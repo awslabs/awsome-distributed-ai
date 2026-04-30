@@ -94,7 +94,6 @@ torchrun --nproc_per_node=1 --nnodes=2 detr_main.py /path/to/data \
 | `--weight-decay` | `1e-4` | Weight decay |
 | `--num-classes` | `2` | Number of object classes |
 | `--workers` | `4` | Data loading workers |
-| `--pretrained` | `false` | Use pre-trained model |
 | `--resume` | | Path to checkpoint for resuming |
 | `--evaluate` | `false` | Evaluate only (no training) |
 | `--seed` | | Random seed for reproducibility |
@@ -156,12 +155,16 @@ on `ml.g5.8xlarge` instances:
 | Dataset | 36 train / 9 val images |
 
 **Note**: The small dataset size (45 images) is intentional for workshop/demo
-purposes. For production use cases, a larger dataset is recommended.
+purposes. The training loss uses simplified positional matching rather than
+DETR's standard Hungarian matching, which is sufficient for this demo. For
+production use cases, a larger dataset and the Hungarian matching loss from the
+DETR paper (or `DetrForObjectDetection`'s built-in loss) are recommended.
 
 ### Output Files
 
 Checkpoints are saved to the directory specified by `CHECKPOINT_DIR` environment
-variable (default: `/tmp/checkpoints`):
+variable (script default: `/tmp/checkpoints`; the Kubernetes deployment sets
+this to `/fsx/checkpoint`):
 
 - `checkpoint.pth.tar` -- Latest checkpoint (for resuming training)
 - `model_best.pth.tar` -- Best checkpoint by validation loss
@@ -171,7 +174,7 @@ variable (default: `/tmp/checkpoints`):
 
 ### Different Classes
 
-Edit `meta.json` to define your own classes:
+Edit `meta.json` (place at `<data-dir>/meta.json` -- see [data/README.md](data/README.md)) to define your own classes:
 
 ```json
 {

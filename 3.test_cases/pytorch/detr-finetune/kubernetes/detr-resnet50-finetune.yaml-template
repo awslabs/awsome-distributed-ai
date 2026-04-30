@@ -42,9 +42,13 @@ spec:
               imagePullPolicy: Always
               resources:
                 requests:
+                  cpu: "8"
+                  memory: "32Gi"
                   nvidia.com/gpu: 1
                   vpc.amazonaws.com/efa: 1
                 limits:
+                  cpu: "8"
+                  memory: "32Gi"
                   nvidia.com/gpu: 1
                   vpc.amazonaws.com/efa: 1
               env:
@@ -53,8 +57,8 @@ spec:
                 value: "1"
               - name: HF_HUB_OFFLINE
                 value: "1"
-              - name: TRANSFORMERS_CACHE
-                value: "/workspace/cache/transformers"
+              - name: QAIHM_DISABLE_TELEMETRY
+                value: "1"
               - name: HF_HOME
                 value: "/workspace/cache/huggingface"
               # -- Logging & debugging --
@@ -131,7 +135,6 @@ spec:
                     --workers=2 \
                     --lr=1e-4 \
                     --weight-decay=1e-4 \
-                    --pretrained \
                     --num-classes=2 \
                     --print-freq=10 \
                     ${RESUME_FLAG} \

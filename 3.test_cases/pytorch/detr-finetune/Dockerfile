@@ -43,9 +43,8 @@ RUN mkdir -p /workspace/data \
 # The weights originate from facebook/detr-resnet-50 on HuggingFace Hub; the QAI Hub
 # Model.from_pretrained() wrapper downloads them via the transformers library.
 # NOTE: This step requires internet access during docker build.
-ENV TRANSFORMERS_CACHE=/workspace/cache/transformers
 ENV HF_HOME=/workspace/cache/huggingface
-RUN mkdir -p /workspace/cache/transformers /workspace/cache/huggingface && \
+RUN mkdir -p /workspace/cache/huggingface && \
     python3 -c "from qai_hub_models.models.detr_resnet50 import Model; m = Model.from_pretrained(); print('DETR-ResNet50 weights cached')"
 
 # Verify installations

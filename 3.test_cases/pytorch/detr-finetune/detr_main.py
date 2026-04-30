@@ -106,10 +106,6 @@ parser.add_argument(
     help="evaluate model on validation set",
 )
 parser.add_argument(
-    "--pretrained", dest="pretrained", action="store_true",
-    help="use pre-trained model",
-)
-parser.add_argument(
     "--world-size", default=-1, type=int,
     help="number of nodes for distributed training",
 )
@@ -198,14 +194,11 @@ class SupermarketDataset(torch.utils.data.Dataset):
         with open(ann_file, "r") as f:
             annotation = json.load(f)
 
-        # Resolve image path (try common extensions)
-        img_name = ann_file.stem  # e.g. "001.jpg" from "001.jpg.json"
+        # Resolve image path from annotation filename (e.g. "001.jpg.json" -> "001.jpg")
+        img_name = ann_file.name.removesuffix(".json")
         img_path = self.images_dir / img_name
-        for ext in [".jpg", ".jpeg", ".png"]:
-            candidate = self.images_dir / f"{img_name}{ext}"
-            if candidate.exists():
-                img_path = candidate
-                break
+        if not img_path.exists():
+            raise FileNotFoundError(f"Image not found: {img_path}")
 
         image = Image.open(img_path).convert("RGB")
         original_size = image.size  # (width, height)
@@ -355,7 +348,7 @@ class QAIHubDETRWrapper(nn.Module):
         }
 
 
-def create_model(num_classes: int, pretrained: bool = True):
+def create_model(num_classes: int):
     """Create a DETR model with custom detection heads.
 
     Loads the pre-trained DETR-ResNet50 from Qualcomm AI Hub and wraps it
@@ -393,7 +386,8 @@ def evaluate_map(model, val_loader, args):
     """Evaluate model using torchmetrics MeanAveragePrecision.
 
     Collects predictions and targets across the full validation set and
-    computes COCO-style mAP metrics.
+    computes COCO-style mAP metrics. Note: with DistributedSampler, each
+    rank evaluates its own shard, so the reported mAP is rank-local.
 
     Args:
         model: Trained model.
@@ -463,10 +457,12 @@ def evaluate_map(model, val_loader, args):
                 metric.update(preds, tgts)
 
     results = metric.compute()
-    print("[INFO] mAP Evaluation Results:")
-    for key in ["map", "map_50", "map_75", "map_small", "map_medium", "map_large"]:
-        val = results.get(key, torch.tensor(float("nan")))
-        print(f"  {key}: {val.item():.4f}")
+    is_rank_zero = (not args.distributed) or args.rank == 0
+    if is_rank_zero:
+        print("[INFO] mAP Evaluation Results:")
+        for key in ["map", "map_50", "map_75", "map_small", "map_medium", "map_large"]:
+            val = results.get(key, torch.tensor(float("nan")))
+            print(f"  {key}: {val.item():.4f}")
 
     return {k: v.item() if isinstance(v, torch.Tensor) else v for k, v in results.items()}
 
@@ -499,7 +495,11 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
         outputs = model(images)
 
-        # Compute loss over all annotated objects per sample
+        # Compute loss over all annotated objects per sample.
+        # NOTE: This uses simplified positional matching (first N queries vs first N GT
+        # objects) rather than DETR's standard Hungarian matching. This is acceptable for
+        # this workshop/demo; for production use cases, consider using the bipartite
+        # matching loss from the DETR paper or DetrForObjectDetection's built-in loss.
         total_loss = 0.0
         valid_samples = 0
 
@@ -527,10 +527,10 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
             total_loss += combined_loss
             valid_samples += 1
 
-        if valid_samples > 0:
-            loss = total_loss / valid_samples
-        else:
-            loss = torch.tensor(0.0, requires_grad=True).cuda(args.gpu)
+        # Skip batch if no valid targets (avoids backward on empty graph)
+        if valid_samples == 0:
+            continue
+        loss = total_loss / valid_samples
 
         losses.update(loss.item(), images.size(0))
 
@@ -756,7 +756,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # Create model
     print(f"[INFO] Creating model '{args.arch}' with {args.num_classes} classes")
-    model = create_model(args.num_classes, args.pretrained)
+    model = create_model(args.num_classes)
 
     if not torch.cuda.is_available():
         print("[WARN] Using CPU, this will be slow")
@@ -766,10 +766,18 @@ def main_worker(gpu, ngpus_per_node, args):
             model.cuda(args.gpu)
             args.batch_size = int(args.batch_size / ngpus_per_node)
             args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
+            # find_unused_parameters=True is required because the QAI Hub DETR wrapper
+            # replaces the original 92-class COCO detection heads with custom heads, but
+            # the original heads (class_labels_classifier, bbox_predictor) remain in the
+            # model's parameter list. They are never used in forward(), so DDP would
+            # otherwise error with "Expected to have finished reduction". This flag has
+            # no effect on accuracy -- it only tells DDP to skip unused params in the
+            # gradient all-reduce.
             model = torch.nn.parallel.DistributedDataParallel(
                 model, device_ids=[args.gpu], find_unused_parameters=True)
         else:
             model.cuda()
+            # See comment above for find_unused_parameters rationale.
             model = torch.nn.parallel.DistributedDataParallel(
                 model, find_unused_parameters=True)
     elif args.gpu is not None:
@@ -876,6 +884,13 @@ def main_worker(gpu, ngpus_per_node, args):
         train(train_loader, model, criterion, optimizer, epoch, args)
         final_val_loss = validate(val_loader, model, criterion, args, epoch)
 
+        # All-reduce validation loss across ranks so all ranks agree on is_best.
+        # Each rank only sees its DistributedSampler shard of the val set.
+        if args.distributed:
+            loss_tensor = torch.tensor([final_val_loss], device=f"cuda:{args.gpu}")
+            dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
+            final_val_loss = loss_tensor.item()
+
         scheduler.step()
 
         # Track best validation loss
@@ -896,58 +911,66 @@ def main_worker(gpu, ngpus_per_node, args):
                 is_best,
             )
 
-    # Training complete -- final evaluation
+    # Training complete -- final evaluation (rank 0 only for printing)
     training_end_time = time.time()
     total_training_time = training_end_time - training_start_time
 
-    print("=" * 80)
-    print("TRAINING COMPLETED")
-    print("=" * 80)
+    is_rank_zero = (not args.distributed) or args.rank == 0
 
-    # Compute proper mAP using torchmetrics
+    if is_rank_zero:
+        print("=" * 80)
+        print("TRAINING COMPLETED")
+        print("=" * 80)
+
+    # Compute proper mAP using torchmetrics (runs on all ranks, prints on rank 0)
     print("[INFO] Computing final mAP on validation set...")
     map_results = evaluate_map(model, val_loader, args)
     final_map = map_results.get("map", 0.0) if map_results else 0.0
     final_map_50 = map_results.get("map_50", 0.0) if map_results else 0.0
 
-    # Print summary
-    print(f"FINAL TRAINING STATISTICS:")
-    print(f"  Total Training Time: {format_time(total_training_time)}")
-    print(f"  Training Epochs: {args.epochs}")
-    print(f"  Final Validation Loss: {final_val_loss:.4f}")
-    print(f"  Best Validation Loss: {best_loss:.4f}")
-    print(f"  mAP: {final_map:.4f}")
-    print(f"  mAP@0.5: {final_map_50:.4f}")
-    print(f"  Dataset Size: {len(train_dataset)} train, {len(val_dataset)} val")
-    print(f"  Model: QAI Hub DETR-ResNet50")
-    print(f"  Classes: {args.num_classes}")
-    print(f"  Batch Size: {args.batch_size}, LR: {args.lr}")
-    print(f"  Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 80)
+    # Print summary and save stats (rank 0 only)
+    if is_rank_zero:
+        print(f"FINAL TRAINING STATISTICS:")
+        print(f"  Total Training Time: {format_time(total_training_time)}")
+        print(f"  Training Epochs: {args.epochs}")
+        print(f"  Final Validation Loss: {final_val_loss:.4f}")
+        print(f"  Best Validation Loss: {best_loss:.4f}")
+        print(f"  mAP: {final_map:.4f}")
+        print(f"  mAP@0.5: {final_map_50:.4f}")
+        print(f"  Dataset Size: {len(train_dataset)} train, {len(val_dataset)} val")
+        print(f"  Model: QAI Hub DETR-ResNet50")
+        print(f"  Classes: {args.num_classes}")
+        print(f"  Batch Size: {args.batch_size}, LR: {args.lr}")
+        print(f"  Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("=" * 80)
 
-    # Save statistics to file
-    stats_file = os.path.join(
-        os.environ.get("CHECKPOINT_DIR", "/tmp/checkpoints"), "training_stats.txt"
-    )
-    try:
-        os.makedirs(os.path.dirname(stats_file), exist_ok=True)
-        with open(stats_file, "w") as f:
-            f.write("DETR-ResNet50 Training Statistics\n")
-            f.write("=" * 50 + "\n")
-            f.write(f"Total Training Time: {format_time(total_training_time)}\n")
-            f.write(f"Training Epochs: {args.epochs}\n")
-            f.write(f"Final Validation Loss: {final_val_loss:.4f}\n")
-            f.write(f"Best Validation Loss: {best_loss:.4f}\n")
-            f.write(f"mAP: {final_map:.4f}\n")
-            f.write(f"mAP@0.5: {final_map_50:.4f}\n")
-            f.write(f"Dataset Size: {len(train_dataset)} train, {len(val_dataset)} val\n")
-            f.write(f"Model: QAI Hub DETR-ResNet50\n")
-            f.write(f"Classes: {args.num_classes}\n")
-            f.write(f"Batch Size: {args.batch_size}, LR: {args.lr}\n")
-            f.write(f"Completed: {datetime.now().strftime('%Y-%m-%d')}\n")
-        print(f"[OK] Training statistics saved to: {stats_file}")
-    except Exception as e:
-        print(f"[WARN] Could not save statistics file: {e}")
+        # Save statistics to file
+        stats_file = os.path.join(
+            os.environ.get("CHECKPOINT_DIR", "/tmp/checkpoints"), "training_stats.txt"
+        )
+        try:
+            os.makedirs(os.path.dirname(stats_file), exist_ok=True)
+            with open(stats_file, "w") as f:
+                f.write("DETR-ResNet50 Training Statistics\n")
+                f.write("=" * 50 + "\n")
+                f.write(f"Total Training Time: {format_time(total_training_time)}\n")
+                f.write(f"Training Epochs: {args.epochs}\n")
+                f.write(f"Final Validation Loss: {final_val_loss:.4f}\n")
+                f.write(f"Best Validation Loss: {best_loss:.4f}\n")
+                f.write(f"mAP: {final_map:.4f}\n")
+                f.write(f"mAP@0.5: {final_map_50:.4f}\n")
+                f.write(f"Dataset Size: {len(train_dataset)} train, {len(val_dataset)} val\n")
+                f.write(f"Model: QAI Hub DETR-ResNet50\n")
+                f.write(f"Classes: {args.num_classes}\n")
+                f.write(f"Batch Size: {args.batch_size}, LR: {args.lr}\n")
+                f.write(f"Completed: {datetime.now().strftime('%Y-%m-%d')}\n")
+            print(f"[OK] Training statistics saved to: {stats_file}")
+        except Exception as e:
+            print(f"[WARN] Could not save statistics file: {e}")
+
+    # Clean up distributed process group
+    if args.distributed:
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

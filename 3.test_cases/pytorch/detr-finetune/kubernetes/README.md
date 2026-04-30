@@ -39,7 +39,8 @@ without a NAT gateway.
 export AWS_REGION=$(aws ec2 describe-availability-zones --output text --query 'AvailabilityZones[0].[RegionName]')
 export ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 export REGISTRY=${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/
-docker build -t ${REGISTRY}detr-finetune:latest -f Dockerfile .
+export VERSION=v1
+docker build -t ${REGISTRY}detr-resnet50-finetune:${VERSION} -f Dockerfile .
 ```
 
 **Note**: Run the `docker build` command from the `detr-finetune/` directory (the parent of `kubernetes/`), where `Dockerfile` and `detr_main.py` are located.
@@ -48,17 +49,15 @@ docker build -t ${REGISTRY}detr-finetune:latest -f Dockerfile .
 
 ```bash
 # Create repository if needed
-REGISTRY_COUNT=$(aws ecr describe-repositories | grep \"detr-finetune\" | wc -l)
-if [ "$REGISTRY_COUNT" == "0" ]; then
-    aws ecr create-repository --repository-name detr-finetune
-fi
+aws ecr describe-repositories --repository-names detr-resnet50-finetune \
+  >/dev/null 2>&1 || aws ecr create-repository --repository-name detr-resnet50-finetune
 
 # Login to registry
 echo "Logging in to $REGISTRY ..."
 aws ecr get-login-password | docker login --username AWS --password-stdin $REGISTRY
 
 # Push image
-docker image push ${REGISTRY}detr-finetune:latest
+docker image push ${REGISTRY}detr-resnet50-finetune:${VERSION}
 ```
 
 ## 3. Submit Training Job
@@ -66,7 +65,7 @@ docker image push ${REGISTRY}detr-finetune:latest
 Set environment variables and create the manifest from the template:
 
 ```bash
-export IMAGE_URI=${REGISTRY}detr-finetune:latest
+export IMAGE_URI=${REGISTRY}detr-resnet50-finetune:${VERSION}
 export INSTANCE_TYPE=ml.g5.8xlarge
 export NUM_NODES=2
 cat detr-resnet50-finetune.yaml-template | envsubst '$IMAGE_URI $NUM_NODES $INSTANCE_TYPE' > detr-resnet50-finetune.yaml
