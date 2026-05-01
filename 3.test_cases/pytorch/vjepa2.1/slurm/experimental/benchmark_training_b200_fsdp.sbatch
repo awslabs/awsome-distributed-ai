@@ -63,7 +63,7 @@ export TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # V-JEPA 2.1 needs /workspace in PYTHONPATH for the code overlay
-export PYTHONPATH=/workspace:${VJEPA_DEPS}:${VJEPA2_CODE}:${PYTHONPATH}
+export PYTHONPATH=/workspace:${VJEPA_DEPS}:${VJEPA2_CODE}:${PYTHONPATH:-}
 
 ###########################
 ## Container Args #########
@@ -83,7 +83,7 @@ declare -a ARGS=(
 
 # Uses run_train_fsdp.py instead of run_train.py
 declare -a TRAINING_ARGS=(
-    --fname ${VJEPA21_DIR}/configs/benchmark-vitg-8nodes-fsdp.yaml
+    --fname ${VJEPA21_DIR}/configs/experimental/benchmark-vitg-8nodes-fsdp.yaml
 )
 
 ###########################
@@ -98,4 +98,4 @@ fi
 
 mkdir -p logs/vjepa21_fsdp
 
-srun ${AUTO_RESUME} -l "${ARGS[@]}" python ${VJEPA21_DIR}/scripts/run_train_fsdp.py "${TRAINING_ARGS[@]}"
+srun ${AUTO_RESUME} -l "${ARGS[@]}" python ${VJEPA21_DIR}/scripts/experimental/run_train_fsdp.py "${TRAINING_ARGS[@]}"

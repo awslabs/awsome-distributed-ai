@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: MIT-0
 
 """
-Parse V-JEPA 2 training logs and compute benchmark metrics.
+Parse V-JEPA 2 / V-JEPA 2.1 training logs and compute benchmark metrics.
 
-V-JEPA 2 logs lines like:
+V-JEPA 2/2.1 logs lines like:
   [epoch, itr] loss: 0.123 masks: [...] [wd: ...] [lr: ...] [mem: ...] [iter: 1234.5 ms] [gpu: 1200.0 ms] [data: 34.5 ms]
 
 Usage:
@@ -13,7 +13,8 @@ Usage:
         --warmup_iters 20 \
         --batch_size_per_gpu 24 \
         --num_gpus 64 \
-        --gpu_type h200
+        --gpu_type h200 \
+        --model_name "V-JEPA 2.1"
 """
 
 import argparse
@@ -115,13 +116,13 @@ def compute_metrics(
     }
 
 
-def print_results(metrics, batch_size_per_gpu, num_gpus, model_params, gpu_type):
+def print_results(metrics, batch_size_per_gpu, num_gpus, model_params, gpu_type, model_name):
     """Print benchmark results as a markdown table."""
     gpu = GPU_SPECS[gpu_type]
-    print("\n## V-JEPA 2 Benchmark Results\n")
+    print(f"\n## {model_name} Benchmark Results\n")
     print("| Metric | Value |")
     print("|--------|-------|")
-    print(f"| Model | V-JEPA 2 ViT-g/16 ({model_params / 1e9:.1f}B params) |")
+    print(f"| Model | {model_name} ViT-g/16 ({model_params / 1e9:.1f}B params) |")
     print(f"| Nodes | {num_gpus // 8} x {gpu['instance']} |")
     print(f"| GPUs | {num_gpus} x {gpu['name']} ({gpu['mem_gb']}GB) |")
     print(f"| Batch size (per GPU) | {batch_size_per_gpu} |")
@@ -139,7 +140,7 @@ def print_results(metrics, batch_size_per_gpu, num_gpus, model_params, gpu_type)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Parse V-JEPA 2 benchmark logs")
+    parser = argparse.ArgumentParser(description="Parse V-JEPA 2/2.1 benchmark logs")
     parser.add_argument("--log_file", type=str, required=True)
     parser.add_argument("--warmup_iters", type=int, default=20)
     parser.add_argument("--batch_size_per_gpu", type=int, default=24)
@@ -150,6 +151,12 @@ def main():
         default="h200",
         choices=list(GPU_SPECS.keys()),
         help="GPU type for output metadata (default: h200)",
+    )
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default="V-JEPA 2",
+        help="Model name for display in results (default: 'V-JEPA 2')",
     )
     parser.add_argument(
         "--model_params",
@@ -186,6 +193,7 @@ def main():
         args.num_gpus,
         args.model_params,
         args.gpu_type,
+        args.model_name,
     )
 
 

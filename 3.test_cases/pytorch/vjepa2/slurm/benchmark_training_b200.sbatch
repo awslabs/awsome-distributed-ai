@@ -87,7 +87,7 @@ export TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # Add V-JEPA 2 deps and source code to Python path
-export PYTHONPATH=${VJEPA_DEPS}:${VJEPA2_CODE}:${PYTHONPATH}
+export PYTHONPATH=${VJEPA_DEPS}:${VJEPA2_CODE}:${PYTHONPATH:-}
 
 ###########################
 ## Container Args #########

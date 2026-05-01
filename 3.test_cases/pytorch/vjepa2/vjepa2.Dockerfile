@@ -19,7 +19,9 @@ RUN cd /tmp && \
     ./efa_installer.sh -y --skip-kmod --skip-limit-conf --no-verify && \
     cd /tmp && rm -rf aws-efa-installer
 
-# Install NCCL OFI plugin for EFA
+# Install NCCL dev headers for EFA plugin compilation.
+# The base NVIDIA image already provides libnccl.so; this is best-effort
+# to get headers and will not fail the build if unavailable.
 RUN apt-get update && apt-get install -y libnccl-dev && rm -rf /var/lib/apt/lists/* || true
 
 # Install V-JEPA 2 dependencies (pinned to tested versions)

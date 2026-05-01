@@ -200,7 +200,36 @@ python scripts/parse_benchmark.py \
     --gpu_type h200
 ```
 
-## 7. Optimized Config (B200)
+## 7. B200 GPU Setup
+
+The standard container (based on `pytorch:25.03-py3`) ships NCCL 2.25 and an older aws-ofi-nccl plugin that are **incompatible with B200 EFA networking**. B200 scripts use a NeMo container with NCCL >= 2.29 instead.
+
+### Prerequisites (run once from the login node)
+
+1. **Obtain a NeMo container** with NCCL 2.29+ and EFA support:
+   ```bash
+   enroot import 'docker://nvcr.io#nvidia/nemo:25.11.01'
+   # Or use a pre-built .sqsh with the correct EFA/NCCL stack
+   ```
+
+2. **Clone the V-JEPA 2 repository** to shared storage:
+   ```bash
+   git clone https://github.com/facebookresearch/vjepa2.git \
+       /fsx/${USER}/vjepa2_code
+   ```
+
+3. **Install V-JEPA 2 Python dependencies** into a shared directory (use the NeMo container to ensure compatible packages):
+   ```bash
+   srun --partition=b200 --account=root -N1 --ntasks=1 \
+       --container-image /fsx/${USER}/nemo-efa-nccl29.sqsh \
+       --container-mounts /fsx:/fsx --no-container-mount-home \
+       pip install --target /fsx/${USER}/vjepa_deps \
+           -r /fsx/${USER}/vjepa2_code/requirements.txt
+   ```
+
+4. **Copy configs and scripts** from this test case to shared storage (same as Section 4).
+
+### Optimized Config (B200)
 
 An optimized config is provided for B200 GPUs that enables `torch.compile` and disables activation checkpointing. This trades higher GPU memory usage (~95 GB/GPU vs ~33 GB) for ~23% faster iteration time.
 
@@ -279,9 +308,58 @@ nsys/
 └── ...
 ```
 
+## 10. Data Loading Optimization (TorchCodec)
+
+[TorchCodec](https://github.com/pytorch/torchcodec) is a drop-in replacement for decord that provides faster video decode and releases the Python GIL during decode operations. Combined with increased DataLoader workers and a cycling sampler, it reduces data loading time by **83%** (140ms → 24ms on H200), making data loading completely hidden behind GPU compute.
+
+### Quick Start
+
+Enable via environment variables in your sbatch script (no code changes needed):
+
+```bash
+export VJEPA_USE_TORCHCODEC=1      # Replace decord with TorchCodec
+export VJEPA_CYCLING_SAMPLER=1     # Eliminate epoch boundary stalls
+```
+
+And increase `num_workers` in your config YAML:
+
+```yaml
+data:
+  num_workers: 16    # up from default 8
+```
+
+### Installation
+
+TorchCodec must be installed with the CUDA wheel index (the default pip install gives a CPU-only build that errors on `device="cuda"`):
+
+```bash
+pip install torchcodec==0.10 --index-url=https://download.pytorch.org/whl/cu130
+```
+
+> **Note**: When using Pyxis containers with multiple tasks per node, serialize the
+> install with `flock /tmp/tc_install.lock pip install ...` to avoid race conditions.
+
+### Results (H200, 2 nodes × 8 GPUs, V-JEPA 2 ViT-g/16, bs=24)
+
+| Configuration | iter_time (ms) | data_time (ms) | data_time reduction |
+|---|---|---|---|
+| Decord baseline (8 workers) | 1,825 | 140 | — |
+| TorchCodec (8 workers) | 1,822 | 112 | 20% |
+| **TorchCodec + 16 workers + cycling** | **1,712** | **24** | **83%** |
+
+### How It Works
+
+The `run_train.py` launcher applies monkey patches at startup based on environment variables:
+
+- **`VJEPA_USE_TORCHCODEC=1`**: Replaces `VideoDataset.loadvideo_decord` with a TorchCodec equivalent that uses `seek_mode="approximate"` for faster seeks
+- **`VJEPA_CYCLING_SAMPLER=1`**: Patches `DistributedSampler` and `DistributedWeightedSampler` to cycle infinitely, eliminating epoch boundary stalls where all workers wait for the slowest rank
+- **`VJEPA_THREADED_DECODE=1`** (experimental): Replaces the multiprocess DataLoader with a threaded variant. Only beneficial for large (720p+) videos where decode dominates transforms
+
+For the full investigation including GPU decode benchmarks, threaded DataLoader results, and microbenchmarks, see the benchmark analysis in the `benchmarks/` directory (generated locally after running profiling jobs).
+
 ## Benchmark Results
 
-_Benchmark results are maintained separately in `benchmarks/vjepa2-benchmark-results.md` (gitignored)._
+Benchmark results comparing H200 and B200 performance are generated locally in the `benchmarks/` directory after running the benchmark sbatch scripts. Use `scripts/parse_benchmark.py` to produce results from training logs.
 
 ## References
 

@@ -37,6 +37,10 @@ See also the [V-JEPA 2 test case](../vjepa2/) for the baseline benchmark.
 - **FSx for Lustre** shared filesystem mounted at `/fsx`
 - **Docker** installed on the cluster for building container images
 
+## Shared Scripts
+
+Several utility scripts (`generate_synthetic_dataset.py`, `nsys_wrapper.sh`, `prepare_ssv2.py`, `test_decord.py`) are shared with the [V-JEPA 2 test case](../vjepa2/) and symlinked from `../vjepa2/scripts/`. Ensure both directories are present when cloning.
+
 ## 1. Clone this repository
 
 ```bash
@@ -143,7 +147,11 @@ kubectl apply -f kubernetes/vjepa2-1-benchmark.yaml
 kubectl logs -f pytorchjob/vjepa2-1-benchmark-worker-0
 ```
 
-## 6. FSDP Experimental Config (B200)
+## 6. B200 GPU Setup
+
+The standard container (based on `pytorch:25.03-py3`) ships NCCL 2.25 and an older aws-ofi-nccl plugin that are **incompatible with B200 EFA networking**. B200 scripts use a NeMo container with NCCL >= 2.29 instead. See the [V-JEPA 2 B200 setup](../vjepa2/README.md#7-b200-gpu-setup) for full prerequisite instructions.
+
+## 7. FSDP Experimental Config (B200)
 
 > **Benchmark finding**: FSDP was found to be **~2x slower** than baseline DDP in benchmarks
 > (iter ~8,200 ms vs ~4,075 ms on video ranks). The gradient sharding communication overhead
@@ -151,11 +159,11 @@ kubectl logs -f pytorchjob/vjepa2-1-benchmark-worker-0
 > also tested and found to be ~55% slower due to graph breaks from checkpoint segments and
 > dynamic masking. **The baseline DDP config is the recommended configuration for V-JEPA 2.1.**
 
-An FSDP variant is provided for reference that replaces DDP with `FullyShardedDataParallel` (SHARD_GRAD_OP / ZeRO-2) for the encoder and target encoder. This shards gradients and optimizer states across ranks, saving ~15 GB/GPU. Activation checkpointing must remain enabled because video ranks (16-frame clips, bs=24) exceed 178 GB HBM without it.
+An FSDP variant is provided for reference under `scripts/experimental/` that replaces DDP with `FullyShardedDataParallel` (SHARD_GRAD_OP / ZeRO-2) for the encoder and target encoder. This shards gradients and optimizer states across ranks, saving ~15 GB/GPU. Activation checkpointing must remain enabled because video ranks (16-frame clips, bs=24) exceed 178 GB HBM without it.
 
 ```bash
 mkdir -p logs/vjepa21_fsdp
-sbatch slurm/benchmark_training_b200_fsdp.sbatch
+sbatch slurm/experimental/benchmark_training_b200_fsdp.sbatch
 ```
 
 | Setting | Baseline (DDP) | FSDP |
@@ -165,7 +173,7 @@ sbatch slurm/benchmark_training_b200_fsdp.sbatch
 | `use_activation_checkpointing` | true | true |
 | `num_workers` | 8 | 20 |
 
-The FSDP script (`scripts/run_train_fsdp.py`) is a self-contained training loop that:
+The FSDP script (`scripts/experimental/run_train_fsdp.py`) is a self-contained training loop that:
 - Wraps encoder and target_encoder with `FSDP(sharding_strategy=SHARD_GRAD_OP, use_orig_params=True)`
 - Keeps predictor with DDP (`find_unused_parameters=True`) since it is small (~55M params)
 - EMA updates operate on FSDP parameters after all-gather (SHARD_GRAD_OP keeps full params materialized)
@@ -242,7 +250,22 @@ nsys/
 
 ## Benchmark Results
 
-_Benchmark results are maintained separately in `../vjepa2/benchmarks/vjepa2-benchmark-results.md` (gitignored)._
+See the V-JEPA 2 README for detailed benchmark results comparing H200 and B200 performance for both V-JEPA 2 and V-JEPA 2.1. Results are generated locally using `parse_benchmark.py` after running benchmark jobs.
+
+### Data Loading Optimization (TorchCodec)
+
+The TorchCodec data loading optimization developed for V-JEPA 2 applies directly to V-JEPA 2.1 — both models use the same `run_train.py` launcher with environment-variable-controlled patches. On B200, where data loading accounts for 44% of iteration time, this optimization is critical.
+
+Enable in your sbatch script:
+
+```bash
+export VJEPA_USE_TORCHCODEC=1      # Replace decord with TorchCodec
+export VJEPA_CYCLING_SAMPLER=1     # Eliminate epoch boundary stalls (36.5% wall time improvement on B200)
+```
+
+The cycling sampler alone (without TorchCodec) already provides a **36.5% reduction** in per-iteration wall time on B200 by eliminating epoch boundary stalls where ranks wait for the slowest data loader to reinitialize. Combined with TorchCodec and increased workers (`num_workers: 16`), data loading time is expected to drop by 80%+ on B200.
+
+See the [V-JEPA 2 README Section 10](../vjepa2/README.md#10-data-loading-optimization-torchcodec) for installation instructions and full details.
 
 ## References
 

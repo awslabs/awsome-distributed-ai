@@ -92,7 +92,7 @@ export TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # V-JEPA 2.1 needs /workspace in PYTHONPATH for the code overlay
-export PYTHONPATH=/workspace:${VJEPA_DEPS}:${VJEPA2_CODE}:${PYTHONPATH}
+export PYTHONPATH=/workspace:${VJEPA_DEPS}:${VJEPA2_CODE}:${PYTHONPATH:-}
 
 ###########################
 ## Container Args #########
