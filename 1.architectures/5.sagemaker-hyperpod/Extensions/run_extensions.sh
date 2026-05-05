@@ -28,7 +28,7 @@ set -ex
 # Feature toggles -- set to "true" or "false"
 # ===========================================================================
 ENABLE_ADD_USERS="true"
-ENABLE_OBSERVABILITY="true"
+ENABLE_OBSERVABILITY="false"
 
 # ===========================================================================
 # Logging -- matches AMI on_create.sh pattern
