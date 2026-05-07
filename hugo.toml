@@ -1,0 +1,13 @@
+baseURL = "https://awslabs.github.io/awsome-distributed/"
+languageCode = "en-us"
+title = "ADT Blog"
+theme = "PaperMod"
+
+[params]
+  description = "Posts about distributed ML training on AWS — companion to awslabs/awsome-distributed."
+  ShowReadingTime = true
+  ShowShareButtons = false
+  ShowPostNavLinks = true
+
+[markup.goldmark.renderer]
+  unsafe = true
