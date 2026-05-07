@@ -505,6 +505,8 @@ Set the following parameters to `true` in your `custom.tfvars` file to enable op
 
 When `create_task_governance_module = true`, you can also manage SageMaker HyperPod task governance compute allocations with Terraform by setting `task_governance_compute_quotas`. The Terraform providers do not currently expose a first-class SageMaker compute quota resource, so this module uses the AWS CLI from a Terraform `local-exec` provisioner to call the SageMaker `create-compute-quota`, `update-compute-quota`, and `delete-compute-quota` APIs. The machine running Terraform must have the AWS CLI, `kubectl`, and `python3` installed and authenticated for the target account.
 
+The `local-exec` wrapper is a temporary compatibility layer and should be migrated to a native AWS provider resource when one becomes available. Compute quota descriptions are managed as Terraform desired state: if `description` is omitted, it defaults to an empty string and will clear an existing remote description on update.
+
 ```hcl
 create_task_governance_module = true
 
@@ -535,6 +537,33 @@ task_governance_compute_quotas = [
 ```
 
 For teams that lend and borrow idle capacity, use `strategy = "LendAndBorrow"` and optionally set `borrow_limit` or `absolute_borrow_limits`.
+
+```hcl
+task_governance_compute_quotas = [
+  {
+    name = "team-b-quota"
+
+    compute_quota_resources = [
+      {
+        instance_type = "ml.g5.8xlarge"
+        count         = 4
+      }
+    ]
+
+    resource_sharing_config = {
+      strategy     = "LendAndBorrow"
+      borrow_limit = 50
+    }
+
+    preempt_team_tasks = "LowerPriority"
+
+    target = {
+      team_name         = "team-b"
+      fair_share_weight = 50
+    }
+  }
+]
+```
 
 The HyperPod training and inference operators both require the [cert-manager](https://cert-manager.io/) EKS addon to be installed as a prerequisite. The variable `enable_cert_manager` is set to `true` by default, so that when `create_hyperpod_training_operator_module` or `create_hyperpod_inference_operator_module` are also set to `true`, cert-manager will be installed as a dependency of the operators. In other words, this stack will not install cert-manager as a standalone component, but it can be disabled if you already have it installed on an existing EKS cluster and wish to use one of the HyperPod operators. 
 

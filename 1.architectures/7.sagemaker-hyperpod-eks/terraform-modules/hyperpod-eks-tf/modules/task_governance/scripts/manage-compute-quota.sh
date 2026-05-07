@@ -204,15 +204,13 @@ create_quota() {
   create_args=(
     create-compute-quota
     --name "${QUOTA_NAME}"
+    --description "${DESCRIPTION}"
     --cluster-arn "${CLUSTER_ARN}"
     --compute-quota-config "${COMPUTE_QUOTA_CONFIG}"
     --compute-quota-target "${COMPUTE_QUOTA_TARGET}"
     --activation-state "${ACTIVATION_STATE}"
     --output json
   )
-  if [[ -n "${DESCRIPTION}" ]]; then
-    create_args+=(--description "${DESCRIPTION}")
-  fi
 
   result_json="$(aws_sm "${create_args[@]}")"
   quota_id="$(json_field ComputeQuotaId "${result_json}")"

@@ -685,7 +685,7 @@ variable "create_task_governance_module" {
 }
 
 variable "task_governance_compute_quotas" {
-  description = "SageMaker HyperPod task governance compute allocations to create or update. Only used when create_task_governance_module is true."
+  description = "SageMaker HyperPod task governance compute allocations to create or update. Only used when create_task_governance_module is true. The description field is managed by Terraform and defaults to an empty string."
   type = list(object({
     name             = string
     description      = optional(string, "")
@@ -825,7 +825,7 @@ variable "create_hyperpod_inference_operator_module" {
 variable "enable_cert_manager" {
   description = "Install cert-manager EKS addon"
   type        = bool
-  default     = true 
+  default     = true
 }
 
 # S3 CSI Driver (bundled with and required for for HPIO module)

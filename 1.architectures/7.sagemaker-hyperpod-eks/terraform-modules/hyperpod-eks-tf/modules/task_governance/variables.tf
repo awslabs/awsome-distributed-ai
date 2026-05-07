@@ -15,7 +15,7 @@ variable "hyperpod_cluster_arn" {
 }
 
 variable "compute_quotas" {
-  description = "SageMaker HyperPod task governance compute allocations to create or update"
+  description = "SageMaker HyperPod task governance compute allocations to create or update. The description field is managed by Terraform and defaults to an empty string."
   type = list(object({
     name             = string
     description      = optional(string, "")

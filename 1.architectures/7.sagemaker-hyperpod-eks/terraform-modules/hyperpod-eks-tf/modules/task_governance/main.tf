@@ -92,8 +92,16 @@ resource "aws_eks_addon" "task_governance" {
 resource "null_resource" "wait_for_kueue_webhook" {
   provisioner "local-exec" {
     command = <<-EOT
+      set -eu
       echo "Waiting for kueue-controller-manager deployment to be ready..."
-      aws eks update-kubeconfig --region ${var.aws_region} --name ${var.eks_cluster_name}
+      KUBECONFIG_FILE="$(mktemp "$${TMPDIR:-/tmp}/task-governance-kubeconfig.XXXXXX")"
+      export KUBECONFIG="$KUBECONFIG_FILE"
+      trap 'rm -f "$KUBECONFIG_FILE"' 0
+
+      aws eks update-kubeconfig \
+        --region ${var.aws_region} \
+        --name ${var.eks_cluster_name} \
+        --kubeconfig "$KUBECONFIG_FILE"
       kubectl wait --for=condition=available deployment/kueue-controller-manager \
         -n kueue-system \
         --timeout=300s
@@ -117,6 +125,8 @@ resource "null_resource" "compute_quota" {
     region               = var.aws_region
   }
 
+  # TODO: Replace this local-exec wrapper with a native Terraform provider resource
+  # after SageMaker HyperPod compute quotas are exposed by the AWS provider.
   provisioner "local-exec" {
     command = "bash ${path.module}/scripts/manage-compute-quota.sh apply"
     environment = {
