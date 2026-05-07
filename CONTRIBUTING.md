@@ -47,6 +47,10 @@ To send us a pull request, please:
 GitHub provides additional document on [forking a repository](https://help.github.com/articles/fork-a-repo/) and
 [creating a pull request](https://help.github.com/articles/creating-a-pull-request/).
 
+### Blog content
+
+Blog posts live on the `content` branch and are AWS-authored. PRs from non-maintainers targeting `content` are auto-closed. If you have feedback or topic suggestions, please open an issue.
+
 
 ## Contributions format
 Assets in this repository are organized differently depending on their nature but regardless of that each test example, architecture must have the following:

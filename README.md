@@ -23,6 +23,12 @@ You can follow the workshops below to train models on AWS. Each contains example
 | [AI on SageMaker HyperPod](https://awslabs.github.io/ai-on-sagemaker-hyperpod/)   | Workshop for SageMaker HyperPod, shows how to deploy and monitor it |
 | [AWS ParallelCluster](https://catalog.workshops.aws/ml-on-aws-parallelcluster)     | Similar workshop as HyperPod but on ParallelCluster             |
 
+## Blog
+
+Posts about distributed ML training on AWS are published at <https://awslabs.github.io/awsome-distributed/>. The Hugo source lives on the [`content`](https://github.com/awslabs/awsome-distributed/tree/content) branch.
+
+Blog content is editorially curated by AWS authors. Code samples in this repo (`1.architectures/`, `3.test_cases/`, etc.) accept external contributions as usual — see [CONTRIBUTING.md](./CONTRIBUTING.md).
+
 ## 1. Architectures
 
 Architectures are located in `1.architectures` and consist of utilities and service-related architectures.
@@ -94,8 +100,8 @@ Micro-benchmarks for evaluating network and communication performance are under 
 
 Thanks to all the contributors for building, reviewing and testing.
 
-[![Contributors](https://contrib.rocks/image?repo=awslabs/awsome-distributed-training)](https://github.com/awslabs/awsome-distributed-training/graphs/contributors)
+[![Contributors](https://contrib.rocks/image?repo=awslabs/awsome-distributed)](https://github.com/awslabs/awsome-distributed/graphs/contributors)
 
 ## 7. Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=awslabs/awsome-distributed-training&type=Date)](https://star-history.com/#awslabs/awsome-distributed-training&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=awslabs/awsome-distributed&type=Date)](https://star-history.com/#awslabs/awsome-distributed&Date)
