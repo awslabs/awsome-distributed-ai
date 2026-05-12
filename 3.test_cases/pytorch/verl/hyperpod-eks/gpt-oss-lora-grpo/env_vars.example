@@ -1,0 +1,18 @@
+# Docker file
+export AWS_REGION=$(aws ec2 describe-availability-zones --output text --query 'AvailabilityZones[0].[RegionName]')
+export ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+export REGISTRY=${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/
+export IMAGE=oss-lora
+export TAG=12.9.1-gpu-py312-cu129-ubuntu22.04-ec2-v1.31
+
+# Cluster Details
+export EKS_CLUSTER_NAME="<your-eks-cluster-name>"
+export INSTANCE_TYPE="<your GPU instance type>" # Example: "p5en.48xlarge"
+export NUM_NODES=4                    # Single source of truth for number of nodes
+export NUM_GPU_PER_NODE=8
+export NUM_EFA_PER_NODE=16
+export PRIVATE_SUBNET_ID="subnet-xxxxxxxxxxxxxxxxx"
+export SECURITY_GROUP_ID="sg-xxxxxxxxxxxxxxxxx"
+export HF_TOKEN="<your-huggingface-token>"
+
+

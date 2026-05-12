@@ -1,0 +1,119 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+apiVersion: sagemaker.amazonaws.com/v1
+kind: HyperPodPyTorchJob
+metadata:
+  name: lora-hyperpod-elastic
+  labels:
+    kueue.x-k8s.io/queue-name: gpu-queue
+spec:
+  nprocPerNode: "4"
+  elasticPolicy:
+    minReplicas: 1
+    maxReplicas: 4
+    replicaIncrementStep: 1
+    scalingTimeoutInSeconds: 300
+    gracefulShutdownTimeoutInSeconds: 30
+  replicaSpecs:
+    - name: worker
+      replicas: 4
+      maxReplicas: 4
+      template:
+        metadata:
+          labels:
+            app: gpt-oss-lora-elastic
+        spec:
+          serviceAccountName: default
+          nodeSelector:
+            node.kubernetes.io/instance-type: ml.g6e.12xlarge
+          tolerations:
+            - key: "node.kubernetes.io/not-ready"
+              operator: "Exists"
+              effect: "NoExecute"
+              tolerationSeconds: 30
+            - key: "node.kubernetes.io/unreachable"
+              operator: "Exists"
+              effect: "NoExecute"
+              tolerationSeconds: 30
+          containers:
+            - name: pytorch
+              image: ${REGISTRY}${IMAGE}:${TAG} 
+              imagePullPolicy: Always
+              resources:
+                requests:
+                  nvidia.com/gpu: 4
+                  memory: "180Gi"
+                  vpc.amazonaws.com/efa: 1
+                limits:
+                  nvidia.com/gpu: 4
+                  memory: "180Gi"
+                  vpc.amazonaws.com/efa: 1
+              env:
+              - name: PYTORCH_CUDA_ALLOC_CONF
+                value: "expandable_segments:True,garbage_collection_threshold:0.6"
+              - name: NCCL_DEBUG
+                value: "INFO"
+              # EFA configuration
+              - name: FI_PROVIDER
+                value: "efa"
+              - name: FI_EFA_USE_DEVICE_RDMA
+                value: "1"
+              - name: FI_EFA_FORK_SAFE
+                value: "1"
+              - name: NCCL_PROTO
+                value: "simple"
+              - name: RDMAV_FORK_SAFE
+                value: "1"
+              - name: NCCL_NVLS_ENABLE
+                value: "0"
+              # aws-ofi-nccl library path for EFA
+              - name: LD_LIBRARY_PATH
+                value: "/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu:/opt/amazon/efa/lib64:/usr/local/cuda/lib64"
+              - name: HF_TOKEN
+                value: $HF_TOKEN
+              - name: HF_HOME
+                value: "/fsx/hf_cache"
+              - name: MY_POD_IP
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
+              - name: MY_POD_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.name
+              # Set RESUME_CHECKPOINT to a specific path to resume from that checkpoint
+              # Leave empty or unset to auto-detect latest checkpoint
+              # Example: /fsx/checkpoints/checkpoint-950
+              - name: RESUME_CHECKPOINT
+                value: ""
+              command:
+                - hyperpodrun
+                - --nproc_per_node=4
+                - --nnodes=4
+                - /app/sft.py
+                - --config
+                - /app/configs/sft_lora.yaml
+                - --output_dir=/fsx/checkpoints
+                - --bf16=True
+                - --per_device_train_batch_size=1
+                - --gradient_checkpointing=true
+                - --max_steps=1000
+                - --save_steps=25
+                - --save_total_limit=5
+                - --logging_steps=1
+                - --fsdp=full_shard auto_wrap
+                - --fsdp_transformer_layer_cls_to_wrap=GptOssDecoderLayer
+              volumeMounts:
+                - name: shmem
+                  mountPath: /dev/shm
+                - name: fsx-storage
+                  mountPath: /fsx
+          volumes:
+            - name: shmem
+              emptyDir:
+                medium: Memory
+                sizeLimit: 64Gi
+            - name: fsx-storage
+              persistentVolumeClaim:
+                claimName: fsx-claim

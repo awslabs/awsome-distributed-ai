@@ -1,0 +1,49 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inference-trained
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    node.kubernetes.io/instance-type: ml.g6e.12xlarge
+  containers:
+    - name: inference
+      image: ${REGISTRY}${IMAGE}:${TAG} 
+      imagePullPolicy: Always
+      resources:
+        requests:
+          nvidia.com/gpu: 4
+          memory: "120Gi"
+        limits:
+          nvidia.com/gpu: 4
+          memory: "120Gi"
+      env:
+        - name: HF_TOKEN
+          value: $HF_TOKEN
+        - name: HF_HOME
+          value: "/fsx/hf_cache"
+        - name: PYTORCH_CUDA_ALLOC_CONF
+          value: "expandable_segments:True"
+      command:
+        - "/bin/bash"
+        - "-c"
+        - |
+          echo "=== TRAINED MODEL Inference Pod ==="
+          nvidia-smi --query-gpu=name,memory.total --format=csv
+          sleep infinity
+      volumeMounts:
+        - name: fsx-storage
+          mountPath: /fsx
+        - name: shmem
+          mountPath: /dev/shm
+  volumes:
+    - name: fsx-storage
+      persistentVolumeClaim:
+        claimName: fsx-claim
+    - name: shmem
+      emptyDir:
+        medium: Memory
+        sizeLimit: 64Gi

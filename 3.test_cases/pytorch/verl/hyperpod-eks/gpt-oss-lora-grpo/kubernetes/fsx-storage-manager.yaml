@@ -1,0 +1,31 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fsx-storage-manager
+spec:
+  containers:
+  - name: helper
+    image: ${REGISTRY}${IMAGE}:${TAG} 
+    imagePullPolicy: Always
+    command: ["sleep", "infinity"]
+    resources:
+      requests:
+        memory: "8Gi"
+      limits:
+        memory: "16Gi"
+    env:
+    - name: HF_TOKEN
+      value: $HF_TOKEN
+    - name: HF_HOME
+      value: "/fsx/hf_cache"
+    volumeMounts:
+    - name: fsx-storage
+      mountPath: /fsx
+  volumes:
+  - name: fsx-storage
+    persistentVolumeClaim:
+      claimName: fsx-claim
+  restartPolicy: Never

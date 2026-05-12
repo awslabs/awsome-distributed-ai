@@ -1,0 +1,56 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: eval-grpo
+  labels:
+    app: eval-grpo
+spec:
+  restartPolicy: Never
+  containers:
+    - name: pytorch
+      image: ${REGISTRY}${IMAGE}:${TAG} 
+      imagePullPolicy: Always
+      resources:
+        requests:
+          nvidia.com/gpu: 4
+          memory: "180Gi"
+        limits:
+          nvidia.com/gpu: 4
+          memory: "180Gi"
+      env:
+      - name: PYTORCH_CUDA_ALLOC_CONF
+        value: "expandable_segments:True,garbage_collection_threshold:0.6"
+      - name: HF_TOKEN
+        value: $HF_TOKEN
+      - name: HF_HOME
+        value: "/fsx/hf_cache"
+      - name: CUDA_VISIBLE_DEVICES
+        value: "0,1,2,3"
+      command:
+        - "/bin/bash"
+        - "-c"
+        - |
+          echo "=== GRPO Evaluation ==="
+          echo "Evaluating GRPO checkpoint-1470-peft"
+          
+          python /app/evaluate_grpo.py \
+            --base_model openai/gpt-oss-20b \
+            --grpo_checkpoint /fsx/checkpoints/converted-peft/checkpoint-1470-peft \
+            --sft_checkpoint /fsx/checkpoints/converted-peft/lora-checkpoint-1000-peft \
+            --output /fsx/experiments/grpo_eval_checkpoint1470_$(date +%Y%m%d_%H%M%S).txt
+      volumeMounts:
+        - name: shmem
+          mountPath: /dev/shm
+        - name: fsx-storage
+          mountPath: /fsx
+  volumes:
+    - name: shmem
+      emptyDir:
+        medium: Memory
+        sizeLimit: 64Gi
+    - name: fsx-storage
+      persistentVolumeClaim:
+        claimName: fsx-claim
