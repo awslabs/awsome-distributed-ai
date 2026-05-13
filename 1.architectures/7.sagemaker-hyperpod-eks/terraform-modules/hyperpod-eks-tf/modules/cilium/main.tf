@@ -47,8 +47,10 @@ resource "helm_release" "cilium" {
 
   values = [yamlencode(local.effective_values)]
 
-  wait          = true
-  wait_for_jobs = true
+  # Do not wait for DaemonSet readiness — Cilium pods can only schedule
+  # once HyperPod nodes join the cluster, which happens after this module.
+  wait          = false
+  wait_for_jobs = false
   timeout       = 600
 }
 
