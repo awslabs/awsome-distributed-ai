@@ -4,11 +4,11 @@ variable "eks_cluster_name" {
 }
 
 variable "cilium_mode" {
-  description = "Cilium operating mode: overlay, eni, chaining, or custom."
+  description = "Cilium operating mode: overlay, chaining, or custom."
   type        = string
   validation {
-    condition     = contains(["overlay", "eni", "chaining", "custom"], var.cilium_mode)
-    error_message = "cilium_mode must be one of: overlay, eni, chaining, custom."
+    condition     = contains(["overlay", "chaining", "custom"], var.cilium_mode)
+    error_message = "cilium_mode must be one of: overlay, chaining, custom."
   }
 }
 
@@ -22,10 +22,4 @@ variable "cilium_helm_values" {
   description = "Custom Helm values merged on top of mode-specific defaults. In custom mode, this IS the entire config."
   type        = any
   default     = {}
-}
-
-variable "sagemaker_execution_role_name" {
-  description = "Name of the SageMaker execution IAM role (used for ENI mode IAM policy attachment)."
-  type        = string
-  default     = ""
 }

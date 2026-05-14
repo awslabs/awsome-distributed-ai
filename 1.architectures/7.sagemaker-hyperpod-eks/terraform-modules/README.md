@@ -595,12 +595,11 @@ By default, the FSx for Lustre module installs the Amazon FSx for Lustre Contain
 
 ## Cilium CNI (Optional)
 
-You can replace the default AWS VPC CNI with [Cilium](https://cilium.io) by setting `enable_cilium = true`. This supports three pre-configured modes plus a fully custom option:
+You can replace the default AWS VPC CNI with [Cilium](https://cilium.io) by setting `enable_cilium = true`. This supports two pre-configured modes plus a fully custom option:
 
 | Mode | Description | VPC CNI |
 |------|-------------|---------|
 | `overlay` | VXLAN tunnel, non-VPC-routable pod IPs, highest pod density | Removed |
-| `eni` | Native ENI routing, VPC-routable pod IPs (like VPC CNI) | Removed |
 | `chaining` | VPC CNI handles networking, Cilium adds eBPF policy/LB | Kept |
 | `custom` | User provides all Helm values, no defaults applied | Removed |
 
@@ -643,12 +642,10 @@ For full control over the Cilium Helm chart configuration:
 enable_cilium = true
 cilium_mode   = "custom"
 cilium_helm_values = {
-  routingMode = "native"
+  routingMode = "tunnel"
+  tunnelProtocol = "vxlan"
   ipam = {
-    mode = "eni"
-  }
-  eni = {
-    enabled = true
+    mode = "cluster-pool"
   }
   hubble = {
     enabled = true
@@ -662,7 +659,7 @@ cilium_helm_values = {
 ### Limitations
 
 - **Closed network:** Cilium images must be pre-staged to ECR in closed-network deployments.
-- **ENI mode:** IPv4 only. Pod count bounded by ENI/IP limits per instance type.
+- **ENI mode not supported:** Cilium's native ENI mode is incompatible with HyperPod because SageMaker-managed instances are not visible in the EC2 API. Use `overlay` or `chaining` instead.
 - **Overlay mode:** Pod-to-VPC traffic is SNATed. Webhooks must be host-networked or exposed via Service/Ingress.
 - **Chaining mode:** Some Cilium features limited (L7 policy, IPsec encryption).
 
