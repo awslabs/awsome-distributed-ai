@@ -21,9 +21,23 @@ Parameters:
     Description: The IP range (CIDR notation) for the public subnet in the second Availability Zone. 
     Type: String
     Default: 10.192.11.0/24
+  
+  IsLocalZone:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false'] 
+    Description: Set to true if using Local Zone Deployment (for GB200)
+  
+  NATGatewayAZ:
+    Type: String
+    Default: 'use1-az2'
+    Description: Standard AZ for NAT Gateway when using Local Zone Deployment (for GB200)
+
+Conditions:
+  UseLocalZoneNATGateway: !Equals [!Ref IsLocalZone, 'true']
+  UseStandardNATGateway: !Equals [!Ref IsLocalZone, 'false']
 
 Resources:
-
   VPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -69,29 +83,69 @@ Resources:
         - Key: Name
           Value: !Sub ${ResourceNamePrefix}-SMHP-Public2
 
+  # Standard NAT Gateway
+
   NatGateway1EIP:
     Type: AWS::EC2::EIP
+    Condition: UseStandardNATGateway
     DependsOn: InternetGatewayAttachment
     Properties:
       Domain: vpc
 
   NatGateway2EIP:
     Type: AWS::EC2::EIP
+    Condition: UseStandardNATGateway
     DependsOn: InternetGatewayAttachment
     Properties:
       Domain: vpc
 
   NatGateway1:
     Type: AWS::EC2::NatGateway
+    Condition: UseStandardNATGateway
     Properties:
       AllocationId: !GetAtt NatGateway1EIP.AllocationId
       SubnetId: !Ref PublicSubnet1
 
   NatGateway2:
     Type: AWS::EC2::NatGateway
+    Condition: UseStandardNATGateway
     Properties:
       AllocationId: !GetAtt NatGateway2EIP.AllocationId
       SubnetId: !Ref PublicSubnet2
+  
+  # Local Zone NAT Gateway
+
+  LocalZoneNATGatewaySubnet:
+    Condition: UseLocalZoneNATGateway
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.192.128.0/24
+      AvailabilityZone: !Ref NATGatewayAZ
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ResourceNamePrefix}-SMHP-Public-NAT-GW-Subnet
+  
+  LocalZoneNATGatewaySubnetAssociation:
+    Condition: UseLocalZoneNATGateway
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref LocalZoneNATGatewaySubnet
+  
+  LocalZoneNATGatewayEIP:
+    Condition: UseLocalZoneNATGateway
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  
+  LocalZoneNATGateway:
+    Condition: UseLocalZoneNATGateway
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt LocalZoneNATGatewayEIP.AllocationId
+      SubnetId: !Ref LocalZoneNATGatewaySubnet
   
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -124,7 +178,10 @@ Resources:
 Outputs:
   NatGatewayId: 
     Description: Nat Gateway Id
-    Value: !Ref NatGateway1
+    Value: !If
+      - UseStandardNATGateway
+      - !Ref NatGateway1
+      - !Ref LocalZoneNATGateway
 
   VpcId:
     Description: VPC Id

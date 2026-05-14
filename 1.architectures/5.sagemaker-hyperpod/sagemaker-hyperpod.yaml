@@ -13,7 +13,6 @@ Description: >
   1.2 TB storage which can be overridden by parameter. A role is also created which
   helps to execute HyperPod cluster operations.
 
-
 ####################
 ## Stack Metadata ##
 ####################
@@ -31,6 +30,8 @@ Metadata:
         Parameters:
           - PrimarySubnetAZ
           - BackupSubnetAZ
+          - IsLocalZone
+          - NATGatewayAZ
       - Label:
           default: FSx Lustre configuration
         Parameters:
@@ -59,7 +60,7 @@ Metadata:
       SSMDocumentName:
         default: True/False; Create SSM Session Manager Document. Only set to False if SSM-SessionManagerRunShellAsUbuntu document exists in your account.
       PrimarySubnetAZ:
-        default: Availability zone id to deploy the primary subnets
+        default: Availability zone id to deploy the primary subnets (OR set this to your Local Zone ID if you set IsLocalZone to True. Example use1-dfw2-az1)
       BackupSubnetAZ:
         default: (Optional) Availability zone id to deploy the backup private subnet
       CreateS3Endpoint:
@@ -175,6 +176,19 @@ Parameters:
     Default: 0
     MinValue: 0
     MaxValue: 400000
+  
+  IsLocalZone:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Set to true if you are using a local zone for GB200 (DFW only currently).
+  
+  NATGatewayAZ:
+    Type: String
+    Default: 'use1-az2'
+    Description: Standard AZ for NAT Gateway when using Local Zone with gateway option
 
 ###############################
 ## Conditions for Parameters ##
@@ -186,6 +200,9 @@ Conditions:
   CreateSSMDocument: !Equals [!Ref 'SSMDocumentName', 'true']
   CreateOpenZFSCondition: !Equals [!Ref 'CreateOpenZFS', 'true']
   ConfigureCustomIops: !Not [!Equals [!Ref OpenZFSIops, 0]]
+  UseLocalZoneNATGateway: !Equals [!Ref IsLocalZone, 'true']
+  UseStandardNATGateway: !Equals [!Ref IsLocalZone, 'false']
+
 
 
 ##########################
@@ -279,16 +296,51 @@ Resources:
 
   # Create a NAT GW then add it to the public subnet
   NATGateway:
+    Condition: UseStandardNATGateway
     Type: AWS::EC2::NatGateway
     Properties:
       AllocationId: !GetAtt ElasticIP.AllocationId
       SubnetId: !Ref PublicSubnet
 
   ElasticIP:
+    Condition: UseStandardNATGateway
     Type: AWS::EC2::EIP
     Properties:
       Domain: vpc
+  
+  ### IF YOU ARE USING A LOCAL ZONE, THIS CF STACK WILL CREATE A NAT GATEWAY
+  NATGatewaySubnet:
+    Condition: UseLocalZoneNATGateway
+    Type: AWS::EC2::Subnet
+    Properties:
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.128.0/24
+      AvailabilityZoneId: !Ref NATGatewayAZ
+      Tags:
+        - Key: Name
+          Value: NAT Gateway Subnet
 
+  NATGatewaySubnetRouteTableAssociation:
+    Condition: UseLocalZoneNATGateway
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref NATGatewaySubnet
+      RouteTableId: !Ref PublicRouteTable     
+
+  LocalZoneNATGateway:
+    Condition: UseLocalZoneNATGateway
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt LocalZoneNATGatewayEIP.AllocationId
+      SubnetId: !Ref NATGatewaySubnet
+
+  LocalZoneNATGatewayEIP:
+    Condition: UseLocalZoneNATGateway
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      
   # NOTE: when you create additional security groups, you must ensure that every
   # security group has ingress/egress from/to its own security group id. Failure
   # to do so may cause trn1/p4d/p4de/p5 SMHP cluster creation to fail:
@@ -392,7 +444,10 @@ Resources:
     Properties:
       RouteTableId: !Ref PrivateRouteTable
       DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NATGateway
+      NatGatewayId: !If 
+        - UseStandardNATGateway
+        - !Ref NATGateway
+        - !Ref LocalZoneNATGateway
 
   # Associate the public route table to the public subnet
   PublicSubnetRouteTableAssociation:

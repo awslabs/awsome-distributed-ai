@@ -31,6 +31,11 @@ Metadata:
         Parameters: 
           - AvailabilityZoneId
           - PrivateSubnet1CIDR
+      - Label:
+            default: Local Zone Configuration (for GB200)
+        Parameters:
+            - IsLocalZone
+            - NATGatewayAZ
       - Label: 
           default: Parameter Checks Recommended If EKSClusterStack == true
         Parameters: 
@@ -169,6 +174,9 @@ Mappings:
     sa-east-1:
       BucketName: ws-assets-prod-iad-r-gru-527b8c19222c1182
     us-east-1:
+      # BucketName: ws-assets-prod-iad-r-iad-ed304a55c2ca1aee
+      BucketName: awsome-distributed-training
+    us-east-1-extra:
       BucketName: ws-assets-prod-iad-r-iad-ed304a55c2ca1aee
     ap-northeast-2:
       BucketName: ws-assets-prod-iad-r-icn-ced060f0d38bc0b0
@@ -221,12 +229,13 @@ Parameters:
     Description: >
       The Availability Zone Id you wish to create a private subnet in.
       This private subnet will be used by HyperPod to deploy cross-account ENIs. 
-      The Availability Zone Id you specify should correspond to the location of your accelerated compute capacity.
+      The Availability Zone Id you specify should correspond to the location of your accelerated compute capacity. 
+      If this is for GB200, use use1-dfw2-az1
     Type: String
-    Default: usw2-az2
-    AllowedPattern: ^[a-z]{3,4}[0-9]-az[0-9]$
-    ConstraintDescription: The Availability Zone Id must match the expression
-      ^[a-z]{3,4}[0-9]-az[0-9]$. For example, use1-az4, usw2-az2, or apse1-az2.
+    Default: usw2-az2 
+    # AllowedPattern: ^[a-z]{3,4}[0-9]-az[0-9]$
+    # ConstraintDescription: The Availability Zone Id must match the expression
+    #   ^[a-z]{3,4}[0-9]-az[0-9]$. For example, use1-az4, usw2-az2, or apse1-az2.
 
   PrivateSubnet1CIDR:
     Description: The IP range (CIDR notation) for the private subnet to be created in the target Availability Zone. 
@@ -242,6 +251,17 @@ Parameters:
     Description: The Id of a NAT Gateway to route internet bound traffic to from the newly create private subnet. 
     Type: String
     Default: nat-1234567890abcdef0
+
+  IsLocalZone:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Set to true if using Local Zone Deployment (for GB200)
+
+  NATGatewayAZ:
+    Type: String
+    Default: 'use1-az2'
+    Description: Standard AZ for NAT Gateway when using Local Zone (for GB200)
 
   ### ---------------- EKS Params ----------------###
 
@@ -689,7 +709,7 @@ Resources:
     Properties:
       TemplateURL: 
         Fn::Sub: 
-        - 'https://${BucketName}.s3.${AWS::Region}.amazonaws.com/2433d39e-ccfe-4c00-9d3d-9917b729258e/vpc-stack.yaml'
+        - 'https://${BucketName}.s3.${AWS::Region}.amazonaws.com/gb200-stacks/vpc-stack.yaml'
         - BucketName: 
             Fn::FindInMap: 
             - AssetS3Buckets
@@ -700,6 +720,8 @@ Resources:
         VpcCIDR: !Ref VpcCIDR
         PublicSubnet1CIDR: !Ref PublicSubnet1CIDR
         PublicSubnet2CIDR: !Ref PublicSubnet2CIDR
+        IsLocalZone: !Ref IsLocalZone
+        NATGatewayAZ: !Ref NATGatewayAZ
 
   PrivateSubnetStack:
     Type: AWS::CloudFormation::Stack
@@ -707,7 +729,7 @@ Resources:
     Properties:
       TemplateURL: 
         Fn::Sub: 
-        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/2433d39e-ccfe-4c00-9d3d-9917b729258e/private-subnet-stack.yaml"
+        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/gb200-stacks/private-subnet-stack.yaml"
         - BucketName: 
             Fn::FindInMap: 
             - AssetS3Buckets
@@ -732,7 +754,7 @@ Resources:
     Properties:
       TemplateURL: 
         Fn::Sub: 
-        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/2433d39e-ccfe-4c00-9d3d-9917b729258e/security-group-stack.yaml"
+        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/gb200-stacks/security-group-stack.yaml"
         - BucketName: 
             Fn::FindInMap: 
             - AssetS3Buckets
@@ -758,7 +780,7 @@ Resources:
     Properties:
       TemplateURL:
         Fn::Sub:
-        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/2433d39e-ccfe-4c00-9d3d-9917b729258e/eks-cluster-stack.yaml"
+        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/gb200-stacks/eks-cluster-stack.yaml"
         - BucketName: 
             Fn::FindInMap: 
             - AssetS3Buckets
@@ -787,7 +809,7 @@ Resources:
     Properties:
       TemplateURL:
         Fn::Sub:
-        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/2433d39e-ccfe-4c00-9d3d-9917b729258e/s3-bucket-stack.yaml"
+        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/gb200-stacks/s3-bucket-stack.yaml"
         - BucketName: 
             Fn::FindInMap: 
             - AssetS3Buckets
@@ -802,7 +824,7 @@ Resources:
     Properties:
       TemplateURL:
         Fn::Sub:
-        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/2433d39e-ccfe-4c00-9d3d-9917b729258e/s3-endpoint-stack.yaml"
+        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/gb200-stacks/s3-endpoint-stack.yaml"
         - BucketName: 
             Fn::FindInMap: 
             - AssetS3Buckets
@@ -824,7 +846,7 @@ Resources:
     Properties:
       TemplateURL: 
         Fn::Sub: 
-        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/2433d39e-ccfe-4c00-9d3d-9917b729258e/lifecycle-script-stack.yaml"
+        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/gb200-stacks/lifecycle-script-stack.yaml"
         - BucketName: 
             Fn::FindInMap: 
             - AssetS3Buckets
@@ -843,7 +865,7 @@ Resources:
     Properties:
       TemplateURL: 
         Fn::Sub:
-        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/2433d39e-ccfe-4c00-9d3d-9917b729258e/sagemaker-iam-role-stack.yaml"
+        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/gb200-stacks/sagemaker-iam-role-stack.yaml"
         - BucketName: 
             Fn::FindInMap: 
             - AssetS3Buckets
@@ -862,7 +884,7 @@ Resources:
     Properties:
       TemplateURL: 
         Fn::Sub:
-        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/2433d39e-ccfe-4c00-9d3d-9917b729258e/helm-chart-stack.yaml"
+        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/gb200-stacks/helm-chart-stack.yaml"
         - BucketName: 
             Fn::FindInMap: 
             - AssetS3Buckets
@@ -877,7 +899,7 @@ Resources:
         CustomResourceS3Bucket: 
           Fn::FindInMap: 
             - AssetS3Buckets
-            - Ref: 'AWS::Region'
+            - us-east-1-extra
             - BucketName
         LayerS3Key: '2433d39e-ccfe-4c00-9d3d-9917b729258e/lambda-layer.zip'
         FunctionS3Key: '2433d39e-ccfe-4c00-9d3d-9917b729258e/function.zip'
@@ -892,7 +914,7 @@ Resources:
     Properties:
       TemplateURL:
         Fn::Sub:
-        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/2433d39e-ccfe-4c00-9d3d-9917b729258e/hyperpod-cluster-stack.yaml"
+        - "https://${BucketName}.s3.${AWS::Region}.amazonaws.com/gb200-stacks/hyperpod-cluster-stack.yaml"
         - BucketName: 
             Fn::FindInMap: 
             - AssetS3Buckets

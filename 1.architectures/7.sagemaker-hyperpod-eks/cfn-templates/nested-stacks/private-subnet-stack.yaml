@@ -20,8 +20,8 @@ Parameters:
       The Availability Zone Id you specify should correspond to the location of your accelerated compute capacity.
     Type: String
     Default: usw2-az2
-    AllowedPattern: ^[a-z]{3,4}[0-9]-az[0-9]$
-    ConstraintDescription: The Availability Zone Id must match the expression ^[a-z]{3,4}[0-9]-az[0-9]$. For example, use1-az4, usw2-az2, or apse1-az2. 
+    # AllowedPattern: ^[a-z]{3,4}[0-9]-az[0-9]$
+    # ConstraintDescription: The Availability Zone Id must match the expression ^[a-z]{3,4}[0-9]-az[0-9]$. For example, use1-az4, usw2-az2, or apse1-az2. 
 
   VpcId: 
     Description: The ID of the VPC you wish to use if you do not want to create a new VPC. 
