@@ -12,6 +12,12 @@ ESM-2 is a powerful pLM. We will demonstrate how to use QLoRA to fine-tune ESM-2
 ## 0. Prerequisites
 You will need to set up a SageMaker Hyperpod cluster using 2 g5.24xlarge instances with a shared parallel filesystem such as [Amazon FSx for Lustre](https://docs.aws.amazon.com/fsx/latest/LustreGuide/getting-started.html).  See the sagemaker-hyperpod section in the [Sagemaker Hyperpod](https://github.com/awslabs/awsome-distributed-training/tree/main/1.architectures/5.sagemaker-hyperpod) folder for setup instructions.  
 
+> [!NOTE]
+> The `enroot.sh` and `4.train_docker_dpp.sh` scripts read the Enroot image, dataset, and output locations from `ESM2_DATA_DIR`, which defaults to `/fsxl/${USER}/esm2`. Export it before running if your shared-filesystem mount differs:
+> ```bash
+> export ESM2_DATA_DIR=/your/shared/mount/esm2
+> ```
+
 ## 1. Install conda
 
 You can install MiniConda as follows:

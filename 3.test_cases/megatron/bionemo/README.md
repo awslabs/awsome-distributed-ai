@@ -21,6 +21,12 @@ This project provides a guide to run [Nvidia's BioNemo](https://docs.nvidia.com/
 
 0. You have access to the bionemo container. To get the access to BioNeMo, visit the [information website](https://www.nvidia.com/en-us/clara/bionemo/).
 
+> [!NOTE]
+> The `bionemo_2.5` scripts (`get-data.sh`, `enroot.sh`, and `train-esm.sbatch`) read the data, image, and checkpoint locations from `DATA_HOME_DIR`, which defaults to `/fsxl/${USER}/bionemo`. Export it before running if your shared-filesystem mount differs:
+> ```bash
+> export DATA_HOME_DIR=/your/shared/mount/bionemo
+> ```
+
 1. Have a slurm based AWS ParallelCluster created with a FSx for Lustre filesystem mounted. Below we are presenting instructions for a cluster with compute nodes instantiated with an Ubuntu based AMI.
 
 ## 1. Install Nvidia Container CLI
