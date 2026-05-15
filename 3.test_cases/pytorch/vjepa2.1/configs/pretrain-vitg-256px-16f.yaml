@@ -1,0 +1,166 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# V-JEPA 2.1 ViT-g/16 Full Pre-training Config
+# Reference config from facebookresearch/vjepa2 configs/train_2_1/vitg16/pretrain-256px-16f.yaml
+# Configured for multi-node training on p5en.48xlarge (H200)
+#
+# V-JEPA 2.1 co-trains on images (50% of ranks) and video (50% of ranks).
+#
+# Before running, update the following paths:
+#   - folder: output directory for checkpoints and logs
+#   - datasets: paths to your video training CSVs
+#   - img_data.datasets: path to your ImageNet CSV
+#
+# Adjust 'nodes' to match your cluster size.
+
+app: vjepa_2_1
+nodes: 8
+tasks_per_node: 8
+cpus_per_task: 16
+mem_per_gpu: 220G
+folder: /fsx/<your_username>/vjepa2.1/pretrain/8.8.vitg.256px.16f
+
+data:
+  dataset_type: VideoDataset
+  datasets:
+    - /fsx/<your_username>/vjepa2.1/datasets/ssv2/ssv2_train_paths.csv
+  datasets_weights:
+    - 1.0
+  batch_size: 24
+  crop_size: 256
+  patch_size: 16
+  dataset_fpcs:
+    - 16
+  tubelet_size: 2
+  fps: 4
+  num_workers: 8
+  persistent_workers: true
+  pin_mem: true
+
+img_data:
+  batch_size: 72
+  crop_size: 256
+  dataset_fpcs:
+    - 1
+  dataset_type: VideoDataset
+  datasets:
+    - /fsx/<your_username>/vjepa2.1/datasets/imagenet/imagenet_train_paths.csv
+  datasets_weights:
+    - 1.0
+  rank_ratio: 0.5
+
+data_aug:
+  auto_augment: false
+  motion_shift: false
+  random_resize_aspect_ratio:
+    - 0.75
+    - 1.35
+  random_resize_scale:
+    - 0.3
+    - 1.0
+  reprob: 0.0
+
+loss:
+  loss_exp: 1.0
+  predict_all: true
+  reg_coeff: 0.0
+  shift_by_n: 0
+  weight_distance_loss: true
+
+mask:
+  - aspect_ratio:
+      - 0.75
+      - 1.5
+    full_complement: false
+    max_keep: null
+    max_temporal_keep: 1.0
+    num_blocks: 8
+    spatial_scale:
+      - 0.15
+      - 0.15
+    temporal_scale:
+      - 1.0
+      - 1.0
+  - aspect_ratio:
+      - 0.75
+      - 1.5
+    full_complement: false
+    max_keep: null
+    max_temporal_keep: 1.0
+    num_blocks: 2
+    spatial_scale:
+      - 0.7
+      - 0.7
+    temporal_scale:
+      - 1.0
+      - 1.0
+
+img_mask:
+  - aspect_ratio:
+      - 0.75
+      - 1.5
+    full_complement: false
+    max_keep: null
+    max_temporal_keep: 1.0
+    num_blocks: 10
+    spatial_scale:
+      - 0.15
+      - 0.15
+    temporal_scale:
+      - 1.0
+      - 1.0
+
+meta:
+  dtype: bfloat16
+  eval_freq: 100
+  load_checkpoint: true
+  read_checkpoint: null
+  save_every_freq: 50
+  seed: 239
+  use_sdpa: true
+
+model:
+  has_cls_first: false
+  img_temporal_dim_size: 1
+  interpolate_rope: true
+  is_causal: false
+  lambda_value_img: 0.5
+  lambda_value_vid: 0.5
+  local_window:
+    - -1
+    - -1
+    - -1
+  modality_embedding: true
+  model_name: vit_giant_xformers
+  n_registers: 0
+  n_registers_predictor: 0
+  normalize_predictor: false
+  pred_depth: 24
+  pred_embed_dim: 384
+  pred_is_causal: false
+  pred_local_window:
+    - -1
+    - -1
+    - -1
+  pred_num_heads: 12
+  uniform_power: true
+  use_activation_checkpointing: true
+  use_mask_tokens: true
+  use_rope: true
+  vit_conv: false
+  zero_init_mask_tokens: true
+
+optimization:
+  ema:
+    - 0.99925
+    - 0.99925
+  epochs: 1000
+  final_lr: 0.0006
+  final_weight_decay: 0.04
+  ipe: 300
+  ipe_scale: 1.25
+  lr: 0.0006
+  start_lr: 0.0001
+  warmup: 40
+  weight_decay: 0.04

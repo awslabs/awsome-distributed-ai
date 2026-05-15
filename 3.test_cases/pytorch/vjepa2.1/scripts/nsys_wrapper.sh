@@ -1,0 +1,1 @@
+../../vjepa2/scripts/nsys_wrapper.sh

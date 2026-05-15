@@ -1,0 +1,1 @@
+../../vjepa2/scripts/prepare_ssv2.py

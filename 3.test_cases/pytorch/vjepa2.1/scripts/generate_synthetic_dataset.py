@@ -1,0 +1,1 @@
+../../vjepa2/scripts/generate_synthetic_dataset.py

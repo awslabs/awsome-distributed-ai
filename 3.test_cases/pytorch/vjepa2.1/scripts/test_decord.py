@@ -1,0 +1,1 @@
+../../vjepa2/scripts/test_decord.py

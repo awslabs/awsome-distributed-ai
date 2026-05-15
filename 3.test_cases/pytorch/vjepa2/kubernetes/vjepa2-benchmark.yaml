@@ -1,0 +1,90 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# V-JEPA 2 ViT-g/16 Benchmark - Kubernetes PyTorchJob
+#
+# Prerequisites:
+#   - Kubeflow PyTorchJob operator installed
+#   - EFA device plugin enabled (vpc.amazonaws.com/efa)
+#   - NVIDIA GPU device plugin enabled
+#   - FSx for Lustre PVC named "fsx-claim" mounted at /fsx
+#   - Container image pushed to ECR (update image field below)
+#
+# Note on launch pattern:
+#   The PyTorchJob operator sets MASTER_ADDR, MASTER_PORT, WORLD_SIZE, and RANK
+#   environment variables. The run_train.py launcher calls app.vjepa.train.main()
+#   which uses torch.distributed.init_process_group(). When SLURM env vars are not
+#   present, it falls back to the standard env:// init method using PyTorchJob's
+#   environment variables.
+#
+# Usage:
+#   kubectl apply -f vjepa2-benchmark.yaml
+#   kubectl logs -f pytorchjob/vjepa2-benchmark-worker-0
+
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: vjepa2-benchmark
+  namespace: kubeflow
+spec:
+  pytorchReplicaSpecs:
+    Worker:
+      replicas: 8
+      restartPolicy: OnFailure
+      template:
+        metadata:
+          labels:
+            app: vjepa2-benchmark
+        spec:
+          containers:
+            - name: vjepa2
+              # Replace with your ECR image URI
+              image: <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/vjepa2:vjepa2
+              imagePullPolicy: Always
+              command:
+                - torchrun
+                - "--nproc_per_node=8"
+                - "--nnodes=8"
+                - "scripts/run_train.py"
+              args:
+                - "--fname"
+                - "/fsx/vjepa2/configs/benchmark-vitg-8nodes.yaml"
+              workingDir: /vjepa2
+              env:
+                - name: NCCL_DEBUG
+                  value: INFO
+                - name: FI_PROVIDER
+                  value: efa
+                - name: FI_EFA_SET_CUDA_SYNC_MEMOPS
+                  value: "0"
+                - name: NCCL_SOCKET_IFNAME
+                  value: "^docker,lo,veth"
+                - name: PYTHONPATH
+                  value: "/vjepa2"
+              resources:
+                limits:
+                  nvidia.com/gpu: 8
+                  vpc.amazonaws.com/efa: 32
+                  memory: 220Gi
+                requests:
+                  nvidia.com/gpu: 8
+                  vpc.amazonaws.com/efa: 32
+                  cpu: "192"
+                  memory: 200Gi
+              volumeMounts:
+                - name: fsx
+                  mountPath: /fsx
+                - name: shmem
+                  mountPath: /dev/shm
+          volumes:
+            - name: fsx
+              persistentVolumeClaim:
+                claimName: fsx-claim
+            - name: shmem
+              emptyDir:
+                medium: Memory
+                sizeLimit: 200Gi
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule

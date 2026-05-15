@@ -1,0 +1,114 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# V-JEPA 2 ViT-g/16 Benchmark Config
+# Adapted from facebookresearch/vjepa2 configs/train/vitg16/pretrain-256px-16f.yaml
+# Configured for 8-node (64 GPU) benchmark run on p5en.48xlarge (H200)
+#
+# Before running, update the following paths:
+#   - folder: output directory for logs and checkpoints
+#   - datasets: path to your training CSV (synthetic or SSv2)
+#
+# Important: Generate at least 50,000 synthetic videos for accurate benchmarks.
+# Smaller datasets (e.g. 5,000) cause frequent data loader re-initialization
+# which inflates iteration times and masks true GPU throughput.
+
+app: vjepa
+nodes: 8
+tasks_per_node: 8
+cpus_per_task: 16
+mem_per_gpu: 220G
+folder: /fsx/<your_username>/vjepa2/benchmark/8.8.vitg.256px.16f
+
+data:
+  dataset_type: VideoDataset
+  datasets:
+    - /fsx/<your_username>/vjepa2/datasets/synthetic/synthetic_train_paths.csv
+  datasets_weights:
+    - 1.0
+  batch_size: 24
+  crop_size: 256
+  patch_size: 16
+  dataset_fpcs:
+    - 16
+  tubelet_size: 2
+  fps: 4
+  num_workers: 8
+  persistent_workers: true
+  pin_mem: true
+
+data_aug:
+  auto_augment: false
+  motion_shift: false
+  random_resize_aspect_ratio:
+    - 0.75
+    - 1.35
+  random_resize_scale:
+    - 0.3
+    - 1.0
+  reprob: 0.0
+
+loss:
+  loss_exp: 1.0
+
+mask:
+  - aspect_ratio:
+      - 0.75
+      - 1.5
+    full_complement: false
+    max_keep: null
+    max_temporal_keep: 1.0
+    num_blocks: 8
+    spatial_scale:
+      - 0.15
+      - 0.15
+    temporal_scale:
+      - 1.0
+      - 1.0
+  - aspect_ratio:
+      - 0.75
+      - 1.5
+    full_complement: false
+    max_keep: null
+    max_temporal_keep: 1.0
+    num_blocks: 2
+    spatial_scale:
+      - 0.7
+      - 0.7
+    temporal_scale:
+      - 1.0
+      - 1.0
+
+meta:
+  dtype: bfloat16
+  eval_freq: 100
+  load_checkpoint: false
+  read_checkpoint: null
+  save_every_freq: -1
+  seed: 239
+  use_sdpa: true
+
+model:
+  model_name: vit_giant_xformers
+  pred_depth: 12
+  pred_embed_dim: 384
+  pred_num_heads: 12
+  uniform_power: true
+  use_activation_checkpointing: true
+  use_mask_tokens: true
+  use_rope: true
+  zero_init_mask_tokens: true
+
+optimization:
+  ema:
+    - 0.99925
+    - 0.99925
+  epochs: 1
+  final_lr: 0.000525
+  final_weight_decay: 0.04
+  ipe: 200
+  ipe_scale: 1.25
+  lr: 0.000525
+  start_lr: 0.0001
+  warmup: 10
+  weight_decay: 0.04
