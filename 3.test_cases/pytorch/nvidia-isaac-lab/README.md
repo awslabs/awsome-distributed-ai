@@ -7,7 +7,7 @@ Train the [Unitree H1 humanoid robot](https://www.unitree.com/h1) to walk on rou
 | Feature | Description |
 |---------|-------------|
 | Multi-node distributed RL | PyTorch DDP via `torchrun` across 2+ nodes with 4-8 GPUs each |
-| Dual compute backends | SageMaker HyperPod EKS (persistent) and SageMaker Training Jobs (serverless) |
+| Dual compute backends | Amazon SageMaker HyperPod EKS (Persistent) and Amazon SageMaker Training Jobs (Ephemeral) |
 | GPU-accelerated simulation | 4096 parallel environments on NVIDIA Isaac Sim |
 | MLflow experiment tracking | Batched metric logging via background thread |
 | Config-driven generation | Single `config.yaml` generates all Kubernetes manifests and launch scripts |
@@ -207,7 +207,6 @@ mlflow:
 | `docker/Dockerfile` | Isaac Sim 5.1.0 + Isaac Lab v2.3.2 + training dependencies |
 | `docker/patches/mlflow-train.patch` | MLflow batched metric logging patch for skrl's `train.py` |
 | `scripts/sm-train-entrypoint.sh` | SageMaker BYOC entrypoint (parses `resourceconfig.json`, launches `torchrun`) |
-| `scripts/distributed_run.bash` | AWS Batch distributed launcher (workshop path) |
 | `templates/*.tpl` | Kubernetes manifest and Python script templates |
 | `viz-scripts/` | DCV visualization helpers for EC2 workshop path |
 
