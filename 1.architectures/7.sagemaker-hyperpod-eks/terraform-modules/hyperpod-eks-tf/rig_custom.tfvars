@@ -19,3 +19,4 @@ restricted_instance_groups = [
         fsxl_size_in_gi_b = 4800
    }
 ]
+create_observability_module = true
