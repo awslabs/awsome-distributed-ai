@@ -78,7 +78,19 @@ There are two steps to setup Slurm with the accounting database:
 1. Configure Slurm accounting
 
 ### Add database configuration file
-You need to execute the following command on the controller node to configure the database connectivity for Slurm.
+You need to execute the following commands on the controller node to configure the database connectivity for Slurm.
+
+The Aurora cluster parameter group deployed by `cf_database-accounting.yaml` sets `require_secure_transport: ON`, so slurmdbd must connect over TLS and verify the RDS server certificate. The RDS public CA is not in the default OS trust store on Amazon Linux or Ubuntu, so first download the RDS global CA bundle and make it readable:
+
+```bash
+# Download the RDS public CA bundle so slurmdbd can verify the TLS server certificate
+# required by the cluster parameter group (require_secure_transport: ON).
+sudo curl -o /etc/ssl/certs/rds-global-bundle.pem \
+  https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+sudo chmod 644 /etc/ssl/certs/rds-global-bundle.pem
+```
+
+Then write the slurmdbd configuration. The `StorageParameters=SSL_CA=...` line points slurmdbd at the bundle you just downloaded; see the Slurm [`StorageParameters` documentation](https://slurm.schedmd.com/slurmdbd.conf.html#OPT_StorageParameters) for details.
 
 ```bash
 cat > /opt/slurm/etc/slurmdbd.conf << EOF
@@ -92,6 +104,7 @@ StorageUser=${DATABASE_ADMIN}
 StoragePass=$(aws secretsmanager get-secret-value --secret-id ${DATABASE_SECRET_ARN} --query SecretString --output text)
 StorageHost=${DATABASE_URI}
 StoragePort=3306
+StorageParameters=SSL_CA=/etc/ssl/certs/rds-global-bundle.pem
 EOF
 ```
 
