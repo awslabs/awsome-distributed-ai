@@ -157,12 +157,12 @@ We'll use `us-east-1` throughout because `g6.48xlarge` is broadly available
 there, and the region has six AZs to pick from when capacity is tight in
 your preferred AZ.
 
-> **AZ caveat for FSx OpenZFS** — at the time of writing, the prereqs
-> template uses `DeploymentType: SINGLE_AZ_HA_1` for `/home`. HA_1 depends
-> on first-generation FSx hardware that has been rolling off in favor of
-> [`SINGLE_AZ_HA_2`](https://docs.aws.amazon.com/fsx/latest/OpenZFSGuide/deployment-options.html)
-> (Graviton-based, broader AZ coverage). In our test deployments, `HA_1`
-> failed in both `us-east-1a` and `us-east-1b` with:
+> **AZ caveat for FSx OpenZFS** — when this walkthrough was first run, the
+> prereqs template used `DeploymentType: SINGLE_AZ_HA_1` for `/home`, which
+> [is not offered in many regions](https://docs.aws.amazon.com/fsx/latest/OpenZFSGuide/available-aws-regions.html)
+> — including `us-east-1`, `us-east-2`, `us-west-2`, `eu-central-1`,
+> `eu-west-1`, `ap-northeast-1`, `ap-southeast-1`/`2`, `ap-south-1`, and
+> `ca-central-1`. In `us-east-1` we saw the create fail with:
 >
 > ```
 > The file system creation request failed because OpenZFS file systems with
@@ -170,8 +170,11 @@ your preferred AZ.
 > requested Availability Zones
 > ```
 >
-> For the rest of this post we use a **forked template** with HA_1 changed
-> to HA_2 — a single-line patch:
+> [`PR #1100`](https://github.com/awslabs/awsome-distributed-ai/pull/1100)
+> ([issue #1097](https://github.com/awslabs/awsome-distributed-ai/issues/1097))
+> flips the default to `SINGLE_AZ_HA_2`, which uses gen-2 hardware and is
+> available in every region where HA_1 was failing. If you're running this
+> post before that PR has merged, fork the template with a one-line patch:
 >
 > ```bash
 > sed 's/DeploymentType: SINGLE_AZ_HA_1/DeploymentType: SINGLE_AZ_HA_2/' \
@@ -179,10 +182,11 @@ your preferred AZ.
 >   > parallelcluster-prerequisites-ha2.yaml
 > ```
 >
-> HA_2 has different parameter minimums: **storage ≥256 GiB** and
-> **throughput ≥160 MB/s** (HA_1 allowed 64/128). Reflect this in the
-> create-stack parameters below. The pricing per MB/s is also different;
-> see the [FSx OpenZFS pricing page](https://aws.amazon.com/fsx/openzfs/pricing/).
+> HA_2's throughput minimum is 160 MB/s (vs HA_1's 64 MB/s), and HA_2's
+> valid set is discrete: `160, 320, 640, 1280, 2560, 3840, 5120, 7680,
+> 10240`. Pick a value from that set when overriding `HomeThroughput`. The
+> per-MB/s price is also different; see the
+> [FSx OpenZFS pricing page](https://aws.amazon.com/fsx/openzfs/pricing/).
 
 ### Step 1 — Prereqs stack
 
@@ -202,11 +206,13 @@ Two parameter notes:
 - `HomeThroughput` (the FSx OpenZFS provisioned throughput) defaults to
   **512 MB/s**. That's badly oversized for shared home directories on a
   3-user demo cluster, and FSx OpenZFS prices throughput aggressively. Drop
-  it to the **128 MB/s** minimum allowed for `SINGLE_AZ_HA_1` deployments.
-  (Watch for this gotcha: the `HomeThroughput` parameter has no
-  `AllowedValues` constraint in the template, but FSx rejects values below
-  128 with a `BadRequest` from the API rather than from CloudFormation
-  itself — a failed CREATE that takes you straight to `ROLLBACK_COMPLETE`.)
+  it to **160 MB/s** — the minimum value for the `SINGLE_AZ_HA_2`
+  deployment type we use below. (Watch for this gotcha: the
+  `HomeThroughput` parameter has no `AllowedValues` constraint in the
+  template, and FSx accepts only a discrete set of values that *differs by
+  deployment type*. Pass a value not in the set — e.g. `512` against HA_2
+  — and FSx rejects with a `BadRequest` from the API rather than from
+  CloudFormation itself, sending the stack straight to `ROLLBACK_COMPLETE`.)
 
 These two knobs cut storage cost from ~$1.70/hr to ~$0.55/hr.
 
@@ -281,17 +287,24 @@ is to satisfy the API.
 
 ### Step 3 — Provision the accounting DB
 
-Now the database itself, with the prereqs subnets wired in. One patch
-first: the template hard-codes an Aurora MySQL engine version
-(`8.0.mysql_aurora.3.07.1` at the time of this writing) that
+Now the database itself, with the prereqs subnets wired in.
+
+When this walkthrough was first run, the template hard-coded
+`EngineVersion: "8.0.mysql_aurora.3.07.1"` — a version
 [AWS rotates out of service on a rolling basis](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraMySQL.Updates.Versions.html).
-If the version named in the template is no longer offered in your region,
-CloudFormation fails with `Cannot find version 8.0.mysql_aurora.3.07.1 for
-aurora-mysql`. Patch to a current version (`aws rds
-describe-db-engine-versions --engine aurora-mysql` lists what's live):
+CloudFormation failed with `Cannot find version 8.0.mysql_aurora.3.07.1 for
+aurora-mysql`.
+[`PR #1101`](https://github.com/awslabs/awsome-distributed-ai/pull/1101)
+([issue #1096](https://github.com/awslabs/awsome-distributed-ai/issues/1096))
+exposes `EngineVersion` as a CloudFormation parameter so the template can
+absorb future Aurora rotations without code edits. If you're running this
+before that PR has merged, sed the template to a currently-available
+version (`aws rds describe-db-engine-versions --engine aurora-mysql --query
+'DBEngineVersions[?Status==\`available\`].EngineVersion'` lists what's
+live — `8.0.mysql_aurora.3.12.0` was the latest at the time of writing):
 
 ```bash
-sed 's|EngineVersion: "8.0.mysql_aurora.3.07.1"|EngineVersion: "8.0.mysql_aurora.3.09.0"|' \
+sed 's|EngineVersion: "8.0.mysql_aurora.3.07.1"|EngineVersion: "8.0.mysql_aurora.3.12.0"|' \
   1.architectures/8.accounting-database/cf_database-accounting.yaml \
   > cf_database-accounting-patched.yaml
 ```
@@ -1145,28 +1158,16 @@ in production:
 | Aurora ACU floor charges 24/7 | Even an idle cluster bills ~$0.12/hr from Aurora | Acceptable; if you tear the cluster down nightly, also delete the DB stack. |
 | `require_secure_transport: ON` rejects plaintext clients | Manual `mysql` clients connecting directly fail with `SSL connection error` | Use `mysql --ssl-mode=REQUIRED --ssl-ca=/path/to/global-bundle.pem`, or connect via `slurmdbd` only. |
 
-Two issues we noticed in passing in the source repository
-([`awslabs/awsome-distributed-ai`](https://github.com/awslabs/awsome-distributed-ai))
-that are worth filing as follow-up PRs:
+Drafting this post surfaced four upstream issues in
+[`awslabs/awsome-distributed-ai`](https://github.com/awslabs/awsome-distributed-ai)
+that were filed and have fixes in flight:
 
-- The accounting DB
-  [README's slurmdbd snippet](https://github.com/awslabs/awsome-distributed-ai/blob/main/1.architectures/8.accounting-database/README.md#configure-slurm-accounting)
-  has three typos (`custeradmin` for `clusteradmin`, `slurmdctld` for
-  `slurmctld`, and a copy-paste reference to "LDAP User Interface") and
-  doesn't mention the `StorageParameters=SSL_CA=...` needed for the
-  TLS-required cluster. Fine for someone working on autopilot, painful for
-  someone copy-pasting.
-- The
-  [prereqs CloudFormation template](https://github.com/awslabs/awsome-distributed-ai/blob/main/1.architectures/2.aws-parallelcluster/infra-templates/parallelcluster-prerequisites.yaml)
-  hard-codes `SINGLE_AZ_HA_1` for the OpenZFS deployment type — which is
-  not available in many AZs. Exposing this as a parameter (with `HA_2` as
-  a recommended default) would save people the surprise rollback.
-- The
-  [accounting DB template](https://github.com/awslabs/awsome-distributed-ai/blob/main/1.architectures/8.accounting-database/cf_database-accounting.yaml)
-  hard-codes Aurora MySQL `8.0.mysql_aurora.3.07.1` — a version AWS has
-  since retired. Pinning by minor version makes the template stop working
-  on a rolling cadence; either pin to the family (e.g. `8.0.mysql_aurora.3`)
-  and let RDS pick latest, or expose as a parameter.
+| Issue | PR | What it fixes |
+|---|---|---|
+| [#1094](https://github.com/awslabs/awsome-distributed-ai/issues/1094) | [#1098](https://github.com/awslabs/awsome-distributed-ai/pull/1098) | Three typos and a leftover LDAP copy/paste line in the accounting-DB README (`custeradmin` → `clusteradmin`, `slurmdctld` → `slurmctld`, "LDAP User Interface" → "database"). |
+| [#1095](https://github.com/awslabs/awsome-distributed-ai/issues/1095) | [#1099](https://github.com/awslabs/awsome-distributed-ai/pull/1099) | The HyperPod `slurmdbd.conf` snippet doesn't configure TLS even though the Aurora cluster parameter group sets `require_secure_transport: ON`. Adds the RDS CA bundle download and `StorageParameters=SSL_CA=...`. ParallelCluster is unaffected — PC plumbs SSL automatically. |
+| [#1096](https://github.com/awslabs/awsome-distributed-ai/issues/1096) | [#1101](https://github.com/awslabs/awsome-distributed-ai/pull/1101) | Accounting-DB template pinned the retired Aurora MySQL `8.0.mysql_aurora.3.07.1`. The PR exposes `EngineVersion` as a parameter (default `8.0.mysql_aurora.3.12.0`, the current latest Serverless-v2-compatible version) so future Aurora rotations don't break the template. |
+| [#1097](https://github.com/awslabs/awsome-distributed-ai/issues/1097) | [#1100](https://github.com/awslabs/awsome-distributed-ai/pull/1100) | Prereqs template hard-coded `SINGLE_AZ_HA_1` for FSx OpenZFS, which isn't offered in many major regions (us-east-1, us-east-2, us-west-2, eu-central-1, eu-west-1, ap-northeast-1, …). Flips the default to `SINGLE_AZ_HA_2`. |
 
 ## Wrap-up
 
