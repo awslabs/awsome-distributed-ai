@@ -320,7 +320,7 @@ Resources:
         CopyTagsToBackups: Yes
         CopyTagsToVolumes: Yes
         DailyAutomaticBackupStartTime: '19:00'
-        DeploymentType: SINGLE_AZ_HA_1
+        DeploymentType: SINGLE_AZ_HA_2
         Options: 
           - DELETE_CHILD_VOLUMES_AND_SNAPSHOTS
         RootVolumeConfiguration: 
