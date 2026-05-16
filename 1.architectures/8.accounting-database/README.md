@@ -25,17 +25,16 @@ In this section, you will retrieve the database parameter that are used by Slurm
 
 ### Get the Database URI
 
-Retrieve the `DatabaseHost` to connect to the LDAP User Interface.
+Retrieve the `DatabaseHost` to connect to the database.
 ```bash
 DATABASE_URI=$(aws cloudformation describe-stacks \
  --stack-name slurm-accounting-database \
  --query 'Stacks[0].Outputs[?OutputKey==`DatabaseHost`].OutputValue' \
  --output text)
 ```
-  Copy URL into a Web Browser.
 
 ### Get the Database Admin User
-The database admin user is by default `custeradmin` if you didn't change it on creation.
+The database admin user is by default `clusteradmin` if you didn't change it on creation.
 
 Get the Database admin user name
 ```bash
@@ -112,7 +111,7 @@ EOF
 
 Restart the slurmctld to pickup the configuration change.
 ```bash
-sudo systemctl restart slurmdctld
+sudo systemctl restart slurmctld
 sudo scontrol reconfigure
 ```
 
