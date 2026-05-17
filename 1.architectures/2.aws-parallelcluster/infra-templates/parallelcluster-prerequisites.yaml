@@ -3,14 +3,20 @@
 
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  This CloudFormation stack creates all the necessary pre-requisites for AWS ParallelCluster,
-  these include VPC and two Subnets, a security group and FSx Lustre Filesystem.
-  A public subnet and a private subnet are created in an Availability Zone that you provide as a parameter.
-  As part of the template you'll deploy an Internet Gateway and NAT Gateway in
-  the public subnet. In addition you deploy endpoints for Amazon S3. The VPC contains 2 CIDR blocks with 10.0.0.0/16 and 10.1.0.0/16
-  The first CIDR is used for the public subnet, the second is used for the private.
-  The template creates an fsx lustre volume in the specified AZ with a default of
-  1.2 TB storage which can be overridden by parameter.
+  This CloudFormation stack creates all the pre-requisites for AWS ParallelCluster:
+  a VPC with one public subnet and two private subnets in different AZs, a NAT
+  Gateway, an Internet Gateway, an Amazon S3 endpoint, an EFA-friendly security
+  group, an FSx Lustre file system (for /fsx), and a Multi-AZ FSx OpenZFS file
+  system (for /home) split across the two private subnets for cross-AZ failover.
+  The VPC has two CIDR blocks: 10.0.0.0/16 (used for the public subnet) and
+  10.1.0.0/16 (split into two /17s for the private subnets). FSx Lustre defaults
+  to 1.2 TB; override via parameter.
+
+  BREAKING CHANGE for existing stacks: this version switches the FSx OpenZFS
+  DeploymentType to MULTI_AZ_1. DeploymentType is CREATE_ONLY, which means
+  CloudFormation must REPLACE the file system on update — your /home data
+  will be destroyed and recreated. Back up /home before running update-stack,
+  or redeploy the stack from scratch.
 
 
 ####################
@@ -30,9 +36,17 @@ Metadata:
           - PrimarySubnetAZ
           - SecondarySubnetAZ
       - Label:
-          default: Fsx Lustre storage size
+          default: FSx Lustre (/fsx) configuration
         Parameters:
           - Capacity
+          - PerUnitStorageThroughput
+          - Compression
+          - LustreVersion
+      - Label:
+          default: FSx OpenZFS (/home) configuration
+        Parameters:
+          - HomeCapacity
+          - HomeThroughput
       - Label:
           default: Network and S3 endpoints configuration
         Parameters:
@@ -67,11 +81,9 @@ Parameters:
       Multi-AZ FSx OpenZFS (the /home file system) and for the
       accounting-database CloudFormation template's Aurora DBSubnetGroup,
       which requires subnets in two different Availability Zones. Leave
-      empty to default to the second AZ in the region (alphabetical), or
-      provide an explicit AZ name (e.g. us-east-1c) to override. Must differ
-      from PrimarySubnetAZ. NOTE: if your PrimarySubnetAZ happens to be the
-      second alphabetically, set SecondarySubnetAZ explicitly to avoid a
-      collision at FSx create time.
+      empty to auto-pick an AZ different from PrimarySubnetAZ (the first
+      alphabetical AZ that isn't already PrimarySubnetAZ), or provide an
+      explicit AZ name (e.g. us-east-1c) to override.
     Type: String
     Default: ""
 
@@ -148,6 +160,11 @@ Parameters:
 Conditions:
   S3EndpointCondition: !Equals [!Ref 'CreateS3Endpoint', 'true']
   UseAutoSecondaryAZ: !Equals [!Ref SecondarySubnetAZ, '']
+  # If PrimarySubnetAZ happens to be the second AZ alphabetically (the
+  # default position the auto-secondary would otherwise pick), the
+  # auto-secondary falls back to the first AZ instead. Guarantees the
+  # two AZs are distinct under the auto path without any user input.
+  PrimaryIsSecondAZAlphabetical: !Equals [!Ref PrimarySubnetAZ, !Select [1, !GetAZs '']]
 
 ###########
 ## Rules ##
@@ -287,7 +304,10 @@ Resources:
       CidrBlock: !Select [ 1, !Cidr [ !FindInMap [Networking, VPC, CIDR1], 2, 15 ]]
       AvailabilityZone: !If
         - UseAutoSecondaryAZ
-        - !Select [ 1, !GetAZs '' ]
+        - !If
+          - PrimaryIsSecondAZAlphabetical
+          - !Select [ 0, !GetAZs '' ]
+          - !Select [ 1, !GetAZs '' ]
         - !Ref SecondarySubnetAZ
       Tags:
         - Key: Name
@@ -297,7 +317,10 @@ Resources:
               - 'Private Subnet -'
               - !If
                 - UseAutoSecondaryAZ
-                - !Select [ 1, !GetAZs '' ]
+                - !If
+                  - PrimaryIsSecondAZAlphabetical
+                  - !Select [ 0, !GetAZs '' ]
+                  - !Select [ 1, !GetAZs '' ]
                 - !Ref SecondarySubnetAZ
 
   # Create and set the public route table
@@ -396,6 +419,11 @@ Resources:
     Type: AWS::FSx::FileSystem
     Properties:
       FileSystemType: OPENZFS
+      # Note on EndpointIpAddressRange: omitted intentionally. With both
+      # /17s of 10.1.0.0/16 used by the private subnets, FSx will auto-
+      # pick a free /28 from 10.0.128.0/17 (the unused half of the public
+      # CIDR). It's reachable from every subnet via the VPC's local route,
+      # which is why the choice works without explicit configuration.
       OpenZFSConfiguration:
         AutomaticBackupRetentionDays: 30
         CopyTagsToBackups: Yes
@@ -406,13 +434,22 @@ Resources:
         # https://docs.aws.amazon.com/fsx/latest/OpenZFSGuide/available-aws-regions.html
         # The HA pair is split across PrimaryPrivateSubnet and
         # SecondaryPrivateSubnet for cross-AZ failover.
+        #
+        # WARNING: DeploymentType is CREATE_ONLY. Changing this on an
+        # existing stack triggers a REPLACE of the file system, destroying
+        # /home data. Back up before update-stack, or redeploy fresh.
         DeploymentType: MULTI_AZ_1
         PreferredSubnetId: !Ref PrimaryPrivateSubnet
-        # Floating-IP routes are added to the private RT so traffic from
-        # the compute fleet (in PrimaryPrivateSubnet) reaches whichever
-        # file server is currently active.
+        # Floating-IP routes are added to BOTH route tables so traffic
+        # from every /home client — the compute fleet in
+        # PrimaryPrivateSubnet AND the head node in PublicSubnet —
+        # reaches whichever file server is currently active. A client in
+        # a subnet whose RT is not listed here loses /home access on
+        # failover, because the floating IP doesn't get a host route in
+        # its RT.
         RouteTableIds:
           - !Ref PrivateRouteTable
+          - !Ref PublicRouteTable
         Options:
           - DELETE_CHILD_VOLUMES_AND_SNAPSHOTS
         RootVolumeConfiguration:
