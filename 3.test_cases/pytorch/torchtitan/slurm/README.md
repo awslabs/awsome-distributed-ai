@@ -2,21 +2,24 @@
 
 ### 0. Prerequisites
 
-Before running this training, you'll need to create a Slurm cluster with an FSx for Lustre file system. Instructions can be found in [1.architectures](../../../1.architectures). Float8 data types are natively supported in NVIDIA H100 and subsequent generations hence it is recommended to run this on at least 1 x p5/p5e/p5en.48xlarge instance. The [Performance Numbers](#performance-numbers) reported in the later sections are based on 4 x p5.48xlarge instances.
+Before running this training, you'll need to create a Slurm cluster with an FSx for Lustre file system. Instructions can be found in [1.architectures](../../../1.architectures). FP8 data types are natively supported on NVIDIA H100 and subsequent generations, so it is recommended to run this on at least 1 x p5/p5e/p5en.48xlarge (H100) or p6-b200/p6-b300 (Blackwell) instance. The [Performance Numbers](#performance-numbers) section was originally captured on 4 x p5.48xlarge.
 
+The setup script targets CUDA 13 (`cu130`) wheels so that `torch.compile`-ed FP8 kernels run with native `sm_103` binaries on P6-B300; older drivers/CUDA toolkits will fall back to PTX-JIT for B300.
 
-### 1. Create torchtitan Conda Environment
+### 1. Create torchtitan venv
 
-On your cluster head node, run the `0.create_conda_env.sh` script:
+On your cluster head node, run the `0.create_venv.sh` script:
 
 ```bash
-bash 0.create_conda_env.sh
+bash 0.create_venv.sh
 ```
 
 This script:
-- Downloads and installs Miniconda and creates a torchtian conda environment named "pt_torchtitan"
-- Clones the torchtitan repository from GitHub 
-- Installs all required dependencies including PyTorch nightly build with CUDA support and [torchao library](https://github.com/pytorch/ao) for FP8 support
+- Creates a Python 3.11 stdlib virtual environment named `pt_torchtitan`
+- Installs **pinned** versions of `torch` (2.9.1+cu130) and `torchao` (0.17.0+cu130) from `https://download.pytorch.org/whl/cu130`
+- Clones torchtitan at the **`v0.2.2` release tag** (not `main`) and installs it editable
+
+Override the defaults by exporting `PYTHON_BIN`, `TORCH_VERSION`, `TORCHAO_VERSION`, `TORCHTITAN_REF`, or `PYTORCH_INDEX_URL` before invoking the script.
 
 
 ### 2. Download the Tokenizer
@@ -46,8 +49,14 @@ sbatch 1.llama_3_8b_torchtitan.sh
 
 This script:
 - Sets the path to the torchtitan training script: `./torchtitan/torchtitan/train.py`
-- Uses the default Llama 3 8B configuration: `./torchtitan/torchtitan/models/llama/train_configs/llama3_8b.toml`
+- Uses the **vendored** default Llama 3 8B configuration: `./configs/llama3_8b.toml` (a copy of torchtitan v0.2.2's preset, included so the test case behavior doesn't drift with upstream `main`)
 - Launches distributed training on your cluster
+
+To run with FP8 + `torch.compile` instead, point `CONFIG_FILE` at the optimized variant before sbatch:
+
+```bash
+CONFIG_FILE="$(pwd)/configs/llama3_8b_fp8_compile.toml" sbatch 1.llama_3_8b_torchtitan.sh
+```
 
 The training will log metrics including loss, throughput, memory utilization, and MFU (Model FLOPS Utilization) to help monitor training efficiency.
 
@@ -70,20 +79,23 @@ Running the llama3_8b.toml default configuration in torchtitan/models/llama/trai
 
 ## Performance Optimizations
 
-To apply various optimizations that leverage `torch.compile` and FP8 for improved performance, update these entries in your training config file:
+`configs/llama3_8b_fp8_compile.toml` is a copy of `configs/llama3_8b.toml` with `torch.compile` and FP8 (rowwise dynamic) enabled. The toggles in torchtitan v0.2.2 are:
 
 ```toml
-compile = true
-...
-...
+[model]
+converters = ["float8"]
 
-[float8]
-enable_float8_linear = true
+[compile]
+enable = true
+components = ["model", "loss"]
+
+[quantize.linear.float8]
 enable_fsdp_float8_all_gather = true
 precompute_float8_dynamic_scale_for_fsdp = true
+filter_fqns = ["output"]
 ```
 
-Applying these optimizations to the llama3_8b.toml config and running on the 4 x p5.48xlarge instances we observe improved throughput(**15.92%** improvement) and MFU metrics(**from 39.73% -> 46.06%**) compared to the default configuration:
+Running with this optimized config on 4 x p5.48xlarge (32 H100s) improved throughput by **15.92%** and MFU from **39.73% → 46.06%** compared to the default configuration:
 
 ```bash
 2: 2025-03-04 00:31:19,918 - root - INFO - [36mstep: 1990  [32mloss:  3.4255  [33mmemory: 63.48GiB(80.25%)  [34mtps: 7,865  [35mmfu: 46.06%[39m

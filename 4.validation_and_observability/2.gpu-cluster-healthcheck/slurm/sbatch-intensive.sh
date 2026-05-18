@@ -24,8 +24,10 @@ HEALTHCHECK_DIR="${HEALTHCHECK_DIR:-/shared/gpu-health-checks}"
 # Results base directory
 RESULTS_BASE="${RESULTS_BASE:-/shared/healthcheck-results}"
 
-# NCCL test container image
-NCCL_CONTAINER="${NCCL_CONTAINER:-public.ecr.aws/hpc-cloud/nccl-tests:latest}"
+# NCCL test container image. The `docker://` scheme is required on older Pyxis
+# (< v0.20); newer Pyxis treats it as a no-op. See checks/5-nccl-allreduce.sh
+# for the rationale.
+NCCL_CONTAINER="${NCCL_CONTAINER:-docker://public.ecr.aws/hpc-cloud/nccl-tests:latest}"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # End User Variables

@@ -30,8 +30,8 @@ Before running NeMo jobs, build a custom optimized container image for EFA and C
 Build Image:
 
   ```bash
-  docker build --progress=plain -t aws-nemo:25.07 -f ../Dockerfile ..
-  enroot import -o ~/aws-nemo-25-07.sqsh dockerd://aws-nemo:25.07
+  docker build --progress=plain -t aws-nemo:26.02 -f ../Dockerfile ..
+  enroot import -o ~/aws-nemo-26-02.sqsh dockerd://aws-nemo:26.02
   ```
 
 ## 5. Install Dependencies and Prepare NeMo 2.0 Environment
@@ -73,7 +73,7 @@ In NeMo-Run, you can build and configure everything using Python, eliminating th
 In this example, we run the following script to start the LLaMa 8B pretraining job:
 
   ```bash
-  python run.py --container_image ~/aws-nemo-25-07.sqsh --nodes 2 --partition dev --env_vars_file env_vars.json --max_steps 1000
+  python run.py --container_image ~/aws-nemo-26-02.sqsh --nodes 2 --partition dev --env_vars_file env_vars.json --max_steps 1000
   ```
 
 ## 7. References

@@ -20,7 +20,7 @@ Before running this training, you'll need to create an Amazon EKS or a SageMaker
 
 Since [llama 3](https://huggingface.co/meta-llama/Meta-Llama-3-8B) is a gated model users have to register in Huggingface and obtain an HF_Access_Token before running this example.
 
-### 0.3 Setup Persistant Volume Claim(PVC) for fsx 
+### 0.3 Setup Persistent Volume Claim(PVC) for fsx 
 
 We need to setup an PVC for FSx to store the tokenized data and training checkpoints. Please follow the link [here](#) to setup FSx CSI Driver and PVC. 
 

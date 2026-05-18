@@ -20,22 +20,36 @@ Deploy the accounting database using the 1-click deploy:
   --parameter-overrides VpcId=XXX SubnetIds=XXX,XXX
   ```
 
+The template defaults the Aurora MySQL `EngineVersion` to the latest Serverless-v2-compatible
+release available at the time of the last template update. AWS retires Aurora MySQL minor
+versions on a rolling basis, so the pinned default may eventually become unavailable and
+stack creation will fail with `Cannot find version ... for aurora-mysql`. Check which
+versions are currently offered with:
+
+```bash
+aws rds describe-db-engine-versions --engine aurora-mysql \
+  --query 'DBEngineVersions[?Status==`available`].EngineVersion' --output text
+```
+
+Override the default by appending `EngineVersion=8.0.mysql_aurora.X.Y.Z` to
+`--parameter-overrides` (or `ParameterKey=EngineVersion,ParameterValue=8.0.mysql_aurora.X.Y.Z`
+when using `aws cloudformation create-stack`).
+
 ## Get database parameters
 In this section, you will retrieve the database parameter that are used by Slurm to connect to the accounting database.
 
 ### Get the Database URI
 
-Retrieve the `DatabaseHost` to connect to the LDAP User Interface.
+Retrieve the `DatabaseHost` to connect to the database.
 ```bash
 DATABASE_URI=$(aws cloudformation describe-stacks \
  --stack-name slurm-accounting-database \
  --query 'Stacks[0].Outputs[?OutputKey==`DatabaseHost`].OutputValue' \
  --output text)
 ```
-  Copy URL into a Web Browser.
 
 ### Get the Database Admin User
-The database admin user is by default `custeradmin` if you didn't change it on creation.
+The database admin user is by default `clusteradmin` if you didn't change it on creation.
 
 Get the Database admin user name
 ```bash
@@ -112,7 +126,7 @@ EOF
 
 Restart the slurmctld to pickup the configuration change.
 ```bash
-sudo systemctl restart slurmdctld
+sudo systemctl restart slurmctld
 sudo scontrol reconfigure
 ```
 

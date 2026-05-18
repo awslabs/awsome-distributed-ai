@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Check 6: EFA Loopback Bandwidth/Latency Test
-# Iterates over all RDMA devices and runs per-device bandwidth and latency tests.
-# Reports MaxBw, AvgBw, MaxLat, MinLat for each device.
+# Check 6: EFA Loopback Connectivity Test
+# Iterates over all EFA libfabric domains and runs a per-device self-loopback
+# connectivity test using AWS's canonical fi_pingpong invocation.
 # Runtime: ~5-15 minutes depending on EFA device count
 
 set -euo pipefail
@@ -11,153 +11,146 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../lib/common.sh"
 
 CHECK_NAME="6-efa-loopback"
-EFA_TEST_TIMEOUT="${EFA_TEST_TIMEOUT:-120}"  # Per-device timeout
+EFA_TEST_TIMEOUT="${EFA_TEST_TIMEOUT:-180}"  # Per-device timeout
+EFA_INSTALLER_TEST="${EFA_INSTALLER_TEST:-/opt/amazon/efa/test/efa_test.sh}"
 
-# Minimum expected EFA bandwidth (Gbps) per device per instance type.
-# Override with EFA_MIN_BW env var.
-get_min_efa_bw() {
-    if [[ -n "${EFA_MIN_BW:-}" ]]; then echo "${EFA_MIN_BW}"; return; fi
-    case "$1" in
-        p4d.24xlarge)      echo 20 ;;
-        p5.48xlarge)       echo 20 ;;
-        p5e.48xlarge)      echo 20 ;;
-        p5en.48xlarge)     echo 20 ;;
-        p6-b200.48xlarge)  echo 20 ;;
-        *)                 echo 0 ;;
-    esac
+# Run a self-loopback fi_pingpong against a single libfabric EFA domain.
+# Mirrors the canonical invocation from AWS's /opt/amazon/efa/test/efa_test.sh:
+#   - -e rdm: endpoint type FI_EP_RDM
+#   - -p efa: libfabric efa provider
+#   - FI_EFA_ENABLE_SHM_TRANSFER=0: force the real EFA hardware path; otherwise
+#     libfabric routes same-host traffic through SHM and the test does not
+#     exercise EFA at all.
+#   - FI_EFA_DEVICE_NAME=<domain>: pin libfabric to the specific EFA domain.
+#   - explicit -B server_port / -B client_port -P server_port: avoid port
+#     collisions when called per-device in a loop.
+# Returns 0 on success, non-zero on failure. Writes server+client logs to stdout
+# on failure for triage.
+run_pingpong_for_domain() {
+    local domain="$1"
+    local server_port client_port
+    server_port=$(shuf -n 1 -i 49152-57342)
+    client_port=$(shuf -n 1 -i 57343-65535)
+
+    local server_log client_log
+    server_log=$(mktemp)
+    client_log=$(mktemp)
+
+    FI_LOG_LEVEL=warn FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_DEVICE_NAME="${domain}" \
+        fi_pingpong -e rdm -p efa -B "${server_port}" > "${server_log}" 2>&1 &
+    local server_pid=$!
+    sleep 3
+
+    if ! kill -0 "${server_pid}" 2>/dev/null; then
+        wait "${server_pid}" 2>/dev/null || true
+        log_warn "Domain ${domain}: server failed to start"
+        cat "${server_log}" >&2
+        rm -f "${server_log}" "${client_log}"
+        return 1
+    fi
+
+    local ret=0
+    FI_LOG_LEVEL=warn FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_DEVICE_NAME="${domain}" \
+        timeout "${EFA_TEST_TIMEOUT}" \
+        fi_pingpong -e rdm -p efa -B "${client_port}" -P "${server_port}" localhost \
+        > "${client_log}" 2>&1 || ret=$?
+
+    kill -9 "${server_pid}" 2>/dev/null || true
+    wait "${server_pid}" 2>/dev/null || true
+
+    if [[ "${ret}" -ne 0 ]]; then
+        log_warn "Domain ${domain}: fi_pingpong client exit ${ret}"
+        echo "--- server log (${domain}) ---" >&2
+        cat "${server_log}" >&2
+        echo "--- client log (${domain}) ---" >&2
+        cat "${client_log}" >&2
+    fi
+
+    rm -f "${server_log}" "${client_log}"
+    return "${ret}"
 }
 
 run_check() {
     init_check "${CHECK_NAME}"
 
     if [[ "${DRY_RUN}" == "1" ]]; then
-        echo -e "${YELLOW}[DRY-RUN]${NC} fi_pingpong -p efa -d <device> for each RDMA device" >&2
+        echo -e "${YELLOW}[DRY-RUN]${NC} fi_pingpong -e rdm -p efa for each libfabric EFA domain" >&2
         check_pass "${CHECK_NAME}" "Dry-run: EFA loopback tests skipped"
         return 0
     fi
 
-    # Discover RDMA devices
-    if ! command -v ibv_devices > /dev/null 2>&1; then
-        check_fail "${CHECK_NAME}" "ibv_devices not found -- RDMA tools not installed" "RESET"
-        return 1
+    if ! command -v fi_pingpong > /dev/null 2>&1; then
+        log_warn "fi_pingpong not found on PATH; EFA installer may not be present"
+        if [[ -x /opt/amazon/efa/bin/fi_pingpong ]]; then
+            export PATH="/opt/amazon/efa/bin:${PATH}"
+        else
+            check_skip "${CHECK_NAME}" "fi_pingpong not available (install the AWS EFA installer)"
+            return 0
+        fi
+    fi
+    if ! command -v fi_info > /dev/null 2>&1; then
+        if [[ -x /opt/amazon/efa/bin/fi_info ]]; then
+            export PATH="/opt/amazon/efa/bin:${PATH}"
+        else
+            check_fail "${CHECK_NAME}" "fi_info not found -- libfabric not installed" "RESET"
+            return 1
+        fi
     fi
 
-    local devices
-    # ibv_devices has 2 header lines; skip them before parsing device names
-    devices=$(ibv_devices 2>/dev/null | tail -n +3 | grep -oE "rdma[0-9]+" || \
-              ibv_devices 2>/dev/null | tail -n +3 | grep -oE "efa_[0-9]+" || \
-              ibv_devices 2>/dev/null | tail -n +3 | awk 'NF{print $1}' || true)
+    # Discover EFA libfabric DOMAINS, not kernel ibv device names. The two
+    # naming spaces differ: ibv_devices returns names like 'rdmap86s0', but
+    # libfabric's -d/FI_EFA_DEVICE_NAME expects domains like 'rdmap86s0-rdm'
+    # (with the '-rdm' suffix added by the EFA provider). Passing kernel names
+    # to fi_pingpong yields fi_getinfo -61 (No data available) and the test
+    # fails on every device. Enumerating via fi_info gets us the correct names
+    # and also naturally excludes back-side Ethernet NICs that show up under
+    # ibv_devices but are not EFA endpoints.
+    local domains
+    domains=$(fi_info -p efa -t FI_EP_RDM 2>/dev/null \
+        | awk '/^[[:space:]]*domain:/{print $2}' \
+        | sort -u)
 
-    if [[ -z "${devices}" ]]; then
-        check_fail "${CHECK_NAME}" "No RDMA devices found" "ISOLATE"
+    if [[ -z "${domains}" ]]; then
+        check_fail "${CHECK_NAME}" "No EFA libfabric domains found (fi_info -p efa -t FI_EP_RDM returned empty)" "ISOLATE"
         return 1
     fi
 
     local device_count
-    device_count=$(echo "${devices}" | wc -l | tr -d ' ')
-    log_info "Testing ${device_count} RDMA device(s)"
+    device_count=$(echo "${domains}" | wc -l | tr -d ' ')
+    log_info "Testing ${device_count} EFA domain(s)"
 
     local failures=0
-    local degraded=0
-    local min_efa_bw
-    min_efa_bw=$(get_min_efa_bw "${INSTANCE_TYPE}")
     local results_json="["
 
-    while IFS= read -r device; do
-        [[ -z "${device}" ]] && continue
-        log_info "Testing device: ${device}"
+    while IFS= read -r domain; do
+        [[ -z "${domain}" ]] && continue
+        log_info "Testing domain: ${domain}"
 
-        local test_output=""
         local test_exit=0
+        run_pingpong_for_domain "${domain}" || test_exit=$?
 
-        # Run fi_pingpong in loopback mode if available
-        if command -v fi_pingpong > /dev/null 2>&1; then
-            # Start server in background, then run client
-            local server_pid
-            fi_pingpong -p efa -d "${device}" -I 100 > /dev/null 2>&1 &
-            server_pid=$!
-            sleep 1
-
-            test_output=$(timeout "${EFA_TEST_TIMEOUT}" \
-                fi_pingpong -p efa -d "${device}" -I 100 localhost 2>&1) || test_exit=$?
-
-            kill "${server_pid}" 2>/dev/null || true
-            wait "${server_pid}" 2>/dev/null || true
-        elif command -v ib_write_bw > /dev/null 2>&1; then
-            # Fallback to ib_write_bw for bandwidth testing
-            local server_pid
-            ib_write_bw -d "${device}" --report_gbits > /dev/null 2>&1 &
-            server_pid=$!
-            sleep 1
-
-            test_output=$(timeout "${EFA_TEST_TIMEOUT}" \
-                ib_write_bw -d "${device}" --report_gbits localhost 2>&1) || test_exit=$?
-
-            kill "${server_pid}" 2>/dev/null || true
-            wait "${server_pid}" 2>/dev/null || true
-        else
-            log_warn "No suitable EFA test tool found (fi_pingpong or ib_write_bw)"
-            check_skip "${CHECK_NAME}" "No EFA loopback test tools available"
-            return 0
-        fi
-
-        # Parse results
-        local bw_value="N/A"
-        local lat_value="N/A"
-
-        if [[ ${test_exit} -eq 0 && -n "${test_output}" ]]; then
-            # Extract bandwidth (varies by tool output format)
-            bw_value=$(echo "${test_output}" | grep -iE "bandwidth|bytes/sec|Gb/s" \
-                | tail -1 | awk '{print $(NF-1), $NF}' || echo "N/A")
-            lat_value=$(echo "${test_output}" | grep -iE "latency|usec" \
-                | tail -1 | awk '{print $(NF-1), $NF}' || echo "N/A")
-
-            log_verbose "Device ${device}: bw=${bw_value}, lat=${lat_value}"
-
-            # Check bandwidth against per-instance threshold
-            if [[ "${min_efa_bw}" -gt 0 && "${bw_value}" != "N/A" ]]; then
-                local bw_numeric
-                bw_numeric=$(echo "${bw_value}" | grep -oE '[0-9]+\.?[0-9]*' | head -1 || echo "0")
-                local bw_int
-                bw_int=$(echo "${bw_numeric}" | awk '{printf "%d", $1}')
-                if [[ "${bw_int}" -lt "${min_efa_bw}" ]]; then
-                    log_warn "Device ${device}: bandwidth ${bw_value} below threshold ${min_efa_bw} Gbps"
-                    degraded=$((degraded + 1))
-                fi
-            fi
-        else
-            log_warn "Device ${device}: test failed or timed out (exit ${test_exit})"
+        if [[ "${test_exit}" -ne 0 ]]; then
             failures=$((failures + 1))
         fi
 
-        # Append to JSON results
         if [[ "${results_json}" != "[" ]]; then
             results_json+=","
         fi
         results_json+=$(cat <<ENDJSON
 
     {
-      "device": "${device}",
+      "domain": "${domain}",
       "status": "$([ ${test_exit} -eq 0 ] && echo 'PASS' || echo 'FAIL')",
-      "bandwidth": "${bw_value}",
-      "latency": "${lat_value}"
+      "exit_code": ${test_exit}
     }
 ENDJSON
 )
-    done <<< "${devices}"
+    done <<< "${domains}"
 
     results_json+=$'\n]'
 
-    # Save per-device results
     echo "${results_json}" > "${RESULTS_DIR}/efa-loopback-results.json"
 
-    # Report degraded devices (below bandwidth threshold)
-    if [[ ${degraded} -gt 0 ]]; then
-        check_warn "${CHECK_NAME}" \
-            "${degraded} device(s) below bandwidth threshold (${min_efa_bw} Gbps)"
-    fi
-
-    # Collect EFA statistics
     log_info "Collecting EFA statistics"
     if command -v rdma > /dev/null 2>&1; then
         local efa_stats
@@ -187,12 +180,12 @@ ENDJSON
 
     if [[ ${failures} -gt 0 ]]; then
         check_fail "${CHECK_NAME}" \
-            "${failures}/${device_count} EFA device(s) failed loopback test" "RESET"
+            "${failures}/${device_count} EFA domain(s) failed loopback test" "RESET"
         return 1
     fi
 
     check_pass "${CHECK_NAME}" \
-        "EFA loopback OK: ${device_count} device(s) tested"
+        "EFA loopback OK: ${device_count} domain(s) tested"
     return 0
 }
 

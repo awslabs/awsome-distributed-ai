@@ -271,35 +271,42 @@ variable "node_recovery" {
 }
 
 variable "instance_groups" {
-  description = "Map of instance group configurations"
-  type = map(object({
-    instance_type    = string
-    instance_count   = number
-    ebs_volume_size  = number
-    threads_per_core = number
-    lifecycle_script = string
+  description = "List of instance group configurations. Each item includes a name. Optionally include training_plan_arn per group."
+  type = list(object({
+    name              = string
+    instance_type     = string
+    instance_count    = number
+    ebs_volume_size   = number
+    threads_per_core  = number
+    lifecycle_script  = string
+    training_plan_arn = optional(string)
   }))
-  default = {
-    controller-machine = {
+
+  default = [
+    {
+      name             = "controller-machine"
       instance_type    = "ml.c5.xlarge"
       instance_count   = 1
       ebs_volume_size  = 100
       threads_per_core = 1
       lifecycle_script = "on_create.sh"
-    }
-    login-nodes = {
+    },
+    {
+      name             = "login-nodes"
       instance_type    = "ml.c5.large"
       instance_count   = 1
       ebs_volume_size  = 100
       threads_per_core = 1
       lifecycle_script = "on_create.sh"
-    }
-    compute-nodes = {
+    },
+    {
+      name             = "compute-nodes"
       instance_type    = "ml.trn1.32xlarge"
       instance_count   = 4
       ebs_volume_size  = 500
       threads_per_core = 1
       lifecycle_script = "on_create.sh"
+      # training_plan_arn = "arn:aws:sagemaker:REGION:ACCOUNT:training-plan/YOUR_TP" # optional
     }
-  }
+  ]
 }

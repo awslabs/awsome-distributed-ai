@@ -20,16 +20,6 @@ ADDITIONAL_LD_LIBRARY_PATH=${2:-/usr/local/cuda-13.0/lib}
 mpirun -N 1 bash -c 'echo $(hostname) ➡️ $(cat /sys/devices/virtual/dmi/id/board_asset_tag | tr -d " ")'
 
 
-### NCCL_BUFFSIZE increase the send queue depth and can turn NCCL communications into non-blocking.
-### https://www.usenix.org/system/files/atc23-choi.pdf
-
-### NCCL_P2P_NET_CHUNKSIZE Improve performance by increasing buffer size for Send/Recv, Gather, Scatter and Alltoall communications
-### https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/p2p.html
-
-### Improve performance for AllReduce by selecting specific protocol and algorithm for specific
-### message size and number of ranks.
-### More information https://github.com/aws/aws-ofi-nccl/wiki/Algorithm-and-Protocol-Tuner-for-AWS.
-
 # run all_reduce test
 mpirun -n $((8 * SLURM_JOB_NUM_NODES)) -N 8 \
         -x FI_PROVIDER=efa \
@@ -37,11 +27,5 @@ mpirun -n $((8 * SLURM_JOB_NUM_NODES)) -N 8 \
 	-x LD_LIBRARY_PATH=$ADDITIONAL_LD_LIBRARY_PATH:/opt/amazon/efa/lib:/opt/amazon/openmpi/lib:/opt/amazon/ofi-nccl/lib:/usr/local/lib:/usr/lib:$LD_LIBRARY_PATH \
 	-x NCCL_DEBUG=INFO \
 	-x NCCL_SOCKET_IFNAME=^docker,lo,veth \
-	-x NCCL_BUFFSIZE=8388608 \
-	-x NCCL_P2P_NET_CHUNKSIZE=524288 \
-	-x NCCL_TUNER_PLUGIN=/opt/amazon/ofi-nccl/lib/libnccl-ofi-tuner.so \
-	--mca pml ^ucx \
-	--mca btl tcp,self \
-	--mca btl_tcp_if_exclude lo,docker0,veth_def_agent \
 	--bind-to none ${ALL_REDUCE_BINARY} -b 8 -e 16G -f 2 -g 1 -c 1 -n 100
 

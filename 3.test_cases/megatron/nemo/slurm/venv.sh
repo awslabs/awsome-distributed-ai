@@ -3,29 +3,32 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 
+# Host-side venv for NeMo-Run. The actual training runs inside the
+# `nvcr.io/nvidia/nemo:26.02` container (built by ../Dockerfile); this venv
+# only needs to satisfy NeMo-Run's import-time deps on the head node.
+
 set -e
 
-# Install NeMo-Run
-pip install git+https://github.com/NVIDIA/NeMo-Run.git@4d056535b5cce475b0536243e2cefcfa3897eee8
+# Pin to NeMo-Run v0.9.0 (Apr 2026 tag) instead of an arbitrary commit, so
+# `bash venv.sh` produces the same environment across runs.
+pip install "nemo-run==0.9.0"
 
-# # Install PyTorch
-pip install torch==2.6.0
- 
-# Install Megatron-LM
-pip install --no-deps git+https://github.com/NVIDIA/Megatron-LM.git@b5d90de8e7c7fae5f35be89d665f237970540bed
+# Torch is a NeMo-Run import-time dep on the host; CUDA flavor doesn't matter
+# here because all GPU work happens inside the container.
+pip install "torch==2.10.0"
 
-# # Download and install Mamba SSM
-wget https://github.com/state-spaces/mamba/releases/download/v2.2.2/mamba_ssm-2.2.2+cu118torch2.0cxx11abiFALSE-cp310-cp310-linux_x86_64.whl  # Adjusted for torch 2.0
-pip install mamba_ssm-2.2.2+cu118torch2.0cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-rm mamba_ssm-2.2.2+cu118torch2.0cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+# Megatron-LM pinned to the version that NeMo 2.7.x is API-compatible with
+# (must match MEGATRON_CORE_VERSION in ../Dockerfile). nemo:26.02 ships
+# 0.16.1 alongside NeMo 2.7.1 by mistake — 0.16.x removed kwargs and
+# submodules NeMo 2.7.x still references (see Dockerfile comment for
+# details). 0.15.3 is the latest 0.15.x patch.
+pip install --no-deps "git+https://github.com/NVIDIA/Megatron-LM.git@core_v0.15.3"
 
-# Install NeMo Toolkit
-pip install nemo_toolkit['all']==2.1.0
+# NeMo Toolkit. PERFORMANCE.md (in this directory's parent) lists 2.5+ as
+# recommended on the NeMo 26.02 container. 2.7.3 is the latest patch in 2.x.
+pip install "nemo_toolkit[all]==2.7.3"
 
-# Install OpenCC
-pip install opencc==1.1.6
-
-# Clone and install NVIDIA Resiliency Extension
-pip install nvidia-resiliency-ext="v0.2.1"
+# NVIDIA Resiliency Extension for fault-tolerance plugins used in run.py.
+pip install "nvidia-resiliency-ext==0.4.1"
 
 echo "Environment setup complete."

@@ -1,0 +1,184 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# ============================================================
+# Dataset Download Job — Pre-cache math dataset + model to FSx
+# ============================================================
+# Run this BEFORE the workshop starts to eliminate download
+# time (~10-15 min) during the live training demo.
+#
+# What it downloads:
+#   1. nvidia/OpenMathInstruct-2 dataset, train_1M split (~1.5GB)
+#   2. Qwen/Qwen2.5-1.5B-Instruct model weights (~3GB)
+#
+# Where it caches (FSx, shared across all pods):
+#   /shared/nvrx-demo/hf_cache      — model weights
+#   /shared/nvrx-demo/hf_datasets   — dataset
+#
+# Requirements:
+#   - FSx PVC: fsx-grpo-pvc (must be created first)
+#   - Internet access (huggingface.co)
+#   - No GPU needed (CPU-only, any node)
+#   - ~5GB FSx space
+#
+# Usage:
+#   Deploy:   kubectl apply -f dataset-download-job.yaml
+#   Monitor:  kubectl logs -f job/dataset-download
+#   Status:   kubectl get job dataset-download
+#   Verify:   kubectl logs job/dataset-download | tail -20
+#   Clean:    kubectl delete job dataset-download
+# ============================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dataset-download
+  namespace: default
+  labels:
+    app: dataset-download
+    purpose: workshop-precache
+spec:
+  completions: 1
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 3600       # Auto-delete 1hr after completion
+  template:
+    metadata:
+      labels:
+        app: dataset-download
+    spec:
+      restartPolicy: OnFailure
+      # Run on any node with FSx access — no GPU needed
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+        - name: downloader
+          # Same image as the training RayJob (built from the Dockerfile in this dir).
+          # Replace <your-alias> with your ECR Public alias — see README Section 0.
+          image: public.ecr.aws/<your-alias>/nemo-rl-workshop:latest
+          imagePullPolicy: Always
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -e
+              echo "============================================"
+              echo "  Workshop Data Pre-cache Job"
+              echo "  Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              echo "============================================"
+
+              # ── Cache paths on FSx (shared across all pods) ──
+              export HF_HOME="/shared/nvrx-demo/hf_cache"
+              export HF_DATASETS_CACHE="/shared/nvrx-demo/hf_datasets"
+              export TORCH_HOME="/shared/nvrx-demo/torch_cache"
+              export TRITON_CACHE_DIR="/shared/nvrx-demo/triton_cache"
+              mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$TORCH_HOME" "$TRITON_CACHE_DIR"
+
+              echo ""
+              echo "Cache locations (on FSx — shared across all pods):"
+              echo "  Model:   $HF_HOME"
+              echo "  Dataset: $HF_DATASETS_CACHE"
+
+              # ── Step 1: Download math dataset ──
+              echo ""
+              echo "=== Step 1/2: Downloading nvidia/OpenMathInstruct-2 (train_1M split) ==="
+              python3 -c "
+              from datasets import load_dataset
+              import os, time
+
+              print('Downloading nvidia/OpenMathInstruct-2 (train_1M split)...')
+              start = time.time()
+              ds = load_dataset('nvidia/OpenMathInstruct-2', split='train_1M')
+              elapsed = time.time() - start
+              print(f'  Dataset ready: {len(ds):,} samples ({elapsed:.1f}s)')
+              print(f'  Columns: {ds.column_names}')
+              print(f'  Example problem: {ds[0][\"problem\"][:100]}...')
+              print(f'  Example answer:  {ds[0][\"expected_answer\"]}')
+
+              cache_dir = os.environ['HF_DATASETS_CACHE']
+              total_size = sum(
+                  f.stat().st_size
+                  for f in __import__('pathlib').Path(cache_dir).rglob('*')
+                  if f.is_file()
+              ) / 1e9
+              print(f'  Cache size: {total_size:.1f} GB at {cache_dir}')
+              "
+
+              # ── Step 2: Download model weights ──
+              echo ""
+              echo "=== Step 2/2: Downloading Qwen/Qwen2.5-1.5B-Instruct model ==="
+              python3 -c "
+              from transformers import AutoTokenizer, AutoModelForCausalLM
+              import torch, os, time
+
+              model_name = 'Qwen/Qwen2.5-1.5B-Instruct'
+
+              print(f'Downloading tokenizer: {model_name}')
+              start = time.time()
+              tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+              print(f'  Tokenizer ready ({time.time()-start:.1f}s)')
+
+              print(f'Downloading model weights: {model_name}')
+              start = time.time()
+              model = AutoModelForCausalLM.from_pretrained(
+                  model_name,
+                  torch_dtype=torch.bfloat16,
+                  trust_remote_code=True,
+              )
+              elapsed = time.time() - start
+              params = sum(p.numel() for p in model.parameters()) / 1e9
+              print(f'  Model ready: {params:.2f}B params ({elapsed:.1f}s)')
+
+              cache_dir = os.path.join(os.environ['HF_HOME'], 'models--Qwen--Qwen2.5-1.5B-Instruct')
+              if os.path.exists(cache_dir):
+                  size_gb = sum(
+                      f.stat().st_size
+                      for f in __import__('pathlib').Path(cache_dir).rglob('*')
+                      if f.is_file()
+                  ) / 1e9
+                  print(f'  Cache size: {size_gb:.1f} GB at {cache_dir}')
+
+              del model
+              print('  Model unloaded from memory')
+              "
+
+              # ── Verification ──
+              echo ""
+              echo "============================================"
+              echo "  Verification"
+              echo "============================================"
+              echo "Dataset cache:"
+              du -sh "$HF_DATASETS_CACHE" 2>/dev/null || echo "  NOT FOUND"
+              echo "Model cache:"
+              du -sh "$HF_HOME/models--Qwen--Qwen2.5-1.5B-Instruct" 2>/dev/null || echo "  NOT FOUND"
+              echo ""
+              echo "Total FSx usage:"
+              du -sh /shared/nvrx-demo/ 2>/dev/null || echo "  NOT FOUND"
+
+              echo ""
+              echo "============================================"
+              echo "  Pre-cache complete!"
+              echo "  The training RayJob will use these caches"
+              echo "  automatically — no downloads during the"
+              echo "  workshop."
+              echo "============================================"
+          env:
+            - name: HF_HOME
+              value: "/shared/nvrx-demo/hf_cache"
+            - name: HF_DATASETS_CACHE
+              value: "/shared/nvrx-demo/hf_datasets"
+            - name: TORCH_HOME
+              value: "/shared/nvrx-demo/torch_cache"
+            - name: TRANSFORMERS_VERBOSITY
+              value: "info"
+          resources:
+            requests:
+              cpu: 4
+              memory: 16Gi
+            limits:
+              memory: 32Gi
+          volumeMounts:
+            - name: fsx
+              mountPath: /shared
+      volumes:
+        - name: fsx
+          persistentVolumeClaim:
+            claimName: fsx-grpo-pvc

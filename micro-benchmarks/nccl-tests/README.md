@@ -35,20 +35,22 @@ The NCCL tests are packaged in a container.
 
 > | Variable              | Default     | Repository                                                                                  |
 > |-----------------------|-------------|---------------------------------------------------------------------------------------------|
-> |`CUDA_VERSION`         | `12.8.1`    |                                                                                             |
-> |`GDRCOPY_VERSION`      | `v2.5.1`    | [link](https://github.com/NVIDIA/gdrcopy)                                                   |
-> |`EFA_INSTALLER_VERSION`| `1.43.2`    | [link](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-start.html#efa-start-enable) |
+> |`CUDA_VERSION`         | `13.0.2`    |                                                                                             |
+> |`GDRCOPY_VERSION`      | `v2.5.2`    | [link](https://github.com/NVIDIA/gdrcopy)                                                   |
+> |`EFA_INSTALLER_VERSION`| `1.48.0`    | [link](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-start.html#efa-start-enable) |
 > |`AWS_OFI_NCCL_VERSION` | *(deprecated)* | AWS OFI NCCL plugin is now bundled with EFA installer                                    |
-> |`NCCL_VERSION`         | `v2.27.7-1` | [link](https://github.com/NVIDIA/nccl)                                                      |
-> |`NCCL_TESTS_VERSION`   | `v2.16.9`   | [link](https://github.com/NVIDIA/nccl-tests)                                                |
+> |`NCCL_VERSION`         | `v2.30.4-1` | [link](https://github.com/NVIDIA/nccl)                                                      |
+> |`NCCL_TESTS_VERSION`   | `v2.18.3`   | [link](https://github.com/NVIDIA/nccl-tests)                                                |
+
+The image is built with `NVCC_GENCODE` covering `sm_80`, `sm_86`, `sm_89`, `sm_90`, `sm_100`, and `sm_103` — i.e. native binaries for A100, RTX 30/Ada/Lovelace, H100/H200, B200/GB200, and B300/GB300. PTX is not embedded; if you target a newer architecture, add it to the `NVCC_GENCODE` lines in `nccl-tests.Dockerfile`.
 
 You must pick each version of the library and set them as variables before proceed:
 
 ```bash
-GDRCOPY_VERSION=v2.5.1
-EFA_INSTALLER_VERSION=1.43.2
-NCCL_VERSION=v2.27.7-1
-NCCL_TESTS_VERSION=v2.16.9
+GDRCOPY_VERSION=v2.5.2
+EFA_INSTALLER_VERSION=1.48.0
+NCCL_VERSION=v2.30.4-1
+NCCL_TESTS_VERSION=v2.18.3
 TAG="efa${EFA_INSTALLER_VERSION}-nccl${NCCL_VERSION}-tests${NCCL_TESTS_VERSION}"
 CONTAINER_IMAGE_NAME_TAG="nccl-tests:${TAG}"
 ```
@@ -74,7 +76,7 @@ If you wish to build the containar image by yourself, follow this section. Alter
    REPOSITORY               TAG                        IMAGE ID       CREATED         SIZE
    nccl                     latest                     6e981e5cf6a5   5 hours ago     8.61GB
    ...
-   nvidia/cuda              12.8.1-devel-ubuntu22.04   a86c511c87e1   2 weeks ago     6.56GB
+   nvidia/cuda              13.0.2-devel-ubuntu22.04   a86c511c87e1   2 weeks ago     6.56GB
    ```
 
 ### Slurm

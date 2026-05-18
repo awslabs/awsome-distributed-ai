@@ -1,0 +1,131 @@
+apiVersion: sagemaker.amazonaws.com/v1
+kind: HyperPodPyTorchJob
+metadata:
+  name: llama3-2-1b-fsdp-hpto
+spec:
+  nprocPerNode: "$GPU_PER_NODE"
+  runPolicy:
+    jobMaxRetryCount: 10
+    restartPolicy:
+      numRestartBeforeFullJobRestart: 3
+      evalPeriodSeconds: 21600
+      maxFullJobRestarts: 1
+    cleanPodPolicy: All
+    logMonitoringConfiguration:
+      - name: JobStart
+        logPattern: '.*Loss:.*'
+        expectedStartCutOffInSeconds: 240
+      - name: JobHangingDetection
+        logPattern: '.*Loss:.*'
+        expectedRecurringFrequencyInSeconds: 600
+  replicaSpecs:
+    - name: pods
+      replicas: $NUM_NODES
+      template:
+        metadata:
+          labels:
+            job-name: llama3-2-1b-fsdp-hpto
+            replica-type: pods
+        spec:
+          volumes:
+            - name: shmem
+              hostPath:
+                path: /dev/shm
+            - name: local
+              hostPath:
+                path: /mnt/k8s-disks/0
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      job-name: llama3-2-1b-fsdp-hpto
+                  topologyKey: kubernetes.io/hostname
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: sagemaker.amazonaws.com/node-health-status
+                        operator: In
+                        values:
+                          - Schedulable
+          topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+              labelSelector:
+                matchLabels:
+                  job-name: llama3-2-1b-fsdp-hpto
+          containers:
+            - name: pytorch
+              image: ${IMAGE_URI}
+              imagePullPolicy: Always
+              resources:
+                requests:
+                  nvidia.com/gpu: $GPU_PER_NODE
+                  vpc.amazonaws.com/efa: $EFA_PER_NODE
+                limits:
+                  nvidia.com/gpu: $GPU_PER_NODE
+                  vpc.amazonaws.com/efa: $EFA_PER_NODE
+              env:
+                - name: LOGLEVEL
+                  value: INFO
+                - name: FI_PROVIDER
+                  value: efa
+                - name: FI_EFA_USE_DEVICE_RDMA
+                  value: '0' # g5 instances do not support GPUDirect RDMA; set to '1' for p4d/p5
+                - name: FI_EFA_FORK_SAFE
+                  value: '1'
+                - name: FI_EFA_ENABLE_SHM_TRANSFER
+                  value: '1'
+                - name: TORCH_DISTRIBUTED_DEBUG
+                  value: DETAIL
+                - name: TORCH_NCCL_ENABLE_MONITORING
+                  value: '1'
+                - name: TORCH_NCCL_TRACE_BUFFER_SIZE
+                  value: '20000'
+                - name: TORCH_NCCL_DUMP_ON_TIMEOUT
+                  value: '1'
+                - name: TORCH_NCCL_DEBUG_INFO_TEMP_FILE
+                  value: /local/nccl_trace_rank_
+                - name: PYTORCH_CUDA_ALLOC_CONF
+                  value: 'expandable_segments:True'
+                - name: NCCL_DEBUG
+                  value: INFO
+                - name: NCCL_SOCKET_IFNAME
+                  value: ^lo
+                - name: TORCH_NCCL_ASYNC_ERROR_HANDLING
+                  value: '1'
+                - name: HF_TOKEN
+                  value: '${HF_TOKEN}'
+              command:
+                - hyperpodrun
+                - '--tee=3'
+                - '--log_dir=/tmp/hyperpod'
+                - '--nproc_per_node=$GPU_PER_NODE'
+                - '--nnodes=$NUM_NODES'
+                - /fsdp/train.py
+                - '--max_context_width=8192'
+                - '--num_key_value_heads=2'
+                - '--intermediate_size=8192'
+                - '--hidden_width=2048'
+                - '--num_layers=16'
+                - '--num_heads=32'
+                - '--model_type=llama_v3'
+                - '--tokenizer=hf-internal-testing/llama-tokenizer'
+                - '--checkpoint_freq=50'
+                - '--validation_freq=25'
+                - '--max_steps=100'
+                - '--checkpoint_dir=./checkpoints'
+                - '--dataset=allenai/c4'
+                - '--dataset_config_name=en'
+                - '--resume_from_checkpoint=./checkpoints'
+                - '--train_batch_size=1'
+                - '--val_batch_size=1'
+                - '--sharding_strategy=full'
+                - '--offload_activations=1'
+              volumeMounts:
+                - name: shmem
+                  mountPath: /dev/shm
+                - name: local
+                  mountPath: /local

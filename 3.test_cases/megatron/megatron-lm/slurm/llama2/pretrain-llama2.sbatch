@@ -149,6 +149,7 @@ srun -l "${ARGS[@]}" python -m torch.distributed.run "${TORCHRUN_ARGS[@]}" /work
         --lr-decay-style cosine \
         --log-interval 1 \
         --eval-iters 0 \
+        --eval-interval 1000 \
         --data-path ${DATA_PATH}/llama2/my-llama2_text_document \
         --tokenizer-type Llama2Tokenizer \
         --tokenizer-model ${DATA_PATH}/llama2/tokenizer.model \

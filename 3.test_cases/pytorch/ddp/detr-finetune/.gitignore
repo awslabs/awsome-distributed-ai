@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pth
+*.pth.tar
+checkpoints/
+outputs/
+*.tar.gz
+.env
+.local/
+wandb/
+.ipynb_checkpoints/

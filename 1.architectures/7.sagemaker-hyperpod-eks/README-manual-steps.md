@@ -54,7 +54,7 @@ export NODE_RECOVEY=AUTOMATIC
 
 ```
 
- If you have used the full deployment option while deploying cloud formation you can use the helper script([create_config.sh](./create_config.sh)) to retreive all the required. 
+ If you have used the full deployment option while deploying cloud formation you can use the helper script([create_config.sh](./create_config.sh)) to retrieve all the required. 
 
  If you used Integrative Deployment Mode set the below parameters
 

@@ -1,0 +1,216 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# ============================================================
+# RayJob: Nemotron-Mini-4B GRPO Training on P5en (H200)
+# ============================================================
+# Runs NeMo RL GRPO training with fault tolerance via RayJob backoffLimit.
+#
+# Features:
+#   - Checkpoints on FSx for resume across retries
+#   - EFA RDMA networking with NCCL
+#   - Configurable via environment variables
+#
+# Setup:
+#   1. Copy rayjob_entrypoint.sh to shared storage:
+#      kubectl cp rayjob_entrypoint.sh <any-pod>:/shared/scripts/rayjob_entrypoint.sh
+#   2. Edit this file: set namespace, image, PVC name
+#   3. kubectl apply -f rayjob-grpo.yaml
+#
+# Monitor:
+#   SUB=$(kubectl get pods -n <namespace> --no-headers | grep grpo-nvrx-rayjob- | \
+#     grep -v head | grep -v worker | awk '{print $1}' | head -1)
+#   kubectl logs $SUB -n <namespace> -f | grep "Avg Filtered Reward"
+# ============================================================
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: grpo-nvrx-rayjob
+  namespace: default    # <-- change to your namespace
+  labels:
+    app: grpo-nvrx-rayjob
+spec:
+  entrypoint: bash /shared/scripts/rayjob_entrypoint.sh  # <-- path on shared storage (FSx)
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 600
+  activeDeadlineSeconds: 14400
+  backoffLimit: 2
+
+  rayClusterSpec:
+    rayVersion: '2.49.2'
+
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: '0.0.0.0'
+        num-gpus: '8'
+        num-cpus: '64'
+      template:
+        metadata:
+          labels:
+            app: grpo-nvrx-rayjob
+        spec:
+          hostNetwork: true
+          dnsPolicy: ClusterFirstWithHostNet
+          nodeSelector:
+            node.kubernetes.io/instance-type: p5en.48xlarge
+          tolerations:
+            - key: "nvidia.com/gpu"
+              operator: "Exists"
+              effect: "NoSchedule"
+          containers:
+            - name: ray-head
+              image: <your-registry>/nemo-rl-workshop:latest  # <-- replace with your image
+              imagePullPolicy: Always
+              securityContext:
+                privileged: true
+              ports:
+                - containerPort: 6379
+                  name: gcs-server
+                - containerPort: 8265
+                  name: dashboard
+                - containerPort: 10001
+                  name: client
+              env: &common-env
+                # --- EFA / NCCL ---
+                - name: LD_LIBRARY_PATH
+                  value: "/opt/amazon/ofi-nccl/lib:/opt/amazon/efa/lib:/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu"
+                - name: NCCL_NET_PLUGIN
+                  value: "ofi"
+                - name: NCCL_TUNER_PLUGIN
+                  value: "ofi"
+                - name: NCCL_SOCKET_IFNAME
+                  value: "^lo,docker,veth,eni"
+                - name: NCCL_DEBUG
+                  value: "WARN"
+                - name: NCCL_TIMEOUT
+                  value: "7200"
+                - name: TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC
+                  value: "7200"
+                - name: FI_PROVIDER
+                  value: "efa"
+                - name: FI_EFA_USE_DEVICE_RDMA
+                  value: "1"
+                - name: FI_EFA_FORK_SAFE
+                  value: "1"
+                - name: RDMAV_FORK_SAFE
+                  value: "1"
+                - name: FI_EFA_USE_HUGE_PAGE
+                  value: "0"
+                - name: FI_MR_CACHE_MONITOR
+                  value: "disabled"
+                - name: FI_HMEM_CUDA_USE_GDRCOPY
+                  value: "1"
+                - name: NCCL_NET_GDR_LEVEL
+                  value: "PHB"
+                # --- H200/NVSwitch NCCL workarounds ---
+                - name: NCCL_CUMEM_ENABLE
+                  value: "0"
+                - name: NCCL_NVLS_ENABLE
+                  value: "0"
+                # --- Training configuration ---
+                - name: CLEAR_CHECKPOINTS
+                  value: "1"
+                - name: GRPO_MODEL
+                  value: "nvidia/Nemotron-Mini-4B-Instruct"
+                - name: GRPO_MAX_STEPS
+                  value: "100"
+                - name: GRPO_NUM_NODES
+                  value: "2"
+                # --- Shared storage paths (configurable) ---
+                - name: SHARED_DIR
+                  value: "/shared/nvrx-demo"
+                - name: HF_HOME
+                  value: "/shared/nvrx-demo/hf_cache"
+                - name: HF_DATASETS_CACHE
+                  value: "/shared/nvrx-demo/hf_datasets"
+                - name: TORCH_HOME
+                  value: "/shared/nvrx-demo/torch_cache"
+                - name: TRITON_CACHE_DIR
+                  value: "/shared/nvrx-demo/triton_cache"
+                - name: RAY_worker_register_timeout_seconds
+                  value: "600"
+              lifecycle:
+                preStop:
+                  exec:
+                    command: ["/bin/sh", "-c", "ray stop"]
+              resources:
+                limits:
+                  nvidia.com/gpu: 8
+                  vpc.amazonaws.com/efa: 16
+                  memory: 900Gi
+                requests:
+                  nvidia.com/gpu: 8
+                  vpc.amazonaws.com/efa: 16
+                  memory: 700Gi
+                  cpu: 64
+              volumeMounts: &common-mounts
+                - name: fsx
+                  mountPath: /shared
+                - name: shm
+                  mountPath: /dev/shm
+                - name: dev-infiniband
+                  mountPath: /dev/infiniband
+          volumes: &common-volumes
+            - name: fsx
+              persistentVolumeClaim:
+                claimName: fsx-pvc    # <-- change to your PVC name
+            - name: shm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 128Gi
+            - name: dev-infiniband
+              hostPath:
+                path: /dev/infiniband
+                type: DirectoryOrCreate
+
+    workerGroupSpecs:
+      - groupName: gpu-workers
+        replicas: 1
+        minReplicas: 1
+        maxReplicas: 1
+        rayStartParams:
+          num-gpus: '8'
+          num-cpus: '64'
+        template:
+          metadata:
+            labels:
+              app: grpo-nvrx-rayjob
+          spec:
+            hostNetwork: true
+            dnsPolicy: ClusterFirstWithHostNet
+            nodeSelector:
+              node.kubernetes.io/instance-type: p5en.48xlarge
+            tolerations:
+              - key: "nvidia.com/gpu"
+                operator: "Exists"
+                effect: "NoSchedule"
+            affinity:
+              podAntiAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchLabels:
+                        app: grpo-nvrx-rayjob
+                    topologyKey: kubernetes.io/hostname
+            containers:
+              - name: ray-worker
+                image: <your-registry>/nemo-rl-workshop:latest  # <-- replace with your image
+                imagePullPolicy: Always
+                securityContext:
+                  privileged: true
+                env: *common-env
+                lifecycle:
+                  preStop:
+                    exec:
+                      command: ["/bin/sh", "-c", "ray stop"]
+                resources:
+                  limits:
+                    nvidia.com/gpu: 8
+                    vpc.amazonaws.com/efa: 16
+                    memory: 900Gi
+                  requests:
+                    nvidia.com/gpu: 8
+                    vpc.amazonaws.com/efa: 16
+                    memory: 700Gi
+                    cpu: 64
+                volumeMounts: *common-mounts
+            volumes: *common-volumes

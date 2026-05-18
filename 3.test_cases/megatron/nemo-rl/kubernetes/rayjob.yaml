@@ -1,0 +1,232 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# ============================================================
+# RayJob: Qwen2.5-1.5B GRPO + NVRx on g5.8xlarge (A10G)
+# ============================================================
+# Prerequisites:
+#   1. KubeRay operator: helm install kuberay-operator kuberay/kuberay-operator
+#   2. FSx PVC: fsx-grpo-pvc
+#   3. NVRx scripts on FSx: /shared/nvrx-demo/{patches,scripts}/
+#   4. NVIDIA + EFA device plugins on g5 nodes
+#
+# Deploy:   kubectl apply -f kubernetes/rayjob.yaml
+# Monitor:  kubectl logs -f -l ray.io/node-type=head -c ray-head
+# Status:   kubectl get rayjob grpo-g5-qwen-nvrx
+# Clean:    kubectl delete rayjob grpo-g5-qwen-nvrx
+#
+# Workshop settings:
+#   CLEAR_CHECKPOINTS=1  — wipe checkpoints for fresh demo runs
+#   GRPO_MAX_STEPS=20    — number of training steps
+# ============================================================
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: grpo-g5-qwen-nvrx
+  namespace: default
+  labels:
+    app: grpo-g5-qwen-nvrx
+    model: qwen2.5-1.5b
+    features: nvrx-lora-grpo
+spec:
+  # ── Job Configuration ──
+  # Entrypoint script lives on FSx — no inline bash, no quoting issues
+  entrypoint: bash /shared/nvrx-demo/scripts/rayjob_entrypoint.sh
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 600
+  activeDeadlineSeconds: 14400        # 4 hour max
+  backoffLimit: 2                     # Retry entire job up to 2 times
+
+  # ── Ray Cluster Spec ──
+  rayClusterSpec:
+    rayVersion: '2.49.2'
+
+    # ── Head Node (also runs 1 GPU worker for g5) ──
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: '0.0.0.0'
+        num-gpus: '1'
+        num-cpus: '16'
+      template:
+        metadata:
+          labels:
+            app: grpo-g5-qwen-nvrx
+        spec:
+          hostNetwork: true
+          dnsPolicy: ClusterFirstWithHostNet
+          nodeSelector:
+            node.kubernetes.io/instance-type: g5.8xlarge
+          tolerations:
+            - key: "nvidia.com/gpu"
+              operator: "Exists"
+              effect: "NoSchedule"
+          containers:
+            - name: ray-head
+              # Replace <your-account>/<your-alias> with your ECR path after building
+              # the Dockerfile in this directory (see README Section 0).
+              image: public.ecr.aws/<your-alias>/nemo-rl-workshop:latest
+              imagePullPolicy: Always
+              securityContext:
+                capabilities:
+                  add: [IPC_LOCK, SYS_RESOURCE]
+              ports:
+                - containerPort: 6379
+                  name: gcs-server
+                - containerPort: 8265
+                  name: dashboard
+                - containerPort: 10001
+                  name: client
+              env: &common-env
+                # ── Workshop controls ──
+                - name: CLEAR_CHECKPOINTS
+                  value: "0"
+                - name: CHECKPOINT_PERIOD
+                  value: "10"
+                - name: GRPO_MAX_STEPS
+                  value: "20"
+                # ── NCCL / EFA ──
+                # Exclusion pattern per repo convention (see 1.architectures/efa-cheatsheet.md).
+                # hostNetwork: true means the container sees host interfaces — excluding
+                # lo/docker/veth is sufficient to pick the node's primary ENI on g5.
+                - name: NCCL_SOCKET_IFNAME
+                  value: "^lo,docker,veth"
+                - name: NCCL_DEBUG
+                  value: "WARN"
+                # Default 600s (10 min); override for longer runs via kubectl edit
+                # or a values.yaml overlay. Long timeouts mask real failures —
+                # 10 min is enough for NVRx (heartbeat ~30s) to surface hangs
+                # without blocking surviving ranks for hours on a dead peer.
+                - name: NCCL_TIMEOUT
+                  value: "600"
+                - name: NCCL_MAX_NCHANNELS
+                  value: "1"
+                - name: NCCL_MIN_NCHANNELS
+                  value: "1"
+                - name: NCCL_PROTO
+                  value: "simple"
+                - name: NCCL_CUMEM_ENABLE
+                  value: "0"
+                - name: NCCL_NVLS_ENABLE
+                  value: "0"
+                # Matches NCCL_TIMEOUT above — letting NVRx drive recovery.
+                - name: TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC
+                  value: "600"
+                - name: FI_EFA_FORK_SAFE
+                  value: "1"
+                - name: RDMAV_FORK_SAFE
+                  value: "1"
+                - name: FI_EFA_USE_HUGE_PAGE
+                  value: "0"
+                - name: FI_MR_CACHE_MONITOR
+                  value: "disabled"
+                # g5.8xlarge uses EFA Gen 1 — no rdma-read capability; must be 0
+                - name: FI_EFA_USE_DEVICE_RDMA
+                  value: "0"
+                # Bypass aws-ofi-nccl RDMA path — EFA Gen1 hangs with RDMA protocol
+                # after ~5 allreduces; use TCP socket transport instead
+                - name: NCCL_NET_PLUGIN
+                  value: "none"
+                # ── Caches on FSx (persistent across runs — first run downloads, subsequent runs reuse) ──
+                - name: HF_HOME
+                  value: "/shared/nvrx-demo/hf_cache"
+                - name: HF_DATASETS_CACHE
+                  value: "/shared/nvrx-demo/hf_datasets"
+                - name: TORCH_HOME
+                  value: "/shared/nvrx-demo/torch_cache"
+                - name: XDG_CACHE_HOME
+                  value: "/shared/nvrx-demo/xdg_cache"
+                - name: TRITON_CACHE_DIR
+                  value: "/shared/nvrx-demo/triton_cache"
+                - name: TORCH_CUDA_ARCH_LIST
+                  value: "8.6"
+                # ── Ray ──
+                - name: RAY_worker_register_timeout_seconds
+                  value: "600"
+              lifecycle:
+                preStop:
+                  exec:
+                    command: ["/bin/sh", "-c", "ray stop"]
+              resources:
+                limits:
+                  nvidia.com/gpu: 1
+                  vpc.amazonaws.com/efa: 1
+                  memory: 100Gi
+                requests:
+                  nvidia.com/gpu: 1
+                  vpc.amazonaws.com/efa: 1
+                  memory: 80Gi
+                  cpu: 16
+              volumeMounts: &common-mounts
+                - name: fsx
+                  mountPath: /shared
+                - name: shm
+                  mountPath: /dev/shm
+                - name: dev-infiniband
+                  mountPath: /dev/infiniband
+          volumes: &common-volumes
+            - name: fsx
+              persistentVolumeClaim:
+                claimName: fsx-grpo-pvc
+            - name: shm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 32Gi
+            - name: dev-infiniband
+              hostPath:
+                path: /dev/infiniband
+                type: DirectoryOrCreate
+
+    # ── Worker Node ──
+    workerGroupSpecs:
+      - groupName: gpu-workers
+        replicas: 1
+        minReplicas: 1
+        maxReplicas: 1
+        rayStartParams:
+          num-gpus: '1'
+          num-cpus: '16'
+        template:
+          metadata:
+            labels:
+              app: grpo-g5-qwen-nvrx
+          spec:
+            hostNetwork: true
+            dnsPolicy: ClusterFirstWithHostNet
+            nodeSelector:
+              node.kubernetes.io/instance-type: g5.8xlarge
+            tolerations:
+              - key: "nvidia.com/gpu"
+                operator: "Exists"
+                effect: "NoSchedule"
+            affinity:
+              podAntiAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchLabels:
+                        app: grpo-g5-qwen-nvrx
+                    topologyKey: kubernetes.io/hostname
+            containers:
+              - name: ray-worker
+                # Replace <your-account>/<your-alias> with your ECR path after building
+                # the Dockerfile in this directory (see README Section 0).
+                image: public.ecr.aws/<your-alias>/nemo-rl-workshop:latest
+                imagePullPolicy: Always
+                securityContext:
+                  capabilities:
+                    add: [IPC_LOCK, SYS_RESOURCE]
+                env: *common-env
+                lifecycle:
+                  preStop:
+                    exec:
+                      command: ["/bin/sh", "-c", "ray stop"]
+                resources:
+                  limits:
+                    nvidia.com/gpu: 1
+                    vpc.amazonaws.com/efa: 1
+                    memory: 100Gi
+                  requests:
+                    nvidia.com/gpu: 1
+                    vpc.amazonaws.com/efa: 1
+                    memory: 80Gi
+                    cpu: 16
+                volumeMounts: *common-mounts
+            volumes: *common-volumes

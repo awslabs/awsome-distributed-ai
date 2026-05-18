@@ -65,6 +65,14 @@ Parameters:
   SubnetIds:
     Description: Subnets in which database will be reachable.
     Type: List<AWS::EC2::Subnet::Id>
+  EngineVersion:
+    Description: >-
+      Aurora MySQL engine version. Verify the value is currently offered with
+      `aws rds describe-db-engine-versions --engine aurora-mysql --query 'DBEngineVersions[?Status==\`available\`].EngineVersion' --output text`.
+      Aurora retires minor versions on a rolling basis, so older pinned values will
+      eventually fail with "Cannot find version" at stack-create time.
+    Type: String
+    Default: "8.0.mysql_aurora.3.12.0"
 
 ############################
 ## Database Resources
@@ -141,7 +149,7 @@ Resources:
     Properties:
       DBClusterIdentifier: !Ref ClusterName
       Engine: "aurora-mysql"
-      EngineVersion: "8.0.mysql_aurora.3.07.1"
+      EngineVersion: !Ref EngineVersion
       CopyTagsToSnapshot: true
       DBClusterParameterGroupName: !Ref AccountingClusterParameterGroup
       DBSubnetGroupName: !Ref AccountingClusterSubnetGroup

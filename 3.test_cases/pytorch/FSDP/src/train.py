@@ -90,14 +90,26 @@ def train(
             step_time = time.time() - step_start
             sample_processed = input_data.shape[0] * world_size
             throughput = sample_processed / step_time
+            # Throughput in tokens/sec and per-GPU TFLOPS using the standard
+            # Llama approximation 6 * num_params * tokens (forward+backward).
+            tokens_per_step = sample_processed * input_data.shape[1]
+            tokens_per_sec = tokens_per_step / step_time
+            tflops_per_gpu = (6.0 * num_params * tokens_per_step) / (
+                step_time * world_size * 1e12
+            )
+            mfu = tflops_per_gpu / args.peak_tflops_per_gpu
             loss_scalar = loss.item()
             current_lr = lr_scheduler.get_lr()
             if global_rank==0 and batch_idx%args.logging_freq==0:
                 logger.info(
-                    "Batch %d Loss: %.5f, Speed: %.2f samples/sec, lr: %.6f",
+                    "Batch %d Loss: %.5f, Speed: %.2f samples/sec, "
+                    "Tokens/s: %.0f, TFLOPS/GPU: %.1f, MFU: %.3f, lr: %.6f",
                     batch_idx,
                     loss_scalar,
                     throughput,
+                    tokens_per_sec,
+                    tflops_per_gpu,
+                    mfu,
                     current_lr,
                 )
             if args.validation_freq and not total_steps % args.validation_freq:

@@ -8,7 +8,7 @@ spec:
   restartPolicy: Never
   containers:
   - name: nemo-processing
-    image: nvcr.io/nvidia/nemo:25.04.01
+    image: nvcr.io/nvidia/nemo:26.02
     command: ["/bin/bash"]
     args: ["-c", "sleep infinity"]
     resources:

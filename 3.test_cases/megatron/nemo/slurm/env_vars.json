@@ -2,8 +2,8 @@
     "TORCH_NCCL_AVOID_RECORD_STREAMS": "1",
     "NVTE_DP_AMAX_REDUCE_INTERVAL": "0",
     "NVTE_ASYNC_AMAX_REDUCTION": "1",
-    "NVTE_FUSED_ATTN": "0",
     "FI_EFA_USE_HUGE_PAGE": "0",
     "NCCL_DEBUG": "INFO",
-    "FI_PROVIDER": "efa"
+    "FI_PROVIDER": "efa",
+    "PATH": "/opt/venv/bin:/opt/slurm/bin:/opt/amazon/openmpi/bin:/opt/amazon/efa/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 }

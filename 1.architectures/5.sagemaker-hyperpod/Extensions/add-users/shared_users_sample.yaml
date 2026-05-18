@@ -1,0 +1,58 @@
+# =============================================================================
+# Add Users Configuration
+# =============================================================================
+#
+# Two formats are supported:
+#
+# 1. Simple: flat list of users (all get global defaults)
+# 2. Groups: users organized into groups with per-group Slurm accounts
+#    and filesystem mounts
+#
+# You can use either format, but not both in the same config file.
+#
+# To use this file, copy it to shared_users.yaml and edit it.
+# =============================================================================
+
+# --- Simple format (no groups) ---
+users:
+  - username: user1
+    uid: 2001
+  - username: user2
+    uid: 2002
+
+# --- Global optional settings ---
+
+# Path where user home directories are created.
+# Must be a shared filesystem mounted on all nodes (e.g., FSx for Lustre or OpenZFS).
+# Default: auto-detect (OpenZFS at /home preferred, then Lustre at /fsx)
+# shared_filesystem_mount: /fsx
+
+# Slurm accounting account to add users to.
+# Default: root
+# slurm_account: root
+
+# --- Groups format (uncomment below and remove the 'users' section above) ---
+#
+# Groups are an organizational concept for mapping users to different
+# Slurm accounts and filesystem mounts. They do not create Linux groups.
+# Per-group settings override the global defaults above.
+#
+# groups:
+#   - name: research
+#     # Optional: Slurm account for this group (default: global slurm_account or 'root')
+#     slurm_account: research
+#     # Optional: Home directory path for this group (default: global shared_filesystem_mount or auto-detect)
+#     # shared_filesystem_mount: /fsx
+#     users:
+#       - username: alice
+#         uid: 2001
+#       - username: bob
+#         uid: 2002
+#
+#   - name: platform
+#     slurm_account: platform
+#     users:
+#       - username: carol
+#         uid: 3001
+#       - username: dave
+#         uid: 3002

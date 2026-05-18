@@ -7,7 +7,7 @@ deepspeed
 accelerate==1.8.1
 datasets
 safetensors
-transformers==4.53.0
+transformers==5.0.0rc3
 trl
 hf_transfer
 huggingface_hub[cli]

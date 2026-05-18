@@ -22,7 +22,7 @@ DATASET_DIR_NAME = "databricks-dolly-15k"   # This is the name of the directory 
 # function in the CustomDataModule class to match your dataset's structure
 # =============================================================================
 
-# python finetune.py --max_steps 200 --nodes 1 --gpus L40S --gpu-devices 8 --container_image nvcr.io/nvidia/nemo:24.12 --env_vars_file env_vars.json --pvc_name fsx-claim --pvc_mount_path /mnt/nemo
+# python finetune.py --max_steps 200 --nodes 1 --gpus L40S --gpu-devices 8 --container_image nvcr.io/nvidia/nemo:26.02 --env_vars_file env_vars.json --pvc_name fsx-claim --pvc_mount_path /mnt/nemo
 
 
 def get_parser():
@@ -32,7 +32,7 @@ def get_parser():
    parser.add_argument("--gpu-devices", type=int, help="Number of GPUs per node", default=8)
    parser.add_argument("--efa-devices", type=int, help="Number of EFA devices per node", default=None)
    parser.add_argument("--max_steps", type=int, help="Maximum number of steps", default=200)
-   parser.add_argument("--container_image", type=str, help="Container image to use", default="nvcr.io/nvidia/nemo:24.12")
+   parser.add_argument("--container_image", type=str, help="Container image to use", default="nvcr.io/nvidia/nemo:26.02")
    parser.add_argument("--env_vars_file", type=str, help="Path to the JSON file with environment variables", default="env_vars.json")
    parser.add_argument("--pvc_name", type=str, help="Name of the Persistent Volume Claim to use", default="fsx-claim")
    parser.add_argument("--pvc_mount_path", type=str, help="Path where the PVC should be mounted in the container", default="/mnt/nemo")
@@ -109,7 +109,7 @@ def skypilot_executor(
    gpus: str = "L40S",
    efa_devices: Optional[int] = None,
    custom_mounts: Optional[dict[str, str]] = None,
-   container_image: str = "nvcr.io/nvidia/nemo:24.12",
+   container_image: str = "nvcr.io/nvidia/nemo:26.02",
    env_vars_file: str = "env_vars.json",
    pvc_name: str = "nemo-runs",
    lora_enabled: bool = False,

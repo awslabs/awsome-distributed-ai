@@ -1,0 +1,57 @@
+Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+SPDX-License-Identifier: MIT-0
+
+Third-Party Licenses
+====================
+
+This file lists the third-party software packages used by the
+nemo-rl container image and their respective licenses.
+
+A complete, auto-generated Software Bill of Materials (SBOM) is
+available inside the container at:
+
+    /THIRD-PARTY-LICENSES   (per-package license text)
+    /SBOM.txt               (CSV inventory)
+
+To extract from a built image:
+
+    docker run --rm nemo-rl-workshop cat /SBOM.txt > SBOM.txt
+
+
+Package                     License             URL
+--------------------------  ------------------  ------------------------------------------
+NeMo RL                     Apache-2.0          https://github.com/NVIDIA-NeMo/RL
+PyTorch                     BSD-3-Clause        https://github.com/pytorch/pytorch
+Ray                         Apache-2.0          https://github.com/ray-project/ray
+vLLM                        Apache-2.0          https://github.com/vllm-project/vllm
+Transformers                Apache-2.0          https://github.com/huggingface/transformers
+Flash-Attention             BSD-3-Clause        https://github.com/Dao-AILab/flash-attention
+Transformer Engine          Apache-2.0          https://github.com/NVIDIA/TransformerEngine
+DeepEP                      MIT                 https://github.com/deepseek-ai/DeepEP
+DeepGEMM                    MIT                 https://github.com/deepseek-ai/DeepGEMM
+NCCL                        BSD-3-Clause        https://github.com/NVIDIA/nccl
+aws-ofi-nccl                Apache-2.0          https://github.com/aws/aws-ofi-nccl
+libfabric (EFA)             BSD-2-Clause        https://github.com/ofiwg/libfabric
+NVIDIA Resiliency Ext       Apache-2.0          https://github.com/NVIDIA/nvidia-resiliency-extension
+CUDA Toolkit                NVIDIA EULA         https://developer.nvidia.com/cuda-toolkit
+cuDNN                       NVIDIA EULA         https://developer.nvidia.com/cudnn
+NVSHMEM                     NVIDIA EULA         https://developer.nvidia.com/nvshmem
+
+
+Utility Licenses
+================
+
+Listed below are build-time and development utilities used in the
+nemo-rl container project and their licenses.
+
+Package                     License             Purpose
+--------------------------  ------------------  ------------------------------------------
+uv                          MIT/Apache-2.0      Python package manager (build-time)
+CMake                       BSD-3-Clause        Build system (build-time)
+pip-licenses                MIT                 SBOM generation (build-time, removed after)
+Docker                      Apache-2.0          Container build
+kubectl                     Apache-2.0          Kubernetes deployment
+Helm                        Apache-2.0          Kubernetes package manager
+asciinema                   GPL-3.0             Terminal recording (dev-only)
+gh (GitHub CLI)             MIT                 GitHub operations (dev-only)
+

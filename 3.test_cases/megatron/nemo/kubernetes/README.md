@@ -124,7 +124,7 @@ Before you begin, ensure you have the following:
 
 ## 1. Building the AWS-Optimized NeMo Container for EFA Enabled Instances
 
-**If you're not using an EFA enabled instance type, you can skip this step**. Here the base NeMo image (`nvcr.io/nvidia/nemo:25.04.01`) is enhanced with AWS-specific optimizations for EFA support.
+**If you're not using an EFA enabled instance type, you can skip this step**. Here the base NeMo image (`nvcr.io/nvidia/nemo:26.02`) is enhanced with AWS-specific optimizations for EFA support.
 
 ### Build the Docker Image
 
@@ -359,7 +359,7 @@ cd data-processing/
 
 ## 5. Launching NeMo Training Jobs
 
-> **Note**: The AWS-optimized container with EFA support can only be used for EFA enabled instances. For non-EFA usage, the default NeMo container (`nvcr.io/nvidia/nemo:25.04.01`) will work fine and you can omit the `--container_image` parameter.
+> **Note**: The AWS-optimized container with EFA support can only be used for EFA enabled instances. For non-EFA usage, the default NeMo container (`nvcr.io/nvidia/nemo:26.02`) will work fine and you can omit the `--container_image` parameter.
 
 ### Overview
 
@@ -388,7 +388,7 @@ The repository provides multiple training scenarios to meet different needs:
 | `--gpus` | GPU type (e.g., L40S, H100, A10G) | L40S |
 | `--gpu-devices` | Number of GPUs per node | 4 |
 | `--efa-devices` | Number of EFA devices per node | None |
-| `--container_image` | Container image for training (required for using EFA) | nvcr.io/nvidia/nemo:25.04.01 |
+| `--container_image` | Container image for training (required for using EFA) | nvcr.io/nvidia/nemo:26.02 |
 | `--env_vars_file` | JSON file with environment variables | env_vars.json |
 | `--pvc_name` | Name of the Persistent Volume Claim to use | fsx-claim |
 | `--pvc_mount_path` | Path where the PVC should be mounted in the container | /mnt/nemo |
@@ -467,7 +467,7 @@ python pretrain_mock_dataset.py \
     --nodes 1 \
     --gpus L40S \
     --gpu-devices 4 \
-    --container_image nvcr.io/nvidia/nemo:25.04.01 \
+    --container_image nvcr.io/nvidia/nemo:26.02 \
     --env_vars_file env_vars.json \
     --pvc_name fsx-claim \
     --pvc_mount_path /mnt/nemo
@@ -496,7 +496,7 @@ python finetune_default_dataset.py \
     --nodes 1 \
     --gpus L40S \
     --gpu-devices 4 \
-    --container_image nvcr.io/nvidia/nemo:25.04.01 \
+    --container_image nvcr.io/nvidia/nemo:26.02 \
     --env_vars_file env_vars.json \
     --pvc_name fsx-claim \
     --pvc_mount_path /mnt/nemo
@@ -509,7 +509,7 @@ python finetune_default_dataset.py \
     --nodes 1 \
     --gpus L40S \
     --gpu-devices 4 \
-    --container_image nvcr.io/nvidia/nemo:25.04.01 \
+    --container_image nvcr.io/nvidia/nemo:26.02 \
     --env_vars_file env_vars.json \
     --pvc_name fsx-claim \
     --pvc_mount_path /mnt/nemo \
@@ -523,7 +523,7 @@ python finetune_default_dataset.py \
     --nodes 1 \
     --gpus L40S \
     --gpu-devices 4 \
-    --container_image nvcr.io/nvidia/nemo:25.04.01 \
+    --container_image nvcr.io/nvidia/nemo:26.02 \
     --env_vars_file env_vars.json \
     --pvc_name fsx-claim \
     --pvc_mount_path /mnt/nemo \
@@ -554,7 +554,7 @@ python finetune_custom_dataset.py \
     --nodes 1 \
     --gpus L40S \
     --gpu-devices 4 \
-    --container_image nvcr.io/nvidia/nemo:25.04.01 \
+    --container_image nvcr.io/nvidia/nemo:26.02 \
     --env_vars_file env_vars.json \
     --pvc_name fsx-claim \
     --pvc_mount_path /mnt/nemo \
@@ -570,7 +570,7 @@ python finetune_custom_dataset.py \
     --nodes 2 \
     --gpus L40S \
     --gpu-devices 4 \
-    --container_image nvcr.io/nvidia/nemo:25.04.01 \
+    --container_image nvcr.io/nvidia/nemo:26.02 \
     --env_vars_file env_vars.json \
     --pvc_name fsx-claim \
     --pvc_mount_path /mnt/nemo \

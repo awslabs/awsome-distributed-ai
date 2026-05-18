@@ -1,0 +1,148 @@
+apiVersion: "kubeflow.org/v1"
+kind: PyTorchJob
+metadata:
+  name: detr-resnet50-finetune
+spec:
+  elasticPolicy:
+    rdzvBackend: c10d
+    minReplicas: 2
+    maxReplicas: $NUM_NODES
+    maxRestarts: 3
+    metrics:
+      - type: Resource
+        resource:
+          name: cpu
+          target:
+            type: Utilization
+            averageUtilization: 80
+  pytorchReplicaSpecs:
+    Worker:
+      replicas: $NUM_NODES
+      restartPolicy: ExitCode
+      template:
+        metadata:
+          labels:
+            app: detr-resnet50-finetune
+        spec:
+          volumes:
+          - name: fsx-storage
+            persistentVolumeClaim:
+              claimName: fsx-pvc
+          - name: shmem
+            hostPath:
+              path: /dev/shm
+          - name: local
+            hostPath:
+              path: /mnt/k8s-disks/0
+          nodeSelector:
+            node.kubernetes.io/instance-type: "${INSTANCE_TYPE}"
+          containers:
+            - name: pytorch
+              image: ${IMAGE_URI}
+              imagePullPolicy: Always
+              resources:
+                requests:
+                  cpu: "8"
+                  memory: "32Gi"
+                  nvidia.com/gpu: 1
+                  vpc.amazonaws.com/efa: 1
+                limits:
+                  cpu: "8"
+                  memory: "32Gi"
+                  nvidia.com/gpu: 1
+                  vpc.amazonaws.com/efa: 1
+              env:
+              # -- HuggingFace offline mode (model weights are baked into the image) --
+              - name: TRANSFORMERS_OFFLINE
+                value: "1"
+              - name: HF_HUB_OFFLINE
+                value: "1"
+              - name: QAIHM_DISABLE_TELEMETRY
+                value: "1"
+              - name: HF_HOME
+                value: "/workspace/cache/huggingface"
+              # -- Logging & debugging --
+              - name: LOGLEVEL
+                value: "DEBUG"
+              - name: TORCH_DISTRIBUTED_DEBUG
+                value: "DETAIL"
+              - name: TORCH_NCCL_ENABLE_MONITORING
+                value: "1"
+              - name: TORCH_NCCL_TRACE_BUFFER_SIZE
+                value: "20000"
+              - name: TORCH_NCCL_DUMP_ON_TIMEOUT
+                value: "1"
+              - name: TORCH_NCCL_DEBUG_INFO_TEMP_FILE
+                value: "/local/nccl_trace_rank_"
+              - name: PYTORCH_CUDA_ALLOC_CONF
+                value: "expandable_segments:True"
+              # -- NCCL --
+              - name: NCCL_DEBUG
+                value: "INFO"
+              - name: NCCL_SOCKET_IFNAME
+                value: "^lo"
+              - name: NCCL_SHM_USE_CUDA_MEMCPY
+                value: "1"
+              - name: NCCL_PROTO
+                value: "simple"
+              - name: TORCH_NCCL_ASYNC_ERROR_HANDLING
+                value: "1"
+              # -- EFA --
+              - name: FI_PROVIDER
+                value: "efa"
+              - name: FI_EFA_FORK_SAFE
+                value: "1"
+              # -- Application --
+              - name: PYTHONPATH
+                value: "/workspace"
+              command:
+                - bash
+                - -c
+                - |
+                  set -ex
+                  echo "Starting DETR-ResNet50 fine-tuning..."
+
+                  # Setup checkpoint directory
+                  if [ -d "/fsx" ]; then
+                    export CHECKPOINT_DIR="/fsx/checkpoint"
+                  else
+                    export CHECKPOINT_DIR="/workspace/checkpoints"
+                  fi
+                  mkdir -p "${CHECKPOINT_DIR}"
+
+                  # Build resume flag if a checkpoint exists from a previous run
+                  RESUME_FLAG=""
+                  if [ -f "${CHECKPOINT_DIR}/checkpoint.pth.tar" ]; then
+                    echo "Found existing checkpoint, resuming training..."
+                    RESUME_FLAG="--resume=${CHECKPOINT_DIR}/checkpoint.pth.tar"
+                  fi
+
+                  # Verify installation
+                  python3 -c "from qai_hub_models.models.detr_resnet50 import Model; print('QAI Hub DETR-ResNet50 ready')"
+
+                  echo "Starting DETR object detection training..."
+                  python3 -m torch.distributed.run \
+                    --nproc_per_node=${NPROC_PER_NODE:-1} \
+                    --nnodes=$NUM_NODES \
+                    --node_rank=${RANK:-0} \
+                    --master_addr=${MASTER_ADDR:-localhost} \
+                    --master_port=${MASTER_PORT:-29500} \
+                    /workspace/detr_main.py \
+                    --dist-url=env:// \
+                    --arch=detr-resnet50 \
+                    --epochs=50 \
+                    --batch-size=4 \
+                    --workers=2 \
+                    --lr=1e-4 \
+                    --weight-decay=1e-4 \
+                    --num-classes=2 \
+                    --print-freq=10 \
+                    ${RESUME_FLAG} \
+                    /fsx/data
+              volumeMounts:
+                - name: fsx-storage
+                  mountPath: /fsx
+                - name: shmem
+                  mountPath: /dev/shm
+                - name: local
+                  mountPath: /local

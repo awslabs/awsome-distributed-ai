@@ -140,7 +140,4 @@ mpirun -n $((SLURM_NTASKS_PER_NODE * SLURM_JOB_NUM_NODES)) -N $SLURM_NTASKS_PER_
         -x NCCL_TESTS_SPLIT_MASK=${SPLIT_MASK} \
         ${NCCL_DEBUG_FLAG} \
         ${HOSTFILE_OPTS} \
-        --mca pml ^ucx \
-        --mca btl tcp,self \
-        --mca btl_tcp_if_exclude lo,docker0,veth_def_agent \
         --bind-to none ${TEST_BINARY} -b 8 -e 16G -f 2 -g 1 -c 1 -n 100

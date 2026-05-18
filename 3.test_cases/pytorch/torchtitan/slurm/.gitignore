@@ -1,5 +1,7 @@
-miniconda3
 pt_torchtitan
+torchtitan
 logs
 checkpoints
-Miniconda3-latest-Linux-x86_64.sh
+outputs
+profile_trace
+tb

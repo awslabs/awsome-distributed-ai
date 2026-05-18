@@ -7,29 +7,35 @@ availability_zone_id = "usw2-az2"
 hyperpod_cluster_name = "ml-cluster"
 
 # Instance Groups Configuration
-instance_groups = {
-  controller-machine = {
+instance_groups = [
+  {
+    name             = "controller-machine"
     instance_type    = "ml.c5.xlarge"
     instance_count   = 1
     ebs_volume_size  = 100
     threads_per_core = 1
     lifecycle_script = "on_create.sh"
-  }
-  login-nodes = {
+  },
+  {
+    name             = "login-nodes"
     instance_type    = "ml.m5.4xlarge"
     instance_count   = 1
     ebs_volume_size  = 100
     threads_per_core = 1
     lifecycle_script = "on_create.sh"
-  }
-  compute-nodes = {
+  },
+  {
+    name             = "compute-nodes"
     instance_type    = "ml.g5.4xlarge"
     instance_count   = 2
     ebs_volume_size  = 500
     threads_per_core = 1
     lifecycle_script = "on_create.sh"
+
+    # Training Plan (optional): attach to THIS group by uncommenting and setting ARN
+    # training_plan_arn = "arn:aws:sagemaker:us-west-2:123456789012:training-plan/your-plan-name"
   }
-}
+]
 
 # Network Configuration
 vpc_cidr = "10.0.0.0/16"
@@ -70,3 +76,5 @@ create_hyperpod_module = true
 
 # Lifecycle Scripts Configuration
 lifecycle_scripts_path = "../../LifecycleScripts/base-config"
+
+

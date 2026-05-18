@@ -13,8 +13,8 @@ The suite provides two operational modes: **lightweight checks** for regular use
 | NVIDIA Driver | All GPU checks | Pre-installed on GPU AMIs |
 | [DCGM Toolkit](https://developer.nvidia.com/dcgm) | Checks 1, 4 | `apt install datacenter-gpu-manager` or via NVIDIA repo |
 | EFA Installer | Checks 2, 6 | [AWS EFA Installer](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-start.html) |
-| NCCL Tests Container | Check 5 | `public.ecr.aws/hpc-cloud/nccl-tests:latest` |
-| [Pyxis](https://github.com/NVIDIA/pyxis) + [Enroot](https://github.com/NVIDIA/enroot) | Check 5 (container) | Optional -- falls back to local `all_reduce_perf` |
+| NCCL Tests Container | Check 5 | `docker://public.ecr.aws/hpc-cloud/nccl-tests:latest` |
+| [Pyxis](https://github.com/NVIDIA/pyxis) + [Enroot](https://github.com/NVIDIA/enroot) | Check 5 (container) | Optional -- falls back to local `all_reduce_perf`. Pyxis < v0.20 requires the explicit `docker://` scheme on the image reference; newer Pyxis auto-detects |
 | Python 3.6+ | Result parsing | Pre-installed on most Linux distributions |
 
 ### Installation
@@ -469,6 +469,24 @@ The guiding principle is **replace, don't repair**. On AWS, the primary remediat
 - Check container image availability: `enroot import docker://public.ecr.aws/hpc-cloud/nccl-tests:latest`
 - Verify inter-node connectivity: security groups must allow all traffic between nodes
 - Check for NCCL version compatibility with driver version
+
+#### Container image pull returns 401 Unauthorized from `registry-1.docker.io`
+
+Symptom in stderr:
+```
+URL https://registry-1.docker.io/v2/public.ecr.aws/hpc-cloud/nccl-tests/manifests/latest returned error code: 401 Unauthorized
+pyxis: failed to import docker image
+spank: required plugin spank_pyxis.so: task_init() failed with rc=-1
+```
+
+Cause: older Pyxis (< v0.20) does not auto-detect the registry hostname in bare image references and routes the pull through Docker Hub, which returns 401 for the `public.ecr.aws/...` path. Force the registry scheme explicitly:
+
+```bash
+NCCL_CONTAINER=docker://public.ecr.aws/hpc-cloud/nccl-tests:latest \
+  ./gpu-healthcheck.sh --suite intensive --exclusive
+```
+
+Or update Pyxis to v0.20 or newer. The script's default already uses the `docker://` scheme as of [PR #TBD](https://github.com/awslabs/awsome-distributed-ai/pulls); this troubleshooting note covers customers running older Pyxis with the previous default still pinned in their configuration.
 
 ### Topology shows disconnected GPUs
 

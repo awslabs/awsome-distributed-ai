@@ -69,6 +69,16 @@ def parse_args():  # pylint: disable=too-many-statements
                         default=1,
                         help="number of iterations between logging")
     parser.add_argument("--tensorboard_dir", type=str, nargs="+", default=None)
+    parser.add_argument(
+        "--peak_tflops_per_gpu",
+        type=float,
+        default=3000.0,
+        help=(
+            "Per-GPU peak BF16/FP16 dense TFLOPS used to compute MFU. "
+            "Default 3000 targets NVIDIA B300 (Blackwell Ultra). "
+            "Use 989 for H100 SXM, 1979 for B200, or your accelerator's spec."
+        ),
+    )
 
     model_grp = parser.add_argument_group(
         title="model", description="arguments to describe model configuration")

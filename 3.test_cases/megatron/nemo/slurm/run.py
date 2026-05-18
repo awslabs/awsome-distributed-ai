@@ -8,7 +8,7 @@ from functools import partial
 from typing import Any, Optional
 from nemo.collections import llm
 from nemo.lightning.run import plugins
-from nemo.collections.nlp.modules.common.tokenizer_utils import get_nmt_tokenizer
+from nemo.collections.common.tokenizers.tokenizer_utils import get_nmt_tokenizer
 from nemo.collections.llm.recipes.callbacks.common import straggler_det_callback
 from nemo.lightning.pytorch.callbacks import PreemptionCallback
 from nemo.lightning.run import plugins
@@ -37,7 +37,7 @@ def get_parser():
    parser.add_argument("--nodes", type=int, help="Number of nodes to run on", default=1)
    parser.add_argument("--max_steps", type=int, help="Maximum number of steps", default=200)
    parser.add_argument("--account", type=str, help="Slurm account to use", default="ubuntu")
-   parser.add_argument("--container_image", type=str, help="Container image to use", default="/fsx/ubuntu/aws-nemo-24-12.sqsh")
+   parser.add_argument("--container_image", type=str, help="Container image to use", default="/fsx/ubuntu/aws-nemo-26-02.sqsh")
    parser.add_argument("--time", type=str, help="Time to run the job", default="01:00:00")
    parser.add_argument("--env_vars_file", type=str, help="Path to the JSON file with environment variables", default="env_vars.json")
    parser.add_argument("--ntasks_per_node", type=int, help="Number of tasks per node", default=8)
@@ -54,7 +54,7 @@ def slurm_executor(
    remote_job_dir: str = "/fsx/ubuntu/aws-nemo",
    time: str = "01:00:00",
    custom_mounts: Optional[list[str]] = None,
-   container_image: str = "/fsx/ubuntu/aws-nemo-24-12.sqsh",
+   container_image: str = "/fsx/ubuntu/aws-nemo-26-02.sqsh",
    env_vars_file: str = "env_vars.json",
    ntasks_per_node: int = 8,
    retries: int = 0,

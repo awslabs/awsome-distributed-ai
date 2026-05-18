@@ -4,14 +4,14 @@ data "aws_s3_bucket" "existing_s3_bucket" {
 }
 
 locals {
-  vpc_id = var.create_vpc_module ? module.vpc[0].vpc_id : var.existing_vpc_id
-  private_subnet_id = var.create_private_subnet_module ? module.private_subnet[0].private_subnet_id : var.existing_private_subnet_id
-  security_group_id = var.create_security_group_module ? module.security_group[0].security_group_id : var.existing_security_group_id
-  s3_bucket_name = var.create_s3_bucket_module ? module.s3_bucket[0].s3_bucket_name : var.existing_s3_bucket_name
+  vpc_id                  = var.create_vpc_module ? module.vpc[0].vpc_id : var.existing_vpc_id
+  private_subnet_id       = var.create_private_subnet_module ? module.private_subnet[0].private_subnet_id : var.existing_private_subnet_id
+  security_group_id       = var.create_security_group_module ? module.security_group[0].security_group_id : var.existing_security_group_id
+  s3_bucket_name          = var.create_s3_bucket_module ? module.s3_bucket[0].s3_bucket_name : var.existing_s3_bucket_name
   sagemaker_iam_role_name = var.create_sagemaker_iam_role_module ? module.sagemaker_iam_role[0].sagemaker_iam_role_name : var.existing_sagemaker_iam_role_name
-  fsx_lustre_dns_name = var.create_fsx_lustre_module ? module.fsx_lustre[0].fsx_lustre_dns_name : var.existing_fsx_lustre_dns_name
-  fsx_lustre_mount_name = var.create_fsx_lustre_module ? module.fsx_lustre[0].fsx_lustre_mount_name : var.existing_fsx_lustre_mount_name
-  fsx_openzfs_dns_name = var.create_fsx_openzfs_module ? module.fsx_openzfs[0].fsx_openzfs_dns_name : var.existing_fsx_openzfs_dns_name
+  fsx_lustre_dns_name     = var.create_fsx_lustre_module ? module.fsx_lustre[0].fsx_lustre_dns_name : var.existing_fsx_lustre_dns_name
+  fsx_lustre_mount_name   = var.create_fsx_lustre_module ? module.fsx_lustre[0].fsx_lustre_mount_name : var.existing_fsx_lustre_mount_name
+  fsx_openzfs_dns_name    = var.create_fsx_openzfs_module ? module.fsx_openzfs[0].fsx_openzfs_dns_name : var.existing_fsx_openzfs_dns_name
   # For Multi-AZ, use provided subnet IDs; for Single-AZ, use single private subnet
   fsx_openzfs_subnet_ids = var.fsx_openzfs_deployment_type == "MULTI_AZ_1" ? var.fsx_openzfs_subnet_ids : []
 }
@@ -93,13 +93,13 @@ module "lifecycle_script" {
   count  = var.create_lifecycle_script_module ? 1 : 0
   source = "./modules/lifecycle_script"
 
-  resource_name_prefix     = var.resource_name_prefix
-  s3_bucket_name           = local.s3_bucket_name
-  fsx_lustre_dns_name      = local.fsx_lustre_dns_name
-  fsx_lustre_mount_name    = local.fsx_lustre_mount_name
-  fsx_openzfs_dns_name     = local.fsx_openzfs_dns_name
-  lifecycle_scripts_path   = var.lifecycle_scripts_path
-  instance_groups          = var.instance_groups
+  resource_name_prefix   = var.resource_name_prefix
+  s3_bucket_name         = local.s3_bucket_name
+  fsx_lustre_dns_name    = local.fsx_lustre_dns_name
+  fsx_lustre_mount_name  = local.fsx_lustre_mount_name
+  fsx_openzfs_dns_name   = local.fsx_openzfs_dns_name
+  lifecycle_scripts_path = var.lifecycle_scripts_path
+  instance_groups        = var.instance_groups
 }
 
 module "sagemaker_iam_role" {

@@ -1,0 +1,11 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+# CVE-2023-48022: Ray Dashboard access — disputed by Ray project (by design, not a bug)
+# https://github.com/ray-project/ray/issues/38720
+CVE-2023-48022
+
+# CVE-2026-22778: vllm 0.11.2 — fix requires 0.14.1 which has breaking API changes
+# NeMo RL is tightly coupled to vllm 0.11.x generation APIs. Upgrading breaks training.
+# Accepted risk: vllm is not exposed to untrusted input in this container.
+CVE-2026-22778

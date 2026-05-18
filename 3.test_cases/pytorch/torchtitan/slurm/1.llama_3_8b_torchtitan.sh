@@ -22,16 +22,12 @@ GPUS_PER_NODE=8
 
 export NCCL_DEBUG=INFO
 export FI_PROVIDER=efa
-export FI_EFA_USE_HUGE_PAGE=0 
+export FI_EFA_USE_HUGE_PAGE=0
 ## Switching SYNC_MEMOPS to zero can boost throughput with FSDP
 ## Disables CU_POINTER_ATTRIBUTE_SYNC_MEMOPS
 ## Reduces memory synchronizations
 ## https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__UNIFIED.html
 export FI_EFA_SET_CUDA_SYNC_MEMOPS=0
-# LD_PRELOAD is required for PyTorch to find the NCCL library
-# This path assumes you are using the Deep Learning AMI
-# If you are not using the DLAMI, you may need to update this path
-export LD_PRELOAD=/usr/local/cuda-12.1/lib/libnccl.so
 export NCCL_SOCKET_IFNAME=^docker,lo,veth
 
 ## Set HuggingFace metadata timeout (in seconds) for large clusters
@@ -52,7 +48,10 @@ declare -a TORCHRUN_ARGS=(
 export TORCHRUN=./pt_torchtitan/bin/torchrun
 export TRAIN_SCRIPT=./torchtitan/torchtitan/train.py
 
-CONFIG_FILE=${CONFIG_FILE:-"./torchtitan/torchtitan/models/llama/train_configs/llama3_8b.toml"}
+# Default config is the vendored copy in this repo. To run with FP8 +
+# torch.compile, set CONFIG_FILE=$(dirname $0)/configs/llama3_8b_fp8_compile.toml
+# before sbatch (or pass it via --export).
+CONFIG_FILE=${CONFIG_FILE:-"$(dirname "$0")/configs/llama3_8b.toml"}
 
 AUTO_RESUME=""
 if [ -d "/opt/sagemaker_cluster" ]; then

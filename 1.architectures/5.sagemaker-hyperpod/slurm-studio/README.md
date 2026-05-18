@@ -246,7 +246,7 @@ nvidia-smi
 
 2. SLURM failed to set up
 
-This is a rare occurence, but it may happen because the MUNGE authentication key was incorrectly copied over from the controller machine. To remediate, you can follow the steps in the logs:
+This is a rare occurrence, but it may happen because the MUNGE authentication key was incorrectly copied over from the controller machine. To remediate, you can follow the steps in the logs:
 ```
 Here are the manual steps you can try:
 

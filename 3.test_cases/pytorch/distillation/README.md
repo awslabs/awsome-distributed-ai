@@ -91,7 +91,7 @@ To store your distilled model artifacts, you'll need to configure a Hugging Face
    export HUB_LOCATION="your-username/your-model-name"
    ```
 
-### Setup Persistant Volume Claim(PVC) for fsx 
+### Setup Persistent Volume Claim(PVC) for fsx 
 
 Depending on the save location, We need to setup an PVC for FSx to save the model artifacts. Please follow the link [here](https://catalog.workshops.aws/sagemaker-hyperpod-eks/en-US/01-cluster/06-fsx-for-lustre) to setup FSx CSI Driver and PVC. You can skip this step if you have a model repository setup on Huggingface.
 

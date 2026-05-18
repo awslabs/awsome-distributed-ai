@@ -2,7 +2,7 @@
 
 These scripts provide an easy way to get started with multinode [FSDP](https://pytorch.org/tutorials/intermediate/FSDP_tutorial.html) training on EKS. It is designed to be as simple as possible, requires no data preparation, and uses a container image. If you would like to run FSDP with SLURM, please refer to [README.md](../slurm/README.md).
 
-This document will run you through how to run Llama 3.1 8B model training with FSDP. You will also find in this folder manifests to run Llama 2(7B, 13B, 70B), Llama 3.1(8B, 70B), Llama 3.2(1B, 3B),  Mistral 8x7b and Mistral Mathstral.
+This document will run you through how to run Llama 3.1 8B model training with FSDP. You will also find in this folder manifests to run Llama 2(7B, 13B, 70B), Llama 3.1(8B, 70B), Llama 3.2(1B, 3B),  Mistral 8x7b and Mistral Mathstral. For SageMaker HyperPod EKS clusters, `HyperPodPyTorchJob` (HPTO) manifests are also available for Llama 3.1 8B and Llama 3.2 1B (see [section 4a](#4a-launch-llama-32-1b-training-with-hyperpod-hpto)).
 
 ## 0. Prerequisites
 
@@ -130,6 +130,74 @@ Keep FI_* values commented out for non-efa instances (G5, G4d, P3) or P5
 Uncomment FI_* values for P4d instances
 
 You can also adjust the training parameters in `TRAINING_ARGS` (for example, to train Llama 3.1 70B). Additional parameters can be found in `src/model_utils/arguments.py`. Note that we use the same directory for both `--checkpoint_dir` and `--resume_from_checkpoint`. If there are multiple checkpoints, `--resume_from_checkpoint` will automatically select the most recent one. This way if our training is interupted for any reason, it will automatically pick up the most recent checkpoint.
+
+## 4a. Launch Llama 3.2 1B training with HyperPod (HPTO)
+
+This section describes how to run a lightweight Llama 3.2 1B FSDP training job using a `HyperPodPyTorchJob` (HPTO) manifest. This is suitable for smaller GPU instances (e.g., g5.8xlarge) and requires a **SageMaker HyperPod EKS cluster**.
+
+### Prerequisites
+
+- A SageMaker HyperPod EKS cluster (the HPTO manifest uses the `sagemaker.amazonaws.com/v1` API group which is not available on vanilla EKS)
+- The container image must be built using the `hpto` target of the Dockerfile, which includes `hyperpod-elastic-agent==1.1.2`:
+
+``` bash
+pushd ../
+docker build -f Dockerfile --target hpto -t ${REGISTRY}fsdp:pytorch2.7.1-hpto .
+popd
+```
+
+Push this image to ECR following the same steps in section 2.
+
+### Launch the training job
+
+Create environment variables:
+
+``` bash
+cat << EOF > env_vars
+export IMAGE_URI=${REGISTRY}fsdp:pytorch2.7.1-hpto
+export NUM_NODES=<NUMBER OF NODES>
+export GPU_PER_NODE=<NUMBER OF GPUS PER NODE>
+export EFA_PER_NODE=<NUMBER OF EFA PER NODE>
+export HF_TOKEN=<YOUR HF ACCESS TOKEN>
+EOF
+```
+
+For reference, this manifest was validated on 8 x ml.g5.8xlarge instances (1 GPU, 1 EFA per node):
+
+``` bash
+cat << EOF > env_vars
+export IMAGE_URI=${REGISTRY}fsdp:pytorch2.7.1-hpto
+export NUM_NODES=8
+export GPU_PER_NODE=1
+export EFA_PER_NODE=1
+export HF_TOKEN=<YOUR HF ACCESS TOKEN>
+EOF
+```
+
+Source variables and apply:
+
+``` bash
+source env_vars
+envsubst < llama3_2_1b-fsdp-hpto.yaml | kubectl apply -f -
+```
+
+> **Note:** The manifest sets `FI_EFA_USE_DEVICE_RDMA=0` because g5 instances do not support GPUDirect RDMA. If you adapt this manifest for p4d/p5 instances, set this value to `1`.
+
+### Monitor and stop
+
+Monitor the HPTO job:
+
+``` bash
+kubectl get hyperpodpytorchjob
+kubectl get pods
+kubectl logs -f llama3-2-1b-fsdp-hpto-pods-0
+```
+
+Stop the job:
+
+``` bash
+envsubst < llama3_2_1b-fsdp-hpto.yaml | kubectl delete -f -
+```
 
 ## 5. Monitor training job
 

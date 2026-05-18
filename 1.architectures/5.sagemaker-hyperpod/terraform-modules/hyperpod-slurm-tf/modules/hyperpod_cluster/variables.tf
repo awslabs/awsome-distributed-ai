@@ -14,13 +14,15 @@ variable "node_recovery" {
 }
 
 variable "instance_groups" {
-  description = "Map of instance group configurations"
-  type = map(object({
-    instance_type    = string
-    instance_count   = number
-    ebs_volume_size  = number
-    threads_per_core = number
-    lifecycle_script = string
+  description = "List of instance group configurations. Each item includes a name. Optionally include training_plan_arn per group."
+  type = list(object({
+    name              = string
+    instance_type     = string
+    instance_count    = number
+    ebs_volume_size   = number
+    threads_per_core  = number
+    lifecycle_script  = string
+    training_plan_arn = optional(string)
   }))
 }
 

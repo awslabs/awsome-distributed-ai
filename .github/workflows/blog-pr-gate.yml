@@ -1,0 +1,51 @@
+# Auto-closes PRs from non-maintainers targeting the `content` (blog) branch.
+#
+# SECURITY — DO NOT MODIFY WITHOUT REVIEW:
+#   - Trigger MUST stay `pull_request_target`, NOT `pull_request`. The latter
+#     has no write permissions on fork PRs.
+#   - This workflow MUST NOT run `actions/checkout` of the PR's code. With
+#     `pull_request_target` we run in base-repo context with secrets;
+#     checking out attacker-controlled code from a fork would let it
+#     exfiltrate `BLOG_GATE_TOKEN`.
+#   - `permissions:` stays minimal: `pull-requests: write` only.
+#   - The PAT secret is read via `github-token`, not interpolated into the
+#     script body.
+#   - Per GitHub's docs, `pull_request_target` only triggers if the workflow
+#     file exists on the default branch — that's why this lives on `main`,
+#     not on `content`.
+
+name: Blog PR Gate
+
+on:
+  pull_request_target:
+    branches: [content]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.BLOG_GATE_TOKEN }}
+          script: |
+            const author = context.payload.pull_request.user.login;
+            const { data: team } = await github.rest.teams.listMembersInOrg({
+              org: 'awslabs',
+              team_slug: 'ad-blog-maintainers',
+            });
+            const allowed = team.map(u => u.login);
+            if (!allowed.includes(author)) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: context.issue.number,
+                body: "Thanks for the interest. The `content` branch is editorially curated by AWS authors and does not accept external PRs. Please open an issue with feedback or topic suggestions instead.",
+              });
+              await github.rest.pulls.update({
+                ...context.repo,
+                pull_number: context.issue.number,
+                state: 'closed',
+              });
+            }

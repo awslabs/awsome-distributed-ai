@@ -6,3 +6,8 @@
 # including all nested subdirectories and files.
 /1.architectures/5.sagemaker-hyperpod/LifecycleScripts/base-config     @awslabs/hyperpod-lcs-dev
 /1.architectures/7.sagemaker-hyperpod-eks/LifecycleScripts/base-config @awslabs/hyperpod-lcs-dev
+
+# The blog PR gate runs with secrets via pull_request_target. Only blog
+# maintainers may modify it — this prevents a malicious edit from turning
+# the gate into a token-exfiltration vector.
+/.github/workflows/blog-pr-gate.yml                                    @awslabs/ad-blog-maintainers

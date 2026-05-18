@@ -12,7 +12,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../lib/common.sh"
 
 CHECK_NAME="5-nccl-allreduce"
-NCCL_CONTAINER="${NCCL_CONTAINER:-public.ecr.aws/hpc-cloud/nccl-tests:latest}"
+# NCCL_CONTAINER is consumed by `srun --container-image=...` (Pyxis/Enroot).
+# Older Pyxis releases (< v0.20) do not auto-detect non-Docker-Hub registries
+# from a bare image reference -- they route the pull through `registry-1.docker.io`
+# and 401 on private/non-DockerHub images such as `public.ecr.aws/...`. Setting
+# the explicit `docker://` scheme keeps the default working across all Pyxis
+# versions. Newer Pyxis treats `docker://` as a no-op, so this is a strict
+# improvement. The K8s code path does not consume this variable.
+NCCL_CONTAINER="${NCCL_CONTAINER:-docker://public.ecr.aws/hpc-cloud/nccl-tests:latest}"
 NCCL_TIMEOUT="${NCCL_TIMEOUT:-1800}"  # 30-minute timeout
 NCCL_ISOLATION_TESTS="${NCCL_ISOLATION_TESTS:-0}"
 NCCL_ISOLATION_TIMEOUT="${NCCL_ISOLATION_TIMEOUT:-600}"  # 10-minute timeout per isolation sub-test
