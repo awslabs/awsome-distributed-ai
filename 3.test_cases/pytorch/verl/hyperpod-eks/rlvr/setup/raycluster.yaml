@@ -40,7 +40,7 @@ spec:
             - name: FI_PROVIDER
               value: "efa"
             - name: FI_EFA_USE_DEVICE_RDMA
-              value: "1"
+              value: "${FI_EFA_USE_DEVICE_RDMA}"  # 1 for p5/p5en (GPUDirect RDMA), 0 for g5
             - name: FI_EFA_FORK_SAFE
               value: "1"
             - name: NCCL_PROTO
@@ -61,11 +61,11 @@ spec:
                 command: ["/bin/sh","-c","ray stop"]
           resources:
             limits:                                    ## LIMITS: Set resource limits for your head pod
-              cpu: 8
-              memory: 32Gi
+              cpu: ${HEAD_CPU}
+              memory: ${HEAD_MEMORY}
             requests:                                    ## REQUESTS: Set resource requests for your head pod
-              cpu: 8
-              memory: 32Gi
+              cpu: ${HEAD_CPU}
+              memory: ${HEAD_MEMORY}
           ports:
           - containerPort: 6379
             name: gcs-server
@@ -121,7 +121,7 @@ spec:
             - name: FI_PROVIDER
               value: "efa"
             - name: FI_EFA_USE_DEVICE_RDMA
-              value: "1"
+              value: "${FI_EFA_USE_DEVICE_RDMA}"  # 1 for p5/p5en (GPUDirect RDMA), 0 for g5
             - name: FI_EFA_FORK_SAFE
               value: "1"
             - name: NCCL_PROTO
@@ -142,13 +142,13 @@ spec:
                 command: ["/bin/sh","-c","ray stop"]
           resources:
             limits:                                    ## LIMITS: Set resource limits for your worker pods
-              cpu: 16
-              memory: 200Gi
+              cpu: ${WORKER_CPU}
+              memory: ${WORKER_MEMORY}
               nvidia.com/gpu: $NUM_GPU_PER_NODE
               vpc.amazonaws.com/efa: $NUM_EFA_PER_NODE
             requests:                                    ## REQUESTS: Set resource requests for your worker pods
-              cpu: 16
-              memory: 200Gi
+              cpu: ${WORKER_CPU}
+              memory: ${WORKER_MEMORY}
               nvidia.com/gpu: $NUM_GPU_PER_NODE
               vpc.amazonaws.com/efa: $NUM_EFA_PER_NODE
           ports:

@@ -24,7 +24,7 @@ This example was tested on 4 p5en.48xlarge nodes (8xH200 GPUs each). If you are 
 
 **Versions**:
 The example was tested on versions:
-- EKS: 1.33
+- EKS: 1.32 / 1.33
 - KubeRay: 1.4.2
 - VERL: v0.6.1
 
@@ -97,6 +97,50 @@ Submit a GRPO training job to the Ray cluster. This trains a language model on m
 
 The `verl/` directory contains the official verl framework, and `recipe/` includes custom run scripts (`run_grpo_configurable.sh`, `run_dapo_configurable.sh`) that integrate with your environment variables for easy configuration.
 
+### Running on g5 Instances (A10G 24GB GPUs)
+
+The default configuration targets p5en.48xlarge (8 × H200 80GB). For g5.12xlarge (4 × A10G 24GB), additional memory optimizations are required. A complete recipe is provided at `recipe/run_gptoss_grpo.sh` for training `openai/gpt-oss-20b` (a 20B MoE model) on g5 instances.
+
+Key differences for small-GPU deployments:
+
+| Parameter | p5en (80GB) | g5 (24GB) | Why |
+|-----------|-------------|-----------|-----|
+| `actor.strategy` | `fsdp` | `fsdp2` | FSDP1 disables CPUOffload for actor role |
+| `fsdp_config.offload_policy` | not set | `True` | FSDP2-specific flag for proper CPU offloading |
+| `fsdp_config.model_dtype` | default (fp32) | `bf16` | veRL defaults actor to fp32; explicit bf16 halves memory |
+| `rollout.gpu_memory_utilization` | `0.6` | `0.6` | Fraction of TOTAL GPU for vLLM (model+cache) |
+| `rollout.enforce_eager` | `False` | `True` | CUDA graphs need extra workspace; OOM on 24GB |
+| `use_kl_loss` | `True` | `False` | Eliminates ref model log-probs during actor update |
+| `rollout.tensor_model_parallel_size` | 2 | 4 | Shard model across all 4 GPUs per node |
+| `trainer.nnodes` | matches node count | workers only | Head pod without GPUs causes NCCL hang |
+
+Setup steps:
+
+```bash
+# 1. Update env_vars for g5 (see env_vars.example for g5 section)
+source setup/env_vars
+
+# 2. Prepare data (Multilingual-Thinking dataset)
+./setup/load_data_gptoss.sh
+
+# 3. Copy reward function to shared storage
+cp recipe/language_reward.py /fsx/verl/reward/language_reward.py
+
+# 4. Submit training
+./recipe/run_gptoss_grpo.sh
+```
+
+### Checkpoint Management
+
+Each veRL checkpoint saves the full FSDP model state for all GPUs. For a 20B parameter model across 12 GPUs, each checkpoint is approximately **117GB**.
+
+Important settings:
+- `trainer.save_freq=20` — Save every 20 steps (not every step)
+- `trainer.max_actor_ckpt_to_keep=3` — Automatically delete old checkpoints
+- `trainer.resume_mode=auto` — Resume from latest checkpoint after crash
+
+For a 1.2TB FSx volume, `save_freq=1` will fill the disk in ~9 steps. Use `save_freq=20` with `max_actor_ckpt_to_keep=3` to keep disk usage under 351GB.
+
 ### Observability
 
 For EKS:
@@ -104,3 +148,73 @@ Please see this documentation to set up Prometheus and Grafana dashboards for Ra
 
 For HyperPod EKS:
 Check out the `observability/` directory to integrate Ray's native metrics dashboards with HyperPod's Amazon Managed Prometheus and Grafana
+
+## Troubleshooting
+
+### OOM during vLLM initialization (KV cache)
+
+**Symptom**: `ValueError: No available memory for the cache blocks` during vLLM init.
+
+**Cause**: `gpu_memory_utilization` is the fraction of **total** GPU memory, not just KV cache. If the model shard is 3.3GB on a 23GB GPU and you set `gpu_memory_utilization=0.3`, vLLM only gets 6.9GB total — less than the model itself.
+
+**Fix**: Set `gpu_memory_utilization=0.6` or higher. Ensure `(gpu_memory_utilization × total_gpu_memory) > model_shard_size`.
+
+### OOM during backward pass
+
+**Symptom**: `torch.OutOfMemoryError` during actor update, even though vLLM init succeeded.
+
+**Cause**: With FSDP1, the actor model stays on GPU during training because FSDP1 explicitly disables `CPUOffload` for the actor role (to avoid incorrect results with gradient accumulation). When vLLM releases GPU memory via sleep, FSDP1 still holds ~20GB of actor params.
+
+**Fix**: Switch to `actor.strategy=fsdp2` with `fsdp_config.offload_policy=True`. FSDP2 properly offloads actor params to CPU during training.
+
+### NCCL hang or fi_av_insert failure
+
+**Symptom**: Training hangs at NCCL init, or error `fi_av_insert failed`.
+
+**Cause**: Mixing EFA and non-EFA pods in the same NCCL communicator. The Ray head pod may not request `vpc.amazonaws.com/efa`, causing NCCL to use Socket transport on the head while workers use Libfabric.
+
+**Fix**: Set `trainer.nnodes` to the number of **worker** nodes only (exclude the head). For example, with 1 head + 3 workers, set `trainer.nnodes=3`.
+
+### Checkpoint save fills disk
+
+**Symptom**: `RuntimeError: PytorchStreamWriter failed writing file data/...: file write failed` during `torch.save`.
+
+**Cause**: Each checkpoint is ~117GB for a 20B model across 12 GPUs. With `save_freq=1`, a 1.2TB FSx fills in 9 steps.
+
+**Fix**: Set `trainer.save_freq=20` and `trainer.max_actor_ckpt_to_keep=3`. Verify free space with `lfs df -h /fsx` (standard `df` may lag on Lustre).
+
+### Zombie Ray jobs
+
+**Symptom**: `ray job status` shows RUNNING, but workers have crashed.
+
+**Cause**: If workers crash (SIGTERM/OOM), the Ray job driver may not detect it immediately. The job appears RUNNING for hours.
+
+**Fix**: Always verify worker health: `kubectl exec <head-pod> -- bash -c "ps aux | grep verl"` on worker pods. Check worker logs in `/tmp/ray/session_*/logs/` for the job hex ID.
+
+### Actor defaults to fp32
+
+**Symptom**: Actor model uses ~40GB instead of ~20GB (for a 20B model).
+
+**Cause**: veRL defaults actor to `torch.float32` in FSDP1 (`torch_dtype = torch.float32 if self._is_actor`). Only ref and critic default to bf16.
+
+**Fix**: Set `actor_rollout_ref.actor.fsdp_config.model_dtype=bf16` explicitly.
+
+### expandable_segments incompatible with vLLM
+
+**Symptom**: `AssertionError: Expandable segments are not compatible with memory pool` at init.
+
+**Cause**: `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` conflicts with vLLM's CuMemAllocator.
+
+**Fix**: Do not set `expandable_segments:True` when using vLLM rollout.
+
+### EFA on g5 instances
+
+For g5 instances (no GPUDirect RDMA), ensure these environment variables are set:
+```bash
+export FI_EFA_USE_DEVICE_RDMA=0   # No GPUDirect RDMA on g5
+export NCCL_PROTO=simple           # Required without GPUDirect RDMA
+export NCCL_NET=ofi                # Use libfabric for EFA
+export LD_LIBRARY_PATH=/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+```
+
+Without `NCCL_NET=ofi` and the correct `LD_LIBRARY_PATH`, NCCL silently falls back to TCP, giving much worse inter-node bandwidth.

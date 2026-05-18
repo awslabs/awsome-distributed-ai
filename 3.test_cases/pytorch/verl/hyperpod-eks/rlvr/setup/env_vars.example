@@ -1,23 +1,53 @@
-# Docker file
+# Docker image
 export AWS_REGION=$(aws ec2 describe-availability-zones --output text --query 'AvailabilityZones[0].[RegionName]')
 export ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 export REGISTRY=${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/
 export IMAGE=rlvr
-export TAG=ngc-th2.6.0-cu126-vllm0.8.4-flashinfer0.2.2-cxx11abi0
+export TAG=vllm011.latest
 
+# ---------------------------------------------------------------------------
 # Cluster Details
+#
+# Two reference configurations are shown below:
+#   • p5en.48xlarge: 8 × H100 80GB, 16 EFA, GPUDirect RDMA
+#   • g5.12xlarge:   4 × A10G 24GB, 1 EFA, no GPUDirect RDMA
+#
+# Uncomment the block that matches your instance type.
+# ---------------------------------------------------------------------------
+
 export EKS_CLUSTER_NAME="<your-eks-cluster-name>"
-export INSTANCE_TYPE="<your GPU instance type>" # Example: "p5en.48xlarge"
-export NUM_NODES=4                    # Single source of truth for number of nodes
-export NUM_GPU_PER_NODE=8
-export NUM_EFA_PER_NODE=16
+
+# --- p5en.48xlarge configuration (default — high-end training) ---------------
+# export INSTANCE_TYPE="p5en.48xlarge"
+# export NUM_NODES=4
+# export NUM_GPU_PER_NODE=8
+# export NUM_EFA_PER_NODE=16
+# export FI_EFA_USE_DEVICE_RDMA=1       # GPUDirect RDMA supported on p5/p5en
+# export HEAD_CPU=8
+# export HEAD_MEMORY=32Gi
+# export WORKER_CPU=48
+# export WORKER_MEMORY=400Gi
+# export NCCL_PROTO=                     # Leave default (LL/LL128 auto-selected)
+
+# --- g5.12xlarge configuration (cost-effective, 24GB GPUs) -------------------
+export INSTANCE_TYPE="g5.12xlarge"
+export NUM_NODES=3                      # 3 worker nodes (head pod has no GPUs)
+export NUM_GPU_PER_NODE=4               # 4 × A10G per node
+export NUM_EFA_PER_NODE=1               # 1 EFA device per node
+export FI_EFA_USE_DEVICE_RDMA=0         # No GPUDirect RDMA on g5 — MUST be 0
+export HEAD_CPU=8
+export HEAD_MEMORY=32Gi
+export WORKER_CPU=16                    # g5.12xlarge has ~48 allocatable CPUs
+export WORKER_MEMORY=150Gi              # g5.12xlarge has ~168Gi allocatable (NOT 200Gi)
+export NCCL_PROTO=simple                # Required for EFA without GPUDirect RDMA
+
 export PRIVATE_SUBNET_ID="subnet-xxxxxxxxxxxxxxxxx"
 export SECURITY_GROUP_ID="sg-xxxxxxxxxxxxxxxxx"
 
 
 # Ray configs
 export MODEL_NAME="Qwen3-8B"
-export MODEL_PATH="Qwen/Qwen3-8B" # Set this to load model from HuggingFace
+export MODEL_PATH="Qwen/Qwen3-8B" # Set this to load model from HuggingFace or local path
 export RAY_DATA_HOME="/fsx/verl" # Shared storage path for checkpoints and data
 export VERL_HOME="fsx/verl"
 export RAY_DASHBOARD_PORT=8265 # Local port for Ray dashboard (forwarded from cluster)
@@ -28,21 +58,34 @@ export RAY_NAMESPACE="default"  # Namespace where RayCluster runs
 
 # Job Env Vars (using NUM_NODES for consistency)
 export HF_TOKEN=<your-huggingface-token>
-export GPUS_PER_NODE=8
+export GPUS_PER_NODE=${NUM_GPU_PER_NODE}
 export NCCL_DEBUG=INFO
 # Memory optimization settings
 export RAY_memory_usage_threshold=0.85
 
+# ---------------------------------------------------------------------------
 # Training parameters
-export TRAIN_BATCH_SIZE=32    
-export GEN_BATCH_SIZE=384      
-export N_RESP_PER_PROMPT=2     
+#
+# For the default Qwen3-8B / GSM8K recipe (run_grpo_configurable.sh):
+#   TRAIN_BATCH_SIZE=32, GEN_BATCH_SIZE=384, N_RESP_PER_PROMPT=2
+#
+# For the GPT-OSS-20B / Multilingual-Thinking recipe (run_gptoss_grpo.sh):
+#   TRAIN_BATCH_SIZE=12  (must satisfy: batch × n ÷ total_gpus = integer)
+#   N_RESP_PER_PROMPT=2
+#   SAVE_FREQ=20         (each ckpt is ~117GB — save_freq=1 will fill 1.2TB FSx)
+#   TOTAL_EPOCHS=5
+#   RESUME_MODE=auto     (auto-resume from latest checkpoint)
+# ---------------------------------------------------------------------------
+export TRAIN_BATCH_SIZE=32
+export GEN_BATCH_SIZE=384
+export N_RESP_PER_PROMPT=2
+
+# Custom reward function (optional — used by run_gptoss_grpo.sh)
+export REWARD_FN_PATH="/fsx/verl/reward/language_reward.py"
+export REWARD_FN_NAME="compute_score"
 
 # Managed Tiered Checkpointing with HyperPod
 # S3 checkpoint configuration
 export S3_BUCKET_NAME="<your S3 bucket name>"
 export S3_BUCKET_ARN="arn:aws:s3:::${S3_BUCKET_NAME}"
 export S3_CHECKPOINT_BASE="s3://${S3_BUCKET_NAME}/checkpoints"
-
-
-
