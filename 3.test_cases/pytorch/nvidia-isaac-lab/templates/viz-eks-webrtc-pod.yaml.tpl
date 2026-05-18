@@ -18,14 +18,13 @@ spec:
     command: ["/bin/bash", "-c"]
     args:
     - |
-      # This viz pod only supports framework: skrl. If you change training.framework
-      # in config.yaml, you must also update the checkpoint glob and play.py path below
-      # to match the target framework's conventions before regenerating.
-      CKPT=$(find ${VIZ_FSX_LOG_DIR} -name best_agent.pt -printf "%T@ %p\n" | sort -n | tail -1 | cut -d' ' -f2)
-      echo "Using checkpoint: $CKPT"
+      # Note: best_agent.pt is the default checkpoint name for the skrl framework.
+      # For other frameworks (rsl_rl, rl_games, sb3), adjust the filename pattern.
+      CKPT=$$(find ${VIZ_FSX_LOG_DIR} -name best_agent.pt -printf "%T@ %p\n" | sort -n | tail -1 | cut -d' ' -f2)
+      echo "Using checkpoint: $$CKPT"
       exec /isaac-sim/python.sh scripts/reinforcement_learning/skrl/play.py \
         --task=${TASK} \
-        --checkpoint $CKPT \
+        --checkpoint $$CKPT \
         --num_envs ${VIZ_NUM_ENVS} \
         --livestream 2
     env:
@@ -37,7 +36,7 @@ spec:
     - containerPort: 49100
       protocol: TCP
       name: signaling
-    - containerPort: 48010
+    - containerPort: 47998
       protocol: UDP
       name: media
     resources:
@@ -49,7 +48,6 @@ spec:
         memory: "32Gi"
         cpu: "16"
         nvidia.com/gpu: "1"
-        ephemeral-storage: "100Gi"
     volumeMounts:
     - name: shm
       mountPath: /dev/shm
@@ -59,6 +57,34 @@ spec:
       mountPath: /isaac-sim/.nvidia-omniverse/logs
     - name: fsx
       mountPath: /fsx
+  - name: web-viewer
+    image: node:22-slim
+    command: ["/bin/sh", "-c"]
+    args:
+    - |
+      # Build the NVIDIA WebRTC viewer at startup.
+      # For production, bake this into a custom image to avoid the runtime download.
+      echo '@nvidia:registry=https://edge.urm.nvidia.com/artifactory/api/npm/omniverse-client-npm/' >> ~/.npmrc
+      npx @nvidia/create-ov-web-rtc-app@1.14.2 --name viewer --sample local-sample --outputDir /app
+      cd /app/viewer
+      # Point the viewer at the Isaac Sim container (same pod = 127.0.0.1)
+      sed -i "s/signalingServer: [^,]*/signalingServer: '127.0.0.1'/" src/main.ts
+      sed -i "/signalingServer:/a\\    signalingPort: 49100,\n    mediaServer: '127.0.0.1',\n    mediaPort: 47998,\n    forceWSS: false," src/main.ts
+      npm install --ignore-scripts
+      npm run build
+      echo "WebRTC viewer ready at http://localhost:8210"
+      exec npx vite preview --host --port 8210
+    ports:
+    - containerPort: 8210
+      protocol: TCP
+      name: web-viewer
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits:
+        memory: "1Gi"
+        cpu: "1"
   volumes:
   - name: shm
     emptyDir:
