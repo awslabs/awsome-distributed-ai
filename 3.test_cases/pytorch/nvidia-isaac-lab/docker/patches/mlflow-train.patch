@@ -1,0 +1,129 @@
+diff --git a/scripts/reinforcement_learning/skrl/train.py b/scripts/reinforcement_learning/skrl/train.py
+--- a/scripts/reinforcement_learning/skrl/train.py
++++ b/scripts/reinforcement_learning/skrl/train.py
+@@ -224,7 +224,99 @@
+     # configure and instantiate the skrl runner
+     # https://skrl.readthedocs.io/en/latest/api/utils/runner.html
+     runner = Runner(env, agent_cfg)
++
++    # --- MLflow real-time logging (optional, rank 0 only) ---
++    # Mirror every TensorBoard scalar to MLflow. Enabled when MLFLOW_TRACKING_URI
++    # is set; no-op otherwise. Uses the sagemaker-mlflow plugin to resolve ARNs.
++    #
++    # Why not mlflow.config.enable_async_logging() (MLflow 2.16+)? On a ~1200
++    # iteration PPO run, the built-in async logger ends up serialising each
++    # metric individually through a single worker with SigV4 signing per call,
++    # which pushes the SageMaker MLflow App path from ~90s to ~10 min on
++    # ml.g6.12xlarge. We batch metrics into memory and flush them with
++    # MlflowClient.log_batch (up to 1000 per call) from a dedicated thread,
++    # which amortizes the request cost and stays within a few seconds of a
++    # run without MLflow enabled.
++    _mlflow_run = None
++    _mlflow_thread = None
++    _mlflow_stop = None
++    _mlflow_uri = os.environ.get("MLFLOW_TRACKING_URI")
++    _is_rank0 = (not args_cli.distributed) or app_launcher.global_rank == 0
++    if _mlflow_uri and _is_rank0:
++        try:
++            import queue
++            import re
++            import threading
++            import time as _mltime
++            import mlflow
++            from mlflow.entities import Metric
++            from torch.utils.tensorboard import SummaryWriter
++
++            mlflow.set_tracking_uri(_mlflow_uri)
++            mlflow.set_experiment(os.environ.get("MLFLOW_EXPERIMENT_NAME", "isaaclab"))
++            _mlflow_run = mlflow.start_run(run_name=os.path.basename(log_dir))
++            _mlflow_run_id = _mlflow_run.info.run_id
++            mlflow.log_params({
++                "task": args_cli.task,
++                "max_iterations": args_cli.max_iterations,
++                "num_envs": env_cfg.scene.num_envs,
++                "seed": agent_cfg["seed"],
++                "framework": args_cli.ml_framework,
++                "algorithm": args_cli.algorithm,
++            })
++
++            _mlflow_client = mlflow.tracking.MlflowClient()
++            _mlflow_queue: "queue.Queue" = queue.Queue()
++            _mlflow_stop = threading.Event()
++            _mlflow_invalid = re.compile(r"[^A-Za-z0-9_\-. :/]")
++            _mlflow_warn_once = False
++
++            def _mlflow_worker():
++                nonlocal _mlflow_warn_once
++                # Flush at most every 2 s, batching up to 1000 metrics per call
++                # (MLflow server caps log_batch payloads).
++                pending: list = []
++                while not _mlflow_stop.is_set() or not _mlflow_queue.empty() or pending:
++                    try:
++                        pending.append(_mlflow_queue.get(timeout=2.0))
++                        while len(pending) < 1000:
++                            try:
++                                pending.append(_mlflow_queue.get_nowait())
++                            except queue.Empty:
++                                break
++                    except queue.Empty:
++                        pass
++                    if pending:
++                        try:
++                            _mlflow_client.log_batch(_mlflow_run_id, metrics=pending)
++                        except Exception as e:
++                            if not _mlflow_warn_once:
++                                print(f"[WARN] MLflow log_batch failed: {e}. "
++                                      "Subsequent failures will be silent.")
++                                _mlflow_warn_once = True
++                        pending = []
+ 
++            _mlflow_thread = threading.Thread(target=_mlflow_worker, daemon=True)
++            _mlflow_thread.start()
++
++            _orig_add_scalar = SummaryWriter.add_scalar
++
++            def _dual_add_scalar(self, tag, value, global_step=None, *a, **kw):
++                _orig_add_scalar(self, tag, value, global_step, *a, **kw)
++                try:
++                    _mlflow_queue.put_nowait(
++                        Metric(
++                            key=_mlflow_invalid.sub("_", tag),
++                            value=float(value),
++                            timestamp=int(_mltime.time() * 1000),
++                            step=int(global_step or 0),
++                        )
++                    )
++                except Exception:
++                    pass
++
++            SummaryWriter.add_scalar = _dual_add_scalar
++        except Exception as e:
++            print(f"[WARN] MLflow initialization failed: {e}. "
++                  "Training will continue without MLflow tracking.")
++            _mlflow_run = None
++
+     # load checkpoint (if specified)
+     if resume_path:
+         print(f"[INFO] Loading model checkpoint from: {resume_path}")
+@@ -235,6 +327,20 @@
+ 
+     print(f"Training time: {round(time.time() - start_time, 2)} seconds")
+ 
++    # Upload artifacts (params, checkpoints) and close the MLflow run.
++    # Signal the worker to drain and exit before logging the artifacts so the
++    # final batch of metrics lands before the run is closed.
++    if _mlflow_run is not None:
++        try:
++            _mlflow_stop.set()
++            _mlflow_thread.join(timeout=30)
++            import mlflow
++            mlflow.log_artifacts(log_dir)
++        except Exception as e:
++            print(f"[WARN] MLflow artifact upload failed: {e}. "
++                  "Training results are saved on the filesystem.")
++        finally:
++            mlflow.end_run()
++
+     # close the simulator
+     env.close()
+ 
