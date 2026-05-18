@@ -12,6 +12,12 @@ export NUM_NODES=4                    # Single source of truth for number of nod
 export NUM_GPU_PER_NODE=8
 export NUM_EFA_PER_NODE=16
 
+# Worker pod resource requests/limits — adjust for your instance type
+# p5en.48xlarge: 192 vCPU, 2 TiB RAM → use 48 CPU, 450Gi per worker (4 workers/node)
+# p5.48xlarge:   192 vCPU, 2 TiB RAM → use 48 CPU, 450Gi per worker
+export WORKER_CPU=48
+export WORKER_MEMORY="450Gi"
+
 
 # Ray configs
 export MODEL_NAME="Qwen3-8B"
