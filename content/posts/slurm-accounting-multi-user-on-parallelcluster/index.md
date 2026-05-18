@@ -369,6 +369,7 @@ Scheduling:
       PasswordSecretArn: ${DB_SECRET}
     CustomSlurmSettings:
       - AccountingStorageTRES: gres/gpu
+      - AccountingStorageEnforce: qos,limits   # otherwise QoS limits are silently inactive — see note below
       - PriorityType: priority/multifactor
       - PriorityDecayHalfLife: 7-0      # 7 days for fairshare decay
       - PriorityWeightAge: 1000
@@ -448,6 +449,18 @@ A few choices worth explaining:
 - **`AccountingStorageTRES: gres/gpu`** is what tells `slurmdbd` to record
   GPU usage as a TRES (Trackable RESource) on every job; without it,
   `sreport` will only show CPU consumption.
+- **`AccountingStorageEnforce: qos,limits`** is the line that makes QoS
+  *actually enforce*. By default
+  ([`slurm.conf` docs](https://slurm.schedmd.com/slurm.conf.html)) this
+  setting is unset and Slurm runs "based upon policies configured in
+  Slurm on each cluster" — i.e. QoS rows in `slurmdbd` are stored and
+  visible but *silently inactive*. `sacctmgr` accepts QoS definitions,
+  `show qos` displays them, jobs record the right QoS attribution in
+  `sacct` — but every limit (`GrpTRES`, `MaxWall`, `MaxJobsPerUser`,
+  `DenyOnLimit`, etc.) is ignored. Setting this to `qos,limits` is the
+  minimum needed to enforce the QoS deep dive in Part 2; `limits` covers
+  `GrpTRES` / `MaxWall` and `qos` covers QoS identity + flags. Both
+  imply `associations`.
 - The head node lands in the *public* subnet so we can `pcluster ssh` to
   it directly. The compute fleet stays in the *primary private* subnet.
 - We deliberately attach **two security groups** to the head node: the EFA
@@ -717,6 +730,7 @@ in production:
 | `OnNodeConfigured` script fails on first boot → compute self-terminates → `HeadNodeWaitCondition timed out` | Cluster CREATE never finishes; failed-bootstrap counter on `clustermgtd.events` keeps incrementing | Author every `OnNodeConfigured` script to be **idempotent and tolerant of missing inputs**. In our walkthrough the script reads `/home/shared/userlistfile`, which doesn't exist on the very first boot (the head node hasn't gotten there yet). An unconditional `< /home/shared/userlistfile` bash redirect on a non-existent file exits non-zero, and PC interprets that as bootstrap failure. The fixed script checks `[ -f $USERLIST ] || exit 0` before reading. |
 | Aurora ACU floor charges 24/7 | Even an idle cluster bills ~$0.12/hr from Aurora | Acceptable; if you tear the cluster down nightly, also delete the DB stack. |
 | `require_secure_transport: ON` rejects plaintext clients | Manual `mysql` clients connecting directly fail with `SSL connection error` | Use `mysql --ssl-mode=REQUIRED --ssl-ca=/path/to/global-bundle.pem`, or connect via `slurmdbd` only. |
+| `sbatch` from a non-shared cwd → job dies with `ExitCode 0:53`, looks like a QoS denial | `slurmd.log` shows `_init_task_stdio_fds: Could not open stdout file '...' No such file` followed by `_fork_all_tasks: IO setup failed: Slurmd could not connect IO`; `sacct` reports `FAILED 0:53` with no useful Reason — indistinguishable from a `DenyOnLimit` denial | `sbatch`'s default `--output` is `slurm-%j.out` in the *invocation* cwd (per the [sbatch docs](https://slurm.schedmd.com/sbatch.html)). When `sbatch` is invoked from automation — `aws ssm send-command` (cwd is `/var/snap/amazon-ssm-agent/<pid>/`), a `cron` job, a `systemd` unit — that path doesn't exist on the compute node, slurmd can't create it, and the job dies with signal 53 before the prolog runs. Pass `--chdir=/home/$USER` *or* `--output=/fsx/slurm-%j.out` to anchor the output path explicitly. |
 
 Drafting this post surfaced five upstream changes in
 [`awslabs/awsome-distributed-ai`](https://github.com/awslabs/awsome-distributed-ai)

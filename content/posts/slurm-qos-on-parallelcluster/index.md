@@ -397,27 +397,37 @@ JobID             User    Account            QOS                      AllocTRES 
 
 And when Bob — also research — tries to grab 5 GPUs for an *interactive*
 session, the `interactive` QoS's `GrpTRES=gres/gpu=4` cap rejects the
-launch:
+launch *at submission*:
 
 ```bash
 $ sudo -u bob sbatch --partition=gpu --qos=interactive --gres=gpu:5 \
                      --nodes=1 --time=00:10:00 --wrap='sleep 60'
-Submitted batch job 9
-
-$ sacct -j 9 --format=JobID,User,QOS%14,AllocTRES%30,State,ExitCode,Reason
-JobID             User            QOS                      AllocTRES      State ExitCode  Reason
------------- --------- -------------- ------------------------------ ---------- -------- -------
-9                  bob    interactive billing=1,cpu=1,gres/gpu=5,no+     FAILED     0:53    None
-9.batch                                cpu=1,gres/gpu=5,mem=0,node=1  CANCELLED     0:53
+sbatch: error: QOSGrpGRES
+sbatch: error: Batch job submission failed: Job violates accounting/QOS policy (job submit limit, user's size and/or time limits)
+$ echo $?
+1
 ```
 
-Note the subtle behavior: `sbatch` *accepted* the submission (returned a
-job ID), but the job was immediately marked `FAILED` with **ExitCode
-`0:53`** — Slurm's "job exceeded a QoS or association limit"
-termination. The job never ran a single command; it was killed before
-the prolog. This is `Flags=DenyOnLimit` in action: the request would
-exceed `GrpTRES=gres/gpu=4`, so it gets aborted at allocation time
-rather than queuing forever.
+`sbatch` itself returns non-zero — no JobID is assigned, no `sacct` row
+is created. This is `Flags=DenyOnLimit` doing exactly what the
+[Slurm Resource Limits docs](https://slurm.schedmd.com/resource_limits.html)
+describe:
+
+> *"if a job request breaches a given limit on its own, the job will pend
+> unless the job's QOS has the `DenyOnLimit` flag set, which will cause
+> the job to be denied at submission."*
+
+Two reminders worth surfacing here, both established in Part 1:
+
+- This works **only** because the cluster YAML sets
+  `AccountingStorageEnforce: qos,limits`. With the default (`none`),
+  Slurm silently accepts the over-cap request and runs it.
+- A separate failure mode that *looks identical* in `sacct` —
+  `FAILED 0:53` — comes from `sbatch` being invoked from a directory
+  not visible on the compute node (the `--chdir` gotcha in Part 1's
+  Operational guidance). If you see `0:53` for a within-cap request,
+  check `slurmd.log` for `_init_task_stdio_fds: Could not open stdout
+  file` before suspecting QoS.
 
 The same Bob with `--gres=gpu:4` (within the cap) succeeds:
 
