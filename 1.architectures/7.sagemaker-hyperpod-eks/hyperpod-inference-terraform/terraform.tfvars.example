@@ -1,0 +1,63 @@
+# =============================================================================
+# HyperPod Inference Terraform — Configuration Template
+# =============================================================================
+# Copy this file to terraform.tfvars and fill in your values.
+# DO NOT commit terraform.tfvars to source control (it contains secrets).
+# =============================================================================
+
+# === REQUIRED: AWS Region and Cluster ===
+region               = "us-east-2"                                                    # AWS region
+hyperpod_cluster_arn = "arn:aws:sagemaker:us-east-2:ACCOUNT_ID:cluster/CLUSTER_ID"    # HyperPod cluster ARN
+eks_cluster_name     = "sagemaker-CLUSTER_NAME-EKS_SUFFIX-eks"                        # EKS cluster name
+
+# === REQUIRED: VPC Configuration ===
+vpc_id = "vpc-XXXXXXXXXXXXXXXXX"                                                      # VPC ID of the EKS cluster
+
+public_subnet_ids = [                                                                  # Subnets with internet access (for API Gateway)
+  "subnet-XXXXXXXXXXXXXXXXX",
+  "subnet-XXXXXXXXXXXXXXXXX",
+]
+
+private_subnet_ids = [                                                                 # Subnets where the ALB lives
+  "subnet-XXXXXXXXXXXXXXXXX",
+  "subnet-XXXXXXXXXXXXXXXXX",
+]
+
+# === REQUIRED: Custom Domain + DNS ===
+# Terraform automatically creates the ACM certificate and all DNS records.
+# You just provide the domain name and the Route 53 hosted zone that owns it.
+# Find your hosted zone: aws route53 list-hosted-zones --query 'HostedZones[?Config.PrivateZone==`false`]'
+domain_name    = "inference.yourdomain.com"                                            # Subdomain for the endpoint
+hosted_zone_id = "ZXXXXXXXXXXXXX"                                                      # Route 53 hosted zone ID (parent domain)
+
+# === REQUIRED: IAM ===
+# This is the role name you created in Step 1 of the README
+inference_operator_role_name = "SageMakerHyperPodInference-YOURCLUSTER"               # IRSA role created in Step 1
+
+# === REQUIRED: Model Configuration ===
+model_id             = "Qwen/Qwen2.5-32B-Instruct"    # HuggingFace model ID
+instance_type        = "ml.p5.48xlarge"                 # Must match your cluster's instance type
+gpu_count            = 2                                # GPUs per replica
+memory               = "120Gi"                          # Memory per replica
+cpu                  = "24"                             # CPU cores per replica
+tensor_parallel_size = 2                                # Must match gpu_count
+max_model_len        = 4096                             # Max sequence length
+
+# === REQUIRED: Secrets ===
+hf_token = ""                                           # HuggingFace API token (https://huggingface.co/settings/tokens)
+api_keys = [                                            # API keys for client authentication
+  "",                                                   # Generate with: openssl rand -hex 24
+]
+
+# === Phase 2 (set after Phase 1 completes) ===
+internal_alb_arn = ""                                   # Set to ALB ARN after Phase 1, then re-apply
+
+# === OPTIONAL: Customization ===
+endpoint_name        = "my-inference-endpoint"          # Name for the K8s deployment and SageMaker endpoint
+namespace            = "hyperpod-ns-inference"          # Kubernetes namespace
+queue_name           = ""                               # Kueue queue name (set if cluster has task governance, leave empty otherwise)
+vllm_image           = "vllm/vllm-openai:v0.10.1"     # vLLM container image
+tls_cert_s3_bucket   = ""                              # Leave empty for auto-generated name (hyperpod-tls-ACCOUNT-REGION)
+throttle_rate_limit  = 10                               # Sustained requests per second
+throttle_burst_limit = 20                               # Maximum burst requests
+enable_waf           = false                            # Reserved for future WAF integration
