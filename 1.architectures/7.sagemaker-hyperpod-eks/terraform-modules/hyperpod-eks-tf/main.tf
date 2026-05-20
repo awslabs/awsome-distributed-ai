@@ -62,7 +62,7 @@ locals {
   create_fsx_module                         = !local.rig_mode ? var.create_fsx_module : false
   create_task_governance_module             = !local.rig_mode && var.create_task_governance_module
   create_hyperpod_training_operator_module  = !local.rig_mode && var.create_hyperpod_training_operator_module
-  create_observability_module               = !local.rig_mode && var.create_observability_module
+  create_observability_module               = var.create_observability_module
   create_hyperpod_inference_operator_module = !local.rig_mode && var.create_hyperpod_inference_operator_module
 }
 
@@ -338,6 +338,8 @@ module "observability" {
   network_metric_level                 = var.network_metric_level
   accelerated_compute_metric_level     = var.accelerated_compute_metric_level
   logging_enabled                      = var.logging_enabled
+  rig_mode                             = local.rig_mode
+  execution_role_name                  = local.sagemaker_iam_role_name
 
   depends_on = [
     module.hyperpod_cluster,

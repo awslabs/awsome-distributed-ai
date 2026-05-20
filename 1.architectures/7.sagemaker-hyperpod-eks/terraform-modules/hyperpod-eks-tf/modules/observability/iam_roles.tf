@@ -214,3 +214,43 @@ resource "aws_iam_role_policy" "grafana_workspace" {
     ]
   })
 }
+
+# Attach observability policy to the cluster execution role for RIG clusters
+resource "aws_iam_role_policy" "execution_role_observability" {
+  count = var.rig_mode ? 1 : 0
+  name  = "${var.resource_name_prefix}-observability-policy"
+  role  = var.execution_role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "PrometheusAccess"
+        Effect   = "Allow"
+        Action   = ["aps:RemoteWrite"]
+        Resource = "arn:aws:aps:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:workspace/${local.prometheus_workspace_id}"
+      },
+      {
+        Sid    = "CloudwatchLogsAccess"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams",
+          "logs:PutLogEvents",
+          "logs:GetLogEvents",
+          "logs:FilterLogEvents",
+          "logs:GetLogRecord",
+          "logs:StartQuery",
+          "logs:StopQuery",
+          "logs:GetQueryResults"
+        ]
+        Resource = [
+          "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/sagemaker/Clusters/*",
+          "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/sagemaker/Clusters/*:log-stream:*"
+        ]
+      }
+    ]
+  })
+}

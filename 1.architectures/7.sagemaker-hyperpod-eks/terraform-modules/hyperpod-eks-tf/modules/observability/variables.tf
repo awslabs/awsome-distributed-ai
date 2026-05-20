@@ -121,3 +121,15 @@ variable "logging_enabled" {
   default     = false
 }
 
+
+variable "rig_mode" {
+  description = "Specify whether this is a RIG cluster."
+  type        = bool
+  default     = false
+}
+
+variable "execution_role_name" {
+  description = "The name of the cluster execution role."
+  type        = string
+  default     = ""
+}
