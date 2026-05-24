@@ -1,0 +1,1396 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Build PCS-ready AMIs from DLAMI Base GPU images using EC2 Image Builder pipelines
+
+### Stack metadata
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Image Configuration
+        Parameters:
+          - SemanticVersion
+      - Label:
+          default: Build Schedule
+        Parameters:
+          - BuildSchedule
+      - Label:
+          default: AMI Discovery (Optional)
+        Parameters:
+          - PublishToSsm
+          - SsmParameterPrefix
+      - Label:
+          default: AMI Lifecycle Management (Optional)
+        Parameters:
+          - EnableLifecyclePolicy
+          - LifecycleDeprecateAfterWeeks
+    ParameterLabels:
+      SemanticVersion:
+        default: Recipe Version
+      BuildSchedule:
+        default: Build Schedule
+      PublishToSsm:
+        default: Publish AMI IDs to SSM Parameter Store
+      SsmParameterPrefix:
+        default: SSM Parameter Prefix
+      EnableLifecyclePolicy:
+        default: Enable AMI Lifecycle Policy
+      LifecycleDeprecateAfterWeeks:
+        default: Deprecate AMIs After (Weeks)
+
+Parameters:
+  SemanticVersion:
+    Type: String
+    Description: Semantic version for ImageBuilder recipes (format X.Y.Z)
+    Default: '1.0.0'
+    AllowedPattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
+    ConstraintDescription: Must be a valid semantic version (e.g., 1.0.0)
+
+  BuildSchedule:
+    Type: String
+    Description: How often to build new AMIs. Manual requires triggering via console or CLI.
+    Default: Manual
+    AllowedValues:
+      - Manual
+      - Weekly
+      - Monthly
+
+  PublishToSsm:
+    Type: String
+    Description: Publish AMI IDs to SSM Parameter Store for easy discovery. Incurs SSM parameter storage costs.
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  SsmParameterPrefix:
+    Type: String
+    Description: Prefix for SSM parameters where AMI IDs will be published (only used if PublishToSsm is true)
+    Default: '/dlami-for-pcs'
+    AllowedPattern: '^/[a-zA-Z0-9/_-]+$'
+    ConstraintDescription: Must start with / and contain only alphanumeric characters, hyphens, underscores, and forward slashes
+
+  EnableLifecyclePolicy:
+    Type: String
+    Description: Enable lifecycle policy to deprecate old AMIs. Deprecated AMIs remain usable but are hidden from EC2 console searches.
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  LifecycleDeprecateAfterWeeks:
+    Type: Number
+    Description: Deprecate AMIs older than this many weeks. At least 1 AMI is always kept visible regardless of age.
+    Default: 4
+    MinValue: 1
+    MaxValue: 52
+
+Conditions:
+  IsWeeklySchedule: !Equals [!Ref BuildSchedule, 'Weekly']
+  IsMonthlySchedule: !Equals [!Ref BuildSchedule, 'Monthly']
+  HasSchedule: !Or
+    - !Condition IsWeeklySchedule
+    - !Condition IsMonthlySchedule
+  EnableSsmPublishing: !Equals [!Ref PublishToSsm, 'true']
+  EnableLifecycle: !Equals [!Ref EnableLifecyclePolicy, 'true']
+
+Mappings:
+  # DLAMI Base GPU AMI SSM parameter paths
+  # These resolve to the latest DLAMI Base GPU AMIs for each OS/architecture combination
+  # Ref: https://docs.aws.amazon.com/dlami/latest/devguide/find-dlami-id.html
+  DLAMIConfigs:
+    al2023:
+      x8664: /aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-amazon-linux-2023/latest/ami-id
+      arm64: /aws/service/deeplearning/ami/arm64/base-oss-nvidia-driver-gpu-amazon-linux-2023/latest/ami-id
+      deviceName: /dev/xvda
+      size: '100'
+    ubuntu2404:
+      x8664: /aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-24.04/latest/ami-id
+      arm64: /aws/service/deeplearning/ami/arm64/base-oss-nvidia-driver-gpu-ubuntu-24.04/latest/ami-id
+      deviceName: /dev/sda1
+      size: '100'
+
+  # Schedule expressions for pipeline builds
+  ScheduleExpressions:
+    Weekly:
+      expression: 'cron(0 0 ? * SUN *)'
+    Monthly:
+      expression: 'cron(0 0 1 * ? *)'
+
+Resources:
+  #############################################################################
+  # Biuld AMI for workshop
+  #############################################################################
+  DLAMIforPCS:
+    Type: AWS::ImageBuilder::Image
+    Properties:
+      ImageRecipeArn:
+        Fn::GetAtt:
+          - ImageRecipeUbuntu2404X8664
+          - Arn
+      InfrastructureConfigurationArn:
+        Fn::GetAtt:
+          - InfrastructureConfigX8664
+          - Arn
+      Tags:
+        Name: DLAMI-for-PCS-Ubuntu2404-x8664
+
+  #############################################################################
+  # IAM Role and Instance Profile for EC2 Image Builder
+  #############################################################################
+  ImageBuilderRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: IAM role for EC2 Image Builder instances
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Required for SSM connectivity during builds
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
+        # Required for Image Builder operations
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/EC2InstanceProfileForImageBuilder
+      Path: /
+
+  # Policy for SSM parameter publishing (only created if enabled)
+  SsmPublishingPolicy:
+    Type: AWS::IAM::Policy
+    Condition: EnableSsmPublishing
+    Properties:
+      PolicyName: SsmParameterPublishing
+      Roles:
+        - !Ref ImageBuilderRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - ssm:PutParameter
+              - ssm:AddTagsToResource
+            Resource: !Sub arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:parameter${SsmParameterPrefix}/*
+
+  ImageBuilderInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref ImageBuilderRole
+
+  #############################################################################
+  # ImageBuilder Components
+  #############################################################################
+
+  # Component: PCS Agent Installer
+  # Downloads and installs the latest AWS PCS agent from the official repository
+  # Supports both AL2023 and Ubuntu 24.04
+  PcsAgentInstallerComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: !Sub 'PcsAgentInstaller-${AWS::StackName}'
+      Description: Download and install the AWS PCS agent
+      Version: !Ref SemanticVersion
+      Platform: Linux
+      SupportedOsVersions:
+        - 'Amazon Linux 2023'
+        - 'Ubuntu 24'
+      Data:
+        Fn::Sub:
+          - |
+            name: 'AWS PCS Agent Installer'
+            description: 'Downloads and installs the latest AWS PCS agent'
+            schemaVersion: 1.0
+            phases:
+              - name: build
+                steps:
+                  - name: InstallPcsAgent
+                    action: ExecuteBash
+                    inputs:
+                      commands:
+                        - set -e
+                        - echo "Installing AWS PCS Agent..."
+                        - |
+                          # Create a temporary directory
+                          TEMP_DIR=$(mktemp -d)
+                          cd "${!TEMP_DIR}"
+                          
+                          # Import AWS PCS public key
+                          curl -fsSL "https://aws-pcs-repo-public-keys-${Region}.s3.${Region}.amazonaws.com/aws-pcs-public-key.pub" -o aws-pcs-public-key.pub
+                          gpg --import aws-pcs-public-key.pub
+                          
+                          # Download and install PCS agent
+                          curl -fsSL "https://aws-pcs-repo-${Region}.s3.${Region}.amazonaws.com/aws-pcs-agent/aws-pcs-agent-v1-latest.tar.gz" -o aws-pcs-agent.tar.gz
+                          tar zxf aws-pcs-agent.tar.gz
+                          cd aws-pcs-agent
+                          ./installer.sh -y
+                          
+                          # Cleanup
+                          cd /
+                          rm -rf "${!TEMP_DIR}"
+                        - echo "AWS PCS Agent installation complete"
+          - Region: !Ref 'AWS::Region'
+
+  # Component: Slurm 24.11 Installer
+  # Downloads and installs Slurm 24.11 from the AWS PCS repository
+  Slurm2411InstallerComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: !Sub 'Slurm2411Installer-${AWS::StackName}'
+      Description: Download and install Slurm 24.11 for AWS PCS
+      Version: !Ref SemanticVersion
+      Platform: Linux
+      SupportedOsVersions:
+        - 'Amazon Linux 2023'
+        - 'Ubuntu 24'
+      Data:
+        Fn::Sub:
+          - |
+            name: 'AWS PCS Slurm 24.11 Installer'
+            description: 'Downloads and installs Slurm 24.11 from AWS PCS repository'
+            schemaVersion: 1.0
+            phases:
+              - name: build
+                steps:
+                  - name: InstallSlurm2411
+                    action: ExecuteBash
+                    inputs:
+                      commands:
+                        - set -e
+                        - echo "Installing Slurm 24.11..."
+                        - |
+                          SLURM_VERSION="24.11"
+                          
+                          # Create a temporary directory
+                          TEMP_DIR=$(mktemp -d)
+                          cd "${!TEMP_DIR}"
+                          
+                          # Import AWS PCS public key
+                          curl -fsSL "https://aws-pcs-repo-public-keys-${Region}.s3.${Region}.amazonaws.com/aws-pcs-public-key.pub" -o aws-pcs-public-key.pub
+                          gpg --import aws-pcs-public-key.pub
+                          
+                          # Download and install Slurm
+                          curl -fsSL "https://aws-pcs-repo-${Region}.s3.${Region}.amazonaws.com/aws-pcs-slurm/aws-pcs-slurm-${!SLURM_VERSION}-installer-latest.tar.gz" -o "aws-pcs-slurm-${!SLURM_VERSION}-installer.tar.gz"
+                          tar zxf "aws-pcs-slurm-${!SLURM_VERSION}-installer.tar.gz"
+                          cd "aws-pcs-slurm-${!SLURM_VERSION}-installer"
+                          ./installer.sh -y
+                          
+                          # Configure library paths
+                          SLURM_INSTALL_PATH="/opt/aws/pcs/scheduler/slurm-${!SLURM_VERSION}"
+                          echo "${!SLURM_INSTALL_PATH}/lib" | tee /etc/ld.so.conf.d/slurm-${!SLURM_VERSION}.conf > /dev/null
+                          chmod 0644 /etc/ld.so.conf.d/slurm-${!SLURM_VERSION}.conf
+                          ldconfig
+                          
+                          # Cleanup
+                          cd /
+                          rm -rf "${!TEMP_DIR}"
+                        - echo "Slurm 24.11 installation complete"
+          - Region: !Ref 'AWS::Region'
+
+  # Component: Slurm 25.05 Installer
+  # Downloads and installs Slurm 25.05 from the AWS PCS repository
+  Slurm2505InstallerComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: !Sub 'Slurm2505Installer-${AWS::StackName}'
+      Description: Download and install Slurm 25.05 for AWS PCS
+      Version: !Ref SemanticVersion
+      Platform: Linux
+      SupportedOsVersions:
+        - 'Amazon Linux 2023'
+        - 'Ubuntu 24'
+      Data:
+        Fn::Sub:
+          - |
+            name: 'AWS PCS Slurm 25.05 Installer'
+            description: 'Downloads and installs Slurm 25.05 from AWS PCS repository'
+            schemaVersion: 1.0
+            phases:
+              - name: build
+                steps:
+                  - name: InstallSlurm2505
+                    action: ExecuteBash
+                    inputs:
+                      commands:
+                        - set -e
+                        - echo "Installing Slurm 25.05..."
+                        - |
+                          SLURM_VERSION="25.05"
+                          
+                          # Create a temporary directory
+                          TEMP_DIR=$(mktemp -d)
+                          cd "${!TEMP_DIR}"
+                          
+                          # Import AWS PCS public key
+                          curl -fsSL "https://aws-pcs-repo-public-keys-${Region}.s3.${Region}.amazonaws.com/aws-pcs-public-key.pub" -o aws-pcs-public-key.pub
+                          gpg --import aws-pcs-public-key.pub
+                          
+                          # Download and install Slurm
+                          curl -fsSL "https://aws-pcs-repo-${Region}.s3.${Region}.amazonaws.com/aws-pcs-slurm/aws-pcs-slurm-${!SLURM_VERSION}-installer-latest.tar.gz" -o "aws-pcs-slurm-${!SLURM_VERSION}-installer.tar.gz"
+                          tar zxf "aws-pcs-slurm-${!SLURM_VERSION}-installer.tar.gz"
+                          cd "aws-pcs-slurm-${!SLURM_VERSION}-installer"
+                          ./installer.sh -y
+                          
+                          # Configure library paths
+                          SLURM_INSTALL_PATH="/opt/aws/pcs/scheduler/slurm-${!SLURM_VERSION}"
+                          echo "${!SLURM_INSTALL_PATH}/lib" | tee /etc/ld.so.conf.d/slurm-${!SLURM_VERSION}.conf > /dev/null
+                          chmod 0644 /etc/ld.so.conf.d/slurm-${!SLURM_VERSION}.conf
+                          ldconfig
+                          
+                          # Cleanup
+                          cd /
+                          rm -rf "${!TEMP_DIR}"
+                        - echo "Slurm 25.05 installation complete"
+          - Region: !Ref 'AWS::Region'
+
+  # Component: Slurm PATH Configuration
+  # Configures PATH and MANPATH for both Slurm versions
+  # 24.11 is first in PATH for maximum compatibility (older clients work with newer servers)
+  SlurmPathConfigComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: !Sub 'SlurmPathConfig-${AWS::StackName}'
+      Description: Configure PATH and library paths for Slurm versions
+      Version: !Ref SemanticVersion
+      Platform: Linux
+      SupportedOsVersions:
+        - 'Amazon Linux 2023'
+        - 'Ubuntu 24'
+      Data: |
+        name: 'Slurm PATH Configuration'
+        description: 'Configures PATH and MANPATH for both Slurm 24.11 and 25.05'
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: ConfigureSlurmPaths
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -e
+                    - echo "Configuring Slurm PATH..."
+                    - |
+                      # Create /etc/profile.d/slurm.sh
+                      # Older version (24.11) first for maximum compatibility
+                      # Slurm has forward compatibility: clients can talk to newer slurmctld servers
+                      cat > /etc/profile.d/slurm.sh << 'EOF'
+                      # Slurm PATH configuration for AWS PCS
+                      # 24.11 is first for maximum compatibility (older clients work with newer servers)
+                      PATH=/opt/aws/pcs/scheduler/slurm-24.11/bin:/opt/aws/pcs/scheduler/slurm-25.05/bin:$PATH
+                      MANPATH=/opt/aws/pcs/scheduler/slurm-24.11/share/man:/opt/aws/pcs/scheduler/slurm-25.05/share/man:$MANPATH
+                      export PATH MANPATH
+                      EOF
+                      chmod 0644 /etc/profile.d/slurm.sh
+                    - echo "Slurm PATH configuration complete"
+
+
+  # Component: EFS Utils Installer
+  # Installs amazon-efs-utils for mounting EFS file systems
+  # Uses dnf on AL2023, builds from source on Ubuntu 24.04
+  EfsUtilsInstallerComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: !Sub 'EfsUtilsInstaller-${AWS::StackName}'
+      Description: Install amazon-efs-utils for EFS file system mounting
+      Version: !Ref SemanticVersion
+      Platform: Linux
+      SupportedOsVersions:
+        - 'Amazon Linux 2023'
+        - 'Ubuntu 24'
+      Data: |
+        name: 'EFS Utils Installer'
+        description: 'Installs amazon-efs-utils with optimized watchdog poll interval'
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: InstallEfsUtils
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -e
+                    - echo "Installing EFS Utils..."
+                    - |
+                      # Detect OS
+                      if [ -f /etc/os-release ]; then
+                        . /etc/os-release
+                        OS_ID="$ID"
+                      else
+                        echo "Unable to detect OS"
+                        exit 1
+                      fi
+                      
+                      if [ "$OS_ID" = "amzn" ]; then
+                        # Amazon Linux 2023 - install from repository
+                        echo "Installing EFS utils from dnf repository..."
+                        dnf install -y amazon-efs-utils
+                      elif [ "$OS_ID" = "ubuntu" ]; then
+                        # Ubuntu 24.04 - check if already installed, otherwise build from source
+                        if dpkg -l amazon-efs-utils &>/dev/null; then
+                          echo "EFS utils already installed, skipping build"
+                        else
+                          # Build from source
+                          # Requires: git, binutils, rustc, cargo, pkg-config, libssl-dev, golang-go (for FIPS)
+                          echo "Building EFS utils from source..."
+                          apt-get update
+                          apt-get -y install git binutils rustc cargo pkg-config libssl-dev golang-go
+                          
+                          TEMP_DIR=$(mktemp -d)
+                          cd "$TEMP_DIR"
+                          git clone https://github.com/aws/efs-utils
+                          cd efs-utils
+                          ./build-deb.sh
+                          apt-get -y install ./build/amazon-efs-utils*deb
+                          
+                          cd /
+                          rm -rf "$TEMP_DIR"
+                        fi
+                      else
+                        echo "Unsupported OS: $OS_ID"
+                        exit 1
+                      fi
+                      
+                      # Increase watchdog poll interval to 10 seconds
+                      # Ref: https://github.com/aws/aws-parallelcluster-cookbook/pull/2357
+                      if [ -f "/etc/amazon/efs/efs-utils.conf" ]; then
+                        sed -i 's/^poll_interval_sec = 1$/poll_interval_sec = 10/' /etc/amazon/efs/efs-utils.conf
+                      fi
+                    - echo "EFS Utils installation complete"
+
+  # Component: CloudWatch Agent Installer
+  # Installs and enables the Amazon CloudWatch agent for metrics and log collection
+  CloudWatchAgentInstallerComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: !Sub 'CloudWatchAgentInstaller-${AWS::StackName}'
+      Description: Install and enable Amazon CloudWatch agent
+      Version: !Ref SemanticVersion
+      Platform: Linux
+      SupportedOsVersions:
+        - 'Amazon Linux 2023'
+        - 'Ubuntu 24'
+      Data: |
+        name: 'CloudWatch Agent Installer'
+        description: 'Installs and enables Amazon CloudWatch agent'
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: InstallCloudWatchAgent
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -e
+                    - echo "Installing CloudWatch Agent..."
+                    - |
+                      # Detect OS and architecture
+                      if [ -f /etc/os-release ]; then
+                        . /etc/os-release
+                        OS_ID="$ID"
+                      else
+                        echo "Unable to detect OS"
+                        exit 1
+                      fi
+                      
+                      ARCH=$(uname -m)
+                      if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+                        TARGET="arm64"
+                      else
+                        TARGET="amd64"
+                      fi
+                      
+                      if [ "$OS_ID" = "amzn" ]; then
+                        # Amazon Linux 2023 - install from repository
+                        echo "Installing CloudWatch agent from dnf repository..."
+                        dnf install -y amazon-cloudwatch-agent
+                        # Enable the systemd service
+                        systemctl enable amazon-cloudwatch-agent
+                      elif [ "$OS_ID" = "ubuntu" ]; then
+                        # Ubuntu 24.04 - check if already installed
+                        if dpkg -l amazon-cloudwatch-agent &>/dev/null; then
+                          echo "CloudWatch agent already installed, skipping download"
+                        else
+                          echo "Installing CloudWatch agent from AWS S3..."
+                          curl -fSsL "https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/${TARGET}/latest/amazon-cloudwatch-agent.deb" -o "amazon-cloudwatch-agent.deb"
+                          dpkg -i -E ./amazon-cloudwatch-agent.deb
+                          rm -f amazon-cloudwatch-agent.deb
+                        fi
+                        # Enable the systemd service
+                        systemctl enable amazon-cloudwatch-agent
+                      else
+                        echo "Unsupported OS: $OS_ID"
+                        exit 1
+                      fi
+                    - echo "CloudWatch Agent installation complete"
+
+  # Component: SSM Agent Installer
+  # Ensures SSM agent is installed and enabled for remote management
+  SsmAgentInstallerComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: !Sub 'SsmAgentInstaller-${AWS::StackName}'
+      Description: Ensure SSM agent is installed and enabled
+      Version: !Ref SemanticVersion
+      Platform: Linux
+      SupportedOsVersions:
+        - 'Amazon Linux 2023'
+        - 'Ubuntu 24'
+      Data: |
+        name: 'SSM Agent Installer'
+        description: 'Ensures SSM agent is installed and enabled for boot'
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: InstallSsmAgent
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -e
+                    - echo "Installing/Verifying SSM Agent..."
+                    - |
+                      # Detect OS and architecture
+                      if [ -f /etc/os-release ]; then
+                        . /etc/os-release
+                        OS_ID="$ID"
+                      else
+                        echo "Unable to detect OS"
+                        exit 1
+                      fi
+                      
+                      ARCH=$(uname -m)
+                      if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+                        TARGET="linux_arm64"
+                      else
+                        TARGET="linux_amd64"
+                      fi
+                      
+                      if [ "$OS_ID" = "amzn" ]; then
+                        # Amazon Linux 2023 - SSM agent should be pre-installed
+                        # Ensure it's installed and enabled
+                        echo "Verifying SSM agent on Amazon Linux..."
+                        if ! dnf list installed amazon-ssm-agent &>/dev/null; then
+                          dnf install -y "https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/${TARGET}/amazon-ssm-agent.rpm"
+                        fi
+                        # Enable the systemd service
+                        systemctl enable amazon-ssm-agent
+                      elif [ "$OS_ID" = "ubuntu" ]; then
+                        # Ubuntu 24.04 - install via snap (recommended method)
+                        # Ref: https://docs.aws.amazon.com/systems-manager/latest/userguide/agent-install-ubuntu-64-snap.html
+                        echo "Installing SSM agent via snap on Ubuntu..."
+                        if ! snap list amazon-ssm-agent &>/dev/null; then
+                          snap install amazon-ssm-agent --classic
+                        else
+                          echo "SSM agent snap already installed, skipping installation"
+                        fi
+                        # Snap services are managed differently - start and enable via snap
+                        snap start amazon-ssm-agent
+                      else
+                        echo "Unsupported OS: $OS_ID"
+                        exit 1
+                      fi
+                    - echo "SSM Agent installation complete"
+
+  EnrootPyxisComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: !Sub 'EnrootPyxisInstaller-${AWS::StackName}'
+      Description: Install Enroot and Pyxis for PCS with DLAMI
+      Version: !Ref SemanticVersion
+      Platform: Linux
+      SupportedOsVersions:
+        - 'Amazon Linux 2023'
+        - 'Ubuntu 24'
+      Data: |
+        name: 'Enroot Pyxis Installer'
+        description: 'Install Enroot and Pyxis for PCS with DLAMI'
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: InstallSsmAgent
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -e
+                    - echo "Installing Enroot/Pyxis..."
+                    - |
+                      #!/bin/bash
+                      # author: midaisuk@
+                      # based on: https://github.com/aws-samples/aws-parallelcluster-post-install-scripts/blob/main/pyxis/postinstall.sh
+                      # about: Install pyxis/enroot to DLAMI for AWS PCS
+                      
+                      # Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+                      #
+                      # Licensed under the Apache License, Version 2.0 (the "License"). You may not use this file except in compliance
+                      # with the License. A copy of the License is located at
+                      #
+                      # http://aws.amazon.com/apache2.0/
+                      #
+                      # or in the "LICENSE.txt" file accompanying this file. This file is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES
+                      # OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions and
+                      # limitations under the License.
+                      
+                      # Usage: ./postinstall.sh [shared_dir]
+                      # default to /home/[default-user] which is available on all clusters
+                      set -exo pipefail
+                      
+                      #. /etc/parallelcluster/cfnconfig
+                      #SHARED_DIR="/shared"
+                      STABLE=1
+                      ENROOT_RELEASE=3.5.0
+                      PYXIS_RELEASE=v0.20.0
+                      SLURM_VERSION=25.05
+                      SLURM_PATH="/opt/aws/pcs/scheduler/slurm-${SLURM_VERSION}"
+                      SLURM_ETC_PATH="/etc/aws/pcs/scheduler/slurm-${SLURM_VERSION}"
+                      
+                      echo "
+                      ###########################################
+                      # BEGIN: post-install enroot & pyxis config
+                      ###########################################
+                      "
+                      
+                      ########
+                      #ENROOT
+                      ########
+                      # enroot and pyxis versions should be hardcoded and will change with our release cycle
+                      OS=$(. /etc/os-release; echo $NAME)
+                      
+                      # We do not suport adding driver yet and rely on parallelcluster AMI and DLAMI for nvidia drivers.
+                      # We would like to investigate using CPU parallelcluster AMI and using Nvidia driver through container, the open question is how to make healthchecks use it.
+                      nvidia-smi && export GPU_PRESENT=0 || GPU_PRESENT=-1;
+                      if [ $GPU_PRESENT -eq 0 ]; then
+                      	nvidia-container-cli info && export GPU_CONTAINER_PRESENT=0 || export GPU_CONTAINER_PRESENT=-1
+                      else
+                      	export GPU_CONTAINER_PRESENT=1
+                      fi
+                      
+                      if [ "${OS}" == "Amazon Linux" ]; then
+                          # Not tested in this case @20260219
+                      	if [ $GPU_PRESENT -eq 0 ] && [ $GPU_CONTAINER_PRESENT -gt 0 ]; then
+                      		distribution=$(. /etc/os-release;echo $ID$VERSION_ID) \
+                      		&& curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.repo | tee /etc/yum.repos.d/nvidia-container-toolkit.repo \
+                      		&& sudo yum clean expire-cache -y \
+                      		&& yum update -y \
+                      		&& yum install libnvidia-container-tools -y
+                      	fi
+                      
+                      	# fuse-overlayfs is now available from the Extra Packages for Enterprise Linux repo via yum
+                       	amazon-linux-extras install epel
+                      	yum install -y epel-release	
+                      	yum install -y jq squashfs-tools parallel fuse-overlayfs pigz squashfuse zstd
+                      
+                      	if [[ $STABLE == 1 ]]; then
+                      		export arch=$(uname -m)
+                      		# QUESTION: alinux2 is el7?
+                      		yum install -y https://github.com/NVIDIA/enroot/releases/download/v${ENROOT_RELEASE}/enroot-${ENROOT_RELEASE}-1.el8.${arch}.rpm
+                      		yum install -y https://github.com/NVIDIA/enroot/releases/download/v${ENROOT_RELEASE}/enroot+caps-${ENROOT_RELEASE}-1.el8.${arch}.rpm
+                      	else
+                      		yum install -y git gcc make libcap libtool automake libmd-devel
+                      		pushd /opt
+                      		git clone https://github.com/NVIDIA/enroot.git && cd enroot
+                      		prefix=/usr sysconfdir=/etc make install	# NOTE: produce lots of log lines (gcc) to CW
+                      		prefix=/usr sysconfdir=/etc make setcap
+                      		popd
+                      	fi
+                        	export NONROOT_USER=ec2-user
+                      elif [ "${OS}" == "Ubuntu" ]; then
+                      	apt-get update
+                      	if [ $GPU_PRESENT -eq 0 ] && [ $GPU_CONTAINER_PRESENT -gt 0 ]; then
+                      		distribution=$(. /etc/os-release;echo $ID$VERSION_ID) \
+                      	    	&& curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
+                      		&& curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
+                      		    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+                      		    tee /etc/apt/sources.list.d/nvidia-container-toolkit.list \
+                      	    	&& apt-get update -y \
+                      	    	&& apt-get install libnvidia-container-tools -y
+                      	fi
+                      	apt-get install -y -o DPkg::Lock::Timeout=120 jq squashfs-tools parallel fuse-overlayfs pigz squashfuse zstd
+                      	if [[ $STABLE == 1 ]]; then
+                      		export arch=$(dpkg --print-architecture)
+                      		mkdir -p /tmp/enroot
+                      		pushd /tmp/enroot
+                      		curl -fSsL -O https://github.com/NVIDIA/enroot/releases/download/v${ENROOT_RELEASE}/enroot_${ENROOT_RELEASE}-1_${arch}.deb
+                      		curl -fSsL -O https://github.com/NVIDIA/enroot/releases/download/v${ENROOT_RELEASE}/enroot+caps_${ENROOT_RELEASE}-1_${arch}.deb # optional
+                      		apt install -y ./*.deb
+                      		popd
+                      	else
+                              # Not tested in this case @20260219
+                      		apt install -y git gcc make libcap2-bin libtool automake libmd-dev
+                      		pushd /opt
+                      		git clone https://github.com/NVIDIA/enroot.git && cd enroot
+                      		prefix=/usr sysconfdir=/etc make install	# NOTE: produce lots of log lines (gcc) to CW
+                      		prefix=/usr sysconfdir=/etc make setcap
+                      		popd
+                      	fi
+                        	export NONROOT_USER=ubuntu
+                      else
+                      	echo "Unsupported OS: ${OS}" && exit 1;
+                      fi
+                      
+                      ln -s /usr/share/enroot/hooks.d/50-slurm-pmi.sh /etc/enroot/hooks.d/
+                      ln -s /usr/share/enroot/hooks.d/50-slurm-pytorch.sh /etc/enroot/hooks.d/
+                      
+                      # https://github.com/NVIDIA/enroot/issues/136#issuecomment-1241257854
+                      #mkdir -p /etc/sysconfig
+                      #wget -O /etc/chef/cookbooks/aws-parallelcluster-slurm/templates/default/compute_node_finalize/slurm/slurm.sysconfig.erb https://raw.githubusercontent.com/aws/aws-parallelcluster-cookbook/refs/heads/develop/cookbooks/aws-parallelcluster-slurm/templates/default/compute_node_finalize/slurm/slurm.sysconfig.erb
+                      #echo "PATH=/opt/slurm/sbin:/opt/slurm/bin:$(bash -c 'source /etc/environment ; echo $PATH')" >> /etc/chef/cookbooks/aws-parallelcluster-slurm/templates/default/compute_node_finalize/slurm/slurm.sysconfig.erb
+                      
+                      # Permissions
+                      mkdir -p /tmp/enroot
+                      chmod 1777 /tmp/enroot
+                      mkdir -p /tmp/enroot/data
+                      chmod 1777 /tmp/enroot/data
+                      
+                      ENROOT_CONFIG_RELEASE=main
+                      wget -O /tmp/enroot.template.conf https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-post-install-scripts/${ENROOT_CONFIG_RELEASE}/pyxis/enroot.template.conf
+                      ENROOT_CACHE_PATH=/tmp/enroot envsubst < /tmp/enroot.template.conf > /tmp/enroot.conf
+                      mv /tmp/enroot.conf /etc/enroot/enroot.conf
+                      chmod 0644 /etc/enroot/enroot.conf
+                      
+                      
+                      
+                      ########
+                      #PYXIS
+                      ########
+                      git clone --depth 1 --branch ${PYXIS_RELEASE} https://github.com/NVIDIA/pyxis.git /tmp/pyxis
+                      cd /tmp/pyxis
+                      #CPPFLAGS='-I /opt/slurm/include/' make
+                      #CPPFLAGS='-I /opt/slurm/include/' make install
+                      CPPFLAGS="-I ${SLURM_PATH}/include/" make
+                      CPPFLAGS="-I ${SLURM_PATH}/include/" make install
+                      
+                      
+                      #mkdir -p /opt/slurm/etc/plugstack.conf.d
+                      mkdir -p ${SLURM_ETC_PATH}/plugstack.conf.d
+                      #echo -e 'include /opt/slurm/etc/plugstack.conf.d/*' | tee /opt/slurm/etc/plugstack.conf
+                      #ln -fs /usr/local/share/pyxis/pyxis.conf /opt/slurm/etc/plugstack.conf.d/pyxis.conf
+                      ln -fs /usr/local/share/pyxis/pyxis.conf ${SLURM_ETC_PATH}/plugstack.conf.d/pyxis.conf
+                      
+                      # set runtime_path, but not use for Image Builder condition
+                      #mkdir -p ${SHARED_DIR}/pyxis/
+                      #chown ${NONROOT_USER} ${SHARED_DIR}/pyxis/
+                      #sed -i '${s/$/ runtime_path=${SHARED_DIR}\/pyxis/}' ${SLURM_ETC_PATH}/plugstack.conf.d/pyxis.conf
+                      #SHARED_DIR=${SHARED_DIR} envsubst < ${SLURM_ETC_PATH}/plugstack.conf.d/pyxis.conf > ${SLURM_ETC_PATH}/plugstack.conf.d/pyxis.tmp.conf
+                      #mv /opt/slurm/etc/plugstack.conf.d/pyxis.tmp.conf /opt/slurm/etc/plugstack.conf.d/pyxis.conf
+                      
+                      # add path for slrum commands
+                      echo "PATH=${SLURM_PATH}/bin:/usr/lib/ccache/bin:/usr/local/bin:/usr/bin:/bin" >> /etc/default/slurmd
+                      
+                      ########
+                      #GPU
+                      ########
+                      if [ $GPU_PRESENT -gt 0 ] && [ $GPU_CONTAINER_PRESENT -gt 0 ]; then
+                      	echo "GPUs not present, stopping early!"
+                      	exit 0
+                      fi
+                      
+                      nvidia-container-cli --load-kmods info || true
+                      
+                      echo "
+                      #########################################
+                      # END: post-install enroot & pyxis config
+                      #########################################
+                      "
+                    - echo "Enroot/Pyxis installation complete"
+
+  #############################################################################
+  # ImageBuilder Infrastructure Configurations
+  #############################################################################
+
+  # Infrastructure Configuration for x86_64 builds
+  # Uses compute-optimized instances for faster builds
+  InfrastructureConfigX8664:
+    Type: AWS::ImageBuilder::InfrastructureConfiguration
+    Properties:
+      Name: !Sub 'dlami-for-pcs-infra-x86-64-${AWS::StackName}'
+      Description: Infrastructure configuration for x86_64 DLAMI PCS AMI builds
+      InstanceProfileName: !Ref ImageBuilderInstanceProfile
+      InstanceTypes:
+        - c6i.4xlarge
+        - m6i.4xlarge
+      TerminateInstanceOnFailure: true
+
+  # Infrastructure Configuration for arm64 builds
+  # Uses Graviton compute-optimized instances for faster builds
+  InfrastructureConfigArm64:
+    Type: AWS::ImageBuilder::InfrastructureConfiguration
+    Properties:
+      Name: !Sub 'dlami-for-pcs-infra-arm64-${AWS::StackName}'
+      Description: Infrastructure configuration for arm64 DLAMI PCS AMI builds
+      InstanceProfileName: !Ref ImageBuilderInstanceProfile
+      InstanceTypes:
+        - c7g.4xlarge
+        - m7g.4xlarge
+      TerminateInstanceOnFailure: true
+
+
+  #############################################################################
+  # ImageBuilder Image Recipes
+  # Creates recipes for all 4 OS/architecture combinations
+  #############################################################################
+
+  # Image Recipe: Amazon Linux 2023 x86_64
+  ImageRecipeAl2023X8664:
+    Type: AWS::ImageBuilder::ImageRecipe
+    Properties:
+      Name: !Sub 'dlami-for-pcs-al2023-x86-64-${AWS::StackName}'
+      Description: DLAMI for PCS recipe - Amazon Linux 2023 x86_64
+      Version: !Ref SemanticVersion
+      ParentImage: !Sub 
+        - '{{resolve:ssm:${SSMPath}}}'
+        - SSMPath: !FindInMap [DLAMIConfigs, al2023, x8664]
+      BlockDeviceMappings:
+        - DeviceName: !FindInMap [DLAMIConfigs, al2023, deviceName]
+          Ebs:
+            VolumeSize: !FindInMap [DLAMIConfigs, al2023, size]
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Components:
+        - ComponentArn: !Ref PcsAgentInstallerComponent
+        - ComponentArn: !Ref Slurm2411InstallerComponent
+        - ComponentArn: !Ref Slurm2505InstallerComponent
+        - ComponentArn: !Ref SlurmPathConfigComponent
+        - ComponentArn: !Ref EfsUtilsInstallerComponent
+        - ComponentArn: !Ref CloudWatchAgentInstallerComponent
+        - ComponentArn: !Ref SsmAgentInstallerComponent
+
+  # Image Recipe: Amazon Linux 2023 arm64
+  ImageRecipeAl2023Arm64:
+    Type: AWS::ImageBuilder::ImageRecipe
+    Properties:
+      Name: !Sub 'dlami-for-pcs-al2023-arm64-${AWS::StackName}'
+      Description: DLAMI for PCS recipe - Amazon Linux 2023 arm64
+      Version: !Ref SemanticVersion
+      ParentImage: !Sub 
+        - '{{resolve:ssm:${SSMPath}}}'
+        - SSMPath: !FindInMap [DLAMIConfigs, al2023, arm64]
+      BlockDeviceMappings:
+        - DeviceName: !FindInMap [DLAMIConfigs, al2023, deviceName]
+          Ebs:
+            VolumeSize: !FindInMap [DLAMIConfigs, al2023, size]
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Components:
+        - ComponentArn: !Ref PcsAgentInstallerComponent
+        - ComponentArn: !Ref Slurm2411InstallerComponent
+        - ComponentArn: !Ref Slurm2505InstallerComponent
+        - ComponentArn: !Ref SlurmPathConfigComponent
+        - ComponentArn: !Ref EfsUtilsInstallerComponent
+        - ComponentArn: !Ref CloudWatchAgentInstallerComponent
+        - ComponentArn: !Ref SsmAgentInstallerComponent
+
+  # Image Recipe: Ubuntu 24.04 x86_64
+  ImageRecipeUbuntu2404X8664:
+    Type: AWS::ImageBuilder::ImageRecipe
+    Properties:
+      Name: !Sub 'dlami-for-pcs-ubuntu2404-x86-64-${AWS::StackName}'
+      Description: DLAMI for PCS recipe - Ubuntu 24.04 x86_64
+      Version: !Ref SemanticVersion
+      ParentImage: !Sub 
+        - '{{resolve:ssm:${SSMPath}}}'
+        - SSMPath: !FindInMap [DLAMIConfigs, ubuntu2404, x8664]
+      BlockDeviceMappings:
+        - DeviceName: !FindInMap [DLAMIConfigs, ubuntu2404, deviceName]
+          Ebs:
+            VolumeSize: !FindInMap [DLAMIConfigs, ubuntu2404, size]
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Components:
+        - ComponentArn: !Ref PcsAgentInstallerComponent
+        - ComponentArn: !Ref Slurm2411InstallerComponent
+        - ComponentArn: !Ref Slurm2505InstallerComponent
+        - ComponentArn: !Ref SlurmPathConfigComponent
+#        - ComponentArn: !Ref EfsUtilsInstallerComponent
+        - ComponentArn: !Ref CloudWatchAgentInstallerComponent
+        - ComponentArn: !Ref SsmAgentInstallerComponent
+        - ComponentArn: !Ref EnrootPyxisComponent
+
+  # Image Recipe: Ubuntu 24.04 arm64
+  ImageRecipeUbuntu2404Arm64:
+    Type: AWS::ImageBuilder::ImageRecipe
+    Properties:
+      Name: !Sub 'dlami-for-pcs-ubuntu2404-arm64-${AWS::StackName}'
+      Description: DLAMI for PCS recipe - Ubuntu 24.04 arm64
+      Version: !Ref SemanticVersion
+      ParentImage: !Sub 
+        - '{{resolve:ssm:${SSMPath}}}'
+        - SSMPath: !FindInMap [DLAMIConfigs, ubuntu2404, arm64]
+      BlockDeviceMappings:
+        - DeviceName: !FindInMap [DLAMIConfigs, ubuntu2404, deviceName]
+          Ebs:
+            VolumeSize: !FindInMap [DLAMIConfigs, ubuntu2404, size]
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Components:
+        - ComponentArn: !Ref PcsAgentInstallerComponent
+        - ComponentArn: !Ref Slurm2411InstallerComponent
+        - ComponentArn: !Ref Slurm2505InstallerComponent
+        - ComponentArn: !Ref SlurmPathConfigComponent
+        - ComponentArn: !Ref EfsUtilsInstallerComponent
+        - ComponentArn: !Ref CloudWatchAgentInstallerComponent
+        - ComponentArn: !Ref SsmAgentInstallerComponent
+
+  #############################################################################
+  # ImageBuilder Distribution Configurations
+  # Configures AMI naming and distribution to current region
+  #############################################################################
+
+  # Distribution Configuration: Amazon Linux 2023 x86_64
+  DistributionConfigAl2023X8664:
+    Type: AWS::ImageBuilder::DistributionConfiguration
+    Properties:
+      Name: !Sub 'dlami-for-pcs-dist-al2023-x86-64-${AWS::StackName}'
+      Description: Distribution configuration for DLAMI PCS AMI - AL2023 x86_64
+      Distributions:
+        - Region: !Ref 'AWS::Region'
+          AmiDistributionConfiguration:
+            Name: 'dlami-for-pcs-base-al2023-x86_64 {{ imagebuilder:buildDate }}'
+            Description: PCS-ready AMI based on DLAMI Base GPU - Amazon Linux 2023 x86_64
+            AmiTags:
+              Name: dlami-for-pcs-base-al2023-x86_64
+              SourceStack: !Ref 'AWS::StackName'
+              OS: al2023
+              Architecture: x86_64
+
+  # Distribution Configuration: Amazon Linux 2023 arm64
+  DistributionConfigAl2023Arm64:
+    Type: AWS::ImageBuilder::DistributionConfiguration
+    Properties:
+      Name: !Sub 'dlami-for-pcs-dist-al2023-arm64-${AWS::StackName}'
+      Description: Distribution configuration for DLAMI PCS AMI - AL2023 arm64
+      Distributions:
+        - Region: !Ref 'AWS::Region'
+          AmiDistributionConfiguration:
+            Name: 'dlami-for-pcs-base-al2023-arm64 {{ imagebuilder:buildDate }}'
+            Description: PCS-ready AMI based on DLAMI Base GPU - Amazon Linux 2023 arm64
+            AmiTags:
+              Name: dlami-for-pcs-base-al2023-arm64
+              SourceStack: !Ref 'AWS::StackName'
+              OS: al2023
+              Architecture: arm64
+
+  # Distribution Configuration: Ubuntu 24.04 x86_64
+  DistributionConfigUbuntu2404X8664:
+    Type: AWS::ImageBuilder::DistributionConfiguration
+    Properties:
+      Name: !Sub 'dlami-for-pcs-dist-ubuntu2404-x86-64-${AWS::StackName}'
+      Description: Distribution configuration for DLAMI PCS AMI - Ubuntu 24.04 x86_64
+      Distributions:
+        - Region: !Ref 'AWS::Region'
+          AmiDistributionConfiguration:
+            Name: 'dlami-for-pcs-base-ubuntu2404-x86_64 {{ imagebuilder:buildDate }}'
+            Description: PCS-ready AMI based on DLAMI Base GPU - Ubuntu 24.04 x86_64
+            AmiTags:
+              Name: dlami-for-pcs-base-ubuntu2404-x86_64
+              SourceStack: !Ref 'AWS::StackName'
+              OS: ubuntu2404
+              Architecture: x86_64
+
+  # Distribution Configuration: Ubuntu 24.04 arm64
+  DistributionConfigUbuntu2404Arm64:
+    Type: AWS::ImageBuilder::DistributionConfiguration
+    Properties:
+      Name: !Sub 'dlami-for-pcs-dist-ubuntu2404-arm64-${AWS::StackName}'
+      Description: Distribution configuration for DLAMI PCS AMI - Ubuntu 24.04 arm64
+      Distributions:
+        - Region: !Ref 'AWS::Region'
+          AmiDistributionConfiguration:
+            Name: 'dlami-for-pcs-base-ubuntu2404-arm64 {{ imagebuilder:buildDate }}'
+            Description: PCS-ready AMI based on DLAMI Base GPU - Ubuntu 24.04 arm64
+            AmiTags:
+              Name: dlami-for-pcs-base-ubuntu2404-arm64
+              SourceStack: !Ref 'AWS::StackName'
+              OS: ubuntu2404
+              Architecture: arm64
+
+
+  #############################################################################
+  # SSM Parameter Publishing Resources
+  # Lambda function and EventBridge rule to publish AMI IDs to SSM Parameter Store
+  #############################################################################
+
+  # IAM Role for Lambda function
+  SsmUpdateLambdaRole:
+    Type: AWS::IAM::Role
+    Condition: EnableSsmPublishing
+    Properties:
+      Description: IAM role for SSM parameter update Lambda function
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SsmParameterAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                  - ssm:AddTagsToResource
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmParameterPrefix}/*
+              - Effect: Allow
+                Action:
+                  - imagebuilder:GetImage
+                Resource: '*'
+
+  # Lambda function to update SSM parameters after pipeline builds
+  SsmUpdateLambda:
+    Type: AWS::Lambda::Function
+    Condition: EnableSsmPublishing
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-ssm-update'
+      Description: Updates SSM parameters with AMI IDs after Image Builder pipeline execution
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt SsmUpdateLambdaRole.Arn
+      Timeout: 30
+      Environment:
+        Variables:
+          SSM_PREFIX: !Ref SsmParameterPrefix
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+          import json
+
+          def handler(event, context):
+              print(f"Event: {json.dumps(event)}")
+              
+              ssm = boto3.client('ssm')
+              imagebuilder = boto3.client('imagebuilder')
+              prefix = os.environ['SSM_PREFIX']
+              
+              # Extract image ARN from the event
+              # The ARN is in the resources array, not in detail
+              resources = event.get('resources', [])
+              if not resources:
+                  print("No resources in event")
+                  return {'statusCode': 400, 'body': 'No resources in event'}
+              image_arn = resources[0]
+              
+              # Get image details
+              response = imagebuilder.get_image(imageBuildVersionArn=image_arn)
+              image = response['image']
+              
+              # Only process successful builds
+              state = image.get('state', {}).get('status')
+              if state != 'AVAILABLE':
+                  print(f"Image not available, state: {state}")
+                  return {'statusCode': 200, 'body': f'Image state: {state}'}
+              
+              # Get AMI ID from output resources
+              ami_id = None
+              for ami in image.get('outputResources', {}).get('amis', []):
+                  ami_id = ami.get('image')
+                  break
+              
+              if not ami_id:
+                  print("No AMI ID found")
+                  return {'statusCode': 400, 'body': 'No AMI ID'}
+              
+              # Determine parameter path from image name
+              image_name = image.get('name', '')
+              param_path = None
+              
+              if 'al2023-x86-64' in image_name:
+                  param_path = f"{prefix}/al2023/x86_64/latest"
+              elif 'al2023-arm64' in image_name:
+                  param_path = f"{prefix}/al2023/arm64/latest"
+              elif 'ubuntu2404-x86-64' in image_name:
+                  param_path = f"{prefix}/ubuntu2404/x86_64/latest"
+              elif 'ubuntu2404-arm64' in image_name:
+                  param_path = f"{prefix}/ubuntu2404/arm64/latest"
+              
+              if not param_path:
+                  print(f"Could not determine parameter path for: {image_name}")
+                  return {'statusCode': 400, 'body': 'Unknown image type'}
+              
+              # Update SSM parameter
+              ssm.put_parameter(
+                  Name=param_path,
+                  Value=ami_id,
+                  Type='String',
+                  Overwrite=True,
+                  Description=f'Latest DLAMI for PCS AMI ID - {image_name}'
+              )
+              
+              print(f"Updated {param_path} = {ami_id}")
+              return {'statusCode': 200, 'body': f'Updated {param_path}'}
+
+  # EventBridge rule to trigger Lambda on pipeline completion
+  SsmUpdateEventRule:
+    Type: AWS::Events::Rule
+    Condition: EnableSsmPublishing
+    Properties:
+      Name: !Sub '${AWS::StackName}-ssm-update-rule'
+      Description: Triggers SSM parameter update when Image Builder pipeline completes
+      EventPattern:
+        source:
+          - aws.imagebuilder
+        detail-type:
+          - EC2 Image Builder Image State Change
+        detail:
+          state:
+            status:
+              - AVAILABLE
+      State: ENABLED
+      Targets:
+        - Id: SsmUpdateLambda
+          Arn: !GetAtt SsmUpdateLambda.Arn
+
+  # Permission for EventBridge to invoke Lambda
+  SsmUpdateLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Condition: EnableSsmPublishing
+    Properties:
+      FunctionName: !Ref SsmUpdateLambda
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SsmUpdateEventRule.Arn
+
+  #############################################################################
+  # Image Pipelines
+  #############################################################################
+
+  ImagePipelineAl2023X8664:
+    Type: AWS::ImageBuilder::ImagePipeline
+    Properties:
+      Name: !Sub 'dlami-for-pcs-al2023-x86-64-${AWS::StackName}'
+      Description: Pipeline for DLAMI for PCS - Amazon Linux 2023 x86_64
+      ImageRecipeArn: !Ref ImageRecipeAl2023X8664
+      InfrastructureConfigurationArn: !Ref InfrastructureConfigX8664
+      DistributionConfigurationArn: !Ref DistributionConfigAl2023X8664
+      Status: ENABLED
+      ImageTestsConfiguration:
+        ImageTestsEnabled: false
+      Schedule: !If
+        - HasSchedule
+        - ScheduleExpression: !If
+            - IsWeeklySchedule
+            - !FindInMap [ScheduleExpressions, Weekly, expression]
+            - !FindInMap [ScheduleExpressions, Monthly, expression]
+          PipelineExecutionStartCondition: EXPRESSION_MATCH_ONLY
+        - !Ref 'AWS::NoValue'
+
+  ImagePipelineAl2023Arm64:
+    Type: AWS::ImageBuilder::ImagePipeline
+    Properties:
+      Name: !Sub 'dlami-for-pcs-al2023-arm64-${AWS::StackName}'
+      Description: Pipeline for DLAMI for PCS - Amazon Linux 2023 arm64
+      ImageRecipeArn: !Ref ImageRecipeAl2023Arm64
+      InfrastructureConfigurationArn: !Ref InfrastructureConfigArm64
+      DistributionConfigurationArn: !Ref DistributionConfigAl2023Arm64
+      Status: ENABLED
+      ImageTestsConfiguration:
+        ImageTestsEnabled: false
+      Schedule: !If
+        - HasSchedule
+        - ScheduleExpression: !If
+            - IsWeeklySchedule
+            - !FindInMap [ScheduleExpressions, Weekly, expression]
+            - !FindInMap [ScheduleExpressions, Monthly, expression]
+          PipelineExecutionStartCondition: EXPRESSION_MATCH_ONLY
+        - !Ref 'AWS::NoValue'
+
+  ImagePipelineUbuntu2404X8664:
+    Type: AWS::ImageBuilder::ImagePipeline
+    Properties:
+      Name: !Sub 'dlami-for-pcs-ubuntu2404-x86-64-${AWS::StackName}'
+      Description: Pipeline for DLAMI for PCS - Ubuntu 24.04 x86_64
+      ImageRecipeArn: !Ref ImageRecipeUbuntu2404X8664
+      InfrastructureConfigurationArn: !Ref InfrastructureConfigX8664
+      DistributionConfigurationArn: !Ref DistributionConfigUbuntu2404X8664
+      Status: ENABLED
+      ImageTestsConfiguration:
+        ImageTestsEnabled: false
+      Schedule: !If
+        - HasSchedule
+        - ScheduleExpression: !If
+            - IsWeeklySchedule
+            - !FindInMap [ScheduleExpressions, Weekly, expression]
+            - !FindInMap [ScheduleExpressions, Monthly, expression]
+          PipelineExecutionStartCondition: EXPRESSION_MATCH_ONLY
+        - !Ref 'AWS::NoValue'
+
+  ImagePipelineUbuntu2404Arm64:
+    Type: AWS::ImageBuilder::ImagePipeline
+    Properties:
+      Name: !Sub 'dlami-for-pcs-ubuntu2404-arm64-${AWS::StackName}'
+      Description: Pipeline for DLAMI for PCS - Ubuntu 24.04 arm64
+      ImageRecipeArn: !Ref ImageRecipeUbuntu2404Arm64
+      InfrastructureConfigurationArn: !Ref InfrastructureConfigArm64
+      DistributionConfigurationArn: !Ref DistributionConfigUbuntu2404Arm64
+      Status: ENABLED
+      ImageTestsConfiguration:
+        ImageTestsEnabled: false
+      Schedule: !If
+        - HasSchedule
+        - ScheduleExpression: !If
+            - IsWeeklySchedule
+            - !FindInMap [ScheduleExpressions, Weekly, expression]
+            - !FindInMap [ScheduleExpressions, Monthly, expression]
+          PipelineExecutionStartCondition: EXPRESSION_MATCH_ONLY
+        - !Ref 'AWS::NoValue'
+
+
+  #############################################################################
+  # AMI Lifecycle Policy Resources
+  # Deprecates old AMIs to keep EC2 console clean while preserving usability
+  #############################################################################
+
+  # IAM Role for lifecycle policy execution
+  LifecyclePolicyRole:
+    Type: AWS::IAM::Role
+    Condition: EnableLifecycle
+    Properties:
+      Description: IAM role for Image Builder lifecycle policy execution
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: imagebuilder.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/EC2ImageBuilderLifecycleExecutionPolicy
+
+  # Lifecycle policy to deprecate old AMIs
+  # Deprecated AMIs remain usable by PCS but are hidden from EC2 console searches
+  AmiLifecyclePolicy:
+    Type: AWS::ImageBuilder::LifecyclePolicy
+    Condition: EnableLifecycle
+    Properties:
+      Name: !Sub 'dlami-for-pcs-lifecycle-${AWS::StackName}'
+      Description: Deprecates old DLAMI for PCS AMIs while keeping them usable
+      ExecutionRole: !GetAtt LifecyclePolicyRole.Arn
+      ResourceType: AMI_IMAGE
+      Status: ENABLED
+      # Select AMIs by the SourceStack tag applied during distribution
+      ResourceSelection:
+        TagMap:
+          SourceStack: !Ref 'AWS::StackName'
+      PolicyDetails:
+        - Action:
+            Type: DEPRECATE
+          Filter:
+            Type: AGE
+            Unit: WEEKS
+            # Deprecate AMIs older than this many weeks
+            Value: !Ref LifecycleDeprecateAfterWeeks
+            # Always keep at least 1 AMI visible even if older than threshold
+            RetainAtLeast: 1
+
+
+Outputs:
+  #############################################################################
+  # Built AMI ID
+  #############################################################################
+
+  DLAMIforPCSAmiId:
+    Description: AMI ID of the built DLAMI for PCS (Ubuntu 24.04 x86_64)
+    Value: !GetAtt DLAMIforPCS.ImageId
+
+  #############################################################################
+  # Pipeline ARNs
+  #############################################################################
+
+  PipelineAl2023X8664Arn:
+    Description: ARN of the Amazon Linux 2023 x86_64 Image Pipeline
+    Value: !Ref ImagePipelineAl2023X8664
+
+  PipelineAl2023Arm64Arn:
+    Description: ARN of the Amazon Linux 2023 arm64 Image Pipeline
+    Value: !Ref ImagePipelineAl2023Arm64
+
+  PipelineUbuntu2404X8664Arn:
+    Description: ARN of the Ubuntu 24.04 x86_64 Image Pipeline
+    Value: !Ref ImagePipelineUbuntu2404X8664
+
+  PipelineUbuntu2404Arm64Arn:
+    Description: ARN of the Ubuntu 24.04 arm64 Image Pipeline
+    Value: !Ref ImagePipelineUbuntu2404Arm64
+
+  #############################################################################
+  # SSM Parameter Paths (only shown when SSM publishing is enabled)
+  #############################################################################
+
+  SsmParameterAl2023X8664:
+    Condition: EnableSsmPublishing
+    Description: SSM Parameter path for Amazon Linux 2023 x86_64 AMI ID
+    Value: !Sub '${SsmParameterPrefix}/al2023/x86_64/latest'
+
+  SsmParameterAl2023Arm64:
+    Condition: EnableSsmPublishing
+    Description: SSM Parameter path for Amazon Linux 2023 arm64 AMI ID
+    Value: !Sub '${SsmParameterPrefix}/al2023/arm64/latest'
+
+  SsmParameterUbuntu2404X8664:
+    Condition: EnableSsmPublishing
+    Description: SSM Parameter path for Ubuntu 24.04 x86_64 AMI ID
+    Value: !Sub '${SsmParameterPrefix}/ubuntu2404/x86_64/latest'
+
+  SsmParameterUbuntu2404Arm64:
+    Condition: EnableSsmPublishing
+    Description: SSM Parameter path for Ubuntu 24.04 arm64 AMI ID
+    Value: !Sub '${SsmParameterPrefix}/ubuntu2404/arm64/latest'
+
+  #############################################################################
+  # IAM Resources
+  #############################################################################
+
+  ImageBuilderRoleArn:
+    Description: ARN of the IAM role for Image Builder
+    Value: !GetAtt ImageBuilderRole.Arn
+
+  ImageBuilderInstanceProfileArn:
+    Description: ARN of the Instance Profile for Image Builder
+    Value: !GetAtt ImageBuilderInstanceProfile.Arn
+
+  #############################################################################
+  # Component ARNs
+  #############################################################################
+
+  PcsAgentInstallerComponentArn:
+    Description: ARN of the PCS Agent Installer component
+    Value: !Ref PcsAgentInstallerComponent
+
+  Slurm2411InstallerComponentArn:
+    Description: ARN of the Slurm 24.11 Installer component
+    Value: !Ref Slurm2411InstallerComponent
+
+  Slurm2505InstallerComponentArn:
+    Description: ARN of the Slurm 25.05 Installer component
+    Value: !Ref Slurm2505InstallerComponent
+
+  SlurmPathConfigComponentArn:
+    Description: ARN of the Slurm PATH Configuration component
+    Value: !Ref SlurmPathConfigComponent
+
+  EfsUtilsInstallerComponentArn:
+    Description: ARN of the EFS Utils Installer component
+    Value: !Ref EfsUtilsInstallerComponent
+
+  CloudWatchAgentInstallerComponentArn:
+    Description: ARN of the CloudWatch Agent Installer component
+    Value: !Ref CloudWatchAgentInstallerComponent
+
+  SsmAgentInstallerComponentArn:
+    Description: ARN of the SSM Agent Installer component
+    Value: !Ref SsmAgentInstallerComponent
+
+  #############################################################################
+  # Lifecycle Policy (only shown when lifecycle policy is enabled)
+  #############################################################################
+
+  LifecyclePolicyArn:
+    Condition: EnableLifecycle
+    Description: ARN of the AMI lifecycle policy
+    Value: !GetAtt AmiLifecyclePolicy.Arn
