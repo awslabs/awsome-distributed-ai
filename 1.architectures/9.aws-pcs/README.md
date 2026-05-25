@@ -41,14 +41,14 @@ Deploy the complete PCS ML cluster with a single nested CloudFormation stack:
 - ✅ Login node group (e.g., m6i.4xlarge)
 - ✅ CPU compute node group (e.g., c6i.4xlarge)
 - ⚙️ Additional on-demand GPU compute node group (optional, e.g., g5.12xlarge)
-- ⚙️ Additional capacity block P5 compute node group (optional, e.g., p5.48xlarge)
+- ⚙️ Additional P-series compute node group with On-Demand Capacity Reservation (ODCR) or Capacity Blocks for ML (optional, e.g., p5.48xlarge)
 
 **Key Parameters:**
 - `PrimarySubnetAZ`: Availability Zone for deployment (required)
 - `BuildAMI`: Build custom DLAMI (`true`/`false`, default: `true`)
 - `DeployOnDemandCNG`: Deploy additional on-demand GPU queue (`true`/`false`, default: `false`)
-- `DeployCapacityBlockCNG`: Deploy capacity block P5 queue (`true`/`false`, default: `false`)
-- `CapacityReservationId`: Capacity Reservation ID (required if deploying capacity block)
+- `DeployPseriesCNG`: Deploy P-series queue with ODCR or Capacity Blocks for ML (`true`/`false`, default: `false`)
+- `CapacityReservationId`: Capacity Reservation ID (required if deploying in Capacity Blocks for ML)
 
 **Example deployment with GPU queue:**
 ```bash
@@ -69,11 +69,11 @@ Deploy components separately for more control:
 
 | Component | Description | Deploy | When to Use |
 |-----------|-------------|--------|-------------|
-| **Prerequisites** | VPC, subnets, security groups, FSx filesystems | [<kbd>Deploy</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/ml-cluster-prerequisites.yaml&stackName=pcs-prerequisites) | Use existing VPC or customize networking |
-| **DLAMI for PCS** | Custom AMI with PCS agent, Slurm 24.11/25.05, Enroot, Pyxis | [<kbd>Deploy</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/dlami-for-pcs.yaml&stackName=pcs-dlami) | Build custom AMI with specific configurations |
-| **PCS Cluster** | Main cluster with login and compute nodes | [<kbd>Deploy</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster.yaml&stackName=pcs-cluster) | Deploy cluster to existing VPC/FSx |
-| **Add CNG (Single NIC)** | Additional compute nodes with single network interface | [<kbd>Deploy</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng.yaml&stackName=pcs-add-cng) | Add CPU/GPU queues (G5, P4d, Trn1, etc.) |
-| **Add CNG (Multi NIC)** | P5/P6 nodes with 16/32 network interfaces (On-Demand or Capacity Block) | [<kbd>Deploy</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p5.yaml&stackName=pcs-add-cng-p5) | Add P5, P6-B200 instances |
+| **Prerequisites** | VPC, subnets, security groups, FSx filesystems | [<kbd>Deploy 🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/ml-cluster-prerequisites.yaml&stackName=pcs-prerequisites) | Use existing VPC or customize networking |
+| **DLAMI for PCS** | Custom AMI with PCS agent, Slurm 24.11/25.05, Enroot, Pyxis | [<kbd>Deploy 🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/dlami-for-pcs.yaml&stackName=pcs-dlami) | Build custom AMI with specific configurations |
+| **PCS Cluster** | Main cluster with login and compute nodes | [<kbd>Deploy 🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster.yaml&stackName=pcs-cluster) | Deploy cluster to existing VPC/FSx |
+| **Add CNG (Single NIC)** | Additional compute nodes with single network interface | [<kbd>Deploy 🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng.yaml&stackName=pcs-add-cng) | Add CPU/GPU queues (G5, P4d, Trn1, etc.) |
+| **Add CNG (Multi NIC)** | P5/P6 nodes with 16/32 network interfaces (On-Demand or Capacity Blocks for ML) | [<kbd>Deploy 🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p5.yaml&stackName=pcs-add-cng-p5) | Add P5, P6-B200 instances |
 
 ### Option 3: Manual Step-by-Step
 
@@ -207,10 +207,10 @@ aws cloudformation create-stack \
   --capabilities CAPABILITY_IAM
 ```
 
-### Example 4: P5 Cluster with Capacity Block (Multi NIC, Static)
+### Example 4: P5 Cluster with Capacity Blocks for ML (Multi NIC, Static)
 
 ```bash
-# First, purchase a capacity block and get the reservation ID
+# First, purchase a capacity blocks for ml and get the reservation ID
 CAPACITY_RESERVATION_ID="cr-0a1b2c3d4e5f6g7h8"
 
 aws cloudformation create-stack \
