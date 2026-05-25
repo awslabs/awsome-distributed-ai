@@ -125,7 +125,7 @@ High-performance instances with 16 or 32 EFA network interfaces. Required for:
 **P5 Series (H100/H200):**
 - `p5.48xlarge`: 8x NVIDIA H100 GPUs (32 EFA interfaces, 3.2 Tbps aggregate network bandwidth)
 - `p5e.48xlarge`: 8x NVIDIA H200 GPUs (32 EFA interfaces, 3.2 Tbps aggregate network bandwidth)
-- `p5en.48xlarge`: 8x NVIDIA H200 GPUs with NVSwitch (16 EFA interfaces, 1.6 Tbps aggregate network bandwidth)
+- `p5en.48xlarge`: 8x NVIDIA H200 GPUs with NVSwitch (16 EFA interfaces, 3.2 Tbps aggregate network bandwidth)
 
 **P6 Series (Blackwell B200):**
 - `p6-b200.48xlarge`: 8x NVIDIA B200 GPUs (32 EFA interfaces)
@@ -178,7 +178,7 @@ aws cloudformation create-stack \
   --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-1a \
-    ParameterKey=ComputeNodeInstanceType,ParameterValue=c7i.48xlarge \
+    ParameterKey=ComputeNodeInstanceType,ParameterValue=c6i.4xlarge \
   --capabilities CAPABILITY_IAM
 ```
 
@@ -198,7 +198,7 @@ aws cloudformation create-stack \
   --capabilities CAPABILITY_IAM
 ```
 
-### Example 3: P5 On-Demand Cluster (Multi NIC)
+### Example 3: P5 On-Demand Capacity Reservation (ODCR) Cluster (Multi NIC, Static)
 
 ```bash
 aws cloudformation create-stack \
@@ -206,16 +206,17 @@ aws cloudformation create-stack \
   --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-1a \
-    ParameterKey=DeployMultiNicCNG,ParameterValue=true \
-    ParameterKey=MultiNicCngName,ParameterValue=p5-od \
-    ParameterKey=MultiNicQueueName,ParameterValue=p5 \
-    ParameterKey=MultiNicInstanceType,ParameterValue=p5.48xlarge \
+    ParameterKey=DeployPseriesCNG,ParameterValue=true \
+    ParameterKey=PseriesCngName,ParameterValue=p5-odcr \
+    ParameterKey=PseriesQueueName,ParameterValue=p5 \
+    ParameterKey=PseriesInstanceType,ParameterValue=p5.48xlarge \
     ParameterKey=NetworkInterfaceCount,ParameterValue=32 \
-    ParameterKey=MultiNicMaxCount,ParameterValue=16 \
+    ParameterKey=PseriesMinCount,ParameterValue=4 \
+    ParameterKey=PseriesMaxCount,ParameterValue=4 \
   --capabilities CAPABILITY_IAM
 ```
 
-### Example 4: P5 Cluster with Capacity Block (Multi NIC)
+### Example 4: P5 Cluster with Capacity Block (Multi NIC, Static)
 
 ```bash
 # First, purchase a capacity block and get the reservation ID
@@ -226,49 +227,14 @@ aws cloudformation create-stack \
   --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-1a \
-    ParameterKey=DeployMultiNicCNG,ParameterValue=true \
-    ParameterKey=MultiNicCngName,ParameterValue=p5-cb \
-    ParameterKey=MultiNicQueueName,ParameterValue=p5 \
-    ParameterKey=MultiNicInstanceType,ParameterValue=p5.48xlarge \
+    ParameterKey=DeployPseriesCNG,ParameterValue=true \
+    ParameterKey=PseriesCngName,ParameterValue=p5-cb \
+    ParameterKey=PseriesQueueName,ParameterValue=p5 \
+    ParameterKey=PseriesInstanceType,ParameterValue=p5.48xlarge \
     ParameterKey=NetworkInterfaceCount,ParameterValue=32 \
-    ParameterKey=MultiNicMaxCount,ParameterValue=32 \
+    ParameterKey=PseriesMinCount,ParameterValue=4 \
+    ParameterKey=PseriesMaxCount,ParameterValue=4 \
     ParameterKey=CapacityReservationId,ParameterValue=${CAPACITY_RESERVATION_ID} \
-  --capabilities CAPABILITY_IAM
-```
-
-### Example 5: P6-B200 Cluster (Multi NIC)
-
-```bash
-aws cloudformation create-stack \
-  --stack-name p6-b200-cluster \
-  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
-  --parameters \
-    ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-1a \
-    ParameterKey=DeployMultiNicCNG,ParameterValue=true \
-    ParameterKey=MultiNicCngName,ParameterValue=p6-b200 \
-    ParameterKey=MultiNicQueueName,ParameterValue=p6 \
-    ParameterKey=MultiNicInstanceType,ParameterValue=p6-b200.48xlarge \
-    ParameterKey=NetworkInterfaceCount,ParameterValue=32 \
-    ParameterKey=MultiNicMaxCount,ParameterValue=16 \
-  --capabilities CAPABILITY_IAM
-```
-
-### Example 6: Multi-Queue Cluster (CPU + G5 + P5)
-
-```bash
-aws cloudformation create-stack \
-  --stack-name multi-queue-cluster \
-  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
-  --parameters \
-    ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-1a \
-    ParameterKey=ComputeNodeInstanceType,ParameterValue=c7i.48xlarge \
-    ParameterKey=DeployOnDemandCNG,ParameterValue=true \
-    ParameterKey=OnDemandCngName,ParameterValue=gpu-g5 \
-    ParameterKey=OnDemandInstanceType,ParameterValue=g5.48xlarge \
-    ParameterKey=DeployMultiNicCNG,ParameterValue=true \
-    ParameterKey=MultiNicCngName,ParameterValue=gpu-p5 \
-    ParameterKey=MultiNicInstanceType,ParameterValue=p5.48xlarge \
-    ParameterKey=NetworkInterfaceCount,ParameterValue=32 \
   --capabilities CAPABILITY_IAM
 ```
 
@@ -276,22 +242,57 @@ aws cloudformation create-stack \
 
 ## Accessing the Cluster
 
-After deployment completes, access your cluster via:
+After deployment completes, connect to the login node using AWS Systems Manager Session Manager.
 
-### 1. AWS Systems Manager Session Manager (Recommended)
+### Connect via Session Manager
 
-Click the `Ec2ConsoleUrl` output link to access login nodes directly in the browser.
+1. **Get the EC2 Console URL** from the CloudFormation stack outputs:
+   ```bash
+   aws cloudformation describe-stacks \
+     --stack-name pcs-ml-cluster \
+     --query 'Stacks[0].Outputs[?OutputKey==`Ec2ConsoleUrl`].OutputValue' \
+     --output text
+   ```
 
-### 2. SSH (if configured)
+2. **Open the URL in your browser** - This will take you to the EC2 console filtered to show only the login node instances.
+
+3. **Connect to the login node**:
+   - Select the login node instance
+   - Click **Connect** button
+   - Choose **Session Manager** tab
+   - Click **Connect**
+
+4. **Switch to the default user** (ubuntu for Ubuntu AMI, ec2-user for Amazon Linux):
+   ```bash
+   sudo su - ubuntu
+   ```
+
+5. **Verify cluster access**:
+   ```bash
+   sinfo                    # View cluster partitions and nodes
+   squeue                   # View job queue
+   scontrol show nodes      # Show detailed node information
+   ```
+
+### Alternative: AWS CLI
+
+Connect directly using the AWS CLI:
+
+**Note**: This method requires IAM permissions for `ec2:DescribeInstances` and `ssm:StartSession`. Alternatively, use AWS CloudShell which has these permissions pre-configured.
 
 ```bash
-# Get the login node public IP from EC2 console
-ssh -i your-key.pem ubuntu@<login-node-public-ip>
+# Get the instance ID of the login node
+INSTANCE_ID=$(aws ec2 describe-instances \
+  --filters "Name=tag:aws:pcs:compute-node-group-name,Values=login" \
+            "Name=instance-state-name,Values=running" \
+  --query 'Reservations[0].Instances[0].InstanceId' \
+  --output text)
+
+# Start a Session Manager session
+aws ssm start-session --target $INSTANCE_ID
 ```
 
-### 3. PCS Console
-
-Click the `PcsConsoleUrl` output link to view cluster status and metrics.
+For more details, see the [Connect to Cluster](https://catalog.workshops.aws/ml-on-pcs/en-US/03-cluster/02-connect-cluster) section in the workshop.
 
 ---
 
@@ -332,13 +333,17 @@ sbatch --partition=gpu \
 
 ---
 
-## Cost Optimization
+## User Management and Observability
 
-1. **Use dynamic scaling**: Set `MinCount=0` for compute node groups
-2. **Right-size instances**: Choose appropriate instance types for your workload
-3. **FSx for Lustre**: Use compression (`LZ4`) to reduce storage costs
-4. **AMI building**: Set `BuildSchedule=Manual` to avoid unnecessary builds
-5. **Capacity Blocks**: Purchase in advance for predictable large-scale training
+### LDAP User Management
+
+For centralized user management across the cluster, see:
+- [LDAP Server Setup Guide](../6.ldap_server/README.md) - Deploy and configure OpenLDAP for cluster-wide user authentication
+
+### Observability Stack
+
+For monitoring and observability, see:
+- [Prometheus & Grafana Setup](../../../4.validation_and_observability/4.prometheus-grafana/README.md) - Deploy monitoring stack with DCGM metrics
 
 ---
 

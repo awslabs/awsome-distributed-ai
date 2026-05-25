@@ -58,14 +58,14 @@ Metadata:
       - Label:
           default: Additional Multi-NIC Compute Node Group for P5/P6 (Optional)
         Parameters:
-          - DeployMultiNicCNG
+          - DeployPseriesCNG
           - CapacityReservationId
-          - MultiNicCngName
-          - MultiNicQueueName
-          - MultiNicInstanceType
+          - PseriesCngName
+          - PseriesQueueName
+          - PseriesInstanceType
           - NetworkInterfaceCount
-          - MultiNicMaxCount
-          - MultiNicMinCount
+          - PseriesMaxCount
+          - PseriesMinCount
 
 Parameters:
   # S3 Configuration
@@ -252,7 +252,7 @@ Parameters:
     MinValue: 0
 
   # Additional Multi-NIC Compute Node Group for P5/P6 (Optional)
-  DeployMultiNicCNG:
+  DeployPseriesCNG:
     Type: String
     Description: Deploy an additional multi-NIC compute node group for P5/P6 instances (On-Demand or Capacity Block)
     Default: 'false'
@@ -265,17 +265,17 @@ Parameters:
     Description: (Optional) Capacity Reservation ID for Capacity Blocks. Leave empty for On-Demand instances.
     Default: ""
 
-  MultiNicCngName:
+  PseriesCngName:
     Type: String
     Description: Name for multi-NIC compute node group
     Default: "p5"
 
-  MultiNicQueueName:
+  PseriesQueueName:
     Type: String
     Description: Queue name for multi-NIC compute node group
     Default: "p5"
 
-  MultiNicInstanceType:
+  PseriesInstanceType:
     Type: String
     Description: Instance type for multi-NIC compute node group (P5/P6 series with 16 or 32 network interfaces)
     Default: "p5.48xlarge"
@@ -288,13 +288,13 @@ Parameters:
       - "16"
       - "32"
 
-  MultiNicMaxCount:
+  PseriesMaxCount:
     Type: Number
     Description: Maximum number of instances for multi-NIC compute node group
     Default: 4
     MinValue: 0
 
-  MultiNicMinCount:
+  PseriesMinCount:
     Type: Number
     Description: Minimum number of instances for multi-NIC compute node group (must be 0 for dynamic scaling)
     Default: 0
@@ -304,7 +304,7 @@ Conditions:
   BuildAMIEnabled: !Equals [!Ref BuildAMI, 'true']
   UseLocalTemplates: !Equals [!Ref S3BucketName, '']
   DeployOnDemandCNGEnabled: !Equals [!Ref DeployOnDemandCNG, 'true']
-  DeployMultiNicCNGEnabled: !Equals [!Ref DeployMultiNicCNG, 'true']
+  DeployPseriesCNGEnabled: !Equals [!Ref DeployPseriesCNG, 'true']
 
 Resources:
   #############################################################################
@@ -424,9 +424,9 @@ Resources:
   #############################################################################
   # 5. Additional Multi-NIC Compute Node Group Stack for P5/P6 (Optional)
   #############################################################################
-  MultiNicCNGStack:
+  PseriesCNGStack:
     Type: AWS::CloudFormation::Stack
-    Condition: DeployMultiNicCNGEnabled
+    Condition: DeployPseriesCNGEnabled
     DependsOn:
       - ClusterStack
     Properties:
@@ -437,12 +437,12 @@ Resources:
       Parameters:
         CapacityReservationId: !Ref CapacityReservationId
         ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
-        CngName: !Ref MultiNicCngName
-        QueueName: !Ref MultiNicQueueName
-        InstanceType: !Ref MultiNicInstanceType
+        CngName: !Ref PseriesCngName
+        QueueName: !Ref PseriesQueueName
+        InstanceType: !Ref PseriesInstanceType
         NetworkInterfaceCount: !Ref NetworkInterfaceCount
-        MaxCount: !Ref MultiNicMaxCount
-        MinCount: !Ref MultiNicMinCount
+        MaxCount: !Ref PseriesMaxCount
+        MinCount: !Ref PseriesMinCount
         SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
         AmiId: !If
           - BuildAMIEnabled
@@ -455,7 +455,7 @@ Resources:
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
       Tags:
         - Key: Name
-          Value: !Sub '${AWS::StackName}-MultiNicCNG'
+          Value: !Sub '${AWS::StackName}-PseriesCNG'
 
 Outputs:
   #############################################################################
@@ -544,10 +544,10 @@ Outputs:
     Description: On-demand compute node group deployed (single NIC)
     Value: !Sub '${OnDemandCngName} (${OnDemandInstanceType})'
 
-  MultiNicCNGDeployed:
-    Condition: DeployMultiNicCNGEnabled
+  PseriesCNGDeployed:
+    Condition: DeployPseriesCNGEnabled
     Description: Multi-NIC compute node group deployed (P5/P6 series)
-    Value: !Sub '${MultiNicCngName} (${MultiNicInstanceType}, ${NetworkInterfaceCount} NICs)'
+    Value: !Sub '${PseriesCngName} (${PseriesInstanceType}, ${NetworkInterfaceCount} NICs)'
 
   #############################################################################
   # Additional Information for Manual Add-on Stacks
