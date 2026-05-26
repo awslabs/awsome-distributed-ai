@@ -314,6 +314,7 @@ For centralized user management across the cluster, see:
 
 For monitoring and observability, see:
 - [Prometheus & Grafana Setup](../../4.validation_and_observability/4.prometheus-grafana/README.md) - Deploy monitoring stack with DCGM metrics
+- [AWS ParallelCluster Monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) - Comprehensive monitoring solution with Prometheus, Grafana, and custom dashboards for HPC clusters
 
 ---
 
