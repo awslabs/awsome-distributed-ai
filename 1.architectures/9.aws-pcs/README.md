@@ -190,13 +190,13 @@ aws cloudformation create-stack \
 
 ```bash
 aws cloudformation create-stack \
-  --stack-name p5-cluster \
+  --stack-name p5-odcr-cluster \
   --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-1a \
     ParameterKey=DeployPseriesCNG,ParameterValue=true \
     ParameterKey=PseriesCngName,ParameterValue=p5-odcr \
-    ParameterKey=PseriesQueueName,ParameterValue=p5 \
+    ParameterKey=PseriesQueueName,ParameterValue=p5-odcr \
     ParameterKey=PseriesInstanceType,ParameterValue=p5.48xlarge \
     ParameterKey=NetworkInterfaceCount,ParameterValue=32 \
     ParameterKey=PseriesMinCount,ParameterValue=4 \
@@ -211,13 +211,13 @@ aws cloudformation create-stack \
 CAPACITY_RESERVATION_ID="cr-0a1b2c3d4e5f6g7h8"
 
 aws cloudformation create-stack \
-  --stack-name p5-cluster \
+  --stack-name p5-cb-cluster \
   --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-1a \
     ParameterKey=DeployPseriesCNG,ParameterValue=true \
     ParameterKey=PseriesCngName,ParameterValue=p5-cb \
-    ParameterKey=PseriesQueueName,ParameterValue=p5 \
+    ParameterKey=PseriesQueueName,ParameterValue=p5-cb \
     ParameterKey=PseriesInstanceType,ParameterValue=p5.48xlarge \
     ParameterKey=NetworkInterfaceCount,ParameterValue=32 \
     ParameterKey=PseriesMinCount,ParameterValue=4 \
