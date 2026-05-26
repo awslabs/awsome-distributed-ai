@@ -6,6 +6,10 @@ Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
+          default: Base AMI Configuration
+        Parameters:
+          - BaseAmiId
+      - Label:
           default: Image Configuration
         Parameters:
           - SemanticVersion
@@ -24,6 +28,8 @@ Metadata:
           - EnableLifecyclePolicy
           - LifecycleDeprecateAfterWeeks
     ParameterLabels:
+      BaseAmiId:
+        default: Base AMI ID (Optional)
       SemanticVersion:
         default: Recipe Version
       BuildSchedule:
@@ -38,6 +44,11 @@ Metadata:
         default: Deprecate AMIs After (Weeks)
 
 Parameters:
+  BaseAmiId:
+    Type: String
+    Description: (Optional) Base AMI ID to use. Leave empty to auto-resolve from SSM parameter store (/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id)
+    Default: ''
+
   SemanticVersion:
     Type: String
     Description: Semantic version for ImageBuilder recipes (format X.Y.Z)
@@ -92,6 +103,7 @@ Conditions:
     - !Condition IsMonthlySchedule
   EnableSsmPublishing: !Equals [!Ref PublishToSsm, 'true']
   EnableLifecycle: !Equals [!Ref EnableLifecyclePolicy, 'true']
+  UseCustomBaseAmi: !Not [!Equals [!Ref BaseAmiId, '']]
 
 Mappings:
   # PCS-ready DLAMI AMI SSM parameter paths
@@ -312,9 +324,12 @@ Resources:
       Name: !Sub 'dlami-for-pcs-ubuntu2404-x86-64-${AWS::StackName}'
       Description: PCS-ready DLAMI with Enroot/Pyxis - Ubuntu 24.04 x86_64
       Version: !Ref SemanticVersion
-      ParentImage: !Sub
-        - '{{resolve:ssm:${SSMPath}}}'
-        - SSMPath: !FindInMap [DLAMIConfigs, ubuntu2404, x8664]
+      ParentImage: !If
+        - UseCustomBaseAmi
+        - !Ref BaseAmiId
+        - !Sub
+          - '{{resolve:ssm:${SSMPath}}}'
+          - SSMPath: !FindInMap [DLAMIConfigs, ubuntu2404, x8664]
       BlockDeviceMappings:
         - DeviceName: !FindInMap [DLAMIConfigs, ubuntu2404, deviceName]
           Ebs:

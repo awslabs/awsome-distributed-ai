@@ -54,6 +54,7 @@ Metadata:
           default: AMI Building Configuration
         Parameters:
           - BuildAMI
+          - BaseAmiId
           - SemanticVersion
           - BuildSchedule
       - Label:
@@ -147,6 +148,11 @@ Parameters:
     AllowedValues:
       - 'true'
       - 'false'
+
+  BaseAmiId:
+    Type: String
+    Description: (Optional) Base AMI ID to use for custom DLAMI build. Leave empty to auto-resolve from SSM parameter store.
+    Default: ''
 
   SemanticVersion:
     Type: String
@@ -342,6 +348,7 @@ Resources:
         - pcs-ready-dlami-with-enroot-pyxis.yaml
         - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}pcs-ready-dlami-with-enroot-pyxis.yaml'
       Parameters:
+        BaseAmiId: !Ref BaseAmiId
         SemanticVersion: !Ref SemanticVersion
         BuildSchedule: !Ref BuildSchedule
         PublishToSsm: 'false'
