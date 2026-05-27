@@ -40,13 +40,14 @@ Deploy the complete PCS ML cluster with a single nested CloudFormation stack:
 - ✅ FSx for OpenZFS (home directories)
 - ✅ Custom DLAMI with PCS agent and Slurm (optional, enabled by default)
 - ✅ AWS PCS cluster with Slurm scheduler
-- ✅ Login node group (m6i.4xlarge)
-- ✅ CPU compute node group - cpu1 queue (c6i.4xlarge, enabled by default)
+- ✅ Login node group (m6i.4xlarge) with monitoring stack (Prometheus, Grafana - enabled by default)
+- ✅ CPU compute node group - cpu1 queue (c6i.4xlarge, enabled by default) with monitoring agents (DCGM exporter for GPU nodes)
 - ⚙️ Additional P-series compute node group with ODCR or Capacity Blocks for ML (optional, e.g., p5.48xlarge)
 
 **Key Parameters:**
 - `PrimarySubnetAZ`: Availability Zone for deployment (required)
 - `BuildAMI`: Build custom DLAMI (`true`/`false`, default: `true`)
+- `DeployMonitoring`: Deploy monitoring stack on Login node (`true`/`false`, default: `true`)
 - `DeployOnDemandCNG`: Deploy cpu1 compute queue (`true`/`false`, default: `true`)
 - `OnDemandInstanceType`: Instance type for cpu1 queue (default: `c6i.4xlarge`)
 - `DeployPseriesCNG`: Deploy P-series queue with ODCR or Capacity Blocks for ML (`true`/`false`, default: `false`)
@@ -90,10 +91,11 @@ For detailed step-by-step deployment instructions, see the [AI/ML for AWS Parall
 
 | Template | Purpose | Nested Stacks |
 |----------|---------|---------------|
-| [`pcs-ml-cluster-deploy-all.yaml`](./assets/pcs-ml-cluster-deploy-all.yaml) | All-in-one nested stack deployment | Prerequisites + DLAMI + Cluster + Login/Compute CNGs |
+| [`pcs-ml-cluster-deploy-all.yaml`](./assets/pcs-ml-cluster-deploy-all.yaml) | All-in-one nested stack deployment | Prerequisites + DLAMI + Cluster + Monitoring + Login/Compute CNGs |
 | [`ml-cluster-prerequisites.yaml`](./assets/ml-cluster-prerequisites.yaml) | VPC, subnets, FSx for Lustre/OpenZFS | Standalone |
 | [`pcs-ready-dlami-with-enroot-pyxis.yaml`](./assets/pcs-ready-dlami-with-enroot-pyxis.yaml) | EC2 Image Builder for PCS AMI with Enroot/Pyxis | Standalone |
 | [`cluster.yaml`](./assets/cluster.yaml) | PCS cluster core (scheduler only, no nodes) | Standalone |
+| [`monitoring-iam-policy.yaml`](./assets/monitoring-iam-policy.yaml) | IAM policy for monitoring stack (CloudWatch, SSM, Pricing API) | Standalone |
 
 ### Add-on Templates
 
@@ -300,6 +302,67 @@ aws ssm start-session --target $INSTANCE_ID
 ```
 
 For more details, see the [Connect to Cluster](https://catalog.workshops.aws/ml-on-pcs/en-US/03-cluster/02-connect-cluster) section in the workshop.
+
+---
+
+## Monitoring Stack Access
+
+If you deployed the cluster with `DeployMonitoring=true` (default), the monitoring stack is deployed across the cluster:
+- **Login node**: Prometheus, Grafana, and custom metrics exporters
+- **Compute nodes (GPU)**: DCGM exporter for GPU metrics (automatically detected)
+- **Compute nodes (CPU)**: Node exporter for system metrics
+
+### Access Grafana via Session Manager Port Forwarding
+
+1. **Get the Login node instance ID**:
+   ```bash
+   INSTANCE_ID=$(aws ec2 describe-instances \
+     --filters "Name=tag:aws:pcs:compute-node-group-name,Values=login" \
+               "Name=instance-state-name,Values=running" \
+     --query 'Reservations[0].Instances[0].InstanceId' \
+     --output text)
+   ```
+
+2. **Start port forwarding** (local 8443 → remote 443):
+   ```bash
+   aws ssm start-session \
+     --target ${INSTANCE_ID} \
+     --document-name AWS-StartPortForwardingSession \
+     --parameters '{"portNumber":["443"],"localPortNumber":["8443"]}'
+   ```
+
+3. **Open Grafana in your browser**:
+   ```bash
+   # Open https://localhost:8443/grafana/
+   open https://localhost:8443/grafana/
+   ```
+
+4. **Get the Grafana admin password**:
+   ```bash
+   # Replace CLUSTER_NAME with your stack name
+   CLUSTER_NAME="pcs-ml-cluster"
+   
+   aws ssm get-parameter \
+     --name /pcs/${CLUSTER_NAME}/grafana/admin-password \
+     --with-decryption \
+     --query 'Parameter.Value' \
+     --output text
+   ```
+
+5. **Login to Grafana**:
+   - Username: `admin`
+   - Password: (from Step 4)
+
+### Dashboards
+
+The monitoring stack includes pre-configured dashboards for:
+- Cluster overview (compute usage, queue status)
+- GPU metrics (DCGM exporter for NVIDIA GPUs)
+- Slurm job metrics
+- Cost analysis (EC2, FSx, EBS pricing)
+
+For more details about the monitoring stack, see:
+- [AWS ParallelCluster Monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) - Upstream repository with detailed documentation
 
 ---
 

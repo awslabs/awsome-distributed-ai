@@ -168,12 +168,15 @@ Outputs:
     Value: !GetAtt [ PCSCluster, Id ]
   InstanceProfileArn:
     Value: !GetAtt [ PCSInstanceProfile, Outputs.InstanceProfileArn ]
+  RoleName:
+    Description: IAM Role name for cluster instances
+    Value: !GetAtt [ PCSInstanceProfile, Outputs.RoleName ]
   PcsConsoleUrl:
     Description: URL to access the cluster in the PCS console
     Value: !Sub
       - https://${ConsoleDomain}/pcs/home?region=${AWS::Region}#/clusters/${ClusterId}
       - { ConsoleDomain: !If [ GovCloud, 'console.amazonaws-us-gov.com', !If [ China, 'console.amazonaws.cn', !Sub '${AWS::Region}.console.aws.amazon.com']],
-          ClusterId: !GetAtt [ PCSCluster, Id ] 
+          ClusterId: !GetAtt [ PCSCluster, Id ]
         }
     Export:
       Name: !Sub ${AWS::StackName}-PcsConsoleUrl

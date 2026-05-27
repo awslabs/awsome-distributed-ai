@@ -27,6 +27,11 @@ Metadata:
         Parameters:
           - LoginNodeInstanceType
       - Label:
+          default: Monitoring Configuration
+        Parameters:
+          - DeployMonitoring
+          - MonitoringVersion
+      - Label:
           default: On-Demand Compute Node Group
         Parameters:
           - DeployOnDemandCNG
@@ -205,6 +210,20 @@ Parameters:
     Description: Instance Type for Login Node Group
     Default: "m6i.4xlarge"
 
+  # Monitoring Configuration
+  DeployMonitoring:
+    Type: String
+    Description: Deploy monitoring stack (Prometheus, Grafana, DCGM) on Login Node
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  MonitoringVersion:
+    Type: String
+    Description: Monitoring stack version (git tag or 'latest')
+    Default: 'latest'
+
   # HPC Recipes Configuration
   HpcRecipesS3Bucket:
     Type: String
@@ -310,6 +329,7 @@ Conditions:
   UseLocalTemplates: !Equals [!Ref S3BucketName, '']
   DeployOnDemandCNGEnabled: !Equals [!Ref DeployOnDemandCNG, 'true']
   DeployPseriesCNGEnabled: !Equals [!Ref DeployPseriesCNG, 'true']
+  DeployMonitoringEnabled: !Equals [!Ref DeployMonitoring, 'true']
 
 Resources:
   #############################################################################
@@ -388,7 +408,27 @@ Resources:
           Value: !Sub '${AWS::StackName}-Cluster'
 
   #############################################################################
-  # 4. Login Node Group Stack
+  # 4. Monitoring IAM Policy Stack (Optional)
+  #############################################################################
+  MonitoringIAMPolicyStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: DeployMonitoringEnabled
+    DependsOn:
+      - ClusterStack
+    Properties:
+      TemplateURL: !If
+        - UseLocalTemplates
+        - monitoring-iam-policy.yaml
+        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}monitoring-iam-policy.yaml'
+      Parameters:
+        ClusterName: !Sub '${AWS::StackName}'
+        RoleName: !GetAtt ClusterStack.Outputs.RoleName
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-MonitoringPolicy'
+
+  #############################################################################
+  # 5. Login Node Group Stack
   #############################################################################
   LoginNodeGroupStack:
     Type: AWS::CloudFormation::Stack
@@ -416,12 +456,14 @@ Resources:
         FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
         FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        DeployMonitoring: !Ref DeployMonitoring
+        MonitoringVersion: !Ref MonitoringVersion
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-LoginNodeGroup'
 
   #############################################################################
-  # 5. On-Demand Compute Node Group Stack
+  # 6. On-Demand Compute Node Group Stack
   #############################################################################
   OnDemandCNGStack:
     Type: AWS::CloudFormation::Stack
@@ -450,12 +492,14 @@ Resources:
         FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
         FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        DeployMonitoring: !Ref DeployMonitoring
+        MonitoringVersion: !Ref MonitoringVersion
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-OnDemandCNG'
 
   #############################################################################
-  # 6. Additional Multi-NIC Compute Node Group Stack for P5/P6 (Optional)
+  # 7. Additional Multi-NIC Compute Node Group Stack for P5/P6 (Optional)
   #############################################################################
   PseriesCNGStack:
     Type: AWS::CloudFormation::Stack
@@ -486,6 +530,8 @@ Resources:
         FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
         FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        DeployMonitoring: !Ref DeployMonitoring
+        MonitoringVersion: !Ref MonitoringVersion
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-PseriesCNG'

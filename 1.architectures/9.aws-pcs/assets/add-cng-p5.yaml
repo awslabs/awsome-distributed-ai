@@ -31,6 +31,11 @@ Metadata:
           - FSxLustreFilesystemId
           - FSxLustreFilesystemMountName
           - FSxOpenZFSFilesystemId
+      - Label:
+          default: Monitoring configuration
+        Parameters:
+          - DeployMonitoring
+          - MonitoringVersion
 
 Parameters:
   CapacityReservationId:
@@ -101,6 +106,19 @@ Parameters:
   FSxOpenZFSFilesystemId:
     Type: String
     Description: Filesystem ID for FSx for OpenZFS
+
+  DeployMonitoring:
+    Type: String
+    Description: Deploy monitoring stack (Prometheus/Grafana on Login Node, DCGM exporter on Compute Node with GPU)
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  MonitoringVersion:
+    Type: String
+    Description: Monitoring stack version (git tag or 'latest')
+    Default: 'latest'
 
 Conditions:
   Use32Interfaces:
@@ -199,6 +217,14 @@ Resources:
             - rm -rf /tmp/home/
             # If provided, mount FSxL filesystem as /fsx
             - if [ ! -z "${FSxLustreFilesystemId}" ]; then mkdir -p /fsx; mount -t lustre ${FSxLustreFilesystemId}.fsx.${AWS::Region}.amazonaws.com@tcp:/${FSxLustreFilesystemMountName} /fsx; chmod 1777 /fsx; fi
+            # Monitoring stack installation (optional, enabled on Login Node only)
+            - |
+              if [ "${DeployMonitoring}" == "true" ]; then
+                echo "Installing monitoring stack..."
+                curl -fsSL https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-monitoring/main/post-install.sh -o /tmp/post-install.sh
+                bash /tmp/post-install.sh ${MonitoringVersion} 2>&1 | tee /var/log/monitoring-install.log
+                echo "Monitoring installation complete"
+              fi
 
             --==MYBOUNDARY==
         NetworkInterfaces:
