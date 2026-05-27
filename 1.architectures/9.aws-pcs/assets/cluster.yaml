@@ -170,7 +170,9 @@ Outputs:
     Value: !GetAtt [ PCSInstanceProfile, Outputs.InstanceProfileArn ]
   RoleName:
     Description: IAM Role name for cluster instances
-    Value: !GetAtt [ PCSInstanceProfile, Outputs.RoleName ]
+    Value: !Sub
+      - 'AWSPCS-pcs-${StackHash}-${AWS::Region}-role'
+      - StackHash: !Select [0, !Split ['-', !Select [2, !Split ['/', !Ref 'AWS::StackId']]]]
   PcsConsoleUrl:
     Description: URL to access the cluster in the PCS console
     Value: !Sub
