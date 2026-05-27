@@ -1,0 +1,8 @@
+# Downloaded sample media (fetched by download_samples.sh)
+sample.jpg
+sample_meteor.webm
+*.webm
+*.mp4
+
+# JSONL output from auto_label.py
+*.jsonl
