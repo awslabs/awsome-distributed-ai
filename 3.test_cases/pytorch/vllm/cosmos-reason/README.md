@@ -78,9 +78,50 @@ This test case is parameterized via `${MODEL_ID}` in `env_vars.example`. Support
 > NVIDIA validates Cosmos Reason on H100 / GB200 / DGX Spark / Jetson AGX Thor.
 > A10G (sm_86) and L4 (sm_89) are not on NVIDIA's official validated list but work in
 > practice; this test case has been empirically validated on g5.8xlarge (1× A10G 24 GB).
-> See **Test Results** in this directory's git history for benchmark data.
+
+## Validation Status
+
+The configurations below were tested end-to-end on a SageMaker HyperPod EKS cluster
+in `us-west-2`. All three example clients (`image_vqa`, `video_qa`, `auto_label`)
+were exercised against both deployment paths.
+
+| Path | Model | Hardware | image_vqa | video_qa | auto_label |
+|------|-------|----------|-----------|----------|------------|
+| `kubernetes/` | Reason1-7B | g5.8xlarge (A10G, TP=1) | 18.3 s | 28.9 s | 20.3 s |
+| `kubernetes/` | Reason2-8B | g6.12xlarge (4× L4, TP=4) | 8.2 s | 16.9 s | 3.4 s |
+| `hyperpod-eks/` | Reason1-7B | ml.g5.8xlarge (A10G, TP=1) | 21.3 s | unsupported¹ | 18.1 s |
+| `hyperpod-eks/` | Reason2-8B | ml.g6.12xlarge (4× L4, TP=4) | 13.8 s | unsupported¹ | 4.5 s |
+
+¹ The AWS vLLM DLC `vllm:0.17-gpu-py312` (vLLM 0.17.1) does not expose
+`--mm-processor-kwargs` through the Inference Operator. The sample 5.3 MB meteor
+clip tokenizes to ~19K embedding tokens, exceeding the default pre-allocated
+16384-token encoder cache. The `kubernetes/` path uses upstream vLLM v0.21.0 and
+includes the necessary args by default — use it for video workloads.
+
+### Empirical findings
+
+- **Reason2-8B on g6.12xlarge (4× L4, TP=4) is 2–5× faster** than Reason1-7B on a
+  single A10G for image workloads. Speedup is driven by tensor parallelism and the
+  L4's higher fp16/bf16 throughput, not model size.
+- **Video workloads need expanded encoder cache.** Default vLLM config (16384-token
+  cache) cannot handle the sample video; shipped `kubernetes/deployment.yaml` adds
+  `--limit-mm-per-prompt`, `--mm-processor-kwargs '{"max_pixels":20000000,"fps":1.0}'`,
+  and bumps `MAX_MODEL_LEN=24576` to make video work out of the box.
+- **`--reasoning-parser qwen3` is Reason2-only.** Enabling it for Reason1
+  (Qwen2.5-VL backbone) causes `RuntimeError: Engine core initialization failed`.
+  `hyperpod-eks/endpoint.yaml` ships with it commented out by default — uncomment
+  for Reason2.
 
 ## Quick Start (vanilla EKS, vendor image)
+
+> [!IMPORTANT]
+> **Video workloads require expanded encoder cache.**
+> `kubernetes/deployment.yaml` ships with `--limit-mm-per-prompt`,
+> `--mm-processor-kwargs '{"max_pixels":20000000,"fps":1.0}'`, and `MAX_MODEL_LEN=24576`
+> so the sample video works without modification. If you swap in a larger or
+> higher-resolution clip and see `400 exceeds the pre-allocated encoder cache size`,
+> increase `max_pixels`. The `hyperpod-eks/` DLC path does not currently expose
+> these flags through the Inference Operator and is recommended for image workloads only.
 
 ```bash
 # 1. Set environment
@@ -114,10 +155,13 @@ python3 examples/image_vqa.py --image examples/sample.jpg
 ```
 
 > [!NOTE]
-> For Reason2 models, omit `--system-prompt` (or pass `--system-prompt ""`). Reason2
-> separates reasoning into the `reasoning_content` field natively via `--reasoning-parser qwen3`,
-> so the default `<think>/<answer>` system prompt is unnecessary and can cause the model to
-> produce minimal answers instead of a full description.
+> The default `<think>/<answer>` system prompt and `--reasoning-parser qwen3` are
+> mutually exclusive:
+> - **Reason1 (Qwen2.5-VL):** Keep the default system prompt. Do NOT enable the
+>   reasoning parser. `<think>...</think>` appears inline in `content`.
+> - **Reason2 (Qwen3-VL):** Omit the system prompt (`--system-prompt ""`) and
+>   enable `--reasoning-parser qwen3`. Reasoning is split into `reasoning_content`.
+>   Leaving the system prompt on can cause Reason2 to produce minimal answers.
 
 ## Quick Start (HyperPod Inference Operator)
 
@@ -188,6 +232,10 @@ kubectl delete secret hf-token
 | Flash-Attention `headdim not multiple of 32` error (Reason2 / Qwen3-VL only) | vLLM internal fork of FA rejects Qwen3-VL ViT head dims | Do NOT set `VLLM_ATTENTION_BACKEND=FLASH_ATTN`. Let vLLM auto-pick. Issue [#27562](https://github.com/vllm-project/vllm/issues/27562) closed Apr 2026; v0.21.0+ is fixed. |
 | Reason2 returns `<think>` text inline in `content` (not separate `reasoning_content`) | Missing `--reasoning-parser qwen3` | Add `--reasoning-parser qwen3` to vLLM args. Required for Reason2; not applicable to Reason1. |
 | Latency low / TTFT high | `--enforce-eager` skips CUDA graphs | Remove `--enforce-eager` to enable graph compilation. Adds ~2 min to startup but ~30% throughput improvement. |
+| `400 The decoder prompt contains a(n) video item with X embedding tokens, which exceeds the pre-allocated encoder cache size` | Default encoder cache too small for the input video (16384 for Reason1, ~5000 for Reason2-8B) | On the `kubernetes/` path, raise `--mm-processor-kwargs '{"max_pixels":...,"fps":1.0}'` until cache > video tokens. On `hyperpod-eks/`, use a shorter clip (≤5 s @ 480p) or switch to `kubernetes/`. |
+| `RuntimeError: Engine core initialization failed` after model load on `hyperpod-eks/` with Reason1 | `--reasoning-parser qwen3` enabled but Reason1 uses Qwen2.5-VL backbone (parser is Qwen3-only) | Comment out `--reasoning-parser qwen3` and `SM_VLLM_REASONING_PARSER=qwen3` in `hyperpod-eks/endpoint.yaml`. Re-enable only for Reason2. |
+| `kubectl get secret hf-token -o jsonpath='{.data.token}' \| base64 -d` returns `REPLACE_WITH_HF_TOKEN` | Applied `hf-token-secret.yaml.example` directly without replacing the literal placeholder (it is not an envsubst template) | Use `kubectl create secret generic hf-token --from-literal=token=$HF_TOKEN` per Quick Start. The `.example` YAML is reference-only. |
+| Video request 400 on `hyperpod-eks/` even with short clip | DLC v0.17.1 does not surface `--mm-processor-kwargs` or `--limit-mm-per-prompt` to the Inference Operator | Use the `kubernetes/` path for video workloads. The DLC ships with a fixed encoder-cache budget; expanding it requires a custom DLC image or a newer DLC tag when available. |
 
 ## References
 

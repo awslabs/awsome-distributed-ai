@@ -66,6 +66,10 @@ spec:
             - "${GPU_MEMORY_UTILIZATION}"
             - "--dtype"
             - "${DTYPE}"
+            - "--limit-mm-per-prompt"
+            - '{"video":2,"image":10}'
+            - "--mm-processor-kwargs"
+            - '{"max_pixels":20000000,"fps":1.0}'
             # Optional flags injected from env_vars — leave empty in env file
             # if not applicable to the chosen model. envsubst will collapse them.
             # ${REASONING_PARSER}

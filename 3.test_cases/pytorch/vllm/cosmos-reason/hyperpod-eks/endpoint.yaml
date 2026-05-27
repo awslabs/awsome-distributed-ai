@@ -48,8 +48,8 @@ spec:
       - "--dtype"
       - "${DTYPE}"
       # For Cosmos-Reason2 (Qwen3-VL), uncomment the next two args:
-      - "--reasoning-parser"
-      - "qwen3"
+      # - "--reasoning-parser"
+      # - "qwen3"
       # For Reason2 video reasoning, uncomment:
       # - "--media-io-kwargs"
       # - '{"video":{"num_frames":-1}}'
@@ -69,8 +69,9 @@ spec:
         value: "${GPU_MEMORY_UTILIZATION}"
       - name: SM_VLLM_DTYPE
         value: "${DTYPE}"
-      - name: SM_VLLM_REASONING_PARSER
-        value: "qwen3"
+      # For Cosmos-Reason2 (Qwen3-VL), uncomment:
+      # - name: SM_VLLM_REASONING_PARSER
+      #   value: "qwen3"
   # NOTE: nodeAffinity cannot be used when instanceType is set — the operator
   # handles scheduling. Deep-health-check affinity is applied automatically.
   # TLS for the operator-managed ALB. Bucket is created at operator install time.
