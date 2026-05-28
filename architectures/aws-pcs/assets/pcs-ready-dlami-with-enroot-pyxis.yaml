@@ -1,0 +1,460 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Build PCS-ready AMIs with Enroot/Pyxis using EC2 Image Builder
+
+### Stack metadata
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Base AMI Configuration
+        Parameters:
+          - BaseAmiId
+      - Label:
+          default: Image Configuration
+        Parameters:
+          - SemanticVersion
+      - Label:
+          default: Build Schedule
+        Parameters:
+          - BuildSchedule
+      - Label:
+          default: AMI Discovery (Optional)
+        Parameters:
+          - PublishToSsm
+          - SsmParameterPrefix
+      - Label:
+          default: AMI Lifecycle Management (Optional)
+        Parameters:
+          - EnableLifecyclePolicy
+          - LifecycleDeprecateAfterWeeks
+    ParameterLabels:
+      BaseAmiId:
+        default: Base AMI ID (Optional)
+      SemanticVersion:
+        default: Recipe Version
+      BuildSchedule:
+        default: Build Schedule
+      PublishToSsm:
+        default: Publish AMI IDs to SSM Parameter Store
+      SsmParameterPrefix:
+        default: SSM Parameter Prefix
+      EnableLifecyclePolicy:
+        default: Enable AMI Lifecycle Policy
+      LifecycleDeprecateAfterWeeks:
+        default: Deprecate AMIs After (Weeks)
+
+Parameters:
+  BaseAmiId:
+    Type: String
+    Description: (Optional) Base AMI ID to use. Leave empty to auto-resolve from SSM parameter store (/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id)
+    Default: ''
+
+  SemanticVersion:
+    Type: String
+    Description: Semantic version for ImageBuilder recipes (format X.Y.Z)
+    Default: '1.0.0'
+    AllowedPattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
+    ConstraintDescription: Must be a valid semantic version (e.g., 1.0.0)
+
+  BuildSchedule:
+    Type: String
+    Description: How often to build new AMIs. Manual requires triggering via console or CLI.
+    Default: Manual
+    AllowedValues:
+      - Manual
+      - Weekly
+      - Monthly
+
+  PublishToSsm:
+    Type: String
+    Description: Publish AMI IDs to SSM Parameter Store for easy discovery. Incurs SSM parameter storage costs.
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  SsmParameterPrefix:
+    Type: String
+    Description: Prefix for SSM parameters where AMI IDs will be published (only used if PublishToSsm is true)
+    Default: '/dlami-for-pcs'
+    AllowedPattern: '^/[a-zA-Z0-9/_-]+$'
+    ConstraintDescription: Must start with / and contain only alphanumeric characters, hyphens, underscores, and forward slashes
+
+  EnableLifecyclePolicy:
+    Type: String
+    Description: Enable lifecycle policy to deprecate old AMIs. Deprecated AMIs remain usable but are hidden from EC2 console searches.
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  LifecycleDeprecateAfterWeeks:
+    Type: Number
+    Description: Deprecate AMIs older than this many weeks. At least 1 AMI is always kept visible regardless of age.
+    Default: 4
+    MinValue: 1
+    MaxValue: 52
+
+Conditions:
+  IsWeeklySchedule: !Equals [!Ref BuildSchedule, 'Weekly']
+  IsMonthlySchedule: !Equals [!Ref BuildSchedule, 'Monthly']
+  HasSchedule: !Or
+    - !Condition IsWeeklySchedule
+    - !Condition IsMonthlySchedule
+  EnableSsmPublishing: !Equals [!Ref PublishToSsm, 'true']
+  EnableLifecycle: !Equals [!Ref EnableLifecyclePolicy, 'true']
+  UseCustomBaseAmi: !Not [!Equals [!Ref BaseAmiId, '']]
+
+Mappings:
+  # PCS-ready DLAMI AMI SSM parameter paths
+  # These resolve to the latest PCS-ready DLAMI AMIs (includes PCS Agent and Slurm pre-installed)
+  DLAMIConfigs:
+    ubuntu2404:
+      x8664: /aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id
+      deviceName: /dev/sda1
+      size: '100'
+
+  # Schedule expressions for pipeline builds
+  ScheduleExpressions:
+    Weekly:
+      expression: 'cron(0 0 ? * SUN *)'
+    Monthly:
+      expression: 'cron(0 0 1 * ? *)'
+
+Resources:
+  #############################################################################
+  # Build AMI for PCS
+  #############################################################################
+  DLAMIforPCS:
+    Type: AWS::ImageBuilder::Image
+    Properties:
+      ImageRecipeArn: !GetAtt ImageRecipeUbuntu2404X8664.Arn
+      InfrastructureConfigurationArn: !GetAtt InfrastructureConfigX8664.Arn
+      DistributionConfigurationArn: !GetAtt DistributionConfigUbuntu2404X8664.Arn
+      Tags:
+        Name: DLAMI-for-PCS-Ubuntu2404-x8664
+
+  #############################################################################
+  # IAM Role and Instance Profile for EC2 Image Builder
+  #############################################################################
+  ImageBuilderRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: IAM role for EC2 Image Builder instances
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Required for SSM connectivity during builds
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
+        # Required for Image Builder operations
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/EC2InstanceProfileForImageBuilder
+      Path: /
+
+  # Policy for SSM parameter publishing (only created if enabled)
+  SsmPublishingPolicy:
+    Type: AWS::IAM::Policy
+    Condition: EnableSsmPublishing
+    Properties:
+      PolicyName: SsmParameterPublishing
+      Roles:
+        - !Ref ImageBuilderRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - ssm:PutParameter
+              - ssm:AddTagsToResource
+            Resource: !Sub arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:parameter${SsmParameterPrefix}/*
+
+  ImageBuilderInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref ImageBuilderRole
+
+  #############################################################################
+  # ImageBuilder Component: Enroot and Pyxis Installer
+  #############################################################################
+  EnrootPyxisComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: !Sub 'EnrootPyxisInstaller-${AWS::StackName}'
+      Description: Install Enroot and Pyxis for PCS clusters
+      Version: !Ref SemanticVersion
+      Platform: Linux
+      SupportedOsVersions:
+        - 'Ubuntu 24'
+      Data: |
+        name: 'Enroot Pyxis Installer'
+        description: 'Install Enroot and Pyxis for PCS with DLAMI'
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: InstallEnrootPyxis
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -e
+                    - echo "Installing Enroot/Pyxis..."
+                    - |
+                      #!/bin/bash
+                      # Install Enroot/Pyxis on PCS-ready DLAMI
+                      # Based on: https://github.com/aws-samples/aws-parallelcluster-post-install-scripts/blob/main/pyxis/postinstall.sh
+
+                      set -exo pipefail
+
+                      STABLE=1
+                      ENROOT_RELEASE=3.5.0
+                      PYXIS_RELEASE=v0.20.0
+                      # Install Pyxis for both Slurm versions supported by PCS
+                      SLURM_VERSIONS="25.05 25.11"
+
+                      echo "Installing Enroot ${ENROOT_RELEASE} and Pyxis ${PYXIS_RELEASE} for Slurm versions: ${SLURM_VERSIONS}"
+
+                      ########
+                      # ENROOT
+                      ########
+                      OS=$(. /etc/os-release; echo $NAME)
+
+                      # Check for GPU and nvidia-container-cli
+                      nvidia-smi && export GPU_PRESENT=0 || GPU_PRESENT=-1;
+                      if [ $GPU_PRESENT -eq 0 ]; then
+                      	nvidia-container-cli info && export GPU_CONTAINER_PRESENT=0 || export GPU_CONTAINER_PRESENT=-1
+                      else
+                      	export GPU_CONTAINER_PRESENT=1
+                      fi
+
+                      if [ "${OS}" == "Ubuntu" ]; then
+                      	apt-get update
+                      	if [ $GPU_PRESENT -eq 0 ] && [ $GPU_CONTAINER_PRESENT -gt 0 ]; then
+                      		distribution=$(. /etc/os-release;echo $ID$VERSION_ID) \
+                      	    	&& curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
+                      		&& curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
+                      		    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+                      		    tee /etc/apt/sources.list.d/nvidia-container-toolkit.list \
+                      	    	&& apt-get update -y \
+                      	    	&& apt-get install libnvidia-container-tools -y
+                      	fi
+                      	apt-get install -y -o DPkg::Lock::Timeout=120 jq squashfs-tools parallel fuse-overlayfs pigz squashfuse zstd
+                      	if [[ $STABLE == 1 ]]; then
+                      		export arch=$(dpkg --print-architecture)
+                      		mkdir -p /tmp/enroot
+                      		pushd /tmp/enroot
+                      		curl -fSsL -O https://github.com/NVIDIA/enroot/releases/download/v${ENROOT_RELEASE}/enroot_${ENROOT_RELEASE}-1_${arch}.deb
+                      		curl -fSsL -O https://github.com/NVIDIA/enroot/releases/download/v${ENROOT_RELEASE}/enroot+caps_${ENROOT_RELEASE}-1_${arch}.deb
+                      		apt install -y ./*.deb
+                      		popd
+                      	fi
+                        	export NONROOT_USER=ubuntu
+                      else
+                      	echo "Unsupported OS: ${OS}" && exit 1;
+                      fi
+
+                      ln -s /usr/share/enroot/hooks.d/50-slurm-pmi.sh /etc/enroot/hooks.d/
+                      ln -s /usr/share/enroot/hooks.d/50-slurm-pytorch.sh /etc/enroot/hooks.d/
+
+                      # Permissions
+                      mkdir -p /tmp/enroot
+                      chmod 1777 /tmp/enroot
+                      mkdir -p /tmp/enroot/data
+                      chmod 1777 /tmp/enroot/data
+
+                      ENROOT_CONFIG_RELEASE=main
+                      wget -O /tmp/enroot.template.conf https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-post-install-scripts/${ENROOT_CONFIG_RELEASE}/pyxis/enroot.template.conf
+                      ENROOT_CACHE_PATH=/tmp/enroot envsubst < /tmp/enroot.template.conf > /tmp/enroot.conf
+                      mv /tmp/enroot.conf /etc/enroot/enroot.conf
+                      chmod 0644 /etc/enroot/enroot.conf
+
+                      ########
+                      # PYXIS
+                      ########
+                      # Install Pyxis for all supported Slurm versions
+                      for SLURM_VERSION in ${SLURM_VERSIONS}; do
+                        echo "Installing Pyxis for Slurm ${SLURM_VERSION}"
+                        SLURM_PATH="/opt/aws/pcs/scheduler/slurm-${SLURM_VERSION}"
+                        SLURM_ETC_PATH="/etc/aws/pcs/scheduler/slurm-${SLURM_VERSION}"
+
+                        # Clone Pyxis (only once)
+                        if [ ! -d /tmp/pyxis ]; then
+                          git clone --depth 1 --branch ${PYXIS_RELEASE} https://github.com/NVIDIA/pyxis.git /tmp/pyxis
+                        fi
+
+                        cd /tmp/pyxis
+                        make clean || true
+                        CPPFLAGS="-I ${SLURM_PATH}/include/" make
+                        CPPFLAGS="-I ${SLURM_PATH}/include/" make install
+
+                        mkdir -p ${SLURM_ETC_PATH}/plugstack.conf.d
+                        ln -fs /usr/local/share/pyxis/pyxis.conf ${SLURM_ETC_PATH}/plugstack.conf.d/pyxis.conf
+
+                        echo "Pyxis installed for Slurm ${SLURM_VERSION}"
+                      done
+
+                      # Add path for slurm commands (using the latest version as default)
+                      echo "PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:/usr/lib/ccache/bin:/usr/local/bin:/usr/bin:/bin" >> /etc/default/slurmd
+
+                      ########
+                      # GPU
+                      ########
+                      if [ $GPU_PRESENT -gt 0 ] && [ $GPU_CONTAINER_PRESENT -gt 0 ]; then
+                      	echo "GPUs not present, stopping early!"
+                      	exit 0
+                      fi
+
+                      nvidia-container-cli --load-kmods info || true
+
+                      echo "Enroot/Pyxis installation complete"
+                    - echo "Enroot/Pyxis installation finished successfully"
+
+  #############################################################################
+  # ImageBuilder Infrastructure Configuration
+  #############################################################################
+  InfrastructureConfigX8664:
+    Type: AWS::ImageBuilder::InfrastructureConfiguration
+    Properties:
+      Name: !Sub 'dlami-for-pcs-infra-x86-64-${AWS::StackName}'
+      Description: Infrastructure configuration for x86_64 PCS AMI builds
+      InstanceProfileName: !Ref ImageBuilderInstanceProfile
+      InstanceTypes:
+        - c6i.4xlarge
+        - m6i.4xlarge
+      TerminateInstanceOnFailure: true
+
+  #############################################################################
+  # ImageBuilder Image Recipe
+  #############################################################################
+  ImageRecipeUbuntu2404X8664:
+    Type: AWS::ImageBuilder::ImageRecipe
+    Properties:
+      Name: !Sub 'dlami-for-pcs-ubuntu2404-x86-64-${AWS::StackName}'
+      Description: PCS-ready DLAMI with Enroot/Pyxis - Ubuntu 24.04 x86_64
+      Version: !Ref SemanticVersion
+      ParentImage: !If
+        - UseCustomBaseAmi
+        - !Ref BaseAmiId
+        - !Sub
+          - '{{resolve:ssm:${SSMPath}}}'
+          - SSMPath: !FindInMap [DLAMIConfigs, ubuntu2404, x8664]
+      BlockDeviceMappings:
+        - DeviceName: !FindInMap [DLAMIConfigs, ubuntu2404, deviceName]
+          Ebs:
+            VolumeSize: !FindInMap [DLAMIConfigs, ubuntu2404, size]
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Components:
+        - ComponentArn: !Ref EnrootPyxisComponent
+
+  #############################################################################
+  # ImageBuilder Distribution Configuration
+  #############################################################################
+  DistributionConfigUbuntu2404X8664:
+    Type: AWS::ImageBuilder::DistributionConfiguration
+    Properties:
+      Name: !Sub 'dlami-for-pcs-ubuntu2404-x86-64-${AWS::StackName}'
+      Description: Distribution configuration for Ubuntu 24.04 x86_64 PCS AMIs
+      Distributions:
+        - Region: !Ref AWS::Region
+          AmiDistributionConfiguration:
+            Name: !Sub 'dlami-for-pcs-ubuntu2404-x86-64-{{imagebuilder:buildDate}}'
+            Description: !Sub 'PCS-ready DLAMI with Enroot/Pyxis - Ubuntu 24.04 x86_64 - Built on {{imagebuilder:buildDate}}'
+            AmiTags:
+              Name: !Sub 'dlami-for-pcs-ubuntu2404-x86-64-{{imagebuilder:buildDate}}'
+              OS: Ubuntu
+              OSVersion: '24.04'
+              Architecture: x86_64
+              BuildDate: '{{imagebuilder:buildDate}}'
+              SourceAMI: '{{imagebuilder:buildVersion}}'
+              StackName: !Ref AWS::StackName
+
+  #############################################################################
+  # ImageBuilder Pipeline (Optional - for scheduled builds)
+  #############################################################################
+  ImagePipelineUbuntu2404X8664:
+    Type: AWS::ImageBuilder::ImagePipeline
+    Condition: HasSchedule
+    Properties:
+      Name: !Sub 'dlami-for-pcs-ubuntu2404-x86-64-${AWS::StackName}'
+      Description: Pipeline for building PCS-ready DLAMI Ubuntu 24.04 x86_64 AMIs
+      ImageRecipeArn: !GetAtt ImageRecipeUbuntu2404X8664.Arn
+      InfrastructureConfigurationArn: !GetAtt InfrastructureConfigX8664.Arn
+      DistributionConfigurationArn: !GetAtt DistributionConfigUbuntu2404X8664.Arn
+      Status: ENABLED
+      Schedule:
+        ScheduleExpression: !If
+          - IsWeeklySchedule
+          - !FindInMap [ScheduleExpressions, Weekly, expression]
+          - !FindInMap [ScheduleExpressions, Monthly, expression]
+        PipelineExecutionStartCondition: EXPRESSION_MATCH_AND_DEPENDENCY_UPDATES_AVAILABLE
+
+  #############################################################################
+  # AMI Lifecycle Policy (Optional)
+  #############################################################################
+  AmiLifecyclePolicy:
+    Type: AWS::ImageBuilder::LifecyclePolicy
+    Condition: EnableLifecycle
+    Properties:
+      Name: !Sub 'dlami-for-pcs-lifecycle-${AWS::StackName}'
+      Description: Deprecate old PCS DLAMI AMIs to keep AMI list clean
+      Status: ENABLED
+      ExecutionRole: !GetAtt LifecyclePolicyRole.Arn
+      ResourceType: AMI_IMAGE
+      ResourceSelection:
+        TagMap:
+          StackName: !Ref AWS::StackName
+      PolicyDetails:
+        - Action:
+            Type: DEPRECATE
+            IncludeResources:
+              Amis: true
+          Filter:
+            Type: AGE
+            Value: !Ref LifecycleDeprecateAfterWeeks
+            Unit: WEEKS
+            RetainAtLeast: 1
+
+  # IAM Role for Lifecycle Policy
+  LifecyclePolicyRole:
+    Type: AWS::IAM::Role
+    Condition: EnableLifecycle
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: imagebuilder.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/EC2ImageBuilderLifecycleExecutionPolicy
+      Path: /
+
+Outputs:
+  DLAMIforPCSAmiId:
+    Description: AMI ID of the built PCS-ready DLAMI (Ubuntu 24.04 x86_64)
+    Value: !GetAtt DLAMIforPCS.ImageId
+    Export:
+      Name: !Sub '${AWS::StackName}-AmiId'
+
+  EnrootPyxisComponentArn:
+    Description: ARN of the Enroot/Pyxis installer component
+    Value: !Ref EnrootPyxisComponent
+
+  ImageRecipeArn:
+    Description: ARN of the Image Recipe
+    Value: !GetAtt ImageRecipeUbuntu2404X8664.Arn
+
+  PipelineArn:
+    Condition: HasSchedule
+    Description: ARN of the Image Pipeline (only created for scheduled builds)
+    Value: !GetAtt ImagePipelineUbuntu2404X8664.Arn

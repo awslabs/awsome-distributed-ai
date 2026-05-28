@@ -1,0 +1,166 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Adding Compute Node Group to PCS Cluster
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Additional Compute Node Group Settings
+        Parameters:
+          - CngName
+          - QueueName
+          - InstanceType
+          - MaxCount
+          - MinCount
+      - Label:
+          default: PCS Cluster configuration
+        Parameters:
+          - ClusterId
+          - SubnetId
+          - AmiId
+          - ClusterSecurityGroupId
+          - IamProfileArn
+          - FSxLustreFilesystemId
+          - FSxLustreFilesystemMountName
+          - FSxOpenZFSFilesystemId
+
+Parameters:
+  ClusterId:
+    Type: String
+    Description: Cluster ID
+  
+  CngName:
+    Type: String
+    Description: Name for Compute Node Group
+
+  QueueName:
+    Type: String
+    Description: Name for Queue (leave empty to skip queue creation)
+    Default: ""
+
+  InstanceType:
+    Type: String
+    Description: Instance Type for Compute Node Group
+
+  MaxCount:
+    Type: Number
+    Description: Maximum number of instance
+
+  MinCount:
+    Type: Number
+    Description: Minimum number of instance. (it must be 0 if you want to use dynamic scaling)
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Select the Subnet where the Compute Node will be launched
+
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Description: Enter the AMI ID for the Login Node and Compute Node (e.g. ami-0abcdef1234567890)
+    ConstraintDescription: Must be a valid AMI ID (ami-xxxxxxxxxxxxxxxxx)
+
+  ClusterSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Select SecurityGroup for Compute Node Group for Cluster Communication
+
+  IamProfileArn:
+    Type: String
+    Description: IAM Instance Profile for Compute Node Group
+
+  FSxLustreFilesystemId:
+    Type: String
+    Description: Filesystem ID for FSx for Lustre
+
+  FSxLustreFilesystemMountName:
+    Type: String
+    Description: MountName for FSx for Lustre
+
+  FSxOpenZFSFilesystemId:
+    Type: String
+    Description: Filesystem ID for FSx for OpenZFS
+
+Conditions:
+  CreateQueue: !Not [!Equals [!Ref QueueName, ""]]
+
+Resources:
+
+  # Compute Node groups - Compute Nodes
+  PCSNodeGroupCompute:
+    Type: AWS::PCS::ComputeNodeGroup
+    Properties:
+      ClusterId: !Ref ClusterId
+      Name: !Ref CngName
+      ScalingConfiguration:
+        MinInstanceCount: !Ref MinCount
+        MaxInstanceCount: !Ref MaxCount
+      IamInstanceProfileArn: !Ref IamProfileArn
+      CustomLaunchTemplate:
+        TemplateId: !Ref PCSLaunchTemplate
+        Version: 1
+      SubnetIds:
+        - !Ref SubnetId
+      AmiId: !Ref AmiId
+      InstanceConfigs:
+        - InstanceType: !Ref InstanceType
+
+  PCSQueueCompute:
+    Type: AWS::PCS::Queue
+    Condition: CreateQueue
+    Properties:
+      ClusterId: !Ref ClusterId
+      Name: !Ref QueueName
+      ComputeNodeGroupConfigurations:
+        - ComputeNodeGroupId: !GetAtt [PCSNodeGroupCompute, Id]
+
+  PCSLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub 'PCS-lt-${AWS::StackName}'
+
+      LaunchTemplateData:
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: HPCRecipes
+                Value: "true"
+              - Key: Name
+                Value: !Sub 'PCS-${CngName}'
+        MetadataOptions:
+          HttpEndpoint: enabled
+          HttpPutResponseHopLimit: 4
+          HttpTokens: required
+        SecurityGroupIds:
+          - !Ref ClusterSecurityGroupId
+        UserData:
+          Fn::Base64: !Sub |
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="==MYBOUNDARY=="
+
+            --==MYBOUNDARY==
+            Content-Type: text/cloud-config; charset="us-ascii"
+            MIME-Version: 1.0
+            
+            runcmd:
+            - mkdir -p /tmp/home
+            - rsync -aA /home/ /tmp/home
+            - echo "${FSxOpenZFSFilesystemId}.fsx.${AWS::Region}.amazonaws.com:/fsx/ /home nfs noatime,nfsvers=3,sync,nconnect=16,rsize=1048576,wsize=1048576,defaults 0 0" >> /etc/fstab
+            - mount -a -t nfs defaults
+            - if [ "enabled" == "$(sestatus | awk '/^SELinux status:/{print $3}')" ]; then setsebool -P use_nfs_home_dirs 1; fi
+            - rsync -aA --ignore-existing /tmp/home/ /home
+            - rm -rf /tmp/home/
+            # If provided, mount FSxL filesystem as /fsx
+            - if [ ! -z "${FSxLustreFilesystemId}" ]; then mkdir -p /fsx; mount -t lustre ${FSxLustreFilesystemId}.fsx.${AWS::Region}.amazonaws.com@tcp:/${FSxLustreFilesystemMountName} /fsx; chmod 1777 /fsx; fi
+
+            --==MYBOUNDARY==
+
+Outputs:
+  NodeGroupId:
+    Description: Compute Node Group ID
+    Value: !GetAtt PCSNodeGroupCompute.Id
+  QueueId:
+    Condition: CreateQueue
+    Description: Queue ID
+    Value: !GetAtt PCSQueueCompute.Id

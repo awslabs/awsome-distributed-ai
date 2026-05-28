@@ -1,0 +1,392 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  This CloudFormation stack creates all the necessary pre-requisites for ML Cluster,
+  these include VPC and two Subnets, a security group and FSx Lustre Filesystem.
+  A public subnet and a private subnet are created in an Availability Zone that you provide as a parameter.
+  As part of the template you'll deploy an Internet Gateway and NAT Gateway in
+  the public subnet. In addition you deploy endpoints for Amazon S3. The VPC contains 2 CIDR blocks with 10.0.0.0/16 and 10.1.0.0/16
+  The first CIDR is used for the public subnet, the second is used for the private.
+  The template creates an fsx lustre volume in the specified AZ with a default of
+  1.2 TB storage which can be overridden by parameter.
+
+
+####################
+## Stack Metadata ##
+####################
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: General configuration
+        Parameters:
+          - VPCName
+      - Label:
+          default: Availability Zone configuration for the subnets
+        Parameters:
+          - PrimarySubnetAZ
+      - Label:
+          default: Fsx Lustre storage size
+        Parameters:
+          - Capacity
+      - Label:
+          default: Network and S3 endpoints configuration
+        Parameters:
+          - CreateS3Endpoint
+    ParameterLabels:
+      VPCName:
+        default: Name of your VPC
+      PrimarySubnetAZ:
+        default: Availability zone id to deploy the primary subnets
+      CreateS3Endpoint:
+        default: Create an S3 endpoint
+
+######################
+## Stack Parameters ##
+######################
+
+Parameters:
+  VPCName:
+    Description: Name of your VPC
+    Default: 'ML-Cluster-VPC'
+    Type: String
+
+  PrimarySubnetAZ:
+    Description: Availability zone id in which the public subnet and primary private subnet will be created.
+    Type: AWS::EC2::AvailabilityZone::Name
+
+  CreateS3Endpoint:
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Default: 'true'
+    Description:
+      Set to false if to avoid creating an S3 endpoint on your VPC.
+    Type: String
+
+  Capacity:
+    Description: Storage capacity in GiB (1200 or increments of 2400)
+    Type: Number
+    Default: 1200
+  
+  PerUnitStorageThroughput:
+    Description: Provisioned Read/Write (MB/s/TiB)
+    Type: Number
+    Default: 250
+    AllowedValues:
+      - 125
+      - 250
+      - 500
+      - 1000
+  
+  Compression:
+    Description: Data compression type
+    Type: String
+    AllowedValues:
+      - "LZ4"
+      - "NONE"
+    Default: "LZ4"
+  
+  LustreVersion:
+    Description: Lustre software version
+    Type: String
+    AllowedValues:
+      - "2.15"
+      - "2.12"
+    Default: "2.15"
+
+  HomeCapacity:
+    Description: "Home directories storage capacity in GiB"
+    Type: Number
+    Default: 512
+
+  HomeThroughput:
+    Description: "Home directories storage throughput MB/s"
+    Type: Number
+    Default: 320
+
+
+###############################
+## Conditions for Parameters ##
+###############################
+
+Conditions:
+  S3EndpointCondition: !Equals [!Ref 'CreateS3Endpoint', 'true']
+
+#########################
+## VPC & Network Setup ##
+#########################
+
+Mappings:
+  Networking:
+    VPC:
+      CIDR0: 10.0.0.0/16
+      CIDR1: 10.1.0.0/16
+
+Resources:
+  # Create a VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: !FindInMap [Networking, VPC, CIDR0]
+      Tags:
+        - Key: Name
+          Value: ML Cluster VPC
+
+  VpcCidrBlock:
+    Type: AWS::EC2::VPCCidrBlock
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [Networking, VPC, CIDR1]
+
+
+  # Create an IGW and add it to the VPC
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  GatewayToInternet:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Create a NAT GW then add it to the public subnet
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt ElasticIP.AllocationId
+      SubnetId: !Ref PublicSubnet
+
+  ElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow EFA communication for Multi-Node Parallel Batch jobs
+      VpcId: !Ref VPC
+  EFASecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: All to all communication for EFA Ingress within Security Group
+      IpProtocol: -1
+      FromPort: -1
+      ToPort: -1
+      GroupId: !Ref SecurityGroup
+      SourceSecurityGroupId: !Ref SecurityGroup
+  EFASecurityGroupEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: All to all communication for EFA Egress  within Security Group
+      IpProtocol: -1
+      FromPort: -1
+      ToPort: -1
+      GroupId: !Ref SecurityGroup
+      DestinationSecurityGroupId: !Ref SecurityGroup
+  EFASecurityGroupEgressECS:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: All to all communication for Egress to all
+      IpProtocol: -1
+      FromPort: -1
+      ToPort: -1
+      GroupId: !Ref SecurityGroup
+      CidrIp: 0.0.0.0/0
+
+  # Build the public subnet
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    DependsOn: VPC
+    Properties:
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref VPC
+      CidrBlock: !Select [ 0, !Cidr [ !GetAtt VPC.CidrBlock, 2, 15 ]]
+      AvailabilityZone: !Ref PrimarySubnetAZ
+      Tags:
+        - Key: Name
+          Value: !Join [ ' ', [ !Ref VPCName, 'Public Subnet -', !Ref PrimarySubnetAZ ] ]
+
+  # Create the primary private subnet
+  PrimaryPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    DependsOn: [VpcCidrBlock]
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [ 0, !Cidr [ !FindInMap [Networking, VPC, CIDR1], 2, 15 ]]
+      AvailabilityZone: !Ref PrimarySubnetAZ
+      Tags:
+        - Key: Name
+          Value: !Join [ ' ', [ !Ref VPCName, 'Private Subnet -', !Ref PrimarySubnetAZ ] ]
+
+  # Create and set the public route table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Then the private route table
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PrivateRouteToInternet:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+
+  # Associate the public route table to the public subnet
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # and the primary private subnet to the private route table
+  PrimaryPrivateSubnetRTAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrimaryPrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  # S3 endpoint
+  S3Endpoint:
+    Condition: S3EndpointCondition
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+            - Effect: Allow
+              Principal: '*'
+              Action:
+                - '*'
+              Resource:
+                - '*'
+      RouteTableIds:
+        - !Ref PublicRouteTable
+        - !Ref PrivateRouteTable
+      ServiceName: !Join
+        - ''
+        - - com.amazonaws.
+          - !Ref AWS::Region
+          - .s3
+      VpcId: !Ref VPC
+
+  FSxLFilesystem:
+    Type: AWS::FSx::FileSystem
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      FileSystemType: LUSTRE
+      StorageType: SSD
+      FileSystemTypeVersion: !Ref LustreVersion
+      StorageCapacity: !Ref Capacity
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      SubnetIds:
+        - !Ref PrimaryPrivateSubnet
+      LustreConfiguration:
+        DataCompressionType: !Ref Compression
+        DeploymentType: PERSISTENT_2
+        PerUnitStorageThroughput: !Ref PerUnitStorageThroughput
+        MetadataConfiguration:
+          Mode: AUTOMATIC
+
+
+  OpenZFSFileSystem:
+    Type: AWS::FSx::FileSystem
+    Properties:
+      FileSystemType: OPENZFS
+      OpenZFSConfiguration: 
+        AutomaticBackupRetentionDays: 30
+        CopyTagsToBackups: Yes
+        CopyTagsToVolumes: Yes
+        DailyAutomaticBackupStartTime: '19:00'
+        DeploymentType: SINGLE_AZ_HA_2
+        Options: 
+          - DELETE_CHILD_VOLUMES_AND_SNAPSHOTS
+        RootVolumeConfiguration: 
+          DataCompressionType: NONE
+          NfsExports: 
+            - ClientConfigurations: 
+              -  Clients: '*'
+                 Options: 
+                    - rw
+                    - no_root_squash
+                    - crossmnt
+        ThroughputCapacity: !Ref HomeThroughput
+        WeeklyMaintenanceStartTime: '1:04:00'
+      SecurityGroupIds: 
+        - !Ref SecurityGroup
+      StorageCapacity: !Ref HomeCapacity
+      StorageType: SSD
+      SubnetIds: 
+        - !Ref PrimaryPrivateSubnet
+
+#############
+## Outputs ##
+#############
+Outputs:
+  VPC:
+    Value: !Ref VPC
+    Description: ID of the VPC
+    Export:
+      Name: !Sub ${AWS::StackName}-VPC
+  PublicSubnet:
+    Value: !Ref PublicSubnet
+    Description: ID of the public subnet
+    Export:
+      Name: !Sub ${AWS::StackName}-PublicSubnet
+  PrimaryPrivateSubnet:
+    Value: !Ref PrimaryPrivateSubnet
+    Description: ID of the primary private subnet
+    Export:
+      Name: !Sub ${AWS::StackName}-PrimaryPrivateSubnet
+  SecurityGroup:
+    Value: !Ref SecurityGroup
+    Description: SecurityGroup for Batch
+    Export:
+      Name: !Sub ${AWS::StackName}-SecurityGroup
+  FSxLustreFilesystemMountname:
+    Description: The ID of the FSxL filesystem that has been created
+    Value: !GetAtt FSxLFilesystem.LustreMountName
+    Export:
+      Name: !Sub ${AWS::StackName}-FSxLustreFilesystemMountname
+  FSxLustreFilesystemDNSname:
+    Description: The DNS of the FSxL filesystem that has been created
+    Value: !GetAtt FSxLFilesystem.DNSName
+    Export:
+      Name: !Sub ${AWS::StackName}-FSxLustreFilesystemDNSname
+  FSxLustreFilesystemId:
+    Description: The ID of the FSxL filesystem that has been created
+    Value: !Ref FSxLFilesystem
+    Export:
+      Name: !Sub ${AWS::StackName}-FSxLustreFilesystemId
+  FSxORootVolumeId:
+    Description: The ID of Fsx OpenZFS root volume
+    Value: !GetAtt OpenZFSFileSystem.RootVolumeId
+    Export:
+      Name: !Sub ${AWS::StackName}-FSxORootVolumeId
+  FSxOFilesystemId:
+    Description: The ID of Fsx OpenZFS filesystem
+    Value: !Ref OpenZFSFileSystem
+    Export:
+      Name: !Sub ${AWS::StackName}-FSxOFilesystemId
