@@ -416,7 +416,7 @@ Resources:
         - monitoring-iam-policy.yaml
         - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}monitoring-iam-policy.yaml'
       Parameters:
-        ClusterName: !Sub '${AWS::StackName}'
+        ClusterName: !GetAtt ClusterStack.Outputs.ClusterId
         RoleName: !GetAtt ClusterStack.Outputs.RoleName
       Tags:
         - Key: Name

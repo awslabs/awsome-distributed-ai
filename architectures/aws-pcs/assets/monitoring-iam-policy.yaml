@@ -1,0 +1,109 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: IAM policy for AWS ParallelCluster Monitoring on PCS
+
+Parameters:
+  ClusterName:
+    Type: String
+    Description: PCS Cluster name
+
+  RoleName:
+    Type: String
+    Description: IAM role name to attach the policy to
+
+Resources:
+  MonitoringPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${ClusterName}-monitoring-policy'
+      Roles:
+        - !Ref RoleName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EC2DescribeForPrometheusSdAndCostMetrics
+            Effect: Allow
+            Action:
+              - ec2:DescribeInstances
+              - ec2:DescribeVolumes
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref AWS::Region
+
+          - Sid: CloudFormationDescribeOwnStackOnly
+            Effect: Allow
+            Action:
+              - cloudformation:DescribeStacks
+              - cloudformation:DescribeStackResources
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ClusterName}/*'
+              - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ClusterName}-*/*'
+
+          - Sid: FSxDescribeForCostMetrics
+            Effect: Allow
+            Action:
+              - fsx:DescribeFileSystems
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref AWS::Region
+
+          - Sid: PricingReadForCostMetrics
+            Effect: Allow
+            Action:
+              - pricing:GetProducts
+              - pricing:DescribeServices
+            Resource: '*'
+
+          - Sid: SSMGrafanaPasswordForThisClusterOnly
+            Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:PutParameter
+              - ssm:AddTagsToResource
+            Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${ClusterName}/grafana/*'
+
+          - Sid: KMSForSSMSecureString
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+            Resource: '*'
+            Condition:
+              StringEquals:
+                kms:ViaService: !Sub 'ssm.${AWS::Region}.amazonaws.com'
+
+          - Sid: CloudWatchGetMetricData
+            Effect: Allow
+            Action:
+              - cloudwatch:GetMetricData
+              - cloudwatch:GetMetricStatistics
+              - cloudwatch:ListMetrics
+            Resource: '*'
+
+          - Sid: CloudWatchLogsReadForClusterLogs
+            Effect: Allow
+            Action:
+              - logs:DescribeLogGroups
+              - logs:DescribeLogStreams
+              - logs:FilterLogEvents
+              - logs:GetLogEvents
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/pcs/${ClusterName}*'
+
+          - Sid: PCSGetClusterForMonitoring
+            Effect: Allow
+            Action:
+              - pcs:GetCluster
+              - pcs:ListComputeNodeGroups
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref AWS::Region
+
+Outputs:
+  PolicyArn:
+    Description: ARN of the monitoring policy
+    Value: !Ref MonitoringPolicy
