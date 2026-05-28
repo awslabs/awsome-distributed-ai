@@ -1,0 +1,179 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS PCS "Getting Started" cluster. 
+  This template deploys a small HPC cluster with 1 login node and up to 4 compute nodes. Optionally, Slurm accounting can be enabled.
+  It includes an EFS file system for shared storage and an FSx for Lustre file system for high-speed temporary storage.  
+  The cluster is deployed in a new VPC with both public and private subnets.  
+  It can be accessed via the browser using AWS Systems Manager Session Manager or over the internet via SSH.  
+  To access the cluster, check the Outputs tab of this stack for relevant links.  
+
+### Stack metadata
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: PCS Cluster configuration
+        Parameters:
+          - ClusterName
+          - SlurmVersion
+          - ManagedAccounting
+          - AccountingPolicyEnforcement
+      - Label:
+          default: PCS Networking configuration
+        Parameters:
+          - VpcId
+          - PublicSubnetId
+          - PrivateSubnetId
+          - DefaultSecurityGroupId
+      - Label:
+          default: PCS Storage configuration
+        Parameters:
+          - FSxLustreFilesystemId
+          - FSxLustreFilesystemMountName
+          - FSxOpenZFSFilesystemId
+      - Label:
+          default: HPC Recipes configuration
+        Parameters:
+          - HpcRecipesS3Bucket
+          - HpcRecipesBranch
+
+Parameters:
+  ClusterName:
+    Type: String
+    Description: Name of the PCS cluster
+    Default: "ml-cluster"
+    AllowedPattern: '^[a-zA-Z][a-zA-Z0-9-]{0,39}$'
+    ConstraintDescription: Must start with a letter, contain only alphanumeric characters and hyphens, and be 1-40 characters long
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Select the VPC where the cluster will be launched
+
+  PublicSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Select the Subnet where the Login Node will be launched
+
+  PrivateSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Select the Subnet where the Compute Node will be launched
+
+  DefaultSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Select SecurityGroup for the cluster
+
+  FSxLustreFilesystemId:
+    Type: String
+    Description: Filesystem ID for FSx for Lustre
+
+  FSxLustreFilesystemMountName:
+    Type: String
+    Description: MountName for FSx for Lustre
+
+  FSxOpenZFSFilesystemId:
+    Type: String
+    Description: Filesystem ID for FSx for OpenZFS
+
+  SlurmVersion:
+    Type: String
+    Default: 25.11
+    Description: Version of Slurm to use
+    AllowedValues:
+         - 25.05
+         - 25.11
+
+  ManagedAccounting:
+    Type: String
+    Default: 'disabled'
+    AllowedValues:
+      - 'enabled'
+      - 'disabled'
+    Description: Monitor cluster usage, manage access control, and enforce resource limits with Slurm accounting. Requires Slurm 24.11 or newer.
+
+  AccountingPolicyEnforcement:
+    Description: Specify which Slurm accounting policies to enforce
+    Type: String
+    Default: none
+    AllowedValues:
+      - none
+      - 'associations,limits,safe'
+
+  HpcRecipesS3Bucket:
+    Type: String
+    Default: aws-hpc-recipes
+    Description: HPC Recipes for AWS S3 bucket
+    AllowedValues:
+         - aws-hpc-recipes
+         - aws-hpc-recipes-dev
+  HpcRecipesBranch:
+    Type: String
+    Default: main
+    Description: HPC Recipes for AWS release branch
+    AllowedPattern: '^(?!.*/\.git$)(?!.*/\.)(?!.*\\.\.)[a-zA-Z0-9-_\.]+$'
+
+Conditions:
+  GovCloud: !Equals [!Ref AWS::Partition, 'aws-us-gov']
+  China: !Equals [!Ref AWS::Partition, 'aws-cn']
+  # Disabled for older SLurm versions and in GovCloud
+  HasAccountingSupport: !Not [!Or [!Equals [!Ref SlurmVersion, "23.11"], !Equals [!Ref SlurmVersion, "24.05"], !Equals [!Ref AWS::Partition, 'aws-us-gov']]]
+  IsAccountingEnabled: !Equals [!Ref ManagedAccounting, 'enabled']
+  IncludeAccountingConfig: !And [!Condition HasAccountingSupport, !Condition IsAccountingEnabled]
+  SetAccountingPolicy: !Not [!Equals [!Ref AccountingPolicyEnforcement, 'none']]
+
+
+Resources:
+
+  # Cluster
+  PCSCluster:
+    Type: AWS::PCS::Cluster
+    Properties:
+      Name: !Ref ClusterName
+      Size: SMALL
+      Scheduler:
+        Type: SLURM
+        Version: !Ref SlurmVersion
+      Networking:
+        SubnetIds:
+          - !Ref PrivateSubnetId
+        SecurityGroupIds:
+          - !Ref DefaultSecurityGroupId
+      SlurmConfiguration: !If
+        - IncludeAccountingConfig
+        - Accounting:
+            Mode: STANDARD
+            DefaultPurgeTimeInDays: 30
+          SlurmCustomSettings: !If 
+            - SetAccountingPolicy
+            - - ParameterName: AccountingStorageEnforce
+                ParameterValue: !Ref AccountingPolicyEnforcement
+            - []
+        - !Ref AWS::NoValue
+
+  # IAM Instance Profile
+  PCSInstanceProfile:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters:
+        # Use hash of stack name to keep role name short and avoid 64-char limit
+        # while still being unique per stack and region
+        RoleName: !Sub
+          - 'pcs-${StackHash}-${AWS::Region}'
+          - StackHash: !Select [0, !Split ['-', !Select [2, !Split ['/', !Ref 'AWS::StackId']]]]
+      TemplateURL: !Sub 'https://${HpcRecipesS3Bucket}.s3.amazonaws.com/${HpcRecipesBranch}/recipes/pcs/getting_started/assets/pcs-iip-minimal.yaml'
+
+Outputs:
+  ClusterId:
+    Description: The Id of the PCS cluster
+    Value: !GetAtt [ PCSCluster, Id ]
+  InstanceProfileArn:
+    Value: !GetAtt [ PCSInstanceProfile, Outputs.InstanceProfileArn ]
+  PcsConsoleUrl:
+    Description: URL to access the cluster in the PCS console
+    Value: !Sub
+      - https://${ConsoleDomain}/pcs/home?region=${AWS::Region}#/clusters/${ClusterId}
+      - { ConsoleDomain: !If [ GovCloud, 'console.amazonaws-us-gov.com', !If [ China, 'console.amazonaws.cn', !Sub '${AWS::Region}.console.aws.amazon.com']],
+          ClusterId: !GetAtt [ PCSCluster, Id ] 
+        }
+    Export:
+      Name: !Sub ${AWS::StackName}-PcsConsoleUrl
