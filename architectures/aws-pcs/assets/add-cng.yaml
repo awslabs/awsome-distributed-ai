@@ -128,6 +128,8 @@ Resources:
                 Value: "true"
               - Key: Name
                 Value: !Sub 'PCS-${CngName}'
+              - Key: ClusterName
+                Value: !Ref ClusterId
         MetadataOptions:
           HttpEndpoint: enabled
           HttpPutResponseHopLimit: 4
