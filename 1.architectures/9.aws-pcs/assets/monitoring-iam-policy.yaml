@@ -83,6 +83,26 @@ Resources:
               - cloudwatch:ListMetrics
             Resource: '*'
 
+          - Sid: CloudWatchLogsReadForClusterLogs
+            Effect: Allow
+            Action:
+              - logs:DescribeLogGroups
+              - logs:DescribeLogStreams
+              - logs:FilterLogEvents
+              - logs:GetLogEvents
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/pcs/${ClusterName}*'
+
+          - Sid: PCSGetClusterForMonitoring
+            Effect: Allow
+            Action:
+              - pcs:GetCluster
+              - pcs:ListComputeNodeGroups
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref AWS::Region
+
 Outputs:
   PolicyArn:
     Description: ARN of the monitoring policy

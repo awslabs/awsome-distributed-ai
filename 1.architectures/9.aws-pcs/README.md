@@ -366,7 +366,7 @@ For more details about the monitoring stack, see:
 
 ### Known Limitations
 
-- **Ubuntu 24.04 compatibility**: The upstream monitoring installer expects `ec2-user` but Ubuntu uses `ubuntu`. Our templates include a workaround (symlink `/home/ec2-user` → `/home/ubuntu`) to ensure compatibility.
+- **Ubuntu 24.04 compatibility**: The upstream monitoring installer hardcodes `CLUSTER_USER="ec2-user"` for PCS, but Ubuntu uses `ubuntu`. Our templates include a workaround (create `ec2-user` user with home directory pointing to `/home/ubuntu`) to ensure compatibility.
 
 ---
 

@@ -19,16 +19,10 @@ Metadata:
       - Label:
           default: PCS Cluster Configuration
         Parameters:
+          - LoginNodeInstanceType
           - SlurmVersion
           - ManagedAccounting
           - AccountingPolicyEnforcement
-      - Label:
-          default: Login Node Configuration
-        Parameters:
-          - LoginNodeInstanceType
-      - Label:
-          default: Monitoring Configuration
-        Parameters:
           - DeployMonitoring
           - MonitoringVersion
       - Label:
@@ -401,6 +395,7 @@ Resources:
         SlurmVersion: !Ref SlurmVersion
         ManagedAccounting: !Ref ManagedAccounting
         AccountingPolicyEnforcement: !Ref AccountingPolicyEnforcement
+        DeployMonitoring: !Ref DeployMonitoring
         HpcRecipesS3Bucket: !Ref HpcRecipesS3Bucket
         HpcRecipesBranch: !Ref HpcRecipesBranch
       Tags:
@@ -458,6 +453,7 @@ Resources:
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         DeployMonitoring: !Ref DeployMonitoring
         MonitoringVersion: !Ref MonitoringVersion
+        MonitoringRole: !If [DeployMonitoringEnabled, 'login', 'none']
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-LoginNodeGroup'
@@ -494,6 +490,7 @@ Resources:
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         DeployMonitoring: !Ref DeployMonitoring
         MonitoringVersion: !Ref MonitoringVersion
+        MonitoringRole: !If [DeployMonitoringEnabled, 'compute', 'none']
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-OnDemandCNG'
@@ -532,6 +529,7 @@ Resources:
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         DeployMonitoring: !Ref DeployMonitoring
         MonitoringVersion: !Ref MonitoringVersion
+        MonitoringRole: !If [DeployMonitoringEnabled, 'compute', 'none']
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-PseriesCNG'

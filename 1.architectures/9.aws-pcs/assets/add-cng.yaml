@@ -31,6 +31,7 @@ Metadata:
         Parameters:
           - DeployMonitoring
           - MonitoringVersion
+          - MonitoringRole
 
 Parameters:
   ClusterId:
@@ -100,8 +101,18 @@ Parameters:
     Description: Monitoring stack version (git tag or 'latest')
     Default: 'latest'
 
+  MonitoringRole:
+    Type: String
+    Description: Monitoring role for this node (login=head node with Prometheus/Grafana, compute=compute node with exporters, none=no monitoring)
+    Default: 'none'
+    AllowedValues:
+      - 'login'
+      - 'compute'
+      - 'none'
+
 Conditions:
   CreateQueue: !Not [!Equals [!Ref QueueName, ""]]
+  IsMonitoringLogin: !Equals [!Ref MonitoringRole, 'login']
 
 Resources:
 
@@ -146,10 +157,21 @@ Resources:
                 Value: "true"
               - Key: Name
                 Value: !Sub 'PCS-${CngName}'
+              - !If
+                - IsMonitoringLogin
+                - Key: monitoring-role
+                  Value: !Ref MonitoringRole
+                - !Ref AWS::NoValue
+              - !If
+                - IsMonitoringLogin
+                - Key: pcs-cluster-id
+                  Value: !Ref ClusterId
+                - !Ref AWS::NoValue
         MetadataOptions:
           HttpEndpoint: enabled
           HttpPutResponseHopLimit: 4
           HttpTokens: required
+          InstanceMetadataTags: enabled
         SecurityGroupIds:
           - !Ref ClusterSecurityGroupId
         UserData:
@@ -166,20 +188,21 @@ Resources:
             - rsync -aA /home/ /tmp/home
             - echo "${FSxOpenZFSFilesystemId}.fsx.${AWS::Region}.amazonaws.com:/fsx/ /home nfs noatime,nfsvers=3,sync,nconnect=16,rsize=1048576,wsize=1048576,defaults 0 0" >> /etc/fstab
             - mount -a -t nfs defaults
-            - if [ "enabled" == "$(sestatus | awk '/^SELinux status:/{print $3}')" ]; then setsebool -P use_nfs_home_dirs 1; fi
+            - if [ "enabled" = "$(sestatus | awk '/^SELinux status:/{print $3}')" ]; then setsebool -P use_nfs_home_dirs 1; fi
             - rsync -aA --ignore-existing /tmp/home/ /home
             - rm -rf /tmp/home/
             # If provided, mount FSxL filesystem as /fsx
             - if [ ! -z "${FSxLustreFilesystemId}" ]; then mkdir -p /fsx; mount -t lustre ${FSxLustreFilesystemId}.fsx.${AWS::Region}.amazonaws.com@tcp:/${FSxLustreFilesystemMountName} /fsx; chmod 1777 /fsx; fi
             # Monitoring stack installation (optional, enabled on Login Node only)
             - |
-              if [ "${DeployMonitoring}" == "true" ]; then
+              if [ "${DeployMonitoring}" = "true" ]; then
                 echo "Installing monitoring stack..."
-                # Workaround: Create symlink for Ubuntu compatibility
+                # Workaround: Create ec2-user for Ubuntu compatibility
                 # aws-parallelcluster-monitoring expects ec2-user but Ubuntu uses ubuntu
-                if [ -d /home/ubuntu ] && [ ! -d /home/ec2-user ]; then
-                  ln -s /home/ubuntu /home/ec2-user
-                  echo "Created symlink: /home/ec2-user -> /home/ubuntu"
+                if [ -d /home/ubuntu ] && ! id ec2-user >/dev/null 2>&1; then
+                  useradd -m -s /bin/bash -d /home/ubuntu ec2-user
+                  usermod -aG docker ec2-user 2>/dev/null || true
+                  echo "Created ec2-user pointing to /home/ubuntu"
                 fi
                 curl -fsSL https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-monitoring/main/post-install.sh -o /tmp/post-install.sh
                 bash /tmp/post-install.sh ${MonitoringVersion} 2>&1 | tee /var/log/monitoring-install.log

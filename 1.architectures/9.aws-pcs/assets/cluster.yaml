@@ -20,6 +20,7 @@ Metadata:
           - SlurmVersion
           - ManagedAccounting
           - AccountingPolicyEnforcement
+          - DeployMonitoring
       - Label:
           default: PCS Networking configuration
         Parameters:
@@ -99,6 +100,14 @@ Parameters:
       - none
       - 'associations,limits,safe'
 
+  DeployMonitoring:
+    Type: String
+    Description: Enable Slurm OpenMetrics for monitoring stack (Prometheus/Grafana)
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
   HpcRecipesS3Bucket:
     Type: String
     Default: aws-hpc-recipes
@@ -120,6 +129,8 @@ Conditions:
   IsAccountingEnabled: !Equals [!Ref ManagedAccounting, 'enabled']
   IncludeAccountingConfig: !And [!Condition HasAccountingSupport, !Condition IsAccountingEnabled]
   SetAccountingPolicy: !Not [!Equals [!Ref AccountingPolicyEnforcement, 'none']]
+  IsMonitoringEnabled: !Equals [!Ref DeployMonitoring, 'true']
+  IncludeSlurmConfig: !Or [!Condition IncludeAccountingConfig, !Condition IsMonitoringEnabled]
 
 
 Resources:
@@ -139,15 +150,28 @@ Resources:
         SecurityGroupIds:
           - !Ref DefaultSecurityGroupId
       SlurmConfiguration: !If
-        - IncludeAccountingConfig
-        - Accounting:
-            Mode: STANDARD
-            DefaultPurgeTimeInDays: 30
-          SlurmCustomSettings: !If 
-            - SetAccountingPolicy
-            - - ParameterName: AccountingStorageEnforce
+        - IncludeSlurmConfig
+        - Accounting: !If
+            - IncludeAccountingConfig
+            - Mode: STANDARD
+              DefaultPurgeTimeInDays: 30
+            - !Ref AWS::NoValue
+          SlurmCustomSettings:
+            - !If
+              - SetAccountingPolicy
+              - ParameterName: AccountingStorageEnforce
                 ParameterValue: !Ref AccountingPolicyEnforcement
-            - []
+              - !Ref AWS::NoValue
+            - !If
+              - IsMonitoringEnabled
+              - ParameterName: MetricsType
+                ParameterValue: metrics/openmetrics
+              - !Ref AWS::NoValue
+            - !If
+              - IsMonitoringEnabled
+              - ParameterName: CommunicationParameters
+                ParameterValue: enable_http
+              - !Ref AWS::NoValue
         - !Ref AWS::NoValue
 
   # IAM Instance Profile
