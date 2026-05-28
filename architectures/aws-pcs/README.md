@@ -304,18 +304,170 @@ For more details, see the [Connect to Cluster](https://catalog.workshops.aws/ml-
 
 ---
 
-## User Management and Observability
+## Monitoring
+
+AWS PCS clusters can be deployed with an integrated monitoring stack based on [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring). The monitoring stack provides comprehensive observability for cluster health, job metrics, and GPU utilization.
+
+### What Gets Deployed
+
+When monitoring is enabled, the following components are installed:
+
+**On Login Node:**
+- **Prometheus**: Metrics collection and storage
+- **Grafana**: Visualization dashboards (accessible via HTTPS on port 443)
+- **Nginx**: Reverse proxy for Grafana
+- **Node Exporter**: System-level metrics
+- **Pushgateway**: Metrics push endpoint
+- **CloudWatch Exporter**: AWS CloudWatch metrics integration
+
+**On Compute Nodes:**
+- **DCGM Exporter**: NVIDIA GPU metrics (on GPU nodes only)
+- **Node Exporter**: System-level metrics
+
+**Slurm Scheduler:**
+- **OpenMetrics Endpoint**: Native Slurm metrics (jobs, nodes, partitions, scheduler stats) exposed on port 6817
+
+### Enabling Monitoring
+
+Add the following parameters when deploying a cluster:
+
+```bash
+aws cloudformation create-stack \
+  --stack-name my-cluster-with-monitoring \
+  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
+  --parameters \
+    ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-1a \
+    ParameterKey=DeployMonitoring,ParameterValue=true \
+    ParameterKey=MonitoringVersion,ParameterValue=latest \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
+```
+
+**Key Parameters:**
+- `DeployMonitoring`: Set to `true` to enable monitoring stack (default: `false`)
+- `MonitoringVersion`: Version tag or `latest` for the monitoring stack (default: `latest`)
+
+### Accessing Grafana
+
+Grafana runs on the login node and is accessible via AWS Systems Manager Session Manager port forwarding (no public internet access required).
+
+**Step 1: Get the login node instance ID**
+
+```bash
+INSTANCE_ID=$(aws ec2 describe-instances \
+  --filters "Name=tag:aws:pcs:compute-node-group-name,Values=login" \
+            "Name=instance-state-name,Values=running" \
+  --query 'Reservations[0].Instances[0].InstanceId' \
+  --output text)
+```
+
+**Step 2: Install Session Manager plugin** (if not already installed)
+
+Follow the [AWS documentation](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) to install the plugin for your platform.
+
+**Step 3: Start port forwarding**
+
+```bash
+aws ssm start-session \
+  --target $INSTANCE_ID \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters '{"portNumber":["443"],"localPortNumber":["8443"]}'
+```
+
+**Step 4: Retrieve Grafana admin password**
+
+```bash
+# Get cluster ID
+CLUSTER_ID=$(aws cloudformation describe-stacks \
+  --stack-name my-cluster-with-monitoring \
+  --query 'Stacks[0].Outputs[?OutputKey==`ClusterId`].OutputValue' \
+  --output text)
+
+# Retrieve password from SSM Parameter Store
+aws ssm get-parameter \
+  --name "/pcs/${CLUSTER_ID}/grafana/admin-password" \
+  --with-decryption \
+  --query 'Parameter.Value' \
+  --output text
+```
+
+**Step 5: Access Grafana**
+
+Open your browser and navigate to:
+```
+https://localhost:8443/grafana/
+```
+
+Login with:
+- **Username**: `admin`
+- **Password**: (retrieved from SSM Parameter Store in Step 4)
+
+### Available Metrics
+
+The monitoring stack collects the following metrics:
+
+**Slurm OpenMetrics (port 6817):**
+- `/metrics/jobs` - Job statistics (running, pending, completed)
+- `/metrics/nodes` - Node state and resource allocation
+- `/metrics/partitions` - Partition/queue statistics
+- `/metrics/scheduler` - Scheduler performance metrics
+
+**DCGM Exporter (GPU nodes):**
+- GPU utilization, memory usage, temperature
+- SM clock, memory clock
+- Power consumption
+- ECC errors
+- NVLink statistics
+
+**Node Exporter:**
+- CPU, memory, disk, network I/O
+- Filesystem usage
+- System load
+
+**CloudWatch Metrics:**
+- EC2 instance metrics
+- FSx filesystem metrics
+- PCS cluster metrics
+
+### Validation and Troubleshooting
+
+For detailed monitoring stack validation steps, see [tests/monitoring-stack-test.md](tests/monitoring-stack-test.md).
+
+**Common checks:**
+
+```bash
+# SSH into login node via Session Manager
+sudo su - ubuntu
+
+# Check Docker containers
+docker ps
+
+# Check Prometheus targets
+curl -s http://localhost:9090/api/v1/targets | jq '.data.activeTargets[] | {job: .labels.job, health: .health}'
+
+# Check Slurm OpenMetrics endpoints
+curl -s http://<slurmctld-ip>:6817/metrics/jobs
+```
+
+### Known Issues and Workarounds
+
+**Ubuntu 24.04 Compatibility**: aws-parallelcluster-monitoring expects `ec2-user` but Ubuntu uses `ubuntu`. The templates automatically create an `ec2-user` symlink during deployment.
+
+**Upstream Bug Fix**: Version 2.6.2 of aws-parallelcluster-monitoring has a shell script bug (`local` variable outside function). The templates automatically apply a fix during installation.
+
+---
+
+## User Management
 
 ### LDAP User Management
 
 For centralized user management across the cluster, see:
 - [LDAP Server Setup Guide](../6.ldap_server/README.md) - Deploy and configure OpenLDAP for cluster-wide user authentication
 
-### Observability Stack
+### Additional Resources
 
-For monitoring and observability, see:
-- [Prometheus & Grafana Setup](../../4.validation_and_observability/4.prometheus-grafana/README.md) - Deploy monitoring stack with DCGM metrics
-- [AWS ParallelCluster Monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) - Comprehensive monitoring solution with Prometheus, Grafana, and custom dashboards for HPC clusters
+For more monitoring and observability options, see:
+- [Prometheus & Grafana Setup](../../4.validation_and_observability/4.prometheus-grafana/README.md) - Alternative monitoring stack deployment
+- [AWS ParallelCluster Monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) - Upstream monitoring solution documentation
 
 ---
 
