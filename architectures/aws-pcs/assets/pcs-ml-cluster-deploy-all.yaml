@@ -62,11 +62,6 @@ Metadata:
           - SemanticVersion
           - BuildSchedule
       - Label:
-          default: HPC Recipes Configuration
-        Parameters:
-          - HpcRecipesS3Bucket
-          - HpcRecipesBranch
-      - Label:
           default: S3 Configuration for Nested Templates
         Parameters:
           - S3BucketName
@@ -217,21 +212,6 @@ Parameters:
     Type: String
     Description: Monitoring stack version (git tag or 'latest')
     Default: 'latest'
-
-  # HPC Recipes Configuration
-  HpcRecipesS3Bucket:
-    Type: String
-    Default: aws-hpc-recipes
-    Description: HPC Recipes for AWS S3 bucket
-    AllowedValues:
-      - aws-hpc-recipes
-      - aws-hpc-recipes-dev
-
-  HpcRecipesBranch:
-    Type: String
-    Default: main
-    Description: HPC Recipes for AWS release branch
-    AllowedPattern: '^(?!.*/\.git$)(?!.*/\.)(?!.*\\.\.)[a-zA-Z0-9-_\.]+$'
 
   # On-Demand Compute Node Group
   DeployOnDemandCNG:
@@ -396,34 +376,12 @@ Resources:
         ManagedAccounting: !Ref ManagedAccounting
         AccountingPolicyEnforcement: !Ref AccountingPolicyEnforcement
         DeployMonitoring: !Ref DeployMonitoring
-        HpcRecipesS3Bucket: !Ref HpcRecipesS3Bucket
-        HpcRecipesBranch: !Ref HpcRecipesBranch
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-Cluster'
 
   #############################################################################
-  # 4. Monitoring IAM Policy Stack (Optional)
-  #############################################################################
-  MonitoringIAMPolicyStack:
-    Type: AWS::CloudFormation::Stack
-    Condition: DeployMonitoringEnabled
-    DependsOn:
-      - ClusterStack
-    Properties:
-      TemplateURL: !If
-        - UseLocalTemplates
-        - monitoring-iam-policy.yaml
-        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}monitoring-iam-policy.yaml'
-      Parameters:
-        ClusterName: !GetAtt ClusterStack.Outputs.ClusterId
-        RoleName: !GetAtt ClusterStack.Outputs.RoleName
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-MonitoringPolicy'
-
-  #############################################################################
-  # 5. Login Node Group Stack
+  # 4. Login Node Group Stack
   #############################################################################
   LoginNodeGroupStack:
     Type: AWS::CloudFormation::Stack
