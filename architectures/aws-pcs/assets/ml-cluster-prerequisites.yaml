@@ -360,6 +360,11 @@ Outputs:
     Description: ID of the primary private subnet
     Export:
       Name: !Sub ${AWS::StackName}-PrimaryPrivateSubnet
+  PrivateSubnet:
+    Value: !Ref PrimaryPrivateSubnet
+    Description: ID of the primary private subnet (alias for compatibility)
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivateSubnet
   SecurityGroup:
     Value: !Ref SecurityGroup
     Description: SecurityGroup for Batch
@@ -390,3 +395,8 @@ Outputs:
     Value: !Ref OpenZFSFileSystem
     Export:
       Name: !Sub ${AWS::StackName}-FSxOFilesystemId
+  FSxOpenZFSFilesystemId:
+    Description: The ID of Fsx OpenZFS filesystem (alias for compatibility)
+    Value: !Ref OpenZFSFileSystem
+    Export:
+      Name: !Sub ${AWS::StackName}-FSxOpenZFSFilesystemId

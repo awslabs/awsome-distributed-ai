@@ -11,42 +11,50 @@ Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
-          default: Network Configuration
+          default: "1. Network Configuration"
         Parameters:
-          - VPCName
           - PrimarySubnetAZ
+          - VPCName
           - CreateS3Endpoint
       - Label:
-          default: PCS Cluster Configuration
+          default: "2. PCS Cluster Configuration"
         Parameters:
           - LoginNodeInstanceType
           - SlurmVersion
-          - ManagedAccounting
-          - AccountingPolicyEnforcement
           - DeployMonitoring
           - MonitoringVersion
+          - ManagedAccounting
+          - AccountingPolicyEnforcement
       - Label:
-          default: On-Demand Compute Node Group
+          default: "3. Enroot/Pyxis Deployment Mode"
+        Parameters:
+          - BuildAMI
+          - InstallEnrootPyxis
+          - BaseAmiId
+          - SemanticVersion
+          - BuildSchedule
+      - Label:
+          default: "4. On-Demand Compute Node Group"
         Parameters:
           - DeployOnDemandCNG
+          - OnDemandInstanceType
+          - OnDemandMinCount
+          - OnDemandMaxCount
           - OnDemandCngName
           - OnDemandQueueName
-          - OnDemandInstanceType
-          - OnDemandMaxCount
-          - OnDemandMinCount
       - Label:
-          default: Additional Multi-NIC Compute Node Group for P5/P6 (Optional)
+          default: "5. GPU Compute Node Group - P5/P6 Series (Optional)"
         Parameters:
           - DeployPseriesCNG
+          - PseriesInstanceType
+          - PseriesMinCount
+          - PseriesMaxCount
+          - NetworkInterfaceCount
           - CapacityReservationId
           - PseriesCngName
           - PseriesQueueName
-          - PseriesInstanceType
-          - NetworkInterfaceCount
-          - PseriesMaxCount
-          - PseriesMinCount
       - Label:
-          default: FSx Storage Configuration
+          default: "6. FSx Storage Configuration (Advanced)"
         Parameters:
           - Capacity
           - PerUnitStorageThroughput
@@ -55,19 +63,22 @@ Metadata:
           - HomeCapacity
           - HomeThroughput
       - Label:
-          default: AMI Building Configuration
+          default: "7. Reuse Existing Prerequisites Stack (Advanced)"
         Parameters:
-          - BuildAMI
-          - BaseAmiId
-          - SemanticVersion
-          - BuildSchedule
+          - PrerequisitesStackName
       - Label:
-          default: S3 Configuration for Nested Templates
+          default: "8. S3 Configuration for Nested Templates (Developer)"
         Parameters:
           - S3BucketName
           - S3KeyPrefix
 
 Parameters:
+  # Prerequisites Stack Reference (Optional)
+  PrerequisitesStackName:
+    Type: String
+    Default: ""
+    Description: "[OPTIONAL] Name of existing Prerequisites stack (e.g., pcs-shared-infra) to reuse VPC and FSx resources. Leave empty to create new Prerequisites. Recommended for deploying multiple clusters quickly."
+
   # S3 Configuration
   S3BucketName:
     Type: String
@@ -168,6 +179,14 @@ Parameters:
       - Manual
       - Weekly
       - Monthly
+
+  InstallEnrootPyxis:
+    Type: String
+    Description: Install Enroot/Pyxis via UserData (only needed if BuildAMI=false and you need container support). Set to false for fastest boot time.
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
 
   # PCS Cluster Configuration
   SlurmVersion:
@@ -304,13 +323,16 @@ Conditions:
   DeployOnDemandCNGEnabled: !Equals [!Ref DeployOnDemandCNG, 'true']
   DeployPseriesCNGEnabled: !Equals [!Ref DeployPseriesCNG, 'true']
   DeployMonitoringEnabled: !Equals [!Ref DeployMonitoring, 'true']
+  UsePrerequisitesStack: !Not [!Equals [!Ref PrerequisitesStackName, '']]
+  CreatePrerequisites: !Equals [!Ref PrerequisitesStackName, '']
 
 Resources:
   #############################################################################
-  # 1. Network and Storage Prerequisites Stack
+  # 1. Network and Storage Prerequisites Stack (Conditional)
   #############################################################################
   PrerequisitesStack:
     Type: AWS::CloudFormation::Stack
+    Condition: CreatePrerequisites
     Properties:
       TemplateURL: !If
         - UseLocalTemplates
@@ -356,8 +378,6 @@ Resources:
   #############################################################################
   ClusterStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn:
-      - PrerequisitesStack
     Properties:
       TemplateURL: !If
         - UseLocalTemplates
@@ -365,13 +385,34 @@ Resources:
         - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}cluster.yaml'
       Parameters:
         ClusterName: !Sub '${AWS::StackName}'
-        VpcId: !GetAtt PrerequisitesStack.Outputs.VPC
-        PublicSubnetId: !GetAtt PrerequisitesStack.Outputs.PublicSubnet
-        PrivateSubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
-        DefaultSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
-        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
-        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
-        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        VpcId: !If
+          - UsePrerequisitesStack
+          - Fn::ImportValue: !Sub '${PrerequisitesStackName}-VPC'
+          - !GetAtt PrerequisitesStack.Outputs.VPC
+        PublicSubnetId: !If
+          - UsePrerequisitesStack
+          - Fn::ImportValue: !Sub '${PrerequisitesStackName}-PublicSubnet'
+          - !GetAtt PrerequisitesStack.Outputs.PublicSubnet
+        PrivateSubnetId: !If
+          - UsePrerequisitesStack
+          - Fn::ImportValue: !Sub '${PrerequisitesStackName}-PrivateSubnet'
+          - !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
+        DefaultSecurityGroupId: !If
+          - UsePrerequisitesStack
+          - Fn::ImportValue: !Sub '${PrerequisitesStackName}-SecurityGroup'
+          - !GetAtt PrerequisitesStack.Outputs.SecurityGroup
+        FSxLustreFilesystemId: !If
+          - UsePrerequisitesStack
+          - Fn::ImportValue: !Sub '${PrerequisitesStackName}-FSxLustreFilesystemId'
+          - !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
+        FSxLustreFilesystemMountName: !If
+          - UsePrerequisitesStack
+          - Fn::ImportValue: !Sub '${PrerequisitesStackName}-FSxLustreFilesystemMountname'
+          - !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
+        FSxOpenZFSFilesystemId: !If
+          - UsePrerequisitesStack
+          - Fn::ImportValue: !Sub '${PrerequisitesStackName}-FSxOpenZFSFilesystemId'
+          - !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         SlurmVersion: !Ref SlurmVersion
         ManagedAccounting: !Ref ManagedAccounting
         AccountingPolicyEnforcement: !Ref AccountingPolicyEnforcement
@@ -394,24 +435,41 @@ Resources:
         - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng.yaml'
       Parameters:
         ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
+        ClusterName: !Sub '${AWS::StackName}'
         CngName: login
         QueueName: ""
         InstanceType: !Ref LoginNodeInstanceType
         MaxCount: 1
         MinCount: 1
-        SubnetId: !GetAtt PrerequisitesStack.Outputs.PublicSubnet
+        SubnetId: !If
+          - UsePrerequisitesStack
+          - !Ref PrerequisitesStackName-PublicSubnet
+          - !GetAtt PrerequisitesStack.Outputs.PublicSubnet
         AmiId: !If
           - BuildAMIEnabled
           - !GetAtt DLAMIStack.Outputs.DLAMIforPCSAmiId
           - !Sub '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
-        ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
+        ClusterSecurityGroupId: !If
+          - UsePrerequisitesStack
+          - !Ref PrerequisitesStackName-SecurityGroup
+          - !GetAtt PrerequisitesStack.Outputs.SecurityGroup
         IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
-        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
-        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
-        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        FSxLustreFilesystemId: !If
+          - UsePrerequisitesStack
+          - !Ref PrerequisitesStackName-FSxLustreFilesystemId
+          - !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
+        FSxLustreFilesystemMountName: !If
+          - UsePrerequisitesStack
+          - !Ref PrerequisitesStackName-FSxLustreFilesystemMountname
+          - !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
+        FSxOpenZFSFilesystemId: !If
+          - UsePrerequisitesStack
+          - !Ref PrerequisitesStackName-FSxOpenZFSFilesystemId
+          - !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         DeployMonitoring: !Ref DeployMonitoring
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRole: !If [DeployMonitoringEnabled, 'login', 'none']
+        InstallEnrootPyxis: !Ref InstallEnrootPyxis
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-LoginNodeGroup'
@@ -431,24 +489,41 @@ Resources:
         - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng.yaml'
       Parameters:
         ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
+        ClusterName: !Sub '${AWS::StackName}'
         CngName: !Ref OnDemandCngName
         QueueName: !Ref OnDemandQueueName
         InstanceType: !Ref OnDemandInstanceType
         MaxCount: !Ref OnDemandMaxCount
         MinCount: !Ref OnDemandMinCount
-        SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
+        SubnetId: !If
+          - UsePrerequisitesStack
+          - !Ref PrerequisitesStackName-PrivateSubnet
+          - !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
         AmiId: !If
           - BuildAMIEnabled
           - !GetAtt DLAMIStack.Outputs.DLAMIforPCSAmiId
           - !Sub '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
-        ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
+        ClusterSecurityGroupId: !If
+          - UsePrerequisitesStack
+          - !Ref PrerequisitesStackName-SecurityGroup
+          - !GetAtt PrerequisitesStack.Outputs.SecurityGroup
         IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
-        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
-        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
-        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        FSxLustreFilesystemId: !If
+          - UsePrerequisitesStack
+          - !Ref PrerequisitesStackName-FSxLustreFilesystemId
+          - !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
+        FSxLustreFilesystemMountName: !If
+          - UsePrerequisitesStack
+          - !Ref PrerequisitesStackName-FSxLustreFilesystemMountname
+          - !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
+        FSxOpenZFSFilesystemId: !If
+          - UsePrerequisitesStack
+          - !Ref PrerequisitesStackName-FSxOpenZFSFilesystemId
+          - !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         DeployMonitoring: !Ref DeployMonitoring
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRole: !If [DeployMonitoringEnabled, 'compute', 'none']
+        InstallEnrootPyxis: !Ref InstallEnrootPyxis
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-OnDemandCNG'
@@ -469,74 +544,47 @@ Resources:
       Parameters:
         CapacityReservationId: !Ref CapacityReservationId
         ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
+        ClusterName: !Sub '${AWS::StackName}'
         CngName: !Ref PseriesCngName
         QueueName: !Ref PseriesQueueName
         InstanceType: !Ref PseriesInstanceType
         NetworkInterfaceCount: !Ref NetworkInterfaceCount
         MaxCount: !Ref PseriesMaxCount
         MinCount: !Ref PseriesMinCount
-        SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
+        SubnetId: !If
+          - UsePrerequisitesStack
+          - !Ref PrerequisitesStackName-PrivateSubnet
+          - !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
         AmiId: !If
           - BuildAMIEnabled
           - !GetAtt DLAMIStack.Outputs.DLAMIforPCSAmiId
           - !Sub '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
-        ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
+        ClusterSecurityGroupId: !If
+          - UsePrerequisitesStack
+          - !Ref PrerequisitesStackName-SecurityGroup
+          - !GetAtt PrerequisitesStack.Outputs.SecurityGroup
         IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
-        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
-        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
-        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        FSxLustreFilesystemId: !If
+          - UsePrerequisitesStack
+          - !Ref PrerequisitesStackName-FSxLustreFilesystemId
+          - !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
+        FSxLustreFilesystemMountName: !If
+          - UsePrerequisitesStack
+          - !Ref PrerequisitesStackName-FSxLustreFilesystemMountname
+          - !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
+        FSxOpenZFSFilesystemId: !If
+          - UsePrerequisitesStack
+          - !Ref PrerequisitesStackName-FSxOpenZFSFilesystemId
+          - !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         DeployMonitoring: !Ref DeployMonitoring
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRole: !If [DeployMonitoringEnabled, 'compute', 'none']
+        InstallEnrootPyxis: !Ref InstallEnrootPyxis
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-PseriesCNG'
 
 Outputs:
-  #############################################################################
-  # Prerequisites Stack Outputs
-  #############################################################################
-  VPCId:
-    Description: VPC ID
-    Value: !GetAtt PrerequisitesStack.Outputs.VPC
-    Export:
-      Name: !Sub '${AWS::StackName}-VPC'
-
-  PublicSubnetId:
-    Description: Public Subnet ID
-    Value: !GetAtt PrerequisitesStack.Outputs.PublicSubnet
-    Export:
-      Name: !Sub '${AWS::StackName}-PublicSubnet'
-
-  PrivateSubnetId:
-    Description: Private Subnet ID
-    Value: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
-    Export:
-      Name: !Sub '${AWS::StackName}-PrivateSubnet'
-
-  SecurityGroupId:
-    Description: Security Group ID
-    Value: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
-    Export:
-      Name: !Sub '${AWS::StackName}-SecurityGroup'
-
-  FSxLustreFilesystemId:
-    Description: FSx Lustre Filesystem ID
-    Value: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
-    Export:
-      Name: !Sub '${AWS::StackName}-FSxLustreFilesystemId'
-
-  FSxLustreFilesystemMountname:
-    Description: FSx Lustre Filesystem Mount Name
-    Value: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
-    Export:
-      Name: !Sub '${AWS::StackName}-FSxLustreFilesystemMountname'
-
-  FSxOpenZFSFilesystemId:
-    Description: FSx OpenZFS Filesystem ID
-    Value: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
-    Export:
-      Name: !Sub '${AWS::StackName}-FSxOpenZFSFilesystemId'
 
   #############################################################################
   # DLAMI Stack Outputs (Optional)
@@ -598,19 +646,50 @@ Outputs:
   #############################################################################
   AddComputeNodeGroupCommand:
     Description: Command to manually add additional compute node groups
-    Value: !Sub |
-      For single NIC instances (CPU/GPU), use add-cng.yaml:
-      For multi-NIC instances (P5/P6 series), use add-cng-p5.yaml:
+    Value: !If
+      - CreatePrerequisites
+      - !Sub |
+        For single NIC instances (CPU/GPU), use add-cng.yaml:
+        For multi-NIC instances (P5/P6 series), use add-cng-p5.yaml:
 
-      Common parameters:
-      ClusterId: ${ClusterStack.Outputs.ClusterId}
-      SubnetId: ${PrerequisitesStack.Outputs.PrimaryPrivateSubnet}
-      ClusterSecurityGroupId: ${PrerequisitesStack.Outputs.SecurityGroup}
-      IamProfileArn: ${ClusterStack.Outputs.InstanceProfileArn}
-      FSxLustreFilesystemId: ${PrerequisitesStack.Outputs.FSxLustreFilesystemId}
-      FSxLustreFilesystemMountName: ${PrerequisitesStack.Outputs.FSxLustreFilesystemMountname}
-      FSxOpenZFSFilesystemId: ${PrerequisitesStack.Outputs.FSxOFilesystemId}
+        Common parameters:
+        ClusterId: ${ClusterStack.Outputs.ClusterId}
+        SubnetId: ${PrerequisitesStack.Outputs.PrimaryPrivateSubnet}
+        ClusterSecurityGroupId: ${PrerequisitesStack.Outputs.SecurityGroup}
+        IamProfileArn: ${ClusterStack.Outputs.InstanceProfileArn}
+        FSxLustreFilesystemId: ${PrerequisitesStack.Outputs.FSxLustreFilesystemId}
+        FSxLustreFilesystemMountName: ${PrerequisitesStack.Outputs.FSxLustreFilesystemMountname}
+        FSxOpenZFSFilesystemId: ${PrerequisitesStack.Outputs.FSxOFilesystemId}
 
-      For add-cng-p5.yaml, also specify:
-      NetworkInterfaceCount: 16 or 32
-      CapacityReservationId: (optional, for Capacity Blocks)
+        For add-cng-p5.yaml, also specify:
+        NetworkInterfaceCount: 16 or 32
+        CapacityReservationId: (optional, for Capacity Blocks)
+      - !Sub
+        - |
+          For single NIC instances (CPU/GPU), use add-cng.yaml:
+          For multi-NIC instances (P5/P6 series), use add-cng-p5.yaml:
+
+          Common parameters:
+          ClusterId: ${ClusterId}
+          SubnetId: ${PrivateSubnet}
+          ClusterSecurityGroupId: ${SecurityGroup}
+          IamProfileArn: ${InstanceProfile}
+          FSxLustreFilesystemId: ${FSxLustre}
+          FSxLustreFilesystemMountName: ${FSxLustreMount}
+          FSxOpenZFSFilesystemId: ${FSxOpenZFS}
+
+          For add-cng-p5.yaml, also specify:
+          NetworkInterfaceCount: 16 or 32
+          CapacityReservationId: (optional, for Capacity Blocks)
+        - ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
+          InstanceProfile: !GetAtt ClusterStack.Outputs.InstanceProfileArn
+          PrivateSubnet:
+            Fn::ImportValue: !Sub '${PrerequisitesStackName}-PrivateSubnet'
+          SecurityGroup:
+            Fn::ImportValue: !Sub '${PrerequisitesStackName}-SecurityGroup'
+          FSxLustre:
+            Fn::ImportValue: !Sub '${PrerequisitesStackName}-FSxLustreFilesystemId'
+          FSxLustreMount:
+            Fn::ImportValue: !Sub '${PrerequisitesStackName}-FSxLustreFilesystemMountname'
+          FSxOpenZFS:
+            Fn::ImportValue: !Sub '${PrerequisitesStackName}-FSxOpenZFSFilesystemId'
