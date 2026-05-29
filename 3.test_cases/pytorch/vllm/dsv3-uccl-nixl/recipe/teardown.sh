@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Delete all pods this sample created. Keeps the namespace and HF secret.
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Delete all Deployments this sample created. Keeps the namespace and HF secret.
 
 set -euo pipefail
 
@@ -8,6 +11,6 @@ if [[ -z "${NAMESPACE:-}" ]]; then
     exit 1
 fi
 
-echo "==> Deleting dsv3-disagg pods in namespace ${NAMESPACE}"
-kubectl delete pod --selector=app=dsv3-disagg --namespace "${NAMESPACE}" --ignore-not-found
+echo "==> Deleting dsv3-disagg Deployments in namespace ${NAMESPACE}"
+kubectl delete deployment --selector=app=dsv3-disagg --namespace "${NAMESPACE}" --ignore-not-found
 echo "==> Done."

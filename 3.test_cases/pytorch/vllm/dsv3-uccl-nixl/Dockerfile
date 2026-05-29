@@ -1,5 +1,5 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT-0
 #
 # vLLM 0.21.0 + UCCL-EP + NIXL container image for DeepSeek-V3 disaggregated
 # inference on AWS EKS / SageMaker HyperPod EKS with EFA.
@@ -10,7 +10,7 @@
 #   - EFA installer 1.48.0
 #   - NCCL 2.30.4 (CUDA arches 8.0/8.6/8.9/9.0/10.0/10.3)
 #   - vLLM 0.21.0 from source
-#   - NIXL 1.0.1 (cu13 build)
+#   - NIXL 1.1.0 (CUDA-13 backend auto-selected via the meta wheel)
 #   - UCCL (commit 0dc87eb) + uccl.ep + deep_ep wrapper
 #   - Ray 2.55.1 for DP coordination
 #
@@ -25,7 +25,7 @@ ARG EFA_INSTALLER_VERSION=1.48.0
 ARG NCCL_VERSION=v2.30.4-1
 ARG NCCL_TESTS_VERSION=v2.18.3
 ARG VLLM_COMMIT=v0.21.0
-ARG NIXL_VERSION=v1.0.1
+ARG NIXL_VERSION=v1.1.0
 ARG UCCL_COMMIT=0dc87eb3b40c372a16b70ef320f37daaa5299ca7
 
 # --- system packages ---------------------------------------------------------
@@ -139,15 +139,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # --- Ray (DP coordinator) ----------------------------------------------------
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system "ray[default]>=2.43"
+    uv pip install --system "ray[default]==2.55.1"
 
-# --- NIXL (cu13) -------------------------------------------------------------
-# Install nixl-cu13 first, then nixl meta package, then force-reinstall
-# nixl-cu13 to keep cu13 ownership of nixl_ep namespace.
+# --- NIXL --------------------------------------------------------------------
+# v1.1.0 ships cu12 and cu13 backends inside the meta wheel and auto-selects
+# at runtime based on torch.version.cuda — single-line install. (v1.0.1 had
+# an unconditional cu12 dep that required a 3-step reinstall dance.)
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system "nixl-cu13==$(echo ${NIXL_VERSION} | sed 's/^v//')" \
-    && uv pip install --system "nixl==$(echo ${NIXL_VERSION} | sed 's/^v//')" \
-    && uv pip install --system --reinstall --no-deps "nixl-cu13==$(echo ${NIXL_VERSION} | sed 's/^v//')"
+    uv pip install --system "nixl==$(echo ${NIXL_VERSION} | sed 's/^v//')"
 
 # --- UCCL-EP + deep_ep wrapper ----------------------------------------------
 RUN git clone https://github.com/uccl-project/uccl.git /opt/uccl \
@@ -166,13 +165,22 @@ ENV PER_EXPERT_BATCHING=1
 RUN TORCH_CUDA_ARCH_LIST="9.0a+PTX;10.0a+PTX;10.3a+PTX" python3 setup.py install
 
 WORKDIR /opt/uccl/ep/deep_ep_wrapper
-RUN pip install --no-deps .
+RUN pip install .
 
 # --- smoke tests -------------------------------------------------------------
 RUN echo "=== Smoke test: vLLM ===" \
     && python3 -c "import vllm; print(f'vLLM {vllm.__version__}')" \
     && echo "=== Smoke test: NIXL ===" \
     && python3 -c "import nixl; print('NIXL OK')" \
+    && echo "=== Smoke test: NIXL backend matches CUDA 13 ===" \
+    && python3 -c "import importlib.util, subprocess, os; \
+spec = importlib.util.find_spec('nixl_ep'); \
+assert spec, 'nixl_ep not found'; \
+so = next(p for p in os.listdir(os.path.dirname(spec.origin)) if p.endswith('.so')); \
+out = subprocess.check_output(['ldd', os.path.join(os.path.dirname(spec.origin), so)], text=True); \
+assert 'libcudart.so.13' in out, 'nixl_ep does not link cu13'; \
+assert 'libcudart.so.12' not in out, 'nixl_ep also links cu12'; \
+print(f'nixl_ep cu13 OK: {so}')" \
     && echo "=== Smoke test: uccl.ep ===" \
     && python3 -c "import torch; import uccl.ep; print('uccl.ep OK')" \
     && echo "=== Smoke test: deep_ep ===" \

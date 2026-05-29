@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
 # Build the vLLM + UCCL-EP + NIXL image and push it to ECR.
 #
 # Reads REGISTRY / IMAGE / TAG / AWS_REGION from setup/env_vars.

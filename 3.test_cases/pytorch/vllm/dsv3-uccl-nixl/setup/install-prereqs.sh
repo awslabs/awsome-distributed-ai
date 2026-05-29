@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
 # Install the NVIDIA device plugin and the AWS EFA Kubernetes device plugin
 # on a vanilla EKS cluster. Skip this on SageMaker HyperPod EKS — both
 # plugins are pre-installed there.
@@ -14,7 +17,7 @@ kubectl apply -f \
 
 echo "==> Installing AWS EFA Kubernetes device plugin ${EFA_PLUGIN_VERSION}"
 kubectl apply -f \
-    "https://raw.githubusercontent.com/aws-samples/aws-efa-eks/main/manifest/efa-k8s-device-plugin.yml"
+    "https://raw.githubusercontent.com/aws-samples/aws-efa-eks/${EFA_PLUGIN_VERSION}/manifest/efa-k8s-device-plugin.yml"
 
 echo "==> Waiting for plugins to roll out"
 kubectl -n kube-system rollout status ds/nvidia-device-plugin-daemonset --timeout=300s

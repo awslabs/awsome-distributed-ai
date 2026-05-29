@@ -1,3 +1,8 @@
+<!--
+Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+SPDX-License-Identifier: MIT-0
+-->
+
 # vLLM test cases
 
 [vLLM](https://github.com/vllm-project/vllm) is a high-throughput,
