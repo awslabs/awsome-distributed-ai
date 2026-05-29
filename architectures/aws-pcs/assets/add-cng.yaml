@@ -214,21 +214,21 @@ Resources:
                 if nvidia-smi 2>/dev/null; then
                   echo "GPU detected, installing nvidia-container-toolkit..." | tee -a /var/log/enroot-pyxis-install.log
                   . /etc/os-release
-                  distribution="\$ID\$VERSION_ID"
+                  distribution="$$ID$$VERSION_ID"
                   curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-                  curl -s -L https://nvidia.github.io/libnvidia-container/\$distribution/libnvidia-container.list | \
+                  curl -s -L https://nvidia.github.io/libnvidia-container/$$distribution/libnvidia-container.list | \
                     sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
                     tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
                   apt-get update -y >> /var/log/enroot-pyxis-install.log 2>&1
                   apt-get install libnvidia-container-tools -y >> /var/log/enroot-pyxis-install.log 2>&1
                 fi
 
-                echo "Installing Enroot \$ENROOT_RELEASE..." | tee -a /var/log/enroot-pyxis-install.log
+                echo "Installing Enroot $$ENROOT_RELEASE..." | tee -a /var/log/enroot-pyxis-install.log
                 arch=`dpkg --print-architecture`
                 mkdir -p /tmp/enroot
                 cd /tmp/enroot
-                curl -fSsL -O https://github.com/NVIDIA/enroot/releases/download/v\$ENROOT_RELEASE/enroot_\$ENROOT_RELEASE-1_\$arch.deb
-                curl -fSsL -O https://github.com/NVIDIA/enroot/releases/download/v\$ENROOT_RELEASE/enroot+caps_\$ENROOT_RELEASE-1_\$arch.deb
+                curl -fSsL -O https://github.com/NVIDIA/enroot/releases/download/v$$ENROOT_RELEASE/enroot_$$ENROOT_RELEASE-1_$$arch.deb
+                curl -fSsL -O https://github.com/NVIDIA/enroot/releases/download/v$$ENROOT_RELEASE/enroot+caps_$$ENROOT_RELEASE-1_$$arch.deb
                 apt install -y ./*.deb >> /var/log/enroot-pyxis-install.log 2>&1
 
                 ln -sf /usr/share/enroot/hooks.d/50-slurm-pmi.sh /etc/enroot/hooks.d/
@@ -241,25 +241,25 @@ Resources:
                 ENROOT_CACHE_PATH=/tmp/enroot envsubst < /tmp/enroot.template.conf > /etc/enroot/enroot.conf
                 chmod 0644 /etc/enroot/enroot.conf
 
-                echo "Installing Pyxis \$PYXIS_RELEASE..." | tee -a /var/log/enroot-pyxis-install.log
-                for SLURM_VERSION in \$SLURM_VERSIONS; do
-                  echo "Installing Pyxis for Slurm \$SLURM_VERSION" | tee -a /var/log/enroot-pyxis-install.log
-                  SLURM_PATH="/opt/aws/pcs/scheduler/slurm-\$SLURM_VERSION"
-                  SLURM_ETC_PATH="/etc/aws/pcs/scheduler/slurm-\$SLURM_VERSION"
+                echo "Installing Pyxis $$PYXIS_RELEASE..." | tee -a /var/log/enroot-pyxis-install.log
+                for SLURM_VERSION in $$$SLURM_VERSIONS; do
+                  echo "Installing Pyxis for Slurm $$SLURM_VERSION" | tee -a /var/log/enroot-pyxis-install.log
+                  SLURM_PATH="/opt/aws/pcs/scheduler/slurm-$$SLURM_VERSION"
+                  SLURM_ETC_PATH="/etc/aws/pcs/scheduler/slurm-$$SLURM_VERSION"
 
                   if [ ! -d /tmp/pyxis ]; then
-                    git clone --depth 1 --branch \$PYXIS_RELEASE https://github.com/NVIDIA/pyxis.git /tmp/pyxis >> /var/log/enroot-pyxis-install.log 2>&1
+                    git clone --depth 1 --branch $$PYXIS_RELEASE https://github.com/NVIDIA/pyxis.git /tmp/pyxis >> /var/log/enroot-pyxis-install.log 2>&1
                   fi
 
                   cd /tmp/pyxis
                   make clean >> /var/log/enroot-pyxis-install.log 2>&1 || true
-                  CPPFLAGS="-I \$SLURM_PATH/include/" make >> /var/log/enroot-pyxis-install.log 2>&1
-                  CPPFLAGS="-I \$SLURM_PATH/include/" make install >> /var/log/enroot-pyxis-install.log 2>&1
+                  CPPFLAGS="-I $$SLURM_PATH/include/" make >> /var/log/enroot-pyxis-install.log 2>&1
+                  CPPFLAGS="-I $$SLURM_PATH/include/" make install >> /var/log/enroot-pyxis-install.log 2>&1
 
-                  mkdir -p \$SLURM_ETC_PATH/plugstack.conf.d
-                  ln -sf /usr/local/share/pyxis/pyxis.conf \$SLURM_ETC_PATH/plugstack.conf.d/pyxis.conf
+                  mkdir -p $$SLURM_ETC_PATH/plugstack.conf.d
+                  ln -sf /usr/local/share/pyxis/pyxis.conf $$SLURM_ETC_PATH/plugstack.conf.d/pyxis.conf
 
-                  echo "Pyxis installed for Slurm \$SLURM_VERSION" | tee -a /var/log/enroot-pyxis-install.log
+                  echo "Pyxis installed for Slurm $$SLURM_VERSION" | tee -a /var/log/enroot-pyxis-install.log
                 done
 
                 echo "PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:/usr/lib/ccache/bin:/usr/local/bin:/usr/bin:/bin" >> /etc/default/slurmd
