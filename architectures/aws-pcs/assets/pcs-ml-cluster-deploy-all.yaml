@@ -23,6 +23,7 @@ Metadata:
           - SlurmVersion
           - DeployMonitoring
           - MonitoringVersion
+          - MonitoringRepo
           - ManagedAccounting
           - AccountingPolicyEnforcement
       - Label:
@@ -229,11 +230,19 @@ Parameters:
   MonitoringVersion:
     Type: String
     Description: >-
-      aws-parallelcluster-monitoring version to install, pinned to a release tag
-      for upstream stability. Passed down to the CNG stacks, which fetch
-      post-install.sh from this tag and pass it as the version argument. Avoid
-      'latest'/'main' in production as upstream changes can break deployments.
+      aws-parallelcluster-monitoring git ref to install (release tag, branch, or
+      'latest'). Passed down to the CNG stacks, which fetch post-install.sh from
+      MonitoringRepo at this ref and pass it as the ref argument. Pin to a release
+      tag in production; a branch name + MonitoringRepo fork can be used to test
+      unreleased changes.
     Default: 'v2.6.3'
+
+  MonitoringRepo:
+    Type: String
+    Description: >-
+      GitHub "owner/repo" to fetch the monitoring stack from. Override with a fork
+      together with a branch in MonitoringVersion to test unreleased changes.
+    Default: 'aws-samples/aws-parallelcluster-monitoring'
 
   # On-Demand Compute Node Group
   DeployOnDemandCNG:
@@ -444,6 +453,7 @@ Resources:
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         DeployMonitoring: !Ref DeployMonitoring
         MonitoringVersion: !Ref MonitoringVersion
+        MonitoringRepo: !Ref MonitoringRepo
         MonitoringRole: login
         PostInstallScriptUrl: !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
@@ -484,7 +494,8 @@ Resources:
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         DeployMonitoring: !Ref DeployMonitoring
         MonitoringVersion: !Ref MonitoringVersion
-        MonitoringRole: none
+        MonitoringRepo: !Ref MonitoringRepo
+        MonitoringRole: compute
         PostInstallScriptUrl: !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
       Tags:
@@ -526,7 +537,8 @@ Resources:
         CapacityReservationId: !Ref CapacityReservationId
         DeployMonitoring: !Ref DeployMonitoring
         MonitoringVersion: !Ref MonitoringVersion
-        MonitoringRole: none
+        MonitoringRepo: !Ref MonitoringRepo
+        MonitoringRole: compute
         PostInstallScriptUrl: !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
       Tags:

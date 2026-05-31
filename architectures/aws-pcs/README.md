@@ -351,9 +351,25 @@ aws cloudformation create-stack \
 
 **Key Parameters:**
 - `DeployMonitoring`: Set to `true` to enable monitoring stack (default: `true`)
-- `MonitoringVersion`: [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) release tag to install (default: `v2.6.3`). The templates use this value both to fetch `post-install.sh` from the matching tag and as the version argument passed to it. `v2.6.3` is the first release with native Ubuntu PCS AMI support ([PR #44](https://github.com/aws-samples/aws-parallelcluster-monitoring/pull/44)), so the templates no longer apply any `ec2-user`/`local login_id` workarounds.
+- `MonitoringVersion`: [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) git ref to install — release tag, branch, or `latest` (default: `v2.6.3`). Used both to fetch `post-install.sh` from `MonitoringRepo` at this ref and as the ref passed to it. `v2.6.3` is the first release with native Ubuntu PCS AMI support ([PR #44](https://github.com/aws-samples/aws-parallelcluster-monitoring/pull/44)), so the templates no longer apply any `ec2-user`/`local login_id` workarounds.
+- `MonitoringRepo`: GitHub `owner/repo` to fetch the monitoring stack from (default: `aws-samples/aws-parallelcluster-monitoring`). Override with a fork together with a branch in `MonitoringVersion` to test unreleased changes before they merge upstream.
 
 > **Pinned for stability:** `MonitoringVersion` is pinned to a release tag rather than `latest`/`main` so that upstream changes cannot break deployments without warning. Update the default only after validating a newer release.
+
+> **Node type is identified by the `monitoring-role` tag, not `Name`.** The
+> templates tag login nodes `monitoring-role=login` and compute nodes
+> `monitoring-role=compute`; the monitoring stack uses this to scrape the login
+> node only via its static job and report compute nodes as `instance_name=Compute`
+> (the ParallelCluster dashboard convention). The EC2 `Name` tag defaults to
+> `PCS-<cngname>` and is free for you to retag — it no longer affects monitoring.
+
+**Testing an unreleased monitoring change (fork + branch):** point `MonitoringRepo`
+at a fork and `MonitoringVersion` at a branch instead of a release tag:
+
+```bash
+    ParameterKey=MonitoringRepo,ParameterValue=<owner>/aws-parallelcluster-monitoring \
+    ParameterKey=MonitoringVersion,ParameterValue=<branch-name> \
+```
 
 ### Accessing Grafana
 

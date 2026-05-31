@@ -36,6 +36,7 @@ Metadata:
         Parameters:
           - DeployMonitoring
           - MonitoringVersion
+          - MonitoringRepo
           - MonitoringRole
       - Label:
           default: Post-install script (OnNodeConfigured)
@@ -137,11 +138,21 @@ Parameters:
   MonitoringVersion:
     Type: String
     Description: >-
-      aws-parallelcluster-monitoring version to install, pinned to a release tag
-      for upstream stability. Used both to fetch post-install.sh from that tag
-      and as the version argument passed to it. Avoid 'latest'/'main' in
-      production as upstream changes can break deployments.
+      aws-parallelcluster-monitoring git ref to install (release tag, branch, or
+      'latest'). Used both to fetch post-install.sh from MonitoringRepo at this
+      ref and as the ref argument passed to it. Pin to a release tag for upstream
+      stability in production; a branch name (e.g. a fork's dev branch) can be
+      used together with MonitoringRepo for testing unreleased changes.
     Default: 'v2.6.3'
+
+  MonitoringRepo:
+    Type: String
+    Description: >-
+      GitHub "owner/repo" to fetch the monitoring stack from. Override with a
+      fork (e.g. DaisukeMiyamoto/aws-parallelcluster-monitoring) together with a
+      branch in MonitoringVersion to test unreleased changes before they merge
+      upstream.
+    Default: 'aws-samples/aws-parallelcluster-monitoring'
 
   MonitoringRole:
     Type: String
@@ -174,7 +185,10 @@ Conditions:
   UseCapacityBlock: !Not [!Equals [!Ref CapacityReservationId, ""]]
   UseOnDemand: !Equals [!Ref CapacityReservationId, ""]
   CreateQueue: !Not [!Equals [!Ref QueueName, ""]]
-  IsMonitoringLogin: !Equals [!Ref MonitoringRole, 'login']
+  # Emit the monitoring-role tag for both login and compute nodes (any role
+  # other than 'none'). The monitoring stack identifies login nodes by this
+  # tag (monitoring-role=login) and excludes them from EC2 service discovery.
+  IsMonitoringRoleSet: !Not [!Equals [!Ref MonitoringRole, 'none']]
 
 Resources:
 
@@ -245,21 +259,26 @@ Resources:
             Tags:
               - Key: HPCRecipes
                 Value: "true"
-              # The Name tag doubles as the monitoring dashboards' node selector:
-              # aws-parallelcluster-monitoring relabels __meta_ec2_tag_Name into the
-              # instance_name label, and the upstream Grafana dashboards filter on the
-              # literals "HeadNode" (login/head) and "Compute" (compute). A node with a
-              # queue is a compute node; a node without one is the login/head node.
+              # Name is free for arbitrary operator use. The monitoring stack
+              # identifies login vs compute nodes via the monitoring-role tag
+              # (below), not Name, so dashboards work regardless of this value.
+              # Default to PCS-<cngname> (mirrors CngName) for a recognizable
+              # console name; retag freely afterward.
               - Key: Name
-                Value: !If [CreateQueue, 'Compute', 'HeadNode']
+                Value: !Sub 'PCS-${CngName}'
               - Key: CngName
                 Value: !Sub 'PCS-${CngName}'
               - Key: ClusterName
                 Value: !Ref ClusterName
               - Key: pcs-cluster-id
                 Value: !Ref ClusterId
+              # Node type for the monitoring stack. Emitted for both login and
+              # compute (any role != none). Prometheus drops monitoring-role=login
+              # from EC2 SD (the static login_node job scrapes it); everything else
+              # is reported as instance_name=Compute. See aws-parallelcluster-monitoring
+              # prometheus-pcs.yml and issue #45.
               - !If
-                - IsMonitoringLogin
+                - IsMonitoringRoleSet
                 - Key: monitoring-role
                   Value: !Ref MonitoringRole
                 - !Ref AWS::NoValue
@@ -305,12 +324,13 @@ Resources:
             - |
               if [ "${DeployMonitoring}" = "true" ]; then
                 echo "Installing monitoring stack..."
-                # Pin post-install.sh to the same release tag as MonitoringVersion for upstream stability.
-                # As of v2.6.3 the installer auto-detects the Ubuntu 'ubuntu' user and runs install.sh
-                # itself (aws-parallelcluster-monitoring PR #44), so no ec2-user shim or local-var patch
-                # is needed here.
-                curl -fsSL https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-monitoring/${MonitoringVersion}/post-install.sh -o /tmp/post-install.sh
-                bash /tmp/post-install.sh ${MonitoringVersion} 2>&1 | tee /var/log/monitoring-install.log
+                # Fetch post-install.sh from MonitoringRepo at the MonitoringVersion ref, and
+                # pass both the ref and the repo to it so the tarball is pulled from the same
+                # source. This lets a fork + branch be used for testing unreleased changes.
+                # As of v2.6.3 the installer auto-detects the Ubuntu 'ubuntu' user and runs
+                # install.sh itself (PR #44), so no ec2-user shim or local-var patch is needed.
+                curl -fsSL https://raw.githubusercontent.com/${MonitoringRepo}/${MonitoringVersion}/post-install.sh -o /tmp/post-install.sh
+                bash /tmp/post-install.sh ${MonitoringVersion} ${MonitoringRepo} 2>&1 | tee /var/log/monitoring-install.log
                 echo "Monitoring installation complete"
               fi
 
