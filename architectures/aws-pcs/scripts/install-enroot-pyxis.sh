@@ -39,10 +39,15 @@ apt-get install -y jq squashfs-tools parallel fuse-overlayfs pigz squashfuse zst
 # Install nvidia-container-toolkit if GPU is detected
 if nvidia-smi 2>/dev/null; then
   echo "GPU detected, installing nvidia-container-toolkit..."
-  . /etc/os-release
-  distribution="${ID}${VERSION_ID}"
-  curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-  curl -s -L "https://nvidia.github.io/libnvidia-container/${distribution}/libnvidia-container.list" | \
+  # gpg must not try to open a controlling terminal: post-install/cloud-init runs
+  # with no tty, and `gpg --dearmor` would otherwise fail with
+  # "gpg: cannot open '/dev/tty'", aborting the whole script under `set -e`.
+  curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --batch --no-tty --yes --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+  # Use the version-agnostic 'stable/deb' repo path. The per-distribution paths
+  # (e.g. ubuntu24.04) do not all exist and return an HTML 404 that, without
+  # `curl -f`, would get written verbatim into the apt source list and break
+  # `apt-get update`.
+  curl -fsSL "https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list" | \
     sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
     tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
   apt-get update -y
