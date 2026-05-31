@@ -324,6 +324,15 @@ Parameters:
     Default: ""
     Description: Optional Capacity Reservation ID for P-series instances
 
+  RootVolumeSize:
+    Type: Number
+    Description: >-
+      Root EBS volume size (GiB) for all node groups. The PCS DLAMI default
+      (~75 GiB) is too small for pulling/importing large container images; 300
+      GiB gives ample headroom. Passed down to every compute node group stack.
+    Default: 300
+    MinValue: 75
+
 Conditions:
   UseLocalTemplates: !Equals [!Ref S3BucketName, 'local']
   BuildAMIEnabled: !Equals [!Ref BuildAMI, 'true']
@@ -420,6 +429,7 @@ Resources:
         CngName: login
         QueueName: ""
         InstanceType: !Ref LoginNodeInstanceType
+        RootVolumeSize: !Ref RootVolumeSize
         MaxCount: 1
         MinCount: 1
         SubnetId: !GetAtt PrerequisitesStack.Outputs.PublicSubnet
@@ -459,6 +469,7 @@ Resources:
         CngName: !Ref OnDemandCngName
         QueueName: !Ref OnDemandQueueName
         InstanceType: !Ref OnDemandInstanceType
+        RootVolumeSize: !Ref RootVolumeSize
         MaxCount: !Ref OnDemandMaxCount
         MinCount: !Ref OnDemandMinCount
         SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
@@ -498,6 +509,7 @@ Resources:
         CngName: !Ref PseriesCngName
         QueueName: !Ref PseriesQueueName
         InstanceType: !Ref PseriesInstanceType
+        RootVolumeSize: !Ref RootVolumeSize
         MaxCount: !Ref PseriesMaxCount
         MinCount: !Ref PseriesMinCount
         SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
