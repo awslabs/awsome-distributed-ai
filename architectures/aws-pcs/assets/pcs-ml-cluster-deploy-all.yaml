@@ -233,7 +233,7 @@ Parameters:
       for upstream stability. Passed down to the CNG stacks, which fetch
       post-install.sh from this tag and pass it as the version argument. Avoid
       'latest'/'main' in production as upstream changes can break deployments.
-    Default: 'v2.6.2'
+    Default: 'v2.6.3'
 
   # On-Demand Compute Node Group
   DeployOnDemandCNG:

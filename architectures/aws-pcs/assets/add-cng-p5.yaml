@@ -141,7 +141,7 @@ Parameters:
       for upstream stability. Used both to fetch post-install.sh from that tag
       and as the version argument passed to it. Avoid 'latest'/'main' in
       production as upstream changes can break deployments.
-    Default: 'v2.6.2'
+    Default: 'v2.6.3'
 
   MonitoringRole:
     Type: String
@@ -298,25 +298,12 @@ Resources:
             - |
               if [ "${DeployMonitoring}" = "true" ]; then
                 echo "Installing monitoring stack..."
-                # Workaround: Create ec2-user for Ubuntu compatibility
-                # aws-parallelcluster-monitoring expects ec2-user but Ubuntu uses ubuntu
-                if [ -d /home/ubuntu ] && ! id ec2-user >/dev/null 2>&1; then
-                  useradd -m -s /bin/bash -d /home/ubuntu ec2-user
-                  usermod -aG docker ec2-user 2>/dev/null || true
-                  echo "Created ec2-user pointing to /home/ubuntu"
-                fi
-                # Pin post-install.sh to the same release tag as MonitoringVersion for upstream stability
+                # Pin post-install.sh to the same release tag as MonitoringVersion for upstream stability.
+                # As of v2.6.3 the installer auto-detects the Ubuntu 'ubuntu' user and runs install.sh
+                # itself (aws-parallelcluster-monitoring PR #44), so no ec2-user shim or local-var patch
+                # is needed here.
                 curl -fsSL https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-monitoring/${MonitoringVersion}/post-install.sh -o /tmp/post-install.sh
-                # Run post-install.sh but with bug fix applied immediately after tarball extraction
-                # Modified version that fixes upstream bug: local variable outside function at line 83
-                bash /tmp/post-install.sh ${MonitoringVersion} 2>&1 | tee /tmp/monitoring-install-step1.log || true
-                # If installation failed due to the bug, fix it and retry
-                if [ -f /home/ec2-user/aws-parallelcluster-monitoring/installer/install.sh ]; then
-                  # Fix upstream bug: replace "local login_id" with "login_id=" anywhere in the file
-                  # This is more robust than line number since file may change
-                  sed -i 's/^\([[:space:]]*\)local login_id$/\1login_id=/g' /home/ec2-user/aws-parallelcluster-monitoring/installer/install.sh
-                  bash /home/ec2-user/aws-parallelcluster-monitoring/installer/install.sh 2>&1 | tee /var/log/monitoring-install.log
-                fi
+                bash /tmp/post-install.sh ${MonitoringVersion} 2>&1 | tee /var/log/monitoring-install.log
                 echo "Monitoring installation complete"
               fi
 

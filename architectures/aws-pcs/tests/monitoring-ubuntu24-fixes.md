@@ -1,5 +1,13 @@
 # AWS ParallelCluster Monitoring - Ubuntu 24.04 PCS Compatibility Fixes
 
+> **STATUS (2026-05-31): RESOLVED UPSTREAM.** These fixes were merged via
+> [PR #44](https://github.com/aws-samples/aws-parallelcluster-monitoring/pull/44)
+> and shipped in release **`v2.6.3`** ("Ubuntu PCS AMI support"). The ml-pcs
+> templates now pin `MonitoringVersion=v2.6.3` and call upstream `post-install.sh`
+> directly — the `ec2-user` shim and the `local login_id` sed patch have been
+> removed from the CNG UserData. This document is retained as the historical
+> record of the fix.
+
 ## Summary
 
 Fixed three critical bugs blocking aws-parallelcluster-monitoring deployment on AWS PCS with Ubuntu 24.04 DLAMI.
@@ -244,6 +252,7 @@ ls -la /home/ubuntu/aws-parallelcluster-monitoring/
 1. ✅ Complete monitoring stack test (Docker containers running)
 2. ✅ Verify Grafana password in SSM Parameter Store
 3. ✅ Clean up test cluster
-4. 🔲 Create PR to aws-samples/aws-parallelcluster-monitoring
-5. 🔲 Monitor PR review and address feedback
-6. 🔲 Update CLAUDE.md with PR status
+4. ✅ Create PR to aws-samples/aws-parallelcluster-monitoring (PR #44)
+5. ✅ Monitor PR review and address feedback (merged 2026-05-31)
+6. ✅ Update CLAUDE.md with PR status
+7. ✅ Pin templates to `v2.6.3` and remove the `ec2-user` / `local login_id` workarounds

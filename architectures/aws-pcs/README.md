@@ -345,13 +345,13 @@ aws cloudformation create-stack \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-1a \
     ParameterKey=DeployMonitoring,ParameterValue=true \
-    ParameterKey=MonitoringVersion,ParameterValue=v2.6.2 \
+    ParameterKey=MonitoringVersion,ParameterValue=v2.6.3 \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
 
 **Key Parameters:**
 - `DeployMonitoring`: Set to `true` to enable monitoring stack (default: `true`)
-- `MonitoringVersion`: [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) release tag to install (default: `v2.6.2`). The templates use this value both to fetch `post-install.sh` from the matching tag and as the version argument passed to it.
+- `MonitoringVersion`: [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) release tag to install (default: `v2.6.3`). The templates use this value both to fetch `post-install.sh` from the matching tag and as the version argument passed to it. `v2.6.3` is the first release with native Ubuntu PCS AMI support ([PR #44](https://github.com/aws-samples/aws-parallelcluster-monitoring/pull/44)), so the templates no longer apply any `ec2-user`/`local login_id` workarounds.
 
 > **Pinned for stability:** `MonitoringVersion` is pinned to a release tag rather than `latest`/`main` so that upstream changes cannot break deployments without warning. Update the default only after validating a newer release.
 

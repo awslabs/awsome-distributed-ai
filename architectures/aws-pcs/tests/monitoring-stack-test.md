@@ -223,11 +223,12 @@ docker logs grafana | tail -20
 # Check installation log on login node
 sudo cat /var/log/monitoring-install.log
 
-# Verify ec2-user workaround
-ls -la /home | grep ec2-user
-id ec2-user
+# Verify the installer detected the Ubuntu user and installed to /home/ubuntu
+# (v2.6.3+ auto-detects 'ubuntu'; no ec2-user shim is created any more)
+ls -la /home/ubuntu/aws-parallelcluster-monitoring
+grep -E 'PLATFORM_USER|MONITORING_HOME' /var/log/monitoring-install.log
 
-# Expected: ec2-user with home directory /home/ubuntu
+# Expected: PLATFORM_USER=ubuntu, MONITORING_HOME=/home/ubuntu/aws-parallelcluster-monitoring
 ```
 
 ### 6. Verify Compute Node Exporters
@@ -367,13 +368,13 @@ In Grafana:
 # Check installation log on login node
 sudo cat /var/log/monitoring-install.log
 
-# Check if ec2-user exists (Ubuntu workaround)
-id ec2-user
-ls -la /home/ubuntu
+# Confirm the installer detected the Ubuntu user (v2.6.3+)
+grep -E 'PLATFORM_USER|MONITORING_HOME' /var/log/monitoring-install.log
+ls -la /home/ubuntu/aws-parallelcluster-monitoring
 
-# Manually re-run installation
-curl -fsSL https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-monitoring/main/post-install.sh -o /tmp/post-install.sh
-sudo bash /tmp/post-install.sh latest
+# Manually re-run installation (pin to the same release tag as the deployment)
+curl -fsSL https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-monitoring/v2.6.3/post-install.sh -o /tmp/post-install.sh
+sudo bash /tmp/post-install.sh v2.6.3
 ```
 
 ### Containers Not Running
@@ -505,7 +506,7 @@ aws cloudformation list-stacks \
 - [ ] Grafana password retrievable from SSM Parameter Store
 - [ ] Prometheus targets are UP (check in Grafana or API)
 - [ ] Dashboards display metrics
-- [ ] Ubuntu ec2-user workaround working (/home/ec2-user exists)
+- [ ] Installer detected Ubuntu user (MONITORING_HOME=/home/ubuntu/aws-parallelcluster-monitoring)
 - [ ] IAM monitoring policy attached to cluster role
 - [ ] Stack deletes cleanly
 
