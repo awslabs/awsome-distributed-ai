@@ -80,6 +80,15 @@ Parameters:
       - "16"
       - "32"
 
+  RootVolumeSize:
+    Type: Number
+    Description: >-
+      Root EBS volume size (GiB) for compute nodes. The PCS DLAMI default (~75
+      GiB) is too small for pulling/importing large container images (Enroot/Pyxis
+      squashfs, Megatron ~20 GB). 300 GiB gives ample headroom.
+    Default: 300
+    MinValue: 75
+
   MaxCount:
     Type: Number
     Description: Maximum number of instance
@@ -212,6 +221,12 @@ Resources:
 
       LaunchTemplateData:
         InstanceType: !Ref InstanceType
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: !Ref RootVolumeSize
+              VolumeType: gp3
+              DeleteOnTermination: true
         InstanceMarketOptions: !If
           - UseCapacityBlock
           - MarketType: capacity-block
