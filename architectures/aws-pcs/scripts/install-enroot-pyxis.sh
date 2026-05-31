@@ -4,6 +4,24 @@
 #
 # Install Enroot and Pyxis on AWS PCS nodes
 # Usage: bash install-enroot-pyxis.sh
+#
+# DEPENDENCIES / PREREQUISITES (must hold at runtime, or install fails):
+#   1. PCS Slurm pre-installed: Pyxis is compiled against the Slurm headers at
+#      /opt/aws/pcs/scheduler/slurm-${VERSION}/include/. Versions in
+#      SLURM_VERSIONS whose directory is absent are SKIPPED (warning, not error),
+#      leaving no plugstack config for that version. Use a PCS DLAMI base AMI.
+#   2. Debian/Ubuntu family only: uses apt-get/dpkg (no yum/dnf). Tested on
+#      Ubuntu 24.04 (PCS DLAMI Base).
+#   3. Outbound network egress required (private subnets need a NAT path; the S3
+#      VPC endpoint alone is NOT sufficient):
+#        - github.com                 (Enroot .deb releases, Pyxis source)
+#        - raw.githubusercontent.com  (aws-samples enroot.template.conf)
+#        - nvidia.github.io           (libnvidia-container repo, GPU nodes only)
+#        - Ubuntu apt mirrors
+#   4. Runs as root and may contend with cloud-init for the apt lock; let
+#      cloud-init finish first when invoked from UserData.
+#   5. GPU toolkit (nvidia-container-toolkit) installs ONLY when nvidia-smi
+#      succeeds; CPU-only nodes intentionally skip it.
 
 set -exo pipefail
 

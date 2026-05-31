@@ -26,13 +26,14 @@ Metadata:
           - ManagedAccounting
           - AccountingPolicyEnforcement
       - Label:
-          default: "3. Enroot/Pyxis Deployment Mode"
+          default: "3. Custom AMI / Post-install Script (container support)"
         Parameters:
           - BuildAMI
-          - InstallEnrootPyxis
           - BaseAmiId
           - SemanticVersion
           - BuildSchedule
+          - PostInstallScriptUrl
+          - PostInstallScriptArgs
       - Label:
           default: "4. On-Demand Compute Node Group"
         Parameters:
@@ -143,8 +144,8 @@ Parameters:
   # AMI Building Configuration
   BuildAMI:
     Type: String
-    Description: Whether to build custom DLAMI for PCS
-    Default: 'true'
+    Description: Whether to build custom DLAMI for PCS. Default false; container support is installed at first boot via PostInstallScriptUrl instead.
+    Default: 'false'
     AllowedValues:
       - 'true'
       - 'false'
@@ -170,13 +171,21 @@ Parameters:
       - Weekly
       - Monthly
 
-  InstallEnrootPyxis:
+  PostInstallScriptUrl:
     Type: String
-    Description: Install Enroot/Pyxis via UserData (only needed if BuildAMI=false and you need container support). Set to false for fastest boot time.
-    Default: 'false'
-    AllowedValues:
-      - 'true'
-      - 'false'
+    Description: >-
+      URL of a post-install script run on every node at first boot (PCS
+      equivalent of ParallelCluster OnNodeConfigured). Defaults to the
+      Enroot/Pyxis installer, which is the most common configuration. Set to an
+      empty string to skip, or to another HTTP(S) URL to run a custom script.
+      For testing the fork, override with the DaisukeMiyamoto/awsome-distributed-ai
+      raw URL. S3 public hosting is not allowed.
+    Default: 'https://raw.githubusercontent.com/aws-samples/awsome-distributed-ai/main/architectures/aws-pcs/scripts/install-enroot-pyxis.sh'
+
+  PostInstallScriptArgs:
+    Type: String
+    Description: Space-separated arguments passed to the post-install script.
+    Default: ''
 
   # PCS Cluster Configuration
   SlurmVersion:
@@ -422,7 +431,8 @@ Resources:
         DeployMonitoring: !Ref DeployMonitoring
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRole: login
-        InstallEnrootPyxis: !Ref InstallEnrootPyxis
+        PostInstallScriptUrl: !Ref PostInstallScriptUrl
+        PostInstallScriptArgs: !Ref PostInstallScriptArgs
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-LoginNodeGroup'
@@ -460,7 +470,8 @@ Resources:
         DeployMonitoring: !Ref DeployMonitoring
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRole: none
-        InstallEnrootPyxis: !Ref InstallEnrootPyxis
+        PostInstallScriptUrl: !Ref PostInstallScriptUrl
+        PostInstallScriptArgs: !Ref PostInstallScriptArgs
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-OnDemandCNG'
@@ -500,7 +511,8 @@ Resources:
         DeployMonitoring: !Ref DeployMonitoring
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRole: none
-        InstallEnrootPyxis: !Ref InstallEnrootPyxis
+        PostInstallScriptUrl: !Ref PostInstallScriptUrl
+        PostInstallScriptArgs: !Ref PostInstallScriptArgs
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-PseriesCNG'

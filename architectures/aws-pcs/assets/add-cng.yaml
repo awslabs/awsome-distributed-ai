@@ -32,6 +32,11 @@ Metadata:
           - DeployMonitoring
           - MonitoringVersion
           - MonitoringRole
+      - Label:
+          default: Post-install script (OnNodeConfigured)
+        Parameters:
+          - PostInstallScriptUrl
+          - PostInstallScriptArgs
 
 Parameters:
   ClusterId:
@@ -114,18 +119,23 @@ Parameters:
       - 'compute'
       - 'none'
 
-  InstallEnrootPyxis:
+  PostInstallScriptUrl:
     Type: String
-    Description: Install Enroot/Pyxis via UserData (only needed if using base AMI without Enroot/Pyxis pre-installed)
-    Default: 'false'
-    AllowedValues:
-      - 'true'
-      - 'false'
+    Description: >-
+      Optional URL of a post-install script to download and run on each node at
+      first boot (PCS equivalent of ParallelCluster OnNodeConfigured). Leave
+      empty to skip. To install Enroot/Pyxis, point this at scripts/install-enroot-pyxis.sh.
+      Must be an HTTP(S) URL (e.g. a GitHub raw URL); S3 public hosting is not allowed.
+    Default: ''
+
+  PostInstallScriptArgs:
+    Type: String
+    Description: Space-separated arguments passed to the post-install script.
+    Default: ''
 
 Conditions:
   CreateQueue: !Not [!Equals [!Ref QueueName, ""]]
   IsMonitoringLogin: !Equals [!Ref MonitoringRole, 'login']
-  InstallEnrootPyxisEnabled: !Equals [!Ref InstallEnrootPyxis, 'true']
 
 Resources:
 
@@ -196,17 +206,18 @@ Resources:
             MIME-Version: 1.0
             
             runcmd:
-            # Enroot/Pyxis Installation (optional) - downloads and executes external script
+            # Post-install script (optional) - generic OnNodeConfigured-style hook.
+            # Downloads and runs a user-supplied script (e.g. Enroot/Pyxis install).
             - |
-              if [ "${InstallEnrootPyxis}" = "true" ]; then
-                echo "Downloading Enroot/Pyxis installation script..." | tee /var/log/enroot-pyxis-install.log
-                curl -fsSL https://raw.githubusercontent.com/DaisukeMiyamoto/awsome-distributed-ai/deploy-monitoring/architectures/aws-pcs/scripts/install-enroot-pyxis.sh -o /tmp/install-enroot-pyxis.sh
-                chmod +x /tmp/install-enroot-pyxis.sh
-                echo "Executing Enroot/Pyxis installation script..." | tee -a /var/log/enroot-pyxis-install.log
-                bash /tmp/install-enroot-pyxis.sh >> /var/log/enroot-pyxis-install.log 2>&1
-                echo "Enroot/Pyxis installation script completed" | tee -a /var/log/enroot-pyxis-install.log
+              if [ -n "${PostInstallScriptUrl}" ]; then
+                echo "Downloading post-install script from ${PostInstallScriptUrl}..." | tee /var/log/pcs-post-install.log
+                curl -fsSL "${PostInstallScriptUrl}" -o /tmp/pcs-post-install.sh
+                chmod +x /tmp/pcs-post-install.sh
+                echo "Executing post-install script..." | tee -a /var/log/pcs-post-install.log
+                bash /tmp/pcs-post-install.sh ${PostInstallScriptArgs} >> /var/log/pcs-post-install.log 2>&1
+                echo "Post-install script completed (exit $?)" | tee -a /var/log/pcs-post-install.log
               else
-                echo "Skipping Enroot/Pyxis installation (InstallEnrootPyxis=${InstallEnrootPyxis})" | tee /var/log/enroot-pyxis-install.log
+                echo "No post-install script configured (PostInstallScriptUrl empty)" | tee /var/log/pcs-post-install.log
               fi
             # FSx Home directories mount
             - mkdir -p /tmp/home

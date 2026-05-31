@@ -47,11 +47,16 @@ Deploy the complete PCS ML cluster with a single nested CloudFormation stack:
 
 **Key Parameters:**
 - `PrimarySubnetAZ`: Availability Zone for deployment (required)
-- `BuildAMI`: Build custom DLAMI (`true`/`false`, default: `true`)
+- `BuildAMI`: Build custom DLAMI with Enroot/Pyxis pre-installed (`true`/`false`, default: `false`)
+- `PostInstallScriptUrl`: URL of a post-install script run on every node at first boot — the PCS equivalent of ParallelCluster's `OnNodeConfigured` custom action. Defaults to the Enroot/Pyxis installer (`install-enroot-pyxis.sh`), which is the most common setup. Set to an empty string to skip, or to another HTTP(S) URL to run a custom script.
+- `PostInstallScriptArgs`: Space-separated arguments passed to the post-install script (default: empty)
+- `DeployMonitoring`: Deploy Prometheus/Grafana monitoring on the login node (`true`/`false`, default: `true`)
 - `DeployOnDemandCNG`: Deploy cpu1 compute queue (`true`/`false`, default: `true`)
 - `OnDemandInstanceType`: Instance type for cpu1 queue (default: `c6i.4xlarge`)
 - `DeployPseriesCNG`: Deploy P-series queue with ODCR or Capacity Blocks for ML (`true`/`false`, default: `false`)
 - `CapacityReservationId`: Capacity Reservation ID (required if deploying in Capacity Blocks for ML)
+
+> **Container support (Enroot/Pyxis)** can be provided two ways, which are independent and can be combined: pre-bake it into a custom AMI (`BuildAMI=true`), or install it at first boot via `PostInstallScriptUrl` (default). The default configuration — `BuildAMI=false` + `PostInstallScriptUrl=<install-enroot-pyxis.sh>` + `DeployMonitoring=true` — is the most common production setup.
 
 **Example deployment (minimal parameters):**
 ```bash
@@ -151,6 +156,8 @@ The custom DLAMI built by `pcs-ready-dlami-with-enroot-pyxis.yaml` adds containe
 | **Base Image** | PCS-ready DLAMI (Ubuntu 24.04 x86_64) | Pre-installed NVIDIA drivers, CUDA, PCS Agent, and Slurm |
 | **Enroot** | 3.5.0 | Unprivileged container runtime |
 | **Pyxis** | 0.20.0 | Slurm plugin for container jobs |
+
+> **Alternative without an AMI build:** the same Enroot/Pyxis setup can be applied at first boot via the `PostInstallScriptUrl` post-install hook (which runs [`scripts/install-enroot-pyxis.sh`](./scripts/install-enroot-pyxis.sh)), avoiding the ~30 min ImageBuilder step at the cost of a longer node boot (~8–12 min). Pre-baking into a custom AMI (`BuildAMI=true`) is recommended for production / frequent scaling; the post-install hook is recommended for testing and infrequent deployments.
 
 **What's already included in PCS-ready DLAMI:**
 - AWS PCS Agent for node lifecycle management
