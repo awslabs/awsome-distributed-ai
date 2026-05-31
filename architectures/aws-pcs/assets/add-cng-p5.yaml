@@ -245,7 +245,14 @@ Resources:
             Tags:
               - Key: HPCRecipes
                 Value: "true"
+              # The Name tag doubles as the monitoring dashboards' node selector:
+              # aws-parallelcluster-monitoring relabels __meta_ec2_tag_Name into the
+              # instance_name label, and the upstream Grafana dashboards filter on the
+              # literals "HeadNode" (login/head) and "Compute" (compute). A node with a
+              # queue is a compute node; a node without one is the login/head node.
               - Key: Name
+                Value: !If [CreateQueue, 'Compute', 'HeadNode']
+              - Key: CngName
                 Value: !Sub 'PCS-${CngName}'
               - Key: ClusterName
                 Value: !Ref ClusterName
