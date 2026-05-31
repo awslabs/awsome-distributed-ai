@@ -1,0 +1,264 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Minimal PCS cluster for testing aws-parallelcluster-monitoring stack installation (Ubuntu 24.04)
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Cluster Configuration
+        Parameters:
+          - ClusterName
+          - SlurmVersion
+      - Label:
+          default: Network Configuration (reuse existing)
+        Parameters:
+          - VpcId
+          - PublicSubnetId
+          - PrivateSubnetId
+          - DefaultSecurityGroupId
+      - Label:
+          default: Storage Configuration (reuse existing)
+        Parameters:
+          - FSxLustreFilesystemId
+          - FSxLustreFilesystemMountName
+          - FSxOpenZFSFilesystemId
+      - Label:
+          default: Monitoring Configuration
+        Parameters:
+          - MonitoringBranch
+          - MonitoringRepo
+
+Parameters:
+  ClusterName:
+    Type: String
+    Description: Name for the test cluster
+    Default: pcs-monitoring-test
+
+  SlurmVersion:
+    Type: String
+    Description: Slurm version
+    Default: '25.11'
+    AllowedValues:
+      - '25.05'
+      - '25.11'
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID (reuse existing)
+
+  PublicSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet for login node
+
+  PrivateSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private subnet (for future compute nodes)
+
+  DefaultSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group for cluster
+
+  FSxLustreFilesystemId:
+    Type: String
+    Description: FSx for Lustre filesystem ID
+
+  FSxLustreFilesystemMountName:
+    Type: String
+    Description: FSx for Lustre mount name
+
+  FSxOpenZFSFilesystemId:
+    Type: String
+    Description: FSx for OpenZFS filesystem ID
+
+  MonitoringBranch:
+    Type: String
+    Description: Git branch/tag for monitoring stack
+    Default: fix/install-script-local-variable-declaration
+
+  MonitoringRepo:
+    Type: String
+    Description: GitHub repository (owner/repo format)
+    Default: DaisukeMiyamoto/aws-parallelcluster-monitoring
+
+Resources:
+  # PCS Cluster
+  PCSCluster:
+    Type: AWS::PCS::Cluster
+    Properties:
+      Name: !Ref ClusterName
+      Size: SMALL
+      Scheduler:
+        Type: SLURM
+        Version: !Ref SlurmVersion
+      Networking:
+        SubnetIds:
+          - !Ref PrivateSubnetId
+        SecurityGroupIds:
+          - !Ref DefaultSecurityGroupId
+
+  # IAM Role for instances
+  PcsInstanceIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub
+        - 'AWSPCS-pcs-${StackHash}-${AWS::Region}-role'
+        - StackHash: !Select [0, !Split ['-', !Select [2, !Split ['/', !Ref 'AWS::StackId']]]]
+      Description: "AWS IAM role for PCS node group instances"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: PCSNodePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - pcs:RegisterComputeNodeGroupInstance
+                  - pcs:DeregisterComputeNodeGroupInstance
+                  - pcs:GetCluster
+                  - pcs:GetComputeNodeGroup
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: arn:aws:logs:*:*:*
+        - PolicyName: MonitoringPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                  - ssm:DeleteParameter
+                  - ssm:AddTagsToResource
+                Resource:
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/grafana/*'
+              - Effect: Allow
+                Action:
+                  - ssm:DescribeParameters
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: '*'
+
+  PcsInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub
+        - 'AWSPCS-pcs-${StackHash}-${AWS::Region}'
+        - StackHash: !Select [0, !Split ['-', !Select [2, !Split ['/', !Ref 'AWS::StackId']]]]
+      Roles:
+        - !Ref PcsInstanceIamRole
+
+  # Login Node Group (single instance for testing)
+  LoginNodeLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub '${ClusterName}-login-lt'
+      LaunchTemplateData:
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub '${ClusterName}-login'
+              - Key: ClusterName
+                Value: !Ref ClusterName
+              - Key: pcs-cluster-id
+                Value: !GetAtt PCSCluster.Id
+              - Key: monitoring-role
+                Value: login
+        MetadataOptions:
+          HttpEndpoint: enabled
+          HttpPutResponseHopLimit: 4
+          HttpTokens: required
+          InstanceMetadataTags: enabled
+        SecurityGroupIds:
+          - !Ref DefaultSecurityGroupId
+        UserData:
+          Fn::Base64: !Sub |
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="==MYBOUNDARY=="
+
+            --==MYBOUNDARY==
+            Content-Type: text/cloud-config; charset="us-ascii"
+            MIME-Version: 1.0
+
+            runcmd:
+            # FSx Home directories mount
+            - mkdir -p /tmp/home
+            - rsync -aA /home/ /tmp/home
+            - echo "${FSxOpenZFSFilesystemId}.fsx.${AWS::Region}.amazonaws.com:/fsx/ /home nfs noatime,nfsvers=3,sync,nconnect=16,rsize=1048576,wsize=1048576,defaults 0 0" >> /etc/fstab
+            - mount -a -t nfs defaults
+            - if [ "enabled" = "$(sestatus | awk '/^SELinux status:/{print $3}')" ]; then setsebool -P use_nfs_home_dirs 1; fi
+            - rsync -aA --ignore-existing /tmp/home/ /home
+            - rm -rf /tmp/home/
+            # Mount FSx Lustre
+            - if [ ! -z "${FSxLustreFilesystemId}" ]; then mkdir -p /fsx; mount -t lustre ${FSxLustreFilesystemId}.fsx.${AWS::Region}.amazonaws.com@tcp:/${FSxLustreFilesystemMountName} /fsx; chmod 1777 /fsx; fi
+            # Monitoring stack installation (using fixed branch)
+            - |
+              echo "Installing monitoring stack from ${MonitoringRepo}@${MonitoringBranch}..." | tee /var/log/monitoring-install-test.log
+              curl -fsSL https://raw.githubusercontent.com/${MonitoringRepo}/${MonitoringBranch}/post-install.sh -o /tmp/post-install.sh
+              bash /tmp/post-install.sh ${MonitoringBranch} ${MonitoringRepo} 2>&1 | tee -a /var/log/monitoring-install-test.log
+              echo "Monitoring installation exit code: $?" | tee -a /var/log/monitoring-install-test.log
+              echo "Installation complete at $(date)" | tee -a /var/log/monitoring-install-test.log
+
+            --==MYBOUNDARY==
+
+  LoginNodeGroup:
+    Type: AWS::PCS::ComputeNodeGroup
+    Properties:
+      ClusterId: !GetAtt PCSCluster.Id
+      Name: login
+      ScalingConfiguration:
+        MinInstanceCount: 1
+        MaxInstanceCount: 1
+      IamInstanceProfileArn: !GetAtt PcsInstanceProfile.Arn
+      CustomLaunchTemplate:
+        TemplateId: !Ref LoginNodeLaunchTemplate
+        Version: 1
+      SubnetIds:
+        - !Ref PublicSubnetId
+      AmiId: !Sub '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
+      InstanceConfigs:
+        - InstanceType: m6i.xlarge
+
+Outputs:
+  ClusterId:
+    Description: PCS Cluster ID
+    Value: !GetAtt PCSCluster.Id
+    Export:
+      Name: !Sub '${AWS::StackName}-ClusterId'
+
+  LoginNodeGroupId:
+    Description: Login Node Group ID
+    Value: !GetAtt LoginNodeGroup.Id
+
+  MonitoringTestCommand:
+    Description: Command to check monitoring installation
+    Value: !Sub |
+      # Get login instance ID
+      aws ec2 describe-instances --region ${AWS::Region} --filters "Name=tag:pcs-cluster-id,Values=${PCSCluster.Id}" "Name=tag:Name,Values=${ClusterName}-login" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].InstanceId' --output text
+
+      # Check logs via SSM (replace INSTANCE_ID with above output)
+      aws ssm send-command --instance-ids INSTANCE_ID --region ${AWS::Region} --document-name "AWS-RunShellScript" --parameters 'commands=["cat /var/log/monitoring-install-test.log"]'
+
+      # Verify installation
+      aws ssm send-command --instance-ids INSTANCE_ID --region ${AWS::Region} --document-name "AWS-RunShellScript" --parameters 'commands=["docker ps","ls -la /home/ubuntu/aws-parallelcluster-monitoring/"]'
+
+  GrafanaPasswordCommand:
+    Description: Command to get Grafana admin password
+    Value: !Sub |
+      aws ssm get-parameter --name "/pcs/${PCSCluster.Id}/grafana/admin-password" --region ${AWS::Region} --with-decryption --query 'Parameter.Value' --output text
