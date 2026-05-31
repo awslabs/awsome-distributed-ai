@@ -228,8 +228,12 @@ Parameters:
 
   MonitoringVersion:
     Type: String
-    Description: Monitoring stack version (git tag or 'latest')
-    Default: 'latest'
+    Description: >-
+      aws-parallelcluster-monitoring version to install, pinned to a release tag
+      for upstream stability. Passed down to the CNG stacks, which fetch
+      post-install.sh from this tag and pass it as the version argument. Avoid
+      'latest'/'main' in production as upstream changes can break deployments.
+    Default: 'v2.6.2'
 
   # On-Demand Compute Node Group
   DeployOnDemandCNG:

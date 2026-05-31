@@ -107,8 +107,12 @@ Parameters:
 
   MonitoringVersion:
     Type: String
-    Description: Monitoring stack version (git tag or 'latest')
-    Default: 'latest'
+    Description: >-
+      aws-parallelcluster-monitoring version to install, pinned to a release tag
+      for upstream stability. Used both to fetch post-install.sh from that tag
+      and as the version argument passed to it. Avoid 'latest'/'main' in
+      production as upstream changes can break deployments.
+    Default: 'v2.6.2'
 
   MonitoringRole:
     Type: String
@@ -240,7 +244,8 @@ Resources:
                   usermod -aG docker ec2-user 2>/dev/null || true
                   echo "Created ec2-user pointing to /home/ubuntu"
                 fi
-                curl -fsSL https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-monitoring/main/post-install.sh -o /tmp/post-install.sh
+                # Pin post-install.sh to the same release tag as MonitoringVersion for upstream stability
+                curl -fsSL https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-monitoring/${MonitoringVersion}/post-install.sh -o /tmp/post-install.sh
                 # Run post-install.sh but with bug fix applied immediately after tarball extraction
                 # Modified version that fixes upstream bug: local variable outside function at line 83
                 bash /tmp/post-install.sh ${MonitoringVersion} 2>&1 | tee /tmp/monitoring-install-step1.log || true
