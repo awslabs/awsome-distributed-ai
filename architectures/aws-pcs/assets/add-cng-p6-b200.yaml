@@ -323,53 +323,89 @@ Resources:
 
             --==MYBOUNDARY==
         NetworkInterfaces:
-          # Primary network interface (NetworkCardIndex 0, DeviceIndex 0)
-          - Description: Primary network interface
+          # Primary network interface: ENA on NCI 0, DeviceIndex 0.
+          # (The primary interface cannot be EFA-only.)
+          - Description: Primary network interface (ENA)
             DeviceIndex: 0
-            InterfaceType: efa
             NetworkCardIndex: 0
             SubnetId: !Ref SubnetId
             Groups:
             - !Ref ClusterSecurityGroupId
-          # EFA network interfaces 1-7 (all use DeviceIndex 1)
-          - DeviceIndex: 1
-            InterfaceType: efa
+          # NCI 1-7: EFA-only on DeviceIndex 0 + ENA on DeviceIndex 1
+          # (Use case 2 — maximum EFA and ENA bandwidth).
+          - DeviceIndex: 0
+            InterfaceType: efa-only
             NetworkCardIndex: 1
             SubnetId: !Ref SubnetId
             Groups:
             - !Ref ClusterSecurityGroupId
           - DeviceIndex: 1
-            InterfaceType: efa
+            NetworkCardIndex: 1
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa-only
             NetworkCardIndex: 2
             SubnetId: !Ref SubnetId
             Groups:
             - !Ref ClusterSecurityGroupId
           - DeviceIndex: 1
-            InterfaceType: efa
+            NetworkCardIndex: 2
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa-only
             NetworkCardIndex: 3
             SubnetId: !Ref SubnetId
             Groups:
             - !Ref ClusterSecurityGroupId
           - DeviceIndex: 1
-            InterfaceType: efa
+            NetworkCardIndex: 3
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa-only
             NetworkCardIndex: 4
             SubnetId: !Ref SubnetId
             Groups:
             - !Ref ClusterSecurityGroupId
           - DeviceIndex: 1
-            InterfaceType: efa
+            NetworkCardIndex: 4
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa-only
             NetworkCardIndex: 5
             SubnetId: !Ref SubnetId
             Groups:
             - !Ref ClusterSecurityGroupId
           - DeviceIndex: 1
-            InterfaceType: efa
+            NetworkCardIndex: 5
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa-only
             NetworkCardIndex: 6
             SubnetId: !Ref SubnetId
             Groups:
             - !Ref ClusterSecurityGroupId
           - DeviceIndex: 1
-            InterfaceType: efa
+            NetworkCardIndex: 6
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa-only
+            NetworkCardIndex: 7
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 1
             NetworkCardIndex: 7
             SubnetId: !Ref SubnetId
             Groups:
