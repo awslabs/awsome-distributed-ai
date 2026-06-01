@@ -301,12 +301,18 @@ Parameters:
 
   PseriesInstanceType:
     Type: String
-    Description: Instance type for P-series compute node group
+    Description: >-
+      Instance type for the P-series compute node group. The right multi-NIC EFA
+      template is selected automatically from this value: p5* use add-cng-p5.yaml
+      (NetworkInterfaceCount applies), p6-b200.48xlarge uses add-cng-p6-b200.yaml
+      (8 NICs), p6-b300.48xlarge uses add-cng-p6-b300.yaml (17 NICs).
     Default: "p5.48xlarge"
     AllowedValues:
       - p5.48xlarge
       - p5e.48xlarge
       - p5en.48xlarge
+      - p6-b200.48xlarge
+      - p6-b300.48xlarge
 
   PseriesMaxCount:
     Type: Number
@@ -322,7 +328,10 @@ Parameters:
 
   NetworkInterfaceCount:
     Type: Number
-    Description: Number of network interfaces for P-series instances (16 or 32 EFA adapters)
+    Description: >-
+      Number of EFA network interfaces, P5 family only (16 or 32). Ignored for
+      p6-b200 (fixed 8 NICs) and p6-b300 (fixed 17 NICs), whose templates set the
+      count themselves.
     Default: 32
     AllowedValues:
       - 16
@@ -347,6 +356,19 @@ Conditions:
   BuildAMIEnabled: !Equals [!Ref BuildAMI, 'true']
   DeployOnDemandCNGEnabled: !Equals [!Ref DeployOnDemandCNG, 'true']
   DeployPseriesCNGEnabled: !Equals [!Ref DeployPseriesCNG, 'true']
+  # Select the right multi-NIC EFA template from the P-series instance type.
+  # p6-b200/p6-b300 have different network-card counts than P5, so each family
+  # gets its own nested stack; anything else falls back to the P5 template.
+  PseriesIsP6B200: !And
+    - !Condition DeployPseriesCNGEnabled
+    - !Equals [!Ref PseriesInstanceType, 'p6-b200.48xlarge']
+  PseriesIsP6B300: !And
+    - !Condition DeployPseriesCNGEnabled
+    - !Equals [!Ref PseriesInstanceType, 'p6-b300.48xlarge']
+  PseriesIsP5: !And
+    - !Condition DeployPseriesCNGEnabled
+    - !Not [!Equals [!Ref PseriesInstanceType, 'p6-b200.48xlarge']]
+    - !Not [!Equals [!Ref PseriesInstanceType, 'p6-b300.48xlarge']]
 
 Resources:
   #############################################################################
@@ -507,7 +529,7 @@ Resources:
   #############################################################################
   PseriesCNGStack:
     Type: AWS::CloudFormation::Stack
-    Condition: DeployPseriesCNGEnabled
+    Condition: PseriesIsP5
     DependsOn: ClusterStack
     Properties:
       TemplateURL: !If
@@ -534,6 +556,90 @@ Resources:
         FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         NetworkInterfaceCount: !Ref NetworkInterfaceCount
+        CapacityReservationId: !Ref CapacityReservationId
+        DeployMonitoring: !Ref DeployMonitoring
+        MonitoringVersion: !Ref MonitoringVersion
+        MonitoringRepo: !Ref MonitoringRepo
+        MonitoringRole: compute
+        PostInstallScriptUrl: !Ref PostInstallScriptUrl
+        PostInstallScriptArgs: !Ref PostInstallScriptArgs
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-PseriesCNG'
+
+  #############################################################################
+  # 6b. P6-B200 Compute Node Group Stack (8 NICs, fixed)
+  #############################################################################
+  P6B200CNGStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: PseriesIsP6B200
+    DependsOn: ClusterStack
+    Properties:
+      TemplateURL: !If
+        - UseLocalTemplates
+        - add-cng-p6-b200.yaml
+        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng-p6-b200.yaml'
+      Parameters:
+        ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
+        ClusterName: !Sub '${AWS::StackName}'
+        CngName: !Ref PseriesCngName
+        QueueName: !Ref PseriesQueueName
+        InstanceType: !Ref PseriesInstanceType
+        RootVolumeSize: !Ref RootVolumeSize
+        MaxCount: !Ref PseriesMaxCount
+        MinCount: !Ref PseriesMinCount
+        SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
+        AmiId: !If
+          - BuildAMIEnabled
+          - !GetAtt DLAMIStack.Outputs.DLAMIforPCSAmiId
+          - !Sub '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
+        ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
+        IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
+        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
+        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
+        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        CapacityReservationId: !Ref CapacityReservationId
+        DeployMonitoring: !Ref DeployMonitoring
+        MonitoringVersion: !Ref MonitoringVersion
+        MonitoringRepo: !Ref MonitoringRepo
+        MonitoringRole: compute
+        PostInstallScriptUrl: !Ref PostInstallScriptUrl
+        PostInstallScriptArgs: !Ref PostInstallScriptArgs
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-PseriesCNG'
+
+  #############################################################################
+  # 6c. P6-B300 Compute Node Group Stack (17 NICs, fixed)
+  #############################################################################
+  P6B300CNGStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: PseriesIsP6B300
+    DependsOn: ClusterStack
+    Properties:
+      TemplateURL: !If
+        - UseLocalTemplates
+        - add-cng-p6-b300.yaml
+        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng-p6-b300.yaml'
+      Parameters:
+        ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
+        ClusterName: !Sub '${AWS::StackName}'
+        CngName: !Ref PseriesCngName
+        QueueName: !Ref PseriesQueueName
+        InstanceType: !Ref PseriesInstanceType
+        RootVolumeSize: !Ref RootVolumeSize
+        MaxCount: !Ref PseriesMaxCount
+        MinCount: !Ref PseriesMinCount
+        SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
+        AmiId: !If
+          - BuildAMIEnabled
+          - !GetAtt DLAMIStack.Outputs.DLAMIforPCSAmiId
+          - !Sub '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
+        ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
+        IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
+        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
+        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
+        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         CapacityReservationId: !Ref CapacityReservationId
         DeployMonitoring: !Ref DeployMonitoring
         MonitoringVersion: !Ref MonitoringVersion
