@@ -8,11 +8,21 @@
 # and does not run on EFA). Model SFT configs are mounted at runtime, not baked
 # in, so this single image is reused by every model test case under this library.
 #
-# The NeMo base already ships Megatron-Bridge v0.4.0, Megatron-Core (>=0.14,
-# has the flex/deepep dispatcher) and TransformerEngine — we do NOT reinstall
-# any of them. This Dockerfile only strips the IB fabric, lays down EFA +
-# GDRCopy, and builds UCCL / UCCL-EP / the deep_ep shadow wrapper.
-FROM nvcr.io/nvidia/nemo:25.11.01
+# Base: NeMo Framework container 26.04.01. Per Megatron-Bridge's own install guidance
+# ("use a matching NeMo Framework container"), the curated stack is consumed via the
+# container rather than pip-pinned. This tag ships a SELF-CONSISTENT, B300-ready stack
+# (verified by probing the live container):
+#   megatron-bridge 0.4.2, megatron-core 0.17.1, torch 2.11.0a0, transformer-engine 2.14.1.
+# Why 26.04.01 and not 25.11.01: the older base shipped Megatron-Bridge 0.2.0, whose
+# flex/deepep GPU allowlist rejects p6-b300 — device name "NVIDIA B300 SXM6 AC" fails
+# the exact-string match `name in ["NVIDIA B300"]`, and the major-version clause only
+# admits 8/9 (Ampere/Hopper), not Blackwell major 10. Bridge 0.4.0+ fixed this
+# (`name.startswith("NVIDIA B300")`), and 26.04.01 ships 0.4.2 with a matching
+# megatron-core (0.17.1) so `import megatron.bridge` is consistent — pip-forcing 0.4.2
+# onto the 25.11.01 base instead DOWNGRADES core to 0.13.1 and breaks the import.
+# This Dockerfile then strips the IB fabric, lays down EFA + GDRCopy, and builds
+# UCCL / UCCL-EP / the deep_ep shadow wrapper against this base's torch/TE.
+FROM nvcr.io/nvidia/nemo:26.04.01
 
 ######################
 # Pinned versions (ARGs)
@@ -39,109 +49,69 @@ ARG NANOBIND_VERSION=2.4.0
 ARG OPEN_MPI_PATH=/opt/amazon/openmpi
 
 ######################
-# Update and remove the IB libverbs so EFA is the only fabric
+# EFA-only fabric on the 26.04.01 base.
 #
-# NOTE: do NOT `apt-get upgrade` here. On the NeMo 25.11.01 base, a blanket
-# upgrade pulls a newer libcusparselt0-cuda-13 that removes the libcusparseLt.so.0
-# symlink the bundled torch is linked against, breaking `import torch`
-# (ImportError: libcusparseLt.so.0). The base image is already curated/pinned, so
-# only refresh the index and install the extra build deps we need.
+# IMPORTANT: do NOT remove libibverbs / ibverbs-providers here. On 25.11.01 the IB
+# libverbs were separable and this Dockerfile apt-removed them to force EFA-only. On
+# 26.04.01 the curated EFA stack (libfabric-aws, openmpi40/50-aws, efa-profile, DOCA
+# SDK) DEPENDS ON libibverbs1/ibverbs-providers — apt-removing them cascades into
+# removing the entire EFA + OpenMPI stack (verified via apt-get remove --simulate).
+# EFA-only is instead enforced at RUNTIME via FI_PROVIDER=efa (set in the ENV block
+# below) plus the OMPI ^ucx / btl=tcp,self settings.
+#
+# Also do NOT `rm -rf /opt/hpcx/ompi`: on 26.04.01 the bundled torch's
+# libtorch_global_deps.so links libmpi.so.40 -> /opt/hpcx/ompi/lib (verified via ldd),
+# so removing the HPC-X tree breaks `import torch` (OSError: libmpi.so.40). On 25.11.01
+# torch didn't depend on it, so the old Dockerfile could drop it; here we keep it.
+#
+# Also do NOT `apt-get upgrade`: a blanket upgrade can pull a newer
+# libcusparselt0-cuda-1x that removes the libcusparseLt.so.0 symlink the bundled
+# torch is linked against, breaking `import torch`. Only refresh the index and
+# install the extra build deps we need.
 ######################
-RUN apt-get update -y
-RUN apt-get remove -y --allow-change-held-packages \
-    ibverbs-utils \
-    libibverbs-dev \
-    libibverbs1 \
-    libmlx5-1
+# GDRCopy + EFA: PRE-PROVIDED by the nemo:26.04.01 base — NOT reinstalled.
+#   Verified in the base (dpkg/ls): GDRCopy /usr/lib/x86_64-linux-gnu/libgdrapi.so.2.5;
+#   EFA efa-profile 1.7, libfabric-aws 2.3.1amzn4.0 (/opt/amazon/efa/lib/libfabric.so.1.29.1),
+#   aws-ofi-nccl (libnccl-net-ofi.so), NCCL 2.29.3+cuda13.1.
+#   On 25.11.01 this Dockerfile built GDRCopy from source and ran the EFA installer; on
+#   26.04.01 both are curated into the base. Re-running the EFA installer FAILS its own
+#   self-check ("000_efa.conf is installed by efa-profile but doesn't exist"). The
+#   GDRCOPY_VERSION / EFA_INSTALLER_VERSION ARGs are retained at the top so the repo CI
+#   version-gate still sees values >= the enforced minimums.
+#
+# NOTE: ALL setup below is collapsed into ONE RUN layer. The 26.04.01 base is 120
+# image layers deep; overlay2's hard limit is 128, so each extra RUN/ENV counts. The
+# UCCL clone/build/wrapper steps further down stay separate (long + cache-valuable).
+# Megatron-Bridge is NOT installed — the base already ships a curated, B300-ready 0.4.2
+# with matching megatron-core 0.17.1 (the verify RUN asserts both).
+RUN set -eux; \
+    apt-get update -y; \
+    DEBIAN_FRONTEND=noninteractive apt install -y --allow-unauthenticated \
+      apt-utils autoconf automake build-essential cmake curl gcc gdb git kmod \
+      libtool openssh-client openssh-server vim; \
+    apt remove -y python3-blinker; apt autoremove -y; \
+    mkdir -p /var/run/sshd; \
+    sed -i 's/[ #]\(.*StrictHostKeyChecking \).*/ \1no/g' /etc/ssh/ssh_config; \
+    echo "    UserKnownHostsFile /dev/null" >> /etc/ssh/ssh_config; \
+    sed -i 's/#\(StrictModes \).*/\1no/g' /etc/ssh/sshd_config; \
+    sed 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@g' -i /etc/pam.d/sshd; \
+    rm -rf /root/.ssh/; mkdir -p /root/.ssh/; \
+    ssh-keygen -q -t rsa -N '' -f /root/.ssh/id_rsa; \
+    cp /root/.ssh/id_rsa.pub /root/.ssh/authorized_keys; \
+    printf "Host *\n  StrictHostKeyChecking no\n" >> /root/.ssh/config; \
+    echo "hwloc_base_binding_policy = none" >> /opt/amazon/openmpi/etc/openmpi-mca-params.conf; \
+    echo "rmaps_base_mapping_policy = slot" >> /opt/amazon/openmpi/etc/openmpi-mca-params.conf; \
+    pip3 install awscli pynvml wandb python-etcd; \
+    mv $OPEN_MPI_PATH/bin/mpirun $OPEN_MPI_PATH/bin/mpirun.real; \
+    printf '#!/bin/bash\n/opt/amazon/openmpi/bin/mpirun.real "$@"\n' > $OPEN_MPI_PATH/bin/mpirun; \
+    chmod a+x $OPEN_MPI_PATH/bin/mpirun; \
+    rm -rf /var/lib/apt/lists/*
 
-RUN rm -rf /opt/hpcx/ompi \
-    && rm -rf /usr/local/mpi \
-    && rm -rf /usr/local/ucx \
-    && ldconfig
-
-RUN DEBIAN_FRONTEND=noninteractive apt install -y --allow-unauthenticated \
-    apt-utils \
-    autoconf \
-    automake \
-    build-essential \
-    cmake \
-    curl \
-    gcc \
-    gdb \
-    git \
-    kmod \
-    libtool \
-    openssh-client \
-    openssh-server \
-    vim \
-    && apt remove -y python3-blinker \
-    && apt autoremove -y
-
-RUN mkdir -p /var/run/sshd && \
-    sed -i 's/[ #]\(.*StrictHostKeyChecking \).*/ \1no/g' /etc/ssh/ssh_config && \
-    echo "    UserKnownHostsFile /dev/null" >> /etc/ssh/ssh_config && \
-    sed -i 's/#\(StrictModes \).*/\1no/g' /etc/ssh/sshd_config && \
-    sed 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@g' -i /etc/pam.d/sshd
-
-RUN rm -rf /root/.ssh/ \
- && mkdir -p /root/.ssh/ \
- && ssh-keygen -q -t rsa -N '' -f /root/.ssh/id_rsa \
- && cp /root/.ssh/id_rsa.pub /root/.ssh/authorized_keys \
- && printf "Host *\n  StrictHostKeyChecking no\n" >> /root/.ssh/config
-
-# NGC images install the OFI NCCL plugin via libnccl-ofi-ngc-v2 (from the EFA
-# installer), landing at /opt/amazon/aws-ofi-nccl/lib. Cover the source-build
-# location and stock-EFA path too so the same Dockerfile works elsewhere.
-ENV LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:/opt/amazon/openmpi/lib:/opt/nccl/build/lib:/opt/amazon/efa/lib:/opt/amazon/aws-ofi-nccl/lib:/opt/amazon/ofi-nccl/lib:/opt/aws-ofi-nccl/install/lib:$LD_LIBRARY_PATH
-# Keep /opt/venv/bin FIRST: the NeMo base installs torch + Megatron-Core +
-# Megatron-Bridge (editable) into the /opt/venv virtualenv. The reference
-# megatron-lm Dockerfile prepended /usr/bin:/usr/local/bin, which shadowed
-# /opt/venv/bin so `python3` resolved to /usr/bin/python3 (no megatron.core).
-# /opt/venv's python already sees /usr/local dist-packages (where pip installs
-# UCCL/deep_ep), so keeping the venv first gives one consistent env with
-# torch + megatron + deep_ep all importable.
-ENV PATH=/opt/venv/bin:/opt/amazon/openmpi/bin:/opt/amazon/efa/bin:$PATH
-
-#################################################
-## Install NVIDIA GDRCopy
-##
-## NOTE: if `nccl-tests` or `/opt/gdrcopy/bin/sanity -v` crashes with incompatible version, ensure
-## that the cuda-compat-xx-x package is the latest.
-RUN git clone -b ${GDRCOPY_VERSION} https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
-    && cd /tmp/gdrcopy \
-    && make prefix=/opt/gdrcopy install
-
-ENV LD_LIBRARY_PATH /opt/gdrcopy/lib:/usr/local/cuda/compat:$LD_LIBRARY_PATH
-ENV LIBRARY_PATH /opt/gdrcopy/lib:/usr/local/cuda/compat/:$LIBRARY_PATH
-ENV CPATH /opt/gdrcopy/include:$CPATH
-ENV PATH /opt/gdrcopy/bin:$PATH
-
-#################################################
-## Install EFA installer (skip kmod/limits — those are host-managed on EKS)
-RUN cd $HOME \
-    && curl -O https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz \
-    && tar -xf $HOME/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz \
-    && cd aws-efa-installer \
-    && ./efa_installer.sh -y -g -d --skip-kmod --skip-limit-conf --no-verify \
-    && rm -rf $HOME/aws-efa-installer
-
-RUN rm -rf /var/lib/apt/lists/*
-
-RUN echo "hwloc_base_binding_policy = none" >> /opt/amazon/openmpi/etc/openmpi-mca-params.conf \
- && echo "rmaps_base_mapping_policy = slot" >> /opt/amazon/openmpi/etc/openmpi-mca-params.conf
-
-RUN pip3 install awscli pynvml wandb
-
-RUN mv $OPEN_MPI_PATH/bin/mpirun $OPEN_MPI_PATH/bin/mpirun.real \
- && echo '#!/bin/bash' > $OPEN_MPI_PATH/bin/mpirun \
- && echo '/opt/amazon/openmpi/bin/mpirun.real "$@"' >> $OPEN_MPI_PATH/bin/mpirun \
- && chmod a+x $OPEN_MPI_PATH/bin/mpirun
-
-######################
-# Runtime python deps. python-etcd is required for the PyTorchJob etcd
-# rendezvous backend used by the orchestration manifest.
-######################
-RUN python3 -m pip install python-etcd
+# Env: OFI-NCCL plugin search paths + cuda compat; keep /opt/venv/bin FIRST so python3
+# resolves to the venv that has torch + Megatron-Core + Megatron-Bridge + (later) UCCL.
+ENV LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:/opt/amazon/openmpi/lib:/opt/nccl/build/lib:/opt/amazon/efa/lib:/opt/amazon/aws-ofi-nccl/lib:/opt/amazon/ofi-nccl/lib:/opt/aws-ofi-nccl/install/lib:/usr/local/cuda/compat:$LD_LIBRARY_PATH \
+    LIBRARY_PATH=/usr/local/cuda/compat/:$LIBRARY_PATH \
+    PATH=/opt/venv/bin:/opt/amazon/openmpi/bin:/opt/amazon/efa/bin:$PATH
 
 #####################################################
 ## UCCL core + UCCL-EP + deep_ep shadow wrapper
@@ -156,29 +126,20 @@ RUN python3 -m pip install python-etcd
 # /usr/local; combined with the `ep` extension that setup.py installs into /opt/venv,
 # that splits the `uccl` package across two dirs (core in /usr/local, ep.abi3.so in
 # /opt/venv) so `from uccl.ep import ...` — and therefore `import deep_ep` — fails.
-RUN python3 -m pip install nanobind==${NANOBIND_VERSION}
-
-# Full clone then checkout the pinned commit (a SHA cannot be passed to --branch),
-# then init submodules.
-RUN git clone https://github.com/uccl-project/uccl.git /opt/uccl \
-    && cd /opt/uccl \
-    && git checkout ${UCCL_COMMIT} \
-    && git submodule update --init --recursive
-
-# UCCL core (host transport library) -> /opt/venv (co-located with the ep extension).
-RUN cd /opt/uccl \
-    && python3 -m pip install .
-
-# UCCL-EP (expert-parallel kernels). PER_EXPERT_BATCHING=1 and the Blackwell
-# arch list are required; the ";" in TORCH_CUDA_ARCH_LIST must stay quoted so the
-# shell does not treat it as a command separator.
-RUN cd /opt/uccl/ep \
-    && PER_EXPERT_BATCHING=1 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
-       python3 setup.py install
-
-# deep_ep shadow module (top-level `deep_ep` that resolves to UCCL on EFA).
-RUN cd /opt/uccl/ep/deep_ep_wrapper \
-    && python3 -m pip install .
+#
+# All UCCL steps are ONE RUN (overlay2 layer-depth budget — see the setup RUN above):
+#   nanobind (build dep) -> clone+checkout pinned SHA + submodules -> UCCL core ->
+#   UCCL-EP kernels (PER_EXPERT_BATCHING + Blackwell arch list; the ";" in
+#   TORCH_CUDA_ARCH_LIST must stay quoted) -> deep_ep shadow wrapper.
+RUN set -eux; \
+    python3 -m pip install nanobind==${NANOBIND_VERSION}; \
+    git clone https://github.com/uccl-project/uccl.git /opt/uccl; \
+    cd /opt/uccl; \
+    git checkout ${UCCL_COMMIT}; \
+    git submodule update --init --recursive; \
+    cd /opt/uccl && python3 -m pip install .; \
+    cd /opt/uccl/ep && PER_EXPERT_BATCHING=1 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" python3 setup.py install; \
+    cd /opt/uccl/ep/deep_ep_wrapper && python3 -m pip install .
 
 #####################################################
 ## Build verification
@@ -193,33 +154,42 @@ RUN cd /opt/uccl/ep/deep_ep_wrapper \
 ## metadata (modules may not expose __version__). import megatron.core/bridge is GPU-less-safe.
 #####################################################
 RUN python3 -c "import importlib.util as u, importlib.metadata as md; \
+ from packaging.version import Version; \
  import deep_ep, uccl, megatron.core, megatron.bridge; \
  assert hasattr(deep_ep, 'Buffer'), 'deep_ep.Buffer missing (uccl.ep not wired into the deep_ep shadow)'; \
+ assert '/opt/venv/' in deep_ep.__file__, \
+   'import deep_ep resolved to %s, NOT the UCCL venv copy: the base also ships NVIDIA DeepEP in dist-packages (IB/NVSHMEM-bound). sys.path order must keep /opt/venv first.' % deep_ep.__file__; \
+ bridge_ver = md.version('megatron-bridge'); \
+ assert Version(bridge_ver) >= Version('0.4.0'), \
+   'megatron-bridge %s < 0.4.0: flex/deepep allowlist rejects B300 (the pin did not take)' % bridge_ver; \
+ from megatron.bridge.training.flex_dispatcher_backend import validate_flex_dispatcher_backend as _v; \
+ import inspect; \
+ assert 'startswith' in inspect.getsource(_v), 'flex dispatcher allowlist is not the startswith() form (B300 unsupported)'; \
  print('python ->', __import__('sys').executable); \
  print('deep_ep ->', deep_ep.__file__); \
  print('uccl ->', uccl.__file__, '(has ep:', u.find_spec('uccl.ep') is not None, ')'); \
  print('megatron-core', md.version('megatron-core')); \
- print('megatron-bridge', md.version('megatron-bridge'))"
+ print('megatron-bridge', bridge_ver, '(B300 flex/deepep allowlist OK)')"
 
 #####################################################
 ## Fabric / EFA environment
 ##
 ## NCCL_SOCKET_IFNAME uses the canonical exclude list (^docker,lo,veth).
 #####################################################
+## NCCL/EFA + OpenMPI (^ucx, tcp,self) + PMIx fix, in ONE ENV (overlay2 layer-depth
+## budget). FI_PROVIDER=efa is what enforces EFA-only at runtime (we no longer remove
+## IB libverbs — the base's curated EFA depends on them). PMIX_MCA_gds=hash works around
+## https://github.com/open-mpi/ompi/issues/7516.
 ENV NCCL_SOCKET_IFNAME=^docker,lo,veth \
     FI_PROVIDER=efa \
     FI_EFA_USE_DEVICE_RDMA=1 \
     FI_EFA_FORK_SAFE=1 \
-    PER_EXPERT_BATCHING=1
-
-## Set Open MPI variables to exclude network interface and conduit.
-ENV OMPI_MCA_pml=^ucx               \
-    OMPI_MCA_btl=tcp,self           \
+    PER_EXPERT_BATCHING=1 \
+    OMPI_MCA_pml=^ucx \
+    OMPI_MCA_btl=tcp,self \
     OMPI_MCA_btl_tcp_if_exclude=lo,docker0,veth \
-    OPAL_PREFIX=/opt/amazon/openmpi
-
-## Turn off PMIx Error https://github.com/open-mpi/ompi/issues/7516
-ENV PMIX_MCA_gds=hash
+    OPAL_PREFIX=/opt/amazon/openmpi \
+    PMIX_MCA_gds=hash
 
 # This image is model-agnostic: it ships only the Megatron-Bridge + UCCL-over-EFA
 # environment, so it can be reused by any model test case under this library.

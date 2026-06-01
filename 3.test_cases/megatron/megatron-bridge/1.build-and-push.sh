@@ -10,9 +10,9 @@
 #   ./1.build-and-push.sh
 #
 # Override defaults via environment variables:
-#   TAG=<tag>       Image tag (default: nemo-25.11.01-uccl-0dc87eb)
+#   TAG=<tag>       Image tag (default: nemo-26.04.01-uccl-0dc87eb)
 #   REGION=<region> AWS region (default: us-west-2)
-#   ACCOUNT=<id>    AWS account ID (default: 159553542841)
+#   ACCOUNT=<id>    AWS account ID (REQUIRED — your account)
 #   REPO_NAME=<name> ECR repository name (default: megatron-bridge-uccl)
 #
 # Prerequisites:
@@ -26,9 +26,9 @@ set -euo pipefail
 ###### User Variables #####
 ###########################
 
-TAG="${TAG:-nemo-25.11.01-uccl-0dc87eb}"
+TAG="${TAG:-nemo-26.04.01-uccl-0dc87eb}"
 REGION="${REGION:-us-west-2}"
-ACCOUNT="${ACCOUNT:-159553542841}"
+ACCOUNT="${ACCOUNT:?set ACCOUNT to your AWS account id}"
 REPO_NAME="${REPO_NAME:-megatron-bridge-uccl}"
 
 ###########################

@@ -7,10 +7,20 @@ This directory contains the manifests and instructions for launching a 32-node (
 Megatron-Bridge SFT job for Kimi K2 (1.04T-param MoE) on Amazon EKS with
 UCCL-EP providing expert-parallel all-to-all over AWS EFA.
 
+> **Status (2026-06-01) — this PyTorchJob + KAI path has NOT been run end-to-end.** The
+> cluster used for validation has **no kubeflow PyTorchJob CRD**, so the work that *was*
+> run — the dispatcher A/B that proves the UCCL-over-EFA path — used **raw ranked Pods**
+> instead (see [`../benchmarks/RESULTS.md`](../benchmarks/RESULTS.md) and
+> [`../benchmarks/run-ab-rawpods.sh`](../benchmarks/run-ab-rawpods.sh)). The full SFT
+> additionally needs the ~2 TB MCore checkpoint at `/fsx/kimi-k2/mcore` (absent at the time
+> of writing). Steps below that depend on the PyTorchJob operator or the KAI PodGroup are
+> therefore **unverified against this cluster** (flagged inline). The EFA / UCCL
+> verification gates in [Section 7](#7-watch-training-progress) (§7.2–7.4), by contrast,
+> were captured from live raw-pod runs and are accurate.
+
 ## 1. Prerequisites
 
-Before proceeding, ensure the following are in place on the target EKS cluster
-(`ml-clusters-shared-us-west-2`, account `159553542841`):
+Before proceeding, ensure the following are in place on the target EKS cluster:
 
 - **EFA device plugin** deployed — `vpc.amazonaws.com/efa` advertised on
   `p6-b300.48xlarge` nodes (expected 16 per node; one of the 17 NIC cards is ENA-only).
@@ -31,7 +41,7 @@ Before proceeding, ensure the following are in place on the target EKS cluster
   env image (`megatron-bridge-uccl`) built from the **library-level** Dockerfile; see
   `3.test_cases/megatron/megatron-bridge/README.md` (`bash 1.build-and-push.sh`).
   Export `REPO_URI` before continuing.
-- **Capacity-block node group** `cb-4ff6b84d` active and 32 nodes available.
+- **Capacity-block node group** active and 32 `p6-b300.48xlarge` nodes available.
 
 ## 2. FSx for Lustre Prerequisite
 
@@ -102,14 +112,14 @@ Export the following variables; they are substituted into the manifest template 
 ```bash
 # --- Image ---
 export AWS_REGION=us-west-2
-export ACCOUNT=159553542841
+export ACCOUNT=<account>
 export REGISTRY=${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com
 export IMAGE_NAME=megatron-bridge-uccl
-export IMAGE_TAG=nemo-25.11.01-uccl-0dc87eb   # pin to the built image tag
+export IMAGE_TAG=nemo-26.04.01-uccl-0dc87eb   # pin to the built image tag
 export REPO_URI=${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
-# = 159553542841.dkr.ecr.us-west-2.amazonaws.com/megatron-bridge-uccl:nemo-25.11.01-uccl-0dc87eb
+# = <account>.dkr.ecr.us-west-2.amazonaws.com/megatron-bridge-uccl:nemo-26.04.01-uccl-0dc87eb
 
-# --- Cluster topology (p6-b300.48xlarge, capacity-block cb-4ff6b84d) ---
+# --- Cluster topology (p6-b300.48xlarge capacity block) ---
 export NUM_NODES=32
 export GPU_PER_NODE=8
 export EFA_PER_NODE=16                  # 16 EFA cards per p6-b300.48xlarge (1 card is ENA-only)
@@ -183,8 +193,8 @@ places the full group, then transition to `Running` simultaneously:
 kubectl get pods -l job-name=kimi-k2-sft -w
 
 # Inspect the PodGroup status (KAI gang object)
-# TODO(validate against image): confirm the apiVersion and group name below
-# against the KAI CRD installed in the cluster.
+# UNVERIFIED: KAI gang scheduling was not exercised (the validated A/B used raw Pods, not a
+# PodGroup). Confirm the apiVersion / group name against the KAI CRD before relying on this.
 # Reference: https://github.com/NVIDIA/KAI-Scheduler/blob/main/docs/podgroup.md
 kubectl get podgroup kimi-k2-sft-pg
 # Expect: status.phase = Running, status.scheduled = 32
@@ -257,25 +267,33 @@ selection line:
 kubectl logs kimi-k2-sft-worker-0 | grep -i "NET/OFI\|provider\|efa"
 ```
 
-Expected output (exact text varies by aws-ofi-nccl version; see the
-`# TODO` below):
+Expected output (captured verbatim from a live 256× B300 run on this image):
 
 ```
-NCCL INFO NET/OFI selected transport EFA
+NCCL INFO NET/OFI Selected provider is efa, fabric is efa-direct (found 16 nics)
 ```
 
-<!-- TODO(validate against image): capture the exact NCCL_DEBUG=INFO provider
-selection line from a live run and paste it here. The line format is printed by
-aws-ofi-nccl and depends on the installed version bundled in the EFA installer
-1.48.0 + the aws-ofi-nccl shipped by the NGC base. -->
+**Every rank must log this `efa` / `efa-direct` line (16 NICs).** If any rank instead
+selects a socket/TCP provider, EFA RDMA is not engaged for that rank — discard the run
+and re-check `FI_PROVIDER=efa` and the EFA device-plugin allocation
+(`vpc.amazonaws.com/efa: 16`).
 
-### 7.3 No NVSHMEM / IB Initialization
+### 7.3 EFA transport active, not NVSHMEM / IBGDA
 
-Confirm absence of InfiniBand or NVSHMEM init messages in the logs:
+EFA-only is enforced at **runtime** (`FI_PROVIDER=efa`, `OMPI_MCA_pml=^ucx`), **not** by
+removing libraries. On the `nemo:26.04.01` base the curated EFA stack (libfabric-aws,
+openmpi4x-aws, efa-profile, DOCA) *depends on* `libibverbs1`/`ibverbs-providers`, so the
+Dockerfile **keeps** them — apt-removing them cascades into removing the entire EFA +
+OpenMPI stack (verified with `apt-get remove --simulate`). Their presence on disk is
+therefore expected and harmless; what matters is the transport **selected at run time**.
+
+Confirm UCCL's EFA path is active and NVSHMEM/IBGDA is *not* initialized (UCCL's `deep_ep`
+uses EFA RDMA, unlike stock NVIDIA DeepEP which is NVSHMEM/IBGDA-bound):
 
 ```bash
-kubectl logs kimi-k2-sft-worker-0 | grep -i "nvshmem\|ibverbs\|mlx5\|hpcx"
-# Should return no output — IB libraries were removed in the Dockerfile.
+kubectl logs kimi-k2-sft-worker-0 | grep -i "nvshmem\|IBGDA"
+# Should return no output. The positive signal is the EFA provider line (7.2) plus the
+# UCCL proxy line (7.4) on every rank.
 ```
 
 ### 7.4 UCCL-EP Bandwidth Logging (Optional)
@@ -287,8 +305,15 @@ UCCL-EP logs all-to-all transfer stats when `PER_EXPERT_BATCHING=1` is set
 kubectl logs kimi-k2-sft-worker-0 | grep -i "uccl\|deep_ep\|efa.*bw\|all2all"
 ```
 
-<!-- TODO(validate against image): capture the actual UCCL-EP all-to-all log
-prefix from a live run — the exact format is implementation-defined. -->
+On a live run, UCCL-EP registers its EFA RDMA proxies at the start of the training loop.
+The captured signature (256× B300, one line per local GPU) is:
+
+```
+Registered proxies for device <N> (high-throughput mode)
+```
+
+`high-throughput mode` is UCCL-EP's normal/training-kernel path (as opposed to the
+low-latency inference path). Seeing these lines confirms the UCCL EP all-to-all is live.
 
 ## 9. Teardown
 

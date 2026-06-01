@@ -129,15 +129,15 @@ echo "Download complete."
 # Step 2: HF -> MCore checkpoint conversion via Megatron-Bridge
 #
 # AutoBridge.import_ckpt() is the single-process convenience wrapper shown in
-# examples/conversion/convert_checkpoints.py for Megatron-Bridge v0.4.0
-# (the version shipped in nvcr.io/nvidia/nemo:25.11.01).
+# examples/conversion/convert_checkpoints.py for Megatron-Bridge v0.4.2
+# (the version shipped in nvcr.io/nvidia/nemo:26.04.01).
 #
 # It calls AutoBridge.from_hf_pretrained(hf_model_id, torch_dtype=bfloat16)
 # followed by provider.finalize() + save_megatron_model() in one shot.
 # Block-FP8 weights are dequantized inline to BF16 during this step.
 #
 # TODO(validate against image): the import_ckpt signature below and whether a
-# Kimi-K2 *text* bridge mapping exists are UNVERIFIED against the v0.4.0 image.
+# Kimi-K2 *text* bridge mapping exists are UNVERIFIED against the v0.4.2 image.
 # Bridge main ships Moonlight / Kimi-K2.5-VL; Kimi K2 is DeepSeek-V3-family so the
 # DeepSeek bridge may cover it via trust_remote_code, but confirm against the image
 # (a dedicated kimi_bridge.py may or may not be present). Mirrors the config's stance
@@ -168,7 +168,7 @@ echo "Download complete."
 #     --trust-remote-code
 #
 # The multi-GPU script is at:
-#   https://github.com/NVIDIA-NeMo/Megatron-Bridge/blob/v0.4.0/examples/conversion/hf_megatron_roundtrip_multi_gpu.py
+#   https://github.com/NVIDIA-NeMo/Megatron-Bridge/blob/v0.4.2/examples/conversion/hf_megatron_roundtrip_multi_gpu.py
 ###############################################################################
 
 mkdir -p "${FSX_MCORE_DIR}"

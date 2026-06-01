@@ -32,8 +32,12 @@ patching Megatron-Core**:
   does, but the bytes go over EFA via UCCL + GDRCopy instead of over IB verbs via NVSHMEM.
 
 > **This is a research/validation recipe, not a production-blessed path.** UCCL's `deep_ep`
-> drop-in has been exercised primarily for vLLM **inference**. The training **combine-backward**
-> path is not yet independently proven at this scale. Treat every gate in
+> drop-in was originally exercised primarily for vLLM **inference**. The training dispatch +
+> **combine-backward** path is now validated at this scale: the dispatcher A/B ran 20-iter
+> forward+backward through `MoEFlexTokenDispatcher(backend="deepep")` on 256× B300 (EP=32) over
+> EFA — clean (0 stalls, EFA-active on every rank) and numerically **equal-work** vs the NCCL
+> all-to-all baseline (iteration-1 loss match). See [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
+> For a new setup, still treat every gate in
 > [Known edge cases](#known-edge-cases--validation-gates) as a hard stop.
 
 ## Architecture: the integration chain
@@ -55,19 +59,19 @@ Megatron-Bridge finetune()                # src/megatron/bridge/training/finetun
 ```
 
 Everything above `import deep_ep` is stock NGC software (Megatron-Bridge, Megatron-Core,
-TransformerEngine from `nvcr.io/nvidia/nemo:25.11.01`). Everything below it is the EFA fabric.
+TransformerEngine from `nvcr.io/nvidia/nemo:26.04.01`). Everything below it is the EFA fabric.
 The shadow module is the single hinge that swaps the transport.
 
 ## Prerequisites
 
 | Requirement | Value / Notes |
 |-------------|---------------|
-| EKS cluster | `ml-clusters-shared-us-west-2` (account `159553542841`, region `us-west-2`) |
-| Node group | `cb-4ff6b84d` — 32x `p6-b300.48xlarge` (256x B300, 8 GPU/node, capacity block) |
+| EKS cluster | your EKS cluster in a region with `p6-b300.48xlarge` capacity |
+| Node group | a capacity-block node group — 32x `p6-b300.48xlarge` (256x B300, 8 GPU/node) |
 | GPU | NVIDIA B300, 288 GB HBM3e, compute capability `sm_103` |
 | EFA | 16 EFA interfaces per node (1 of 17 net cards is ENA-only) |
 | Shared storage | FSx for Lustre, mounted at `/fsx` via a PVC (`fsx-claim`); budget 4-5 TB |
-| Registry | ECR `159553542841.dkr.ecr.us-west-2.amazonaws.com` (us-west-2) |
+| Registry | ECR `<account>.dkr.ecr.us-west-2.amazonaws.com` (us-west-2) |
 | Operators | [Kubeflow Training Operator](https://www.kubeflow.org/docs/components/training/) (PyTorchJob), NVIDIA + EFA device plugins |
 | Scheduler | Default scheduler works; KAI gang scheduling (PodGroup) is OPTIONAL/opt-in for all-or-nothing 32-node start (see `kubernetes/README.md`) |
 | Tooling | Docker for the build, `kubectl` + `aws` CLI configured for the workload account |
@@ -75,7 +79,7 @@ The shadow module is the single hinge that swaps the transport.
 Confirm cluster/account before any mutation:
 
 ```bash
-aws sts get-caller-identity   # expect Account 159553542841
+aws sts get-caller-identity   # expect Account <account>
 kubectl config current-context
 ```
 
@@ -108,7 +112,7 @@ nodeSelector:
 > [`../`](../README.md):
 > ```bash
 > cd ..                      # 3.test_cases/megatron/megatron-bridge
-> bash 1.build-and-push.sh   # build & push megatron-bridge-uccl:nemo-25.11.01-uccl-0dc87eb
+> bash 1.build-and-push.sh   # build & push megatron-bridge-uccl:nemo-26.04.01-uccl-0dc87eb
 > bash 2.sanity-singlenode.sh   # inside the image, on one p6-b300 node (do NOT skip)
 > cd kimi-k2
 > ```

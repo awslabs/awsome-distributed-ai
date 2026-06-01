@@ -48,29 +48,41 @@ from this directory, then continue in the model subdirectory.
 ### 1. Build the environment image and push to ECR
 
 `1.build-and-push.sh` builds `Dockerfile`, creates the ECR repository if needed
-(`megatron-bridge-uccl`), logs in, and pushes the pinned tag `nemo-25.11.01-uccl-0dc87eb`
-(no `latest`). The Dockerfile starts from `nvcr.io/nvidia/nemo:25.11.01` (CUDA 13.0.2,
-PyTorch 2.10), which already ships **Megatron-Bridge v0.4.0**, Megatron-Core (with the
-`flex`/`deepep` dispatcher), and TransformerEngine — these are **not** reinstalled. It then
-strips the IB fabric, lays down GDRCopy `v2.5.2` + the EFA installer `1.48.0`, and builds
-UCCL (pinned to commit `0dc87eb`) / UCCL-EP for `sm_103` (B300) plus the `deep_ep` shadow.
+(`megatron-bridge-uccl`), logs in, and pushes the pinned tag `nemo-26.04.01-uccl-0dc87eb`
+(no `latest`). The Dockerfile starts from `nvcr.io/nvidia/nemo:26.04.01` (CUDA 13.1,
+PyTorch 2.11), which already ships **Megatron-Bridge v0.4.2**, Megatron-Core `0.17.1` (with
+the `flex`/`deepep` dispatcher), and TransformerEngine — these are **not** reinstalled. (The
+older `25.11.01` base shipped Megatron-Bridge 0.2.0, whose flex/deepep GPU allowlist rejects
+p6-b300; 0.4.0+ fixes it — see the Dockerfile header.) It then strips the IB fabric, lays down
+GDRCopy `v2.5.2` + the EFA installer `1.48.0`, and builds UCCL (pinned to commit `0dc87eb`) /
+UCCL-EP for `sm_103` (B300) plus the `deep_ep` shadow.
 
 ```bash
 bash 1.build-and-push.sh
-# Image: 159553542841.dkr.ecr.us-west-2.amazonaws.com/megatron-bridge-uccl:nemo-25.11.01-uccl-0dc87eb
+# Image: <account>.dkr.ecr.us-west-2.amazonaws.com/megatron-bridge-uccl:nemo-26.04.01-uccl-0dc87eb
 ```
 
 ### 2. Single-node sanity gate
 
 **Do not skip this.** It is far cheaper to fail on 1 node than to burn 32 capacity-block
 nodes. `2.sanity-singlenode.sh` runs a single-node, 8-GPU smoke test **inside the image**
-that confirms the UCCL `deep_ep` wrapper is active, EFA is present, and an EP forward +
-backward micro-step runs through `MoEFlexTokenDispatcher` with `backend="deepep"`.
+that confirms the UCCL `deep_ep` wrapper is active, EFA is present, and the
+Megatron-Core flex/deepep dispatcher config is wired.
 
 ```bash
 # inside the container on one p6-b300.48xlarge node:
 bash 2.sanity-singlenode.sh
 ```
+
+> **Note (nemo:26.04.01 / Megatron-Core 0.17.1):** Gates 1–4 (EFA device present, UCCL
+> `deep_ep` active with `Buffer`, MCore flex/deepep config fields, NCCL all-reduce over
+> EFA) pass. **Gate 5** — a hand-rolled `MoEFlexTokenDispatcher` micro-step — is **stale**
+> on Core 0.17.1: its standalone setup predates the `ProcessGroupCollection` API and
+> raises a `pg_collection` error. This is **not** a UCCL/image fault — the real
+> `pretrain()` path builds the process groups internally and dispatches correctly (the
+> multi-node benchmark runs clean through `MoEFlexTokenDispatcher(backend="deepep")`).
+> Treat the multi-node run / [`benchmarks`](kimi-k2/benchmarks/RESULTS.md) as the
+> authoritative end-to-end dispatch check until Gate 5 is ported to the 0.17.1 API.
 
 ## Models
 
@@ -81,6 +93,32 @@ bash 2.sanity-singlenode.sh
 To add a model: create `megatron-bridge/<model>/` with its `conf/`, deployment manifests,
 and a model README. Reuse the shared image from step 1 (mount the model's `conf` at runtime)
 — do **not** add a second Dockerfile.
+
+## Benchmark result — UCCL-EP vs NCCL all-to-all (256× B300)
+
+The headline measurement this environment was built for: swapping **only** the
+Megatron-Core MoE token dispatcher — NCCL all-to-all (baseline) vs UCCL's EFA-native
+`deep_ep` (treatment) — on a live 32× p6-b300.48xlarge (256× B300) block. Model:
+DeepSeek-V3 256-expert MoE (Kimi-K2 family), TP8/PP8/EP32/DP4, seq 4096, bf16, balanced
+routing. Everything else is held byte-identical across arms. Full methodology, caveats,
+and raw numbers: [`kimi-k2/benchmarks/RESULTS.md`](kimi-k2/benchmarks/RESULTS.md).
+
+At the throughput-efficient operating point (micro-batch ≥ 4), **UCCL `deep_ep` is
+~36% faster than NCCL all-to-all**, and the advantage **holds under deployment-realistic
+1F1B overlap**. NCCL wins only at micro-batch 1 (64 tiny dispatches — UCCL-EP's
+per-dispatch overhead unamortized), an operating point no throughput-tuned run uses.
+
+| micro-batch | overlap | NCCL all-to-all | UCCL `deep_ep` | dispatcher delta |
+|------------:|---------|----------------:|---------------:|------------------|
+| 1 | off | 12.54 s | 14.12 s | NCCL **+12.6%** faster |
+| 4 | off |  9.77 s | **6.26 s** | UCCL **−36.0%** faster |
+| 4 | on  |  5.98 s | **3.84 s** | UCCL **−35.8%** faster |
+
+> Mean training-iteration time (lower = better), median over 16 steady-state iters
+> after warmup, 0 stalls, EFA-active on every rank. Work-equivalence (no token dropping)
+> verified two ways: drop-free config + an iteration-1 loss match (deepep 11.897349 vs
+> alltoall 11.897517). `overlap=on` is a separate within-regime A/B (VPP=2 + recompute
+> off on both arms) — do not subtract its numbers against the `overlap=off` rows.
 
 ## References
 
