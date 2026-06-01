@@ -1,0 +1,447 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Adding Compute Node Group to PCS Cluster with multi-network interface (EFA) support for P6-B300 (17 network cards; On-Demand or Capacity Block)
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Capacity Blocks for ML Settings (Optional)
+        Parameters:
+          - CapacityReservationId
+      - Label:
+          default: Additional Compute Node Group Settings
+        Parameters:
+          - CngName
+          - QueueName
+          - InstanceType
+          - MaxCount
+          - MinCount
+      - Label:
+          default: PCS Cluster configuration
+        Parameters:
+          - ClusterId
+          - SubnetId
+          - AmiId
+          - ClusterSecurityGroupId
+          - IamProfileArn
+          - FSxLustreFilesystemId
+          - FSxLustreFilesystemMountName
+          - FSxOpenZFSFilesystemId
+      - Label:
+          default: Monitoring configuration
+        Parameters:
+          - DeployMonitoring
+          - MonitoringVersion
+          - MonitoringRepo
+          - MonitoringRole
+      - Label:
+          default: Post-install script (OnNodeConfigured)
+        Parameters:
+          - PostInstallScriptUrl
+          - PostInstallScriptArgs
+
+Parameters:
+  CapacityReservationId:
+    Type: String
+    Description: (Optional) Capacity Reservation ID for Capacity Blocks. Leave empty for On-Demand instances.
+    Default: ""
+
+  ClusterId:
+    Type: String
+    Description: Cluster ID (actual PCS cluster ID like pcs_xxxxx)
+
+  ClusterName:
+    Type: String
+    Description: User-friendly cluster name
+
+  CngName:
+    Type: String
+    Description: Name for Compute Node Group
+    Default: "gpu-p5"
+
+  QueueName:
+    Type: String
+    Description: Name for Queue (leave empty to skip queue creation)
+    Default: ""
+
+  InstanceType:
+    Type: String
+    Description: Instance Type for Compute Node Group (p6-b300.48xlarge, 17 network cards)
+    Default: "p6-b300.48xlarge"
+
+  RootVolumeSize:
+    Type: Number
+    Description: >-
+      Root EBS volume size (GiB) for compute nodes. The PCS DLAMI default (~75
+      GiB) is too small for pulling/importing large container images (Enroot/Pyxis
+      squashfs, Megatron ~20 GB). 300 GiB gives ample headroom.
+    Default: 300
+    MinValue: 75
+
+  MaxCount:
+    Type: Number
+    Description: Maximum number of instance
+
+  MinCount:
+    Type: Number
+    Description: Minimum number of instance. (it must be 0 if you want to use dynamic scaling)
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Select the Subnet where the Compute Node will be launched
+
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Description: Enter the AMI ID for the Login Node and Compute Node (e.g. ami-0abcdef1234567890)
+    ConstraintDescription: Must be a valid AMI ID (ami-xxxxxxxxxxxxxxxxx)
+
+  ClusterSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Select SecurityGroup for Compute Node Group for Cluster Communication
+
+  IamProfileArn:
+    Type: String
+    Description: IAM Instance Profile for Compute Node Group
+
+  FSxLustreFilesystemId:
+    Type: String
+    Description: Filesystem ID for FSx for Lustre
+
+  FSxLustreFilesystemMountName:
+    Type: String
+    Description: MountName for FSx for Lustre
+
+  FSxOpenZFSFilesystemId:
+    Type: String
+    Description: Filesystem ID for FSx for OpenZFS
+
+  DeployMonitoring:
+    Type: String
+    Description: Deploy monitoring stack (Prometheus/Grafana on Login Node, DCGM exporter on Compute Node with GPU)
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  MonitoringVersion:
+    Type: String
+    Description: >-
+      aws-parallelcluster-monitoring git ref to install (release tag, branch, or
+      'latest'). Used both to fetch post-install.sh from MonitoringRepo at this
+      ref and as the ref argument passed to it. Pin to a release tag for upstream
+      stability in production; a branch name (e.g. a fork's dev branch) can be
+      used together with MonitoringRepo for testing unreleased changes.
+    Default: 'v2.6.3'
+
+  MonitoringRepo:
+    Type: String
+    Description: >-
+      GitHub "owner/repo" to fetch the monitoring stack from. Override with a
+      fork (e.g. DaisukeMiyamoto/aws-parallelcluster-monitoring) together with a
+      branch in MonitoringVersion to test unreleased changes before they merge
+      upstream.
+    Default: 'aws-samples/aws-parallelcluster-monitoring'
+
+  MonitoringRole:
+    Type: String
+    Description: Monitoring role for this node (login=head node with Prometheus/Grafana, compute=compute node with exporters, none=no monitoring)
+    Default: 'none'
+    AllowedValues:
+      - 'login'
+      - 'compute'
+      - 'none'
+
+  PostInstallScriptUrl:
+    Type: String
+    Description: >-
+      Optional URL of a post-install script to download and run on each node at
+      first boot (PCS equivalent of ParallelCluster OnNodeConfigured). Leave
+      empty to skip. To install Enroot/Pyxis, point this at scripts/install-enroot-pyxis.sh.
+      Must be an HTTP(S) URL (e.g. a GitHub raw URL); S3 public hosting is not allowed.
+    Default: ''
+
+  PostInstallScriptArgs:
+    Type: String
+    Description: Space-separated arguments passed to the post-install script.
+    Default: ''
+
+Conditions:
+  UseCapacityBlock: !Not [!Equals [!Ref CapacityReservationId, ""]]
+  UseOnDemand: !Equals [!Ref CapacityReservationId, ""]
+  CreateQueue: !Not [!Equals [!Ref QueueName, ""]]
+  # Emit the monitoring-role tag for both login and compute nodes (any role
+  # other than 'none'). The monitoring stack identifies login nodes by this
+  # tag (monitoring-role=login) and excludes them from EC2 service discovery.
+  IsMonitoringRoleSet: !Not [!Equals [!Ref MonitoringRole, 'none']]
+
+Resources:
+
+  # Cluster Placement Group (On-Demand only)
+  PlacementGroup:
+    Type: AWS::EC2::PlacementGroup
+    Condition: UseOnDemand
+    Properties:
+      Strategy: cluster
+
+  # Compute Node groups - Compute Nodes
+  PCSNodeGroupCompute:
+    Type: AWS::PCS::ComputeNodeGroup
+    Properties:
+      ClusterId: !Ref ClusterId
+      Name: !Ref CngName
+      ScalingConfiguration:
+        MinInstanceCount: !Ref MinCount
+        MaxInstanceCount: !Ref MaxCount
+      IamInstanceProfileArn: !Ref IamProfileArn
+      CustomLaunchTemplate:
+        TemplateId: !Ref PCSLaunchTemplate
+        Version: 1
+      SubnetIds:
+        - !Ref SubnetId
+      AmiId: !Ref AmiId
+      InstanceConfigs:
+        - InstanceType: !Ref InstanceType
+      PurchaseOption: !If [UseCapacityBlock, CAPACITY_BLOCK, !Ref "AWS::NoValue"]
+
+  PCSQueueCompute:
+    Type: AWS::PCS::Queue
+    Condition: CreateQueue
+    Properties:
+      ClusterId: !Ref ClusterId
+      Name: !Ref QueueName
+      ComputeNodeGroupConfigurations:
+        - ComputeNodeGroupId: !GetAtt [PCSNodeGroupCompute, Id]
+
+  PCSLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub 'PCS-lt-${AWS::StackName}'
+
+      LaunchTemplateData:
+        InstanceType: !Ref InstanceType
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: !Ref RootVolumeSize
+              VolumeType: gp3
+              DeleteOnTermination: true
+        InstanceMarketOptions: !If
+          - UseCapacityBlock
+          - MarketType: capacity-block
+          - !Ref AWS::NoValue
+        CapacityReservationSpecification: !If
+          - UseCapacityBlock
+          - CapacityReservationTarget:
+              CapacityReservationId: !Ref CapacityReservationId
+          - !Ref AWS::NoValue
+        Placement: !If
+          - UseOnDemand
+          - GroupName: !Ref PlacementGroup
+          - !Ref AWS::NoValue
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: HPCRecipes
+                Value: "true"
+              # Name is free for arbitrary operator use. The monitoring stack
+              # identifies login vs compute nodes via the monitoring-role tag
+              # (below), not Name, so dashboards work regardless of this value.
+              # Default to PCS-<cngname> (mirrors CngName) for a recognizable
+              # console name; retag freely afterward.
+              - Key: Name
+                Value: !Sub 'PCS-${CngName}'
+              - Key: CngName
+                Value: !Sub 'PCS-${CngName}'
+              - Key: ClusterName
+                Value: !Ref ClusterName
+              - Key: pcs-cluster-id
+                Value: !Ref ClusterId
+              # Node type for the monitoring stack. Emitted for both login and
+              # compute (any role != none). Prometheus drops monitoring-role=login
+              # from EC2 SD (the static login_node job scrapes it); everything else
+              # is reported as instance_name=Compute. See aws-parallelcluster-monitoring
+              # prometheus-pcs.yml and issue #45.
+              - !If
+                - IsMonitoringRoleSet
+                - Key: monitoring-role
+                  Value: !Ref MonitoringRole
+                - !Ref AWS::NoValue
+        MetadataOptions:
+          HttpEndpoint: enabled
+          HttpPutResponseHopLimit: 4
+          HttpTokens: required
+          InstanceMetadataTags: enabled
+        UserData:
+          Fn::Base64: !Sub |
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="==MYBOUNDARY=="
+
+            --==MYBOUNDARY==
+            Content-Type: text/cloud-config; charset="us-ascii"
+            MIME-Version: 1.0
+
+            runcmd:
+            # Post-install script (optional) - generic OnNodeConfigured-style hook.
+            # Downloads and runs a user-supplied script (e.g. Enroot/Pyxis install).
+            - |
+              if [ -n "${PostInstallScriptUrl}" ]; then
+                echo "Downloading post-install script from ${PostInstallScriptUrl}..." | tee /var/log/pcs-post-install.log
+                curl -fsSL "${PostInstallScriptUrl}" -o /tmp/pcs-post-install.sh
+                chmod +x /tmp/pcs-post-install.sh
+                echo "Executing post-install script..." | tee -a /var/log/pcs-post-install.log
+                bash /tmp/pcs-post-install.sh ${PostInstallScriptArgs} >> /var/log/pcs-post-install.log 2>&1
+                echo "Post-install script completed (exit $?)" | tee -a /var/log/pcs-post-install.log
+              else
+                echo "No post-install script configured (PostInstallScriptUrl empty)" | tee /var/log/pcs-post-install.log
+              fi
+            # FSx Home directories mount
+            - mkdir -p /tmp/home
+            - rsync -aA /home/ /tmp/home
+            - echo "${FSxOpenZFSFilesystemId}.fsx.${AWS::Region}.amazonaws.com:/fsx/ /home nfs noatime,nfsvers=3,sync,nconnect=16,rsize=1048576,wsize=1048576,defaults 0 0" >> /etc/fstab
+            - mount -a -t nfs defaults
+            - if [ "enabled" = "$(sestatus | awk '/^SELinux status:/{print $3}')" ]; then setsebool -P use_nfs_home_dirs 1; fi
+            - rsync -aA --ignore-existing /tmp/home/ /home
+            - rm -rf /tmp/home/
+            # If provided, mount FSxL filesystem as /fsx
+            - if [ ! -z "${FSxLustreFilesystemId}" ]; then mkdir -p /fsx; mount -t lustre ${FSxLustreFilesystemId}.fsx.${AWS::Region}.amazonaws.com@tcp:/${FSxLustreFilesystemMountName} /fsx; chmod 1777 /fsx; fi
+            # Monitoring stack installation (optional, enabled on Login Node only)
+            - |
+              if [ "${DeployMonitoring}" = "true" ]; then
+                echo "Installing monitoring stack..."
+                # Fetch post-install.sh from MonitoringRepo at the MonitoringVersion ref, and
+                # pass both the ref and the repo to it so the tarball is pulled from the same
+                # source. This lets a fork + branch be used for testing unreleased changes.
+                # As of v2.6.3 the installer auto-detects the Ubuntu 'ubuntu' user and runs
+                # install.sh itself (PR #44), so no ec2-user shim or local-var patch is needed.
+                curl -fsSL https://raw.githubusercontent.com/${MonitoringRepo}/${MonitoringVersion}/post-install.sh -o /tmp/post-install.sh
+                bash /tmp/post-install.sh ${MonitoringVersion} ${MonitoringRepo} 2>&1 | tee /var/log/monitoring-install.log
+                echo "Monitoring installation complete"
+              fi
+
+            --==MYBOUNDARY==
+        NetworkInterfaces:
+          # Primary network interface (NetworkCardIndex 0, DeviceIndex 0)
+          - Description: Primary network interface
+            DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 0
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          # EFA network interfaces 1-16 (all use DeviceIndex 1)
+          - DeviceIndex: 1
+            InterfaceType: efa
+            NetworkCardIndex: 1
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 1
+            InterfaceType: efa
+            NetworkCardIndex: 2
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 1
+            InterfaceType: efa
+            NetworkCardIndex: 3
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 1
+            InterfaceType: efa
+            NetworkCardIndex: 4
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 1
+            InterfaceType: efa
+            NetworkCardIndex: 5
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 1
+            InterfaceType: efa
+            NetworkCardIndex: 6
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 1
+            InterfaceType: efa
+            NetworkCardIndex: 7
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 1
+            InterfaceType: efa
+            NetworkCardIndex: 8
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 1
+            InterfaceType: efa
+            NetworkCardIndex: 9
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 1
+            InterfaceType: efa
+            NetworkCardIndex: 10
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 1
+            InterfaceType: efa
+            NetworkCardIndex: 11
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 1
+            InterfaceType: efa
+            NetworkCardIndex: 12
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 1
+            InterfaceType: efa
+            NetworkCardIndex: 13
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 1
+            InterfaceType: efa
+            NetworkCardIndex: 14
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 1
+            InterfaceType: efa
+            NetworkCardIndex: 15
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 1
+            InterfaceType: efa
+            NetworkCardIndex: 16
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+Outputs:
+  NodeGroupId:
+    Description: Compute Node Group ID
+    Value: !GetAtt PCSNodeGroupCompute.Id
+  QueueId:
+    Condition: CreateQueue
+    Description: Queue ID
+    Value: !GetAtt PCSQueueCompute.Id
+  LaunchTemplateId:
+    Description: Launch template Id
+    Value: !Ref PCSLaunchTemplate
+  DefaultVersionNumber:
+    Description: Default version number
+    Value: !GetAtt PCSLaunchTemplate.DefaultVersionNumber
+  LatestVersionNumber:
+    Description: Latest version number
+    Value: !GetAtt PCSLaunchTemplate.DefaultVersionNumber
