@@ -326,55 +326,54 @@ Resources:
 
             --==MYBOUNDARY==
         NetworkInterfaces:
-          # Primary network interface: ENA on network card 0, device index 0.
-          # On P6, network card 0 does not support EFA (EFA limit 0), so this
-          # must be a plain ENA interface (no InterfaceType).
-          - Description: Primary network interface (ENA)
+          # p6-b200 supports EFA on all 8 network cards (MaxEfaInterfaces=8),
+          # so every card uses InterfaceType: efa for maximum EFA bandwidth.
+          # Primary is network card 0, device index 0; the rest are device index 1.
+          # PCS requires InterfaceType: efa (not efa-only) to propagate correctly.
+          - Description: Primary network interface
             DeviceIndex: 0
+            InterfaceType: efa
             NetworkCardIndex: 0
             SubnetId: !Ref SubnetId
             Groups:
             - !Ref ClusterSecurityGroupId
-          # EFA on network cards 1-7 (device index 0). PCS requires
-          # InterfaceType: efa (not efa-only) to propagate the interface
-          # configuration to the launch instances request correctly.
-          - DeviceIndex: 0
+          - DeviceIndex: 1
             InterfaceType: efa
             NetworkCardIndex: 1
             SubnetId: !Ref SubnetId
             Groups:
             - !Ref ClusterSecurityGroupId
-          - DeviceIndex: 0
+          - DeviceIndex: 1
             InterfaceType: efa
             NetworkCardIndex: 2
             SubnetId: !Ref SubnetId
             Groups:
             - !Ref ClusterSecurityGroupId
-          - DeviceIndex: 0
+          - DeviceIndex: 1
             InterfaceType: efa
             NetworkCardIndex: 3
             SubnetId: !Ref SubnetId
             Groups:
             - !Ref ClusterSecurityGroupId
-          - DeviceIndex: 0
+          - DeviceIndex: 1
             InterfaceType: efa
             NetworkCardIndex: 4
             SubnetId: !Ref SubnetId
             Groups:
             - !Ref ClusterSecurityGroupId
-          - DeviceIndex: 0
+          - DeviceIndex: 1
             InterfaceType: efa
             NetworkCardIndex: 5
             SubnetId: !Ref SubnetId
             Groups:
             - !Ref ClusterSecurityGroupId
-          - DeviceIndex: 0
+          - DeviceIndex: 1
             InterfaceType: efa
             NetworkCardIndex: 6
             SubnetId: !Ref SubnetId
             Groups:
             - !Ref ClusterSecurityGroupId
-          - DeviceIndex: 0
+          - DeviceIndex: 1
             InterfaceType: efa
             NetworkCardIndex: 7
             SubnetId: !Ref SubnetId
