@@ -12,6 +12,7 @@ ARG ACCELERATE_VERSION=1.6.0
 ARG DEEPSPEED_VERSION=0.16.4
 ARG PYNVML_VERSION=12.0.0
 ARG SENTENCEPIECE_VERSION=0.2.0
+ARG AWSCLI_MIN_VERSION=2.0.0
 ARG OPEN_MPI_PATH=/opt/amazon/openmpi
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -148,7 +149,7 @@ RUN mv ${OPEN_MPI_PATH}/bin/mpirun ${OPEN_MPI_PATH}/bin/mpirun.real \
 # 9. Python packages for DeepSpeed training
 # ============================================================
 RUN pip3 install --no-cache-dir \
-    awscli \
+    "awscli>=${AWSCLI_MIN_VERSION}" \
     pynvml==${PYNVML_VERSION} \
     transformers==${TRANSFORMERS_VERSION} \
     sentencepiece==${SENTENCEPIECE_VERSION} \
