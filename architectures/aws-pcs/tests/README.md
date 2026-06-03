@@ -96,6 +96,12 @@ Container support can be provided two ways — validate whichever you deployed:
 - **(a) First-boot UserData** (`BuildAMI=false` + `PostInstallScriptUrl`, the default).
 - **(b) Pre-baked custom AMI** (`BuildAMI=true`, via `pcs-ready-dlami-with-enroot-pyxis.yaml`).
 
+> **Use one, not both.** `PostInstallScriptUrl` defaults to the Enroot/Pyxis installer and
+> deploy-all passes it to the node groups regardless of `BuildAMI`. When testing path (b),
+> deploy with **`BuildAMI=true` AND `PostInstallScriptUrl=""`** — otherwise every node both
+> boots the pre-baked AMI and re-runs the installer at first boot (wasted time / possible
+> conflict). For path (a) keep `BuildAMI=false` and the default `PostInstallScriptUrl`.
+
 ```bash
 # On any node (login or compute):
 which enroot                                  # /usr/bin/enroot
