@@ -312,7 +312,13 @@ automatically — see the [screenshot below](#accessing-grafana).
 
 ### Accessing Grafana
 
-Grafana is reached via SSM port forwarding (no public access).
+By default Grafana has **no public access** and is reached via SSM port forwarding
+(below). To instead reach it directly in a browser, set `GrafanaPublicAccessCidr` at
+deploy time to a CIDR you trust (e.g. your office IP `203.0.113.4/32`): a login-only
+security group then opens HTTPS/443 to that CIDR, and you can browse
+`https://<login-node-public-ip>/grafana/`. Only the login node is exposed (compute
+nodes and FSx are not). Prefer a tight CIDR over `0.0.0.0/0`. SSM port forwarding works
+regardless.
 
 ```bash
 # 1. Login node instance ID

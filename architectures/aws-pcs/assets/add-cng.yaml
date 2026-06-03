@@ -91,6 +91,14 @@ Parameters:
     Type: AWS::EC2::SecurityGroup::Id
     Description: Select SecurityGroup for Compute Node Group for Cluster Communication
 
+  ExtraSecurityGroupId:
+    Type: String
+    Description: >-
+      (Optional) An additional security group ID to attach to these nodes (in
+      addition to ClusterSecurityGroupId). Used e.g. to expose Grafana on a login
+      node to a specific CIDR. Leave empty to attach only the cluster security group.
+    Default: ""
+
   IamProfileArn:
     Type: String
     Description: IAM Instance Profile for Compute Node Group
@@ -163,6 +171,7 @@ Conditions:
   # other than 'none'). The monitoring stack identifies login nodes by this
   # tag (monitoring-role=login) and excludes them from EC2 service discovery.
   IsMonitoringRoleSet: !Not [!Equals [!Ref MonitoringRole, 'none']]
+  HasExtraSecurityGroup: !Not [!Equals [!Ref ExtraSecurityGroupId, ""]]
 
 Resources:
 
@@ -242,8 +251,11 @@ Resources:
           HttpPutResponseHopLimit: 4
           HttpTokens: required
           InstanceMetadataTags: enabled
-        SecurityGroupIds:
-          - !Ref ClusterSecurityGroupId
+        SecurityGroupIds: !If
+          - HasExtraSecurityGroup
+          - - !Ref ClusterSecurityGroupId
+            - !Ref ExtraSecurityGroupId
+          - - !Ref ClusterSecurityGroupId
         UserData:
           Fn::Base64: !Sub |
             MIME-Version: 1.0
