@@ -1,13 +1,15 @@
 <!-- Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. -->
 <!-- SPDX-License-Identifier: MIT-0 -->
 
-# Kimi-K2 MoE: DeepEP/UCCL-over-EFA vs NCCL all-to-all — Benchmark
+# DeepSeek-V3 256-expert MoE: DeepEP/UCCL-over-EFA vs NCCL all-to-all — Benchmark
 
 This harness measures the performance of UCCL's EFA-native **DeepEP drop-in**
 (expert-parallel dispatch/combine over AWS EFA) against the standard **NCCL
-all-to-all** token dispatcher, for Kimi-K2 / DeepSeek-V3-class fine-grained MoE
-training with NVIDIA Megatron-Bridge / Megatron-Core on **32x p6-b300.48xlarge**
-(256x B300, 8 GPU/node, 16x 400 Gbps EFAv4 = 6.4 Tbps/node).
+all-to-all** token dispatcher, for a **DeepSeek-V3 256-expert** fine-grained MoE
+training step with NVIDIA Megatron-Bridge / Megatron-Core on **32x p6-b300.48xlarge**
+(256x B300, 8 GPU/node, 16x 400 Gbps EFAv4 = 6.4 Tbps/node). DeepSeek-V3 is the
+architecture family Kimi-K2 belongs to; the literal Kimi-K2 (384-expert) shape was
+**not** run (see the substrate note under "Overview").
 
 > ## ✅ Measured (2026-06-01) — results are in
 >
@@ -41,10 +43,13 @@ delta is attributable to the dispatcher and not to a confounder.
 | **WITHOUT DeepEP** (baseline) | `moe_token_dispatcher_type="alltoall"` | NCCL all-to-all over EFA (via aws-ofi-nccl) |
 | **WITH DeepEP** (treatment) | `moe_token_dispatcher_type="flex"`, `moe_flex_dispatcher_backend="deepep"` | DeepEP kernels; on AWS the `deep_ep` module imported is **UCCL's EFA-native drop-in** (stock NVIDIA DeepEP is NVSHMEM/IBGDA-bound and cannot run on EFA) |
 
-- Model (as run): recipe-native **DSV3 256-expert** MoE (Kimi-K2 family — top-8, MLA,
-  hidden 7168, 61 layers). Kimi-K2's native 384 routed experts is **not** used: overriding
-  the expert count without recomputing the recipe's node-group routing breaks the build,
-  and the dispatcher A/B does not depend on the exact count.
+- Model (as run): the `deepseek_v3` recipe — **DeepSeek-V3 256-expert** MoE (top-8, MLA,
+  hidden 7168, 61 layers, **128 attention heads**). This is **DeepSeek-V3, not Kimi-K2**:
+  Kimi-K2 uses **384 experts** and **64 heads** (~1.04T vs ~671B params). They share the
+  rest, and the dispatcher A/B depends on the shared token-routing params (hidden, top-k,
+  EP degree), not the expert count — so DSV3-256 is a valid family substrate, but the
+  literal-Kimi-K2 number is unrun. Overriding `num_moe_experts` to 384 without re-deriving
+  the recipe's node-group routing breaks the build.
 - Parallelism: **TP=8** (intra-node), **EP=32** (spans 4 nodes), **PP=8**, **DP=4** = 256 GPUs (32 nodes x 8 B300).
 - Image: `<account>.dkr.ecr.us-west-2.amazonaws.com/megatron-bridge-uccl:nemo-26.04.01-uccl-0dc87eb`
 - FSx layout: `/fsx/kimi-k2/{hf,mcore,sft-data,sft-output}`; benchmark outputs -> `/fsx/kimi-k2/bench`
@@ -72,7 +77,7 @@ Scripts in this directory:
 > *why this was surprising*, but do not read the "modest / small overlap delta" framing as
 > the finding — the finding is in [`RESULTS.md`](RESULTS.md).
 
-For our 256-GPU (32x p6-b300) Kimi-K2 / DSV3-class MoE training A/B, the *pre-run*
+For our 256-GPU (32x p6-b300) DeepSeek-V3 256-expert MoE training A/B, the *pre-run*
 expectation was: the *communication-layer* delta from swapping the NCCL all-to-all
 token dispatcher for the DeepEP/UCCL-over-EFA drop-in can be large in
 microbenchmarks, but the *end-to-end training* delta is most likely modest —

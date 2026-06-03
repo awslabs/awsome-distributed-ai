@@ -33,10 +33,13 @@ patching Megatron-Core**:
 
 > **This is a research/validation recipe, not a production-blessed path.** UCCL's `deep_ep`
 > drop-in was originally exercised primarily for vLLM **inference**. The training dispatch +
-> **combine-backward** path is now validated at this scale: the dispatcher A/B ran 20-iter
+> **combine-backward** path is exercised at this scale: the dispatcher A/B ran 20-iter
 > forward+backward through `MoEFlexTokenDispatcher(backend="deepep")` on 256× B300 (EP=32) over
 > EFA — clean (0 stalls, EFA-active on every rank) and numerically **equal-work** vs the NCCL
-> all-to-all baseline (iteration-1 loss match). See [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
+> all-to-all baseline (iteration-1 loss match). Note that A/B ran on a **DeepSeek-V3 256-expert**
+> substrate (the architecture family — **not** the literal 384-expert Kimi-K2) with random init +
+> mock data, measuring throughput; cross-iteration gradient correctness and real-data convergence
+> remain untested. See [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
 > For a new setup, still treat every gate in
 > [Known edge cases](#known-edge-cases--validation-gates) as a hard stop.
 

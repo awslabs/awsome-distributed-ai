@@ -1,11 +1,13 @@
 <!-- Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. -->
 <!-- SPDX-License-Identifier: MIT-0 -->
 
-# Kimi-K2 UCCL-EP vs NCCL all-to-all — Benchmark Results
+# DeepSeek-V3 (256-expert MoE) — UCCL-EP vs NCCL all-to-all — Benchmark Results
 
-Results template for the MoE token-dispatcher A/B: UCCL's EFA-native DeepEP
-drop-in (expert-parallel all-to-all over EFA) vs the stock NCCL all-to-all token
-dispatcher, for 256-GPU (32x p6-b300) Kimi-K2 / DSV3-class MoE SFT.
+MoE token-dispatcher A/B: UCCL's EFA-native DeepEP drop-in (expert-parallel
+all-to-all over EFA) vs the stock NCCL all-to-all token dispatcher, on a 256-GPU
+(32x p6-b300) **DeepSeek-V3 256-expert** MoE training step. This is the architecture
+family Kimi-K2 belongs to, but the substrate that ran is literally DeepSeek-V3, **not**
+Kimi-K2 — see the substrate caveat below for the differences.
 
 The only toggle that changes between
 arms is `MOE_DISPATCHER` (`alltoall` -> baseline, `deepep` -> UCCL-EFA treatment);
@@ -83,9 +85,14 @@ is mean iter time over the balanced steady state.
    `overlap=on` required `VPP=2` (the recipe's `(8,2)` layout) + recompute OFF on both
    arms, so it is a separate within-regime A/B (see that section). Remaining overlap
    follow-up: a finer micro-batch sweep under overlap, and `delay_wgrad_compute=on`.
-2. **256-expert DSV3 shape**, not literally Kimi-K2's 384 experts (overriding experts
-   without recomputing the recipe's node-group routing breaks the build). This is an
-   architecture-**family** result.
+2. **This is DeepSeek-V3, not Kimi-K2.** The substrate is the `deepseek_v3` recipe with
+   DSV3's values — **256 routed experts** and **128 attention heads** — whereas Kimi-K2
+   uses **384 experts** and **64 heads** (~1.04T vs ~671B params). They share the rest
+   (hidden 7168, 61 layers, top-8, MLA), and the dispatcher A/B depends on the shared
+   token-routing params (hidden, top-k, EP degree), not the expert count — so this is a
+   valid *architecture-family* measurement, but the literal-Kimi-K2 (384-expert) number
+   is unrun. Overriding `num_moe_experts` to 384 without re-deriving the recipe's
+   node-group routing (`moe_router_num_groups` / `group_topk`) breaks the build.
 3. **Random-init + mock data + forced balancing** measures the dispatcher on a
    *balanced* token distribution; real data carries some residual imbalance.
 4. Single 20-iter run per arm (within-run σ tiny; between-run variance not bounded,

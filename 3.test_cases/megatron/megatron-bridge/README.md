@@ -98,10 +98,11 @@ and a model README. Reuse the shared image from step 1 (mount the model's `conf`
 
 The headline measurement this environment was built for: swapping **only** the
 Megatron-Core MoE token dispatcher — NCCL all-to-all (baseline) vs UCCL's EFA-native
-`deep_ep` (treatment) — on a live 32× p6-b300.48xlarge (256× B300) block. Model:
-DeepSeek-V3 256-expert MoE (Kimi-K2 family), TP8/PP8/EP32/DP4, seq 4096, bf16, balanced
-routing. Everything else is held byte-identical across arms. Full methodology, caveats,
-and raw numbers: [`kimi-k2/benchmarks/RESULTS.md`](kimi-k2/benchmarks/RESULTS.md).
+`deep_ep` (treatment) — on a live 32× p6-b300.48xlarge (256× B300) block. Model: the
+`deepseek_v3` recipe — **DeepSeek-V3 256-expert** MoE (the architecture family Kimi-K2
+belongs to, but **not** the literal 384-expert Kimi-K2 — see RESULTS.md), TP8/PP8/EP32/DP4,
+seq 4096, bf16, balanced routing. Everything else is held byte-identical across arms. Full
+methodology, caveats, and raw numbers: [`kimi-k2/benchmarks/RESULTS.md`](kimi-k2/benchmarks/RESULTS.md).
 
 At the throughput-efficient operating point (micro-batch ≥ 4), **UCCL `deep_ep` is
 ~36% faster than NCCL all-to-all**, and the advantage **holds under deployment-realistic
@@ -114,8 +115,8 @@ per-dispatch overhead unamortized), an operating point no throughput-tuned run u
 | 4 | off |  9.77 s | **6.26 s** | UCCL **−36.0%** faster |
 | 4 | on  |  5.98 s | **3.84 s** | UCCL **−35.8%** faster |
 
-> Mean training-iteration time (lower = better), median over 16 steady-state iters
-> after warmup, 0 stalls, EFA-active on every rank. Work-equivalence (no token dropping)
+> Mean training-iteration time (lower = better) over 16 steady-state iters after warmup,
+> 0 stalls, EFA-active on every rank. Work-equivalence (no token dropping)
 > verified two ways: drop-free config + an iteration-1 loss match (deepep 11.897349 vs
 > alltoall 11.897517). `overlap=on` is a separate within-regime A/B (VPP=2 + recompute
 > off on both arms) — do not subtract its numbers against the `overlap=off` rows.
