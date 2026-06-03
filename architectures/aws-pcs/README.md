@@ -64,6 +64,16 @@ Once it's up:
 
 Prefer step-by-step instructions? See the [AI/ML for AWS PCS Workshop](https://catalog.workshops.aws/ml-on-pcs/).
 
+**Clean up.** When you're done, delete the stack — either from the **CloudFormation
+Management Console** (select the stack → **Delete**) or via the CLI:
+
+```bash
+aws cloudformation delete-stack --stack-name pcs-ml-cluster
+```
+
+Nested stacks are deleted automatically. Back up any FSx data first — the filesystems
+are deleted with the stack.
+
 ---
 
 ## 4. Configuration
@@ -391,18 +401,7 @@ For detailed validation, the full metric list, and troubleshooting, see
 
 ---
 
-## 9. Cleanup
-
-```bash
-aws cloudformation delete-stack --stack-name pcs-ml-cluster
-```
-
-Nested stacks are deleted automatically. Back up any FSx data first — the filesystems
-are deleted with the stack.
-
----
-
-## 10. Templates
+## 9. Templates
 
 All templates live in [`assets/`](./assets/). `pcs-ml-cluster-deploy-all.yaml` nests
 the others; you can also deploy each individually for more control (e.g. reuse a VPC/FSx
@@ -426,7 +425,7 @@ Capacity Block.
 
 ---
 
-## 11. Testing and Validation
+## 10. Testing and Validation
 
 Validated configurations:
 
@@ -440,11 +439,7 @@ Validated configurations:
 
 ---
 
-## 12. User Management
-
-- [LDAP Server Setup Guide](../6.ldap_server/README.md) — OpenLDAP for cluster-wide user authentication.
-
-## 13. Additional Resources
+## 11. Additional Resources
 
 - [AWS Parallel Computing Service Documentation](https://docs.aws.amazon.com/pcs/)
 - [AI/ML for AWS PCS Workshop](https://catalog.workshops.aws/ml-on-pcs/)
@@ -453,3 +448,4 @@ Validated configurations:
 - [Capacity Blocks for ML](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-capacity-blocks.html)
 - [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) (upstream monitoring)
 - [Prometheus & Grafana Setup](../../4.validation_and_observability/4.prometheus-grafana/README.md) (alternative: AWS-managed Prometheus/Grafana)
+- [LDAP Server Setup Guide](../6.ldap_server/README.md) — OpenLDAP for cluster-wide user management
