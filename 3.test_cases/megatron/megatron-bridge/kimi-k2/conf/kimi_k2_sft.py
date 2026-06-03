@@ -109,12 +109,16 @@ def kimi_k2_sft_config() -> ConfigContainer:
     # AutoBridge detects the HF architecture and returns a Megatron-Core provider.
     # load_weights=False: real weights are loaded from the converted MCore checkpoint
     # via cfg.checkpoint.pretrained_checkpoint (set below), not re-converted here.
-    # TODO(validate against image): confirm AutoBridge on this image has a bridge
-    # mapping for Kimi K2 *text* (moonshotai/Kimi-K2-Base). Bridge main ships Moonlight
-    # and Kimi-K2.5-VL; Kimi K2 is DeepSeek-V3-family (MLA + fine-grained MoE) so the
-    # DeepSeek bridge may cover it, but verify. If unsupported, convert via the DeepSeek
-    # bridge or add a Kimi bridge. https://github.com/NVIDIA-NeMo/Megatron-Bridge
-    cfg.model = AutoBridge.from_hf_pretrained(KIMI_K2_HF_ID).to_megatron_provider(load_weights=False)
+    # Validated on the image (Bridge 0.4.2, nemo:26.04.01): moonshotai/Kimi-K2-Base
+    # declares architectures=["DeepseekV3ForCausalLM"], which AutoBridge routes to the
+    # registered DeepSeekV3Bridge, building the literal Kimi K2 provider (384 experts,
+    # moe_router_num_groups=1, 64 heads, MLA) straight from the HF config.
+    # trust_remote_code=True is REQUIRED: the HF config uses auto_map ->
+    # configuration_deepseek.DeepseekV3Config (custom code); without it the config load
+    # fails with "contains custom code which must be executed".
+    cfg.model = AutoBridge.from_hf_pretrained(
+        KIMI_K2_HF_ID, trust_remote_code=True
+    ).to_megatron_provider(load_weights=False)
 
     # Tokenizer from the local HF repo dir on FSx (no network/auth on workers).
     cfg.tokenizer.tokenizer_type = "HuggingFaceTokenizer"
