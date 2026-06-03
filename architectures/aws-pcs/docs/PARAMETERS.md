@@ -7,7 +7,7 @@ sections shown in the CloudFormation console (the console also shows friendly la
 so a default deploy only needs the Availability Zone (`PrimarySubnetAZ`).
 
 For conceptual guidance (GPU instance/EFA selection, FSx Region availability, container
-runtime options), see the [README](./README.md#4-configuration).
+runtime options), see the [README](../README.md#4-configuration).
 
 ## 1. Network Configuration
 
@@ -53,7 +53,7 @@ runtime options), see the [README](./README.md#4-configuration).
 
 ## 5. GPU Compute Node Group — P5/P6 (Optional)
 
-See [GPU compute](./README.md#gpu-compute-p5p6) for instance/EFA/capacity guidance.
+See [GPU compute](../README.md#gpu-compute-p5p6) for instance/EFA/capacity guidance.
 
 | Parameter | Default | Purpose |
 |---|---|---|
@@ -67,7 +67,7 @@ See [GPU compute](./README.md#gpu-compute-p5p6) for instance/EFA/capacity guidan
 
 ## 6. FSx Storage Configuration (Advanced)
 
-See [Storage: FSx deployment types](./README.md#storage-fsx-deployment-types-region-availability) for Region availability.
+See [Storage: FSx deployment types](../README.md#storage-fsx-deployment-types-region-availability) for Region availability.
 
 | Parameter | Default | Purpose |
 |---|---|---|

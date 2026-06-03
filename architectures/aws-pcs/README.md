@@ -92,7 +92,7 @@ Availability Zone (`PrimarySubnetAZ`). The most-used parameters:
 | `PseriesInstanceType` | `p5.48xlarge` | GPU instance type; auto-selects the multi-NIC template + EFA count |
 | `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR |
 
-**See [PARAMETERS.md](./PARAMETERS.md) for the complete parameter reference** (all 7
+**See [PARAMETERS.md](./docs/PARAMETERS.md) for the complete parameter reference** (all 7
 console parameter groups, with every default). The concept guides below cover the
 choices that need the most thought.
 
@@ -406,7 +406,7 @@ For detailed validation, the full metric list, and troubleshooting, see
 All templates live in [`assets/`](./assets/). `pcs-ml-cluster-deploy-all.yaml` nests
 the others; you can also deploy each individually for more control (e.g. reuse a VPC/FSx
 across clusters). Click **Deploy** to 1-click-launch a single template. For every
-parameter and default, see [PARAMETERS.md](./PARAMETERS.md).
+parameter and default, see [PARAMETERS.md](./docs/PARAMETERS.md).
 
 | Template | Purpose | Deploy |
 |---|---|---|
