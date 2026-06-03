@@ -305,6 +305,53 @@ See [Connect to Cluster](https://catalog.workshops.aws/ml-on-pcs/en-US/03-cluste
 
 ---
 
+## Running a multi-node GPU job (NCCL test)
+
+A quick way to confirm the GPU queue, Pyxis containers, and EFA all work end-to-end is
+the [NCCL tests](https://github.com/NVIDIA/nccl-tests) `all_reduce_perf` benchmark across
+2 nodes. Run these on the login node as the `ubuntu` user, with a GPU queue deployed
+(e.g. `gpu-p6b300`, adjust the partition name to yours).
+
+**1. Import the container image once** (to shared `/fsx`, via Enroot):
+
+```bash
+srun --partition=gpu-p6b300 --nodes=1 --exclusive \
+  enroot import -o /fsx/nccl-tests.sqsh dockerd://public.ecr.aws/hpc-cloud/nccl-tests
+```
+
+**2. Submit a 2-node, 16-GPU all_reduce** (`nccl-test.sbatch`):
+
+```bash
+cat > nccl-test.sbatch <<'EOF'
+#!/bin/bash
+#SBATCH --job-name=nccl-allreduce
+#SBATCH --partition=gpu-p6b300
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=8
+#SBATCH --gres=gpu:8
+#SBATCH --exclusive
+#SBATCH --output=/fsx/nccl-%j.out
+
+export FI_PROVIDER=efa
+export NCCL_DEBUG=INFO
+
+srun --mpi=pmix --container-image=/fsx/nccl-tests.sqsh --container-mounts=/fsx:/fsx \
+  /opt/nccl-tests/build/all_reduce_perf -b 8 -e 16G -f 2 -g 1
+EOF
+
+sbatch nccl-test.sbatch
+```
+
+**3. Check the result** (`/fsx/nccl-<jobid>.out`). EFA is in use when you see
+`NET/OFI Selected provider is efa ... (found N nics)`, and a healthy run ends with
+`# Out of bounds values : 0 OK` plus a busbw column that scales up to the GPU
+interconnect bandwidth (e.g. ~760 GB/s peak on 2× p6-b300).
+
+For a full training example (FSDP), see the
+[PyTorch FSDP test case](../../3.test_cases/pytorch/FSDP).
+
+---
+
 ## Monitoring
 
 With `DeployMonitoring=true` (default), an integrated monitoring stack based on
