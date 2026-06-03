@@ -9,14 +9,20 @@ This directory contains test guides and verification procedures for AWS PCS clus
 Complete guide for testing PCS cluster with integrated monitoring stack:
 - Deploy cluster with Prometheus, Grafana, and DCGM exporter
 - Verify Slurm OpenMetrics configuration
-- Access Grafana dashboard via Session Manager
+- Access Grafana dashboard via Session Manager (or public access)
 - Validate monitoring components on login and compute nodes
 - Troubleshooting common issues
 
+### [GPU Training Validation](./gpu-training-validation/)
+
+End-to-end GPU node-group validation (sbatch scripts + results): `nvidia-smi` in a
+Pyxis container, multi-node NCCL `all_reduce_perf` over EFA, and a multi-node training
+run.
+
 **Use cases:**
 - Testing monitoring integration before production deployment
-- Verifying Ubuntu 24.04 compatibility workarounds
 - Validating IAM policies for monitoring
+- Verifying EFA / NCCL / container (Enroot/Pyxis) on P5/P6 GPU nodes
 - Testing with Capacity Blocks for ML or On-Demand instances
 
 ## Quick Start

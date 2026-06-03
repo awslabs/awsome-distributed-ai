@@ -224,7 +224,7 @@ docker logs grafana | tail -20
 sudo cat /var/log/monitoring-install.log
 
 # Verify the installer detected the Ubuntu user and installed to /home/ubuntu
-# (v2.6.3+ auto-detects 'ubuntu'; no ec2-user shim is created any more)
+# (v2.6.5+ auto-detects 'ubuntu'; no ec2-user shim is created any more)
 ls -la /opt/aws-parallelcluster-monitoring
 grep -E 'PLATFORM_USER|MONITORING_HOME' /var/log/monitoring-install.log
 
@@ -368,13 +368,13 @@ In Grafana:
 # Check installation log on login node
 sudo cat /var/log/monitoring-install.log
 
-# Confirm the installer detected the Ubuntu user (v2.6.3+)
+# Confirm the installer detected the Ubuntu user (v2.6.5+)
 grep -E 'PLATFORM_USER|MONITORING_HOME' /var/log/monitoring-install.log
 ls -la /opt/aws-parallelcluster-monitoring
 
 # Manually re-run installation (pin to the same release tag as the deployment)
-curl -fsSL https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-monitoring/v2.6.3/post-install.sh -o /tmp/post-install.sh
-sudo bash /tmp/post-install.sh v2.6.3
+curl -fsSL https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-monitoring/v2.6.5/post-install.sh -o /tmp/post-install.sh
+sudo bash /tmp/post-install.sh v2.6.5
 ```
 
 ### Containers Not Running
