@@ -2,20 +2,18 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 #
-# Stage 2 (Approach 2 - container via Pyxis/Enroot): 2-node NCCL all_reduce_perf
-# over EFA, using the PREBUILT published image from public ECR (no local build):
-#   public.ecr.aws/hpc-cloud/nccl-tests:efa1.48.0-ncclv2.30.4-1-testsv2.18.3
+# Stage 2: 2-node NCCL all_reduce_perf over EFA, via Pyxis/Enroot using the
+# prebuilt published image from public ECR (no local build):
+#   public.ecr.aws/hpc-cloud/nccl-tests
+# Import it first on the login node with 02-import-nccl-image.sh (writes
+# /fsx/nccl-tests.sqsh). Adjust --partition to your GPU queue
+# (gpu-p5 / gpu-p6b200 / gpu-p6b300).
 # Reference: https://catalog.workshops.aws/ml-on-pcs/en-US/05-test-gpu/06-nccl-test
-# Adapted from micro-benchmarks/nccl-tests/slurm/nccl-tests-container.sbatch.
-#
-# We import the image to a squashfs on /fsx first (02-import-nccl-image.sh),
-# because the GPU node root disk is small (~72G, mostly full); importing to the
-# root-backed enroot cache overflows it.
 
 #SBATCH --job-name=nccl-all_reduce_perf
-#SBATCH --partition=gpu-p5
+#SBATCH --partition=gpu-p6b200
 #SBATCH --nodes=2
-#SBATCH --ntasks-per-node=8        # 8 GPUs per p5.48xlarge
+#SBATCH --ntasks-per-node=8        # 8 GPUs per node
 #SBATCH --exclusive
 #SBATCH --wait-all-nodes=1
 #SBATCH --output=02-nccl-tests_%j.out
@@ -23,7 +21,7 @@
 
 set -euxo pipefail
 
-: "${IMAGE:=/fsx/validation/nccl-tests.sqsh}"
+: "${IMAGE:=/fsx/nccl-tests.sqsh}"
 : "${NCCL_TESTS_PATH:=/opt/nccl-tests/build}"
 
 [[ -f "${IMAGE}" ]] || { echo "Missing ${IMAGE}; run 02-import-nccl-image.sh first." >&2; exit 1; }

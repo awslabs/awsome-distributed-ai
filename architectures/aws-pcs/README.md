@@ -392,8 +392,8 @@ node's model, instance type, utilization, temperature, power, and memory:
 
 ![Grafana GPU Node List dashboard](images/dashboard-screenshot-gpu-list.png)
 
-For detailed validation, the full metric list, and troubleshooting, see
-[tests/monitoring-stack-test.md](tests/monitoring-stack-test.md).
+For detailed validation steps and the full test matrix (monitoring, containers, CPU/GPU,
+NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 
 > **Use `v2.6.5` or newer for PCS.** Native Ubuntu/PCS support, the node-local `/opt`
 > install (fixing the shared-`/home` race), and a DCGM exporter tag that pulls on
