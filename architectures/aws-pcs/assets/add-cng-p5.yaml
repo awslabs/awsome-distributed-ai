@@ -105,9 +105,14 @@ Parameters:
     Description: Select the Subnet where the Compute Node will be launched
 
   AmiId:
-    Type: AWS::EC2::Image::Id
-    Description: Enter the AMI ID for the Login Node and Compute Node (e.g. ami-0abcdef1234567890)
-    ConstraintDescription: Must be a valid AMI ID (ami-xxxxxxxxxxxxxxxxx)
+    Type: String
+    Description: >-
+      (Optional) AMI ID for the nodes. Leave empty to auto-resolve the latest
+      PCS-ready DLAMI (Ubuntu 24.04 x86_64) from SSM Parameter Store. Set an explicit
+      ami-xxxx only to override (e.g. a custom AMI built with Enroot/Pyxis pre-baked).
+    Default: ""
+    AllowedPattern: '^$|^ami-[0-9a-f]{8,17}$'
+    ConstraintDescription: Must be empty or a valid AMI ID (ami-xxxxxxxxxxxxxxxxx)
 
   ClusterSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
@@ -191,6 +196,7 @@ Conditions:
   # other than 'none'). The monitoring stack identifies login nodes by this
   # tag (monitoring-role=login) and excludes them from EC2 service discovery.
   IsMonitoringRoleSet: !Not [!Equals [!Ref MonitoringRole, 'none']]
+  HasAmiId: !Not [!Equals [!Ref AmiId, ""]]
 
 Resources:
 
@@ -219,7 +225,10 @@ Resources:
         Version: !GetAtt PCSLaunchTemplate.LatestVersionNumber
       SubnetIds:
         - !Ref SubnetId
-      AmiId: !Ref AmiId
+      AmiId: !If
+        - HasAmiId
+        - !Ref AmiId
+        - '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
       InstanceConfigs:
         - InstanceType: !Ref InstanceType
       PurchaseOption: !If [UseCapacityBlock, CAPACITY_BLOCK, !Ref "AWS::NoValue"]
