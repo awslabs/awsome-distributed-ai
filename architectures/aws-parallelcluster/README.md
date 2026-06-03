@@ -185,7 +185,7 @@ To deploy the S3 bucket using our CloudFormation template:
 
 1. Click the button below to launch the CloudFormation stack:
 
-[<kbd> <br> 1-Click Deploy 🚀 <br> </kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-training.s3.amazonaws.com/templates/0.private-bucket.yaml&stackName=cluster-data-bucket)
+[<kbd> <br> 1-Click Deploy 🚀 <br> </kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/0.private-bucket.yaml&stackName=cluster-data-bucket)
 
 2. In the CloudFormation console:
    - Enter a stack name (e.g., `cluster-data-bucket`)
@@ -222,7 +222,7 @@ Please follow the steps below to deploy your resources:
 
 1. Click on this link to deploy to CloudFormation:
 
-[<kbd> <br> 1-Click Deploy 🚀 <br> </kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-training.s3.amazonaws.com/templates/parallelcluster-prerequisites.yaml&stackName=parallelcluster-prerequisites)
+[<kbd> <br> 1-Click Deploy 🚀 <br> </kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/parallelcluster-prerequisites.yaml&stackName=parallelcluster-prerequisites)
 
 > [!IMPORTANT]
 > When opening the link, you must specify the region and availability zone where your compute resources are located. Be sure to select the correct region and fill out the "Availability Zone configuration for the subnets" field, when you create the stack.
@@ -230,7 +230,7 @@ Please follow the steps below to deploy your resources:
 
 > [!NOTE]
 > The above CloudFormation stack uses FSx for Lustre `PERSISTENT_2` deployment type by default. If your selected availability zone doesn't support `PERSISTENT_2` or you specifically need to use `PERSISTENT_1` deployment type, please use the link below instead:
-> [<kbd> <br> 1-Click Deploy 🚀 <br> </kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-training.s3.amazonaws.com/templates/parallelcluster-prerequisites-p1.yaml&stackName=parallelcluster-prerequisites)
+> [<kbd> <br> 1-Click Deploy 🚀 <br> </kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/parallelcluster-prerequisites-p1.yaml&stackName=parallelcluster-prerequisites)
 
 ![parallelcluster-prerequisites-cfn](../../assets/parallelcluster-prerequisites-cfn.png)
 

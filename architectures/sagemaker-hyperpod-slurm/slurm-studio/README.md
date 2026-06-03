@@ -69,7 +69,7 @@ You can deploy the CloudFormation template, which creates the following resource
 
 You can deploy the stack via
 
- [<kbd> <br> 1-Click Deploy 🚀 <br> </kbd>](https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/quickcreate?templateURL=https://awsome-distributed-training.s3.amazonaws.com/templates/studio-slurm.yaml)
+ [<kbd> <br> 1-Click Deploy 🚀 <br> </kbd>](https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/quickcreate?templateURL=https://awsome-distributed-ai.s3.amazonaws.com/templates/studio-slurm.yaml)
 
 The CloudFormation template requires the following parameters:
 

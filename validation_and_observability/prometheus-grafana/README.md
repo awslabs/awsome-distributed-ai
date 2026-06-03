@@ -52,11 +52,11 @@ If you have already created your HyperPod cluster, you can follow [these instruc
 
 ### Deploy the CloudFormation Stack 
 
-[<kbd> <br> 1-Click Deploy <br> </kbd>](https://console.aws.amazon.com/cloudformation/home?#/stacks/quickcreate?templateURL=https://awsome-distributed-training.s3.amazonaws.com/templates/cluster-observability.yaml&stackName=Cluster-Observability)
+[<kbd> <br> 1-Click Deploy <br> </kbd>](https://console.aws.amazon.com/cloudformation/home?#/stacks/quickcreate?templateURL=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster-observability.yaml&stackName=Cluster-Observability)
 
 Alternatively, you can deploy OS Grafana stack.
 
-[<kbd> <br> 1-Click Deploy <br> </kbd>](https://console.aws.amazon.com/cloudformation/home?#/stacks/quickcreate?templateURL=https://awsome-distributed-training.s3.amazonaws.com/templates/cluster-observability-os-grafana.yaml&stackName=Cluster-Observability-OS-Grafana)
+[<kbd> <br> 1-Click Deploy <br> </kbd>](https://console.aws.amazon.com/cloudformation/home?#/stacks/quickcreate?templateURL=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster-observability-os-grafana.yaml&stackName=Cluster-Observability-OS-Grafana)
 
 >[!IMPORTANT]
 > It is strongly recommended you deploy this stack into the same region and same account as your SageMaker HyperPod Cluster.This will ensure successful execution of the Lifecycle Scripts, specifically `install_prometheus.sh`, which relies on AWS CLI commands that assume same account and same region. 
