@@ -60,6 +60,7 @@ Add a GPU queue and tune storage/monitoring via the parameters below.
 Once it's up:
 - **Connect** to the login node via SSM Session Manager — see [Accessing the Cluster](#6-accessing-the-cluster).
 - **Open the Grafana dashboards** (deployed by default) via SSM port forwarding — see [Accessing Grafana](#accessing-grafana).
+- **Want to reach Grafana directly in a browser** (no port forwarding)? Set `GrafanaPublicAccessCidr` to a trusted CIDR at deploy time — see [Option B — Direct public access](#option-b--direct-public-access-opt-in-via-grafanapublicaccesscidr).
 
 Prefer step-by-step instructions? See the [AI/ML for AWS PCS Workshop](https://catalog.workshops.aws/ml-on-pcs/).
 
