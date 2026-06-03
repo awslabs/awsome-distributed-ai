@@ -341,7 +341,7 @@ Parameters:
       MonitoringRepo at this ref and pass it as the ref argument. Pin to a release
       tag in production; a branch name + MonitoringRepo fork can be used to test
       unreleased changes.
-    Default: 'v2.6.3'
+    Default: 'v2.6.5'
 
   MonitoringRepo:
     Type: String
