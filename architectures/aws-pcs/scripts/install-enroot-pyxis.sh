@@ -18,8 +18,10 @@
 #        - raw.githubusercontent.com  (aws-samples enroot.template.conf)
 #        - nvidia.github.io           (libnvidia-container repo, GPU nodes only)
 #        - Ubuntu apt mirrors
-#   4. Runs as root and may contend with cloud-init for the apt lock; let
-#      cloud-init finish first when invoked from UserData.
+#   4. Runs as root and may contend with cloud-init / unattended-upgrades for the
+#      apt lock at first boot. The script now waits for the dpkg/apt lock and
+#      retries apt (wait_for_apt_lock/apt_get), so the boot-time lock race no
+#      longer aborts the install.
 #   5. GPU toolkit (nvidia-container-toolkit) installs ONLY when nvidia-smi
 #      succeeds; CPU-only nodes intentionally skip it.
 
@@ -31,10 +33,40 @@ ENROOT_RELEASE=3.5.0
 PYXIS_RELEASE=v0.20.0
 SLURM_VERSIONS="25.05 25.11"
 
+# At first boot this script runs alongside cloud-init and Ubuntu's
+# `unattended-upgrades`, which hold the dpkg/apt locks. Without waiting, the very
+# first `apt-get` fails with "Could not get lock /var/lib/dpkg/lock-frontend ...
+# held by ... (unattended-upgr)" and the whole script aborts under `set -e`
+# (observed as post-install exit 100 on a cold boot). Wait for the locks to clear,
+# and route apt through a small retry wrapper so a transient lock never fails the run.
+wait_for_apt_lock() {
+  local max=300 i=0
+  while fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock \
+        /var/cache/apt/archives/lock >/dev/null 2>&1; do
+    i=$((i+1))
+    [ "$i" -ge "$max" ] && { echo "WARN: apt/dpkg lock still held after ${max}s; proceeding"; break; }
+    echo "Waiting for apt/dpkg lock to be released (${i}s)..."
+    sleep 1
+  done
+}
+
+apt_get() {
+  # Wait for the lock, then retry a few times to ride out unattended-upgrades.
+  local tries=0
+  wait_for_apt_lock
+  until DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 "$@"; do
+    tries=$((tries+1))
+    [ "$tries" -ge 5 ] && { echo "ERROR: apt-get $* failed after $tries attempts"; return 1; }
+    echo "apt-get $* failed (attempt $tries); waiting for lock and retrying..."
+    wait_for_apt_lock
+    sleep 5
+  done
+}
+
 # Install dependencies
 echo "Installing dependencies..."
-apt-get update
-apt-get install -y jq squashfs-tools parallel fuse-overlayfs pigz squashfuse zstd git build-essential
+apt_get update
+apt_get install -y jq squashfs-tools parallel fuse-overlayfs pigz squashfuse zstd git build-essential
 
 # Install nvidia-container-toolkit if GPU is detected
 if nvidia-smi 2>/dev/null; then
@@ -50,8 +82,8 @@ if nvidia-smi 2>/dev/null; then
   curl -fsSL "https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list" | \
     sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
     tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-  apt-get update -y
-  apt-get install -y libnvidia-container-tools
+  apt_get update -y
+  apt_get install -y libnvidia-container-tools
 fi
 
 # Install Enroot
@@ -61,7 +93,7 @@ mkdir -p /tmp/enroot
 cd /tmp/enroot
 curl -fSsL -O "https://github.com/NVIDIA/enroot/releases/download/v${ENROOT_RELEASE}/enroot_${ENROOT_RELEASE}-1_${arch}.deb"
 curl -fSsL -O "https://github.com/NVIDIA/enroot/releases/download/v${ENROOT_RELEASE}/enroot+caps_${ENROOT_RELEASE}-1_${arch}.deb"
-apt install -y ./*.deb
+apt_get install -y ./*.deb
 
 # Configure Enroot
 ln -sf /usr/share/enroot/hooks.d/50-slurm-pmi.sh /etc/enroot/hooks.d/
