@@ -45,6 +45,7 @@ results; exact bandwidth/throughput vary with NCCL/EFA versions and message size
 
 | Config | Region | Capacity | Monitoring | NCCL all_reduce (2-node peak busbw) | FSDP Llama-2 7B (2-node) |
 |---|---|---|---|---|---|
+| **2× p6-b200.48xlarge** (16× B200) | us-west-2 | Capacity Block | ✅ v2.6.5, 16 GPUs in Grafana | **~654 GB/s** (EFA, `found 8 nics`, `#wrong 0`) | **~223 TFLOPS/GPU, ~86k tok/s** |
 | **2× p6-b300.48xlarge** (16× B300) | us-west-2 | Capacity Block | ✅ v2.6.5, 16 GPUs in Grafana | **~760 GB/s** (EFA, `found 16 nics`, `#wrong 0`) | **~195 TFLOPS/GPU, ~75k tok/s** |
 | **2× p5.48xlarge** (16× H100) | us-east-2 | Capacity Block | ✅ | **~480 GB/s** (EFA, `found 32 nics`, `#wrong 0`) | ~60 TFLOPS/GPU |
 | **Login + CPU (`c6i`)** | us-west-2 / us-east-* | On-Demand | ✅ all targets up | n/a | n/a |
