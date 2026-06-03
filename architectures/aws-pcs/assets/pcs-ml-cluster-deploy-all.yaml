@@ -22,8 +22,6 @@ Metadata:
           - LoginNodeInstanceType
           - SlurmVersion
           - DeployMonitoring
-          - MonitoringVersion
-          - MonitoringRepo
           - ManagedAccounting
           - AccountingPolicyEnforcement
       - Label:
@@ -67,10 +65,12 @@ Metadata:
           - HomeThroughput
           - OpenZFSDeploymentType
       - Label:
-          default: "7. S3 Configuration for Nested Templates (Developer)"
+          default: "7. Developer / Advanced (Nested Templates & Monitoring Source)"
         Parameters:
           - S3BucketName
           - S3KeyPrefix
+          - MonitoringVersion
+          - MonitoringRepo
     ParameterLabels:
       # Friendly display names shown in the CloudFormation console 1-click UI,
       # so users see plain-language labels instead of raw CamelCase parameter keys.
@@ -285,9 +285,8 @@ Parameters:
       URL of a post-install script run on every node at first boot (PCS
       equivalent of ParallelCluster OnNodeConfigured). Defaults to the
       Enroot/Pyxis installer, which is the most common configuration. Set to an
-      empty string to skip, or to another HTTP(S) URL to run a custom script.
-      For testing the fork, override with the DaisukeMiyamoto/awsome-distributed-ai
-      raw URL. S3 public hosting is not allowed.
+      empty string to skip, or override with another HTTP(S) URL to run a custom
+      script. S3 public hosting is not allowed.
     Default: 'https://raw.githubusercontent.com/aws-samples/awsome-distributed-ai/main/architectures/aws-pcs/scripts/install-enroot-pyxis.sh'
 
   PostInstallScriptArgs:
