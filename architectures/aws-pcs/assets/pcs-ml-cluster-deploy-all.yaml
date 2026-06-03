@@ -35,6 +35,7 @@ Metadata:
           - BuildSchedule
           - PostInstallScriptUrl
           - PostInstallScriptArgs
+          - RootVolumeSize
       - Label:
           default: "4. On-Demand Compute Node Group"
         Parameters:
@@ -59,16 +60,103 @@ Metadata:
           default: "6. FSx Storage Configuration (Advanced)"
         Parameters:
           - Capacity
+          - LustreDeploymentType
           - PerUnitStorageThroughput
           - Compression
           - LustreVersion
           - HomeCapacity
           - HomeThroughput
+          - OpenZFSDeploymentType
       - Label:
           default: "7. S3 Configuration for Nested Templates (Developer)"
         Parameters:
           - S3BucketName
           - S3KeyPrefix
+    ParameterLabels:
+      # Friendly display names shown in the CloudFormation console 1-click UI,
+      # so users see plain-language labels instead of raw CamelCase parameter keys.
+      PrimarySubnetAZ:
+        default: "Availability Zone (required)"
+      VPCName:
+        default: "VPC name"
+      CreateS3Endpoint:
+        default: "Create S3 VPC endpoint"
+      LoginNodeInstanceType:
+        default: "Login node instance type"
+      SlurmVersion:
+        default: "Slurm version"
+      DeployMonitoring:
+        default: "Deploy monitoring (Prometheus/Grafana)"
+      MonitoringVersion:
+        default: "Monitoring version (git ref)"
+      MonitoringRepo:
+        default: "Monitoring repo (owner/repo)"
+      ManagedAccounting:
+        default: "Slurm managed accounting"
+      AccountingPolicyEnforcement:
+        default: "Slurm accounting policy enforcement"
+      BuildAMI:
+        default: "Build custom DLAMI (Enroot/Pyxis pre-baked)"
+      BaseAmiId:
+        default: "Base AMI ID (optional)"
+      SemanticVersion:
+        default: "Image Builder recipe version"
+      BuildSchedule:
+        default: "AMI build schedule"
+      PostInstallScriptUrl:
+        default: "Post-install script URL (container support)"
+      PostInstallScriptArgs:
+        default: "Post-install script arguments"
+      RootVolumeSize:
+        default: "Root volume size (GiB)"
+      DeployOnDemandCNG:
+        default: "Deploy CPU (on-demand) queue"
+      OnDemandInstanceType:
+        default: "CPU queue instance type"
+      OnDemandMinCount:
+        default: "CPU queue min nodes"
+      OnDemandMaxCount:
+        default: "CPU queue max nodes"
+      OnDemandCngName:
+        default: "CPU node group name"
+      OnDemandQueueName:
+        default: "CPU queue name"
+      DeployPseriesCNG:
+        default: "Deploy GPU (P5/P6) queue"
+      PseriesInstanceType:
+        default: "GPU instance type"
+      PseriesMinCount:
+        default: "GPU queue min nodes"
+      PseriesMaxCount:
+        default: "GPU queue max nodes"
+      NetworkInterfaceCount:
+        default: "EFA interface count (P5 only)"
+      CapacityReservationId:
+        default: "Capacity Reservation ID (ODCR / Capacity Block)"
+      PseriesCngName:
+        default: "GPU node group name"
+      PseriesQueueName:
+        default: "GPU queue name"
+      Capacity:
+        default: "FSx Lustre capacity (GiB)"
+      LustreDeploymentType:
+        default: "FSx Lustre deployment type"
+      PerUnitStorageThroughput:
+        default: "FSx Lustre throughput (MB/s/TiB)"
+      OpenZFSDeploymentType:
+        default: "FSx OpenZFS (home) deployment type"
+      Compression:
+        default: "FSx Lustre compression"
+      LustreVersion:
+        default: "FSx Lustre version"
+      HomeCapacity:
+        default: "FSx OpenZFS (home) capacity (GiB)"
+      HomeThroughput:
+        default: "FSx OpenZFS (home) throughput (MB/s)"
+      S3BucketName:
+        default: "Nested templates S3 bucket"
+      S3KeyPrefix:
+        default: "Nested templates S3 key prefix"
 
 Parameters:
   # S3 Configuration
@@ -106,15 +194,24 @@ Parameters:
     Type: Number
     Default: 1200
 
+  LustreDeploymentType:
+    Description: >-
+      FSx for Lustre deployment type. PERSISTENT_2 (default) supports throughput
+      per TiB of 125/250/500/1000 but is not in every Region; PERSISTENT_1
+      (50/100/200) is available in more Regions. Pick one your Region supports.
+    Type: String
+    Default: PERSISTENT_2
+    AllowedValues:
+      - PERSISTENT_2
+      - PERSISTENT_1
+
   PerUnitStorageThroughput:
-    Description: Provisioned Read/Write (MB/s/TiB)
+    Description: >-
+      Provisioned Read/Write throughput per unit of storage (MB/s/TiB). Valid
+      values depend on LustreDeploymentType: PERSISTENT_2 = 125/250/500/1000,
+      PERSISTENT_1 = 50/100/200.
     Type: Number
     Default: 250
-    AllowedValues:
-      - 125
-      - 250
-      - 500
-      - 1000
 
   Compression:
     Description: Data compression type
@@ -141,6 +238,19 @@ Parameters:
     Description: "Home directories storage throughput MB/s"
     Type: Number
     Default: 320
+
+  OpenZFSDeploymentType:
+    Description: >-
+      FSx for OpenZFS deployment type for /home. SINGLE_AZ_HA_2 (default) is not
+      in every Region; SINGLE_AZ_1 is available in all Regions. Pick one your
+      Region supports (MULTI_AZ excluded — needs a second subnet).
+    Type: String
+    Default: SINGLE_AZ_HA_2
+    AllowedValues:
+      - SINGLE_AZ_HA_2
+      - SINGLE_AZ_HA_1
+      - SINGLE_AZ_2
+      - SINGLE_AZ_1
 
   # AMI Building Configuration
   BuildAMI:
@@ -386,11 +496,13 @@ Resources:
         PrimarySubnetAZ: !Ref PrimarySubnetAZ
         CreateS3Endpoint: !Ref CreateS3Endpoint
         Capacity: !Ref Capacity
+        LustreDeploymentType: !Ref LustreDeploymentType
         PerUnitStorageThroughput: !Ref PerUnitStorageThroughput
         Compression: !Ref Compression
         LustreVersion: !Ref LustreVersion
         HomeCapacity: !Ref HomeCapacity
         HomeThroughput: !Ref HomeThroughput
+        OpenZFSDeploymentType: !Ref OpenZFSDeploymentType
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-Prerequisites'
@@ -428,13 +540,8 @@ Resources:
         - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}cluster.yaml'
       Parameters:
         ClusterName: !Sub '${AWS::StackName}'
-        VpcId: !GetAtt PrerequisitesStack.Outputs.VPC
-        PublicSubnetId: !GetAtt PrerequisitesStack.Outputs.PublicSubnet
         PrivateSubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
         DefaultSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
-        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
-        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
-        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         SlurmVersion: !Ref SlurmVersion
         ManagedAccounting: !Ref ManagedAccounting
         AccountingPolicyEnforcement: !Ref AccountingPolicyEnforcement

@@ -24,16 +24,8 @@ Metadata:
       - Label:
           default: PCS Networking configuration
         Parameters:
-          - VpcId
-          - PublicSubnetId
           - PrivateSubnetId
           - DefaultSecurityGroupId
-      - Label:
-          default: PCS Storage configuration
-        Parameters:
-          - FSxLustreFilesystemId
-          - FSxLustreFilesystemMountName
-          - FSxOpenZFSFilesystemId
 
 Parameters:
   ClusterName:
@@ -43,33 +35,13 @@ Parameters:
     AllowedPattern: '^[a-zA-Z][a-zA-Z0-9-]{0,39}$'
     ConstraintDescription: Must start with a letter, contain only alphanumeric characters and hyphens, and be 1-40 characters long
 
-  VpcId:
-    Type: AWS::EC2::VPC::Id
-    Description: Select the VPC where the cluster will be launched
-
-  PublicSubnetId:
-    Type: AWS::EC2::Subnet::Id
-    Description: Select the Subnet where the Login Node will be launched
-
   PrivateSubnetId:
     Type: AWS::EC2::Subnet::Id
-    Description: Select the Subnet where the Compute Node will be launched
+    Description: Select the Subnet where the PCS cluster (Slurm controller) will be placed
 
   DefaultSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
     Description: Select SecurityGroup for the cluster
-
-  FSxLustreFilesystemId:
-    Type: String
-    Description: Filesystem ID for FSx for Lustre
-
-  FSxLustreFilesystemMountName:
-    Type: String
-    Description: MountName for FSx for Lustre
-
-  FSxOpenZFSFilesystemId:
-    Type: String
-    Description: Filesystem ID for FSx for OpenZFS
 
   SlurmVersion:
     Type: String

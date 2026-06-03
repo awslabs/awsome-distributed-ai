@@ -71,17 +71,27 @@ Parameters:
     Description: Storage capacity in GiB (1200 or increments of 2400)
     Type: Number
     Default: 1200
-  
+
+  LustreDeploymentType:
+    Description: >-
+      FSx for Lustre deployment type. PERSISTENT_2 is the latest generation
+      (throughput per TiB of 125/250/500/1000) but is not available in every
+      Region; PERSISTENT_1 (50/100/200) is available in more Regions. Check the
+      FSx for Lustre Region table and pick the one your Region supports.
+    Type: String
+    Default: PERSISTENT_2
+    AllowedValues:
+      - PERSISTENT_2
+      - PERSISTENT_1
+
   PerUnitStorageThroughput:
-    Description: Provisioned Read/Write (MB/s/TiB)
+    Description: >-
+      Provisioned Read/Write throughput per unit of storage (MB/s/TiB). Valid
+      values depend on LustreDeploymentType: PERSISTENT_2 supports 125/250/500/1000,
+      PERSISTENT_1 supports 50/100/200. Enter a value valid for the chosen type.
     Type: Number
     Default: 250
-    AllowedValues:
-      - 125
-      - 250
-      - 500
-      - 1000
-  
+
   Compression:
     Description: Data compression type
     Type: String
@@ -108,6 +118,22 @@ Parameters:
     Type: Number
     Default: 320
 
+  OpenZFSDeploymentType:
+    Description: >-
+      FSx for OpenZFS deployment type for the /home file system. SINGLE_AZ_HA_2
+      (the default) is not available in every Region; SINGLE_AZ_1 is available in
+      all Regions. SINGLE_AZ_HA_1 / SINGLE_AZ_2 are also offered in some Regions.
+      Check the FSx for OpenZFS Region table and pick one your Region supports.
+      (MULTI_AZ types are intentionally excluded — they require a second subnet
+      this template does not provision.)
+    Type: String
+    Default: SINGLE_AZ_HA_2
+    AllowedValues:
+      - SINGLE_AZ_HA_2
+      - SINGLE_AZ_HA_1
+      - SINGLE_AZ_2
+      - SINGLE_AZ_1
+
 
 ###############################
 ## Conditions for Parameters ##
@@ -115,6 +141,10 @@ Parameters:
 
 Conditions:
   S3EndpointCondition: !Equals [!Ref 'CreateS3Endpoint', 'true']
+  # PERSISTENT_2 is the only Lustre deployment type that supports a metadata
+  # configuration (and the EFA/Intelligent-Tiering features); PERSISTENT_1 does
+  # not, so the MetadataConfiguration block is only emitted for PERSISTENT_2.
+  LustreIsPersistent2: !Equals [!Ref 'LustreDeploymentType', 'PERSISTENT_2']
 
 #########################
 ## VPC & Network Setup ##
@@ -305,10 +335,13 @@ Resources:
         - !Ref PrimaryPrivateSubnet
       LustreConfiguration:
         DataCompressionType: !Ref Compression
-        DeploymentType: PERSISTENT_2
+        DeploymentType: !Ref LustreDeploymentType
         PerUnitStorageThroughput: !Ref PerUnitStorageThroughput
-        MetadataConfiguration:
-          Mode: AUTOMATIC
+        # MetadataConfiguration is only valid on PERSISTENT_2.
+        MetadataConfiguration: !If
+          - LustreIsPersistent2
+          - Mode: AUTOMATIC
+          - !Ref AWS::NoValue
 
 
   OpenZFSFileSystem:
@@ -320,7 +353,7 @@ Resources:
         CopyTagsToBackups: Yes
         CopyTagsToVolumes: Yes
         DailyAutomaticBackupStartTime: '19:00'
-        DeploymentType: SINGLE_AZ_HA_2
+        DeploymentType: !Ref OpenZFSDeploymentType
         Options: 
           - DELETE_CHILD_VOLUMES_AND_SNAPSHOTS
         RootVolumeConfiguration: 
