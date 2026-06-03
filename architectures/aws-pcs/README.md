@@ -8,7 +8,7 @@ This repository provides reference architectures and deployment templates for se
 
 - **One click to an ML-training-ready cluster**: a single CloudFormation stack gives you a complete, ready-to-train environment — Slurm scheduler, GPU compute with EFA, shared FSx storage, the Enroot/Pyxis container runtime, and monitoring — with only the Availability Zone to choose. Submit distributed training jobs minutes after launch.
 - **Container runtime included**: Enroot/Pyxis is set up automatically, so `srun --container-image=...` works out of the box for containerized training.
-- **Monitoring built in**: Prometheus + Grafana + GPU (DCGM) dashboards deploy automatically on the login node (`DeployMonitoring=true`, on by default); access via SSM port-forward, no public endpoint.
+- **Monitoring built in**: Prometheus + Grafana + GPU (DCGM) dashboards deploy automatically on the login node (`DeployMonitoring=true`, on by default); reach it privately via SSM port-forward, or open it to a trusted CIDR with `GrafanaPublicAccessCidr`.
 - **GPU-ready, multi-NIC EFA**: dedicated launch templates for the P5 and P6 families, selected automatically by instance type, for high-bandwidth multi-node training.
 - **Flexible capacity**: On-Demand, On-Demand Capacity Reservations (ODCR), and Capacity Blocks for ML.
 - **High-performance storage**: FSx for Lustre (shared scratch, `/fsx`) and FSx for OpenZFS (home directories, `/home`).
@@ -312,36 +312,72 @@ automatically — see the [screenshot below](#accessing-grafana).
 
 ### Accessing Grafana
 
-By default Grafana has **no public access** and is reached via SSM port forwarding
-(below). To instead reach it directly in a browser, set `GrafanaPublicAccessCidr` at
-deploy time to a CIDR you trust (e.g. your office IP `203.0.113.4/32`): a login-only
-security group then opens HTTPS/443 to that CIDR, and you can browse
-`https://<login-node-public-ip>/grafana/`. Only the login node is exposed (compute
-nodes and FSx are not). Prefer a tight CIDR over `0.0.0.0/0`. SSM port forwarding works
-regardless.
+Log in to Grafana as **`admin`**; the password is generated per cluster and stored in
+SSM Parameter Store. Retrieve it (with `CLUSTER_ID` from the stack's `ClusterId` output):
 
 ```bash
-# 1. Login node instance ID
+aws ssm get-parameter --name "/pcs/${CLUSTER_ID}/grafana/admin-password" \
+  --with-decryption --query 'Parameter.Value' --output text
+```
+
+There are two ways to reach the UI.
+
+#### Option A — SSM port forwarding (default, private)
+
+No public access required; works even when the login node has no inbound rules.
+
+```bash
+# Login node instance ID
 INSTANCE_ID=$(aws ec2 describe-instances \
   --filters "Name=tag:aws:pcs:compute-node-group-name,Values=login" \
             "Name=instance-state-name,Values=running" \
   --query 'Reservations[0].Instances[0].InstanceId' --output text)
 
-# 2. Port-forward 443 -> localhost:8443 (needs the Session Manager plugin)
+# Port-forward remote 443 -> local 8443 (needs the Session Manager plugin)
 aws ssm start-session --target $INSTANCE_ID \
   --document-name AWS-StartPortForwardingSession \
   --parameters '{"portNumber":["443"],"localPortNumber":["8443"]}'
-
-# 3. Grafana admin password (CLUSTER_ID from the stack's ClusterId output)
-aws ssm get-parameter --name "/pcs/${CLUSTER_ID}/grafana/admin-password" \
-  --with-decryption --query 'Parameter.Value' --output text
 ```
 
-Open `https://localhost:8443/grafana/` and log in as `admin` with that password.
-Use the dashboard nav bar to switch between **Cluster Summary**, **Slurm Detail**,
-**Compute Node List**, **GPU Node List**, **GPU Health**, **Cluster Costs**, and
-**Storage**. For example, the **GPU Node List** shows each GPU node's model, instance
-type, utilization, temperature, power, and memory:
+Then open `https://localhost:8443/grafana/`.
+
+#### Option B — Direct public access (opt-in, via `GrafanaPublicAccessCidr`)
+
+To browse Grafana directly without port forwarding, set **`GrafanaPublicAccessCidr`** at
+deploy time to a CIDR you trust (e.g. your office IP `203.0.113.4/32`). deploy-all then
+creates a **login-only security group** that opens HTTPS/**443** to that CIDR and
+attaches it to the login node, so you can open:
+
+```
+https://<login-node-public-ip>/grafana/
+```
+
+Get the login node's public IP from the EC2 console, or:
+
+```bash
+aws ec2 describe-instances \
+  --filters "Name=tag:aws:pcs:compute-node-group-name,Values=login" \
+            "Name=instance-state-name,Values=running" \
+  --query 'Reservations[0].Instances[0].PublicIpAddress' --output text
+```
+
+Security notes:
+- The security group is attached **only to the login node** — compute nodes and FSx
+  (which share the cluster security group) are **not** exposed.
+- Prefer a tight CIDR (a `/32` host or your VPN range); **avoid `0.0.0.0/0`**, which
+  exposes the Grafana login to the whole internet (it still requires the admin
+  password / Cognito, but open exposure is risky).
+- The certificate is self-signed, so browsers show a warning — proceed past it, or put
+  an ALB + ACM certificate in front for a trusted cert.
+- Leaving `GrafanaPublicAccessCidr` empty (the default) keeps Grafana private; use
+  Option A.
+
+---
+
+Once logged in, use the dashboard nav bar to switch between **Cluster Summary**,
+**Slurm Detail**, **Compute Node List**, **GPU Node List**, **GPU Health**,
+**Cluster Costs**, and **Storage**. For example, the **GPU Node List** shows each GPU
+node's model, instance type, utilization, temperature, power, and memory:
 
 ![Grafana GPU Node List dashboard](images/dashboard-screenshot-gpu-list.png)
 
