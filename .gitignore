@@ -39,7 +39,7 @@ downloads/
 eggs/
 .eggs/
 lib/
-!4.validation_and_observability/2.gpu-cluster-healthcheck/lib/
+!validation_and_observability/gpu-cluster-healthcheck/lib/
 lib64/
 parts/
 sdist/

@@ -3,7 +3,7 @@ name: FSDP Regression Test (EKS)
 on: 
   pull_request:
     paths:
-      - '3.test_cases/pytorch/FSDP/**'
+      - 'examples/training/fsdp/**'
 
   workflow_dispatch:
 
@@ -26,7 +26,7 @@ jobs:
       - name: Set env vars
         run: |
           BUILD_ID="${{ github.run_id }}"
-          FSDP_DIR="$(pwd)/${BUILD_ID}/3.test_cases/pytorch/FSDP"
+          FSDP_DIR="$(pwd)/${BUILD_ID}/examples/training/fsdp"
 
           # Set instance specific variables
           if [[ "${{ matrix.cluster }}" == "p5-eks" ]]; then

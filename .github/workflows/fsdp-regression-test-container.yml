@@ -6,10 +6,10 @@ on:
   push:
     branches: [ "main" ]
     paths: 
-      - '3.test_cases/pytorch/FSDP/**'
+      - 'examples/training/fsdp/**'
   pull_request:
     paths:
-      - '3.test_cases/pytorch/FSDP/**'
+      - 'examples/training/fsdp/**'
 
   workflow_dispatch:
 
@@ -95,7 +95,7 @@ jobs:
         id: build
         working-directory: source-code
         run: |
-          FSDP_DIR="${{ env.REMOTE_BUILD_PATH }}/3.test_cases/pytorch/FSDP"
+          FSDP_DIR="${{ env.REMOTE_BUILD_PATH }}/examples/training/fsdp"
           ENROOT_IMAGE="${{ env.BASE_PATH }}/enroot-images/fsdp-${{ github.run_id }}-${{ matrix.cluster }}.sqsh"
           
           echo "Building FSDP image on cluster..."
@@ -208,7 +208,7 @@ EOF
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          FSDP_DIR="${{ env.REMOTE_TEST_PATH }}/3.test_cases/pytorch/FSDP"
+          FSDP_DIR="${{ env.REMOTE_TEST_PATH }}/examples/training/fsdp"
           SBATCH_FILE="slurm/${{ matrix.model_config }}-training.sbatch"
           TMP_SBATCH="slurm/regression_test_${{ matrix.model_config }}_${{ matrix.cluster }}.sbatch"
           

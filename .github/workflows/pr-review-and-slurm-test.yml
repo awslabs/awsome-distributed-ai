@@ -10,7 +10,7 @@ env:
   AWS_REGION: us-east-1
   SLURM_HOST: p5en.smml.aiml.aws.dev
   SLURM_USER: ghactions
-  RESULTS_PATH: /fsx/agents/pr-reviews/awsome-distributed-training
+  RESULTS_PATH: /fsx/agents/pr-reviews/awsome-distributed-ai
   AWS_ROLE_ARN: arn:aws:iam::159553542841:role/awslabs-AOSH-GitHubActionsRole
 
 permissions:

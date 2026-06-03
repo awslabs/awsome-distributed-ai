@@ -309,12 +309,12 @@ For more details, see the [Connect to Cluster](https://catalog.workshops.aws/ml-
 ### LDAP User Management
 
 For centralized user management across the cluster, see:
-- [LDAP Server Setup Guide](../6.ldap_server/README.md) - Deploy and configure OpenLDAP for cluster-wide user authentication
+- [LDAP Server Setup Guide](../ldap_server/README.md) - Deploy and configure OpenLDAP for cluster-wide user authentication
 
 ### Observability Stack
 
 For monitoring and observability, see:
-- [Prometheus & Grafana Setup](../../4.validation_and_observability/4.prometheus-grafana/README.md) - Deploy monitoring stack with DCGM metrics
+- [Prometheus & Grafana Setup](../../validation_and_observability/prometheus-grafana/README.md) - Deploy monitoring stack with DCGM metrics
 - [AWS ParallelCluster Monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) - Comprehensive monitoring solution with Prometheus, Grafana, and custom dashboards for HPC clusters
 
 ---

@@ -24,7 +24,7 @@ body:
     attributes:
       label: GitHub Actions Run URL
       description: Link to the failing GitHub Actions run.
-      placeholder: https://github.com/awslabs/awsome-distributed-training/actions/runs/...
+      placeholder: https://github.com/awslabs/awsome-distributed-ai/actions/runs/...
     validations:
       required: false
   - type: dropdown

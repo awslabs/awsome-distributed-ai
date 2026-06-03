@@ -31,7 +31,7 @@
 <!-- If adding or updating a test case, ensure it follows the expected layout below. -->
 
 ```
-3.test_cases/
+examples/
 └── <framework>/                # e.g. pytorch, megatron, jax
     └── <library>/              # e.g. picotron, FSDP, megatron-lm
         └── <model>/            # e.g. SmolLM-1.7B (may be omitted for single-model cases)
@@ -48,7 +48,7 @@
 
 ## Checklist
 
-- [ ] I have read the [contributing guidelines](https://github.com/awslabs/awsome-distributed-training/blob/main/CONTRIBUTING.md).
+- [ ] I have read the [contributing guidelines](https://github.com/awslabs/awsome-distributed-ai/blob/main/CONTRIBUTING.md).
 - [ ] I am working against the latest `main` branch.
 - [ ] I have searched existing open and recently merged PRs to confirm this is not a duplicate.
 - [ ] The contribution is self-contained with documentation and scripts.

@@ -4,8 +4,8 @@
 # Enforces that a member of the @awslabs/sagemaker-hyperpod-dev team for HyperPod lifecycle scripts
 # They must approve any PRs that modify files under either base-config directory,
 # including all nested subdirectories and files.
-/1.architectures/5.sagemaker-hyperpod/LifecycleScripts/base-config     @awslabs/hyperpod-lcs-dev
-/1.architectures/7.sagemaker-hyperpod-eks/LifecycleScripts/base-config @awslabs/hyperpod-lcs-dev
+/architectures/sagemaker-hyperpod-slurm/LifecycleScripts/base-config     @awslabs/hyperpod-lcs-dev
+/architectures/sagemaker-hyperpod-eks/LifecycleScripts/base-config @awslabs/hyperpod-lcs-dev
 
 # The blog PR gate runs with secrets via pull_request_target. Only blog
 # maintainers may modify it — this prevents a malicious edit from turning

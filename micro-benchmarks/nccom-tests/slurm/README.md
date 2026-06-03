@@ -6,7 +6,7 @@ This guide assumes that you have the following:
 - A functional Slurm cluster on AWS.
 - `aws-neuronx-tools` installed on all the compute instances.
 
-It is recommended that you use the templates in the architectures [directory](../../1.architectures)
+It is recommended that you use the templates in the architectures [directory](../../architectures)
 
 
 ## Running NCCOM Tests
