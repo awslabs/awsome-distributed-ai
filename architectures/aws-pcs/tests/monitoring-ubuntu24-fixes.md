@@ -97,7 +97,7 @@ fi
 
 **Impact**: Monitoring files extracted to wrong path
 
-**Test Result**: ✅ Fixed - files extracted to `/home/ubuntu/aws-parallelcluster-monitoring/`
+**Test Result**: ✅ Fixed - files extracted to `/opt/aws-parallelcluster-monitoring/`
 
 ## Additional IAM Permission Required (Not Part of PR)
 
@@ -130,7 +130,7 @@ AccessDeniedException: User is not authorized to perform: ssm:AddTagsToResource
 ✅ **User Detection**:
 ```
 PLATFORM_USER=ubuntu
-MONITORING_HOME=/home/ubuntu/aws-parallelcluster-monitoring
+MONITORING_HOME=/opt/aws-parallelcluster-monitoring
 ```
 
 ✅ **Bash Syntax**:
@@ -141,7 +141,7 @@ sed -i 's|__LOGIN_INSTANCE_ID__|i-03dc68912df5d0fef|g' ...
 
 ✅ **File Structure**:
 ```
-/home/ubuntu/aws-parallelcluster-monitoring/
+/opt/aws-parallelcluster-monitoring/
 ├── cloudwatch-exporter/
 ├── compose/
 ├── grafana/
@@ -244,7 +244,7 @@ PLATFORM_USER=ubuntu
 
 # Verify installation
 docker ps
-ls -la /home/ubuntu/aws-parallelcluster-monitoring/
+ls -la /opt/aws-parallelcluster-monitoring/
 ```
 
 ## Next Steps

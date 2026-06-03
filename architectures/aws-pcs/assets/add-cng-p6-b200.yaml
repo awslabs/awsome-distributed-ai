@@ -320,8 +320,22 @@ Resources:
                 # As of v2.6.3 the installer auto-detects the Ubuntu 'ubuntu' user and runs
                 # install.sh itself (PR #44), so no ec2-user shim or local-var patch is needed.
                 curl -fsSL https://raw.githubusercontent.com/${MonitoringRepo}/${MonitoringVersion}/post-install.sh -o /tmp/post-install.sh
-                bash /tmp/post-install.sh ${MonitoringVersion} ${MonitoringRepo} 2>&1 | tee /var/log/monitoring-install.log
-                echo "Monitoring installation complete"
+                # Retry up to 3 times: the install can hit transient first-boot
+                # failures (apt lock contention with cloud-init, network, or the
+                # shared NFS /home still settling). The installer is idempotent
+                # (reuses the existing Grafana SSM param, recreates containers),
+                # so re-running is safe and self-heals a one-off hiccup instead
+                # of leaving the node unmonitored.
+                rc=1
+                for attempt in 1 2 3; do
+                  echo "Monitoring install attempt $attempt/3..." >> /var/log/monitoring-install.log
+                  bash /tmp/post-install.sh ${MonitoringVersion} ${MonitoringRepo} >> /var/log/monitoring-install.log 2>&1
+                  rc=$?
+                  [ $rc -eq 0 ] && break
+                  echo "Monitoring install attempt $attempt failed (exit $rc); retrying in 15s..." >> /var/log/monitoring-install.log
+                  sleep 15
+                done
+                echo "Monitoring installation complete (exit $rc)" >> /var/log/monitoring-install.log
               fi
 
             --==MYBOUNDARY==

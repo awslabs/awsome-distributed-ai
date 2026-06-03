@@ -256,7 +256,7 @@ Outputs:
       aws ssm send-command --instance-ids INSTANCE_ID --region ${AWS::Region} --document-name "AWS-RunShellScript" --parameters 'commands=["cat /var/log/monitoring-install-test.log"]'
 
       # Verify installation
-      aws ssm send-command --instance-ids INSTANCE_ID --region ${AWS::Region} --document-name "AWS-RunShellScript" --parameters 'commands=["docker ps","ls -la /home/ubuntu/aws-parallelcluster-monitoring/"]'
+      aws ssm send-command --instance-ids INSTANCE_ID --region ${AWS::Region} --document-name "AWS-RunShellScript" --parameters 'commands=["docker ps","ls -la /opt/aws-parallelcluster-monitoring/"]'
 
   GrafanaPasswordCommand:
     Description: Command to get Grafana admin password

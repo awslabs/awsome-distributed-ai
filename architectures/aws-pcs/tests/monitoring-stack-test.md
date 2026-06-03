@@ -225,10 +225,10 @@ sudo cat /var/log/monitoring-install.log
 
 # Verify the installer detected the Ubuntu user and installed to /home/ubuntu
 # (v2.6.3+ auto-detects 'ubuntu'; no ec2-user shim is created any more)
-ls -la /home/ubuntu/aws-parallelcluster-monitoring
+ls -la /opt/aws-parallelcluster-monitoring
 grep -E 'PLATFORM_USER|MONITORING_HOME' /var/log/monitoring-install.log
 
-# Expected: PLATFORM_USER=ubuntu, MONITORING_HOME=/home/ubuntu/aws-parallelcluster-monitoring
+# Expected: PLATFORM_USER=ubuntu, MONITORING_HOME=/opt/aws-parallelcluster-monitoring
 ```
 
 ### 6. Verify Compute Node Exporters
@@ -370,7 +370,7 @@ sudo cat /var/log/monitoring-install.log
 
 # Confirm the installer detected the Ubuntu user (v2.6.3+)
 grep -E 'PLATFORM_USER|MONITORING_HOME' /var/log/monitoring-install.log
-ls -la /home/ubuntu/aws-parallelcluster-monitoring
+ls -la /opt/aws-parallelcluster-monitoring
 
 # Manually re-run installation (pin to the same release tag as the deployment)
 curl -fsSL https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-monitoring/v2.6.3/post-install.sh -o /tmp/post-install.sh
@@ -392,7 +392,7 @@ docker logs grafana
 docker logs nginx
 
 # Restart containers
-cd /home/ubuntu/aws-parallelcluster-monitoring
+cd /opt/aws-parallelcluster-monitoring
 docker-compose restart
 ```
 
@@ -506,7 +506,7 @@ aws cloudformation list-stacks \
 - [ ] Grafana password retrievable from SSM Parameter Store
 - [ ] Prometheus targets are UP (check in Grafana or API)
 - [ ] Dashboards display metrics
-- [ ] Installer detected Ubuntu user (MONITORING_HOME=/home/ubuntu/aws-parallelcluster-monitoring)
+- [ ] Installer detected Ubuntu user (MONITORING_HOME=/opt/aws-parallelcluster-monitoring)
 - [ ] IAM monitoring policy attached to cluster role
 - [ ] Stack deletes cleanly
 
