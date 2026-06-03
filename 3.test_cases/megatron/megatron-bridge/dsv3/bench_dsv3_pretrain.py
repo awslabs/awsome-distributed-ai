@@ -10,7 +10,7 @@ the two benchmark arms is the MoE token dispatcher, selected by ``MOE_DISPATCHER
     MOE_DISPATCHER=alltoall  -> moe_token_dispatcher_type="alltoall"  (NCCL all-to-all / EFA)  [baseline]
     MOE_DISPATCHER=deepep    -> flex + moe_flex_dispatcher_backend="deepep" (UCCL EFA drop-in) [treatment]
 
-Why this is a valid A/B (benchmarks/README.md): Megatron's throughput numerator is
+Why this is a valid A/B (README.md): Megatron's throughput numerator is
 analytical (FLOPs from config), and model/data/parallelism/precision/seed are byte-identical
 across arms, so the iter-time ratio isolates the dispatcher. Random init + mock data are
 sound because we measure step time, not loss — and they decouple the A/B from the ~2 TB

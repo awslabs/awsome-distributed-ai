@@ -153,7 +153,7 @@ def kimi_k2_sft_config() -> ConfigContainer:
     # layer count. src/megatron/bridge/recipes/deepseek/deepseek_v3.py
     cfg.model.pipeline_model_parallel_layout = None
 
-    # -- MoE token dispatcher: A/B toggle (see benchmarks/) --------------------
+    # -- MoE token dispatcher: A/B toggle (see ../../dsv3/) --------------------
     # MOE_DISPATCHER selects the expert-parallel all-to-all backend so the benchmark
     # harness can compare them with everything else held fixed:
     #   "deepep"   -> flex dispatcher + UCCL's `deep_ep` shadow over EFA (treatment, default)
@@ -161,7 +161,7 @@ def kimi_k2_sft_config() -> ConfigContainer:
     # The flex dispatcher decouples the EP comm group from model parallelism; the "deepep"
     # backend makes Megatron-Core call into the top-level `deep_ep` python module, which on
     # this image is UCCL's EFA drop-in (installed from /opt/uccl/ep/deep_ep_wrapper).
-    # See benchmarks/README.md for the A/B methodology.
+    # See ../../dsv3/README.md for the A/B methodology.
     moe_dispatcher = os.environ.get("MOE_DISPATCHER", "deepep").lower()
     if moe_dispatcher == "alltoall":
         cfg.model.moe_token_dispatcher_type = "alltoall"
@@ -203,7 +203,7 @@ def kimi_k2_sft_config() -> ConfigContainer:
     # MOE_A2A_OVERLAP in {on, off}, held IDENTICAL across both dispatcher arms within a
     # run. "on" overlaps the expert-parallel all-to-all with compute (realistic deployment;
     # Megatron 1F1B hides up to ~93% of A2A) -> report as the deployment delta. "off"
-    # exposes the A2A fully (dispatcher-isolation upper bound). See benchmarks/README.md.
+    # exposes the A2A fully (dispatcher-isolation upper bound). See ../../dsv3/README.md.
     moe_a2a_overlap = os.environ.get("MOE_A2A_OVERLAP", "on").lower() == "on"
     # TODO(validate against image): confirm these MCore TransformerConfig field names map to
     # the --overlap-moe-expert-parallel-comm / --delay-wgrad-compute CLI flags on the image.
@@ -236,7 +236,7 @@ def kimi_k2_sft_config() -> ConfigContainer:
     cfg.model.cuda_graph_impl = "none"  # CUDA graphs + EP all-to-all do not mix well
 
     # -- SFT hyperparameters -------------------------------------------------
-    # TRAIN_ITERS is env-overridable so the benchmark harness (benchmarks/) can run a
+    # TRAIN_ITERS is env-overridable so the benchmark harness (../../dsv3/) can run a
     # short A/B (e.g. WARMUP_ITERS+MEASURE_ITERS) without editing this file; the full
     # SFT default is 2000.
     cfg.train.train_iters = int(os.environ.get("TRAIN_ITERS", "2000"))

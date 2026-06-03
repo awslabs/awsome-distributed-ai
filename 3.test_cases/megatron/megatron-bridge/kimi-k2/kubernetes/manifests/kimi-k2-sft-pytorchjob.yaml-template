@@ -219,7 +219,7 @@ spec:
               # UNVERIFIED (full SFT not run): the SFT itself needs the ~2 TB MCore
               # checkpoint (absent) and conf/kimi_k2_sft.py was not exercised end-to-end on
               # this image. The dispatcher A/B that WAS validated used a different entrypoint
-              # (benchmarks/bench_dsv3_pretrain.py calling pretrain(), not finetune()).
+              # (../../../dsv3/bench_dsv3_pretrain.py calling pretrain(), not finetune()).
               # Confirm conf/kimi_k2_sft.py's __main__ launches finetune() under torchrun
               # before relying on this command.
               command: [ "/usr/local/bin/torchrun", "--nproc_per_node=${GPU_PER_NODE}", "--nnodes=${NUM_NODES}", "/workspace/conf/kimi_k2_sft.py" ]

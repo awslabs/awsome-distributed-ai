@@ -243,7 +243,7 @@ each arm holds all 32 nodes, so delete the previous arm's Pods before the next. 
 `bench_dsv3_pretrain.py` to FSx first (`/fsx/kimi-k2/bench_dsv3_pretrain.py`).
 
 ```bash
-cd 3.test_cases/megatron/megatron-bridge/kimi-k2/benchmarks
+cd 3.test_cases/megatron/megatron-bridge/dsv3
 export CTX=<your-kubectl-context>          # required by run-ab-rawpods.sh
 export IMG=<your-account>.dkr.ecr.<region>.amazonaws.com/megatron-bridge-uccl:nemo-26.04.01-uccl-0dc87eb
 

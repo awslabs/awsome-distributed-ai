@@ -28,12 +28,16 @@ megatron-bridge/                  # <library> — model-agnostic environment
 ├── 1.build-and-push.sh           # build the shared env image and push the pinned tag to ECR
 ├── 2.sanity-singlenode.sh        # single-node 8-GPU deep_ep/EFA/EP smoke gate (run in the image)
 ├── test_megatron_bridge_uccl.py  # CI build smoke test for the shared image
-└── kimi-k2/                      # <model> — Kimi K2 full-parameter SFT recipe
+├── kimi-k2/                      # <model> — Kimi K2 full-parameter SFT recipe
+│   ├── README.md
+│   ├── 1.convert-checkpoint.sh
+│   ├── conf/                     # SFT ConfigContainer (mounted into the image at runtime)
+│   └── kubernetes/
+└── dsv3/                         # <model> — DeepSeek-V3 256-expert dispatcher A/B
     ├── README.md
-    ├── 1.convert-checkpoint.sh
-    ├── conf/                     # SFT ConfigContainer (mounted into the image at runtime)
-    ├── kubernetes/
-    └── benchmarks/
+    ├── RESULTS.md                # UCCL-EP vs NCCL all-to-all measured numbers
+    ├── bench_dsv3_pretrain.py    # torchrun entrypoint (recipe-native DSV3, mock data)
+    └── run-ab-rawpods.sh         # raw-pod A/B launcher (one arm per call)
 ```
 
 The image is **model-agnostic**: SFT configs are **not** baked in. Each model mounts its
@@ -81,7 +85,7 @@ bash 2.sanity-singlenode.sh
 > raises a `pg_collection` error. This is **not** a UCCL/image fault — the real
 > `pretrain()` path builds the process groups internally and dispatches correctly (the
 > multi-node benchmark runs clean through `MoEFlexTokenDispatcher(backend="deepep")`).
-> Treat the multi-node run / [`benchmarks`](kimi-k2/benchmarks/RESULTS.md) as the
+> Treat the multi-node run / [`benchmarks`](dsv3/RESULTS.md) as the
 > authoritative end-to-end dispatch check until Gate 5 is ported to the 0.17.1 API.
 
 ## Models
@@ -89,6 +93,7 @@ bash 2.sanity-singlenode.sh
 | Model | Directory | Recipe |
 |-------|-----------|--------|
 | [Kimi K2](https://huggingface.co/moonshotai/Kimi-K2-Base) (1.04T MoE) | [`kimi-k2/`](kimi-k2/) | Full-parameter SFT on 32× p6-b300 (256× B300) |
+| [DeepSeek-V3](https://github.com/deepseek-ai/DeepSeek-V3) (256-expert MoE) | [`dsv3/`](dsv3/) | UCCL-EP vs NCCL all-to-all dispatcher A/B on 32× p6-b300 (256× B300) |
 
 To add a model: create `megatron-bridge/<model>/` with its `conf/`, deployment manifests,
 and a model README. Reuse the shared image from step 1 (mount the model's `conf` at runtime)
@@ -102,7 +107,7 @@ Megatron-Core MoE token dispatcher — NCCL all-to-all (baseline) vs UCCL's EFA-
 `deepseek_v3` recipe — **DeepSeek-V3 256-expert** MoE (the architecture family Kimi-K2
 belongs to, but **not** the literal 384-expert Kimi-K2 — see RESULTS.md), TP8/PP8/EP32/DP4,
 seq 4096, bf16, balanced routing. Everything else is held byte-identical across arms. Full
-methodology, caveats, and raw numbers: [`kimi-k2/benchmarks/RESULTS.md`](kimi-k2/benchmarks/RESULTS.md).
+methodology, caveats, and raw numbers: [`dsv3/RESULTS.md`](dsv3/RESULTS.md).
 
 At the throughput-efficient operating point (micro-batch ≥ 4), **UCCL `deep_ep` is
 ~36% faster than NCCL all-to-all**, and the advantage **holds under deployment-realistic

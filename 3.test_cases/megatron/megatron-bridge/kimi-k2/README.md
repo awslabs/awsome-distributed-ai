@@ -39,7 +39,7 @@ patching Megatron-Core**:
 > all-to-all baseline (iteration-1 loss match). Note that A/B ran on a **DeepSeek-V3 256-expert**
 > substrate (the architecture family — **not** the literal 384-expert Kimi-K2) with random init +
 > mock data, measuring throughput; cross-iteration gradient correctness and real-data convergence
-> remain untested. See [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
+> remain untested. See [`../dsv3/RESULTS.md`](../dsv3/RESULTS.md).
 > For a new setup, still treat every gate in
 > [Known edge cases](#known-edge-cases--validation-gates) as a hard stop.
 
@@ -261,7 +261,10 @@ Model-specific files in **this** directory:
 | `1.convert-checkpoint.sh` | HF Kimi K2 (FP8) -> BF16 -> Megatron-Core checkpoint |
 | `conf/kimi_k2_sft.py` | Megatron-Bridge SFT `ConfigContainer` (mounted at `/workspace/conf` via ConfigMap, launched by `torchrun`) |
 | `kubernetes/` | etcd `Service`/`Deployment` + PyTorchJob template (+ optional KAI `PodGroup`); create the conf ConfigMap, then `envsubst ... \| kubectl apply` to deploy (see `kubernetes/README.md`) |
-| `benchmarks/` | MoE dispatcher A/B harness (NCCL all-to-all vs UCCL DeepEP-over-EFA) |
+
+The MoE dispatcher A/B (NCCL all-to-all vs UCCL DeepEP-over-EFA) that validated this
+UCCL-over-EFA path is now an independent sibling case — see
+[`../dsv3/`](../dsv3/) (it ran on a DeepSeek-V3 256-expert substrate, the Kimi K2 family).
 
 ## References
 
@@ -270,4 +273,5 @@ Model-specific files in **this** directory:
 - [DeepSeek-V3 recipe](https://github.com/NVIDIA-NeMo/Megatron-Bridge/blob/main/src/megatron/bridge/recipes/deepseek/deepseek_v3.py)
 - [UCCL project](https://github.com/uccl-project/uccl)
 - [Kimi K2 (Moonshot AI)](https://huggingface.co/moonshotai/Kimi-K2-Base)
+- Sibling model case: [`../dsv3/`](../dsv3/) — DeepSeek-V3 256-expert dispatcher A/B (UCCL-EP vs NCCL all-to-all) that validated this environment
 - Sibling case: [`../../megatron-lm`](../../megatron-lm) (EFA/GDRCopy Dockerfile + PyTorchJob template)

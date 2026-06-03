@@ -10,8 +10,8 @@ UCCL-EP providing expert-parallel all-to-all over AWS EFA.
 > **Status (2026-06-01) — this PyTorchJob + KAI path has NOT been run end-to-end.** The
 > cluster used for validation has **no kubeflow PyTorchJob CRD**, so the work that *was*
 > run — the dispatcher A/B that proves the UCCL-over-EFA path — used **raw ranked Pods**
-> instead (see [`../benchmarks/RESULTS.md`](../benchmarks/RESULTS.md) and
-> [`../benchmarks/run-ab-rawpods.sh`](../benchmarks/run-ab-rawpods.sh)). The full SFT
+> instead (see [`../../dsv3/RESULTS.md`](../../dsv3/RESULTS.md) and
+> [`../../dsv3/run-ab-rawpods.sh`](../../dsv3/run-ab-rawpods.sh)). The full SFT
 > additionally needs the ~2 TB MCore checkpoint at `/fsx/kimi-k2/mcore` (absent at the time
 > of writing). Steps below that depend on the PyTorchJob operator or the KAI PodGroup are
 > therefore **unverified against this cluster** (flagged inline). The EFA / UCCL
@@ -156,8 +156,7 @@ kubectl get configmap kimi-k2-sft-conf   # confirm it exists before applying the
 ```
 
 Re-run this whenever you edit `conf/kimi_k2_sft.py` (then restart the job to pick it up).
-The 21 KB config is well under the 1 MiB ConfigMap limit. The same ConfigMap is consumed by
-the benchmark manifests under `benchmarks/`.
+The 21 KB config is well under the 1 MiB ConfigMap limit.
 
 ## 5. Render and Apply the Manifest
 
