@@ -14,6 +14,16 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   Multi-AZ FSx and higher-availability deployments.
 - [ ] 🟢 **Trainium (Trn) validation.** Validate the templates on Trainium instances
   (e.g. trn1/trn2) — node group, EFA/networking, and a sample training run.
+- [ ] 🟡 **P6e-GB200 / P6e-GB300 (Grace-Blackwell) support.** Add node-group templates for
+  the GB200/GB300 NVL instances (e.g. p6e-gb200.36xlarge). These are Grace (arm64) CPUs
+  with a different NIC/EFA layout (e.g. p6e-gb200 = 17 network cards) and likely need an
+  arm64 PCS-ready DLAMI and arm64 Enroot/Pyxis builds — validate the AMI, EFA, and a
+  sample run.
+- [ ] 🟡 **Document/provision the IAM permissions deploy-all needs.** A one-click /
+  deploy-all run creates IAM roles, PCS clusters, EC2/VPC/FSx, Image Builder, SSM, etc.
+  Document the minimum deploying-principal permissions (and provide a ready-made policy or
+  a deploy-role CloudFormation/managed policy), so users in restricted accounts can grant
+  exactly what's required instead of needing broad admin.
 
 ## User management
 
