@@ -131,7 +131,7 @@ so a default deploy only needs the Availability Zone.
 | Parameter | Default | Purpose |
 |---|---|---|
 | `S3BucketName` / `S3KeyPrefix` | `awsome-distributed-ai` / `templates/` | Where the nested templates are fetched from |
-| `MonitoringRepo` / `MonitoringVersion` | `aws-samples/aws-parallelcluster-monitoring` / `v2.6.3` | Monitoring stack source (override with a fork + branch to test unreleased changes) |
+| `MonitoringRepo` / `MonitoringVersion` | `aws-samples/aws-parallelcluster-monitoring` / `v2.6.5` | Monitoring stack source (override with a fork + branch to test unreleased changes) |
 
 ### Container runtime (Enroot/Pyxis)
 
@@ -375,7 +375,7 @@ automatically — see the [screenshot below](#accessing-grafana).
 
 **Monitoring-related parameters:**
 - `DeployMonitoring` (default `true`)
-- `MonitoringVersion` — [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) git ref (release tag, branch, or `latest`; default `v2.6.3`). Pinned to a tag so upstream changes can't break deployments unexpectedly.
+- `MonitoringVersion` — [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) git ref (release tag, branch, or `latest`; default `v2.6.5`). Pinned to a tag so upstream changes can't break deployments unexpectedly. `v2.6.4`/`v2.6.5` add the PCS fixes (node-local `/opt` install + Docker-29.x DCGM tag).
 - `MonitoringRepo` — `owner/repo` to fetch from (default `aws-samples/aws-parallelcluster-monitoring`). Point at a fork + a branch in `MonitoringVersion` to test unreleased changes.
 
 > Node type is identified by the `monitoring-role` tag (`login`/`compute`), not the EC2
@@ -413,7 +413,10 @@ type, utilization, temperature, power, and memory:
 For detailed validation, the full metric list, and troubleshooting, see
 [tests/monitoring-stack-test.md](tests/monitoring-stack-test.md).
 
-> **Ubuntu/PCS support is native as of `v2.6.3`** ([PR #44](https://github.com/aws-samples/aws-parallelcluster-monitoring/pull/44)) — the old `ec2-user` symlink and `local`-var workarounds are gone; just keep `MonitoringVersion` at `v2.6.3`+.
+> **Use `v2.6.5` or newer for PCS.** Ubuntu/PCS support became native in `v2.6.3`
+> ([PR #44](https://github.com/aws-samples/aws-parallelcluster-monitoring/pull/44)), and
+> `v2.6.4`/`v2.6.5` add the PCS reliability fixes (node-local `/opt` install fixing the
+> shared-`/home` race, and a DCGM exporter tag that pulls on Docker 29.x).
 
 ---
 
