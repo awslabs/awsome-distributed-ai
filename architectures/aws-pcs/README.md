@@ -265,11 +265,11 @@ the [NCCL tests](https://github.com/NVIDIA/nccl-tests) `all_reduce_perf` benchma
 2 nodes. Run these on the login node as the `ubuntu` user, with a GPU queue deployed
 (e.g. `gpu-p6b300`, adjust the partition name to yours).
 
-**1. Import the container image once** (to shared `/fsx`, via Enroot):
+**1. Import the container image once** — run it right on the login node (it has Enroot
+and writes the `.sqsh` to shared `/fsx`, so every compute node can use it):
 
 ```bash
-srun --partition=gpu-p6b300 --nodes=1 --exclusive \
-  enroot import -o /fsx/nccl-tests.sqsh dockerd://public.ecr.aws/hpc-cloud/nccl-tests
+enroot import -o /fsx/nccl-tests.sqsh dockerd://public.ecr.aws/hpc-cloud/nccl-tests
 ```
 
 **2. Submit a 2-node, 16-GPU all_reduce** (`nccl-test.sbatch`):
@@ -366,10 +366,9 @@ type, utilization, temperature, power, and memory:
 For detailed validation, the full metric list, and troubleshooting, see
 [tests/monitoring-stack-test.md](tests/monitoring-stack-test.md).
 
-> **Use `v2.6.5` or newer for PCS.** Ubuntu/PCS support became native in `v2.6.3`
-> ([PR #44](https://github.com/aws-samples/aws-parallelcluster-monitoring/pull/44)), and
-> `v2.6.4`/`v2.6.5` add the PCS reliability fixes (node-local `/opt` install fixing the
-> shared-`/home` race, and a DCGM exporter tag that pulls on Docker 29.x).
+> **Use `v2.6.5` or newer for PCS.** Native Ubuntu/PCS support, the node-local `/opt`
+> install (fixing the shared-`/home` race), and a DCGM exporter tag that pulls on
+> Docker 29.x all landed by `v2.6.5`.
 
 ---
 
