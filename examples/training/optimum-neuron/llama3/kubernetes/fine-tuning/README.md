@@ -37,7 +37,7 @@ This solution uses:
 
 ### 0.1. EKS Cluster
 
-Before running this training, you'll need an Amazon EKS or SageMaker HyperPod EKS cluster with at least 1 Trainium node (trn1.32xlarge, trn1n.32xlarge, or trn2.48xlarge). Instructions can be found in [architectures](../../architectures), the [aws-do-eks](https://bit.ly/do-eks) project, or the [eks-blueprints](https://github.com/aws-ia/terraform-aws-eks-blueprints) project.
+Before running this training, you'll need an Amazon EKS or SageMaker HyperPod EKS cluster with at least 1 Trainium node (trn1.32xlarge, trn1n.32xlarge, or trn2.48xlarge). Instructions can be found in [architectures](../../../../../../architectures), the [aws-do-eks](https://bit.ly/do-eks) project, or the [eks-blueprints](https://github.com/aws-ia/terraform-aws-eks-blueprints) project.
 
 ### 0.2. Setup Persistent Volume Claim (PVC) for FSx
 

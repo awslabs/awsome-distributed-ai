@@ -2,7 +2,7 @@
 
 ### 0. Prerequisites
 
-Before running this training, you'll need to create a Slurm cluster with an FSx for Lustre file system. Instructions can be found in [architectures](../../../architectures). FP8 data types are natively supported on NVIDIA H100 and subsequent generations, so it is recommended to run this on at least 1 x p5/p5e/p5en.48xlarge (H100) or p6-b200/p6-b300 (Blackwell) instance. The [Performance Numbers](#performance-numbers) section was originally captured on 4 x p5.48xlarge.
+Before running this training, you'll need to create a Slurm cluster with an FSx for Lustre file system. Instructions can be found in [architectures](../../../../architectures). FP8 data types are natively supported on NVIDIA H100 and subsequent generations, so it is recommended to run this on at least 1 x p5/p5e/p5en.48xlarge (H100) or p6-b200/p6-b300 (Blackwell) instance. The [Performance Numbers](#performance-numbers) section was originally captured on 4 x p5.48xlarge.
 
 The setup script targets CUDA 13 (`cu130`) wheels so that `torch.compile`-ed FP8 kernels run with native `sm_103` binaries on P6-B300; older drivers/CUDA toolkits will fall back to PTX-JIT for B300.
 

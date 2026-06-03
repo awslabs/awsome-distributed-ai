@@ -12,7 +12,7 @@
 
 ## Prerequisites
 
-- A functional Slurm cluster on AWS. We recommend [SageMaker HyperPod](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod.html) or the templates in the [architectures directory](../../architectures).
+- A functional Slurm cluster on AWS. We recommend [SageMaker HyperPod](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod.html) or the templates in the [architectures directory](../../../architectures).
 - [Docker](https://docs.docker.com/engine/install/), [Pyxis](https://github.com/NVIDIA/pyxis), and [Enroot](https://github.com/NVIDIA/enroot) installed on compute nodes.
 - An [FSx for Lustre](https://docs.aws.amazon.com/fsx/latest/LustreGuide/what-is.html) filesystem mounted on `/fsx`.
 - NVIDIA GPU instances with [EFA networking](https://aws.amazon.com/hpc/efa/) (B200, H100, A100, etc.).

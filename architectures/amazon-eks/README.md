@@ -1,7 +1,7 @@
 
 # Amazon EKS distributed training architecture
 
-This project provides several reference architectures to run distributed training on Amazon EKS for different use cases using `p4d.24xlarge` instances (you can replace them by `p5` or `trn1`. These examples use [eksctl](eksctl.io) and a cluster manifest to create your specified Amazon EKS cluster.
+This project provides several reference architectures to run distributed training on Amazon EKS for different use cases using `p4d.24xlarge` instances (you can replace them by `p5` or `trn1`. These examples use [eksctl](https://eksctl.io) and a cluster manifest to create your specified Amazon EKS cluster.
 
 ## 0. Prerequisites
 

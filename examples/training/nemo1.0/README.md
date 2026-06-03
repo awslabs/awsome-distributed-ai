@@ -23,7 +23,7 @@ The following pre-requisites are needed to run this example:
 
 - You are using p4de.24xlarge instances with A100 80GB or newer, with at least 80GB of memory per GPU.
 - You have access to the base image [NeMo Framework Training](https://registry.ngc.nvidia.com/orgs/ea-bignlp/teams/ga-participants/containers/nemofw-training). To gain access to this image, go to [Get Access to NeMo Framework](https://developer.nvidia.com/nemo-framework) to enroll to organization/team `ea-bignlp/ga-participant`.
-- Docker, [Enroot](https://github.com/NVIDIA/enroot) and [Pixys](https://github.com/NVIDIA/pyxis) installed on the cluster and available on all nodes. It is assumed you are using a Custom AMI ([example](../../ami_and_containers/1.amazon_machine_image))
+- Docker, [Enroot](https://github.com/NVIDIA/enroot) and [Pixys](https://github.com/NVIDIA/pyxis) installed on the cluster and available on all nodes. It is assumed you are using a Custom AMI ([example](../../../ami_and_containers/1.amazon_machine_image))
 
 You will need to setup the following environment variables before running the scripts. :
 

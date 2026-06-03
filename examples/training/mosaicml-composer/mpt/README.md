@@ -15,7 +15,7 @@ This guide assumes that you have the following:
 * Docker, [Pyxis](https://github.com/NVIDIA/pyxis) and [Enroot](https://github.com/NVIDIA/enroot) installed.
 * An FSx for Lustre filesystem mounted on `/fsx`.
 
-We recommend that you setup a Slurm cluster using the templates in the architectures [directory](../../architectures). Before creating the Slurm cluster, you need to setup the following environment variables:
+We recommend that you setup a Slurm cluster using the templates in the architectures [directory](../../../../architectures). Before creating the Slurm cluster, you need to setup the following environment variables:
 
 ```bash
 export APPS_PATH=/apps
@@ -26,7 +26,7 @@ export TEST_CASE_PATH=${HOME}/3.MPT  # where you copy the test case or set to yo
 cd $TEST_CASE_PATH
 ```
 
-then follow the detailed instructions [here](../../architectures/aws-parallelcluster/README.md).
+then follow the detailed instructions [here](../../../../architectures/aws-parallelcluster/README.md).
 
 ## 2. Build the container
 

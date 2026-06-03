@@ -60,7 +60,7 @@ Default location is `~/.nemo_run/experiments/`.
 
 ### Build Docker Image
 
-The Dockerfile extends the NVIDIA NeMo container with AWS EFA (Elastic Fabric Adapter) support for high-performance networking. See the [Dockerfile](../Dockerfile) in this directory for the complete configuration.
+The Dockerfile extends the NVIDIA NeMo container with AWS EFA (Elastic Fabric Adapter) support for high-performance networking. See the [Dockerfile](Dockerfile) in this directory for the complete configuration.
 
 Key components installed:
 - **EFA installer (v1.47.0)** - provides libfabric and Open MPI
@@ -130,7 +130,7 @@ The performance scripts support multi-node training via Slurm. The `--num_gpus` 
 | 128 | 8 | 16 |
 | 256 | 8 | 32 |
 
-Ensure your Slurm partition has sufficient nodes available. See the [Slurm README](../slurm/README.md) for detailed setup instructions.
+Ensure your Slurm partition has sufficient nodes available. See the [Slurm README](slurm/README.md) for detailed setup instructions.
 
 ## Pre-training Performance
 

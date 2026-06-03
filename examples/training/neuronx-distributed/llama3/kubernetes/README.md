@@ -14,7 +14,7 @@ In this section, we showcase how to pre-train Llama3-8B, Llama3 8B model using T
 ## 0. Prerequisites
 
 ### 0.1. EKS Cluster 
-Before running this training, you'll need to create an Amazon EKS or a SageMaker HyperPod EKS cluster with atleast 1 trn1.32xlarge/ trn1n.32xlarge. Instructions can be found in [architectures](../../architectures), the [aws-do-eks](https://bit.ly/do-eks) project, or the [eks-blueprints](https://github.com/aws-ia/terraform-aws-eks-blueprints) project.
+Before running this training, you'll need to create an Amazon EKS or a SageMaker HyperPod EKS cluster with atleast 1 trn1.32xlarge/ trn1n.32xlarge. Instructions can be found in [architectures](../../../../../architectures), the [aws-do-eks](https://bit.ly/do-eks) project, or the [eks-blueprints](https://github.com/aws-ia/terraform-aws-eks-blueprints) project.
 
 ### 0.2 HF Access token 
 

@@ -5,7 +5,7 @@ The guide assumes that you have the following:
 * An Amazon FSx for Lustre persistent volume claim named `fsx-pv`, you can use an example from [here](https://github.com/aws-samples/aws-do-eks/tree/main/Container-Root/eks/deployment/csi/fsx), if you need to create one.
 * Docker 
 
-We recommend that you setup a Kubernetes cluster using the templates in the architectures [directory](../../architectures). 
+We recommend that you setup a Kubernetes cluster using the templates in the architectures [directory](../../../../architectures). 
 
 
 ## 3. Submit training job using container

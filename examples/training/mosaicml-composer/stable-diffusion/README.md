@@ -186,7 +186,7 @@ More details on this can be found here: https://pytorch.org/blog/accelerated-dif
 
 ### 2.1 Multi-Node Training with Slurm
 
-For the multi-node training we've created a [Dockerfile](https://github.com/awslabs/awsome-distributed-training/blob/multi-node/examples/6.stable-diffusion/multi-node/1.Dockerfile), and Slurm submit script to submit the training job. To get started please follow the guide [AWS ParallelCluster Distributed Training](../../architectures/aws-parallelcluster). Before starting this section make sure you have the following setup:
+For the multi-node training we've created a [Dockerfile](https://github.com/awslabs/awsome-distributed-training/blob/multi-node/examples/6.stable-diffusion/multi-node/1.Dockerfile), and Slurm submit script to submit the training job. To get started please follow the guide [AWS ParallelCluster Distributed Training](../../../../architectures/aws-parallelcluster). Before starting this section make sure you have the following setup:
 
 * AWS ParallelCluster >= 3.7.0
 * Pyxis

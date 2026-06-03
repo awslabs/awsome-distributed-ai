@@ -11,7 +11,7 @@ This guide assumes that you have the following:
 - Docker, for Slurm [Pyxis](https://github.com/NVIDIA/pyxis) and [Enroot](https://github.com/NVIDIA/enroot) need to be installed as well.
 - An FSx for Lustre filesystem mounted on `/fsx` in all Slurm nodes.
 
-It is recommended that you use the templates for [AWS Parallel Cluster](../../../architectures/aws-parallelcluster/) or [Amazon SageMaker HyperPod Slurm](../../../architectures/sagemaker-hyperpod-slurm) set up.
+It is recommended that you use the templates for [AWS Parallel Cluster](../../../../architectures/aws-parallelcluster/) or [Amazon SageMaker HyperPod Slurm](../../../../architectures/sagemaker-hyperpod-slurm) set up.
 
 You will also setup the following variables in your terminal environment.
 

@@ -10,7 +10,7 @@ This guide assumes that you have the following:
 - Docker, for Slurm [Pyxis](https://github.com/NVIDIA/pyxis) and [Enroot](https://github.com/NVIDIA/enroot) need to be installed as well.
 - An FSx for Lustre filesystem mounted on `/fsx` in all Slurm nodes. Also, this test case assumes that the home directory is also a shared directory.
 
-It is recommended that you use the templates in the architectures [directory](../../architectures) for setting up Amazon SageMaker HyperPod or AWS Parallel Cluster.
+It is recommended that you use the templates in the architectures [directory](../../../../architectures) for setting up Amazon SageMaker HyperPod or AWS Parallel Cluster.
 
 Make sure that your current directory is under a shared filesystem such as `/fsx`. 
 

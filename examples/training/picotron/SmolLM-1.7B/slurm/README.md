@@ -6,7 +6,7 @@ This guide demonstrates how to run distributed training across two GPU instances
 
 1. **Cluster Setup**
    - A Slurm cluster on AWS with at least two GPU compute nodes
-   - We recommend using either AWS ParallelCluster or SageMaker HyperPod with our provided templates in the [architectures directory](../../../architectures)
+   - We recommend using either AWS ParallelCluster or SageMaker HyperPod with our provided templates in the [architectures directory](../../../../../architectures)
 
 2. **Node Requirements**
    - Docker
