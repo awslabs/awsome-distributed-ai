@@ -84,7 +84,20 @@ Conditions:
   IncludeAccountingConfig: !And [!Condition HasAccountingSupport, !Condition IsAccountingEnabled]
   SetAccountingPolicy: !Not [!Equals [!Ref AccountingPolicyEnforcement, 'none']]
   IsMonitoringEnabled: !Equals [!Ref DeployMonitoring, 'true']
-  IncludeSlurmConfig: !Or [!Condition IncludeAccountingConfig, !Condition IsMonitoringEnabled]
+  # The Slurm OpenMetrics endpoint (MetricsType=metrics/openmetrics +
+  # CommunicationParameters=enable_http) is only supported on Slurm 25.11+. PCS
+  # rejects cluster creation if these are set on an older version (e.g. 25.05),
+  # so only emit them when monitoring is enabled AND the version supports it.
+  IsSlurm2511OrLater: !Equals [!Ref SlurmVersion, "25.11"]
+  IncludeMetricsConfig: !And [!Condition IsMonitoringEnabled, !Condition IsSlurm2511OrLater]
+  # Emit SlurmConfiguration only when at least one custom setting / accounting block
+  # actually applies. Monitoring alone on Slurm < 25.11 contributes nothing (its
+  # metrics settings are gated by IncludeMetricsConfig), so it must NOT force an
+  # otherwise-empty SlurmCustomSettings list, which PCS rejects.
+  IncludeSlurmConfig: !Or
+    - !Condition IncludeAccountingConfig
+    - !Condition SetAccountingPolicy
+    - !Condition IncludeMetricsConfig
 
 
 Resources:
@@ -117,12 +130,12 @@ Resources:
                 ParameterValue: !Ref AccountingPolicyEnforcement
               - !Ref AWS::NoValue
             - !If
-              - IsMonitoringEnabled
+              - IncludeMetricsConfig
               - ParameterName: MetricsType
                 ParameterValue: metrics/openmetrics
               - !Ref AWS::NoValue
             - !If
-              - IsMonitoringEnabled
+              - IncludeMetricsConfig
               - ParameterName: CommunicationParameters
                 ParameterValue: enable_http
               - !Ref AWS::NoValue
