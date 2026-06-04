@@ -172,16 +172,42 @@ for SLURM_VERSION in ${SLURM_VERSIONS}; do
   echo "Pyxis installed for Slurm ${SLURM_VERSION}"
 done
 
-# Update PATH for slurmd. Derive the Slurm bin dir from what is actually present
-# on this node instead of hardcoding a version -- a hardcoded slurm-25.11 silently
-# mismatches clusters deployed with SlurmVersion=25.05. Include every installed
-# slurm-*/bin (a single-version cluster yields exactly one). Guard the append with
-# grep -q so re-running this script does not add a duplicate PATH line.
-SLURM_BIN_DIRS=$(printf '%s:' /opt/aws/pcs/scheduler/slurm-*/bin 2>/dev/null)
-SLURMD_PATH_LINE="PATH=${SLURM_BIN_DIRS}/usr/lib/ccache/bin:/usr/local/bin:/usr/bin:/bin"
-if ! grep -qxF "${SLURMD_PATH_LINE}" /etc/default/slurmd 2>/dev/null; then
-  echo "${SLURMD_PATH_LINE}" >> /etc/default/slurmd
+# Update PATH for slurmd so Slurm CLIs (scontrol, srun, ...) resolve -- needed by
+# the Pyxis/Enroot PMI hook, which runs `scontrol show config`.
+#
+# Pick the SINGLE bin dir matching THIS cluster's Slurm version, not all of them.
+# The PCS DLAMI ships multiple versions (slurm-24.11, -25.05, -25.11). Putting every
+# slurm-*/bin on PATH is wrong two ways:
+#   1. glob order puts the OLDEST (24.11) first, and an older client can fatally fail
+#      to parse a newer slurm.conf key -- e.g. 24.11 chokes on MetricsType (added in
+#      25.11, set by cluster.yaml for the monitoring OpenMetrics endpoint) with
+#      "unrecognized key: MetricsType", which makes the Pyxis PMI hook abort and every
+#      --container-image job die with "spank_pyxis.so: task_init() failed".
+#   2. even newest-first, a 25.11 client on a 25.05 cluster is a version mismatch.
+# So resolve the cluster's actual version from the live controller (slurmd already has
+# --conf-server) via a probe scontrol, then use exactly that version's bin.
+SLURM_BIN=""
+# First, find any bin whose scontrol can talk to the controller, and read the
+# controller's reported version from it.
+CLUSTER_SLURM_VER=""
+for d in $(ls -d /opt/aws/pcs/scheduler/slurm-*/bin 2>/dev/null | sort -rV); do
+  ver=$("${d}/scontrol" show config 2>/dev/null | awk '/^SLURM_VERSION/{print $3; exit}')
+  if [ -n "${ver}" ]; then CLUSTER_SLURM_VER="${ver}"; break; fi
+done
+# Map the reported version (e.g. 25.11.6) to the matching installed bin dir
+# (slurm-25.11/bin). Match on the major.minor prefix.
+if [ -n "${CLUSTER_SLURM_VER}" ]; then
+  mm=$(echo "${CLUSTER_SLURM_VER}" | cut -d. -f1,2)
+  [ -d "/opt/aws/pcs/scheduler/slurm-${mm}/bin" ] && SLURM_BIN="/opt/aws/pcs/scheduler/slurm-${mm}/bin"
 fi
+# Fallback: if the controller wasn't reachable (e.g. during an AMI build) or the
+# matching dir is absent, use the newest installed version rather than the oldest.
+[ -z "${SLURM_BIN}" ] && SLURM_BIN=$(ls -d /opt/aws/pcs/scheduler/slurm-*/bin 2>/dev/null | sort -rV | head -1)
+SLURMD_PATH_LINE="PATH=${SLURM_BIN}:/usr/lib/ccache/bin:/usr/local/bin:/usr/bin:/bin"
+# Drop any prior PATH= line this script added (idempotent across re-runs / version
+# changes), then append the current one.
+sed -i '\#^PATH=/opt/aws/pcs/scheduler/slurm-#d' /etc/default/slurmd 2>/dev/null || true
+echo "${SLURMD_PATH_LINE}" >> /etc/default/slurmd
 
 # Load GPU kernel modules if GPU detected
 if nvidia-smi 2>/dev/null; then
