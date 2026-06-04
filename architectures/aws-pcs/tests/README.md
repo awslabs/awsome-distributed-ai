@@ -20,6 +20,29 @@ as `bash -lc "sinfo; squeue"`.
 
 ---
 
+## Pre-merge full test matrix (run before opening / updating the PR)
+
+Run this **complete set** before merging template or script changes. Several real bugs
+only appeared in specific combinations (a 25.05-only `MetricsType` rejection, a Pyxis
+SPANK plugin built for the wrong Slurm version, a first-boot post-install failure), so
+do **not** assume a single 25.11 GPU run covers everything.
+
+| # | Dimension | What to cover | Why it matters |
+|---|---|---|---|
+| 1 | **Every Slurm version** | Deploy one cluster per `SlurmVersion` `AllowedValues` value (**25.05 and 25.11**) and run a Pyxis `--container-image` job on each | `MetricsType` is 25.11-only (25.05 cluster create fails if it's set unconditionally); the Pyxis SPANK plugin is ABI-locked to its Slurm version, so a wrong-version `spank_pyxis.so` stops slurmd. **Any change to `scripts/install-enroot-pyxis.sh` MUST be retested on all supported versions.** |
+| 2 | **Container runtime, both paths** | (a) `BuildAMI=false` + `PostInstallScriptUrl` (first-boot install); (b) **`BuildAMI=true`** (pre-baked AMI via `pcs-ready-dlami-with-enroot-pyxis.yaml`) | The AMI-build path **duplicates** the Enroot/Pyxis logic in its own UserData; a fix to `install-enroot-pyxis.sh` is **not** automatically in the AMI path. Build an AMI and boot a node from it, run a container job. **Any Enroot/Pyxis change MUST also be verified through a BuildAMI=true run.** |
+| 3 | **First-boot from a clean deploy** | Validate on a **freshly deployed** cluster, not a node you hand-patched | Post-install runs during cloud-init *before* slurmd/profile.d/controller exist; bugs there (e.g. version detection, `set -e` aborts) only show on a clean first boot, not after a live re-run. |
+| 4 | **CPU queue** | `DeployOnDemandCNG=true`; Pyxis container job on `cpu1` | Baseline; also the cheapest way to exercise items 1–3 without GPU capacity. |
+| 5 | **Each GPU family** (as capacity allows) | `p5`/`p5e`/`p5en`, `p6-b200`, `p6-b300`: nvidia-smi, NCCL all_reduce, FSDP | EFA NIC layout and the dcgm-exporter image differ per family (see notes). |
+| 6 | **Monitoring** | 6 login containers up, all Prometheus targets healthy, GPU dashboards populate (B300 needs `DcgmExporterImage`) | — |
+| 7 | **Template lint** | `aws cloudformation validate-template` on every edited `assets/*.yaml` | Catches structural errors before a deploy round-trip. |
+
+Tests 1–7 below are the per-item how-to. The single-cluster shortcut (one deploy that
+covers monitoring + CPU + one GPU family) is fine for iterating, but the matrix above is
+the bar for **merge**.
+
+---
+
 ## Coverage matrix
 
 What this guide covers, and the template/parameter that exercises it:
@@ -130,15 +153,30 @@ Container support can be provided two ways — validate whichever you deployed:
 
 ```bash
 # On any node (login or compute):
-which enroot                                  # /usr/bin/enroot
-ls /usr/local/lib/slurm/spank_pyxis.so        # Pyxis SPANK plugin present
-tail -1 /var/log/pcs-post-install.log         # (a) only: "...completed (exit 0)"
+which enroot                                                       # /usr/bin/enroot
+ls /opt/aws/pcs/scheduler/slurm-*/lib/slurm/spank_pyxis.so         # per-version Pyxis SPANK plugin
+cat /etc/aws/pcs/scheduler/slurm-*/plugstack.conf.d/pyxis.conf     # points at the matching .so
+tail -1 /var/log/pcs-post-install.log                              # (a) only: "...completed (exit 0)"
 ```
 
-**Expected:** `enroot` on `PATH` and `spank_pyxis.so` present on every node. For (a),
-the post-install log exits 0 (Pyxis plugstack changes need a `slurmd` restart to take
-effect, which PCS handles at boot). The Test 1/6/7 container jobs are the functional
-proof that Pyxis works.
+**Expected:** `enroot` on `PATH`; a `spank_pyxis.so` under the **cluster's** Slurm version
+dir, and the plugstack `pyxis.conf` referencing that exact path. For (a), the post-install
+log exits 0. The Test 1/6/7 container jobs are the functional proof that Pyxis works.
+
+> **⚠️ Regression-test rule for `scripts/install-enroot-pyxis.sh`.** This script has bitten
+> us repeatedly in ways a single 25.11 GPU run does not catch. **Any change to it MUST be
+> retested across the full matrix at the top of this guide**, specifically:
+> - **All supported Slurm versions** (25.05 **and** 25.11). The Pyxis SPANK plugin is
+>   ABI-locked to its Slurm version — a plugin built for the wrong version stops slurmd from
+>   starting (`Incompatible Slurm plugin version`). The script builds Pyxis for the version
+>   passed in `PCS_SLURM_VERSION` and installs the `.so` to a per-version path; a regression
+>   here only shows on the *other* version.
+> - **The `BuildAMI=true` path too.** `pcs-ready-dlami-with-enroot-pyxis.yaml` carries its
+>   **own copy** of the Enroot/Pyxis steps in its Image Builder UserData — editing
+>   `install-enroot-pyxis.sh` does **not** change the AMI path. Build an AMI and boot a node
+>   from it, then run a container job.
+> - **On a clean first boot**, not a hand-patched node — post-install runs before
+>   slurmd/profile.d/controller exist, and several bugs only appear there.
 
 ---
 
