@@ -382,12 +382,20 @@ aws ec2 describe-instances \
 Security notes:
 - The security group is attached **only to the login node** — compute nodes and FSx
   (which share the cluster security group) are **not** exposed.
-- Prefer a tight CIDR (a `/32` host or your VPN range); **avoid `0.0.0.0/0`**, which
-  exposes the Grafana login to the whole internet (it still requires the admin
-  password / Cognito, but open exposure is risky).
+- **Opening 443 exposes more than Grafana.** The login node's nginx also reverse-proxies
+  `/prometheus/`, `/pushgateway/`, and `/slurmexporter/`, and **those endpoints are
+  unauthenticated**. Anyone who can reach the allowed CIDR can read all cluster metrics
+  (and push to Pushgateway) without credentials — only the `/grafana/` path is
+  password-gated. Treat this as exposing the whole monitoring stack, not just the Grafana
+  login.
+- Prefer a tight CIDR (a `/32` host or your VPN range). **`0.0.0.0/0` is accepted** — it
+  can be convenient for a short-lived PoC or workshop where granting each user local SSM
+  permissions is impractical — but it exposes the unauthenticated endpoints above to the
+  whole internet. If you use it, narrow it to a real CIDR or clear it (Option A) as soon
+  as you are done.
 - The certificate is self-signed, so browsers show a warning — proceed past it, or put
   an ALB + ACM certificate in front for a trusted cert.
-- Leaving `GrafanaPublicAccessCidr` empty (the default) keeps Grafana private; use
+- Leaving `GrafanaPublicAccessCidr` empty (the default) keeps monitoring private; use
   Option A.
 
 ---

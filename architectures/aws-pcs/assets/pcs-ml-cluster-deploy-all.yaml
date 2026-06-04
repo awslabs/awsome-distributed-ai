@@ -353,14 +353,19 @@ Parameters:
   GrafanaPublicAccessCidr:
     Type: String
     Description: >-
-      (Optional) CIDR allowed to reach Grafana on the login node over HTTPS (port
-      443) directly from the internet. When SET, a login-only security group is
-      created that opens 443 to this CIDR, so you can browse https://<login-public-ip>/grafana/
-      without SSM port forwarding. Leave EMPTY (default) to keep Grafana private
-      and reachable only via SSM port forwarding. Use a tight CIDR (e.g. your
-      office IP /32); avoid 0.0.0.0/0 — Grafana would be exposed to the whole
-      internet (it still requires the admin password / Cognito, but open exposure
-      is risky). Only the login node is affected; compute nodes and FSx are not.
+      (Optional) CIDR allowed to reach the login node's monitoring endpoint over
+      HTTPS (port 443) directly from the internet. When SET, a login-only security
+      group opens 443 to this CIDR so you can browse https://<login-public-ip>/grafana/
+      without SSM port forwarding. Leave EMPTY (default) to keep monitoring private
+      and reachable only via SSM port forwarding.
+      IMPORTANT: 443 exposes more than Grafana. The login node's nginx also reverse-
+      proxies /prometheus/, /pushgateway/ and /slurmexporter/, which are UNauthenticated
+      — anyone in the allowed CIDR can read all cluster metrics (and push to
+      Pushgateway) without credentials, even though Grafana itself is password-gated.
+      Use the tightest CIDR you can (e.g. your office IP /32). 0.0.0.0/0 is accepted
+      (useful for short-lived PoC/workshop access) but exposes those endpoints to the
+      whole internet — narrow it or clear it as soon as you are done. Only the login
+      node is affected; compute nodes and FSx are not.
     Default: ""
     AllowedPattern: '^$|^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
     ConstraintDescription: Must be empty or a valid IPv4 CIDR (e.g. 203.0.113.4/32)

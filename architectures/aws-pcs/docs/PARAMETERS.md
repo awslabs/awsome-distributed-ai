@@ -24,7 +24,7 @@ runtime options), see the [README](../README.md#4-configuration).
 | `LoginNodeInstanceType` | `m6i.4xlarge` | Login node instance type |
 | `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`) |
 | `DeployMonitoring` | `true` | Deploy Prometheus/Grafana/DCGM on the login node |
-| `GrafanaPublicAccessCidr` | *(empty)* | When set to a CIDR, opens Grafana (HTTPS/443) on the login node to that CIDR via a login-only security group. Empty = SSM port-forward only. Use a tight CIDR; avoid `0.0.0.0/0` |
+| `GrafanaPublicAccessCidr` | *(empty)* | When set to a CIDR, opens HTTPS/443 on the login node to that CIDR via a login-only security group. Empty = SSM port-forward only. **443 also exposes the unauthenticated `/prometheus/`, `/pushgateway/`, `/slurmexporter/` proxy paths**, not just the password-gated Grafana. Use the tightest CIDR you can; `0.0.0.0/0` is accepted for short-lived PoC/workshop use but exposes those endpoints to the whole internet |
 | `ManagedAccounting` | `disabled` | Enable Slurm managed accounting (requires Slurm 24.11+) |
 | `AccountingPolicyEnforcement` | `none` | Slurm accounting policy enforcement (`none` or `associations,limits,safe`) |
 
