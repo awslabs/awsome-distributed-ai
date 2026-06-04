@@ -36,10 +36,12 @@ patching Megatron-Core**:
 > **combine-backward** path is exercised at this scale: the dispatcher A/B ran 20-iter
 > forward+backward through `MoEFlexTokenDispatcher(backend="deepep")` on 256× B300 (EP=32) over
 > EFA — clean (0 stalls, EFA-active on every rank) and numerically **equal-work** vs the NCCL
-> all-to-all baseline (iteration-1 loss match). Note that A/B ran on a **DeepSeek-V3 256-expert**
-> substrate (the architecture family — **not** the literal 384-expert Kimi-K2) with random init +
-> mock data, measuring throughput; cross-iteration gradient correctness and real-data convergence
-> remain untested. See [`../dsv3/RESULTS.md`](../dsv3/RESULTS.md).
+> all-to-all baseline (per-iteration loss curves match to ≤4e-4 relative over 24 iters).
+> The A/B has now been measured on **both** a DeepSeek-V3 256-expert substrate
+> ([`../dsv3/RESULTS.md`](../dsv3/RESULTS.md), 2026-06-01) and the **literal 384-expert
+> Kimi-K2** ([`benchmarks/RESULTS.md`](benchmarks/RESULTS.md), 2026-06-04: UCCL deepep
+> −34/−35% iter time at mb=4 on 256× B300), with random init + mock data, measuring
+> throughput; real-data convergence remains untested.
 > For a new setup, still treat every gate in
 > [Known edge cases](#known-edge-cases--validation-gates) as a hard stop.
 
@@ -261,10 +263,13 @@ Model-specific files in **this** directory:
 | `1.convert-checkpoint.sh` | HF Kimi K2 (FP8) -> BF16 -> Megatron-Core checkpoint |
 | `conf/kimi_k2_sft.py` | Megatron-Bridge SFT `ConfigContainer` (mounted at `/workspace/conf` via ConfigMap, launched by `torchrun`) |
 | `kubernetes/` | etcd `Service`/`Deployment` + PyTorchJob template (+ optional KAI `PodGroup`); create the conf ConfigMap, then `envsubst ... \| kubectl apply` to deploy (see `kubernetes/README.md`) |
+| `benchmarks/bench_kimi_k2_pretrain.py` | Literal-K2 (384-expert) dispatcher A/B entrypoint (AutoBridge provider + mock data; launched via `../run-ab-rawpods.sh` with `MODEL=kimi-k2`) |
+| `benchmarks/RESULTS.md` | Measured UCCL-EP vs NCCL A/B on literal K2 (32-node PP8 + 16-node PP4 appendix, loss-equivalence) |
 
-The MoE dispatcher A/B (NCCL all-to-all vs UCCL DeepEP-over-EFA) that validated this
-UCCL-over-EFA path is now an independent sibling case — see
-[`../dsv3/`](../dsv3/) (it ran on a DeepSeek-V3 256-expert substrate, the Kimi K2 family).
+The MoE dispatcher A/B (NCCL all-to-all vs UCCL DeepEP-over-EFA) that first validated
+this UCCL-over-EFA path is an independent sibling case — see
+[`../dsv3/`](../dsv3/) (DeepSeek-V3 256-expert substrate). The same A/B measured on
+**literal Kimi-K2** lives in [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
 
 ## References
 

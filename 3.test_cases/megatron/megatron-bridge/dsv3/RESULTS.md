@@ -17,6 +17,14 @@ TP8/EP32/PP8/DP4, seed, image, FSx mounts, EFA env, and the
 
 ---
 
+> **2026-06-04 note:** a same-campaign DSV3 re-run (alongside the literal Kimi-K2
+> matrix, campaign `20260604T083049Z-uccl-ab-pp8-32n-v2`) was planned but **never
+> started** — the 32-node Capacity Block expired after the K2 half. The numbers below
+> remain the standing DSV3 reference (same image and TP8/PP8/EP32/DP4 layout as the
+> K2 campaign, but a separate prior run — not same-campaign apples-to-apples). The
+> literal-K2 results are in
+> [`../kimi-k2/benchmarks/RESULTS.md`](../kimi-k2/benchmarks/RESULTS.md).
+
 ## Measured result — 2026-06-01 (256× B300, balanced routing, overlap off & on)
 
 **Headline — the dispatcher winner DEPENDS ON micro-batch granularity (a crossover):**
