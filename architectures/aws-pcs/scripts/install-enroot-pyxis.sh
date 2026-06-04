@@ -24,6 +24,18 @@
 #      longer aborts the install.
 #   5. GPU toolkit (nvidia-container-toolkit) installs ONLY when nvidia-smi
 #      succeeds; CPU-only nodes intentionally skip it.
+#
+# EXECUTION CONTEXT:
+#   Designed to run as a first-boot hook (PCS PostInstallScriptUrl) or during a
+#   custom-AMI build -- i.e. BEFORE slurmd starts. It does NOT restart slurmd, so
+#   the slurmd PATH it writes only takes effect on the next slurmd start (the
+#   first boot). If you run it on an already-running node, restart slurmd yourself.
+#
+# IDEMPOTENT:
+#   Safe to run more than once (e.g. PostInstallScriptUrl left at the default on a
+#   BuildAMI=true node where Enroot/Pyxis is already baked in). Each component is
+#   skipped when already present at the expected version; a version mismatch is
+#   overwritten. So a redundant re-run is a fast no-op rather than a double install.
 
 set -exo pipefail
 
@@ -86,14 +98,19 @@ if nvidia-smi 2>/dev/null; then
   apt_get install -y libnvidia-container-tools
 fi
 
-# Install Enroot
-echo "Installing Enroot ${ENROOT_RELEASE}..."
-arch=$(dpkg --print-architecture)
-mkdir -p /tmp/enroot
-cd /tmp/enroot
-curl -fSsL -O "https://github.com/NVIDIA/enroot/releases/download/v${ENROOT_RELEASE}/enroot_${ENROOT_RELEASE}-1_${arch}.deb"
-curl -fSsL -O "https://github.com/NVIDIA/enroot/releases/download/v${ENROOT_RELEASE}/enroot+caps_${ENROOT_RELEASE}-1_${arch}.deb"
-apt_get install -y ./*.deb
+# Install Enroot (skip if the target version is already present, e.g. baked into
+# a custom AMI; reinstall only on a version mismatch).
+if [ "$(enroot version 2>/dev/null)" = "${ENROOT_RELEASE}" ]; then
+  echo "Enroot ${ENROOT_RELEASE} already installed, skipping."
+else
+  echo "Installing Enroot ${ENROOT_RELEASE}..."
+  arch=$(dpkg --print-architecture)
+  mkdir -p /tmp/enroot
+  cd /tmp/enroot
+  curl -fSsL -O "https://github.com/NVIDIA/enroot/releases/download/v${ENROOT_RELEASE}/enroot_${ENROOT_RELEASE}-1_${arch}.deb"
+  curl -fSsL -O "https://github.com/NVIDIA/enroot/releases/download/v${ENROOT_RELEASE}/enroot+caps_${ENROOT_RELEASE}-1_${arch}.deb"
+  apt_get install -y ./*.deb
+fi
 
 # Configure Enroot
 ln -sf /usr/share/enroot/hooks.d/50-slurm-pmi.sh /etc/enroot/hooks.d/
@@ -125,6 +142,15 @@ for SLURM_VERSION in ${SLURM_VERSIONS}; do
     continue
   fi
 
+  # Idempotent: skip this Slurm version if Pyxis is already wired up for it (the
+  # SPANK plugin built and the plugstack config symlinked). Catches the AMI-baked
+  # / re-run case so we don't rebuild from source every boot.
+  if [ -f /usr/local/lib/slurm/spank_pyxis.so ] && \
+     [ -e "${SLURM_ETC_PATH}/plugstack.conf.d/pyxis.conf" ]; then
+    echo "Pyxis already installed for Slurm ${SLURM_VERSION}, skipping."
+    continue
+  fi
+
   if [ ! -d /tmp/pyxis ]; then
     git clone --depth 1 --branch "${PYXIS_RELEASE}" https://github.com/NVIDIA/pyxis.git /tmp/pyxis
   fi
@@ -140,8 +166,16 @@ for SLURM_VERSION in ${SLURM_VERSIONS}; do
   echo "Pyxis installed for Slurm ${SLURM_VERSION}"
 done
 
-# Update PATH for slurmd
-echo 'PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:/usr/lib/ccache/bin:/usr/local/bin:/usr/bin:/bin' >> /etc/default/slurmd
+# Update PATH for slurmd. Derive the Slurm bin dir from what is actually present
+# on this node instead of hardcoding a version -- a hardcoded slurm-25.11 silently
+# mismatches clusters deployed with SlurmVersion=25.05. Include every installed
+# slurm-*/bin (a single-version cluster yields exactly one). Guard the append with
+# grep -q so re-running this script does not add a duplicate PATH line.
+SLURM_BIN_DIRS=$(printf '%s:' /opt/aws/pcs/scheduler/slurm-*/bin 2>/dev/null)
+SLURMD_PATH_LINE="PATH=${SLURM_BIN_DIRS}/usr/lib/ccache/bin:/usr/local/bin:/usr/bin:/bin"
+if ! grep -qxF "${SLURMD_PATH_LINE}" /etc/default/slurmd 2>/dev/null; then
+  echo "${SLURMD_PATH_LINE}" >> /etc/default/slurmd
+fi
 
 # Load GPU kernel modules if GPU detected
 if nvidia-smi 2>/dev/null; then
