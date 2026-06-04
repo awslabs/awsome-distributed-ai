@@ -49,17 +49,27 @@ PYXIS_RELEASE=v0.20.0
 # the templates don't expose it, and it is not validated here, so a 24.11 cluster
 # would get no Pyxis plugstack. Keep this list in sync with cluster.yaml's
 # AllowedValues if that list changes.
-SLURM_VERSIONS="25.05 25.11"
-
 # This cluster's Slurm version, passed in by the CNG UserData as the PCS_SLURM_VERSION
 # environment variable (sourced from the template's SlurmVersion parameter). The node
 # itself cannot reliably discover the cluster version at post-install time -- this runs
 # during cloud-init, before slurmd starts and before the slurmd unit / profile.d /
 # controller config that name the version exist. Passing it in is authoritative and
 # timing-safe. (When PCS gains a native post-install hook, the cluster Slurm version is
-# the kind of context it should likewise expose to the script.) Empty is tolerated: we
-# fall back to the newest installed version, so a manual run still works.
+# the kind of context it should likewise expose to the script.)
 PCS_SLURM_VERSION="${PCS_SLURM_VERSION:-}"
+
+# Build Pyxis ONLY for this cluster's Slurm version when it's known. Building for a
+# version the cluster doesn't run is wasted work and risks the wrong spank_pyxis.so
+# (the SPANK ABI is version-locked; slurmd won't start against a mismatched plugin).
+# When PCS_SLURM_VERSION is unset (e.g. a manual run, or a cluster-agnostic AMI build),
+# fall back to building every supported version. Keep the fallback list in sync with
+# cluster.yaml's SlurmVersion AllowedValues (25.05, 25.11); PCS also offers 24.11 but
+# it is intentionally out of scope here.
+if [ -n "${PCS_SLURM_VERSION}" ]; then
+  SLURM_VERSIONS="${PCS_SLURM_VERSION}"
+else
+  SLURM_VERSIONS="25.05 25.11"
+fi
 
 # At first boot this script runs alongside cloud-init and Ubuntu's
 # `unattended-upgrades`, which hold the dpkg/apt locks. Without waiting, the very
@@ -158,11 +168,20 @@ for SLURM_VERSION in ${SLURM_VERSIONS}; do
     continue
   fi
 
-  # Idempotent: skip this Slurm version if Pyxis is already wired up for it (the
-  # SPANK plugin built and the plugstack config symlinked). Catches the AMI-baked
-  # / re-run case so we don't rebuild from source every boot.
-  if [ -f /usr/local/lib/slurm/spank_pyxis.so ] && \
-     [ -e "${SLURM_ETC_PATH}/plugstack.conf.d/pyxis.conf" ]; then
+  # Install each version's plugin to a PER-VERSION libdir. The SPANK plugin ABI is
+  # version-locked: slurmd refuses to start if spank_pyxis.so was built against a
+  # different Slurm version ("Incompatible Slurm plugin version"). The Pyxis Makefile
+  # installs to $libdir/slurm/spank_pyxis.so AND bakes that absolute path into the
+  # generated pyxis.conf -- so a single shared libdir (the old /usr/local/lib) means the
+  # last version built clobbers the .so, and every version's plugstack then points at it.
+  # On a 25.05 cluster that left slurmd loading a 25.11 .so and failing to start. Giving
+  # each version its own libdir keeps the .so and the pyxis.conf reference version-matched.
+  PYXIS_LIBDIR="${SLURM_PATH}"
+  PLUGIN_SO="${PYXIS_LIBDIR}/lib/slurm/spank_pyxis.so"
+
+  # Idempotent: skip this version if its OWN plugin + plugstack config already exist
+  # (AMI-baked / re-run). Checks the per-version .so, not a shared path.
+  if [ -f "${PLUGIN_SO}" ] && [ -e "${SLURM_ETC_PATH}/plugstack.conf.d/pyxis.conf" ]; then
     echo "Pyxis already installed for Slurm ${SLURM_VERSION}, skipping."
     continue
   fi
@@ -174,12 +193,16 @@ for SLURM_VERSION in ${SLURM_VERSIONS}; do
   cd /tmp/pyxis
   make clean || true
   CPPFLAGS="-I ${SLURM_PATH}/include/" make
-  CPPFLAGS="-I ${SLURM_PATH}/include/" make install
+  # libdir is per-version so the .so (and the path baked into the generated pyxis.conf)
+  # is unique to this Slurm version.
+  CPPFLAGS="-I ${SLURM_PATH}/include/" make install prefix=/usr/local libdir="${PYXIS_LIBDIR}/lib"
 
   mkdir -p "${SLURM_ETC_PATH}/plugstack.conf.d"
-  ln -sf /usr/local/share/pyxis/pyxis.conf "${SLURM_ETC_PATH}/plugstack.conf.d/pyxis.conf"
+  # Point the plugstack at this version's generated pyxis.conf (which references the
+  # per-version .so). Copy rather than symlink the shared /usr/local one.
+  echo "required ${PLUGIN_SO}" > "${SLURM_ETC_PATH}/plugstack.conf.d/pyxis.conf"
 
-  echo "Pyxis installed for Slurm ${SLURM_VERSION}"
+  echo "Pyxis installed for Slurm ${SLURM_VERSION} -> ${PLUGIN_SO}"
 done
 
 # Put the cluster's Slurm bin on slurmd's PATH so the Pyxis/Enroot PMI hook
