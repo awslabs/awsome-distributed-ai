@@ -12,8 +12,8 @@ Fine-tune [OpenVLA-7B](https://github.com/openvla/openvla) (Vision-Language-Acti
 ## 1. Clone this repository
 
 ```bash
-git clone https://github.com/awslabs/awsome-distributed-training.git
-cd awsome-distributed-training/3.test_cases/pytorch/openvla
+git clone https://github.com/awslabs/awsome-distributed-ai.git
+cd awsome-distributed-ai/3.test_cases/pytorch/openvla
 ```
 
 ## 2. Build the container
@@ -44,7 +44,7 @@ mkdir -p $VLA_HOME/{models,data,checkpoints,logs,scripts}
 ```bash
 python3 -c "
 from huggingface_hub import snapshot_download
-snapshot_download('openvla/openvla-7b-prismatic', local_dir='$VLA_HOME/models/openvla-7b')
+snapshot_download('openvla/openvla-7b', local_dir='$VLA_HOME/models/openvla-7b')
 "
 ```
 
@@ -65,7 +65,7 @@ Submit from `$VLA_HOME` — Slurm writes logs relative to the submission directo
 
 ```bash
 cd $VLA_HOME
-cp ~/awsome-distributed-training/3.test_cases/pytorch/openvla/slurm/finetune_openvla.sbatch scripts/
+cp ~/awsome-distributed-ai/3.test_cases/pytorch/openvla/slurm/finetune_openvla.sbatch scripts/
 sbatch scripts/finetune_openvla.sbatch
 ```
 
