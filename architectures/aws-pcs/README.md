@@ -114,18 +114,10 @@ Choose **one** of two ways to provide Enroot/Pyxis:
 The PCS-ready DLAMI base already includes the PCS agent, Slurm 25.05 & 25.11
 (`/opt/aws/pcs/scheduler/slurm-*`), NVIDIA driver + CUDA, and SSM agent.
 
-> **Production tip — pin the AMI.** Left empty, `AmiId` resolves the PCS-ready DLAMI from
-> the SSM public parameter `/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id`.
-> Only a `/latest/` path is published (there is no version-pinned alternative), and
-> CloudFormation re-resolves it on every stack update — so nodes added by a later
-> scale-out/update can boot a newer AMI than the original ones. That's a fine default for
-> evaluation. For production, resolve it once and **pass the resulting AMI ID explicitly as
-> `AmiId`** so every node in the cluster's lifetime is identical:
->
-> ```bash
-> aws ssm get-parameter --name /aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id \
->   --query 'Parameter.Value' --output text
-> ```
+> **Production tip — pin the AMI.** Empty `AmiId` re-resolves the SSM `/latest/` parameter on
+> every stack update, so scale-out nodes can drift to a newer AMI. For production, resolve it
+> once and pass the result as `AmiId`. Details:
+> [OPERATIONS.md §4](./docs/OPERATIONS.md#4-ami-selection-amiid--pin-in-production).
 
 ### GPU compute (P5/P6)
 
@@ -331,15 +323,11 @@ node-local `/opt` (not the shared `/home`). Pre-built Grafana dashboards (Cluste
 Slurm Detail, GPU Node List, GPU Health, Cluster Costs, Storage) are provisioned
 automatically — see the [screenshot below](#accessing-grafana).
 
-> **GPU metrics on p6-b300 — set `DcgmExporterImage`:** the monitoring stack's default
-> `dcgm-exporter` pin is DCGM 4.2.0, which covers Hopper and B200 but **not B300** (B300 needs
-> DCGM ≥ 4.4.0; the pin stays at 4.2.0 because newer NVCR tags can't be pulled on Docker 29.x).
-> For p6-b300, pass **`DcgmExporterImage`** a B300-capable build **by digest** (a digest pull
-> bypasses the Docker-29.x OCI-index failure), e.g.
-> `nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547d4546eaf4dd5d6b4c0b4db4101e63ef7dc3cdff7f42b767d2c60b706`
-> (DCGM 4.5.2). Validated on 2× p6-b300: all 16 B300 GPUs report in Grafana. The
-> `DCGM_EXPORTER_IMAGE` support shipped in monitoring **`v2.9.1`** (this template's default
-> `MonitoringVersion`), so the digest override works out of the box — no fork needed.
+> **GPU metrics on p6-b300 — set `DcgmExporterImage`:** the default dcgm-exporter pin
+> (DCGM 4.2.0) covers up to B200; **B300 needs DCGM ≥ 4.4.0** supplied via `DcgmExporterImage`
+> by digest. Validated on 2× p6-b300, works out of the box with the default
+> `MonitoringVersion=v2.9.1`. Details + the validated digest:
+> [OPERATIONS.md §3.1](./docs/OPERATIONS.md#31-b300-gpu-metrics-need-dcgmexporterimage).
 > Other GPU types (p5/p5e/p5en/p6-b200) need no override.
 
 > **Prefer AWS-managed Prometheus/Grafana?** If you'd rather use Amazon Managed Service
@@ -438,10 +426,10 @@ node's model, instance type, utilization, temperature, power, and memory:
 For detailed validation steps and the full test matrix (monitoring, containers, CPU/GPU,
 NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 
-> **Use `v2.9.1` or newer for PCS.** Native Ubuntu/PCS support, the node-local `/opt`
-> install (fixing the shared-`/home` race), and a DCGM exporter tag that pulls on
-> Docker 29.x landed by `v2.6.5`; `v2.9.1` adds the `DCGM_EXPORTER_IMAGE` override that
-> lets `DcgmExporterImage` enable B300 GPU metrics without a fork.
+> **Use `v2.9.1` or newer for PCS.** Carries the PCS `/opt` install fix (v2.6.4),
+> Docker-29.x DCGM tag (v2.6.5), Grafana 13 (v2.9), and the `DCGM_EXPORTER_IMAGE` override
+> needed by `DcgmExporterImage` for B300 (v2.9.1). Migration notes:
+> [OPERATIONS.md §3](./docs/OPERATIONS.md#3-monitoring-monitoringversion).
 
 ---
 
@@ -485,6 +473,7 @@ Validated configurations:
 
 ## 11. Additional Resources
 
+- [Operations guide](./docs/OPERATIONS.md) — version trade-offs, AMI single-version rule, monitoring/B300 dcgm setup, AMI pinning, FSx coupling, recommended production settings
 - [Roadmap / TODO](./docs/ROADMAP.md) — implementation items under consideration
 - [Parameter reference](./docs/PARAMETERS.md) — every deploy-all parameter and default
 - [AWS Parallel Computing Service Documentation](https://docs.aws.amazon.com/pcs/)

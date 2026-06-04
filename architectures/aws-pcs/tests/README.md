@@ -4,6 +4,10 @@ This directory is a single guide for validating an AWS PCS cluster deployed from
 templates in [`../assets`](../assets). Each test below lists **what to run** and the
 **expected result**.
 
+For non-test operational guidance (Slurm version trade-offs, AMI single-version rule,
+`MonitoringVersion` migration, `DcgmExporterImage` for B300, AMI pinning, FSx
+deployment-type ↔ throughput coupling), see [`../docs/OPERATIONS.md`](../docs/OPERATIONS.md).
+
 Rather than ship its own copies, this guide reuses the repository's canonical benchmark
 and training assets and documents only the **PCS-specific deltas** (queue/partition names,
 running the Enroot import on the login node, putting caches on `/fsx`):
@@ -30,7 +34,7 @@ do **not** assume a single 25.11 GPU run covers everything.
 | # | Dimension | What to cover | Why it matters |
 |---|---|---|---|
 | 1 | **Every Slurm version** | Deploy one cluster per `SlurmVersion` `AllowedValues` value (**25.05 and 25.11**) and run a Pyxis `--container-image` job on each | `MetricsType` is 25.11-only (25.05 cluster create fails if it's set unconditionally); the Pyxis SPANK plugin is ABI-locked to its Slurm version, so a wrong-version `spank_pyxis.so` stops slurmd. **Any change to `scripts/install-enroot-pyxis.sh` MUST be retested on all supported versions.** |
-| 2 | **Container runtime, both paths** | (a) `BuildAMI=false` + `PostInstallScriptUrl` (first-boot install); (b) **`BuildAMI=true`** (pre-baked AMI via `pcs-ready-dlami-with-enroot-pyxis.yaml`) | The AMI-build path **duplicates** the Enroot/Pyxis logic in its own UserData; a fix to `install-enroot-pyxis.sh` is **not** automatically in the AMI path. Build an AMI and boot a node from it, run a container job. **Any Enroot/Pyxis change MUST also be verified through a BuildAMI=true run.** |
+| 2 | **Container runtime, both paths** | (a) `BuildAMI=false` + `PostInstallScriptUrl` (first-boot install); (b) **`BuildAMI=true`** (pre-baked AMI via `pcs-ready-dlami-with-enroot-pyxis.yaml`) | The AMI-build path **duplicates** the Enroot/Pyxis logic in its own UserData (a fix to `install-enroot-pyxis.sh` is **not** automatically in the AMI path), and the **AMI is single-Slurm-version** by design — `SlurmVersion` on the DLAMI stack must match the cluster's `SlurmVersion` (the SPANK plugin is ABI-locked, so a 25.11 AMI used by a 25.05 cluster crashes slurmd). Build an AMI and boot a node from it, run a container job. **Any Enroot/Pyxis change MUST also be verified through a BuildAMI=true run, on each Slurm version.** |
 | 3 | **First-boot from a clean deploy** | Validate on a **freshly deployed** cluster, not a node you hand-patched | Post-install runs during cloud-init *before* slurmd/profile.d/controller exist; bugs there (e.g. version detection, `set -e` aborts) only show on a clean first boot, not after a live re-run. |
 | 4 | **CPU queue** | `DeployOnDemandCNG=true`; Pyxis container job on `cpu1` | Baseline; also the cheapest way to exercise items 1–3 without GPU capacity. |
 | 5 | **Each GPU family** (as capacity allows) | `p5`/`p5e`/`p5en`, `p6-b200`, `p6-b300`: nvidia-smi, NCCL all_reduce, FSDP | EFA NIC layout and the dcgm-exporter image differ per family (see notes). |
@@ -74,21 +78,39 @@ results; exact bandwidth/throughput vary with NCCL/EFA versions and message size
 | **2× p6-b200.48xlarge** (16× B200) | us-west-2 | Capacity Block | ✅ v2.9.1, 16 GPUs in Grafana | **~654 GB/s** @16 GiB (EFA, `found 8 nics`, `#wrong 0`) | **~223 TFLOPS/GPU, ~86k tok/s** |
 | **2× p6-b300.48xlarge** (16× B300) | us-west-2 | Capacity Block | ✅ v2.9.1 + `DcgmExporterImage` digest, 16 B300 GPUs in Grafana ‡ | **~751 GB/s** @64 GiB (EFA, `found 16 nics`, `#wrong 0`) † | **~205 TFLOPS/GPU, ~79k tok/s** (venv); **~193 TFLOPS/GPU** (container) |
 | **2× p5.48xlarge** (16× H100) | us-east-2 | Capacity Block | ✅ | **~480 GB/s** (EFA, `found 32 nics`, `#wrong 0`) | ~60 TFLOPS/GPU |
+| **Slurm 25.05, CPU + PostInstall** | us-west-2 | On-Demand | ✅ v2.9.1 (no `slurm_openmetrics` job §) | first-boot Pyxis OK, `srun --container-image=ubuntu:22.04` clean | n/a |
+| **Slurm 25.11, CPU + PostInstall** | us-west-2 | On-Demand | ✅ v2.9.1 incl. Slurm OpenMetrics | first-boot Pyxis OK | n/a |
 | **Login + CPU (`c6i`)** | us-west-2 / us-east-* | On-Demand | ✅ all targets up | n/a | n/a |
 | **Grafana public access** (login-only SG) | us-west-2 | — | ✅ reachable at `https://<login-public-ip>/grafana/` from the allowed CIDR | — | — |
+
+### Stack creation times (measured, deploy-all)
+
+Wall-clock from `aws cloudformation create-stack` to top-level `CREATE_COMPLETE`, on a
+warmed account in us-west-2 (no first-time-in-region provisioning). Useful for sizing
+how long a deploy round-trip takes during a review cycle.
+
+| Configuration | First-boot path | Time |
+|---|---|---|
+| 25.05, CPU only | `BuildAMI=false` + `PostInstallScriptUrl` | **~24m** |
+| 25.11, CPU only | `BuildAMI=false` + `PostInstallScriptUrl` | **~31m** |
+| 25.11, GPU + CPU (Capacity Block) | `BuildAMI=false` + `PostInstallScriptUrl` | **~44m** |
+| 25.05/25.11, CPU only | `BuildAMI=true` (Image Builder runs alongside prereqs) | **~32m** |
+
+Notes: Prerequisites (VPC + dual FSx) is the long-pole on every path (~20-25m); the
+PostInstall path adds the per-boot Enroot/Pyxis install (~2-3m), and the BuildAMI path
+adds Image Builder (~20-25m) but **runs in parallel with prereqs**, so the wall-clock
+delta vs PostInstall is much smaller than ImageBuilder's standalone time. GPU adds the
+P-series CNG and the GPU node first boot.
 
 Notes:
 - **Deploy path:** all of the above came up from `pcs-ml-cluster-deploy-all.yaml`
   (`BuildAMI=false`, Enroot/Pyxis via `PostInstallScriptUrl`, `DeployMonitoring=true`).
 - **Container runtime:** validated via first-boot UserData install (the default); the
   pre-baked-AMI path (`BuildAMI=true`) shares the same `install-enroot-pyxis.sh`.
-- **`BuildAMI=true` path validated** (us-west-2, CPU-only deploy-all, `PostInstallScriptUrl=""`):
-  ImageBuilder produced a custom AMI (`EnrootPyxisInstaller` component); the login/compute
-  nodes booted from it with **`enroot 3.5.0` + Pyxis baked in** (post-install log =
-  `No post-install script configured` — confirming **no first-boot double-install**), the
-  monitoring stack up, and a `cpu1` Pyxis container job (`ubuntu:22.04`) ran clean
-  (`pyxis: imported docker image`). **Set `PostInstallScriptUrl=""` when `BuildAMI=true`** to
-  avoid re-running the installer at boot — see [README container runtime](../README.md#container-runtime-enrootpyxis).
+- **`BuildAMI=true` path validated** (us-west-2, CPU-only, `PostInstallScriptUrl=""`):
+  ImageBuilder bakes Enroot 3.5.0 + per-version Pyxis into the DLAMI; login/compute nodes
+  boot ready, no first-boot install. The AMI is single-Slurm-version on purpose — see
+  [docs/OPERATIONS.md §2](../docs/OPERATIONS.md#2-container-runtime-postinstall-vs-ami-build).
 - **EFA interface count** is derived from the instance type (p5/p5e = 32, p5en = 16,
   p6-b200 = 8, p6-b300 = 16-of-17); see [README GPU compute](../README.md#gpu-compute-p5p6).
 - **FSDP runs both ways** — validated with a shared-`/fsx` **venv** (~200 TFLOPS/GPU) and
@@ -101,16 +123,13 @@ Notes:
   16 GiB was indeed unsaturated. **128 GiB and 256 GiB OOM** (the all_reduce buffer exceeds
   B300 GPU memory), so ~64 GiB is the practical max single-buffer size here; for a true peak,
   scale to more nodes rather than larger buffers.
-- **‡ B300 GPU metrics require a newer dcgm-exporter.** The monitoring stack's default
-  `dcgm-exporter` pin is DCGM 4.2.0 (covers up to B200; the pin exists because newer NVCR
-  tags can't be pulled on Docker 29.x). B300 needs DCGM ≥ 4.4.0. Pass **`DcgmExporterImage`**
-  (deploy-all) / **`DCGM_EXPORTER_IMAGE`** (monitoring) a B300-capable build **by digest** to
-  bypass the Docker-29.x OCI-index pull failure — validated on 2× p6-b300 with
-  `nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547…` (DCGM 4.5.2): the digest pulls on Docker
-  29.5.3 and Grafana shows all 16 B300 GPUs (temp/util/power/NVLink/DCP profiling). The
-  `DCGM_EXPORTER_IMAGE` support shipped in monitoring **`v2.9.1`** (the default
-  `MonitoringVersion`), so the digest override works with the released stack — no fork needed.
-  Other GPU types (p5/p5e/p5en/p6-b200) report GPU metrics on the default pin with no override.
+- **‡ B300 GPU metrics require `DcgmExporterImage`** with a DCGM ≥ 4.4.0 build supplied
+  **by digest** (validated with `nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547…`,
+  DCGM 4.5.2). Other GPU types need no override. See
+  [docs/OPERATIONS.md §3.1](../docs/OPERATIONS.md#31-b300-gpu-metrics-need-dcgmexporterimage).
+- **§ Slurm OpenMetrics is 25.11+ only.** On 25.05 the Slurm dashboards stay empty (the
+  rest of monitoring works fine). See
+  [docs/OPERATIONS.md §1](../docs/OPERATIONS.md#1-slurm-version-selection).
 
 ---
 
