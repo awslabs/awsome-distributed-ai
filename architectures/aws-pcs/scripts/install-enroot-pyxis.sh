@@ -172,35 +172,46 @@ for SLURM_VERSION in ${SLURM_VERSIONS}; do
   echo "Pyxis installed for Slurm ${SLURM_VERSION}"
 done
 
-# Update PATH for slurmd so Slurm CLIs (scontrol, srun, ...) resolve -- needed by
-# the Pyxis/Enroot PMI hook, which runs `scontrol show config`.
+# Put the cluster's Slurm bin on slurmd's PATH so the Pyxis/Enroot PMI hook
+# (50-slurm-pmi.sh) can run `scontrol show config` when a container job starts.
+# Note: PCS adds Slurm to *login shells* via /etc/profile.d/slurm.sh, but slurmd
+# runs with a minimal PATH that does NOT include scontrol, and the PMI hook runs in
+# that job environment -- so without this, every --container-image job fails with
+# "Command not found: scontrol" / "spank_pyxis.so: task_init() failed".
 #
-# Pick the SINGLE bin dir matching THIS cluster's Slurm version, not all of them.
-# The PCS DLAMI ships multiple versions (slurm-24.11, -25.05, -25.11). Putting every
-# slurm-*/bin on PATH is wrong: glob order puts the OLDEST (24.11) first, and an older
-# client can fatally fail to parse a newer slurm.conf key -- e.g. 24.11 chokes on
-# MetricsType (added in 25.11, set by cluster.yaml for the monitoring OpenMetrics
-# endpoint) with "unrecognized key: MetricsType", which makes the Pyxis PMI hook abort
-# and every --container-image job die with "spank_pyxis.so: task_init() failed".
-#
-# Derive the cluster's version from the slurmd systemd unit's ExecStart, which PCS sets
-# to the absolute path of the chosen version's slurmd
-# (e.g. /opt/aws/pcs/scheduler/slurm-25.11/sbin/slurmd). This is authoritative and works
-# at first boot too (this script runs before slurmd starts, so `scontrol show config`
-# is not yet usable -- the controller config source isn't established).
+# Use the SINGLE bin dir matching THIS cluster's Slurm version, not all of them: the
+# PCS DLAMI ships several (slurm-24.11/25.05/25.11), and an OLDER scontrol fatally
+# fails to parse a NEWER slurm.conf key (e.g. 24.11 chokes on MetricsType, which 25.11
+# sets for the monitoring OpenMetrics endpoint) -- so globbing every slurm-*/bin onto
+# PATH (oldest first) breaks the hook. Resolve the version from the first source that
+# exists at post-install time, newest-installed as a last resort. Each step is guarded
+# so a missing source never trips `set -e`.
+SLURM_VER_DIR=""
+# 1) PCS points /etc/profile.d/slurm.sh at the cluster's chosen version.
+if [ -L /etc/profile.d/slurm.sh ]; then
+  SLURM_VER_DIR=$(readlink /etc/profile.d/slurm.sh 2>/dev/null \
+    | sed -n 's#\(/opt/aws/pcs/scheduler/slurm-[^/]*\)/.*#\1#p' || true)
+fi
+# 2) Otherwise the slurmd systemd unit's ExecStart names the version's slurmd.
+if [ -z "${SLURM_VER_DIR}" ]; then
+  SLURM_VER_DIR=$(systemctl cat slurmd 2>/dev/null \
+    | sed -n 's#.*ExecStart=\(/opt/aws/pcs/scheduler/slurm-[^/]*\)/sbin/slurmd.*#\1#p' \
+    | head -1 || true)
+fi
 SLURM_BIN=""
-SLURM_VER_DIR=$(systemctl cat slurmd 2>/dev/null \
-  | sed -n 's#.*ExecStart=\(/opt/aws/pcs/scheduler/slurm-[^/]*\)/sbin/slurmd.*#\1#p' \
-  | head -1)
-[ -n "${SLURM_VER_DIR}" ] && [ -d "${SLURM_VER_DIR}/bin" ] && SLURM_BIN="${SLURM_VER_DIR}/bin"
-# Fallback: if the unit can't be read (e.g. during an AMI build, no slurmd unit yet),
-# use the newest installed version rather than the oldest.
-[ -z "${SLURM_BIN}" ] && SLURM_BIN=$(ls -d /opt/aws/pcs/scheduler/slurm-*/bin 2>/dev/null | sort -rV | head -1)
+if [ -n "${SLURM_VER_DIR}" ] && [ -d "${SLURM_VER_DIR}/bin" ]; then
+  SLURM_BIN="${SLURM_VER_DIR}/bin"
+fi
+# 3) Last resort (e.g. AMI build with no cluster context yet): newest installed version.
+if [ -z "${SLURM_BIN}" ]; then
+  SLURM_BIN=$(ls -d /opt/aws/pcs/scheduler/slurm-*/bin 2>/dev/null | sort -rV | head -1)
+fi
 SLURMD_PATH_LINE="PATH=${SLURM_BIN}:/usr/lib/ccache/bin:/usr/local/bin:/usr/bin:/bin"
 # Drop any prior PATH= line this script added (idempotent across re-runs / version
 # changes), then append the current one.
 sed -i '\#^PATH=/opt/aws/pcs/scheduler/slurm-#d' /etc/default/slurmd 2>/dev/null || true
 echo "${SLURMD_PATH_LINE}" >> /etc/default/slurmd
+echo "slurmd PATH set to use ${SLURM_BIN}"
 
 # Load GPU kernel modules if GPU detected
 if nvidia-smi 2>/dev/null; then
