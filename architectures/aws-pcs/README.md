@@ -306,8 +306,9 @@ sbatch nccl-test.sbatch
 
 **3. Check the result** (`/fsx/nccl-<jobid>.out`). EFA is in use when you see
 `NET/OFI Selected provider is efa ... (found N nics)`, and a healthy run ends with
-`# Out of bounds values : 0 OK` plus a busbw column that scales up to the GPU
-interconnect bandwidth (e.g. ~760 GB/s peak on 2× p6-b300).
+`# Out of bounds values : 0 OK` plus a busbw column that scales up with message size
+(e.g. ~751 GB/s at 64 GiB on 2× p6-b300; raise `-e` past the default 16 GiB to saturate
+B300's 16 EFA cards).
 
 For a full training example (FSDP), see the
 [PyTorch FSDP test case](../../3.test_cases/pytorch/FSDP).
@@ -330,14 +331,17 @@ node-local `/opt` (not the shared `/home`). Pre-built Grafana dashboards (Cluste
 Slurm Detail, GPU Node List, GPU Health, Cluster Costs, Storage) are provisioned
 automatically — see the [screenshot below](#accessing-grafana).
 
-> **Known issue — GPU metrics on p6-b300:** the monitoring stack (`v2.6.5`) pins
-> `dcgm-exporter` to DCGM 4.2.0, which covers Hopper and B200 but **not B300** (B300 needs
-> DCGM ≥ 4.4.0). The pin exists because newer NVCR tags can't be pulled on Docker 29.x.
-> On **p6-b300** nodes the GPU dashboards will therefore stay empty until the monitoring
-> stack can ship a newer DCGM; tracked upstream in
-> [aws-parallelcluster-monitoring#50](https://github.com/aws-samples/aws-parallelcluster-monitoring/issues/50)
-> (making the dcgm-exporter image configurable so a B300-capable build can be supplied by
-> digest). All other GPU types (p5/p5e/p5en/p6-b200) are unaffected.
+> **GPU metrics on p6-b300 — set `DcgmExporterImage`:** the monitoring stack's default
+> `dcgm-exporter` pin is DCGM 4.2.0, which covers Hopper and B200 but **not B300** (B300 needs
+> DCGM ≥ 4.4.0; the pin stays at 4.2.0 because newer NVCR tags can't be pulled on Docker 29.x).
+> For p6-b300, pass **`DcgmExporterImage`** a B300-capable build **by digest** (a digest pull
+> bypasses the Docker-29.x OCI-index failure), e.g.
+> `nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547d4546eaf4dd5d6b4c0b4db4101e63ef7dc3cdff7f42b767d2c60b706`
+> (DCGM 4.5.2). Validated on 2× p6-b300: all 16 B300 GPUs report in Grafana. This needs the
+> monitoring stack's `DCGM_EXPORTER_IMAGE` support
+> ([aws-parallelcluster-monitoring#51](https://github.com/aws-samples/aws-parallelcluster-monitoring/pull/51),
+> for #50); until it's in a release, point `MonitoringRepo`/`MonitoringVersion` at that branch.
+> Other GPU types (p5/p5e/p5en/p6-b200) need no override.
 
 > **Prefer AWS-managed Prometheus/Grafana?** If you'd rather use Amazon Managed Service
 > for Prometheus + Amazon Managed Grafana instead of the self-hosted stack on the login

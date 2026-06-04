@@ -11,7 +11,7 @@ running the Enroot import on the login node, putting caches on `/fsx`):
 | Stage | Canonical asset to use | PCS-specific delta documented here |
 |---|---|---|
 | NCCL `all_reduce` over EFA | [`micro-benchmarks/nccl-tests/slurm/nccl-tests-container.sbatch`](../../../micro-benchmarks/nccl-tests) | [Test 6](#test-6-nccl-multi-node-efa) — import on the login node, partition name |
-| FSDP Llama-2 7B training | [`3.test_cases/pytorch/FSDP`](../../../3.test_cases/pytorch/FSDP) | [Test 7](#test-7-fsdp-sample-training) — venv/cache on `/fsx`, 2 nodes |
+| FSDP Llama-2 7B training | [`3.test_cases/pytorch/FSDP`](../../../3.test_cases/pytorch/FSDP) | [Test 7](#test-7-fsdp-sample-training) — venv **or** Enroot container; cache on `/fsx`, 2 nodes |
 | GPU sanity (nvidia-smi) | (one `srun` line, no script) | [Test 5](#test-5-p5p6-gpu-multi-nic) |
 
 All Slurm commands run as the **`ubuntu`** user from the login node (SSM session or
@@ -48,8 +48,8 @@ results; exact bandwidth/throughput vary with NCCL/EFA versions and message size
 
 | Config | Region | Capacity | Monitoring | NCCL all_reduce (2-node peak busbw) | FSDP Llama-2 7B (2-node) |
 |---|---|---|---|---|---|
-| **2× p6-b200.48xlarge** (16× B200) | us-west-2 | Capacity Block | ✅ v2.6.5, 16 GPUs in Grafana | **~654 GB/s** (EFA, `found 8 nics`, `#wrong 0`) | **~223 TFLOPS/GPU, ~86k tok/s** |
-| **2× p6-b300.48xlarge** (16× B300) | us-west-2 | Capacity Block | ⚠️ stack up, but **GPU metrics empty** ‡ | **~760 GB/s** busbw (EFA, `found 16 nics`, `#wrong 0`) † | **~195 TFLOPS/GPU, ~75k tok/s** |
+| **2× p6-b200.48xlarge** (16× B200) | us-west-2 | Capacity Block | ✅ v2.6.5, 16 GPUs in Grafana | **~654 GB/s** @16 GiB (EFA, `found 8 nics`, `#wrong 0`) | **~223 TFLOPS/GPU, ~86k tok/s** |
+| **2× p6-b300.48xlarge** (16× B300) | us-west-2 | Capacity Block | ✅ v2.7 + `DcgmExporterImage` digest, 16 B300 GPUs in Grafana ‡ | **~751 GB/s** @64 GiB (EFA, `found 16 nics`, `#wrong 0`) † | **~200 TFLOPS/GPU, ~77k tok/s** (venv); **~193 TFLOPS/GPU** (container) |
 | **2× p5.48xlarge** (16× H100) | us-east-2 | Capacity Block | ✅ | **~480 GB/s** (EFA, `found 32 nics`, `#wrong 0`) | ~60 TFLOPS/GPU |
 | **Login + CPU (`c6i`)** | us-west-2 / us-east-* | On-Demand | ✅ all targets up | n/a | n/a |
 | **Grafana public access** (login-only SG) | us-west-2 | — | ✅ reachable at `https://<login-public-ip>/grafana/` from the allowed CIDR | — | — |
@@ -68,19 +68,27 @@ Notes:
   avoid re-running the installer at boot — see [README container runtime](../README.md#container-runtime-enrootpyxis).
 - **EFA interface count** is derived from the instance type (p5/p5e = 32, p5en = 16,
   p6-b200 = 8, p6-b300 = 16-of-17); see [README GPU compute](../README.md#gpu-compute-p5p6).
-- **FSDP loss** stays at ln(vocab) in this smoke test — a known dataloader/vocab quirk of
-  the test case, not a cluster issue.
-- **† B300 NCCL bandwidth is not yet conclusive.** B300 has 2× the EFA cards of B200
-  (16 vs 8) but the 2-node busbw was only ~1.16× higher — a 2-node / 16 GiB all_reduce
-  likely doesn't saturate all 16 cards. Re-test with **larger message sizes (up to ~64 GiB)
-  and more nodes (4–8+)** before treating ~760 GB/s as B300's peak network bandwidth.
-- **‡ B300 GPU metrics don't populate yet.** The monitoring stack (`v2.6.5`) pins
-  `dcgm-exporter` to DCGM 4.2.0, which doesn't support B300 (needs ≥ 4.4.0); the pin exists
-  because newer NVCR tags can't be pulled on Docker 29.x. The stack and all non-GPU metrics
-  come up fine, but the GPU dashboards stay empty on **p6-b300** until the dcgm image can be
-  bumped. Tracked upstream:
-  [aws-parallelcluster-monitoring#50](https://github.com/aws-samples/aws-parallelcluster-monitoring/issues/50).
-  All other GPU types (p5/p5e/p5en/p6-b200) report GPU metrics normally.
+- **FSDP runs both ways** — validated with a shared-`/fsx` **venv** (~200 TFLOPS/GPU) and
+  with an **Enroot/Pyxis container** (`CONTAINER_IMAGE=/fsx/pytorch-fsdp.sqsh`, ~193
+  TFLOPS/GPU) on the same 2× p6-b300. See Test 7 for both. **FSDP loss** stays at ln(vocab)
+  in this smoke test — a known dataloader/vocab quirk of the test case, not a cluster issue.
+- **† B300 NCCL bandwidth scales past 16 GiB.** A 2-node / **16 GiB** all_reduce reaches only
+  ~654 GB/s busbw — it doesn't saturate all 16 EFA cards. Re-measured with larger messages on
+  2× p6-b300: **64 GiB → ~751 GB/s** busbw (`found 16 nics`, `#wrong 0`), still climbing, so
+  16 GiB was indeed unsaturated. **128 GiB and 256 GiB OOM** (the all_reduce buffer exceeds
+  B300 GPU memory), so ~64 GiB is the practical max single-buffer size here; for a true peak,
+  scale to more nodes rather than larger buffers.
+- **‡ B300 GPU metrics require a newer dcgm-exporter.** The monitoring stack's default
+  `dcgm-exporter` pin is DCGM 4.2.0 (covers up to B200; the pin exists because newer NVCR
+  tags can't be pulled on Docker 29.x). B300 needs DCGM ≥ 4.4.0. Pass **`DcgmExporterImage`**
+  (deploy-all) / **`DCGM_EXPORTER_IMAGE`** (monitoring) a B300-capable build **by digest** to
+  bypass the Docker-29.x OCI-index pull failure — validated on 2× p6-b300 with
+  `nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547…` (DCGM 4.5.2): the digest pulls on Docker
+  29.5.3 and Grafana shows all 16 B300 GPUs (temp/util/power/NVLink/DCP profiling). Needs the
+  monitoring `DCGM_EXPORTER_IMAGE` support
+  ([aws-parallelcluster-monitoring#51](https://github.com/aws-samples/aws-parallelcluster-monitoring/pull/51),
+  for #50); until released, point `MonitoringRepo`/`MonitoringVersion` at that branch.
+  Other GPU types (p5/p5e/p5en/p6-b200) report GPU metrics on the default pin with no override.
 
 ---
 
@@ -215,8 +223,13 @@ node. EFA itself is exercised by Test 6.
 - EFA is the provider: `NET/OFI Selected provider is efa, fabric is efa-direct (found N nics)`
   (N = EFA interface count: 32 for p5/p5e, 16 for p5en, 8 for p6-b200, 16 for p6-b300).
 - Correctness: `# Out of bounds values : 0 OK`, every size `#wrong: 0`.
-- `busbw` scales up to the interconnect bandwidth — e.g. **~760 GB/s** peak at 16 GiB on
-  2× p6-b300; ~480 GB/s on 2× p5. (Cross-node bandwidth high and no errors is the check.)
+- `busbw` rises with message size — on 2× p6-b300, ~654 GB/s at 16 GiB but **~751 GB/s at
+  64 GiB** (16 cards aren't saturated at 16 GiB); ~480 GB/s on 2× p5.
+
+> **Sizing the sweep on B300.** The canonical script sweeps to `-e 16G`. On p6-b300 that
+> under-reports peak bandwidth — raise it to `-e 64G` (edit the `all_reduce_perf` line) to
+> see the cards saturate. **Don't go to 128 GiB/256 GiB**: the all_reduce buffer exceeds
+> B300 GPU memory and the job is OOM-killed. For a higher peak, add nodes, not buffer size.
 
 ---
 
@@ -241,18 +254,43 @@ shared filesystems and the node count:
    file-locking on NFS throws `OSError: [Errno 116] Stale file handle`; export
    `HF_HOME=/fsx/.hf-cache` before submitting.
 
-3. **Submit 2 nodes** (the canonical sbatch defaults to 4) on your GPU queue:
+3. **Submit 2 nodes** (the canonical sbatch defaults to 4) on your GPU queue. The venv must
+   be on `PATH` for `torchrun` to resolve on every node — point `PATH` at the shared venv via
+   `--export` (the canonical sbatch doesn't `activate` it):
 
    ```bash
-   sbatch --nodes=2 --partition=gpu-p6b200 llama2_7b-training.sbatch
+   sbatch --nodes=2 --partition=gpu-p6b200 \
+     --export=ALL,PATH=/fsx/awsome-distributed-ai/3.test_cases/pytorch/FSDP/slurm/env/bin:$PATH,HF_HOME=/fsx/.hf-cache \
+     llama2_7b-training.sbatch
    ```
 
-**Expected** (in `logs/llama2_7b-FSDP_<jobid>.out`):
+### Option B — run it in an Enroot/Pyxis container instead of the venv
+
+The same canonical sbatch switches to container mode when `CONTAINER_IMAGE` is set (it adds
+`--container-image`/`--container-mounts` and runs `./train.py` inside). Build the image once
+on the login node and submit with `CONTAINER_IMAGE` — no venv needed:
+
+```bash
+# On the login node (300 GiB root disk + Docker), build + import to /fsx:
+cd /fsx/awsome-distributed-ai/3.test_cases/pytorch/FSDP
+sudo docker build -t fsdp:pytorch -f Dockerfile .
+enroot import -o /fsx/pytorch-fsdp.sqsh dockerd://fsdp:pytorch
+
+# Submit (container mode; mounts $(pwd) into /fsx inside the container):
+cd slurm && sbatch --nodes=2 --partition=gpu-p6b300 \
+  --export=ALL,CONTAINER_IMAGE=/fsx/pytorch-fsdp.sqsh,HF_HOME=/fsx/.hf-cache,HF_TOKEN=hf_xxx \
+  llama2_7b-training.sbatch
+```
+
+> If the Dockerfile's `FROM` tag (a `public.ecr.aws/hpc-cloud/nccl-tests` tag) has been
+> rotated out of the registry, substitute a current tag from that repo before building.
+
+**Expected** (in `logs/llama2_7b-FSDP_<jobid>.out`), either path:
 - NCCL initializes over EFA (`found N nics`) and training logs ~100 steps + a validation
   step, saving checkpoints under `./checkpoints`.
-- Throughput is printed per step, e.g. **~195 TFLOPS/GPU, ~75k tokens/s** on 2× p6-b300
-  (~60 TFLOPS on 2× p5/H100). (Loss is constant at ln(vocab) in this smoke test — a
-  known dataloader/vocab quirk of the test case, not a cluster problem.)
+- Throughput per step, e.g. on 2× p6-b300 **~200 TFLOPS/GPU, ~77k tokens/s** (venv) /
+  **~193 TFLOPS/GPU** (container); ~60 TFLOPS on 2× p5/H100. (Loss is constant at ln(vocab)
+  in this smoke test — a known dataloader/vocab quirk of the test case, not a cluster problem.)
 
 > **Multi-NIC tip:** the canonical sbatch already sets `NCCL_SOCKET_IFNAME=^docker,lo,veth,eth`
 > (NCCL auto-selects). Do **not** pin a single interface on P5/P6 — all NICs share one
