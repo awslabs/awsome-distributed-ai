@@ -43,6 +43,12 @@ echo "Starting Enroot/Pyxis installation for AWS PCS..."
 
 ENROOT_RELEASE=3.5.0
 PYXIS_RELEASE=v0.20.0
+# Slurm versions Pyxis is built for. These match the SlurmVersion values the PCS
+# templates allow (cluster.yaml AllowedValues: 25.05, 25.11). PCS also offers Slurm
+# 24.11, but it is intentionally OUT OF SCOPE for these templates and this script --
+# the templates don't expose it, and it is not validated here, so a 24.11 cluster
+# would get no Pyxis plugstack. Keep this list in sync with cluster.yaml's
+# AllowedValues if that list changes.
 SLURM_VERSIONS="25.05 25.11"
 
 # At first boot this script runs alongside cloud-init and Ubuntu's
