@@ -186,6 +186,18 @@ Parameters:
     Description: Space-separated arguments passed to the post-install script.
     Default: ''
 
+  SlurmVersion:
+    Type: String
+    Description: >-
+      The cluster's Slurm version, exported to the post-install script as
+      PCS_SLURM_VERSION so it can put the matching Slurm CLI bin on slurmd's PATH
+      (the Pyxis PMI hook needs scontrol). Must match the version the cluster was
+      created with.
+    Default: '25.11'
+    AllowedValues:
+      - '25.05'
+      - '25.11'
+
 Conditions:
   CreateQueue: !Not [!Equals [!Ref QueueName, ""]]
   # Emit the monitoring-role tag for both login and compute nodes (any role
@@ -299,6 +311,9 @@ Resources:
                 curl -fsSL "${PostInstallScriptUrl}" -o /tmp/pcs-post-install.sh
                 chmod +x /tmp/pcs-post-install.sh
                 echo "Executing post-install script..." | tee -a /var/log/pcs-post-install.log
+                # Tell the script this cluster's Slurm version (it can't discover it at
+                # first boot, before slurmd/profile.d/controller exist). See script header.
+                export PCS_SLURM_VERSION="${SlurmVersion}"
                 bash /tmp/pcs-post-install.sh ${PostInstallScriptArgs} >> /var/log/pcs-post-install.log 2>&1
                 echo "Post-install script completed (exit $?)" | tee -a /var/log/pcs-post-install.log
               else

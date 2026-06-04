@@ -301,8 +301,16 @@ Resources:
                         echo "Pyxis installed for Slurm ${SLURM_VERSION}"
                       done
 
-                      # Add path for slurm commands (using the latest version as default)
-                      echo "PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:/usr/lib/ccache/bin:/usr/local/bin:/usr/bin:/bin" >> /etc/default/slurmd
+                      # Add Slurm CLIs to slurmd's PATH so the Pyxis PMI hook can run
+                      # scontrol. This AMI is cluster-agnostic, so we can't know the
+                      # cluster's Slurm version at build time -- list every installed
+                      # slurm-*/bin NEWEST-FIRST (sort -rV) so an older version (e.g.
+                      # 24.11, which can't parse a 25.11 slurm.conf key like MetricsType)
+                      # never shadows a newer one. When this AMI boots via
+                      # PostInstallScriptUrl, install-enroot-pyxis.sh rewrites this line
+                      # to the exact cluster version from PCS_SLURM_VERSION.
+                      SLURM_BIN_DIRS=$(ls -d /opt/aws/pcs/scheduler/slurm-*/bin 2>/dev/null | sort -rV | tr '\n' ':')
+                      echo "PATH=${SLURM_BIN_DIRS}/usr/lib/ccache/bin:/usr/local/bin:/usr/bin:/bin" >> /etc/default/slurmd
 
                       ########
                       # GPU

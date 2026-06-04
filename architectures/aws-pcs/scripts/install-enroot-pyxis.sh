@@ -51,6 +51,16 @@ PYXIS_RELEASE=v0.20.0
 # AllowedValues if that list changes.
 SLURM_VERSIONS="25.05 25.11"
 
+# This cluster's Slurm version, passed in by the CNG UserData as the PCS_SLURM_VERSION
+# environment variable (sourced from the template's SlurmVersion parameter). The node
+# itself cannot reliably discover the cluster version at post-install time -- this runs
+# during cloud-init, before slurmd starts and before the slurmd unit / profile.d /
+# controller config that name the version exist. Passing it in is authoritative and
+# timing-safe. (When PCS gains a native post-install hook, the cluster Slurm version is
+# the kind of context it should likewise expose to the script.) Empty is tolerated: we
+# fall back to the newest installed version, so a manual run still works.
+PCS_SLURM_VERSION="${PCS_SLURM_VERSION:-}"
+
 # At first boot this script runs alongside cloud-init and Ubuntu's
 # `unattended-upgrades`, which hold the dpkg/apt locks. Without waiting, the very
 # first `apt-get` fails with "Could not get lock /var/lib/dpkg/lock-frontend ...
@@ -173,42 +183,26 @@ for SLURM_VERSION in ${SLURM_VERSIONS}; do
 done
 
 # Put the cluster's Slurm bin on slurmd's PATH so the Pyxis/Enroot PMI hook
-# (50-slurm-pmi.sh) can run `scontrol show config` when a container job starts.
-# Note: PCS adds Slurm to *login shells* via /etc/profile.d/slurm.sh, but slurmd
-# runs with a minimal PATH that does NOT include scontrol, and the PMI hook runs in
-# that job environment -- so without this, every --container-image job fails with
-# "Command not found: scontrol" / "spank_pyxis.so: task_init() failed".
+# (50-slurm-pmi.sh) can run `scontrol show config` when a container job starts. PCS
+# adds Slurm to *login shells* via /etc/profile.d/slurm.sh, but slurmd runs with a
+# minimal PATH (no scontrol) and the hook runs in that job environment -- so without
+# this, every --container-image job fails with "Command not found: scontrol" /
+# "spank_pyxis.so: task_init() failed".
 #
-# Use the SINGLE bin dir matching THIS cluster's Slurm version, not all of them: the
-# PCS DLAMI ships several (slurm-24.11/25.05/25.11), and an OLDER scontrol fatally
-# fails to parse a NEWER slurm.conf key (e.g. 24.11 chokes on MetricsType, which 25.11
-# sets for the monitoring OpenMetrics endpoint) -- so globbing every slurm-*/bin onto
-# PATH (oldest first) breaks the hook. Resolve the version from the first source that
-# exists at post-install time, newest-installed as a last resort. Each step is guarded
-# so a missing source never trips `set -e`.
-SLURM_VER_DIR=""
-# 1) PCS points /etc/profile.d/slurm.sh at the cluster's chosen version.
-if [ -L /etc/profile.d/slurm.sh ]; then
-  SLURM_VER_DIR=$(readlink /etc/profile.d/slurm.sh 2>/dev/null \
-    | sed -n 's#\(/opt/aws/pcs/scheduler/slurm-[^/]*\)/.*#\1#p' || true)
-fi
-# 2) Otherwise the slurmd systemd unit's ExecStart names the version's slurmd.
-if [ -z "${SLURM_VER_DIR}" ]; then
-  SLURM_VER_DIR=$(systemctl cat slurmd 2>/dev/null \
-    | sed -n 's#.*ExecStart=\(/opt/aws/pcs/scheduler/slurm-[^/]*\)/sbin/slurmd.*#\1#p' \
-    | head -1 || true)
-fi
-SLURM_BIN=""
-if [ -n "${SLURM_VER_DIR}" ] && [ -d "${SLURM_VER_DIR}/bin" ]; then
-  SLURM_BIN="${SLURM_VER_DIR}/bin"
-fi
-# 3) Last resort (e.g. AMI build with no cluster context yet): newest installed version.
-if [ -z "${SLURM_BIN}" ]; then
+# Use exactly the cluster's version, never a glob of all installed versions: the PCS
+# DLAMI ships several (slurm-24.11/25.05/25.11) and an OLDER scontrol fatally fails to
+# parse a NEWER slurm.conf key (e.g. 24.11 chokes on MetricsType, set by 25.11 for the
+# monitoring OpenMetrics endpoint). The version comes from PCS_SLURM_VERSION (passed by
+# the UserData from the template's SlurmVersion); fall back to the newest installed
+# version only if it wasn't provided (e.g. a manual run).
+if [ -n "${PCS_SLURM_VERSION}" ] && [ -d "/opt/aws/pcs/scheduler/slurm-${PCS_SLURM_VERSION}/bin" ]; then
+  SLURM_BIN="/opt/aws/pcs/scheduler/slurm-${PCS_SLURM_VERSION}/bin"
+else
+  echo "WARN: PCS_SLURM_VERSION='${PCS_SLURM_VERSION}' not usable; falling back to newest installed Slurm bin"
   SLURM_BIN=$(ls -d /opt/aws/pcs/scheduler/slurm-*/bin 2>/dev/null | sort -rV | head -1)
 fi
 SLURMD_PATH_LINE="PATH=${SLURM_BIN}:/usr/lib/ccache/bin:/usr/local/bin:/usr/bin:/bin"
-# Drop any prior PATH= line this script added (idempotent across re-runs / version
-# changes), then append the current one.
+# Drop any prior PATH= line this script added (idempotent across re-runs), then append.
 sed -i '\#^PATH=/opt/aws/pcs/scheduler/slurm-#d' /etc/default/slurmd 2>/dev/null || true
 echo "${SLURMD_PATH_LINE}" >> /etc/default/slurmd
 echo "slurmd PATH set to use ${SLURM_BIN}"
