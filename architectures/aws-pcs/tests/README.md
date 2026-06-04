@@ -2,14 +2,17 @@
 
 This directory is a single guide for validating an AWS PCS cluster deployed from the
 templates in [`../assets`](../assets). Each test below lists **what to run** and the
-**expected result**. The accompanying scripts:
+**expected result**.
 
-| Script | Stage |
-|---|---|
-| [`01-nvidia-smi.sbatch`](./01-nvidia-smi.sbatch) | GPU sanity in a Pyxis container |
-| [`02-import-nccl-image.sh`](./02-import-nccl-image.sh) | Import the NCCL-tests image (run on the login node) |
-| [`02-nccl-tests.sbatch`](./02-nccl-tests.sbatch) | 2-node NCCL `all_reduce_perf` over EFA |
-| [`03-fsdp-llama2.sbatch`](./03-fsdp-llama2.sbatch) | 2-node PyTorch FSDP Llama-2 7B smoke test |
+Rather than ship its own copies, this guide reuses the repository's canonical benchmark
+and training assets and documents only the **PCS-specific deltas** (queue/partition names,
+running the Enroot import on the login node, putting caches on `/fsx`):
+
+| Stage | Canonical asset to use | PCS-specific delta documented here |
+|---|---|---|
+| NCCL `all_reduce` over EFA | [`micro-benchmarks/nccl-tests/slurm/nccl-tests-container.sbatch`](../../../micro-benchmarks/nccl-tests) | [Test 6](#test-6-nccl-multi-node-efa) — import on the login node, partition name |
+| FSDP Llama-2 7B training | [`3.test_cases/pytorch/FSDP`](../../../3.test_cases/pytorch/FSDP) | [Test 7](#test-7-fsdp-sample-training) — venv/cache on `/fsx`, 2 nodes |
+| GPU sanity (nvidia-smi) | (one `srun` line, no script) | [Test 5](#test-5-p5p6-gpu-multi-nic) |
 
 All Slurm commands run as the **`ubuntu`** user from the login node (SSM session or
 SSH). Slurm binaries are only on `PATH` in a login shell — over SSM/SSH wrap commands
@@ -165,10 +168,12 @@ single-NIC GPU + Pyxis on a G-series queue.
 Multi-NIC GPU node groups, selected automatically by `PseriesInstanceType`
 (`p5.48xlarge`/`p5e`/`p5en` → `add-cng-p5.yaml`; `p6-b200.48xlarge` → `add-cng-p6-b200`;
 `p6-b300.48xlarge` → `add-cng-p6-b300`). The EFA interface count is derived from the
-type — no parameter to set. Run `01-nvidia-smi.sbatch` (adjust `--partition`):
+type — no parameter to set. A one-line interactive `srun` is enough for a GPU sanity
+check (no batch script needed); set `--partition` to your GPU queue:
 
 ```bash
-sbatch 01-nvidia-smi.sbatch        # 1 node, 8 GPUs
+srun --partition=gpu-p6b200 --nodes=1 --gres=gpu:8 \
+  --container-image=docker://nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
 ```
 
 **Expected:** `nvidia-smi` lists 8 GPUs of the expected model (H100 / H200 / B200 /
@@ -179,18 +184,32 @@ node. EFA itself is exercised by Test 6.
 
 ## Test 6: NCCL multi-node (EFA)
 
-2-node × 8-GPU `all_reduce_perf` over EFA. **Import the image on the login node first**
-(it has a 300 GiB root disk and Enroot), then submit the job:
+2-node × 8-GPU `all_reduce_perf` over EFA, using the repo's canonical launcher
+[`micro-benchmarks/nccl-tests/slurm/nccl-tests-container.sbatch`](../../../micro-benchmarks/nccl-tests/slurm/nccl-tests-container.sbatch)
+(it reads `$IMAGE`, default `/fsx/nccl-tests.sqsh`). Only two PCS-specific deltas:
 
-```bash
-# On the login node (direct, not a batch job):
-bash 02-import-nccl-image.sh                   # writes /fsx/nccl-tests.sqsh
+1. **Import the image on the login node** — `enroot import` builds its overlayfs on the
+   node-local root disk (the login node has a 300 GiB root via `RootVolumeSize`); FSx
+   Lustre can't host that overlay, so only the resulting `.sqsh` goes to shared `/fsx`.
+   Pin a specific image tag for reproducible numbers (don't use `latest`):
 
-# Submit the 2-node all_reduce (set --partition to your GPU queue):
-sbatch 02-nccl-tests.sbatch
-```
+   ```bash
+   # On the login node (direct, not a batch job). enroot URI form is
+   # docker://[REGISTRY#]REPO:TAG — the registry needs a '#', or it 401s on Docker Hub.
+   TAG=cuda12.8.1-efa1.43.2-ofiv1.16.3-ncclv2.27.7-1-testsv2.16.9
+   enroot import -o /fsx/nccl-tests.sqsh "docker://public.ecr.aws#hpc-cloud/nccl-tests:${TAG}"
+   ```
 
-**Expected** (in `02-nccl-tests_<jobid>.out`):
+2. **Submit with your GPU queue** — set the partition to the queue you deployed
+   (`gpu-p5` / `gpu-p6b200` / `gpu-p6b300`); the canonical script defaults to 2 nodes,
+   8 tasks/node:
+
+   ```bash
+   cd /fsx && sbatch --partition=gpu-p6b200 \
+     /fsx/awsome-distributed-ai/micro-benchmarks/nccl-tests/slurm/nccl-tests-container.sbatch
+   ```
+
+**Expected** (in `nccl-all_reduce_perf_<jobid>.out`):
 - EFA is the provider: `NET/OFI Selected provider is efa, fabric is efa-direct (found N nics)`
   (N = EFA interface count: 32 for p5/p5e, 16 for p5en, 8 for p6-b200, 16 for p6-b300).
 - Correctness: `# Out of bounds values : 0 OK`, every size `#wrong: 0`.
@@ -201,37 +220,41 @@ sbatch 02-nccl-tests.sbatch
 
 ## Test 7: FSDP sample training
 
-2-node PyTorch FSDP Llama-2 7B smoke test, using the repo's
-[`3.test_cases/pytorch/FSDP`](../../../3.test_cases/pytorch/FSDP) case.
+A short FSDP Llama-2 7B run, using the repo's canonical training case
+[`3.test_cases/pytorch/FSDP`](../../../3.test_cases/pytorch/FSDP) and its
+[`slurm/llama2_7b-training.sbatch`](../../../3.test_cases/pytorch/FSDP/slurm/llama2_7b-training.sbatch).
+Follow that case's README; the only PCS-specific deltas are where things live on the
+shared filesystems and the node count:
 
-**One-time setup on the login node** (venv on shared `/fsx`, repo cloned, HF token):
+1. **Build the venv on shared `/fsx`** so every compute node sees it (the canonical
+   `slurm/create_venv.sh` creates `./env` in place — run it from a `/fsx` checkout):
 
-```bash
-cd /fsx
-git clone --depth 1 https://github.com/awslabs/awsome-distributed-ai.git
-python3 -m venv /fsx/fsdp-env
-source /fsx/fsdp-env/bin/activate
-pip install -U pip wheel setuptools
-pip install -r /fsx/awsome-distributed-ai/3.test_cases/pytorch/FSDP/src/requirements.txt
-export HF_TOKEN=hf_xxx        # gated tokenizer; keep HF_HOME on /fsx (set in the sbatch)
-```
+   ```bash
+   cd /fsx && git clone --depth 1 https://github.com/awslabs/awsome-distributed-ai.git
+   cd /fsx/awsome-distributed-ai/3.test_cases/pytorch/FSDP/slurm && bash create_venv.sh
+   export HF_TOKEN=hf_xxx          # gated Llama-2 tokenizer
+   ```
 
-Then submit (adjust `--partition`; the script pins `HF_HOME=/fsx/.hf-cache`):
+2. **Keep the HuggingFace cache on `/fsx` (Lustre), not `/home` (NFS).** Concurrent rank
+   file-locking on NFS throws `OSError: [Errno 116] Stale file handle`; export
+   `HF_HOME=/fsx/.hf-cache` before submitting.
 
-```bash
-sbatch 03-fsdp-llama2.sbatch
-```
+3. **Submit 2 nodes** (the canonical sbatch defaults to 4) on your GPU queue:
 
-**Expected** (in `03-fsdp-llama2_<jobid>.out`):
-- NCCL initializes over EFA (`found N nics`) and training logs 100 steps + a validation
-  step, then saves checkpoints (`llama_v2-50steps`, `llama_v2-100steps`).
+   ```bash
+   sbatch --nodes=2 --partition=gpu-p6b200 llama2_7b-training.sbatch
+   ```
+
+**Expected** (in `logs/llama2_7b-FSDP_<jobid>.out`):
+- NCCL initializes over EFA (`found N nics`) and training logs ~100 steps + a validation
+  step, saving checkpoints under `./checkpoints`.
 - Throughput is printed per step, e.g. **~195 TFLOPS/GPU, ~75k tokens/s** on 2× p6-b300
   (~60 TFLOPS on 2× p5/H100). (Loss is constant at ln(vocab) in this smoke test — a
   known dataloader/vocab quirk of the test case, not a cluster problem.)
 
-> **Multi-NIC tip:** keep `NCCL_SOCKET_IFNAME=^docker,lo` (NCCL auto-selects). Do **not**
-> pin a single interface on P5/P6 — all NICs share one subnet and pinning one breaks the
-> cross-node NCCL bootstrap ring.
+> **Multi-NIC tip:** the canonical sbatch already sets `NCCL_SOCKET_IFNAME=^docker,lo,veth,eth`
+> (NCCL auto-selects). Do **not** pin a single interface on P5/P6 — all NICs share one
+> subnet and pinning one breaks the cross-node NCCL bootstrap ring.
 
 ---
 
