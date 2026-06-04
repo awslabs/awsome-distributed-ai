@@ -265,7 +265,7 @@ Parameters:
   # AMI Building Configuration
   BuildAMI:
     Type: String
-    Description: Whether to build custom DLAMI for PCS. Default false; container support is installed at first boot via PostInstallScriptUrl instead.
+    Description: Whether to build a custom DLAMI for PCS with Enroot/Pyxis pre-baked. Default false; container support is installed at first boot via PostInstallScriptUrl instead. When true, PostInstallScriptUrl is forced empty for every node group so the installer does not run a second time at boot.
     Default: 'false'
     AllowedValues:
       - 'true'
@@ -299,7 +299,9 @@ Parameters:
       equivalent of ParallelCluster OnNodeConfigured). Defaults to the
       Enroot/Pyxis installer, which is the most common configuration. Set to an
       empty string to skip, or override with another HTTP(S) URL to run a custom
-      script. S3 public hosting is not allowed.
+      script. S3 public hosting is not allowed. NOTE: ignored when BuildAMI=true
+      (Enroot/Pyxis is already baked into the custom AMI, so this template forces
+      it empty to avoid a redundant first-boot reinstall).
     Default: 'https://raw.githubusercontent.com/awslabs/awsome-distributed-ai/main/architectures/aws-pcs/scripts/install-enroot-pyxis.sh'
 
   PostInstallScriptArgs:
@@ -664,7 +666,7 @@ Resources:
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
         MonitoringRole: login
-        PostInstallScriptUrl: !Ref PostInstallScriptUrl
+        PostInstallScriptUrl: !If [BuildAMIEnabled, '', !Ref PostInstallScriptUrl]
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
       Tags:
         - Key: Name
@@ -705,7 +707,7 @@ Resources:
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
         MonitoringRole: compute
-        PostInstallScriptUrl: !Ref PostInstallScriptUrl
+        PostInstallScriptUrl: !If [BuildAMIEnabled, '', !Ref PostInstallScriptUrl]
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
       Tags:
         - Key: Name
@@ -747,7 +749,7 @@ Resources:
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
         MonitoringRole: compute
-        PostInstallScriptUrl: !Ref PostInstallScriptUrl
+        PostInstallScriptUrl: !If [BuildAMIEnabled, '', !Ref PostInstallScriptUrl]
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
       Tags:
         - Key: Name
@@ -789,7 +791,7 @@ Resources:
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
         MonitoringRole: compute
-        PostInstallScriptUrl: !Ref PostInstallScriptUrl
+        PostInstallScriptUrl: !If [BuildAMIEnabled, '', !Ref PostInstallScriptUrl]
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
       Tags:
         - Key: Name
@@ -831,7 +833,7 @@ Resources:
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
         MonitoringRole: compute
-        PostInstallScriptUrl: !Ref PostInstallScriptUrl
+        PostInstallScriptUrl: !If [BuildAMIEnabled, '', !Ref PostInstallScriptUrl]
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
       Tags:
         - Key: Name
