@@ -126,9 +126,11 @@ module "cilium" {
   count  = local.create_cilium ? 1 : 0
   source = "./modules/cilium"
 
-  cilium_mode        = var.cilium_mode
-  cilium_version     = var.cilium_version
-  cilium_helm_values = var.cilium_helm_values
+  cilium_mode            = var.cilium_mode
+  cilium_version         = var.cilium_version
+  cilium_helm_repository = var.cilium_helm_repository
+  cilium_helm_chart      = var.cilium_helm_chart
+  cilium_helm_values     = var.cilium_helm_values
 
   depends_on = [module.eks_cluster]
 }

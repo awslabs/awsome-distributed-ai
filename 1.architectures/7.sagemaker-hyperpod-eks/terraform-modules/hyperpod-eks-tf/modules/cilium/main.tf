@@ -28,8 +28,8 @@ locals {
 
 resource "helm_release" "cilium" {
   name       = "cilium"
-  repository = "https://helm.cilium.io/"
-  chart      = "cilium"
+  repository = var.cilium_helm_repository != "" ? var.cilium_helm_repository : null
+  chart      = var.cilium_helm_chart
   version    = var.cilium_version
   namespace  = "kube-system"
 

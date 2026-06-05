@@ -656,9 +656,29 @@ cilium_helm_values = {
 }
 ```
 
+### Closed-Network Chart Source
+
+By default the Cilium Helm chart is pulled from the public repository `https://helm.cilium.io/`. In closed-network (air-gapped) deployments without internet access, pre-stage the chart to a private mirror and redirect the source with `cilium_helm_repository` / `cilium_helm_chart`. The Helm provider (>= 3.0) supports both classic HTTP repositories and OCI registries such as Amazon ECR:
+
+```hcl
+# Classic HTTP mirror
+cilium_helm_repository = "https://my-mirror.internal/charts/"
+cilium_helm_chart      = "cilium"
+
+# OCI registry (repository + chart name)
+cilium_helm_repository = "oci://<account>.dkr.ecr.<region>.amazonaws.com"
+cilium_helm_chart      = "cilium"
+
+# OCI registry (fully qualified reference in the chart, empty repository)
+cilium_helm_repository = ""
+cilium_helm_chart      = "oci://<account>.dkr.ecr.<region>.amazonaws.com/cilium"
+```
+
+> **Note:** These variables redirect the **chart** source only. Cilium's **container images** are configured separately through `cilium_helm_values` (e.g. `image.repository`, `operator.image.repository`, `preflight.image.repository`). A fully closed-network deployment must pre-stage both the chart and the images to your private registry.
+
 ### Limitations
 
-- **Closed network:** Cilium images must be pre-staged to ECR in closed-network deployments.
+- **Closed network:** The Cilium Helm chart and container images must be pre-staged to a private registry (e.g. ECR) in closed-network deployments. Redirect the chart with `cilium_helm_repository` / `cilium_helm_chart` (see [Closed-Network Chart Source](#closed-network-chart-source)) and the images via `cilium_helm_values`.
 - **ENI mode not supported:** Cilium's native ENI mode is incompatible with HyperPod because SageMaker-managed instances are not visible in the EC2 API. Use `overlay` or `chaining` instead.
 - **Overlay mode:** Pod-to-VPC traffic is SNATed. Webhooks must be host-networked or exposed via Service/Ingress.
 - **Chaining mode:** Some Cilium features limited (L7 policy, IPsec encryption).
