@@ -1,8 +1,3 @@
-variable "eks_cluster_name" {
-  description = "Name of the EKS cluster"
-  type        = string
-}
-
 variable "cilium_mode" {
   description = "Cilium operating mode: overlay, chaining, or custom."
   type        = string

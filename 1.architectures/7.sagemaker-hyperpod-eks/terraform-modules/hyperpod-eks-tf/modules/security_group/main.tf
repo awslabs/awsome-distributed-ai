@@ -97,6 +97,28 @@ locals {
       r.rule.cidr_ipv4 == "0.0.0.0/0"
     ]) > 0
   )
+
+  has_vxlan_ingress = var.create_new_sg ? false : (
+    length([
+      for r in local.rules : r
+      if !r.rule.is_egress &&
+      r.rule.ip_protocol == "udp" &&
+      r.rule.from_port == 8472 &&
+      r.rule.to_port == 8472 &&
+      r.rule.referenced_security_group_id == var.existing_security_group_id
+    ]) > 0
+  )
+
+  has_vxlan_egress = var.create_new_sg ? false : (
+    length([
+      for r in local.rules : r
+      if r.rule.is_egress &&
+      r.rule.ip_protocol == "udp" &&
+      r.rule.from_port == 8472 &&
+      r.rule.to_port == 8472 &&
+      r.rule.referenced_security_group_id == var.existing_security_group_id
+    ]) > 0
+  )
 }
 
 resource "aws_security_group" "no_ingress" {
@@ -183,7 +205,7 @@ resource "aws_vpc_security_group_ingress_rule" "vpc_endpoint_https" {
 
 # Cilium VXLAN overlay rules
 resource "aws_vpc_security_group_ingress_rule" "cilium_vxlan_ingress" {
-  count = var.enable_vxlan_rule ? 1 : 0
+  count = var.enable_vxlan_rule && (var.create_new_sg || !local.has_vxlan_ingress) ? 1 : 0
 
   description                  = "Cilium VXLAN overlay traffic"
   from_port                    = 8472
@@ -194,7 +216,7 @@ resource "aws_vpc_security_group_ingress_rule" "cilium_vxlan_ingress" {
 }
 
 resource "aws_vpc_security_group_egress_rule" "cilium_vxlan_egress" {
-  count = var.enable_vxlan_rule ? 1 : 0
+  count = var.enable_vxlan_rule && (var.create_new_sg || !local.has_vxlan_egress) ? 1 : 0
 
   description                  = "Cilium VXLAN overlay traffic"
   from_port                    = 8472

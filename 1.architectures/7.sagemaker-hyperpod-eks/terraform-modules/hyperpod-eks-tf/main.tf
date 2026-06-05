@@ -126,7 +126,6 @@ module "cilium" {
   count  = local.create_cilium ? 1 : 0
   source = "./modules/cilium"
 
-  eks_cluster_name   = module.eks_cluster[0].eks_cluster_name
   cilium_mode        = var.cilium_mode
   cilium_version     = var.cilium_version
   cilium_helm_values = var.cilium_helm_values

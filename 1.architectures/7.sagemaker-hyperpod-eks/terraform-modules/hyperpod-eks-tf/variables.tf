@@ -896,7 +896,7 @@ variable "cilium_version" {
 }
 
 variable "cilium_helm_values" {
-  description = "Custom Helm values merged on top of mode-specific defaults. In custom mode, this IS the entire Helm config (no base defaults applied). For overlay/eni/chaining modes, these values override the base defaults."
+  description = "Custom Helm values merged on top of mode-specific defaults. In custom mode, this IS the entire Helm config (no base defaults applied). For overlay/chaining modes, these values override the base defaults."
   type        = any
   default     = {}
 }
