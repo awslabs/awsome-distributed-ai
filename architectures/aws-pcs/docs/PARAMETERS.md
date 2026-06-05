@@ -28,17 +28,13 @@ runtime options), see the [README](../README.md#4-configuration).
 | `ManagedAccounting` | `disabled` | Enable Slurm managed accounting (requires Slurm 24.11+) |
 | `AccountingPolicyEnforcement` | `none` | Slurm accounting policy enforcement (`none` or `associations,limits,safe`) |
 
-## 3. Custom AMI / Post-install Script (container support)
+## 3. Container Runtime (Post-install Script)
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `BuildAMI` | `false` | Pre-bake Enroot/Pyxis into a custom DLAMI (adds ~30 min Image Builder step) instead of installing at first boot. The AMI is **single-Slurm-version** by design: pass the same `SlurmVersion` you'll use on the cluster, otherwise slurmd refuses to start. See [OPERATIONS.md §2](./OPERATIONS.md#2-container-runtime-postinstall-vs-ami-build) |
-| `PostInstallScriptUrl` | Enroot/Pyxis installer | Script run on every node at first boot (PCS equivalent of ParallelCluster `OnNodeConfigured`). Empty = skip; or override with any HTTP(S) script |
+| `PostInstallScriptUrl` | Enroot/Pyxis installer | HTTP(S) script run on every node at first boot (PCS equivalent of ParallelCluster `OnNodeConfigured`). Empty = skip; or override with any other HTTP(S) script. Idempotent under `BuildAMI=true` (no-op when already pre-baked) |
 | `PostInstallScriptArgs` | *(empty)* | Arguments passed to the post-install script |
-| `BaseAmiId` | *(auto)* | Base AMI for the custom build; empty = auto-resolve from SSM (only used when `BuildAMI=true`) |
-| `SemanticVersion` | `1.0.0` | Image Builder recipe version (only used when `BuildAMI=true`) |
-| `BuildSchedule` | `Manual` | AMI build cadence: `Manual` / `Weekly` / `Monthly` (only used when `BuildAMI=true`) |
-| `RootVolumeSize` | `300` | Node root volume (GiB); 300 leaves room for large container images |
+| `RootVolumeSize` | `300` | Node root volume (GiB); 300 leaves room for large container images (Megatron `.sqsh` ~20 GB) |
 
 ## 4. On-Demand Compute Node Group (CPU)
 
@@ -80,7 +76,20 @@ See [Storage: FSx deployment types](../README.md#storage-fsx-deployment-types-re
 | `HomeThroughput` | `320` | FSx OpenZFS (`/home`) throughput (MB/s) |
 | `OpenZFSDeploymentType` | `SINGLE_AZ_HA_2` | OpenZFS deployment type (`SINGLE_AZ_HA_2` / `SINGLE_AZ_HA_1` / `SINGLE_AZ_2` / `SINGLE_AZ_1`) — Region-dependent |
 
-## 7. Developer / Advanced
+## 7. Custom AMI Build (Optional)
+
+Skip unless you need a pre-baked DLAMI (faster scale-out, deterministic state).
+The default first-boot install (`PostInstallScriptUrl` in §3) is what almost
+every cluster wants.
+
+| Parameter | Default | Purpose |
+|---|---|---|
+| `BuildAMI` | `false` | Pre-bake Enroot/Pyxis into a custom DLAMI via Image Builder (~30 min). When `true`, set `PostInstallScriptUrl=""` for the cleanest boot. The AMI is **single-Slurm-version** by design — match `SlurmVersion`. See [OPERATIONS.md §2](./OPERATIONS.md#2-container-runtime-postinstall-vs-ami-build) |
+| `BaseAmiId` | *(auto)* | Base AMI for the custom build; empty = auto-resolve from SSM (only used when `BuildAMI=true`) |
+| `SemanticVersion` | `1.0.0` | Image Builder recipe version (only used when `BuildAMI=true`) |
+| `BuildSchedule` | `Manual` | AMI build cadence: `Manual` / `Weekly` / `Monthly` (only used when `BuildAMI=true`) |
+
+## 8. Developer / Advanced
 
 | Parameter | Default | Purpose |
 |---|---|---|

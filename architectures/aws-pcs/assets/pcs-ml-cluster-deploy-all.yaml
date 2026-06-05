@@ -19,19 +19,15 @@ Metadata:
       - Label:
           default: "2. PCS Cluster Configuration"
         Parameters:
-          - LoginNodeInstanceType
           - SlurmVersion
+          - LoginNodeInstanceType
           - DeployMonitoring
           - GrafanaPublicAccessCidr
           - ManagedAccounting
           - AccountingPolicyEnforcement
       - Label:
-          default: "3. Custom AMI / Post-install Script (container support)"
+          default: "3. Container Runtime (Post-install Script)"
         Parameters:
-          - BuildAMI
-          - BaseAmiId
-          - SemanticVersion
-          - BuildSchedule
           - PostInstallScriptUrl
           - PostInstallScriptArgs
           - RootVolumeSize
@@ -66,12 +62,20 @@ Metadata:
           - HomeThroughput
           - OpenZFSDeploymentType
       - Label:
-          default: "7. Developer / Advanced (Nested Templates & Monitoring Source)"
+          default: "7. Custom AMI Build (Optional - skip unless you need a pre-baked DLAMI)"
+        Parameters:
+          - BuildAMI
+          - BaseAmiId
+          - SemanticVersion
+          - BuildSchedule
+      - Label:
+          default: "8. Developer / Advanced (Nested Templates & Monitoring Source)"
         Parameters:
           - S3BucketName
           - S3KeyPrefix
           - MonitoringVersion
           - MonitoringRepo
+          - DcgmExporterImage
     ParameterLabels:
       # Friendly display names shown in the CloudFormation console 1-click UI,
       # so users see plain-language labels instead of raw CamelCase parameter keys.
@@ -99,20 +103,20 @@ Metadata:
         default: "Slurm managed accounting"
       AccountingPolicyEnforcement:
         default: "Slurm accounting policy enforcement"
-      BuildAMI:
-        default: "Build custom DLAMI (Enroot/Pyxis pre-baked)"
-      BaseAmiId:
-        default: "Base AMI ID (optional)"
-      SemanticVersion:
-        default: "Image Builder recipe version"
-      BuildSchedule:
-        default: "AMI build schedule"
       PostInstallScriptUrl:
-        default: "Post-install script URL (container support)"
+        default: "Post-install script URL (default installs Enroot/Pyxis)"
       PostInstallScriptArgs:
         default: "Post-install script arguments"
       RootVolumeSize:
         default: "Root volume size (GiB)"
+      BuildAMI:
+        default: "Build custom DLAMI (Enroot/Pyxis pre-baked) -- optional"
+      BaseAmiId:
+        default: "Base AMI ID (optional; auto-resolved if empty)"
+      SemanticVersion:
+        default: "Image Builder recipe version"
+      BuildSchedule:
+        default: "AMI build schedule"
       DeployOnDemandCNG:
         default: "Deploy CPU (on-demand) queue"
       OnDemandInstanceType:
@@ -134,7 +138,7 @@ Metadata:
       PseriesMaxCount:
         default: "GPU queue max nodes"
       CapacityReservationId:
-        default: "Capacity Block reservation ID (leave empty for On-Demand/ODCR)"
+        default: "Capacity Block for ML reservation ID (leave empty for On-Demand/ODCR)"
       PseriesCngName:
         default: "GPU node group name"
       PseriesQueueName:
@@ -179,7 +183,10 @@ Parameters:
     Type: String
 
   PrimarySubnetAZ:
-    Description: Availability zone id in which the public subnet and primary private subnet will be created.
+    Description: >-
+      Availability Zone to deploy the cluster into. The only required choice --
+      the public subnet (login node) and primary private subnet (compute nodes,
+      FSx) are both placed here.
     Type: AWS::EC2::AvailabilityZone::Name
 
   CreateS3Endpoint:
@@ -209,10 +216,9 @@ Parameters:
 
   PerUnitStorageThroughput:
     Description: >-
-      Provisioned Read/Write throughput per unit of storage (MB/s/TiB). Valid
-      values depend on LustreDeploymentType: PERSISTENT_2 = 125/250/500/1000,
-      PERSISTENT_1 = 50/100/200. If you change LustreDeploymentType you must pick
-      a value valid for it (enforced by a template Rule below).
+      Lustre throughput (MB/s/TiB). Valid values depend on LustreDeploymentType
+      (enforced by a template Rule): PERSISTENT_2 = 125/250/500/1000;
+      PERSISTENT_1 = 50/100/200.
     Type: String
     Default: "250"
     AllowedValues: ["50", "100", "200", "125", "250", "500", "1000"]
@@ -240,11 +246,10 @@ Parameters:
 
   HomeThroughput:
     Description: >-
-      FSx for OpenZFS /home throughput (MB/s). Valid values depend on
-      OpenZFSDeploymentType: SINGLE_AZ_HA_2 / SINGLE_AZ_2 =
-      160/320/640/1280/2560/3840/5120/7680/10240; SINGLE_AZ_HA_1 / SINGLE_AZ_1 =
-      64/128/256/512/1024/2048/3072/4096. If you change OpenZFSDeploymentType you
-      must pick a value valid for it (enforced by a template Rule below).
+      OpenZFS /home throughput (MB/s). Valid values depend on
+      OpenZFSDeploymentType (enforced by a template Rule):
+      SINGLE_AZ_HA_2 / SINGLE_AZ_2 = 160/320/640/1280/2560/3840/5120/7680/10240;
+      SINGLE_AZ_HA_1 / SINGLE_AZ_1 = 64/128/256/512/1024/2048/3072/4096.
     Type: String
     Default: "320"
     AllowedValues:
@@ -267,7 +272,11 @@ Parameters:
   # AMI Building Configuration
   BuildAMI:
     Type: String
-    Description: Whether to build a custom DLAMI for PCS with Enroot/Pyxis pre-baked. Default false; container support is installed at first boot via PostInstallScriptUrl instead. If you set this true, also clear PostInstallScriptUrl (or point it at a different script) so the default Enroot/Pyxis installer does not reinstall at boot on top of the pre-baked AMI.
+    Description: >-
+      Pre-bake Enroot/Pyxis into a custom DLAMI via Image Builder (~30 min).
+      Default false (install at first boot via PostInstallScriptUrl). When true,
+      clear PostInstallScriptUrl for the cleanest boot. AMI is single-Slurm-version
+      by design -- match SlurmVersion. Details: docs/OPERATIONS.md §2.
     Default: 'false'
     AllowedValues:
       - 'true'
@@ -297,15 +306,11 @@ Parameters:
   PostInstallScriptUrl:
     Type: String
     Description: >-
-      URL of a post-install script run on every node at first boot (PCS
-      equivalent of ParallelCluster OnNodeConfigured). Defaults to the
-      Enroot/Pyxis installer, which is the most common configuration. Set to an
-      empty string to skip, or override with another HTTP(S) URL to run a custom
-      script (this is a generic first-boot hook, not Enroot/Pyxis-specific).
-      S3 public hosting is not allowed. NOTE: if BuildAMI=true, Enroot/Pyxis is
-      already baked into the custom AMI -- leave this at the default Enroot/Pyxis
-      installer only if you want it reinstalled at boot; set it empty to skip, or
-      point it at a different script for other first-boot setup.
+      HTTP(S) URL of a script run on every node at first boot (PCS equivalent of
+      ParallelCluster OnNodeConfigured). Default installs Enroot/Pyxis. Set empty
+      to skip, or point at any other HTTP(S) script for custom first-boot setup.
+      With BuildAMI=true the default installer is a no-op (idempotent) -- set
+      empty for the cleanest boot. S3 hosting is not allowed.
     Default: 'https://raw.githubusercontent.com/awslabs/awsome-distributed-ai/main/architectures/aws-pcs/scripts/install-enroot-pyxis.sh'
 
   PostInstallScriptArgs:
@@ -355,19 +360,11 @@ Parameters:
   GrafanaPublicAccessCidr:
     Type: String
     Description: >-
-      (Optional) CIDR allowed to reach the login node's monitoring endpoint over
-      HTTPS (port 443) directly from the internet. When SET, a login-only security
-      group opens 443 to this CIDR so you can browse https://<login-public-ip>/grafana/
-      without SSM port forwarding. Leave EMPTY (default) to keep monitoring private
-      and reachable only via SSM port forwarding.
-      IMPORTANT: 443 exposes more than Grafana. The login node's nginx also reverse-
-      proxies /prometheus/, /pushgateway/ and /slurmexporter/, which are UNauthenticated
-      — anyone in the allowed CIDR can read all cluster metrics (and push to
-      Pushgateway) without credentials, even though Grafana itself is password-gated.
-      Use the tightest CIDR you can (e.g. your office IP /32). 0.0.0.0/0 is accepted
-      (useful for short-lived PoC/workshop access) but exposes those endpoints to the
-      whole internet — narrow it or clear it as soon as you are done. Only the login
-      node is affected; compute nodes and FSx are not.
+      (Optional) CIDR allowed to reach the login node on HTTPS/443. Empty (default)
+      = SSM port-forward only (recommended). When set, also exposes the
+      UNauthenticated /prometheus/, /pushgateway/, /slurmexporter/ proxy paths
+      (not just password-gated Grafana). Use the tightest CIDR you can; clear it
+      when done. Details: docs/OPERATIONS.md §3.2.
     Default: ""
     AllowedPattern: '^$|^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
     ConstraintDescription: Must be empty or a valid IPv4 CIDR (e.g. 203.0.113.4/32)
@@ -392,11 +389,10 @@ Parameters:
   DcgmExporterImage:
     Type: String
     Description: >-
-      dcgm-exporter image used by the monitoring stack on GPU nodes. Defaults to a
-      DCGM 4.5.2 build pinned by DIGEST -- covers Hopper / B200 / B300 (the digest
-      pull bypasses the Docker 29.x OCI-index failure on newer NVCR tags). To pin to
-      the monitoring stack's older default (DCGM 4.2.0, Hopper + B200 only) or any
-      other build, override here (preferably also a digest). No effect on CPU nodes.
+      dcgm-exporter image for GPU nodes. Default = DCGM 4.5.2 by digest, covering
+      H100/B200/B300 (digest pull bypasses the Docker 29.x OCI-index failure on
+      newer NVCR tags). Override to pin a different build (also use a digest).
+      Details: docs/OPERATIONS.md §3.1.
     Default: 'nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547d4546eaf4dd5d6b4c0b4db4101e63ef7dc3cdff7f42b767d2c60b706'
 
   # On-Demand Compute Node Group
@@ -485,11 +481,12 @@ Parameters:
     Type: String
     Default: ""
     Description: >-
-      (Optional) Capacity Block for ML reservation ID for the GPU node group. When
-      SET, GPU nodes launch with MarketType=capacity-block against it. Leave EMPTY
-      for On-Demand. This is for Capacity Blocks ONLY — do not put an On-Demand
-      Capacity Reservation (ODCR) ID here; an "open" ODCR is consumed automatically
-      by On-Demand launches, so for ODCR leave this empty.
+      (Optional) **Capacity Block for ML reservation ID** for the GPU node group.
+      When SET, GPU nodes launch with MarketType=capacity-block against this
+      reservation. Leave EMPTY for On-Demand. This parameter is for Capacity
+      Blocks ONLY -- do NOT put an On-Demand Capacity Reservation (ODCR) ID here;
+      an "open" ODCR is consumed automatically by On-Demand launches, so for ODCR
+      leave this empty.
 
   RootVolumeSize:
     Type: Number

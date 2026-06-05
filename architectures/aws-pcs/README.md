@@ -93,7 +93,7 @@ Availability Zone (`PrimarySubnetAZ`). The most-used parameters:
 | `PseriesInstanceType` | `p5.48xlarge` | GPU instance type; auto-selects the multi-NIC template + EFA count |
 | `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR |
 
-**See [PARAMETERS.md](./docs/PARAMETERS.md) for the complete parameter reference** (all 7
+**See [PARAMETERS.md](./docs/PARAMETERS.md) for the complete parameter reference** (all 8
 console parameter groups, with every default). The concept guides below cover the
 choices that need the most thought.
 
