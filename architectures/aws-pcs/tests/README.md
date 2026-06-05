@@ -35,15 +35,17 @@ do **not** assume a single 25.11 GPU run covers everything.
 | # | Dimension | What to cover | Why it matters |
 |---|---|---|---|
 | 1 | **Every Slurm version** | Deploy one cluster per `SlurmVersion` `AllowedValues` value (**25.05 and 25.11**) and run a Pyxis `--container-image` job on each | `MetricsType` is 25.11-only (25.05 cluster create fails if it's set unconditionally); the Pyxis SPANK plugin is ABI-locked to its Slurm version, so a wrong-version `spank_pyxis.so` stops slurmd. **Any change to `scripts/install-enroot-pyxis.sh` MUST be retested on all supported versions.** |
-| 2 | **Container runtime, both paths** | (a) `BuildAMI=false` + `PostInstallScriptUrl` (first-boot install); (b) **`BuildAMI=true`** (pre-baked AMI via `pcs-ready-dlami-with-enroot-pyxis.yaml`) | The AMI-build path **duplicates** the Enroot/Pyxis logic in its own UserData (a fix to `install-enroot-pyxis.sh` is **not** automatically in the AMI path), and the **AMI is single-Slurm-version** by design — `SlurmVersion` on the DLAMI stack must match the cluster's `SlurmVersion` (the SPANK plugin is ABI-locked, so a 25.11 AMI used by a 25.05 cluster crashes slurmd). Build an AMI and boot a node from it, run a container job. **Any Enroot/Pyxis change MUST also be verified through a BuildAMI=true run, on each Slurm version.** |
+| 2 | **First-boot container runtime install** | Default `PostInstallScriptUrl` runs `install-enroot-pyxis.sh` at first boot; verify Enroot/Pyxis lands and a `--container-image` job works → [Test 2](#test-2-enrootpyxis-container-runtime-first-boot-install) | The default path used by every cluster that doesn't override `AmiId`. Bugs in `install-enroot-pyxis.sh` only show up on a clean first boot. |
 | 3 | **First-boot from a clean deploy** | Validate on a **freshly deployed** cluster, not a node you hand-patched | Post-install runs during cloud-init *before* slurmd/profile.d/controller exist; bugs there (e.g. version detection, `set -e` aborts) only show on a clean first boot, not after a live re-run. |
 | 4 | **CPU queue** | `DeployOnDemandCNG=true`; Pyxis container job on `cpu1` | Baseline; also the cheapest way to exercise items 1–3 without GPU capacity. |
 | 5 | **Each GPU family** (as capacity allows) | `p5`/`p5e`/`p5en`, `p6-b200`, `p6-b300`: nvidia-smi, NCCL all_reduce, FSDP | EFA NIC layout and the dcgm-exporter image differ per family (see notes). |
 | 6 | **Monitoring** | 6 login containers up, all Prometheus targets healthy, GPU dashboards populate on every supported GPU family with the default `DcgmExporterImage` (DCGM 4.5.2 by digest) | — |
 | 7 | **Template lint** | `aws cloudformation validate-template` on every edited `assets/*.yaml` | Catches structural errors before a deploy round-trip. |
+| 8 | **Pre-baked AMI build path** (when touched) | If `pcs-ready-dlami-with-enroot-pyxis.yaml` or any code it bakes (`scripts/install-enroot-pyxis.sh`) changes: build an AMI per supported `SlurmVersion`, then deploy a cluster with `AmiId=<ami-xxx>` + `PostInstallScriptUrl=""` and run a container job → [Test 8](#test-8-pre-baked-ami-build-standalone-dlami-template) | Independent path: the cluster stack does NOT run Image Builder, so an `install-enroot-pyxis.sh` fix is only in the AMI after a rebuild. The AMI is single-Slurm-version by design — `SlurmVersion` on the DLAMI stack must match the cluster's `SlurmVersion` (the SPANK plugin is ABI-locked). **Skip this row only if neither the AMI build template nor the install script changed.** |
 
-Tests 1–7 below are the per-item how-to. The single-cluster shortcut (one deploy that
-covers monitoring + CPU + one GPU family) is fine for iterating, but the matrix above is
+Tests 1–8 below are the per-item how-to. The single-cluster shortcut (one deploy that
+covers monitoring + CPU + one GPU family) is fine for iterating; row 8 is its own
+separate AMI-build stack, run only when its inputs change. The full matrix above is
 the bar for **merge**.
 
 ---
@@ -55,17 +57,20 @@ What this guide covers, and the template/parameter that exercises it:
 | Dimension | Options to test | How |
 |---|---|---|
 | **Monitoring** | enabled (default) | `DeployMonitoring=true` → [Test 1](#test-1-monitoring-stack) |
-| **Container runtime** | (a) first-boot UserData, (b) pre-baked AMI | (a) default `PostInstallScriptUrl`; (b) build the AMI with `pcs-ready-dlami-with-enroot-pyxis.yaml` separately and pass its `ami-xxx` as `AmiId` → [Test 2](#test-2-enrootpyxis-container-runtime) |
+| **Container runtime — default first-boot path** | UserData install on every node | Default `PostInstallScriptUrl` (no AMI override) → [Test 2](#test-2-enrootpyxis-container-runtime-first-boot-install) |
 | **CPU nodes** | `c6i`/`c7i` etc. | `DeployOnDemandCNG=true` → [Test 3](#test-3-cpu-queue) |
 | **Single-NIC GPU** | `g5`/`g6` | On-Demand CNG with a G-series type → [Test 4](#test-4-g-series-gpu-single-nic) |
 | **Multi-NIC GPU** | `p5`/`p5e`/`p5en`, `p6-b200`, `p6-b300` | `DeployPseriesCNG=true` + `PseriesInstanceType` → [Test 5](#test-5-p5p6-gpu-multi-nic) |
 | **NCCL / EFA** | 2-node all_reduce | [Test 6](#test-6-nccl-multi-node-efa) |
 | **Sample training** | FSDP Llama-2 7B | [Test 7](#test-7-fsdp-sample-training) |
+| **Container runtime — pre-baked AMI path** | Standalone DLAMI build + cluster pinned to its output | `pcs-ready-dlami-with-enroot-pyxis.yaml` (separate stack) → cluster with `AmiId=ami-xxx` + `PostInstallScriptUrl=""` → [Test 8](#test-8-pre-baked-ami-build-standalone-dlami-template) |
 
 A single `pcs-ml-cluster-deploy-all.yaml` deploy with `DeployMonitoring=true`,
 `DeployOnDemandCNG=true`, and `DeployPseriesCNG=true` exercises Tests 1–7 in one cluster.
-See [the README](../README.md#5-usage-examples) for deploy commands; set
-`PseriesInstanceType` to the GPU family you want to validate.
+Test 8 is a **separate** flow (independent stack for the AMI, then a cluster pinned to
+its output); run it when `pcs-ready-dlami-with-enroot-pyxis.yaml` or
+`scripts/install-enroot-pyxis.sh` change. See [the README](../README.md#5-usage-examples)
+for deploy commands; set `PseriesInstanceType` to the GPU family you want to validate.
 
 ---
 
@@ -158,32 +163,26 @@ For dashboard access (SSM port-forward or public CIDR) see
 
 ---
 
-## Test 2: Enroot/Pyxis container runtime
+## Test 2: Enroot/Pyxis container runtime (first-boot install)
 
-Container support can be provided two ways — validate whichever you deployed:
+This is the default path used by every cluster that doesn't override `AmiId`:
+`PostInstallScriptUrl` runs `install-enroot-pyxis.sh` once on each node at first boot.
+The pre-baked-AMI path is validated separately as [Test 8](#test-8-pre-baked-ami-build-standalone-dlami-template).
 
-- **(a) First-boot UserData** (default `PostInstallScriptUrl`, no AMI override).
-- **(b) Pre-baked custom AMI** — built once via `pcs-ready-dlami-with-enroot-pyxis.yaml`
-  (separate stack), then passed to the cluster as `AmiId=<ami-xxx>`.
-
-> **Cleanest path for (b).** `PostInstallScriptUrl` defaults to the Enroot/Pyxis installer
-> and the cluster passes it to the node groups regardless of `AmiId` (it's a generic
-> first-boot hook). When testing path (b), deploy with the custom **`AmiId` AND
-> `PostInstallScriptUrl=""`** so nodes don't re-run the installer at boot. Leaving the
-> default is not fatal — the installer is idempotent and skips what's already baked into
-> the AMI — but `""` gives the cleanest boot. For path (a) leave both at their defaults.
+Deploy `pcs-ml-cluster-deploy-all.yaml` with both `AmiId` and `PostInstallScriptUrl`
+left at their defaults (so SSM auto-resolves the latest PCS-Ready DLAMI and
+post-install runs the Enroot/Pyxis installer), then on any node:
 
 ```bash
-# On any node (login or compute):
 which enroot                                                       # /usr/bin/enroot
 ls /opt/aws/pcs/scheduler/slurm-*/lib/slurm/spank_pyxis.so         # per-version Pyxis SPANK plugin
 cat /etc/aws/pcs/scheduler/slurm-*/plugstack.conf.d/pyxis.conf     # points at the matching .so
-tail -1 /var/log/pcs-post-install.log                              # (a) only: "...completed (exit 0)"
+tail -1 /var/log/pcs-post-install.log                              # "...completed (exit 0)"
 ```
 
 **Expected:** `enroot` on `PATH`; a `spank_pyxis.so` under the **cluster's** Slurm version
-dir, and the plugstack `pyxis.conf` referencing that exact path. For (a), the post-install
-log exits 0. The Test 1/6/7 container jobs are the functional proof that Pyxis works.
+dir, and the plugstack `pyxis.conf` referencing that exact path; post-install log exits 0.
+The Test 1/6/7 container jobs are the functional proof that Pyxis works.
 
 > **⚠️ Regression-test rule for `scripts/install-enroot-pyxis.sh`.** This script has bitten
 > us repeatedly in ways a single 25.11 GPU run does not catch. **Any change to it MUST be
@@ -193,10 +192,12 @@ log exits 0. The Test 1/6/7 container jobs are the functional proof that Pyxis w
 >   starting (`Incompatible Slurm plugin version`). The script builds Pyxis for the version
 >   passed in `PCS_SLURM_VERSION` and installs the `.so` to a per-version path; a regression
 >   here only shows on the *other* version.
-> - **The `BuildAMI=true` path too.** `pcs-ready-dlami-with-enroot-pyxis.yaml` carries its
->   **own copy** of the Enroot/Pyxis steps in its Image Builder UserData — editing
->   `install-enroot-pyxis.sh` does **not** change the AMI path. Build an AMI and boot a node
->   from it, then run a container job.
+> - **The pre-baked AMI path too** ([Test 8](#test-8-pre-baked-ami-build-standalone-dlami-template)).
+>   `pcs-ready-dlami-with-enroot-pyxis.yaml` carries its **own copy** of the Enroot/Pyxis
+>   steps in its Image Builder UserData — editing `install-enroot-pyxis.sh` does **not**
+>   change the AMI path until you rebuild. Build an AMI per supported `SlurmVersion`,
+>   deploy a cluster pinned to it (`AmiId=<ami-xxx>` + `PostInstallScriptUrl=""`), and
+>   run a container job.
 > - **On a clean first boot**, not a hand-patched node — post-install runs before
 >   slurmd/profile.d/controller exist, and several bugs only appear there.
 
@@ -354,6 +355,96 @@ cd slurm && sbatch --nodes=2 --partition=gpu-p6b300 \
 > **Multi-NIC tip:** the canonical sbatch already sets `NCCL_SOCKET_IFNAME=^docker,lo,veth,eth`
 > (NCCL auto-selects). Do **not** pin a single interface on P5/P6 — all NICs share one
 > subnet and pinning one breaks the cross-node NCCL bootstrap ring.
+
+---
+
+## Test 8: Pre-baked AMI build (standalone DLAMI template)
+
+**When to run:** when `pcs-ready-dlami-with-enroot-pyxis.yaml` or any code it bakes
+in (`scripts/install-enroot-pyxis.sh`) changes — the cluster stack does NOT run
+Image Builder, so a fix to the install script is only in the AMI after a rebuild.
+Skip this test if you only touched the cluster templates.
+
+This is an **independent flow**, not a deploy-all parameter: build an AMI with the
+standalone template, then deploy a cluster pinned to that AMI ID with
+`PostInstallScriptUrl=""` so nothing else runs at boot.
+
+The AMI is **single-Slurm-version by design** (Pyxis SPANK plugin ABI is
+version-locked) — so when you run this test, run it for **every supported
+`SlurmVersion`** that the install-script change could affect (typically both 25.05
+and 25.11).
+
+### Step 1 — build the AMI (~30 min one-time per Slurm version)
+
+```bash
+SLURM_VERSION=25.11   # repeat for 25.05 if relevant
+
+aws cloudformation create-stack \
+  --stack-name pcs-dlami-${SLURM_VERSION/./} \
+  --template-url https://midaisuk-llm-dev.s3.amazonaws.com/templates/pcs-ready-dlami-with-enroot-pyxis.yaml \
+  --parameters ParameterKey=SlurmVersion,ParameterValue=${SLURM_VERSION} \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+  --profile claude --region us-west-2
+
+aws cloudformation wait stack-create-complete \
+  --stack-name pcs-dlami-${SLURM_VERSION/./} \
+  --profile claude --region us-west-2
+
+AMI_ID=$(aws cloudformation describe-stacks \
+  --stack-name pcs-dlami-${SLURM_VERSION/./} \
+  --query 'Stacks[0].Outputs[?OutputKey==`DLAMIforPCSAmiId`].OutputValue' \
+  --output text --profile claude --region us-west-2)
+echo "$AMI_ID"   # ami-0xxxxxxxxxxxxxxxx
+```
+
+### Step 2 — deploy a cluster pinned to that AMI
+
+```bash
+aws cloudformation create-stack \
+  --stack-name pcs-amitest-${SLURM_VERSION/./} \
+  --template-url https://midaisuk-llm-dev.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
+  --parameters \
+    ParameterKey=PrimarySubnetAZ,ParameterValue=us-west-2a \
+    ParameterKey=SlurmVersion,ParameterValue=${SLURM_VERSION} \
+    ParameterKey=AmiId,ParameterValue=${AMI_ID} \
+    ParameterKey=PostInstallScriptUrl,ParameterValue= \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+  --profile claude --region us-west-2
+```
+
+### Step 3 — verify the bake landed and a container job runs
+
+On any node from the new cluster:
+
+```bash
+which enroot                                                       # /usr/bin/enroot (pre-baked)
+ls /opt/aws/pcs/scheduler/slurm-${SLURM_VERSION}/lib/slurm/spank_pyxis.so  # built for matching Slurm
+cat /etc/aws/pcs/scheduler/slurm-${SLURM_VERSION}/plugstack.conf.d/pyxis.conf  # references the .so
+test ! -s /var/log/pcs-post-install.log && echo "post-install did not run (PostInstallScriptUrl='')"
+```
+
+Then a container job through the login node (same form as Test 2):
+
+```bash
+srun --partition=cpu1 --nodes=1 --ntasks=1 \
+  --container-image=ubuntu:22.04 bash -c "echo PYXIS_FROM_AMI_OK"
+```
+
+**Expected:** `enroot` and the per-version Pyxis files exist **without** the
+post-install hook running (because `PostInstallScriptUrl=""`); the container job
+prints `PYXIS_FROM_AMI_OK`. Slurmd starts cleanly (no `Incompatible Slurm plugin
+version` in `journalctl -u slurmd`).
+
+### Step 4 — clean up
+
+```bash
+aws cloudformation delete-stack --stack-name pcs-amitest-${SLURM_VERSION/./} --profile claude --region us-west-2
+aws cloudformation delete-stack --stack-name pcs-dlami-${SLURM_VERSION/./}   --profile claude --region us-west-2
+```
+
+The DLAMI stack's AMI itself is **not** automatically deregistered when the stack is
+deleted — if you need to free its EBS snapshots, deregister the AMI manually
+(`aws ec2 deregister-image --image-id $AMI_ID`) and delete the snapshot.
 
 ---
 
