@@ -33,6 +33,32 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   a deploy-role CloudFormation/managed policy), so users in restricted accounts can grant
   exactly what's required instead of needing broad admin.
 
+## Software stack
+
+- [ ] 🟡 **Spack as a first-class install option.** Today the cluster ships Enroot/Pyxis
+  (containers) + the PCS DLAMI's pre-installed CUDA/NCCL/EFA stack, but no native
+  package manager for HPC software (MPI variants, BLAS/LAPACK, scientific libraries,
+  source-built apps). Add an opt-in `Spack` install path — e.g. a `PostInstallScriptUrl`
+  variant that bootstraps Spack into shared `/fsx`, configures
+  [aws-pcluster-spack](https://github.com/spack/spack-configs)-style external packages
+  for PCS (Slurm, EFA libfabric, FSx Lustre client), and uses the
+  `aws-pcluster-` compiler + EFA/NCCL targets so binaries are tuned for the instance
+  family. Single shared install on `/fsx` works for the whole cluster, so this fits
+  cleanly alongside the existing layout. Validate on at least one CPU + one GPU node.
+- [ ] 🟢 **Intel oneAPI (HPC Toolkit) install option.** For users running ICC/IFX/MPI/MKL
+  workloads, add an opt-in install path (apt repo or shared `/fsx` install) that places
+  Intel oneAPI HPC Toolkit on the cluster, with `module load`-style discoverability that
+  composes with the Spack option above. Likely a separate
+  `PostInstallScriptUrl`-style script invoked by users explicitly (large download, not
+  every cluster needs it).
+- [ ] 🟢 **NVIDIA HPC SDK install option.** Same shape as the Intel one — opt-in
+  install of the NVIDIA HPC SDK (nvhpc, nvfortran, NCCL/CUDA-aware MPI variants) for
+  GPU clusters that build their own apps. Less critical than Spack since Pyxis containers
+  already cover most NVIDIA-stack use cases, but useful for native-build workflows.
+- [ ] 🟢 **Module system (Lmod / environment-modules).** Once Spack and/or the Intel /
+  NVIDIA toolkits land, ship a working `module avail` so users can switch toolchains the
+  way they would on a traditional HPC system instead of editing `PATH` by hand.
+
 ## User management
 
 - [ ] 🟡 **Integrate a user-management backend (LDAP/AD).** Provide a way to manage cluster
