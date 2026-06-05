@@ -325,8 +325,7 @@ automatically — see the [screenshot below](#accessing-grafana).
 
 > **Prefer AWS-managed Prometheus/Grafana?** If you'd rather use Amazon Managed Service
 > for Prometheus + Amazon Managed Grafana instead of the self-hosted stack on the login
-> node, see
-> [4.validation_and_observability/4.prometheus-grafana](https://github.com/DaisukeMiyamoto/awsome-distributed-ai/tree/deploy-monitoring/4.validation_and_observability/4.prometheus-grafana).
+> node, see [`4.validation_and_observability/4.prometheus-grafana`](../../4.validation_and_observability/4.prometheus-grafana).
 
 **Monitoring-related parameters:**
 - `DeployMonitoring` (default `true`)

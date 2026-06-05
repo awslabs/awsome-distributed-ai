@@ -173,10 +173,9 @@ Parameters:
   MonitoringRepo:
     Type: String
     Description: >-
-      GitHub "owner/repo" to fetch the monitoring stack from. Override with a
-      fork (e.g. DaisukeMiyamoto/aws-parallelcluster-monitoring) together with a
-      branch in MonitoringVersion to test unreleased changes before they merge
-      upstream.
+      GitHub "owner/repo" to fetch the monitoring stack from. Override with a fork
+      together with a branch in MonitoringVersion to test unreleased changes before
+      they merge upstream.
     Default: 'aws-samples/aws-parallelcluster-monitoring'
 
   DcgmExporterImage:
