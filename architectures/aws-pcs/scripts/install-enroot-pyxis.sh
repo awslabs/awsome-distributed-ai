@@ -9,9 +9,9 @@
 #   1. PCS Slurm pre-installed: Pyxis is compiled against the Slurm headers at
 #      /opt/aws/pcs/scheduler/slurm-${VERSION}/include/. Versions in
 #      SLURM_VERSIONS whose directory is absent are SKIPPED (warning, not error),
-#      leaving no plugstack config for that version. Use a PCS DLAMI base AMI.
+#      leaving no plugstack config for that version. Use a PCS-Ready DLAMI base AMI.
 #   2. Debian/Ubuntu family only: uses apt-get/dpkg (no yum/dnf). Tested on
-#      Ubuntu 24.04 (PCS DLAMI Base).
+#      Ubuntu 24.04 (PCS-Ready DLAMI Base).
 #   3. Outbound network egress required (private subnets need a NAT path; the S3
 #      VPC endpoint alone is NOT sufficient):
 #        - github.com                 (Enroot .deb releases, Pyxis source)

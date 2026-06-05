@@ -122,8 +122,8 @@ Conditions:
   UseCustomBaseAmi: !Not [!Equals [!Ref BaseAmiId, '']]
 
 Mappings:
-  # PCS-ready DLAMI AMI SSM parameter paths
-  # These resolve to the latest PCS-ready DLAMI AMIs (includes PCS Agent and Slurm pre-installed)
+  # PCS-Ready DLAMI AMI SSM parameter paths
+  # These resolve to the latest PCS-Ready DLAMI AMIs (includes PCS Agent and Slurm pre-installed)
   DLAMIConfigs:
     ubuntu2404:
       x8664: /aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id
@@ -222,7 +222,7 @@ Resources:
                     - echo "Installing Enroot/Pyxis..."
                     - |
                       #!/bin/bash
-                      # Install Enroot/Pyxis on PCS-ready DLAMI
+                      # Install Enroot/Pyxis on PCS-Ready DLAMI
                       # Based on: https://github.com/aws-samples/aws-parallelcluster-post-install-scripts/blob/main/pyxis/postinstall.sh
 
                       set -exo pipefail
@@ -359,7 +359,7 @@ Resources:
     Type: AWS::ImageBuilder::ImageRecipe
     Properties:
       Name: !Sub 'dlami-for-pcs-ubuntu2404-x86-64-${AWS::StackName}'
-      Description: PCS-ready DLAMI with Enroot/Pyxis - Ubuntu 24.04 x86_64
+      Description: PCS-Ready DLAMI with Enroot/Pyxis - Ubuntu 24.04 x86_64
       Version: !Ref SemanticVersion
       ParentImage: !If
         - UseCustomBaseAmi
@@ -388,7 +388,7 @@ Resources:
         - Region: !Ref AWS::Region
           AmiDistributionConfiguration:
             Name: !Sub 'dlami-for-pcs-ubuntu2404-x86-64-{{imagebuilder:buildDate}}'
-            Description: !Sub 'PCS-ready DLAMI with Enroot/Pyxis - Ubuntu 24.04 x86_64 - Built on {{imagebuilder:buildDate}}'
+            Description: !Sub 'PCS-Ready DLAMI with Enroot/Pyxis - Ubuntu 24.04 x86_64 - Built on {{imagebuilder:buildDate}}'
             AmiTags:
               Name: !Sub 'dlami-for-pcs-ubuntu2404-x86-64-{{imagebuilder:buildDate}}'
               OS: Ubuntu
@@ -406,7 +406,7 @@ Resources:
     Condition: HasSchedule
     Properties:
       Name: !Sub 'dlami-for-pcs-ubuntu2404-x86-64-${AWS::StackName}'
-      Description: Pipeline for building PCS-ready DLAMI Ubuntu 24.04 x86_64 AMIs
+      Description: Pipeline for building PCS-Ready DLAMI Ubuntu 24.04 x86_64 AMIs
       ImageRecipeArn: !GetAtt ImageRecipeUbuntu2404X8664.Arn
       InfrastructureConfigurationArn: !GetAtt InfrastructureConfigX8664.Arn
       DistributionConfigurationArn: !GetAtt DistributionConfigUbuntu2404X8664.Arn
@@ -426,7 +426,7 @@ Resources:
     Condition: EnableLifecycle
     Properties:
       Name: !Sub 'dlami-for-pcs-lifecycle-${AWS::StackName}'
-      Description: Deprecate old PCS DLAMI AMIs to keep AMI list clean
+      Description: Deprecate old PCS-Ready DLAMI AMIs to keep AMI list clean
       Status: ENABLED
       ExecutionRole: !GetAtt LifecyclePolicyRole.Arn
       ResourceType: AMI_IMAGE
@@ -462,7 +462,7 @@ Resources:
 
 Outputs:
   DLAMIforPCSAmiId:
-    Description: AMI ID of the built PCS-ready DLAMI (Ubuntu 24.04 x86_64)
+    Description: AMI ID of the built PCS-Ready DLAMI (Ubuntu 24.04 x86_64)
     Value: !GetAtt DLAMIforPCS.ImageId
     Export:
       Name: !Sub '${AWS::StackName}-AmiId'

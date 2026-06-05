@@ -117,7 +117,7 @@ removals or B200 regressions between 4.2.0 and 4.5.2).
 
 **Why a digest, not a tag.** The monitoring stack's *own* default is the older
 4.2.0 tag because newer NVCR tags publish an OCI image-index manifest that Docker 29.x
-on the PCS DLAMI can't pull (`error from registry: Incorrect Repository Format`). A
+on the PCS-Ready DLAMI can't pull (`error from registry: Incorrect Repository Format`). A
 digest pull bypasses that index negotiation, so we can ship a newer DCGM safely.
 4.2.0 also caps coverage at B200 — too restrictive for this repo's GPU range.
 
@@ -145,7 +145,7 @@ clear it) when you're done.
 
 ## 4. AMI selection (`AmiId`) — pin in production
 
-Left empty, `AmiId` resolves the PCS-ready DLAMI from the SSM public parameter
+Left empty, `AmiId` resolves the PCS-Ready DLAMI from the SSM public parameter
 `/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id`. Only a `/latest/`
 path is published, and CloudFormation re-resolves SSM parameter values on every stack
 update — so a later scale-out can boot a *newer* AMI than the original nodes (drift).

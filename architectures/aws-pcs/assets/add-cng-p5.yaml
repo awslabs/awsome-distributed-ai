@@ -104,7 +104,7 @@ Parameters:
   RootVolumeSize:
     Type: Number
     Description: >-
-      Root EBS volume size (GiB) for compute nodes. The PCS DLAMI default (~75
+      Root EBS volume size (GiB) for compute nodes. The PCS-Ready DLAMI default (~75
       GiB) is too small for pulling/importing large container images (Enroot/Pyxis
       squashfs, Megatron ~20 GB). 300 GiB gives ample headroom.
     Default: 300
@@ -126,7 +126,7 @@ Parameters:
     Type: String
     Description: >-
       (Optional) AMI ID for the nodes. Leave empty to auto-resolve the latest
-      PCS-ready DLAMI (Ubuntu 24.04 x86_64) from SSM Parameter Store. Set an explicit
+      PCS-Ready DLAMI (Ubuntu 24.04 x86_64) from SSM Parameter Store. Set an explicit
       ami-xxxx only to override (e.g. a custom AMI built with Enroot/Pyxis pre-baked).
     Default: ""
     AllowedPattern: '^$|^ami-[0-9a-f]{8,17}$'

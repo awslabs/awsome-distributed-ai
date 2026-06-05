@@ -14,7 +14,7 @@ This repository provides reference architectures and deployment templates for se
 - **High-performance storage**: FSx for Lustre (shared scratch, `/fsx`) and FSx for OpenZFS (home directories, `/home`).
 - **Modular components**: compose individual stacks (network/storage prerequisites, cluster scheduler, per-family compute node groups) instead of the all-in-one nested stack when you want to reuse infrastructure across clusters or iterate on one piece at a time.
 
-> Built on the AWS-managed **PCS-ready DLAMI** (NVIDIA driver, CUDA, PCS agent, and
+> Built on the AWS-managed **PCS-Ready DLAMI** (NVIDIA driver, CUDA, PCS agent, and
 > Slurm 25.05/25.11 pre-installed), so no custom AMI build is required by default —
 > the cluster comes up without an Image Builder step. For frequent scaling, you can
 > pre-bake Enroot/Pyxis into a custom DLAMI with the standalone
@@ -28,7 +28,7 @@ This repository provides reference architectures and deployment templates for se
 A default deployment (`pcs-ml-cluster-deploy-all.yaml`) provisions:
 - VPC with public/private subnets, NAT gateway, and S3 endpoint
 - FSx for Lustre (`/fsx`, high-performance shared scratch) and FSx for OpenZFS (`/home`)
-- PCS cluster with the Slurm scheduler (25.05 or 25.11), on the PCS-ready DLAMI
+- PCS cluster with the Slurm scheduler (25.05 or 25.11), on the PCS-Ready DLAMI
 - Login node group (public subnet) with the monitoring stack (Prometheus/Grafana/DCGM)
 - CPU compute node group (private subnet); optional GPU (P5/P6) node group with EFA
 - Enroot/Pyxis container runtime installed at first boot via `PostInstallScriptUrl` (or pre-baked into a custom AMI you build separately and pass as `AmiId`)
@@ -103,7 +103,7 @@ choices that need the most thought.
 
 By default, every node runs [`scripts/install-enroot-pyxis.sh`](./scripts/install-enroot-pyxis.sh)
 at first boot via `PostInstallScriptUrl` — no AMI build, ~8–12 min node boot. The
-PCS-ready DLAMI base already includes the PCS agent, Slurm 25.05 & 25.11
+PCS-Ready DLAMI base already includes the PCS agent, Slurm 25.05 & 25.11
 (`/opt/aws/pcs/scheduler/slurm-*`), NVIDIA driver + CUDA, and SSM agent, so the script
 only adds Enroot 3.5.0 + Pyxis 0.20.0 on top.
 
@@ -518,7 +518,7 @@ parameter and default, see [PARAMETERS.md](./docs/PARAMETERS.md).
 | [`add-cng-p5.yaml`](./assets/add-cng-p5.yaml) | P5/P5e/P5en nodes (16/32 EFA interfaces, by type) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p5.yaml&stackName=pcs-add-cng-p5) |
 | [`add-cng-p6-b200.yaml`](./assets/add-cng-p6-b200.yaml) | P6-B200 nodes (8 EFA interfaces) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p6-b200.yaml&stackName=pcs-add-cng-p6-b200) |
 | [`add-cng-p6-b300.yaml`](./assets/add-cng-p6-b300.yaml) | P6-B300 nodes (16 EFA interfaces) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p6-b300.yaml&stackName=pcs-add-cng-p6-b300) |
-| [`pcs-ready-dlami-with-enroot-pyxis.yaml`](./assets/pcs-ready-dlami-with-enroot-pyxis.yaml) | EC2 Image Builder: bake Enroot 3.5.0 + Pyxis 0.20.0 into the PCS-ready DLAMI | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ready-dlami-with-enroot-pyxis.yaml&stackName=pcs-dlami) |
+| [`pcs-ready-dlami-with-enroot-pyxis.yaml`](./assets/pcs-ready-dlami-with-enroot-pyxis.yaml) | EC2 Image Builder: bake Enroot 3.5.0 + Pyxis 0.20.0 into the PCS-Ready DLAMI | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ready-dlami-with-enroot-pyxis.yaml&stackName=pcs-dlami) |
 
 `add-cng*` templates create a Slurm queue only when `QueueName` is set (leave it empty
 for login nodes). The P-series templates need a `CapacityReservationId` when using a

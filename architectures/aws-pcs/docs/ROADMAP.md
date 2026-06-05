@@ -17,7 +17,7 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
 - [ ] 🟡 **P6e-GB200 / P6e-GB300 (Grace-Blackwell) support.** Add node-group templates for
   the GB200/GB300 NVL instances (e.g. p6e-gb200.36xlarge). These are Grace (arm64) CPUs
   with a different NIC/EFA layout (e.g. p6e-gb200 = 17 network cards) and likely need an
-  arm64 PCS-ready DLAMI and arm64 Enroot/Pyxis builds — validate the AMI, EFA, and a
+  arm64 PCS-Ready DLAMI and arm64 Enroot/Pyxis builds — validate the AMI, EFA, and a
   sample run.
 - [ ] 🟢 **Consolidate the per-family GPU add-cng templates (p5 / p6-b200 / p6-b300).**
   The three `add-cng-p6*`/`add-cng-p5` templates are ~85% identical; the real difference
@@ -36,7 +36,7 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
 ## Software stack
 
 - [ ] 🟡 **Spack as a first-class install option.** Today the cluster ships Enroot/Pyxis
-  (containers) + the PCS DLAMI's pre-installed CUDA/NCCL/EFA stack, but no native
+  (containers) + the PCS-Ready DLAMI's pre-installed CUDA/NCCL/EFA stack, but no native
   package manager for HPC software (MPI variants, BLAS/LAPACK, scientific libraries,
   source-built apps). Add an opt-in `Spack` install path — e.g. a `PostInstallScriptUrl`
   variant that bootstraps Spack into shared `/fsx`, configures

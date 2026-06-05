@@ -4,8 +4,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Complete AWS PCS ML Cluster deployment with nested stacks.
-  This template orchestrates: Prerequisites (VPC, FSx), optional custom AMI building,
-  and PCS cluster with compute node groups.
+  This template orchestrates: Prerequisites (VPC, FSx), the PCS cluster, and its
+  compute node groups (login + on-demand CPU + optional GPU). For pre-baking a
+  custom DLAMI, run pcs-ready-dlami-with-enroot-pyxis.yaml as a separate stack
+  and pass its DLAMIforPCSAmiId output as this template's AmiId parameter.
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -462,7 +464,7 @@ Parameters:
   RootVolumeSize:
     Type: Number
     Description: >-
-      Root EBS volume size (GiB) for all node groups. The PCS DLAMI default
+      Root EBS volume size (GiB) for all node groups. The PCS-Ready DLAMI default
       (~75 GiB) is too small for pulling/importing large container images; 300
       GiB gives ample headroom. Passed down to every compute node group stack.
     Default: 300
