@@ -55,7 +55,7 @@ What this guide covers, and the template/parameter that exercises it:
 | Dimension | Options to test | How |
 |---|---|---|
 | **Monitoring** | enabled (default) | `DeployMonitoring=true` → [Test 1](#test-1-monitoring-stack) |
-| **Container runtime** | (a) first-boot UserData, (b) pre-baked AMI | (a) `BuildAMI=false` + `PostInstallScriptUrl` (default); (b) `BuildAMI=true` → [Test 2](#test-2-enrootpyxis-container-runtime) |
+| **Container runtime** | (a) first-boot UserData, (b) pre-baked AMI | (a) default `PostInstallScriptUrl`; (b) build the AMI with `pcs-ready-dlami-with-enroot-pyxis.yaml` separately and pass its `ami-xxx` as `AmiId` → [Test 2](#test-2-enrootpyxis-container-runtime) |
 | **CPU nodes** | `c6i`/`c7i` etc. | `DeployOnDemandCNG=true` → [Test 3](#test-3-cpu-queue) |
 | **Single-NIC GPU** | `g5`/`g6` | On-Demand CNG with a G-series type → [Test 4](#test-4-g-series-gpu-single-nic) |
 | **Multi-NIC GPU** | `p5`/`p5e`/`p5en`, `p6-b200`, `p6-b300` | `DeployPseriesCNG=true` + `PseriesInstanceType` → [Test 5](#test-5-p5p6-gpu-multi-nic) |
@@ -92,25 +92,27 @@ how long a deploy round-trip takes during a review cycle.
 
 | Configuration | First-boot path | Time |
 |---|---|---|
-| 25.05, CPU only | `BuildAMI=false` + `PostInstallScriptUrl` | **~24m** |
-| 25.11, CPU only | `BuildAMI=false` + `PostInstallScriptUrl` | **~31m** |
-| 25.11, GPU + CPU (Capacity Block) | `BuildAMI=false` + `PostInstallScriptUrl` | **~44m** |
-| 25.05/25.11, CPU only | `BuildAMI=true` (Image Builder runs alongside prereqs) | **~32m** |
+| 25.05, CPU only | Default `PostInstallScriptUrl` (Enroot/Pyxis at first boot) | **~24m** |
+| 25.11, CPU only | Default `PostInstallScriptUrl` (Enroot/Pyxis at first boot) | **~31m** |
+| 25.11, GPU + CPU (Capacity Block) | Default `PostInstallScriptUrl` (Enroot/Pyxis at first boot) | **~44m** |
+| 25.05/25.11, CPU only, **pre-baked AMI** | Custom AMI built **separately** via `pcs-ready-dlami-with-enroot-pyxis.yaml` (~30m one-time), then cluster deployed with `AmiId=<ami-xxx>` + `PostInstallScriptUrl=""` | AMI build ~30m + cluster ~25m |
 
-Notes: Prerequisites (VPC + dual FSx) is the long-pole on every path (~20-25m); the
-PostInstall path adds the per-boot Enroot/Pyxis install (~2-3m), and the BuildAMI path
-adds Image Builder (~20-25m) but **runs in parallel with prereqs**, so the wall-clock
-delta vs PostInstall is much smaller than ImageBuilder's standalone time. GPU adds the
-P-series CNG and the GPU node first boot.
+Notes: Prerequisites (VPC + dual FSx) is the long-pole on the cluster path (~20-25m);
+the default first-boot path adds the per-boot Enroot/Pyxis install (~2-3m). Pre-baking
+the AMI is a separate ~30m one-time job — its cost amortizes when you redeploy or
+scale clusters that share the AMI. GPU adds the P-series CNG and the GPU node first boot.
 
 Notes:
-- **Deploy path:** all of the above came up from `pcs-ml-cluster-deploy-all.yaml`
-  (`BuildAMI=false`, Enroot/Pyxis via `PostInstallScriptUrl`, `DeployMonitoring=true`).
+- **Deploy path:** all of the above came up from `pcs-ml-cluster-deploy-all.yaml` with
+  the default first-boot Enroot/Pyxis installer + `DeployMonitoring=true`.
 - **Container runtime:** validated via first-boot UserData install (the default); the
-  pre-baked-AMI path (`BuildAMI=true`) shares the same `install-enroot-pyxis.sh`.
-- **`BuildAMI=true` path validated** (us-west-2, CPU-only, `PostInstallScriptUrl=""`):
-  ImageBuilder bakes Enroot 3.5.0 + per-version Pyxis into the DLAMI; login/compute nodes
-  boot ready, no first-boot install. The AMI is single-Slurm-version on purpose — see
+  pre-baked-AMI path uses the same `install-enroot-pyxis.sh` baked into the DLAMI by
+  `pcs-ready-dlami-with-enroot-pyxis.yaml`.
+- **Pre-baked AMI path validated** (us-west-2, CPU-only): build the AMI with the
+  standalone DLAMI template, take its `DLAMIforPCSAmiId` output, deploy the cluster
+  with `AmiId=<ami-xxx>` and `PostInstallScriptUrl=""`. ImageBuilder bakes Enroot 3.5.0
+  + per-version Pyxis into the DLAMI; login/compute nodes boot ready, no first-boot
+  install. The AMI is single-Slurm-version on purpose — see
   [docs/OPERATIONS.md §2](../docs/OPERATIONS.md#2-container-runtime-postinstall-vs-ami-build).
 - **EFA interface count** is derived from the instance type (p5/p5e = 32, p5en = 16,
   p6-b200 = 8, p6-b300 = 16-of-17); see [README GPU compute](../README.md#gpu-compute-p5p6).
@@ -160,16 +162,16 @@ For dashboard access (SSM port-forward or public CIDR) see
 
 Container support can be provided two ways — validate whichever you deployed:
 
-- **(a) First-boot UserData** (`BuildAMI=false` + `PostInstallScriptUrl`, the default).
-- **(b) Pre-baked custom AMI** (`BuildAMI=true`, via `pcs-ready-dlami-with-enroot-pyxis.yaml`).
+- **(a) First-boot UserData** (default `PostInstallScriptUrl`, no AMI override).
+- **(b) Pre-baked custom AMI** — built once via `pcs-ready-dlami-with-enroot-pyxis.yaml`
+  (separate stack), then passed to the cluster as `AmiId=<ami-xxx>`.
 
 > **Cleanest path for (b).** `PostInstallScriptUrl` defaults to the Enroot/Pyxis installer
-> and deploy-all passes it to the node groups regardless of `BuildAMI` (it's a generic
-> first-boot hook, not forced empty). When testing path (b), deploy with
-> **`BuildAMI=true` AND `PostInstallScriptUrl=""`** so nodes don't re-run the installer at
-> boot. Leaving the default is not fatal — the installer is idempotent and skips what's
-> already baked into the AMI — but `""` gives the cleanest boot. For path (a) keep
-> `BuildAMI=false` and the default `PostInstallScriptUrl`.
+> and the cluster passes it to the node groups regardless of `AmiId` (it's a generic
+> first-boot hook). When testing path (b), deploy with the custom **`AmiId` AND
+> `PostInstallScriptUrl=""`** so nodes don't re-run the installer at boot. Leaving the
+> default is not fatal — the installer is idempotent and skips what's already baked into
+> the AMI — but `""` gives the cleanest boot. For path (a) leave both at their defaults.
 
 ```bash
 # On any node (login or compute):

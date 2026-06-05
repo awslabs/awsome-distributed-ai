@@ -32,18 +32,22 @@ Slurm-specific dashboards stay empty. Pick 25.11 unless you have a reason to pin
 `24.11` is intentionally **out of scope** here — `cluster.yaml`'s `AllowedValues`
 doesn't include it, and `install-enroot-pyxis.sh` builds Pyxis only for 25.05/25.11.
 
-## 2. Container runtime: PostInstall vs. AMI build
+## 2. Container runtime: PostInstall vs. pre-baked AMI
 
-Two paths install Enroot/Pyxis on a node:
+Two paths install Enroot/Pyxis on a node. They are **decoupled**: the cluster stack
+(`pcs-ml-cluster-deploy-all.yaml`) does not run Image Builder — it accepts a ready
+`AmiId`. To get a pre-baked AMI you run `pcs-ready-dlami-with-enroot-pyxis.yaml` once
+as a separate stack, then pass its output to the cluster.
 
-- **PostInstall (default, `BuildAMI=false`)** — `PostInstallScriptUrl` runs
-  `install-enroot-pyxis.sh` on every node at first boot. Adds ~2-3 min to boot but the
-  cluster stack itself is faster to create (no Image Builder step).
-- **AMI build (`BuildAMI=true`)** — `pcs-ready-dlami-with-enroot-pyxis.yaml` bakes
-  Enroot/Pyxis into a custom DLAMI via Image Builder once, then nodes boot from it
-  ready-to-go. Use `PostInstallScriptUrl=""` so the AMI's pre-baked installer doesn't run again
-  (the installer is idempotent so leaving the default is harmless, but it adds minutes
-  to every boot for nothing).
+- **PostInstall (default)** — `PostInstallScriptUrl` runs `install-enroot-pyxis.sh`
+  on every node at first boot. Adds ~2-3 min to boot but the cluster stack itself is
+  faster to create (no Image Builder step). This is what `AmiId=""` (default) plus
+  the default `PostInstallScriptUrl` delivers.
+- **Pre-baked AMI** — build the AMI separately (see the README's
+  *Pre-baking Enroot/Pyxis into a custom AMI* section), then pass its `ami-xxx` as
+  the cluster's `AmiId`. Use `PostInstallScriptUrl=""` for the cleanest boot (the
+  installer is idempotent so leaving the default is a fast no-op, but skipping the
+  download saves a few seconds on every node launch).
 
 ### 2.1 The AMI is single-Slurm-version, by design
 
@@ -233,8 +237,11 @@ For a new production deploy:
 
 - `SlurmVersion=25.11` (full monitoring coverage)
 - `MonitoringVersion=v2.9.1` (default; carries the B300 / `/opt` install / Docker 29.x fixes)
-- `AmiId` pinned to a resolved AMI ID, not left empty
-- `BuildAMI=true` for frequent scaling (~3 min boot vs ~6 min) — pair with matching `SlurmVersion`
-- `DcgmExporterImage` set to a digest only on **p6-b300**; leave empty otherwise
+- `AmiId` pinned to a resolved AMI ID (PCS-Ready DLAMI from SSM, or a custom AMI you
+  built off it), not left empty — avoids drift on later scale-out
+- For frequent scaling, pre-bake Enroot/Pyxis with `pcs-ready-dlami-with-enroot-pyxis.yaml`
+  and pass its output as `AmiId` (~3 min boot vs ~6 min). Match `SlurmVersion` between
+  the AMI build stack and the cluster stack.
+- Default `DcgmExporterImage` covers H100/B200/B300; override only to pin a different build
 - Minimum-CIDR `GrafanaPublicAccessCidr` if used at all; otherwise empty (SSM port-forward)
 - Throughput values that match the chosen FSx deployment types

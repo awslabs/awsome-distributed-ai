@@ -33,9 +33,10 @@
 #
 # IDEMPOTENT:
 #   Safe to run more than once (e.g. PostInstallScriptUrl left at the default on a
-#   BuildAMI=true node where Enroot/Pyxis is already baked in). Each component is
-#   skipped when already present at the expected version; a version mismatch is
-#   overwritten. So a redundant re-run is a fast no-op rather than a double install.
+#   node booted from a pre-baked AMI where Enroot/Pyxis is already installed). Each
+#   component is skipped when already present at the expected version; a version
+#   mismatch is overwritten. So a redundant re-run is a fast no-op rather than a
+#   double install.
 
 set -exo pipefail
 

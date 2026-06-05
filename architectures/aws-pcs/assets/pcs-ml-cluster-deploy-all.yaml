@@ -22,6 +22,7 @@ Metadata:
           - SlurmVersion
           - LoginNodeInstanceType
           - RootVolumeSize
+          - AmiId
           - DeployMonitoring
           - GrafanaPublicAccessCidr
           - ManagedAccounting
@@ -62,14 +63,7 @@ Metadata:
           - HomeThroughput
           - OpenZFSDeploymentType
       - Label:
-          default: "7. Custom AMI Build (Optional - skip unless you need a pre-baked DLAMI)"
-        Parameters:
-          - BuildAMI
-          - BaseAmiId
-          - SemanticVersion
-          - BuildSchedule
-      - Label:
-          default: "8. Developer / Advanced (Nested Templates & Monitoring Source)"
+          default: "7. Developer / Advanced (Nested Templates & Monitoring Source)"
         Parameters:
           - S3BucketName
           - S3KeyPrefix
@@ -109,14 +103,8 @@ Metadata:
         default: "Post-install script arguments"
       RootVolumeSize:
         default: "Root volume size (GiB)"
-      BuildAMI:
-        default: "Build custom DLAMI (Enroot/Pyxis pre-baked) -- optional"
-      BaseAmiId:
-        default: "Base AMI ID (optional; auto-resolved if empty)"
-      SemanticVersion:
-        default: "Image Builder recipe version"
-      BuildSchedule:
-        default: "AMI build schedule"
+      AmiId:
+        default: "AMI ID (empty = latest PCS-Ready Deep Learning AMI from SSM; pin in production)"
       DeployOnDemandCNG:
         default: "Deploy CPU (on-demand) queue"
       OnDemandInstanceType:
@@ -269,40 +257,21 @@ Parameters:
       - SINGLE_AZ_2
       - SINGLE_AZ_1
 
-  # AMI Building Configuration
-  BuildAMI:
+  # AMI selection (used by every node group)
+  AmiId:
     Type: String
     Description: >-
-      Pre-bake Enroot/Pyxis into a custom DLAMI via Image Builder (~30 min).
-      Default false (install at first boot via PostInstallScriptUrl). When true,
-      clear PostInstallScriptUrl for the cleanest boot. The AMI is bound to the
-      cluster's SlurmVersion (Pyxis ABI is locked to it) -- do not reuse across
-      Slurm major versions.
-    Default: 'false'
-    AllowedValues:
-      - 'true'
-      - 'false'
-
-  BaseAmiId:
-    Type: String
-    Description: (Optional) Base AMI ID to use for custom DLAMI build. Leave empty to auto-resolve from SSM parameter store.
+      AMI ID for every node group (login + compute). Empty (default) auto-resolves
+      to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04, x86_64) from the
+      SSM public parameter
+      /aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id. CloudFormation
+      re-resolves SSM parameter values on every stack update, so a later scale-out
+      can boot a newer AMI than the original nodes (drift). For production, pin to a
+      specific ami-xxx -- e.g. one produced by pcs-ready-dlami-with-enroot-pyxis.yaml
+      with Enroot/Pyxis pre-baked, or any other AMI built off the PCS-Ready DLAMI base.
     Default: ''
-
-  SemanticVersion:
-    Type: String
-    Description: Semantic version for ImageBuilder recipes (format X.Y.Z)
-    Default: '1.0.0'
-    AllowedPattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
-    ConstraintDescription: Must be a valid semantic version (e.g., 1.0.0)
-
-  BuildSchedule:
-    Type: String
-    Description: How often to build new AMIs. Manual requires triggering via console or CLI.
-    Default: Manual
-    AllowedValues:
-      - Manual
-      - Weekly
-      - Monthly
+    AllowedPattern: '^$|^ami-[0-9a-f]{8,17}$'
+    ConstraintDescription: Must be empty or a valid AMI ID (ami-xxxxxxxxx)
 
   PostInstallScriptUrl:
     Type: String
@@ -310,8 +279,9 @@ Parameters:
       HTTP(S) URL of a script run on every node at first boot (PCS equivalent of
       ParallelCluster OnNodeConfigured). Default installs Enroot/Pyxis. Set empty
       to skip, or point at any other HTTP(S) script for custom first-boot setup.
-      With BuildAMI=true the default installer is a no-op (idempotent) -- set
-      empty for the cleanest boot. S3 hosting is not allowed.
+      Idempotent: a no-op if Enroot/Pyxis is already pre-baked into AmiId, so
+      leaving the default works whether or not you supply a custom AMI.
+      S3 hosting is not allowed.
     Default: 'https://raw.githubusercontent.com/awslabs/awsome-distributed-ai/main/architectures/aws-pcs/scripts/install-enroot-pyxis.sh'
 
   PostInstallScriptArgs:
@@ -536,7 +506,6 @@ Rules:
 
 Conditions:
   UseLocalTemplates: !Equals [!Ref S3BucketName, 'local']
-  BuildAMIEnabled: !Equals [!Ref BuildAMI, 'true']
   DeployOnDemandCNGEnabled: !Equals [!Ref DeployOnDemandCNG, 'true']
   DeployPseriesCNGEnabled: !Equals [!Ref DeployPseriesCNG, 'true']
   # Open Grafana (login node, HTTPS/443) to a CIDR only when one is provided.
@@ -583,32 +552,7 @@ Resources:
           Value: !Sub '${AWS::StackName}-Prerequisites'
 
   #############################################################################
-  # 2. Custom AMI Stack (ImageBuilder) - Optional
-  #############################################################################
-  DLAMIStack:
-    Type: AWS::CloudFormation::Stack
-    Condition: BuildAMIEnabled
-    Properties:
-      TemplateURL: !If
-        - UseLocalTemplates
-        - pcs-ready-dlami-with-enroot-pyxis.yaml
-        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}pcs-ready-dlami-with-enroot-pyxis.yaml'
-      Parameters:
-        BaseAmiId: !Ref BaseAmiId
-        SemanticVersion: !Ref SemanticVersion
-        BuildSchedule: !Ref BuildSchedule
-        # The AMI bakes Pyxis built specifically for this Slurm version (the SPANK
-        # plugin ABI is version-locked) -- pass the cluster's SlurmVersion so AMI
-        # and cluster always match.
-        SlurmVersion: !Ref SlurmVersion
-        PublishToSsm: 'false'
-        EnableLifecyclePolicy: 'false'
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-PCS-DLAMI'
-
-  #############################################################################
-  # 3. PCS Cluster Stack (Scheduler only, no compute nodes)
+  # 2. PCS Cluster Stack (Scheduler only, no compute nodes)
   #############################################################################
   ClusterStack:
     Type: AWS::CloudFormation::Stack
@@ -670,10 +614,7 @@ Resources:
         MaxCount: 1
         MinCount: 1
         SubnetId: !GetAtt PrerequisitesStack.Outputs.PublicSubnet
-        AmiId: !If
-          - BuildAMIEnabled
-          - !GetAtt DLAMIStack.Outputs.DLAMIforPCSAmiId
-          - !Sub '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
+        AmiId: !Ref AmiId
         ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
         ExtraSecurityGroupId: !If
           - GrafanaPublicAccess
@@ -717,10 +658,7 @@ Resources:
         MaxCount: !Ref OnDemandMaxCount
         MinCount: !Ref OnDemandMinCount
         SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
-        AmiId: !If
-          - BuildAMIEnabled
-          - !GetAtt DLAMIStack.Outputs.DLAMIforPCSAmiId
-          - !Sub '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
+        AmiId: !Ref AmiId
         ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
         IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
         FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
@@ -760,10 +698,7 @@ Resources:
         MaxCount: !Ref PseriesMaxCount
         MinCount: !Ref PseriesMinCount
         SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
-        AmiId: !If
-          - BuildAMIEnabled
-          - !GetAtt DLAMIStack.Outputs.DLAMIforPCSAmiId
-          - !Sub '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
+        AmiId: !Ref AmiId
         ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
         IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
         FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
@@ -804,10 +739,7 @@ Resources:
         MaxCount: !Ref PseriesMaxCount
         MinCount: !Ref PseriesMinCount
         SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
-        AmiId: !If
-          - BuildAMIEnabled
-          - !GetAtt DLAMIStack.Outputs.DLAMIforPCSAmiId
-          - !Sub '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
+        AmiId: !Ref AmiId
         ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
         IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
         FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
@@ -848,10 +780,7 @@ Resources:
         MaxCount: !Ref PseriesMaxCount
         MinCount: !Ref PseriesMinCount
         SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
-        AmiId: !If
-          - BuildAMIEnabled
-          - !GetAtt DLAMIStack.Outputs.DLAMIforPCSAmiId
-          - !Sub '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
+        AmiId: !Ref AmiId
         ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
         IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
         FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId

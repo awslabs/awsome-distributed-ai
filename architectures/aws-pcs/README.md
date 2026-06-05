@@ -16,8 +16,10 @@ This repository provides reference architectures and deployment templates for se
 
 > Built on the AWS-managed **PCS-ready DLAMI** (NVIDIA driver, CUDA, PCS agent, and
 > Slurm 25.05/25.11 pre-installed), so no custom AMI build is required by default —
-> the cluster comes up without an Image Builder step. (Pre-baking Enroot/Pyxis into a
-> custom AMI is still available via `BuildAMI=true` for faster node boot at scale.)
+> the cluster comes up without an Image Builder step. For frequent scaling, you can
+> pre-bake Enroot/Pyxis into a custom DLAMI with the standalone
+> [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional)
+> template and pass the result as `AmiId`.
 
 ## 2. Architecture
 
@@ -29,7 +31,7 @@ A default deployment (`pcs-ml-cluster-deploy-all.yaml`) provisions:
 - PCS cluster with the Slurm scheduler (25.05 or 25.11), on the PCS-ready DLAMI
 - Login node group (public subnet) with the monitoring stack (Prometheus/Grafana/DCGM)
 - CPU compute node group (private subnet); optional GPU (P5/P6) node group with EFA
-- Enroot/Pyxis container runtime installed at first boot (default) or pre-baked via `BuildAMI=true`
+- Enroot/Pyxis container runtime installed at first boot via `PostInstallScriptUrl` (or pre-baked into a custom AMI you build separately and pass as `AmiId`)
 
 ---
 
@@ -78,46 +80,58 @@ are deleted with the stack.
 
 ## 4. Configuration
 
-Defaults give the most common production setup — `BuildAMI=false` + Enroot/Pyxis via
-`PostInstallScriptUrl` + `DeployMonitoring=true` — so a default deploy only needs the
-Availability Zone (`PrimarySubnetAZ`). The most-used parameters:
+Defaults give the most common production setup — Enroot/Pyxis installed at first
+boot via `PostInstallScriptUrl` + `DeployMonitoring=true` — so a default deploy
+only needs the Availability Zone (`PrimarySubnetAZ`). The most-used parameters:
 
 | Parameter | Default | Purpose |
 |---|---|---|
 | `PrimarySubnetAZ` | *(required)* | Availability Zone to deploy into — the one required parameter |
 | `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`); 25.11 is needed for the Slurm OpenMetrics dashboards. Drives Pyxis build version too. See [OPERATIONS.md §1](./docs/OPERATIONS.md#1-slurm-version-selection) |
-| `BuildAMI` | `false` | Pre-bake Enroot/Pyxis into a custom DLAMI instead of installing at first boot |
+| `AmiId` | *(empty → SSM auto)* | Empty auto-resolves to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04) from SSM. Pin to a specific `ami-xxx` for production, or pass an AMI built by [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional) |
 | `DeployMonitoring` | `true` | Deploy Prometheus/Grafana/DCGM on the login node |
 | `DeployOnDemandCNG` | `true` | Deploy the `cpu1` CPU queue (`OnDemandInstanceType`, default `c6i.4xlarge`) |
 | `DeployPseriesCNG` | `false` | Deploy a GPU (P5/P6) queue — see [GPU compute](#gpu-compute-p5p6) |
 | `PseriesInstanceType` | `p5.48xlarge` | GPU instance type; auto-selects the multi-NIC template + EFA count |
 | `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR |
 
-**See [PARAMETERS.md](./docs/PARAMETERS.md) for the complete parameter reference** (all 8
+**See [PARAMETERS.md](./docs/PARAMETERS.md) for the complete parameter reference** (all 7
 console parameter groups, with every default). The concept guides below cover the
 choices that need the most thought.
 
 ### Container runtime (Enroot/Pyxis)
 
-Choose **one** of two ways to provide Enroot/Pyxis:
+By default, every node runs [`scripts/install-enroot-pyxis.sh`](./scripts/install-enroot-pyxis.sh)
+at first boot via `PostInstallScriptUrl` — no AMI build, ~8–12 min node boot. The
+PCS-ready DLAMI base already includes the PCS agent, Slurm 25.05 & 25.11
+(`/opt/aws/pcs/scheduler/slurm-*`), NVIDIA driver + CUDA, and SSM agent, so the script
+only adds Enroot 3.5.0 + Pyxis 0.20.0 on top.
 
-- **First-boot install (default)**: `PostInstallScriptUrl` runs [`scripts/install-enroot-pyxis.sh`](./scripts/install-enroot-pyxis.sh) on each node — no AMI build, ~8–12 min node boot. Best for testing/infrequent scaling.
-- **Pre-baked AMI** (`BuildAMI=true`): `pcs-ready-dlami-with-enroot-pyxis.yaml` bakes Enroot 3.5.0 + Pyxis 0.20.0 into a custom DLAMI (~30 min build, ~3 min node boot). Best for production/frequent scaling. The template also wraps the build in a managed Image Builder pipeline with optional **scheduled rebuilds** (`BuildSchedule=Weekly`/`Monthly`), an **AMI lifecycle policy** that deprecates older AMIs after a configurable window, and **SSM parameter publishing** so other stacks can resolve the latest AMI ID. Without these, an equivalent build would be a one-shot ad-hoc invocation; the in-stack pipeline is what justifies the extra surface vs. just passing `AmiId` to a hand-built AMI.
+For **frequent scaling** in production, you can instead pre-bake Enroot/Pyxis into a
+custom DLAMI and set `AmiId` to that ami-xxx. Boot time drops to ~3 min, and the AMI
+gives you deterministic state across all nodes. See
+[Pre-baking Enroot/Pyxis into a custom AMI (optional)](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional)
+below — this is a separate template you run once, then pass its output as `AmiId` to
+the cluster.
 
-> **`BuildAMI=true` + `PostInstallScriptUrl`.** `PostInstallScriptUrl` is a generic
-> first-boot hook (not Enroot/Pyxis-specific), so the templates don't force it empty under
-> `BuildAMI=true`. If you set `BuildAMI=true` and leave the default Enroot/Pyxis installer,
-> nothing breaks — the installer is idempotent and skips components already baked into the
-> AMI (a fast no-op) — but for the cleanest boot pass **`PostInstallScriptUrl=""`** (or
-> point it at a different script for other first-boot setup). With `BuildAMI=false`
-> (default), leave `PostInstallScriptUrl` at its default.
+The post-install hook is idempotent: if you supply a custom AMI that already has
+Enroot/Pyxis baked in, the default `PostInstallScriptUrl` becomes a fast no-op. For
+the cleanest boot, set `PostInstallScriptUrl=""` when using a pre-baked AMI.
 
-The PCS-ready DLAMI base already includes the PCS agent, Slurm 25.05 & 25.11
-(`/opt/aws/pcs/scheduler/slurm-*`), NVIDIA driver + CUDA, and SSM agent.
+### AMI selection (`AmiId`)
 
-> **Production tip — pin the AMI.** Empty `AmiId` re-resolves the SSM `/latest/` parameter on
-> every stack update, so scale-out nodes can drift to a newer AMI. For production, resolve it
-> once and pass the result as `AmiId`. Details:
+`AmiId` is shared by every node group (login + compute). The default (empty)
+**auto-resolves to the latest PCS-Ready Deep Learning AMI** (Ubuntu 24.04, x86_64) from
+the SSM public parameter
+`/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id` — so a fresh deploy
+needs no AMI choice at all. To use a custom AMI (e.g. one with Enroot/Pyxis pre-baked,
+see [Pre-baking Enroot/Pyxis into a custom AMI (optional)](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional)),
+pass its `ami-xxx` here.
+
+> **Production tip — pin the AMI.** CloudFormation re-resolves SSM `/latest/`
+> parameters on every stack update, so a later scale-out can drift onto a newer AMI
+> than the original nodes. For production, resolve the parameter once and pass the
+> resulting `ami-xxx` as `AmiId`. Details:
 > [OPERATIONS.md §4](./docs/OPERATIONS.md#4-ami-selection-amiid--pin-in-production).
 
 ### GPU compute (P5/P6)
@@ -425,7 +439,70 @@ NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 
 ---
 
-## 9. Templates
+## 9. Pre-baking Enroot/Pyxis into a custom AMI (optional)
+
+The all-in-one template installs Enroot/Pyxis at **first boot** via
+`PostInstallScriptUrl`, which is fast to deploy and avoids an Image Builder step.
+For **frequent scaling** in production, pre-baking Enroot/Pyxis into a custom AMI
+drops node boot time from ~8–12 min to ~3 min and pins every node to a deterministic
+state. This is a separate, standalone path: build the AMI once with
+[`pcs-ready-dlami-with-enroot-pyxis.yaml`](./assets/pcs-ready-dlami-with-enroot-pyxis.yaml),
+then pass the resulting `ami-xxx` as `AmiId` to the cluster.
+
+**Step 1: Build the AMI** (~30 min one-time, separate stack)
+
+[![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ready-dlami-with-enroot-pyxis.yaml&stackName=pcs-dlami)
+
+```bash
+aws cloudformation create-stack \
+  --stack-name pcs-dlami \
+  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ready-dlami-with-enroot-pyxis.yaml \
+  --parameters ParameterKey=SlurmVersion,ParameterValue=25.11 \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
+```
+
+The AMI is **single-Slurm-version by design**: Pyxis is a SPANK plugin whose ABI is
+locked to its compile-time Slurm version, so pass the same `SlurmVersion` you'll use
+on the cluster.
+
+**Step 2: Read the resulting AMI ID** from the stack output `DLAMIforPCSAmiId`:
+
+```bash
+AMI_ID=$(aws cloudformation describe-stacks \
+  --stack-name pcs-dlami \
+  --query 'Stacks[0].Outputs[?OutputKey==`DLAMIforPCSAmiId`].OutputValue' \
+  --output text)
+echo "$AMI_ID"   # ami-0xxxxxxxxxxxxxxxx
+```
+
+**Step 3: Pass it to the cluster** as `AmiId` and clear `PostInstallScriptUrl` for
+the cleanest boot:
+
+```bash
+aws cloudformation create-stack \
+  --stack-name pcs-ml-cluster \
+  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
+  --parameters \
+    ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-1a \
+    ParameterKey=AmiId,ParameterValue=$AMI_ID \
+    ParameterKey=PostInstallScriptUrl,ParameterValue= \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
+```
+
+The post-install hook is idempotent, so leaving `PostInstallScriptUrl` at its default
+also works — the installer detects Enroot/Pyxis is already present and is a fast
+no-op. Setting it empty just shaves a few seconds off boot.
+
+**Optional features of `pcs-ready-dlami-with-enroot-pyxis.yaml`** (defaults are off):
+- `BuildSchedule=Weekly`/`Monthly` for scheduled rebuilds against a moving base AMI
+- `EnableLifecyclePolicy=true` to deprecate older AMIs after `LifecycleDeprecateAfterWeeks`
+- `PublishToSsm=true` to publish the latest AMI ID to an SSM parameter for downstream stacks
+
+For production deploys that pin the AMI explicitly per cluster, none of these are needed.
+
+---
+
+## 10. Templates
 
 All templates live in [`assets/`](./assets/). `pcs-ml-cluster-deploy-all.yaml` nests
 the others; you can also deploy each individually for more control (e.g. reuse a VPC/FSx
@@ -449,7 +526,7 @@ Capacity Block.
 
 ---
 
-## 10. Testing and Validation
+## 11. Testing and Validation
 
 Validated configurations:
 
@@ -463,7 +540,7 @@ Validated configurations:
 
 ---
 
-## 11. Additional Resources
+## 12. Additional Resources
 
 - [Operations guide](./docs/OPERATIONS.md) — version trade-offs, AMI single-version rule, monitoring/B300 dcgm setup, AMI pinning, FSx coupling, recommended production settings
 - [Roadmap / TODO](./docs/ROADMAP.md) — implementation items under consideration

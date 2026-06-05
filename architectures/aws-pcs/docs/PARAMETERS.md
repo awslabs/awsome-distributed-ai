@@ -3,8 +3,12 @@
 Full parameter list for the all-in-one deployment template, grouped to match the
 sections shown in the CloudFormation console (the console also shows friendly labels via
 `AWS::CloudFormation::Interface`). Defaults give the most common production setup —
-`BuildAMI=false` + Enroot/Pyxis via `PostInstallScriptUrl` + `DeployMonitoring=true` —
-so a default deploy only needs the Availability Zone (`PrimarySubnetAZ`).
+the latest PCS-Ready Deep Learning AMI auto-resolved from SSM, Enroot/Pyxis installed
+at first boot via `PostInstallScriptUrl`, monitoring enabled — so a default deploy
+only needs the Availability Zone (`PrimarySubnetAZ`). To pre-bake Enroot/Pyxis into
+a custom AMI for faster boots, build it separately with
+[`pcs-ready-dlami-with-enroot-pyxis.yaml`](../README.md#9-pre-baking-enrootpyxis-into-a-custom-ami-optional)
+and pass its output as `AmiId`.
 
 For conceptual guidance (GPU instance/EFA selection, FSx Region availability, container
 runtime options), see the [README](../README.md#4-configuration).
@@ -21,9 +25,10 @@ runtime options), see the [README](../README.md#4-configuration).
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`). Drives which monitoring you get (Slurm OpenMetrics is 25.11+ only) and is also threaded into the AMI build / CNG UserData so the right-version Pyxis is installed; see [OPERATIONS.md §1](./OPERATIONS.md#1-slurm-version-selection) |
+| `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`). Drives which monitoring you get (Slurm OpenMetrics is 25.11+ only) and is also threaded into the CNG UserData so the right-version Pyxis is installed; see [OPERATIONS.md §1](./OPERATIONS.md#1-slurm-version-selection) |
 | `LoginNodeInstanceType` | `m6i.4xlarge` | Login node instance type |
-| `RootVolumeSize` | `300` | Root EBS volume size (GiB) on every node (login + compute + AMI build); 300 leaves room for large container images (Megatron `.sqsh` ~20 GB) |
+| `RootVolumeSize` | `300` | Root EBS volume size (GiB) on every node (login + compute); 300 leaves room for large container images (Megatron `.sqsh` ~20 GB) |
+| `AmiId` | *(empty → SSM auto-resolve)* | AMI ID for every node group. **Empty (default) auto-resolves to the latest PCS-Ready Deep Learning AMI** (Ubuntu 24.04, x86_64) from SSM (`/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id`). For production, **pin to a specific `ami-xxx`** so a later scale-out cannot drift onto a newer base. Use a custom AMI built off the PCS-Ready DLAMI base (e.g. via [`pcs-ready-dlami-with-enroot-pyxis.yaml`](../README.md#9-pre-baking-enrootpyxis-into-a-custom-ami-optional)) when you want Enroot/Pyxis pre-baked or other customizations. See [OPERATIONS.md §4](./OPERATIONS.md#4-ami-selection-amiid--pin-in-production) |
 | `DeployMonitoring` | `true` | Deploy Prometheus/Grafana/DCGM on the login node |
 | `GrafanaPublicAccessCidr` | *(empty)* | When set to a CIDR, opens HTTPS/443 on the login node to that CIDR via a login-only security group. Empty = SSM port-forward only. **443 also exposes the unauthenticated `/prometheus/`, `/pushgateway/`, `/slurmexporter/` proxy paths**, not just the password-gated Grafana. Use the tightest CIDR you can; `0.0.0.0/0` is accepted for short-lived PoC/workshop use but exposes those endpoints to the whole internet |
 | `ManagedAccounting` | `disabled` | Enable Slurm managed accounting (requires Slurm 24.11+) |
@@ -33,7 +38,7 @@ runtime options), see the [README](../README.md#4-configuration).
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `PostInstallScriptUrl` | Enroot/Pyxis installer | HTTP(S) script run on every node at first boot (PCS equivalent of ParallelCluster `OnNodeConfigured`). Empty = skip; or override with any other HTTP(S) script. Idempotent under `BuildAMI=true` (no-op when already pre-baked) |
+| `PostInstallScriptUrl` | Enroot/Pyxis installer | HTTP(S) script run on every node at first boot (PCS equivalent of ParallelCluster `OnNodeConfigured`). Empty = skip; or override with any other HTTP(S) script. Idempotent: a no-op if Enroot/Pyxis is already pre-baked into `AmiId` |
 | `PostInstallScriptArgs` | *(empty)* | Arguments passed to the post-install script |
 
 ## 4. On-Demand Compute Node Group (CPU)
@@ -76,20 +81,7 @@ See [Storage: FSx deployment types](../README.md#storage-fsx-deployment-types-re
 | `HomeThroughput` | `320` | FSx for OpenZFS (`/home`) throughput (MB/s) |
 | `OpenZFSDeploymentType` | `SINGLE_AZ_HA_2` | FSx for OpenZFS (`/home`) deployment type (`SINGLE_AZ_HA_2` / `SINGLE_AZ_HA_1` / `SINGLE_AZ_2` / `SINGLE_AZ_1`) — Region-dependent |
 
-## 7. Custom AMI Build (Optional)
-
-Skip unless you need a pre-baked DLAMI (faster scale-out, deterministic state).
-The default first-boot install (`PostInstallScriptUrl` in §3) is what almost
-every cluster wants.
-
-| Parameter | Default | Purpose |
-|---|---|---|
-| `BuildAMI` | `false` | Pre-bake Enroot/Pyxis into a custom DLAMI via Image Builder (~30 min). When `true`, set `PostInstallScriptUrl=""` for the cleanest boot. The AMI is **single-Slurm-version** by design — match `SlurmVersion`. See [OPERATIONS.md §2](./OPERATIONS.md#2-container-runtime-postinstall-vs-ami-build) |
-| `BaseAmiId` | *(auto)* | Base AMI for the custom build; empty = auto-resolve from SSM (only used when `BuildAMI=true`) |
-| `SemanticVersion` | `1.0.0` | Image Builder recipe version (only used when `BuildAMI=true`) |
-| `BuildSchedule` | `Manual` | AMI build cadence: `Manual` / `Weekly` / `Monthly` (only used when `BuildAMI=true`) |
-
-## 8. Developer / Advanced
+## 7. Developer / Advanced
 
 | Parameter | Default | Purpose |
 |---|---|---|
