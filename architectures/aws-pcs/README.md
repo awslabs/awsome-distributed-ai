@@ -269,7 +269,7 @@ the GPU queue, Pyxis containers, and EFA work end-to-end. Two PCS-specific delta
 all you need to add:
 
 **1. Import the image on the login node** — `enroot import` builds its overlayfs on the
-node-local root disk (the login node has 300 GiB), and FSx Lustre can't host that
+node-local root disk (the login node has 300 GiB), and FSx for Lustre can't host that
 overlay; only the resulting `.sqsh` lands on shared `/fsx`. Pin a specific image tag
 for reproducible numbers (don't use `latest`):
 

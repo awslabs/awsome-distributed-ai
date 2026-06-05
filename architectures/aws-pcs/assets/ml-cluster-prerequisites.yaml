@@ -9,7 +9,7 @@ Description: >
   A public and a private subnet are created in the Availability Zone you provide. It
   also deploys an Internet Gateway, a NAT Gateway in the public subnet, and an Amazon
   S3 VPC endpoint. The VPC has two CIDR blocks (10.0.0.0/16 public, 10.1.0.0/16
-  private). FSx Lustre defaults to 1.2 TB; deployment types/throughput are parameters.
+  private). FSx for Lustre defaults to 1.2 TB; deployment types/throughput are parameters.
 
 
 ####################
@@ -28,7 +28,7 @@ Metadata:
         Parameters:
           - PrimarySubnetAZ
       - Label:
-          default: Fsx Lustre storage size
+          default: FSx for Lustre (/fsx) storage size
         Parameters:
           - Capacity
       - Label:
@@ -467,17 +467,17 @@ Outputs:
     Export:
       Name: !Sub ${AWS::StackName}-FSxLustreFilesystemId
   FSxORootVolumeId:
-    Description: The ID of Fsx OpenZFS root volume
+    Description: The ID of FSx for OpenZFS root volume
     Value: !GetAtt OpenZFSFileSystem.RootVolumeId
     Export:
       Name: !Sub ${AWS::StackName}-FSxORootVolumeId
   FSxOFilesystemId:
-    Description: The ID of Fsx OpenZFS filesystem
+    Description: The ID of FSx for OpenZFS filesystem
     Value: !Ref OpenZFSFileSystem
     Export:
       Name: !Sub ${AWS::StackName}-FSxOFilesystemId
   FSxOpenZFSFilesystemId:
-    Description: The ID of Fsx OpenZFS filesystem (alias for compatibility)
+    Description: The ID of FSx for OpenZFS filesystem (alias for compatibility)
     Value: !Ref OpenZFSFileSystem
     Export:
       Name: !Sub ${AWS::StackName}-FSxOpenZFSFilesystemId

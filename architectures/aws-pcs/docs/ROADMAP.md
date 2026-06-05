@@ -41,7 +41,7 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   source-built apps). Add an opt-in `Spack` install path — e.g. a `PostInstallScriptUrl`
   variant that bootstraps Spack into shared `/fsx`, configures
   [aws-pcluster-spack](https://github.com/spack/spack-configs)-style external packages
-  for PCS (Slurm, EFA libfabric, FSx Lustre client), and uses the
+  for PCS (Slurm, EFA libfabric, FSx for Lustre client), and uses the
   `aws-pcluster-` compiler + EFA/NCCL targets so binaries are tuned for the instance
   family. Single shared install on `/fsx` works for the whole cluster, so this fits
   cleanly alongside the existing layout. Validate on at least one CPU + one GPU node.

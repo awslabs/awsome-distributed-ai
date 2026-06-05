@@ -61,20 +61,20 @@ See [GPU compute](../README.md#gpu-compute-p5p6) for instance/EFA/capacity guida
 | `PseriesCngName` | `gpu-p5` | GPU node-group name |
 | `PseriesQueueName` | `gpu-p5` | GPU Slurm queue name |
 
-## 6. FSx Storage Configuration (Advanced)
+## 6. FSx for Lustre (`/fsx`) + FSx for OpenZFS (`/home`) (Advanced)
 
 See [Storage: FSx deployment types](../README.md#storage-fsx-deployment-types-region-availability) for Region availability.
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `Capacity` | `1200` | FSx Lustre capacity (GiB; 1200 or increments of 2400) |
-| `LustreDeploymentType` | `PERSISTENT_2` | Lustre deployment type (`PERSISTENT_2` / `PERSISTENT_1`) — Region-dependent |
-| `PerUnitStorageThroughput` | `250` | Lustre throughput (MB/s/TiB); valid values depend on the deployment type |
-| `Compression` | `LZ4` | Lustre data compression (`LZ4` / `NONE`) |
-| `LustreVersion` | `2.15` | Lustre software version (`2.15` / `2.12`) |
-| `HomeCapacity` | `512` | FSx OpenZFS (`/home`) capacity (GiB) |
-| `HomeThroughput` | `320` | FSx OpenZFS (`/home`) throughput (MB/s) |
-| `OpenZFSDeploymentType` | `SINGLE_AZ_HA_2` | OpenZFS deployment type (`SINGLE_AZ_HA_2` / `SINGLE_AZ_HA_1` / `SINGLE_AZ_2` / `SINGLE_AZ_1`) — Region-dependent |
+| `Capacity` | `1200` | FSx for Lustre (`/fsx`) capacity (GiB; 1200 or increments of 2400) |
+| `LustreDeploymentType` | `PERSISTENT_2` | FSx for Lustre (`/fsx`) deployment type (`PERSISTENT_2` / `PERSISTENT_1`) — Region-dependent |
+| `PerUnitStorageThroughput` | `250` | FSx for Lustre (`/fsx`) throughput (MB/s/TiB); valid values depend on the deployment type |
+| `Compression` | `LZ4` | FSx for Lustre (`/fsx`) data compression (`LZ4` / `NONE`) |
+| `LustreVersion` | `2.15` | FSx for Lustre (`/fsx`) software version (`2.15` / `2.12`) |
+| `HomeCapacity` | `512` | FSx for OpenZFS (`/home`) capacity (GiB) |
+| `HomeThroughput` | `320` | FSx for OpenZFS (`/home`) throughput (MB/s) |
+| `OpenZFSDeploymentType` | `SINGLE_AZ_HA_2` | FSx for OpenZFS (`/home`) deployment type (`SINGLE_AZ_HA_2` / `SINGLE_AZ_HA_1` / `SINGLE_AZ_2` / `SINGLE_AZ_1`) — Region-dependent |
 
 ## 7. Custom AMI Build (Optional)
 

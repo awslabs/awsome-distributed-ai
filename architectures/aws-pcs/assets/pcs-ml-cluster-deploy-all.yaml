@@ -51,7 +51,7 @@ Metadata:
           - PseriesCngName
           - PseriesQueueName
       - Label:
-          default: "6. FSx Storage Configuration (Advanced)"
+          default: "6. FSx for Lustre (/fsx) + FSx for OpenZFS (/home) (Advanced)"
         Parameters:
           - Capacity
           - LustreDeploymentType
@@ -144,21 +144,21 @@ Metadata:
       PseriesQueueName:
         default: "GPU queue name"
       Capacity:
-        default: "FSx Lustre capacity (GiB)"
+        default: "FSx for Lustre (/fsx) capacity (GiB)"
       LustreDeploymentType:
-        default: "FSx Lustre deployment type"
+        default: "FSx for Lustre (/fsx) deployment type"
       PerUnitStorageThroughput:
-        default: "FSx Lustre throughput (MB/s/TiB)"
-      OpenZFSDeploymentType:
-        default: "FSx OpenZFS (home) deployment type"
+        default: "FSx for Lustre (/fsx) throughput (MB/s/TiB)"
       Compression:
-        default: "FSx Lustre compression"
+        default: "FSx for Lustre (/fsx) compression"
       LustreVersion:
-        default: "FSx Lustre version"
+        default: "FSx for Lustre (/fsx) version"
       HomeCapacity:
-        default: "FSx OpenZFS (home) capacity (GiB)"
+        default: "FSx for OpenZFS (/home) capacity (GiB)"
       HomeThroughput:
-        default: "FSx OpenZFS (home) throughput (MB/s)"
+        default: "FSx for OpenZFS (/home) throughput (MB/s)"
+      OpenZFSDeploymentType:
+        default: "FSx for OpenZFS (/home) deployment type"
       S3BucketName:
         default: "Nested templates S3 bucket"
       S3KeyPrefix:
