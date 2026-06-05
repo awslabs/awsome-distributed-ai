@@ -5,8 +5,9 @@ templates in [`../assets`](../assets). Each test below lists **what to run** and
 **expected result**.
 
 For non-test operational guidance (Slurm version trade-offs, AMI single-version rule,
-`MonitoringVersion` migration, `DcgmExporterImage` for B300, AMI pinning, FSx
-deployment-type ↔ throughput coupling), see [`../docs/OPERATIONS.md`](../docs/OPERATIONS.md).
+`MonitoringVersion` migration, the `DcgmExporterImage` default and when to change it,
+AMI pinning, FSx deployment-type ↔ throughput coupling), see
+[`../docs/OPERATIONS.md`](../docs/OPERATIONS.md).
 
 Rather than ship its own copies, this guide reuses the repository's canonical benchmark
 and training assets and documents only the **PCS-specific deltas** (queue/partition names,
@@ -38,7 +39,7 @@ do **not** assume a single 25.11 GPU run covers everything.
 | 3 | **First-boot from a clean deploy** | Validate on a **freshly deployed** cluster, not a node you hand-patched | Post-install runs during cloud-init *before* slurmd/profile.d/controller exist; bugs there (e.g. version detection, `set -e` aborts) only show on a clean first boot, not after a live re-run. |
 | 4 | **CPU queue** | `DeployOnDemandCNG=true`; Pyxis container job on `cpu1` | Baseline; also the cheapest way to exercise items 1–3 without GPU capacity. |
 | 5 | **Each GPU family** (as capacity allows) | `p5`/`p5e`/`p5en`, `p6-b200`, `p6-b300`: nvidia-smi, NCCL all_reduce, FSDP | EFA NIC layout and the dcgm-exporter image differ per family (see notes). |
-| 6 | **Monitoring** | 6 login containers up, all Prometheus targets healthy, GPU dashboards populate (B300 needs `DcgmExporterImage`) | — |
+| 6 | **Monitoring** | 6 login containers up, all Prometheus targets healthy, GPU dashboards populate on every supported GPU family with the default `DcgmExporterImage` (DCGM 4.5.2 by digest) | — |
 | 7 | **Template lint** | `aws cloudformation validate-template` on every edited `assets/*.yaml` | Catches structural errors before a deploy round-trip. |
 
 Tests 1–7 below are the per-item how-to. The single-cluster shortcut (one deploy that
@@ -76,7 +77,7 @@ results; exact bandwidth/throughput vary with NCCL/EFA versions and message size
 | Config | Region | Capacity | Monitoring | NCCL all_reduce (2-node peak busbw) | FSDP Llama-2 7B (2-node) |
 |---|---|---|---|---|---|
 | **2× p6-b200.48xlarge** (16× B200) | us-west-2 | Capacity Block | ✅ v2.9.1, 16 GPUs in Grafana | **~654 GB/s** @16 GiB (EFA, `found 8 nics`, `#wrong 0`) | **~223 TFLOPS/GPU, ~86k tok/s** |
-| **2× p6-b300.48xlarge** (16× B300) | us-west-2 | Capacity Block | ✅ v2.9.1 + `DcgmExporterImage` digest, 16 B300 GPUs in Grafana ‡ | **~751 GB/s** @64 GiB (EFA, `found 16 nics`, `#wrong 0`) † | **~205 TFLOPS/GPU, ~79k tok/s** (venv); **~193 TFLOPS/GPU** (container) |
+| **2× p6-b300.48xlarge** (16× B300) | us-west-2 | Capacity Block | ✅ v2.9.1, 16 B300 GPUs in Grafana with the default `DcgmExporterImage` (DCGM 4.5.2 by digest) ‡ | **~751 GB/s** @64 GiB (EFA, `found 16 nics`, `#wrong 0`) † | **~205 TFLOPS/GPU, ~79k tok/s** (venv); **~193 TFLOPS/GPU** (container) |
 | **2× p5.48xlarge** (16× H100) | us-east-2 | Capacity Block | ✅ | **~480 GB/s** (EFA, `found 32 nics`, `#wrong 0`) | ~60 TFLOPS/GPU |
 | **Slurm 25.05, CPU + PostInstall** | us-west-2 | On-Demand | ✅ v2.9.1 (no `slurm_openmetrics` job §) | first-boot Pyxis OK, `srun --container-image=ubuntu:22.04` clean | n/a |
 | **Slurm 25.11, CPU + PostInstall** | us-west-2 | On-Demand | ✅ v2.9.1 incl. Slurm OpenMetrics | first-boot Pyxis OK | n/a |
@@ -123,10 +124,10 @@ Notes:
   16 GiB was indeed unsaturated. **128 GiB and 256 GiB OOM** (the all_reduce buffer exceeds
   B300 GPU memory), so ~64 GiB is the practical max single-buffer size here; for a true peak,
   scale to more nodes rather than larger buffers.
-- **‡ B300 GPU metrics require `DcgmExporterImage`** with a DCGM ≥ 4.4.0 build supplied
-  **by digest** (validated with `nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547…`,
-  DCGM 4.5.2). Other GPU types need no override. See
-  [docs/OPERATIONS.md §3.1](../docs/OPERATIONS.md#31-b300-gpu-metrics-need-dcgmexporterimage).
+- **‡ B300 GPU metrics work with the default `DcgmExporterImage`** — a DCGM 4.5.2
+  build pinned by digest (`nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547…`),
+  validated on 2× p6-b300. Override only if you need to pin to a different DCGM build;
+  see [docs/OPERATIONS.md §3.1](../docs/OPERATIONS.md#31-dcgmexporterimage-the-default-and-when-to-change-it).
 - **§ Slurm OpenMetrics is 25.11+ only.** On 25.05 the Slurm dashboards stay empty (the
   rest of monitoring works fine). See
   [docs/OPERATIONS.md §1](../docs/OPERATIONS.md#1-slurm-version-selection).

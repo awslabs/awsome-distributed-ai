@@ -315,12 +315,13 @@ node-local `/opt` (not the shared `/home`). Pre-built Grafana dashboards (Cluste
 Slurm Detail, GPU Node List, GPU Health, Cluster Costs, Storage) are provisioned
 automatically — see the [screenshot below](#accessing-grafana).
 
-> **GPU metrics on p6-b300 — set `DcgmExporterImage`:** the default dcgm-exporter pin
-> (DCGM 4.2.0) covers up to B200; **B300 needs DCGM ≥ 4.4.0** supplied via `DcgmExporterImage`
-> by digest. Validated on 2× p6-b300, works out of the box with the default
-> `MonitoringVersion=v2.9.1`. Details + the validated digest:
-> [OPERATIONS.md §3.1](./docs/OPERATIONS.md#31-b300-gpu-metrics-need-dcgmexporterimage).
-> Other GPU types (p5/p5e/p5en/p6-b200) need no override.
+> **GPU metrics work out of the box across the supported GPU range** (Hopper / B200 /
+> B300). `DcgmExporterImage` defaults to a DCGM 4.5.2 build pinned by digest, validated
+> on 2× p6-b300 and on B200. The monitoring stack's own default (DCGM 4.2.0) tops out
+> at B200 and can't pull newer NVCR tags on Docker 29.x — overriding via digest at the
+> deploy-all level is what bridges that. Override `DcgmExporterImage` only if you need
+> to pin to a different build; details:
+> [OPERATIONS.md §3.1](./docs/OPERATIONS.md#31-dcgmexporterimage-the-default-and-when-to-change-it).
 
 > **Prefer AWS-managed Prometheus/Grafana?** If you'd rather use Amazon Managed Service
 > for Prometheus + Amazon Managed Grafana instead of the self-hosted stack on the login
@@ -331,7 +332,7 @@ automatically — see the [screenshot below](#accessing-grafana).
 - `DeployMonitoring` (default `true`)
 - `MonitoringVersion` — [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) git ref (release tag, branch, or `latest`; default `v2.9.1`). Pinned to a tag so upstream changes can't break deployments unexpectedly. `v2.9.1` adds the `DCGM_EXPORTER_IMAGE` override (lets `DcgmExporterImage` enable B300 GPU metrics); `v2.6.4`+ carry the PCS fixes (node-local `/opt` install + Docker-29.x DCGM tag).
 - `MonitoringRepo` — `owner/repo` to fetch from (default `aws-samples/aws-parallelcluster-monitoring`). Point at a fork + a branch in `MonitoringVersion` to test unreleased changes.
-- `DcgmExporterImage` — override the dcgm-exporter image (empty = default DCGM 4.2.0, up to B200). For p6-b300 set a DCGM ≥ 4.4.0 build **by digest** (see the [p6-b300 note](#8-monitoring) below).
+- `DcgmExporterImage` — dcgm-exporter image used on GPU nodes; defaults to a DCGM 4.5.2 build pinned by digest (covers Hopper/B200/B300). Override only if you need to pin to a different build (e.g. the older monitoring-default DCGM 4.2.0).
 
 > Node type is identified by the `monitoring-role` tag (`login`/`compute`), not the EC2
 > `Name` tag — the `Name` tag defaults to `PCS-<cngname>` and is free for you to retag.

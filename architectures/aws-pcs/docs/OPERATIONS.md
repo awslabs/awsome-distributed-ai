@@ -98,21 +98,36 @@ treat a binary built against a particular libc.
 - **v2.6.4**: node-local `/opt` install (fixes the shared-`/home` Stale-file-handle race).
 - **v2.6.5**: DCGM exporter pin that pulls on Docker 29.x.
 
-### 3.1 B300 GPU metrics need `DcgmExporterImage`
+### 3.1 `DcgmExporterImage` — the default, and when to change it
 
-The default `dcgm-exporter` pin is DCGM 4.2.0 — that's the newest tag that pulls
-cleanly on Docker 29.x (newer NVCR tags publish OCI image-index manifests Docker 29.x
-can't pull), and it covers up to B200. **B300 needs DCGM ≥ 4.4.0**, so set
-`DcgmExporterImage` to a B300-capable build by **digest** (a digest pull bypasses the
-OCI-index issue):
+The templates default `DcgmExporterImage` to a **DCGM 4.5.2 build pinned by digest**:
 
 ```
-DcgmExporterImage=nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547d4546eaf4dd5d6b4c0b4db4101e63ef7dc3cdff7f42b767d2c60b706
+nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547d4546eaf4dd5d6b4c0b4db4101e63ef7dc3cdff7f42b767d2c60b706
 ```
 
-(linux/amd64 manifest for `4.5.2-4.8.1-ubuntu22.04`; an arm64 sibling digest exists for
-Grace-based nodes when those land.) Validated on 2× p6-b300 with all 16 GPUs reporting
-in Grafana. p5/p5e/p5en/p6-b200 don't need an override.
+This is the linux/amd64 manifest for `4.5.2-4.8.1-ubuntu22.04`. It covers Hopper /
+B200 / B300 with the same image — validated on 2× p6-b300 (all 16 GPUs reporting in
+Grafana) and aligns with the upstream DCGM changelog (no `DCGM_FI_DEV_*` field
+removals or B200 regressions between 4.2.0 and 4.5.2).
+
+**Why a digest, not a tag.** The monitoring stack's *own* default is the older
+4.2.0 tag because newer NVCR tags publish an OCI image-index manifest that Docker 29.x
+on the PCS DLAMI can't pull (`error from registry: Incorrect Repository Format`). A
+digest pull bypasses that index negotiation, so we can ship a newer DCGM safely.
+4.2.0 also caps coverage at B200 — too restrictive for this repo's GPU range.
+
+**When you might want to override.** Set `DcgmExporterImage` to a different image
+reference (preferably also a digest) if you have a reason to deviate:
+
+| Goal | Set `DcgmExporterImage` to |
+|---|---|
+| Pin to the monitoring stack's older 4.2.0 (e.g. matching another fleet) | `nvcr.io/nvidia/k8s/dcgm-exporter:4.2.0-4.1.0-ubuntu22.04` |
+| Test a newer DCGM | The new build's digest, e.g. `nvcr.io/.../dcgm-exporter@sha256:<newer>` |
+| Use an arm64 build (Grace-based nodes once supported) | The arm64 sibling digest of the same release |
+
+For all the standard x86_64 P-family clusters this PR targets, the default is what you
+want — leave it alone.
 
 ### 3.2 Public Grafana exposure
 

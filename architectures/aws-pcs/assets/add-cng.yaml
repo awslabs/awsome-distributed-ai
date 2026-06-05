@@ -155,13 +155,13 @@ Parameters:
   DcgmExporterImage:
     Type: String
     Description: >-
-      (Optional) Override the dcgm-exporter container image used by the monitoring
-      stack on GPU nodes. Leave EMPTY to use the monitoring stack's default pin
-      (DCGM 4.2.0, which covers up to B200). B300 and newer GPUs need DCGM >= 4.4.0:
-      supply a newer build here, preferably by DIGEST (e.g.
-      nvcr.io/nvidia/k8s/dcgm-exporter@sha256:...) so the pull bypasses the Docker
-      29.x OCI-index failure that breaks newer NVCR tags. Has no effect on CPU nodes.
-    Default: ''
+      dcgm-exporter container image used by the monitoring stack on GPU nodes. The
+      default is a DCGM 4.5.2 build pinned by DIGEST -- this covers Hopper / B200 /
+      B300 alike (the digest pull bypasses the Docker 29.x OCI-index failure that
+      breaks newer NVCR tags). To pin to the older monitoring-default 4.2.0 (covers
+      Hopper + B200 only) or any other build, set this to that image reference
+      (preferably also a digest). No effect on CPU nodes.
+    Default: 'nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547d4546eaf4dd5d6b4c0b4db4101e63ef7dc3cdff7f42b767d2c60b706'
 
   MonitoringRole:
     Type: String
