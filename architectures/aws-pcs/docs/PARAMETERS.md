@@ -21,8 +21,9 @@ runtime options), see the [README](../README.md#4-configuration).
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `LoginNodeInstanceType` | `m6i.4xlarge` | Login node instance type |
 | `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`). Drives which monitoring you get (Slurm OpenMetrics is 25.11+ only) and is also threaded into the AMI build / CNG UserData so the right-version Pyxis is installed; see [OPERATIONS.md §1](./OPERATIONS.md#1-slurm-version-selection) |
+| `LoginNodeInstanceType` | `m6i.4xlarge` | Login node instance type |
+| `RootVolumeSize` | `300` | Root EBS volume size (GiB) on every node (login + compute + AMI build); 300 leaves room for large container images (Megatron `.sqsh` ~20 GB) |
 | `DeployMonitoring` | `true` | Deploy Prometheus/Grafana/DCGM on the login node |
 | `GrafanaPublicAccessCidr` | *(empty)* | When set to a CIDR, opens HTTPS/443 on the login node to that CIDR via a login-only security group. Empty = SSM port-forward only. **443 also exposes the unauthenticated `/prometheus/`, `/pushgateway/`, `/slurmexporter/` proxy paths**, not just the password-gated Grafana. Use the tightest CIDR you can; `0.0.0.0/0` is accepted for short-lived PoC/workshop use but exposes those endpoints to the whole internet |
 | `ManagedAccounting` | `disabled` | Enable Slurm managed accounting (requires Slurm 24.11+) |
@@ -34,7 +35,6 @@ runtime options), see the [README](../README.md#4-configuration).
 |---|---|---|
 | `PostInstallScriptUrl` | Enroot/Pyxis installer | HTTP(S) script run on every node at first boot (PCS equivalent of ParallelCluster `OnNodeConfigured`). Empty = skip; or override with any other HTTP(S) script. Idempotent under `BuildAMI=true` (no-op when already pre-baked) |
 | `PostInstallScriptArgs` | *(empty)* | Arguments passed to the post-install script |
-| `RootVolumeSize` | `300` | Node root volume (GiB); 300 leaves room for large container images (Megatron `.sqsh` ~20 GB) |
 
 ## 4. On-Demand Compute Node Group (CPU)
 
