@@ -166,7 +166,53 @@ which differs from p5/b200's "card 0 = EFA, DeviceIndex 1" layout). The instance
 is locked via `AllowedValues` so a different type can't be selected through this
 template — pick the matching `add-cng-*.yaml` for the family you want.
 
-## 7. Recommendations recap
+## 7. Known issues
+
+### 7.1 First-srun-on-a-fresh-cpu1-node can drain the node ("Prolog error")
+
+**Symptom.** The very first `srun` against a freshly-launched compute node fails with
+`Job prolog failed`, the node enters `drained` state with `Reason=Prolog error`, and the
+job is cancelled. The next `srun` (which lands on a sibling node) works.
+
+**Cause.** A systemd / cgroup-v2 race during PCS bootstrap, observed on the PCS-ready
+DLAMI Ubuntu 24.04. Sequence in `journalctl -u slurmd` on the affected node:
+
+```
+T+0   pcs_bootstrap_finalize.sh starts slurmd  (slurmd PID A)
+T+1   slurmd PID A starts up, loads pyxis, registers with the controller
+T+9   systemd: slurmd.service: Failed to set 'cpuset.cpus' attribute on
+      '/system.slice/slurmd.service' to '': No space left on device
+      (Linux's misleading error for an empty/invalid cpuset value)
+T+9   systemd SIGTERMs slurmd PID A and starts slurmd PID B
+T+10  user srun arrives, controller asks PID B for the prolog
+T+10..+430  prolog notification times out (420s default)
+T+430 slurmd cancels the job: "error: Waiting for JobId=N REQUEST_LAUNCH_PROLOG
+      notification failed, giving up after 420 sec" → controller drains the node
+```
+
+The `cpuset.*` "No space left on device" message is a kernel-level error that
+surfaces when systemd hands the cgroup controller an empty cpuset value; the ensuing
+forced restart of slurmd is what actually breaks the prolog handshake. Nothing the PCS
+templates or this repo's install scripts touch is in the path — `/etc/default/slurmd`
+is written to by `install-enroot-pyxis.sh` but post-install completes before slurmd's
+first start, and no slurmd unit / cgroup config is modified afterwards.
+
+**Workaround.**
+- Resubmit; subsequent `srun`s land on sibling nodes that didn't hit the race.
+- To bring the drained node back, on the login node run:
+  `sudo scontrol update nodename=cpu1-N state=resume reason=cleared`.
+- For latency-sensitive workloads, warm the queue with a trivial `sinfo` /
+  zero-work `srun` that you don't mind losing before the real job; that exercises the
+  prolog path while a sibling is still cold.
+
+**Why we don't paper over it.** The trigger lives below this repo's code (PCS
+bootstrap + systemd + slurmd 25.05/25.11 cgroup-v2 handling). Wrapping the post-install
+or the install script wouldn't change the timing of the systemd cgroup setup. The
+cleanest mitigation is upstream — recording it here so users seeing it know the
+workaround and the next contributor doesn't waste time looking for a bug in this PR's
+scripts.
+
+## 8. Recommendations recap
 
 For a new production deploy:
 
