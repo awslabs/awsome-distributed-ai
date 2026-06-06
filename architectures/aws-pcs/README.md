@@ -4,24 +4,38 @@ This repository provides reference architectures and deployment templates for se
 
 > **Upstream Repository**: These templates are based on [aws-samples/aws-hpc-recipes](https://github.com/aws-samples/aws-hpc-recipes/tree/main/recipes/pcs), customized for ML workloads: container support (Enroot/Pyxis) installable at first boot without an AMI build, built-in monitoring, updated Slurm versions (25.05/25.11), and dedicated P5/P6 multi-NIC EFA templates. The templates in this repository are maintained independently and may diverge from the upstream recipes.
 
-## 1. What you get
+## 1. Key Features
 
-A single CloudFormation stack (`pcs-ml-cluster-deploy-all.yaml`) provisions a
-complete, ready-to-train cluster — only the Availability Zone to choose:
+- **One click to an ML-training-ready cluster**: a single CloudFormation stack gives you a complete, ready-to-train environment — Slurm scheduler, GPU compute with EFA, shared FSx storage, the Enroot/Pyxis container runtime, and monitoring — with only the Availability Zone to choose. Submit distributed training jobs minutes after launch.
+- **Container runtime included**: Enroot/Pyxis is set up automatically, so `srun --container-image=...` works out of the box for containerized training.
+- **Monitoring built in**: Prometheus + Grafana + GPU (DCGM) dashboards deploy automatically on the login node (`DeployMonitoring=true`, on by default); reach it privately via SSM port-forward, or open it to a trusted CIDR with `GrafanaPublicAccessCidr`.
+- **GPU-ready, multi-NIC EFA**: dedicated launch templates for the P5 and P6 families, selected automatically by instance type, for high-bandwidth multi-node training.
+- **Broad capacity-purchase support**: covers the full range of EC2 capacity options out of the box — On-Demand, On-Demand Capacity Reservations (ODCR), and Capacity Blocks for ML — selected per node group.
+- **High-performance storage**: FSx for Lustre (shared scratch, `/fsx`) and FSx for OpenZFS (home directories, `/home`).
+- **Modular components**: compose individual stacks (network/storage prerequisites, cluster scheduler, per-family compute node groups) instead of the all-in-one nested stack when you want to reuse infrastructure across clusters or iterate on one piece at a time.
+
+> Built on the AWS-managed **PCS-Ready DLAMI** (NVIDIA driver, CUDA, PCS agent, and
+> Slurm 25.05/25.11 pre-installed), so no custom AMI build is required by default —
+> the cluster comes up without an Image Builder step. For frequent scaling, you can
+> pre-bake Enroot/Pyxis into a custom DLAMI with the standalone
+> [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional)
+> template and pass the result as `AmiId`.
+
+## 2. Architecture
 
 ![AWS PCS diagram](./images/ml-pcs-architecture.png)
 
-- **Cluster**: PCS Slurm (25.05 or 25.11) on the AWS-managed **PCS-Ready DLAMI** (NVIDIA driver / CUDA / PCS agent pre-installed) — no custom AMI build by default
-- **Compute**: login node + CPU queue (optional EFA for HPC/MPI) + optional GPU queue with **multi-NIC EFA** for P5 / P5e / P5en / P6-B200 / P6-B300, selected automatically per instance type
-- **Storage**: FSx for Lustre (`/fsx`) + FSx for OpenZFS (`/home`)
-- **Containers**: Enroot/Pyxis installed at first boot via `PostInstallScriptUrl` — `srun --container-image=...` works out of the box (or pre-bake into a custom AMI; see [§8](#8-pre-baking-enrootpyxis-into-a-custom-ami-optional))
-- **Monitoring**: Prometheus + Grafana + GPU (DCGM) dashboards on the login node, reached via SSM port-forward (or a trusted CIDR with `GrafanaPublicAccessCidr`)
-- **Capacity**: On-Demand, ODCR (open matching), or Capacity Blocks for ML — chosen per node group
-- **Modular**: deploy each layer (network/storage, cluster, per-family CNGs) on its own when you want to share infra or iterate
+A default deployment (`pcs-ml-cluster-deploy-all.yaml`) provisions:
+- VPC with public/private subnets, NAT gateway, and S3 endpoint
+- FSx for Lustre (`/fsx`, high-performance shared scratch) and FSx for OpenZFS (`/home`)
+- PCS cluster with the Slurm scheduler (25.05 or 25.11), on the PCS-Ready DLAMI
+- Login node group (public subnet) with the monitoring stack (Prometheus/Grafana/DCGM)
+- CPU compute node group (private subnet, optional EFA for HPC/MPI workloads); optional GPU (P5/P6) node group with multi-NIC EFA
+- Enroot/Pyxis container runtime installed at first boot via `PostInstallScriptUrl` (or pre-baked into a custom AMI you build separately and pass as `AmiId`)
 
 ---
 
-## 2. Quick Start
+## 3. Quick Start
 
 Deploy a complete cluster with one nested CloudFormation stack:
 
@@ -46,7 +60,7 @@ a `cpu1` queue (c6i.4xlarge, 0–4 nodes, dynamic scaling), and Enroot/Pyxis on 
 Add a GPU queue and tune storage/monitoring via the parameters below.
 
 Once it's up:
-- **Connect** to the login node via SSM Session Manager — see [Accessing the Cluster](#5-accessing-the-cluster).
+- **Connect** to the login node via SSM Session Manager — see [Accessing the Cluster](#6-accessing-the-cluster).
 - **Open the Grafana dashboards** (deployed by default) via SSM port forwarding — see [Accessing Grafana](#accessing-grafana).
 - **Want to reach Grafana directly in a browser** (no port forwarding)? Set `GrafanaPublicAccessCidr` to a trusted CIDR at deploy time — see [Option B — Direct public access](#option-b--direct-public-access-opt-in-via-grafanapublicaccesscidr).
 
@@ -64,7 +78,7 @@ are deleted with the stack.
 
 ---
 
-## 3. Configuration
+## 4. Configuration
 
 Defaults give the most common production setup — Enroot/Pyxis installed at first
 boot via `PostInstallScriptUrl` + `DeployMonitoring=true` — so a default deploy
@@ -74,7 +88,7 @@ only needs the Availability Zone (`PrimarySubnetAZ`). The most-used parameters:
 |---|---|---|
 | `PrimarySubnetAZ` | *(required)* | Availability Zone to deploy into — the one required parameter |
 | `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`); 25.11 is needed for the Slurm OpenMetrics dashboards. Drives Pyxis build version too. See [OPERATIONS.md §1](./docs/OPERATIONS.md#1-slurm-version-selection) |
-| `AmiId` | *(empty → SSM auto)* | Empty auto-resolves to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04) from SSM. Pin to a specific `ami-xxx` for production, or pass an AMI built by [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#8-pre-baking-enrootpyxis-into-a-custom-ami-optional) |
+| `AmiId` | *(empty → SSM auto)* | Empty auto-resolves to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04) from SSM. Pin to a specific `ami-xxx` for production, or pass an AMI built by [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional) |
 | `DeployMonitoring` | `true` | Deploy Prometheus/Grafana/DCGM on the login node |
 | `DeployOnDemandCNG` | `true` | Deploy the `cpu1` CPU queue (`OnDemandInstanceType`, default `c6i.4xlarge`) |
 | `OnDemandEnableEfa` | `false` | Set `true` for HPC/MPI workloads on EFA-capable CPU types (hpc6a/hpc7a/hpc7g/hpc6id/hpc8a, c7gn etc.). Auto-creates a cluster placement group. See [EFA on CPU HPC instances](#efa-on-cpu-hpc-instances-ondemandenableefa) |
@@ -94,7 +108,7 @@ choices that need the most thought.
 needed. Enroot 3.5.0 + Pyxis 0.20.0 are layered on at first boot via
 [`scripts/install-enroot-pyxis.sh`](./scripts/install-enroot-pyxis.sh)
 (~8–12 min boot). For **frequent scaling**, pre-bake Enroot/Pyxis into a custom DLAMI
-once with [§8](#8-pre-baking-enrootpyxis-into-a-custom-ami-optional) and pass that
+once with [§9](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional) and pass that
 `ami-xxx` as `AmiId` (~3 min boot, deterministic state). The post-install hook is
 idempotent — it no-ops on a pre-baked AMI.
 
@@ -179,9 +193,9 @@ switch these parameters to a type your Region supports.
 
 ---
 
-## 4. Usage Examples
+## 5. Usage Examples
 
-The default cluster (1 login + `cpu1` queue) is covered in [§2 Quick Start](#2-quick-start);
+The default cluster (1 login + `cpu1` queue) is covered in [§3 Quick Start](#3-quick-start);
 the examples below show the more common customizations. Each one starts by setting
 `AZ_ID` — the one required choice.
 
@@ -256,7 +270,7 @@ group. For other HPC types, set `OnDemandInstanceType` and the matching
 
 ---
 
-## 5. Accessing the Cluster
+## 6. Accessing the Cluster
 
 Connect to the login node via SSM Session Manager — no public SSH needed.
 
@@ -277,7 +291,7 @@ Then `sudo su - ubuntu` and use `sinfo` / `squeue` / `scontrol show nodes`.
 
 ---
 
-## 6. Running a multi-node GPU job (NCCL test)
+## 7. Running a multi-node GPU job (NCCL test)
 
 A 2-node `all_reduce_perf` is the quickest end-to-end check (GPU queue + Pyxis + EFA).
 Run on the login node — `/fsx` is shared with every compute node:
@@ -305,7 +319,7 @@ the full validation matrix is in [tests/README.md](./tests/README.md).
 
 ---
 
-## 7. Monitoring
+## 8. Monitoring
 
 With `DeployMonitoring=true` (default), an integrated monitoring stack based on
 [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring)
@@ -426,7 +440,7 @@ NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 
 ---
 
-## 8. Pre-baking Enroot/Pyxis into a custom AMI (optional)
+## 9. Pre-baking Enroot/Pyxis into a custom AMI (optional)
 
 The all-in-one template installs Enroot/Pyxis at **first boot** via
 `PostInstallScriptUrl`, which is fast to deploy and avoids an Image Builder step.
@@ -489,7 +503,7 @@ For production deploys that pin the AMI explicitly per cluster, none of these ar
 
 ---
 
-## 9. Templates
+## 10. Templates
 
 All templates live in [`assets/`](./assets/). `pcs-ml-cluster-deploy-all.yaml` nests
 the others; you can also deploy each individually for more control (e.g. reuse a VPC/FSx
@@ -513,7 +527,7 @@ Capacity Block.
 
 ---
 
-## 10. Testing and Validation
+## 11. Testing and Validation
 
 Every template has been deployed end-to-end on real hardware: P5 / P5e / P5en /
 P6-B200 / P6-B300 (NCCL all-reduce + FSDP Llama-2 7B), HPC EFA on hpc6a / hpc7a /
@@ -524,7 +538,7 @@ numbers is in **[tests/README.md](./tests/README.md)**.
 
 ---
 
-## 11. Additional Resources
+## 12. Additional Resources
 
 In this repo:
 - [Parameter reference](./docs/PARAMETERS.md) — every deploy-all parameter and default
