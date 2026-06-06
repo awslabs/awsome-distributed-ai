@@ -8,7 +8,7 @@ This repository provides reference architectures and deployment templates for se
 
 - **One click to an ML-training-ready cluster**: a single CloudFormation stack gives you a complete, ready-to-train environment — Slurm scheduler, GPU compute with EFA, shared FSx storage, the Enroot/Pyxis container runtime, and monitoring — with only the Availability Zone to choose. Submit distributed training jobs minutes after launch.
 - **Container runtime included**: Enroot/Pyxis is set up automatically, so `srun --container-image=...` works out of the box for containerized training.
-- **Monitoring built in**: Prometheus + Grafana + GPU (DCGM) dashboards deploy automatically on the login node (`DeployMonitoring=true`, on by default); reach it privately via SSM port-forward, or open it to a trusted CIDR with `GrafanaPublicAccessCidr`.
+- **Monitoring built in**: Grafana + Prometheus run on the login node, with DCGM Exporter on GPU compute nodes feeding the pre-built GPU dashboards (`DeployMonitoring=true`, on by default). Reach Grafana privately via SSM port-forward, or open it to a trusted CIDR with `GrafanaPublicAccessCidr`.
 - **GPU-ready, multi-NIC EFA**: dedicated launch templates for the P5 and P6 families, selected automatically by instance type, for high-bandwidth multi-node training.
 - **Broad capacity-purchase support**: covers the full range of EC2 capacity options out of the box — On-Demand, On-Demand Capacity Reservations (ODCR), and Capacity Blocks for ML — selected per node group.
 - **High-performance storage**: FSx for Lustre (shared scratch, `/fsx`) and FSx for OpenZFS (home directories, `/home`).
@@ -29,8 +29,8 @@ A default deployment (`pcs-ml-cluster-deploy-all.yaml`) provisions:
 - VPC with public/private subnets, NAT gateway, and S3 endpoint
 - FSx for Lustre (`/fsx`, high-performance shared scratch) and FSx for OpenZFS (`/home`)
 - PCS cluster with the Slurm scheduler (25.05 or 25.11), on the PCS-Ready DLAMI
-- Login node group (public subnet) with the monitoring stack (Prometheus/Grafana/DCGM)
-- CPU compute node group (private subnet, optional EFA for HPC/MPI workloads); optional GPU (P5/P6) node group with multi-NIC EFA
+- Login node group (public subnet) with the monitoring stack (Prometheus + Grafana + Nginx)
+- CPU compute node group (private subnet, optional EFA for HPC/MPI workloads); optional GPU (P5/P6) node group with multi-NIC EFA — GPU nodes additionally run DCGM Exporter for the GPU dashboards
 - Enroot/Pyxis container runtime installed at first boot via `PostInstallScriptUrl` (or pre-baked into a custom AMI you build separately and pass as `AmiId`)
 
 ---
@@ -89,7 +89,7 @@ only needs the Availability Zone (`PrimarySubnetAZ`). The most-used parameters:
 | `PrimarySubnetAZ` | *(required)* | Availability Zone to deploy into — the one required parameter |
 | `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`); 25.11 is needed for the Slurm OpenMetrics dashboards. Drives Pyxis build version too. See [OPERATIONS.md §1](./docs/OPERATIONS.md#1-slurm-version-selection) |
 | `AmiId` | *(empty → SSM auto)* | Empty auto-resolves to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04) from SSM. Pin to a specific `ami-xxx` for production, or pass an AMI built by [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional) |
-| `DeployMonitoring` | `true` | Deploy Prometheus/Grafana/DCGM on the login node |
+| `DeployMonitoring` | `true` | Deploy Prometheus + Grafana on the login node, plus DCGM Exporter on GPU compute nodes |
 | `DeployOnDemandCNG` | `true` | Deploy the `cpu1` CPU queue (`OnDemandInstanceType`, default `c6i.4xlarge`) |
 | `OnDemandEnableEfa` | `false` | Set `true` for HPC/MPI workloads on EFA-capable CPU types (hpc6a/hpc7a/hpc7g/hpc6id/hpc8a, c7gn etc.). Auto-creates a cluster placement group. See [EFA on CPU HPC instances](#efa-on-cpu-hpc-instances-ondemandenableefa) |
 | `DeployPseriesCNG` | `false` | Deploy a GPU (P5/P6) queue — see [GPU compute](#gpu-compute-p5p6) |
