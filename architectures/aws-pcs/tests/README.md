@@ -589,7 +589,7 @@ PATH=/opt/amazon/openmpi/bin:$PATH make -j8
 ```
 
 Submit a 2-node sbatch with the AWS-tuned EFA env (the canonical reference
-parameters, see "Tuning notes" in [Verified configurations](#hpc-efa-on-cpu-instances-ondemandenableefa-true)):
+parameters, see "Tuning notes" in [Verified configurations](#hpc-efa-on-cpu-instances-ondemandenableefatrue)):
 
 ```bash
 cat > /fsx/osu/osu-bench.sbatch <<'EOF'
@@ -627,7 +627,7 @@ sbatch -p hpc /fsx/osu/osu-bench.sbatch
 ```
 
 The reference numbers per instance type are in
-[Verified configurations](#hpc-efa-on-cpu-instances-ondemandenableefa-true) above.
+[Verified configurations](#hpc-efa-on-cpu-instances-ondemandenableefatrue) above.
 
 ### Step 4 — observe NIC-level traffic in Grafana (optional)
 
