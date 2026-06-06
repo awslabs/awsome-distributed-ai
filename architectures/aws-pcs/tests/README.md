@@ -43,8 +43,9 @@ do **not** assume a single 25.11 GPU run covers everything.
 | 7 | **Template lint** | `aws cloudformation validate-template` on every edited `assets/*.yaml` | Catches structural errors before a deploy round-trip. |
 | 8 | **Pre-baked AMI build path** (when touched) | If `pcs-ready-dlami-with-enroot-pyxis.yaml` or any code it bakes (`scripts/install-enroot-pyxis.sh`) changes: build an AMI per supported `SlurmVersion`, then deploy a cluster with `AmiId=<ami-xxx>` + `PostInstallScriptUrl=""` and run a container job → [Test 8](#test-8-pre-baked-ami-build-standalone-dlami-template) | Independent path: the cluster stack does NOT run Image Builder, so an `install-enroot-pyxis.sh` fix is only in the AMI after a rebuild. The AMI is single-Slurm-version by design — `SlurmVersion` on the DLAMI stack must match the cluster's `SlurmVersion` (the SPANK plugin is ABI-locked). **Skip this row only if neither the AMI build template nor the install script changed.** |
 | 9 | **CPU EFA path** (when touched) | If `add-cng.yaml`'s EFA wiring (`EnableEfa` / `EfaInterfaceCount` / `PlacementGroupName`) or the deploy-all forwarding (`OnDemand{EnableEfa,EfaInterfaceCount,PlacementGroupName}`) changes: deploy with `OnDemandEnableEfa=true` on at least one EFA-capable HPC type (e.g. hpc7a.96xlarge, 2 NICs), verify `lspci`/`fi_info` show the EFA NICs, and run a 2-node OSU `osu_mbw_mr` → [Test 9](#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a) | EFA enables a different LaunchTemplate shape (`NetworkInterfaces` block with `InterfaceType=efa`, mutually exclusive with `SecurityGroupIds`); a regression here only shows on a real EFA deploy, not template-validate. **Skip this row only if no EFA-related wiring was touched.** |
+| 10 | **FSx storage health** | Both filesystems mount on every node; read/write sanity; FSx side reports the parameters CFN asked for (deployment type, throughput, capacity, `EfaEnabled` when set) → [Test 10](#test-10-fsx-storage-health) | Mount errors only surface on a fresh first boot (race vs systemd, NFS settle, Lustre client driver mismatch). FSx-side parameter mismatch (e.g. `FSxLustreEnableEfa=true` silently applied as false on PERSISTENT_1) is invisible to template-validate. |
 
-Tests 1–9 below are the per-item how-to. The single-cluster shortcut (one deploy that
+Tests 1–10 below are the per-item how-to. The single-cluster shortcut (one deploy that
 covers monitoring + CPU + one GPU family) is fine for iterating; rows 8 and 9 are
 separate paths run only when their inputs change. The full matrix above is the bar
 for **merge**.
@@ -66,6 +67,7 @@ What this guide covers, and the template/parameter that exercises it:
 | **Sample training** | FSDP Llama-2 7B | [Test 7](#test-7-fsdp-sample-training) |
 | **Container runtime — pre-baked AMI path** | Standalone DLAMI build + cluster pinned to its output | `pcs-ready-dlami-with-enroot-pyxis.yaml` (separate stack) → cluster with `AmiId=ami-xxx` + `PostInstallScriptUrl=""` → [Test 8](#test-8-pre-baked-ami-build-standalone-dlami-template) |
 | **EFA on CPU HPC instances** | hpc6a (1 NIC), hpc7a / hpc8a (2 NIC) | `OnDemandEnableEfa=true` + `OnDemandEfaInterfaceCount=1\|2` (deploy-all) or `EnableEfa=true` + `EfaInterfaceCount=1\|2` (modular `add-cng.yaml`); auto-creates a per-CNG cluster placement group, override with `OnDemandPlacementGroupName` / `PlacementGroupName` to share → [Test 9](#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a) |
+| **FSx storage health** | Lustre + OpenZFS mounts, read/write, FSx-side parameters honored (incl. `FSxLustreEnableEfa` when set) | Default deploy already mounts both filesystems; verify on the login + a compute node and inspect the FSx-side filesystem with `aws fsx describe-file-systems` → [Test 10](#test-10-fsx-storage-health) |
 
 A single `pcs-ml-cluster-deploy-all.yaml` deploy with `DeployMonitoring=true`,
 `DeployOnDemandCNG=true`, and `DeployPseriesCNG=true` exercises Tests 1–7 in one cluster.
@@ -658,6 +660,130 @@ stack). The auto-created cluster placement group is owned by the CNG stack and
 is removed automatically. Slurm puts the EFA compute nodes to sleep on idle
 (`SuspendTime`), so leaving the cluster up between benchmarks does not keep the
 hpc7a/hpc8a instances running.
+
+---
+
+## Test 10: FSx storage health
+
+Validates that both shared filesystems (Lustre on `/fsx`, OpenZFS on `/home`)
+mount cleanly on every node, are usable, and that the FSx-side configuration
+matches what the template asked for. Most of this is exercised implicitly by
+Tests 1–9 (the post-install script, monitoring stack, OSU / FSDP all touch
+`/fsx`); this test is the explicit health check to run after a fresh deploy
+or after touching `ml-cluster-prerequisites.yaml` / FSx-related parameters.
+
+### Step 1 — both filesystems mounted on every node
+
+On the login node and at least one compute node (via `srun`):
+
+```bash
+mount | grep -E ' /home | /fsx '
+df -h /home /fsx
+```
+
+Expected:
+- `/fsx` mounted as type `lustre`, source `<fs-id>.fsx.<region>.amazonaws.com@tcp:/<mountname>`,
+  size matches the `Capacity` parameter (1200 GiB default; 19200 GiB or larger
+  when `FSxLustreEnableEfa=true`).
+- `/home` mounted as type `nfs` over OpenZFS, NFS options include
+  `nconnect=16,rsize=1048576,wsize=1048576` (the deploy-all UserData mount
+  string).
+- Both `df -h` reports show `Avail` greater than zero.
+
+If a mount is missing on a freshly booted node, check
+`/var/log/cloud-init-output.log` and `/var/log/pcs-post-install.log` for the
+`mount` line. The most common first-boot failure is the OpenZFS DNS name not
+being resolvable yet (NFS settle race); the post-install log will show
+`mount.nfs: Failed to resolve server`.
+
+### Step 2 — read/write sanity
+
+```bash
+# /fsx (Lustre): write 1 GiB, read it back
+dd if=/dev/zero of=/fsx/.healthcheck bs=1M count=1024 conv=fsync 2>&1 | tail -1
+dd if=/fsx/.healthcheck of=/dev/null bs=1M 2>&1 | tail -1
+rm /fsx/.healthcheck
+
+# /home (OpenZFS / NFS): same, 100 MiB (it's a small home filesystem)
+dd if=/dev/zero of=/home/ubuntu/.healthcheck bs=1M count=100 conv=fsync 2>&1 | tail -1
+dd if=/home/ubuntu/.healthcheck of=/dev/null bs=1M 2>&1 | tail -1
+rm /home/ubuntu/.healthcheck
+```
+
+Expected: both write+read complete without error. Throughput is bounded by the
+single-stream limits of NFS / Lustre on a single node — this is a sanity check,
+not a benchmark. For Lustre throughput numbers, see the FSx Lustre User Guide
+(provisioned throughput = `Capacity * PerUnitStorageThroughput / 1024` MB/s).
+
+### Step 3 — FSx-side parameters match the CFN inputs
+
+```bash
+FSX_ID=$(aws cloudformation describe-stacks \
+  --stack-name <your-stack> \
+  --query 'Stacks[0].Outputs[?OutputKey==`FSxLustreFilesystemId`].OutputValue' \
+  --region <region> --output text)
+
+aws fsx describe-file-systems --file-system-ids "$FSX_ID" --region <region> \
+  --query 'FileSystems[0].[StorageCapacity,StorageType,LustreConfiguration.[DeploymentType,PerUnitStorageThroughput,DataCompressionType,EfaEnabled,MetadataConfiguration.Mode]]' \
+  --output text
+```
+
+Expected (default deploy):
+- `StorageCapacity` = your `Capacity` parameter (1200 by default)
+- `StorageType` = `SSD`
+- `DeploymentType` = `PERSISTENT_2` (default; or `PERSISTENT_1` if you set it)
+- `PerUnitStorageThroughput` = 250 (default)
+- `DataCompressionType` = `LZ4` (default)
+- `EfaEnabled` = `False` (default; `True` when `FSxLustreEnableEfa=true` AND
+  `LustreDeploymentType=PERSISTENT_2` — the FSx EFA feature is gated on
+  PERSISTENT_2 by AWS)
+- `MetadataConfiguration.Mode` = `AUTOMATIC` on PERSISTENT_2
+
+For the OpenZFS `/home` filesystem:
+
+```bash
+FSXO_ID=$(aws cloudformation describe-stacks \
+  --stack-name <your-stack> \
+  --query 'Stacks[0].Outputs[?OutputKey==`FSxOFilesystemId`].OutputValue' \
+  --region <region> --output text)
+
+aws fsx describe-file-systems --file-system-ids "$FSXO_ID" --region <region> \
+  --query 'FileSystems[0].[StorageCapacity,OpenZFSConfiguration.[DeploymentType,ThroughputCapacity]]' \
+  --output text
+```
+
+### Step 4 — Storage dashboard in Grafana
+
+The `Compute Node Details` and `HPC Cluster Monitoring → Storage` Grafana
+dashboards are populated by the **CloudWatch Exporter** (FSx CloudWatch
+metrics, scraped by the monitoring stack on the login node — see the
+[aws-parallelcluster-monitoring v2.6 release notes](https://github.com/aws-samples/aws-parallelcluster-monitoring/releases/tag/v2.6)).
+
+Open Grafana (Test 1's port-forward / public CIDR), go to the Storage
+dashboard, and verify the `/fsx` panels (Throughput, IOPS, Free Capacity,
+Client Connections) populate within ~5 minutes of a workload starting. CW
+metrics have a ~5 min publishing delay, so a brand-new filesystem with no I/O
+shows blank panels for a while; the `dd` from Step 2 is enough to seed values.
+
+### `FSxLustreEnableEfa=true` specifics
+
+When `FSxLustreEnableEfa=true` is set on a PERSISTENT_2 SSD filesystem, the
+extra checks beyond the above are:
+
+- `aws fsx describe-file-systems` `LustreConfiguration.EfaEnabled = true`
+- `Capacity` is at-or-above the EFA minimum for the chosen
+  `PerUnitStorageThroughput` tier (19200 GiB for tier 250; the FSx for
+  Lustre User Guide has the full matrix). Below the minimum, the FSx side
+  rejects the `CreateFileSystem` with `Invalid storage capacity provided:
+  N GiB. Minimum storage capacity for an EFA enabled LUSTRE file systems
+  with deployment type PERSISTENT_2, per unit storage throughput X and
+  storage type SSD is M`. The Lustre nested stack fails first, then the
+  whole stack rolls back; that's the expected behavior for an undersized
+  Capacity.
+
+The FSx-side EFA endpoints are usable from EFA-capable clients (CPU CNGs
+deployed with `OnDemandEnableEfa=true`, P5/P6 GPU CNGs). Plain Lustre client
+mounts continue to work over TCP for non-EFA nodes; EFA support is additive.
 
 ---
 
