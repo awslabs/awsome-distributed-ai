@@ -244,9 +244,14 @@ Parameters:
   FSxLustreEnableEfa:
     Description: >-
       (Optional) Enable EFA + GPUDirect Storage (GDS) on the FSx for Lustre
-      filesystem. Default false. PERSISTENT_2 only -- silently ignored on
+      filesystem. Default false. PERSISTENT_2 SSD only -- silently ignored on
       PERSISTENT_1. EFA-capable clients (CPU CNGs with OnDemandEnableEfa=true,
       P5/P6 GPU CNGs) get a libfabric/GDS path to Lustre when enabled.
+      **EFA-enabled Lustre has a much higher minimum Capacity than non-EFA**:
+      at PerUnitStorageThroughput=250 the minimum is 19200 GiB (16x the non-EFA
+      default of 1200 GiB). Set Capacity to >= the EFA minimum when enabling
+      this; the full minimum-capacity matrix per throughput tier is in the
+      FSx for Lustre User Guide.
     Type: String
     Default: 'false'
     AllowedValues:

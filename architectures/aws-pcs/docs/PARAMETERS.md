@@ -80,7 +80,7 @@ See [Storage: FSx deployment types](../README.md#storage-fsx-deployment-types-re
 | `PerUnitStorageThroughput` | `250` | FSx for Lustre (`/fsx`) throughput (MB/s/TiB); valid values depend on the deployment type |
 | `Compression` | `LZ4` | FSx for Lustre (`/fsx`) data compression (`LZ4` / `NONE`) |
 | `LustreVersion` | `2.15` | FSx for Lustre (`/fsx`) software version (`2.15` / `2.12`) |
-| `FSxLustreEnableEfa` | `false` | Enable EFA + GPUDirect Storage (GDS) on the FSx for Lustre filesystem. **PERSISTENT_2 only** — silently ignored on PERSISTENT_1 (the FSx EFA feature is gated on PERSISTENT_2). When true, EFA-capable clients (CPU CNGs with `OnDemandEnableEfa=true`, P5/P6 GPU CNGs) get a libfabric/GDS path to Lustre |
+| `FSxLustreEnableEfa` | `false` | Enable EFA + GPUDirect Storage (GDS) on the FSx for Lustre filesystem. **PERSISTENT_2 SSD only** — silently ignored on PERSISTENT_1. When true, EFA-capable clients (CPU CNGs with `OnDemandEnableEfa=true`, P5/P6 GPU CNGs) get a libfabric/GDS path to Lustre. **Requires a much larger `Capacity` than non-EFA**: at `PerUnitStorageThroughput=250` the minimum is **19200 GiB** (16× the 1200 GiB non-EFA default). The full minimum-capacity matrix per throughput tier is in the [FSx for Lustre User Guide](https://docs.aws.amazon.com/fsx/latest/LustreGuide/efa.html). The FSx side rejects undersized capacity at stack-create time with a clear error |
 | `HomeCapacity` | `512` | FSx for OpenZFS (`/home`) capacity (GiB) |
 | `HomeThroughput` | `320` | FSx for OpenZFS (`/home`) throughput (MB/s) |
 | `OpenZFSDeploymentType` | `SINGLE_AZ_HA_2` | FSx for OpenZFS (`/home`) deployment type (`SINGLE_AZ_HA_2` / `SINGLE_AZ_HA_1` / `SINGLE_AZ_2` / `SINGLE_AZ_1`) — Region-dependent |
