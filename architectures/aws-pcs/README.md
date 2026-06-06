@@ -30,7 +30,8 @@ A default deployment (`pcs-ml-cluster-deploy-all.yaml`) provisions:
 - FSx for Lustre (`/fsx`, high-performance shared scratch) and FSx for OpenZFS (`/home`)
 - PCS cluster with the Slurm scheduler (25.05 or 25.11), on the PCS-Ready DLAMI
 - Login node group (public subnet) with the monitoring stack (Prometheus + Grafana + Nginx)
-- CPU compute node group (private subnet, optional EFA for HPC/MPI workloads); optional GPU (P5/P6) node group with multi-NIC EFA — GPU nodes additionally run DCGM Exporter for the GPU dashboards
+- CPU compute node group (private subnet); EFA can be enabled for HPC/MPI workloads
+- Optional GPU (P5/P6) node group with multi-NIC EFA, plus DCGM Exporter for the GPU dashboards
 - Enroot/Pyxis container runtime installed at first boot via `PostInstallScriptUrl` (or pre-baked into a custom AMI you build separately and pass as `AmiId`)
 
 ---
