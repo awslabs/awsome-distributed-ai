@@ -41,7 +41,14 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   (e.g. `scripts/install-fsx-lustre-efa.sh`) that runs the
   [official FSx EFA client setup](https://docs.aws.amazon.com/fsx/latest/LustreGuide/configure-efa-clients.html)
   and the GDS driver build, surface a `OnDemandEnableFSxLustreEfaClient` /
-  `PseriesEnableFSxLustreEfaClient` toggle to invoke it, and validate with GDSIO end-to-end.
+  `PseriesEnableFSxLustreEfaClient` toggle to invoke it, and validate end-to-end with:
+  - **GDSIO** — direct GPU-to-storage path, target the ~78-94 GiB/s read on a 96 TiB
+    filesystem from the reference repo
+  - **ior** — POSIX / MPIIO bandwidth on `/fsx`, multi-process / multi-node, ranks
+    binding to local EFA NICs (validates the EFA path is actually carrying the I/O,
+    not falling back to TCP)
+  - **mdtest** — metadata IOPS on `/fsx` (file create/stat/remove rates), exercises
+    PERSISTENT_2's metadata-configuration path that is required for EfaEnabled
   Reference design + 8x H200 throughput numbers (~78-94 GiB/s on a 96 TiB filesystem) at
   [aws-samples/sample-fsx-lustre-gds-sharded-model-loading](https://github.com/aws-samples/sample-fsx-lustre-gds-sharded-model-loading).
 
