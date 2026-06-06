@@ -30,7 +30,7 @@ A default deployment (`pcs-ml-cluster-deploy-all.yaml`) provisions:
 - FSx for Lustre (`/fsx`, high-performance shared scratch) and FSx for OpenZFS (`/home`)
 - PCS cluster with the Slurm scheduler (25.05 or 25.11), on the PCS-Ready DLAMI
 - Login node group (public subnet) with the monitoring stack (Prometheus/Grafana/DCGM)
-- CPU compute node group (private subnet); optional GPU (P5/P6) node group with EFA
+- CPU compute node group (private subnet, optional EFA for HPC/MPI workloads); optional GPU (P5/P6) node group with multi-NIC EFA
 - Enroot/Pyxis container runtime installed at first boot via `PostInstallScriptUrl` (or pre-baked into a custom AMI you build separately and pass as `AmiId`)
 
 ---
@@ -546,7 +546,7 @@ parameter and default, see [PARAMETERS.md](./docs/PARAMETERS.md).
 | [`pcs-ml-cluster-deploy-all.yaml`](./assets/pcs-ml-cluster-deploy-all.yaml) | All-in-one: Prerequisites + (optional AMI) + Cluster + login/CPU/GPU CNGs | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml&stackName=pcs-ml-cluster) |
 | [`ml-cluster-prerequisites.yaml`](./assets/ml-cluster-prerequisites.yaml) | VPC, subnets, security groups, FSx for Lustre + OpenZFS | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/ml-cluster-prerequisites.yaml&stackName=pcs-prerequisites) |
 | [`cluster.yaml`](./assets/cluster.yaml) | PCS cluster core (Slurm scheduler only, no nodes) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster.yaml&stackName=pcs-cluster) |
-| [`add-cng.yaml`](./assets/add-cng.yaml) | Compute node group, single NIC — login nodes, CPU/single-NIC-GPU queues (C6i, G5, G6) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng.yaml&stackName=pcs-add-cng) |
+| [`add-cng.yaml`](./assets/add-cng.yaml) | Compute node group — login nodes, CPU / single-NIC-GPU queues (C6i, G5, G6); switches to a multi-NIC EFA `NetworkInterfaces` block when `EnableEfa=true` (HPC types: hpc6a/hpc7a/hpc7g/hpc6id/hpc8a, c7gn …) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng.yaml&stackName=pcs-add-cng) |
 | [`add-cng-p5.yaml`](./assets/add-cng-p5.yaml) | P5/P5e/P5en nodes (16/32 EFA interfaces, by type) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p5.yaml&stackName=pcs-add-cng-p5) |
 | [`add-cng-p6-b200.yaml`](./assets/add-cng-p6-b200.yaml) | P6-B200 nodes (8 EFA interfaces) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p6-b200.yaml&stackName=pcs-add-cng-p6-b200) |
 | [`add-cng-p6-b300.yaml`](./assets/add-cng-p6-b300.yaml) | P6-B300 nodes (16 EFA interfaces) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p6-b300.yaml&stackName=pcs-add-cng-p6-b300) |
@@ -569,6 +569,8 @@ Validated configurations:
 - **P6-B200** (`add-cng-p6-b200.yaml`): 8-network-card template (same EFA layout family as B300).
 - **All-in-one** (`pcs-ml-cluster-deploy-all.yaml`): selects the P5/P6-B200/P6-B300 CNG template automatically from `PseriesInstanceType`; tested end-to-end with monitoring, container jobs, NCCL, and FSDP on p6-b300.
 - **AMI builder** (`pcs-ready-dlami-with-enroot-pyxis.yaml`): Ubuntu 24.04 x86_64 AMIs with Enroot 3.5.0 + Pyxis 0.20.0, validated with PyTorch/CUDA containers.
+- **HPC EFA on CPU instances** (`OnDemandEnableEfa=true`): hpc6a.48xlarge (1 EFA NIC, 100 Gbps), hpc7a.96xlarge (2 NIC, 300 Gbps), hpc8a.96xlarge (2 NIC, 300 Gbps) on us-east-2b. Cluster placement group auto-created, NCCL/EFA initialization clean, OSU MPI 7.4 multi-pair throughput 97.6 / 263 / 341 Gbps respectively (hpc7a hits 87.6% of spec, hpc8a 113% — Nitro v6 / EFAv4 efficiency). See [tests/README.md Test 9](./tests/README.md#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a) for the full benchmark numbers and tuning notes.
+- **FSx for Lustre EFA** (`FSxLustreEnableEfa=true`): FSx server-side EfaEnabled validated on PERSISTENT_2 SSD with `Capacity=19200` (the EFA minimum at `PerUnitStorageThroughput=250`); the cluster comes up clean and `aws fsx describe-file-systems` reports `EfaEnabled=true`. Client-side Lustre-on-EFA / GDS install (P5/P5e/P5en/P6-B200) is tracked as a follow-up in [docs/ROADMAP.md](./docs/ROADMAP.md).
 
 ---
 
