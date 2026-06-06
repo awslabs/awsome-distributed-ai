@@ -51,6 +51,9 @@ runtime options), see the [README](../README.md#4-configuration).
 | `OnDemandMaxCount` | `4` | CPU queue maximum nodes |
 | `OnDemandCngName` | `cpu1` | CPU node-group name |
 | `OnDemandQueueName` | `cpu1` | CPU Slurm queue name |
+| `OnDemandEnableEfa` | `false` | Enable EFA on the CPU CNG (HPC/MPI workloads on hpc6a/hpc7a/hpc7g/hpc6id/hpc8a, c7gn, etc.). Switches the CNG's LaunchTemplate to a `NetworkInterfaces` block with `InterfaceType=efa` and wires in a cluster placement group. No effect on the GPU CNG. See [README §EFA on CPU HPC instances](../README.md#efa-on-cpu-hpc-instances-ondemandenableefa) |
+| `OnDemandEfaInterfaceCount` | `1` | Number of EFA interfaces. Match the instance type's `MaximumEfaInterfaces`: hpc8a/hpc7a/hpc6id = `2`; hpc6a/hpc7g/c7gn/c7i.metal = `1`. Mismatching fails at launch. Ignored when `OnDemandEnableEfa=false` |
+| `OnDemandPlacementGroupName` | *(empty)* | Existing cluster placement group name to launch nodes into. Empty + `OnDemandEnableEfa=true` auto-creates a per-CNG cluster placement group; supplying a name reuses an existing one (e.g. shared across CPU + GPU CNGs for heterogeneous tightly-coupled jobs). Ignored when `OnDemandEnableEfa=false` |
 
 ## 5. GPU Compute Node Group — P5/P6 (Optional)
 

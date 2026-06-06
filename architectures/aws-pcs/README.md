@@ -91,6 +91,7 @@ only needs the Availability Zone (`PrimarySubnetAZ`). The most-used parameters:
 | `AmiId` | *(empty → SSM auto)* | Empty auto-resolves to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04) from SSM. Pin to a specific `ami-xxx` for production, or pass an AMI built by [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional) |
 | `DeployMonitoring` | `true` | Deploy Prometheus/Grafana/DCGM on the login node |
 | `DeployOnDemandCNG` | `true` | Deploy the `cpu1` CPU queue (`OnDemandInstanceType`, default `c6i.4xlarge`) |
+| `OnDemandEnableEfa` | `false` | Set `true` for HPC/MPI workloads on EFA-capable CPU types (hpc6a/hpc7a/hpc7g/hpc6id/hpc8a, c7gn etc.). Auto-creates a cluster placement group. See [EFA on CPU HPC instances](#efa-on-cpu-hpc-instances-ondemandenableefa) |
 | `DeployPseriesCNG` | `false` | Deploy a GPU (P5/P6) queue — see [GPU compute](#gpu-compute-p5p6) |
 | `PseriesInstanceType` | `p5.48xlarge` | GPU instance type; auto-selects the multi-NIC template + EFA count |
 | `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR |
@@ -158,6 +159,36 @@ automatically.
 > starts and cannot be stopped early. When the block is active, run the GPU node
 > group at `PseriesMinCount = PseriesMaxCount = <reserved count>` so the reserved
 > nodes launch immediately, rather than scaling from 0.
+
+### EFA on CPU HPC instances (`OnDemandEnableEfa`)
+
+For tightly-coupled HPC / MPI workloads on CPU-only HPC instances, set
+`OnDemandEnableEfa=true` (deploy-all) or `EnableEfa=true` (modular `add-cng.yaml`).
+The CPU compute node group then launches with EFA `NetworkInterfaces` and a cluster
+placement group is auto-created. GPU CNGs (P5/P6) are unaffected — they use their
+own dedicated multi-NIC EFA wiring per-family.
+
+| Instance type | EFA interfaces | Aggregate spec | Set `OnDemandEfaInterfaceCount` to |
+|---|---:|---:|---:|
+| `hpc6a.48xlarge` | 1 | 100 Gbps | **1** |
+| `hpc7a.96xlarge` (and 12/24/48) | 2 | 300 Gbps | **2** |
+| `hpc7g.16xlarge` (Graviton) | 1 | 200 Gbps | **1** |
+| `hpc6id.32xlarge` | 2 | 200 Gbps | **2** |
+| `hpc8a.96xlarge` | 2 | 300 Gbps | **2** |
+| `c7gn.16xlarge` / `c7i.metal-48xl` etc. | 1 | varies | **1** |
+
+(Mismatching `OnDemandEfaInterfaceCount` with the instance type's actual
+`MaximumEfaInterfaces` fails at launch.)
+
+**Placement group:** auto-created per-CNG by the template. Override with
+`OnDemandPlacementGroupName=<existing-pg-name>` to share one PG across multiple
+CNGs (e.g. heterogeneous tightly-coupled jobs that span CPU + GPU).
+
+**Multi-NIC bandwidth needs multiple MPI pairs.** A single MPI pair uses one
+libfabric endpoint and only one NIC. Use `osu_mbw_mr -np 32 -N 16` (or your
+application's natural multi-pair pattern) to actually exercise both NICs on
+hpc7a/hpc8a. See [tests/README.md Test 9](./tests/README.md#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a)
+for the full benchmark setup and validated bandwidth numbers.
 
 ### Storage: FSx deployment types (Region availability)
 
