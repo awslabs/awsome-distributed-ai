@@ -1,0 +1,140 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# RayCluster for Qwen2.5-7B GRPO experiments
+# 2 nodes x 8 GPUs (g6e.48xlarge / L40S)
+# Requires: KubeRay operator v1.4.2+
+
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: qwen-grpo-cluster
+  labels:
+    app: qwen-grpo
+spec:
+  rayVersion: '2.44.0'
+  enableInTreeAutoscaling: false
+
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: '0.0.0.0'
+      num-gpus: "8"
+    template:
+      metadata:
+        labels:
+          app: qwen-grpo
+          role: head
+      spec:
+        serviceAccountName: compute-sa
+        containers:
+          - name: ray-head
+            image: "${FULL_IMAGE}"  # Replace via envsubst or kustomize
+            ports:
+              - containerPort: 6379
+                name: gcs
+              - containerPort: 8265
+                name: dashboard
+              - containerPort: 10001
+                name: client
+            env:
+              - name: RAY_GRAFANA_HOST
+                value: "http://prometheus-grafana.prometheus.svc.cluster.local"
+              - name: NCCL_DEBUG
+                value: "WARN"
+              - name: FI_PROVIDER
+                value: "efa"
+              - name: FI_EFA_USE_DEVICE_RDMA
+                value: "1"
+              - name: FI_EFA_FORK_SAFE
+                value: "1"
+              - name: NCCL_PROTO
+                value: "simple"
+            resources:
+              limits:
+                nvidia.com/gpu: "8"
+                vpc.amazonaws.com/efa: "32"
+                memory: "700Gi"
+                cpu: "180"
+              requests:
+                nvidia.com/gpu: "8"
+                vpc.amazonaws.com/efa: "32"
+                memory: "600Gi"
+                cpu: "160"
+            volumeMounts:
+              - name: fsx
+                mountPath: /fsx
+              - name: dshm
+                mountPath: /dev/shm
+        volumes:
+          - name: fsx
+            persistentVolumeClaim:
+              claimName: fsx-claim
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: "200Gi"
+        nodeSelector:
+          node.kubernetes.io/instance-type: ml.g6e.48xlarge
+        tolerations:
+          - key: "nvidia.com/gpu"
+            operator: "Exists"
+            effect: "NoSchedule"
+
+  workerGroupSpecs:
+    - groupName: gpu-workers
+      replicas: 1
+      minReplicas: 1
+      maxReplicas: 1
+      rayStartParams:
+        num-gpus: "8"
+      template:
+        metadata:
+          labels:
+            app: qwen-grpo
+            role: worker
+        spec:
+          serviceAccountName: compute-sa
+          containers:
+            - name: ray-worker
+              image: "${FULL_IMAGE}"  # Replace via envsubst or kustomize
+              env:
+                - name: NCCL_DEBUG
+                  value: "WARN"
+                - name: FI_PROVIDER
+                  value: "efa"
+                - name: FI_EFA_USE_DEVICE_RDMA
+                  value: "1"
+                - name: FI_EFA_FORK_SAFE
+                  value: "1"
+                - name: NCCL_PROTO
+                  value: "simple"
+              resources:
+                limits:
+                  nvidia.com/gpu: "8"
+                  vpc.amazonaws.com/efa: "32"
+                  memory: "700Gi"
+                  cpu: "180"
+                requests:
+                  nvidia.com/gpu: "8"
+                  vpc.amazonaws.com/efa: "32"
+                  memory: "600Gi"
+                  cpu: "160"
+              volumeMounts:
+                - name: fsx
+                  mountPath: /fsx
+                - name: dshm
+                  mountPath: /dev/shm
+          volumes:
+            - name: fsx
+              persistentVolumeClaim:
+                claimName: fsx-claim
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: "200Gi"
+          nodeSelector:
+            node.kubernetes.io/instance-type: ml.g6e.48xlarge
+          tolerations:
+            - key: "nvidia.com/gpu"
+              operator: "Exists"
+              effect: "NoSchedule"
