@@ -122,23 +122,24 @@ nodeSelector:
 > cd kimi-k2
 > ```
 
-The model-specific helper scripts below are numbered in usage order. Run them from
-this directory.
+The model-specific steps below are run from this directory. Checkpoint conversion uses the
+**shared, model-agnostic** library script one level up.
 
 ### 1. Convert HF Kimi K2 to a Megatron-Core checkpoint
 
 Kimi K2's HF weights ship block-FP8 (~1 TB). Full SFT runs in BF16, so the weights are
 dequantized to BF16 (~2 TB) and converted to a Megatron-Core distributed checkpoint with
-Megatron-Bridge's `AutoBridge`. `1.convert-checkpoint.sh` wraps Megatron-Bridge's conversion
-entry point:
+Megatron-Bridge's `AutoBridge`. The shared library script
+[`../convert-checkpoint.sh`](../convert-checkpoint.sh) wraps that conversion, parameterized
+by env (Kimi-K2's HF config needs `trust_remote_code`, which the script defaults on):
 
 ```bash
-# under the hood (Megatron-Bridge examples/conversion/convert_checkpoints.py):
-python examples/conversion/convert_checkpoints.py import \
-  --hf-model /fsx/kimi-k2/hf \
-  --megatron-path /fsx/kimi-k2/mcore \
-  --torch-dtype bfloat16 \
-  --trust-remote-code
+HF_MODEL_ID=moonshotai/Kimi-K2-Base \
+HF_REVISION=<commit-sha> \
+FSX_ROOT=/fsx/kimi-k2 \
+bash ../convert-checkpoint.sh
+# under the hood: AutoBridge.import_ckpt(hf_model_id=/fsx/kimi-k2/hf,
+#   megatron_path=/fsx/kimi-k2/mcore, torch_dtype=bfloat16, trust_remote_code=True)
 ```
 
 This is a large, multi-hour, memory-heavy job; run it on a node with the FSx mount and enough
@@ -255,12 +256,12 @@ The container environment is shared and lives at the **library level** (one dire
 | `../1.build-and-push.sh` | Build the shared env image and push the pinned tag to ECR |
 | `../2.sanity-singlenode.sh` | Single-node 8-GPU `deep_ep`/EFA/EP smoke test |
 | `../test_megatron_bridge_uccl.py` | CI build smoke test for the shared image |
+| `../convert-checkpoint.sh` | Shared HF -> BF16 -> Megatron-Core conversion, parameterized by `HF_MODEL_ID`/`HF_REVISION`/`FSX_ROOT` (run with `HF_MODEL_ID=moonshotai/Kimi-K2-Base`) |
 
 Model-specific files in **this** directory:
 
 | File | Purpose |
 |------|---------|
-| `1.convert-checkpoint.sh` | HF Kimi K2 (FP8) -> BF16 -> Megatron-Core checkpoint |
 | `conf/kimi_k2_sft.py` | Megatron-Bridge SFT `ConfigContainer` (mounted at `/workspace/conf` via ConfigMap, launched by `torchrun`) |
 | `kubernetes/` | etcd `Service`/`Deployment` + PyTorchJob template (+ optional KAI `PodGroup`); create the conf ConfigMap, then `envsubst ... \| kubectl apply` to deploy (see `kubernetes/README.md`) |
 | `benchmarks/bench_kimi_k2_pretrain.py` | Literal-K2 (384-expert) dispatcher A/B entrypoint (AutoBridge provider + mock data; launched via `../run-ab-rawpods.sh` with `MODEL=kimi-k2`) |

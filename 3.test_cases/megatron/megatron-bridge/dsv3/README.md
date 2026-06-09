@@ -1,7 +1,88 @@
 <!-- Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. -->
 <!-- SPDX-License-Identifier: MIT-0 -->
 
-# DeepSeek-V3 256-expert MoE: DeepEP/UCCL-over-EFA vs NCCL all-to-all — Benchmark
+# DeepSeek-V3 256-expert MoE: Full-Parameter SFT + UCCL-EP-over-EFA Dispatcher A/B
+
+This directory provides two workloads for **DeepSeek-V3** (671B MoE, 256 routed experts —
+the architecture family Kimi-K2 belongs to) on Amazon EKS with NVIDIA Megatron-Bridge, both
+using UCCL-EP's EFA-native `deep_ep` drop-in for the expert-parallel all-to-all:
+
+- **Full-parameter SFT** — convert the HF checkpoint, then fine-tune on 256× B300
+  (`conf/dsv3_sft.py` + `kubernetes/`); see [Full-parameter SFT](#full-parameter-sft) below.
+- **Dispatcher A/B benchmark** — UCCL `deep_ep`-over-EFA vs NCCL all-to-all, measured
+  2026-06-01 (`benchmarks/`); the bulk of this README documents the benchmark.
+
+It is the structural sibling of [`../kimi-k2/`](../kimi-k2/) (literal 384-expert Kimi-K2):
+both model directories share the same `conf/` + `kubernetes/` + `benchmarks/` layout.
+
+## Full-parameter SFT
+
+Full-parameter SFT of DeepSeek-V3 (BF16) on 32× p6-b300 (256× B300), parallel to
+[`../kimi-k2/`](../kimi-k2/). The dispatch path is identical to the benchmark below
+(UCCL `deep_ep` over EFA); what differs is real weights + a real dataset instead of
+random init + mock data.
+
+> **Status: scaffolded, not yet run.** `conf/dsv3_sft.py` and the PyTorchJob path were not
+> exercised end-to-end — the validated work is the dispatcher A/B in `benchmarks/` (which
+> used `pretrain()` + mock data on raw Pods). The HF→MCore conversion and a real SFT run
+> remain to be validated; TODOs are flagged inline in the conf. Note the two AutoBridge
+> operations are not equally proven: DeepSeek-V3's *architecture* is covered by a
+> **dedicated** `deepseek_v3_bridge.py` in Megatron-Bridge v0.4.2 (so the provider build —
+> `from_hf_pretrained(...).to_megatron_provider(load_weights=False)` — is well-grounded),
+> but the full `import_ckpt` **weight conversion** that `../convert-checkpoint.sh` runs is
+> unrun here. A sibling note in
+> [`benchmarks/bench_dsv3_pretrain.py`](benchmarks/bench_dsv3_pretrain.py) flags the
+> HF/AutoBridge path as problematic on this image — which is exactly why the benchmark uses
+> random init + mock data. **Validate the conversion before relying on it.**
+
+First build the shared environment image (library steps 1–2, one level up):
+
+```bash
+cd ..                      # 3.test_cases/megatron/megatron-bridge
+bash 1.build-and-push.sh   # build & push megatron-bridge-uccl:nemo-26.04.01-uccl-0dc87eb
+bash 2.sanity-singlenode.sh
+cd dsv3
+```
+
+### 1. Convert HF DeepSeek-V3 to a Megatron-Core checkpoint
+
+Conversion uses the **shared, model-agnostic** library script
+[`../convert-checkpoint.sh`](../convert-checkpoint.sh), parameterized by env:
+
+```bash
+HF_MODEL_ID=deepseek-ai/DeepSeek-V3-Base \
+HF_REVISION=<commit-sha> \
+FSX_ROOT=/fsx/dsv3 \
+bash ../convert-checkpoint.sh
+```
+
+It downloads the HF weights (~0.7 TB block-FP8), dequantizes to BF16, and writes a ~1.3 TB
+Megatron-Core distributed checkpoint to `/fsx/dsv3/mcore` via `AutoBridge.import_ckpt()`
+(dedicated `deepseek_v3_bridge`). Budget 3–4 TB on FSx.
+
+### 2. Create the SFT-config ConfigMap
+
+The shared image bakes in no model config; the PyTorchJob mounts `conf/dsv3_sft.py` at
+`/workspace/conf` from a ConfigMap:
+
+```bash
+kubectl create configmap dsv3-sft-conf \
+  --from-file=dsv3_sft.py=conf/dsv3_sft.py -n <namespace>
+```
+
+### 3. Deploy the 32-node PyTorchJob
+
+```bash
+envsubst < kubernetes/manifests/dsv3-sft-pytorchjob.yaml-template | kubectl apply -f -
+```
+
+Each worker runs `torchrun --nproc_per_node=8 --nnodes=32`, requests `nvidia.com/gpu: 8` +
+`vpc.amazonaws.com/efa: 16`, and mounts the conf ConfigMap. Full prerequisites, environment
+exports, optional KAI gang scheduling, and EFA-active verification are in
+[`kubernetes/README.md`](kubernetes/README.md). Parallelism is TP8/EP32/PP8/DP4 = 256
+(EP=32 divides 256 experts → 8/rank); see [`conf/dsv3_sft.py`](conf/dsv3_sft.py).
+
+## Benchmark overview
 
 This harness measures the performance of UCCL's EFA-native **DeepEP drop-in**
 (expert-parallel dispatch/combine over AWS EFA) against the standard **NCCL
@@ -59,7 +140,9 @@ delta is attributable to the dispatcher and not to a confounder.
   cluster had **no kubeflow PyTorchJob CRD**, so runs launch as raw ranked Pods (see
   the shared launcher `../run-ab-rawpods.sh`).
 
-Files (the launcher, campaign driver, and parser are **shared at the library level**):
+Files (the launcher, campaign driver, parser, and convert script are **shared at the
+library level**). The SFT recipe (`conf/`, `kubernetes/`) and the benchmark (`benchmarks/`)
+are the two per-model workloads:
 
 | file | what it does |
 |------|--------------|
@@ -68,6 +151,9 @@ Files (the launcher, campaign driver, and parser are **shared at the library lev
 | [`../bench/parse-runs.py`](../bench/parse-runs.py) | post-hoc parser — per-run `loss_curve.csv` + campaign `index.csv` from the preserved rank logs (the per-iteration `lm loss` / iter-time line is printed by the **last** rank) |
 | `benchmarks/bench_dsv3_pretrain.py` | **the entrypoint** torchrun runs — builds the recipe's DSV3 256-expert config, applies the single dispatcher toggle + overlap/VPP/recompute handling, launches `pretrain()`. Staged to FSx at `/fsx/kimi-k2/bench_dsv3_pretrain.py` |
 | `benchmarks/RESULTS.md` | results sheet (sweep + overlap=on + work-equivalence + caveats) |
+| `conf/dsv3_sft.py` | full-parameter SFT `ConfigContainer` (mounted at `/workspace/conf` via ConfigMap; keeps DeepSeek-V3's 1 MTP layer; same UCCL/EFA dispatch as the benchmark) — see [Full-parameter SFT](#full-parameter-sft) |
+| `kubernetes/` | etcd `Service`/`Deployment` + PyTorchJob template (+ optional KAI `PodGroup`) for the SFT job; see [`kubernetes/README.md`](kubernetes/README.md) |
+| [`../convert-checkpoint.sh`](../convert-checkpoint.sh) | **shared** HF→MCore conversion (library level, model-agnostic; `HF_MODEL_ID=deepseek-ai/DeepSeek-V3-Base`) |
 
 ---
 
@@ -150,11 +236,11 @@ p6-b300 blog 2025-11-18.
 
 ### The single toggle — `MOE_DISPATCHER`
 
-`bench_dsv3_pretrain.py` (the validated entrypoint; the un-run PyTorchJob path used
-`conf/kimi_k2_sft.py` instead) honors one env var, `MOE_DISPATCHER`:
+`benchmarks/bench_dsv3_pretrain.py` (the validated entrypoint; the un-run SFT PyTorchJob
+path uses `conf/dsv3_sft.py` — same toggle) honors one env var, `MOE_DISPATCHER`:
 
 ```python
-# conf/kimi_k2_sft.py reads env MOE_DISPATCHER in {"alltoall", "deepep"}:
+# conf/dsv3_sft.py reads env MOE_DISPATCHER in {"alltoall", "deepep"}:
 import os
 _disp = os.environ.get("MOE_DISPATCHER", "alltoall")
 if _disp == "deepep":

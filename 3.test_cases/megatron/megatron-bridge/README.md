@@ -27,18 +27,18 @@ megatron-bridge/                  # <library> — model-agnostic environment
 ├── Dockerfile                    # NGC NeMo base + EFA/GDRCopy + UCCL + deep_ep shadow
 ├── 1.build-and-push.sh           # build the shared env image and push the pinned tag to ECR
 ├── 2.sanity-singlenode.sh        # single-node 8-GPU deep_ep/EFA/EP smoke gate (run in the image)
+├── convert-checkpoint.sh         # shared HF -> BF16 -> Megatron-Core conversion (parameterized per model)
 ├── test_megatron_bridge_uccl.py  # CI build smoke test for the shared image
-├── kimi-k2/                      # <model> — Kimi K2 full-parameter SFT recipe
+├── kimi-k2/                      # <model> — Kimi K2 (384-expert): SFT + dispatcher A/B
 │   ├── README.md
-│   ├── 1.convert-checkpoint.sh
 │   ├── conf/                     # SFT ConfigContainer (mounted into the image at runtime)
-│   ├── kubernetes/
+│   ├── kubernetes/               # PyTorchJob manifest + deploy guide
 │   └── benchmarks/               # dispatcher A/B entrypoint + measured RESULTS.md
-└── dsv3/                         # <model> — DeepSeek-V3 256-expert dispatcher A/B
+└── dsv3/                         # <model> — DeepSeek-V3 (256-expert): SFT + dispatcher A/B
     ├── README.md
-    └── benchmarks/               # dispatcher A/B entrypoint + measured RESULTS.md
-        ├── RESULTS.md            # UCCL-EP vs NCCL all-to-all measured numbers
-        └── bench_dsv3_pretrain.py # torchrun entrypoint (recipe-native DSV3, mock data)
+    ├── conf/                     # same layout as kimi-k2/ (both models are structural siblings)
+    ├── kubernetes/
+    └── benchmarks/
 ```
 
 The image is **model-agnostic**: SFT configs are **not** baked in. Each model mounts its
@@ -91,14 +91,19 @@ bash 2.sanity-singlenode.sh
 
 ## Models
 
-| Model | Directory | Recipe |
+Both models provide the same two workloads — full-parameter SFT (`conf/` + `kubernetes/`)
+and the UCCL-EP vs NCCL all-to-all dispatcher A/B (`benchmarks/`) — in a structurally
+identical directory layout.
+
+| Model | Directory | Workloads (32× p6-b300 / 256× B300) |
 |-------|-----------|--------|
-| [Kimi K2](https://huggingface.co/moonshotai/Kimi-K2-Base) (1.04T MoE) | [`kimi-k2/`](kimi-k2/) | Full-parameter SFT on 32× p6-b300 (256× B300) |
-| [DeepSeek-V3](https://github.com/deepseek-ai/DeepSeek-V3) (256-expert MoE) | [`dsv3/`](dsv3/) | UCCL-EP vs NCCL all-to-all dispatcher A/B on 32× p6-b300 (256× B300) |
+| [Kimi K2](https://huggingface.co/moonshotai/Kimi-K2-Base) (1.04T MoE, 384 experts) | [`kimi-k2/`](kimi-k2/) | Full-parameter SFT + UCCL-EP vs NCCL dispatcher A/B |
+| [DeepSeek-V3](https://github.com/deepseek-ai/DeepSeek-V3) (671B MoE, 256 experts) | [`dsv3/`](dsv3/) | Full-parameter SFT + UCCL-EP vs NCCL dispatcher A/B |
 
 To add a model: create `megatron-bridge/<model>/` with its `conf/`, deployment manifests,
-and a model README. Reuse the shared image from step 1 (mount the model's `conf` at runtime)
-— do **not** add a second Dockerfile.
+and a model README (and a `benchmarks/` entrypoint if you want the dispatcher A/B). Reuse the
+shared image from step 1 (mount the model's `conf` at runtime) and the shared
+`convert-checkpoint.sh` — do **not** add a second Dockerfile.
 
 ## Benchmark result — UCCL-EP vs NCCL all-to-all (256× B300)
 
