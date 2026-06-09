@@ -2,7 +2,12 @@
 # SPDX-License-Identifier: MIT-0
 
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Adding Compute Node Group to PCS Cluster
+Description: >
+  Add a single-network-interface Compute Node Group to a PCS cluster — login nodes,
+  CPU queues, or single-NIC GPU queues (e.g. C6i, G5, G6). Mounts the shared FSx
+  filesystems, optionally installs Enroot/Pyxis (PostInstallScriptUrl) and the
+  monitoring exporters (DeployMonitoring/MonitoringRole). A Slurm queue is created
+  only when QueueName is set (leave empty for login nodes).
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -26,12 +31,28 @@ Metadata:
           - FSxLustreFilesystemId
           - FSxLustreFilesystemMountName
           - FSxOpenZFSFilesystemId
+      - Label:
+          default: Monitoring configuration
+        Parameters:
+          - DeployMonitoring
+          - MonitoringVersion
+          - MonitoringRepo
+          - MonitoringRole
+      - Label:
+          default: Post-install script (OnNodeConfigured)
+        Parameters:
+          - PostInstallScriptUrl
+          - PostInstallScriptArgs
 
 Parameters:
   ClusterId:
     Type: String
-    Description: Cluster ID
-  
+    Description: Cluster ID (actual PCS cluster ID like pcs_xxxxx)
+
+  ClusterName:
+    Type: String
+    Description: User-friendly cluster name
+
   CngName:
     Type: String
     Description: Name for Compute Node Group
@@ -44,6 +65,15 @@ Parameters:
   InstanceType:
     Type: String
     Description: Instance Type for Compute Node Group
+
+  RootVolumeSize:
+    Type: Number
+    Description: >-
+      Root EBS volume size (GiB) for nodes. The PCS-Ready DLAMI default (~75 GiB) is
+      too small for pulling/importing large container images; 300 GiB gives ample
+      headroom.
+    Default: 300
+    MinValue: 75
 
   MaxCount:
     Type: Number
@@ -58,13 +88,26 @@ Parameters:
     Description: Select the Subnet where the Compute Node will be launched
 
   AmiId:
-    Type: AWS::EC2::Image::Id
-    Description: Enter the AMI ID for the Login Node and Compute Node (e.g. ami-0abcdef1234567890)
-    ConstraintDescription: Must be a valid AMI ID (ami-xxxxxxxxxxxxxxxxx)
+    Type: String
+    Description: >-
+      (Optional) AMI ID for the nodes. Leave empty to auto-resolve the latest
+      PCS-Ready DLAMI (Ubuntu 24.04 x86_64) from SSM Parameter Store. Set an explicit
+      ami-xxxx only to override (e.g. a custom AMI built with Enroot/Pyxis pre-baked).
+    Default: ""
+    AllowedPattern: '^$|^ami-[0-9a-f]{8,17}$'
+    ConstraintDescription: Must be empty or a valid AMI ID (ami-xxxxxxxxxxxxxxxxx)
 
   ClusterSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
     Description: Select SecurityGroup for Compute Node Group for Cluster Communication
+
+  ExtraSecurityGroupId:
+    Type: String
+    Description: >-
+      (Optional) An additional security group ID to attach to these nodes (in
+      addition to ClusterSecurityGroupId). Used e.g. to expose Grafana on a login
+      node to a specific CIDR. Leave empty to attach only the cluster security group.
+    Default: ""
 
   IamProfileArn:
     Type: String
@@ -82,8 +125,86 @@ Parameters:
     Type: String
     Description: Filesystem ID for FSx for OpenZFS
 
+  DeployMonitoring:
+    Type: String
+    Description: Deploy monitoring stack (Prometheus/Grafana on Login Node, DCGM exporter on Compute Node with GPU)
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  MonitoringVersion:
+    Type: String
+    Description: >-
+      aws-parallelcluster-monitoring git ref to install (release tag, branch, or
+      'latest'). Used both to fetch post-install.sh from MonitoringRepo at this
+      ref and as the ref argument passed to it. Pin to a release tag for upstream
+      stability in production; a branch name (e.g. a fork's dev branch) can be
+      used together with MonitoringRepo for testing unreleased changes.
+    Default: 'v2.9.1'
+
+  MonitoringRepo:
+    Type: String
+    Description: >-
+      GitHub "owner/repo" to fetch the monitoring stack from. Override with a fork
+      together with a branch in MonitoringVersion to test unreleased changes before
+      they merge upstream.
+    Default: 'aws-samples/aws-parallelcluster-monitoring'
+
+  DcgmExporterImage:
+    Type: String
+    Description: >-
+      dcgm-exporter container image used by the monitoring stack on GPU nodes. The
+      default is a DCGM 4.5.2 build pinned by DIGEST -- this covers Hopper / B200 /
+      B300 alike (the digest pull bypasses the Docker 29.x OCI-index failure that
+      breaks newer NVCR tags). To pin to the older monitoring-default 4.2.0 (covers
+      Hopper + B200 only) or any other build, set this to that image reference
+      (preferably also a digest). No effect on CPU nodes.
+    Default: 'nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547d4546eaf4dd5d6b4c0b4db4101e63ef7dc3cdff7f42b767d2c60b706'
+
+  MonitoringRole:
+    Type: String
+    Description: Monitoring role for this node (login=head node with Prometheus/Grafana, compute=compute node with exporters, none=no monitoring)
+    Default: 'none'
+    AllowedValues:
+      - 'login'
+      - 'compute'
+      - 'none'
+
+  PostInstallScriptUrl:
+    Type: String
+    Description: >-
+      Optional URL of a post-install script to download and run on each node at
+      first boot (PCS equivalent of ParallelCluster OnNodeConfigured). Leave
+      empty to skip. To install Enroot/Pyxis, point this at scripts/install-enroot-pyxis.sh.
+      Must be an HTTP(S) URL (e.g. a GitHub raw URL); S3 public hosting is not allowed.
+    Default: ''
+
+  PostInstallScriptArgs:
+    Type: String
+    Description: Space-separated arguments passed to the post-install script.
+    Default: ''
+
+  SlurmVersion:
+    Type: String
+    Description: >-
+      The cluster's Slurm version, exported to the post-install script as
+      PCS_SLURM_VERSION so it can put the matching Slurm CLI bin on slurmd's PATH
+      (the Pyxis PMI hook needs scontrol). Must match the version the cluster was
+      created with.
+    Default: '25.11'
+    AllowedValues:
+      - '25.05'
+      - '25.11'
+
 Conditions:
   CreateQueue: !Not [!Equals [!Ref QueueName, ""]]
+  # Emit the monitoring-role tag for both login and compute nodes (any role
+  # other than 'none'). The monitoring stack identifies login nodes by this
+  # tag (monitoring-role=login) and excludes them from EC2 service discovery.
+  IsMonitoringRoleSet: !Not [!Equals [!Ref MonitoringRole, 'none']]
+  HasExtraSecurityGroup: !Not [!Equals [!Ref ExtraSecurityGroupId, ""]]
+  HasAmiId: !Not [!Equals [!Ref AmiId, ""]]
 
 Resources:
 
@@ -99,10 +220,16 @@ Resources:
       IamInstanceProfileArn: !Ref IamProfileArn
       CustomLaunchTemplate:
         TemplateId: !Ref PCSLaunchTemplate
-        Version: 1
+        # Track the latest launch template version so template updates (e.g. NIC
+        # or UserData changes) actually reach the node group. Hardcoding Version: 1
+        # pins the node group to the original version and silently ignores updates.
+        Version: !GetAtt PCSLaunchTemplate.LatestVersionNumber
       SubnetIds:
         - !Ref SubnetId
-      AmiId: !Ref AmiId
+      AmiId: !If
+        - HasAmiId
+        - !Ref AmiId
+        - '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
       InstanceConfigs:
         - InstanceType: !Ref InstanceType
 
@@ -121,19 +248,50 @@ Resources:
       LaunchTemplateName: !Sub 'PCS-lt-${AWS::StackName}'
 
       LaunchTemplateData:
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: !Ref RootVolumeSize
+              VolumeType: gp3
+              DeleteOnTermination: true
         TagSpecifications:
           - ResourceType: instance
             Tags:
               - Key: HPCRecipes
                 Value: "true"
+              # Name is free for arbitrary operator use. The monitoring stack
+              # identifies login vs compute nodes via the monitoring-role tag
+              # (below), not Name, so dashboards work regardless of this value.
+              # Default to PCS-<cngname> (mirrors CngName) for a recognizable
+              # console name; retag freely afterward.
               - Key: Name
                 Value: !Sub 'PCS-${CngName}'
+              - Key: CngName
+                Value: !Sub 'PCS-${CngName}'
+              - Key: ClusterName
+                Value: !Ref ClusterName
+              - Key: pcs-cluster-id
+                Value: !Ref ClusterId
+              # Node type for the monitoring stack. Emitted for both login and
+              # compute (any role != none). Prometheus drops monitoring-role=login
+              # from EC2 SD (the static login_node job scrapes it); everything else
+              # is reported as instance_name=Compute. See aws-parallelcluster-monitoring
+              # prometheus-pcs.yml and issue #45.
+              - !If
+                - IsMonitoringRoleSet
+                - Key: monitoring-role
+                  Value: !Ref MonitoringRole
+                - !Ref AWS::NoValue
         MetadataOptions:
           HttpEndpoint: enabled
           HttpPutResponseHopLimit: 4
           HttpTokens: required
-        SecurityGroupIds:
-          - !Ref ClusterSecurityGroupId
+          InstanceMetadataTags: enabled
+        SecurityGroupIds: !If
+          - HasExtraSecurityGroup
+          - - !Ref ClusterSecurityGroupId
+            - !Ref ExtraSecurityGroupId
+          - - !Ref ClusterSecurityGroupId
         UserData:
           Fn::Base64: !Sub |
             MIME-Version: 1.0
@@ -144,15 +302,65 @@ Resources:
             MIME-Version: 1.0
             
             runcmd:
+            # Post-install script (optional) - generic OnNodeConfigured-style hook.
+            # Downloads and runs a user-supplied script (e.g. Enroot/Pyxis install).
+            - |
+              if [ -n "${PostInstallScriptUrl}" ]; then
+                echo "Downloading post-install script from ${PostInstallScriptUrl}..." | tee /var/log/pcs-post-install.log
+                curl -fsSL "${PostInstallScriptUrl}" -o /tmp/pcs-post-install.sh
+                chmod +x /tmp/pcs-post-install.sh
+                echo "Executing post-install script..." | tee -a /var/log/pcs-post-install.log
+                # Tell the script this cluster's Slurm version (it can't discover it at
+                # first boot, before slurmd/profile.d/controller exist). See script header.
+                export PCS_SLURM_VERSION="${SlurmVersion}"
+                bash /tmp/pcs-post-install.sh ${PostInstallScriptArgs} >> /var/log/pcs-post-install.log 2>&1
+                echo "Post-install script completed (exit $?)" | tee -a /var/log/pcs-post-install.log
+              else
+                echo "No post-install script configured (PostInstallScriptUrl empty)" | tee /var/log/pcs-post-install.log
+              fi
+            # FSx Home directories mount
             - mkdir -p /tmp/home
             - rsync -aA /home/ /tmp/home
             - echo "${FSxOpenZFSFilesystemId}.fsx.${AWS::Region}.amazonaws.com:/fsx/ /home nfs noatime,nfsvers=3,sync,nconnect=16,rsize=1048576,wsize=1048576,defaults 0 0" >> /etc/fstab
             - mount -a -t nfs defaults
-            - if [ "enabled" == "$(sestatus | awk '/^SELinux status:/{print $3}')" ]; then setsebool -P use_nfs_home_dirs 1; fi
+            - if [ "enabled" = "$(sestatus | awk '/^SELinux status:/{print $3}')" ]; then setsebool -P use_nfs_home_dirs 1; fi
             - rsync -aA --ignore-existing /tmp/home/ /home
             - rm -rf /tmp/home/
             # If provided, mount FSxL filesystem as /fsx
             - if [ ! -z "${FSxLustreFilesystemId}" ]; then mkdir -p /fsx; mount -t lustre ${FSxLustreFilesystemId}.fsx.${AWS::Region}.amazonaws.com@tcp:/${FSxLustreFilesystemMountName} /fsx; chmod 1777 /fsx; fi
+            # Monitoring stack installation (optional, enabled on Login Node only)
+            - |
+              if [ "${DeployMonitoring}" = "true" ]; then
+                echo "Installing monitoring stack..."
+                # Fetch post-install.sh from MonitoringRepo at the MonitoringVersion ref, and
+                # pass both the ref and the repo to it so the tarball is pulled from the same
+                # source. This lets a fork + branch be used for testing unreleased changes.
+                # As of v2.6.3 the installer auto-detects the Ubuntu 'ubuntu' user and runs
+                # install.sh itself (PR #44), so no ec2-user shim or local-var patch is needed.
+                # Optional dcgm-exporter image override (e.g. a B300-capable DCGM
+                # >= 4.4.0 build by digest). The monitoring installer reads
+                # DCGM_EXPORTER_IMAGE from its environment and falls back to its
+                # default pin when empty, so leaving DcgmExporterImage empty keeps
+                # the stock behaviour. See aws-parallelcluster-monitoring #50.
+                export DCGM_EXPORTER_IMAGE="${DcgmExporterImage}"
+                curl -fsSL https://raw.githubusercontent.com/${MonitoringRepo}/${MonitoringVersion}/post-install.sh -o /tmp/post-install.sh
+                # Retry up to 3 times: the install can hit transient first-boot
+                # failures (apt lock contention with cloud-init, network, or the
+                # shared NFS /home still settling). The installer is idempotent
+                # (reuses the existing Grafana SSM param, recreates containers),
+                # so re-running is safe and self-heals a one-off hiccup instead
+                # of leaving the node unmonitored.
+                rc=1
+                for attempt in 1 2 3; do
+                  echo "Monitoring install attempt $attempt/3..." >> /var/log/monitoring-install.log
+                  bash /tmp/post-install.sh ${MonitoringVersion} ${MonitoringRepo} >> /var/log/monitoring-install.log 2>&1
+                  rc=$?
+                  [ $rc -eq 0 ] && break
+                  echo "Monitoring install attempt $attempt failed (exit $rc); retrying in 15s..." >> /var/log/monitoring-install.log
+                  sleep 15
+                done
+                echo "Monitoring installation complete (exit $rc)" >> /var/log/monitoring-install.log
+              fi
 
             --==MYBOUNDARY==
 

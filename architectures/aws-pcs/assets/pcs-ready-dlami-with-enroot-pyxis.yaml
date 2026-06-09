@@ -59,6 +59,19 @@ Parameters:
     AllowedPattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
     ConstraintDescription: Must be a valid semantic version (e.g., 1.0.0)
 
+  SlurmVersion:
+    Type: String
+    Description: >-
+      Slurm version this AMI is built for. The AMI bakes Pyxis built specifically
+      for this version (the SPANK plugin ABI is version-locked, so an AMI works
+      only for clusters at the same Slurm version). Pick the version of the PCS
+      cluster you intend to use this AMI with; the AMI is single-version on
+      purpose to avoid the multi-version .so conflict that breaks slurmd.
+    Default: '25.11'
+    AllowedValues:
+      - '25.05'
+      - '25.11'
+
   BuildSchedule:
     Type: String
     Description: How often to build new AMIs. Manual requires triggering via console or CLI.
@@ -109,8 +122,8 @@ Conditions:
   UseCustomBaseAmi: !Not [!Equals [!Ref BaseAmiId, '']]
 
 Mappings:
-  # PCS-ready DLAMI AMI SSM parameter paths
-  # These resolve to the latest PCS-ready DLAMI AMIs (includes PCS Agent and Slurm pre-installed)
+  # PCS-Ready DLAMI AMI SSM parameter paths
+  # These resolve to the latest PCS-Ready DLAMI AMIs (includes PCS Agent and Slurm pre-installed)
   DLAMIConfigs:
     ubuntu2404:
       x8664: /aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id
@@ -194,7 +207,7 @@ Resources:
       Platform: Linux
       SupportedOsVersions:
         - 'Ubuntu 24'
-      Data: |
+      Data: !Sub |
         name: 'Enroot Pyxis Installer'
         description: 'Install Enroot and Pyxis for PCS with DLAMI'
         schemaVersion: 1.0
@@ -209,7 +222,7 @@ Resources:
                     - echo "Installing Enroot/Pyxis..."
                     - |
                       #!/bin/bash
-                      # Install Enroot/Pyxis on PCS-ready DLAMI
+                      # Install Enroot/Pyxis on PCS-Ready DLAMI
                       # Based on: https://github.com/aws-samples/aws-parallelcluster-post-install-scripts/blob/main/pyxis/postinstall.sh
 
                       set -exo pipefail
@@ -217,10 +230,15 @@ Resources:
                       STABLE=1
                       ENROOT_RELEASE=3.5.0
                       PYXIS_RELEASE=v0.20.0
-                      # Install Pyxis for both Slurm versions supported by PCS
-                      SLURM_VERSIONS="25.05 25.11"
+                      # Install Pyxis ONLY for the Slurm version this AMI is being built for
+                      # (passed in as the SlurmVersion CFN parameter). The SPANK plugin ABI
+                      # is version-locked: a Pyxis built for a different Slurm version makes
+                      # slurmd refuse to start ("Incompatible Slurm plugin version"). So the
+                      # AMI is single-version on purpose -- pick the value matching the cluster
+                      # this AMI will join.
+                      SLURM_VERSIONS="${SlurmVersion}"
 
-                      echo "Installing Enroot ${ENROOT_RELEASE} and Pyxis ${PYXIS_RELEASE} for Slurm versions: ${SLURM_VERSIONS}"
+                      echo "Installing Enroot ${!ENROOT_RELEASE} and Pyxis ${!PYXIS_RELEASE} for Slurm versions: ${!SLURM_VERSIONS}"
 
                       ########
                       # ENROOT
@@ -235,7 +253,7 @@ Resources:
                       	export GPU_CONTAINER_PRESENT=1
                       fi
 
-                      if [ "${OS}" == "Ubuntu" ]; then
+                      if [ "${!OS}" == "Ubuntu" ]; then
                       	apt-get update
                       	if [ $GPU_PRESENT -eq 0 ] && [ $GPU_CONTAINER_PRESENT -gt 0 ]; then
                       		distribution=$(. /etc/os-release;echo $ID$VERSION_ID) \
@@ -251,14 +269,14 @@ Resources:
                       		export arch=$(dpkg --print-architecture)
                       		mkdir -p /tmp/enroot
                       		pushd /tmp/enroot
-                      		curl -fSsL -O https://github.com/NVIDIA/enroot/releases/download/v${ENROOT_RELEASE}/enroot_${ENROOT_RELEASE}-1_${arch}.deb
-                      		curl -fSsL -O https://github.com/NVIDIA/enroot/releases/download/v${ENROOT_RELEASE}/enroot+caps_${ENROOT_RELEASE}-1_${arch}.deb
+                      		curl -fSsL -O https://github.com/NVIDIA/enroot/releases/download/v${!ENROOT_RELEASE}/enroot_${!ENROOT_RELEASE}-1_${!arch}.deb
+                      		curl -fSsL -O https://github.com/NVIDIA/enroot/releases/download/v${!ENROOT_RELEASE}/enroot+caps_${!ENROOT_RELEASE}-1_${!arch}.deb
                       		apt install -y ./*.deb
                       		popd
                       	fi
                         	export NONROOT_USER=ubuntu
                       else
-                      	echo "Unsupported OS: ${OS}" && exit 1;
+                      	echo "Unsupported OS: ${!OS}" && exit 1;
                       fi
 
                       ln -s /usr/share/enroot/hooks.d/50-slurm-pmi.sh /etc/enroot/hooks.d/
@@ -271,7 +289,7 @@ Resources:
                       chmod 1777 /tmp/enroot/data
 
                       ENROOT_CONFIG_RELEASE=main
-                      wget -O /tmp/enroot.template.conf https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-post-install-scripts/${ENROOT_CONFIG_RELEASE}/pyxis/enroot.template.conf
+                      wget -O /tmp/enroot.template.conf https://raw.githubusercontent.com/aws-samples/aws-parallelcluster-post-install-scripts/${!ENROOT_CONFIG_RELEASE}/pyxis/enroot.template.conf
                       ENROOT_CACHE_PATH=/tmp/enroot envsubst < /tmp/enroot.template.conf > /tmp/enroot.conf
                       mv /tmp/enroot.conf /etc/enroot/enroot.conf
                       chmod 0644 /etc/enroot/enroot.conf
@@ -280,29 +298,32 @@ Resources:
                       # PYXIS
                       ########
                       # Install Pyxis for all supported Slurm versions
-                      for SLURM_VERSION in ${SLURM_VERSIONS}; do
-                        echo "Installing Pyxis for Slurm ${SLURM_VERSION}"
-                        SLURM_PATH="/opt/aws/pcs/scheduler/slurm-${SLURM_VERSION}"
-                        SLURM_ETC_PATH="/etc/aws/pcs/scheduler/slurm-${SLURM_VERSION}"
+                      for SLURM_VERSION in ${!SLURM_VERSIONS}; do
+                        echo "Installing Pyxis for Slurm ${!SLURM_VERSION}"
+                        SLURM_PATH="/opt/aws/pcs/scheduler/slurm-${!SLURM_VERSION}"
+                        SLURM_ETC_PATH="/etc/aws/pcs/scheduler/slurm-${!SLURM_VERSION}"
 
                         # Clone Pyxis (only once)
                         if [ ! -d /tmp/pyxis ]; then
-                          git clone --depth 1 --branch ${PYXIS_RELEASE} https://github.com/NVIDIA/pyxis.git /tmp/pyxis
+                          git clone --depth 1 --branch ${!PYXIS_RELEASE} https://github.com/NVIDIA/pyxis.git /tmp/pyxis
                         fi
 
                         cd /tmp/pyxis
                         make clean || true
-                        CPPFLAGS="-I ${SLURM_PATH}/include/" make
-                        CPPFLAGS="-I ${SLURM_PATH}/include/" make install
+                        CPPFLAGS="-I ${!SLURM_PATH}/include/" make
+                        CPPFLAGS="-I ${!SLURM_PATH}/include/" make install
 
-                        mkdir -p ${SLURM_ETC_PATH}/plugstack.conf.d
-                        ln -fs /usr/local/share/pyxis/pyxis.conf ${SLURM_ETC_PATH}/plugstack.conf.d/pyxis.conf
+                        mkdir -p ${!SLURM_ETC_PATH}/plugstack.conf.d
+                        ln -fs /usr/local/share/pyxis/pyxis.conf ${!SLURM_ETC_PATH}/plugstack.conf.d/pyxis.conf
 
-                        echo "Pyxis installed for Slurm ${SLURM_VERSION}"
+                        echo "Pyxis installed for Slurm ${!SLURM_VERSION}"
                       done
 
-                      # Add path for slurm commands (using the latest version as default)
-                      echo "PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:/usr/lib/ccache/bin:/usr/local/bin:/usr/bin:/bin" >> /etc/default/slurmd
+                      # Add the cluster's Slurm bin to slurmd's PATH so the Pyxis PMI hook
+                      # can run scontrol. The AMI is built for a single Slurm version (set
+                      # via the SlurmVersion CFN parameter), so just pin to that version's
+                      # bin directly -- no need to enumerate / pick newest at boot.
+                      echo "PATH=/opt/aws/pcs/scheduler/slurm-${SlurmVersion}/bin:/usr/lib/ccache/bin:/usr/local/bin:/usr/bin:/bin" >> /etc/default/slurmd
 
                       ########
                       # GPU
@@ -338,7 +359,7 @@ Resources:
     Type: AWS::ImageBuilder::ImageRecipe
     Properties:
       Name: !Sub 'dlami-for-pcs-ubuntu2404-x86-64-${AWS::StackName}'
-      Description: PCS-ready DLAMI with Enroot/Pyxis - Ubuntu 24.04 x86_64
+      Description: PCS-Ready DLAMI with Enroot/Pyxis - Ubuntu 24.04 x86_64
       Version: !Ref SemanticVersion
       ParentImage: !If
         - UseCustomBaseAmi
@@ -367,7 +388,7 @@ Resources:
         - Region: !Ref AWS::Region
           AmiDistributionConfiguration:
             Name: !Sub 'dlami-for-pcs-ubuntu2404-x86-64-{{imagebuilder:buildDate}}'
-            Description: !Sub 'PCS-ready DLAMI with Enroot/Pyxis - Ubuntu 24.04 x86_64 - Built on {{imagebuilder:buildDate}}'
+            Description: !Sub 'PCS-Ready DLAMI with Enroot/Pyxis - Ubuntu 24.04 x86_64 - Built on {{imagebuilder:buildDate}}'
             AmiTags:
               Name: !Sub 'dlami-for-pcs-ubuntu2404-x86-64-{{imagebuilder:buildDate}}'
               OS: Ubuntu
@@ -385,7 +406,7 @@ Resources:
     Condition: HasSchedule
     Properties:
       Name: !Sub 'dlami-for-pcs-ubuntu2404-x86-64-${AWS::StackName}'
-      Description: Pipeline for building PCS-ready DLAMI Ubuntu 24.04 x86_64 AMIs
+      Description: Pipeline for building PCS-Ready DLAMI Ubuntu 24.04 x86_64 AMIs
       ImageRecipeArn: !GetAtt ImageRecipeUbuntu2404X8664.Arn
       InfrastructureConfigurationArn: !GetAtt InfrastructureConfigX8664.Arn
       DistributionConfigurationArn: !GetAtt DistributionConfigUbuntu2404X8664.Arn
@@ -405,7 +426,7 @@ Resources:
     Condition: EnableLifecycle
     Properties:
       Name: !Sub 'dlami-for-pcs-lifecycle-${AWS::StackName}'
-      Description: Deprecate old PCS DLAMI AMIs to keep AMI list clean
+      Description: Deprecate old PCS-Ready DLAMI AMIs to keep AMI list clean
       Status: ENABLED
       ExecutionRole: !GetAtt LifecyclePolicyRole.Arn
       ResourceType: AMI_IMAGE
@@ -441,7 +462,7 @@ Resources:
 
 Outputs:
   DLAMIforPCSAmiId:
-    Description: AMI ID of the built PCS-ready DLAMI (Ubuntu 24.04 x86_64)
+    Description: AMI ID of the built PCS-Ready DLAMI (Ubuntu 24.04 x86_64)
     Value: !GetAtt DLAMIforPCS.ImageId
     Export:
       Name: !Sub '${AWS::StackName}-AmiId'

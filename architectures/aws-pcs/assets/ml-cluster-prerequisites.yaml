@@ -3,14 +3,13 @@
 
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  This CloudFormation stack creates all the necessary pre-requisites for ML Cluster,
-  these include VPC and two Subnets, a security group and FSx Lustre Filesystem.
-  A public subnet and a private subnet are created in an Availability Zone that you provide as a parameter.
-  As part of the template you'll deploy an Internet Gateway and NAT Gateway in
-  the public subnet. In addition you deploy endpoints for Amazon S3. The VPC contains 2 CIDR blocks with 10.0.0.0/16 and 10.1.0.0/16
-  The first CIDR is used for the public subnet, the second is used for the private.
-  The template creates an fsx lustre volume in the specified AZ with a default of
-  1.2 TB storage which can be overridden by parameter.
+  Network and storage prerequisites for an ML PCS cluster: a VPC with one public and
+  one private subnet, a security group, an FSx for Lustre filesystem (high-speed
+  shared scratch, /fsx), and an FSx for OpenZFS filesystem (home directories, /home).
+  A public and a private subnet are created in the Availability Zone you provide. It
+  also deploys an Internet Gateway, a NAT Gateway in the public subnet, and an Amazon
+  S3 VPC endpoint. The VPC has two CIDR blocks (10.0.0.0/16 public, 10.1.0.0/16
+  private). FSx for Lustre defaults to 1.2 TB; deployment types/throughput are parameters.
 
 
 ####################
@@ -29,7 +28,7 @@ Metadata:
         Parameters:
           - PrimarySubnetAZ
       - Label:
-          default: Fsx Lustre storage size
+          default: FSx for Lustre (/fsx) storage size
         Parameters:
           - Capacity
       - Label:
@@ -71,17 +70,29 @@ Parameters:
     Description: Storage capacity in GiB (1200 or increments of 2400)
     Type: Number
     Default: 1200
-  
-  PerUnitStorageThroughput:
-    Description: Provisioned Read/Write (MB/s/TiB)
-    Type: Number
-    Default: 250
+
+  LustreDeploymentType:
+    Description: >-
+      FSx for Lustre deployment type. PERSISTENT_2 is the latest generation
+      (throughput per TiB of 125/250/500/1000) but is not available in every
+      Region; PERSISTENT_1 (50/100/200) is available in more Regions. Check the
+      FSx for Lustre Region table and pick the one your Region supports.
+    Type: String
+    Default: PERSISTENT_2
     AllowedValues:
-      - 125
-      - 250
-      - 500
-      - 1000
-  
+      - PERSISTENT_2
+      - PERSISTENT_1
+
+  PerUnitStorageThroughput:
+    Description: >-
+      Provisioned Read/Write throughput per unit of storage (MB/s/TiB). Valid
+      values depend on LustreDeploymentType: PERSISTENT_2 supports 125/250/500/1000,
+      PERSISTENT_1 supports 50/100/200. If you change LustreDeploymentType you must
+      pick a value valid for it (enforced by a template Rule below).
+    Type: String
+    Default: "250"
+    AllowedValues: ["50", "100", "200", "125", "250", "500", "1000"]
+
   Compression:
     Description: Data compression type
     Type: String
@@ -104,9 +115,72 @@ Parameters:
     Default: 512
 
   HomeThroughput:
-    Description: "Home directories storage throughput MB/s"
-    Type: Number
-    Default: 320
+    Description: >-
+      Home directories (FSx for OpenZFS) storage throughput (MB/s). Valid values
+      depend on OpenZFSDeploymentType: SINGLE_AZ_HA_2 / SINGLE_AZ_2 =
+      160/320/640/1280/2560/3840/5120/7680/10240; SINGLE_AZ_HA_1 / SINGLE_AZ_1 =
+      64/128/256/512/1024/2048/3072/4096. If you change OpenZFSDeploymentType you
+      must pick a value valid for it (enforced by a template Rule below).
+    Type: String
+    Default: "320"
+    AllowedValues:
+      ["64", "128", "256", "512", "1024", "2048", "3072", "4096",
+       "160", "320", "640", "1280", "2560", "3840", "5120", "7680", "10240"]
+
+  OpenZFSDeploymentType:
+    Description: >-
+      FSx for OpenZFS deployment type for the /home file system. SINGLE_AZ_HA_2
+      (the default) is not available in every Region; SINGLE_AZ_1 is available in
+      all Regions. SINGLE_AZ_HA_1 / SINGLE_AZ_2 are also offered in some Regions.
+      Check the FSx for OpenZFS Region table and pick one your Region supports.
+      (MULTI_AZ types are intentionally excluded — they require a second subnet
+      this template does not provision.)
+    Type: String
+    Default: SINGLE_AZ_HA_2
+    AllowedValues:
+      - SINGLE_AZ_HA_2
+      - SINGLE_AZ_HA_1
+      - SINGLE_AZ_2
+      - SINGLE_AZ_1
+
+
+###########################################
+## Rules: validate FSx throughput vs type ##
+###########################################
+# FSx throughput is a discrete grid that depends on the chosen deployment type.
+# Reject an invalid (DeploymentType, throughput) pair at stack-create time with a
+# clear message, instead of an opaque CreateFileSystem failure later.
+Rules:
+  LustrePersistent1Throughput:
+    RuleCondition: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_1']
+    Assertions:
+      - Assert: !Contains [["50", "100", "200"], !Ref PerUnitStorageThroughput]
+        AssertDescription: >-
+          PERSISTENT_1 supports PerUnitStorageThroughput of 50, 100, or 200 MB/s/TiB only.
+  LustrePersistent2Throughput:
+    RuleCondition: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_2']
+    Assertions:
+      - Assert: !Contains [["125", "250", "500", "1000"], !Ref PerUnitStorageThroughput]
+        AssertDescription: >-
+          PERSISTENT_2 supports PerUnitStorageThroughput of 125, 250, 500, or 1000 MB/s/TiB only.
+  OpenZFS64GridThroughput:
+    RuleCondition: !Or
+      - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_1']
+      - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_HA_1']
+    Assertions:
+      - Assert: !Contains [["64", "128", "256", "512", "1024", "2048", "3072", "4096"], !Ref HomeThroughput]
+        AssertDescription: >-
+          SINGLE_AZ_1 / SINGLE_AZ_HA_1 support HomeThroughput of
+          64/128/256/512/1024/2048/3072/4096 MB/s only.
+  OpenZFS160GridThroughput:
+    RuleCondition: !Or
+      - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_2']
+      - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_HA_2']
+    Assertions:
+      - Assert: !Contains [["160", "320", "640", "1280", "2560", "3840", "5120", "7680", "10240"], !Ref HomeThroughput]
+        AssertDescription: >-
+          SINGLE_AZ_2 / SINGLE_AZ_HA_2 support HomeThroughput of
+          160/320/640/1280/2560/3840/5120/7680/10240 MB/s only.
 
 
 ###############################
@@ -115,6 +189,10 @@ Parameters:
 
 Conditions:
   S3EndpointCondition: !Equals [!Ref 'CreateS3Endpoint', 'true']
+  # PERSISTENT_2 is the only Lustre deployment type that supports a metadata
+  # configuration (and the EFA/Intelligent-Tiering features); PERSISTENT_1 does
+  # not, so the MetadataConfiguration block is only emitted for PERSISTENT_2.
+  LustreIsPersistent2: !Equals [!Ref 'LustreDeploymentType', 'PERSISTENT_2']
 
 #########################
 ## VPC & Network Setup ##
@@ -305,10 +383,13 @@ Resources:
         - !Ref PrimaryPrivateSubnet
       LustreConfiguration:
         DataCompressionType: !Ref Compression
-        DeploymentType: PERSISTENT_2
+        DeploymentType: !Ref LustreDeploymentType
         PerUnitStorageThroughput: !Ref PerUnitStorageThroughput
-        MetadataConfiguration:
-          Mode: AUTOMATIC
+        # MetadataConfiguration is only valid on PERSISTENT_2.
+        MetadataConfiguration: !If
+          - LustreIsPersistent2
+          - Mode: AUTOMATIC
+          - !Ref AWS::NoValue
 
 
   OpenZFSFileSystem:
@@ -320,7 +401,7 @@ Resources:
         CopyTagsToBackups: Yes
         CopyTagsToVolumes: Yes
         DailyAutomaticBackupStartTime: '19:00'
-        DeploymentType: SINGLE_AZ_HA_2
+        DeploymentType: !Ref OpenZFSDeploymentType
         Options: 
           - DELETE_CHILD_VOLUMES_AND_SNAPSHOTS
         RootVolumeConfiguration: 
@@ -360,6 +441,11 @@ Outputs:
     Description: ID of the primary private subnet
     Export:
       Name: !Sub ${AWS::StackName}-PrimaryPrivateSubnet
+  PrivateSubnet:
+    Value: !Ref PrimaryPrivateSubnet
+    Description: ID of the primary private subnet (alias for compatibility)
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivateSubnet
   SecurityGroup:
     Value: !Ref SecurityGroup
     Description: SecurityGroup for Batch
@@ -381,12 +467,17 @@ Outputs:
     Export:
       Name: !Sub ${AWS::StackName}-FSxLustreFilesystemId
   FSxORootVolumeId:
-    Description: The ID of Fsx OpenZFS root volume
+    Description: The ID of FSx for OpenZFS root volume
     Value: !GetAtt OpenZFSFileSystem.RootVolumeId
     Export:
       Name: !Sub ${AWS::StackName}-FSxORootVolumeId
   FSxOFilesystemId:
-    Description: The ID of Fsx OpenZFS filesystem
+    Description: The ID of FSx for OpenZFS filesystem
     Value: !Ref OpenZFSFileSystem
     Export:
       Name: !Sub ${AWS::StackName}-FSxOFilesystemId
+  FSxOpenZFSFilesystemId:
+    Description: The ID of FSx for OpenZFS filesystem (alias for compatibility)
+    Value: !Ref OpenZFSFileSystem
+    Export:
+      Name: !Sub ${AWS::StackName}-FSxOpenZFSFilesystemId

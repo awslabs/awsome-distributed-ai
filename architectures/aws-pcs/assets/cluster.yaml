@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: MIT-0
 
 AWSTemplateFormatVersion: '2010-09-09'
-Description: AWS PCS "Getting Started" cluster. 
-  This template deploys a small HPC cluster with 1 login node and up to 4 compute nodes. Optionally, Slurm accounting can be enabled.
-  It includes an EFS file system for shared storage and an FSx for Lustre file system for high-speed temporary storage.  
-  The cluster is deployed in a new VPC with both public and private subnets.  
-  It can be accessed via the browser using AWS Systems Manager Session Manager or over the internet via SSH.  
-  To access the cluster, check the Outputs tab of this stack for relevant links.  
+Description: >
+  AWS PCS cluster core (Slurm scheduler only — no compute nodes). Creates the PCS
+  cluster, its IAM role/instance profile, and (optionally) the monitoring IAM policy
+  and Slurm accounting. It attaches to an existing private subnet and security group
+  (from the prerequisites stack); add login/compute nodes separately with add-cng*.yaml.
+  Optionally enables Slurm OpenMetrics for the monitoring stack via DeployMonitoring.
 
 ### Stack metadata
 Metadata:
@@ -20,24 +20,12 @@ Metadata:
           - SlurmVersion
           - ManagedAccounting
           - AccountingPolicyEnforcement
+          - DeployMonitoring
       - Label:
           default: PCS Networking configuration
         Parameters:
-          - VpcId
-          - PublicSubnetId
           - PrivateSubnetId
           - DefaultSecurityGroupId
-      - Label:
-          default: PCS Storage configuration
-        Parameters:
-          - FSxLustreFilesystemId
-          - FSxLustreFilesystemMountName
-          - FSxOpenZFSFilesystemId
-      - Label:
-          default: HPC Recipes configuration
-        Parameters:
-          - HpcRecipesS3Bucket
-          - HpcRecipesBranch
 
 Parameters:
   ClusterName:
@@ -47,33 +35,13 @@ Parameters:
     AllowedPattern: '^[a-zA-Z][a-zA-Z0-9-]{0,39}$'
     ConstraintDescription: Must start with a letter, contain only alphanumeric characters and hyphens, and be 1-40 characters long
 
-  VpcId:
-    Type: AWS::EC2::VPC::Id
-    Description: Select the VPC where the cluster will be launched
-
-  PublicSubnetId:
-    Type: AWS::EC2::Subnet::Id
-    Description: Select the Subnet where the Login Node will be launched
-
   PrivateSubnetId:
     Type: AWS::EC2::Subnet::Id
-    Description: Select the Subnet where the Compute Node will be launched
+    Description: Select the Subnet where the PCS cluster (Slurm controller) will be placed
 
   DefaultSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
     Description: Select SecurityGroup for the cluster
-
-  FSxLustreFilesystemId:
-    Type: String
-    Description: Filesystem ID for FSx for Lustre
-
-  FSxLustreFilesystemMountName:
-    Type: String
-    Description: MountName for FSx for Lustre
-
-  FSxOpenZFSFilesystemId:
-    Type: String
-    Description: Filesystem ID for FSx for OpenZFS
 
   SlurmVersion:
     Type: String
@@ -99,18 +67,13 @@ Parameters:
       - none
       - 'associations,limits,safe'
 
-  HpcRecipesS3Bucket:
+  DeployMonitoring:
     Type: String
-    Default: aws-hpc-recipes
-    Description: HPC Recipes for AWS S3 bucket
+    Description: Enable Slurm OpenMetrics for monitoring stack (Prometheus/Grafana)
+    Default: 'false'
     AllowedValues:
-         - aws-hpc-recipes
-         - aws-hpc-recipes-dev
-  HpcRecipesBranch:
-    Type: String
-    Default: main
-    Description: HPC Recipes for AWS release branch
-    AllowedPattern: '^(?!.*/\.git$)(?!.*/\.)(?!.*\\.\.)[a-zA-Z0-9-_\.]+$'
+      - 'true'
+      - 'false'
 
 Conditions:
   GovCloud: !Equals [!Ref AWS::Partition, 'aws-us-gov']
@@ -120,6 +83,21 @@ Conditions:
   IsAccountingEnabled: !Equals [!Ref ManagedAccounting, 'enabled']
   IncludeAccountingConfig: !And [!Condition HasAccountingSupport, !Condition IsAccountingEnabled]
   SetAccountingPolicy: !Not [!Equals [!Ref AccountingPolicyEnforcement, 'none']]
+  IsMonitoringEnabled: !Equals [!Ref DeployMonitoring, 'true']
+  # The Slurm OpenMetrics endpoint (MetricsType=metrics/openmetrics +
+  # CommunicationParameters=enable_http) is only supported on Slurm 25.11+. PCS
+  # rejects cluster creation if these are set on an older version (e.g. 25.05),
+  # so only emit them when monitoring is enabled AND the version supports it.
+  IsSlurm2511OrLater: !Equals [!Ref SlurmVersion, "25.11"]
+  IncludeMetricsConfig: !And [!Condition IsMonitoringEnabled, !Condition IsSlurm2511OrLater]
+  # Emit SlurmConfiguration only when at least one custom setting / accounting block
+  # actually applies. Monitoring alone on Slurm < 25.11 contributes nothing (its
+  # metrics settings are gated by IncludeMetricsConfig), so it must NOT force an
+  # otherwise-empty SlurmCustomSettings list, which PCS rejects.
+  IncludeSlurmConfig: !Or
+    - !Condition IncludeAccountingConfig
+    - !Condition SetAccountingPolicy
+    - !Condition IncludeMetricsConfig
 
 
 Resources:
@@ -139,41 +117,175 @@ Resources:
         SecurityGroupIds:
           - !Ref DefaultSecurityGroupId
       SlurmConfiguration: !If
-        - IncludeAccountingConfig
-        - Accounting:
-            Mode: STANDARD
-            DefaultPurgeTimeInDays: 30
-          SlurmCustomSettings: !If 
-            - SetAccountingPolicy
-            - - ParameterName: AccountingStorageEnforce
+        - IncludeSlurmConfig
+        - Accounting: !If
+            - IncludeAccountingConfig
+            - Mode: STANDARD
+              DefaultPurgeTimeInDays: 30
+            - !Ref AWS::NoValue
+          SlurmCustomSettings:
+            - !If
+              - SetAccountingPolicy
+              - ParameterName: AccountingStorageEnforce
                 ParameterValue: !Ref AccountingPolicyEnforcement
-            - []
+              - !Ref AWS::NoValue
+            - !If
+              - IncludeMetricsConfig
+              - ParameterName: MetricsType
+                ParameterValue: metrics/openmetrics
+              - !Ref AWS::NoValue
+            - !If
+              - IncludeMetricsConfig
+              - ParameterName: CommunicationParameters
+                ParameterValue: enable_http
+              - !Ref AWS::NoValue
         - !Ref AWS::NoValue
 
-  # IAM Instance Profile
-  PCSInstanceProfile:
-    Type: AWS::CloudFormation::Stack
+  # IAM Role for PCS instances
+  PcsInstanceIamRole:
+    Type: AWS::IAM::Role
     Properties:
-      Parameters:
-        # Use hash of stack name to keep role name short and avoid 64-char limit
-        # while still being unique per stack and region
-        RoleName: !Sub
-          - 'pcs-${StackHash}-${AWS::Region}'
-          - StackHash: !Select [0, !Split ['-', !Select [2, !Split ['/', !Ref 'AWS::StackId']]]]
-      TemplateURL: !Sub 'https://${HpcRecipesS3Bucket}.s3.amazonaws.com/${HpcRecipesBranch}/recipes/pcs/getting_started/assets/pcs-iip-minimal.yaml'
+      RoleName: !Sub
+        - 'AWSPCS-pcs-${StackHash}-${AWS::Region}-role'
+        - StackHash: !Select [0, !Split ['-', !Select [2, !Split ['/', !Ref 'AWS::StackId']]]]
+      Description: "AWS IAM role for PCS node group instances"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonS3ReadOnlyAccess"
+      Policies:
+        - PolicyName: PcsRegisterInstancePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - pcs:RegisterComputeNodeGroupInstance
+                Resource: "*"
+
+  # IAM Instance Profile
+  PcsInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub
+        - 'AWSPCS-pcs-${StackHash}-${AWS::Region}'
+        - StackHash: !Select [0, !Split ['-', !Select [2, !Split ['/', !Ref 'AWS::StackId']]]]
+      Roles:
+        - !Ref PcsInstanceIamRole
+
+  # Monitoring IAM Policy (optional, attached to the instance role)
+  MonitoringPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: IsMonitoringEnabled
+    Properties:
+      ManagedPolicyName: !Sub '${PCSCluster.Id}-monitoring-policy'
+      Roles:
+        - !Ref PcsInstanceIamRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EC2DescribeForPrometheusSdAndCostMetrics
+            Effect: Allow
+            Action:
+              - ec2:DescribeInstances
+              - ec2:DescribeVolumes
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref AWS::Region
+
+          - Sid: CloudFormationDescribeOwnStackOnly
+            Effect: Allow
+            Action:
+              - cloudformation:DescribeStacks
+              - cloudformation:DescribeStackResources
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*'
+              - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}-*/*'
+
+          - Sid: FSxDescribeForCostMetrics
+            Effect: Allow
+            Action:
+              - fsx:DescribeFileSystems
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref AWS::Region
+
+          - Sid: PricingReadForCostMetrics
+            Effect: Allow
+            Action:
+              - pricing:GetProducts
+              - pricing:DescribeServices
+            Resource: '*'
+
+          - Sid: SSMGrafanaPasswordForThisClusterOnly
+            Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:PutParameter
+              - ssm:AddTagsToResource
+            Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/grafana/*'
+
+          - Sid: KMSForSSMSecureString
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+            Resource: '*'
+            Condition:
+              StringEquals:
+                kms:ViaService: !Sub 'ssm.${AWS::Region}.amazonaws.com'
+
+          - Sid: CloudWatchGetMetricData
+            Effect: Allow
+            Action:
+              - cloudwatch:GetMetricData
+              - cloudwatch:GetMetricStatistics
+              - cloudwatch:ListMetrics
+            Resource: '*'
+
+          - Sid: CloudWatchLogsReadForClusterLogs
+            Effect: Allow
+            Action:
+              - logs:DescribeLogGroups
+              - logs:DescribeLogStreams
+              - logs:FilterLogEvents
+              - logs:GetLogEvents
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/pcs/${PCSCluster.Id}*'
+
+          - Sid: PCSGetClusterForMonitoring
+            Effect: Allow
+            Action:
+              - pcs:GetCluster
+              - pcs:ListComputeNodeGroups
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref AWS::Region
 
 Outputs:
   ClusterId:
     Description: The Id of the PCS cluster
     Value: !GetAtt [ PCSCluster, Id ]
   InstanceProfileArn:
-    Value: !GetAtt [ PCSInstanceProfile, Outputs.InstanceProfileArn ]
+    Description: ARN of the IAM instance profile
+    Value: !GetAtt [ PcsInstanceProfile, Arn ]
+  RoleName:
+    Description: IAM Role name for cluster instances
+    Value: !Ref PcsInstanceIamRole
   PcsConsoleUrl:
     Description: URL to access the cluster in the PCS console
     Value: !Sub
       - https://${ConsoleDomain}/pcs/home?region=${AWS::Region}#/clusters/${ClusterId}
       - { ConsoleDomain: !If [ GovCloud, 'console.amazonaws-us-gov.com', !If [ China, 'console.amazonaws.cn', !Sub '${AWS::Region}.console.aws.amazon.com']],
-          ClusterId: !GetAtt [ PCSCluster, Id ] 
+          ClusterId: !GetAtt [ PCSCluster, Id ]
         }
     Export:
       Name: !Sub ${AWS::StackName}-PcsConsoleUrl
