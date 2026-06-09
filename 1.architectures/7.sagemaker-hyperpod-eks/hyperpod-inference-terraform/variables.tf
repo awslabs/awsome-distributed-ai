@@ -131,7 +131,7 @@ variable "api_keys" {
 }
 
 variable "internal_alb_arn" {
-  description = "ARN of the internal ALB created by the inference operator (optional — auto-discovered if empty)"
+  description = "Optional override for the internal ALB ARN. Leave empty (default) to auto-discover the operator-managed ALB by its ingress tags in a single apply."
   type        = string
   default     = ""
 }

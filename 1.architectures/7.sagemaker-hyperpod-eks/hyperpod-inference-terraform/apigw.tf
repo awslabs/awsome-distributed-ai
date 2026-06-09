@@ -9,7 +9,28 @@
 # - No credential management for callers (just x-api-key header)
 
 locals {
-  deploy_apigw = var.internal_alb_arn != ""
+  # The API Gateway always deploys in this stage. The internal ALB it fronts is
+  # either auto-discovered from the operator-managed load balancer (default) or
+  # supplied explicitly via var.internal_alb_arn.
+  deploy_apigw = true
+
+  # Resolved ARN of the internal ALB to front with API Gateway.
+  internal_alb_arn = var.internal_alb_arn != "" ? var.internal_alb_arn : data.aws_lb.discovered[0].arn
+}
+
+# --- Auto-discover the operator-managed internal ALB by its ingress tags ---
+# The AWS Load Balancer Controller tags the ALB with the ingress stack name
+# (<namespace>/alb-<endpoint_name>) and the owning EKS cluster. We wait for it
+# to exist (null_resource.wait_for_alb) before reading it here.
+data "aws_lb" "discovered" {
+  count = var.internal_alb_arn == "" ? 1 : 0
+
+  tags = {
+    "ingress.k8s.aws/stack" = "${var.namespace}/alb-${var.endpoint_name}"
+    "elbv2.k8s.aws/cluster" = var.eks_cluster_name
+  }
+
+  depends_on = [null_resource.wait_for_alb]
 }
 
 # --- VPC Link (connects API Gateway to internal ALB) ---
@@ -28,12 +49,12 @@ resource "aws_apigatewayv2_vpc_link" "inference" {
 
 data "aws_lb" "internal_alb" {
   count = local.deploy_apigw ? 1 : 0
-  arn   = var.internal_alb_arn
+  arn   = local.internal_alb_arn
 }
 
 data "aws_lb_listener" "internal_alb" {
   count             = local.deploy_apigw ? 1 : 0
-  load_balancer_arn = var.internal_alb_arn
+  load_balancer_arn = local.internal_alb_arn
   port              = 443
 }
 

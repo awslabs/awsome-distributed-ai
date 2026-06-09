@@ -5,7 +5,12 @@ output "endpoint_url" {
 
 output "api_gateway_url" {
   description = "API Gateway execute URL (alternative)"
-  value       = local.deploy_apigw ? aws_apigatewayv2_api.inference[0].api_endpoint : "Not deployed yet - set internal_alb_arn and re-apply"
+  value       = aws_apigatewayv2_api.inference[0].api_endpoint
+}
+
+output "internal_alb_arn" {
+  description = "ARN of the internal ALB fronted by API Gateway (auto-discovered unless overridden)"
+  value       = local.internal_alb_arn
 }
 
 output "acm_certificate_arn" {
@@ -25,5 +30,5 @@ output "namespace" {
 
 output "next_steps" {
   description = "Instructions"
-  value       = local.deploy_apigw ? "Deployment complete! Use x-api-key header to authenticate." : "Phase 1 complete. Wait for ALB, then set internal_alb_arn and api_keys in terraform.tfvars and run: tofu apply"
+  value       = "Deployment complete! Call ${var.domain_name} with an x-api-key (or Authorization: Bearer) header."
 }

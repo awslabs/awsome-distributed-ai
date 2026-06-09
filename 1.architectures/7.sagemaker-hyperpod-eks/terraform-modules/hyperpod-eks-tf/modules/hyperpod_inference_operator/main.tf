@@ -86,4 +86,8 @@ resource "aws_eks_addon" "inference_operator" {
   depends_on = [
     aws_eks_addon.s3_csi_driver
   ]
+
+  timeouts {
+    create = var.inference_operator_create_timeout
+  }
 }

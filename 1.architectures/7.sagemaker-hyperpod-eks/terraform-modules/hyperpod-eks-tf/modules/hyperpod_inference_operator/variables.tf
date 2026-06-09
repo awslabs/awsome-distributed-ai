@@ -44,3 +44,15 @@ variable "enable_metrics_server" {
   description = "Install metrics-server EKS addon"
   type        = bool
 }
+
+# Create timeout for the inference operator EKS add-on. The add-on only reports
+# ACTIVE once its controller-manager pod is healthy, which in turn waits for a
+# GPU node to be ready and several large container images to be pulled. On a
+# cold P5 cluster this can exceed the AWS provider's default 20m. Raising it
+# avoids spurious "timeout while waiting for state to become ACTIVE" failures
+# on slow-but-healthy first deploys.
+variable "inference_operator_create_timeout" {
+  description = "Create timeout for the amazon-sagemaker-hyperpod-inference EKS add-on"
+  type        = string
+  default     = "40m"
+}

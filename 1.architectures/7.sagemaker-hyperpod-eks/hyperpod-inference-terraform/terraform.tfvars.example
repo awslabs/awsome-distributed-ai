@@ -49,8 +49,11 @@ api_keys = [                                            # API keys for client au
   "",                                                   # Generate with: openssl rand -hex 24
 ]
 
-# === Phase 2 (set after Phase 1 completes) ===
-internal_alb_arn = ""                                   # Set to ALB ARN after Phase 1, then re-apply
+# === Internal ALB (optional override) ===
+# Leave empty (default): the API Gateway auto-discovers the operator-managed
+# ALB by its ingress tags and deploys in a SINGLE `tofu apply`. Only set this
+# if you want to front a specific, pre-existing ALB ARN.
+internal_alb_arn = ""
 
 # === OPTIONAL: Customization ===
 endpoint_name        = "my-inference-endpoint"          # Name for the K8s deployment and SageMaker endpoint
