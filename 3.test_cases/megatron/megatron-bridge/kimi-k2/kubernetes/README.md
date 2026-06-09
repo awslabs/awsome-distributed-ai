@@ -10,7 +10,7 @@ UCCL-EP providing expert-parallel all-to-all over AWS EFA.
 > **Status (2026-06-01) — this PyTorchJob + KAI path has NOT been run end-to-end.** The
 > cluster used for validation has **no kubeflow PyTorchJob CRD**, so the work that *was*
 > run — the dispatcher A/B that proves the UCCL-over-EFA path — used **raw ranked Pods**
-> instead (see [`../../dsv3/RESULTS.md`](../../dsv3/RESULTS.md) and
+> instead (see [`../../dsv3/benchmarks/RESULTS.md`](../../dsv3/benchmarks/RESULTS.md) and
 > [`../../dsv3/run-ab-rawpods.sh`](../../dsv3/run-ab-rawpods.sh)). The full SFT
 > additionally needs the ~2 TB MCore checkpoint at `/fsx/kimi-k2/mcore` (absent at the time
 > of writing). Steps below that depend on the PyTorchJob operator or the KAI PodGroup are

@@ -6,7 +6,7 @@
 MoE token-dispatcher A/B on **literal Kimi-K2** (`moonshotai/Kimi-K2-Base`: 61 layers,
 384 routed experts, top-8, MLA, 64 attention heads, `n_group=1`, no MTP), built via
 `AutoBridge.from_hf_pretrained(..., trust_remote_code=True).to_megatron_provider()` —
-**not** the DeepSeek-V3 256-expert stand-in used in [`../../dsv3/`](../../dsv3/RESULTS.md).
+**not** the DeepSeek-V3 256-expert stand-in used in [`../../dsv3/`](../../dsv3/benchmarks/RESULTS.md).
 This is the first dispatcher A/B measured on the real K2 architecture.
 
 The only toggle that changes between arms is `MOE_DISPATCHER`
@@ -74,7 +74,7 @@ The 32-node Capacity Block ended at 2026-06-04 ~10:51Z (EC2 reclaims instances
   counterpart never started. The 16-node campaign measured deepep mb1+ovl (20.95 s)
   but not its alltoall pair, so **no mb1+overlap A/B exists at either scale**.
 - The planned same-campaign **DSV3 re-run never started** — DSV3 reference numbers
-  remain the separate 2026-06-01 campaign in [`../../dsv3/RESULTS.md`](../../dsv3/RESULTS.md)
+  remain the separate 2026-06-01 campaign in [`../../dsv3/benchmarks/RESULTS.md`](../../dsv3/benchmarks/RESULTS.md)
   (same image/layout, but not same-campaign apples-to-apples).
 
 ## Appendix — 16-node PP4 (128× B300), campaign `20260604T051726Z-uccl-ab-pp4-16n-v2`

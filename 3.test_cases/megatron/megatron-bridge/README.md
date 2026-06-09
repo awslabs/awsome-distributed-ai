@@ -32,12 +32,13 @@ megatron-bridge/                  # <library> — model-agnostic environment
 │   ├── README.md
 │   ├── 1.convert-checkpoint.sh
 │   ├── conf/                     # SFT ConfigContainer (mounted into the image at runtime)
-│   └── kubernetes/
+│   ├── kubernetes/
+│   └── benchmarks/               # dispatcher A/B entrypoint + measured RESULTS.md
 └── dsv3/                         # <model> — DeepSeek-V3 256-expert dispatcher A/B
     ├── README.md
-    ├── RESULTS.md                # UCCL-EP vs NCCL all-to-all measured numbers
-    ├── bench_dsv3_pretrain.py    # torchrun entrypoint (recipe-native DSV3, mock data)
-    └── run-ab-rawpods.sh         # raw-pod A/B launcher (one arm per call)
+    └── benchmarks/               # dispatcher A/B entrypoint + measured RESULTS.md
+        ├── RESULTS.md            # UCCL-EP vs NCCL all-to-all measured numbers
+        └── bench_dsv3_pretrain.py # torchrun entrypoint (recipe-native DSV3, mock data)
 ```
 
 The image is **model-agnostic**: SFT configs are **not** baked in. Each model mounts its
@@ -85,7 +86,7 @@ bash 2.sanity-singlenode.sh
 > raises a `pg_collection` error. This is **not** a UCCL/image fault — the real
 > `pretrain()` path builds the process groups internally and dispatches correctly (the
 > multi-node benchmark runs clean through `MoEFlexTokenDispatcher(backend="deepep")`).
-> Treat the multi-node run / [`benchmarks`](dsv3/RESULTS.md) as the
+> Treat the multi-node run / [`benchmarks`](dsv3/benchmarks/RESULTS.md) as the
 > authoritative end-to-end dispatch check until Gate 5 is ported to the 0.17.1 API.
 
 ## Models
@@ -107,7 +108,7 @@ Megatron-Core MoE token dispatcher — NCCL all-to-all (baseline) vs UCCL's EFA-
 `deepseek_v3` recipe — **DeepSeek-V3 256-expert** MoE (the architecture family Kimi-K2
 belongs to, but **not** the literal 384-expert Kimi-K2 — see RESULTS.md), TP8/PP8/EP32/DP4,
 seq 4096, bf16, balanced routing. Everything else is held byte-identical across arms. Full
-methodology, caveats, and raw numbers: [`dsv3/RESULTS.md`](dsv3/RESULTS.md).
+methodology, caveats, and raw numbers: [`dsv3/benchmarks/RESULTS.md`](dsv3/benchmarks/RESULTS.md).
 
 At the throughput-efficient operating point (micro-batch ≥ 4), **UCCL `deep_ep` is
 ~36% faster than NCCL all-to-all**, and the advantage **holds under deployment-realistic

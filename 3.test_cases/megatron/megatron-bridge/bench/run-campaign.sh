@@ -77,7 +77,7 @@ ensure_util
 
 # ---- stage bench entrypoints + parser onto FSx -------------------------------------------
 echo "== staging bench scripts + parser to /fsx/kimi-k2 =="
-$K cp "${REPO_ROOT}/3.test_cases/megatron/megatron-bridge/dsv3/bench_dsv3_pretrain.py"            ${UTIL}:/fsx/kimi-k2/bench_dsv3_pretrain.py
+$K cp "${REPO_ROOT}/3.test_cases/megatron/megatron-bridge/dsv3/benchmarks/bench_dsv3_pretrain.py" ${UTIL}:/fsx/kimi-k2/bench_dsv3_pretrain.py
 $K cp "${REPO_ROOT}/3.test_cases/megatron/megatron-bridge/kimi-k2/benchmarks/bench_kimi_k2_pretrain.py" ${UTIL}:/fsx/kimi-k2/bench_kimi_k2_pretrain.py
 uexec "mkdir -p /fsx/kimi-k2/bench"
 $K cp "${SELF_DIR}/parse-runs.py" ${UTIL}:/fsx/kimi-k2/bench/parse-runs.py

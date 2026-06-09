@@ -11,7 +11,7 @@ dispatcher, selected by ``MOE_DISPATCHER``:
     MOE_DISPATCHER=alltoall  -> moe_token_dispatcher_type="alltoall"  (NCCL all-to-all / EFA)  [baseline]
     MOE_DISPATCHER=deepep    -> flex + moe_flex_dispatcher_backend="deepep" (UCCL EFA drop-in) [treatment]
 
-This mirrors ``../../dsv3/bench_dsv3_pretrain.py`` but swaps the recipe-native DeepSeek-V3
+This mirrors ``../../dsv3/benchmarks/bench_dsv3_pretrain.py`` but swaps the recipe-native DeepSeek-V3
 256-expert model for the real Kimi-K2 provider:
 
 - the DSV3 recipe ``deepseek_v3_pretrain_config_32nodes()`` supplies the model-agnostic
@@ -85,7 +85,7 @@ def build_config():
 
     # 3) Re-apply the runtime knobs. The AutoBridge provider carries only the architecture; the
     #    recipe's runtime/parallelism settings lived on the model object we just replaced, so we
-    #    set them explicitly here (mirrors conf/kimi_k2_sft.py + dsv3/bench_dsv3_pretrain.py).
+    #    set them explicitly here (mirrors conf/kimi_k2_sft.py + dsv3/benchmarks/bench_dsv3_pretrain.py).
     m.tensor_model_parallel_size = tp
     m.pipeline_model_parallel_size = pp
     m.expert_model_parallel_size = ep

@@ -23,7 +23,7 @@ TP8/EP32/PP8/DP4, seed, image, FSx mounts, EFA env, and the
 > remain the standing DSV3 reference (same image and TP8/PP8/EP32/DP4 layout as the
 > K2 campaign, but a separate prior run — not same-campaign apples-to-apples). The
 > literal-K2 results are in
-> [`../kimi-k2/benchmarks/RESULTS.md`](../kimi-k2/benchmarks/RESULTS.md).
+> [`../../kimi-k2/benchmarks/RESULTS.md`](../../kimi-k2/benchmarks/RESULTS.md).
 
 ## Measured result — 2026-06-01 (256× B300, balanced routing, overlap off & on)
 
@@ -265,11 +265,11 @@ all-to-all at EP=32), not merely exposed comm latency that overlap could hide.
 ## How to reproduce
 
 Run the A/B on a 32-node (256-GPU) p6-b300 block with the shared launcher
-`../run-ab-rawpods.sh` (`MODEL=dsv3`; see [`README.md`](README.md) for the exact
-commands), or run the full two-model matrix with `../bench/run-campaign.sh`. One arm
+`../../run-ab-rawpods.sh` (`MODEL=dsv3`; see [`../README.md`](../README.md) for the exact
+commands), or run the full two-model matrix with `../../bench/run-campaign.sh`. One arm
 per call; delete the arm's Pods between runs. Every run writes to a unique,
 never-overwritten dir under `/fsx/megatron-bridge-bench/<CAMPAIGN_ID>/`. Parse with
-`../bench/parse-runs.py`: it drops the warmup iters, takes the **mean** over the
+`../../bench/parse-runs.py`: it drops the warmup iters, takes the **mean** over the
 steady state, and extracts the per-iteration `lm loss` curve — the training line is
 printed by the **last** rank's log. Tokens/s is derived as
 `global_batch × seq_len / iter_time_s` (it is not a printed Megatron label). For the

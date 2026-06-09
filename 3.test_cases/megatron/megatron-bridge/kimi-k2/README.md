@@ -38,7 +38,7 @@ patching Megatron-Core**:
 > EFA — clean (0 stalls, EFA-active on every rank) and numerically **equal-work** vs the NCCL
 > all-to-all baseline (per-iteration loss curves match to ≤4e-4 relative over 24 iters).
 > The A/B has now been measured on **both** a DeepSeek-V3 256-expert substrate
-> ([`../dsv3/RESULTS.md`](../dsv3/RESULTS.md), 2026-06-01) and the **literal 384-expert
+> ([`../dsv3/benchmarks/RESULTS.md`](../dsv3/benchmarks/RESULTS.md), 2026-06-01) and the **literal 384-expert
 > Kimi-K2** ([`benchmarks/RESULTS.md`](benchmarks/RESULTS.md), 2026-06-04: UCCL deepep
 > −34/−35% iter time at mb=4 on 256× B300), with random init + mock data, measuring
 > throughput; real-data convergence remains untested.

@@ -211,7 +211,7 @@ def kimi_k2_sft_config() -> ConfigContainer:
     # Validated on the image (core 0.17.1, 256x B300 A/B): set the flag on whichever config
     # object exposes it — the model config is what the validator reads; comm_overlap mirrors
     # it. delay_wgrad_compute is held OFF to minimise the constraint surface; enabling it is
-    # an unvalidated follow-up (see ../../dsv3/RESULTS.md).
+    # an unvalidated follow-up (see ../../dsv3/benchmarks/RESULTS.md).
     for _obj in (getattr(cfg, "comm_overlap", None), cfg.model):
         if _obj is None:
             continue

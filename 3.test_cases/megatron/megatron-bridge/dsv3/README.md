@@ -14,7 +14,7 @@ architecture family Kimi-K2 belongs to; the literal Kimi-K2 (384-expert) shape w
 > ## ✅ Measured (2026-06-01) — results are in
 >
 > This A/B has been **run** on a live 256× B300 block. Full numbers, methodology, and
-> caveats: **[`RESULTS.md`](RESULTS.md)**.
+> caveats: **[`benchmarks/RESULTS.md`](benchmarks/RESULTS.md)**.
 >
 > **Headline:** at the throughput-efficient operating point (micro-batch ≥ 4), **UCCL
 > `deep_ep` is ~36% faster than NCCL all-to-all**, and the advantage **holds under
@@ -25,7 +25,7 @@ architecture family Kimi-K2 belongs to; the literal Kimi-K2 (384-expert) shape w
 >
 > **How it ran:** this cluster has **no kubeflow PyTorchJob CRD**, so the A/B ran as **raw
 > ranked Pods** via the shared launcher [`../run-ab-rawpods.sh`](../run-ab-rawpods.sh) driving
-> [`bench_dsv3_pretrain.py`](bench_dsv3_pretrain.py). The substrate is the recipe-native
+> [`benchmarks/bench_dsv3_pretrain.py`](benchmarks/bench_dsv3_pretrain.py). The substrate is the recipe-native
 > **DSV3 256-expert** MoE, not Kimi-K2's 384 (overriding the expert count breaks the
 > recipe's node-group routing). Metric of record is **mean** steady-state iter time (not
 > median — see RESULTS.md on why), with forced router load-balancing to avoid
@@ -66,8 +66,8 @@ Files (the launcher, campaign driver, and parser are **shared at the library lev
 | [`../run-ab-rawpods.sh`](../run-ab-rawpods.sh) | **the shared launcher** — one arm per call (`MODEL=dsv3 bash ../run-ab-rawpods.sh <alltoall\|deepep> [NNODES]`); creates raw ranked Pods + a headless Service + static torchrun rendezvous (no PyTorchJob CRD needed). Writes every run to a unique **no-overwrite** dir `/fsx/megatron-bridge-bench/<CAMPAIGN_ID>/dsv3/<arm>-mb<m>-ovl<on\|off>/` (per-node `logs/rank-<r>.log`, `env.txt`, `STATUS`; rank-0 refuses to clobber a completed run). Env knobs: `MODEL`, `CAMPAIGN_ID`, `EXPERT_PARALLEL`, `MICRO_BATCH`, `GLOBAL_BATCH`, `TRAIN_ITERS`, `MOE_A2A_OVERLAP`, `MOE_FORCE_BALANCE`, `LOSS_PROBE` |
 | [`../bench/run-campaign.sh`](../bench/run-campaign.sh) | **the campaign driver** — runs the full matrix (both models × {mb1,mb4} × {overlap on,off} × both arms) serially under one `CAMPAIGN_ID`, asserting the EFA-active gate per run |
 | [`../bench/parse-runs.py`](../bench/parse-runs.py) | post-hoc parser — per-run `loss_curve.csv` + campaign `index.csv` from the preserved rank logs (the per-iteration `lm loss` / iter-time line is printed by the **last** rank) |
-| `bench_dsv3_pretrain.py` | **the entrypoint** torchrun runs — builds the recipe's DSV3 256-expert config, applies the single dispatcher toggle + overlap/VPP/recompute handling, launches `pretrain()`. Staged to FSx at `/fsx/kimi-k2/bench_dsv3_pretrain.py` |
-| `RESULTS.md` | results sheet (sweep + overlap=on + work-equivalence + caveats) |
+| `benchmarks/bench_dsv3_pretrain.py` | **the entrypoint** torchrun runs — builds the recipe's DSV3 256-expert config, applies the single dispatcher toggle + overlap/VPP/recompute handling, launches `pretrain()`. Staged to FSx at `/fsx/kimi-k2/bench_dsv3_pretrain.py` |
+| `benchmarks/RESULTS.md` | results sheet (sweep + overlap=on + work-equivalence + caveats) |
 
 ---
 
@@ -77,7 +77,7 @@ Files (the launcher, campaign driver, and parser are **shared at the library lev
 > contradicts it: at micro-batch ≥ 4 UCCL `deep_ep` is ~36% faster and overlap did **not**
 > compress the gap. The literature caveats and reference table remain valid context for
 > *why this was surprising*, but do not read the "modest / small overlap delta" framing as
-> the finding — the finding is in [`RESULTS.md`](RESULTS.md).
+> the finding — the finding is in [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
 
 For our 256-GPU (32x p6-b300) DeepSeek-V3 256-expert MoE training A/B, the *pre-run*
 expectation was: the *communication-layer* delta from swapping the NCCL all-to-all
