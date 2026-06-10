@@ -53,10 +53,7 @@
             ],
             "Condition": {
                 "StringLike": {
-                    "ssm:resourceTag/aws:pcs:compute-node-group-name": [
-                        "login*",
-                        "Login*"
-                    ]
+                    "ssm:resourceTag/Name": "PCS-login*"
                 }
             }
         },

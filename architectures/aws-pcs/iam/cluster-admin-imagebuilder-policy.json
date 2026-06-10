@@ -1,0 +1,60 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "IAMPassRoleToImageBuilder",
+            "Effect": "Allow",
+            "Action": "iam:PassRole",
+            "Resource": "arn:aws:iam::*:role/*ImageBuilder*",
+            "Condition": {
+                "StringEquals": {
+                    "iam:PassedToService": "imagebuilder.amazonaws.com"
+                }
+            }
+        },
+        {
+            "Sid": "ImageBuilderLifecycleOptional",
+            "Effect": "Allow",
+            "Action": [
+                "imagebuilder:CreateImagePipeline",
+                "imagebuilder:UpdateImagePipeline",
+                "imagebuilder:DeleteImagePipeline",
+                "imagebuilder:GetImagePipeline",
+                "imagebuilder:ListImagePipelines",
+                "imagebuilder:CreateImageRecipe",
+                "imagebuilder:DeleteImageRecipe",
+                "imagebuilder:GetImageRecipe",
+                "imagebuilder:ListImageRecipes",
+                "imagebuilder:CreateComponent",
+                "imagebuilder:DeleteComponent",
+                "imagebuilder:GetComponent",
+                "imagebuilder:ListComponents",
+                "imagebuilder:CreateInfrastructureConfiguration",
+                "imagebuilder:UpdateInfrastructureConfiguration",
+                "imagebuilder:DeleteInfrastructureConfiguration",
+                "imagebuilder:GetInfrastructureConfiguration",
+                "imagebuilder:ListInfrastructureConfigurations",
+                "imagebuilder:CreateDistributionConfiguration",
+                "imagebuilder:UpdateDistributionConfiguration",
+                "imagebuilder:DeleteDistributionConfiguration",
+                "imagebuilder:GetDistributionConfiguration",
+                "imagebuilder:ListDistributionConfigurations",
+                "imagebuilder:CreateImage",
+                "imagebuilder:DeleteImage",
+                "imagebuilder:GetImage",
+                "imagebuilder:ListImages",
+                "imagebuilder:StartImagePipelineExecution",
+                "imagebuilder:CancelImageCreation",
+                "imagebuilder:CreateLifecyclePolicy",
+                "imagebuilder:UpdateLifecyclePolicy",
+                "imagebuilder:DeleteLifecyclePolicy",
+                "imagebuilder:GetLifecyclePolicy",
+                "imagebuilder:ListLifecyclePolicies",
+                "imagebuilder:TagResource",
+                "imagebuilder:UntagResource",
+                "imagebuilder:ListTagsForResource"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
