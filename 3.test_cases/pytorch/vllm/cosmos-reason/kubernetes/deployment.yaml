@@ -1,0 +1,147 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cosmos-reason
+  namespace: ${NAMESPACE}
+  labels:
+    app: cosmos-reason
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cosmos-reason
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: cosmos-reason
+    spec:
+      restartPolicy: Always
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: In
+                    values:
+                      - ${INSTANCE_TYPE}
+                      - ${HYPERPOD_INSTANCE_TYPE}
+          # Optional: prefer nodes that passed HyperPod deep-health checks.
+          # Harmless on plain EKS (label simply won't match).
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: sagemaker.amazonaws.com/deep-health-check-status
+                    operator: In
+                    values:
+                      - Passed
+      tolerations:
+        # HyperPod nodes carry this taint; harmless on plain EKS.
+        - key: sagemaker.amazonaws.com/node-health-status
+          operator: Equal
+          value: Schedulable
+          effect: NoSchedule
+      containers:
+        - name: vllm
+          image: ${VLLM_IMAGE_VANILLA}
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--model"
+            - "${MODEL_ID}"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "${INVOCATION_PORT}"
+            - "--max-model-len"
+            - "${MAX_MODEL_LEN}"
+            - "--tensor-parallel-size"
+            - "${TENSOR_PARALLEL_SIZE}"
+            - "--gpu-memory-utilization"
+            - "${GPU_MEMORY_UTILIZATION}"
+            - "--dtype"
+            - "${DTYPE}"
+            - "--limit-mm-per-prompt"
+            - '{"video":2,"image":10}'
+            - "--mm-processor-kwargs"
+            - '{"max_pixels":20000000,"fps":1.0}'
+            # For Cosmos-Reason2 (Qwen3-VL), uncomment the following two args:
+            # - "--reasoning-parser"
+            # - "qwen3"
+            # For Reason2 video reasoning, uncomment:
+            # - "--media-io-kwargs"
+            # - '{"video":{"num_frames":-1}}'
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+            - name: VLLM_USAGE_SOURCE
+              value: "awsome-distributed-ai-cosmos-reason"
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          resources:
+            requests:
+              nvidia.com/gpu: ${TENSOR_PARALLEL_SIZE}
+              cpu: "4"
+              memory: "32Gi"
+            limits:
+              nvidia.com/gpu: ${TENSOR_PARALLEL_SIZE}
+          volumeMounts:
+            - name: shmem
+              mountPath: /dev/shm
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 240
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 80
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 900
+            periodSeconds: 60
+            timeoutSeconds: 10
+      volumes:
+        - name: shmem
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
+        - name: hf-cache
+          emptyDir:
+            sizeLimit: 50Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cosmos-reason
+  namespace: ${NAMESPACE}
+  labels:
+    app: cosmos-reason
+spec:
+  type: ClusterIP
+  selector:
+    app: cosmos-reason
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
