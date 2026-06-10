@@ -1,0 +1,84 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "DiscoverClusterAndLoginNode",
+            "Effect": "Allow",
+            "Action": [
+                "ec2:DescribeInstances",
+                "ec2:DescribeInstanceStatus",
+                "ec2:DescribeTags",
+                "cloudformation:DescribeStacks",
+                "cloudformation:ListStacks",
+                "cloudformation:DescribeStackResources",
+                "cloudformation:ListStackResources"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "PCSReadOnly",
+            "Effect": "Allow",
+            "Action": [
+                "pcs:GetCluster",
+                "pcs:ListClusters",
+                "pcs:GetComputeNodeGroup",
+                "pcs:ListComputeNodeGroups",
+                "pcs:GetQueue",
+                "pcs:ListQueues",
+                "pcs:ListTagsForResource"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "GrafanaPasswordRead",
+            "Effect": "Allow",
+            "Action": [
+                "ssm:GetParameter",
+                "ssm:GetParameters"
+            ],
+            "Resource": "arn:aws:ssm:*:*:parameter/pcs/*/grafana/*"
+        },
+        {
+            "Sid": "SSMSessionToLoginNode",
+            "Effect": "Allow",
+            "Action": [
+                "ssm:StartSession"
+            ],
+            "Resource": [
+                "arn:aws:ec2:*:*:instance/*",
+                "arn:aws:ssm:*:*:document/AWS-StartSSHSession",
+                "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSession",
+                "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSessionToRemoteHost",
+                "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell"
+            ],
+            "Condition": {
+                "StringLike": {
+                    "ssm:resourceTag/aws:pcs:compute-node-group-name": [
+                        "login*",
+                        "Login*"
+                    ]
+                }
+            }
+        },
+        {
+            "Sid": "SSMSessionDocumentLookup",
+            "Effect": "Allow",
+            "Action": [
+                "ssm:DescribeSessions",
+                "ssm:GetConnectionStatus",
+                "ssm:DescribeInstanceProperties",
+                "ssm:DescribeInstanceInformation"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "SSMSessionTerminateOwn",
+            "Effect": "Allow",
+            "Action": [
+                "ssm:TerminateSession",
+                "ssm:ResumeSession"
+            ],
+            "Resource": "arn:aws:ssm:*:*:session/${aws:username}-*"
+        }
+    ]
+}
