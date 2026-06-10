@@ -3,11 +3,18 @@
 
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  Add a single-network-interface Compute Node Group to a PCS cluster — login nodes,
-  CPU queues, or single-NIC GPU queues (e.g. C6i, G5, G6). Mounts the shared FSx
-  filesystems, optionally installs Enroot/Pyxis (PostInstallScriptUrl) and the
-  monitoring exporters (DeployMonitoring/MonitoringRole). A Slurm queue is created
-  only when QueueName is set (leave empty for login nodes).
+  Add a Compute Node Group to a PCS cluster — login nodes, CPU queues, or single-NIC
+  GPU queues (e.g. C6i, G5, G6). Mounts the shared FSx filesystems, optionally
+  installs Enroot/Pyxis (PostInstallScriptUrl) and the monitoring exporters
+  (DeployMonitoring/MonitoringRole). A Slurm queue is created only when QueueName
+  is set (leave empty for login nodes).
+
+  EFA support (EnableEfa=true) is available for CPU HPC instance types
+  (hpc8a/hpc7a/hpc6a etc., 1-2 EFA interfaces). When enabled the LaunchTemplate
+  switches to a NetworkInterfaces block with InterfaceType=efa, and a cluster
+  placement group is auto-created (override with PlacementGroupName to reuse an
+  existing one). For multi-NIC GPU instances (P5/P6 families) use the dedicated
+  add-cng-p5.yaml / add-cng-p6-b200.yaml / add-cng-p6-b300.yaml templates instead.
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -31,6 +38,12 @@ Metadata:
           - FSxLustreFilesystemId
           - FSxLustreFilesystemMountName
           - FSxOpenZFSFilesystemId
+      - Label:
+          default: EFA (CPU HPC instances)
+        Parameters:
+          - EnableEfa
+          - EfaInterfaceCount
+          - PlacementGroupName
       - Label:
           default: Monitoring configuration
         Parameters:
@@ -197,6 +210,40 @@ Parameters:
       - '25.05'
       - '25.11'
 
+  EnableEfa:
+    Type: String
+    Description: >-
+      Enable Elastic Fabric Adapter (EFA) on the compute nodes for tightly-coupled
+      HPC/MPI workloads. When true, the LaunchTemplate switches to a
+      NetworkInterfaces block with InterfaceType=efa and a cluster placement group
+      is wired in (auto-created unless PlacementGroupName is supplied). Requires
+      an EFA-capable instance type (e.g. hpc8a.96xlarge, hpc7a.96xlarge,
+      hpc6a.48xlarge). For multi-NIC GPU families (P5/P6) use the
+      dedicated add-cng-p5/p6-* templates instead.
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  EfaInterfaceCount:
+    Type: Number
+    Description: >-
+      Number of EFA network interfaces to attach when EnableEfa=true. Use the
+      MaximumEfaInterfaces value reported by the instance type: hpc8a/hpc7a/hpc6id
+      = 2; hpc6a/c7i.metal = 1. Mismatching this with the instance type's
+      capability fails at launch. Ignored when EnableEfa=false.
+    Default: 1
+    AllowedValues: [1, 2]
+
+  PlacementGroupName:
+    Type: String
+    Description: >-
+      (Optional) Name of an existing cluster placement group to launch nodes into.
+      Leave empty to auto-create a per-CNG cluster placement group when
+      EnableEfa=true. Specify a value to share one placement group across multiple
+      CNGs (e.g. a heterogeneous tightly-coupled job). Ignored when EnableEfa=false.
+    Default: ''
+
 Conditions:
   CreateQueue: !Not [!Equals [!Ref QueueName, ""]]
   # Emit the monitoring-role tag for both login and compute nodes (any role
@@ -205,8 +252,28 @@ Conditions:
   IsMonitoringRoleSet: !Not [!Equals [!Ref MonitoringRole, 'none']]
   HasExtraSecurityGroup: !Not [!Equals [!Ref ExtraSecurityGroupId, ""]]
   HasAmiId: !Not [!Equals [!Ref AmiId, ""]]
+  EfaEnabled: !Equals [!Ref EnableEfa, 'true']
+  HasUserPlacementGroup: !Not [!Equals [!Ref PlacementGroupName, ""]]
+  # Auto-create a per-CNG cluster placement group only when EFA is on AND the
+  # user did not provide one. Override PlacementGroupName to reuse an existing
+  # PG (e.g. a shared one across multiple CNGs).
+  CreatePlacementGroup: !And
+    - !Condition EfaEnabled
+    - !Not [!Condition HasUserPlacementGroup]
+  Has2ndEfaInterface: !And
+    - !Condition EfaEnabled
+    - !Equals [!Ref EfaInterfaceCount, 2]
 
 Resources:
+
+  # Cluster placement group for EFA-enabled CPU HPC instances. Created only when
+  # EFA is enabled and the user did not provide an existing PG. Lifecycle is
+  # bound to this CNG stack -- delete the stack and the PG goes with it.
+  PlacementGroup:
+    Type: AWS::EC2::PlacementGroup
+    Condition: CreatePlacementGroup
+    Properties:
+      Strategy: cluster
 
   # Compute Node groups - Compute Nodes
   PCSNodeGroupCompute:
@@ -287,11 +354,53 @@ Resources:
           HttpPutResponseHopLimit: 4
           HttpTokens: required
           InstanceMetadataTags: enabled
+        # Cluster placement group, only when EFA is enabled. Either the auto-created
+        # PG (CreatePlacementGroup) or a user-supplied one (PlacementGroupName).
+        Placement: !If
+          - EfaEnabled
+          - GroupName: !If
+              - CreatePlacementGroup
+              - !Ref PlacementGroup
+              - !Ref PlacementGroupName
+          - !Ref AWS::NoValue
+        # When EFA is enabled, switch to NetworkInterfaces (mutually exclusive with
+        # SecurityGroupIds at the LaunchTemplateData level). The cluster
+        # SecurityGroup created by ml-cluster-prerequisites already includes
+        # self-referencing all-protocol ingress/egress (EFASecurityGroupIngress/
+        # EFASecurityGroupEgress), which is the EFA wire protocol requirement.
+        # When EFA is disabled, keep the simpler SecurityGroupIds form so existing
+        # deployments are unaffected.
         SecurityGroupIds: !If
-          - HasExtraSecurityGroup
-          - - !Ref ClusterSecurityGroupId
-            - !Ref ExtraSecurityGroupId
-          - - !Ref ClusterSecurityGroupId
+          - EfaEnabled
+          - !Ref AWS::NoValue
+          - !If
+            - HasExtraSecurityGroup
+            - - !Ref ClusterSecurityGroupId
+              - !Ref ExtraSecurityGroupId
+            - - !Ref ClusterSecurityGroupId
+        NetworkInterfaces: !If
+          - EfaEnabled
+          - - Description: Primary EFA interface
+              DeviceIndex: 0
+              NetworkCardIndex: 0
+              InterfaceType: efa
+              SubnetId: !Ref SubnetId
+              Groups: !If
+                - HasExtraSecurityGroup
+                - - !Ref ClusterSecurityGroupId
+                  - !Ref ExtraSecurityGroupId
+                - - !Ref ClusterSecurityGroupId
+            - !If
+              - Has2ndEfaInterface
+              - Description: Second EFA interface
+                DeviceIndex: 1
+                NetworkCardIndex: 1
+                InterfaceType: efa
+                SubnetId: !Ref SubnetId
+                Groups:
+                  - !Ref ClusterSecurityGroupId
+              - !Ref AWS::NoValue
+          - !Ref AWS::NoValue
         UserData:
           Fn::Base64: !Sub |
             MIME-Version: 1.0
@@ -372,3 +481,10 @@ Outputs:
     Condition: CreateQueue
     Description: Queue ID
     Value: !GetAtt PCSQueueCompute.Id
+  PlacementGroupName:
+    Condition: CreatePlacementGroup
+    Description: >-
+      Auto-created cluster placement group name. Pass this as
+      PlacementGroupName to another add-cng stack to share the PG across CNGs
+      (e.g. heterogeneous tightly-coupled jobs).
+    Value: !Ref PlacementGroup

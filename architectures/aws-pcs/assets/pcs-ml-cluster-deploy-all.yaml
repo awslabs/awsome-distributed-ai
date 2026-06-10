@@ -43,6 +43,9 @@ Metadata:
           - OnDemandMaxCount
           - OnDemandCngName
           - OnDemandQueueName
+          - OnDemandEnableEfa
+          - OnDemandEfaInterfaceCount
+          - OnDemandPlacementGroupName
       - Label:
           default: "5. GPU Compute Node Group - P5/P6 Series (Optional)"
         Parameters:
@@ -61,6 +64,7 @@ Metadata:
           - PerUnitStorageThroughput
           - Compression
           - LustreVersion
+          - FSxLustreEnableEfa
           - HomeCapacity
           - HomeThroughput
           - OpenZFSDeploymentType
@@ -119,6 +123,12 @@ Metadata:
         default: "CPU node group name"
       OnDemandQueueName:
         default: "CPU queue name"
+      OnDemandEnableEfa:
+        default: "Enable EFA on CPU queue (for HPC instance types)"
+      OnDemandEfaInterfaceCount:
+        default: "EFA interface count (1 for hpc6a, 2 for hpc8a/hpc7a/hpc6id)"
+      OnDemandPlacementGroupName:
+        default: "Existing placement group name (empty = auto-create when EFA on)"
       DeployPseriesCNG:
         default: "Deploy GPU (P5/P6) queue"
       PseriesInstanceType:
@@ -143,6 +153,8 @@ Metadata:
         default: "FSx for Lustre (/fsx) compression"
       LustreVersion:
         default: "FSx for Lustre (/fsx) version"
+      FSxLustreEnableEfa:
+        default: "FSx for Lustre (/fsx) EFA + GDS support (PERSISTENT_2 only)"
       HomeCapacity:
         default: "FSx for OpenZFS (/home) capacity (GiB)"
       HomeThroughput:
@@ -228,6 +240,27 @@ Parameters:
       - "2.15"
       - "2.12"
     Default: "2.15"
+
+  FSxLustreEnableEfa:
+    Description: >-
+      (Optional) Enable EFA on the FSx for Lustre filesystem. Default false.
+      PERSISTENT_2 SSD only -- combining with PERSISTENT_1 fails the stack at
+      create time via a Rule (rather than silently ignoring the opt-in). The
+      headline feature is GPUDirect Storage (GDS) for P5/P5e/P5en/P6-B200 GPU
+      clients, which DMAs file data straight into GPU memory (the NVIDIA
+      nvidia-fs/cuFile stack must be installed on the client -- currently a
+      ROADMAP follow-up). EFA-capable CPU CNGs (OnDemandEnableEfa=true) get
+      the EFA transport path to storage as a secondary benefit, useful when a
+      single client is pushing past ~10 GBps. **EFA-enabled Lustre has a
+      much higher minimum Capacity than non-EFA**: at PerUnitStorageThroughput=250
+      the minimum is 19200 GiB (16x the non-EFA default of 1200 GiB). Set
+      Capacity to >= the EFA minimum when enabling this; the full minimum-capacity
+      matrix per throughput tier is in the FSx for Lustre User Guide.
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
 
   HomeCapacity:
     Description: "Home directories storage capacity in GiB"
@@ -404,6 +437,41 @@ Parameters:
     Default: 0
     MinValue: 0
 
+  # EFA on the on-demand CPU CNG (for HPC instances like hpc8a/hpc7a/hpc6a).
+  # GPU CNGs (P5/P6) have their own multi-NIC EFA wiring in the dedicated
+  # add-cng-p5/p6-* templates; these knobs do NOT affect those.
+  OnDemandEnableEfa:
+    Type: String
+    Description: >-
+      Enable Elastic Fabric Adapter (EFA) on the on-demand (CPU) compute node
+      group. Use with EFA-capable HPC instance types (hpc8a.96xlarge,
+      hpc7a.96xlarge, hpc6a.48xlarge, etc.). Default false keeps the
+      standard single-NIC LaunchTemplate. No effect on the P-series GPU CNG.
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  OnDemandEfaInterfaceCount:
+    Type: Number
+    Description: >-
+      Number of EFA interfaces to attach when OnDemandEnableEfa=true. Use 2 for
+      hpc8a/hpc7a/hpc6id; use 1 for hpc6a/c7i.metal. Mismatching this with
+      the instance type's MaximumEfaInterfaces fails at launch. Ignored when
+      OnDemandEnableEfa=false.
+    Default: 1
+    AllowedValues: [1, 2]
+
+  OnDemandPlacementGroupName:
+    Type: String
+    Description: >-
+      (Optional, advanced) Existing cluster placement group name to launch the
+      on-demand CPU nodes into. Leave empty (default) to auto-create a per-CNG
+      cluster placement group when OnDemandEnableEfa=true. Set to share one PG
+      across multiple CNGs (e.g. heterogeneous tightly-coupled jobs). Ignored
+      when OnDemandEnableEfa=false.
+    Default: ''
+
   # P-series Compute Node Group
   DeployPseriesCNG:
     Type: String
@@ -505,6 +573,16 @@ Rules:
         AssertDescription: >-
           SINGLE_AZ_2 / SINGLE_AZ_HA_2 support HomeThroughput of
           160/320/640/1280/2560/3840/5120/7680/10240 MB/s only.
+  # FSx EFA is a PERSISTENT_2-only feature. Fail at the parent stack's create
+  # time -- before any nested resources are launched -- if the user opted in
+  # on PERSISTENT_1, instead of silently dropping the EfaEnabled property.
+  FSxLustreEfaRequiresPersistent2:
+    RuleCondition: !Equals [!Ref FSxLustreEnableEfa, 'true']
+    Assertions:
+      - Assert: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_2']
+        AssertDescription: >-
+          FSxLustreEnableEfa=true requires LustreDeploymentType=PERSISTENT_2
+          (EFA on FSx for Lustre is a PERSISTENT_2-only feature).
 
 Conditions:
   UseLocalTemplates: !Equals [!Ref S3BucketName, 'local']
@@ -546,6 +624,7 @@ Resources:
         PerUnitStorageThroughput: !Ref PerUnitStorageThroughput
         Compression: !Ref Compression
         LustreVersion: !Ref LustreVersion
+        FSxLustreEnableEfa: !Ref FSxLustreEnableEfa
         HomeCapacity: !Ref HomeCapacity
         HomeThroughput: !Ref HomeThroughput
         OpenZFSDeploymentType: !Ref OpenZFSDeploymentType
@@ -674,6 +753,12 @@ Resources:
         MonitoringRole: compute
         PostInstallScriptUrl: !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
+        # EFA on CPU HPC instances (hpc8a/hpc7a/hpc6a). Forwarded to add-cng.yaml,
+        # which auto-creates a per-CNG cluster placement group when EnableEfa=true and
+        # PlacementGroupName is empty.
+        EnableEfa: !Ref OnDemandEnableEfa
+        EfaInterfaceCount: !Ref OnDemandEfaInterfaceCount
+        PlacementGroupName: !Ref OnDemandPlacementGroupName
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-OnDemandCNG'

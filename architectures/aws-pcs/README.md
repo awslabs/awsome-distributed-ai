@@ -1,6 +1,6 @@
 # AWS Parallel Computing Service Distributed Training Reference Architecture
 
-This repository provides reference architectures and deployment templates for setting up distributed training clusters using [AWS Parallel Computing Service (PCS)](https://aws.amazon.com/pcs/). AWS Parallel Computing Service is a fully managed service that makes it easy to run and scale HPC workloads using Slurm scheduler. These architectures are optimized for machine learning workloads and include configurations for high-performance computing instances (P and Trn EC2 families) with shared filesystems (FSx for Lustre and OpenZFS).
+This repository provides reference architectures and deployment templates for setting up distributed training clusters using [AWS Parallel Computing Service (PCS)](https://aws.amazon.com/pcs/). AWS Parallel Computing Service is a fully managed service that makes it easy to run and scale HPC workloads using Slurm scheduler. These architectures are optimized for machine learning workloads and ship dedicated multi-NIC EFA launch templates for the **P5 / P5e / P5en / P6-B200 / P6-B300** GPU families with shared filesystems (FSx for Lustre and OpenZFS).
 
 > **Upstream Repository**: These templates are based on [aws-samples/aws-hpc-recipes](https://github.com/aws-samples/aws-hpc-recipes/tree/main/recipes/pcs), customized for ML workloads: container support (Enroot/Pyxis) installable at first boot without an AMI build, built-in monitoring, updated Slurm versions (25.05/25.11), and dedicated P5/P6 multi-NIC EFA templates. The templates in this repository are maintained independently and may diverge from the upstream recipes.
 
@@ -8,7 +8,7 @@ This repository provides reference architectures and deployment templates for se
 
 - **One click to an ML-training-ready cluster**: a single CloudFormation stack gives you a complete, ready-to-train environment — Slurm scheduler, GPU compute with EFA, shared FSx storage, the Enroot/Pyxis container runtime, and monitoring — with only the Availability Zone to choose. Submit distributed training jobs minutes after launch.
 - **Container runtime included**: Enroot/Pyxis is set up automatically, so `srun --container-image=...` works out of the box for containerized training.
-- **Monitoring built in**: Prometheus + Grafana + GPU (DCGM) dashboards deploy automatically on the login node (`DeployMonitoring=true`, on by default); reach it privately via SSM port-forward, or open it to a trusted CIDR with `GrafanaPublicAccessCidr`.
+- **Monitoring built in**: Grafana + Prometheus run on the login node, with DCGM Exporter on GPU compute nodes feeding the pre-built GPU dashboards (`DeployMonitoring=true`, on by default). Reach Grafana privately via SSM port-forward, or open it to a trusted CIDR with `GrafanaPublicAccessCidr`.
 - **GPU-ready, multi-NIC EFA**: dedicated launch templates for the P5 and P6 families, selected automatically by instance type, for high-bandwidth multi-node training.
 - **Broad capacity-purchase support**: covers the full range of EC2 capacity options out of the box — On-Demand, On-Demand Capacity Reservations (ODCR), and Capacity Blocks for ML — selected per node group.
 - **High-performance storage**: FSx for Lustre (shared scratch, `/fsx`) and FSx for OpenZFS (home directories, `/home`).
@@ -29,8 +29,9 @@ A default deployment (`pcs-ml-cluster-deploy-all.yaml`) provisions:
 - VPC with public/private subnets, NAT gateway, and S3 endpoint
 - FSx for Lustre (`/fsx`, high-performance shared scratch) and FSx for OpenZFS (`/home`)
 - PCS cluster with the Slurm scheduler (25.05 or 25.11), on the PCS-Ready DLAMI
-- Login node group (public subnet) with the monitoring stack (Prometheus/Grafana/DCGM)
-- CPU compute node group (private subnet); optional GPU (P5/P6) node group with EFA
+- Login node group (public subnet) with the monitoring stack (Prometheus + Grafana + Nginx)
+- CPU compute node group (private subnet); EFA can be enabled for HPC/MPI workloads
+- Optional GPU (P5/P6) node group with multi-NIC EFA, plus DCGM Exporter for the GPU dashboards
 - Enroot/Pyxis container runtime installed at first boot via `PostInstallScriptUrl` (or pre-baked into a custom AMI you build separately and pass as `AmiId`)
 
 ---
@@ -89,8 +90,9 @@ only needs the Availability Zone (`PrimarySubnetAZ`). The most-used parameters:
 | `PrimarySubnetAZ` | *(required)* | Availability Zone to deploy into — the one required parameter |
 | `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`); 25.11 is needed for the Slurm OpenMetrics dashboards. Drives Pyxis build version too. See [OPERATIONS.md §1](./docs/OPERATIONS.md#1-slurm-version-selection) |
 | `AmiId` | *(empty → SSM auto)* | Empty auto-resolves to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04) from SSM. Pin to a specific `ami-xxx` for production, or pass an AMI built by [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional) |
-| `DeployMonitoring` | `true` | Deploy Prometheus/Grafana/DCGM on the login node |
+| `DeployMonitoring` | `true` | Deploy Prometheus + Grafana on the login node, plus DCGM Exporter on GPU compute nodes |
 | `DeployOnDemandCNG` | `true` | Deploy the `cpu1` CPU queue (`OnDemandInstanceType`, default `c6i.4xlarge`) |
+| `OnDemandEnableEfa` | `false` | Set `true` for HPC/MPI workloads on EFA-capable CPU types (hpc6a/hpc7a/hpc6id/hpc8a, c7i.metal, etc.). Auto-creates a cluster placement group. See [EFA on CPU HPC instances](#efa-on-cpu-hpc-instances-ondemandenableefa) |
 | `DeployPseriesCNG` | `false` | Deploy a GPU (P5/P6) queue — see [GPU compute](#gpu-compute-p5p6) |
 | `PseriesInstanceType` | `p5.48xlarge` | GPU instance type; auto-selects the multi-NIC template + EFA count |
 | `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR |
@@ -99,39 +101,21 @@ only needs the Availability Zone (`PrimarySubnetAZ`). The most-used parameters:
 console parameter groups, with every default). The concept guides below cover the
 choices that need the most thought.
 
-### Container runtime (Enroot/Pyxis)
+### AMI and container runtime
 
-By default, every node runs [`scripts/install-enroot-pyxis.sh`](./scripts/install-enroot-pyxis.sh)
-at first boot via `PostInstallScriptUrl` — no AMI build, ~8–12 min node boot. The
-PCS-Ready DLAMI base already includes the PCS agent, Slurm 25.05 & 25.11
-(`/opt/aws/pcs/scheduler/slurm-*`), NVIDIA driver + CUDA, and SSM agent, so the script
-only adds Enroot 3.5.0 + Pyxis 0.20.0 on top.
-
-For **frequent scaling** in production, you can instead pre-bake Enroot/Pyxis into a
-custom DLAMI and set `AmiId` to that ami-xxx. Boot time drops to ~3 min, and the AMI
-gives you deterministic state across all nodes. See
-[Pre-baking Enroot/Pyxis into a custom AMI (optional)](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional)
-below — this is a separate template you run once, then pass its output as `AmiId` to
-the cluster.
-
-The post-install hook is idempotent: if you supply a custom AMI that already has
-Enroot/Pyxis baked in, the default `PostInstallScriptUrl` becomes a fast no-op. For
-the cleanest boot, set `PostInstallScriptUrl=""` when using a pre-baked AMI.
-
-### AMI selection (`AmiId`)
-
-`AmiId` is shared by every node group (login + compute). The default (empty)
-**auto-resolves to the latest PCS-Ready Deep Learning AMI** (Ubuntu 24.04, x86_64) from
-the SSM public parameter
-`/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id` — so a fresh deploy
-needs no AMI choice at all. To use a custom AMI (e.g. one with Enroot/Pyxis pre-baked,
-see [Pre-baking Enroot/Pyxis into a custom AMI (optional)](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional)),
-pass its `ami-xxx` here.
+`AmiId` is shared by every node group. Empty (default) auto-resolves the latest
+**PCS-Ready DLAMI** (Ubuntu 24.04 x86_64) from SSM
+(`/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id`) — no AMI choice
+needed. Enroot 3.5.0 + Pyxis 0.20.0 are layered on at first boot via
+[`scripts/install-enroot-pyxis.sh`](./scripts/install-enroot-pyxis.sh)
+(~8–12 min boot). For **frequent scaling**, pre-bake Enroot/Pyxis into a custom DLAMI
+once with [§9](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional) and pass that
+`ami-xxx` as `AmiId` (~3 min boot, deterministic state). The post-install hook is
+idempotent — it no-ops on a pre-baked AMI.
 
 > **Production tip — pin the AMI.** CloudFormation re-resolves SSM `/latest/`
-> parameters on every stack update, so a later scale-out can drift onto a newer AMI
-> than the original nodes. For production, resolve the parameter once and pass the
-> resulting `ami-xxx` as `AmiId`. Details:
+> parameters on every stack update, so a later scale-out can drift onto a newer AMI.
+> Resolve once and pass the literal `ami-xxx` as `AmiId`. Details:
 > [OPERATIONS.md §4](./docs/OPERATIONS.md#4-ami-selection-amiid--pin-in-production).
 
 ### GPU compute (P5/P6)
@@ -159,6 +143,35 @@ automatically.
 > group at `PseriesMinCount = PseriesMaxCount = <reserved count>` so the reserved
 > nodes launch immediately, rather than scaling from 0.
 
+### EFA on CPU HPC instances (`OnDemandEnableEfa`)
+
+For tightly-coupled HPC / MPI workloads on CPU-only HPC instances, set
+`OnDemandEnableEfa=true` (deploy-all) or `EnableEfa=true` (modular `add-cng.yaml`).
+The CPU compute node group then launches with EFA `NetworkInterfaces` and a cluster
+placement group is auto-created. GPU CNGs (P5/P6) are unaffected — they use their
+own dedicated multi-NIC EFA wiring per-family.
+
+| Instance type | EFA interfaces | Aggregate spec | Set `OnDemandEfaInterfaceCount` to |
+|---|---:|---:|---:|
+| `hpc6a.48xlarge` | 1 | 100 Gbps | **1** |
+| `hpc7a.96xlarge` (and 12/24/48) | 2 | 300 Gbps | **2** |
+| `hpc6id.32xlarge` | 2 | 200 Gbps | **2** |
+| `hpc8a.96xlarge` | 2 | 300 Gbps | **2** |
+| `c7i.metal-48xl` etc. | 1 | varies | **1** |
+
+(Mismatching `OnDemandEfaInterfaceCount` with the instance type's actual
+`MaximumEfaInterfaces` fails at launch.)
+
+**Placement group:** auto-created per-CNG by the template. Override with
+`OnDemandPlacementGroupName=<existing-pg-name>` to share one PG across multiple
+CNGs (e.g. heterogeneous tightly-coupled jobs that span CPU + GPU).
+
+**Multi-NIC bandwidth needs multiple MPI pairs.** A single MPI pair uses one
+libfabric endpoint and only one NIC. Use `osu_mbw_mr -np 32 -N 16` (or your
+application's natural multi-pair pattern) to actually exercise both NICs on
+hpc7a/hpc8a. See [tests/README.md Test 9](./tests/README.md#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a)
+for the full benchmark setup and validated bandwidth numbers.
+
 ### Storage: FSx deployment types (Region availability)
 
 **FSx deployment types are not available in every Region.** Defaults match the most
@@ -168,6 +181,7 @@ capable type; switch to a more widely available one if your Region needs it.
 |---|---|---|---|---|
 | Lustre (`/fsx`) | `LustreDeploymentType` | `PERSISTENT_2` | `PERSISTENT_1` | `PERSISTENT_2` (throughput 125/250/500/1000, metadata config) isn't in every Region; `PERSISTENT_1` (50/100/200) is in more Regions |
 | Lustre (`/fsx`) | `PerUnitStorageThroughput` | `250` | any valid number | Must be valid for the type: P2 = 125/250/500/1000, P1 = 50/100/200 |
+| Lustre (`/fsx`) | `FSxLustreEnableEfa` | `false` | `true` | Enable EFA on the Lustre filesystem. **The headline feature is GPUDirect Storage (GDS) for P5 / P5e / P5en / P6-B200 GPU CNGs**, which DMAs file data straight into GPU memory (requires the NVIDIA `nvidia-fs` / cuFile stack on the client — see [`docs/ROADMAP.md`](./docs/ROADMAP.md#client-side-lustre-on-efa--gds-support)). EFA-capable CPU CNGs (`OnDemandEnableEfa=true`) get the EFA *transport* path to storage as a secondary benefit, useful when a single client is pushing past ~10 GBps. **PERSISTENT_2 SSD only** (a CFN Rule fails the stack at create time on PERSISTENT_1). **Requires a much higher minimum `Capacity`**: at `PerUnitStorageThroughput=250` the minimum is **19200 GiB** (16× the 1200 GiB default). Set `Capacity` accordingly when enabling this |
 | OpenZFS (`/home`) | `OpenZFSDeploymentType` | `SINGLE_AZ_HA_2` | `SINGLE_AZ_HA_1`, `SINGLE_AZ_2`, `SINGLE_AZ_1` | `SINGLE_AZ_1` is in all Regions; HA/2 variants vary. `MULTI_AZ` excluded (needs a second subnet) |
 | OpenZFS (`/home`) | `HomeThroughput` | `320` | any valid number | Throughput (MB/s). Valid values depend on the deployment type: `SINGLE_AZ_2`/`SINGLE_AZ_HA_2` = 160/320/640/1280/2560/3840/5120/7680/10240; `SINGLE_AZ_HA_1` = 128/256/512/1024/2048/3072/4096; `SINGLE_AZ_1` = 64/128/256/512/1024/2048/3072/4096 |
 
@@ -181,22 +195,11 @@ switch these parameters to a type your Region supports.
 
 ## 5. Usage Examples
 
-All examples start by setting `AZ_ID` — the one required choice.
+The default cluster (1 login + `cpu1` queue) is covered in [§3 Quick Start](#3-quick-start);
+the examples below show the more common customizations. Each one starts by setting
+`AZ_ID` — the one required choice.
 
-### Example 1: Default CPU cluster
-
-```bash
-AZ_ID=us-east-1a   # your target Availability Zone
-
-aws cloudformation create-stack \
-  --stack-name cpu-cluster \
-  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
-  --parameters ParameterKey=PrimarySubnetAZ,ParameterValue=${AZ_ID} \
-  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
-```
-1 login node + `cpu1` queue (c6i.4xlarge, 0–4 nodes, dynamic scaling).
-
-### Example 2: Single-NIC GPU queue (G6)
+### Example 1: Single-NIC GPU queue (G6)
 
 ```bash
 AZ_ID=us-east-1a   # your target Availability Zone
@@ -214,11 +217,11 @@ aws cloudformation create-stack \
 ```
 Replaces the default `cpu1` queue with a `gpu-g6` queue of g6.12xlarge instances.
 
-### Example 3: Multi-NIC GPU with a Capacity Block (P6-B300)
+### Example 2: Multi-NIC GPU with a Capacity Block (P6-B300)
 
 ```bash
 AZ_ID=us-west-2b
-CAPACITY_RESERVATION_ID="cr-0a1b2c3d4e5f6g7h8"
+CAPACITY_RESERVATION_ID="cr-0a1b2c3d4e5f67890"
 
 aws cloudformation create-stack \
   --stack-name p6-b300-cb-cluster \
@@ -240,76 +243,79 @@ parameter to set. For `p6-b200.48xlarge` or any P5 type, just change
 `PseriesInstanceType`. `CapacityReservationId` here is the **Capacity Block** ID; for
 On-Demand or an "open" ODCR, leave it empty (see [GPU compute](#gpu-compute-p5p6)).
 
+### Example 3: HPC EFA on the CPU queue (hpc7a)
+
+```bash
+AZ_ID=us-east-2b   # check your target type's AZ availability first
+
+aws cloudformation create-stack \
+  --stack-name hpc7a-cluster \
+  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
+  --parameters \
+    ParameterKey=PrimarySubnetAZ,ParameterValue=${AZ_ID} \
+    ParameterKey=OnDemandCngName,ParameterValue=hpc7a \
+    ParameterKey=OnDemandQueueName,ParameterValue=hpc \
+    ParameterKey=OnDemandInstanceType,ParameterValue=hpc7a.96xlarge \
+    ParameterKey=OnDemandMaxCount,ParameterValue=4 \
+    ParameterKey=OnDemandEnableEfa,ParameterValue=true \
+    ParameterKey=OnDemandEfaInterfaceCount,ParameterValue=2 \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
+```
+Replaces the default `cpu1` queue with an `hpc` queue of EFA-enabled
+hpc7a.96xlarge nodes. The CNG launches in an auto-created cluster placement
+group. For other HPC types, set `OnDemandInstanceType` and the matching
+`OnDemandEfaInterfaceCount` from the table in
+[EFA on CPU HPC instances](#efa-on-cpu-hpc-instances-ondemandenableefa)
+(hpc6a = `1`; hpc7a/hpc6id/hpc8a = `2`).
+
 ---
 
 ## 6. Accessing the Cluster
 
-Connect to the login node with AWS Systems Manager Session Manager (no public SSH needed).
+Connect to the login node via SSM Session Manager — no public SSH needed.
 
 **Console:** [EC2 Console](https://console.aws.amazon.com/ec2/home#Instances:) → filter
-by tag `aws:pcs:compute-node-group-name = login` → select the instance → **Connect** →
-**Session Manager** → **Connect**.
+by `aws:pcs:compute-node-group-name = login` → **Connect** → **Session Manager**.
 
-**CLI** (needs `ec2:DescribeInstances` + `ssm:StartSession`; AWS CloudShell has these):
+**CLI** (AWS CloudShell has the required permissions):
 
 ```bash
 INSTANCE_ID=$(aws ec2 describe-instances \
   --filters "Name=tag:aws:pcs:compute-node-group-name,Values=login" \
             "Name=instance-state-name,Values=running" \
   --query 'Reservations[0].Instances[0].InstanceId' --output text)
-
 aws ssm start-session --target $INSTANCE_ID
 ```
 
-Then switch to the default user and check the cluster:
-
-```bash
-sudo su - ubuntu
-sinfo                 # partitions and nodes
-squeue                # job queue
-scontrol show nodes   # node detail
-```
-
-See [Connect to Cluster](https://catalog.workshops.aws/ml-on-pcs/en-US/03-cluster/02-connect-cluster) in the workshop for more.
+Then `sudo su - ubuntu` and use `sinfo` / `squeue` / `scontrol show nodes`.
 
 ---
 
 ## 7. Running a multi-node GPU job (NCCL test)
 
-The repo's canonical NCCL launcher
-[`micro-benchmarks/nccl-tests/slurm/nccl-tests-container.sbatch`](../../micro-benchmarks/nccl-tests/slurm/nccl-tests-container.sbatch)
-runs an `all_reduce_perf` benchmark across 2 nodes and is the quickest way to confirm
-the GPU queue, Pyxis containers, and EFA work end-to-end. Two PCS-specific deltas are
-all you need to add:
-
-**1. Import the image on the login node** — `enroot import` builds its overlayfs on the
-node-local root disk (the login node has 300 GiB), and FSx for Lustre can't host that
-overlay; only the resulting `.sqsh` lands on shared `/fsx`. Pin a specific image tag
-for reproducible numbers (don't use `latest`):
+A 2-node `all_reduce_perf` is the quickest end-to-end check (GPU queue + Pyxis + EFA).
+Run on the login node — `/fsx` is shared with every compute node:
 
 ```bash
+# Import the container image (enroot's overlayfs needs the node-local root disk;
+# the resulting .sqsh lands on shared /fsx). Pin the tag for reproducibility.
 TAG=cuda12.8.1-efa1.43.2-ofiv1.16.3-ncclv2.27.7-1-testsv2.16.9
 enroot import -o /fsx/nccl-tests.sqsh "docker://public.ecr.aws#hpc-cloud/nccl-tests:${TAG}"
+
+# Fetch and submit the canonical 2-node / 8-tasks sbatch
+cd /fsx
+wget https://raw.githubusercontent.com/awslabs/awsome-distributed-ai/main/micro-benchmarks/nccl-tests/slurm/nccl-tests-container.sbatch
+sbatch --partition=gpu-p6b300 nccl-tests-container.sbatch
 ```
 
-**2. Submit on your GPU partition** — the canonical sbatch reads `$IMAGE`
-(`/fsx/nccl-tests.sqsh` by default) and defaults to 2 nodes / 8 tasks per node:
+In `nccl-all_reduce_perf_<jobid>.out`, EFA is active when you see
+`NET/OFI Selected provider is efa ... (found N nics)`; a healthy run ends with
+`# Out of bounds values : 0 OK` and a busbw that scales with message size
+(e.g. ~751 GB/s at 64 GiB on 2× p6-b300; raise `-e` past the 16 GiB default to
+saturate larger fabrics).
 
-```bash
-cd /fsx && git clone --depth 1 https://github.com/awslabs/awsome-distributed-ai.git
-sbatch --partition=gpu-p6b300 \
-  /fsx/awsome-distributed-ai/micro-benchmarks/nccl-tests/slurm/nccl-tests-container.sbatch
-```
-
-**3. Check the result** (`nccl-all_reduce_perf_<jobid>.out`). EFA is in use when you see
-`NET/OFI Selected provider is efa ... (found N nics)`, and a healthy run ends with
-`# Out of bounds values : 0 OK` plus a busbw column that scales up with message size
-(e.g. ~751 GB/s at 64 GiB on 2× p6-b300; raise `-e` past the default 16 GiB to saturate
-B300's 16 EFA cards).
-
-For a full training example, see the [PyTorch FSDP test case](../../3.test_cases/pytorch/FSDP).
-For the full validation matrix (monitoring, containers, CPU/GPU, NCCL, FSDP) and the
-PCS deltas worth knowing, see the [Test & Validation Guide](tests/README.md).
+For a full training example, see the [PyTorch FSDP test case](../../3.test_cases/pytorch/FSDP);
+the full validation matrix is in [tests/README.md](./tests/README.md).
 
 ---
 
@@ -325,9 +331,9 @@ is installed automatically:
 
 Metrics cover Slurm jobs, GPU (utilization/memory/temperature/power/ECC/NVLink via DCGM),
 node CPU/memory/disk/network, and CloudWatch (EC2/FSx/PCS). The stack installs on
-node-local `/opt` (not the shared `/home`). Pre-built Grafana dashboards (Cluster Summary,
-Slurm Detail, GPU Node List, GPU Health, Cluster Costs, Storage) are provisioned
-automatically — see the [screenshot below](#accessing-grafana).
+node-local `/opt` (not the shared `/home`). Pre-built Grafana dashboards are
+provisioned automatically — see [Accessing Grafana](#accessing-grafana) for the list
+and a screenshot.
 
 > **GPU metrics work out of the box across the supported GPU range** (Hopper / B200 /
 > B300). `DcgmExporterImage` defaults to a DCGM 4.5.2 build pinned by digest, validated
@@ -432,11 +438,6 @@ node's model, instance type, utilization, temperature, power, and memory:
 For detailed validation steps and the full test matrix (monitoring, containers, CPU/GPU,
 NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 
-> **Use `v2.9.1` or newer for PCS.** Carries the PCS `/opt` install fix (v2.6.4),
-> Docker-29.x DCGM tag (v2.6.5), Grafana 13 (v2.9), and the `DCGM_EXPORTER_IMAGE` override
-> needed by `DcgmExporterImage` for B300 (v2.9.1). Migration notes:
-> [OPERATIONS.md §3](./docs/OPERATIONS.md#3-monitoring-monitoringversion).
-
 ---
 
 ## 9. Pre-baking Enroot/Pyxis into a custom AMI (optional)
@@ -514,7 +515,7 @@ parameter and default, see [PARAMETERS.md](./docs/PARAMETERS.md).
 | [`pcs-ml-cluster-deploy-all.yaml`](./assets/pcs-ml-cluster-deploy-all.yaml) | All-in-one: Prerequisites + (optional AMI) + Cluster + login/CPU/GPU CNGs | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml&stackName=pcs-ml-cluster) |
 | [`ml-cluster-prerequisites.yaml`](./assets/ml-cluster-prerequisites.yaml) | VPC, subnets, security groups, FSx for Lustre + OpenZFS | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/ml-cluster-prerequisites.yaml&stackName=pcs-prerequisites) |
 | [`cluster.yaml`](./assets/cluster.yaml) | PCS cluster core (Slurm scheduler only, no nodes) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster.yaml&stackName=pcs-cluster) |
-| [`add-cng.yaml`](./assets/add-cng.yaml) | Compute node group, single NIC — login nodes, CPU/single-NIC-GPU queues (C6i, G5, G6) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng.yaml&stackName=pcs-add-cng) |
+| [`add-cng.yaml`](./assets/add-cng.yaml) | Compute node group — login nodes, CPU / single-NIC-GPU queues (C6i, G5, G6); switches to a multi-NIC EFA `NetworkInterfaces` block when `EnableEfa=true` (HPC types: hpc6a/hpc7a/hpc6id/hpc8a …) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng.yaml&stackName=pcs-add-cng) |
 | [`add-cng-p5.yaml`](./assets/add-cng-p5.yaml) | P5/P5e/P5en nodes (16/32 EFA interfaces, by type) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p5.yaml&stackName=pcs-add-cng-p5) |
 | [`add-cng-p6-b200.yaml`](./assets/add-cng-p6-b200.yaml) | P6-B200 nodes (8 EFA interfaces) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p6-b200.yaml&stackName=pcs-add-cng-p6-b200) |
 | [`add-cng-p6-b300.yaml`](./assets/add-cng-p6-b300.yaml) | P6-B300 nodes (16 EFA interfaces) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p6-b300.yaml&stackName=pcs-add-cng-p6-b300) |
@@ -528,28 +529,23 @@ Capacity Block.
 
 ## 11. Testing and Validation
 
-Validated configurations:
-
-- **Infrastructure** (`ml-cluster-prerequisites.yaml`, `cluster.yaml`): multiple Regions (us-east-1/us-west-2/us-east-2), Slurm 25.05 & 25.11.
-- **CPU / single-NIC GPU** (`add-cng.yaml`): login (m6i.4xlarge), CPU (c6i.4xlarge), GPU (g6.xlarge/g6.12xlarge).
-- **P5** (`add-cng-p5.yaml`): p5.48xlarge / p5en.48xlarge with ODCR and Capacity Blocks for ML.
-- **P6-B300** (`add-cng-p6-b300.yaml`): validated on real p6-b300.48xlarge (Capacity Blocks, us-west-2) — 17 network cards, EFA active (NCCL `found 16 nics`), 2-node all_reduce ~761 GB/s peak, FSDP Llama-2 7B multi-node.
-- **P6-B200** (`add-cng-p6-b200.yaml`): 8-network-card template (same EFA layout family as B300).
-- **All-in-one** (`pcs-ml-cluster-deploy-all.yaml`): selects the P5/P6-B200/P6-B300 CNG template automatically from `PseriesInstanceType`; tested end-to-end with monitoring, container jobs, NCCL, and FSDP on p6-b300.
-- **AMI builder** (`pcs-ready-dlami-with-enroot-pyxis.yaml`): Ubuntu 24.04 x86_64 AMIs with Enroot 3.5.0 + Pyxis 0.20.0, validated with PyTorch/CUDA containers.
+Every template has been deployed end-to-end on real hardware: P5 / P5e / P5en /
+P6-B200 / P6-B300 (NCCL all-reduce + FSDP Llama-2 7B), HPC EFA on hpc6a / hpc7a /
+hpc8a (OSU multi-pair throughput up to 341 Gbps), FSx Lustre EFA (`EfaEnabled=true`
+on PERSISTENT_2), and the full monitoring stack across multiple Regions and both
+Slurm 25.05 / 25.11. The full test matrix with reproduction steps and measured
+numbers is in **[tests/README.md](./tests/README.md)**.
 
 ---
 
 ## 12. Additional Resources
 
-- [Operations guide](./docs/OPERATIONS.md) — version trade-offs, AMI single-version rule, monitoring/B300 dcgm setup, AMI pinning, FSx coupling, recommended production settings
-- [Roadmap / TODO](./docs/ROADMAP.md) — implementation items under consideration
+In this repo:
 - [Parameter reference](./docs/PARAMETERS.md) — every deploy-all parameter and default
-- [AWS Parallel Computing Service Documentation](https://docs.aws.amazon.com/pcs/)
-- [AI/ML for AWS PCS Workshop](https://catalog.workshops.aws/ml-on-pcs/)
-- [Slurm Documentation](https://slurm.schedmd.com/documentation.html)
-- [Enroot](https://github.com/NVIDIA/enroot) · [Pyxis](https://github.com/NVIDIA/pyxis)
-- [Capacity Blocks for ML](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-capacity-blocks.html)
-- [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) (upstream monitoring)
-- [Prometheus & Grafana Setup](../../4.validation_and_observability/4.prometheus-grafana/README.md) (alternative: AWS-managed Prometheus/Grafana)
-- [LDAP Server Setup Guide](../../1.architectures/6.ldap_server/README.md) — OpenLDAP for cluster-wide user management
+- [Operations guide](./docs/OPERATIONS.md) — version trade-offs, AMI pinning, monitoring/DCGM, FSx coupling, production settings
+- [Test & Validation Guide](./tests/README.md) — reproducible matrix with measured numbers
+- [Roadmap / TODO](./docs/ROADMAP.md)
+
+External:
+- [AWS PCS Documentation](https://docs.aws.amazon.com/pcs/) · [AI/ML for AWS PCS Workshop](https://catalog.workshops.aws/ml-on-pcs/)
+- [Slurm](https://slurm.schedmd.com/documentation.html) · [Enroot](https://github.com/NVIDIA/enroot) · [Pyxis](https://github.com/NVIDIA/pyxis) · [Capacity Blocks for ML](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-capacity-blocks.html)

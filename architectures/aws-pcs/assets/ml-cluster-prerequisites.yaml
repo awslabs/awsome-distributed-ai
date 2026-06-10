@@ -31,6 +31,7 @@ Metadata:
           default: FSx for Lustre (/fsx) storage size
         Parameters:
           - Capacity
+          - FSxLustreEnableEfa
       - Label:
           default: Network and S3 endpoints configuration
         Parameters:
@@ -38,6 +39,8 @@ Metadata:
     ParameterLabels:
       VPCName:
         default: Name of your VPC
+      FSxLustreEnableEfa:
+        default: Enable EFA + GDS on FSx for Lustre (PERSISTENT_2 only)
       PrimarySubnetAZ:
         default: Availability zone id to deploy the primary subnets
       CreateS3Endpoint:
@@ -108,6 +111,29 @@ Parameters:
       - "2.15"
       - "2.12"
     Default: "2.15"
+
+  FSxLustreEnableEfa:
+    Description: >-
+      (Optional) Enable EFA on the FSx for Lustre filesystem. Default false.
+      PERSISTENT_2 SSD only — a Rule below fails the stack at create time when
+      combined with PERSISTENT_1 (rather than silently ignoring the opt-in).
+      The headline feature is GPUDirect Storage (GDS) for P5/P5e/P5en/P6-B200
+      GPU clients, which DMAs file data straight into GPU memory (the NVIDIA
+      nvidia-fs/cuFile stack must be installed on the client — currently a
+      ROADMAP follow-up). EFA-capable CPU CNGs (OnDemandEnableEfa=true) get
+      the EFA transport path to storage as a secondary benefit, useful when a
+      single client is pushing past ~10 GBps. **EFA-enabled Lustre has a
+      much larger minimum storage capacity than the non-EFA default**: at
+      PerUnitStorageThroughput=250 the minimum is 19200 GiB (16x the non-EFA
+      default of 1200 GiB). Set Capacity to >= the EFA minimum when enabling
+      this; the full minimum-capacity matrix per throughput tier is in the
+      FSx for Lustre User Guide. The FSx side rejects undersized capacity at
+      stack-create time with a clear error.
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
 
   HomeCapacity:
     Description: "Home directories storage capacity in GiB"
@@ -181,6 +207,15 @@ Rules:
         AssertDescription: >-
           SINGLE_AZ_2 / SINGLE_AZ_HA_2 support HomeThroughput of
           160/320/640/1280/2560/3840/5120/7680/10240 MB/s only.
+  # FSx EFA + GDS is a PERSISTENT_2-only feature. Fail fast if a user opts in on
+  # PERSISTENT_1 instead of silently dropping the EfaEnabled property.
+  FSxLustreEfaRequiresPersistent2:
+    RuleCondition: !Equals [!Ref FSxLustreEnableEfa, 'true']
+    Assertions:
+      - Assert: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_2']
+        AssertDescription: >-
+          FSxLustreEnableEfa=true requires LustreDeploymentType=PERSISTENT_2
+          (EFA on FSx for Lustre is a PERSISTENT_2-only feature).
 
 
 ###############################
@@ -193,6 +228,13 @@ Conditions:
   # configuration (and the EFA/Intelligent-Tiering features); PERSISTENT_1 does
   # not, so the MetadataConfiguration block is only emitted for PERSISTENT_2.
   LustreIsPersistent2: !Equals [!Ref 'LustreDeploymentType', 'PERSISTENT_2']
+  # EFA on Lustre is a PERSISTENT_2-only feature; the
+  # FSxLustreEfaRequiresPersistent2 Rule above already fails the stack at
+  # create time on PERSISTENT_1, so the !And here is just defense-in-depth so
+  # this template's resource synthesis is still correct in isolation.
+  FSxLustreEfaEnabled: !And
+    - !Equals [!Ref 'FSxLustreEnableEfa', 'true']
+    - !Condition LustreIsPersistent2
 
 #########################
 ## VPC & Network Setup ##
@@ -389,6 +431,13 @@ Resources:
         MetadataConfiguration: !If
           - LustreIsPersistent2
           - Mode: AUTOMATIC
+          - !Ref AWS::NoValue
+        # EfaEnabled enables EFA + GPUDirect Storage (GDS) on the FSx-side
+        # endpoints. PERSISTENT_2 only; the FSxLustreEfaEnabled condition gates
+        # both the user toggle and the deployment-type prerequisite.
+        EfaEnabled: !If
+          - FSxLustreEfaEnabled
+          - true
           - !Ref AWS::NoValue
 
 

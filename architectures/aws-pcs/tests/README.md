@@ -42,11 +42,13 @@ do **not** assume a single 25.11 GPU run covers everything.
 | 6 | **Monitoring** | 6 login containers up, all Prometheus targets healthy, GPU dashboards populate on every supported GPU family with the default `DcgmExporterImage` (DCGM 4.5.2 by digest) | — |
 | 7 | **Template lint** | `aws cloudformation validate-template` on every edited `assets/*.yaml` | Catches structural errors before a deploy round-trip. |
 | 8 | **Pre-baked AMI build path** (when touched) | If `pcs-ready-dlami-with-enroot-pyxis.yaml` or any code it bakes (`scripts/install-enroot-pyxis.sh`) changes: build an AMI per supported `SlurmVersion`, then deploy a cluster with `AmiId=<ami-xxx>` + `PostInstallScriptUrl=""` and run a container job → [Test 8](#test-8-pre-baked-ami-build-standalone-dlami-template) | Independent path: the cluster stack does NOT run Image Builder, so an `install-enroot-pyxis.sh` fix is only in the AMI after a rebuild. The AMI is single-Slurm-version by design — `SlurmVersion` on the DLAMI stack must match the cluster's `SlurmVersion` (the SPANK plugin is ABI-locked). **Skip this row only if neither the AMI build template nor the install script changed.** |
+| 9 | **CPU EFA path** (when touched) | If `add-cng.yaml`'s EFA wiring (`EnableEfa` / `EfaInterfaceCount` / `PlacementGroupName`) or the deploy-all forwarding (`OnDemand{EnableEfa,EfaInterfaceCount,PlacementGroupName}`) changes: deploy with `OnDemandEnableEfa=true` on at least one EFA-capable HPC type (e.g. hpc7a.96xlarge, 2 NICs), verify `lspci`/`fi_info` show the EFA NICs, and run a 2-node OSU `osu_mbw_mr` → [Test 9](#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a) | EFA enables a different LaunchTemplate shape (`NetworkInterfaces` block with `InterfaceType=efa`, mutually exclusive with `SecurityGroupIds`); a regression here only shows on a real EFA deploy, not template-validate. **Skip this row only if no EFA-related wiring was touched.** |
+| 10 | **FSx storage health** | Both filesystems mount on every node; read/write sanity; FSx side reports the parameters CFN asked for (deployment type, throughput, capacity, `EfaEnabled` when set) → [Test 10](#test-10-fsx-storage-health) | Mount errors only surface on a fresh first boot (race vs systemd, NFS settle, Lustre client driver mismatch). FSx-side parameter drift between what CFN asked for and what FSx reports is invisible to template-validate. |
 
-Tests 1–8 below are the per-item how-to. The single-cluster shortcut (one deploy that
-covers monitoring + CPU + one GPU family) is fine for iterating; row 8 is its own
-separate AMI-build stack, run only when its inputs change. The full matrix above is
-the bar for **merge**.
+Tests 1–10 below are the per-item how-to. The single-cluster shortcut (one deploy that
+covers monitoring + CPU + one GPU family) is fine for iterating; rows 8 and 9 are
+separate paths run only when their inputs change. The full matrix above is the bar
+for **merge**.
 
 ---
 
@@ -64,6 +66,8 @@ What this guide covers, and the template/parameter that exercises it:
 | **NCCL / EFA** | 2-node all_reduce | [Test 6](#test-6-nccl-multi-node-efa) |
 | **Sample training** | FSDP Llama-2 7B | [Test 7](#test-7-fsdp-sample-training) |
 | **Container runtime — pre-baked AMI path** | Standalone DLAMI build + cluster pinned to its output | `pcs-ready-dlami-with-enroot-pyxis.yaml` (separate stack) → cluster with `AmiId=ami-xxx` + `PostInstallScriptUrl=""` → [Test 8](#test-8-pre-baked-ami-build-standalone-dlami-template) |
+| **EFA on CPU HPC instances** | hpc6a (1 NIC), hpc7a / hpc8a (2 NIC) | `OnDemandEnableEfa=true` + `OnDemandEfaInterfaceCount=1\|2` (deploy-all) or `EnableEfa=true` + `EfaInterfaceCount=1\|2` (modular `add-cng.yaml`); auto-creates a per-CNG cluster placement group, override with `OnDemandPlacementGroupName` / `PlacementGroupName` to share → [Test 9](#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a) |
+| **FSx storage health** | Lustre + OpenZFS mounts, read/write, FSx-side parameters honored (incl. `FSxLustreEnableEfa` when set) | Default deploy already mounts both filesystems; verify on the login + a compute node and inspect the FSx-side filesystem with `aws fsx describe-file-systems` → [Test 10](#test-10-fsx-storage-health) |
 
 A single `pcs-ml-cluster-deploy-all.yaml` deploy with `DeployMonitoring=true`,
 `DeployOnDemandCNG=true`, and `DeployPseriesCNG=true` exercises Tests 1–7 in one cluster.
@@ -88,6 +92,67 @@ results; exact bandwidth/throughput vary with NCCL/EFA versions and message size
 | **Slurm 25.11, CPU + PostInstall** | us-west-2 | On-Demand | ✅ v2.9.1 incl. Slurm OpenMetrics | first-boot Pyxis OK | n/a |
 | **Login + CPU (`c6i`)** | us-west-2 / us-east-* | On-Demand | ✅ all targets up | n/a | n/a |
 | **Grafana public access** (login-only SG) | us-west-2 | — | ✅ reachable at `https://<login-public-ip>/grafana/` from the allowed CIDR | — | — |
+
+### HPC EFA on CPU instances (`OnDemandEnableEfa=true`)
+
+OSU MPI micro-benchmarks 7.4 on 2 nodes, Slurm 25.11, AWS Open MPI 4.1.7
+(`/opt/amazon/openmpi`), libfabric provider `efa`. Tuned env: `FI_PROVIDER=efa`,
+huge page on (default), `FI_EFA_FORK_SAFE=1`, `OMPI_MCA_pml=cm`, `OMPI_MCA_mtl=ofi`,
+`OMPI_MCA_mtl_ofi_provider_include=efa`. All deploys used `OnDemandEnableEfa=true`
+with the matching `OnDemandEfaInterfaceCount`; the cluster placement group was
+auto-created per-CNG by `add-cng.yaml`.
+
+| Instance | NICs | Spec aggregate ¶ | `osu_latency` 1B | `osu_bw` peak (1 pair) | `osu_bibw` peak (1 pair) | `osu_mbw_mr` peak (16 pair × 2 nodes) | `osu_allreduce` 1B (32 ranks) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **hpc6a.48xlarge** | 1 | 100 Gbps | 13.78 µs | 96.3 Gbps (12.04 GB/s) | 152 Gbps †† | **97.6 Gbps** (97.6% of spec) | 27.5 µs |
+| **hpc7a.96xlarge** | 2 | 300 Gbps | 14.27 µs | 95.6 Gbps (11.95 GB/s) | 156 Gbps | **263 Gbps** (87.6% of spec) | 23.4 µs |
+| **hpc8a.96xlarge** | 2 | 300 Gbps | **10.31 µs** ★ | **210 Gbps** (26.27 GB/s) | **363 Gbps** †† | **341 Gbps** ‡‡ | **17.4 µs** ★ |
+
+¶ AWS docs ([HPC instance specs](https://docs.aws.amazon.com/ec2/latest/instancetypes/hpc.html))
+"Baseline / Burst bandwidth (Gbps)" column. The notes also state "you must attach at
+least 2 ENIs, to separate network cards, to achieve [aggregate] throughput" with a
+per-ENI cap of 150 Gbps for hpc7a and 170 Gbps for hpc6id; **per-ENI cap for hpc8a is
+not stated in AWS docs**.
+
+†† `osu_bibw` measures bidirectional bandwidth on a single pair (simultaneous
+send+recv). It can exceed the uni-directional spec because it counts both
+directions; not directly comparable to the "300 Gbps" aggregate spec.
+
+‡‡ hpc8a's `osu_mbw_mr` reading exceeds the docs' aggregate spec (300 Gbps). The
+reading is reproducible across two independent runs (job 6 = 42.68 GB/s, job 7 =
+43.85 GB/s), so it isn't a one-off artifact. Possible explanations include (a) AWS
+docs spec is per-direction sustained while `osu_mbw_mr` reports forward-direction
+peak, (b) Nitro v6 / EFAv4 efficiency on hpc8a leaves headroom above the published
+number, (c) ack/control traffic in reverse direction inflates the receiver-side
+counter view. **NIC-level Prometheus counters** (`node_amazonefa_tx_bytes` and
+`rx_bytes`, available via the v2.7+ `efa-metrics.sh` textfile collector) can resolve
+which is the case for a given run; in a 30s-update collector the wire-level peak
+shows below the OSU-reported peak because the OSU phases for each message size are
+shorter than the textfile sample window.
+
+★ hpc8a is fastest on every metric. The Nitro v6 / EFAv4 generation lift over hpc7a
+(Nitro v4) shows up most clearly in latency (~30% better) and single-pair bandwidth
+(~2× — single pair on hpc7a hits the 150 Gbps per-ENI cap, hpc8a does not appear to
+hit one).
+
+**Tuning notes** (collected during these runs):
+- **`osu_bw` (single pair) understates aggregate fabric bandwidth.** A single MPI
+  pair uses one libfabric endpoint; on instances with 2 NICs, the second NIC is idle.
+  Use `osu_mbw_mr -np 32 -N 16` for the realistic aggregate number; `osu_bw` only
+  matches the per-ENI cap.
+- **Disabling huge pages costs throughput.** An earlier hpc7a run with
+  `FI_EFA_USE_HUGE_PAGE=0` showed 68 Gbps `osu_bw`; leaving the variable unset (= 1
+  default) brought it to 95.6 Gbps on the same instance.
+- **Open MPI 4.1.7 on the PCS-Ready DLAMI has no `pml=ofi`.** Set
+  `OMPI_MCA_pml=cm` and `OMPI_MCA_mtl=ofi` instead — the `cm` PML dispatches to the
+  OFI MTL. Setting `OMPI_MCA_pml=ofi` directly fails with "mca_pml_base_open()
+  failed → Returned 'Not found' (-13)".
+- **EFA monitoring works with the default v2.9.1 stack.** The `efa-metrics.sh`
+  textfile collector emits `node_amazonefa_*` series for `tx_bytes`, `rx_bytes`,
+  `recv_bytes`, `send_bytes`, RDMA `read/write` bytes/work-requests, retransmits,
+  and unresponsive-remote-endpoint events. The Compute Node Details Grafana
+  dashboard has dedicated EFA panels for these. Sampling cadence is 30 sec
+  (textfile-collector timer), so short OSU sub-tests show below their wall-clock peak.
 
 ### Stack creation times (measured, deploy-all)
 
@@ -445,6 +510,281 @@ aws cloudformation delete-stack --stack-name pcs-dlami-${SLURM_VERSION/./}   --p
 The DLAMI stack's AMI itself is **not** automatically deregistered when the stack is
 deleted — if you need to free its EBS snapshots, deregister the AMI manually
 (`aws ec2 deregister-image --image-id $AMI_ID`) and delete the snapshot.
+
+---
+
+## Test 9: EFA on CPU HPC instances (hpc6a / hpc7a / hpc8a)
+
+**When to run:** when `add-cng.yaml`'s EFA wiring (`EnableEfa`, `EfaInterfaceCount`,
+`PlacementGroupName`) or the deploy-all forwarding params (`OnDemandEnableEfa`,
+`OnDemandEfaInterfaceCount`, `OnDemandPlacementGroupName`) change. Skip if only
+GPU/monitoring/AMI paths were touched.
+
+This validates that the on-demand CPU CNG actually launches with EFA NICs in a
+cluster placement group, and that MPI / libfabric over EFA works end-to-end. The
+verified-configurations table above documents the bandwidth numbers; this section
+documents the **how-to** so a contributor can reproduce.
+
+### Step 1 — deploy with EFA on the CPU CNG
+
+```bash
+# hpc7a / hpc8a have 2 EFA NICs; hpc6a has 1.
+INSTANCE_TYPE=hpc7a.96xlarge
+EFA_NICS=2
+
+# AZ availability is region-specific — confirm with describe-instance-type-offerings:
+# hpc7a is in us-east-2b (and others); hpc8a is in us-east-2b / eu-north-1 / ap-northeast-1;
+# hpc6a is in us-east-2 (b) / us-west-2 / eu-west-1 etc. AZ MUST contain the type.
+AWS_AZ=us-east-2b
+
+aws cloudformation create-stack \
+  --stack-name pcs-hpc-efa \
+  --region us-east-2 \
+  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
+  --parameters \
+    ParameterKey=PrimarySubnetAZ,ParameterValue=$AWS_AZ \
+    ParameterKey=DeployOnDemandCNG,ParameterValue=true \
+    ParameterKey=OnDemandInstanceType,ParameterValue=$INSTANCE_TYPE \
+    ParameterKey=OnDemandCngName,ParameterValue=hpc \
+    ParameterKey=OnDemandQueueName,ParameterValue=hpc \
+    ParameterKey=OnDemandMinCount,ParameterValue=0 \
+    ParameterKey=OnDemandMaxCount,ParameterValue=2 \
+    ParameterKey=OnDemandEnableEfa,ParameterValue=true \
+    ParameterKey=OnDemandEfaInterfaceCount,ParameterValue=$EFA_NICS \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
+```
+
+The `OnDemandCNGStack` nested stack auto-creates a cluster placement group and
+exposes the name as a stack output (`PlacementGroupName`). To share the PG across
+multiple CNGs (heterogeneous tightly-coupled jobs), pass
+`OnDemandPlacementGroupName=<existing-pg-name>` instead.
+
+### Step 2 — verify EFA visibility on a compute node
+
+After the stack reaches CREATE_COMPLETE and an `srun` has woken up a node:
+
+```bash
+# On a compute node (via Slurm srun from login):
+srun -p hpc -N 1 -n 1 bash -c '
+  /opt/amazon/efa/bin/fi_info -p efa | head -20  # provider=efa, FI_EP_RDM
+  lspci | grep -iE "EFA|Elastic"                 # 2 EFA + 2 ENA on hpc7a/hpc8a
+'
+```
+
+Expected (hpc7a / hpc8a):
+- `fi_info -p efa`: shows `efa-direct` and `efa` fabrics on `rdmap36s0` and
+  `rdmap42s0` (or matching device names).
+- `lspci`: 2 lines `Elastic Fabric Adapter` (or `Device efa3` on hpc8a) + 2 lines
+  `Elastic Network Adapter`.
+
+### Step 3 — OSU MPI micro-benchmarks
+
+Build OSU 7.4 on `/fsx` once (shared across compute nodes) using the
+PCS-Ready DLAMI's `/opt/amazon/openmpi`:
+
+```bash
+mkdir -p /fsx/osu && cd /fsx/osu
+curl -fL -o osu.tgz https://mvapich.cse.ohio-state.edu/download/mvapich/osu-micro-benchmarks-7.4.tar.gz
+tar xf osu.tgz && cd osu-micro-benchmarks-7.4
+PATH=/opt/amazon/openmpi/bin:$PATH ./configure CC=mpicc CXX=mpicxx --prefix=/fsx/osu
+PATH=/opt/amazon/openmpi/bin:$PATH make -j8
+```
+
+Submit a 2-node sbatch with the AWS-tuned EFA env (the canonical reference
+parameters, see "Tuning notes" in [Verified configurations](#hpc-efa-on-cpu-instances-ondemandenableefatrue)):
+
+```bash
+cat > /fsx/osu/osu-bench.sbatch <<'EOF'
+#!/bin/bash
+#SBATCH --job-name=osu-efa
+#SBATCH --partition=hpc
+#SBATCH --nodes=2
+#SBATCH --exclusive
+#SBATCH --output=/fsx/osu/logs/%x_%j.out
+
+set -ex
+OSU=/fsx/osu/osu-micro-benchmarks-7.4
+export PATH=/opt/amazon/openmpi/bin:$PATH
+
+export FI_PROVIDER=efa
+export FI_EFA_FORK_SAFE=1                # huge page stays at the default (=1, on)
+export OMPI_MCA_pml=cm                    # AWS Open MPI 4.1.7 has no pml=ofi
+export OMPI_MCA_mtl=ofi
+export OMPI_MCA_mtl_ofi_provider_include=efa
+export OMPI_MCA_btl=^openib,tcp
+
+MPI_X="-x FI_PROVIDER -x FI_EFA_FORK_SAFE \
+       -x OMPI_MCA_pml -x OMPI_MCA_mtl -x OMPI_MCA_mtl_ofi_provider_include \
+       -x OMPI_MCA_btl"
+
+mpirun -np 2  -N 1  $MPI_X $OSU/c/mpi/pt2pt/standard/osu_latency
+mpirun -np 2  -N 1  $MPI_X $OSU/c/mpi/pt2pt/standard/osu_bw
+mpirun -np 2  -N 1  $MPI_X $OSU/c/mpi/pt2pt/standard/osu_bibw
+mpirun -np 32 -N 16 $MPI_X $OSU/c/mpi/pt2pt/standard/osu_mbw_mr
+mpirun -np 32 -N 16 $MPI_X $OSU/c/mpi/collective/blocking/osu_allreduce
+EOF
+
+mkdir -p /fsx/osu/logs
+sbatch -p hpc /fsx/osu/osu-bench.sbatch
+```
+
+The reference numbers per instance type are in
+[Verified configurations](#hpc-efa-on-cpu-instances-ondemandenableefatrue) above.
+
+### Step 4 — observe NIC-level traffic in Grafana (optional)
+
+The monitoring stack's Compute Node Details dashboard has dedicated EFA panels
+sourced from the `node_amazonefa_*` metrics produced by the v2.7+
+`efa-metrics.sh` textfile collector:
+
+- RDMA Read / Write Throughput
+- SRD Retransmitted Packets
+- Work-Request Errors
+
+For per-NIC `tx_bytes` / `rx_bytes` rate during a benchmark, query Prometheus
+directly:
+
+```promql
+rate(node_amazonefa_tx_bytes[30s]) * 8 / 1e9   # Gbps per (instance, device)
+sum by (instance) (rate(node_amazonefa_tx_bytes[30s])) * 8 / 1e9  # both NICs
+```
+
+(The textfile collector cadence is 30s; rates over windows shorter than that are
+zeros most of the time. OSU sub-tests are also short — 10–30s each — so wall-clock
+peak in Prometheus typically reads below the OSU-reported peak.)
+
+### Step 5 — clean up
+
+When done with EFA testing, just delete the CNG stack (or the whole deploy-all
+stack). The auto-created cluster placement group is owned by the CNG stack and
+is removed automatically. Slurm puts the EFA compute nodes to sleep on idle
+(`SuspendTime`), so leaving the cluster up between benchmarks does not keep the
+hpc7a/hpc8a instances running.
+
+---
+
+## Test 10: FSx storage health
+
+Validates that both shared filesystems (Lustre on `/fsx`, OpenZFS on `/home`)
+mount cleanly on every node, are usable, and that the FSx-side configuration
+matches what the template asked for. Most of this is exercised implicitly by
+Tests 1–9 (the post-install script, monitoring stack, OSU / FSDP all touch
+`/fsx`); this test is the explicit health check to run after a fresh deploy
+or after touching `ml-cluster-prerequisites.yaml` / FSx-related parameters.
+
+### Step 1 — both filesystems mounted on every node
+
+On the login node and at least one compute node (via `srun`):
+
+```bash
+mount | grep -E ' /home | /fsx '
+df -h /home /fsx
+```
+
+Expected:
+- `/fsx` mounted as type `lustre`, source `<fs-id>.fsx.<region>.amazonaws.com@tcp:/<mountname>`,
+  size matches the `Capacity` parameter (1200 GiB default; 19200 GiB or larger
+  when `FSxLustreEnableEfa=true`).
+- `/home` mounted as type `nfs` over OpenZFS, NFS options include
+  `nconnect=16,rsize=1048576,wsize=1048576` (the deploy-all UserData mount
+  string).
+- Both `df -h` reports show `Avail` greater than zero.
+
+If a mount is missing on a freshly booted node, check
+`/var/log/cloud-init-output.log` and `/var/log/pcs-post-install.log` for the
+`mount` line. The most common first-boot failure is the OpenZFS DNS name not
+being resolvable yet (NFS settle race); the post-install log will show
+`mount.nfs: Failed to resolve server`.
+
+### Step 2 — read/write sanity
+
+```bash
+# /fsx (Lustre): write 1 GiB, read it back
+dd if=/dev/zero of=/fsx/.healthcheck bs=1M count=1024 conv=fsync 2>&1 | tail -1
+dd if=/fsx/.healthcheck of=/dev/null bs=1M 2>&1 | tail -1
+rm /fsx/.healthcheck
+
+# /home (OpenZFS / NFS): same, 100 MiB (it's a small home filesystem)
+dd if=/dev/zero of=/home/ubuntu/.healthcheck bs=1M count=100 conv=fsync 2>&1 | tail -1
+dd if=/home/ubuntu/.healthcheck of=/dev/null bs=1M 2>&1 | tail -1
+rm /home/ubuntu/.healthcheck
+```
+
+Expected: both write+read complete without error. Throughput is bounded by the
+single-stream limits of NFS / Lustre on a single node — this is a sanity check,
+not a benchmark. For Lustre throughput numbers, see the FSx Lustre User Guide
+(provisioned throughput = `Capacity * PerUnitStorageThroughput / 1024` MB/s).
+
+### Step 3 — FSx-side parameters match the CFN inputs
+
+```bash
+FSX_ID=$(aws cloudformation describe-stacks \
+  --stack-name <your-stack> \
+  --query 'Stacks[0].Outputs[?OutputKey==`FSxLustreFilesystemId`].OutputValue' \
+  --region <region> --output text)
+
+aws fsx describe-file-systems --file-system-ids "$FSX_ID" --region <region> \
+  --query 'FileSystems[0].[StorageCapacity,StorageType,LustreConfiguration.[DeploymentType,PerUnitStorageThroughput,DataCompressionType,EfaEnabled,MetadataConfiguration.Mode]]' \
+  --output text
+```
+
+Expected (default deploy):
+- `StorageCapacity` = your `Capacity` parameter (1200 by default)
+- `StorageType` = `SSD`
+- `DeploymentType` = `PERSISTENT_2` (default; or `PERSISTENT_1` if you set it)
+- `PerUnitStorageThroughput` = 250 (default)
+- `DataCompressionType` = `LZ4` (default)
+- `EfaEnabled` = `False` (default; `True` when `FSxLustreEnableEfa=true`. EFA on
+  FSx is a PERSISTENT_2-only feature — the prerequisites and deploy-all templates
+  enforce this with a CFN Rule that fails the stack at create time when
+  `FSxLustreEnableEfa=true` is combined with `LustreDeploymentType=PERSISTENT_1`)
+- `MetadataConfiguration.Mode` = `AUTOMATIC` on PERSISTENT_2
+
+For the OpenZFS `/home` filesystem:
+
+```bash
+FSXO_ID=$(aws cloudformation describe-stacks \
+  --stack-name <your-stack> \
+  --query 'Stacks[0].Outputs[?OutputKey==`FSxOFilesystemId`].OutputValue' \
+  --region <region> --output text)
+
+aws fsx describe-file-systems --file-system-ids "$FSXO_ID" --region <region> \
+  --query 'FileSystems[0].[StorageCapacity,OpenZFSConfiguration.[DeploymentType,ThroughputCapacity]]' \
+  --output text
+```
+
+### Step 4 — Storage dashboard in Grafana
+
+The `Compute Node Details` and `HPC Cluster Monitoring → Storage` Grafana
+dashboards are populated by the **CloudWatch Exporter** (FSx CloudWatch
+metrics, scraped by the monitoring stack on the login node — see the
+[aws-parallelcluster-monitoring v2.6 release notes](https://github.com/aws-samples/aws-parallelcluster-monitoring/releases/tag/v2.6)).
+
+Open Grafana (Test 1's port-forward / public CIDR), go to the Storage
+dashboard, and verify the `/fsx` panels (Throughput, IOPS, Free Capacity,
+Client Connections) populate within ~5 minutes of a workload starting. CW
+metrics have a ~5 min publishing delay, so a brand-new filesystem with no I/O
+shows blank panels for a while; the `dd` from Step 2 is enough to seed values.
+
+### `FSxLustreEnableEfa=true` specifics
+
+When `FSxLustreEnableEfa=true` is set on a PERSISTENT_2 SSD filesystem, the
+extra checks beyond the above are:
+
+- `aws fsx describe-file-systems` `LustreConfiguration.EfaEnabled = true`
+- `Capacity` is at-or-above the EFA minimum for the chosen
+  `PerUnitStorageThroughput` tier (19200 GiB for tier 250; the FSx for
+  Lustre User Guide has the full matrix). Below the minimum, the FSx side
+  rejects the `CreateFileSystem` with `Invalid storage capacity provided:
+  N GiB. Minimum storage capacity for an EFA enabled LUSTRE file systems
+  with deployment type PERSISTENT_2, per unit storage throughput X and
+  storage type SSD is M`. The Lustre nested stack fails first, then the
+  whole stack rolls back; that's the expected behavior for an undersized
+  Capacity.
+
+The FSx-side EFA endpoints are usable from EFA-capable clients (CPU CNGs
+deployed with `OnDemandEnableEfa=true`, P5/P6 GPU CNGs). Plain Lustre client
+mounts continue to work over TCP for non-EFA nodes; EFA support is additive.
 
 ---
 
