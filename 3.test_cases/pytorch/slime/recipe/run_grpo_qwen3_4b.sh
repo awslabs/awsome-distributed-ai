@@ -85,7 +85,7 @@ TRAIN_CMD="cd /opt/slime && source scripts/models/${MODEL_SCRIPT} && python3 tra
     --num-rollout ${NUM_ROLLOUT} \
     --rollout-batch-size ${ROLLOUT_BATCH_SIZE} \
     --n-samples-per-prompt ${N_SAMPLES_PER_PROMPT} \
-    --num-steps-per-rollout 1 \
+    --num-steps-per-rollout ${NUM_STEPS_PER_ROLLOUT:-1} \
     --global-batch-size ${GLOBAL_BATCH_SIZE} \
     \
     --rollout-max-response-len ${ROLLOUT_MAX_RESPONSE_LEN} \

@@ -159,4 +159,15 @@ def health():
 def score(req: ScoreRequest):
     # SLIME's remote_rm assigns the returned JSON value directly to
     # sample.reward, so we return a bare float.
-    return _scorer.score(req.prompt, req.response, req.label)
+    #
+    # Never raise: SLIME's remote_rm client calls resp.raise_for_status(),
+    # retries up to 10x with backoff, then re-raises; batched_async_rm gathers
+    # without return_exceptions, so a single failed /score (e.g. an odd
+    # truncation, unexpected logits shape, or CPU OOM in the reward model) would
+    # take down the whole rollout step. Guard the handler and return a neutral
+    # reward instead, mirroring the rule-based backend's defensive behavior.
+    try:
+        return _scorer.score(req.prompt, req.response, req.label)
+    except Exception as e:  # noqa: BLE001 - must never 500 the rollout loop
+        logger.warning("scoring error (returning neutral reward 0.0): %s", e)
+        return 0.0

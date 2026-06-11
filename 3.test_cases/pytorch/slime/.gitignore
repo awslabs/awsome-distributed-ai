@@ -1,17 +1,9 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
 # Local environment files with filled-in secrets/values -- never commit
 env_vars
 env_vars.disaggregated
 
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-.ipynb_checkpoints/
-
 # Eval / training artifacts
 eval_results/
-*.log
-
-# OS / editor
-.DS_Store
-*.swp

@@ -160,6 +160,31 @@ For larger models (DeepSeek-R1, GLM-4.7-355B-A32B), scale to 8+ p5.48xlarge node
 4. FSx for Lustre persistent volume claim (`fsx-claim`) available
 5. Docker and Amazon ECR access for building/pushing images
 6. A Hugging Face account and access token for model downloads
+7. **(Disaggregated path only)** A **Spot-capacity CPU instance group** in the
+   same AZ as the GPU pool, with no EFA, for the reward service. Add one to an
+   existing HyperPod cluster with a one-time `update-cluster` call — Spot is
+   selected via `CapacityRequirements: { Spot: {} }` and requires `Continuous`
+   node provisioning:
+
+   ```bash
+   aws sagemaker update-cluster \
+     --cluster-name <your-hyperpod-cluster> \
+     --instance-groups '[{
+       "InstanceGroupName": "reward-spot-c5",
+       "InstanceType": "ml.c5.4xlarge",
+       "InstanceCount": 4,
+       "LifeCycleConfig": {"SourceS3Uri": "s3://<your-lifecycle-bucket>/on-create.sh", "OnCreate": "on_create.sh"},
+       "ExecutionRole": "<your-hyperpod-execution-role-arn>",
+       "ThreadsPerCore": 1,
+       "CapacityRequirements": {"Spot": {}}
+     }]'
+   ```
+
+   Reuse the same subnet/security-group/lifecycle config as an existing CPU
+   ("general") group so the node joins EKS identically. The nodes appear labeled
+   `sagemaker.amazonaws.com/instance-group-name=reward-spot-c5`. See
+   [Adding instance groups](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-operate-console-ui-edit.html)
+   and [Using Spot in HyperPod](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-spot.html).
 
 ## Quick Start
 
@@ -206,6 +231,15 @@ export NUM_NODES=2
 export GPUS_PER_NODE=8
 ```
 
+Create the Hugging Face token Secret that the manifests reference (the Ray
+cluster and reward-service pods read `HF_TOKEN` from it via `secretKeyRef`):
+
+```bash
+kubectl create secret generic hf-token \
+  --from-literal=HF_TOKEN=${HF_TOKEN} \
+  -n ${NAMESPACE}
+```
+
 ### 2. Build and Push Docker Image
 
 The Docker image packages SLIME, SGLang, Megatron-LM, and all dependencies on top
@@ -219,7 +253,7 @@ aws ecr get-login-password --region ${AWS_REGION} | \
 # Create repository (first time only)
 aws ecr create-repository --repository-name ${IMAGE} --region ${AWS_REGION} || true
 
-# Build image (build context is the repo root)
+# Build image (build context is this test-case directory, 3.test_cases/pytorch/slime)
 docker build -t ${REGISTRY}${IMAGE}:${TAG} -f slime.Dockerfile .
 
 # Push to ECR
@@ -358,9 +392,12 @@ SLIME's `remote_rm` hook lets you move it to a dedicated, independently-scalable
 **CPU instance group in the same Availability Zone**. Because the reward service
 is **stateless and fault-tolerant** (SLIME's `remote_rm` client retries with
 backoff), that pool is a great fit for **EC2 Spot** capacity -- up to ~90%
-cheaper than On-Demand. This sample assumes the cluster already has a Spot-backed
-`reward-spot-c5` instance group for it; if not, create one with
-[`infra/add_cpu_instance_group.sh`](infra/README.md) (see below).
+cheaper than On-Demand. This is especially valuable when the reward tier fans
+out to many replicas (e.g. fleets of code-execution or tool sandboxes scored per
+rollout): the expensive GPUs stay On-Demand while the bursty, interruption-
+tolerant scoring fleet rides Spot. This sample assumes the cluster already has a
+Spot-backed `reward-spot-c5` instance group (see
+[Prerequisites](#prerequisites)).
 
 ### Three-pool topology
 
@@ -403,51 +440,33 @@ There are two distinct offload boundaries, and only one is CPU-appropriate:
 > [Spot instances in HyperPod](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-spot.html).
 
 
-### Step 1: Provision a Spot CPU instance group for the reward pool
+### Step 1: Ensure the Spot CPU reward pool exists
 
-> This sample assumes the HyperPod cluster **already has a Spot-enabled
-> `reward-spot-c5` instance group** for the reward pool. If yours does not,
-> create one with the helper in `infra/`.
+This path requires a Spot-capacity CPU instance group (default name
+`reward-spot-c5`) in the **same AZ** as the GPU pool, with **no EFA**. If your
+cluster doesn't already have one, create it with the one-time
+`aws sagemaker update-cluster` command documented in
+[Prerequisites](#prerequisites), then set `REWARD_NODE_GROUP` to its name in the
+disaggregated profile.
 
-The reward service needs a CPU instance group to run on. The helper adds the
-group in the **same subnet/AZ** as the GPU pool (inheriting the security group,
-execution role, and lifecycle config from an existing CPU group), requests **no
-EFA** (the reward RPC is plain HTTP), and uses **Spot capacity by default**
-(`CapacityRequirements: { Spot: {} }`):
-
-```bash
-CLUSTER_NAME=<your-hyperpod-cluster> REGION=us-east-1 \
-  GROUP_NAME=reward-spot-c5 \
-  INSTANCE_TYPE=ml.c5.4xlarge INSTANCE_COUNT=4 \
-  CAPACITY_TYPE=spot \
-  infra/add_cpu_instance_group.sh
-```
-
-The group provisions in ~10-15 min; nodes join EKS labeled
-`sagemaker.amazonaws.com/instance-group-name=<GROUP_NAME>`. See
-[`infra/README.md`](infra/README.md) for all options and the teardown script
-(`infra/remove_cpu_instance_group.sh`). If you already have a CPU pool, skip
-this and just set `REWARD_NODE_GROUP` to its name in the next step.
-
-> **Spot note:** `CapacityRequirements` is immutable after a group is created,
-> so choose Spot vs On-Demand up front. Spot requires `Continuous` provisioning
-> (this cluster uses it). The reward Deployment tolerates HyperPod's Spot
-> interruption taint and rolls with `maxUnavailable: 1` so reward capacity never
-> drops to zero during a reclaim.
+> **Why Spot is safe here:** `CapacityRequirements` is chosen at group-creation
+> time (immutable afterward) and requires `Continuous` provisioning. The reward
+> Deployment tolerates HyperPod's Spot-interruption taint, adds a `startupProbe`
+> for cold model loads, and rolls with `maxUnavailable: 1` so reward capacity
+> never drops to zero during a reclaim.
 
 ### Step 2: Build and deploy the reward service
 
 ```bash
-# Build + push the lightweight CPU reward image (no CUDA)
-docker build -t ${REGISTRY}slime-reward:cpu -f reward_service.Dockerfile .
-docker push ${REGISTRY}slime-reward:cpu
-
 # Load the disaggregated profile (sets RM_TYPE=remote_rm, REWARD_NODE_GROUP,
-# REWARD_BACKEND, REWARD_REPLICAS, RM_URL, etc.)
+# REWARD_BACKEND, REWARD_REPLICAS, REWARD_TAG/REWARD_IMAGE, RM_URL, etc.)
 cp env_vars.disaggregated.example env_vars.disaggregated   # edit REWARD_NODE_GROUP if needed
 source env_vars                # base config
 source env_vars.disaggregated  # reward-service overlay
-export REWARD_IMAGE="${REGISTRY}slime-reward:cpu"
+
+# Build + push the lightweight CPU reward image (no CUDA), versioned tag
+docker build -t ${REWARD_IMAGE} -f reward_service.Dockerfile .
+docker push ${REWARD_IMAGE}
 
 # Deploy onto the CPU instance group (pinned via REWARD_NODE_GROUP, off GPU
 # nodes, no EFA)
@@ -499,7 +518,6 @@ independently -- the entire rationale for the separate CPU instance group.
 ```
 slime/                                    # 3.test_cases/pytorch/slime
 ├── README.md                            # This documentation
-├── LICENSE                              # MIT-0
 ├── .gitignore
 ├── env_vars.colocated.example           # Base config: colocated train+rollout, built-in reward
 ├── env_vars.disaggregated.example       # Overlay: reward model on a CPU pool + heavier GRPO
@@ -509,10 +527,6 @@ slime/                                    # 3.test_cases/pytorch/slime
 ├── reward_service/
 │   ├── app.py                           # FastAPI reward server (reward_model / math_verify)
 │   └── requirements.txt                 # Pinned CPU deps (no CUDA)
-├── infra/
-│   ├── README.md                        # CPU instance-group provisioning guide
-│   ├── add_cpu_instance_group.sh        # Add a CPU (e.g. c5) HyperPod instance group
-│   └── remove_cpu_instance_group.sh     # Remove a HyperPod instance group
 ├── kubernetes/
 │   ├── raycluster.yaml                  # KubeRay cluster manifest (p5.48xlarge)
 │   ├── reward-service.yaml              # CPU reward service Deployment + Service

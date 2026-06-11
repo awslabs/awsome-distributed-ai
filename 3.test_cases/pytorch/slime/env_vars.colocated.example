@@ -93,6 +93,9 @@ export NUM_ROLLOUT=100
 export ROLLOUT_BATCH_SIZE=16
 export N_SAMPLES_PER_PROMPT=8
 export GLOBAL_BATCH_SIZE=128
+# GRPO constraint: ROLLOUT_BATCH_SIZE x N_SAMPLES_PER_PROMPT = GLOBAL_BATCH_SIZE x NUM_STEPS_PER_ROLLOUT
+# Here: 16 x 8 = 128 x 1
+export NUM_STEPS_PER_ROLLOUT=1
 export LEARNING_RATE="1e-6"
 export ROLLOUT_TEMPERATURE=1.0
 
@@ -109,7 +112,10 @@ export RM_TYPE="deepscaler"
 # kubernetes/reward-service.yaml). Recommended when the reward is heavy (a
 # reward MODEL, code-exec, RAG) so it does not steal CPU from the GPU actors.
 # To enable: set RM_TYPE="remote_rm" above and configure the values below.
-export REWARD_IMAGE="${REGISTRY}slime-reward:cpu"
+# Use an immutable, versioned reward image tag (not a bare ":cpu") so the pods
+# can run imagePullPolicy: IfNotPresent without ever serving a stale build.
+export REWARD_TAG="cpu-0.2.4"
+export REWARD_IMAGE="${REGISTRY}slime-reward:${REWARD_TAG}"
 export REWARD_BACKEND="reward_model"   # or "math_verify"
 export REWARD_MODEL_NAME="OpenAssistant/reward-model-deberta-v3-large-v2"
 export REWARD_REPLICAS=4

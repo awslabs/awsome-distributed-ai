@@ -24,8 +24,8 @@
 #   * env_vars (Option A: Qwen3-4B, colocated) has already been sourced.
 #   * A Spot-capacity CPU instance group named ${REWARD_NODE_GROUP} is ALREADY
 #     provisioned on the HyperPod cluster (same AZ as the GPU pool, no EFA,
-#     CapacityRequirements: Spot). Provision it with infra/add_cpu_instance_group.sh
-#     and set the name below to match.
+#     CapacityRequirements: Spot). See the README Prerequisites for the one-time
+#     `aws sagemaker update-cluster` command, then set the name below to match.
 
 # ----- Heavier GRPO config (GPU tier) -----
 export ROLLOUT_BATCH_SIZE=64          # was 16  -> 4x more prompts per rollout
@@ -43,11 +43,16 @@ export ROLLOUT_TEMPERATURE=1.0
 export RM_TYPE="remote_rm"
 export REWARD_BACKEND="reward_model"
 export REWARD_MODEL_NAME="OpenAssistant/reward-model-deberta-v3-large-v2"
-# Name of the CPU instance group hosting the reward pods. This sample assumes it
-# is a Spot-capacity group (CapacityRequirements: Spot) -- the reward service is
-# stateless and SLIME's remote_rm client retries on transient failures, so Spot
-# interruptions are tolerated. Provision it with infra/add_cpu_instance_group.sh.
+# Name of the CPU instance group hosting the reward pods. This sample assumes a
+# Spot-capacity group (CapacityRequirements: Spot) already exists -- the reward
+# service is stateless and SLIME's remote_rm client retries on transient
+# failures, so Spot interruptions are tolerated. See the README Prerequisites
+# for the one-time `aws sagemaker update-cluster` command that creates it.
 export REWARD_NODE_GROUP="reward-spot-c5"
-export REWARD_REPLICAS=4               # one per c5.4xlarge node
-export REWARD_TORCH_THREADS=6          # c5.4xlarge ~7.9 allocatable vCPU on EKS
+export REWARD_REPLICAS=4               # one per node
+# ml.c5.4xlarge is 16 physical vCPU, but this sample provisions the group with
+# ThreadsPerCore=1 (hyperthreading off) -> ~8 logical / 7.9 allocatable vCPU on
+# EKS. TORCH_NUM_THREADS is sized to fit alongside the pod cpu request below.
+# If you provision with ThreadsPerCore=2, raise this toward ~14.
+export REWARD_TORCH_THREADS=6
 export RM_URL="http://slime-reward.${NAMESPACE}.svc.cluster.local:8000/score"

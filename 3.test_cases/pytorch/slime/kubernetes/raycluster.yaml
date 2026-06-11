@@ -23,7 +23,7 @@ spec:
         containers:
           - name: ray-head
             image: ${FULL_IMAGE}
-            imagePullPolicy: Always
+            imagePullPolicy: IfNotPresent
             ports:
               - containerPort: 6379   # Ray GCS
               - containerPort: 8265   # Ray Dashboard
@@ -100,7 +100,7 @@ spec:
           containers:
             - name: ray-worker
               image: ${FULL_IMAGE}
-              imagePullPolicy: Always
+              imagePullPolicy: IfNotPresent
               env:
                 - name: RAY_memory_monitor_refresh_ms
                   value: "0"
@@ -125,7 +125,10 @@ spec:
                 - name: RDMAV_FORK_SAFE
                   value: "1"
                 - name: NCCL_SOCKET_IFNAME
-                  value: "eth0"
+                  # Exclusion form (matches the Dockerfile and repo convention):
+                  # governs only NCCL's TCP bootstrap/control socket, not the EFA
+                  # data path. Robust if the primary CNI NIC is not named eth0.
+                  value: "^lo"
                 - name: TOKENIZERS_PARALLELISM
                   value: "false"
               resources:

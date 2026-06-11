@@ -69,7 +69,9 @@ spec:
       containers:
         - name: reward
           image: ${REWARD_IMAGE}
-          imagePullPolicy: Always
+          # Image tag is immutable/versioned (REWARD_TAG), so avoid re-pulling
+          # on every pod start (fast Spot recovery, air-gap friendly).
+          imagePullPolicy: IfNotPresent
           env:
             - name: REWARD_BACKEND
               value: "${REWARD_BACKEND}"
@@ -93,6 +95,16 @@ spec:
             limits:
               cpu: "8"
               memory: "16Gi"
+          # startupProbe gates liveness until the reward model has finished its
+          # one-time CPU download+load (cold HF cache on a freshly reclaimed Spot
+          # node can take minutes). Without it, livenessProbe would race the cold
+          # load and crashloop during the very Spot churn this design rides out.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 30   # up to ~5 min for a cold model download/load
           readinessProbe:
             httpGet:
               path: /health
