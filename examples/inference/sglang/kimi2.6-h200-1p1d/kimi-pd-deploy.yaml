@@ -1,0 +1,381 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prefill-headless
+spec:
+  publishNotReadyAddresses: true
+  clusterIP: None
+  selector:
+    app: prefill
+  ports:
+  - port: 30000
+    name: http
+  - port: 8998
+    name: bootstrap
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: decode-headless
+spec:
+  publishNotReadyAddresses: true
+  clusterIP: None
+  selector:
+    app: decode
+  ports:
+  - port: 30000
+    name: http
+  - port: 8998
+    name: bootstrap
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-prefill
+spec:
+  selector:
+    app: prefill
+  ports:
+  - name: http
+    port: 30000
+    targetPort: 30000
+  - name: bootstrap
+    port: 8998
+    targetPort: 8998
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-decode
+spec:
+  selector:
+    app: decode
+  ports:
+  - name: http
+    port: 30000
+    targetPort: 30000
+  - name: bootstrap
+    port: 8998
+    targetPort: 8998
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: prefill
+  labels:
+    app: prefill
+    role: prefill
+spec:
+  serviceName: prefill-headless
+  replicas: 1
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: prefill
+  template:
+    metadata:
+      labels:
+        app: prefill
+        role: prefill
+        sglang-metrics: "true"
+      annotations:
+        sglang.ai/bootstrap-port: "8998"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "30000"
+        prometheus.io/path: "/metrics"
+    spec:
+      nodeSelector:
+        node.kubernetes.io/instance-type: ml.p5en.48xlarge
+      containers:
+      - name: sglang
+        image: <YOUR_ECR_IMAGE>   # the URI build-image.sh printed, e.g. <account>.dkr.ecr.<region>.amazonaws.com/sgl-dev-cu13:<tag>
+        imagePullPolicy: Always
+        securityContext:
+          privileged: true
+        env:
+        - name: NCCL_DEBUG
+          value: INFO
+        - name: FI_PROVIDER
+          value: efa
+        - name: FI_EFA_USE_DEVICE_RDMA
+          value: "1"
+        - name: SGLANG_DISAGGREGATION_NIXL_BACKEND
+          value: LIBFABRIC
+        # --- added in v4 ---
+        - name: FI_EFA_ENABLE_SHM_TRANSFER
+          value: "0"
+        - name: FI_LOG_LEVEL
+          value: warn
+        - name: NIXL_LOG_LEVEL
+          value: INFO
+        command:
+        - sh
+        - -c
+        - |
+          python3 -m sglang.launch_server \
+            --model-path /nvme/moonshotai-Kimi-K2.5 \
+            --host 0.0.0.0 \
+            --port 30000 \
+            --tp-size 8 \
+            --ep-size 8 \
+            --attention-backend flashinfer \
+            --disaggregation-mode prefill \
+            --disaggregation-transfer-backend nixl \
+            --disaggregation-bootstrap-port 8998 \
+            --mem-fraction-static 0.92 \
+            --trust-remote-code \
+            --enable-hierarchical-cache \
+            --hicache-ratio 2 \
+            --hicache-io-backend kernel \
+            --enable-metrics
+        ports:
+        - containerPort: 30000
+          name: http
+        - containerPort: 8998
+          name: bootstrap
+        volumeMounts:
+        - name: shm
+          mountPath: /dev/shm
+        - name: nvme-storage
+          mountPath: /nvme
+        - name: gdrdrv
+          mountPath: /dev/gdrdrv
+        resources:
+          limits:
+            nvidia.com/gpu: 8
+            vpc.amazonaws.com/efa: 16
+            memory: "1900Gi"
+            cpu: "180"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 30000
+          initialDelaySeconds: 180
+          periodSeconds: 10
+          timeoutSeconds: 5
+      volumes:
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Gi
+      - name: nvme-storage
+        hostPath:
+          path: /opt/dlami/nvme
+          type: Directory
+      - name: gdrdrv
+        hostPath:
+          path: /dev/gdrdrv
+          type: CharDevice
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: decode
+  labels:
+    app: decode
+    role: decode
+spec:
+  serviceName: decode-headless
+  replicas: 1
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: decode
+  template:
+    metadata:
+      labels:
+        app: decode
+        role: decode
+        sglang-metrics: "true"
+      annotations:
+        sglang.ai/bootstrap-port: "8998"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "30000"
+        prometheus.io/path: "/metrics"
+    spec:
+      nodeSelector:
+        node.kubernetes.io/instance-type: ml.p5en.48xlarge
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: prefill
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - name: sglang
+        image: <YOUR_ECR_IMAGE>   # the URI build-image.sh printed, e.g. <account>.dkr.ecr.<region>.amazonaws.com/sgl-dev-cu13:<tag>
+        imagePullPolicy: Always
+        securityContext:
+          privileged: true
+        env:
+        - name: NCCL_DEBUG
+          value: INFO
+        - name: FI_PROVIDER
+          value: efa
+        - name: FI_EFA_USE_DEVICE_RDMA
+          value: "1"
+        - name: SGLANG_DISAGGREGATION_NIXL_BACKEND
+          value: LIBFABRIC
+        # --- added in v4 ---
+        - name: FI_EFA_ENABLE_SHM_TRANSFER
+          value: "0"
+        - name: FI_LOG_LEVEL
+          value: warn
+        - name: NIXL_LOG_LEVEL
+          value: INFO
+        command:
+        - sh
+        - -c
+        - |
+          python3 -m sglang.launch_server \
+            --model-path /nvme/moonshotai-Kimi-K2.5 \
+            --host 0.0.0.0 \
+            --port 30000 \
+            --tp-size 8 \
+            --ep-size 8 \
+            --attention-backend flashinfer \
+            --disaggregation-mode decode \
+            --disaggregation-transfer-backend nixl \
+            --disaggregation-bootstrap-port 8998 \
+            --mem-fraction-static 0.92 \
+            --trust-remote-code \
+            --tool-call-parser kimi_k2 \
+            --reasoning-parser kimi_k2 \
+            --enable-metrics
+        ports:
+        - containerPort: 30000
+          name: http
+        - containerPort: 8998
+          name: bootstrap
+        volumeMounts:
+        - name: shm
+          mountPath: /dev/shm
+        - name: nvme-storage
+          mountPath: /nvme
+        - name: gdrdrv
+          mountPath: /dev/gdrdrv
+        resources:
+          limits:
+            nvidia.com/gpu: 8
+            vpc.amazonaws.com/efa: 16
+            memory: "1900Gi"
+            cpu: "180"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 30000
+          initialDelaySeconds: 180
+          periodSeconds: 10
+          timeoutSeconds: 5
+      volumes:
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Gi
+      - name: nvme-storage
+        hostPath:
+          path: /opt/dlami/nvme
+          type: Directory
+      - name: gdrdrv
+        hostPath:
+          path: /dev/gdrdrv
+          type: CharDevice
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sglang-router
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sglang-router
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sglang-router
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sglang-router
+subjects:
+- kind: ServiceAccount
+  name: sglang-router
+  namespace: default
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sglang-router
+  labels:
+    app: sglang-router
+spec:
+  selector:
+    matchLabels:
+      app: sglang-router
+  template:
+    metadata:
+      labels:
+        app: sglang-router
+    spec:
+      serviceAccountName: sglang-router
+      containers:
+      - name: router
+        image: lmsysorg/sgl-model-gateway:latest
+        ports:
+        - containerPort: 30000
+          name: http
+        command:
+        - python
+        - -m
+        - sglang_router.launch_router
+        args:
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "30000"
+        - --pd-disaggregation
+        - --prefill
+        - http://sglang-prefill.default.svc.cluster.local:30000
+        - "8998"
+        - --decode
+        - http://sglang-decode.default.svc.cluster.local:30000
+        - --prefill-policy
+        - cache_aware
+        - --decode-policy
+        - round_robin
+        resources:
+          requests:
+            cpu: "2"
+            memory: 4Gi
+          limits:
+            cpu: "4"
+            memory: 8Gi
+        readinessProbe:
+          httpGet:
+            path: /readiness
+            port: 30000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-router
+spec:
+  selector:
+    app: sglang-router
+  ports:
+  - name: http
+    port: 30000
+    targetPort: 30000
+  type: ClusterIP

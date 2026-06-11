@@ -1,0 +1,153 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# DeepSeek V4 Pro unified (non-PD) serving on a single 8-GPU B300 node
+# (EKS / HyperPod). One SGLang engine spans all 8 GPUs (tp=8, dp=8,
+# --enable-dp-attention, MXFP4 MoE, EAGLE speculative decoding) on the
+# OpenAI-compatible endpoint :30000.
+#
+#   kubectl apply -f dsv4pro-deploy.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dsv4pro
+spec:
+  selector:
+    app: dsv4pro-unified
+  ports:
+  - name: http
+    port: 30000
+    targetPort: 30000
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dsv4pro-unified
+  labels:
+    app: dsv4pro-unified
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: dsv4pro-unified
+  template:
+    metadata:
+      labels:
+        app: dsv4pro-unified
+        sglang-metrics: "true"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "30000"
+        prometheus.io/path: "/metrics"
+    spec:
+      nodeSelector:
+        node.kubernetes.io/instance-type: ml.p6-b300.48xlarge
+      containers:
+      - name: sglang
+        image: lmsysorg/sglang:deepseek-v4-b300
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          privileged: true
+        env:
+        - name: SGLANG_JIT_DEEPGEMM_PRECOMPILE
+          value: "0"
+        - name: SGLANG_OPT_SWA_SPLIT_LEAF_ON_INSERT
+          value: "1"
+        - name: SGLANG_OPT_USE_JIT_NORM
+          value: "1"
+        - name: SGLANG_OPT_USE_JIT_INDEXER_METADATA
+          value: "1"
+        - name: SGLANG_OPT_USE_TOPK_V2
+          value: "1"
+        - name: SGLANG_OPT_USE_CUSTOM_ALL_REDUCE_V2
+          value: "1"
+        - name: SGLANG_OPT_SWA_EVICT_DROP_PAGE_MARGIN
+          value: "1"
+        - name: SGLANG_OPT_USE_DEEPGEMM_MEGA_MOE
+          value: "0"
+        - name: SGLANG_OPT_FIX_HASH_MEGA_MOE
+          value: "0"
+        - name: SGLANG_OPT_USE_FAST_MASK_EP
+          value: "1"
+        - name: SGLANG_OPT_FIX_MEGA_MOE_MEMORY
+          value: "1"
+        - name: SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK
+          value: "4096"
+        - name: SGLANG_OPT_FIX_NEXTN_MEGA_MOE
+          value: "1"
+        - name: SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK
+          value: "0"
+        ports:
+        - containerPort: 30000
+          name: http
+        volumeMounts:
+        - name: shm
+          mountPath: /dev/shm
+        - name: nvme-hf
+          mountPath: /root/.cache/huggingface
+        - name: nvme-tmp
+          mountPath: /tmp
+        resources:
+          limits:
+            nvidia.com/gpu: 8
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 30000
+          initialDelaySeconds: 180
+          periodSeconds: 10
+          timeoutSeconds: 5
+        command:
+        - sglang
+        - serve
+        - --trust-remote-code
+        - --model-path
+        - deepseek-ai/DeepSeek-V4-Pro
+        - --tp
+        - "8"
+        - --dp
+        - "8"
+        - --enable-dp-attention
+        - --moe-runner-backend
+        - flashinfer_mxfp4
+        - --disable-flashinfer-autotune
+        - --chunked-prefill-size
+        - "32768"
+        - --swa-full-tokens-ratio
+        - "0.1"
+        - --speculative-algo
+        - EAGLE
+        - --speculative-num-steps
+        - "1"
+        - --speculative-eagle-topk
+        - "1"
+        - --speculative-num-draft-tokens
+        - "2"
+        - --mem-fraction-static
+        - "0.92"
+        - --cuda-graph-max-bs
+        - "256"
+        - --deepep-config
+        - '{"normal_dispatch":{"num_sms":96},"normal_combine":{"num_sms":96}}'
+        - --enable-metrics
+        - --host
+        - 0.0.0.0
+        - --port
+        - "30000"
+      volumes:
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 32Gi
+      - name: nvme-hf
+        hostPath:
+          path: /opt/dlami/nvme/huggingface
+          type: DirectoryOrCreate
+      - name: nvme-tmp
+        hostPath:
+          path: /opt/dlami/nvme/tmp
+          type: DirectoryOrCreate
