@@ -11,4 +11,4 @@ uvicorn[standard]==0.32.1
 pydantic==2.10.2
 math_verify==0.9.0
 sentencepiece==0.2.1
-protobuf==5.28.3
+protobuf==5.29.6
