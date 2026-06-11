@@ -66,6 +66,9 @@ RUN DEBIAN_FRONTEND=noninteractive apt install -y --allow-unauthenticated \
     && apt remove -y python3-blinker \
     && apt autoremove -y
 
+# NOTE: Permissive SSH config is standard practice for multi-node HPC images.
+# SSH is used for inter-node MPI/NCCL communication within the cluster boundary.
+# Port 22 should NOT be exposed outside the cluster via Kubernetes Services.
 RUN mkdir -p /var/run/sshd && \
     sed -i 's/[ #]\(.*StrictHostKeyChecking \).*/ \1no/g' /etc/ssh/ssh_config && \
     echo "    UserKnownHostsFile /dev/null" >> /etc/ssh/ssh_config && \

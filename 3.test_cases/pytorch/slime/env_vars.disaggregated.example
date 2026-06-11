@@ -30,7 +30,9 @@
 # ----- Heavier GRPO config (GPU tier) -----
 export ROLLOUT_BATCH_SIZE=64          # was 16  -> 4x more prompts per rollout
 export N_SAMPLES_PER_PROMPT=16        # was 8   -> 2x more responses per prompt
+# GRPO batch-size constraint: ROLLOUT_BATCH_SIZE × N_SAMPLES_PER_PROMPT = GLOBAL_BATCH_SIZE × NUM_STEPS_PER_ROLLOUT
 export GLOBAL_BATCH_SIZE=512          # was 128 -> 4x bigger optimizer step
+export NUM_STEPS_PER_ROLLOUT=2        # adjusted to satisfy constraint: 64*16 = 512*2
 export ROLLOUT_MAX_RESPONSE_LEN=16384 # was 8192 -> 2x longer generations
 export NUM_ROLLOUT=20                 # short but heavy run for the demo
 export ROLLOUT_TEMPERATURE=1.0

@@ -8,7 +8,7 @@ metadata:
   labels:
     app: slime-grpo
 spec:
-  rayVersion: "2.44.0"
+  rayVersion: "2.55.1"
   enableInTreeAutoscaling: false
   headGroupSpec:
     rayStartParams:
@@ -40,8 +40,13 @@ spec:
                 value: "0"
               - name: PYTHONPATH
                 value: "/opt/Megatron-LM"
+              # Create the secret with:
+              #   kubectl create secret generic hf-token --from-literal=HF_TOKEN=$HF_TOKEN -n $NAMESPACE
               - name: HF_TOKEN
-                value: "${HF_TOKEN}"
+                valueFrom:
+                  secretKeyRef:
+                    name: hf-token
+                    key: HF_TOKEN
               - name: NCCL_DEBUG
                 value: "WARN"
             # The head only runs the Ray GCS + dashboard; keep requests small
@@ -102,7 +107,10 @@ spec:
                 - name: PYTHONPATH
                   value: "/opt/Megatron-LM"
                 - name: HF_TOKEN
-                  value: "${HF_TOKEN}"
+                  valueFrom:
+                    secretKeyRef:
+                      name: hf-token
+                      key: HF_TOKEN
                 # ----- EFA / NCCL tuning -----
                 - name: FI_PROVIDER
                   value: "efa"

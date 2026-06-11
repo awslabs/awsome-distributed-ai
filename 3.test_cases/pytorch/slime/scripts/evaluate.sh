@@ -76,14 +76,15 @@ python3 -m sglang.launch_server \
 SGLANG_PID=$!
 
 # Wait for server to be ready
-echo "[INFO] Waiting for SGLang server to start..."
-for i in $(seq 1 120); do
+SGLANG_STARTUP_TIMEOUT=${SGLANG_STARTUP_TIMEOUT:-300}
+echo "[INFO] Waiting for SGLang server to start (timeout=${SGLANG_STARTUP_TIMEOUT}s)..."
+for i in $(seq 1 ${SGLANG_STARTUP_TIMEOUT}); do
     if curl -s http://localhost:30000/health > /dev/null 2>&1; then
         echo "[INFO] SGLang server ready."
         break
     fi
-    if [[ $i -eq 120 ]]; then
-        echo "[ERROR] SGLang server failed to start within 120 seconds."
+    if [[ $i -eq ${SGLANG_STARTUP_TIMEOUT} ]]; then
+        echo "[ERROR] SGLang server failed to start within ${SGLANG_STARTUP_TIMEOUT} seconds."
         kill ${SGLANG_PID} 2>/dev/null || true
         exit 1
     fi

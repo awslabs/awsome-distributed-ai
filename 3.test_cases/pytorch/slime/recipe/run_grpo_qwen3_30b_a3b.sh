@@ -53,6 +53,18 @@ echo "  Rollout BS:        ${ROLLOUT_BATCH_SIZE} x ${N_SAMPLES_PER_PROMPT}"
 echo "  Global BS:         ${GLOBAL_BATCH_SIZE}"
 echo "============================================================"
 
+# When RM_TYPE=remote_rm, point SLIME at the CPU-hosted reward Service via
+# --rm-url (see kubernetes/reward-service.yaml). Otherwise scoring is in-process.
+RM_ARGS="--rm-type ${RM_TYPE}"
+if [ "${RM_TYPE}" = "remote_rm" ]; then
+    if [ -z "${RM_URL}" ]; then
+        echo "[ERROR] RM_TYPE=remote_rm but RM_URL is not set. Configure it in env_vars."
+        exit 1
+    fi
+    RM_ARGS="${RM_ARGS} --rm-url ${RM_URL}"
+    echo "  Reward:         remote_rm @ ${RM_URL}"
+fi
+
 TRAIN_CMD="cd /opt/slime && source scripts/models/${MODEL_SCRIPT} && python3 train.py \
     \${MODEL_ARGS[@]} \
     --hf-checkpoint ${MODEL_LOCAL} \
@@ -67,7 +79,7 @@ TRAIN_CMD="cd /opt/slime && source scripts/models/${MODEL_SCRIPT} && python3 tra
     --apply-chat-template \
     --rollout-shuffle \
     \
-    --rm-type ${RM_TYPE} \
+    ${RM_ARGS} \
     \
     --num-rollout ${NUM_ROLLOUT} \
     --rollout-batch-size ${ROLLOUT_BATCH_SIZE} \

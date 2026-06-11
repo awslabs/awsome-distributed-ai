@@ -130,15 +130,6 @@ class MathVerifyScorer(Scorer):
         except Exception as e:  # noqa: BLE001 - verifier must never crash the service
             logger.warning("math_verify scoring error: %s", e)
             return 0.0
-        try:
-            gold = self._parse(
-                label if "\\boxed" in str(label) else f"\\boxed{{{label}}}"
-            )
-            pred = self._parse(response)
-            return 1.0 if self._verify(gold, pred) else 0.0
-        except Exception as e:  # noqa: BLE001 - verifier must never crash the service
-            logger.warning("math_verify scoring error: %s", e)
-            return 0.0
 
 
 def _build_scorer() -> Scorer:

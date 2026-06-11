@@ -178,7 +178,7 @@ helm install kuberay-operator kuberay/kuberay-operator \
 ### 1. Configure Environment Variables
 
 ```bash
-cd slime_hyperpod
+cd 3.test_cases/pytorch/slime
 cp env_vars.colocated.example env_vars
 # Edit env_vars with your cluster-specific values
 source env_vars
