@@ -57,7 +57,7 @@ Metadata:
           - PseriesCngName
           - PseriesQueueName
       - Label:
-          default: "6. FSx for Lustre (/fsx) + FSx for OpenZFS (/home) (Advanced)"
+          default: "6. FSx for Lustre (/fsx) and FSx for OpenZFS (/home)"
         Parameters:
           - Capacity
           - LustreDeploymentType
@@ -69,7 +69,7 @@ Metadata:
           - HomeThroughput
           - OpenZFSDeploymentType
       - Label:
-          default: "7. Developer / Advanced (Nested Templates & Monitoring Source)"
+          default: "7. Developer (do not change for normal use)"
         Parameters:
           - S3BucketName
           - S3KeyPrefix
@@ -80,9 +80,9 @@ Metadata:
       # Friendly display names shown in the CloudFormation console 1-click UI,
       # so users see plain-language labels instead of raw CamelCase parameter keys.
       PrimarySubnetAZ:
-        default: "Availability Zone (required)"
+        default: "Availability Zone"
       VPCName:
-        default: "VPC name"
+        default: "VPC name (empty = ${StackName}-VPC)"
       CreateS3Endpoint:
         default: "Create S3 VPC endpoint"
       LoginNodeInstanceType:
@@ -98,7 +98,7 @@ Metadata:
       MonitoringRepo:
         default: "Monitoring repo (owner/repo)"
       DcgmExporterImage:
-        default: "dcgm-exporter image (default DCGM 4.5.2 by digest; covers H100/B200/B300)"
+        default: "dcgm-exporter image (default covers H100/B200/B300)"
       ManagedAccounting:
         default: "Slurm managed accounting"
       AccountingPolicyEnforcement:
@@ -110,7 +110,7 @@ Metadata:
       RootVolumeSize:
         default: "Root volume size (GiB)"
       AmiId:
-        default: "AMI ID (empty = latest PCS-Ready Deep Learning AMI from SSM; pin in production)"
+        default: "AMI ID (empty = SSM auto-resolve; pin in production)"
       DeployOnDemandCNG:
         default: "Deploy CPU (on-demand) queue"
       OnDemandInstanceType:
@@ -126,7 +126,7 @@ Metadata:
       OnDemandEnableEfa:
         default: "Enable EFA on CPU queue (for HPC instance types)"
       OnDemandEfaInterfaceCount:
-        default: "EFA interface count (1 for hpc6a, 2 for hpc8a/hpc7a/hpc6id)"
+        default: "EFA interface count (0 = auto from instance type)"
       OnDemandPlacementGroupName:
         default: "Existing placement group name (empty = auto-create when EFA on)"
       DeployPseriesCNG:
@@ -180,8 +180,11 @@ Parameters:
 
   # Network Configuration
   VPCName:
-    Description: Name of your VPC
-    Default: 'ML-Cluster-VPC'
+    Description: >-
+      Name of your VPC. Leave empty (default) to auto-derive from the stack
+      name as ${AWS::StackName}-VPC, so multiple PCS deployments in one
+      account get unique VPC names automatically.
+    Default: ''
     Type: String
 
   PrimarySubnetAZ:
@@ -455,12 +458,13 @@ Parameters:
   OnDemandEfaInterfaceCount:
     Type: Number
     Description: >-
-      Number of EFA interfaces to attach when OnDemandEnableEfa=true. Use 2 for
-      hpc8a/hpc7a/hpc6id; use 1 for hpc6a/c7i.metal. Mismatching this with
-      the instance type's MaximumEfaInterfaces fails at launch. Ignored when
-      OnDemandEnableEfa=false.
-    Default: 1
-    AllowedValues: [1, 2]
+      Number of EFA interfaces to attach when OnDemandEnableEfa=true.
+      Default 0 = auto-derive from OnDemandInstanceType: 2 for
+      hpc8a.96xlarge / hpc7a.96xlarge / hpc6id.32xlarge (2-NIC HPC types),
+      1 otherwise (hpc6a.48xlarge / c7i.metal etc.). Override with 1 or 2
+      to pin explicitly. Ignored when OnDemandEnableEfa=false.
+    Default: 0
+    AllowedValues: [0, 1, 2]
 
   OnDemandPlacementGroupName:
     Type: String
@@ -603,6 +607,19 @@ Conditions:
     - !Condition DeployPseriesCNGEnabled
     - !Not [!Equals [!Ref PseriesInstanceType, 'p6-b200.48xlarge']]
     - !Not [!Equals [!Ref PseriesInstanceType, 'p6-b300.48xlarge']]
+  # VPCName auto-derives from the stack name when left empty.
+  HasUserVPCName: !Not [!Equals [!Ref VPCName, '']]
+  # Auto-derive OnDemandEfaInterfaceCount from OnDemandInstanceType when the
+  # user leaves the parameter at its default 0. Only the 2-NIC HPC types
+  # (hpc8a / hpc7a / hpc6id) report 2 EFA interfaces; everything else is 1.
+  OnDemandEfaCountIsAuto: !Equals [!Ref OnDemandEfaInterfaceCount, 0]
+  OnDemandIs2NicHpc: !Or
+    - !Equals [!Ref OnDemandInstanceType, 'hpc8a.96xlarge']
+    - !Equals [!Ref OnDemandInstanceType, 'hpc7a.96xlarge']
+    - !Equals [!Ref OnDemandInstanceType, 'hpc7a.48xlarge']
+    - !Equals [!Ref OnDemandInstanceType, 'hpc7a.24xlarge']
+    - !Equals [!Ref OnDemandInstanceType, 'hpc7a.12xlarge']
+    - !Equals [!Ref OnDemandInstanceType, 'hpc6id.32xlarge']
 
 Resources:
   #############################################################################
@@ -616,7 +633,7 @@ Resources:
         - ml-cluster-prerequisites.yaml
         - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}ml-cluster-prerequisites.yaml'
       Parameters:
-        VPCName: !Ref VPCName
+        VPCName: !If [HasUserVPCName, !Ref VPCName, !Sub '${AWS::StackName}-VPC']
         PrimarySubnetAZ: !Ref PrimarySubnetAZ
         CreateS3Endpoint: !Ref CreateS3Endpoint
         Capacity: !Ref Capacity
@@ -755,9 +772,13 @@ Resources:
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
         # EFA on CPU HPC instances (hpc8a/hpc7a/hpc6a). Forwarded to add-cng.yaml,
         # which auto-creates a per-CNG cluster placement group when EnableEfa=true and
-        # PlacementGroupName is empty.
+        # PlacementGroupName is empty. EfaInterfaceCount auto-derives from the
+        # instance type when the user left OnDemandEfaInterfaceCount=0 (the default).
         EnableEfa: !Ref OnDemandEnableEfa
-        EfaInterfaceCount: !Ref OnDemandEfaInterfaceCount
+        EfaInterfaceCount: !If
+          - OnDemandEfaCountIsAuto
+          - !If [OnDemandIs2NicHpc, 2, 1]
+          - !Ref OnDemandEfaInterfaceCount
         PlacementGroupName: !Ref OnDemandPlacementGroupName
       Tags:
         - Key: Name
