@@ -1,0 +1,118 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Remote reward service for SLIME GRPO (rm_type=remote_rm).
+#
+# Runs on a same-AZ CPU instance group -- NOT on the GPU nodes. This frees the
+# scarce GPU rollout/training actors from CPU-bound reward scoring and lets the
+# reward layer scale independently (bump `replicas`). The reward RPC is
+# low-bandwidth HTTP, so this group does NOT need EFA.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: slime-reward
+  namespace: ${NAMESPACE}
+  labels:
+    app: slime-reward
+spec:
+  replicas: ${REWARD_REPLICAS}
+  # Roll new pods before tearing old ones down so reward capacity never drops to
+  # zero -- important on Spot, where nodes can be reclaimed at any time.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: slime-reward
+  template:
+    metadata:
+      labels:
+        app: slime-reward
+    spec:
+      # Pin to a specific HyperPod CPU instance group (e.g. the c5 compute pool)
+      # via REWARD_NODE_GROUP, and additionally guard against GPU nodes with the
+      # gpu-feature-discovery label so the reward pods never land on p5 nodes.
+      nodeSelector:
+        sagemaker.amazonaws.com/instance-group-name: ${REWARD_NODE_GROUP}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.present
+                    operator: NotIn
+                    values:
+                      - "true"
+      topologySpreadConstraints:
+        # Spread replicas across the CPU nodes so the reward tier uses the whole
+        # pool rather than stacking on one node. On Spot this also limits the
+        # blast radius if a single node is reclaimed.
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: slime-reward
+      # The reward server is stateless; this is enough time to drain in-flight
+      # /score requests when HyperPod gives a Spot interruption notice (it taints
+      # the node and gracefully evicts within terminationGracePeriodSeconds).
+      terminationGracePeriodSeconds: 30
+      # HyperPod taints interrupted Spot nodes; tolerate briefly so in-flight
+      # requests can finish before the pod is evicted.
+      tolerations:
+        - key: "sagemaker.amazonaws.com/node-health-status"
+          operator: "Exists"
+          effect: "NoExecute"
+          tolerationSeconds: 30
+      containers:
+        - name: reward
+          image: ${REWARD_IMAGE}
+          imagePullPolicy: Always
+          env:
+            - name: REWARD_BACKEND
+              value: "${REWARD_BACKEND}"
+            - name: REWARD_MODEL_NAME
+              value: "${REWARD_MODEL_NAME}"
+            - name: TORCH_NUM_THREADS
+              value: "${REWARD_TORCH_THREADS}"
+            - name: HF_TOKEN
+              value: "${HF_TOKEN}"
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              cpu: "6"
+              memory: "12Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: slime-reward
+  namespace: ${NAMESPACE}
+  labels:
+    app: slime-reward
+spec:
+  selector:
+    app: slime-reward
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP
