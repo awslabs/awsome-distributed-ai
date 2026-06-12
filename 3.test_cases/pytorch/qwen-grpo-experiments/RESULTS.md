@@ -224,7 +224,36 @@ Key observations:
   no gradient signal to learn format. It's a local optimum trap.
 - **Training was stable**: Grad norm 0.07-0.60, entropy 0.34-0.51, no collapse. Just no improvement.
 
+### Arm C v2: Format-Aware Reward (Still Failed)
+
+Redesigned reward function (`language_reward_format.py`) to explicitly reward format:
+- Format tags: +3.0 per tag (`<analysis>`, `<final>`), +2.0 for correct ordering
+- Progressive partial credit: +1.5 unclosed `<analysis`, +0.5 structural hints
+- Language (always scored): +1.0 correct lang without format, +1.5/+2.0 with format
+- Range: [-5.0, +12.0], designed to produce variance even without format
+
+**Config**: n=8 samples, temp=1.0, lr=1e-5, entropy_coeff=0.02, 5 epochs (594 steps)
+
+**Training trajectory (109 steps before stopping):**
+
+| Phase | Steps | Val Reward | Entropy | Behavior |
+|-------|-------|:----------:|:-------:|----------|
+| Learning | 0-60 | 0.43→1.28 | 0.8-1.2 | Reward improving, healthy |
+| Plateau | 60-85 | 1.28→1.50 | 1.2-2.6 | Hit ceiling for non-format outputs |
+| Degrading | 85-109 | 1.50→declining | 2.6→**9.6** | Entropy explosion, model collapsing |
+
+**Evaluation (step 60, reward plateau): 0/50 format** — model still never generates
+`<analysis>`/`<final>` tags despite +8.0 reward signal for format. It produces correct
+natural-language answers in the right language (val reward 1.28 = language score) but zero
+format compliance.
+
+**Root cause**: With n=8 samples at temp=1.0, the base Qwen2.5-7B-Instruct has essentially
+**zero probability** of spontaneously generating `<analysis>` as output. In 109 steps × 8 samples
+× 16 batch = ~14,000 generated responses, not a single one produced format tags. Without at
+least one high-reward sample showing format, GRPO has no gradient direction to learn it.
+
 This confirms: **SFT teaches format, GRPO optimizes compliance within format.**
+GRPO cannot discover novel output patterns with zero probability in the base distribution.
 
 ---
 
@@ -233,10 +262,12 @@ This confirms: **SFT teaches format, GRPO optimizes compliance within format.**
 | Phase | GPU-hours | Wall time | Cost estimate |
 |-------|:---------:|:---------:|:-------------:|
 | SFT training (50 epochs) | 32 | 4 hrs × 8 GPUs | ~$50 |
-| GRPO training (3 epochs) | 72 | 9 hrs × 8 GPUs | ~$115 |
-| Evaluations (×6 runs) | 12 | 25 min × 6 | ~$19 |
-| Failed experiments | ~80 | Various | ~$128 |
-| **Total Phase 1** | **~196** | — | **~$312** |
+| GRPO Arm D (3 epochs, LoRA) | 72 | 9 hrs × 8 GPUs | ~$115 |
+| GRPO Arm C (original reward) | 24 | 6.5 hrs × 8 GPUs | ~$38 |
+| GRPO Arm C v2 (format reward) | 16 | 4.5 hrs × 8 GPUs | ~$26 |
+| Evaluations (×8 runs) | 16 | 25 min × 8 | ~$25 |
+| Failed experiments (OOM, disk, collapse) | ~100 | Various | ~$160 |
+| **Total Phase 1** | **~260** | — | **~$414** |
 
 ---
 
@@ -247,12 +278,15 @@ This confirms: **SFT teaches format, GRPO optimizes compliance within format.**
 | SFT checkpoint | `/fsx/checkpoints/qwen-grpo/multilingual/sft_v7_merged/` |
 | GRPO best checkpoint - Arm D (step 60) | `/fsx/checkpoints/qwen-grpo/multilingual/grpo_lora_v3/global_step_60/` |
 | GRPO Arm C checkpoints | `/fsx/checkpoints/qwen-grpo/multilingual/grpo_arm_c/` (steps 20-177) |
+| GRPO Arm C v2 checkpoints | `/fsx/checkpoints/qwen-grpo/multilingual/grpo_arm_c_v2/` (steps 30, 60, 90) |
 | GRPO adapter | `global_step_60/actor/lora_adapter/adapter_model.safetensors` (155 MB) |
 | Training data | `/fsx/data/qwen-multilingual-v3/sft_train.parquet` (949 rows) |
 | GRPO data | `/fsx/data/qwen-multilingual/train.parquet` (950 rows) |
-| Reward function | `/fsx/scripts/qwen-grpo-experiments/src/language_reward.py` |
+| Reward function (Arm D) | `/fsx/scripts/qwen-grpo-experiments/src/language_reward.py` |
+| Reward function (Arm C v2) | `/fsx/scripts/qwen-grpo-experiments/src/language_reward_format.py` |
 | Eval script | `/fsx/scripts/eval_grpo_lora_v3.py` |
-| Results JSON | `/fsx/scripts/eval_grpo_lora_v3_results.json` |
+| Results JSON (Arm D) | `/fsx/scripts/eval_grpo_lora_v3_results.json` |
+| Results JSON (Arm C v2) | `/fsx/scripts/eval_arm_c_v2_step60.json` |
 
 ---
 
@@ -262,5 +296,5 @@ This confirms: **SFT teaches format, GRPO optimizes compliance within format.**
    larger GRPO gains on math reasoning (expected +4-6%)
 2. **Reward shaping**: Try partial-credit reward for answer language (currently binary ±5.0)
 3. **Longer GRPO with lower LR**: Try lr=1e-6 with 1 epoch + cosine decay to avoid entropy growth
-4. **Format-aware reward for Arm C**: Add format bonus (+2.0 for having `<analysis>/<final>`)
-   to test if GRPO can learn format when properly incentivized
+4. **Curriculum learning for Arm C**: Pre-seed the model with a few format examples via
+   few-shot prompting so it has non-zero probability of generating format tags
