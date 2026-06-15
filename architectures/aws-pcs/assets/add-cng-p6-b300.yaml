@@ -367,12 +367,6 @@ Resources:
             - rm -rf /tmp/home/
             # If provided, mount FSxL filesystem as /fsx
             - if [ ! -z "${FSxLustreFilesystemId}" ]; then mkdir -p /fsx; mount -t lustre -o noatime,flock,lazystatfs ${FSxLustreFilesystemId}.fsx.${AWS::Region}.amazonaws.com@tcp:/${FSxLustreFilesystemMountName} /fsx; chmod 1777 /fsx; fi
-            # with noatime (the only option not already set by default).
-            - |
-              if [ ! -z "${FSxLustreFilesystemId}" ]; then
-                else
-                    ${FSxLustreFilesystemId}.fsx.${AWS::Region}.amazonaws.com@tcp:/${FSxLustreFilesystemMountName} /fsx
-              fi
             # Monitoring stack installation (optional, enabled on Login Node only)
             - |
               if [ "${DeployMonitoring}" = "true" ]; then

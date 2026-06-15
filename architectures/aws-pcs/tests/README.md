@@ -67,7 +67,7 @@ What this guide covers, and the template/parameter that exercises it:
 | **Sample training** | FSDP Llama-2 7B | [Test 7](#test-7-fsdp-sample-training) |
 | **Container runtime — pre-baked AMI path** | Standalone DLAMI build + cluster pinned to its output | `pcs-ready-dlami-with-enroot-pyxis.yaml` (separate stack) → cluster with `AmiId=ami-xxx` + `PostInstallScriptUrl=""` → [Test 8](#test-8-pre-baked-ami-build-standalone-dlami-template) |
 | **EFA on CPU HPC instances** | hpc6a (1 NIC), hpc7a / hpc8a (2 NIC) | `OnDemandEnableEfa=true` + `OnDemandEfaInterfaceCount=1\|2` (deploy-all) or `EnableEfa=true` + `EfaInterfaceCount=1\|2` (modular `add-cng.yaml`); auto-creates a per-CNG cluster placement group, override with `OnDemandPlacementGroupName` / `PlacementGroupName` to share → [Test 9](#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a) |
-| **FSx storage health** | Lustre + OpenZFS mounts, read/write, FSx-side parameters honored (incl. `FSxLustreEnableEfa` when set) | Default deploy already mounts both filesystems; verify on the login + a compute node and inspect the FSx-side filesystem with `aws fsx describe-file-systems` → [Test 10](#test-10-fsx-storage-health) |
+| **FSx storage health + performance** | Lustre + OpenZFS mounts, read/write, FSx-side parameters honored; performance regression/improvement test for any Lustre-related change | Default deploy already mounts both filesystems; verify + benchmark → [Test 10](#test-10-fsx-storage-health-and-performance) |
 
 A single `pcs-ml-cluster-deploy-all.yaml` deploy with `DeployMonitoring=true`,
 `DeployOnDemandCNG=true`, and `DeployPseriesCNG=true` exercises Tests 1–7 in one cluster.
@@ -906,7 +906,7 @@ investigated.
 On a small filesystem (2 OSTs, MDS far from saturation), single-node deltas
 are in the noise. Multi-node shows the beginning of MDS contention relief from
 `noatime`. At production scale (64+ nodes, 10+ OSTs), improvements from
-`noatime` + `mdc` tunables are expected to be 10–30×× larger.
+`noatime` + `mdc` tunables are expected to be 10–30× larger.
 
 These numbers serve as the **regression baseline** for this filesystem size.
 When running the same tests on a larger filesystem (e.g. 19200 GiB / ~16 OSTs

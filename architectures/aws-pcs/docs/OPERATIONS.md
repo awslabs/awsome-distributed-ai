@@ -199,7 +199,7 @@ at 64+ nodes it can become a throughput bottleneck.
 | Environment | relatime (default) | noatime | Delta |
 |---|---|---|---|
 | 1 node, 10K stat | 1851 ms | 1930 ms | ±noise |
-| 4 nodes × 4 procs (16 streams), 10K stat | 5033 ms | 4812 ms | **-4%** |
+| 4 nodes × 4 procs (16 streams), 10K stat | 5033 ms | 4812 ms | **-4.4%** |
 
 On a small filesystem (1.2 TiB / 2 OSTs) the MDS is nowhere near saturated,
 so the improvement is modest. At production scale (64+ nodes, 100K+ files,
