@@ -90,7 +90,7 @@ spec:
             - name: VLLM_USAGE_SOURCE
               value: "awsome-distributed-ai-cosmos-reason"
           ports:
-            - containerPort: 8000
+            - containerPort: ${INVOCATION_PORT}
               name: http
               protocol: TCP
           resources:
@@ -108,7 +108,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /health
-              port: 8000
+              port: ${INVOCATION_PORT}
             initialDelaySeconds: 240
             periodSeconds: 15
             timeoutSeconds: 5
@@ -116,7 +116,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: 8000
+              port: ${INVOCATION_PORT}
             initialDelaySeconds: 900
             periodSeconds: 60
             timeoutSeconds: 10
@@ -142,6 +142,6 @@ spec:
     app: cosmos-reason
   ports:
     - name: http
-      port: 8000
-      targetPort: 8000
+      port: ${INVOCATION_PORT}
+      targetPort: ${INVOCATION_PORT}
       protocol: TCP

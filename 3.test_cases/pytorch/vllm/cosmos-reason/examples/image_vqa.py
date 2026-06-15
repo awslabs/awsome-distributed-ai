@@ -110,7 +110,7 @@ def main() -> int:
     print("--- Answer ---")
     print(answer)
     print()
-    print(f"--- Usage ---")
+    print("--- Usage ---")
     print(json.dumps(data["usage"], indent=2))
     return 0
 

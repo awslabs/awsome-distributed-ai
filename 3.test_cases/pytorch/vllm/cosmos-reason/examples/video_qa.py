@@ -21,7 +21,6 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Optional, Tuple
 
 import requests
 import urllib3
@@ -94,7 +93,7 @@ def main() -> int:
     print("--- Answer ---")
     print(answer)
     print()
-    print(f"--- Usage ---")
+    print("--- Usage ---")
     print(json.dumps(data["usage"], indent=2))
     return 0
 

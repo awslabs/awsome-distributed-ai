@@ -62,7 +62,7 @@ matches your platform.
 | GPU node | One of: g5.* (A10G 24 GB), g6.12xlarge (4× L4 24 GB), g6e.* (L40S 48 GB), p4d/p5/p5e (H100/H200) |
 | NVIDIA device plugin | `nvidia-device-plugin` DaemonSet running on GPU nodes |
 | Hugging Face token | Required — Cosmos Reason models are gated on HF (NVIDIA Open Model License acceptance). [Request access](https://huggingface.co/nvidia/Cosmos-Reason1-7B) on the model card first. |
-| For `hyperpod-eks/` only | HyperPod Inference Operator installed (`hyperpod-inference-operator` Helm chart, image `v3.1`). Comes with `sagemaker-hyperpod-cli` v3.7.1+ or one-click EKS add-on. |
+| For `hyperpod-eks/` only | HyperPod Inference Operator installed. Recommended: EKS add-on `amazon-sagemaker-hyperpod-inference` (`v1.3.0-eksbuild.1`). Alternatives: `sagemaker-hyperpod-cli` v3.7.0+ (`hyp install`), or Helm chart `hyperpod-inference-operator` v2.1.0 (operator image `v3.1`). See [hyperpod-eks/README.md](hyperpod-eks/README.md#prerequisites). |
 
 ## Models
 
@@ -92,7 +92,7 @@ were exercised against both deployment paths.
 | `hyperpod-eks/` | Reason1-7B | ml.g5.8xlarge (A10G, TP=1) | 21.3 s | unsupported¹ | 18.1 s |
 | `hyperpod-eks/` | Reason2-8B | ml.g6.12xlarge (4× L4, TP=4) | 13.8 s | unsupported¹ | 4.5 s |
 
-¹ The AWS vLLM DLC `vllm:0.17-gpu-py312` (vLLM 0.17.1) does not expose
+¹ The AWS vLLM DLC `vllm:0.17-gpu-py312` (vLLM 0.17.0) does not expose
 `--mm-processor-kwargs` through the Inference Operator. The sample 5.3 MB meteor
 clip tokenizes to ~19K embedding tokens, exceeding the default pre-allocated
 16384-token encoder cache. The `kubernetes/` path uses upstream vLLM v0.21.0 and
@@ -198,8 +198,8 @@ python3 examples/image_vqa.py \
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `MODEL_ID` | `nvidia/Cosmos-Reason1-7B` | HF model ID. Override to `Cosmos-Reason2-8B` on L40S/H100. |
-| `IMAGE_TAG` (kubernetes) | `vllm/vllm-openai:v0.21.0` | Upstream vLLM container. Pin to a specific version, never `:latest`. |
-| `IMAGE_TAG` (hyperpod-eks) | `vllm:0.17-gpu-py312` (AWS DLC) | AWS-managed vLLM DLC. ECR path: `763104351884.dkr.ecr.${AWS_REGION}.amazonaws.com/vllm:0.17-gpu-py312` |
+| `VLLM_IMAGE_VANILLA` (kubernetes) | `vllm/vllm-openai:v0.21.0` | Upstream vLLM container. Pin to a specific version, never `:latest`. |
+| `VLLM_IMAGE_AWS_DLC` (hyperpod-eks) | `vllm:0.17-gpu-py312` (AWS DLC) | AWS-managed vLLM DLC. ECR path: `763104351884.dkr.ecr.${AWS_REGION}.amazonaws.com/vllm:0.17-gpu-py312` |
 | `INSTANCE_TYPE` | `ml.g5.8xlarge` | A10G 24 GB. Other validated: `ml.g6.12xlarge` (4×L4), `ml.g6e.4xlarge` (1×L40S 48 GB). |
 | `MAX_MODEL_LEN` | `24576` | Sized for video out-of-the-box on 24 GB GPUs. Reduce to `8192` if OOM during CUDA graph capture; increase to `32768` on 40 GB+ GPUs. Cosmos Reason native context is 256K — must reduce for non-H100 hardware. |
 | `GPU_MEMORY_UTILIZATION` | `0.92` | vLLM target memory headroom. Reduce to `0.85` if OOM during CUDA graph capture. |
@@ -235,7 +235,7 @@ kubectl delete secret hf-token
 | `400 The decoder prompt contains a(n) video item with X embedding tokens, which exceeds the pre-allocated encoder cache size` | Default encoder cache too small for the input video (16384 for Reason1, ~5000 for Reason2-8B) | On the `kubernetes/` path, raise `--mm-processor-kwargs '{"max_pixels":...,"fps":1.0}'` until cache > video tokens. On `hyperpod-eks/`, use a shorter clip (≤5 s @ 480p) or switch to `kubernetes/`. |
 | `RuntimeError: Engine core initialization failed` after model load on `hyperpod-eks/` with Reason1 | `--reasoning-parser qwen3` enabled but Reason1 uses Qwen2.5-VL backbone (parser is Qwen3-only) | Comment out `--reasoning-parser qwen3` and `SM_VLLM_REASONING_PARSER=qwen3` in `hyperpod-eks/endpoint.yaml`. Re-enable only for Reason2. |
 | `kubectl get secret hf-token -o jsonpath='{.data.token}' \| base64 -d` returns `REPLACE_WITH_HF_TOKEN` | Applied `hf-token-secret.yaml.example` directly without replacing the literal placeholder (it is not an envsubst template) | Use `kubectl create secret generic hf-token --from-literal=token=$HF_TOKEN` per Quick Start. The `.example` YAML is reference-only. |
-| Video request 400 on `hyperpod-eks/` even with short clip | DLC v0.17.1 does not surface `--mm-processor-kwargs` or `--limit-mm-per-prompt` to the Inference Operator | Use the `kubernetes/` path for video workloads. The DLC ships with a fixed encoder-cache budget; expanding it requires a custom DLC image or a newer DLC tag when available. |
+| Video request 400 on `hyperpod-eks/` even with short clip | DLC v0.17.0 does not surface `--mm-processor-kwargs` or `--limit-mm-per-prompt` to the Inference Operator | Use the `kubernetes/` path for video workloads. The DLC ships with a fixed encoder-cache budget; expanding it requires a custom DLC image or a newer DLC tag when available. |
 
 ## References
 

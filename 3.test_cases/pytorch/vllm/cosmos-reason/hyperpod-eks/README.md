@@ -5,7 +5,7 @@ EKS cluster using the [HyperPod Inference Operator](https://aws.amazon.com/blogs
 
 This path uses the **AWS-managed vLLM Deep Learning Container** (`vllm:0.17-gpu-py312`)
 with EFA, NCCL, and security patches pre-baked. The DLC tag `0.17-gpu-py312` corresponds
-to vLLM 0.17.1; the [`../kubernetes/`](../kubernetes/) path uses upstream
+to vLLM 0.17.0; the [`../kubernetes/`](../kubernetes/) path uses upstream
 `vllm/vllm-openai:v0.21.0` directly.
 
 For plain EKS clusters without HyperPod, or HyperPod Clusters without the Inference Operator, use the [`../kubernetes/`](../kubernetes/) path.
@@ -20,10 +20,16 @@ For plain EKS clusters without HyperPod, or HyperPod Clusters without the Infere
 ## Prerequisites
 
 - HyperPod EKS cluster with at least one GPU node
-- HyperPod Inference Operator installed:
-  - Helm chart `hyperpod-inference-operator` v2.1.1, image `v3.1`, OR
-  - One-click EKS add-on (HyperPod console → Add-ons → Inference Operator)
-  - Or: `sagemaker-hyperpod-cli` v3.7.1+ and `hyp install`
+- HyperPod Inference Operator installed. Three install paths, each with its own version scheme:
+  - **EKS Add-on (recommended)** — add-on `amazon-sagemaker-hyperpod-inference`, versioned
+    as `vX.Y.Z-eksbuild.N` (latest `v1.3.0-eksbuild.1` as of this writing). Install via the
+    HyperPod console (Add-ons → Inference Operator) or
+    `aws eks create-addon --addon-name amazon-sagemaker-hyperpod-inference`. Confirm the
+    current version for your region with
+    `aws eks describe-addon-versions --addon-name amazon-sagemaker-hyperpod-inference`.
+  - **`sagemaker-hyperpod-cli`** — CLI `v3.7.0+` with `hyp install`.
+  - **Helm chart** — `hyperpod-inference-operator` subchart `v2.1.0`, operator image `v3.1`.
+    Helm install may be deprecated in a future release in favor of the EKS Add-on.
 - The Inference Operator's prerequisite IRSA roles must be configured at install time
   (the operator does NOT need per-endpoint IAM)
 - A TLS certificate output S3 bucket for endpoint certificate management
