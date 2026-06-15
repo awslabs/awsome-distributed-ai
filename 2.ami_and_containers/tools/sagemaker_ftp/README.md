@@ -50,7 +50,7 @@ does that and ranks the matches by effective per-instance hourly rate.
               --count <N> --region <REGION> \
               [--start-after <ISO8601_UTC>] [--profile <AWS_PROFILE>] \
               [--target hyperpod-cluster|training-job] \
-              [--durations <H1,H2,...>] [--json]
+              [--durations <H1,H2,...>] [--json] [--verbose]
 ```
 
 Run `./find-ftp.sh --help` for the built-in help.
@@ -73,6 +73,7 @@ Run `./find-ftp.sh --help` for the built-in help.
 | `--target` | Target resource: `hyperpod-cluster` or `training-job` | `hyperpod-cluster` |
 | `--durations` | Comma-separated durations (hours) to probe | `24,48,72,168,336,720` |
 | `--json` | Emit machine-readable JSON to stdout | off |
+| `--verbose` | Print the full AWS error text to stderr when a per-duration call fails | off |
 | `-h`, `--help` | Show help and exit | — |
 
 ### Supported instance types
@@ -154,6 +155,18 @@ JSON shape:
 }
 ```
 
+### 5. Verbose error output (debugging)
+
+```bash
+./find-ftp.sh \
+  --az us-west-2b --instance-type ml.p5.48xlarge \
+  --count 2 --region us-west-2 --verbose
+```
+
+Without `--verbose`, transient or configuration errors per duration appear
+as a single `WARNING:` line. With `--verbose`, the full AWS error text is
+also printed (to stderr) so you can see exactly what failed.
+
 ## Sample output (text mode)
 
 ```
@@ -166,6 +179,7 @@ Searching SageMaker FTP offerings:
   Target:         hyperpod-cluster
   Profile:        <default>
   Durations (h):  24 48 72 168 336 720
+  Verbose:        off
 
 Found 9 matching offering(s) in us-west-2b:
 
@@ -214,6 +228,23 @@ To purchase this offering (NON-REFUNDABLE; charges the upfront fee immediately):
 
 The script never purchases anything. To actually reserve the capacity you
 must run the printed `create-training-plan` command yourself.
+
+## Error handling per duration
+
+The script calls the API once per duration in the sweep list. Failures are
+classified and reported as follows:
+
+| Outcome | Default behavior | With `--verbose` |
+|---|---|---|
+| Success, has offerings | Process them | Same |
+| Success, no offerings | Skip silently | Same |
+| `ResourceLimitExceeded` (account quota below requested count) | One-line `Note:` to stderr, then continue | Same + full AWS error text |
+| Any other error (expired creds, throttling, invalid region, service outage, etc.) | One-line `WARNING:` to stderr, then continue | Same + full AWS error text |
+
+This means a real configuration problem (e.g. expired credentials) will not
+silently masquerade as "no offerings found" — you'll see a `WARNING:` line
+explaining what happened. Use `--verbose` if you need the full AWS error
+output to debug further.
 
 ## Choosing a target resource
 
@@ -277,9 +308,12 @@ Things to try:
 |---|---|---|
 | `aws CLI not found on PATH` | AWS CLI not installed | Install AWS CLI v2 |
 | `jq not found on PATH` | `jq` not installed | `brew install jq` / `apt-get install jq` |
-| `Unable to locate credentials` | No AWS credentials resolved | Configure a profile or set env vars; use `--profile` |
-| `AccessDeniedException` | Missing IAM permission | Grant `sagemaker:SearchTrainingPlanOfferings` |
-| Result table is empty | No matching capacity / quota too low | Try different AZ, smaller `--count`, later start, or request quota |
+| `WARNING: ... Unable to locate credentials` | No AWS credentials resolved | Configure a profile or set env vars; use `--profile` |
+| `WARNING: ... AccessDeniedException` | Missing IAM permission | Grant `sagemaker:SearchTrainingPlanOfferings` |
+| `WARNING: ... ThrottlingException` | API rate-limited transiently | Retry; if persistent, run with fewer durations |
+| `WARNING: ... Could not connect to the endpoint URL` | Invalid `--region` or network issue | Check the region name; try `--verbose` for details |
+| `Note: ... ResourceLimitExceeded` for every duration | Account quota for the instance type is below `--count` | Lower `--count`, or request a quota increase via Service Quotas |
+| Result table is empty (no `Note:` or `WARNING:` lines) | No matching capacity in that AZ | Try different AZ, smaller `--count`, later start, different durations |
 | Same offering shown multiple times across durations | Different reservation windows / capacity blocks | Expected — each duration is searched independently |
 
 ## References

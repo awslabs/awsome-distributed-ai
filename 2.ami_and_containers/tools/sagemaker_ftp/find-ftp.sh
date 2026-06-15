@@ -60,7 +60,7 @@ USAGE:
                --count <N> --region <REGION> \\
                [--start-after <ISO8601_UTC>] [--profile <AWS_PROFILE>] \\
                [--target hyperpod-cluster|training-job] \\
-               [--durations <H1,H2,...>] [--json]
+               [--durations <H1,H2,...>] [--json] [--verbose]
 
 REQUIRED ARGUMENTS:
   --az              Availability Zone name, e.g. us-west-2b
@@ -82,6 +82,9 @@ OPTIONAL ARGUMENTS:
                     Example: --durations 24,168,720
   --json            Emit machine-readable JSON to stdout instead of the
                     human-readable table. Status messages still go to stderr.
+  --verbose         Print full AWS error text (to stderr) when a per-duration
+                    API call fails. Without this flag, failures are summarized
+                    in a single line.
   -h, --help        Show this help message and exit.
 
 WHAT IT DOES:
@@ -141,6 +144,7 @@ AWS_PROFILE_ARG=""
 DURATIONS_ARG=""
 TARGET_RESOURCE="$DEFAULT_TARGET_RESOURCE"
 JSON_OUT=0
+VERBOSE=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -153,6 +157,7 @@ while [[ $# -gt 0 ]]; do
     --target)         TARGET_RESOURCE="$2"; shift 2 ;;
     --durations)      DURATIONS_ARG="$2"; shift 2 ;;
     --json)           JSON_OUT=1; shift ;;
+    --verbose)        VERBOSE=1; shift ;;
     -h|--help)        usage; exit 0 ;;
     *)
       echo "ERROR: unknown argument: $1" >&2
@@ -221,6 +226,25 @@ fi
 # Helper: log to stderr (so JSON on stdout stays clean in --json mode).
 log() { echo "$@" >&2; }
 
+# Reusable jq filter that converts a timestamp value to epoch seconds.
+# Handles three input shapes that AWS CLI may emit:
+#   * a raw epoch number (CLI v1 default; CLI v2 with cli_timestamp_format=wire)
+#   * an ISO-8601 string ending in "Z" (UTC)
+#   * an ISO-8601 string ending in "±HH:MM" (CLI v2 default in many regions)
+JQ_TO_EPOCH='
+def to_epoch:
+  if type == "number" then .
+  else
+    capture("^(?<dt>[0-9-]{10}T[0-9:]{8})(?:\\.[0-9]+)?(?<tz>Z|(?<sign>[+-])(?<oh>[0-9]{2}):(?<om>[0-9]{2}))$") as $m
+    | ($m.dt + "Z" | fromdateiso8601) as $base
+    | if $m.tz == "Z" then $base
+      else
+        (($m.oh | tonumber) * 3600 + ($m.om | tonumber) * 60) as $off
+        | if $m.sign == "+" then $base - $off else $base + $off end
+      end
+  end;
+'
+
 # ---------- run ----------
 log "Searching SageMaker FTP offerings:"
 log "  AZ:             $AZ"
@@ -231,35 +255,55 @@ log "  Start after:    $START_AFTER"
 log "  Target:         $TARGET_RESOURCE"
 log "  Profile:        ${AWS_PROFILE_ARG:-<default>}"
 log "  Durations (h):  ${DURATIONS[*]}"
+log "  Verbose:        $([[ $VERBOSE -eq 1 ]] && echo on || echo off)"
 log ""
 
 ALL_OFFERINGS="[]"
+ERR_FILE="$(mktemp -t find-ftp-err.XXXXXX)"
+trap 'rm -f "$ERR_FILE"' EXIT
 
 for DUR in "${DURATIONS[@]}"; do
-  if ! RESP=$(aws "${AWS_PROFILE_FLAG[@]}" sagemaker search-training-plan-offerings \
+  : > "$ERR_FILE"
+  if RESP=$(aws "${AWS_PROFILE_FLAG[@]}" sagemaker search-training-plan-offerings \
         --region "$REGION" \
         --instance-type "$INSTANCE_TYPE" \
         --instance-count "$INSTANCE_COUNT" \
         --start-time-after "$START_AFTER" \
         --duration-hours "$DUR" \
         --target-resources "$TARGET_RESOURCE" \
-        --output json 2>/dev/null); then
-    # API errored (e.g. ResourceLimitExceeded for that duration). Skip silently.
+        --output json 2>"$ERR_FILE"); then
+    : # success — fall through to parse RESP
+  else
+    AWS_RC=$?
+    ERR_TEXT="$(cat "$ERR_FILE")"
+    if echo "$ERR_TEXT" | grep -q "ResourceLimitExceeded"; then
+      log "Note: duration=${DUR}h skipped (ResourceLimitExceeded — account quota below requested count)."
+    else
+      # Real error: surface a one-liner; full text only with --verbose.
+      FIRST_LINE="$(echo "$ERR_TEXT" | grep -v '^[[:space:]]*$' | head -1)"
+      log "WARNING: duration=${DUR}h failed (aws exit ${AWS_RC}): ${FIRST_LINE:-<no error text>}"
+      if [[ "$VERBOSE" -eq 1 && -n "$ERR_TEXT" ]]; then
+        log "----- full AWS error (duration=${DUR}h) -----"
+        echo "$ERR_TEXT" >&2
+        log "----- end -----"
+      fi
+    fi
     continue
   fi
 
   MATCHES=$(echo "$RESP" | jq --arg az "$AZ" --argjson count "$INSTANCE_COUNT" '
     [.TrainingPlanOfferings[]
-     | select(any(.ReservedCapacityOfferings[]; .AvailabilityZone == $az))
+     | . as $offering
+     | (.ReservedCapacityOfferings[] | select(.AvailabilityZone == $az)) as $rc
      | {
-         id: .TrainingPlanOfferingId,
-         duration_h: .DurationHours,
-         upfront: (.UpfrontFee | tonumber),
-         currency: .CurrencyCode,
-         az: .ReservedCapacityOfferings[0].AvailabilityZone,
-         start: .ReservedCapacityOfferings[0].StartTime,
-         end:   .ReservedCapacityOfferings[0].EndTime,
-         per_inst_hr: ((.UpfrontFee | tonumber) / (.DurationHours * $count))
+         id: $offering.TrainingPlanOfferingId,
+         duration_h: $offering.DurationHours,
+         upfront: ($offering.UpfrontFee | tonumber),
+         currency: $offering.CurrencyCode,
+         az: $rc.AvailabilityZone,
+         start: $rc.StartTime,
+         end:   $rc.EndTime,
+         per_inst_hr: (($offering.UpfrontFee | tonumber) / ($offering.DurationHours * $count))
        }
     ]')
 
@@ -320,14 +364,15 @@ printf "%-50s %8s %12s %10s   %-20s %-20s\n" \
 printf "%-50s %8s %12s %10s   %-20s %-20s\n" \
   "$(printf '%.0s-' {1..50})" "------" "------------" "----------" "--------------------" "--------------------"
 
-echo "$ALL_OFFERINGS" | jq -r '.[] |
+echo "$ALL_OFFERINGS" | jq -r "$JQ_TO_EPOCH"'
+  .[] |
   [
     .id,
     (.duration_h | tostring),
     (.upfront | tostring),
-    ((.per_inst_hr * 100 | floor) / 100 | tostring),
-    (.start | strftime("%Y-%m-%d %H:%M")),
-    (.end   | strftime("%Y-%m-%d %H:%M"))
+    ((.per_inst_hr * 100 | round) / 100 | tostring),
+    (.start | to_epoch | strftime("%Y-%m-%d %H:%M")),
+    (.end   | to_epoch | strftime("%Y-%m-%d %H:%M"))
   ] | @tsv' | \
 while IFS=$'\t' read -r id dur upfront rate start end; do
   printf "%-50s %8s %12s %10s   %-20s %-20s\n" \
@@ -336,14 +381,14 @@ done
 
 echo
 echo "Recommendation (lowest \$/instance/hour):"
-echo "$ALL_OFFERINGS" | jq -r '
+echo "$ALL_OFFERINGS" | jq -r "$JQ_TO_EPOCH"'
   sort_by(.per_inst_hr) | .[0] |
   "  Offering ID:  " + .id,
   "  Duration:     " + (.duration_h | tostring) + " h",
   "  AZ:           " + .az,
   "  Upfront fee:  " + (.upfront | tostring) + " " + .currency,
-  "  Effective:    $" + (((.per_inst_hr * 100 | floor) / 100) | tostring) + " / instance / hour",
-  "  Window:       " + (.start | strftime("%Y-%m-%d %H:%M UTC")) + " -> " + (.end | strftime("%Y-%m-%d %H:%M UTC"))
+  "  Effective:    $" + (((.per_inst_hr * 100 | round) / 100) | tostring) + " / instance / hour",
+  "  Window:       " + (.start | to_epoch | strftime("%Y-%m-%d %H:%M UTC")) + " -> " + (.end | to_epoch | strftime("%Y-%m-%d %H:%M UTC"))
 '
 
 echo
