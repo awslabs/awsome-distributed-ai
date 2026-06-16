@@ -20,7 +20,7 @@ runtime options), see the [README](../README.md#4-configuration).
 | `PrimarySubnetAZ` | *(required)* | Availability Zone to deploy into — the one required parameter. Holds the public subnet (login node), the primary private subnet (compute, FSx), and the single NAT gateway |
 | `AdditionalSubnetAZ2` | *(empty)* | (Optional) 2nd AZ for an additional private subnet. Empty = single-AZ. Enables multi-AZ layouts (e.g. OpenZFS `MULTI_AZ`). Shares the primary AZ's NAT gateway (cross-AZ egress, no per-AZ NAT) |
 | `AdditionalSubnetAZ3` | *(empty)* | (Optional) 3rd AZ for an additional private subnet. Requires `AdditionalSubnetAZ2` to also be set. Max 3 private AZs total |
-| `VPCName` | `ML-Cluster-VPC` | Name for the created VPC |
+| `VPCName` | *(empty → `${StackName}-VPC`)* | Name for the created VPC. Empty (default) auto-derives from the stack name so multiple deployments in one account get unique names |
 | `CreateS3Endpoint` | `true` | Create an S3 VPC endpoint |
 
 ## 2. PCS Cluster Configuration
@@ -62,7 +62,7 @@ runtime options), see the [README](../README.md#4-configuration).
 | `OnDemandCngName` | `cpu1` | CPU node-group name |
 | `OnDemandQueueName` | `cpu1` | CPU Slurm queue name |
 | `OnDemandEnableEfa` | `false` | Enable EFA on the CPU CNG (HPC/MPI workloads on hpc6a/hpc7a/hpc6id/hpc8a, c7i.metal, etc.). Switches the CNG's LaunchTemplate to a `NetworkInterfaces` block with `InterfaceType=efa` and wires in a cluster placement group. No effect on the GPU CNG. See [README §EFA on CPU HPC instances](../README.md#efa-on-cpu-hpc-instances-ondemandenableefa) |
-| `OnDemandEfaInterfaceCount` | `1` | Number of EFA interfaces. Match the instance type's `MaximumEfaInterfaces`: hpc8a/hpc7a/hpc6id = `2`; hpc6a/c7i.metal = `1`. Mismatching fails at launch. Ignored when `OnDemandEnableEfa=false` |
+| `OnDemandEfaInterfaceCount` | `0` (auto) | Number of EFA interfaces. **`0` (default) auto-derives from `OnDemandInstanceType`**: 2 for hpc8a/hpc7a/hpc6id, 1 otherwise (hpc6a/c7i.metal). Override with `1` or `2` to pin explicitly. Ignored when `OnDemandEnableEfa=false` |
 | `OnDemandPlacementGroupName` | *(empty)* | Existing cluster placement group name to launch nodes into. Empty + `OnDemandEnableEfa=true` auto-creates a per-CNG cluster placement group; supplying a name reuses an existing one (e.g. shared across CPU + GPU CNGs for heterogeneous tightly-coupled jobs). Ignored when `OnDemandEnableEfa=false` |
 
 ## 5. GPU Compute Node Group — P5/P6 (Optional)
