@@ -258,7 +258,10 @@ setup_client_internal() {
     apt_get update -qq
 
     echo "[directory-client] Installing SSSD..."
-    apt_get install -y sssd libpam-sss libnss-sss ldap-utils
+    # sssd-tools provides sss_cache, needed to invalidate the SSSD cache after a
+    # user is deleted/modified in LDAP (otherwise the change is not visible until
+    # the cache entry's TTL expires — see USER-MANAGEMENT.md "Deleting a user").
+    apt_get install -y sssd sssd-tools libpam-sss libnss-sss ldap-utils
 
     echo "[directory-client] Configuring SSSD (server: ${server_uri})..."
     cat > /etc/sssd/sssd.conf <<EOF

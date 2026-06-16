@@ -260,6 +260,17 @@ ldapdelete -x -H ldap://localhost \
   "uid=alice,ou=People,dc=cluster,dc=internal"
 ```
 
+**Invalidate the SSSD cache** so the deletion takes effect immediately instead
+of lingering until the cache entry's TTL expires. SSSD caches lookups (so users
+still resolve during a brief LDAP outage), which means a freshly-deleted user
+keeps resolving via `getent` until the cache is cleared. Run on the login node
+**and** any running compute node:
+```bash
+sudo sss_cache -E      # invalidate all cached entries (needs the sssd-tools package, pre-installed)
+# across compute nodes:
+srun -N <nodes> -n <nodes> bash -c 'sudo sss_cache -E'
+```
+
 Also remove from Slurm accounting:
 ```bash
 sacctmgr -i remove user alice
