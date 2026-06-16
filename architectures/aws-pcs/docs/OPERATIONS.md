@@ -135,7 +135,7 @@ want — leave it alone.
 
 ### 3.2 Public Grafana exposure
 
-`GrafanaPublicAccessCidr` opens **TCP/443 on the login node** to a CIDR via a
+`GrafanaAccessCidr` opens **TCP/443 on the login node** to a CIDR via a
 login-only security group. The nginx in front of Grafana also proxies
 **`/prometheus/`, `/pushgateway/`, `/slurmexporter/` without authentication** — opening
 the CIDR exposes those too, not just password-gated Grafana. Use the tightest CIDR you
@@ -243,5 +243,5 @@ For a new production deploy:
   and pass its output as `AmiId` (~3 min boot vs ~6 min). Match `SlurmVersion` between
   the AMI build stack and the cluster stack.
 - Default `DcgmExporterImage` covers H100/B200/B300; override only to pin a different build
-- Minimum-CIDR `GrafanaPublicAccessCidr` if used at all; otherwise empty (SSM port-forward)
+- Minimum-CIDR `GrafanaAccessCidr` if used at all; otherwise empty (SSM port-forward)
 - Throughput values that match the chosen FSx deployment types

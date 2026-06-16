@@ -26,7 +26,7 @@ Run this **complete set** before merging template or script changes.
 
 ## Quick-start: single-cluster shortcut
 
-A single `pcs-ml-cluster-deploy-all.yaml` deploy with `DeployMonitoring=true`,
+A single `pcs-ml-cluster-deploy-all.yaml` deploy with `MonitoringStack=Prometheus-LoginNode`,
 `DeployOnDemandCNG=true`, and `DeployPseriesCNG=true` exercises Tests 1–7 in
 one cluster. Tests 8-13 are separate paths run only when their inputs change.
 

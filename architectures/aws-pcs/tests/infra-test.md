@@ -7,7 +7,7 @@ first-boot install, and the pre-baked AMI build path.
 
 ## Test 1: Monitoring stack
 
-With `DeployMonitoring=true` (default), Prometheus/Grafana/exporters install on the
+With `MonitoringStack=Prometheus-LoginNode` (default), Prometheus/Grafana/exporters install on the
 login node and DCGM/node exporters on the compute nodes.
 
 ```bash
