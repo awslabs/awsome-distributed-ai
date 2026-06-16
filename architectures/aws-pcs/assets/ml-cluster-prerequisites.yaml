@@ -27,6 +27,8 @@ Metadata:
           default: Availability Zone configuration for the subnets
         Parameters:
           - PrimarySubnetAZ
+          - AdditionalSubnetAZ2
+          - AdditionalSubnetAZ3
       - Label:
           default: FSx for Lustre (/fsx) storage size
         Parameters:
@@ -43,6 +45,10 @@ Metadata:
         default: Enable EFA + GDS on FSx for Lustre (PERSISTENT_2 only)
       PrimarySubnetAZ:
         default: Availability zone id to deploy the primary subnets
+      AdditionalSubnetAZ2:
+        default: "(Optional) 2nd AZ for an additional private subnet"
+      AdditionalSubnetAZ3:
+        default: "(Optional) 3rd AZ for an additional private subnet"
       CreateS3Endpoint:
         default: Create an S3 endpoint
 
@@ -59,6 +65,23 @@ Parameters:
   PrimarySubnetAZ:
     Description: Availability zone id in which the public subnet and primary private subnet will be created.
     Type: AWS::EC2::AvailabilityZone::Name
+
+  AdditionalSubnetAZ2:
+    Description: >-
+      (Optional) Availability Zone for a 2nd private subnet. Empty (default) =
+      single-AZ. Set to create an additional private subnet for multi-AZ FSx
+      (OpenZFS MULTI_AZ), Simple AD, or higher-availability workloads. The NAT
+      gateway stays in the primary AZ (shared), so this subnet reaches the
+      internet via cross-AZ routing.
+    Type: String
+    Default: ""
+
+  AdditionalSubnetAZ3:
+    Description: >-
+      (Optional) Availability Zone for a 3rd private subnet. Empty (default) =
+      not created. Requires AdditionalSubnetAZ2 to also be set.
+    Type: String
+    Default: ""
 
   CreateS3Endpoint:
     AllowedValues:
@@ -224,6 +247,11 @@ Rules:
 
 Conditions:
   S3EndpointCondition: !Equals [!Ref 'CreateS3Endpoint', 'true']
+  # Additional private subnets (multi-AZ). Each is created only when its AZ
+  # parameter is set. AZ3 is meant to be used together with AZ2 (a 3rd subnet
+  # without a 2nd is unusual but technically allowed — both are independent).
+  HasSubnetAZ2: !Not [!Equals [!Ref AdditionalSubnetAZ2, ""]]
+  HasSubnetAZ3: !Not [!Equals [!Ref AdditionalSubnetAZ3, ""]]
   # PERSISTENT_2 is the only Lustre deployment type that supports a metadata
   # configuration (and the EFA/Intelligent-Tiering features); PERSISTENT_1 does
   # not, so the MetadataConfiguration block is only emitted for PERSISTENT_2.
@@ -334,17 +362,45 @@ Resources:
         - Key: Name
           Value: !Join [ ' ', [ !Ref VPCName, 'Public Subnet -', !Ref PrimarySubnetAZ ] ]
 
-  # Create the primary private subnet
+  # Private subnets are carved from CIDR1 (10.1.0.0/16) split into four /18
+  # blocks, so up to three private AZs (primary + 2 additional) can coexist
+  # without overlap. The primary uses index 0; additional subnets use 1 and 2.
   PrimaryPrivateSubnet:
     Type: AWS::EC2::Subnet
     DependsOn: [VpcCidrBlock]
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: !Select [ 0, !Cidr [ !FindInMap [Networking, VPC, CIDR1], 2, 15 ]]
+      CidrBlock: !Select [ 0, !Cidr [ !FindInMap [Networking, VPC, CIDR1], 4, 14 ]]
       AvailabilityZone: !Ref PrimarySubnetAZ
       Tags:
         - Key: Name
           Value: !Join [ ' ', [ !Ref VPCName, 'Private Subnet -', !Ref PrimarySubnetAZ ] ]
+
+  # Additional private subnet 2 (optional, multi-AZ)
+  AdditionalPrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Condition: HasSubnetAZ2
+    DependsOn: [VpcCidrBlock]
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [ 1, !Cidr [ !FindInMap [Networking, VPC, CIDR1], 4, 14 ]]
+      AvailabilityZone: !Ref AdditionalSubnetAZ2
+      Tags:
+        - Key: Name
+          Value: !Join [ ' ', [ !Ref VPCName, 'Private Subnet -', !Ref AdditionalSubnetAZ2 ] ]
+
+  # Additional private subnet 3 (optional, multi-AZ)
+  AdditionalPrivateSubnet3:
+    Type: AWS::EC2::Subnet
+    Condition: HasSubnetAZ3
+    DependsOn: [VpcCidrBlock]
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [ 2, !Cidr [ !FindInMap [Networking, VPC, CIDR1], 4, 14 ]]
+      AvailabilityZone: !Ref AdditionalSubnetAZ3
+      Tags:
+        - Key: Name
+          Value: !Join [ ' ', [ !Ref VPCName, 'Private Subnet -', !Ref AdditionalSubnetAZ3 ] ]
 
   # Create and set the public route table
   PublicRouteTable:
@@ -384,6 +440,23 @@ Resources:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PrimaryPrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  # Additional private subnets share the same private route table, so they reach
+  # the internet through the primary AZ's single NAT gateway (cross-AZ). This is
+  # intentional — no per-AZ NAT (cost/HA trade-off documented in the AZ params).
+  AdditionalPrivateSubnet2RTAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: HasSubnetAZ2
+    Properties:
+      SubnetId: !Ref AdditionalPrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  AdditionalPrivateSubnet3RTAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: HasSubnetAZ3
+    Properties:
+      SubnetId: !Ref AdditionalPrivateSubnet3
       RouteTableId: !Ref PrivateRouteTable
 
   # S3 endpoint
@@ -495,6 +568,18 @@ Outputs:
     Description: ID of the primary private subnet (alias for compatibility)
     Export:
       Name: !Sub ${AWS::StackName}-PrivateSubnet
+  AdditionalPrivateSubnet2:
+    Condition: HasSubnetAZ2
+    Value: !Ref AdditionalPrivateSubnet2
+    Description: ID of the 2nd additional private subnet (multi-AZ)
+    Export:
+      Name: !Sub ${AWS::StackName}-AdditionalPrivateSubnet2
+  AdditionalPrivateSubnet3:
+    Condition: HasSubnetAZ3
+    Value: !Ref AdditionalPrivateSubnet3
+    Description: ID of the 3rd additional private subnet (multi-AZ)
+    Export:
+      Name: !Sub ${AWS::StackName}-AdditionalPrivateSubnet3
   SecurityGroup:
     Value: !Ref SecurityGroup
     Description: SecurityGroup for Batch

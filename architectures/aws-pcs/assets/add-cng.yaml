@@ -399,6 +399,16 @@ Resources:
                 - Key: monitoring-role
                   Value: !Ref MonitoringRole
                 - !Ref AWS::NoValue
+              # Directory (multi-user) role tag, independent of monitoring-role.
+              # Emitted for both server (login) and client (compute) nodes when
+              # DirectoryRole != none. Compute clients discover the OpenLDAP
+              # server by querying for directory-role=server (NOT monitoring-role,
+              # which is owned by the monitoring stack). See setup-directory.sh.
+              - !If
+                - DirectoryEnabled
+                - Key: directory-role
+                  Value: !Ref DirectoryRole
+                - !Ref AWS::NoValue
         MetadataOptions:
           HttpEndpoint: enabled
           HttpPutResponseHopLimit: 4
@@ -528,6 +538,10 @@ Resources:
                 export LDAP_ADMIN_PASSWORD=$(openssl rand -base64 16)
                 export CLUSTER_ID="${ClusterId}"
                 export DIRECTORY_DNS_IPS=""
+                # Pass the script source so the server role can install the
+                # ldap-add-user.sh helper onto /usr/local/bin from the same bucket.
+                export S3_BUCKET="${S3BucketName}"
+                export S3_KEY_PREFIX="${S3KeyPrefix}"
                 aws s3 cp s3://${S3BucketName}/${S3KeyPrefix}scripts/setup-directory.sh /tmp/setup-directory.sh
                 chmod +x /tmp/setup-directory.sh
                 bash /tmp/setup-directory.sh "${DirectoryRole}" 2>&1 | tee /var/log/directory-setup.log

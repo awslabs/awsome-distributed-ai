@@ -8,6 +8,16 @@
 #   role = "server"  (login node — installs slapd, creates base OUs)
 #          "client"  (compute node — installs SSSD, points at LDAP server)
 #
+# IMPORTANT — single login node only when DirectoryService=OpenLDAP-LoginNode:
+#   The OpenLDAP server runs on THE login node and its DB lives on shared
+#   /home (OpenZFS). This design assumes exactly ONE login node (server). Do
+#   NOT scale the login node group above MinCount=MaxCount=1 with the directory
+#   enabled: multiple login nodes would each tag themselves directory-role=server
+#   (clients would pick an arbitrary one) and each run a slapd against the same
+#   /home/ldap-db MDB files (concurrent-open corruption). For HA multi-server
+#   directory, use a managed backend (Simple AD / Managed AD) instead — that is
+#   the planned DirectoryService=SimpleAD / ManagedAD extension path.
+#
 # Environment variables (from UserData):
 #   LDAP_DOMAIN_SUFFIX  — e.g. "dc=cluster,dc=internal"
 #   LDAP_DOMAIN         — e.g. "cluster.internal" (derived from suffix)
@@ -15,6 +25,9 @@
 #   CLUSTER_ID          — PCS cluster ID (for SSM parameter path)
 #   LDAP_SERVER_URI     — e.g. "ldap://10.1.x.x" (client role; empty = discover)
 #   DIRECTORY_DNS_IPS   — comma-separated DNS IPs (future SimpleAD; empty = discover login IP)
+#   S3_BUCKET           — bucket holding the scripts (server role; to install the
+#                         ldap-add-user.sh helper onto /usr/local/bin)
+#   S3_KEY_PREFIX       — key prefix for the scripts (default "templates/")
 
 set -euo pipefail
 
@@ -24,6 +37,13 @@ LDAP_DOMAIN="${LDAP_DOMAIN:-cluster.internal}"
 LDAP_DB_DIR="/home/ldap-db"
 
 export DEBIAN_FRONTEND=noninteractive
+
+# AWS CLI calls below (ssm put-parameter, ec2 describe-instances) pass no
+# --region: on EC2 the CLI resolves both credentials and region from the
+# instance's IMDS credential provider (it obtains the IMDSv2 token itself, even
+# under HttpTokens=required). Reading placement/region with a plain curl would
+# need a manual token and return empty without one, so we deliberately let the
+# CLI handle it instead of passing a (possibly empty) --region.
 
 echo "[directory] Role: ${ROLE}"
 echo "[directory] Domain: ${LDAP_DOMAIN} (${LDAP_DOMAIN_SUFFIX})"
@@ -110,20 +130,37 @@ cn: clusterusers
 gidNumber: 3000
 EOF
 
-    # Persist admin password — prefer SSM (access-controlled, auditable)
-    REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+    # Persist admin password — prefer SSM (access-controlled, auditable).
+    # No explicit --region: the AWS CLI resolves it from the instance's IMDS
+    # credential provider (reading placement/region directly would need an
+    # IMDSv2 token).
     if aws ssm put-parameter \
          --name "/pcs/${CLUSTER_ID}/ldap/admin-password" \
          --value "${LDAP_ADMIN_PASSWORD}" \
          --type SecureString \
-         --overwrite \
-         --region "${REGION}" 2>/dev/null; then
+         --overwrite 2>/dev/null; then
         echo "[directory-server] Admin password stored in SSM: /pcs/${CLUSTER_ID}/ldap/admin-password"
     else
         echo "${LDAP_ADMIN_PASSWORD}" > "${LDAP_DB_DIR}/.admin-password"
         chmod 600 "${LDAP_DB_DIR}/.admin-password"
         chown openldap:openldap "${LDAP_DB_DIR}/.admin-password"
         echo "[directory-server] WARNING: SSM put failed. Password saved to ${LDAP_DB_DIR}/.admin-password"
+    fi
+
+    # Install the ldap-add-user helper alongside this script so admins have it
+    # on PATH (/usr/local/bin) on the login node. Fetched from the same S3
+    # location this script came from (S3_BUCKET/S3_KEY_PREFIX passed by UserData);
+    # falls back to a no-op with a hint if those are unset.
+    if [ -n "${S3_BUCKET:-}" ]; then
+        if aws s3 cp "s3://${S3_BUCKET}/${S3_KEY_PREFIX:-templates/}scripts/ldap-add-user.sh" \
+             /usr/local/bin/ldap-add-user.sh 2>/dev/null; then
+            chmod 755 /usr/local/bin/ldap-add-user.sh
+            echo "[directory-server] Installed helper: /usr/local/bin/ldap-add-user.sh"
+        else
+            echo "[directory-server] WARNING: could not fetch ldap-add-user.sh from s3://${S3_BUCKET}/${S3_KEY_PREFIX:-templates/}scripts/ — add users with raw ldapadd (see USER-MANAGEMENT.md)."
+        fi
+    else
+        echo "[directory-server] NOTE: S3_BUCKET unset; skipping ldap-add-user.sh install. Add users with raw ldapadd (see USER-MANAGEMENT.md)."
     fi
 
     # Also configure SSSD on the login node itself (so getent works locally)
@@ -146,18 +183,26 @@ setup_client() {
             # Future: SimpleAD — use provided DNS IPs
             server_uri="ldap://${DIRECTORY_DNS_IPS%%,*}"
         else
-            # OpenLDAP-LoginNode — discover via EC2 tag query
-            local region
-            region=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+            # OpenLDAP-LoginNode — discover the directory server's private IP via
+            # its EC2 tags (pcs-cluster-id + directory-role=server). The
+            # directory-role tag is owned by the multi-user feature and is
+            # independent of the monitoring stack's monitoring-role tag. The AWS
+            # CLI auto-resolves the region from the instance's IMDS credential
+            # provider, so no explicit --region (which would need an IMDSv2 token
+            # to read placement/region) is required.
+            if [ -z "${CLUSTER_ID:-}" ]; then
+                echo "[directory-client] ERROR: CLUSTER_ID is empty; cannot discover directory server. LDAP client not configured."
+                return 1
+            fi
             local login_ip
-            login_ip=$(aws ec2 describe-instances --region "${region}" \
-                --filters "Name=tag:pcs-cluster-id,Values=${CLUSTER_ID:-}" \
-                          "Name=tag:monitoring-role,Values=login" \
+            login_ip=$(aws ec2 describe-instances \
+                --filters "Name=tag:pcs-cluster-id,Values=${CLUSTER_ID}" \
+                          "Name=tag:directory-role,Values=server" \
                           "Name=instance-state-name,Values=running" \
                 --query 'Reservations[0].Instances[0].PrivateIpAddress' \
                 --output text 2>/dev/null || echo "")
             if [ -z "$login_ip" ] || [ "$login_ip" = "None" ]; then
-                echo "[directory-client] ERROR: could not discover login node IP. LDAP client not configured."
+                echo "[directory-client] ERROR: could not discover directory server IP (CLUSTER_ID=${CLUSTER_ID}, directory-role=server). Check the compute node's IAM role has ec2:DescribeInstances. LDAP client not configured."
                 return 1
             fi
             server_uri="ldap://${login_ip}"

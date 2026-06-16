@@ -277,7 +277,10 @@ Parameters:
       Multi-user directory service. 'none' = single ubuntu user (default,
       unchanged). 'OpenLDAP-LoginNode' = deploy slapd on the login node (DB on shared
       /home/ldap-db), compute nodes configure SSSD as LDAP clients. Future
-      options (SimpleAD, ManagedAD) will be added here.
+      options (SimpleAD, ManagedAD) will be added here. NOTE: OpenLDAP-LoginNode
+      runs the directory server on a SINGLE login node — keep the login node
+      group at 1 instance (do not scale it) while this is enabled. For
+      multi-login-node / HA directories, use the future SimpleAD/ManagedAD options.
     Default: 'none'
     AllowedValues:
       - 'none'

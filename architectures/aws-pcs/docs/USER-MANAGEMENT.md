@@ -63,6 +63,16 @@ below for reference.
 - Home directories are auto-created at first login (shared `/home` on OpenZFS)
 - Slurm sees LDAP users transparently — no Slurm configuration needed for user resolution
 
+> ⚠️ **Single login node only.** `OpenLDAP-LoginNode` runs the directory server
+> on **one** login node, so keep the login node group at `MinCount=MaxCount=1`
+> while the directory is enabled. Compute clients discover the server by its
+> `directory-role=server` tag and the slapd database is a single MDB on shared
+> `/home`; running two login nodes would give clients an ambiguous server and
+> have two `slapd` processes open the same database files concurrently
+> (corruption risk). If you need multiple login nodes or a highly-available
+> directory, use a managed backend (the planned `SimpleAD` / `ManagedAD`
+> `DirectoryService` options) rather than the login-node OpenLDAP.
+
 ---
 
 ## Enabling multi-user
