@@ -32,6 +32,35 @@ one cluster. Tests 8-13 are separate paths run only when their inputs change.
 
 ---
 
+## Major-update PR — configurations run end-to-end on real hardware
+
+The major-update PR (IAM policies, multi-user OpenLDAP, `MonitoringStack` rename,
+`SSHAccessCidr`/`GrafanaAccessCidr`, multi-AZ subnets, VPCName auto-derive +
+EFA auto-count) was validated end-to-end in us-east-2 with a single
+`deploy-all` cluster:
+
+```
+PrimarySubnetAZ=us-east-2b  AdditionalSubnetAZ2=us-east-2a  AdditionalSubnetAZ3=us-east-2c
+DirectoryService=OpenLDAP-LoginNode  SSHAccessCidr=<office-ip>/32
+MonitoringStack=Prometheus-LoginNode
+```
+
+| Feature | Verified | Result |
+|---|---|---|
+| **Multi-AZ subnets** | 3 private subnets, 3 distinct AZs, non-overlapping `/18` CIDRs (`10.1.0.0/18`, `10.1.64.0/18`, `10.1.128.0/18`); compute nodes actually scheduled into the additional-AZ subnets (`10.1.x`) | ✅ |
+| **SSHAccessCidr** | `LoginAccessSecurityGroup` opens **port 22 only** (443 absent since `GrafanaAccessCidr` empty) from the given CIDR, attached to the login node only; direct `ssh` to the login public IP succeeds | ✅ |
+| **MonitoringStack=Prometheus-LoginNode** | 6 login containers up (prometheus/grafana/nginx/cloudwatch-exporter/node-exporter/pushgateway) | ✅ |
+| **OpenLDAP server (boot-time, automatic)** | `slapd` active, DB on `/home/ldap-db`, OUs + `clusterusers` gid 3000 created, admin password in SSM; `ldap-add-user` helper auto-installed to `/usr/local/bin`; apt/dpkg-lock wait survived first-boot unattended-upgrades | ✅ |
+| **`directory-role` tag discovery** | login tagged `directory-role=server` (independent of `monitoring-role`); compute clients discover the server by that tag, scoped to `pcs-cluster-id` | ✅ |
+| **Compute SSSD client (boot-time, automatic)** | fresh compute nodes auto-install SSSD + sssd-tools, resolve `testuser1` via the login LDAP — no manual step | ✅ |
+| **Slurm job as LDAP user** | `srun` as `testuser1` runs with `uid=10001` on the compute node | ✅ |
+| **Multi-node UID consistency** | two different compute nodes both resolve `testuser1`→`uid=10001` | ✅ |
+| **User delete propagation** | `ldapdelete` + `sss_cache -E` removes the user from `getent` immediately (sssd-tools now installed) | ✅ |
+| **Template lint** | `validate-template` passes on all 8 edited `assets/*.yaml` (incl. 3 GPU templates + 2 IAM stacks) | ✅ |
+| **Slurm managed accounting (Test 12)** | requires a separate `ManagedAccounting=enabled` cluster — run when validating accounting; LDAP-user↔Slurm visibility itself is covered by the "Slurm job as LDAP user" row above | ⏳ run on accounting-enabled cluster |
+
+---
+
 ## Canonical assets reused (not duplicated)
 
 | Workload | Source in this repo | PCS-specific delta |
