@@ -1,10 +1,10 @@
 # Test: Multi-User Directory (OpenLDAP)
 
-Run this test when `DeployDirectory=true` is enabled. Validates that the
+Run this test when `DirectoryService=OpenLDAP-LoginNode` is enabled. Validates that the
 OpenLDAP directory on the login node is functional, that LDAP users are
 visible on compute nodes via SSSD, and that Slurm can run jobs as those users.
 
-**Prerequisites**: a deployed cluster with `DeployDirectory=true` on the login
+**Prerequisites**: a deployed cluster with `DirectoryService=OpenLDAP-LoginNode` on the login
 CNG and at least one compute CNG. All commands run from the login node unless
 noted otherwise.
 

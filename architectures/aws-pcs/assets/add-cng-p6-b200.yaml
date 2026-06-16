@@ -194,7 +194,7 @@ Parameters:
     Description: >-
       Optional URL of a post-install script to download and run on each node at
       first boot (PCS equivalent of ParallelCluster OnNodeConfigured). Leave
-      empty to skip. To install Enroot/Pyxis, point this at scripts/install-enroot-pyxis.sh.
+      empty to skip. To install Enroot/Pyxis, point this at assets/scripts/install-enroot-pyxis.sh.
       Must be an HTTP(S) URL (e.g. a GitHub raw URL); S3 public hosting is not allowed.
     Default: ''
 

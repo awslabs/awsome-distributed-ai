@@ -21,7 +21,7 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   `/aws/service/pcs/ami/dlami-base-ubuntu2404/arm64/latest/ami-id` (verified via
   `aws ssm get-parameters-by-path`), so this is well-defined as a follow-up: branch
   `AmiId` resolution by the CNG's instance architecture (or expose an `arm64` toggle),
-  add an arm64 Enroot/Pyxis first-boot path (`scripts/install-enroot-pyxis.sh` is x86
+  add an arm64 Enroot/Pyxis first-boot path (`assets/scripts/install-enroot-pyxis.sh` is x86
   only today), and validate hpc7g + c7gn end-to-end on real hardware.
 - [ ] 🟡 **P6e-GB200 / P6e-GB300 (Grace-Blackwell) support.** Add node-group templates for
   the GB200/GB300 NVL instances (e.g. p6e-gb200.36xlarge). These are Grace (arm64) CPUs

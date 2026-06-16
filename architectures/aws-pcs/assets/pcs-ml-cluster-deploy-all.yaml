@@ -342,7 +342,7 @@ Parameters:
       Idempotent: a no-op if Enroot/Pyxis is already pre-baked into AmiId, so
       leaving the default works whether or not you supply a custom AMI.
       S3 hosting is not allowed.
-    Default: 'https://raw.githubusercontent.com/awslabs/awsome-distributed-ai/main/architectures/aws-pcs/scripts/install-enroot-pyxis.sh'
+    Default: 'https://raw.githubusercontent.com/awslabs/awsome-distributed-ai/main/architectures/aws-pcs/assets/scripts/install-enroot-pyxis.sh'
 
   PostInstallScriptArgs:
     Type: String

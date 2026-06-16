@@ -34,14 +34,14 @@ do **not** assume a single 25.11 GPU run covers everything.
 
 | # | Dimension | What to cover | Why it matters |
 |---|---|---|---|
-| 1 | **Every Slurm version** | Deploy one cluster per `SlurmVersion` `AllowedValues` value (**25.05 and 25.11**) and run a Pyxis `--container-image` job on each | `MetricsType` is 25.11-only (25.05 cluster create fails if it's set unconditionally); the Pyxis SPANK plugin is ABI-locked to its Slurm version, so a wrong-version `spank_pyxis.so` stops slurmd. **Any change to `scripts/install-enroot-pyxis.sh` MUST be retested on all supported versions.** |
+| 1 | **Every Slurm version** | Deploy one cluster per `SlurmVersion` `AllowedValues` value (**25.05 and 25.11**) and run a Pyxis `--container-image` job on each | `MetricsType` is 25.11-only (25.05 cluster create fails if it's set unconditionally); the Pyxis SPANK plugin is ABI-locked to its Slurm version, so a wrong-version `spank_pyxis.so` stops slurmd. **Any change to `assets/scripts/install-enroot-pyxis.sh` MUST be retested on all supported versions.** |
 | 2 | **First-boot container runtime install** | Default `PostInstallScriptUrl` runs `install-enroot-pyxis.sh` at first boot; verify Enroot/Pyxis lands and a `--container-image` job works → [Test 2](#test-2-enrootpyxis-container-runtime-first-boot-install) | The default path used by every cluster that doesn't override `AmiId`. Bugs in `install-enroot-pyxis.sh` only show up on a clean first boot. |
 | 3 | **First-boot from a clean deploy** | Validate on a **freshly deployed** cluster, not a node you hand-patched | Post-install runs during cloud-init *before* slurmd/profile.d/controller exist; bugs there (e.g. version detection, `set -e` aborts) only show on a clean first boot, not after a live re-run. |
 | 4 | **CPU queue** | `DeployOnDemandCNG=true`; Pyxis container job on `cpu1` | Baseline; also the cheapest way to exercise items 1–3 without GPU capacity. |
 | 5 | **Each GPU family** (as capacity allows) | `p5`/`p5e`/`p5en`, `p6-b200`, `p6-b300`: nvidia-smi, NCCL all_reduce, FSDP | EFA NIC layout and the dcgm-exporter image differ per family (see notes). |
 | 6 | **Monitoring** | 6 login containers up, all Prometheus targets healthy, GPU dashboards populate on every supported GPU family with the default `DcgmExporterImage` (DCGM 4.5.2 by digest) | — |
 | 7 | **Template lint** | `aws cloudformation validate-template` on every edited `assets/*.yaml` | Catches structural errors before a deploy round-trip. |
-| 8 | **Pre-baked AMI build path** (when touched) | If `pcs-ready-dlami-with-enroot-pyxis.yaml` or any code it bakes (`scripts/install-enroot-pyxis.sh`) changes: build an AMI per supported `SlurmVersion`, then deploy a cluster with `AmiId=<ami-xxx>` + `PostInstallScriptUrl=""` and run a container job → [Test 8](#test-8-pre-baked-ami-build-standalone-dlami-template) | Independent path: the cluster stack does NOT run Image Builder, so an `install-enroot-pyxis.sh` fix is only in the AMI after a rebuild. The AMI is single-Slurm-version by design — `SlurmVersion` on the DLAMI stack must match the cluster's `SlurmVersion` (the SPANK plugin is ABI-locked). **Skip this row only if neither the AMI build template nor the install script changed.** |
+| 8 | **Pre-baked AMI build path** (when touched) | If `pcs-ready-dlami-with-enroot-pyxis.yaml` or any code it bakes (`assets/scripts/install-enroot-pyxis.sh`) changes: build an AMI per supported `SlurmVersion`, then deploy a cluster with `AmiId=<ami-xxx>` + `PostInstallScriptUrl=""` and run a container job → [Test 8](#test-8-pre-baked-ami-build-standalone-dlami-template) | Independent path: the cluster stack does NOT run Image Builder, so an `install-enroot-pyxis.sh` fix is only in the AMI after a rebuild. The AMI is single-Slurm-version by design — `SlurmVersion` on the DLAMI stack must match the cluster's `SlurmVersion` (the SPANK plugin is ABI-locked). **Skip this row only if neither the AMI build template nor the install script changed.** |
 | 9 | **CPU EFA path** (when touched) | If `add-cng.yaml`'s EFA wiring (`EnableEfa` / `EfaInterfaceCount` / `PlacementGroupName`) or the deploy-all forwarding (`OnDemand{EnableEfa,EfaInterfaceCount,PlacementGroupName}`) changes: deploy with `OnDemandEnableEfa=true` on at least one EFA-capable HPC type (e.g. hpc7a.96xlarge, 2 NICs), verify `lspci`/`fi_info` show the EFA NICs, and run a 2-node OSU `osu_mbw_mr` → [Test 9](#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a) | EFA enables a different LaunchTemplate shape (`NetworkInterfaces` block with `InterfaceType=efa`, mutually exclusive with `SecurityGroupIds`); a regression here only shows on a real EFA deploy, not template-validate. **Skip this row only if no EFA-related wiring was touched.** |
 | 10 | **FSx storage health** | Both filesystems mount on every node; read/write sanity; FSx side reports the parameters CFN asked for (deployment type, throughput, capacity, `EfaEnabled` when set) → [Test 10](#test-10-fsx-storage-health) | Mount errors only surface on a fresh first boot (race vs systemd, NFS settle, Lustre client driver mismatch). FSx-side parameter drift between what CFN asked for and what FSx reports is invisible to template-validate. |
 
@@ -73,7 +73,7 @@ A single `pcs-ml-cluster-deploy-all.yaml` deploy with `DeployMonitoring=true`,
 `DeployOnDemandCNG=true`, and `DeployPseriesCNG=true` exercises Tests 1–7 in one cluster.
 Test 8 is a **separate** flow (independent stack for the AMI, then a cluster pinned to
 its output); run it when `pcs-ready-dlami-with-enroot-pyxis.yaml` or
-`scripts/install-enroot-pyxis.sh` change. See [the README](../README.md#5-usage-examples)
+`assets/scripts/install-enroot-pyxis.sh` change. See [the README](../README.md#5-usage-examples)
 for deploy commands; set `PseriesInstanceType` to the GPU family you want to validate.
 
 ---
@@ -249,7 +249,7 @@ tail -1 /var/log/pcs-post-install.log                              # "...complet
 dir, and the plugstack `pyxis.conf` referencing that exact path; post-install log exits 0.
 The Test 1/6/7 container jobs are the functional proof that Pyxis works.
 
-> **⚠️ Regression-test rule for `scripts/install-enroot-pyxis.sh`.** This script has bitten
+> **⚠️ Regression-test rule for `assets/scripts/install-enroot-pyxis.sh`.** This script has bitten
 > us repeatedly in ways a single 25.11 GPU run does not catch. **Any change to it MUST be
 > retested across the full matrix at the top of this guide**, specifically:
 > - **All supported Slurm versions** (25.05 **and** 25.11). The Pyxis SPANK plugin is
@@ -426,7 +426,7 @@ cd slurm && sbatch --nodes=2 --partition=gpu-p6b300 \
 ## Test 8: Pre-baked AMI build (standalone DLAMI template)
 
 **When to run:** when `pcs-ready-dlami-with-enroot-pyxis.yaml` or any code it bakes
-in (`scripts/install-enroot-pyxis.sh`) changes — the cluster stack does NOT run
+in (`assets/scripts/install-enroot-pyxis.sh`) changes — the cluster stack does NOT run
 Image Builder, so a fix to the install script is only in the AMI after a rebuild.
 Skip this test if you only touched the cluster templates.
 
@@ -792,7 +792,7 @@ mounts continue to work over TCP for non-EFA nodes; EFA support is additive.
 
 See **[`multi-user-test.md`](./multi-user-test.md)** for the full test procedure.
 
-Run when `DeployDirectory=true` is enabled. Covers: LDAP server health,
+Run when `DirectoryService=OpenLDAP-LoginNode` is enabled. Covers: LDAP server health,
 user lifecycle (create/delete/verify on login + compute), Slurm job execution
 as LDAP user, multi-node UID consistency, home directory sharing, SSSD cache
 resilience, and LDAP DB persistence across login node replacement.
