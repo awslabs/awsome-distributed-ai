@@ -73,6 +73,52 @@ below for reference.
 > directory, use a managed backend (the planned `SimpleAD` / `ManagedAD`
 > `DirectoryService` options) rather than the login-node OpenLDAP.
 
+### How a compute node finds the LDAP server (tag-based discovery)
+
+This part is **not obvious**, so it's worth spelling out. A compute node does
+**not** receive the login node's IP as a parameter — PCS launches the login and
+compute node groups independently, and the login node's private IP isn't known
+at template-synthesis time (and it changes if the login node is replaced).
+Instead, discovery happens **at compute-node boot**, by EC2 tag lookup:
+
+1. When the directory is enabled, the login node group tags its instance
+   `directory-role=server` (alongside `pcs-cluster-id=<this cluster>`). The
+   compute node groups tag themselves `directory-role=client`. This
+   `directory-role` tag is **dedicated to the directory feature** — it is
+   deliberately *separate* from the monitoring stack's `monitoring-role` tag, so
+   the two features don't depend on each other.
+2. On first boot, each compute node runs `setup-directory.sh client`, which
+   calls `aws ec2 describe-instances` filtering for
+   `tag:pcs-cluster-id=<my cluster>` + `tag:directory-role=server` +
+   `instance-state-name=running`, and reads the matching instance's
+   `PrivateIpAddress`. The `pcs-cluster-id` filter scopes the lookup to **this
+   cluster only**, so multiple PCS clusters can share one VPC without their
+   compute nodes finding the wrong cluster's LDAP server. (`CLUSTER_ID` is
+   passed from `${ClusterId}` in UserData; the script aborts client setup if it
+   is empty, rather than risk matching another cluster's server.)
+3. That IP becomes the SSSD `ldap_uri` (`ldap://<login-ip>`). SSSD on the
+   compute node then resolves users from the login node's slapd.
+
+Implications to be aware of:
+
+- **Compute nodes need `ec2:DescribeInstances`** in their instance role (the
+  cluster IAM role already grants it). Without it, discovery fails and the node
+  boots without LDAP (check `/var/log/directory-setup.log` for
+  `could not discover directory server IP`).
+- **The login (server) node must be running before a compute node boots** for
+  discovery to succeed. In normal deploy order the login node group comes up
+  first; a compute node that scales up later simply queries the
+  already-running server.
+- **If the login node is replaced**, its new instance re-tags itself
+  `directory-role=server` and re-attaches to the same `/home/ldap-db`, so newly
+  booting compute nodes discover the new IP automatically. Already-running
+  compute nodes keep their cached `ldap_uri`; they pick up the new IP on their
+  next boot (or after an SSSD reconfigure).
+- **An explicit override exists**: set `LDAP_SERVER_URI` (or `DIRECTORY_DNS_IPS`,
+  for the future managed-directory path) in the client's environment to skip the
+  tag lookup entirely — used by the SimpleAD/ManagedAD extension and handy for
+  debugging.
+
 ---
 
 ## Enabling multi-user

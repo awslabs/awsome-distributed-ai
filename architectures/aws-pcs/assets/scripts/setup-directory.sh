@@ -49,6 +49,42 @@ echo "[directory] Role: ${ROLE}"
 echo "[directory] Domain: ${LDAP_DOMAIN} (${LDAP_DOMAIN_SUFFIX})"
 
 ###############################################################################
+# apt helpers — at first boot cloud-init's own unattended-upgrades/apt run can
+# still hold the dpkg lock, so a bare `apt-get install` fails with
+# "Could not get lock /var/lib/dpkg/lock-frontend". Wait for the lock to clear,
+# then run apt-get with built-in retries. Mirrors install-enroot-pyxis.sh.
+###############################################################################
+wait_for_apt_lock() {
+    local waited=0
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+       || fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
+       || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+        if [ "$waited" -ge 300 ]; then
+            echo "[directory] WARNING: dpkg lock still held after ${waited}s; proceeding anyway."
+            break
+        fi
+        echo "[directory] Waiting for apt/dpkg lock to clear (${waited}s)..."
+        sleep 10
+        waited=$((waited + 10))
+    done
+}
+
+apt_get() {
+    wait_for_apt_lock
+    local attempt
+    for attempt in 1 2 3; do
+        if DEBIAN_FRONTEND=noninteractive apt-get "$@"; then
+            return 0
+        fi
+        echo "[directory] apt-get $* failed (attempt ${attempt}/3); waiting for lock and retrying..."
+        wait_for_apt_lock
+        sleep 5
+    done
+    echo "[directory] ERROR: apt-get $* failed after 3 attempts."
+    return 1
+}
+
+###############################################################################
 # SERVER role — login node: install slapd + configure
 ###############################################################################
 setup_server() {
@@ -56,7 +92,7 @@ setup_server() {
     CLUSTER_ID="${CLUSTER_ID:-unknown}"
 
     echo "[directory-server] Running apt-get update..."
-    apt-get update -qq
+    apt_get update -qq
 
     echo "[directory-server] Installing slapd + ldap-utils..."
     debconf-set-selections <<EOF
@@ -70,7 +106,7 @@ slapd slapd/purge_database boolean false
 slapd slapd/move_old_database boolean false
 slapd slapd/no_configuration boolean false
 EOF
-    apt-get install -y slapd ldap-utils
+    apt_get install -y slapd ldap-utils
 
     echo "[directory-server] Configuring LDAP DB on shared storage (${LDAP_DB_DIR})..."
     systemctl stop slapd || true
@@ -219,10 +255,10 @@ setup_client_internal() {
     local server_uri="$1"
 
     echo "[directory-client] Running apt-get update..."
-    apt-get update -qq
+    apt_get update -qq
 
     echo "[directory-client] Installing SSSD..."
-    apt-get install -y sssd libpam-sss libnss-sss ldap-utils
+    apt_get install -y sssd libpam-sss libnss-sss ldap-utils
 
     echo "[directory-client] Configuring SSSD (server: ${server_uri})..."
     cat > /etc/sssd/sssd.conf <<EOF
