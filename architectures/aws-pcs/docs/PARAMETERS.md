@@ -7,7 +7,7 @@ the latest PCS-Ready Deep Learning AMI auto-resolved from SSM, Enroot/Pyxis inst
 at first boot via `PostInstallScriptUrl`, monitoring enabled — so a default deploy
 only needs the Availability Zone (`PrimarySubnetAZ`). To pre-bake Enroot/Pyxis into
 a custom AMI for faster boots, build it separately with
-[`pcs-ready-dlami-with-enroot-pyxis.yaml`](../README.md#9-pre-baking-enrootpyxis-into-a-custom-ami-optional)
+[`pcs-ready-dlami-with-enroot-pyxis.yaml`](../README.md#82-pre-baking-enrootpyxis-into-a-custom-ami)
 and pass its output as `AmiId`.
 
 For conceptual guidance (GPU instance/EFA selection, FSx Region availability, container
@@ -17,7 +17,9 @@ runtime options), see the [README](../README.md#4-configuration).
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `PrimarySubnetAZ` | *(required)* | Availability Zone to deploy into — the one required parameter |
+| `PrimarySubnetAZ` | *(required)* | Availability Zone to deploy into — the one required parameter. Holds the public subnet (login node), the primary private subnet (compute, FSx), and the single NAT gateway |
+| `AdditionalSubnetAZ2` | *(empty)* | (Optional) 2nd AZ for an additional private subnet. Empty = single-AZ. Enables multi-AZ layouts (e.g. OpenZFS `MULTI_AZ`). Shares the primary AZ's NAT gateway (cross-AZ egress, no per-AZ NAT) |
+| `AdditionalSubnetAZ3` | *(empty)* | (Optional) 3rd AZ for an additional private subnet. Requires `AdditionalSubnetAZ2` to also be set. Max 3 private AZs total |
 | `VPCName` | `ML-Cluster-VPC` | Name for the created VPC |
 | `CreateS3Endpoint` | `true` | Create an S3 VPC endpoint |
 
@@ -28,11 +30,19 @@ runtime options), see the [README](../README.md#4-configuration).
 | `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`). Drives which monitoring you get (Slurm OpenMetrics is 25.11+ only) and is also threaded into the CNG UserData so the right-version Pyxis is installed; see [OPERATIONS.md §1](./OPERATIONS.md#1-slurm-version-selection) |
 | `LoginNodeInstanceType` | `m6i.4xlarge` | Login node instance type |
 | `RootVolumeSize` | `300` | Root EBS volume size (GiB) on every node (login + compute); 300 leaves room for large container images (Megatron `.sqsh` ~20 GB) |
-| `AmiId` | *(empty → SSM auto-resolve)* | AMI ID for every node group. **Empty (default) auto-resolves to the latest PCS-Ready Deep Learning AMI** (Ubuntu 24.04, x86_64) from SSM (`/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id`). For production, **pin to a specific `ami-xxx`** so a later scale-out cannot drift onto a newer base. Use a custom AMI built off the PCS-Ready DLAMI base (e.g. via [`pcs-ready-dlami-with-enroot-pyxis.yaml`](../README.md#9-pre-baking-enrootpyxis-into-a-custom-ami-optional)) when you want Enroot/Pyxis pre-baked or other customizations. See [OPERATIONS.md §4](./OPERATIONS.md#4-ami-selection-amiid--pin-in-production) |
-| `DeployMonitoring` | `true` | Deploy Prometheus/Grafana/DCGM on the login node |
-| `GrafanaPublicAccessCidr` | *(empty)* | When set to a CIDR, opens HTTPS/443 on the login node to that CIDR via a login-only security group. Empty = SSM port-forward only. **443 also exposes the unauthenticated `/prometheus/`, `/pushgateway/`, `/slurmexporter/` proxy paths**, not just the password-gated Grafana. Use the tightest CIDR you can; `0.0.0.0/0` is accepted for short-lived PoC/workshop use but exposes those endpoints to the whole internet |
+| `AmiId` | *(empty → SSM auto-resolve)* | AMI ID for every node group. **Empty (default) auto-resolves to the latest PCS-Ready Deep Learning AMI** (Ubuntu 24.04, x86_64) from SSM (`/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id`). For production, **pin to a specific `ami-xxx`** so a later scale-out cannot drift onto a newer base. Use a custom AMI built off the PCS-Ready DLAMI base (e.g. via [`pcs-ready-dlami-with-enroot-pyxis.yaml`](../README.md#82-pre-baking-enrootpyxis-into-a-custom-ami)) when you want Enroot/Pyxis pre-baked or other customizations. See [OPERATIONS.md §4](./OPERATIONS.md#4-ami-selection-amiid--pin-in-production) |
+| `SSHAccessCidr` | *(empty)* | When set to a CIDR, opens SSH/22 on the login node to that CIDR via a login-only security group (attached to the login node only, never compute). Empty (default) = SSH over SSM only. Set to your office/VPN range for direct `ssh`/`scp`/VS Code Remote (common for multi-user clusters) |
 | `ManagedAccounting` | `disabled` | Enable Slurm managed accounting (requires Slurm 24.11+) |
 | `AccountingPolicyEnforcement` | `none` | Slurm accounting policy enforcement (`none` or `associations,limits,safe`) |
+
+## 2b. Additional Cluster Configuration (Monitoring, Multi-User)
+
+| Parameter | Default | Purpose |
+|---|---|---|
+| `MonitoringStack` | `Prometheus-LoginNode` | Monitoring stack to deploy. `Prometheus-LoginNode` = self-hosted Prometheus + Grafana + DCGM Exporter on the login node. `none` = no monitoring. (Renamed from the old boolean `DeployMonitoring`; `<what>-<where>` enum, extensible to future `AMP-AMG`/`CloudWatch`) |
+| `GrafanaAccessCidr` | *(empty)* | When set to a CIDR, opens HTTPS/443 (Grafana) on the login node to that CIDR via the login-only security group. Empty = SSM port-forward only. **443 also exposes the unauthenticated `/prometheus/`, `/pushgateway/`, `/slurmexporter/` proxy paths**, not just the password-gated Grafana. Use the tightest CIDR you can. (Renamed from `GrafanaPublicAccessCidr`) |
+| `DirectoryService` | `none` | Multi-user directory. `none` = single `ubuntu` user. `OpenLDAP-LoginNode` = slapd on the login node (DB on shared `/home/ldap-db`) + SSSD on all compute nodes. **Single login node only** — keep the login node group at 1 instance while enabled. See [USER-MANAGEMENT.md](./USER-MANAGEMENT.md) |
+| `DirectoryDomainSuffix` | `dc=cluster,dc=internal` | LDAP domain suffix. Only used when `DirectoryService != none` |
 
 ## 3. Container Runtime (Post-install Script)
 

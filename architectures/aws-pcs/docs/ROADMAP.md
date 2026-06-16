@@ -8,10 +8,12 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
 
 ## Templates & deployment
 
-- [ ] 🟡 **Multi-AZ support in the prerequisites stack.** `ml-cluster-prerequisites.yaml`
-  currently creates a single private subnet, so `OpenZFSDeploymentType` excludes the
-  `MULTI_AZ` types. Add a second private subnet (and the related routing) to enable
-  Multi-AZ FSx and higher-availability deployments.
+- [x] 🟡 **Multi-AZ support in the prerequisites stack.** `ml-cluster-prerequisites.yaml`
+  now supports up to 3 private-subnet AZs via `AdditionalSubnetAZ2`/`AdditionalSubnetAZ3`
+  (CIDR1 split into four /18 blocks; additional subnets share the primary AZ's single
+  NAT gateway). This unblocks `OpenZFSDeploymentType=MULTI_AZ` and higher-availability
+  layouts. *(Note: OpenZFS MULTI_AZ wiring of the 2nd subnet into the FSx resource is a
+  follow-up; the subnets + routing are in place.)*
 - [ ] 🟢 **Trainium (Trn) validation.** Validate the templates on Trainium instances
   (e.g. trn1/trn2) — node group, EFA/networking, and a sample training run.
 - [ ] 🟡 **Graviton (arm64) CPU CNG support — `hpc7g` / `c7gn`.** EFA-capable arm64
@@ -89,11 +91,13 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
 
 ## User management
 
-- [ ] 🟡 **Integrate a user-management backend (LDAP/AD).** Provide a way to manage cluster
-  users centrally instead of the single `ubuntu` user — e.g. integrate an LDAP/OpenLDAP or
-  AWS Managed Microsoft AD directory (see `1.architectures/6.ldap_server`) so login/compute
-  nodes authenticate against a shared directory (multi-user clusters, per-user home dirs,
-  Slurm accounting per user).
+- [x] 🟡 **Integrate a user-management backend (LDAP/AD).** Done for OpenLDAP:
+  `DirectoryService=OpenLDAP-LoginNode` runs slapd on the login node (DB on shared
+  `/home/ldap-db`) with SSSD on all compute nodes (CPU + GPU). Users added via
+  `ldap-add-user` resolve cluster-wide; home dirs auto-create; Slurm sees LDAP users
+  transparently. See `docs/USER-MANAGEMENT.md`. *(Follow-up: managed-directory options
+  `DirectoryService=SimpleAD`/`ManagedAD` for multi-login-node / HA — the param enum is
+  already extensible.)*
 
 ## Monitoring
 
@@ -101,14 +105,14 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   Prometheus + Amazon Managed Grafana as an alternative to the self-hosted stack on the
   login node (see `4.validation_and_observability/4.prometheus-grafana`), so users can
   use a managed backend instead of running the containers themselves.
-- [ ] 🟡 **Rename `DeployMonitoring` → `MonitoringStack` (enum).** Align with the
-  `DirectoryService` parameter pattern (`<what>-<where>`):
-  `MonitoringStack: none | Prometheus-LoginNode | AMP-AMG | CloudWatch`.
-  This makes it clear that the current default is a self-hosted Prometheus + Grafana
-  stack on the login node, and provides a natural extension point for the managed
-  option above. **Breaking change** — bundle with the next minor version alongside
-  other parameter renames (`Capacity` → `LustreCapacity`, `CngName`/`QueueName`
-  collapse, etc.).
+- [x] 🟡 **Rename `DeployMonitoring` → `MonitoringStack` (enum).** Done in deploy-all:
+  `MonitoringStack: none | Prometheus-LoginNode` (default `Prometheus-LoginNode`),
+  aligning with the `DirectoryService` `<what>-<where>` pattern. `AMP-AMG`/`CloudWatch`
+  remain as future AllowedValues for the managed-monitoring item above. deploy-all
+  converts to the nested templates' `DeployMonitoring=true/false` internally, so
+  add-cng*.yaml are unchanged. **Breaking change** at the deploy-all interface
+  (bundled into the major-update PR alongside `GrafanaPublicAccessCidr`→`GrafanaAccessCidr`
+  and `SSHAccessCidr`).
 
 ## Testing / docs
 

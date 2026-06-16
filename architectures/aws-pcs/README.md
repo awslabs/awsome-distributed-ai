@@ -8,7 +8,7 @@ This repository provides reference architectures and deployment templates for se
 
 - **One click to an ML-training-ready cluster**: a single CloudFormation stack gives you a complete, ready-to-train environment — Slurm scheduler, GPU compute with EFA, shared FSx storage, the Enroot/Pyxis container runtime, and monitoring — with only the Availability Zone to choose. Submit distributed training jobs minutes after launch.
 - **Container runtime included**: Enroot/Pyxis is set up automatically, so `srun --container-image=...` works out of the box for containerized training.
-- **Monitoring built in**: Grafana + Prometheus run on the login node, with DCGM Exporter on GPU compute nodes feeding the pre-built GPU dashboards (`DeployMonitoring=true`, on by default). Reach Grafana privately via SSM port-forward, or open it to a trusted CIDR with `GrafanaPublicAccessCidr`.
+- **Monitoring built in**: Grafana + Prometheus run on the login node, with DCGM Exporter on GPU compute nodes feeding the pre-built GPU dashboards (`MonitoringStack=Prometheus-LoginNode`, on by default). Reach Grafana privately via SSM port-forward, or open it to a trusted CIDR with `GrafanaAccessCidr`.
 - **GPU-ready, multi-NIC EFA**: dedicated launch templates for the P5 and P6 families, selected automatically by instance type, for high-bandwidth multi-node training.
 - **Broad capacity-purchase support**: covers the full range of EC2 capacity options out of the box — On-Demand, On-Demand Capacity Reservations (ODCR), and Capacity Blocks for ML — selected per node group.
 - **High-performance storage**: FSx for Lustre (shared scratch, `/fsx`) and FSx for OpenZFS (home directories, `/home`).
@@ -63,7 +63,7 @@ Add a GPU queue and tune storage/monitoring via the parameters below.
 Once it's up:
 - **Connect** to the login node via SSM Session Manager — see [Accessing the Cluster](#6-accessing-the-cluster).
 - **Open the Grafana dashboards** (deployed by default) via SSM port forwarding — see [Accessing Grafana](#accessing-grafana).
-- **Want to reach Grafana directly in a browser** (no port forwarding)? Set `GrafanaPublicAccessCidr` to a trusted CIDR at deploy time — see [Option B — Direct public access](#option-b--direct-public-access-opt-in-via-grafanapublicaccesscidr).
+- **Want to reach Grafana directly in a browser** (no port forwarding)? Set `GrafanaAccessCidr` to a trusted CIDR at deploy time — see [Option B — Direct public access](#option-b--direct-public-access-opt-in-via-grafanaaccesscidr).
 
 Prefer step-by-step instructions? See the [AI/ML for AWS PCS Workshop](https://catalog.workshops.aws/ml-on-pcs/).
 
@@ -82,7 +82,7 @@ are deleted with the stack.
 ## 4. Configuration
 
 Defaults give the most common production setup — Enroot/Pyxis installed at first
-boot via `PostInstallScriptUrl` + `DeployMonitoring=true` — so a default deploy
+boot via `PostInstallScriptUrl` + `MonitoringStack=Prometheus-LoginNode` — so a default deploy
 only needs the Availability Zone (`PrimarySubnetAZ`). The most-used parameters:
 
 | Parameter | Default | Purpose |
@@ -90,7 +90,7 @@ only needs the Availability Zone (`PrimarySubnetAZ`). The most-used parameters:
 | `PrimarySubnetAZ` | *(required)* | Availability Zone to deploy into — the one required parameter |
 | `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`); 25.11 is needed for the Slurm OpenMetrics dashboards. Drives Pyxis build version too. See [OPERATIONS.md §1](./docs/OPERATIONS.md#1-slurm-version-selection) |
 | `AmiId` | *(empty → SSM auto)* | Empty auto-resolves to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04) from SSM. Pin to a specific `ami-xxx` for production, or pass an AMI built by [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#82-pre-baking-enrootpyxis-into-a-custom-ami) |
-| `DeployMonitoring` | `true` | Deploy Prometheus + Grafana on the login node, plus DCGM Exporter on GPU compute nodes |
+| `MonitoringStack` | `Prometheus-LoginNode` | Deploy Prometheus + Grafana on the login node, plus DCGM Exporter on GPU compute nodes. Set to `none` to disable monitoring |
 | `DeployOnDemandCNG` | `true` | Deploy the `cpu1` CPU queue (`OnDemandInstanceType`, default `c6i.4xlarge`) |
 | `OnDemandEnableEfa` | `false` | Set `true` for HPC/MPI workloads on EFA-capable CPU types (hpc6a/hpc7a/hpc6id/hpc8a, c7i.metal, etc.). Auto-creates a cluster placement group. See [EFA on CPU HPC instances](#efa-on-cpu-hpc-instances-ondemandenableefa) |
 | `DeployPseriesCNG` | `false` | Deploy a GPU (P5/P6) queue — see [GPU compute](#gpu-compute-p5p6) |
@@ -272,7 +272,9 @@ group. For other HPC types, set `OnDemandInstanceType` and the matching
 
 ## 6. Accessing the Cluster
 
-Connect to the login node via SSM Session Manager — no public SSH needed.
+Connect to the login node via SSM Session Manager — no public SSH needed. If you do
+want direct SSH, set `SSHAccessCidr` to a trusted CIDR at deploy time to open SSH/22
+on the login node to that CIDR.
 
 **Console:** [EC2 Console](https://console.aws.amazon.com/ec2/home#Instances:) → filter
 by `aws:pcs:compute-node-group-name = login` → **Connect** → **Session Manager**.
@@ -323,7 +325,7 @@ the full validation matrix is in [tests/README.md](./tests/README.md).
 
 ### 8.1 Monitoring
 
-With `DeployMonitoring=true` (default), an integrated monitoring stack based on
+With `MonitoringStack=Prometheus-LoginNode` (default), an integrated monitoring stack based on
 [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring)
 is installed automatically:
 
@@ -350,7 +352,7 @@ and a screenshot.
 > node, see [`4.validation_and_observability/4.prometheus-grafana`](../../4.validation_and_observability/4.prometheus-grafana).
 
 **Monitoring-related parameters:**
-- `DeployMonitoring` (default `true`)
+- `MonitoringStack` (default `Prometheus-LoginNode`; `none` disables monitoring)
 - `MonitoringVersion` — [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) git ref (release tag, branch, or `latest`; default `v2.9.1`). Pinned to a tag so upstream changes can't break deployments unexpectedly. `v2.9.1` adds the `DCGM_EXPORTER_IMAGE` override (lets `DcgmExporterImage` enable B300 GPU metrics); `v2.6.4`+ carry the PCS fixes (node-local `/opt` install + Docker-29.x DCGM tag).
 - `MonitoringRepo` — `owner/repo` to fetch from (default `aws-samples/aws-parallelcluster-monitoring`). Point at a fork + a branch in `MonitoringVersion` to test unreleased changes.
 - `DcgmExporterImage` — dcgm-exporter image used on GPU nodes; defaults to a DCGM 4.5.2 build pinned by digest (covers Hopper/B200/B300). Override only if you need to pin to a different build (e.g. the older monitoring-default DCGM 4.2.0).
@@ -389,9 +391,9 @@ aws ssm start-session --target $INSTANCE_ID \
 
 Then open `https://localhost:8443/grafana/`.
 
-#### Option B — Direct public access (opt-in, via `GrafanaPublicAccessCidr`)
+#### Option B — Direct public access (opt-in, via `GrafanaAccessCidr`)
 
-To browse Grafana directly without port forwarding, set **`GrafanaPublicAccessCidr`** at
+To browse Grafana directly without port forwarding, set **`GrafanaAccessCidr`** at
 deploy time to a CIDR you trust (e.g. your office IP `203.0.113.4/32`). deploy-all then
 creates a **login-only security group** that opens HTTPS/**443** to that CIDR and
 attaches it to the login node, so you can open:
@@ -425,7 +427,7 @@ Security notes:
   as you are done.
 - The certificate is self-signed, so browsers show a warning — proceed past it, or put
   an ALB + ACM certificate in front for a trusted cert.
-- Leaving `GrafanaPublicAccessCidr` empty (the default) keeps monitoring private; use
+- Leaving `GrafanaAccessCidr` empty (the default) keeps monitoring private; use
   Option A.
 
 ---
