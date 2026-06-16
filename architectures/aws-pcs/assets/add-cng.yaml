@@ -520,8 +520,8 @@ Resources:
                 done
                 echo "Monitoring installation complete (exit $rc)" >> /var/log/monitoring-install.log
               fi
-            # Multi-user directory setup (optional, DirectoryRole != none)
             - |
+              # Multi-user directory setup (optional, DirectoryRole != none)
               if [ "${DirectoryRole}" != "none" ]; then
                 export LDAP_DOMAIN_SUFFIX="${DirectoryDomainSuffix}"
                 export LDAP_DOMAIN=$(echo "${DirectoryDomainSuffix}" | sed 's/dc=//g; s/,/./g')
