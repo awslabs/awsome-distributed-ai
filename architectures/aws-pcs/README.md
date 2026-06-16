@@ -18,7 +18,7 @@ This repository provides reference architectures and deployment templates for se
 > Slurm 25.05/25.11 pre-installed), so no custom AMI build is required by default —
 > the cluster comes up without an Image Builder step. For frequent scaling, you can
 > pre-bake Enroot/Pyxis into a custom DLAMI with the standalone
-> [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional)
+> [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#82-pre-baking-enrootpyxis-into-a-custom-ami)
 > template and pass the result as `AmiId`.
 
 ## 2. Architecture
@@ -89,7 +89,7 @@ only needs the Availability Zone (`PrimarySubnetAZ`). The most-used parameters:
 |---|---|---|
 | `PrimarySubnetAZ` | *(required)* | Availability Zone to deploy into — the one required parameter |
 | `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`); 25.11 is needed for the Slurm OpenMetrics dashboards. Drives Pyxis build version too. See [OPERATIONS.md §1](./docs/OPERATIONS.md#1-slurm-version-selection) |
-| `AmiId` | *(empty → SSM auto)* | Empty auto-resolves to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04) from SSM. Pin to a specific `ami-xxx` for production, or pass an AMI built by [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional) |
+| `AmiId` | *(empty → SSM auto)* | Empty auto-resolves to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04) from SSM. Pin to a specific `ami-xxx` for production, or pass an AMI built by [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#82-pre-baking-enrootpyxis-into-a-custom-ami) |
 | `DeployMonitoring` | `true` | Deploy Prometheus + Grafana on the login node, plus DCGM Exporter on GPU compute nodes |
 | `DeployOnDemandCNG` | `true` | Deploy the `cpu1` CPU queue (`OnDemandInstanceType`, default `c6i.4xlarge`) |
 | `OnDemandEnableEfa` | `false` | Set `true` for HPC/MPI workloads on EFA-capable CPU types (hpc6a/hpc7a/hpc6id/hpc8a, c7i.metal, etc.). Auto-creates a cluster placement group. See [EFA on CPU HPC instances](#efa-on-cpu-hpc-instances-ondemandenableefa) |
@@ -109,7 +109,7 @@ choices that need the most thought.
 needed. Enroot 3.5.0 + Pyxis 0.20.0 are layered on at first boot via
 [`assets/scripts/install-enroot-pyxis.sh`](./assets/scripts/install-enroot-pyxis.sh)
 (~8–12 min boot). For **frequent scaling**, pre-bake Enroot/Pyxis into a custom DLAMI
-once with [§9](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional) and pass that
+once with [§8.2](#82-pre-baking-enrootpyxis-into-a-custom-ami) and pass that
 `ami-xxx` as `AmiId` (~3 min boot, deterministic state). The post-install hook is
 idempotent — it no-ops on a pre-baked AMI.
 
@@ -319,7 +319,9 @@ the full validation matrix is in [tests/README.md](./tests/README.md).
 
 ---
 
-## 8. Monitoring
+## 8. Advanced Features
+
+### 8.1 Monitoring
 
 With `DeployMonitoring=true` (default), an integrated monitoring stack based on
 [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring)
@@ -440,7 +442,7 @@ NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 
 ---
 
-## 9. Pre-baking Enroot/Pyxis into a custom AMI (optional)
+### 8.2 Pre-baking Enroot/Pyxis into a custom AMI
 
 The all-in-one template installs Enroot/Pyxis at **first boot** via
 `PostInstallScriptUrl`, which is fast to deploy and avoids an Image Builder step.
@@ -503,7 +505,31 @@ For production deploys that pin the AMI explicitly per cluster, none of these ar
 
 ---
 
-## 10. Templates
+### 8.3 User Management
+
+By default, the cluster runs as a single `ubuntu` user. For **multi-user
+clusters** (per-user Slurm accounting, isolated home directories, team-based
+access control), set `DirectoryService=OpenLDAP-LoginNode` at deploy time.
+
+This installs an OpenLDAP directory on the login node with SSSD on all compute
+nodes — users you add are immediately visible cluster-wide. See the
+**[User Management Guide](./docs/USER-MANAGEMENT.md)** for step-by-step
+operations (adding/removing users, Slurm accounting, SSH access).
+
+### 8.4 IAM Permissions
+
+Two sample IAM policy stacks are provided for least-privilege access:
+
+- **Cluster admin** (`cluster-admin-iam.yaml`) — deploy / update / delete the cluster
+- **Cluster user** (`cluster-user-iam.yaml`) — SSM session to login node + read-only
+
+Deploy with one click from the [iam/ README](./iam/README.md), or attach the
+raw JSON policies manually. See [iam/README.md](./iam/README.md) for the full
+verification matrix and design rationale.
+
+---
+
+## 9. Templates
 
 All templates live in [`assets/`](./assets/). `pcs-ml-cluster-deploy-all.yaml` nests
 the others; you can also deploy each individually for more control (e.g. reuse a VPC/FSx
@@ -585,27 +611,7 @@ Standalone (not nested):
 
 ---
 
-## 11. User Management
-
-By default, the cluster runs as a single `ubuntu` user (the PCS-Ready DLAMI
-default). This is sufficient for single-user evaluation, workshops, and
-small-team use where everyone shares the same environment.
-
-For **multi-user clusters** (per-user Slurm accounting, isolated home
-directories, team-based access control), set `DirectoryService=OpenLDAP-LoginNode`
-at deploy time. This installs an OpenLDAP directory on the login node with
-SSSD on all compute nodes — users you add are immediately visible cluster-wide.
-
-See the **[User Management Guide](./docs/USER-MANAGEMENT.md)** for:
-- Enabling multi-user (one parameter)
-- Adding / removing users (step-by-step, no LDAP knowledge required)
-- Slurm accounting integration
-- Access methods (SSH vs SSM)
-- Troubleshooting
-
----
-
-## 12. Testing and Validation
+## 10. Testing and Validation
 
 Every template has been deployed end-to-end on real hardware: P5 / P5e / P5en /
 P6-B200 / P6-B300 (NCCL all-reduce + FSDP Llama-2 7B), HPC EFA on hpc6a / hpc7a /
@@ -616,7 +622,7 @@ numbers is in **[tests/README.md](./tests/README.md)**.
 
 ---
 
-## 13. Additional Resources
+## 11. Additional Resources
 
 In this repo:
 - [Parameter reference](./docs/PARAMETERS.md) — every deploy-all parameter and default
