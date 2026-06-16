@@ -585,7 +585,27 @@ Standalone (not nested):
 
 ---
 
-## 11. Testing and Validation
+## 11. User Management
+
+By default, the cluster runs as a single `ubuntu` user (the PCS-Ready DLAMI
+default). This is sufficient for single-user evaluation, workshops, and
+small-team use where everyone shares the same environment.
+
+For **multi-user clusters** (per-user Slurm accounting, isolated home
+directories, team-based access control), set `DirectoryService=OpenLDAP-LoginNode`
+at deploy time. This installs an OpenLDAP directory on the login node with
+SSSD on all compute nodes — users you add are immediately visible cluster-wide.
+
+See the **[User Management Guide](./docs/USER-MANAGEMENT.md)** for:
+- Enabling multi-user (one parameter)
+- Adding / removing users (step-by-step, no LDAP knowledge required)
+- Slurm accounting integration
+- Access methods (SSH vs SSM)
+- Troubleshooting
+
+---
+
+## 12. Testing and Validation
 
 Every template has been deployed end-to-end on real hardware: P5 / P5e / P5en /
 P6-B200 / P6-B300 (NCCL all-reduce + FSDP Llama-2 7B), HPC EFA on hpc6a / hpc7a /
@@ -596,7 +616,7 @@ numbers is in **[tests/README.md](./tests/README.md)**.
 
 ---
 
-## 12. Additional Resources
+## 13. Additional Resources
 
 In this repo:
 - [Parameter reference](./docs/PARAMETERS.md) — every deploy-all parameter and default
