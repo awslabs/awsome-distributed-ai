@@ -893,6 +893,11 @@ Resources:
         MonitoringRole: compute
         PostInstallScriptUrl: !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
+        DirectoryService: !Ref DirectoryService
+        DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
+        DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
+        S3BucketName: !Ref S3BucketName
+        S3KeyPrefix: !Ref S3KeyPrefix
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-PseriesCNG'
@@ -934,6 +939,11 @@ Resources:
         MonitoringRole: compute
         PostInstallScriptUrl: !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
+        DirectoryService: !Ref DirectoryService
+        DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
+        DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
+        S3BucketName: !Ref S3BucketName
+        S3KeyPrefix: !Ref S3KeyPrefix
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-PseriesCNG'
@@ -975,6 +985,11 @@ Resources:
         MonitoringRole: compute
         PostInstallScriptUrl: !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
+        DirectoryService: !Ref DirectoryService
+        DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
+        DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
+        S3BucketName: !Ref S3BucketName
+        S3KeyPrefix: !Ref S3KeyPrefix
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-PseriesCNG'

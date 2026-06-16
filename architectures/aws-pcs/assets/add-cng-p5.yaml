@@ -224,6 +224,49 @@ Parameters:
       - '25.05'
       - '25.11'
 
+  DirectoryService:
+    Type: String
+    Description: >-
+      Multi-user directory service. 'none' = single ubuntu user (default,
+      unchanged). 'OpenLDAP-LoginNode' = deploy slapd on the login node (DB on shared
+      /home/ldap-db), compute nodes configure SSSD as LDAP clients. Future
+      options (SimpleAD, ManagedAD) will be added as AllowedValues.
+    Default: 'none'
+    AllowedValues:
+      - 'none'
+      - 'OpenLDAP-LoginNode'
+
+  DirectoryDomainSuffix:
+    Type: String
+    Description: >-
+      LDAP domain suffix (e.g. dc=cluster,dc=internal). Only used when
+      DirectoryService != none.
+    Default: 'dc=cluster,dc=internal'
+
+  DirectoryRole:
+    Type: String
+    Description: >-
+      This CNG's role in the directory service. 'server' = install and run
+      the directory (slapd on login node). 'client' = configure SSSD to
+      resolve users from the directory server. 'none' = skip directory setup.
+      deploy-all sets this automatically (login=server, compute=client) when
+      DirectoryService != none.
+    Default: 'none'
+    AllowedValues:
+      - 'none'
+      - 'server'
+      - 'client'
+
+  S3BucketName:
+    Type: String
+    Description: S3 bucket where scripts are stored (same as nested templates bucket)
+    Default: 'awsome-distributed-ai'
+
+  S3KeyPrefix:
+    Type: String
+    Description: S3 key prefix for scripts (e.g. templates/)
+    Default: 'templates/'
+
 Conditions:
   # EFA interface count is derived from the instance type: p5en.48xlarge has 16
   # network cards, p5.48xlarge / p5e.48xlarge have 32. So "use 32 interfaces"
@@ -237,6 +280,7 @@ Conditions:
   # tag (monitoring-role=login) and excludes them from EC2 service discovery.
   IsMonitoringRoleSet: !Not [!Equals [!Ref MonitoringRole, 'none']]
   HasAmiId: !Not [!Equals [!Ref AmiId, ""]]
+  DirectoryEnabled: !Not [!Equals [!Ref DirectoryRole, 'none']]
 
 Resources:
 
@@ -336,6 +380,16 @@ Resources:
                 - Key: monitoring-role
                   Value: !Ref MonitoringRole
                 - !Ref AWS::NoValue
+              # Directory (multi-user) role tag, independent of monitoring-role.
+              # Emitted for both server (login) and client (compute) nodes when
+              # DirectoryRole != none. Compute clients discover the OpenLDAP
+              # server by querying for directory-role=server (NOT monitoring-role,
+              # which is owned by the monitoring stack). See setup-directory.sh.
+              - !If
+                - DirectoryEnabled
+                - Key: directory-role
+                  Value: !Ref DirectoryRole
+                - !Ref AWS::NoValue
         MetadataOptions:
           HttpEndpoint: enabled
           HttpPutResponseHopLimit: 4
@@ -395,6 +449,22 @@ Resources:
                 curl -fsSL https://raw.githubusercontent.com/${MonitoringRepo}/${MonitoringVersion}/post-install.sh -o /tmp/post-install.sh
                 bash /tmp/post-install.sh ${MonitoringVersion} ${MonitoringRepo} 2>&1 | tee /var/log/monitoring-install.log
                 echo "Monitoring installation complete"
+              fi
+            - |
+              # Multi-user directory setup (optional, DirectoryRole != none)
+              if [ "${DirectoryRole}" != "none" ]; then
+                export LDAP_DOMAIN_SUFFIX="${DirectoryDomainSuffix}"
+                export LDAP_DOMAIN=$(echo "${DirectoryDomainSuffix}" | sed 's/dc=//g; s/,/./g')
+                export LDAP_ADMIN_PASSWORD=$(openssl rand -base64 16)
+                export CLUSTER_ID="${ClusterId}"
+                export DIRECTORY_DNS_IPS=""
+                # Pass the script source so the server role can install the
+                # ldap-add-user.sh helper onto /usr/local/bin from the same bucket.
+                export S3_BUCKET="${S3BucketName}"
+                export S3_KEY_PREFIX="${S3KeyPrefix}"
+                aws s3 cp s3://${S3BucketName}/${S3KeyPrefix}scripts/setup-directory.sh /tmp/setup-directory.sh
+                chmod +x /tmp/setup-directory.sh
+                bash /tmp/setup-directory.sh "${DirectoryRole}" 2>&1 | tee /var/log/directory-setup.log
               fi
 
             --==MYBOUNDARY==
