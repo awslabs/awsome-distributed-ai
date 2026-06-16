@@ -528,8 +528,7 @@ Resources:
                 export LDAP_ADMIN_PASSWORD=$(openssl rand -base64 16)
                 export CLUSTER_ID="${ClusterId}"
                 export DIRECTORY_DNS_IPS=""
-                REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
-                aws s3 cp s3://${S3BucketName}/${S3KeyPrefix}scripts/setup-directory.sh /tmp/setup-directory.sh --region ${!REGION}
+                aws s3 cp s3://${S3BucketName}/${S3KeyPrefix}scripts/setup-directory.sh /tmp/setup-directory.sh
                 chmod +x /tmp/setup-directory.sh
                 bash /tmp/setup-directory.sh "${DirectoryRole}" 2>&1 | tee /var/log/directory-setup.log
               fi
