@@ -60,6 +60,7 @@ Metadata:
           default: Multi-user directory (optional)
         Parameters:
           - DirectoryService
+          - DirectoryRole
           - DirectoryDomainSuffix
 
 Parameters:
@@ -231,8 +232,22 @@ Parameters:
     Type: String
     Description: >-
       LDAP domain suffix (e.g. dc=cluster,dc=internal). Only used when
-      DirectoryService=OpenLDAP-LoginNode.
+      DirectoryService != none.
     Default: 'dc=cluster,dc=internal'
+
+  DirectoryRole:
+    Type: String
+    Description: >-
+      This CNG's role in the directory service. 'server' = install and run
+      the directory (slapd on login node). 'client' = configure SSSD to
+      resolve users from the directory server. 'none' = skip directory setup.
+      deploy-all sets this automatically (login=server, compute=client) when
+      DirectoryService != none.
+    Default: 'none'
+    AllowedValues:
+      - 'none'
+      - 'server'
+      - 'client'
 
   EnableEfa:
     Type: String
@@ -287,15 +302,7 @@ Conditions:
   Has2ndEfaInterface: !And
     - !Condition EfaEnabled
     - !Equals [!Ref EfaInterfaceCount, 2]
-  DirectoryEnabled: !Not [!Equals [!Ref DirectoryService, 'none']]
-  IsLoginNode: !Equals [!Ref MonitoringRole, 'login']
-  # LDAP server runs on login node; LDAP client (SSSD) runs on compute nodes
-  SetupLdapServer: !And
-    - !Condition DirectoryEnabled
-    - !Condition IsLoginNode
-  SetupLdapClient: !And
-    - !Condition DirectoryEnabled
-    - !Not [!Condition IsLoginNode]
+  DirectoryEnabled: !Not [!Equals [!Ref DirectoryRole, 'none']]
 
 Resources:
 
@@ -509,8 +516,8 @@ Resources:
             MIME-Version: 1.0
 
             #!/bin/bash
-            # Multi-user directory setup (optional, DirectoryService != none)
-            if [ "${DirectoryService}" != "none" ]; then
+            # Multi-user directory setup (optional, DirectoryRole != none)
+            if [ "${DirectoryRole}" != "none" ]; then
               export LDAP_DOMAIN_SUFFIX="${DirectoryDomainSuffix}"
               export LDAP_DOMAIN=$(echo "${DirectoryDomainSuffix}" | sed 's/dc=//g; s/,/./g')
               export LDAP_ADMIN_PASSWORD=$(openssl rand -base64 16)
@@ -519,12 +526,7 @@ Resources:
 
               SCRIPT_URL="https://raw.githubusercontent.com/DaisukeMiyamoto/awsome-distributed-ai/feat/multi-user/architectures/aws-pcs/scripts/setup-directory.sh"
               curl -fsSL "${!SCRIPT_URL}" -o /tmp/setup-directory.sh
-
-              if [ "${MonitoringRole}" = "login" ]; then
-                bash /tmp/setup-directory.sh server 2>&1 | tee /var/log/directory-setup.log
-              else
-                bash /tmp/setup-directory.sh client 2>&1 | tee /var/log/directory-setup.log
-              fi
+              bash /tmp/setup-directory.sh "${DirectoryRole}" 2>&1 | tee /var/log/directory-setup.log
             fi
 
             --==MYBOUNDARY==

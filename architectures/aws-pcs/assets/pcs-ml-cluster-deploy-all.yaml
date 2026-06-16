@@ -612,6 +612,7 @@ Rules:
 Conditions:
   UseLocalTemplates: !Equals [!Ref S3BucketName, 'local']
   DeployOnDemandCNGEnabled: !Equals [!Ref DeployOnDemandCNG, 'true']
+  DirectoryEnabled: !Not [!Equals [!Ref DirectoryService, 'none']]
   DeployPseriesCNGEnabled: !Equals [!Ref DeployPseriesCNG, 'true']
   # Open Grafana (login node, HTTPS/443) to a CIDR only when one is provided.
   GrafanaPublicAccess: !Not [!Equals [!Ref GrafanaPublicAccessCidr, ""]]
@@ -739,6 +740,7 @@ Resources:
         PostInstallScriptUrl: !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
         DirectoryService: !Ref DirectoryService
+        DirectoryRole: !If [DirectoryEnabled, 'server', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
       Tags:
         - Key: Name
@@ -787,6 +789,7 @@ Resources:
         EfaInterfaceCount: !Ref OnDemandEfaInterfaceCount
         PlacementGroupName: !Ref OnDemandPlacementGroupName
         DirectoryService: !Ref DirectoryService
+        DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
       Tags:
         - Key: Name
