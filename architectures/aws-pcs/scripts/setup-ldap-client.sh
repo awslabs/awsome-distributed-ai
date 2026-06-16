@@ -15,6 +15,9 @@ LDAP_DOMAIN="${LDAP_DOMAIN:-cluster.internal}"
 
 export DEBIAN_FRONTEND=noninteractive
 
+echo "[ldap-client] Running apt-get update..."
+apt-get update -qq
+
 echo "[ldap-client] Installing SSSD + LDAP client packages..."
 apt-get install -y sssd libpam-sss libnss-sss ldap-utils
 

@@ -22,6 +22,9 @@ LDAP_DB_DIR="/home/ldap-db"
 
 export DEBIAN_FRONTEND=noninteractive
 
+echo "[ldap-server] Running apt-get update..."
+apt-get update -qq
+
 echo "[ldap-server] Installing slapd + ldap-utils..."
 debconf-set-selections <<EOF
 slapd slapd/internal/adminpw password ${LDAP_ADMIN_PASSWORD}

@@ -788,6 +788,17 @@ mounts continue to work over TCP for non-EFA nodes; EFA support is additive.
 
 ---
 
+## Test 11: Multi-user directory (OpenLDAP)
+
+See **[`multi-user-test.md`](./multi-user-test.md)** for the full test procedure.
+
+Run when `DeployDirectory=true` is enabled. Covers: LDAP server health,
+user lifecycle (create/delete/verify on login + compute), Slurm job execution
+as LDAP user, multi-node UID consistency, home directory sharing, SSSD cache
+resilience, and LDAP DB persistence across login node replacement.
+
+---
+
 ## Cleanup
 
 Delete the stack from the CloudFormation console (select → **Delete**) or:
