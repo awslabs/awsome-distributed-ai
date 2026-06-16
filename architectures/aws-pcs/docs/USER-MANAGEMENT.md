@@ -1,134 +1,73 @@
 # User Management Guide
 
-This guide covers multi-user management for the PCS reference architecture.
-By default, the cluster runs as a single `ubuntu` user (the PCS-Ready DLAMI
-default). When `DeployDirectory=true` is set, an OpenLDAP directory is deployed
+This guide is written for **cluster administrators who may not be familiar with
+LDAP**. It covers the day-to-day operations of managing users on a PCS
+reference architecture cluster with `DirectoryService=OpenLDAP-LoginNode`.
+
+By default, the cluster runs as a single `ubuntu` user. When multi-user is
+enabled, an OpenLDAP directory runs on the login node and provides centralized
+POSIX user accounts visible on all nodes via SSSD.
 
 ---
 
-## Access methods (multi-user)
+## Quick reference (common tasks)
 
-| Method | Pro | Con | Best for |
-|---|---|---|---|
-| **SSM Session Manager** | No port opening, IAM-based auth, full audit trail in CloudTrail | Each user needs IAM credentials + SSM plugin installed; lands as `ssm-user`, requires `su - <user>` to switch | Admin-only access, security-sensitive environments |
-| **SSH over SSM** (`ProxyCommand`) | No port opening + standard SSH workflow (VS Code Remote, scp, rsync) | Each user needs IAM credentials + SSM plugin + SSH config entry; slightly more setup | Teams with IAM already in place, remote IDE use |
-| **Direct SSH** (port 22 on login node) | Simplest for users — standard `ssh user@host`, familiar HPC workflow, VS Code/JupyterLab tunnels work natively | Requires SG port 22 open (CIDR-restricted), SSH key distribution needed | Traditional HPC teams, workshop/training environments |
+| Task | Command (run on login node as root) |
+|---|---|
+| Add a user | `sudo ldap-add-user alice 10001 3000` |
+| List all users | `sudo ldap-list-users` |
+| Delete a user | `sudo ldap-delete-user alice` |
+| Reset a user's password | `sudo ldap-reset-password alice` |
+| Add user to Slurm accounting | `sacctmgr -i add user alice Account=default` |
+| Verify user on compute node | `srun -N1 -n1 -p cpu1 id alice` |
 
-**Recommendation for multi-user clusters**: use **Direct SSH** with CIDR-restricted
-port 22 on the login node. This matches the standard HPC user experience and
-avoids per-user IAM setup overhead. SSH keys are stored in each user's
-`/home/<user>/.ssh/authorized_keys` (shared OpenZFS, visible on all nodes).
-
-### SSH key management
-
-| Approach | Who adds keys | How |
-|---|---|---|
-| Admin provisions at user-creation time | Cluster admin | Pass `ssh-pub-key` to `ldap-add-user.sh` → written to `/home/<user>/.ssh/authorized_keys` |
-| User self-service | Each user | User logs in (first time via admin-provided temp password or SSM) and adds their own key to `~/.ssh/authorized_keys` |
-| LDAP-stored keys (`AuthorizedKeysCommand`) | Admin | `sshd_config` queries LDAP for `sshPublicKey` attribute via helper script — centralizes key management but adds sshd config complexity |
-
-For most clusters, the simplest path is: admin creates the user + writes their
-SSH public key to `/home/<user>/.ssh/authorized_keys` during creation.
+The `ldap-*` commands above are helper scripts installed on the login node at
+`/usr/local/bin/`. They wrap raw `ldapadd`/`ldapdelete`/`ldappasswd` commands
+so you don't need to know LDAP syntax. The full manual commands are documented
+below for reference.
 
 ---
 
-## Slurm accounting with PCS
-
-PCS manages the Slurm accounting database internally — you do NOT need to
-configure `slurmdbd` or manage a MySQL/MariaDB database. When
-`ManagedAccounting=enabled` is set on the cluster, Slurm's accounting commands
-(`sacctmgr`, `sacct`, `sreport`) work against PCS's managed backing store.
-
-**What you still need to do manually**:
-- `sacctmgr add account <team>` — create Slurm accounts (one per team/project)
-- `sacctmgr add user <username> account=<team>` — map LDAP users to Slurm accounts
-- (Optional) Set fairshare / QOS via `sacctmgr modify user`
-
-If `AccountingPolicyEnforcement=associations,limits,safe` is set, a user
-without a `sacctmgr` entry will have their jobs **rejected**. With the default
-`AccountingPolicyEnforcement=none`, unregistered users can still submit jobs
-(they just won't have accounting records).
-
----
-
-## Template structure (how multi-user is wired)
+## How it works (overview)
 
 ```
-pcs-ml-cluster-deploy-all.yaml
-│
-│  Parameters: DeployDirectory, DirectoryDomainSuffix
-│
-├─► PrerequisitesStack (ml-cluster-prerequisites.yaml)
-│     VPC, FSx Lustre, FSx OpenZFS (/home — shared storage for LDAP DB)
-│
-├─► ClusterStack (cluster.yaml)
-│     PCS Cluster, IAM role, SSM param (Grafana pw)
-│
-├─► LoginNodeGroupStack (add-cng.yaml)
-│     │  MonitoringRole=login, DeployDirectory=$DeployDirectory
-│     │
-│     └─► UserData:
-│           if DeployDirectory=true:
-│             curl setup-openldap-server.sh → install slapd
-│             DB → /home/ldap-db/ (shared OpenZFS)
-│             Admin password → SSM /pcs/<id>/ldap/admin-password
-│
-├─► OnDemandCNGStack (add-cng.yaml)
-│     │  MonitoringRole=compute, DeployDirectory=$DeployDirectory
-│     │
-│     └─► UserData:
-│           if DeployDirectory=true:
-│             discover login node IP (ec2:DescribeInstances by tag)
-│             curl setup-ldap-client.sh → install SSSD
-│             ldap_uri = ldap://<login-node-ip>
-│
-└─► [Optional] PseriesCNGStack (add-cng-p5/p6-*.yaml)
-      Same pattern as OnDemandCNG (SSSD client when DeployDirectory=true)
+┌─────────────────────────────────────────────────────────┐
+│  Login Node                                              │
+│                                                          │
+│  ┌──────────┐     ┌──────────┐     ┌──────────────┐    │
+│  │  slapd   │────►│  SSSD    │────►│  NSS / PAM   │    │
+│  │ (OpenLDAP│     │  (cache) │     │  (getent,    │    │
+│  │  server) │     │          │     │   login, su) │    │
+│  └──────────┘     └──────────┘     └──────────────┘    │
+│       │                                                  │
+│  DB: /home/ldap-db/ (shared OpenZFS)                    │
+└───────┼──────────────────────────────────────────────────┘
+        │ ldap://login-ip:389
+        ▼
+┌─────────────────────────────────────────────────────────┐
+│  Compute Node                                            │
+│                                                          │
+│  ┌──────────┐     ┌──────────────┐                      │
+│  │  SSSD    │────►│  NSS / PAM   │                      │
+│  │  (client)│     │  (getent,    │                      │
+│  │          │     │   srun user) │                      │
+│  └──────────┘     └──────────────┘                      │
+└─────────────────────────────────────────────────────────┘
 ```
 
-When `DeployDirectory=true` is set, an OpenLDAP directory is deployed
-on the login node, and all compute nodes are configured as LDAP clients via
-SSSD — giving you centralized POSIX user management across the cluster.
-
----
-
-## Overview
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  Login Node                                                   │
-│  ┌──────────────┐    ┌──────────────────────────────────┐    │
-│  │  slapd       │    │  SSSD (ldap provider, localhost)  │    │
-│  │  (OpenLDAP)  │    └──────────────────────────────────┘    │
-│  │  DB: /home/  │                                            │
-│  │    ldap-db/  │◄─── LDAP queries from compute nodes        │
-│  └──────────────┘                                            │
-└──────────────────────────────────────────────────────────────┘
-         ▲                          ▲
-         │ ldap://login-ip:389      │ ldap://login-ip:389
-         │                          │
-┌────────┴───────┐        ┌────────┴───────┐
-│  Compute Node  │        │  Compute Node  │
-│  SSSD (ldap)   │        │  SSSD (ldap)   │
-│  NSS + PAM     │        │  NSS + PAM     │
-└────────────────┘        └────────────────┘
-```
-
-**Key properties:**
-- LDAP DB is stored on `/home/ldap-db` (shared OpenZFS) — survives login node
-  CNG recreation or instance replacement
-- All nodes use SSSD with `cache_credentials=true` — users can still log in
-  during brief LDAP server unavailability (e.g. login node reboot)
-- UID/GID are explicit POSIX attributes in LDAP (not algorithmic mapping) —
-  fully deterministic across all nodes and NFS mounts
-- Home directories auto-created on first login via `pam_mkhomedir` at `/home/<username>`
-  (shared OpenZFS, visible on all nodes immediately)
+**Key points:**
+- Users are stored in the LDAP database on the login node
+- The database lives on shared `/home` (OpenZFS NFS) — it survives login node restart/replacement
+- Every node (login + compute) runs SSSD which queries LDAP for user info
+- When you add a user in LDAP, they become visible on all nodes within seconds
+- Home directories are auto-created at first login (shared `/home` on OpenZFS)
+- Slurm sees LDAP users transparently — no Slurm configuration needed for user resolution
 
 ---
 
 ## Enabling multi-user
 
-### With deploy-all
+### Option 1: deploy-all (recommended)
 
 ```bash
 aws cloudformation create-stack \
@@ -136,147 +75,183 @@ aws cloudformation create-stack \
   --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-2b \
-    ParameterKey=DeployDirectory,ParameterValue=true \
+    ParameterKey=DirectoryService,ParameterValue=OpenLDAP-LoginNode \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
 
-### With modular deployment (add-cng.yaml)
+That's it. The login node will have slapd running and compute nodes will be
+configured as LDAP clients automatically at first boot.
 
-Pass `DeployDirectory=true` and `DirectoryDomainSuffix=dc=cluster,dc=internal`
-to **both** the login CNG and compute CNG stacks. The login CNG installs the
-LDAP server; the compute CNG configures the SSSD client pointing at the login
-node.
+### Option 2: modular deployment
+
+Pass these to your add-cng.yaml stacks:
+- Login CNG: `DirectoryService=OpenLDAP-LoginNode`, `DirectoryRole=server`
+- Compute CNG: `DirectoryService=OpenLDAP-LoginNode`, `DirectoryRole=client`
 
 ### Parameters
 
 | Parameter | Default | Description |
 |---|---|---|
-| `DeployDirectory` | `false` | Enable OpenLDAP directory on login node |
-| `DirectoryDomainSuffix` | `dc=cluster,dc=internal` | LDAP base DN. Change if you want a different domain (e.g. `dc=myorg,dc=com`) |
+| `DirectoryService` | `none` | Set to `OpenLDAP-LoginNode` to enable multi-user |
+| `DirectoryRole` | `none` | Auto-set by deploy-all: `server` for login, `client` for compute |
+| `DirectoryDomainSuffix` | `dc=cluster,dc=internal` | LDAP base DN (change only if you need a different domain) |
 
 ---
 
-## Managing users
+## Day-to-day operations
 
-All user management commands run on the **login node** as root (or via `sudo`).
+All commands below run on the **login node** as root (`sudo`).
 
-### Retrieve the LDAP admin password
+### Getting the admin password
 
-The admin password is auto-generated at first boot and stored in SSM
-Parameter Store (encrypted with the account's default KMS key):
-
-```bash
-CLUSTER_ID=<from stack output>
-aws ssm get-parameter --name "/pcs/${CLUSTER_ID}/ldap/admin-password" \
-  --with-decryption --query 'Parameter.Value' --output text
-```
-
-> **Fallback**: if the instance role lacked `ssm:PutParameter` at first boot,
-> the password is instead saved to `/home/ldap-db/.admin-password` on shared
-> OpenZFS. This file is `chmod 600` but readable by root on any node — for
-> production, ensure the instance role has the SSM permission (the default
-> `cluster.yaml` role includes it at `/pcs/<cluster-id>/ldap/*`).
-
-### Add a user
-
-Use the helper script (pre-installed on the login node at
-`/usr/local/bin/ldap-add-user.sh`, or fetch from the repo):
+The LDAP admin password is auto-generated at cluster creation and stored in
+AWS Systems Manager Parameter Store:
 
 ```bash
-# Usage: ldap-add-user.sh <username> [uid] [gid] [ssh-pub-key]
-sudo LDAP_ADMIN_PASSWORD=$(aws ssm get-parameter \
+CLUSTER_ID=<from stack output, e.g. pcs_abc123>
+
+aws ssm get-parameter \
   --name "/pcs/${CLUSTER_ID}/ldap/admin-password" \
-  --with-decryption --query 'Parameter.Value' --output text) \
-  /usr/local/bin/ldap-add-user.sh alice 10001 3000
+  --with-decryption \
+  --query 'Parameter.Value' \
+  --output text
 ```
 
-Or manually with `ldapadd`:
+> **If SSM is empty** (instance role lacked the permission at first boot):
+> ```bash
+> sudo cat /home/ldap-db/.admin-password
+> ```
+
+Store this password somewhere safe — you'll need it for all user management
+operations.
+
+---
+
+### Adding a user
+
+**Using the helper script** (recommended):
 
 ```bash
-ADMIN_PW="<retrieved above>"
-BASE_DN="dc=cluster,dc=internal"
-
-ldapadd -x -H ldap://localhost -D "cn=admin,${BASE_DN}" -w "${ADMIN_PW}" <<EOF
-dn: uid=alice,ou=People,${BASE_DN}
-objectClass: inetOrgPerson
-objectClass: posixAccount
-objectClass: shadowAccount
-uid: alice
-cn: Alice
-sn: Smith
-uidNumber: 10001
-gidNumber: 3000
-homeDirectory: /home/alice
-loginShell: /bin/bash
-EOF
-
-# Set initial password
-ldappasswd -x -H ldap://localhost -D "cn=admin,${BASE_DN}" -w "${ADMIN_PW}" \
-  -s "initial-password-123" "uid=alice,ou=People,${BASE_DN}"
+# Usage: ldap-add-user <username> <uid> <gid> [ssh-public-key]
+sudo LDAP_ADMIN_PASSWORD="<password>" ldap-add-user alice 10001 3000
 ```
 
-### Verify user exists on all nodes
+This creates the user with:
+- Username: `alice`
+- UID: `10001` (pick a unique number in range 10001–59999)
+- GID: `3000` (= `clusterusers` group, the default)
+- Home directory: `/home/alice` (auto-created on first login)
+- Shell: `/bin/bash`
+- A random initial password (printed to stdout)
+
+**With an SSH key** (user can log in immediately):
+
+```bash
+sudo LDAP_ADMIN_PASSWORD="<password>" ldap-add-user alice 10001 3000 "ssh-rsa AAAA... alice@laptop"
+```
+
+**Verifying the user was created:**
 
 ```bash
 # On login node
 getent passwd alice
+# Expected: alice:*:10001:3000:alice:/home/alice:/bin/bash
 
-# On a compute node (via srun)
-srun -N 1 -n 1 bash -c 'getent passwd alice'
+id alice
+# Expected: uid=10001(alice) gid=3000(clusterusers) groups=3000(clusterusers)
 ```
 
-Expected output:
+---
+
+### Adding multiple users (batch)
+
+Create a file `users.txt`:
 ```
-alice:*:10001:3000:Alice:/home/alice:/bin/bash
+alice 10001 3000 ssh-rsa AAAA...
+bob   10002 3000 ssh-rsa BBBB...
+carol 10003 3000
 ```
 
-### Add user to Slurm accounting
+Then:
+```bash
+while read name uid gid key; do
+  sudo LDAP_ADMIN_PASSWORD="<password>" ldap-add-user "$name" "$uid" "$gid" "$key"
+done < users.txt
+```
+
+---
+
+### Listing all users
 
 ```bash
-export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH
+# Simple list
+ldapsearch -x -H ldap://localhost -b "ou=People,dc=cluster,dc=internal" \
+  "(objectClass=posixAccount)" uid uidNumber | grep -E "^uid:|^uidNumber:"
 
-# Create a Slurm account (one per team/project)
-sacctmgr add account researchers Description="ML Researchers"
-
-# Add user to account
-sacctmgr add user alice Account=researchers
+# Or just use getent (shows all LDAP users + system users)
+getent passwd | awk -F: '$3 >= 10000 {print $1, $3, $6}'
 ```
 
-### List users
+---
+
+### Deleting a user
 
 ```bash
-# All LDAP users
-ldapsearch -x -H ldap://localhost -b "ou=People,dc=cluster,dc=internal" uid
+ADMIN_PW="<password>"
+ldapdelete -x -H ldap://localhost \
+  -D "cn=admin,dc=cluster,dc=internal" \
+  -w "$ADMIN_PW" \
+  "uid=alice,ou=People,dc=cluster,dc=internal"
 ```
 
-### Change a user's password
-
+Also remove from Slurm accounting:
 ```bash
-ldappasswd -x -H ldap://localhost -D "cn=admin,${BASE_DN}" -w "${ADMIN_PW}" \
-  -s "new-password" "uid=alice,ou=People,${BASE_DN}"
+sacctmgr -i remove user alice
 ```
 
-Or the user can change their own password (if `passwordSelfChange` is enabled):
+The user's home directory (`/home/alice`) is NOT deleted automatically.
+Remove it manually if needed:
 ```bash
-ldappasswd -x -H ldap://localhost -D "uid=alice,ou=People,${BASE_DN}" \
-  -W -s "new-password" "uid=alice,ou=People,${BASE_DN}"
+sudo rm -rf /home/alice
 ```
 
-### Remove a user
+---
+
+### Resetting a user's password
 
 ```bash
-ldapdelete -x -H ldap://localhost -D "cn=admin,${BASE_DN}" -w "${ADMIN_PW}" \
-  "uid=alice,ou=People,${BASE_DN}"
+ADMIN_PW="<password>"
+NEW_PW="temporary-password-123"
 
-# Also remove from Slurm
-sacctmgr remove user alice
+ldappasswd -x -H ldap://localhost \
+  -D "cn=admin,dc=cluster,dc=internal" \
+  -w "$ADMIN_PW" \
+  -s "$NEW_PW" \
+  "uid=alice,ou=People,dc=cluster,dc=internal"
+
+echo "New password for alice: $NEW_PW"
 ```
 
-### Add a group
+Tell the user to change it after login:
+```bash
+# User runs this after logging in
+ldappasswd -x -H ldap://localhost \
+  -D "uid=alice,ou=People,dc=cluster,dc=internal" \
+  -W -s "my-new-password" \
+  "uid=alice,ou=People,dc=cluster,dc=internal"
+```
+
+---
+
+### Creating groups
 
 ```bash
-ldapadd -x -H ldap://localhost -D "cn=admin,${BASE_DN}" -w "${ADMIN_PW}" <<EOF
-dn: cn=ml-team,ou=Groups,${BASE_DN}
+ADMIN_PW="<password>"
+
+ldapadd -x -H ldap://localhost \
+  -D "cn=admin,dc=cluster,dc=internal" \
+  -w "$ADMIN_PW" << EOF
+dn: cn=ml-team,ou=Groups,dc=cluster,dc=internal
 objectClass: posixGroup
 cn: ml-team
 gidNumber: 3001
@@ -285,53 +260,129 @@ memberUid: bob
 EOF
 ```
 
-### Add user to an existing group
+### Adding a user to a group
 
 ```bash
-ldapmodify -x -H ldap://localhost -D "cn=admin,${BASE_DN}" -w "${ADMIN_PW}" <<EOF
-dn: cn=ml-team,ou=Groups,${BASE_DN}
+ldapmodify -x -H ldap://localhost \
+  -D "cn=admin,dc=cluster,dc=internal" \
+  -w "$ADMIN_PW" << EOF
+dn: cn=ml-team,ou=Groups,dc=cluster,dc=internal
 changetype: modify
 add: memberUid
-memberUid: charlie
+memberUid: carol
 EOF
+```
+
+---
+
+## Slurm accounting
+
+PCS manages the Slurm accounting database internally. You just need to register
+users and accounts:
+
+```bash
+export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH
+
+# Create a Slurm account (typically one per team or project)
+sacctmgr -i add account default Description="Default account"
+
+# Add users to the account
+sacctmgr -i add user alice Account=default
+sacctmgr -i add user bob Account=default
+
+# Verify
+sacctmgr show user
+```
+
+> **Note:** if `AccountingPolicyEnforcement=none` (the default), users can
+> submit jobs even without being registered in `sacctmgr`. Registration is
+> needed for fairshare/priority and for `sacct` history to show the user name.
+
+---
+
+## Verifying users on compute nodes
+
+After adding a user, verify they're visible on compute nodes:
+
+```bash
+export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH
+
+# Single node
+srun -N 1 -n 1 -p cpu1 bash -c 'getent passwd alice; id alice'
+
+# All nodes
+srun -N 4 -n 4 -p cpu1 bash -c 'echo "$(hostname): $(id alice)"'
+```
+
+If a user isn't visible yet (SSSD cache delay, typically <5 sec):
+```bash
+srun -N 1 -n 1 -p cpu1 bash -c 'sudo sss_cache -E; sleep 2; getent passwd alice'
 ```
 
 ---
 
 ## Running jobs as a specific user
 
-Once users are in LDAP, Slurm can run jobs as those users:
+Users log in to the login node and submit jobs normally:
 
 ```bash
-# User submits their own job (after logging in as themselves)
-srun --partition=cpu1 hostname
-
-# Admin runs a job on behalf of a user
-sudo -u alice srun --partition=cpu1 hostname
-
-# Verify UID in the job
-srun --partition=cpu1 bash -c 'id; whoami'
+# User 'alice' logs in via SSH and runs:
+srun -p cpu1 -N 1 -n 1 bash -c 'whoami; hostname'
+sbatch --partition=cpu1 my-training.sbatch
 ```
+
+The job runs as `alice` (uid=10001) on the compute node. The user's home
+directory `/home/alice` is visible on the compute node (shared OpenZFS).
 
 ---
 
-## SSH access for LDAP users
+## Troubleshooting
 
-LDAP users can connect to the login node via SSM Session Manager (recommended)
-or SSH. For SSH:
+### "User not found" on compute node
 
-1. Add the user's public key to their LDAP entry (if using the
-   `openssh-lpk` schema) or to `/home/<username>/.ssh/authorized_keys`
-   (auto-created by pam_mkhomedir on shared `/home`).
+```bash
+# Check SSSD is running on compute
+srun -N 1 -n 1 bash -c 'systemctl status sssd | head -3'
 
-2. Users connect via SSH-over-SSM:
-   ```bash
-   # ~/.ssh/config
-   Host pcs-login
-     HostName <login-instance-id>
-     User alice
-     ProxyCommand aws ssm start-session --target %h --document-name AWS-StartSSHSession --parameters 'portNumber=%p'
-   ```
+# Check LDAP connectivity from compute
+srun -N 1 -n 1 bash -c 'ldapsearch -x -H ldap://<login-ip> -b dc=cluster,dc=internal uid=alice'
+
+# Force cache refresh
+srun -N 1 -n 1 bash -c 'sudo sss_cache -E; sudo systemctl restart sssd'
+```
+
+### slapd not running on login node
+
+```bash
+sudo systemctl status slapd
+sudo journalctl -u slapd -n 20
+# Check install log
+cat /var/log/directory-setup.log
+```
+
+### "Invalid credentials" when running ldap commands
+
+You're using the wrong admin password. Retrieve it from SSM or the fallback
+file (see [Getting the admin password](#getting-the-admin-password)).
+
+### Home directory not created
+
+```bash
+# Check pam_mkhomedir is configured
+grep pam_mkhomedir /etc/pam.d/common-session
+# Expected: session optional pam_mkhomedir.so skel=/etc/skel umask=0022
+
+# Manually create (should auto-create on next login)
+sudo mkdir -p /home/alice
+sudo chown alice:clusterusers /home/alice
+```
+
+### New compute node doesn't resolve users
+
+New compute nodes boot with the latest LaunchTemplate version, which includes
+SSSD client setup. If a node was launched before `DirectoryService` was enabled
+(e.g. during a stack update), it won't have SSSD. Terminate the node and let
+PCS replace it with a new one.
 
 ---
 
@@ -341,106 +392,85 @@ or SSH. For SSH:
 |---|---|
 | 0–999 | System users (do not use) |
 | 1000 | `ubuntu` (DLAMI default user) |
-| 3000 | `clusterusers` group (default group for new users) |
-| 3001+ | Custom groups |
-| 10000–59999 | LDAP user UIDs (SSSD `min_id`/`max_id` range) |
+| 3000 | `clusterusers` group (default GID for new users) |
+| 3001+ | Additional groups (create as needed) |
+| 10001–59999 | LDAP user UIDs |
 
-Use deterministic UIDs (specify in `ldapadd`) rather than letting LDAP
-auto-assign. This ensures consistency across all nodes and NFS mounts.
-
----
-
-## SSSD caching behavior
-
-| Setting | Value | Meaning |
-|---|---|---|
-| `cache_credentials` | `true` | Users can authenticate even if LDAP server is temporarily down |
-| `enumerate` | `true` | `getent passwd` shows all LDAP users (not just those who have logged in) |
-| `entry_cache_timeout` | 5400 (default) | Cached user/group entries are valid for 90 minutes |
-
-To force immediate cache refresh on a node (e.g. after adding a user):
-```bash
-sudo sss_cache -E
-```
+**Always specify UIDs explicitly** when creating users. This ensures
+consistency across all nodes and NFS mounts. Do not rely on auto-increment.
 
 ---
 
-## Troubleshooting
+## Data persistence and backup
 
-### User not visible on compute node
-
-```bash
-# Check SSSD is running
-systemctl status sssd
-
-# Check LDAP connectivity from compute node
-ldapsearch -x -H ldap://<login-node-ip> -b "dc=cluster,dc=internal" uid=alice
-
-# Force cache refresh
-sudo sss_cache -E
-sudo systemctl restart sssd
-
-# Check SSSD logs
-journalctl -u sssd -n 50
-```
-
-### Login node LDAP server not starting
-
-```bash
-# Check slapd status
-systemctl status slapd
-journalctl -u slapd -n 30
-
-# Check AppArmor (common issue with custom DB path)
-aa-status | grep slapd
-```
-
-### Home directory not created on first login
-
-```bash
-# Verify pam_mkhomedir is configured
-grep pam_mkhomedir /etc/pam.d/common-session
-
-# Verify /home is mounted (shared OpenZFS)
-mount | grep /home
-```
-
----
-
-## Data persistence
-
-| Data | Location | Survives CNG delete? | Survives stack delete? |
+| Data | Location | Survives node replacement? | Survives stack delete? |
 |---|---|---|---|
-| LDAP database | `/home/ldap-db/` | ✅ (shared OpenZFS) | ❌ (FSx deleted with prereqs) |
-| User home dirs | `/home/<username>/` | ✅ (shared OpenZFS) | ❌ (FSx deleted with prereqs) |
-| LDAP admin password | SSM Parameter Store | ✅ (account-level) | ✅ (not part of stack) |
+| LDAP database | `/home/ldap-db/` (shared OpenZFS) | ✅ | ❌ (FSx deleted) |
+| User home directories | `/home/<user>/` (shared OpenZFS) | ✅ | ❌ (FSx deleted) |
+| Admin password | SSM Parameter Store | ✅ | ✅ |
 
-**Backup recommendation**: periodically export the LDAP database:
+### Backup
+
 ```bash
-slapcat -l /home/ldap-backup/ldap-$(date +%Y%m%d).ldif
+# Export LDAP database to a file (run periodically via cron)
+sudo slapcat -l /home/ldap-backup-$(date +%Y%m%d).ldif
 ```
 
-Restore on a fresh login node:
+### Restore (on a fresh login node)
+
 ```bash
-systemctl stop slapd
-slapadd -l /home/ldap-backup/ldap-YYYYMMDD.ldif
-chown -R openldap:openldap /home/ldap-db
-systemctl start slapd
+sudo systemctl stop slapd
+sudo slapadd -l /home/ldap-backup-YYYYMMDD.ldif
+sudo chown -R openldap:openldap /home/ldap-db
+sudo systemctl start slapd
 ```
 
 ---
 
-## Upgrading to Simple AD or Managed AD
+## Access methods
 
-If your team outgrows the self-hosted OpenLDAP (> 50 users, need HA, need
-Kerberos), migrate to AWS Simple AD or Managed Microsoft AD:
+| Method | Best for | Setup required |
+|---|---|---|
+| **Direct SSH** (port 22) | Multi-user teams, VS Code/JupyterLab | SG rule opening port 22 to a CIDR |
+| **SSH over SSM** | Security-sensitive environments | IAM credentials + SSM plugin per user |
+| **SSM Session Manager** | Admin-only access | IAM credentials only |
 
+For multi-user clusters, **Direct SSH** is recommended. Users connect with
+their SSH key that was added during user creation:
+
+```bash
+ssh alice@<login-node-public-ip>
+```
+
+---
+
+## Template structure
+
+```
+deploy-all.yaml
+├─► cluster.yaml         (IAM role with ssm:PutParameter for /pcs/<id>/ldap/*)
+├─► add-cng.yaml (login) → DirectoryRole=server → setup-directory.sh server
+│                           (installs slapd + configures SSSD locally)
+└─► add-cng.yaml (compute) → DirectoryRole=client → setup-directory.sh client
+                              (installs SSSD, discovers login node IP)
+```
+
+---
+
+## Upgrading to AWS Simple AD (future)
+
+If you outgrow OpenLDAP (need HA, >50 users, Kerberos), the
+`DirectoryService` parameter is designed for extension:
+
+```yaml
+DirectoryService: SimpleAD   # future AllowedValue
+```
+
+Migration path:
 1. Export users: `slapcat > users.ldif`
-2. Deploy Simple AD (requires 2 AZs — see [ROADMAP](./ROADMAP.md))
-3. Import users into AD (convert LDIF to AD format)
-4. Update compute node SSSD config: change `id_provider` from `ldap` to `ad`,
-   switch to `realm join`
-5. Decommission slapd on login node
+2. Deploy Simple AD (separate stack, requires 2 AZs)
+3. Import users
+4. Redeploy cluster with `DirectoryService=SimpleAD`
+5. Decommission slapd
 
-The Slurm accounting entries (`sacctmgr`) don't need to change — Slurm
-resolves users via NSS regardless of the identity backend.
+See [docs/ROADMAP.md](./ROADMAP.md) for tracking.

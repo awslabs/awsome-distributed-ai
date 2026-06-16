@@ -542,7 +542,7 @@ pcs-ml-cluster-deploy-all.yaml                    ← user deploys this
 │     └─ UserData fetches external scripts:
 │          ├─ PostInstallScriptUrl (default: install-enroot-pyxis.sh)
 │          ├─ MonitoringRepo/MonitoringVersion → post-install.sh
-│          └─ setup-openldap-server.sh (when DirectoryService != none)
+│          └─ setup-directory.sh server (when DirectoryRole=server)
 │
 ├─► add-cng.yaml (compute)                        ← CPU queue (dynamic scaling 0→N)
 │     • MonitoringRole=compute → Node Exporter
@@ -552,7 +552,7 @@ pcs-ml-cluster-deploy-all.yaml                    ← user deploys this
 │     └─ UserData fetches external scripts:
 │          ├─ PostInstallScriptUrl (same as login)
 │          ├─ MonitoringRepo/MonitoringVersion → post-install.sh
-│          └─ setup-ldap-client.sh (when DirectoryService != none)
+│          └─ setup-directory.sh client (when DirectoryRole=client)
 │
 └─► add-cng-p5.yaml / add-cng-p6-b200.yaml       ← GPU queue (optional)
     / add-cng-p6-b300.yaml
@@ -560,7 +560,7 @@ pcs-ml-cluster-deploy-all.yaml                    ← user deploys this
       • MonitoringRole=compute → DCGM Exporter
       • Same external script pattern as compute CNG
 
-External scripts (fetched at first boot from GitHub raw):
+External scripts (fetched at first boot from S3: s3://<S3BucketName>/<S3KeyPrefix>scripts/):
   assets/scripts/install-enroot-pyxis.sh           ← Enroot 3.5.0 + Pyxis 0.20.0
   assets/scripts/setup-directory.sh               ← multi-user directory (server + client)
   assets/scripts/ldap-add-user.sh                 ← helper to add POSIX users to LDAP
@@ -595,6 +595,8 @@ numbers is in **[tests/README.md](./tests/README.md)**.
 In this repo:
 - [Parameter reference](./docs/PARAMETERS.md) — every deploy-all parameter and default
 - [Operations guide](./docs/OPERATIONS.md) — version trade-offs, AMI pinning, monitoring/DCGM, FSx coupling, production settings
+- [User management guide](./docs/USER-MANAGEMENT.md) — multi-user setup with OpenLDAP (add/remove users, groups, Slurm accounting)
+- [Deploy & testing procedures](./docs/DEPLOY-TESTING.md) — development deploy workflow with test S3 bucket
 - [Test & Validation Guide](./tests/README.md) — reproducible matrix with measured numbers
 - [Roadmap / TODO](./docs/ROADMAP.md)
 
