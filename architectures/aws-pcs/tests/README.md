@@ -799,6 +799,28 @@ resilience, and LDAP DB persistence across login node replacement.
 
 ---
 
+## Test 12: Slurm managed accounting + multi-user
+
+See **[`accounting-test.md`](./accounting-test.md)** for the full test procedure.
+
+Run when `ManagedAccounting=enabled` and `DirectoryService=OpenLDAP-LoginNode`.
+Covers: sacctmgr user/account registration, job submission as LDAP users,
+sacct/sreport verification, resource limit enforcement, and
+AccountingPolicyEnforcement behavior.
+
+---
+
+## Test 13: GPU cluster health check
+
+See **[`gpu-healthcheck-test.md`](./gpu-healthcheck-test.md)** for the full test procedure.
+
+Run after any GPU CNG (P5/P5e/P5en/P6-B200) deployment. Uses the
+[GPU Cluster Health Check Suite](../../4.validation_and_observability/2.gpu-cluster-healthcheck)
+from this repository. Covers: nvidia-smi, DCGM L2, EFA enumeration, topology
+validation, and multi-node NCCL bandwidth thresholds.
+
+---
+
 ## Cleanup
 
 Delete the stack from the CloudFormation console (select → **Delete**) or:
