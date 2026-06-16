@@ -16,6 +16,8 @@ Metadata:
           default: "1. Network Configuration"
         Parameters:
           - PrimarySubnetAZ
+          - AdditionalSubnetAZ2
+          - AdditionalSubnetAZ3
           - VPCName
           - CreateS3Endpoint
       - Label:
@@ -87,6 +89,10 @@ Metadata:
       # so users see plain-language labels instead of raw CamelCase parameter keys.
       PrimarySubnetAZ:
         default: "Availability Zone (required)"
+      AdditionalSubnetAZ2:
+        default: "(Optional) 2nd AZ for an additional private subnet"
+      AdditionalSubnetAZ3:
+        default: "(Optional) 3rd AZ for an additional private subnet"
       VPCName:
         default: "VPC name"
       CreateS3Endpoint:
@@ -198,6 +204,21 @@ Parameters:
       the public subnet (login node) and primary private subnet (compute nodes,
       FSx) are both placed here.
     Type: AWS::EC2::AvailabilityZone::Name
+
+  AdditionalSubnetAZ2:
+    Description: >-
+      (Optional) 2nd Availability Zone for an additional private subnet. Empty
+      (default) = single-AZ. Enables multi-AZ FSx (OpenZFS MULTI_AZ) and future
+      multi-AZ workloads. The NAT gateway stays in the primary AZ.
+    Type: String
+    Default: ""
+
+  AdditionalSubnetAZ3:
+    Description: >-
+      (Optional) 3rd Availability Zone for an additional private subnet. Empty
+      (default) = not created. Requires AdditionalSubnetAZ2 to also be set.
+    Type: String
+    Default: ""
 
   CreateS3Endpoint:
     AllowedValues:
@@ -667,6 +688,8 @@ Resources:
       Parameters:
         VPCName: !Ref VPCName
         PrimarySubnetAZ: !Ref PrimarySubnetAZ
+        AdditionalSubnetAZ2: !Ref AdditionalSubnetAZ2
+        AdditionalSubnetAZ3: !Ref AdditionalSubnetAZ3
         CreateS3Endpoint: !Ref CreateS3Endpoint
         Capacity: !Ref Capacity
         LustreDeploymentType: !Ref LustreDeploymentType
