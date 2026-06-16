@@ -101,6 +101,14 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   Prometheus + Amazon Managed Grafana as an alternative to the self-hosted stack on the
   login node (see `4.validation_and_observability/4.prometheus-grafana`), so users can
   use a managed backend instead of running the containers themselves.
+- [ ] 🟡 **Rename `DeployMonitoring` → `MonitoringStack` (enum).** Align with the
+  `DirectoryService` parameter pattern (`<what>-<where>`):
+  `MonitoringStack: none | Prometheus-LoginNode | AMP-AMG | CloudWatch`.
+  This makes it clear that the current default is a self-hosted Prometheus + Grafana
+  stack on the login node, and provides a natural extension point for the managed
+  option above. **Breaking change** — bundle with the next minor version alongside
+  other parameter renames (`Capacity` → `LustreCapacity`, `CngName`/`QueueName`
+  collapse, etc.).
 
 ## Testing / docs
 
