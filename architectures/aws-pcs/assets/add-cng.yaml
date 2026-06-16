@@ -59,7 +59,7 @@ Metadata:
       - Label:
           default: Multi-user directory (optional)
         Parameters:
-          - DeployDirectory
+          - DirectoryService
           - DirectoryDomainSuffix
 
 Parameters:
@@ -215,24 +215,23 @@ Parameters:
       - '25.05'
       - '25.11'
 
-  DeployDirectory:
+  DirectoryService:
     Type: String
     Description: >-
-      Deploy an OpenLDAP directory on the login node for multi-user management.
-      When true and MonitoringRole=login, slapd is installed on the login node
-      with its DB on shared /home (OpenZFS), so it survives CNG recreation.
-      Compute nodes configure SSSD to resolve users from the login node's LDAP.
-      Default false = single ubuntu user (unchanged).
-    Default: 'false'
+      Multi-user directory service. 'none' = single ubuntu user (default,
+      unchanged). 'OpenLDAP-LoginNode' = deploy slapd on the login node (DB on shared
+      /home/ldap-db), compute nodes configure SSSD as LDAP clients. Future
+      options (SimpleAD, ManagedAD) will be added as AllowedValues.
+    Default: 'none'
     AllowedValues:
-      - 'true'
-      - 'false'
+      - 'none'
+      - 'OpenLDAP-LoginNode'
 
   DirectoryDomainSuffix:
     Type: String
     Description: >-
       LDAP domain suffix (e.g. dc=cluster,dc=internal). Only used when
-      DeployDirectory=true.
+      DirectoryService=OpenLDAP-LoginNode.
     Default: 'dc=cluster,dc=internal'
 
   EnableEfa:
@@ -245,7 +244,7 @@ Parameters:
       an EFA-capable instance type (e.g. hpc8a.96xlarge, hpc7a.96xlarge,
       hpc6a.48xlarge). For multi-NIC GPU families (P5/P6) use the
       dedicated add-cng-p5/p6-* templates instead.
-    Default: 'false'
+    Default: 'none'
     AllowedValues:
       - 'true'
       - 'false'
@@ -288,7 +287,7 @@ Conditions:
   Has2ndEfaInterface: !And
     - !Condition EfaEnabled
     - !Equals [!Ref EfaInterfaceCount, 2]
-  DirectoryEnabled: !Equals [!Ref DeployDirectory, 'true']
+  DirectoryEnabled: !Not [!Equals [!Ref DirectoryService, 'none']]
   IsLoginNode: !Equals [!Ref MonitoringRole, 'login']
   # LDAP server runs on login node; LDAP client (SSSD) runs on compute nodes
   SetupLdapServer: !And
@@ -510,8 +509,8 @@ Resources:
             MIME-Version: 1.0
 
             #!/bin/bash
-            # Multi-user directory setup (optional, DeployDirectory=true)
-            if [ "${DeployDirectory}" = "true" ]; then
+            # Multi-user directory setup (optional, DirectoryService=OpenLDAP-LoginNode)
+            if [ "${DirectoryService}" != "none" ]; then
               export LDAP_DOMAIN_SUFFIX="${DirectoryDomainSuffix}"
               export LDAP_DOMAIN=$(echo "${DirectoryDomainSuffix}" | sed 's/dc=//g; s/,/./g')
               export LDAP_ADMIN_PASSWORD=$(openssl rand -base64 16)

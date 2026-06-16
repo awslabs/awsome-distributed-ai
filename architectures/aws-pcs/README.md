@@ -525,6 +525,36 @@ parameter and default, see [PARAMETERS.md](./docs/PARAMETERS.md).
 for login nodes). The P-series templates need a `CapacityReservationId` when using a
 Capacity Block.
 
+### Template nesting structure (deploy-all)
+
+```
+pcs-ml-cluster-deploy-all.yaml                    ← user deploys this
+│
+├─► ml-cluster-prerequisites.yaml                 ← VPC, subnets, SG, FSx Lustre + OpenZFS
+│
+├─► cluster.yaml                                  ← PCS cluster (Slurm scheduler), IAM role
+│
+├─► add-cng.yaml (login)                          ← login node (MinCount=1)
+│     • MonitoringRole=login → Prometheus/Grafana
+│     • DirectoryService=OpenLDAP → slapd server
+│
+├─► add-cng.yaml (compute)                        ← CPU queue (dynamic scaling 0→N)
+│     • MonitoringRole=compute → Node Exporter
+│     • DirectoryService=OpenLDAP → SSSD client
+│     • EnableEfa=true → EFA NetworkInterfaces + PG
+│
+└─► add-cng-p5.yaml / add-cng-p6-b200.yaml       ← GPU queue (optional)
+    / add-cng-p6-b300.yaml
+      • Multi-NIC EFA (16/32 cards, per-family)
+      • MonitoringRole=compute → DCGM Exporter
+      • DirectoryService=OpenLDAP → SSSD client
+
+Standalone (not nested):
+  pcs-ready-dlami-with-enroot-pyxis.yaml          ← AMI builder (separate stack)
+  iam/cluster-admin-iam.yaml                      ← IAM policies (separate stack)
+  iam/cluster-user-iam.yaml                       ← IAM policies (separate stack)
+```
+
 ---
 
 ## 11. Testing and Validation
