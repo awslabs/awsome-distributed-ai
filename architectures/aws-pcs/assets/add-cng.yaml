@@ -56,6 +56,11 @@ Metadata:
         Parameters:
           - PostInstallScriptUrl
           - PostInstallScriptArgs
+      - Label:
+          default: Multi-user directory (optional)
+        Parameters:
+          - DeployDirectory
+          - DirectoryDomainSuffix
 
 Parameters:
   ClusterId:
@@ -210,6 +215,26 @@ Parameters:
       - '25.05'
       - '25.11'
 
+  DeployDirectory:
+    Type: String
+    Description: >-
+      Deploy an OpenLDAP directory on the login node for multi-user management.
+      When true and MonitoringRole=login, slapd is installed on the login node
+      with its DB on shared /home (OpenZFS), so it survives CNG recreation.
+      Compute nodes configure SSSD to resolve users from the login node's LDAP.
+      Default false = single ubuntu user (unchanged).
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  DirectoryDomainSuffix:
+    Type: String
+    Description: >-
+      LDAP domain suffix (e.g. dc=cluster,dc=internal). Only used when
+      DeployDirectory=true.
+    Default: 'dc=cluster,dc=internal'
+
   EnableEfa:
     Type: String
     Description: >-
@@ -263,6 +288,15 @@ Conditions:
   Has2ndEfaInterface: !And
     - !Condition EfaEnabled
     - !Equals [!Ref EfaInterfaceCount, 2]
+  DirectoryEnabled: !Equals [!Ref DeployDirectory, 'true']
+  IsLoginNode: !Equals [!Ref MonitoringRole, 'login']
+  # LDAP server runs on login node; LDAP client (SSSD) runs on compute nodes
+  SetupLdapServer: !And
+    - !Condition DirectoryEnabled
+    - !Condition IsLoginNode
+  SetupLdapClient: !And
+    - !Condition DirectoryEnabled
+    - !Not [!Condition IsLoginNode]
 
 Resources:
 
@@ -470,6 +504,48 @@ Resources:
                 done
                 echo "Monitoring installation complete (exit $rc)" >> /var/log/monitoring-install.log
               fi
+
+            --==MYBOUNDARY==
+            Content-Type: text/x-shellscript; charset="us-ascii"
+            MIME-Version: 1.0
+
+            #!/bin/bash
+            # Multi-user directory setup (optional, DeployDirectory=true)
+            if [ "${DeployDirectory}" = "true" ]; then
+              export LDAP_DOMAIN_SUFFIX="${DirectoryDomainSuffix}"
+              export LDAP_DOMAIN=$(echo "${DirectoryDomainSuffix}" | sed 's/dc=//g; s/,/./g')
+              export LDAP_ADMIN_PASSWORD=$(openssl rand -base64 16)
+
+              if [ "${MonitoringRole}" = "login" ]; then
+                # Login node: install OpenLDAP server
+                echo "[multi-user] Setting up OpenLDAP server on login node..."
+                curl -fsSL "https://raw.githubusercontent.com/awslabs/awsome-distributed-ai/main/architectures/aws-pcs/scripts/setup-openldap-server.sh" -o /tmp/setup-openldap-server.sh
+                bash /tmp/setup-openldap-server.sh 2>&1 | tee /var/log/ldap-server-install.log
+                # Store admin password in SSM for retrieval
+                export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:/usr/local/bin:${!PATH}
+                CLUSTER_ID="${ClusterId}"
+                aws ssm put-parameter --name "/pcs/${!CLUSTER_ID}/ldap/admin-password" \
+                  --value "${!LDAP_ADMIN_PASSWORD}" --type SecureString --overwrite \
+                  --region $(curl -s http://169.254.169.254/latest/meta-data/placement/region) || true
+              else
+                # Compute node: configure SSSD LDAP client pointing at login node
+                echo "[multi-user] Configuring SSSD LDAP client..."
+                # Discover login node IP via tag query
+                REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+                LOGIN_IP=$(aws ec2 describe-instances --region ${!REGION} \
+                  --filters "Name=tag:pcs-cluster-id,Values=${ClusterId}" \
+                            "Name=tag:monitoring-role,Values=login" \
+                            "Name=instance-state-name,Values=running" \
+                  --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text 2>/dev/null || echo "")
+                if [ -n "${!LOGIN_IP}" ] && [ "${!LOGIN_IP}" != "None" ]; then
+                  export LDAP_SERVER_URI="ldap://${!LOGIN_IP}"
+                  curl -fsSL "https://raw.githubusercontent.com/awslabs/awsome-distributed-ai/main/architectures/aws-pcs/scripts/setup-ldap-client.sh" -o /tmp/setup-ldap-client.sh
+                  bash /tmp/setup-ldap-client.sh 2>&1 | tee /var/log/ldap-client-install.log
+                else
+                  echo "[multi-user] WARNING: could not discover login node IP. LDAP client not configured."
+                fi
+              fi
+            fi
 
             --==MYBOUNDARY==
 
