@@ -107,9 +107,26 @@ objectClass: organizationalUnit
 ou: Groups
 EOF
 
-# Persist admin password on shared storage (survives CNG delete)
-echo "${LDAP_ADMIN_PASSWORD}" > "${LDAP_DB_DIR}/.admin-password"
-chmod 600 "${LDAP_DB_DIR}/.admin-password"
+# Persist admin password — prefer SSM Parameter Store (access-controlled,
+# auditable via CloudTrail) over a file on shared /home (readable by any root).
+REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+CLUSTER_ID="${CLUSTER_ID:-unknown}"
+if aws ssm put-parameter \
+     --name "/pcs/${CLUSTER_ID}/ldap/admin-password" \
+     --value "${LDAP_ADMIN_PASSWORD}" \
+     --type SecureString \
+     --overwrite \
+     --region "${REGION}" 2>/dev/null; then
+  echo "[ldap-server] Admin password stored in SSM: /pcs/${CLUSTER_ID}/ldap/admin-password"
+else
+  # Fallback: write to shared storage if instance role lacks ssm:PutParameter
+  echo "${LDAP_ADMIN_PASSWORD}" > "${LDAP_DB_DIR}/.admin-password"
+  chmod 600 "${LDAP_DB_DIR}/.admin-password"
+  chown openldap:openldap "${LDAP_DB_DIR}/.admin-password"
+  echo "[ldap-server] WARNING: SSM put failed (instance role may lack ssm:PutParameter)."
+  echo "[ldap-server] Admin password saved to ${LDAP_DB_DIR}/.admin-password (readable by root on all nodes)."
+  echo "[ldap-server] For production, add ssm:PutParameter to the instance role and redeploy."
+fi
 
 echo "[ldap-server] OpenLDAP server ready."
 echo "[ldap-server] Admin DN: cn=admin,${LDAP_DOMAIN_SUFFIX}"

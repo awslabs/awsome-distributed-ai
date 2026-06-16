@@ -225,13 +225,15 @@ Resources:
               - pricing:DescribeServices
             Resource: '*'
 
-          - Sid: SSMGrafanaPasswordForThisClusterOnly
+          - Sid: SSMClusterParametersForThisClusterOnly
             Effect: Allow
             Action:
               - ssm:GetParameter
               - ssm:PutParameter
               - ssm:AddTagsToResource
-            Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/grafana/*'
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/grafana/*'
+              - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/ldap/*'
 
           - Sid: KMSForSSMSecureString
             Effect: Allow

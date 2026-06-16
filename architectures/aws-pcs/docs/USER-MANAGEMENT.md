@@ -71,7 +71,7 @@ pcs-ml-cluster-deploy-all.yaml
 │           if DeployDirectory=true:
 │             curl setup-openldap-server.sh → install slapd
 │             DB → /home/ldap-db/ (shared OpenZFS)
-│             Admin password → /home/ldap-db/.admin-password
+│             Admin password → SSM /pcs/<id>/ldap/admin-password
 │
 ├─► OnDemandCNGStack (add-cng.yaml)
 │     │  MonitoringRole=compute, DeployDirectory=$DeployDirectory
@@ -163,13 +163,19 @@ All user management commands run on the **login node** as root (or via `sudo`).
 ### Retrieve the LDAP admin password
 
 The admin password is auto-generated at first boot and stored in SSM
-Parameter Store:
+Parameter Store (encrypted with the account's default KMS key):
 
 ```bash
 CLUSTER_ID=<from stack output>
 aws ssm get-parameter --name "/pcs/${CLUSTER_ID}/ldap/admin-password" \
   --with-decryption --query 'Parameter.Value' --output text
 ```
+
+> **Fallback**: if the instance role lacked `ssm:PutParameter` at first boot,
+> the password is instead saved to `/home/ldap-db/.admin-password` on shared
+> OpenZFS. This file is `chmod 600` but readable by root on any node — for
+> production, ensure the instance role has the SSM permission (the default
+> `cluster.yaml` role includes it at `/pcs/<cluster-id>/ldap/*`).
 
 ### Add a user
 
