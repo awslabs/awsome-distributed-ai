@@ -244,7 +244,7 @@ Parameters:
       an EFA-capable instance type (e.g. hpc8a.96xlarge, hpc7a.96xlarge,
       hpc6a.48xlarge). For multi-NIC GPU families (P5/P6) use the
       dedicated add-cng-p5/p6-* templates instead.
-    Default: 'none'
+    Default: 'false'
     AllowedValues:
       - 'true'
       - 'false'

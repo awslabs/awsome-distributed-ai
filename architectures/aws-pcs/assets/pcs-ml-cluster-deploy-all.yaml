@@ -262,7 +262,7 @@ Parameters:
       Capacity to >= the EFA minimum when enabling this; the full minimum-capacity
       matrix per throughput tier is in the FSx for Lustre User Guide.
     Type: String
-    Default: 'none'
+    Default: 'false'
     AllowedValues:
       - 'true'
       - 'false'
@@ -472,7 +472,7 @@ Parameters:
       group. Use with EFA-capable HPC instance types (hpc8a.96xlarge,
       hpc7a.96xlarge, hpc6a.48xlarge, etc.). Default false keeps the
       standard single-NIC LaunchTemplate. No effect on the P-series GPU CNG.
-    Default: 'none'
+    Default: 'false'
     AllowedValues:
       - 'true'
       - 'false'
@@ -501,7 +501,7 @@ Parameters:
   DeployPseriesCNG:
     Type: String
     Description: Deploy P-series (P5/P6) compute node group
-    Default: 'none'
+    Default: 'false'
     AllowedValues:
       - 'true'
       - 'false'
