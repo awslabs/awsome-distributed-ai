@@ -560,11 +560,17 @@ pcs-ml-cluster-deploy-all.yaml                    ← user deploys this
       • MonitoringRole=compute → DCGM Exporter
       • Same external script pattern as compute CNG
 
-External scripts (fetched at first boot from S3: s3://<S3BucketName>/<S3KeyPrefix>scripts/):
+Boot scripts (fetched at first boot from S3: s3://<S3BucketName>/<S3KeyPrefix>scripts/):
   assets/scripts/install-enroot-pyxis.sh           ← Enroot 3.5.0 + Pyxis 0.20.0
   assets/scripts/setup-directory.sh               ← multi-user directory (server + client)
-  assets/scripts/ldap-add-user.sh                 ← helper to add POSIX users to LDAP
-  MonitoringRepo @ MonitoringVersion              ← aws-parallelcluster-monitoring post-install.sh
+
+External boot scripts (fetched from GitHub):
+  aws-parallelcluster-monitoring post-install.sh   ← monitoring stack installer
+    (https://github.com/aws-samples/aws-parallelcluster-monitoring)
+    fetched from: ${MonitoringRepo} @ ${MonitoringVersion}
+
+Helper scripts (NOT run at boot — for admin use on the login node):
+  assets/scripts/ldap-add-user.sh                 ← add POSIX users to LDAP directory
 
 External references (runtime):
   SSM /aws/service/pcs/ami/.../latest/ami-id      ← PCS-Ready DLAMI (when AmiId is empty)
