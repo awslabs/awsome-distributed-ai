@@ -107,7 +107,7 @@ choices that need the most thought.
 **PCS-Ready DLAMI** (Ubuntu 24.04 x86_64) from SSM
 (`/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id`) — no AMI choice
 needed. Enroot 3.5.0 + Pyxis 0.20.0 are layered on at first boot via
-[`scripts/install-enroot-pyxis.sh`](./scripts/install-enroot-pyxis.sh)
+[`assets/scripts/install-enroot-pyxis.sh`](./assets/scripts/install-enroot-pyxis.sh)
 (~8–12 min boot). For **frequent scaling**, pre-bake Enroot/Pyxis into a custom DLAMI
 once with [§9](#9-pre-baking-enrootpyxis-into-a-custom-ami-optional) and pass that
 `ami-xxx` as `AmiId` (~3 min boot, deterministic state). The post-install hook is
@@ -561,9 +561,9 @@ pcs-ml-cluster-deploy-all.yaml                    ← user deploys this
       • Same external script pattern as compute CNG
 
 External scripts (fetched at first boot from GitHub raw):
-  scripts/install-enroot-pyxis.sh                 ← Enroot 3.5.0 + Pyxis 0.20.0
-  scripts/setup-openldap-server.sh                ← slapd install + config (login only)
-  scripts/setup-ldap-client.sh                    ← SSSD LDAP client (compute nodes)
+  assets/scripts/install-enroot-pyxis.sh           ← Enroot 3.5.0 + Pyxis 0.20.0
+  assets/scripts/setup-directory.sh               ← multi-user directory (server + client)
+  assets/scripts/ldap-add-user.sh                 ← helper to add POSIX users to LDAP
   MonitoringRepo @ MonitoringVersion              ← aws-parallelcluster-monitoring post-install.sh
 
 External references (runtime):
