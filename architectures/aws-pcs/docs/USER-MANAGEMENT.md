@@ -3,6 +3,55 @@
 This guide covers multi-user management for the PCS reference architecture.
 By default, the cluster runs as a single `ubuntu` user (the PCS-Ready DLAMI
 default). When `DeployDirectory=true` is set, an OpenLDAP directory is deployed
+
+---
+
+## Access methods (multi-user)
+
+| Method | Pro | Con | Best for |
+|---|---|---|---|
+| **SSM Session Manager** | No port opening, IAM-based auth, full audit trail in CloudTrail | Each user needs IAM credentials + SSM plugin installed; lands as `ssm-user`, requires `su - <user>` to switch | Admin-only access, security-sensitive environments |
+| **SSH over SSM** (`ProxyCommand`) | No port opening + standard SSH workflow (VS Code Remote, scp, rsync) | Each user needs IAM credentials + SSM plugin + SSH config entry; slightly more setup | Teams with IAM already in place, remote IDE use |
+| **Direct SSH** (port 22 on login node) | Simplest for users — standard `ssh user@host`, familiar HPC workflow, VS Code/JupyterLab tunnels work natively | Requires SG port 22 open (CIDR-restricted), SSH key distribution needed | Traditional HPC teams, workshop/training environments |
+
+**Recommendation for multi-user clusters**: use **Direct SSH** with CIDR-restricted
+port 22 on the login node. This matches the standard HPC user experience and
+avoids per-user IAM setup overhead. SSH keys are stored in each user's
+`/home/<user>/.ssh/authorized_keys` (shared OpenZFS, visible on all nodes).
+
+### SSH key management
+
+| Approach | Who adds keys | How |
+|---|---|---|
+| Admin provisions at user-creation time | Cluster admin | Pass `ssh-pub-key` to `ldap-add-user.sh` → written to `/home/<user>/.ssh/authorized_keys` |
+| User self-service | Each user | User logs in (first time via admin-provided temp password or SSM) and adds their own key to `~/.ssh/authorized_keys` |
+| LDAP-stored keys (`AuthorizedKeysCommand`) | Admin | `sshd_config` queries LDAP for `sshPublicKey` attribute via helper script — centralizes key management but adds sshd config complexity |
+
+For most clusters, the simplest path is: admin creates the user + writes their
+SSH public key to `/home/<user>/.ssh/authorized_keys` during creation.
+
+---
+
+## Slurm accounting with PCS
+
+PCS manages the Slurm accounting database internally — you do NOT need to
+configure `slurmdbd` or manage a MySQL/MariaDB database. When
+`ManagedAccounting=enabled` is set on the cluster, Slurm's accounting commands
+(`sacctmgr`, `sacct`, `sreport`) work against PCS's managed backing store.
+
+**What you still need to do manually**:
+- `sacctmgr add account <team>` — create Slurm accounts (one per team/project)
+- `sacctmgr add user <username> account=<team>` — map LDAP users to Slurm accounts
+- (Optional) Set fairshare / QOS via `sacctmgr modify user`
+
+If `AccountingPolicyEnforcement=associations,limits,safe` is set, a user
+without a `sacctmgr` entry will have their jobs **rejected**. With the default
+`AccountingPolicyEnforcement=none`, unregistered users can still submit jobs
+(they just won't have accounting records).
+
+---
+
+When `DeployDirectory=true` is set, an OpenLDAP directory is deployed
 on the login node, and all compute nodes are configured as LDAP clients via
 SSSD — giving you centralized POSIX user management across the cluster.
 

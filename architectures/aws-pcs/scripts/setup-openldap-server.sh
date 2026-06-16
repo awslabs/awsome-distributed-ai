@@ -107,8 +107,13 @@ objectClass: organizationalUnit
 ou: Groups
 EOF
 
+# Persist admin password on shared storage (survives CNG delete)
+echo "${LDAP_ADMIN_PASSWORD}" > "${LDAP_DB_DIR}/.admin-password"
+chmod 600 "${LDAP_DB_DIR}/.admin-password"
+
 echo "[ldap-server] OpenLDAP server ready."
 echo "[ldap-server] Admin DN: cn=admin,${LDAP_DOMAIN_SUFFIX}"
+echo "[ldap-server] Admin password stored at: ${LDAP_DB_DIR}/.admin-password"
 echo "[ldap-server] DB stored on: ${LDAP_DB_DIR} (shared OpenZFS, survives CNG delete)"
 echo "[ldap-server] Add users with:"
-echo "  ldapadd -x -H ldap://localhost -D 'cn=admin,${LDAP_DOMAIN_SUFFIX}' -w '<password>'"
+echo "  ldapadd -x -H ldap://localhost -D 'cn=admin,${LDAP_DOMAIN_SUFFIX}' -w '\$(cat ${LDAP_DB_DIR}/.admin-password)'"

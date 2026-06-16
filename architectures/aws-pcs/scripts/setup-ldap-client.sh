@@ -44,7 +44,7 @@ default_shell = /bin/bash
 fallback_homedir = /home/%u
 
 # UID/GID range for LDAP users (avoid collision with system users)
-min_id = 10000
+min_id = 1001
 max_id = 60000
 EOF
 
