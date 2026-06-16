@@ -235,6 +235,14 @@ Resources:
               - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/grafana/*'
               - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/ldap/*'
 
+          - Sid: S3GetScripts
+            Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource:
+              - arn:aws:s3:::awsome-distributed-ai/templates/scripts/*
+              - arn:aws:s3:::*/templates/scripts/*
+
           - Sid: KMSForSSMSecureString
             Effect: Allow
             Action:

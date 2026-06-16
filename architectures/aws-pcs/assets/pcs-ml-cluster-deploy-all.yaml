@@ -742,6 +742,8 @@ Resources:
         DirectoryService: !Ref DirectoryService
         DirectoryRole: !If [DirectoryEnabled, 'server', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
+        S3BucketName: !Ref S3BucketName
+        S3KeyPrefix: !Ref S3KeyPrefix
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-LoginNodeGroup'
@@ -791,6 +793,8 @@ Resources:
         DirectoryService: !Ref DirectoryService
         DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
+        S3BucketName: !Ref S3BucketName
+        S3KeyPrefix: !Ref S3KeyPrefix
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-OnDemandCNG'

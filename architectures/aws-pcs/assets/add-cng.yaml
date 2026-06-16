@@ -249,6 +249,16 @@ Parameters:
       - 'server'
       - 'client'
 
+  S3BucketName:
+    Type: String
+    Description: S3 bucket where scripts are stored (same as nested templates bucket)
+    Default: 'awsome-distributed-ai'
+
+  S3KeyPrefix:
+    Type: String
+    Description: S3 key prefix for scripts (e.g. templates/)
+    Default: 'templates/'
+
   EnableEfa:
     Type: String
     Description: >-
@@ -524,8 +534,9 @@ Resources:
               export CLUSTER_ID="${ClusterId}"
               export DIRECTORY_DNS_IPS=""
 
-              SCRIPT_URL="https://raw.githubusercontent.com/DaisukeMiyamoto/awsome-distributed-ai/feat/multi-user/architectures/aws-pcs/scripts/setup-directory.sh"
-              curl -fsSL "${!SCRIPT_URL}" -o /tmp/setup-directory.sh
+              REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+              aws s3 cp s3://${S3BucketName}/${S3KeyPrefix}scripts/setup-directory.sh /tmp/setup-directory.sh --region ${!REGION}
+              chmod +x /tmp/setup-directory.sh
               bash /tmp/setup-directory.sh "${DirectoryRole}" 2>&1 | tee /var/log/directory-setup.log
             fi
 
