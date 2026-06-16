@@ -51,6 +51,41 @@ without a `sacctmgr` entry will have their jobs **rejected**. With the default
 
 ---
 
+## Template structure (how multi-user is wired)
+
+```
+pcs-ml-cluster-deploy-all.yaml
+│
+│  Parameters: DeployDirectory, DirectoryDomainSuffix
+│
+├─► PrerequisitesStack (ml-cluster-prerequisites.yaml)
+│     VPC, FSx Lustre, FSx OpenZFS (/home — shared storage for LDAP DB)
+│
+├─► ClusterStack (cluster.yaml)
+│     PCS Cluster, IAM role, SSM param (Grafana pw)
+│
+├─► LoginNodeGroupStack (add-cng.yaml)
+│     │  MonitoringRole=login, DeployDirectory=$DeployDirectory
+│     │
+│     └─► UserData:
+│           if DeployDirectory=true:
+│             curl setup-openldap-server.sh → install slapd
+│             DB → /home/ldap-db/ (shared OpenZFS)
+│             Admin password → /home/ldap-db/.admin-password
+│
+├─► OnDemandCNGStack (add-cng.yaml)
+│     │  MonitoringRole=compute, DeployDirectory=$DeployDirectory
+│     │
+│     └─► UserData:
+│           if DeployDirectory=true:
+│             discover login node IP (ec2:DescribeInstances by tag)
+│             curl setup-ldap-client.sh → install SSSD
+│             ldap_uri = ldap://<login-node-ip>
+│
+└─► [Optional] PseriesCNGStack (add-cng-p5/p6-*.yaml)
+      Same pattern as OnDemandCNG (SSSD client when DeployDirectory=true)
+```
+
 When `DeployDirectory=true` is set, an OpenLDAP directory is deployed
 on the login node, and all compute nodes are configured as LDAP clients via
 SSSD — giving you centralized POSIX user management across the cluster.

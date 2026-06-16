@@ -69,7 +69,12 @@ Metadata:
           - HomeThroughput
           - OpenZFSDeploymentType
       - Label:
-          default: "7. Developer / Advanced (Nested Templates & Monitoring Source)"
+          default: "7. Multi-User Directory (Optional)"
+        Parameters:
+          - DeployDirectory
+          - DirectoryDomainSuffix
+      - Label:
+          default: "8. Developer / Advanced (Nested Templates & Monitoring Source)"
         Parameters:
           - S3BucketName
           - S3KeyPrefix
@@ -261,6 +266,26 @@ Parameters:
     AllowedValues:
       - 'true'
       - 'false'
+
+  # Multi-user directory
+  DeployDirectory:
+    Type: String
+    Description: >-
+      Deploy an OpenLDAP directory on the login node for multi-user management.
+      When true, slapd runs on the login node (DB on shared /home/ldap-db,
+      survives CNG recreation) and compute nodes configure SSSD to resolve LDAP
+      users. Default false = single ubuntu user (unchanged).
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  DirectoryDomainSuffix:
+    Type: String
+    Description: >-
+      LDAP domain suffix (e.g. dc=cluster,dc=internal). Only used when
+      DeployDirectory=true.
+    Default: 'dc=cluster,dc=internal'
 
   HomeCapacity:
     Description: "Home directories storage capacity in GiB"
@@ -713,6 +738,8 @@ Resources:
         MonitoringRole: login
         PostInstallScriptUrl: !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
+        DeployDirectory: !Ref DeployDirectory
+        DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-LoginNodeGroup'
@@ -759,6 +786,8 @@ Resources:
         EnableEfa: !Ref OnDemandEnableEfa
         EfaInterfaceCount: !Ref OnDemandEfaInterfaceCount
         PlacementGroupName: !Ref OnDemandPlacementGroupName
+        DeployDirectory: !Ref DeployDirectory
+        DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-OnDemandCNG'
