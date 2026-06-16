@@ -509,36 +509,21 @@ Resources:
             MIME-Version: 1.0
 
             #!/bin/bash
-            # Multi-user directory setup (optional, DirectoryService=OpenLDAP-LoginNode)
+            # Multi-user directory setup (optional, DirectoryService != none)
             if [ "${DirectoryService}" != "none" ]; then
               export LDAP_DOMAIN_SUFFIX="${DirectoryDomainSuffix}"
               export LDAP_DOMAIN=$(echo "${DirectoryDomainSuffix}" | sed 's/dc=//g; s/,/./g')
               export LDAP_ADMIN_PASSWORD=$(openssl rand -base64 16)
-
               export CLUSTER_ID="${ClusterId}"
+              export DIRECTORY_DNS_IPS=""
+
+              SCRIPT_URL="https://raw.githubusercontent.com/DaisukeMiyamoto/awsome-distributed-ai/feat/multi-user/architectures/aws-pcs/scripts/setup-directory.sh"
+              curl -fsSL "${!SCRIPT_URL}" -o /tmp/setup-directory.sh
 
               if [ "${MonitoringRole}" = "login" ]; then
-                # Login node: install OpenLDAP server (password stored in SSM by the script)
-                echo "[multi-user] Setting up OpenLDAP server on login node..."
-                curl -fsSL "https://raw.githubusercontent.com/DaisukeMiyamoto/awsome-distributed-ai/feat/multi-user/architectures/aws-pcs/scripts/setup-openldap-server.sh" -o /tmp/setup-openldap-server.sh
-                bash /tmp/setup-openldap-server.sh 2>&1 | tee /var/log/ldap-server-install.log
+                bash /tmp/setup-directory.sh server 2>&1 | tee /var/log/directory-setup.log
               else
-                # Compute node: configure SSSD LDAP client pointing at login node
-                echo "[multi-user] Configuring SSSD LDAP client..."
-                # Discover login node IP via tag query
-                REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
-                LOGIN_IP=$(aws ec2 describe-instances --region ${!REGION} \
-                  --filters "Name=tag:pcs-cluster-id,Values=${ClusterId}" \
-                            "Name=tag:monitoring-role,Values=login" \
-                            "Name=instance-state-name,Values=running" \
-                  --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text 2>/dev/null || echo "")
-                if [ -n "${!LOGIN_IP}" ] && [ "${!LOGIN_IP}" != "None" ]; then
-                  export LDAP_SERVER_URI="ldap://${!LOGIN_IP}"
-                  curl -fsSL "https://raw.githubusercontent.com/DaisukeMiyamoto/awsome-distributed-ai/feat/multi-user/architectures/aws-pcs/scripts/setup-ldap-client.sh" -o /tmp/setup-ldap-client.sh
-                  bash /tmp/setup-ldap-client.sh 2>&1 | tee /var/log/ldap-client-install.log
-                else
-                  echo "[multi-user] WARNING: could not discover login node IP. LDAP client not configured."
-                fi
+                bash /tmp/setup-directory.sh client 2>&1 | tee /var/log/directory-setup.log
               fi
             fi
 

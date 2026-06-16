@@ -533,21 +533,43 @@ pcs-ml-cluster-deploy-all.yaml                    ← user deploys this
 ├─► ml-cluster-prerequisites.yaml                 ← VPC, subnets, SG, FSx Lustre + OpenZFS
 │
 ├─► cluster.yaml                                  ← PCS cluster (Slurm scheduler), IAM role
+│     • IAM role grants: ssm:PutParameter /pcs/<id>/grafana/*, /pcs/<id>/ldap/*
 │
 ├─► add-cng.yaml (login)                          ← login node (MinCount=1)
 │     • MonitoringRole=login → Prometheus/Grafana
-│     • DirectoryService=OpenLDAP → slapd server
+│     • DirectoryService=OpenLDAP-LoginNode → slapd server
+│     │
+│     └─ UserData fetches external scripts:
+│          ├─ PostInstallScriptUrl (default: install-enroot-pyxis.sh)
+│          ├─ MonitoringRepo/MonitoringVersion → post-install.sh
+│          └─ setup-openldap-server.sh (when DirectoryService != none)
 │
 ├─► add-cng.yaml (compute)                        ← CPU queue (dynamic scaling 0→N)
 │     • MonitoringRole=compute → Node Exporter
-│     • DirectoryService=OpenLDAP → SSSD client
+│     • DirectoryService=OpenLDAP-LoginNode → SSSD client
 │     • EnableEfa=true → EFA NetworkInterfaces + PG
+│     │
+│     └─ UserData fetches external scripts:
+│          ├─ PostInstallScriptUrl (same as login)
+│          ├─ MonitoringRepo/MonitoringVersion → post-install.sh
+│          └─ setup-ldap-client.sh (when DirectoryService != none)
 │
 └─► add-cng-p5.yaml / add-cng-p6-b200.yaml       ← GPU queue (optional)
     / add-cng-p6-b300.yaml
       • Multi-NIC EFA (16/32 cards, per-family)
       • MonitoringRole=compute → DCGM Exporter
-      • DirectoryService=OpenLDAP → SSSD client
+      • Same external script pattern as compute CNG
+
+External scripts (fetched at first boot from GitHub raw):
+  scripts/install-enroot-pyxis.sh                 ← Enroot 3.5.0 + Pyxis 0.20.0
+  scripts/setup-openldap-server.sh                ← slapd install + config (login only)
+  scripts/setup-ldap-client.sh                    ← SSSD LDAP client (compute nodes)
+  MonitoringRepo @ MonitoringVersion              ← aws-parallelcluster-monitoring post-install.sh
+
+External references (runtime):
+  SSM /aws/service/pcs/ami/.../latest/ami-id      ← PCS-Ready DLAMI (when AmiId is empty)
+  SSM /pcs/<cluster-id>/grafana/admin-password    ← auto-generated Grafana password
+  SSM /pcs/<cluster-id>/ldap/admin-password       ← auto-generated LDAP admin password
 
 Standalone (not nested):
   pcs-ready-dlami-with-enroot-pyxis.yaml          ← AMI builder (separate stack)
