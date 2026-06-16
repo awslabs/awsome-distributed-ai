@@ -71,16 +71,16 @@ Metadata:
         Parameters:
           - DeployMonitoring
           - GrafanaPublicAccessCidr
+          - MonitoringRepo
+          - MonitoringVersion
+          - DcgmExporterImage
           - DirectoryService
           - DirectoryDomainSuffix
       - Label:
-          default: "8. Developer / Advanced"
+          default: "8. Developer / Advanced (do not change for normal use)"
         Parameters:
           - S3BucketName
           - S3KeyPrefix
-          - MonitoringVersion
-          - MonitoringRepo
-          - DcgmExporterImage
     ParameterLabels:
       # Friendly display names shown in the CloudFormation console 1-click UI,
       # so users see plain-language labels instead of raw CamelCase parameter keys.
