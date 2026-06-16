@@ -25,6 +25,7 @@ Metadata:
           - LoginNodeInstanceType
           - RootVolumeSize
           - AmiId
+          - SSHAccessCidr
           - ManagedAccounting
           - AccountingPolicyEnforcement
       - Label:
@@ -69,8 +70,8 @@ Metadata:
       - Label:
           default: "7. Additional Cluster Configuration (Monitoring, Multi-User)"
         Parameters:
-          - DeployMonitoring
-          - GrafanaPublicAccessCidr
+          - MonitoringStack
+          - GrafanaAccessCidr
           - MonitoringRepo
           - MonitoringVersion
           - DcgmExporterImage
@@ -94,10 +95,12 @@ Metadata:
         default: "Login node instance type"
       SlurmVersion:
         default: "Slurm version"
-      DeployMonitoring:
-        default: "Deploy monitoring (Prometheus/Grafana)"
-      GrafanaPublicAccessCidr:
-        default: "Grafana public access CIDR (empty = SSM only)"
+      SSHAccessCidr:
+        default: "SSH access CIDR for login node (empty = SSM only)"
+      MonitoringStack:
+        default: "Monitoring stack (none or Prometheus-LoginNode)"
+      GrafanaAccessCidr:
+        default: "Grafana public access CIDR (empty = SSM port-forward only)"
       MonitoringVersion:
         default: "Monitoring version (git ref)"
       MonitoringRepo:
@@ -380,22 +383,34 @@ Parameters:
     Default: "m6i.4xlarge"
 
   # Monitoring Configuration
-  DeployMonitoring:
-    Type: String
-    Description: Deploy monitoring stack (Prometheus, Grafana, DCGM) on Login Node
-    Default: 'true'
-    AllowedValues:
-      - 'true'
-      - 'false'
-
-  GrafanaPublicAccessCidr:
+  SSHAccessCidr:
     Type: String
     Description: >-
-      (Optional) CIDR allowed to reach the login node on HTTPS/443. Empty (default)
-      = SSM port-forward only (recommended). When set, also exposes the
-      UNauthenticated /prometheus/, /pushgateway/, /slurmexporter/ proxy paths
-      (not just password-gated Grafana). Use the tightest CIDR you can; clear it
-      when done.
+      (Optional) CIDR allowed to reach the login node on SSH/22. Empty (default)
+      = SSH over SSM only. Set to your office IP or VPN range for direct SSH
+      access (multi-user clusters, VS Code Remote, scp).
+    Default: ""
+    AllowedPattern: '^$|^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)/(3[0-2]|[12]?\d)$'
+    ConstraintDescription: Must be empty or a valid IPv4 CIDR (e.g. 203.0.113.4/32)
+
+  MonitoringStack:
+    Type: String
+    Description: >-
+      Monitoring stack to deploy. 'Prometheus-LoginNode' (default) installs
+      Prometheus + Grafana + DCGM Exporter on the login node. 'none' skips
+      monitoring entirely. Future options (AMP-AMG, CloudWatch) will be added.
+    Default: 'Prometheus-LoginNode'
+    AllowedValues:
+      - 'Prometheus-LoginNode'
+      - 'none'
+
+  GrafanaAccessCidr:
+    Type: String
+    Description: >-
+      (Optional) CIDR allowed to reach the login node on HTTPS/443 (Grafana).
+      Empty (default) = SSM port-forward only. When set, also exposes the
+      unauthenticated /prometheus/, /pushgateway/, /slurmexporter/ proxy paths.
+      Use the tightest CIDR you can; clear it when done.
     Default: ""
     AllowedPattern: '^$|^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)/(3[0-2]|[12]?\d)$'
     ConstraintDescription: Must be empty or a valid IPv4 CIDR (e.g. 203.0.113.4/32)
@@ -615,7 +630,12 @@ Conditions:
   DirectoryEnabled: !Not [!Equals [!Ref DirectoryService, 'none']]
   DeployPseriesCNGEnabled: !Equals [!Ref DeployPseriesCNG, 'true']
   # Open Grafana (login node, HTTPS/443) to a CIDR only when one is provided.
-  GrafanaPublicAccess: !Not [!Equals [!Ref GrafanaPublicAccessCidr, ""]]
+  SSHAccessEnabled: !Not [!Equals [!Ref SSHAccessCidr, ""]]
+  GrafanaAccessEnabled: !Not [!Equals [!Ref GrafanaAccessCidr, ""]]
+  LoginAccessEnabled: !Or
+    - !Condition SSHAccessEnabled
+    - !Condition GrafanaAccessEnabled
+  MonitoringEnabled: !Not [!Equals [!Ref MonitoringStack, 'none']]
   # Select the right multi-NIC EFA template from the P-series instance type.
   # p6-b200/p6-b300 have different network-card counts than P5, so each family
   # gets its own nested stack; anything else falls back to the P5 template.
@@ -675,7 +695,7 @@ Resources:
         SlurmVersion: !Ref SlurmVersion
         ManagedAccounting: !Ref ManagedAccounting
         AccountingPolicyEnforcement: !Ref AccountingPolicyEnforcement
-        DeployMonitoring: !Ref DeployMonitoring
+        DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-Cluster'
@@ -683,25 +703,36 @@ Resources:
   #############################################################################
   # 4. Login Node Group Stack
   #############################################################################
-  # Optional login-only security group that exposes Grafana (HTTPS/443) to a
-  # specific CIDR. Created only when GrafanaPublicAccessCidr is set. It is
-  # attached ONLY to the login node (via ExtraSecurityGroupId), so compute nodes
-  # and FSx — which share the cluster security group — are not exposed.
-  GrafanaPublicSecurityGroup:
+  # Optional login-only security group for SSH and/or Grafana access from a
+  # specific CIDR. Created when SSHAccessCidr and/or GrafanaAccessCidr is set.
+  # Attached ONLY to the login node (via ExtraSecurityGroupId) — compute nodes
+  # and FSx (which share the cluster security group) are NOT exposed.
+  LoginAccessSecurityGroup:
     Type: AWS::EC2::SecurityGroup
-    Condition: GrafanaPublicAccess
+    Condition: LoginAccessEnabled
     Properties:
-      GroupDescription: Allow inbound HTTPS to Grafana on the login node
+      GroupDescription: Allow inbound SSH/HTTPS to the login node from trusted CIDRs
       VpcId: !GetAtt PrerequisitesStack.Outputs.VPC
       SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: !Ref GrafanaPublicAccessCidr
-          Description: Grafana HTTPS from the allowed CIDR
+        - !If
+          - SSHAccessEnabled
+          - IpProtocol: tcp
+            FromPort: 22
+            ToPort: 22
+            CidrIp: !Ref SSHAccessCidr
+            Description: SSH from SSHAccessCidr
+          - !Ref AWS::NoValue
+        - !If
+          - GrafanaAccessEnabled
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            CidrIp: !Ref GrafanaAccessCidr
+            Description: Grafana HTTPS from GrafanaAccessCidr
+          - !Ref AWS::NoValue
       Tags:
         - Key: Name
-          Value: !Sub '${AWS::StackName}-grafana-public'
+          Value: !Sub '${AWS::StackName}-login-access'
 
   LoginNodeGroupStack:
     Type: AWS::CloudFormation::Stack
@@ -724,14 +755,14 @@ Resources:
         AmiId: !Ref AmiId
         ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
         ExtraSecurityGroupId: !If
-          - GrafanaPublicAccess
-          - !Ref GrafanaPublicSecurityGroup
+          - LoginAccessEnabled
+          - !Ref LoginAccessSecurityGroup
           - ""
         IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
         FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
         FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
-        DeployMonitoring: !Ref DeployMonitoring
+        DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
         DcgmExporterImage: !Ref DcgmExporterImage
@@ -776,7 +807,7 @@ Resources:
         FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
         FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
-        DeployMonitoring: !Ref DeployMonitoring
+        DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
         DcgmExporterImage: !Ref DcgmExporterImage
@@ -828,7 +859,7 @@ Resources:
         FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         CapacityReservationId: !Ref CapacityReservationId
-        DeployMonitoring: !Ref DeployMonitoring
+        DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
         DcgmExporterImage: !Ref DcgmExporterImage
@@ -869,7 +900,7 @@ Resources:
         FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         CapacityReservationId: !Ref CapacityReservationId
-        DeployMonitoring: !Ref DeployMonitoring
+        DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
         DcgmExporterImage: !Ref DcgmExporterImage
@@ -910,7 +941,7 @@ Resources:
         FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         CapacityReservationId: !Ref CapacityReservationId
-        DeployMonitoring: !Ref DeployMonitoring
+        DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
         DcgmExporterImage: !Ref DcgmExporterImage
