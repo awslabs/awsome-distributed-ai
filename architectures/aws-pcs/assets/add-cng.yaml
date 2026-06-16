@@ -519,7 +519,7 @@ Resources:
               if [ "${MonitoringRole}" = "login" ]; then
                 # Login node: install OpenLDAP server
                 echo "[multi-user] Setting up OpenLDAP server on login node..."
-                curl -fsSL "https://raw.githubusercontent.com/awslabs/awsome-distributed-ai/main/architectures/aws-pcs/scripts/setup-openldap-server.sh" -o /tmp/setup-openldap-server.sh
+                curl -fsSL "https://raw.githubusercontent.com/DaisukeMiyamoto/awsome-distributed-ai/feat/multi-user/architectures/aws-pcs/scripts/setup-openldap-server.sh" -o /tmp/setup-openldap-server.sh
                 bash /tmp/setup-openldap-server.sh 2>&1 | tee /var/log/ldap-server-install.log
                 # Store admin password in SSM for retrieval
                 export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:/usr/local/bin:${!PATH}
@@ -539,7 +539,7 @@ Resources:
                   --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text 2>/dev/null || echo "")
                 if [ -n "${!LOGIN_IP}" ] && [ "${!LOGIN_IP}" != "None" ]; then
                   export LDAP_SERVER_URI="ldap://${!LOGIN_IP}"
-                  curl -fsSL "https://raw.githubusercontent.com/awslabs/awsome-distributed-ai/main/architectures/aws-pcs/scripts/setup-ldap-client.sh" -o /tmp/setup-ldap-client.sh
+                  curl -fsSL "https://raw.githubusercontent.com/DaisukeMiyamoto/awsome-distributed-ai/feat/multi-user/architectures/aws-pcs/scripts/setup-ldap-client.sh" -o /tmp/setup-ldap-client.sh
                   bash /tmp/setup-ldap-client.sh 2>&1 | tee /var/log/ldap-client-install.log
                 else
                   echo "[multi-user] WARNING: could not discover login node IP. LDAP client not configured."
