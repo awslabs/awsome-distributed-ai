@@ -1,0 +1,139 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+AWSTemplateFormatVersion: "2010-09-09"
+Description: |
+  Creates a customer-managed IAM policy + group for end users of an
+  already-deployed AWS PCS reference cluster. Members can:
+    - Discover the login node (ec2:DescribeInstances) and read CFN stack outputs
+    - Read PCS cluster / queue / compute-node-group status (pcs:Get*/List*)
+    - Open SSM Session Manager / SSH-over-SSM / port-forward to LOGIN nodes
+    - Retrieve the Grafana admin password from Parameter Store
+    - Terminate their own SSM sessions
+  They cannot create, modify, or delete cluster resources, and cannot open
+  shells on compute nodes (the ssm:resourceTag Name=PCS-login* scope blocks that. Note: the Name tag is operator-mutable; if you rename login nodes, update the policy accordingly).
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: "Group + IAM users (optional)" }
+        Parameters: [GroupName, AttachUsers]
+    ParameterLabels:
+      GroupName: { default: "Name of the IAM group to create" }
+      AttachUsers: { default: "Existing IAM users to add to the group (comma-separated, optional)" }
+Parameters:
+  GroupName:
+    Type: String
+    Default: PCSClusterUsers
+    Description: IAM group name for cluster end users
+  AttachUsers:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: Comma-separated list of existing IAM user names to add to the group. Leave empty to skip.
+Conditions:
+  HasUsers: !Not [!Equals [!Join ["", !Ref AttachUsers], ""]]
+Resources:
+  PCSClusterUserPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::StackName}-PCSClusterUser"
+      Description: "Read-only + SSM Session Manager (login-node only) for end users of an already-deployed AWS PCS cluster"
+      PolicyDocument:
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DiscoverClusterAndLoginNode",
+              "Effect": "Allow",
+              "Action": [
+                "ec2:DescribeInstances",
+                "ec2:DescribeInstanceStatus",
+                "ec2:DescribeTags",
+                "cloudformation:DescribeStacks",
+                "cloudformation:ListStacks",
+                "cloudformation:DescribeStackResources",
+                "cloudformation:ListStackResources"
+              ],
+              "Resource": "*"
+            },
+            {
+              "Sid": "PCSReadOnly",
+              "Effect": "Allow",
+              "Action": [
+                "pcs:GetCluster",
+                "pcs:ListClusters",
+                "pcs:GetComputeNodeGroup",
+                "pcs:ListComputeNodeGroups",
+                "pcs:GetQueue",
+                "pcs:ListQueues",
+                "pcs:ListTagsForResource"
+              ],
+              "Resource": "*"
+            },
+            {
+              "Sid": "GrafanaPasswordRead",
+              "Effect": "Allow",
+              "Action": [
+                "ssm:GetParameter",
+                "ssm:GetParameters"
+              ],
+              "Resource": "arn:aws:ssm:*:*:parameter/pcs/*/grafana/*"
+            },
+            {
+              "Sid": "SSMSessionToLoginNode",
+              "Effect": "Allow",
+              "Action": [
+                "ssm:StartSession"
+              ],
+              "Resource": [
+                "arn:aws:ec2:*:*:instance/*",
+                "arn:aws:ssm:*:*:document/AWS-StartSSHSession",
+                "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSession",
+                "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSessionToRemoteHost",
+                "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell"
+              ],
+              "Condition": {
+                "StringLike": {
+                  "ssm:resourceTag/Name": "PCS-login*"
+                }
+              }
+            },
+            {
+              "Sid": "SSMSessionDocumentLookup",
+              "Effect": "Allow",
+              "Action": [
+                "ssm:DescribeSessions",
+                "ssm:GetConnectionStatus",
+                "ssm:DescribeInstanceProperties",
+                "ssm:DescribeInstanceInformation"
+              ],
+              "Resource": "*"
+            },
+            {
+              "Sid": "SSMSessionTerminateOwn",
+              "Effect": "Allow",
+              "Action": [
+                "ssm:TerminateSession",
+                "ssm:ResumeSession"
+              ],
+              "Resource": "arn:aws:ssm:*:*:session/${aws:username}-*"
+            }
+          ]
+        }
+  PCSClusterUserGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: !Ref GroupName
+      ManagedPolicyArns:
+        - !Ref PCSClusterUserPolicy
+  GroupMembership:
+    Type: AWS::IAM::UserToGroupAddition
+    Condition: HasUsers
+    Properties:
+      GroupName: !Ref PCSClusterUserGroup
+      Users: !Ref AttachUsers
+Outputs:
+  GroupName:
+    Description: IAM group with cluster-user (read-only + SSM-to-login) permissions
+    Value: !Ref PCSClusterUserGroup
+  PolicyArn:
+    Description: ARN of the user managed policy
+    Value: !Ref PCSClusterUserPolicy
