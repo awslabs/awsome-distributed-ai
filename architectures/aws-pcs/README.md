@@ -614,6 +614,15 @@ application's natural multi-pair pattern) to actually exercise both NICs on
 hpc7a/hpc8a. See [tests/README.md Test 9](./tests/README.md#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a)
 for the full benchmark setup and validated bandwidth numbers.
 
+### 8.7 Deploying updated templates before they are published
+
+The Quick Start deploys from the public production bucket (`awsome-distributed-ai`), which
+only holds already-published templates. If you need to test **template or script changes
+that aren't published yet** — a fork, a feature branch, or a PR under review — host the
+templates + boot scripts in an S3 bucket you control and point the deploy at it via
+`S3BucketName` / `S3KeyPrefix`. The step-by-step procedure (upload, deploy, iterate,
+clean up) is in [docs/DEPLOY-TESTING.md](./docs/DEPLOY-TESTING.md).
+
 ---
 
 ## 9. Templates
