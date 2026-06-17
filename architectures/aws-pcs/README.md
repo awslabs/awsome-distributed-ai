@@ -92,14 +92,14 @@ parameters are grouped below to match the deploy-all console's parameter groups.
 parameters are covered in [§8.1 Storage](#81-storage-fsx-deployment-types--sizing); for the
 complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 
-**1. Network**
+**1. Network Configuration**
 
 | Parameter | Default | Purpose |
 |---|---|---|
 | `PrimarySubnetAZ` | *(required)* | Availability Zone to deploy into — the one required parameter |
 | `AdditionalSubnetAZ2` / `…AZ3` | *(empty)* | Add private subnets in up to 2 more AZs (primary + 2). NAT gateway stays in the primary AZ |
 
-**2. PCS cluster**
+**2. PCS Cluster Configuration**
 
 | Parameter | Default | Purpose |
 |---|---|---|
@@ -107,7 +107,7 @@ complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 | `AmiId` | *(empty → SSM auto)* | Empty auto-resolves the latest PCS-Ready DLAMI. See [AMI and container runtime](#ami-and-container-runtime) |
 | `SSHAccessCidr` | *(empty)* | Open SSH/22 on the login node to a trusted CIDR (default: SSM only). See [§6](#6-accessing-the-cluster) |
 
-**3. On-Demand compute queue**
+**3. On-Demand Compute Node Group**
 
 | Parameter | Default | Purpose |
 |---|---|---|
@@ -115,7 +115,7 @@ complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 | `OnDemandInstanceType` | `c6i.4xlarge` | Any On-Demand type — CPU, a single-NIC GPU (`g6.12xlarge`, [Example 1](#example-1-single-nic-gpu-queue-g6)), or an HPC type. Multi-NIC P5/P6 use the GPU queue instead |
 | `OnDemandEfaInterfaceCount` | `0` | `1`/`2` enables EFA for HPC/MPI on EFA-capable CPU types. See [§8.6](#86-cpu-compute-node-group--advanced-settings) |
 
-**4. GPU compute queue (P5/P6, optional)**
+**4. GPU Compute Node Group - P5/P6 Series (Optional)**
 
 | Parameter | Default | Purpose |
 |---|---|---|
@@ -123,13 +123,16 @@ complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 | `PseriesInstanceType` | `p5.48xlarge` | Picks the matching template + EFA NIC count automatically. See [GPU compute](#gpu-compute-p5p6) for the accepted types |
 | `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR |
 
-**5. Additional (monitoring, multi-user)**
+**5. Additional Cluster Configuration (Monitoring, Multi-User, Container Runtime)**
 
 | Parameter | Default | Purpose |
 |---|---|---|
 | `MonitoringStack` | `Prometheus-LoginNode` | Prometheus + Grafana on the login node, DCGM Exporter on GPU nodes. `none` disables it. See [§8.2](#82-monitoring) |
 | `GrafanaAccessCidr` | *(empty)* | Open HTTPS/443 (Grafana) on the login node to a trusted CIDR (default: SSM port-forward only) |
 | `DirectoryService` | `none` | `OpenLDAP-LoginNode` for a multi-user cluster. See [§8.3](#83-user-management) |
+| `PostInstallScriptUrl` | *(empty → auto)* | First-boot script; empty auto-installs Enroot/Pyxis from your templates bucket. Rarely changed. See [PARAMETERS.md](./docs/PARAMETERS.md) |
+
+(Group 5 also has `MonitoringRepo` / `MonitoringVersion` / `DcgmExporterImage` — pinned defaults, rarely changed; see [PARAMETERS.md](./docs/PARAMETERS.md).)
 
 **See [PARAMETERS.md](./docs/PARAMETERS.md) for the complete parameter reference** (all 7
 console parameter groups, with every default). The concept guides below cover the
