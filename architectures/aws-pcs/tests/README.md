@@ -57,7 +57,7 @@ MonitoringStack=Prometheus-LoginNode
 | **Multi-node UID consistency** | two different compute nodes both resolve `testuser1`→`uid=10001` | ✅ |
 | **User delete propagation** | `ldapdelete` + `sss_cache -E` removes the user from `getent` immediately (sssd-tools now installed) | ✅ |
 | **Template lint** | `validate-template` passes on all 8 edited `assets/*.yaml` (incl. 3 GPU templates + 2 IAM stacks) | ✅ |
-| **Slurm managed accounting (Test 12)** | requires a separate `ManagedAccounting=enabled` cluster — run when validating accounting; LDAP-user↔Slurm visibility itself is covered by the "Slurm job as LDAP user" row above | ⏳ run on accounting-enabled cluster |
+| **Slurm managed accounting + multi-user (Test 12)** | on a `ManagedAccounting=enabled` cluster: LDAP users alice/bob registered in `sacctmgr` (account=ml-team) as root admin; jobs submitted as each LDAP user complete and `sacct -a` records them under the correct `User`+`Account` (`scontrol show job`: `UserId=alice(10001) Account=ml-team`) | ✅ |
 
 ---
 
