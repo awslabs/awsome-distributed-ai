@@ -3,10 +3,10 @@
 The cluster distinguishes **two human roles** with very different
 responsibilities, and ships a ready-to-deploy IAM policy stack for each:
 
-| Role | Who | What they can do | Template | Deploy |
-|---|---|---|---|---|
-| **Cluster admin** | The person who deploys/updates/deletes the cluster | Full CRUD on the infrastructure: CloudFormation, PCS, EC2 (VPC/SG/launch templates/placement groups/NAT/EIP), FSx, scoped IAM, SSM Parameter Store, KMS, Secrets Manager, and (optionally) Image Builder | [`cluster-admin-iam.yaml`](../assets/cluster-admin-iam.yaml) | [<kbd>🚀 Deploy</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster-admin-iam.yaml&stackName=pcs-cluster-admins) |
-| **Cluster user** | Engineers who just run jobs on an existing cluster | SSM session **to the login node only**, port-forward Grafana, read the Grafana password, read PCS cluster/queue status. **Cannot create, modify, or delete anything**, and cannot open shells on compute nodes | [`cluster-user-iam.yaml`](../assets/cluster-user-iam.yaml) | [<kbd>🚀 Deploy</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster-user-iam.yaml&stackName=pcs-cluster-users) |
+| Role | Who | What they can do | Template |
+|---|---|---|---|
+| **Cluster admin** | The person who deploys/updates/deletes the cluster | Full CRUD on the infrastructure: CloudFormation, PCS, EC2 (VPC/SG/launch templates/placement groups/NAT/EIP), FSx, scoped IAM, SSM Parameter Store, KMS, Secrets Manager, and (optionally) Image Builder | [`cluster-admin-iam.yaml`](../assets/cluster-admin-iam.yaml) |
+| **Cluster user** | Engineers who just run jobs on an existing cluster | SSM session **to the login node only**, port-forward Grafana, read the Grafana password, read PCS cluster/queue status. **Cannot create, modify, or delete anything**, and cannot open shells on compute nodes | [`cluster-user-iam.yaml`](../assets/cluster-user-iam.yaml) |
 
 Splitting the roles means the deployer's broad permissions never have to be
 handed to every engineer who just wants to `srun`, and the user role can be
@@ -21,10 +21,10 @@ Each template creates the customer-managed IAM policies, an IAM group with them
 attached, and (optionally) adds existing IAM users to that group. Deploy both
 as CloudFormation stacks:
 
-| Stack | Creates | 1-click |
+| Stack | Creates | Deploy |
 |---|---|---|
-| **Cluster admin** | `<stack>-PCSClusterAdmin-core` (always) + `<stack>-PCSClusterAdmin-imagebuilder` (if opted in) managed policies + an IAM group | [<kbd>🚀 Deploy</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster-admin-iam.yaml&stackName=pcs-cluster-admins) |
-| **Cluster user** | `<stack>-PCSClusterUser` managed policy + an IAM group | [<kbd>🚀 Deploy</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster-user-iam.yaml&stackName=pcs-cluster-users) |
+| **Cluster admin** | `<stack>-PCSClusterAdmin-core` (always) + `<stack>-PCSClusterAdmin-imagebuilder` (if opted in) managed policies + an IAM group | [![Launch](../images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster-admin-iam.yaml&stackName=pcs-cluster-admins) |
+| **Cluster user** | `<stack>-PCSClusterUser` managed policy + an IAM group | [![Launch](../images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster-user-iam.yaml&stackName=pcs-cluster-users) |
 
 Or from the CLI (use `--template-body` against a local checkout for a pre-merge
 sandbox test):
