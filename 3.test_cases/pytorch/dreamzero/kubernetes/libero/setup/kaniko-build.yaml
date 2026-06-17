@@ -1,0 +1,133 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# In-cluster image build via the Chainguard kaniko fork (no local Docker daemon
+# or disk needed). Alternative to setup/build-push.sh for disk-constrained users.
+#
+# Two stages, run as two Jobs (apply stage 1, wait for completion, then stage 2):
+#   stage 1: build the upstream RLinf embodied-libero image, push as
+#            ${ECR_URI}:upstream-embodied-libero
+#   stage 2: FROM that tag, layer the EFA overlay (this test case's Dockerfile),
+#            apply the DCP-save patch, push ${ECR_URI}:latest
+#
+# A shared FSx scratch dir (PVC fsx-claim) holds the cloned sources + build cache.
+# The test-case Dockerfile + docker/ build helpers are delivered via a ConfigMap
+# (created from the test-case dir; see kubernetes/libero/README.md).
+#
+# Apply (restricted envsubst):
+#   kubectl -n ${NAMESPACE} create configmap dreamzero-build-context \
+#     --from-file=Dockerfile=Dockerfile \
+#     --from-file=install_extras.sh=docker/scripts/install_extras.sh \
+#     --from-file=dcp-save-finalize-besteffort.patch=docker/scripts/patches/dcp-save-finalize-besteffort.patch \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#   envsubst '${ECR_URI} ${NAMESPACE}' < kubernetes/libero/setup/kaniko-build.yaml | kubectl apply -f -
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dreamzero-kaniko-stage1
+  namespace: ${NAMESPACE}
+  labels:
+    app: dreamzero-kaniko
+    stage: "1"
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: dreamzero-kaniko
+        stage: "1"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: training-sa
+      initContainers:
+        - name: clone-rlinf
+          image: alpine/git:2.45.2
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eux
+              rm -rf /ctx/RLinf
+              git clone https://github.com/RLinf/RLinf.git /ctx/RLinf
+              git -C /ctx/RLinf checkout b3bbabb1f461
+          volumeMounts:
+            - { name: ctx, mountPath: /ctx }
+      containers:
+        - name: kaniko
+          image: ghcr.io/chainguard-forks/kaniko/executor:latest
+          args:
+            - --dockerfile=/ctx/RLinf/docker/Dockerfile
+            - --context=dir:///ctx/RLinf
+            - --build-arg=BUILD_TARGET=embodied-libero
+            - --build-arg=NO_MIRROR=1
+            - --destination=${ECR_URI}:upstream-embodied-libero
+            - --cache=true
+            - --cache-repo=${ECR_URI}/cache
+          volumeMounts:
+            - { name: ctx, mountPath: /ctx }
+      volumes:
+        - name: ctx
+          persistentVolumeClaim:
+            claimName: fsx-claim
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dreamzero-kaniko-stage2
+  namespace: ${NAMESPACE}
+  labels:
+    app: dreamzero-kaniko
+    stage: "2"
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: dreamzero-kaniko
+        stage: "2"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: training-sa
+      initContainers:
+        - name: assemble-context
+          image: alpine/git:2.45.2
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eux
+              # Stage-2 build context = /ctx/overlay containing the test-case
+              # Dockerfile + docker/scripts/ (helpers + DCP patch) + the DreamZero
+              # groot clone. RLinf source is re-cloned for the COPY RLinf/ layer.
+              rm -rf /ctx/overlay
+              mkdir -p /ctx/overlay/docker/scripts/patches
+              cp /cm/Dockerfile /ctx/overlay/Dockerfile
+              cp /cm/install_extras.sh /ctx/overlay/docker/scripts/install_extras.sh
+              cp /cm/dcp-save-finalize-besteffort.patch /ctx/overlay/docker/scripts/patches/dcp-save-finalize-besteffort.patch
+              git clone https://github.com/RLinf/RLinf.git /ctx/overlay/RLinf
+              git -C /ctx/overlay/RLinf checkout b3bbabb1f461
+              git clone https://github.com/RLinf/dreamzero.git /ctx/overlay/DreamZero
+              git -C /ctx/overlay/DreamZero checkout ab790c198fbc
+          volumeMounts:
+            - { name: ctx, mountPath: /ctx }
+            - { name: cm, mountPath: /cm }
+      containers:
+        - name: kaniko
+          image: ghcr.io/chainguard-forks/kaniko/executor:latest
+          args:
+            - --dockerfile=/ctx/overlay/Dockerfile
+            - --context=dir:///ctx/overlay
+            - --build-arg=BUILD_TARGET=embodied-libero
+            - --build-arg=RLINF_UPSTREAM_IMAGE=${ECR_URI}:upstream-embodied-libero
+            - --destination=${ECR_URI}:latest
+            - --cache=true
+            - --cache-repo=${ECR_URI}/cache
+          volumeMounts:
+            - { name: ctx, mountPath: /ctx }
+      volumes:
+        - name: ctx
+          persistentVolumeClaim:
+            claimName: fsx-claim
+        - name: cm
+          configMap:
+            name: dreamzero-build-context
+            optional: false
