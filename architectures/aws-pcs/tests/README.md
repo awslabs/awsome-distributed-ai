@@ -99,6 +99,25 @@ NCCL `all_reduce_perf` over EFA (Pyxis container `public.ecr.aws/hpc-cloud/nccl-
 > `spank_pyxis.so` loads), `--container-image` jobs ran. A correct
 > `PostInstallScriptUrl` at deploy time avoids all of this.
 
+### FSDP distributed training (ap-south-1, 32 B200 GPUs)
+
+FSDP Llama-3 1B (`3.test_cases/pytorch/FSDP`, venv on shared `/home`, 4×
+p6-b200 = 32 GPUs, `torchrun --nnodes=4 --nproc_per_node=8`):
+
+- **Distributed init across 32 GPUs succeeds**: NCCL rendezvous (c10d on the
+  master node's resolved IP — Slurm node names like `gpu-b200-1` are not in DNS,
+  so the sbatch resolves `hostname -i`), FSDP2 model wrap (`410,143,488` params
+  / 0.41 B), and optimizer creation all complete on every rank.
+- Each node exposes all **8 B200 GPUs** to its single `torchrun` (verified
+  `nvidia-smi -L` = 8 per node); `--ntasks-per-node=1` so torchrun (not srun)
+  spawns the 8 ranks per node.
+- The training step loop is gated on streaming the `allenai/c4` dataset from
+  HuggingFace, which intermittently returns `429 Too Many Requests` /
+  shard `FileNotFoundError` from 32 concurrent readers — an **external HF
+  rate-limit**, not a cluster/template issue. The distributed-training stack
+  (the part the architecture is responsible for) is proven up to the data
+  pipeline; a cached/mirrored dataset or an HF token avoids the throttling.
+
 Cross-region note: nested-stack `TemplateURL` and the in-instance
 `aws s3 cp` of boot scripts both work against an S3 bucket in a **different**
 region (S3 global namespace; no `--region` needed) — verified ap-south-1 →
