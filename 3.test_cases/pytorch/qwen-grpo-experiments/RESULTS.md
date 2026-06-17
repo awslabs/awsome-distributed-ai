@@ -290,10 +290,54 @@ GRPO cannot discover novel output patterns with zero probability in the base dis
 
 ---
 
+## Phase 2 Results: Math Reasoning
+
+### Phase 2a: GSM8K (Grade School Math) — Ceiling Effect
+
+**Problem**: Qwen2.5-7B-Instruct is already too strong at GSM8K (90.5% baseline).
+GRPO cannot improve a model that's near ceiling.
+
+| Arm | Description | GSM8K Accuracy | Format (`\boxed{}`) |
+|-----|-------------|:--------------:|:-------------------:|
+| A | Base Qwen2.5-7B-Instruct | **181/200 (90.5%)** | 200/200 (100%) |
+| B | SFT only | Skipped (base already 90.5%) | — |
+| C | GRPO from base (step 30, best val) | **181/200 (90.5%)** | 196/200 (98%) |
+| D | SFT + GRPO | Skipped (same ceiling) | — |
+
+**Why GRPO didn't help on GSM8K:**
+- With 90.5% baseline, most GRPO sample groups have all-correct answers → zero advantages → no learning signal
+- Val reward: 1.036 (step 0) → 1.056 (step 30, peak) → 1.051 (step 45) — essentially flat
+- The model doesn't have latent capability gap (pass@1 ≈ pass@k) on this easy benchmark
+- This is consistent with DeepSeekMath: GRPO helps most when pass@k >> pass@1
+
+**Training was stable** (no collapse in 1 epoch): entropy 0.067→0.124, grad norm 0.014-0.019.
+But stable ≠ improving — the model just isn't learning because it's already correct.
+
+**GRPO config (same proven setup as Phase 1 Arm D):**
+- LoRA r=16, alpha=32, all-linear, lr=5e-6, KL=0.01, n=4, temp=0.7
+- `layered_summon=True`, `load_format=safetensors`, TP=2, 8 GPUs
+- Reward: exact answer match (+1.2 correct+format, -0.8 wrong+format, range [-1.2, +1.2])
+
+**Conclusion**: Need a harder benchmark where baseline is 50-70% to see GRPO improvement.
+
+### Phase 2b: MATH (Competition-Level) — In Progress
+
+Pivoting to MATH dataset (AMC/AIME level problems) where Qwen2.5-7B-Instruct baseline
+is expected to be ~50-65%, providing substantial headroom for GRPO improvement.
+
+| Arm | Description | MATH Accuracy | Status |
+|-----|-------------|:-------------:|--------|
+| A | Base Qwen2.5-7B-Instruct | TBD (~50-65% expected) | Evaluating |
+| C | GRPO from base (MATH train) | TBD | Pending |
+
+**Literature reference**: DeepSeekMath 7B: MATH 46.8% (SFT) → 51.7% (GRPO) = **+4.9%**
+
+---
+
 ## Next Steps
 
-1. **Phase 2 (Math)**: Run same experiment design on GSM8K/MATH to demonstrate
-   larger GRPO gains on math reasoning (expected +4-6%)
+1. **Phase 2b (MATH)**: Evaluate baseline on MATH, run GRPO with harder problems
+   where model has latent capability gap (pass@k >> pass@1)
 2. **Reward shaping**: Try partial-credit reward for answer language (currently binary ±5.0)
 3. **Longer GRPO with lower LR**: Try lr=1e-6 with 1 epoch + cosine decay to avoid entropy growth
 4. **Curriculum learning for Arm C**: Pre-seed the model with a few format examples via
