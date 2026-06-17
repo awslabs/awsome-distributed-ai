@@ -20,8 +20,13 @@ runtime options), see the [README](../README.md#4-configuration).
 | `PrimarySubnetAZ` | *(required)* | Availability Zone to deploy into — the one required parameter. Holds the public subnet (login node), the primary private subnet (compute, FSx), and the single NAT gateway |
 | `AdditionalSubnetAZ2` | *(empty)* | (Optional) 2nd AZ for an additional private subnet. Empty = single-AZ. Enables multi-AZ layouts (e.g. OpenZFS `MULTI_AZ`). Shares the primary AZ's NAT gateway (cross-AZ egress, no per-AZ NAT) |
 | `AdditionalSubnetAZ3` | *(empty)* | (Optional) 3rd AZ for an additional private subnet. Requires `AdditionalSubnetAZ2` to also be set. Max 3 private AZs total |
-| `VPCName` | *(empty → `${StackName}-VPC`)* | Name for the created VPC. Empty (default) auto-derives from the stack name so multiple deployments in one account get unique names |
 | `CreateS3Endpoint` | `true` | Create an S3 VPC endpoint |
+
+The VPC name is fixed to `${StackName}-VPC` (derived from the stack name, so
+multiple deployments in one account get unique VPC names automatically) — there
+is no `VPCName` parameter on the all-in-one template. The standalone
+`ml-cluster-prerequisites.yaml` still accepts a `VPCName` parameter if you deploy
+it directly.
 
 ## 2. PCS Cluster Configuration
 
@@ -89,7 +94,7 @@ See [Storage: FSx deployment types](../README.md#storage-fsx-deployment-types-re
 | `PerUnitStorageThroughput` | `250` | FSx for Lustre (`/fsx`) throughput (MB/s/TiB); valid values depend on the deployment type |
 | `Compression` | `LZ4` | FSx for Lustre (`/fsx`) data compression (`LZ4` / `NONE`) |
 | `LustreVersion` | `2.15` | FSx for Lustre (`/fsx`) software version (`2.15` / `2.12`) |
-| `FSxLustreEnableEfa` | `false` | Enable EFA on the FSx for Lustre filesystem. **The headline feature is GPUDirect Storage (GDS) for P5/P5e/P5en/P6-B200 GPU clients**, which DMAs file data straight into GPU memory (requires the NVIDIA `nvidia-fs` / cuFile stack on the client — tracked as a follow-up in [docs/ROADMAP.md](./ROADMAP.md#client-side-lustre-on-efa--gds-support)). EFA-capable CPU CNGs (`OnDemandEnableEfa=true`) get the EFA *transport* path to storage as a secondary benefit, useful when a single client is pushing past ~10 GBps. **PERSISTENT_2 SSD only** — a CFN Rule on the prerequisites template fails the stack at create time when combined with PERSISTENT_1 (rather than silently ignoring the opt-in). **Requires a much larger `Capacity` than non-EFA**: at `PerUnitStorageThroughput=250` the minimum is **19200 GiB** (16× the 1200 GiB non-EFA default). The full minimum-capacity matrix per throughput tier is in the [FSx for Lustre User Guide](https://docs.aws.amazon.com/fsx/latest/LustreGuide/efa.html). The FSx side rejects undersized capacity at stack-create time with a clear error |
+| `FSxLustreEnableEfa` | `false` | Enable EFA on the FSx for Lustre filesystem. **The headline feature is GPUDirect Storage (GDS) for P5/P5e/P5en/P6-B200 GPU clients**, which DMAs file data straight into GPU memory (requires the NVIDIA `nvidia-fs` / cuFile stack on the client — tracked as a follow-up in [docs/ROADMAP.md](./ROADMAP.md)). EFA-capable CPU CNGs (`OnDemandEfaInterfaceCount > 0`) get the EFA *transport* path to storage as a secondary benefit, useful when a single client is pushing past ~10 GBps. **PERSISTENT_2 SSD only** — a CFN Rule on the prerequisites template fails the stack at create time when combined with PERSISTENT_1 (rather than silently ignoring the opt-in). **Requires a much larger `Capacity` than non-EFA**: at `PerUnitStorageThroughput=250` the minimum is **19200 GiB** (16× the 1200 GiB non-EFA default). The full minimum-capacity matrix per throughput tier is in the [FSx for Lustre User Guide](https://docs.aws.amazon.com/fsx/latest/LustreGuide/efa.html). The FSx side rejects undersized capacity at stack-create time with a clear error |
 | `HomeCapacity` | `512` | FSx for OpenZFS (`/home`) capacity (GiB) |
 | `HomeThroughput` | `320` | FSx for OpenZFS (`/home`) throughput (MB/s) |
 | `OpenZFSDeploymentType` | `SINGLE_AZ_HA_2` | FSx for OpenZFS (`/home`) deployment type (`SINGLE_AZ_HA_2` / `SINGLE_AZ_HA_1` / `SINGLE_AZ_2` / `SINGLE_AZ_1`) — Region-dependent |

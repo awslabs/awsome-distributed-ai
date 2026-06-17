@@ -18,7 +18,6 @@ Metadata:
           - PrimarySubnetAZ
           - AdditionalSubnetAZ2
           - AdditionalSubnetAZ3
-          - VPCName
           - CreateS3Endpoint
       - Label:
           default: "2. PCS Cluster Configuration"
@@ -92,8 +91,6 @@ Metadata:
         default: "(Optional) 2nd AZ for an additional private subnet"
       AdditionalSubnetAZ3:
         default: "(Optional) 3rd AZ for an additional private subnet"
-      VPCName:
-        default: "VPC name (empty = ${StackName}-VPC)"
       CreateS3Endpoint:
         default: "Create S3 VPC endpoint"
       LoginNodeInstanceType:
@@ -190,14 +187,6 @@ Parameters:
     Default: "templates/"
 
   # Network Configuration
-  VPCName:
-    Description: >-
-      Name of your VPC. Leave empty (default) to auto-derive from the stack
-      name as ${AWS::StackName}-VPC, so multiple PCS deployments in one
-      account get unique VPC names automatically.
-    Default: ''
-    Type: String
-
   PrimarySubnetAZ:
     Description: >-
       Availability Zone to deploy the cluster into. The only required choice --
@@ -665,8 +654,6 @@ Conditions:
     - !Condition DeployPseriesCNGEnabled
     - !Not [!Equals [!Ref PseriesInstanceType, 'p6-b200.48xlarge']]
     - !Not [!Equals [!Ref PseriesInstanceType, 'p6-b300.48xlarge']]
-  # VPCName auto-derives from the stack name when left empty.
-  HasUserVPCName: !Not [!Equals [!Ref VPCName, '']]
 
 Resources:
   #############################################################################
@@ -680,7 +667,7 @@ Resources:
         - ml-cluster-prerequisites.yaml
         - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}ml-cluster-prerequisites.yaml'
       Parameters:
-        VPCName: !If [HasUserVPCName, !Ref VPCName, !Sub '${AWS::StackName}-VPC']
+        VPCName: !Sub '${AWS::StackName}-VPC'
         PrimarySubnetAZ: !Ref PrimarySubnetAZ
         AdditionalSubnetAZ2: !Ref AdditionalSubnetAZ2
         AdditionalSubnetAZ3: !Ref AdditionalSubnetAZ3
