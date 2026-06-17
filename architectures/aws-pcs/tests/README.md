@@ -14,6 +14,7 @@ Run this **complete set** before merging template or script changes.
 
 | # | Category | Tests | File | When to run |
 |---|---|---|---|---|
+| 0 | **Docs lint** | `bash tests/lint-docs.sh` — no stale/renamed param refs in docs, every deploy-all param documented, README anchors resolve (the docs counterpart of template-lint; runs in seconds, no AWS) | [`lint-docs.sh`](./lint-docs.sh) | Every PR (esp. param renames) |
 | 1-3, 8 | **Infrastructure** | Monitoring stack, container runtime (first-boot + AMI build), template lint | [`infra-test.md`](./infra-test.md) | Every PR |
 | 4-6 | **Compute** | CPU queue, GPU families (G/P5/P6), NCCL multi-node EFA | [`compute-test.md`](./compute-test.md) | Every PR |
 | 7 | **Training** | FSDP Llama-2 7B distributed training | [`training-test.md`](./training-test.md) | GPU PRs |
