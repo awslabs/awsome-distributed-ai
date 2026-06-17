@@ -198,7 +198,7 @@ Parameters:
       Optional URL of a post-install script to download and run on each node at
       first boot (PCS equivalent of ParallelCluster OnNodeConfigured). Leave
       empty to skip. To install Enroot/Pyxis, point this at assets/scripts/install-enroot-pyxis.sh.
-      Must be an HTTP(S) URL (e.g. a GitHub raw URL); S3 public hosting is not allowed.
+      Accepts an s3:// URL (instance-role fetch; private bucket OK) or an http(s):// URL (curl; public only). For Enroot/Pyxis point at scripts/install-enroot-pyxis.sh in the templates bucket.
     Default: ''
 
   PostInstallScriptArgs:
@@ -400,7 +400,10 @@ Resources:
             - |
               if [ -n "${PostInstallScriptUrl}" ]; then
                 echo "Downloading post-install script from ${PostInstallScriptUrl}..." | tee /var/log/pcs-post-install.log
-                curl -fsSL "${PostInstallScriptUrl}" -o /tmp/pcs-post-install.sh
+                case "${PostInstallScriptUrl}" in
+                  s3://*) aws s3 cp "${PostInstallScriptUrl}" /tmp/pcs-post-install.sh >> /var/log/pcs-post-install.log 2>&1 ;;
+                  *)      curl -fsSL "${PostInstallScriptUrl}" -o /tmp/pcs-post-install.sh ;;
+                esac
                 chmod +x /tmp/pcs-post-install.sh
                 echo "Executing post-install script..." | tee -a /var/log/pcs-post-install.log
                 # Tell the script this cluster's Slurm version (it can't discover it at

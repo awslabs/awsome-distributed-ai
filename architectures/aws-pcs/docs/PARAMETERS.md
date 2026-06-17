@@ -53,7 +53,7 @@ it directly.
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `PostInstallScriptUrl` | Enroot/Pyxis installer | HTTP(S) script run on every node at first boot (PCS equivalent of ParallelCluster `OnNodeConfigured`). Empty = skip; or override with any other HTTP(S) script. Idempotent: a no-op if Enroot/Pyxis is already pre-baked into `AmiId` |
+| `PostInstallScriptUrl` | *(empty → auto)* | Script run on every node at first boot (PCS equivalent of ParallelCluster `OnNodeConfigured`). **Empty (default) auto-installs Enroot/Pyxis** from `s3://<S3BucketName>/<S3KeyPrefix>scripts/install-enroot-pyxis.sh` (fetched with the instance role, so it works with a **private** bucket — no public S3 needed). Accepts an `s3://` URL (instance-role fetch) or an `http(s)://` URL (curl, public only, e.g. GitHub raw). Set to a single space to skip. Idempotent: a no-op if Enroot/Pyxis is already pre-baked into `AmiId` |
 | `PostInstallScriptArgs` | *(empty)* | Arguments passed to the post-install script |
 
 ## 4. On-Demand Compute Node Group (CPU)

@@ -194,8 +194,11 @@ Parameters:
     Description: >-
       Optional URL of a post-install script to download and run on each node at
       first boot (PCS equivalent of ParallelCluster OnNodeConfigured). Leave
-      empty to skip. To install Enroot/Pyxis, point this at assets/scripts/install-enroot-pyxis.sh.
-      Must be an HTTP(S) URL (e.g. a GitHub raw URL); S3 public hosting is not allowed.
+      empty to skip. Accepts an s3:// URL (fetched with the instance role — works
+      with a private bucket) or an http(s):// URL (fetched with curl — public
+      only, e.g. a GitHub raw URL). To install Enroot/Pyxis, point this at
+      scripts/install-enroot-pyxis.sh in your templates bucket
+      (s3://<bucket>/<prefix>scripts/install-enroot-pyxis.sh).
     Default: ''
 
   PostInstallScriptArgs:
@@ -463,10 +466,18 @@ Resources:
             runcmd:
             # Post-install script (optional) - generic OnNodeConfigured-style hook.
             # Downloads and runs a user-supplied script (e.g. Enroot/Pyxis install).
+            # Accepts BOTH an s3:// URL (fetched with `aws s3 cp` using the instance
+            # role — works with a PRIVATE bucket, the default for Enroot/Pyxis) and an
+            # http(s):// URL (fetched anonymously with curl — for public GitHub raw or
+            # any user-hosted script). Pick by scheme so dev accounts without public S3
+            # still install Enroot/Pyxis from their own private templates bucket.
             - |
               if [ -n "${PostInstallScriptUrl}" ]; then
                 echo "Downloading post-install script from ${PostInstallScriptUrl}..." | tee /var/log/pcs-post-install.log
-                curl -fsSL "${PostInstallScriptUrl}" -o /tmp/pcs-post-install.sh
+                case "${PostInstallScriptUrl}" in
+                  s3://*) aws s3 cp "${PostInstallScriptUrl}" /tmp/pcs-post-install.sh >> /var/log/pcs-post-install.log 2>&1 ;;
+                  *)      curl -fsSL "${PostInstallScriptUrl}" -o /tmp/pcs-post-install.sh ;;
+                esac
                 chmod +x /tmp/pcs-post-install.sh
                 echo "Executing post-install script..." | tee -a /var/log/pcs-post-install.log
                 # Tell the script this cluster's Slurm version (it can't discover it at

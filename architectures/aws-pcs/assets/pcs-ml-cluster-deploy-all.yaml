@@ -352,13 +352,15 @@ Parameters:
   PostInstallScriptUrl:
     Type: String
     Description: >-
-      HTTP(S) URL of a script run on every node at first boot (PCS equivalent of
-      ParallelCluster OnNodeConfigured). Default installs Enroot/Pyxis. Set empty
-      to skip, or point at any other HTTP(S) script for custom first-boot setup.
-      Idempotent: a no-op if Enroot/Pyxis is already pre-baked into AmiId, so
-      leaving the default works whether or not you supply a custom AMI.
-      S3 hosting is not allowed.
-    Default: 'https://raw.githubusercontent.com/awslabs/awsome-distributed-ai/main/architectures/aws-pcs/assets/scripts/install-enroot-pyxis.sh'
+      URL of a script run on every node at first boot (PCS equivalent of
+      ParallelCluster OnNodeConfigured). Accepts an s3:// URL (fetched with the
+      instance role — works with a private bucket) or an http(s):// URL (fetched
+      with curl — public only). Leave EMPTY (default) to auto-install Enroot/Pyxis
+      from the templates bucket (s3://<S3BucketName>/<S3KeyPrefix>scripts/install-enroot-pyxis.sh),
+      so it works in dev accounts without public S3. Set to your own s3://or
+      https:// script for custom first-boot setup, or to a single space to skip.
+      Idempotent: a no-op if Enroot/Pyxis is already pre-baked into AmiId.
+    Default: ''
 
   PostInstallScriptArgs:
     Type: String
@@ -631,6 +633,11 @@ Rules:
 
 Conditions:
   UseLocalTemplates: !Equals [!Ref S3BucketName, 'local']
+  # When PostInstallScriptUrl is left empty, default it to the Enroot/Pyxis
+  # installer in the templates bucket (s3://, fetched via the instance role —
+  # works with a private bucket). A non-empty value (s3:// or https://) is used
+  # verbatim; a single space disables the post-install hook.
+  PostInstallScriptUrlIsDefault: !Equals [!Ref PostInstallScriptUrl, '']
   DeployOnDemandCNGEnabled: !Equals [!Ref DeployOnDemandCNG, 'true']
   DirectoryEnabled: !Not [!Equals [!Ref DirectoryService, 'none']]
   DeployPseriesCNGEnabled: !Equals [!Ref DeployPseriesCNG, 'true']
@@ -775,7 +782,10 @@ Resources:
         DcgmExporterImage: !Ref DcgmExporterImage
         SlurmVersion: !Ref SlurmVersion
         MonitoringRole: login
-        PostInstallScriptUrl: !Ref PostInstallScriptUrl
+        PostInstallScriptUrl: !If
+          - PostInstallScriptUrlIsDefault
+          - !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-enroot-pyxis.sh'
+          - !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
         DirectoryService: !Ref DirectoryService
         DirectoryRole: !If [DirectoryEnabled, 'server', 'none']
@@ -820,7 +830,10 @@ Resources:
         DcgmExporterImage: !Ref DcgmExporterImage
         SlurmVersion: !Ref SlurmVersion
         MonitoringRole: compute
-        PostInstallScriptUrl: !Ref PostInstallScriptUrl
+        PostInstallScriptUrl: !If
+          - PostInstallScriptUrlIsDefault
+          - !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-enroot-pyxis.sh'
+          - !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
         # EFA on CPU HPC instances (hpc8a/hpc7a/hpc6a). add-cng.yaml enables EFA
         # when EfaInterfaceCount > 0 and auto-creates a per-CNG cluster placement
@@ -871,7 +884,10 @@ Resources:
         DcgmExporterImage: !Ref DcgmExporterImage
         SlurmVersion: !Ref SlurmVersion
         MonitoringRole: compute
-        PostInstallScriptUrl: !Ref PostInstallScriptUrl
+        PostInstallScriptUrl: !If
+          - PostInstallScriptUrlIsDefault
+          - !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-enroot-pyxis.sh'
+          - !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
         DirectoryService: !Ref DirectoryService
         DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
@@ -917,7 +933,10 @@ Resources:
         DcgmExporterImage: !Ref DcgmExporterImage
         SlurmVersion: !Ref SlurmVersion
         MonitoringRole: compute
-        PostInstallScriptUrl: !Ref PostInstallScriptUrl
+        PostInstallScriptUrl: !If
+          - PostInstallScriptUrlIsDefault
+          - !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-enroot-pyxis.sh'
+          - !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
         DirectoryService: !Ref DirectoryService
         DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
@@ -963,7 +982,10 @@ Resources:
         DcgmExporterImage: !Ref DcgmExporterImage
         SlurmVersion: !Ref SlurmVersion
         MonitoringRole: compute
-        PostInstallScriptUrl: !Ref PostInstallScriptUrl
+        PostInstallScriptUrl: !If
+          - PostInstallScriptUrlIsDefault
+          - !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-enroot-pyxis.sh'
+          - !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
         DirectoryService: !Ref DirectoryService
         DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
