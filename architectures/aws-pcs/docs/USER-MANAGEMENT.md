@@ -17,6 +17,12 @@ Run on the login node. `$ADMIN_PW` is the LDAP admin password from SSM (see
 vars must be passed **inline to `sudo`** (`sudo VAR=... cmd`) — `sudo -E` alone
 drops them under the default `env_reset`/`secure_path`.
 
+> **Slurm path matches `SlurmVersion`.** The `sacctmgr` / `sbatch` paths below use
+> `slurm-25.11` (the default). If you deployed with `SlurmVersion=25.05`, replace
+> `slurm-25.11` with `slurm-25.05` in every path (or just run `export
+> PATH=/opt/aws/pcs/scheduler/slurm-$(ls /opt/aws/pcs/scheduler | sed 's/slurm-//')/bin:$PATH`
+> once and drop the absolute path).
+
 | Task | Command (run on the login node) |
 |---|---|
 | Add a user | `sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" ldap-add-user.sh alice 10001 3000` |

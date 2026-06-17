@@ -170,8 +170,8 @@ on the deployment type**:
 |---|---|---|
 | Lustre | `PERSISTENT_2` (default) | 125 / 250 / 500 / 1000 MB/s/TiB |
 | Lustre | `PERSISTENT_1` (older Regions) | 50 / 100 / 200 MB/s/TiB |
-| OpenZFS | `SINGLE_AZ_HA_2` (default) | 160 / 320 / 640 / 1280 / 2560 / 3840 / 5120 / 7680 MB/s |
-| OpenZFS | `SINGLE_AZ_HA_1` / `SINGLE_AZ_2` / `SINGLE_AZ_1` | 64 / 128 / 192 / 256 / 384 / 512 / 768 / 1024 MB/s |
+| OpenZFS | `SINGLE_AZ_2` / `SINGLE_AZ_HA_2` (default) | 160 / 320 / 640 / 1280 / 2560 / 3840 / 5120 / 7680 / 10240 MB/s |
+| OpenZFS | `SINGLE_AZ_HA_1` / `SINGLE_AZ_1` | 64 / 128 / 256 / 512 / 1024 / 2048 / 3072 / 4096 MB/s |
 
 The templates enforce the valid pair via CloudFormation `Rules` so a mismatch fails at
 stack-create time with a clear message instead of deep in the nested FSx stack. If you
