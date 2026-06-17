@@ -39,11 +39,10 @@ post-install runs the Enroot/Pyxis installer), then on any node:
 
 > **The default `PostInstallScriptUrl` is now an `s3://` URL** (empty →
 > `s3://<S3BucketName>/<S3KeyPrefix>scripts/install-enroot-pyxis.sh`, fetched with
-> the instance role). Verified end-to-end against a **private** test bucket
-> (`s3://midaisuk-llm-dev/...`): the node's post-install log shows
-> `Downloading post-install script from s3://…` and `pyxis.conf` is installed —
-> so no public S3 is required (works in dev accounts). An `http(s)://` value still
-> works too (curl), for public/GitHub-raw scripts.
+> the instance role). Verified end-to-end against a **private** test bucket: the
+> node's post-install log shows `Downloading post-install script from s3://…` and
+> `pyxis.conf` is installed — so no public S3 is required (works in dev accounts). An
+> `http(s)://` value still works too (curl), for public/GitHub-raw scripts.
 
 ```bash
 which enroot                                                       # /usr/bin/enroot
@@ -114,7 +113,7 @@ SLURM_VERSION=25.11   # repeat for 25.05 if relevant
 
 aws cloudformation create-stack \
   --stack-name pcs-dlami-${SLURM_VERSION/./} \
-  --template-url https://midaisuk-llm-dev.s3.amazonaws.com/templates/pcs-ready-dlami-with-enroot-pyxis.yaml \
+  --template-url https://<bucket>.s3.amazonaws.com/<prefix>pcs-ready-dlami-with-enroot-pyxis.yaml \
   --parameters ParameterKey=SlurmVersion,ParameterValue=${SLURM_VERSION} \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
   --region us-west-2
@@ -135,7 +134,7 @@ echo "$AMI_ID"   # ami-0xxxxxxxxxxxxxxxx
 ```bash
 aws cloudformation create-stack \
   --stack-name pcs-amitest-${SLURM_VERSION/./} \
-  --template-url https://midaisuk-llm-dev.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
+  --template-url https://<bucket>.s3.amazonaws.com/<prefix>pcs-ml-cluster-deploy-all.yaml \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=us-west-2a \
     ParameterKey=SlurmVersion,ParameterValue=${SLURM_VERSION} \
