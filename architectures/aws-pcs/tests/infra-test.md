@@ -37,6 +37,14 @@ Deploy `pcs-ml-cluster-deploy-all.yaml` with both `AmiId` and `PostInstallScript
 left at their defaults (so SSM auto-resolves the latest PCS-Ready DLAMI and
 post-install runs the Enroot/Pyxis installer), then on any node:
 
+> **The default `PostInstallScriptUrl` is now an `s3://` URL** (empty →
+> `s3://<S3BucketName>/<S3KeyPrefix>scripts/install-enroot-pyxis.sh`, fetched with
+> the instance role). Verified end-to-end against a **private** test bucket
+> (`s3://midaisuk-llm-dev/...`): the node's post-install log shows
+> `Downloading post-install script from s3://…` and `pyxis.conf` is installed —
+> so no public S3 is required (works in dev accounts). An `http(s)://` value still
+> works too (curl), for public/GitHub-raw scripts.
+
 ```bash
 which enroot                                                       # /usr/bin/enroot
 ls /opt/aws/pcs/scheduler/slurm-*/lib/slurm/spank_pyxis.so         # per-version Pyxis SPANK plugin

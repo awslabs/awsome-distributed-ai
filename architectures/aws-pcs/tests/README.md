@@ -71,47 +71,45 @@ MonitoringStack=Prometheus-LoginNode
 ## Region coverage
 
 The templates fetch nested stacks + boot scripts from a single S3 bucket
-(`S3BucketName`) and resolve the PCS-Ready DLAMI from SSM per region. Validated
-deploys (deploy-all: prereqs + cluster + login + CPU, monitoring on) across:
+(`S3BucketName`) and resolve the PCS-Ready DLAMI from SSM per region.
 
-| Region | Deploy | Login + monitoring | FSx Lustre `/fsx` + OpenZFS `/home` | Notes |
-|---|---|---|---|---|
-| **us-east-1** | ✅ CREATE_COMPLETE | ✅ 6 containers | ✅ 1.2T Lustre + OpenZFS NFS | template bucket's home region |
-| **us-east-2** | ✅ CREATE_COMPLETE | ✅ 6 containers | ✅ | primary test region; also EFA hpc6a/hpc8a + multi-user/accounting |
-| **us-west-2** | ✅ CREATE_COMPLETE | ✅ 6 containers | ✅ | |
-| **ap-northeast-1** | ✅ CREATE_COMPLETE | ✅ | ✅ | Tokyo |
-| **ap-south-1** | ✅ CREATE_COMPLETE | ✅ 6 containers | ✅ | Mumbai; p6-b200 ×4 GPU (8 GPU/node, 8 EFA NICs), B200 driver 595.71.05 |
+Columns: **Deploy** (deploy-all → CREATE_COMPLETE), **Mon** (6 monitoring
+containers up on the login node), **Storage** (FSx Lustre `/fsx` + OpenZFS
+`/home` created & mounted — with the OpenZFS deployment type that worked),
+**Pyxis** (Enroot/Pyxis container job runs), **GPU** (multi-NIC GPU CNG tested,
+incl. capacity reservation type), **Verified** (date, UTC).
 
-### All PCS launch regions
+| Region | Deploy | Mon | Storage (OpenZFS type) | Pyxis | GPU (CB/ODCR) | Verified |
+|---|---|---|---|---|---|---|
+| **us-east-1** (N. Virginia) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | — | 2026-06-17 |
+| **us-east-2** (Ohio) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | EFA hpc6a(1)/hpc8a(2) — CPU/EFA | 2026-06-17 |
+| **us-west-2** (Oregon) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | — | 2026-06-17 |
+| **ap-northeast-1** (Tokyo) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | — | 2026-06-17 |
+| **ap-south-1** (Mumbai) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | ✅ **p6-b200 ×4** (Capacity Block) | 2026-06-17 |
+| **ap-northeast-3** (Osaka) | ✅ | ✅ | ✅ `SINGLE_AZ_1` ¹ | ✅ | — | 2026-06-17 |
+| **ap-southeast-1** (Singapore) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | — | 2026-06-17 |
+| **ap-southeast-2** (Sydney) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | — | 2026-06-17 |
+| **eu-central-1** (Frankfurt) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | — | 2026-06-17 |
+| **eu-north-1** (Stockholm) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | — | 2026-06-17 |
 
-AWS PCS is available in the 18 regions below (per
-`/aws/service/global-infrastructure/services/pcs/regions`). The 5 marked
-**tested** above were validated end-to-end; the rest are expected to work (the
-templates resolve the PCS-Ready DLAMI from SSM and FSx deployment types per
-region) but have not been run. Confirm `LustreDeploymentType` /
-`OpenZFSDeploymentType` availability in a new region before relying on the
-defaults (`PERSISTENT_2` / `SINGLE_AZ_HA_2`).
+¹ **Osaka (ap-northeast-3) does not support the default `OpenZFSDeploymentType=SINGLE_AZ_HA_2`**
+— the default deploy fails at the OpenZFS filesystem with
+`Invalid deploymentType (BadRequest)`. Deploy there with
+`OpenZFSDeploymentType=SINGLE_AZ_1` (+ a valid `HomeThroughput`, e.g. 256). This
+is the documented "not available in every Region" case (see the parameter's
+description in `ml-cluster-prerequisites.yaml`); `SINGLE_AZ_1` is available in
+all regions and is the safe fallback.
 
-| Region | Status |
-|---|---|
-| us-east-1 (N. Virginia) | ✅ tested |
-| us-east-2 (Ohio) | ✅ tested |
-| us-west-2 (Oregon) | ✅ tested |
-| ap-northeast-1 (Tokyo) | ✅ tested |
-| ap-south-1 (Mumbai) | ✅ tested (GPU/B200) |
-| ap-northeast-3 (Osaka) | ⬜ not run |
-| ap-southeast-1 (Singapore) | ⬜ not run |
-| ap-southeast-2 (Sydney) | ⬜ not run |
-| eu-central-1 (Frankfurt) | ⬜ not run |
-| eu-north-1 (Stockholm) | ⬜ not run |
-| eu-south-1 (Milan) | ⬜ not run |
-| eu-south-2 (Spain) | ⬜ not run |
-| eu-west-1 (Ireland) | ⬜ not run |
-| eu-west-2 (London) | ⬜ not run |
-| eu-west-3 (Paris) | ⬜ not run |
-| sa-east-1 (São Paulo) | ⬜ not run |
-| us-gov-east-1 (GovCloud East) | ⬜ not run |
-| us-gov-west-1 (GovCloud West) | ⬜ not run |
+### Remaining PCS launch regions (not yet run)
+
+AWS PCS is available in 18 regions total (per
+`/aws/service/global-infrastructure/services/pcs/regions`). Beyond the 10 tested
+above, these are expected to work but have not been run — confirm
+`LustreDeploymentType` / `OpenZFSDeploymentType` availability before relying on
+the defaults (`PERSISTENT_2` / `SINGLE_AZ_HA_2`), as Osaka above shows:
+`eu-south-1` (Milan), `eu-south-2` (Spain), `eu-west-1` (Ireland), `eu-west-2`
+(London), `eu-west-3` (Paris), `sa-east-1` (São Paulo), `us-gov-east-1`,
+`us-gov-west-1` (GovCloud).
 
 The ap-south-1 (Mumbai) row was exercised most deeply — p6-b200 ×4 GPU. The
 detailed results live with their tests, not here: NCCL all_reduce numbers in
