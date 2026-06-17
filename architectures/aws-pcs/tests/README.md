@@ -130,6 +130,15 @@ NCCL `all_reduce_perf` over EFA (Pyxis container `public.ecr.aws/hpc-cloud/nccl-
 | 4 GiB | 375 |
 | 16 GiB | **377** |
 
+The curve is healthy (monotonic, latency-bound small → bandwidth-bound large,
+asymptotes at 377). With p6-b200's 8×EFA (≈800 Gbps/node node-to-node) this is a
+reasonable effective all_reduce busbw — EFA's `efa-direct` fabric is engaged on
+all 8 NICs. It is **not a peak-tuned number**: NICs were auto-selected (no
+`NCCL_ALGO`/topology-aware tuning) and the test ran from a general-purpose
+nccl-tests image. The goal here was to confirm the templates establish
+multi-node GPU communication over EFA, not to chase the hardware ceiling; for a
+peak run use a B200-tuned NCCL build + the `topology-aware-nccl-tests` sbatch.
+
 > Pre-merge gotcha hit here: the GPU nodes booted without Enroot/Pyxis (the
 > `PostInstallScriptUrl` 404, see caveat below). After installing
 > `install-enroot-pyxis.sh` manually on the **login node and all compute nodes**
