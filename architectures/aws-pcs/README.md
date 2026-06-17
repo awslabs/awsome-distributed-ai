@@ -18,7 +18,7 @@ This repository provides reference architectures and deployment templates for se
 > Slurm 25.05/25.11 pre-installed), so no custom AMI build is required by default —
 > the cluster comes up without an Image Builder step. For frequent scaling, you can
 > pre-bake Enroot/Pyxis into a custom DLAMI with the standalone
-> [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#82-pre-baking-enrootpyxis-into-a-custom-ami)
+> [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#84-pre-baking-enrootpyxis-into-a-custom-ami)
 > template and pass the result as `AmiId`.
 
 ## 2. Architecture
@@ -62,7 +62,7 @@ Add a GPU queue and tune storage/monitoring via the parameters below.
 
 Once it's up:
 - **Connect** to the login node via SSM Session Manager — see [Accessing the Cluster](#6-accessing-the-cluster).
-- **Open the Grafana dashboards** (deployed by default) via SSM port forwarding — see [Accessing Grafana](#accessing-grafana).
+- **Open the Grafana dashboards** (deployed by default) via SSM port forwarding — see [Accessing the Grafana dashboards](#accessing-the-grafana-dashboards).
 - **Want to reach Grafana directly in a browser** (no port forwarding)? Set `GrafanaAccessCidr` to a trusted CIDR at deploy time — see [Option B — Direct public access](#option-b--direct-public-access-opt-in-via-grafanaaccesscidr).
 
 Prefer step-by-step instructions? See the [AI/ML for AWS PCS Workshop](https://catalog.workshops.aws/ml-on-pcs/).
@@ -89,7 +89,7 @@ only needs the Availability Zone (`PrimarySubnetAZ`). The most-used parameters:
 |---|---|---|
 | `PrimarySubnetAZ` | *(required)* | Availability Zone to deploy into — the one required parameter |
 | `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`); 25.11 is needed for the Slurm OpenMetrics dashboards. Drives Pyxis build version too. See [OPERATIONS.md §1](./docs/OPERATIONS.md#1-slurm-version-selection) |
-| `AmiId` | *(empty → SSM auto)* | Empty auto-resolves to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04) from SSM. Pin to a specific `ami-xxx` for production, or pass an AMI built by [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#82-pre-baking-enrootpyxis-into-a-custom-ami) |
+| `AmiId` | *(empty → SSM auto)* | Empty auto-resolves to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04) from SSM. Pin to a specific `ami-xxx` for production, or pass an AMI built by [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#84-pre-baking-enrootpyxis-into-a-custom-ami) |
 | `MonitoringStack` | `Prometheus-LoginNode` | Deploy Prometheus + Grafana on the login node, plus DCGM Exporter on GPU compute nodes. Set to `none` to disable monitoring |
 | `DeployOnDemandCNG` | `true` | Deploy the `cpu1` CPU queue (`OnDemandInstanceType`, default `c6i.4xlarge`) |
 | `OnDemandEnableEfa` | `false` | Set `true` for HPC/MPI workloads on EFA-capable CPU types (hpc6a/hpc7a/hpc6id/hpc8a, c7i.metal, etc.). Auto-creates a cluster placement group. See [EFA on CPU HPC instances](#efa-on-cpu-hpc-instances-ondemandenableefa) |
@@ -109,7 +109,7 @@ choices that need the most thought.
 needed. Enroot 3.5.0 + Pyxis 0.20.0 are layered on at first boot via
 [`assets/scripts/install-enroot-pyxis.sh`](./assets/scripts/install-enroot-pyxis.sh)
 (~8–12 min boot). For **frequent scaling**, pre-bake Enroot/Pyxis into a custom DLAMI
-once with [§8.2](#82-pre-baking-enrootpyxis-into-a-custom-ami) and pass that
+once with [§8.4](#84-pre-baking-enrootpyxis-into-a-custom-ami) and pass that
 `ami-xxx` as `AmiId` (~3 min boot, deterministic state). The post-install hook is
 idempotent — it no-ops on a pre-baked AMI.
 
@@ -336,7 +336,7 @@ is installed automatically:
 Metrics cover Slurm jobs, GPU (utilization/memory/temperature/power/ECC/NVLink via DCGM),
 node CPU/memory/disk/network, and CloudWatch (EC2/FSx/PCS). The stack installs on
 node-local `/opt` (not the shared `/home`). Pre-built Grafana dashboards are
-provisioned automatically — see [Accessing Grafana](#accessing-grafana) for the list
+provisioned automatically — see [Accessing the Grafana dashboards](#accessing-the-grafana-dashboards) for the list
 and a screenshot.
 
 > **GPU metrics work out of the box across the supported GPU range** (Hopper / B200 /
@@ -360,7 +360,7 @@ and a screenshot.
 > Node type is identified by the `monitoring-role` tag (`login`/`compute`), not the EC2
 > `Name` tag — the `Name` tag defaults to `PCS-<cngname>` and is free for you to retag.
 
-### Accessing Grafana
+#### Accessing the Grafana dashboards
 
 Log in to Grafana as **`admin`**; the password is generated per cluster and stored in
 SSM Parameter Store. Retrieve it (with `CLUSTER_ID` from the stack's `ClusterId` output):
@@ -372,7 +372,7 @@ aws ssm get-parameter --name "/pcs/${CLUSTER_ID}/grafana/admin-password" \
 
 There are two ways to reach the UI.
 
-#### Option A — SSM port forwarding (default, private)
+##### Option A — SSM port forwarding (default, private)
 
 No public access required; works even when the login node has no inbound rules.
 
@@ -391,7 +391,7 @@ aws ssm start-session --target $INSTANCE_ID \
 
 Then open `https://localhost:8443/grafana/`.
 
-#### Option B — Direct public access (opt-in, via `GrafanaAccessCidr`)
+##### Option B — Direct public access (opt-in, via `GrafanaAccessCidr`)
 
 To browse Grafana directly without port forwarding, set **`GrafanaAccessCidr`** at
 deploy time to a CIDR you trust (e.g. your office IP `203.0.113.4/32`). deploy-all then
@@ -444,7 +444,32 @@ NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 
 ---
 
-### 8.2 Pre-baking Enroot/Pyxis into a custom AMI
+### 8.2 User Management
+
+By default, the cluster runs as a single `ubuntu` user. For **multi-user
+clusters** (per-user Slurm accounting, isolated home directories, team-based
+access control), set `DirectoryService=OpenLDAP-LoginNode` at deploy time.
+
+This installs an OpenLDAP directory on the login node with SSSD on all compute
+nodes — users you add are immediately visible cluster-wide. See the
+**[User Management Guide](./docs/USER-MANAGEMENT.md)** for step-by-step
+operations (adding/removing users, Slurm accounting, SSH access).
+
+### 8.3 IAM Permissions
+
+The cluster has two human roles, each with a ready-to-deploy IAM policy stack:
+
+- **Cluster admin** ([`cluster-admin-iam.yaml`](./assets/cluster-admin-iam.yaml)) —
+  deploy / update / delete the cluster (CloudFormation, PCS, EC2, FSx, scoped IAM).
+- **Cluster user** ([`cluster-user-iam.yaml`](./assets/cluster-user-iam.yaml)) —
+  SSM session to the **login node only** + read-only status; cannot create,
+  modify, or delete anything.
+
+Each template creates the customer-managed policies and an IAM group, and can
+attach existing users at deploy time. See the **[IAM Permissions Guide](./docs/IAM.md)**
+for roles, deploy instructions, security considerations, and the verification matrix.
+
+### 8.4 Pre-baking Enroot/Pyxis into a custom AMI
 
 The all-in-one template installs Enroot/Pyxis at **first boot** via
 `PostInstallScriptUrl`, which is fast to deploy and avoids an Image Builder step.
@@ -504,30 +529,6 @@ no-op. Setting it empty just shaves a few seconds off boot.
 - `PublishToSsm=true` to publish the latest AMI ID to an SSM parameter for downstream stacks
 
 For production deploys that pin the AMI explicitly per cluster, none of these are needed.
-
----
-
-### 8.3 User Management
-
-By default, the cluster runs as a single `ubuntu` user. For **multi-user
-clusters** (per-user Slurm accounting, isolated home directories, team-based
-access control), set `DirectoryService=OpenLDAP-LoginNode` at deploy time.
-
-This installs an OpenLDAP directory on the login node with SSSD on all compute
-nodes — users you add are immediately visible cluster-wide. See the
-**[User Management Guide](./docs/USER-MANAGEMENT.md)** for step-by-step
-operations (adding/removing users, Slurm accounting, SSH access).
-
-### 8.4 IAM Permissions
-
-Two sample IAM policy stacks are provided for least-privilege access:
-
-- **Cluster admin** (`cluster-admin-iam.yaml`) — deploy / update / delete the cluster
-- **Cluster user** (`cluster-user-iam.yaml`) — SSM session to login node + read-only
-
-Deploy with one click from the [iam/ README](./iam/README.md), or attach the
-raw JSON policies manually. See [iam/README.md](./iam/README.md) for the full
-verification matrix and design rationale.
 
 ---
 
@@ -607,8 +608,8 @@ External references (runtime):
 
 Standalone (not nested):
   pcs-ready-dlami-with-enroot-pyxis.yaml          ← AMI builder (separate stack)
-  iam/cluster-admin-iam.yaml                      ← IAM policies (separate stack)
-  iam/cluster-user-iam.yaml                       ← IAM policies (separate stack)
+  cluster-admin-iam.yaml                          ← IAM admin policies + group (separate stack)
+  cluster-user-iam.yaml                           ← IAM user policy + group (separate stack)
 ```
 
 ---
@@ -630,6 +631,7 @@ In this repo:
 - [Parameter reference](./docs/PARAMETERS.md) — every deploy-all parameter and default
 - [Operations guide](./docs/OPERATIONS.md) — version trade-offs, AMI pinning, monitoring/DCGM, FSx coupling, Lustre tuning, production settings
 - [User management guide](./docs/USER-MANAGEMENT.md) — multi-user setup with OpenLDAP (add/remove users, groups, Slurm accounting)
+- [IAM permissions guide](./docs/IAM.md) — cluster admin / cluster user roles, policy deploy, security considerations
 - [Deploy & testing procedures](./docs/DEPLOY-TESTING.md) — development deploy workflow with test S3 bucket
 - [Test & Validation Guide](./tests/README.md) — reproducible matrix with measured numbers
 - [GPU Cluster Health Check](../../4.validation_and_observability/2.gpu-cluster-healthcheck) — comprehensive GPU/EFA/NVLink validation suite (lightweight + intensive modes, Slurm prolog integration)
