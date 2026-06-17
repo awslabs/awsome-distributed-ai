@@ -7,10 +7,14 @@ group auto-creation, multi-NIC wiring, and OSU MPI benchmark results.
 
 ## Test 9: EFA on CPU HPC instances (hpc6a / hpc7a / hpc8a)
 
-**When to run:** when `add-cng.yaml`'s EFA wiring (`EnableEfa`, `EfaInterfaceCount`,
-`PlacementGroupName`) or the deploy-all forwarding params (`OnDemandEnableEfa`,
-`OnDemandEfaInterfaceCount`, `OnDemandPlacementGroupName`) change. Skip if only
+**When to run:** when `add-cng.yaml`'s EFA wiring (`EfaInterfaceCount`,
+`PlacementGroupName`) or the deploy-all forwarding params
+(`OnDemandEfaInterfaceCount`, `OnDemandPlacementGroupName`) change. Skip if only
 GPU/monitoring/AMI paths were touched.
+
+> **EFA is enabled by the interface count.** `OnDemandEfaInterfaceCount=0`
+> (default) = no EFA; `1` or `2` enables EFA with that many NICs. There is no
+> separate `OnDemandEnableEfa` flag (removed — the count alone drives it).
 
 This validates that the on-demand CPU CNG actually launches with EFA NICs in a
 cluster placement group, and that MPI / libfabric over EFA works end-to-end. The
@@ -41,7 +45,6 @@ aws cloudformation create-stack \
     ParameterKey=OnDemandQueueName,ParameterValue=hpc \
     ParameterKey=OnDemandMinCount,ParameterValue=0 \
     ParameterKey=OnDemandMaxCount,ParameterValue=2 \
-    ParameterKey=OnDemandEnableEfa,ParameterValue=true \
     ParameterKey=OnDemandEfaInterfaceCount,ParameterValue=$EFA_NICS \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
@@ -83,7 +86,7 @@ PATH=/opt/amazon/openmpi/bin:$PATH make -j8
 ```
 
 Submit a 2-node sbatch with the AWS-tuned EFA env (the canonical reference
-parameters, see "Tuning notes" in [Verified configurations](#hpc-efa-on-cpu-instances-ondemandenableefatrue)):
+parameters, see "Tuning notes" in the verified-configuration numbers in [tests/README.md](./README.md)):
 
 ```bash
 cat > /fsx/osu/osu-bench.sbatch <<'EOF'
@@ -121,7 +124,7 @@ sbatch -p hpc /fsx/osu/osu-bench.sbatch
 ```
 
 The reference numbers per instance type are in
-[Verified configurations](#hpc-efa-on-cpu-instances-ondemandenableefatrue) above.
+the verified-configuration numbers in [tests/README.md](./README.md) above.
 
 ### Step 4 — observe NIC-level traffic in Grafana (optional)
 

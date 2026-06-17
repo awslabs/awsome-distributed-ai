@@ -92,7 +92,7 @@ only needs the Availability Zone (`PrimarySubnetAZ`). The most-used parameters:
 | `AmiId` | *(empty → SSM auto)* | Empty auto-resolves to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04) from SSM. Pin to a specific `ami-xxx` for production, or pass an AMI built by [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#84-pre-baking-enrootpyxis-into-a-custom-ami) |
 | `MonitoringStack` | `Prometheus-LoginNode` | Deploy Prometheus + Grafana on the login node, plus DCGM Exporter on GPU compute nodes. Set to `none` to disable monitoring |
 | `DeployOnDemandCNG` | `true` | Deploy the `cpu1` CPU queue (`OnDemandInstanceType`, default `c6i.4xlarge`) |
-| `OnDemandEnableEfa` | `false` | Set `true` for HPC/MPI workloads on EFA-capable CPU types (hpc6a/hpc7a/hpc6id/hpc8a, c7i.metal, etc.). Auto-creates a cluster placement group. See [EFA on CPU HPC instances](#efa-on-cpu-hpc-instances-ondemandenableefa) |
+| `OnDemandEfaInterfaceCount` | `0` | `0` = no EFA (default). Set `1`/`2` for HPC/MPI workloads on EFA-capable CPU types (hpc6a=1, hpc7a/hpc8a/hpc6id=2). Enables EFA `NetworkInterfaces` + auto-creates a cluster placement group. See [EFA on CPU HPC instances](#efa-on-cpu-hpc-instances-ondemandefainterfacecount) |
 | `DeployPseriesCNG` | `false` | Deploy a GPU (P5/P6) queue — see [GPU compute](#gpu-compute-p5p6) |
 | `PseriesInstanceType` | `p5.48xlarge` | GPU instance type; auto-selects the multi-NIC template + EFA count |
 | `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR |
@@ -143,24 +143,27 @@ automatically.
 > group at `PseriesMinCount = PseriesMaxCount = <reserved count>` so the reserved
 > nodes launch immediately, rather than scaling from 0.
 
-### EFA on CPU HPC instances (`OnDemandEnableEfa`)
+### EFA on CPU HPC instances (`OnDemandEfaInterfaceCount`)
 
 For tightly-coupled HPC / MPI workloads on CPU-only HPC instances, set
-`OnDemandEnableEfa=true` (deploy-all) or `EnableEfa=true` (modular `add-cng.yaml`).
-The CPU compute node group then launches with EFA `NetworkInterfaces` and a cluster
-placement group is auto-created. GPU CNGs (P5/P6) are unaffected — they use their
-own dedicated multi-NIC EFA wiring per-family.
+`OnDemandEfaInterfaceCount` (deploy-all) or `EfaInterfaceCount` (modular
+`add-cng.yaml`) to the instance type's EFA interface count. `0` (default) = no
+EFA; `1` or `2` = enable EFA with that many interfaces — the CPU compute node
+group then launches with EFA `NetworkInterfaces` and a cluster placement group
+is auto-created. GPU CNGs (P5/P6) are unaffected — they use their own dedicated
+multi-NIC EFA wiring per-family.
 
-| Instance type | EFA interfaces | Aggregate spec | Set `OnDemandEfaInterfaceCount` to |
+| Instance type | EFA interfaces | Aggregate spec | Set the count to |
 |---|---:|---:|---:|
+| (any non-HPC type, e.g. `c6i.4xlarge`) | — | — | **0** (no EFA; default) |
 | `hpc6a.48xlarge` | 1 | 100 Gbps | **1** |
 | `hpc7a.96xlarge` (and 12/24/48) | 2 | 300 Gbps | **2** |
 | `hpc6id.32xlarge` | 2 | 200 Gbps | **2** |
 | `hpc8a.96xlarge` | 2 | 300 Gbps | **2** |
 | `c7i.metal-48xl` etc. | 1 | varies | **1** |
 
-(Mismatching `OnDemandEfaInterfaceCount` with the instance type's actual
-`MaximumEfaInterfaces` fails at launch.)
+(Setting a count > 0 on a non-EFA type, or mismatching the count with the
+instance type's actual `MaximumEfaInterfaces`, fails at launch.)
 
 **Placement group:** auto-created per-CNG by the template. Override with
 `OnDemandPlacementGroupName=<existing-pg-name>` to share one PG across multiple
@@ -257,7 +260,6 @@ aws cloudformation create-stack \
     ParameterKey=OnDemandQueueName,ParameterValue=hpc \
     ParameterKey=OnDemandInstanceType,ParameterValue=hpc7a.96xlarge \
     ParameterKey=OnDemandMaxCount,ParameterValue=4 \
-    ParameterKey=OnDemandEnableEfa,ParameterValue=true \
     ParameterKey=OnDemandEfaInterfaceCount,ParameterValue=2 \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
@@ -265,7 +267,7 @@ Replaces the default `cpu1` queue with an `hpc` queue of EFA-enabled
 hpc7a.96xlarge nodes. The CNG launches in an auto-created cluster placement
 group. For other HPC types, set `OnDemandInstanceType` and the matching
 `OnDemandEfaInterfaceCount` from the table in
-[EFA on CPU HPC instances](#efa-on-cpu-hpc-instances-ondemandenableefa)
+[EFA on CPU HPC instances](#efa-on-cpu-hpc-instances-ondemandefainterfacecount)
 (hpc6a = `1`; hpc7a/hpc6id/hpc8a = `2`).
 
 ---
@@ -544,7 +546,7 @@ parameter and default, see [PARAMETERS.md](./docs/PARAMETERS.md).
 | [`pcs-ml-cluster-deploy-all.yaml`](./assets/pcs-ml-cluster-deploy-all.yaml) | All-in-one: Prerequisites + (optional AMI) + Cluster + login/CPU/GPU CNGs | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml&stackName=pcs-ml-cluster) |
 | [`ml-cluster-prerequisites.yaml`](./assets/ml-cluster-prerequisites.yaml) | VPC, subnets, security groups, FSx for Lustre + OpenZFS | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/ml-cluster-prerequisites.yaml&stackName=pcs-prerequisites) |
 | [`cluster.yaml`](./assets/cluster.yaml) | PCS cluster core (Slurm scheduler only, no nodes) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster.yaml&stackName=pcs-cluster) |
-| [`add-cng.yaml`](./assets/add-cng.yaml) | Compute node group — login nodes, CPU / single-NIC-GPU queues (C6i, G5, G6); switches to a multi-NIC EFA `NetworkInterfaces` block when `EnableEfa=true` (HPC types: hpc6a/hpc7a/hpc6id/hpc8a …) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng.yaml&stackName=pcs-add-cng) |
+| [`add-cng.yaml`](./assets/add-cng.yaml) | Compute node group — login nodes, CPU / single-NIC-GPU queues (C6i, G5, G6); switches to a multi-NIC EFA `NetworkInterfaces` block when `EfaInterfaceCount > 0` (HPC types: hpc6a/hpc7a/hpc6id/hpc8a …) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng.yaml&stackName=pcs-add-cng) |
 | [`add-cng-p5.yaml`](./assets/add-cng-p5.yaml) | P5/P5e/P5en nodes (16/32 EFA interfaces, by type) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p5.yaml&stackName=pcs-add-cng-p5) |
 | [`add-cng-p6-b200.yaml`](./assets/add-cng-p6-b200.yaml) | P6-B200 nodes (8 EFA interfaces) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p6-b200.yaml&stackName=pcs-add-cng-p6-b200) |
 | [`add-cng-p6-b300.yaml`](./assets/add-cng-p6-b300.yaml) | P6-B300 nodes (16 EFA interfaces) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p6-b300.yaml&stackName=pcs-add-cng-p6-b300) |
@@ -576,7 +578,7 @@ pcs-ml-cluster-deploy-all.yaml                    ← user deploys this
 ├─► add-cng.yaml (compute)                        ← CPU queue (dynamic scaling 0→N)
 │     • MonitoringRole=compute → Node Exporter
 │     • DirectoryService=OpenLDAP-LoginNode → SSSD client
-│     • EnableEfa=true → EFA NetworkInterfaces + PG
+│     • EfaInterfaceCount>0 → EFA NetworkInterfaces + PG
 │     │
 │     └─ UserData fetches external scripts:
 │          ├─ PostInstallScriptUrl (same as login)

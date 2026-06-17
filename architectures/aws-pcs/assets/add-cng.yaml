@@ -9,7 +9,7 @@ Description: >
   (DeployMonitoring/MonitoringRole). A Slurm queue is created only when QueueName
   is set (leave empty for login nodes).
 
-  EFA support (EnableEfa=true) is available for CPU HPC instance types
+  EFA support (EfaInterfaceCount > 0) is available for CPU HPC instance types
   (hpc8a/hpc7a/hpc6a etc., 1-2 EFA interfaces). When enabled the LaunchTemplate
   switches to a NetworkInterfaces block with InterfaceType=efa, and a cluster
   placement group is auto-created (override with PlacementGroupName to reuse an
@@ -41,7 +41,6 @@ Metadata:
       - Label:
           default: EFA (CPU HPC instances)
         Parameters:
-          - EnableEfa
           - EfaInterfaceCount
           - PlacementGroupName
       - Label:
@@ -259,38 +258,30 @@ Parameters:
     Description: S3 key prefix for scripts (e.g. templates/)
     Default: 'templates/'
 
-  EnableEfa:
-    Type: String
-    Description: >-
-      Enable Elastic Fabric Adapter (EFA) on the compute nodes for tightly-coupled
-      HPC/MPI workloads. When true, the LaunchTemplate switches to a
-      NetworkInterfaces block with InterfaceType=efa and a cluster placement group
-      is wired in (auto-created unless PlacementGroupName is supplied). Requires
-      an EFA-capable instance type (e.g. hpc8a.96xlarge, hpc7a.96xlarge,
-      hpc6a.48xlarge). For multi-NIC GPU families (P5/P6) use the
-      dedicated add-cng-p5/p6-* templates instead.
-    Default: 'false'
-    AllowedValues:
-      - 'true'
-      - 'false'
-
   EfaInterfaceCount:
     Type: Number
     Description: >-
-      Number of EFA network interfaces to attach when EnableEfa=true. Use the
-      MaximumEfaInterfaces value reported by the instance type: hpc8a/hpc7a/hpc6id
-      = 2; hpc6a/c7i.metal = 1. Mismatching this with the instance type's
-      capability fails at launch. Ignored when EnableEfa=false.
-    Default: 1
-    AllowedValues: [1, 2]
+      Number of Elastic Fabric Adapter (EFA) network interfaces on the compute
+      nodes. 0 (default) = no EFA (standard ENA networking). 1 or 2 = enable EFA
+      with that many interfaces: the LaunchTemplate switches to a NetworkInterfaces
+      block with InterfaceType=efa and a cluster placement group is wired in
+      (auto-created unless PlacementGroupName is supplied). Set the count to the
+      instance type's MaximumEfaInterfaces — hpc8a.96xlarge / hpc7a.* /
+      hpc6id.32xlarge = 2; hpc6a.48xlarge / c7i.metal = 1. EFA requires an
+      EFA-capable type; a non-EFA type (e.g. c6i.4xlarge) fails to launch with
+      count > 0. For multi-NIC GPU families (P5/P6) use the dedicated
+      add-cng-p5/p6-* templates instead.
+    Default: 0
+    AllowedValues: [0, 1, 2]
 
   PlacementGroupName:
     Type: String
     Description: >-
       (Optional) Name of an existing cluster placement group to launch nodes into.
       Leave empty to auto-create a per-CNG cluster placement group when
-      EnableEfa=true. Specify a value to share one placement group across multiple
-      CNGs (e.g. a heterogeneous tightly-coupled job). Ignored when EnableEfa=false.
+      EfaInterfaceCount > 0. Specify a value to share one placement group across
+      multiple CNGs (e.g. a heterogeneous tightly-coupled job). Ignored when
+      EfaInterfaceCount = 0.
     Default: ''
 
 Conditions:
@@ -301,7 +292,8 @@ Conditions:
   IsMonitoringRoleSet: !Not [!Equals [!Ref MonitoringRole, 'none']]
   HasExtraSecurityGroup: !Not [!Equals [!Ref ExtraSecurityGroupId, ""]]
   HasAmiId: !Not [!Equals [!Ref AmiId, ""]]
-  EfaEnabled: !Equals [!Ref EnableEfa, 'true']
+  # EFA is enabled when the interface count is non-zero (0 = standard ENA).
+  EfaEnabled: !Not [!Equals [!Ref EfaInterfaceCount, 0]]
   HasUserPlacementGroup: !Not [!Equals [!Ref PlacementGroupName, ""]]
   # Auto-create a per-CNG cluster placement group only when EFA is on AND the
   # user did not provide one. Override PlacementGroupName to reuse an existing
@@ -309,9 +301,7 @@ Conditions:
   CreatePlacementGroup: !And
     - !Condition EfaEnabled
     - !Not [!Condition HasUserPlacementGroup]
-  Has2ndEfaInterface: !And
-    - !Condition EfaEnabled
-    - !Equals [!Ref EfaInterfaceCount, 2]
+  Has2ndEfaInterface: !Equals [!Ref EfaInterfaceCount, 2]
   DirectoryEnabled: !Not [!Equals [!Ref DirectoryRole, 'none']]
 
 Resources:

@@ -62,7 +62,6 @@ aws cloudformation create-stack \
     ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-2b \
     ParameterKey=S3BucketName,ParameterValue=midaisuk-llm-dev \
     ParameterKey=OnDemandInstanceType,ParameterValue=hpc8a.96xlarge \
-    ParameterKey=OnDemandEnableEfa,ParameterValue=true \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
   --region us-east-2 --profile claude
 ```

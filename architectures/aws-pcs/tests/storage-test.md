@@ -125,7 +125,7 @@ extra checks beyond the above are:
   Capacity.
 
 The FSx-side EFA endpoints are usable from EFA-capable clients (CPU CNGs
-deployed with `OnDemandEnableEfa=true`, P5/P6 GPU CNGs). Plain Lustre client
+deployed with `OnDemandEfaInterfaceCount > 0`, P5/P6 GPU CNGs). Plain Lustre client
 mounts continue to work over TCP for non-EFA nodes; EFA support is additive.
 
 ---
