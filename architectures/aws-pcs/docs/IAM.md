@@ -149,16 +149,23 @@ The same approach works for the user policy — exercise the user workflows
 
 ## Verification
 
-These policies were validated end-to-end on a real account (us-east-2):
+Re-validated end-to-end on a real account (us-east-2) against the major-update
+templates — a dedicated role attached to **only** the admin (or user) managed
+policies, nothing else:
 
 | Check | Result |
 |---|---|
 | Both IAM CFN stacks `CREATE_COMPLETE` | ✅ |
-| Admin user deploys `pcs-ml-cluster-deploy-all.yaml` end-to-end (all nested stacks `CREATE_COMPLETE`, ~28 min) | ✅ |
-| Admin user `UpdateStack` (param change → `UPDATE_COMPLETE`) and `DeleteStack` (full teardown) | ✅ |
-| `iam:simulate-principal-policy` on `cfn:CreateStack`, `pcs:CreateCluster`, `ec2:RunInstances`, `fsx:CreateFileSystem`, `iam:CreateRole` → all `allowed` | ✅ |
-| User can `pcs:GetCluster`, `cloudformation:DescribeStacks`, read the Grafana password | ✅ |
-| User `ssm:StartSession` on the login node (`Name=PCS-login`) `allowed`; on compute nodes `implicitDeny` | ✅ |
-| User `cloudformation:CreateStack`, `pcs:CreateCluster`, `ec2:RunInstances` all `implicitDeny` | ✅ |
-| CloudTrail over a full admin deploy+update+delete cycle: 0 `AccessDenied` across 332+ API calls | ✅ |
-| `aws accessanalyzer validate-policy` on every embedded policy: 0 errors | ✅ |
+| **A role with only the admin policies runs `pcs-ml-cluster-deploy-all.yaml`** (DirectoryService=OpenLDAP-LoginNode + SSHAccessCidr + MonitoringStack=Prometheus-LoginNode) — every nested stack `CREATE_COMPLETE`, no `AccessDenied` | ✅ |
+| Admin role needs **no `iam:CreatePolicy`** — the instance role's perms are inline (`PutRolePolicy`), so deploy-all works with the admin policy as-is (`iam:CreatePolicy` simulates `implicitDeny`, and deploy-all still completes) | ✅ |
+| `simulate-principal-policy` (with proper resource ARNs / `iam:PassedToService` context): `cfn:CreateStack`, `ec2:RunInstances/CreateSubnet/CreateSecurityGroup`, `fsx:CreateFileSystem`, `pcs:CreateCluster`, `iam:CreateRole/PutRolePolicy/CreateInstanceProfile/PassRole(ec2,pcs)`, `ssm:Put/GetParameter` on `/pcs/*/ldap/*`, `kms:Decrypt` → all `allowed` | ✅ |
+| User role: `pcs:GetCluster`/`ListComputeNodeGroups`, `cloudformation:DescribeStacks`, `ec2:DescribeInstances` → `allowed`; `cfn:CreateStack`, `pcs:CreateCluster`, `ec2:RunInstances`, `fsx:CreateFileSystem`, `iam:CreateRole` → `implicitDeny` | ✅ |
+| User `ssm:StartSession` on login node (`Name=PCS-login`) `allowed`; on compute node (`Name=PCS-cpu1`) `implicitDeny` | ✅ |
+| **Security: user reads `/pcs/*/grafana/*` (`allowed`) but NOT `/pcs/*/ldap/*`** (the OpenLDAP admin password) → `implicitDeny` | ✅ |
+
+> **Note on the template-source bucket.** The admin policy grants no `s3:GetObject`,
+> because the production templates live in the public `awsome-distributed-ai`
+> bucket (CFN fetches `--template-url` anonymously). If you host the templates in
+> a **private** bucket, the deploying principal additionally needs `s3:GetObject`
+> on that bucket — grant it separately; it is intentionally out of the
+> cluster-admin policy.
