@@ -31,12 +31,12 @@
 #   so the `model/dreamzero_14b` default must be 14B-correct on its own.
 #
 # HOW THIS FILE IS DELIVERED TO THE CONTAINER:
-#   This file lives in OUR repo (examples/dreamzero/configs/), NOT upstream. At
+#   This file lives in OUR repo (kubernetes/libero/scripts/), NOT upstream. At
 #   runtime it is mounted into the eval pod via the `dreamzero-eval-config`
 #   ConfigMap at /opt/eval-config/, and run_dreamzero_eval_eks.sh copies it into
 #   /workspace/RLinf/examples/embodiment/config/ before invoking the eval (so
 #   `--config-path config` finds it WITHOUT hiding the upstream env/ and model/
-#   config groups it depends on). See examples/dreamzero/manifests/dreamzero-eval.yaml.
+#   config groups it depends on). See kubernetes/libero/dreamzero-eval.yaml.
 #
 # DROID action space: 8D (7 joint + gripper); model outputs action chunks.
 # =============================================================================

@@ -103,7 +103,7 @@ HYDRA_ARGS="${HYDRA_ARGS} runner.logger.log_path=${LOG_DIR}"
 # NOTE on checkpoint format for eval:
 # RLinf's FSDP saver writes a sharded DCP checkpoint (.distcp + .metadata) under
 #   {ckpt}/actor/dcp_checkpoint/. The LIBERO eval needs a single .pt; convert the
-# DCP to .pt offline (CPU) with examples/dreamzero/manifests/convert-checkpoint.yaml.
+# DCP to .pt offline (CPU) with kubernetes/libero/convert-checkpoint.yaml.
 # We do NOT use +actor.fsdp_config.save_full_model_weights=true: on 2x p5en the
 # rank-0 full-state-dict gather for the 16B model is pathologically slow / stalls.
 # DCP-only save + offline convert is faster and more reliable.
