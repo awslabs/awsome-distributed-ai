@@ -99,24 +99,32 @@ NCCL `all_reduce_perf` over EFA (Pyxis container `public.ecr.aws/hpc-cloud/nccl-
 > `spank_pyxis.so` loads), `--container-image` jobs ran. A correct
 > `PostInstallScriptUrl` at deploy time avoids all of this.
 
-### FSDP distributed training (ap-south-1, 32 B200 GPUs)
+### FSDP distributed training (ap-south-1, p6-b200)
 
-FSDP Llama-3 1B (`3.test_cases/pytorch/FSDP`, venv on shared `/home`, 4×
-p6-b200 = 32 GPUs, `torchrun --nnodes=4 --nproc_per_node=8`):
+Ran the repo's canonical `3.test_cases/pytorch/FSDP/slurm/llama3_2_1b-training.sbatch`
+unchanged (venv per `create_venv.sh`, `srun … torchrun --nproc_per_node=8`,
+`--dataset=allenai/c4`).
 
-- **Distributed init across 32 GPUs succeeds**: NCCL rendezvous (c10d on the
-  master node's resolved IP — Slurm node names like `gpu-b200-1` are not in DNS,
-  so the sbatch resolves `hostname -i`), FSDP2 model wrap (`410,143,488` params
-  / 0.41 B), and optimizer creation all complete on every rank.
-- Each node exposes all **8 B200 GPUs** to its single `torchrun` (verified
-  `nvidia-smi -L` = 8 per node); `--ntasks-per-node=1` so torchrun (not srun)
-  spawns the 8 ranks per node.
-- The training step loop is gated on streaming the `allenai/c4` dataset from
-  HuggingFace, which intermittently returns `429 Too Many Requests` /
-  shard `FileNotFoundError` from 32 concurrent readers — an **external HF
-  rate-limit**, not a cluster/template issue. The distributed-training stack
-  (the part the architecture is responsible for) is proven up to the data
-  pipeline; a cached/mirrored dataset or an HF token avoids the throttling.
+- **The distributed-training stack the architecture is responsible for works.**
+  Across 4× p6-b200 (32 GPUs): NCCL c10d rendezvous, FSDP2 wrap of the Llama-3
+  1B model (`1,154,549,760` params), and optimizer creation complete on every
+  rank. Each node exposes all 8 B200 GPUs to its `torchrun` (`nvidia-smi -L` = 8/node).
+- **The training step loop could not be reached because of an external
+  HuggingFace rate-limit on `allenai/c4`**, not a cluster/template issue. Every
+  rank's dataloader does `load_dataset("allenai/c4", streaming=True)`, which
+  hits the c4 *tree* API (1024-shard listing); HF returns `429 Too Many Requests`.
+  Confirmed it is purely external by exhausting the mitigations:
+  - HF token (authenticated) — still 429
+  - shared `HF_HOME=/fsx` cache + single-process prefetch of shards — still 429
+    (streaming re-lists shards via the tree API regardless of cache)
+  - `HF_HUB_OFFLINE=1` — flips to `OfflineModeIsEnabled` (streaming needs the Hub)
+  - long `HF_HUB_ETAG_TIMEOUT`/`DOWNLOAD_TIMEOUT` + the loader's 20× retry — still 429
+  - dropping to a single node (8 concurrent readers instead of 32) — still 429
+- **Conclusion:** the cluster is training-ready (NCCL/EFA/FSDP all proven; NCCL
+  all_reduce hit 377 GB/s above). Driving `allenai/c4` through the streaming
+  loader at scale needs an HF account with a higher rate limit, an HF mirror, or
+  pre-tokenized data staged on `/fsx` (non-streaming) — an operational/data
+  choice, independent of these templates.
 
 Cross-region note: nested-stack `TemplateURL` and the in-instance
 `aws s3 cp` of boot scripts both work against an S3 bucket in a **different**
