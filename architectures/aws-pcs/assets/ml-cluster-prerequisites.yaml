@@ -284,7 +284,7 @@ Resources:
       CidrBlock: !FindInMap [Networking, VPC, CIDR0]
       Tags:
         - Key: Name
-          Value: ML Cluster VPC
+          Value: !Ref VPCName
 
   VpcCidrBlock:
     Type: AWS::EC2::VPCCidrBlock
