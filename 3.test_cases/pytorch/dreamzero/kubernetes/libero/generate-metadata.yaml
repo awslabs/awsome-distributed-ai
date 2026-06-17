@@ -1,0 +1,93 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Generate LIBERO Normalization Metadata for DreamZero SFT
+#
+# Produces /fsx/models/metadata-libero.json with normalization statistics for
+# embodiment `libero_sim`, used by the DreamZero LIBERO 14B SFT job.
+#
+# WHY THIS IS NEEDED:
+#   DreamZero LIBERO SFT warm-starts from the DreamZero-DROID checkpoint, which
+#   bundles experiment_cfg/metadata.json for embodiment `oxe_droid` ONLY. Training
+#   with embodiment_tag `libero_sim` fails with:
+#     KeyError: "embodiment_tag 'libero_sim' not found in
+#       /fsx/models/DreamZero-DROID/experiment_cfg/metadata.json (keys: ['oxe_droid'])."
+#   This Job generates LIBERO-specific stats via upstream's toolkit so the SFT
+#   launcher can point actor.model.metadata_json_path at them.
+#
+# WHY THE TRAINING IMAGE (not python:3.11-slim):
+#   Metadata generation requires the RLinf repo's toolkit
+#   (toolkits/lerobot/generate_dreamzero_metadata.py) PLUS the dreamzero venv
+#   (groot, lerobot, etc.). The slim staging image used by model-download.yaml
+#   does NOT have these, so this step runs in ${ECR_URI}:latest instead.
+#
+# OUTPUT:
+#   Writes /fsx/models/metadata-libero.json (top-level key `libero_sim`). The SFT
+#   launcher (run_dreamzero_sft_eks.sh) and manifest (dreamzero-sft.yaml) default
+#   METADATA_PATH to this path, so SFT uses it automatically.
+#
+# Prerequisites:
+#   - LIBERO dataset staged on FSx at /fsx/datasets/libero (by model-download.yaml)
+#   - Training image built and pushed to ECR (${ECR_URI}:latest)
+#   - FSx PVC "fsx-claim" bound in the target namespace
+#
+# Usage:
+#   export ECR_URI=<account>.dkr.ecr.<region>.amazonaws.com/<repo>
+#   export NAMESPACE=natharno
+#   # NOTE: use RESTRICTED envsubst -- substitute ONLY ${ECR_URI} and ${NAMESPACE}.
+#   # The container command contains shell vars (${PYTHONPATH}, ${DREAMZERO_PATH})
+#   # that unrestricted envsubst would clobber to empty strings. Same pattern as
+#   # dreamzero-sft.yaml.
+#   envsubst '${ECR_URI} ${NAMESPACE}' < kubernetes/libero/generate-metadata.yaml | kubectl apply -f -
+#   kubectl logs -f job/generate-metadata-dreamzero -n $NAMESPACE
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: generate-metadata-dreamzero
+  namespace: ${NAMESPACE}
+  labels:
+    app: generate-metadata
+    reference: rlinf
+    example: dreamzero
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app: generate-metadata
+        example: dreamzero
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: generate-metadata
+          image: ${ECR_URI}:latest
+          command:
+            - bash
+            - -lc
+            - |
+              set -euo pipefail
+              export PYTHONPATH="${PYTHONPATH:-}"
+              source /opt/venv/dreamzero/bin/activate
+              export DREAMZERO_PATH=/workspace/DreamZero
+              export PYTHONPATH="${DREAMZERO_PATH}:${PYTHONPATH}"
+              cd /workspace/RLinf
+              python3 toolkits/lerobot/generate_dreamzero_metadata.py \
+                --preset libero_sim \
+                --dataset-root /fsx/datasets/libero \
+                --output-metadata /fsx/models/metadata-libero.json
+              ls -la /fsx/models/metadata-libero.json
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+          volumeMounts:
+            - name: fsx
+              mountPath: /fsx
+      volumes:
+        - name: fsx
+          persistentVolumeClaim:
+            claimName: fsx-claim

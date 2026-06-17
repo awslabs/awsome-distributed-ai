@@ -1,0 +1,161 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Download Model Weights and Dataset for DreamZero LIBERO 14B SFT
+#
+# Stages the three artifacts needed to fine-tune the DreamZero 14B World-Action
+# Model on LIBERO (warm-started from the DreamZero-DROID checkpoint):
+#   1. GEAR-Dreams/DreamZero-DROID -> /fsx/models/DreamZero-DROID
+#        14B warm-start checkpoint (the DROID-pretrained model we SFT from).
+#   2. google/umt5-xxl            -> /fsx/models/umt5-xxl
+#        Text tokenizer / encoder used by the model.
+#   3. physical-intelligence/libero (HF DATASET) -> /fsx/datasets/libero
+#        LIBERO trajectories in LeRobot layout.
+#
+# GOTCHA: the dataset MUST be `physical-intelligence/libero`, NOT `lerobot/libero`.
+#   The two repos share a name but have DIFFERENT observation.state / action column
+#   schemas. Only `physical-intelligence/libero` matches the libero_sim preset's
+#   state/actions schema. Using `lerobot/libero` will silently train on the wrong
+#   column layout.
+#
+# The two models and the LIBERO dataset are downloaded with snapshot_download
+# (matching the house pattern used by the sibling example model-download jobs).
+# hf_transfer is enabled only for the large model checkpoints (multi-GB files);
+# it is intentionally NOT used for the dataset, which is a LeRobot repo containing
+# many small files where hf_transfer offers no benefit.
+#
+# NOTE: LIBERO normalization metadata (embodiment libero_sim) is NOT generated
+#   here. The DreamZero-DROID checkpoint bundles experiment_cfg/metadata.json for
+#   embodiment oxe_droid ONLY, so LIBERO SFT needs its own libero_sim stats. That
+#   metadata is produced by a SEPARATE step -- see generate-metadata.yaml -- which
+#   runs in the TRAINING image because it requires the RLinf toolkit + the
+#   dreamzero venv (groot, lerobot, etc.) that this python:3.11-slim staging image
+#   does NOT have. Run generate-metadata.yaml AFTER this job stages the dataset.
+#
+# Prerequisites:
+#   - FSx for Lustre PVC (fsx-claim) available in the target namespace
+#   - Storage: ~117GB models (umt5-xxl ~52GB + DreamZero-DROID ~65GB) + ~35GB
+#     LIBERO dataset (~152GB total). Ensure FSx has headroom.
+#
+# Usage:
+#   export NAMESPACE=natharno  # shared test cluster namespace
+#   envsubst < kubernetes/libero/model-download.yaml | kubectl apply -f -
+#   kubectl logs -f job/model-download-dreamzero -n $NAMESPACE
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: model-download-dreamzero
+  namespace: ${NAMESPACE}
+  labels:
+    app: model-download
+    example: dreamzero
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 7200
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: downloader
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+
+              echo "============================================"
+              echo "  DreamZero LIBERO 14B SFT: Model & Dataset Download"
+              echo "============================================"
+
+              pip install -q -U huggingface_hub hf_transfer
+
+              # hf_transfer accelerates LARGE multi-GB file downloads (model
+              # checkpoints). It is NOT used for the dataset (many small files).
+              export HF_HUB_ENABLE_HF_TRANSFER=1
+
+              download_model() {
+                local model_id=$1
+                local target_dir=$2
+                echo ""
+                echo "=== Model: $model_id ==="
+                echo "  Target: $target_dir"
+                if [ -f "$target_dir/.download_complete" ]; then
+                  echo "  Completion sentinel found. Skipping."
+                  return
+                fi
+                echo "  Downloading..."
+                python3 -c "
+              import os
+              from huggingface_hub import snapshot_download
+              snapshot_download(
+                  repo_id='$model_id',
+                  local_dir='$target_dir',
+                  token=os.environ.get('HF_TOKEN') or None,
+              )
+              print('  Download complete')
+              "
+                # set -e guarantees we only reach this line on a successful download.
+                touch "$target_dir/.download_complete"
+                du -sh "$target_dir" | awk '{print "  Size: " $1}'
+              }
+
+              download_dataset() {
+                local repo_id=$1
+                local target_dir=$2
+                echo ""
+                echo "=== Dataset: $repo_id ==="
+                echo "  Target: $target_dir"
+                if [ -f "$target_dir/.download_complete" ]; then
+                  echo "  Completion sentinel found. Skipping."
+                  return
+                fi
+                # LeRobot dataset: many small files, so DISABLE hf_transfer here.
+                HF_HUB_ENABLE_HF_TRANSFER=0 python3 -c "
+              import os
+              from huggingface_hub import snapshot_download
+              snapshot_download(
+                  repo_id='$repo_id',
+                  repo_type='dataset',
+                  local_dir='$target_dir',
+                  token=os.environ.get('HF_TOKEN') or None,
+              )
+              print('  Download complete')
+              "
+                # set -e guarantees we only reach this line on a successful download.
+                touch "$target_dir/.download_complete"
+                du -sh "$target_dir" | awk '{print "  Size: " $1}'
+              }
+
+              # DreamZero-DROID 14B warm-start checkpoint
+              download_model "GEAR-Dreams/DreamZero-DROID" "/fsx/models/DreamZero-DROID"
+
+              # umt5-xxl text tokenizer / encoder
+              download_model "google/umt5-xxl" "/fsx/models/umt5-xxl"
+
+              # LIBERO trajectories (LeRobot layout).
+              # MUST be physical-intelligence/libero (state/action schema matches
+              # the libero_sim preset), NOT lerobot/libero (different schema).
+              download_dataset "physical-intelligence/libero" "/fsx/datasets/libero"
+
+              echo ""
+              echo "=== staging complete ==="
+              echo "Models:"
+              du -sh /fsx/models/DreamZero-DROID 2>/dev/null || echo "  (not found)"
+              du -sh /fsx/models/umt5-xxl 2>/dev/null || echo "  (not found)"
+              echo "Dataset:"
+              du -sh /fsx/datasets/libero 2>/dev/null || echo "  (not found)"
+              ls -la /fsx/models/DreamZero-DROID /fsx/models/umt5-xxl /fsx/datasets/libero
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: fsx
+              mountPath: /fsx
+      volumes:
+        - name: fsx
+          persistentVolumeClaim:
+            claimName: fsx-claim
