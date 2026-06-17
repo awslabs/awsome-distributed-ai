@@ -1,4 +1,4 @@
-# Test: GPU Cluster Health Check
+# Test 13: GPU Cluster Health Check
 
 Validates GPU hardware, EFA, and NVLink on a PCS GPU node group using the
 repository's [GPU Cluster Health Check Suite](../../../4.validation_and_observability/2.gpu-cluster-healthcheck).

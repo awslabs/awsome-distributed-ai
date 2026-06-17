@@ -1,4 +1,4 @@
-# IAM Test: cluster-admin / cluster-user policies
+# Test 14: IAM Policies (cluster-admin / cluster-user)
 
 Validates the two IAM policy stacks ([`cluster-admin-iam.yaml`](../assets/cluster-admin-iam.yaml)
 and [`cluster-user-iam.yaml`](../assets/cluster-user-iam.yaml), documented in

@@ -1,4 +1,4 @@
-# Test: Multi-User Directory (OpenLDAP)
+# Tests 11-12: Multi-User Directory (OpenLDAP) + Slurm Accounting
 
 Run this test when `DirectoryService=OpenLDAP-LoginNode` is enabled. Validates that the
 OpenLDAP directory on the login node is functional, that LDAP users are

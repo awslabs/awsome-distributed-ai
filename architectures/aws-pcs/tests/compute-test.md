@@ -72,7 +72,7 @@ node. EFA itself is exercised by Test 6.
   (N = EFA interface count: 32 for p5/p5e, 16 for p5en, 8 for p6-b200, 16 for p6-b300).
 - Correctness: `# Out of bounds values : 0 OK`, every size `#wrong: 0`.
 - `busbw` rises with message size — on 2× p6-b300, ~654 GB/s at 16 GiB but **~751 GB/s at
-  64 GiB** (16 cards aren't saturated at 16 GiB); ~480 GB/s on 2× p5.
+  64 GiB** (the 16 EFA NICs aren't saturated at 16 GiB); ~480 GB/s on 2× p5.
 
 > **Sizing the sweep on B300.** The canonical script sweeps to `-e 16G`. On p6-b300 that
 > under-reports peak bandwidth — raise it to `-e 64G` (edit the `all_reduce_perf` line) to

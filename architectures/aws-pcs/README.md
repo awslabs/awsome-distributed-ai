@@ -121,7 +121,7 @@ complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 |---|---|---|
 | `DeployPseriesCNG` | `false` | Deploy a multi-NIC GPU (P5/P6) queue |
 | `PseriesInstanceType` | `p5.48xlarge` | Picks the matching template + EFA NIC count automatically. See [GPU compute](#gpu-compute-p5p6) for the accepted types |
-| `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR |
+| `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR. ⚠️ A Capacity Block bills for its whole reserved window — see [GPU compute](#gpu-compute-p5p6) |
 
 **5. Additional Cluster Configuration (Monitoring, Multi-User, Container Runtime)**
 
