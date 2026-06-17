@@ -159,15 +159,54 @@ Resources:
       ManagedPolicyArns:
         - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
         - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonS3ReadOnlyAccess"
+      # Instance-role permissions are inline (PutRolePolicy), NOT a separate
+      # AWS::IAM::ManagedPolicy — so deploying this stack needs only
+      # iam:CreateRole + iam:PutRolePolicy (which the cluster-admin policy
+      # grants), never iam:CreatePolicy. Split by feature so monitoring and
+      # multi-user don't depend on each other:
       Policies:
-        - PolicyName: PcsRegisterInstancePolicy
+        # Always present (every cluster): register with PCS + read boot scripts
+        # from S3 + read this cluster's own SSM parameters (grafana password,
+        # ldap admin password) + decrypt SSM SecureStrings. None of this is
+        # monitoring- or directory-specific; it is the baseline an instance
+        # needs to register, fetch its post-install/directory scripts, and
+        # store/read the per-cluster secrets it generates.
+        - PolicyName: PcsInstanceBasePolicy
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              - Effect: Allow
+              - Sid: PcsRegisterInstance
+                Effect: Allow
                 Action:
                   - pcs:RegisterComputeNodeGroupInstance
                 Resource: "*"
+
+              - Sid: S3GetScripts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - arn:aws:s3:::awsome-distributed-ai/templates/scripts/*
+                  - arn:aws:s3:::*/templates/scripts/*
+
+              - Sid: SSMClusterParametersForThisClusterOnly
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                  - ssm:AddTagsToResource
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/grafana/*'
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/ldap/*'
+
+              - Sid: KMSForSSMSecureString
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub 'ssm.${AWS::Region}.amazonaws.com'
 
   # IAM Instance Profile
   PcsInstanceProfile:
@@ -179,12 +218,17 @@ Resources:
       Roles:
         - !Ref PcsInstanceIamRole
 
-  # Monitoring IAM Policy (optional, attached to the instance role)
-  MonitoringPolicy:
-    Type: AWS::IAM::ManagedPolicy
+  # Monitoring instance permissions — inline policy added to the instance role
+  # only when monitoring is enabled. Inline (RoleName + PutRolePolicy via an
+  # AWS::IAM::Policy) instead of a ManagedPolicy, so the deployer never needs
+  # iam:CreatePolicy. Holds ONLY monitoring-specific reads (Prometheus service
+  # discovery + cost/CloudWatch metrics); multi-user/SSM/S3 perms live in the
+  # always-on base policy above.
+  MonitoringInstancePolicy:
+    Type: AWS::IAM::Policy
     Condition: IsMonitoringEnabled
     Properties:
-      ManagedPolicyName: !Sub '${PCSCluster.Id}-monitoring-policy'
+      PolicyName: !Sub '${PCSCluster.Id}-monitoring'
       Roles:
         - !Ref PcsInstanceIamRole
       PolicyDocument:
@@ -224,33 +268,6 @@ Resources:
               - pricing:GetProducts
               - pricing:DescribeServices
             Resource: '*'
-
-          - Sid: SSMClusterParametersForThisClusterOnly
-            Effect: Allow
-            Action:
-              - ssm:GetParameter
-              - ssm:PutParameter
-              - ssm:AddTagsToResource
-            Resource:
-              - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/grafana/*'
-              - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/ldap/*'
-
-          - Sid: S3GetScripts
-            Effect: Allow
-            Action:
-              - s3:GetObject
-            Resource:
-              - arn:aws:s3:::awsome-distributed-ai/templates/scripts/*
-              - arn:aws:s3:::*/templates/scripts/*
-
-          - Sid: KMSForSSMSecureString
-            Effect: Allow
-            Action:
-              - kms:Decrypt
-            Resource: '*'
-            Condition:
-              StringEquals:
-                kms:ViaService: !Sub 'ssm.${AWS::Region}.amazonaws.com'
 
           - Sid: CloudWatchGetMetricData
             Effect: Allow
