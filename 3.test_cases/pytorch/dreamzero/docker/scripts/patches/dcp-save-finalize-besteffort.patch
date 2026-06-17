@@ -1,0 +1,46 @@
+diff --git a/rlinf/hybrid_engines/fsdp/strategy/base.py b/rlinf/hybrid_engines/fsdp/strategy/base.py
+index 06bdd2d4..3f757111 100644
+--- a/rlinf/hybrid_engines/fsdp/strategy/base.py
++++ b/rlinf/hybrid_engines/fsdp/strategy/base.py
+@@ -233,10 +233,37 @@ class FSDPStrategyBase(ABC):
+                 from torch.distributed import checkpoint as dcp
+ 
+                 dcp_save_path = os.path.join(save_path, "dcp_checkpoint")
+-                dcp.save(
+-                    {"fsdp_checkpoint": training_state},
+-                    checkpoint_id=dcp_save_path,
+-                )
++                try:
++                    dcp.save(
++                        {"fsdp_checkpoint": training_state},
++                        checkpoint_id=dcp_save_path,
++                    )
++                except BaseException as dcp_err:
++                    # EKS hotfix: torch DCP's post-write finalization broadcast
++                    # (all_reduce("write", ...) -> broadcast_object_list) can raise
++                    # `_pickle.UnpicklingError: invalid load key, '\x00'` on multi-node
++                    # gloo process groups, AFTER write_data() and finish_checkpoint()
++                    # have already written every shard + .metadata to disk. Treat the
++                    # save as successful when the on-disk DCP is complete; otherwise
++                    # re-raise (genuine write failure, e.g. truncated/full filesystem).
++                    import glob as _glob
++
++                    meta_ok = os.path.isfile(
++                        os.path.join(dcp_save_path, ".metadata")
++                    )
++                    shards = _glob.glob(os.path.join(dcp_save_path, "*.distcp"))
++                    world = torch.distributed.get_world_size()
++                    if meta_ok and len(shards) >= world:
++                        if hasattr(cls, "logger") and cls.logger is not None:
++                            cls.logger.warning(
++                                "dcp.save raised in post-write finalization "
++                                f"({type(dcp_err).__name__}: {dcp_err}) but the "
++                                f"on-disk checkpoint is complete (.metadata + "
++                                f"{len(shards)} shards >= world_size {world}) at "
++                                f"{dcp_save_path}; treating save as successful."
++                            )
++                    else:
++                        raise
+ 
+         except BaseException as e:
+             import traceback
