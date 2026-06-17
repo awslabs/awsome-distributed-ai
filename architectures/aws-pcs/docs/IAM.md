@@ -157,6 +157,7 @@ policies, nothing else:
 |---|---|
 | Both IAM CFN stacks `CREATE_COMPLETE` | ✅ |
 | **A role with only the admin policies runs `pcs-ml-cluster-deploy-all.yaml`** (DirectoryService=OpenLDAP-LoginNode + SSHAccessCidr + MonitoringStack=Prometheus-LoginNode) — every nested stack `CREATE_COMPLETE`, no `AccessDenied` | ✅ |
+| Same admin-only role tears it down: `delete-stack` → `DELETE_COMPLETE` with no `AccessDenied` (delete perms cover the full teardown) | ✅ |
 | Admin role needs **no `iam:CreatePolicy`** — the instance role's perms are inline (`PutRolePolicy`), so deploy-all works with the admin policy as-is (`iam:CreatePolicy` simulates `implicitDeny`, and deploy-all still completes) | ✅ |
 | `simulate-principal-policy` (with proper resource ARNs / `iam:PassedToService` context): `cfn:CreateStack`, `ec2:RunInstances/CreateSubnet/CreateSecurityGroup`, `fsx:CreateFileSystem`, `pcs:CreateCluster`, `iam:CreateRole/PutRolePolicy/CreateInstanceProfile/PassRole(ec2,pcs)`, `ssm:Put/GetParameter` on `/pcs/*/ldap/*`, `kms:Decrypt` → all `allowed` | ✅ |
 | User role: `pcs:GetCluster`/`ListComputeNodeGroups`, `cloudformation:DescribeStacks`, `ec2:DescribeInstances` → `allowed`; `cfn:CreateStack`, `pcs:CreateCluster`, `ec2:RunInstances`, `fsx:CreateFileSystem`, `iam:CreateRole` → `implicitDeny` | ✅ |
