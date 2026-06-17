@@ -14,6 +14,21 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   NAT gateway). This unblocks `OpenZFSDeploymentType=MULTI_AZ` and higher-availability
   layouts. *(Note: OpenZFS MULTI_AZ wiring of the 2nd subnet into the FSx resource is a
   follow-up; the subnets + routing are in place.)*
+- [ ] 🟡 **Targeted ODCR support for GPU node groups.** Today `CapacityReservationId`
+  on `add-cng-p5`/`add-cng-p6-b200`/`add-cng-p6-b300` is **Capacity Block for ML only** —
+  setting it forces `MarketType=capacity-block` and drops the placement group, so a
+  *targeted* On-Demand Capacity Reservation (ODCR) cannot be consumed (only "open" ODCRs,
+  via the empty/On-Demand path, work). Add a `CapacityReservationType` enum
+  (`none` | `capacity-block` | `targeted-odcr`) and branch the launch template:
+  `targeted-odcr` sets `CapacityReservationTarget` **without** `MarketType=capacity-block`
+  and **keeps** the placement group (On-Demand billing against the reservation).
+  `none`/`capacity-block` stay equivalent to today (backward compatible). Replaces the
+  current "do not put an ODCR ID here" caveat. Verification can be done **without GPU
+  capacity**: (1) static — create the GPU CNGs with `Min/MaxCount=0` and assert the
+  generated launch template's `CapacityReservationSpecification`/`InstanceMarketOptions`/
+  `Placement` per type; (2) dynamic — the branch logic is instance-family-independent, so
+  exercise actual targeted-ODCR consumption (`InstanceLifecycle` empty = On-Demand, reserved
+  count decrements) on a cheap type (c6i/g5).
 - [ ] 🟢 **Trainium (Trn) validation.** Validate the templates on Trainium instances
   (e.g. trn1/trn2) — node group, EFA/networking, and a sample training run.
 - [ ] 🟡 **Graviton (arm64) CPU CNG support — `hpc7g` / `c7gn`.** EFA-capable arm64
