@@ -12,6 +12,9 @@ This repository provides reference architectures and deployment templates for se
 - **GPU-ready, multi-NIC EFA**: dedicated launch templates for the P5 and P6 families, selected automatically by instance type, for high-bandwidth multi-node training.
 - **Flexible capacity options**: On-Demand, "open" On-Demand Capacity Reservations (ODCR, consumed automatically), and Capacity Blocks for ML — selected per node group. (Targeting a *specific* ODCR is on the [roadmap](./docs/ROADMAP.md).)
 - **High-performance storage**: FSx for Lustre (shared scratch, `/fsx`) and FSx for OpenZFS (home directories, `/home`).
+- **Multi-user ready**: opt-in OpenLDAP directory on the login node with SSSD on every compute node, so a team shares one cluster with consistent POSIX users cluster-wide — pairs with Slurm accounting (`DirectoryService=OpenLDAP-LoginNode`).
+- **Access control built in**: ready-to-deploy least-privilege IAM policy stacks for cluster admins and users, and login-node SSH / Grafana access gated to a trusted CIDR (`SSHAccessCidr` / `GrafanaAccessCidr`).
+- **Multi-AZ and broad Region coverage**: place private subnets across up to 3 AZs for availability or AZ-matched capacity; validated end-to-end across 10 Regions.
 - **Modular components**: compose individual stacks (network/storage prerequisites, cluster scheduler, per-family compute node groups) instead of the all-in-one nested stack when you want to reuse infrastructure across clusters or iterate on one piece at a time.
 
 > Built on the AWS-managed **PCS-Ready DLAMI** (NVIDIA driver, CUDA, PCS agent, and
@@ -26,13 +29,17 @@ This repository provides reference architectures and deployment templates for se
 ![AWS PCS diagram](./images/ml-pcs-architecture.png)
 
 A default deployment (`pcs-ml-cluster-deploy-all.yaml`) provisions:
-- VPC with public/private subnets, NAT gateway, and S3 endpoint
+- VPC with a public subnet and private subnets in up to 3 AZs, a NAT gateway (primary AZ), and an S3 endpoint
 - FSx for Lustre (`/fsx`, high-performance shared scratch) and FSx for OpenZFS (`/home`)
 - PCS cluster with the Slurm scheduler (25.05 or 25.11), on the PCS-Ready DLAMI
-- Login node group (public subnet) with the monitoring stack (Prometheus + Grafana + Nginx)
+- Login node group (public subnet) with the monitoring stack (Prometheus + Grafana + Nginx); SSH/Grafana can be opened to a trusted CIDR
 - CPU compute node group (private subnet); EFA can be enabled for HPC/MPI workloads
 - Optional GPU (P5/P6) node group with multi-NIC EFA, plus DCGM Exporter for the GPU dashboards
 - Enroot/Pyxis container runtime installed at first boot via `PostInstallScriptUrl` (or pre-baked into a custom AMI you build separately and pass as `AmiId`)
+
+Optional add-ons (off by default):
+- **Multi-user directory**: OpenLDAP on the login node + SSSD on every compute node (`DirectoryService`)
+- **IAM policy stacks**: least-privilege cluster-admin / cluster-user policies you can deploy separately
 
 ---
 
@@ -85,22 +92,25 @@ Defaults give the most common production setup — Enroot/Pyxis installed at fir
 boot via `PostInstallScriptUrl` + `MonitoringStack=Prometheus-LoginNode` — so a default deploy
 only needs the Availability Zone (`PrimarySubnetAZ`). The most-used parameters:
 
+The rows below follow the same order as the deploy-all console parameter groups
+(Network → PCS Cluster → On-Demand CNG → GPU CNG → Additional Configuration).
+
 | Parameter | Default | Purpose |
 |---|---|---|
 | `PrimarySubnetAZ` | *(required)* | Availability Zone to deploy into — the one required parameter |
+| `AdditionalSubnetAZ2` / `AdditionalSubnetAZ3` | *(empty)* | Add private subnets in up to 2 more AZs (primary + 2) for higher availability or AZ-matched capacity. NAT gateway stays in the primary AZ |
 | `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`); 25.11 is needed for the Slurm OpenMetrics dashboards. Drives Pyxis build version too. See [OPERATIONS.md §1](./docs/OPERATIONS.md#1-slurm-version-selection) |
 | `AmiId` | *(empty → SSM auto)* | Empty auto-resolves to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04) from SSM. Pin to a specific `ami-xxx` for production, or pass an AMI built by [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#84-pre-baking-enrootpyxis-into-a-custom-ami) |
-| `MonitoringStack` | `Prometheus-LoginNode` | Deploy Prometheus + Grafana on the login node, plus DCGM Exporter on GPU compute nodes. Set to `none` to disable monitoring |
+| `SSHAccessCidr` | *(empty)* | Open SSH/22 on the login node to a trusted CIDR for direct SSH (default: SSM only, no public access). See [§6 Accessing the Cluster](#6-accessing-the-cluster) |
 | `DeployOnDemandCNG` | `true` | Deploy the On-Demand compute queue (the `cpu1` queue by default) |
 | `OnDemandInstanceType` | `c6i.4xlarge` | Instance type for the On-Demand queue. Not limited to CPU — set any On-Demand type, e.g. a single-NIC GPU like `g6.12xlarge` (see [Example 1](#example-1-single-nic-gpu-queue-g6)) or an EFA-capable HPC type like `hpc7a.96xlarge`. (Multi-NIC P5/P6 GPUs use the P-series queue instead — see `PseriesInstanceType`.) Tune `OnDemandQueueName`/`OnDemandCngName`/`OnDemandMinCount`/`OnDemandMaxCount` alongside it |
-| `OnDemandEfaInterfaceCount` | `0` | `0` = no EFA (default). Set `1`/`2` for HPC/MPI workloads on EFA-capable CPU types (hpc6a=1, hpc7a/hpc8a/hpc6id=2). Enables EFA `NetworkInterfaces` + auto-creates a cluster placement group. See [EFA on CPU HPC instances](#efa-on-cpu-hpc-instances-ondemandefainterfacecount) |
+| `OnDemandEfaInterfaceCount` | `0` | `0` = no EFA (default). Set `1`/`2` for HPC/MPI workloads on EFA-capable CPU types (hpc6a=1, hpc7a/hpc8a/hpc6id=2). Enables EFA `NetworkInterfaces` + auto-creates a cluster placement group. See [§8.5 CPU compute node group](#85-cpu-compute-node-group--advanced-settings) |
 | `DeployPseriesCNG` | `false` | Deploy a GPU (P5/P6) queue — see [GPU compute](#gpu-compute-p5p6) |
 | `PseriesInstanceType` | `p5.48xlarge` | Multi-NIC GPU instance type; auto-selects the matching template + EFA NIC count. Accepted values: `p5.48xlarge` / `p5e.48xlarge` (→ add-cng-p5, 32 NICs), `p5en.48xlarge` (→ add-cng-p5, 16 NICs), `p6-b200.48xlarge` (→ add-cng-p6-b200, 8 NICs), `p6-b300.48xlarge` (→ add-cng-p6-b300, 17 NICs). See [GPU compute](#gpu-compute-p5p6) |
 | `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR |
-| `DirectoryService` | `none` | Set to `OpenLDAP-LoginNode` for a multi-user cluster (shared LDAP users across all nodes). See [§8.2 User Management](#82-user-management) |
-| `SSHAccessCidr` | *(empty)* | Open SSH/22 on the login node to a trusted CIDR for direct SSH (default: SSM only, no public access). See [§6 Accessing the Cluster](#6-accessing-the-cluster) |
+| `MonitoringStack` | `Prometheus-LoginNode` | Deploy Prometheus + Grafana on the login node, plus DCGM Exporter on GPU compute nodes. Set to `none` to disable monitoring |
 | `GrafanaAccessCidr` | *(empty)* | Open HTTPS/443 on the login node to a trusted CIDR for direct Grafana access (default: SSM port-forward only). See [§8.1 Monitoring](#accessing-the-grafana-dashboards) |
-| `AdditionalSubnetAZ2` / `AdditionalSubnetAZ3` | *(empty)* | Add private subnets in up to 2 more AZs (primary + 2) for higher availability or AZ-matched capacity. NAT gateway stays in the primary AZ |
+| `DirectoryService` | `none` | Set to `OpenLDAP-LoginNode` for a multi-user cluster (shared LDAP users across all nodes). See [§8.2 User Management](#82-user-management) |
 
 **See [PARAMETERS.md](./docs/PARAMETERS.md) for the complete parameter reference** (all 7
 console parameter groups, with every default). The concept guides below cover the

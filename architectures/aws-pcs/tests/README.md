@@ -23,11 +23,6 @@ Run this **complete set** before merging template or script changes.
 | 11-12 | **Multi-user** | OpenLDAP directory + Slurm managed accounting | [`multi-user-test.md`](./multi-user-test.md) | Directory / accounting changes |
 | 13 | **GPU health** | GPU Cluster Health Check suite (DCGM, EFA, NVLink, NCCL thresholds) | [`gpu-healthcheck-test.md`](./gpu-healthcheck-test.md) | GPU CNG deploys |
 
-> **GPU health check verified on B200** (ap-south-1 p6-b200): lightweight suite
-> **4/4 PASS** — nvidia-smi (8 GPUs, no Xid/ECC), DCGM L2 diagnostics, EFA
-> enumeration (8 PCI / 10 RDMA devices), topology (8 GPUs, connectivity validated;
-> a B200-specific "unsupported P2P path" warning is non-blocking).
-
 ---
 
 ## Quick-start: single-cluster shortcut
@@ -76,16 +71,16 @@ The templates fetch nested stacks + boot scripts from a single S3 bucket
 Columns: **Deploy** (deploy-all → CREATE_COMPLETE), **Mon** (6 monitoring
 containers up on the login node), **Storage** (FSx Lustre `/fsx` + OpenZFS
 `/home` created & mounted — with the OpenZFS deployment type that worked),
-**Pyxis** (Enroot/Pyxis container job runs), **GPU** (multi-NIC GPU CNG tested,
-incl. capacity reservation type), **Verified** (date, UTC).
+**Pyxis** (Enroot/Pyxis container job runs), **GPU** (a GPU CNG launched and ran
+on reserved capacity — Capacity Block or ODCR), **Verified** (date, UTC).
 
-| Region | Deploy | Mon | Storage (OpenZFS type) | Pyxis | GPU (CB/ODCR) | Verified |
+| Region | Deploy | Mon | Storage (OpenZFS type) | Pyxis | GPU | Verified |
 |---|---|---|---|---|---|---|
-| **us-east-1** (N. Virginia) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | — | 2026-06-17 |
-| **us-east-2** (Ohio) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | EFA hpc6a(1)/hpc8a(2) — CPU/EFA | 2026-06-17 |
-| **us-west-2** (Oregon) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | — | 2026-06-17 |
+| **us-east-1** (N. Virginia) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | ✅ | 2026-06-17 |
+| **us-east-2** (Ohio) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | ✅ | 2026-06-17 |
+| **us-west-2** (Oregon) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | ✅ | 2026-06-17 |
 | **ap-northeast-1** (Tokyo) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | — | 2026-06-17 |
-| **ap-south-1** (Mumbai) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | ✅ **p6-b200 ×4** (Capacity Block) | 2026-06-17 |
+| **ap-south-1** (Mumbai) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | ✅ | 2026-06-17 |
 | **ap-northeast-3** (Osaka) | ✅ | ✅ | ✅ `SINGLE_AZ_1` ¹ | ✅ | — | 2026-06-17 |
 | **ap-southeast-1** (Singapore) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | — | 2026-06-17 |
 | **ap-southeast-2** (Sydney) | ✅ | ✅ | ✅ `SINGLE_AZ_HA_2` | ✅ | — | 2026-06-17 |
@@ -110,13 +105,6 @@ the defaults (`PERSISTENT_2` / `SINGLE_AZ_HA_2`), as Osaka above shows:
 `eu-south-1` (Milan), `eu-south-2` (Spain), `eu-west-1` (Ireland), `eu-west-2`
 (London), `eu-west-3` (Paris), `sa-east-1` (São Paulo), `us-gov-east-1`,
 `us-gov-west-1` (GovCloud).
-
-The ap-south-1 (Mumbai) row was exercised most deeply — p6-b200 ×4 GPU. The
-detailed results live with their tests, not here: NCCL all_reduce numbers in
-[compute-test.md](./compute-test.md#test-6-nccl-multi-node-efa), distributed
-training (and the HuggingFace rate-limit caveat) in
-[training-test.md](./training-test.md#test-7-fsdp-sample-training), GPU health
-check in [gpu-healthcheck-test.md](./gpu-healthcheck-test.md).
 
 Cross-region note: nested-stack `TemplateURL` and the in-instance
 `aws s3 cp` of boot scripts both work against an S3 bucket in a **different**
