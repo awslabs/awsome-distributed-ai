@@ -12,19 +12,24 @@ POSIX user accounts visible on all nodes via SSSD.
 
 ## Quick reference (common tasks)
 
-| Task | Command (run on login node as root) |
+Run on the login node. `$ADMIN_PW` is the LDAP admin password from SSM (see
+[Getting the admin password](#getting-the-admin-password)); the `LDAP_*` env
+vars must be passed **inline to `sudo`** (`sudo VAR=... cmd`) — `sudo -E` alone
+drops them under the default `env_reset`/`secure_path`.
+
+| Task | Command (run on the login node) |
 |---|---|
-| Add a user | `sudo ldap-add-user alice 10001 3000` |
-| List all users | `sudo ldap-list-users` |
-| Delete a user | `sudo ldap-delete-user alice` |
-| Reset a user's password | `sudo ldap-reset-password alice` |
-| Add user to Slurm accounting | `sacctmgr -i add user alice Account=default` |
+| Add a user | `sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" ldap-add-user.sh alice 10001 3000` |
+| List all users | `ldapsearch -x -H ldap://localhost -b ou=People,dc=cluster,dc=internal uid` |
+| Delete a user | `ldapdelete -x -H ldap://localhost -D cn=admin,dc=cluster,dc=internal -w "$ADMIN_PW" uid=alice,ou=People,dc=cluster,dc=internal` then `sudo sss_cache -E` |
+| Reset a user's password | `ldappasswd -x -H ldap://localhost -D cn=admin,dc=cluster,dc=internal -w "$ADMIN_PW" -s NEWPASS uid=alice,ou=People,dc=cluster,dc=internal` |
+| Add user to Slurm accounting | `sudo /opt/aws/pcs/scheduler/slurm-25.11/bin/sacctmgr -i add user alice Account=ml-team` (root = accounting admin) |
 | Verify user on compute node | `srun -N1 -n1 -p cpu1 id alice` |
 
-The `ldap-*` commands above are helper scripts installed on the login node at
-`/usr/local/bin/`. They wrap raw `ldapadd`/`ldapdelete`/`ldappasswd` commands
-so you don't need to know LDAP syntax. The full manual commands are documented
-below for reference.
+`ldap-add-user.sh` is a helper script installed on the login node at
+`/usr/local/bin/` (it wraps `ldapadd`+`ldappasswd` so you don't need the LDAP
+syntax). List/delete/reset use the raw `ldap*` tools directly — the full
+commands are documented in each section below.
 
 ---
 
@@ -188,8 +193,8 @@ operations.
 **Using the helper script** (recommended):
 
 ```bash
-# Usage: ldap-add-user <username> <uid> <gid> [ssh-public-key]
-sudo LDAP_ADMIN_PASSWORD="<password>" ldap-add-user alice 10001 3000
+# Usage: ldap-add-user.sh <username> <uid> <gid> [ssh-public-key]
+sudo LDAP_ADMIN_PASSWORD="<password>" ldap-add-user.sh alice 10001 3000
 ```
 
 This creates the user with:
@@ -203,7 +208,7 @@ This creates the user with:
 **With an SSH key** (user can log in immediately):
 
 ```bash
-sudo LDAP_ADMIN_PASSWORD="<password>" ldap-add-user alice 10001 3000 "ssh-rsa AAAA... alice@laptop"
+sudo LDAP_ADMIN_PASSWORD="<password>" ldap-add-user.sh alice 10001 3000 "ssh-rsa AAAA... alice@laptop"
 ```
 
 **Verifying the user was created:**
@@ -231,7 +236,7 @@ carol 10003 3000
 Then:
 ```bash
 while read name uid gid key; do
-  sudo LDAP_ADMIN_PASSWORD="<password>" ldap-add-user "$name" "$uid" "$gid" "$key"
+  sudo LDAP_ADMIN_PASSWORD="<password>" ldap-add-user.sh "$name" "$uid" "$gid" "$key"
 done < users.txt
 ```
 
@@ -273,7 +278,7 @@ srun -N <nodes> -n <nodes> bash -c 'sudo sss_cache -E'
 
 Also remove from Slurm accounting:
 ```bash
-sacctmgr -i remove user alice
+sudo /opt/aws/pcs/scheduler/slurm-25.11/bin/sacctmgr -i remove user alice
 ```
 
 The user's home directory (`/home/alice`) is NOT deleted automatically.
@@ -344,22 +349,32 @@ EOF
 
 ## Slurm accounting
 
-PCS manages the Slurm accounting database internally. You just need to register
-users and accounts:
+PCS manages the Slurm accounting database internally (enable it with
+`ManagedAccounting=enabled` at deploy time). You just need to register users and
+accounts.
+
+> **Run `sacctmgr` add/modify/remove as `root`.** In PCS managed accounting the
+> Administrator is `root` — the default `ubuntu` user is not an accounting admin,
+> so `sacctmgr -i add ...` as `ubuntu` fails with *"Only
+> admins/operators/coordinators can add accounts"*. Use `sudo` with the full
+> path (the Slurm bin dir isn't on root's `PATH` by default):
 
 ```bash
-export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH
+SACCTMGR=/opt/aws/pcs/scheduler/slurm-25.11/bin/sacctmgr
 
 # Create a Slurm account (typically one per team or project)
-sacctmgr -i add account default Description="Default account"
+sudo $SACCTMGR -i add account ml-team Description="ML Team"
 
-# Add users to the account
-sacctmgr -i add user alice Account=default
-sacctmgr -i add user bob Account=default
+# Add LDAP users to the account
+sudo $SACCTMGR -i add user alice Account=ml-team
+sudo $SACCTMGR -i add user bob Account=ml-team
 
-# Verify
-sacctmgr show user
+# Verify (read-only — works as any user with the Slurm bin on PATH)
+sudo $SACCTMGR show user alice bob format=User,Account,DefaultAccount
 ```
+
+Read-only `sacct` / `sreport` / `sacctmgr show ...` work as `ubuntu`; only the
+mutating `sacctmgr` verbs need `root`.
 
 > **Note:** if `AccountingPolicyEnforcement=none` (the default), users can
 > submit jobs even without being registered in `sacctmgr`. Registration is
