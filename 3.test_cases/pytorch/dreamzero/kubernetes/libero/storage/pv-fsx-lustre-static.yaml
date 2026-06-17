@@ -1,0 +1,39 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Optional: bind to an EXISTING FSx for Lustre filesystem (static provisioning).
+# Fill in fileSystemId / dnsName / mountName from your FSx filesystem. The PVC is
+# named fsx-claim (mounted at /fsx by the workflow manifests).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: fsx-pv-dreamzero
+spec:
+  capacity:
+    storage: 1200Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  mountOptions:
+    - flock
+  persistentVolumeReclaimPolicy: Retain
+  csi:
+    driver: fsx.csi.aws.com
+    volumeHandle: ${FSX_FILESYSTEM_ID}
+    volumeAttributes:
+      dnsname: ${FSX_DNS_NAME}
+      mountname: ${FSX_MOUNT_NAME}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fsx-claim
+  namespace: ${NAMESPACE}
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: fsx-pv-dreamzero
+  resources:
+    requests:
+      storage: 1200Gi

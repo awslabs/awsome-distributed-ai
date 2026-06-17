@@ -1,0 +1,18 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Copy to env_vars and `source env_vars` before running the walkthrough.
+# env_vars is gitignored; env_vars.example is tracked.
+
+# Your ECR repository URI for the DreamZero training image (no tag).
+export ECR_URI=<account>.dkr.ecr.<region>.amazonaws.com/dreamzero
+
+# Kubernetes namespace to deploy into.
+export NAMESPACE=dreamzero
+
+# AWS region of your cluster/ECR.
+export AWS_REGION=us-east-1
+
+# Pinned source refs (baked into the image build).
+export UPSTREAM_REF=b3bbabb1f461
+export DREAMZERO_REF=ab790c198fbc
