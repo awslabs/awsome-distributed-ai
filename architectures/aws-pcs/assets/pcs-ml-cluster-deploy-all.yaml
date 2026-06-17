@@ -30,12 +30,7 @@ Metadata:
           - ManagedAccounting
           - AccountingPolicyEnforcement
       - Label:
-          default: "3. Container Runtime (Post-install Script)"
-        Parameters:
-          - PostInstallScriptUrl
-          - PostInstallScriptArgs
-      - Label:
-          default: "4. On-Demand Compute Node Group"
+          default: "3. On-Demand Compute Node Group"
         Parameters:
           - DeployOnDemandCNG
           - OnDemandInstanceType
@@ -46,7 +41,7 @@ Metadata:
           - OnDemandEfaInterfaceCount
           - OnDemandPlacementGroupName
       - Label:
-          default: "5. GPU Compute Node Group - P5/P6 Series (Optional)"
+          default: "4. GPU Compute Node Group - P5/P6 Series (Optional)"
         Parameters:
           - DeployPseriesCNG
           - PseriesInstanceType
@@ -55,6 +50,18 @@ Metadata:
           - CapacityReservationId
           - PseriesCngName
           - PseriesQueueName
+      - Label:
+          default: "5. Additional Cluster Configuration (Monitoring, Multi-User, Container Runtime)"
+        Parameters:
+          - MonitoringStack
+          - GrafanaAccessCidr
+          - MonitoringRepo
+          - MonitoringVersion
+          - DcgmExporterImage
+          - DirectoryService
+          - DirectoryDomainSuffix
+          - PostInstallScriptUrl
+          - PostInstallScriptArgs
       - Label:
           default: "6. FSx Storage (/fsx and /home)"
         Parameters:
@@ -68,17 +75,7 @@ Metadata:
           - HomeThroughput
           - OpenZFSDeploymentType
       - Label:
-          default: "7. Additional Cluster Configuration (Monitoring, Multi-User)"
-        Parameters:
-          - MonitoringStack
-          - GrafanaAccessCidr
-          - MonitoringRepo
-          - MonitoringVersion
-          - DcgmExporterImage
-          - DirectoryService
-          - DirectoryDomainSuffix
-      - Label:
-          default: "8. Developer / Advanced (do not change for normal use)"
+          default: "7. Developer / Advanced (do not change for normal use)"
         Parameters:
           - S3BucketName
           - S3KeyPrefix

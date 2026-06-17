@@ -102,15 +102,15 @@ below; for the complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 | `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`); 25.11 is needed for the Slurm OpenMetrics dashboards. Drives Pyxis build version too. See [OPERATIONS.md §1](./docs/OPERATIONS.md#1-slurm-version-selection) |
 | `AmiId` | *(empty → SSM auto)* | Empty auto-resolves to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04) from SSM. Pin to a specific `ami-xxx` for production, or pass an AMI built by [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#84-pre-baking-enrootpyxis-into-a-custom-ami) |
 | `SSHAccessCidr` | *(empty)* | Open SSH/22 on the login node to a trusted CIDR for direct SSH (default: SSM only, no public access). See [§6 Accessing the Cluster](#6-accessing-the-cluster) |
-| **— 4. On-Demand Compute Node Group —** | | |
+| **— 3. On-Demand Compute Node Group —** | | |
 | `DeployOnDemandCNG` | `true` | Deploy the On-Demand compute queue (the `cpu1` queue by default) |
 | `OnDemandInstanceType` | `c6i.4xlarge` | Instance type for the On-Demand queue. Not limited to CPU — set any On-Demand type, e.g. a single-NIC GPU like `g6.12xlarge` (see [Example 1](#example-1-single-nic-gpu-queue-g6)) or an EFA-capable HPC type like `hpc7a.96xlarge`. (Multi-NIC P5/P6 GPUs use the P-series queue instead — see `PseriesInstanceType`.) Tune `OnDemandQueueName`/`OnDemandCngName`/`OnDemandMinCount`/`OnDemandMaxCount` alongside it |
 | `OnDemandEfaInterfaceCount` | `0` | `0` = no EFA (default). Set `1`/`2` for HPC/MPI workloads on EFA-capable CPU types (hpc6a=1, hpc7a/hpc8a/hpc6id=2). Enables EFA `NetworkInterfaces` + auto-creates a cluster placement group. See [§8.5 CPU compute node group](#85-cpu-compute-node-group--advanced-settings) |
-| **— 5. GPU Compute Node Group (P5/P6, optional) —** | | |
+| **— 4. GPU Compute Node Group (P5/P6, optional) —** | | |
 | `DeployPseriesCNG` | `false` | Deploy a GPU (P5/P6) queue — see [GPU compute](#gpu-compute-p5p6) |
 | `PseriesInstanceType` | `p5.48xlarge` | Multi-NIC GPU instance type; auto-selects the matching template + EFA NIC count. Accepted values: `p5.48xlarge` / `p5e.48xlarge` (→ add-cng-p5, 32 NICs), `p5en.48xlarge` (→ add-cng-p5, 16 NICs), `p6-b200.48xlarge` (→ add-cng-p6-b200, 8 NICs), `p6-b300.48xlarge` (→ add-cng-p6-b300, 17 NICs). See [GPU compute](#gpu-compute-p5p6) |
 | `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR |
-| **— 7. Additional Cluster Configuration (Monitoring, Multi-User) —** | | |
+| **— 5. Additional Cluster Configuration (Monitoring, Multi-User, Container Runtime) —** | | |
 | `MonitoringStack` | `Prometheus-LoginNode` | Deploy Prometheus + Grafana on the login node, plus DCGM Exporter on GPU compute nodes. Set to `none` to disable monitoring |
 | `GrafanaAccessCidr` | *(empty)* | Open HTTPS/443 on the login node to a trusted CIDR for direct Grafana access (default: SSM port-forward only). See [§8.1 Monitoring](#accessing-the-grafana-dashboards) |
 | `DirectoryService` | `none` | Set to `OpenLDAP-LoginNode` for a multi-user cluster (shared LDAP users across all nodes). See [§8.2 User Management](#82-user-management) |
