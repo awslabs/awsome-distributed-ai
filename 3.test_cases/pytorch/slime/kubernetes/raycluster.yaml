@@ -1,0 +1,170 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: slime-ray
+  namespace: ${NAMESPACE}
+  labels:
+    app: slime-grpo
+spec:
+  rayVersion: "2.55.1"
+  enableInTreeAutoscaling: false
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: "0.0.0.0"
+      num-gpus: "0"
+      # Head runs the Ray GCS and dashboard only -- no training/inference on head.
+    template:
+      metadata:
+        labels:
+          ray.io/node-type: head
+      spec:
+        containers:
+          - name: ray-head
+            image: ${FULL_IMAGE}
+            imagePullPolicy: IfNotPresent
+            ports:
+              - containerPort: 6379   # Ray GCS
+              - containerPort: 8265   # Ray Dashboard
+              - containerPort: 10001  # Ray Client
+            env:
+              # The HyperPod AMI makes the NVIDIA container runtime the
+              # containerd default with CDI auto-injection. On a GPU-less node
+              # that injection fails ("Driver Not Loaded") and the container
+              # cannot start. "void" tells the NVIDIA runtime to skip all GPU
+              # tooling injection -- correct for the head, which uses no GPUs.
+              - name: NVIDIA_VISIBLE_DEVICES
+                value: "void"
+              - name: RAY_memory_monitor_refresh_ms
+                value: "0"
+              - name: PYTHONPATH
+                value: "/opt/Megatron-LM"
+              # Create the secret with:
+              #   kubectl create secret generic hf-token --from-literal=HF_TOKEN=$HF_TOKEN -n $NAMESPACE
+              - name: HF_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: hf-token
+                    key: HF_TOKEN
+              - name: NCCL_DEBUG
+                value: "WARN"
+            # The head only runs the Ray GCS + dashboard; keep requests small
+            # so it fits on a modest CPU node (e.g. ml.m5.4xlarge ~8 CPU/62Gi).
+            resources:
+              requests:
+                cpu: "2"
+                memory: "8Gi"
+              limits:
+                cpu: "4"
+                memory: "16Gi"
+            volumeMounts:
+              - name: fsx
+                mountPath: /fsx
+              - name: dshm
+                mountPath: /dev/shm
+        volumes:
+          - name: fsx
+            persistentVolumeClaim:
+              claimName: ${FSX_CLAIM}
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: "64Gi"
+        # Keep the head off GPU nodes so it never blocks a GPU worker from
+        # scheduling. Uses the label set by NVIDIA gpu-feature-discovery, so it
+        # is portable across clusters (no hard-coded instance-group name).
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: nvidia.com/gpu.present
+                      operator: NotIn
+                      values:
+                        - "true"
+        restartPolicy: Never
+        terminationGracePeriodSeconds: 120
+  workerGroupSpecs:
+    - groupName: gpu-workers
+      replicas: ${NUM_NODES}
+      minReplicas: ${NUM_NODES}
+      maxReplicas: ${NUM_NODES}
+      rayStartParams:
+        num-gpus: "${GPUS_PER_NODE}"
+      template:
+        metadata:
+          labels:
+            ray.io/node-type: worker
+        spec:
+          containers:
+            - name: ray-worker
+              image: ${FULL_IMAGE}
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: RAY_memory_monitor_refresh_ms
+                  value: "0"
+                - name: PYTHONPATH
+                  value: "/opt/Megatron-LM"
+                - name: HF_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: hf-token
+                      key: HF_TOKEN
+                # ----- EFA / NCCL tuning -----
+                - name: FI_PROVIDER
+                  value: "efa"
+                - name: FI_EFA_USE_DEVICE_RDMA
+                  value: "1"
+                - name: FI_EFA_FORK_SAFE
+                  value: "1"
+                - name: NCCL_PROTO
+                  value: "Simple"
+                - name: NCCL_DEBUG
+                  value: "WARN"
+                - name: RDMAV_FORK_SAFE
+                  value: "1"
+                - name: NCCL_SOCKET_IFNAME
+                  # Exclusion form (matches the Dockerfile and repo convention):
+                  # governs only NCCL's TCP bootstrap/control socket, not the EFA
+                  # data path. Robust if the primary CNI NIC is not named eth0.
+                  value: "^lo"
+                - name: TOKENIZERS_PARALLELISM
+                  value: "false"
+              resources:
+                requests:
+                  cpu: "90"
+                  memory: "1800Gi"
+                  nvidia.com/gpu: "${GPUS_PER_NODE}"
+                  vpc.amazonaws.com/efa: "32"
+                limits:
+                  cpu: "96"
+                  memory: "1900Gi"
+                  nvidia.com/gpu: "${GPUS_PER_NODE}"
+                  vpc.amazonaws.com/efa: "32"
+              volumeMounts:
+                - name: fsx
+                  mountPath: /fsx
+                - name: dshm
+                  mountPath: /dev/shm
+          volumes:
+            - name: fsx
+              persistentVolumeClaim:
+                claimName: ${FSX_CLAIM}
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: "256Gi"
+          restartPolicy: Never
+          terminationGracePeriodSeconds: 300
+          # Schedule one worker per physical node
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchExpressions:
+                      - key: ray.io/node-type
+                        operator: In
+                        values:
+                          - worker
+                  topologyKey: kubernetes.io/hostname

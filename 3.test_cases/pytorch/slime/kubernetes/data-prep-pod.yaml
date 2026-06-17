@@ -1,0 +1,33 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+apiVersion: v1
+kind: Pod
+metadata:
+  name: data-prep
+  namespace: ${NAMESPACE}
+  labels:
+    app: slime-data-prep
+spec:
+  containers:
+    - name: data-prep
+      image: python:3.11-slim
+      command: ["sleep", "infinity"]
+      env:
+        - name: HF_TOKEN
+          value: ""  # Set before applying, or pass via kubectl set env
+      resources:
+        requests:
+          cpu: "4"
+          memory: "16Gi"
+        limits:
+          cpu: "8"
+          memory: "32Gi"
+      volumeMounts:
+        - name: fsx
+          mountPath: /fsx
+  volumes:
+    - name: fsx
+      persistentVolumeClaim:
+        claimName: fsx-claim
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 30

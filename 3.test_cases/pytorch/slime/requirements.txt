@@ -1,0 +1,22 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+# Reinforcement-learning Python dependencies for the SLIME image.
+nltk==3.9.4
+awscli==1.45.26
+pynvml==13.0.1
+ray[default]==2.55.1
+kernels==0.10.4
+huggingface-hub==1.18.0
+tokenizers==0.22.2
+datasets==4.5.0
+accelerate==1.13.0
+sentencepiece==0.2.1
+protobuf==6.33.5
+math_verify==0.9.0
+qwen_vl_utils==0.0.14
+wandb==0.27.2
+tensorboard==2.20.0
+pylatexenc==2.10
+omegaconf==2.3.0
+aiohttp==3.13.3
