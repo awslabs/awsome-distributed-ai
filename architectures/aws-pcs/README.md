@@ -506,11 +506,10 @@ operations (adding/removing users, Slurm accounting, SSH access).
 
 The cluster has two human roles, each with a ready-to-deploy IAM policy stack:
 
-- **Cluster admin** ([`cluster-admin-iam.yaml`](./assets/cluster-admin-iam.yaml)) —
-  deploy / update / delete the cluster (CloudFormation, PCS, EC2, FSx, scoped IAM).
-- **Cluster user** ([`cluster-user-iam.yaml`](./assets/cluster-user-iam.yaml)) —
-  SSM session to the **login node only** + read-only status; cannot create,
-  modify, or delete anything.
+| Role | What they can do | Deploy |
+|---|---|---|
+| **Cluster admin** ([`cluster-admin-iam.yaml`](./assets/cluster-admin-iam.yaml)) | deploy / update / delete the cluster (CloudFormation, PCS, EC2, FSx, scoped IAM) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster-admin-iam.yaml&stackName=pcs-cluster-admins) |
+| **Cluster user** ([`cluster-user-iam.yaml`](./assets/cluster-user-iam.yaml)) | SSM session to the **login node only** + read-only status; cannot create, modify, or delete anything | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster-user-iam.yaml&stackName=pcs-cluster-users) |
 
 Each template creates the customer-managed policies and an IAM group, and can
 attach existing users at deploy time. See the **[IAM Permissions Guide](./docs/IAM.md)**
