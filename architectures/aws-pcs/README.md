@@ -14,7 +14,6 @@ This repository provides reference architectures and deployment templates for se
 - **High-performance storage**: FSx for Lustre (shared scratch, `/fsx`) and FSx for OpenZFS (home directories, `/home`).
 - **Multi-user ready**: opt-in OpenLDAP directory on the login node with SSSD on every compute node, so a team shares one cluster with consistent POSIX users cluster-wide — pairs with Slurm accounting (`DirectoryService=OpenLDAP-LoginNode`).
 - **Access control built in**: ready-to-deploy least-privilege IAM policy stacks for cluster admins and users, and login-node SSH / Grafana access gated to a trusted CIDR (`SSHAccessCidr` / `GrafanaAccessCidr`).
-- **Multi-AZ and broad Region coverage**: place private subnets across up to 3 AZs for availability or AZ-matched capacity; validated end-to-end across 10 Regions.
 - **Modular components**: compose individual stacks (network/storage prerequisites, cluster scheduler, per-family compute node groups) instead of the all-in-one nested stack when you want to reuse infrastructure across clusters or iterate on one piece at a time.
 
 > Built on the AWS-managed **PCS-Ready DLAMI** (NVIDIA driver, CUDA, PCS agent, and

@@ -72,7 +72,9 @@ Columns: **Deploy** (deploy-all → CREATE_COMPLETE), **Mon** (6 monitoring
 containers up on the login node), **Storage** (FSx Lustre `/fsx` + OpenZFS
 `/home` created & mounted — with the OpenZFS deployment type that worked),
 **Pyxis** (Enroot/Pyxis container job runs), **GPU** (a GPU CNG launched and ran
-on reserved capacity — Capacity Block or ODCR), **Verified** (date, UTC).
+on reserved capacity — Capacity Block or ODCR; ✅ marks regions where this was
+exercised in **earlier** GPU validation rounds, not necessarily on the row's
+deploy/monitoring/storage verification date), **Verified** (date, UTC).
 
 | Region | Deploy | Mon | Storage (OpenZFS type) | Pyxis | GPU | Verified |
 |---|---|---|---|---|---|---|
