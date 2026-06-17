@@ -1,193 +1,176 @@
-# Development & Testing Deploy Procedures
+# Deploying updated templates before they are published
 
-## Prerequisites
+The one-click Quick Start in the [README](../README.md#3-quick-start) deploys from the
+**public production bucket** (`awsome-distributed-ai`), which only has the templates that
+have already been merged and published. This guide is for the other case: **you have
+template/script changes that are not yet in the public bucket** (e.g. a fork, a feature
+branch, or a PR under review) and you want to deploy and test them.
 
-- AWS CLI configured (`--profile claude` in this project)
-- Test S3 bucket: `midaisuk-llm-dev` (us-east-1)
-- Production S3 bucket: `awsome-distributed-ai` (us-east-1)
-- Test region: `us-east-2`
+The approach is the same in every case: **host the templates + boot scripts in an S3
+bucket you control, then point the deploy at that bucket** via the `S3BucketName` /
+`S3KeyPrefix` parameters. The nested stacks and the first-boot scripts are all fetched
+from `s3://<S3BucketName>/<S3KeyPrefix>...`, so overriding those two parameters redirects
+the entire deploy to your copy.
 
----
+## 1. Prerequisites
 
-## Upload templates + scripts to test bucket
+- AWS CLI configured with credentials for your account.
+- An S3 bucket you own, in any Region (the bucket is reached by its global name, so it
+  does not need to be in the deploy Region). It can be **private** — the templates are
+  fetched by your CLI/CloudFormation, and the boot scripts are fetched by the node
+  instance role, so no public access is required.
+- A local checkout of the branch/fork with the changes you want to test.
+
+This guide uses these placeholders — substitute your own:
 
 ```bash
-cd architectures/aws-pcs
-aws s3 sync assets/ s3://midaisuk-llm-dev/templates/ \
-  --exclude "*" --include "*.yaml" --include "*.sh" \
-  --profile claude
+BUCKET=my-pcs-templates       # an S3 bucket you control
+PREFIX=templates/             # key prefix (keep the trailing slash)
+REGION=us-east-1              # the Region to deploy the cluster into
+AZ=us-east-1a                 # an Availability Zone in $REGION
 ```
 
-This uploads both CloudFormation templates and boot scripts in one command
-(scripts live under `assets/scripts/`, synced to `s3://bucket/templates/scripts/`).
+## 2. Upload the templates + scripts to your bucket
 
----
+Run from the repo's `architectures/aws-pcs` directory (so `assets/` is the source):
 
-## Deploy a test cluster
+```bash
+aws s3 sync assets/ "s3://${BUCKET}/${PREFIX}" \
+  --exclude "*" --include "*.yaml" --include "*.sh"
+```
 
-### Minimal (single ubuntu user, default)
+This uploads both the CloudFormation templates (`*.yaml`) and the boot scripts (`*.sh`)
+in one command. The scripts live under `assets/scripts/`, so they land at
+`s3://${BUCKET}/${PREFIX}scripts/` — which is exactly where the default
+`PostInstallScriptUrl` looks (`s3://<S3BucketName>/<S3KeyPrefix>scripts/install-enroot-pyxis.sh`).
+Re-run this sync after every change you want to test.
+
+## 3. Deploy pointing at your bucket
+
+Pass `S3BucketName` (and `S3KeyPrefix` if you changed it from the `templates/` default).
+That single override is what makes the nested stacks **and** the first-boot Enroot/Pyxis
+installer come from your copy instead of the public bucket:
 
 ```bash
 aws cloudformation create-stack \
   --stack-name pcs-test \
-  --template-url https://midaisuk-llm-dev.s3.us-east-1.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
+  --template-url "https://${BUCKET}.s3.amazonaws.com/${PREFIX}pcs-ml-cluster-deploy-all.yaml" \
   --parameters \
-    ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-2b \
-    ParameterKey=S3BucketName,ParameterValue=midaisuk-llm-dev \
+    ParameterKey=PrimarySubnetAZ,ParameterValue=${AZ} \
+    ParameterKey=S3BucketName,ParameterValue=${BUCKET} \
+    ParameterKey=S3KeyPrefix,ParameterValue=${PREFIX} \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-  --region us-east-2 --profile claude
+  --region ${REGION}
 ```
 
-### With multi-user (OpenLDAP on login node)
+> **Why this matters.** If you deploy the updated top-level template but leave
+> `S3BucketName` at its default, the nested stacks and boot scripts are still pulled from
+> the **public** bucket — so you'd be testing your top-level change against the old
+> published nested templates/scripts. Always override `S3BucketName` to your bucket when
+> testing unpublished changes.
+
+Add any parameters you're testing on top — for example multi-user:
 
 ```bash
-aws cloudformation create-stack \
-  --stack-name pcs-multiuser \
-  --template-url https://midaisuk-llm-dev.s3.us-east-1.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
-  --parameters \
-    ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-2b \
-    ParameterKey=S3BucketName,ParameterValue=midaisuk-llm-dev \
     ParameterKey=DirectoryService,ParameterValue=OpenLDAP-LoginNode \
-  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-  --region us-east-2 --profile claude
 ```
 
-### With EFA on HPC instances
+or an EFA-capable CPU queue:
 
 ```bash
-aws cloudformation create-stack \
-  --stack-name pcs-hpc \
-  --template-url https://midaisuk-llm-dev.s3.us-east-1.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
-  --parameters \
-    ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-2b \
-    ParameterKey=S3BucketName,ParameterValue=midaisuk-llm-dev \
     ParameterKey=OnDemandInstanceType,ParameterValue=hpc8a.96xlarge \
-  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-  --region us-east-2 --profile claude
+    ParameterKey=OnDemandEfaInterfaceCount,ParameterValue=2 \
 ```
 
----
+See [PARAMETERS.md](./PARAMETERS.md) for the full list.
 
-## Monitor deploy progress
+## 4. Monitor progress
 
 ```bash
-# Quick status
-aws cloudformation describe-stacks --stack-name <stack-name> --region us-east-2 --profile claude \
+aws cloudformation describe-stacks --stack-name pcs-test --region ${REGION} \
   --query 'Stacks[0].StackStatus' --output text
 
-# Nested stack progress
-aws cloudformation describe-stack-events --stack-name <stack-name> --region us-east-2 --profile claude \
+aws cloudformation describe-stack-events --stack-name pcs-test --region ${REGION} \
   --query 'StackEvents[?ResourceStatus!=`CREATE_IN_PROGRESS`].[Timestamp,LogicalResourceId,ResourceStatus]' \
   --output text | head -20
 ```
 
-Typical timeline (~25-30 min):
-1. PrerequisitesStack (VPC + FSx) — ~10 min
-2. ClusterStack (PCS cluster) — ~5 min
-3. LoginNodeGroupStack + OnDemandCNGStack (parallel) — ~5 min
-4. Node boot + cloud-init (post-install, monitoring, directory) — ~3-8 min
+Typical timeline (~25-30 min): Prerequisites (VPC + FSx) ~10 min → Cluster ~5 min →
+Login + compute node groups (parallel) ~5 min → node boot + cloud-init (post-install,
+monitoring, directory) ~3-8 min.
 
----
+## 5. Connect and verify
 
-## Connect to the login node
+Connect to the login node over SSM (no public IP or SSH key needed):
 
 ```bash
-# Find login node
-CLUSTER_ID=$(aws cloudformation describe-stacks --stack-name <stack-name> --region us-east-2 --profile claude \
+CLUSTER_ID=$(aws cloudformation describe-stacks --stack-name pcs-test --region ${REGION} \
   --query 'Stacks[0].Outputs[?OutputKey==`ClusterId`].OutputValue' --output text)
-LOGIN_ID=$(aws ec2 describe-instances --region us-east-2 --profile claude \
+LOGIN_ID=$(aws ec2 describe-instances --region ${REGION} \
   --filters "Name=tag:pcs-cluster-id,Values=$CLUSTER_ID" \
             "Name=tag:monitoring-role,Values=login" \
             "Name=instance-state-name,Values=running" \
   --query 'Reservations[0].Instances[0].InstanceId' --output text)
-
-# SSH config (one-time)
-cat >> ~/.ssh/config << EOF
-Host pcs-login
-  HostName $LOGIN_ID
-  User ubuntu
-  ProxyCommand sh -c "aws ssm start-session --profile claude --region us-east-2 --target %h --document-name AWS-StartSSHSession --parameters 'portNumber=%p'"
-  StrictHostKeyChecking no
-  UserKnownHostsFile /dev/null
-EOF
-
-# Inject SSH key (one-time)
-aws ssm send-command --instance-ids $LOGIN_ID --region us-east-2 --profile claude \
-  --document-name "AWS-RunShellScript" \
-  --parameters "commands=[\"mkdir -p /home/ubuntu/.ssh; echo '$(cat ~/.ssh/id_rsa.pub)' >> /home/ubuntu/.ssh/authorized_keys; chown -R ubuntu:ubuntu /home/ubuntu/.ssh; chmod 700 /home/ubuntu/.ssh; chmod 600 /home/ubuntu/.ssh/authorized_keys\"]"
-
-# Connect
-ssh pcs-login
+aws ssm start-session --target $LOGIN_ID --region ${REGION}
 ```
 
----
+Then `sudo su - ubuntu` and run the checks relevant to your change. A few quick ones:
 
-## Verification checks
-
-### Basic cluster health
 ```bash
-ssh pcs-login 'export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; sinfo -N; squeue'
+# Slurm sees the queues / nodes (adjust the version if you set SlurmVersion=25.05)
+export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; sinfo -N; squeue
+
+# Container runtime came from your bucket (the log shows the s3:// it fetched)
+grep s3:// /var/log/pcs-post-install.log
+
+# Monitoring containers (when MonitoringStack=Prometheus-LoginNode)
+sudo docker ps --format "table {{.Names}}\t{{.Status}}"
 ```
 
-### Monitoring
+For the full reproducible test matrix (monitoring, container runtime, CPU/GPU, NCCL,
+FSDP, multi-user, GPU health), see [tests/README.md](../tests/README.md).
+
+## 6. Iterate
+
+After editing a template or script, re-run the **sync** (step 2), then
+`update-stack` (same parameters as `create-stack`) — or delete and recreate if the change
+can't be applied in place (e.g. a subnet CIDR change):
+
 ```bash
-ssh pcs-login 'sudo docker ps --format "table {{.Names}}\t{{.Status}}"'
+aws cloudformation update-stack --stack-name pcs-test \
+  --template-url "https://${BUCKET}.s3.amazonaws.com/${PREFIX}pcs-ml-cluster-deploy-all.yaml" \
+  --parameters ParameterKey=PrimarySubnetAZ,UsePreviousValue=true \
+               ParameterKey=S3BucketName,UsePreviousValue=true \
+               ... \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM --region ${REGION}
 ```
 
-### Multi-user (when DirectoryService=OpenLDAP-LoginNode)
-```bash
-# On login node
-ssh pcs-login 'systemctl status slapd | head -3'
-ssh pcs-login 'getent passwd testuser1'  # after creating a user
-ssh pcs-login 'cat /var/log/directory-setup.log | tail -10'
+> A stack update only re-runs first-boot scripts on **newly launched** nodes; existing
+> nodes keep what they booted with. To re-test a boot-script change, let the node group
+> scale a fresh node (or replace the affected nodes).
 
-# On compute node (via srun)
-ssh pcs-login 'export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; srun -N 1 -n 1 -p cpu1 bash -c "getent passwd testuser1"'
+## 7. Cleanup
+
+```bash
+aws cloudformation delete-stack --stack-name pcs-test --region ${REGION}
 ```
 
-### LDAP admin password
-```bash
-# From SSM (preferred)
-aws ssm get-parameter --name "/pcs/${CLUSTER_ID}/ldap/admin-password" \
-  --with-decryption --query 'Parameter.Value' --output text --region us-east-2 --profile claude
-
-# Fallback (if SSM put failed at boot)
-ssh pcs-login 'sudo cat /home/ldap-db/.admin-password'
-```
-
----
-
-## Cleanup
+Nested stacks (and FSx — back up data first) are deleted automatically. If a CNG stack
+hits `DELETE_FAILED` (a PCS timing dependency), delete the PCS compute node groups first,
+then retry:
 
 ```bash
-aws cloudformation delete-stack --stack-name <stack-name> --region us-east-2 --profile claude
-```
-
-Nested stacks are deleted automatically. If DELETE_FAILED on CNG stacks
-(PCS timing dependency), delete PCS CNGs first:
-```bash
-CLUSTER_ID=<id>
-for cng in $(aws pcs list-compute-node-groups --cluster-identifier $CLUSTER_ID --region us-east-2 --profile claude --query 'computeNodeGroups[].id' --output text); do
-  aws pcs delete-compute-node-group --cluster-identifier $CLUSTER_ID --compute-node-group-identifier $cng --region us-east-2 --profile claude
+for cng in $(aws pcs list-compute-node-groups --cluster-identifier $CLUSTER_ID --region ${REGION} \
+  --query 'computeNodeGroups[].id' --output text); do
+  aws pcs delete-compute-node-group --cluster-identifier $CLUSTER_ID \
+    --compute-node-group-identifier $cng --region ${REGION}
 done
 sleep 60
-aws cloudformation delete-stack --stack-name <stack-name> --region us-east-2 --profile claude
+aws cloudformation delete-stack --stack-name pcs-test --region ${REGION}
 ```
 
----
+## After the change is published
 
-## Production deploy (post-merge)
-
-After PR merge, maintainer syncs to prod bucket:
-```bash
-aws s3 sync assets/ s3://awsome-distributed-ai/templates/
-```
-
-Users deploy from prod bucket (no S3BucketName override needed — it's the default):
-```bash
-aws cloudformation create-stack \
-  --stack-name pcs-ml-cluster \
-  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
-  --parameters ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-1a \
-  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
-```
+Once the change is merged and the maintainer has synced `assets/` to the public bucket
+(`awsome-distributed-ai`), no override is needed — the defaults already point there, and
+the [README Quick Start](../README.md#3-quick-start) works as written.

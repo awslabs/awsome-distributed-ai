@@ -117,16 +117,16 @@ aws cloudformation create-stack \
   --template-url https://midaisuk-llm-dev.s3.amazonaws.com/templates/pcs-ready-dlami-with-enroot-pyxis.yaml \
   --parameters ParameterKey=SlurmVersion,ParameterValue=${SLURM_VERSION} \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-  --profile claude --region us-west-2
+  --region us-west-2
 
 aws cloudformation wait stack-create-complete \
   --stack-name pcs-dlami-${SLURM_VERSION/./} \
-  --profile claude --region us-west-2
+  --region us-west-2
 
 AMI_ID=$(aws cloudformation describe-stacks \
   --stack-name pcs-dlami-${SLURM_VERSION/./} \
   --query 'Stacks[0].Outputs[?OutputKey==`DLAMIforPCSAmiId`].OutputValue' \
-  --output text --profile claude --region us-west-2)
+  --output text --region us-west-2)
 echo "$AMI_ID"   # ami-0xxxxxxxxxxxxxxxx
 ```
 
@@ -142,7 +142,7 @@ aws cloudformation create-stack \
     ParameterKey=AmiId,ParameterValue=${AMI_ID} \
     ParameterKey=PostInstallScriptUrl,ParameterValue=' ' \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-  --profile claude --region us-west-2
+  --region us-west-2
 ```
 
 ### Step 3 — verify the bake landed and a container job runs
@@ -171,8 +171,8 @@ version` in `journalctl -u slurmd`).
 ### Step 4 — clean up
 
 ```bash
-aws cloudformation delete-stack --stack-name pcs-amitest-${SLURM_VERSION/./} --profile claude --region us-west-2
-aws cloudformation delete-stack --stack-name pcs-dlami-${SLURM_VERSION/./}   --profile claude --region us-west-2
+aws cloudformation delete-stack --stack-name pcs-amitest-${SLURM_VERSION/./} --region us-west-2
+aws cloudformation delete-stack --stack-name pcs-dlami-${SLURM_VERSION/./} --region us-west-2
 ```
 
 The DLAMI stack's AMI itself is **not** automatically deregistered when the stack is
