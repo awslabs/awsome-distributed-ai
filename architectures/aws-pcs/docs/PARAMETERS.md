@@ -62,7 +62,7 @@ runtime options), see the [README](../README.md#4-configuration).
 | `OnDemandCngName` | `cpu1` | CPU node-group name |
 | `OnDemandQueueName` | `cpu1` | CPU Slurm queue name |
 | `OnDemandEnableEfa` | `false` | Enable EFA on the CPU CNG (HPC/MPI workloads on hpc6a/hpc7a/hpc6id/hpc8a, c7i.metal, etc.). Switches the CNG's LaunchTemplate to a `NetworkInterfaces` block with `InterfaceType=efa` and wires in a cluster placement group. No effect on the GPU CNG. See [README §EFA on CPU HPC instances](../README.md#efa-on-cpu-hpc-instances-ondemandenableefa) |
-| `OnDemandEfaInterfaceCount` | `0` (auto) | Number of EFA interfaces. **`0` (default) auto-derives from `OnDemandInstanceType`**: 2 for hpc8a/hpc7a/hpc6id, 1 otherwise (hpc6a/c7i.metal). Override with `1` or `2` to pin explicitly. Ignored when `OnDemandEnableEfa=false` |
+| `OnDemandEfaInterfaceCount` | `0` (auto) | Number of EFA interfaces, used only when `OnDemandEnableEfa=true`. **`0` (default) auto-derives from `OnDemandInstanceType`** — `hpc8a.96xlarge`=2, `hpc7a.{96,48,24,12}xlarge`=2, `hpc6id.32xlarge`=2, `hpc6a.48xlarge`=1, `c7i.metal-*`=1, any other type=1. **Only enable EFA on an EFA-capable type** (hpc6/hpc7/hpc8 family + select metal); on a non-EFA type (e.g. `c6i.4xlarge`) the launch fails regardless. Override with `1`/`2` only to pin a value that differs from the auto map (e.g. a new HPC type) |
 | `OnDemandPlacementGroupName` | *(empty)* | Existing cluster placement group name to launch nodes into. Empty + `OnDemandEnableEfa=true` auto-creates a per-CNG cluster placement group; supplying a name reuses an existing one (e.g. shared across CPU + GPU CNGs for heterogeneous tightly-coupled jobs). Ignored when `OnDemandEnableEfa=false` |
 
 ## 5. GPU Compute Node Group — P5/P6 (Optional)
