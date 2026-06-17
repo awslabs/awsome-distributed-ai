@@ -6,7 +6,7 @@ DATA_DIR="${RAY_DATA_HOME}/data/gsm8k"
 echo "Creating data directory: ${DATA_DIR}"
 
 # Get the head pod name
-HEAD_POD=$(kubectl get pods -l ray.io/node-type=head -o jsonpath='{.items[0].metadata.name}')
+HEAD_POD=$(kubectl get pods -n "${RAY_NAMESPACE}" -l ray.io/node-type=head -o jsonpath='{.items[0].metadata.name}')
 
 if [ -z "$HEAD_POD" ]; then
     echo "Error: Could not find Ray head pod. Is your cluster running?"
@@ -45,10 +45,20 @@ except Exception as e:
 print("Adding VERL-required columns (data_source and reward_model)...")
 
 def add_verl_columns(example):
-    """Add required columns for VERL reward computation"""
+    """Add required columns for VERL reward computation.
+
+    IMPORTANT: verl's RLHFDataset._build_messages() expects the prompt_key
+    column to contain a list of chat message dicts, NOT a raw string.
+    e.g. [{"role": "user", "content": "..."}]
+
+    If the column contains a raw string, apply_chat_template will produce
+    only the generation prompt tokens (e.g. '<|im_start|>assistant\\n' = 3 tokens)
+    and the model will never see the actual question, resulting in 0.0 reward.
+    """
     ground_truth = extract_answer(example['answer'])
     return {
-        **example,
+        'question': [{'role': 'user', 'content': example['question']}],
+        'answer': example['answer'],
         'data_source': 'openai/gsm8k',
         'reward_model': {'ground_truth': ground_truth}
     }
@@ -82,17 +92,17 @@ EOF
 
 # Copy script to pod
 echo "Copying download script to pod..."
-kubectl cp /tmp/download_gsm8k.py ${HEAD_POD}:/tmp/download_gsm8k.py
+kubectl cp /tmp/download_gsm8k.py "${RAY_NAMESPACE}/${HEAD_POD}:/tmp/download_gsm8k.py"
 
 # Execute the script in the pod
 echo "Downloading GSM8K data..."
-kubectl exec ${HEAD_POD} -- bash -c "export DATA_DIR=${DATA_DIR}"
-kubectl exec ${HEAD_POD} -- python3 /tmp/download_gsm8k.py
+kubectl exec -n "${RAY_NAMESPACE}" ${HEAD_POD} -- bash -c "export DATA_DIR=${DATA_DIR}"
+kubectl exec -n "${RAY_NAMESPACE}" ${HEAD_POD} -- python3 /tmp/download_gsm8k.py
 
 
 # Verify the files exist
 echo "Verifying downloaded files..."
-kubectl exec ${HEAD_POD} -- ls -lh ${DATA_DIR}/
+kubectl exec -n "${RAY_NAMESPACE}" ${HEAD_POD} -- ls -lh ${DATA_DIR}/
 
 echo "GSM8K data download complete!"
 echo "Data location: ${DATA_DIR}"

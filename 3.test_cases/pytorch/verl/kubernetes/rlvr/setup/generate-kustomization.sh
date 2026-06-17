@@ -86,9 +86,13 @@ patches:
                 value: ${HF_TOKEN}
               resources:
                 limits:
+                  cpu: ${WORKER_CPU}
+                  memory: ${WORKER_MEMORY}
                   nvidia.com/gpu: ${NUM_GPU_PER_NODE}
                   vpc.amazonaws.com/efa: ${NUM_EFA_PER_NODE}
                 requests:
+                  cpu: ${WORKER_CPU}
+                  memory: ${WORKER_MEMORY}
                   nvidia.com/gpu: ${NUM_GPU_PER_NODE}
                   vpc.amazonaws.com/efa: ${NUM_EFA_PER_NODE}
               volumeMounts:
