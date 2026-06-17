@@ -22,6 +22,11 @@ Run this **complete set** before merging template or script changes.
 | 11-12 | **Multi-user** | OpenLDAP directory + Slurm managed accounting | [`multi-user-test.md`](./multi-user-test.md) | Directory / accounting changes |
 | 13 | **GPU health** | GPU Cluster Health Check suite (DCGM, EFA, NVLink, NCCL thresholds) | [`gpu-healthcheck-test.md`](./gpu-healthcheck-test.md) | GPU CNG deploys |
 
+> **GPU health check verified on B200** (ap-south-1 p6-b200): lightweight suite
+> **4/4 PASS** — nvidia-smi (8 GPUs, no Xid/ECC), DCGM L2 diagnostics, EFA
+> enumeration (8 PCI / 10 RDMA devices), topology (8 GPUs, connectivity validated;
+> a B200-specific "unsupported P2P path" warning is non-blocking).
+
 ---
 
 ## Quick-start: single-cluster shortcut
