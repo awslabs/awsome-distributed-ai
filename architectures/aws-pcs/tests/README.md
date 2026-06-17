@@ -61,6 +61,36 @@ MonitoringStack=Prometheus-LoginNode
 
 ---
 
+## Region coverage
+
+The templates fetch nested stacks + boot scripts from a single S3 bucket
+(`S3BucketName`) and resolve the PCS-Ready DLAMI from SSM per region. Validated
+deploys (deploy-all: prereqs + cluster + login + CPU, monitoring on) across:
+
+| Region | Deploy | Login + monitoring | FSx Lustre `/fsx` + OpenZFS `/home` | Notes |
+|---|---|---|---|---|
+| **us-east-1** | ✅ CREATE_COMPLETE | ✅ 6 containers | ✅ 1.2T Lustre + OpenZFS NFS | template bucket's home region |
+| **us-east-2** | ✅ CREATE_COMPLETE | ✅ 6 containers | ✅ | primary test region; also EFA hpc6a/hpc8a + multi-user/accounting |
+| **us-west-2** | ✅ CREATE_COMPLETE | ✅ 6 containers | ✅ | |
+| **ap-northeast-1** | ✅ CREATE_COMPLETE | ✅ | ✅ | Tokyo |
+| **ap-south-1** | ✅ CREATE_COMPLETE | ✅ 6 containers | ✅ | Mumbai; p6-b200 ×4 GPU (8 GPU/node, 8 EFA NICs), B200 driver 595.71.05 |
+
+Cross-region note: nested-stack `TemplateURL` and the in-instance
+`aws s3 cp` of boot scripts both work against an S3 bucket in a **different**
+region (S3 global namespace; no `--region` needed) — verified ap-south-1 →
+us-east-1 bucket. The PCS-Ready DLAMI SSM parameter
+(`/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id`) resolves in
+every region tested. `OpenZFSDeploymentType=SINGLE_AZ_HA_2` and
+`LustreDeploymentType=PERSISTENT_2` (the defaults) were available in all five.
+
+> **Pre-merge caveat:** `PostInstallScriptUrl` defaults to the `awslabs/main`
+> GitHub-raw URL, which 404s until PR #1120 merges — so pre-merge test deploys
+> must override it (point at the test bucket / fork) or compute nodes boot
+> without Enroot/Pyxis (`/var/log/pcs-post-install.log` shows exit 127). The
+> cluster still reaches CREATE_COMPLETE; only the container runtime is missing.
+
+---
+
 ## Canonical assets reused (not duplicated)
 
 | Workload | Source in this repo | PCS-specific delta |
