@@ -5,11 +5,10 @@ FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu22.04
 
 ################################ NCCL ########################################
 
-ARG GDRCOPY_VERSION=v2.5.1
-ARG EFA_INSTALLER_VERSION=1.43.2
-ARG AWS_OFI_NCCL_VERSION=v1.16.3
-ARG NCCL_VERSION=v2.27.7-1
-ARG NCCL_TESTS_VERSION=v2.16.9
+ARG GDRCOPY_VERSION=v2.5.2
+ARG EFA_INSTALLER_VERSION=1.48.0
+ARG NCCL_VERSION=v2.30.4-1
+ARG NCCL_TESTS_VERSION=v2.18.3
 
 RUN apt-get update -y && apt-get upgrade -y
 RUN apt-get remove -y --allow-change-held-packages \
@@ -75,7 +74,6 @@ RUN git clone -b ${GDRCOPY_VERSION} https://github.com/NVIDIA/gdrcopy.git /tmp/g
 
 ENV LD_LIBRARY_PATH=/opt/gdrcopy/lib:$LD_LIBRARY_PATH
 ENV LIBRARY_PATH=/opt/gdrcopy/lib:$LIBRARY_PATH
-ENV CPATH=/opt/gdrcopy/include:$CPATH
 ENV PATH=/opt/gdrcopy/bin:$PATH
 
 #################################################
@@ -120,72 +118,50 @@ ENV PMIX_MCA_gds=hash
 ## Set LD_PRELOAD for NCCL library
 ENV LD_PRELOAD=/opt/nccl/build/lib/libnccl.so
 
+################################ venv ################################
+
+RUN python3 -m venv /opt/deepep \
+    && /opt/deepep/bin/python -m pip install --no-cache-dir --upgrade pip setuptools wheel
+
+ENV PATH=/opt/deepep/bin:$PATH
+ENV VIRTUAL_ENV=/opt/deepep
+
 ################################ NVSHMEM ########################################
 
-ENV NVSHMEM_DIR=/opt/nvshmem
-ENV NVSHMEM_HOME=/opt/nvshmem
+ARG NVSHMEM_VERSION=v3.7.0-0
 
-# 3.2.5-1: wget https://developer.nvidia.com/downloads/assets/secure/nvshmem/nvshmem_src_3.2.5-1.txz && tar -xvf nvshmem_src_3.2.5-1.txz
-# 3.3.9:   wget https://developer.download.nvidia.com/compute/redist/nvshmem/3.3.9/source/nvshmem_src_cuda12-all-all-3.3.9.tar.gz && tar -xvf nvshmem_src_cuda12-all-all-3.3.9.tar.gz
-# 3.4.5-0: git clone https://github.com/NVIDIA/nvshmem.git && cd ./nvshmem && git checkout df2814155acfba6227534dd81a8bf338da9e55f2
-COPY ./nvshmem /nvshmem_src
+ENV NVSHMEM_SRC=/opt/nvshmem_src
+RUN git clone -b ${NVSHMEM_VERSION} https://github.com/NVIDIA/nvshmem.git ${NVSHMEM_SRC}
 
-RUN cd /nvshmem_src \
-    && mkdir -p build \
-    && cd build \ 
-    && cmake \
-    -DNVSHMEM_PREFIX=/opt/nvshmem \
-    -DCMAKE_INSTALL_PREFIX=/opt/nvshmem \
-    \
-    -DCUDA_HOME=/usr/local/cuda \
-    -DCMAKE_CUDA_ARCHITECTURES="90a;100" \
-    \
-    -DNVSHMEM_USE_GDRCOPY=1 \
-    -DGDRCOPY_HOME=/opt/gdrcopy \
-    \
-    -DNVSHMEM_USE_NCCL=1 \
-    -DNCCL_HOME=/opt/nccl/build \
-    -DNCCL_INCLUDE=/opt/nccl/build/include \
-    \
-    -DNVSHMEM_LIBFABRIC_SUPPORT=1 \
-    -DLIBFABRIC_HOME=/opt/amazon/efa \
-    \
-    -DNVSHMEM_MPI_SUPPORT=1 \
-    -DMPI_HOME=/opt/amazon/openmpi \
-    \
-    -DNVSHMEM_PMIX_SUPPORT=1 \
-    -DPMIX_HOME=/opt/amazon/pmix \
-    -DNVSHMEM_DEFAULT_PMIX=1 \
-    \
-    -DNVSHMEM_BUILD_TESTS=1 \
-    -DNVSHMEM_BUILD_EXAMPLES=1 \
-    -DNVSHMEM_BUILD_HYDRA_LAUNCHER=1 \
-    -DNVSHMEM_BUILD_TXZ_PACKAGE=1 \
-    \
-    -DNVSHMEM_IBRC_SUPPORT=1 \
-    -DNVSHMEM_IBGDA_SUPPORT=1 \
-    \
-    -DNVSHMEM_TIMEOUT_DEVICE_POLLING=0 \
-    .. \
-    && make -j$(nproc) \
-    && make install
+COPY ./setup_deepep_efa.sh /tmp/setup_deepep_efa.sh
 
-ENV PATH=/opt/nvshmem/bin:$PATH
-ENV LD_LIBRARY_PATH=/opt/nvshmem/lib:$LD_LIBRARY_PATH
-# ENV PATH=/opt/nvshmem/bin:$PATH LD_LIBRARY_PATH=/opt/amazon/pmix/lib:/opt/nvshmem/lib:$LD_LIBRARY_PATH NVSHMEM_REMOTE_TRANSPORT=libfabric NVSHMEM_LIBFABRIC_PROVIDER=efa
+ENV NVSHMEM_DIR=${NVSHMEM_SRC}/install
+ENV NVSHMEM_HOME=${NVSHMEM_DIR}
+ENV PATH=${NVSHMEM_DIR}/bin:$PATH
+ENV LD_LIBRARY_PATH=${NVSHMEM_DIR}/lib:$LD_LIBRARY_PATH
+
+ENV NVSHMEM_REMOTE_TRANSPORT=libfabric 
+ENV NVSHMEM_LIBFABRIC_PROVIDER=efa
 
 ################################ PyTorch ########################################
 
-RUN pip install torch --index-url https://download.pytorch.org/whl/cu128
-RUN pip install ninja numpy cmake pytest
+RUN /opt/deepep/bin/pip install torch --index-url https://download.pytorch.org/whl/cu128 \
+    && /opt/deepep/bin/pip uninstall -y nvidia-nvshmem-cu12 \
+    && /opt/deepep/bin/pip install ninja numpy cmake pytest
 
 ################################ DeepEP ########################################
 
-ARG DEEPEP_COMMIT=e02e4d2e1fbfdf09e02e870b6acc5831cbd11e39
+ARG DEEPEP_COMMIT=567632d
 
 RUN git clone https://github.com/deepseek-ai/DeepEP.git /DeepEP \
     && cd /DeepEP \
-    && git checkout ${DEEPEP_COMMIT} \
-    && TORCH_CUDA_ARCH_LIST="9.0a+PTX;10.0" pip install .
+    && git checkout ${DEEPEP_COMMIT}
 
-RUN mkdir -p /tmp/coredump
+RUN /tmp/setup_deepep_efa.sh \
+    --cuda-home /usr/local/cuda \
+    --libfabric-home /opt/amazon/efa \
+    --gdrcopy-home /opt/gdrcopy \
+    --gpu-arch 90 \
+    --venv /opt/deepep \
+    --deepep-src /DeepEP \
+    --nvshmem-src ${NVSHMEM_SRC}
