@@ -81,6 +81,37 @@ deploys (deploy-all: prereqs + cluster + login + CPU, monitoring on) across:
 | **ap-northeast-1** | ✅ CREATE_COMPLETE | ✅ | ✅ | Tokyo |
 | **ap-south-1** | ✅ CREATE_COMPLETE | ✅ 6 containers | ✅ | Mumbai; p6-b200 ×4 GPU (8 GPU/node, 8 EFA NICs), B200 driver 595.71.05 |
 
+### All PCS launch regions
+
+AWS PCS is available in the 18 regions below (per
+`/aws/service/global-infrastructure/services/pcs/regions`). The 5 marked
+**tested** above were validated end-to-end; the rest are expected to work (the
+templates resolve the PCS-Ready DLAMI from SSM and FSx deployment types per
+region) but have not been run. Confirm `LustreDeploymentType` /
+`OpenZFSDeploymentType` availability in a new region before relying on the
+defaults (`PERSISTENT_2` / `SINGLE_AZ_HA_2`).
+
+| Region | Status |
+|---|---|
+| us-east-1 (N. Virginia) | ✅ tested |
+| us-east-2 (Ohio) | ✅ tested |
+| us-west-2 (Oregon) | ✅ tested |
+| ap-northeast-1 (Tokyo) | ✅ tested |
+| ap-south-1 (Mumbai) | ✅ tested (GPU/B200) |
+| ap-northeast-3 (Osaka) | ⬜ not run |
+| ap-southeast-1 (Singapore) | ⬜ not run |
+| ap-southeast-2 (Sydney) | ⬜ not run |
+| eu-central-1 (Frankfurt) | ⬜ not run |
+| eu-north-1 (Stockholm) | ⬜ not run |
+| eu-south-1 (Milan) | ⬜ not run |
+| eu-south-2 (Spain) | ⬜ not run |
+| eu-west-1 (Ireland) | ⬜ not run |
+| eu-west-2 (London) | ⬜ not run |
+| eu-west-3 (Paris) | ⬜ not run |
+| sa-east-1 (São Paulo) | ⬜ not run |
+| us-gov-east-1 (GovCloud East) | ⬜ not run |
+| us-gov-west-1 (GovCloud West) | ⬜ not run |
+
 ### p6-b200 ×4 NCCL all_reduce (ap-south-1, 32 GPU)
 
 NCCL `all_reduce_perf` over EFA (Pyxis container `public.ecr.aws/hpc-cloud/nccl-tests`,
