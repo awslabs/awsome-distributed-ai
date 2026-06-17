@@ -16,7 +16,7 @@
 #   - shutdownAfterJobFinishes tears the RayCluster down when the job completes.
 #
 # Prerequisites:
-#   - KubeRay operator installed (infrastructure/addons, enable_kuberay=true)
+#   - KubeRay operator installed (helm install kuberay-operator, chart 1.6.0)
 #   - dataset/model staging job completed
 #     (DreamZero-DROID warm-start + umt5-xxl tokenizer + LIBERO dataset on FSx)
 #   - FSx PVC "fsx-claim" bound, >=250GB free
