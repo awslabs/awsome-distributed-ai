@@ -58,3 +58,22 @@ Lightweight suite (checks 0-3) on **p6-b200** (ap-south-1, via `srun -p gpu`):
 EFA device count matching the instance profile and the multi-node NCCL bandwidth
 threshold are also covered by [compute-test.md](./compute-test.md) (NCCL
 all_reduce hit 377 GB/s on 4× p6-b200).
+
+### Intensive suite (checks 4-6) on p6-b200 ×2 (ap-south-1)
+
+The intensive suite (`--suite intensive`) needs **exclusive nodes for 1-3 hr** (DCGM L4
+alone is 45 min – 2.25 hr/node), so it's a maintenance-window / pre-long-run check, not a
+per-deploy gate.
+
+- **Check 6 — EFA loopback: PASS** on 2× p6-b200 (8 EFA domains tested per node, both nodes).
+- **Check 4 — DCGM L4:** budget the full 45 min+/node; it disables MIG, stops concurrent
+  GPU telemetry (`dcgm-exporter`), and runs the EUD + pulse-power stress, so it cannot share
+  a node with other GPU work.
+
+> **⚠️ Validate multi-node NCCL via [compute-test.md Test 6](./compute-test.md#test-6-nccl-multi-node-efa),
+> not intensive check 5.** The suite's `checks/5-nccl-allreduce.sh` defaults to an ECR image
+> URI that enroot rejects (needs the `#` registry separator,
+> `docker://public.ecr.aws#hpc-cloud/nccl-tests:<tag>`), and invokes `all_reduce_perf` by
+> bare name when that image keeps the binaries under `/opt/nccl-tests/build/` (not on
+> `PATH`). The canonical `nccl-tests-container.sbatch` in Test 6 handles both correctly and
+> ran to 377 GB/s on this cluster.

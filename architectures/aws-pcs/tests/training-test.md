@@ -77,3 +77,53 @@ cd slurm && sbatch --nodes=2 --partition=gpu-p6b300 \
 > subnet and pinning one breaks the cross-node NCCL bootstrap ring.
 
 ---
+
+## Test 7b: Megatron-LM GPT-3 (tensor + pipeline parallel)
+
+A second distributed-training path that exercises 3D parallelism (TP/PP/DP) rather than
+FSDP, using the repo's canonical Megatron-LM case
+[`3.test_cases/megatron/megatron-lm`](../../../3.test_cases/megatron/megatron-lm). Unlike
+the FSDP case it does **not** stream from HuggingFace — data is tokenized once to local
+`.bin`/`.idx` on `/fsx`, so it has no HF rate-limit exposure. Two PCS-specific deltas:
+
+1. **Build + import the image on the login node** (300 GiB root; the overlay can't live on
+   Lustre), writing the `.sqsh` to `/fsx`:
+
+   ```bash
+   cd /fsx/awsome-distributed-ai/3.test_cases/megatron/megatron-lm
+   sudo docker build -t aws-megatron-lm -f 0.distributed-training.Dockerfile .
+   enroot import -o /fsx/aws-megatron-lm.sqsh dockerd://aws-megatron-lm:latest
+   ```
+
+2. **Preprocess once, then train**, passing `IMAGE`/`DATA_PATH`/`FSX_MOUNT` as env (the
+   sbatch scripts read them). Preprocessing is CPU work but still needs a Pyxis-capable
+   node and the login `srun` client:
+
+   ```bash
+   cd slurm/gpt3
+   IMAGE=/fsx/aws-megatron-lm.sqsh DATA_PATH=/fsx FSX_MOUNT=/fsx:/fsx \
+     sbatch -p gpu 1.data-preprocessing.sbatch          # → /fsx/my-gpt2_text_document.{bin,idx}
+   # the training sbatch expects data under ${DATA_PATH}/gpt2/ — symlink it there
+   mkdir -p /fsx/gpt2 && ln -sf /fsx/my-gpt2_text_document.* /fsx/gpt2/ \
+     && ln -sf /fsx/gpt2-vocab.json /fsx/gpt2-merges.txt /fsx/gpt2/
+   IMAGE=/fsx/aws-megatron-lm.sqsh DATA_PATH=/fsx FSX_MOUNT=/fsx:/fsx \
+     sbatch --nodes=4 -p gpu 2.distributed-training.sbatch
+   ```
+
+   For a short smoke run, add `--exit-interval 20` and `--log-throughput` to the megatron
+   args in `2.distributed-training.sbatch`. At `NODES≤4` the script picks `TP=4, PP=2,
+   GBS=288` automatically.
+
+**Expected:** NCCL over EFA (`NET/OFI Selected provider is efa, fabric is efa-direct (found
+8 nics)` on p6-b200); `0` nan/skipped after warmup; `lm loss` begins descending once the
+LR warmup kicks in (loss-scale auto-tuning skips the first ~16 steps with `lr=0` by design).
+
+### Verified — p6-b200 ×4 (32 GPU, ap-south-1)
+
+GPT-3 36-layer / hidden 4096 / 32 heads, seq 2048, TP=4 PP=2 (DP=4), GBS=288, fp16 +
+activation recompute. Steady **~134 TFLOP/s/GPU** (iters 3–20, ~6.4 s/iter); `lm loss`
+**10.91 → 10.46** over iters 17–20 as the cosine LR warmup ramps (grad norm 57→45); 0 nan,
+0 skipped post-warmup. This is a general-purpose (un-tuned) container — not a peak MFU
+number — but confirms TP+PP+DP 3D parallelism trains correctly over EFA on B200.
+
+---
