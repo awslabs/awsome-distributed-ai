@@ -117,11 +117,15 @@ us-east-1 bucket. The PCS-Ready DLAMI SSM parameter
 every region tested. `OpenZFSDeploymentType=SINGLE_AZ_HA_2` and
 `LustreDeploymentType=PERSISTENT_2` (the defaults) were available in all five.
 
-> **Pre-merge caveat:** `PostInstallScriptUrl` defaults to the `awslabs/main`
-> GitHub-raw URL, which 404s until PR #1120 merges — so pre-merge test deploys
-> must override it (point at the test bucket / fork) or compute nodes boot
-> without Enroot/Pyxis (`/var/log/pcs-post-install.log` shows exit 127). The
-> cluster still reaches CREATE_COMPLETE; only the container runtime is missing.
+> **Testing unpublished templates:** an empty `PostInstallScriptUrl` (the default)
+> resolves to `s3://<S3BucketName>/<S3KeyPrefix>scripts/install-enroot-pyxis.sh` — i.e.
+> the boot script comes from the **same bucket as the nested templates**. So when
+> testing changes that aren't in the public bucket yet, point `S3BucketName` at your own
+> bucket **and** sync the scripts there (the `aws s3 sync assets/ …` step covers both);
+> otherwise the first-boot fetch fails and nodes come up without Enroot/Pyxis
+> (`/var/log/pcs-post-install.log` shows the failed `aws s3 cp`). The cluster still
+> reaches CREATE_COMPLETE; only the container runtime is missing. See
+> [docs/DEPLOY-TESTING.md](../docs/DEPLOY-TESTING.md).
 
 ---
 
