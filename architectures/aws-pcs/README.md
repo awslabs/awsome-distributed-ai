@@ -16,13 +16,6 @@ This repository provides reference architectures and deployment templates for se
 - **Access control built in**: ready-to-deploy least-privilege IAM policy stacks for cluster admins and users, and login-node SSH / Grafana access gated to a trusted CIDR. See [§8.3 IAM Permissions](#83-iam-permissions).
 - **Modular components**: compose individual stacks (network/storage prerequisites, cluster scheduler, per-family compute node groups) instead of the all-in-one nested stack when you want to reuse infrastructure across clusters or iterate on one piece at a time.
 
-> Built on the AWS-managed **PCS-Ready DLAMI** (NVIDIA driver, CUDA, PCS agent, and
-> Slurm 25.05/25.11 pre-installed), so no custom AMI build is required by default —
-> the cluster comes up without an Image Builder step. For frequent scaling, you can
-> pre-bake Enroot/Pyxis into a custom DLAMI with the standalone
-> [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#84-pre-baking-enrootpyxis-into-a-custom-ami)
-> template and pass the result as `AmiId`.
-
 ## 2. Architecture
 
 ![AWS PCS diagram](./images/ml-pcs-architecture.png)
@@ -39,6 +32,12 @@ A default deployment (`pcs-ml-cluster-deploy-all.yaml`) provisions:
 Optional add-ons (off by default):
 - **Multi-user directory**: OpenLDAP on the login node + SSSD on every compute node (`DirectoryService`)
 - **IAM policy stacks**: least-privilege cluster-admin / cluster-user policies you can deploy separately
+
+Every node runs on the AWS-managed **PCS-Ready DLAMI** (NVIDIA driver, CUDA, PCS agent,
+and Slurm 25.05/25.11 pre-installed), so **no custom AMI build is required** — the cluster
+comes up without an Image Builder step, and Enroot/Pyxis is layered on at first boot.
+See [AMI and container runtime](#ami-and-container-runtime) for pinning the AMI and the
+optional pre-bake path for faster scaling.
 
 ---
 
@@ -306,6 +305,10 @@ In `nccl-all_reduce_perf_<jobid>.out`, EFA is active when you see
 expected bandwidth numbers per instance family and tuning notes, see
 [tests/compute-test.md](./tests/compute-test.md#test-6-nccl-multi-node-efa).
 
+Before a long run, it's also worth checking GPU/EFA/NVLink health with the
+[GPU Cluster Health Check suite](./tests/gpu-healthcheck-test.md) (nvidia-smi, DCGM
+diagnostics, EFA enumeration, NCCL thresholds).
+
 For a full training example, see the [PyTorch FSDP test case](../../3.test_cases/pytorch/FSDP);
 the full validation matrix is in [tests/README.md](./tests/README.md).
 
@@ -333,14 +336,10 @@ and a screenshot.
 > for Prometheus + Amazon Managed Grafana instead of the self-hosted stack on the login
 > node, see [`4.validation_and_observability/4.prometheus-grafana`](../../4.validation_and_observability/4.prometheus-grafana).
 
-**Monitoring-related parameters:**
-- `MonitoringStack` (default `Prometheus-LoginNode`; `none` disables monitoring)
-- `MonitoringVersion` — [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) git ref (release tag, branch, or `latest`; default `v2.9.1`). Pinned to a tag so upstream changes can't break deployments unexpectedly.
-- `MonitoringRepo` — `owner/repo` to fetch from (default `aws-samples/aws-parallelcluster-monitoring`). Point at a fork + a branch in `MonitoringVersion` to test unreleased changes.
-- `DcgmExporterImage` — dcgm-exporter image used on GPU nodes (default covers Hopper/B200/B300; see the DCGM note below).
-
-> Node type is identified by the `monitoring-role` tag (`login`/`compute`), not the EC2
-> `Name` tag — the `Name` tag defaults to `PCS-<cngname>` and is free for you to retag.
+`MonitoringStack` toggles the stack (`Prometheus-LoginNode` / `none`). The defaults work
+out of the box; the source repo/version (`MonitoringRepo` / `MonitoringVersion`) and the
+DCGM exporter image (`DcgmExporterImage`) are pinned and rarely need changing — see
+[PARAMETERS.md](./docs/PARAMETERS.md) if you do.
 
 #### Accessing the Grafana dashboards
 
@@ -434,6 +433,10 @@ NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 > fixes: node-local `/opt` install + the Docker-29.x DCGM tag). Override `DcgmExporterImage`
 > only to pin a different build; details:
 > [OPERATIONS.md §3.1](./docs/OPERATIONS.md#31-dcgmexporterimage-the-default-and-when-to-change-it).
+
+> **Note — node-type tagging.** The monitoring stack identifies login vs compute nodes by
+> the `monitoring-role` tag (`login`/`compute`), **not** the EC2 `Name` tag — so the `Name`
+> tag (default `PCS-<cngname>`) is free for you to retag without breaking dashboards.
 
 ---
 
