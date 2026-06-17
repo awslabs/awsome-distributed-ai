@@ -507,8 +507,9 @@ AMI_ID=$(aws cloudformation describe-stacks \
 echo "$AMI_ID"   # ami-0xxxxxxxxxxxxxxxx
 ```
 
-**Step 3: Pass it to the cluster** as `AmiId` and clear `PostInstallScriptUrl` for
-the cleanest boot:
+**Step 3: Pass it to the cluster** as `AmiId`. Optionally skip the boot-time
+Enroot/Pyxis install (it's already baked in) by setting `PostInstallScriptUrl`
+to a single space:
 
 ```bash
 aws cloudformation create-stack \
@@ -517,13 +518,14 @@ aws cloudformation create-stack \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-1a \
     ParameterKey=AmiId,ParameterValue=$AMI_ID \
-    ParameterKey=PostInstallScriptUrl,ParameterValue= \
+    ParameterKey=PostInstallScriptUrl,ParameterValue=' ' \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
 
-The post-install hook is idempotent, so leaving `PostInstallScriptUrl` at its default
-also works — the installer detects Enroot/Pyxis is already present and is a fast
-no-op. Setting it empty just shaves a few seconds off boot.
+Leaving `PostInstallScriptUrl` at its default (empty → auto-install Enroot/Pyxis
+from the templates bucket) also works on a pre-baked AMI: the installer detects
+Enroot/Pyxis is already present and is a fast idempotent no-op. Passing a single
+space skips the download+check entirely, shaving a few seconds off boot.
 
 **Optional features of `pcs-ready-dlami-with-enroot-pyxis.yaml`** (defaults are off):
 - `BuildSchedule=Weekly`/`Monthly` for scheduled rebuilds against a moving base AMI

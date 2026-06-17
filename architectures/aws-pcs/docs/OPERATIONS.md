@@ -45,9 +45,11 @@ as a separate stack, then pass its output to the cluster.
   the default `PostInstallScriptUrl` delivers.
 - **Pre-baked AMI** — build the AMI separately (see the README's
   *Pre-baking Enroot/Pyxis into a custom AMI* section), then pass its `ami-xxx` as
-  the cluster's `AmiId`. Use `PostInstallScriptUrl=""` for the cleanest boot (the
-  installer is idempotent so leaving the default is a fast no-op, but skipping the
-  download saves a few seconds on every node launch).
+  the cluster's `AmiId`. Set `PostInstallScriptUrl=' '` (a single space) for the
+  cleanest boot — that skips the Enroot/Pyxis install entirely. (Leaving it at the
+  default — empty, which auto-installs from the templates bucket — also works on a
+  pre-baked AMI: the installer is idempotent and detects Enroot/Pyxis is already
+  present, a fast no-op; the single space just avoids the download+check.)
 
 ### 2.1 The AMI is single-Slurm-version, by design
 

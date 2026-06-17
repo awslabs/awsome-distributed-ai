@@ -60,7 +60,7 @@ The Test 1/6/7 container jobs are the functional proof that Pyxis works.
 >   `pcs-ready-dlami-with-enroot-pyxis.yaml` carries its **own copy** of the Enroot/Pyxis
 >   steps in its Image Builder UserData — editing `install-enroot-pyxis.sh` does **not**
 >   change the AMI path until you rebuild. Build an AMI per supported `SlurmVersion`,
->   deploy a cluster pinned to it (`AmiId=<ami-xxx>` + `PostInstallScriptUrl=""`), and
+>   deploy a cluster pinned to it (`AmiId=<ami-xxx>` + `PostInstallScriptUrl=' '`), and
 >   run a container job.
 > - **On a clean first boot**, not a hand-patched node — post-install runs before
 >   slurmd/profile.d/controller exist, and several bugs only appear there.
@@ -92,7 +92,7 @@ Skip this test if you only touched the cluster templates.
 
 This is an **independent flow**, not a deploy-all parameter: build an AMI with the
 standalone template, then deploy a cluster pinned to that AMI ID with
-`PostInstallScriptUrl=""` so nothing else runs at boot.
+`PostInstallScriptUrl=' '` so nothing else runs at boot.
 
 The AMI is **single-Slurm-version by design** (Pyxis SPANK plugin ABI is
 version-locked) — so when you run this test, run it for **every supported
@@ -132,7 +132,7 @@ aws cloudformation create-stack \
     ParameterKey=PrimarySubnetAZ,ParameterValue=us-west-2a \
     ParameterKey=SlurmVersion,ParameterValue=${SLURM_VERSION} \
     ParameterKey=AmiId,ParameterValue=${AMI_ID} \
-    ParameterKey=PostInstallScriptUrl,ParameterValue= \
+    ParameterKey=PostInstallScriptUrl,ParameterValue=' ' \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
   --profile claude --region us-west-2
 ```
@@ -145,7 +145,7 @@ On any node from the new cluster:
 which enroot                                                       # /usr/bin/enroot (pre-baked)
 ls /opt/aws/pcs/scheduler/slurm-${SLURM_VERSION}/lib/slurm/spank_pyxis.so  # built for matching Slurm
 cat /etc/aws/pcs/scheduler/slurm-${SLURM_VERSION}/plugstack.conf.d/pyxis.conf  # references the .so
-test ! -s /var/log/pcs-post-install.log && echo "post-install did not run (PostInstallScriptUrl='')"
+test ! -s /var/log/pcs-post-install.log && echo "post-install did not run (PostInstallScriptUrl=' ')"
 ```
 
 Then a container job through the login node (same form as Test 2):
@@ -156,7 +156,7 @@ srun --partition=cpu1 --nodes=1 --ntasks=1 \
 ```
 
 **Expected:** `enroot` and the per-version Pyxis files exist **without** the
-post-install hook running (because `PostInstallScriptUrl=""`); the container job
+post-install hook running (because `PostInstallScriptUrl=' '`); the container job
 prints `PYXIS_FROM_AMI_OK`. Slurmd starts cleanly (no `Incompatible Slurm plugin
 version` in `journalctl -u slurmd`).
 
