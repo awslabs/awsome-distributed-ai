@@ -79,4 +79,15 @@ node. EFA itself is exercised by Test 6.
 > see the cards saturate. **Don't go to 128 GiB/256 GiB**: the all_reduce buffer exceeds
 > B300 GPU memory and the job is OOM-killed. For a higher peak, add nodes, not buffer size.
 
+### Verified — p6-b200 ×4 (32 GPU, ap-south-1)
+
+`all_reduce_perf` over EFA (8 EFA NICs/node, `NET/OFI provider efa, fabric
+efa-direct`, NICs auto-selected). busbw by message size: 128 MiB 295, 256 MiB
+325, 1 GiB 367, 4 GiB 375, **16 GiB 377 GB/s** (peak); 0 wrong / 0 out-of-bounds.
+The curve is healthy (latency-bound small → bandwidth-bound large, asymptotes at
+377), a reasonable effective busbw for p6-b200's ≈800 Gbps/node node-to-node EFA.
+This is **not a peak-tuned number** — NICs auto-selected (no `NCCL_ALGO` /
+topology tuning), general-purpose nccl-tests image; for a higher peak use a
+B200-tuned NCCL build + the `topology-aware-nccl-tests` sbatch.
+
 ---

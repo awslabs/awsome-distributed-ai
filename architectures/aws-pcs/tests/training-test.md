@@ -26,6 +26,14 @@ shared filesystems and the node count:
    file-locking on NFS throws `OSError: [Errno 116] Stale file handle`; export
    `HF_HOME=/fsx/.hf-cache` before submitting.
 
+   > **HuggingFace rate limits.** The test case streams its dataset from the Hub, so
+   > every rank pulls from HF at startup. Large datasets (e.g. `allenai/c4`, 1024
+   > shards) can return `429 Too Many Requests` under many concurrent ranks even with
+   > an `HF_TOKEN` — the dataset is fetched, not the cluster, so this is an HF-account
+   > limit, not a cluster issue. For large multi-node runs, use an HF account with a
+   > higher rate limit, an HF mirror, or pre-tokenized data staged on `/fsx` (no
+   > streaming).
+
 3. **Submit 2 nodes** (the canonical sbatch defaults to 4) on your GPU queue. The venv must
    be on `PATH` for `torchrun` to resolve on every node — point `PATH` at the shared venv via
    `--export` (the canonical sbatch doesn't `activate` it):
