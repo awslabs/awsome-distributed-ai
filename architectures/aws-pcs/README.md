@@ -131,10 +131,6 @@ complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 | `GrafanaAccessCidr` | *(empty)* | Open HTTPS/443 (Grafana) on the login node to a trusted CIDR (default: SSM port-forward only) |
 | `DirectoryService` | `none` | `OpenLDAP-LoginNode` for a multi-user cluster. See [§8.3](#83-user-management) |
 
-(The console's group 5 also holds the monitoring-source and container-runtime
-parameters — `MonitoringRepo` / `MonitoringVersion` / `DcgmExporterImage` /
-`PostInstallScriptUrl` — which rarely need changing; see [PARAMETERS.md](./docs/PARAMETERS.md).)
-
 **See [PARAMETERS.md](./docs/PARAMETERS.md) for the complete parameter reference** (all 7
 console parameter groups, with every default). The concept guides below cover the
 choices that need the most thought.
