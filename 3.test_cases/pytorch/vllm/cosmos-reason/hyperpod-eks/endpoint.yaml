@@ -1,0 +1,82 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+---
+apiVersion: inference.sagemaker.aws.amazon.com/v1
+kind: InferenceEndpointConfig
+metadata:
+  name: cosmos-reason
+  namespace: ${NAMESPACE}
+spec:
+  endpointName: cosmos-reason
+  modelName: ${ENDPOINT_NAME}
+  instanceType: ${HYPERPOD_INSTANCE_TYPE}
+  invocationEndpoint: v1/chat/completions
+  # First deploy can take 5-10 min (23 GB AWS DLC pull + HF download + vLLM init).
+  # Default maxDeployTimeInSeconds is 1800; bump for headroom.
+  maxDeployTimeInSeconds: 3600
+  modelSourceConfig:
+    modelSourceType: huggingface
+    huggingFaceModel:
+      modelId: ${MODEL_ID}
+      tokenSecretRef:
+        name: hf-token
+        key: token
+  worker:
+    image: ${VLLM_IMAGE_AWS_DLC}
+    modelVolumeMount:
+      name: model-store
+      mountPath: /tmp/model
+    modelInvocationPort:
+      containerPort: 8080
+      name: http
+    resources:
+      requests:
+        cpu: "8"
+        memory: "64Gi"
+        nvidia.com/gpu: "${TENSOR_PARALLEL_SIZE}"
+      limits:
+        nvidia.com/gpu: "${TENSOR_PARALLEL_SIZE}"
+    args:
+      - "--model"
+      - "${MODEL_ID}"
+      - "--max-model-len"
+      - "${MAX_MODEL_LEN}"
+      - "--tensor-parallel-size"
+      - "${TENSOR_PARALLEL_SIZE}"
+      - "--gpu-memory-utilization"
+      - "${GPU_MEMORY_UTILIZATION}"
+      - "--dtype"
+      - "${DTYPE}"
+      # For Cosmos-Reason2 (Qwen3-VL), uncomment the next two args:
+      # - "--reasoning-parser"
+      # - "qwen3"
+      # For Reason2 video reasoning, uncomment:
+      # - "--media-io-kwargs"
+      # - '{"video":{"num_frames":-1}}'
+    environmentVariables:
+      - name: OMP_NUM_THREADS
+        value: "1"
+      - name: VLLM_USAGE_SOURCE
+        value: "awsome-distributed-ai-cosmos-reason"
+      # AWS DLC reads SM_VLLM_* env vars — these override the entrypoint defaults.
+      # CLI args above may be ignored by the DLC entrypoint; env vars are the
+      # reliable path.
+      - name: SM_VLLM_MAX_MODEL_LEN
+        value: "${MAX_MODEL_LEN}"
+      - name: SM_VLLM_TENSOR_PARALLEL_SIZE
+        value: "${TENSOR_PARALLEL_SIZE}"
+      - name: SM_VLLM_GPU_MEMORY_UTILIZATION
+        value: "${GPU_MEMORY_UTILIZATION}"
+      - name: SM_VLLM_DTYPE
+        value: "${DTYPE}"
+      # For Cosmos-Reason2 (Qwen3-VL), uncomment:
+      # - name: SM_VLLM_REASONING_PARSER
+      #   value: "qwen3"
+  # NOTE: nodeAffinity cannot be used when instanceType is set — the operator
+  # handles scheduling. Deep-health-check affinity is applied automatically.
+  # TLS for the operator-managed ALB. Bucket is created at operator install time.
+  # Override TLS_CERT_S3_URI in env_vars.
+  tlsConfig:
+    tlsCertificateOutputS3Uri: ${TLS_CERT_S3_URI}
+  loadBalancer:
+    healthCheckPath: /health

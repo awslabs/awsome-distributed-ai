@@ -177,6 +177,188 @@ change `LustreDeploymentType` or `OpenZFSDeploymentType`, also pick a throughput
 for the new type. The defaults (250 / 320) target `PERSISTENT_2` / `SINGLE_AZ_HA_2`;
 override both throughput parameters when falling back to the older deployment types.
 
+### 5.1 Lustre mount options — `noatime`
+
+The CNG templates mount FSx for Lustre with `-o noatime,flock,lazystatfs`. Of
+these, `flock` and `lazystatfs` are already enabled by default on FSx for
+Lustre 2.15 (verified via `/proc/mounts`), so the explicit options serve as
+documentation and forward-compatibility. The only *net-new* behaviour is
+**`noatime`**.
+
+**What `noatime` does:** suppresses updating the access timestamp on every
+`read()`. Without it, every file read triggers a metadata RPC to the MDS to
+record the access time — even when the file content is served from OST cache.
+
+**When it matters:** under concurrent multi-node read workloads (distributed
+training data loading, HuggingFace cache reads, Python imports from shared
+`/fsx`). With 16+ concurrent readers the atime RPCs add measurable MDS load;
+at 64+ nodes it can become a throughput bottleneck.
+
+**Benchmark (us-east-2, 2026-06-11):**
+
+| Environment | relatime (default) | noatime | Delta |
+|---|---|---|---|
+| 1 node, 10K stat | 1851 ms | 1930 ms | ±noise |
+| 4 nodes × 4 procs (16 streams), 10K stat | 5033 ms | 4812 ms | **-4.4%** |
+
+On a small filesystem (1.2 TiB / 2 OSTs) the MDS is nowhere near saturated,
+so the improvement is modest. At production scale (64+ nodes, 100K+ files,
+larger filesystems) the effect is proportionally larger as MDS lock contention
+for atime writes grows.
+
+**What you lose:** `atime` is no longer recorded. No ML training pipeline
+depends on when a file was last read; if you need access-time auditing, switch
+to `relatime` (the kernel default, which updates atime at most once per day).
+
+**Why not fstab?** The `/home` (OpenZFS/NFS) mount uses fstab because NFS
+with `_netdev` reliably waits for network readiness. Lustre requires not just
+network but the `lustre` kernel module and LNet initialization to be complete;
+fstab + `_netdev` alone doesn't guarantee this ordering. Mounting explicitly
+in cloud-init `runcmd` (which runs after network + module load) is the most
+portable approach.
+
+### 5.2 Lustre runtime performance tuning (recommended)
+
+The mount options above handle metadata behaviour. For I/O throughput and
+metadata IOPS, the following `lctl` runtime tunables are recommended for ML
+training workloads. They are **not set by the templates by default** (to keep
+the base minimal and avoid surprising users), but can be added to a
+post-install script or run manually on the login/compute nodes.
+
+These settings do not persist across reboot — add them to a boot script or
+UserData if you want them permanent.
+
+```bash
+# --- Data path (OSC): controls per-OST throughput ---
+# Max concurrent bulk-data RPCs per OST per client (default 8).
+# Raise to saturate network bandwidth to each OST.
+sudo lctl set_param osc.*.max_rpcs_in_flight=64
+
+# Write-back cache per OST (default 32 MB).
+# Larger buffer → fewer, larger writes for checkpoints.
+sudo lctl set_param osc.*.max_dirty_mb=256
+
+# Max pages per RPC (default 256 = 1 MB). 1024 = 4 MB per RPC.
+# Reduces per-operation overhead for large sequential I/O.
+sudo lctl set_param osc.*.max_pages_per_rpc=1024
+
+# --- Metadata path (MDC): controls file open/stat/create throughput ---
+# Max concurrent metadata RPCs (default 8).
+# Critical for Python imports, HuggingFace cache walks, readdir.
+sudo lctl set_param mdc.*.max_rpcs_in_flight=64
+
+# Max concurrent modifying metadata RPCs (default 8).
+# Helps checkpoint directory creation (many simultaneous file creates).
+sudo lctl set_param mdc.*.max_mod_rpcs_in_flight=50
+
+# --- Read-ahead (llite): controls sequential-read prefetch ---
+# Total read-ahead buffer (default 64 MB). Scale with instance RAM.
+# 256 MB is conservative; 1024 MB is fine on 2 TB GPU nodes.
+sudo lctl set_param llite.*.max_read_ahead_mb=256
+
+# Per-file read-ahead cap (default 64 MB).
+sudo lctl set_param llite.*.max_read_ahead_per_file_mb=256
+
+# --- Directory stat-ahead (llite): helps large-directory traversal ---
+# Entries to stat ahead (default 32).
+# 512 helps HuggingFace cache dirs with thousands of files.
+sudo lctl set_param llite.*.statahead_max=512
+```
+
+**When to apply:**
+- Large-scale training (16+ nodes, large datasets on `/fsx`)
+- Checkpoint-heavy workloads (frequent writes of multi-GB files)
+- Python environments on `/fsx` (many small-file imports)
+
+**When to skip:**
+- Small PoC / evaluation deploys (default 8 RPCs is sufficient for 1–4 nodes)
+- If the filesystem is 1.2 TiB / 2 OSTs (the throughput ceiling is the
+  filesystem's provisioned bandwidth, not the client's RPC parallelism)
+
+### 5.3 Lustre stripe configuration (per-directory)
+
+Stripe settings control how a file's data is distributed across OSTs. The
+default FSx PFL (Progressive File Layout) is reasonable for mixed workloads:
+```
+-E 100M -c 1  -E 10G -c 8  -E 100G -c 16  -E -1 -c 32
+```
+
+For ML directories with a known access pattern, explicit striping is better:
+
+```bash
+# Checkpoints: max parallelism, large stripe for sequential writes
+lfs setstripe -c -1 -S 16M /fsx/checkpoints
+
+# Large datasets (sequential read by all nodes)
+lfs setstripe -c -1 -S 16M /fsx/datasets
+
+# Container images (.sqsh, 5-30 GB, sequential read)
+lfs setstripe -c -1 -S 16M /fsx/containers
+
+# Log directories (small append-only files — wide striping adds lock overhead)
+lfs setstripe -c 1 /fsx/logs
+```
+
+| Parameter | Meaning | Default | ML recommendation |
+|---|---|---|---|
+| `-c` (stripe count) | Number of OSTs per file | PFL auto | `-1` (all OSTs) for large files |
+| `-S` (stripe size) | Chunk size per OST before rotating | 1 MiB | `16M` for sequential I/O (matches EFA MTU alignment) |
+
+**Do not stripe widely for small files** (<10 MB): one DLM lock per OST per
+file means wide striping on thousands of small files adds more lock overhead
+than it gains in parallelism. The default PFL handles this correctly (starts
+with `-c 1` for small extents).
+
+### 5.4 Kernel module parameters (advanced, requires reboot)
+
+For instances with 64+ vCPUs (all P5/P6/hpc types), the Lustre kernel module
+defaults bottleneck RPC processing. Set these before first mount via
+`/etc/modprobe.d/lustre.conf`:
+
+```bash
+# /etc/modprobe.d/lustre-perf.conf
+options ptlrpc ptlrpcd_per_cpt_max=32
+options ksocklnd credits=2560
+```
+
+| Parameter | Default | Recommended | Effect |
+|---|---|---|---|
+| `ptlrpcd_per_cpt_max` | 2 | **32** | RPC worker threads per CPU partition. Without this, `max_rpcs_in_flight > 8` is bottlenecked by thread starvation. |
+| `ksocklnd credits` | 256 | **2560** | LNet flow-control credits for TCP path. Increases in-flight message limit. |
+
+**Note:** For EFA-enabled FSx (`FSxLustreEnableEfa=true`), LNet uses the EFA
+fabric directly (not ksocklnd). The `ksocklnd credits` setting only matters
+for the TCP fallback path or non-EFA filesystems. `ptlrpcd_per_cpt_max` is
+relevant regardless of transport.
+
+These require a **reboot** (or module reload) to take effect. For the
+reference architecture, the recommended path is to add them to a custom AMI
+(via `pcs-ready-dlami-with-enroot-pyxis.yaml`) or to early UserData before
+the Lustre mount.
+
+### 5.5 OS-level sysctl (optional)
+
+On GPU instances with 2 TB RAM, the kernel dirty-page defaults can cause
+bursty flushes that compete with GPU-to-host DMA during checkpoint writes:
+
+```bash
+# Lower dirty-page thresholds (default 20%/10% of RAM = 400 GB / 200 GB on 2 TB nodes)
+sudo sysctl -w vm.dirty_ratio=5
+sudo sysctl -w vm.dirty_background_ratio=3
+sudo sysctl -w vm.dirty_expire_centisecs=1000
+
+# Retain dentry/inode cache longer (helps repeated Python imports)
+sudo sysctl -w vm.vfs_cache_pressure=50
+```
+
+For TCP-based LNet (non-EFA filesystems), also raise socket buffer limits:
+```bash
+sudo sysctl -w net.core.rmem_max=16777216
+sudo sysctl -w net.core.wmem_max=16777216
+```
+
+---
+
 ## 6. P6-B300 NIC topology — single-template lock-in
 
 `add-cng-p6-b300.yaml` is a hand-built `NetworkInterfaces` block for **exactly

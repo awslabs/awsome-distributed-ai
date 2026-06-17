@@ -868,3 +868,47 @@ variable "enable_guardduty_cleanup" {
   type        = bool
   default     = false
 }
+
+# ==========================================
+# Cilium CNI Configuration
+# ==========================================
+
+variable "enable_cilium" {
+  description = "Enable Cilium CNI. When true and creating a new EKS cluster, deploys Cilium and conditionally skips the VPC CNI addon based on cilium_mode."
+  type        = bool
+  default     = false
+}
+
+variable "cilium_mode" {
+  description = "Cilium operating mode: overlay (VXLAN tunnel), chaining (policy-only on top of VPC CNI), or custom (user provides all Helm values via cilium_helm_values)."
+  type        = string
+  default     = "overlay"
+  validation {
+    condition     = contains(["overlay", "chaining", "custom"], var.cilium_mode)
+    error_message = "cilium_mode must be one of: overlay, chaining, custom."
+  }
+}
+
+variable "cilium_version" {
+  description = "Cilium Helm chart version to deploy."
+  type        = string
+  default     = "1.19.4"
+}
+
+variable "cilium_helm_repository" {
+  description = "Helm chart repository for Cilium. Override for closed-network deployments using a private mirror (e.g. an OCI registry: oci://<account>.dkr.ecr.<region>.amazonaws.com). Leave empty when cilium_helm_chart already contains a fully qualified oci:// reference. Note: this redirects the chart source only — container image registries are set separately via cilium_helm_values (image.repository, etc.)."
+  type        = string
+  default     = "https://helm.cilium.io/"
+}
+
+variable "cilium_helm_chart" {
+  description = "Helm chart name for Cilium, or a fully qualified OCI reference (e.g. oci://<account>.dkr.ecr.<region>.amazonaws.com/cilium) when cilium_helm_repository is empty."
+  type        = string
+  default     = "cilium"
+}
+
+variable "cilium_helm_values" {
+  description = "Custom Helm values merged on top of mode-specific defaults. In custom mode, this IS the entire Helm config (no base defaults applied). For overlay/chaining modes, these values override the base defaults."
+  type        = any
+  default     = {}
+}
