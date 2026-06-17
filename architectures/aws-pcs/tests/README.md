@@ -35,9 +35,9 @@ one cluster. Tests 8-13 are separate paths run only when their inputs change.
 ## Major-update PR — configurations run end-to-end on real hardware
 
 The major-update PR (IAM policies, multi-user OpenLDAP, `MonitoringStack` rename,
-`SSHAccessCidr`/`GrafanaAccessCidr`, multi-AZ subnets, VPCName auto-derive +
-EFA auto-count) was validated end-to-end in us-east-2 with a single
-`deploy-all` cluster:
+`SSHAccessCidr`/`GrafanaAccessCidr`, multi-AZ subnets, `OnDemandEfaInterfaceCount`
+0/1/2 collapse, VPCName fixed to `${StackName}-VPC`, instance-role perms split
+inline) was validated end-to-end in us-east-2 with a single `deploy-all` cluster:
 
 ```
 PrimarySubnetAZ=us-east-2b  AdditionalSubnetAZ2=us-east-2a  AdditionalSubnetAZ3=us-east-2c
@@ -57,6 +57,7 @@ MonitoringStack=Prometheus-LoginNode
 | **Multi-node UID consistency** | two different compute nodes both resolve `testuser1`→`uid=10001` | ✅ |
 | **User delete propagation** | `ldapdelete` + `sss_cache -E` removes the user from `getent` immediately (sssd-tools now installed) | ✅ |
 | **Template lint** | `validate-template` passes on all 8 edited `assets/*.yaml` (incl. 3 GPU templates + 2 IAM stacks) | ✅ |
+| **`OnDemandEfaInterfaceCount` (0/1/2 collapse)** | `=1` → hpc6a launch template has 1 EFA NIC; `=2` → hpc8a has 2 EFA NICs (`DeviceIndex 0/1`, `InterfaceType: efa`). Real EFA traffic on hpc8a (2 nodes, `FI_PROVIDER=efa`): `osu_bw` peak **26.3 GB/s** (~210 Gbps, 1 pair); `osu_mbw_mr` peak **42.9 GB/s** (~343 Gbps, 16 pairs/node multi-rail) | ✅ |
 | **Slurm managed accounting + multi-user (Test 12)** | on a `ManagedAccounting=enabled` cluster: LDAP users alice/bob registered in `sacctmgr` (account=ml-team) as root admin; jobs submitted as each LDAP user complete and `sacct -a` records them under the correct `User`+`Account` (`scontrol show job`: `UserId=alice(10001) Account=ml-team`) | ✅ |
 
 ---
