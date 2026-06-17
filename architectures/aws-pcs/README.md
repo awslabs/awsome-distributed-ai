@@ -10,7 +10,7 @@ This repository provides reference architectures and deployment templates for se
 - **Container runtime included**: Enroot/Pyxis is set up automatically, so `srun --container-image=...` works out of the box for containerized training.
 - **Monitoring built in**: Grafana + Prometheus run on the login node, with DCGM Exporter on GPU compute nodes feeding the pre-built GPU dashboards (`MonitoringStack=Prometheus-LoginNode`, on by default). Reach Grafana privately via SSM port-forward, or open it to a trusted CIDR with `GrafanaAccessCidr`.
 - **GPU-ready, multi-NIC EFA**: dedicated launch templates for the P5 and P6 families, selected automatically by instance type, for high-bandwidth multi-node training.
-- **Broad capacity-purchase support**: covers the full range of EC2 capacity options out of the box — On-Demand, On-Demand Capacity Reservations (ODCR), and Capacity Blocks for ML — selected per node group.
+- **Flexible capacity options**: On-Demand, "open" On-Demand Capacity Reservations (ODCR, consumed automatically), and Capacity Blocks for ML — selected per node group. (Targeting a *specific* ODCR is on the [roadmap](./docs/ROADMAP.md).)
 - **High-performance storage**: FSx for Lustre (shared scratch, `/fsx`) and FSx for OpenZFS (home directories, `/home`).
 - **Modular components**: compose individual stacks (network/storage prerequisites, cluster scheduler, per-family compute node groups) instead of the all-in-one nested stack when you want to reuse infrastructure across clusters or iterate on one piece at a time.
 
@@ -91,11 +91,16 @@ only needs the Availability Zone (`PrimarySubnetAZ`). The most-used parameters:
 | `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`); 25.11 is needed for the Slurm OpenMetrics dashboards. Drives Pyxis build version too. See [OPERATIONS.md §1](./docs/OPERATIONS.md#1-slurm-version-selection) |
 | `AmiId` | *(empty → SSM auto)* | Empty auto-resolves to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04) from SSM. Pin to a specific `ami-xxx` for production, or pass an AMI built by [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#84-pre-baking-enrootpyxis-into-a-custom-ami) |
 | `MonitoringStack` | `Prometheus-LoginNode` | Deploy Prometheus + Grafana on the login node, plus DCGM Exporter on GPU compute nodes. Set to `none` to disable monitoring |
-| `DeployOnDemandCNG` | `true` | Deploy the `cpu1` CPU queue (`OnDemandInstanceType`, default `c6i.4xlarge`) |
+| `DeployOnDemandCNG` | `true` | Deploy the On-Demand compute queue (the `cpu1` queue by default) |
+| `OnDemandInstanceType` | `c6i.4xlarge` | Instance type for the On-Demand queue. Not limited to CPU — set any On-Demand type, e.g. a single-NIC GPU like `g6.12xlarge` (see [Example 1](#example-1-single-nic-gpu-queue-g6)) or an EFA-capable HPC type like `hpc7a.96xlarge`. (Multi-NIC P5/P6 GPUs use the P-series queue instead — see `PseriesInstanceType`.) Tune `OnDemandQueueName`/`OnDemandCngName`/`OnDemandMinCount`/`OnDemandMaxCount` alongside it |
 | `OnDemandEfaInterfaceCount` | `0` | `0` = no EFA (default). Set `1`/`2` for HPC/MPI workloads on EFA-capable CPU types (hpc6a=1, hpc7a/hpc8a/hpc6id=2). Enables EFA `NetworkInterfaces` + auto-creates a cluster placement group. See [EFA on CPU HPC instances](#efa-on-cpu-hpc-instances-ondemandefainterfacecount) |
 | `DeployPseriesCNG` | `false` | Deploy a GPU (P5/P6) queue — see [GPU compute](#gpu-compute-p5p6) |
-| `PseriesInstanceType` | `p5.48xlarge` | GPU instance type; auto-selects the multi-NIC template + EFA count |
+| `PseriesInstanceType` | `p5.48xlarge` | Multi-NIC GPU instance type; auto-selects the matching template + EFA NIC count. Accepted values: `p5.48xlarge` / `p5e.48xlarge` (→ add-cng-p5, 32 NICs), `p5en.48xlarge` (→ add-cng-p5, 16 NICs), `p6-b200.48xlarge` (→ add-cng-p6-b200, 8 NICs), `p6-b300.48xlarge` (→ add-cng-p6-b300, 17 NICs). See [GPU compute](#gpu-compute-p5p6) |
 | `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR |
+| `DirectoryService` | `none` | Set to `OpenLDAP-LoginNode` for a multi-user cluster (shared LDAP users across all nodes). See [§8.2 User Management](#82-user-management) |
+| `SSHAccessCidr` | *(empty)* | Open SSH/22 on the login node to a trusted CIDR for direct SSH (default: SSM only, no public access). See [§6 Accessing the Cluster](#6-accessing-the-cluster) |
+| `GrafanaAccessCidr` | *(empty)* | Open HTTPS/443 on the login node to a trusted CIDR for direct Grafana access (default: SSM port-forward only). See [§8.1 Monitoring](#accessing-the-grafana-dashboards) |
+| `AdditionalSubnetAZ2` / `AdditionalSubnetAZ3` | *(empty)* | Add private subnets in up to 2 more AZs (primary + 2) for higher availability or AZ-matched capacity. NAT gateway stays in the primary AZ |
 
 **See [PARAMETERS.md](./docs/PARAMETERS.md) for the complete parameter reference** (all 7
 console parameter groups, with every default). The concept guides below cover the
@@ -143,38 +148,6 @@ automatically.
 > group at `PseriesMinCount = PseriesMaxCount = <reserved count>` so the reserved
 > nodes launch immediately, rather than scaling from 0.
 
-### EFA on CPU HPC instances (`OnDemandEfaInterfaceCount`)
-
-For tightly-coupled HPC / MPI workloads on CPU-only HPC instances, set
-`OnDemandEfaInterfaceCount` (deploy-all) or `EfaInterfaceCount` (modular
-`add-cng.yaml`) to the instance type's EFA interface count. `0` (default) = no
-EFA; `1` or `2` = enable EFA with that many interfaces — the CPU compute node
-group then launches with EFA `NetworkInterfaces` and a cluster placement group
-is auto-created. GPU CNGs (P5/P6) are unaffected — they use their own dedicated
-multi-NIC EFA wiring per-family.
-
-| Instance type | EFA interfaces | Aggregate spec | Set the count to |
-|---|---:|---:|---:|
-| (any non-HPC type, e.g. `c6i.4xlarge`) | — | — | **0** (no EFA; default) |
-| `hpc6a.48xlarge` | 1 | 100 Gbps | **1** |
-| `hpc7a.96xlarge` (and 12/24/48) | 2 | 300 Gbps | **2** |
-| `hpc6id.32xlarge` | 2 | 200 Gbps | **2** |
-| `hpc8a.96xlarge` | 2 | 300 Gbps | **2** |
-| `c7i.metal-48xl` etc. | 1 | varies | **1** |
-
-(Setting a count > 0 on a non-EFA type, or mismatching the count with the
-instance type's actual `MaximumEfaInterfaces`, fails at launch.)
-
-**Placement group:** auto-created per-CNG by the template. Override with
-`OnDemandPlacementGroupName=<existing-pg-name>` to share one PG across multiple
-CNGs (e.g. heterogeneous tightly-coupled jobs that span CPU + GPU).
-
-**Multi-NIC bandwidth needs multiple MPI pairs.** A single MPI pair uses one
-libfabric endpoint and only one NIC. Use `osu_mbw_mr -np 32 -N 16` (or your
-application's natural multi-pair pattern) to actually exercise both NICs on
-hpc7a/hpc8a. See [tests/README.md Test 9](./tests/README.md#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a)
-for the full benchmark setup and validated bandwidth numbers.
-
 ### Storage: FSx deployment types (Region availability)
 
 **FSx deployment types are not available in every Region.** Defaults match the most
@@ -184,15 +157,17 @@ capable type; switch to a more widely available one if your Region needs it.
 |---|---|---|---|---|
 | Lustre (`/fsx`) | `LustreDeploymentType` | `PERSISTENT_2` | `PERSISTENT_1` | `PERSISTENT_2` (throughput 125/250/500/1000, metadata config) isn't in every Region; `PERSISTENT_1` (50/100/200) is in more Regions |
 | Lustre (`/fsx`) | `PerUnitStorageThroughput` | `250` | any valid number | Must be valid for the type: P2 = 125/250/500/1000, P1 = 50/100/200 |
-| Lustre (`/fsx`) | `FSxLustreEnableEfa` | `false` | `true` | Enable EFA on the Lustre filesystem. **The headline feature is GPUDirect Storage (GDS) for P5 / P5e / P5en / P6-B200 GPU CNGs**, which DMAs file data straight into GPU memory (requires the NVIDIA `nvidia-fs` / cuFile stack on the client — see the Client-side Lustre-on-EFA + GDS item in [`docs/ROADMAP.md`](./docs/ROADMAP.md)). EFA-capable CPU CNGs (`OnDemandEfaInterfaceCount > 0`) get the EFA *transport* path to storage as a secondary benefit, useful when a single client is pushing past ~10 GBps. **PERSISTENT_2 SSD only** (a CFN Rule fails the stack at create time on PERSISTENT_1). **Requires a much higher minimum `Capacity`**: at `PerUnitStorageThroughput=250` the minimum is **19200 GiB** (16× the 1200 GiB default). Set `Capacity` accordingly when enabling this |
 | OpenZFS (`/home`) | `OpenZFSDeploymentType` | `SINGLE_AZ_HA_2` | `SINGLE_AZ_HA_1`, `SINGLE_AZ_2`, `SINGLE_AZ_1` | `SINGLE_AZ_1` is in all Regions; HA/2 variants vary. `MULTI_AZ` excluded (needs a second subnet) |
-| OpenZFS (`/home`) | `HomeThroughput` | `320` | any valid number | Throughput (MB/s). Valid values depend on the deployment type: `SINGLE_AZ_2`/`SINGLE_AZ_HA_2` = 160/320/640/1280/2560/3840/5120/7680/10240; `SINGLE_AZ_HA_1` = 128/256/512/1024/2048/3072/4096; `SINGLE_AZ_1` = 64/128/256/512/1024/2048/3072/4096 |
+| OpenZFS (`/home`) | `HomeThroughput` | `320` | any valid number | Throughput (MB/s). Valid values depend on the deployment type: `SINGLE_AZ_2`/`SINGLE_AZ_HA_2` = 160/320/640/1280/2560/3840/5120/7680/10240; `SINGLE_AZ_HA_1`/`SINGLE_AZ_1` = 64/128/256/512/1024/2048/3072/4096 |
 
 Check support before deploying:
 [Lustre Regions](https://docs.aws.amazon.com/fsx/latest/LustreGuide/using-fsx-lustre.html) ·
 [OpenZFS Regions](https://docs.aws.amazon.com/fsx/latest/OpenZFSGuide/available-aws-regions.html).
 If a deploy fails at the FSx resource with an "unsupported deployment type" error,
 switch these parameters to a type your Region supports.
+
+> Enabling EFA / GPUDirect Storage on the Lustre filesystem (`FSxLustreEnableEfa`) is an
+> advanced option — see [§8.6 FSx for Lustre over EFA (GPUDirect Storage)](#86-fsx-for-lustre-over-efa-gpudirect-storage).
 
 ---
 
@@ -314,9 +289,9 @@ sbatch --partition=gpu-p6b300 nccl-tests-container.sbatch
 
 In `nccl-all_reduce_perf_<jobid>.out`, EFA is active when you see
 `NET/OFI Selected provider is efa ... (found N nics)`; a healthy run ends with
-`# Out of bounds values : 0 OK` and a busbw that scales with message size
-(e.g. ~751 GB/s at 64 GiB on 2× p6-b300; raise `-e` past the 16 GiB default to
-saturate larger fabrics).
+`# Out of bounds values : 0 OK` and a busbw that scales with message size. For
+expected bandwidth numbers per instance family and tuning notes, see
+[tests/compute-test.md](./tests/compute-test.md#test-6-nccl-multi-node-efa).
 
 For a full training example, see the [PyTorch FSDP test case](../../3.test_cases/pytorch/FSDP);
 the full validation matrix is in [tests/README.md](./tests/README.md).
@@ -341,23 +316,15 @@ node-local `/opt` (not the shared `/home`). Pre-built Grafana dashboards are
 provisioned automatically — see [Accessing the Grafana dashboards](#accessing-the-grafana-dashboards) for the list
 and a screenshot.
 
-> **GPU metrics work out of the box across the supported GPU range** (Hopper / B200 /
-> B300). `DcgmExporterImage` defaults to a DCGM 4.5.2 build pinned by digest, validated
-> on 2× p6-b300 and on B200. The monitoring stack's own default (DCGM 4.2.0) tops out
-> at B200 and can't pull newer NVCR tags on Docker 29.x — overriding via digest at the
-> deploy-all level is what bridges that. Override `DcgmExporterImage` only if you need
-> to pin to a different build; details:
-> [OPERATIONS.md §3.1](./docs/OPERATIONS.md#31-dcgmexporterimage-the-default-and-when-to-change-it).
-
 > **Prefer AWS-managed Prometheus/Grafana?** If you'd rather use Amazon Managed Service
 > for Prometheus + Amazon Managed Grafana instead of the self-hosted stack on the login
 > node, see [`4.validation_and_observability/4.prometheus-grafana`](../../4.validation_and_observability/4.prometheus-grafana).
 
 **Monitoring-related parameters:**
 - `MonitoringStack` (default `Prometheus-LoginNode`; `none` disables monitoring)
-- `MonitoringVersion` — [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) git ref (release tag, branch, or `latest`; default `v2.9.1`). Pinned to a tag so upstream changes can't break deployments unexpectedly. `v2.9.1` adds the `DCGM_EXPORTER_IMAGE` override (lets `DcgmExporterImage` enable B300 GPU metrics); `v2.6.4`+ carry the PCS fixes (node-local `/opt` install + Docker-29.x DCGM tag).
+- `MonitoringVersion` — [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) git ref (release tag, branch, or `latest`; default `v2.9.1`). Pinned to a tag so upstream changes can't break deployments unexpectedly.
 - `MonitoringRepo` — `owner/repo` to fetch from (default `aws-samples/aws-parallelcluster-monitoring`). Point at a fork + a branch in `MonitoringVersion` to test unreleased changes.
-- `DcgmExporterImage` — dcgm-exporter image used on GPU nodes; defaults to a DCGM 4.5.2 build pinned by digest (covers Hopper/B200/B300). Override only if you need to pin to a different build (e.g. the older monitoring-default DCGM 4.2.0).
+- `DcgmExporterImage` — dcgm-exporter image used on GPU nodes (default covers Hopper/B200/B300; see the DCGM note below).
 
 > Node type is identified by the `monitoring-role` tag (`login`/`compute`), not the EC2
 > `Name` tag — the `Name` tag defaults to `PCS-<cngname>` and is free for you to retag.
@@ -444,6 +411,17 @@ node's model, instance type, utilization, temperature, power, and memory:
 For detailed validation steps and the full test matrix (monitoring, containers, CPU/GPU,
 NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 
+> **Note — DCGM exporter version (GPU metrics).** GPU metrics work out of the box across
+> the supported range (Hopper / B200 / B300) without overriding `DcgmExporterImage`:
+> it defaults to a **DCGM 4.5.2** build pinned by digest (validated on 2× p6-b300 and on
+> B200). The monitoring stack's own default (DCGM 4.2.0) tops out at B200 and can't pull
+> newer NVCR tags on Docker 29.x — pinning by digest at the deploy-all level is what
+> bridges that, and `MonitoringVersion v2.9.1` is the first release carrying the
+> `DCGM_EXPORTER_IMAGE` override that lets this through (`v2.6.4`+ carry the other PCS
+> fixes: node-local `/opt` install + the Docker-29.x DCGM tag). Override `DcgmExporterImage`
+> only to pin a different build; details:
+> [OPERATIONS.md §3.1](./docs/OPERATIONS.md#31-dcgmexporterimage-the-default-and-when-to-change-it).
+
 ---
 
 ### 8.2 User Management
@@ -456,6 +434,11 @@ This installs an OpenLDAP directory on the login node with SSSD on all compute
 nodes — users you add are immediately visible cluster-wide. See the
 **[User Management Guide](./docs/USER-MANAGEMENT.md)** for step-by-step
 operations (adding/removing users, Slurm accounting, SSH access).
+
+> **Constraint — single login node.** The OpenLDAP server runs on the (single) login
+> node, so enabling `DirectoryService` means a one-login-node cluster. The user database
+> lives on OpenZFS `/home`, so it survives a login-node replacement (data is recoverable),
+> but the directory **service** is a single point of failure while the login node is down.
 
 ### 8.3 IAM Permissions
 
@@ -534,6 +517,59 @@ space skips the download+check entirely, shaving a few seconds off boot.
 
 For production deploys that pin the AMI explicitly per cluster, none of these are needed.
 
+### 8.5 CPU compute node group — advanced settings
+
+The On-Demand CPU queue is configured with `OnDemandInstanceType` (default
+`c6i.4xlarge`) plus `OnDemandQueueName` / `OnDemandCngName` / `OnDemandMinCount` /
+`OnDemandMaxCount`. The settings below cover tightly-coupled HPC / MPI workloads.
+
+#### EFA on CPU HPC instances (`OnDemandEfaInterfaceCount`)
+
+For tightly-coupled HPC / MPI workloads on CPU-only HPC instances, set
+`OnDemandEfaInterfaceCount` (deploy-all) or `EfaInterfaceCount` (modular
+`add-cng.yaml`) to the instance type's EFA interface count. `0` (default) = no
+EFA; `1` or `2` = enable EFA with that many interfaces — the CPU compute node
+group then launches with EFA `NetworkInterfaces` and a cluster placement group
+is auto-created. GPU CNGs (P5/P6) are unaffected — they use their own dedicated
+multi-NIC EFA wiring per-family.
+
+| Instance type | EFA interfaces | Aggregate spec | Set the count to |
+|---|---:|---:|---:|
+| (any non-HPC type, e.g. `c6i.4xlarge`) | — | — | **0** (no EFA; default) |
+| `hpc6a.48xlarge` | 1 | 100 Gbps | **1** |
+| `hpc7a.96xlarge` (and 12/24/48) | 2 | 300 Gbps | **2** |
+| `hpc6id.32xlarge` | 2 | 200 Gbps | **2** |
+| `hpc8a.96xlarge` | 2 | 300 Gbps | **2** |
+| `c7i.metal-48xl` etc. | 1 | varies | **1** |
+
+(Setting a count > 0 on a non-EFA type, or mismatching the count with the
+instance type's actual `MaximumEfaInterfaces`, fails at launch.)
+
+**Placement group:** auto-created per-CNG by the template. Override with
+`OnDemandPlacementGroupName=<existing-pg-name>` to share one PG across multiple
+CNGs (e.g. heterogeneous tightly-coupled jobs that span CPU + GPU).
+
+**Multi-NIC bandwidth needs multiple MPI pairs.** A single MPI pair uses one
+libfabric endpoint and only one NIC. Use `osu_mbw_mr -np 32 -N 16` (or your
+application's natural multi-pair pattern) to actually exercise both NICs on
+hpc7a/hpc8a. See [tests/README.md Test 9](./tests/README.md#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a)
+for the full benchmark setup and validated bandwidth numbers.
+
+### 8.6 FSx for Lustre over EFA (GPUDirect Storage)
+
+`FSxLustreEnableEfa` (default `false`) enables EFA on the `/fsx` Lustre filesystem.
+**The headline feature is GPUDirect Storage (GDS) for P5 / P5e / P5en / P6-B200 GPU CNGs**,
+which DMAs file data straight into GPU memory (requires the NVIDIA `nvidia-fs` / cuFile
+stack on the client — see the Client-side Lustre-on-EFA + GDS item in
+[`docs/ROADMAP.md`](./docs/ROADMAP.md)). EFA-capable CPU CNGs
+(`OnDemandEfaInterfaceCount > 0`) get the EFA *transport* path to storage as a secondary
+benefit, useful when a single client is pushing past ~10 GBps.
+
+Constraints when enabling this:
+- **PERSISTENT_2 SSD only** — a CFN Rule fails the stack at create time on `PERSISTENT_1`.
+- **Much higher minimum `Capacity`** — at `PerUnitStorageThroughput=250` the minimum is
+  **19200 GiB** (16× the 1200 GiB default). Set `Capacity` accordingly.
+
 ---
 
 ## 9. Templates
@@ -551,7 +587,7 @@ parameter and default, see [PARAMETERS.md](./docs/PARAMETERS.md).
 | [`add-cng.yaml`](./assets/add-cng.yaml) | Compute node group — login nodes, CPU / single-NIC-GPU queues (C6i, G5, G6); switches to a multi-NIC EFA `NetworkInterfaces` block when `EfaInterfaceCount > 0` (HPC types: hpc6a/hpc7a/hpc6id/hpc8a …) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng.yaml&stackName=pcs-add-cng) |
 | [`add-cng-p5.yaml`](./assets/add-cng-p5.yaml) | P5/P5e/P5en nodes (16/32 EFA interfaces, by type) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p5.yaml&stackName=pcs-add-cng-p5) |
 | [`add-cng-p6-b200.yaml`](./assets/add-cng-p6-b200.yaml) | P6-B200 nodes (8 EFA interfaces) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p6-b200.yaml&stackName=pcs-add-cng-p6-b200) |
-| [`add-cng-p6-b300.yaml`](./assets/add-cng-p6-b300.yaml) | P6-B300 nodes (16 EFA interfaces) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p6-b300.yaml&stackName=pcs-add-cng-p6-b300) |
+| [`add-cng-p6-b300.yaml`](./assets/add-cng-p6-b300.yaml) | P6-B300 nodes (17 interfaces: 16 EFA + 1 ENA) | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p6-b300.yaml&stackName=pcs-add-cng-p6-b300) |
 | [`pcs-ready-dlami-with-enroot-pyxis.yaml`](./assets/pcs-ready-dlami-with-enroot-pyxis.yaml) | EC2 Image Builder: bake Enroot 3.5.0 + Pyxis 0.20.0 into the PCS-Ready DLAMI | [<kbd>🚀</kbd>](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ready-dlami-with-enroot-pyxis.yaml&stackName=pcs-dlami) |
 
 `add-cng*` templates create a Slurm queue only when `QueueName` is set (leave it empty
