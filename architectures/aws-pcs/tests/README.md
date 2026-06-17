@@ -75,6 +75,30 @@ deploys (deploy-all: prereqs + cluster + login + CPU, monitoring on) across:
 | **ap-northeast-1** | ✅ CREATE_COMPLETE | ✅ | ✅ | Tokyo |
 | **ap-south-1** | ✅ CREATE_COMPLETE | ✅ 6 containers | ✅ | Mumbai; p6-b200 ×4 GPU (8 GPU/node, 8 EFA NICs), B200 driver 595.71.05 |
 
+### p6-b200 ×4 NCCL all_reduce (ap-south-1, 32 GPU)
+
+NCCL `all_reduce_perf` over EFA (Pyxis container `public.ecr.aws/hpc-cloud/nccl-tests`,
+4× p6-b200.48xlarge = 32 B200 GPUs, NCCL auto-selected NICs):
+
+- **NET/OFI provider: `efa`, fabric `efa-direct`, 8 NICs per node** (all EFA NICs in use)
+- **Peak bus bandwidth: 377.4 GB/s** (16 GiB message, in/out-of-place)
+- Avg bus bandwidth across the 8 B → 16 GiB sweep: 106 GB/s; 0 wrong / 0 out-of-bounds
+
+| Message size | busbw (GB/s) |
+|---|---|
+| 128 MiB | 295 |
+| 256 MiB | 325 |
+| 1 GiB | 367 |
+| 4 GiB | 375 |
+| 16 GiB | **377** |
+
+> Pre-merge gotcha hit here: the GPU nodes booted without Enroot/Pyxis (the
+> `PostInstallScriptUrl` 404, see caveat below). After installing
+> `install-enroot-pyxis.sh` manually on the **login node and all compute nodes**
+> and `systemctl restart slurmd` on the compute nodes (so the freshly-dropped
+> `spank_pyxis.so` loads), `--container-image` jobs ran. A correct
+> `PostInstallScriptUrl` at deploy time avoids all of this.
+
 Cross-region note: nested-stack `TemplateURL` and the in-instance
 `aws s3 cp` of boot scripts both work against an S3 bucket in a **different**
 region (S3 global namespace; no `--region` needed) — verified ap-south-1 →
