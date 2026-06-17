@@ -87,32 +87,49 @@ are deleted with the stack.
 ## 4. Configuration
 
 The defaults give a working ML-training cluster, so the only required parameter is
-the Availability Zone (`PrimarySubnetAZ`); everything else is optional. The table
-below is the most-used subset, grouped by the deploy-all console's parameter groups
-(separator rows show each group). Storage parameters have their [own table](#storage-fsx-deployment-types-region-availability)
-below; for the complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
+the Availability Zone (`PrimarySubnetAZ`); everything else is optional. The most-used
+parameters are grouped below to match the deploy-all console's parameter groups. Storage
+has its [own table](#storage-fsx-deployment-types-region-availability) below; for the
+complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
+
+**Network**
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| **— 1. Network Configuration —** | | |
 | `PrimarySubnetAZ` | *(required)* | Availability Zone to deploy into — the one required parameter |
-| `AdditionalSubnetAZ2` / `AdditionalSubnetAZ3` | *(empty)* | Add private subnets in up to 2 more AZs (primary + 2) for higher availability or AZ-matched capacity. NAT gateway stays in the primary AZ |
-| **— 2. PCS Cluster Configuration —** | | |
-| `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`); 25.11 is needed for the Slurm OpenMetrics dashboards. Drives Pyxis build version too. See [OPERATIONS.md §1](./docs/OPERATIONS.md#1-slurm-version-selection) |
-| `AmiId` | *(empty → SSM auto)* | Empty auto-resolves to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04) from SSM. Pin to a specific `ami-xxx` for production, or pass an AMI built by [`pcs-ready-dlami-with-enroot-pyxis.yaml`](#84-pre-baking-enrootpyxis-into-a-custom-ami) |
-| `SSHAccessCidr` | *(empty)* | Open SSH/22 on the login node to a trusted CIDR for direct SSH (default: SSM only, no public access). See [§6 Accessing the Cluster](#6-accessing-the-cluster) |
-| **— 3. On-Demand Compute Node Group —** | | |
+| `AdditionalSubnetAZ2` / `…AZ3` | *(empty)* | Add private subnets in up to 2 more AZs (primary + 2). NAT gateway stays in the primary AZ |
+
+**PCS cluster**
+
+| Parameter | Default | Purpose |
+|---|---|---|
+| `SlurmVersion` | `25.11` | `25.05` or `25.11`; 25.11 is needed for the Slurm OpenMetrics dashboards. See [OPERATIONS.md §1](./docs/OPERATIONS.md#1-slurm-version-selection) |
+| `AmiId` | *(empty → SSM auto)* | Empty auto-resolves the latest PCS-Ready DLAMI. See [AMI and container runtime](#ami-and-container-runtime) |
+| `SSHAccessCidr` | *(empty)* | Open SSH/22 on the login node to a trusted CIDR (default: SSM only). See [§6](#6-accessing-the-cluster) |
+
+**On-Demand compute queue**
+
+| Parameter | Default | Purpose |
+|---|---|---|
 | `DeployOnDemandCNG` | `true` | Deploy the On-Demand compute queue (the `cpu1` queue by default) |
-| `OnDemandInstanceType` | `c6i.4xlarge` | Instance type for the On-Demand queue. Not limited to CPU — set any On-Demand type, e.g. a single-NIC GPU like `g6.12xlarge` (see [Example 1](#example-1-single-nic-gpu-queue-g6)) or an EFA-capable HPC type like `hpc7a.96xlarge`. (Multi-NIC P5/P6 GPUs use the P-series queue instead — see `PseriesInstanceType`.) Tune `OnDemandQueueName`/`OnDemandCngName`/`OnDemandMinCount`/`OnDemandMaxCount` alongside it |
-| `OnDemandEfaInterfaceCount` | `0` | `0` = no EFA (default). Set `1`/`2` for HPC/MPI workloads on EFA-capable CPU types (hpc6a=1, hpc7a/hpc8a/hpc6id=2). Enables EFA `NetworkInterfaces` + auto-creates a cluster placement group. See [§8.5 CPU compute node group](#85-cpu-compute-node-group--advanced-settings) |
-| **— 4. GPU Compute Node Group (P5/P6, optional) —** | | |
-| `DeployPseriesCNG` | `false` | Deploy a GPU (P5/P6) queue — see [GPU compute](#gpu-compute-p5p6) |
-| `PseriesInstanceType` | `p5.48xlarge` | Multi-NIC GPU instance type; auto-selects the matching template + EFA NIC count. Accepted values: `p5.48xlarge` / `p5e.48xlarge` (→ add-cng-p5, 32 NICs), `p5en.48xlarge` (→ add-cng-p5, 16 NICs), `p6-b200.48xlarge` (→ add-cng-p6-b200, 8 NICs), `p6-b300.48xlarge` (→ add-cng-p6-b300, 17 NICs). See [GPU compute](#gpu-compute-p5p6) |
+| `OnDemandInstanceType` | `c6i.4xlarge` | Any On-Demand type — CPU, a single-NIC GPU (`g6.12xlarge`, [Example 1](#example-1-single-nic-gpu-queue-g6)), or an HPC type. Multi-NIC P5/P6 use the GPU queue instead |
+| `OnDemandEfaInterfaceCount` | `0` | `1`/`2` enables EFA for HPC/MPI on EFA-capable CPU types. See [§8.5](#85-cpu-compute-node-group--advanced-settings) |
+
+**GPU compute queue (P5/P6, optional)**
+
+| Parameter | Default | Purpose |
+|---|---|---|
+| `DeployPseriesCNG` | `false` | Deploy a multi-NIC GPU (P5/P6) queue |
+| `PseriesInstanceType` | `p5.48xlarge` | Picks the matching template + EFA NIC count automatically. See [GPU compute](#gpu-compute-p5p6) for the accepted types |
 | `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR |
-| **— 5. Additional Cluster Configuration (Monitoring, Multi-User, Container Runtime) —** | | |
-| `MonitoringStack` | `Prometheus-LoginNode` | Deploy Prometheus + Grafana on the login node, plus DCGM Exporter on GPU compute nodes. Set to `none` to disable monitoring |
-| `GrafanaAccessCidr` | *(empty)* | Open HTTPS/443 on the login node to a trusted CIDR for direct Grafana access (default: SSM port-forward only). See [§8.1 Monitoring](#accessing-the-grafana-dashboards) |
-| `DirectoryService` | `none` | Set to `OpenLDAP-LoginNode` for a multi-user cluster (shared LDAP users across all nodes). See [§8.2 User Management](#82-user-management) |
+
+**Additional (monitoring, multi-user, container runtime)**
+
+| Parameter | Default | Purpose |
+|---|---|---|
+| `MonitoringStack` | `Prometheus-LoginNode` | Prometheus + Grafana on the login node, DCGM Exporter on GPU nodes. `none` disables it. See [§8.1](#81-monitoring) |
+| `GrafanaAccessCidr` | *(empty)* | Open HTTPS/443 (Grafana) on the login node to a trusted CIDR (default: SSM port-forward only) |
+| `DirectoryService` | `none` | `OpenLDAP-LoginNode` for a multi-user cluster. See [§8.2](#82-user-management) |
 
 **See [PARAMETERS.md](./docs/PARAMETERS.md) for the complete parameter reference** (all 7
 console parameter groups, with every default). The concept guides below cover the
