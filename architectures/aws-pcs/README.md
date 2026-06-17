@@ -344,8 +344,20 @@ Check support before deploying:
 If a deploy fails at the FSx resource with an "unsupported deployment type" error,
 switch these parameters to a type your Region supports.
 
-> Enabling EFA / GPUDirect Storage on the Lustre filesystem (`FSxLustreEnableEfa`) is an
-> advanced option — see [§8.7 FSx for Lustre over EFA (GPUDirect Storage)](#87-fsx-for-lustre-over-efa-gpudirect-storage).
+#### FSx for Lustre over EFA (GPUDirect Storage)
+
+`FSxLustreEnableEfa` (default `false`) enables EFA on the `/fsx` Lustre filesystem.
+**The headline feature is GPUDirect Storage (GDS) for P5 / P5e / P5en / P6-B200 GPU CNGs**,
+which DMAs file data straight into GPU memory (requires the NVIDIA `nvidia-fs` / cuFile
+stack on the client — see the Client-side Lustre-on-EFA + GDS item in
+[`docs/ROADMAP.md`](./docs/ROADMAP.md)). EFA-capable CPU CNGs
+(`OnDemandEfaInterfaceCount > 0`) get the EFA *transport* path to storage as a secondary
+benefit, useful when a single client is pushing past ~10 GBps.
+
+Constraints when enabling this:
+- **PERSISTENT_2 SSD only** — a CFN Rule fails the stack at create time on `PERSISTENT_1`.
+- **Much higher minimum `Capacity`** — at `PerUnitStorageThroughput=250` the minimum is
+  **19200 GiB** (16× the 1200 GiB default). Set `Capacity` accordingly.
 
 ### 8.2 Monitoring
 
@@ -601,21 +613,6 @@ libfabric endpoint and only one NIC. Use `osu_mbw_mr -np 32 -N 16` (or your
 application's natural multi-pair pattern) to actually exercise both NICs on
 hpc7a/hpc8a. See [tests/README.md Test 9](./tests/README.md#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a)
 for the full benchmark setup and validated bandwidth numbers.
-
-### 8.7 FSx for Lustre over EFA (GPUDirect Storage)
-
-`FSxLustreEnableEfa` (default `false`) enables EFA on the `/fsx` Lustre filesystem.
-**The headline feature is GPUDirect Storage (GDS) for P5 / P5e / P5en / P6-B200 GPU CNGs**,
-which DMAs file data straight into GPU memory (requires the NVIDIA `nvidia-fs` / cuFile
-stack on the client — see the Client-side Lustre-on-EFA + GDS item in
-[`docs/ROADMAP.md`](./docs/ROADMAP.md)). EFA-capable CPU CNGs
-(`OnDemandEfaInterfaceCount > 0`) get the EFA *transport* path to storage as a secondary
-benefit, useful when a single client is pushing past ~10 GBps.
-
-Constraints when enabling this:
-- **PERSISTENT_2 SSD only** — a CFN Rule fails the stack at create time on `PERSISTENT_1`.
-- **Much higher minimum `Capacity`** — at `PerUnitStorageThroughput=250` the minimum is
-  **19200 GiB** (16× the 1200 GiB default). Set `Capacity` accordingly.
 
 ---
 
