@@ -8,12 +8,12 @@ This repository provides reference architectures and deployment templates for se
 
 - **One click to an ML-training-ready cluster**: a single CloudFormation stack gives you a complete, ready-to-train environment — Slurm scheduler, GPU compute with EFA, shared FSx storage, the Enroot/Pyxis container runtime, and monitoring — with only the Availability Zone to choose. Submit distributed training jobs minutes after launch.
 - **Container runtime included**: Enroot/Pyxis is set up automatically, so `srun --container-image=...` works out of the box for containerized training.
-- **Monitoring built in**: Grafana + Prometheus on the login node, with DCGM Exporter on GPU nodes feeding pre-built GPU dashboards (on by default). Reach Grafana privately via SSM port-forward, or open it to a trusted CIDR. See [§8.1 Monitoring](#81-monitoring).
+- **Monitoring built in**: Grafana + Prometheus on the login node, with DCGM Exporter on GPU nodes feeding pre-built GPU dashboards (on by default). Reach Grafana privately via SSM port-forward, or open it to a trusted CIDR. See [§8.2 Monitoring](#82-monitoring).
 - **GPU-ready, multi-NIC EFA**: dedicated launch templates for the P5 and P6 families, selected automatically by instance type, for high-bandwidth multi-node training.
 - **Flexible capacity options**: On-Demand, "open" On-Demand Capacity Reservations (consumed automatically), and Capacity Blocks for ML — selected per node group. (Targeting a *specific* ODCR is on the [roadmap](./docs/ROADMAP.md).)
 - **High-performance storage**: FSx for Lustre (shared scratch, `/fsx`) and FSx for OpenZFS (home directories, `/home`).
-- **Multi-user ready**: opt-in OpenLDAP directory on the login node with SSSD on every compute node, so a team shares one cluster with consistent users — pairs with Slurm accounting. See [§8.2 User Management](#82-user-management).
-- **Access control built in**: ready-to-deploy least-privilege IAM policy stacks for cluster admins and users, and login-node SSH / Grafana access gated to a trusted CIDR. See [§8.3 IAM Permissions](#83-iam-permissions).
+- **Multi-user ready**: opt-in OpenLDAP directory on the login node with SSSD on every compute node, so a team shares one cluster with consistent users — pairs with Slurm accounting. See [§8.3 User Management](#83-user-management).
+- **Access control built in**: ready-to-deploy least-privilege IAM policy stacks for cluster admins and users, and login-node SSH / Grafana access gated to a trusted CIDR. See [§8.4 IAM Permissions](#84-iam-permissions).
 - **Modular components**: compose individual stacks (network/storage prerequisites, cluster scheduler, per-family compute node groups) instead of the all-in-one nested stack when you want to reuse infrastructure across clusters or iterate on one piece at a time.
 
 ## 2. Architecture
@@ -89,17 +89,17 @@ are deleted with the stack.
 The defaults give a working ML-training cluster, so the only required parameter is
 the Availability Zone (`PrimarySubnetAZ`); everything else is optional. The most-used
 parameters are grouped below to match the deploy-all console's parameter groups. Storage
-has its [own table](#storage-fsx-deployment-types-region-availability) below; for the
+parameters are covered in [§8.1 Storage](#81-storage-fsx-deployment-types--sizing); for the
 complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 
-**Network**
+**1. Network**
 
 | Parameter | Default | Purpose |
 |---|---|---|
 | `PrimarySubnetAZ` | *(required)* | Availability Zone to deploy into — the one required parameter |
 | `AdditionalSubnetAZ2` / `…AZ3` | *(empty)* | Add private subnets in up to 2 more AZs (primary + 2). NAT gateway stays in the primary AZ |
 
-**PCS cluster**
+**2. PCS cluster**
 
 | Parameter | Default | Purpose |
 |---|---|---|
@@ -107,15 +107,15 @@ complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 | `AmiId` | *(empty → SSM auto)* | Empty auto-resolves the latest PCS-Ready DLAMI. See [AMI and container runtime](#ami-and-container-runtime) |
 | `SSHAccessCidr` | *(empty)* | Open SSH/22 on the login node to a trusted CIDR (default: SSM only). See [§6](#6-accessing-the-cluster) |
 
-**On-Demand compute queue**
+**3. On-Demand compute queue**
 
 | Parameter | Default | Purpose |
 |---|---|---|
 | `DeployOnDemandCNG` | `true` | Deploy the On-Demand compute queue (the `cpu1` queue by default) |
 | `OnDemandInstanceType` | `c6i.4xlarge` | Any On-Demand type — CPU, a single-NIC GPU (`g6.12xlarge`, [Example 1](#example-1-single-nic-gpu-queue-g6)), or an HPC type. Multi-NIC P5/P6 use the GPU queue instead |
-| `OnDemandEfaInterfaceCount` | `0` | `1`/`2` enables EFA for HPC/MPI on EFA-capable CPU types. See [§8.5](#85-cpu-compute-node-group--advanced-settings) |
+| `OnDemandEfaInterfaceCount` | `0` | `1`/`2` enables EFA for HPC/MPI on EFA-capable CPU types. See [§8.6](#86-cpu-compute-node-group--advanced-settings) |
 
-**GPU compute queue (P5/P6, optional)**
+**4. GPU compute queue (P5/P6, optional)**
 
 | Parameter | Default | Purpose |
 |---|---|---|
@@ -123,13 +123,13 @@ complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 | `PseriesInstanceType` | `p5.48xlarge` | Picks the matching template + EFA NIC count automatically. See [GPU compute](#gpu-compute-p5p6) for the accepted types |
 | `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR |
 
-**Additional (monitoring, multi-user, container runtime)**
+**5. Additional (monitoring, multi-user, container runtime)**
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `MonitoringStack` | `Prometheus-LoginNode` | Prometheus + Grafana on the login node, DCGM Exporter on GPU nodes. `none` disables it. See [§8.1](#81-monitoring) |
+| `MonitoringStack` | `Prometheus-LoginNode` | Prometheus + Grafana on the login node, DCGM Exporter on GPU nodes. `none` disables it. See [§8.2](#82-monitoring) |
 | `GrafanaAccessCidr` | *(empty)* | Open HTTPS/443 (Grafana) on the login node to a trusted CIDR (default: SSM port-forward only) |
-| `DirectoryService` | `none` | `OpenLDAP-LoginNode` for a multi-user cluster. See [§8.2](#82-user-management) |
+| `DirectoryService` | `none` | `OpenLDAP-LoginNode` for a multi-user cluster. See [§8.3](#83-user-management) |
 
 **See [PARAMETERS.md](./docs/PARAMETERS.md) for the complete parameter reference** (all 7
 console parameter groups, with every default). The concept guides below cover the
@@ -143,7 +143,7 @@ choices that need the most thought.
 needed. Enroot 3.5.0 + Pyxis 0.20.0 are layered on at first boot via
 [`assets/scripts/install-enroot-pyxis.sh`](./assets/scripts/install-enroot-pyxis.sh)
 (~8–12 min boot). For **frequent scaling**, pre-bake Enroot/Pyxis into a custom DLAMI
-once with [§8.4](#84-pre-baking-enrootpyxis-into-a-custom-ami) and pass that
+once with [§8.5](#85-pre-baking-enrootpyxis-into-a-custom-ami) and pass that
 `ami-xxx` as `AmiId` (~3 min boot, deterministic state). The post-install hook is
 idempotent — it no-ops on a pre-baked AMI.
 
@@ -177,26 +177,8 @@ automatically.
 > group at `PseriesMinCount = PseriesMaxCount = <reserved count>` so the reserved
 > nodes launch immediately, rather than scaling from 0.
 
-### Storage: FSx deployment types (Region availability)
-
-**FSx deployment types are not available in every Region.** Defaults match the most
-capable type; switch to a more widely available one if your Region needs it.
-
-| Filesystem | Parameter | Default | Other values | Notes |
-|---|---|---|---|---|
-| Lustre (`/fsx`) | `LustreDeploymentType` | `PERSISTENT_2` | `PERSISTENT_1` | `PERSISTENT_2` (throughput 125/250/500/1000, metadata config) isn't in every Region; `PERSISTENT_1` (50/100/200) is in more Regions |
-| Lustre (`/fsx`) | `PerUnitStorageThroughput` | `250` | any valid number | Must be valid for the type: P2 = 125/250/500/1000, P1 = 50/100/200 |
-| OpenZFS (`/home`) | `OpenZFSDeploymentType` | `SINGLE_AZ_HA_2` | `SINGLE_AZ_HA_1`, `SINGLE_AZ_2`, `SINGLE_AZ_1` | `SINGLE_AZ_1` is in all Regions; HA/2 variants vary. `MULTI_AZ` excluded (needs a second subnet) |
-| OpenZFS (`/home`) | `HomeThroughput` | `320` | any valid number | Throughput (MB/s). Valid values depend on the deployment type: `SINGLE_AZ_2`/`SINGLE_AZ_HA_2` = 160/320/640/1280/2560/3840/5120/7680/10240; `SINGLE_AZ_HA_1`/`SINGLE_AZ_1` = 64/128/256/512/1024/2048/3072/4096 |
-
-Check support before deploying:
-[Lustre Regions](https://docs.aws.amazon.com/fsx/latest/LustreGuide/using-fsx-lustre.html) ·
-[OpenZFS Regions](https://docs.aws.amazon.com/fsx/latest/OpenZFSGuide/available-aws-regions.html).
-If a deploy fails at the FSx resource with an "unsupported deployment type" error,
-switch these parameters to a type your Region supports.
-
-> Enabling EFA / GPUDirect Storage on the Lustre filesystem (`FSxLustreEnableEfa`) is an
-> advanced option — see [§8.6 FSx for Lustre over EFA (GPUDirect Storage)](#86-fsx-for-lustre-over-efa-gpudirect-storage).
+Storage (FSx for Lustre `/fsx` + OpenZFS `/home`) has sensible defaults; deployment
+types, throughput, and capacity are covered in [§8.1 Storage](#81-storage-fsx-deployment-types--sizing).
 
 ---
 
@@ -333,7 +315,39 @@ the full validation matrix is in [tests/README.md](./tests/README.md).
 
 ## 8. Advanced Features
 
-### 8.1 Monitoring
+### 8.1 Storage: FSx deployment types & sizing
+
+The `/fsx` (Lustre) and `/home` (OpenZFS) filesystems have working defaults. Two things
+are worth knowing before changing them: **deployment types are not available in every
+Region**, and **starting small then expanding is usually faster to deploy**.
+
+> **Tip — deploy small, expand after.** Both FSx for Lustre and OpenZFS can be **grown
+> after creation** (increase storage capacity, and for Lustre throughput, via an FSx
+> update — no data migration). A large filesystem also takes longer to create, which
+> lengthens the whole stack deploy. So for the first deploy, leave `Capacity` /
+> `HomeCapacity` at (or near) the minimum to get the cluster up quickly, then expand the
+> filesystem to the size you need once the stack is `CREATE_COMPLETE`.
+
+**FSx deployment types are not available in every Region.** Defaults match the most
+capable type; switch to a more widely available one if your Region needs it.
+
+| Filesystem | Parameter | Default | Other values | Notes |
+|---|---|---|---|---|
+| Lustre (`/fsx`) | `LustreDeploymentType` | `PERSISTENT_2` | `PERSISTENT_1` | `PERSISTENT_2` (throughput 125/250/500/1000, metadata config) isn't in every Region; `PERSISTENT_1` (50/100/200) is in more Regions |
+| Lustre (`/fsx`) | `PerUnitStorageThroughput` | `250` | any valid number | Must be valid for the type: P2 = 125/250/500/1000, P1 = 50/100/200 |
+| OpenZFS (`/home`) | `OpenZFSDeploymentType` | `SINGLE_AZ_HA_2` | `SINGLE_AZ_HA_1`, `SINGLE_AZ_2`, `SINGLE_AZ_1` | `SINGLE_AZ_1` is in all Regions; HA/2 variants vary. `MULTI_AZ` excluded (needs a second subnet) |
+| OpenZFS (`/home`) | `HomeThroughput` | `320` | any valid number | Throughput (MB/s). Valid values depend on the deployment type: `SINGLE_AZ_2`/`SINGLE_AZ_HA_2` = 160/320/640/1280/2560/3840/5120/7680/10240; `SINGLE_AZ_HA_1`/`SINGLE_AZ_1` = 64/128/256/512/1024/2048/3072/4096 |
+
+Check support before deploying:
+[Lustre Regions](https://docs.aws.amazon.com/fsx/latest/LustreGuide/using-fsx-lustre.html) ·
+[OpenZFS Regions](https://docs.aws.amazon.com/fsx/latest/OpenZFSGuide/available-aws-regions.html).
+If a deploy fails at the FSx resource with an "unsupported deployment type" error,
+switch these parameters to a type your Region supports.
+
+> Enabling EFA / GPUDirect Storage on the Lustre filesystem (`FSxLustreEnableEfa`) is an
+> advanced option — see [§8.7 FSx for Lustre over EFA (GPUDirect Storage)](#87-fsx-for-lustre-over-efa-gpudirect-storage).
+
+### 8.2 Monitoring
 
 With `MonitoringStack=Prometheus-LoginNode` (default), an integrated monitoring stack based on
 [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring)
@@ -457,7 +471,7 @@ NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 
 ---
 
-### 8.2 User Management
+### 8.3 User Management
 
 By default, the cluster runs as a single `ubuntu` user. For **multi-user
 clusters** (per-user Slurm accounting, isolated home directories, team-based
@@ -473,7 +487,7 @@ operations (adding/removing users, Slurm accounting, SSH access).
 > lives on OpenZFS `/home`, so it survives a login-node replacement (data is recoverable),
 > but the directory **service** is a single point of failure while the login node is down.
 
-### 8.3 IAM Permissions
+### 8.4 IAM Permissions
 
 The cluster has two human roles, each with a ready-to-deploy IAM policy stack:
 
@@ -487,7 +501,7 @@ Each template creates the customer-managed policies and an IAM group, and can
 attach existing users at deploy time. See the **[IAM Permissions Guide](./docs/IAM.md)**
 for roles, deploy instructions, security considerations, and the verification matrix.
 
-### 8.4 Pre-baking Enroot/Pyxis into a custom AMI
+### 8.5 Pre-baking Enroot/Pyxis into a custom AMI
 
 The all-in-one template installs Enroot/Pyxis at **first boot** via
 `PostInstallScriptUrl`, which is fast to deploy and avoids an Image Builder step.
@@ -550,7 +564,7 @@ space skips the download+check entirely, shaving a few seconds off boot.
 
 For production deploys that pin the AMI explicitly per cluster, none of these are needed.
 
-### 8.5 CPU compute node group — advanced settings
+### 8.6 CPU compute node group — advanced settings
 
 The On-Demand CPU queue is configured with `OnDemandInstanceType` (default
 `c6i.4xlarge`) plus `OnDemandQueueName` / `OnDemandCngName` / `OnDemandMinCount` /
@@ -588,7 +602,7 @@ application's natural multi-pair pattern) to actually exercise both NICs on
 hpc7a/hpc8a. See [tests/README.md Test 9](./tests/README.md#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a)
 for the full benchmark setup and validated bandwidth numbers.
 
-### 8.6 FSx for Lustre over EFA (GPUDirect Storage)
+### 8.7 FSx for Lustre over EFA (GPUDirect Storage)
 
 `FSxLustreEnableEfa` (default `false`) enables EFA on the `/fsx` Lustre filesystem.
 **The headline feature is GPUDirect Storage (GDS) for P5 / P5e / P5en / P6-B200 GPU CNGs**,
