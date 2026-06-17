@@ -1,0 +1,144 @@
+<mxfile host="Electron" agent="RLinf-on-EKS">
+  <diagram name="DreamZero WAM - Real-Time Control" id="dreamzero-wam-infer">
+    <mxGraphModel dx="2730" dy="793" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="700" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title2" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=14;rounded=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Inference: Closed-Loop Real-Time Control&lt;/b&gt;" vertex="1">
+          <mxGeometry height="25" width="400" x="320" as="geometry" />
+        </mxCell>
+        <mxCell id="inputs2" parent="1" style="swimlane;startSize=22;html=1;fontStyle=1;container=0;rounded=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="Real-Time Inputs" vertex="1">
+          <mxGeometry height="300" width="160" x="20" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="past_frames" parent="inputs2" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Past Frames&lt;/b&gt;&lt;br&gt;(real observations)" vertex="1">
+          <mxGeometry height="50" width="140" x="10" y="31" as="geometry" />
+        </mxCell>
+        <mxCell id="lang2" parent="inputs2" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Language&lt;/b&gt;&lt;br&gt;&quot;Pack up the fruits&lt;br&gt;into the bag&quot;" vertex="1">
+          <mxGeometry height="60" width="140" x="10" y="155" as="geometry" />
+        </mxCell>
+        <mxCell id="enc2" parent="1" style="swimlane;startSize=22;html=1;fontStyle=1;rounded=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="Encoders" vertex="1">
+          <mxGeometry height="300" width="160" x="230" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="vae_enc2" parent="enc2" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;VAE Encoder&lt;/b&gt;&lt;br&gt;(Wan2.1)" vertex="1">
+          <mxGeometry height="50" width="130" x="15" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="state_enc2" parent="enc2" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;State Encoder&lt;/b&gt;&lt;br&gt;(Proprioception MLP)" vertex="1">
+          <mxGeometry height="50" width="130" x="15" y="230" as="geometry" />
+        </mxCell>
+        <mxCell id="clip_enc2" parent="enc2" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;CLIP Image Encoder&lt;/b&gt;&lt;br&gt;(ViT-H/14)" vertex="1">
+          <mxGeometry height="50" width="130" x="15" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="umt5_enc2" parent="enc2" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;UMT5-XXL&lt;/b&gt;&lt;br&gt;(text → 512 tokens)" vertex="1">
+          <mxGeometry height="50" width="130" x="15" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="dit2" parent="1" style="swimlane;startSize=24;html=1;fontStyle=1;fontSize=12;rounded=0;container=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="Joint Video-Action DiT (14B)" vertex="1">
+          <mxGeometry height="400" width="380" x="440" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="dit_causal2" parent="dit2" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Causal DiT Blocks&lt;/b&gt;&lt;br&gt;(Blockwise Causal Self-Attention)&lt;br&gt;&lt;br&gt;Jointly denoise video + action latents&lt;br&gt;Cross-attn to CLIP + UMT5" vertex="1">
+          <mxGeometry height="100" width="300" x="40" y="132" as="geometry" />
+        </mxCell>
+        <mxCell id="dit_video_head" parent="dit2" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;opacity=60;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Video Head&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;(CausalHead: AdaLN + Linear)&lt;br&gt;predict v(t) on video latents&lt;br&gt;— output discarded —&lt;/font&gt;" vertex="1">
+          <mxGeometry height="70" width="130" x="20" y="270" as="geometry" />
+        </mxCell>
+        <mxCell id="dit_act_dec2" parent="dit2" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Action Decoder&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;(CategorySpecificMLP)&lt;br&gt;predict v(t) on action tokens&lt;/font&gt;" vertex="1">
+          <mxGeometry height="70" width="140" x="210" y="270" as="geometry" />
+        </mxCell>
+        <mxCell id="e_causal_vhead" edge="1" parent="dit2" source="dit_causal2" style="rounded=0;html=1;strokeWidth=2;exitX=0.152;exitY=0.994;exitDx=0;exitDy=0;exitPerimeter=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="dit_video_head">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_causal_adec2" edge="1" parent="dit2" source="dit_causal2" style="rounded=0;html=1;strokeWidth=2;exitX=0.796;exitY=1.011;exitDx=0;exitDy=0;exitPerimeter=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="dit_act_dec2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="flow_sample" parent="dit2" style="text;html=1;align=center;verticalAlign=middle;rounded=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;font style=&quot;font-size: 11px;&quot;&gt;16-step flow sampling (4 with DiT caching)&lt;br&gt;Video + Action denoised jointly (coupled in self-attn)&lt;/font&gt;" vertex="1">
+          <mxGeometry height="40" width="280" x="50" y="360" as="geometry" />
+        </mxCell>
+        <mxCell id="outputs2" parent="1" style="swimlane;startSize=22;html=1;fontStyle=1;rounded=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="Output" vertex="1">
+          <mxGeometry height="220" width="200" x="870" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="future_action" parent="outputs2" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Future Action Chunk&lt;/b&gt;&lt;br&gt;24 steps x 7 joints&lt;br&gt;(absolute positions)" vertex="1">
+          <mxGeometry height="60" width="150" x="25" y="35" as="geometry" />
+        </mxCell>
+        <mxCell id="robot" parent="outputs2" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Async Real-World&lt;br&gt;Execution&lt;/b&gt;&lt;br&gt;(7Hz chunk gen;&lt;br&gt;15Hz action exec)" vertex="1">
+          <mxGeometry height="55" width="150" x="25" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="e_past_vae2" edge="1" parent="1" source="past_frames" style="rounded=0;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="vae_enc2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_past_clip2" edge="1" parent="1" source="past_frames" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="clip_enc2" value="&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;1st frame&lt;/span&gt;">
+          <mxGeometry relative="1" x="-0.0373" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="100" y="165" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_proprio_stenc2" edge="1" parent="1" source="proprio2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="state_enc2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_lang_stenc2" edge="1" parent="1" source="lang2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="umt5_enc2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_vae_kv" edge="1" parent="1" source="vae_enc2" style="rounded=0;html=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="kv_cache" value="&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;encode → cache&lt;/span&gt;">
+          <mxGeometry relative="1" x="-0.0323" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="380" y="108" as="sourcePoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_stenc_dit2" edge="1" parent="1" source="state_enc2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;entryX=0;entryY=0.75;entryDx=0;entryDy=0;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="dit_causal2" value="&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;self-attn register&lt;/span&gt;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_clip_dit2" edge="1" parent="1" source="clip_enc2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;entryX=0;entryY=0.25;entryDx=0;entryDy=0;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="dit_causal2" value="&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;cross-attn KV&lt;/span&gt;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_umt5_dit2" edge="1" parent="1" source="umt5_enc2" style="rounded=0;html=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="dit_causal2" value="&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;cross-attn KV&lt;/span&gt;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_adec_faction" edge="1" parent="1" source="dit_act_dec2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="future_action">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="840" y="351" />
+              <mxPoint x="840" y="115" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_faction_robot" edge="1" parent="1" source="future_action" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="robot">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_proprio_unapply" edge="1" parent="1" source="proprio2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="future_action" value="&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;unapply()&lt;br&gt;(rel → abs)&lt;/span&gt;">
+          <mxGeometry relative="1" x="-0.9011" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="90" y="470" />
+              <mxPoint x="1100" y="470" />
+              <mxPoint x="1100" y="115" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="feedback_loop" edge="1" parent="1" source="robot" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;dashed=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="past_frames" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="970" y="490" />
+              <mxPoint x="-10" y="490" />
+              <mxPoint x="-10" y="106" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="feedback_label" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=10;rounded=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;Closed-Loop: New Real Observation → Update KV Cache&lt;/font&gt;&lt;/b&gt;" vertex="1">
+          <mxGeometry height="30" width="350" x="410" y="490" as="geometry" />
+        </mxCell>
+        <mxCell id="note_infer" parent="1" style="text;html=1;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;rounded=0;fontSize=11;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Real-Time Control (Paper §3.2):&lt;/b&gt;&lt;br&gt;- Real observations encoded → attention KV cache (prevents drift)&lt;br&gt;- DiT jointly denoises video + action (coupled in causal self-attn)&lt;br&gt;- Video Head runs but output is discarded (video aids action quality)&lt;br&gt;- 16-step flow sampling; 4 effective DiT forwards (DiT caching)&lt;br&gt;- 7Hz chunk generation; 15Hz action execution (DROID/Franka)&lt;br&gt;- DreamZero-Flash: DiT caching cuts steps; decouple_inference_noise rescales video sigmas to terminate at 0.8 (orthogonal)" vertex="1">
+          <mxGeometry height="120" width="400" x="-10" y="510" as="geometry" />
+        </mxCell>
+        <mxCell id="proprio2" parent="1" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Proprioception&lt;/b&gt;&lt;br&gt;(current joints)" vertex="1">
+          <mxGeometry height="50" width="140" x="30" y="280" as="geometry" />
+        </mxCell>
+        <mxCell id="kv_cache" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;KV Cache&lt;/b&gt;&lt;br&gt;(attention K/V from real obs, per layer, t=0)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Updated with each new frame&lt;/font&gt;" vertex="1">
+          <mxGeometry height="55" width="200" x="530" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="e_kv_causal2" edge="1" parent="1" source="kv_cache" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="dit_causal2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
