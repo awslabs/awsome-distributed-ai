@@ -151,16 +151,24 @@ configured as LDAP clients automatically at first boot.
 
 ### Option 2: modular deployment
 
-Pass these to your add-cng.yaml stacks:
-- Login CNG: `DirectoryService=OpenLDAP-LoginNode`, `DirectoryRole=server`
-- Compute CNG: `DirectoryService=OpenLDAP-LoginNode`, `DirectoryRole=client`
+Pass these to your `add-cng.yaml` stacks:
+- Login CNG: `DirectoryRole=server`, `DirectoryDomainSuffix=dc=cluster,dc=internal`
+- Compute CNG: `DirectoryRole=client`, `DirectoryDomainSuffix=dc=cluster,dc=internal`
+
+> **IAM profile — give the login CNG the login profile.** `cluster.yaml` outputs two
+> instance profiles: `InstanceProfileArn` (compute) and `LoginInstanceProfileArn` (login,
+> which additionally grants read+decrypt of the OpenLDAP admin secret). When deploying
+> modularly with multi-user enabled, pass `IamProfileArn=<LoginInstanceProfileArn>` to the
+> **login** CNG and `IamProfileArn=<InstanceProfileArn>` to the **compute** CNGs. Giving
+> the login node the plain compute profile makes its OpenLDAP setup fail (it can't write
+> the admin password to SSM). `deploy-all` wires this automatically.
 
 ### Parameters
 
 | Parameter | Default | Description |
 |---|---|---|
-| `DirectoryService` | `none` | Set to `OpenLDAP-LoginNode` to enable multi-user |
-| `DirectoryRole` | `none` | Auto-set by deploy-all: `server` for login, `client` for compute |
+| `DirectoryService` | `none` | (deploy-all only) Set to `OpenLDAP-LoginNode` to enable multi-user; deploy-all derives each CNG's `DirectoryRole` from it |
+| `DirectoryRole` | `none` | (add-cng) `server` for the login CNG, `client` for compute CNGs |
 | `DirectoryDomainSuffix` | `dc=cluster,dc=internal` | LDAP base DN (change only if you need a different domain) |
 
 ---
