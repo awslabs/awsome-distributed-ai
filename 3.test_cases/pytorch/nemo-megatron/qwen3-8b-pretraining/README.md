@@ -26,12 +26,15 @@ Both clusters are compute-saturated with perfect communication overlap. AllReduc
 
 ## Quick Start
 
+> **Disk space:** The container build requires ~50 GB of disk space in TMPDIR.
+> `enroot import` needs `sudo` and TMPDIR pointing to FSx (not `/tmp`, which is too small).
+
 ### H200 Cluster (p5en.48xlarge)
 
 ```bash
 # 1. Build container
 cd h200/ && docker build -t qwen3-8b-h200:latest .
-sudo enroot import --output /fsx/ubuntu/qwen3-8b-pretraining/containers/nemo-efa-25.07.sqsh dockerd://qwen3-8b-h200:latest
+sudo TMPDIR=/fsx/tmp ENROOT_TEMP_PATH=/fsx/tmp enroot import --output /fsx/ubuntu/qwen3-8b-pretraining/containers/nemo-efa-25.07.sqsh dockerd://qwen3-8b-h200:latest
 
 # 2. Submit training job
 sbatch h200/slurm/run.sh
@@ -42,7 +45,7 @@ sbatch h200/slurm/run.sh
 ```bash
 # 1. Build container
 cd b300/ && docker build -t qwen3-8b-b300:latest .
-sudo enroot import --output /fsx/ubuntu/qwen3-8b-pretraining/containers/nemo-efa-26.02.sqsh dockerd://qwen3-8b-b300:latest
+sudo TMPDIR=/fsx/tmp ENROOT_TEMP_PATH=/fsx/tmp enroot import --output /fsx/ubuntu/qwen3-8b-pretraining/containers/nemo-efa-26.02.sqsh dockerd://qwen3-8b-b300:latest
 
 # 2. Submit training job
 sbatch b300/slurm/run.sh
