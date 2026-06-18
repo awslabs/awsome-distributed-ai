@@ -204,6 +204,23 @@ Resources:
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/grafana/*'
 
+              # Hard-deny the OpenLDAP admin password on the shared/compute role.
+              # AmazonSSMManagedInstanceCore (attached for SSM agent) grants
+              # ssm:GetParameter on "*", and the SecureString is encrypted with the
+              # AWS-managed key alias/aws/ssm — whose key policy lets any in-account
+              # principal decrypt via SSM. So WITHOUT this explicit Deny a user job on
+              # a compute node could `get-parameter --with-decryption` the directory
+              # admin password (directory takeover). An explicit Deny overrides the
+              # managed-policy Allow. The login-only role does NOT carry this Deny.
+              - Sid: DenyLdapAdminPasswordOnComputeNodes
+                Effect: Deny
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/ldap/*'
+
   # IAM Instance Profile (compute + login share this base profile)
   PcsInstanceProfile:
     Type: AWS::IAM::InstanceProfile
