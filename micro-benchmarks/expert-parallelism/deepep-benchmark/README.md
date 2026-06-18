@@ -30,7 +30,7 @@ enroot import -o ./deepep.sqsh dockerd://${DEEPEP_CONTAINER_IMAGE_NAME_TAG}
 ## Running DeepEP Benchmark
 
 ```bash
-sbatch deepep-test_intranode.sbatch
+sbatch test_intranode.sbatch
 ```
 
 ```bash
