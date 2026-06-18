@@ -181,13 +181,9 @@ Resources:
                   - pcs:RegisterComputeNodeGroupInstance
                 Resource: "*"
 
-              - Sid: S3GetScripts
-                Effect: Allow
-                Action:
-                  - s3:GetObject
-                Resource:
-                  - arn:aws:s3:::awsome-distributed-ai/templates/scripts/*
-                  - arn:aws:s3:::*/templates/scripts/*
+              # (Boot-script reads from S3 are already covered by the attached
+              # AmazonS3ReadOnlyAccess managed policy, so no inline s3:GetObject
+              # statement is needed here. See note on AmazonS3ReadOnlyAccess above.)
 
               # Compute nodes run untrusted user jobs and must NOT be able to read
               # the OpenLDAP admin password, so the base policy grants the grafana
@@ -265,13 +261,8 @@ Resources:
                   - pcs:RegisterComputeNodeGroupInstance
                 Resource: "*"
 
-              - Sid: S3GetScripts
-                Effect: Allow
-                Action:
-                  - s3:GetObject
-                Resource:
-                  - arn:aws:s3:::awsome-distributed-ai/templates/scripts/*
-                  - arn:aws:s3:::*/templates/scripts/*
+              # (Boot-script reads from S3 are covered by AmazonS3ReadOnlyAccess;
+              # no inline s3:GetObject needed — same as the base role.)
 
               - Sid: SSMClusterParametersForThisClusterOnly
                 Effect: Allow

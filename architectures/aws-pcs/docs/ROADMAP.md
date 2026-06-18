@@ -29,6 +29,18 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   `Placement` per type; (2) dynamic — the branch logic is instance-family-independent, so
   exercise actual targeted-ODCR consumption (`InstanceLifecycle` empty = On-Demand, reserved
   count decrements) on a cheap type (c6i/g5).
+- [ ] 🟡 **Scope down the instance role's `AmazonS3ReadOnlyAccess`.** The PCS instance
+  role in `cluster.yaml` attaches `AmazonS3ReadOnlyAccess` **unconditionally** (every node
+  can read every S3 bucket in the account). The upstream
+  [aws-hpc-recipes `pcs-iip-minimal`](https://github.com/aws-samples/aws-hpc-recipes/blob/main/recipes/pcs/getting_started/assets/pcs-iip-minimal.yaml)
+  makes it an **opt-in** (`EnableS3ReadOnly`, off by default); ml-pcs lost that gate when
+  the role was brought into `cluster.yaml`. Restore the opt-in (a parameter, or scope to
+  the named data/templates bucket(s)) so the default cluster doesn't grant account-wide S3
+  read. **IAM-behaviour change — needs care:** training test cases (FSDP, Megatron) and any
+  workload reading datasets/checkpoints from S3 rely on this today, so validate those
+  before tightening. (`AmazonSSMManagedInstanceCore` is also unconditional here, but SSM is
+  a core feature of this architecture — login/connect, cluster-user policy — so it stays on
+  by default.)
 - [ ] 🟢 **Trainium (Trn) validation.** Validate the templates on Trainium instances
   (e.g. trn1/trn2) — node group, EFA/networking, and a sample training run.
 - [ ] 🟡 **Graviton (arm64) CPU CNG support — `hpc7g` / `c7gn`.** EFA-capable arm64
