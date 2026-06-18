@@ -15,4 +15,4 @@ export WORLD_SIZE=$SLURM_NNODES
 
 mpirun -N 1 bash -c 'echo $(hostname): $(cat /sys/devices/virtual/dmi/id/board_asset_tag | tr -d " ")'
 
-srun --mpi=pmix --cpu-bind=none --container-image ./deepep.sqsh bash -c 'PYTHONPATH=$(echo /DeepEP/install/lib/python*/site-packages):$PYTHONPATH RANK=$SLURM_PROCID python3 /DeepEP/tests/test_low_latency.py'
+srun --mpi=pmix --cpu-bind=none --container-image ./deepep.sqsh bash -c 'RANK=$SLURM_PROCID python3 /DeepEP/tests/test_low_latency.py'
