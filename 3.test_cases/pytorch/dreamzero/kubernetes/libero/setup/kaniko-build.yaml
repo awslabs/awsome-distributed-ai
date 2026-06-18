@@ -8,7 +8,7 @@
 #   stage 1: build the upstream RLinf embodied-libero image, push as
 #            ${ECR_URI}:upstream-embodied-libero
 #   stage 2: FROM that tag, layer the EFA overlay (this test case's Dockerfile),
-#            apply the DCP-save patch, push ${ECR_URI}:latest
+#            apply the DCP-save gloo-coordinator patch, push ${ECR_URI}:latest
 #
 # A shared FSx scratch dir (PVC fsx-claim) holds the cloned sources + build cache.
 # The test-case Dockerfile + docker/ build helpers are delivered via a ConfigMap
@@ -18,7 +18,7 @@
 #   kubectl -n ${NAMESPACE} create configmap dreamzero-build-context \
 #     --from-file=Dockerfile=Dockerfile \
 #     --from-file=install_extras.sh=docker/scripts/install_extras.sh \
-#     --from-file=dcp-save-finalize-besteffort.patch=docker/scripts/patches/dcp-save-finalize-besteffort.patch \
+#     --from-file=dcp-save-gloo-coordinator.patch=docker/scripts/patches/dcp-save-gloo-coordinator.patch \
 #     --dry-run=client -o yaml | kubectl apply -f -
 #   envsubst '${ECR_URI} ${NAMESPACE}' < kubernetes/libero/setup/kaniko-build.yaml | kubectl apply -f -
 ---
@@ -102,7 +102,7 @@ spec:
               mkdir -p /ctx/overlay/docker/scripts/patches
               cp /cm/Dockerfile /ctx/overlay/Dockerfile
               cp /cm/install_extras.sh /ctx/overlay/docker/scripts/install_extras.sh
-              cp /cm/dcp-save-finalize-besteffort.patch /ctx/overlay/docker/scripts/patches/dcp-save-finalize-besteffort.patch
+              cp /cm/dcp-save-gloo-coordinator.patch /ctx/overlay/docker/scripts/patches/dcp-save-gloo-coordinator.patch
               git clone https://github.com/RLinf/RLinf.git /ctx/overlay/RLinf
               git -C /ctx/overlay/RLinf checkout b3bbabb1f461
               git clone https://github.com/RLinf/dreamzero.git /ctx/overlay/DreamZero

@@ -269,7 +269,7 @@ not clobbered to empty strings.
 The image is built in two stages: the upstream RLinf `embodied-libero` target
 (which natively builds the dedicated **`dreamzero` venv**, RLinf PR #1272), then
 an EFA overlay (`Dockerfile` at the test-case root) that layers EFA 1.47.0 /
-libfabric 2.4.0 / aws-ofi-nccl 1.18.0 and a best-effort DCP-save patch. The
+libfabric 2.4.0 / aws-ofi-nccl 1.18.0 and the DCP-save gloo-coordinator patch. The
 external `groot` package is cloned from `github.com/RLinf/dreamzero.git` and
 placed on `PYTHONPATH` via `DREAMZERO_PATH=/workspace/DreamZero`.
 
@@ -306,7 +306,7 @@ stage 1 to complete before stage 2):
 kubectl -n "$NAMESPACE" create configmap dreamzero-build-context \
   --from-file=Dockerfile=Dockerfile \
   --from-file=install_extras.sh=docker/scripts/install_extras.sh \
-  --from-file=dcp-save-finalize-besteffort.patch=docker/scripts/patches/dcp-save-finalize-besteffort.patch \
+  --from-file=dcp-save-gloo-coordinator.patch=docker/scripts/patches/dcp-save-gloo-coordinator.patch \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # Apply both stages (restricted envsubst), then wait on stage 1 before stage 2 runs:
@@ -497,7 +497,7 @@ config:
 |---------|-------|-----|
 | Pods crash with `ray: command not found`, or inline `${...}` vars render empty | Manifest rendered with unrestricted `envsubst`, clobbering inline shell vars | Always render manifests that embed shell with the **restricted** allow-list: `envsubst '${ECR_URI} ${NAMESPACE}' < ...`. |
 | `ray: command not found` on Ray head/worker/submitter | KubeRay runs `ray` non-interactively (`~/.bashrc` not sourced); `ray` lives in the `dreamzero` venv | Already handled in `dreamzero-sft.yaml`: the venv `bin` is prepended to `PATH` on the head/worker `env` **and** on the `submitterPodTemplate`. Don't strip those `PATH` entries. |
-| SFT crashes near checkpoint save: `UnpicklingError: invalid load key '\x00'` in `broadcast_object_list`, after shards are written | A best-effort DCP-save finalize step crashes *after* the on-disk shards are already complete | The in-image best-effort save patch handles this; the **on-disk checkpoint is valid and convertible**. Proceed to step 5 (convert). |
+| SFT crashes near checkpoint save: `UnpicklingError: invalid load key '\x00'` in `broadcast_object_list`, after shards are written | torch 2.6 DCP broadcasts its finalization object over the default NCCL/CUDA PG, which races with NCCL teardown at the end of a long write | Fixed by the in-image `dcp-save-gloo-coordinator.patch` (routes the broadcast over a CPU/gloo PG, like torch 2.7+). If you somehow hit this, the **on-disk checkpoint is still valid and convertible** — proceed to step 5 (convert). |
 | Convert fails with `EOFError` / `inline_container.cc unexpected pos`, corrupt shards | FSx filled up during the SFT run; `torch.save` was truncated mid-write | Ensure **≥250 GB free** on FSx before SFT (a 14B DCP checkpoint is ~140–206 GB). Free space, re-run SFT. |
 | SFT fails with `KeyError: embodiment_tag 'libero_sim' not found` | The DROID checkpoint only bundles `oxe_droid` metadata | Run step 3 (`generate-metadata.yaml`) to produce `/fsx/models/metadata-libero.json` before SFT/eval. |
 | Metadata generation or transforms behave wrongly / schema errors | Wrong dataset (`lerobot/libero` has a different `observation.state`/`action` schema) | The dataset **must** be `physical-intelligence/libero`. Re-stage step 2. |

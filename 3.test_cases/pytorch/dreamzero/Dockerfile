@@ -209,14 +209,18 @@ COPY RLinf/ /workspace/RLinf/
 COPY DreamZero/ /workspace/DreamZero/
 
 # Apply EKS hotfix patches to the upstream RLinf source.
-# dcp-save-finalize-besteffort.patch: tolerate torch DCP's post-write
-# finalization broadcast crash (UnpicklingError on multi-node gloo PG) when the
-# on-disk checkpoint is already complete. Must be baked into the image because
+# dcp-save-gloo-coordinator.patch: pass a CPU/gloo process group to dcp.save so
+# its post-write finalization object-broadcast runs over gloo instead of CUDA/NCCL.
+# On torch 2.6 the default-PG (NCCL) broadcast of the multi-MB finalization object
+# races with NCCL comm teardown at the end of a long (100s+ GB) checkpoint write,
+# leaving non-coordinator ranks with an all-zero buffer -> UnpicklingError, AFTER
+# every shard + .metadata are already on disk (reproduced + validated on 2x p5en;
+# torch 2.7+ fixes this upstream the same way). Must be baked into the image because
 # Ray worker actors on every node import from /workspace/RLinf. git is present
 # (installed in the EFA stage). Patches are validated to apply against the pinned
 # UPSTREAM_REF; the build fails loudly if a patch no longer applies.
 RUN cd /workspace/RLinf && \
-    for p in /workspace/eks/scripts/patches/*.patch; do \
+    for p in /workspace/eks/scripts/patches/*.patch; do [ -e "$p" ] || continue; \
         echo "Applying patch: ${p}"; \
         git apply --verbose "${p}" || patch -p1 < "${p}"; \
     done
