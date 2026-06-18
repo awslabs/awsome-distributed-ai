@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=intranode
+#SBATCH --job-name=low_latency
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node 1
 #SBATCH --exclusive
