@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # setup-directory.sh — Multi-user directory setup for PCS reference architecture.
 #
 # Single script for both login node (LDAP server) and compute nodes (SSSD client).

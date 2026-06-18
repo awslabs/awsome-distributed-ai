@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # ldap-add-user.sh — Helper to add a POSIX user to the OpenLDAP directory.
 # Run on the login node as root (or with LDAP admin credentials).
 #
@@ -11,7 +13,7 @@
 set -euo pipefail
 
 USERNAME="${1:?Usage: $0 <username> [uid] [gid] [ssh-pub-key]}"
-USER_UID="${2:-$((10000 + RANDOM % 50000))}"
+USER_UID="${2:?uid required — pick a cluster-unique uidNumber (see USER-MANAGEMENT.md). Auto-random was removed: bash RANDOM tops out at 32767 so it could not span the intended range and risked UID collisions (two users sharing a uidNumber = same POSIX principal on shared /home,/fsx)}"
 USER_GID="${3:-3000}"
 SSH_PUBKEY="${4:-}"
 

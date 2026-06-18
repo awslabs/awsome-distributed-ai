@@ -224,18 +224,6 @@ Parameters:
       - '25.05'
       - '25.11'
 
-  DirectoryService:
-    Type: String
-    Description: >-
-      Multi-user directory service. 'none' = single ubuntu user (default,
-      unchanged). 'OpenLDAP-LoginNode' = deploy slapd on the login node (DB on shared
-      /home/ldap-db), compute nodes configure SSSD as LDAP clients. Future
-      options (SimpleAD, ManagedAD) will be added as AllowedValues.
-    Default: 'none'
-    AllowedValues:
-      - 'none'
-      - 'OpenLDAP-LoginNode'
-
   DirectoryDomainSuffix:
     Type: String
     Description: >-

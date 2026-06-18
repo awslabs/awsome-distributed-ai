@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Docs ⇄ template consistency lint for the AWS PCS reference architecture.
 #
 # Catches the most common drift after a parameter rename/removal: docs (and

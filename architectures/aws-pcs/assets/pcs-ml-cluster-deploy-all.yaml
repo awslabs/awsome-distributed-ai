@@ -787,7 +787,6 @@ Resources:
           - !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-enroot-pyxis.sh'
           - !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
-        DirectoryService: !Ref DirectoryService
         DirectoryRole: !If [DirectoryEnabled, 'server', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
         S3BucketName: !Ref S3BucketName
@@ -840,7 +839,6 @@ Resources:
         # group when PlacementGroupName is empty.
         EfaInterfaceCount: !Ref OnDemandEfaInterfaceCount
         PlacementGroupName: !Ref OnDemandPlacementGroupName
-        DirectoryService: !Ref DirectoryService
         DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
         S3BucketName: !Ref S3BucketName
@@ -889,7 +887,6 @@ Resources:
           - !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-enroot-pyxis.sh'
           - !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
-        DirectoryService: !Ref DirectoryService
         DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
         S3BucketName: !Ref S3BucketName
@@ -938,7 +935,6 @@ Resources:
           - !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-enroot-pyxis.sh'
           - !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
-        DirectoryService: !Ref DirectoryService
         DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
         S3BucketName: !Ref S3BucketName
@@ -987,7 +983,6 @@ Resources:
           - !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-enroot-pyxis.sh'
           - !Ref PostInstallScriptUrl
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
-        DirectoryService: !Ref DirectoryService
         DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
         S3BucketName: !Ref S3BucketName
