@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=intranode
+#SBATCH --job-name=internode
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node 1
 #SBATCH --exclusive
