@@ -78,23 +78,30 @@ Resources:
               "Resource": "arn:aws:ssm:*:*:parameter/pcs/*/grafana/*"
             },
             {
-              "Sid": "SSMSessionToLoginNode",
+              "Sid": "SSMSessionToLoginNodeInstance",
               "Effect": "Allow",
               "Action": [
                 "ssm:StartSession"
               ],
-              "Resource": [
-                "arn:aws:ec2:*:*:instance/*",
-                "arn:aws:ssm:*:*:document/AWS-StartSSHSession",
-                "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSession",
-                "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSessionToRemoteHost",
-                "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell"
-              ],
+              "Resource": "arn:aws:ec2:*:*:instance/*",
               "Condition": {
                 "StringLike": {
                   "ssm:resourceTag/Name": "PCS-login*"
                 }
               }
+            },
+            {
+              "Sid": "SSMSessionDocuments",
+              "Effect": "Allow",
+              "Action": [
+                "ssm:StartSession"
+              ],
+              "Resource": [
+                "arn:aws:ssm:*:*:document/AWS-StartSSHSession",
+                "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSession",
+                "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSessionToRemoteHost",
+                "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell"
+              ]
             },
             {
               "Sid": "SSMSessionDocumentLookup",
