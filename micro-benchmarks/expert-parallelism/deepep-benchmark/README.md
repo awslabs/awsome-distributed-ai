@@ -34,7 +34,7 @@ sbatch test_intranode.sbatch
 ```
 
 ```bash
-sbatch deepep-test_internode.sbatch
+sbatch test_internode.sbatch
 ```
 
 ```bash
