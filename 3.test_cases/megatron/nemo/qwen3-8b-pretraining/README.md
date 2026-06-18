@@ -10,7 +10,7 @@ Pre-training **Qwen3-8B** (8.2B dense parameters) on 1T tokens comparing two GPU
 | **Throughput** | 162K tok/s | **318K tok/s** | 1.96× |
 | **Time to 1T tokens** | ~71 days | **~36 days** | 1.97× |
 | Step time (100 iters) | 3.23s | 1.65s | 1.96× |
-| Peak memory/GPU | ~138 GB / 141 GB | ~173 GB / 288 GB | — |
+| Peak memory/GPU | ~114 GB / 141 GB | ~173 GB / 288 GB | — |
 | MFU | 0.50 | 0.50 | — |
 
 Both clusters are compute-saturated with perfect communication overlap. AllReduce and AllGather are fully hidden behind compute.
@@ -92,20 +92,20 @@ sbatch b300/slurm/run.sh
 | Global batch size | 128 (grad_accum=4) | 128 (grad_accum=2) |
 | Sequence length | 4096 | 4096 |
 | Precision | BF16 | BF16 |
-| Gradient checkpointing | Full recompute | None |
+| Gradient checkpointing | None | None |
 | Distributed optimizer | Yes (sharded Adam) | Yes (sharded Adam) |
 | Overlap grad reduce | Yes | Yes |
-| Framework | Megatron-Core (NeMo 25.07) | Megatron-Bridge (NeMo 26.02) |
+| Framework | Megatron-Bridge (NeMo 25.07) | Megatron-Bridge (NeMo 26.02) |
 
 ## Key Findings
 
 1. **Both clusters are compute-saturated with perfect communication overlap.** AllReduce and AllGather are fully hidden behind compute — verified by single-GPU benchmarks showing lower TFLOP/s due to reduced batch arithmetic intensity.
 
-2. **Best software stack per GPU generation.** NeMo 25.07 (Megatron-Core v0.13.1) for H200; NeMo 26.02 (Megatron-Bridge v2.9.0) for B300. Each maximizes hardware utilization for its target architecture.
+2. **Both clusters use the Megatron-Bridge recipe API.** NeMo 25.07 for H200; NeMo 26.02 for B300. Each container maximizes hardware utilization for its target architecture.
 
 3. **Pure data parallelism is optimal** when the model fits in single-GPU memory. Distributed optimizer + overlapped grad reduce eliminate the memory penalty.
 
-4. **Gradient checkpointing is the key differentiator:** required on H200 (141 GB) for MBS≥2, unnecessary on B300 (288 GB) for MBS≤4 — saving ~20% recompute overhead.
+4. **No gradient checkpointing needed on either cluster:** distributed optimizer shards Adam states across DP ranks, keeping H200 peak at ~114 GB (MBS=2) and B300 at ~173 GB (MBS=4).
 
 ## Hardware
 
@@ -124,7 +124,7 @@ sbatch b300/slurm/run.sh
 ├── README.md              ← You are here
 ├── h200/
 │   ├── Dockerfile         ← NeMo 25.07 + EFA container
-│   ├── train.py           ← Megatron-Core training script
+│   ├── train.py           ← Megatron-Bridge training script
 │   └── slurm/
 │       └── run.sh         ← Slurm submission script
 ├── b300/
@@ -138,4 +138,4 @@ sbatch b300/slurm/run.sh
 
 ## License
 
-Apache 2.0
+MIT-0

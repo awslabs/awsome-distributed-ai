@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 
 # Push the AWS-optimized NeMo container to Amazon ECR
 # This script creates the ECR repository, logs in, tags, and pushes the image

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Qwen3-8B Pre-Training on B300 — Megatron-Bridge (NeMo 26.02)
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+"""Qwen3-8B Pre-Training on H200 — Megatron-Bridge (NeMo 25.07)
 
 Uses the Megatron-Bridge recipe API with config objects.
-No gradient checkpointing needed (288 GB B300 memory).
+No gradient checkpointing needed (distributed optimizer keeps memory at ~114 GB).
 
-Best config: TP=1, PP=1, DP=16, MBS=4, GBS=128, seq=4096, BF16
-Result: 976 TFLOP/s/GPU, 318K tok/s on 16x B300
+Best config: TP=1, PP=1, DP=16, MBS=2, GBS=128, seq=4096, BF16
+Result: 497 TFLOP/s/GPU, 162K tok/s on 16x H200
 """
 import os
 
@@ -18,10 +20,10 @@ from megatron.bridge.training.pretrain import pretrain
 
 def main():
     cfg = qwen3_8b_pretrain_config(
-        mock=True,  # Set to False and provide data_path for real training
+        mock=True,
         tensor_model_parallel_size=1,
         pipeline_model_parallel_size=1,
-        micro_batch_size=4,
+        micro_batch_size=2,
         global_batch_size=128,
         seq_length=4096,
         train_iters=100,
@@ -29,14 +31,8 @@ def main():
         lr_decay_iters=100,
     )
 
-    # Training configuration
-    cfg.train.bf16 = True
-    cfg.train.use_distributed_optimizer = True
-    cfg.train.overlap_grad_reduce = True
-    cfg.train.overlap_param_gather = True
-
-    # No gradient checkpointing (B300 has 288 GB — fits MBS=4 without recompute)
-    cfg.train.recompute_granularity = None
+    # No gradient checkpointing - MBS=2 with distributed optimizer fits in 141 GB
+    # (uses ~114 GB peak, leaving headroom)
 
     # Optimizer
     cfg.optimizer.lr = 3e-4
@@ -50,14 +46,8 @@ def main():
     cfg.logger.log_interval = 5
     cfg.train.eval_interval = 1000
     cfg.train.eval_iters = 0
-    cfg.train.dir = "/fsx/ubuntu/qwen3-8b-pretraining/checkpoints/b300"
+    cfg.train.dir = "/fsx/ubuntu/qwen3-8b/checkpoints/h200"
     cfg.train.save_interval = 1000
-
-    # To use real data instead of mock:
-    # cfg.data.mock = False
-    # cfg.data.data_path = "/fsx/ubuntu/qwen3-8b-pretraining/datasets/c4/merged_text_document"
-    # cfg.data.tokenizer_type = "HuggingFaceTokenizer"
-    # cfg.data.tokenizer_model = "Qwen/Qwen3-8B"
 
     pretrain(config=cfg, forward_step_func=forward_step)
 
