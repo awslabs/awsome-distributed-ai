@@ -189,6 +189,69 @@ Resources:
                   - arn:aws:s3:::awsome-distributed-ai/templates/scripts/*
                   - arn:aws:s3:::*/templates/scripts/*
 
+              # Compute nodes run untrusted user jobs and must NOT be able to read
+              # the OpenLDAP admin password, so the base policy grants the grafana
+              # parameter only. The ldap/* SSM read/write + KMS decrypt live on a
+              # separate login-only role (PcsLoginInstanceIamRole) below — see the
+              # security review on the multi-user PR. SSSD on compute uses an
+              # anonymous bind, so compute never needs the ldap secret.
+              - Sid: SSMGrafanaParameterForThisClusterOnly
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                  - ssm:AddTagsToResource
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/grafana/*'
+
+  # IAM Instance Profile (compute + login share this base profile)
+  PcsInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub
+        - 'AWSPCS-pcs-${StackHash}-${AWS::Region}'
+        - StackHash: !Select [0, !Split ['-', !Select [2, !Split ['/', !Ref 'AWS::StackId']]]]
+      Roles:
+        - !Ref PcsInstanceIamRole
+
+  # Login-node-only role: the base role plus the OpenLDAP admin password
+  # (ssm /pcs/<id>/ldap/*) read/write and KMS decrypt. Only the login node runs
+  # the OpenLDAP server and needs this secret; keeping it off the compute role
+  # prevents a user job on a compute node from reading the directory admin
+  # password via IMDS (directory-takeover). deploy-all passes this profile to the
+  # LoginNodeGroupStack only; every other CNG gets PcsInstanceProfile.
+  PcsLoginInstanceIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonS3ReadOnlyAccess"
+      Policies:
+        - PolicyName: PcsLoginInstancePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: PcsRegisterInstance
+                Effect: Allow
+                Action:
+                  - pcs:RegisterComputeNodeGroupInstance
+                Resource: "*"
+
+              - Sid: S3GetScripts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - arn:aws:s3:::awsome-distributed-ai/templates/scripts/*
+                  - arn:aws:s3:::*/templates/scripts/*
+
               - Sid: SSMClusterParametersForThisClusterOnly
                 Effect: Allow
                 Action:
@@ -208,15 +271,14 @@ Resources:
                   StringEquals:
                     kms:ViaService: !Sub 'ssm.${AWS::Region}.amazonaws.com'
 
-  # IAM Instance Profile
-  PcsInstanceProfile:
+  PcsLoginInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
       InstanceProfileName: !Sub
-        - 'AWSPCS-pcs-${StackHash}-${AWS::Region}'
+        - 'AWSPCS-pcs-login-${StackHash}-${AWS::Region}'
         - StackHash: !Select [0, !Split ['-', !Select [2, !Split ['/', !Ref 'AWS::StackId']]]]
       Roles:
-        - !Ref PcsInstanceIamRole
+        - !Ref PcsLoginInstanceIamRole
 
   # Monitoring instance permissions — inline policy added to the instance role
   # only when monitoring is enabled. Inline (RoleName + PutRolePolicy via an
@@ -231,6 +293,7 @@ Resources:
       PolicyName: !Sub '${PCSCluster.Id}-monitoring'
       Roles:
         - !Ref PcsInstanceIamRole
+        - !Ref PcsLoginInstanceIamRole
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -302,8 +365,11 @@ Outputs:
     Description: The Id of the PCS cluster
     Value: !GetAtt [ PCSCluster, Id ]
   InstanceProfileArn:
-    Description: ARN of the IAM instance profile
+    Description: ARN of the IAM instance profile (compute node groups)
     Value: !GetAtt [ PcsInstanceProfile, Arn ]
+  LoginInstanceProfileArn:
+    Description: ARN of the login-node IAM instance profile (adds ldap/* SSM + KMS decrypt)
+    Value: !GetAtt [ PcsLoginInstanceProfile, Arn ]
   RoleName:
     Description: IAM Role name for cluster instances
     Value: !Ref PcsInstanceIamRole

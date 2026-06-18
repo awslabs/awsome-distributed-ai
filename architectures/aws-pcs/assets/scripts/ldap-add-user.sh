@@ -16,7 +16,8 @@ USER_GID="${3:-3000}"
 SSH_PUBKEY="${4:-}"
 
 # Auto-detect LDAP config from sssd.conf or environment
-LDAP_DOMAIN_SUFFIX="${LDAP_DOMAIN_SUFFIX:-$(grep ldap_search_base /etc/sssd/sssd.conf 2>/dev/null | awk -F= '{print $2}' | tr -d ' ' || echo 'dc=cluster,dc=internal')}"
+LDAP_DOMAIN_SUFFIX="${LDAP_DOMAIN_SUFFIX:-$(sed -n 's/^ldap_search_base[[:space:]]*=[[:space:]]*//p' /etc/sssd/sssd.conf 2>/dev/null || echo 'dc=cluster,dc=internal')}"
+LDAP_DOMAIN_SUFFIX="${LDAP_DOMAIN_SUFFIX:-dc=cluster,dc=internal}"
 LDAP_ADMIN_DN="cn=admin,${LDAP_DOMAIN_SUFFIX}"
 
 echo "Adding user: ${USERNAME} (uid=${USER_UID}, gid=${USER_GID})"

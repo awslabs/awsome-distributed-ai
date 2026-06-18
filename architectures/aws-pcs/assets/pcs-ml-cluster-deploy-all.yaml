@@ -769,7 +769,10 @@ Resources:
           - LoginAccessEnabled
           - !Ref LoginAccessSecurityGroup
           - ""
-        IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
+        # Login node runs the OpenLDAP server, so it gets the login-only profile
+        # (base perms + ldap/* SSM + KMS decrypt). Compute CNGs below keep the
+        # base InstanceProfileArn, which cannot read the LDAP admin password.
+        IamProfileArn: !GetAtt ClusterStack.Outputs.LoginInstanceProfileArn
         FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
         FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
