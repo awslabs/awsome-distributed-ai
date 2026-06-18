@@ -223,6 +223,10 @@ Resources:
   PcsLoginInstanceIamRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub
+        - 'AWSPCS-pcs-login-${StackHash}-${AWS::Region}-role'
+        - StackHash: !Select [0, !Split ['-', !Select [2, !Split ['/', !Ref 'AWS::StackId']]]]
+      Description: "AWS IAM role for the PCS login node (adds OpenLDAP admin secret access)"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -273,6 +277,7 @@ Resources:
 
   PcsLoginInstanceProfile:
     Type: AWS::IAM::InstanceProfile
+    DependsOn: PcsLoginInstanceIamRole
     Properties:
       InstanceProfileName: !Sub
         - 'AWSPCS-pcs-login-${StackHash}-${AWS::Region}'
