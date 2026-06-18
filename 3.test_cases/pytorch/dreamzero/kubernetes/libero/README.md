@@ -273,8 +273,8 @@ libfabric 2.4.0 / aws-ofi-nccl 1.18.0 and the DCP-save gloo-coordinator patch. T
 external `groot` package is cloned from `github.com/RLinf/dreamzero.git` and
 placed on `PYTHONPATH` via `DREAMZERO_PATH=/workspace/DreamZero`.
 
-**Primary path (local Docker + buildx).** Run from the `setup/` directory; it
-reads `ECR_URI`, `AWS_REGION`, `UPSTREAM_REF`, and `DREAMZERO_REF` from
+Build the image with **local Docker + buildx**. Run from the `setup/` directory;
+it reads `ECR_URI`, `AWS_REGION`, `UPSTREAM_REF`, and `DREAMZERO_REF` from
 `env_vars`:
 
 ```bash
@@ -287,33 +287,6 @@ cd ..
 This clones the pinned `RLinf` and `dreamzero` sources, builds stage 1
 (`rlinf-upstream-embodied-libero`), then builds and pushes stage 2 to
 `${ECR_URI}:latest`.
-
-**Alternative path (in-cluster kaniko, disk-constrained hosts).**
-
-> ⚠️ **EXPERIMENTAL — PENDING LIVE VALIDATION.** The kaniko in-cluster build path
-> below is provided for hosts without a local Docker daemon or sufficient disk.
-> It is **not-yet-validated** / **untested in-cluster as of this writing**. The
-> primary `build-push.sh` path above is the validated one. Use kaniko at your own
-> risk and expect to debug the two-stage build.
-
-The kaniko path (`setup/kaniko-build.yaml`) runs two Jobs against a shared FSx
-scratch dir. First create the build-context ConfigMap from the test-case
-`Dockerfile` and `docker/scripts/`, then apply the two stages in order (wait for
-stage 1 to complete before stage 2):
-
-```bash
-# From the test-case root (3.test_cases/pytorch/dreamzero), create the context CM:
-kubectl -n "$NAMESPACE" create configmap dreamzero-build-context \
-  --from-file=Dockerfile=Dockerfile \
-  --from-file=install_extras.sh=docker/scripts/install_extras.sh \
-  --from-file=dcp-save-gloo-coordinator.patch=docker/scripts/patches/dcp-save-gloo-coordinator.patch \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-# Apply both stages (restricted envsubst), then wait on stage 1 before stage 2 runs:
-envsubst '${ECR_URI} ${NAMESPACE}' < kubernetes/libero/setup/kaniko-build.yaml | kubectl apply -f -
-kubectl wait --for=condition=complete job/dreamzero-kaniko-stage1 -n "$NAMESPACE" --timeout=90m
-kubectl logs -f job/dreamzero-kaniko-stage2 -n "$NAMESPACE"
-```
 
 ### 2. Stage models + dataset to FSx
 
@@ -450,8 +423,7 @@ kubernetes/libero/
 │   ├── run_dreamzero_eval_eks.sh   # LIBERO simulator eval launcher
 │   └── libero_spatial_eval_dreamzero_14b.yaml  # 14B eval config (upstream ships 5B only)
 ├── setup/
-│   ├── build-push.sh               # Primary: local buildx two-stage build + push
-│   └── kaniko-build.yaml           # EXPERIMENTAL in-cluster kaniko build (pending validation)
+│   └── build-push.sh               # Local buildx two-stage build + push to ECR
 └── storage/
     ├── pvc-fsx-lustre-dynamic.yaml # OPTIONAL: dynamically provision fsx-claim
     └── pv-fsx-lustre-static.yaml   # OPTIONAL: bind fsx-claim to an existing FSx

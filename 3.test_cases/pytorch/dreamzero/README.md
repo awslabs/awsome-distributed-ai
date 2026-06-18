@@ -59,8 +59,8 @@ DCP→`.pt` conversion, and in-sim eval) — **not** task accuracy. A 1-step
 checkpoint yields `eval/success_once = 0.0`, which is **expected**; real accuracy
 requires a multi-step SFT run (raise `runner.max_steps`).
 
-The **local `docker buildx` build path is the validated primary**; the in-cluster
-kaniko alternative is provided but **pending live validation**.
+The image is built with the **local `docker buildx`** two-stage build and pushed
+to ECR (see [`kubernetes/libero/setup/build-push.sh`](kubernetes/libero/setup/build-push.sh)).
 
 ## References
 

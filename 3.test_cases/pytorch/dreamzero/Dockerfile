@@ -44,9 +44,9 @@ FROM rlinf-upstream-${BUILD_TARGET} AS upstream
 # Layer EFA, GDRCopy, NCCL, and OpenMPI onto the upstream RLinf image.
 # Recipe proven in nccl-tests/Dockerfile on nvidia/cuda base images.
 
-# RLINF_UPSTREAM_IMAGE lets the kaniko build path (setup/kaniko-build.yaml) point
-# stage 2 at the stage-1 image it pushed to ECR. The docker buildx path
-# (setup/build-push.sh) uses the default local tag built immediately before.
+# RLINF_UPSTREAM_IMAGE points stage 2 at the stage-1 image. The docker buildx
+# path (setup/build-push.sh) uses the default local tag built immediately before;
+# override it to pull a stage-1 image from a registry instead.
 ARG RLINF_UPSTREAM_IMAGE=rlinf-upstream-${BUILD_TARGET}
 FROM ${RLINF_UPSTREAM_IMAGE}
 
