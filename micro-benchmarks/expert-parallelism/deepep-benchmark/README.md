@@ -38,5 +38,5 @@ sbatch test_internode.sbatch
 ```
 
 ```bash
-sbatch deepep-test_low_latency.sbatch
+sbatch test_low_latency.sbatch
 ```
