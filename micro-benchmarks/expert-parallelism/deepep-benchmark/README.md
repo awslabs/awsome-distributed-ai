@@ -33,7 +33,10 @@ RDMA over InfiniBand), which EFA does not provide. The image works around this:
   calls with NVSHMEM host-proxy QP APIs (`nvshmemx_qp_*`), maps the dispatch/combine tail updates
   onto a combined put+signal, and raises `NVSHMEM_MAX_TEAMS` for NVSHMEM 3.7.
 - The build runs in a **Python virtual environment** (`/opt/deepep`); PyTorch's bundled
-  `nvidia-nvshmem-cu12` is uninstalled so it does not clash with the from-source NVSHMEM 3.7.0-0.
+  `nvidia-nvshmem-cu13` is uninstalled so it does not clash with the from-source NVSHMEM 3.7.0-0.
+- The image is built on **CUDA 13** (PyTorch `cu130`). This is required for Blackwell (B200/B300):
+  CUDA ≤ 12.9 CUPTI fails on those GPUs (`CUPTI_ERROR_INVALID_DEVICE`), which breaks the
+  internode/low-latency tuning phase that profiles kernels.
 
 At runtime the NVSHMEM libfabric transport is selected by these environment variables (set in the
 image and re-exported by the launchers):

@@ -79,6 +79,12 @@ spec:
           - image: ${IMAGE_URI}
             imagePullPolicy: IfNotPresent
             name: deepep-internode-worker
+            # The tuning phase profiles kernels via CUPTI. These nodes set the
+            # driver's RmProfilingAdminOnly=1, so the workload needs SYS_ADMIN to
+            # profile. Remove if your cluster allows non-admin GPU profiling.
+            securityContext:
+              capabilities:
+                add: ["SYS_ADMIN"]
             volumeMounts:
             - name: shmem
               mountPath: /dev/shm

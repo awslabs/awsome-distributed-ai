@@ -426,6 +426,13 @@ export NVSHMEM_HOME="$NVSHMEM_INSTALL_DIR"
 export LIBFABRIC_HOME
 export LD_LIBRARY_PATH="${LIBFABRIC_HOME}/lib:${NVSHMEM_INSTALL_DIR}/lib:${CUDA_HOME}/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+# CUDA 13 relocated libcu++ (the cuda/std/* headers) under include/cccl. NVSHMEM's
+# device headers include <cuda/std/array>, and DeepEP's host (.cpp) compile does not
+# get nvcc's automatic -isystem .../cccl, so add it to CPATH. No-op on CUDA <= 12.x
+# (the directory does not exist there).
+CCCL_INCLUDE="$CUDA_HOME/targets/x86_64-linux/include/cccl"
+[ -d "$CCCL_INCLUDE" ] && export CPATH="${CCCL_INCLUDE}${CPATH:+:$CPATH}"
+
 TORCH_CUDA=$(python3 -c "import torch; print(torch.version.cuda)" 2>/dev/null || echo "unknown")
 echo "  NVSHMEM:      $NVSHMEM_INSTALL_DIR"
 echo "  PyTorch CUDA: $TORCH_CUDA"

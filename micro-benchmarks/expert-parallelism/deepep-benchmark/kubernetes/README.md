@@ -106,11 +106,11 @@ envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' \
   `kubectl exec deepep-internode-worker-1 -- getent hosts <worker-0-name>`.
 - **GPU profiling (internode / low-latency tuning):** the `internode` and `low_latency` tests
   profile their kernels with the Kineto/CUPTI profiler during the tuning phase (the `intranode`
-  test does not). This needs (1) the node driver to permit profiling — `nvidia-smi`-class
-  access, i.e. the kernel module loaded with `NVreg_RestrictProfilingToAdminUsers=0` (check
-  `grep RmProfiling /proc/driver/nvidia/params`) or the workload granted `SYS_ADMIN`, and (2) a
-  CUDA toolkit whose CUPTI supports the GPU. On `p6-b300` nodes with this image's CUDA 12.8,
-  CUPTI returns `CUPTI_ERROR_INVALID_DEVICE` and the tuning phase fails after the correctness
-  checks pass; a CUDA build new enough for Blackwell CUPTI is required for the tuning numbers.
-  This is a profiler/toolkit limitation independent of Kubernetes (it affects the Slurm path
-  the same way).
+  test does not). Two requirements, both already handled here for `p6-b300`:
+  1. *Driver profiling access.* These nodes load the driver with
+     `NVreg_RestrictProfilingToAdminUsers=1` (`grep RmProfiling /proc/driver/nvidia/params`), so
+     the test pods are granted `SYS_ADMIN` (see the worker `securityContext` in the internode /
+     low-latency manifests). Remove it if your nodes already permit non-admin profiling.
+  2. *A CUPTI that supports the GPU.* The image is built on **CUDA 13** — its CUPTI supports
+     Blackwell. CUDA ≤ 12.9 returns `CUPTI_ERROR_INVALID_DEVICE` on B300 and the tuning phase
+     fails after the correctness checks pass, so do not downgrade the image's CUDA for B300.
