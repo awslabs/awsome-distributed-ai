@@ -48,6 +48,15 @@ spec:
               # SSH-launched workers do not inherit Dockerfile ENV, so pass every
               # needed variable through `mpirun -x`. Single node, so no MASTER_ADDR
               # is needed (the test defaults to 127.0.0.1).
+              # Wait for each worker's sshd to accept connections before launching.
+              # mpi-operator starts the launcher as soon as workers are Running, but
+              # their sshd may not be ready yet; without this wait the launcher loses
+              # the SSH race, exits non-zero, and burns Job retries (backoffLimit).
+              for host in $(awk '{print $1}' /etc/mpi/hostfile); do
+                until ssh -o ConnectTimeout=3 -o BatchMode=yes -o StrictHostKeyChecking=no "$host" true 2>/dev/null; do
+                  echo "waiting for sshd on $host"; sleep 3
+                done
+              done
               /opt/amazon/openmpi/bin/mpirun \
                 --allow-run-as-root --tag-output \
                 -np 1 -N 1 --bind-to none \
