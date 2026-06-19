@@ -153,6 +153,12 @@ RUN /opt/deepep/bin/pip install torch --index-url https://download.pytorch.org/w
 
 ARG DEEPEP_COMMIT=567632d
 
+# CUDA architecture(s) to build NVSHMEM and DeepEP for, semicolon-separated:
+# 90 = Hopper (H100, sm_90), 100 = Blackwell (B200/B300, sm_100). Defaults to
+# both so one image runs on Hopper and Blackwell; override with e.g.
+# --build-arg GPU_ARCH=90 to build a smaller Hopper-only image.
+ARG GPU_ARCH="90;100"
+
 RUN git clone https://github.com/deepseek-ai/DeepEP.git /DeepEP \
     && cd /DeepEP \
     && git checkout ${DEEPEP_COMMIT}
@@ -161,7 +167,7 @@ RUN /tmp/setup_deepep_efa.sh \
     --cuda-home /usr/local/cuda \
     --libfabric-home /opt/amazon/efa \
     --gdrcopy-home /opt/gdrcopy \
-    --gpu-arch 90 \
+    --gpu-arch "${GPU_ARCH}" \
     --venv /opt/deepep \
     --deepep-src /DeepEP \
     --nvshmem-src ${NVSHMEM_SRC}

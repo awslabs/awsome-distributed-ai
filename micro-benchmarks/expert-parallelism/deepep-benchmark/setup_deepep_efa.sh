@@ -18,7 +18,8 @@
 #   --cuda-home <path>        CUDA toolkit (default: /usr/local/cuda)
 #   --libfabric-home <path>   Libfabric install (default: /opt/amazon/efa)
 #   --gdrcopy-home <path>     GDRCopy install (default: /usr)
-#   --gpu-arch <arch>         CUDA architecture (default: 90)
+#   --gpu-arch <arch>         CUDA architecture(s), semicolon-separated (default: 90).
+#                             e.g. "90;100" builds one image for Hopper + Blackwell.
 
 set -euo pipefail
 
@@ -48,8 +49,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Derive TORCH_CUDA_ARCH_LIST from GPU_ARCH (e.g. 90 -> 9.0, 100 -> 10.0)
-TORCH_CUDA_ARCH_LIST="${GPU_ARCH%?}.${GPU_ARCH: -1}"
+# Derive TORCH_CUDA_ARCH_LIST from GPU_ARCH (e.g. 90 -> 9.0, 100 -> 10.0).
+# GPU_ARCH may be a semicolon-separated list (e.g. "90;100") to build a single
+# image that runs on multiple architectures (Hopper + Blackwell).
+TORCH_CUDA_ARCH_LIST=""
+IFS=';' read -ra _GPU_ARCHS <<< "$GPU_ARCH"
+for _arch in "${_GPU_ARCHS[@]}"; do
+    TORCH_CUDA_ARCH_LIST+="${_arch%?}.${_arch: -1};"
+done
+TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST%;}"
 
 # --- Validate required args ---
 if [[ -z "$DEEPEP_SRC" ]]; then
@@ -431,8 +439,10 @@ cd "$DEEPEP_SRC"
 pip uninstall -y deep_ep 2>/dev/null || true
 python setup.py clean --all 2>/dev/null || true
 
-# DeepEP's setup.py requires DISABLE_AGGRESSIVE_PTX_INSTRS=1 on sm_100 (Blackwell);
-# Hopper (sm_90) builds with it off. Derive from --gpu-arch instead of hard-coding.
+# DeepEP's setup.py requires DISABLE_AGGRESSIVE_PTX_INSTRS=1 whenever sm_100
+# (Blackwell) is targeted; pure Hopper (sm_90) builds with it off. A combined
+# "90;100" build therefore disables it (the flag applies to the whole build, so
+# Hopper loses the aggressive-PTX optimization in exchange for one portable image).
 if [[ "$GPU_ARCH" == "90" ]]; then
     DISABLE_AGGRESSIVE_PTX_INSTRS=0
 else
