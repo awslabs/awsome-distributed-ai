@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 apiVersion: kubeflow.org/v2beta1
 kind: MPIJob
 metadata:
@@ -5,7 +7,7 @@ metadata:
 spec:
   runPolicy:
     cleanPodPolicy: Running
-    backoffLimit: 20
+    backoffLimit: 3
   # One MPI slot per node: each worker process spawns 8 local GPU ranks itself
   # (torch.multiprocessing.spawn). The test reads WORLD_SIZE = number of nodes
   # and RANK = node rank, so MPI launches exactly one process per node.
@@ -36,6 +38,10 @@ spec:
           - image: ${IMAGE_URI}
             imagePullPolicy: IfNotPresent
             name: deepep-internode-launcher
+            resources:
+              requests:
+                cpu: "1"
+                memory: 2Gi
             command:
             - /bin/bash
             - -c

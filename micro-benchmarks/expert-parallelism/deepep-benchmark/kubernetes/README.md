@@ -54,15 +54,16 @@ docker push ${IMAGE_URI}
 
 ## Configure & launch
 
-Edit [`env_vars`](./env_vars) with your image URI, instance type, and per-node device counts,
-then `envsubst` the manifest into `kubectl`. Restrict substitution to the known variables so the
-launcher's runtime shell vars (`$OMPI_COMM_WORLD_RANK`, `$MASTER_ADDR`, `$PATH`, …) are left
-intact:
+Copy the committed template to `env_vars` (gitignored) and edit it with your image URI, instance
+type, and per-node device counts, then `envsubst` the manifest into `kubectl`. Restrict
+substitution to the known variables so the launcher's runtime shell vars
+(`$OMPI_COMM_WORLD_RANK`, `$MASTER_ADDR`, `$PATH`, …) are left intact:
 
 ```bash
+cp env_vars.example env_vars   # then edit env_vars
 source env_vars
 
-# Single-node intranode (NVLink) test  — set NUM_NODES=1 in env_vars first
+# Single-node intranode (NVLink) test  (intranode is fixed at 1 node; NUM_NODES is unused)
 envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' \
   < test-intranode.yaml | kubectl apply -f -
 
