@@ -59,7 +59,7 @@ sbatch b300/slurm/run.sh
 | Hidden dim (d_model) | 4096 |
 | Q-heads | 32 |
 | KV-heads | 8 (GQA) |
-| FFN dim | 14336 (SwiGLU) |
+| FFN dim | 12288 (SwiGLU) |
 | Vocab size | 151,936 |
 | Positional encoding | RoPE |
 | Normalization | RMSNorm |
