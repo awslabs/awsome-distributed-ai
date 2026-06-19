@@ -273,7 +273,7 @@ spec:
       containers:
       - name: sglang
         image: <YOUR_ECR_IMAGE>   # the URI build-image.sh printed, e.g. <account>.dkr.ecr.<region>.amazonaws.com/sgl-dev-cu13:<tag>
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         securityContext:
           privileged: true
         env:

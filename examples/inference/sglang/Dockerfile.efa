@@ -1,3 +1,7 @@
+# Shared EFA-enabled SGLang image: stock upstream SGLang + the AWS EFA installer,
+# the base for every multi-node example here (built/pushed by build-image.sh).
+# Pinned to v0.5.12.post1-cu130 (NIXL 1.1.0) on purpose — see the NIXL note in
+# kimi2.6-h200-1p1d/README.md before bumping.
 FROM lmsysorg/sglang:v0.5.12.post1-cu130
 
 ARG EFA_VERSION=1.47.0

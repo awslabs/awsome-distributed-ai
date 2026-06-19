@@ -77,7 +77,10 @@ spec:
         effect: NoSchedule
       containers:
       - name: sglang
-        image: lmsysorg/sglang:deepseek-v4-b300
+        # Same upstream SGLang image as the other examples — DeepSeek-V4-Pro
+        # serves correctly on it; the model/kernel knobs are all driven by the
+        # SGLANG_OPT_* env vars and serve flags below, not by a dedicated image.
+        image: lmsysorg/sglang:v0.5.12.post1-cu130
         imagePullPolicy: IfNotPresent
         securityContext:
           privileged: true

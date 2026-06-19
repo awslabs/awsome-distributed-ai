@@ -6,10 +6,13 @@
 # fast local disk instead of pulling them at startup.
 #
 # Rendered and applied by download-model.sh, which fills INSTANCE_TYPE,
-# HF_REPO_ID, and LOCAL_DIR_NAME. To apply by hand instead:
-#   export INSTANCE_TYPE=ml.p5en.48xlarge HF_REPO_ID=moonshotai/Kimi-K2.5 \
-#          LOCAL_DIR_NAME=moonshotai-Kimi-K2.5
-#   envsubst '${INSTANCE_TYPE} ${HF_REPO_ID} ${LOCAL_DIR_NAME}' \
+# INSTANCE_TYPE_ALT, HF_REPO_ID, and LOCAL_DIR_NAME. INSTANCE_TYPE_ALT is the
+# other instance-type spelling (bare EC2 type vs the SageMaker `ml.` prefix) so
+# the DaemonSet lands on the GPU nodes of BOTH a plain EKS managed nodegroup and
+# a HyperPod instance group. To apply by hand instead:
+#   export INSTANCE_TYPE=ml.p5en.48xlarge INSTANCE_TYPE_ALT=p5en.48xlarge \
+#          HF_REPO_ID=moonshotai/Kimi-K2.5 LOCAL_DIR_NAME=moonshotai-Kimi-K2.5
+#   envsubst '${INSTANCE_TYPE} ${INSTANCE_TYPE_ALT} ${HF_REPO_ID} ${LOCAL_DIR_NAME}' \
 #     < download-model-daemonset.yaml | kubectl apply -f -
 #   # wait until each pod logs "Download complete!", then deploy the engine
 apiVersion: apps/v1
@@ -27,8 +30,20 @@ spec:
       labels:
         app: model-downloader
     spec:
-      nodeSelector:
-        node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+      # A plain EKS managed nodegroup labels instance-type with the bare EC2 type;
+      # a SageMaker HyperPod instance group uses the `ml.` prefix. A nodeSelector
+      # can't express OR, so match both with nodeAffinity In (the serving
+      # manifests do the same). download-model.sh fills the second spelling.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node.kubernetes.io/instance-type
+                operator: In
+                values:
+                - ${INSTANCE_TYPE}
+                - ${INSTANCE_TYPE_ALT}
       tolerations:
         - key: nvidia.com/gpu
           operator: Exists

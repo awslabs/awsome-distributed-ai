@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
+#
+# Build and push the shared EFA-enabled SGLang image (Dockerfile.efa) to ECR.
+# This image — stock lmsysorg/sglang + the AWS EFA installer — is the base for
+# every multi-node example here (Kimi 1P1D, and future inter-node topologies);
+# single-node examples use the upstream image directly and don't need it.
+# Prints the pushed image URI on the last line.
 
 set -euo pipefail
 
 algorithm_name=sgl-dev-cu13
-dockerfilename=Dockerfile
+dockerfilename=Dockerfile.efa
 
 export DOCKER_BUILDKIT=1
 

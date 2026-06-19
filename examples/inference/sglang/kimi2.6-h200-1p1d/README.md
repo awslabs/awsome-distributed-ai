@@ -8,8 +8,8 @@ SPDX-License-Identifier: MIT-0
 Node-level prefill/decode disaggregation with SGLang on **two `ml.p5en.48xlarge`
 (8×H200) nodes** — one prefill StatefulSet, one decode StatefulSet, KV cache
 transferred over **NIXL (LIBFABRIC over EFA)**, fronted by the SGLang router.
-Optional DCGM + Prometheus-agent → Amazon Managed Prometheus monitoring is
-included.
+The engines expose SGLang metrics on `:30000/metrics` for any
+Prometheus-compatible scraper (see the [SGLang README](../README.md#metrics)).
 
 ## Indicative results
 
@@ -54,8 +54,9 @@ Workload: TBD (`sglang.bench_serving`).
 > transfer over EFA — transfers are pathologically slow (~256s for 4 tokens vs.
 > ~11s for a 32-token completion on 1.1.0) and requests exceed the 300s timeout
 > with `Decode transfer failed … timed out … in KVPoll.WaitingForInput`. The
-> Dockerfile is pinned to `v0.5.12.post1-cu130` (**NIXL 1.1.0**) specifically to
-> avoid this. Verify `python3 -c "import nixl; print(nixl.__version__)"` reports
+> shared [`../Dockerfile.efa`](../Dockerfile.efa) is pinned to
+> `v0.5.12.post1-cu130` (**NIXL 1.1.0**) specifically to avoid this. Verify
+> `python3 -c "import nixl; print(nixl.__version__)"` reports
 > `1.1.0` in the container before deploying.
 
 ### Accounts and tokens
@@ -67,23 +68,21 @@ Workload: TBD (`sglang.bench_serving`).
 ## Quick start
 
 ```bash
-cd examples/inference/sglang/kimi2.6-h200-1p1d
-
-# 1. build + push the image — prints the ECR image URI
+# 1. build + push the shared EFA-enabled image — prints the ECR image URI
+#    (Dockerfile.efa + build-image.sh live one level up; reused by every
+#    multi-node example)
+cd examples/inference/sglang
 ./build-image.sh
 
 # 2. pre-stage the weights to every matching node's NVMe (wait for
 #    "Download complete!" in each downloader pod's logs)
-../download-model.sh moonshotai/Kimi-K2.5 ml.p5en.48xlarge
+./download-model.sh moonshotai/Kimi-K2.5 ml.p5en.48xlarge
+
+cd kimi2.6-h200-1p1d
 
 # 3. set <YOUR_ECR_IMAGE> in manifests/kimi-pd-deploy.yaml to the URI from step 1,
 #    then deploy prefill + decode StatefulSets and the router
 kubectl apply -f manifests/kimi-pd-deploy.yaml
-
-# 4. (optional) GPU metrics + remote-write to Amazon Managed Prometheus —
-#    fill in the AMP/IAM placeholders in ../prometheus-agent-amp.yaml first
-kubectl apply -f ../dcgm-exporter-daemonset.yaml
-kubectl apply -f ../prometheus-agent-amp.yaml
 ```
 
 Wait until `prefill-0`, `decode-0`, and the router are all `1/1 Ready` (engine
@@ -102,13 +101,13 @@ curl http://localhost:30000/v1/completions \
 
 | File | Purpose |
 |---|---|
-| [`Dockerfile`](./Dockerfile) | `lmsysorg/sglang:v0.5.12.post1-cu130` + AWS EFA installer |
-| [`build-image.sh`](./build-image.sh) | build and push to ECR |
 | [`manifests/kimi-pd-deploy.yaml`](./manifests/kimi-pd-deploy.yaml) | prefill + decode StatefulSets, router |
 
-Model pre-staging, GPU metrics, and AMP remote-write use the shared helpers one
-level up ([`../download-model.sh`](..), [`../dcgm-exporter-daemonset.yaml`](..),
-[`../prometheus-agent-amp.yaml`](..)).
+The EFA image build ([`../Dockerfile.efa`](../Dockerfile.efa),
+[`../build-image.sh`](../build-image.sh)) and model pre-staging
+([`../download-model.sh`](../download-model.sh)) are shared helpers one level up.
+Metrics are exposed on `:30000/metrics` for your own scraper (see the
+[SGLang README](../README.md#metrics)).
 
 Per-engine SGLang flags live inline in the StatefulSet `command:` blocks:
 `tp-size 8`, `ep-size 8`, `mem-fraction-static 0.92`, hierarchical cache

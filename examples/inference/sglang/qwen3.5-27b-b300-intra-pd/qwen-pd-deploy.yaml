@@ -203,7 +203,7 @@ spec:
             --enable-metrics
       # ---- PD router (shares pod network → reaches engines on 127.0.0.1) ---
       - name: router
-        image: lmsysorg/sgl-model-gateway:latest
+        image: lmsysorg/sgl-model-gateway:v0.3.2
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 30080
