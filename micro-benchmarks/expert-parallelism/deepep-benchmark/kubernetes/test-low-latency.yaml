@@ -16,6 +16,22 @@ spec:
       template:
         spec:
           restartPolicy: OnFailure
+          # The launcher runs the full benchmark image (~20GB) just to invoke
+          # mpirun. Co-locate it on the GPU node pool, whose nodes have enough
+          # ephemeral storage; small CPU nodes hit DiskPressure and evict it.
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: workload
+            value: bench
+            operator: Equal
+            effect: NoSchedule
+          - key: capacity-reservation
+            operator: Exists
+            effect: NoSchedule
           containers:
           - image: ${IMAGE_URI}
             imagePullPolicy: IfNotPresent
