@@ -2,7 +2,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 # =============================================================================
-# Install optional extras for RLinf-on-EKS container image
+# Install optional extras for the DreamZero container image
 #
 # Called by Dockerfile with EXTRAS arg (comma-separated list).
 # Each extra is a self-contained install block.

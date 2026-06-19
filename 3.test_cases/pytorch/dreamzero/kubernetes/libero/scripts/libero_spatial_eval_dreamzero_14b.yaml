@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT-0
 # libero_spatial_eval_dreamzero_14b.yaml
 # =============================================================================
-# DreamZero 14B LIBERO-Spatial simulator eval config (RLinf-on-EKS variant).
+# DreamZero 14B LIBERO-Spatial simulator eval config (EKS variant).
 #
 # WHY THIS FILE EXISTS:
 #   Upstream RLinf only ships a *5B* embodied eval config
