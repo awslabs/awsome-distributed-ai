@@ -4,8 +4,9 @@ Run the DeepEP micro-benchmarks on Amazon EKS as [MPIJobs](https://www.kubeflow.
 These are the Kubernetes equivalents of the [Slurm](../slurm/) `sbatch` scripts.
 
 Each job launches **one MPI process per node** (`slotsPerWorker: 1`); that process spawns 8
-local GPU ranks itself via `torch.multiprocessing`. The launcher passes the EFA / NVSHMEM
-environment through `mpirun -x` because SSH-launched workers do not inherit the image `ENV`.
+local GPU ranks itself via `torch.multiprocessing`. The launcher passes the EFA / NVSHMEM / NCCL
+environment (including `NCCL_SOCKET_IFNAME` and `LD_PRELOAD`) through `mpirun -x` because
+SSH-launched workers do not inherit the image `ENV`.
 
 ## Prerequisites
 
