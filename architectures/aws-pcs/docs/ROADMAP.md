@@ -125,6 +125,24 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   transparently. See `docs/USER-MANAGEMENT.md`. *(Follow-up: managed-directory options
   `DirectoryService=SimpleAD`/`ManagedAD` for multi-login-node / HA — the param enum is
   already extensible.)*
+- [ ] 🟡 **Stable LDAP endpoint across login-node replacement (OpenLDAP-LoginNode).**
+  Compute clients bake the login node's **private IP** into SSSD's `ldap_uri`
+  (`setup-directory.sh` `setup_client_internal`). The user DB on `/home/ldap-db` survives a
+  login-node replacement, but the new node gets a **new private IP**, so already-running
+  compute nodes keep a stale `ldap_uri` — cached users still resolve (`cache_credentials`),
+  but uncached/new users and group expansion fail until each compute node is rebooted or
+  SSSD is reconfigured. (Newly-booting compute nodes are fine: discovery now re-reads the
+  `directory-role=server` tag, with retry.) Upstream's
+  [`dir/demo_openldap`](https://github.com/aws-samples/aws-hpc-recipes/tree/main/recipes/dir/demo_openldap)
+  avoids this by fronting the directory with an **NLB (stable DNS)**, so the client URI
+  never changes when the backend restarts. Options for ml-pcs: (a) put the login IP behind a
+  **Route 53 private hosted-zone record** the replacement updates, and point `ldap_uri` at
+  the DNS name; (b) have running compute nodes periodically re-resolve the tag and rewrite
+  `ldap_uri`; or (c) defer to the managed-directory path (SimpleAD/ManagedAD) which provides
+  a stable endpoint by design. Until then, document the post-replacement recovery
+  (`sss_cache -E` + `systemctl restart sssd` across compute, or node replacement) — see
+  `docs/USER-MANAGEMENT.md`. *(The admin-password regen-on-replacement issue is already
+  fixed: `setup_server` reuses the existing SSM password instead of generating a new one.)*
 
 ## Monitoring
 
