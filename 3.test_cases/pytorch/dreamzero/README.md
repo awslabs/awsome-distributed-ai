@@ -30,6 +30,10 @@ model code).
 
 ![DreamZero WAM](diagrams/dreamzero-wam.drawio.svg)
 
+For the full breakdown — the KubeRay/FSDP2 training topology and a component-level
+walkthrough of the World-Action Model — see
+[**Architecture** in the walkthrough](kubernetes/libero/README.md#architecture).
+
 ## Layout
 
 ```
