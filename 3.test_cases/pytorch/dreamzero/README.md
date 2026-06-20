@@ -3,7 +3,7 @@
 
 # DreamZero LIBERO 14B SFT (World-Action Model) on Amazon EKS
 
-This test case is a worked example of **deploying DreamZero training on Amazon
+This test case is a working example of **deploying DreamZero training on Amazon
 EKS**. DreamZero is a **14B-parameter World-Action Model (WAM)** — a Wan-based,
 causal (autoregressive) video diffusion transformer that *jointly* denoises
 future video frames and robot actions via flow matching. Here it continues
@@ -13,9 +13,17 @@ supervised fine-tuning from the released
 LIBERO simulator — exercising multi-node **FSDP2** training over **EFA** with
 **KubeRay**. The focus is the **EKS deployment mechanics** (image build,
 multi-node EFA/NCCL, FSDP2 sharded checkpointing, sim eval), not a training-quality
-or transfer result. Upstream:
-[github.com/RLinf/RLinf](https://github.com/RLinf/RLinf) (training framework) and
-[github.com/RLinf/dreamzero](https://github.com/RLinf/dreamzero) (the `groot` WAM
+or transfer result. Note that LIBERO is a **simulation** of the same Franka Emika
+Panda arm that DROID captures in the **real world**, so warm-starting the DROID
+checkpoint onto LIBERO must bridge a real→sim visual domain gap. LIBERO is used
+here as a convenient public dataset + simulator to exercise the pipeline
+end-to-end; in practice you would swap it for your own dataset (real or simulated)
+for task-specific or cross-embodiment fine-tuning.
+
+Upstream:
+
+- [github.com/RLinf/RLinf](https://github.com/RLinf/RLinf) (training framework)
+- [github.com/RLinf/dreamzero](https://github.com/RLinf/dreamzero) (the `groot` WAM
 model code).
 
 ## Architecture
