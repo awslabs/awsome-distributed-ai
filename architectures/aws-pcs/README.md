@@ -516,6 +516,13 @@ NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 > the `monitoring-role` tag (`login`/`compute`), **not** the EC2 `Name` tag — so the `Name`
 > tag (default `PCS-<cngname>`) is free for you to retag without breaking dashboards.
 
+> **Note — monitoring across login-node replacement.** Prometheus + Grafana run on the
+> (single) login node. Metric collection, the Grafana password, and the built-in
+> dashboards all recover automatically if the login node is replaced — but the
+> **historical metrics and any custom dashboards are lost** (the TSDB / Grafana DB are
+> node-local). Export custom dashboards to JSON if you need them to persist. Details:
+> [OPERATIONS.md §3.2](./docs/OPERATIONS.md#32-monitoring-across-a-login-node-stop--replacement).
+
 ---
 
 ### 8.3 User Management
@@ -529,10 +536,22 @@ nodes — users you add are immediately visible cluster-wide. See the
 **[User Management Guide](./docs/USER-MANAGEMENT.md)** for step-by-step
 operations (adding/removing users, Slurm accounting, SSH access).
 
+> **Note — accounting reports.** Two Slurm reporting quirks worth knowing: `sacct
+> --state=...` needs an explicit `-E now` or it silently returns nothing, and
+> `sreport` usage trails the hourly rollup (use `sacct` for up-to-the-second data).
+> See [USER-MANAGEMENT.md — Slurm accounting](./docs/USER-MANAGEMENT.md#slurm-accounting).
+
 > **Constraint — single login node.** The OpenLDAP server runs on the (single) login
-> node, so enabling `DirectoryService` means a one-login-node cluster. The user database
-> lives on OpenZFS `/home`, so it survives a login-node replacement (data is recoverable),
-> but the directory **service** is a single point of failure while the login node is down.
+> node, so enabling `DirectoryService` means a one-login-node cluster. The directory
+> **service** is a single point of failure while the login node is down.
+>
+> The user database (OpenZFS `/home`) and the admin password (SSM) **survive a
+> login-node replacement** — but recovery isn't fully transparent: already-running
+> compute nodes keep the old login IP cached in SSSD, so name resolution for new/uncached
+> users degrades on them until you refresh SSSD (jobs already submitted still run — Slurm
+> uses numeric UIDs). The new login node also gets a new public IP and SSH host key. See
+> [USER-MANAGEMENT.md — login-node replacement](./docs/USER-MANAGEMENT.md#how-a-compute-node-finds-the-ldap-server-tag-based-discovery)
+> for the recovery steps.
 
 ### 8.4 IAM Permissions
 
