@@ -12,7 +12,7 @@
 | World size | 64 ranks (8 nodes × 8 GPU) |
 | EP config | num-tokens=4096 (LL: 128), hidden=7168, num-topk=8, num-experts=256, bf16 |
 | NVSHMEM image | `deepep:efa1.48.0-nvshmem3.7.0-deepep567632d-cuda13` (CUDA 13) |
-| UCCL image | `uccl-ep:efa1.43.2-uccl0dc87eb-sm100` (CUDA 12.8.1, UCCL `0dc87eb`, sm_100) |
+| UCCL image | UCCL `0dc87eb`, CUDA 13, Hopper+Blackwell (committed `uccl-ep.Dockerfile`; the run used the equivalent prebuilt dsv3-uccl-nixl image) |
 | NCCL image | DeepEP image (reuses `/opt/nccl-tests/build/alltoall_perf`, sm_100) |
 
 ## Dispatch / Combine bandwidth (EP backends)

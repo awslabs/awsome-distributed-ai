@@ -47,7 +47,7 @@ If the DeepEP values differ from 4096/7168/8/256, edit the `torchrun` args in
   Operator (`kubectl get crd mpijobs.kubeflow.org`). See each benchmark's `kubernetes/README.md`.
 - The container images in ECR:
   - NVSHMEM: `../deepep-benchmark/deepep.Dockerfile` (CUDA 13, `sm_90`+`sm_100`)
-  - UCCL: `../uccl-ep-benchmark/uccl-ep.Dockerfile` (pinned UCCL commit; single arch via `GPU_SM`, default `sm_100` for B300)
+  - UCCL: `../uccl-ep-benchmark/uccl-ep.Dockerfile` (CUDA 13; pinned UCCL commit; Hopper + Blackwell via PTX)
   - NCCL: **reuse the NVSHMEM/DeepEP image** — it already builds `/opt/nccl-tests/build/alltoall_perf`
     with `sm_100` gencode, so no separate `nccl-tests` build is needed for the baseline.
 
@@ -135,8 +135,8 @@ date, and any config deltas. Eyeball one real launcher log against the parser be
 - **`num-experts` must divide the world size.** Both tests assert `num_experts % num_ranks == 0`.
   At 8 nodes (64 ranks) the comparison uses 256 (= 4/rank). The DeepEP low-latency default (288)
   is not divisible by 64 and must be overridden (see the run-order note).
-- **CUDA skew.** NVSHMEM/NCCL (DeepEP image) are CUDA 13; the UCCL image is CUDA 12.8.1. Separate
-  images/pods, so it does not affect a single run, but note it for fairness.
+- **Toolchain.** All three images are CUDA 13 (NVSHMEM/NCCL share the DeepEP image; UCCL is
+  CUDA 13 per `uccl-ep.Dockerfile`), so there is no CUDA skew across backends.
 - **UCCL bench scripts** are pulled from upstream `uccl/ep/bench` at image-build time and pinned
   via `UCCL_COMMIT`. If upstream renames CLI flags, adjust the `torchrun` args in the UCCL
   manifests.

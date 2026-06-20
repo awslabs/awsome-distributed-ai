@@ -7,8 +7,8 @@
 #   envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' \
 #     < test-internode.yaml | kubectl apply -f -
 
-# ECR image built from ../uccl-ep.Dockerfile (single GPU arch via GPU_SM; default
-# sm_100 for B300). Build with --build-arg GPU_SM=90 for Hopper.
+# ECR image built from ../uccl-ep.Dockerfile (CUDA 13; Hopper sm_90 + Blackwell
+# sm_100/sm_103 via PTX fallback, so it runs on p5/p5en and p6-b300).
 export IMAGE_URI=<account>.dkr.ecr.<region>.amazonaws.com/uccl-ep:<tag>
 
 # GPU node instance type and per-node device counts.

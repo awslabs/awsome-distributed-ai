@@ -37,22 +37,23 @@ kubectl get crd mpijobs.kubeflow.org      # confirm the CRD exists
 ## Build & push the container image
 
 Build the image from [`../uccl-ep.Dockerfile`](../uccl-ep.Dockerfile) and push it to ECR. The
-image pins a UCCL commit (`UCCL_COMMIT` build arg) for reproducibility. UCCL-EP compiles a
-**single GPU arch** (`ep/Makefile` uses `-arch=sm_$(SM)`); the `GPU_SM` build arg sets it
-explicitly so the build does not depend on the build host's GPU — **`GPU_SM=100` for
-Blackwell/B300 (default)**, `GPU_SM=90` for Hopper (H100/H200). Build one image per target arch.
+image pins a UCCL commit (`UCCL_COMMIT` build arg) for reproducibility and builds the UCCL-EP
+kernels for **both Hopper (`sm_90`) and Blackwell (`sm_100`/`sm_103`)** via an explicit
+`TORCH_CUDA_ARCH_LIST` with PTX fallback (the `python3 setup.py install` path, following the
+validated dsv3-uccl-nixl recipe), so one image runs on `p5`/`p5en` and `p6-b300` without a
+rebuild.
 
 ```bash
 export AWS_REGION=$(aws ec2 describe-availability-zones --output text --query 'AvailabilityZones[0].[RegionName]')
 export ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 export REGISTRY=${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com
-export IMAGE_URI=${REGISTRY}/uccl-ep:efa1.43.2-uccl0dc87eb-sm100
+export IMAGE_URI=${REGISTRY}/uccl-ep:efa1.48.0-uccl0dc87eb-cu13
 
 aws ecr create-repository --repository-name uccl-ep --region ${AWS_REGION} 2>/dev/null || true
 aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${REGISTRY}
 
 cd ..   # build context is the uccl-ep-benchmark/ directory
-docker build --progress=plain -f ./uccl-ep.Dockerfile --build-arg GPU_SM=100 -t ${IMAGE_URI} .
+docker build --progress=plain -f ./uccl-ep.Dockerfile -t ${IMAGE_URI} .
 docker push ${IMAGE_URI}
 ```
 
@@ -109,9 +110,8 @@ envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' \
 
 ## Notes for `p6-b300.48xlarge` (B300 / Blackwell)
 
-- **Image:** the default image is built for `sm_100` (`GPU_SM=100`), so it runs on `p6-b300`.
-  To run on Hopper (`p5`/`p5en`), rebuild with `--build-arg GPU_SM=90` — UCCL-EP compiles a
-  single arch, so there is no combined Hopper+Blackwell image.
+- **Image:** the default image is built for `sm_90` + `sm_100`/`sm_103` (PTX fallback), so it
+  runs on `p5`/`p5en` (Hopper) and `p6-b300` (Blackwell) without a rebuild.
 - **EFA count:** `EFA_PER_NODE=16` (a `p6-b300.48xlarge` exposes 16 EFA NICs). `p5.48xlarge`
   exposes 32 — adjust per instance type.
 - **Tolerations:** the manifests tolerate `nvidia.com/gpu`, `workload=bench`, and
