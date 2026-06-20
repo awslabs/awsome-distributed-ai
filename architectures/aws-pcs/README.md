@@ -313,8 +313,11 @@ srun --partition=cpu1 --nodes=2 --ntasks=2 \
 
 You should see two different compute-node hostnames. (First launch waits ~2–3 min
 while the `cpu1` queue scales up; `pyxis: importing docker image ...` then the two
-lines.) Submit it as a batch job instead with `sbatch --partition=cpu1 --nodes=2
---wrap='srun bash -c "hostname"'`.
+lines.) To submit it as a batch job instead:
+
+```bash
+sbatch --partition=cpu1 --nodes=2 --wrap='srun bash -c "hostname"'
+```
 
 ### Example B — multi-node GPU NCCL test (needs a GPU queue)
 
