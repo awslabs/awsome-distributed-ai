@@ -56,6 +56,8 @@ LL_COMBINE = re.compile(r"Combine bandwidth:\s*" + _BW + r"\s*GB/s")
 # nccl-tests data row: size count type redop root  time algbw busbw #wrong ...
 NCCL_ROW_RE = re.compile(r"^\s*\d+\s+\d+\s+\w+")
 NCCL_BUSBW_COLS = (7, 11)
+# mpirun --tag-output prefixes every line with e.g. "[1,0]<stdout>:".
+TAG_PREFIX_RE = re.compile(r"^\[\d+,\d+\]<std(?:out|err)>:")
 
 
 def _last(text, regex):
@@ -95,6 +97,7 @@ def parse_nccl(path, target_bytes):
     best_at = None       # (abs_size_delta, size, busbw)
     with open(path) as f:
         for line in f:
+            line = TAG_PREFIX_RE.sub("", line)
             if line.lstrip().startswith("#") or not NCCL_ROW_RE.match(line):
                 continue
             cols = line.split()

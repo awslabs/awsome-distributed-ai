@@ -47,40 +47,26 @@ spec:
             - name: LD_LIBRARY_PATH
               value: /opt/amazon/openmpi/lib:/opt/nccl/build/lib:/opt/amazon/efa/lib:/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu:/usr/local/nvidia/lib:$LD_LIBRARY_PATH
             command:
-            - /opt/amazon/openmpi/bin/mpirun
-            - --allow-run-as-root
-            - --tag-output
-            - -np
-            - "${NP}"
-            - -N
-            - "${GPU_PER_NODE}"
-            - --bind-to
-            - none
-            - -x
-            - PATH
-            - -x
-            - LD_LIBRARY_PATH
-            - -x
-            - FI_PROVIDER=efa
-            - -x
-            - FI_EFA_USE_DEVICE_RDMA=1
-            - -x
-            - FI_EFA_FORK_SAFE=1
-            - -x
-            - NCCL_DEBUG=INFO
-            - /opt/nccl-tests/build/alltoall_perf
-            - -b
-            - "8"
-            - -e
-            - "8G"
-            - -f
-            - "2"
-            - -g
-            - "1"
+            - /bin/bash
             - -c
-            - "1"
-            - -n
-            - "100"
+            - |
+              # Wait for each worker's sshd before launching: mpi-operator starts
+              # the launcher as soon as workers are Running, but their sshd / DNS
+              # may not be ready yet, and the launcher would lose the SSH race.
+              for host in $(awk '{print $1}' /etc/mpi/hostfile); do
+                until ssh -o ConnectTimeout=3 -o BatchMode=yes -o StrictHostKeyChecking=no "$host" true 2>/dev/null; do
+                  echo "waiting for sshd on $host"; sleep 3
+                done
+              done
+              /opt/amazon/openmpi/bin/mpirun \
+                --allow-run-as-root --tag-output \
+                -np ${NP} -N ${GPU_PER_NODE} --bind-to none \
+                -x PATH -x LD_LIBRARY_PATH \
+                -x FI_PROVIDER=efa \
+                -x FI_EFA_USE_DEVICE_RDMA=1 \
+                -x FI_EFA_FORK_SAFE=1 \
+                -x NCCL_DEBUG=INFO \
+                /opt/nccl-tests/build/alltoall_perf -b 8 -e 8G -f 2 -g 1 -c 1 -n 100
     Worker:
       replicas: ${NUM_NODES}
       template:
