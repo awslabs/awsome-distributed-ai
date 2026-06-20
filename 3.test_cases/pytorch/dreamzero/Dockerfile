@@ -19,7 +19,7 @@
 #   - reason                     (Agentic RL, vLLM/SGLang)
 #   - ... (15 targets total, see upstream docker/Dockerfile)
 #
-# Build: use kubernetes/libero/setup/build-push.sh, which clones RLinf (pinned
+# Build: use kubernetes/libero/build-push.sh, which clones RLinf (pinned
 # UPSTREAM_REF) and DreamZero (pinned DREAMZERO_REF), builds the upstream
 # embodied-libero image as stage 1, then builds this EFA overlay as stage 2 and
 # pushes to your ECR. The build context is this test-case dir and must contain
@@ -33,7 +33,7 @@ ARG UPSTREAM_DOCKERFILE=docker/Dockerfile
 # scope (before the first FROM) because an ARG used in a later FROM must be
 # global -- a per-stage ARG is not visible to FROM and would resolve blank
 # (BuildKit: "base name should not be blank"). The docker buildx path
-# (setup/build-push.sh) and CodeBuild both build stage 1 as the local tag
+# (build-push.sh) and CodeBuild both build stage 1 as the local tag
 # rlinf-upstream-${BUILD_TARGET}; override this arg to pull stage 1 from a
 # registry instead.
 ARG RLINF_UPSTREAM_IMAGE=rlinf-upstream-${BUILD_TARGET}

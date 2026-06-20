@@ -273,15 +273,13 @@ libfabric 2.4.0 / aws-ofi-nccl 1.18.0 and the DCP-save gloo-coordinator patch. T
 external `groot` package is cloned from `github.com/RLinf/dreamzero.git` and
 placed on `PYTHONPATH` via `DREAMZERO_PATH=/workspace/DreamZero`.
 
-Build the image with **local Docker + buildx**. Run from the `setup/` directory;
-it reads `ECR_URI`, `AWS_REGION`, `UPSTREAM_REF`, and `DREAMZERO_REF` from
-`env_vars`:
+Build the image with **local Docker + buildx**. Run from the `kubernetes/libero/`
+directory; it reads `ECR_URI`, `AWS_REGION`, `UPSTREAM_REF`, and `DREAMZERO_REF`
+from `env_vars`:
 
 ```bash
-cd setup
-source ../env_vars
+source ./env_vars
 ./build-push.sh
-cd ..
 ```
 
 This clones the pinned `RLinf` and `dreamzero` sources, builds stage 1
@@ -412,6 +410,7 @@ kubernetes/libero/
 ├── README.md                       # This walkthrough
 ├── env_vars.example                # Copy to env_vars and `source` it
 ├── secret.example.yaml             # OPTIONAL hf-token Secret (gated repos only)
+├── build-push.sh                   # Local buildx two-stage build + push to ECR
 ├── model-download.yaml             # Job: stage DreamZero-DROID + umt5-xxl + libero dataset
 ├── generate-metadata.yaml          # Job: libero_sim normalization metadata.json
 ├── dreamzero-sft.yaml              # KubeRay RayJob: 2-node FSDP2 SFT
@@ -422,8 +421,6 @@ kubernetes/libero/
 │   ├── convert_checkpoint.sh       # DCP -> .pt conversion launcher
 │   ├── run_dreamzero_eval_eks.sh   # LIBERO simulator eval launcher
 │   └── libero_spatial_eval_dreamzero_14b.yaml  # 14B eval config (upstream ships 5B only)
-├── setup/
-│   └── build-push.sh               # Local buildx two-stage build + push to ECR
 └── storage/
     ├── pvc-fsx-lustre-dynamic.yaml # OPTIONAL: dynamically provision fsx-claim
     └── pv-fsx-lustre-static.yaml   # OPTIONAL: bind fsx-claim to an existing FSx

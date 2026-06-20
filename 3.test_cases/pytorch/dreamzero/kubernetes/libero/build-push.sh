@@ -6,7 +6,7 @@
 # EFA overlay) and push to your ECR. Requires docker buildx + AWS CLI logged in.
 #
 # Usage:
-#   source ../env_vars         # sets ECR_URI, AWS_REGION, UPSTREAM_REF, DREAMZERO_REF
+#   source ./env_vars         # sets ECR_URI, AWS_REGION, UPSTREAM_REF, DREAMZERO_REF
 #   ./build-push.sh
 set -euo pipefail
 
@@ -19,8 +19,8 @@ DREAMZERO_REF="${DREAMZERO_REF:-ab790c198fbc}"
 BUILD_TARGET="${BUILD_TARGET:-embodied-libero}"
 TAG="${TAG:-latest}"
 
-# Test-case root (this script is at kubernetes/libero/setup/build-push.sh).
-ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+# Test-case root (this script is at kubernetes/libero/build-push.sh).
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
 echo "== ECR login =="

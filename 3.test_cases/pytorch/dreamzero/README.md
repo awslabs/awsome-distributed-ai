@@ -60,7 +60,7 @@ checkpoint yields `eval/success_once = 0.0`, which is **expected**; real accurac
 requires a multi-step SFT run (raise `runner.max_steps`).
 
 The image is built with the **local `docker buildx`** two-stage build and pushed
-to ECR (see [`kubernetes/libero/setup/build-push.sh`](kubernetes/libero/setup/build-push.sh)).
+to ECR (see [`kubernetes/libero/build-push.sh`](kubernetes/libero/build-push.sh)).
 
 ## References
 
