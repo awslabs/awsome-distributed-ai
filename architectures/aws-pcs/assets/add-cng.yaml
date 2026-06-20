@@ -532,34 +532,30 @@ Resources:
                 export S3_KEY_PREFIX="${S3KeyPrefix}"
                 aws s3 cp s3://${S3BucketName}/${S3KeyPrefix}scripts/setup-directory.sh /tmp/setup-directory.sh
                 chmod +x /tmp/setup-directory.sh
-                # Capture the script's REAL exit code. The old `... | tee logfile`
-                # form returned tee's status (0), masking a failed LDAP client
-                # setup (e.g. discovery exhausting its retries) — the node would
-                # then silently join the cluster idle and jobs landing on it fail
-                # with "no such user". We redirect to the log instead of piping so
-                # $? is the script's own exit code (cloud-init runcmd runs under
-                # /bin/sh, so PIPESTATUS / bash arrays are unavailable here — a
-                # bashism would die with "Bad substitution" before slurmd starts).
-                # On a client-setup failure we DRAIN this node so the scheduler
-                # stops placing work on it until an operator fixes LDAP and resumes.
+                # Capture the script's REAL exit code so a failed LDAP client
+                # setup is VISIBLE in the log instead of being masked. The old
+                # `... | tee logfile` form returned tee's status (always 0), so a
+                # failure (e.g. discovery exhausting its retries) looked
+                # successful and left no signal. We redirect to the log instead
+                # of piping so $? is the script's own exit code. (cloud-init
+                # runcmd runs under /bin/sh, so PIPESTATUS / bash arrays are
+                # unavailable here — a bashism would die with "Bad substitution"
+                # before slurmd even starts.)
+                #
+                # We deliberately do NOT drain the node on failure:
+                #  - Slurm launches jobs by numeric UID, so a job still RUNS even
+                #    if the user can't be name-resolved on this node (verified on
+                #    real hardware); a missing directory client is a degradation,
+                #    not a hard job failure.
+                #  - Auto-draining a fresh node would risk a launch/drain/replace
+                #    loop: PCS replaces the "unhealthy" node, the replacement hits
+                #    the same condition and drains again. Log-and-continue is the
+                #    safe choice; an operator can act on the logged ERROR.
                 bash /tmp/setup-directory.sh "${DirectoryRole}" > /var/log/directory-setup.log 2>&1
                 dir_rc=$?
                 echo "directory setup exited $dir_rc" >> /var/log/directory-setup.log
                 if [ "$dir_rc" -ne 0 ] && [ "${DirectoryRole}" = "client" ]; then
-                  echo "ERROR: LDAP client setup failed (exit $dir_rc); draining this node so jobs are not scheduled onto it without LDAP." >> /var/log/directory-setup.log
-                  # slurmd may not have registered yet at first boot; retry the
-                  # drain in the background until scontrol can reach the controller.
-                  (
-                    SCONTROL=$(ls /opt/aws/pcs/scheduler/slurm-*/bin/scontrol 2>/dev/null | head -1)
-                    for i in $(seq 1 30); do
-                      if [ -n "$SCONTROL" ] && "$SCONTROL" update nodename="$(hostname -s)" state=drain reason="ldap-client-setup-failed" >> /var/log/directory-setup.log 2>&1; then
-                        echo "Node drained due to LDAP client setup failure." >> /var/log/directory-setup.log
-                        break
-                      fi
-                      sleep 10
-                      SCONTROL=$(ls /opt/aws/pcs/scheduler/slurm-*/bin/scontrol 2>/dev/null | head -1)
-                    done
-                  ) &
+                  echo "ERROR: LDAP client setup failed (exit $dir_rc). The node will still join and run jobs (Slurm uses numeric UIDs), but user name resolution / home-dir creation may be degraded on this node. Check this log and the directory server; not draining (avoids a replace loop)." >> /var/log/directory-setup.log
                 fi
               fi
 
