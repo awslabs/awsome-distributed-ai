@@ -128,9 +128,12 @@ Implications to be aware of:
   admin passwords keep working and the DB stays accessible.
   **Already-running compute nodes, however, keep their cached `ldap_uri`** (the
   old login node's private IP, which the replacement no longer has). Cached users
-  still resolve via SSSD, but **uncached/new users and group expansion fail** on
-  those nodes until you refresh them. After a login-node replacement, run on every
-  running compute node:
+  still resolve via SSSD, but **name resolution for uncached/new users and group
+  expansion degrades** on those nodes until you refresh them. (Jobs already
+  submitted by such users still *run* — Slurm uses numeric UIDs, so a name-
+  resolution gap is a degradation, not a hard job failure — but `id`/`getent`,
+  `pam_mkhomedir`, and anything that looks the user up by name can misbehave.)
+  After a login-node replacement, run on every running compute node:
   ```bash
   srun -N <nodes> -n <nodes> bash -c 'sudo sed -i "s#ldap_uri = .*#ldap_uri = ldap://<new-login-ip>#" /etc/sssd/sssd.conf && sudo sss_cache -E && sudo systemctl restart sssd'
   ```
