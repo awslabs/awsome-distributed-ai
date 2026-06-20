@@ -17,8 +17,9 @@ Kubernetes manifests that run on Amazon EKS: take the released
 fine-tuning (SFT)** on the **LIBERO** benchmark (also a Franka arm, in
 simulation; `embodiment_tag: libero_sim`), then
 **run the LIBERO simulator eval** (which renders in-sim rollout videos).
-There is no native LIBERO 14B checkpoint upstream — warm-starting from DROID is
-the point.
+The released DreamZero-DROID checkpoint is the 14B foundation weight you
+warm-start from; continue-SFT adapts it to your target data (here, LIBERO) —
+the same pattern you would follow with your own dataset.
 
 Upstream projects:
 [github.com/RLinf/RLinf](https://github.com/RLinf/RLinf) (training framework) and
