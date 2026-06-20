@@ -23,12 +23,20 @@
 # UPSTREAM_REF) and DreamZero (pinned DREAMZERO_REF), builds the upstream
 # embodied-libero image as stage 1, then builds this EFA overlay as stage 2 and
 # pushes to your ECR. The build context is this test-case dir and must contain
-# ./RLinf, ./DreamZero, and ./docker (scripts + patches).
+# ./RLinf, ./DreamZero, and the *.patch file(s) applied to the RLinf source.
 # =============================================================================
 
 # ---- Stage 1: Build upstream RLinf image ----
 ARG BUILD_TARGET=embodied-maniskill_libero
 ARG UPSTREAM_DOCKERFILE=docker/Dockerfile
+# RLINF_UPSTREAM_IMAGE points stage 2 at the stage-1 image. Declared in GLOBAL
+# scope (before the first FROM) because an ARG used in a later FROM must be
+# global -- a per-stage ARG is not visible to FROM and would resolve blank
+# (BuildKit: "base name should not be blank"). The docker buildx path
+# (setup/build-push.sh) and CodeBuild both build stage 1 as the local tag
+# rlinf-upstream-${BUILD_TARGET}; override this arg to pull stage 1 from a
+# registry instead.
+ARG RLINF_UPSTREAM_IMAGE=rlinf-upstream-${BUILD_TARGET}
 
 FROM rlinf-upstream-${BUILD_TARGET} AS upstream
 # This FROM is a placeholder -- the actual upstream build happens in CodeBuild
@@ -43,11 +51,6 @@ FROM rlinf-upstream-${BUILD_TARGET} AS upstream
 # ---- Stage 2: EFA networking overlay ----
 # Layer EFA, GDRCopy, NCCL, and OpenMPI onto the upstream RLinf image.
 # Recipe proven in nccl-tests/Dockerfile on nvidia/cuda base images.
-
-# RLINF_UPSTREAM_IMAGE points stage 2 at the stage-1 image. The docker buildx
-# path (setup/build-push.sh) uses the default local tag built immediately before;
-# override it to pull a stage-1 image from a registry instead.
-ARG RLINF_UPSTREAM_IMAGE=rlinf-upstream-${BUILD_TARGET}
 FROM ${RLINF_UPSTREAM_IMAGE}
 
 ARG GDRCOPY_VERSION=v2.5.1
@@ -178,56 +181,42 @@ ENV TOKENIZERS_PARALLELISM=true
 ENV TORCH_NCCL_AVOID_RECORD_STREAMS=1
 ENV NCCL_DEBUG=WARN
 
-# -- Copy EKS-specific scripts --
-COPY docker/scripts/ /workspace/eks/scripts/
+# -- Copy EKS hotfix patches (applied to the RLinf source below) --
+COPY *.patch /workspace/eks/patches/
 
 # =============================================================================
-# Optional extras (controlled by EXTRAS build arg)
+# Copy source repos into the build context.
 #
-# EXTRAS is a comma-separated list of packages to install on top of the EFA
-# overlay. This allows the same Dockerfile to produce images for different
-# examples without rebuilding the expensive EFA/NCCL layers.
-#
-# Supported values:
-#   rlinf       - RLinf source (required for all training examples)
-#
-# DreamZero note: the DreamZero `groot` package is provided by the
-# COPY DreamZero/ tree on PYTHONPATH (DREAMZERO_PATH). Its `dreamzero` venv is
-# built by the upstream embodied-libero target (RLinf PR #1272), so this overlay
-# no longer rebuilds it.
-#
-# Examples:
-#   --build-arg EXTRAS=rlinf                  (ManiSkill, LIBERO, pi0, DreamZero)
+# RLinf is always available (cloned in pre_build). RLinf is NOT pip-installed:
+# the launchers run from /workspace/RLinf (cwd on sys.path), and the upstream
+# image deliberately uses --no-install-project. DreamZero (groot package) is
+# always cloned by the buildspec (pre_build) and made available on PYTHONPATH
+# via DREAMZERO_PATH; its `dreamzero` venv is built by the upstream
+# embodied-libero target (RLinf PR #1272), so this overlay does not rebuild it.
 # =============================================================================
-ARG EXTRAS="rlinf"
-
-# Copy source repos into build context.
-# RLinf is always available (cloned in pre_build).
-# DreamZero (groot package) is always cloned by the buildspec (pre_build) and
-# made available on PYTHONPATH via DREAMZERO_PATH; it is no longer gated by EXTRAS.
 COPY RLinf/ /workspace/RLinf/
 COPY DreamZero/ /workspace/DreamZero/
 
 # Apply EKS hotfix patches to the upstream RLinf source.
 # dcp-save-gloo-coordinator.patch: pass a CPU/gloo process group to dcp.save so
 # its post-write finalization object-broadcast runs over gloo instead of CUDA/NCCL.
-# On torch 2.6 the default-PG (NCCL) broadcast of the multi-MB finalization object
-# races with NCCL comm teardown at the end of a long (100s+ GB) checkpoint write,
-# leaving non-coordinator ranks with an all-zero buffer -> UnpicklingError, AFTER
-# every shard + .metadata are already on disk (reproduced + validated on 2x p5en;
-# torch 2.7+ fixes this upstream the same way). Must be baked into the image because
-# Ray worker actors on every node import from /workspace/RLinf. git is present
-# (installed in the EFA stage). Patches are validated to apply against the pinned
-# UPSTREAM_REF; the build fails loudly if a patch no longer applies.
+# dcp.save's broadcast_object_list picks its transport from the PG backend (CUDA
+# for NCCL, CPU for gloo); with the default PG it runs on CUDA and races with NCCL
+# comm teardown at the end of a long (100s+ GB) checkpoint write, leaving
+# non-coordinator ranks with an all-zero buffer -> UnpicklingError, AFTER every
+# shard + .metadata are already on disk (reproduced + validated on 2x p5en).
+# NOTE: upgrading torch does NOT remove the need for this patch -- the synchronous
+# dcp.save / _save_state_dict path is byte-identical through at least torch 2.8 and
+# always broadcasts over the default PG (only async_save requires a CPU/gloo
+# backend). Must be baked into the image because Ray worker actors on every node
+# import from /workspace/RLinf. git is present (installed in the EFA stage).
+# Patches are validated to apply against the pinned UPSTREAM_REF; the build fails
+# loudly if a patch no longer applies.
 RUN cd /workspace/RLinf && \
-    for p in /workspace/eks/scripts/patches/*.patch; do [ -e "$p" ] || continue; \
+    for p in /workspace/eks/patches/*.patch; do [ -e "$p" ] || continue; \
         echo "Applying patch: ${p}"; \
         git apply --verbose "${p}" || patch -p1 < "${p}"; \
     done
-
-# Install extras based on EXTRAS arg
-RUN chmod +x /workspace/eks/scripts/install_extras.sh && \
-    /workspace/eks/scripts/install_extras.sh "${EXTRAS}"
 
 # =============================================================================
 # Security hardening / image hygiene (runs last so it cleans everything above)

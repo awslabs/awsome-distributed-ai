@@ -24,7 +24,7 @@ model code).
 ```
 dreamzero/
 ├── Dockerfile                 # two-stage RLinf + EFA overlay image
-├── docker/                    # build-context helpers (install_extras, DCP-save patch)
+├── dcp-save-gloo-coordinator.patch  # DCP checkpoint fix, applied to RLinf at build time
 ├── diagrams/                  # WAM + infra topology (draw.io + SVG)
 └── kubernetes/libero/         # the EKS recipe (RayJob SFT + eval) — see its README
 ```
