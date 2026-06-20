@@ -52,9 +52,12 @@ node**, and **FSx for Lustre with ≥250 GB free** (a 14B FSDP DCP checkpoint is
 
 ## Prerequisites
 
-An Amazon EKS cluster with GPU autoscaling (Karpenter), EFA networking, the
-KubeRay operator, and FSx for Lustre shared storage. See
-[`../../1.architectures/4.amazon-eks`](../../1.architectures/4.amazon-eks) for
+An Amazon EKS cluster that can schedule **2× `p5en.48xlarge`** (8× H200 + EFA
+each) — provisioned however you like (a static managed node group, a Capacity
+Block reservation, or on-demand autoscaling such as Karpenter; the workload is
+fixed-size, so autoscaling is a convenience, not a requirement) — plus EFA
+networking, the KubeRay operator, and FSx for Lustre shared storage. See
+[`1.architectures/4.amazon-eks`](../../../1.architectures/4.amazon-eks) for
 cluster setup. The detailed prerequisite checklist lives in the walkthrough below.
 
 ## Full walkthrough
@@ -86,7 +89,7 @@ to ECR (see [`kubernetes/libero/build-push.sh`](kubernetes/libero/build-push.sh)
 - RLinf training framework — [github.com/RLinf/RLinf](https://github.com/RLinf/RLinf)
 - DreamZero (`groot`) model code — [github.com/RLinf/dreamzero](https://github.com/RLinf/dreamzero)
 - DreamZero-DROID checkpoint — [huggingface.co/GEAR-Dreams/DreamZero-DROID](https://huggingface.co/GEAR-Dreams/DreamZero-DROID)
-- EKS cluster architectures — [`1.architectures/4.amazon-eks`](../../1.architectures/4.amazon-eks)
+- EKS cluster architectures — [`1.architectures/4.amazon-eks`](../../../1.architectures/4.amazon-eks)
 
 ## Security
 
