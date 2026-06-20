@@ -45,10 +45,11 @@ If the DeepEP values differ from 4096/7168/8/256, edit the `torchrun` args in
 
 - EKS cluster with EFA + GPU nodes; NVIDIA device plugin + AWS EFA device plugin; Kubeflow MPI
   Operator (`kubectl get crd mpijobs.kubeflow.org`). See each benchmark's `kubernetes/README.md`.
-- The three container images built and pushed to ECR:
+- The container images in ECR:
   - NVSHMEM: `../deepep-benchmark/deepep.Dockerfile` (CUDA 13, `sm_90`+`sm_100`)
   - UCCL: `../uccl-ep-benchmark/uccl-ep.Dockerfile` (pinned UCCL commit; single arch via `GPU_SM`, default `sm_100` for B300)
-  - NCCL: `../../nccl-tests/nccl-tests.Dockerfile` (CUDA 13.0.2, ships `alltoall_perf`, `sm_100`/`sm_103`)
+  - NCCL: **reuse the NVSHMEM/DeepEP image** — it already builds `/opt/nccl-tests/build/alltoall_perf`
+    with `sm_100` gencode, so no separate `nccl-tests` build is needed for the baseline.
 
 ## Account / cluster safety (run first)
 
@@ -61,6 +62,11 @@ kubectl get crd mpijobs.kubeflow.org                 # confirm MPI Operator
 
 ## Run order (serial — each config needs all 8 nodes)
 
+**Smoke first.** Before any 8-node job, run the single-node `test-intranode.yaml` for each EP
+image. It validates the image, that `sm_100` actually runs on B300, and the launch path in
+minutes instead of failing eight nodes deep. Intranode is NVLink-only (same for every backend),
+so it is a smoke test, not a comparison row.
+
 ```bash
 cp env_vars.example env_vars   # then edit image URIs / topology
 source env_vars
@@ -68,19 +74,31 @@ source env_vars
 # 1) NVSHMEM (DeepEP)
 ( cd ../deepep-benchmark/kubernetes
   IMAGE_URI=$NVSHMEM_IMAGE_URI NUM_NODES=$NUM_NODES \
-  envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' < test-internode.yaml   | kubectl apply -f -
-  # ...wait for completion, save logs, delete, then test-low-latency.yaml )
+  envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' < test-internode.yaml | kubectl apply -f -
+  # ...wait, save logs, delete. Then low-latency -- see the override note below. )
 
 # 2) UCCL (UCCL-EP)
 ( cd ../uccl-ep-benchmark/kubernetes
   IMAGE_URI=$UCCL_IMAGE_URI NUM_NODES=$NUM_NODES \
-  envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' < test-internode.yaml   | kubectl apply -f -
-  # ...then test-low-latency.yaml )
+  envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' < test-internode.yaml | kubectl apply -f -
+  # ...then test-low-latency.yaml (already pinned to --num-experts=256) )
 
-# 3) NCCL baseline
+# 3) NCCL baseline (reuses the DeepEP image's alltoall_perf)
 IMAGE_URI=$NCCL_IMAGE_URI \
 envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES $NP' < nccl-alltoall.yaml | kubectl apply -f -
 ```
+
+> **DeepEP low-latency at 8 nodes — required override.** The merged DeepEP low-latency manifest
+> runs `python3 /DeepEP/tests/test_low_latency.py` with no args, so it uses the upstream default
+> `--num-experts=288`. The test asserts `num_experts % num_ranks == 0`; at 8 nodes (64 ranks),
+> `288 % 64 ≠ 0` and it aborts. Match the comparison's 256 by patching the rendered manifest:
+> ```bash
+> cd ../deepep-benchmark/kubernetes
+> IMAGE_URI=$NVSHMEM_IMAGE_URI NUM_NODES=$NUM_NODES \
+> envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' < test-low-latency.yaml \
+>   | sed 's#test_low_latency.py#test_low_latency.py --num-experts 256#' | kubectl apply -f -
+> ```
+> (DeepEP internode defaults are already 4096/7168/8/**256**, so internode needs no override.)
 
 Save each launcher log (`kubectl logs <…-launcher> > <name>.log`) and **delete the job before
 the next run** (MPIJob names are fixed; re-applying collides, and each job needs all 8 nodes):
@@ -100,15 +118,24 @@ python3 collect_results.py \
     --nccl             nccl_alltoall.log
 ```
 
-This prints the comparison table; record it in [`RESULTS.md`](RESULTS.md) along with the image
-tags, date, and any config deltas.
+The parser reports, for internode, the **RDMA** leg of the "Best dispatch/combine" line (the
+cross-node bottleneck — *not* the intra-node NVL number printed on the same line), and for the
+NCCL baseline the busbw **at the EP per-rank payload size** (`num_tokens*hidden*2`, ≈56 MiB) as
+well as the asymptotic peak. Record the table in [`RESULTS.md`](RESULTS.md) with image tags,
+date, and any config deltas. Eyeball one real launcher log against the parser before trusting it.
 
 ## Caveats
 
 - **NCCL is a reference, not an equal.** `alltoall_perf` busbw is pure transport throughput; the
   EP dispatch/combine numbers carry routing + reduction overhead, so they should sit *below* the
-  NCCL ceiling.
-- **CUDA skew.** NVSHMEM/NCCL images are CUDA 13; the UCCL image is CUDA 12.8.1. Separate
+  NCCL ceiling. Compare against the **matched-size** busbw, not the asymptotic peak.
+- **Internode = RDMA leg.** DeepEP/UCCL print both an RDMA (cross-node) and an NVL (intra-node)
+  bandwidth on the same line; only the RDMA number reflects the inter-node transport being
+  compared.
+- **`num-experts` must divide the world size.** Both tests assert `num_experts % num_ranks == 0`.
+  At 8 nodes (64 ranks) the comparison uses 256 (= 4/rank). The DeepEP low-latency default (288)
+  is not divisible by 64 and must be overridden (see the run-order note).
+- **CUDA skew.** NVSHMEM/NCCL (DeepEP image) are CUDA 13; the UCCL image is CUDA 12.8.1. Separate
   images/pods, so it does not affect a single run, but note it for fairness.
 - **UCCL bench scripts** are pulled from upstream `uccl/ep/bench` at image-build time and pinned
   via `UCCL_COMMIT`. If upstream renames CLI flags, adjust the `torchrun` args in the UCCL

@@ -12,7 +12,11 @@ export EFA_PER_NODE=16
 export NUM_NODES=8
 export NP=$((NUM_NODES * GPU_PER_NODE))   # 64 ranks; used by the NCCL baseline
 
-# Per-backend image URIs (built/pushed from each benchmark's Dockerfile).
-export NVSHMEM_IMAGE_URI=<account>.dkr.ecr.<region>.amazonaws.com/deepep:efa1.48.0-nvshmem3.7.0-deepep567632d
+# Per-backend image URIs.
+# NVSHMEM: built from ../deepep-benchmark/deepep.Dockerfile (CUDA 13, sm_90+sm_100).
+# UCCL:    built from ../uccl-ep-benchmark/uccl-ep.Dockerfile (single arch; sm_100 for B300).
+# NCCL:    the DeepEP image already ships /opt/nccl-tests/build/alltoall_perf built with
+#          sm_100 gencode, so reuse it for the baseline -- no separate nccl-tests build.
+export NVSHMEM_IMAGE_URI=<account>.dkr.ecr.<region>.amazonaws.com/deepep:efa1.48.0-nvshmem3.7.0-deepep567632d-cuda13
 export UCCL_IMAGE_URI=<account>.dkr.ecr.<region>.amazonaws.com/uccl-ep:efa1.43.2-uccl0dc87eb-sm100
-export NCCL_IMAGE_URI=<account>.dkr.ecr.<region>.amazonaws.com/nccl-tests:efa1.48.0-nccl2.30.4-1-tests2.18.3
+export NCCL_IMAGE_URI=$NVSHMEM_IMAGE_URI
