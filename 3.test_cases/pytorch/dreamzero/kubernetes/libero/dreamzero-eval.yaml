@@ -19,7 +19,7 @@
 #   - umt5-xxl tokenizer + DreamZero-DROID backbone staged on FSx
 #       (/fsx/models/umt5-xxl, /fsx/models/DreamZero-DROID)
 #   - LIBERO dataset/assets staged (model-download.yaml)
-#   - Container image built and pushed to ECR (examples/buildspec.yml)
+#   - Container image built and pushed to ECR (build-push.sh)
 #   - FSx PVC "fsx-claim" bound; training-sa ServiceAccount exists
 #
 # ConfigMaps (create BOTH before applying this manifest):

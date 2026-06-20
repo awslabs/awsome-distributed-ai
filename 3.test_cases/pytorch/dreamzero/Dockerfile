@@ -33,19 +33,19 @@ ARG UPSTREAM_DOCKERFILE=docker/Dockerfile
 # scope (before the first FROM) because an ARG used in a later FROM must be
 # global -- a per-stage ARG is not visible to FROM and would resolve blank
 # (BuildKit: "base name should not be blank"). The docker buildx path
-# (build-push.sh) and CodeBuild both build stage 1 as the local tag
+# (kubernetes/libero/build-push.sh) builds stage 1 as the local tag
 # rlinf-upstream-${BUILD_TARGET}; override this arg to pull stage 1 from a
 # registry instead.
 ARG RLINF_UPSTREAM_IMAGE=rlinf-upstream-${BUILD_TARGET}
 
 FROM rlinf-upstream-${BUILD_TARGET} AS upstream
-# This FROM is a placeholder -- the actual upstream build happens in CodeBuild
-# (see buildspec.yml). CodeBuild builds the upstream image first, tags it as
-# rlinf-upstream-${BUILD_TARGET}, then this Dockerfile layers EFA on top.
-# For local builds, run the upstream build first:
+# This FROM is a placeholder -- kubernetes/libero/build-push.sh builds the
+# upstream RLinf image first, tags it as rlinf-upstream-${BUILD_TARGET}, then
+# builds this Dockerfile to layer EFA on top. To build the upstream image by
+# hand first:
 #   cd /path/to/RLinf
-#   docker build --build-arg BUILD_TARGET=embodied-maniskill_libero \
-#     -t rlinf-upstream-embodied-maniskill_libero -f docker/Dockerfile .
+#   docker build --build-arg BUILD_TARGET=embodied-libero \
+#     -t rlinf-upstream-embodied-libero -f docker/Dockerfile .
 
 
 # ---- Stage 2: EFA networking overlay ----
@@ -187,12 +187,13 @@ COPY *.patch /workspace/eks/patches/
 # =============================================================================
 # Copy source repos into the build context.
 #
-# RLinf is always available (cloned in pre_build). RLinf is NOT pip-installed:
-# the launchers run from /workspace/RLinf (cwd on sys.path), and the upstream
-# image deliberately uses --no-install-project. DreamZero (groot package) is
-# always cloned by the buildspec (pre_build) and made available on PYTHONPATH
-# via DREAMZERO_PATH; its `dreamzero` venv is built by the upstream
-# embodied-libero target (RLinf PR #1272), so this overlay does not rebuild it.
+# RLinf is always available (cloned into the build context by build-push.sh
+# before the build). RLinf is NOT pip-installed: the launchers run from
+# /workspace/RLinf (cwd on sys.path), and the upstream image deliberately uses
+# --no-install-project. DreamZero (groot package) is likewise cloned by
+# build-push.sh and made available on PYTHONPATH via DREAMZERO_PATH; its
+# `dreamzero` venv is built by the upstream embodied-libero target
+# (RLinf PR #1272), so this overlay does not rebuild it.
 # =============================================================================
 COPY RLinf/ /workspace/RLinf/
 COPY DreamZero/ /workspace/DreamZero/

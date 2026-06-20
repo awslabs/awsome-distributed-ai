@@ -57,7 +57,7 @@ each) — provisioned however you like (a static managed node group, a Capacity
 Block reservation, or on-demand autoscaling such as Karpenter; the workload is
 fixed-size, so autoscaling is a convenience, not a requirement) — plus EFA
 networking, the KubeRay operator, and FSx for Lustre shared storage. See
-[`1.architectures/4.amazon-eks`](../../../1.architectures/4.amazon-eks) for
+[`Amazon EKS distributed training architecture`](../../../1.architectures/4.amazon-eks/README.md) for
 cluster setup. The detailed prerequisite checklist lives in the walkthrough below.
 
 ## Full walkthrough
