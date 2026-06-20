@@ -16,7 +16,7 @@ Kubernetes manifests that run on Amazon EKS: take the released
 14B checkpoint (pretrained on DROID, a Franka arm), continue **supervised
 fine-tuning (SFT)** on the **LIBERO** benchmark (also a Franka arm, in
 simulation; `embodiment_tag: libero_sim`), then
-**evaluate the result in the LIBERO simulator** and render in-sim rollout videos.
+**run the LIBERO simulator eval** (which renders in-sim rollout videos).
 There is no native LIBERO 14B checkpoint upstream — warm-starting from DROID is
 the point.
 
