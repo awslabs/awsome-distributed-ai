@@ -467,6 +467,17 @@ directory `/home/alice` is visible on the compute node (shared OpenZFS).
 
 ### "User not found" on compute node
 
+> **Expected right after a node boots.** SSSD is configured with `enumerate = true`,
+> so on first start it runs a full enumeration of all users/groups in the
+> background. Until that completes (seconds to a minute, depending on directory
+> size), an individual `getent passwd <user>` / `id <user>` can briefly return
+> "not found" even though LDAP is healthy. It resolves on its own; only
+> investigate further if it persists. (Note also that a job submitted by such a
+> user still **runs** — Slurm uses numeric UIDs — so this is a name-resolution
+> delay, not a job failure.)
+
+If it persists:
+
 ```bash
 # Check SSSD is running on compute
 srun -N 1 -n 1 bash -c 'systemctl status sssd | head -3'

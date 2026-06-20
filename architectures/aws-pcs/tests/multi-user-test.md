@@ -262,6 +262,62 @@ ldapsearch -x -H ldap://localhost -b "ou=People,dc=cluster,dc=internal" uid
 Expected: previously-created users still in the directory (DB on shared OpenZFS
 survived the instance replacement).
 
+### E3. Admin password is preserved across login node replacement
+
+```bash
+# Before terminating the login node, record the hash:
+aws ssm get-parameter --name "/pcs/<cluster-id>/ldap/admin-password" \
+  --with-decryption --query 'Parameter.Value' --output text | sha256sum
+# Terminate the login node, wait for the PCS replacement, then on the new node:
+aws ssm get-parameter --name "/pcs/<cluster-id>/ldap/admin-password" \
+  --with-decryption --query 'Parameter.Value' --output text | sha256sum
+# Admin bind on the new login node:
+ldapsearch -x -H ldap://localhost -D "cn=admin,dc=cluster,dc=internal" \
+  -w "<password>" -b dc=cluster,dc=internal -s base dn
+```
+
+Expected: the SHA-256 is **identical** before and after (the new login node
+reuses the existing SSM password instead of regenerating it), and the admin bind
+returns `result: 0 Success`.
+
+### E4. Already-running compute after replacement (stale ldap_uri) + recovery
+
+This is the worst case: a compute node is running a job when the login node is
+replaced, so it keeps the old login IP cached in `ldap_uri`.
+
+```bash
+# 1. Submit a long job so a compute node stays up, confirm it's RUNNING.
+# 2. Terminate the login node; wait for the PCS replacement (new private IP).
+# 3. Add a NEW user on the new login node, then on the still-running compute:
+srun -w <that-node> bash -c 'getent passwd <new-user>'      # -> NOT found (stale ldap_uri)
+srun -w <that-node> bash -c 'getent passwd <cached-user>'   # -> still resolves (SSSD cache)
+# 4. Recovery: point the node's SSSD at the new login IP and refresh.
+srun -w <that-node> bash -c \
+  'sudo sed -i "s#ldap_uri = .*#ldap_uri = ldap://<new-login-ip>#" /etc/sssd/sssd.conf \
+   && sudo sss_cache -E && sudo systemctl restart sssd'
+srun -w <that-node> bash -c 'getent passwd <new-user>'      # -> now resolves
+```
+
+Expected: before recovery the new user is unresolvable on the stale node while
+cached users still resolve; after the recovery command the new user resolves.
+The job that was running throughout is **unaffected** (recovery is non-disruptive;
+no node drain).
+
+### E5. A job runs even when its user is unresolvable on the compute node
+
+Confirms the design decision not to drain on a directory gap: Slurm launches by
+numeric UID.
+
+```bash
+# On a compute node where SSSD can't currently resolve <user> (e.g. mid-recovery
+# in E4, or sssd stopped): a job submitted as that user still runs.
+sacct -X -a -j <jobid> --format=JobID,User,State,ExitCode -S today -E now
+```
+
+Expected: the job reaches `COMPLETED` (ExitCode `0:0`) even though
+`id <user>` / `getent passwd <user>` returns "no such user" on that node —
+name resolution is degraded, the job is not.
+
 ---
 
 ## Verdict checklist
@@ -282,6 +338,9 @@ survived the instance replacement).
 | New compute node resolves existing users | ✅ |
 | SSSD cache works during brief LDAP outage | ✅ |
 | LDAP DB survives login node replacement | ✅ |
+| Admin password preserved across replacement (same SHA-256) | ✅ |
+| Stale-ldap_uri recovery on running compute is non-disruptive | ✅ |
+| Job runs by UID even when user unresolvable on the node | ✅ |
 
 ---
 
