@@ -3,9 +3,10 @@
 
 # Continue SFT of DreamZero (14B World-Action Model) on LIBERO on Amazon EKS
 
-DreamZero is a **16.48B-parameter World-Action Model (WAM)** — a Wan-based
-video-diffusion Diffusion Transformer (DiT) that *jointly* denoises future video
-frames and future robot actions in a shared causal self-attention space. The
+DreamZero is a **14B-parameter World-Action Model (WAM)** — a Wan-based,
+causal (autoregressive) video-diffusion Diffusion Transformer (DiT) that
+*jointly* denoises future video frames and future robot actions via flow
+matching. The
 model predicts both what will happen (video) and what to do (actions); the video
 prediction acts as a computational scaffold for action reasoning.
 
@@ -13,7 +14,8 @@ This walkthrough packages the canonical customer workflow as a set of reusable
 Kubernetes manifests that run on Amazon EKS: take the released
 [`GEAR-Dreams/DreamZero-DROID`](https://huggingface.co/GEAR-Dreams/DreamZero-DROID)
 14B checkpoint (pretrained on DROID, a Franka arm), continue **supervised
-fine-tuning (SFT)** on a *new* embodiment's data (LIBERO, `libero_sim`), then
+fine-tuning (SFT)** on the **LIBERO** benchmark (also a Franka arm, in
+simulation; `embodiment_tag: libero_sim`), then
 **evaluate the result in the LIBERO simulator** and render in-sim rollout videos.
 There is no native LIBERO 14B checkpoint upstream — warm-starting from DROID is
 the point.

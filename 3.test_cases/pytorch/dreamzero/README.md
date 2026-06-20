@@ -3,14 +3,17 @@
 
 # DreamZero LIBERO 14B SFT (World-Action Model) on Amazon EKS
 
-DreamZero is a **16.48B-parameter World-Action Model (WAM)** — a Wan-based
-video-diffusion Diffusion Transformer that *jointly* denoises future video frames
-and robot actions in a shared causal self-attention space. This test case
-continues supervised fine-tuning from the released
+This test case is a worked example of **deploying DreamZero training on Amazon
+EKS**. DreamZero is a **14B-parameter World-Action Model (WAM)** — a Wan-based,
+causal (autoregressive) video diffusion transformer that *jointly* denoises
+future video frames and robot actions via flow matching. Here it continues
+supervised fine-tuning from the released
 [`GEAR-Dreams/DreamZero-DROID`](https://huggingface.co/GEAR-Dreams/DreamZero-DROID)
-14B checkpoint onto a *new* embodiment (LIBERO) and evaluates it in the LIBERO
-simulator on Amazon EKS — demonstrating cross-embodiment transfer and multi-node
-**FSDP2** training over **EFA** with **KubeRay**. Upstream:
+14B checkpoint on the **LIBERO** manipulation benchmark and evaluates it in the
+LIBERO simulator — exercising multi-node **FSDP2** training over **EFA** with
+**KubeRay**. The focus is the **EKS deployment mechanics** (image build,
+multi-node EFA/NCCL, FSDP2 sharded checkpointing, sim eval), not a training-quality
+or transfer result. Upstream:
 [github.com/RLinf/RLinf](https://github.com/RLinf/RLinf) (training framework) and
 [github.com/RLinf/dreamzero](https://github.com/RLinf/dreamzero) (the `groot` WAM
 model code).
@@ -57,7 +60,11 @@ on CPU and consumed by the LIBERO simulator eval. This proves the *infrastructur
 and pipeline* (image build, multi-node EFA/NCCL, FSDP2 sharded checkpointing,
 DCP→`.pt` conversion, and in-sim eval) — **not** task accuracy. A 1-step
 checkpoint yields `eval/success_once = 0.0`, which is **expected**; real accuracy
-requires a multi-step SFT run (raise `runner.max_steps`).
+requires a multi-step SFT run (raise `runner.max_steps`). For reference, RLinf's
+own LIBERO-Spatial SFT of the **5B** WAM
+([`RLinf-DreamZero-WAN2.2-5B-LIBERO-SFT-Step18000`](https://huggingface.co/RLinf/RLinf-DreamZero-WAN2.2-5B-LIBERO-SFT-Step18000))
+reaches **~96.7% `success_once` by step 18000** ([RLinf docs](https://rlinf.readthedocs.io/en/latest/rst_source/examples/embodied/sft_dreamzero.html)),
+confirming the recipe converges with sufficient steps.
 
 The image is built with the **local `docker buildx`** two-stage build and pushed
 to ECR (see [`kubernetes/libero/build-push.sh`](kubernetes/libero/build-push.sh)).
