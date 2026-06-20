@@ -135,7 +135,46 @@ reference (preferably also a digest) if you have a reason to deviate:
 For all the standard x86_64 P-family clusters this PR targets, the default is what you
 want — leave it alone.
 
-### 3.2 Public Grafana exposure
+### 3.2 Monitoring across a login-node stop / replacement
+
+Monitoring (Prometheus + Grafana + the exporters) runs on the **login node**, so
+it's worth knowing what happens when that node is stopped or replaced (PCS replaces
+an unhealthy login node with a new instance that has a **new private IP** — see also
+the directory-service equivalent in [USER-MANAGEMENT.md](./USER-MANAGEMENT.md)).
+Most of the stack is **replacement-safe by design**; one thing is not.
+
+**Survives a replacement (no action needed):**
+- **Compute metrics keep flowing.** Prometheus *pulls* (scrapes) compute exporters;
+  compute nodes never push and never store the login IP. The new login node's
+  Prometheus re-discovers the running compute nodes automatically via **EC2 service
+  discovery** filtering on the `aws:pcs:cluster-id` tag (10 s refresh) — there is no
+  compute→login IP dependency to break (unlike SSSD's pinned `ldap_uri`). Verified on
+  a real replacement: the new login's Prometheus re-listed the compute/slurm targets
+  as `up` within seconds.
+- **Grafana admin password.** Stored in SSM at `/pcs/<cluster-id>/grafana/admin-password`
+  and **reused** on replacement (the installer only generates one on first boot), so
+  the password you fetched still works.
+- **The built-in dashboards.** Grafana's dashboards and the Prometheus datasource are
+  **file-provisioned** (`type: file`, datasource `url: http://localhost:9090`), so the
+  ~13 stock dashboards re-appear automatically on the new node and the datasource still
+  points at the co-located Prometheus.
+
+**Lost on a replacement (known limitation):**
+- **Historical metrics and any hand-made Grafana changes.** The Prometheus TSDB and
+  the Grafana DB live in **node-local Docker named volumes** (`/var/lib/docker/volumes/...`
+  — deliberately node-local to avoid the shared-`/home` Stale-file-handle race that
+  drove the `/opt` install). They are **not** on shared/persistent storage, so a
+  replacement starts both fresh: you lose the pre-replacement time-series history and
+  any **user-created or user-edited** Grafana state (custom dashboards, edits to the
+  stock dashboards — they are `editable`, annotations, alert rules). New metrics
+  collect normally from the moment the new node is up.
+
+If long-term metric retention or custom dashboards matter for your cluster, export
+dashboards to JSON (or keep them in the provisioning tree) and treat the on-node TSDB
+as ephemeral. Persisting the TSDB/Grafana DB across replacement (shared FS, EBS
+snapshot, or a managed AMP/AMG backend) is tracked in [ROADMAP.md](./ROADMAP.md).
+
+### 3.3 Public Grafana exposure
 
 `GrafanaAccessCidr` opens **TCP/443 on the login node** to a CIDR via a
 login-only security group. The nginx in front of Grafana also proxies

@@ -150,6 +150,22 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   Prometheus + Amazon Managed Grafana as an alternative to the self-hosted stack on the
   login node (see `4.validation_and_observability/4.prometheus-grafana`), so users can
   use a managed backend instead of running the containers themselves.
+- [ ] 🟢 **Persist Prometheus TSDB / Grafana DB across login-node replacement.** Monitoring
+  runs on the login node and is otherwise replacement-safe (compute scraping is pull-based
+  via EC2 service discovery on the `aws:pcs:cluster-id` tag — no compute→login IP
+  dependency; the Grafana password is reused from SSM; the stock dashboards + datasource are
+  file-provisioned). The one gap: the **Prometheus TSDB and Grafana DB live in node-local
+  Docker named volumes** (`/var/lib/docker/volumes/...`, deliberately node-local to avoid the
+  shared-`/home` Stale-file-handle race that motivated the `/opt` install), so a replacement
+  **loses historical metrics and any user-created/edited Grafana state** (custom dashboards,
+  edits to the stock ones, annotations, alert rules). Options: (a) the managed AMP/AMG backend
+  above (best — storage is off-node by design); (b) bind the TSDB/Grafana volumes to an EBS
+  volume that re-attaches on replacement; (c) periodic `slapcat`-style export of dashboards +
+  TSDB snapshots to `/fsx`. **Do NOT** simply move the volumes onto `/home` — that reintroduces
+  the NFS Stale-file-handle race the `/opt` install was created to fix. Documented as a known
+  limitation in [OPERATIONS.md §3.2](./OPERATIONS.md). Verified on a real login-node
+  replacement (2026-06): discovery/password/dashboards recovered automatically; only history
+  was lost.
 - [x] 🟡 **Rename `DeployMonitoring` → `MonitoringStack` (enum).** Done in deploy-all:
   `MonitoringStack: none | Prometheus-LoginNode` (default `Prometheus-LoginNode`),
   aligning with the `DirectoryService` `<what>-<where>` pattern. `AMP-AMG`/`CloudWatch`
