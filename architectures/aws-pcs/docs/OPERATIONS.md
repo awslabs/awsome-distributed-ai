@@ -32,7 +32,12 @@ Slurm-specific dashboards stay empty. Pick 25.11 unless you have a reason to pin
 `24.11` is intentionally **out of scope** here — `cluster.yaml`'s `AllowedValues`
 doesn't include it, and `install-enroot-pyxis.sh` builds Pyxis only for 25.05/25.11.
 
-## 2. Container runtime: PostInstall vs. pre-baked AMI
+## 2. AMI and container runtime
+
+This section covers the node image (`AmiId`) and how the Enroot/Pyxis container
+runtime gets onto it — two facets of the same decision.
+
+### 2.1 Container runtime: PostInstall vs. pre-baked AMI
 
 Two paths install Enroot/Pyxis on a node. They are **decoupled**: the cluster stack
 (`pcs-ml-cluster-deploy-all.yaml`) does not run Image Builder — it accepts a ready
@@ -51,7 +56,7 @@ as a separate stack, then pass its output to the cluster.
   pre-baked AMI: the installer is idempotent and detects Enroot/Pyxis is already
   present, a fast no-op; the single space just avoids the download+check.)
 
-### 2.1 The AMI is single-Slurm-version, by design
+### 2.2 The AMI is single-Slurm-version, by design
 
 Pyxis is a SPANK plugin and **its ABI is locked to the Slurm version it was compiled
 against**. A `spank_pyxis.so` built for 25.11 makes a 25.05 slurmd refuse to start with
@@ -60,7 +65,7 @@ against**. A `spank_pyxis.so` built for 25.11 makes a 25.05 slurmd refuse to sta
 `SlurmVersion` value on the AMI build stack and on the cluster stack, otherwise nodes
 won't come up.
 
-### 2.2 PostInstall passes the version via `PCS_SLURM_VERSION`
+### 2.3 PostInstall passes the version via `PCS_SLURM_VERSION`
 
 For the PostInstall path, `add-cng*.yaml`'s UserData exports
 `PCS_SLURM_VERSION="${SlurmVersion}"` before invoking the script. The script can't
@@ -74,7 +79,7 @@ script falls back to building every supported version and using the newest insta
 bin on slurmd's PATH — slower and less precise than the cluster path, but enough for a
 manual node fix.
 
-### 2.3 Why a single version is fine across cluster upgrades
+### 2.4 Why a single version is fine across cluster upgrades
 
 Pinning Pyxis and slurmd's PATH to one Slurm version sounds brittle, but Slurm's
 [upgrade policy](https://slurm.schedmd.com/upgrades.html) makes it safe in practice:
@@ -91,6 +96,22 @@ path bakes a new AMI for it. Nothing dynamic is needed on the running node side.
 The single-version pin is also why the AMI is *not* a one-AMI-fits-all artifact —
 treat the AMI as bound to a specific cluster `SlurmVersion`, the same way you would
 treat a binary built against a particular libc.
+
+### 2.5 AMI selection (`AmiId`) — pin in production
+
+Left empty, `AmiId` resolves the PCS-Ready DLAMI from the SSM public parameter
+`/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id`. Only a `/latest/`
+path is published, and CloudFormation re-resolves SSM parameter values on every stack
+update — so a later scale-out can boot a *newer* AMI than the original nodes (drift).
+For evaluation that's fine; for production:
+
+```bash
+aws ssm get-parameter --name /aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id \
+  --query 'Parameter.Value' --output text
+```
+
+then pass that exact `ami-xxx` as `AmiId` so every node in the cluster's lifetime is
+identical.
 
 ## 3. Monitoring (`MonitoringVersion`)
 
@@ -184,23 +205,7 @@ can. Empty (the default) means SSM port-forward only, which is the safest path f
 production. `0.0.0.0/0` is accepted for short-lived PoC/workshop use; narrow it (or
 clear it) when you're done.
 
-## 4. AMI selection (`AmiId`) — pin in production
-
-Left empty, `AmiId` resolves the PCS-Ready DLAMI from the SSM public parameter
-`/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id`. Only a `/latest/`
-path is published, and CloudFormation re-resolves SSM parameter values on every stack
-update — so a later scale-out can boot a *newer* AMI than the original nodes (drift).
-For evaluation that's fine; for production:
-
-```bash
-aws ssm get-parameter --name /aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id \
-  --query 'Parameter.Value' --output text
-```
-
-then pass that exact `ami-xxx` as `AmiId` so every node in the cluster's lifetime is
-identical.
-
-## 5. FSx storage: deployment type vs. throughput coupling
+## 4. FSx storage: deployment type vs. throughput coupling
 
 Lustre `PerUnitStorageThroughput` and OpenZFS `HomeThroughput` allowed values **depend
 on the deployment type**:
@@ -218,7 +223,7 @@ change `LustreDeploymentType` or `OpenZFSDeploymentType`, also pick a throughput
 for the new type. The defaults (250 / 320) target `PERSISTENT_2` / `SINGLE_AZ_HA_2`;
 override both throughput parameters when falling back to the older deployment types.
 
-### 5.1 Lustre mount options — `noatime`
+### 4.1 Lustre mount options — `noatime`
 
 The CNG templates mount FSx for Lustre with `-o noatime,flock,lazystatfs`. Of
 these, `flock` and `lazystatfs` are already enabled by default on FSx for
@@ -258,7 +263,7 @@ fstab + `_netdev` alone doesn't guarantee this ordering. Mounting explicitly
 in cloud-init `runcmd` (which runs after network + module load) is the most
 portable approach.
 
-### 5.2 Lustre runtime performance tuning (recommended)
+### 4.2 Lustre runtime performance tuning (recommended)
 
 The mount options above handle metadata behaviour. For I/O throughput and
 metadata IOPS, the following `lctl` runtime tunables are recommended for ML
@@ -316,7 +321,7 @@ sudo lctl set_param llite.*.statahead_max=512
 - If the filesystem is 1.2 TiB / 2 OSTs (the throughput ceiling is the
   filesystem's provisioned bandwidth, not the client's RPC parallelism)
 
-### 5.3 Lustre stripe configuration (per-directory)
+### 4.3 Lustre stripe configuration (per-directory)
 
 Stripe settings control how a file's data is distributed across OSTs. The
 default FSx PFL (Progressive File Layout) is reasonable for mixed workloads:
@@ -350,7 +355,7 @@ file means wide striping on thousands of small files adds more lock overhead
 than it gains in parallelism. The default PFL handles this correctly (starts
 with `-c 1` for small extents).
 
-### 5.4 Kernel module parameters (advanced, requires reboot)
+### 4.4 Kernel module parameters (advanced, requires reboot)
 
 For instances with 64+ vCPUs (all P5/P6/hpc types), the Lustre kernel module
 defaults bottleneck RPC processing. Set these before first mount via
@@ -377,7 +382,7 @@ reference architecture, the recommended path is to add them to a custom AMI
 (via `pcs-ready-dlami-with-enroot-pyxis.yaml`) or to early UserData before
 the Lustre mount.
 
-### 5.5 OS-level sysctl (optional)
+### 4.5 OS-level sysctl (optional)
 
 On GPU instances with 2 TB RAM, the kernel dirty-page defaults can cause
 bursty flushes that compete with GPU-to-host DMA during checkpoint writes:
@@ -400,7 +405,7 @@ sudo sysctl -w net.core.wmem_max=16777216
 
 ---
 
-## 6. P6-B300 NIC topology — single-template lock-in
+## 5. P6-B300 NIC topology — single-template lock-in
 
 `add-cng-p6-b300.yaml` is a hand-built `NetworkInterfaces` block for **exactly
 `p6-b300.48xlarge`** (17 cards: card 0 ENA-only + EFA on cards 1-16 at `DeviceIndex 0`,
@@ -408,9 +413,9 @@ which differs from p5/b200's "card 0 = EFA, DeviceIndex 1" layout). The instance
 is locked via `AllowedValues` so a different type can't be selected through this
 template — pick the matching `add-cng-*.yaml` for the family you want.
 
-## 7. Known issues
+## 6. Known issues
 
-### 7.1 First-srun-on-a-fresh-cpu1-node can drain the node ("Prolog error")
+### 6.1 First-srun-on-a-fresh-cpu1-node can drain the node ("Prolog error")
 
 **Symptom.** The very first `srun` against a freshly-launched compute node fails with
 `Job prolog failed`, the node enters `drained` state with `Reason=Prolog error`, and the
@@ -454,7 +459,7 @@ cleanest mitigation is upstream — recording it here so users seeing it know th
 workaround and the next contributor doesn't waste time looking for a bug in this PR's
 scripts.
 
-## 8. Recommendations recap
+## 7. Recommendations recap
 
 For a new production deploy:
 
