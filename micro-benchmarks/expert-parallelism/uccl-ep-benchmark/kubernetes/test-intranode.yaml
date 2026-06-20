@@ -1,0 +1,116 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+apiVersion: kubeflow.org/v2beta1
+kind: MPIJob
+metadata:
+  name: uccl-ep-intranode
+spec:
+  runPolicy:
+    cleanPodPolicy: Running
+    backoffLimit: 3
+  # Single node, NVLink only: one torchrun agent spawns GPU_PER_NODE local ranks.
+  # No multi-node rendezvous is needed (master is 127.0.0.1). NUM_NODES is unused.
+  slotsPerWorker: 1
+  mpiReplicaSpecs:
+    Launcher:
+      replicas: 1
+      template:
+        spec:
+          restartPolicy: OnFailure
+          # The launcher runs the full benchmark image just to invoke mpirun.
+          # Co-locate it on the GPU node pool, whose nodes have enough ephemeral
+          # storage; small CPU nodes hit DiskPressure and evict it.
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: workload
+            value: bench
+            operator: Equal
+            effect: NoSchedule
+          - key: capacity-reservation
+            operator: Exists
+            effect: NoSchedule
+          containers:
+          - image: ${IMAGE_URI}
+            imagePullPolicy: IfNotPresent
+            name: uccl-ep-intranode-launcher
+            resources:
+              requests:
+                cpu: "1"
+                memory: 2Gi
+            command:
+            - /bin/bash
+            - -c
+            - |
+              # SSH-launched workers do not inherit Dockerfile ENV, so pass every
+              # needed variable through `mpirun -x`. Single node, so torchrun uses
+              # a local rendezvous on 127.0.0.1.
+              # Wait for the worker's sshd to accept connections before launching.
+              for host in $(awk '{print $1}' /etc/mpi/hostfile); do
+                until ssh -o ConnectTimeout=3 -o BatchMode=yes -o StrictHostKeyChecking=no "$host" true 2>/dev/null; do
+                  echo "waiting for sshd on $host"; sleep 3
+                done
+              done
+              /opt/amazon/openmpi/bin/mpirun \
+                --allow-run-as-root --tag-output \
+                -np 1 -N 1 --bind-to none \
+                -x PATH -x LD_LIBRARY_PATH -x LD_PRELOAD \
+                -x FI_PROVIDER=efa \
+                -x FI_EFA_USE_DEVICE_RDMA=1 \
+                -x FI_EFA_FORK_SAFE=1 \
+                -x NCCL_SOCKET_IFNAME \
+                -x OMP_NUM_THREADS=8 \
+                -x PYTHONFAULTHANDLER=1 \
+                bash -c 'cd /opt/uccl/ep && torchrun \
+                           --nnodes=1 \
+                           --nproc_per_node=${GPU_PER_NODE} \
+                           --node_rank=0 \
+                           --master_addr=127.0.0.1 \
+                           --master_port=29400 \
+                           bench/test_intranode.py \
+                             --num-tokens 4096 \
+                             --hidden 7168 \
+                             --num-topk 8 \
+                             --num-experts 256'
+    Worker:
+      replicas: 1
+      template:
+        spec:
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: workload
+            value: bench
+            operator: Equal
+            effect: NoSchedule
+          - key: capacity-reservation
+            operator: Exists
+            effect: NoSchedule
+          containers:
+          - image: ${IMAGE_URI}
+            imagePullPolicy: IfNotPresent
+            name: uccl-ep-intranode-worker
+            volumeMounts:
+            - name: shmem
+              mountPath: /dev/shm
+            resources:
+              limits:
+                nvidia.com/gpu: ${GPU_PER_NODE}
+                vpc.amazonaws.com/efa: ${EFA_PER_NODE}
+                hugepages-2Mi: 5120Mi
+                memory: 32000Mi
+              requests:
+                nvidia.com/gpu: ${GPU_PER_NODE}
+                vpc.amazonaws.com/efa: ${EFA_PER_NODE}
+                hugepages-2Mi: 5120Mi
+                memory: 32000Mi
+          volumes:
+          - name: shmem
+            hostPath:
+              path: /dev/shm

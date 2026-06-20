@@ -1,0 +1,134 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+apiVersion: kubeflow.org/v2beta1
+kind: MPIJob
+metadata:
+  name: uccl-ep-low-latency
+spec:
+  runPolicy:
+    cleanPodPolicy: Running
+    backoffLimit: 3
+  # One MPI slot per node. MPI launches one torchrun agent per node (`-N 1`) and
+  # each agent spawns GPU_PER_NODE ranks. Node rank comes from
+  # $OMPI_COMM_WORLD_RANK. Low-latency is the decode path (few tokens per rank).
+  slotsPerWorker: 1
+  mpiReplicaSpecs:
+    Launcher:
+      replicas: 1
+      template:
+        spec:
+          restartPolicy: OnFailure
+          # The launcher runs the full benchmark image just to invoke mpirun.
+          # Co-locate it on the GPU node pool, whose nodes have enough ephemeral
+          # storage; small CPU nodes hit DiskPressure and evict it.
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: workload
+            value: bench
+            operator: Equal
+            effect: NoSchedule
+          - key: capacity-reservation
+            operator: Exists
+            effect: NoSchedule
+          containers:
+          - image: ${IMAGE_URI}
+            imagePullPolicy: IfNotPresent
+            name: uccl-ep-low-latency-launcher
+            resources:
+              requests:
+                cpu: "1"
+                memory: 2Gi
+            command:
+            - /bin/bash
+            - -c
+            - |
+              # MASTER_ADDR must be worker-0 and must resolve from the other workers
+              # (the torch rendezvous runs on the worker pods). Read it from the
+              # mpi-operator-injected hostfile so we use exactly the DNS name the
+              # operator made cluster-resolvable.
+              # Wait for each worker's sshd to accept connections before launching.
+              # mpi-operator starts the launcher as soon as workers are Running, but
+              # their sshd may not be ready yet; without this wait the launcher loses
+              # the SSH race, exits non-zero, and burns Job retries (backoffLimit).
+              for host in $(awk '{print $1}' /etc/mpi/hostfile); do
+                until ssh -o ConnectTimeout=3 -o BatchMode=yes -o StrictHostKeyChecking=no "$host" true 2>/dev/null; do
+                  echo "waiting for sshd on $host"; sleep 3
+                done
+              done
+              MASTER_ADDR=$(head -n1 /etc/mpi/hostfile | awk '{print $1}')
+              # SSH-launched workers do not inherit Dockerfile ENV, so pass every
+              # needed variable through `mpirun -x`. torchrun uses a static
+              # rendezvous: each agent's --node_rank is its MPI rank, all agents
+              # point at MASTER_ADDR:29400.
+              /opt/amazon/openmpi/bin/mpirun \
+                --allow-run-as-root --tag-output \
+                -np ${NUM_NODES} -N 1 --bind-to none \
+                -x PATH -x LD_LIBRARY_PATH -x LD_PRELOAD \
+                -x FI_PROVIDER=efa \
+                -x FI_EFA_USE_DEVICE_RDMA=1 \
+                -x FI_EFA_FORK_SAFE=1 \
+                -x NCCL_SOCKET_IFNAME \
+                -x OMP_NUM_THREADS=8 \
+                -x PYTHONFAULTHANDLER=1 \
+                -x MASTER_ADDR=$MASTER_ADDR \
+                bash -c 'cd /opt/uccl/ep && torchrun \
+                           --nnodes=${NUM_NODES} \
+                           --nproc_per_node=${GPU_PER_NODE} \
+                           --node_rank=$OMPI_COMM_WORLD_RANK \
+                           --master_addr=$MASTER_ADDR \
+                           --master_port=29400 \
+                           bench/test_low_latency.py \
+                             --num-tokens=128 \
+                             --hidden=7168 \
+                             --num-topk=8 \
+                             --num-experts=256'
+    Worker:
+      replicas: ${NUM_NODES}
+      template:
+        spec:
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: workload
+            value: bench
+            operator: Equal
+            effect: NoSchedule
+          - key: capacity-reservation
+            operator: Exists
+            effect: NoSchedule
+          containers:
+          - image: ${IMAGE_URI}
+            imagePullPolicy: IfNotPresent
+            name: uccl-ep-low-latency-worker
+            # The low-latency tuning phase profiles kernels via CUPTI. These nodes
+            # set the driver's RmProfilingAdminOnly=1, so the workload needs
+            # SYS_ADMIN to profile. Remove if your cluster allows non-admin GPU
+            # profiling.
+            securityContext:
+              capabilities:
+                add: ["SYS_ADMIN"]
+            volumeMounts:
+            - name: shmem
+              mountPath: /dev/shm
+            resources:
+              limits:
+                nvidia.com/gpu: ${GPU_PER_NODE}
+                vpc.amazonaws.com/efa: ${EFA_PER_NODE}
+                hugepages-2Mi: 5120Mi
+                memory: 32000Mi
+              requests:
+                nvidia.com/gpu: ${GPU_PER_NODE}
+                vpc.amazonaws.com/efa: ${EFA_PER_NODE}
+                hugepages-2Mi: 5120Mi
+                memory: 32000Mi
+          volumes:
+          - name: shmem
+            hostPath:
+              path: /dev/shm

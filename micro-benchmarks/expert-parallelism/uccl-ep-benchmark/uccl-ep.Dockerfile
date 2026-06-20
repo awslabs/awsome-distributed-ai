@@ -8,6 +8,13 @@ ARG EFA_INSTALLER_VERSION=1.43.2
 ARG AWS_OFI_NCCL_VERSION=v1.16.3
 ARG NCCL_VERSION=v2.27.7-1
 ARG NCCL_TESTS_VERSION=v2.16.9
+# Pin UCCL to a known-good commit for reproducible builds (same commit used by the
+# 3.test_cases/pytorch/vllm/dsv3-uccl-nixl recipe).
+ARG UCCL_COMMIT=0dc87eb3b40c372a16b70ef320f37daaa5299ca7
+# UCCL-EP compiles a single GPU arch (ep/Makefile uses -arch=sm_$(SM), default
+# auto-detected from the build host's nvidia-smi). Set it explicitly so the build
+# is host-independent: 100 = Blackwell/B300 (default), 90 = Hopper (H100/H200).
+ARG GPU_SM=100
 
 RUN apt-get update -y && apt-get upgrade -y
 RUN apt-get remove -y --allow-change-held-packages \
@@ -128,9 +135,9 @@ RUN apt-get update && apt-get install -y \
 
 RUN git clone https://github.com/uccl-project/uccl.git /opt/uccl \
     && cd /opt/uccl \
-    # && git checkout <commit-hash> \
+    && git checkout ${UCCL_COMMIT} \
     && cd ep \
     && ./install_deps.sh \
-    && make -j install
+    && make -j SM=${GPU_SM} install
 
 WORKDIR /opt/uccl/ep

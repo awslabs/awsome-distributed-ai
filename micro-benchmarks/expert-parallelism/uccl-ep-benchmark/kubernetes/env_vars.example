@@ -1,0 +1,20 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+# Copy this file to env_vars (gitignored), edit the values, then source it:
+#   cp env_vars.example env_vars
+#   source env_vars
+#   envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' \
+#     < test-internode.yaml | kubectl apply -f -
+
+# ECR image built from ../uccl-ep.Dockerfile (single GPU arch via GPU_SM; default
+# sm_100 for B300). Build with --build-arg GPU_SM=90 for Hopper.
+export IMAGE_URI=<account>.dkr.ecr.<region>.amazonaws.com/uccl-ep:<tag>
+
+# GPU node instance type and per-node device counts.
+export INSTANCE_TYPE=p6-b300.48xlarge
+export GPU_PER_NODE=8
+export EFA_PER_NODE=16          # p6-b300.48xlarge has 16 EFA NICs; p5.48xlarge has 32
+
+# Number of nodes: 1 for intranode; >=2 for internode / low-latency.
+export NUM_NODES=8

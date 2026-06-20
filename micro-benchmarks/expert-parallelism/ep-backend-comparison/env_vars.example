@@ -1,0 +1,18 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+# Shared topology for the EP-backend comparison. Copy to env_vars (gitignored),
+# edit, then source it before applying the per-backend manifests.
+#   cp env_vars.example env_vars && source env_vars
+
+# GPU node instance type and per-node device counts (p6-b300.48xlarge => 16 EFA).
+export INSTANCE_TYPE=p6-b300.48xlarge
+export GPU_PER_NODE=8
+export EFA_PER_NODE=16
+export NUM_NODES=8
+export NP=$((NUM_NODES * GPU_PER_NODE))   # 64 ranks; used by the NCCL baseline
+
+# Per-backend image URIs (built/pushed from each benchmark's Dockerfile).
+export NVSHMEM_IMAGE_URI=<account>.dkr.ecr.<region>.amazonaws.com/deepep:efa1.48.0-nvshmem3.7.0-deepep567632d
+export UCCL_IMAGE_URI=<account>.dkr.ecr.<region>.amazonaws.com/uccl-ep:efa1.43.2-uccl0dc87eb-sm100
+export NCCL_IMAGE_URI=<account>.dkr.ecr.<region>.amazonaws.com/nccl-tests:efa1.48.0-nccl2.30.4-1-tests2.18.3

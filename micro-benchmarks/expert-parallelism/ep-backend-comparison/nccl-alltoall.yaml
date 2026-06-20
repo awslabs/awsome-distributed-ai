@@ -1,0 +1,122 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Baseline for the EP-backend comparison: a raw NCCL all-to-all over the same
+# world size as the EP benchmarks (NUM_NODES x GPU_PER_NODE ranks). This is the
+# transport-level reference ceiling -- it moves bytes but does NOT do MoE token
+# routing or combine-reduction, so its busbw is an upper bound, not a
+# like-for-like dispatch/combine number.
+#
+# Built from micro-benchmarks/nccl-tests (CUDA 13.0.2 image ships alltoall_perf
+# and sm_100/sm_103). Set NP = NUM_NODES * GPU_PER_NODE in env_vars.
+apiVersion: kubeflow.org/v2beta1
+kind: MPIJob
+metadata:
+  name: nccl-alltoall
+spec:
+  runPolicy:
+    cleanPodPolicy: Running
+    backoffLimit: 3
+  slotsPerWorker: ${GPU_PER_NODE}
+  mpiReplicaSpecs:
+    Launcher:
+      replicas: 1
+      template:
+        spec:
+          restartPolicy: OnFailure
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: workload
+            value: bench
+            operator: Equal
+            effect: NoSchedule
+          - key: capacity-reservation
+            operator: Exists
+            effect: NoSchedule
+          containers:
+          - image: ${IMAGE_URI}
+            imagePullPolicy: IfNotPresent
+            name: nccl-alltoall-launcher
+            env:
+            - name: PATH
+              value: $PATH:/opt/amazon/efa/bin:/usr/bin
+            - name: LD_LIBRARY_PATH
+              value: /opt/amazon/openmpi/lib:/opt/nccl/build/lib:/opt/amazon/efa/lib:/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu:/usr/local/nvidia/lib:$LD_LIBRARY_PATH
+            command:
+            - /opt/amazon/openmpi/bin/mpirun
+            - --allow-run-as-root
+            - --tag-output
+            - -np
+            - "${NP}"
+            - -N
+            - "${GPU_PER_NODE}"
+            - --bind-to
+            - none
+            - -x
+            - PATH
+            - -x
+            - LD_LIBRARY_PATH
+            - -x
+            - FI_PROVIDER=efa
+            - -x
+            - FI_EFA_USE_DEVICE_RDMA=1
+            - -x
+            - FI_EFA_FORK_SAFE=1
+            - -x
+            - NCCL_DEBUG=INFO
+            - /opt/nccl-tests/build/alltoall_perf
+            - -b
+            - "8"
+            - -e
+            - "8G"
+            - -f
+            - "2"
+            - -g
+            - "1"
+            - -c
+            - "1"
+            - -n
+            - "100"
+    Worker:
+      replicas: ${NUM_NODES}
+      template:
+        spec:
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: workload
+            value: bench
+            operator: Equal
+            effect: NoSchedule
+          - key: capacity-reservation
+            operator: Exists
+            effect: NoSchedule
+          containers:
+          - image: ${IMAGE_URI}
+            imagePullPolicy: IfNotPresent
+            name: nccl-alltoall-worker
+            volumeMounts:
+            - name: shmem
+              mountPath: /dev/shm
+            resources:
+              limits:
+                nvidia.com/gpu: ${GPU_PER_NODE}
+                hugepages-2Mi: 5120Mi
+                vpc.amazonaws.com/efa: ${EFA_PER_NODE}
+                memory: 32000Mi
+              requests:
+                nvidia.com/gpu: ${GPU_PER_NODE}
+                hugepages-2Mi: 5120Mi
+                vpc.amazonaws.com/efa: ${EFA_PER_NODE}
+                memory: 32000Mi
+          volumes:
+          - name: shmem
+            hostPath:
+              path: /dev/shm
