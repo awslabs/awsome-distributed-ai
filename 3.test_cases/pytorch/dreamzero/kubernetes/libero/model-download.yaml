@@ -145,6 +145,17 @@ spec:
               echo "Dataset:"
               du -sh /fsx/datasets/libero 2>/dev/null || echo "  (not found)"
               ls -la /fsx/models/DreamZero-DROID /fsx/models/umt5-xxl /fsx/datasets/libero
+          env:
+            # Optional Hugging Face token. The default repos are public (download
+            # works without it), but passing a token avoids the stricter
+            # anonymous per-IP rate limits and is required for gated repos.
+            # optional: true -> the Job runs fine if the hf-token Secret is absent.
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HF_TOKEN
+                  optional: true
           resources:
             requests:
               cpu: "4"

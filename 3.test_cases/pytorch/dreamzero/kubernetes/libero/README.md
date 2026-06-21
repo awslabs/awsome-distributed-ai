@@ -148,8 +148,8 @@ Block for ML or an On-Demand Capacity Reservation (ODCR); the workload is
 fixed-size, so autoscaling is a convenience, not a requirement). You also need
 the NVIDIA GPU Operator (or device plugin) and EFA device plugin so pods can
 request `nvidia.com/gpu` and `vpc.amazonaws.com/efa`. Cluster-creation
-references live in
-[`1.architectures/4.amazon-eks`](../../../../../1.architectures/4.amazon-eks).
+references live in the
+[`Amazon EKS distributed training architecture`](../../../../../1.architectures/4.amazon-eks/README.md) section.
 
 Point your local kubeconfig at the cluster and confirm it is reachable:
 
@@ -235,11 +235,17 @@ aws eks create-pod-identity-association \
   --role-arn arn:aws:iam::<account>:role/<training-sa-role>
 ```
 
-> **Hugging Face auth is optional.** The default repos
+> **Hugging Face auth is optional, but recommended.** The default repos
 > (`GEAR-Dreams/DreamZero-DROID`, `google/umt5-xxl`,
-> `physical-intelligence/libero`) are **public** and download anonymously. Only
-> if you must authenticate to a gated repo, create the `hf-token` Secret from
-> `secret.example.yaml`:
+> `physical-intelligence/libero`) are **public** and download anonymously, so a
+> token is not *required*. However, anonymous downloads are rate-limited **per
+> source IP** and the anonymous tier is substantially stricter than an
+> authenticated one (HF's #1 cause of `429 Too Many Requests`). This download is
+> large and multi-file (a 23B sharded checkpoint + tokenizer + video dataset),
+> and on EKS it egresses through a shared NAT gateway — so the cluster's other
+> workloads share that same per-IP anonymous quota. Providing an `HF_TOKEN`
+> shifts you to a higher per-token quota and avoids that contention. Create the
+> `hf-token` Secret (also required for gated repos):
 >
 > ```bash
 > kubectl -n "$NAMESPACE" create secret generic hf-token --from-literal=HF_TOKEN=hf_xxx
@@ -328,7 +334,9 @@ This clones the pinned `RLinf` and `dreamzero` sources, builds stage 1
 
 Downloads the DreamZero-DROID 14B warm-start checkpoint
 (`GEAR-Dreams/DreamZero-DROID`), the `google/umt5-xxl` tokenizer, and the
-`physical-intelligence/libero` dataset (LeRobot layout) — all **anonymous**. This
+`physical-intelligence/libero` dataset (LeRobot layout). The repos are public so
+this works anonymously, but the Job picks up the optional `hf-token` Secret if
+present (recommended — see the auth note above). This
 Job runs in a lightweight `python:3.11-slim` staging image, so plain `envsubst`
 is fine:
 
