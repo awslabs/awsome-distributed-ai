@@ -87,7 +87,7 @@ DCP→`.pt` conversion → in-sim eval).
 
 **Training convergence** — a **300-step** SFT run on 2× `p5en.48xlarge` (16×
 H200, FSDP2 `full_shard` over EFA, ~6.9 s/step) reduced `train/loss` from
-**0.232 → 0.085** with a clean, monotonic-ish curve (`action_loss` and
+**0.232 → 0.085** with a steady downward trend (`action_loss` and
 `dynamics_loss` both ~0.04–0.05 at the end). It wrote a **207 GB** sharded DCP
 checkpoint (16 shards + `.metadata`) with no corruption or save-time crashes —
 exercising the in-image checkpoint-save fix
