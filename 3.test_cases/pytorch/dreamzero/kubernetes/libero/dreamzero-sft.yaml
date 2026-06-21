@@ -100,13 +100,6 @@ spec:
                         values:
                           - dreamzero-sft
                   topologyKey: kubernetes.io/hostname
-          topologySpreadConstraints:
-            - maxSkew: 1
-              topologyKey: topology.k8s.aws/network-node-layer-2
-              whenUnsatisfiable: ScheduleAnyway
-              labelSelector:
-                matchLabels:
-                  app: dreamzero-sft
           containers:
             - name: ray-head
               image: ${ECR_URI}:latest
@@ -212,13 +205,6 @@ spec:
                           values:
                             - dreamzero-sft
                     topologyKey: kubernetes.io/hostname
-            topologySpreadConstraints:
-              - maxSkew: 1
-                topologyKey: topology.k8s.aws/network-node-layer-2
-                whenUnsatisfiable: ScheduleAnyway
-                labelSelector:
-                  matchLabels:
-                    app: dreamzero-sft
             containers:
               - name: ray-worker
                 image: ${ECR_URI}:latest

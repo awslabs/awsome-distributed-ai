@@ -97,8 +97,7 @@ scheduler fans **FSDP2 `full_shard`** training across all 16 GPUs (the 16.48B
 model is *sharded*, not replicated). There is **no** torchrun, DeepSpeed, or
 manual head election. Gradient sync flows over **NCCL on EFA RDMA** (libfabric
 2.4 / aws-ofi-nccl 1.18, GPUDirect RDMA). Pod anti-affinity guarantees one pod
-per physical node; a topology-spread constraint prefers co-location under the
-same network layer for lowest NCCL latency. `shutdownAfterJobFinishes: true`
+per physical node. `shutdownAfterJobFinishes: true`
 tears the RayCluster down when training ends.
 
 ### The World-Action Model
