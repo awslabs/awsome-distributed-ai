@@ -31,6 +31,7 @@ PVC="${PVC:-fsx-kimi-k2}"
 NNODES="${NNODES:-8}"
 GPUS_PER_NODE=8
 WORLD=$(( NNODES * GPUS_PER_NODE ))
+TP="${TENSOR_PARALLEL:-8}"            # fixed across the sweep (intra-node NVLink); EP=TP*DP
 
 export TRAIN_ITERS="${TRAIN_ITERS:-24}"
 export GLOBAL_BATCH="${GLOBAL_BATCH:-256}"
@@ -40,7 +41,10 @@ export RECOMPUTE="${RECOMPUTE:-}"     # full|selective|"" — held identical acr
 RUN_TIMEOUT="${RUN_TIMEOUT:-2400}"     # seconds to wait for one run's rank-0 to finish
 
 EPS="${EPS:-16 32}"
-CELLS="${CELLS:-1:off 4:off 4:on}"
+# Default to the validated overlap=off cells (mb4 = efficient point first, then mb1 crossover).
+# overlap=on needs PP>1 + recompute-off headroom (see RESULTS caveat) — add "4:on" explicitly
+# only on a node count where EP tiles with PP>1 for the EP you want.
+CELLS="${CELLS:-4:off 1:off}"
 # arm spec = "label:dispatcher:imagevar:backend" (imagevar in {UCCL,NVSHMEM}).
 ARMS="${ARMS:-alltoall:alltoall:UCCL: deepep-uccl:deepep:UCCL:uccl deepep-nvshmem:deepep:NVSHMEM:nvshmem}"
 
@@ -122,14 +126,21 @@ export HF_HOME="${HF_CACHE}" HF_HUB_OFFLINE="${HF_OFFLINE}"
 # ---- one run ------------------------------------------------------------------------------
 run_one() {
   local LABEL="$1" DISP="$2" IMG="$3" BACKEND="$4" EP="$5" MB="$6" OVL="$7"
-  local PP=$(( WORLD / EP ))          # TP8 fixed: EP=TP*DP -> PP=WORLD/EP (EP32->PP2, EP16->PP4)
+  # TP8 fixed, ETP1: EP = TP*DP, so PP = WORLD/EP and DP = EP/TP. Guard that the layout tiles
+  # with integer PP and DP before launching — a non-dividing EP would silently floor PP and
+  # burn a whole N-node job that fails late inside Megatron (the opposite of "fail cheap").
+  if (( WORLD % EP != 0 )) || (( EP % TP != 0 )); then
+    echo "   SKIP: EP=${EP} does not tile WORLD=${WORLD} with TP=${TP} (need WORLD%EP==0 and EP%TP==0)"
+    return 0
+  fi
+  local PP=$(( WORLD / EP ))          # EP32->PP1/DP4, EP16->PP2/DP2 at WORLD=32; EP16->PP4 at WORLD=64
   local ARM_LABEL="${LABEL}-ep${EP}"
   local JOB="abrun-${MODEL}-${ARM_LABEL}"
   local RUN_DIR="${CAMPAIGN_FS}/${MODEL}/${ARM_LABEL}-mb${MB}-ovl${OVL}"
   echo ""
   echo ">>> RUN  arm=${LABEL} backend=${BACKEND:-nccl} EP=${EP} (TP8/PP${PP}) mb=${MB} overlap=${OVL}"
   MODEL="${MODEL}" IMG="${IMG}" ARM_LABEL="${ARM_LABEL}" EP_BACKEND="${BACKEND}" \
-    TENSOR_PARALLEL=8 PIPELINE_PARALLEL="${PP}" EXPERT_PARALLEL="${EP}" \
+    TENSOR_PARALLEL="${TP}" PIPELINE_PARALLEL="${PP}" EXPERT_PARALLEL="${EP}" \
     MICRO_BATCH="${MB}" MOE_A2A_OVERLAP="${OVL}" NNODES="${NNODES}" \
     HF_HOME="${HF_HOME}" HF_HUB_OFFLINE="${HF_HUB_OFFLINE}" \
     bash "${LAUNCH}" "${DISP}" "${NNODES}" || { echo "   launch failed"; return 1; }

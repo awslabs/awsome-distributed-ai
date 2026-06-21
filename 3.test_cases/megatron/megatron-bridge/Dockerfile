@@ -188,6 +188,7 @@ RUN if [ "${EP_BACKEND}" = "nvshmem" ]; then set -eux; \
       --venv /opt/venv \
       --deepep-src /opt/deepep-efa-src \
       --nvshmem-src /opt/nvshmem_src; \
+    rm -rf /opt/nvshmem_src/build /opt/deepep-efa-src; \
     else echo "EP_BACKEND=${EP_BACKEND}: skipping NVSHMEM/DeepEP build"; fi
 
 # NVSHMEM runtime env. Harmless for the uccl image (the dirs are absent there).

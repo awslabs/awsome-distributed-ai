@@ -97,7 +97,14 @@ def parse_run(run_dir, warmup, debug=False):
     times = [r[2] for r in steady if r[2] == r[2]]
     tfs = [r[3] for r in steady if r[3] == r[3]]
     gbs = next((r[4] for r in iters if r[4]), 0)
+    # Sequence length for the tok/s derivation: read it from env.txt (recorded as "seq=NNNN")
+    # rather than hardcoding, so a SEQ_LEN override doesn't silently skew derived tok/s.
     seq = 4096
+    _envp = os.path.join(run_dir, "env.txt")
+    if os.path.isfile(_envp):
+        _m = re.search(r"\bseq=(\d+)", open(_envp, errors="replace").read())
+        if _m:
+            seq = int(_m.group(1))
     n = len(times)
     mean_t = sum(times) / n if n else float("nan")
     med_t = sorted(times)[n // 2] if n else float("nan")
@@ -186,14 +193,13 @@ def main():
         w.writeheader()
         w.writerows(rows)
     sys.stderr.write("wrote %s (%d runs)\n" % (idx, len(rows)))
-    # echo a readable table to stdout
-    print("%-10s %-26s %9s %10s %10s %6s %5s %6s %8s" %
-          ("model", "run", "backend", "mean_s", "tflop/gpu", "tok/s", "efa", "stalls", "transport"))
+    # echo a readable table to stdout (one shared fmt so header and rows always align)
+    _FMT = "%-10s %-28s %8s %9s %10s %10s %6s %6s %9s"
+    print(_FMT % ("model", "run", "backend", "mean_s", "tflop/gpu", "tok/s", "efa", "stalls", "transport"))
     for r in rows:
         transport = "uccl" if r["uccl_ok"] else ("nvshmem" if r["nvshmem_ok"] else "-")
-        print("%-10s %-26s %9s %9s %10s %10s %5s %6s %8s" %
-              (r["model"], r["run"], r["backend"] or "-", r["mean_iter_s"],
-               r["tflops_per_gpu"], r["tok_s"], r["efa_ok"], r["stalls"], transport))
+        print(_FMT % (r["model"], r["run"], r["backend"] or "-", r["mean_iter_s"],
+                      r["tflops_per_gpu"], r["tok_s"], r["efa_ok"], r["stalls"], transport))
 
 
 if __name__ == "__main__":

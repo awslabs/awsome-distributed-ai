@@ -27,7 +27,7 @@ training-iteration time** over the steady state (first 4 of 12 iters dropped), p
 > **Why 4 nodes, not 8.** The plan targeted 8× p6-b300 (EP32 at TP8/PP2/DP4). At run time
 > the shared `ml-shared` cluster had only 6 of its 8 B300 nodes free (2 held by another
 > team), and EP32 cannot tile 6 nodes with integer PP. The whole sweep was therefore run on
-> **4 nodes (32 GPU)**, where both EP16 (PP4/DP2) and EP32 (PP1/DP4) tile cleanly and the
+> **4 nodes (32 GPU)**, where both EP16 (PP2/DP2) and EP32 (PP1/DP4) tile cleanly and the
 > EP degree — the variable the all-to-all turns on — is preserved. EP32 at PP1 needs
 > `RECOMPUTE=full` to fit; that recompute is applied to **all** arms and **both** EPs so the
 > per-cell 3-way comparison stays clean (see caveats).
@@ -53,12 +53,16 @@ MODEL TFLOP/s/GPU · derived tok/s.
 
 ## What the numbers say
 
-1. **At the efficient operating point (mb=4) the three dispatchers are within ~±18%, and the
-   winner depends on EP degree.** At **EP16**, DeepEP+NVSHMEM is fastest (−1.8% vs NCCL) and
-   UCCL is slowest (+17.6%). At **EP32** the order flips among the DeepEP backends: **UCCL is
-   fastest (−5.6% vs NCCL)** while NVSHMEM falls behind (+7.1%). UCCL degrades least going
-   EP16→EP32 (17.85→20.96 s), whereas NCCL and NVSHMEM degrade more (15.18→22.20 and
-   14.91→23.76) — UCCL scales to higher EP best here, NVSHMEM worst.
+1. **At the efficient operating point (mb=4) all three dispatchers are close — within ~±18%.**
+   Read the magnitudes, not a fine ranking: this is **n=1 per cell** (caveat 7), so deltas
+   below roughly **±6%** are within plausible run-to-run variance and are **not resolved**
+   here. What *is* robust: at **EP16** DeepEP+UCCL is clearly the slowest (**+17.6%** vs NCCL),
+   while NCCL and DeepEP+NVSHMEM are statistically tied (NVSHMEM −1.8%, inside the noise
+   floor). At **EP32** the three converge further (UCCL −5.6%, NVSHMEM +7.1% vs NCCL) — a
+   possible reordering, but at this n and with `RECOMPUTE=full` compressing the deltas (point 3)
+   it should be treated as *indicative*, not established. Any cross-EP scaling read (EP16→EP32)
+   is further confounded because PP also changes with EP (caveat 3). To turn the sub-±6%
+   gaps into claims, re-run with n≥3 per cell and report spread.
 2. **At mb=1 NCCL all-to-all wins at both EP degrees** (+7–28% over the DeepEP arms). This is
    the smallest per-dispatch granularity (64/EP16 and 32/EP32 microbatches per iter), where
    DeepEP's per-dispatch proxy/kernel-launch overhead is unamortized — the same crossover the
@@ -78,7 +82,7 @@ MODEL TFLOP/s/GPU · derived tok/s.
 - **No stalls**: 0/8 steady iters > 3× median in every run (balanced routing held).
 - **Work-equivalence (no token dropping)** — verified on a 2-node smoke (NUM_LAYERS=8) with
   `LOSS_PROBE=1`: iteration-1 mean loss **deepep-nvshmem 12.701515 vs alltoall 12.702237**
-  (identical num_tokens=2048; relative diff 5.7e-5 = bf16 round-off). The NVSHMEM arm's
+  (identical num_tokens=2048; agree to ~4 sig figs, relative diff 5.7e-5 = bf16 round-off). The NVSHMEM arm's
   IBGDA→host-proxy + put_signal patches dispatch/combine the same tokens to numerically
   equivalent output as NCCL.
 
@@ -95,7 +99,10 @@ MODEL TFLOP/s/GPU · derived tok/s.
    Qwen3's 94 layers need a 96-layer VPP round-up). Deferred to an 8-node run.
 5. **NVSHMEM arm exits non-zero (1) at process teardown** (NVSHMEM finalize after
    `[after training is done]`); all 8 steady training iters are recorded and valid (tight
-   median≈mean), so the measurement is unaffected. STATUS shows `exit=1` for those runs.
+   median≈mean), so the measurement is unaffected. STATUS shows `exit=1` for those runs. Because
+   this benign finalize-failure and a *real* failure (e.g. mid-run OOM) both surface as pod
+   phase `Failed`, validity for the NVSHMEM arm rests on the EFA gate + `n_steady==8` in
+   `index.csv` — cross-check those before trusting an NVSHMEM-arm number, don't rely on exit code.
 6. **Mock data + random-init + forced balancing** — measures the dispatcher on a balanced
    token distribution (step time, not loss), same regime as the DSV3/Kimi-K2 A/Bs.
 7. Single run per cell (within-run σ small; between-run variance not bounded).

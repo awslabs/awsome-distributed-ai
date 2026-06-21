@@ -166,6 +166,13 @@ def build_config():
     # applies. This makes overlap=on a SEPARATE within-regime A/B (different num_layers
     # AND recompute vs overlap=off) — NEVER subtract a number across the two regimes.
     overlap = os.environ.get("MOE_A2A_OVERLAP", "on").lower() == "on"
+    # overlap_moe_expert_parallel_comm hides the EP all-to-all behind 1F1B pipeline compute —
+    # which only exists when PP>1. At PP=1 there is nothing to overlap against, so force it off
+    # (setting the flag with no pipeline is at best a no-op and at worst a config-validate abort).
+    if overlap and pp <= 1:
+        logger.warning("MOE_A2A_OVERLAP=on requested but PP=%d (no pipeline to overlap "
+                       "against) — forcing overlap OFF for this run.", pp)
+        overlap = False
     if overlap:
         if pp > 1:
             vpp = _int("VPP", 2)
