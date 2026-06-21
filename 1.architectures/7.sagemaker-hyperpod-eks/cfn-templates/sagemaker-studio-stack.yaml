@@ -1053,6 +1053,7 @@ Resources:
   SageMakerStudioVpcPublicRouteOne:
     Type: AWS::EC2::Route
     Condition: CreateNewVpc
+    DependsOn: SageMakerStudioVpcGatewayAttachment
     Properties:
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId:
@@ -1077,6 +1078,7 @@ Resources:
   SageMakerStudioVpcPublicRouteTwo:
     Type: AWS::EC2::Route
     Condition: CreateNewVpc
+    DependsOn: SageMakerStudioVpcGatewayAttachment
     Properties:
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId:
