@@ -74,25 +74,31 @@ def write_idx_file(idx_path, sizes, doc_idx):
 
 
 def tokenize_chunk(args_tuple):
-    """Tokenize a chunk of documents. Returns (tmp_bin_path, sizes, doc_idx, total_tokens)."""
-    chunk_id, texts, tokenizer_name, output_dir = args_tuple
+    """Tokenize a chunk of documents into fixed-length sequences."""
+    chunk_id, texts, tokenizer_name, output_dir, seq_length = args_tuple
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
     tmp_bin = os.path.join(output_dir, f"_tmp_chunk_{chunk_id:05d}.bin")
     sizes = []
     doc_idx = [0]
     total_tokens = 0
+    buffer = []
 
     with open(tmp_bin, "wb") as out:
         for text in texts:
             tokens = tokenizer.encode(text, add_special_tokens=False)
             if not tokens:
                 continue
-            arr = np.array(tokens, dtype=_DTYPE)
-            out.write(arr.tobytes())
-            sizes.append(len(tokens))
-            doc_idx.append(len(sizes))
-            total_tokens += len(tokens)
+            buffer.extend(tokens)
+
+            while len(buffer) >= seq_length:
+                seq = buffer[:seq_length]
+                buffer = buffer[seq_length:]
+                arr = np.array(seq, dtype=_DTYPE)
+                out.write(arr.tobytes())
+                sizes.append(seq_length)
+                doc_idx.append(len(sizes))
+                total_tokens += seq_length
 
     return tmp_bin, sizes, doc_idx, total_tokens
 
@@ -135,7 +141,7 @@ def main():
     chunks = [texts[i:i + chunk_size] for i in range(0, len(texts), chunk_size)]
 
     worker_args = [
-        (i, chunk, args.tokenizer, output_dir)
+        (i, chunk, args.tokenizer, output_dir, 4096)
         for i, chunk in enumerate(chunks)
     ]
 

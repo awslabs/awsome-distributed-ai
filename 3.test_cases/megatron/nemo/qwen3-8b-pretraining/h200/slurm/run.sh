@@ -7,8 +7,8 @@
 #SBATCH --gpus-per-node=8
 #SBATCH --cpus-per-task=12
 #SBATCH --exclusive
-#SBATCH --output=/fsx/ubuntu/qwen3-8b/logs/%j.out
-#SBATCH --error=/fsx/ubuntu/qwen3-8b/logs/%j.err
+#SBATCH --output=/fsx/ubuntu/qwen3-8b-pretraining/logs/%j.out
+#SBATCH --error=/fsx/ubuntu/qwen3-8b-pretraining/logs/%j.err
 
 # EFA / NCCL environment
 export FI_PROVIDER=efa
