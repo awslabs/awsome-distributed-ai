@@ -7,19 +7,38 @@ nodes and collating with [`collect_results.py`](collect_results.py).
 
 | Field | Value |
 |---|---|
-| Date | 2026-06-20 |
+| Date | 2026-06-21 |
 | Hardware | `p6-b300.48xlarge` on EKS (Blackwell B300, 8 GPU + 16 EFA / node) |
-| World size | **4 nodes × 8 GPU = 32 ranks** |
 | EP config | num-tokens=4096 (LL: 128), hidden=7168, num-topk=8, num-experts=256, bf16 |
 | NVSHMEM image | `deepep:efa1.48.0-nvshmem3.7.0-deepep567632d-cuda13` (CUDA 13) |
 | UCCL image | UCCL `0dc87eb`, CUDA 13, Hopper+Blackwell (committed `uccl-ep.Dockerfile`) |
 | NCCL image | DeepEP image (reuses `/opt/nccl-tests/build/alltoall_perf`, sm_100) |
 
-> This table reports the **4-node (32-rank)** run. The harness scales to any node count via
-> `NUM_NODES`; `num-experts=256` divides evenly at both 32 and 64 ranks, so an 8-node (64-rank)
-> run uses the same config.
+`num-experts=256` divides evenly at both 32 and 64 ranks, so the config is identical across the
+4-node and 8-node runs.
 
-## Dispatch / Combine bandwidth (EP backends)
+## 8 nodes — 64 ranks (primary)
+
+| Backend | Mode | Dispatch (GB/s) | Combine (GB/s) |
+|---|---|---:|---:|
+| NVSHMEM (DeepEP) | internode (RDMA) | 83.7 | 72.7 |
+| NVSHMEM (DeepEP) | low-latency | 9.2 | 18.6 |
+| UCCL (UCCL-EP) | internode (RDMA) | 93.4 | 90.7 |
+| UCCL (UCCL-EP) | low-latency | see note | see note |
+
+| Reference (NCCL all-to-all) | Metric | GB/s |
+|---|---|---:|
+| busbw at EP payload (~64 MiB) | matched-size | 72.5 |
+| busbw peak (asymptotic) | peak | 103.1 |
+
+> **UCCL low-latency at 64 ranks did not complete.** The upstream UCCL low-latency test aborts
+> in its **FP8 dispatch correctness check** — `AssertionError: diff≈0.001–0.002,
+> dispatch_use_fp8_case=True` across ranks — before any bandwidth is measured. The same test
+> passes at 32 ranks, and NVSHMEM's low-latency (which also exercises FP8) passes at 64 ranks, so
+> this is specific to UCCL's FP8 low-latency dispatch at this scale. Not worked around (the assert
+> is a real numerical-tolerance failure, not an infra issue).
+
+## 4 nodes — 32 ranks (scaling reference)
 
 | Backend | Mode | Dispatch (GB/s) | Combine (GB/s) |
 |---|---|---:|---:|
@@ -28,8 +47,6 @@ nodes and collating with [`collect_results.py`](collect_results.py).
 | UCCL (UCCL-EP) | internode (RDMA) | 101.3 | 94.4 |
 | UCCL (UCCL-EP) | low-latency | 44.5 | 45.3 |
 
-## Transport reference (baseline)
-
 | Reference (NCCL all-to-all) | Metric | GB/s |
 |---|---|---:|
 | busbw at EP payload (~64 MiB) | matched-size | 93.9 |
@@ -37,24 +54,24 @@ nodes and collating with [`collect_results.py`](collect_results.py).
 
 ## Observations
 
-- **Internode (high-throughput) is a near-tie.** NVSHMEM and UCCL land within a few percent of
-  each other (dispatch 97 vs 101, combine 96 vs 94 GB/s RDMA), both right at the NCCL
-  transport ceiling for the matched ~64 MiB message size (94 GB/s). At this scale the EP
-  dispatch/combine kernels are essentially transport-bound — the backend choice barely moves
-  high-throughput bandwidth.
-- **Low-latency (decode path) is where they diverge — UCCL wins clearly.** UCCL delivers
-  ~4× the dispatch bandwidth (44.5 vs 11.2 GB/s) and ~1.8× the combine bandwidth (45.3 vs
-  25.2 GB/s) of NVSHMEM. The low-latency kernels move tiny messages (128 tokens) where
-  per-op overhead dominates, and UCCL's host-proxy path handles that regime better here.
-- **NCCL is the ceiling, not an equal.** `alltoall_perf` is pure data movement (no token
-  routing or combine-reduction). Its asymptotic peak (117 GB/s at 1 GiB) overstates what EP
-  sees; at the matched message size it is ~94 GB/s, which the high-throughput EP kernels
-  already reach.
+- **Internode high-throughput: a tie at 4 nodes, a UCCL win at 8.** At 32 ranks NVSHMEM and UCCL
+  are within a few percent (97/96 vs 101/94). At 64 ranks UCCL pulls ahead on both legs —
+  dispatch 93 vs 84 and **combine 91 vs 73 GB/s (RDMA)** — i.e. UCCL's combine degrades far less
+  as the RDMA peer count doubles. Bandwidth drops with scale for both backends (more RDMA peers,
+  more contention).
+- **Low-latency (decode path): UCCL wins big where it runs.** At 32 ranks UCCL delivers ~4×
+  dispatch and ~1.8× combine over NVSHMEM (44/45 vs 11/25). At 64 ranks UCCL's FP8 low-latency
+  correctness check fails (see note), so only NVSHMEM produces a number (9/19).
+- **NCCL is a reference, not an equal.** `alltoall_perf` busbw is pure data movement (no token
+  routing / combine-reduction) and is measured differently from the EP kernels' RDMA-only,
+  NVL-overlapped bandwidth — so the EP numbers can sit *above* the NCCL matched-size busbw (e.g.
+  UCCL 93 vs 72.5 at 8 nodes) while staying below the asymptotic peak (103). Treat it as a
+  transport context line, not a hard ceiling.
 
 ## Reproduce
 
-See [`README.md`](README.md). Logs were collected with
-`kubectl logs <launcher> > <name>.log` and collated with:
+See [`README.md`](README.md). Logs were collected with `kubectl logs <launcher> > <name>.log`
+and collated with:
 
 ```bash
 python3 collect_results.py \
