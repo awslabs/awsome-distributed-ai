@@ -16,14 +16,17 @@ This test case is a working example of **deploying DreamZero training on Amazon
 EKS**. DreamZero is a **14B-parameter World-Action Model (WAM)** — a Wan-based,
 causal (autoregressive) video diffusion transformer that *jointly* denoises
 future video frames and robot actions via flow matching. Here it continues
-supervised fine-tuning from the released
+supervised fine-tuning (SFT) from the released
 [`GEAR-Dreams/DreamZero-DROID`](https://huggingface.co/GEAR-Dreams/DreamZero-DROID)
 14B checkpoint on the **LIBERO** manipulation benchmark and evaluates it in the
-LIBERO simulator — exercising multi-node **FSDP2** training over **EFA** with
+LIBERO simulator — exercising multi-node **FSDP2** (Fully Sharded Data Parallel)
+training over **EFA** (Elastic Fabric Adapter) with
 **KubeRay**. The focus is the **EKS deployment mechanics** (image build,
-multi-node EFA/NCCL, FSDP2 sharded checkpointing, sim eval), not a training-quality
+multi-node EFA + NCCL (NVIDIA Collective Communications Library), FSDP2 sharded
+checkpointing, sim eval), not a training-quality
 or transfer result. Note that LIBERO is a **simulation** of the same Franka Emika
-Panda arm that DROID captures in the **real world**, so warm-starting the DROID
+Panda arm that the Distributed Robot Interaction Dataset (DROID) captures in the
+**real world**, so warm-starting the DROID
 checkpoint onto LIBERO must bridge a real→sim visual domain gap. LIBERO is used
 here as a convenient public dataset + simulator to exercise the pipeline
 end-to-end; in practice you would swap it for your own dataset (real or simulated)
@@ -48,7 +51,7 @@ walkthrough of the World-Action Model — see
 ```
 dreamzero/
 ├── Dockerfile                 # two-stage RLinf + EFA overlay image
-├── dcp-save-gloo-coordinator.patch  # DCP checkpoint fix, applied to RLinf at build time
+├── dcp-save-gloo-coordinator.patch  # Distributed Checkpoint (DCP) save fix, applied to RLinf at build time
 ├── diagrams/                  # WAM + infra topology (draw.io + SVG)
 └── kubernetes/libero/         # the EKS recipe (RayJob SFT + eval) — see its README
 ```
@@ -74,7 +77,7 @@ cluster setup. The detailed prerequisite checklist lives in the walkthrough belo
 ## Full walkthrough
 
 **Full step-by-step walkthrough: [`kubernetes/libero/README.md`](kubernetes/libero/README.md)** —
-build-image → push-to-ECR → stage models/dataset → generate metadata → multi-node
+build-image → push-to-ECR (Amazon Elastic Container Registry) → stage models/dataset → generate metadata → multi-node
 SFT RayJob → DCP→`.pt` conversion → LIBERO simulator eval.
 
 ## Results / validation status

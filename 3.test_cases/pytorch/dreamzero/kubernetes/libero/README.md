@@ -24,15 +24,17 @@ prediction acts as a computational scaffold for action reasoning.
 > **14B vs 16.48B vs 23B.** These all describe the same released checkpoint,
 > at different scopes:
 > - **14B** — the publisher's headline (the Wan video-diffusion **DiT backbone**;
->   the HF model card lists "14 Billion" and base model `Wan2.1-I2V-14B-480P`).
+>   the HF model card lists "14 Billion" and base model `Wan2.1-I2V-14B-480P`,
+>   an image-to-video (I2V) model).
 > - **16.48B** — the **trainable** parameters when the WAM is instantiated for
 >   full SFT: the DiT backbone together with the model's action/state encoders
 >   and action-head projector (the live run reports `16,484,292,448`).
 > - **23B** — the **on-disk** safetensors total, which also includes the frozen
->   conditioning encoders (CLIP / UMT5-XXL text / Wan VAE) that are not trained.
+>   conditioning encoders (CLIP image encoder / UMT5-XXL text encoder / Wan
+>   variational autoencoder (VAE)) that are not trained.
 >
 > This doc uses **14B** as the name and **16.48B** where the exact trainable size
-> matters (FSDP sharding, VRAM, checkpoint size).
+> matters (FSDP (Fully Sharded Data Parallel) sharding, VRAM (video RAM), checkpoint size).
 
 This walkthrough packages the canonical customer workflow as a set of reusable
 Kubernetes manifests that run on Amazon EKS: take the released
@@ -51,8 +53,9 @@ Upstream projects:
 package that provides the WAM model code).
 
 > **Validation scope (read this first).** The pipeline below was validated
-> end-to-end on EKS: image build, multi-node EFA/NCCL, FSDP2 sharded
-> checkpointing, DCP→`.pt` conversion, and LIBERO simulator eval. A **300-step**
+> end-to-end on EKS: image build, multi-node EFA (Elastic Fabric Adapter) +
+> NCCL (NVIDIA Collective Communications Library), FSDP2 sharded
+> checkpointing, Distributed Checkpoint (DCP)→`.pt` conversion, and LIBERO simulator eval. A **300-step**
 > SFT run on 2× `p5en.48xlarge` reduced `train/loss` **0.232 → 0.085** (~6.9
 > s/step) and wrote a **207 GB** sharded checkpoint with no corruption or
 > save-time crashes — exercising the in-image checkpoint-save fix
@@ -95,7 +98,8 @@ operator brings the Ray cluster up, then runs the Ray-agnostic launcher
 (`run_dreamzero_sft_eks.sh`) as the head `entrypoint`; RLinf's `Cluster` (Ray)
 scheduler fans **FSDP2 `full_shard`** training across all 16 GPUs (the 16.48B
 model is *sharded*, not replicated). There is **no** torchrun, DeepSpeed, or
-manual head election. Gradient sync flows over **NCCL on EFA RDMA** (libfabric
+manual head election. Gradient sync flows over **NCCL on EFA RDMA (Remote Direct
+Memory Access)** (libfabric
 2.4 / aws-ofi-nccl 1.18, GPUDirect RDMA). Pod anti-affinity guarantees one pod
 per physical node. `shutdownAfterJobFinishes: true`
 tears the RayCluster down when training ends.
@@ -171,7 +175,7 @@ kubectl get pods -n kuberay-system
 
 ### 3. FSx for Lustre shared storage (`fsx-claim` at `/fsx`)
 
-Every step mounts a `PersistentVolumeClaim` named **`fsx-claim`** at `/fsx`. If
+Every step mounts a `PersistentVolumeClaim` (PVC) named **`fsx-claim`** at `/fsx`. If
 your cluster already exposes such a PVC (many EKS GPU cluster templates ship one),
 confirm it is `Bound` with `ReadWriteMany` access and has ≥250 GB free:
 
@@ -182,11 +186,11 @@ kubectl get pvc fsx-claim -n "$NAMESPACE"
 ```
 
 If you do **not** already have one, this directory ships two optional manifests
-(both require the `fsx.csi.aws.com` CSI driver):
+(both require the `fsx.csi.aws.com` CSI (Container Storage Interface) driver):
 
 - **Dynamic provisioning** — `storage/pvc-fsx-lustre-dynamic.yaml` creates a
   `StorageClass` + `fsx-claim` PVC and provisions a fresh filesystem. Fill in
-  `FSX_SUBNET_ID` and `FSX_SECURITY_GROUP_IDS` for your cluster's VPC:
+  `FSX_SUBNET_ID` and `FSX_SECURITY_GROUP_IDS` for your cluster's VPC (Virtual Private Cloud):
 
   ```bash
   export FSX_SUBNET_ID=subnet-0abc... FSX_SECURITY_GROUP_IDS=sg-0def...
@@ -205,7 +209,7 @@ If you do **not** already have one, this directory ships two optional manifests
 ### 4. A `training-sa` ServiceAccount with credentials for HF + S3
 
 The SFT, eval, convert, and metadata pods run as the **`training-sa`**
-ServiceAccount. Give it IRSA or EKS Pod Identity so pods can reach Hugging Face
+ServiceAccount. Give it IRSA (IAM Roles for Service Accounts) or EKS Pod Identity so pods can reach Hugging Face
 and (if you stage to/from S3) Amazon S3. For example, with IRSA via `eksctl`:
 
 ```bash
