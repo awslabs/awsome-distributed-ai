@@ -31,19 +31,35 @@ nodes and collating with [`collect_results.py`](collect_results.py).
 | NVSHMEM (DeepEP) | internode (RDMA) | 83.7 | 72.7 |
 | NVSHMEM (DeepEP) | low-latency | 9.2 | 18.6 |
 | UCCL (UCCL-EP) | internode (RDMA) | 93.4 | 90.7 |
-| UCCL (UCCL-EP) | low-latency | see note | see note |
+| UCCL (UCCL-EP) | low-latency | n/a¹ | n/a¹ |
+
+¹ No bandwidth: the UCCL low-latency test aborts in its FP8 correctness check **before** the
+timed phase. Measured FP8 round-trip error `diff ≈ 9.1e-4 – 1.8e-3` (sampled across ranks) vs the
+test's `< 9e-4` FP8 tolerance → assertion fails. See the note below.
 
 | Reference (NCCL all-to-all) | Metric | GB/s |
 |---|---|---:|
 | busbw at EP payload (~64 MiB) | matched-size | 72.5 |
 | busbw peak (asymptotic) | peak | 103.1 |
 
-> **UCCL low-latency at 64 ranks did not complete.** The upstream UCCL low-latency test aborts
-> in its **FP8 dispatch correctness check** — `AssertionError: diff≈0.001–0.002,
-> dispatch_use_fp8_case=True` across ranks — before any bandwidth is measured. The same test
-> passes at 32 ranks, and NVSHMEM's low-latency (which also exercises FP8) passes at 64 ranks, so
-> this is specific to UCCL's FP8 low-latency dispatch at this scale. Not worked around (the assert
-> is a real numerical-tolerance failure, not an infra issue).
+> **UCCL low-latency at 64 ranks did not complete — FP8 correctness check.**
+> `bench/test_low_latency.py` validates a full dispatch→(identity GEMM)→combine round-trip against
+> the closed-form reference `current_x · Σ(top-k gate weights)`, using the global similarity error
+> `calc_diff(x,y) = 1 − 2·⟨x,y⟩ / (‖x‖²+‖y‖²)`, and asserts:
+>
+> ```python
+> assert diff < (9e-4 if dispatch_use_fp8_case else 1e-5)   # test_low_latency.py:373
+> ```
+>
+> At 64 ranks the **FP8** path measured `diff ≈ 9.1e-4 – 1.8e-3` (sampled across ranks: 9.08e-4,
+> 1.03e-3, 1.18e-3, 1.30e-3, 1.80e-3), i.e. ~1.0–2× over the `9e-4` FP8 tolerance, so the assert
+> trips during the correctness phase — **before** the bandwidth loop runs (hence no number). The
+> same test **passes at 32 ranks**, and NVSHMEM's low-latency (which also exercises FP8) **passes
+> at 64 ranks**, so this is specific to UCCL's FP8 low-latency dispatch at this scale. The
+> threshold is a fixed constant (it does not widen with rank count); combine sums more cross-rank,
+> FP8-dequantized contributions per token as ranks grow, so the accumulated quantization error
+> edges past `9e-4`. Reported as a real numerical-tolerance result, not worked around (loosening
+> the assert or disabling FP8 would change the matched config every other cell uses).
 
 ## 4 nodes — 32 ranks (scaling reference)
 
