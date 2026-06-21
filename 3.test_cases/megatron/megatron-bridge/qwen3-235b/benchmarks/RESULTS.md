@@ -22,7 +22,7 @@ training-iteration time** over the steady state (first 4 of 12 iters dropped), p
 | UCCL image | `megatron-bridge-uccl:nemo-26.04.01-uccl-0dc87eb` (UCCL `0dc87eb`) |
 | NVSHMEM image | `megatron-bridge-uccl:nemo-26.04.01-deepep-nvshmem-567632d-cu13` (DeepEP `567632d`, NVSHMEM v3.7.0-0, libfabric/EFA) |
 | Bridge / Core | megatron-bridge 0.4.2 / megatron-core 0.17.1 (nemo:26.04.01) |
-| Campaign | `qwen3final-20260621T0215Z` (raw `index.csv`: [`last-campaign-index.csv`](last-campaign-index.csv)) |
+| Campaign | `qwen3final-20260621T0215Z` (raw per-run `index.csv` is regenerated locally by `../bench/parse-runs.py`; `*.csv` is gitignored repo-wide) |
 
 > **Why 4 nodes, not 8.** The plan targeted 8× p6-b300 (EP32 at TP8/PP2/DP4). At run time
 > the shared `ml-shared` cluster had only 6 of its 8 B300 nodes free (2 held by another
