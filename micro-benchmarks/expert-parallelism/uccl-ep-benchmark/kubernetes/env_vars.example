@@ -18,3 +18,5 @@ export EFA_PER_NODE=16          # p6-b300.48xlarge has 16 EFA NICs; p5.48xlarge 
 
 # Number of nodes: 1 for intranode; >=2 for internode / low-latency.
 export NUM_NODES=8
+# Total rank count = NUM_NODES * GPU_PER_NODE (one MPI rank per GPU).
+export NP=$((NUM_NODES * GPU_PER_NODE))

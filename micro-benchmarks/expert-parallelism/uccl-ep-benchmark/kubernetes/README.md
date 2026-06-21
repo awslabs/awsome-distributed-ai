@@ -4,12 +4,15 @@ Run the UCCL expert-parallelism micro-benchmarks on Amazon EKS as [MPIJobs](http
 These are the Kubernetes equivalents of the [Slurm](../) `sbatch` scripts and mirror the
 [DeepEP benchmark's Kubernetes layout](../../deepep-benchmark/kubernetes/).
 
-Each job launches **one MPI process per node** (`slotsPerWorker: 1`); that process runs a
-single `torchrun` agent which spawns `GPU_PER_NODE` local ranks. Unlike the DeepEP benchmark
-(`torch.multiprocessing.spawn`, `RANK` = node rank), UCCL drives ranks with `torchrun` and a
-**static rendezvous**: each agent's `--node_rank` is its MPI rank (`$OMPI_COMM_WORLD_RANK`)
-and all agents point at `MASTER_ADDR:29400`. The launcher passes the EFA / NCCL environment
-through `mpirun -x` because SSH-launched workers do not inherit the image `ENV`.
+Each job launches **one MPI rank per GPU** (`slotsPerWorker: 8`): the UCCL bench runs one
+process per GPU and initializes `torch.distributed` directly, so MPI (not `torchrun`) does the
+spawning. The launcher maps the OMPI per-rank variables to the standard `torch.distributed`
+env contract — `RANK=$OMPI_COMM_WORLD_RANK`, `WORLD_SIZE=$OMPI_COMM_WORLD_SIZE`,
+`LOCAL_RANK=$OMPI_COMM_WORLD_LOCAL_RANK`, `LOCAL_WORLD_SIZE=$OMPI_COMM_WORLD_LOCAL_SIZE`, plus
+`MASTER_ADDR`/`MASTER_PORT` — and passes the EFA / NCCL environment through `mpirun -x` because
+SSH-launched workers do not inherit the image `ENV`. (The DeepEP benchmark uses
+`slotsPerWorker: 1` because its test spawns its 8 local ranks itself with
+`torch.multiprocessing`; UCCL's does not, hence 8 slots here.)
 
 ## Prerequisites
 
@@ -61,30 +64,31 @@ docker push ${IMAGE_URI}
 
 Copy the committed template to `env_vars` (gitignored) and edit it with your image URI,
 instance type, and per-node device counts, then `envsubst` the manifest into `kubectl`.
-Restrict substitution to the known variables so the launcher's runtime shell vars
-(`$OMPI_COMM_WORLD_RANK`, `$MASTER_ADDR`, `$PATH`, …) are left intact:
+Set `NP` = `NUM_NODES * GPU_PER_NODE` (the total rank count). Restrict substitution to the
+known variables so the launcher's runtime shell vars (`$OMPI_COMM_WORLD_RANK`, `$MASTER_ADDR`,
+`$PATH`, …) are left intact:
 
 ```bash
 cp env_vars.example env_vars   # then edit env_vars
 source env_vars
 
-# Single-node intranode (NVLink) test  (intranode is fixed at 1 node; NUM_NODES is unused)
-envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' \
+# Single-node intranode (NVLink) test  — set NUM_NODES=1, NP=GPU_PER_NODE
+envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES $NP' \
   < test-intranode.yaml | kubectl apply -f -
 
-# Internode (RDMA over EFA) test  — set NUM_NODES (e.g. 8)
-envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' \
+# Internode (RDMA over EFA) test  — e.g. NUM_NODES=8, NP=64
+envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES $NP' \
   < test-internode.yaml | kubectl apply -f -
 
-# Low-latency (decode-path) test  — set NUM_NODES (e.g. 8)
-envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' \
+# Low-latency (decode-path) test  — e.g. NUM_NODES=8, NP=64
+envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES $NP' \
   < test-low-latency.yaml | kubectl apply -f -
 ```
 
 ### EP problem size (matched for backend comparison)
 
-The EP shape is baked into each manifest's `torchrun` invocation to a DeepSeek-V3-class
-configuration: `--num-tokens` 4096 (128 for low-latency), `--hidden 7168`, `--num-topk 8`,
+The EP shape is baked into each manifest's `python3 bench/test_*.py` invocation to a
+DeepSeek-V3-class configuration: `--num-tokens` 4096 (128 for low-latency), `--hidden 7168`, `--num-topk 8`,
 `--num-experts 256`. `num-experts=256` divides evenly across 64 ranks (8 nodes × 8 GPU) and
 **matches the DeepEP NVSHMEM benchmark**, so the dispatch/combine bandwidths are comparable.
 The upstream Slurm scripts use `--num-experts=288` for internode/low-latency; that is not
@@ -104,7 +108,7 @@ kubectl logs -f $(kubectl get pods | grep uccl-ep.*launcher | cut -d ' ' -f 1)
 MPIJob names are fixed, so delete a run before re-applying it:
 
 ```bash
-envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' \
+envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES $NP' \
   < test-internode.yaml | kubectl delete -f -
 ```
 
@@ -114,9 +118,9 @@ envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' \
   runs on `p5`/`p5en` (Hopper) and `p6-b300` (Blackwell) without a rebuild.
 - **EFA count:** `EFA_PER_NODE=16` (a `p6-b300.48xlarge` exposes 16 EFA NICs). `p5.48xlarge`
   exposes 32 — adjust per instance type.
-- **Tolerations:** the manifests tolerate `nvidia.com/gpu`, `workload=bench`, and
-  `capacity-reservation` taints. Edit the `tolerations` block if your nodes use different taints;
-  if they are untainted, the extra tolerations are harmless.
+- **Tolerations:** the manifests tolerate the `nvidia.com/gpu` and `capacity-reservation`
+  taints. If your GPU nodes carry additional taints, add matching tolerations to the
+  `tolerations` block; if they are untainted, the existing ones are harmless.
 - **GPU profiling (internode / low-latency tuning):** the `internode` and `low_latency` tests
   profile their kernels during the tuning phase (the `intranode` test does not). The worker
   `securityContext` grants `SYS_ADMIN` because these nodes load the driver with

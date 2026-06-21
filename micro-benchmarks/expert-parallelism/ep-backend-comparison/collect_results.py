@@ -23,10 +23,11 @@ derived from DeepEP's tests):
     -> single bandwidth per dispatch/combine (no RDMA/NVL split).
 
   NCCL alltoall_perf: the standard size-sweep table; busbw is column 7
-    (out-of-place) / 11 (in-place). We report busbw at the row whose size is
-    closest to the EP per-rank dispatch payload (num_tokens * hidden * 2 bytes,
-    default ~56 MiB) AND the asymptotic peak, because the peak overstates the
-    transport ceiling relative to EP's smaller messages.
+    (out-of-place) / 11 (in-place). We report busbw at the sampled row whose size
+    is closest to the EP per-rank dispatch payload (num_tokens * hidden * 2 bytes,
+    ~56 MiB target; the power-of-two sweep lands on the 64 MiB row) AND the
+    asymptotic peak, because the peak overstates the transport ceiling relative to
+    EP's smaller messages.
 
 Both EP formats vary slightly across versions; if a value comes back N/A, print
 the raw log and adjust the regexes.

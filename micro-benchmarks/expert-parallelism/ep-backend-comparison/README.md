@@ -29,16 +29,16 @@ All runs use the **same EP problem size** — otherwise the table is meaningless
 | `num-experts` | 256 (divides evenly across 64 ranks) |
 | dtype | bf16 |
 
-The UCCL manifests bake these args into `torchrun`; the DeepEP test hard-codes its config
-in-image. **Before running, confirm the DeepEP image's config is the anchor** and align UCCL to
-it:
+The UCCL manifests bake these args into the `python3 bench/test_*.py` invocation; the DeepEP
+test hard-codes its config in-image. **Before running, confirm the DeepEP image's config is the
+anchor** and align UCCL to it:
 
 ```bash
 # Read the DeepEP test config from the NVSHMEM image and match UCCL's CLI args to it.
 docker run --rm ${NVSHMEM_IMAGE_URI} sed -n '1,60p' /DeepEP/tests/test_internode.py
 ```
 
-If the DeepEP values differ from 4096/7168/8/256, edit the `torchrun` args in
+If the DeepEP values differ from 4096/7168/8/256, edit the bench args in
 `../uccl-ep-benchmark/kubernetes/test-*.yaml` to match.
 
 ## Prerequisites
@@ -77,10 +77,10 @@ source env_vars
   envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' < test-internode.yaml | kubectl apply -f -
   # ...wait, save logs, delete. Then low-latency -- see the override note below. )
 
-# 2) UCCL (UCCL-EP)
+# 2) UCCL (UCCL-EP) — one MPI rank per GPU (NP = NUM_NODES * GPU_PER_NODE)
 ( cd ../uccl-ep-benchmark/kubernetes
-  IMAGE_URI=$UCCL_IMAGE_URI NUM_NODES=$NUM_NODES \
-  envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' < test-internode.yaml | kubectl apply -f -
+  IMAGE_URI=$UCCL_IMAGE_URI NUM_NODES=$NUM_NODES NP=$NP \
+  envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES $NP' < test-internode.yaml | kubectl apply -f -
   # ...then test-low-latency.yaml (already pinned to --num-experts=256) )
 
 # 3) NCCL baseline (reuses the DeepEP image's alltoall_perf)
@@ -120,7 +120,8 @@ python3 collect_results.py \
 
 The parser reports, for internode, the **RDMA** leg of the "Best dispatch/combine" line (the
 cross-node bottleneck — *not* the intra-node NVL number printed on the same line), and for the
-NCCL baseline the busbw **at the EP per-rank payload size** (`num_tokens*hidden*2`, ≈56 MiB) as
+NCCL baseline the busbw **at the EP per-rank payload size** (`num_tokens*hidden*2`, ~56 MiB
+target; the power-of-two sweep reports the nearest sampled row, 64 MiB) as
 well as the asymptotic peak. Record the table in [`RESULTS.md`](RESULTS.md) with image tags,
 date, and any config deltas. Eyeball one real launcher log against the parser before trusting it.
 
@@ -138,5 +139,5 @@ date, and any config deltas. Eyeball one real launcher log against the parser be
 - **Toolchain.** All three images are CUDA 13 (NVSHMEM/NCCL share the DeepEP image; UCCL is
   CUDA 13 per `uccl-ep.Dockerfile`), so there is no CUDA skew across backends.
 - **UCCL bench scripts** are pulled from upstream `uccl/ep/bench` at image-build time and pinned
-  via `UCCL_COMMIT`. If upstream renames CLI flags, adjust the `torchrun` args in the UCCL
+  via `UCCL_COMMIT`. If upstream renames CLI flags, adjust the bench args in the UCCL
   manifests.

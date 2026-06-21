@@ -30,10 +30,6 @@ spec:
           - key: nvidia.com/gpu
             operator: Exists
             effect: NoSchedule
-          - key: workload
-            value: bench
-            operator: Equal
-            effect: NoSchedule
           - key: capacity-reservation
             operator: Exists
             effect: NoSchedule
@@ -41,11 +37,9 @@ spec:
           - image: ${IMAGE_URI}
             imagePullPolicy: IfNotPresent
             name: nccl-alltoall-launcher
-            env:
-            - name: PATH
-              value: $PATH:/opt/amazon/efa/bin:/usr/bin
-            - name: LD_LIBRARY_PATH
-              value: /opt/amazon/openmpi/lib:/opt/nccl/build/lib:/opt/amazon/efa/lib:/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu:/usr/local/nvidia/lib:$LD_LIBRARY_PATH
+            # PATH / LD_LIBRARY_PATH come from the image ENV and are forwarded to
+            # workers via `mpirun -x PATH -x LD_LIBRARY_PATH` below (Kubernetes does
+            # not expand a bare $PATH in an env value, so we do not set one here).
             command:
             - /bin/bash
             - -c
@@ -76,10 +70,6 @@ spec:
           tolerations:
           - key: nvidia.com/gpu
             operator: Exists
-            effect: NoSchedule
-          - key: workload
-            value: bench
-            operator: Equal
             effect: NoSchedule
           - key: capacity-reservation
             operator: Exists
