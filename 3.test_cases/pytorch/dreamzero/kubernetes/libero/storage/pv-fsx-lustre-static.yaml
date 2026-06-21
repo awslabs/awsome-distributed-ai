@@ -32,6 +32,9 @@ metadata:
 spec:
   accessModes:
     - ReadWriteMany
+  # storageClassName "" (empty, not unset) is intentional: it disables dynamic
+  # provisioning so the PVC binds the static PV named below instead of letting
+  # the cluster's default StorageClass provision a new volume.
   storageClassName: ""
   volumeName: fsx-pv-dreamzero
   resources:
