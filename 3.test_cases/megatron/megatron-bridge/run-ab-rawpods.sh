@@ -10,20 +10,30 @@
 # Runs ONE arm (alltoall|deepep) of ONE model per invocation. Model/data/parallelism
 # are byte-identical across arms; only MOE_DISPATCHER differs.
 #
-#   MODEL=dsv3      -> DeepSeek-V3 256-expert recipe     (BENCH_PY bench_dsv3_pretrain.py)
-#   MODEL=kimi-k2   -> Kimi-K2 384-expert via AutoBridge (BENCH_PY bench_kimi_k2_pretrain.py)
+#   MODEL=dsv3       -> DeepSeek-V3 256-expert recipe     (BENCH_PY bench_dsv3_pretrain.py)
+#   MODEL=kimi-k2    -> Kimi-K2 384-expert via AutoBridge (BENCH_PY bench_kimi_k2_pretrain.py)
+#   MODEL=qwen3-235b -> Qwen3-235B-A22B 128-expert recipe (BENCH_PY bench_qwen3_pretrain.py)
+#
+# THREE-WAY DISPATCHER COMPARISON (NCCL / DeepEP+UCCL / DeepEP+NVSHMEM): the ARM
+# positional is what the bench reads as MOE_DISPATCHER (alltoall|deepep). The deepep
+# arm's *transport* is set by which IMG is passed (UCCL image -> UCCL deep_ep;
+# NVSHMEM image -> NVIDIA DeepEP). Set ARM_LABEL to disambiguate the two deepep arms
+# in run dirs / pod names (e.g. ARM_LABEL=deepep-nvshmem IMG=<nvshmem-image>).
 #
 # NO-OVERWRITE LOGGING: every run writes to a unique directory on FSx Lustre under
-#   /fsx/megatron-bridge-bench/${CAMPAIGN_ID}/${MODEL}/${ARM}-mb${MICRO_BATCH}-ovl${MOE_A2A_OVERLAP}/
+#   /fsx/megatron-bridge-bench/${CAMPAIGN_ID}/${MODEL}/${ARM_LABEL}-mb${MICRO_BATCH}-ovl${MOE_A2A_OVERLAP}/
 # (logs/rank-<r>.log for all ranks, env.txt, STATUS). A run whose dir already has a
 # completed STATUS is REFUSED (rank-0 aborts) so a retro is never clobbered. CAMPAIGN_ID
 # defaults to a fresh UTC timestamp; the campaign driver passes one shared id for all runs.
 #
-# Usage:  MODEL=<dsv3|kimi-k2> CTX=<ctx> IMG=<ecr-uri> ./run-ab-rawpods.sh <alltoall|deepep> [NNODES]
+# Usage:  MODEL=<dsv3|kimi-k2|qwen3-235b> CTX=<ctx> IMG=<ecr-uri> ./run-ab-rawpods.sh <alltoall|deepep> [NNODES]
 set -uo pipefail
 
-ARM="${1:?usage: MODEL=<dsv3|kimi-k2> ./run-ab-rawpods.sh <alltoall|deepep> [NNODES]}"
+ARM="${1:?usage: MODEL=<dsv3|kimi-k2|qwen3-235b> ./run-ab-rawpods.sh <alltoall|deepep> [NNODES]}"
 NNODES="${2:-32}"
+# ARM_LABEL names the run dir / pod set; defaults to ARM. Use it to split the two deepep
+# transports (deepep-uccl vs deepep-nvshmem) into distinct, non-clobbering run dirs.
+ARM_LABEL="${ARM_LABEL:-${ARM}}"
 
 CTX="${CTX:?set CTX to your kubectl context}"
 NS="${NS:-kimi-k2-bench}"
@@ -44,24 +54,34 @@ SEQ_LEN="${SEQ_LEN:-4096}"
 MOE_A2A_OVERLAP="${MOE_A2A_OVERLAP:-on}"
 MOE_FORCE_BALANCE="${MOE_FORCE_BALANCE:-on}"
 LOSS_PROBE="${LOSS_PROBE:-0}"
+# Transport label recorded in env.txt for the 3-way comparison (uccl|nvshmem|"" for the
+# NCCL alltoall arm). Informational only — the actual transport is fixed by the IMG.
+EP_BACKEND="${EP_BACKEND:-}"
+# HF hub config/tokenizer access. The qwen3-235b recipe builds its model provider via
+# AutoBridge.from_hf_pretrained(...) (config + tokenizer only; load_weights=False), so it
+# needs either pod egress to huggingface.co OR a pre-staged offline cache. Point HF_HOME at
+# a staged cache on FSx and set HF_HUB_OFFLINE=1 to run without egress. (No-op for dsv3.)
+HF_HOME="${HF_HOME:-${STAGE}/hf-cache}"
+HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-0}"
 
 # Staging dir on FSx holds the bench entrypoints + the Kimi-K2 HF config dir (hf/).
 STAGE="${STAGE:-/fsx/kimi-k2}"
 case "${MODEL}" in
-  dsv3)    DEFAULT_BENCH="${STAGE}/bench_dsv3_pretrain.py" ;;
-  kimi-k2) DEFAULT_BENCH="${STAGE}/bench_kimi_k2_pretrain.py" ;;
-  *) echo "MODEL must be 'dsv3' or 'kimi-k2', got '${MODEL}'" >&2; exit 2 ;;
+  dsv3)       DEFAULT_BENCH="${STAGE}/bench_dsv3_pretrain.py" ;;
+  kimi-k2)    DEFAULT_BENCH="${STAGE}/bench_kimi_k2_pretrain.py" ;;
+  qwen3-235b) DEFAULT_BENCH="${STAGE}/bench_qwen3_pretrain.py" ;;
+  *) echo "MODEL must be 'dsv3', 'kimi-k2', or 'qwen3-235b', got '${MODEL}'" >&2; exit 2 ;;
 esac
 BENCH_PY="${BENCH_PY:-${DEFAULT_BENCH}}"
 
-# No-overwrite run tree on Lustre. One CAMPAIGN_ID groups a whole 16-run campaign.
+# No-overwrite run tree on Lustre. One CAMPAIGN_ID groups a whole campaign.
 CAMPAIGN_ID="${CAMPAIGN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
-RUN_TAG="${ARM}-mb${MICRO_BATCH}-ovl${MOE_A2A_OVERLAP}"
+RUN_TAG="${ARM_LABEL}-mb${MICRO_BATCH}-ovl${MOE_A2A_OVERLAP}"
 RUN_DIR="${RUN_DIR:-/fsx/megatron-bridge-bench/${CAMPAIGN_ID}/${MODEL}/${RUN_TAG}}"
 LOGDIR="${RUN_DIR}/logs"
 
 GIT_REV="${GIT_REV:-$(git -C "$(dirname "$0")" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
-JOB="abrun-${MODEL}-${ARM}"
+JOB="abrun-${MODEL}-${ARM_LABEL}"
 PORT=12355
 K="kubectl --context ${CTX} -n ${NS}"
 
@@ -89,7 +109,7 @@ EOF
 RANK0_PREAMBLE="
           if [ -f ${RUN_DIR}/STATUS ]; then echo 'REFUSE: ${RUN_DIR} already has STATUS (completed run); not overwriting' ; exit 3 ; fi ;
           mkdir -p ${LOGDIR} ;
-          { echo run_dir=${RUN_DIR} ; echo model=${MODEL} arm=${ARM} ; echo nnodes=${NNODES} world=${WORLD} ;
+          { echo run_dir=${RUN_DIR} ; echo model=${MODEL} arm=${ARM} arm_label=${ARM_LABEL} ep_backend=${EP_BACKEND} ; echo nnodes=${NNODES} world=${WORLD} ;
             echo TP=${TP} PP=${PP} EP=${EP} mb=${MICRO_BATCH} gbs=${GLOBAL_BATCH} seq=${SEQ_LEN} iters=${TRAIN_ITERS} ;
             echo overlap=${MOE_A2A_OVERLAP} force_balance=${MOE_FORCE_BALANCE} loss_probe=${LOSS_PROBE} ;
             echo image=${IMG} ; echo bench_py=${BENCH_PY} ; echo git_rev=${GIT_REV} ; echo started=\$(date -u +%FT%TZ) ; } > ${RUN_DIR}/env.txt ;"

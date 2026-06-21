@@ -9,12 +9,23 @@ that run Mixture-of-Experts (MoE) training on Amazon EKS with
 [UCCL-EP](https://github.com/uccl-project/uccl) carrying the expert-parallel
 all-to-all over **AWS EFA**.
 
-The crux is replacing NVIDIA [DeepEP](https://github.com/deepseek-ai/DeepEP) (which is
-built on NVSHMEM + InfiniBand verbs and does **not** run on EFA) with UCCL's EFA-native
-drop-in — **without patching Megatron-Core**. UCCL ships a top-level `deep_ep` shadow
-module; because it installs into `site-packages`, `import deep_ep` resolves to UCCL's
-EFA RDMA implementation. Megatron-Core's MoE `flex`/`deepep` dispatcher then sends its
-all-to-all bytes over EFA via UCCL + GDRCopy instead of over IB verbs via NVSHMEM.
+The crux is carrying the Megatron-Core `flex`/`deepep` all-to-all over **AWS EFA**
+— **without patching Megatron-Core**. NVIDIA [DeepEP](https://github.com/deepseek-ai/DeepEP)
+is built on NVSHMEM + InfiniBand verbs and does **not** run on EFA *out of the box*. Two
+EFA-native providers plug into the same `flex`/`deepep` path by shipping a top-level
+`deep_ep` module (installed into `site-packages`, so `import deep_ep` resolves to it):
+
+1. **UCCL** ([uccl-project/uccl](https://github.com/uccl-project/uccl)) — an EFA-native
+   `deep_ep` drop-in (UCCL-EP + GDRCopy). This is the default image (`EP_BACKEND=uccl`).
+2. **NVIDIA DeepEP, EFA-patched** — DeepEP itself, rebuilt to run **NVSHMEM over libfabric**
+   (host-proxy, IBGDA off) on EFA, via the patches in
+   [`../../micro-benchmarks/expert-parallelism/deepep-benchmark`](../../../micro-benchmarks/expert-parallelism/deepep-benchmark)
+   (vendored at [`deepep/`](deepep/)). Built with `EP_BACKEND=nvshmem`.
+
+So "stock DeepEP can't run on EFA" is true only of the IB/IBGDA build — patched, it does.
+The [`qwen3-235b/`](qwen3-235b/) case uses this to compare **NCCL all-to-all vs DeepEP+UCCL
+vs DeepEP+NVSHMEM** head-to-head. Select the provider with the `EP_BACKEND` Docker build arg
+(one Dockerfile, two image tags); see [Shared environment workflow](#shared-environment-workflow).
 
 ## Layout
 
@@ -67,6 +78,15 @@ bash 1.build-and-push.sh
 # Image: <account>.dkr.ecr.us-west-2.amazonaws.com/megatron-bridge-uccl:nemo-26.04.01-uccl-0dc87eb
 ```
 
+For the **DeepEP+NVSHMEM** provider (used by the `qwen3-235b/` 3-way comparison), build the
+same Dockerfile with `EP_BACKEND=nvshmem` — it skips UCCL and instead builds NVIDIA DeepEP
+(`567632d`) over NVSHMEM v3.7 (libfabric/EFA, IBGDA off) into `/opt/venv`:
+
+```bash
+EP_BACKEND=nvshmem bash 1.build-and-push.sh
+# Image: <account>.dkr.ecr.us-west-2.amazonaws.com/megatron-bridge-uccl:nemo-26.04.01-deepep-nvshmem-567632d-cu13
+```
+
 ### 2. Single-node sanity gate
 
 **Do not skip this.** It is far cheaper to fail on 1 node than to burn 32 capacity-block
@@ -95,10 +115,11 @@ Both models provide the same two workloads — full-parameter SFT (`conf/` + `ku
 and the UCCL-EP vs NCCL all-to-all dispatcher A/B (`benchmarks/`) — in a structurally
 identical directory layout.
 
-| Model | Directory | Workloads (32× p6-b300 / 256× B300) |
+| Model | Directory | Workloads |
 |-------|-----------|--------|
-| [Kimi K2](https://huggingface.co/moonshotai/Kimi-K2-Base) (1.04T MoE, 384 experts) | [`kimi-k2/`](kimi-k2/) | Full-parameter SFT + UCCL-EP vs NCCL dispatcher A/B |
-| [DeepSeek-V3](https://github.com/deepseek-ai/DeepSeek-V3) (671B MoE, 256 experts) | [`dsv3/`](dsv3/) | Full-parameter SFT + UCCL-EP vs NCCL dispatcher A/B |
+| [Kimi K2](https://huggingface.co/moonshotai/Kimi-K2-Base) (1.04T MoE, 384 experts) | [`kimi-k2/`](kimi-k2/) | Full-parameter SFT + UCCL-EP vs NCCL dispatcher A/B (32× p6-b300) |
+| [DeepSeek-V3](https://github.com/deepseek-ai/DeepSeek-V3) (671B MoE, 256 experts) | [`dsv3/`](dsv3/) | Full-parameter SFT + UCCL-EP vs NCCL dispatcher A/B (32× p6-b300) |
+| [Qwen3-235B-A22B](https://huggingface.co/Qwen/Qwen3-235B-A22B) (235B MoE, 128 experts) | [`qwen3-235b/`](qwen3-235b/) | **3-way** dispatcher comparison: NCCL vs DeepEP+UCCL vs DeepEP+NVSHMEM, EP16/EP32 (8× p6-b300) |
 
 To add a model: create `megatron-bridge/<model>/` with its `conf/`, deployment manifests,
 and a model README (and a `benchmarks/` entrypoint if you want the dispatcher A/B). Reuse the

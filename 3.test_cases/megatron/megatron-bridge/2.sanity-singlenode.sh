@@ -61,6 +61,11 @@ section() {
 # ---------------------------------------------------------------------------
 : "${GPUS_PER_NODE:=8}"
 : "${SKIP_NCCL_TEST:=0}"
+# deep_ep provider in the image under test: uccl (UCCL shadow) or nvshmem (NVIDIA DeepEP
+# over NVSHMEM-libfabric/EFA). Selects which positive markers Gate 2/5 assert. Set this to
+# match the image's EP_BACKEND build arg.
+: "${EP_BACKEND:=uccl}"
+export EP_BACKEND
 # Number of experts for the micro-step test (must be divisible by GPUS_PER_NODE).
 : "${NUM_EXPERTS:=8}"
 # Tokens per micro-step (keep small for a fast gate).
@@ -85,42 +90,55 @@ if [[ "${EFA_COUNT}" -eq 0 ]]; then
     fail "No EFA devices found. Ensure the pod has vpc.amazonaws.com/efa: 16 in its resource spec and the EFA device plugin is running."
 fi
 
-fi_info -p efa | head -40
+# `|| true`: on a many-NIC node (p6-b300 has 16 EFA) fi_info prints >40 lines, so head
+# closes the pipe early and fi_info gets SIGPIPE — which, under `set -o pipefail`, would
+# abort the whole gate script. Swallow it; the count check above already gated.
+fi_info -p efa | head -40 || true
 pass "Gate 1: ${EFA_COUNT} EFA device(s) visible"
 
 # ---------------------------------------------------------------------------
 # GATE 2 — deep_ep shadow module resolves to /opt/uccl
 # ---------------------------------------------------------------------------
-section "2 / 5 — UCCL deep_ep shadow module"
+section "2 / 5 — deep_ep provider (${EP_BACKEND}) importable with Buffer"
 
 python3 - <<'PYEOF'
-import sys
+import os, sys
 
-# TODO(validate against image): confirm a positive UCCL marker (a uccl-specific
-# attr on deep_ep); site-packages path is expected after `pip install .`, so do
-# NOT assert on /opt/uccl. https://github.com/uccl-project/uccl
+backend = os.environ.get("EP_BACKEND", "uccl")
+
+# The deepep arm imports the SAME top-level `deep_ep` module regardless of provider; only
+# which library backs it differs (UCCL shadow vs NVIDIA DeepEP over NVSHMEM-libfabric).
 try:
     import deep_ep
-    import uccl
 except ImportError as e:
-    print(f"[FAIL] 'import deep_ep'/'import uccl' raised ImportError: {e}", file=sys.stderr)
+    print(f"[FAIL] 'import deep_ep' raised ImportError: {e}", file=sys.stderr)
     sys.exit(1)
 
 print(f"[INFO] deep_ep -> {deep_ep.__file__}")
-print(f"[INFO] uccl    -> {uccl.__file__}")
 
-# Positive check: the UCCL wrapper exposes Buffer. A bare importable deep_ep that
-# lacks Buffer means the UCCL wrapper is not the active module.
+# For the UCCL image, the shadow is backed by the `uccl` package — assert it imports too.
+if backend == "uccl":
+    try:
+        import uccl
+        print(f"[INFO] uccl    -> {uccl.__file__}")
+    except ImportError as e:
+        print(f"[FAIL] EP_BACKEND=uccl but 'import uccl' failed: {e}", file=sys.stderr)
+        sys.exit(1)
+else:
+    # NVIDIA DeepEP build: confirm we resolved the from-source EFA build in /opt/venv,
+    # NOT the base's IB/NVSHMEM-bound DeepEP (dist-packages or editable /opt/DeepEP).
+    if "/opt/venv/" not in (deep_ep.__file__ or ""):
+        print(f"[FAIL] deep_ep resolved to {deep_ep.__file__}, not the /opt/venv EFA build",
+              file=sys.stderr)
+        sys.exit(1)
+
+# Positive check: the provider exposes Buffer. A bare importable deep_ep that lacks Buffer
+# means the provider is not the active module.
 if not hasattr(deep_ep, "Buffer"):
-    print(
-        "[FAIL] deep_ep.Buffer missing — UCCL wrapper not active. "
-        "Check that 'pip install .' was run in /opt/uccl/ep/deep_ep_wrapper "
-        "AFTER any other deep_ep installation.",
-        file=sys.stderr,
-    )
+    print("[FAIL] deep_ep.Buffer missing — provider not active.", file=sys.stderr)
     sys.exit(1)
 
-print(f"[PASS] Gate 2: deep_ep importable and UCCL wrapper active (deep_ep.Buffer present)")
+print(f"[PASS] Gate 2: deep_ep importable and {backend} provider active (deep_ep.Buffer present)")
 PYEOF
 
 # ---------------------------------------------------------------------------

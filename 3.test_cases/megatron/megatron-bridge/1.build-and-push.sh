@@ -10,10 +10,16 @@
 #   ./1.build-and-push.sh
 #
 # Override defaults via environment variables:
-#   TAG=<tag>       Image tag (default: nemo-26.04.01-uccl-0dc87eb)
+#   EP_BACKEND=<uccl|nvshmem>  deep_ep provider to build (default: uccl). nvshmem
+#                              builds NVIDIA DeepEP over NVSHMEM-libfabric/EFA.
+#   TAG=<tag>       Image tag (default depends on EP_BACKEND, see below)
 #   REGION=<region> AWS region (default: us-west-2)
 #   ACCOUNT=<id>    AWS account ID (REQUIRED — your account)
 #   REPO_NAME=<name> ECR repository name (default: megatron-bridge-uccl)
+#
+# Build BOTH images for the 3-way dispatcher comparison (NCCL / UCCL / NVSHMEM):
+#   ./1.build-and-push.sh                      # EP_BACKEND=uccl    -> nemo-26.04.01-uccl-0dc87eb
+#   EP_BACKEND=nvshmem ./1.build-and-push.sh   # -> nemo-26.04.01-deepep-nvshmem-567632d-cu13
 #
 # Prerequisites:
 #   - AWS CLI configured with credentials that have ECR push access.
@@ -26,7 +32,14 @@ set -euo pipefail
 ###### User Variables #####
 ###########################
 
-TAG="${TAG:-nemo-26.04.01-uccl-0dc87eb}"
+EP_BACKEND="${EP_BACKEND:-uccl}"
+case "${EP_BACKEND}" in
+    uccl)    DEFAULT_TAG="nemo-26.04.01-uccl-0dc87eb" ;;
+    nvshmem) DEFAULT_TAG="nemo-26.04.01-deepep-nvshmem-567632d-cu13" ;;
+    *) echo "ERROR: EP_BACKEND must be 'uccl' or 'nvshmem', got '${EP_BACKEND}'"; exit 1 ;;
+esac
+
+TAG="${TAG:-${DEFAULT_TAG}}"
 REGION="${REGION:-us-west-2}"
 ACCOUNT="${ACCOUNT:?set ACCOUNT to your AWS account id}"
 REPO_NAME="${REPO_NAME:-megatron-bridge-uccl}"
@@ -41,9 +54,10 @@ REMOTE_IMAGE="${REGISTRY}/${REPO_NAME}:${TAG}"
 DOCKERFILE="Dockerfile"
 
 echo "============================================"
-echo "Megatron-Bridge UCCL-EP env image — Docker Build & Push"
+echo "Megatron-Bridge MoE env image — Docker Build & Push"
 echo "============================================"
 echo "Dockerfile : ${DOCKERFILE}"
+echo "EP_BACKEND : ${EP_BACKEND}"
 echo "Local tag  : ${LOCAL_IMAGE}"
 echo "ECR image  : ${REMOTE_IMAGE}"
 echo "Region     : ${REGION}"
@@ -69,6 +83,7 @@ echo "Building image: ${LOCAL_IMAGE} ..."
 docker build \
     --progress=plain \
     -f "${DOCKERFILE}" \
+    --build-arg EP_BACKEND="${EP_BACKEND}" \
     -t "${LOCAL_IMAGE}" \
     .
 

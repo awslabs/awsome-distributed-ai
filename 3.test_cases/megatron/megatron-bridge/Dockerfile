@@ -46,6 +46,25 @@ ARG TORCH_CUDA_ARCH_LIST="10.0a+PTX;10.3a+PTX"
 # nanobind is a UCCL build-time dependency. Pinned per the repo "no latest" rule.
 ARG NANOBIND_VERSION=2.4.0
 
+# EP backend selector — which library provides the top-level `deep_ep` module that
+# Megatron-Core's flex/deepep dispatcher (`moe_flex_dispatcher_backend="deepep"`)
+# resolves at `import deep_ep`. ONE Dockerfile, TWO image tags:
+#   uccl    (default) -> UCCL EFA-native deep_ep shadow (the existing build)
+#   nvshmem           -> NVIDIA DeepEP, EFA-patched to run NVSHMEM over libfabric
+#                        (host-proxy, no IBGDA — see micro-benchmarks/expert-
+#                         parallelism/deepep-benchmark/setup_deepep_efa.sh).
+# Both arms then run the SAME `MOE_DISPATCHER=deepep` code path; only the image
+# (hence which `deep_ep` is importable) differs. This is what lets the dsv3/qwen3
+# benchmarks compare DeepEP+UCCL vs DeepEP+NVSHMEM with no Megatron-Core changes.
+ARG EP_BACKEND=uccl
+# nvshmem-backend pins (used only when EP_BACKEND=nvshmem). DeepEP commit + NVSHMEM
+# tag match micro-benchmarks/.../deepep-benchmark (proven on p6-b300 / sm_103).
+# DEEPEP_GPU_ARCH=100 (sm_100) is the Blackwell cubin the deepep-benchmark image
+# was built with and ran on these sm_103 B300 nodes.
+ARG NVSHMEM_VERSION=v3.7.0-0
+ARG DEEPEP_COMMIT=567632d
+ARG DEEPEP_GPU_ARCH=100
+
 ARG OPEN_MPI_PATH=/opt/amazon/openmpi
 
 ######################
@@ -114,13 +133,15 @@ ENV LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:/opt/amazon/openmpi/lib:/
     PATH=/opt/venv/bin:/opt/amazon/openmpi/bin:/opt/amazon/efa/bin:$PATH
 
 #####################################################
-## UCCL core + UCCL-EP + deep_ep shadow wrapper
+## deep_ep provider — UCCL (default) OR NVIDIA DeepEP + NVSHMEM-over-EFA
 ##
-## UCCL provides the EFA-native expert-parallel all-to-all. Its `deep_ep_wrapper`
-## installs a TOP-LEVEL python module named `deep_ep` that shadows NVIDIA DeepEP,
-## so Megatron-Core's flex/deepep dispatcher (`moe_flex_dispatcher_backend="deepep"`)
-## resolves `import deep_ep` to the UCCL/EFA implementation.
+## Exactly one of the two RUN blocks below executes, gated on EP_BACKEND, and each
+## installs a TOP-LEVEL python `deep_ep` module into /opt/venv that shadows the
+## NVIDIA DeepEP the base ships in dist-packages (IB/NVSHMEM-bound). Megatron-Core's
+## flex/deepep dispatcher (`moe_flex_dispatcher_backend="deepep"`) then resolves
+## `import deep_ep` to whichever was installed.
 #####################################################
+# --- EP_BACKEND=uccl: UCCL core + UCCL-EP + deep_ep shadow wrapper ---
 # Use `python3 -m pip` for ALL of UCCL so packages land in the SAME env as python3
 # (/opt/venv, first on PATH, where torch + Megatron live). A bare `pip` targets
 # /usr/local; combined with the `ep` extension that setup.py installs into /opt/venv,
@@ -131,7 +152,7 @@ ENV LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:/opt/amazon/openmpi/lib:/
 #   nanobind (build dep) -> clone+checkout pinned SHA + submodules -> UCCL core ->
 #   UCCL-EP kernels (PER_EXPERT_BATCHING + Blackwell arch list; the ";" in
 #   TORCH_CUDA_ARCH_LIST must stay quoted) -> deep_ep shadow wrapper.
-RUN set -eux; \
+RUN if [ "${EP_BACKEND}" = "uccl" ]; then set -eux; \
     python3 -m pip install nanobind==${NANOBIND_VERSION}; \
     git clone https://github.com/uccl-project/uccl.git /opt/uccl; \
     cd /opt/uccl; \
@@ -139,21 +160,59 @@ RUN set -eux; \
     git submodule update --init --recursive; \
     cd /opt/uccl && python3 -m pip install .; \
     cd /opt/uccl/ep && PER_EXPERT_BATCHING=1 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" python3 setup.py install; \
-    cd /opt/uccl/ep/deep_ep_wrapper && python3 -m pip install .
+    cd /opt/uccl/ep/deep_ep_wrapper && python3 -m pip install .; \
+    else echo "EP_BACKEND=${EP_BACKEND}: skipping UCCL build"; fi
+
+# --- EP_BACKEND=nvshmem: NVIDIA DeepEP, EFA-patched (NVSHMEM over libfabric) ---
+# Reuses the proven build recipe from
+# micro-benchmarks/expert-parallelism/deepep-benchmark/setup_deepep_efa.sh, vendored
+# into this dir (deepep/) so it is in the build context (Docker can't COPY outside it).
+# It patches DeepEP (put+signal, an IBGDA->host-proxy shim, fake IBGDA state,
+# NVSHMEM_MAX_TEAMS 7->8), builds NVSHMEM v3.7 (libfabric/EFA, IBGDA OFF), then builds
+# DeepEP into /opt/venv. GDRCopy is built from source (NVSHMEM cmake needs its headers).
+# Replaces the base's torch-bundled nvidia-nvshmem so the from-source NVSHMEM is used.
+COPY deepep/setup_deepep_efa.sh /tmp/setup_deepep_efa.sh
+RUN if [ "${EP_BACKEND}" = "nvshmem" ]; then set -eux; \
+    git clone -b ${GDRCOPY_VERSION} https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy; \
+    cd /tmp/gdrcopy && make prefix=/opt/gdrcopy install && cd / && rm -rf /tmp/gdrcopy; \
+    python3 -m pip uninstall -y nvidia-nvshmem-cu13 nvidia-nvshmem-cu12 deep_ep 2>/dev/null || true; \
+    git clone -b ${NVSHMEM_VERSION} https://github.com/NVIDIA/nvshmem.git /opt/nvshmem_src; \
+    git clone https://github.com/deepseek-ai/DeepEP.git /opt/deepep-efa-src; \
+    cd /opt/deepep-efa-src && git checkout ${DEEPEP_COMMIT}; \
+    chmod +x /tmp/setup_deepep_efa.sh; \
+    /tmp/setup_deepep_efa.sh \
+      --cuda-home /usr/local/cuda \
+      --libfabric-home /opt/amazon/efa \
+      --gdrcopy-home /opt/gdrcopy \
+      --gpu-arch "${DEEPEP_GPU_ARCH}" \
+      --venv /opt/venv \
+      --deepep-src /opt/deepep-efa-src \
+      --nvshmem-src /opt/nvshmem_src; \
+    else echo "EP_BACKEND=${EP_BACKEND}: skipping NVSHMEM/DeepEP build"; fi
+
+# NVSHMEM runtime env. Harmless for the uccl image (the dirs are absent there).
+# Must PRECEDE the verify RUN so the nvshmem build's `import deep_ep` can dlopen
+# libnvshmem; LD_LIBRARY_PATH puts the from-source NVSHMEM ahead of any torch-bundled one.
+ENV NVSHMEM_DIR=/opt/nvshmem_src/install \
+    NVSHMEM_HOME=/opt/nvshmem_src/install \
+    NVSHMEM_REMOTE_TRANSPORT=libfabric \
+    NVSHMEM_LIBFABRIC_PROVIDER=efa \
+    LD_LIBRARY_PATH=/opt/nvshmem_src/install/lib:/opt/gdrcopy/lib:$LD_LIBRARY_PATH
 
 #####################################################
-## Build verification
+## Build verification (backend-aware)
 ##
 ## Runs via the SAME python3 the training uses (/opt/venv, first on PATH). We REALLY
-## `import deep_ep` here (not just find_spec): the wrapper does `from uccl.ep import ...`,
-## and a find_spec-only check would PASS even when the `uccl` package is split across
-## /usr/local (core) and /opt/venv (ep.abi3.so) so the real import fails. Importing
-## deep_ep loads uccl/ep.abi3.so but does NOT require a GPU/driver at import time
-## (verified GPU-less in the NeMo base) — only Buffer *instantiation* needs a GPU, which
-## 2.sanity-singlenode.sh (Gate 2) exercises on a real node. Versions via package
-## metadata (modules may not expose __version__). import megatron.core/bridge is GPU-less-safe.
+## `import deep_ep` here (not just find_spec): for uccl the wrapper does
+## `from uccl.ep import ...`, and for nvshmem the C extension dlopens libnvshmem — a
+## find_spec-only check would PASS even when those fail. Importing deep_ep does NOT
+## require a GPU/driver at import time (NVSHMEM init / Buffer instantiation does, which
+## 2.sanity-singlenode.sh Gate 2/5 exercises on a real node). Both arms must resolve
+## `import deep_ep` to our /opt build, NOT the base's IB/NVSHMEM-bound DeepEP in
+## dist-packages. import megatron.core/bridge is GPU-less-safe.
 #####################################################
-RUN python3 -c "import importlib.util as u, importlib.metadata as md; \
+RUN if [ "${EP_BACKEND}" = "uccl" ]; then \
+ python3 -c "import importlib.util as u, importlib.metadata as md; \
  from packaging.version import Version; \
  import deep_ep, uccl, megatron.core, megatron.bridge; \
  assert hasattr(deep_ep, 'Buffer'), 'deep_ep.Buffer missing (uccl.ep not wired into the deep_ep shadow)'; \
@@ -169,7 +228,25 @@ RUN python3 -c "import importlib.util as u, importlib.metadata as md; \
  print('deep_ep ->', deep_ep.__file__); \
  print('uccl ->', uccl.__file__, '(has ep:', u.find_spec('uccl.ep') is not None, ')'); \
  print('megatron-core', md.version('megatron-core')); \
- print('megatron-bridge', bridge_ver, '(B300 flex/deepep allowlist OK)')"
+ print('megatron-bridge', bridge_ver, '(B300 flex/deepep allowlist OK)')"; \
+ else \
+ python3 -c "import importlib.util as u, importlib.metadata as md, inspect; \
+ from packaging.version import Version; \
+ import megatron.core, megatron.bridge; \
+ spec = u.find_spec('deep_ep'); \
+ assert spec is not None and spec.origin, 'deep_ep not importable (NVIDIA DeepEP/NVSHMEM build failed)'; \
+ assert '/opt/venv/' in spec.origin, \
+   'deep_ep spec at %s, NOT the from-source EFA build in /opt/venv: the base ships an IB/NVSHMEM-bound DeepEP (dist-packages or editable /opt/DeepEP). Our setup.py install must shadow it.' % spec.origin; \
+ bridge_ver = md.version('megatron-bridge'); \
+ assert Version(bridge_ver) >= Version('0.4.0'), \
+   'megatron-bridge %s < 0.4.0: flex/deepep allowlist rejects B300 (the pin did not take)' % bridge_ver; \
+ from megatron.bridge.training.flex_dispatcher_backend import validate_flex_dispatcher_backend as _v; \
+ assert 'startswith' in inspect.getsource(_v), 'flex dispatcher allowlist is not the startswith() form (B300 unsupported)'; \
+ print('python ->', __import__('sys').executable); \
+ print('deep_ep spec ->', spec.origin, '(NVIDIA DeepEP, EFA/NVSHMEM-libfabric; real import+Buffer is GPU-gated to 2.sanity-singlenode.sh)'); \
+ print('megatron-core', md.version('megatron-core')); \
+ print('megatron-bridge', bridge_ver, '(B300 flex/deepep allowlist OK)')"; \
+ fi
 
 #####################################################
 ## Fabric / EFA environment
