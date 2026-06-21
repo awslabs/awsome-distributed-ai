@@ -1,0 +1,128 @@
+# Multi-node (2x p5en) action-policy post-training via JobSet + torchrun, on
+# the AWS DLC-derived image. JobSet (jobset.x-k8s.io, the K8s SIG-Batch unified
+# distributed-ML/HPC API) launches the gang with no Kubeflow operator dependency;
+# failurePolicy: Recreate gives clean gang-restart so NCCL re-forms. Requires the
+# JobSet controller installed on the cluster (API is v1alpha2). The AWS DLC base
+# avoids the cross-node NCCL ABI mismatch an NGC base hits (aws-ofi-nccl <-> NCCL
+# 2.28.9); see "Why the AWS DLC base image" in the top-level README.
+#
+# KEY DLC RUNTIME CHOICES (deliberate):
+#   - We DO NOT override LD_LIBRARY_PATH: the DLC bakes in /opt/amazon/efa/lib +
+#     /opt/amazon/ofi-nccl/lib already, and its torch matches the venv torch
+#     (2.10.0+cu130) so there is no host-vs-venv lib conflict to dodge.
+#   - We DO NOT set NCCL_NET_PLUGIN to an NGC path: the DLC ships a version-
+#     matched aws-ofi-nccl that NCCL auto-discovers. We set NCCL_DEBUG=INFO so the
+#     logs prove the transport actually selected (NET/OFI = EFA; NET/Socket = TCP).
+#   - A diagnostic preamble prints the EFA + NCCL + plugin versions BEFORE training,
+#     so a single run yields both the environment proof and the result.
+#
+# SMOKE vs REAL is env-driven (no YAML edit): the defaults run a smoke
+# (POLICY_TOML=droid_policy_smoke.toml, CKPT_TYPE=dummy, random init). For a REAL
+# warm-start, set POLICY_TOML=droid_policy.toml + CKPT_TYPE=dcp and stage the
+# Cosmos3-Nano DCP checkpoint at BASE_CHECKPOINT_PATH (see README "Deployment").
+#
+# RENDER with envsubst (the a8m/envsubst variant — see top-level README "Deployment").
+# Template vars (${IMAGE_URI}, ${NAMESPACE}, …) are substituted from env_vars;
+# in-container runtime bash vars are written $$NAME so a8m collapses them to a
+# literal $NAME that the pod's bash expands at run time ($NODE_RANK / $MASTER /
+# $JOB_COMPLETION_INDEX / $LD_LIBRARY_PATH):
+#   set -a; . ./env_vars; set +a
+#   envsubst < kubernetes/train-multi-node-dlc.yaml | kubectl apply -f -
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: cosmos3-droid-policy-dlc-mn
+  namespace: ${NAMESPACE}
+spec:
+  # On any pod failure, recreate the WHOLE gang (all ranks) so NCCL re-forms a clean
+  # process group; the framework then auto-resumes from the latest DCP checkpoint
+  # (latest_checkpoint.txt) rather than restarting from scratch. maxRestarts bounds
+  # retries against a persistently-bad node. (HyperPod replaces this with node
+  # auto-replacement + job auto-resume — see hyperpod-eks/train-multi-node-dlc.yaml.)
+  failurePolicy:
+    maxRestarts: 3
+    restartStrategy: Recreate
+  replicatedJobs:
+    - name: node
+      replicas: 1
+      template:
+        spec:
+          parallelism: ${NUM_NODES}
+          completions: ${NUM_NODES}
+          backoffLimit: 0
+          template:
+            metadata:
+              labels:
+                app: cosmos3-droid-policy-dlc-mn
+            spec:
+              restartPolicy: Never
+              nodeSelector:
+                node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+              containers:
+                - name: trainer
+                  image: ${IMAGE_URI}
+                  imagePullPolicy: Always
+                  command: ["bash", "-lc"]
+                  args:
+                    - |
+                      set -euo pipefail
+                      echo "=========== EFA / NCCL DIAGNOSTIC (AWS DLC image) ==========="
+                      echo "LD_LIBRARY_PATH=$$LD_LIBRARY_PATH"
+                      echo "--- infiniband verbs devices ---"; ls /dev/infiniband/ 2>&1 || true
+                      echo "--- ulimit -l ---"; ulimit -l || true
+                      echo "--- fi_info -p efa (libfabric provider) ---"
+                      (fi_info -p efa 2>&1 | head -20) || echo "fi_info not found on PATH"
+                      echo "--- aws-ofi-nccl plugin location ---"
+                      ls -la /opt/amazon/ofi-nccl/lib/ 2>&1 || true
+                      find / -name 'libnccl-net*.so*' 2>/dev/null || true
+                      echo "--- venv NCCL version ---"
+                      python -c "import torch; print('torch', torch.__version__, 'nccl', torch.cuda.nccl.version())" 2>&1 || true
+                      echo "============================================================="
+                      NODE_RANK=$${JOB_COMPLETION_INDEX:-0}
+                      MASTER=cosmos3-droid-policy-dlc-mn-node-0-0.cosmos3-droid-policy-dlc-mn
+                      echo "node_rank=$$NODE_RANK master=$$MASTER nnodes=${NUM_NODES}"
+                      exec torchrun \
+                        --nnodes=${NUM_NODES} \
+                        --nproc_per_node=${GPUS_PER_NODE} \
+                        --node_rank=$$NODE_RANK \
+                        --rdzv_id=cosmos3-droid-dlc \
+                        --rdzv_backend=c10d \
+                        --rdzv_endpoint=$$MASTER:${MASTER_PORT} \
+                        -m cosmos3_aws.action.launch_droid_policy \
+                        --sft-toml /workspace/cosmos3-aws/toml/${POLICY_TOML} -- \
+                        trainer.max_iter=${MAX_ITER} ckpt_type=${CKPT_TYPE} job.wandb_mode=disabled
+                  env:
+                    - { name: DROID_DATASET_PATH, value: "${DROID_DATASET_PATH}" }
+                    - { name: WAN_VAE_PATH,       value: "${WAN_VAE_PATH}" }
+                    # Consumed by droid_policy.toml (real warm-start) via oc.env; harmless for the smoke TOML.
+                    - { name: BASE_CHECKPOINT_PATH, value: "${BASE_CHECKPOINT_PATH}" }
+                    - { name: HF_HOME,            value: "${HF_HOME}" }
+                    - { name: IMAGINAIRE_OUTPUT_ROOT, value: "${OUT}" }
+                    - { name: PYTHONHASHSEED,     value: "42" }
+                    # Force EFA provider + RDMA; prove transport selection in logs.
+                    - { name: FI_PROVIDER,        value: "efa" }
+                    - { name: FI_EFA_USE_DEVICE_RDMA, value: "1" }
+                    - { name: FI_EFA_FORK_SAFE,   value: "1" }
+                    - { name: NCCL_DEBUG,         value: "INFO" }
+                    - { name: NCCL_DEBUG_SUBSYS,  value: "INIT,NET,ENV" }
+                    - name: HF_TOKEN
+                      valueFrom:
+                        secretKeyRef: { name: hf-token, key: token }
+                  resources:
+                    requests:
+                      nvidia.com/gpu: "${GPUS_PER_NODE}"
+                      vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
+                    limits:
+                      nvidia.com/gpu: "${GPUS_PER_NODE}"
+                      vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
+                  volumeMounts:
+                    - { name: fsx, mountPath: /fsx }
+                    - { name: shm, mountPath: /dev/shm }
+              volumes:
+                - name: fsx
+                  persistentVolumeClaim:
+                    claimName: ${FSX_CLAIM}
+                - name: shm
+                  emptyDir:
+                    medium: Memory
+                    sizeLimit: ${SHM_SIZE}

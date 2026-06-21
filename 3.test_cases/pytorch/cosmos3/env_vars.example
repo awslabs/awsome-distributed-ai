@@ -1,0 +1,88 @@
+# Source this before rendering manifests with envsubst.
+#   cp env_vars.example env_vars   # env_vars is gitignored (keep your token/account out of git)
+#   # edit env_vars, then:
+#   set -a; . ./env_vars; set +a
+#   envsubst < kubernetes/<manifest>.yaml | kubectl apply -f -
+
+# --- AWS / registry (auto-derived; no need to edit) ---
+export AWS_REGION=$(aws configure get region || aws ec2 describe-availability-zones --output text --query 'AvailabilityZones[0].[RegionName]')
+export ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+export REGISTRY=${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com
+
+# --- Image (built + pushed by you; see README "Build the image") ---
+export IMAGE="cosmos3"
+export TAG="dlc"
+export IMAGE_URI="${REGISTRY}/${IMAGE}:${TAG}"
+
+# --- Image build (build-push.sh; docker buildx → ECR) ---
+export DLC_TAG="2.10.0-gpu-py313-cu130-ubuntu22.04-ec2"  # AWS DLC base tag
+# export COSMOS_FRAMEWORK_REF="f358a625875310096cf01d75b11b7818c438aa1e"   # framework pin (default in build-push.sh)
+
+# --- Namespace / scheduling ---
+export NAMESPACE="<your-namespace>"
+export INSTANCE_TYPE="p5en.48xlarge"
+export GPUS_PER_NODE="8"
+export EFA_PER_NODE="16"            # p5en advertises 16 EFA NICs
+
+# --- Storage: an RWX PVC bound in your namespace, mounted at /fsx (FSx for Lustre) ---
+export FSX_CLAIM="fsx-claim"
+
+# --- Storage: FSx-for-Lustre StorageClass provisioning (storage-fsx-efa-sc.yaml) ---
+export SUBNET_ID="subnet-<your-gpu-node-subnet>"        # same AZ as your GPU nodes
+export SECURITY_GROUP_ID="sg-<self-referencing-efa-sg>" # all-traffic self-ref rule for EFA
+
+# --- Storage: S3 -> FSx-Lustre DRA hydration (storage-fsx-dra.yaml) ---
+export FSX_FS_ID="fs-0123456789abcdef0"        # your FSx for Lustre filesystem id
+export FSX_DNS_NAME="${FSX_FS_ID}.fsx.${AWS_REGION}.amazonaws.com"
+export FSX_MOUNT_NAME="<mountname>"            # from: aws fsx describe-file-systems
+export FSX_CAPACITY="4800Gi"                   # match your FSx provisioned size
+export DRA_S3_BUCKET="<your-in-region-bucket>" # S3 origin for datasets/models
+export DRA_S3_PREFIX="cosmos3"                 # prefix under the bucket
+
+# --- Data + model assets (paths on the FSx mount) ---
+export DROID_DATASET_PATH="/fsx/datasets/droid_lerobot_v3"     # public lerobot/droid_100 (v3)
+export WAN_VAE_PATH="/fsx/pretrained/tokenizers/video/wan2pt2/Wan2.2_VAE.pth"
+export HF_HOME="/fsx/hf-cache"
+export HF_TOKEN="<your-hf-token>"  # HF read token (gated assets: e.g. nvidia/Cosmos-Guardrail1)
+
+# --- Action-policy run config (train-multi-node-dlc.yaml) ---
+# Smoke (default): POLICY_TOML=droid_policy_smoke.toml + CKPT_TYPE=dummy (random init).
+# Real warm-start: POLICY_TOML=droid_policy.toml + CKPT_TYPE=dcp + BASE_CHECKPOINT_PATH set below.
+export POLICY_TOML="droid_policy_smoke.toml"   # bare filename under toml/ (manifest prepends the dir)
+export MAX_ITER="10"
+export CKPT_TYPE="dummy"            # 'dummy' = smoke (random init); 'dcp' = real resume
+
+# --- Vision SFT (train-vision-sft.yaml; Nano + Super LoRA) ---
+export SFT_TOML="vision_sft_nano.toml"   # bare filename under toml/ (vision_sft_nano.toml | vision_sft_super.toml)
+export DATASET_PATH="/fsx/datasets/bridge-sft/sft_dataset_bridge"  # Bridge SFT dataset on FSx (reads ${DATASET_PATH}/train/video_dataset_file.jsonl)
+export SFT_MAX_ITER="10"           # vision SFT smoke iters
+export RUN_ID="cosmos3-sft-001"    # run/output namespacing (rdzv id + log dir)
+
+# --- Multi-node (JobSet) ---
+export NUM_NODES="1"
+export MASTER_PORT="12360"
+export SHM_SIZE="64Gi"              # /dev/shm; raise for async-DCP large-ckpt runs
+
+# --- HyperPod-EKS (hyperpod-eks/ manifests) ---
+export JOB_MAX_RETRY="3"            # sagemaker.amazonaws.com/job-max-retry-count
+# PyTorchJob node count = Master(1) + Worker(NUM_WORKERS). MUST set NUM_WORKERS =
+# NUM_NODES - 1 to stay consistent with --nnodes=${NUM_NODES}. Default 0 = single
+# node (Master only). For a 2-node run: NUM_NODES=2 + NUM_WORKERS=1.
+export NUM_WORKERS="0"
+
+# --- Action-policy real warm-start (non-dummy); requires the Cosmos3-Nano DCP checkpoint ---
+# Stage once: convert nvidia/Cosmos3-Nano HF -> DCP (see README), then:
+export BASE_CHECKPOINT_PATH="/fsx/pretrained/Cosmos3-Nano-dcp"   # dir containing model/
+
+# --- Generation / SDG (generate-vllm-omni-super.yaml; official vllm/vllm-omni:cosmos3 engine) ---
+# Parallelism flags must multiply to GPUS_PER_NODE (e.g. cfg2 x uly4 = 8). Guardrails
+# are toggled PER-REQUEST (request extra_params.guardrails), NOT a server flag.
+export CFG_PARALLEL="2"            # --cfg-parallel-size
+export ULYSSES="4"                 # --ulysses-degree
+export HSDP_SHARD="8"              # --hsdp-shard-size
+export OUT="/fsx/results/run"   # output dir for runs (training IMAGINAIRE_OUTPUT_ROOT + generation OUTPUT_DIR)
+
+# --- Policy eval serving ---
+export INVOCATION_PORT="8000"
+# Public post-trained policy, OR an exported action-policy checkpoint dir:
+export EVAL_CHECKPOINT="nvidia/Cosmos3-Nano-Policy-DROID"

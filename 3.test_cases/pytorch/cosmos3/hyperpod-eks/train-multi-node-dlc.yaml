@@ -1,0 +1,125 @@
+# HyperPod-EKS variant of kubernetes/train-multi-node-dlc.yaml.
+# Kubeflow PyTorchJob + auto-resume + node-health scheduling. Same AWS DLC image,
+# env, EFA diagnostic, and torchrun -m cosmos3_aws.action.launch_droid_policy.
+# Auto-resume covers the node layer that the EKS JobSet failurePolicy: Recreate does
+# not: failurePolicy restarts the gang on a POD failure only, whereas here HyperPod's
+# health agent detects a bad node, NodeRecovery: Automatic replaces it, and job
+# auto-resume restarts onto healthy capacity. In both paths the framework then resumes
+# from the last DCP checkpoint rather than restarting from scratch.
+#
+# PyTorchJob injects MASTER_ADDR / MASTER_PORT / RANK / WORLD_SIZE into every
+# pod at runtime — the launcher uses those (NOT the manual rdzv hostname the
+# JobSet built). nprocPerNode = GPUs per node.
+#
+# SMOKE vs REAL is env-driven (no YAML edit): defaults run a smoke
+# (POLICY_TOML=droid_policy_smoke.toml, CKPT_TYPE=dummy). For a REAL warm-start set
+# POLICY_TOML=droid_policy.toml + CKPT_TYPE=dcp and stage BASE_CHECKPOINT_PATH.
+#
+# Apply with the a8m/envsubst variant (see top-level README "Deployment"). Template
+# vars are substituted from env_vars; the PyTorchJob-injected runtime vars are
+# written $$NAME so a8m collapses them to a literal $NAME the pod's bash expands
+# ($MASTER_ADDR / $MASTER_PORT / $RANK / $WORLD_SIZE):
+#   set -a; . ../env_vars; set +a
+#   envsubst < hyperpod-eks/train-multi-node-dlc.yaml | kubectl apply -f -
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: cosmos3-droid-policy-hp
+  namespace: ${NAMESPACE}
+  annotations:
+    sagemaker.amazonaws.com/enable-job-auto-resume: "true"
+    sagemaker.amazonaws.com/job-max-retry-count: "${JOB_MAX_RETRY}"
+spec:
+  nprocPerNode: "${GPUS_PER_NODE}"
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      restartPolicy: OnFailure
+      template: &podtmpl
+        metadata:
+          labels:
+            app: cosmos3-droid-policy-hp
+        spec:
+          tolerations:
+            - key: sagemaker.amazonaws.com/node-health-status
+              operator: Exists
+              effect: NoSchedule
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: sagemaker.amazonaws.com/node-health-status
+                        operator: In
+                        values: ["Schedulable"]
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  preference:
+                    matchExpressions:
+                      - key: sagemaker.amazonaws.com/deep-health-check-status
+                        operator: In
+                        values: ["Passed"]
+                # Optional topology-aware hint: if your nodes are labeled with
+                # topology.k8s.aws/network-node-layer-*, uncomment to prefer
+                # co-located nodes and minimize inter-node EFA hops.
+                # - weight: 50
+                #   preference:
+                #     matchExpressions:
+                #       - key: topology.k8s.aws/network-node-layer-1
+                #         operator: Exists
+          containers:
+            - name: pytorch
+              image: ${IMAGE_URI}
+              imagePullPolicy: Always
+              command: ["bash", "-lc"]
+              args:
+                - |
+                  set -euo pipefail
+                  echo "=========== EFA / NCCL DIAGNOSTIC (AWS DLC image) ==========="
+                  (fi_info -p efa 2>&1 | head -20) || echo "fi_info not found on PATH"
+                  python -c "import torch; print('torch', torch.__version__, 'nccl', torch.cuda.nccl.version())" 2>&1 || true
+                  echo "============================================================="
+                  echo "rank=$$RANK world_size=$$WORLD_SIZE master=$$MASTER_ADDR:$$MASTER_PORT nnodes=${NUM_NODES}"
+                  exec torchrun \
+                    --nnodes=${NUM_NODES} \
+                    --nproc_per_node=${GPUS_PER_NODE} \
+                    --node_rank=$$RANK \
+                    --rdzv_id=cosmos3-droid-hp \
+                    --rdzv_backend=c10d \
+                    --rdzv_endpoint=$$MASTER_ADDR:$$MASTER_PORT \
+                    -m cosmos3_aws.action.launch_droid_policy \
+                    --sft-toml /workspace/cosmos3-aws/toml/${POLICY_TOML} -- \
+                    trainer.max_iter=${MAX_ITER} ckpt_type=${CKPT_TYPE} job.wandb_mode=disabled
+              env:
+                - { name: DROID_DATASET_PATH, value: "${DROID_DATASET_PATH}" }
+                - { name: WAN_VAE_PATH,       value: "${WAN_VAE_PATH}" }
+                # Consumed by droid_policy.toml (real warm-start) via oc.env; harmless for the smoke TOML.
+                - { name: BASE_CHECKPOINT_PATH, value: "${BASE_CHECKPOINT_PATH}" }
+                - { name: HF_HOME,            value: "${HF_HOME}" }
+                - { name: IMAGINAIRE_OUTPUT_ROOT, value: "${OUT}" }
+                - { name: PYTHONHASHSEED,     value: "42" }
+                - { name: FI_PROVIDER,        value: "efa" }
+                - { name: FI_EFA_USE_DEVICE_RDMA, value: "1" }
+                - { name: FI_EFA_FORK_SAFE,   value: "1" }
+                - { name: NCCL_DEBUG,         value: "INFO" }
+                - { name: NCCL_DEBUG_SUBSYS,  value: "INIT,NET,ENV" }
+                - name: HF_TOKEN
+                  valueFrom:
+                    secretKeyRef: { name: hf-token, key: token }
+              resources:
+                requests: { nvidia.com/gpu: "${GPUS_PER_NODE}", vpc.amazonaws.com/efa: "${EFA_PER_NODE}" }
+                limits:   { nvidia.com/gpu: "${GPUS_PER_NODE}", vpc.amazonaws.com/efa: "${EFA_PER_NODE}" }
+              volumeMounts:
+                - { name: fsx, mountPath: /fsx }
+                - { name: shm, mountPath: /dev/shm }
+          volumes:
+            - name: fsx
+              persistentVolumeClaim: { claimName: ${FSX_CLAIM} }
+            - name: shm
+              emptyDir: { medium: Memory, sizeLimit: ${SHM_SIZE} }
+    Worker:
+      replicas: ${NUM_WORKERS}
+      restartPolicy: OnFailure
+      template: *podtmpl

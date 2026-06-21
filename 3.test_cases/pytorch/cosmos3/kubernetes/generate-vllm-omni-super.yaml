@@ -1,0 +1,90 @@
+# vLLM-Omni Cosmos3-Super V2V generation SERVER (single-node, 8 GPU).
+# Write-bound batch synthetic data generation, run as an OpenAI-compatible server:
+# send V2V requests to POST /v1/videos/sync (input_reference=@clip.mp4). Uses the
+# OFFICIAL vllm/vllm-omni:cosmos3 image (mirror it to your ECR, or pull directly if
+# your nodes have egress) — a SEPARATE stack from the cosmos-framework training
+# image (vLLM-Omni = cp312/vLLM 0.23).
+#
+# Single-node only: generation is embarrassingly parallel; CFG/Ulysses/HSDP parallelism is
+# WITHIN the 8-GPU node, so NO cross-node EFA is needed. Scale-out = independent servers.
+#
+# This is a long-running server — delete the Job when generation is done.
+#
+# RENDER with the a8m/envsubst variant (see top-level README "Deployment").
+# Template vars are substituted from env_vars; the in-container runtime bash var
+# $$OUTPUT_DIR collapses to a literal $OUTPUT_DIR the pod's bash expands.
+#   export IMAGE_URI=<acct>.dkr.ecr.<region>.amazonaws.com/vllm-omni:cosmos3 \
+#          NAMESPACE=$NAMESPACE INSTANCE_TYPE=p5en.48xlarge GPUS_PER_NODE=8 \
+#          CFG_PARALLEL=2 ULYSSES=4 HSDP_SHARD=8 OUT=/fsx/results/generate/run
+#   # Guardrails are toggled PER-REQUEST on this image (request body extra_params.guardrails),
+#   # NOT via a server CLI flag — there is no --no-guardrails arg on vllm/vllm-omni:cosmos3.
+#   envsubst < kubernetes/generate-vllm-omni-super.yaml | kubectl apply -f -
+#   # then: kubectl port-forward svc/cosmos3-vllm-omni 8000:8000 ; POST a V2V
+#   #       request to http://localhost:8000/v1/videos/sync (input_reference=@clip.mp4)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cosmos3-vllm-omni
+  namespace: ${NAMESPACE}
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: cosmos3-vllm-omni
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+      containers:
+        - name: vllm-omni
+          image: ${IMAGE_URI}
+          imagePullPolicy: Always
+          # The CUDA vllm-omni image has NO default entrypoint — must pass `vllm serve ... --omni`.
+          command: ["bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              mkdir -p "$$OUTPUT_DIR"
+              echo "=== vLLM-Omni Super V2V server: cfg=${CFG_PARALLEL} uly=${ULYSSES} hsdp=${HSDP_SHARD} ==="
+              exec vllm serve nvidia/Cosmos3-Super --omni \
+                --cfg-parallel-size ${CFG_PARALLEL} \
+                --ulysses-degree ${ULYSSES} \
+                --use-hsdp --hsdp-shard-size ${HSDP_SHARD} \
+                --init-timeout 2400 --stage-init-timeout 1800 \
+                --host 0.0.0.0 --port 8000
+          env:
+            - { name: HF_HOME,    value: "${HF_HOME}" }
+            - { name: OUTPUT_DIR, value: "${OUT}" }
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: { name: hf-token, key: token }
+          ports:
+            - { containerPort: 8000 }
+          resources:
+            requests:
+              nvidia.com/gpu: "${GPUS_PER_NODE}"
+            limits:
+              nvidia.com/gpu: "${GPUS_PER_NODE}"
+          volumeMounts:
+            - { name: fsx, mountPath: /fsx }
+            - { name: shm, mountPath: /dev/shm }
+      volumes:
+        - name: fsx
+          persistentVolumeClaim:
+            claimName: fsx-claim
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cosmos3-vllm-omni
+  namespace: ${NAMESPACE}
+spec:
+  selector: { app: cosmos3-vllm-omni }
+  ports: [{ port: 8000, targetPort: 8000 }]

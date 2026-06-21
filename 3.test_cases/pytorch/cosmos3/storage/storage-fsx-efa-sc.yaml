@@ -1,0 +1,44 @@
+# EFA-enabled PERSISTENT_2 FSx for Lustre for the storage read-path / checkpoint data point.
+# Reuse your cluster's GPU-node subnet + a security group that has the self-referencing
+# all-traffic EFA rule (set ${SUBNET_ID} / ${SECURITY_GROUP_ID}). Provision in the same AZ
+# as your GPU nodes.
+#
+# Render (a8m/envsubst — see top-level README): SUBNET_ID=subnet-xxxx SECURITY_GROUP_ID=sg-xxxx NAMESPACE=$NAMESPACE \
+#   envsubst < storage/storage-fsx-efa-sc.yaml | kubectl apply -f -
+#
+# Sized for a throughput target: 9600 GiB @ 1000 MBps/TiB. Capacity governs the
+# aggregate FS throughput ceiling (more OSTs = more parallel paths); 9.6 TiB gives clean
+# headroom for the action-policy dataset + Nano/Super DCP checkpoints while keeping throughput
+# non-trivial. Scale capacity up + re-run if fio shows the FS (not the client path)
+# is the bottleneck — that's a one-line `storage:` change here.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fsx-efa-p2-sc
+provisioner: fsx.csi.aws.com
+parameters:
+  subnetId: ${SUBNET_ID}
+  securityGroupIds: ${SECURITY_GROUP_ID}
+  deploymentType: PERSISTENT_2
+  perUnitStorageThroughput: "1000"   # MBps/TiB (the AWS GDS-reference tier)
+  fileSystemTypeVersion: "2.15"
+  metadataConfigurationMode: "AUTOMATIC"   # EFA dynamic provisioning requires metadata config (FSx CSI v1.3.0+, PR #402)
+  efaEnabled: "true"
+  dataCompressionType: NONE          # benchmark raw I/O, not compression
+mountOptions:
+  - flock
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fsx-efa-claim
+  namespace: ${NAMESPACE}
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: fsx-efa-p2-sc
+  resources:
+    requests:
+      storage: 9600Gi

@@ -1,0 +1,108 @@
+# Vision SFT — Nano (toml/vision_sft_nano.toml) and Super LoRA
+# (toml/vision_sft_super.toml). Parameterized JobSet, generalizes the validated
+# train-multi-node-dlc.yaml. Reads a video+caption SFT dataset from
+# ${DATASET_PATH}/train/video_dataset_file.jsonl (the experiment interpolates
+# DATASET_PATH via oc.env). Storage pinned to FSx.
+#
+# IMPORTANT — render with the a8m/envsubst variant (see top-level README
+# "Deployment"). Template vars (${IMAGE_URI}, ${RUN_ID}, ${SFT_TOML}, …) are
+# substituted from env_vars; in-container RUNTIME bash vars are written $$NAME so
+# a8m collapses them to a literal $NAME the pod's bash expands at run time
+# ($OUT, $NODE_RANK, $MASTER, $JOB_COMPLETION_INDEX, $BASE_CHECKPOINT_PATH,
+# $DATASET_PATH):
+#
+#   set -a; . ./env_vars; set +a
+#   export IMAGE_URI=... NAMESPACE=$NAMESPACE INSTANCE_TYPE=p5en.48xlarge FSX_CLAIM=fsx-claim \
+#          GPUS_PER_NODE=8 EFA_PER_NODE=16 MASTER_PORT=12360 SFT_MAX_ITER=10 \
+#          WAN_VAE_PATH=/fsx/pretrained/tokenizers/video/wan2pt2/Wan2.2_VAE.pth HF_HOME=/fsx/hf-cache
+#   # Nano: SFT_TOML=vision_sft_nano.toml BASE_CHECKPOINT_PATH=/fsx/pretrained/Cosmos3-Nano-dcp
+#   #      DATASET_PATH=/fsx/datasets/bridge-sft/sft_dataset_bridge
+#   # Super: SFT_TOML=vision_sft_super.toml BASE_CHECKPOINT_PATH=/fsx/pretrained/Cosmos3-Super-dcp (same DATASET_PATH)
+#   NUM_NODES=1 RUN_ID=nano-sft-r1 envsubst < kubernetes/train-vision-sft.yaml | kubectl apply -f -
+#
+# Captures the per-rank log to FSx Tier 1: /fsx/results/<RUN_ID>/rank<N>.log
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: cosmos3-sft-${RUN_ID}
+  namespace: ${NAMESPACE}
+spec:
+  # On any pod failure, recreate the WHOLE gang (all ranks) so NCCL re-forms a clean
+  # process group; the framework then auto-resumes from the latest DCP checkpoint
+  # (latest_checkpoint.txt) rather than restarting from scratch. maxRestarts bounds
+  # retries against a persistently-bad node. (HyperPod replaces this with node
+  # auto-replacement + job auto-resume — see hyperpod-eks/train-vision-sft.yaml.)
+  failurePolicy:
+    maxRestarts: 3
+    restartStrategy: Recreate
+  replicatedJobs:
+    - name: node
+      replicas: 1
+      template:
+        spec:
+          parallelism: ${NUM_NODES}
+          completions: ${NUM_NODES}
+          backoffLimit: 0
+          template:
+            metadata:
+              labels:
+                app: cosmos3-sft
+                run-id: ${RUN_ID}
+            spec:
+              restartPolicy: Never
+              nodeSelector:
+                node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+              containers:
+                - name: trainer
+                  image: ${IMAGE_URI}
+                  imagePullPolicy: Always
+                  command: ["bash", "-lc"]
+                  args:
+                    - |
+                      set -euo pipefail
+                      NODE_RANK=$${JOB_COMPLETION_INDEX:-0}
+                      MASTER=cosmos3-sft-${RUN_ID}-node-0-0.cosmos3-sft-${RUN_ID}
+                      OUT=/fsx/results/${RUN_ID}
+                      mkdir -p "$$OUT"
+                      ls -la "$$BASE_CHECKPOINT_PATH/model/.metadata"
+                      ls -la "$$DATASET_PATH/train/video_dataset_file.jsonl"
+                      torchrun \
+                        --nnodes=${NUM_NODES} --nproc_per_node=${GPUS_PER_NODE} \
+                        --node_rank=$$NODE_RANK --rdzv_id=cosmos3-sft-${RUN_ID} \
+                        --rdzv_backend=c10d --rdzv_endpoint=$$MASTER:${MASTER_PORT} \
+                        -m cosmos_framework.scripts.train \
+                        --sft-toml /workspace/cosmos3-aws/toml/${SFT_TOML} -- \
+                        trainer.max_iter=${SFT_MAX_ITER} ckpt_type=dcp job.wandb_mode=disabled \
+                        2>&1 | tee "$$OUT/rank$$NODE_RANK.log"
+                  env:
+                    - { name: DATASET_PATH,       value: "${DATASET_PATH}" }
+                    - { name: WAN_VAE_PATH,       value: "${WAN_VAE_PATH}" }
+                    - { name: BASE_CHECKPOINT_PATH, value: "${BASE_CHECKPOINT_PATH}" }
+                    - { name: HF_HOME,            value: "${HF_HOME}" }
+                    - { name: IMAGINAIRE_OUTPUT_ROOT, value: "/fsx/results/${RUN_ID}/out" }
+                    - { name: PYTHONHASHSEED,     value: "42" }
+                    - { name: FI_PROVIDER,        value: "efa" }
+                    - { name: FI_EFA_USE_DEVICE_RDMA, value: "1" }
+                    - { name: FI_EFA_FORK_SAFE,   value: "1" }
+                    - { name: NCCL_DEBUG,         value: "WARN" }
+                    - name: HF_TOKEN
+                      valueFrom:
+                        secretKeyRef: { name: hf-token, key: token }
+                  resources:
+                    requests:
+                      nvidia.com/gpu: "${GPUS_PER_NODE}"
+                      vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
+                    limits:
+                      nvidia.com/gpu: "${GPUS_PER_NODE}"
+                      vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
+                  volumeMounts:
+                    - { name: fsx, mountPath: /fsx }
+                    - { name: shm, mountPath: /dev/shm }
+              volumes:
+                - name: fsx
+                  persistentVolumeClaim:
+                    claimName: ${FSX_CLAIM}
+                - name: shm
+                  emptyDir:
+                    medium: Memory
+                    sizeLimit: 256Gi

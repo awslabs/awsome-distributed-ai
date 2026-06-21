@@ -1,0 +1,95 @@
+<mxfile host="Electron">
+  <diagram name="Cosmos3 AWS Architecture" id="cosmos3-aws-arch">
+    <mxGraphModel dx="1414" dy="912" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1240" pageHeight="860" math="0" shadow="0" adaptiveColors="auto">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;align=center;fontSize=16;fontStyle=1;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="Cosmos 3 Model Factory — AWS Architecture (Amazon EKS / SageMaker HyperPod)" vertex="1">
+          <mxGeometry height="30" width="840" x="200" y="10" as="geometry" />
+        </mxCell>
+        <mxCell id="cluster" parent="1" style="swimlane;startSize=30;html=1;fillColor=#f0f7ff;strokeColor=#6c8ebf;fontSize=12;fontStyle=1;verticalAlign=top;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="Kubernetes control plane (Amazon EKS · SageMaker HyperPod-EKS)" vertex="1">
+          <mxGeometry height="540" width="800" x="40" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="compute" parent="cluster" style="swimlane;startSize=26;html=1;fillColor=#eef7ee;strokeColor=#82b366;fontSize=11;fontStyle=1;verticalAlign=top;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="GPU compute — p5en.48xlarge node pool (8× H200, EFA/RDMA)" vertex="1">
+          <mxGeometry height="290" width="760" x="20" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="train" parent="compute" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;sketch=1;curveFitting=1;jiggle=2;" value="&lt;b&gt;Post-train&lt;/b&gt;&lt;br&gt;JobSet / PyTorchJob&lt;br&gt;FSDP2 + Ulysses CP&lt;br&gt;&lt;i&gt;action-policy fine-tune · vision SFT&amp;nbsp;&lt;/i&gt;&lt;div&gt;&lt;i&gt;(full &amp;amp; LoRA)&lt;/i&gt;&lt;br&gt;async DCP checkpoints&lt;/div&gt;" vertex="1">
+          <mxGeometry height="130" width="220" x="20" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="gen" parent="compute" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;sketch=1;curveFitting=1;jiggle=2;" value="&lt;b&gt;Generate (SDG)&lt;/b&gt;&lt;br&gt;vLLM-Omni server&lt;br&gt;Cosmos3-Super (64B)&lt;br&gt;&lt;i&gt;T2I · I2V · V2V&lt;/i&gt;&lt;br&gt;multi-GPU diffusion parallelism&lt;br&gt;(CFG × Ulysses × HSDP)" vertex="1">
+          <mxGeometry height="130" width="220" x="520" y="78" as="geometry" />
+        </mxCell>
+        <mxCell id="serve" parent="compute" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;sketch=1;curveFitting=1;jiggle=2;" value="&lt;b&gt;Evaluate / Serve&lt;/b&gt;&lt;br&gt;policy server&lt;br&gt;Deployment + Service&lt;br&gt;Cosmos3-Nano-Policy&lt;br&gt;&lt;i&gt;single-GPU replicas&lt;/i&gt;" vertex="1">
+          <mxGeometry height="130" width="220" x="270" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="guard" parent="compute" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;fontStyle=2;sketch=1;curveFitting=1;jiggle=2;" value="NVIDIA Cosmos Guardrail — safety filter for generation &amp;amp; serving" vertex="1">
+          <mxGeometry height="40" width="470" x="270" y="228" as="geometry" />
+        </mxCell>
+        <mxCell id="g2gen" edge="1" parent="compute" source="guard" style="html=1;endArrow=none;dashed=1;strokeColor=#d6b656;rounded=0;sketch=1;curveFitting=1;jiggle=2;" target="gen">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="g2serve" edge="1" parent="compute" source="guard" style="html=1;endArrow=none;dashed=1;strokeColor=#d6b656;rounded=0;sketch=1;curveFitting=1;jiggle=2;" target="serve">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="resil" parent="cluster" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;sketch=1;curveFitting=1;jiggle=2;" value="&lt;b&gt;Resilience &amp;amp; scheduling&lt;/b&gt;  —  Framework auto-resumes from the latest DCP checkpoint on restart  · &lt;b&gt;EKS:&lt;/b&gt; JobSet failurePolicy: Recreate (recreate pods on failure)  ·  &lt;b&gt;HyperPod:&lt;/b&gt; node auto-replacement + job auto-resume + deep-health node affinity (Schedulable required, deep-health preferred)" vertex="1">
+          <mxGeometry height="60" width="760" x="20" y="345" as="geometry" />
+        </mxCell>
+        <mxCell id="obs" parent="cluster" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;sketch=1;curveFitting=1;jiggle=2;" value="&lt;b&gt;Observability&lt;/b&gt;  —  NVIDIA GPU-Operator DCGM exporter → Prometheus (EKS) / Amazon Managed Prometheus (HyperPod AMP)  ·&amp;nbsp;&lt;div&gt;&amp;nbsp;GPU saturation (SM-active) + goodput (productive-time fraction)&lt;/div&gt;" vertex="1">
+          <mxGeometry height="60" width="760" x="20" y="415" as="geometry" />
+        </mxCell>
+        <mxCell id="image" parent="cluster" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=10;sketch=1;curveFitting=1;jiggle=2;" value="&lt;b&gt;Container image (Amazon ECR)&lt;/b&gt;  —  AWS DLC base (PyTorch 2.10 / cu130, matched EFA + aws-ofi-nccl)&amp;nbsp;" vertex="1">
+          <mxGeometry height="45" width="760" x="20" y="485" as="geometry" />
+        </mxCell>
+        <mxCell id="storage" parent="1" style="swimlane;startSize=30;html=1;fillColor=#fbf1f7;strokeColor=#333333;fontSize=12;fontStyle=1;verticalAlign=top;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="Storage" vertex="1">
+          <mxGeometry height="540" width="330" x="889" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="s3" parent="storage" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;b&gt;Amazon S3&lt;/b&gt;&lt;br&gt;data lake — raw + synthetic corpus&lt;br&gt;&lt;i&gt;Mountpoint (read) · checkpoint archive&lt;/i&gt;" vertex="1">
+          <mxGeometry height="100" width="200" x="60" y="372" as="geometry" />
+        </mxCell>
+        <mxCell id="fsx" parent="storage" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;b&gt;FSx for Lustre + EFA&lt;/b&gt;&lt;br&gt;hot training corpus, checkpoints,&lt;br&gt;HF cache" vertex="1">
+          <mxGeometry height="110" width="220" x="50" y="202" as="geometry" />
+        </mxCell>
+        <mxCell id="nvme" parent="storage" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;div&gt;&lt;b&gt;&lt;br&gt;&lt;/b&gt;&lt;/div&gt;&lt;b&gt;Local NVMe (instance store)&lt;/b&gt;&lt;br&gt;RAID0 scratch — generation write path&lt;br&gt;&lt;i&gt;async copy back to FSx / S3&lt;/i&gt;" vertex="1">
+          <mxGeometry height="100" width="220" x="50" y="42" as="geometry" />
+        </mxCell>
+        <mxCell id="dra" edge="1" parent="storage" source="s3" style="html=1;endArrow=classic;startArrow=classic;strokeColor=#9673a6;strokeWidth=2;align=center;rounded=0;sketch=1;curveFitting=1;jiggle=2;" target="fsx" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="loop" edge="1" parent="storage" source="nvme" style="html=1;endArrow=classic;strokeColor=#666666;rounded=0;fontSize=10;fontStyle=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;exitPerimeter=0;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="160" y="202" />
+            </Array>
+            <mxPoint x="165.4545454545455" y="142.0000000000001" as="sourcePoint" />
+            <mxPoint x="160" y="201.9999999999999" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rbkijbqyOhdl1ioP6hgv-1" parent="storage" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Architects Daughter;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DArchitects%2BDaughter;labelBackgroundColor=default;fontSize=10;sketch=1;curveFitting=1;jiggle=2;" value="&lt;i style=&quot;font-family: Helvetica;&quot;&gt;S3→FSx data-repository association (DRA)&lt;/i&gt;" vertex="1">
+          <mxGeometry height="30" width="250" x="35" y="328" as="geometry" />
+        </mxCell>
+        <mxCell id="rbkijbqyOhdl1ioP6hgv-2" parent="storage" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Architects Daughter;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DArchitects%2BDaughter;sketch=1;curveFitting=1;jiggle=2;" value="&lt;span style=&quot;font-family: Helvetica; font-size: 10px; font-style: italic; white-space: nowrap; background-color: rgb(255, 255, 255);&quot;&gt;read corpus /&amp;nbsp;&lt;/span&gt;&lt;div style=&quot;font-family: Helvetica; font-size: 10px; font-style: italic; white-space: nowrap;&quot;&gt;l&lt;span style=&quot;background-color: rgb(255, 255, 255); color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;oad+save ckpt&lt;/span&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="30" width="70" x="-40" y="222" as="geometry" />
+        </mxCell>
+        <mxCell id="rbkijbqyOhdl1ioP6hgv-3" parent="storage" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Architects Daughter;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DArchitects%2BDaughter;sketch=1;curveFitting=1;jiggle=2;" value="&lt;span style=&quot;font-family: Helvetica; font-size: 10px; font-style: italic; white-space: nowrap; background-color: rgb(255, 255, 255);&quot;&gt;closed loop: synthetic clips re-enter the corpus → next post-train round&lt;/span&gt;" vertex="1">
+          <mxGeometry height="30" width="310" x="8" y="154" as="geometry" />
+        </mxCell>
+        <mxCell id="fsx2train" edge="1" parent="1" source="fsx" style="html=1;endArrow=classic;startArrow=classic;strokeColor=#82b366;strokeWidth=2;fontSize=10;fontStyle=2;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="">
+          <mxGeometry relative="1" x="0.0909" y="-25" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="820" y="317" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="gen2nvme" edge="1" parent="1" source="gen" style="html=1;endArrow=classic;strokeColor=#666666;strokeWidth=2;fontSize=10;fontStyle=2;rounded=0;sketch=1;curveFitting=1;jiggle=2;" target="nvme" value="write synthetic clips">
+          <mxGeometry relative="1" x="-0.2202" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="690" y="150" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

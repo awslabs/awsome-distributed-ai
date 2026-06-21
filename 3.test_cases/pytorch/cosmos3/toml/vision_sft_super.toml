@@ -1,0 +1,94 @@
+# Cosmos3-Super (~64B) vision LoRA SFT (T2V/I2V/V2V). Post-train in the
+# bandwidth/compute-diluted regime: Super reads the same bytes as the Nano vision
+# SFT but computes ~4x longer per step. LoRA-only (rank 16 / alpha 32), CP=2, no EMA.
+#
+# PREREQUISITE: warm-starts from a Cosmos3-Super DCP checkpoint
+# (BASE_CHECKPOINT_PATH=/fsx/pretrained/Cosmos3-Super-dcp) — source via
+# `convert_model_to_dcp --checkpoint-path Cosmos3-Super` (HF->DCP, ~64B, big-RAM pod).
+# Reuses the SAME dataset as the Nano vision SFT (DATASET_PATH) to isolate the model-size effect.
+#
+# Run with: ckpt_type=dcp, env BASE_CHECKPOINT_PATH + WAN_VAE_PATH + DATASET_PATH.
+# Smoke: override trainer.max_iter on the CLI (e.g. =10).
+
+[job]
+task       = "vfm"
+experiment = "vision_sft_super"
+project    = "cosmos3"
+group      = "sft"
+name       = "vision_sft_super"
+wandb_mode = "disabled"
+
+[model]
+max_num_tokens_after_packing = 45056
+joint_attn_implementation    = "two_way"
+lora_enabled                 = true
+lora_rank                    = 16
+lora_alpha                   = 32
+lora_target_modules          = "q_proj_moe_gen,k_proj_moe_gen,v_proj_moe_gen,o_proj_moe_gen"
+precision                    = "bfloat16"
+
+[model.ema]
+enabled         = false   # super uses LoRA, no EMA
+rate            = 0.1
+iteration_shift = 0
+
+[model.parallelism]
+data_parallel_shard_degree     = -1   # auto from WORLD_SIZE
+data_parallel_replicate_degree = 1
+context_parallel_shard_degree  = 2    # super uses CP=2
+cfg_parallel_shard_degree      = 1
+
+[model.compile]
+enabled         = false   # super disables compile
+compile_dynamic = true
+
+[model.activation_checkpointing]
+mode               = "full"
+save_ops_regex     = ["fmha"]
+preserve_rng_state = true
+determinism_check  = "default"
+
+[model.tokenizer]
+vae_path = "${oc.env:WAN_VAE_PATH}"
+
+[optimizer]
+betas          = [0.9, 0.95]
+eps            = 1.0e-6
+fused          = true
+keys_to_select = ["lora_"]   # train LoRA adapters only
+lr             = 5.0e-4
+weight_decay   = 0
+
+[scheduler]
+cycle_lengths      = [1000]
+f_max              = [1.0]
+f_min              = [0.0]
+f_start            = [0.0]
+verbosity_interval = 0
+warm_up_steps      = [50]
+
+[trainer]
+distributed_parallelism = "fsdp"
+grad_accum_iter         = 2
+logging_iter            = 1
+max_iter                = 100   # real short run; override via CLI for smoke/full
+
+[trainer.callbacks.compile_tokenizer]
+compile_after_iterations = 3
+enabled                  = false
+warmup_resolutions       = ["256", "480", "720"]
+
+[trainer.callbacks.grad_clip]
+clip_norm    = 0.1
+force_finite = true
+
+# Warm-start the Super backbone from its DCP checkpoint; LoRA adapter tensors are
+# freshly initialized (skipped on load), EMA tensors skipped.
+[checkpoint]
+keys_to_skip_loading = ["net_ema.", "lora_"]
+load_path            = "${oc.env:BASE_CHECKPOINT_PATH}"
+save_iter            = 1000000   # avoid mid-smoke saves; raise/lower per real run
+
+[dataloader_train]
+max_sequence_length = 45056
+max_caption_tokens  = 2048
