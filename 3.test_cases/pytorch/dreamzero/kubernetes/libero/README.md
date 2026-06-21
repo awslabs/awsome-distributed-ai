@@ -30,8 +30,10 @@ package that provides the WAM model code).
 > end-to-end on EKS: image build, multi-node EFA/NCCL, FSDP2 sharded
 > checkpointing, DCP→`.pt` conversion, and LIBERO simulator eval. A **300-step**
 > SFT run on 2× `p5en.48xlarge` reduced `train/loss` **0.232 → 0.085** (~6.9
-> s/step) and wrote a **207 GB** DCP checkpoint with **zero** `UnpicklingError`,
-> confirming the gloo-coordinator checkpoint fix at the full 16.48B scale. That
+> s/step) and wrote a **207 GB** sharded checkpoint with no corruption or
+> save-time crashes — exercising the in-image checkpoint-save fix
+> ([dcp-save-gloo-coordinator.patch](../../dcp-save-gloo-coordinator.patch); see
+> Troubleshooting) at the full 16.48B scale. That
 > demonstrates the pipeline *trains and converges* — it is **not** a
 > task-accuracy claim: 300 steps is a short run (the released 14B checkpoint
 > trained for 100K). A 1-step checkpoint yields `eval/success_once = 0.0`, which
