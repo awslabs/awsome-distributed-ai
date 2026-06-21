@@ -22,8 +22,8 @@ warm-start from; continue-SFT adapts it to your target data (here, LIBERO) —
 the same pattern you would follow with your own dataset.
 
 Upstream projects:
-[github.com/RLinf/RLinf](https://github.com/RLinf/RLinf) (training framework) and
-[github.com/RLinf/dreamzero](https://github.com/RLinf/dreamzero) (the `groot`
+- [github.com/RLinf/RLinf](https://github.com/RLinf/RLinf) (training framework)
+- [github.com/RLinf/dreamzero](https://github.com/RLinf/dreamzero) (the `groot`
 package that provides the WAM model code).
 
 > **Validation scope (read this first).** The pipeline below was validated
