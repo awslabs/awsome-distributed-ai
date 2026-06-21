@@ -384,7 +384,10 @@ kubectl -n "$NAMESPACE" create configmap dreamzero-sft-launcher \
 
 envsubst '${ECR_URI} ${NAMESPACE}' < dreamzero-sft.yaml | kubectl apply -f -
 
-kubectl logs -f -n "$NAMESPACE" job/dreamzero-sft
+# dreamzero-sft is a RayJob. `kubectl logs job/...` would only show the KubeRay
+# submitter's `ray job submit` output; the training driver logs live on the Ray
+# head pod:
+kubectl logs -f -n "$NAMESPACE" -l ray.io/node-type=head
 ```
 
 The launcher drives `examples/sft/train_vla_sft.py` with config
@@ -400,8 +403,9 @@ The launcher drives `examples/sft/train_vla_sft.py` with config
 ### 5. Convert the checkpoint (DCP shards → single `.pt`)
 
 Eval consumes a single consolidated `.pt`. Convert the sharded DCP offline on
-**CPU** (do **not** use `save_full_model_weights` — the rank-0 full-state-dict
-gather stalls on the 16B model). Create the launcher ConfigMap from
+**CPU** (do **not** use `save_full_model_weights` — on the 16B model the
+full-state-dict gather hits `Backend nccl does not support
+allgather_into_tensor_coalesced`). Create the launcher ConfigMap from
 `scripts/convert_checkpoint.sh`, then apply with **restricted** `envsubst`:
 
 ```bash
