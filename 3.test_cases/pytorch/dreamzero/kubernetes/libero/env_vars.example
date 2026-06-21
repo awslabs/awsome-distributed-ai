@@ -16,3 +16,16 @@ export AWS_REGION=us-east-1
 # Pinned source refs (baked into the image build).
 export UPSTREAM_REF=b3bbabb1f461
 export DREAMZERO_REF=ab790c198fbc
+
+# ---------------------------------------------------------------------------
+# OPTIONAL: only needed if you provision FSx via the storage/ manifests.
+# Skip these if you already have an `fsx-claim` PVC bound in your namespace.
+#
+# For storage/pvc-fsx-lustre-dynamic.yaml (provision a NEW filesystem):
+# export FSX_SUBNET_ID=subnet-0abc...
+# export FSX_SECURITY_GROUP_IDS=sg-0def...
+#
+# For storage/pv-fsx-lustre-static.yaml (bind an EXISTING filesystem):
+# export FSX_FILESYSTEM_ID=fs-0...
+# export FSX_DNS_NAME=fs-0....fsx.<region>.amazonaws.com
+# export FSX_MOUNT_NAME=abcd1234
