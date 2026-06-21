@@ -11,11 +11,18 @@ nodes and collating with [`collect_results.py`](collect_results.py).
 | Hardware | `p6-b300.48xlarge` on EKS (Blackwell B300, 8 GPU + 16 EFA / node) |
 | EP config | num-tokens=4096 (LL: 128), hidden=7168, num-topk=8, num-experts=256, bf16 |
 | NVSHMEM image | `deepep:efa1.48.0-nvshmem3.7.0-deepep567632d-cuda13` (CUDA 13) |
-| UCCL image | UCCL `0dc87eb`, CUDA 13, Hopper+Blackwell (committed `uccl-ep.Dockerfile`) |
+| UCCL image | UCCL `0dc87eb`, CUDA 13, Hopper+Blackwell — see image note below |
 | NCCL image | DeepEP image (reuses `/opt/nccl-tests/build/alltoall_perf`, sm_100) |
 
 `num-experts=256` divides evenly at both 32 and 64 ranks, so the config is identical across the
 4-node and 8-node runs.
+
+> **UCCL image note.** The UCCL dispatch/combine numbers below were measured with a prebuilt
+> image of the **same UCCL commit (`0dc87eb`) and the same CUDA-13 `setup.py`+PTX build method**
+> as the committed [`uccl-ep.Dockerfile`](../uccl-ep-benchmark/uccl-ep.Dockerfile). That committed
+> Dockerfile is independently validated to **build** and to **run the benchmark on B300** — a
+> 2-node internode run from it gives dispatch ~92 / combine ~60 GB/s (RDMA), consistent with the
+> table — so it reproduces these results.
 
 ## 8 nodes — 64 ranks (primary)
 
