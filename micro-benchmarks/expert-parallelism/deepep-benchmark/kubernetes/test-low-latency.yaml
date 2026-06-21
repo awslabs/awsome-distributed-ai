@@ -16,7 +16,17 @@ spec:
     Launcher:
       replicas: 1
       template:
+        metadata:
+          labels:
+            mpi/name: deepep-low-latency
         spec:
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - topologyKey: topology.kubernetes.io/zone
+                  labelSelector:
+                    matchLabels:
+                      mpi/name: deepep-low-latency
           restartPolicy: OnFailure
           # The launcher runs the full benchmark image (~20GB) just to invoke
           # mpirun. Co-locate it on the GPU node pool, whose nodes have enough
@@ -69,6 +79,7 @@ spec:
                 -x FI_PROVIDER=efa \
                 -x NVSHMEM_REMOTE_TRANSPORT=libfabric \
                 -x NVSHMEM_LIBFABRIC_PROVIDER=efa \
+                -x NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE \
                 -x NCCL_SOCKET_IFNAME -x LD_PRELOAD \
                 -x MASTER_ADDR=$MASTER_ADDR -x MASTER_PORT=8361 \
                 bash -c 'RANK=$OMPI_COMM_WORLD_RANK WORLD_SIZE=$OMPI_COMM_WORLD_SIZE \
@@ -76,7 +87,17 @@ spec:
     Worker:
       replicas: ${NUM_NODES}
       template:
+        metadata:
+          labels:
+            mpi/name: deepep-low-latency
         spec:
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - topologyKey: topology.kubernetes.io/zone
+                  labelSelector:
+                    matchLabels:
+                      mpi/name: deepep-low-latency
           nodeSelector:
             node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
           tolerations:
@@ -94,6 +115,9 @@ spec:
           - image: ${IMAGE_URI}
             imagePullPolicy: IfNotPresent
             name: deepep-low-latency-worker
+            env:
+              - name: NVIDIA_GDRCOPY
+                value: "enabled"
             # The tuning phase profiles kernels via CUPTI. These nodes set the
             # driver's RmProfilingAdminOnly=1, so the workload needs SYS_ADMIN to
             # profile. Remove if your cluster allows non-admin GPU profiling.

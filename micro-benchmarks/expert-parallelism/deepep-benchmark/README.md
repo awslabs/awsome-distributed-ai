@@ -27,13 +27,11 @@ and switches to the NCCL GIN backend; it is out of scope here.
 DeepEP's internode kernels were written for [IBGDA](https://docs.nvidia.com/nvshmem/) (GPU-initiated
 RDMA over InfiniBand), which EFA does not provide. The image works around this:
 
-- **NVSHMEM is built from source** with the libfabric transport
-  (`NVSHMEM_LIBFABRIC_SUPPORT=ON`, IBGDA/IBRC off) so RDMA runs over EFA.
-- [`setup_deepep_efa.sh`](./setup_deepep_efa.sh) **patches DeepEP** to replace its IBGDA device
+- **NVSHMEM 3.7.0**
+- [`deepep_aws_efa.patch`](./deepep_aws_efa.patch) **patches DeepEP** to replace its IBGDA device
   calls with NVSHMEM host-proxy QP APIs (`nvshmemx_qp_*`), maps the dispatch/combine tail updates
   onto a combined put+signal, and raises `NVSHMEM_MAX_TEAMS` for NVSHMEM 3.7.
-- The build runs in a **Python virtual environment** (`/opt/deepep`); PyTorch's bundled
-  `nvidia-nvshmem-cu13` is uninstalled so it does not clash with the from-source NVSHMEM 3.7.0-0.
+- The build requires PyTorch, PyTorch's bundled `nvidia-nvshmem-cu13` is uninstalled so it does not clash with the OS libraries NVSHMEM 3.7.0.
 - The image is built on **CUDA 13** (PyTorch `cu130`). This is required for Blackwell (B200/B300):
   CUDA ≤ 12.9 CUPTI fails on those GPUs (`CUPTI_ERROR_INVALID_DEVICE`), which breaks the
   internode/low-latency tuning phase that profiles kernels.
@@ -45,6 +43,7 @@ image and re-exported by the launchers):
 FI_PROVIDER=efa
 NVSHMEM_REMOTE_TRANSPORT=libfabric
 NVSHMEM_LIBFABRIC_PROVIDER=efa
+NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE
 ```
 
 ## Prerequisites
@@ -52,8 +51,8 @@ NVSHMEM_LIBFABRIC_PROVIDER=efa
 - EFA-enabled GPU nodes.
 - **GPU architecture:** the image is built for **both Hopper (`sm_90`) and Blackwell (`sm_100`)**
   by default, so the same image runs on `p5`/`p5en` and `p6-b300` nodes. To build a smaller
-  single-arch image, override `--build-arg GPU_ARCH=90` (Hopper only) or `GPU_ARCH=100`
-  (Blackwell only).
+  single-arch image, override `--build-arg GPU_ARCH=90 --build-arg TORCH_CUDA_ARCH_LIST=9.0 --build-arg NVCC_GENCODE=-gencode=arch=compute_90,code=sm_90` (Hopper only)
+  or `--build-arg GPU_ARCH=100 --build-arg TORCH_CUDA_ARCH_LIST=10.0 --build-arg NVCC_GENCODE=-gencode=arch=compute_100,code=sm_100` (Blackwell only)
 
 ## Building the DeepEP image
 
@@ -62,7 +61,9 @@ GDRCOPY_VERSION=v2.5.2
 EFA_INSTALLER_VERSION=1.48.0
 NVSHMEM_VERSION=v3.7.0-0
 DEEPEP_COMMIT=567632d
-GPU_ARCH="90;100"  # Hopper + Blackwell by default; use "90" or "100" for a single-arch image
+GPU_ARCH="90;100" # Hopper + Blackwell by default; use "90" or "100" for a single-arch image
+TORCH_CUDA_ARCH_LIST="9.0;10.0" # Hopper + Blackwell by default; use "9.0" or "10.0" for a single-arch image
+NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90 -gencode=arch=compute_100,code=sm_100" # Hopper + Blackwell by default; use "90" or "100" for a single-arch image
 TAG="efa${EFA_INSTALLER_VERSION}-nvshmem${NVSHMEM_VERSION}-deepep${DEEPEP_COMMIT}"
 DEEPEP_CONTAINER_IMAGE_NAME_TAG="deepep:${TAG}"
 ```
@@ -74,6 +75,8 @@ docker build --progress=plain -f ./deepep.Dockerfile \
       --build-arg="NVSHMEM_VERSION=${NVSHMEM_VERSION}" \
       --build-arg="DEEPEP_COMMIT=${DEEPEP_COMMIT}" \
       --build-arg="GPU_ARCH=${GPU_ARCH}" \
+      --build-arg "TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}" \
+      --build-arg NVCC_GENCODE=${NVCC_GENCODE}" \
       -t ${DEEPEP_CONTAINER_IMAGE_NAME_TAG} \
       .
 ```

@@ -64,6 +64,7 @@ spec:
                 -x FI_PROVIDER=efa \
                 -x NVSHMEM_REMOTE_TRANSPORT=libfabric \
                 -x NVSHMEM_LIBFABRIC_PROVIDER=efa \
+                -x NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE \
                 -x NCCL_SOCKET_IFNAME -x LD_PRELOAD \
                 bash -c 'RANK=$OMPI_COMM_WORLD_RANK WORLD_SIZE=$OMPI_COMM_WORLD_SIZE \
                          python3 /DeepEP/tests/test_intranode.py'
@@ -88,6 +89,9 @@ spec:
           - image: ${IMAGE_URI}
             imagePullPolicy: IfNotPresent
             name: deepep-intranode-worker
+            env:
+              - name: NVIDIA_GDRCOPY
+                value: "enabled"
             volumeMounts:
             - name: shmem
               mountPath: /dev/shm

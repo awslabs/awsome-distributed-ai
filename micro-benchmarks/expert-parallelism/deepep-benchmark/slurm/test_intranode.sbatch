@@ -9,6 +9,7 @@
 export FI_PROVIDER=efa
 export NVSHMEM_REMOTE_TRANSPORT=libfabric
 export NVSHMEM_LIBFABRIC_PROVIDER=efa
+export NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE
 
 mpirun -N 1 bash -c 'echo $(hostname): $(cat /sys/devices/virtual/dmi/id/board_asset_tag | tr -d " ")'
 
