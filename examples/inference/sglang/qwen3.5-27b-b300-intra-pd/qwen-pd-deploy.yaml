@@ -1,0 +1,284 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Qwen3.5-27B intra-node PD on a single 8-GPU B300 node (EKS / HyperPod).
+#
+# All engines run in ONE pod on ONE node: the sglang-pd container claims all
+# 8 GPUs and starts 6 prefill instances (GPU 0-5) + 2 decode instances
+# (GPU 6-7), split via --base-gpu-id; KV cache moves prefill -> decode over
+# NIXL, staying intra-node. A router sidecar shares the pod network namespace,
+# so it reaches every engine on 127.0.0.1 (same as the compose host network).
+#
+#   kubectl apply -f qwen-pd-deploy.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qwen35-router
+spec:
+  selector:
+    app: qwen35-intra-pd
+  ports:
+  - name: http
+    port: 30080
+    targetPort: 30080
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qwen35-intra-pd
+  labels:
+    app: qwen35-intra-pd
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: qwen35-intra-pd
+  template:
+    metadata:
+      labels:
+        app: qwen35-intra-pd
+        sglang-metrics: "true"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "30000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Target a p6-b300.48xlarge on either cluster type. A plain EKS managed
+      # nodegroup labels instance-type with the bare EC2 type; a SageMaker
+      # HyperPod instance group uses the `ml.` prefix. A nodeSelector can't
+      # express OR, so match both with nodeAffinity In.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node.kubernetes.io/instance-type
+                operator: In
+                values:
+                - p6-b300.48xlarge      # plain EKS managed nodegroup
+                - ml.p6-b300.48xlarge   # SageMaker HyperPod instance group
+      # An eksctl B300 nodegroup taints nodes nvidia.com/gpu=true:NoSchedule to
+      # keep non-GPU pods off; HyperPod nodes have no such taint. A toleration is
+      # a no-op when the taint is absent, so it's safe to always carry it.
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+      containers:
+      # ---- 6 prefill + 2 decode engines, all on one node ------------------
+      - name: sglang-pd
+        image: lmsysorg/sglang:v0.5.12.post1-cu130
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          privileged: true
+          capabilities:
+            add: ["SYS_NICE"]
+        env:
+        - name: NIXL_LOG_LEVEL
+          value: INFO
+        ports:
+        - containerPort: 30000
+          name: http
+        - containerPort: 30080
+          name: router
+        volumeMounts:
+        - name: shm
+          mountPath: /dev/shm
+        - name: nvme-storage
+          mountPath: /root/.cache/huggingface
+        resources:
+          limits:
+            nvidia.com/gpu: 8
+        # Probe the foreground prefill (30005) — it keeps the container alive, so
+        # if it wedges the pod should restart. The 1800s initial delay clears the
+        # long cold start (8 engines load + CUDA-graph capture, gated behind the
+        # decode-ready wait loop) so liveness never fires during warmup.
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 30005
+          initialDelaySeconds: 1800
+          periodSeconds: 60
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 30005
+          initialDelaySeconds: 180
+          periodSeconds: 10
+          timeoutSeconds: 5
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+
+          # ---- 2 decode instances (GPU 6, 7) ----
+          python3 -m sglang.launch_server \
+            --model-path Qwen/Qwen3.5-27B \
+            --host 0.0.0.0 --port 30010 \
+            --tp 1 --dp 1 --base-gpu-id 6 \
+            --attention-backend flashinfer \
+            --disaggregation-mode decode \
+            --disaggregation-transfer-backend nixl \
+            --disaggregation-bootstrap-port 9010 \
+            --mem-fraction-static 0.85 \
+            --reasoning-parser qwen3 --tool-call-parser qwen3_coder \
+            --context-length 32768 \
+            --disable-flashinfer-autotune \
+            --skip-server-warmup \
+            --enable-metrics > /tmp/decode-30010.log 2>&1 &
+
+          python3 -m sglang.launch_server \
+            --model-path Qwen/Qwen3.5-27B \
+            --host 0.0.0.0 --port 30011 \
+            --tp 1 --dp 1 --base-gpu-id 7 \
+            --attention-backend flashinfer \
+            --disaggregation-mode decode \
+            --disaggregation-transfer-backend nixl \
+            --disaggregation-bootstrap-port 9011 \
+            --mem-fraction-static 0.85 \
+            --reasoning-parser qwen3 --tool-call-parser qwen3_coder \
+            --context-length 32768 \
+            --disable-flashinfer-autotune \
+            --skip-server-warmup \
+            --enable-metrics > /tmp/decode-30011.log 2>&1 &
+
+          echo "Waiting for decode instances (timeout 10 min)..."
+          for i in $(seq 1 120); do
+            if curl -sf http://localhost:30010/health > /dev/null 2>&1 && \
+               curl -sf http://localhost:30011/health > /dev/null 2>&1; then
+              echo "Both decode instances ready after ${i}*5s"
+              break
+            fi
+            sleep 5
+          done
+          if ! curl -sf http://localhost:30010/health > /dev/null 2>&1; then
+            echo "ERROR: decode 30010 failed to start"; tail -100 /tmp/decode-30010.log; exit 1
+          fi
+          if ! curl -sf http://localhost:30011/health > /dev/null 2>&1; then
+            echo "ERROR: decode 30011 failed to start"; tail -100 /tmp/decode-30011.log; exit 1
+          fi
+          echo "Decode ready, starting prefill instances..."
+
+          # ---- 6 prefill instances (GPU 0-5) ----
+          for gpu in 0 1 2 3 4; do
+            port=$((30000 + gpu))
+            bport=$((9000 + gpu))
+            python3 -m sglang.launch_server \
+              --model-path Qwen/Qwen3.5-27B \
+              --host 0.0.0.0 --port ${port} \
+              --tp 1 --dp 1 --base-gpu-id ${gpu} \
+              --attention-backend flashinfer \
+              --disaggregation-mode prefill \
+              --disaggregation-transfer-backend nixl \
+              --disaggregation-bootstrap-port ${bport} \
+              --mem-fraction-static 0.85 \
+              --reasoning-parser qwen3 --tool-call-parser qwen3_coder \
+              --context-length 32768 \
+              --disable-flashinfer-autotune \
+              --skip-server-warmup \
+              --enable-metrics > /tmp/prefill-${port}.log 2>&1 &
+          done
+
+          # GPU 5 prefill runs in foreground (keeps container alive)
+          exec python3 -m sglang.launch_server \
+            --model-path Qwen/Qwen3.5-27B \
+            --host 0.0.0.0 --port 30005 \
+            --tp 1 --dp 1 --base-gpu-id 5 \
+            --attention-backend flashinfer \
+            --disaggregation-mode prefill \
+            --disaggregation-transfer-backend nixl \
+            --disaggregation-bootstrap-port 9005 \
+            --mem-fraction-static 0.85 \
+            --reasoning-parser qwen3 --tool-call-parser qwen3_coder \
+            --context-length 32768 \
+            --disable-flashinfer-autotune \
+            --skip-server-warmup \
+            --enable-metrics
+      # ---- PD router (shares pod network → reaches engines on 127.0.0.1) ---
+      - name: router
+        image: lmsysorg/sgl-model-gateway:v0.3.2
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 30080
+          name: http
+        resources:
+          requests:
+            cpu: "2"
+            memory: 4Gi
+          limits:
+            cpu: "4"
+            memory: 8Gi
+        # Liveness is a bare TCP check, not /readiness: the router reports
+        # not-ready whenever its backends are down, and we must not restart the
+        # router for that — only when its own process has wedged.
+        livenessProbe:
+          tcpSocket:
+            port: 30080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /readiness
+            port: 30080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        command:
+        - python3
+        - -m
+        - sglang_router.launch_router
+        args:
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "30080"
+        - --pd-disaggregation
+        - --prefill-policy
+        - round_robin
+        - --decode-policy
+        - round_robin
+        - --prefill
+        - http://127.0.0.1:30000
+        - "9000"
+        - --prefill
+        - http://127.0.0.1:30001
+        - "9001"
+        - --prefill
+        - http://127.0.0.1:30002
+        - "9002"
+        - --prefill
+        - http://127.0.0.1:30003
+        - "9003"
+        - --prefill
+        - http://127.0.0.1:30004
+        - "9004"
+        - --prefill
+        - http://127.0.0.1:30005
+        - "9005"
+        - --decode
+        - http://127.0.0.1:30010
+        - --decode
+        - http://127.0.0.1:30011
+      volumes:
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Gi
+      # ⚠️  SET THIS PER CLUSTER — the one thing scheduling can't auto-detect.
+      # The node's local NVMe is mounted at different paths on the two AMIs:
+      #   HyperPod-on-EKS (DLAMI):           /opt/dlami/nvme/...
+      #   self-managed EKS (RAID0 instance): /mnt/k8s-disks/0/...   (setup-local-disks raid0)
+      # Picking the WRONG path is not a hard error: type=DirectoryOrCreate will
+      # silently create an empty dir on the small root disk, and weights then
+      # download there and can fill it up.
+      - name: nvme-storage
+        hostPath:
+          path: /opt/dlami/nvme/huggingface  # For EKS: /mnt/k8s-disks/0/huggingface
+          type: DirectoryOrCreate

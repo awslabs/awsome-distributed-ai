@@ -1,0 +1,60 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Prerequisite for dsv4pro-deploy.yaml: create the B300 spot nodegroup on a
+# self-managed (eksctl) EKS cluster. Produces a single 8-GPU p6-b300.48xlarge
+# node that is tainted exactly as dsv4pro-deploy.yaml tolerates, and auto-mounts
+# its 8x3.7TB local NVMe as a ~28TB RAID0 at /mnt/k8s-disks/0.
+#
+# Fill in the <PLACEHOLDERS> for your account, then:
+#   eksctl create nodegroup -f nodegroup-b300-eks.yaml
+#
+# (HyperPod-on-EKS users don't need this — nodes are provisioned by HyperPod.)
+---
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata:
+  name: <CLUSTER_NAME>          # e.g. eks-hypd-0512-b2ad
+  region: <REGION>             # e.g. us-west-2
+
+# A cluster NOT created by eksctl must be given explicit VPC config, otherwise
+# eksctl errors with "VPC configuration required". Use private subnets that have
+# a NAT egress route (0.0.0.0/0 -> nat-...), so nodes can pull ECR images and
+# NVIDIA drivers and join the control plane.
+vpc:
+  id: <VPC_ID>
+  securityGroup: <CLUSTER_SECURITY_GROUP>   # cluster additional SG; lets nodes talk to the control plane
+  subnets:
+    private:
+      <AZ_A>:                  # e.g. us-west-2a
+        id: <PRIVATE_SUBNET_AZ_A>
+      <AZ_B>:                  # e.g. us-west-2b
+        id: <PRIVATE_SUBNET_AZ_B>
+
+managedNodeGroups:
+  - name: b300-spot
+    spot: true                  # Spot capacity
+    instanceTypes:              # Spot requires a list (even for a single type)
+      - p6-b300.48xlarge
+    minSize: 0                  # Spot: min 0 so it scales to 0 (instead of retrying) when capacity is gone
+    maxSize: 2
+    desiredCapacity: 1
+    volumeSize: 500             # root EBS 500GB: container images + driver build cache
+    amiFamily: AmazonLinux2023
+    privateNetworking: true     # private subnets only; GPU nodes need no public IP
+    # Run at node bootstrap (before joining the cluster): make the 8 local NVMe
+    # instance-store disks into a RAID0 (~28TB) and mount at /mnt/k8s-disks/0.
+    # More reliable than mounting after the fact with nsenter — cloud-init runs
+    # directly in the host mount namespace, systemd completes the mount, and it
+    # re-runs automatically when a spot node is reclaimed / replaced, so the
+    # workload pod has its disk ready on start. setup-local-disks also redirects
+    # the kubelet/containerd data dirs onto this NVMe, keeping the root disk free.
+    # NOTE: only injected by eksctl on the stock AL2023 AMI (no custom launch template).
+    preBootstrapCommands:
+      - "/usr/bin/setup-local-disks raid0"
+    labels:
+      nvidia.com/gpu.product: B300   # convenience label for the NODEGROUP-EKS.md verify commands
+    taints:
+      - key: nvidia.com/gpu
+        value: "true"
+        effect: NoSchedule      # keep non-GPU pods off; dsv4pro-deploy.yaml tolerates this
