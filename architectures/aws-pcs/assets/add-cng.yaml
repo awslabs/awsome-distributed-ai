@@ -554,8 +554,12 @@ Resources:
                 bash /tmp/setup-directory.sh "${DirectoryRole}" > /var/log/directory-setup.log 2>&1
                 dir_rc=$?
                 echo "directory setup exited $dir_rc" >> /var/log/directory-setup.log
-                if [ "$dir_rc" -ne 0 ] && [ "${DirectoryRole}" = "client" ]; then
-                  echo "ERROR: LDAP client setup failed (exit $dir_rc). The node will still join and run jobs (Slurm uses numeric UIDs), but user name resolution / home-dir creation may be degraded on this node. Check this log and the directory server; not draining (avoids a replace loop)." >> /var/log/directory-setup.log
+                if [ "$dir_rc" -ne 0 ]; then
+                  if [ "${DirectoryRole}" = "client" ]; then
+                    echo "ERROR: LDAP client setup failed (exit $dir_rc). The node will still join and run jobs (Slurm uses numeric UIDs), but user name resolution / home-dir creation may be degraded on this node. Check this log and the directory server; not draining (avoids a replace loop)." >> /var/log/directory-setup.log
+                  else
+                    echo "ERROR: LDAP server (login-node) setup failed (exit $dir_rc) — the directory service may be unavailable cluster-wide; compute nodes will not be able to resolve directory users. Check this log." >> /var/log/directory-setup.log
+                  fi
                 fi
               fi
 

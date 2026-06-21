@@ -162,7 +162,7 @@ idempotent — it no-ops on a pre-baked AMI.
 > **Production tip — pin the AMI.** CloudFormation re-resolves SSM `/latest/`
 > parameters on every stack update, so a later scale-out can drift onto a newer AMI.
 > Resolve once and pass the literal `ami-xxx` as `AmiId`. Details:
-> [OPERATIONS.md §4](./docs/OPERATIONS.md#25-ami-selection-amiid--pin-in-production).
+> [OPERATIONS.md §2.5](./docs/OPERATIONS.md#25-ami-selection-amiid--pin-in-production).
 
 ### GPU compute (P5/P6)
 
