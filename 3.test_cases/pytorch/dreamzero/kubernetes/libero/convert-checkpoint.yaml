@@ -16,7 +16,7 @@
 #
 # Usage (restricted envsubst protects the inline ${...} shell vars):
 #   export ECR_URI=<acct>.dkr.ecr.<region>.amazonaws.com/<repo>
-#   export NAMESPACE=natharno
+#   export NAMESPACE=dreamzero
 #   # Optionally override STEP (default global_step_1):
 #   kubectl -n $NAMESPACE create configmap dreamzero-convert-launcher \
 #     --from-file=convert_checkpoint.sh=kubernetes/libero/scripts/convert_checkpoint.sh \

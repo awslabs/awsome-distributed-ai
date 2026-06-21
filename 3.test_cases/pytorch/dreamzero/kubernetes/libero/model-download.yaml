@@ -37,7 +37,7 @@
 #     LIBERO dataset (~152GB total). Ensure FSx has headroom.
 #
 # Usage:
-#   export NAMESPACE=natharno  # shared test cluster namespace
+#   export NAMESPACE=dreamzero
 #   envsubst < kubernetes/libero/model-download.yaml | kubectl apply -f -
 #   kubectl logs -f job/model-download-dreamzero -n $NAMESPACE
 apiVersion: batch/v1

@@ -32,7 +32,7 @@
 #
 # Usage:
 #   export ECR_URI=<account>.dkr.ecr.<region>.amazonaws.com/<repo>
-#   export NAMESPACE=natharno
+#   export NAMESPACE=dreamzero
 #   # NOTE: use RESTRICTED envsubst -- substitute ONLY ${ECR_URI} and ${NAMESPACE}.
 #   # The container command contains shell vars (${PYTHONPATH}, ${DREAMZERO_PATH})
 #   # that unrestricted envsubst would clobber to empty strings. Same pattern as

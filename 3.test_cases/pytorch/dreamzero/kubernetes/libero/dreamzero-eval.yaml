@@ -36,7 +36,7 @@
 # Apply (RESTRICTED envsubst -- substitute ONLY ${ECR_URI} and ${NAMESPACE} so the
 # inline ${PYTHONPATH:-} guards in the bootstrap are NOT clobbered):
 #   export ECR_URI=<account>.dkr.ecr.<region>.amazonaws.com/<repo>
-#   export NAMESPACE=natharno
+#   export NAMESPACE=dreamzero
 #   envsubst '${ECR_URI} ${NAMESPACE}' < kubernetes/libero/dreamzero-eval.yaml | kubectl apply -f -
 ---
 apiVersion: batch/v1

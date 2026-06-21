@@ -28,7 +28,7 @@
 #     --from-file=run_dreamzero_sft_eks.sh=kubernetes/libero/scripts/run_dreamzero_sft_eks.sh \
 #     --dry-run=client -o yaml | kubectl apply -f -
 #   export ECR_URI=<account>.dkr.ecr.<region>.amazonaws.com/<repo>
-#   export NAMESPACE=rlinf
+#   export NAMESPACE=dreamzero
 #   # RESTRICTED envsubst -- substitute ONLY ${ECR_URI} and ${NAMESPACE}.
 #   # (The Ray head-election bash is gone, but keep this habit: other inline
 #   # shell snippets, e.g. the launcher copy, must not be expanded.)
