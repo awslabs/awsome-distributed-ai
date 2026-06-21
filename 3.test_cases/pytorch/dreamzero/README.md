@@ -62,10 +62,12 @@ node**, and **FSx for Lustre with ≥250 GB free** (a 14B FSDP DCP checkpoint is
 ## Prerequisites
 
 An Amazon EKS cluster that can schedule **2× `p5en.48xlarge`** (8× H200 + EFA
-each) — provisioned however you like (a static managed node group, a Capacity
-Block reservation, or on-demand autoscaling such as Karpenter; the workload is
-fixed-size, so autoscaling is a convenience, not a requirement) — plus EFA
-networking, the KubeRay operator, and FSx for Lustre shared storage. See
+each) — provisioned however you like (a static managed node group or Karpenter
+for autoscaling, backed by a **Capacity Block for ML** or an **On-Demand
+Capacity Reservation (ODCR)** — either capacity type works with either
+provisioner; the workload is fixed-size, so autoscaling is a convenience, not a
+requirement) — plus EFA networking, the KubeRay operator, and FSx for Lustre
+shared storage. See
 [`Amazon EKS distributed training architecture`](../../../1.architectures/4.amazon-eks/README.md) for
 cluster setup. The detailed prerequisite checklist lives in the walkthrough below.
 
