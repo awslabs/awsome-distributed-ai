@@ -43,7 +43,12 @@ random-init weights** (we measure step time, not loss).
 | 16 | 8 | 4 | 2 | 8 |
 | 32 | 8 | 2 | 4 | 4 |
 
-`PP = WORLD / EP` (TP8 fixed, ETP=1). Qwen3's 94 layers (= 2·47) are not VPP-divisible, so
+`PP = WORLD / EP` (TP8 fixed, ETP=1). The table above is the **8-node target** (WORLD=64).
+The measured campaign in [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md) ran on **4 nodes**
+(WORLD=32 → EP16=PP2/DP2, EP32=PP1/DP4) because the shared cluster had only 6 of 8 B300 nodes
+free; the EP degree (the variable that matters) is preserved either way.
+
+Qwen3's 94 layers (= 2·47) are not VPP-divisible, so
 the `overlap=on` cells round `num_layers` up to the nearest `PP·VPP` multiple (94 → 96) and
 disable the embedding/loss pipeline accounting — making `overlap=on` a separate within-regime
 A/B (never subtract its numbers against `overlap=off`).

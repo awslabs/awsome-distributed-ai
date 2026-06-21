@@ -88,12 +88,20 @@ def build_config():
     cfg.train.micro_batch_size = micro_batch
 
     # This is a throughput benchmark — never write checkpoints. pretrain() otherwise saves a
-    # full 235B checkpoint at the end of every run (slow + fills disk over an 18-run sweep).
+    # full 235B checkpoint at the end of every run (slow + fills disk over a multi-run sweep).
     if hasattr(cfg, "checkpoint"):
         cfg.checkpoint.save = None
         cfg.checkpoint.load = None
         if hasattr(cfg.checkpoint, "save_interval"):
             cfg.checkpoint.save_interval = None
+    # Disable the post-training evaluation loop (the recipe runs ~32 eval iters, which on a
+    # 235B model dwarfs the few training iters we time and can blow the run timeout). We only
+    # measure training-step time.
+    if hasattr(cfg, "train"):
+        if hasattr(cfg.train, "eval_iters"):
+            cfg.train.eval_iters = 0
+        if hasattr(cfg.train, "eval_interval"):
+            cfg.train.eval_interval = train_iters + 1000
 
     # Expert count: keep the recipe-native 128 (Qwen3-235B-A22B). The dispatcher A/B/C
     # does not depend on the exact expert count; opt-in override only.
@@ -190,6 +198,18 @@ def build_config():
             obj.overlap_moe_expert_parallel_comm = overlap
         if hasattr(obj, "delay_wgrad_compute"):
             obj.delay_wgrad_compute = False
+
+    # Optional activation recomputation, independent of the dispatcher (held identical across
+    # arms). overlap=on requires recompute OFF (forced above), so only apply when overlap is
+    # off. Needed to fit large per-stage layer counts on few nodes — e.g. EP32 at PP1 on 4
+    # nodes (all 94 layers on one stage). RECOMPUTE=full|selective.
+    recompute = os.environ.get("RECOMPUTE", "").lower()
+    if not overlap and recompute in ("full", "selective"):
+        m.recompute_granularity = "full" if recompute == "full" else "selective"
+        if recompute == "full":
+            m.recompute_method = "uniform"
+            m.recompute_num_layers = _int("RECOMPUTE_NUM_LAYERS", 1)
+        logger.info("recompute enabled: granularity=%s", m.recompute_granularity)
 
     # Ensure the analytical throughput line is emitted (RESULTS scraping keys on it).
     if hasattr(cfg, "logger"):

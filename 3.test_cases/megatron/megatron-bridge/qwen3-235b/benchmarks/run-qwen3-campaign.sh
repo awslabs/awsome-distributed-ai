@@ -36,6 +36,7 @@ export TRAIN_ITERS="${TRAIN_ITERS:-24}"
 export GLOBAL_BATCH="${GLOBAL_BATCH:-256}"
 export SEQ_LEN="${SEQ_LEN:-4096}"
 export MOE_FORCE_BALANCE="${MOE_FORCE_BALANCE:-on}"
+export RECOMPUTE="${RECOMPUTE:-}"     # full|selective|"" — held identical across arms
 RUN_TIMEOUT="${RUN_TIMEOUT:-2400}"     # seconds to wait for one run's rank-0 to finish
 
 EPS="${EPS:-16 32}"

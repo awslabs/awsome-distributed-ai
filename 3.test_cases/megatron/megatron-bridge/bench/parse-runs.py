@@ -37,11 +37,11 @@ RE_TFLOPS = re.compile(r"(?:throughput per GPU \(TFLOP/s/GPU\)|TFLOP/s/GPU|tflop
 RE_GBS = re.compile(r"global batch size:\s*(\d+)")
 RE_EFA = re.compile(r"Selected provider is efa")
 RE_UCCL = re.compile(r"Registered proxies|high-throughput mode")
-# NVSHMEM-over-libfabric init banner (NVIDIA DeepEP arm). Tolerant: NVSHMEM prints an
-# init/version line and DeepEP logs its buffer setup; any of these confirms the NVSHMEM
-# transport is live (the analogue of RE_UCCL for the UCCL arm). The hard EFA gate
-# (RE_EFA) still applies to ALL arms.
-RE_NVSHMEM = re.compile(r"NVSHMEM INFO|nvshmem_init|NVSHMEM[^\n]*libfabric|libfabric[^\n]*efa|Initializing NVSHMEM", re.I)
+# NVSHMEM init banner (NVIDIA DeepEP arm). Must be NVSHMEM-SPECIFIC — the generic
+# "libfabric ... efa" string also appears in the NCCL/aws-ofi init of every arm, so we key
+# only on NVSHMEM's own version/init lines (e.g. "NVSHMEM v3.7.0"). This is the analogue of
+# RE_UCCL for the UCCL arm. The hard EFA gate (RE_EFA) still applies to ALL arms.
+RE_NVSHMEM = re.compile(r"NVSHMEM INFO|nvshmem_init|Initializing NVSHMEM|NVSHMEM v[0-9]")
 
 
 def parse_run(run_dir, warmup, debug=False):

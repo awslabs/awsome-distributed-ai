@@ -54,6 +54,9 @@ SEQ_LEN="${SEQ_LEN:-4096}"
 MOE_A2A_OVERLAP="${MOE_A2A_OVERLAP:-on}"
 MOE_FORCE_BALANCE="${MOE_FORCE_BALANCE:-on}"
 LOSS_PROBE="${LOSS_PROBE:-0}"
+# Optional activation recompute (full|selective|""), passed to the bench. Lets a large
+# per-stage layer count fit on few nodes (e.g. EP32 at PP1). Held identical across arms.
+RECOMPUTE="${RECOMPUTE:-}"
 # Transport label recorded in env.txt for the 3-way comparison (uccl|nvshmem|"" for the
 # NCCL alltoall arm). Informational only — the actual transport is fixed by the IMG.
 EP_BACKEND="${EP_BACKEND:-}"
@@ -149,7 +152,7 @@ spec:
           MOE_DISPATCHER=${ARM} MOE_A2A_OVERLAP=${MOE_A2A_OVERLAP} MOE_FORCE_BALANCE=${MOE_FORCE_BALANCE}
           TENSOR_PARALLEL=${TP} PIPELINE_PARALLEL=${PP} EXPERT_PARALLEL=${EP}
           TRAIN_ITERS=${TRAIN_ITERS} GLOBAL_BATCH=${GLOBAL_BATCH} MICRO_BATCH=${MICRO_BATCH} SEQ_LEN=${SEQ_LEN}
-          LOSS_PROBE=${LOSS_PROBE}
+          LOSS_PROBE=${LOSS_PROBE} RECOMPUTE=${RECOMPUTE} NUM_LAYERS=${NUM_LAYERS:-}
           FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_FORK_SAFE=1
           NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET NCCL_SOCKET_IFNAME=^docker,lo,veth ;
           torchrun --nnodes=${NNODES} --nproc_per_node=${GPUS_PER_NODE}
