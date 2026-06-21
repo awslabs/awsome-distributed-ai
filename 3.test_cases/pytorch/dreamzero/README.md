@@ -81,9 +81,9 @@ H200, FSDP2 `full_shard` over EFA, ~6.9 s/step) reduced `train/loss` from
 checkpoint (16 shards + `.metadata`) with no corruption or save-time crashes —
 exercising the in-image checkpoint-save fix
 ([`dcp-save-gloo-coordinator.patch`](dcp-save-gloo-coordinator.patch)) at the
-full **16.48B**-parameter scale (the 14B Wan DiT backbone plus the action/state
-encoders and action head — `16,484,292,448` trainable params; "14B" is the
-backbone headline).
+full **16.48B**-parameter scale (the released checkpoint is published as 14B —
+its Wan DiT backbone — but trains `16,484,292,448` params once instantiated as a
+full WAM; see the walkthrough's "14B vs 16.48B vs 23B" note).
 This demonstrates the pipeline *trains and converges*, not a converged policy:
 300 steps is a short run (the released 14B checkpoint trained for 100K), so it is
 **not** a task-accuracy claim.

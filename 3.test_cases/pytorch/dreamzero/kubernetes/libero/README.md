@@ -10,12 +10,18 @@ matching. The
 model predicts both what will happen (video) and what to do (actions); the video
 prediction acts as a computational scaffold for action reasoning.
 
-> **14B vs 16.48B.** "14B" is the Wan video-diffusion **DiT backbone** — the
-> headline figure. The full trainable model is **16.48B** parameters once the
-> action/state encoders and the action-head projector are added on top of the
-> backbone (the live run reports `16,484,292,448`). This doc uses **14B** as the
-> name and **16.48B** where the exact instantiated size matters (FSDP sharding,
-> VRAM, checkpoint size).
+> **14B vs 16.48B vs 23B.** These all describe the same released checkpoint,
+> at different scopes:
+> - **14B** — the publisher's headline (the Wan video-diffusion **DiT backbone**;
+>   the HF model card lists "14 Billion" and base model `Wan2.1-I2V-14B-480P`).
+> - **16.48B** — the **trainable** parameters when the WAM is instantiated for
+>   full SFT: the DiT backbone together with the model's action/state encoders
+>   and action-head projector (the live run reports `16,484,292,448`).
+> - **23B** — the **on-disk** safetensors total, which also includes the frozen
+>   conditioning encoders (CLIP / UMT5-XXL text / Wan VAE) that are not trained.
+>
+> This doc uses **14B** as the name and **16.48B** where the exact trainable size
+> matters (FSDP sharding, VRAM, checkpoint size).
 
 This walkthrough packages the canonical customer workflow as a set of reusable
 Kubernetes manifests that run on Amazon EKS: take the released
