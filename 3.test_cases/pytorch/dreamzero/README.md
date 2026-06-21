@@ -94,7 +94,7 @@ exercising the in-image checkpoint-save fix
 ([`dcp-save-gloo-coordinator.patch`](dcp-save-gloo-coordinator.patch)) at the
 full **16.48B**-parameter scale (the released checkpoint is published as 14B —
 its Wan DiT backbone — but trains `16,484,292,448` params once instantiated as a
-full WAM; see the walkthrough's "14B vs 16.48B vs 23B" note).
+full WAM; see the walkthrough's [**14B vs 16.48B vs 23B**](kubernetes/libero/README.md#param-counts) note).
 This demonstrates the pipeline *trains and converges*, not a converged policy:
 300 steps is a short run (the released 14B checkpoint trained for 100K), so it is
 **not** a task-accuracy claim.

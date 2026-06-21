@@ -19,6 +19,8 @@ matching. The
 model predicts both what will happen (video) and what to do (actions); the video
 prediction acts as a computational scaffold for action reasoning.
 
+<a id="param-counts"></a>
+
 > **14B vs 16.48B vs 23B.** These all describe the same released checkpoint,
 > at different scopes:
 > - **14B** — the publisher's headline (the Wan video-diffusion **DiT backbone**;
