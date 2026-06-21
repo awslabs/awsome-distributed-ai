@@ -3,6 +3,15 @@
 
 # Continue SFT of DreamZero (14B World-Action Model) on LIBERO on Amazon EKS
 
+> **⚠️ Non-commercial model license.** This walkthrough uses the
+> [`GEAR-Dreams/DreamZero-DROID`](https://huggingface.co/GEAR-Dreams/DreamZero-DROID)
+> model, which is released under a **non-commercial license**
+> ([CC-BY-NC-4.0](https://spdx.org/licenses/CC-BY-NC-4.0)). Any production use of
+> this model needs additional approvals. Note the license terms before using this
+> model so you can make an informed decision about whether to use it. (This note
+> concerns the *model* only; the code in this repository is MIT-0 — see
+> [License](#license).)
+
 DreamZero is a **14B-parameter World-Action Model (WAM)** — a Wan-based,
 causal (autoregressive) video-diffusion Diffusion Transformer (DiT) that
 *jointly* denoises future video frames and future robot actions via flow
