@@ -59,7 +59,7 @@ NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE
 ```bash
 GDRCOPY_VERSION=v2.5.2
 EFA_INSTALLER_VERSION=1.48.0
-NVSHMEM_VERSION=v3.7.0-0
+NVSHMEM_VERSION=3.7.0
 DEEPEP_COMMIT=567632d
 GPU_ARCH="90;100" # Hopper + Blackwell by default; use "90" or "100" for a single-arch image
 TORCH_CUDA_ARCH_LIST="9.0;10.0" # Hopper + Blackwell by default; use "9.0" or "10.0" for a single-arch image
@@ -76,7 +76,7 @@ docker build --progress=plain -f ./deepep.Dockerfile \
       --build-arg="DEEPEP_COMMIT=${DEEPEP_COMMIT}" \
       --build-arg="GPU_ARCH=${GPU_ARCH}" \
       --build-arg "TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}" \
-      --build-arg NVCC_GENCODE=${NVCC_GENCODE}" \
+      --build-arg "NVCC_GENCODE=${NVCC_GENCODE}" \
       -t ${DEEPEP_CONTAINER_IMAGE_NAME_TAG} \
       .
 ```

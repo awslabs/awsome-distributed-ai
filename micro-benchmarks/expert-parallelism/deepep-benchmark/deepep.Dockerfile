@@ -73,7 +73,7 @@ RUN sed -i 's/[ #]\(.*StrictHostKeyChecking \).*/ \1no/g' /etc/ssh/ssh_config &&
 
 RUN curl https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
     && python3 /tmp/get-pip.py \
-    && pip3 install awscli nvidia-ml-py setuptools wheel build ninja
+    && pip3 install awscli nvidia-ml-py ninja
 
 #################################################
 ## Install NVIDIA GDRCopy
@@ -212,4 +212,4 @@ RUN --mount=type=bind,source=deepep_aws_efa.patch,target=/tmp/deepep_aws/deepep_
     if [ "${CUDA_VERSION_MAJOR}" -ge 13 ]; then \
         sed -i "s|f'{nvshmem_dir}/include']|f'{nvshmem_dir}/include', '${CUDA_HOME}/include/cccl']|" "setup.py"; \
     fi && \
-    NVSHMEM_DIR="${NVSHMEM_PREFIX}" pip3 install --no-build-isolation .
+    NVSHMEM_DIR="${NVSHMEM_PREFIX}" pip3 install -vv --no-build-isolation .
