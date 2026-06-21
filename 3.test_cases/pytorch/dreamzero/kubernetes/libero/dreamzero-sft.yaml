@@ -44,15 +44,18 @@ metadata:
     reference: rlinf
     example: dreamzero-sft
 spec:
-  # Run the launcher on the head once the Ray cluster is ready. The launcher
-  # copies itself from the mounted ConfigMap (if present) then execs training.
+  # Run the launcher on the head once the Ray cluster is ready. The launcher is
+  # mounted read-only from the dreamzero-sft-launcher ConfigMap at /tmp/scripts;
+  # run it directly from there (it is path-independent -- it cd's to
+  # /workspace/RLinf itself). A fallback to a baked-in copy is kept for images
+  # that ship the launcher under /workspace/eks/scripts.
   entrypoint: >-
     bash -c '
     if [ -f /tmp/scripts/run_dreamzero_sft_eks.sh ]; then
-      cp /tmp/scripts/run_dreamzero_sft_eks.sh /workspace/eks/scripts/run_dreamzero_sft_eks.sh;
-      chmod +x /workspace/eks/scripts/run_dreamzero_sft_eks.sh;
-    fi;
-    bash /workspace/eks/scripts/run_dreamzero_sft_eks.sh'
+      bash /tmp/scripts/run_dreamzero_sft_eks.sh;
+    else
+      bash /workspace/eks/scripts/run_dreamzero_sft_eks.sh;
+    fi'
   shutdownAfterJobFinishes: true
   ttlSecondsAfterFinished: 600
   # The KubeRay submitter pod runs `ray job submit` against the head. It does NOT
