@@ -68,15 +68,25 @@ SFT RayJob → DCP→`.pt` conversion → LIBERO simulator eval.
 
 ## Results / validation status
 
-The pipeline was validated **end-to-end** with a **1-step SFT smoke run** on 2×
-`p5en.48xlarge`: the KubeRay RayJob reached `SUCCEEDED`, a **209 GB sharded FSDP
-DCP checkpoint** was written, and it was converted to a single **91.7 GB `.pt`**
-on CPU and consumed by the LIBERO simulator eval. This proves the *infrastructure
-and pipeline* (image build, multi-node EFA/NCCL, FSDP2 sharded checkpointing,
-DCP→`.pt` conversion, and in-sim eval) — **not** task accuracy. A 1-step
-checkpoint yields `eval/success_once = 0.0`, which is **expected**; real accuracy
-requires a multi-step SFT run (raise `runner.max_steps`). For reference, RLinf's
-own LIBERO-Spatial SFT of the **5B** WAM
+**Infrastructure & pipeline** — validated **end-to-end** on 2× `p5en.48xlarge`:
+the KubeRay RayJob reached `SUCCEEDED`, a sharded FSDP2 DCP checkpoint was
+written, converted to a single `.pt` on CPU, and consumed by the LIBERO
+simulator eval (image build → multi-node EFA/NCCL → FSDP2 sharded checkpointing →
+DCP→`.pt` conversion → in-sim eval).
+
+**Training convergence** — a **300-step** SFT run on 2× `p5en.48xlarge` (16×
+H200, FSDP2 `full_shard` over EFA, ~6.9 s/step) reduced `train/loss` from
+**0.232 → 0.085** with a clean, monotonic-ish curve (`action_loss` and
+`dynamics_loss` both ~0.04–0.05 at the end). It wrote a **207 GB** DCP checkpoint
+(16 shards + `.metadata`) with **zero** `UnpicklingError` — exercising the
+in-image `dcp-save-gloo-coordinator.patch` at the full 16.48B-parameter scale.
+This demonstrates the pipeline *trains and converges*, not a converged policy:
+300 steps is a short run (the released 14B checkpoint trained for 100K), so it is
+**not** a task-accuracy claim.
+
+**Accuracy reference** — a 1-step checkpoint yields `eval/success_once = 0.0`
+(expected — it validates the eval machinery, not competence). For real accuracy,
+train longer; RLinf's own LIBERO-Spatial SFT of the **5B** WAM
 ([`RLinf-DreamZero-WAN2.2-5B-LIBERO-SFT-Step18000`](https://huggingface.co/RLinf/RLinf-DreamZero-WAN2.2-5B-LIBERO-SFT-Step18000))
 reaches **~96.7% `success_once` by step 18000** ([RLinf docs](https://rlinf.readthedocs.io/en/latest/rst_source/examples/embodied/sft_dreamzero.html)),
 confirming the recipe converges with sufficient steps.
