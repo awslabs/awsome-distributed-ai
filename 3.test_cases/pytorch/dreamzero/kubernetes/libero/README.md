@@ -10,6 +10,13 @@ matching. The
 model predicts both what will happen (video) and what to do (actions); the video
 prediction acts as a computational scaffold for action reasoning.
 
+> **14B vs 16.48B.** "14B" is the Wan video-diffusion **DiT backbone** — the
+> headline figure. The full trainable model is **16.48B** parameters once the
+> action/state encoders and the action-head projector are added on top of the
+> backbone (the live run reports `16,484,292,448`). This doc uses **14B** as the
+> name and **16.48B** where the exact instantiated size matters (FSDP sharding,
+> VRAM, checkpoint size).
+
 This walkthrough packages the canonical customer workflow as a set of reusable
 Kubernetes manifests that run on Amazon EKS: take the released
 [`GEAR-Dreams/DreamZero-DROID`](https://huggingface.co/GEAR-Dreams/DreamZero-DROID)
@@ -33,7 +40,7 @@ package that provides the WAM model code).
 > s/step) and wrote a **207 GB** sharded checkpoint with no corruption or
 > save-time crashes — exercising the in-image checkpoint-save fix
 > ([dcp-save-gloo-coordinator.patch](../../dcp-save-gloo-coordinator.patch); see
-> Troubleshooting) at the full 16.48B scale. That
+> [Troubleshooting](#troubleshooting)) at the full 16.48B scale. That
 > demonstrates the pipeline *trains and converges* — it is **not** a
 > task-accuracy claim: 300 steps is a short run (the released 14B checkpoint
 > trained for 100K). A 1-step checkpoint yields `eval/success_once = 0.0`, which
