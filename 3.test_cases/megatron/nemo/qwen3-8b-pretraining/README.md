@@ -27,29 +27,60 @@ Both clusters are compute-saturated with perfect communication overlap. AllReduc
 ## Quick Start
 
 > **Disk space:** The container build requires ~50 GB of disk space in TMPDIR.
-> `enroot import` needs `sudo` and TMPDIR pointing to FSx (not `/tmp`, which is too small).
+> `enroot import` needs `sudo` and TMPDIR pointing to FSx or another file system (not `/tmp`, which is too small).
 
-### H200 Cluster (p5en.48xlarge)
+### Clone this repo and change it its directory
+```bash
+git clone https://github.com/awslabs/awsome-distributed-ai.git
+cd awsome-distribued-ai
+```
+
+### Build the container
+```bash
+# Build container
+docker build -t qwen3-8b-h200:latest .
+
+# Setup directories to run
+mkdir -p /fsx/tmp && mkdir -p /fsx/ubuntu/qwen3-8b-pretraining/containers/
+
+# Create the squash file with Enroot
+sudo TMPDIR=/fsx/tmp ENROOT_TEMP_PATH=/fsx/tmp enroot import --output /fsx/ubuntu/qwen3-8b-pretraining/containers/nemo-efa-26.04.sqsh dockerd://qwen3-8b-h200:latest
+```
+
+### Prepare datasets
+```bash
+# export your Hugging Face token, if you have one
+export HF_TOKEN=<your token>
+
+# Prepare the dataset
+python preprocess.py
+```
+Without your Hugging Face token, the download will be throttled. 
+Datasets are transformed into binary mmap accessible files to avoid streaming data.
+
+### H200 Cluster (2x p5en.48xlarge)
 
 ```bash
-# 1. Build container
-cd h200/ && docker build -t qwen3-8b-h200:latest .
-sudo TMPDIR=/fsx/tmp ENROOT_TEMP_PATH=/fsx/tmp enroot import --output /fsx/ubuntu/qwen3-8b-pretraining/containers/nemo-efa-25.07.sqsh dockerd://qwen3-8b-h200:latest
+# 1. Change to directory
+cd h200
 
 # 2. Submit training job
-sbatch h200/slurm/run.sh
+sbatch slurm/run.sh
 ```
+Logs will be written to `/fsx/ubuntu/qwen3-8b-pretraining/logs`.
+Checkpoints are saved to `/fsx/ubuntu/qwen3-8b-pretraining/checkpoints`.
 
 ### B300 Cluster (p6-b300.48xlarge)
 
 ```bash
-# 1. Build container
-cd b300/ && docker build -t qwen3-8b-b300:latest .
-sudo TMPDIR=/fsx/tmp ENROOT_TEMP_PATH=/fsx/tmp enroot import --output /fsx/ubuntu/qwen3-8b-pretraining/containers/nemo-efa-26.02.sqsh dockerd://qwen3-8b-b300:latest
+# 1. Change to directory
+cd b300
 
 # 2. Submit training job
-sbatch b300/slurm/run.sh
+sbatch slurm/run.sh
 ```
+Logs will be written to `/fsx/ubuntu/qwen3-8b-pretraining/logs`.
+Checkpoints are saved to `/fsx/ubuntu/qwen3-8b-pretraining/checkpoints`.
 
 ## Model Architecture: Qwen3-8B
 
@@ -88,24 +119,25 @@ sbatch b300/slurm/run.sh
 |-----------|---------------------|------------------------|
 | GPUs | 16× H200 (141 GB HBM3) | 16× B300 (288 GB HBM3e) |
 | Parallelism | TP=1, PP=1, DP=16 | TP=1, PP=1, DP=16 |
-| Micro-batch size | 2 | 4 |
+| **Micro-batch size** | **2** | **4** |
 | Global batch size | 128 (grad_accum=4) | 128 (grad_accum=2) |
 | Sequence length | 4096 | 4096 |
 | Precision | BF16 | BF16 |
-| Gradient checkpointing | None | None |
+| **Gradient checkpointing** | Selective (core_attn only) | Selective (core_attn only) | 
 | Distributed optimizer | Yes (sharded Adam) | Yes (sharded Adam) |
 | Overlap grad reduce | Yes | Yes |
-| Framework | Megatron-Bridge (NeMo 25.07) | Megatron-Bridge (NeMo 26.02) |
+| Overlap param gather| Yes | Yes |
+| Framework | Megatron-Bridge (NeMo 26.04) | Megatron-Bridge (NeMo 26.04) |
 
 ## Key Findings
 
 1. **Both clusters are compute-saturated with perfect communication overlap.** AllReduce and AllGather are fully hidden behind compute — verified by single-GPU benchmarks showing lower TFLOP/s due to reduced batch arithmetic intensity.
 
-2. **Both clusters use the Megatron-Bridge recipe API.** NeMo 25.07 for H200; NeMo 26.02 for B300. Each container maximizes hardware utilization for its target architecture.
+2. **Both clusters use the Megatron-Bridge recipe API.** NeMo 26.04 for both H200 and B300.
 
 3. **Pure data parallelism is optimal** when the model fits in single-GPU memory. Distributed optimizer + overlapped grad reduce eliminate the memory penalty.
 
-4. **No gradient checkpointing needed on either cluster:** distributed optimizer shards Adam states across DP ranks, keeping H200 peak at ~114 GB (MBS=2) and B300 at ~173 GB (MBS=4).
+4. **Selective gradient checkpointing used on both clusters:** lightweight core_attn recompute is Megatron-Core's standard behavior, keeping H200 peak at ~114 GB (MBS=2) and B300 at ~173 GB (MBS=4).
 
 ## Hardware
 
@@ -115,25 +147,22 @@ sbatch b300/slurm/run.sh
 | Nodes | 2 | 2 |
 | GPUs per node | 8× H200 | 8× B300 |
 | GPU Memory | 141 GB HBM3 | 288 GB HBM3e |
-| Interconnect | EFA GDRDMA (3200 Gbps) | EFA GDRDMA (3200 Gbps) |
-| Intra-node | NVLink | NVLink |
+| Interconnect | EFA GDRDMA (3200 Gbps) | EFA GDRDMA (6400 Gbps) |
+| Intra-node | NVLink (900 GB/s) | NVLink (1800 GB/s) |
 
 ## Project Structure
 
 ```
 ├── README.md              ← You are here
+│   Dockerfile             ← NeMo 26.04 + EFA container
 ├── h200/
-│   ├── Dockerfile         ← NeMo 25.07 + EFA container
 │   ├── train.py           ← Megatron-Bridge training script
 │   └── slurm/
 │       └── run.sh         ← Slurm submission script
-├── b300/
-│   ├── Dockerfile         ← NeMo 26.02 + EFA container
-│   ├── train.py           ← Megatron-Bridge training script
-│   └── slurm/
-│       └── run.sh         ← Slurm submission script
-└── docs/
-    └── lessons-learned.md ← EFA, PyXis, and Megatron gotchas
+└── b300/
+    ├── train.py           ← Megatron-Bridge training script
+    └── slurm/
+        └── run.sh         ← Slurm submission script
 ```
 
 ## License
