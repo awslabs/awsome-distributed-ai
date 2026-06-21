@@ -139,12 +139,15 @@ only the action channel.
 
 ## Prerequisites
 
-### 1. An EKS cluster that can provision 2× `p5en.48xlarge` with EFA
+### 1. An EKS cluster that can schedule 2× `p5en.48xlarge` with EFA
 
-You need an Amazon EKS cluster with GPU autoscaling (e.g. Karpenter) able to
-launch **2× `p5en.48xlarge`** nodes, each with **8× H200** GPUs and **16 EFA
-NICs**, plus the NVIDIA GPU Operator (or device plugin) and EFA device plugin so
-pods can request `nvidia.com/gpu` and `vpc.amazonaws.com/efa`. Cluster-creation
+You need an Amazon EKS cluster that can schedule **2× `p5en.48xlarge`** nodes,
+each with **8× H200** GPUs and **16 EFA NICs** — provisioned however you like (a
+static managed node group or Karpenter for autoscaling, backed by a Capacity
+Block for ML or an On-Demand Capacity Reservation (ODCR); the workload is
+fixed-size, so autoscaling is a convenience, not a requirement). You also need
+the NVIDIA GPU Operator (or device plugin) and EFA device plugin so pods can
+request `nvidia.com/gpu` and `vpc.amazonaws.com/efa`. Cluster-creation
 references live in
 [`1.architectures/4.amazon-eks`](../../../../../1.architectures/4.amazon-eks).
 
