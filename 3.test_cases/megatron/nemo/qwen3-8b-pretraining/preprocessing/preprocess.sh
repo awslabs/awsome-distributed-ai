@@ -31,7 +31,7 @@ python3 -m venv /fsx/ubuntu/qwen3-8b-pretraining/venv
 source /fsx/ubuntu/qwen3-8b-pretraining/venv/bin/activate
 
 PYTHON=/fsx/ubuntu/qwen3-8b-pretraining/venv/bin/python
-SCRIPT_DIR=$SLURM_SUBMIT_DIR
+SCRIPT_DIR=$SLURM_SUBMIT_DIR/preprocessing/
 SCRIPT="${SCRIPT_DIR}/preprocess.py"
 
 pip install -r $SCRIPT_DIR/requirements.txt

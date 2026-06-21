@@ -35,28 +35,28 @@ git clone https://github.com/awslabs/awsome-distributed-ai.git
 cd awsome-distribued-ai
 ```
 
-### Build the container
-```bash
-# Build container
-docker build -t qwen3-8b-h200:latest .
-
-# Setup directories to run
-mkdir -p /fsx/tmp && mkdir -p /fsx/ubuntu/qwen3-8b-pretraining/containers/
-
-# Create the squash file with Enroot
-sudo TMPDIR=/fsx/tmp ENROOT_TEMP_PATH=/fsx/tmp enroot import --output /fsx/ubuntu/qwen3-8b-pretraining/containers/nemo-efa-26.04.sqsh dockerd://qwen3-8b-h200:latest
-```
-
-### Prepare datasets
+### Prepare datasets (allenai/c4/en)
 ```bash
 # export your Hugging Face token, if you have one
 export HF_TOKEN=<your token>
 
 # Prepare the dataset
-python preprocess.py
+sbatch preprocessing/preprocess.sh
 ```
-Without your Hugging Face token, the download will be throttled. 
-Datasets are transformed into binary mmap accessible files to avoid streaming data.
+Without your Hugging Face token, the download will be throttled. The script requires a token. 
+Datasets are tokenized and transformed into binary mmap accessible files to avoid streaming data (`.idx` and `.bin` files).
+
+### Build the container
+```bash
+# Build container
+docker build -t qwen3-8b-pretraining:latest .
+
+# Setup directories to run
+mkdir -p /fsx/tmp && mkdir -p /fsx/ubuntu/qwen3-8b-pretraining/containers/
+
+# Create the squash file with Enroot
+sudo TMPDIR=/fsx/tmp ENROOT_TEMP_PATH=/fsx/tmp enroot import --output /fsx/ubuntu/qwen3-8b-pretraining/containers/nemo-efa-26.04.sqsh dockerd://qwen3-8b-pretraining:latest
+```
 
 ### H200 Cluster (2x p5en.48xlarge)
 
@@ -70,7 +70,7 @@ sbatch slurm/run.sh
 Logs will be written to `/fsx/ubuntu/qwen3-8b-pretraining/logs`.
 Checkpoints are saved to `/fsx/ubuntu/qwen3-8b-pretraining/checkpoints`.
 
-### B300 Cluster (p6-b300.48xlarge)
+### B300 Cluster (2x p6-b300.48xlarge)
 
 ```bash
 # 1. Change to directory
