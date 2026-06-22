@@ -113,6 +113,12 @@ Use the provided script for automated setup:
 
 ```bash
 cd awsome-distributed-training/4.validation_and_observability/4.prometheus-grafana/eks-managed-observability
+
+# (Optional) Provide custom DCGM metrics. If a custom-dcgm-metrics.csv file
+# exists in this directory, the script builds those metrics into DCGM Exporter.
+# A reference file is provided at ../dcgm-metrics.csv:
+# cp ../dcgm-metrics.csv custom-dcgm-metrics.csv
+
 ./deploy-obs.sh
 ```
 
@@ -121,6 +127,8 @@ The script will prompt for:
 - AMP/AMG region (must support Amazon Managed Grafana)
 - Cluster name
 - CloudFormation stack name
+
+**Note:** Custom DCGM metrics are optional. If a `custom-dcgm-metrics.csv` file exists in this directory, the script creates a `custom-dcgm-metrics` ConfigMap and points DCGM Exporter at it. If the file is absent, the script clears any custom override and leaves DCGM Exporter on the GPU Operator's built-in default metrics.
 
 ### Manual Deployment
 
@@ -296,9 +304,15 @@ kubectl logs -n adot-col -l app.kubernetes.io/component=opentelemetry-collector 
 - Metrics are scraped every 30 seconds by default
 - SigV4 authentication is used for AMP remote write
 
-### 7. Configure Custom DCGM Metrics
+### 7. Configure Custom DCGM Metrics (Optional)
 
-Enable advanced GPU metrics including XID errors, power violations, thermal violations, and profiling metrics.
+Enable advanced GPU metrics including XID errors, power violations, thermal violations, and profiling metrics. This step is optional — if you skip it, DCGM Exporter uses the GPU Operator's built-in default metrics.
+
+A reference metrics file is provided at [`../dcgm-metrics.csv`](../dcgm-metrics.csv). Copy it into this directory as `custom-dcgm-metrics.csv` and edit as needed:
+
+```bash
+cp ../dcgm-metrics.csv custom-dcgm-metrics.csv
+```
 
 #### For GPU Operator Installation:
 
@@ -311,7 +325,7 @@ kubectl create configmap custom-dcgm-metrics \
 # Update GPU Operator to use custom metrics
 helm upgrade gpu-operator nvidia/gpu-operator \
   -n gpu-operator \
-  --reuse-values \
+  --reset-then-reuse-values \
   --set dcgmExporter.config.name=custom-dcgm-metrics
 
 # Restart DCGM Exporter to apply changes
@@ -330,7 +344,7 @@ kubectl create configmap custom-dcgm-metrics \
 # Upgrade DCGM Exporter to use custom metrics
 helm upgrade dcgm-exporter gpu-helm-charts/dcgm-exporter \
   -n dcgm-exporter \
-  --reuse-values \
+  --reset-then-reuse-values \
   --set-file arguments.configMap.data=custom-dcgm-metrics.csv
 
 # Restart DCGM Exporter

@@ -358,24 +358,37 @@ echo ""
 echo -e "${YELLOW}Step 7: Configure Custom DCGM Metrics${NC}"
 echo ""
 
-# Create ConfigMap
-kubectl create configmap custom-dcgm-metrics \
-  --from-file=dcgm-metrics.csv=custom-dcgm-metrics.csv \
-  -n gpu-operator 2>/dev/null || echo "ConfigMap already exists, deleting and recreating..."
+# If a local custom-dcgm-metrics.csv exists, create a ConfigMap from it and
+# point DCGM Exporter at it. Otherwise leave the exporter on the GPU Operator's
+# built-in default metrics rather than pointing it at a non-existent ConfigMap
+# (which would wedge the pod in Init:0/1 on a failed mount).
+if [ -f "custom-dcgm-metrics.csv" ]; then
+    echo "Using custom DCGM metrics from: custom-dcgm-metrics.csv"
 
-if [ $? -ne 0 ]; then
-    kubectl delete configmap custom-dcgm-metrics -n gpu-operator
+    # Recreate the ConfigMap. The key must be exactly dcgm-metrics.csv for the
+    # exporter to pick it up.
+    kubectl delete configmap custom-dcgm-metrics -n gpu-operator --ignore-not-found
     kubectl create configmap custom-dcgm-metrics \
       --from-file=dcgm-metrics.csv=custom-dcgm-metrics.csv \
       -n gpu-operator
-fi
 
-# Update GPU Operator
-echo "Updating GPU Operator..."
-helm upgrade gpu-operator nvidia/gpu-operator \
-  -n gpu-operator \
-  --reuse-values \
-  --set dcgmExporter.config.name=custom-dcgm-metrics
+    echo "Updating GPU Operator to use custom metrics ConfigMap..."
+    helm upgrade gpu-operator nvidia/gpu-operator \
+      -n gpu-operator \
+      --reset-then-reuse-values \
+      --set dcgmExporter.config.name=custom-dcgm-metrics
+else
+    echo -e "${YELLOW}No custom-dcgm-metrics.csv found; using GPU Operator default DCGM metrics.${NC}"
+
+    # Drop any stale custom ConfigMap and clear the override (=null removes the
+    # key) so the exporter reverts to the operator's built-in default metrics.
+    kubectl delete configmap custom-dcgm-metrics -n gpu-operator --ignore-not-found
+    echo "Updating GPU Operator to use default metrics..."
+    helm upgrade gpu-operator nvidia/gpu-operator \
+      -n gpu-operator \
+      --reset-then-reuse-values \
+      --set dcgmExporter.config.name=null
+fi
 
 # Restart DCGM Exporter
 echo "Restarting DCGM Exporter..."
