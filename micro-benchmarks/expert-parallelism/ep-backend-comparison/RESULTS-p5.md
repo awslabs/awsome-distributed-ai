@@ -26,18 +26,19 @@ Same harness and matched config as [`RESULTS.md`](RESULTS.md) (B300), run on `p5
 | NVSHMEM (DeepEP) | internode (RDMA) | 39.6 | 39.2 |
 | NVSHMEM (DeepEP) | low-latency | 6.5 | 15.6 |
 | UCCL (UCCL-EP) | internode (RDMA) | 29.9 | 26.7 |
-| UCCL (UCCL-EP) | low-latency | n/a¹ | n/a¹ |
+| UCCL (UCCL-EP) | low-latency | 3.1¹ | 3.7¹ |
 
 | Reference (NCCL all-to-all) | Metric | GB/s |
 |---|---|---:|
 | busbw at EP payload (~64 MiB) | matched-size | 40.4 |
 | busbw peak (asymptotic) | peak | 51.1 |
 
-¹ Same as B300: UCCL's low-latency test aborts in its FP8 correctness check at 64 ranks
-(`diff ≈ 9e-4 – 1.8e-3` vs the `< 9e-4` FP8 tolerance) before the timed phase — so this is a
-**rank-scale** failure in UCCL's FP8 low-latency dispatch, independent of GPU generation
-(it also fails on B300 at 64 ranks and passes at 32 on both). See [`RESULTS.md`](RESULTS.md) for
-the exact check.
+¹ Same as B300, the standard FP8 low-latency path (`round_scale=False`) **passes** correctness at
+64 ranks (max diff 1.07e-4 vs the 9e-4 FP8 tolerance — 8× margin) and gives these numbers. The
+unpatched test aborts *first* on the coarser `round_scale=True` FP8 sub-case, which upstream DeepEP
+exempts via `if not round_scale`; matching that gating recovers the bandwidth. The per-sub-case
+errors are **identical to B300** (the reference is generated from fixed seeds), confirming this is a
+quantization-recipe property, not GPU-arch. See [`RESULTS.md`](RESULTS.md) for the sub-case table.
 
 ## 4 nodes — 32 ranks
 
@@ -58,14 +59,16 @@ the exact check.
 - **The winner flips by GPU generation.** On **B300** (see `RESULTS.md`) UCCL matches/beats
   NVSHMEM at 4 nodes and clearly wins at 8. On **P5/H100 the order reverses at both scales**:
   NVSHMEM leads UCCL on internode (4n 44/46 vs 38/30; 8n **40/39 vs 30/27** GB/s RDMA) and on
-  low-latency. UCCL-EP's kernels lean on SM90+ features tuned for Blackwell; on H100 they trail
-  NVSHMEM here. **Pick the dispatcher per target GPU, not globally.**
+  low-latency (8n LL 6.5/15.6 vs 3.1/3.7). UCCL-EP's kernels lean on SM90+ features tuned for
+  Blackwell; on H100 they trail NVSHMEM here. **Pick the dispatcher per target GPU, not globally.**
 - **Absolute bandwidth is ~half of B300.** P5 internode tops out ~40–46 GB/s (RDMA) and the NCCL
   reference ~40–45 (matched) / ~51–54 (peak), versus ~73–96 / ~103–117 on B300 — a combination of
   EFA throughput and NVLink-generation differences.
-- **UCCL low-latency FP8 failure is rank-scale, not arch.** It passes at 32 ranks (P5: ~5 GB/s)
-  and aborts at 64 ranks on **both** P5 and B300 — so it tracks rank count (combine sums more
-  cross-rank FP8-dequantized contributions), not the GPU.
+- **UCCL low-latency's 64-rank abort is a test-gate divergence, not a kernel fault.** The standard
+  `round_scale=False` FP8 path passes at 64 ranks (max diff 1.07e-4, identical on P5 and B300); the
+  default test aborts only on the coarser `round_scale=True` sub-case that DeepEP exempts via
+  `if not round_scale`. Matching that gating recovers the LL bandwidth (P5 3.1/3.7, B300 28.4/24.8).
+  See [`RESULTS.md`](RESULTS.md) for the sub-case breakdown.
 
 ## Reproduce
 

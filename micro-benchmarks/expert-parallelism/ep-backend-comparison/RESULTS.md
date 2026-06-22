@@ -33,35 +33,46 @@ of the same matrix — and the cross-generation contrast (the winner flips by GP
 | NVSHMEM (DeepEP) | internode (RDMA) | 83.7 | 72.7 |
 | NVSHMEM (DeepEP) | low-latency | 9.2 | 18.6 |
 | UCCL (UCCL-EP) | internode (RDMA) | 93.4 | 90.7 |
-| UCCL (UCCL-EP) | low-latency | n/a¹ | n/a¹ |
+| UCCL (UCCL-EP) | low-latency | 28.4¹ | 24.8¹ |
 
-¹ No bandwidth: the UCCL low-latency test aborts in its FP8 correctness check **before** the
-timed phase. Measured FP8 round-trip error `diff ≈ 9.1e-4 – 1.8e-3` (sampled across ranks) vs the
-test's `< 9e-4` FP8 tolerance → assertion fails. See the note below.
+¹ The standard FP8 low-latency path (`round_scale=False`) **passes** correctness at 64 ranks and
+gives these numbers. The unpatched test still aborts *first* on the coarser `round_scale=True` FP8
+sub-case — which upstream DeepEP exempts from the same check — so reproducing with the committed
+manifest shows the abort; matching DeepEP's gating recovers the bandwidth. See the note below.
 
 | Reference (NCCL all-to-all) | Metric | GB/s |
 |---|---|---:|
 | busbw at EP payload (~64 MiB) | matched-size | 72.5 |
 | busbw peak (asymptotic) | peak | 103.1 |
 
-> **UCCL low-latency at 64 ranks did not complete — FP8 correctness check.**
-> `bench/test_low_latency.py` validates a full dispatch→(identity GEMM)→combine round-trip against
-> the closed-form reference `current_x · Σ(top-k gate weights)`, using the global similarity error
-> `calc_diff(x,y) = 1 − 2·⟨x,y⟩ / (‖x‖²+‖y‖²)`, and asserts:
+> **UCCL low-latency at 64 ranks: the abort is a test-gate divergence, not a kernel precision regression.**
+> `bench/test_low_latency.py` validates a dispatch→(identity GEMM)→combine round-trip against the
+> closed-form reference `current_x · Σ(top-k gate weights)`, using the global similarity error
+> `calc_diff(x,y) = 1 − 2·⟨x,y⟩ / (‖x‖²+‖y‖²)`. UCCL asserts `diff < 9e-4` for **every** FP8
+> sub-case:
 >
 > ```python
-> assert diff < (9e-4 if dispatch_use_fp8_case else 1e-5)   # test_low_latency.py:373
+> assert diff < (9e-4 if dispatch_use_fp8_case else 1e-5)   # uccl ep/bench/test_low_latency.py:373
 > ```
 >
-> At 64 ranks the **FP8** path measured `diff ≈ 9.1e-4 – 1.8e-3` (sampled across ranks: 9.08e-4,
-> 1.03e-3, 1.18e-3, 1.30e-3, 1.80e-3), i.e. ~1.0–2× over the `9e-4` FP8 tolerance, so the assert
-> trips during the correctness phase — **before** the bandwidth loop runs (hence no number). The
-> same test **passes at 32 ranks**, and NVSHMEM's low-latency (which also exercises FP8) **passes
-> at 64 ranks**, so this is specific to UCCL's FP8 low-latency dispatch at this scale. The
-> threshold is a fixed constant (it does not widen with rank count); combine sums more cross-rank,
-> FP8-dequantized contributions per token as ranks grow, so the accumulated quantization error
-> edges past `9e-4`. Reported as a real numerical-tolerance result, not worked around (loosening
-> the assert or disabling FP8 would change the matched config every other cell uses).
+> whereas upstream DeepEP gates the *same* assert with `if not round_scale`
+> (`deepseek-ai/DeepEP tests/test_low_latency.py:178`) — it deliberately exempts the coarse,
+> power-of-2-scale (`round_scale=True`) FP8 path. Instrumenting the run to log every sub-case's error
+> at 64 ranks (256 samples per sub-case across the 64 ranks) shows the split exactly:
+>
+> | dispatch_use_fp8 | round_scale | max diff | tolerance | result |
+> |---|---|---:|---:|---|
+> | False (bf16) | — | 1.7e-6 | 1e-5 | pass |
+> | True | **False** | **1.07e-4** | 9e-4 | **pass (8× margin)** |
+> | True | **True** | **1.80e-3** | 9e-4 | fail |
+>
+> So the **standard `round_scale=False` FP8 path is numerically correct at 64 ranks** (and at 32);
+> the default test aborts only because UCCL applies the tight FP8 tolerance to the `round_scale=True`
+> sub-case that DeepEP does not gate. `round_scale=True` is a coarser (power-of-2 / UE8M0-family)
+> scaling recipe whose larger quantization error is expected — hence DeepEP's exemption. The
+> dispatch/combine numbers in the table are the `round_scale=False` FP8 timed phase, recovered by
+> matching DeepEP's gating (skipping the `round_scale=True` assert) — **not** by loosening the
+> tolerance on the path the table measures.
 
 ## 4 nodes — 32 ranks (scaling reference)
 
@@ -84,9 +95,10 @@ test's `< 9e-4` FP8 tolerance → assertion fails. See the note below.
   dispatch 93 vs 84 and **combine 91 vs 73 GB/s (RDMA)** — i.e. UCCL's combine degrades far less
   as the RDMA peer count doubles. Bandwidth drops with scale for both backends (more RDMA peers,
   more contention).
-- **Low-latency (decode path): UCCL wins big where it runs.** At 32 ranks UCCL delivers ~4×
-  dispatch and ~1.8× combine over NVSHMEM (44/45 vs 11/25). At 64 ranks UCCL's FP8 low-latency
-  correctness check fails (see note), so only NVSHMEM produces a number (9/19).
+- **Low-latency (decode path): UCCL wins.** At 32 ranks UCCL delivers ~4× dispatch and ~1.8×
+  combine over NVSHMEM (44/45 vs 11/25). At 64 ranks UCCL leads on both legs too — **28.4/24.8 vs
+  9.2/18.6** (~3× dispatch, ~1.3× combine) — once the test's `round_scale=True` gate (which DeepEP
+  exempts) is matched; the standard `round_scale=False` FP8 path passes at this scale (see note).
 - **NCCL is a reference, not an equal.** `alltoall_perf` busbw is pure data movement (no token
   routing / combine-reduction) and is measured differently from the EP kernels' RDMA-only,
   NVL-overlapped bandwidth — so the EP numbers can sit *above* the NCCL matched-size busbw (e.g.
