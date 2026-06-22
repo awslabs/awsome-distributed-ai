@@ -40,7 +40,10 @@ NS="${NS:-kimi-k2-bench}"
 IMG="${IMG:?set IMG to your megatron-bridge-uccl ECR image URI}"
 MODEL="${MODEL:-dsv3}"
 GPUS_PER_NODE=8
-EFA_PER_NODE=16
+# Node type + EFA NIC count per node. Defaults to p6-b300 (16 EFA); set INSTANCE_TYPE=
+# p5.48xlarge EFA_PER_NODE=32 for the H100 runs.
+INSTANCE_TYPE="${INSTANCE_TYPE:-p6-b300.48xlarge}"
+EFA_PER_NODE="${EFA_PER_NODE:-16}"
 WORLD=$(( NNODES * GPUS_PER_NODE ))
 
 # Parallelism. TP MUST be >1 (recipe enables sequence_parallel). EP = DP*TP = 32 (ETP=1) at 256 GPU.
@@ -72,10 +75,13 @@ STAGE="${STAGE:-/fsx/kimi-k2}"
 case "${MODEL}" in
   dsv3)       DEFAULT_BENCH="${STAGE}/bench_dsv3_pretrain.py" ;;
   kimi-k2)    DEFAULT_BENCH="${STAGE}/bench_kimi_k2_pretrain.py" ;;
-  qwen3-235b) DEFAULT_BENCH="${STAGE}/bench_qwen3_pretrain.py" ;;
-  *) echo "MODEL must be 'dsv3', 'kimi-k2', or 'qwen3-235b', got '${MODEL}'" >&2; exit 2 ;;
+  # Both qwen3 sizes share one bench, differentiated by QWEN3_SIZE (235b on B300, 30b on H100).
+  qwen3-235b) DEFAULT_BENCH="${STAGE}/bench_qwen3_pretrain.py"; QWEN3_SIZE="${QWEN3_SIZE:-235b}" ;;
+  qwen3-30b)  DEFAULT_BENCH="${STAGE}/bench_qwen3_pretrain.py"; QWEN3_SIZE="${QWEN3_SIZE:-30b}" ;;
+  *) echo "MODEL must be 'dsv3', 'kimi-k2', 'qwen3-235b', or 'qwen3-30b', got '${MODEL}'" >&2; exit 2 ;;
 esac
 BENCH_PY="${BENCH_PY:-${DEFAULT_BENCH}}"
+QWEN3_SIZE="${QWEN3_SIZE:-}"
 
 # No-overwrite run tree on Lustre. One CAMPAIGN_ID groups a whole campaign.
 CAMPAIGN_ID="${CAMPAIGN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
@@ -136,7 +142,7 @@ spec:
   hostname: ${JOB}-${R}
   subdomain: ${JOB}
   nodeSelector:
-    node.kubernetes.io/instance-type: p6-b300.48xlarge
+    node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
   tolerations:
     - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
     - {key: workload, value: bench, operator: Equal, effect: NoSchedule}
@@ -152,7 +158,7 @@ spec:
           MOE_DISPATCHER=${ARM} MOE_A2A_OVERLAP=${MOE_A2A_OVERLAP} MOE_FORCE_BALANCE=${MOE_FORCE_BALANCE}
           TENSOR_PARALLEL=${TP} PIPELINE_PARALLEL=${PP} EXPERT_PARALLEL=${EP}
           TRAIN_ITERS=${TRAIN_ITERS} GLOBAL_BATCH=${GLOBAL_BATCH} MICRO_BATCH=${MICRO_BATCH} SEQ_LEN=${SEQ_LEN}
-          LOSS_PROBE=${LOSS_PROBE} RECOMPUTE=${RECOMPUTE} NUM_LAYERS=${NUM_LAYERS:-}
+          LOSS_PROBE=${LOSS_PROBE} RECOMPUTE=${RECOMPUTE} NUM_LAYERS=${NUM_LAYERS:-} QWEN3_SIZE=${QWEN3_SIZE}
           FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_FORK_SAFE=1
           NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET NCCL_SOCKET_IFNAME=^docker,lo,veth ;
           torchrun --nnodes=${NNODES} --nproc_per_node=${GPUS_PER_NODE}

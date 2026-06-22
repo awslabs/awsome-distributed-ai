@@ -38,6 +38,8 @@ export GLOBAL_BATCH="${GLOBAL_BATCH:-256}"
 export SEQ_LEN="${SEQ_LEN:-4096}"
 export MOE_FORCE_BALANCE="${MOE_FORCE_BALANCE:-on}"
 export RECOMPUTE="${RECOMPUTE:-}"     # full|selective|"" — held identical across arms
+export INSTANCE_TYPE="${INSTANCE_TYPE:-p6-b300.48xlarge}"  # p5.48xlarge for H100 runs
+export EFA_PER_NODE="${EFA_PER_NODE:-16}"                  # 32 for p5.48xlarge
 RUN_TIMEOUT="${RUN_TIMEOUT:-2400}"     # seconds to wait for one run's rank-0 to finish
 
 EPS="${EPS:-16 32}"
@@ -56,7 +58,14 @@ PARSER="${SELF_DIR}/../../bench/parse-runs.py"
 BENCH_PY_SRC="${SELF_DIR}/bench_qwen3_pretrain.py"
 GIT_REV="$(git -C "${SELF_DIR}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 export GIT_REV
-MODEL=qwen3-235b
+# MODEL selects the Qwen3 size (235b on B300, 30b on H100/p5). The bench is shared; the size +
+# the HF config to prestage are derived here and threaded to run-ab-rawpods via QWEN3_SIZE.
+MODEL="${MODEL:-qwen3-235b}"
+case "${MODEL}" in
+  qwen3-235b) export QWEN3_SIZE=235b; HF_MODEL_ID="Qwen/Qwen3-235B-A22B" ;;
+  qwen3-30b)  export QWEN3_SIZE=30b;  HF_MODEL_ID="Qwen/Qwen3-30B-A3B" ;;
+  *) echo "MODEL must be qwen3-235b or qwen3-30b, got ${MODEL}"; exit 2 ;;
+esac
 STAGE=/fsx/kimi-k2
 HF_CACHE="${STAGE}/hf-cache"
 K="kubectl --context ${CTX} -n ${NS}"
@@ -115,7 +124,7 @@ uexec "ls -la ${STAGE}/bench_qwen3_pretrain.py ${STAGE}/bench/parse-runs.py"
 # util pod has no egress this is a no-op and runs fall back to online (HF_HUB_OFFLINE=0).
 HF_OFFLINE=0
 echo "== staging Qwen3 HF config/tokenizer to ${HF_CACHE} (config only) =="
-if uexec "HF_HOME=${HF_CACHE} python3 -c \"from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-235B-A22B', allow_patterns=['*.json','*.txt','tokenizer*','merges*','vocab*'])\" "; then
+if uexec "HF_HOME=${HF_CACHE} python3 -c \"from huggingface_hub import snapshot_download; snapshot_download('${HF_MODEL_ID}', allow_patterns=['*.json','*.txt','tokenizer*','merges*','vocab*'])\" "; then
   HF_OFFLINE=1
   echo "   HF config staged — runs will use HF_HUB_OFFLINE=1"
 else

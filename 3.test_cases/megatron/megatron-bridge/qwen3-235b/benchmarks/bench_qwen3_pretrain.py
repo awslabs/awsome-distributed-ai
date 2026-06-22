@@ -50,8 +50,16 @@ def build_config():
     # ConfigContainer (mock data on, Qwen3-235B-A22B 94-layer/128-expert provider,
     # TP4/PP16/CP2/EP8 defaults) and calls apply_flex_dispatcher_backend(cfg.model,
     # "deepep") itself at the end. We build it, then MUTATE cfg fields for our A/B shape.
-    from megatron.bridge.recipes.qwen.qwen3_moe import qwen3_235b_a22b_pretrain_config
+    from megatron.bridge.recipes.qwen import qwen3_moe
     from megatron.bridge.training.flex_dispatcher_backend import apply_flex_dispatcher_backend
+
+    # QWEN3_SIZE selects the shipped recipe (235b default; 30b = Qwen3-30B-A3B, which fits
+    # H100-80GB so it's used for the p5.48xlarge runs). Both are 128-expert top-8 Qwen3 MoE;
+    # 30b has hidden 2048 / 48 layers vs 235b's 4096 / 94.
+    _size = os.environ.get("QWEN3_SIZE", "235b").lower()
+    _recipes = {"235b": "qwen3_235b_a22b_pretrain_config", "30b": "qwen3_30b_a3b_pretrain_config"}
+    if _size not in _recipes:
+        raise ValueError("QWEN3_SIZE must be one of %s, got %r" % (sorted(_recipes), _size))
 
     # Parallelism — manifest contract. 64-GPU (8x p6-b300) EP sweep:
     #   EP16: TP8 * PP4 * DP2 (CP1) -> EP16 divides TP*DP=16 and 128 experts (8/rank).
@@ -66,7 +74,7 @@ def build_config():
     micro_batch = _int("MICRO_BATCH", 1)
     seq_len = _int("SEQ_LEN", 4096)
 
-    cfg = qwen3_235b_a22b_pretrain_config()   # no-arg; mock data by default
+    cfg = getattr(qwen3_moe, _recipes[_size])()   # no-arg; mock data by default
     m = cfg.model
 
     # ---- override parallelism / iters / batch for our shape --------------------
@@ -226,9 +234,9 @@ def build_config():
             cfg.logger.log_interval = 1
 
     logger.info(
-        "bench cfg: dispatcher=%s overlap=%s | L=%s h=%s experts=%s topk=%s | "
+        "bench cfg: size=%s dispatcher=%s overlap=%s | L=%s h=%s experts=%s topk=%s | "
         "TP%s PP%s EP%s CP%s | iters=%s gbs=%s mbs=%s seq=%s",
-        dispatcher, overlap, m.num_layers, m.hidden_size, m.num_moe_experts,
+        _size, dispatcher, overlap, m.num_layers, m.hidden_size, m.num_moe_experts,
         m.moe_router_topk, tp, pp, ep, cp, train_iters, global_batch, micro_batch, seq_len,
     )
     return cfg
