@@ -3,122 +3,144 @@
 
 # Qwen3-235B-A22B — NCCL vs DeepEP+UCCL vs DeepEP+NVSHMEM — Benchmark Results
 
-Three-way MoE token-dispatcher comparison on **`p6-b300`**: NCCL all-to-all (baseline) vs
-DeepEP over **UCCL** (EFA-native) vs DeepEP over **NVSHMEM-libfabric** (NVIDIA DeepEP,
+Three-way MoE token-dispatcher comparison on **`p6-b300`** (B300): NCCL all-to-all (baseline)
+vs DeepEP over **UCCL** (EFA-native) vs DeepEP over **NVSHMEM-libfabric** (NVIDIA DeepEP,
 EFA-patched). The only toggle that changes between arms is the dispatcher / image; everything
 else (Qwen3-235B-A22B 128-expert recipe, mock data, seq 4096, global batch, bf16, parallelism,
-seed, EFA env, recompute) is held fixed within a run. Metric of record: **mean
-training-iteration time** over the steady state (first 4 of 12 iters dropped), plus analytical
-`MODEL TFLOP/s/GPU` and derived `tok/s = global_batch × seq_len / iter_time`.
+seed, EFA env, recompute) is held fixed within a run. Metric of record: **mean training-iteration
+time** over the steady state (first 4 of 12 iters dropped), plus analytical `MODEL TFLOP/s/GPU`
+and derived `tok/s = global_batch × seq_len / iter_time`.
+
+There are **two campaigns**: the **primary** 8-node EP32-at-PP2 run (cleaner regime, below) and a
+**secondary** 4-node reference (capacity-constrained, near the bottom). Read the primary; the
+secondary is retained to show how the regime (PP depth + recompute) changes the conclusion.
+
+---
+
+## Primary — 8 nodes, EP32 @ PP2 (recompute=selective)
 
 | Field | Value |
 |---|---|
-| Date | 2026-06-21 |
-| Hardware | **4 × `p6-b300.48xlarge`** (32× B300, 8 GPU + 16 EFA / node), EKS `ml-shared` (us-west-2) |
-| Model | Qwen3-235B-A22B — 128 experts, top-8, 94 layers, hidden 4096, MoE FFN 1536, bf16 |
-| World | 32 ranks, TP8, ETP1, balanced routing, `RECOMPUTE=full`, overlap=off |
-| EP sweep | EP16 (PP2/DP2) · EP32 (PP1/DP4) — `PP = WORLD/EP`, WORLD=32 |
-| Global batch | 128 (12 iters/run, 8 steady) |
-| UCCL image | `megatron-bridge-uccl:nemo-26.04.01-uccl-0dc87eb` (UCCL `0dc87eb`) |
-| NVSHMEM image | `megatron-bridge-uccl:nemo-26.04.01-deepep-nvshmem-567632d-cu13` (DeepEP `567632d`, NVSHMEM v3.7.0-0, libfabric/EFA) |
-| Bridge / Core | megatron-bridge 0.4.2 / megatron-core 0.17.1 (nemo:26.04.01) |
-| Campaign | `qwen3final-20260621T0215Z` (raw per-run `index.csv` is regenerated locally by `../bench/parse-runs.py`; `*.csv` is gitignored repo-wide) |
+| Hardware | **8 × `p6-b300.48xlarge`** (64× B300, 8 GPU + 16 EFA / node), EKS `ml-shared` (us-west-2) |
+| World | 64 ranks, TP8, ETP1, balanced routing, **`RECOMPUTE=selective`** |
+| Parallelism | **EP32 = TP8/PP2/DP4** · EP16 = TP8/PP4/DP2 (`PP = WORLD/EP`, WORLD=64) |
+| Global batch | 256 (12 iters/run, 8 steady) |
+| Images | `…-uccl-0dc87eb` (UCCL) · `…-deepep-nvshmem-567632d-cu13` (NVSHMEM v3.7.0-0, DeepEP 567632d, libfabric/EFA) |
+| Campaign | `qwen3-8n-ep32pp2-20260621` |
 
-> **Why 4 nodes, not 8.** The plan targeted 8× p6-b300 (EP32 at TP8/PP2/DP4). At run time
-> the shared `ml-shared` cluster had only 6 of its 8 B300 nodes free (2 held by another
-> team), and EP32 cannot tile 6 nodes with integer PP. The whole sweep was therefore run on
-> **4 nodes (32 GPU)**, where both EP16 (PP2/DP2) and EP32 (PP1/DP4) tile cleanly and the
-> EP degree — the variable the all-to-all turns on — is preserved. EP32 at PP1 needs
-> `RECOMPUTE=full` to fit; that recompute is applied to **all** arms and **both** EPs so the
-> per-cell 3-way comparison stays clean (see caveats).
-
-## Measured result — mean iter time (lower = better), overlap=off, recompute=full
-
-`Δ` = vs the NCCL all-to-all baseline (negative = DeepEP faster). Each cell: mean iter s ·
-MODEL TFLOP/s/GPU · derived tok/s.
-
-### EP16 (TP8/PP2/DP2) — internode EP across 2 nodes
+### EP32 @ PP2, overlap=off (dispatcher-isolation) — mean iter s · TFLOP/s/GPU · tok/s
 
 | mb | NCCL all-to-all | DeepEP+UCCL | DeepEP+NVSHMEM | UCCL Δ | NVSHMEM Δ |
 |---:|----------------:|------------:|---------------:|-------:|----------:|
-| 4 | 15.18 s · 159.8 · 34.5k | 17.85 s · 135.9 · 29.4k | **14.91 s · 162.7 · 35.2k** | +17.6% | **−1.8%** |
-| 1 | **46.81 s · 51.8 · 11.2k** | 56.00 s · 43.5 · 9.4k | 50.09 s · 48.4 · 10.5k | +19.6% | +7.0% |
+| 4 | **15.91 s · 152.4 · 65.9k** | 18.43 s · 134.5 · 56.9k | 20.41 s · 120.9 · 51.4k | +15.9% | +28.3% |
+| 1 | **33.41 s · 72.6 · 31.4k** | 46.90 s · 52.4 · 22.4k | 45.39 s · 54.2 · 23.1k | +40.4% | +35.9% |
 
-### EP32 (TP8/PP1/DP4) — internode EP across all 4 nodes
+### EP32 @ PP2, overlap=on (1F1B, deployment regime) — mean iter s
 
-| mb | NCCL all-to-all | DeepEP+UCCL | DeepEP+NVSHMEM | UCCL Δ | NVSHMEM Δ |
-|---:|----------------:|------------:|---------------:|-------:|----------:|
-| 4 | 22.20 s · 109.3 · 23.6k | **20.96 s · 117.2 · 25.0k** | 23.76 s · 103.1 · 22.1k | **−5.6%** | +7.1% |
-| 1 | **45.45 s · 53.4 · 11.5k** | 57.94 s · 42.2 · 9.0k | 55.35 s · 44.2 · 9.5k | +27.5% | +21.8% |
+| mb | NCCL all-to-all | DeepEP+UCCL | DeepEP+NVSHMEM |
+|---:|----------------:|------------:|---------------:|
+| 4 | **11.01 s · 225.0 · 95.3k** | _re-running_ | _re-running_ |
 
-## What the numbers say
+### EP16 @ PP4, overlap off/on
 
-1. **At the efficient operating point (mb=4) all three dispatchers are close — within ~±18%.**
-   Read the magnitudes, not a fine ranking: this is **n=1 per cell** (caveat 7), so deltas
-   below roughly **±6%** are within plausible run-to-run variance and are **not resolved**
-   here. What *is* robust: at **EP16** DeepEP+UCCL is clearly the slowest (**+17.6%** vs NCCL),
-   while NCCL and DeepEP+NVSHMEM are statistically tied (NVSHMEM −1.8%, inside the noise
-   floor). At **EP32** the three converge further (UCCL −5.6%, NVSHMEM +7.1% vs NCCL) — a
-   possible reordering, but at this n and with `RECOMPUTE=full` compressing the deltas (point 3)
-   it should be treated as *indicative*, not established. Any cross-EP scaling read (EP16→EP32)
-   is further confounded because PP also changes with EP (caveat 3). To turn the sub-±6%
-   gaps into claims, re-run with n≥3 per cell and report spread.
-2. **At mb=1 NCCL all-to-all wins at both EP degrees** (+7–28% over the DeepEP arms). This is
-   the smallest per-dispatch granularity (64/EP16 and 32/EP32 microbatches per iter), where
-   DeepEP's per-dispatch proxy/kernel-launch overhead is unamortized — the same crossover the
-   DSV3 A/B found. A throughput-tuned run uses mb≥4.
-3. **The deltas are far smaller than the DSV3 256-GPU result (−36% for UCCL at mb4).** The
-   dominant reason is `RECOMPUTE=full` (forced to fit EP32 on 4 nodes): recomputation roughly
-   doubles compute per step, so the all-to-all becomes a smaller fraction of the iteration and
-   any dispatcher delta is compressed. These numbers are therefore a **conservative,
-   recompute-on** comparison, not the dispatcher-isolation upper bound.
+| mb · overlap | NCCL all-to-all | DeepEP+UCCL | DeepEP+NVSHMEM |
+|---|----------------:|------------:|---------------:|
+| 4 · off | _re-running_ | _re-running_ | _re-running_ |
+| 1 · off | _re-running_ | _re-running_ | _re-running_ |
+| 4 · on  | _re-running_ | _re-running_ | _re-running_ |
 
-## Validity gates (every run)
+> The first 8-node campaign lost a node to another team mid-run (rendezvous 7/8); the EP32
+> overlap=off cells completed before that, the EP16 cells and the two EP32 overlap=on DeepEP
+> cells are being re-run into the same campaign dir. This section is updated when they land.
 
-- **EFA active on all 32 ranks**: every run logged `NET/OFI Selected provider is efa`
-  (`efa_ok=True`, 4/4 node logs) — true EFA RDMA, no socket fallback. ✓ all 12 runs.
-- **Transport-active per arm**: UCCL arms logged the UCCL-EP proxy banner (`uccl_ok=True`);
-  NVSHMEM arms logged `NVSHMEM v3.7.0` init (`nvshmem_ok=True`); NCCL arms neither. ✓
-- **No stalls**: 0/8 steady iters > 3× median in every run (balanced routing held).
-- **Work-equivalence (no token dropping)** — verified on a 2-node smoke (NUM_LAYERS=8) with
-  `LOSS_PROBE=1`: iteration-1 mean loss **deepep-nvshmem 12.701515 vs alltoall 12.702237**
-  (identical num_tokens=2048; agree to ~4 sig figs, relative diff 5.7e-5 = bf16 round-off). The NVSHMEM arm's
-  IBGDA→host-proxy + put_signal patches dispatch/combine the same tokens to numerically
-  equivalent output as NCCL.
+### What the numbers say (primary)
 
-## Caveats
+1. **At the clean EP32 @ PP2 regime, NCCL all-to-all is the fastest dispatcher and both DeepEP
+   backends are slower** — and these are **large, robust deltas** (not n=1 noise): at mb=4,
+   DeepEP+UCCL **+15.9%** and DeepEP+NVSHMEM **+28.3%** slower than NCCL; at mb=1, **+40%** and
+   **+36%**. NCCL all-to-all also scales fine into the `overlap=on` deployment regime (11.0 s,
+   **95k tok/s**, 225 TFLOP/s/GPU at mb=4).
+2. **This overturns the 4-node EP32 result** (secondary table), where DeepEP+UCCL *looked* 5.6%
+   *faster* than NCCL at EP32. That apparent win was an artifact of the 4-node **PP1 +
+   `RECOMPUTE=full`** regime (recompute roughly doubles compute and shrinks the all-to-all's
+   share of the step, compressing/distorting the dispatcher delta). At PP2 with lighter
+   `selective` recompute the all-to-all is a larger share of the step and the true ordering
+   shows: **NCCL > UCCL > NVSHMEM** at EP32 on this 6.4 Tbps/node B300 fabric.
+3. Consistent with the DSV3 "honest bottom line": there is no published EFA *training* win for
+   the DeepEP/UCCL path over NCCL all-to-all, and p6-b300's per-node bandwidth makes NCCL's
+   all-to-all very strong. (DeepEP/UCCL wins in the literature are inference-scale or on
+   InfiniBand / lower-bandwidth fabrics.)
 
-1. **`RECOMPUTE=full` on all arms** compresses the dispatcher delta (see point 3). To measure
-   the dispatcher-isolation upper bound, re-run with recompute off — which needs ≥8 nodes for
-   EP32 (more pipeline stages) to fit without it.
-2. **4 nodes / 32 GPU, not 8** — shared-cluster capacity at run time (see the note above). The
-   EP degree (16/32) is preserved; absolute scale is half the plan.
-3. **EP16 uses PP2, EP32 uses PP1** — within each EP the three arms are identical (clean 3-way),
-   but the cross-EP comparison also changes PP, so read EP16-vs-EP32 as indicative, not isolated.
-4. **`overlap=on` not run** here (it requires recompute off → OOM at PP1 on 4 nodes, plus
-   Qwen3's 94 layers need a 96-layer VPP round-up). Deferred to an 8-node run.
-5. **NVSHMEM arm exits non-zero (1) at process teardown** (NVSHMEM finalize after
-   `[after training is done]`); all 8 steady training iters are recorded and valid (tight
-   median≈mean), so the measurement is unaffected. STATUS shows `exit=1` for those runs. Because
-   this benign finalize-failure and a *real* failure (e.g. mid-run OOM) both surface as pod
-   phase `Failed`, validity for the NVSHMEM arm rests on the EFA gate + `n_steady==8` in
-   `index.csv` — cross-check those before trusting an NVSHMEM-arm number, don't rely on exit code.
-6. **Mock data + random-init + forced balancing** — measures the dispatcher on a balanced
-   token distribution (step time, not loss), same regime as the DSV3/Kimi-K2 A/Bs.
-7. Single run per cell (within-run σ small; between-run variance not bounded).
+### Validity (primary, EP32 overlap=off + NCCL overlap=on)
+
+EFA active on all 64 ranks (`efa_ok`, 8/8 node logs) · 0 stalls · 8 steady iters · per-arm
+transport confirmed (`uccl_ok` / `nvshmem_ok`). Work-equivalence verified on a 2-node smoke
+(`LOSS_PROBE`): deepep-nvshmem iter-1 loss matches NCCL to ~4 sig figs (12.701515 vs 12.702237,
+rel 5.7e-5). The NVSHMEM arm exits non-zero at NVSHMEM finalize *after* training — validate via
+`efa_ok` + `n_steady==8`, not exit code.
+
+---
+
+## Secondary reference — 4 nodes, recompute=full (capacity-constrained)
+
+Retained to show the regime dependence. **Do not read this as the headline** — point 2 above
+explains why its EP32 deltas are distorted.
+
+| Field | Value |
+|---|---|
+| Hardware | **4 × `p6-b300.48xlarge`** (32× B300), EKS `ml-shared` |
+| World | 32 ranks, TP8, ETP1, **`RECOMPUTE=full`**, overlap=off, global batch 128 |
+| Parallelism | EP16 = PP2/DP2 · EP32 = **PP1**/DP4 (`PP = WORLD/EP`, WORLD=32) |
+| Campaign | `qwen3final-20260621T0215Z` |
+
+> **Why 4 nodes:** at run time the shared cluster had only 6 of 8 B300 free (held by other
+> teams), and EP32 cannot tile 6 nodes with integer PP, so this ran on 4 nodes — where EP32 is
+> forced to **PP1** and needs `RECOMPUTE=full` to fit. That regime is what distorts the deltas.
+
+mean iter s · TFLOP/s/GPU · tok/s; `Δ` vs NCCL (− = DeepEP faster):
+
+| EP | mb | NCCL all-to-all | DeepEP+UCCL | DeepEP+NVSHMEM | UCCL Δ | NVSHMEM Δ |
+|---:|---:|----------------:|------------:|---------------:|-------:|----------:|
+| 16 | 4 | 15.18 · 159.8 · 34.5k | 17.85 · 135.9 · 29.4k | 14.91 · 162.7 · 35.2k | +17.6% | −1.8% |
+| 16 | 1 | 46.81 · 51.8 · 11.2k | 56.00 · 43.5 · 9.4k | 50.09 · 48.4 · 10.5k | +19.6% | +7.0% |
+| 32 | 4 | 22.20 · 109.3 · 23.6k | 20.96 · 117.2 · 25.0k | 23.76 · 103.1 · 22.1k | −5.6% | +7.1% |
+| 32 | 1 | 45.45 · 53.4 · 11.5k | 57.94 · 42.2 · 9.0k | 55.35 · 44.2 · 9.5k | +27.5% | +21.8% |
+
+At this `RECOMPUTE=full` regime the mb=4 deltas are small (≤±18%) and, at n=1, sub-±6% gaps
+(EP16 NVSHMEM −1.8%, EP32 UCCL −5.6%) are within noise — which is exactly why the 8-node PP2
+re-run was done. The one regime-independent read that holds in both campaigns: **NCCL wins the
+mb=1 tiny-dispatch regime** (DeepEP per-dispatch overhead unamortized).
+
+---
+
+## Caveats (both campaigns)
+
+1. **Regime matters more than n.** The dispatcher delta depends strongly on PP depth + recompute
+   (compute-vs-comm balance), as the primary-vs-secondary contrast shows. Compare only within a
+   regime.
+2. **n=1 per cell.** Within-run σ is small (median≈mean), but between-run variance is not bounded.
+   The primary EP32 deltas are large enough (+16% to +40%) to be robust at n=1; the secondary's
+   sub-±6% deltas are not. n≥3 with error bars is the recommended next step.
+3. **`overlap=on` uses 96 layers** (Qwen3's 94 rounded up for VPP divisibility) and recompute off
+   — a separate within-regime A/B; do not subtract across overlap regimes.
+4. **NVSHMEM arm exits 1 at teardown** (NVSHMEM finalize after training); measured iters are valid
+   — gate on `efa_ok` + `n_steady==8`.
+5. **Mock data + random-init + forced balancing** — measures the dispatcher on a balanced token
+   distribution (step time, not loss), same regime as the DSV3/Kimi-K2 A/Bs.
 
 ## How to reproduce
 
-See [`../README.md`](../README.md). The exact campaign:
+See [`../README.md`](../README.md). Primary (8-node EP32@PP2):
 
 ```bash
-CTX=ml-shared NS=kimi-k2-bench NNODES=4 EPS="16 32" CELLS="4:off 1:off" RECOMPUTE=full \
-TRAIN_ITERS=12 GLOBAL_BATCH=128 \
+CTX=ml-shared NS=kimi-k2-bench NNODES=8 EPS="32 16" CELLS="4:off 1:off 4:on" RECOMPUTE=selective \
+TRAIN_ITERS=12 GLOBAL_BATCH=256 \
 UCCL_IMG=<…>:nemo-26.04.01-uccl-0dc87eb \
 NVSHMEM_IMG=<…>:nemo-26.04.01-deepep-nvshmem-567632d-cu13 \
   bash run-qwen3-campaign.sh
 # then: python3 ../bench/parse-runs.py <campaign_dir> --warmup 4
 ```
 
-**Confounder guard:** assert `NET/OFI Selected provider is efa` appears for every rank of
-every run (the parser's `efa_ok`); discard and re-run any run where it does not.
+**Confounder guard:** assert `NET/OFI Selected provider is efa` for every rank of every run
+(`efa_ok`); discard and re-run any run where it does not (this is how the preempted 7/8-node
+runs are detected and rerun).
