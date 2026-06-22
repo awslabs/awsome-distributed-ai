@@ -125,6 +125,10 @@ target; the power-of-two sweep reports the nearest sampled row, 64 MiB) as
 well as the asymptotic peak. Record the table in [`RESULTS.md`](RESULTS.md) with image tags,
 date, and any config deltas. Eyeball one real launcher log against the parser before trusting it.
 
+Results are recorded per platform: [`RESULTS.md`](RESULTS.md) (B300) and
+[`RESULTS-p5.md`](RESULTS-p5.md) (P5/H100). For other instance types set `INSTANCE_TYPE` and
+`EFA_PER_NODE` accordingly (e.g. `p5.48xlarge` exposes **32** EFA NICs vs **16** on `p6-b300`).
+
 ## Caveats
 
 - **NCCL is a reference, not an equal.** `alltoall_perf` busbw is pure transport throughput; the
