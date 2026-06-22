@@ -101,7 +101,11 @@ jobs:
           fi
 
       - name: Publish to S3
-        run: aws s3 sync "$STAGE_DIR/" "s3://${TEMPLATE_BUCKET}/${TEMPLATE_PREFIX}" --no-progress
+        # --acl public-read: the bucket serves templates via per-object ACL, not a
+        # bucket policy, so objects must carry AllUsers:READ to be anonymously
+        # fetchable by the launch URLs and nested-stack TemplateURLs. Requires
+        # s3:PutObjectAcl on the OIDC role.
+        run: aws s3 sync "$STAGE_DIR/" "s3://${TEMPLATE_BUCKET}/${TEMPLATE_PREFIX}" --acl public-read --no-progress
 
       - name: Remove obsolete flat S3 keys
         run: |

@@ -7,20 +7,13 @@
 #     key: example/path/template.yaml
 bucket: awsome-distributed-ai
 prefix: templates/
-obsolete_keys:
-  - add-cng.yaml
-  - add-cng-p5.yaml
-  - add-cng-p6-b200.yaml
-  - add-cng-p6-b300.yaml
-  - cluster.yaml
-  - cluster-admin-iam.yaml
-  - cluster-user-iam.yaml
-  - ml-cluster-prerequisites.yaml
-  - pcs-ml-cluster-deploy-all.yaml
-  - pcs-ready-dlami-with-enroot-pyxis.yaml
-  - scripts/install-enroot-pyxis.sh
-  - scripts/ldap-add-user.sh
-  - scripts/setup-directory.sh
+# Legacy flat keys are intentionally retained, not deleted. Deployed stacks
+# stored S3KeyPrefix=templates/ and resolve nested templates + bootstrap scripts
+# (e.g. ${S3KeyPrefix}scripts/install-enroot-pyxis.sh) against the flat layout;
+# deleting these keys would break stack updates and node-replacement bootstrap,
+# plus any external/bookmarked launch URLs. Add a flat key here to delete it only
+# once no deployed stack references the flat prefix.
+obsolete_keys: []
 entries:
   - source: architectures/aws-pcs/assets/add-cng.yaml
     key: aws-pcs/add-cng.yaml
