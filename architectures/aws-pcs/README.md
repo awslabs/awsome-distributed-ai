@@ -509,9 +509,10 @@ NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 > it defaults to a **DCGM 4.5.2** build pinned by digest (validated on 2× p6-b300 and on
 > B200). The monitoring stack's own default (DCGM 4.2.0) tops out at B200 and can't pull
 > newer NVCR tags on Docker 29.x — pinning by digest at the deploy-all level is what
-> bridges that, and `MonitoringVersion v2.9.1` is the first release carrying the
-> `DCGM_EXPORTER_IMAGE` override that lets this through (`v2.6.4`+ carry the other PCS
-> fixes: node-local `/opt` install + the Docker-29.x DCGM tag). Override `DcgmExporterImage`
+> bridges that — it works on the default `MonitoringVersion` (`v2.10.2`); the
+> `DCGM_EXPORTER_IMAGE` override that lets this through first shipped in `v2.9.1`
+> (`v2.6.4`+ carry the other PCS fixes: node-local `/opt` install + the Docker-29.x
+> DCGM tag). Override `DcgmExporterImage`
 > only to pin a different build; details:
 > [OPERATIONS.md §3.1](./docs/OPERATIONS.md#31-dcgmexporterimage-the-default-and-when-to-change-it).
 

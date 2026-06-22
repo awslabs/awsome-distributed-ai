@@ -115,9 +115,16 @@ identical.
 
 ## 3. Monitoring (`MonitoringVersion`)
 
-`MonitoringVersion` defaults to **`v2.9.1`**, which is what the GPU dashboards on
-**p6-b300** require. Notable upstream changes since the older `v2.6.5`:
+`MonitoringVersion` defaults to **`v2.10.2`**. Notable upstream changes since the
+older `v2.6.5`:
 
+- **v2.10.2**: `refresh-ec2-credentials.sh` also restarts **prometheus** on IMDS
+  credential rotation. Without it, ~6 h after boot Prometheus's `ec2_sd` keeps a
+  cached (now-expired) token, `DescribeInstances` starts returning
+  `RequestExpired`, and compute node/GPU metrics silently stop being collected
+  while the login-local targets still report. Earlier tags (incl. `v2.9.1`) are
+  affected; pin to `v2.10.2`+ to avoid it.
+- **v2.10**: Amazon RES VDI monitoring + GPU clock fix.
 - **v2.9.1**: `dcgm-exporter` image is now configurable via `DCGM_EXPORTER_IMAGE`
   (lets `DcgmExporterImage` enable B300 GPU metrics without forking the monitoring repo).
 - **v2.9**: Grafana **11 → 13**.
@@ -464,7 +471,7 @@ scripts.
 For a new production deploy:
 
 - `SlurmVersion=25.11` (full monitoring coverage)
-- `MonitoringVersion=v2.9.1` (default; carries the B300 / `/opt` install / Docker 29.x fixes)
+- `MonitoringVersion=v2.10.2` (default; carries the B300 / `/opt` install / Docker 29.x fixes plus the ec2_sd credential-refresh fix)
 - `AmiId` pinned to a resolved AMI ID (PCS-Ready DLAMI from SSM, or a custom AMI you
   built off it), not left empty — avoids drift on later scale-out
 - For frequent scaling, pre-bake Enroot/Pyxis with `pcs-ready-dlami-with-enroot-pyxis.yaml`
