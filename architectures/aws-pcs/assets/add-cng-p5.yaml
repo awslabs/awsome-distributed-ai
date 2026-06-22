@@ -252,8 +252,8 @@ Parameters:
 
   S3KeyPrefix:
     Type: String
-    Description: S3 key prefix for scripts (e.g. templates/)
-    Default: 'templates/'
+    Description: S3 key prefix for scripts (e.g. templates/aws-pcs/)
+    Default: 'templates/aws-pcs/'
 
 Conditions:
   # EFA interface count is derived from the instance type: p5en.48xlarge has 16

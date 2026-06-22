@@ -245,8 +245,8 @@ Parameters:
 
   S3KeyPrefix:
     Type: String
-    Description: S3 key prefix for scripts (e.g. templates/)
-    Default: 'templates/'
+    Description: S3 key prefix for scripts (e.g. templates/aws-pcs/)
+    Default: 'templates/aws-pcs/'
 
   EfaInterfaceCount:
     Type: Number

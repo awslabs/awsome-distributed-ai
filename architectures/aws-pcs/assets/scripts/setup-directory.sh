@@ -29,7 +29,7 @@
 #   DIRECTORY_DNS_IPS   — comma-separated DNS IPs (future SimpleAD; empty = discover login IP)
 #   S3_BUCKET           — bucket holding the scripts (server role; to install the
 #                         ldap-add-user.sh helper onto /usr/local/bin)
-#   S3_KEY_PREFIX       — key prefix for the scripts (default "templates/")
+#   S3_KEY_PREFIX       — key prefix for the scripts (default "templates/aws-pcs/")
 
 set -euo pipefail
 
@@ -190,12 +190,12 @@ EOF
     # location this script came from (S3_BUCKET/S3_KEY_PREFIX passed by UserData);
     # falls back to a no-op with a hint if those are unset.
     if [ -n "${S3_BUCKET:-}" ]; then
-        if aws s3 cp "s3://${S3_BUCKET}/${S3_KEY_PREFIX:-templates/}scripts/ldap-add-user.sh" \
+        if aws s3 cp "s3://${S3_BUCKET}/${S3_KEY_PREFIX:-templates/aws-pcs/}scripts/ldap-add-user.sh" \
              /usr/local/bin/ldap-add-user.sh 2>/dev/null; then
             chmod 755 /usr/local/bin/ldap-add-user.sh
             echo "[directory-server] Installed helper: /usr/local/bin/ldap-add-user.sh"
         else
-            echo "[directory-server] WARNING: could not fetch ldap-add-user.sh from s3://${S3_BUCKET}/${S3_KEY_PREFIX:-templates/}scripts/ — add users with raw ldapadd (see USER-MANAGEMENT.md)."
+            echo "[directory-server] WARNING: could not fetch ldap-add-user.sh from s3://${S3_BUCKET}/${S3_KEY_PREFIX:-templates/aws-pcs/}scripts/ — add users with raw ldapadd (see USER-MANAGEMENT.md)."
         fi
     else
         echo "[directory-server] NOTE: S3_BUCKET unset; skipping ldap-add-user.sh install. Add users with raw ldapadd (see USER-MANAGEMENT.md)."

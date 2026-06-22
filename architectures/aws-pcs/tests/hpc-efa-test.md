@@ -36,7 +36,7 @@ AWS_AZ=us-east-2b
 aws cloudformation create-stack \
   --stack-name pcs-hpc-efa \
   --region us-east-2 \
-  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
+  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/pcs-ml-cluster-deploy-all.yaml \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=$AWS_AZ \
     ParameterKey=DeployOnDemandCNG,ParameterValue=true \

@@ -1,0 +1,50 @@
+# Files published to s3://awsome-distributed-ai/templates by
+# .github/workflows/publish-architecture-templates.yml.
+#
+# Publish architecture assets under an architecture namespace. Add new migrated
+# architecture assets with namespaced keys, for example:
+#   - source: architectures/example/path/template.yaml
+#     key: example/path/template.yaml
+bucket: awsome-distributed-ai
+prefix: templates/
+obsolete_keys:
+  - add-cng.yaml
+  - add-cng-p5.yaml
+  - add-cng-p6-b200.yaml
+  - add-cng-p6-b300.yaml
+  - cluster.yaml
+  - cluster-admin-iam.yaml
+  - cluster-user-iam.yaml
+  - ml-cluster-prerequisites.yaml
+  - pcs-ml-cluster-deploy-all.yaml
+  - pcs-ready-dlami-with-enroot-pyxis.yaml
+  - scripts/install-enroot-pyxis.sh
+  - scripts/ldap-add-user.sh
+  - scripts/setup-directory.sh
+entries:
+  - source: architectures/aws-pcs/assets/add-cng.yaml
+    key: aws-pcs/add-cng.yaml
+  - source: architectures/aws-pcs/assets/add-cng-p5.yaml
+    key: aws-pcs/add-cng-p5.yaml
+  - source: architectures/aws-pcs/assets/add-cng-p6-b200.yaml
+    key: aws-pcs/add-cng-p6-b200.yaml
+  - source: architectures/aws-pcs/assets/add-cng-p6-b300.yaml
+    key: aws-pcs/add-cng-p6-b300.yaml
+  - source: architectures/aws-pcs/assets/cluster.yaml
+    key: aws-pcs/cluster.yaml
+  - source: architectures/aws-pcs/assets/cluster-admin-iam.yaml
+    key: aws-pcs/cluster-admin-iam.yaml
+  - source: architectures/aws-pcs/assets/cluster-user-iam.yaml
+    key: aws-pcs/cluster-user-iam.yaml
+  - source: architectures/aws-pcs/assets/ml-cluster-prerequisites.yaml
+    key: aws-pcs/ml-cluster-prerequisites.yaml
+  - source: architectures/aws-pcs/assets/pcs-ml-cluster-deploy-all.yaml
+    key: aws-pcs/pcs-ml-cluster-deploy-all.yaml
+  - source: architectures/aws-pcs/assets/pcs-ready-dlami-with-enroot-pyxis.yaml
+    key: aws-pcs/pcs-ready-dlami-with-enroot-pyxis.yaml
+  - source: architectures/aws-pcs/assets/scripts/install-enroot-pyxis.sh
+    key: aws-pcs/scripts/install-enroot-pyxis.sh
+  - source: architectures/aws-pcs/assets/scripts/ldap-add-user.sh
+    key: aws-pcs/scripts/ldap-add-user.sh
+  - source: architectures/aws-pcs/assets/scripts/setup-directory.sh
+    key: aws-pcs/scripts/setup-directory.sh

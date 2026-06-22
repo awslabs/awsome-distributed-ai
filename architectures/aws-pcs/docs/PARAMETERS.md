@@ -103,4 +103,4 @@ availability and the "deploy small, expand after" tip.
 | Parameter | Default | Purpose |
 |---|---|---|
 | `S3BucketName` | `awsome-distributed-ai` | S3 bucket the nested templates are fetched from |
-| `S3KeyPrefix` | `templates/` | S3 key prefix for the nested templates |
+| `S3KeyPrefix` | `templates/aws-pcs/` | S3 key prefix for the nested templates |

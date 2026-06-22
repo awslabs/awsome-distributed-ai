@@ -139,7 +139,7 @@ Implications to be aware of:
 ```bash
 aws cloudformation create-stack \
   --stack-name my-cluster \
-  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
+  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/pcs-ml-cluster-deploy-all.yaml \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-2b \
     ParameterKey=DirectoryService,ParameterValue=OpenLDAP-LoginNode \
