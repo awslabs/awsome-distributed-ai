@@ -37,21 +37,22 @@ secondary is retained to show how the regime (PP depth + recompute) changes the 
 
 ### EP32 @ PP2, overlap=on (1F1B, deployment regime) — mean iter s
 
-| mb | NCCL all-to-all | DeepEP+UCCL | DeepEP+NVSHMEM |
-|---:|----------------:|------------:|---------------:|
-| 4 | **11.01 s · 225.0 · 95.3k** | _re-running_ | _re-running_ |
+| mb | NCCL all-to-all | DeepEP+UCCL | DeepEP+NVSHMEM | UCCL Δ | NVSHMEM Δ |
+|---:|----------------:|------------:|---------------:|-------:|----------:|
+| 4 | **11.01 s · 225.0 · 95.3k** | 17.08 s · 150.6 · 61.4k | 17.08 s · 150.6 · 61.4k | +55.1% | +55.1% |
 
-### EP16 @ PP4, overlap off/on
+### EP16 @ PP4 (TP8/PP4/DP2) — internode EP across 2 nodes
 
-| mb · overlap | NCCL all-to-all | DeepEP+UCCL | DeepEP+NVSHMEM |
-|---|----------------:|------------:|---------------:|
-| 4 · off | _re-running_ | _re-running_ | _re-running_ |
-| 1 · off | _re-running_ | _re-running_ | _re-running_ |
-| 4 · on  | _re-running_ | _re-running_ | _re-running_ |
+| mb · overlap | NCCL all-to-all | DeepEP+UCCL | DeepEP+NVSHMEM | UCCL Δ | NVSHMEM Δ |
+|---|----------------:|------------:|---------------:|-------:|----------:|
+| 4 · off | 12.21 s · 198.6 · 85.9k | 13.06 s · 185.8 · 80.3k | **11.57 s · 209.6 · 90.6k** | +6.9% | **−5.2%** |
+| 1 · off | 34.17 s · 71.0 · 30.7k | 40.00 s · 60.7 · 26.2k | _preempted_ | +17.1% | — |
+| 4 · on  | **10.53 s · 235.0 · 99.5k** | 13.24 s · 187.1 · 79.2k | 11.32 s · 218.7 · 92.6k | +25.7% | +7.5% |
 
-> The first 8-node campaign lost a node to another team mid-run (rendezvous 7/8); the EP32
-> overlap=off cells completed before that, the EP16 cells and the two EP32 overlap=on DeepEP
-> cells are being re-run into the same campaign dir. This section is updated when they land.
+> Two cells lost to mid-run node preemption (rendezvous < 8/8): `nvshmem-ep16-mb1-off` and (on
+> the first pass) the two EP32 overlap=on DeepEP cells, which were re-run successfully. The
+> EP32 overlap=off numbers above are from the first pass (their logs were cosmetically
+> overwritten by the same-campaign re-run; the harness skip-guard is now fixed for all ranks).
 
 ### What the numbers say (primary)
 
@@ -59,7 +60,14 @@ secondary is retained to show how the regime (PP depth + recompute) changes the 
    backends are slower** — and these are **large, robust deltas** (not n=1 noise): at mb=4,
    DeepEP+UCCL **+15.9%** and DeepEP+NVSHMEM **+28.3%** slower than NCCL; at mb=1, **+40%** and
    **+36%**. NCCL all-to-all also scales fine into the `overlap=on` deployment regime (11.0 s,
-   **95k tok/s**, 225 TFLOP/s/GPU at mb=4).
+   **95k tok/s**, 225 TFLOP/s/GPU at mb=4), where both DeepEP backends sit at +55%.
+1b. **The DeepEP penalty grows with EP degree.** At the lower **EP16** the gap nearly closes —
+   DeepEP+NVSHMEM is actually *fastest* at mb=4 overlap=off (**−5.2%** vs NCCL) and UCCL only
+   +6.9%; going EP16→EP32 the NVSHMEM delta swings from −5% to +28% and UCCL from +7% to +16%.
+   The same EP-scaling trend appears far more violently on H100/30B
+   ([`../../qwen3-30b`](../../qwen3-30b/benchmarks/RESULTS.md)). So the all-to-all fan-out, not
+   just the model, decides whether DeepEP is competitive — and on this B300/EFA fabric it only
+   is at the lower EP degree.
 2. **This overturns the 4-node EP32 result** (secondary table), where DeepEP+UCCL *looked* 5.6%
    *faster* than NCCL at EP32. That apparent win was an artifact of the 4-node **PP1 +
    `RECOMPUTE=full`** regime (recompute roughly doubles compute and shrinks the all-to-all's
@@ -71,10 +79,12 @@ secondary is retained to show how the regime (PP depth + recompute) changes the 
    all-to-all very strong. (DeepEP/UCCL wins in the literature are inference-scale or on
    InfiniBand / lower-bandwidth fabrics.)
 
-### Validity (primary, EP32 overlap=off + NCCL overlap=on)
+### Validity (primary)
 
-EFA active on all 64 ranks (`efa_ok`, 8/8 node logs) · 0 stalls · 8 steady iters · per-arm
-transport confirmed (`uccl_ok` / `nvshmem_ok`). Work-equivalence verified on a 2-node smoke
+16 of 18 cells valid: EFA active on all 64 ranks (`efa_ok`, 8/8 node logs) · 0 stalls · 8
+steady iters · per-arm transport confirmed (`uccl_ok` / `nvshmem_ok`). Two cells lost to node
+preemption (`nvshmem-ep16-mb1-off`, and on the first pass the two EP32 overlap=on DeepEP cells
+— re-run successfully). Work-equivalence verified on a 2-node smoke
 (`LOSS_PROBE`): deepep-nvshmem iter-1 loss matches NCCL to ~4 sig figs (12.701515 vs 12.702237,
 rel 5.7e-5). The NVSHMEM arm exits non-zero at NVSHMEM finalize *after* training — validate via
 `efa_ok` + `n_steady==8`, not exit code.

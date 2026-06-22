@@ -125,7 +125,10 @@ RANK0_PREAMBLE="
 
 launch_pod() {
   local R="$1"
-  local PREAMBLE="mkdir -p ${LOGDIR} ;"
+  # ALL ranks must skip a completed cell, not just rank-0. If only rank-0 REFUSE-exits, ranks
+  # 1..N-1 still start torchrun, fail rendezvous (no rank-0), and OVERWRITE their rank logs —
+  # corrupting a previously-good run when a campaign is re-run with the same CAMPAIGN_ID.
+  local PREAMBLE="if [ -f ${RUN_DIR}/STATUS ]; then echo 'skip: completed run' ; exit 0 ; fi ; mkdir -p ${LOGDIR} ;"
   local EPILOGUE=""
   if [ "$R" = "0" ]; then
     PREAMBLE="${RANK0_PREAMBLE}"

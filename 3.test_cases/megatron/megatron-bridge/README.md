@@ -119,7 +119,8 @@ identical directory layout.
 |-------|-----------|--------|
 | [Kimi K2](https://huggingface.co/moonshotai/Kimi-K2-Base) (1.04T MoE, 384 experts) | [`kimi-k2/`](kimi-k2/) | Full-parameter SFT + UCCL-EP vs NCCL dispatcher A/B (32× p6-b300) |
 | [DeepSeek-V3](https://github.com/deepseek-ai/DeepSeek-V3) (671B MoE, 256 experts) | [`dsv3/`](dsv3/) | Full-parameter SFT + UCCL-EP vs NCCL dispatcher A/B (32× p6-b300) |
-| [Qwen3-235B-A22B](https://huggingface.co/Qwen/Qwen3-235B-A22B) (235B MoE, 128 experts) | [`qwen3-235b/`](qwen3-235b/) | **3-way** dispatcher comparison: NCCL vs DeepEP+UCCL vs DeepEP+NVSHMEM, EP16/EP32 (8× p6-b300) |
+| [Qwen3-235B-A22B](https://huggingface.co/Qwen/Qwen3-235B-A22B) (235B MoE, 128 experts) | [`qwen3-235b/`](qwen3-235b/) | **3-way** dispatcher comparison: NCCL vs DeepEP+UCCL vs DeepEP+NVSHMEM, EP16/EP32 (8× p6-b300 / B300) |
+| [Qwen3-30B-A3B](https://huggingface.co/Qwen/Qwen3-30B-A3B) (30B MoE, 128 experts) | [`qwen3-30b/`](qwen3-30b/) | Same **3-way** comparison on **8× p5.48xlarge / H100** (the size that fits H100-80GB), EP16/EP32 |
 
 To add a model: create `megatron-bridge/<model>/` with its `conf/`, deployment manifests,
 and a model README (and a `benchmarks/` entrypoint if you want the dispatcher A/B). Reuse the
