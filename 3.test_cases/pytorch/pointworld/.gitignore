@@ -1,0 +1,19 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+# Local logs and captured run output
+logs/
+*.log
+run.log
+
+# Downloaded datasets, restored roots, WDS shards, checkpoints (kept on FSx)
+downloads/
+dataset/
+*.sqsh
+*.pt
+*.pth
+*.h5
+
+# Python caches
+__pycache__/
+*.pyc
