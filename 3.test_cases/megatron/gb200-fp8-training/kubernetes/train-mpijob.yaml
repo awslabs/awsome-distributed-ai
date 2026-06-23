@@ -1,0 +1,79 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# FP8/FP4 Megatron training on P6e-GB200 (EKS / HyperPod-EKS).
+# One ComputeDomain = one 72-GPU NVLink domain; edit PRECISION/MODEL env to taste.
+---
+apiVersion: resource.nvidia.com/v1beta1
+kind: ComputeDomain
+metadata:
+  name: gb200-megatron-domain
+spec:
+  numNodes: 18
+  channel:
+    resourceClaimTemplate:
+      name: gb200-megatron-domain-channel
+---
+apiVersion: kubeflow.org/v2beta1
+kind: MPIJob
+metadata:
+  name: gb200-megatron-fp8
+spec:
+  runPolicy:
+    cleanPodPolicy: Running
+    backoffLimit: 5
+  slotsPerWorker: 4
+  mpiReplicaSpecs:
+    Launcher:
+      replicas: 1
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - image: public.ecr.aws/u1m6g1t5/gb200-megatron-fp8-arm64:latest
+            name: launcher
+            env:
+            - { name: PRECISION, value: "fp8-mxfp8" }
+            - { name: MODEL, value: "llama3-8b" }
+            - name: LD_LIBRARY_PATH
+              value: /opt/amazon/openmpi/lib:/opt/amazon/efa/lib:/usr/local/nvidia/lib
+            command: ["bash","-lc"]
+            args:
+            - >
+              /opt/amazon/openmpi/bin/mpirun --allow-run-as-root -np 72 -npernode 4
+              --bind-to none
+              -x PRECISION -x MODEL
+              -x FI_PROVIDER=efa -x FI_EFA_FORK_SAFE=1
+              -x NCCL_DEBUG=INFO -x NCCL_NVLS_ENABLE=1 -x NCCL_MNNVL_ENABLE=1
+              bash -lc 'cd /opt/Megatron-LM && ./train.sh'
+    Worker:
+      replicas: 18
+      template:
+        metadata:
+          labels:
+            megatron-replica: worker
+        spec:
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                  - key: megatron-replica
+                    operator: In
+                    values: [worker]
+                topologyKey: nvidia.com/gpu.clique
+          containers:
+          - image: public.ecr.aws/u1m6g1t5/gb200-megatron-fp8-arm64:latest
+            name: worker
+            resources:
+              limits:
+                nvidia.com/gpu: 4
+                vpc.amazonaws.com/efa: 4
+              requests:
+                nvidia.com/gpu: 4
+                vpc.amazonaws.com/efa: 4
+              claims:
+              - name: compute-domain-channel
+          resourceClaims:
+          - name: compute-domain-channel
+            resourceClaimTemplateName: gb200-megatron-domain-channel
