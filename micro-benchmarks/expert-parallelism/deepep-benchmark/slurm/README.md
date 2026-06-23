@@ -44,5 +44,10 @@ The scripts export the EFA / NVSHMEM settings the libfabric transport needs:
 | `FI_PROVIDER` | `efa` |
 | `NVSHMEM_REMOTE_TRANSPORT` | `libfabric` |
 | `NVSHMEM_LIBFABRIC_PROVIDER` | `efa` |
+| `NVSHMEM_NETDEVS_POLICY` | `EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE` |
+
+These are also baked into the image `ENV`; the sbatch scripts re-export them so the transport
+config is visible and overridable per-job. `NVSHMEM_NETDEVS_POLICY` controls NIC↔PE assignment on
+multi-NIC EFA nodes. See the [benchmark README](../README.md#how-the-efa-support-works) for the full rationale.
 
 For the Kubernetes/EKS equivalent of these jobs, see [`../kubernetes/`](../kubernetes/).

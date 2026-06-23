@@ -36,15 +36,19 @@ RDMA over InfiniBand), which EFA does not provide. The image works around this:
   CUDA ≤ 12.9 CUPTI fails on those GPUs (`CUPTI_ERROR_INVALID_DEVICE`), which breaks the
   internode/low-latency tuning phase that profiles kernels.
 
-At runtime the NVSHMEM libfabric transport is selected by these environment variables (set in the
-image and re-exported by the launchers):
+At runtime the NVSHMEM libfabric transport is selected by these environment variables. They are
+baked into the image as `ENV` (see [`deepep.Dockerfile`](./deepep.Dockerfile)), so every rank in
+the container inherits them automatically. The launchers ([`slurm/`](./slurm/) sbatch and
+[`kubernetes/`](./kubernetes/) `mpirun -x`) re-export the same values explicitly: this keeps the
+runtime transport config visible at the launch surface and lets you override it per-job without
+rebuilding the image.
 
-```
-FI_PROVIDER=efa
-NVSHMEM_REMOTE_TRANSPORT=libfabric
-NVSHMEM_LIBFABRIC_PROVIDER=efa
-NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE
-```
+| Variable | Value | Purpose |
+|----------|-------|---------|
+| `FI_PROVIDER` | `efa` | Selects the EFA provider in libfabric. |
+| `NVSHMEM_REMOTE_TRANSPORT` | `libfabric` | Routes NVSHMEM's inter-node RDMA through the libfabric transport (instead of IBGDA/UCX). |
+| `NVSHMEM_LIBFABRIC_PROVIDER` | `efa` | Tells the NVSHMEM libfabric transport to use the EFA provider. |
+| `NVSHMEM_NETDEVS_POLICY` | `EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE` | Controls NIC↔PE (processing element) assignment on multi-NIC EFA nodes, pairing each PE with the NIC under its PCIe switch. |
 
 ## Prerequisites
 
@@ -68,8 +72,15 @@ TAG="efa${EFA_INSTALLER_VERSION}-nvshmem${NVSHMEM_VERSION}-deepep${DEEPEP_COMMIT
 DEEPEP_CONTAINER_IMAGE_NAME_TAG="deepep:${TAG}"
 ```
 
+> [!NOTE]
+> The `deepep.Dockerfile` relies on BuildKit features (`RUN --mount` and the
+> auto-populated `TARGETARCH` arg), so the build must run under BuildKit. The
+> command below sets `DOCKER_BUILDKIT=1` explicitly so it works even on hosts
+> where the legacy builder is still the default. Alternatively, use
+> `docker buildx build ...`.
+
 ```bash
-docker build --progress=plain -f ./deepep.Dockerfile \
+DOCKER_BUILDKIT=1 docker build --progress=plain -f ./deepep.Dockerfile \
       --build-arg="GDRCOPY_VERSION=${GDRCOPY_VERSION}" \
       --build-arg="EFA_INSTALLER_VERSION=${EFA_INSTALLER_VERSION}" \
       --build-arg="NVSHMEM_VERSION=${NVSHMEM_VERSION}" \

@@ -12,17 +12,18 @@ ARG NCCL_VERSION=v2.30.4-1
 ARG NCCL_TESTS_VERSION=v2.18.3
 ARG NVSHMEM_VERSION=3.7.0
 ARG TORCH_VERSION=2.11.0
+# NOTE: deepep_aws_efa.patch is generated against this exact commit. If you bump
+# DEEPEP_COMMIT, regenerate the patch too -- `git apply` is exact and the build
+# will fail on a mismatch.
 ARG DEEPEP_COMMIT=567632d
 
 # CUDA architecture(s), semicolon-separated:
-# 9.0 = Hopper (H100, sm_90), 10.0 = Blackwell (B200/B300, sm_100). Defaults to
+# 9.0 = Hopper (H100, sm_90), 10.0 and 10.3 = Blackwell (B200/B300, sm_100,sm_103). Defaults to
 # both so one image runs on Hopper and Blackwell; override with e.g.
-# --build-arg GPU_ARCH=90 \
 # --build-arg TORCH_CUDA_ARCH_LIST=9.0 \
 # --build-arg NVCC_GENCODE=-gencode=arch=compute_90,code=sm_90 to build a smaller Hopper-only image.
-ARG GPU_ARCH="90;100"
-ARG TORCH_CUDA_ARCH_LIST="9.0;10.0"
-ARG NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90 -gencode=arch=compute_100,code=sm_100"
+ARG TORCH_CUDA_ARCH_LIST="9.0;10.0;10.3"
+ARG NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90 -gencode=arch=compute_100,code=sm_100 -gencode=arch=compute_103,code=sm_103"
 
 ARG CUDA_HOME="/usr/local/cuda"
 
@@ -139,37 +140,6 @@ RUN CUDA_VERSION_MAJOR=$(nvcc --version | grep -oP 'release \K[0-9]+') && \
     tar -xf "/tmp/${NVSHMEM_ARCHIVE}" --strip-components=1 -C "$NVSHMEM_PREFIX" && \
     rm "/tmp/${NVSHMEM_ARCHIVE}"
 
-# Uncomment to build NVSHMEM from source
-# RUN git clone https://github.com/NVIDIA/nvshmem.git /tmp/nvshmem && \
-#     cd /tmp/nvshmem && \
-#     git checkout "v${NVSHMEM_VERSION}-0" && \
-#     cd /tmp/nvshmem && \
-#     rm -rf build && mkdir build && cd build && \
-#     cmake .. \
-#         -DCMAKE_INSTALL_PREFIX="${NVSHMEM_PREFIX}" \
-#         -DCUDA_HOME="${CUDA_HOME}" \
-#         -DLIBFABRIC_HOME="${LIBFABRIC_HOME}" \
-#         -DNVSHMEM_LIBFABRIC_SUPPORT=ON \
-#         -DNVSHMEM_MPI_SUPPORT=OFF \
-#         -DNVSHMEM_IBRC_SUPPORT=OFF \
-#         -DNVSHMEM_IBGDA_SUPPORT=OFF \
-#         -DNVSHMEM_IBDEVX_SUPPORT=OFF \
-#         -DNVSHMEM_UCX_SUPPORT=OFF \
-#         -DNVSHMEM_SHMEM_SUPPORT=OFF \
-#         -DNVSHMEM_PMIX_SUPPORT=OFF \
-#         -DNVSHMEM_USE_NCCL=OFF \
-#         -DNVSHMEM_USE_GDRCOPY=ON \
-#         -DGDRCOPY_HOME="${GDRCOPY_PREFIX}" \
-#         -DNVSHMEM_USE_MLX5DV=OFF \
-#         -DNVSHMEM_BUILD_TESTS=OFF \
-#         -DNVSHMEM_BUILD_EXAMPLES=OFF \
-#         -DNVSHMEM_BUILD_PYTHON_LIB=OFF \
-#         -DNVSHMEM_BUILD_BITCODE_LIBRARY=OFF \
-#         -DCMAKE_CUDA_ARCHITECTURES="${GPU_ARCH}" && \
-#     make -j"$(nproc)" && \
-#     make install && \
-#     rm -rf /tmp/nvshmem
-
 ENV LD_LIBRARY_PATH="${NVSHMEM_PREFIX}/lib:${LD_LIBRARY_PATH}"
 ENV PATH="${NVSHMEM_PREFIX}/bin:${PATH}"
 
@@ -207,9 +177,12 @@ RUN --mount=type=bind,source=deepep_aws_efa.patch,target=/tmp/deepep_aws/deepep_
     git clone https://github.com/deepseek-ai/DeepEP.git ${DEEPEP_PREFIX} && \
     cd ${DEEPEP_PREFIX} && \
     git checkout ${DEEPEP_COMMIT} && \
-    patch -p1 < /tmp/deepep_aws/deepep_aws_efa.patch && \
+    git apply --check /tmp/deepep_aws/deepep_aws_efa.patch && \
+    git apply /tmp/deepep_aws/deepep_aws_efa.patch && \
     CUDA_VERSION_MAJOR=$(nvcc --version | grep -oP 'release \K[0-9]+') && \
     if [ "${CUDA_VERSION_MAJOR}" -ge 13 ]; then \
         sed -i "s|f'{nvshmem_dir}/include']|f'{nvshmem_dir}/include', '${CUDA_HOME}/include/cccl']|" "setup.py"; \
     fi && \
     NVSHMEM_DIR="${NVSHMEM_PREFIX}" pip3 install -vv --no-build-isolation .
+
+ENV NVIDIA_GDRCOPY="enabled"

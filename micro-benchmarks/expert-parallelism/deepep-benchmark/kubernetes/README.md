@@ -48,7 +48,7 @@ aws ecr create-repository --repository-name deepep --region ${AWS_REGION} 2>/dev
 aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${REGISTRY}
 
 cd ..   # build context is the deepep-benchmark/ directory
-docker build --progress=plain -f ./deepep.Dockerfile -t ${IMAGE_URI} .
+DOCKER_BUILDKIT=1 docker build --progress=plain -f ./deepep.Dockerfile -t ${IMAGE_URI} .
 docker push ${IMAGE_URI}
 ```
 

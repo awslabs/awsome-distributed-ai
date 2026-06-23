@@ -123,7 +123,7 @@ spec:
             # profile. Remove if your cluster allows non-admin GPU profiling.
             securityContext:
               capabilities:
-                add: ["SYS_ADMIN"]
+                add: ["SYS_ADMIN", "IPC_LOCK"]
             volumeMounts:
             - name: shmem
               mountPath: /dev/shm
@@ -140,5 +140,6 @@ spec:
                 memory: 32000Mi
           volumes:
           - name: shmem
-            hostPath:
-              path: /dev/shm
+            emptyDir:
+                medium: Memory
+                sizeLimit: 200Gi
