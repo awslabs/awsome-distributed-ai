@@ -127,7 +127,9 @@ and a model README (and a `benchmarks/` entrypoint if you want the dispatcher A/
 shared image from step 1 (mount the model's `conf` at runtime) and the shared
 `convert-checkpoint.sh` — do **not** add a second Dockerfile.
 
-## Benchmark result — UCCL-EP vs NCCL all-to-all (256× B300)
+## Benchmark results & dispatcher recommendation
+
+### DeepSeek-V3, 32× p6-b300 / 256× B300 — UCCL-EP vs NCCL all-to-all
 
 The headline measurement this environment was built for: swapping **only** the
 Megatron-Core MoE token dispatcher — NCCL all-to-all (baseline) vs UCCL's EFA-native
@@ -153,6 +155,50 @@ per-dispatch overhead unamortized), an operating point no throughput-tuned run u
 > verified two ways: drop-free config + an iteration-1 loss match (deepep 11.897349 vs
 > alltoall 11.897517). `overlap=on` is a separate within-regime A/B (VPP=2 + recompute
 > off on both arms) — do not subtract its numbers against the `overlap=off` rows.
+
+### Qwen3 three-way comparison, 8 nodes — NCCL vs DeepEP+UCCL vs DeepEP+NVSHMEM
+
+Adds the NVIDIA DeepEP+NVSHMEM-over-EFA arm and a second fabric (H100). Mean iter time at
+mb=4, overlap=off; `Δ` vs NCCL all-to-all (− = DeepEP faster). Full tables:
+[`qwen3-235b/benchmarks/RESULTS.md`](qwen3-235b/benchmarks/RESULTS.md) (B300),
+[`qwen3-30b/benchmarks/RESULTS.md`](qwen3-30b/benchmarks/RESULTS.md) (H100).
+
+| Hardware (8 nodes) | Model | EP | NCCL | DeepEP+UCCL | DeepEP+NVSHMEM |
+|---|---|---:|---:|---:|---:|
+| p6-b300 / B300 | Qwen3-235B | 16 | 12.21 s | +6.9% | **−5.2%** |
+| p6-b300 / B300 | Qwen3-235B | 32 | 15.91 s | +15.9% | +28.3% |
+| p5.48xlarge / H100 | Qwen3-30B | 16 | 8.60 s | +72% | +6.6% |
+| p5.48xlarge / H100 | Qwen3-30B | 32 | 9.24 s | +187% | +86% |
+
+At this 8-node scale NCCL all-to-all is fastest almost everywhere (lone exception: B300 EP16,
+where DeepEP+NVSHMEM edges it by 5.2%). DeepEP+NVSHMEM is consistently the stronger of the two
+DeepEP backends, and the DeepEP penalty **shrinks as EP drops (EP32→EP16)** and grows on the
+lower-bandwidth H100 fabric / smaller (30B) model.
+
+### Recommendation (scale-dependent)
+
+The dispatcher choice on EFA depends primarily on **scale (EP span / node count)**, and only
+secondarily on the instance/fabric:
+
+- **Small scale (≲8 nodes, up to EP32): default to NCCL all-to-all.** Without IBGDA, DeepEP on
+  EFA runs the NVSHMEM/UCCL **host-proxy** path and can't use GPU-initiated RDMA; at small EP
+  span that overhead dominates and NCCL's dense all-to-all wins (Qwen3 tables above).
+- **Large scale (≳16–32 nodes, large EP span): prefer DeepEP.** DeepEP does **sparse dispatch**
+  (tokens go only to their routed experts), so its advantage grows with node count and overtakes
+  the host-proxy penalty. Measured: **UCCL −36%** on DSV3 256× B300, and **−34% at 32 nodes /
+  −21% at 16 nodes** on Kimi-K2 ([`kimi-k2/benchmarks/RESULTS.md`](kimi-k2/benchmarks/RESULTS.md))
+  — the win itself scales with node count.
+- **DeepEP+NVSHMEM is the promising backend to watch.** It is the best DeepEP backend at every
+  8-node point here (and beats NCCL at B300 EP16), and standalone EP micro-benchmarks suggest it
+  is competitive-to-better than UCCL in throughput mode — so it is a strong candidate for the
+  large-scale regime. **Not yet validated at 16–32 nodes** (UCCL is the proven large-scale
+  choice today; NVSHMEM at K2 scale is the top follow-up).
+- **Fabric is second-order.** DeepEP looked worst on H100 (p5.48xlarge, lower EFA bandwidth
+  exposes the host-proxy cost) and better on B300; p5en/newer should help. But it still lost at
+  B300 8-node/EP32 — so treat this as **scale-primary, fabric-secondary**.
+
+All numbers use mock data + **balanced routing**; skewed / real expert routing is not yet
+tested and could shift the balance.
 
 ## References
 
