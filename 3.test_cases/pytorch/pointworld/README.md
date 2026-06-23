@@ -47,6 +47,13 @@ out of scope for this repository.
 > This test case is **Kubernetes-only** (EKS / HyperPod EKS). Slurm and other
 > orchestrators are not included here.
 
+> [!note] Kubeflow Trainer v1 vs v2
+> The manifests in [`kubernetes/`](./kubernetes/) use the Kubeflow **PyTorchJob v1**
+> API (`kubeflow.org/v1`). If your cluster runs the newer **Kubeflow Trainer v2**
+> controller (`trainer.kubeflow.org` — `TrainJob`/`ClusterTrainingRuntime`, and the
+> `pytorchjobs.kubeflow.org` CRD is absent), use the equivalent manifests in
+> [`kubernetes/trainer-v2/`](./kubernetes/trainer-v2/) instead.
+
 ## Prerequisites
 
 - An EKS or SageMaker HyperPod EKS cluster with **8 x p5en.48xlarge** (64 x H200)
@@ -233,6 +240,27 @@ pointworld/
   >= 2.29 for B200.
 - **Gated DINOv3**: training and evaluation cannot run until the gated DINOv3
   weights are present on FSx (Section 2).
+
+## Validation status
+
+This test case was exercised end-to-end on Amazon EKS (Kubeflow Trainer v2.0.0)
+with p5en.48xlarge (H200) nodes:
+
+- **Container**: built from `pointworld.Dockerfile` and imported cleanly on an
+  H200 (torch 2.5.1+cu124, flash-attn 2.7.4.post1, PTv3, DINOv3).
+- **Pre-training**: a 1-node / 8-GPU run (BEHAVIOR, `--ptv3_size=large`,
+  `--max_train_steps=2`) initialized distributed training, loaded the DINOv3
+  backbone, streamed the WebDataset dataloader, and ran forward/backward with a
+  decreasing loss before stopping cleanly.
+- **Evaluation**: `eval.py` loaded a released checkpoint
+  (`nvidia/PointWorld_models` `large-droid+behavior`) and produced metrics on the
+  BEHAVIOR test split.
+
+> [!note] Small-scale data
+> DROID is distributed as a single ~3.9 TB split archive that does not subset
+> cleanly. For small-scale validation, BEHAVIOR is sharded by task
+> (~1.6-14 GB/task) and restores independently, making it the practical choice
+> for smoke tests on a modest filesystem.
 
 ## References and attribution
 

@@ -37,8 +37,11 @@ fi
 DINOV3_URL="$1"
 DEST_DIR="${2:-/fsx/${USER}/pointworld/dinov3/checkpoints}"
 
-# Default filename matches PointWorld's expected dinov3_vitl16 weight name.
-OUT_NAME="${DINOV3_WEIGHT_NAME:-dinov3_vitl16_pretrain.pth}"
+# Filename MUST match what PointWorld's scene_featurizer expects. The loader
+# (scene_featurizer._resolve_dinov3_weights) looks for this exact canonical name
+# first; a renamed file is rejected with "Unexpected weights specification for
+# the ViT-L backbone". Keep the canonical released filename.
+OUT_NAME="${DINOV3_WEIGHT_NAME:-dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth}"
 
 mkdir -p "${DEST_DIR}"
 echo "[2.download_dinov3] Downloading DINOv3 ViT-L/16 weights -> ${DEST_DIR}/${OUT_NAME}"

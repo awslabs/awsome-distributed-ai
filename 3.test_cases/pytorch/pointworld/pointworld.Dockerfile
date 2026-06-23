@@ -16,18 +16,23 @@ FROM nvcr.io/nvidia/pytorch:24.10-py3
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
-    git git-lfs wget curl ca-certificates \
+    git git-lfs wget curl ca-certificates zstd \
     libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
     && git lfs install \
     && rm -rf /var/lib/apt/lists/*
 
 # Install EFA user-space libraries (kernel module provided by the host).
+# NOTE: the EFA installer shells out to apt for its own dependencies
+# (environment-modules, tcl, ...), so the apt index must be present here. We
+# refresh it inside this layer (the previous layer purged /var/lib/apt/lists)
+# and purge again at the end to keep the layer small.
 ARG EFA_INSTALLER_VERSION=1.47.0
-RUN cd /tmp && \
+RUN apt-get update && cd /tmp && \
     curl -sL https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz | tar xz && \
     cd aws-efa-installer && \
     ./efa_installer.sh -y --skip-kmod --skip-limit-conf --no-verify && \
-    cd /tmp && rm -rf aws-efa-installer
+    cd /tmp && rm -rf aws-efa-installer && \
+    rm -rf /var/lib/apt/lists/*
 
 # Clone PointWorld (pinned to a tested commit) and its third-party submodules.
 ARG POINTWORLD_COMMIT=05484826dfef74cbe278a3974179a5a16705d35d
@@ -41,6 +46,17 @@ WORKDIR /pointworld
 # torch-scatter, spconv-cu124, webdataset, etc.). Using the upstream
 # requirements.txt verbatim keeps this in lockstep with the pinned commit.
 RUN pip install --no-cache-dir -r environments/requirements.txt
+
+# The NVIDIA base image ships its own opencv (4.7.0) whose native libraries live
+# in site-packages/cv2 and are NOT owned by a pip distribution, so `pip uninstall`
+# leaves them behind. requirements.txt also pulls `opencv-python` (4.11.x), and
+# the mix breaks `import cv2` (cv2/typing references cv2.dnn.DictValue, removed in
+# >=4.10; the loaded native module is 4.7.0). Remove the stale cv2 tree entirely,
+# then install a single headless build so the dataloader imports cleanly.
+RUN pip uninstall -y opencv opencv-python opencv-python-headless opencv-contrib-python || true && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/cv2 \
+           /usr/local/lib/python3.10/dist-packages/opencv* && \
+    pip install --no-cache-dir opencv-python-headless==4.11.0.86
 
 # huggingface_hub is used by the dataset / checkpoint download steps.
 RUN pip install --no-cache-dir huggingface_hub==0.26.2

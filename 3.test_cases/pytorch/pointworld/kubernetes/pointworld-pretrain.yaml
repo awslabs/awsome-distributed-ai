@@ -105,11 +105,11 @@ spec:
               resources:
                 limits:
                   nvidia.com/gpu: 8
-                  vpc.amazonaws.com/efa: 32
+                  vpc.amazonaws.com/efa: 16
                   memory: 1100Gi
                 requests:
                   nvidia.com/gpu: 8
-                  vpc.amazonaws.com/efa: 32
+                  vpc.amazonaws.com/efa: 16
                   cpu: "180"
                   memory: 1000Gi
               volumeMounts:

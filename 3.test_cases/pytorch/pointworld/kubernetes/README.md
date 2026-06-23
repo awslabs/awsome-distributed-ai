@@ -112,8 +112,9 @@ regions. For a quick smoke test, set `EVAL_NUM_BATCHES` to e.g. `100`.
 - **Batch size**: `--batch_size=22` is the upstream default. H200 has 141 GB
   HBM; raise it if memory allows, and update `--global_batch_size` accordingly
   when parsing throughput with `../scripts/parse_benchmark.py`.
-- **EFA**: `vpc.amazonaws.com/efa: 32` matches p5en.48xlarge (32 EFA devices per
-  node). Adjust for other instance types.
+- **EFA**: `vpc.amazonaws.com/efa: 16` matches p5en.48xlarge (16 EFA network
+  cards per node, as advertised by the EFA device plugin). Adjust for other
+  instance types (for example p5.48xlarge advertises 32).
 - **Shared memory**: the `shmem` `emptyDir` backs the PyTorch DataLoader workers;
   reduce `sizeLimit` for smaller instances.
 - **B200**: this image targets H200. B200 EFA needs NCCL >= 2.29 — see

@@ -1,0 +1,53 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# PointWorld pre-training TrainJob for Kubeflow Trainer v2.
+# References pointworld-runtime (ClusterTrainingRuntime); apply that first.
+#
+# The container command symlinks the gated DINOv3 weights from FSx into the path
+# the scene featurizer expects (keeping gated weights out of the image), then
+# execs torchrun. The Trainer v2 torch plugin injects the PET_* rendezvous env.
+#
+# numNodes here is the flagship 8 (64 H200). For multi-domain DROID+BEHAVIOR set
+# --domains/--data_dirs accordingly and stage both WDS roots on FSx.
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: pointworld-pretrain
+  namespace: kubeflow
+spec:
+  runtimeRef:
+    name: pointworld-runtime
+    kind: ClusterTrainingRuntime
+  trainer:
+    image: <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/pointworld:05484826
+    numNodes: 8
+    numProcPerNode: 8
+    command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        mkdir -p /pointworld/third_party/dinov3/checkpoints
+        if [ -d /fsx/pointworld/dinov3/checkpoints ] && \
+           [ -n "$(ls -A /fsx/pointworld/dinov3/checkpoints 2>/dev/null)" ]; then
+          ln -sfn /fsx/pointworld/dinov3/checkpoints/* \
+            /pointworld/third_party/dinov3/checkpoints/
+        else
+          echo "ERROR: DINOv3 weights not found; run scripts/2.download_dinov3.sh." >&2
+          exit 1
+        fi
+        cd /pointworld
+        # Trainer v2 torch plugin provides the torchrun rendezvous env (PET_*).
+        exec torchrun --nproc_per_node=8 --nnodes=8 train.py \
+          --distributed=true \
+          --domains=droid,behavior \
+          --data_dirs=/dataset/droid/wds,/dataset/behavior/wds \
+          --norm_stats_path=stats/droid_behavior \
+          --ptv3_size=large \
+          --batch_size=22 \
+          --num_workers=16 \
+          --eval_freq=-1 \
+          --save_freq=1800 \
+          --log_dir=/fsx/pointworld/train_logs \
+          --exp_name=pointworld-large-droid-behavior
