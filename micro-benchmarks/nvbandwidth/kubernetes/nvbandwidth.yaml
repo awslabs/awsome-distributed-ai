@@ -1,0 +1,94 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# nvbandwidth fabric test for P6e-GB200 on EKS / HyperPod-EKS.
+# One ComputeDomain (one 72-GPU NVLink domain); an MPIJob runs the multi-node
+# device-to-device and host-to-device (C2C) tests across the domain.
+#
+# Requires: K8s >= 1.33, NVIDIA DRA driver (ComputeDomain CRD), EFA device plugin.
+---
+apiVersion: resource.nvidia.com/v1beta1
+kind: ComputeDomain
+metadata:
+  name: nvbandwidth-gb200-domain
+spec:
+  numNodes: 18
+  channel:
+    resourceClaimTemplate:
+      name: nvbandwidth-gb200-domain-channel
+---
+apiVersion: kubeflow.org/v2beta1
+kind: MPIJob
+metadata:
+  name: nvbandwidth-gb200
+spec:
+  runPolicy:
+    cleanPodPolicy: Running
+    backoffLimit: 10
+  slotsPerWorker: 4
+  mpiReplicaSpecs:
+    Launcher:
+      replicas: 1
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - image: public.ecr.aws/u1m6g1t5/nvbandwidth-arm64:latest
+            imagePullPolicy: IfNotPresent
+            name: nvbandwidth-launcher
+            env:
+            - name: PATH
+              value: $PATH:/opt/amazon/efa/bin:/opt/nvbandwidth/build:/usr/bin
+            - name: LD_LIBRARY_PATH
+              value: /opt/amazon/openmpi/lib:/opt/amazon/efa/lib:/usr/local/nvidia/lib:$LD_LIBRARY_PATH
+            command:
+            - /opt/amazon/openmpi/bin/mpirun
+            - --allow-run-as-root
+            - --tag-output
+            - -np
+            - "72"
+            - -npernode
+            - "4"
+            - --bind-to
+            - none
+            - -x
+            - PATH
+            - -x
+            - LD_LIBRARY_PATH
+            - /opt/nvbandwidth/build/nvbandwidth
+            - -t
+            - multinode_device_to_device_memcpy_read_ce
+    Worker:
+      replicas: 18
+      template:
+        metadata:
+          labels:
+            nvbandwidth-replica: worker
+        spec:
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                  - key: nvbandwidth-replica
+                    operator: In
+                    values: [worker]
+                topologyKey: nvidia.com/gpu.clique     # pin the whole job to one NVLink domain
+          containers:
+          - image: public.ecr.aws/u1m6g1t5/nvbandwidth-arm64:latest
+            imagePullPolicy: IfNotPresent
+            name: nvbandwidth-worker
+            resources:
+              limits:
+                nvidia.com/gpu: 4
+                vpc.amazonaws.com/efa: 4
+                memory: 32000Mi
+              requests:
+                nvidia.com/gpu: 4
+                vpc.amazonaws.com/efa: 4
+                memory: 32000Mi
+              claims:
+              - name: compute-domain-channel
+          resourceClaims:
+          - name: compute-domain-channel
+            resourceClaimTemplateName: nvbandwidth-gb200-domain-channel

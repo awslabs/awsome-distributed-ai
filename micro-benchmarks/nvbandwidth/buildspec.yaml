@@ -1,0 +1,30 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# CodeBuild spec for the GB200 nvbandwidth image (arm64 / Grace).
+version: 0.2
+
+env:
+  variables:
+    IMAGE_REPO: nvbandwidth-arm64
+    CUDA_VERSION: "12.8.0"
+    NVBANDWIDTH_REF: "main"
+
+phases:
+  pre_build:
+    commands:
+      - echo "Logging in to Amazon ECR..."
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+  build:
+    commands:
+      # arm64 build -- Grace is ARM. Requires an arm64 builder (or buildx --platform linux/arm64).
+      - >-
+        docker build --platform linux/arm64
+        --build-arg CUDA_VERSION="$CUDA_VERSION"
+        --build-arg NVBANDWIDTH_REF="$NVBANDWIDTH_REF"
+        -t "$ECR_REGISTRY/$IMAGE_REPO:latest"
+        -f micro-benchmarks/nvbandwidth/nvbandwidth.Dockerfile
+        micro-benchmarks/nvbandwidth
+  post_build:
+    commands:
+      - docker push "$ECR_REGISTRY/$IMAGE_REPO:latest"
