@@ -1,0 +1,16 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# NVIDIA DRA driver Helm values for P6e-GB200 on EKS (IMEX ComputeDomain support).
+# Install: helm install nvidia-dra-driver-gpu nvidia/nvidia-dra-driver-gpu \
+#            -n nvidia-dra-driver-gpu --create-namespace --version 25.8.0 \
+#            -f nvidia-dra-driver-values.yaml
+#
+# We enable ONLY the ComputeDomain (IMEX) capability. GPU allocation stays with the GPU
+# Operator's device plugin, so gpus.enabled=false here avoids double-managing GPUs.
+computeDomains:
+  enabled: true           # provides the ComputeDomain CRD + per-domain IMEX daemon
+gpus:
+  enabled: false          # GPU scheduling handled by the GPU Operator device plugin
+# Requires K8s >= 1.33 (DRA GA). The driver auto-creates the IMEX daemon for a
+# ComputeDomain before the workload that claims its channel starts.

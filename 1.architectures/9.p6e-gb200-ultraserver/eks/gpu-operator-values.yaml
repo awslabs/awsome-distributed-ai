@@ -1,0 +1,24 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# NVIDIA GPU Operator Helm values for P6e-GB200 on EKS / HyperPod-EKS.
+# Install: helm install gpu-operator nvidia/gpu-operator -n gpu-operator --create-namespace \
+#            --version 25.3.4 -f gpu-operator-values.yaml
+#
+# The AL2023-ARM-NVIDIA EKS AMI (v20251103+) already ships NVIDIA driver 580 with CDMM
+# enabled, so the operator must NOT install its own driver/toolkit, and MIG manager must
+# be OFF (CDMM disables MIG on GB200).
+driver:
+  enabled: false          # AMI provides driver 580 (CDMM)
+toolkit:
+  enabled: false          # AMI provides the container toolkit
+migManager:
+  enabled: false          # MIG is unsupported on GB200 (CDMM) -- do not run the MIG manager
+devicePlugin:
+  enabled: true
+nfd:
+  enabled: true           # node feature discovery (provides nvidia.com/gpu.clique via GFD)
+gfd:
+  enabled: true           # GPU Feature Discovery applies the nvidia.com/gpu.clique label
+# DRA / ComputeDomain support is provided by the separate NVIDIA DRA driver chart
+# (see nvidia-dra-driver-values.yaml), not by the GPU Operator.

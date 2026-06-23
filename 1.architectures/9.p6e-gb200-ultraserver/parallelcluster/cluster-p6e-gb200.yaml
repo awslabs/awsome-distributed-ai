@@ -1,0 +1,57 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# AWS ParallelCluster 3.14.0 config for a P6e-GB200 UltraServer (one 72-GPU NVLink domain).
+# Authored-to-spec: substitute your subnet, key, AMI, and Capacity Block reservation id.
+Region: us-east-1
+Image:
+  # arm64 (Grace) ParallelCluster AMI. Build with the GB200 driver (580/CDMM) baked in,
+  # or layer it via a custom AMI / OnNodeStart action.
+  CustomAmi: <ami-xxxxxxxx-arm64-gb200>
+HeadNode:
+  InstanceType: c7g.4xlarge          # Graviton head node (arm64)
+  Networking:
+    SubnetId: <subnet-xxxxxxxx>
+  Ssh:
+    KeyName: <your-key>
+  CustomActions:
+    OnNodeStart:
+      # Stages the IMEX prolog so compute-node allocations form the NVLink domain.
+      Script: s3://<your-bucket>/91_nvidia_imex_prolog.sh
+  Iam:
+    S3Access:
+      - BucketName: <your-bucket>
+Scheduling:
+  Scheduler: slurm
+  SlurmSettings:
+    # IMEX is set up per-allocation by the prolog; require exclusive nodes.
+    ScaledownIdletime: 60
+  SlurmQueues:
+    - Name: gb200
+      CapacityType: CAPACITY_BLOCK
+      CapacityReservationTarget:
+        CapacityReservationId: <cr-xxxxxxxx>     # from your Capacity Block for ML
+      Networking:
+        SubnetIds:
+          - <subnet-xxxxxxxx>
+        PlacementGroup:
+          Enabled: true
+      ComputeResources:
+        - Name: p6e-gb200
+          InstanceType: p6e-gb200.36xlarge
+          MinCount: 18                            # one full UltraServer (72 GPUs)
+          MaxCount: 18
+          Efa:
+            Enabled: true
+          DisableSimultaneousMultithreading: true
+  # Slurm >= 24.05 alternative to the prolog: add the IMEX switch plugin in slurm.conf:
+  #   SwitchType=switch/nvidia_imex
+  # and skip the OnNodeStart prolog action above.
+SharedStorage:
+  - Name: fsx
+    StorageType: FsxLustre
+    MountDir: /fsx
+    FsxLustreSettings:
+      StorageCapacity: 4800
+      DeploymentType: PERSISTENT_2
+      PerUnitStorageThroughput: 250

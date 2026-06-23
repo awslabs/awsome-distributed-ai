@@ -1,0 +1,57 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Minimal ComputeDomain + clique-pinned validation Job for a P6e-GB200 UltraServer.
+# Applying this proves the IMEX domain forms across all 18 instances before you run
+# real training/inference. The DRA driver auto-creates the IMEX daemon for the domain.
+---
+apiVersion: resource.nvidia.com/v1beta1
+kind: ComputeDomain
+metadata:
+  name: gb200-ultraserver-domain
+spec:
+  numNodes: 18                       # one full UltraServer (72 GPUs)
+  channel:
+    resourceClaimTemplate:
+      name: gb200-ultraserver-domain-channel
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gb200-imex-validate
+spec:
+  backoffLimit: 1
+  completions: 18
+  parallelism: 18
+  completionMode: Indexed
+  template:
+    metadata:
+      labels:
+        app: gb200-imex-validate
+    spec:
+      restartPolicy: Never
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values: [gb200-imex-validate]
+            topologyKey: nvidia.com/gpu.clique     # all pods land in one NVLink domain
+      containers:
+      - name: imex-check
+        image: public.ecr.aws/u1m6g1t5/nvbandwidth-arm64:latest
+        command: ["bash", "-lc", "nvidia-imex-ctl -N | tee /dev/stderr | grep -q 'Domain State: UP'"]
+        resources:
+          limits:
+            nvidia.com/gpu: 4
+            vpc.amazonaws.com/efa: 4
+          requests:
+            nvidia.com/gpu: 4
+            vpc.amazonaws.com/efa: 4
+          claims:
+          - name: compute-domain-channel
+      resourceClaims:
+      - name: compute-domain-channel
+        resourceClaimTemplateName: gb200-ultraserver-domain-channel
