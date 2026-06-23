@@ -141,5 +141,5 @@ spec:
           volumes:
           - name: shmem
             emptyDir:
-                medium: Memory
-                sizeLimit: 200Gi
+              medium: Memory
+              sizeLimit: 200Gi

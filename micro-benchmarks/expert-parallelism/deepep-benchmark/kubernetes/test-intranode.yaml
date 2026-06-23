@@ -89,6 +89,9 @@ spec:
           - image: ${IMAGE_URI}
             imagePullPolicy: IfNotPresent
             name: deepep-intranode-worker
+            env:
+              - name: NVIDIA_GDRCOPY
+                value: "enabled"
             volumeMounts:
             - name: shmem
               mountPath: /dev/shm
@@ -106,5 +109,5 @@ spec:
           volumes:
           - name: shmem
             emptyDir:
-                medium: Memory
-                sizeLimit: 200Gi
+              medium: Memory
+              sizeLimit: 200Gi
