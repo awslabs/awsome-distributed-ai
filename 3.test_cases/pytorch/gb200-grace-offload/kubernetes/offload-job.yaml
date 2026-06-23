@@ -1,0 +1,32 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Grace unified-memory offload training on P6e-GB200 (EKS). Single node, 4 GB200 GPUs.
+# privileged is needed for MPAM/resctrl bandwidth partitioning on the host.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gb200-grace-offload
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: gb200-grace-offload
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: grace-offload
+        image: public.ecr.aws/u1m6g1t5/gb200-grace-offload-arm64:latest
+        env:
+        - { name: VARIANT, value: "superoffload" }
+        command: ["bash","-lc","cd /opt/grace-offload && ./run.sh"]
+        securityContext:
+          privileged: true            # MPAM / resctrl bandwidth partitioning
+        resources:
+          limits:
+            nvidia.com/gpu: 4
+          requests:
+            nvidia.com/gpu: 4
+      nodeSelector:
+        node.kubernetes.io/instance-type: p6e-gb200.36xlarge
