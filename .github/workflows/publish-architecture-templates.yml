@@ -12,7 +12,10 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  AWS_ROLE_ARN: arn:aws:iam::159553542841:role/awslabs-AOSH-GitHubActionsRole
+  # Dedicated, least-privilege template-publishing role (S3 publish + ValidateTemplate),
+  # provisioned in gitlab.aws.dev/ml-frameworks/projects/container-release-pipeline.
+  # Isolated from the shared awslabs-AOSH-GitHubActionsRole used by other workflows.
+  AWS_ROLE_ARN: arn:aws:iam::159553542841:role/adai-template-publisher
   TEMPLATE_BUCKET: awsome-distributed-ai
   TEMPLATE_PREFIX: templates/
   PUBLISH_MANIFEST: .github/template-publish-manifest.yml
