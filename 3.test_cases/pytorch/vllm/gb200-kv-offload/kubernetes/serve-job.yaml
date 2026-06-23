@@ -1,0 +1,35 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# KV-offload-to-Grace serving on P6e-GB200 (EKS / HyperPod-EKS). Single node, 4 GB200 GPUs.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gb200-kv-offload
+  labels: { app: gb200-kv-offload }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: gb200-kv-offload } }
+  template:
+    metadata: { labels: { app: gb200-kv-offload } }
+    spec:
+      containers:
+      - name: vllm
+        image: public.ecr.aws/u1m6g1t5/gb200-kv-offload-arm64:latest
+        env:
+        - { name: MODEL, value: "deepseek-ai/DeepSeek-V3" }
+        - { name: CPU_OFFLOAD_GB, value: "320" }   # cold-KV pool in Grace LPDDR5X
+        command: ["bash","-lc","cd /opt/kv-offload && ./serve.sh"]
+        ports: [ { containerPort: 8000 } ]
+        resources:
+          limits: { nvidia.com/gpu: 4 }
+          requests: { nvidia.com/gpu: 4 }
+      nodeSelector:
+        node.kubernetes.io/instance-type: p6e-gb200.36xlarge
+---
+apiVersion: v1
+kind: Service
+metadata: { name: gb200-kv-offload }
+spec:
+  selector: { app: gb200-kv-offload }
+  ports: [ { port: 8000, targetPort: 8000 } ]
