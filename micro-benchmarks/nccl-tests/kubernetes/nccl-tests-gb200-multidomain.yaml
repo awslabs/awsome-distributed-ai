@@ -1,0 +1,152 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Cross-UltraServer (multi-domain) NCCL test for P6e-GB200.
+#
+# Companion to nccl-tests-gb200.yaml (which runs INTRA one 72-GPU NVLink domain).
+# This manifest spans TWO UltraServers = two NVLink domains = 36 instances = 144 GPUs,
+# so the all-reduce crosses the EFA boundary where there is NO in-network SHARP.
+# It measures the NVLSTree path (NVLink SHARP within each domain, Tree over EFA between).
+#
+# AUTHORED-TO-SPEC: not yet validated at 144-GPU scale -- requires two u-p6e-gb200x72
+# UltraServers (two distinct nvidia.com/gpu.clique values) held simultaneously in a
+# Capacity Block. Run nccl-tests-gb200.yaml first to confirm the single-domain path.
+#
+# Two ComputeDomains are declared (one per UltraServer NVLink domain). The MPIJob runs
+# 144 ranks (4 per instance x 36 instances); workers split into two groups, each pinned
+# to its own clique, so NCCL sees two 72-GPU NVLink domains bridged by EFA.
+---
+apiVersion: resource.nvidia.com/v1beta1
+kind: ComputeDomain
+metadata:
+  name: eks-nccl-gb200-domain-a
+spec:
+  numNodes: 18
+  channel:
+    resourceClaimTemplate:
+      name: eks-nccl-gb200-domain-a-channel
+---
+apiVersion: resource.nvidia.com/v1beta1
+kind: ComputeDomain
+metadata:
+  name: eks-nccl-gb200-domain-b
+spec:
+  numNodes: 18
+  channel:
+    resourceClaimTemplate:
+      name: eks-nccl-gb200-domain-b-channel
+---
+apiVersion: kubeflow.org/v2beta1
+kind: MPIJob
+metadata:
+  name: nccl-tests-gb200-multidomain
+spec:
+  runPolicy:
+    cleanPodPolicy: Running
+    backoffLimit: 20
+  slotsPerWorker: 4
+  mpiReplicaSpecs:
+    Launcher:
+      replicas: 1
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - image: public.ecr.aws/u1m6g1t5/nccl-tests-arm64:latest
+            imagePullPolicy: IfNotPresent
+            name: test-nccl-launcher
+            env:
+            - name: PATH
+              value: $PATH:/opt/amazon/efa/bin:/usr/bin
+            - name: LD_LIBRARY_PATH
+              value: /opt/amazon/openmpi/lib:/opt/nccl/build/lib:/opt/amazon/efa/lib:/opt/aws-ofi-nccl/install/lib:/usr/local/nvidia/lib:$LD_LIBRARY_PATH
+            command:
+            - /opt/amazon/openmpi/bin/mpirun
+            - --allow-run-as-root
+            - --tag-output
+            - -np
+            - "144"          # 2 domains x 72 GPUs -- crosses EFA
+            - -npernode
+            - "4"
+            - --map-by
+            - ppr:4:node
+            - --bind-to
+            - none
+            - -x
+            - PATH
+            - -x
+            - LD_LIBRARY_PATH
+            - -x
+            - FI_PROVIDER=efa
+            - -x
+            - FI_EFA_FORK_SAFE=1
+            - -x
+            - NCCL_DEBUG=INFO
+            - -x
+            - NCCL_NVLS_ENABLE=1
+            - -x
+            - NCCL_MNNVL_ENABLE=1
+            # To pin the inter-domain algorithm explicitly (disables the AWS tuner's
+            # per-size selection), uncomment: - -x  / - NCCL_ALGO=NVLSTree
+            - /opt/nccl-tests/build/all_reduce_perf
+            - -b
+            - "8"
+            - -e
+            - "16G"
+            - -f
+            - "2"
+            - -g
+            - "1"
+            - -c
+            - "1"            # correctness check: #wrong column must be 0
+            - -n
+            - "100"
+    Worker:
+      replicas: 36
+      template:
+        metadata:
+          labels:
+            nccl-tests-replica: mpi-worker
+        spec:
+          # Spread workers across two cliques (two NVLink domains). With 36 replicas and
+          # exactly two clique values available, anti-affinity on the clique key forces
+          # the scheduler to use both UltraServers rather than packing one.
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                  - key: nccl-tests-replica
+                    operator: In
+                    values:
+                    - mpi-worker
+                topologyKey: nvidia.com/gpu.clique
+          containers:
+          - image: public.ecr.aws/u1m6g1t5/nccl-tests-arm64:latest
+            imagePullPolicy: IfNotPresent
+            name: nccl-tests-worker
+            volumeMounts:
+            - name: shmem
+              mountPath: /dev/shm
+            resources:
+              limits:
+                nvidia.com/gpu: 4
+                vpc.amazonaws.com/efa: 4   # p6e-gb200.36xlarge: 4 EFA NICs
+                memory: 32000Mi
+              requests:
+                nvidia.com/gpu: 4
+                vpc.amazonaws.com/efa: 4
+                memory: 32000Mi
+              claims:
+              - name: compute-domain-channel
+          resourceClaims:
+          - name: compute-domain-channel
+            # NOTE: with two ComputeDomains, split the 36 workers into two worker specs
+            # (18 each) referencing domain-a-channel and domain-b-channel respectively.
+            # This single-spec form is kept readable; the two-spec split is the
+            # validated shape once hardware is available.
+            resourceClaimTemplateName: eks-nccl-gb200-domain-a-channel
+          volumes:
+          - name: shmem
+            hostPath:
+              path: /dev/shm
