@@ -1,0 +1,68 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# slime GRPO RL post-training on P6e-GB200 (EKS / HyperPod-EKS) via KubeRay RayJob.
+# Ray head + workers pinned to one nvidia.com/gpu.clique (one 72-GPU NVLink domain).
+# Requires the KubeRay operator and a ComputeDomain for IMEX.
+---
+apiVersion: resource.nvidia.com/v1beta1
+kind: ComputeDomain
+metadata:
+  name: gb200-slime-domain
+spec:
+  numNodes: 18
+  channel:
+    resourceClaimTemplate:
+      name: gb200-slime-domain-channel
+---
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: gb200-slime-grpo
+spec:
+  entrypoint: "cd /opt/slime && MODEL=Qwen/Qwen3-30B-A3B ./run-grpo.sh"
+  rayClusterSpec:
+    headGroupSpec:
+      rayStartParams: {}
+      template:
+        spec:
+          containers:
+          - name: ray-head
+            image: public.ecr.aws/u1m6g1t5/gb200-slime-arm64:latest
+            resources:
+              limits: { nvidia.com/gpu: 4, vpc.amazonaws.com/efa: 4 }
+              requests: { nvidia.com/gpu: 4, vpc.amazonaws.com/efa: 4 }
+              claims:
+              - name: compute-domain-channel
+          resourceClaims:
+          - name: compute-domain-channel
+            resourceClaimTemplateName: gb200-slime-domain-channel
+    workerGroupSpecs:
+    - groupName: gb200-workers
+      replicas: 17
+      minReplicas: 17
+      maxReplicas: 17
+      rayStartParams: {}
+      template:
+        metadata:
+          labels:
+            slime-replica: worker
+        spec:
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                  - { key: slime-replica, operator: In, values: [worker] }
+                topologyKey: nvidia.com/gpu.clique
+          containers:
+          - name: ray-worker
+            image: public.ecr.aws/u1m6g1t5/gb200-slime-arm64:latest
+            resources:
+              limits: { nvidia.com/gpu: 4, vpc.amazonaws.com/efa: 4 }
+              requests: { nvidia.com/gpu: 4, vpc.amazonaws.com/efa: 4 }
+              claims:
+              - name: compute-domain-channel
+          resourceClaims:
+          - name: compute-domain-channel
+            resourceClaimTemplateName: gb200-slime-domain-channel
