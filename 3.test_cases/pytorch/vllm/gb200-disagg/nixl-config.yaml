@@ -1,0 +1,18 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# NIXL KV-connector config for GB200 on AWS. The backend MUST be pinned to LIBFABRIC
+# (UCX is the off-AWS default and will not use EFA correctly here).
+kv_connector: NixlConnector
+nixl:
+  # Explicit backend pin -- NIXL supports EFA via libfabric since v1.0.0.
+  backends: ["LIBFABRIC"]
+  libfabric:
+    provider: efa
+    path: /opt/amazon/efa
+  # NIXL #1609 workaround: LIBFABRIC+VRAM dma-buf fails ("Bad address") on p6e-gb200.
+  # Disable dma-buf until the upstream fix lands; expect a transfer-perf caveat.
+  env:
+    FI_HMEM_CUDA_USE_DMABUF: "0"
+# Intra-UltraServer KV handoff rides NVLink/NVSwitch automatically; only cross-UltraServer
+# handoff uses the LIBFABRIC/EFA path above.

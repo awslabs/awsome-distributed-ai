@@ -1,0 +1,77 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Disaggregated prefill-decode on P6e-GB200 (EKS): prefill Deployment, decode Deployment,
+# and a router/proxy. KV transfer via NIXL LIBFABRIC over EFA (FI_HMEM_CUDA_USE_DMABUF=0
+# for NIXL #1609). One ComputeDomain per role; clique-pinned.
+---
+apiVersion: resource.nvidia.com/v1beta1
+kind: ComputeDomain
+metadata: { name: gb200-disagg-domain }
+spec:
+  numNodes: 18
+  channel:
+    resourceClaimTemplate: { name: gb200-disagg-domain-channel }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: gb200-prefill, labels: { app: gb200-disagg, role: prefill } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: gb200-disagg, role: prefill } }
+  template:
+    metadata: { labels: { app: gb200-disagg, role: prefill } }
+    spec:
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector: { matchExpressions: [ { key: app, operator: In, values: [gb200-disagg] } ] }
+            topologyKey: nvidia.com/gpu.clique
+      containers:
+      - name: prefill
+        image: public.ecr.aws/u1m6g1t5/gb200-disagg-arm64:latest
+        env:
+        - { name: FI_PROVIDER, value: "efa" }
+        - { name: FI_HMEM_CUDA_USE_DMABUF, value: "0" }   # NIXL #1609
+        command: ["bash","-lc","cd /opt/disagg && vllm serve $MODEL --disagg-role prefill --kv-transfer-config \"$(python3 -c 'import yaml,json;print(json.dumps(yaml.safe_load(open(\"nixl-config.yaml\"))))')\""]
+        resources:
+          limits: { nvidia.com/gpu: 4, vpc.amazonaws.com/efa: 4 }
+          requests: { nvidia.com/gpu: 4, vpc.amazonaws.com/efa: 4 }
+          claims: [ { name: cd } ]
+      resourceClaims:
+      - { name: cd, resourceClaimTemplateName: gb200-disagg-domain-channel }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: gb200-decode, labels: { app: gb200-disagg, role: decode } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: gb200-disagg, role: decode } }
+  template:
+    metadata: { labels: { app: gb200-disagg, role: decode } }
+    spec:
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector: { matchExpressions: [ { key: app, operator: In, values: [gb200-disagg] } ] }
+            topologyKey: nvidia.com/gpu.clique
+      containers:
+      - name: decode
+        image: public.ecr.aws/u1m6g1t5/gb200-disagg-arm64:latest
+        env:
+        - { name: FI_PROVIDER, value: "efa" }
+        - { name: FI_HMEM_CUDA_USE_DMABUF, value: "0" }
+        command: ["bash","-lc","cd /opt/disagg && vllm serve $MODEL --disagg-role decode --kv-transfer-config \"$(python3 -c 'import yaml,json;print(json.dumps(yaml.safe_load(open(\"nixl-config.yaml\"))))')\""]
+        resources:
+          limits: { nvidia.com/gpu: 4, vpc.amazonaws.com/efa: 4 }
+          requests: { nvidia.com/gpu: 4, vpc.amazonaws.com/efa: 4 }
+          claims: [ { name: cd } ]
+      resourceClaims:
+      - { name: cd, resourceClaimTemplateName: gb200-disagg-domain-channel }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: gb200-disagg-proxy }
+spec:
+  selector: { app: gb200-disagg, role: decode }
+  ports: [ { port: 8000, targetPort: 8000 } ]
