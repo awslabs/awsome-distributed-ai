@@ -1,0 +1,77 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Mandatory GB200 NCCL correctness gate (EKS). One ComputeDomain (72 GPUs); the launcher
+# runs all_reduce -c 1 and the correctness gate fails the job on any #wrong != 0.
+---
+apiVersion: resource.nvidia.com/v1beta1
+kind: ComputeDomain
+metadata:
+  name: gb200-gate-domain
+spec:
+  numNodes: 18
+  channel:
+    resourceClaimTemplate:
+      name: gb200-gate-domain-channel
+---
+apiVersion: kubeflow.org/v2beta1
+kind: MPIJob
+metadata:
+  name: gb200-correctness-gate
+spec:
+  runPolicy:
+    cleanPodPolicy: Running
+    backoffLimit: 0          # a correctness failure must NOT be retried away
+  slotsPerWorker: 4
+  mpiReplicaSpecs:
+    Launcher:
+      replicas: 1
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - image: public.ecr.aws/u1m6g1t5/nccl-tests-arm64:latest
+            name: gate-launcher
+            env:
+            - name: LD_LIBRARY_PATH
+              value: /opt/amazon/openmpi/lib:/opt/nccl/build/lib:/opt/amazon/efa/lib:/opt/aws-ofi-nccl/install/lib:/usr/local/nvidia/lib
+            command: ["bash","-lc"]
+            args:
+            - >
+              /opt/amazon/openmpi/bin/mpirun --allow-run-as-root -np 72 -npernode 4
+              --bind-to none
+              -x FI_PROVIDER=efa -x FI_EFA_FORK_SAFE=1
+              -x NCCL_DEBUG=INFO -x NCCL_NVLS_ENABLE=1 -x NCCL_MNNVL_ENABLE=1
+              /opt/nccl-tests/build/all_reduce_perf -b 8 -e 16G -f 2 -g 1 -c 1 -n 100
+              | awk '/^[[:space:]]*[0-9]+[[:space:]]+[0-9]+/ {if($NF+0>m)m=$NF+0} END{print "max_wrong="m; exit (m>0)}'
+    Worker:
+      replicas: 18
+      template:
+        metadata:
+          labels:
+            gate-replica: worker
+        spec:
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                  - key: gate-replica
+                    operator: In
+                    values: [worker]
+                topologyKey: nvidia.com/gpu.clique
+          containers:
+          - image: public.ecr.aws/u1m6g1t5/nccl-tests-arm64:latest
+            name: gate-worker
+            resources:
+              limits:
+                nvidia.com/gpu: 4
+                vpc.amazonaws.com/efa: 4
+              requests:
+                nvidia.com/gpu: 4
+                vpc.amazonaws.com/efa: 4
+              claims:
+              - name: compute-domain-channel
+          resourceClaims:
+          - name: compute-domain-channel
+            resourceClaimTemplateName: gb200-gate-domain-channel
