@@ -1,0 +1,34 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# FP4 (NVFP4) TensorRT-LLM serving on P6e-GB200 (EKS). Single node, 4 GB200 GPUs.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gb200-fp4-trtllm
+  labels: { app: gb200-fp4-trtllm }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: gb200-fp4-trtllm } }
+  template:
+    metadata: { labels: { app: gb200-fp4-trtllm } }
+    spec:
+      containers:
+      - name: trtllm
+        image: public.ecr.aws/u1m6g1t5/gb200-fp4-trtllm-arm64:latest
+        env:
+        - { name: MODEL, value: "nvidia/Llama-3.1-8B-Instruct-NVFP4" }
+        command: ["bash","-lc","cd /opt/fp4 && ./serve.sh"]
+        ports: [ { containerPort: 8000 } ]
+        resources:
+          limits: { nvidia.com/gpu: 4 }
+          requests: { nvidia.com/gpu: 4 }
+      nodeSelector:
+        node.kubernetes.io/instance-type: p6e-gb200.36xlarge
+---
+apiVersion: v1
+kind: Service
+metadata: { name: gb200-fp4-trtllm }
+spec:
+  selector: { app: gb200-fp4-trtllm }
+  ports: [ { port: 8000, targetPort: 8000 } ]
