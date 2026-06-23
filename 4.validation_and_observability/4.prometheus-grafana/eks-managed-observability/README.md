@@ -19,6 +19,7 @@ Monitor EKS GPU workloads using Amazon Managed Prometheus (AMP) and Amazon Manag
 
 - EKS cluster with GPU nodes
 - AWS CLI and `kubectl` configured
+- Helm >= 3.14
 - AWS IAM Identity Center configured (for Grafana authentication)
 
 ## Installing DCGM Exporter

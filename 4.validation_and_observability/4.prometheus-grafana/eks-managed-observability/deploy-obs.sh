@@ -12,6 +12,15 @@ echo -e "${GREEN}EKS GPU Observability Setup${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
 
+# Helm >= 3.14 is required for `--reset-then-reuse-values` (introduced in
+# v3.14.0) used by the GPU Operator upgrades in Step 7. Fail loudly up front
+# rather than aborting mid-deploy with `unknown flag`.
+if ! helm version --short 2>/dev/null | grep -qE 'v3\.(1[4-9]|[2-9][0-9])'; then
+    echo -e "${RED}Helm >= 3.14 is required (for --reset-then-reuse-values).${NC}"
+    echo -e "${RED}Current version: $(helm version --short 2>/dev/null || echo 'helm not found')${NC}"
+    exit 1
+fi
+
 # Function to prompt for input with default value
 prompt_with_default() {
     local prompt="$1"
@@ -380,14 +389,14 @@ if [ -f "custom-dcgm-metrics.csv" ]; then
 else
     echo -e "${YELLOW}No custom-dcgm-metrics.csv found; using GPU Operator default DCGM metrics.${NC}"
 
-    # Drop any stale custom ConfigMap and clear the override (=null removes the
-    # key) so the exporter reverts to the operator's built-in default metrics.
-    kubectl delete configmap custom-dcgm-metrics -n gpu-operator --ignore-not-found
     echo "Updating GPU Operator to use default metrics..."
     helm upgrade gpu-operator nvidia/gpu-operator \
       -n gpu-operator \
       --reset-then-reuse-values \
       --set dcgmExporter.config.name=null
+
+    # Now that the release no longer references it, drop any stale ConfigMap.
+    kubectl delete configmap custom-dcgm-metrics -n gpu-operator --ignore-not-found
 fi
 
 # Restart DCGM Exporter
