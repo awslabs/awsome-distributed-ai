@@ -1,0 +1,30 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Single-node FP4/FP8 Transformer Engine GEMM microbenchmark on P6e-GB200 (EKS).
+# GPU-capability benchmark: one pod, 4 GB200 GPUs, no EFA / ComputeDomain needed.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: te-gemm-gb200
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: te-gemm-gb200
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: te-gemm
+        image: public.ecr.aws/u1m6g1t5/transformer-engine-gemm-arm64:latest
+        imagePullPolicy: IfNotPresent
+        command: ["bash", "-lc", "cd /opt/te-gemm && ./run_gemm_bench.sh && python3 roofline.py results.json"]
+        resources:
+          limits:
+            nvidia.com/gpu: 4
+          requests:
+            nvidia.com/gpu: 4
+      # Schedule onto a GB200 node; CDMM disables MIG so the GPUs are whole.
+      nodeSelector:
+        node.kubernetes.io/instance-type: p6e-gb200.36xlarge

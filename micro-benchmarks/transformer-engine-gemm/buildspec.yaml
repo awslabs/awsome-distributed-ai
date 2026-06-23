@@ -1,0 +1,26 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# CodeBuild spec for the GB200 Transformer Engine GEMM image (arm64 / Grace).
+version: 0.2
+
+env:
+  variables:
+    IMAGE_REPO: transformer-engine-gemm-arm64
+    BASE_IMAGE: "nvcr.io/nvidia/pytorch:25.04-py3"
+
+phases:
+  pre_build:
+    commands:
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+  build:
+    commands:
+      - >-
+        docker build --platform linux/arm64
+        --build-arg BASE_IMAGE="$BASE_IMAGE"
+        -t "$ECR_REGISTRY/$IMAGE_REPO:latest"
+        -f micro-benchmarks/transformer-engine-gemm/transformer-engine-gemm.Dockerfile
+        micro-benchmarks/transformer-engine-gemm
+  post_build:
+    commands:
+      - docker push "$ECR_REGISTRY/$IMAGE_REPO:latest"
