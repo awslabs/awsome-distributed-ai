@@ -300,13 +300,14 @@ The variables:
 | `AWS_REGION` | `us-east-1` | Region of your cluster / ECR. |
 | `UPSTREAM_REF` | `b3bbabb1f461` | Pinned RLinf commit baked into the image. |
 | `DREAMZERO_REF` | `ab790c198fbc` | Pinned `dreamzero` (`groot`) commit baked into the image. |
+| `IMAGE_TAG` | `dz-ab790c198fbc` | Immutable tag for the training image. Used by both `build-push.sh` and the manifest `envsubst` so the pushed and deployed images always match (avoid a mutable `latest` tag). Defaults to `dz-${DREAMZERO_REF}`. |
 
 ## Step-by-step
 
 Throughout, `$NAMESPACE` and `$ECR_URI` come from `env_vars`. Wherever a manifest
 embeds inline shell, render it with the **restricted** allow-list
-`envsubst '${ECR_URI} ${NAMESPACE}'` so the inline `${...}` shell variables are
-not clobbered to empty strings.
+`envsubst '${ECR_URI} ${NAMESPACE} ${IMAGE_TAG}'` so the inline `${...}` shell
+variables are not clobbered to empty strings.
 
 ### 1. Build and push the training image
 
@@ -318,8 +319,8 @@ external `groot` package is cloned from `github.com/RLinf/dreamzero.git` and
 placed on `PYTHONPATH` via `DREAMZERO_PATH=/workspace/DreamZero`.
 
 Build the image with **local Docker + buildx**. Run from the `kubernetes/libero/`
-directory; it reads `ECR_URI`, `AWS_REGION`, `UPSTREAM_REF`, and `DREAMZERO_REF`
-from `env_vars`:
+directory; it reads `ECR_URI`, `AWS_REGION`, `UPSTREAM_REF`, `DREAMZERO_REF`, and
+`IMAGE_TAG` from `env_vars`:
 
 ```bash
 source ./env_vars
@@ -328,7 +329,7 @@ source ./env_vars
 
 This clones the pinned `RLinf` and `dreamzero` sources, builds stage 1
 (`rlinf-upstream-embodied-libero`), then builds and pushes stage 2 to
-`${ECR_URI}:latest`.
+`${ECR_URI}:${IMAGE_TAG}`.
 
 ### 2. Stage models + dataset to FSx
 
@@ -363,7 +364,7 @@ image** (it needs the RLinf toolkit + the `dreamzero` venv), so use **restricted
 `envsubst`:
 
 ```bash
-envsubst '${ECR_URI} ${NAMESPACE}' < generate-metadata.yaml | kubectl apply -f -
+envsubst '${ECR_URI} ${NAMESPACE} ${IMAGE_TAG}' < generate-metadata.yaml | kubectl apply -f -
 kubectl logs -f -n "$NAMESPACE" job/generate-metadata-dreamzero
 # -> writes /fsx/models/metadata-libero.json (top-level key `libero_sim`)
 ```
@@ -382,7 +383,7 @@ kubectl -n "$NAMESPACE" create configmap dreamzero-sft-launcher \
   --from-file=run_dreamzero_sft_eks.sh=scripts/run_dreamzero_sft_eks.sh \
   --dry-run=client -o yaml | kubectl apply -f -
 
-envsubst '${ECR_URI} ${NAMESPACE}' < dreamzero-sft.yaml | kubectl apply -f -
+envsubst '${ECR_URI} ${NAMESPACE} ${IMAGE_TAG}' < dreamzero-sft.yaml | kubectl apply -f -
 
 # dreamzero-sft is a RayJob. `kubectl logs job/...` would only show the KubeRay
 # submitter's `ray job submit` output; the training driver logs live on the Ray
@@ -413,7 +414,7 @@ kubectl -n "$NAMESPACE" create configmap dreamzero-convert-launcher \
   --from-file=convert_checkpoint.sh=scripts/convert_checkpoint.sh \
   --dry-run=client -o yaml | kubectl apply -f -
 
-envsubst '${ECR_URI} ${NAMESPACE}' < convert-checkpoint.yaml | kubectl apply -f -
+envsubst '${ECR_URI} ${NAMESPACE} ${IMAGE_TAG}' < convert-checkpoint.yaml | kubectl apply -f -
 kubectl logs -f -n "$NAMESPACE" job/dreamzero-convert
 # -> .../global_step_1/actor/model_state_dict/full_weights.pt
 ```
@@ -437,7 +438,7 @@ kubectl -n "$NAMESPACE" create configmap dreamzero-eval-config \
   --from-file=libero_spatial_eval_dreamzero_14b.yaml=scripts/libero_spatial_eval_dreamzero_14b.yaml \
   --dry-run=client -o yaml | kubectl apply -f -
 
-envsubst '${ECR_URI} ${NAMESPACE}' < dreamzero-eval.yaml | kubectl apply -f -
+envsubst '${ECR_URI} ${NAMESPACE} ${IMAGE_TAG}' < dreamzero-eval.yaml | kubectl apply -f -
 kubectl logs -f -n "$NAMESPACE" job/dreamzero-eval
 ```
 
@@ -514,7 +515,7 @@ config:
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Pods crash with `ray: command not found`, or inline `${...}` vars render empty | Manifest rendered with unrestricted `envsubst`, clobbering inline shell vars | Always render manifests that embed shell with the **restricted** allow-list: `envsubst '${ECR_URI} ${NAMESPACE}' < ...`. |
+| Pods crash with `ray: command not found`, or inline `${...}` vars render empty | Manifest rendered with unrestricted `envsubst`, clobbering inline shell vars | Always render manifests that embed shell with the **restricted** allow-list: `envsubst '${ECR_URI} ${NAMESPACE} ${IMAGE_TAG}' < ...`. |
 | `ray: command not found` on Ray head/worker/submitter | KubeRay runs `ray` non-interactively (`~/.bashrc` not sourced); `ray` lives in the `dreamzero` venv | Already handled in `dreamzero-sft.yaml`: the venv `bin` is prepended to `PATH` on the head/worker `env` **and** on the `submitterPodTemplate`. Don't strip those `PATH` entries. |
 | SFT crashes near checkpoint save: `UnpicklingError: invalid load key '\x00'` in `broadcast_object_list`, after shards are written | `dcp.save`'s finalization broadcast runs over the default NCCL/CUDA PG and races with NCCL teardown at the end of a long write (not torch-version-specific — the sync `dcp.save` path is unchanged through ≥ torch 2.8) | Fixed by the in-image `dcp-save-gloo-coordinator.patch`, which passes a dedicated gloo PG so the broadcast runs over CPU/gloo. If you somehow hit this, the **on-disk checkpoint is still valid and convertible** — proceed to step 5 (convert). |
 | Convert fails with `EOFError` / `inline_container.cc unexpected pos`, corrupt shards | FSx filled up during the SFT run; `torch.save` was truncated mid-write | Ensure **≥250 GB free** on FSx before SFT (a 14B DCP checkpoint is ~140–206 GB). Free space, re-run SFT. |

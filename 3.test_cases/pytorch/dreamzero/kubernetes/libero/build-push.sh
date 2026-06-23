@@ -17,7 +17,11 @@ UPSTREAM_REF="${UPSTREAM_REF:-b3bbabb1f461}"
 DREAMZERO_REPO="${DREAMZERO_REPO:-https://github.com/RLinf/dreamzero.git}"
 DREAMZERO_REF="${DREAMZERO_REF:-ab790c198fbc}"
 BUILD_TARGET="${BUILD_TARGET:-embodied-libero}"
-TAG="${TAG:-latest}"
+# Immutable image tag. Defaults to one derived from the pinned DreamZero ref so the
+# pushed image is reproducible (CONTRIBUTING: "do not use a latest tag"). The SAME
+# value must be exported as IMAGE_TAG when rendering the manifests so the deployed
+# image matches the pushed one -- see env_vars.example.
+IMAGE_TAG="${IMAGE_TAG:-dz-${DREAMZERO_REF}}"
 
 # Test-case root (this script is at kubernetes/libero/build-push.sh).
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -41,9 +45,9 @@ docker buildx build --platform linux/amd64 --load \
 echo "== Stage 2: EFA overlay (push) =="
 docker buildx build --platform linux/amd64 --push \
   --build-arg BUILD_TARGET="$BUILD_TARGET" \
-  -t "${ECR_URI}:${TAG}" \
+  -t "${ECR_URI}:${IMAGE_TAG}" \
   -f Dockerfile .
 
-echo "== Done: ${ECR_URI}:${TAG} =="
+echo "== Done: ${ECR_URI}:${IMAGE_TAG} =="
 echo "== Cleaning transient clones =="
 rm -rf RLinf DreamZero

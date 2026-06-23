@@ -33,11 +33,12 @@
 #     --from-file=libero_spatial_eval_dreamzero_14b.yaml=kubernetes/libero/scripts/libero_spatial_eval_dreamzero_14b.yaml \
 #     --dry-run=client -o yaml | kubectl apply -f -
 #
-# Apply (RESTRICTED envsubst -- substitute ONLY ${ECR_URI} and ${NAMESPACE} so the
-# inline ${PYTHONPATH:-} guards in the bootstrap are NOT clobbered):
+# Apply (RESTRICTED envsubst -- substitute ONLY ${ECR_URI}, ${NAMESPACE} and
+# ${IMAGE_TAG} so the inline ${PYTHONPATH:-} guards in the bootstrap are NOT clobbered):
 #   export ECR_URI=<account>.dkr.ecr.<region>.amazonaws.com/<repo>
 #   export NAMESPACE=dreamzero
-#   envsubst '${ECR_URI} ${NAMESPACE}' < kubernetes/libero/dreamzero-eval.yaml | kubectl apply -f -
+#   export IMAGE_TAG=dz-ab790c198fbc   # immutable tag pushed by build-push.sh
+#   envsubst '${ECR_URI} ${NAMESPACE} ${IMAGE_TAG}' < kubernetes/libero/dreamzero-eval.yaml | kubectl apply -f -
 ---
 apiVersion: batch/v1
 kind: Job
@@ -69,7 +70,7 @@ spec:
       terminationGracePeriodSeconds: 120
       containers:
         - name: eval
-          image: ${ECR_URI}:latest
+          image: ${ECR_URI}:${IMAGE_TAG}
           command:
             - bash
             - /opt/scripts/run_dreamzero_eval_eks.sh

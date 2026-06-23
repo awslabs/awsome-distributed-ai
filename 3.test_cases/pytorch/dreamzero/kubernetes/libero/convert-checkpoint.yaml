@@ -17,11 +17,12 @@
 # Usage (restricted envsubst protects the inline ${...} shell vars):
 #   export ECR_URI=<acct>.dkr.ecr.<region>.amazonaws.com/<repo>
 #   export NAMESPACE=dreamzero
+#   export IMAGE_TAG=dz-ab790c198fbc   # immutable tag pushed by build-push.sh
 #   # Optionally override STEP (default global_step_1):
 #   kubectl -n $NAMESPACE create configmap dreamzero-convert-launcher \
 #     --from-file=convert_checkpoint.sh=kubernetes/libero/scripts/convert_checkpoint.sh \
 #     --dry-run=client -o yaml | kubectl apply -f -
-#   envsubst '${ECR_URI} ${NAMESPACE}' < kubernetes/libero/convert-checkpoint.yaml | kubectl apply -f -
+#   envsubst '${ECR_URI} ${NAMESPACE} ${IMAGE_TAG}' < kubernetes/libero/convert-checkpoint.yaml | kubectl apply -f -
 ---
 apiVersion: batch/v1
 kind: Job
@@ -42,7 +43,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: convert
-          image: ${ECR_URI}:latest
+          image: ${ECR_URI}:${IMAGE_TAG}
           command: ["bash", "/opt/scripts/convert_checkpoint.sh"]
           env:
             - name: VENV_NAME

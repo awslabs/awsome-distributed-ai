@@ -29,10 +29,11 @@
 #     --dry-run=client -o yaml | kubectl apply -f -
 #   export ECR_URI=<account>.dkr.ecr.<region>.amazonaws.com/<repo>
 #   export NAMESPACE=dreamzero
-#   # RESTRICTED envsubst -- substitute ONLY ${ECR_URI} and ${NAMESPACE}.
+#   export IMAGE_TAG=dz-ab790c198fbc   # immutable tag pushed by build-push.sh
+#   # RESTRICTED envsubst -- substitute ONLY ${ECR_URI}, ${NAMESPACE} and ${IMAGE_TAG}.
 #   # (The Ray head-election bash is gone, but keep this habit: other inline
 #   # shell snippets, e.g. the launcher copy, must not be expanded.)
-#   envsubst '${ECR_URI} ${NAMESPACE}' < kubernetes/libero/dreamzero-sft.yaml | kubectl apply -f -
+#   envsubst '${ECR_URI} ${NAMESPACE} ${IMAGE_TAG}' < kubernetes/libero/dreamzero-sft.yaml | kubectl apply -f -
 ---
 apiVersion: ray.io/v1
 kind: RayJob
@@ -66,7 +67,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: ray-job-submitter
-          image: ${ECR_URI}:latest
+          image: ${ECR_URI}:${IMAGE_TAG}
           env:
             - name: PATH
               value: "/opt/venv/dreamzero/bin:/opt/amazon/openmpi/bin:/opt/amazon/efa/bin:/opt/gdrcopy/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -102,7 +103,7 @@ spec:
                   topologyKey: kubernetes.io/hostname
           containers:
             - name: ray-head
-              image: ${ECR_URI}:latest
+              image: ${ECR_URI}:${IMAGE_TAG}
               env: &dreamzero_env
                 # KubeRay runs `ray start` as the container command (non-interactive,
                 # ~/.bashrc not sourced). `ray` lives in the dreamzero venv, so prepend
@@ -207,7 +208,7 @@ spec:
                     topologyKey: kubernetes.io/hostname
             containers:
               - name: ray-worker
-                image: ${ECR_URI}:latest
+                image: ${ECR_URI}:${IMAGE_TAG}
                 env: *dreamzero_env
                 resources: *dreamzero_resources
                 volumeMounts: *dreamzero_mounts
