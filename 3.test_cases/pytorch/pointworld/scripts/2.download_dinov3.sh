@@ -15,7 +15,7 @@
 #
 # The weights are placed on the shared filesystem so every worker pod can read
 # them. The training container symlinks third_party/dinov3/checkpoints to this
-# location at run time (see kubernetes/README.md), so no gated artifact is ever
+# location at run time (see ../README.md), so no gated artifact is ever
 # baked into the container image.
 #
 # Usage:

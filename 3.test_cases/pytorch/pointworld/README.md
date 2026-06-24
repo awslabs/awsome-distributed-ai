@@ -44,7 +44,9 @@ There is **no fine-tuning stage** — it is intentionally absent from the model
 design. Real-robot MPC deployment happens off-cluster on physical hardware and is
 out of scope for this repository.
 
-> This test case is **Kubernetes-only** (EKS / HyperPod EKS). 
+> [!info] Kubernetes-only
+> This test case targets **Amazon EKS / SageMaker HyperPod EKS**. There is no
+> Slurm variant.
 
 > [!note] Kubeflow Trainer v1 vs v2
 > The manifests in [`kubernetes/`](./kubernetes/) use the Kubeflow **PyTorchJob v1**
@@ -72,7 +74,31 @@ git clone https://github.com/awslabs/awsome-distributed-ai.git
 cd awsome-distributed-ai/3.test_cases/pytorch/pointworld
 ```
 
-## 2. Stage data and weights onto FSx (in-cluster)
+## 2. Build and push the container
+
+The pre-training, evaluation, **and** data-staging jobs all run inside this image,
+so build and push it to Amazon ECR before anything else.
+
+```bash
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+REGION=us-east-1   # adjust to your cluster region
+REPO=pointworld
+TAG=05484826        # matches POINTWORLD_COMMIT in pointworld.Dockerfile
+
+aws ecr create-repository --repository-name ${REPO} --region ${REGION} || true
+aws ecr get-login-password --region ${REGION} \
+  | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
+
+docker build -t ${REPO}:${TAG} -f pointworld.Dockerfile .
+docker tag ${REPO}:${TAG} ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${REPO}:${TAG}
+docker push ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${REPO}:${TAG}
+```
+
+The image tag matches `POINTWORLD_COMMIT` in the Dockerfile so the running image
+is traceable to an exact upstream commit. Then replace `<ACCOUNT_ID>` and
+`<REGION>` in the manifests under [`kubernetes/`](./kubernetes/) with your values.
+
+## 3. Stage data and weights onto FSx (in-cluster)
 
 > [!important] FSx is not mounted on your laptop
 > FSx for Lustre is a VPC-internal filesystem. The `/fsx` paths in this test case
@@ -94,9 +120,9 @@ PointWorld needs two things staged onto FSx before training:
 
 [`kubernetes/pointworld-data-prep.yaml`](./kubernetes/pointworld-data-prep.yaml)
 does all of this in one Job. Because the Job runs inside the PointWorld container,
-**build and push the image first (Section 3)**, then edit the Job:
+**build and push the image first (Section 2)**, then edit the Job:
 
-- Replace `<ACCOUNT_ID>` / `<REGION>` (your ECR image — built in Section 3).
+- Replace `<ACCOUNT_ID>` / `<REGION>` (your ECR image — built in Section 2).
 - Paste your gated DINOv3 URL into `DINOV3_URL` (treat it as a secret; do not
   commit it).
 - Set `BEHAVIOR_TASKS` / `MAX_CLIPS`: the defaults stage a small BEHAVIOR subset
@@ -108,13 +134,25 @@ kubectl apply -f kubernetes/pointworld-data-prep.yaml
 kubectl logs -f job/pointworld-data-prep -n kubeflow
 ```
 
-The Job writes this layout (consumed by training via `LOCAL_DATASET_DIR`):
+The Job writes the DINOv3 weights and WDS shards into the layout the
+training/eval manifests expect on the shared filesystem:
 
 ```text
 /fsx/pointworld/
-├── dinov3/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
-└── dataset/behavior/wds/{train,test}/...   # + metadata_rank0.json
+├── dataset/
+│   ├── behavior/wds/{train,test}/...          # from the data-prep Job
+│   │   └── metadata_rank0.json                # written by convert_wds on completion
+│   └── droid/wds/{train,test}/...             # full-scale only (see note below)
+│       └── test/expert_confidence-seed=42.h5  # for DROID filtered metrics
+├── dinov3/checkpoints/
+│   └── dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth   # gated; canonical name required
+├── train_logs/                                # written during pre-training
+└── checkpoints/                               # written during pre-training
 ```
+
+The pre-training pod mounts the WDS root at `/dataset` via
+`subPath: pointworld/dataset`, so PointWorld's `LOCAL_DATASET_DIR=/dataset`
+resolves `/dataset/behavior/wds` (and `/dataset/droid/wds`).
 
 > [!note] DROID vs BEHAVIOR
 > DROID is distributed as a single multi-terabyte split archive that does not
@@ -139,16 +177,6 @@ pod that mounts `fsx-claim`), the `scripts/` helpers are the equivalent steps:
 `scripts/1.convert_wds.py` for the data. They take the same `/fsx/...` paths and
 must run inside a pod with FSx mounted.
 
-## 3. Build and push the container
-
-```bash
-docker build -t pointworld:05484826 -f pointworld.Dockerfile .
-```
-
-Then push to ECR (see [`kubernetes/README.md`](./kubernetes/README.md#push-the-image-to-ecr)
-for the full login/tag/push sequence). The image tag matches `POINTWORLD_COMMIT`
-in the Dockerfile so the running image is traceable to an exact upstream commit.
-
 ## 4. Pre-train (Kubernetes PyTorchJob)
 
 ```bash
@@ -162,8 +190,27 @@ processes (one per H200) for 64-way data-parallel pre-training. The flagship fla
 set (large PTv3, DROID + BEHAVIOR) is encoded in the manifest and mirrored in
 [`configs/train-large-droid-behavior.env`](./configs/train-large-droid-behavior.env).
 
-See [`kubernetes/README.md`](./kubernetes/README.md) for the launch-pattern
-details, FSx layout, and tuning notes.
+The PyTorchJob operator injects `MASTER_ADDR`, `MASTER_PORT`, `WORLD_SIZE`, and
+`RANK`; PointWorld's `Trainer` initializes the process group with
+`init_method="env://"` and reads `LOCAL_RANK` directly, so no extra launcher is
+needed.
+
+### Launch-pattern detail
+
+The container `command` is a small `bash -c` wrapper that:
+
+1. Symlinks the gated DINOv3 weights from `/fsx/pointworld/dinov3/checkpoints`
+   into `/pointworld/third_party/dinov3/checkpoints` (keeping gated weights out of
+   the image), then
+2. `exec`s `torchrun ... train.py` with the flagship DROID + BEHAVIOR flags.
+
+Doing the symlink in the main container (rather than an initContainer) ensures it
+lives in the same filesystem namespace as the training process.
+
+> [!note] Kubeflow Trainer v2
+> On a Trainer v2 cluster, apply the manifests in
+> [`kubernetes/trainer-v2/`](./kubernetes/trainer-v2/) instead — same image and
+> FSx layout, expressed as a `TrainJob` + `ClusterTrainingRuntime`.
 
 ## 5. Evaluate (Kubernetes Job)
 
@@ -201,6 +248,19 @@ python scripts/parse_benchmark.py \
 > The step/loss/time regexes are configurable; adjust them if your build's log
 > format differs from the release default.
 
+## Tuning notes
+
+- **Batch size**: `--batch_size=22` is the upstream default. H200 has 141 GB HBM;
+  raise it if memory allows, and update `--global_batch_size` accordingly when
+  parsing throughput with [`scripts/parse_benchmark.py`](./scripts/parse_benchmark.py).
+- **EFA**: `vpc.amazonaws.com/efa: 16` matches p5en.48xlarge (16 EFA network cards
+  per node, as advertised by the EFA device plugin). Adjust for other instance
+  types — for example p5.48xlarge advertises 32.
+- **Shared memory**: the `shmem` `emptyDir` backs the PyTorch DataLoader workers;
+  reduce its `sizeLimit` for smaller instances.
+- **B200**: this image targets H200. B200 EFA networking needs NCCL >= 2.29 — see
+  "Known limitations" below.
+
 ## Directory structure
 
 ```text
@@ -216,7 +276,7 @@ pointworld/
 │   ├── 2.download_dinov3.sh           # fetch gated DINOv3 weights
 │   └── parse_benchmark.py             # throughput / loss from logs
 └── kubernetes/
-    ├── README.md                      # EKS/HyperPod-EKS specifics
+    ├── README.md                      # manifest index (points back here)
     ├── pointworld-data-prep.yaml       # Job: stage DINOv3 + WDS onto FSx (in-cluster)
     ├── pointworld-pretrain.yaml        # PyTorchJob: 8x DDP pre-training
     ├── pointworld-eval.yaml            # Job: single-GPU evaluation
@@ -234,7 +294,7 @@ pointworld/
   NCCL >= 2.29, which the base image predates; use a NeMo container with NCCL
   >= 2.29 for B200.
 - **Gated DINOv3**: training and evaluation cannot run until the gated DINOv3
-  weights are present on FSx (Section 2).
+  weights are present on FSx (Section 3).
 
 ## Validation status
 
