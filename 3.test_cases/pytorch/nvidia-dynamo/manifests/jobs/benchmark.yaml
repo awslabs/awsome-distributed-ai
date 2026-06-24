@@ -1,0 +1,31 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# AIPerf load-generator Job. Applied by scripts/08-benchmark.sh via an explicit
+# allow-list so shell inside the container ($(seq ...), $i) is NOT touched:
+#   envsubst '$JOB $NS $IMAGE $URL $CONCURRENCIES $NAME $MODEL $ISL $OSL' | kubectl apply -f -
+apiVersion: batch/v1
+kind: Job
+metadata: { name: ${JOB}, namespace: ${NS} }
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 1800
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector: { sagemaker.amazonaws.com/instance-group-name: dynamo-workers }
+      tolerations: [{ effect: NoSchedule, key: nvidia.com/gpu, operator: Exists }]
+      containers:
+        - name: bench
+          image: ${IMAGE}
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              set -e
+              echo "Waiting for endpoint ${URL} ..."
+              for i in $(seq 1 60); do curl -sf ${URL}/health >/dev/null 2>&1 && { echo healthy; break; }; sleep 5; done
+              export CONCURRENCIES="${CONCURRENCIES}"
+              python3 -m benchmarks.utils.benchmark --benchmark-name "${NAME}" --endpoint-url "${URL}" \
+                --model "${MODEL}" --isl ${ISL} --osl ${OSL} --output-dir /tmp/results 2>&1
+              echo BENCH_DONE
+          resources: { requests: { cpu: "2", memory: "4Gi" }, limits: { cpu: "4", memory: "8Gi" } }

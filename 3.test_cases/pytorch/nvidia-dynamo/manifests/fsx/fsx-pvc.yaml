@@ -1,0 +1,12 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# FSx PersistentVolumeClaim bound to dynamo-fsx-pv.
+# Applied by scripts/02-download-model.sh via: envsubst '$PVC $NS' | kubectl apply -f -
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: ${PVC}, namespace: ${NS} }
+spec:
+  accessModes: ["ReadWriteMany"]
+  resources: { requests: { storage: 1200Gi } }
+  volumeName: dynamo-fsx-pv

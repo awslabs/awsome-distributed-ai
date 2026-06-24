@@ -80,4 +80,4 @@ The Dynamo frontend exposes these metric families:
 - Use `rate(...[5m])` for counters and histograms to see per-second rates
 - Use `histogram_quantile(0.50, ...)` for p50, `0.99` for p99
 - Filter by model: add `{model="openai/gpt-oss-20b"}` to any query
-- Run a benchmark (`./scripts/05a-test-benchmark.sh`) to generate traffic and see metrics in action
+- Run a benchmark (`./scripts/08-benchmark.sh <scenario>`) to generate traffic and see metrics in action

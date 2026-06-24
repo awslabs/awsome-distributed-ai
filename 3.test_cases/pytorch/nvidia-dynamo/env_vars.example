@@ -11,8 +11,8 @@ export EKS_CLUSTER_NAME="<your-hyperpod-eks-cluster>"
 export NAMESPACE="dynamo-system"
 
 # ---- Serving image (pinned; do NOT use :latest) ----
-# SGLang runtime that backs the Dynamo workers and frontend. Pinned in every
-# scenario YAML (the `image:` field) — keep this in sync if you bump it there.
+# Reference only: the authoritative pin lives in each scenario YAML (the `image:` field).
+# No script consumes this var — it documents the serving image tag in use.
 export DYNAMO_IMAGE="nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.2.1"
 
 # ---- Models (downloaded once to FSx Lustre by scripts/02-download-model.sh) ----

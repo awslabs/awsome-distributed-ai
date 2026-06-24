@@ -35,8 +35,14 @@ spec:
         volumes:
           - name: fsx
             persistentVolumeClaim: { claimName: dynamo-fsx }
-        nodeSelector:
-          sagemaker.amazonaws.com/instance-group-name: dynamo-workers
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: node.kubernetes.io/instance-type
+                      operator: In
+                      values: ["ml.g6e.4xlarge", "g6e.4xlarge"]   # HyperPod (ml.) / standard EKS
         tolerations:
           - { effect: NoSchedule, key: nvidia.com/gpu, operator: Exists }
     worker:
@@ -60,6 +66,8 @@ spec:
             - openai/gpt-oss-20b
             - --tp
             - "1"
+            # required: GPT-OSS ships custom modeling code (the harmony format); weights
+            #   come from the official Hugging Face repo, so the remote code is trusted.
             - --trust-remote-code
             - --skip-tokenizer-init
             - --attention-backend
@@ -75,7 +83,13 @@ spec:
         volumes:
           - name: fsx
             persistentVolumeClaim: { claimName: dynamo-fsx }
-        nodeSelector:
-          sagemaker.amazonaws.com/instance-group-name: dynamo-workers
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: node.kubernetes.io/instance-type
+                      operator: In
+                      values: ["ml.g6e.4xlarge", "g6e.4xlarge"]   # HyperPod (ml.) / standard EKS
         tolerations:
           - { effect: NoSchedule, key: nvidia.com/gpu, operator: Exists }

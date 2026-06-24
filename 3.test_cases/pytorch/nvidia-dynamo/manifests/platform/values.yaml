@@ -13,6 +13,13 @@
 # NOTE: the 0.7.0 chart pins a kube-rbac-proxy sidecar image that no longer exists
 # (gcr.io/kubebuilder/...). 01-install-platform.sh patches it to the quay.io/brancz
 # mirror right after install (the image tag isn't exposed as a Helm value).
+#
+# PORTABILITY: the nodeSelectors below use SageMaker HyperPod instance-group labels
+# (`sagemaker.amazonaws.com/instance-group-name`), so the group names `dynamo-control`
+# and `dynamo-workers` are load-bearing here. On a standard (non-HyperPod) EKS cluster
+# that label doesn't exist — replace these nodeSelectors with one your nodes carry, e.g.
+# `node.kubernetes.io/instance-type: <type>` or your own node-group label. (The scenario
+# manifests already use the portable `node.kubernetes.io/instance-type` affinity instead.)
 
 dynamo-operator:
   enabled: true

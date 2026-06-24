@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT-0
 # Install Dynamo 0.7.0 Platform on HyperPod EKS
 # Prerequisites: kubectl configured, helm installed
-set -e
+set -euo pipefail
 export AWS_PAGER=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -109,7 +109,7 @@ kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -
 
 helm upgrade --install dynamo-platform "dynamo-platform-${RELEASE_VERSION}.tgz" \
   --namespace "$NAMESPACE" \
-  -f "$SCRIPT_DIR/../platform/values.yaml"
+  -f "$SCRIPT_DIR/../manifests/platform/values.yaml"
 
 # The 0.7.0 chart pins a kube-rbac-proxy image that no longer exists (gcr.io/kubebuilder).
 # Repoint the operator sidecar to the quay.io/brancz mirror (not exposed as a Helm value).
@@ -130,7 +130,7 @@ echo ""
 echo "📊 Step 6: Setting up observability..."
 # Apply PodMonitor if Prometheus Operator CRDs exist
 if kubectl get crd podmonitors.monitoring.coreos.com >/dev/null 2>&1; then
-  kubectl apply -f "$SCRIPT_DIR/../scenarios/observability/pod-monitor.yaml"
+  kubectl apply -f "$SCRIPT_DIR/../manifests/observability/pod-monitor.yaml"
   echo "  ✅ PodMonitor created"
 else
   echo "  ⚠️  Prometheus Operator CRDs not found, skipping PodMonitor"

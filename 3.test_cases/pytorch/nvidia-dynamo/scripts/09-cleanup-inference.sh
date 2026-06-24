@@ -4,13 +4,13 @@
 # Remove a deployed scenario (DynamoGraphDeployment), or all. Platform is left running.
 # Auto-detects deployed DGDs if no name is given.
 # Usage: ./scripts/09-cleanup-inference.sh [gpt-oss-agg|gpt-oss-disagg|qwen36-agg|qwen36-disagg|all]
-set -e
+set -euo pipefail
 NS=dynamo-system
 TARGET="${1:-}"
 DET=$(kubectl get dynamographdeployment -n "$NS" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
 
 if [ -z "$TARGET" ]; then
-  n=$(echo "$DET" | grep -c .)
+  n=$(echo "$DET" | grep -c . || true)
   if   [ "$n" -eq 0 ]; then echo "ℹ️  No DynamoGraphDeployment deployed — nothing to clean."; exit 0
   elif [ "$n" -eq 1 ]; then TARGET="$DET"; echo "🔎 auto-detected: $TARGET"
   elif [ -t 0 ]; then echo "Multiple deployed — pick what to remove:"; select s in $DET all; do [ -n "$s" ] && { TARGET="$s"; break; }; done

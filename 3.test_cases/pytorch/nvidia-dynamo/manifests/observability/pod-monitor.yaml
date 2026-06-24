@@ -18,9 +18,12 @@ spec:
         operator: In
         values: ["frontend", "worker"]
   podMetricsEndpoints:
+    # Frontend exposes Prometheus metrics on its HTTP port (named `http`, 8000).
     - port: http
       path: /metrics
       interval: 15s
-    - port: system
-      path: /metrics
-      interval: 15s
+    # NOTE: backend workers only expose a metrics/health port when DYN_SYSTEM_PORT is set
+    # (default -1 = disabled) and a matching named containerPort is declared on the worker.
+    # These scenarios don't enable it, so there is no `system` port to scrape. To collect
+    # worker metrics, set DYN_SYSTEM_PORT (e.g. 8081) + add a `system` containerPort on the
+    # worker, then add a `- port: system` endpoint here.

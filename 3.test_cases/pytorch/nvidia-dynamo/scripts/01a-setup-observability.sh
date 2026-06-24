@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: MIT-0
 # Setup Dynamo observability: metrics → AMP → Grafana
 # Creates a stable metrics service and patches HyperPod ObservabilityConfig
-set -e
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 NAMESPACE=dynamo-system
 
@@ -13,20 +14,7 @@ echo "📊 Setting up Dynamo observability..."
 echo ""
 echo "📡 Step 1: Creating metrics service..."
 kubectl get svc dynamo-metrics -n "$NAMESPACE" >/dev/null 2>&1 && echo "  Service already exists, skipping" || {
-  cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Service
-metadata:
-  name: dynamo-metrics
-  namespace: ${NAMESPACE}
-spec:
-  selector:
-    nvidia.com/dynamo-component-type: frontend
-  ports:
-    - name: metrics
-      port: 8000
-      targetPort: 8000
-EOF
+  envsubst '$NAMESPACE' < "$SCRIPT_DIR/../manifests/observability/metrics-service.yaml" | kubectl apply -f -
   echo "  ✅ Service created"
 }
 

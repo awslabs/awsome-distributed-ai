@@ -1,0 +1,28 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# One-time model download to FSx Lustre. Applied by scripts/02-download-model.sh via:
+#   envsubst '$JOB $NS $MODEL_ID $MODEL_PATH $PVC' | kubectl apply -f -
+apiVersion: batch/v1
+kind: Job
+metadata: { name: ${JOB}, namespace: ${NS} }
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector: { sagemaker.amazonaws.com/instance-group-name: dynamo-workers }
+      tolerations: [{ effect: NoSchedule, key: nvidia.com/gpu, operator: Exists }]
+      containers:
+        - name: download
+          image: python:3.11-slim
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              set -e
+              pip install -q "huggingface_hub[hf_transfer]"; export HF_HUB_ENABLE_HF_TRANSFER=1
+              if [ -f "${MODEL_PATH}/config.json" ]; then echo "already present, skipping"; exit 0; fi
+              python3 -c "from huggingface_hub import snapshot_download; snapshot_download('${MODEL_ID}', local_dir='${MODEL_PATH}')"
+              echo done; du -sh ${MODEL_PATH}
+          volumeMounts: [{ name: fsx, mountPath: /fsx }]
+      volumes: [{ name: fsx, persistentVolumeClaim: { claimName: ${PVC} } }]

@@ -25,15 +25,16 @@ See [BENCHMARKS.md](BENCHMARKS.md) for measured TTFT / ITL / throughput, and
 
 | Requirement | Detail |
 |---|---|
-| HyperPod EKS cluster | Two instance groups (see below); `kubectl` configured, `helm` v3+ |
-| Control nodes | 2x `ml.c6i.xlarge` — platform components (operator, etcd, NATS) |
+| HyperPod EKS cluster | Two instance groups (see below); `kubectl` configured, `helm` v3+, `envsubst` (GNU gettext) |
+| Control nodes | 2x `ml.c6i.xlarge` — platform operator (etcd + NATS run on the GPU workers) |
 | GPU nodes | 2x `ml.g6e.4xlarge` (L40S 48GB), instance group named **`dynamo-workers`** |
 | Shared filesystem | FSx for Lustre (model weights, mounted at `/fsx`) |
 | Hugging Face token | **Not required** — both models are public. Only needed for gated models. |
 
-> The GPU instance group **must** be named `dynamo-workers` — every scenario YAML uses
-> this label for scheduling. For production disaggregation, use EFA-enabled instances
-> (e.g. p5) so NIXL uses RDMA instead of TCP.
+> The GPU instance group **must** be named `dynamo-workers`, and the control instance
+> group **must** be named `dynamo-control` — the scenario YAMLs and `manifests/platform/values.yaml`
+> pin scheduling to those exact names. For production disaggregation, use EFA-enabled
+> instances (e.g. p5) so NIXL uses RDMA instead of TCP.
 
 ## 0. Configure environment
 
@@ -123,7 +124,11 @@ AIPerf concurrency sweep, saved to `bench_results/<scenario>/`:
 ## Architecture notes
 
 ### HyperPod specifics
-- Node labels use `sagemaker.amazonaws.com/instance-group-name` (not `node-group-name`).
+- Node placement: the **platform** (`manifests/platform/values.yaml`) targets the HyperPod
+  `sagemaker.amazonaws.com/instance-group-name` labels (`dynamo-control` / `dynamo-workers`),
+  while the **scenario manifests** use the portable `node.kubernetes.io/instance-type`
+  affinity (`ml.g6e.4xlarge` on HyperPod, `g6e.4xlarge` on standard EKS) so they schedule
+  on GPU nodes on either platform.
 - EBS CSI needs `sagemaker:AttachClusterNodeVolume` / `DetachClusterNodeVolume` (handled by `01`).
 - Model weights live on shared FSx Lustre — no repeated downloads on pod restarts.
 - The SGLang runtime image requires the NVIDIA runtime, so frontend pods also run on GPU
@@ -138,14 +143,15 @@ AIPerf concurrency sweep, saved to `bench_results/<scenario>/`:
 
 ### Layout
 ```
-scenarios/
-  gpt-oss-agg/      gpt-oss-20b-agg.yaml
-  gpt-oss-disagg/   gpt-oss-20b-disagg.yaml
-  qwen3.6-agg/      qwen3.6-27b-fp8-agg.yaml
-  qwen3.6-disagg/   qwen3.6-27b-fp8-disagg.yaml
-  observability/    pod-monitor.yaml
-scripts/            01..10 (install, download, deploy, test, benchmark, cleanup)
-platform/           values.yaml (Dynamo platform Helm values)
+manifests/
+  scenarios/
+    gpt-oss-agg/      gpt-oss-20b-agg.yaml
+    gpt-oss-disagg/   gpt-oss-20b-disagg.yaml
+    qwen3.6-agg/      qwen3.6-27b-fp8-agg.yaml
+    qwen3.6-disagg/   qwen3.6-27b-fp8-disagg.yaml
+  observability/      pod-monitor.yaml
+  platform/           values.yaml (Dynamo platform Helm values)
+scripts/              01..10 (install, download, deploy, test, benchmark, cleanup)
 ```
 Each YAML is a `DynamoGraphDeployment` reconciled by the operator into the frontend +
 worker pods and their Services. The serving image is pinned in each YAML (`image:` field).

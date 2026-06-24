@@ -4,14 +4,16 @@
 # Benchmark a deployed scenario with AIPerf (concurrency sweep) -> bench_results/<name>/.
 # Auto-detects the deployed DynamoGraphDeployment if no name is given.
 # Usage: ./scripts/08-benchmark.sh [gpt-oss-agg|gpt-oss-disagg|qwen36-agg|qwen36-disagg] [isl] [osl]
-set -e
+set -euo pipefail
 NS=dynamo-system
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE="nvcr.io/nvidia/ai-dynamo/sglang-runtime:0.7.0"   # benchmark harness lives here (load generator only)
+# Load-generator harness only (AIPerf). Intentionally pinned to 0.7.0 and independent of
+# the 1.2.1 serving image — this container drives traffic, it does not serve the model.
+IMAGE="nvcr.io/nvidia/ai-dynamo/sglang-runtime:0.7.0"
 NAME="${1:-}"
 if [ -z "$NAME" ]; then
   DET=$(kubectl get dynamographdeployment -n "$NS" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
-  n=$(echo "$DET" | grep -c .)
+  n=$(echo "$DET" | grep -c . || true)
   if   [ "$n" -eq 0 ]; then echo "❌ No DynamoGraphDeployment deployed."; exit 1
   elif [ "$n" -eq 1 ]; then NAME="$DET"; echo "🔎 auto-detected: $NAME"
   elif [ -t 0 ]; then echo "Multiple deployed — pick one:"; select s in $DET; do [ -n "$s" ] && { NAME="$s"; break; }; done
@@ -30,33 +32,8 @@ OUT="${SCRIPT_DIR}/../bench_results/${NAME}"; mkdir -p "$OUT"
 
 echo "📊 Benchmark ${NAME}  model=${MODEL}  ISL/OSL=${ISL}/${OSL}  conc=${CONCURRENCIES}  url=${URL}"
 kubectl delete job "$JOB" -n "$NS" --ignore-not-found >/dev/null 2>&1; sleep 2
-cat <<EOF | kubectl apply -f - >/dev/null
-apiVersion: batch/v1
-kind: Job
-metadata: { name: ${JOB}, namespace: ${NS} }
-spec:
-  backoffLimit: 0
-  ttlSecondsAfterFinished: 1800
-  template:
-    spec:
-      restartPolicy: Never
-      nodeSelector: { sagemaker.amazonaws.com/instance-group-name: dynamo-workers }
-      tolerations: [{ effect: NoSchedule, key: nvidia.com/gpu, operator: Exists }]
-      containers:
-        - name: bench
-          image: ${IMAGE}
-          command: ["/bin/bash","-c"]
-          args:
-            - |
-              set -e
-              echo "Waiting for endpoint ${URL} ..."
-              for i in \$(seq 1 60); do curl -sf ${URL}/health >/dev/null 2>&1 && { echo healthy; break; }; sleep 5; done
-              export CONCURRENCIES="${CONCURRENCIES}"
-              python3 -m benchmarks.utils.benchmark --benchmark-name "${NAME}" --endpoint-url "${URL}" \\
-                --model "${MODEL}" --isl ${ISL} --osl ${OSL} --output-dir /tmp/results 2>&1
-              echo BENCH_DONE
-          resources: { requests: { cpu: "2", memory: "4Gi" }, limits: { cpu: "4", memory: "8Gi" } }
-EOF
+JOB="$JOB" NS="$NS" IMAGE="$IMAGE" URL="$URL" CONCURRENCIES="$CONCURRENCIES" NAME="$NAME" MODEL="$MODEL" ISL="$ISL" OSL="$OSL" \
+  envsubst '$JOB $NS $IMAGE $URL $CONCURRENCIES $NAME $MODEL $ISL $OSL' < "$SCRIPT_DIR/../manifests/jobs/benchmark.yaml" | kubectl apply -f - >/dev/null
 echo "⏳ benchmark running (polling; saving to ${OUT}/benchmark.log)..."
 for i in $(seq 1 60); do
   kubectl logs job/$JOB -n $NS --tail=-1 > "${OUT}/benchmark.log" 2>/dev/null || true

@@ -4,12 +4,12 @@
 # Smoke test a deployed scenario (models list + chat) via kubectl exec.
 # Auto-detects the deployed DynamoGraphDeployment if no name is given.
 # Usage: ./scripts/07-test-inference.sh [gpt-oss-agg|gpt-oss-disagg|qwen36-agg|qwen36-disagg]
-set -e
+set -euo pipefail
 NS=dynamo-system
 NAME="${1:-}"
 if [ -z "$NAME" ]; then
   DET=$(kubectl get dynamographdeployment -n "$NS" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
-  n=$(echo "$DET" | grep -c .)
+  n=$(echo "$DET" | grep -c . || true)
   if   [ "$n" -eq 0 ]; then echo "❌ No DynamoGraphDeployment deployed. Deploy one with scripts/03..06."; exit 1
   elif [ "$n" -eq 1 ]; then NAME="$DET"; echo "🔎 auto-detected: $NAME"
   elif [ -t 0 ]; then echo "Multiple deployed — pick one:"; select s in $DET; do [ -n "$s" ] && { NAME="$s"; break; }; done

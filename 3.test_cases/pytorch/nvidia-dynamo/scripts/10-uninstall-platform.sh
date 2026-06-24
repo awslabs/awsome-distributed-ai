@@ -2,7 +2,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 # Uninstall Dynamo platform completely
-set -e
+set -euo pipefail
 
 echo "🧹 Removing Dynamo Platform..."
 helm uninstall dynamo-platform -n dynamo-system 2>/dev/null || true

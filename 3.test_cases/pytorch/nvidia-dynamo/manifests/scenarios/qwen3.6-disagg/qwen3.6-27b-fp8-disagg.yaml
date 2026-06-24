@@ -1,20 +1,22 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 
-# Scenario: GPT-OSS-20B — Disaggregated (separate prefill + decode workers, 2 GPUs)
-# Managed by the Dynamo operator (DGD). KV transfer prefill->decode via NIXL (TCP on g6e).
-# GPT-OSS on L40S requires the triton attention backend.
+# Scenario: Qwen3.6-27B-FP8 — Disaggregated (separate prefill + decode workers, 2 GPUs)
+# Managed by the Dynamo operator (DGD). KV transfer via NIXL.
+# IMPORTANT: the hybrid (Gated DeltaNet) decode worker reserves a per-slot SSM/mamba
+# state; on a 48GB L40S you MUST cap --max-running-requests (and lower mem-fraction)
+# or decode OOMs allocating the mamba cache. 16 slots fits alongside the FP8 weights.
 apiVersion: nvidia.com/v1alpha1
 kind: DynamoGraphDeployment
 metadata:
-  name: gpt-oss-disagg
+  name: qwen36-disagg
   namespace: dynamo-system
   labels:
-    app: gpt-oss-disagg
+    app: qwen36-disagg
 spec:
   services:
     Frontend:
-      dynamoNamespace: gpt-oss-disagg
+      dynamoNamespace: qwen36-disagg
       componentType: frontend
       replicas: 1
       resources:
@@ -34,12 +36,18 @@ spec:
         volumes:
           - name: fsx
             persistentVolumeClaim: { claimName: dynamo-fsx }
-        nodeSelector:
-          sagemaker.amazonaws.com/instance-group-name: dynamo-workers
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: node.kubernetes.io/instance-type
+                      operator: In
+                      values: ["ml.g6e.4xlarge", "g6e.4xlarge"]   # HyperPod (ml.) / standard EKS
         tolerations:
           - { effect: NoSchedule, key: nvidia.com/gpu, operator: Exists }
     prefill:
-      dynamoNamespace: gpt-oss-disagg
+      dynamoNamespace: qwen36-disagg
       componentType: worker
       subComponentType: prefill
       replicas: 1
@@ -55,17 +63,21 @@ spec:
           command: ["python3", "-m", "dynamo.sglang"]
           args:
             - --model-path
-            - /fsx/models/openai-gpt-oss-20b
+            - /fsx/models/qwen3.6-27b-fp8
             - --served-model-name
-            - openai/gpt-oss-20b
+            - Qwen/Qwen3.6-27B-FP8
             - --tp
             - "1"
+            # required: Qwen3.6 ships custom modeling code (hybrid Gated DeltaNet + attn);
+            #   weights come from the official Hugging Face repo, so remote code is trusted.
             - --trust-remote-code
             - --skip-tokenizer-init
-            - --attention-backend
-            - triton
+            - --context-length
+            - "32768"
             - --mem-fraction-static
-            - "0.85"
+            - "0.80"
+            - --max-running-requests
+            - "16"
             - --disaggregation-mode
             - prefill
             - --disaggregation-transfer-backend
@@ -73,9 +85,9 @@ spec:
             - --disaggregation-bootstrap-port
             - "12345"
             - --dyn-reasoning-parser
-            - gpt_oss
+            - qwen3
             - --dyn-tool-call-parser
-            - harmony
+            - qwen3_coder
             - --host
             - 0.0.0.0
           volumeMounts:
@@ -83,12 +95,18 @@ spec:
         volumes:
           - name: fsx
             persistentVolumeClaim: { claimName: dynamo-fsx }
-        nodeSelector:
-          sagemaker.amazonaws.com/instance-group-name: dynamo-workers
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: node.kubernetes.io/instance-type
+                      operator: In
+                      values: ["ml.g6e.4xlarge", "g6e.4xlarge"]   # HyperPod (ml.) / standard EKS
         tolerations:
           - { effect: NoSchedule, key: nvidia.com/gpu, operator: Exists }
     decode:
-      dynamoNamespace: gpt-oss-disagg
+      dynamoNamespace: qwen36-disagg
       componentType: worker
       subComponentType: decode
       replicas: 1
@@ -104,17 +122,21 @@ spec:
           command: ["python3", "-m", "dynamo.sglang"]
           args:
             - --model-path
-            - /fsx/models/openai-gpt-oss-20b
+            - /fsx/models/qwen3.6-27b-fp8
             - --served-model-name
-            - openai/gpt-oss-20b
+            - Qwen/Qwen3.6-27B-FP8
             - --tp
             - "1"
+            # required: Qwen3.6 ships custom modeling code (hybrid Gated DeltaNet + attn);
+            #   weights come from the official Hugging Face repo, so remote code is trusted.
             - --trust-remote-code
             - --skip-tokenizer-init
-            - --attention-backend
-            - triton
+            - --context-length
+            - "32768"
             - --mem-fraction-static
-            - "0.85"
+            - "0.80"
+            - --max-running-requests
+            - "16"
             - --disaggregation-mode
             - decode
             - --disaggregation-transfer-backend
@@ -122,9 +144,9 @@ spec:
             - --disaggregation-bootstrap-port
             - "12345"
             - --dyn-reasoning-parser
-            - gpt_oss
+            - qwen3
             - --dyn-tool-call-parser
-            - harmony
+            - qwen3_coder
             - --host
             - 0.0.0.0
           volumeMounts:
@@ -132,7 +154,13 @@ spec:
         volumes:
           - name: fsx
             persistentVolumeClaim: { claimName: dynamo-fsx }
-        nodeSelector:
-          sagemaker.amazonaws.com/instance-group-name: dynamo-workers
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: node.kubernetes.io/instance-type
+                      operator: In
+                      values: ["ml.g6e.4xlarge", "g6e.4xlarge"]   # HyperPod (ml.) / standard EKS
         tolerations:
           - { effect: NoSchedule, key: nvidia.com/gpu, operator: Exists }
