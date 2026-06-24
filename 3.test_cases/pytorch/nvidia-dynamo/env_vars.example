@@ -1,0 +1,31 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Copy to `env_vars` and `source env_vars` before running the scripts.
+# These are the validated defaults — change only what differs in your account.
+
+# ---- AWS / cluster context ----
+export AWS_REGION="us-west-2"
+export AWS_ACCOUNT_ID="123456789012"
+export EKS_CLUSTER_NAME="<your-hyperpod-eks-cluster>"
+export NAMESPACE="dynamo-system"
+
+# ---- Serving image (pinned; do NOT use :latest) ----
+# SGLang runtime that backs the Dynamo workers and frontend. Pinned in every
+# scenario YAML (the `image:` field) — keep this in sync if you bump it there.
+export DYNAMO_IMAGE="nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.2.1"
+
+# ---- Models (downloaded once to FSx Lustre by scripts/02-download-model.sh) ----
+export GPT_OSS_MODEL_PATH="/fsx/models/openai-gpt-oss-20b"
+export QWEN_MODEL_PATH="/fsx/models/qwen3.6-27b-fp8"
+
+# ---- Hugging Face token ----
+# Both models in this test case are PUBLIC — anonymous download works, no token needed.
+# Set this ONLY if you swap in a gated model (e.g. Llama). DO NOT commit a real value;
+# pass it via your shell or a CI secret store. scripts/01-install-platform.sh reads it.
+export HF_TOKEN=""
+
+# ---- Hardware (validated) ----
+# 2x ml.g6e.4xlarge GPU workers (NVIDIA L40S 48GB). Aggregated = 1 GPU per scenario;
+# disaggregated = 2 GPUs (prefill + decode). For RDMA NIXL, use EFA-enabled nodes (e.g. p5).
+export GPU_INSTANCE_TYPE="ml.g6e.4xlarge"

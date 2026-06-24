@@ -1,0 +1,40 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+# Dynamo platform values for this repo (operator + DynamoGraphDeployment pattern).
+#
+# The operator reconciles DynamoGraphDeployment (DGD) custom resources into the
+# frontend/worker Deployments — this is NVIDIA's recommended Kubernetes path.
+#
+# Placement: the operator runs on the c6i control nodes; etcd + NATS run on the GPU
+# workers because the c6i nodes cap at ~14 pods (filled by daemonsets) and can't fit
+# all platform pods. Workers allow ~29 and have headroom.
+#
+# NOTE: the 0.7.0 chart pins a kube-rbac-proxy sidecar image that no longer exists
+# (gcr.io/kubebuilder/...). 01-install-platform.sh patches it to the quay.io/brancz
+# mirror right after install (the image tag isn't exposed as a Helm value).
+
+dynamo-operator:
+  enabled: true
+  controllerManager:
+    nodeSelector:
+      sagemaker.amazonaws.com/instance-group-name: dynamo-control
+    tolerations: []
+
+etcd:
+  persistence:
+    storageClass: "gp2"
+  nodeSelector:
+    sagemaker.amazonaws.com/instance-group-name: dynamo-workers
+
+nats:
+  natsBox:
+    enabled: true
+  config:
+    jetstream:
+      enabled: true
+      fileStore:
+        pvc:
+          storageClassName: "gp2"
+  nodeSelector:
+    sagemaker.amazonaws.com/instance-group-name: dynamo-workers

@@ -1,0 +1,81 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+# Scenario: GPT-OSS-20B — Aggregated (1 worker = prefill+decode, 1 GPU)
+# Managed by the Dynamo operator via a DynamoGraphDeployment (CRD). The operator wires
+# etcd/NATS discovery automatically (no --discovery-backend needed in args).
+# GPT-OSS on L40S requires the triton attention backend.
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeployment
+metadata:
+  name: gpt-oss-agg
+  namespace: dynamo-system
+  labels:
+    app: gpt-oss-agg
+spec:
+  services:
+    Frontend:
+      dynamoNamespace: gpt-oss-agg
+      componentType: frontend
+      replicas: 1
+      resources:
+        requests: { memory: "4Gi", cpu: "1" }
+        limits: { memory: "8Gi", cpu: "2" }
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.2.1
+          env:
+            - { name: HF_HUB_OFFLINE, value: "1" }
+          command: ["python3"]
+          args: ["-m", "dynamo.frontend", "--http-port", "8000"]
+          ports:
+            - { name: http, containerPort: 8000, protocol: TCP }
+          volumeMounts:
+            - { name: fsx, mountPath: /fsx, readOnly: true }
+        volumes:
+          - name: fsx
+            persistentVolumeClaim: { claimName: dynamo-fsx }
+        nodeSelector:
+          sagemaker.amazonaws.com/instance-group-name: dynamo-workers
+        tolerations:
+          - { effect: NoSchedule, key: nvidia.com/gpu, operator: Exists }
+    worker:
+      dynamoNamespace: gpt-oss-agg
+      componentType: worker
+      replicas: 1
+      resources:
+        requests: { memory: "40Gi", cpu: "4" }
+        limits: { memory: "60Gi", cpu: "6", gpu: "1" }
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.2.1
+          workingDir: /workspace/examples/backends/sglang
+          env:
+            - { name: HF_HUB_OFFLINE, value: "1" }
+          command: ["python3", "-m", "dynamo.sglang"]
+          args:
+            - --model-path
+            - /fsx/models/openai-gpt-oss-20b
+            - --served-model-name
+            - openai/gpt-oss-20b
+            - --tp
+            - "1"
+            - --trust-remote-code
+            - --skip-tokenizer-init
+            - --attention-backend
+            - triton
+            - --mem-fraction-static
+            - "0.85"
+            - --dyn-reasoning-parser
+            - gpt_oss
+            - --dyn-tool-call-parser
+            - harmony
+          volumeMounts:
+            - { name: fsx, mountPath: /fsx, readOnly: true }
+        volumes:
+          - name: fsx
+            persistentVolumeClaim: { claimName: dynamo-fsx }
+        nodeSelector:
+          sagemaker.amazonaws.com/instance-group-name: dynamo-workers
+        tolerations:
+          - { effect: NoSchedule, key: nvidia.com/gpu, operator: Exists }

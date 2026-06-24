@@ -1,0 +1,26 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+# PodMonitor for Dynamo components
+# Scrapes /metrics from frontend and worker pods
+# Connects to HyperPod's existing Prometheus (AMP) via the observability collector
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: dynamo-metrics
+  namespace: dynamo-system
+  labels:
+    app: dynamo
+spec:
+  selector:
+    matchExpressions:
+      - key: nvidia.com/dynamo-component-type
+        operator: In
+        values: ["frontend", "worker"]
+  podMetricsEndpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+    - port: system
+      path: /metrics
+      interval: 15s
