@@ -30,11 +30,11 @@ apiVersion: kubeflow.org/v1
 kind: PyTorchJob
 metadata:
   name: pointworld-pretrain
-  namespace: kubeflow
+  namespace: ${NAMESPACE}
 spec:
   pytorchReplicaSpecs:
     Worker:
-      replicas: 8
+      replicas: ${NUM_NODES}
       restartPolicy: OnFailure
       template:
         metadata:
@@ -43,8 +43,9 @@ spec:
         spec:
           containers:
             - name: pointworld
-              # Replace with your ECR image URI (tag matches pinned commit in Dockerfile).
-              image: <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/pointworld:05484826
+              # Rendered from env_vars by ./deploy.sh (IMAGE_URI). Tag matches the
+              # pinned commit in the Dockerfile.
+              image: ${IMAGE_URI}
               imagePullPolicy: Always
               workingDir: /pointworld
               # A small wrapper links the gated DINOv3 weights from FSx into the
@@ -71,27 +72,27 @@ spec:
                   # (MASTER_ADDR, MASTER_PORT, WORLD_SIZE, RANK and the PET_*
                   # elastic variables), so torchrun only needs the local topology.
                   exec torchrun \
-                    --nproc_per_node=8 \
-                    --nnodes=8 \
+                    --nproc_per_node=${GPU_PER_NODE} \
+                    --nnodes=${NUM_NODES} \
                     train.py \
                     --distributed=true \
-                    --domains=droid,behavior \
-                    --data_dirs=/dataset/droid/wds,/dataset/behavior/wds \
-                    --norm_stats_path=stats/droid_behavior \
-                    --ptv3_size=large \
-                    --batch_size=22 \
-                    --num_workers=16 \
-                    --eval_freq=-1 \
-                    --save_freq=1800 \
-                    --log_dir=/fsx/pointworld/train_logs \
-                    --exp_name=pointworld-large-droid-behavior
+                    --domains=${DOMAINS} \
+                    --data_dirs=${DATA_DIRS} \
+                    --norm_stats_path=${NORM_STATS_PATH} \
+                    --ptv3_size=${PTV3_SIZE} \
+                    --batch_size=${BATCH_SIZE} \
+                    --num_workers=${NUM_WORKERS} \
+                    --eval_freq=${EVAL_FREQ} \
+                    --save_freq=${SAVE_FREQ} \
+                    --log_dir=${LOG_DIR} \
+                    --exp_name=${EXP_NAME}
               env:
-                # PointWorld maps domains -> ${LOCAL_DATASET_DIR}/<domain>/wds.
+                # PointWorld maps domains -> $LOCAL_DATASET_DIR/<domain>/wds.
                 # We bind-mount the FSx WDS root here so /dataset/<domain>/wds resolves.
                 - name: LOCAL_DATASET_DIR
                   value: /dataset
                 - name: WANDB_MODE
-                  value: disabled
+                  value: ${WANDB_MODE}
                 - name: NCCL_DEBUG
                   value: INFO
                 - name: FI_PROVIDER
@@ -104,12 +105,12 @@ spec:
                   value: "/pointworld"
               resources:
                 limits:
-                  nvidia.com/gpu: 8
-                  vpc.amazonaws.com/efa: 16
+                  nvidia.com/gpu: ${GPU_PER_NODE}
+                  vpc.amazonaws.com/efa: ${EFA_PER_NODE}
                   memory: 1100Gi
                 requests:
-                  nvidia.com/gpu: 8
-                  vpc.amazonaws.com/efa: 16
+                  nvidia.com/gpu: ${GPU_PER_NODE}
+                  vpc.amazonaws.com/efa: ${EFA_PER_NODE}
                   cpu: "180"
                   memory: 1000Gi
               volumeMounts:
@@ -125,7 +126,7 @@ spec:
           volumes:
             - name: fsx
               persistentVolumeClaim:
-                claimName: fsx-claim
+                claimName: ${FSX_PVC_NAME}
             - name: shmem
               emptyDir:
                 medium: Memory

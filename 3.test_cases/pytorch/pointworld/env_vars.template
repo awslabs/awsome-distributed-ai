@@ -1,0 +1,83 @@
+#!/bin/bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# env_vars.template -- Copy to env_vars and customize for your environment.
+# env_vars is .gitignored and must NEVER be committed.
+#
+# Usage:
+#   cp env_vars.template env_vars
+#   vim env_vars            # fill in the manual fields below
+#   source env_vars
+#
+# Then render + apply the manifests from the kubernetes/ directory:
+#   ./deploy.sh pointworld-data-prep.yaml          # stage data onto FSx
+#   ./deploy.sh pointworld-pretrain.yaml           # pre-train
+#   ./deploy.sh pointworld-eval.yaml               # evaluate
+#   ./deploy.sh trainer-v2/pointworld-runtime.yaml # (Trainer v2 clusters)
+#   ./deploy.sh --dry-run <manifest>.yaml          # preview rendered YAML
+#   ./deploy.sh --delete  <manifest>.yaml          # tear down
+#
+# deploy.sh substitutes ONLY the variables listed in its ENVSUBST_VARS allowlist,
+# so in-container shell variables in the manifests ($BASE, $WDS, $RANK,
+# $LOCAL_DATASET_DIR, ...) are left intact for runtime evaluation.
+
+# ============================================================================
+# Auto-detected (AWS / cluster / image) -- no manual entry needed
+# ============================================================================
+export AWS_REGION=$(aws configure get region 2>/dev/null \
+  || aws ec2 describe-availability-zones --query 'AvailabilityZones[0].RegionName' --output text)
+export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+export REGISTRY=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+export IMAGE_TAG=05484826                  # matches POINTWORLD_COMMIT in the Dockerfile
+export IMAGE_URI=${REGISTRY}/pointworld:${IMAGE_TAG}
+
+# ============================================================================
+# Cluster / placement
+# ============================================================================
+export NAMESPACE=kubeflow
+export FSX_PVC_NAME=fsx-claim
+export NUM_NODES=8                          # pre-training nodes (replicas / numNodes)
+export GPU_PER_NODE=8                        # H200 per p5en.48xlarge
+export EFA_PER_NODE=16                        # p5en.48xlarge advertises 16 (p5.48xlarge = 32)
+
+# ============================================================================
+# Data staging (kubernetes/pointworld-data-prep.yaml)
+# ============================================================================
+# DINOV3_URL is a gated Meta secret. It is deliberately NOT rendered by envsubst;
+# deploy.sh injects it only for the data-prep manifest at apply time so it never
+# lands in a file on disk. Paste your personal URL here (do not commit env_vars).
+export DINOV3_URL=""
+export BEHAVIOR_TASKS="task-0000,task-0001,task-0002"   # comma list, or "all"
+export MAX_CLIPS=200                          # cap clips for a smoke run; -1 = full scale
+
+# ============================================================================
+# Evaluation (kubernetes/pointworld-eval.yaml)
+# ============================================================================
+export MODEL_PATH="/fsx/pointworld/checkpoints/pointworld-large-droid-behavior/model-best.pt"
+export EVAL_NUM_BATCHES=100                   # -1 = full test split
+
+# ============================================================================
+# Pre-training flags (kubernetes/pointworld-pretrain.yaml + trainer-v2)
+# PointWorld's train.py is CLI-driven (see arguments.py upstream). These map 1:1
+# to torchrun train.py --<flag>=<value> in the manifests.
+# Reference: https://github.com/NVlabs/PointWorld
+# ============================================================================
+export DOMAINS=droid,behavior
+export DATA_DIRS=/dataset/droid/wds,/dataset/behavior/wds
+export NORM_STATS_PATH=stats/droid_behavior   # joint DROID+BEHAVIOR stats folder
+export PTV3_SIZE=large
+export BATCH_SIZE=22                           # per-GPU; tune to fit 141 GB H200 HBM
+export NUM_WORKERS=16
+export SAVE_FREQ=1800                          # checkpoint cadence (steps)
+export EVAL_FREQ=-1                            # disable in-loop eval; run eval.py separately
+export LOG_DIR=/fsx/pointworld/train_logs
+export EXP_NAME=pointworld-large-droid-behavior
+export WANDB_MODE=disabled                     # "online" to enable Weights & Biases
+
+# ----------------------------------------------------------------------------
+# Additional upstream train.py defaults (not tokenized in the manifests; change
+# the manifest args directly if you need to override these):
+#   PTV3_PATCH_SIZE=256  PREDICTOR_DIM=256  BASE_LR=0.0001  WEIGHT_DECAY=0.01
+#   GRAD_CLIP_MAX_NORM=5.0  NUM_EPOCHS=200  EVAL_NUM_WORKERS=5  DISTRIBUTED=true
+# ----------------------------------------------------------------------------

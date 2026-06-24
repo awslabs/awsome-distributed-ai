@@ -33,7 +33,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: pointworld-eval
-  namespace: kubeflow
+  namespace: ${NAMESPACE}
 spec:
   backoffLimit: 2
   template:
@@ -44,7 +44,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: pointworld
-          image: <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/pointworld:05484826
+          image: ${IMAGE_URI}
           imagePullPolicy: Always
           workingDir: /pointworld
           command:
@@ -64,6 +64,9 @@ spec:
               # DROID evaluation (annotation-aware / filtered metrics).
               # For BEHAVIOR, set --domains=behavior, --data_dirs=/dataset/behavior/wds
               # and drop --confidence_thres.
+              # MODEL_PATH / EVAL_NUM_BATCHES are rendered from env_vars by
+              # ./deploy.sh. For BEHAVIOR, set --domains=behavior,
+              # --data_dirs=/dataset/behavior/wds and drop --confidence_thres.
               exec python eval.py \
                 --model_path "${MODEL_PATH}" \
                 --domains=droid \
@@ -75,13 +78,8 @@ spec:
           env:
             - name: LOCAL_DATASET_DIR
               value: /dataset
-            - name: MODEL_PATH
-              value: /fsx/pointworld/checkpoints/pointworld-large-droid-behavior/model-best.pt
-            # -1 = full test split; set to e.g. 100 for a quick smoke test.
-            - name: EVAL_NUM_BATCHES
-              value: "-1"
             - name: WANDB_MODE
-              value: disabled
+              value: ${WANDB_MODE}
             - name: PYTHONPATH
               value: "/pointworld"
           resources:
@@ -103,7 +101,7 @@ spec:
       volumes:
         - name: fsx
           persistentVolumeClaim:
-            claimName: fsx-claim
+            claimName: ${FSX_PVC_NAME}
         - name: shmem
           emptyDir:
             medium: Memory

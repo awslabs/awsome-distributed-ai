@@ -14,6 +14,16 @@ HyperPod EKS.
 | [`pointworld-eval.yaml`](./pointworld-eval.yaml) | `Job` | Single-GPU evaluation of a trained or released checkpoint |
 | [`trainer-v2/`](./trainer-v2/) | `TrainJob` + `ClusterTrainingRuntime` | Kubeflow Trainer v2 variants of pre-training |
 
+Manifests use `${VAR}` tokens rendered from the test case's `env_vars` file by
+[`deploy.sh`](./deploy.sh):
+
+```bash
+source ../env_vars                     # after: cp ../env_vars.template ../env_vars
+./deploy.sh pointworld-pretrain.yaml   # render (envsubst) + kubectl apply
+./deploy.sh --dry-run <manifest>.yaml  # preview rendered YAML
+./deploy.sh --delete  <manifest>.yaml  # tear down
+```
+
 > [!important] Single source of truth
 > All instructions — prerequisites, building and pushing the image, staging data
 > onto FSx, running pre-training and evaluation, the FSx layout, and tuning notes

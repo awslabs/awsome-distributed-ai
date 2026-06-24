@@ -23,9 +23,9 @@ metadata:
   name: pointworld-runtime
 spec:
   mlPolicy:
-    numNodes: 8
+    numNodes: ${NUM_NODES}
     torch:
-      numProcPerNode: 8
+      numProcPerNode: ${GPU_PER_NODE}
   template:
     spec:
       replicatedJobs:
@@ -43,12 +43,12 @@ spec:
                   containers:
                     - name: node
                       # Overridden by the TrainJob's trainer.image.
-                      image: <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/pointworld:05484826
+                      image: ${IMAGE_URI}
                       env:
                         - name: LOCAL_DATASET_DIR
                           value: /dataset
                         - name: WANDB_MODE
-                          value: disabled
+                          value: ${WANDB_MODE}
                         - name: NCCL_DEBUG
                           value: INFO
                         - name: FI_PROVIDER
@@ -63,11 +63,11 @@ spec:
                           value: /pointworld
                       resources:
                         limits:
-                          nvidia.com/gpu: "8"
-                          vpc.amazonaws.com/efa: "16"
+                          nvidia.com/gpu: "${GPU_PER_NODE}"
+                          vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
                         requests:
-                          nvidia.com/gpu: "8"
-                          vpc.amazonaws.com/efa: "16"
+                          nvidia.com/gpu: "${GPU_PER_NODE}"
+                          vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
                       volumeMounts:
                         - name: fsx
                           mountPath: /fsx
@@ -79,7 +79,7 @@ spec:
                   volumes:
                     - name: fsx
                       persistentVolumeClaim:
-                        claimName: fsx-claim
+                        claimName: ${FSX_PVC_NAME}
                     - name: shmem
                       emptyDir:
                         medium: Memory

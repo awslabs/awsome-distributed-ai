@@ -17,3 +17,6 @@ dataset/
 # Python caches
 __pycache__/
 *.pyc
+
+# Local env var file (copy of env_vars.template) - never commit
+env_vars

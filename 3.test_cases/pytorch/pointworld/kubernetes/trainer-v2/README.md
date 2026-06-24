@@ -22,11 +22,13 @@ use the manifests here.
 
 ```bash
 # 1. Build + push the image and stage data/DINOv3 (see ../../README.md).
-# 2. Replace <ACCOUNT_ID>/<REGION> in both files.
-kubectl apply -f pointworld-runtime.yaml
-kubectl apply -f pointworld-trainjob.yaml
-kubectl get trainjob pointworld-pretrain -n kubeflow
-kubectl logs -f pointworld-pretrain-node-0-0-<suffix> -n kubeflow
+# 2. Configure and render with the shared env_vars + deploy.sh (from the test
+#    case root). deploy.sh substitutes IMAGE_URI/NAMESPACE/NUM_NODES/etc.
+source ../../env_vars
+../deploy.sh trainer-v2/pointworld-runtime.yaml    # apply the runtime once
+../deploy.sh trainer-v2/pointworld-trainjob.yaml
+kubectl get trainjob pointworld-pretrain -n ${NAMESPACE}
+kubectl logs -f pointworld-pretrain-node-0-0-<suffix> -n ${NAMESPACE}
 ```
 
 ## Validation notes (Amazon EKS, Trainer v2.0.0, p5en.48xlarge / H200)

@@ -15,24 +15,28 @@
 # self-contained and do not depend on this repo's scripts/ being baked in.
 #
 # BEFORE APPLYING:
-#   1. Replace <ACCOUNT_ID> and <REGION> with your ECR image coordinates.
-#   2. Paste your personal, gated DINOv3 download URL into DINOV3_URL.
-#      (Treat it as a secret -- do not commit it. For a one-off you can instead
-#       inject it at apply time, e.g.:
-#         sed "s|<DINOV3_DOWNLOAD_URL>|$DINOV3_URL|" pointworld-data-prep.yaml \
-#           | kubectl apply -f - )
-#   3. Tune BEHAVIOR_TASKS / MAX_CLIPS:
-#        - Smoke (default): a few tasks, MAX_CLIPS bounded -> finishes in minutes.
-#        - Full scale: set BEHAVIOR_TASKS=all and MAX_CLIPS=-1 (and add DROID).
+#   1. `source env_vars` so deploy.sh can render IMAGE_URI / NAMESPACE /
+#      FSX_PVC_NAME. (These three structural fields use ${...} tokens.)
+#   2. Set the data knobs DIRECTLY in this file (they read the container env at
+#      runtime via bash/python, so they are intentionally NOT envsubst'd):
+#        - DINOV3_URL: paste your personal, gated DINOv3 URL (treat as a secret;
+#          do not commit). Or inject it at apply time so it never lands in a file:
+#            source env_vars
+#            ./deploy.sh --dry-run pointworld-data-prep.yaml \
+#              | sed "s|<DINOV3_DOWNLOAD_URL>|$DINOV3_URL|" | kubectl apply -f -
+#        - BEHAVIOR_TASKS / MAX_CLIPS: smoke default is a few tasks + bounded
+#          clips; for full scale set BEHAVIOR_TASKS=all and MAX_CLIPS=-1 (and add
+#          DROID).
 #
-# Watch progress:
-#   kubectl apply -f pointworld-data-prep.yaml
-#   kubectl logs -f job/pointworld-data-prep -n kubeflow
+# Apply (renders the structural tokens):
+#   source env_vars
+#   ./deploy.sh pointworld-data-prep.yaml
+#   kubectl logs -f job/pointworld-data-prep -n ${NAMESPACE}
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: pointworld-data-prep
-  namespace: kubeflow
+  namespace: ${NAMESPACE}
 spec:
   backoffLimit: 0
   template:
@@ -48,7 +52,7 @@ spec:
       #     node.kubernetes.io/instance-type: m5.8xlarge
       containers:
         - name: data-prep
-          image: <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/pointworld:05484826
+          image: ${IMAGE_URI}
           command:
             - bash
             - -c
@@ -169,4 +173,4 @@ spec:
       volumes:
         - name: fsx
           persistentVolumeClaim:
-            claimName: fsx-claim
+            claimName: ${FSX_PVC_NAME}
