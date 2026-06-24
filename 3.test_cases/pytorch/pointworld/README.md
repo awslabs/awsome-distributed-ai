@@ -252,6 +252,35 @@ The PyTorchJob operator injects `MASTER_ADDR`, `MASTER_PORT`, `WORLD_SIZE`, and
 `init_method="env://"` and reads `LOCAL_RANK` directly, so no extra launcher is
 needed.
 
+### Controlling duration
+
+Two `env_vars` knobs bound the run:
+
+- `NUM_EPOCHS` (default 200) — the full-scale target. Note `train.py` tracks
+  progress as a **fractional** `epoch_count = samples_seen / train_total_samples`,
+  so on a small dataset it reaches `NUM_EPOCHS` in seconds. Use this for real runs.
+- `MAX_TRAIN_STEPS` (default `-1` = disabled) — stops after N optimizer steps,
+  independent of dataset size. Set this `> 0` for a **deterministic smoke run**.
+
+> [!warning] Smoke runs and checkpoints
+> The `MAX_TRAIN_STEPS` exit does **not** force a final checkpoint (only the
+> `NUM_EPOCHS` cutoff does). Checkpoints are otherwise written every `SAVE_FREQ`
+> **batches**. So for a `MAX_TRAIN_STEPS`-bounded smoke run, set
+> `SAVE_FREQ <= MAX_TRAIN_STEPS` or nothing is saved (e.g. `MAX_TRAIN_STEPS=50`,
+> `SAVE_FREQ=20`).
+
+> [!note] Where the checkpoint lands
+> PointWorld derives the run directory from the **W&B run name**. With
+> `WANDB_MODE=disabled`, W&B ignores `EXP_NAME` and generates a random name, so
+> the checkpoint is written to:
+> ```text
+> ${LOG_DIR}/<wandb-run-name>/model-last.pt      # e.g. .../dummy-5b5pxh8p/model-last.pt
+> ```
+> Read the run's `Saving to:` log line for the actual directory, and point eval's
+> `MODEL_PATH` at that `.../model-last.pt`. (The released checkpoint is
+> `model-best.pt`; a training run writes `model-last.pt`.) Each run adds a new
+> directory under `${LOG_DIR}`.
+
 ### Launch-pattern detail
 
 The container `command` is a small `bash -c` wrapper that:
