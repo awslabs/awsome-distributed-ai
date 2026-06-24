@@ -66,6 +66,9 @@ out of scope for this repository.
   PVC named `fsx-claim` mounted at `/fsx`
 - Docker + Amazon ECR for building and hosting the container image
 - `kubectl`, the AWS CLI, and `envsubst` (from GNU `gettext`) on your workstation
+- **Architecture:** the container targets **`linux/amd64`**. Build it on x86_64
+  (the on-cluster Kaniko build in Section 3, or an x86_64 host) — not natively on
+  Apple Silicon / arm64.
 - **DINOv3 access** (gated — see below)
 
 ## 1. Clone this repository
@@ -103,17 +106,41 @@ etc.) are left untouched for runtime. `env_vars` is git-ignored — never commit
 ## 3. Build and push the container
 
 The pre-training, evaluation, **and** data-staging jobs all run inside this image,
-so build and push it to Amazon ECR before anything else. With `env_vars` sourced,
-`IMAGE_URI` is already set:
+so build and push it to Amazon ECR before anything else.
+
+> [!warning] The image is `linux/amd64` only
+> The NGC base image, the PyG `torch-scatter==…+pt25cu124` wheels, and
+> p5en.48xlarge nodes are all **x86_64**. You cannot build this image natively on
+> an arm64 / Apple Silicon workstation (the `torch-scatter` wheel doesn't exist
+> for arm64, and `docker build` would default to `linux/arm64`). Use the
+> on-cluster build below, or cross-build with `buildx --platform linux/amd64`.
+
+### Option A — build on the cluster (recommended)
+
+[`kubernetes/build-image.sh`](./kubernetes/build-image.sh) runs a
+[Kaniko](https://github.com/GoogleContainerTools/kaniko) build on an x86_64 CPU
+node and pushes straight to ECR — no local Docker, correct architecture
+regardless of your workstation. It creates the ECR repo if needed, stages the
+Dockerfile, runs the build, and cleans up after itself.
 
 ```bash
 source env_vars
-aws ecr create-repository --repository-name pointworld --region ${AWS_REGION} || true
+./kubernetes/build-image.sh
+```
+
+### Option B — cross-build locally with buildx
+
+Requires Docker with Buildx. On Apple Silicon this uses QEMU emulation and is
+**slow** (the torch/CUDA install can take 30–60+ min); prefer Option A.
+
+```bash
+source env_vars
+aws ecr create-repository --repository-name "${IMAGE_URI#*/}" --region ${AWS_REGION} 2>/dev/null || true
 aws ecr get-login-password --region ${AWS_REGION} \
   | docker login --username AWS --password-stdin ${REGISTRY}
 
-docker build -t ${IMAGE_URI} -f pointworld.Dockerfile .
-docker push ${IMAGE_URI}
+docker buildx build --platform linux/amd64 \
+  -t ${IMAGE_URI} -f pointworld.Dockerfile --push .
 ```
 
 The image tag (`IMAGE_TAG`) matches `POINTWORLD_COMMIT` in the Dockerfile so the
@@ -140,8 +167,7 @@ PointWorld needs two things staged onto FSx before training:
    convert to WDS.
 
 [`kubernetes/pointworld-data-prep.yaml`](./kubernetes/pointworld-data-prep.yaml)
-does all of this in one Job. Because the Job runs inside the PointWorld container,
-**build and push the image first (Section 3)**. Then set the data knobs directly
+does all of this in one Job. Then set the data knobs directly
 in the manifest (they are read by the container at runtime, so `deploy.sh` does
 not render them):
 
@@ -317,6 +343,8 @@ pointworld/
 │   └── parse_benchmark.py             # throughput / loss from logs
 └── kubernetes/
     ├── README.md                      # manifest index (points back here)
+    ├── build-image.sh                   # on-cluster Kaniko build -> ECR (linux/amd64)
+    ├── build-image.yaml                 # Kaniko build Pod (rendered by build-image.sh)
     ├── deploy.sh                       # render (envsubst) + apply a manifest
     ├── pointworld-data-prep.yaml       # Job: stage DINOv3 + WDS onto FSx (in-cluster)
     ├── pointworld-pretrain.yaml        # PyTorchJob: 8x DDP pre-training
