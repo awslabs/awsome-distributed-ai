@@ -29,7 +29,7 @@
 #   DIRECTORY_DNS_IPS   — comma-separated DNS IPs (future SimpleAD; empty = discover login IP)
 #   S3_BUCKET           — bucket holding the scripts (server role; to install the
 #                         ldap-add-user.sh helper onto /usr/local/bin)
-#   S3_KEY_PREFIX       — key prefix for the scripts (default "templates/")
+#   S3_KEY_PREFIX       — key prefix for the scripts (default "templates/aws-pcs/")
 
 set -euo pipefail
 
@@ -92,6 +92,26 @@ apt_get() {
 setup_server() {
     LDAP_ADMIN_PASSWORD="${LDAP_ADMIN_PASSWORD:?LDAP_ADMIN_PASSWORD must be set}"
     CLUSTER_ID="${CLUSTER_ID:-unknown}"
+
+    # Idempotent admin password: UserData generates a fresh random password on
+    # every boot, but the user DB on /home/ldap-db is PERSISTENT (survives login
+    # node replacement). If we let each replacement re-randomise the password,
+    # the SSM parameter (and slapd's olcRootPW) silently change while the data
+    # stays — breaking any admin who cached the old password. So if a password
+    # already exists in SSM for this cluster, REUSE it: slapd is then configured
+    # (via debconf below) with the same password the DB was created under, and
+    # the final put-parameter becomes a no-op overwrite. Only the very first
+    # login node (empty SSM) keeps the UserData-generated random password.
+    if [ "${CLUSTER_ID}" != "unknown" ]; then
+        local existing_pw
+        existing_pw=$(aws ssm get-parameter \
+            --name "/pcs/${CLUSTER_ID}/ldap/admin-password" \
+            --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+        if [ -n "$existing_pw" ] && [ "$existing_pw" != "None" ]; then
+            echo "[directory-server] Reusing existing admin password from SSM (login node replacement / re-run)."
+            LDAP_ADMIN_PASSWORD="$existing_pw"
+        fi
+    fi
 
     echo "[directory-server] Running apt-get update..."
     apt_get update -qq
@@ -190,12 +210,12 @@ EOF
     # location this script came from (S3_BUCKET/S3_KEY_PREFIX passed by UserData);
     # falls back to a no-op with a hint if those are unset.
     if [ -n "${S3_BUCKET:-}" ]; then
-        if aws s3 cp "s3://${S3_BUCKET}/${S3_KEY_PREFIX:-templates/}scripts/ldap-add-user.sh" \
+        if aws s3 cp "s3://${S3_BUCKET}/${S3_KEY_PREFIX:-templates/aws-pcs/}scripts/ldap-add-user.sh" \
              /usr/local/bin/ldap-add-user.sh 2>/dev/null; then
             chmod 755 /usr/local/bin/ldap-add-user.sh
             echo "[directory-server] Installed helper: /usr/local/bin/ldap-add-user.sh"
         else
-            echo "[directory-server] WARNING: could not fetch ldap-add-user.sh from s3://${S3_BUCKET}/${S3_KEY_PREFIX:-templates/}scripts/ — add users with raw ldapadd (see USER-MANAGEMENT.md)."
+            echo "[directory-server] WARNING: could not fetch ldap-add-user.sh from s3://${S3_BUCKET}/${S3_KEY_PREFIX:-templates/aws-pcs/}scripts/ — add users with raw ldapadd (see USER-MANAGEMENT.md)."
         fi
     else
         echo "[directory-server] NOTE: S3_BUCKET unset; skipping ldap-add-user.sh install. Add users with raw ldapadd (see USER-MANAGEMENT.md)."
@@ -232,15 +252,30 @@ setup_client() {
                 echo "[directory-client] ERROR: CLUSTER_ID is empty; cannot discover directory server. LDAP client not configured."
                 return 1
             fi
-            local login_ip
-            login_ip=$(aws ec2 describe-instances \
-                --filters "Name=tag:pcs-cluster-id,Values=${CLUSTER_ID}" \
-                          "Name=tag:directory-role,Values=server" \
-                          "Name=instance-state-name,Values=running" \
-                --query 'Reservations[0].Instances[0].PrivateIpAddress' \
-                --output text 2>/dev/null || echo "")
+            # Retry the tag lookup with backoff: a compute node can boot before
+            # the login node has finished tagging itself directory-role=server
+            # (scale-up race, or a compute node coming up right after a login
+            # node replacement). A single one-shot lookup would leave the node
+            # permanently LDAP-less until the next reboot, so poll for up to
+            # ~5 min. The describe-instances filter already scopes to this
+            # cluster's running server only.
+            local login_ip=""
+            local attempt
+            for attempt in $(seq 1 30); do
+                login_ip=$(aws ec2 describe-instances \
+                    --filters "Name=tag:pcs-cluster-id,Values=${CLUSTER_ID}" \
+                              "Name=tag:directory-role,Values=server" \
+                              "Name=instance-state-name,Values=running" \
+                    --query 'Reservations[0].Instances[0].PrivateIpAddress' \
+                    --output text 2>/dev/null || echo "")
+                if [ -n "$login_ip" ] && [ "$login_ip" != "None" ]; then
+                    break
+                fi
+                echo "[directory-client] Directory server not found yet (attempt ${attempt}/30); retrying in 10s..."
+                sleep 10
+            done
             if [ -z "$login_ip" ] || [ "$login_ip" = "None" ]; then
-                echo "[directory-client] ERROR: could not discover directory server IP (CLUSTER_ID=${CLUSTER_ID}, directory-role=server). Check the compute node's IAM role has ec2:DescribeInstances. LDAP client not configured."
+                echo "[directory-client] ERROR: could not discover directory server IP after retries (CLUSTER_ID=${CLUSTER_ID}, directory-role=server). Check the compute node's IAM role has ec2:DescribeInstances and that the login node is running. LDAP client not configured."
                 return 1
             fi
             server_uri="ldap://${login_ip}"

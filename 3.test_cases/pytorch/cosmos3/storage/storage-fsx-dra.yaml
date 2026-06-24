@@ -1,0 +1,53 @@
+# S3 -> FSx for Lustre Data Repository Association (DRA) hydration.
+# This is the recommended data plane: dataset + model assets
+# live in an in-region S3 origin and hydrate on-demand onto the FSx-Lustre hot
+# tier. storage-fsx-efa-sc.yaml defines the EFA-enabled StorageClass; this file
+# wires the S3<->FSx link and the PV/PVC the training/generation jobs mount.
+#
+# DRA itself is an FSx API (not a native K8s CRD). Create it ONCE against your
+# FSx filesystem, then apply the PV/PVC below. Render with envsubst.
+#
+#   aws fsx create-data-repository-association \
+#     --file-system-id ${FSX_FS_ID} \
+#     --file-system-path /datasets \
+#     --data-repository-path s3://${DRA_S3_BUCKET}/${DRA_S3_PREFIX} \
+#     --s3 'AutoImportPolicy={Events=[NEW,CHANGED,DELETED]},AutoExportPolicy={Events=[NEW,CHANGED,DELETED]}' \
+#     --batch-import-meta-data-on-create
+#
+# Render:
+#   set -a; . ./env_vars; set +a
+#   envsubst < storage/storage-fsx-dra.yaml | kubectl apply -f -
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: fsx-dra-pv
+spec:
+  capacity:
+    storage: ${FSX_CAPACITY}
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  mountOptions:
+    - flock
+  persistentVolumeReclaimPolicy: Retain
+  csi:
+    driver: fsx.csi.aws.com
+    volumeHandle: ${FSX_FS_ID}
+    volumeAttributes:
+      dnsname: ${FSX_DNS_NAME}
+      mountname: ${FSX_MOUNT_NAME}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ${FSX_CLAIM}
+  namespace: ${NAMESPACE}
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: ${FSX_CAPACITY}
+  volumeName: fsx-dra-pv

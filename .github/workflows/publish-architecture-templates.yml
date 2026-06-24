@@ -1,0 +1,119 @@
+name: Publish Architecture Templates
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'architectures/**'
+      - '.github/template-publish-manifest.yml'
+      - '.github/scripts/stage-template-publish.py'
+      - '.github/workflows/publish-architecture-templates.yml'
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  # Dedicated, least-privilege template-publishing role (S3 publish + ValidateTemplate),
+  # provisioned in gitlab.aws.dev/ml-frameworks/projects/container-release-pipeline.
+  # Isolated from the shared awslabs-AOSH-GitHubActionsRole used by other workflows.
+  AWS_ROLE_ARN: arn:aws:iam::159553542841:role/adai-template-publisher
+  TEMPLATE_BUCKET: awsome-distributed-ai
+  TEMPLATE_PREFIX: templates/
+  PUBLISH_MANIFEST: .github/template-publish-manifest.yml
+  STAGE_DIR: .template-publish-stage
+  CFN_LIST: .template-publish-cfn-files.txt
+  SHELL_LIST: .template-publish-shell-files.txt
+  OBSOLETE_LIST: .template-publish-obsolete-keys.txt
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    name: Validate and publish templates
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: publish-architecture-templates
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install validation dependencies
+        run: python -m pip install --upgrade pyyaml
+
+      - name: Stage publish manifest
+        run: |
+          python .github/scripts/stage-template-publish.py \
+            --manifest "$PUBLISH_MANIFEST" \
+            --stage-dir "$STAGE_DIR" \
+            --cfn-list "$CFN_LIST" \
+            --shell-list "$SHELL_LIST" \
+            --obsolete-list "$OBSOLETE_LIST"
+
+      - name: Validate shell scripts
+        run: |
+          if [ -s "$SHELL_LIST" ]; then
+            while IFS= read -r script; do
+              bash -n "$script"
+            done < "$SHELL_LIST"
+          fi
+
+      - name: Detect AWS PCS changes
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "aws_pcs_changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          before="${{ github.event.before }}"
+          if [[ "$before" =~ ^0+$ ]]; then
+            echo "aws_pcs_changed=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$before" "${{ github.sha }}" -- architectures/aws-pcs/ | grep -q .; then
+            echo "aws_pcs_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "aws_pcs_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run AWS PCS docs lint
+        if: ${{ steps.changes.outputs.aws_pcs_changed == 'true' && hashFiles('architectures/aws-pcs/tests/lint-docs.sh') != '' }}
+        run: bash architectures/aws-pcs/tests/lint-docs.sh
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Validate CloudFormation templates
+        run: |
+          if [ -s "$CFN_LIST" ]; then
+            while IFS= read -r template; do
+              aws cloudformation validate-template --template-body "file://$template" >/dev/null
+            done < "$CFN_LIST"
+          fi
+
+      - name: Publish to S3
+        # --acl public-read: the bucket serves templates via per-object ACL, not a
+        # bucket policy, so objects must carry AllUsers:READ to be anonymously
+        # fetchable by the launch URLs and nested-stack TemplateURLs. Requires
+        # s3:PutObjectAcl on the OIDC role.
+        run: aws s3 sync "$STAGE_DIR/" "s3://${TEMPLATE_BUCKET}/${TEMPLATE_PREFIX}" --acl public-read --no-progress
+
+      - name: Remove obsolete flat S3 keys
+        run: |
+          if [ -s "$OBSOLETE_LIST" ]; then
+            while IFS= read -r key; do
+              aws s3 rm "s3://${TEMPLATE_BUCKET}/${TEMPLATE_PREFIX}${key}"
+            done < "$OBSOLETE_LIST"
+          fi

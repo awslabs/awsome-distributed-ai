@@ -1,0 +1,114 @@
+# EKS closed-loop policy eval — serve a Cosmos3 action policy via
+# the framework's HTTP policy server (POST /predict, GET /info). This is the
+# flywheel's eval stage: latency-bound, light, single-GPU replicated server.
+# Render (a8m/envsubst — see top-level README "Deployment"): `set -a; . ./env_vars; set +a; envsubst < kubernetes/serve-policy.yaml | kubectl apply -f -`
+#
+# EVAL_CHECKPOINT options:
+#   - nvidia/Cosmos3-Nano-Policy-DROID  (public post-trained DROID policy)
+#   - /fsx/<run>/.../checkpoints/iter_0000000NN/model  (our own action-policy output;
+#     export DCP->consolidated first via cosmos_framework.scripts.export_model)
+# Affinity/tolerations mirror the cosmos-reason template: HyperPod-friendly,
+# harmless on EKS.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cosmos3-policy-eval
+  namespace: ${NAMESPACE}
+  labels:
+    app: cosmos3-policy-eval
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cosmos3-policy-eval
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: cosmos3-policy-eval
+    spec:
+      restartPolicy: Always
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: In
+                    values:
+                      - ${INSTANCE_TYPE}
+      containers:
+        - name: policy-server
+          image: ${IMAGE_URI}
+          imagePullPolicy: Always
+          command: ["bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              echo "=== policy eval server: $$EVAL_CHECKPOINT ==="
+              exec python -m cosmos_framework.scripts.action_policy_server_libero \
+                --checkpoint-path "$$EVAL_CHECKPOINT" \
+                --port ${INVOCATION_PORT}
+          env:
+            - { name: WAN_VAE_PATH,    value: "${WAN_VAE_PATH}" }
+            - { name: HF_HOME,         value: "${HF_HOME}" }
+            - { name: EVAL_CHECKPOINT, value: "${EVAL_CHECKPOINT}" }
+            - { name: PYTHONHASHSEED,  value: "42" }
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: { name: hf-token, key: token }
+          ports:
+            - containerPort: ${INVOCATION_PORT}
+              name: http
+              protocol: TCP
+          resources:
+            requests:
+              nvidia.com/gpu: "1"
+              cpu: "8"
+              memory: "64Gi"
+            limits:
+              nvidia.com/gpu: "1"
+          readinessProbe:
+            httpGet:
+              path: /info
+              port: ${INVOCATION_PORT}
+            initialDelaySeconds: 300
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 80
+          livenessProbe:
+            httpGet:
+              path: /info
+              port: ${INVOCATION_PORT}
+            initialDelaySeconds: 900
+            periodSeconds: 60
+            timeoutSeconds: 10
+          volumeMounts:
+            - { name: fsx, mountPath: /fsx }
+            - { name: shm, mountPath: /dev/shm }
+      volumes:
+        - name: fsx
+          persistentVolumeClaim:
+            claimName: ${FSX_CLAIM}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cosmos3-policy-eval
+  namespace: ${NAMESPACE}
+  labels:
+    app: cosmos3-policy-eval
+spec:
+  type: ClusterIP
+  selector:
+    app: cosmos3-policy-eval
+  ports:
+    - name: http
+      port: ${INVOCATION_PORT}
+      targetPort: ${INVOCATION_PORT}
+      protocol: TCP

@@ -125,6 +125,24 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   transparently. See `docs/USER-MANAGEMENT.md`. *(Follow-up: managed-directory options
   `DirectoryService=SimpleAD`/`ManagedAD` for multi-login-node / HA — the param enum is
   already extensible.)*
+- [ ] 🟡 **Stable LDAP endpoint across login-node replacement (OpenLDAP-LoginNode).**
+  Compute clients bake the login node's **private IP** into SSSD's `ldap_uri`
+  (`setup-directory.sh` `setup_client_internal`). The user DB on `/home/ldap-db` survives a
+  login-node replacement, but the new node gets a **new private IP**, so already-running
+  compute nodes keep a stale `ldap_uri` — cached users still resolve (`cache_credentials`),
+  but uncached/new users and group expansion fail until each compute node is rebooted or
+  SSSD is reconfigured. (Newly-booting compute nodes are fine: discovery now re-reads the
+  `directory-role=server` tag, with retry.) Upstream's
+  [`dir/demo_openldap`](https://github.com/aws-samples/aws-hpc-recipes/tree/main/recipes/dir/demo_openldap)
+  avoids this by fronting the directory with an **NLB (stable DNS)**, so the client URI
+  never changes when the backend restarts. Options for ml-pcs: (a) put the login IP behind a
+  **Route 53 private hosted-zone record** the replacement updates, and point `ldap_uri` at
+  the DNS name; (b) have running compute nodes periodically re-resolve the tag and rewrite
+  `ldap_uri`; or (c) defer to the managed-directory path (SimpleAD/ManagedAD) which provides
+  a stable endpoint by design. Until then, document the post-replacement recovery
+  (`sss_cache -E` + `systemctl restart sssd` across compute, or node replacement) — see
+  `docs/USER-MANAGEMENT.md`. *(The admin-password regen-on-replacement issue is already
+  fixed: `setup_server` reuses the existing SSM password instead of generating a new one.)*
 
 ## Monitoring
 
@@ -132,6 +150,22 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   Prometheus + Amazon Managed Grafana as an alternative to the self-hosted stack on the
   login node (see `4.validation_and_observability/4.prometheus-grafana`), so users can
   use a managed backend instead of running the containers themselves.
+- [ ] 🟢 **Persist Prometheus TSDB / Grafana DB across login-node replacement.** Monitoring
+  runs on the login node and is otherwise replacement-safe (compute scraping is pull-based
+  via EC2 service discovery on the `aws:pcs:cluster-id` tag — no compute→login IP
+  dependency; the Grafana password is reused from SSM; the stock dashboards + datasource are
+  file-provisioned). The one gap: the **Prometheus TSDB and Grafana DB live in node-local
+  Docker named volumes** (`/var/lib/docker/volumes/...`, deliberately node-local to avoid the
+  shared-`/home` Stale-file-handle race that motivated the `/opt` install), so a replacement
+  **loses historical metrics and any user-created/edited Grafana state** (custom dashboards,
+  edits to the stock ones, annotations, alert rules). Options: (a) the managed AMP/AMG backend
+  above (best — storage is off-node by design); (b) bind the TSDB/Grafana volumes to an EBS
+  volume that re-attaches on replacement; (c) periodic `slapcat`-style export of dashboards +
+  TSDB snapshots to `/fsx`. **Do NOT** simply move the volumes onto `/home` — that reintroduces
+  the NFS Stale-file-handle race the `/opt` install was created to fix. Documented as a known
+  limitation in [OPERATIONS.md §3.2](./OPERATIONS.md). Verified on a real login-node
+  replacement (2026-06): discovery/password/dashboards recovered automatically; only history
+  was lost.
 - [x] 🟡 **Rename `DeployMonitoring` → `MonitoringStack` (enum).** Done in deploy-all:
   `MonitoringStack: none | Prometheus-LoginNode` (default `Prometheus-LoginNode`),
   aligning with the `DirectoryService` `<what>-<where>` pattern. `AMP-AMG`/`CloudWatch`

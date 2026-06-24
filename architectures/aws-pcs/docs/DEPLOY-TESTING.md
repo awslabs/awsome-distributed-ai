@@ -25,7 +25,7 @@ This guide uses these placeholders — substitute your own:
 
 ```bash
 BUCKET=my-pcs-templates       # an S3 bucket you control
-PREFIX=templates/             # key prefix (keep the trailing slash)
+PREFIX=templates/aws-pcs/             # key prefix (keep the trailing slash)
 REGION=us-east-1              # the Region to deploy the cluster into
 AZ=us-east-1a                 # an Availability Zone in $REGION
 ```
@@ -47,7 +47,7 @@ Re-run this sync after every change you want to test.
 
 ## 3. Deploy pointing at your bucket
 
-Pass `S3BucketName` (and `S3KeyPrefix` if you changed it from the `templates/` default).
+Pass `S3BucketName` (and `S3KeyPrefix` if you changed it from the `templates/aws-pcs/` default).
 That single override is what makes the nested stacks **and** the first-boot Enroot/Pyxis
 installer come from your copy instead of the public bucket:
 

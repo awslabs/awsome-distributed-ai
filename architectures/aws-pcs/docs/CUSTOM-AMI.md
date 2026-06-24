@@ -11,12 +11,12 @@ then pass the resulting `ami-xxx` as `AmiId` to the cluster.
 
 ## Step 1: Build the AMI (~30 min one-time, separate stack)
 
-[![Launch](../images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ready-dlami-with-enroot-pyxis.yaml&stackName=pcs-dlami)
+[![Launch](../images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/pcs-ready-dlami-with-enroot-pyxis.yaml&stackName=pcs-dlami)
 
 ```bash
 aws cloudformation create-stack \
   --stack-name pcs-dlami \
-  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ready-dlami-with-enroot-pyxis.yaml \
+  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/pcs-ready-dlami-with-enroot-pyxis.yaml \
   --parameters ParameterKey=SlurmVersion,ParameterValue=25.11 \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
@@ -45,7 +45,7 @@ Optionally skip the boot-time Enroot/Pyxis install (it's already baked in) by se
 ```bash
 aws cloudformation create-stack \
   --stack-name pcs-ml-cluster \
-  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
+  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/pcs-ml-cluster-deploy-all.yaml \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-1a \
     ParameterKey=AmiId,ParameterValue=$AMI_ID \

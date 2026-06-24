@@ -122,9 +122,25 @@ Implications to be aware of:
   already-running server.
 - **If the login node is replaced**, its new instance re-tags itself
   `directory-role=server` and re-attaches to the same `/home/ldap-db`, so newly
-  booting compute nodes discover the new IP automatically. Already-running
-  compute nodes keep their cached `ldap_uri`; they pick up the new IP on their
-  next boot (or after an SSSD reconfigure).
+  booting compute nodes discover the new IP automatically. The admin password is
+  **preserved** across replacement (the new login node reuses the existing
+  `/pcs/<id>/ldap/admin-password` from SSM rather than regenerating it), so cached
+  admin passwords keep working and the DB stays accessible.
+  **Already-running compute nodes, however, keep their cached `ldap_uri`** (the
+  old login node's private IP, which the replacement no longer has). Cached users
+  still resolve via SSSD, but **name resolution for uncached/new users and group
+  expansion degrades** on those nodes until you refresh them. (Jobs already
+  submitted by such users still *run* — Slurm uses numeric UIDs, so a name-
+  resolution gap is a degradation, not a hard job failure — but `id`/`getent`,
+  `pam_mkhomedir`, and anything that looks the user up by name can misbehave.)
+  After a login-node replacement, run on every running compute node:
+  ```bash
+  srun -N <nodes> -n <nodes> bash -c 'sudo sed -i "s#ldap_uri = .*#ldap_uri = ldap://<new-login-ip>#" /etc/sssd/sssd.conf && sudo sss_cache -E && sudo systemctl restart sssd'
+  ```
+  or simply let PCS replace the compute nodes (terminate them; the replacements
+  discover the new IP on boot). A stable endpoint that removes this manual step is
+  tracked in [ROADMAP.md](./ROADMAP.md) ("Stable LDAP endpoint across login-node
+  replacement").
 - **An explicit override exists**: set `LDAP_SERVER_URI` (or `DIRECTORY_DNS_IPS`,
   for the future managed-directory path) in the client's environment to skip the
   tag lookup entirely — used by the SimpleAD/ManagedAD extension and handy for
@@ -139,7 +155,7 @@ Implications to be aware of:
 ```bash
 aws cloudformation create-stack \
   --stack-name my-cluster \
-  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
+  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/pcs-ml-cluster-deploy-all.yaml \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-2b \
     ParameterKey=DirectoryService,ParameterValue=OpenLDAP-LoginNode \
@@ -390,6 +406,21 @@ sudo $SACCTMGR show user alice bob format=User,Account,DefaultAccount
 Read-only `sacct` / `sreport` / `sacctmgr show ...` work as `ubuntu`; only the
 mutating `sacctmgr` verbs need `root`.
 
+> **Two reporting gotchas (verified in testing — they are tool behaviour, not bugs):**
+>
+> 1. **`sacct --state=...` needs an explicit end time.** A state filter without
+>    `-E now` (or `--endtime`) silently returns **nothing** — e.g.
+>    `sacct -X --state=FAILED -S 2026-01-01` shows no rows even when failed jobs
+>    exist. Always pair it: `sacct -X -a --state=FAILED -S <start> -E now`.
+>    (`sacct -j <id>` always shows the true state, useful to cross-check.)
+> 2. **`sreport` usage lags behind `sacct` by up to an hour.** `sreport`
+>    (`AccountUtilizationByUser`, `topusage`, cluster `Utilization`) reads
+>    slurmdbd's **periodic usage rollup**, which runs hourly — so right after jobs
+>    finish, `sreport ... Used` reads **zero** (even at `-t Seconds`) until the next
+>    rollup boundary. `sacct` reads the live job table and is immediate. For
+>    up-to-the-second per-job/-user accounting use `sacct`; use `sreport` for
+>    settled historical utilization.
+
 > **Note:** if `AccountingPolicyEnforcement=none` (the default), users can
 > submit jobs even without being registered in `sacctmgr`. Registration is
 > needed for fairshare/priority and for `sacct` history to show the user name.
@@ -435,6 +466,17 @@ directory `/home/alice` is visible on the compute node (shared OpenZFS).
 ## Troubleshooting
 
 ### "User not found" on compute node
+
+> **Expected right after a node boots.** SSSD is configured with `enumerate = true`,
+> so on first start it runs a full enumeration of all users/groups in the
+> background. Until that completes (seconds to a minute, depending on directory
+> size), an individual `getent passwd <user>` / `id <user>` can briefly return
+> "not found" even though LDAP is healthy. It resolves on its own; only
+> investigate further if it persists. (Note also that a job submitted by such a
+> user still **runs** — Slurm uses numeric UIDs — so this is a name-resolution
+> delay, not a job failure.)
+
+If it persists:
 
 ```bash
 # Check SSSD is running on compute
@@ -537,6 +579,16 @@ their SSH key that was added during user creation:
 ```bash
 ssh alice@<login-node-public-ip>
 ```
+
+> **After a login-node replacement, the public IP and SSH host key change.**
+> The login node has no Elastic IP, so a replacement (or stop/start) gives it a
+> **new public IP** — re-fetch it from the EC2 console or
+> `aws ec2 describe-instances`. A *replacement* (not a stop/start) is a brand-new
+> instance, so its **SSH host key also changes**: users will see
+> `WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!` and must clear the old key
+> (`ssh-keygen -R <old-ip-or-hostname>`) before reconnecting. Tell users to expect
+> this whenever the login node is replaced. (SSH-over-SSM avoids the IP problem
+> since it targets the instance ID, not an IP.)
 
 ---
 

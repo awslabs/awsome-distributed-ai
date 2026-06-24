@@ -1,0 +1,127 @@
+# HyperPod-EKS variant of kubernetes/train-vision-sft.yaml — vision SFT for
+# Nano (toml/vision_sft_nano.toml) and Super LoRA (toml/vision_sft_super.toml).
+# Kubeflow PyTorchJob + auto-resume + node-health scheduling, mirroring
+# hyperpod-eks/train-multi-node-dlc.yaml. Same AWS DLC image, env, and the vision-SFT
+# entrypoint torchrun -m cosmos_framework.scripts.train (NOT the droid policy
+# launcher). Reads the video+caption SFT dataset from
+# ${DATASET_PATH}/train/video_dataset_file.jsonl. Storage pinned to FSx;
+# per-rank log captured to FSx Tier 1: /fsx/results/${RUN_ID}/rank<N>.log
+#
+# Auto-resume covers the node layer that the EKS JobSet's gang restart
+# (failurePolicy: Recreate; the Job here is backoffLimit: 0 / restartPolicy: Never)
+# does not: that restarts on a POD failure only, whereas here HyperPod's health agent
+# detects a bad node, NodeRecovery: Automatic replaces it, and job auto-resume restarts
+# onto healthy capacity. In both paths the framework then resumes from the last DCP
+# checkpoint rather than restarting from scratch.
+#
+# PyTorchJob injects MASTER_ADDR / MASTER_PORT / RANK / WORLD_SIZE into every
+# pod at runtime — the launcher uses those (NOT the manual rdzv hostname the
+# JobSet built). nprocPerNode = GPUs per node.
+#
+# Nano:  SFT_TOML=vision_sft_nano.toml  + BASE_CHECKPOINT_PATH=/fsx/pretrained/Cosmos3-Nano-dcp
+# Super: SFT_TOML=vision_sft_super.toml + BASE_CHECKPOINT_PATH=/fsx/pretrained/Cosmos3-Super-dcp
+#      (Super LoRA is memory-hungry — raise SHM_SIZE, e.g. 256Gi, for it.)
+#
+# Apply with the a8m/envsubst variant (see top-level README "Deployment"). Template
+# vars are substituted from env_vars; runtime bash vars are written $$NAME so a8m
+# collapses them to a literal $NAME the pod's bash expands ($OUT,
+# $BASE_CHECKPOINT_PATH, $DATASET_PATH, and the PyTorchJob-injected
+# $MASTER_ADDR / $MASTER_PORT / $RANK / $WORLD_SIZE):
+#   set -a; . ../env_vars; set +a
+#   export RUN_ID=nano-sft-r1 SFT_TOML=vision_sft_nano.toml BASE_CHECKPOINT_PATH=/fsx/pretrained/Cosmos3-Nano-dcp
+#   envsubst < hyperpod-eks/train-vision-sft.yaml | kubectl apply -f -
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: cosmos3-sft-${RUN_ID}
+  namespace: ${NAMESPACE}
+  labels:
+    app: cosmos3-sft
+    run-id: ${RUN_ID}
+  annotations:
+    sagemaker.amazonaws.com/enable-job-auto-resume: "true"
+    sagemaker.amazonaws.com/job-max-retry-count: "${JOB_MAX_RETRY}"
+spec:
+  nprocPerNode: "${GPUS_PER_NODE}"
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      restartPolicy: OnFailure
+      template: &podtmpl
+        metadata:
+          labels:
+            app: cosmos3-sft
+            run-id: ${RUN_ID}
+        spec:
+          tolerations:
+            - key: sagemaker.amazonaws.com/node-health-status
+              operator: Exists
+              effect: NoSchedule
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: sagemaker.amazonaws.com/node-health-status
+                        operator: In
+                        values: ["Schedulable"]
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  preference:
+                    matchExpressions:
+                      - key: sagemaker.amazonaws.com/deep-health-check-status
+                        operator: In
+                        values: ["Passed"]
+          containers:
+            - name: pytorch
+              image: ${IMAGE_URI}
+              imagePullPolicy: Always
+              command: ["bash", "-lc"]
+              args:
+                - |
+                  set -euo pipefail
+                  OUT=/fsx/results/${RUN_ID}
+                  mkdir -p "$$OUT"
+                  ls -la "$$BASE_CHECKPOINT_PATH/model/.metadata"
+                  ls -la "$$DATASET_PATH/train/video_dataset_file.jsonl"
+                  echo "rank=$$RANK world_size=$$WORLD_SIZE master=$$MASTER_ADDR:$$MASTER_PORT nnodes=${NUM_NODES}"
+                  torchrun \
+                    --nnodes=${NUM_NODES} --nproc_per_node=${GPUS_PER_NODE} \
+                    --node_rank=$$RANK --rdzv_id=cosmos3-sft-${RUN_ID} \
+                    --rdzv_backend=c10d --rdzv_endpoint=$$MASTER_ADDR:$$MASTER_PORT \
+                    -m cosmos_framework.scripts.train \
+                    --sft-toml /workspace/cosmos3-aws/toml/${SFT_TOML} -- \
+                    trainer.max_iter=${SFT_MAX_ITER} ckpt_type=dcp job.wandb_mode=disabled \
+                    2>&1 | tee "$$OUT/rank$$RANK.log"
+              env:
+                - { name: DATASET_PATH,       value: "${DATASET_PATH}" }
+                - { name: WAN_VAE_PATH,       value: "${WAN_VAE_PATH}" }
+                - { name: BASE_CHECKPOINT_PATH, value: "${BASE_CHECKPOINT_PATH}" }
+                - { name: HF_HOME,            value: "${HF_HOME}" }
+                - { name: IMAGINAIRE_OUTPUT_ROOT, value: "/fsx/results/${RUN_ID}/out" }
+                - { name: PYTHONHASHSEED,     value: "42" }
+                - { name: FI_PROVIDER,        value: "efa" }
+                - { name: FI_EFA_USE_DEVICE_RDMA, value: "1" }
+                - { name: FI_EFA_FORK_SAFE,   value: "1" }
+                - { name: NCCL_DEBUG,         value: "WARN" }
+                - name: HF_TOKEN
+                  valueFrom:
+                    secretKeyRef: { name: hf-token, key: token }
+              resources:
+                requests: { nvidia.com/gpu: "${GPUS_PER_NODE}", vpc.amazonaws.com/efa: "${EFA_PER_NODE}" }
+                limits:   { nvidia.com/gpu: "${GPUS_PER_NODE}", vpc.amazonaws.com/efa: "${EFA_PER_NODE}" }
+              volumeMounts:
+                - { name: fsx, mountPath: /fsx }
+                - { name: shm, mountPath: /dev/shm }
+          volumes:
+            - name: fsx
+              persistentVolumeClaim: { claimName: ${FSX_CLAIM} }
+            - name: shm
+              # Super LoRA is memory-hungry — raise SHM_SIZE (e.g. 256Gi) for it.
+              emptyDir: { medium: Memory, sizeLimit: ${SHM_SIZE} }
+    Worker:
+      replicas: ${NUM_WORKERS}
+      restartPolicy: OnFailure
+      template: *podtmpl

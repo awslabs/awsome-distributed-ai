@@ -29,15 +29,15 @@ A default deployment (`pcs-ml-cluster-deploy-all.yaml`) provisions:
 - Optional GPU (P5/P6) node group with multi-NIC EFA, plus DCGM Exporter for the GPU dashboards
 - Enroot/Pyxis container runtime installed at first boot via `PostInstallScriptUrl` (or pre-baked into a custom AMI you build separately and pass as `AmiId`)
 
+Every node runs on the AWS-managed **PCS-Ready DLAMI** (NVIDIA driver, CUDA, PCS agent,
+and Slurm pre-installed), so no custom AMI build is required.
+
 Optional add-ons (off by default):
 - **Multi-user directory**: OpenLDAP on the login node + SSSD on every compute node (`DirectoryService`)
 - **IAM policy stacks**: least-privilege cluster-admin / cluster-user policies you can deploy separately
-
-Every node runs on the AWS-managed **PCS-Ready DLAMI** (NVIDIA driver, CUDA, PCS agent,
-and Slurm 25.05/25.11 pre-installed), so **no custom AMI build is required** — the cluster
-comes up without an Image Builder step, and Enroot/Pyxis is layered on at first boot.
-See [AMI and container runtime](#ami-and-container-runtime) for pinning the AMI and the
-optional pre-bake path for faster scaling.
+- **Custom AMI**: pin a specific AMI or pre-bake Enroot/Pyxis into your own DLAMI (faster
+  scaling, skips the first-boot install) and pass it as `AmiId` — see
+  [AMI and container runtime](#ami-and-container-runtime) and [docs/CUSTOM-AMI.md](./docs/CUSTOM-AMI.md)
 
 ---
 
@@ -45,7 +45,7 @@ optional pre-bake path for faster scaling.
 
 Deploy a complete cluster with one nested CloudFormation stack:
 
-[![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml&stackName=pcs-ml-cluster)
+[![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/pcs-ml-cluster-deploy-all.yaml&stackName=pcs-ml-cluster)
 
 **The only decision you must make is which Availability Zone to deploy into**
 (`PrimarySubnetAZ`) — everything else has a sensible default. The minimal CLI
@@ -56,7 +56,7 @@ AZ_ID=us-east-1a   # <-- the one required choice: your target Availability Zone
 
 aws cloudformation create-stack \
   --stack-name pcs-ml-cluster \
-  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
+  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/pcs-ml-cluster-deploy-all.yaml \
   --parameters ParameterKey=PrimarySubnetAZ,ParameterValue=${AZ_ID} \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
@@ -65,10 +65,19 @@ This brings up (≈25–30 min, mostly VPC/FSx): 1 login node (m6i.4xlarge) with
 a `cpu1` queue (c6i.4xlarge, 0–4 nodes, dynamic scaling), and Enroot/Pyxis on every node.
 Add a GPU queue and tune storage/monitoring via the parameters below.
 
-Once it's up:
-- **Connect** to the login node via SSM Session Manager — see [Accessing the Cluster](#6-accessing-the-cluster).
-- **Open the Grafana dashboards** (deployed by default) via SSM port forwarding — see [Accessing the Grafana dashboards](#accessing-the-grafana-dashboards).
-- **Want to reach Grafana directly in a browser** (no port forwarding)? Set `GrafanaAccessCidr` to a trusted CIDR at deploy time — see [Option B — Direct public access](#option-b--direct-public-access-opt-in-via-grafanaaccesscidr).
+Once it's up, the end-to-end path from a running stack to your first job is just
+three steps:
+
+1. **Connect** to the login node via SSM Session Manager (no public SSH needed) —
+   see [Accessing the Cluster](#6-accessing-the-cluster).
+2. **Run a job.** Submit a quick CPU job on the default `cpu1` queue, or a
+   multi-node GPU NCCL test once you've added a GPU queue — see
+   [Running a job](#7-running-a-job).
+3. **Watch it** in the pre-built Grafana dashboards (deployed by default) via SSM
+   port forwarding — see [Accessing the Grafana dashboards](#accessing-the-grafana-dashboards).
+   (Want Grafana directly in a browser, no port forwarding? Set `GrafanaAccessCidr`
+   to a trusted CIDR at deploy time — see
+   [Option B — Direct public access](#option-b--direct-public-access-opt-in-via-grafanaaccesscidr).)
 
 Prefer step-by-step instructions? See the [AI/ML for AWS PCS Workshop](https://catalog.workshops.aws/ml-on-pcs/).
 
@@ -153,7 +162,7 @@ idempotent — it no-ops on a pre-baked AMI.
 > **Production tip — pin the AMI.** CloudFormation re-resolves SSM `/latest/`
 > parameters on every stack update, so a later scale-out can drift onto a newer AMI.
 > Resolve once and pass the literal `ami-xxx` as `AmiId`. Details:
-> [OPERATIONS.md §4](./docs/OPERATIONS.md#4-ami-selection-amiid--pin-in-production).
+> [OPERATIONS.md §2.5](./docs/OPERATIONS.md#25-ami-selection-amiid--pin-in-production).
 
 ### GPU compute (P5/P6)
 
@@ -198,7 +207,7 @@ AZ_ID=us-east-1a   # your target Availability Zone
 
 aws cloudformation create-stack \
   --stack-name gpu-cluster \
-  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
+  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/pcs-ml-cluster-deploy-all.yaml \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=${AZ_ID} \
     ParameterKey=OnDemandCngName,ParameterValue=gpu-g6 \
@@ -217,7 +226,7 @@ CAPACITY_RESERVATION_ID="cr-0a1b2c3d4e5f67890"
 
 aws cloudformation create-stack \
   --stack-name p6-b300-cb-cluster \
-  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
+  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/pcs-ml-cluster-deploy-all.yaml \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=${AZ_ID} \
     ParameterKey=DeployPseriesCNG,ParameterValue=true \
@@ -242,7 +251,7 @@ AZ_ID=us-east-2b   # check your target type's AZ availability first
 
 aws cloudformation create-stack \
   --stack-name hpc7a-cluster \
-  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml \
+  --template-url https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/pcs-ml-cluster-deploy-all.yaml \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=${AZ_ID} \
     ParameterKey=OnDemandCngName,ParameterValue=hpc7a \
@@ -284,10 +293,36 @@ Then `sudo su - ubuntu` and use `sinfo` / `squeue` / `scontrol show nodes`.
 
 ---
 
-## 7. Running a multi-node GPU job (NCCL test)
+## 7. Running a job
 
-A 2-node `all_reduce_perf` is the quickest end-to-end check (GPU queue + Pyxis + EFA).
-Run on the login node — `/fsx` is shared with every compute node:
+Run these from the login node (`sudo su - ubuntu` after connecting). `/fsx` is
+shared with every compute node.
+
+### Example A — CPU job (works on the Quick Start cluster, no GPU needed)
+
+The fastest end-to-end check: a 2-node MPI-style job on the default `cpu1` queue
+(which scales up from 0 on demand). Container-based via Pyxis, so it also confirms
+Enroot/Pyxis is working:
+
+```bash
+# 2 nodes, 1 task each, in an Ubuntu container — prints each node's hostname.
+srun --partition=cpu1 --nodes=2 --ntasks=2 \
+     --container-image=docker://ubuntu:22.04 \
+     bash -c 'echo "hello from $(hostname)"'
+```
+
+You should see two different compute-node hostnames. (First launch waits ~2–3 min
+while the `cpu1` queue scales up; `pyxis: importing docker image ...` then the two
+lines.) To submit it as a batch job instead:
+
+```bash
+sbatch --partition=cpu1 --nodes=2 --wrap='srun bash -c "hostname"'
+```
+
+### Example B — multi-node GPU NCCL test (needs a GPU queue)
+
+A 2-node `all_reduce_perf` is the quickest GPU end-to-end check (GPU queue + Pyxis
++ EFA). Add a GPU queue first (see [Templates](#9-templates)):
 
 ```bash
 # Import the container image (enroot's overlayfs needs the node-local root disk;
@@ -474,15 +509,23 @@ NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 > it defaults to a **DCGM 4.5.2** build pinned by digest (validated on 2× p6-b300 and on
 > B200). The monitoring stack's own default (DCGM 4.2.0) tops out at B200 and can't pull
 > newer NVCR tags on Docker 29.x — pinning by digest at the deploy-all level is what
-> bridges that, and `MonitoringVersion v2.9.1` is the first release carrying the
-> `DCGM_EXPORTER_IMAGE` override that lets this through (`v2.6.4`+ carry the other PCS
-> fixes: node-local `/opt` install + the Docker-29.x DCGM tag). Override `DcgmExporterImage`
+> bridges that — it works on the default `MonitoringVersion` (`v2.10.2`); the
+> `DCGM_EXPORTER_IMAGE` override that lets this through first shipped in `v2.9.1`
+> (`v2.6.4`+ carry the other PCS fixes: node-local `/opt` install + the Docker-29.x
+> DCGM tag). Override `DcgmExporterImage`
 > only to pin a different build; details:
 > [OPERATIONS.md §3.1](./docs/OPERATIONS.md#31-dcgmexporterimage-the-default-and-when-to-change-it).
 
 > **Note — node-type tagging.** The monitoring stack identifies login vs compute nodes by
 > the `monitoring-role` tag (`login`/`compute`), **not** the EC2 `Name` tag — so the `Name`
 > tag (default `PCS-<cngname>`) is free for you to retag without breaking dashboards.
+
+> **Note — monitoring across login-node replacement.** Prometheus + Grafana run on the
+> (single) login node. Metric collection, the Grafana password, and the built-in
+> dashboards all recover automatically if the login node is replaced — but the
+> **historical metrics and any custom dashboards are lost** (the TSDB / Grafana DB are
+> node-local). Export custom dashboards to JSON if you need them to persist. Details:
+> [OPERATIONS.md §3.2](./docs/OPERATIONS.md#32-monitoring-across-a-login-node-stop--replacement).
 
 ---
 
@@ -497,10 +540,22 @@ nodes — users you add are immediately visible cluster-wide. See the
 **[User Management Guide](./docs/USER-MANAGEMENT.md)** for step-by-step
 operations (adding/removing users, Slurm accounting, SSH access).
 
+> **Note — accounting reports.** Two Slurm reporting quirks worth knowing: `sacct
+> --state=...` needs an explicit `-E now` or it silently returns nothing, and
+> `sreport` usage trails the hourly rollup (use `sacct` for up-to-the-second data).
+> See [USER-MANAGEMENT.md — Slurm accounting](./docs/USER-MANAGEMENT.md#slurm-accounting).
+
 > **Constraint — single login node.** The OpenLDAP server runs on the (single) login
-> node, so enabling `DirectoryService` means a one-login-node cluster. The user database
-> lives on OpenZFS `/home`, so it survives a login-node replacement (data is recoverable),
-> but the directory **service** is a single point of failure while the login node is down.
+> node, so enabling `DirectoryService` means a one-login-node cluster. The directory
+> **service** is a single point of failure while the login node is down.
+>
+> The user database (OpenZFS `/home`) and the admin password (SSM) **survive a
+> login-node replacement** — but recovery isn't fully transparent: already-running
+> compute nodes keep the old login IP cached in SSSD, so name resolution for new/uncached
+> users degrades on them until you refresh SSSD (jobs already submitted still run — Slurm
+> uses numeric UIDs). The new login node also gets a new public IP and SSH host key. See
+> [USER-MANAGEMENT.md — login-node replacement](./docs/USER-MANAGEMENT.md#how-a-compute-node-finds-the-ldap-server-tag-based-discovery)
+> for the recovery steps.
 
 ### 8.4 IAM Permissions
 
@@ -508,8 +563,8 @@ The cluster has two human roles, each with a ready-to-deploy IAM policy stack:
 
 | Role | What they can do | Deploy |
 |---|---|---|
-| **Cluster admin** ([`cluster-admin-iam.yaml`](./assets/cluster-admin-iam.yaml)) | deploy / update / delete the cluster (CloudFormation, PCS, EC2, FSx, scoped IAM) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster-admin-iam.yaml&stackName=pcs-cluster-admins) |
-| **Cluster user** ([`cluster-user-iam.yaml`](./assets/cluster-user-iam.yaml)) | SSM session to the **login node only** + read-only status; cannot create, modify, or delete anything | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster-user-iam.yaml&stackName=pcs-cluster-users) |
+| **Cluster admin** ([`cluster-admin-iam.yaml`](./assets/cluster-admin-iam.yaml)) | deploy / update / delete the cluster (CloudFormation, PCS, EC2, FSx, scoped IAM) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/cluster-admin-iam.yaml&stackName=pcs-cluster-admins) |
+| **Cluster user** ([`cluster-user-iam.yaml`](./assets/cluster-user-iam.yaml)) | SSM session to the **login node only** + read-only status; cannot create, modify, or delete anything | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/cluster-user-iam.yaml&stackName=pcs-cluster-users) |
 
 Each template creates the customer-managed policies and an IAM group, and can
 attach existing users at deploy time. See the **[IAM Permissions Guide](./docs/IAM.md)**
@@ -524,7 +579,7 @@ pins every node to a deterministic state. It's a standalone path: build the AMI 
 [`pcs-ready-dlami-with-enroot-pyxis.yaml`](./assets/pcs-ready-dlami-with-enroot-pyxis.yaml)
 (single-Slurm-version by design), then pass the resulting `ami-xxx` as `AmiId`.
 
-[![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ready-dlami-with-enroot-pyxis.yaml&stackName=pcs-dlami)
+[![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/pcs-ready-dlami-with-enroot-pyxis.yaml&stackName=pcs-dlami)
 
 See **[docs/CUSTOM-AMI.md](./docs/CUSTOM-AMI.md)** for the full build → read AMI ID →
 deploy procedure and the optional scheduled-rebuild / lifecycle / SSM-publish features.
@@ -587,14 +642,14 @@ parameter and default, see [PARAMETERS.md](./docs/PARAMETERS.md).
 
 | Template | Purpose | Deploy |
 |---|---|---|
-| [`pcs-ml-cluster-deploy-all.yaml`](./assets/pcs-ml-cluster-deploy-all.yaml) | All-in-one: Prerequisites + (optional AMI) + Cluster + login/CPU/GPU CNGs | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ml-cluster-deploy-all.yaml&stackName=pcs-ml-cluster) |
-| [`ml-cluster-prerequisites.yaml`](./assets/ml-cluster-prerequisites.yaml) | VPC, subnets, security groups, FSx for Lustre + OpenZFS | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/ml-cluster-prerequisites.yaml&stackName=pcs-prerequisites) |
-| [`cluster.yaml`](./assets/cluster.yaml) | PCS cluster core (Slurm scheduler only, no nodes) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster.yaml&stackName=pcs-cluster) |
-| [`add-cng.yaml`](./assets/add-cng.yaml) | Compute node group — login nodes, CPU / single-NIC-GPU queues (C6i, G5, G6); switches to a multi-NIC EFA `NetworkInterfaces` block when `EfaInterfaceCount > 0` (HPC types: hpc6a/hpc7a/hpc6id/hpc8a …) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng.yaml&stackName=pcs-add-cng) |
-| [`add-cng-p5.yaml`](./assets/add-cng-p5.yaml) | P5/P5e/P5en nodes (16/32 EFA interfaces, by type) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p5.yaml&stackName=pcs-add-cng-p5) |
-| [`add-cng-p6-b200.yaml`](./assets/add-cng-p6-b200.yaml) | P6-B200 nodes (8 EFA interfaces) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p6-b200.yaml&stackName=pcs-add-cng-p6-b200) |
-| [`add-cng-p6-b300.yaml`](./assets/add-cng-p6-b300.yaml) | P6-B300 nodes (17 interfaces: 16 EFA + 1 ENA) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/add-cng-p6-b300.yaml&stackName=pcs-add-cng-p6-b300) |
-| [`pcs-ready-dlami-with-enroot-pyxis.yaml`](./assets/pcs-ready-dlami-with-enroot-pyxis.yaml) | EC2 Image Builder: bake Enroot 3.5.0 + Pyxis 0.20.0 into the PCS-Ready DLAMI | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/pcs-ready-dlami-with-enroot-pyxis.yaml&stackName=pcs-dlami) |
+| [`pcs-ml-cluster-deploy-all.yaml`](./assets/pcs-ml-cluster-deploy-all.yaml) | All-in-one: Prerequisites + (optional AMI) + Cluster + login/CPU/GPU CNGs | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/pcs-ml-cluster-deploy-all.yaml&stackName=pcs-ml-cluster) |
+| [`ml-cluster-prerequisites.yaml`](./assets/ml-cluster-prerequisites.yaml) | VPC, subnets, security groups, FSx for Lustre + OpenZFS | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/ml-cluster-prerequisites.yaml&stackName=pcs-prerequisites) |
+| [`cluster.yaml`](./assets/cluster.yaml) | PCS cluster core (Slurm scheduler only, no nodes) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/cluster.yaml&stackName=pcs-cluster) |
+| [`add-cng.yaml`](./assets/add-cng.yaml) | Compute node group — login nodes, CPU / single-NIC-GPU queues (C6i, G5, G6); switches to a multi-NIC EFA `NetworkInterfaces` block when `EfaInterfaceCount > 0` (HPC types: hpc6a/hpc7a/hpc6id/hpc8a …) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/add-cng.yaml&stackName=pcs-add-cng) |
+| [`add-cng-p5.yaml`](./assets/add-cng-p5.yaml) | P5/P5e/P5en nodes (16/32 EFA interfaces, by type) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/add-cng-p5.yaml&stackName=pcs-add-cng-p5) |
+| [`add-cng-p6-b200.yaml`](./assets/add-cng-p6-b200.yaml) | P6-B200 nodes (8 EFA interfaces) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/add-cng-p6-b200.yaml&stackName=pcs-add-cng-p6-b200) |
+| [`add-cng-p6-b300.yaml`](./assets/add-cng-p6-b300.yaml) | P6-B300 nodes (17 interfaces: 16 EFA + 1 ENA) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/add-cng-p6-b300.yaml&stackName=pcs-add-cng-p6-b300) |
+| [`pcs-ready-dlami-with-enroot-pyxis.yaml`](./assets/pcs-ready-dlami-with-enroot-pyxis.yaml) | EC2 Image Builder: bake Enroot 3.5.0 + Pyxis 0.20.0 into the PCS-Ready DLAMI | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/pcs-ready-dlami-with-enroot-pyxis.yaml&stackName=pcs-dlami) |
 
 `add-cng*` templates create a Slurm queue only when `QueueName` is set (leave it empty
 for login nodes). The P-series templates need a `CapacityReservationId` when using a

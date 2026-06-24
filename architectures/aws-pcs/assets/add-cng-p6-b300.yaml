@@ -162,7 +162,7 @@ Parameters:
       ref and as the ref argument passed to it. Pin to a release tag for upstream
       stability in production; a branch name (e.g. a fork's dev branch) can be
       used together with MonitoringRepo for testing unreleased changes.
-    Default: 'v2.9.1'
+    Default: 'v2.10.2'
 
   MonitoringRepo:
     Type: String
@@ -246,8 +246,8 @@ Parameters:
 
   S3KeyPrefix:
     Type: String
-    Description: S3 key prefix for scripts (e.g. templates/)
-    Default: 'templates/'
+    Description: S3 key prefix for scripts (e.g. templates/aws-pcs/)
+    Default: 'templates/aws-pcs/'
 
 Conditions:
   UseCapacityBlock: !Not [!Equals [!Ref CapacityReservationId, ""]]

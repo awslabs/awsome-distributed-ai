@@ -23,8 +23,8 @@ as CloudFormation stacks:
 
 | Stack | Creates | Deploy |
 |---|---|---|
-| **Cluster admin** | `<stack>-PCSClusterAdmin-core` (always) + `<stack>-PCSClusterAdmin-imagebuilder` (if opted in) managed policies + an IAM group | [![Launch](../images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster-admin-iam.yaml&stackName=pcs-cluster-admins) |
-| **Cluster user** | `<stack>-PCSClusterUser` managed policy + an IAM group | [![Launch](../images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster-user-iam.yaml&stackName=pcs-cluster-users) |
+| **Cluster admin** | `<stack>-PCSClusterAdmin-core` (always) + `<stack>-PCSClusterAdmin-imagebuilder` (if opted in) managed policies + an IAM group | [![Launch](../images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/cluster-admin-iam.yaml&stackName=pcs-cluster-admins) |
+| **Cluster user** | `<stack>-PCSClusterUser` managed policy + an IAM group | [![Launch](../images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/cluster-user-iam.yaml&stackName=pcs-cluster-users) |
 
 Or from the CLI (use `--template-body` against a local checkout for a pre-merge
 sandbox test):
