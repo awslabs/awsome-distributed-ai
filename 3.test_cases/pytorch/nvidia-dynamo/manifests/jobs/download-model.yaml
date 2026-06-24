@@ -20,7 +20,7 @@ spec:
           args:
             - |
               set -e
-              pip install -q "huggingface_hub[hf_transfer]"; export HF_HUB_ENABLE_HF_TRANSFER=1
+              pip install -q "huggingface_hub[hf_transfer]==1.20.1"; export HF_HUB_ENABLE_HF_TRANSFER=1
               if [ -f "${MODEL_PATH}/config.json" ]; then echo "already present, skipping"; exit 0; fi
               python3 -c "from huggingface_hub import snapshot_download; snapshot_download('${MODEL_ID}', local_dir='${MODEL_PATH}')"
               echo done; du -sh ${MODEL_PATH}
