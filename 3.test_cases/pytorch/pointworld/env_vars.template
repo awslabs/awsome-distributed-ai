@@ -69,11 +69,29 @@ export NORM_STATS_PATH=stats/droid_behavior   # joint DROID+BEHAVIOR stats folde
 export PTV3_SIZE=large
 export BATCH_SIZE=22                           # per-GPU; tune to fit 141 GB H200 HBM
 export NUM_WORKERS=16
-export SAVE_FREQ=1800                          # checkpoint cadence (steps)
+
+# Duration. NOTE: train.py's epoch_count is fractional (= samples_seen /
+# train_total_samples), so on a small dataset it races past NUM_EPOCHS in
+# seconds. For a deterministic, dataset-size-independent smoke run, set
+# MAX_TRAIN_STEPS > 0.
+export NUM_EPOCHS=200                           # full-scale target (epoch_count = samples/total)
+export MAX_TRAIN_STEPS=-1                        # >0 stops after N steps (smoke runs); <=0 disables
+
+# Checkpoint cadence, in BATCHES. The final save only fires on the NUM_EPOCHS
+# cutoff -- the MAX_TRAIN_STEPS exit does NOT save. So for a smoke run bounded by
+# MAX_TRAIN_STEPS, set SAVE_FREQ <= MAX_TRAIN_STEPS or no checkpoint is written.
+export SAVE_FREQ=1800
 export EVAL_FREQ=-1                            # disable in-loop eval; run eval.py separately
 export LOG_DIR=/fsx/pointworld/train_logs
 export EXP_NAME=pointworld-large-droid-behavior
 export WANDB_MODE=disabled                     # "online" to enable Weights & Biases
+
+# NOTE on checkpoint location: PointWorld sets the run name from W&B, so the
+# checkpoint is saved to ${LOG_DIR}/<wandb-run-name>/model-last.pt. With
+# WANDB_MODE=disabled, W&B IGNORES EXP_NAME and generates a random name
+# (e.g. dummy-ab12cd34), so EXP_NAME does NOT control the path. Read the run's
+# "Saving to:" log line for the actual dir, and point eval's MODEL_PATH at that
+# .../model-last.pt.
 
 # ----------------------------------------------------------------------------
 # Additional upstream train.py defaults (not tokenized in the manifests; change

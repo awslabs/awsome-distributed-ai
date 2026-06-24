@@ -47,6 +47,8 @@ spec:
           --ptv3_size=${PTV3_SIZE} \
           --batch_size=${BATCH_SIZE} \
           --num_workers=${NUM_WORKERS} \
+          --num_epochs=${NUM_EPOCHS} \
+          --max_train_steps=${MAX_TRAIN_STEPS} \
           --eval_freq=${EVAL_FREQ} \
           --save_freq=${SAVE_FREQ} \
           --log_dir=${LOG_DIR} \
