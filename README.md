@@ -26,7 +26,7 @@ You can follow the workshops below to train models on AWS. Each contains example
 
 ## Blog
 
-Posts about distributed ML training on AWS are published at <https://awslabs.github.io/awsome-distributed/>. The Hugo source lives on the [`content`](https://github.com/awslabs/awsome-distributed/tree/content) branch.
+Posts about distributed ML training on AWS are published at <https://awslabs.github.io/awsome-distributed-ai/>. The Hugo source lives on the [`content`](https://github.com/awslabs/awsome-distributed/tree/content) branch.
 
 Blog content is editorially curated by AWS authors. Code samples in this repo (`1.architectures/`, `3.test_cases/`, etc.) accept external contributions as usual — see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
