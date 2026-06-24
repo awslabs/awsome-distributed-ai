@@ -9,8 +9,13 @@ cluster using the Kubeflow PyTorchJob operator.
 
 | Manifest | Kind | Purpose |
 |---|---|---|
+| [`pointworld-data-prep.yaml`](./pointworld-data-prep.yaml) | `Job` | Stage DINOv3 weights + WebDataset shards onto FSx (runs in-cluster) |
 | [`pointworld-pretrain.yaml`](./pointworld-pretrain.yaml) | `PyTorchJob` | Multi-node DDP pre-training (DROID + BEHAVIOR, large PTv3) |
 | [`pointworld-eval.yaml`](./pointworld-eval.yaml) | `Job` | Single-GPU evaluation of a trained or released checkpoint |
+
+> If your cluster runs **Kubeflow Trainer v2** (`trainer.kubeflow.org`,
+> `TrainJob`/`ClusterTrainingRuntime`) rather than the PyTorchJob v1 operator, use
+> the manifests in [`trainer-v2/`](./trainer-v2/) for pre-training.
 
 See the [top-level README](../README.md) for the model overview, container build,
 and the full data pipeline. This page covers only the Kubernetes specifics.
@@ -38,7 +43,7 @@ Both manifests assume this layout on the shared filesystem:
 │   │   └── test/expert_confidence-seed=42.h5   # for DROID filtered metrics
 │   └── behavior/wds/{train,test}/...
 ├── dinov3/checkpoints/
-│   └── dinov3_vitl16_pretrain.pth          # gated; from scripts/2.download_dinov3.sh
+│   └── dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth   # gated; canonical name required
 ├── train_logs/                             # written during pre-training
 └── checkpoints/                            # written during pre-training
 ```
@@ -64,7 +69,23 @@ docker tag ${REPO}:${TAG} ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${REPO}:
 docker push ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${REPO}:${TAG}
 ```
 
-Then replace `<ACCOUNT_ID>` and `<REGION>` in both manifests with your values.
+Then replace `<ACCOUNT_ID>` and `<REGION>` in the manifests with your values.
+
+## Stage data onto FSx
+
+FSx for Lustre is VPC-internal and is **not** mounted on your workstation, so the
+DINOv3 weights and WebDataset shards are staged by an in-cluster Job that mounts
+`fsx-claim`:
+
+```bash
+# Edit pointworld-data-prep.yaml: set <ACCOUNT_ID>/<REGION>, paste your gated
+# DINOV3_URL, and choose BEHAVIOR_TASKS / MAX_CLIPS (defaults = small smoke set).
+kubectl apply -f pointworld-data-prep.yaml
+kubectl logs -f job/pointworld-data-prep -n kubeflow
+```
+
+See Section 2 of the [top-level README](../README.md#2-stage-data-and-weights-onto-fsx-in-cluster)
+for details (including full-scale staging and adding DROID).
 
 ## Run pre-training
 

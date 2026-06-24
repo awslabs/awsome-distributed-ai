@@ -44,8 +44,7 @@ There is **no fine-tuning stage** — it is intentionally absent from the model
 design. Real-robot MPC deployment happens off-cluster on physical hardware and is
 out of scope for this repository.
 
-> This test case is **Kubernetes-only** (EKS / HyperPod EKS). Slurm and other
-> orchestrators are not included here.
+> This test case is **Kubernetes-only** (EKS / HyperPod EKS). 
 
 > [!note] Kubeflow Trainer v1 vs v2
 > The manifests in [`kubernetes/`](./kubernetes/) use the Kubeflow **PyTorchJob v1**
@@ -73,80 +72,74 @@ git clone https://github.com/awslabs/awsome-distributed-ai.git
 cd awsome-distributed-ai/3.test_cases/pytorch/pointworld
 ```
 
-## 2. DINOv3 (gated dependency)
+## 2. Stage data and weights onto FSx (in-cluster)
 
-PointWorld's scene featurizer uses a **DINOv3 ViT-L/16** backbone whose weights
-are gated by Meta. You must request access and obtain a personal download URL:
+> [!important] FSx is not mounted on your laptop
+> FSx for Lustre is a VPC-internal filesystem. The `/fsx` paths in this test case
+> only exist **inside the cluster**, so all downloading, restoring, and WDS
+> conversion runs in a Kubernetes Job that mounts the `fsx-claim` PVC — not from
+> your local terminal. The `scripts/*` in this repo are the same steps expressed
+> as standalone helpers; the Job runs them where `/fsx` actually exists.
 
-1. Request access at <https://github.com/facebookresearch/dinov3>.
-2. From the access email, copy the `dinov3_vitl16` pre-train checkpoint URL.
-3. Download it onto the shared filesystem:
+PointWorld needs two things staged onto FSx before training:
 
-   ```bash
-   ./scripts/2.download_dinov3.sh "<DINOV3_DOWNLOAD_URL>" \
-       /fsx/$USER/pointworld/dinov3/checkpoints
-   ```
+1. **DINOv3 ViT-L/16 weights** (gated by Meta) — the scene featurizer backbone.
+   Request access at <https://github.com/facebookresearch/dinov3>, then copy the
+   `dinov3_vitl16` pre-train checkpoint URL from the access email. The weights are
+   **never baked into the image**; the training/eval manifests symlink them from
+   FSx at pod start.
+2. **WebDataset (WDS) shards** — PointWorld ships datasets as packaged Hugging
+   Face archives that you download, restore (`recover_dataset_from_parts.sh`), and
+   convert to WDS.
 
-The DINOv3 weights are **never baked into the container image**. The Kubernetes
-manifests symlink them from FSx into the path PointWorld expects at pod start.
+[`kubernetes/pointworld-data-prep.yaml`](./kubernetes/pointworld-data-prep.yaml)
+does all of this in one Job. Because the Job runs inside the PointWorld container,
+**build and push the image first (Section 3)**, then edit the Job:
 
-## 3. Data pipeline (DROID + BEHAVIOR)
-
-PointWorld distributes generated datasets as packaged archives on Hugging Face,
-which you restore and convert to WebDataset (WDS) shards before training.
-
-### 3.1 Download
-
-```bash
-python scripts/0.download_dataset.py \
-    --output_dir /fsx/$USER/pointworld/downloads \
-    --datasets droid behavior
-```
-
-> DROID full-dataset restoration is multi-terabyte. The DROID flow package is
-> split into independent shards, so you can use `--allow_patterns` to fetch a
-> subset for development before committing to the full download.
-
-### 3.2 Restore
-
-Each dataset repo ships `recover_dataset_from_parts.sh`. Run it inside each
-downloaded dataset directory to reassemble the restored dataset root (see the
-upstream [PointWorld README](https://github.com/NVlabs/PointWorld#datasets-and-checkpoints)).
-
-### 3.3 Convert to WebDataset
-
-The H5-to-WDS conversion + integrity tooling lives on the PointWorld `data`
-branch. Check it out, then use the wrapper:
+- Replace `<ACCOUNT_ID>` / `<REGION>` (your ECR image — built in Section 3).
+- Paste your gated DINOv3 URL into `DINOV3_URL` (treat it as a secret; do not
+  commit it).
+- Set `BEHAVIOR_TASKS` / `MAX_CLIPS`: the defaults stage a small BEHAVIOR subset
+  for a quick smoke run; use `BEHAVIOR_TASKS=all` and `MAX_CLIPS=-1` for the full
+  dataset.
 
 ```bash
-git clone https://github.com/NVlabs/PointWorld.git /fsx/$USER/pointworld/PointWorld-data
-cd /fsx/$USER/pointworld/PointWorld-data && git checkout data && cd -
-
-python scripts/1.convert_wds.py \
-    --pointworld_data_branch /fsx/$USER/pointworld/PointWorld-data \
-    --restored_root /fsx/$USER/pointworld/downloads/droid/pointworld_droid_restored \
-    --domain droid \
-    --output_root /fsx/$USER/pointworld/dataset
-# repeat with --domain behavior
+kubectl apply -f kubernetes/pointworld-data-prep.yaml
+kubectl logs -f job/pointworld-data-prep -n kubeflow
 ```
 
-Resulting layout (consumed by training via `LOCAL_DATASET_DIR`):
+The Job writes this layout (consumed by training via `LOCAL_DATASET_DIR`):
 
 ```text
-/fsx/$USER/pointworld/dataset/
-├── droid/wds/{train,test}/...
-└── behavior/wds/{train,test}/...
+/fsx/pointworld/
+├── dinov3/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+└── dataset/behavior/wds/{train,test}/...   # + metadata_rank0.json
 ```
 
-For **DROID filtered metrics**, copy the released expert-confidence artifact into
-the generated WDS test split:
+> [!note] DROID vs BEHAVIOR
+> DROID is distributed as a single multi-terabyte split archive that does not
+> subset cleanly, so the Job stages **BEHAVIOR** (sharded per task,
+> ~1.6–14 GB/task), which is the practical choice for development and smoke
+> tests. To add DROID at full scale, extend the Job to download the DROID package
+> and run the same restore → convert steps with `--domain droid`, then copy the
+> released expert-confidence artifact into the generated test split for filtered
+> metrics:
+>
+> ```text
+> droid/confidence/expert_confidence-seed=42.h5
+>     -> /fsx/pointworld/dataset/droid/wds/test/expert_confidence-seed=42.h5
+> ```
 
-```bash
-cp .../droid/confidence/expert_confidence-seed=42.h5 \
-   /fsx/$USER/pointworld/dataset/droid/wds/test/expert_confidence-seed=42.h5
-```
+### Running the staging steps by hand
 
-## 4. Build and push the container
+If you prefer to stage manually (for example, from a HyperPod login pod or any
+pod that mounts `fsx-claim`), the `scripts/` helpers are the equivalent steps:
+`scripts/2.download_dinov3.sh` for the weights, and
+`scripts/0.download_dataset.py` → `recover_dataset_from_parts.sh` →
+`scripts/1.convert_wds.py` for the data. They take the same `/fsx/...` paths and
+must run inside a pod with FSx mounted.
+
+## 3. Build and push the container
 
 ```bash
 docker build -t pointworld:05484826 -f pointworld.Dockerfile .
@@ -156,7 +149,7 @@ Then push to ECR (see [`kubernetes/README.md`](./kubernetes/README.md#push-the-i
 for the full login/tag/push sequence). The image tag matches `POINTWORLD_COMMIT`
 in the Dockerfile so the running image is traceable to an exact upstream commit.
 
-## 5. Pre-train (Kubernetes PyTorchJob)
+## 4. Pre-train (Kubernetes PyTorchJob)
 
 ```bash
 # Update <ACCOUNT_ID> and <REGION> in kubernetes/pointworld-pretrain.yaml first.
@@ -172,7 +165,7 @@ set (large PTv3, DROID + BEHAVIOR) is encoded in the manifest and mirrored in
 See [`kubernetes/README.md`](./kubernetes/README.md) for the launch-pattern
 details, FSx layout, and tuning notes.
 
-## 6. Evaluate (Kubernetes Job)
+## 5. Evaluate (Kubernetes Job)
 
 ```bash
 # Point MODEL_PATH in kubernetes/pointworld-eval.yaml at your trained checkpoint
@@ -190,7 +183,7 @@ kubectl logs -f job/pointworld-eval -n kubeflow
 
 For a quick smoke test, set `EVAL_NUM_BATCHES` to e.g. `100` instead of `-1`.
 
-## 7. Parse throughput
+## 6. Parse throughput
 
 After capturing training logs, compute steady-state throughput:
 
@@ -224,8 +217,10 @@ pointworld/
 │   └── parse_benchmark.py             # throughput / loss from logs
 └── kubernetes/
     ├── README.md                      # EKS/HyperPod-EKS specifics
-    ├── pointworld-pretrain.yaml       # PyTorchJob: 8x DDP pre-training
-    └── pointworld-eval.yaml           # Job: single-GPU evaluation
+    ├── pointworld-data-prep.yaml       # Job: stage DINOv3 + WDS onto FSx (in-cluster)
+    ├── pointworld-pretrain.yaml        # PyTorchJob: 8x DDP pre-training
+    ├── pointworld-eval.yaml            # Job: single-GPU evaluation
+    └── trainer-v2/                     # Kubeflow Trainer v2 variants (TrainJob)
 ```
 
 ## Known limitations
