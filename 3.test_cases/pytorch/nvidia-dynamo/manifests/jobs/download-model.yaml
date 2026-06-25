@@ -11,7 +11,14 @@ spec:
   template:
     spec:
       restartPolicy: Never
-      nodeSelector: { sagemaker.amazonaws.com/instance-group-name: dynamo-workers }
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: In
+                    values: ["ml.g6e.4xlarge", "g6e.4xlarge"]   # HyperPod (ml.) / standard EKS
       tolerations: [{ effect: NoSchedule, key: nvidia.com/gpu, operator: Exists }]
       containers:
         - name: download
