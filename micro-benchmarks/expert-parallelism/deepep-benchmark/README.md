@@ -28,10 +28,11 @@ DeepEP's internode kernels were written for [IBGDA](https://docs.nvidia.com/nvsh
 RDMA over InfiniBand), which EFA does not provide. The image works around this:
 
 - **NVSHMEM 3.7.0**
-- [`deepep_aws_efa.patch`](./deepep_aws_efa.patch) **patches DeepEP** to replace its IBGDA device
-  calls with NVSHMEM host-proxy QP APIs (`nvshmemx_qp_*`), maps the dispatch/combine tail updates
-  onto a combined put+signal, and raises `NVSHMEM_MAX_TEAMS` for NVSHMEM 3.7.
-- The build requires PyTorch, PyTorch's bundled `nvidia-nvshmem-cu13` is uninstalled so it does not clash with the OS libraries NVSHMEM 3.7.0.
+- [`setup_deepep_efa.sh`](./setup_deepep_efa.sh) — a self-contained script that downloads NVSHMEM,
+  clones DeepEP, and applies an **embedded EFA patch** that replaces IBGDA device calls with
+  NVSHMEM host-proxy QP APIs (`nvshmemx_qp_*`), maps the dispatch/combine tail updates onto a
+  combined put+signal, and raises `NVSHMEM_MAX_TEAMS` for NVSHMEM 3.7.
+- The build requires PyTorch; PyTorch's bundled `nvidia-nvshmem-cu13` is uninstalled so it does not clash with the OS-installed NVSHMEM 3.7.0 during runtime.
 - The image is built on **CUDA 13** (PyTorch `cu130`). This is required for Blackwell (B200/B300):
   CUDA ≤ 12.9 CUPTI fails on those GPUs (`CUPTI_ERROR_INVALID_DEVICE`), which breaks the
   internode/low-latency tuning phase that profiles kernels.
