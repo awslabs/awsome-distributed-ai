@@ -8,8 +8,8 @@
 # the scene featurizer expects (keeping gated weights out of the image), then
 # execs torchrun. The Trainer v2 torch plugin injects the PET_* rendezvous env.
 #
-# numNodes here is the flagship 8 (64 H200). For multi-domain DROID+BEHAVIOR set
-# --domains/--data_dirs accordingly and stage both WDS roots on FSx.
+# numNodes is ${NUM_NODES} (default 2 = 16 H200; raise in env_vars to scale out).
+# This sample trains the BEHAVIOR domain; DROID is out of scope (see the README).
 apiVersion: trainer.kubeflow.org/v1alpha1
 kind: TrainJob
 metadata:

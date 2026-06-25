@@ -15,9 +15,14 @@ embodiment-specific action space (e.g. joint angles), so a single model can lear
 jointly across embodiments (a single-arm Franka and a bimanual humanoid) and
 condition directly on physical geometry.
 
-We pre-train the **large PTv3** variant on the multi-domain **DROID + BEHAVIOR**
-corpus across **8 x p5en.48xlarge** instances (64 x NVIDIA H200) using PyTorch
+We pre-train the **large PTv3** variant on the **BEHAVIOR** domain using PyTorch
 DDP, then evaluate the resulting checkpoint with PointWorld's point-flow metrics.
+The committed defaults are a small **2 x p5en.48xlarge** (16 x NVIDIA H200) smoke
+run over a BEHAVIOR subset, so the full data → train → evaluate → visualize loop
+runs end to end on a modest footprint; `env_vars` knobs scale it up to more nodes
+and the full dataset. (Upstream PointWorld pre-trains the released checkpoint on
+the multi-domain **DROID + BEHAVIOR** corpus across 8 nodes / 64 H200; DROID is
+multi-terabyte and out of scope for this test case — see [Section 4](#4-stage-data-and-weights-onto-fsx-in-cluster).)
 
 ![PointWorld viser 3D visualizer](img/visualizer.png)
 
@@ -27,7 +32,7 @@ DDP, then evaluate the resulting checkpoint with PointWorld's point-flow metrics
 | **Model** | PointWorld (PTv3 backbone + DINOv3 scene featurizer) |
 | **Framework** | PyTorch + DDP (`torchrun`, `init_method="env://"`) |
 | **Precision** | BF16 (AMP) |
-| **Data** | DROID (real) + BEHAVIOR (sim), WebDataset shards |
+| **Data** | BEHAVIOR (sim), WebDataset shards (DROID full-scale, out of scope) |
 | **Paper** | [arXiv:2601.03782](https://arxiv.org/abs/2601.03782) (CVPR 2026 Highlight) |
 | **Code** | [NVlabs/PointWorld](https://github.com/NVlabs/PointWorld) (Apache-2.0) |
 | **Datasets** | [PointWorld-DROID](https://huggingface.co/datasets/nvidia/PointWorld-DROID), [PointWorld-BEHAVIOR](https://huggingface.co/datasets/nvidia/PointWorld-BEHAVIOR) |
@@ -40,7 +45,7 @@ pre-trained checkpoint drives a real robot via model-predictive control (MPC)
 with no demonstrations or task-specific fine-tuning. Accordingly, this test case
 covers the two stages that run on a training cluster:
 
-1. **Pre-train** the 3D world model (multi-node DDP) on DROID + BEHAVIOR.
+1. **Pre-train** the 3D world model (multi-node DDP) on BEHAVIOR.
 2. **Evaluate** the resulting checkpoint (point-flow L2 metrics; viser viz optional).
 
 There is **no fine-tuning stage** — it is intentionally absent from the model
@@ -60,7 +65,8 @@ out of scope for this repository.
 
 ## Prerequisites
 
-- An EKS or SageMaker HyperPod EKS cluster with **8 x p5en.48xlarge** (64 x H200)
+- An EKS or SageMaker HyperPod EKS cluster with p5en.48xlarge (H200) nodes — the
+  default smoke run uses **2** (16 x H200); scale up via `NUM_NODES`
 - [Kubeflow Training Operator](https://www.kubeflow.org/docs/components/training/)
   (provides the `PyTorchJob` CRD)
 - [NVIDIA device plugin](https://github.com/NVIDIA/k8s-device-plugin) and
@@ -151,7 +157,7 @@ running image is traceable to an exact upstream commit.
 
 ## 4. Stage data and weights onto FSx (in-cluster)
 
-> [!important] FSx is not mounted on your laptop
+
 > FSx for Lustre is a VPC-internal filesystem. The `/fsx` paths in this test case
 > only exist **inside the cluster**, so all downloading, restoring, and WDS
 > conversion runs in a Kubernetes Job that mounts the `fsx-claim` PVC — not from
@@ -187,9 +193,10 @@ source env_vars
 # Option A: DINOV3_URL already pasted into the manifest
 ./kubernetes/deploy.sh kubernetes/pointworld-data-prep.yaml
 
-# Option B: keep the gated URL out of any file — inject it at apply time
+# Option B: keep the gated URL out of any file — inject it at apply time.
+# Replace ONLY the env `value:` line so the in-script placeholder guard stays intact.
 ./kubernetes/deploy.sh --dry-run kubernetes/pointworld-data-prep.yaml \
-  | sed "s|<DINOV3_DOWNLOAD_URL>|$DINOV3_URL|" | kubectl apply -f -
+  | sed "s|value: \"<DINOV3_DOWNLOAD_URL>\"|value: \"$DINOV3_URL\"|" | kubectl apply -f -
 
 kubectl logs -f job/pointworld-data-prep -n ${NAMESPACE}
 ```
@@ -200,10 +207,8 @@ training/eval manifests expect on the shared filesystem:
 ```text
 /fsx/pointworld/
 ├── dataset/
-│   ├── behavior/wds/{train,test}/...          # from the data-prep Job
-│   │   └── metadata_rank0.json                # written by convert_wds on completion
-│   └── droid/wds/{train,test}/...             # full-scale only (see note below)
-│       └── test/expert_confidence-seed=42.h5  # for DROID filtered metrics
+│   └── behavior/wds/{train,test}/...          # from the data-prep Job
+│       └── metadata_rank0.json                # written by convert_wds on completion
 ├── dinov3/checkpoints/
 │   └── dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth   # gated; canonical name required
 ├── train_logs/                                # written during pre-training
@@ -212,21 +217,19 @@ training/eval manifests expect on the shared filesystem:
 
 The pre-training pod mounts the WDS root at `/dataset` via
 `subPath: pointworld/dataset`, so PointWorld's `LOCAL_DATASET_DIR=/dataset`
-resolves `/dataset/behavior/wds` (and `/dataset/droid/wds`).
+resolves `/dataset/behavior/wds`.
 
-> [!note] DROID vs BEHAVIOR
-> DROID is distributed as a single multi-terabyte split archive that does not
-> subset cleanly, so the Job stages **BEHAVIOR** (sharded per task,
-> ~1.6–14 GB/task), which is the practical choice for development and smoke
-> tests. To add DROID at full scale, extend the Job to download the DROID package
-> and run the same restore → convert steps with `--domain droid`, then copy the
-> released expert-confidence artifact into the generated test split for filtered
-> metrics:
->
-> ```text
-> droid/confidence/expert_confidence-seed=42.h5
->     -> /fsx/pointworld/dataset/droid/wds/test/expert_confidence-seed=42.h5
-> ```
+> [!note] DROID is out of scope for this test case
+> PointWorld has two domains: **BEHAVIOR** (simulation, sharded per task at
+> ~1.6–14 GB/task) and **DROID** (real-world, a single ~3.9 TB split archive).
+> This test case stages **BEHAVIOR only** — it subsets cleanly, fits a modest
+> FSx, and exercises the full distributed pipeline. DROID is multi-terabyte and
+> is **not** staged by the data-prep Job. If you want to train on DROID yourself,
+> [`scripts/0.download_dataset.py`](./scripts/0.download_dataset.py) downloads
+> either package, and upstream PointWorld documents the restore → convert steps;
+> note DROID also needs the released expert-confidence artifact
+> (`droid/confidence/expert_confidence-seed=42.h5`) copied into the WDS test split
+> for filtered metrics. Sizing FSx for DROID is your responsibility.
 
 ### Running the staging steps by hand
 
@@ -247,8 +250,8 @@ kubectl logs -f pointworld-pretrain-worker-0 -n ${NAMESPACE}
 
 This launches `NUM_NODES` worker pods (one per node), each running `torchrun` with
 `GPU_PER_NODE` processes (one per H200) for data-parallel pre-training. The
-flagship flag set (large PTv3, DROID + BEHAVIOR) comes from the training-flag
-section of `env_vars` and is rendered into the manifest by `deploy.sh`.
+training flags (large PTv3, BEHAVIOR) come from the training-flag section of
+`env_vars` and are rendered into the manifest by `deploy.sh`.
 
 The PyTorchJob operator injects `MASTER_ADDR`, `MASTER_PORT`, `WORLD_SIZE`, and
 `RANK`; PointWorld's `Trainer` initializes the process group with
@@ -259,9 +262,10 @@ needed.
 
 Two `env_vars` knobs bound the run:
 
-- `NUM_EPOCHS` (default 200) — the full-scale target. Note `train.py` tracks
-  progress as a **fractional** `epoch_count = samples_seen / train_total_samples`,
-  so on a small dataset it reaches `NUM_EPOCHS` in seconds. Use this for real runs.
+- `NUM_EPOCHS` (smoke default 10; upstream full-scale target is 200) — note
+  `train.py` tracks progress as a **fractional**
+  `epoch_count = samples_seen / train_total_samples`, so on a small dataset it
+  reaches `NUM_EPOCHS` quickly. Raise it for full-scale training.
 - `MAX_TRAIN_STEPS` (default `-1` = disabled) — stops after N optimizer steps,
   independent of dataset size. Set this `> 0` for a **deterministic smoke run**.
 
@@ -291,7 +295,7 @@ The container `command` is a small `bash -c` wrapper that:
 1. Symlinks the gated DINOv3 weights from `/fsx/pointworld/dinov3/checkpoints`
    into `/pointworld/third_party/dinov3/checkpoints` (keeping gated weights out of
    the image), then
-2. `exec`s `torchrun ... train.py` with the flagship DROID + BEHAVIOR flags.
+2. `exec`s `torchrun ... train.py` with the BEHAVIOR training flags.
 
 Doing the symlink in the main container (rather than an initContainer) ensures it
 lives in the same filesystem namespace as the training process.
@@ -343,14 +347,15 @@ kubectl logs -n ${NAMESPACE} \
 python scripts/parse_benchmark.py \
     --log_file run.log \
     --warmup_steps 20 \
-    --global_batch_size 1408 \
-    --num_gpus 64 \
+    --global_batch_size 352 \
+    --num_gpus 16 \
     --gpu_type h200
 ```
 
-> `--global_batch_size` is `per_gpu_batch_size * num_gpus` (e.g. `22 * 64 = 1408`).
-> The step/loss/time regexes are configurable; adjust them if your build's log
-> format differs from the release default.
+> `--global_batch_size` is `per_gpu_batch_size * num_gpus` — for the default
+> 2-node smoke run that is `22 * 16 = 352` (at full scale on 8 nodes it would be
+> `22 * 64 = 1408`). The step/loss/time regexes are configurable; adjust them if
+> your build's log format differs from the release default.
 
 ## 8. Visualize (interactive 3D viewer)
 
@@ -438,10 +443,14 @@ All of these are exposed as variables in `env_vars` (rendered by `deploy.sh`):
 - **Batch size**: `BATCH_SIZE=22` is the upstream default. H200 has 141 GB HBM;
   raise it if memory allows, and update `--global_batch_size` accordingly when
   parsing throughput with [`scripts/parse_benchmark.py`](./scripts/parse_benchmark.py).
-- **EFA**: `EFA_PER_NODE=16` matches p5en.48xlarge (16 EFA network cards per node,
-  as advertised by the EFA device plugin). Set to `32` for p5.48xlarge.
-- **Nodes / GPUs**: `NUM_NODES` and `GPU_PER_NODE` drive replicas/`numNodes` and
-  `--nproc_per_node` across both the v1 and v2 manifests.
+- **EFA**: `EFA_PER_NODE=16` matches a dedicated p5en.48xlarge (16 EFA NICs per
+  node; `32` for p5.48xlarge). On a **shared/contended cluster** you may not get
+  nodes with all 16 free — lower it (e.g. `3`) so the job schedules; NCCL still
+  runs over EFA at reduced bandwidth. Use 16 on dedicated capacity for full
+  inter-node bandwidth.
+- **Nodes / GPUs**: `NUM_NODES` (default 2) and `GPU_PER_NODE` drive
+  replicas/`numNodes` and `--nproc_per_node` across both the v1 and v2 manifests;
+  raise `NUM_NODES` to scale out (e.g. 8 for the upstream 64-GPU footprint).
 - **Shared memory**: the `shmem` `emptyDir` backs the PyTorch DataLoader workers;
   reduce its `sizeLimit` in the manifest for smaller instances.
 - **B200**: this image targets H200. B200 EFA networking needs NCCL >= 2.29 — see
@@ -466,7 +475,7 @@ pointworld/
     ├── build-image.yaml                 # Kaniko build Pod (rendered by build-image.sh)
     ├── deploy.sh                       # render (envsubst) + apply a manifest
     ├── pointworld-data-prep.yaml       # Job: stage DINOv3 + WDS onto FSx (in-cluster)
-    ├── pointworld-pretrain.yaml        # PyTorchJob: 8x DDP pre-training
+    ├── pointworld-pretrain.yaml        # PyTorchJob: multi-node DDP pre-training
     ├── pointworld-eval.yaml            # Job: single-GPU evaluation
     ├── pointworld-viz.yaml             # Pod: interactive viser 3D viewer (stdin/tty + :8080)
     └── trainer-v2/                     # Kubeflow Trainer v2 variants (TrainJob)

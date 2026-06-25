@@ -2,16 +2,15 @@
 # SPDX-License-Identifier: MIT-0
 #
 # PointWorld 3D World Model Pre-training - Kubernetes PyTorchJob
-# Multi-domain DROID + BEHAVIOR, large PTv3 backbone.
-# Targets 8 x p5en.48xlarge (64 x NVIDIA H200).
+# BEHAVIOR domain, large PTv3 backbone.
+# Default: 2 x p5en.48xlarge (16 x NVIDIA H200); scales via NUM_NODES in env_vars.
 #
 # Prerequisites:
 #   - Kubeflow PyTorchJob operator (Training Operator) installed
 #   - NVIDIA GPU device plugin enabled (nvidia.com/gpu)
 #   - EFA device plugin enabled (vpc.amazonaws.com/efa)
 #   - FSx for Lustre PVC named "fsx-claim" mounted at /fsx, containing:
-#       /fsx/pointworld/dataset/droid/wds         (WDS shards from 1.convert_wds.py)
-#       /fsx/pointworld/dataset/behavior/wds
+#       /fsx/pointworld/dataset/behavior/wds       (WDS shards from the data-prep Job)
 #       /fsx/pointworld/dinov3/checkpoints/...     (gated DINOv3 weights, 2.download_dinov3.sh)
 #   - Container image built from pointworld.Dockerfile and pushed to ECR
 #

@@ -14,10 +14,13 @@
 #
 # Prerequisites:
 #   - FSx for Lustre PVC "fsx-claim" with:
-#       /fsx/pointworld/dataset/droid/wds (incl. test/expert_confidence-seed=42.h5)
+#       /fsx/pointworld/dataset/behavior/wds      (WDS shards from the data-prep Job)
 #       /fsx/pointworld/dinov3/checkpoints/...    (gated DINOv3 weights)
-#       /fsx/pointworld/checkpoints/<run>/model-best.pt   (your trained ckpt)
+#       a trained checkpoint, e.g. /fsx/pointworld/train_logs/<run>/model-last.pt
+#         (set MODEL_PATH in env_vars; see the pre-train section for the <run> dir)
 #   - Container image from pointworld.Dockerfile pushed to ECR
+#       (For DROID eval at full scale, also stage /dataset/droid/wds with
+#        test/expert_confidence-seed=42.h5 — out of scope for this sample.)
 #
 # To evaluate a RELEASED checkpoint instead of your own, first download it:
 #   huggingface-cli download nvidia/PointWorld_models \
