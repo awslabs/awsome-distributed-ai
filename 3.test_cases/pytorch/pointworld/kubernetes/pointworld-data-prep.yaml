@@ -85,7 +85,13 @@ spec:
               ls -lh "$DINO/"
 
               echo "== 2. Download BEHAVIOR package (subset or all) =="
-              python - <<'PY'
+              # NOTE: this heredoc lives inside a YAML literal block, so every line
+              # carries the block's leading indentation. A plain `python - <<'PY'`
+              # would feed that indentation to Python and fail with
+              # "IndentationError: unexpected indent". We therefore strip the common
+              # leading whitespace with `sed` before piping to Python; keep the body
+              # uniformly indented so the dedent is consistent.
+              sed 's/^              //' <<'PY' | python -
               import os
               from huggingface_hub import snapshot_download
               dl = os.environ["DL_DIR"]

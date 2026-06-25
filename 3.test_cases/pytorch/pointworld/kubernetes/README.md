@@ -11,7 +11,7 @@ HyperPod EKS.
 |---|---|---|
 | [`build-image.yaml`](./build-image.yaml) | `Pod` (Kaniko) | Build the container on an x86_64 node and push to ECR (run via [`build-image.sh`](./build-image.sh)) |
 | [`pointworld-data-prep.yaml`](./pointworld-data-prep.yaml) | `Job` | Stage DINOv3 weights + WebDataset shards onto FSx (runs in-cluster) |
-| [`pointworld-pretrain.yaml`](./pointworld-pretrain.yaml) | `PyTorchJob` | Multi-node DDP pre-training (DROID + BEHAVIOR, large PTv3) |
+| [`pointworld-pretrain.yaml`](./pointworld-pretrain.yaml) | `PyTorchJob` | Multi-node DDP pre-training (BEHAVIOR, large PTv3) |
 | [`pointworld-eval.yaml`](./pointworld-eval.yaml) | `Job` | Single-GPU evaluation of a trained or released checkpoint |
 | [`trainer-v2/`](./trainer-v2/) | `TrainJob` + `ClusterTrainingRuntime` | Kubeflow Trainer v2 variants of pre-training |
 

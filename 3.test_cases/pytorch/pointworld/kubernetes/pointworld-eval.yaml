@@ -28,9 +28,10 @@
 #     --include "large-droid+behavior/model-best.pt"
 # and point MODEL_PATH below at it.
 #
-# Usage:
-#   kubectl apply -f pointworld-eval.yaml
-#   kubectl logs -f job/pointworld-eval
+# Usage (renders the ${...} tokens from env_vars via deploy.sh):
+#   source env_vars
+#   ./kubernetes/deploy.sh kubernetes/pointworld-eval.yaml
+#   kubectl logs -f job/pointworld-eval -n ${NAMESPACE}
 
 apiVersion: batch/v1
 kind: Job

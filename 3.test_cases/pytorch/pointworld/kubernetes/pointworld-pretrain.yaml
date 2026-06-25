@@ -21,9 +21,10 @@
 #   LOCAL_RANK directly, so torchrun + the operator env vars are sufficient -
 #   no thin launcher is required.
 #
-# Usage:
-#   kubectl apply -f pointworld-pretrain.yaml
-#   kubectl logs -f pytorchjob/pointworld-pretrain-worker-0
+# Usage (renders the ${...} tokens from env_vars via deploy.sh):
+#   source env_vars
+#   ./kubernetes/deploy.sh kubernetes/pointworld-pretrain.yaml
+#   kubectl logs -f pointworld-pretrain-worker-0 -n ${NAMESPACE}
 
 apiVersion: kubeflow.org/v1
 kind: PyTorchJob
