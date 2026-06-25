@@ -20,10 +20,11 @@
 #   2. Set the data knobs DIRECTLY in this file (they read the container env at
 #      runtime via bash/python, so they are intentionally NOT envsubst'd):
 #        - DINOV3_URL: paste your personal, gated DINOv3 URL (treat as a secret;
-#          do not commit). Or inject it at apply time so it never lands in a file:
+#          do not commit). Or inject it at apply time so it never lands in a file
+#          (replace ONLY the env value line so the in-script guard is left intact):
 #            source env_vars
 #            ./deploy.sh --dry-run pointworld-data-prep.yaml \
-#              | sed "s|<DINOV3_DOWNLOAD_URL>|$DINOV3_URL|" | kubectl apply -f -
+#              | sed "s|value: \"<DINOV3_DOWNLOAD_URL>\"|value: \"$DINOV3_URL\"|" | kubectl apply -f -
 #        - BEHAVIOR_TASKS / MAX_CLIPS: smoke default is a few tasks + bounded
 #          clips; for full scale set BEHAVIOR_TASKS=all and MAX_CLIPS=-1 (and add
 #          DROID).
@@ -152,10 +153,10 @@ spec:
               value: "<DINOV3_DOWNLOAD_URL>"
             # Comma-separated BEHAVIOR task IDs, or "all" for the full package.
             - name: BEHAVIOR_TASKS
-              value: "task-0000,task-0001,task-0002"
+              value: "task-0000,task-0001,task-0002,task-0003,task-0004,task-0005,task-0006,task-0007,task-0008,task-0009"
             # Cap clips for a quick smoke run; set -1 for full scale.
             - name: MAX_CLIPS
-              value: "200"
+              value: "5000"
             - name: DL_DIR
               value: /fsx/pointworld/downloads/behavior
             - name: PYTHONPATH

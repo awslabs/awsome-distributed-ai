@@ -325,10 +325,18 @@ For a quick smoke test, set `EVAL_NUM_BATCHES` to e.g. `100` instead of `-1`.
 
 ## 7. Parse throughput
 
-After capturing training logs, compute steady-state throughput:
+After capturing **pre-training** logs, compute steady-state throughput:
 
 ```bash
+# Trainer v1 (PyTorchJob):
 kubectl logs pointworld-pretrain-worker-0 -n ${NAMESPACE} > run.log
+
+# Trainer v2 (TrainJob):
+kubectl logs -n ${NAMESPACE} \
+  $(kubectl get pods -n ${NAMESPACE} --no-headers \
+    -o custom-columns=NAME:.metadata.name \
+    | grep '^pointworld-pretrain-node-0-0-') > run.log
+
 python scripts/parse_benchmark.py \
     --log_file run.log \
     --warmup_steps 20 \
@@ -341,8 +349,58 @@ python scripts/parse_benchmark.py \
 > The step/loss/time regexes are configurable; adjust them if your build's log
 > format differs from the release default.
 
-## Tuning notes
+## 8. Visualize (interactive 3D viewer)
 
+PointWorld ships an **interactive** [`viser`](https://github.com/nerfstudio-project/viser)
+3D viewer that renders predicted vs. ground-truth scene point-flow for a trained
+checkpoint. It is enabled at evaluation time with `--eval_viz_num > 0` and serves
+a live web UI on port `8080`.
+
+Because the viewer is a **live web server** *and* pauses on an **interactive TTY
+prompt** between samples (`Press ENTER to continue ... type q to quit`), it
+cannot run as a fire-and-forget `Job` — it needs `stdin`/`tty` and a port you can
+reach. This test case therefore provides a dedicated **Pod**
+([`kubernetes/pointworld-viz.yaml`](./kubernetes/pointworld-viz.yaml)) with
+`stdin: true` / `tty: true` and a `containerPort: 8080`.
+
+> [!note] Image must include the visualization extras
+> The viewer needs `viser`, `open3d`, and `matplotlib`
+> (pinned to upstream `environments/train_eval_viz.yml`:
+> `viser==1.0.10`, `open3d==0.16.0`, `matplotlib==3.10.6`). These are baked into
+> `pointworld.Dockerfile`, so the image built in [Section 3](#3-build-and-push-the-container)
+> already supports visualization.
+
+```bash
+# Point MODEL_PATH at a trained checkpoint (see Section 5 for the dummy-<run> dir)
+# and set EVAL_VIZ_NUM (# samples to visualize), then launch the viz Pod:
+source env_vars
+./kubernetes/deploy.sh kubernetes/pointworld-viz.yaml
+
+# 1) Terminal A — forward the viser port to your workstation:
+kubectl port-forward pod/pointworld-viz 8080:8080 -n ${NAMESPACE}
+
+# 2) Terminal B — attach to drive the ENTER / q prompt:
+kubectl attach -it pointworld-viz -n ${NAMESPACE}
+
+# 3) Open http://localhost:8080 in your browser. Press ENTER in terminal B to
+#    step to the next sample; type q to quit. The Pod exits when viz finishes.
+
+# Tear down:
+./kubernetes/deploy.sh --delete kubernetes/pointworld-viz.yaml
+```
+
+Viewer controls include `Frame` (step through the temporal sequence),
+`Ground-truth` (toggle prediction vs. GT), `Upsample`, scene/robot flow density
+and thickness, point size, and overlay opacity.
+
+> [!warning] The prompt requires a real TTY
+> `eval.py` reads the continue/quit prompt from an attached terminal (it falls
+> back to `/dev/tty` and errors if stdin is redirected/captured). Always drive it
+> with `kubectl attach -it` (or `kubectl exec -it` into a shell), not a piped
+> command. `--viewer_host` is **not** a CLI flag; the server binds `0.0.0.0`
+> automatically, which is what makes `port-forward` work.
+
+## Tuning notes
 All of these are exposed as variables in `env_vars` (rendered by `deploy.sh`):
 
 - **Batch size**: `BATCH_SIZE=22` is the upstream default. H200 has 141 GB HBM;
@@ -378,6 +436,7 @@ pointworld/
     ├── pointworld-data-prep.yaml       # Job: stage DINOv3 + WDS onto FSx (in-cluster)
     ├── pointworld-pretrain.yaml        # PyTorchJob: 8x DDP pre-training
     ├── pointworld-eval.yaml            # Job: single-GPU evaluation
+    ├── pointworld-viz.yaml             # Pod: interactive viser 3D viewer (stdin/tty + :8080)
     └── trainer-v2/                     # Kubeflow Trainer v2 variants (TrainJob)
 ```
 
@@ -401,13 +460,22 @@ with p5en.48xlarge (H200) nodes:
 
 - **Container**: built from `pointworld.Dockerfile` and imported cleanly on an
   H200 (torch 2.5.1+cu124, flash-attn 2.7.4.post1, PTv3, DINOv3).
-- **Pre-training**: a 1-node / 8-GPU run (BEHAVIOR, `--ptv3_size=large`,
-  `--max_train_steps=2`) initialized distributed training, loaded the DINOv3
-  backbone, streamed the WebDataset dataloader, and ran forward/backward with a
-  decreasing loss before stopping cleanly.
-- **Evaluation**: `eval.py` loaded a released checkpoint
-  (`nvidia/PointWorld_models` `large-droid+behavior`) and produced metrics on the
-  BEHAVIOR test split.
+- **Pre-training**: validated at two scales on p5en.48xlarge / H200 (Kubeflow
+  Trainer v2, EFA `efa-direct`):
+  - a 1-node / 8-GPU smoke run (BEHAVIOR, `--ptv3_size=large`, bounded by
+    `--max_train_steps`), and
+  - a **2-node / 16-GPU** run over a larger BEHAVIOR subset (4000 train /
+    1000 test clips, `--num_epochs=10`) that initialized distributed training,
+    loaded the DINOv3 backbone, streamed the WebDataset dataloader, ran
+    forward/backward with a decreasing loss, and wrote `model-last.pt` on the
+    epoch cutoff.
+- **Evaluation**: `eval.py` loaded a trained checkpoint and produced metrics on
+  the BEHAVIOR test split (also verified against a released checkpoint,
+  `nvidia/PointWorld_models` `large-droid+behavior`).
+- **Visualization**: the interactive `viser` viewer
+  ([`kubernetes/pointworld-viz.yaml`](./kubernetes/pointworld-viz.yaml)) loaded a
+  trained checkpoint, served the live 3D UI on port `8080`, and paused at the
+  per-sample TTY prompt.
 
 > [!note] Small-scale data
 > DROID is distributed as a single ~3.9 TB split archive that does not subset

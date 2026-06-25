@@ -17,14 +17,16 @@
 #
 # DINOv3 secret note: the data-prep Job's DINOV3_URL is intentionally NOT
 # rendered (it reads the value from the container env at runtime). To inject your
-# gated URL without writing it to a file, pipe through sed at apply time:
+# gated URL without writing it to a file, sed-replace ONLY the env value line at
+# apply time (matching the whole `value: "..."` so the in-script guard comparison
+# against the literal placeholder is left intact):
 #   ./deploy.sh --dry-run pointworld-data-prep.yaml \
-#     | sed "s|<DINOV3_DOWNLOAD_URL>|$DINOV3_URL|" | kubectl apply -f -
+#     | sed "s|value: \"<DINOV3_DOWNLOAD_URL>\"|value: \"$DINOV3_URL\"|" | kubectl apply -f -
 
 set -euo pipefail
 
 # Full allowlist: structural fields + tokenized training flags.
-ENVSUBST_VARS_FULL='$IMAGE_URI $NAMESPACE $FSX_PVC_NAME $NUM_NODES $GPU_PER_NODE $EFA_PER_NODE $DOMAINS $DATA_DIRS $NORM_STATS_PATH $PTV3_SIZE $BATCH_SIZE $NUM_WORKERS $NUM_EPOCHS $MAX_TRAIN_STEPS $EVAL_FREQ $SAVE_FREQ $LOG_DIR $EXP_NAME $WANDB_MODE $MODEL_PATH $EVAL_NUM_BATCHES'
+ENVSUBST_VARS_FULL='$IMAGE_URI $NAMESPACE $FSX_PVC_NAME $NUM_NODES $GPU_PER_NODE $EFA_PER_NODE $DOMAINS $DATA_DIRS $NORM_STATS_PATH $PTV3_SIZE $BATCH_SIZE $NUM_WORKERS $NUM_EPOCHS $MAX_TRAIN_STEPS $EVAL_FREQ $SAVE_FREQ $LOG_DIR $EXP_NAME $WANDB_MODE $MODEL_PATH $EVAL_NUM_BATCHES $EVAL_VIZ_NUM $EVAL_DOMAIN $EVAL_DATA_DIR $EVAL_CONFIDENCE_THRES'
 
 # For the data-prep Job only: render structural fields, but leave the data knobs
 # (BEHAVIOR_TASKS / MAX_CLIPS / DINOV3_URL) as-is so the container reads them at

@@ -61,18 +61,22 @@ spec:
                 echo "ERROR: DINOv3 weights not found; run scripts/2.download_dinov3.sh." >&2
                 exit 1
               fi
-              # DROID evaluation (annotation-aware / filtered metrics).
-              # For BEHAVIOR, set --domains=behavior, --data_dirs=/dataset/behavior/wds
-              # and drop --confidence_thres.
-              # MODEL_PATH / EVAL_NUM_BATCHES are rendered from env_vars by
-              # ./deploy.sh. For BEHAVIOR, set --domains=behavior,
-              # --data_dirs=/dataset/behavior/wds and drop --confidence_thres.
+              # Domain is controlled by EVAL_DOMAIN / EVAL_DATA_DIR / EVAL_CONFIDENCE_THRES
+              # in env_vars (rendered by deploy.sh):
+              #   droid    -> EVAL_DOMAIN=droid, EVAL_DATA_DIR=/dataset/droid/wds,
+              #               EVAL_CONFIDENCE_THRES=0.8
+              #   behavior -> EVAL_DOMAIN=behavior, EVAL_DATA_DIR=/dataset/behavior/wds,
+              #               EVAL_CONFIDENCE_THRES=  (empty, flag is omitted)
+              CONFIDENCE_ARG=""
+              if [ -n "${EVAL_CONFIDENCE_THRES}" ]; then
+                CONFIDENCE_ARG="--confidence_thres=${EVAL_CONFIDENCE_THRES}"
+              fi
               exec python eval.py \
                 --model_path "${MODEL_PATH}" \
-                --domains=droid \
-                --data_dirs=/dataset/droid/wds \
+                --domains="${EVAL_DOMAIN}" \
+                --data_dirs="${EVAL_DATA_DIR}" \
                 --norm_stats_path=stats/droid_behavior \
-                --confidence_thres=0.8 \
+                ${CONFIDENCE_ARG} \
                 --batch_size=1 \
                 --eval_num_batches="${EVAL_NUM_BATCHES}"
           env:

@@ -72,6 +72,16 @@ RUN pip install --no-cache-dir flash-attn==2.7.4.post1 --no-build-isolation
 # Keep urdfpy-compatible graph deps on a Python 3.10-safe networkx release.
 RUN pip install --no-cache-dir networkx==3.4.2 --no-deps
 
+# Optional visualization extras, pinned to match upstream
+# environments/train_eval_viz.yml. These power the eval-time interactive viser
+# 3D viewer (eval.py --eval_viz_num > 0; see kubernetes/pointworld-viz.yaml and
+# the README "Visualize" section). matplotlib is already present in the base
+# image, but we pin it here to the upstream viz version for consistency.
+RUN pip install --no-cache-dir \
+    viser==1.0.10 \
+    open3d==0.16.0 \
+    matplotlib==3.10.6
+
 # DINOv3 (scene encoder backbone) is a gated submodule. The submodule source is
 # vendored above; its checkpoint weights are gated by Meta and must be supplied
 # at run time on the shared filesystem. See scripts/2.download_dinov3.sh and the

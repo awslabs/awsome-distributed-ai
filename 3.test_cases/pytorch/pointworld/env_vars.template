@@ -56,6 +56,13 @@ export MAX_CLIPS=200                          # cap clips for a smoke run; -1 = 
 # ============================================================================
 export MODEL_PATH="/fsx/pointworld/checkpoints/pointworld-large-droid-behavior/model-best.pt"
 export EVAL_NUM_BATCHES=100                   # -1 = full test split
+export EVAL_VIZ_NUM=5                          # interactive viz (kubernetes/pointworld-viz.yaml): # eval samples to visualize (-1 disables)
+# EVAL_DOMAIN controls which dataset split is used.
+#   droid    : filtered L2 over moving points; requires --confidence_thres.
+#   behavior : unfiltered L2 (simulation data is noiseless); no confidence threshold.
+export EVAL_DOMAIN=droid
+export EVAL_DATA_DIR=/dataset/droid/wds      # set to /dataset/behavior/wds for behavior
+export EVAL_CONFIDENCE_THRES=0.8             # only used for droid; leave empty ("") for behavior
 
 # ============================================================================
 # Pre-training flags (kubernetes/pointworld-pretrain.yaml + trainer-v2)
