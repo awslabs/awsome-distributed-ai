@@ -19,6 +19,9 @@ We pre-train the **large PTv3** variant on the multi-domain **DROID + BEHAVIOR**
 corpus across **8 x p5en.48xlarge** instances (64 x NVIDIA H200) using PyTorch
 DDP, then evaluate the resulting checkpoint with PointWorld's point-flow metrics.
 
+![PointWorld viser 3D visualizer](img/visualizer.png)
+
+
 | | |
 |---|---|
 | **Model** | PointWorld (PTv3 backbone + DINOv3 scene featurizer) |
@@ -389,9 +392,38 @@ kubectl attach -it pointworld-viz -n ${NAMESPACE}
 ./kubernetes/deploy.sh --delete kubernetes/pointworld-viz.yaml
 ```
 
-Viewer controls include `Frame` (step through the temporal sequence),
-`Ground-truth` (toggle prediction vs. GT), `Upsample`, scene/robot flow density
-and thickness, point size, and overlay opacity.
+### How to read the viewer
+
+PointWorld's task is **3D scene-flow prediction**: given the current scene, predict
+how each 3D point will move over the next frames. For every clip the viewer holds
+two parallel timelines — the **ground-truth** flow (what actually happens in the
+simulation) and your **model's predicted** flow (from the loaded checkpoint).
+
+The controls (in the **"prediction controls"** GUI panel) map to this:
+
+- **`Ground-truth`** — the key toggle. ON shows the ground-truth motion (the
+  "answer key"); OFF shows your model's prediction for the same clip. Flip it
+  back and forth on a fixed frame and watch how much the flow vectors change:
+  small change = the prediction is close to reality; large divergence = the model
+  is off.
+- **`Frame`** — step through the temporal sequence. Errors typically grow over the
+  horizon (frame 1 is easy, frame 10 is hard), so compare GT vs. prediction at a
+  *mid/late* frame, not frame 0.
+- **`Scene flow` / `Robot flow` density + thickness** — how many / how thick the
+  motion vectors are (scene = environment points, robot = the arm's body points).
+- **`Upsample`** — coarse vs. dense point rendering. **`Point size`**,
+  **`Full overlay opacity`**, **`Show workspace bounds`** — display only.
+
+> [!note] What the viewer does — and does not — tell you about a run
+> The viewer is a **qualitative** sanity check on **one sample**: it confirms the
+> model produces *structured, plausible* motion (not noise) and that the whole
+> data → train → checkpoint → load → predict → render path works. It does **not**
+> quantify model quality — that comes from `eval.py` metrics (L2 flow error on the
+> test split) and the training loss curve ([`scripts/parse_benchmark.py`](./scripts/parse_benchmark.py)).
+> A short or early-stopped run (loss still decreasing) will look directionally
+> right but **fuzzy/imprecise**, which is expected, not a defect. Also note which
+> checkpoint you loaded: a freshly trained `model-last.pt` is typically
+> under-trained relative to the released `model-best.pt`.
 
 > [!warning] The prompt requires a real TTY
 > `eval.py` reads the continue/quit prompt from an attached terminal (it falls
