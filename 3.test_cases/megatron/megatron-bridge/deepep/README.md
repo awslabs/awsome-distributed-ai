@@ -21,3 +21,7 @@ the full rationale.
 cp ../../../../micro-benchmarks/expert-parallelism/deepep-benchmark/setup_deepep_efa.sh \
    setup_deepep_efa.sh
 ```
+
+Drift is guarded in CI: [`.github/workflows/deepep-vendor-sync.yml`](../../../../.github/workflows/deepep-vendor-sync.yml)
+diffs this copy against the canonical source on any PR that touches either file and fails on
+mismatch.

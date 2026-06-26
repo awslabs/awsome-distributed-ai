@@ -58,8 +58,8 @@ Metric of record: mean training-iteration time over 8 steady iters (first 4 of 1
 | | B300 / Qwen3-235B (hidden 4096, EP32 PP2) | H100 / Qwen3-30B (hidden 2048, EP32 PP2) |
 |---|---|---|
 | NCCL all-to-all | fastest | fastest |
-| DeepEP+UCCL (mb4) | +15.9% | +186.8% |
-| DeepEP+NVSHMEM (mb4) | +28.3% | +86.2% |
+| DeepEP+UCCL (mb4) | +21.5% | +186.8% |
+| DeepEP+NVSHMEM (mb4) | +34.0% | +86.2% |
 
 Same qualitative conclusion on both fabrics — **NCCL all-to-all wins** — but the DeepEP penalty
 is far larger on H100/30B (smaller messages, lower-bandwidth fabric, compute-light model). No

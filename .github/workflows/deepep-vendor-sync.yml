@@ -1,0 +1,32 @@
+# Fails if the vendored copy of setup_deepep_efa.sh drifts from its canonical source.
+#
+# megatron-bridge vendors a verbatim copy of the deepep-benchmark EFA setup script (Docker
+# can only COPY from within the build context). The copy is kept in sync by hand, so silent
+# drift would mean the megatron-bridge image builds a different DeepEP than documented. This
+# gate diffs the two and fails on any mismatch. Runs only when either file changes.
+
+name: DeepEP vendor sync
+
+on:
+  pull_request:
+    paths:
+      - "3.test_cases/megatron/megatron-bridge/deepep/setup_deepep_efa.sh"
+      - "micro-benchmarks/expert-parallelism/deepep-benchmark/setup_deepep_efa.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare vendored copy against canonical source
+        run: |
+          CANON=micro-benchmarks/expert-parallelism/deepep-benchmark/setup_deepep_efa.sh
+          VENDORED=3.test_cases/megatron/megatron-bridge/deepep/setup_deepep_efa.sh
+          if ! diff -u "$CANON" "$VENDORED"; then
+            echo "::error::$VENDORED has drifted from $CANON. Re-copy: cp $CANON $VENDORED"
+            exit 1
+          fi
+          echo "OK: vendored setup_deepep_efa.sh matches canonical source."

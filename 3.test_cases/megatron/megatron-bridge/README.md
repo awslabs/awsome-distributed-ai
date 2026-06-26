@@ -166,14 +166,15 @@ mb=4, overlap=off; `Δ` vs NCCL all-to-all (− = DeepEP faster). Full tables:
 | Hardware (8 nodes) | Model | EP | NCCL | DeepEP+UCCL | DeepEP+NVSHMEM |
 |---|---|---:|---:|---:|---:|
 | p6-b300 / B300 | Qwen3-235B | 16 | 12.21 s | +6.9% | **−5.2%** |
-| p6-b300 / B300 | Qwen3-235B | 32 | 15.91 s | +15.9% | +28.3% |
+| p6-b300 / B300 | Qwen3-235B | 32 | 15.76 s | +21.5% | +34.0% |
 | p5.48xlarge / H100 | Qwen3-30B | 16 | 8.60 s | +72% | +6.6% |
 | p5.48xlarge / H100 | Qwen3-30B | 32 | 9.24 s | +187% | +86% |
 
 At this 8-node scale NCCL all-to-all is fastest almost everywhere (lone exception: B300 EP16,
-where DeepEP+NVSHMEM edges it by 5.2%). DeepEP+NVSHMEM is consistently the stronger of the two
-DeepEP backends, and the DeepEP penalty **shrinks as EP drops (EP32→EP16)** and grows on the
-lower-bandwidth H100 fabric / smaller (30B) model.
+where DeepEP+NVSHMEM edges it by 5.2%). DeepEP+NVSHMEM is the stronger of the two DeepEP backends
+in most cells (both H100 points and B300 EP16), though UCCL edges it at B300 EP32 (mb=4); the
+DeepEP penalty **shrinks as EP drops (EP32→EP16)** and grows on the lower-bandwidth H100 fabric /
+smaller (30B) model.
 
 ### Recommendation (scale-dependent)
 
@@ -188,11 +189,12 @@ secondarily on the instance/fabric:
   the host-proxy penalty. Measured: **UCCL −36%** on DSV3 256× B300, and **−34% at 32 nodes /
   −21% at 16 nodes** on Kimi-K2 ([`kimi-k2/benchmarks/RESULTS.md`](kimi-k2/benchmarks/RESULTS.md))
   — the win itself scales with node count.
-- **DeepEP+NVSHMEM is the promising backend to watch.** It is the best DeepEP backend at every
-  8-node point here (and beats NCCL at B300 EP16), and standalone EP micro-benchmarks suggest it
-  is competitive-to-better than UCCL in throughput mode — so it is a strong candidate for the
-  large-scale regime. **Not yet validated at 16–32 nodes** (UCCL is the proven large-scale
-  choice today; NVSHMEM at K2 scale is the top follow-up).
+- **DeepEP+NVSHMEM is the promising backend to watch.** It is the best DeepEP backend at most
+  8-node points here (both H100 EPs and B300 EP16, where it beats NCCL; UCCL edges it only at
+  B300 EP32 mb=4), and standalone EP micro-benchmarks suggest it is competitive-to-better than
+  UCCL in throughput mode — so it is a strong candidate for the large-scale regime. **Not yet
+  validated at 16–32 nodes** (UCCL is the proven large-scale choice today; NVSHMEM at K2 scale is
+  the top follow-up).
 - **Fabric is second-order.** DeepEP looked worst on H100 (p5.48xlarge, lower EFA bandwidth
   exposes the host-proxy cost) and better on B300; p5en/newer should help. But it still lost at
   B300 8-node/EP32 — so treat this as **scale-primary, fabric-secondary**.

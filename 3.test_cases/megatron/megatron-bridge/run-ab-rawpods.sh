@@ -128,6 +128,9 @@ launch_pod() {
   # ALL ranks must skip a completed cell, not just rank-0. If only rank-0 REFUSE-exits, ranks
   # 1..N-1 still start torchrun, fail rendezvous (no rank-0), and OVERWRITE their rank logs —
   # corrupting a previously-good run when a campaign is re-run with the same CAMPAIGN_ID.
+  # The skip key is STATUS *existing*, deliberately NOT exit==0: the NVSHMEM arm writes STATUS
+  # then exits 1 at NVSHMEM finalize (validity is judged by efa_ok + n_steady, not exit code —
+  # see RESULTS.md), so a same-CAMPAIGN_ID re-run treats such a cell as complete and skips it.
   local PREAMBLE="if [ -f ${RUN_DIR}/STATUS ]; then echo 'skip: completed run' ; exit 0 ; fi ; mkdir -p ${LOGDIR} ;"
   local EPILOGUE=""
   if [ "$R" = "0" ]; then

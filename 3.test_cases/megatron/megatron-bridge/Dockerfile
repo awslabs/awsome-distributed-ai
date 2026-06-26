@@ -191,7 +191,11 @@ RUN if [ "${EP_BACKEND}" = "nvshmem" ]; then set -eux; \
     rm -rf /opt/nvshmem_src/build /opt/deepep-efa-src; \
     else echo "EP_BACKEND=${EP_BACKEND}: skipping NVSHMEM/DeepEP build"; fi
 
-# NVSHMEM runtime env. Harmless for the uccl image (the dirs are absent there).
+# NVSHMEM runtime env. Set UNCONDITIONALLY on purpose: `ENV` cannot be gated on the
+# `EP_BACKEND` build ARG, so these are baked into the uccl image too. Harmless there because
+# the dirs are absent (nothing dlopens libfabric); the only latent risk is a future uccl
+# image that also ships NVSHMEM bits, which would then inherit a libfabric transport — revisit
+# this block if the uccl build ever gains NVSHMEM.
 # Must PRECEDE the verify RUN so the nvshmem build's `import deep_ep` can dlopen
 # libnvshmem; LD_LIBRARY_PATH puts the from-source NVSHMEM ahead of any torch-bundled one.
 ENV NVSHMEM_DIR=/opt/nvshmem_src/install \
