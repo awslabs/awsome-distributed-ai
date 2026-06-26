@@ -1,3 +1,488 @@
+#!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Build DeepEP with NVSHMEM EFA (libfabric) transport for AWS EFA clusters.
+
+set -euo pipefail
+
+log() {
+    printf '%s\n' "$*" >&2
+}
+
+warn() {
+    printf 'WARNING: %s\n' "$*" >&2
+}
+
+die() {
+    printf 'ERROR: %s\n' "$*" >&2 || true
+    exit 1
+}
+
+PROG_NAME="${0##*/}"
+if [[ -z "$PROG_NAME" || "$PROG_NAME" == "bash" || "$PROG_NAME" == "-bash" ]]; then
+    PROG_NAME="setup_deepep_efa.sh"
+fi
+
+print_help() {
+    cat <<EOF
+Usage: ${PROG_NAME} [options]
+
+Install NVSHMEM and build DeepEP for AWS EFA (libfabric).
+
+With no arguments, downloads a prebuilt NVSHMEM release, clones DeepEP at the
+only supported commit, applies the embedded AWS EFA patch, and installs DeepEP
+into the active Python environment.
+
+Options:
+  --nvshmem-version <v>     NVSHMEM version to download, MAJOR.MINOR.PATCH form
+                            (default: 3.7.0)
+  --nvshmem-prefix <path>   NVSHMEM install location
+                            (default: /opt/amazon/nvshmem)
+  --nvshmem-src <path>      Build NVSHMEM from this existing source tree instead
+                            of downloading the prebuilt release
+                            (default: unset; download prebuilt)
+  --deepep-commit <sha>     DeepEP commit to checkout, 7-40 hex chars
+                            (default: 567632d)
+  --deepep-prefix <path>    DeepEP clone/build location
+                            (default: /opt/amazon/deepep)
+  --deepep-src <path>       Build DeepEP from this existing source tree instead
+                            of cloning from GitHub
+                            (default: unset; clone from GitHub)
+  --wheel-only              Build a DeepEP wheel but do not install it
+                            (default: off; install into the active environment)
+  --wheel-output-dir <path> Directory to write the DeepEP wheel into
+                            (default: /opt/amazon/wheels)
+  --libfabric-home <path>   Libfabric install dir (NVSHMEM source build only)
+                            (default: /opt/amazon/efa)
+  --gdrcopy-home <path>     GDRCopy install dir (NVSHMEM source build only)
+                            (default: /usr)
+  --cuda-home <path>        CUDA toolkit directory
+                            (default: /usr/local/cuda)
+  --gen-ldconfig            Write /etc/ld.so.conf.d/nvshmem.conf and refresh the
+                            dynamic linker cache (default: off)
+  --python <cmd|path>       Python interpreter command or absolute path
+                            (default: python3)
+  --pip <cmd|path>          pip command or absolute path
+                            (default: pip3)
+  --force                   Skip the DeepEP commit-compatibility check and build
+                            at your own risk (default: off)
+  --skip-checks             Skip Python prerequisite validation (torch, pip,
+                            ninja checks) (default: off)
+  -h, --help                Print this usage information and exit
+
+Environment:
+  TORCH_CUDA_ARCH_LIST      GPU architectures, dotted and ;-separated
+                            (default: 9.0;10.0)
+EOF
+    exit 0
+}
+
+parse_args() {
+    NVSHMEM_VERSION="3.7.0"
+    NVSHMEM_PREFIX="/opt/amazon/nvshmem"
+    NVSHMEM_SRC=""
+    DEEPEP_COMMIT="567632d"
+    DEEPEP_PREFIX="/opt/amazon/deepep"
+    DEEPEP_SRC=""
+    WHEEL_ONLY="false"
+    WHEEL_OUTPUT_DIR="/opt/amazon/wheels"
+    LIBFABRIC_HOME="/opt/amazon/efa"
+    GDRCOPY_HOME="/usr"
+    CUDA_HOME="/usr/local/cuda"
+    GEN_LDCONFIG="false"
+    FORCE="false"
+    SKIP_CHECKS="false"
+    PYTHON_CMD="python3"
+    PIP_CMD="pip3"
+    TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST-9.0;10.0}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --nvshmem-version)
+                [[ $# -ge 2 ]] || die "option '$1' requires a value"
+                NVSHMEM_VERSION="$2"; shift 2 ;;
+            --nvshmem-prefix)
+                [[ $# -ge 2 ]] || die "option '$1' requires a value"
+                NVSHMEM_PREFIX="$2"; shift 2 ;;
+            --nvshmem-src)
+                [[ $# -ge 2 ]] || die "option '$1' requires a value"
+                NVSHMEM_SRC="$2"; shift 2 ;;
+            --deepep-commit)
+                [[ $# -ge 2 ]] || die "option '$1' requires a value"
+                DEEPEP_COMMIT="$2"; shift 2 ;;
+            --deepep-prefix)
+                [[ $# -ge 2 ]] || die "option '$1' requires a value"
+                DEEPEP_PREFIX="$2"; shift 2 ;;
+            --deepep-src)
+                [[ $# -ge 2 ]] || die "option '$1' requires a value"
+                DEEPEP_SRC="$2"; shift 2 ;;
+            --wheel-only)
+                WHEEL_ONLY="true"; shift ;;
+            --wheel-output-dir)
+                [[ $# -ge 2 ]] || die "option '$1' requires a value"
+                WHEEL_OUTPUT_DIR="$2"; shift 2 ;;
+            --libfabric-home)
+                [[ $# -ge 2 ]] || die "option '$1' requires a value"
+                LIBFABRIC_HOME="$2"; shift 2 ;;
+            --gdrcopy-home)
+                [[ $# -ge 2 ]] || die "option '$1' requires a value"
+                GDRCOPY_HOME="$2"; shift 2 ;;
+            --cuda-home)
+                [[ $# -ge 2 ]] || die "option '$1' requires a value"
+                CUDA_HOME="$2"; shift 2 ;;
+            --python)
+                [[ $# -ge 2 ]] || die "option '$1' requires a value"
+                PYTHON_CMD="$2"; shift 2 ;;
+            --pip)
+                [[ $# -ge 2 ]] || die "option '$1' requires a value"
+                PIP_CMD="$2"; shift 2 ;;
+            --gen-ldconfig)
+                GEN_LDCONFIG="true"; shift ;;
+            --force)
+                FORCE="true"; shift ;;
+            --skip-checks)
+                SKIP_CHECKS="true"; shift ;;
+            -h|--help)
+                print_help ;;
+            *)
+                die "unrecognized argument: '$1'" ;;
+        esac
+    done
+}
+
+validate_version() {
+    local version="$1"
+    if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        die "invalid NVSHMEM version: '$version' (expected MAJOR.MINOR.PATCH, e.g. 3.7.0)"
+    fi
+}
+
+validate_commit() {
+    local commit="$1"
+    if [[ ! "$commit" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+        die "invalid DeepEP commit: '$commit' (expected 7-40 hexadecimal characters)"
+    fi
+}
+
+validate_arch_list() {
+    local arch_list="$1"
+    if [[ ! "$arch_list" =~ ^[0-9]+\.[0-9]+(;[0-9]+\.[0-9]+)*$ ]]; then
+        die "invalid TORCH_CUDA_ARCH_LIST: '$arch_list' (expected non-empty, dotted, ;-separated architectures, e.g. 9.0;10.0)"
+    fi
+}
+
+compute_disable_ptx() {
+    local arch_list="${1-${TORCH_CUDA_ARCH_LIST:-}}"
+    if [[ "$arch_list" == "9.0" ]]; then
+        printf '0\n'
+    else
+        printf '1\n'
+    fi
+}
+
+arch_list_to_cmake() {
+    local arch_list="${1-${TORCH_CUDA_ARCH_LIST:-}}"
+    local out="" entry first=1
+    local IFS=';'
+    for entry in $arch_list; do
+        if (( first )); then
+            first=0
+        else
+            out+=";"
+        fi
+        out+="${entry/./}"
+    done
+    printf '%s\n' "$out"
+}
+
+detect_arch() {
+    local machine
+    machine="$(uname -m)"
+
+    case "$machine" in
+        aarch64|arm64)
+            ARCH_KEY="linux-sbsa"
+            ;;
+        x86_64)
+            ARCH_KEY="linux-x86_64"
+            ;;
+        *)
+            die "unsupported architecture: '$machine' (expected aarch64, arm64, or x86_64)"
+            ;;
+    esac
+
+    log "Detected arch: $ARCH_KEY"
+    printf '%s\n' "$ARCH_KEY"
+}
+
+detect_cuda_major() {
+    local nvcc_path=""
+
+    if command -v nvcc >/dev/null 2>&1; then
+        nvcc_path="$(command -v nvcc)"
+    elif [[ -n "${CUDA_HOME:-}" && -x "${CUDA_HOME}/bin/nvcc" ]]; then
+        nvcc_path="${CUDA_HOME}/bin/nvcc"
+    else
+        die "cannot find nvcc: not on PATH and not at \${CUDA_HOME}/bin/nvcc (is the CUDA toolkit installed?)"
+    fi
+
+    local version_output major
+    version_output="$("$nvcc_path" --version 2>/dev/null)" || \
+        die "failed to run '$nvcc_path --version'"
+
+    major="$(printf '%s\n' "$version_output" | \
+        sed -n 's/.*release \([0-9][0-9]*\)\..*/\1/p')"
+
+    if [[ -z "$major" ]]; then
+        die "unable to parse CUDA major version from nvcc output"
+    fi
+
+    CUDA_MAJOR="$major"
+    log "Detected CUDA major version: $CUDA_MAJOR"
+    printf '%s\n' "$CUDA_MAJOR"
+}
+
+check_python_prereqs() {
+    # Validate that PYTHON_CMD and PIP_CMD are resolvable before checking prereqs.
+    local python_cmd="${PYTHON_CMD:-python3}"
+    local pip_cmd="${PIP_CMD:-pip3}"
+
+    if [[ "$python_cmd" == /* ]]; then
+        [[ -x "$python_cmd" ]] || die "python command not found: '$python_cmd' is not an executable file"
+    else
+        command -v "$python_cmd" >/dev/null 2>&1 || die "python command not found: '$python_cmd' is not on PATH"
+    fi
+
+    if [[ "$pip_cmd" == /* ]]; then
+        [[ -x "$pip_cmd" ]] || die "pip command not found: '$pip_cmd' is not an executable file"
+    else
+        command -v "$pip_cmd" >/dev/null 2>&1 || die "pip command not found: '$pip_cmd' is not on PATH"
+    fi
+
+    local missing=()
+
+    if ! command -v "$python_cmd" >/dev/null 2>&1; then
+        missing+=("$python_cmd")
+    else
+        if ! "$python_cmd" -c "import torch" >/dev/null 2>&1; then
+            missing+=("torch (Python module)")
+        fi
+        if ! "$python_cmd" -m pip --version >/dev/null 2>&1; then
+            missing+=("pip")
+        fi
+    fi
+
+    if ! command -v ninja >/dev/null 2>&1; then
+        missing+=("ninja")
+    fi
+
+    if (( ${#missing[@]} > 0 )); then
+        local IFS=', '
+        die "missing prerequisites: ${missing[*]} (install them before running this script)"
+    fi
+
+    return 0
+}
+
+download_with_retry() {
+    local url="$1"
+    local dest="$2"
+    local max_attempts=3
+    local attempt
+
+    for (( attempt = 1; attempt <= max_attempts; attempt++ )); do
+        if command -v curl >/dev/null 2>&1; then
+            if curl -fsSL -o "$dest" "$url"; then
+                return 0
+            fi
+        elif command -v wget >/dev/null 2>&1; then
+            if wget -q -O "$dest" "$url"; then
+                return 0
+            fi
+        else
+            die "Neither curl nor wget is available; cannot download ${url}"
+        fi
+
+        if (( attempt < max_attempts )); then
+            log "Download attempt ${attempt}/${max_attempts} failed for ${url}; retrying in 2s..."
+            sleep 2
+        fi
+    done
+
+    die "Failed to download ${url} after ${max_attempts} attempts"
+}
+
+verify_sha256() {
+    local file="$1"
+    local expected="$2"
+    local actual
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum "$file" | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+    else
+        die "Neither sha256sum nor shasum is available; cannot verify integrity of ${file}"
+    fi
+
+    if [[ "$actual" != "$expected" ]]; then
+        die "SHA256 mismatch for ${file}: expected=${expected}, actual=${actual}"
+    fi
+}
+
+readonly NVSHMEM_REDIST_ROOT="https://developer.download.nvidia.com/compute/nvshmem/redist/"
+
+resolve_nvshmem_archive() {
+    local manifest_url="${NVSHMEM_REDIST_ROOT}redistrib_${NVSHMEM_VERSION}.json"
+    local manifest_tmp
+    manifest_tmp="$(mktemp)"
+
+    download_with_retry "$manifest_url" "$manifest_tmp"
+
+    local parsed
+    if ! parsed="$("$PYTHON_CMD" - "$manifest_tmp" "$ARCH_KEY" "$CUDA_MAJOR" <<'PY'
+import json, sys
+manifest, arch_key, major = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(manifest) as f:
+    data = json.load(f)
+obj = data["libnvshmem"][arch_key]["cuda" + major]
+print(obj["relative_path"], obj["sha256"])
+PY
+    )"; then
+        rm -f "$manifest_tmp"
+        die "NVSHMEM manifest does not contain an entry for arch='${ARCH_KEY}', cuda='${CUDA_MAJOR}' (version ${NVSHMEM_VERSION})"
+    fi
+
+    rm -f "$manifest_tmp"
+    read -r NVSHMEM_REL_PATH NVSHMEM_SHA256 <<< "$parsed"
+}
+
+install_prebuilt_nvshmem() {
+    log "Installing prebuilt NVSHMEM ${NVSHMEM_VERSION} for ${ARCH_KEY}/cuda${CUDA_MAJOR}..."
+
+    resolve_nvshmem_archive
+
+    local archive_url="${NVSHMEM_REDIST_ROOT}${NVSHMEM_REL_PATH}"
+    local archive_tmp
+    archive_tmp="$(mktemp)"
+
+    download_with_retry "$archive_url" "$archive_tmp"
+    verify_sha256 "$archive_tmp" "$NVSHMEM_SHA256"
+
+    mkdir -p "$NVSHMEM_PREFIX"
+    tar -xf "$archive_tmp" --strip-components=1 -C "$NVSHMEM_PREFIX"
+    rm -f "$archive_tmp"
+
+    log "Prebuilt NVSHMEM ${NVSHMEM_VERSION} installed to ${NVSHMEM_PREFIX}"
+}
+
+build_nvshmem_from_source() {
+    if [[ ! -d "$NVSHMEM_SRC" ]]; then
+        die "NVSHMEM source path does not exist or is not a directory: '$NVSHMEM_SRC'"
+    fi
+    if [[ ! -f "$NVSHMEM_SRC/CMakeLists.txt" ]]; then
+        die "NVSHMEM source path does not contain CMakeLists.txt: '$NVSHMEM_SRC' does not look like an NVSHMEM source tree"
+    fi
+    if [[ ! -d "$LIBFABRIC_HOME" ]]; then
+        die "libfabric not found at LIBFABRIC_HOME: '$LIBFABRIC_HOME' does not exist or is not a directory"
+    fi
+
+    log "Building NVSHMEM from source at ${NVSHMEM_SRC}..."
+
+    local cmake_archs
+    cmake_archs="$(arch_list_to_cmake)"
+
+    local build_dir="${NVSHMEM_SRC}/build"
+    rm -rf "$build_dir"
+    mkdir -p "$build_dir"
+
+    cmake -S "$NVSHMEM_SRC" -B "$build_dir" \
+        -DCMAKE_INSTALL_PREFIX="$NVSHMEM_PREFIX" \
+        -DCUDA_HOME="$CUDA_HOME" \
+        -DLIBFABRIC_HOME="$LIBFABRIC_HOME" \
+        -DNVSHMEM_LIBFABRIC_SUPPORT=ON \
+        -DNVSHMEM_MPI_SUPPORT=OFF \
+        -DNVSHMEM_IBRC_SUPPORT=OFF \
+        -DNVSHMEM_IBGDA_SUPPORT=OFF \
+        -DNVSHMEM_IBDEVX_SUPPORT=OFF \
+        -DNVSHMEM_UCX_SUPPORT=OFF \
+        -DNVSHMEM_SHMEM_SUPPORT=OFF \
+        -DNVSHMEM_PMIX_SUPPORT=OFF \
+        -DNVSHMEM_USE_NCCL=OFF \
+        -DNVSHMEM_USE_GDRCOPY=ON \
+        -DGDRCOPY_HOME="$GDRCOPY_HOME" \
+        -DNVSHMEM_USE_MLX5DV=OFF \
+        -DNVSHMEM_BUILD_TESTS=OFF \
+        -DNVSHMEM_BUILD_EXAMPLES=OFF \
+        -DNVSHMEM_BUILD_PYTHON_LIB=OFF \
+        -DNVSHMEM_BUILD_BITCODE_LIBRARY=OFF \
+        -DCMAKE_CUDA_ARCHITECTURES="$cmake_archs" \
+        || die "NVSHMEM CMake configure failed"
+
+    make -C "$build_dir" -j"$(nproc)" \
+        || die "NVSHMEM build (make) failed"
+
+    make -C "$build_dir" install \
+        || die "NVSHMEM install (make install) failed"
+
+    log "NVSHMEM built from source and installed to ${NVSHMEM_PREFIX}"
+}
+
+acquire_deepep() {
+    if [[ -z "${DEEPEP_SRC:-}" ]]; then
+        log "Cloning DeepEP into ${DEEPEP_PREFIX} at commit ${DEEPEP_COMMIT}..."
+
+        rm -rf "$DEEPEP_PREFIX"
+        mkdir -p "$(dirname "$DEEPEP_PREFIX")"
+
+        git clone https://github.com/deepseek-ai/DeepEP "$DEEPEP_PREFIX" \
+            || die "failed to clone DeepEP from https://github.com/deepseek-ai/DeepEP"
+
+        git -C "$DEEPEP_PREFIX" checkout "$DEEPEP_COMMIT" \
+            || die "failed to checkout DeepEP commit '${DEEPEP_COMMIT}'"
+
+        log "DeepEP cloned and checked out at commit ${DEEPEP_COMMIT}"
+    else
+        log "Using existing DeepEP source tree at ${DEEPEP_SRC}..."
+
+        if [[ ! -d "$DEEPEP_SRC" ]]; then
+            die "DeepEP source path does not exist or is not a directory: '${DEEPEP_SRC}'"
+        fi
+
+        if [[ ! -f "$DEEPEP_SRC/csrc/kernels/internode.cu" ]]; then
+            die "DeepEP source path does not contain csrc/kernels/internode.cu: '${DEEPEP_SRC}' does not look like a valid DeepEP source tree"
+        fi
+
+        DEEPEP_PREFIX="$DEEPEP_SRC"
+        log "DeepEP source tree validated at ${DEEPEP_SRC}"
+    fi
+}
+
+readonly DEEPEP_SUPPORTED_COMMIT="567632d"
+
+commit_compat_gate() {
+    if [[ "$DEEPEP_COMMIT" == "$DEEPEP_SUPPORTED_COMMIT" ]]; then
+        log "DeepEP commit ${DEEPEP_COMMIT} matches the supported commit"
+        return 0
+    fi
+
+    if [[ "$FORCE" != "true" ]]; then
+        die "DeepEP commit '${DEEPEP_COMMIT}' is not supported; the only supported commit is ${DEEPEP_SUPPORTED_COMMIT}. Use --force to override at your own risk."
+    fi
+
+    warn "DeepEP commit '${DEEPEP_COMMIT}' differs from the supported commit ${DEEPEP_SUPPORTED_COMMIT}; proceeding at your own risk (--force)"
+    return 0
+}
+
+apply_efa_patch() {
+    cd "$DEEPEP_PREFIX"
+
+    log "Applying EFA patch to DeepEP at ${DEEPEP_PREFIX}..."
+
+    local efa_patch
+    efa_patch="$(mktemp -t deepep-efa.XXXXXX.patch)"
+
+    cat > "$efa_patch" << 'PATCHEOF'
 diff --git a/csrc/kernels/ibgda_device.cuh b/csrc/kernels/ibgda_device.cuh
 index 421ec2a..b3473db 100644
 --- a/csrc/kernels/ibgda_device.cuh
@@ -701,3 +1186,166 @@ index 37512ee..b29ff63 100644
              # Disable NVLink SHArP
              os.environ['NVSHMEM_DISABLE_NVLS'] = '1'
              # NOTES: NVSHMEM initialization requires at least 256 MiB
+
+PATCHEOF
+
+    if ! git apply --check "$efa_patch" 2>/dev/null; then
+        rm -f "$efa_patch"
+        die "EFA patch does not apply cleanly; the patch was validated against commit ${DEEPEP_SUPPORTED_COMMIT}. Is the tree at that commit?"
+    fi
+
+    git apply "$efa_patch"
+    rm -f "$efa_patch"
+
+    log "EFA patch applied successfully (4 files patched atomically)"
+}
+
+apply_cuda13_cccl_fix() {
+    if (( CUDA_MAJOR < 13 )); then
+        log "CUDA major ${CUDA_MAJOR} < 13; skipping cccl include fix"
+        return 0
+    fi
+
+    local setup_py="${DEEPEP_PREFIX}/setup.py"
+
+    if [[ ! -f "$setup_py" ]]; then
+        die "cannot apply CUDA 13 cccl fix: setup.py not found at '${setup_py}'"
+    fi
+
+    if grep -q "include/cccl" "$setup_py"; then
+        log "CUDA 13 cccl include path already present in setup.py; skipping (idempotent)"
+        return 0
+    fi
+
+    local target_pattern="f'{nvshmem_dir}/include']"
+
+    if ! grep -q "$target_pattern" "$setup_py"; then
+        die "cannot apply CUDA 13 cccl fix: target include-list pattern not found in ${setup_py} (expected line containing: ${target_pattern})"
+    fi
+
+    sed -i'' -e "s|f'{nvshmem_dir}/include']|f'{nvshmem_dir}/include', '${CUDA_HOME}/include/cccl']|" "$setup_py"
+
+    log "Applied CUDA 13 cccl include fix to ${setup_py} (added ${CUDA_HOME}/include/cccl)"
+}
+
+warn_nvshmem_pip_conflict() {
+    local pkg="nvidia-nvshmem-cu${CUDA_MAJOR}"
+
+    if "$PIP_CMD" show "$pkg" >/dev/null 2>&1; then
+        warn "pip package '${pkg}' is installed and conflicts with the standalone NVSHMEM library at Python runtime. Please remove it manually: $PIP_CMD uninstall ${pkg}"
+    fi
+}
+
+build_deepep() {
+    warn_nvshmem_pip_conflict
+
+    local disable_ptx
+    disable_ptx="$(compute_disable_ptx)"
+
+    export LD_LIBRARY_PATH="${NVSHMEM_PREFIX}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+    if [[ "$WHEEL_ONLY" == "true" ]]; then
+        log "Building DeepEP wheel (wheel-only mode)..."
+
+        mkdir -p "$WHEEL_OUTPUT_DIR" \
+            || die "failed to create wheel output directory: '${WHEEL_OUTPUT_DIR}'"
+
+        cd "$DEEPEP_PREFIX"
+        DISABLE_AGGRESSIVE_PTX_INSTRS="$disable_ptx" \
+        TORCH_CUDA_ARCH_LIST="$TORCH_CUDA_ARCH_LIST" \
+        NVSHMEM_DIR="$NVSHMEM_PREFIX" \
+            "$PIP_CMD" wheel -vv --no-build-isolation --wheel-dir "$WHEEL_OUTPUT_DIR" . \
+            || die "DeepEP wheel build failed"
+
+        local wheel_file
+        wheel_file="$(find "$WHEEL_OUTPUT_DIR" -maxdepth 1 -name '*.whl' -type f | sort | tail -n1)"
+        if [[ -z "$wheel_file" ]]; then
+            die "DeepEP wheel build completed but no .whl file found in '${WHEEL_OUTPUT_DIR}'"
+        fi
+
+        printf '%s\n' "$wheel_file"
+        log "DeepEP wheel written to ${wheel_file}"
+    else
+        log "Building and installing DeepEP (install mode)..."
+
+        "$PIP_CMD" uninstall -y deep_ep 2>/dev/null || true
+
+        cd "$DEEPEP_PREFIX"
+        DISABLE_AGGRESSIVE_PTX_INSTRS="$disable_ptx" \
+        TORCH_CUDA_ARCH_LIST="$TORCH_CUDA_ARCH_LIST" \
+        NVSHMEM_DIR="$NVSHMEM_PREFIX" \
+            "$PIP_CMD" install -vv --no-build-isolation . \
+            || die "DeepEP build/install failed"
+
+        log "DeepEP installed successfully"
+    fi
+}
+
+print_completion_notes() {
+    if [[ "$GEN_LDCONFIG" == "true" ]]; then
+        local ldconfig_file="/etc/ld.so.conf.d/nvshmem.conf"
+        local lib_path="${NVSHMEM_PREFIX}/lib"
+
+        if ! printf '%s\n' "$lib_path" > "$ldconfig_file" 2>/dev/null; then
+            die "insufficient permissions to write ${ldconfig_file}; elevated privileges are required for --gen-ldconfig"
+        fi
+
+        if ldconfig 2>/dev/null; then
+            log "Wrote ${ldconfig_file} and refreshed the linker cache successfully"
+        else
+            die "wrote ${ldconfig_file} but failed to refresh the linker cache (ldconfig); elevated privileges may be required"
+        fi
+    fi
+
+    log ""
+    log "=== DeepEP setup complete ==="
+    log ""
+    log "To use DeepEP at runtime, configure the following environment variables:"
+    log ""
+    log "  export LD_LIBRARY_PATH=${NVSHMEM_PREFIX}/lib:\${LD_LIBRARY_PATH}"
+    log "  export PATH=${NVSHMEM_PREFIX}/bin:\${PATH}"
+    log ""
+    log "  export NVSHMEM_REMOTE_TRANSPORT=libfabric"
+    log "  export NVSHMEM_LIBFABRIC_PROVIDER=efa"
+    log "  export NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE"
+    log ""
+    log "NOTE: If the nvidia-nvshmem-cu${CUDA_MAJOR} Python package is installed in your environment,"
+    log "      you must uninstall it to avoid conflicts with the standalone NVSHMEM library at Python runtime"
+    log "      built by this script:"
+    log ""
+    log "  $PIP_CMD uninstall -y nvidia-nvshmem-cu${CUDA_MAJOR}"
+    log ""
+}
+
+main() {
+    parse_args "$@"
+
+    if [[ -z "${NVSHMEM_SRC}" ]]; then
+        validate_version "$NVSHMEM_VERSION"
+    fi
+    validate_commit "$DEEPEP_COMMIT"
+    validate_arch_list "$TORCH_CUDA_ARCH_LIST"
+
+    detect_arch
+    detect_cuda_major
+    if [[ "$SKIP_CHECKS" != "true" ]]; then
+        check_python_prereqs
+    fi
+
+    if [[ -n "${NVSHMEM_SRC}" ]]; then
+        build_nvshmem_from_source
+    else
+        install_prebuilt_nvshmem
+    fi
+
+    acquire_deepep
+    commit_compat_gate
+    apply_efa_patch
+    apply_cuda13_cccl_fix
+    build_deepep
+    print_completion_notes
+}
+
+if [[ "${SETUP_DEEPEP_EFA_LIB:-}" != "1" ]]; then
+    main "$@"
+fi

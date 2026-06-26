@@ -10,12 +10,7 @@ ARG GDRCOPY_VERSION=v2.5.2
 ARG EFA_INSTALLER_VERSION=1.48.0
 ARG NCCL_VERSION=v2.30.4-1
 ARG NCCL_TESTS_VERSION=v2.18.3
-ARG NVSHMEM_VERSION=3.7.0
 ARG TORCH_VERSION=2.11.0
-# NOTE: deepep_aws_efa.patch is generated against this exact commit. If you bump
-# DEEPEP_COMMIT, regenerate the patch too -- `git apply` is exact and the build
-# will fail on a mismatch.
-ARG DEEPEP_COMMIT=567632d
 
 # CUDA architecture(s), semicolon-separated:
 # 9.0 = Hopper (H100, sm_90), 10.0 and 10.3 = Blackwell (B200/B300, sm_100,sm_103). Defaults to
@@ -126,27 +121,6 @@ RUN git clone -b ${NCCL_TESTS_VERSION} https://github.com/NVIDIA/nccl-tests.git 
     CUDA_HOME="${CUDA_HOME}" \
     NCCL_HOME=/opt/nccl/build
 
-###################################################
-## Install NVSHMEM
-ARG NVSHMEM_PREFIX="/opt/nvshmem"
-ARG LIBFABRIC_HOME="/opt/amazon/efa"
-
-RUN CUDA_VERSION_MAJOR=$(nvcc --version | grep -oP 'release \K[0-9]+') && \
-    if [ "${TARGETARCH}" = "arm64" ]; then NVSHMEM_ARCH="linux-sbsa"; else NVSHMEM_ARCH="linux-x86_64"; fi && \
-    NVSHMEM_ARCHIVE="libnvshmem-${NVSHMEM_ARCH}-${NVSHMEM_VERSION}_cuda${CUDA_VERSION_MAJOR}-archive.tar.xz" && \
-    NVSHMEM_DOWNLOAD_URL="https://developer.download.nvidia.com/compute/nvshmem/redist/libnvshmem/${NVSHMEM_ARCH}/${NVSHMEM_ARCHIVE}" && \
-    curl -fSL "${NVSHMEM_DOWNLOAD_URL}" -o "/tmp/${NVSHMEM_ARCHIVE}" && \
-    mkdir -p "$NVSHMEM_PREFIX" && \
-    tar -xf "/tmp/${NVSHMEM_ARCHIVE}" --strip-components=1 -C "$NVSHMEM_PREFIX" && \
-    rm "/tmp/${NVSHMEM_ARCHIVE}"
-
-ENV LD_LIBRARY_PATH="${NVSHMEM_PREFIX}/lib:${LD_LIBRARY_PATH}"
-ENV PATH="${NVSHMEM_PREFIX}/bin:${PATH}"
-
-ENV NVSHMEM_REMOTE_TRANSPORT=libfabric
-ENV NVSHMEM_LIBFABRIC_PROVIDER=efa
-ENV NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE
-
 RUN rm -rf /var/lib/apt/lists/*
 
 ## Set Open MPI variables to exclude network interface and conduit.
@@ -165,24 +139,21 @@ ENV LD_PRELOAD=/opt/nccl/build/lib/libnccl.so
 ################################ PyTorch ########################################
 RUN CUDA_VER=$(nvcc --version | grep -oP 'release \K[0-9]+\.[0-9]+' | tr -d '.') && \
     CUDA_MAJOR=$(nvcc --version | grep -oP 'release \K[0-9]+') && \
-    pip3 install torch==${TORCH_VERSION} numpy --index-url https://download.pytorch.org/whl/cu${CUDA_VER} && \
-    pip3 uninstall -y nvidia-nvshmem-cu${CUDA_MAJOR}
+    pip3 install torch==${TORCH_VERSION} numpy --index-url https://download.pytorch.org/whl/cu${CUDA_VER}
 
-################################ DeepEP ########################################
+################################ DeepEP & NVSHMEM ########################################
 ARG DEEPEP_PREFIX="/DeepEP"
 
-RUN --mount=type=bind,source=deepep_aws_efa.patch,target=/tmp/deepep_aws/deepep_aws_efa.patch \
-    if [ "${TORCH_CUDA_ARCH_LIST}" = "9.0" ]; then DISABLE_AGGRESSIVE_PTX_INSTRS=0; else DISABLE_AGGRESSIVE_PTX_INSTRS=1; fi && \
-    export DISABLE_AGGRESSIVE_PTX_INSTRS && \
-    git clone https://github.com/deepseek-ai/DeepEP.git ${DEEPEP_PREFIX} && \
-    cd ${DEEPEP_PREFIX} && \
-    git checkout ${DEEPEP_COMMIT} && \
-    git apply --check /tmp/deepep_aws/deepep_aws_efa.patch && \
-    git apply /tmp/deepep_aws/deepep_aws_efa.patch && \
-    CUDA_VERSION_MAJOR=$(nvcc --version | grep -oP 'release \K[0-9]+') && \
-    if [ "${CUDA_VERSION_MAJOR}" -ge 13 ]; then \
-        sed -i "s|f'{nvshmem_dir}/include']|f'{nvshmem_dir}/include', '${CUDA_HOME}/include/cccl']|" "setup.py"; \
-    fi && \
-    NVSHMEM_DIR="${NVSHMEM_PREFIX}" pip3 install -vv --no-build-isolation .
+RUN --mount=type=bind,source=setup_deepep_efa.sh,target=/tmp/setup_deepep_efa.sh \
+    /tmp/setup_deepep_efa.sh --deepep-prefix "${DEEPEP_PREFIX}" && \
+    pip3 uninstall -y nvidia-nvshmem-cu13 nvidia-nvshmem-cu12 nvidia-nvshmem
+
+ENV LD_LIBRARY_PATH="/opt/amazon/nvshmem/lib:${LD_LIBRARY_PATH}"
+ENV PATH="/opt/amazon/nvshmem/bin:${PATH}"
+
+ENV FI_PROVIDER=efa
+ENV NVSHMEM_REMOTE_TRANSPORT=libfabric
+ENV NVSHMEM_LIBFABRIC_PROVIDER=efa
+ENV NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE
 
 ENV NVIDIA_GDRCOPY="enabled"
