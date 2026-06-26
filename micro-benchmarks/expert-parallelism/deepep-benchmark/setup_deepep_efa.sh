@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
+# Build DeepEP with NVSHMEM EFA (libfabric) transport for AWS EFA clusters.
 
 set -euo pipefail
 
@@ -207,19 +208,6 @@ detect_arch() {
             ;;
         *)
             die "unsupported architecture: '$machine' (expected aarch64, arm64, or x86_64)"
-            ;;
-    esac
-
-    case "$machine" in
-        aarch64|arm64)
-            if [[ "$ARCH_KEY" != "linux-sbsa" ]]; then
-                die "architecture mismatch: host is '$machine' but selected key is '$ARCH_KEY' (expected linux-sbsa)"
-            fi
-            ;;
-        x86_64)
-            if [[ "$ARCH_KEY" != "linux-x86_64" ]]; then
-                die "architecture mismatch: host is '$machine' but selected key is '$ARCH_KEY' (expected linux-x86_64)"
-            fi
             ;;
     esac
 
