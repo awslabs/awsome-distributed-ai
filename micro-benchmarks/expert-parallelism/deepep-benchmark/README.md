@@ -17,7 +17,7 @@ Run them on **Slurm** ([`slurm/`](./slurm/)) or **Kubernetes / EKS** ([`kubernet
 ## ⚠️ Version constraints
 
 > This particular version works only with NVSHMEM >= [3.7.0-0](https://github.com/NVIDIA/nvshmem/tree/v3.7.0-0)
-> and DeepEP v1 with the **NVSHMEM backend** <= [567632d of Feb 3, 2026](https://github.com/deepseek-ai/DeepEP/tree/567632dd59810d77b3cc05553df953cc0f779799).
+> and DeepEP v1 with the **NVSHMEM backend** = [567632d of Feb 3, 2026](https://github.com/deepseek-ai/DeepEP/tree/567632dd59810d77b3cc05553df953cc0f779799).
 
 This targets DeepEP's legacy NVSHMEM code path (pre-EPv2). EPv2 restructures the kernel sources
 and switches to the NCCL GIN backend; it is out of scope here.
@@ -56,26 +56,22 @@ rebuilding the image.
 - EFA-enabled GPU nodes.
 - **GPU architecture:** the image is built for **both Hopper (`sm_90`) and Blackwell (`sm_100`)**
   by default, so the same image runs on `p5`/`p5en` and `p6-b300` nodes. To build a smaller
-  single-arch image, override `--build-arg GPU_ARCH=90 --build-arg TORCH_CUDA_ARCH_LIST=9.0 --build-arg NVCC_GENCODE=-gencode=arch=compute_90,code=sm_90` (Hopper only)
-  or `--build-arg GPU_ARCH=100 --build-arg TORCH_CUDA_ARCH_LIST=10.0 --build-arg NVCC_GENCODE=-gencode=arch=compute_100,code=sm_100` (Blackwell only)
+  single-arch image, override `--build-arg TORCH_CUDA_ARCH_LIST=9.0 --build-arg NVCC_GENCODE=-gencode=arch=compute_90,code=sm_90` (Hopper only)
+  or `--build-arg TORCH_CUDA_ARCH_LIST=10.0 --build-arg NVCC_GENCODE=-gencode=arch=compute_100,code=sm_100` (Blackwell only)
 
 ## Building the DeepEP image
 
 ```bash
 GDRCOPY_VERSION=v2.5.2
 EFA_INSTALLER_VERSION=1.48.0
-NVSHMEM_VERSION=3.7.0
-DEEPEP_COMMIT=567632d
-GPU_ARCH="90;100" # Hopper + Blackwell by default; use "90" or "100" for a single-arch image
-TORCH_CUDA_ARCH_LIST="9.0;10.0" # Hopper + Blackwell by default; use "9.0" or "10.0" for a single-arch image
-NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90 -gencode=arch=compute_100,code=sm_100" # Hopper + Blackwell by default; use "90" or "100" for a single-arch image
-TAG="efa${EFA_INSTALLER_VERSION}-nvshmem${NVSHMEM_VERSION}-deepep${DEEPEP_COMMIT}"
+TORCH_CUDA_ARCH_LIST="9.0;10.0;10.3" # Hopper + Blackwell by default; use "9.0" or "10.0" for a single-arch image
+NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90 -gencode=arch=compute_100,code=sm_100 -gencode=arch=compute_103,code=sm_103" # Hopper + Blackwell by default; use "90" or "100" for a single-arch image
+TAG="efa${EFA_INSTALLER_VERSION}"
 DEEPEP_CONTAINER_IMAGE_NAME_TAG="deepep:${TAG}"
 ```
 
 > [!NOTE]
-> The `deepep.Dockerfile` relies on BuildKit features (`RUN --mount` and the
-> auto-populated `TARGETARCH` arg), so the build must run under BuildKit. The
+> The `deepep.Dockerfile` relies on BuildKit features (`RUN --mount`), so the build must run under BuildKit. The
 > command below sets `DOCKER_BUILDKIT=1` explicitly so it works even on hosts
 > where the legacy builder is still the default. Alternatively, use
 > `docker buildx build ...`.
@@ -84,9 +80,6 @@ DEEPEP_CONTAINER_IMAGE_NAME_TAG="deepep:${TAG}"
 DOCKER_BUILDKIT=1 docker build --progress=plain -f ./deepep.Dockerfile \
       --build-arg="GDRCOPY_VERSION=${GDRCOPY_VERSION}" \
       --build-arg="EFA_INSTALLER_VERSION=${EFA_INSTALLER_VERSION}" \
-      --build-arg="NVSHMEM_VERSION=${NVSHMEM_VERSION}" \
-      --build-arg="DEEPEP_COMMIT=${DEEPEP_COMMIT}" \
-      --build-arg="GPU_ARCH=${GPU_ARCH}" \
       --build-arg "TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}" \
       --build-arg "NVCC_GENCODE=${NVCC_GENCODE}" \
       -t ${DEEPEP_CONTAINER_IMAGE_NAME_TAG} \

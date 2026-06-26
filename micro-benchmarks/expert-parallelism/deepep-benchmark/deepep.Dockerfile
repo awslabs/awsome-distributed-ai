@@ -145,12 +145,13 @@ RUN CUDA_VER=$(nvcc --version | grep -oP 'release \K[0-9]+\.[0-9]+' | tr -d '.')
 ARG DEEPEP_PREFIX="/DeepEP"
 
 RUN --mount=type=bind,source=setup_deepep_efa.sh,target=/tmp/setup_deepep_efa.sh \
-    ./tmp/setup_deepep_efa.sh --deepep-prefix "${DEEPEP_PREFIX}" && \
+    /tmp/setup_deepep_efa.sh --deepep-prefix "${DEEPEP_PREFIX}" && \
     pip3 uninstall -y nvidia-nvshmem-cu13 nvidia-nvshmem-cu12 nvidia-nvshmem
 
 ENV LD_LIBRARY_PATH="/opt/amazon/nvshmem/lib:${LD_LIBRARY_PATH}"
 ENV PATH="/opt/amazon/nvshmem/bin:${PATH}"
 
+ENV FI_PROVIDER=efa
 ENV NVSHMEM_REMOTE_TRANSPORT=libfabric
 ENV NVSHMEM_LIBFABRIC_PROVIDER=efa
 ENV NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE
