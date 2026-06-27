@@ -11,6 +11,11 @@ wire up the two metric sources behind it.
   importable Grafana dashboard model (Amazon Managed Grafana compatible) titled
   **"Cosmos 3 Goodput (AWS HyperPod)"**.
 
+> **Validated on:** both trainer-metrics export paths below were functionally
+> validated on a **2× g6.8xlarge HyperPod-EKS cluster (us-east-1)** — DCGM/GPU
+> metrics and both `cosmos3_*` sources were observed together in a single AMP
+> workspace and unified in one Grafana pane.
+
 ## What you get
 
 The dashboard unifies **two metric sources** into two rows, sharing a single
@@ -19,13 +24,97 @@ Prometheus (Amazon Managed Prometheus / AMP) datasource template variable
 
 | Row | Source | Metrics → Panels |
 | --- | --- | --- |
-| **Trainer** | Shipped `PrometheusCallback` (`src/cosmos3_aws/observability/prometheus_callback.py`) → Pushgateway → AMP | `cosmos3_loss` (loss), `cosmos3_step_time_seconds` (step time), `cosmos3_iteration` (stat) |
+| **Trainer** | Shipped callbacks (see [How trainer metrics reach AMP](#how-trainer-metrics-reach-amp)) → AMP | `cosmos3_loss` (loss), `cosmos3_step_time_seconds` (step time), `cosmos3_iteration` (stat) |
 | **GPU / infra** | HyperPod observability addon (DCGM exporter + node exporters) → AMP | `DCGM_FI_PROF_SM_ACTIVE` (saturation headline), `DCGM_FI_DEV_GPU_UTIL`, `DCGM_FI_DEV_FB_USED`, `DCGM_FI_DEV_POWER_USAGE`, PCIe/NVLink traffic |
 
 > **Saturation headline = `DCGM_FI_PROF_SM_ACTIVE`.** This is the trustworthy
 > GPU-saturation signal and is the headline panel. **MFU is intentionally NOT
 > shown** — it is still under validation (an open investigation), so we don't
 > report a number we can't yet stand behind.
+
+## How trainer metrics reach AMP
+
+The trainer metrics (`cosmos3_loss`, `cosmos3_step_time_seconds`,
+`cosmos3_iteration`) are emitted by the **shipped callbacks** and activated by
+env vars in the launcher (see [`env_vars.example`](../env_vars.example)). There
+are **two validated paths** to land them in AMP, unified with the addon's
+DCGM/GPU metrics.
+
+> **Important:** callback metrics do **not** reach AMP automatically. The
+> HyperPod observability addon's central collector keeps a **fixed** scrape job
+> set (node-exporter, dcgm-exporter, kube-state-metrics, training-operator) and
+> does **not** scrape arbitrary services. You must use one of the paths below.
+
+| | **Path B — OTLP direct** *(recommended default)* | **Path A — Pushgateway** *(alternative)* |
+| --- | --- | --- |
+| Callback | `OTLPCallback` | `PrometheusCallback` |
+| Activation env | `OTEL_EXPORTER_OTLP_ENDPOINT` | `PROMETHEUS_PUSHGATEWAY_URL` |
+| Extra deploy | none | `observability/pushgateway.yaml` |
+| Edit managed addon? | **No** | **Yes** — add a scrape job to the central-collector ConfigMap |
+| Durability | survives addon upgrades | fragile — addon reconcile/upgrade can revert the edit |
+| Use when | addon exposes an OTLP receiver (default) | no OTLP receiver available |
+
+Optional env for either path: `PROMETHEUS_JOB_NAME` (default `cosmos3`),
+`PROMETHEUS_EVERY_N` (push/export every N steps).
+
+### Path B — OTLP direct (recommended default)
+
+The addon's central collector **already** exposes an OTLP receiver wired into
+the same remote-write→AMP pipeline. No Pushgateway, no collector-config edit —
+this is more durable across addon upgrades. The OpenTelemetry deps
+(`opentelemetry-sdk` + OTLP grpc/http exporters) are already baked into the
+sample Dockerfile.
+
+```bash
+# on the training pod / job spec
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://hyperpod-otel-collector.hyperpod-observability.svc:4317"
+export OTEL_EXPORTER_OTLP_PROTOCOL="grpc"   # grpc (4317) or http (4318)
+```
+
+The OTLP receiver lives in the `hyperpod-observability` namespace as service
+`hyperpod-otel-collector`, ports `4317` (grpc) / `4318` (http).
+
+### Path A — Pushgateway (alternative)
+
+1. Deploy the shipped Pushgateway (Deployment + Service in namespace
+   `cosmos3-obs`, service `pushgateway:9091`):
+
+   ```bash
+   kubectl apply -f observability/pushgateway.yaml
+   ```
+
+2. Point the training pods at it:
+
+   ```bash
+   export PROMETHEUS_PUSHGATEWAY_URL="http://pushgateway.cosmos3-obs.svc:9091"
+   ```
+
+3. **Required glue:** add a scrape job so the addon's **central** collector
+   scrapes the Pushgateway. Edit the `hyperpod-observability-central-collector-config`
+   ConfigMap's `collector.yaml`, append the following under `scrape_configs:`,
+   then restart `deploy/hyperpod-observability-central-collector`:
+
+   ```yaml
+           - job_name: cosmos3-pushgateway
+             scrape_interval: 15s
+             honor_labels: true
+             kubernetes_sd_configs:
+               - role: service
+             relabel_configs:
+               - action: keep
+                 regex: pushgateway
+                 source_labels:
+                   - __meta_kubernetes_service_name
+               - target_label: cluster_name
+                 replacement: <your-cluster-name>
+   ```
+
+> **Downside (be honest):** editing the addon's **managed** ConfigMap is fragile
+> — an addon upgrade/reconcile can revert it. Prefer Path B if you want to avoid
+> editing managed resources.
+
+**Fallback (no gateway, no OTLP):** run with `wandb_mode=offline` — the same
+trainer metrics are captured locally for later inspection.
 
 ## Prerequisites & setup
 
@@ -58,19 +147,9 @@ HyperPod managed auto-resume relies on the Kubeflow Training Operator
 
 ### 3. Activate trainer metrics
 
-The shipped `PrometheusCallback` activates when the env var
-`PROMETHEUS_PUSHGATEWAY_URL` is set on the training pod. With it set, the
-callback pushes `cosmos3_loss`, `cosmos3_step_time_seconds`, and
-`cosmos3_iteration` to the Pushgateway, which is then scraped into AMP and
-unified with the GPU/DCGM metrics.
-
-```bash
-# on the training pod / job spec
-export PROMETHEUS_PUSHGATEWAY_URL="http://<pushgateway-host>:9091"
-```
-
-**Fallback (no gateway):** run with `wandb_mode=offline` — the same trainer
-metrics are captured locally for later inspection.
+Pick **Path B (OTLP, recommended)** or **Path A (Pushgateway)** above and set
+the corresponding env var(s) on the training pod. See
+[How trainer metrics reach AMP](#how-trainer-metrics-reach-amp).
 
 ### 4. Import the dashboard into Amazon Managed Grafana
 
