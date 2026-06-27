@@ -1,9 +1,16 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 #
-# PointWorld 3D World Model Pre-training - Kubernetes PyTorchJob
+# PointWorld 3D World Model Pre-training - Kubernetes PyTorchJob (v1)
 # BEHAVIOR domain, large PTv3 backbone.
 # Default: 2 x p5en.48xlarge (16 x NVIDIA H200); scales via NUM_NODES in env_vars.
+#
+# NOTE: This PyTorchJob v1 (Training Operator) path is provided for clusters that
+# do not run Kubeflow Trainer v2. It has NOT been validated multi-node on a live
+# cluster - the validated path is Trainer v2 (see kubernetes/trainer-v2/). The
+# elasticPolicy below is required so the operator runs in elastic/torchrun mode
+# and injects the PET_* rendezvous vars; without it the operator runs in classic
+# mode and each pod rendezvouses as a standalone node 0 (split-brain).
 #
 # Prerequisites:
 #   - Kubeflow PyTorchJob operator (Training Operator) installed
@@ -15,11 +22,12 @@
 #   - Container image built from pointworld.Dockerfile and pushed to ECR
 #
 # Launch pattern:
-#   The PyTorchJob operator sets MASTER_ADDR, MASTER_PORT, WORLD_SIZE, RANK and
-#   (per-process) LOCAL_RANK. PointWorld's Trainer calls
-#   dist.init_process_group(backend="nccl", init_method="env://") and reads
-#   LOCAL_RANK directly, so torchrun + the operator env vars are sufficient -
-#   no thin launcher is required.
+#   With elasticPolicy set (rdzvBackend: c10d), the PyTorchJob operator runs in
+#   elastic/torchrun mode and injects the PET_* rendezvous vars (PET_NNODES,
+#   PET_NODE_RANK, PET_MASTER_ADDR/PORT, PET_NPROC_PER_NODE) plus MASTER_ADDR/PORT.
+#   torchrun consumes those to gang-schedule one job across all nodes; PointWorld's
+#   Trainer then calls dist.init_process_group(backend="nccl", init_method="env://")
+#   and reads LOCAL_RANK directly. No thin launcher is required.
 #
 # Usage (renders the ${...} tokens from env_vars via deploy.sh):
 #   source env_vars
@@ -32,6 +40,15 @@ metadata:
   name: pointworld-pretrain
   namespace: ${NAMESPACE}
 spec:
+  # Required for multi-node torchrun: puts the operator in elastic/rendezvous
+  # mode (c10d) so it injects the PET_* vars torchrun needs. Without it the
+  # operator runs in classic mode and a multi-node run splits into independent
+  # single-node jobs. Mirrors the repo's FSDP PyTorchJobs.
+  elasticPolicy:
+    rdzvBackend: c10d
+    minReplicas: 1
+    maxReplicas: ${NUM_NODES}
+    maxRestarts: 100
   pytorchReplicaSpecs:
     Worker:
       replicas: ${NUM_NODES}
@@ -68,9 +85,9 @@ spec:
                     echo "Run scripts/2.download_dinov3.sh first (gated Meta access)." >&2
                     exit 1
                   fi
-                  # The PyTorchJob operator injects the torchrun rendezvous env
-                  # (MASTER_ADDR, MASTER_PORT, WORLD_SIZE, RANK and the PET_*
-                  # elastic variables), so torchrun only needs the local topology.
+                  # With elasticPolicy (rdzvBackend: c10d) the operator injects
+                  # the torchrun rendezvous env (MASTER_ADDR/PORT and the PET_*
+                  # elastic vars), so torchrun only needs the local topology.
                   exec torchrun \
                     --nproc_per_node=${GPU_PER_NODE} \
                     --nnodes=${NUM_NODES} \
@@ -99,8 +116,8 @@ spec:
                   value: INFO
                 - name: FI_PROVIDER
                   value: efa
-                - name: FI_EFA_SET_CUDA_SYNC_MEMOPS
-                  value: "0"
+                - name: FI_EFA_USE_DEVICE_RDMA
+                  value: "1"
                 - name: NCCL_SOCKET_IFNAME
                   value: "^docker,lo,veth"
                 - name: PYTHONPATH

@@ -26,6 +26,10 @@ multi-terabyte and out of scope for this test case — see [Section 4](#4-stage-
 
 ![PointWorld viser 3D visualizer](img/visualizer.png)
 
+For more information on 3d World Models, please watch:
+> [https://www.youtube.com/watch?v=0vfgm8LshmY](https://www.youtube.com/watch?v=0vfgm8LshmY)
+
+
 
 | | |
 |---|---|
@@ -56,12 +60,18 @@ out of scope for this repository.
 > This test case targets **Amazon EKS / SageMaker HyperPod EKS**. There is no
 > Slurm variant.
 
-> [!note] Kubeflow Trainer v1 vs v2
-> The manifests in [`kubernetes/`](./kubernetes/) use the Kubeflow **PyTorchJob v1**
-> API (`kubeflow.org/v1`). If your cluster runs the newer **Kubeflow Trainer v2**
-> controller (`trainer.kubeflow.org` — `TrainJob`/`ClusterTrainingRuntime`, and the
-> `pytorchjobs.kubeflow.org` CRD is absent), use the equivalent manifests in
-> [`kubernetes/trainer-v2/`](./kubernetes/trainer-v2/) instead.
+> [!note] Kubeflow Trainer v2 is the validated default; PyTorchJob v1 is an alternative
+> Pre-training was validated end-to-end on **Kubeflow Trainer v2**
+> (`trainer.kubeflow.org` — `TrainJob`/`ClusterTrainingRuntime`); the manifests live
+> in [`kubernetes/trainer-v2/`](./kubernetes/trainer-v2/). Use that path if your
+> cluster runs Trainer v2.
+>
+> A classic **PyTorchJob v1** manifest (`kubeflow.org/v1`,
+> [`kubernetes/pointworld-pretrain.yaml`](./kubernetes/pointworld-pretrain.yaml)) is
+> also provided for clusters that still run the Training Operator. It carries the
+> `elasticPolicy` required for correct multi-node `torchrun` rendezvous, but it has
+> **not been validated multi-node on a live cluster** — verify rendezvous before
+> relying on it at scale.
 
 ## Prerequisites
 
@@ -240,7 +250,42 @@ pod that mounts `fsx-claim`), the `scripts/` helpers are the equivalent steps:
 `scripts/1.convert_wds.py` for the data. They take the same `/fsx/...` paths and
 must run inside a pod with FSx mounted.
 
-## 5. Pre-train (Kubernetes PyTorchJob)
+> [!note] data-prep Job vs `0.download_dataset.py`
+> The in-cluster [`pointworld-data-prep.yaml`](./kubernetes/pointworld-data-prep.yaml)
+> Job **inlines** its own `huggingface_hub.snapshot_download` for the BEHAVIOR
+> package rather than calling `scripts/0.download_dataset.py`, so the Job is
+> self-contained (no script mount). `0.download_dataset.py` is the documented
+> manual/standalone equivalent (and the only path that fetches DROID). Keep the two
+> in sync if you change download logic.
+
+## 5. Pre-train (Kubernetes)
+
+Pre-training runs as a multi-node, data-parallel `torchrun` job: `NUM_NODES`
+worker pods (one per node), each running `GPU_PER_NODE` processes (one per H200).
+The training flags (large PTv3, BEHAVIOR) come from the training-flag section of
+`env_vars` and are rendered into the manifest by `deploy.sh`.
+
+### 5a. Trainer v2 (validated default)
+
+This is the path validated end-to-end on EKS (p5en/H200). On a Kubeflow Trainer v2
+cluster (`trainer.kubeflow.org`), apply the runtime once, then submit the TrainJob —
+same image, flags, and FSx layout, expressed as a `ClusterTrainingRuntime` +
+`TrainJob`:
+
+```bash
+source env_vars
+./kubernetes/deploy.sh kubernetes/trainer-v2/pointworld-runtime.yaml    # apply once
+./kubernetes/deploy.sh kubernetes/trainer-v2/pointworld-trainjob.yaml
+kubectl get pods -n ${NAMESPACE} -l trainer.kubeflow.org/trainjob-name=pointworld-pretrain
+```
+
+Trainer v2's torch plugin sets `numNodes`/`numProcPerNode` and injects the
+`torchrun` rendezvous (`PET_*`) env so the run gang-schedules across all nodes as a
+single job. PointWorld's `Trainer` initializes the process group with
+`init_method="env://"` and reads `LOCAL_RANK` directly, so no extra launcher is
+needed.
+
+### 5b. PyTorchJob v1 (classic Training Operator — alternative, not validated multi-node)
 
 ```bash
 source env_vars
@@ -248,15 +293,18 @@ source env_vars
 kubectl logs -f pointworld-pretrain-worker-0 -n ${NAMESPACE}
 ```
 
-This launches `NUM_NODES` worker pods (one per node), each running `torchrun` with
-`GPU_PER_NODE` processes (one per H200) for data-parallel pre-training. The
-training flags (large PTv3, BEHAVIOR) come from the training-flag section of
-`env_vars` and are rendered into the manifest by `deploy.sh`.
+The v1 manifest sets `elasticPolicy` (`rdzvBackend: c10d`), which puts the Training
+Operator in elastic/`torchrun` mode so it injects the `PET_*` rendezvous env (plus
+`MASTER_ADDR`/`MASTER_PORT`). Without `elasticPolicy` the operator runs in classic
+mode and a multi-node run splits into independent single-node jobs.
 
-The PyTorchJob operator injects `MASTER_ADDR`, `MASTER_PORT`, `WORLD_SIZE`, and
-`RANK`; PointWorld's `Trainer` initializes the process group with
-`init_method="env://"` and reads `LOCAL_RANK` directly, so no extra launcher is
-needed.
+> [!warning] v1 multi-node path is unvalidated
+> Only the Trainer v2 path above was exercised on a live cluster. The v1
+> manifest carries the correct `elasticPolicy` but has **not** been validated
+> multi-node. Before relying on it at scale, confirm a single rendezvous group —
+> e.g. on a worker pod, `env | grep -E 'PET_|WORLD_SIZE'` should show
+> `WORLD_SIZE` = `NUM_NODES` × `GPU_PER_NODE` (16 for the 2-node default), and NCCL
+> init should report all ranks across all nodes (not `WORLD_SIZE=8` twice).
 
 ### Controlling duration
 
@@ -298,18 +346,8 @@ The container `command` is a small `bash -c` wrapper that:
 2. `exec`s `torchrun ... train.py` with the BEHAVIOR training flags.
 
 Doing the symlink in the main container (rather than an initContainer) ensures it
-lives in the same filesystem namespace as the training process.
-
-> [!note] Kubeflow Trainer v2
-> On a Trainer v2 cluster, render and apply the manifests in
-> [`kubernetes/trainer-v2/`](./kubernetes/trainer-v2/) instead — same image, flags,
-> and FSx layout, expressed as a `TrainJob` + `ClusterTrainingRuntime`:
->
-> ```bash
-> source env_vars
-> ./kubernetes/deploy.sh kubernetes/trainer-v2/pointworld-runtime.yaml   # apply once
-> ./kubernetes/deploy.sh kubernetes/trainer-v2/pointworld-trainjob.yaml
-> ```
+lives in the same filesystem namespace as the training process. Both the Trainer v2
+runtime and the v1 PyTorchJob use the same wrapper.
 
 ## 6. Evaluate (Kubernetes Job)
 

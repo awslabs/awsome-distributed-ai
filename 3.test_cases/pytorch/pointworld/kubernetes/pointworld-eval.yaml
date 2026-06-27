@@ -39,6 +39,10 @@ metadata:
   name: pointworld-eval
   namespace: ${NAMESPACE}
 spec:
+  # Retries cover transient infra failures (e.g. FSx mount races). Misconfig
+  # (placeholder/missing MODEL_PATH) is caught by a fail-fast guard in the
+  # container command below, so it surfaces a clear error rather than silently
+  # consuming retries.
   backoffLimit: 2
   template:
     metadata:
@@ -63,6 +67,22 @@ spec:
                   /pointworld/third_party/dinov3/checkpoints/
               else
                 echo "ERROR: DINOv3 weights not found; run scripts/2.download_dinov3.sh." >&2
+                exit 1
+              fi
+              # Fail fast if MODEL_PATH was left at the env_vars placeholder, so the
+              # Job errors immediately instead of retrying (backoffLimit) against a
+              # non-existent checkpoint.
+              case "${MODEL_PATH}" in
+                *"<wandb-run-name>"*|"")
+                  echo "ERROR: MODEL_PATH is unset or still the placeholder ('${MODEL_PATH}')." >&2
+                  echo "Set MODEL_PATH in env_vars to a real checkpoint, e.g." >&2
+                  echo "  /fsx/pointworld/train_logs/<run>/model-last.pt" >&2
+                  echo "(read the pre-train pod's 'Saving to:' log line for <run>)." >&2
+                  exit 1
+                  ;;
+              esac
+              if [ ! -f "${MODEL_PATH}" ]; then
+                echo "ERROR: MODEL_PATH '${MODEL_PATH}' does not exist on FSx." >&2
                 exit 1
               fi
               # Domain is controlled by EVAL_DOMAIN / EVAL_DATA_DIR / EVAL_CONFIDENCE_THRES

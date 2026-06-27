@@ -5,16 +5,25 @@
 """
 Parse PointWorld training logs to compute throughput and average loss.
 
-PointWorld's Trainer prints per-step lines that include the global step, the
-training loss, and a wall-clock timestamp. This script scans a captured log
-file (e.g. ``kubectl logs pytorchjob/pointworld-pretrain-worker-0 > run.log``),
-extracts per-step timing, and reports steady-state samples/sec across the
-cluster after a warmup window.
+PointWorld's Trainer prints per-step progress lines that include the global batch
+counter, the step counter, the training loss, and a leading wall-clock timestamp,
+e.g.::
 
-Because exact log formatting can evolve upstream, the step/loss/time regexes are
-configurable via flags. The defaults match the release Trainer's
-``step=<N> ... loss=<F>`` style lines; adjust ``--step_regex`` / ``--loss_regex``
-if your build differs.
+    [22:48:38 dummy-5b5pxh8p], Epoch=2.354/200, B=16, S=352, Loss=2.936e+03
+
+This script scans a captured log file (e.g.
+``kubectl logs pointworld-pretrain-worker-0 > run.log``), extracts the batch/loss
+columns, and reports steady-state samples/sec across the cluster after a warmup
+window.
+
+The default ``--step_regex`` (``B=(\\d+)``) and ``--loss_regex`` (``Loss=<F>``)
+match the release Trainer's lines out of the box (verified against a validated
+run). Throughput additionally needs a per-step time signal: PointWorld does not
+print an explicit per-step duration (so ``--time_regex`` does not match by
+default), but the leading ``[HH:MM:SS ...]`` prefix is used to derive timing via
+``--timestamp_regex`` (default matches the format above). If your build's
+formatting differs, override the regexes; if no usable timestamp/duration is
+present, loss is still reported and throughput is skipped.
 
 Example
 -------

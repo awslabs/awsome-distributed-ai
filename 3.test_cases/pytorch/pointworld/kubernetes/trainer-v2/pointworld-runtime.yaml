@@ -55,8 +55,6 @@ spec:
                           value: efa
                         - name: FI_EFA_USE_DEVICE_RDMA
                           value: "1"
-                        - name: FI_EFA_FORK_SAFE
-                          value: "1"
                         - name: NCCL_SOCKET_IFNAME
                           value: "^docker,lo,veth"
                         - name: PYTHONPATH
