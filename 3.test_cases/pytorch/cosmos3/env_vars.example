@@ -16,7 +16,7 @@ export IMAGE_URI="${REGISTRY}/${IMAGE}:${TAG}"
 
 # --- Image build (build-push.sh; docker buildx → ECR) ---
 export DLC_TAG="2.10.0-gpu-py313-cu130-ubuntu22.04-ec2"  # AWS DLC base tag
-# export COSMOS_FRAMEWORK_REF="f358a625875310096cf01d75b11b7818c438aa1e"   # framework pin (default in build-push.sh)
+# export COSMOS_FRAMEWORK_REF="90cd348877c37b888942c988b631eb1611bf2950"   # framework pin (default in build-push.sh)
 
 # --- Namespace / scheduling ---
 export NAMESPACE="<your-namespace>"
@@ -86,3 +86,20 @@ export OUT="/fsx/results/run"   # output dir for runs (training IMAGINAIRE_OUTPU
 export INVOCATION_PORT="8000"
 # Public post-trained policy, OR an exported action-policy checkpoint dir:
 export EVAL_CHECKPOINT="nvidia/Cosmos3-Nano-Policy-DROID"
+
+# --- Native observability (optional; see observability/README.md) ---
+# Two independent ways to land trainer metrics (loss, step time, iteration) in
+# Amazon Managed Prometheus, unified with the HyperPod observability addon's
+# GPU/DCGM metrics in Grafana. Set AT MOST one (or both); unset = default no-op.
+#
+# Path A — Pushgateway (PrometheusCallback). Requires a Pushgateway + a scrape
+# job on the addon central collector (observability/pushgateway.yaml + runbook):
+# export PROMETHEUS_PUSHGATEWAY_URL="http://prometheus-pushgateway.cosmos3-obs.svc:9091"
+#
+# Path B — OTLP direct to the addon collector's OTLP receiver (OTLPCallback).
+# No Pushgateway, no collector-config edit (more durable across addon upgrades):
+# export OTEL_EXPORTER_OTLP_ENDPOINT="http://hyperpod-otel-collector.hyperpod-observability.svc:4317"
+# export OTEL_EXPORTER_OTLP_PROTOCOL="grpc"   # grpc (4317) or http (4318)
+#
+# export PROMETHEUS_JOB_NAME="cosmos3"
+# export PROMETHEUS_EVERY_N="1"

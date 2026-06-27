@@ -85,7 +85,7 @@ WORKDIR /workspace
 # Clone + install cosmos-framework (pin via --build-arg COSMOS_FRAMEWORK_REF) on
 # the uv-managed Python 3.13. The cu130-train group pins
 # torch 2.10.0+cu130 + NCCL 2.28.9 (the NCCL that matches the DLC's aws-ofi-nccl).
-ARG COSMOS_FRAMEWORK_REF=f358a625875310096cf01d75b11b7818c438aa1e
+ARG COSMOS_FRAMEWORK_REF=90cd348877c37b888942c988b631eb1611bf2950
 RUN git clone https://github.com/NVIDIA/cosmos-framework.git && \
     cd cosmos-framework && git checkout ${COSMOS_FRAMEWORK_REF} && \
     uv sync --all-extras --group=cu130-train --python 3.13
@@ -100,6 +100,18 @@ RUN LP=$(find /opt/uv-python -name 'libpython3.13.so.1.0' | head -1) && \
 COPY src /workspace/cosmos3-aws/src
 COPY toml /workspace/cosmos3-aws/toml
 ENV PYTHONPATH=/workspace/cosmos3-aws/src
+
+# Observability deps for the optional metric-export callbacks (no-op unless their
+# env var is set at launch; see observability/README.md). Installed into the
+# framework venv so both export paths resolve:
+#   - prometheus_client : PrometheusCallback (Pushgateway path)
+#   - opentelemetry-*   : OTLPCallback (OTLP-to-collector path)
+RUN cd /workspace/cosmos-framework && \
+    uv pip install --python .venv \
+      prometheus_client \
+      opentelemetry-sdk \
+      opentelemetry-exporter-otlp-proto-grpc \
+      opentelemetry-exporter-otlp-proto-http
 
 # --- Runtime env: DLC EFA stack (DIFFERENT from the NGC-base workarounds) ---
 # Do NOT set LD_LIBRARY_PATH="" here: on the DLC we WANT the AWS EFA libfabric +

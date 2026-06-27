@@ -17,7 +17,12 @@ construction are identical to the in-tree DROID recipe.
 """
 from __future__ import annotations
 
-from cosmos_framework.data.vfm.action.datasets.action_sft_dataset import ActionSFTDataset
+from torch.utils.data import Dataset
+
+from cosmos_framework.data.vfm.action.datasets.action_sft_dataset import (
+    ActionSFTDataset,
+    ActionIterableShuffleDataset,
+)
 from cosmos_framework.data.vfm.action.transforms import ActionTransformPipeline
 
 from cosmos3_aws.action.lerobot_v3_action_dataset import LeRobotV3ActionDataset
@@ -40,7 +45,9 @@ def get_action_public_lerobot_sft_dataset(
     append_duration_fps_timestamps: bool = True,
     append_resolution_info: bool = True,
     append_idle_frames: bool = False,
-) -> ActionSFTDataset:
+    iterable_shuffle: bool = False,
+    episode_shuffle_seed: int = 42,
+) -> Dataset:
     """Build a turnkey-public LeRobot v3 action SFT dataset.
 
     Mirrors ``get_action_droid_sft_dataset`` but swaps the dataset for
@@ -48,6 +55,12 @@ def get_action_public_lerobot_sft_dataset(
     ``append_idle_frames`` defaults to ``False`` to match
     ``get_action_droid_sft_dataset``; the public wrapper also does not emit an
     ``idle_frames`` key, so the pipeline never requires one.
+
+    When ``iterable_shuffle`` is ``True``, the map-style ``ActionSFTDataset`` is
+    wrapped in the framework's ``ActionIterableShuffleDataset``, which yields an
+    episode-shuffled stream (seeded by ``episode_shuffle_seed``) so batches are
+    decorrelated across ranks — the upstream grad-norm fix. The default
+    (``False``) returns the plain map-style ``ActionSFTDataset``.
     """
     dataset = LeRobotV3ActionDataset(
         repo_id=repo_id,
@@ -67,4 +80,7 @@ def get_action_public_lerobot_sft_dataset(
         append_resolution_info=append_resolution_info,
         append_idle_frames=append_idle_frames,
     )
-    return ActionSFTDataset(dataset, transform, resolution)
+    sft = ActionSFTDataset(dataset, transform, resolution)
+    if iterable_shuffle:
+        return ActionIterableShuffleDataset(sft, seed=episode_shuffle_seed)
+    return sft

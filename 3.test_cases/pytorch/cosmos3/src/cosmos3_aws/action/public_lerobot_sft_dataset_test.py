@@ -59,3 +59,38 @@ def test_factory_wraps_our_dataset_in_action_sft_dataset(monkeypatch):
     assert captured["atp_kwargs"]["max_action_dim"] == 64
     assert captured["atp_kwargs"]["tokenizer_config"] == {"x": 1}
     assert captured["atp_kwargs"]["append_idle_frames"] is False
+
+
+def test_factory_returns_iterable_shuffle_when_enabled(monkeypatch):
+    """When iterable_shuffle=True, the factory wraps the map-style ActionSFTDataset
+    in the framework's ActionIterableShuffleDataset."""
+    import cosmos3_aws.action.public_lerobot_sft_dataset as mod
+    from cosmos_framework.data.vfm.action.datasets.action_sft_dataset import (
+        ActionIterableShuffleDataset,
+    )
+
+    class _FakeInner:
+        def __init__(self, *a, **k): ...
+
+    monkeypatch.setattr(mod, "LeRobotV3ActionDataset", _FakeInner)
+    monkeypatch.setattr(mod, "ActionTransformPipeline", lambda *a, **k: (lambda x, r: x))
+
+    ds = mod.get_action_public_lerobot_sft_dataset(
+        repo_id="lerobot/droid_100", iterable_shuffle=True, episode_shuffle_seed=7
+    )
+    assert isinstance(ds, ActionIterableShuffleDataset)
+
+
+def test_factory_returns_mapstyle_by_default(monkeypatch):
+    """Default (iterable_shuffle=False) returns the plain ActionSFTDataset."""
+    import cosmos3_aws.action.public_lerobot_sft_dataset as mod
+    from cosmos_framework.data.vfm.action.datasets.action_sft_dataset import ActionSFTDataset
+
+    class _FakeInner:
+        def __init__(self, *a, **k): ...
+
+    monkeypatch.setattr(mod, "LeRobotV3ActionDataset", _FakeInner)
+    monkeypatch.setattr(mod, "ActionTransformPipeline", lambda *a, **k: (lambda x, r: x))
+
+    ds = mod.get_action_public_lerobot_sft_dataset(repo_id="lerobot/droid_100")
+    assert isinstance(ds, ActionSFTDataset)

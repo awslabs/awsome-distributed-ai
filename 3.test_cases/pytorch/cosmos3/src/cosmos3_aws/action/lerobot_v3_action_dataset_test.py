@@ -85,3 +85,28 @@ def test_mode_and_scalars_typed() -> None:
     assert s["mode"] == "policy"
     assert torch.is_tensor(s["conditioning_fps"]) and s["conditioning_fps"].dtype == torch.long
     assert torch.is_tensor(s["domain_id"]) and s["domain_id"].dtype == torch.long
+
+
+def test_get_shuffle_blocks_from_episode_boundaries() -> None:
+    """get_shuffle_blocks() returns per-episode (start, length) flat-index blocks,
+    dropping the last chunk_length frames of each episode (cannot start a full window)."""
+    from cosmos3_aws.action.lerobot_v3_action_dataset import LeRobotV3ActionDataset
+
+    ds = LeRobotV3ActionDataset.__new__(LeRobotV3ActionDataset)  # bypass __init__ (no lerobot)
+    ds._chunk_length = 2
+    # Two episodes: episode 0 has 5 frames [0..4], episode 1 has 4 frames [5..8].
+    ds._episode_frame_counts = [5, 4]
+    # Expected: ep0 -> (0, 5-2=3); ep1 -> (5, 4-2=2)
+    blocks = ds.get_shuffle_blocks()
+    assert blocks == [(0, 3), (5, 2)]
+
+
+def test_get_shuffle_blocks_drops_short_episodes() -> None:
+    """Episodes shorter than or equal to chunk_length contribute no windows."""
+    from cosmos3_aws.action.lerobot_v3_action_dataset import LeRobotV3ActionDataset
+
+    ds = LeRobotV3ActionDataset.__new__(LeRobotV3ActionDataset)
+    ds._chunk_length = 4
+    ds._episode_frame_counts = [3, 6]  # ep0 (3 <= 4) drops; ep1 -> (3, 6-4=2)
+    blocks = ds.get_shuffle_blocks()
+    assert blocks == [(3, 2)]

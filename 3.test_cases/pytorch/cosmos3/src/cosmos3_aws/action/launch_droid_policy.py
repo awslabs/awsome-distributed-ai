@@ -57,6 +57,44 @@ def main() -> None:
     config = load_experiment_from_toml(args.sft_toml, extra_overrides=args.opts)
     args.config = args.sft_toml  # telemetry alias (mirrors framework train.py)
 
+    # Optional native-observability bridges (both no-op when their env var is
+    # absent, so the default path is unchanged). Two independent ways to land
+    # trainer metrics (loss, step time, iteration) in Amazon Managed Prometheus,
+    # unified with the HyperPod observability addon's GPU/DCGM metrics in Grafana:
+    #   - PROMETHEUS_PUSHGATEWAY_URL -> PrometheusCallback (push to a Pushgateway
+    #     that the addon central collector scrapes; requires a scrape job).
+    #   - OTEL_EXPORTER_OTLP_ENDPOINT -> OTLPCallback (push straight to the addon
+    #     collector's OTLP receiver; no Pushgateway, no collector-config edit).
+    # See observability/README.md for the tradeoffs.
+    _extra_callbacks: dict[str, dict] = {}
+    _pushgateway_url = os.environ.get("PROMETHEUS_PUSHGATEWAY_URL")
+    if _pushgateway_url:
+        _extra_callbacks["prometheus"] = dict(
+            _target_="cosmos3_aws.observability.prometheus_callback.PrometheusCallback",
+            pushgateway_url=_pushgateway_url,
+            job_name=os.environ.get("PROMETHEUS_JOB_NAME", "cosmos3"),
+            every_n=int(os.environ.get("PROMETHEUS_EVERY_N", "1")),
+        )
+    _otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    if _otlp_endpoint:
+        _extra_callbacks["otlp"] = dict(
+            _target_="cosmos3_aws.observability.otlp_callback.OTLPCallback",
+            endpoint=_otlp_endpoint,
+            job_name=os.environ.get("PROMETHEUS_JOB_NAME", "cosmos3"),
+            every_n=int(os.environ.get("PROMETHEUS_EVERY_N", "1")),
+            protocol=os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc"),
+        )
+    if _extra_callbacks:
+        from omegaconf import OmegaConf
+
+        # The loaded config is an OmegaConf node in struct mode (new keys rejected);
+        # open it just long enough to attach the observability callback(s).
+        OmegaConf.set_struct(config.trainer.callbacks, False)
+        for _name, _cb in _extra_callbacks.items():
+            config.trainer.callbacks[_name] = _cb
+        OmegaConf.set_struct(config.trainer.callbacks, True)
+        logging.info(f"Observability callbacks enabled: {list(_extra_callbacks)}")
+
     if args.dryrun:
         logging.info("Config:\n" + config.pretty_print(use_color=True))
         os.makedirs(config.job.path_local, exist_ok=True)

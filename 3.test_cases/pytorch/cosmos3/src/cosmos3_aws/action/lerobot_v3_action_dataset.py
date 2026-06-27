@@ -101,8 +101,40 @@ class LeRobotV3ActionDataset(Dataset):
             delta[cam] = dt
         self._ds = LeRobotDataset(repo_id, root=root, delta_timestamps=delta)
 
+        # Per-episode frame counts (ordered by episode index) for shuffle-block
+        # construction used by the framework's ActionIterableShuffleDataset.
+        meta = self._ds.meta
+        try:
+            episodes = meta.episodes
+            counts = [int(episodes[i]["length"]) for i in range(len(episodes))]
+        except Exception:
+            import numpy as np
+            ep_idx = np.asarray(self._ds.hf_dataset["episode_index"])
+            counts = np.bincount(ep_idx).tolist()
+        self._episode_frame_counts = counts
+
     def __len__(self) -> int:
         return len(self._ds)
+
+    def get_shuffle_blocks(self) -> list[tuple[int, int]]:
+        """Per-episode flat-index blocks ``(start, length)`` for the framework's
+        ``ActionIterableShuffleDataset``. The iterable shuffles the ORDER of these
+        blocks and shards them disjointly across ranks while streaming the windows
+        WITHIN each block sequentially (decorrelated batches, sequential reads).
+
+        A window needs ``chunk_length + 1`` frames, so the last ``chunk_length``
+        frames of each episode cannot start a full window -> usable length is
+        ``max(0, frame_count - chunk_length)``. Episodes with no usable windows
+        are dropped. Mirrors the in-tree ``DROIDLeRobotDataset.get_shuffle_blocks``.
+        """
+        blocks: list[tuple[int, int]] = []
+        start = 0
+        for count in self._episode_frame_counts:
+            usable = max(0, int(count) - self._chunk_length)
+            if usable > 0:
+                blocks.append((start, usable))
+            start += int(count)
+        return blocks
 
     def _choose_mode(self) -> str:
         if self._mode == "joint":
