@@ -400,7 +400,7 @@ the `Dockerfile` header). The pinned, validated versions:
 | Component | Version |
 |-----------|---------|
 | AWS DLC base (`DLC_TAG`) | `2.10.0-gpu-py313-cu130-ubuntu22.04-ec2` (PyTorch 2.10.0+cu130, Python 3.13, CUDA 13.0, Ubuntu 22.04) |
-| `cosmos-framework` (`COSMOS_FRAMEWORK_REF`) | `f358a625875310096cf01d75b11b7818c438aa1e` |
+| `cosmos-framework` (`COSMOS_FRAMEWORK_REF`) | `90cd348877c37b888942c988b631eb1611bf2950` |
 | NCCL | 2.28.9 (from the `cosmos-framework` venv's `nvidia-nccl-cu13`) |
 | EFA installer | 1.47.0 (libfabric 2.4, aws-ofi-nccl 1.18.0, gdrcopy 2.5.1 — baked into the DLC) |
 | FFmpeg (shared, for torchcodec) | 8.x (pinned BtbN build, SHA-256 verified) |

@@ -16,7 +16,7 @@ export IMAGE_URI="${REGISTRY}/${IMAGE}:${TAG}"
 
 # --- Image build (build-push.sh; docker buildx → ECR) ---
 export DLC_TAG="2.10.0-gpu-py313-cu130-ubuntu22.04-ec2"  # AWS DLC base tag
-# export COSMOS_FRAMEWORK_REF="f358a625875310096cf01d75b11b7818c438aa1e"   # framework pin (default in build-push.sh)
+# export COSMOS_FRAMEWORK_REF="90cd348877c37b888942c988b631eb1611bf2950"   # framework pin (default in build-push.sh)
 
 # --- Namespace / scheduling ---
 export NAMESPACE="<your-namespace>"
