@@ -1,0 +1,88 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# PointWorld ClusterTrainingRuntime for Kubeflow Trainer v2 (trainer.kubeflow.org).
+#
+# Use this on clusters running the Kubeflow Trainer v2 controller (TrainJob /
+# ClusterTrainingRuntime CRDs) instead of the v1 PyTorchJob manifest in the
+# parent directory. Validated on Amazon EKS (Kubeflow Trainer v2.0.0) with
+# p5en.48xlarge (H200) nodes.
+#
+# Key v2 requirements (learned in testing):
+#   - The replicatedJob template MUST carry the label
+#     `trainer.kubeflow.org/trainjob-ancestor-step: trainer` so the controller
+#     scales numNodes -> JobSet parallelism and injects the torchrun PET_* env.
+#   - The container entrypoint MUST be `torchrun` (the torch plugin sets PET_*
+#     rendezvous env; launching python directly fails with "RANK ... not set").
+#   - p5en.48xlarge advertises 16 EFA devices (vpc.amazonaws.com/efa: 16).
+#
+# Apply this runtime once, then submit pointworld-trainjob.yaml.
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: ClusterTrainingRuntime
+metadata:
+  name: pointworld-runtime
+spec:
+  mlPolicy:
+    numNodes: ${NUM_NODES}
+    torch:
+      numProcPerNode: ${GPU_PER_NODE}
+  template:
+    spec:
+      replicatedJobs:
+        - name: node
+          template:
+            metadata:
+              labels:
+                trainer.kubeflow.org/trainjob-ancestor-step: trainer
+            spec:
+              template:
+                metadata:
+                  labels:
+                    app: pointworld
+                spec:
+                  containers:
+                    - name: node
+                      # Overridden by the TrainJob's trainer.image.
+                      image: ${IMAGE_URI}
+                      env:
+                        - name: LOCAL_DATASET_DIR
+                          value: /dataset
+                        - name: WANDB_MODE
+                          value: ${WANDB_MODE}
+                        - name: NCCL_DEBUG
+                          value: INFO
+                        - name: FI_PROVIDER
+                          value: efa
+                        - name: FI_EFA_USE_DEVICE_RDMA
+                          value: "1"
+                        - name: NCCL_SOCKET_IFNAME
+                          value: "^docker,lo,veth"
+                        - name: PYTHONPATH
+                          value: /pointworld
+                      resources:
+                        limits:
+                          nvidia.com/gpu: "${GPU_PER_NODE}"
+                          vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
+                        requests:
+                          nvidia.com/gpu: "${GPU_PER_NODE}"
+                          vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
+                      volumeMounts:
+                        - name: fsx
+                          mountPath: /fsx
+                        - name: fsx
+                          mountPath: /dataset
+                          subPath: pointworld/dataset
+                        - name: shmem
+                          mountPath: /dev/shm
+                  volumes:
+                    - name: fsx
+                      persistentVolumeClaim:
+                        claimName: ${FSX_PVC_NAME}
+                    - name: shmem
+                      emptyDir:
+                        medium: Memory
+                        sizeLimit: 256Gi
+                  tolerations:
+                    - key: nvidia.com/gpu
+                      operator: Exists
+                      effect: NoSchedule

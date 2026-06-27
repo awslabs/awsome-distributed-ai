@@ -1,0 +1,184 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# PointWorld data-staging Job.
+#
+# FSx for Lustre is a VPC-internal filesystem; it is NOT mounted on your laptop.
+# All staging therefore runs *inside the cluster* in this Job, which mounts the
+# shared `fsx-claim` PVC at /fsx and writes the DINOv3 weights + WebDataset
+# shards that pre-training and evaluation consume.
+#
+# This Job reproduces, end to end, what scripts/0.download_dataset.py,
+# scripts/1.convert_wds.py, and scripts/2.download_dinov3.sh do locally -- it
+# just runs them where /fsx actually exists. The container image already clones
+# upstream PointWorld and ships huggingface_hub + zstd, so the commands below are
+# self-contained and do not depend on this repo's scripts/ being baked in.
+#
+# BEFORE APPLYING:
+#   1. `source env_vars` so deploy.sh can render IMAGE_URI / NAMESPACE /
+#      FSX_PVC_NAME. (These three structural fields use ${...} tokens.)
+#   2. Set the data knobs DIRECTLY in this file (they read the container env at
+#      runtime via bash/python, so they are intentionally NOT envsubst'd):
+#        - DINOV3_URL: paste your personal, gated DINOv3 URL (treat as a secret;
+#          do not commit). Or inject it at apply time so it never lands in a file
+#          (replace ONLY the env value line so the in-script guard is left intact):
+#            source env_vars
+#            ./deploy.sh --dry-run pointworld-data-prep.yaml \
+#              | sed "s|value: \"<DINOV3_DOWNLOAD_URL>\"|value: \"$DINOV3_URL\"|" | kubectl apply -f -
+#        - BEHAVIOR_TASKS / MAX_CLIPS: the defaults stage a small subset (3 tasks,
+#          200 clips) for a quick smoke run; for full scale set BEHAVIOR_TASKS=all
+#          and MAX_CLIPS=-1. This Job stages BEHAVIOR only -- DROID is out of scope
+#          for this test case (see the README).
+#
+# Apply (renders the structural tokens):
+#   source env_vars
+#   ./deploy.sh pointworld-data-prep.yaml
+#   kubectl logs -f job/pointworld-data-prep -n ${NAMESPACE}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pointworld-data-prep
+  namespace: ${NAMESPACE}
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: pointworld-data-prep
+    spec:
+      restartPolicy: Never
+      # Runs on a CPU node -- no GPU required for download/restore/convert.
+      # Pin to an instance type with ample CPU/RAM and FSx network throughput if
+      # desired, e.g.:
+      #   nodeSelector:
+      #     node.kubernetes.io/instance-type: m5.8xlarge
+      containers:
+        - name: data-prep
+          image: ${IMAGE_URI}
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+
+              BASE=/fsx/pointworld
+              DL=$BASE/downloads/behavior
+              RESTORE=$BASE/restored/behavior
+              WDS=$BASE/dataset/behavior/wds
+              DATABRANCH=$BASE/PointWorld-data
+              DINO=$BASE/dinov3/checkpoints
+              # PointWorld's scene featurizer rejects renamed weights; keep the
+              # canonical filename.
+              DINO_NAME=dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+              mkdir -p "$DL" "$RESTORE" "$WDS" "$DINO"
+
+              echo "== 1. DINOv3 ViT-L/16 weights =="
+              if [ "${DINOV3_URL}" = "<DINOV3_DOWNLOAD_URL>" ]; then
+                echo "ERROR: set DINOV3_URL to your personal gated DINOv3 URL." >&2
+                exit 1
+              fi
+              if [ ! -s "$DINO/$DINO_NAME" ]; then
+                wget --no-verbose -O "$DINO/$DINO_NAME" "${DINOV3_URL}"
+              else
+                echo "  already present"
+              fi
+              ls -lh "$DINO/"
+
+              echo "== 2. Download BEHAVIOR package (subset or all) =="
+              # NOTE: this heredoc lives inside a YAML literal block, so every line
+              # carries the block's leading indentation. A plain `python - <<'PY'`
+              # would feed that indentation to Python and fail with
+              # "IndentationError: unexpected indent". We therefore strip the common
+              # leading whitespace with `sed` before piping to Python; keep the body
+              # uniformly indented so the dedent is consistent.
+              sed 's/^              //' <<'PY' | python -
+              import os
+              from huggingface_hub import snapshot_download
+              dl = os.environ["DL_DIR"]
+              tasks = os.environ["BEHAVIOR_TASKS"].strip()
+              if tasks.lower() == "all":
+                  patterns = None  # fetch the whole repo (multi-TB for full scale)
+              else:
+                  patterns = ["behavior/flows/%s/*" % t.strip() for t in tasks.split(",") if t.strip()]
+                  # shared metadata + the recovery script at the repo root
+                  patterns += ["behavior/*.json", "behavior/*.sh",
+                               "recover_dataset_from_parts.sh", "README.md"]
+              print("allow_patterns:", patterns, flush=True)
+              snapshot_download(repo_id="nvidia/PointWorld-BEHAVIOR", repo_type="dataset",
+                                local_dir=dl, allow_patterns=patterns, max_workers=8)
+              print("download done", flush=True)
+              PY
+
+              echo "== 3. Restore dataset from parts (needs zstd) =="
+              command -v zstd >/dev/null 2>&1 || { echo "zstd missing in image" >&2; exit 1; }
+              if [ "${BEHAVIOR_TASKS}" = "all" ]; then
+                bash "$DL/recover_dataset_from_parts.sh" --packages "$DL" --out "$RESTORE"
+              else
+                INCLUDE=()
+                IFS=',' read -ra T <<< "${BEHAVIOR_TASKS}"
+                for t in "${T[@]}"; do INCLUDE+=(--include-prefix "behavior/flows/${t}"); done
+                bash "$DL/recover_dataset_from_parts.sh" --packages "$DL" --out "$RESTORE" "${INCLUDE[@]}"
+              fi
+              find "$RESTORE" -name '*.hdf5' | wc -l
+
+              echo "== 4. Clone PointWorld 'data' branch (conversion tooling) =="
+              if [ ! -d "$DATABRANCH/.git" ]; then
+                git clone --branch data --depth 1 https://github.com/NVlabs/PointWorld.git "$DATABRANCH"
+              fi
+              cd "$DATABRANCH"
+
+              INPUT=$RESTORE/behavior/flows
+              INTEGRITY=$WDS/integrity_check.json
+              MANIFEST=$WDS/wds_manifest.json
+
+              echo "== 5. Integrity check -> manifest -> WDS =="
+              python data_integrity_check.py \
+                --input_dir "$INPUT" --domain behavior \
+                --output_file "$INTEGRITY" --fastmode \
+                || echo "integrity check returned nonzero (continuing)"
+
+              python make_wds_manifest.py \
+                --input_dir "$INPUT" --domain behavior \
+                --output_manifest "$MANIFEST" \
+                --integrity_check_file "$INTEGRITY" \
+                --test_percentage 0.2 \
+                --max_clips "${MAX_CLIPS}"
+
+              # convert_wds.py only writes metadata_rank*.json when it finishes the
+              # selected clips; --max_clips keeps dev runs bounded.
+              python convert_wds.py \
+                --input_dir "$INPUT" --output_dir "$WDS" --domain behavior \
+                --integrity_check_file "$INTEGRITY" --manifest "$MANIFEST" \
+                --max_clips "${MAX_CLIPS}" --maxsize 200000000
+
+              echo "== Staged tree =="
+              find "$WDS" -maxdepth 2 | head -30
+              echo "DATA_PREP_DONE"
+          env:
+            # Paste your personal gated DINOv3 URL here (or inject at apply time).
+            - name: DINOV3_URL
+              value: "<DINOV3_DOWNLOAD_URL>"
+            # Comma-separated BEHAVIOR task IDs, or "all" for the full package.
+            - name: BEHAVIOR_TASKS
+              value: "task-0000,task-0001,task-0002"
+            # Cap clips for a quick smoke run; set -1 for full scale.
+            - name: MAX_CLIPS
+              value: "200"
+            - name: DL_DIR
+              value: /fsx/pointworld/downloads/behavior
+            - name: PYTHONPATH
+              value: /pointworld
+          volumeMounts:
+            - name: fsx
+              mountPath: /fsx
+          resources:
+            requests:
+              cpu: "16"
+              memory: 48Gi
+            limits:
+              cpu: "30"
+              memory: 110Gi
+      volumes:
+        - name: fsx
+          persistentVolumeClaim:
+            claimName: ${FSX_PVC_NAME}

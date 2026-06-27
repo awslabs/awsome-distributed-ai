@@ -1,0 +1,55 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# PointWorld pre-training TrainJob for Kubeflow Trainer v2.
+# References pointworld-runtime (ClusterTrainingRuntime); apply that first.
+#
+# The container command symlinks the gated DINOv3 weights from FSx into the path
+# the scene featurizer expects (keeping gated weights out of the image), then
+# execs torchrun. The Trainer v2 torch plugin injects the PET_* rendezvous env.
+#
+# numNodes is ${NUM_NODES} (default 2 = 16 H200; raise in env_vars to scale out).
+# This sample trains the BEHAVIOR domain; DROID is out of scope (see the README).
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: pointworld-pretrain
+  namespace: ${NAMESPACE}
+spec:
+  runtimeRef:
+    name: pointworld-runtime
+    kind: ClusterTrainingRuntime
+  trainer:
+    image: ${IMAGE_URI}
+    numNodes: ${NUM_NODES}
+    numProcPerNode: ${GPU_PER_NODE}
+    command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        mkdir -p /pointworld/third_party/dinov3/checkpoints
+        if [ -d /fsx/pointworld/dinov3/checkpoints ] && \
+           [ -n "$(ls -A /fsx/pointworld/dinov3/checkpoints 2>/dev/null)" ]; then
+          ln -sfn /fsx/pointworld/dinov3/checkpoints/* \
+            /pointworld/third_party/dinov3/checkpoints/
+        else
+          echo "ERROR: DINOv3 weights not found; run scripts/2.download_dinov3.sh." >&2
+          exit 1
+        fi
+        cd /pointworld
+        # Trainer v2 torch plugin provides the torchrun rendezvous env (PET_*).
+        exec torchrun --nproc_per_node=${GPU_PER_NODE} --nnodes=${NUM_NODES} train.py \
+          --distributed=true \
+          --domains=${DOMAINS} \
+          --data_dirs=${DATA_DIRS} \
+          --norm_stats_path=${NORM_STATS_PATH} \
+          --ptv3_size=${PTV3_SIZE} \
+          --batch_size=${BATCH_SIZE} \
+          --num_workers=${NUM_WORKERS} \
+          --num_epochs=${NUM_EPOCHS} \
+          --max_train_steps=${MAX_TRAIN_STEPS} \
+          --eval_freq=${EVAL_FREQ} \
+          --save_freq=${SAVE_FREQ} \
+          --log_dir=${LOG_DIR} \
+          --exp_name=${EXP_NAME}

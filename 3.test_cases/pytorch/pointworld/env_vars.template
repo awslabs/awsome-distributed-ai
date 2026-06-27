@@ -1,0 +1,132 @@
+#!/bin/bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# env_vars.template -- Copy to env_vars and customize for your environment.
+# env_vars is .gitignored and must NEVER be committed.
+#
+# Usage:
+#   cp env_vars.template env_vars
+#   vim env_vars            # fill in the manual fields below
+#   source env_vars
+#
+# Then render + apply the manifests from the kubernetes/ directory:
+#   ./deploy.sh pointworld-data-prep.yaml          # stage data onto FSx
+#   ./deploy.sh pointworld-pretrain.yaml           # pre-train
+#   ./deploy.sh pointworld-eval.yaml               # evaluate
+#   ./deploy.sh trainer-v2/pointworld-runtime.yaml # (Trainer v2 clusters)
+#   ./deploy.sh --dry-run <manifest>.yaml          # preview rendered YAML
+#   ./deploy.sh --delete  <manifest>.yaml          # tear down
+#
+# deploy.sh substitutes ONLY the variables listed in its ENVSUBST_VARS allowlist,
+# so in-container shell variables in the manifests ($BASE, $WDS, $RANK,
+# $LOCAL_DATASET_DIR, ...) are left intact for runtime evaluation.
+
+# ============================================================================
+# Auto-detected (AWS / cluster / image) -- no manual entry needed
+# ============================================================================
+export AWS_REGION=$(aws configure get region 2>/dev/null \
+  || aws ec2 describe-availability-zones --query 'AvailabilityZones[0].RegionName' --output text)
+export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+export REGISTRY=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+export IMAGE_TAG=05484826                  # matches POINTWORLD_COMMIT in the Dockerfile
+export IMAGE_URI=${REGISTRY}/pointworld:${IMAGE_TAG}
+
+# ============================================================================
+# Cluster / placement
+# ============================================================================
+export NAMESPACE=kubeflow
+export FSX_PVC_NAME=fsx-claim
+# Default is a small 2-node / 16-GPU BEHAVIOR smoke run (see "Scale up" below to
+# go bigger). Every manifest is ${NUM_NODES}-driven, so this is the only place to
+# set the node count.
+export NUM_NODES=2                           # pre-training nodes (replicas / numNodes)
+export GPU_PER_NODE=8                        # H200 per p5en.48xlarge
+# p5en.48xlarge advertises 16 EFA NICs. On a SHARED/contended cluster you may not
+# get nodes with all 16 free -- lower this (e.g. 3) so the job schedules; NCCL
+# still runs over EFA at reduced bandwidth. Use 16 on dedicated capacity.
+export EFA_PER_NODE=16
+
+# ============================================================================
+# Data staging (kubernetes/pointworld-data-prep.yaml)
+# ============================================================================
+# DINOV3_URL is a gated Meta secret. It is deliberately NOT rendered by envsubst;
+# deploy.sh injects it only for the data-prep manifest at apply time so it never
+# lands in a file on disk. Paste your personal URL here (do not commit env_vars).
+export DINOV3_URL=""
+export BEHAVIOR_TASKS="task-0000,task-0001,task-0002"   # small smoke subset; comma list, or "all"
+export MAX_CLIPS=200                          # cap clips for the smoke run; -1 = full scale
+
+# ============================================================================
+# Evaluation (kubernetes/pointworld-eval.yaml)
+# ============================================================================
+# MODEL_PATH points at the checkpoint to evaluate. After a pre-training run,
+# point this at ${LOG_DIR}/<wandb-run-name>/model-last.pt (see the checkpoint-
+# location note below). Or use a released checkpoint from nvidia/PointWorld_models.
+export MODEL_PATH="/fsx/pointworld/train_logs/<wandb-run-name>/model-last.pt"
+export EVAL_NUM_BATCHES=100                   # -1 = full test split
+export EVAL_VIZ_NUM=5                          # interactive viz (kubernetes/pointworld-viz.yaml): # eval samples to visualize (-1 disables)
+# EVAL_DOMAIN controls which dataset split is used. This test case stages BEHAVIOR.
+#   behavior : unfiltered L2 (simulation data is noiseless); no confidence threshold.
+#   droid    : filtered L2 over moving points; requires --confidence_thres (full
+#              scale only -- DROID is not staged by this sample, see README).
+export EVAL_DOMAIN=behavior
+export EVAL_DATA_DIR=/dataset/behavior/wds   # set to /dataset/droid/wds for droid (full scale)
+export EVAL_CONFIDENCE_THRES=                 # empty for behavior; set e.g. 0.8 for droid
+
+# ============================================================================
+# Pre-training flags (kubernetes/pointworld-pretrain.yaml + trainer-v2)
+# PointWorld's train.py is CLI-driven (see arguments.py upstream). These map 1:1
+# to torchrun train.py --<flag>=<value> in the manifests.
+# Reference: https://github.com/NVlabs/PointWorld
+# ============================================================================
+export DOMAINS=behavior
+export DATA_DIRS=/dataset/behavior/wds
+export NORM_STATS_PATH=stats/droid_behavior   # joint stats file (baked in the image); correct for behavior-only runs too
+export PTV3_SIZE=large
+export BATCH_SIZE=22                           # per-GPU; tune to fit 141 GB H200 HBM
+export NUM_WORKERS=16
+
+# Duration. NOTE: train.py's epoch_count is fractional (= samples_seen /
+# train_total_samples), so on a small dataset it races past NUM_EPOCHS in
+# seconds. For a deterministic, dataset-size-independent smoke run, set
+# MAX_TRAIN_STEPS > 0 instead.
+export NUM_EPOCHS=10                            # smoke default; raise for full-scale training
+export MAX_TRAIN_STEPS=-1                        # >0 stops after N steps (smoke runs); <=0 disables
+
+# Checkpoint cadence, in BATCHES. The final save only fires on the NUM_EPOCHS
+# cutoff -- the MAX_TRAIN_STEPS exit does NOT save. So for a smoke run bounded by
+# MAX_TRAIN_STEPS, set SAVE_FREQ <= MAX_TRAIN_STEPS or no checkpoint is written.
+export SAVE_FREQ=200
+export EVAL_FREQ=-1                            # disable in-loop eval; run eval.py separately
+export LOG_DIR=/fsx/pointworld/train_logs
+export EXP_NAME=pointworld-large-behavior      # see W&B note below: ignored when WANDB_MODE=disabled
+export WANDB_MODE=disabled                     # "online" to enable Weights & Biases
+
+# NOTE on checkpoint location: PointWorld sets the run name from W&B, so the
+# checkpoint is saved to ${LOG_DIR}/<wandb-run-name>/model-last.pt. With
+# WANDB_MODE=disabled, W&B IGNORES EXP_NAME and generates a random name
+# (e.g. dummy-ab12cd34), so EXP_NAME does NOT control the path. Read the run's
+# "Saving to:" log line for the actual dir, and point eval's MODEL_PATH at that
+# .../model-last.pt.
+
+# ----------------------------------------------------------------------------
+# Additional upstream train.py defaults (not tokenized in the manifests; change
+# the manifest args directly if you need to override these):
+#   PTV3_PATCH_SIZE=256  PREDICTOR_DIM=256  BASE_LR=0.0001  WEIGHT_DECAY=0.01
+#   GRAD_CLIP_MAX_NORM=5.0  EVAL_NUM_WORKERS=5  DISTRIBUTED=true
+# ----------------------------------------------------------------------------
+
+# ============================================================================
+# Scale up (optional) -- the defaults above are a small 2-node BEHAVIOR smoke
+# run. To train on more data and more nodes, override:
+#   export NUM_NODES=8                       # more p5en.48xlarge nodes
+#   export EFA_PER_NODE=16                    # full EFA on dedicated capacity
+#   export BEHAVIOR_TASKS=all                 # all 43 BEHAVIOR tasks (or a longer list)
+#   export MAX_CLIPS=-1                       # no clip cap (full dataset)
+#   export NUM_EPOCHS=200                     # upstream full-scale target
+# DROID is the other PointWorld domain (~3.9 TB). It is OUT OF SCOPE for this
+# test case (the data-prep Job stages BEHAVIOR only); see the README and
+# scripts/0.download_dataset.py if you want to stage DROID yourself.
+# ============================================================================
+# ----------------------------------------------------------------------------

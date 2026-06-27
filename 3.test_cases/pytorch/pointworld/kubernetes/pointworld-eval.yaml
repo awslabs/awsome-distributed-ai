@@ -1,0 +1,140 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# PointWorld Evaluation - Kubernetes Job (single GPU)
+#
+# Runs eval.py on a trained (or released) PointWorld checkpoint to compute
+# 3D point-flow prediction metrics:
+#   - DROID    : filtered L2 over moving points (full_eval/test/filtered_l2_moved/mean),
+#                using the released expert-confidence artifact.
+#   - BEHAVIOR : unfiltered L2 (simulation data is noiseless).
+#
+# Evaluation is single-process (not distributed), so this is a plain batch/v1 Job
+# requesting a single GPU rather than a PyTorchJob.
+#
+# Prerequisites:
+#   - FSx for Lustre PVC "fsx-claim" with:
+#       /fsx/pointworld/dataset/behavior/wds      (WDS shards from the data-prep Job)
+#       /fsx/pointworld/dinov3/checkpoints/...    (gated DINOv3 weights)
+#       a trained checkpoint, e.g. /fsx/pointworld/train_logs/<run>/model-last.pt
+#         (set MODEL_PATH in env_vars; see the pre-train section for the <run> dir)
+#   - Container image from pointworld.Dockerfile pushed to ECR
+#       (For DROID eval at full scale, also stage /dataset/droid/wds with
+#        test/expert_confidence-seed=42.h5 — out of scope for this sample.)
+#
+# To evaluate a RELEASED checkpoint instead of your own, first download it:
+#   huggingface-cli download nvidia/PointWorld_models \
+#     --local-dir /fsx/pointworld/pretrained_checkpoints \
+#     --include "large-droid+behavior/model-best.pt"
+# and point MODEL_PATH below at it.
+#
+# Usage (renders the ${...} tokens from env_vars via deploy.sh):
+#   source env_vars
+#   ./kubernetes/deploy.sh kubernetes/pointworld-eval.yaml
+#   kubectl logs -f job/pointworld-eval -n ${NAMESPACE}
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pointworld-eval
+  namespace: ${NAMESPACE}
+spec:
+  # Retries cover transient infra failures (e.g. FSx mount races). Misconfig
+  # (placeholder/missing MODEL_PATH) is caught by a fail-fast guard in the
+  # container command below, so it surfaces a clear error rather than silently
+  # consuming retries.
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: pointworld-eval
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: pointworld
+          image: ${IMAGE_URI}
+          imagePullPolicy: Always
+          workingDir: /pointworld
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              mkdir -p /pointworld/third_party/dinov3/checkpoints
+              if [ -d /fsx/pointworld/dinov3/checkpoints ] && \
+                 [ -n "$(ls -A /fsx/pointworld/dinov3/checkpoints 2>/dev/null)" ]; then
+                ln -sfn /fsx/pointworld/dinov3/checkpoints/* \
+                  /pointworld/third_party/dinov3/checkpoints/
+              else
+                echo "ERROR: DINOv3 weights not found; run scripts/2.download_dinov3.sh." >&2
+                exit 1
+              fi
+              # Fail fast if MODEL_PATH was left at the env_vars placeholder, so the
+              # Job errors immediately instead of retrying (backoffLimit) against a
+              # non-existent checkpoint.
+              case "${MODEL_PATH}" in
+                *"<wandb-run-name>"*|"")
+                  echo "ERROR: MODEL_PATH is unset or still the placeholder ('${MODEL_PATH}')." >&2
+                  echo "Set MODEL_PATH in env_vars to a real checkpoint, e.g." >&2
+                  echo "  /fsx/pointworld/train_logs/<run>/model-last.pt" >&2
+                  echo "(read the pre-train pod's 'Saving to:' log line for <run>)." >&2
+                  exit 1
+                  ;;
+              esac
+              if [ ! -f "${MODEL_PATH}" ]; then
+                echo "ERROR: MODEL_PATH '${MODEL_PATH}' does not exist on FSx." >&2
+                exit 1
+              fi
+              # Domain is controlled by EVAL_DOMAIN / EVAL_DATA_DIR / EVAL_CONFIDENCE_THRES
+              # in env_vars (rendered by deploy.sh):
+              #   droid    -> EVAL_DOMAIN=droid, EVAL_DATA_DIR=/dataset/droid/wds,
+              #               EVAL_CONFIDENCE_THRES=0.8
+              #   behavior -> EVAL_DOMAIN=behavior, EVAL_DATA_DIR=/dataset/behavior/wds,
+              #               EVAL_CONFIDENCE_THRES=  (empty, flag is omitted)
+              CONFIDENCE_ARG=""
+              if [ -n "${EVAL_CONFIDENCE_THRES}" ]; then
+                CONFIDENCE_ARG="--confidence_thres=${EVAL_CONFIDENCE_THRES}"
+              fi
+              exec python eval.py \
+                --model_path "${MODEL_PATH}" \
+                --domains="${EVAL_DOMAIN}" \
+                --data_dirs="${EVAL_DATA_DIR}" \
+                --norm_stats_path=stats/droid_behavior \
+                ${CONFIDENCE_ARG} \
+                --batch_size=1 \
+                --eval_num_batches="${EVAL_NUM_BATCHES}"
+          env:
+            - name: LOCAL_DATASET_DIR
+              value: /dataset
+            - name: WANDB_MODE
+              value: ${WANDB_MODE}
+            - name: PYTHONPATH
+              value: "/pointworld"
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+              memory: 200Gi
+            requests:
+              nvidia.com/gpu: 1
+              cpu: "24"
+              memory: 180Gi
+          volumeMounts:
+            - name: fsx
+              mountPath: /fsx
+            - name: fsx
+              mountPath: /dataset
+              subPath: pointworld/dataset
+            - name: shmem
+              mountPath: /dev/shm
+      volumes:
+        - name: fsx
+          persistentVolumeClaim:
+            claimName: ${FSX_PVC_NAME}
+        - name: shmem
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Gi
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
