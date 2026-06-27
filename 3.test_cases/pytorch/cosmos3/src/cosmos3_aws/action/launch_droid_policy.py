@@ -57,6 +57,29 @@ def main() -> None:
     config = load_experiment_from_toml(args.sft_toml, extra_overrides=args.opts)
     args.config = args.sft_toml  # telemetry alias (mirrors framework train.py)
 
+    # Optional native-observability bridge: when PROMETHEUS_PUSHGATEWAY_URL is set,
+    # attach the sample-side PrometheusCallback so trainer metrics (loss, step time,
+    # iteration) flow into a Prometheus Pushgateway -> Amazon Managed Prometheus,
+    # unifying with the HyperPod observability addon's GPU/DCGM metrics in Grafana.
+    # No-op (and zero overhead) when the env var is absent, so the default path is
+    # unchanged. See observability/README.md.
+    _pushgateway_url = os.environ.get("PROMETHEUS_PUSHGATEWAY_URL")
+    if _pushgateway_url:
+        from omegaconf import OmegaConf
+
+        _prom_cb = dict(
+            _target_="cosmos3_aws.observability.prometheus_callback.PrometheusCallback",
+            pushgateway_url=_pushgateway_url,
+            job_name=os.environ.get("PROMETHEUS_JOB_NAME", "cosmos3"),
+            every_n=int(os.environ.get("PROMETHEUS_EVERY_N", "1")),
+        )
+        # The loaded config is an OmegaConf node in struct mode (new keys rejected);
+        # open it just long enough to attach the callback.
+        OmegaConf.set_struct(config.trainer.callbacks, False)
+        config.trainer.callbacks["prometheus"] = _prom_cb
+        OmegaConf.set_struct(config.trainer.callbacks, True)
+        logging.info(f"PrometheusCallback enabled -> pushgateway {_pushgateway_url}")
+
     if args.dryrun:
         logging.info("Config:\n" + config.pretty_print(use_color=True))
         os.makedirs(config.job.path_local, exist_ok=True)

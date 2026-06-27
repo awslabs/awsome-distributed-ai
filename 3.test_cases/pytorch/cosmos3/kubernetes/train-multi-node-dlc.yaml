@@ -99,6 +99,8 @@ spec:
                     - { name: HF_HOME,            value: "${HF_HOME}" }
                     - { name: IMAGINAIRE_OUTPUT_ROOT, value: "${OUT}" }
                     - { name: PYTHONHASHSEED,     value: "42" }
+                    # Optional native-observability bridge (empty unless set in env_vars); see observability/README.md
+                    - { name: PROMETHEUS_PUSHGATEWAY_URL, value: "${PROMETHEUS_PUSHGATEWAY_URL}" }
                     # Force EFA provider + RDMA; prove transport selection in logs.
                     - { name: FI_PROVIDER,        value: "efa" }
                     - { name: FI_EFA_USE_DEVICE_RDMA, value: "1" }
