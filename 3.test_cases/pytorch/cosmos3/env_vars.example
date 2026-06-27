@@ -98,7 +98,7 @@ export EVAL_CHECKPOINT="nvidia/Cosmos3-Nano-Policy-DROID"
 #
 # Path B — OTLP direct to the addon collector's OTLP receiver (OTLPCallback).
 # No Pushgateway, no collector-config edit (more durable across addon upgrades):
-# export OTEL_EXPORTER_OTLP_ENDPOINT="http://hyperpod-observability-central-collector.hyperpod-observability.svc:4317"
+# export OTEL_EXPORTER_OTLP_ENDPOINT="http://hyperpod-otel-collector.hyperpod-observability.svc:4317"
 # export OTEL_EXPORTER_OTLP_PROTOCOL="grpc"   # grpc (4317) or http (4318)
 #
 # export PROMETHEUS_JOB_NAME="cosmos3"
