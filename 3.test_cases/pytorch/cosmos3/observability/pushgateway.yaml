@@ -1,0 +1,54 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Path A (Pushgateway) deployable for native trainer-metrics observability.
+# Deploy this Pushgateway, point the training pods at it via
+# PROMETHEUS_PUSHGATEWAY_URL (env_vars.example), then add the scrape job in
+# observability/README.md to the HyperPod observability addon's CENTRAL collector
+# so the cosmos3_* metrics are remote-written to Amazon Managed Prometheus.
+#
+# NOTE: the addon's central collector does NOT scrape arbitrary pods/services by
+# default (it keeps a fixed job set: node-exporter, dcgm-exporter,
+# kube-state-metrics, training-operator). The scrape job in the runbook is the
+# required glue for Path A. If you prefer no collector edit, use Path B (OTLP) —
+# see observability/README.md.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cosmos3-obs
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-pushgateway
+  namespace: cosmos3-obs
+  labels: { app: prometheus-pushgateway }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: prometheus-pushgateway }
+  template:
+    metadata:
+      labels: { app: prometheus-pushgateway }
+    spec:
+      containers:
+        - name: pushgateway
+          image: prom/pushgateway:v1.9.0
+          ports:
+            - containerPort: 9091
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits: { cpu: "200m", memory: "256Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pushgateway
+  namespace: cosmos3-obs
+  labels: { app: prometheus-pushgateway }
+spec:
+  selector: { app: prometheus-pushgateway }
+  ports:
+    - name: http
+      port: 9091
+      targetPort: 9091

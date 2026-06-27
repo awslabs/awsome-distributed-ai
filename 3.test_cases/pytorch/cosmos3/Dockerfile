@@ -101,6 +101,18 @@ COPY src /workspace/cosmos3-aws/src
 COPY toml /workspace/cosmos3-aws/toml
 ENV PYTHONPATH=/workspace/cosmos3-aws/src
 
+# Observability deps for the optional metric-export callbacks (no-op unless their
+# env var is set at launch; see observability/README.md). Installed into the
+# framework venv so both export paths resolve:
+#   - prometheus_client : PrometheusCallback (Pushgateway path)
+#   - opentelemetry-*   : OTLPCallback (OTLP-to-collector path)
+RUN cd /workspace/cosmos-framework && \
+    uv pip install --python .venv \
+      prometheus_client \
+      opentelemetry-sdk \
+      opentelemetry-exporter-otlp-proto-grpc \
+      opentelemetry-exporter-otlp-proto-http
+
 # --- Runtime env: DLC EFA stack (DIFFERENT from the NGC-base workarounds) ---
 # Do NOT set LD_LIBRARY_PATH="" here: on the DLC we WANT the AWS EFA libfabric +
 # aws-ofi-nccl on the loader path. The DLC sets LD_LIBRARY_PATH to include

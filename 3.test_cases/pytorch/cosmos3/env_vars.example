@@ -88,10 +88,18 @@ export INVOCATION_PORT="8000"
 export EVAL_CHECKPOINT="nvidia/Cosmos3-Nano-Policy-DROID"
 
 # --- Native observability (optional; see observability/README.md) ---
-# When PROMETHEUS_PUSHGATEWAY_URL is set, the launcher attaches the sample-side
-# PrometheusCallback so trainer metrics (loss, step time, iteration) push to a
-# Prometheus Pushgateway -> Amazon Managed Prometheus, unified with the HyperPod
-# observability addon's GPU/DCGM metrics in Grafana. Unset = default path (no-op).
-# export PROMETHEUS_PUSHGATEWAY_URL="http://prometheus-pushgateway.observability.svc:9091"
+# Two independent ways to land trainer metrics (loss, step time, iteration) in
+# Amazon Managed Prometheus, unified with the HyperPod observability addon's
+# GPU/DCGM metrics in Grafana. Set AT MOST one (or both); unset = default no-op.
+#
+# Path A — Pushgateway (PrometheusCallback). Requires a Pushgateway + a scrape
+# job on the addon central collector (observability/pushgateway.yaml + runbook):
+# export PROMETHEUS_PUSHGATEWAY_URL="http://prometheus-pushgateway.cosmos3-obs.svc:9091"
+#
+# Path B — OTLP direct to the addon collector's OTLP receiver (OTLPCallback).
+# No Pushgateway, no collector-config edit (more durable across addon upgrades):
+# export OTEL_EXPORTER_OTLP_ENDPOINT="http://hyperpod-observability-central-collector.hyperpod-observability.svc:4317"
+# export OTEL_EXPORTER_OTLP_PROTOCOL="grpc"   # grpc (4317) or http (4318)
+#
 # export PROMETHEUS_JOB_NAME="cosmos3"
 # export PROMETHEUS_EVERY_N="1"
