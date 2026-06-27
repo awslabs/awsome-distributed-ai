@@ -322,7 +322,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "HEADLINE saturation signal: DCGM_FI_PROF_SM_ACTIVE (fraction of time SMs were active). This is the trustworthy GPU-saturation metric. MFU is intentionally NOT shown (under validation).",
+      "description": "HEADLINE saturation signal: DCGM_FI_PROF_GR_ENGINE_ACTIVE (fraction of time the graphics/compute engine was active). This is the trustworthy GPU-saturation metric emitted by the HyperPod observability addon's DCGM exporter. MFU is intentionally NOT shown (under validation).",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -380,13 +380,13 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "DCGM_FI_PROF_SM_ACTIVE",
+          "expr": "DCGM_FI_PROF_GR_ENGINE_ACTIVE",
           "legendFormat": "{{Hostname}} gpu{{gpu}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "SM active (saturation headline)",
+      "title": "GR engine active (saturation headline)",
       "type": "timeseries"
     },
     {
@@ -597,7 +597,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Interconnect traffic: PCIe TX/RX (DCGM_FI_PROF_PCIE_TX_BYTES / _RX_BYTES) and NVLink TX/RX (DCGM_FI_PROF_NVLINK_TX_BYTES / _RX_BYTES). Rates per second across all GPUs.",
+      "description": "Interconnect traffic: PCIe TX/RX (DCGM_FI_PROF_PCIE_TX_BYTES / _RX_BYTES). Rates per second across all GPUs. (NVLink counters are not emitted by the HyperPod addon's DCGM exporter, so only PCIe is shown.)",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -665,31 +665,9 @@
           "legendFormat": "PCIe RX",
           "range": true,
           "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(DCGM_FI_PROF_NVLINK_TX_BYTES[5m]))",
-          "legendFormat": "NVLink TX",
-          "range": true,
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(DCGM_FI_PROF_NVLINK_RX_BYTES[5m]))",
-          "legendFormat": "NVLink RX",
-          "range": true,
-          "refId": "D"
         }
       ],
-      "title": "Interconnect traffic (PCIe / NVLink)",
+      "title": "Interconnect traffic (PCIe)",
       "type": "timeseries"
     }
   ]
