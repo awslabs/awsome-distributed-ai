@@ -147,6 +147,12 @@ action_policy_public_lerobot = LazyDict(
                             max_action_dim="${model.config.max_action_dim}",
                             cfg_dropout_rate=0.1,
                             tokenizer_config="${model.config.vlm_config.tokenizer}",
+                            # Episode-shuffle stream (upstream grad-norm fix): rank x worker
+                            # episode-order-shuffled, sequential-within-episode. A SequentialSampler
+                            # over the map-style dataset would feed every rank the same overlapping
+                            # windows -> unstable grad-norm. See public_lerobot_sft_dataset.py.
+                            iterable_shuffle=True,
+                            episode_shuffle_seed=42,
                         ),
                     ),
                 ),
