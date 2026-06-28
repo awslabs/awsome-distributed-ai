@@ -937,7 +937,7 @@
             "showPoints": "never",
             "spanNulls": true
           },
-          "unit": "decmbytes"
+          "unit": "bytes"
         },
         "overrides": []
       },
@@ -967,7 +967,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "DCGM_FI_DEV_FB_USED / 1024",
+          "expr": "DCGM_FI_DEV_FB_USED * 1048576",
           "legendFormat": "{{Hostname}} gpu{{gpu}}",
           "range": true,
           "refId": "A"
