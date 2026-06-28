@@ -103,7 +103,6 @@ spec:
                 - { name: IMAGINAIRE_OUTPUT_ROOT, value: "/fsx/results/${RUN_ID}/out" }
                 - { name: PYTHONHASHSEED,     value: "42" }
                 # Optional native-observability bridge (empty unless set in env_vars); see observability/README.md
-                - { name: PROMETHEUS_PUSHGATEWAY_URL, value: "${PROMETHEUS_PUSHGATEWAY_URL}" }
                 - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "${OTEL_EXPORTER_OTLP_ENDPOINT}" }
                 - { name: FI_PROVIDER,        value: "efa" }
                 - { name: FI_EFA_USE_DEVICE_RDMA, value: "1" }

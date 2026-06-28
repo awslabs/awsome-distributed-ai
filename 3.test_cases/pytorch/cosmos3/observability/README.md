@@ -1,72 +1,47 @@
 <!-- Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. -->
 <!-- SPDX-License-Identifier: MIT-0 -->
 
-# Cosmos 3 Observability — Goodput Dashboard & Prerequisites
+# Cosmos 3 Observability — Framework-Metrics Dashboard & Prerequisites
 
 This directory ships a reproducible **goodput metrics harness** for the Cosmos 3
 sample on Amazon SageMaker HyperPod (EKS): a Grafana dashboard plus the steps to
-wire up the two metric sources behind it.
+wire up the cosmos-framework training metrics behind it.
 
 - [`cosmos3-goodput-dashboard.json`](./cosmos3-goodput-dashboard.json) — an
   importable Grafana dashboard model (Amazon Managed Grafana compatible) titled
   **"Cosmos 3 Goodput (AWS HyperPod)"**.
 
-> **Validated on:** both trainer-metrics export paths below were functionally
+> **Validated on:** the OTLP trainer-metrics export path below was functionally
 > validated on a **2× g6.8xlarge HyperPod-EKS cluster (us-east-1)** — DCGM/GPU
-> metrics and both `cosmos3_*` sources were observed together in a single AMP
-> workspace and unified in one Grafana pane.
+> metrics and the `cosmos3_*` framework metrics were observed together in a
+> single AMP workspace and unified in one Grafana pane.
 
-## What you get
+## What this dashboard adds
 
-The dashboard unifies **two metric sources** into two rows, sharing a single
-Prometheus (Amazon Managed Prometheus / AMP) datasource template variable
-(`${DS_PROMETHEUS}`):
+The HyperPod observability addon **already** ships DCGM/GPU dashboards (e.g. the
+built-in **"Cluster"** dashboard) from its DCGM exporter and node exporters.
+What **this** dashboard adds is the **cosmos-framework training metrics** —
+MFU, iteration throughput, gradient norm, sequence packing, tokens-per-step,
+loss and step time — unified with a small GPU correlation strip, all on a single
+Amazon Managed Prometheus (AMP) datasource template variable (`${DS_PROMETHEUS}`).
 
-| Row | Source | Metrics → Panels |
+| Section | Source | Metrics → Panels |
 | --- | --- | --- |
-| **Trainer** | Shipped callbacks (see [How trainer metrics reach AMP](#how-trainer-metrics-reach-amp)) → AMP | `cosmos3_loss` (loss), `cosmos3_step_time_seconds` (step time), `cosmos3_iteration` (stat) |
-| **GPU / infra** | HyperPod observability addon (DCGM exporter + node exporters) → AMP | `DCGM_FI_PROF_SM_ACTIVE` (saturation headline), `DCGM_FI_DEV_GPU_UTIL`, `DCGM_FI_DEV_FB_USED`, `DCGM_FI_DEV_POWER_USAGE`, PCIe/NVLink traffic |
+| **Trainer (cosmos-framework)** *(the differentiator)* | Shipped `OTLPCallback` + the wandb→OTLP bridge → AMP | `cosmos3_loss`, `cosmos3_step_time_seconds`, `cosmos3_iteration`, `cosmos3_mfu_achieved_tflops_per_gpu`, `cosmos3_mfu_h200`/`cosmos3_mfu_h100`, `cosmos3_timer_iter_speed`, `cosmos3_clip_grad_norm_video_global`, `cosmos3_sequencepackingpadding_*`, `cosmos3_data_stats_tokens_avg_num_real_tokens` |
+| **GPU / infra** *(correlation strip)* | HyperPod observability addon (DCGM exporter) → AMP | `DCGM_FI_PROF_GR_ENGINE_ACTIVE`, `DCGM_FI_DEV_GPU_UTIL`, `DCGM_FI_DEV_FB_USED`, `DCGM_FI_DEV_POWER_USAGE` |
 
-> **Saturation headline = `DCGM_FI_PROF_SM_ACTIVE`.** This is the trustworthy
-> GPU-saturation signal and is the headline panel. **MFU is intentionally NOT
-> shown** — it is still under validation (an open investigation), so we don't
-> report a number we can't yet stand behind.
+## How framework metrics reach AMP (OTLP)
 
-## How trainer metrics reach AMP
+The trainer metrics are emitted by the cosmos-framework callbacks and exported
+to AMP via **OpenTelemetry OTLP**, straight into the HyperPod observability
+addon's OTLP receiver (which is already wired into the same remote-write→AMP
+pipeline). No Pushgateway, no collector-config edit — durable across addon
+upgrades. The OpenTelemetry deps (`opentelemetry-sdk` + OTLP grpc/http
+exporters) are already baked into the sample Dockerfile.
 
-The trainer metrics (`cosmos3_loss`, `cosmos3_step_time_seconds`,
-`cosmos3_iteration`) are emitted by the **shipped callbacks** and activated by
-env vars in the launcher (see [`env_vars.example`](../env_vars.example)). There
-are **two validated paths** to land them in AMP, unified with the addon's
-DCGM/GPU metrics.
-
-> **Important:** callback metrics do **not** reach AMP automatically. The
-> HyperPod observability addon's central collector keeps a **fixed** scrape job
-> set (node-exporter, dcgm-exporter, kube-state-metrics, training-operator) and
-> does **not** scrape arbitrary services. You must use one of the paths below.
-
-| | **Path B — OTLP direct** *(recommended default)* | **Path A — Pushgateway** *(alternative)* |
-| --- | --- | --- |
-| Callback | `OTLPCallback` | `PrometheusCallback` |
-| Activation env | `OTEL_EXPORTER_OTLP_ENDPOINT` | `PROMETHEUS_PUSHGATEWAY_URL` |
-| Extra deploy | none | `observability/pushgateway.yaml` |
-| Edit managed addon? | **No** | **Yes** — add a scrape job to the central-collector ConfigMap |
-| Durability | survives addon upgrades | fragile — addon reconcile/upgrade can revert the edit |
-| Use when | addon exposes an OTLP receiver (default) | no OTLP receiver available |
-
-Optional env for either path: `PROMETHEUS_JOB_NAME` (default `cosmos3`),
-`PROMETHEUS_EVERY_N` (push/export every N steps).
-
-### Path B — OTLP direct (recommended default)
-
-The addon's central collector **already** exposes an OTLP receiver wired into
-the same remote-write→AMP pipeline. No Pushgateway, no collector-config edit —
-this is more durable across addon upgrades. The OpenTelemetry deps
-(`opentelemetry-sdk` + OTLP grpc/http exporters) are already baked into the
-sample Dockerfile.
+Set a single env var on the training pod / job spec to enable everything:
 
 ```bash
-# on the training pod / job spec
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://hyperpod-otel-collector.hyperpod-observability.svc:4317"
 export OTEL_EXPORTER_OTLP_PROTOCOL="grpc"   # grpc (4317) or http (4318)
 ```
@@ -74,47 +49,42 @@ export OTEL_EXPORTER_OTLP_PROTOCOL="grpc"   # grpc (4317) or http (4318)
 The OTLP receiver lives in the `hyperpod-observability` namespace as service
 `hyperpod-otel-collector`, ports `4317` (grpc) / `4318` (http).
 
-### Path A — Pushgateway (alternative)
+Setting `OTEL_EXPORTER_OTLP_ENDPOINT` activates **three** things in lockstep
+(all gated on that one env var; the default path is untouched):
 
-1. Deploy the shipped Pushgateway (Deployment + Service in namespace
-   `cosmos3-obs`, service `pushgateway:9091`):
+1. **`OTLPCallback`** — exports the three core trainer scalars (loss, step time,
+   iteration) directly to the OTLP receiver.
+2. **The wandb→OTLP bridge** — wraps `wandb.log` so every numeric scalar the
+   framework callbacks log (MFU, throughput, grad-norm, sequence packing,
+   data-stats, ...) is mirrored to OTLP gauges too.
+3. **The MFU + sequence-packing framework callbacks** — enabled in the
+   experiment so those richer metrics are actually produced. (`iter_speed` and
+   `grad_clip` are already enabled in the experiment.)
 
-   ```bash
-   kubectl apply -f observability/pushgateway.yaml
-   ```
+> **Overhead note:** enabling `MFUCallback` adds minor per-step FLOPs-accounting
+> overhead. It is gated on observability being on, so the default path pays
+> nothing.
 
-2. Point the training pods at it:
+Optional env: `PROMETHEUS_JOB_NAME` (OTLP `service.name`, default `cosmos3`) and
+`PROMETHEUS_EVERY_N` (export every N steps).
 
-   ```bash
-   export PROMETHEUS_PUSHGATEWAY_URL="http://pushgateway.cosmos3-obs.svc:9091"
-   ```
+### MFU peak-TFLOPS (`COSMOS3_PEAK_TFLOPS`)
 
-3. **Required glue:** add a scrape job so the addon's **central** collector
-   scrapes the Pushgateway. Edit the `hyperpod-observability-central-collector-config`
-   ConfigMap's `collector.yaml`, append the following under `scrape_configs:`,
-   then restart `deploy/hyperpod-observability-central-collector`:
+The framework's `MFUCallback` defaults its hardware target to H100's peak
+(989 TFLOPS) on non-Blackwell accelerators, which is the **wrong denominator on
+p5en / H200** and skews the MFU ratio. Set the correct H200 peak (per precision)
+so the ratio is computed correctly:
 
-   ```yaml
-           - job_name: cosmos3-pushgateway
-             scrape_interval: 15s
-             honor_labels: true
-             kubernetes_sd_configs:
-               - role: service
-             relabel_configs:
-               - action: keep
-                 regex: pushgateway
-                 source_labels:
-                   - __meta_kubernetes_service_name
-               - target_label: cluster_name
-                 replacement: <your-cluster-name>
-   ```
+```bash
+export COSMOS3_PEAK_TFLOPS="1979"   # H200 peak TFLOPS; set per precision
+```
 
-> **Downside (be honest):** editing the addon's **managed** ConfigMap is fragile
-> — an addon upgrade/reconcile can revert it. Prefer Path B if you want to avoid
-> editing managed resources.
+When set, the MFU ratio series is exported as `cosmos3_mfu_h200`; otherwise the
+framework default `cosmos3_mfu_h100` is used. The dashboard's
+**"Model FLOPs Utilization"** panel queries both, so whichever exists is shown.
 
-**Fallback (no gateway, no OTLP):** run with `wandb_mode=offline` — the same
-trainer metrics are captured locally for later inspection.
+**Fallback (no OTLP receiver available):** run with `wandb_mode=offline` — the
+same metrics are captured locally for later inspection.
 
 ## Prerequisites & setup
 
@@ -145,18 +115,18 @@ HyperPod managed auto-resume relies on the Kubeflow Training Operator
 (**1.7.0 / 1.8.0 / 1.8.1**). This is already a sample prerequisite — see the
 [hyperpod-eks README](../hyperpod-eks/README.md) for the install/verify steps.
 
-### 3. Activate trainer metrics
+### 3. Activate framework metrics
 
-Pick **Path B (OTLP, recommended)** or **Path A (Pushgateway)** above and set
-the corresponding env var(s) on the training pod. See
-[How trainer metrics reach AMP](#how-trainer-metrics-reach-amp).
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` (and optionally `COSMOS3_PEAK_TFLOPS`) on the
+training pod — see [How framework metrics reach AMP (OTLP)](#how-framework-metrics-reach-amp-otlp).
 
 ### 4. Import the dashboard into Amazon Managed Grafana
 
 1. Open your Amazon Managed Grafana workspace → **Dashboards → New → Import**.
 2. Upload [`cosmos3-goodput-dashboard.json`](./cosmos3-goodput-dashboard.json).
 3. When prompted for the `DS_PROMETHEUS` input, select your **AMP** datasource.
-4. Save. The two rows populate once both metric sources are flowing.
+4. Save. The framework section populates once a training job is running with the
+   OTLP endpoint set; the GPU strip populates from the addon's DCGM exporter.
 
 ### 5. Experiment tracking (out of scope here)
 

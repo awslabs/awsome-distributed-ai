@@ -101,14 +101,12 @@ COPY src /workspace/cosmos3-aws/src
 COPY toml /workspace/cosmos3-aws/toml
 ENV PYTHONPATH=/workspace/cosmos3-aws/src
 
-# Observability deps for the optional metric-export callbacks (no-op unless their
-# env var is set at launch; see observability/README.md). Installed into the
-# framework venv so both export paths resolve:
-#   - prometheus_client : PrometheusCallback (Pushgateway path)
-#   - opentelemetry-*   : OTLPCallback (OTLP-to-collector path)
+# Observability deps for the optional OTLP metric-export path (no-op unless
+# OTEL_EXPORTER_OTLP_ENDPOINT is set at launch; see observability/README.md).
+# Installed into the framework venv so the OTLPCallback + wandb->OTLP bridge
+# resolve their OpenTelemetry exporters:
 RUN cd /workspace/cosmos-framework && \
     uv pip install --python .venv \
-      prometheus_client \
       opentelemetry-sdk \
       opentelemetry-exporter-otlp-proto-grpc \
       opentelemetry-exporter-otlp-proto-http

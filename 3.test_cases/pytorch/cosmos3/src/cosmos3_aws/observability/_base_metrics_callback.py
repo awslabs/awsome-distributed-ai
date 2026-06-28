@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: MIT-0
 """Shared base for cosmos-framework metrics-export callbacks.
 
-Holds the logic common to every metrics exporter (Prometheus Pushgateway,
-OpenTelemetry OTLP, ...): rank resolution, ``every_n`` gating, per-step time
-delta and loss extraction. Concrete subclasses only implement ``_emit``.
+Holds the logic common to a metrics exporter (currently the OpenTelemetry OTLP
+path): rank resolution, ``every_n`` gating, per-step time delta and loss
+extraction. Concrete subclasses only implement ``_emit``.
 
 Importable WITHOUT ``cosmos_framework`` present (the base class is imported
 defensively). Observability failures must never crash the training loop.

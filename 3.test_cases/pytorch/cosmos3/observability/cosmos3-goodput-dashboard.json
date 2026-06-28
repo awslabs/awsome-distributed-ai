@@ -104,7 +104,7 @@
       },
       "id": 100,
       "panels": [],
-      "title": "Trainer (cosmos3 PrometheusCallback)",
+      "title": "Trainer (cosmos-framework)",
       "type": "row"
     },
     {
@@ -112,7 +112,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Training loss reported by the cosmos3 PrometheusCallback (gauge cosmos3_loss).",
+      "description": "Training loss reported by the cosmos-framework (gauge cosmos3_loss).",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -141,7 +141,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 8,
         "x": 0,
         "y": 1
       },
@@ -209,7 +209,7 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 12,
+        "x": 8,
         "y": 1
       },
       "id": 2,
@@ -268,8 +268,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 4,
-        "x": 20,
+        "w": 8,
+        "x": 16,
         "y": 1
       },
       "id": 3,
@@ -305,24 +305,11 @@
       "type": "stat"
     },
     {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 9
-      },
-      "id": 200,
-      "panels": [],
-      "title": "GPU / infra (HyperPod observability addon, DCGM exporter)",
-      "type": "row"
-    },
-    {
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "HEADLINE saturation signal: DCGM_FI_PROF_GR_ENGINE_ACTIVE (fraction of time the graphics/compute engine was active). This is the trustworthy GPU-saturation metric emitted by the HyperPod observability addon's DCGM exporter. MFU is intentionally NOT shown (under validation).",
+      "description": "Achieved TFLOPS per GPU from the cosmos-framework MFU callback (cosmos3_mfu_achieved_tflops_per_gpu).",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -345,9 +332,473 @@
             "showPoints": "never",
             "spanNulls": true
           },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 9
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "cosmos3_mfu_achieved_tflops_per_gpu",
+          "legendFormat": "TFLOPS/GPU",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Achieved TFLOPS per GPU",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Model FLOPs Utilization ratio from the cosmos-framework MFU callback. The series name depends on the peak-TFLOPS override (cosmos3_mfu_h200 when COSMOS3_PEAK_TFLOPS sets the H200 peak; cosmos3_mfu_h100 otherwise). Both are queried so whichever exists is shown.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "percentunit",
           "max": 1,
-          "min": 0,
-          "unit": "percentunit"
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 9
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "cosmos3_mfu_h200",
+          "legendFormat": "MFU (H200)",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "cosmos3_mfu_h100",
+          "legendFormat": "MFU (H100)",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Model FLOPs Utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Training iteration throughput from the cosmos-framework iter_speed callback (cosmos3_timer_iter_speed).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 9
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "cosmos3_timer_iter_speed",
+          "legendFormat": "iter/s",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Iteration throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Global gradient L2 norm from the cosmos-framework grad_clip callback (cosmos3_clip_grad_norm_video_global).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 17
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "cosmos3_clip_grad_norm_video_global",
+          "legendFormat": "grad norm",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Gradient norm",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Per-batch packed token lengths from the cosmos-framework sequence-packing callback.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 17
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "cosmos3_sequencepackingpadding_max_full_len_video_batch",
+          "legendFormat": "full len (video)",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "cosmos3_sequencepackingpadding_max_causal_len_video_batch",
+          "legendFormat": "causal len (video)",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "cosmos3_sequencepackingpadding_max_full_len_image_batch",
+          "legendFormat": "full len (image)",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "cosmos3_sequencepackingpadding_max_causal_len_image_batch",
+          "legendFormat": "causal len (image)",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Sequence packing (token lengths)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Average number of real (non-padding) tokens per step from the cosmos-framework data-stats callback (cosmos3_data_stats_tokens_avg_num_real_tokens).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 17
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "cosmos3_data_stats_tokens_avg_num_real_tokens",
+          "legendFormat": "real tokens",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Tokens per step",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 25
+      },
+      "id": 200,
+      "panels": [],
+      "title": "GPU / infra (HyperPod observability addon, DCGM exporter)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Fraction of time the graphics/compute engine was active (DCGM_FI_PROF_GR_ENGINE_ACTIVE), the trustworthy GPU-saturation signal emitted by the HyperPod observability addon's DCGM exporter.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "percentunit",
+          "max": 1,
+          "min": 0
         },
         "overrides": []
       },
@@ -355,7 +806,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 10
+        "y": 26
       },
       "id": 4,
       "options": {
@@ -386,7 +837,7 @@
           "refId": "A"
         }
       ],
-      "title": "GR engine active (saturation headline)",
+      "title": "GR engine active",
       "type": "timeseries"
     },
     {
@@ -394,7 +845,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "GPU utilization % (DCGM_FI_DEV_GPU_UTIL). Coarser than SM active; shown for reference.",
+      "description": "GPU utilization % (DCGM_FI_DEV_GPU_UTIL). Coarser than GR engine active; shown for reference.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -417,9 +868,9 @@
             "showPoints": "never",
             "spanNulls": true
           },
+          "unit": "percent",
           "max": 100,
-          "min": 0,
-          "unit": "percent"
+          "min": 0
         },
         "overrides": []
       },
@@ -427,7 +878,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 10
+        "y": 26
       },
       "id": 5,
       "options": {
@@ -492,9 +943,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 12,
         "x": 0,
-        "y": 18
+        "y": 34
       },
       "id": 6,
       "options": {
@@ -559,9 +1010,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 18
+        "w": 12,
+        "x": 12,
+        "y": 34
       },
       "id": 7,
       "options": {
@@ -590,84 +1041,6 @@
         }
       ],
       "title": "GPU power",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Interconnect traffic: PCIe TX/RX (DCGM_FI_PROF_PCIE_TX_BYTES / _RX_BYTES). Rates per second across all GPUs. (NVLink counters are not emitted by the HyperPod addon's DCGM exporter, so only PCIe is shown.)",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": true
-          },
-          "unit": "Bps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 18
-      },
-      "id": 8,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(DCGM_FI_PROF_PCIE_TX_BYTES[5m]))",
-          "legendFormat": "PCIe TX",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(DCGM_FI_PROF_PCIE_RX_BYTES[5m]))",
-          "legendFormat": "PCIe RX",
-          "range": true,
-          "refId": "B"
-        }
-      ],
-      "title": "Interconnect traffic (PCIe)",
       "type": "timeseries"
     }
   ]

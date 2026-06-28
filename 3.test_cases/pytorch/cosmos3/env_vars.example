@@ -88,18 +88,16 @@ export INVOCATION_PORT="8000"
 export EVAL_CHECKPOINT="nvidia/Cosmos3-Nano-Policy-DROID"
 
 # --- Native observability (optional; see observability/README.md) ---
-# Two independent ways to land trainer metrics (loss, step time, iteration) in
-# Amazon Managed Prometheus, unified with the HyperPod observability addon's
-# GPU/DCGM metrics in Grafana. Set AT MOST one (or both); unset = default no-op.
+# Land cosmos-framework trainer metrics in Amazon Managed Prometheus, unified
+# with the HyperPod observability addon's GPU/DCGM metrics in Grafana. Setting
+# the OTLP endpoint activates the OTLPCallback, installs the wandb->OTLP bridge,
+# and enables the MFU + sequence-packing framework callbacks. Unset = no-op.
 #
-# Path A — Pushgateway (PrometheusCallback). Requires a Pushgateway + a scrape
-# job on the addon central collector (observability/pushgateway.yaml + runbook):
-# export PROMETHEUS_PUSHGATEWAY_URL="http://prometheus-pushgateway.cosmos3-obs.svc:9091"
-#
-# Path B — OTLP direct to the addon collector's OTLP receiver (OTLPCallback).
-# No Pushgateway, no collector-config edit (more durable across addon upgrades):
+# OTLP direct to the addon collector's OTLP receiver (no Pushgateway, no
+# collector-config edit):
 # export OTEL_EXPORTER_OTLP_ENDPOINT="http://hyperpod-otel-collector.hyperpod-observability.svc:4317"
 # export OTEL_EXPORTER_OTLP_PROTOCOL="grpc"   # grpc (4317) or http (4318)
 #
-# export PROMETHEUS_JOB_NAME="cosmos3"
-# export PROMETHEUS_EVERY_N="1"
+# export PROMETHEUS_JOB_NAME="cosmos3"   # service.name / OTLP job label
+# export PROMETHEUS_EVERY_N="1"          # export every N steps
+# export COSMOS3_PEAK_TFLOPS="1979"      # H200 peak TFLOPS for the MFU ratio (set per precision)

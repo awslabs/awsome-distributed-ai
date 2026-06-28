@@ -3,10 +3,11 @@
 """Cosmos-framework callback that exports trainer metrics (loss, step time,
 iteration) via OpenTelemetry OTLP.
 
-This is the second metrics-export path (alongside :class:`PrometheusCallback`):
-metrics reach the HyperPod observability addon's OTLP receiver directly, with no
-Pushgateway and no collector-config edit. A ``PeriodicExportingMetricReader``
-handles export in the background, so :meth:`_emit` only updates gauge values.
+Metrics reach the HyperPod observability addon's OTLP receiver directly, with no
+Pushgateway and no collector-config edit, where they are remote-written into
+Amazon Managed Prometheus and unified with GPU/DCGM metrics in Grafana. A
+``PeriodicExportingMetricReader`` handles export in the background, so
+:meth:`_emit` only updates gauge values.
 
 The module is importable WITHOUT ``opentelemetry`` installed (the SDK is imported
 defensively) and degrades to a no-op when the SDK or an OTLP endpoint is missing.

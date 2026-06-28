@@ -57,35 +57,55 @@ def main() -> None:
     config = load_experiment_from_toml(args.sft_toml, extra_overrides=args.opts)
     args.config = args.sft_toml  # telemetry alias (mirrors framework train.py)
 
-    # Optional native-observability bridges (both no-op when their env var is
-    # absent, so the default path is unchanged). Two independent ways to land
-    # trainer metrics (loss, step time, iteration) in Amazon Managed Prometheus,
-    # unified with the HyperPod observability addon's GPU/DCGM metrics in Grafana:
-    #   - PROMETHEUS_PUSHGATEWAY_URL -> PrometheusCallback (push to a Pushgateway
-    #     that the addon central collector scrapes; requires a scrape job).
-    #   - OTEL_EXPORTER_OTLP_ENDPOINT -> OTLPCallback (push straight to the addon
-    #     collector's OTLP receiver; no Pushgateway, no collector-config edit).
-    # See observability/README.md for the tradeoffs.
-    _extra_callbacks: dict[str, dict] = {}
-    _pushgateway_url = os.environ.get("PROMETHEUS_PUSHGATEWAY_URL")
-    if _pushgateway_url:
-        _extra_callbacks["prometheus"] = dict(
-            _target_="cosmos3_aws.observability.prometheus_callback.PrometheusCallback",
-            pushgateway_url=_pushgateway_url,
-            job_name=os.environ.get("PROMETHEUS_JOB_NAME", "cosmos3"),
-            every_n=int(os.environ.get("PROMETHEUS_EVERY_N", "1")),
-        )
+    # Optional native-observability bridge (no-op when its env var is absent, so
+    # the default path is unchanged). Setting OTEL_EXPORTER_OTLP_ENDPOINT lands
+    # the cosmos-framework training metrics in Amazon Managed Prometheus via the
+    # HyperPod observability addon's OTLP receiver, unified with the addon's
+    # GPU/DCGM metrics in Grafana. Enabling it does three things in lockstep:
+    #   - attaches OTLPCallback (loss / step time / iteration straight to the
+    #     addon collector's OTLP receiver; no Pushgateway, no collector edit);
+    #   - installs the wandb->OTLP bridge so EVERY numeric scalar the framework
+    #     callbacks log via wandb (MFU, throughput, grad-norm, packing, ...) is
+    #     mirrored to OTLP gauges too;
+    #   - enables the MFU + sequence-packing framework callbacks that produce
+    #     those richer metrics (iter_speed and grad_clip are already enabled in
+    #     the experiment, so they are NOT re-added here).
+    # See observability/README.md for details.
     _otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
     if _otlp_endpoint:
+        from omegaconf import OmegaConf
+
+        _job_name = os.environ.get("PROMETHEUS_JOB_NAME", "cosmos3")
+        _every_n = int(os.environ.get("PROMETHEUS_EVERY_N", "1"))
+        _protocol = os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
+        _peak_tflops = os.environ.get("COSMOS3_PEAK_TFLOPS")
+
+        _extra_callbacks: dict[str, dict] = {}
         _extra_callbacks["otlp"] = dict(
             _target_="cosmos3_aws.observability.otlp_callback.OTLPCallback",
             endpoint=_otlp_endpoint,
-            job_name=os.environ.get("PROMETHEUS_JOB_NAME", "cosmos3"),
-            every_n=int(os.environ.get("PROMETHEUS_EVERY_N", "1")),
-            protocol=os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc"),
+            job_name=_job_name,
+            every_n=_every_n,
+            protocol=_protocol,
         )
-    if _extra_callbacks:
-        from omegaconf import OmegaConf
+
+        # Enabling MFUCallback adds minor per-step FLOPs-accounting overhead; it
+        # is gated on observability being on, so the default path pays nothing.
+        # OmegaConf interpolation strings (e.g. "${trainer.logging_iter}") can't
+        # be injected into a plain dict post-load, so read the ints directly.
+        _logging_iter = int(config.trainer.logging_iter)
+        _mfu_cb = dict(
+            _target_="cosmos3_aws.observability.cosmos3_mfu_callback.Cosmos3MFUCallback",
+            every_n=_logging_iter,
+            grad_accum_iter=int(getattr(config.trainer, "grad_accum_iter", 1)),
+        )
+        if _peak_tflops is not None:
+            _mfu_cb["peak_tflops"] = float(_peak_tflops)
+        _extra_callbacks["mfu"] = _mfu_cb
+        _extra_callbacks["sequence_packing_padding"] = dict(
+            _target_="cosmos_framework.callbacks.sequence_packing_padding.SequencePackingPadding",
+            every_n=_logging_iter,
+        )
 
         # The loaded config is an OmegaConf node in struct mode (new keys rejected);
         # open it just long enough to attach the observability callback(s).
@@ -93,6 +113,11 @@ def main() -> None:
         for _name, _cb in _extra_callbacks.items():
             config.trainer.callbacks[_name] = _cb
         OmegaConf.set_struct(config.trainer.callbacks, True)
+
+        # Mirror the framework's wandb-logged scalars to OTLP gauges too.
+        from cosmos3_aws.observability.wandb_otlp_bridge import install_wandb_otlp_bridge
+
+        install_wandb_otlp_bridge(endpoint=_otlp_endpoint, job_name=_job_name, protocol=_protocol)
         logging.info(f"Observability callbacks enabled: {list(_extra_callbacks)}")
 
     if args.dryrun:
