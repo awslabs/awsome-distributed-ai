@@ -66,6 +66,71 @@ def _install_fake_wandb(monkeypatch):
     return fake, calls
 
 
+def _install_fake_wandb_with_run(monkeypatch):
+    """Fake wandb that models the real init rebinding.
+
+    Before init: ``wandb.log`` is a module-level pre-init shim. ``wandb.init()``
+    rebinds ``wandb.log`` to the bound method ``run.log`` of a ``Run`` instance
+    (exactly what wandb 0.25 does). The bridge MUST survive this rebinding.
+    """
+    calls = []
+
+    class Run:
+        def log(self, *args, **kwargs):
+            calls.append((args, kwargs))
+
+    fake = types.ModuleType("wandb")
+
+    def _preinit_log(*args, **kwargs):  # pre-init shim; replaced by init
+        calls.append((args, kwargs))
+
+    fake.log = _preinit_log
+    fake.run = None
+
+    # Expose the Run class where the bridge looks for it: wandb.sdk.wandb_run.Run
+    sdk = types.ModuleType("wandb.sdk")
+    wandb_run = types.ModuleType("wandb.sdk.wandb_run")
+    wandb_run.Run = Run
+    sdk.wandb_run = wandb_run
+    fake.sdk = sdk
+
+    def _init(*args, **kwargs):
+        r = Run()
+        fake.run = r
+        fake.log = r.log  # the rebinding that discards a wandb.log monkeypatch
+        return r
+
+    fake.init = _init
+
+    monkeypatch.setitem(sys.modules, "wandb", fake)
+    monkeypatch.setitem(sys.modules, "wandb.sdk", sdk)
+    monkeypatch.setitem(sys.modules, "wandb.sdk.wandb_run", wandb_run)
+    return fake, calls, Run
+
+
+def test_bridge_survives_wandb_init_rebinding(monkeypatch):
+    """The real-world failure: wandb.init() rebinds wandb.log to run.log,
+    discarding a wandb.log monkeypatch. Mirroring must still happen for metrics
+    logged AFTER init (which is when the framework callbacks actually log)."""
+    import cosmos3_aws.observability.wandb_otlp_bridge as mod
+
+    fake_wandb, calls, _Run = _install_fake_wandb_with_run(monkeypatch)
+    meter = _FakeMeter()
+    _force_available(monkeypatch, mod, meter)
+
+    assert mod.install_wandb_otlp_bridge(endpoint="http://otel:4317", job_name="cosmos3") is True
+
+    # Framework calls wandb.init() AFTER the bridge installs.
+    run = fake_wandb.init(mode="offline")
+
+    # A framework callback logs via wandb.log (now == run.log) post-init.
+    fake_wandb.log({"mfu/H200": 0.42, "timer/iter_speed": 1.7})
+
+    # The mirror must have captured these even though wandb.log was rebound.
+    assert meter.gauges["cosmos3_mfu_h200"].values == [0.42]
+    assert meter.gauges["cosmos3_timer_iter_speed"].values == [1.7]
+
+
 def _force_available(monkeypatch, mod, meter):
     """Make install_wandb_otlp_bridge take the success path with a fake meter."""
     monkeypatch.setattr(mod, "_OTEL_AVAILABLE", True)

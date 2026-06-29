@@ -13,6 +13,18 @@ Prometheus -- without editing the framework -- this module monkeypatches
 ``wandb.log`` so each numeric scalar it receives is ALSO ``gauge.set()`` onto an
 OTLP MeterProvider pointed at the HyperPod observability addon's OTLP receiver.
 
+SURVIVING ``wandb.init()`` (load-bearing)
+-----------------------------------------
+The bridge installs BEFORE the framework calls ``wandb.init()``. But
+``wandb.init(force=True, ...)`` rebinds the module-level ``wandb.log`` to the
+freshly-created run's bound method ``run.log`` -- which would DISCARD a patch
+applied only to ``wandb.log``. Since the framework callbacks log AFTER init,
+none of their metrics would be mirrored (verified live on p5en: only the
+OTLPCallback's own gauges reached the sink). The fix wraps
+``wandb.sdk.wandb_run.Run.log`` at the CLASS level too: because post-init
+``wandb.log`` IS ``run.log``, the class-level wrap survives re-init. The
+module-level patch is kept for any pre-init logging.
+
 This is a documented, sample-side runtime bridge, in the same spirit as
 ``norm_monitor_guard.py`` (a framework monkeypatch installed via
 ``sitecustomize.py``). It is importable WITHOUT ``wandb`` or ``opentelemetry``
@@ -110,12 +122,9 @@ def install_wandb_otlp_bridge(endpoint: str, job_name: str = "cosmos3", protocol
         logger.warning("wandb->OTLP bridge: meter build failed (bridge disabled): %s", exc)
         return False
 
-    _original_log = wandb.log
-
-    def _logged_with_mirror(*args, **kwargs):
-        # Mirror first (best-effort), then always call the real wandb.log.
+    def _mirror(data) -> None:
+        # Mirror numeric scalars to OTLP gauges (best-effort, never raises).
         try:
-            data = args[0] if args else kwargs.get("data")
             if isinstance(data, dict):
                 for k, v in data.items():
                     # numeric scalars only; bool is a subclass of int -> exclude it
@@ -129,9 +138,39 @@ def install_wandb_otlp_bridge(endpoint: str, job_name: str = "cosmos3", protocol
                     gauge.set(v)
         except Exception as exc:  # a mirror failure must never break real logging
             logger.debug("wandb->OTLP bridge: mirror failed (ignored): %s", exc)
+
+    # Wrap the module-level ``wandb.log`` for any pre-init logging.
+    _original_log = wandb.log
+
+    def _logged_with_mirror(*args, **kwargs):
+        _mirror(args[0] if args else kwargs.get("data"))
         return _original_log(*args, **kwargs)
 
     wandb.log = _logged_with_mirror
+
+    # CRITICAL: ``wandb.init()`` rebinds the module-level ``wandb.log`` to the
+    # bound method ``run.log`` of the freshly-created Run, which DISCARDS the
+    # module-level monkeypatch above. The framework's callbacks (MFU, iter_speed,
+    # sequence-packing, grad_clip, ...) all log AFTER ``wandb.init()``, so without
+    # also wrapping at the class level their metrics would never be mirrored.
+    # Wrapping ``Run.log`` on the class survives re-init because the rebound
+    # ``wandb.log`` IS ``run.log`` -> our wrapped class method. Idempotent via a
+    # sentinel attribute so repeated installs don't stack wrappers.
+    try:
+        from wandb.sdk.wandb_run import Run as _WandbRun
+
+        if not getattr(_WandbRun.log, "_cosmos3_otlp_wrapped", False):
+            _original_run_log = _WandbRun.log
+
+            def _run_log_with_mirror(self, *args, **kwargs):
+                _mirror(args[0] if args else kwargs.get("data"))
+                return _original_run_log(self, *args, **kwargs)
+
+            _run_log_with_mirror._cosmos3_otlp_wrapped = True  # type: ignore[attr-defined]
+            _WandbRun.log = _run_log_with_mirror  # type: ignore[assignment]
+    except Exception as exc:  # Run class unavailable / wandb internals shifted -> module-level patch stands
+        logger.warning("wandb->OTLP bridge: Run.log wrap skipped (%s); module-level wandb.log patch still active.", exc)
+
     _installed = True
     logger.info("wandb->OTLP bridge installed (endpoint=%s, job=%s, protocol=%s).", endpoint, job_name, protocol)
     return True

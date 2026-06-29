@@ -86,6 +86,14 @@ framework default `cosmos3_mfu_h100` is used. The dashboard's
 **Fallback (no OTLP receiver available):** run with `wandb_mode=offline` — the
 same metrics are captured locally for later inspection.
 
+> **Warm-up thresholds (short runs).** The framework's `MFUCallback` skips its
+> first few iterations (`hit_thres=5`) before it begins reporting, and
+> `IterSpeed` only logs `timer/iter_speed` after **50** iterations
+> (`hit_thres=50`). A short smoke (≤ ~30 iters) will surface MFU, sequence
+> packing and grad-norm but **not** `cosmos3_timer_iter_speed` — run ≥ 51
+> iterations to see it. With `wandb_mode=offline`, all of these are still
+> captured to the local wandb datastore regardless.
+
 ## Prerequisites & setup
 
 ### 1. Enable the HyperPod observability addon (Terraform)
