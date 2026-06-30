@@ -30,7 +30,28 @@ Amazon Managed Prometheus (AMP) datasource template variable (`${DS_PROMETHEUS}`
 | **Trainer (cosmos-framework)** *(the differentiator)* | Shipped `OTLPCallback` + the wandb→OTLP bridge → AMP | `cosmos3_loss`, `cosmos3_step_time_seconds`, `cosmos3_iteration`, `cosmos3_mfu_achieved_tflops_per_gpu`, `cosmos3_mfu_h200`/`cosmos3_mfu_h100`, `cosmos3_timer_iter_speed`, `cosmos3_clip_grad_norm_video_global`, `cosmos3_sequencepackingpadding_*`, `cosmos3_data_stats_tokens_avg_num_real_tokens` |
 | **GPU / infra** *(correlation strip)* | HyperPod observability addon (DCGM exporter) → AMP | `DCGM_FI_PROF_GR_ENGINE_ACTIVE`, `DCGM_FI_DEV_GPU_UTIL`, `DCGM_FI_DEV_FB_USED`, `DCGM_FI_DEV_POWER_USAGE` |
 
+The two panes below are an illustrative capture from a single run, not a benchmark
+result to read numbers off of. The first pane is the **Trainer (cosmos-framework)**
+view — training loss, step time, achieved TFLOPS per GPU, Model FLOPs Utilization
+(here against the framework's default per-GPU peak), iteration throughput, gradient
+norm, and sequence-packing token lengths — all bridged from the framework callbacks:
+
+![Grafana Trainer pane for the cosmos-framework: panels for training loss, step time, current iteration, achieved TFLOPS per GPU, Model FLOPs Utilization, iteration throughput, gradient norm, sequence packing token lengths, and tokens per step.](./img/cosmos3-grafana-trainer.png)
+
+The second pane is the **GPU / infra** view from the HyperPod observability addon
+(via the DCGM exporter) — graphics-engine-active, GPU utilization, framebuffer (HBM)
+used, and GPU power, reported per GPU so an idle or under-driven device is visible:
+
+![Grafana GPU and infrastructure pane from the HyperPod observability addon: panels for GR engine active, GPU utilization, framebuffer (HBM) used, and GPU power, shown per GPU.](./img/cosmos3-grafana-gpu.png)
+
 ## How framework metrics reach AMP (OTLP)
+
+The diagram below traces both metric sources into a single AMP workspace and one
+Grafana pane. The cosmos-framework callbacks reach AMP through the sample's OTLP
+callback and wandb→OTLP bridge, while the add-on's DCGM exporter contributes the
+GPU/infra metrics — the two converge on the add-on's existing remote-write pipeline.
+
+![Cosmos 3 observability data flow: framework callbacks and the wandb-to-OTLP bridge export cosmos3_* metrics over OTLP to the HyperPod observability add-on's collector, the DCGM exporter contributes GPU metrics, and both remote-write into Amazon Managed Service for Prometheus, unified in one Amazon Managed Grafana pane.](../diagrams/observability-architecture.drawio.svg)
 
 The trainer metrics are emitted by the cosmos-framework callbacks and exported
 to AMP via **OpenTelemetry OTLP**, straight into the HyperPod observability
