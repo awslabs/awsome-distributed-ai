@@ -2,6 +2,16 @@
 # SPDX-License-Identifier: MIT-0
 
 # Reinforcement-learning Python dependencies for the SLIME image.
+
+# Megatron-LM asserts numpy 1.x at init (slime .../megatron_utils/initialize.py:
+# `assert np.__version__.startswith("1.")`, per NVIDIA/Megatron-LM#1563), but
+# sglang[all] (installed just before this file) pulls in numpy 2.x transitively.
+# Pin numpy < 2 here so this requirements install downgrades it back to 1.x; the
+# later slime/sgl-router installs use --no-deps and do not touch it. Without this
+# the train worker aborts during Megatron init with "Megatron does not support
+# numpy 2.x".
+numpy<2
+
 nltk==3.9.4
 awscli==1.45.26
 pynvml==13.0.1
