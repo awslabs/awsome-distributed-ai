@@ -532,8 +532,10 @@ slime/                                    # 3.test_cases/pytorch/slime
 │   ├── reward-service.yaml              # CPU reward service Deployment + Service
 │   └── data-prep-pod.yaml               # Utility pod for data preparation
 ├── recipe/
-│   ├── run_grpo_qwen3_4b.sh             # GRPO training launcher (Qwen3-4B, colocated)
-│   └── run_grpo_qwen3_30b_a3b.sh        # GRPO training launcher (Qwen3-30B-A3B MoE, disaggregated)
+│   ├── run_grpo_qwen3_4b.sh             # GRPO submit script (Qwen3-4B, colocated)
+│   ├── run_grpo_qwen3_30b_a3b.sh        # GRPO submit script (Qwen3-30B-A3B MoE, disaggregated)
+│   └── launcher/
+│       └── grpo_launch.sh               # Ray job entrypoint: sources the model script, expands MODEL_ARGS, execs train.py
 └── scripts/
     ├── convert_checkpoint.sh            # HF <-> Megatron conversion helper
     └── evaluate.sh                      # Evaluation launcher
