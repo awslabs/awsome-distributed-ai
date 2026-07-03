@@ -522,6 +522,8 @@ slime/                                    # 3.test_cases/pytorch/slime
 ├── env_vars.colocated.example           # Base config: colocated train+rollout, built-in reward
 ├── env_vars.disaggregated.example       # Overlay: reward model on a CPU pool + heavier GRPO
 ├── slime.Dockerfile                     # SLIME + SGLang + Megatron + EFA image
+├── patches/
+│   └── apply_slime_patches.py           # Self-neutralizing in-place fixes for the pinned upstream SLIME checkout (no-op once upstream merges them)
 ├── requirements.txt                     # Pinned Python RL dependencies
 ├── reward_service.Dockerfile            # CPU-only image for the remote reward service
 ├── reward_service/
