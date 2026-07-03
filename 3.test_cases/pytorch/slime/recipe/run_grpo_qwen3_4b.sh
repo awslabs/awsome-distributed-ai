@@ -137,7 +137,13 @@ TRAIN_ARGS=(
     --rollout-num-gpus-per-engine "${ROLLOUT_GPUS_PER_ENGINE}"
 
     --sglang-mem-fraction-static 0.8
-    --sglang-log-level WARN
+    # SGLang forwards this to uvicorn's log_level, whose LOG_LEVELS dict is keyed
+    # by lowercase names only (critical/error/warning/info/debug/trace) with no
+    # "warn" key. Uppercase "WARN" (the original value) raises a KeyError and
+    # uvicorn dies before the rollout HTTP server binds, so the rollout health
+    # check never passes and training hangs before it starts. Use lowercase
+    # "warning" to preserve the original intended verbosity.
+    --sglang-log-level warning
 )
 
 # Submit via Ray job API.
