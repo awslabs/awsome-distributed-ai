@@ -5,11 +5,21 @@
 
 # Megatron-LM asserts numpy 1.x at init (slime .../megatron_utils/initialize.py:
 # `assert np.__version__.startswith("1.")`, per NVIDIA/Megatron-LM#1563), but
-# sglang[all] (installed just before this file) pulls in numpy 2.x transitively.
-# Pin numpy < 2 here so this requirements install downgrades it back to 1.x; the
-# later slime/sgl-router installs use --no-deps and do not touch it. Without this
-# the train worker aborts during Megatron init with "Megatron does not support
-# numpy 2.x".
+# sglang[all] (installed just before this file in slime.Dockerfile) pulls in
+# numpy 2.x transitively. Pin numpy < 2 so this requirements install downgrades
+# it back to 1.x; without it the train worker aborts during Megatron init with
+# "Megatron does not support numpy 2.x". Upstream SLIME's own docker/Dockerfile
+# does the same (`pip install "numpy<2"`), so this mirrors the sanctioned pin.
+#
+# Why 1.x survives to runtime: the only pip steps after this one in the
+# Dockerfile are the slime and sgl-router installs (--no-deps) and
+# ring_flash_attn==0.1.8 (which declares no dependencies), so none of them
+# reintroduce numpy 2.x. If a later step is added that pulls numpy WITHOUT
+# --no-deps, re-pin numpy after it.
+#
+# TODO(numpy<2): remove this pin once MEGATRON_LM_VERSION is bumped to a commit
+# that no longer asserts numpy 1.x (drops the numpy 2.x assert); until then the
+# pin is required.
 numpy<2
 
 nltk==3.9.4
