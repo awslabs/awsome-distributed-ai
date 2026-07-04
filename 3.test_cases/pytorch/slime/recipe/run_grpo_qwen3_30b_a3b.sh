@@ -145,7 +145,17 @@ TRAIN_ARGS=(
     # check never passes and training hangs before it starts. Use lowercase
     # "warning" to preserve the original intended verbosity.
     --sglang-log-level warning
-    --sglang-enable-ep-moe
+    # SGLang 0.5.12 removed the `--enable-ep-moe` flag (expert-parallel MoE is now
+    # selected via the MoE runner backend). Passing the old flag makes SGLang's
+    # argparse reject it, so the rollout engine never starts. Select the triton
+    # MoE runner and set expert parallelism explicitly instead.
+    --sglang-moe-runner-backend triton
+    --sglang-expert-parallel-size "${EP_SIZE}"
+    # On large-HBM GPUs (e.g. B300) SGLang auto-picks a high cuda_graph_max_bs,
+    # which makes CUDA-graph capture extremely slow at startup. Cap it so the
+    # rollout engine comes up in a reasonable time; H200 tolerates the default
+    # but the cap is harmless there.
+    --sglang-cuda-graph-max-bs 8
 )
 
 # Submit via Ray job API.
@@ -163,6 +173,7 @@ ray job submit \
     --runtime-env-json="{
         \"env_vars\": {
             \"PYTHONPATH\": \"/opt/Megatron-LM\",
+            \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
             \"HF_TOKEN\": \"${HF_TOKEN}\",
             \"MODEL_SCRIPT\": \"${MODEL_SCRIPT}\",
             \"TOKENIZERS_PARALLELISM\": \"false\",
