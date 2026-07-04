@@ -259,6 +259,48 @@ _VALIDATE_INJECT = '''def validate_args(args):
     _megatron_validate_args(args)'''
 
 
+def _megatron_probe_is_unguarded() -> bool:
+    """True if the installed Megatron's validate_args still probes the CUDA
+    device eagerly without a torch.cuda.is_available() guard.
+
+    This is the real defect this patch works around. When Megatron guards the
+    probe upstream (the permanent fix), this returns False and the SLIME-side
+    patch self-neutralizes. Locating Megatron via import keeps this robust to
+    the install path. If Megatron cannot be located or its arguments module has
+    been restructured beyond recognition, we conservatively assume the probe is
+    still unguarded (better a harmless is_available()-gated guard than a crash).
+    """
+    try:
+        import importlib.util
+
+        spec = importlib.util.find_spec("megatron.training.arguments")
+        if spec is None or not spec.origin:
+            return True
+        src = Path(spec.origin).read_text()
+    except Exception:
+        return True
+
+    if "get_device_capability()" not in src and "get_device_arch_version()" not in src:
+        # Probe removed/renamed entirely -> upstream changed it; nothing to guard.
+        return False
+
+    # A probe is considered guarded if a torch.cuda.is_available() check appears
+    # on the probe's own line OR within the few lines immediately preceding it
+    # (upstream's likely fix is `if ...is_available(): dc = get_device_capability()`
+    # -- the guard sits on the enclosing `if`, not the probe line itself). If any
+    # eager get_device_capability() call has no is_available() nearby, the probe
+    # is still unguarded and the SLIME-side workaround is needed.
+    lines = src.splitlines()
+    WINDOW = 3
+    for i, line in enumerate(lines):
+        if "get_device_capability()" not in line:
+            continue
+        context = lines[max(0, i - WINDOW): i + 1]
+        if not any("is_available" in c for c in context):
+            return True
+    return False
+
+
 def patch_gpuless_driver_validate(slime_root: Path) -> PatchResult:
     """Fix: let Megatron validate_args run on the GPU-less Ray driver.
 
@@ -277,14 +319,25 @@ def patch_gpuless_driver_validate(slime_root: Path) -> PatchResult:
     if "_slime_cpu_guard" in src:
         return PatchResult(name, "already-applied", f"{target} already guards the driver probes")
 
-    # If upstream (or SLIME) has guarded the probes with is_available(), the
-    # bare validate_args anchor may still be present but the fix is unnecessary;
-    # keep this conservative -- only skip when we truly cannot find the anchor.
-    if _VALIDATE_ANCHOR not in src:
+    # True self-neutralization: the real defect is Megatron's *unguarded* eager
+    # device probe in validate_args. If Megatron has guarded it upstream (the
+    # permanent fix), this patch is unnecessary and must not touch SLIME. Detect
+    # the unguarded probe in the installed Megatron; if it is gone, no-op.
+    if not _megatron_probe_is_unguarded():
         return PatchResult(
             name,
             "already-fixed-upstream",
-            "validate_args wrapper not in the expected shape; leaving it untouched",
+            "Megatron validate_args no longer has an unguarded CUDA device probe; leaving SLIME untouched",
+        )
+
+    # The probe is still unguarded upstream, so the SLIME-side guard is needed.
+    # It must be injectable into SLIME's validate_args wrapper in its known shape.
+    if _VALIDATE_ANCHOR not in src:
+        return PatchResult(
+            name,
+            "error",
+            "Megatron probe is unguarded but SLIME validate_args is not in the expected shape to inject a guard; "
+            "refusing to edit (needs a refreshed anchor)",
         )
     if src.count(_VALIDATE_ANCHOR) != 1:
         return PatchResult(
