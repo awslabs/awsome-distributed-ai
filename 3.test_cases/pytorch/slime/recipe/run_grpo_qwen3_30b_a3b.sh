@@ -145,17 +145,15 @@ TRAIN_ARGS=(
     # check never passes and training hangs before it starts. Use lowercase
     # "warning" to preserve the original intended verbosity.
     --sglang-log-level warning
-    # SGLang 0.5.12 removed the `--enable-ep-moe` flag (expert-parallel MoE is now
-    # selected via the MoE runner backend). Passing the old flag makes SGLang's
-    # argparse reject it, so the rollout engine never starts. Select the triton
-    # MoE runner and set expert parallelism explicitly instead.
-    --sglang-moe-runner-backend triton
-    --sglang-expert-parallel-size "${EP_SIZE}"
-    # On large-HBM GPUs (e.g. B300) SGLang auto-picks a high cuda_graph_max_bs,
-    # which makes CUDA-graph capture extremely slow at startup. Cap it so the
-    # rollout engine comes up in a reasonable time; H200 tolerates the default
-    # but the cap is harmless there.
-    --sglang-cuda-graph-max-bs 8
+    # NOTE: the original recipe passed `--sglang-enable-ep-moe`, which SGLang
+    # 0.5.12 removed. SLIME v0.2.4 registers --sglang-* flags from SGLang's live
+    # ServerArgs (parse_known_args / ignore_unknown_args), so the dead flag is
+    # silently ignored rather than erroring -- but it configures nothing, so it
+    # is dropped here. No replacement flag is needed for this recipe: the rollout
+    # engine serves the Qwen3-30B-A3B MoE correctly with the SGLang defaults
+    # (moe_runner_backend=auto resolves to the triton runner for bf16 on H200;
+    # ep_size defaults to 1, which is a valid serving mode). Both were verified
+    # unnecessary by a full end-to-end run with neither flag set.
 )
 
 # Submit via Ray job API.
