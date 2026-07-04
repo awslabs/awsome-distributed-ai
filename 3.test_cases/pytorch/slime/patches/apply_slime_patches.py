@@ -212,12 +212,14 @@ def patch_tms_preload_selection(slime_root: Path) -> PatchResult:
 # argument validation can complete:
 #   * get_device_capability -> (8, 0): satisfies the moe_grouped_gemm assert
 #     (dc[0] >= 8) without a device; does not affect any arch-dependent branch.
-#   * get_device_arch_version -> 10: makes the driver treat itself as Blackwell+
-#     and SKIP the arch<10 CUDA_DEVICE_MAX_CONNECTIONS branch, deferring that
-#     decision to the real GPU actors. This avoids faking a specific pre-Blackwell
-#     arch (which would wrongly force CUDA_DEVICE_MAX_CONNECTIONS=1 on B300); the
-#     actual requirement is still enforced on the actors on their real arch (H200
-#     = sm_90 requires it, satisfied via the recipe env; B300 = sm_100 does not).
+#   * get_device_arch_version -> a sentinel (9999) that is NOT any real GPU
+#     generation (Ampere=8, Hopper=9, Blackwell=10, ...), so it never mislabels
+#     the hardware -- on a GPU-less driver the arch is genuinely unknown. Being
+#     >= 10, it makes the driver SKIP the arch<10 CUDA_DEVICE_MAX_CONNECTIONS
+#     branch, deferring that decision to the real GPU actors. Returning a real
+#     generation (9 or 10) would falsely claim a specific arch; the sentinel does
+#     not. The actual requirement is enforced on the actors from their real arch
+#     (H200 = sm_90 requires it, satisfied via the recipe env; B300 = sm_100 does not).
 # Guarded so substitution happens only while is_available() is False, and
 # idempotent via a _slime_cpu_guard marker.
 _VALIDATE_ANCHOR = '''def validate_args(args):
@@ -249,9 +251,20 @@ _VALIDATE_INJECT = '''def validate_args(args):
 
         if not getattr(_ma.get_device_arch_version, "_slime_cpu_guard", False):
             _orig_arch = _ma.get_device_arch_version
+            # A GPU-less driver has no GPU arch to report. Return a value that is
+            # deliberately NOT any real GPU generation (Ampere=8, Hopper=9,
+            # Blackwell=10, ...) so we never mislabel the hardware; it just has to
+            # be >= 10 so the arch-gated CUDA_DEVICE_MAX_CONNECTIONS branch is
+            # skipped on the driver. The real requirement is decided on the GPU
+            # actors from their real arch (they never re-run validate_args).
+            _ARCH_UNKNOWN_ON_GPULESS_DRIVER = 9999
 
             def _arch(*a, **k):
-                return 10 if not _torch.cuda.is_available() else _orig_arch(*a, **k)
+                return (
+                    _ARCH_UNKNOWN_ON_GPULESS_DRIVER
+                    if not _torch.cuda.is_available()
+                    else _orig_arch(*a, **k)
+                )
 
             _arch._slime_cpu_guard = True
             _ma.get_device_arch_version = _arch
