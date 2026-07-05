@@ -145,7 +145,15 @@ TRAIN_ARGS=(
     # check never passes and training hangs before it starts. Use lowercase
     # "warning" to preserve the original intended verbosity.
     --sglang-log-level warning
-    --sglang-enable-ep-moe
+    # NOTE: the original recipe passed `--sglang-enable-ep-moe`, which SGLang
+    # 0.5.12 removed. SLIME v0.2.4 registers --sglang-* flags from SGLang's live
+    # ServerArgs (parse_known_args / ignore_unknown_args), so the dead flag is
+    # silently ignored rather than erroring -- but it configures nothing, so it
+    # is dropped here. No replacement flag is needed for this recipe: the rollout
+    # engine serves the Qwen3-30B-A3B MoE correctly with the SGLang defaults
+    # (moe_runner_backend=auto resolves to the triton runner for bf16 on H200;
+    # ep_size defaults to 1, which is a valid serving mode). Both were verified
+    # unnecessary by a full end-to-end run with neither flag set.
 )
 
 # Submit via Ray job API.
@@ -163,6 +171,7 @@ ray job submit \
     --runtime-env-json="{
         \"env_vars\": {
             \"PYTHONPATH\": \"/opt/Megatron-LM\",
+            \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
             \"HF_TOKEN\": \"${HF_TOKEN}\",
             \"MODEL_SCRIPT\": \"${MODEL_SCRIPT}\",
             \"TOKENIZERS_PARALLELISM\": \"false\",

@@ -194,8 +194,184 @@ def patch_tms_preload_selection(slime_root: Path) -> PatchResult:
     return PatchResult(name, "applied", f"routed LD_PRELOAD through {_HELPER_MARKER[:-1]}()")
 
 
+# --- wall: Megatron validate_args probes the GPU on a GPU-less Ray driver -----
+# Megatron's validate_args eagerly probes the CUDA device during pure argument
+# validation (which SLIME runs on the Ray driver -- intentionally GPU-less in
+# this test case: the head is num-gpus:0, GCS/dashboard only). Two probes are
+# only reached by MoE models with tensor/context parallelism (the 30B recipe:
+# --moe-grouped-gemm, TP=2, CP=2), so the 4B path never hits them:
+#   * torch.cuda.get_device_capability()      (moe_grouped_gemm compute-cap assert)
+#   * megatron.training.utils.get_device_arch_version() (imported by name into
+#     megatron.training.arguments; used for the CUDA_DEVICE_MAX_CONNECTIONS note)
+# On the GPU-less driver both raise "Found no NVIDIA driver". The real GPU actors
+# (torch.cuda.is_available() == True) probe the real device unchanged.
+#
+# This injects a guard at the top of SLIME's own validate_args wrapper
+# (slime/backends/megatron_utils/arguments.py) that, ONLY when no CUDA device is
+# present (i.e. the driver), makes those two probes return safe values so
+# argument validation can complete:
+#   * get_device_capability -> (8, 0): satisfies the moe_grouped_gemm assert
+#     (dc[0] >= 8) without a device; does not affect any arch-dependent branch.
+#   * get_device_arch_version -> a sentinel (9999) that is NOT any real GPU
+#     generation (Ampere=8, Hopper=9, Blackwell=10, ...), so it never mislabels
+#     the hardware -- on a GPU-less driver the arch is genuinely unknown. Being
+#     >= 10, it makes the driver SKIP the arch<10 CUDA_DEVICE_MAX_CONNECTIONS
+#     branch, deferring that decision to the real GPU actors. Returning a real
+#     generation (9 or 10) would falsely claim a specific arch; the sentinel does
+#     not. The actual requirement is enforced on the actors from their real arch
+#     (H200 = sm_90 requires it, satisfied via the recipe env; B300 = sm_100 does not).
+# Guarded so substitution happens only while is_available() is False, and
+# idempotent via a _slime_cpu_guard marker.
+_VALIDATE_ANCHOR = '''def validate_args(args):
+    """Run megatron\'s own validate_args plus slime-specific megatron validations."""
+    _megatron_validate_args(args)'''
+
+_VALIDATE_INJECT = '''def validate_args(args):
+    """Run megatron\'s own validate_args plus slime-specific megatron validations."""
+    # Megatron validate_args eagerly probes the CUDA device (get_device_capability
+    # for moe_grouped_gemm; get_device_arch_version for the TP/CP
+    # CUDA_DEVICE_MAX_CONNECTIONS note). SLIME runs validate_args on the Ray
+    # driver, which is intentionally GPU-less in this test case, so those probes
+    # raise "Found no NVIDIA driver". Guard them for the GPU-less driver only; the
+    # real GPU actors probe the real device unchanged. Injected as a stopgap until
+    # Megatron guards these probes with torch.cuda.is_available() upstream.
+    import torch as _torch
+
+    if not _torch.cuda.is_available():
+        import megatron.training.arguments as _ma
+
+        if not getattr(_torch.cuda.get_device_capability, "_slime_cpu_guard", False):
+            _orig_cap = _torch.cuda.get_device_capability
+
+            def _cap(*a, **k):
+                return (8, 0) if not _torch.cuda.is_available() else _orig_cap(*a, **k)
+
+            _cap._slime_cpu_guard = True
+            _torch.cuda.get_device_capability = _cap
+
+        if not getattr(_ma.get_device_arch_version, "_slime_cpu_guard", False):
+            _orig_arch = _ma.get_device_arch_version
+            # A GPU-less driver has no GPU arch to report. Return a value that is
+            # deliberately NOT any real GPU generation (Ampere=8, Hopper=9,
+            # Blackwell=10, ...) so we never mislabel the hardware; it just has to
+            # be >= 10 so the arch-gated CUDA_DEVICE_MAX_CONNECTIONS branch is
+            # skipped on the driver. The real requirement is decided on the GPU
+            # actors from their real arch (they never re-run validate_args).
+            _ARCH_UNKNOWN_ON_GPULESS_DRIVER = 9999
+
+            def _arch(*a, **k):
+                return (
+                    _ARCH_UNKNOWN_ON_GPULESS_DRIVER
+                    if not _torch.cuda.is_available()
+                    else _orig_arch(*a, **k)
+                )
+
+            _arch._slime_cpu_guard = True
+            _ma.get_device_arch_version = _arch
+
+    _megatron_validate_args(args)'''
+
+
+def _megatron_probe_is_unguarded() -> bool:
+    """True if the installed Megatron's validate_args still probes the CUDA
+    device eagerly without a torch.cuda.is_available() guard.
+
+    This is the real defect this patch works around. When Megatron guards the
+    probe upstream (the permanent fix), this returns False and the SLIME-side
+    patch self-neutralizes. Locating Megatron via import keeps this robust to
+    the install path. If Megatron cannot be located or its arguments module has
+    been restructured beyond recognition, we conservatively assume the probe is
+    still unguarded (better a harmless is_available()-gated guard than a crash).
+    """
+    try:
+        import importlib.util
+
+        spec = importlib.util.find_spec("megatron.training.arguments")
+        if spec is None or not spec.origin:
+            return True
+        src = Path(spec.origin).read_text()
+    except Exception:
+        return True
+
+    if "get_device_capability()" not in src and "get_device_arch_version()" not in src:
+        # Probe removed/renamed entirely -> upstream changed it; nothing to guard.
+        return False
+
+    # A probe is considered guarded if a torch.cuda.is_available() check appears
+    # on the probe's own line OR within the few lines immediately preceding it
+    # (upstream's likely fix is `if ...is_available(): dc = get_device_capability()`
+    # -- the guard sits on the enclosing `if`, not the probe line itself). If any
+    # eager get_device_capability() call has no is_available() nearby, the probe
+    # is still unguarded and the SLIME-side workaround is needed.
+    lines = src.splitlines()
+    WINDOW = 3
+    for i, line in enumerate(lines):
+        if "get_device_capability()" not in line:
+            continue
+        context = lines[max(0, i - WINDOW): i + 1]
+        if not any("is_available" in c for c in context):
+            return True
+    return False
+
+
+def patch_gpuless_driver_validate(slime_root: Path) -> PatchResult:
+    """Fix: let Megatron validate_args run on the GPU-less Ray driver.
+
+    Guards the two eager CUDA device probes (get_device_capability,
+    get_device_arch_version) inside SLIME's validate_args wrapper so that on a
+    GPU-less driver they return safe values instead of crashing with
+    "Found no NVIDIA driver" (upstream Megatron issue/PR filed separately).
+    """
+    name = "gpuless-driver-validate"
+    target = slime_root / "slime" / "backends" / "megatron_utils" / "arguments.py"
+    if not target.is_file():
+        return PatchResult(name, "error", f"target not found: {target}")
+
+    src = target.read_text()
+
+    if "_slime_cpu_guard" in src:
+        return PatchResult(name, "already-applied", f"{target} already guards the driver probes")
+
+    # True self-neutralization: the real defect is Megatron's *unguarded* eager
+    # device probe in validate_args. If Megatron has guarded it upstream (the
+    # permanent fix), this patch is unnecessary and must not touch SLIME. Detect
+    # the unguarded probe in the installed Megatron; if it is gone, no-op.
+    if not _megatron_probe_is_unguarded():
+        return PatchResult(
+            name,
+            "already-fixed-upstream",
+            "Megatron validate_args no longer has an unguarded CUDA device probe; leaving SLIME untouched",
+        )
+
+    # The probe is still unguarded upstream, so the SLIME-side guard is needed.
+    # It must be injectable into SLIME's validate_args wrapper in its known shape.
+    if _VALIDATE_ANCHOR not in src:
+        return PatchResult(
+            name,
+            "error",
+            "Megatron probe is unguarded but SLIME validate_args is not in the expected shape to inject a guard; "
+            "refusing to edit (needs a refreshed anchor)",
+        )
+    if src.count(_VALIDATE_ANCHOR) != 1:
+        return PatchResult(
+            name,
+            "error",
+            f"expected exactly one validate_args wrapper, found {src.count(_VALIDATE_ANCHOR)}",
+        )
+
+    patched = src.replace(_VALIDATE_ANCHOR, _VALIDATE_INJECT, 1)
+    try:
+        compile(patched, str(target), "exec")
+    except SyntaxError as exc:
+        return PatchResult(name, "error", f"patched file fails to compile: {exc}")
+
+    target.write_text(patched)
+    return PatchResult(name, "applied", "guarded get_device_capability / get_device_arch_version on the GPU-less driver")
+
+
 PATCHES = [
     patch_tms_preload_selection,
+    patch_gpuless_driver_validate,
 ]
 
 

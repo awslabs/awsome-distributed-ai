@@ -190,6 +190,14 @@ RUN cd /opt && \
     cd slime && \
     pip install --no-cache-dir -e . --no-deps
 
+# mbridge: required by SLIME's HF->torch_dist converter
+# (tools/convert_hf_to_torch_dist.py imports `slime_plugins.mbridge` and
+# `from mbridge import AutoBridge`). It is NOT pulled by the `--no-deps` slime
+# install above, so the 30B MoE checkpoint conversion fails with
+# `ModuleNotFoundError: No module named 'mbridge'` without it. Installed with
+# --no-deps so it cannot drag numpy 2.x (or any other pinned dep) back in.
+RUN pip install --no-cache-dir --no-deps mbridge
+
 #####################
 # Self-neutralizing upstream patches.
 #
