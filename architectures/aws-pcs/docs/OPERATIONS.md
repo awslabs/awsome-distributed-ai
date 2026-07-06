@@ -466,6 +466,61 @@ cleanest mitigation is upstream — recording it here so users seeing it know th
 workaround and the next contributor doesn't waste time looking for a bug in this PR's
 scripts.
 
+### 6.2 `apt-daily-upgrade` can kill running jobs via `needrestart` restarting `slurmd`
+
+**Symptom.** Jobs are killed for no obvious reason, and the kill time lines up with when
+`apt-daily-upgrade.timer` fires (by default in the early morning). The job either
+disappears or requeues from scratch, losing all in-progress work.
+
+**Cause.** `apt-daily-upgrade` installs security updates, including base libraries such as
+glibc. `needrestart` (which runs in automatic mode after unattended upgrades on the
+PCS-ready DLAMI) then restarts every service linked against an updated library. `slurmd`
+links `libc`, so `needrestart` restarts it — and restarting `slurmd` tears down the
+`slurmstepd` steps under it, killing the jobs running on that node. Sequence:
+
+```
+T+0   apt-daily-upgrade.timer fires -> unattended-upgrades installs e.g. libc6
+T+1   needrestart (automatic mode) sees slurmd is linked against the updated libc
+T+1   needrestart runs: systemctl restart slurmd
+T+1   slurmd restart tears down slurmstepd -> the running job is killed / requeued
+```
+
+Note this is **not** about upgrading Slurm: `slurmd` lives under `/opt/aws/pcs/...` and is
+not an apt-managed package. It is purely `needrestart` restarting `slurmd` because a
+library it links was updated. Reboot is not involved either (`Automatic-Reboot` is off by
+default) — the job dies from the `slurmd` restart, not a node reboot.
+
+**Fix (shipped in this repo).** The compute-node-group UserData writes a `needrestart`
+drop-in that excludes the Slurm daemons from automatic restart:
+
+```perl
+# /etc/needrestart/conf.d/90-pcs-slurm.conf  (written by add-cng* UserData)
+$nrconf{override_rc} = { qr(^slurmd) => 0, qr(^slurmctld) => 0, qr(^slurmdbd) => 0 };
+```
+
+This is the minimum targeted change: security packages still install as before, and
+`needrestart` still restarts everything else; only the automatic restart of the Slurm
+daemons is suppressed, so an upgrade can never take down a running job. `needrestart` will
+report the `slurmd` restart as *deferred* rather than performing it. `slurmd` picks up the
+new libraries the next time it restarts on its own terms (node replacement, power-save
+cycle, or a manual restart) — acceptable for HPC, where PCS replaces nodes regularly.
+
+Verified end-to-end on real hardware: a long-running job survives a real `apt-get upgrade`
+that updates glibc followed by `needrestart -r a` (the `slurmd` PID is unchanged and the
+job keeps running); without the drop-in, the same sequence restarts `slurmd` and the job
+is killed.
+
+**If you still want to disable unattended upgrades entirely** (stops all security updates —
+a heavier hammer), you can also mask the timers in your own post-install:
+`systemctl disable --now apt-daily.timer apt-daily-upgrade.timer`. The `needrestart`
+drop-in above is preferred because it keeps security updates flowing.
+
+**Forward-compatibility.** The drop-in lives in its own `conf.d` file and only names the
+Slurm services, so it stays inert if upstream later addresses this a different way (e.g. a
+`slurmd` unit that survives restart, or a DLAMI-level `needrestart` policy): `needrestart`
+reads `conf.d/*.conf` in order and tolerates unknown keys, so an extra override never
+causes an error — at worst it becomes redundant.
+
 ## 7. Recommendations recap
 
 For a new production deploy:
