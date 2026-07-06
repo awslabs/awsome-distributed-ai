@@ -466,52 +466,26 @@ cleanest mitigation is upstream — recording it here so users seeing it know th
 workaround and the next contributor doesn't waste time looking for a bug in this PR's
 scripts.
 
-### 6.2 `needrestart` must not auto-restart `slurmd` (would stop running jobs) — already handled
+### 6.2 `needrestart` restarting `slurmd` would stop running jobs — already handled
 
-**What to know.** On Ubuntu, automatic security upgrades (`apt-daily-upgrade` +
-`unattended-upgrades`) update base libraries such as glibc, and `needrestart` then
-restarts every service linked against them. `slurmd` links `libc`, so left unchecked
-**`needrestart` restarts `slurmd`, and restarting `slurmd` tears down the `slurmstepd`
-steps under it — stopping every job running on that node** (the job is killed and, if
-requeued, restarts from scratch, losing in-progress work). This is a definite,
-reproducible interaction, not a random failure: it happens whenever an unattended upgrade
-touches a library `slurmd` uses. (It is not a Slurm upgrade — `slurmd` lives under
-`/opt/aws/pcs/...` and is not apt-managed — and it is not a reboot; the job stops purely
-because `slurmd` is restarted.)
+When an unattended security upgrade updates a base library `slurmd` links (e.g. glibc),
+`needrestart` restarts `slurmd`, and that restart tears down the `slurmstepd` steps under
+it — **stopping every job on the node**. It is reproducible, not random, and not a reboot
+or a Slurm-package upgrade.
 
-**You do not need to do anything — the templates already guard against this.** Every
-compute-node-group UserData (`add-cng*`) writes a `needrestart` drop-in that excludes
-`slurmd` from automatic restart:
+The compute-node-group templates already guard against this: each `add-cng*` UserData
+writes a `needrestart` drop-in so `slurmd` is never auto-restarted (security updates still
+install; `needrestart` only defers the `slurmd` restart):
 
 ```perl
 # /etc/needrestart/conf.d/90-pcs-slurm.conf  (written by add-cng* UserData)
 $nrconf{override_rc} = { qr(^slurmd) => 0 };
 ```
 
-`slurmd` is the only Slurm systemd service on login/compute nodes (PCS runs the
-controller managed-side, so there is no `slurmctld`/`slurmdbd` service to guard here), and
-`qr(^slurmd)` also matches the versioned units (e.g. `slurmd-25.11`). With this in place,
-security packages still install and `needrestart` still restarts everything else; only the
-automatic restart of `slurmd` is suppressed (`needrestart` reports it as *deferred*), so an
-unattended upgrade can no longer stop a running job. `slurmd` picks up the new libraries the next time it restarts on its own
-terms — node replacement, power-save cycle, or a manual restart — which is fine for HPC,
-where PCS replaces nodes regularly. (Verified end-to-end on real hardware: a long-running
-job survives a real `apt-get upgrade` of glibc followed by `needrestart -r a`, with the
-`slurmd` PID unchanged.)
-
-**Safe if the platform later fixes this upstream.** The drop-in is a standalone
-`conf.d/*.conf` file that only names the Slurm services. If a future PCS-ready DLAMI or
-Slurm unit handles this differently (e.g. a `slurmd` unit that survives restart, or a
-DLAMI-level `needrestart` policy), this file does not conflict or error — `needrestart`
-reads `conf.d/*.conf` in order and tolerates keys it does not use, so at worst the
-override becomes redundant. In other words, keeping it in place is harmless even after an
-upstream fix; you never have to race to remove it.
-
-**If you would rather turn off automatic upgrades entirely** (heavier — this stops all
-security updates), mask the timers in your own post-install instead:
-`systemctl disable --now apt-daily.timer apt-daily-upgrade.timer`. The `needrestart`
-drop-in above is preferred because it keeps security updates flowing while still protecting
-jobs.
+`slurmd` is the only Slurm systemd service on these nodes (the controller is managed by
+PCS); `qr(^slurmd)` also matches the versioned units (e.g. `slurmd-25.11`). The drop-in is
+a standalone `conf.d/*.conf` naming only `slurmd`, so if a later DLAMI or Slurm unit
+handles this differently it neither conflicts nor errors — at worst it becomes redundant.
 
 ## 7. Recommendations recap
 
