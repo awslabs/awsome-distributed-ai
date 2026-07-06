@@ -387,19 +387,21 @@ Resources:
             # apt-daily-upgrade updates base libraries (e.g. glibc). needrestart then
             # auto-restarts every service linked against them. slurmd links libc, so it
             # gets restarted mid-upgrade - which KILLS the jobs running under it (the
-            # step is torn down and the job requeues from scratch). Exclude the Slurm
-            # daemons from needrestart's automatic restart so a security upgrade can
+            # step is torn down and the job requeues from scratch). Exclude slurmd
+            # from needrestart's automatic restart so a security upgrade can
             # never take down a running job. Security packages still install; only the
-            # slurmd/slurmctld/slurmdbd auto-restart is suppressed.
+            # slurmd auto-restart is suppressed. (PCS runs the controller managed-side;
+            # slurmd is the only Slurm systemd service on login/compute nodes. qr(^slurmd)
+            # also covers the versioned units, e.g. slurmd-25.11.)
             # runcmd runs under /bin/sh (dash) - keep this POSIX-clean, no bashisms.
             - |
               mkdir -p /etc/needrestart/conf.d
               cat > /etc/needrestart/conf.d/90-pcs-slurm.conf <<'NRCONF'
-              # AWS PCS: never auto-restart Slurm daemons - restarting slurmd kills
+              # AWS PCS: never auto-restart slurmd - restarting it kills
               # the jobs running under it. Managed by add-cng UserData.
-              $nrconf{override_rc} = { qr(^slurmd) => 0, qr(^slurmctld) => 0, qr(^slurmdbd) => 0 };
+              $nrconf{override_rc} = { qr(^slurmd) => 0 };
               NRCONF
-              echo "needrestart: slurmd/slurmctld/slurmdbd excluded from auto-restart" | tee /var/log/pcs-needrestart-guard.log
+              echo "needrestart: slurmd excluded from auto-restart" | tee /var/log/pcs-needrestart-guard.log
             # Post-install script (optional) - generic OnNodeConfigured-style hook.
             # Downloads and runs a user-supplied script (e.g. Enroot/Pyxis install).
             - |

@@ -480,18 +480,20 @@ touches a library `slurmd` uses. (It is not a Slurm upgrade — `slurmd` lives u
 because `slurmd` is restarted.)
 
 **You do not need to do anything — the templates already guard against this.** Every
-compute-node-group UserData (`add-cng*`) writes a `needrestart` drop-in that excludes the
-Slurm daemons from automatic restart:
+compute-node-group UserData (`add-cng*`) writes a `needrestart` drop-in that excludes
+`slurmd` from automatic restart:
 
 ```perl
 # /etc/needrestart/conf.d/90-pcs-slurm.conf  (written by add-cng* UserData)
-$nrconf{override_rc} = { qr(^slurmd) => 0, qr(^slurmctld) => 0, qr(^slurmdbd) => 0 };
+$nrconf{override_rc} = { qr(^slurmd) => 0 };
 ```
 
-With this in place, security packages still install and `needrestart` still restarts
-everything else; only the automatic restart of the Slurm daemons is suppressed
-(`needrestart` reports it as *deferred*), so an unattended upgrade can no longer stop a
-running job. `slurmd` picks up the new libraries the next time it restarts on its own
+`slurmd` is the only Slurm systemd service on login/compute nodes (PCS runs the
+controller managed-side, so there is no `slurmctld`/`slurmdbd` service to guard here), and
+`qr(^slurmd)` also matches the versioned units (e.g. `slurmd-25.11`). With this in place,
+security packages still install and `needrestart` still restarts everything else; only the
+automatic restart of `slurmd` is suppressed (`needrestart` reports it as *deferred*), so an
+unattended upgrade can no longer stop a running job. `slurmd` picks up the new libraries the next time it restarts on its own
 terms — node replacement, power-save cycle, or a manual restart — which is fine for HPC,
 where PCS replaces nodes regularly. (Verified end-to-end on real hardware: a long-running
 job survives a real `apt-get upgrade` of glibc followed by `needrestart -r a`, with the
