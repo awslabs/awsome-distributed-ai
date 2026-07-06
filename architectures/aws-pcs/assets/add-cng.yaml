@@ -454,7 +454,7 @@ Resources:
             # --- Protect running jobs from unattended-upgrades / needrestart ---
             # apt-daily-upgrade updates base libraries (e.g. glibc). needrestart then
             # auto-restarts every service linked against them. slurmd links libc, so it
-            # gets restarted mid-upgrade — which KILLS the jobs running under it (the
+            # gets restarted mid-upgrade - which KILLS the jobs running under it (the
             # step is torn down and the job requeues from scratch). Exclude the Slurm
             # daemons from needrestart's automatic restart so a security upgrade can
             # never take down a running job. Security packages still install; only the
@@ -463,7 +463,7 @@ Resources:
             - |
               mkdir -p /etc/needrestart/conf.d
               cat > /etc/needrestart/conf.d/90-pcs-slurm.conf <<'NRCONF'
-              # AWS PCS: never auto-restart Slurm daemons — restarting slurmd kills
+              # AWS PCS: never auto-restart Slurm daemons - restarting slurmd kills
               # the jobs running under it. Managed by add-cng.yaml UserData.
               $nrconf{override_rc} = { qr(^slurmd) => 0, qr(^slurmctld) => 0, qr(^slurmdbd) => 0 };
               NRCONF
