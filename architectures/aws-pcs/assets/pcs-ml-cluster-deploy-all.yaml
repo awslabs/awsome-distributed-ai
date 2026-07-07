@@ -50,15 +50,21 @@ Metadata:
           - PseriesCngName
           - PseriesQueueName
       - Label:
-          default: "5. Additional Cluster Configuration (Monitoring, Multi-User, Container Runtime)"
+          default: "5.1. Additional Cluster Configuration: Monitoring"
         Parameters:
           - MonitoringStack
           - GrafanaAccessCidr
           - MonitoringRepo
           - MonitoringVersion
           - DcgmExporterImage
+      - Label:
+          default: "5.2. Additional Cluster Configuration: Multi-User Directory"
+        Parameters:
           - DirectoryService
           - DirectoryDomainSuffix
+      - Label:
+          default: "5.3. Additional Cluster Configuration: Post-Install Script (default: Enroot/Pyxis container runtime)"
+        Parameters:
           - PostInstallScriptUrl
           - PostInstallScriptArgs
       - Label:

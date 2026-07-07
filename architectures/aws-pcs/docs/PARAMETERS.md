@@ -66,7 +66,7 @@ See [GPU compute](../README.md#gpu-compute-p5p6) for instance/EFA/capacity guida
 | `PseriesCngName` | `gpu-p5` | GPU node-group name |
 | `PseriesQueueName` | `gpu-p5` | GPU Slurm queue name |
 
-## 5. Additional Cluster Configuration (Monitoring, Multi-User, Container Runtime)
+## 5.1. Additional Cluster Configuration: Monitoring
 
 | Parameter | Default | Purpose |
 |---|---|---|
@@ -75,8 +75,21 @@ See [GPU compute](../README.md#gpu-compute-p5p6) for instance/EFA/capacity guida
 | `MonitoringRepo` | `aws-samples/aws-parallelcluster-monitoring` | GitHub `owner/repo` for the monitoring stack; override with a fork + a branch in `MonitoringVersion` to test unreleased changes |
 | `MonitoringVersion` | `v2.10.2` | [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) git ref (release tag, branch, or `latest`). `v2.10.2` adds the `ec2_sd` credential-refresh fix (restarts prometheus on IMDS credential rotation, so compute metrics keep flowing past ~6 h); `v2.9.1` added the `DCGM_EXPORTER_IMAGE` override (needed for B300 GPU metrics) and Grafana 13; `v2.6.4`+ carry the PCS `/opt` install + Docker-29.x DCGM fixes. Pin to a tag for stability. Migration notes: [OPERATIONS.md §3](./OPERATIONS.md#3-monitoring-monitoringversion) |
 | `DcgmExporterImage` | DCGM 4.5.2 by digest | `dcgm-exporter` image used on GPU nodes. Defaults to a DCGM 4.5.2 build pinned by digest (`nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547...`) covering Hopper / B200 / B300. The digest pull bypasses the Docker-29.x OCI-index failure on newer NVCR tags. Override (any image reference, ideally also a digest) to pin to a different build — e.g. the monitoring stack's older default 4.2.0. No effect on CPU nodes. See [OPERATIONS.md §3.1](./OPERATIONS.md#31-dcgmexporterimage-the-default-and-when-to-change-it) |
+
+## 5.2. Additional Cluster Configuration: Multi-User Directory
+
+| Parameter | Default | Purpose |
+|---|---|---|
 | `DirectoryService` | `none` | Multi-user directory. `none` = single `ubuntu` user. `OpenLDAP-LoginNode` = slapd on the login node (DB on shared `/home/ldap-db`) + SSSD on all compute nodes. **Single login node only** — keep the login node group at 1 instance while enabled. See [USER-MANAGEMENT.md](./USER-MANAGEMENT.md) |
 | `DirectoryDomainSuffix` | `dc=cluster,dc=internal` | LDAP domain suffix. Only used when `DirectoryService != none` |
+
+## 5.3. Additional Cluster Configuration: Post-Install Script
+
+The first-boot hook that runs on every node. By default it installs the
+Enroot/Pyxis container runtime; point it at your own script to customize.
+
+| Parameter | Default | Purpose |
+|---|---|---|
 | `PostInstallScriptUrl` | *(empty → auto)* | Script run on every node at first boot (PCS equivalent of ParallelCluster `OnNodeConfigured`). **Empty (default) auto-installs Enroot/Pyxis** from `s3://<S3BucketName>/<S3KeyPrefix>scripts/install-enroot-pyxis.sh` (fetched with the instance role, so it works with a **private** bucket — no public S3 needed). Accepts an `s3://` URL (instance-role fetch) or an `http(s)://` URL (curl, public only, e.g. GitHub raw). Set to a single space to skip. Idempotent: a no-op if Enroot/Pyxis is already pre-baked into `AmiId` |
 | `PostInstallScriptArgs` | *(empty)* | Arguments passed to the post-install script. Normally left empty — most users never touch the container-runtime parameters |
 

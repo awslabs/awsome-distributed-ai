@@ -132,18 +132,28 @@ complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 | `PseriesInstanceType` | `p5.48xlarge` | Picks the matching template + EFA NIC count automatically. See [GPU compute](#gpu-compute-p5p6) for the accepted types |
 | `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR |
 
-**5. Additional Cluster Configuration (Monitoring, Multi-User, Container Runtime)**
+**5.1. Additional Cluster Configuration: Monitoring**
 
 | Parameter | Default | Purpose |
 |---|---|---|
 | `MonitoringStack` | `Prometheus-LoginNode` | Prometheus + Grafana on the login node, DCGM Exporter on GPU nodes. `none` disables it. See [§8.2](#82-monitoring) |
 | `GrafanaAccessCidr` | *(empty)* | Open HTTPS/443 (Grafana) on the login node to a trusted CIDR (default: SSM port-forward only) |
+
+(Group 5.1 also has `MonitoringRepo` / `MonitoringVersion` / `DcgmExporterImage` — pinned defaults, rarely changed; see [PARAMETERS.md](./docs/PARAMETERS.md).)
+
+**5.2. Additional Cluster Configuration: Multi-User Directory**
+
+| Parameter | Default | Purpose |
+|---|---|---|
 | `DirectoryService` | `none` | `OpenLDAP-LoginNode` for a multi-user cluster. See [§8.3](#83-user-management) |
-| `PostInstallScriptUrl` | *(empty → auto)* | First-boot script; empty auto-installs Enroot/Pyxis from your templates bucket. Rarely changed. See [PARAMETERS.md](./docs/PARAMETERS.md) |
 
-(Group 5 also has `MonitoringRepo` / `MonitoringVersion` / `DcgmExporterImage` — pinned defaults, rarely changed; see [PARAMETERS.md](./docs/PARAMETERS.md).)
+**5.3. Additional Cluster Configuration: Post-Install Script**
 
-**See [PARAMETERS.md](./docs/PARAMETERS.md) for the complete parameter reference** (all 7
+| Parameter | Default | Purpose |
+|---|---|---|
+| `PostInstallScriptUrl` | *(empty → auto)* | First-boot script on every node; empty (default) auto-installs the Enroot/Pyxis container runtime from your templates bucket. Point at your own script to customize. See [PARAMETERS.md](./docs/PARAMETERS.md) |
+
+**See [PARAMETERS.md](./docs/PARAMETERS.md) for the complete parameter reference** (all
 console parameter groups, with every default). The concept guides below cover the
 choices that need the most thought.
 
