@@ -141,6 +141,49 @@ rm ~/.jupyter-token-<jobid>
 The queue scales back to 0 after the idle timeout, so a stopped Jupyter job
 costs nothing.
 
+## Using GPUs
+
+The same sbatch script works on a GPU queue — change the `#SBATCH` header, and
+request GPUs with `--gres`:
+
+```bash
+#SBATCH --partition=gpu-g6        # your GPU queue name
+#SBATCH --gres=gpu:1              # GPUs for this Jupyter session
+#SBATCH --time=8:00:00
+```
+
+Add the ML stack to the venv from Step 1 (once):
+
+```bash
+$HOME/jupyter-env/bin/pip install torch   # + transformers, etc.
+```
+
+How the GPU allocation behaves:
+
+- **Slurm enforces the `--gres` count.** The job gets `CUDA_VISIBLE_DEVICES`
+  set to its allocated GPUs (e.g. `0,1` for `--gres=gpu:2` on a 4-GPU
+  g6.12xlarge), so frameworks like PyTorch see exactly the requested GPUs —
+  `torch.cuda.device_count()` matches the `--gres` count. GPU node groups
+  configure gres automatically (e.g. `Gres=gpu:L4:4`; check with
+  `scontrol show node <node>`).
+- **Multi-GPU works inside one notebook.** All allocated GPUs are visible to
+  the kernel, so `DataParallel` / FSDP / `accelerate` with
+  `num_processes=<gres count>` run as usual. Leave GPUs you don't need
+  unrequested — on multi-GPU nodes Slurm can schedule other jobs (another
+  user's Jupyter, batch training) onto the remaining GPUs.
+- **Sizing:** request only what you interactively need (`--gres=gpu:1` is
+  plenty for most exploration) and keep `--time` tight — an idle notebook
+  holds its GPUs until the job ends. For multi-hour *training*, prefer a
+  batch job over a notebook so the GPUs free up when the run finishes.
+- **Set `HF_HOME=/fsx/.hf-cache`** (e.g. in the sbatch script before starting
+  Jupyter, or per notebook) — model downloads must not go to NFS `/home`.
+- **Containerized kernels (optional):** to use an NGC image as the notebook
+  environment instead of a venv, wrap the server in Pyxis:
+  `srun --container-image=<image> --container-mounts=/fsx,$HOME …` around the
+  `jupyter lab` command inside the job. Import large images once to
+  `/fsx/*.sqsh` (see the [README §7](../README.md#7-running-a-job) enroot
+  note) and pass the `.sqsh` path as the image.
+
 ## Notes
 
 - **Multi-user:** each user runs their own server job under their own UID; the
@@ -148,12 +191,11 @@ costs nothing.
   Keep tokens in `$HOME` (created mode 600 by the script) — treat the token
   like a password to your account, since the SSM/IAM layer alone does not
   distinguish cluster users.
-- **GPU:** switch `--partition` to your GPU queue and add `--gres=gpu:1` (or
-  more). For a containerized kernel environment (e.g. an NGC PyTorch image),
-  run the same pattern with Pyxis: `srun --container-image=… --container-mounts=/fsx,$HOME`
-  around the `jupyter lab` command.
 - **Alternative when `SSHAccessCidr` is set:** a plain SSH tunnel also works —
   `ssh -L 8888:<compute-node-ip>:<port> <user>@<login-public-ip>` — useful for
   users who cannot install the Session Manager plugin.
 - **Do not run Jupyter on the login node.** It has no GPUs, and it is shared
   by every user (and hosts the monitoring stack).
+- **Scripts on `/fsx` can't be exec'd directly** (Lustre blocks `execve` on
+  some paths) — keep the sbatch file under `$HOME`, or invoke via
+  `bash /fsx/script.sh`.
