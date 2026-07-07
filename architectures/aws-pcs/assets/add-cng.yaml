@@ -461,12 +461,12 @@ Resources:
             # slurmd auto-restart is suppressed. (PCS runs the controller managed-side;
             # slurmd is the only Slurm systemd service on login/compute nodes. qr(^slurmd)
             # also covers the versioned units, e.g. slurmd-25.11.)
-            # runcmd runs under /bin/sh (dash) — keep this POSIX-clean, no bashisms.
+            # runcmd runs under /bin/sh (dash) - keep this POSIX-clean, no bashisms.
             - |
-              mkdir -p /etc/needrestart/conf.d
-              cat > /etc/needrestart/conf.d/90-pcs-slurm.conf <<'NRCONF'
+              mkdir -p /etc/needrestart/conf.d &&
+              cat > /etc/needrestart/conf.d/90-pcs-slurm.conf <<'NRCONF' &&
               # AWS PCS: never auto-restart slurmd - restarting it kills
-              # the jobs running under it. Managed by add-cng.yaml UserData.
+              # the jobs running under it. Managed by add-cng UserData.
               $nrconf{override_rc} = { qr(^slurmd) => 0 };
               NRCONF
               echo "needrestart: slurmd excluded from auto-restart" | tee /var/log/pcs-needrestart-guard.log
