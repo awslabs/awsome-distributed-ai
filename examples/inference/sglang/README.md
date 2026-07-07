@@ -5,9 +5,7 @@ SPDX-License-Identifier: MIT-0
 
 # SGLang test cases
 
-[SGLang](https://github.com/sgl-project/sglang) deployments on AWS EKS /
-SageMaker HyperPod. Each sub-directory is a self-contained sample — apply its
-manifest with `kubectl`.
+[SGLang](https://github.com/sgl-project/sglang) deployments on AWS EKS / SageMaker HyperPod. Each sub-directory is a self-contained sample — apply its manifest with `kubectl`.
 
 | Test case | Hardware | Topology | Engine image |
 | --- | --- | --- | --- |
@@ -17,10 +15,10 @@ manifest with `kubectl`.
 | [`dsv4flash-b300-intra-3p1d`](./dsv4flash-b300-intra-3p1d) | 1× B300 (8 GPU) | Intra-node PD — 3 prefill + 1 decode (tp=2 each) in one pod, NIXL, SGLang router sidecar | `lmsysorg/sglang:v0.5.12.post1-cu130`, no inter-node RDMA support |
 | [`glm5.2-b300-tp2-dp4`](./glm5.2-b300-tp2-dp4) | 1× B300 (8 GPU) | 4× independent tp=2 engines behind an SGLang router (cache-aware LB, cluster-level dp=4) | `lmsysorg/sglang:dev-glm52-nvfp4` (GLM-5.2 NVFP4 support not yet in a tagged release) |
 
-All samples except GLM-5.2 serve on the same upstream
-`lmsysorg/sglang:v0.5.12.post1-cu130` image (Kimi adds only an EFA layer on top
-for inter-node RDMA); the GLM-5.2 sample uses the `dev-glm52-nvfp4` image until
-NVFP4 support for that model lands in a tagged release.
+> The intra-node PD samples deliberately run several engine processes in one pod — not the usual one-process-per-pod shape. Intra-node KV transfer rides NVLink via CUDA IPC, which requires all engines to share an IPC namespace and see each other's GPUs; 
+
+> All samples except GLM-5.2 serve on the same upstream `lmsysorg/sglang:v0.5.12.post1-cu130` image (Kimi adds only an EFA layer on top
+for inter-node RDMA); the GLM-5.2 sample uses the `dev-glm52-nvfp4` image until NVFP4 support for that model lands in a tagged release.
 
 ## Shared helpers
 
@@ -38,19 +36,15 @@ ECR, printing the image URI on the last line:
 ./build-image.sh   # -> <account>.dkr.ecr.<region>.amazonaws.com/sgl-dev-cu13:<tag>
 ```
 
-Set that URI as `<YOUR_ECR_IMAGE>` in the sample's manifest. Single-node samples
-run the upstream image directly and don't need this build.
+Set that URI as `<YOUR_ECR_IMAGE>` in the sample's manifest. Single-node samples run the upstream image directly and don't need this build.
 
 ### Pre-stage model weights
 
-Download a Hugging Face repo to every matching node's local NVMe
-(`/opt/dlami/nvme`) so the serving pods read weights from fast local disk
-instead of pulling them at startup. [`download-model.sh`](./download-model.sh)
-renders [`download-model-daemonset.yaml`](./download-model-daemonset.yaml) and
-applies it — `LOCAL_DIR_NAME` defaults to the repo id with `/` → `-`:
+Download a Hugging Face repo to every matching node's local NVMe (`/opt/dlami/nvme`) so the serving pods read weights from fast local disk
+instead of pulling them at startup. [`download-model.sh`](./download-model.sh) renders [`download-model-daemonset.yaml`](./download-model-daemonset.yaml) and applies it — `LOCAL_DIR_NAME` defaults to the repo id with `/` → `-`:
 
 ```bash
-./download-model.sh moonshotai/Kimi-K2.5       ml.p5en.48xlarge
+./download-model.sh moonshotai/Kimi-K2.5        ml.p5en.48xlarge
 ./download-model.sh deepseek-ai/DeepSeek-V4-Pro ml.p6-b300.48xlarge
 # watch: kubectl logs -f -l app=model-downloader   (each node prints "Download complete!")
 # then:  kubectl delete daemonset model-downloader
@@ -58,11 +52,4 @@ applies it — `LOCAL_DIR_NAME` defaults to the repo id with `/` → `-`:
 
 ### Metrics
 
-Every serving pod already exposes SGLang metrics on `:30000/metrics` (the engines
-start with `--enable-metrics`) and carries the `sglang-metrics=true` label plus
-the `prometheus.io/{scrape,port,path}` scrape annotations. Point any
-Prometheus-compatible scraper at those pods — e.g. an in-cluster Prometheus
-**agent** remote-writing to **Amazon Managed Prometheus (AMP)** with **Amazon
-Managed Grafana** reading from AMP, or a self-managed Prometheus + Grafana stack.
-Wiring up the scrape backend is left to your cluster's existing observability
-setup; the manifests here only produce the metrics.
+Every serving pod already exposes SGLang metrics on `:30000/metrics` (the engines start with `--enable-metrics`) and carries the `sglang-metrics=true` label plus the `prometheus.io/{scrape,port,path}` scrape annotations. Point any Prometheus-compatible scraper at those pods — e.g. an in-cluster Prometheus **agent** remote-writing to **Amazon Managed Prometheus (AMP)** with **Amazon Managed Grafana** reading from AMP, or a self-managed Prometheus + Grafana stack. Wiring up the scrape backend is left to your cluster's existing observability setup; the manifests here only produce the metrics.

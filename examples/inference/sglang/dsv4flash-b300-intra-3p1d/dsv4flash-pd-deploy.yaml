@@ -12,6 +12,15 @@
 # sidecar shares the pod network namespace, so it reaches every engine on
 # 127.0.0.1 (same as the compose host network).
 #
+# Why one pod with 4 engine processes, not one pod per engine? Intra-node KV
+# transfer rides NVLink via CUDA IPC, which requires the prefill and decode
+# processes to see each other's GPUs and share an IPC namespace. Pods (and
+# containers) each get a DISJOINT 2-GPU set from the device plugin and isolated
+# IPC namespaces, so CUDA IPC handles can't be opened across them and NIXL
+# falls back to TCP over the pod network — NVIDIA measures that fallback at
+# 200-500x worse TTFT. Splitting PD across pods is the right shape only with
+# RDMA between them (see ../kimi2.6-h200-1p1d for the EFA-based version).
+#
 #   kubectl apply -f dsv4flash-pd-deploy.yaml
 ---
 apiVersion: v1
@@ -46,6 +55,11 @@ spec:
         app: dsv4flash-intra-pd
         sglang-metrics: "true"
       annotations:
+        # The prometheus.io annotation convention carries ONE port, but this pod
+        # runs four engines (30000/30100/30200/30300), each with its own
+        # /metrics. Annotation-driven scrapers therefore only see prefill-0; to
+        # scrape all four, target the named container ports (prefill-*/decode)
+        # via the sglang-metrics label instead.
         prometheus.io/scrape: "true"
         prometheus.io/port: "30000"
         prometheus.io/path: "/metrics"
@@ -91,11 +105,17 @@ spec:
         # single-node example needs a longer SGLANG_OPT_* set; Flash does not.)
         - name: SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK
           value: "8320"
+        # One named port per engine — exactly what this container listens on.
+        # 30080 belongs to the router sidecar and is declared there, not here.
         ports:
         - containerPort: 30000
-          name: http
-        - containerPort: 30080
-          name: router
+          name: prefill-0
+        - containerPort: 30100
+          name: prefill-1
+        - containerPort: 30200
+          name: prefill-2
+        - containerPort: 30300
+          name: decode
         volumeMounts:
         - name: shm
           mountPath: /dev/shm
