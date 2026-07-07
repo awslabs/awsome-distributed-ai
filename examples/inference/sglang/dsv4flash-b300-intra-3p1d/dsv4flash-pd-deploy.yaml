@@ -1,0 +1,266 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# DeepSeek-V4-Flash intra-node PD on a single 8-GPU B300 node (EKS / HyperPod).
+#
+# All engines run in ONE pod on ONE node: the sglang-pd container claims all
+# 8 GPUs and starts 3 prefill instances + 1 decode instance, each spanning
+# TWO GPUs (tp=2), split via --base-gpu-id:
+#   prefill 0 -> GPU 0,1   prefill 1 -> GPU 2,3   prefill 2 -> GPU 4,5
+#   decode   -> GPU 6,7
+# KV cache moves prefill -> decode over NIXL, staying intra-node. A router
+# sidecar shares the pod network namespace, so it reaches every engine on
+# 127.0.0.1 (same as the compose host network).
+#
+#   kubectl apply -f dsv4flash-pd-deploy.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dsv4flash-router
+spec:
+  selector:
+    app: dsv4flash-intra-pd
+  ports:
+  - name: http
+    port: 30080
+    targetPort: 30080
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dsv4flash-intra-pd
+  labels:
+    app: dsv4flash-intra-pd
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: dsv4flash-intra-pd
+  template:
+    metadata:
+      labels:
+        app: dsv4flash-intra-pd
+        sglang-metrics: "true"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "30000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Target a p6-b300.48xlarge on either cluster type. A plain EKS managed
+      # nodegroup labels instance-type with the bare EC2 type; a SageMaker
+      # HyperPod instance group uses the `ml.` prefix. A nodeSelector can't
+      # express OR, so match both with nodeAffinity In.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node.kubernetes.io/instance-type
+                operator: In
+                values:
+                - p6-b300.48xlarge      # plain EKS managed nodegroup
+                - ml.p6-b300.48xlarge   # SageMaker HyperPod instance group
+      # An eksctl B300 nodegroup taints nodes nvidia.com/gpu=true:NoSchedule to
+      # keep non-GPU pods off; HyperPod nodes have no such taint. A toleration is
+      # a no-op when the taint is absent, so it's safe to always carry it.
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+      containers:
+      # ---- 3 prefill + 1 decode engines, all on one node -------------------
+      - name: sglang-pd
+        # Same upstream SGLang image as the other examples — DeepSeek-V4-Flash
+        # serves correctly on it; the model/kernel knobs are all driven by the
+        # SGLANG_OPT_* env vars and serve flags below, not by a dedicated image.
+        image: lmsysorg/sglang:v0.5.12.post1-cu130
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          capabilities:
+            add: ["SYS_NICE", "IPC_LOCK"]
+        env:
+        - name: NIXL_LOG_LEVEL
+          value: INFO
+        # The ONLY model env var the SGLang cookbook lists for the verified
+        # b300 / DeepSeek-V4-Flash / fp4 / high-throughput cell. (The Pro
+        # single-node example needs a longer SGLANG_OPT_* set; Flash does not.)
+        - name: SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK
+          value: "8320"
+        ports:
+        - containerPort: 30000
+          name: http
+        - containerPort: 30080
+          name: router
+        volumeMounts:
+        - name: shm
+          mountPath: /dev/shm
+        - name: nvme-hf
+          mountPath: /root/.cache/huggingface
+        - name: nvme-tmp
+          mountPath: /tmp
+        resources:
+          limits:
+            nvidia.com/gpu: 8
+        # Probe the foreground prefill (30200) — it keeps the container alive, so
+        # if it wedges the pod should restart. The 1800s initial delay clears the
+        # long cold start (4 engines load + DeepGEMM JIT + CUDA-graph capture,
+        # gated behind the decode-ready wait loop) so liveness never fires during
+        # warmup.
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 30200
+          initialDelaySeconds: 1800
+          periodSeconds: 60
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 30200
+          initialDelaySeconds: 180
+          periodSeconds: 10
+          timeoutSeconds: 5
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+
+          # Flags shared by every engine (prefill + decode). These mirror the
+          # SGLang cookbook's verified b300 / DeepSeek-V4-Flash / fp4 /
+          # high-throughput single-node cell — tp=4,dp=4 there — scaled down to
+          # tp=2,dp=2 so each engine fits on two GPUs. Per-role flags
+          # (--disaggregation-mode, --base-gpu-id, ports) are appended below.
+          COMMON="--trust-remote-code \
+            --model-path deepseek-ai/DeepSeek-V4-Flash \
+            --tp 2 \
+            --dp 2 \
+            --enable-dp-attention \
+            --moe-a2a-backend megamoe \
+            --mem-fraction-static 0.85 \
+            --cuda-graph-max-bs 64 \
+            --disaggregation-transfer-backend nixl \
+            --skip-server-warmup \
+            --enable-metrics \
+            --host 0.0.0.0"
+
+          # Engine HTTP ports are spaced 100 apart on purpose. With
+          # --enable-dp-attention on a single node, SGLang derives a BLOCK of
+          # internal TCP ports at (--port + 233): dist_init, detokenizer, rpc,
+          # metrics, scheduler_input, plus one per dp rank. Ports spaced only 1
+          # apart would overlap those blocks ("Address already in use"), so we
+          # use 30000 / 30100 / 30200 (prefill) and 30300 (decode).
+
+          # ---- 1 decode instance (GPU 6,7) ----
+          python3 -m sglang.launch_server $COMMON \
+            --port 30300 --base-gpu-id 6 \
+            --disaggregation-mode decode \
+            --disaggregation-bootstrap-port 9300 > /tmp/decode-30300.log 2>&1 &
+
+          echo "Waiting for decode instance (timeout 20 min)..."
+          for i in $(seq 1 240); do
+            if curl -sf http://localhost:30300/health > /dev/null 2>&1; then
+              echo "Decode instance ready after ${i}*5s"
+              break
+            fi
+            sleep 5
+          done
+          if ! curl -sf http://localhost:30300/health > /dev/null 2>&1; then
+            echo "ERROR: decode 30300 failed to start"; tail -100 /tmp/decode-30300.log; exit 1
+          fi
+          echo "Decode ready, starting prefill instances..."
+
+          # ---- 3 prefill instances, tp=2 each (GPU 0-1, 2-3, 4-5) ----
+          for gpu in 0 2; do
+            port=$((30000 + gpu * 50))   # gpu 0 -> 30000, gpu 2 -> 30100
+            bport=$((9000 + gpu * 50))    # gpu 0 -> 9000,  gpu 2 -> 9100
+            python3 -m sglang.launch_server $COMMON \
+              --port ${port} --base-gpu-id ${gpu} \
+              --disaggregation-mode prefill \
+              --disaggregation-bootstrap-port ${bport} > /tmp/prefill-${port}.log 2>&1 &
+          done
+
+          # Last prefill (GPU 4,5) runs in foreground (keeps container alive)
+          exec python3 -m sglang.launch_server $COMMON \
+            --port 30200 --base-gpu-id 4 \
+            --disaggregation-mode prefill \
+            --disaggregation-bootstrap-port 9200
+      # ---- PD router (shares pod network → reaches engines on 127.0.0.1) ---
+      - name: router
+        image: lmsysorg/sgl-model-gateway:v0.3.2
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 30080
+          name: http
+        resources:
+          requests:
+            cpu: "2"
+            memory: 4Gi
+          limits:
+            cpu: "4"
+            memory: 8Gi
+        # Liveness is a bare TCP check, not /readiness: the router reports
+        # not-ready whenever its backends are down, and we must not restart the
+        # router for that — only when its own process has wedged.
+        livenessProbe:
+          tcpSocket:
+            port: 30080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /readiness
+            port: 30080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        command:
+        - python3
+        - -m
+        - sglang_router.launch_router
+        args:
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "30080"
+        - --pd-disaggregation
+        - --prefill-policy
+        - round_robin
+        - --decode-policy
+        - round_robin
+        - --prefill
+        - http://127.0.0.1:30000
+        - "9000"
+        - --prefill
+        - http://127.0.0.1:30100
+        - "9100"
+        - --prefill
+        - http://127.0.0.1:30200
+        - "9200"
+        - --decode
+        - http://127.0.0.1:30300
+      volumes:
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Gi
+      # ⚠️  SET THIS PER CLUSTER — the one thing scheduling can't auto-detect.
+      # The node's local NVMe is mounted at different paths on the two AMIs:
+      #   HyperPod-on-EKS (DLAMI):           /opt/dlami/nvme/...
+      #   self-managed EKS (RAID0 instance): /mnt/k8s-disks/0/...   (setup-local-disks raid0)
+      # Picking the WRONG path is not a hard error: type=DirectoryOrCreate will
+      # silently create an empty dir on the small root disk, and the 500GB+
+      # weights then download there and can fill it up.
+      - name: nvme-hf
+        hostPath:
+          path: /opt/dlami/nvme/huggingface  # For EKS: /mnt/k8s-disks/0/huggingface
+          type: DirectoryOrCreate
+      - name: nvme-tmp
+        hostPath:
+          path: /opt/dlami/nvme/tmp          # For EKS: /mnt/k8s-disks/0/tmp
+          type: DirectoryOrCreate
