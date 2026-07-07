@@ -8,8 +8,8 @@ group auto-creation, multi-NIC wiring, and OSU MPI benchmark results.
 ## Test 9: EFA on CPU HPC instances (hpc6a / hpc7a / hpc8a)
 
 **When to run:** when `add-cng.yaml`'s EFA wiring (`EfaInterfaceCount`,
-`PlacementGroupName`) or the deploy-all forwarding param
-(`OnDemandEfaInterfaceCount`) changes. Skip if only
+`PlacementGroupName`) or the deploy-all forwarding params
+(`OnDemandEfaInterfaceCount`, `OnDemandPlacementGroupName`) change. Skip if only
 GPU/monitoring/AMI paths were touched.
 
 > **EFA is enabled by the interface count.** `OnDemandEfaInterfaceCount=0`
@@ -51,9 +51,8 @@ aws cloudformation create-stack \
 
 The `OnDemandCNGStack` nested stack auto-creates a cluster placement group and
 exposes the name as a stack output (`PlacementGroupName`). To share the PG across
-multiple CNGs (heterogeneous tightly-coupled jobs), deploy the CNG with the
-modular `add-cng.yaml` and pass `PlacementGroupName=<existing-pg-name>` there
-(not exposed on deploy-all).
+multiple CNGs (heterogeneous tightly-coupled jobs), pass
+`OnDemandPlacementGroupName=<existing-pg-name>` instead.
 
 ### Step 2 — verify EFA visibility on a compute node
 

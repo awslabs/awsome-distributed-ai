@@ -50,7 +50,8 @@ it directly.
 | `OnDemandMaxCount` | `4` | CPU queue maximum nodes |
 | `OnDemandCngName` | `cpu1` | CPU node-group name |
 | `OnDemandQueueName` | `cpu1` | CPU Slurm queue name |
-| `OnDemandEfaInterfaceCount` | `0` | EFA interfaces on the CPU CNG. **`0` (default) = no EFA** (standard ENA). `1` or `2` = enable EFA with that many interfaces (switches the LaunchTemplate to a `NetworkInterfaces` block with `InterfaceType=efa` + an auto-created per-CNG cluster placement group). Set the count to the instance type's `MaximumEfaInterfaces`: `hpc8a.96xlarge`/`hpc7a.*`/`hpc6id.32xlarge`=2; `hpc6a.48xlarge`/`c7i.metal`=1. **EFA needs an EFA-capable type** — a non-EFA type (e.g. the default `c6i.4xlarge`) fails to launch with count > 0. No effect on the GPU CNG. See [README §8.6 CPU compute node group](../README.md#86-cpu-compute-node-group--advanced-settings) |
+| `OnDemandEfaInterfaceCount` | `0` | EFA interfaces on the CPU CNG. **`0` (default) = no EFA** (standard ENA). `1` or `2` = enable EFA with that many interfaces (switches the LaunchTemplate to a `NetworkInterfaces` block with `InterfaceType=efa` + a cluster placement group). Set the count to the instance type's `MaximumEfaInterfaces`: `hpc8a.96xlarge`/`hpc7a.*`/`hpc6id.32xlarge`=2; `hpc6a.48xlarge`/`c7i.metal`=1. **EFA needs an EFA-capable type** — a non-EFA type (e.g. the default `c6i.4xlarge`) fails to launch with count > 0. No effect on the GPU CNG. See [README §8.6 CPU compute node group](../README.md#86-cpu-compute-node-group--advanced-settings) |
+| `OnDemandPlacementGroupName` | *(empty)* | Existing cluster placement group name to launch nodes into. Empty + `OnDemandEfaInterfaceCount > 0` auto-creates a per-CNG cluster placement group; supplying a name reuses an existing one (e.g. shared across CPU + GPU CNGs for heterogeneous tightly-coupled jobs). Ignored when `OnDemandEfaInterfaceCount = 0` |
 
 ## 4. GPU Compute Node Group — P5/P6 (Optional)
 

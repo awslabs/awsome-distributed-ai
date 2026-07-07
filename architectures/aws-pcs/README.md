@@ -622,11 +622,9 @@ multi-NIC EFA wiring per-family.
 (Setting a count > 0 on a non-EFA type, or mismatching the count with the
 instance type's actual `MaximumEfaInterfaces`, fails at launch.)
 
-**Placement group:** auto-created per-CNG by the template. To reuse an existing
-placement group across multiple CNGs (e.g. heterogeneous tightly-coupled jobs
-that span CPU + GPU), deploy the CNG with the modular
-[`add-cng.yaml`](./assets/add-cng.yaml) and set its `PlacementGroupName`
-parameter — deploy-all always auto-creates.
+**Placement group:** auto-created per-CNG by the template. Override with
+`OnDemandPlacementGroupName=<existing-pg-name>` to share one PG across multiple
+CNGs (e.g. heterogeneous tightly-coupled jobs that span CPU + GPU).
 
 **Multi-NIC bandwidth needs multiple MPI pairs.** A single MPI pair uses one
 libfabric endpoint and only one NIC. Use `osu_mbw_mr -np 32 -N 16` (or your
