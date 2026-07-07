@@ -106,11 +106,11 @@ Metadata:
       GrafanaAccessCidr:
         default: "Grafana public access CIDR (empty = SSM port-forward only)"
       MonitoringVersion:
-        default: "Advanced: Monitoring version (git ref)"
+        default: "Monitoring version (git ref)"
       MonitoringRepo:
-        default: "Advanced: Monitoring repo (owner/repo)"
+        default: "Monitoring repo (owner/repo)"
       DcgmExporterImage:
-        default: "Advanced: dcgm-exporter image (default covers H100/B200/B300)"
+        default: "dcgm-exporter image (default covers H100/B200/B300)"
       ManagedAccounting:
         default: "Slurm managed accounting"
       AccountingPolicyEnforcement:
