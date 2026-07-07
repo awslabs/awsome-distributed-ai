@@ -39,7 +39,6 @@ Metadata:
           - OnDemandCngName
           - OnDemandQueueName
           - OnDemandEfaInterfaceCount
-          - OnDemandPlacementGroupName
       - Label:
           default: "4. GPU Compute Node Group - P5/P6 Series (Optional)"
         Parameters:
@@ -132,8 +131,6 @@ Metadata:
         default: "CPU queue name"
       OnDemandEfaInterfaceCount:
         default: "EFA interfaces on CPU queue (0 = off, 1 or 2 for HPC types)"
-      OnDemandPlacementGroupName:
-        default: "Existing placement group name (empty = auto-create when EFA on)"
       DeployPseriesCNG:
         default: "Deploy GPU (P5/P6) queue"
       PseriesInstanceType:
@@ -506,16 +503,6 @@ Parameters:
     Default: 0
     AllowedValues: [0, 1, 2]
 
-  OnDemandPlacementGroupName:
-    Type: String
-    Description: >-
-      (Optional, advanced) Existing cluster placement group name to launch the
-      on-demand CPU nodes into. Leave empty (default) to auto-create a per-CNG
-      cluster placement group when OnDemandEfaInterfaceCount > 0. Set to share one
-      PG across multiple CNGs (e.g. heterogeneous tightly-coupled jobs). Ignored
-      when OnDemandEfaInterfaceCount = 0.
-    Default: ''
-
   # P-series Compute Node Group
   DeployPseriesCNG:
     Type: String
@@ -836,9 +823,9 @@ Resources:
         PostInstallScriptArgs: !Ref PostInstallScriptArgs
         # EFA on CPU HPC instances (hpc8a/hpc7a/hpc6a). add-cng.yaml enables EFA
         # when EfaInterfaceCount > 0 and auto-creates a per-CNG cluster placement
-        # group when PlacementGroupName is empty.
+        # group (reusing an existing PG via PlacementGroupName is a modular
+        # add-cng.yaml-only feature — not exposed on deploy-all).
         EfaInterfaceCount: !Ref OnDemandEfaInterfaceCount
-        PlacementGroupName: !Ref OnDemandPlacementGroupName
         DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
         S3BucketName: !Ref S3BucketName
