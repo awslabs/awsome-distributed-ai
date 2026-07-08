@@ -1,7 +1,21 @@
 # Infrastructure Tests (Tests 1-3, 8)
 
-Validates cluster infrastructure: monitoring stack, container runtime (Enroot/Pyxis)
-first-boot install, and the pre-baked AMI build path.
+Validates cluster infrastructure: template lint, monitoring stack, container
+runtime (Enroot/Pyxis) first-boot install, and the pre-baked AMI build path.
+
+---
+
+## Template lint
+
+Run on every edited template before any deploy (no AWS resources created;
+catches YAML/CFN syntax errors in seconds):
+
+```bash
+aws cloudformation validate-template --template-body file://assets/<name>.yaml
+```
+
+**Expected:** the parameter list is returned with no error, for every edited
+`assets/*.yaml`.
 
 ---
 

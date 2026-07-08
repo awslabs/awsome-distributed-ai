@@ -128,4 +128,12 @@ The FSx-side EFA endpoints are usable from EFA-capable clients (CPU CNGs
 deployed with `OnDemandEfaInterfaceCount > 0`, P5/P6 GPU CNGs). Plain Lustre client
 mounts continue to work over TCP for non-EFA nodes; EFA support is additive.
 
+### Performance regression criteria
+
+For changes that touch mount options or FSx parameters, re-run the throughput
+benchmark documented in
+[OPERATIONS.md §4.1](../docs/OPERATIONS.md#41-lustre-mount-options--noatime)
+(the `noatime` benchmark) and compare against the recorded baseline.
+**A >10% degradation blocks the change.**
+
 ---
