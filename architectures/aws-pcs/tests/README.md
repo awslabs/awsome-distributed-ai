@@ -78,7 +78,7 @@ The table lists **all 20 regions where AWS PCS is available** (per
 | Region (AZ ID) ¹ | Verified ² | Storage ³ (Lustre<br>/ OpenZFS) | GPU verified ⁴ | *(ref) CBML GPUs offered* ⁵ | Date (UTC) |
 |---|---|---|---|---|---|
 | **N. Virginia**<br>(`use1-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | ✅ | P6-B300, P6-B200, P5, P5e, P5en, P4d, P4de | 2026-06-17 |
-| **Ohio**<br>(`use2-az3`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | ✅ | P6-B200, P5, P5e, P5en, P4d | 2026-06-17 |
+| **Ohio**<br>(`use2-az3`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | ✅ P5 | P6-B200, P5, P5e, P5en, P4d | 2026-07-08 |
 | **Oregon**<br>(`usw2-az3`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | ✅ P6-B300 | P6-B300, P6-B200, P5, P5e, P5en, P4d, P4de | 2026-06-17 |
 | **Tokyo**<br>(`apne1-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | P5, P5e, P5en | 2026-06-17 |
 | **Mumbai**<br>(`aps1-az2`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | ✅ P6-B200 | P6-B200, P5, P5e, P5en | 2026-06-17 |

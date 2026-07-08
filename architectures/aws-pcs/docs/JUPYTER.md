@@ -177,6 +177,12 @@ How the GPU allocation behaves:
   batch job over a notebook so the GPUs free up when the run finishes.
 - **Set `HF_HOME=/fsx/.hf-cache`** (e.g. in the sbatch script before starting
   Jupyter, or per notebook) — model downloads must not go to NFS `/home`.
+- **Multi-NIC GPU nodes (P5/P6) work as-is.** On these instances `hostname -I`
+  returns dozens of addresses (one per EFA NIC), but the first entry is always
+  the primary interface's IP — which is what the sbatch script binds Jupyter
+  to, and the address the login node can reach. Verified on p5.48xlarge
+  (32 NICs): server bound to the primary IP, port-forward path worked
+  unchanged, and the kernel saw all 8 H100s with `--gres=gpu:8`.
 - **Containerized kernels (optional):** to use an NGC image as the notebook
   environment instead of a venv, wrap the server in Pyxis:
   `srun --container-image=<image> --container-mounts=/fsx,$HOME …` around the

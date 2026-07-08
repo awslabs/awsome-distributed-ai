@@ -210,11 +210,18 @@ after the idle timeout.
 
 ## Verified configurations
 
-| Item | 2026-07-07 (existing cluster) | 2026-07-08 (fresh deploy-all) |
-|---|---|---|
-| Cluster | AWS PCS (Slurm 25.11), scale-to-zero queues | Fresh `pcs-ml-cluster-deploy-all.yaml` deploy (us-east-2), Slurm 25.11 — E2E gate also passed (6 monitoring containers, Pyxis `ubuntu:22.04` container job) |
-| CPU test | `cpu1` queue, c-family node — server up, 403/token-JSON, tunnel `200` | `cpu1` queue, c6i.4xlarge, scale-from-zero — same results |
-| GPU test | `gpu-g6` queue, g6.12xlarge (4× L4), `--gres=gpu:1` | same, first-boot node (Enroot/Pyxis install then job start) |
-| GPU result | `cuda_available=true`, `device_count=1`, `CUDA_VISIBLE_DEVICES=0`, CUDA matmul OK — identical from direct `srun` and from `jupyter execute` notebook run | identical |
-| Access path | SSM port-forward via login node (`AWS-StartPortForwardingSessionToRemoteHost`), no inbound ports | identical (`/lab` = `200` through the tunnel for both queues) |
-| Software | JupyterLab 4.6.1, torch 2.12.1+cu130, driver 595.71.05 / CUDA 13.2 | identical |
+All runs: AWS PCS, Slurm 25.11, us-east-2, scale-to-zero queues; JupyterLab
+4.6.1, torch 2.12.1+cu130, driver 595.71.05 / CUDA 13.2. Access via SSM
+port-forward through the login node (no inbound ports). Every run passed the
+same gates — server up as a Slurm job, token file mode 600, `403` without /
+JSON with token, `/lab` = `200` through the tunnel, and (GPU) the kernel
+seeing exactly the `--gres` allocation from both direct `srun` and a
+`jupyter execute` notebook run.
+
+| Date | Cluster | Queue / instance | GPU check |
+|---|---|---|---|
+| 2026-07-07 | existing dev cluster | `cpu1` (c-family) | — |
+| 2026-07-07 | existing dev cluster | `gpu-g6` g6.12xlarge (4× L4), `--gres=gpu:1` | `device_count=1`, `CUDA_VISIBLE_DEVICES=0`, matmul OK |
+| 2026-07-08 | **fresh `deploy-all`** (E2E gate also passed: 6 monitoring containers, Pyxis container job) | `cpu1` c6i.4xlarge, scale-from-zero | — |
+| 2026-07-08 | same fresh cluster | `gpu-g6` g6.12xlarge, first-boot node | identical to 07-07 GPU run |
+| 2026-07-08 | **fresh `deploy-all` + P5 CNG on a Capacity Block** (GPU E2E also passed: Pyxis CUDA container `nvidia-smi`, DCGM exporter scraping all 8 GPUs) | `gpu-p5` p5.48xlarge (8× H100, 32 NICs), `--gres=gpu:8` | `device_count=8`, `CUDA_VISIBLE_DEVICES=0,…,7`, matmul OK; multi-NIC first-IP binding worked unchanged |
