@@ -36,7 +36,7 @@ So the rule of thumb encoded by this repo's samples:
 
 ## Deploy
 
-**Pre-stage the weights first (recommended)** — this pod runs **four** engine processes that all load the same model from the node's HF cache; without pre-staging, the cold start begins with the decode engine downloading the full weights before anything else can proceed:
+**Pre-stage the weights first (required for this sample)** — this pod runs **four** engine processes that all load the same model from the node's HF cache; the decode engine's startup wait-loop gives up after 20 min, so on a cold cache the full weights must download first or the pod restarts until the node cache fills:
 
 ```bash
 ../download-model.sh deepseek-ai/DeepSeek-V4-Flash ml.p6-b300.48xlarge
