@@ -28,11 +28,21 @@ So the rule of thumb encoded by this repo's samples:
 
 - **PD split across pods/nodes** — correct when the pods are connected by RDMA(EFA); see [`kimi2.6-h200-1p1d`](../kimi2.6-h200-1p1d), where prefill and decode are separate StatefulSets.
 - **PD within one node, no RDMA between engines** — the engines must live in one container that owns all 8 GPUs, as here. The pod is still a single
-  schedulable, restartable unit: probes watch the foreground engine and the whole group restarts together (`strategy: Recreate`), which is also the
-  correct failure semantics — a half-alive PD group can't serve anyway.
+  schedulable, restartable unit: the liveness probe ANDs the `/health` of **all four engines**, so if any engine dies the whole group restarts together
+  (`strategy: Recreate`). The router does health-check around a dead prefill, but that leaves the pod serving at reduced capacity with no path back to
+  full — and a dead decode leaves nothing to route to at all — so any dead engine triggers a group restart (at the cost of the ~30 min cold start).
+  Readiness stays on the foreground engine only, so a dying background engine doesn't cut traffic before the restart lands.
 - **No PD at all** — if you just want N independent engines on a node, one-engine-per-pod is the native shape; see [`glm5.2-b300-tp2-dp4`](../glm5.2-b300-tp2-dp4).
 
 ## Deploy
+
+**Pre-stage the weights first (recommended)** — this pod runs **four** engine processes that all load the same model from the node's HF cache; without pre-staging, the cold start begins with the decode engine downloading the full weights before anything else can proceed:
+
+```bash
+../download-model.sh deepseek-ai/DeepSeek-V4-Flash ml.p6-b300.48xlarge
+# wait for "Download complete!" in the downloader pod's logs, then:
+kubectl delete daemonset model-downloader
+```
 
 ```bash
 kubectl apply -f dsv4flash-pd-deploy.yaml

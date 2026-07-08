@@ -126,18 +126,33 @@ spec:
         resources:
           limits:
             nvidia.com/gpu: 8
-        # Probe the foreground prefill (30200) — it keeps the container alive, so
-        # if it wedges the pod should restart. The 1800s initial delay clears the
-        # long cold start (4 engines load + DeepGEMM JIT + CUDA-graph capture,
-        # gated behind the decode-ready wait loop) so liveness never fires during
-        # warmup.
+        # Liveness ANDs all four engines: httpGet can only hit one port, and a
+        # dead engine is otherwise never recovered — the router health-checks
+        # around a dead prefill (pod stays Ready at 2/3 capacity), and a dead
+        # decode leaves nothing to route to at all. Any engine down for
+        # 5x60s restarts the whole container, i.e. the whole PD group
+        # (~30 min cold start — the price of self-healing back to full
+        # capacity). The 1800s initial delay clears that cold start (4 engines
+        # load + DeepGEMM JIT + CUDA-graph capture, gated behind the
+        # decode-ready wait loop) so liveness never fires during warmup.
         livenessProbe:
-          httpGet:
-            path: /health
-            port: 30200
+          exec:
+            command:
+            - sh
+            - -c
+            - |
+              for p in 30000 30100 30200 30300; do
+                curl -sf -m 5 http://127.0.0.1:${p}/health || exit 1
+              done
           initialDelaySeconds: 1800
           periodSeconds: 60
+          timeoutSeconds: 30
           failureThreshold: 5
+        # Readiness deliberately does NOT AND the engines: it watches only the
+        # foreground prefill. If it also required every engine, one dead
+        # background engine would instantly flip the pod NotReady and stop ALL
+        # traffic (replicas: 1) during the up-to-5-min window before liveness
+        # restarts it — worse than serving degraded until the restart lands.
         readinessProbe:
           httpGet:
             path: /health

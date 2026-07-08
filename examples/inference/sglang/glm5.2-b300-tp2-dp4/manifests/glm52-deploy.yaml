@@ -199,7 +199,7 @@ spec:
         effect: NoSchedule
       containers:
       - name: sglang
-        image: lmsysorg/sglang:dev-glm52-nvfp4
+        image: lmsysorg/sglang@sha256:bafcd07dbc511ca4cbae8e3865fecca98a0323b777c83c4d3083008228891f65  # dev-glm52-nvfp4, until GLM-5.2 NVFP4 lands in a tagged release
         imagePullPolicy: IfNotPresent
         securityContext:
           capabilities:

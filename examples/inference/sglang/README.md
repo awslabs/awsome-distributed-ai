@@ -13,12 +13,12 @@ SPDX-License-Identifier: MIT-0
 | [`kimi2.6-h200-1p1d`](./kimi2.6-h200-1p1d) | 2× H200 nodes | Node-level 1P1D — prefill + decode StatefulSets, NIXL over EFA | Custom ECR build from [`Dockerfile.efa`](./Dockerfile.efa) (lmsysorg/sglang:v0.5.12.post1-cu130 + EFA layer), inter-node RDMA enabled |
 | [`dsv4pro-b300-single-node`](./dsv4pro-b300-single-node) | 1× B300 (8 GPU) | Unified (non-PD) baseline | `lmsysorg/sglang:v0.5.12.post1-cu130`, no inter-node RDMA support |
 | [`dsv4flash-b300-intra-3p1d`](./dsv4flash-b300-intra-3p1d) | 1× B300 (8 GPU) | Intra-node PD — 3 prefill + 1 decode (tp=2 each) in one pod, NIXL, SGLang router sidecar | `lmsysorg/sglang:v0.5.12.post1-cu130`, no inter-node RDMA support |
-| [`glm5.2-b300-tp2-dp4`](./glm5.2-b300-tp2-dp4) | 1× B300 (8 GPU) | 4× independent tp=2 engines behind an SGLang router (cache-aware LB, cluster-level dp=4) | `lmsysorg/sglang:dev-glm52-nvfp4` (GLM-5.2 NVFP4 support not yet in a tagged release) |
+| [`glm5.2-b300-tp2-dp4`](./glm5.2-b300-tp2-dp4) | 1× B300 (8 GPU) | 4× independent tp=2 engines behind an SGLang router (cache-aware LB, cluster-level dp=4) | `lmsysorg/sglang@sha256:bafcd0…` (the `dev-glm52-nvfp4` tag pinned by digest — GLM-5.2 NVFP4 support not yet in a tagged release) |
 
 > The intra-node PD samples deliberately run several engine processes in one pod — not the usual one-process-per-pod shape. Intra-node KV transfer rides NVLink via CUDA IPC, which requires all engines to share an IPC namespace and see each other's GPUs; 
 
 > All samples except GLM-5.2 serve on the same upstream `lmsysorg/sglang:v0.5.12.post1-cu130` image (Kimi adds only an EFA layer on top
-for inter-node RDMA); the GLM-5.2 sample uses the `dev-glm52-nvfp4` image until NVFP4 support for that model lands in a tagged release.
+for inter-node RDMA); the GLM-5.2 sample uses the `dev-glm52-nvfp4` image (pinned by digest in its manifest, since `dev-*` tags are mutable) until NVFP4 support for that model lands in a tagged release.
 
 ## Shared helpers
 
@@ -40,8 +40,10 @@ Set that URI as `<YOUR_ECR_IMAGE>` in the sample's manifest. Single-node samples
 
 ### Pre-stage model weights
 
-Download a Hugging Face repo to every matching node's local NVMe (`/opt/dlami/nvme`) so the serving pods read weights from fast local disk
-instead of pulling them at startup. [`download-model.sh`](./download-model.sh) renders [`download-model-daemonset.yaml`](./download-model-daemonset.yaml) and applies it — `LOCAL_DIR_NAME` defaults to the repo id with `/` → `-`:
+Download a Hugging Face repo to every matching node's local NVMe so the serving pods read weights from fast local disk instead of pulling them at
+startup. [`download-model.sh`](./download-model.sh) renders [`download-model-daemonset.yaml`](./download-model-daemonset.yaml) and applies it. The
+weights are staged in **HF cache layout** under `<nvme>/huggingface` — the dir every serving manifest mounts at `/root/.cache/huggingface`, with the
+engines loading by repo id, so the staged snapshot is found as a cache hit:
 
 ```bash
 ./download-model.sh moonshotai/Kimi-K2.5        ml.p5en.48xlarge
@@ -49,6 +51,8 @@ instead of pulling them at startup. [`download-model.sh`](./download-model.sh) r
 # watch: kubectl logs -f -l app=model-downloader   (each node prints "Download complete!")
 # then:  kubectl delete daemonset model-downloader
 ```
+
+Like the serving manifests, the daemonset's NVMe `hostPath` defaults to HyperPod's `/opt/dlami/nvme` — on self-managed EKS change it to `/mnt/k8s-disks/0` so it stages to the disk the serving pods actually mount.
 
 ### Metrics
 
