@@ -68,6 +68,11 @@ done
 #    CNG templates. It is hand-duplicated (no shared include), so an edit that
 #    lands in only some of the copies is exactly the drift this catches.
 guard_extract() {  # print the guard block: comment header through the log line
+  # Leading whitespace is stripped because the four templates legitimately nest
+  # the block at different depths. Side effect: the check cannot see RELATIVE
+  # indentation drift inside the block (e.g. an indented NRCONF terminator, or
+  # <<'NRCONF' switched to the tab-stripping <<-'NRCONF' in one template) —
+  # those would change deployed behavior while still comparing as identical.
   awk '/--- Protect running jobs from unattended-upgrades \/ needrestart ---/{p=1}
        p{print}
        p&&/pcs-needrestart-guard\.log/{exit}' "$1" | sed -E 's/^[[:space:]]+//'
@@ -80,7 +85,7 @@ else
     other=$(guard_extract "assets/$t.yaml")
     if [ "$other" != "$ref" ]; then
       report "needrestart guard block in assets/$t.yaml differs from assets/add-cng.yaml (keep the four copies byte-identical):"
-      diff <(echo "$ref") <(echo "$other") | sed 's/^/    /'
+      diff <(printf '%s\n' "$ref") <(printf '%s\n' "$other") | sed 's/^/    /'
     fi
   done
 fi
