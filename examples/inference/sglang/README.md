@@ -15,7 +15,7 @@ SPDX-License-Identifier: MIT-0
 | [`dsv4flash-b300-intra-3p1d`](./dsv4flash-b300-intra-3p1d) | 1× B300 (8 GPU) | Intra-node PD — 3 prefill + 1 decode (tp=2 each) in one pod, NIXL, SGLang router sidecar | `lmsysorg/sglang:v0.5.12.post1-cu130`, no inter-node RDMA support |
 | [`glm5.2-b300-tp2-dp4`](./glm5.2-b300-tp2-dp4) | 1× B300 (8 GPU) | 4× independent tp=2 engines behind an SGLang router (cache-aware LB, cluster-level dp=4) | `lmsysorg/sglang@sha256:bafcd0…` (the `dev-glm52-nvfp4` tag pinned by digest — GLM-5.2 NVFP4 support not yet in a tagged release) |
 
-> The intra-node PD samples deliberately run several engine processes in one pod — not the usual one-process-per-pod shape. Intra-node KV transfer rides NVLink via CUDA IPC, which requires all engines to share an IPC namespace and see each other's GPUs; 
+> The intra-node PD samples deliberately run several engine processes in one pod — not the usual one-process-per-pod shape. Intra-node KV transfer rides NVLink via CUDA IPC, which requires all engines to share an IPC namespace and see each other's GPUs — impossible across separate pods or containers, so the engines share one container (each sample's README explains the full rationale).
 
 > All samples except GLM-5.2 serve on the same upstream `lmsysorg/sglang:v0.5.12.post1-cu130` image (Kimi adds only an EFA layer on top
 for inter-node RDMA); the GLM-5.2 sample uses the `dev-glm52-nvfp4` image (pinned by digest in its manifest, since `dev-*` tags are mutable) until NVFP4 support for that model lands in a tagged release.
