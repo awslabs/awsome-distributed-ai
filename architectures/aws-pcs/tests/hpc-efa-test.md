@@ -18,7 +18,7 @@ GPU/monitoring/AMI paths were touched.
 
 This validates that the on-demand CPU CNG actually launches with EFA NICs in a
 cluster placement group, and that MPI / libfabric over EFA works end-to-end.
-Verified bandwidth numbers are recorded in
+Verified **hpc8a** bandwidth numbers are recorded in
 [tests/README.md](./README.md#major-update-pr--configurations-run-end-to-end-on-real-hardware);
 this section documents the **how-to** so a contributor can reproduce.
 

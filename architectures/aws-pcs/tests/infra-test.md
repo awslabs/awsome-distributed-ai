@@ -37,7 +37,7 @@ curl -s http://localhost:6817/metrics | head               # Slurm OpenMetrics
 **Expected:** the six login containers are `Up`; install log exits 0; the tree is under
 `/opt`; all Prometheus targets `up`; Slurm OpenMetrics returns Prometheus-format text.
 For dashboard access (SSM port-forward or public CIDR) see
-[README §8 Monitoring](../README.md#8-monitoring). Use `MonitoringVersion=v2.10.2`+
+[README §8.2 Monitoring](../README.md#82-monitoring). Use `MonitoringVersion=v2.10.2`+
 on PCS (earlier tags have the ec2_sd credential-expiry bug — see
 [OPERATIONS.md §3](../docs/OPERATIONS.md#3-monitoring-monitoringversion)).
 

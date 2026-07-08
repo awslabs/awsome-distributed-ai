@@ -426,6 +426,9 @@ sreport cluster AccountUtilizationByUser \
   format="Account,Login,Used"
 ```
 
+Expected: `sacct -u alice` lists alice's jobs; `sreport` shows alice and bob
+under `ml-team` with non-zero `Used`.
+
 ### C4. Resource limit enforcement (if B3 was set)
 
 ```bash
