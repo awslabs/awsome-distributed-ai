@@ -69,7 +69,7 @@ export LDAP_ADMIN_PASSWORD=$(aws ssm get-parameter \
 export LDAP_DOMAIN_SUFFIX="dc=cluster,dc=internal"
 
 # Using the helper script
-sudo -E bash /usr/local/bin/ldap-add-user.sh testuser1 10001 3000
+sudo -E ldap-add-user.sh testuser1 10001 3000
 ```
 
 (For the manual `ldapadd`/`ldappasswd` equivalent, see
@@ -118,7 +118,7 @@ srun -N 1 -n 1 -p cpu1 bash -c 'ls -la /home/testuser1'
 ### B5. Create a second user
 
 ```bash
-sudo -E bash /usr/local/bin/ldap-add-user.sh testuser2 10002 3000
+sudo -E ldap-add-user.sh testuser2 10002 3000
 ```
 
 ### B6. Delete a user
@@ -351,8 +351,8 @@ sacctmgr -i add account default Description="Default account"
 ADMIN_PW=$(aws ssm get-parameter --name "/pcs/${CLUSTER_ID}/ldap/admin-password" \
   --with-decryption --query 'Parameter.Value' --output text --region <region>)
 
-sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" bash /usr/local/bin/ldap-add-user.sh alice 10001 3000
-sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" bash /usr/local/bin/ldap-add-user.sh bob 10002 3000
+sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" ldap-add-user.sh alice 10001 3000
+sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" ldap-add-user.sh bob 10002 3000
 ```
 
 ### B2. Register users in Slurm accounting
@@ -466,7 +466,7 @@ sshare -a --format=Account,User,RawShares,NormShares,RawUsage,FairShare
 An unregistered user can still submit jobs:
 ```bash
 # Create a user NOT in sacctmgr
-sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" bash /usr/local/bin/ldap-add-user.sh charlie 10003 3000
+sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" ldap-add-user.sh charlie 10003 3000
 sudo su - charlie -c 'export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; \
   srun -p cpu1 -N1 -n1 hostname'
 ```
