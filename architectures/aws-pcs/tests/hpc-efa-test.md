@@ -17,9 +17,10 @@ GPU/monitoring/AMI paths were touched.
 > separate `OnDemandEnableEfa` flag (removed — the count alone drives it).
 
 This validates that the on-demand CPU CNG actually launches with EFA NICs in a
-cluster placement group, and that MPI / libfabric over EFA works end-to-end. The
-verified-configurations table above documents the bandwidth numbers; this section
-documents the **how-to** so a contributor can reproduce.
+cluster placement group, and that MPI / libfabric over EFA works end-to-end.
+Verified bandwidth numbers are recorded in
+[tests/README.md](./README.md#major-update-pr--configurations-run-end-to-end-on-real-hardware);
+this section documents the **how-to** so a contributor can reproduce.
 
 ### Step 1 — deploy with EFA on the CPU CNG
 
@@ -85,8 +86,7 @@ PATH=/opt/amazon/openmpi/bin:$PATH ./configure CC=mpicc CXX=mpicxx --prefix=/fsx
 PATH=/opt/amazon/openmpi/bin:$PATH make -j8
 ```
 
-Submit a 2-node sbatch with the AWS-tuned EFA env (the canonical reference
-parameters, see "Tuning notes" in the verified-configuration numbers in [tests/README.md](./README.md)):
+Submit a 2-node sbatch with the AWS-tuned EFA env:
 
 ```bash
 cat > /fsx/osu/osu-bench.sbatch <<'EOF'
@@ -123,8 +123,8 @@ mkdir -p /fsx/osu/logs
 sbatch -p hpc /fsx/osu/osu-bench.sbatch
 ```
 
-The reference numbers per instance type are in
-the verified-configuration numbers in [tests/README.md](./README.md) above.
+Reference numbers (hpc8a, 2 nodes) are in
+[tests/README.md](./README.md#major-update-pr--configurations-run-end-to-end-on-real-hardware).
 
 ### Step 4 — observe NIC-level traffic in Grafana (optional)
 
