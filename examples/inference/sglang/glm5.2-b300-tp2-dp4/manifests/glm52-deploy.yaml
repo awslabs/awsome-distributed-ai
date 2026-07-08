@@ -1,0 +1,300 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# GLM-5.2 (NVFP4) multi-replica serving on a single 8-GPU B300 node.
+# The NVFP4 checkpoint is small enough for a 2-GPU engine, so instead of one
+# tp=8 engine spanning the node, FOUR independent tp=2 engines share it
+# (4 replicas x 2 GPUs = 8 GPUs). An SGLang router in front discovers the
+# engine pods via the Kubernetes API (label selector) and load-balances with
+# its cache-aware policy — that is the dp=4 layer; inside each engine attention
+# runs dp=2 (--enable-dp-attention requires dp to divide tp, so tp=2/dp=4 in
+# ONE engine is not a valid combination).
+#
+# Runs on BOTH SageMaker HyperPod-on-EKS and self-managed (eksctl) EKS:
+#
+#   kubectl apply -f glm52-deploy.yaml
+#
+# Scheduling is handled for both cluster types automatically (see nodeAffinity +
+# tolerations below). The ONE thing you must set per environment is the NVMe
+# hostPath at the bottom of this file — see the WARNING there.
+#
+# Pre-stage the weights with ../download-model.sh before applying — otherwise
+# all four replicas cold-start by downloading the same HF repo into the same
+# shared cache at once.
+---
+# Entry point: the router, not the engines. Clients talk to glm52-router:30080;
+# the router forwards to whichever engine its policy picks.
+apiVersion: v1
+kind: Service
+metadata:
+  name: glm52-router
+spec:
+  selector:
+    app: glm52-router
+  ports:
+  - name: http
+    port: 30080
+    targetPort: 30080
+  type: ClusterIP
+---
+# The router discovers engine pods through the Kubernetes API (watch on pods
+# matching --selector), so it needs read access to pods in this namespace.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: glm52-router
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: glm52-router
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: glm52-router
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: glm52-router
+subjects:
+- kind: ServiceAccount
+  name: glm52-router
+---
+# ---- SGLang router — cache-aware LB across the 4 engines -------------------
+# Unlike the qwen intra-PD sample (router sidecar, engines on 127.0.0.1), the
+# engines here are separate pods with dynamic IPs, so the router runs as its
+# own Deployment and tracks engines via Kubernetes service discovery: pods
+# matching the selector are added/removed as workers automatically — a rolling
+# engine update needs no router config change. Being CPU-only it schedules on
+# any node.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glm52-router
+  labels:
+    app: glm52-router
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: glm52-router
+  template:
+    metadata:
+      labels:
+        app: glm52-router
+    spec:
+      serviceAccountName: glm52-router
+      containers:
+      - name: router
+        image: lmsysorg/sgl-model-gateway:v0.3.2
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 30080
+          name: http
+        resources:
+          requests:
+            cpu: "2"
+            memory: 4Gi
+          limits:
+            cpu: "4"
+            memory: 8Gi
+        # Liveness is a bare TCP check, not /readiness: the router reports
+        # not-ready whenever its backends are down, and we must not restart the
+        # router for that — only when its own process has wedged.
+        livenessProbe:
+          tcpSocket:
+            port: 30080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /readiness
+            port: 30080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        env:
+        # Scope discovery to the namespace this stack is deployed in, matching
+        # the namespace-scoped Role above (all-namespace watch would need a
+        # ClusterRole).
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        command:
+        - python3
+        - -m
+        - sglang_router.launch_router
+        args:
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "30080"
+        - --policy
+        - cache_aware
+        - --service-discovery
+        - --service-discovery-namespace
+        - $(POD_NAMESPACE)
+        - --service-discovery-port
+        - "30000"
+        - --selector
+        - app=glm52-tp2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glm52-tp2
+  labels:
+    app: glm52-tp2
+spec:
+  # 4 x tp=2 engines fill the 8-GPU node; the router above spreads requests
+  # across them (cluster-level dp=4).
+  replicas: 4
+  # All 8 GPUs are taken when the 4 replicas are up, so a surge pod could never
+  # schedule — roll one replica at a time instead, keeping 3/4 serving.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: glm52-tp2
+  template:
+    metadata:
+      labels:
+        app: glm52-tp2
+        sglang-metrics: "true"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "30000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Target a p6-b300.48xlarge on either cluster type. kubelet always sets
+      # node.kubernetes.io/instance-type; HyperPod instance groups use the
+      # SageMaker-style `ml.` prefix, a plain EKS managed nodegroup uses the
+      # bare EC2 type. A nodeSelector can't express OR, so use nodeAffinity In.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node.kubernetes.io/instance-type
+                operator: In
+                values:
+                - p6-b300.48xlarge      # plain EKS managed nodegroup
+                - ml.p6-b300.48xlarge   # SageMaker HyperPod instance group
+      # The eksctl B300 nodegroup taints nodes nvidia.com/gpu=true:NoSchedule to
+      # keep non-GPU pods off; HyperPod nodes have no such taint. A toleration is
+      # a no-op when the taint is absent, so it's safe to always carry it.
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+      containers:
+      - name: sglang
+        image: lmsysorg/sglang@sha256:bafcd07dbc511ca4cbae8e3865fecca98a0323b777c83c4d3083008228891f65  # dev-glm52-nvfp4, until GLM-5.2 NVFP4 lands in a tagged release
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          capabilities:
+            add: ["IPC_LOCK"]
+        env:
+        # Feeds the subPathExpr below so the four co-located replicas don't
+        # race on the same /tmp compile caches.
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        ports:
+        - containerPort: 30000
+          name: http
+        volumeMounts:
+        - name: shm
+          mountPath: /dev/shm
+        - name: nvme-hf
+          mountPath: /root/.cache/huggingface
+        - name: nvme-tmp
+          mountPath: /tmp
+          subPathExpr: $(POD_NAME)
+        resources:
+          limits:
+            nvidia.com/gpu: 2
+        # /health returns 200 once the API server is up, but the engine can still
+        # wedge on a stuck CUDA-graph capture. Restart after 5 consecutive misses;
+        # the 1800s initial delay clears the cold start (weight load + CUDA-graph
+        # capture) so liveness never fires during warmup.
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 30000
+          initialDelaySeconds: 1800
+          periodSeconds: 60
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 30000
+          initialDelaySeconds: 180
+          periodSeconds: 10
+          timeoutSeconds: 5
+        command:
+        - sglang
+        - serve
+        - --trust-remote-code
+        - --model-path
+        - nvidia/GLM-5.2-NVFP4
+        - --tp
+        - "2"
+        - --dp
+        - "2"
+        - --enable-dp-attention
+        - --quantization
+        - modelopt_fp4
+        # Split <think> blocks into reasoning_content and parse GLM-style tool
+        # calls into structured tool_calls in the OpenAI-compatible responses.
+        - --reasoning-parser
+        - glm45
+        - --tool-call-parser
+        - glm47
+        - --max-running-requests
+        - "32"
+        - --chunked-prefill-size
+        - "8192"
+        - --mem-fraction-static
+        - "0.88"
+        - --enable-metrics
+        - --host
+        - 0.0.0.0
+        - --port
+        - "30000"
+      volumes:
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Gi
+      # ⚠️  SET THIS PER CLUSTER — the one thing scheduling can't auto-detect.
+      # The node's local NVMe is mounted at different paths on the two AMIs.
+      # Default below is HyperPod's DLAMI mount; for self-managed EKS swap both
+      # paths to the instance-store RAID0 (commented). Picking the WRONG path is
+      # not a hard error: type=DirectoryOrCreate will silently create an empty
+      # dir on the small root disk and the weights will fill it up.
+      #
+      #   HyperPod-on-EKS (DLAMI):           /opt/dlami/nvme/...
+      #   self-managed EKS (RAID0 instance): /mnt/k8s-disks/0/...   (setup-local-disks raid0)
+      #
+      # The HF cache is shared by all four replicas on the node — the weights
+      # are downloaded (or pre-staged) once and read by every engine.
+      - name: nvme-hf
+        hostPath:
+          path: /opt/dlami/nvme/huggingface  #For EKS: /mnt/k8s-disks/0/huggingface
+          type: DirectoryOrCreate
+      - name: nvme-tmp
+        hostPath:
+          path: /opt/dlami/nvme/tmp         #For EKS: /mnt/k8s-disks/0/tmp
+          type: DirectoryOrCreate

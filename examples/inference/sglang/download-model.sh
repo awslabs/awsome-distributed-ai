@@ -6,28 +6,28 @@
 # it, pre-staging the weights to every matching node's NVMe (/opt/dlami/nvme).
 #
 # Usage:
-#   ./download-model.sh <HF_REPO_ID> <INSTANCE_TYPE> [LOCAL_DIR_NAME]
+#   ./download-model.sh <HF_REPO_ID> <INSTANCE_TYPE>
 #
 # Examples:
-#   ./download-model.sh moonshotai/Kimi-K2.5  ml.p5en.48xlarge
 #   ./download-model.sh deepseek-ai/DeepSeek-V4-Pro ml.p6-b300.48xlarge
+#   ./download-model.sh moonshotai/Kimi-K2.5 ml.p5en.48xlarge
 #
-# LOCAL_DIR_NAME defaults to the repo id with '/' replaced by '-'
-# (e.g. moonshotai/Kimi-K2.5 -> moonshotai-Kimi-K2.5). The weights land at
-# /opt/dlami/nvme/<LOCAL_DIR_NAME> on each node.
+# The weights are staged in HF cache layout under
+# /opt/dlami/nvme/huggingface — the dir every serving manifest mounts at
+# /root/.cache/huggingface, with engines loading by repo id, so the staged
+# snapshot is found as a cache hit.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ $# -lt 2 ]]; then
-    echo "Usage: $0 <HF_REPO_ID> <INSTANCE_TYPE> [LOCAL_DIR_NAME]" >&2
+    echo "Usage: $0 <HF_REPO_ID> <INSTANCE_TYPE>" >&2
     exit 1
 fi
 
 export HF_REPO_ID="$1"
 export INSTANCE_TYPE="$2"
-export LOCAL_DIR_NAME="${3:-${HF_REPO_ID//\//-}}"
 
 # The two cluster types label instance-type differently: a plain EKS managed
 # nodegroup uses the bare EC2 type (p5en.48xlarge), a SageMaker HyperPod instance
@@ -42,9 +42,9 @@ fi
 
 echo "==> Pre-staging ${HF_REPO_ID}"
 echo "    nodes:  ${INSTANCE_TYPE} / ${INSTANCE_TYPE_ALT}"
-echo "    target: /opt/dlami/nvme/${LOCAL_DIR_NAME}"
+echo "    target: <nvme>/huggingface (HF cache layout)"
 
-envsubst '${INSTANCE_TYPE} ${INSTANCE_TYPE_ALT} ${HF_REPO_ID} ${LOCAL_DIR_NAME}' \
+envsubst '${INSTANCE_TYPE} ${INSTANCE_TYPE_ALT} ${HF_REPO_ID}' \
     < "${SCRIPT_DIR}/download-model-daemonset.yaml" \
     | kubectl apply -f -
 
