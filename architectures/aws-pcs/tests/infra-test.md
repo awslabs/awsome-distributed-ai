@@ -1,7 +1,21 @@
 # Infrastructure Tests (Tests 1-3, 8)
 
-Validates cluster infrastructure: monitoring stack, container runtime (Enroot/Pyxis)
-first-boot install, and the pre-baked AMI build path.
+Validates cluster infrastructure: template lint, monitoring stack, container
+runtime (Enroot/Pyxis) first-boot install, and the pre-baked AMI build path.
+
+---
+
+## Template lint
+
+Run on every edited template before any deploy (no AWS resources created;
+catches YAML/CFN syntax errors in seconds):
+
+```bash
+aws cloudformation validate-template --template-body file://assets/<name>.yaml
+```
+
+**Expected:** the parameter list is returned with no error, for every edited
+`assets/*.yaml`.
 
 ---
 
@@ -23,7 +37,9 @@ curl -s http://localhost:6817/metrics | head               # Slurm OpenMetrics
 **Expected:** the six login containers are `Up`; install log exits 0; the tree is under
 `/opt`; all Prometheus targets `up`; Slurm OpenMetrics returns Prometheus-format text.
 For dashboard access (SSM port-forward or public CIDR) see
-[README §8 Monitoring](../README.md#8-monitoring). Use `MonitoringVersion=v2.9.1`+ on PCS.
+[README §8.2 Monitoring](../README.md#82-monitoring). Use `MonitoringVersion=v2.10.2`+
+on PCS (earlier tags have the ec2_sd credential-expiry bug — see
+[OPERATIONS.md §3](../docs/OPERATIONS.md#3-monitoring-monitoringversion)).
 
 ---
 

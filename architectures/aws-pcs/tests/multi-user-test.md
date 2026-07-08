@@ -69,28 +69,11 @@ export LDAP_ADMIN_PASSWORD=$(aws ssm get-parameter \
 export LDAP_DOMAIN_SUFFIX="dc=cluster,dc=internal"
 
 # Using the helper script
-sudo -E bash /usr/local/bin/ldap-add-user.sh testuser1 10001 3000
+sudo -E ldap-add-user.sh testuser1 10001 3000
 ```
 
-Or manually:
-```bash
-ldapadd -x -H ldap://localhost -D "cn=admin,dc=cluster,dc=internal" -w "$LDAP_ADMIN_PASSWORD" <<EOF
-dn: uid=testuser1,ou=People,dc=cluster,dc=internal
-objectClass: inetOrgPerson
-objectClass: posixAccount
-objectClass: shadowAccount
-uid: testuser1
-cn: Test User 1
-sn: User1
-uidNumber: 10001
-gidNumber: 3000
-homeDirectory: /home/testuser1
-loginShell: /bin/bash
-EOF
-
-ldappasswd -x -H ldap://localhost -D "cn=admin,dc=cluster,dc=internal" \
-  -w "$LDAP_ADMIN_PASSWORD" -s "testpass123" "uid=testuser1,ou=People,dc=cluster,dc=internal"
-```
+(For the manual `ldapadd`/`ldappasswd` equivalent, see
+[USER-MANAGEMENT.md](../docs/USER-MANAGEMENT.md).)
 
 ### B2. Verify user visible on login node
 
@@ -135,7 +118,7 @@ srun -N 1 -n 1 -p cpu1 bash -c 'ls -la /home/testuser1'
 ### B5. Create a second user
 
 ```bash
-sudo -E bash /usr/local/bin/ldap-add-user.sh testuser2 10002 3000
+sudo -E ldap-add-user.sh testuser2 10002 3000
 ```
 
 ### B6. Delete a user
@@ -318,29 +301,6 @@ Expected: the job reaches `COMPLETED` (ExitCode `0:0`) even though
 `id <user>` / `getent passwd <user>` returns "no such user" on that node —
 name resolution is degraded, the job is not.
 
----
-
-## Verdict checklist
-
-| Check | Expected |
-|---|---|
-| slapd running on login node | ✅ |
-| LDAP DB on /home/ldap-db (shared OpenZFS) | ✅ |
-| Admin password in SSM Parameter Store | ✅ |
-| User created via ldapadd/helper script | ✅ |
-| User visible on login node (`getent passwd`) | ✅ |
-| User visible on compute node (`srun getent passwd`) | ✅ |
-| Home dir auto-created on first login | ✅ |
-| User deleted, no longer resolvable | ✅ |
-| Slurm job runs as LDAP user | ✅ |
-| Multiple nodes resolve same UID | ✅ |
-| Home dir accessible from all nodes | ✅ |
-| New compute node resolves existing users | ✅ |
-| SSSD cache works during brief LDAP outage | ✅ |
-| LDAP DB survives login node replacement | ✅ |
-| Admin password preserved across replacement (same SHA-256) | ✅ |
-| Stale-ldap_uri recovery on running compute is non-disruptive | ✅ |
-| Job runs by UID even when user unresolvable on the node | ✅ |
 
 ---
 
@@ -389,10 +349,10 @@ sacctmgr -i add account default Description="Default account"
 
 ```bash
 ADMIN_PW=$(aws ssm get-parameter --name "/pcs/${CLUSTER_ID}/ldap/admin-password" \
-  --with-decryption --query 'Parameter.Value' --output text --region us-east-2)
+  --with-decryption --query 'Parameter.Value' --output text --region <region>)
 
-sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" ldap-add-user alice 10001 3000
-sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" ldap-add-user bob 10002 3000
+sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" ldap-add-user.sh alice 10001 3000
+sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" ldap-add-user.sh bob 10002 3000
 ```
 
 ### B2. Register users in Slurm accounting
@@ -466,6 +426,9 @@ sreport cluster AccountUtilizationByUser \
   format="Account,Login,Used"
 ```
 
+Expected: `sacct -u alice` lists alice's jobs; `sreport` shows alice and bob
+under `ml-team` with non-zero `Used`.
+
 ### C4. Resource limit enforcement (if B3 was set)
 
 ```bash
@@ -506,7 +469,7 @@ sshare -a --format=Account,User,RawShares,NormShares,RawUsage,FairShare
 An unregistered user can still submit jobs:
 ```bash
 # Create a user NOT in sacctmgr
-sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" ldap-add-user charlie 10003 3000
+sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" ldap-add-user.sh charlie 10003 3000
 sudo su - charlie -c 'export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; \
   srun -p cpu1 -N1 -n1 hostname'
 ```
@@ -525,16 +488,3 @@ sudo su - charlie -c 'export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; 
 
 Expected: `error: Unable to allocate resources: Invalid account or account/partition combination specified`
 
----
-
-## Verdict checklist
-
-| Check | Expected |
-|---|---|
-| sacctmgr show cluster → cluster listed | ✅ |
-| Users registered in accounting (alice, bob) | ✅ |
-| Jobs run as LDAP users complete successfully | ✅ |
-| sacct shows correct user/account/state per job | ✅ |
-| sreport shows per-user utilization | ✅ |
-| Resource limit enforcement (if set) blocks over-limit jobs | ✅ |
-| Unregistered user behavior matches AccountingPolicyEnforcement setting | ✅ |
