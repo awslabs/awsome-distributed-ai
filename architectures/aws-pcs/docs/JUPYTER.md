@@ -63,13 +63,13 @@ $HOME/jupyter-env/bin/pip install --upgrade pip jupyterlab
 
 ## Step 2 — submit the Jupyter job
 
-Save as `$HOME/jupyter.sbatch` and submit **from your home directory** with
-`sbatch jupyter.sbatch`:
+Save the following as `$HOME/jupyter.sbatch`. It has **no `--partition` line on
+purpose** — you pick the queue (and, for GPUs, the GPU count) at submit time,
+so the *same* script serves both CPU and GPU sessions:
 
 ```bash
 #!/bin/bash
 #SBATCH --job-name=jupyter
-#SBATCH --partition=cpu1          # or your GPU queue; then add e.g. --gres=gpu:1
 #SBATCH --nodes=1
 #SBATCH --time=8:00:00            # auto-terminate after 8 h — adjust to taste
 #SBATCH --output=%u-jupyter-%j.log
@@ -102,6 +102,22 @@ exec jupyter lab --no-browser --ip="$NODE_IP" --port="$PORT" \
   --ServerApp.token="$(cat "$TOKEN_FILE")" \
   --notebook-dir="$HOME"
 ```
+
+Then submit it with `sbatch`. **`-p <queue>` is required** — Slurm has no
+default partition, so a bare `sbatch jupyter.sbatch` is rejected with
+*"invalid partition specified"*. Run `sinfo` to list your queues, then:
+
+```bash
+# CPU session — pick a CPU queue (e.g. cpu1)
+sbatch -p cpu1 jupyter.sbatch
+
+# GPU session — pick a GPU queue and request GPUs with --gres
+sbatch -p gpu-g6 --gres=gpu:1 jupyter.sbatch
+```
+
+For GPU work, add the ML stack to the venv from Step 1 once
+(`$HOME/jupyter-env/bin/pip install torch  # + transformers, etc.`); the GPU
+allocation behaviour is detailed in [Using GPUs](#using-gpus) below.
 
 The first submission on an idle queue waits ~2–3 minutes for the node to
 scale up (8–12 minutes if the node is also running its first-boot
@@ -157,22 +173,9 @@ costs nothing.
 
 ## Using GPUs
 
-The same sbatch script works on a GPU queue — change the `#SBATCH` header, and
-request GPUs with `--gres`:
-
-```bash
-#SBATCH --partition=gpu-g6        # your GPU queue name
-#SBATCH --gres=gpu:1              # GPUs for this Jupyter session
-#SBATCH --time=8:00:00
-```
-
-Add the ML stack to the venv from Step 1 (once):
-
-```bash
-$HOME/jupyter-env/bin/pip install torch   # + transformers, etc.
-```
-
-How the GPU allocation behaves:
+You launch a GPU session with the same script and the `sbatch -p <gpu-queue>
+--gres=gpu:N` form shown in Step 2 — nothing else changes. How the GPU
+allocation behaves:
 
 - **Slurm enforces the `--gres` count.** The job gets `CUDA_VISIBLE_DEVICES`
   set to its allocated GPUs (e.g. `0,1` for `--gres=gpu:2` on a 4-GPU
