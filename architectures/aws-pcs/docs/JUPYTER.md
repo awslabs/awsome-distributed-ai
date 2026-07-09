@@ -88,24 +88,12 @@ openssl rand -hex 24 > "$TOKEN_FILE"
 
 cat <<EOM
 ======================================================================
-Jupyter starting on $(hostname) ($NODE_IP), port $PORT.
-
-1. From your workstation, forward localhost:8888 to the server:
-
-  LOGIN_ID=\$(aws ec2 describe-instances \\
-    --filters "Name=tag:Name,Values=*login" \\
-              "Name=instance-state-name,Values=running" \\
-    --query 'Reservations[0].Instances[0].InstanceId' --output text)
-
-  aws ssm start-session --target \$LOGIN_ID \\
-    --document-name AWS-StartPortForwardingSessionToRemoteHost \\
-    --parameters host=$NODE_IP,portNumber=$PORT,localPortNumber=8888
-
-2. Get the token (on the login node):  cat $TOKEN_FILE
-
-3. Open:  http://localhost:8888/?token=<token>
-
-Stop the server with:  scancel $SLURM_JOB_ID
+Jupyter is running on compute node $NODE_IP, port $PORT (job $SLURM_JOB_ID).
+To connect, follow "Step 3" in JUPYTER.md with these values:
+    NODE_IP = $NODE_IP
+    PORT    = $PORT
+    token   = run  cat $TOKEN_FILE  on the login node
+Stop the server:  scancel $SLURM_JOB_ID
 ======================================================================
 EOM
 
@@ -121,69 +109,41 @@ Enroot/Pyxis install).
 
 ## Step 3 — connect
 
-### 3a. Read the connection details from the job log (on the login node)
+The job log (`~/<user>-jupyter-<jobid>.log`, printed by the running job) gives
+you the compute node's `NODE_IP` and `PORT`. With those two values:
+
+**1. On your workstation** — open the SSM tunnel (fill in your Region and the
+`NODE_IP` / `PORT` from the log):
 
 ```bash
-cat ~/<username>-jupyter-<jobid>.log   # %u = your username, e.g. ubuntu-jupyter-3.log
-```
-
-The log prints the compute node IP and port (e.g. `10.1.8.103`, port `8003`)
-and reminds you where the token file is.
-
-### 3b. Open the SSM port-forward tunnel (on your workstation)
-
-```bash
-# 1. Find the login-node instance ID
-LOGIN_ID=$(aws ec2 describe-instances \
-  --region <region> \
+LOGIN_ID=$(aws ec2 describe-instances --region <region> \
   --filters "Name=tag:Name,Values=*login" \
             "Name=instance-state-name,Values=running" \
   --query 'Reservations[0].Instances[0].InstanceId' --output text)
 
-# If you run more than one cluster in the same account, pin by stack name:
-# --filters "Name=tag:Name,Values=*login" \
-#           "Name=tag:ClusterName,Values=<your-stack-name>" \
-#           "Name=instance-state-name,Values=running"
-
-# 2. Forward localhost:8888 → compute node
-aws ssm start-session \
-  --region <region> \
-  --target "$LOGIN_ID" \
+aws ssm start-session --region <region> --target "$LOGIN_ID" \
   --document-name AWS-StartPortForwardingSessionToRemoteHost \
   --parameters "host=<NODE_IP>,portNumber=<PORT>,localPortNumber=8888"
 ```
 
-The session stays in the foreground; **Ctrl-C closes the tunnel** (the Jupyter
-job keeps running — reconnect any time until the job ends).
+Leave this running — **Ctrl-C closes the tunnel** (the Jupyter job keeps
+running; reconnect any time until the job ends).
 
-### 3c. Get the token and open the browser
-
-On the login node:
+**2. On the login node** — read the token:
 
 ```bash
 cat ~/.jupyter-token-<jobid>
 ```
 
-Then open in your browser: `http://localhost:8888/?token=<token>`
+**3. In your browser** — open `http://localhost:8888/?token=<token>`.
 
-### Required IAM permissions
-
-The two AWS CLI calls above require the following actions, all of which are
-already included in the stock
-[`cluster-user-iam.yaml`](../assets/cluster-user-iam.yaml) policy:
-
-| Call | Action(s) required |
-|---|---|
-| `aws ec2 describe-instances` | `ec2:DescribeInstances`, `ec2:DescribeInstanceStatus`, `ec2:DescribeTags` |
-| `aws ssm start-session` (instance target) | `ssm:StartSession` on `ec2:instance/*` with condition `ssm:resourceTag/Name = PCS-login*` |
-| `aws ssm start-session` (document) | `ssm:StartSession` on `arn:aws:ssm:*:*:document/AWS-StartPortForwardingSessionToRemoteHost` |
-| Session lifecycle | `ssm:DescribeSessions`, `ssm:GetConnectionStatus`, `ssm:DescribeInstanceProperties`, `ssm:TerminateSession` |
-
-If you are using the cluster-admin policy (`cluster-admin-iam.yaml`) or an
-account with broad permissions, these are implicitly covered. If you are
-operating under a restricted IAM role, attach the `cluster-user-iam.yaml`
-stack output policy (or an equivalent inline policy) before running the
-commands above.
+> **Required IAM.** The two CLI calls above are already permitted by the stock
+> [`cluster-user-iam.yaml`](../assets/cluster-user-iam.yaml) policy (and by any
+> broader admin credentials). Under a restricted role, ensure it grants:
+> `ec2:DescribeInstances` (find the login node); `ssm:StartSession` on the
+> login instance (`ssm:resourceTag/Name = PCS-login*`) and on the
+> `AWS-StartPortForwardingSessionToRemoteHost` document; and
+> `ssm:TerminateSession` / `ssm:DescribeSessions` to end the tunnel.
 
 ## Stopping
 
@@ -229,9 +189,7 @@ How the GPU allocation behaves:
   plenty for most exploration) and keep `--time` tight — an idle notebook
   holds its GPUs until the job ends. For multi-hour *training*, prefer a
   batch job over a notebook so the GPUs free up when the run finishes.
-- **Set `HF_HOME=/fsx/$USER/.hf-cache`** (e.g. in the sbatch script before
-  starting Jupyter, or per notebook) — model downloads must not go to NFS
-  `/home`, and a per-user path avoids cache-ownership clashes between users.
+  (Remember `HF_HOME=/fsx/$USER/.hf-cache` from Step 1 for model downloads.)
 - **Multi-NIC GPU nodes (P5/P6) work as-is.** On these instances `hostname -I`
   returns dozens of addresses (one per EFA NIC). The script binds Jupyter to
   the first entry, which in practice is the primary interface's IP (verified
