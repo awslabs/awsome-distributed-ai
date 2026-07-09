@@ -48,13 +48,6 @@ userPassword: {SSHA}placeholder
 EOF
 )
 
-# Add SSH key if provided (uses openssh-lpk schema if available)
-if [ -n "${SSH_PUBKEY}" ]; then
-    LDIF="${LDIF}
-objectClass: ldapPublicKey
-sshPublicKey: ${SSH_PUBKEY}"
-fi
-
 echo "$LDIF" | ldapadd -x -H ldap://localhost -D "${LDAP_ADMIN_DN}" -w "${LDAP_ADMIN_PASSWORD}" 2>&1
 
 # Set a random initial password (user should change via ldappasswd)
@@ -62,11 +55,35 @@ INITIAL_PW=$(openssl rand -base64 12)
 ldappasswd -x -H ldap://localhost -D "${LDAP_ADMIN_DN}" -w "${LDAP_ADMIN_PASSWORD}" \
     -s "${INITIAL_PW}" "uid=${USERNAME},ou=People,${LDAP_DOMAIN_SUFFIX}"
 
+# SSH public key (optional 4th arg): install into the user's authorized_keys
+# on shared /home (visible to every node). This intentionally does NOT use the
+# LDAP openssh-lpk schema — slapd here doesn't load it, and authorized_keys on
+# the shared filesystem gives the same result with zero sshd/SSSD wiring.
+# Requires root (this script already needs root to be useful).
+if [ -n "${SSH_PUBKEY}" ]; then
+    HOME_DIR="/home/${USERNAME}"
+    if [ ! -d "${HOME_DIR}" ]; then
+        # Creating the home dir here pre-empts pam_mkhomedir, so copy the
+        # skeleton files it would have provided (.bashrc, .profile, ...).
+        cp -rT /etc/skel "${HOME_DIR}"
+    fi
+    mkdir -p "${HOME_DIR}/.ssh"
+    echo "${SSH_PUBKEY}" >> "${HOME_DIR}/.ssh/authorized_keys"
+    chmod 700 "${HOME_DIR}/.ssh"
+    chmod 600 "${HOME_DIR}/.ssh/authorized_keys"
+    chown -R "${USER_UID}:${USER_GID}" "${HOME_DIR}"
+    chmod 750 "${HOME_DIR}"
+fi
+
 echo ""
 echo "User '${USERNAME}' created successfully."
 echo "  UID: ${USER_UID}"
 echo "  GID: ${USER_GID}"
-echo "  Home: /home/${USERNAME} (auto-created on first login via pam_mkhomedir)"
+if [ -n "${SSH_PUBKEY}" ]; then
+    echo "  Home: /home/${USERNAME} (created; SSH public key installed)"
+else
+    echo "  Home: /home/${USERNAME} (auto-created on first login via pam_mkhomedir)"
+fi
 echo "  Initial password: ${INITIAL_PW}"
 echo ""
 echo "To add to Slurm accounting:"

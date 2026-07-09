@@ -26,6 +26,7 @@ drops them under the default `env_reset`/`secure_path`.
 | Task | Command (run on the login node) |
 |---|---|
 | Add a user | `sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" ldap-add-user.sh alice 10001 3000` |
+| Add a user + SSH key | `sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" ldap-add-user.sh alice 10001 3000 "ssh-ed25519 AAAA..."` |
 | List all users | `ldapsearch -x -H ldap://localhost -b ou=People,dc=cluster,dc=internal uid` |
 | Delete a user | `ldapdelete -x -H ldap://localhost -D cn=admin,dc=cluster,dc=internal -w "$ADMIN_PW" uid=alice,ou=People,dc=cluster,dc=internal` then `sudo sss_cache -E` |
 | Reset a user's password | `ldappasswd -x -H ldap://localhost -D cn=admin,dc=cluster,dc=internal -w "$ADMIN_PW" -s NEWPASS uid=alice,ou=People,dc=cluster,dc=internal` |
@@ -238,8 +239,12 @@ This creates the user with:
 **With an SSH key** (user can log in immediately):
 
 ```bash
-sudo LDAP_ADMIN_PASSWORD="<password>" ldap-add-user.sh alice 10001 3000 "ssh-rsa AAAA... alice@laptop"
+sudo LDAP_ADMIN_PASSWORD="<password>" ldap-add-user.sh alice 10001 3000 "ssh-ed25519 AAAA... alice@laptop"
 ```
+
+The quoted key is installed into `/home/alice/.ssh/authorized_keys` (home
+directory created on the spot; `/home` is shared, so it works cluster-wide).
+To add or rotate a key later, append to that file — LDAP doesn't store keys.
 
 **Verifying the user was created:**
 
