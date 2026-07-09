@@ -56,9 +56,10 @@ python3 -m venv $HOME/jupyter-env
 $HOME/jupyter-env/bin/pip install --upgrade pip jupyterlab
 ```
 
-> For ML work, also set `HF_HOME=/fsx/.hf-cache` in your notebooks/jobs — the
-> HuggingFace cache must not live on NFS `/home` (file-locking errors under
-> concurrent access).
+> For ML work, also set `HF_HOME=/fsx/$USER/.hf-cache` in your notebooks/jobs —
+> the HuggingFace cache must not live on NFS `/home` (file-locking errors under
+> concurrent access), and a per-user path avoids ownership clashes on
+> multi-user clusters.
 
 ## Step 2 — submit the Jupyter job
 
@@ -75,7 +76,8 @@ Save as `$HOME/jupyter.sbatch` and submit **from your home directory** with
 
 umask 077   # everything this job writes is owner-only
 
-# Port derived from the job ID → no collisions between concurrent servers
+# Port derived from the job ID (range 8000-8999). Collisions are unlikely but
+# possible if two servers share a node with job IDs differing by a multiple of 1000.
 PORT=$((8000 + SLURM_JOB_ID % 1000))
 NODE_IP=$(hostname -I | awk '{print $1}')
 
@@ -91,7 +93,7 @@ Jupyter starting on $(hostname) ($NODE_IP), port $PORT.
 1. From your workstation, forward localhost:8888 to the server:
 
   LOGIN_ID=\$(aws ec2 describe-instances \\
-    --filters "Name=tag:aws:pcs:compute-node-group-name,Values=login" \\
+    --filters "Name=tag:Name,Values=*login" \\
               "Name=instance-state-name,Values=running" \\
     --query 'Reservations[0].Instances[0].InstanceId' --output text)
 
@@ -175,14 +177,15 @@ How the GPU allocation behaves:
   plenty for most exploration) and keep `--time` tight — an idle notebook
   holds its GPUs until the job ends. For multi-hour *training*, prefer a
   batch job over a notebook so the GPUs free up when the run finishes.
-- **Set `HF_HOME=/fsx/.hf-cache`** (e.g. in the sbatch script before starting
-  Jupyter, or per notebook) — model downloads must not go to NFS `/home`.
+- **Set `HF_HOME=/fsx/$USER/.hf-cache`** (e.g. in the sbatch script before
+  starting Jupyter, or per notebook) — model downloads must not go to NFS
+  `/home`, and a per-user path avoids cache-ownership clashes between users.
 - **Multi-NIC GPU nodes (P5/P6) work as-is.** On these instances `hostname -I`
-  returns dozens of addresses (one per EFA NIC), but the first entry is always
-  the primary interface's IP — which is what the sbatch script binds Jupyter
-  to, and the address the login node can reach. Verified on p5.48xlarge
-  (32 NICs): server bound to the primary IP, port-forward path worked
-  unchanged, and the kernel saw all 8 H100s with `--gres=gpu:8`.
+  returns dozens of addresses (one per EFA NIC). The script binds Jupyter to
+  the first entry, which in practice is the primary interface's IP (verified
+  on p5.48xlarge, 32 NICs) — and any entry is same-VPC-reachable from the
+  login node, so the port-forward path works regardless. The kernel saw all
+  8 H100s with `--gres=gpu:8`.
 - **Containerized kernels (optional):** to use an NGC image as the notebook
   environment instead of a venv, wrap the server in Pyxis:
   `srun --container-image=<image> --container-mounts=/fsx,$HOME …` around the
@@ -193,10 +196,14 @@ How the GPU allocation behaves:
 ## Notes
 
 - **Multi-user:** each user runs their own server job under their own UID; the
-  job-ID-derived port avoids collisions when several servers share a node.
-  Keep tokens in `$HOME` (created mode 600 by the script) — treat the token
-  like a password to your account, since the SSM/IAM layer alone does not
-  distinguish cluster users.
+  job-ID-derived port makes same-node collisions unlikely (see the comment in
+  the script). Keep tokens in `$HOME` (created mode 600 by the script) — treat
+  the token like a password to your account, since the SSM/IAM layer alone
+  does not distinguish cluster users.
+- **Multiple clusters in one account:** the `Name=*login` tag filter in the
+  connect snippet matches the login node of *every* PCS cluster that follows
+  the naming convention — add a `"Name=tag:ClusterName,Values=<your-stack>"`
+  filter to pin it when you run more than one.
 - **Alternative when `SSHAccessCidr` is set:** a plain SSH tunnel also works —
   `ssh -L 8888:<compute-node-ip>:<port> <user>@<login-public-ip>` — useful for
   users who cannot install the Session Manager plugin.

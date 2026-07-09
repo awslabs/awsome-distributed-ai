@@ -49,8 +49,9 @@ is shared, every compute node sees the same venv.
 
 ## Step 2 — CPU: Jupyter server as a Slurm job
 
-Save as `$HOME/jupyter.sbatch` (this is the same script as the user-facing
-guide; adjust `--partition` to your CPU queue):
+Save as `$HOME/jupyter.sbatch` (a trimmed variant of the script in
+[JUPYTER.md](../docs/JUPYTER.md) — the server-launch logic is the same; **keep
+the two in sync** when changing it. Adjust `--partition` to your CPU queue):
 
 ```bash
 #!/bin/bash
@@ -62,6 +63,8 @@ guide; adjust `--partition` to your CPU queue):
 
 umask 077
 
+# Port range 8000-8999; collisions possible only if two servers share a node
+# with job IDs differing by a multiple of 1000
 PORT=$((8000 + SLURM_JOB_ID % 1000))
 NODE_IP=$(hostname -I | awk '{print $1}')
 
@@ -110,8 +113,8 @@ Via SSM (AWS; `LOGIN_ID` = login-node instance ID) — run locally:
 aws ssm start-session --target $LOGIN_ID \
   --document-name AWS-StartPortForwardingSessionToRemoteHost \
   --parameters host=$NODE_IP,portNumber=$PORT,localPortNumber=8888
-# other terminal:
-curl -s -o /dev/null -w '%{http_code}\n' "http://localhost:8888/lab?token=$(TOKEN)"
+# other terminal — TOKEN=<value from `cat ~/.jupyter-token-<jobid>` on the login node>:
+curl -s -o /dev/null -w '%{http_code}\n' "http://localhost:8888/lab?token=$TOKEN"
 ```
 
 (Or the SSH equivalent: `ssh -L 8888:$NODE_IP:$PORT <login-node>`.)
@@ -165,7 +168,23 @@ if res["cuda_available"]:
 print(json.dumps(res, indent=2))
 ```
 
-Run it two ways — directly in the allocation, and through an actual notebook
+Create a one-cell notebook that runs the same script (the cell path must
+match where `gpu_check.py` was saved):
+
+```bash
+cat > $HOME/gpu_check.ipynb <<EOF
+{
+ "cells": [
+  {"cell_type": "code", "execution_count": null, "metadata": {}, "outputs": [],
+   "source": ["exec(open('$HOME/gpu_check.py').read())"]}
+ ],
+ "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+ "nbformat": 4, "nbformat_minor": 5
+}
+EOF
+```
+
+Run the check two ways — directly in the allocation, and through the notebook
 executed by the Jupyter machinery (`jupyter execute` uses the same kernel the
 browser would):
 
@@ -173,9 +192,12 @@ browser would):
 # direct
 srun --jobid=<gpu-jobid> --overlap $HOME/jupyter-env/bin/python $HOME/gpu_check.py
 
-# as a notebook: one code cell containing  exec(open('/home/.../gpu_check.py').read())
+# as a notebook (prints nothing on success; output lands in gpu_check_out.ipynb)
 srun --jobid=<gpu-jobid> --overlap $HOME/jupyter-env/bin/jupyter execute \
   --output=gpu_check_out.ipynb $HOME/gpu_check.ipynb
+
+# print the executed cell's output
+python3 -c "import json; nb=json.load(open('$HOME/gpu_check_out.ipynb')); [print(''.join(o.get('text',[]))) for c in nb['cells'] for o in c.get('outputs',[]) if 'text' in o]"
 ```
 
 **Expected (both ways, pass criteria in bold):**
@@ -193,6 +215,9 @@ srun --jobid=<gpu-jobid> --overlap $HOME/jupyter-env/bin/jupyter execute \
 `CUDA_VISIBLE_DEVICES` matching the `--gres` count (here `0` for `gpu:1` on a
 4-GPU node) confirms Slurm's gres enforcement reaches the kernel process; the
 matmul confirms compute actually executes on the device, not just enumeration.
+(Note: `device_count == --gres count` assumes the cluster constrains devices
+per job — `ConstrainDevices=yes` in `cgroup.conf`, the PCS default. On a
+cluster without device cgroups the kernel sees every GPU on the node.)
 
 ---
 
@@ -225,3 +250,4 @@ seeing exactly the `--gres` allocation from both direct `srun` and a
 | 2026-07-08 | **fresh `deploy-all`** (E2E gate also passed: 6 monitoring containers, Pyxis container job) | `cpu1` c6i.4xlarge, scale-from-zero | — |
 | 2026-07-08 | same fresh cluster | `gpu-g6` g6.12xlarge, first-boot node | identical to 07-07 GPU run |
 | 2026-07-08 | **fresh `deploy-all` + P5 CNG on a Capacity Block** (GPU E2E also passed: Pyxis CUDA container `nvidia-smi`, DCGM exporter scraping all 8 GPUs) | `gpu-p5` p5.48xlarge (8× H100, 32 NICs), `--gres=gpu:8` | `device_count=8`, `CUDA_VISIBLE_DEVICES=0,…,7`, matmul OK; multi-NIC first-IP binding worked unchanged |
+| 2026-07-09 | fresh `deploy-all` cluster — **clean-room pass**: every command block in this file and JUPYTER.md executed verbatim in its documented role (login node / workstation), including the `Name=*login` login-node discovery, the workstation `$TOKEN` curl, and the notebook-creation heredoc | `cpu1` + `gpu-g6` g6.12xlarge, `--gres=gpu:1` | identical results; notebook run output extracted with the documented print command |
