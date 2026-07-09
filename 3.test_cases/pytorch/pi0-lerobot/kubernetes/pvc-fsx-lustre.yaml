@@ -1,0 +1,35 @@
+# Pi0 LeRobot — FSx for Lustre PVC
+#
+# Dynamic provisioning path (EKS with FSx CSI driver).
+# For HyperPod-on-EKS with pre-provisioned FSx, use the existing fsx-claim PVC
+# and skip this manifest entirely.
+#
+# Render: envsubst < pvc-fsx-lustre.yaml | kubectl apply -f -
+# Required env vars: DATA_PVC_NAME, DATA_PVC_SIZE, FSX_SUBNET_ID, FSX_SECURITY_GROUP_ID
+
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fsx-sc-pi0
+provisioner: fsx.csi.aws.com
+parameters:
+  subnetId: "${FSX_SUBNET_ID}"
+  securityGroupIds: "${FSX_SECURITY_GROUP_ID}"
+  deploymentType: SCRATCH_2
+  storageType: SSD
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: "${DATA_PVC_NAME}"
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: fsx-sc-pi0
+  resources:
+    requests:
+      storage: "${DATA_PVC_SIZE}"

@@ -1,0 +1,26 @@
+version: 0.2
+
+env:
+  variables:
+    AWS_REGION: "us-east-2"
+    IMAGE_REPO: "pi0-lerobot"
+    IMAGE_TAG: "v1.0.0"
+
+phases:
+  pre_build:
+    commands:
+      - echo "Logging in to ECR..."
+      - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - REGISTRY=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+      - aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${REGISTRY}
+      - aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin 763104351884.dkr.ecr.${AWS_REGION}.amazonaws.com
+      - aws ecr create-repository --repository-name ${IMAGE_REPO} --region ${AWS_REGION} 2>/dev/null || true
+  build:
+    commands:
+      - echo "Building Docker image..."
+      - docker build --build-arg AWS_REGION=${AWS_REGION} -f Dockerfile -t ${REGISTRY}/${IMAGE_REPO}:${IMAGE_TAG} .
+  post_build:
+    commands:
+      - echo "Pushing to ECR..."
+      - docker push ${REGISTRY}/${IMAGE_REPO}:${IMAGE_TAG}
+      - echo "Done. Image at ${REGISTRY}/${IMAGE_REPO}:${IMAGE_TAG}"

@@ -1,0 +1,166 @@
+# Pi0 LeRobot — LIBERO Fine-tuning using custom Docker image
+# Image has LeRobot pre-installed — startup is ~30 sec instead of ~5 min
+
+apiVersion: "kubeflow.org/v1"
+kind: PyTorchJob
+metadata:
+  name: pi0-lerobot-libero-finetune
+  namespace: default
+spec:
+  runPolicy:
+    ttlSecondsAfterFinished: 86400
+    cleanPodPolicy: None
+  pytorchReplicaSpecs:
+    Worker:
+      replicas: 1
+      restartPolicy: Never
+      template:
+        metadata:
+          labels:
+            app: pi0-lerobot-libero-finetune
+        spec:
+          nodeSelector:
+            node.kubernetes.io/instance-type: ml.p5.48xlarge
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+          containers:
+            - name: pytorch
+              image: 783764584149.dkr.ecr.us-east-2.amazonaws.com/pi0-lerobot:v1.0.0
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  set -e
+                  echo "============================================================"
+                  echo "  Pi0 Fine-Tuning — LIBERO (Custom Image)"
+                  echo "============================================================"
+
+                  # --- Config ---
+                  MAX_STEPS="${MAX_STEPS:-20000}"
+                  BATCH_SIZE="${BATCH_SIZE:-4}"
+                  SAVE_INTERVAL="${SAVE_INTERVAL:-2000}"
+                  LEARNING_RATE="${LEARNING_RATE:-2.5e-5}"
+                  ACTION_HORIZON="${ACTION_HORIZON:-50}"
+                  DATASET_PATH="/fsx/datasets/libero_10"
+                  OUTPUT_DIR="/fsx/runs/pi0-libero"
+                  LOCAL_DATASET_NAME="libero_local"
+                  RENAME_MAP='{"observation.images.exterior_image_1_left":"observation.images.base_0_rgb","observation.images.wrist_image_left":"observation.images.left_wrist_0_rgb","observation.images.image":"observation.images.base_0_rgb","observation.images.wrist_image":"observation.images.left_wrist_0_rgb"}'
+                  EMPTY_CAMERAS=1
+
+                  mkdir -p "$OUTPUT_DIR"
+
+                  # --- Quick fixes (pre-installed image, just patch) ---
+                  pip uninstall -y flash-attn 2>/dev/null || true
+
+                  # Install local-dataset patch
+                  USER_SITE=$(python -c "import site; print(site.getusersitepackages())")
+                  mkdir -p "$USER_SITE"
+                  cp /opt/pi0-lerobot/src/lerobot_local_patch.py "$USER_SITE/"
+                  cat > "$USER_SITE/usercustomize.py" <<'PYEOF'
+                  try:
+                      import lerobot_local_patch
+                  except Exception:
+                      pass
+                  PYEOF
+
+                  # --- HF Login ---
+                  if [ -n "${HF_TOKEN:-}" ]; then
+                    python -c "from huggingface_hub import login; import os; login(token=os.environ['HF_TOKEN'])"
+                  fi
+
+                  # --- Dataset ---
+                  export HF_HOME="/fsx/hf-cache"
+                  export HF_LEROBOT_HOME="/fsx/lerobot-cache"
+                  mkdir -p "$HF_HOME" "$HF_LEROBOT_HOME"
+
+                  if [ ! -f "$DATASET_PATH/meta/info.json" ]; then
+                    echo "Downloading lerobot/libero_10..."
+                    pip install --quiet --upgrade huggingface-hub 2>/dev/null
+                    hf download lerobot/libero_10 --repo-type dataset --local-dir "$DATASET_PATH"
+                  fi
+
+                  ln -snf "$DATASET_PATH" "$HF_LEROBOT_HOME/$LOCAL_DATASET_NAME"
+
+                  # --- Training ---
+                  NUM_GPUS=$(python -c "import torch; print(torch.cuda.device_count())")
+                  echo "Using $NUM_GPUS GPUs, dataset at $DATASET_PATH"
+
+                  export TORCHELASTIC_ERROR_FILE=/tmp/torch_error.json
+                  export PYTHONUNBUFFERED=1
+                  rm -rf "$OUTPUT_DIR/training" 2>/dev/null || true
+
+                  accelerate launch \
+                      --num_processes=$NUM_GPUS \
+                      --num_machines=1 \
+                      --use_fsdp \
+                      --mixed_precision=bf16 \
+                      --fsdp_sharding_strategy=FULL_SHARD \
+                      --fsdp_auto_wrap_policy=TRANSFORMER_BASED_WRAP \
+                      --fsdp_state_dict_type=SHARDED_STATE_DICT \
+                      --fsdp_use_orig_params=true \
+                      --fsdp_cpu_ram_efficient_loading=false \
+                      --fsdp_sync_module_states=true \
+                      --fsdp_offload_params=false \
+                      $(which lerobot-train) \
+                      --dataset.repo_id=$LOCAL_DATASET_NAME \
+                      --dataset.root=$DATASET_PATH \
+                      --dataset.video_backend=pyav \
+                      --policy.path=lerobot/pi0_base \
+                      --policy.repo_id=local/pi0_libero_finetune \
+                      --policy.push_to_hub=false \
+                      --policy.dtype=float32 \
+                      --policy.device=cuda \
+                      --policy.gradient_checkpointing=true \
+                      --policy.chunk_size=$ACTION_HORIZON \
+                      --policy.n_action_steps=$ACTION_HORIZON \
+                      --policy.empty_cameras=$EMPTY_CAMERAS \
+                      --rename_map="$RENAME_MAP" \
+                      --steps=$MAX_STEPS \
+                      --batch_size=$BATCH_SIZE \
+                      --output_dir=$OUTPUT_DIR/training \
+                      --job_name=pi0_libero_finetune \
+                      --save_freq=$SAVE_INTERVAL \
+                      --optimizer.lr=$LEARNING_RATE \
+                      --num_workers=4
+
+                  echo "============================================================"
+                  echo "  Training complete. Output: $OUTPUT_DIR/training"
+                  echo "============================================================"
+              env:
+                - name: HF_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: pi0-lerobot-secrets
+                      key: HF_TOKEN
+                      optional: true
+                - name: NCCL_SOCKET_IFNAME
+                  value: "^lo"
+                - name: GLOO_SOCKET_IFNAME
+                  value: "lo"
+                - name: NCCL_DEBUG
+                  value: "WARN"
+                - name: NCCL_TIMEOUT
+                  value: "1800"
+              resources:
+                limits:
+                  nvidia.com/gpu: 8
+                  vpc.amazonaws.com/efa: 32
+                requests:
+                  nvidia.com/gpu: 8
+                  cpu: "90"
+                  memory: "700Gi"
+              volumeMounts:
+                - name: fsx-volume
+                  mountPath: /fsx
+                - name: dshm
+                  mountPath: /dev/shm
+          volumes:
+            - name: fsx-volume
+              persistentVolumeClaim:
+                claimName: fsx-claim
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: "128Gi"

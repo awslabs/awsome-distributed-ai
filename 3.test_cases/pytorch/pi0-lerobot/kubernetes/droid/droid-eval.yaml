@@ -1,0 +1,99 @@
+# Pi0 LeRobot — DROID Evaluation Job
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pi0-lerobot-droid-eval
+  namespace: default
+spec:
+  ttlSecondsAfterFinished: 86400
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: pi0-lerobot-droid-eval
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        node.kubernetes.io/instance-type: ml.p5.48xlarge
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: eval
+          image: 783764584149.dkr.ecr.us-east-2.amazonaws.com/pi0-lerobot:v1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -e
+              echo "============================================================"
+              echo "  Pi0 Evaluation — DROID"
+              echo "============================================================"
+
+              pip uninstall -y flash-attn 2>/dev/null || true
+
+              # Install patch
+              USER_SITE=$(python -c "import site; print(site.getusersitepackages())")
+              mkdir -p "$USER_SITE"
+              cp /opt/pi0-lerobot/src/lerobot_local_patch.py "$USER_SITE/"
+              cat > "$USER_SITE/usercustomize.py" <<'PYEOF'
+              try:
+                  import lerobot_local_patch
+              except Exception:
+                  pass
+              PYEOF
+
+              # HF Login
+              if [ -n "${HF_TOKEN:-}" ]; then
+                python -c "from huggingface_hub import login; import os; login(token=os.environ['HF_TOKEN'])"
+              fi
+
+              export HF_HOME="/fsx/hf-cache"
+              export HF_LEROBOT_HOME="/fsx/lerobot-cache"
+              mkdir -p "$HF_LEROBOT_HOME"
+              ln -snf /fsx/datasets/droid_100 "$HF_LEROBOT_HOME/droid_local"
+
+              # Patch the evaluate script to skip S3 auto-detect
+              sed -i 's/if args.test_dataset_s3 is None:/if args.test_dataset_s3 is None and not (args.test_dataset_local and args.test_dataset_local.exists()):/' /opt/pi0-lerobot/src/evaluate_pi0.py
+
+              echo "Running evaluation..."
+              python /opt/pi0-lerobot/src/evaluate_pi0.py \
+                --dataset droid \
+                --finetuned-path /fsx/runs/pi0-droid/training/checkpoints/020000/pretrained_model \
+                --test-dataset-local /fsx/datasets/droid_100 \
+                --results-out /fsx/runs/pi0-droid/eval_results_droid.json \
+                --num-trajectories 5 \
+                --num-inference-steps 10 5 3 1
+
+              echo "============================================================"
+              echo "  Done. Results: /fsx/runs/pi0-droid/eval_results_droid.json"
+              echo "============================================================"
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pi0-lerobot-secrets
+                  key: HF_TOKEN
+                  optional: true
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+            requests:
+              nvidia.com/gpu: 1
+              cpu: "8"
+              memory: "64Gi"
+          volumeMounts:
+            - name: fsx-volume
+              mountPath: /fsx
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: fsx-volume
+          persistentVolumeClaim:
+            claimName: fsx-claim
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "32Gi"
