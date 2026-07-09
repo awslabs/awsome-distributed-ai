@@ -121,17 +121,69 @@ Enroot/Pyxis install).
 
 ## Step 3 — connect
 
+### 3a. Read the connection details from the job log (on the login node)
+
 ```bash
-# On the login node: connection instructions are in the job log
-cat ~/ubuntu-jupyter-<jobid>.log      # (%u = your username)
+cat ~/<username>-jupyter-<jobid>.log   # %u = your username, e.g. ubuntu-jupyter-3.log
 ```
 
-Run the `aws ssm start-session …` command from the log on your **local
-workstation**, read the token (`cat ~/.jupyter-token-<jobid>` on the login
-node), then open `http://localhost:8888/?token=<token>` in your browser.
+The log prints the compute node IP and port (e.g. `10.1.8.103`, port `8003`)
+and reminds you where the token file is.
 
-The SSM session stays in the foreground; Ctrl-C closes the tunnel (the
-Jupyter job keeps running — reconnect any time until the job ends).
+### 3b. Open the SSM port-forward tunnel (on your workstation)
+
+```bash
+# 1. Find the login-node instance ID
+LOGIN_ID=$(aws ec2 describe-instances \
+  --region <region> \
+  --filters "Name=tag:Name,Values=*login" \
+            "Name=instance-state-name,Values=running" \
+  --query 'Reservations[0].Instances[0].InstanceId' --output text)
+
+# If you run more than one cluster in the same account, pin by stack name:
+# --filters "Name=tag:Name,Values=*login" \
+#           "Name=tag:ClusterName,Values=<your-stack-name>" \
+#           "Name=instance-state-name,Values=running"
+
+# 2. Forward localhost:8888 → compute node
+aws ssm start-session \
+  --region <region> \
+  --target "$LOGIN_ID" \
+  --document-name AWS-StartPortForwardingSessionToRemoteHost \
+  --parameters "host=<NODE_IP>,portNumber=<PORT>,localPortNumber=8888"
+```
+
+The session stays in the foreground; **Ctrl-C closes the tunnel** (the Jupyter
+job keeps running — reconnect any time until the job ends).
+
+### 3c. Get the token and open the browser
+
+On the login node:
+
+```bash
+cat ~/.jupyter-token-<jobid>
+```
+
+Then open in your browser: `http://localhost:8888/?token=<token>`
+
+### Required IAM permissions
+
+The two AWS CLI calls above require the following actions, all of which are
+already included in the stock
+[`cluster-user-iam.yaml`](../assets/cluster-user-iam.yaml) policy:
+
+| Call | Action(s) required |
+|---|---|
+| `aws ec2 describe-instances` | `ec2:DescribeInstances`, `ec2:DescribeInstanceStatus`, `ec2:DescribeTags` |
+| `aws ssm start-session` (instance target) | `ssm:StartSession` on `ec2:instance/*` with condition `ssm:resourceTag/Name = PCS-login*` |
+| `aws ssm start-session` (document) | `ssm:StartSession` on `arn:aws:ssm:*:*:document/AWS-StartPortForwardingSessionToRemoteHost` |
+| Session lifecycle | `ssm:DescribeSessions`, `ssm:GetConnectionStatus`, `ssm:DescribeInstanceProperties`, `ssm:TerminateSession` |
+
+If you are using the cluster-admin policy (`cluster-admin-iam.yaml`) or an
+account with broad permissions, these are implicitly covered. If you are
+operating under a restricted IAM role, attach the `cluster-user-iam.yaml`
+stack output policy (or an equivalent inline policy) before running the
+commands above.
 
 ## Stopping
 

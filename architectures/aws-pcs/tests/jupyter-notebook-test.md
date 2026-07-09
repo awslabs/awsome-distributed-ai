@@ -107,17 +107,35 @@ curl -s -H "Authorization: token $(cat $HOME/.jupyter-token-$JOBID)" \
 
 ### 2b. Browser path from the workstation
 
-Via SSM (AWS; `LOGIN_ID` = login-node instance ID) — run locally:
+Run from your local workstation. Prerequisites: AWS CLI +
+[Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
+installed, and IAM permissions from `cluster-user-iam.yaml` (see
+[JUPYTER.md §Required IAM permissions](../docs/JUPYTER.md#required-iam-permissions)).
 
 ```bash
-aws ssm start-session --target $LOGIN_ID \
+# Discover the login-node instance ID
+LOGIN_ID=$(aws ec2 describe-instances \
+  --region <region> \
+  --filters "Name=tag:Name,Values=*login" \
+            "Name=instance-state-name,Values=running" \
+  --query 'Reservations[0].Instances[0].InstanceId' --output text)
+
+# Open the SSM port-forward tunnel (stays in foreground; Ctrl-C to close)
+aws ssm start-session \
+  --region <region> \
+  --target "$LOGIN_ID" \
   --document-name AWS-StartPortForwardingSessionToRemoteHost \
-  --parameters host=$NODE_IP,portNumber=$PORT,localPortNumber=8888
-# other terminal — TOKEN=<value from `cat ~/.jupyter-token-<jobid>` on the login node>:
+  --parameters "host=$NODE_IP,portNumber=$PORT,localPortNumber=8888"
+```
+
+In a second terminal on the workstation (TOKEN = value of
+`cat ~/.jupyter-token-<jobid>` on the login node):
+
+```bash
 curl -s -o /dev/null -w '%{http_code}\n' "http://localhost:8888/lab?token=$TOKEN"
 ```
 
-(Or the SSH equivalent: `ssh -L 8888:$NODE_IP:$PORT <login-node>`.)
+(SSH alternative when `SSHAccessCidr` is set: `ssh -L 8888:$NODE_IP:$PORT <login-node>`.)
 
 **Expected:** `200` from `/lab?token=…`, and the same `/api/status` JSON as 2a
 through `localhost:8888`. Opening the URL in a browser shows JupyterLab.
