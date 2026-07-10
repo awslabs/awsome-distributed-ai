@@ -34,7 +34,7 @@ RUN git config --global filter.lfs.clean cat && \
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
-        "lerobot[pi,dataset] @ git+https://github.com/huggingface/lerobot.git" \
+        "lerobot[pi,dataset] @ git+https://github.com/huggingface/lerobot.git@v0.5.0" \
         accelerate \
         safetensors \
         huggingface-hub
@@ -56,7 +56,6 @@ COPY src/lerobot_local_patch.py /opt/pi0-lerobot/src/
 ENV HF_HOME=/data/hf-cache
 ENV HF_LEROBOT_HOME=/data/lerobot-cache
 ENV NCCL_DEBUG=WARN
-ENV NCCL_TIMEOUT=1800
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 WORKDIR /opt/pi0-lerobot

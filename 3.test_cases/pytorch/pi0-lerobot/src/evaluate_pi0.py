@@ -358,8 +358,7 @@ def main():
         job_prefix = f"pi0-finetune-{args.dataset}"
         search_roots = [
             Path.cwd() / "model_artifacts",
-            Path.home() / "pi0_eval" / "checkpoint",
-            Path(f"/home/sagemaker-user/Pi0_SMTJ/model_artifacts"),
+            Path("/fsx/runs"),
         ]
         import re as _re
         _step_pat = _re.compile(r"(\d+)")
@@ -385,13 +384,12 @@ def main():
             print(f"  Auto-discovered checkpoint: {args.finetuned_path}")
         else:
             args.finetuned_path = Path(
-                f"/home/sagemaker-user/pi0_checkpoint/"
-                f"pi0-finetune-{args.dataset}/extracted/"
-                f"training/checkpoints/002000/pretrained_model"
+                f"/fsx/runs/pi0-{args.dataset}/training/"
+                f"checkpoints/020000/pretrained_model"
             )
 
     if args.test_dataset_local is None:
-        args.test_dataset_local = Path(f"/home/sagemaker-user/pi0_test_dataset_{args.dataset}")
+        args.test_dataset_local = Path(f"/fsx/datasets/{ds_cfg['s3_suffix'].replace('_test', '')}")
 
     if args.results_out is None:
         args.results_out = Path(f"./pi0_eval_results_{args.dataset}.json")
@@ -454,7 +452,8 @@ def main():
                 preprocessor_overrides={"device_processor": {"device": str(args.device)}},
             )
         except Exception as e:
-            print(f"    WARNING: couldn't load processors: {e}")
+            print(f"    WARNING: pre/post processors failed to load ({type(e).__name__}: {e}).")
+            print(f"    Results will compare raw model output to raw ground truth (no un-normalization).")
             preprocess, postprocess = None, None
 
         return p, preprocess, postprocess
@@ -476,7 +475,8 @@ def main():
         from transformers import AutoTokenizer
         try:
             tokenizer = AutoTokenizer.from_pretrained("google/paligemma-3b-pt-224")
-        except Exception:
+        except Exception as e:
+            print(f"    WARNING: tokenizer load failed ({e}). Language conditioning disabled.")
             tokenizer = None
 
         results = []

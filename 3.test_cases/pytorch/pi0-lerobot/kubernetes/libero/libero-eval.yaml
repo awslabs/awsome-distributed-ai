@@ -15,6 +15,8 @@ spec:
     spec:
       restartPolicy: Never
       nodeSelector:
+        # HyperPod EKS labels instances with "ml." prefix (ml.p5.48xlarge).
+        # On plain EKS (managed node groups / Karpenter), use "p5.48xlarge" instead.
         node.kubernetes.io/instance-type: ml.p5.48xlarge
       tolerations:
         - key: nvidia.com/gpu
@@ -22,7 +24,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: eval
-          image: 783764584149.dkr.ecr.us-east-2.amazonaws.com/pi0-lerobot:v1.0.0
+          image: 763104351884.dkr.ecr.us-east-2.amazonaws.com/pytorch-training:2.9.0-gpu-py312-cu130-ubuntu22.04-sagemaker-v1.9
           imagePullPolicy: IfNotPresent
           command: ["/bin/bash", "-c"]
           args:
@@ -54,9 +56,6 @@ spec:
               export HF_LEROBOT_HOME="/fsx/lerobot-cache"
               mkdir -p "$HF_LEROBOT_HOME"
               ln -snf /fsx/datasets/libero_10 "$HF_LEROBOT_HOME/libero_local"
-
-              # Patch evaluate script to skip S3 auto-detect
-              sed -i 's/if args.test_dataset_s3 is None:/if args.test_dataset_s3 is None and not (args.test_dataset_local and args.test_dataset_local.exists()):/' /opt/pi0-lerobot/src/evaluate_pi0.py
 
               echo "Running evaluation..."
               python /opt/pi0-lerobot/src/evaluate_pi0.py \

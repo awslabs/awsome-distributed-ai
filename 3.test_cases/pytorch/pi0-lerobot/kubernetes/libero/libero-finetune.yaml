@@ -20,6 +20,8 @@ spec:
             app: pi0-lerobot-libero-finetune
         spec:
           nodeSelector:
+            # HyperPod EKS labels instances with "ml." prefix (ml.p5.48xlarge).
+            # On plain EKS (managed node groups / Karpenter), use "p5.48xlarge" instead.
             node.kubernetes.io/instance-type: ml.p5.48xlarge
           tolerations:
             - key: nvidia.com/gpu
@@ -27,7 +29,7 @@ spec:
               effect: NoSchedule
           containers:
             - name: pytorch
-              image: 783764584149.dkr.ecr.us-east-2.amazonaws.com/pi0-lerobot:v1.0.0
+              image: 763104351884.dkr.ecr.us-east-2.amazonaws.com/pytorch-training:2.9.0-gpu-py312-cu130-ubuntu22.04-sagemaker-v1.9
               imagePullPolicy: IfNotPresent
               command: ["/bin/bash", "-c"]
               args:
@@ -89,7 +91,10 @@ spec:
 
                   export TORCHELASTIC_ERROR_FILE=/tmp/torch_error.json
                   export PYTHONUNBUFFERED=1
-                  rm -rf "$OUTPUT_DIR/training" 2>/dev/null || true
+                  # Resume from existing checkpoint if available, otherwise start fresh
+                  if [ -d "$OUTPUT_DIR/training/checkpoints" ] && ls "$OUTPUT_DIR/training/checkpoints"/*/pretrained_model/config.json 1>/dev/null 2>&1; then
+                    echo "  Found existing checkpoints — training will resume from latest."
+                  fi
 
                   accelerate launch \
                       --num_processes=$NUM_GPUS \
@@ -141,6 +146,9 @@ spec:
                   value: "lo"
                 - name: NCCL_DEBUG
                   value: "WARN"
+                # NCCL_TIMEOUT is not a native NCCL variable but is read by some
+                # framework-level process group implementations. Kept for consistency
+                # with other test cases in this repo (e.g., openvla-oft).
                 - name: NCCL_TIMEOUT
                   value: "1800"
               resources:

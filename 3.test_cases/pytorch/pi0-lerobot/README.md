@@ -11,16 +11,15 @@ Fine-tune [Physical Intelligence's π0](https://huggingface.co/lerobot/pi0_base)
 
 ```
 pi0-lerobot/
-├── Dockerfile                        # Container: DLC PyTorch 2.9 + LeRobot + π0
+├── Dockerfile                        # Container: DLC PyTorch 2.9 + LeRobot v0.5.0 + π0
 ├── buildspec.yml                     # AWS CodeBuild spec for image builds
 ├── README.md                         # This file
 ├── src/
-│   ├── run_finetuning.sh             # Training entrypoint (accelerate + FSDP)
 │   ├── evaluate_pi0.py               # Evaluation script (MSE/MAE + ODE sweep)
 │   ├── evaluate_pi0.sh               # Eval entrypoint wrapper
 │   └── lerobot_local_patch.py        # Hub-skip patch for FSx-local datasets
 └── kubernetes/
-    ├── pvc-fsx-lustre.yaml           # FSx PVC (dynamic provisioning, if needed)
+    ├── pvc-fsx-lustre.yaml           # FSx PVC (dynamic provisioning, reclaimPolicy: Retain)
     ├── droid/
     │   ├── README.md                 # DROID walkthrough
     │   ├── droid-download.yaml       # Dataset staging Job
@@ -45,6 +44,7 @@ Training time: ~6.5 hours per dataset (20K steps, FSDP FULL_SHARD, 8× H100).
 ## Prerequisites
 
 - A SageMaker HyperPod EKS cluster with GPU nodes (p5.48xlarge or p4de.24xlarge)
+  - **Note:** HyperPod labels instances with an `ml.` prefix (e.g., `ml.p5.48xlarge`). On plain EKS, the label is `p5.48xlarge`. The manifests use the HyperPod convention by default.
 - The [Kubeflow Training Operator](https://github.com/kubeflow/training-operator) installed
 - FSx for Lustre PVC (`fsx-claim`) mounted at `/fsx`
 - A HuggingFace token (for base model download)

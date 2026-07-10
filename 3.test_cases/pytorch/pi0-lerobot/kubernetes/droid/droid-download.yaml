@@ -23,7 +23,7 @@ spec:
       containers:
         - name: download
           image: ${IMAGE_URI}
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           command: ["/bin/bash", "-c"]
           args:
             - |

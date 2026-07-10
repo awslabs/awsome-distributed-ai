@@ -1,6 +1,5 @@
 # Pi0 LeRobot — DROID Fine-tuning PyTorchJob
-# Uses the EXACT same lerobot-train invocation as Pi0_SMTJ/scripts/run_finetuning.sh
-# Only paths are changed: /opt/ml/ -> /fsx/
+# Trains π0 on DROID-100 with FSDP on 8× GPU via accelerate + lerobot-train.
 
 apiVersion: "kubeflow.org/v1"
 kind: PyTorchJob
@@ -21,6 +20,8 @@ spec:
             app: pi0-lerobot-droid-finetune
         spec:
           nodeSelector:
+            # HyperPod EKS labels instances with "ml." prefix (ml.p5.48xlarge).
+            # On plain EKS (managed node groups / Karpenter), use "p5.48xlarge" instead.
             node.kubernetes.io/instance-type: ml.p5.48xlarge
           tolerations:
             - key: nvidia.com/gpu
@@ -38,7 +39,7 @@ spec:
                   echo "  Pi0 Fine-Tuning on HyperPod EKS (LeRobot PyTorch)"
                   echo "============================================================"
 
-                  # --- Configuration (adapted from Pi0_SMTJ/scripts/run_finetuning.sh) ---
+                  # --- Configuration ---
                   MAX_STEPS="${MAX_STEPS:-20000}"
                   BATCH_SIZE="${BATCH_SIZE:-4}"
                   SAVE_INTERVAL="${SAVE_INTERVAL:-2000}"
@@ -47,7 +48,7 @@ spec:
                   DATASET_PATH="/fsx/datasets/droid_100"
                   OUTPUT_DIR="/fsx/runs/pi0-droid"
                   LOCAL_DATASET_NAME="droid_local"
-                  RENAME_MAP='{"observation.images.exterior_image_1_left":"observation.images.base_0_rgb","observation.images.wrist_image_left":"observation.images.wrist_0_rgb"}'
+                  RENAME_MAP='{"observation.images.exterior_image_1_left":"observation.images.base_0_rgb","observation.images.wrist_image_left":"observation.images.left_wrist_0_rgb"}'
                   EMPTY_CAMERAS=1
 
                   mkdir -p "$OUTPUT_DIR"
@@ -67,7 +68,7 @@ spec:
                   # --- Step 2: Install lerobot ---
                   echo "[2/5] Installing lerobot[pi,dataset]..."
                   pip install --quiet --upgrade pip
-                  pip install --quiet "lerobot[pi,dataset]@git+https://github.com/huggingface/lerobot.git"
+                  pip install --quiet "lerobot[pi,dataset]@git+https://github.com/huggingface/lerobot.git@v0.5.0"
                   # Remove flash_attn (CUDA 13 image, flash_attn needs CUDA 12)
                   pip uninstall -y flash-attn 2>/dev/null || true
 
@@ -149,8 +150,10 @@ spec:
                   export TORCHELASTIC_ERROR_FILE=/tmp/torch_error.json
                   export PYTHONUNBUFFERED=1
 
-                  # Clean stale output from previous runs
-                  rm -rf "$OUTPUT_DIR/training" 2>/dev/null || true
+                  # Resume from existing checkpoint if available, otherwise start fresh
+                  if [ -d "$OUTPUT_DIR/training/checkpoints" ] && ls "$OUTPUT_DIR/training/checkpoints"/*/pretrained_model/config.json 1>/dev/null 2>&1; then
+                    echo "  Found existing checkpoints — training will resume from latest."
+                  fi
 
                   pip install --quiet accelerate
 
@@ -204,6 +207,9 @@ spec:
                   value: "lo"
                 - name: NCCL_DEBUG
                   value: "WARN"
+                # NCCL_TIMEOUT is not a native NCCL variable but is read by some
+                # framework-level process group implementations. Kept for consistency
+                # with other test cases in this repo (e.g., openvla-oft).
                 - name: NCCL_TIMEOUT
                   value: "1800"
               resources:
