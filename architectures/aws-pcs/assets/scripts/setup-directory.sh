@@ -210,8 +210,17 @@ EOF
     # location this script came from (S3_BUCKET/S3_KEY_PREFIX passed by UserData);
     # falls back to a no-op with a hint if those are unset.
     if [ -n "${S3_BUCKET:-}" ]; then
+        # Resolve the bucket's region via HTTPS HEAD and pass it to --region.
+        # Without this, cross-region `aws s3 cp` gets a 301 on the HeadObject
+        # probe that CRT S3 client cannot recover from — most visibly on
+        # multi-NIC instances (P5/P6). Silent fallback keeps single-region
+        # deployments working exactly as before.
+        BUCKET_REGION=$(curl -sI "https://${S3_BUCKET}.s3.amazonaws.com/" 2>/dev/null \
+          | tr -d '\r' | awk -F': ' 'tolower($1)=="x-amz-bucket-region"{print tolower($2)}')
+        REGION_ARG=""
+        [ -n "${BUCKET_REGION}" ] && REGION_ARG="--region ${BUCKET_REGION}"
         if aws s3 cp "s3://${S3_BUCKET}/${S3_KEY_PREFIX:-templates/aws-pcs/}scripts/ldap-add-user.sh" \
-             /usr/local/bin/ldap-add-user.sh 2>/dev/null; then
+             /usr/local/bin/ldap-add-user.sh ${REGION_ARG} 2>/dev/null; then
             chmod 755 /usr/local/bin/ldap-add-user.sh
             echo "[directory-server] Installed helper: /usr/local/bin/ldap-add-user.sh"
         else
