@@ -481,7 +481,27 @@ Resources:
               if [ -n "${PostInstallScriptUrl}" ]; then
                 echo "Downloading post-install script from ${PostInstallScriptUrl}..." | tee /var/log/pcs-post-install.log
                 case "${PostInstallScriptUrl}" in
-                  s3://*) aws s3 cp "${PostInstallScriptUrl}" /tmp/pcs-post-install.sh >> /var/log/pcs-post-install.log 2>&1 ;;
+                  s3://*)
+                    # Resolve the bucket's real region via HTTPS HEAD and pass it as
+                    # --region. Without this, `aws s3 cp` uses the instance's IMDS
+                    # region for signing; if that differs from the bucket's region,
+                    # the HeadObject probe gets 301 Moved Permanently and the CLI's
+                    # CRT S3 client fails to recover (aws-c-s3 AWS_ERROR_S3_INVALID_
+                    # RESPONSE_STATUS 14343). Symptom: post-install exit 127 on GPU
+                    # CNGs when the templates bucket sits in a different region
+                    # than the cluster.
+                    S3_URL="${PostInstallScriptUrl}"
+                    S3_BUCKET_FOR_HEAD=$(printf '%s' "$S3_URL" | sed -E 's#^s3://([^/]+).*#\1#')
+                    S3_BUCKET_REGION=$(curl -sI "https://$S3_BUCKET_FOR_HEAD.s3.amazonaws.com/" \
+                      | tr -d '\r' | awk -F': ' 'tolower($1)=="x-amz-bucket-region"{print tolower($2)}')
+                    if [ -n "$S3_BUCKET_REGION" ]; then
+                      echo "Resolved bucket region: $S3_BUCKET_REGION" | tee -a /var/log/pcs-post-install.log
+                      aws s3 cp "$S3_URL" /tmp/pcs-post-install.sh --region "$S3_BUCKET_REGION" >> /var/log/pcs-post-install.log 2>&1
+                    else
+                      echo "Bucket region lookup failed; falling back to CLI default" | tee -a /var/log/pcs-post-install.log
+                      aws s3 cp "$S3_URL" /tmp/pcs-post-install.sh >> /var/log/pcs-post-install.log 2>&1
+                    fi
+                    ;;
                   *)      curl -fsSL "${PostInstallScriptUrl}" -o /tmp/pcs-post-install.sh ;;
                 esac
                 chmod +x /tmp/pcs-post-install.sh
@@ -549,7 +569,15 @@ Resources:
                 # ldap-add-user.sh helper onto /usr/local/bin from the same bucket.
                 export S3_BUCKET="${S3BucketName}"
                 export S3_KEY_PREFIX="${S3KeyPrefix}"
-                aws s3 cp s3://${S3BucketName}/${S3KeyPrefix}scripts/setup-directory.sh /tmp/setup-directory.sh
+                # Resolve the bucket's region (see post-install block above for why —
+                # cross-region cp gets 301 on multi-NIC instances).
+                S3_BUCKET_REGION=$(curl -sI "https://${S3BucketName}.s3.amazonaws.com/" \
+                  | tr -d '\r' | awk -F': ' 'tolower($1)=="x-amz-bucket-region"{print tolower($2)}')
+                if [ -n "$S3_BUCKET_REGION" ]; then
+                  aws s3 cp s3://${S3BucketName}/${S3KeyPrefix}scripts/setup-directory.sh /tmp/setup-directory.sh --region "$S3_BUCKET_REGION"
+                else
+                  aws s3 cp s3://${S3BucketName}/${S3KeyPrefix}scripts/setup-directory.sh /tmp/setup-directory.sh
+                fi
                 chmod +x /tmp/setup-directory.sh
                 # Capture the script's REAL exit code so a failed LDAP client
                 # setup is VISIBLE in the log instead of being masked. The old
