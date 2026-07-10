@@ -37,6 +37,11 @@ BANNED=(
   $'DeployMonitoring=true\tMonitoringStack|internally|nested\tDeployMonitoring (bool) was replaced by MonitoringStack at the deploy-all layer'
   $'S3 (public )?hosting is not allowed\tNEVERMATCH\tPostInstallScriptUrl now accepts s3:// URLs'
   $'architectures/aws-pcs/iam/\tNEVERMATCH\tthe iam/ directory was removed; use docs/IAM.md + assets/cluster-*-iam.yaml'
+  # PCS emits aws:pcs:compute-node-group-*id* (the internal pcs_xxx handle), NOT
+  # aws:pcs:compute-node-group-name — a copy-paste filter with the -name key
+  # returns nothing (silently), so the docs example fails at first use.
+  # The stable, human-readable filter is Name=tag:Name,Values=PCS-login.
+  $'tag:aws:pcs:compute-node-group-name\tNEVERMATCH\ttag key aws:pcs:compute-node-group-name does not exist — use Name=tag:Name,Values=PCS-login'
 )
 for entry in "${BANNED[@]}"; do
   IFS=$'\t' read -r pat allow msg <<<"$entry"

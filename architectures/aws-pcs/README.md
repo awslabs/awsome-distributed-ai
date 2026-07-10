@@ -287,13 +287,13 @@ want direct SSH, set `SSHAccessCidr` to a trusted CIDR at deploy time to open SS
 on the login node to that CIDR.
 
 **Console:** [EC2 Console](https://console.aws.amazon.com/ec2/home#Instances:) → filter
-by `aws:pcs:compute-node-group-name = login` → **Connect** → **Session Manager**.
+by `Name = PCS-login` → **Connect** → **Session Manager**.
 
 **CLI** (AWS CloudShell has the required permissions):
 
 ```bash
 INSTANCE_ID=$(aws ec2 describe-instances \
-  --filters "Name=tag:aws:pcs:compute-node-group-name,Values=login" \
+  --filters "Name=tag:Name,Values=PCS-login" \
             "Name=instance-state-name,Values=running" \
   --query 'Reservations[0].Instances[0].InstanceId' --output text)
 aws ssm start-session --target $INSTANCE_ID
@@ -451,7 +451,7 @@ No public access required; works even when the login node has no inbound rules.
 ```bash
 # Login node instance ID
 INSTANCE_ID=$(aws ec2 describe-instances \
-  --filters "Name=tag:aws:pcs:compute-node-group-name,Values=login" \
+  --filters "Name=tag:Name,Values=PCS-login" \
             "Name=instance-state-name,Values=running" \
   --query 'Reservations[0].Instances[0].InstanceId' --output text)
 
@@ -478,7 +478,7 @@ Get the login node's public IP from the EC2 console, or:
 
 ```bash
 aws ec2 describe-instances \
-  --filters "Name=tag:aws:pcs:compute-node-group-name,Values=login" \
+  --filters "Name=tag:Name,Values=PCS-login" \
             "Name=instance-state-name,Values=running" \
   --query 'Reservations[0].Instances[0].PublicIpAddress' --output text
 ```
