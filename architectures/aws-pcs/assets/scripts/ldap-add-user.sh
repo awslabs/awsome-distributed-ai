@@ -8,7 +8,7 @@
 #
 # Example:
 #   ./ldap-add-user.sh alice 10001 3000
-#   ./ldap-add-user.sh bob 10002 3000 "ssh-rsa AAAA..."
+#   ./ldap-add-user.sh bob 10002 3000 "ssh-ed25519 AAAA..."
 
 set -euo pipefail
 
@@ -16,6 +16,24 @@ USERNAME="${1:?Usage: $0 <username> [uid] [gid] [ssh-pub-key]}"
 USER_UID="${2:?uid required — pick a cluster-unique uidNumber (see USER-MANAGEMENT.md). Auto-random was removed: bash RANDOM tops out at 32767 so it could not span the intended range and risked UID collisions (two users sharing a uidNumber = same POSIX principal on shared /home,/fsx)}"
 USER_GID="${3:-3000}"
 SSH_PUBKEY="${4:-}"
+
+# Validate before these values flow into an LDAP DN and (for the SSH-key path)
+# into filesystem paths used by cp/mkdir/chown -R. A username with "/" or ".."
+# would make HOME_DIR resolve outside /home (e.g. USERNAME=../../etc →
+# chown -R on /etc); a non-numeric uid/gid would corrupt the LDIF. Turns a
+# malformed batch-add row into a clean error instead of a destructive op.
+if [[ ! "${USERNAME}" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+    echo "Invalid username '${USERNAME}': lowercase letters/digits/_/- only, starting with a letter or '_'." >&2
+    exit 1
+fi
+if [[ ! "${USER_UID}" =~ ^[0-9]+$ ]]; then
+    echo "Invalid uid '${USER_UID}': must be a positive integer." >&2
+    exit 1
+fi
+if [[ ! "${USER_GID}" =~ ^[0-9]+$ ]]; then
+    echo "Invalid gid '${USER_GID}': must be a positive integer." >&2
+    exit 1
+fi
 
 # Auto-detect LDAP config from sssd.conf or environment
 LDAP_DOMAIN_SUFFIX="${LDAP_DOMAIN_SUFFIX:-$(sed -n 's/^ldap_search_base[[:space:]]*=[[:space:]]*//p' /etc/sssd/sssd.conf 2>/dev/null || echo 'dc=cluster,dc=internal')}"
