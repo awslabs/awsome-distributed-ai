@@ -10,7 +10,7 @@ Description: |
     - Retrieve the Grafana admin password from Parameter Store
     - Terminate their own SSM sessions
   They cannot create, modify, or delete cluster resources, and cannot open
-  shells on compute nodes (the ssm:resourceTag Name=PCS-login* scope blocks that. Note: the Name tag is operator-mutable; if you rename login nodes, update the policy accordingly).
+  shells on compute nodes (the ssm:resourceTag Name=*-login scope blocks that — templates default Name to <ClusterName>-<CngName>, so any login CNG matches; compute/GPU CNGs do not. Note: the Name tag is operator-mutable; if you rename login nodes, update the policy accordingly).
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -86,7 +86,7 @@ Resources:
               "Resource": "arn:aws:ec2:*:*:instance/*",
               "Condition": {
                 "StringLike": {
-                  "ssm:resourceTag/Name": "PCS-login*"
+                  "ssm:resourceTag/Name": "*-login"
                 }
               }
             },

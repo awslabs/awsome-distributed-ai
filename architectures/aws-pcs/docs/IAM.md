@@ -56,19 +56,24 @@ admin will also deploy the standalone DLAMI builder
 ### What the cluster user can do once attached
 
 ```bash
-# Find the login node and open a session
-INSTANCE_ID=$(aws ec2 describe-instances \
-  --filters "Name=tag:Name,Values=PCS-login" "Name=instance-state-name,Values=running" \
-  --query 'Reservations[0].Instances[0].InstanceId' --output text)
-aws ssm start-session --target $INSTANCE_ID
+STACK_NAME=pcs-ml-cluster        # your CloudFormation stack name
+AWS_REGION=us-east-1             # your region
+
+# Find the login node's instance ID via the PCS API — no dependency on tag naming
+LOGIN_INSTANCE_ID=$(aws ec2 describe-instances --region "$AWS_REGION" --filters "Name=tag:aws:pcs:compute-node-group-id,Values=$(aws pcs list-compute-node-groups --cluster-identifier $(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Outputs[?OutputKey==`ClusterId`].OutputValue' --output text) --region "$AWS_REGION" --query 'computeNodeGroups[?name==`login`].id' --output text)" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].InstanceId' --output text)
+
+# Open a session
+aws ssm start-session --target "$LOGIN_INSTANCE_ID" --region "$AWS_REGION"
 
 # Port-forward Grafana (443 -> 8443), then open https://localhost:8443/grafana/
-aws ssm start-session --target $INSTANCE_ID \
+aws ssm start-session --target "$LOGIN_INSTANCE_ID" --region "$AWS_REGION" \
   --document-name AWS-StartPortForwardingSession \
   --parameters '{"portNumber":["443"],"localPortNumber":["8443"]}'
 
-# Read the Grafana admin password
-aws ssm get-parameter --name "/pcs/<cluster-id>/grafana/admin-password" \
+# Read the Grafana admin password (CLUSTER_ID is resolved by CFN Outputs above; look it up if needed)
+CLUSTER_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" \
+  --query 'Stacks[0].Outputs[?OutputKey==`ClusterId`].OutputValue' --output text)
+aws ssm get-parameter --name "/pcs/${CLUSTER_ID}/grafana/admin-password" --region "$AWS_REGION" \
   --with-decryption --query 'Parameter.Value' --output text
 ```
 
@@ -84,13 +89,15 @@ VPC + FSx + IAM roles itself (the AWS reference policy assumes those already
 exist). Review and tighten before production use.
 
 **Login-node access is scoped by the `Name` tag.** The user policy conditions
-`ssm:StartSession` on `ssm:resourceTag/Name` matching `PCS-login*`. PCS does not
+`ssm:StartSession` on `ssm:resourceTag/Name` matching `*-login`. PCS does not
 emit a dedicated "is this a login node" tag, so the templates set
-`Name=PCS-login` on the login node and `Name=PCS-<cng-name>` on compute nodes
-(`PCS-cpu1`, `PCS-hpc8a`, …) — the most stable signal available. **The `Name`
-tag is operator-mutable**: if you re-tag a login node, update the policy
-condition to match (or fork the templates to add a dedicated `IsLoginNode=true`
-tag and key off that).
+`Name=<ClusterName>-<cng-name>` on every instance — the login CNG's default
+`CngName=login` yields `Name=<ClusterName>-login` (which the `*-login` glob
+matches), and compute CNGs get `<ClusterName>-cpu1`, `<ClusterName>-gpu-p5`,
+etc. This is the most stable signal available. **The `Name` tag is
+operator-mutable**: if you re-tag a login node, update the policy condition
+to match (or fork the templates to add a dedicated `IsLoginNode=true` tag
+and key off that).
 
 **Combined CRUD is intentional, not a mistake.** The admin policy covers
 create + update + delete in one policy because (1) CFN rollback on a failed

@@ -27,6 +27,7 @@ LDAP users).
 | 11-12 | **Multi-user** | OpenLDAP directory + Slurm managed accounting | [`multi-user-test.md`](./multi-user-test.md) | Directory / accounting changes |
 | 13 | **GPU health** | GPU Cluster Health Check suite (DCGM, EFA, NVLink, NCCL thresholds) | [`gpu-healthcheck-test.md`](./gpu-healthcheck-test.md) | GPU CNG deploys |
 | 14 | **IAM** | cluster-admin deploys+deletes (no `iam:CreatePolicy`); cluster-user is SSM-login-only and can't read the LDAP password | [`iam-test.md`](./iam-test.md) | IAM policy changes |
+| 15 | **README walkthrough** | Deploy from README §3 Quick Start, then run the SSM connect (§6) and Grafana port-forward (§8.2) commands **as written**. Every copy-pasted command must return a real value (no `None`, no `Not found`), Grafana must load `admin` + SSM-retrieved password. Catches tag/CLI/permission drifts before customers hit them. | [`readme-walkthrough-test.md`](./readme-walkthrough-test.md) | Every PR touching README §3/§6/§8.2 or the tags/policies they depend on |
 
 ---
 

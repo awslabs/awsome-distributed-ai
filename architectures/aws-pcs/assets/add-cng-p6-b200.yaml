@@ -332,15 +332,15 @@ Resources:
             Tags:
               - Key: HPCRecipes
                 Value: "true"
-              # Name is free for arbitrary operator use. The monitoring stack
-              # identifies login vs compute nodes via the monitoring-role tag
-              # (below), not Name, so dashboards work regardless of this value.
-              # Default to PCS-<cngname> (mirrors CngName) for a recognizable
-              # console name; retag freely afterward.
+              # Name defaults to <ClusterName>-<CngName> so the EC2 console
+              # can tell instances of different clusters apart at a glance;
+              # retag freely, nothing operational reads it (monitoring keys
+              # off monitoring-role below, docs look up instances via the
+              # PCS API + aws:pcs:* tags).
               - Key: Name
-                Value: !Sub 'PCS-${CngName}'
+                Value: !Sub '${ClusterName}-${CngName}'
               - Key: CngName
-                Value: !Sub 'PCS-${CngName}'
+                Value: !Sub '${ClusterName}-${CngName}'
               - Key: ClusterName
                 Value: !Ref ClusterName
               - Key: pcs-cluster-id

@@ -37,6 +37,8 @@ BANNED=(
   $'DeployMonitoring=true\tMonitoringStack|internally|nested\tDeployMonitoring (bool) was replaced by MonitoringStack at the deploy-all layer'
   $'S3 (public )?hosting is not allowed\tNEVERMATCH\tPostInstallScriptUrl now accepts s3:// URLs'
   $'architectures/aws-pcs/iam/\tNEVERMATCH\tthe iam/ directory was removed; use docs/IAM.md + assets/cluster-*-iam.yaml'
+  $'aws:pcs:compute-node-group-name\tNEVERMATCH\ttag key does not exist — use `aws pcs list-compute-node-groups` + `tag:aws:pcs:compute-node-group-id`'
+  $'Name=tag:Name,Values=PCS-\tNEVERMATCH\tthe Name tag is <ClusterName>-<CngName>; resolve the login node via the PCS API instead'
 )
 for entry in "${BANNED[@]}"; do
   IFS=$'\t' read -r pat allow msg <<<"$entry"
