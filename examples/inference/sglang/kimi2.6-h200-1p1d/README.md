@@ -33,7 +33,7 @@ Workload: TBD (`sglang.bench_serving`).
   one for decode
 - NVIDIA device plugin and EFA device plugin installed
 - Local NVMe under `/opt/dlami/nvme` on each node for the model cache
-  (~555 GB of Kimi-K2.5 weights are pre-staged there)
+  (~555 GB of Kimi-K2.6 weights are pre-staged there)
 
 ### Software
 
@@ -74,9 +74,9 @@ Workload: TBD (`sglang.bench_serving`).
 cd examples/inference/sglang
 ./build-image.sh
 
-# 2. pre-stage the weights to every matching node's NVMe (wait for
+# 2. pre-stage the weights into every matching node's NVMe HF cache (wait for
 #    "Download complete!" in each downloader pod's logs)
-./download-model.sh moonshotai/Kimi-K2.5 ml.p5en.48xlarge
+./download-model.sh moonshotai/Kimi-K2.6 ml.p5en.48xlarge
 
 cd kimi2.6-h200-1p1d
 
@@ -94,7 +94,7 @@ capture for the 1T MoE). The router exposes an OpenAI-compatible endpoint on
 kubectl port-forward svc/sglang-router 30000:30000
 curl http://localhost:30000/v1/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model": "/nvme/moonshotai-Kimi-K2.5", "prompt": "The capital of France is", "max_tokens": 32}'
+  -d '{"model": "moonshotai/Kimi-K2.6", "prompt": "The capital of France is", "max_tokens": 32}'
 ```
 
 ## Files

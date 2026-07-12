@@ -143,7 +143,7 @@ spec:
         - -c
         - |
           python3 -m sglang.launch_server \
-            --model-path /nvme/moonshotai-Kimi-K2.5 \
+            --model-path moonshotai/Kimi-K2.6 \
             --host 0.0.0.0 \
             --port 30000 \
             --tp-size 8 \
@@ -166,8 +166,8 @@ spec:
         volumeMounts:
         - name: shm
           mountPath: /dev/shm
-        - name: nvme-storage
-          mountPath: /nvme
+        - name: nvme-hf
+          mountPath: /root/.cache/huggingface
         - name: gdrdrv
           mountPath: /dev/gdrdrv
         resources:
@@ -202,14 +202,16 @@ spec:
           sizeLimit: 64Gi
       # ⚠️  SET THIS PER CLUSTER — the one thing scheduling can't auto-detect.
       # The node's local NVMe is mounted at different paths on the two AMIs:
-      #   HyperPod-on-EKS (DLAMI):           /opt/dlami/nvme
-      #   self-managed EKS (RAID0 instance): /mnt/k8s-disks/0   (setup-local-disks raid0)
-      # type=Directory means the path must already exist (it holds the pre-staged
-      # model at <path>/moonshotai-Kimi-K2.5); a wrong path keeps the pod Pending
-      # with a FailedMount error rather than starting.
-      - name: nvme-storage
+      #   HyperPod-on-EKS (DLAMI):           /opt/dlami/nvme/...
+      #   self-managed EKS (RAID0 instance): /mnt/k8s-disks/0/...   (setup-local-disks raid0)
+      # This is the node's HF cache (mounted at /root/.cache/huggingface; the
+      # engine loads by repo id) — pre-stage it with ../download-model.sh,
+      # which creates this dir. type=Directory makes a wrong path (or a skipped
+      # pre-stage) fail loudly with FailedMount instead of silently creating an
+      # empty dir on the small root disk and downloading the 1TB+ weights there.
+      - name: nvme-hf
         hostPath:
-          path: /opt/dlami/nvme  #For EKS: /mnt/k8s-disks/0
+          path: /opt/dlami/nvme/huggingface  # For EKS: /mnt/k8s-disks/0/huggingface
           type: Directory
       - name: gdrdrv
         hostPath:
@@ -304,7 +306,7 @@ spec:
         - -c
         - |
           python3 -m sglang.launch_server \
-            --model-path /nvme/moonshotai-Kimi-K2.5 \
+            --model-path moonshotai/Kimi-K2.6 \
             --host 0.0.0.0 \
             --port 30000 \
             --tp-size 8 \
@@ -326,8 +328,8 @@ spec:
         volumeMounts:
         - name: shm
           mountPath: /dev/shm
-        - name: nvme-storage
-          mountPath: /nvme
+        - name: nvme-hf
+          mountPath: /root/.cache/huggingface
         - name: gdrdrv
           mountPath: /dev/gdrdrv
         resources:
@@ -362,14 +364,16 @@ spec:
           sizeLimit: 64Gi
       # ⚠️  SET THIS PER CLUSTER — the one thing scheduling can't auto-detect.
       # The node's local NVMe is mounted at different paths on the two AMIs:
-      #   HyperPod-on-EKS (DLAMI):           /opt/dlami/nvme
-      #   self-managed EKS (RAID0 instance): /mnt/k8s-disks/0   (setup-local-disks raid0)
-      # type=Directory means the path must already exist (it holds the pre-staged
-      # model at <path>/moonshotai-Kimi-K2.5); a wrong path keeps the pod Pending
-      # with a FailedMount error rather than starting.
-      - name: nvme-storage
+      #   HyperPod-on-EKS (DLAMI):           /opt/dlami/nvme/...
+      #   self-managed EKS (RAID0 instance): /mnt/k8s-disks/0/...   (setup-local-disks raid0)
+      # This is the node's HF cache (mounted at /root/.cache/huggingface; the
+      # engine loads by repo id) — pre-stage it with ../download-model.sh,
+      # which creates this dir. type=Directory makes a wrong path (or a skipped
+      # pre-stage) fail loudly with FailedMount instead of silently creating an
+      # empty dir on the small root disk and downloading the 1TB+ weights there.
+      - name: nvme-hf
         hostPath:
-          path: /opt/dlami/nvme  #For EKS: /mnt/k8s-disks/0
+          path: /opt/dlami/nvme/huggingface  # For EKS: /mnt/k8s-disks/0/huggingface
           type: Directory
       - name: gdrdrv
         hostPath:

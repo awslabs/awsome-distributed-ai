@@ -10,7 +10,7 @@
 #
 # Examples:
 #   ./download-model.sh deepseek-ai/DeepSeek-V4-Pro ml.p6-b300.48xlarge
-#   ./download-model.sh moonshotai/Kimi-K2.5 ml.p5en.48xlarge
+#   ./download-model.sh moonshotai/Kimi-K2.6 ml.p5en.48xlarge
 #
 # The weights are staged in HF cache layout under
 # /opt/dlami/nvme/huggingface — the dir every serving manifest mounts at

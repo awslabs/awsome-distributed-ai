@@ -281,19 +281,20 @@ spec:
       # ⚠️  SET THIS PER CLUSTER — the one thing scheduling can't auto-detect.
       # The node's local NVMe is mounted at different paths on the two AMIs.
       # Default below is HyperPod's DLAMI mount; for self-managed EKS swap both
-      # paths to the instance-store RAID0 (commented). Picking the WRONG path is
-      # not a hard error: type=DirectoryOrCreate will silently create an empty
-      # dir on the small root disk and the weights will fill it up.
+      # paths to the instance-store RAID0 (commented).
       #
       #   HyperPod-on-EKS (DLAMI):           /opt/dlami/nvme/...
       #   self-managed EKS (RAID0 instance): /mnt/k8s-disks/0/...   (setup-local-disks raid0)
       #
-      # The HF cache is shared by all four replicas on the node — the weights
-      # are downloaded (or pre-staged) once and read by every engine.
+      # The HF cache is shared by all four replicas on the node — pre-staged
+      # once by ../download-model.sh (required, see README), which creates this
+      # dir. type=Directory makes a wrong path (or a skipped pre-stage) fail
+      # loudly with FailedMount instead of silently creating an empty dir on
+      # the small root disk and downloading the weights there.
       - name: nvme-hf
         hostPath:
           path: /opt/dlami/nvme/huggingface  #For EKS: /mnt/k8s-disks/0/huggingface
-          type: DirectoryOrCreate
+          type: Directory
       - name: nvme-tmp
         hostPath:
           path: /opt/dlami/nvme/tmp         #For EKS: /mnt/k8s-disks/0/tmp

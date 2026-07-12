@@ -288,13 +288,14 @@ spec:
       # The node's local NVMe is mounted at different paths on the two AMIs:
       #   HyperPod-on-EKS (DLAMI):           /opt/dlami/nvme/...
       #   self-managed EKS (RAID0 instance): /mnt/k8s-disks/0/...   (setup-local-disks raid0)
-      # Picking the WRONG path is not a hard error: type=DirectoryOrCreate will
-      # silently create an empty dir on the small root disk, and the 500GB+
-      # weights then download there and can fill it up.
+      # Pre-staging with ../download-model.sh (required, see README) creates
+      # this dir. type=Directory makes a wrong path (or a skipped pre-stage)
+      # fail loudly with FailedMount instead of silently creating an empty dir
+      # on the small root disk and downloading the 500GB+ weights there.
       - name: nvme-hf
         hostPath:
           path: /opt/dlami/nvme/huggingface  # For EKS: /mnt/k8s-disks/0/huggingface
-          type: DirectoryOrCreate
+          type: Directory
       - name: nvme-tmp
         hostPath:
           path: /opt/dlami/nvme/tmp          # For EKS: /mnt/k8s-disks/0/tmp

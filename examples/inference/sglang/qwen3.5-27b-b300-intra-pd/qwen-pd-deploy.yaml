@@ -122,17 +122,34 @@ spec:
         resources:
           limits:
             nvidia.com/gpu: 8
-        # Probe the foreground prefill (30005) — it keeps the container alive, so
-        # if it wedges the pod should restart. The 1800s initial delay clears the
-        # long cold start (8 engines load + CUDA-graph capture, gated behind the
-        # decode-ready wait loop) so liveness never fires during warmup.
+        # Liveness ANDs all eight engines: httpGet can only hit one port, and a
+        # dead engine is otherwise never recovered — the router health-checks
+        # around a dead prefill (pod stays Ready at reduced capacity), and both
+        # decodes dead leaves nothing to route to at all. Any engine down for
+        # 5x60s restarts the whole container, i.e. the whole PD group (long
+        # cold start — the price of self-healing back to full capacity). The
+        # 1800s initial delay clears that cold start (8 engines load +
+        # CUDA-graph capture, gated behind the decode-ready wait loop) so
+        # liveness never fires during warmup.
         livenessProbe:
-          httpGet:
-            path: /health
-            port: 30005
+          exec:
+            command:
+            - sh
+            - -c
+            - |
+              # -m 3 keeps the worst case (8 ports x 3s) under timeoutSeconds
+              for p in 30000 30001 30002 30003 30004 30005 30010 30011; do
+                curl -sf -m 3 http://127.0.0.1:${p}/health || exit 1
+              done
           initialDelaySeconds: 1800
           periodSeconds: 60
+          timeoutSeconds: 30
           failureThreshold: 5
+        # Readiness deliberately does NOT AND the engines: it watches only the
+        # foreground prefill. If it also required every engine, one dead
+        # background engine would instantly flip the pod NotReady and stop ALL
+        # traffic (replicas: 1) during the up-to-5-min window before liveness
+        # restarts it — worse than serving degraded until the restart lands.
         readinessProbe:
           httpGet:
             path: /health
@@ -303,10 +320,11 @@ spec:
       # The node's local NVMe is mounted at different paths on the two AMIs:
       #   HyperPod-on-EKS (DLAMI):           /opt/dlami/nvme/...
       #   self-managed EKS (RAID0 instance): /mnt/k8s-disks/0/...   (setup-local-disks raid0)
-      # Picking the WRONG path is not a hard error: type=DirectoryOrCreate will
-      # silently create an empty dir on the small root disk, and weights then
-      # download there and can fill it up.
+      # Pre-staging with ../download-model.sh (required, see README) creates
+      # this dir. type=Directory makes a wrong path (or a skipped pre-stage)
+      # fail loudly with FailedMount instead of silently creating an empty dir
+      # on the small root disk and downloading the weights there.
       - name: nvme-storage
         hostPath:
           path: /opt/dlami/nvme/huggingface  # For EKS: /mnt/k8s-disks/0/huggingface
-          type: DirectoryOrCreate
+          type: Directory

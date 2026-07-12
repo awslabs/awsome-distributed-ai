@@ -16,7 +16,7 @@
 # DaemonSet lands on the GPU nodes of BOTH a plain EKS managed nodegroup and a
 # HyperPod instance group. To apply by hand instead:
 #   export INSTANCE_TYPE=ml.p5en.48xlarge INSTANCE_TYPE_ALT=p5en.48xlarge \
-#          HF_REPO_ID=moonshotai/Kimi-K2.5
+#          HF_REPO_ID=moonshotai/Kimi-K2.6
 #   envsubst '${INSTANCE_TYPE} ${INSTANCE_TYPE_ALT} ${HF_REPO_ID}' \
 #     < download-model-daemonset.yaml | kubectl apply -f -
 #   # wait until each pod logs "Download complete!", then deploy the engine

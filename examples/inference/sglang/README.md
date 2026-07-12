@@ -46,7 +46,7 @@ weights are staged in **HF cache layout** under `<nvme>/huggingface` — the dir
 engines loading by repo id, so the staged snapshot is found as a cache hit:
 
 ```bash
-./download-model.sh moonshotai/Kimi-K2.5        ml.p5en.48xlarge
+./download-model.sh moonshotai/Kimi-K2.6        ml.p5en.48xlarge
 ./download-model.sh deepseek-ai/DeepSeek-V4-Pro ml.p6-b300.48xlarge
 # watch: kubectl logs -f -l app=model-downloader   (each node prints "Download complete!")
 # then:  kubectl delete daemonset model-downloader

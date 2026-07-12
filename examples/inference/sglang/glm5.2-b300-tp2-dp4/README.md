@@ -19,7 +19,7 @@ The NVFP4 checkpoint fits in 2 GPUs, so instead of one big engine the node runs 
 
 1. **Provision the B300 node** — on self-managed (eksctl) EKS, create the nodegroup first: see [`../dsv4pro-b300-single-node/NODEGROUP-EKS.md`](../dsv4pro-b300-single-node/NODEGROUP-EKS.md).
    On HyperPod-on-EKS, nodes are already provisioned.
-2. **Pre-stage the weights** (recommended) — the downloader is a DaemonSet, so every matching B300 node gets the weights staged into its NVMe HF cache
+2. **Pre-stage the weights** (required) — the downloader is a DaemonSet, so every matching B300 node gets the weights staged into its NVMe HF cache
    (the same dir the engine pods mount at `/root/.cache/huggingface`); replicas landing on that node then load from local disk instead of downloading:
 
    ```bash
