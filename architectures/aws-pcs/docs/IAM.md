@@ -39,10 +39,13 @@ aws cloudformation create-stack \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 
 # User: create the policy + group, attach existing users
+# ClusterStackName scopes SSM session access to that one cluster's login node —
+# deploy one stack of this template per cluster.
 aws cloudformation create-stack \
-  --stack-name pcs-cluster-users \
+  --stack-name pcs-cluster-users-pcs-ml-cluster \
   --template-body file://architectures/aws-pcs/assets/cluster-user-iam.yaml \
-  --parameters ParameterKey=AttachUsers,ParameterValue=carol,dave \
+  --parameters ParameterKey=ClusterStackName,ParameterValue=pcs-ml-cluster \
+               ParameterKey=AttachUsers,ParameterValue=carol,dave \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
 
@@ -92,16 +95,19 @@ plus the extra permissions the all-in-one template needs because it provisions
 VPC + FSx + IAM roles itself (the AWS reference policy assumes those already
 exist). Review and tighten before production use.
 
-**Login-node access is scoped by the `Name` tag.** The user policy conditions
-`ssm:StartSession` on `ssm:resourceTag/Name` matching `*-login`. PCS does not
-emit a dedicated "is this a login node" tag, so the templates set
-`Name=<ClusterName>-<cng-name>` on every instance — the login CNG's default
-`CngName=login` yields `Name=<ClusterName>-login` (which the `*-login` glob
-matches), and compute CNGs get `<ClusterName>-cpu1`, `<ClusterName>-gpu-p5`,
-etc. This is the most stable signal available. **The `Name` tag is
-operator-mutable**: if you re-tag a login node, update the policy condition
-to match (or fork the templates to add a dedicated `IsLoginNode=true` tag
-and key off that).
+**Login-node access is scoped by the `Name` tag, to one stack.** The user
+policy conditions `ssm:StartSession` on `ssm:resourceTag/Name` **equalling**
+`<ClusterStackName>-login` (exact match, no wildcards). PCS does not emit a
+dedicated "is this a login node" tag, so the templates set
+`Name=<ClusterName>-<cng-name>` on every instance — the deploy-all template
+passes `${AWS::StackName}` as ClusterName, so the login CNG's default
+`CngName=login` yields `Name=<StackName>-login`, and compute CNGs get
+`<StackName>-cpu1`, `<StackName>-gpu-p5`, etc. That means one deploy of
+`cluster-user-iam.yaml` grants access to **exactly one cluster**; deploy the
+template again with a different `ClusterStackName` for each additional
+cluster you want the group to reach. **The `Name` tag is operator-mutable**:
+if you re-tag a login node, update the policy condition to match (or fork
+the templates to add a dedicated `IsLoginNode=true` tag and key off that).
 
 **Combined CRUD is intentional, not a mistake.** The admin policy covers
 create + update + delete in one policy because (1) CFN rollback on a failed
