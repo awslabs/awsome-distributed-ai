@@ -27,6 +27,7 @@ LDAP users).
 | 11-12 | **Multi-user** | OpenLDAP directory + Slurm managed accounting | [`multi-user-test.md`](./multi-user-test.md) | Directory / accounting changes |
 | 13 | **GPU health** | GPU Cluster Health Check suite (DCGM, EFA, NVLink, NCCL thresholds) | [`gpu-healthcheck-test.md`](./gpu-healthcheck-test.md) | GPU CNG deploys |
 | 14 | **IAM** | cluster-admin deploys+deletes (no `iam:CreatePolicy`); cluster-user is SSM-login-only and can't read the LDAP password | [`iam-test.md`](./iam-test.md) | IAM policy changes |
+| 15 | **Jupyter** | Jupyter server as a Slurm job on CPU + GPU queues; token auth, SSM tunnel, GPU visible from the notebook kernel (self-contained — portable to any Slurm cluster) | [`jupyter-notebook-test.md`](./jupyter-notebook-test.md) | JUPYTER.md changes |
 
 ---
 
@@ -77,7 +78,7 @@ The table lists **all 20 regions where AWS PCS is available** (per
 | Region (AZ ID) ¹ | Verified ² | Storage ³ (Lustre<br>/ OpenZFS) | GPU verified ⁴ | *(ref) CBML GPUs offered* ⁵ | Date (UTC) |
 |---|---|---|---|---|---|
 | **N. Virginia**<br>(`use1-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | ✅ | P6-B300, P6-B200, P5, P5e, P5en, P4d, P4de | 2026-06-17 |
-| **Ohio**<br>(`use2-az3`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | ✅ | P6-B200, P5, P5e, P5en, P4d | 2026-06-17 |
+| **Ohio**<br>(`use2-az3`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | ✅ P5 | P6-B200, P5, P5e, P5en, P4d | 2026-07-08 |
 | **Oregon**<br>(`usw2-az3`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | ✅ P6-B300 | P6-B300, P6-B200, P5, P5e, P5en, P4d, P4de | 2026-06-17 |
 | **Tokyo**<br>(`apne1-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | P5, P5e, P5en | 2026-06-17 |
 | **Mumbai**<br>(`aps1-az2`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | ✅ P6-B200 | P6-B200, P5, P5e, P5en | 2026-06-17 |
