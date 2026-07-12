@@ -340,7 +340,7 @@ Resources:
               - Key: Name
                 Value: !Sub '${ClusterName}-${CngName}'
               - Key: CngName
-                Value: !Sub '${ClusterName}-${CngName}'
+                Value: !Ref CngName
               - Key: ClusterName
                 Value: !Ref ClusterName
               - Key: pcs-cluster-id
