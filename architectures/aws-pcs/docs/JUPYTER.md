@@ -116,12 +116,16 @@ you the compute node's `NODE_IP` and `PORT`. With those two values:
 `NODE_IP` / `PORT` from the log):
 
 ```bash
-LOGIN_ID=$(aws ec2 describe-instances --region <region> \
-  --filters "Name=tag:Name,Values=*login" \
-            "Name=instance-state-name,Values=running" \
-  --query 'Reservations[0].Instances[0].InstanceId' --output text)
+STACK_NAME=pcs-ml-cluster        # your CloudFormation stack name
+AWS_REGION=us-east-1             # your region
 
-aws ssm start-session --region <region> --target "$LOGIN_ID" \
+CLUSTER_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Outputs[?OutputKey==`ClusterId`].OutputValue' --output text)
+[ -n "$CLUSTER_ID" ] && [ "$CLUSTER_ID" != "None" ] || { echo "No ClusterId — check STACK_NAME/AWS_REGION"; return 1; }
+
+LOGIN_CNG_ID=$(aws pcs list-compute-node-groups --cluster-identifier "$CLUSTER_ID" --region "$AWS_REGION" --query 'computeNodeGroups[?name==`login`].id' --output text)
+LOGIN_ID=$(aws ec2 describe-instances --region "$AWS_REGION" --filters "Name=tag:aws:pcs:compute-node-group-id,Values=$LOGIN_CNG_ID" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].InstanceId' --output text)
+
+aws ssm start-session --region "$AWS_REGION" --target "$LOGIN_ID" \
   --document-name AWS-StartPortForwardingSessionToRemoteHost \
   --parameters "host=<NODE_IP>,portNumber=<PORT>,localPortNumber=8888"
 ```
