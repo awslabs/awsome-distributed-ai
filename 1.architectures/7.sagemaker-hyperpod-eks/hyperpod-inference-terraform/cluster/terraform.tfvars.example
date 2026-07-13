@@ -1,0 +1,44 @@
+# =============================================================================
+# Stage 1 (cluster) — Configuration Template
+# =============================================================================
+# Copy to terraform.tfvars and adjust. This stage creates a brand-new
+# SageMaker HyperPod EKS cluster (VPC, EKS, GPU nodes, inference operator).
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# DO NOT commit terraform.tfvars.
+# =============================================================================
+
+region                = "us-east-1"
+resource_name_prefix  = "hpinf"
+eks_cluster_name      = "hyperpod-inference-eks"
+hyperpod_cluster_name = "hyperpod-inference-cluster"
+kubernetes_version    = "1.31"
+
+# --- GPU instance group that will serve inference ---
+# Default: 1x ml.p5.48xlarge (8x H100) in use1-az6 (us-east-1c).
+# NOTE: On-Demand p5.48xlarge usually requires an On-Demand Capacity
+# Reservation (ODCR) or a SageMaker training plan. If you have a training
+# plan, set training_plan_arn on the instance group below.
+instance_groups = [
+  {
+    name                      = "inference-p5"
+    instance_type             = "ml.p5.48xlarge"
+    instance_count            = 1
+    ebs_volume_size_in_gb     = 500
+    threads_per_core          = 2
+    enable_stress_check       = false
+    enable_connectivity_check = false
+    lifecycle_script          = "on_create.sh"
+    availability_zone_id      = "use1-az6"
+    # training_plan_arn       = "arn:aws:sagemaker:us-east-1:ACCOUNT_ID:training-plan/NAME"
+  }
+]
+
+# --- Inference operator dependencies (leave enabled for a fresh cluster) ---
+enable_s3_csi_driver  = true
+enable_alb_controller = true
+enable_keda           = true
+enable_metrics_server = true
+enable_cert_manager   = true
+gated_access          = true

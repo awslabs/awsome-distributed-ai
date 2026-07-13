@@ -1,0 +1,19 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
+tfplan
+.terraform.lock.hcl
+
+# Secrets — NEVER commit these
+terraform.tfvars
+*.auto.tfvars
+secrets.tf
+
+# Lambda build artifacts
+.terraform/authorizer.zip
+
+# OS
+.DS_Store
+Thumbs.db
