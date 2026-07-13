@@ -444,31 +444,22 @@ Resources:
                 # the stock behaviour. See aws-parallelcluster-monitoring #50.
                 export DCGM_EXPORTER_IMAGE="${DcgmExporterImage}"
                 curl -fsSL https://raw.githubusercontent.com/${MonitoringRepo}/${MonitoringVersion}/post-install.sh -o /tmp/post-install.sh
-                # Wait for concurrent dpkg lock holders before invoking the upstream
-                # installer — it runs `apt-get install` with no lock wait, so a live
-                # holder (unattended-upgrades, apt-daily, or the tail-end of this
-                # node's own post-install) fails it with "Could not get lock". Poll
-                # up to 5 min for the four lock files; exit the wait as soon as they
-                # clear. install-enroot-pyxis.sh already has its own wait_for_apt_lock;
-                # this one is the counterpart on the monitoring path.
-                wait_for_apt_lock() {
-                  for i in $(seq 1 60); do
-                    fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock \
-                      /var/lib/apt/lists/lock /var/cache/apt/archives/lock >/dev/null 2>&1 || return 0
-                    [ "$i" = 1 ] && echo "Waiting for dpkg lock before monitoring install..." >> /var/log/monitoring-install.log
-                    sleep 5
-                  done
-                  return 1
-                }
-                # Retry up to 3 times: the install can hit transient first-boot
-                # failures (apt lock contention with cloud-init, network, or the
-                # shared NFS /home still settling). The installer is idempotent
-                # (reuses the existing Grafana SSM param, recreates containers),
-                # so re-running is safe and self-heals a one-off hiccup instead
-                # of leaving the node unmonitored.
+                # Make every child `apt-get` in the upstream installer wait up to 5 min
+                # for the dpkg lock (default is fail-fast). The installer runs unedited,
+                # so we can't pass `-o DPkg::Lock::Timeout=300` per-call — an apt.conf.d
+                # drop-in applies globally to the caller and its children. Fixes the
+                # first-boot race with unattended-upgrades / apt-daily / this node's own
+                # post-install that used to fail with "Could not get lock". Same value
+                # install-enroot-pyxis.sh has been using; sibling helper for the
+                # monitoring path.
+                echo 'DPkg::Lock::Timeout "300";' > /etc/apt/apt.conf.d/99lock-timeout
+                # Retry up to 3 times for non-lock transient failures at first boot
+                # (network, or the shared NFS /home still settling). The installer is
+                # idempotent (reuses the existing Grafana SSM param, recreates
+                # containers), so re-running self-heals a one-off hiccup instead of
+                # leaving the node unmonitored.
                 rc=1
                 for attempt in 1 2 3; do
-                  wait_for_apt_lock
                   echo "Monitoring install attempt $attempt/3..." >> /var/log/monitoring-install.log
                   bash /tmp/post-install.sh ${MonitoringVersion} ${MonitoringRepo} >> /var/log/monitoring-install.log 2>&1
                   rc=$?
