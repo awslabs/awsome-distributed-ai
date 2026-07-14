@@ -63,6 +63,9 @@ RECOMPUTE="${RECOMPUTE:-}"
 # Transport label recorded in env.txt for the 3-way comparison (uccl|nvshmem|"" for the
 # NCCL alltoall arm). Informational only — the actual transport is fixed by the IMG.
 EP_BACKEND="${EP_BACKEND:-}"
+# Staging dir on FSx holds the bench entrypoints + the Kimi-K2 HF config dir (hf/).
+STAGE="${STAGE:-/fsx/kimi-k2}"
+
 # HF hub config/tokenizer access. The qwen3-235b recipe builds its model provider via
 # AutoBridge.from_hf_pretrained(...) (config + tokenizer only; load_weights=False), so it
 # needs either pod egress to huggingface.co OR a pre-staged offline cache. Point HF_HOME at
@@ -70,8 +73,32 @@ EP_BACKEND="${EP_BACKEND:-}"
 HF_HOME="${HF_HOME:-${STAGE}/hf-cache}"
 HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-0}"
 
-# Staging dir on FSx holds the bench entrypoints + the Kimi-K2 HF config dir (hf/).
-STAGE="${STAGE:-/fsx/kimi-k2}"
+# Volume backing /fsx. Default is the FSx Lustre PVC (shared across all nodes). On clusters
+# without FSx (e.g. local-zone capacity blocks), set STORAGE=hostpath to back /fsx with
+# node-local NVMe (HOSTPATH_ROOT). In hostpath mode ${STAGE} must be pre-staged on EVERY
+# node and each node holds only its own rank's logs — harvest with a utility DaemonSet
+# after every cell (see kimi-k2/README.md).
+STORAGE="${STORAGE:-pvc}"
+FSX_PVC="${FSX_PVC:-fsx-kimi-k2}"
+HOSTPATH_ROOT="${HOSTPATH_ROOT:-/mnt/k8s-disks/0/bench-fsx}"
+case "${STORAGE}" in
+  pvc)      FSX_VOLUME_SRC="persistentVolumeClaim: {claimName: ${FSX_PVC}}" ;;
+  hostpath) FSX_VOLUME_SRC="hostPath: {path: ${HOSTPATH_ROOT}, type: DirectoryOrCreate}" ;;
+  *) echo "STORAGE must be 'pvc' or 'hostpath', got '${STORAGE}'" >&2; exit 2 ;;
+esac
+
+# GDRCOPY_DEV=on mounts the host's /dev/gdrdrv into the pod (privileged). Needed for the
+# NVSHMEM arm when its symmetric heap outgrows the init chunk: NVSHMEM's dynamic (CUDA-VMM)
+# heap growth registers chunks over libfabric/EFA via GDRCopy, and on clusters whose nvidia
+# container toolkit does not honor NVIDIA_GDRCOPY=enabled the device is absent in-container
+# and every rank dies at register_mem_handle (mem_heap.cpp:1361). No-op for UCCL/alltoall.
+GDRCOPY_DEV="${GDRCOPY_DEV:-off}"
+GDR_MOUNT_LINE=""; GDR_VOLUME_LINE=""; SECURITY_LINE=""
+if [ "${GDRCOPY_DEV}" = "on" ]; then
+  GDR_MOUNT_LINE='- {name: gdrdrv, mountPath: /dev/gdrdrv}'
+  GDR_VOLUME_LINE='- {name: gdrdrv, hostPath: {path: /dev/gdrdrv, type: CharDevice}}'
+  SECURITY_LINE='securityContext: {privileged: true}'
+fi
 case "${MODEL}" in
   dsv3)       DEFAULT_BENCH="${STAGE}/bench_dsv3_pretrain.py" ;;
   kimi-k2)    DEFAULT_BENCH="${STAGE}/bench_kimi_k2_pretrain.py" ;;
@@ -165,6 +192,7 @@ spec:
           TENSOR_PARALLEL=${TP} PIPELINE_PARALLEL=${PP} EXPERT_PARALLEL=${EP}
           TRAIN_ITERS=${TRAIN_ITERS} GLOBAL_BATCH=${GLOBAL_BATCH} MICRO_BATCH=${MICRO_BATCH} SEQ_LEN=${SEQ_LEN}
           LOSS_PROBE=${LOSS_PROBE} RECOMPUTE=${RECOMPUTE} NUM_LAYERS=${NUM_LAYERS:-} QWEN3_SIZE=${QWEN3_SIZE}
+          HF_HOME=${HF_HOME} HF_HUB_OFFLINE=${HF_HUB_OFFLINE}
           FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_FORK_SAFE=1
           NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET NCCL_SOCKET_IFNAME=^docker,lo,veth ;
           torchrun --nnodes=${NNODES} --nproc_per_node=${GPUS_PER_NODE}
@@ -173,14 +201,17 @@ spec:
       resources:
         requests: {nvidia.com/gpu: ${GPUS_PER_NODE}, vpc.amazonaws.com/efa: ${EFA_PER_NODE}}
         limits:   {nvidia.com/gpu: ${GPUS_PER_NODE}, vpc.amazonaws.com/efa: ${EFA_PER_NODE}}
+      ${SECURITY_LINE}
       volumeMounts:
         - {name: fsx, mountPath: /fsx}
         - {name: shmem, mountPath: /dev/shm}
+        ${GDR_MOUNT_LINE}
   volumes:
     - name: fsx
-      persistentVolumeClaim: {claimName: fsx-kimi-k2}
+      ${FSX_VOLUME_SRC}
     - name: shmem
       emptyDir: {medium: Memory, sizeLimit: 32Gi}
+    ${GDR_VOLUME_LINE}
 EOF
 }
 

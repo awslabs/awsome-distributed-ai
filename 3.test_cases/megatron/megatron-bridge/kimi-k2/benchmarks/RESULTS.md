@@ -1,7 +1,7 @@
 <!-- Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. -->
 <!-- SPDX-License-Identifier: MIT-0 -->
 
-# Kimi-K2 (literal 384-expert MoE) — UCCL-EP vs NCCL all-to-all — Benchmark Results
+# Kimi-K2 (literal 384-expert MoE) — EP dispatcher results (NCCL / DeepEP+UCCL / DeepEP+NVSHMEM)
 
 MoE token-dispatcher A/B on **literal Kimi-K2** (`moonshotai/Kimi-K2-Base`: 61 layers,
 384 routed experts, top-8, MLA, 64 attention heads, `n_group=1`, no MTP), built via
@@ -10,10 +10,14 @@ MoE token-dispatcher A/B on **literal Kimi-K2** (`moonshotai/Kimi-K2-Base`: 61 l
 This is the first dispatcher A/B measured on the real K2 architecture.
 
 The only toggle that changes between arms is `MOE_DISPATCHER`
-(`alltoall` → NCCL baseline, `deepep` → UCCL-EP over EFA); everything else (model,
-mock data, seq 4096, GBS 256, bf16, seed, image, EFA env, `MOE_A2A_OVERLAP` flags)
-is held fixed within a cell. 24 iterations per run, `log_interval=1`; the first 4
-iterations (incl. the ~300 s compile) are dropped from perf stats.
+(`alltoall` → NCCL baseline, `deepep` → DeepEP-over-EFA, whose *transport* — UCCL or
+NVSHMEM — is fixed by the image; see the arm table in [`../README.md`](../README.md));
+everything else (model, mock data, seq 4096, GBS 256, bf16, seed, EFA env,
+`MOE_A2A_OVERLAP` flags) is held fixed within a cell. 24 iterations per run,
+`log_interval=1`; the first 4 iterations (incl. the ~300 s compile) are dropped from
+perf stats. The June campaign measured UCCL vs NCCL same-campaign; the
+[DeepEP+NVSHMEM section](#deepepnvshmem-arm--32-node-pp8-2026-07-14-20260714t0515z-k2-nvshmem-pp8-32n-ue1)
+adds the third arm from a 2026-07-14 campaign (cross-campaign caveat noted there).
 
 - Image: `megatron-bridge-uccl:nemo-26.04.01-uccl-0dc87eb` (Bridge 0.4.2, Core 0.17.1)
 - Raw logs (no overwrite, all ranks): `/fsx/megatron-bridge-bench/<campaign>/kimi-k2/<arm>-mb<m>-ovl<on|off>/`
@@ -77,6 +81,45 @@ The 32-node Capacity Block ended at 2026-06-04 ~10:51Z (EC2 reclaims instances
   remain the separate 2026-06-01 campaign in [`../../dsv3/benchmarks/RESULTS.md`](../../dsv3/benchmarks/RESULTS.md)
   (same image/layout, but not same-campaign apples-to-apples).
 
+## DeepEP+NVSHMEM arm — 32-node PP8 (2026-07-14, `20260714T0515Z-k2-nvshmem-pp8-32n-ue1`)
+
+The third dispatcher arm (see the arm table in [`../README.md`](../README.md)): **NVIDIA
+DeepEP v1 over NVSHMEM-libfabric/EFA** — the
+[`deepep-benchmark`](../../../../../micro-benchmarks/expert-parallelism/deepep-benchmark) build,
+image `megatron-bridge-uccl:nemo-26.04.01-deepep-nvshmem-567632d-cu13` (NVSHMEM v3.7.0-0,
+DeepEP `567632d`). Same bench entrypoint, layout (TP8/PP8/EP32/DP4, 256× B300), GBS 256,
+seq 4096, mock data, 24 iters, warmup 4 as the June campaign.
+
+> **Cross-campaign comparison, not a same-campaign A/B.** The NVSHMEM cells ran on a
+> *different cluster and date* than the June UCCL/NCCL numbers: EKS
+> `ml-clusters-shared-us-east-1`, 32× p6-b300 **us-east-1-atl-2a local-zone Capacity
+> Block**, node-local NVMe (`STORAGE=hostpath`) instead of FSx, `GDRCOPY_DEV=on`
+> (see [`../README.md`](../README.md)). Same image lineage, config, and EFA env, but
+> deltas below carry cross-cluster noise the June UCCL-vs-NCCL deltas do not.
+
+| cell | DeepEP+NVSHMEM (2026-07-14) | UCCL deepep (2026-06-04) | NCCL alltoall (2026-06-04) |
+|---|---|---|---|
+| **mb=4, overlap=on** | **3.742 s/iter · 224.6 TF/GPU · 280.2k tok/s** | 3.834 s/iter · 219.1 TF/GPU · 273.5k tok/s | 5.793 s/iter · 144.8 TF/GPU · 181.0k tok/s |
+| **mb=4, overlap=off** | 6.632 s/iter · 126.4 TF/GPU · 158.1k tok/s | **6.041 s/iter · 138.8 TF/GPU** | 9.303 s/iter · 90.1 TF/GPU |
+| **mb=1, overlap=off** | 13.538 s/iter · 61.9 TF/GPU · 77.5k tok/s | 14.98 s/iter · 56.0 TF/GPU | **12.88 s/iter · 65.1 TF/GPU** |
+
+**What the numbers say** (with the cross-campaign caveat above):
+
+- **NVSHMEM DeepEP is competitive with UCCL on literal K2 at the tuned operating point**:
+  at mb=4+overlap it edges the June UCCL number (−2.4% iter time) and lands −35.4% vs the
+  June NCCL baseline — the same "DeepEP-class dispatchers win decisively at mb≥4" picture.
+- At mb=4 no-overlap NVSHMEM trails UCCL (+9.8%) while still beating NCCL by −28.7%.
+- At mb=1 no-overlap the June ranking holds: NCCL fastest, but NVSHMEM (13.54 s) beats
+  UCCL's June 14.98 s in the unamortized regime.
+
+**Validity** — every cell: `efa_ok` on all 32 nodes (`Selected provider is efa`), 0 stalls,
+`n_steady` 20/20, `parse-runs.py` transport = **nvshmem** (NVSHMEM-over-libfabric init
+banner present on the 8 EP-group leader nodes; no UCCL proxy lines). Iteration-1 `lm loss`
+13.43885 / 13.43207 / 13.43359 (mb4-ovlon / mb4-ovloff / mb1-ovloff); the mb4-ovlon value
+matches the June arms' quoted 13.438850/13.438960 to 5 significant figures — same numerical
+work, bf16 round-off apart. As designed, every NVSHMEM run wrote `STATUS` then exited 1 at
+NVSHMEM finalize (benign; see `../run-ab-rawpods.sh`).
+
 ## Appendix — 16-node PP4 (128× B300), campaign `20260604T051726Z-uccl-ab-pp4-16n-v2`
 
 Parallelism **TP8 / PP4 / EP32 / DP2** — *not directly comparable to the PP8 table*
@@ -95,9 +138,10 @@ figures through the 13.44 → 0.03 mock-data collapse).
 ## Reproduce / parse
 
 ```bash
-# launch one cell (see ../../run-ab-rawpods.sh for all knobs)
-MODEL=kimi-k2 ARM=deepep MICRO_BATCH=4 MOE_A2A_OVERLAP=on NNODES=32 \
-  CAMPAIGN_ID=<id> bash ../../run-ab-rawpods.sh
+# launch one cell — the arm (alltoall|deepep) is the POSITIONAL arg, NNODES the second
+# (see ../../run-ab-rawpods.sh for all knobs)
+MODEL=kimi-k2 MICRO_BATCH=4 MOE_A2A_OVERLAP=on \
+  CAMPAIGN_ID=<id> bash ../../run-ab-rawpods.sh deepep 32
 
 # full matrix, serial, one campaign root
 MODELS="kimi-k2" CELLS="4:on 4:off 1:off 1:on" ARMS="deepep alltoall" \

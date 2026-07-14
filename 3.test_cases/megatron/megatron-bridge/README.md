@@ -117,7 +117,7 @@ identical directory layout.
 
 | Model | Directory | Workloads |
 |-------|-----------|--------|
-| [Kimi K2](https://huggingface.co/moonshotai/Kimi-K2-Base) (1.04T MoE, 384 experts) | [`kimi-k2/`](kimi-k2/) | Full-parameter SFT + UCCL-EP vs NCCL dispatcher A/B (32× p6-b300) |
+| [Kimi K2](https://huggingface.co/moonshotai/Kimi-K2-Base) (1.04T MoE, 384 experts) | [`kimi-k2/`](kimi-k2/) | Full-parameter SFT + 3-way dispatcher comparison: NCCL vs DeepEP+UCCL (same-campaign A/B) vs DeepEP+NVSHMEM (32× p6-b300) |
 | [DeepSeek-V3](https://github.com/deepseek-ai/DeepSeek-V3) (671B MoE, 256 experts) | [`dsv3/`](dsv3/) | Full-parameter SFT + UCCL-EP vs NCCL dispatcher A/B (32× p6-b300) |
 | [Qwen3-235B-A22B](https://huggingface.co/Qwen/Qwen3-235B-A22B) (235B MoE, 128 experts) | [`qwen3-235b/`](qwen3-235b/) | **3-way** dispatcher comparison: NCCL vs DeepEP+UCCL vs DeepEP+NVSHMEM, EP16/EP32 (8× p6-b300 / B300) |
 | [Qwen3-30B-A3B](https://huggingface.co/Qwen/Qwen3-30B-A3B) (30B MoE, 128 experts) | [`qwen3-30b/`](qwen3-30b/) | Same **3-way** comparison on **8× p5.48xlarge / H100** (the size that fits H100-80GB), EP16/EP32 |
@@ -189,12 +189,14 @@ secondarily on the instance/fabric:
   the host-proxy penalty. Measured: **UCCL −36%** on DSV3 256× B300, and **−34% at 32 nodes /
   −21% at 16 nodes** on Kimi-K2 ([`kimi-k2/benchmarks/RESULTS.md`](kimi-k2/benchmarks/RESULTS.md))
   — the win itself scales with node count.
-- **DeepEP+NVSHMEM is the promising backend to watch.** It is the best DeepEP backend at most
-  8-node points here (both H100 EPs and B300 EP16, where it beats NCCL; UCCL edges it only at
-  B300 EP32 mb=4), and standalone EP micro-benchmarks suggest it is competitive-to-better than
-  UCCL in throughput mode — so it is a strong candidate for the large-scale regime. **Not yet
-  validated at 16–32 nodes** (UCCL is the proven large-scale choice today; NVSHMEM at K2 scale is
-  the top follow-up).
+- **DeepEP+NVSHMEM is validated at K2 scale (32 nodes) and competitive with UCCL.** It is the
+  best DeepEP backend at most 8-node points here (both H100 EPs and B300 EP16, where it beats
+  NCCL; UCCL edges it only at B300 EP32 mb=4), and the 2026-07-14 32-node run on literal Kimi-K2
+  (256× B300, TP8/PP8/EP32) confirmed it at scale: **3.74 s/iter at mb=4+overlap — −35% vs the
+  June NCCL baseline and slightly ahead of the June UCCL number** (cross-campaign comparison;
+  [`kimi-k2/benchmarks/RESULTS.md`](kimi-k2/benchmarks/RESULTS.md)). Both DeepEP transports are
+  now proven large-scale choices on EFA; note the NVSHMEM arm may need `GDRCOPY_DEV=on`
+  (see [`kimi-k2/README.md`](kimi-k2/README.md)).
 - **Fabric is second-order.** DeepEP looked worst on H100 (p5.48xlarge, lower EFA bandwidth
   exposes the host-proxy cost) and better on B300; p5en/newer should help. But it still lost at
   B300 8-node/EP32 — so treat this as **scale-primary, fabric-secondary**.
