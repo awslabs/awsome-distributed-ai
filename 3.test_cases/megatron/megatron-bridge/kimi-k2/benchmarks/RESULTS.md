@@ -27,8 +27,9 @@ perf stats. The headline table merges two campaigns — NCCL+UCCL (same-campaign
 
 ## Headline — 32-node PP8 (256× B300), all three arms
 
-Parallelism **TP8 / PP8 / EP32 / DP4** (the canonical layout, same as the published
-DSV3 numbers). Steady-state mean over iters 5–24, zero stalls, EFA active 32/32 in
+Parallelism **TP8 / PP8 / EP32 / DP4** — the reference layout shared by all 256-GPU
+dispatcher numbers in this library (chosen for the published DSV3 A/B and reused here
+so cells are comparable across model cases; not a tuned-optimal layout for K2). Steady-state mean over iters 5–24, zero stalls, EFA active 32/32 in
 every run. Two measurement campaigns feed this table:
 
 - **¹ NCCL + UCCL**: same-campaign A/B, `20260604T083049Z-uccl-ab-pp8-32n-v2`
