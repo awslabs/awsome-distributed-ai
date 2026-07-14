@@ -1,6 +1,6 @@
 # Amazon EKS support in Amazon SageMaker HyperPod
 
-> 🚨 We recommend following the official [Amazon SageMaker HyperPod EKS Workshop](https://awslabs.github.io/ai-on-sagemaker-hyperpod/docs/category/eks-orchestration) to deploy clusters, which contains detailed instructions and latest best-practices.
+> 🚨 We recommend following the official [Amazon SageMaker HyperPod EKS documentation](https://awslabs.github.io/ai-on-sagemaker-hyperpod/docs/category/eks-orchestration) to deploy clusters, which contains detailed instructions and latest best-practices.
 
 ## 1. Architecture
 
