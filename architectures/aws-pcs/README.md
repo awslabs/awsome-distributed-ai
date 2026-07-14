@@ -775,6 +775,7 @@ In this repo:
 - [Parameter reference](./docs/PARAMETERS.md) — every deploy-all parameter and default
 - [Operations guide](./docs/OPERATIONS.md) — version trade-offs, AMI pinning, monitoring/DCGM, FSx coupling, Lustre tuning, production settings
 - [User management guide](./docs/USER-MANAGEMENT.md) — multi-user setup with OpenLDAP (add/remove users, groups, Slurm accounting)
+- [Jupyter on a compute node](./docs/JUPYTER.md) — run Jupyter as a Slurm job, browser access via SSM port forwarding
 - [IAM permissions guide](./docs/IAM.md) — cluster admin / cluster user roles, policy deploy, security considerations
 - [Deploy & testing procedures](./docs/DEPLOY-TESTING.md) — development deploy workflow with test S3 bucket
 - [Test & Validation Guide](./tests/README.md) — reproducible matrix with measured numbers

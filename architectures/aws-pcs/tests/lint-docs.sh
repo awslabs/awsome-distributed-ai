@@ -92,7 +92,28 @@ else
   done
 fi
 
-# 5. Same-file Markdown anchor links in README.md resolve to a real heading.
+# 5. The monitoring install block (dpkg lock wait + retry) must also be
+#    byte-identical across the four CNG templates. Same rationale as the
+#    needrestart guard: hand-duplicated UserData drifts silently otherwise.
+monitoring_extract() {
+  awk '/Monitoring stack installation/{p=1}
+       p{print}
+       p&&/Monitoring installation complete \(exit/{exit}' "$1" | sed -E 's/^[[:space:]]+//'
+}
+mref=$(monitoring_extract assets/add-cng.yaml)
+if [ -z "$mref" ]; then
+  report "monitoring install block not found in assets/add-cng.yaml"
+else
+  for t in add-cng-p5 add-cng-p6-b200 add-cng-p6-b300; do
+    other=$(monitoring_extract "assets/$t.yaml")
+    if [ "$other" != "$mref" ]; then
+      report "monitoring install block in assets/$t.yaml differs from assets/add-cng.yaml (keep the four copies byte-identical):"
+      diff <(printf '%s\n' "$mref") <(printf '%s\n' "$other") | sed 's/^/    /'
+    fi
+  done
+fi
+
+# 6. Same-file Markdown anchor links in README.md resolve to a real heading.
 #    (Cross-file and external links are out of scope — kept simple on purpose.)
 while IFS= read -r anchor; do
   # build the set of heading slugs in README
@@ -104,6 +125,6 @@ while IFS= read -r anchor; do
 done < <(grep -oE '\]\(#[a-z0-9-]+\)' README.md | sed -E 's/\]\(#//; s/\)//' | sort -u)
 
 if [ "$fail" -eq 0 ]; then
-  echo "docs lint: PASS (no stale parameter references, no empty=skip wording, all deploy-all params documented, needrestart guard in lock-step, README anchors resolve)"
+  echo "docs lint: PASS (no stale parameter references, no empty=skip wording, all deploy-all params documented, needrestart guard + monitoring install in lock-step, README anchors resolve)"
 fi
 exit $fail

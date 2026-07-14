@@ -28,7 +28,7 @@ import wandb
 
 try:
     import torch.cuda.nvtx as nvtx
-except:
+except ImportError:
     print("NVIDIA NSight tools not available")
     class nvtx:
         @staticmethod
