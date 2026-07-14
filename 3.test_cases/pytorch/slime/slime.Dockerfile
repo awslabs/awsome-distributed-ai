@@ -180,11 +180,36 @@ RUN pip install --no-cache-dir --force-reinstall --no-deps "${SGL_ROUTER_WHEEL}"
 
 #####################
 # SLIME (RL post-training framework)
+#
+# Installed straight from upstream THUDM/slime at the pinned SLIME_VERSION --
+# no fork, no forked URL. A few upstream bugs still block a clean end-to-end run
+# on CUDA 13; they are healed in the next step against this upstream checkout.
 #####################
 RUN cd /opt && \
     git clone --depth 1 --branch ${SLIME_VERSION} https://github.com/THUDM/slime.git && \
     cd slime && \
     pip install --no-cache-dir -e . --no-deps
+
+# mbridge: required by SLIME's HF->torch_dist converter
+# (tools/convert_hf_to_torch_dist.py imports `slime_plugins.mbridge` and
+# `from mbridge import AutoBridge`). It is NOT pulled by the `--no-deps` slime
+# install above, so the 30B MoE checkpoint conversion fails with
+# `ModuleNotFoundError: No module named 'mbridge'` without it. Installed with
+# --no-deps so it cannot drag numpy 2.x (or any other pinned dep) back in.
+RUN pip install --no-cache-dir --no-deps mbridge
+
+#####################
+# Self-neutralizing upstream patches.
+#
+# Applies small, in-place fixes to the upstream SLIME checkout above -- only
+# where the unfixed pattern is actually present. Each patch checks upstream
+# first, so once the corresponding fix lands in THUDM/slime the patch becomes a
+# no-op automatically (no fork to track, no URL to bump; upstream simply wins).
+# The build fails loudly if a patch cannot reach a known-good state. See
+# patches/apply_slime_patches.py for the per-patch rationale and upstream links.
+#####################
+COPY patches/apply_slime_patches.py /opt/slime-patches/apply_slime_patches.py
+RUN python3 /opt/slime-patches/apply_slime_patches.py --slime-root /opt/slime
 
 ## Set Open MPI variables to exclude network interface and conduit.
 ENV OMPI_MCA_pml=^ucx            \
