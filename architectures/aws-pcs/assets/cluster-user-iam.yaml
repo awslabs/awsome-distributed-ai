@@ -2,24 +2,38 @@
 # SPDX-License-Identifier: MIT-0
 AWSTemplateFormatVersion: "2010-09-09"
 Description: |
-  Creates a customer-managed IAM policy + group for end users of an
-  already-deployed AWS PCS reference cluster. Members can:
+  Creates a customer-managed IAM policy + group for end users of one
+  already-deployed AWS PCS reference cluster (identified by the deploy-all
+  stack name). Members can:
     - Discover the login node (ec2:DescribeInstances) and read CFN stack outputs
     - Read PCS cluster / queue / compute-node-group status (pcs:Get*/List*)
-    - Open SSM Session Manager / SSH-over-SSM / port-forward to LOGIN nodes
+    - Open SSM Session Manager / SSH-over-SSM / port-forward to that cluster's LOGIN node only
     - Retrieve the Grafana admin password from Parameter Store
     - Terminate their own SSM sessions
   They cannot create, modify, or delete cluster resources, and cannot open
-  shells on compute nodes (the ssm:resourceTag Name=PCS-login* scope blocks that. Note: the Name tag is operator-mutable; if you rename login nodes, update the policy accordingly).
+  shells on compute nodes. The ssm:StartSession condition matches the
+  exact `<ClusterStackName>-login` Name tag emitted by add-cng.yaml, so it
+  does not open unrelated `*-login` instances in the account. Deploy one
+  stack of this template per cluster you want to grant access to.
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
+      - Label: { default: "Cluster to grant access to" }
+        Parameters: [ClusterStackName]
       - Label: { default: "Group + IAM users (optional)" }
         Parameters: [GroupName, AttachUsers]
     ParameterLabels:
+      ClusterStackName: { default: "The deploy-all CloudFormation stack name of the target cluster" }
       GroupName: { default: "Name of the IAM group to create" }
       AttachUsers: { default: "Existing IAM users to add to the group (comma-separated, optional)" }
 Parameters:
+  ClusterStackName:
+    Type: String
+    Description: >
+      Deploy-all CloudFormation stack name of the cluster this IAM group grants access to.
+      The policy scopes ssm:StartSession to instances tagged Name=<ClusterStackName>-login.
+    AllowedPattern: '^[a-zA-Z][-a-zA-Z0-9]{0,127}$'
+    ConstraintDescription: Must match a valid CloudFormation stack name (letters, digits, hyphens; up to 128 chars).
   GroupName:
     Type: String
     Default: PCSClusterUsers
@@ -35,96 +49,76 @@ Resources:
     Type: AWS::IAM::ManagedPolicy
     Properties:
       ManagedPolicyName: !Sub "${AWS::StackName}-PCSClusterUser"
-      Description: "Read-only + SSM Session Manager (login-node only) for end users of an already-deployed AWS PCS cluster"
+      Description: !Sub "Read-only + SSM Session Manager (login-node only) for end users of PCS cluster ${ClusterStackName}"
       PolicyDocument:
-        {
-          "Version": "2012-10-17",
-          "Statement": [
-            {
-              "Sid": "DiscoverClusterAndLoginNode",
-              "Effect": "Allow",
-              "Action": [
-                "ec2:DescribeInstances",
-                "ec2:DescribeInstanceStatus",
-                "ec2:DescribeTags",
-                "cloudformation:DescribeStacks",
-                "cloudformation:ListStacks",
-                "cloudformation:DescribeStackResources",
-                "cloudformation:ListStackResources"
-              ],
-              "Resource": "*"
-            },
-            {
-              "Sid": "PCSReadOnly",
-              "Effect": "Allow",
-              "Action": [
-                "pcs:GetCluster",
-                "pcs:ListClusters",
-                "pcs:GetComputeNodeGroup",
-                "pcs:ListComputeNodeGroups",
-                "pcs:GetQueue",
-                "pcs:ListQueues",
-                "pcs:ListTagsForResource"
-              ],
-              "Resource": "*"
-            },
-            {
-              "Sid": "GrafanaPasswordRead",
-              "Effect": "Allow",
-              "Action": [
-                "ssm:GetParameter",
-                "ssm:GetParameters"
-              ],
-              "Resource": "arn:aws:ssm:*:*:parameter/pcs/*/grafana/*"
-            },
-            {
-              "Sid": "SSMSessionToLoginNodeInstance",
-              "Effect": "Allow",
-              "Action": [
-                "ssm:StartSession"
-              ],
-              "Resource": "arn:aws:ec2:*:*:instance/*",
-              "Condition": {
-                "StringLike": {
-                  "ssm:resourceTag/Name": "PCS-login*"
-                }
-              }
-            },
-            {
-              "Sid": "SSMSessionDocuments",
-              "Effect": "Allow",
-              "Action": [
-                "ssm:StartSession"
-              ],
-              "Resource": [
-                "arn:aws:ssm:*:*:document/AWS-StartSSHSession",
-                "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSession",
-                "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSessionToRemoteHost",
-                "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell"
-              ]
-            },
-            {
-              "Sid": "SSMSessionDocumentLookup",
-              "Effect": "Allow",
-              "Action": [
-                "ssm:DescribeSessions",
-                "ssm:GetConnectionStatus",
-                "ssm:DescribeInstanceProperties",
-                "ssm:DescribeInstanceInformation"
-              ],
-              "Resource": "*"
-            },
-            {
-              "Sid": "SSMSessionTerminateOwn",
-              "Effect": "Allow",
-              "Action": [
-                "ssm:TerminateSession",
-                "ssm:ResumeSession"
-              ],
-              "Resource": "arn:aws:ssm:*:*:session/${aws:username}-*"
-            }
-          ]
-        }
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DiscoverClusterAndLoginNode
+            Effect: Allow
+            Action:
+              - ec2:DescribeInstances
+              - ec2:DescribeInstanceStatus
+              - ec2:DescribeTags
+              - cloudformation:DescribeStacks
+              - cloudformation:ListStacks
+              - cloudformation:DescribeStackResources
+              - cloudformation:ListStackResources
+            Resource: "*"
+          - Sid: PCSReadOnly
+            Effect: Allow
+            Action:
+              - pcs:GetCluster
+              - pcs:ListClusters
+              - pcs:GetComputeNodeGroup
+              - pcs:ListComputeNodeGroups
+              - pcs:GetQueue
+              - pcs:ListQueues
+              - pcs:ListTagsForResource
+            Resource: "*"
+          - Sid: GrafanaPasswordRead
+            Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+            Resource: "arn:aws:ssm:*:*:parameter/pcs/*/grafana/*"
+          - Sid: SSMSessionToLoginNodeInstance
+            # Exact-match Name=<stack>-login (no wildcards on either side). The
+            # add-cng*.yaml templates tag the login node's EC2 instance
+            # Name=<ClusterName>-login and deploy-all passes ${AWS::StackName}
+            # as ClusterName, so exactly the login node of the named stack
+            # matches. Other clusters' login nodes, unrelated *-login
+            # instances (bastion-login, vpn-login, …), and compute CNGs whose
+            # own name ends in "login" are all excluded.
+            Effect: Allow
+            Action:
+              - ssm:StartSession
+            Resource: "arn:aws:ec2:*:*:instance/*"
+            Condition:
+              StringEquals:
+                ssm:resourceTag/Name: !Sub "${ClusterStackName}-login"
+          - Sid: SSMSessionDocuments
+            Effect: Allow
+            Action:
+              - ssm:StartSession
+            Resource:
+              - "arn:aws:ssm:*:*:document/AWS-StartSSHSession"
+              - "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSession"
+              - "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSessionToRemoteHost"
+              - "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell"
+          - Sid: SSMSessionDocumentLookup
+            Effect: Allow
+            Action:
+              - ssm:DescribeSessions
+              - ssm:GetConnectionStatus
+              - ssm:DescribeInstanceProperties
+              - ssm:DescribeInstanceInformation
+            Resource: "*"
+          - Sid: SSMSessionTerminateOwn
+            Effect: Allow
+            Action:
+              - ssm:TerminateSession
+              - ssm:ResumeSession
+            Resource: "arn:aws:ssm:*:*:session/${aws:username}-*"
   PCSClusterUserGroup:
     Type: AWS::IAM::Group
     Properties:

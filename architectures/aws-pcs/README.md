@@ -287,16 +287,24 @@ want direct SSH, set `SSHAccessCidr` to a trusted CIDR at deploy time to open SS
 on the login node to that CIDR.
 
 **Console:** [EC2 Console](https://console.aws.amazon.com/ec2/home#Instances:) → filter
-by `aws:pcs:compute-node-group-name = login` → **Connect** → **Session Manager**.
+by `Name` = `<your-stack-name>-login` → **Connect** → **Session Manager**.
 
-**CLI** (AWS CloudShell has the required permissions):
+**CLI** (AWS CloudShell has the required permissions). Set `STACK_NAME` /
+`AWS_REGION` once, then a single command resolves the login node's
+instance ID — it works no matter what your CNG is named because the
+lookup goes through the PCS API, not the human-facing tag:
 
 ```bash
-INSTANCE_ID=$(aws ec2 describe-instances \
-  --filters "Name=tag:aws:pcs:compute-node-group-name,Values=login" \
-            "Name=instance-state-name,Values=running" \
-  --query 'Reservations[0].Instances[0].InstanceId' --output text)
-aws ssm start-session --target $INSTANCE_ID
+STACK_NAME=pcs-ml-cluster        # your CloudFormation stack name
+AWS_REGION=us-east-1             # your region
+
+CLUSTER_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Outputs[?OutputKey==`ClusterId`].OutputValue' --output text)
+[ -n "$CLUSTER_ID" ] && [ "$CLUSTER_ID" != "None" ] || { echo "No ClusterId — check STACK_NAME/AWS_REGION"; return 1; }
+
+LOGIN_CNG_ID=$(aws pcs list-compute-node-groups --cluster-identifier "$CLUSTER_ID" --region "$AWS_REGION" --query 'computeNodeGroups[?name==`login`].id' --output text)
+LOGIN_INSTANCE_ID=$(aws ec2 describe-instances --region "$AWS_REGION" --filters "Name=tag:aws:pcs:compute-node-group-id,Values=$LOGIN_CNG_ID" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].InstanceId' --output text)
+
+aws ssm start-session --target "$LOGIN_INSTANCE_ID" --region "$AWS_REGION"
 ```
 
 Then `sudo su - ubuntu` and use `sinfo` / `squeue` / `scontrol show nodes`.
@@ -435,11 +443,15 @@ DCGM exporter image (`DcgmExporterImage`) are pinned and rarely need changing �
 #### Accessing the Grafana dashboards
 
 Log in to Grafana as **`admin`**; the password is generated per cluster and stored in
-SSM Parameter Store. Retrieve it (with `CLUSTER_ID` from the stack's `ClusterId` output):
+SSM Parameter Store. Retrieve it — the same `STACK_NAME` / `AWS_REGION` used in §6
+resolve the cluster's `ClusterId` from the stack Outputs:
 
 ```bash
-aws ssm get-parameter --name "/pcs/${CLUSTER_ID}/grafana/admin-password" \
-  --with-decryption --query 'Parameter.Value' --output text
+STACK_NAME=pcs-ml-cluster        # your CloudFormation stack name
+AWS_REGION=us-east-1             # your region
+
+aws ssm get-parameter --region "$AWS_REGION" --with-decryption --query 'Parameter.Value' --output text \
+  --name "/pcs/$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Outputs[?OutputKey==`ClusterId`].OutputValue' --output text)/grafana/admin-password"
 ```
 
 There are two ways to reach the UI.
@@ -447,16 +459,25 @@ There are two ways to reach the UI.
 ##### Option A — SSM port forwarding (default, private)
 
 No public access required; works even when the login node has no inbound rules.
+The monitoring stack runs on the instance tagged `monitoring-role=login`;
+scope by the cluster's `aws:pcs:cluster-id` so multi-cluster VPCs don't
+cross the streams.
 
 ```bash
-# Login node instance ID
-INSTANCE_ID=$(aws ec2 describe-instances \
-  --filters "Name=tag:aws:pcs:compute-node-group-name,Values=login" \
+STACK_NAME=pcs-ml-cluster        # your CloudFormation stack name
+AWS_REGION=us-east-1             # your region
+
+CLUSTER_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Outputs[?OutputKey==`ClusterId`].OutputValue' --output text)
+[ -n "$CLUSTER_ID" ] && [ "$CLUSTER_ID" != "None" ] || { echo "No ClusterId — check STACK_NAME/AWS_REGION"; return 1; }
+
+LOGIN_INSTANCE_ID=$(aws ec2 describe-instances --region "$AWS_REGION" \
+  --filters "Name=tag:aws:pcs:cluster-id,Values=$CLUSTER_ID" \
+            "Name=tag:monitoring-role,Values=login" \
             "Name=instance-state-name,Values=running" \
   --query 'Reservations[0].Instances[0].InstanceId' --output text)
 
 # Port-forward remote 443 -> local 8443 (needs the Session Manager plugin)
-aws ssm start-session --target $INSTANCE_ID \
+aws ssm start-session --target "$LOGIN_INSTANCE_ID" --region "$AWS_REGION" \
   --document-name AWS-StartPortForwardingSession \
   --parameters '{"portNumber":["443"],"localPortNumber":["8443"]}'
 ```
@@ -474,11 +495,19 @@ attaches it to the login node, so you can open:
 https://<login-node-public-ip>/grafana/
 ```
 
-Get the login node's public IP from the EC2 console, or:
+Get the login node's public IP from the EC2 console, or (again scoping by
+`monitoring-role=login` + `aws:pcs:cluster-id` for the monitoring instance):
 
 ```bash
-aws ec2 describe-instances \
-  --filters "Name=tag:aws:pcs:compute-node-group-name,Values=login" \
+STACK_NAME=pcs-ml-cluster        # your CloudFormation stack name
+AWS_REGION=us-east-1             # your region
+
+CLUSTER_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Outputs[?OutputKey==`ClusterId`].OutputValue' --output text)
+[ -n "$CLUSTER_ID" ] && [ "$CLUSTER_ID" != "None" ] || { echo "No ClusterId — check STACK_NAME/AWS_REGION"; return 1; }
+
+aws ec2 describe-instances --region "$AWS_REGION" \
+  --filters "Name=tag:aws:pcs:cluster-id,Values=$CLUSTER_ID" \
+            "Name=tag:monitoring-role,Values=login" \
             "Name=instance-state-name,Values=running" \
   --query 'Reservations[0].Instances[0].PublicIpAddress' --output text
 ```
@@ -528,7 +557,7 @@ NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 
 > **Note — node-type tagging.** The monitoring stack identifies login vs compute nodes by
 > the `monitoring-role` tag (`login`/`compute`), **not** the EC2 `Name` tag — so the `Name`
-> tag (default `PCS-<cngname>`) is free for you to retag without breaking dashboards.
+> tag (default `<ClusterName>-<cngname>`) is free for you to retag without breaking dashboards.
 
 > **Note — monitoring across login-node replacement.** Prometheus + Grafana run on the
 > (single) login node. Metric collection, the Grafana password, and the built-in

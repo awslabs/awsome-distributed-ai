@@ -39,10 +39,13 @@ aws cloudformation create-stack \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 
 # User: create the policy + group, attach existing users
+# ClusterStackName scopes SSM session access to that one cluster's login node —
+# deploy one stack of this template per cluster.
 aws cloudformation create-stack \
-  --stack-name pcs-cluster-users \
+  --stack-name pcs-cluster-users-pcs-ml-cluster \
   --template-body file://architectures/aws-pcs/assets/cluster-user-iam.yaml \
-  --parameters ParameterKey=AttachUsers,ParameterValue=carol,dave \
+  --parameters ParameterKey=ClusterStackName,ParameterValue=pcs-ml-cluster \
+               ParameterKey=AttachUsers,ParameterValue=carol,dave \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
 
@@ -56,19 +59,28 @@ admin will also deploy the standalone DLAMI builder
 ### What the cluster user can do once attached
 
 ```bash
-# Find the login node and open a session
-INSTANCE_ID=$(aws ec2 describe-instances \
-  --filters "Name=tag:Name,Values=PCS-login" "Name=instance-state-name,Values=running" \
-  --query 'Reservations[0].Instances[0].InstanceId' --output text)
-aws ssm start-session --target $INSTANCE_ID
+STACK_NAME=pcs-ml-cluster        # your CloudFormation stack name
+AWS_REGION=us-east-1             # your region
+
+# Find the login node's instance ID via the PCS API — no dependency on tag naming
+CLUSTER_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Outputs[?OutputKey==`ClusterId`].OutputValue' --output text)
+[ -n "$CLUSTER_ID" ] && [ "$CLUSTER_ID" != "None" ] || { echo "No ClusterId — check STACK_NAME/AWS_REGION"; return 1; }
+
+LOGIN_CNG_ID=$(aws pcs list-compute-node-groups --cluster-identifier "$CLUSTER_ID" --region "$AWS_REGION" --query 'computeNodeGroups[?name==`login`].id' --output text)
+LOGIN_INSTANCE_ID=$(aws ec2 describe-instances --region "$AWS_REGION" --filters "Name=tag:aws:pcs:compute-node-group-id,Values=$LOGIN_CNG_ID" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].InstanceId' --output text)
+
+# Open a session
+aws ssm start-session --target "$LOGIN_INSTANCE_ID" --region "$AWS_REGION"
 
 # Port-forward Grafana (443 -> 8443), then open https://localhost:8443/grafana/
-aws ssm start-session --target $INSTANCE_ID \
+aws ssm start-session --target "$LOGIN_INSTANCE_ID" --region "$AWS_REGION" \
   --document-name AWS-StartPortForwardingSession \
   --parameters '{"portNumber":["443"],"localPortNumber":["8443"]}'
 
-# Read the Grafana admin password
-aws ssm get-parameter --name "/pcs/<cluster-id>/grafana/admin-password" \
+# Read the Grafana admin password (CLUSTER_ID is resolved by CFN Outputs above; look it up if needed)
+CLUSTER_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" \
+  --query 'Stacks[0].Outputs[?OutputKey==`ClusterId`].OutputValue' --output text)
+aws ssm get-parameter --name "/pcs/${CLUSTER_ID}/grafana/admin-password" --region "$AWS_REGION" \
   --with-decryption --query 'Parameter.Value' --output text
 ```
 
@@ -83,14 +95,19 @@ plus the extra permissions the all-in-one template needs because it provisions
 VPC + FSx + IAM roles itself (the AWS reference policy assumes those already
 exist). Review and tighten before production use.
 
-**Login-node access is scoped by the `Name` tag.** The user policy conditions
-`ssm:StartSession` on `ssm:resourceTag/Name` matching `PCS-login*`. PCS does not
-emit a dedicated "is this a login node" tag, so the templates set
-`Name=PCS-login` on the login node and `Name=PCS-<cng-name>` on compute nodes
-(`PCS-cpu1`, `PCS-hpc8a`, …) — the most stable signal available. **The `Name`
-tag is operator-mutable**: if you re-tag a login node, update the policy
-condition to match (or fork the templates to add a dedicated `IsLoginNode=true`
-tag and key off that).
+**Login-node access is scoped by the `Name` tag, to one stack.** The user
+policy conditions `ssm:StartSession` on `ssm:resourceTag/Name` **equalling**
+`<ClusterStackName>-login` (exact match, no wildcards). PCS does not emit a
+dedicated "is this a login node" tag, so the templates set
+`Name=<ClusterName>-<cng-name>` on every instance — the deploy-all template
+passes `${AWS::StackName}` as ClusterName, so the login CNG's default
+`CngName=login` yields `Name=<StackName>-login`, and compute CNGs get
+`<StackName>-cpu1`, `<StackName>-gpu-p5`, etc. That means one deploy of
+`cluster-user-iam.yaml` grants access to **exactly one cluster**; deploy the
+template again with a different `ClusterStackName` for each additional
+cluster you want the group to reach. **The `Name` tag is operator-mutable**:
+if you re-tag a login node, update the policy condition to match (or fork
+the templates to add a dedicated `IsLoginNode=true` tag and key off that).
 
 **Combined CRUD is intentional, not a mistake.** The admin policy covers
 create + update + delete in one policy because (1) CFN rollback on a failed

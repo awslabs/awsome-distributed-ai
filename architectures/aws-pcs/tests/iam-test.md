@@ -27,6 +27,7 @@ aws cloudformation create-stack --stack-name pcs-iam-admin \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM --region <region>
 aws cloudformation create-stack --stack-name pcs-iam-user \
   --template-url https://<bucket>.s3.amazonaws.com/<prefix>cluster-user-iam.yaml \
+  --parameters ParameterKey=ClusterStackName,ParameterValue=<target-cluster-stack> \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM --region <region>
 ```
 
@@ -80,15 +81,25 @@ node**, and reading `/pcs/*/grafana/*` (the Grafana password).
 
 **Expected (denied — `implicitDeny`):** `cloudformation:CreateStack`, `pcs:CreateCluster`,
 `ec2:RunInstances`, `fsx:CreateFileSystem`, `iam:CreateRole`; `ssm:StartSession` on a
-**compute** node; and — critically for security — reading `/pcs/*/ldap/*` (the OpenLDAP
-admin password).
+**compute** node, on **another cluster's login node**, or on unrelated `*-login`
+instances such as `bastion-login` / `vpn-login`; and — critically for security — reading
+`/pcs/*/ldap/*` (the OpenLDAP admin password).
 
 ```bash
-# Example simulate checks (repeat per action/resource):
-aws iam simulate-principal-policy --policy-source-arn <user-role-arn> \
-  --action-names ssm:StartSession \
-  --resource-arns arn:aws:ec2:<region>:<acct>:instance/<login-instance-id>
-# → allowed for the login node, implicitDeny for a compute node
+# Simulate exact-tag scope with the SSM Condition key ssm:resourceTag/Name:
+POLICY_JSON=$(aws iam get-policy-version --policy-arn <user-policy-arn> \
+  --version-id $(aws iam get-policy --policy-arn <user-policy-arn> --query Policy.DefaultVersionId --output text) \
+  --query PolicyVersion.Document --output json)
+
+for NAME in "<target-stack>-login" "other-cluster-login" "bastion-login" "<target-stack>-cpu1" "<target-stack>-data-login"; do
+  aws iam simulate-custom-policy \
+    --policy-input-list "$POLICY_JSON" \
+    --action-names ssm:StartSession \
+    --resource-arns arn:aws:ec2:<region>:<acct>:instance/i-00000000 \
+    --context-entries "ContextKeyName=ssm:resourceTag/Name,ContextKeyType=string,ContextKeyValues=$NAME" \
+    --query 'EvaluationResults[0].EvalDecision' --output text
+done
+# Expected: allowed, implicitDeny, implicitDeny, implicitDeny, implicitDeny.
 ```
 
 ---
