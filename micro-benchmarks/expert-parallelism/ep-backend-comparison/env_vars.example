@@ -9,8 +9,11 @@
 export INSTANCE_TYPE=p6-b300.48xlarge
 export GPU_PER_NODE=8
 export EFA_PER_NODE=16
+# 8 = primary 3-way comparison. 32 (256 ranks) works for NCCL and the low-latency kernels
+# only — both HT internode paths hit hard caps past 64-160 ranks (see README "Scaling
+# beyond 8 nodes").
 export NUM_NODES=8
-export NP=$((NUM_NODES * GPU_PER_NODE))   # 64 ranks; used by the NCCL baseline
+export NP=$((NUM_NODES * GPU_PER_NODE))   # ranks; used by the NCCL baseline (64 at 8 nodes)
 
 # Per-backend image URIs.
 # NVSHMEM: built from ../deepep-benchmark/deepep.Dockerfile (CUDA 13, sm_90+sm_100).

@@ -2,8 +2,10 @@
 
 Head-to-head MoE dispatch/combine micro-benchmark across three communication backends, run
 at the **same EP world size** on the same GPU nodes (designed for 8× `p6-b300.48xlarge`,
-64 ranks). This directory is the orchestration layer; the benchmarks themselves live in the
-sibling directories.
+64 ranks; also exercised at **32 nodes / 256 ranks** — see
+[Scaling beyond 8 nodes](#scaling-beyond-8-nodes-256-rank-findings) for the hard backend
+limits that appear there). This directory is the orchestration layer; the benchmarks
+themselves live in the sibling directories.
 
 | Config | What it is | Source benchmark |
 |---|---|---|
@@ -56,7 +58,7 @@ If the DeepEP values differ from 4096/7168/8/256, edit the bench args in
 ```bash
 aws sts get-caller-identity                          # confirm the target account
 kubectl config current-context                       # confirm the target cluster
-kubectl get nodes -l node.kubernetes.io/instance-type=p6-b300.48xlarge   # confirm 8 schedulable
+kubectl get nodes -l node.kubernetes.io/instance-type=p6-b300.48xlarge   # confirm $NUM_NODES schedulable
 kubectl get crd mpijobs.kubeflow.org                 # confirm MPI Operator
 ```
 
@@ -128,6 +130,32 @@ date, and any config deltas. Eyeball one real launcher log against the parser be
 Results are recorded per platform: [`RESULTS.md`](RESULTS.md) (B300) and
 [`RESULTS-p5.md`](RESULTS-p5.md) (P5/H100). For other instance types set `INSTANCE_TYPE` and
 `EFA_PER_NODE` accordingly (e.g. `p5.48xlarge` exposes **32** EFA NICs vs **16** on `p6-b300`).
+
+## Scaling beyond 8 nodes (256-rank findings)
+
+The full matrix was pushed to 16 and 32 nodes (128 / 256 ranks) on a 32× `p6-b300` Capacity
+Block on 2026-07-14. **Every DeepEP-class kernel hits a hard implementation limit between
+65 and 256 ranks; only the NCCL reference runs at 256.** Details and the per-limit source
+citations are in [`RESULTS.md`](RESULTS.md) ("32 / 16 nodes" section). Operational notes for
+anyone re-running at scale:
+
+- **HT internode**: DeepEP asserts at >160 ranks (`NUM_MAX_NVL_PEERS 8 × NUM_MAX_RDMA_PEERS 20`,
+  `kernels/configs.cuh`) and its stock combine tuning tables already abort at 16 nodes; UCCL
+  overflows an `int32` buffer bound above 64 ranks. Treat the HT comparison as an
+  **8-nodes-per-EP-domain benchmark** — which matches how training deploys these kernels
+  (EP32/EP64 groups inside a larger world).
+- **Low-latency**: both implementations cap between 64 and 128 ranks (UCCL: compile-time
+  signaling-buffer arena; NVSHMEM/DeepEP: libfabric host-proxy retry exhaustion with moving
+  victims per run).
+- **GDRCopy at scale (NVSHMEM)**: past ~1 GiB of LL buffer, NVSHMEM grows its symmetric heap
+  dynamically and must register each chunk over libfabric via **GDRCopy inside the container**.
+  The manifests set `NVIDIA_GDRCOPY=enabled`, but some clusters' nvidia container toolkit
+  ignores it — if every rank dies at `mem_heap.cpp:1361 register_mem_handle failed` after a
+  `GDRCopy support not enabled` warning, hostPath-mount `/dev/gdrdrv` into the worker
+  (requires `privileged: true`) and ensure the host loads `gdrdrv` (gdrcopy-loader DaemonSet
+  or DLAMI).
+- **NCCL at 32 nodes** works unmodified (`NUM_NODES=32`, `NP=256`); expect matched-size busbw
+  to drop vs 8 nodes (fan-out cost).
 
 ## Caveats
 

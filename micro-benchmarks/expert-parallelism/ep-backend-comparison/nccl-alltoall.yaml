@@ -30,6 +30,10 @@ spec:
           - key: nvidia.com/gpu
             operator: Exists
             effect: NoSchedule
+          - key: workload
+            value: bench
+            operator: Equal
+            effect: NoSchedule
           - key: capacity-reservation
             operator: Exists
             effect: NoSchedule
@@ -70,6 +74,10 @@ spec:
           tolerations:
           - key: nvidia.com/gpu
             operator: Exists
+            effect: NoSchedule
+          - key: workload
+            value: bench
+            operator: Equal
             effect: NoSchedule
           - key: capacity-reservation
             operator: Exists

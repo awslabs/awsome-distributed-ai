@@ -26,6 +26,51 @@ of the same matrix — and the cross-generation contrast (the winner flips by GP
 > 2-node internode run from it gives dispatch ~92 / combine ~60 GB/s (RDMA), consistent with the
 > table — so it reproduces these results.
 
+## 32 / 16 nodes — 256 / 128 ranks (2026-07-14 scale run)
+
+A 32× `p6-b300.48xlarge` Capacity Block (**us-east-1-atl-2a local zone**, EKS, same images
+as below) was used to push the same matched config past the 8-node primary. Headline:
+**every DeepEP-class kernel hits a hard implementation limit between 65 and 256 ranks —
+at 256 ranks only the NCCL all-to-all reference runs.** The 8-node table below remains the
+canonical 3-way comparison; this section documents the scale envelope.
+
+| Backend / kernel | 128 ranks (16n) | 256 ranks (32n) | Limit (source) |
+|---|---|---|---|
+| NCCL all-to-all | **73.8** matched / 84.0 peak GB/s | **54.7** matched / 74.4 peak GB/s | none observed |
+| NVSHMEM (DeepEP) HT internode | dispatch tunes to **74.7 GB/s** (RDMA); combine aborts in the stock tuning sweep¹ | constructor abort² | ≤160 ranks hard; ≤8 nodes practical |
+| UCCL (UCCL-EP) HT internode | constructor abort³ | constructor abort³ | 64 < cap ≤ 128 ranks |
+| NVSHMEM (DeepEP) low-latency | init traffic abort⁴ | init traffic abort⁴ | 64 < cap ≤ 128 PEs (host-proxy) |
+| UCCL (UCCL-EP) low-latency | buffer-config abort⁵ | buffer-config abort⁵ | 64 < cap ≤ 128 ranks |
+
+¹ `internode.cu:2363` — `num_max_nvl_chunked_recv_tokens / num_rdma_ranks > max(send chunk)`:
+the shipped chunk configs were tuned for ≤8-node EP domains; at 16 RDMA peers the combine
+sweep violates the constraint. Dispatch (74.7 GB/s RDMA, ~143 GB/s NVL) is a valid datapoint.
+² `deep_ep.cpp:158` — `num_ranks <= NUM_MAX_NVL_PEERS(8) × NUM_MAX_RDMA_PEERS(20) = 160 or
+low_latency_mode`. DeepEP v1's HT kernels decompose every rank into `(rdma_rank, nvl_rank)`
+against fixed 8×20 compile-time tables (`kernels/configs.cuh`). The same assert block also
+bounds `num_rdma_bytes <= INT_MAX` for HT — waiting behind the peer cap even if it were raised.
+³ `uccl_ep.cc:431` — HT `num_rdma_bytes` (∝ ranks at matched config) exceeds `INT_MAX`
+somewhere between 64 ranks (8n, June: passes at 93 GB/s) and 128 ranks.
+⁴ NVSHMEM 3.7 libfabric **host-proxy** retry exhaustion: `Max amount of libfabric retries
+reached, -11 (EAGAIN)` in `nvshmemi_process_multisend_rma`, killing ~2 nodes per run with
+**different victims each run** (4 runs: ranks {12,29}, {9,12}, {12}, {6,11}) — a statistical
+fan-out limit of the single proxy thread at ≥128 PEs on EFA, not a bad node and not geometry.
+Registration itself is solvable: the ≥1 GiB LL buffer forces dynamic (CUDA-VMM) heap growth
+whose remote-chunk registration needs **GDRCopy in-container** — on clusters whose toolkit
+ignores `NVIDIA_GDRCOPY=enabled`, hostPath-mount `/dev/gdrdrv` (privileged); a >2 GiB static
+heap is no workaround (exceeds EFA's single-MR registration limit).
+⁵ `ep_config.hpp:279` — LL per-peer signaling buffer (∝ ranks) exceeds the compile-time
+`kAtomicBufferSize` arena at ≥128 ranks.
+
+**Reading.** DeepEP-class dispatchers are engineered for EP domains of ~64–160 ranks —
+matching how training actually deploys them (EP32/EP64 groups inside a larger world; the
+[`kimi-k2`](../../../3.test_cases/megatron/megatron-bridge/kimi-k2/benchmarks/RESULTS.md)
+NVSHMEM arm ran clean on 256 GPUs precisely because its `deep_ep` domains are 32-rank EP
+groups). A *flat* EP domain >64 ranks is already off the map for both low-latency paths on
+EFA, and >160 for HT; NCCL all-to-all is the only working option there. NCCL's per-rank
+busbw at the matched ~56 MiB payload drops 73.8 → 54.7 GB/s from 128 to 256 ranks
+(like-for-like on this cluster; the 8-node 72.5 below is from the June us-west-2 run).
+
 ## 8 nodes — 64 ranks (primary)
 
 | Backend | Mode | Dispatch (GB/s) | Combine (GB/s) |
