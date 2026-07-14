@@ -29,16 +29,36 @@ of the same matrix — and the cross-generation contrast (the winner flips by GP
 ## 32 / 16 nodes — 256 / 128 ranks (2026-07-14 scale run)
 
 A 32× `p6-b300.48xlarge` Capacity Block (**us-east-1-atl-2a local zone**, EKS, same images
-as below) was used to push the same matched config past the 8-node primary. Headline:
+as below) was used to sweep the same matched config from 2 to 32 nodes. Headline:
 **every DeepEP-class kernel hits a hard implementation limit between 65 and 256 ranks —
-at 256 ranks only the NCCL all-to-all reference runs.** The 8-node table below remains the
-canonical 3-way comparison; this section documents the scale envelope.
+at 256 ranks only the NCCL all-to-all reference runs.**
+
+**HT internode scaling (like-for-like, this cluster, 2026-07-14).** The matched config
+(`num-experts=256`) is only *runnable* at power-of-2 node counts:
+`tests/test_internode.py:30` asserts `num_experts % num_ranks == 0`, and 256 divides
+16/32/64/128/256 ranks but not the 24/48/96/144/160 of DeepEP's other instantiated
+shapes ({3, 6, 12, 18, 20} nodes — a menu cut for 288-expert models, where those counts
+do divide). Dispatch/combine are the RDMA leg in GB/s:
+
+| nodes | ranks | NVSHMEM (DeepEP) disp / comb | UCCL disp / comb | NCCL matched / peak |
+|---|---|---|---|---|
+| 2 | 16 | **126.6 / 106.4** | 91.9 / 59.6 | 104.9 / 179.6 |
+| 4 | 32 | 97.1 / 95.4 | **102.1 / 95.3** | 94.0 / 116.9 |
+| 8 | 64 | 84.2 / 73.1 | **93.9 / 90.5** | 74.0 / 103.2 |
+| 16 | 128 | 74.7 / tuning abort¹ | constructor abort³ | 73.8 / 84.0 |
+| 32 | 256 | constructor abort² | constructor abort³ | 54.7 / 74.4 |
+
+Two reads: **(a)** the 8-node row reproduces the June `us-west-2` primary table below
+within ~1% on a different cluster (NVSHMEM 84.2/73.1 vs 83.7/72.7; UCCL 93.9/90.5 vs
+93.4/90.7; NCCL 74.0 vs 72.5) — strong cross-cluster reproducibility for these
+benchmarks. **(b)** the winner flips with scale: NVSHMEM leads at 2 nodes, UCCL from
+4 nodes up — per-rank bandwidth decays smoothly for all three as fan-out grows.
+
+**Low-latency kernels** cap between 64 and 128 ranks on both implementations
+(⁴ and ⁵ below); at 256 ranks nothing but NCCL runs:
 
 | Backend / kernel | 128 ranks (16n) | 256 ranks (32n) | Limit (source) |
 |---|---|---|---|
-| NCCL all-to-all | **73.8** matched / 84.0 peak GB/s | **54.7** matched / 74.4 peak GB/s | none observed |
-| NVSHMEM (DeepEP) HT internode | dispatch tunes to **74.7 GB/s** (RDMA); combine aborts in the stock tuning sweep¹ | constructor abort² | ≤160 ranks hard; ≤8 nodes practical |
-| UCCL (UCCL-EP) HT internode | constructor abort³ | constructor abort³ | 64 < cap ≤ 128 ranks |
 | NVSHMEM (DeepEP) low-latency | init traffic abort⁴ | init traffic abort⁴ | 64 < cap ≤ 128 PEs (host-proxy) |
 | UCCL (UCCL-EP) low-latency | buffer-config abort⁵ | buffer-config abort⁵ | 64 < cap ≤ 128 ranks |
 
@@ -68,8 +88,8 @@ matching how training actually deploys them (EP32/EP64 groups inside a larger wo
 NVSHMEM arm ran clean on 256 GPUs precisely because its `deep_ep` domains are 32-rank EP
 groups). A *flat* EP domain >64 ranks is already off the map for both low-latency paths on
 EFA, and >160 for HT; NCCL all-to-all is the only working option there. NCCL's per-rank
-busbw at the matched ~56 MiB payload drops 73.8 → 54.7 GB/s from 128 to 256 ranks
-(like-for-like on this cluster; the 8-node 72.5 below is from the June us-west-2 run).
+busbw at the matched ~56 MiB payload decays smoothly with fan-out across the whole sweep:
+104.9 → 94.0 → 74.0 → 73.8 → 54.7 GB/s over 16 → 256 ranks (like-for-like, this cluster).
 
 ## 8 nodes — 64 ranks (primary)
 
