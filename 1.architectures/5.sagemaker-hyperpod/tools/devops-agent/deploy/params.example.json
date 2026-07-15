@@ -1,0 +1,23 @@
+{
+  "__README__": "Copy this file to params.json and edit. This is a flat key->value map that 'make deploy' converts into CloudFormation --parameter-overrides. Only HyperPodClusterName, EmailSender, and EmailRecipients are required. Do NOT set EksClusterName, AgentSpaceName, AssetsBucket, SkillsVersion, or SkillsManifest here — 'make deploy' fills those in automatically. Keys starting with '__' are ignored. Uncomment (remove the '__off_' prefix) any optional key to override its default.",
+
+  "HyperPodClusterName": "my-hyperpod-cluster",
+  "EmailSender": "alerts@example.com",
+  "EmailRecipients": "oncall@example.com,team@example.com",
+
+  "__off_EnablePeriodicAudit": "true",
+  "__off_AuditSchedule": "rate(15 minutes)",
+  "__off_K8sChecksEnabled": "true",
+  "__off_CrashLoopHoursThreshold": "4",
+  "__off_NotReadyNodePercentThreshold": "10",
+  "__off_NotReadyDurationMinutes": "15",
+  "__off_IgnoreNamespaces": "kube-public,kube-node-lease",
+  "__off_SystemNamespaces": "kube-system,aws-hyperpod,amazon-cloudwatch",
+  "__off_ClusterFilter": "",
+  "__off_DropEventLevels": "Info",
+  "__off_EmailDetailTypes": "Investigation Completed",
+  "__off_ConsoleUrlTemplate": "https://%agent_space_id%.aidevops.global.app.aws/investigation/%task_id%",
+  "__off_ForceSend": "false",
+  "__off_MarkerExpirationDays": "30",
+  "__off_LcsBucketArnPattern": "arn:aws:s3:::sagemaker-*-bucket"
+}
