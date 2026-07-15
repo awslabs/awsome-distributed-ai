@@ -16,7 +16,7 @@ The Helm Chart Injector is an AWS Lambda function that can be used as an [`AWS::
     └── lambda_function.py            <-- lambda function code
     └── requirements.txt              <-- lambda function requirements
 ```
-The [Amazon SageMaker HyperPod EKS Workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/2433d39e-ccfe-4c00-9d3d-9917b729258e/en-US) maintains a copy of the `layer.zip` and `function.zip` files used to instantiate the Helm Chart Injector in an AWS owned S3 bucket, as configured using the `CustomResourceS3Bucket`, `LayerS3Key`, and `FunctionS3Key` parameters in the [main-stack.yaml](./../nested-stacks/main-stack.yaml) template. However, you can follow the steps below to build your own copy of the dependency files and host them in your own S3 bucket. 
+The [Amazon SageMaker HyperPod EKS documentation](https://awslabs.github.io/ai-on-sagemaker-hyperpod/docs/category/eks-orchestration) maintains a copy of the `layer.zip` and `function.zip` files used to instantiate the Helm Chart Injector in an AWS owned S3 bucket, as configured using the `CustomResourceS3Bucket`, `LayerS3Key`, and `FunctionS3Key` parameters in the [main-stack.yaml](./../nested-stacks/main-stack.yaml) template. However, you can follow the steps below to build your own copy of the dependency files and host them in your own S3 bucket.
 
 ## How to Build the Helm Chart Injector to Host in Your Own S3 Bucket:
 ```bash 

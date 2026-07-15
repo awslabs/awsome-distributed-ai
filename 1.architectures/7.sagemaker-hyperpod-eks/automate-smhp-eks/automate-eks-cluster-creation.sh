@@ -607,7 +607,7 @@ configure_eks_cluster() {
         echo -e "${YELLOW}Converting assumed-role ARN to IAM role ARN: ${USER_ARN}${NC}"
     fi        
 
-    echo -e "${GREEN}Note: By default, Amazon EKS will automatically create an AccessEntry with the AmazonEKSClusterAdminPolicy for the IAM principal that you use to deploy the CloudFormation stack. To allow other users entry, check out https://catalog.us-east-1.prod.workshops.aws/workshops/2433d39e-ccfe-4c00-9d3d-9917b729258e/en-US/10-tips/07-add-users${NC}"
+    echo -e "${GREEN}Note: By default, Amazon EKS will automatically create an AccessEntry with the AmazonEKSClusterAdminPolicy for the IAM principal that you use to deploy the CloudFormation stack. To allow other users entry, check out https://awslabs.github.io/ai-on-sagemaker-hyperpod/docs/eks-orchestration/tips/add-users${NC}"
 
     # Create access entry for current user
     echo -e "${YELLOW}Adding current $PRINCIPAL_TYPE $USER_NAME to $EKS_CLUSTER_NAME...${NC}"
@@ -1066,7 +1066,7 @@ display_important_prereqs() {
 
     echo -e "\n${GREEN}2. 🌐 VPC Stack:${NC}"
     echo "   Deploy the hyperpod-eks-full-stack using:"
-    echo "   https://catalog.us-east-1.prod.workshops.aws/workshops/2433d39e-ccfe-4c00-9d3d-9917b729258e/en-US/00-setup/02-own-account"
+    echo "   https://awslabs.github.io/ai-on-sagemaker-hyperpod/docs/eks-orchestration/getting-started/initial-cluster-setup"
     echo -e "   Choose between ${BLUE}\"Full Deployment\"${NC}, ${BLUE}\"Integrative Deployment\"${NC}, and ${BLUE}\"Minimal Deployment\"${NC}, depending on what you'd like to provision. This script accounts for all of these deployment modes."
     echo -e "   ${YELLOW}Full Deployment: Creates all prerequisite resources$ (10 minutes),${NC}"
     echo -e "   ${YELLOW}Integrative Deployment: Uses existing VPC and EKS cluster, but creates new network resources(subnet, security group, CIDR block), S3 bucket, and IAM role for the HyperPod cluster. (3 minutes),${NC}"

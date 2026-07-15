@@ -489,7 +489,7 @@ configure_eks_cluster() {
     echo -e "ARN: ${YELLOW}$USER_ARN${NC}"
     echo -e "Principal Type: ${YELLOW}$PRINCIPAL_TYPE${NC}"
     echo -e "${YELLOW}Note: You are authenticated using an IAM $PRINCIPAL_TYPE $USER_NAME${NC}"    
-    echo -e "${GREEN}Note: By default, Amazon EKS will automatically create an AccessEntry with the AmazonEKSClusterAdminPolicy for the IAM principal that you use to create the EKS Cluster. To allow other users entry, check out https://catalog.us-east-1.prod.workshops.aws/workshops/2433d39e-ccfe-4c00-9d3d-9917b729258e/en-US/10-tips/07-add-users${NC}"
+    echo -e "${GREEN}Note: By default, Amazon EKS will automatically create an AccessEntry with the AmazonEKSClusterAdminPolicy for the IAM principal that you use to create the EKS Cluster. To allow other users entry, check out https://awslabs.github.io/ai-on-sagemaker-hyperpod/docs/eks-orchestration/tips/add-users${NC}"
 
     # Skip access entry creation if the EKS Cluster Stack was deployed 
     # Using the current IAM entity (user or role) from this script 
