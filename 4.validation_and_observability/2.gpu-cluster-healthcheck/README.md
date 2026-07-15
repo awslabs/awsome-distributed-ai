@@ -105,7 +105,7 @@ All check results are classified into four severity levels that map directly to 
 |----------|---------|--------|
 | **ISOLATE** | Critical hardware fault confirmed | Drain node, initiate instance replacement |
 | **REBOOT** | Node reboot required to clear error | Drain/cordon node, reboot, re-test |
-| **RESET** | GPU reset may resolve the issue | Attempt GPU reset (`nvidia-smi --gpu-reset`); may require power-cycle |
+| **RESET** | GPU-level error, recoverable without replacement | Reboot the instance. A GPU-level reset (`nvidia-smi --gpu-reset`) requires all GPU processes stopped and does not recover all fault states, so an instance reboot is the reliable path |
 | **MONITOR** | Minor anomaly, not service-affecting | Keep in service, flag for review |
 
 ## Instance Profiles
@@ -144,10 +144,10 @@ Verifies basic GPU driver functionality:
 | RESTART_VM | 151 | REBOOT | RESTART_VM | VM restart required |
 | BOOT_REATTEMPT | 168 | REBOOT | BOOT_REATTEMPT_OR_ENABLE_ECC | Boot reattempt or enable ECC |
 | WORKFLOW_XID_48 | 48 | RESET | WORKFLOW_XID_48 | Workflow-driven; Xid 154 parsing may escalate |
-| DRAM_RETIREMENT | 64 | RESET (A100→REBOOT) | RESET_GPU | DRAM retirement failure; A100 needs reboot |
+| DRAM_RETIREMENT | 64 | ISOLATE | RESET_GPU + CONTACT_SUPPORT | Row-remapping failure; an RMA criterion per [NVIDIA GPU Memory Error Management](https://docs.nvidia.com/deploy/a100-gpu-mem-error-mgmt/index.html) — replace the instance |
 | RESET_GPU | 95 | RESET (A100+MIG_off→REBOOT) | RESET_GPU | GPU reset required; A100 w/o MIG needs reboot |
 | RESET_GPU | 109, 110, 119, 120, 136, 140, 143, 155, 156, 158 | RESET | RESET_GPU | GPU reset or node reboot clears the error |
-| WORKFLOW_NVLINK | 74 | `NVLINK_DEFAULT` | WORKFLOW_NVLINK_ERR | NVLink error; configurable (default: RESET) |
+| WORKFLOW_NVLINK | 74 | `NVLINK_DEFAULT` | WORKFLOW_NVLINK_ERR | NVLink error; configurable (default: REBOOT) |
 | WORKFLOW_NVLINK5 | 144-150 | `NVLINK5_DEFAULT` | WORKFLOW_NVLINK5_ERR | Blackwell NVLink5; configurable (default: MONITOR) |
 | CHECK_UVM | 159 | RESET if UVM in use, else MONITOR | CHECK_UVM | C2C/CHI UVM error; conditional |
 | PSHC_INFO | 162, 163 | MONITOR | PSHC_INFO | PSHC informational |
@@ -159,8 +159,8 @@ Verifies basic GPU driver functionality:
 | CONTACT_SUPPORT | 81, 125, 157 | MONITOR | CONTACT_SUPPORT | Deprecated/unused; escalate to humans if seen |
 
 - **Xid 154 derived action parsing**: Xid 154 lines carry authoritative recovery action text. The check parses for "Node Reboot Required" (→REBOOT), "GPU Reset Required" / "Drain and Reset" / "Drain P2P" (→RESET). Unrecognized or "(None)" stays MONITOR.
-- **Tunables**: `KERNEL_LOG_LINES` (default: 4000), `NVIDIA_LOG_TAIL` (default: 200), `STRICT_PSHC` (default: 0), `NVLINK5_DEFAULT` (default: MONITOR), `NVLINK_DEFAULT` (default: RESET). NVLink tunables accept MONITOR, RESET, or REBOOT.
-- Scans kernel log for SXid (NVSwitch) errors; SXid alongside Xid 74 indicates NVSwitch root cause
+- **Tunables**: `KERNEL_LOG_LINES` (default: 4000), `NVIDIA_LOG_TAIL` (default: 200), `STRICT_PSHC` (default: 0), `NVLINK5_DEFAULT` (default: MONITOR), `NVLINK_DEFAULT` (default: REBOOT). NVLink tunables accept MONITOR, RESET, or REBOOT.
+- Scans kernel log for SXid (NVSwitch) errors; SXid alongside Xid 74 indicates a fabric-level fault (recommend REBOOT)
 - Checks GPU persistence mode status
 - Captures GPU serial numbers and UUIDs to `gpu-uuids.csv` for asset tracking
 
@@ -340,7 +340,7 @@ DCGM diagnostic results include a `warning_level` field per test per GPU:
 | Warning Level | Severity | Action |
 |--------------|----------|--------|
 | 3 | **ISOLATE** | Drain node, initiate instance replacement |
-| 2 | **RESET** | Attempt GPU reset via `nvidia-smi --gpu-reset` |
+| 2 | **RESET** | Reboot the instance (`nvidia-smi --gpu-reset` is often insufficient) |
 | 1 | **MONITOR** | Keep in service, flag for review |
 | 0 | **PASS** | No action required |
 
@@ -498,9 +498,9 @@ Or update Pyxis to v0.20 or newer. The script's default already uses the `docker
 
 Xid severity classification is aligned with the [NVIDIA XID Errors r590](https://docs.nvidia.com/deploy/pdf/XID_Errors.pdf) catalog. The four severity tiers are:
 
-- **ISOLATE** (Xid 54; Xid 165 with `STRICT_PSHC=1`): Critical hardware fault. Drain the node and replace the instance.
-- **REBOOT** (Xid 79, 151, 168; Xid 64 on A100; Xid 95 on A100 w/o MIG): Node reboot required. Reboot and re-test; escalate to replacement if recurring.
-- **RESET** (Xid 48, 109, 110, 119, 120, 136, 140, 143, 155, 156, 158; Xid 64, 95 on non-A100): GPU reset required. Attempt `nvidia-smi --gpu-reset`; may require power-cycle.
+- **ISOLATE** (Xid 54, 64; Xid 165 with `STRICT_PSHC=1`): Critical hardware fault. Drain the node and replace the instance. Xid 64 (row-remapping failure) means the GPU has exhausted its memory self-repair path — an RMA criterion per [NVIDIA GPU Memory Error Management](https://docs.nvidia.com/deploy/a100-gpu-mem-error-mgmt/index.html).
+- **REBOOT** (Xid 79, 151, 168; Xid 95 on A100 w/o MIG): Node reboot required. Reboot and re-test; escalate to replacement if recurring.
+- **RESET** (Xid 48, 109, 110, 119, 120, 136, 140, 143, 155, 156, 158; Xid 95 on non-A100): Recoverable GPU-level error. Reboot the instance; `nvidia-smi --gpu-reset` requires all GPU processes stopped and does not recover all fault states.
 - **MONITOR** (Xid 13, 31, 43, 63, 81, 92, 94, 121, 125, 126, 154, 157, 162-164): Application-level fault or informational. No node action required.
 
 Xid 154 carries authoritative recovery action text — the check parses it for "Node Reboot Required" (→REBOOT) or "GPU Reset Required" / "Drain and Reset" / "Drain P2P" (→RESET).
@@ -531,5 +531,5 @@ GDRCopy enables GPU memory registration for RDMA. If the sanity check fails:
 Disable MIG before running L4 diagnostics:
 ```bash
 sudo nvidia-smi -i 0 -mig 0    # Disable MIG on GPU 0
-sudo nvidia-smi --gpu-reset     # Reset GPUs (requires no running processes)
+sudo reboot                     # Reboot to apply (preferred over nvidia-smi --gpu-reset)
 ```
