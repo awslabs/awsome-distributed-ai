@@ -253,12 +253,77 @@ of the stack and is removed with it.
 
 ## Parameters
 
-Only three are required — `HyperPodClusterName`, `EmailSender`,
-`EmailRecipients`. `EksClusterName`, `AssetsBucket`, `SkillsVersion`, and
-`SkillsManifest` are filled in automatically by `make deploy` (do not set them in
-`params.json`). Everything else has a safe default; see the inline `Description`
-fields and the `AWS::CloudFormation::Interface` groups in
-`deploy/hyperpod_devops_agent.template.yaml`.
+`params.json` is a **flat JSON key→value map** that `make deploy` converts into
+CloudFormation `--parameter-overrides`. Copy `deploy/params.example.json` to
+`deploy/params.json` and edit it.
+
+### Minimal (the only three required keys)
+
+```jsonc
+{
+  "Region": "us-west-2",                          // optional; falls back to the AWS CLI default region
+  "HyperPodClusterName": "my-hyperpod-cluster",   // the cluster this stack monitors
+  "EmailSender": "alerts@example.com",            // SES-verified From address (verify it first)
+  "EmailRecipients": "oncall@example.com,team@example.com"  // comma-separated; in the SES sandbox each must be verified too
+}
+```
+
+That is a complete, deployable file. Everything else has a safe default.
+
+`EksClusterName`, `AssetsBucket`, `SkillsVersion`, `SkillsManifest`,
+`SkillUploaderS3Bucket`, and `SkillUploaderS3Key` are **filled in automatically**
+by `make deploy` — do **not** set them in `params.json`.
+
+### Optional parameters
+
+To override an optional parameter, add it as a normal key. In
+`params.example.json` the optional keys ship with an `__off_` prefix (and keys
+starting with `__` are ignored) so the example stays at defaults — **remove the
+`__off_` prefix to activate one**. For example, to page sooner on CrashLoopBackOff
+and only forward events for two named clusters:
+
+```jsonc
+{
+  "Region": "us-west-2",
+  "HyperPodClusterName": "my-hyperpod-cluster",
+  "EmailSender": "alerts@example.com",
+  "EmailRecipients": "oncall@example.com",
+
+  "CrashLoopHoursThreshold": "1",
+  "ClusterFilter": "my-hyperpod-cluster,my-other-cluster"
+}
+```
+
+| Parameter | Default | What it controls |
+| --- | --- | --- |
+| `Region` | AWS CLI default | Target region. Read by `deploy.sh`; not a CloudFormation parameter. |
+| **Periodic audit** | | |
+| `EnablePeriodicAudit` | `true` | Deploy the 15-minute audit Scheduler + Lambda. `false` = live event bridging only. |
+| `AuditSchedule` | `rate(15 minutes)` | EventBridge Scheduler expression for the periodic audit. |
+| `HeartbeatSchedule` | `cron(0 12 * * ? *)` | Scheduler expression for the daily "all clear" heartbeat. |
+| `K8sChecksEnabled` | `true` | Master switch for the Kubernetes-state checks (CrashLoopBackOff, NotReady). |
+| `CrashLoopHoursThreshold` | `4` | Escalate if a Pod is CrashLoopBackOff longer than this many hours. `0` = fire on any. |
+| `NotReadyNodePercentThreshold` | `10` | Escalate if ≥ this percent of nodes are NotReady (after the duration gate). |
+| `NotReadyDurationMinutes` | `15` | A node must be NotReady this long to count toward the percent threshold. |
+| `IgnoreNamespaces` | `kube-public,kube-node-lease` | Namespaces skipped entirely. Must not overlap `SystemNamespaces`. |
+| `SystemNamespaces` | `kube-system,aws-hyperpod,amazon-cloudwatch` | Platform namespaces; CrashLoops here are tagged `system-workload`. |
+| **Webhook bridge** | | |
+| `ClusterFilter` | `""` (this stack's cluster) | Comma-separated allowlist of cluster names to forward. Empty = only `HyperPodClusterName`. |
+| `DropEventLevels` | `Info` | Comma-separated `EventLevel`s to drop (drops noisy Info-level events by default). |
+| **Email notifier** | | |
+| `EmailDetailTypes` | `Investigation Completed` | Comma-separated detail-types to email on (default: one email per incident lifecycle). |
+| `ConsoleUrlTemplate` | `https://%agent_space_id%.aidevops.global.app.aws/investigation/%task_id%` | Per-investigation link in emails. Tokens: `%region%`, `%account%`, `%agent_space_id%`, `%task_id%`. |
+| `ForceSend` | `false` | Bypass all email filters (dedup, no-findings, suppress). Debugging only. |
+| `MarkerExpirationDays` | `30` | Retention (days) for the per-execution email dedup markers. |
+| **Advanced** | | |
+| `AgentSpaceName` | auto (`hyperpod-<cluster>-devops-agent`) | Friendly Agent Space name. |
+| `AgentSpaceDescription` | auto-generated | Free-text Agent Space description. |
+| `AgentSpaceRoleName` / `WebappRoleName` | auto-named per stack | Fixed IAM role names (only set if you need them stable). |
+| `LcsBucketArnPattern` | `arn:aws:s3:::sagemaker-*-bucket` | ARN pattern of lifecycle-script buckets the RCA skill may read (`on_create.sh`). `""` to skip. |
+
+The template's inline `Description` fields and the `AWS::CloudFormation::Interface`
+groups in `deploy/hyperpod_devops_agent.template.yaml` remain the authoritative
+source for every parameter.
 
 ## Multiple clusters in one account/region
 
