@@ -45,7 +45,7 @@ def collate_fn(batch):
 
 config_file = '../scDINO_full_pipeline.yaml'
 with open(config_file, "r") as f:
-    config = yaml.load(f,Loader=yaml.FullLoader)
+    config = yaml.safe_load(f)
 
 data_dir = config['meta']['dataset_dir'] 
 fraction_for_mean_std = config['train_scDINO']['fraction_for_mean_std_calc']

@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 from sklearn import preprocessing
 import umap
+import ast
 import os
 import seaborn as sns
 import yaml
@@ -31,7 +32,7 @@ def get_channel_name_combi_list(selected_channels, channel_dict):
 
 config_file = '../scDINO_full_pipeline.yaml'
 with open(config_file, "r") as f:
-    config = yaml.load(f,Loader=yaml.FullLoader)
+    config = yaml.safe_load(f)
 
 name_of_run = config['meta']['name_of_run']
 sk_save_dir = config['meta']['output_dir']
@@ -61,7 +62,7 @@ class_labels = class_labels_pd[0].tolist()
 dino_vit_name = config['train_scDINO']['dino_vit_name']
 
 selected_channels = [config['meta']['selected_channel_combination_per_run']]
-selected_channels = list(eval(selected_channels[0]))
+selected_channels = list(ast.literal_eval(selected_channels[0]))
 
 channel_dict = config['meta']['channel_dict']
 channel_dict = dict(zip(selected_channels, channel_dict.split(',')))

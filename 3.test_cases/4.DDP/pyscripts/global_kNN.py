@@ -3,6 +3,7 @@ import torch
 from sklearn import preprocessing
 import numpy as np
 import yaml
+import ast
 import os
 import glob
 
@@ -28,7 +29,7 @@ def get_channel_name_combi_list(selected_channels, channel_dict):
 
 config_file = '../scDINO_full_pipeline.yaml'
 with open(config_file, "r") as f:
-    config = yaml.load(f,Loader=yaml.FullLoader)
+    config = yaml.safe_load(f)
 
 name_of_run = config['meta']['name_of_run']
 sk_save_dir = config['meta']['output_dir']
@@ -46,7 +47,7 @@ labels_file = f"{save_dir_downstream_run}/CLS_features/class_labels.csv"
 dino_vit_name = config['train_scDINO']['dino_vit_name']
 
 selected_channels = [config['meta']['selected_channel_combination_per_run']]
-selected_channels = list(eval(selected_channels[0]))
+selected_channels = list(ast.literal_eval(selected_channels[0]))
 
 channel_dict = config['meta']['channel_dict']
 channel_dict = dict(zip(selected_channels, channel_dict.split(',')))
