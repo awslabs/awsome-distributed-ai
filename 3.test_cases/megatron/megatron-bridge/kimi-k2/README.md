@@ -1,7 +1,7 @@
 <!-- Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. -->
 <!-- SPDX-License-Identifier: MIT-0 -->
 
-# Kimi K2 Full-Parameter SFT with Megatron-Bridge + UCCL-EP over EFA
+# Kimi K2 Full-Parameter SFT with Megatron-Bridge + DeepEP-over-EFA dispatchers (UCCL / NVSHMEM)
 
 This test case provides a reproducible recipe for **full-parameter supervised fine-tuning
 (SFT)** of [Kimi K2](https://huggingface.co/moonshotai/Kimi-K2-Base) (Moonshot AI's
@@ -30,6 +30,22 @@ patching Megatron-Core**:
   `import deep_ep` resolves to UCCL's EFA RDMA implementation instead of NVIDIA DeepEP.
 - The result: Megatron-Core's MoE dispatcher calls the same `deep_ep` API symbols it always
   does, but the bytes go over EFA via UCCL + GDRCopy instead of over IB verbs via NVSHMEM.
+
+Since 2026-07 this case also measures a **third arm** on literal Kimi-K2, mirroring the
+[`../qwen3-235b/`](../qwen3-235b/) three-way: **NVIDIA DeepEP v1 over NVSHMEM-libfabric/EFA**
+(the [`deepep-benchmark`](../../../../micro-benchmarks/expert-parallelism/deepep-benchmark)
+build, vendored at [`../deepep/`](../deepep/)). As in the qwen3 case, the arm is selected
+purely by **image** — the Megatron-Core code path is identical:
+
+| Arm | `MOE_DISPATCHER` | Image | all-to-all transport |
+|-----|------------------|-------|----------------------|
+| **NCCL all-to-all** (baseline) | `alltoall` | UCCL image | NCCL all-to-all over EFA |
+| **DeepEP + UCCL** | `deepep` | UCCL image | UCCL EFA-native `deep_ep` |
+| **DeepEP + NVSHMEM** | `deepep` | **NVSHMEM image** | NVIDIA DeepEP v1 over NVSHMEM-libfabric/EFA |
+
+Run instructions for the NVSHMEM arm are in
+[Running the DeepEP+NVSHMEM arm](#running-the-deepepnvshmem-arm-32-node-benchmark); measured
+numbers are in [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
 
 > **This is a research/validation recipe, not a production-blessed path.** UCCL's `deep_ep`
 > drop-in was originally exercised primarily for vLLM **inference**. The training dispatch +
@@ -182,6 +198,71 @@ KAI gang scheduling (a `PodGroup` with `minMember: 32`, so all 32 nodes start to
 **OPTIONAL** and shipped commented out in the manifest; enable it by uncommenting the relevant
 blocks as documented in `kubernetes/README.md`.
 
+## Running the DeepEP+NVSHMEM arm (32-node benchmark)
+
+The NVSHMEM arm reuses the shared raw-pod launcher [`../run-ab-rawpods.sh`](../run-ab-rawpods.sh)
+with the **NVSHMEM image** (`EP_BACKEND=nvshmem` build of `../Dockerfile`) and
+`ARM_LABEL=deepep-nvshmem` to keep its run dirs distinct from the UCCL arm:
+
+```bash
+cd 3.test_cases/megatron/megatron-bridge
+export CTX=<kubectl-context> NS=kimi-k2-bench
+export IMG=<account>.dkr.ecr.<region>.amazonaws.com/megatron-bridge-uccl:nemo-26.04.01-deepep-nvshmem-567632d-cu13
+export MODEL=kimi-k2 ARM_LABEL=deepep-nvshmem EP_BACKEND=nvshmem
+export TENSOR_PARALLEL=8 PIPELINE_PARALLEL=8 EXPERT_PARALLEL=32   # DP=4 at 256 GPUs
+export GLOBAL_BATCH=256 TRAIN_ITERS=24 SEQ_LEN=4096 MOE_FORCE_BALANCE=on
+export CAMPAIGN_ID=<utc-stamp>-k2-nvshmem-pp8-32n
+
+MICRO_BATCH=4 MOE_A2A_OVERLAP=on  bash run-ab-rawpods.sh deepep 32
+MICRO_BATCH=4 MOE_A2A_OVERLAP=off bash run-ab-rawpods.sh deepep 32
+MICRO_BATCH=1 MOE_A2A_OVERLAP=off bash run-ab-rawpods.sh deepep 32
+```
+
+Validation is the same as the UCCL arm (`../bench/parse-runs.py`: `efa_ok` on every rank,
+`n_steady`, iteration-1 loss matches the other arms) **plus** `nvshmem_ok` — the log must show
+NVSHMEM-over-libfabric init, proving the transport is not silently UCCL or NCCL. The NVSHMEM
+arm writes `STATUS` and then **exits 1 at NVSHMEM finalize** after training completes; that
+exit code is benign — judge the run by `parse-runs.py` gates, not by pod exit status.
+
+### GDRCopy device (`GDRCOPY_DEV=on`)
+
+Kimi-K2's dispatch buffers outgrow NVSHMEM's initial 1 GiB symmetric-heap chunk, so NVSHMEM
+grows the heap dynamically (CUDA-VMM) and must register each new chunk with the
+libfabric/EFA transport — a path that requires **GDRCopy inside the container**. On clusters
+whose nvidia container toolkit does not inject `/dev/gdrdrv` (the `NVIDIA_GDRCOPY=enabled`
+env is silently ignored), every rank dies at init with
+`mem_heap.cpp:1361 ... register_mem_handle failed for remote` after a
+`GDRCopy support not enabled` warning. Fix: launch with `GDRCOPY_DEV=on`, which hostPath-mounts
+the node's `/dev/gdrdrv` into the pods (privileged). The host module must be loaded (a
+`gdrcopy-loader` DaemonSet or the DLAMI does this). No-op for the UCCL/alltoall arms.
+
+### Running without FSx (`STORAGE=hostpath`)
+
+On clusters without FSx Lustre (e.g. local-zone capacity blocks), set `STORAGE=hostpath`
+(optionally `HOSTPATH_ROOT`, default `/mnt/k8s-disks/0/bench-fsx`) and the launcher backs
+`/fsx` with node-local NVMe instead of the `fsx-kimi-k2` PVC. Two consequences:
+
+1. **Per-node staging.** `${STAGE}` (default `/fsx/kimi-k2`) must exist on **every** node
+   *before* launch: the bench entrypoint (`benchmarks/bench_kimi_k2_pretrain.py` →
+   `/fsx/kimi-k2/`), the Kimi-K2 HF config+tokenizer (→ `/fsx/kimi-k2/hf/`; no safetensors
+   needed — the bench uses `load_weights=False` + mock data), **and** a hub-layout cache of
+   `deepseek-ai/DeepSeek-V3` config+tokenizer (→ `/fsx/kimi-k2/hf-cache/hub/models--deepseek-ai--DeepSeek-V3/`)
+   because the DSV3 recipe scaffolding fetches it at config build; export `HF_HUB_OFFLINE=1`
+   (the launcher threads `HF_HOME`/`HF_HUB_OFFLINE` into the pods). A no-resource utility
+   DaemonSet mounting the same hostPath is the practical stager (`kubectl cp`/`exec` loop) and
+   doubles as the log harvester.
+2. **Per-node logs — harvest after every cell.** Each node holds only its own rank's
+   `logs/rank-<r>.log` (rank-0's node also holds `env.txt` + `STATUS`). Before launching the
+   next cell, merge the run tree locally (files are disjoint, so untar-merge is safe):
+
+   ```bash
+   for p in $(kubectl -n $NS get pods -l app=bench-util -o name); do
+     kubectl -n $NS exec ${p#pod/} -- bash -c \
+       "cd /fsx/megatron-bridge-bench && tar cf - ${CAMPAIGN_ID}" | tar xf - -C ./harvest/
+   done
+   python3 ../bench/parse-runs.py ./harvest/${CAMPAIGN_ID} --warmup 4
+   ```
+
 ## Parallelism and memory budget
 
 Starting point for 256 GPUs, adapted from Megatron-Bridge's DeepSeek-V3 32-node recipe
@@ -265,7 +346,7 @@ Model-specific files in **this** directory:
 | `conf/kimi_k2_sft.py` | Megatron-Bridge SFT `ConfigContainer` (mounted at `/workspace/conf` via ConfigMap, launched by `torchrun`) |
 | `kubernetes/` | etcd `Service`/`Deployment` + PyTorchJob template (+ optional KAI `PodGroup`); create the conf ConfigMap, then `envsubst ... \| kubectl apply` to deploy (see `kubernetes/README.md`) |
 | `benchmarks/bench_kimi_k2_pretrain.py` | Literal-K2 (384-expert) dispatcher A/B entrypoint (AutoBridge provider + mock data; launched via `../run-ab-rawpods.sh` with `MODEL=kimi-k2`) |
-| `benchmarks/RESULTS.md` | Measured UCCL-EP vs NCCL A/B on literal K2 (32-node PP8 + 16-node PP4 appendix, loss-equivalence) |
+| `benchmarks/RESULTS.md` | Measured dispatcher results on literal K2: UCCL-EP vs NCCL A/B (2026-06-04, 32-node PP8 + 16-node PP4 appendix, loss-equivalence) + DeepEP+NVSHMEM arm (2026-07-14, 32-node PP8, cross-campaign) |
 
 The MoE dispatcher A/B (NCCL all-to-all vs UCCL DeepEP-over-EFA) that first validated
 this UCCL-over-EFA path is an independent sibling case — see
@@ -279,5 +360,8 @@ this UCCL-over-EFA path is an independent sibling case — see
 - [DeepSeek-V3 recipe](https://github.com/NVIDIA-NeMo/Megatron-Bridge/blob/main/src/megatron/bridge/recipes/deepseek/deepseek_v3.py)
 - [UCCL project](https://github.com/uccl-project/uccl)
 - [Kimi K2 (Moonshot AI)](https://huggingface.co/moonshotai/Kimi-K2-Base)
+- [NVIDIA DeepEP](https://github.com/deepseek-ai/DeepEP) — the v1 NVSHMEM backend used by the third arm
+- DeepEP v1 + NVSHMEM-over-EFA build: [`micro-benchmarks/expert-parallelism/deepep-benchmark`](../../../../micro-benchmarks/expert-parallelism/deepep-benchmark) (vendored at [`../deepep/`](../deepep/))
+- Sibling 3-way cases: [`../qwen3-235b/`](../qwen3-235b/) (B300) and [`../qwen3-30b/`](../qwen3-30b/) (P5/H100) — the NCCL/UCCL/NVSHMEM comparison pattern this arm follows
 - Sibling model case: [`../dsv3/`](../dsv3/) — DeepSeek-V3 256-expert dispatcher A/B (UCCL-EP vs NCCL all-to-all) that validated this environment
 - Sibling case: [`../../megatron-lm`](../../megatron-lm) (EFA/GDRCopy Dockerfile + PyTorchJob template)
