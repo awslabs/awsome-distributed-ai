@@ -55,9 +55,10 @@ every run. Two measurement campaigns feed this table:
 
 - **At mb≥4 — the throughput-efficient operating point — both DeepEP transports win
   decisively on literal K2**: UCCL −34/−35% iteration time in both overlap regimes
-  (same-campaign), NVSHMEM ~−35/−29% (cross-campaign). At the tuned point
-  (mb=4+overlap) NVSHMEM edges the June UCCL number by ~2.4% — within cross-campaign
-  noise; read the two DeepEP transports as **competitive**, not ranked.
+  (same-campaign), NVSHMEM ~−35/−29% (cross-campaign). Between the two DeepEP
+  transports there is **no ranking to read here**: at mb=4+overlap NVSHMEM lands ~2.4%
+  under the June UCCL number (within cross-campaign noise), while at mb=4 no-overlap
+  it trails UCCL by ~10% — call them **competitive**.
 - At **mb=1 no-overlap**, NCCL all-to-all stays fastest — the same unamortized
   per-dispatch-overhead regime seen on DSV3 (~12.6%) and on the K2 16-node run (~12%).
   A tuned run operates at mb≥4, where the DeepEP arms win.
