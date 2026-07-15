@@ -60,6 +60,7 @@ spec:
                 --dataset droid \
                 --finetuned-path /fsx/runs/pi0-droid/training/checkpoints/020000/pretrained_model \
                 --test-dataset-local /fsx/datasets/droid_100 \
+                --eval-episodes 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 \
                 --results-out /fsx/runs/pi0-droid/eval_results_droid.json \
                 --num-trajectories 5 \
                 --num-inference-steps 10 5 3 1

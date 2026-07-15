@@ -297,6 +297,11 @@ def main():
         "--num-trajectories", type=int, default=5,
     )
     parser.add_argument(
+        "--eval-episodes", type=int, nargs="+", default=None,
+        help="Episode indices to evaluate on (held-out set). "
+             "Default: last 20 episodes for DROID, last 100 for LIBERO.",
+    )
+    parser.add_argument(
         "--action-horizon", type=int, default=50,
     )
     parser.add_argument("--device", default="cuda")
@@ -375,12 +380,25 @@ def main():
     test_dir = ensure_test_dataset_local(args.test_dataset_s3, args.test_dataset_local)
     setup_lerobot_cache(test_dir, repo_id=ds_cfg["repo_id"])
 
-    # Load dataset
+    # Load dataset (with episode filtering for held-out eval)
     print(f"\n[3/5] Loading test dataset...")
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    # Determine eval episodes: use --eval-episodes if provided, else default split
+    eval_episodes = args.eval_episodes
+    if eval_episodes is None:
+        # Default: last 20% of episodes as held-out test set
+        # DROID-100: episodes 80-99; LIBERO-10: episodes 400-499
+        eval_episodes_defaults = {
+            "droid": list(range(80, 100)),
+            "libero": list(range(400, 500)),
+        }
+        eval_episodes = eval_episodes_defaults.get(args.dataset)
+
     dataset = LeRobotDataset(
         repo_id=ds_cfg["repo_id"],
         root=str(test_dir),
+        episodes=eval_episodes,
         video_backend="pyav",
     )
     n_eps = len(dataset.meta.episodes["dataset_from_index"])

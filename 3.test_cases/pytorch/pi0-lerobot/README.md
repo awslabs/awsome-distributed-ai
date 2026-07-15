@@ -20,22 +20,25 @@ pi0-lerobot/
     ├── pvc-fsx-lustre.yaml           # FSx PVC (dynamic provisioning, reclaimPolicy: Retain)
     ├── droid/
     │   ├── README.md                 # DROID walkthrough
-    │   ├── droid-download.yaml       # Dataset staging Job
     │   ├── droid-finetune.yaml       # Training PyTorchJob (8× H100, FSDP)
     │   └── droid-eval.yaml           # Evaluation Job (1× GPU, ODE sweep)
     └── libero/
         ├── README.md                 # LIBERO walkthrough
-        ├── libero-download.yaml      # Dataset staging Job
         ├── libero-finetune.yaml      # Training PyTorchJob
         └── libero-eval.yaml          # Evaluation Job
 ```
 
 ## Results (p5.48xlarge — 8× H100 80GB)
 
-| Dataset | Base MSE | Fine-Tuned MSE | Improvement | Latency (1 ODE step) |
-|---------|----------|----------------|-------------|---------------------|
-| **DROID** | 3.897e-01 | 1.353e-02 | **96.5%** | 199 ms |
-| **LIBERO** | 7.214e-01 | 5.003e-02 | **93.1%** | 197 ms |
+> **Note:** Results below are pending re-run with proper train/test split.
+> The manifests now enforce an 80/20 episode split: training uses episodes 0-79 (DROID)
+> or 0-399 (LIBERO), evaluation uses the held-out remainder. Previous numbers were
+> measured on training data and are not shown here.
+
+| Dataset | Train Episodes | Eval Episodes (held-out) | Status |
+|---------|---------------|--------------------------|--------|
+| **DROID** | 0-79 | 80-99 | Pending re-run |
+| **LIBERO** | 0-399 | 400-499 | Pending re-run |
 
 Training time: ~6.5 hours per dataset (20K steps, FSDP FULL_SHARD, 8× H100).
 
