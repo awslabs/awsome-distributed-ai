@@ -78,7 +78,7 @@ def _write_secret(secret_arn: str, url: str, secret: str) -> None:
         SecretId=secret_arn,
         SecretString=json.dumps({"url": url, "secret": secret}),
     )
-    print(f"wrote webhook url + secret into {secret_arn}")
+    print("wrote webhook url + secret into Secrets Manager")
 
 
 def _provision(agent_space_id: str, secret_arn: str) -> dict:
@@ -190,7 +190,7 @@ def handler(event, context):
     secret_arn = props.get("SecretArn", "")
     physical_id = event.get("PhysicalResourceId") or f"webhook-{agent_space_id}"
 
-    print(f"RequestType={request_type} agentSpaceId={agent_space_id!r} secretArn={secret_arn!r}")
+    print(f"RequestType={request_type} agentSpaceId={agent_space_id!r} secretArn={'set' if secret_arn else 'unset'}")
 
     # Delete must NEVER fail the stack. If the eventChannel can't be
     # disassociated here, AgentSpace deletion may still fail downstream, but a
