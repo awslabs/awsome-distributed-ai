@@ -371,8 +371,9 @@ def _post(webhook_url: str, secret: str, payload: dict) -> None:
 
     if _truthy("WEBHOOK_LOG_PAYLOAD"):
         # body is the EXACT bytes being POSTed; log size + content + signed
-        # timestamp so you can reproduce the HMAC offline if needed.
-        print(f"webhook POST url={webhook_url}")
+        # timestamp so you can reproduce the HMAC offline if needed. The webhook
+        # URL is a credential-bearing endpoint (loaded from Secrets Manager), so
+        # it is deliberately NOT logged in clear text.
         print(f"webhook POST timestamp={timestamp} signature={signature}")
         print(f"webhook POST body bytes={len(body)} json={body.decode('utf-8')}")
 
