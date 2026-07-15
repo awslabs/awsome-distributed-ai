@@ -78,47 +78,9 @@ spec:
                   print(f'PyTorch: {torch.__version__}, CUDA: {torch.cuda.is_available()}, GPUs: {torch.cuda.device_count()}')
                   "
 
-                  # --- Install local-dataset patch (same as SageMaker version) ---
-                  echo "  Installing lerobot local-dataset patch..."
-                  USER_SITE=$(python -c "import site; print(site.getusersitepackages())")
-                  mkdir -p "$USER_SITE"
-                  cat > "$USER_SITE/lerobot_local_patch.py" <<'PATCHEOF'
-                  import os
-                  try:
-                      from lerobot.datasets import utils as lr_utils
-                      _orig_safe = lr_utils.get_safe_version
-                      _orig_repo = lr_utils.get_repo_versions
-                      def _is_local(repo_id):
-                          return os.environ.get("HF_HUB_OFFLINE","0") in ("1","true","True") or "/" not in repo_id
-                      def patched_get_safe_version(repo_id, version):
-                          if _is_local(repo_id):
-                              v = str(version)
-                              return v if v.startswith("v") else f"v{v}"
-                          return _orig_safe(repo_id, version)
-                      def patched_get_repo_versions(repo_id):
-                          return [] if _is_local(repo_id) else _orig_repo(repo_id)
-                      lr_utils.get_safe_version = patched_get_safe_version
-                      lr_utils.get_repo_versions = patched_get_repo_versions
-                      try:
-                          from lerobot.datasets import dataset_metadata as lr_meta
-                          if hasattr(lr_meta, "get_safe_version"):
-                              lr_meta.get_safe_version = patched_get_safe_version
-                      except: pass
-                      try:
-                          import lerobot.datasets.lerobot_dataset as _lr_ds
-                          if hasattr(_lr_ds, "get_safe_version"):
-                              _lr_ds.get_safe_version = patched_get_safe_version
-                          if hasattr(_lr_ds, "get_repo_versions"):
-                              _lr_ds.get_repo_versions = patched_get_repo_versions
-                      except: pass
-                  except: pass
-                  PATCHEOF
-                  cat > "$USER_SITE/usercustomize.py" <<'PYEOF'
-                  try:
-                      import lerobot_local_patch
-                  except Exception:
-                      pass
-                  PYEOF
+                  # --- Install local-dataset patch ---
+                  # LeRobot v0.5.0 handles local datasets natively when passed
+                  # --dataset.root pointing to a local directory. No monkey-patch needed.
 
                   # --- Step 3: HF Login ---
                   echo "[3/5] HuggingFace login..."
@@ -150,9 +112,19 @@ spec:
                   export TORCHELASTIC_ERROR_FILE=/tmp/torch_error.json
                   export PYTHONUNBUFFERED=1
 
-                  # Resume from existing checkpoint if available, otherwise start fresh
-                  if [ -d "$OUTPUT_DIR/training/checkpoints" ] && ls "$OUTPUT_DIR/training/checkpoints"/*/pretrained_model/config.json 1>/dev/null 2>&1; then
-                    echo "  Found existing checkpoints — training will resume from latest."
+                  # Handle existing output directory.
+                  # LeRobot v0.5.0 raises FileExistsError if output_dir exists.
+                  # If FORCE_RESTART=1, remove and start fresh. Otherwise, error early.
+                  if [ -d "$OUTPUT_DIR/training" ]; then
+                    if [ "${FORCE_RESTART:-0}" = "1" ]; then
+                      echo "  FORCE_RESTART=1: removing existing $OUTPUT_DIR/training"
+                      rm -rf "$OUTPUT_DIR/training"
+                    else
+                      echo "  ERROR: $OUTPUT_DIR/training already exists."
+                      echo "  Set FORCE_RESTART=1 env var to delete and restart, or"
+                      echo "  remove manually: kubectl exec ... -- rm -rf $OUTPUT_DIR/training"
+                      exit 1
+                    fi
                   fi
 
                   pip install --quiet accelerate
@@ -200,7 +172,7 @@ spec:
                     secretKeyRef:
                       name: pi0-lerobot-secrets
                       key: HF_TOKEN
-                      optional: true
+                # Required: π0's PaliGemma processor requires Gemma license acceptance.
                 - name: NCCL_SOCKET_IFNAME
                   value: "^lo"
                 - name: GLOO_SOCKET_IFNAME
@@ -209,7 +181,7 @@ spec:
                   value: "WARN"
                 # NCCL_TIMEOUT is not a native NCCL variable but is read by some
                 # framework-level process group implementations. Kept for consistency
-                # with other test cases in this repo (e.g., openvla-oft).
+                # with other test cases in this repo (e.g., distillation, nemo-rl).
                 - name: NCCL_TIMEOUT
                   value: "1800"
               resources:

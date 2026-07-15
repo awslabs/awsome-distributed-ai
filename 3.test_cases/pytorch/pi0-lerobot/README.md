@@ -11,13 +11,11 @@ Fine-tune [Physical Intelligence's π0](https://huggingface.co/lerobot/pi0_base)
 
 ```
 pi0-lerobot/
-├── Dockerfile                        # Container: DLC PyTorch 2.9 + LeRobot v0.5.0 + π0
-├── buildspec.yml                     # AWS CodeBuild spec for image builds
+├── Dockerfile                        # Optional: pre-built image (faster startup)
+├── buildspec.yml                     # AWS CodeBuild spec (if using pre-built image)
 ├── README.md                         # This file
 ├── src/
-│   ├── evaluate_pi0.py               # Evaluation script (MSE/MAE + ODE sweep)
-│   ├── evaluate_pi0.sh               # Eval entrypoint wrapper
-│   └── lerobot_local_patch.py        # Hub-skip patch for FSx-local datasets
+│   └── evaluate_pi0.py               # Evaluation script (MSE/MAE + ODE sweep)
 └── kubernetes/
     ├── pvc-fsx-lustre.yaml           # FSx PVC (dynamic provisioning, reclaimPolicy: Retain)
     ├── droid/
@@ -44,46 +42,62 @@ Training time: ~6.5 hours per dataset (20K steps, FSDP FULL_SHARD, 8× H100).
 ## Prerequisites
 
 - A SageMaker HyperPod EKS cluster with GPU nodes (p5.48xlarge or p4de.24xlarge)
-  - **Note:** HyperPod labels instances with an `ml.` prefix (e.g., `ml.p5.48xlarge`). On plain EKS, the label is `p5.48xlarge`. The manifests use the HyperPod convention by default.
+  - **Note:** HyperPod labels instances with an `ml.` prefix (e.g., `ml.p5.48xlarge`). On plain EKS, the label is `p5.48xlarge`. The manifests use the HyperPod convention by default — edit the `nodeSelector` if running on plain EKS.
 - The [Kubeflow Training Operator](https://github.com/kubeflow/training-operator) installed
 - FSx for Lustre PVC (`fsx-claim`) mounted at `/fsx`
-- A HuggingFace token (for base model download)
+- A HuggingFace token that has accepted **both**:
+  - [lerobot/pi0_base](https://huggingface.co/lerobot/pi0_base) (Apache 2.0, but gated)
+  - [google/paligemma-3b-pt-224](https://huggingface.co/google/paligemma-3b-pt-224) (Gemma license — π0's processor downloads this at train time)
 
 ## Quick Start
 
-```bash
-# 1. Build and push container image
-#    (see "Container Image" section below)
+The manifests use the [AWS DLC PyTorch image](https://github.com/aws/deep-learning-containers) directly and install LeRobot v0.5.0 at pod startup (~3-5 min). No custom image build required.
 
-# 2. Install Training Operator + create secrets
+```bash
+# 1. Install Training Operator + create secrets
 kubectl apply -k "github.com/kubeflow/training-operator/manifests/overlays/standalone?ref=v1.9.1"
 kubectl create secret generic pi0-lerobot-secrets --from-literal=HF_TOKEN="<your-token>"
 
-# 3. Train DROID
+# 2. Train DROID
 kubectl apply -f kubernetes/droid/droid-finetune.yaml
 kubectl logs -f pi0-lerobot-droid-finetune-worker-0
 
-# 4. Evaluate DROID (after training completes)
+# 3. Evaluate DROID (after training completes)
 kubectl delete pytorchjob pi0-lerobot-droid-finetune
 kubectl apply -f kubernetes/droid/droid-eval.yaml
 
-# 5. Train + Evaluate LIBERO
+# 4. Train + Evaluate LIBERO
 kubectl apply -f kubernetes/libero/libero-finetune.yaml
 # ... wait for completion ...
 kubectl delete pytorchjob pi0-lerobot-libero-finetune
 kubectl apply -f kubernetes/libero/libero-eval.yaml
 ```
 
-## Container Image
+## Training Configuration
 
-The Dockerfile builds against the AWS Deep Learning Container (DLC) PyTorch training image so that PyTorch, NCCL, EFA, and libfabric are version-pinned together by AWS.
+| Parameter | Value |
+|-----------|-------|
+| Base checkpoint | `lerobot/pi0_base` |
+| LeRobot version | v0.5.0 (pinned) |
+| Training steps | 20,000 |
+| Batch size (per GPU) | 4 |
+| Number of GPUs | 8 (H100 80GB) |
+| Effective batch size | 32 |
+| Learning rate | 2.5e-5 |
+| Action horizon | 50 |
+| Precision | bf16 (mixed via FSDP) |
+| Sharding | FSDP FULL_SHARD |
+| Gradient checkpointing | Enabled |
+| Checkpoint interval | Every 2,000 steps |
 
-The build uses `docker buildx build --platform linux/amd64 --load` because every AWS GPU instance this recipe targets is x86_64. A plain `docker build` on Apple Silicon produces an arm64 manifest and the kubelet rejects the pull.
+## Optional: Pre-built Container Image
+
+For faster pod startup (30s vs 5min), you can build a custom image with LeRobot pre-installed. The `Dockerfile` and `buildspec.yml` are provided for this purpose.
 
 ```bash
 cd pi0-lerobot
 
-# One-time: create buildx builder + QEMU
+# One-time: create buildx builder + QEMU (for arm64 hosts)
 docker buildx create --use --name pi0-builder
 docker run --privileged --rm tonistiigi/binfmt --install all
 
@@ -108,52 +122,7 @@ aws ecr get-login-password --region ${AWS_REGION} \
 docker image push ${REGISTRY}/pi0-lerobot:${IMAGE_TAG}
 ```
 
-### Alternative: AWS CodeBuild
-
-Upload source to S3 and use CodeBuild for native x86_64 builds (no QEMU):
-
-```bash
-zip -r pi0-lerobot-source.zip Dockerfile src/ buildspec.yml
-aws s3 cp pi0-lerobot-source.zip s3://<bucket>/codebuild/pi0-lerobot-source.zip
-aws codebuild start-build --project-name pi0-lerobot-build --region ${AWS_REGION}
-```
-
-### Alternative: DLC Direct (no custom image)
-
-For quick iteration, you can use the DLC image directly and install LeRobot at pod startup (~5 min overhead). See `droid-finetune.yaml` for the pattern — change the `image:` field to:
-
-```yaml
-image: 763104351884.dkr.ecr.<region>.amazonaws.com/pytorch-training:2.9.0-gpu-py312-cu130-ubuntu22.04-sagemaker-v1.9
-```
-
-Then add `pip install "lerobot[pi,dataset]@git+..."` to the args block before training.
-
-## Training Configuration
-
-| Parameter | Value |
-|-----------|-------|
-| Base checkpoint | `lerobot/pi0_base` |
-| Training steps | 20,000 |
-| Batch size (per GPU) | 4 |
-| Number of GPUs | 8 (H100 80GB) |
-| Effective batch size | 32 |
-| Learning rate | 2.5e-5 |
-| Action horizon | 50 |
-| Precision | bf16 (mixed via FSDP) |
-| Sharding | FSDP FULL_SHARD |
-| Gradient checkpointing | Enabled |
-| Checkpoint interval | Every 2,000 steps |
-
-## Key Differences: HyperPod EKS vs SageMaker Training Jobs
-
-| Aspect | SageMaker Training Job | HyperPod EKS (this recipe) |
-|--------|----------------------|---------------------------|
-| Data | Downloaded from S3 per job | Persists on FSx across jobs |
-| Checkpoints | Archived to model.tar.gz on S3 | Stay on FSx (no tar/untar) |
-| Orchestration | ModelTrainer API (Python SDK) | kubectl + PyTorchJob YAML |
-| Multi-node | instance_count parameter | Set `replicas` in PyTorchJob |
-| Debugging | CloudWatch logs only | kubectl exec into running pod |
-| Iteration speed | ~5 min cold start per job | Instant (data on FSx, image cached) |
+Then update the `image:` field in the manifests to point to your ECR image.
 
 ## Troubleshooting
 
@@ -166,14 +135,28 @@ kubectl delete validatingwebhookconfiguration validator.training-operator.kubefl
 
 ### flash_attn / libcudart.so.12
 
-The DLC image ships CUDA 13; flash_attn needs CUDA 12. The training YAML uninstalls flash_attn at startup (π0 doesn't use it — only the XVLA policy does).
+The DLC image ships CUDA 13; `flash_attn` is compiled for CUDA 12. The manifests uninstall it at startup — π0 doesn't use flash attention (only the XVLA policy does).
 
 ### MPIJob CRD missing
 
 If the training operator crashes with "no matches for MPIJob", install the CRD:
 ```bash
+kubectl delete crd mpijobs.kubeflow.org 2>/dev/null
 kubectl apply -f https://raw.githubusercontent.com/kubeflow/training-operator/v1.9.1/manifests/base/crds/kubeflow.org_mpijobs.yaml
 ```
+
+### FileExistsError on restart
+
+LeRobot v0.5.0 raises `FileExistsError` if `--output_dir` exists. Set `FORCE_RESTART=1` env var on the finetune pod to delete and restart, or manually remove:
+```bash
+kubectl exec <pod> -- rm -rf /fsx/runs/pi0-droid/training
+```
+
+### HF_TOKEN / Gemma license
+
+Training fails ~15 min in with a 403 when downloading `google/paligemma-3b-pt-224` if:
+- `HF_TOKEN` is missing from the `pi0-lerobot-secrets` Secret
+- The token hasn't accepted the [Gemma license](https://huggingface.co/google/gemma-2b)
 
 ## References
 

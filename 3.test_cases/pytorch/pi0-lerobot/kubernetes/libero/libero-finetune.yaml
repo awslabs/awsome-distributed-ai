@@ -56,16 +56,8 @@ spec:
                   # --- Quick fixes (pre-installed image, just patch) ---
                   pip uninstall -y flash-attn 2>/dev/null || true
 
-                  # Install local-dataset patch
-                  USER_SITE=$(python -c "import site; print(site.getusersitepackages())")
-                  mkdir -p "$USER_SITE"
-                  cp /opt/pi0-lerobot/src/lerobot_local_patch.py "$USER_SITE/"
-                  cat > "$USER_SITE/usercustomize.py" <<'PYEOF'
-                  try:
-                      import lerobot_local_patch
-                  except Exception:
-                      pass
-                  PYEOF
+                  # LeRobot v0.5.0 handles local datasets natively when passed
+                  # --dataset.root pointing to a local directory. No monkey-patch needed.
 
                   # --- HF Login ---
                   if [ -n "${HF_TOKEN:-}" ]; then
@@ -91,9 +83,19 @@ spec:
 
                   export TORCHELASTIC_ERROR_FILE=/tmp/torch_error.json
                   export PYTHONUNBUFFERED=1
-                  # Resume from existing checkpoint if available, otherwise start fresh
-                  if [ -d "$OUTPUT_DIR/training/checkpoints" ] && ls "$OUTPUT_DIR/training/checkpoints"/*/pretrained_model/config.json 1>/dev/null 2>&1; then
-                    echo "  Found existing checkpoints — training will resume from latest."
+                  # Handle existing output directory.
+                  # LeRobot v0.5.0 raises FileExistsError if output_dir exists.
+                  # If FORCE_RESTART=1, remove and start fresh. Otherwise, error early.
+                  if [ -d "$OUTPUT_DIR/training" ]; then
+                    if [ "${FORCE_RESTART:-0}" = "1" ]; then
+                      echo "  FORCE_RESTART=1: removing existing $OUTPUT_DIR/training"
+                      rm -rf "$OUTPUT_DIR/training"
+                    else
+                      echo "  ERROR: $OUTPUT_DIR/training already exists."
+                      echo "  Set FORCE_RESTART=1 env var to delete and restart, or"
+                      echo "  remove manually: kubectl exec ... -- rm -rf $OUTPUT_DIR/training"
+                      exit 1
+                    fi
                   fi
 
                   accelerate launch \
@@ -139,7 +141,7 @@ spec:
                     secretKeyRef:
                       name: pi0-lerobot-secrets
                       key: HF_TOKEN
-                      optional: true
+                # Required: π0's PaliGemma processor requires Gemma license acceptance.
                 - name: NCCL_SOCKET_IFNAME
                   value: "^lo"
                 - name: GLOO_SOCKET_IFNAME
@@ -148,7 +150,7 @@ spec:
                   value: "WARN"
                 # NCCL_TIMEOUT is not a native NCCL variable but is read by some
                 # framework-level process group implementations. Kept for consistency
-                # with other test cases in this repo (e.g., openvla-oft).
+                # with other test cases in this repo (e.g., distillation, nemo-rl).
                 - name: NCCL_TIMEOUT
                   value: "1800"
               resources:

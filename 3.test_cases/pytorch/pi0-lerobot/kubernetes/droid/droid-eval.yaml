@@ -1,4 +1,5 @@
 # Pi0 LeRobot — DROID Evaluation Job
+# Uses the DLC image directly and installs LeRobot at runtime.
 
 apiVersion: batch/v1
 kind: Job
@@ -34,31 +35,28 @@ spec:
               echo "  Pi0 Evaluation — DROID"
               echo "============================================================"
 
+              # Install LeRobot (pinned) + remove flash_attn (CUDA 12/13 mismatch)
+              export GIT_LFS_SKIP_SMUDGE=1
+              git config --global filter.lfs.required false
+              pip install --quiet "lerobot[pi,dataset]@git+https://github.com/huggingface/lerobot.git@v0.5.0"
               pip uninstall -y flash-attn 2>/dev/null || true
 
-              # Install patch
-              USER_SITE=$(python -c "import site; print(site.getusersitepackages())")
-              mkdir -p "$USER_SITE"
-              cp /opt/pi0-lerobot/src/lerobot_local_patch.py "$USER_SITE/"
-              cat > "$USER_SITE/usercustomize.py" <<'PYEOF'
-              try:
-                  import lerobot_local_patch
-              except Exception:
-                  pass
-              PYEOF
-
-              # HF Login
-              if [ -n "${HF_TOKEN:-}" ]; then
-                python -c "from huggingface_hub import login; import os; login(token=os.environ['HF_TOKEN'])"
-              fi
+              # HF Login (required for PaliGemma tokenizer — Gemma license)
+              python -c "from huggingface_hub import login; import os; login(token=os.environ['HF_TOKEN'])"
 
               export HF_HOME="/fsx/hf-cache"
               export HF_LEROBOT_HOME="/fsx/lerobot-cache"
               mkdir -p "$HF_LEROBOT_HOME"
               ln -snf /fsx/datasets/droid_100 "$HF_LEROBOT_HOME/droid_local"
 
+              # Write eval script to a temp location (DLC has no /opt/pi0-lerobot)
+              EVAL_SCRIPT="/tmp/evaluate_pi0.py"
+              cp /fsx/pi0-lerobot-src/evaluate_pi0.py "$EVAL_SCRIPT" 2>/dev/null || \
+                pip show lerobot | grep -q . && \
+                curl -sL "https://raw.githubusercontent.com/amindm/awsome-distributed-ai/pi0-lerobot-test-case/3.test_cases/pytorch/pi0-lerobot/src/evaluate_pi0.py" -o "$EVAL_SCRIPT"
+
               echo "Running evaluation..."
-              python /opt/pi0-lerobot/src/evaluate_pi0.py \
+              python "$EVAL_SCRIPT" \
                 --dataset droid \
                 --finetuned-path /fsx/runs/pi0-droid/training/checkpoints/020000/pretrained_model \
                 --test-dataset-local /fsx/datasets/droid_100 \
@@ -75,7 +73,6 @@ spec:
                 secretKeyRef:
                   name: pi0-lerobot-secrets
                   key: HF_TOKEN
-                  optional: true
           resources:
             limits:
               nvidia.com/gpu: 1

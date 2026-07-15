@@ -37,7 +37,7 @@ DATASET_CONFIGS = {
     "droid": {
         "rename_map": {
             "observation.images.exterior_image_1_left": "observation.images.base_0_rgb",
-            "observation.images.wrist_image_left": "observation.images.wrist_0_rgb",
+            "observation.images.wrist_image_left": "observation.images.left_wrist_0_rgb",
         },
         "empty_cameras": 1,
         "s3_suffix": "droid_100_test",
@@ -61,48 +61,6 @@ DATASET_CONFIGS = {
         "description": "LIBERO-10 (7-DoF tabletop manipulation)",
     },
 }
-
-
-# -------------------------------------------------------------------------
-# Hub-skip monkey patch
-# -------------------------------------------------------------------------
-def apply_local_dataset_patch():
-    """Stop LeRobot from pinging the Hub for our local-only repo_ids."""
-    from lerobot.datasets import utils as lr_utils
-    try:
-        from lerobot.datasets import dataset_metadata as lr_meta
-    except ImportError:
-        lr_meta = None
-
-    orig_safe = lr_utils.get_safe_version
-    orig_repo = lr_utils.get_repo_versions
-
-    def _is_local(repo_id):
-        if os.environ.get("HF_HUB_OFFLINE", "0") in ("1", "true", "True"):
-            return True
-        return "/" not in repo_id
-
-    def patched_safe(repo_id, version):
-        if _is_local(repo_id):
-            v = str(version)
-            return v if v.startswith("v") else f"v{v}"
-        return orig_safe(repo_id, version)
-
-    def patched_repo(repo_id):
-        if _is_local(repo_id):
-            return []
-        return orig_repo(repo_id)
-
-    lr_utils.get_safe_version = patched_safe
-    lr_utils.get_repo_versions = patched_repo
-    if lr_meta is not None and hasattr(lr_meta, "get_safe_version"):
-        lr_meta.get_safe_version = patched_safe
-
-    import lerobot.datasets.lerobot_dataset as _lr_ds
-    if hasattr(_lr_ds, "get_safe_version"):
-        _lr_ds.get_safe_version = patched_safe
-    if hasattr(_lr_ds, "get_repo_versions"):
-        _lr_ds.get_repo_versions = patched_repo
 
 
 # -------------------------------------------------------------------------
@@ -411,10 +369,6 @@ def main():
             bucket = f"sagemaker-{region}-{account}"
             args.test_dataset_s3 = f"s3://{bucket}/pi0-finetuning/datasets/{ds_cfg['s3_suffix']}"
             print(f"  Test S3: {args.test_dataset_s3}")
-
-    # Apply patches
-    print("\n[1/5] Applying LeRobot local-dataset patch...")
-    apply_local_dataset_patch()
 
     # Test dataset
     print(f"\n[2/5] Preparing test dataset...")
