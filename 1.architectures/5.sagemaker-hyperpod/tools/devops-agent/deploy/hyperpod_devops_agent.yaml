@@ -496,13 +496,21 @@ Resources:
 
 
           def _find_event_channel_association(agent_space_id: str) -> dict | None:
-              """Return an existing eventChannel association for the space, or None."""
-              paginator_kwargs = {"agentSpaceId": agent_space_id}
-              resp = _devops.list_associations(**paginator_kwargs)
-              for assoc in resp.get("associations", []) or []:
-                  if (assoc.get("configuration") or {}).get("eventChannel") is not None:
-                      return assoc
-              return None
+              """Return an existing eventChannel association for the space, or None.
+
+              list_associations is paginated; follow nextToken so an association past the
+              first page isn't missed (mirrors _find_asset_id in cr_skill_uploader.py).
+              """
+              kwargs = {"agentSpaceId": agent_space_id}
+              while True:
+                  resp = _devops.list_associations(**kwargs)
+                  for assoc in resp.get("associations", []) or []:
+                      if (assoc.get("configuration") or {}).get("eventChannel") is not None:
+                          return assoc
+                  token = resp.get("nextToken")
+                  if not token:
+                      return None
+                  kwargs["nextToken"] = token
 
 
           def _find_event_channel_service() -> str | None:
@@ -512,12 +520,20 @@ Resources:
               with 'Event Channel service is already registered for this account' once one
               exists. So we reuse it across Agent Spaces (each space gets its own
               association + webhook against the same service).
+
+              list_services is paginated; follow nextToken so the service isn't missed on
+              an account with more services than fit one page.
               """
-              resp = _devops.list_services()
-              for svc in resp.get("services", []) or []:
-                  if svc.get("serviceType") == "eventChannel":
-                      return svc.get("serviceId")
-              return None
+              kwargs: dict = {}
+              while True:
+                  resp = _devops.list_services(**kwargs)
+                  for svc in resp.get("services", []) or []:
+                      if svc.get("serviceType") == "eventChannel":
+                          return svc.get("serviceId")
+                  token = resp.get("nextToken")
+                  if not token:
+                      return None
+                  kwargs["nextToken"] = token
 
 
           def _register_or_reuse_service() -> str:
@@ -592,12 +608,22 @@ Resources:
               other deployment. Returns False if listing spaces isn't possible (safer to
               skip deregister than to break a sibling).
               """
+              # list_agent_spaces is paginated; walk every page so a sibling space on a
+              # later page can't be missed (which would wrongly deregister the singleton).
+              spaces: list[dict] = []
+              kwargs: dict = {}
               try:
-                  resp = _devops.list_agent_spaces()
+                  while True:
+                      resp = _devops.list_agent_spaces(**kwargs)
+                      spaces.extend(resp.get("agentSpaces", []) or [])
+                      token = resp.get("nextToken")
+                      if not token:
+                          break
+                      kwargs["nextToken"] = token
               except Exception as e:  # noqa: BLE001
                   print(f"list_agent_spaces failed ({e!r}); assuming service is in use")
                   return True
-              for space in resp.get("agentSpaces", []) or []:
+              for space in spaces:
                   sid = space.get("agentSpaceId")
                   if not sid or sid == this_space_id:
                       continue
