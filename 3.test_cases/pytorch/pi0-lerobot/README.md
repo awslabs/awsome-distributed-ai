@@ -48,9 +48,10 @@ Training time: ~6.5 hours per dataset (20K steps, FSDP FULL_SHARD, 8× H100).
   - **Note:** HyperPod labels instances with an `ml.` prefix (e.g., `ml.p5.48xlarge`). On plain EKS, the label is `p5.48xlarge`. The manifests use the HyperPod convention by default — edit the `nodeSelector` if running on plain EKS.
 - The [Kubeflow Training Operator](https://github.com/kubeflow/training-operator) installed
 - FSx for Lustre PVC (`fsx-claim`) mounted at `/fsx`
-- A HuggingFace token that has accepted **both**:
-  - [lerobot/pi0_base](https://huggingface.co/lerobot/pi0_base) (Apache 2.0, but gated)
+- A HuggingFace token that has accepted:
   - [google/paligemma-3b-pt-224](https://huggingface.co/google/paligemma-3b-pt-224) (Gemma license — π0's processor downloads this at train time)
+  
+  Note: `lerobot/pi0_base` itself is ungated and requires no token. The gate is the transitive PaliGemma dependency.
 
 ## Quick Start
 
@@ -61,19 +62,19 @@ The manifests use the [AWS DLC PyTorch image](https://github.com/aws/deep-learni
 kubectl apply -k "github.com/kubeflow/training-operator/manifests/overlays/standalone?ref=v1.9.1"
 kubectl create secret generic pi0-lerobot-secrets --from-literal=HF_TOKEN="<your-token>"
 
-# 2. Train DROID
+# 2. Stage the eval script to FSx (one-time, from any pod that mounts the PVC)
+kubectl run stager --rm -it --restart=Never \
+  --image=busybox:1.37 \
+  --overrides='{"spec":{"volumes":[{"name":"fsx","persistentVolumeClaim":{"claimName":"fsx-claim"}}],"containers":[{"name":"stager","image":"busybox:1.37","command":["sh","-c","mkdir -p /fsx/pi0-lerobot && cat > /fsx/pi0-lerobot/evaluate_pi0.py"],"stdin":true,"volumeMounts":[{"name":"fsx","mountPath":"/fsx"}]}]}}' \
+  < src/evaluate_pi0.py
+
+# 3. Train DROID (episodes 0-79)
 kubectl apply -f kubernetes/droid/droid-finetune.yaml
 kubectl logs -f pi0-lerobot-droid-finetune-worker-0
 
-# 3. Evaluate DROID (after training completes)
+# 4. Evaluate DROID (held-out episodes 80-99)
 kubectl delete pytorchjob pi0-lerobot-droid-finetune
 kubectl apply -f kubernetes/droid/droid-eval.yaml
-
-# 4. Train + Evaluate LIBERO
-kubectl apply -f kubernetes/libero/libero-finetune.yaml
-# ... wait for completion ...
-kubectl delete pytorchjob pi0-lerobot-libero-finetune
-kubectl apply -f kubernetes/libero/libero-eval.yaml
 ```
 
 ## Training Configuration
@@ -142,10 +143,10 @@ The DLC image ships CUDA 13; `flash_attn` is compiled for CUDA 12. The manifests
 
 ### MPIJob CRD missing
 
-If the training operator crashes with "no matches for MPIJob", install the CRD:
+If the training operator crashes with "no matches for MPIJob", reinstall the operator
+which includes the CRD:
 ```bash
-kubectl delete crd mpijobs.kubeflow.org 2>/dev/null
-kubectl apply -f https://raw.githubusercontent.com/kubeflow/training-operator/v1.9.1/manifests/base/crds/kubeflow.org_mpijobs.yaml
+kubectl apply -k "github.com/kubeflow/training-operator/manifests/overlays/standalone?ref=v1.9.1"
 ```
 
 ### FileExistsError on restart
@@ -157,7 +158,7 @@ kubectl exec <pod> -- rm -rf /fsx/runs/pi0-droid/training
 
 ### HF_TOKEN / Gemma license
 
-Training fails ~15 min in with a 403 when downloading `google/paligemma-3b-pt-224` if:
+Training fails ~15 min in with a `GatedRepoError` (HTTP 401) when downloading `google/paligemma-3b-pt-224` if:
 - `HF_TOKEN` is missing from the `pi0-lerobot-secrets` Secret
 - The token hasn't accepted the [Gemma license](https://huggingface.co/google/gemma-2b)
 

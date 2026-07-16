@@ -380,8 +380,10 @@ def main():
     test_dir = ensure_test_dataset_local(args.test_dataset_s3, args.test_dataset_local)
     setup_lerobot_cache(test_dir, repo_id=ds_cfg["repo_id"])
 
-    # Load dataset (with episode filtering for held-out eval)
-    print(f"\n[3/5] Loading test dataset...")
+    # Load the FULL dataset (no episode filter) — episode metadata and frame
+    # indexing must stay aligned. The eval loop below iterates only over
+    # held-out episodes by index.
+    print(f"\n[3/5] Loading dataset...")
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     # Determine eval episodes: use --eval-episodes if provided, else default split
@@ -398,11 +400,11 @@ def main():
     dataset = LeRobotDataset(
         repo_id=ds_cfg["repo_id"],
         root=str(test_dir),
-        episodes=eval_episodes,
         video_backend="pyav",
     )
     n_eps = len(dataset.meta.episodes["dataset_from_index"])
-    print(f"  Loaded {n_eps} test episodes, {len(dataset)} total frames")
+    print(f"  Loaded {n_eps} total episodes, {len(dataset)} total frames")
+    print(f"  Evaluating on held-out episodes: {eval_episodes[:5]}...{eval_episodes[-1]}")
 
     # Load policies
     print(f"\n[4/5] Loading policies...")
@@ -452,7 +454,9 @@ def main():
             tokenizer = None
 
         results = []
-        for ep in range(args.num_trajectories):
+        # Evaluate on held-out episodes (by episode index into full dataset)
+        episodes_to_eval = eval_episodes[:args.num_trajectories]
+        for ep in episodes_to_eval:
             r = evaluate_policy_on_trajectory(
                 policy, dataset, ep, rename_map,
                 n_empty_cameras=n_empty_cameras,
@@ -546,6 +550,7 @@ def main():
         "num_trajectories": args.num_trajectories,
         "action_horizon": args.action_horizon,
         "action_dim": ds_cfg["action_dim"],
+        "eval_episodes": eval_episodes[:args.num_trajectories],
         "base": base_results,
         "finetuned": finetuned_results,
         "finetuned_step_sweep": {str(n): r for n, r in finetuned_sweep.items()},

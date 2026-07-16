@@ -11,13 +11,14 @@ SageMaker HyperPod-on-EKS.
 - HyperPod EKS cluster with a p5.48xlarge (8× H100) node
 - Kubeflow Training Operator installed
 - FSx for Lustre PVC (`fsx-claim`) bound and mounted
-- Container image pushed to ECR (see parent README)
 - `pi0-lerobot-secrets` Kubernetes Secret with HF_TOKEN
+  (token must have accepted [Gemma license](https://huggingface.co/google/gemma-2b))
+- `evaluate_pi0.py` staged on FSx at `/fsx/pi0-lerobot/evaluate_pi0.py`
 
 ## 1. Submit the Training Job
 
-The training YAML downloads DROID-100, installs patches, and launches
-FSDP training on 8 GPUs for 20K steps (~6.5 hours):
+Training downloads DROID-100, installs LeRobot v0.5.0, and runs FSDP on 8 GPUs
+for 20K steps (~6.5 hours). Only episodes 0-79 are used for training.
 
 ```bash
 kubectl apply -f droid-finetune.yaml
@@ -26,7 +27,7 @@ kubectl logs -f pi0-lerobot-droid-finetune-worker-0
 
 ## 2. Submit the Evaluation Job
 
-After training completes:
+After training completes, evaluate on held-out episodes 80-99:
 
 ```bash
 kubectl delete pytorchjob pi0-lerobot-droid-finetune
@@ -40,20 +41,11 @@ kubectl logs -f $(kubectl get pods -l app=pi0-lerobot-droid-eval --sort-by=.meta
 kubectl delete job pi0-lerobot-droid-eval
 ```
 
-## Results (p5.48xlarge — 8× H100)
+## Train/Test Split
 
-| Metric | Base π0 | Fine-Tuned | Improvement |
-|--------|---------|------------|-------------|
-| Avg MSE | 3.897e-01 | 1.353e-02 | **96.5% reduction** |
-| Avg MAE | 4.617e-01 | 5.614e-02 | **87.9% reduction** |
-| Time/chunk (10 steps) | 366 ms | 385 ms | — |
-| Time/chunk (1 step) | — | 199 ms | — |
+| Set | Episodes | Purpose |
+|-----|----------|---------|
+| Train | 0-79 | Passed via `--dataset.episodes` |
+| Eval (held-out) | 80-99 | Passed via `--eval-episodes` to evaluate_pi0.py |
 
-### ODE Step Sweep
-
-| Steps | MSE | MAE | Time/chunk |
-|-------|-----|-----|------------|
-| 1 | 8.352e-03 | 4.941e-02 | 199 ms |
-| 3 | 1.072e-02 | 5.152e-02 | 241 ms |
-| 5 | 1.063e-02 | 5.060e-02 | 284 ms |
-| 10 | 1.353e-02 | 5.614e-02 | 385 ms |
+> **Note:** Results pending re-run with this proper split. See top-level README.

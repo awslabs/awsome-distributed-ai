@@ -1,5 +1,9 @@
 # Pi0 LeRobot — LIBERO Evaluation Job
-# Uses the DLC image directly and installs LeRobot at runtime.
+#
+# Prerequisites:
+#   1. Training completed (checkpoint exists at /fsx/runs/pi0-libero/training/checkpoints/)
+#   2. evaluate_pi0.py staged on FSx:
+#      kubectl cp src/evaluate_pi0.py <any-pod>:/fsx/pi0-lerobot/evaluate_pi0.py
 
 apiVersion: batch/v1
 kind: Job
@@ -32,29 +36,31 @@ spec:
             - |
               set -e
               echo "============================================================"
-              echo "  Pi0 Evaluation — LIBERO"
+              echo "  Pi0 Evaluation — LIBERO (held-out episodes 400-499)"
               echo "============================================================"
 
-              # Install LeRobot (pinned) + remove flash_attn (CUDA 12/13 mismatch)
+              # [1/3] Install LeRobot (pinned v0.5.0)
+              echo "[1/3] Installing LeRobot..."
               export GIT_LFS_SKIP_SMUDGE=1
               git config --global filter.lfs.required false
               pip install --quiet "lerobot[pi,dataset]@git+https://github.com/huggingface/lerobot.git@v0.5.0"
               pip uninstall -y flash-attn 2>/dev/null || true
 
-              # HF Login (required for PaliGemma tokenizer — Gemma license)
+              # [2/3] HF Login (required for PaliGemma tokenizer — Gemma license)
+              echo "[2/3] HuggingFace login..."
               python -c "from huggingface_hub import login; import os; login(token=os.environ['HF_TOKEN'])"
 
+              # [3/3] Run evaluation
+              echo "[3/3] Running evaluation on held-out episodes 400-499..."
               export HF_HOME="/fsx/hf-cache"
-              export HF_LEROBOT_HOME="/fsx/lerobot-cache"
-              mkdir -p "$HF_LEROBOT_HOME"
-              ln -snf /fsx/datasets/libero_10 "$HF_LEROBOT_HOME/libero_local"
 
-              # Write eval script to a temp location (DLC has no /opt/pi0-lerobot)
-              EVAL_SCRIPT="/tmp/evaluate_pi0.py"
-              cp /fsx/pi0-lerobot-src/evaluate_pi0.py "$EVAL_SCRIPT" 2>/dev/null || \
-                curl -sL "https://raw.githubusercontent.com/amindm/awsome-distributed-ai/pi0-lerobot-test-case/3.test_cases/pytorch/pi0-lerobot/src/evaluate_pi0.py" -o "$EVAL_SCRIPT"
+              EVAL_SCRIPT="/fsx/pi0-lerobot/evaluate_pi0.py"
+              if [ ! -f "$EVAL_SCRIPT" ]; then
+                echo "ERROR: $EVAL_SCRIPT not found on FSx."
+                echo "Stage it first: copy src/evaluate_pi0.py to /fsx/pi0-lerobot/ on the PVC."
+                exit 1
+              fi
 
-              echo "Running evaluation..."
               python "$EVAL_SCRIPT" \
                 --dataset libero \
                 --finetuned-path /fsx/runs/pi0-libero/training/checkpoints/020000/pretrained_model \

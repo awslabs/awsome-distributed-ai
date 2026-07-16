@@ -26,6 +26,7 @@ RUN apt-get update -qq && \
     rm -rf /var/lib/apt/lists/*
 
 # ── Install LeRobot with π0 extras (pinned to v0.5.0 for reproducibility) ──
+# Dependency versions are resolved by LeRobot's own pyproject.toml constraints.
 ENV GIT_LFS_SKIP_SMUDGE=1
 RUN git config --global filter.lfs.clean cat && \
     git config --global filter.lfs.smudge cat && \
@@ -34,10 +35,7 @@ RUN git config --global filter.lfs.clean cat && \
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
-        "lerobot[pi,dataset] @ git+https://github.com/huggingface/lerobot.git@v0.5.0" \
-        "accelerate==1.2.1" \
-        "safetensors==0.4.5" \
-        "huggingface-hub==0.27.1"
+        "lerobot[pi,dataset] @ git+https://github.com/huggingface/lerobot.git@v0.5.0"
 
 # ── Remove flash_attn (compiled for CUDA 12, this image is CUDA 13) ──
 RUN pip uninstall -y flash-attn 2>/dev/null || true
@@ -46,7 +44,7 @@ RUN pip uninstall -y flash-attn 2>/dev/null || true
 RUN python -c "import lerobot; import accelerate; import torch; print(f'torch={torch.__version__}, cuda={torch.cuda.is_available()}')"
 RUN python -c "from lerobot.policies.pi0 import PI0Policy; print('PI0Policy import OK')"
 
-# ── Copy eval script (the only src file needed at runtime) ──
+# ── Copy eval script ──
 COPY src/evaluate_pi0.py /opt/pi0-lerobot/src/evaluate_pi0.py
 
 # ── Environment defaults ──

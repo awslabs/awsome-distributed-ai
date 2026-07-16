@@ -11,22 +11,23 @@ SageMaker HyperPod-on-EKS.
 - HyperPod EKS cluster with a p5.48xlarge (8× H100) node
 - Kubeflow Training Operator installed
 - FSx for Lustre PVC (`fsx-claim`) bound and mounted
-- Container image pushed to ECR (see parent README)
 - `pi0-lerobot-secrets` Kubernetes Secret with HF_TOKEN
+  (token must have accepted [Gemma license](https://huggingface.co/google/gemma-2b))
+- `evaluate_pi0.py` staged on FSx at `/fsx/pi0-lerobot/evaluate_pi0.py`
 
 ## 1. Submit the Training Job
+
+Training downloads LIBERO-10, installs LeRobot v0.5.0, and runs FSDP on 8 GPUs
+for 20K steps (~6.5 hours). Only episodes 0-399 are used for training.
 
 ```bash
 kubectl apply -f libero-finetune.yaml
 kubectl logs -f pi0-lerobot-libero-finetune-worker-0
 ```
 
-Training downloads LIBERO-10, patches LeRobot, and runs FSDP on 8 GPUs
-for 20K steps (~6.5 hours).
-
 ## 2. Submit the Evaluation Job
 
-After training completes:
+After training completes, evaluate on held-out episodes 400-499:
 
 ```bash
 kubectl delete pytorchjob pi0-lerobot-libero-finetune
@@ -40,20 +41,11 @@ kubectl logs -f $(kubectl get pods -l app=pi0-lerobot-libero-eval --sort-by=.met
 kubectl delete job pi0-lerobot-libero-eval
 ```
 
-## Results (p5.48xlarge — 8× H100)
+## Train/Test Split
 
-| Metric | Base π0 | Fine-Tuned | Improvement |
-|--------|---------|------------|-------------|
-| Avg MSE | 7.214e-01 | 5.003e-02 | **93.1% reduction** |
-| Avg MAE | 6.302e-01 | 7.505e-02 | **88.1% reduction** |
-| Time/chunk (10 steps) | 361 ms | 383 ms | — |
-| Time/chunk (1 step) | — | 197 ms | — |
+| Set | Episodes | Purpose |
+|-----|----------|---------|
+| Train | 0-399 | Passed via `--dataset.episodes` |
+| Eval (held-out) | 400-499 | Passed via `--eval-episodes` to evaluate_pi0.py |
 
-### ODE Step Sweep
-
-| Steps | MSE | MAE | Time/chunk |
-|-------|-----|-----|------------|
-| 1 | 3.235e-02 | 7.735e-02 | 197 ms |
-| 3 | 3.939e-02 | 6.875e-02 | 239 ms |
-| 5 | 4.133e-02 | 6.902e-02 | 281 ms |
-| 10 | 5.003e-02 | 7.505e-02 | 383 ms |
+> **Note:** Results pending re-run with this proper split. See top-level README.
