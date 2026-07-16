@@ -66,7 +66,7 @@ PLACEHOLDERS = {
 # built-in boto3 predates the Asset API. We do NOT pip-install it during deploy;
 # it must already be present in the environment running this script (see
 # _require_boto3), and we bundle that installed copy.
-BOTO3_MIN_VERSION = (1, 40, 0)
+BOTO3_MIN_VERSION = (1, 43, 25)
 BOTO3_MIN = "boto3>=" + ".".join(str(n) for n in BOTO3_MIN_VERSION)
 
 

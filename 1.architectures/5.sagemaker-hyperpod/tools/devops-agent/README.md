@@ -185,7 +185,7 @@ for Slurm clusters).
 ## Prerequisites
 
 - AWS CLI v2 configured for the target account, with a region set (`aws configure set region <region>`) or `Region` in `params.json`.
-- Python 3.9+ with **boto3 ≥ 1.40.0** installed in the environment you run `make deploy` from — it's bundled into the skill-uploader Lambda (the Lambda runtime's built-in boto3 predates the DevOps Agent Asset API). The deploy fails fast with an install hint if it's missing or too old; it never installs boto3 for you. Install it into a venv, e.g. `python3 -m venv .venv && source .venv/bin/activate && pip install 'boto3>=1.40.0'`.
+- Python 3.9+ with **boto3 ≥ 1.43.25** installed in the environment you run `make deploy` from — it's bundled into the skill-uploader Lambda (the Lambda runtime's built-in boto3 predates the DevOps Agent Asset API, which first ships in boto3 1.43.25). The deploy fails fast with an install hint if it's missing or too old; it never installs boto3 for you. Install it into a venv, e.g. `python3 -m venv .venv && source .venv/bin/activate && pip install 'boto3>=1.43.25'`.
 - An existing HyperPod cluster (EKS or Slurm orchestrator). For Slurm, **Continuous Provisioning is required** for `list-cluster-events` and the correct EventBridge event format (see [Slurm clusters](#slurm-clusters) below).
 - Permission to create IAM roles, Secrets Manager secrets, CloudFormation stacks, `aidevops:*`, `eks:CreateAccessEntry`, and (for email) `ses:SendEmail` from a verified sender.
 - An SES-verified sender identity in the target region (and, in SES sandbox, verified recipients).
@@ -197,10 +197,10 @@ Everything deploys as **one CloudFormation stack per cluster**:
 ```bash
 cd hyperpod_devops_agent
 
-# 1. Deploy from a Python env that has boto3 >= 1.40.0 (bundled into the
+# 1. Deploy from a Python env that has boto3 >= 1.43.25 (bundled into the
 #    skill-uploader Lambda). A venv is the simplest way; make deploy fails fast
 #    with an install hint if boto3 is missing or too old.
-python3 -m venv .venv && source .venv/bin/activate && pip install 'boto3>=1.40.0'
+python3 -m venv .venv && source .venv/bin/activate && pip install 'boto3>=1.43.25'
 
 # 2. Fill in your cluster + email (the SES sender must be verified first).
 cp deploy/params.example.json deploy/params.json
