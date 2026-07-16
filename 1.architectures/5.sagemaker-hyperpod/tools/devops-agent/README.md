@@ -195,7 +195,7 @@ for Slurm clusters).
 Everything deploys as **one CloudFormation stack per cluster**:
 
 ```bash
-cd hyperpod_devops_agent
+cd 1.architectures/5.sagemaker-hyperpod/tools/devops-agent
 
 # 1. Deploy from a Python env that has boto3 >= 1.43.25 (bundled into the
 #    skill-uploader Lambda). A venv is the simplest way; make deploy fails fast
