@@ -168,6 +168,32 @@ def _k8s_get(path: str, eks_cluster_name: str, region: str) -> dict:
         return json.loads(resp.read())
 
 
+def _k8s_list_all(path: str, eks_cluster_name: str, region: str,
+                  page_limit: int = 500) -> list[dict]:
+    """List every item across all pages of a K8s collection endpoint.
+
+    The API server paginates large collections: a single /api/v1/pods (or
+    /nodes) call returns at most one page (500 items on EKS), so on a large
+    cluster CrashLoopBackOff pods / NotReady nodes in the tail are silently
+    dropped. Follow metadata.continue to read every page.
+    """
+    from urllib.parse import quote
+
+    items: list[dict] = []
+    continue_token: str | None = None
+    safe_max_pages = 200  # 200 * 500 = 100k items ceiling — a runaway guard
+    for _ in range(safe_max_pages):
+        query = f"?limit={page_limit}"
+        if continue_token:
+            query += f"&continue={quote(continue_token, safe='')}"
+        response = _k8s_get(f"{path}{query}", eks_cluster_name, region)
+        items.extend(response.get("items") or [])
+        continue_token = (response.get("metadata") or {}).get("continue")
+        if not continue_token:
+            break
+    return items
+
+
 # ----------------------------------------------------------------- detection
 
 def _detect_crashloops(eks_cluster_name: str, region: str, cfg: dict) -> list[dict]:
@@ -177,7 +203,7 @@ def _detect_crashloops(eks_cluster_name: str, region: str, cfg: dict) -> list[di
     threshold_h = cfg["crashLoopHoursThreshold"]
     now = _now()
     issues: list[dict] = []
-    pods = _k8s_get("/api/v1/pods", eks_cluster_name, region).get("items", [])
+    pods = _k8s_list_all("/api/v1/pods", eks_cluster_name, region)
     for pod in pods:
         meta = pod.get("metadata", {})
         ns = meta.get("namespace", "")
@@ -205,7 +231,7 @@ def _detect_notready_nodes(eks_cluster_name: str, region: str, cfg: dict) -> lis
     duration_min = cfg["notReadyDurationMinutes"]
     percent_threshold = cfg["notReadyNodePercentThreshold"]
     now = _now()
-    nodes = _k8s_get("/api/v1/nodes", eks_cluster_name, region).get("items", [])
+    nodes = _k8s_list_all("/api/v1/nodes", eks_cluster_name, region)
     total = len(nodes)
     if total == 0:
         return []
