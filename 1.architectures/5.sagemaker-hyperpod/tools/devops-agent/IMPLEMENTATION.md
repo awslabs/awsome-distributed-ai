@@ -320,9 +320,11 @@ Three channels stack:
      re-emitting `Investigation Completed` for the same execution. Marker objects
      auto-expire (30 days by default; `MarkerExpirationDays` CFN parameter).
    - **Skip filters (in order):** detail-type allowlist → S3 marker → heartbeat
-     (daily liveness, never emailed) → Suppress-verdict detection →
-     no-actionable-content (zero findings AND no verdict symptom).
-     `FORCE_SEND=true` on the stack bypasses all of them.
+     all-clear (the "no open issues" daily-liveness payload, never emailed; a
+     heartbeat run that *detects a real problem* is built as an issues payload
+     and is NOT skipped here) → Suppress-verdict detection → no-actionable-content
+     (zero findings AND no verdict symptom). `FORCE_SEND=true` on the stack
+     bypasses all of them.
    - SES sender must be verified in `$REGION`. If SES is in sandbox mode, every
      recipient must also be verified.
    - The IAM policy on the Lambda restricts `ses:SendEmail` to the configured
