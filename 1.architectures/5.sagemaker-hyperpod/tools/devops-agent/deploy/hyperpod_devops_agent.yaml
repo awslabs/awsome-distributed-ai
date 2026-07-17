@@ -807,6 +807,14 @@ Resources:
           _sagemaker_client = None
 
 
+          class _WebhookAuthError(Exception):
+              """A 401/403 from the webhook — signals a likely stale HMAC secret."""
+
+              def __init__(self, status: int):
+                  super().__init__(f"webhook rejected request with status {status}")
+                  self.status = status
+
+
           def _sagemaker():
               """SageMaker client, lazily created + reused across warm invocations."""
               global _sagemaker_client
@@ -842,9 +850,16 @@ Resources:
                   return {}
 
 
-          def _load_webhook_credentials() -> tuple[str, str]:
-              """Fetch webhook URL + HMAC secret from Secrets Manager, cached per cold start."""
-              if "url" in _secrets_cache and "secret" in _secrets_cache:
+          def _load_webhook_credentials(force_refresh: bool = False) -> tuple[str, str]:
+              """Fetch webhook URL + HMAC secret from Secrets Manager, cached per cold start.
+
+              force_refresh bypasses (and repopulates) the cache. The provisioner rewrites
+              the secret on re-associate, after which a warm sandbox would otherwise keep
+              signing with the stale HMAC key — every POST rejected, EventBridge retrying
+              forever until the sandbox recycles. The handler forces a refresh + one retry
+              on a 401/403 to break that loop.
+              """
+              if not force_refresh and "url" in _secrets_cache and "secret" in _secrets_cache:
                   return _secrets_cache["url"], _secrets_cache["secret"]
 
               secret_arn = os.environ["WEBHOOK_SECRET_ARN"]
@@ -1172,6 +1187,11 @@ Resources:
                       print(f"webhook response status={resp.status} body={resp.read(512)!r}")
               except HTTPError as e:
                   print(f"webhook HTTP error status={e.code} body={e.read()!r}")
+                  # 401/403 most likely means the signing secret is stale (re-provisioned
+                  # while this sandbox stayed warm). Surface it distinctly so the handler
+                  # can refresh the cached secret and retry once.
+                  if e.code in (401, 403):
+                      raise _WebhookAuthError(e.code) from e
                   raise
               except URLError as e:
                   print(f"webhook URL error: {e}")
@@ -1201,7 +1221,14 @@ Resources:
               webhook_url, secret = _load_webhook_credentials()
               payload = _build_payload(event)
               print(f"payload incidentId={payload['incidentId']} priority={payload['priority']} title={payload['title']!r} eventLevel={level!r}")
-              _post(webhook_url, secret, payload)
+              try:
+                  _post(webhook_url, secret, payload)
+              except _WebhookAuthError as e:
+                  # Stale cached secret (re-provisioned while this sandbox stayed warm):
+                  # refresh from Secrets Manager and retry once before giving up.
+                  print(f"webhook auth failure (status={e.status}); refreshing secret and retrying once")
+                  webhook_url, secret = _load_webhook_credentials(force_refresh=True)
+                  _post(webhook_url, secret, payload)
               return {"statusCode": 200, "body": json.dumps({"incidentId": payload["incidentId"]})}
 
   WebhookBridgeEventRole:
@@ -1359,6 +1386,14 @@ Resources:
 
           _secrets_cache: dict[str, str] = {}
           _eks_cache: dict[str, tuple[str, str]] = {}  # cluster -> (endpoint, ca_file_path)
+
+
+          class _WebhookAuthError(Exception):
+              """A 401/403 from the webhook — signals a likely stale HMAC secret."""
+
+              def __init__(self, status: int):
+                  super().__init__(f"webhook rejected request with status {status}")
+                  self.status = status
 
 
           # ----------------------------------------------------------------- config helpers
@@ -1655,8 +1690,14 @@ Resources:
 
           # ----------------------------------------------------------------- webhook
 
-          def _load_webhook_credentials() -> tuple[str, str]:
-              if "url" in _secrets_cache and "secret" in _secrets_cache:
+          def _load_webhook_credentials(force_refresh: bool = False) -> tuple[str, str]:
+              """Fetch webhook URL + HMAC secret, cached per cold start.
+
+              force_refresh bypasses (and repopulates) the cache — used to recover from a
+              stale HMAC key after the provisioner re-associates the webhook while this
+              sandbox stays warm (see the 401/403 retry in lambda_handler).
+              """
+              if not force_refresh and "url" in _secrets_cache and "secret" in _secrets_cache:
                   return _secrets_cache["url"], _secrets_cache["secret"]
               secret_arn = os.environ["WEBHOOK_SECRET_ARN"]
               resp = boto3.client("secretsmanager").get_secret_value(SecretId=secret_arn)
@@ -1799,6 +1840,10 @@ Resources:
                       print(f"webhook response status={resp.status} body={resp.read(512)!r}")
               except HTTPError as e:
                   print(f"webhook HTTP error status={e.code} body={e.read()!r}")
+                  # 401/403 most likely means a stale signing secret (re-provisioned while
+                  # this sandbox stayed warm); surface it so the caller can refresh + retry.
+                  if e.code in (401, 403):
+                      raise _WebhookAuthError(e.code) from e
                   raise
               except URLError as e:
                   print(f"webhook URL error: {e}")
@@ -1832,7 +1877,14 @@ Resources:
               reason = "issues-detected" if issues else "heartbeat"
               print(f"POSTing webhook: reason={reason} incidentId={payload['incidentId']} issues={len(issues)}")
               url, secret = _load_webhook_credentials()
-              _post(url, secret, payload)
+              try:
+                  _post(url, secret, payload)
+              except _WebhookAuthError as e:
+                  # Stale cached secret (re-provisioned while this sandbox stayed warm):
+                  # refresh from Secrets Manager and retry once before giving up.
+                  print(f"webhook auth failure (status={e.status}); refreshing secret and retrying once")
+                  url, secret = _load_webhook_credentials(force_refresh=True)
+                  _post(url, secret, payload)
               return {"statusCode": 200, "body": json.dumps(
                   {"posted": True, "reason": reason, "issues": len(issues), "incidentId": payload["incidentId"]}
               )}

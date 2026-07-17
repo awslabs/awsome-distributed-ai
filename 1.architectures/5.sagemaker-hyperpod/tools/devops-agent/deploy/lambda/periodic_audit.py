@@ -53,6 +53,14 @@ _secrets_cache: dict[str, str] = {}
 _eks_cache: dict[str, tuple[str, str]] = {}  # cluster -> (endpoint, ca_file_path)
 
 
+class _WebhookAuthError(Exception):
+    """A 401/403 from the webhook — signals a likely stale HMAC secret."""
+
+    def __init__(self, status: int):
+        super().__init__(f"webhook rejected request with status {status}")
+        self.status = status
+
+
 # ----------------------------------------------------------------- config helpers
 
 def _parse_namespace_list(env_name: str) -> list[str]:
@@ -347,8 +355,14 @@ def _detect_issues(cluster_name: str, eks_cluster_name: str, region: str) -> lis
 
 # ----------------------------------------------------------------- webhook
 
-def _load_webhook_credentials() -> tuple[str, str]:
-    if "url" in _secrets_cache and "secret" in _secrets_cache:
+def _load_webhook_credentials(force_refresh: bool = False) -> tuple[str, str]:
+    """Fetch webhook URL + HMAC secret, cached per cold start.
+
+    force_refresh bypasses (and repopulates) the cache — used to recover from a
+    stale HMAC key after the provisioner re-associates the webhook while this
+    sandbox stays warm (see the 401/403 retry in lambda_handler).
+    """
+    if not force_refresh and "url" in _secrets_cache and "secret" in _secrets_cache:
         return _secrets_cache["url"], _secrets_cache["secret"]
     secret_arn = os.environ["WEBHOOK_SECRET_ARN"]
     resp = boto3.client("secretsmanager").get_secret_value(SecretId=secret_arn)
@@ -491,6 +505,10 @@ def _post(webhook_url: str, secret: str, payload: dict) -> None:
             print(f"webhook response status={resp.status} body={resp.read(512)!r}")
     except HTTPError as e:
         print(f"webhook HTTP error status={e.code} body={e.read()!r}")
+        # 401/403 most likely means a stale signing secret (re-provisioned while
+        # this sandbox stayed warm); surface it so the caller can refresh + retry.
+        if e.code in (401, 403):
+            raise _WebhookAuthError(e.code) from e
         raise
     except URLError as e:
         print(f"webhook URL error: {e}")
@@ -524,7 +542,14 @@ def lambda_handler(event, context):
     reason = "issues-detected" if issues else "heartbeat"
     print(f"POSTing webhook: reason={reason} incidentId={payload['incidentId']} issues={len(issues)}")
     url, secret = _load_webhook_credentials()
-    _post(url, secret, payload)
+    try:
+        _post(url, secret, payload)
+    except _WebhookAuthError as e:
+        # Stale cached secret (re-provisioned while this sandbox stayed warm):
+        # refresh from Secrets Manager and retry once before giving up.
+        print(f"webhook auth failure (status={e.status}); refreshing secret and retrying once")
+        url, secret = _load_webhook_credentials(force_refresh=True)
+        _post(url, secret, payload)
     return {"statusCode": 200, "body": json.dumps(
         {"posted": True, "reason": reason, "issues": len(issues), "incidentId": payload["incidentId"]}
     )}
