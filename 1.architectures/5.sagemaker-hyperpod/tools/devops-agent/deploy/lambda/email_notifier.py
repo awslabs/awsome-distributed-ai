@@ -462,7 +462,7 @@ def _format_ts(iso: str) -> str:
 
 def _format_subject(event: dict, headline: str, priority: str) -> str:
     priority_tag = {"HIGH": "[H]", "MEDIUM": "[M]", "LOW": "[L]"}.get(priority, "[?]")
-    return f"{priority_tag} HyperPod: {headline}"[:200]
+    return re.sub(r"[\r\n]+", " ", f"{priority_tag} HyperPod: {headline}")[:200]
 
 
 def _render_section(esc, heading: str, rows_html: str) -> str:
