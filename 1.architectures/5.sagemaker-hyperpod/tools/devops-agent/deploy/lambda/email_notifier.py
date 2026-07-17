@@ -43,6 +43,36 @@ import boto3
 _ses_client = None
 _devops_client = None
 _s3_client = None
+_cloudwatch_client = None
+
+
+def _log(level: str, event: str, **kwargs) -> None:
+    """Emit one structured-JSON log line for CloudWatch Logs Insights.
+
+    Diagnostic-only lines stay as plain print().
+    """
+    print(json.dumps({"level": level, "event": event, **kwargs}, default=str))
+
+
+def _cloudwatch():
+    global _cloudwatch_client
+    if _cloudwatch_client is None:
+        _cloudwatch_client = boto3.client("cloudwatch")
+    return _cloudwatch_client
+
+
+def _emit_metric(name: str, value: float = 1.0) -> None:
+    """Emit a single CloudWatch custom metric for operational alerting.
+
+    Best-effort: a metric-publish failure must never break email delivery.
+    """
+    try:
+        _cloudwatch().put_metric_data(
+            Namespace="HyperPodDevOpsAgent",
+            MetricData=[{"MetricName": name, "Value": value, "Unit": "Count"}],
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"put_metric_data failed for {name}: {exc!r}")
 
 
 def _ses():
@@ -242,8 +272,11 @@ def _write_marker(execution_id: str, event: dict, meta: dict) -> None:
         )
     except Exception as exc:
         # Log but do not fail — the email has already been sent. Worst-case a
-        # subsequent event resends, which is what our old behavior was.
+        # subsequent event resends, which is what our old behavior was. Emit a
+        # metric so "dedup markers are failing to write" (→ duplicate emails
+        # likely) becomes dashboardable/alarmable rather than buried in log tails.
         print(f"put_object failed for {bucket}/{key}: {exc!r} (email sent OK, dedup marker not written)")
+        _emit_metric("S3DedupMarkerWriteFailed")
 
 
 def _is_heartbeat(task: dict) -> bool:
@@ -638,16 +671,16 @@ def _format_body_text(
 
 def lambda_handler(event, context):
     detail_type = event.get("detail-type", "")
-    print(f"received event detail-type={detail_type!r} id={event.get('id')!r}")
+    _log("INFO", "event_received", detailType=detail_type, id=event.get("id"))
 
     allowed = _env_list("EMAIL_DETAIL_TYPES", "Investigation Completed")
     if detail_type not in allowed:
-        print(f"skipping: detail-type {detail_type!r} not in allowlist {allowed}")
+        _log("INFO", "email_skipped", reason="detail-type", detailType=detail_type)
         return {"statusCode": 200, "body": json.dumps({"skipped": True, "reason": "detail-type"})}
 
     meta = _extract_meta(event)
     if not meta["agent_space_id"] or not meta["execution_id"]:
-        print(f"skipping: missing agent_space_id / execution_id")
+        _log("INFO", "email_skipped", reason="missing-ids")
         return {"statusCode": 200, "body": json.dumps({"skipped": True, "reason": "missing-ids"})}
 
     force = _env_bool("FORCE_SEND")
@@ -655,12 +688,12 @@ def lambda_handler(event, context):
     # Cheap dedup check first — before any API calls to DevOps Agent.
     # If we've already emailed for this execution_id, drop the event.
     if not force and _already_emailed(meta["execution_id"]):
-        print(f"skipping: already emailed for execution_id={meta['execution_id']}")
+        _log("INFO", "email_skipped", reason="already-emailed", executionId=meta["execution_id"])
         return {"statusCode": 200, "body": json.dumps({"skipped": True, "reason": "already-emailed"})}
 
     task = _fetch_task(meta["agent_space_id"], meta["task_id"])
     journal = _fetch_journal(meta["agent_space_id"], meta["execution_id"])
-    print(f"journal: symptoms={len(journal['symptoms'])} findings={len(journal['findings'])} gaps={len(journal['gaps'])} raw={journal['raw_count']}")
+    _log("INFO", "journal_fetched", symptoms=len(journal["symptoms"]), findings=len(journal["findings"]), gaps=len(journal["gaps"]), raw=journal["raw_count"])
 
     # If the journal fetch itself failed, we cannot tell "no findings" from "API
     # error". Raise so EventBridge retries this event rather than silently
@@ -676,14 +709,14 @@ def lambda_handler(event, context):
     # but never emailed. The audit Lambda marks heartbeat runs deterministically
     # in the task title/description; match either (skill-independent).
     if not force and _is_heartbeat(task):
-        print("skipping: daily heartbeat (silent liveness, no email)")
+        _log("INFO", "email_skipped", reason="heartbeat")
         return {"statusCode": 200, "body": json.dumps({"skipped": True, "reason": "heartbeat"})}
 
     if not force and _is_suppress_verdict(journal):
-        print("skipping: Suppress verdict")
+        _log("INFO", "email_skipped", reason="suppress-verdict")
         return {"statusCode": 200, "body": json.dumps({"skipped": True, "reason": "suppress-verdict"})}
     if not force and not _has_actionable_content(journal):
-        print("skipping: no findings in journal (set FORCE_SEND=1 to bypass)")
+        _log("INFO", "email_skipped", reason="no-actionable-content")
         return {"statusCode": 200, "body": json.dumps({"skipped": True, "reason": "no-findings"})}
 
     console_url = _console_url(event, meta)
@@ -699,7 +732,7 @@ def lambda_handler(event, context):
     if not sender:
         raise RuntimeError("EMAIL_SENDER is unset")
 
-    print(f"sending email from={sender!r} to={recipients} subject={subject!r} html_bytes={len(body_html)}")
+    _log("INFO", "email_sending", sender=sender, recipientCount=len(recipients), subject=subject, htmlBytes=len(body_html))
     resp = _ses().send_email(
         Source=sender,
         Destination={"ToAddresses": recipients},
@@ -711,7 +744,7 @@ def lambda_handler(event, context):
             },
         },
     )
-    print(f"ses MessageId={resp['MessageId']}")
+    _log("INFO", "email_sent", messageId=resp["MessageId"], executionId=meta["execution_id"], priority=meta.get("priority"))
 
     # Record the send in the dedup bucket so subsequent re-emissions for
     # the same execution_id are skipped. Best-effort: a failure here means

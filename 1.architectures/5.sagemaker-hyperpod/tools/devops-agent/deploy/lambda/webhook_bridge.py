@@ -31,6 +31,17 @@ _secrets_cache: dict[str, str] = {}
 _sagemaker_client = None
 
 
+def _log(level: str, event: str, **kwargs) -> None:
+    """Emit one structured-JSON log line so CloudWatch Logs Insights can parse it.
+
+    Unstructured f-string logs can't be reliably aggregated (e.g. "how many
+    webhook POSTs failed in the last 24h?"). A single JSON object per line makes
+    fields like event/status/incidentId queryable. Diagnostic-only lines stay as
+    plain print().
+    """
+    print(json.dumps({"level": level, "event": event, **kwargs}, default=str))
+
+
 class _WebhookAuthError(Exception):
     """A 401/403 from the webhook — signals a likely stale HMAC secret."""
 
@@ -193,7 +204,16 @@ def _shorten(text: str, limit: int = 120) -> str:
     cut = text.rfind(" ", 0, limit - 1)
     if cut <= limit // 2:
         cut = limit - 1
-    return text[:cut].rstrip(".,;: ") + "…"
+    truncated = text[:cut].rstrip(".,;: ")
+    # Python 3 str indices are codepoint-aligned, so text[:cut] never splits a
+    # codepoint. Belt-and-suspenders for a non-UTF-8-encodable trailing surrogate
+    # (e.g. an unpaired surrogate that slipped in from upstream): drop it rather
+    # than emit a body that ses:SendEmail / the webhook receiver would reject.
+    try:
+        truncated.encode("utf-8")
+    except UnicodeEncodeError:
+        truncated = truncated[:-1]
+    return truncated + "…"
 
 
 def _title_and_description(event: dict) -> tuple[str, str]:
@@ -410,9 +430,9 @@ def _post(webhook_url: str, secret: str, payload: dict) -> None:
     )
     try:
         with urllib.request.urlopen(request, timeout=10) as resp:
-            print(f"webhook response status={resp.status} body={resp.read(512)!r}")
+            _log("INFO", "webhook_post_success", status=resp.status, incidentId=payload.get("incidentId"))
     except HTTPError as e:
-        print(f"webhook HTTP error status={e.code} body={e.read()!r}")
+        _log("ERROR", "webhook_post_failed", status=e.code, body=repr(e.read()))
         # 401/403 most likely means the signing secret is stale (re-provisioned
         # while this sandbox stayed warm). Surface it distinctly so the handler
         # can refresh the cached secret and retry once.
@@ -420,39 +440,39 @@ def _post(webhook_url: str, secret: str, payload: dict) -> None:
             raise _WebhookAuthError(e.code) from e
         raise
     except URLError as e:
-        print(f"webhook URL error: {e}")
+        _log("ERROR", "webhook_post_failed", error=repr(e))
         raise
 
 
 def lambda_handler(event, context):
-    print(f"received event detail-type={event.get('detail-type')!r} id={event.get('id')!r}")
+    _log("INFO", "event_received", detailType=event.get("detail-type"), id=event.get("id"))
     if _truthy("WEBHOOK_LOG_FULL_EVENT"):
         print(f"full event: {json.dumps(event)}")
     allowlist = _cluster_filter()
     if allowlist:
         cluster = _event_cluster_name(event)
         if cluster not in allowlist:
-            print(f"dropping event: cluster={cluster!r} not in WEBHOOK_CLUSTER_FILTER={sorted(allowlist)}")
+            _log("INFO", "event_dropped", reason="cluster-not-in-filter", cluster=cluster, filter=sorted(allowlist))
             return {"statusCode": 200, "body": json.dumps({"dropped": True, "reason": "cluster-not-in-filter"})}
 
     drop, level = _should_drop(event)
     if drop:
-        print(f"dropping event: EventLevel={level!r} is in WEBHOOK_DROP_EVENT_LEVELS")
+        _log("INFO", "event_dropped", reason="event-level", eventLevel=level)
         return {"statusCode": 200, "body": json.dumps({"dropped": True, "eventLevel": level})}
 
     if _is_scale_progress_noise(event):
-        print("dropping event: scale-in-progress 'lost orchestration-ready' noise")
+        _log("INFO", "event_dropped", reason="scale-progress-noise")
         return {"statusCode": 200, "body": json.dumps({"dropped": True, "reason": "scale-progress-noise"})}
 
     webhook_url, secret = _load_webhook_credentials()
     payload = _build_payload(event)
-    print(f"payload incidentId={payload['incidentId']} priority={payload['priority']} title={payload['title']!r} eventLevel={level!r}")
+    _log("INFO", "payload_built", incidentId=payload["incidentId"], priority=payload["priority"], title=payload["title"], eventLevel=level)
     try:
         _post(webhook_url, secret, payload)
     except _WebhookAuthError as e:
         # Stale cached secret (re-provisioned while this sandbox stayed warm):
         # refresh from Secrets Manager and retry once before giving up.
-        print(f"webhook auth failure (status={e.status}); refreshing secret and retrying once")
+        _log("WARN", "webhook_auth_retry", status=e.status)
         webhook_url, secret = _load_webhook_credentials(force_refresh=True)
         _post(webhook_url, secret, payload)
     return {"statusCode": 200, "body": json.dumps({"incidentId": payload["incidentId"]})}

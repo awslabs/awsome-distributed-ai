@@ -53,6 +53,15 @@ _secrets_cache: dict[str, str] = {}
 _eks_cache: dict[str, tuple[str, str]] = {}  # cluster -> (endpoint, ca_file_path)
 
 
+def _log(level: str, event: str, **kwargs) -> None:
+    """Emit one structured-JSON log line for CloudWatch Logs Insights.
+
+    Enables queries like "issues detected per cluster over the last week".
+    Diagnostic-only lines stay as plain print().
+    """
+    print(json.dumps({"level": level, "event": event, **kwargs}, default=str))
+
+
 class _WebhookAuthError(Exception):
     """A 401/403 from the webhook — signals a likely stale HMAC secret."""
 
@@ -511,16 +520,16 @@ def _post(webhook_url: str, secret: str, payload: dict) -> None:
     )
     try:
         with urllib.request.urlopen(request, timeout=10) as resp:
-            print(f"webhook response status={resp.status} body={resp.read(512)!r}")
+            _log("INFO", "webhook_post_success", status=resp.status, incidentId=payload.get("incidentId"))
     except HTTPError as e:
-        print(f"webhook HTTP error status={e.code} body={e.read()!r}")
+        _log("ERROR", "webhook_post_failed", status=e.code, body=repr(e.read()))
         # 401/403 most likely means a stale signing secret (re-provisioned while
         # this sandbox stayed warm); surface it so the caller can refresh + retry.
         if e.code in (401, 403):
             raise _WebhookAuthError(e.code) from e
         raise
     except URLError as e:
-        print(f"webhook URL error: {e}")
+        _log("ERROR", "webhook_post_failed", error=repr(e))
         raise
 
 
@@ -537,26 +546,25 @@ def lambda_handler(event, context):
     # Inspect cluster state and POST only when a real issue is found (plus the
     # daily heartbeat), so a healthy cluster costs zero investigations.
     issues = _detect_issues(cluster_name, eks_cluster_name, region)
-    print(
-        f"lambda audit: cluster={cluster_name!r} trigger={trigger} "
-        f"heartbeat={heartbeat} issues={len(issues)} "
-        f"types={sorted({i['type'] for i in issues})}"
-    )
+    _log("INFO", "audit_ran", cluster=cluster_name, trigger=trigger,
+         heartbeat=heartbeat, issueCount=len(issues),
+         issueTypes=sorted({i["type"] for i in issues}))
 
     if not issues and not heartbeat:
-        print("healthy cluster, no issues — not POSTing webhook (no investigation created)")
+        _log("INFO", "audit_no_post", reason="healthy", cluster=cluster_name)
         return {"statusCode": 200, "body": json.dumps({"posted": False, "reason": "healthy"})}
 
     payload = _build_payload(cluster_name, k8s_checks, issues, heartbeat=heartbeat)
     reason = "issues-detected" if issues else "heartbeat"
-    print(f"POSTing webhook: reason={reason} incidentId={payload['incidentId']} issues={len(issues)}")
+    _log("INFO", "audit_posting", reason=reason, incidentId=payload["incidentId"],
+         issueCount=len(issues), cluster=cluster_name)
     url, secret = _load_webhook_credentials()
     try:
         _post(url, secret, payload)
     except _WebhookAuthError as e:
         # Stale cached secret (re-provisioned while this sandbox stayed warm):
         # refresh from Secrets Manager and retry once before giving up.
-        print(f"webhook auth failure (status={e.status}); refreshing secret and retrying once")
+        _log("WARN", "webhook_auth_retry", status=e.status)
         url, secret = _load_webhook_credentials(force_refresh=True)
         _post(url, secret, payload)
     return {"statusCode": 200, "body": json.dumps(

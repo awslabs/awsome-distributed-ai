@@ -781,6 +781,17 @@ Resources:
                 Action:
                   - s3:ListBucket
                 Resource: !GetAtt MarkerBucket.Arn
+              # Custom metric emitted when a dedup-marker write fails (so
+              # "duplicate emails likely" is alarmable). PutMetricData does not
+              # support resource-level scoping; the Namespace condition limits it
+              # to this solution's metrics.
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    "cloudwatch:namespace": "HyperPodDevOpsAgent"
 
   EmailNotifierFunction:
     Type: AWS::Lambda::Function
