@@ -1827,8 +1827,10 @@ Resources:
                       f"Daily heartbeat audit for HyperPod cluster '{cluster_name}'. "
                       f"The audit Lambda inspected cluster state and found NO open issues. "
                       f"This is an informational 'all clear' liveness signal, not an incident. "
-                      f"The hyperpod-incident-rca skill should emit "
-                      f"'Suppress — periodic audit, no open incidents'."
+                      f"Triage will typically SKIP it (the skipped task is itself the "
+                      f"console liveness signal); if it does PROCEED, the hyperpod-incident-rca "
+                      f"skill should emit 'Suppress — periodic audit, no open incidents'. "
+                      f"Either way it is visible in the console and never emailed."
                   )
               elif detected_issues:
                   lines = "\n".join(

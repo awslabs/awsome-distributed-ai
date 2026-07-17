@@ -58,6 +58,13 @@ heartbeat is a **silent liveness signal**: it is visible in the console
 and logs but is intentionally **not emailed**. Do not treat a heartbeat
 as an incident.
 
+Disposition can take either of two paths, both silent: triage typically
+**SKIPs** the heartbeat (the skipped task is itself the console liveness
+signal), or — if it PROCEEDs — RCA emits `Suppress — periodic audit, no
+open incidents`. Either way it is visible in the console and never
+emailed, so an operator looking for a daily "Suppress" verdict may
+instead find a SKIPPED task.
+
 ## Triage → RCA → notification
 
 - **Triage** (`hyperpod-incident-triage`, INCIDENT_TRIAGE) decides
