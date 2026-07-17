@@ -30,7 +30,15 @@ if [[ -z "${REGION}" ]]; then
     exit 1
 fi
 
-ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "")"
+# Under 'set -uo pipefail' (no -e; teardown is deliberately best-effort) an
+# expired/absent credential would otherwise leave ACCOUNT_ID empty and the script
+# would march through "stack not found" / "bucket not found" to "Teardown
+# complete." with exit 0 — a fake-success teardown that hides live resources.
+if [[ -z "${ACCOUNT_ID}" || "${ACCOUNT_ID}" == "None" ]]; then
+    echo "Error: cannot resolve AWS account (check credentials)" >&2
+    exit 1
+fi
 
 # Derive the same per-cluster slug deploy.sh uses (from params.json), so the
 # stack name + assets bucket resolve to the same values that were created.
