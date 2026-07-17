@@ -62,7 +62,11 @@ echo "==> Deleting stack ${STACK_NAME} in ${REGION}"
 if aws cloudformation describe-stacks --region "${REGION}" --stack-name "${STACK_NAME}" >/dev/null 2>&1; then
     aws cloudformation delete-stack --region "${REGION}" --stack-name "${STACK_NAME}"
     echo "    waiting for stack delete to complete..."
-    aws cloudformation wait stack-delete-complete --region "${REGION}" --stack-name "${STACK_NAME}" || true
+    if ! aws cloudformation wait stack-delete-complete --region "${REGION}" --stack-name "${STACK_NAME}"; then
+        STATUS="$(aws cloudformation describe-stacks --region "${REGION}" --stack-name "${STACK_NAME}" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo 'DELETE_FAILED')"
+        echo "Error: stack delete did not complete (status: ${STATUS}). Fix the blocking resource (often a non-empty marker bucket — re-run this script) and retry." >&2
+        exit 1
+    fi
     echo "    stack deleted"
 else
     echo "    stack not found"
