@@ -46,19 +46,31 @@ ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 # Build the USER_PARAMS array of "Key=Value" entries for every real
 # CloudFormation parameter (skip __-prefixed keys and the Region helper).
 # Read line-by-line (not mapfile) for bash 3.2 compatibility (macOS default).
-USER_PARAMS=()
-while IFS= read -r line; do
-    [[ -n "${line}" ]] && USER_PARAMS+=("${line}")
-done < <(python3 - "${PARAMS_FILE}" <<'PY'
+# Render the params first into a variable (NOT a process substitution): a
+# validation failure inside `$(...)` propagates via set -e, whereas a failure
+# inside `< <(...)` does not — the loop would just read fewer lines and the
+# deploy would proceed with a silently-dropped param. The Python is passed via
+# `-c '...'` rather than a heredoc because bash 3.2 (the macOS default this
+# script supports) can't parse a heredoc inside command substitution.
+PARAMS_RENDERED="$(python3 -c '
 import json, sys
 data = json.load(open(sys.argv[1]))
 reserved = {"Region"}
 for k, v in data.items():
     if k.startswith("__") or k in reserved:
         continue
-    print(f"{k}={v}")
-PY
-)
+    # Values must be JSON strings. A natural-JSON boolean/number would render via
+    # its Python repr (true -> "True"), failing the template AllowedValues with a
+    # confusing error; a value with a newline would split into a bogus extra
+    # --parameter-overrides entry. Reject up front -- see params.example.json.
+    if not isinstance(v, str):
+        sys.exit("params.json: %s must be a JSON string (got %s) -- see params.example.json" % (k, type(v).__name__))
+    print("%s=%s" % (k, v))
+' "${PARAMS_FILE}")"
+USER_PARAMS=()
+while IFS= read -r line; do
+    [[ -n "${line}" ]] && USER_PARAMS+=("${line}")
+done <<< "${PARAMS_RENDERED}"
 
 HYPERPOD_CLUSTER_NAME="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('HyperPodClusterName',''))" "${PARAMS_FILE}")"
 if [[ -z "${HYPERPOD_CLUSTER_NAME}" ]]; then
