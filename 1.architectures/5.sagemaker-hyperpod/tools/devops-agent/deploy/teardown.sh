@@ -51,11 +51,21 @@ import re, sys
 s = (sys.argv[1] if len(sys.argv) > 1 else "").lower()
 s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
 s = re.sub(r"-{2,}", "-", s)[:20].strip("-")
-print(s or "cluster")
+print(s)  # empty (not a fabricated 'cluster' slug) when no cluster name is known
 PY
 )"
 
 : "${STACK_NAME:=hyperpod-devops-agent-${NAME_PREFIX}}"
+
+# Refuse to tear down a fabricated stack name: without an explicit STACK_NAME
+# and without a resolvable cluster slug, we'd target 'hyperpod-devops-agent-'
+# (or, previously, '...-cluster') — "stack not found" would then read as a
+# clean teardown while the real stack lives on. Require one or the other.
+if [[ -z "${NAME_PREFIX}" && "${STACK_NAME}" == "hyperpod-devops-agent-" ]]; then
+    echo "Error: cannot determine which stack to tear down." >&2
+    echo "  Provide params.json (with HyperPodClusterName) or set STACK_NAME=... explicitly." >&2
+    exit 1
+fi
 
 # The marker bucket is stack-managed, but CloudFormation refuses to delete a
 # non-empty S3 bucket. Empty it first so the stack delete succeeds. Name is

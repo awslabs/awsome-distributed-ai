@@ -16,13 +16,16 @@ DEPLOY_DIR   := deploy
 PARAMS_FILE  ?= $(DEPLOY_DIR)/params.json
 
 # Per-cluster slug + stack name, derived from params.json so multiple clusters
-# coexist. Override STACK_NAME to target a specific stack. Empty when params.json
-# is absent (e.g. before first deploy) — the deploy/teardown scripts recompute it.
+# coexist. Override STACK_NAME to target a specific stack. Both are empty when
+# params.json is absent (e.g. before first deploy) — the recipes then omit
+# STACK_NAME so the deploy/teardown scripts recompute it from params themselves
+# (do NOT fabricate a 'cluster' slug here; that made teardown-stack silently
+# target a nonexistent 'hyperpod-devops-agent-cluster' stack).
 NAME_PREFIX  := $(shell $(PYTHON3) -c "import json,re,sys; \
 n=json.load(open('$(PARAMS_FILE)')).get('HyperPodClusterName','') if __import__('os').path.exists('$(PARAMS_FILE)') else ''; \
 s=re.sub(r'-{2,}','-',re.sub(r'[^a-z0-9]+','-',n.lower()).strip('-'))[:20].strip('-'); \
-print(s or 'cluster')" 2>/dev/null)
-STACK_NAME   ?= hyperpod-devops-agent-$(NAME_PREFIX)
+print(s)" 2>/dev/null)
+STACK_NAME   ?= $(if $(NAME_PREFIX),hyperpod-devops-agent-$(NAME_PREFIX))
 
 .PHONY: help \
         deploy update teardown-stack \
