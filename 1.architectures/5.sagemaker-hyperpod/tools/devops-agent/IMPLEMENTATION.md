@@ -143,7 +143,14 @@ sync-skills` zips every skill dir under `skills/` (parsing `agent_types` from th
 frontmatter — set it to `["INCIDENT_TRIAGE", "INCIDENT_RCA"]` for investigation
 skills) and the `SkillUploader` custom resource create/updates the asset by name.
 The skill's `description:` field determines when the agent loads it during
-investigations. Removing a skill dir + re-deploying deletes the asset.
+investigations.
+
+The uploader is **additive** — on redeploy it only creates/updates the skills in
+the current manifest. Removing a skill dir does **not** delete its asset from the
+Agent Space; the skill stays ACTIVE until you delete it (in the DevOps Agent
+console) or tear down the stack. This is deliberate: customers may add their own
+skills through the console, and a "delete everything not in the manifest" pass
+would clobber those. To retire a stack-managed skill, remove it in the console.
 
 This is the extension point for your own detection rules — e.g. escalate on a Pod
 in CrashLoopBackOff beyond a threshold, or on an instance group whose GPU
