@@ -71,7 +71,7 @@ DevOps Agent does not understand HyperPod out of the box — a HyperPod cluster 
 "a SageMaker resource" to its topology engine, not a composition of EKS + EC2 +
 FSx + lifecycle scripts. Two kinds of skill teach it the mapping:
 
-1. **Our two skills**:
+1. **The skills this repo authors**:
    - **`hyperpod-incident-triage`** (INCIDENT_TRIAGE) — runs at the triage stage
      and decides LINKED / SKIPPED / PROCEED. See
      [skills/hyperpod-incident-triage/SKILL.md](skills/hyperpod-incident-triage/SKILL.md).
@@ -84,6 +84,10 @@ FSx + lifecycle scripts. Two kinds of skill teach it the mapping:
      derived from the [HyperPod mental model](docs/hyperpod-mental-model.md).
      Bundles the mental-model doc as a reference. See
      [skills/hyperpod-incident-rca/SKILL.md](skills/hyperpod-incident-rca/SKILL.md).
+   - **`hyperpod-devops-agent-solution`** (GENERIC) — solution-context skill that
+     explains how and why this Agent Space monitors HyperPod, so an investigation
+     can reason about the pipeline. See
+     [skills/hyperpod-devops-agent-solution/SKILL.md](skills/hyperpod-devops-agent-solution/SKILL.md).
 
 2. **Curated upstream skills from [awslabs/agent-plugins](https://github.com/awslabs/agent-plugins)**
    — supporting reference. `make import-upstream-skills` imports a **curated

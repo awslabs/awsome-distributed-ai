@@ -421,6 +421,9 @@ stays out of it and the heartbeat fires as expected.
 ├── Makefile          - unified make targets (deploy / teardown-stack / *-logs / import-upstream-skills)
 ├── README.md         - this file (value, architecture, deploy, operate)
 ├── IMPLEMENTATION.md - design decisions and skill-authoring notes
+├── IDEAS.md          - backlog of possible enhancements (not deployed)
+├── docs/             - supporting docs (e.g. the HyperPod mental-model bundled into skills)
+├── images/           - README screenshots
 ├── deploy/           - the single-template deployment
 │   ├── hyperpod_devops_agent.yaml            - the deployable template (Lambda code inlined; committed — the file you deploy directly)
 │   ├── hyperpod_devops_agent.template.yaml   - the source template (with # *_CODE_PLACEHOLDER markers)
@@ -438,6 +441,7 @@ stays out of it and the heartbeat fires as expected.
 └── skills/
     ├── hyperpod-incident-triage/     - INCIDENT_TRIAGE skill (LINKED/SKIPPED/PROCEED)
     ├── hyperpod-incident-rca/        - INCIDENT_RCA skill (investigation + verdict + summary)
+    ├── hyperpod-devops-agent-solution/ - GENERIC skill: how/why this solution monitors the cluster
     └── upstream/                     - awslabs/agent-plugins clone (git-ignored)
 ```
 
