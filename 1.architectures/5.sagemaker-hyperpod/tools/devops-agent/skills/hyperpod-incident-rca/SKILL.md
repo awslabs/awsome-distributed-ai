@@ -363,13 +363,17 @@ Phase 1 step 8, which is mandatory in audit-mode-on-EKS regardless
 of the k8sChecks payload block. Emit each verdict as an
 independent symptom record.
 
-**Threshold + namespace configuration.** Read from the payload's
-`data.metadata.k8sChecks` block when present; otherwise use the
-defaults documented in Phase 1 step 8. If the block is present with
-`enabled: false`, DO NOT emit Phase 3d verdicts (customer has
-opted out of the k8s-state Escalate) — but Phase 1's kubectl gather
-still ran because it's part of general state discovery, and its
-data may still surface in Phase 4 report context.
+**Threshold + namespace configuration.** Use the `k8sChecks` block
+parsed from the task **description line** per Phase 1 step 8 — the
+DevOps Agent platform preserves the top-level `description` verbatim
+but flattens nested payload sub-objects, so `data.metadata.k8sChecks`
+is NOT reliably present; the description-inline copy is the source of
+truth. If no block is in the description, use the defaults documented
+in Phase 1 step 8. If the block is present with `enabled: false`, DO
+NOT emit Phase 3d verdicts (customer has opted out of the k8s-state
+Escalate) — but Phase 1's kubectl gather still ran because it's part
+of general state discovery, and its data may still surface in Phase 4
+report context.
 
 **Pod check — CrashLoopBackOff loop.** For each Pod in the
 `kubectl get pods -A -o json` output:
@@ -885,8 +889,14 @@ instance separately so the operator can run the commands in parallel.
 
 ## Inputs the skill expects from the trigger
 
-The webhook payload built by the bridge Lambda passes these fields in
-the investigation context:
+The webhook payload built by the bridge Lambda carries these fields.
+**Retrieval note:** the DevOps Agent platform preserves the top-level
+`description` string verbatim but flattens nested payload sub-objects,
+so the `data.metadata.*` / `data.originalEvent.detail.*` paths below
+name the *logical* source — the bridge also mirrors the same facts
+(cluster name, detail-type, instance/instance-group) into the human-
+readable `description`, which is the reliable place to read them from
+at runtime:
 
 - `data.metadata.clusterName` — HyperPod cluster name (required)
 - `data.metadata.detailType` — `Cluster State Change` /
