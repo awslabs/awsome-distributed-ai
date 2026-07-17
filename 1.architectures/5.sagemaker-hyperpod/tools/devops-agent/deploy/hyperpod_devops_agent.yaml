@@ -584,7 +584,11 @@ Resources:
                           _secrets.get_secret_value(SecretId=secret_arn)["SecretString"]
                       ) if _secret_populated(secret_arn) else {}
                       _write_secret(secret_arn, url, existing_secret.get("secret", ""))
-                  return {"AssociationId": assoc_id, "ServiceId": svc_id, "WebhookUrl": url}
+                  # Do NOT return the webhook URL in the CR Data: it is a credential-bearing
+                  # endpoint whose home is Secrets Manager (written above). CR Data is logged
+                  # by the cfnresponse module and readable via DescribeStacks, so returning
+                  # it would leak the endpoint to two surfaces broader than the secret.
+                  return {"AssociationId": assoc_id, "ServiceId": svc_id}
 
               svc_id = _register_or_reuse_service()
               print(f"associating eventChannel service {svc_id} to {agent_space_id}")
@@ -597,7 +601,9 @@ Resources:
               url = resp["webhook"]["webhookUrl"]
               secret = resp["webhook"]["webhookSecret"]
               _write_secret(secret_arn, url, secret)
-              return {"AssociationId": assoc_id, "ServiceId": svc_id, "WebhookUrl": url}
+              # See the note in the reuse branch above: the webhook URL is deliberately
+              # NOT returned in the CR Data (Secrets Manager is its only home).
+              return {"AssociationId": assoc_id, "ServiceId": svc_id}
 
 
           def _secret_populated(secret_arn: str) -> bool:
