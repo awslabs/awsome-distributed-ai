@@ -361,9 +361,11 @@ Kubernetes state — CrashLoopBackOff pods and NotReady nodes (via read-only EKS
 access) — and POSTs the DevOps Agent webhook **only when a real issue is found**.
 On a healthy cluster nothing is POSTed, so **no investigation runs and no cost is
 incurred**. A separate daily `AuditHeartbeatSchedule` fires one "all clear"
-investigation per day so operators can see the pipeline is alive. **On Slurm (no
-kubectl) the audit has nothing to poll, so it fires only the heartbeat** — HyperPod
-faults on Slurm still flow through the event-driven bridge.
+investigation per day so operators can see the pipeline is alive; it is visible
+in the DevOps Agent console and `make audit-logs` but is **deliberately never
+emailed** (don't watch your inbox for it). **On Slurm (no kubectl) the audit has
+nothing to poll, so it fires only the heartbeat** — HyperPod faults on Slurm
+still flow through the event-driven bridge.
 
 The audit deliberately does **not** re-scan `list-cluster-events` for faults: that
 duplicated the bridge from a worse data source (the Lambda runtime's boto3 omits
