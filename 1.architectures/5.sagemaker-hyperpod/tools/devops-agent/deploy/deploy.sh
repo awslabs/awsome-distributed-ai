@@ -255,12 +255,14 @@ aws cloudformation deploy \
 
 echo
 echo "==> Stack outputs"
-aws cloudformation describe-stacks \
+# AWS_PAGER="" suppresses the pager version-neutrally: honored by CLI v2, ignored
+# by v1. The old --no-cli-pager flag is v2-only, so on v1 it made this final
+# command fail and taint the exit code of an otherwise-successful deploy (255).
+AWS_PAGER="" aws cloudformation describe-stacks \
     --region "${REGION}" \
     --stack-name "${STACK_NAME}" \
     --query 'Stacks[0].Outputs' \
-    --output table \
-    --no-cli-pager
+    --output table
 
 echo
 echo "Done."

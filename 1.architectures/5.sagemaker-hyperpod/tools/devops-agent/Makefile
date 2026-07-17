@@ -96,8 +96,8 @@ stack-status:
 
 stack-outputs:
 	@bash -c 'REGION=$${REGION:-$$(aws configure get region)}; \
-		aws cloudformation describe-stacks --region $$REGION --stack-name $(STACK_NAME) \
-			--query "Stacks[0].Outputs" --output table --no-cli-pager'
+		AWS_PAGER="" aws cloudformation describe-stacks --region $$REGION --stack-name $(STACK_NAME) \
+			--query "Stacks[0].Outputs" --output table'
 
 # Tail a Lambda's logs by reading its function name from a stack output.
 # $(1) = output key
@@ -124,5 +124,6 @@ audit-test:
 			--query "Stacks[0].Outputs[?OutputKey=='"'"'PeriodicAuditFunctionName'"'"'].OutputValue | [0]" --output text); \
 		if [ -z "$$FUNC" ] || [ "$$FUNC" = "None" ]; then echo "Periodic audit not enabled in this stack."; exit 1; fi; \
 		echo "Invoking $$FUNC..."; \
-		aws lambda invoke --region $$REGION --function-name $$FUNC --payload "{\"trigger\":\"periodic\"}" /tmp/audit-test-output.json \
-			--cli-binary-format raw-in-base64-out >/dev/null && cat /tmp/audit-test-output.json && echo'
+		printf "%s" "{\"trigger\":\"periodic\"}" > /tmp/audit-test-payload.json; \
+		AWS_PAGER="" aws lambda invoke --region $$REGION --function-name $$FUNC --payload fileb:///tmp/audit-test-payload.json /tmp/audit-test-output.json \
+			>/dev/null && cat /tmp/audit-test-output.json && echo'
