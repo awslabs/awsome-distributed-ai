@@ -84,7 +84,7 @@ behavior differs slightly between them:
 | Mode | Trigger | Scope |
 |---|---|---|
 | **Incident mode** | Webhook fire from the bridge Lambda (an EventBridge HyperPod event passed the noise filter). The investigation context carries `clusterName` and usually an `instanceId`. | Focused on the specific incident referenced in the trigger. |
-| **Audit mode** | Scheduled `TIME_BASED` trigger (rate(15 minutes)) creating a task against this skill with no per-incident context. | Scan the cluster(s) configured for this Agent Space for any in-flight or recently-resolved fault chains, and re-classify each one. Catches: (1) `Monitor` incidents that have now succeeded (emit `Resolved`), (2) `Monitor` incidents stuck past their re-check budget (escalate), (3) recurring patterns that didn't trigger an EventBridge event recently but persist statistically. |
+| **Audit mode** | A synthesized webhook POST from the periodic-audit Lambda. Unlike a raw scheduled trigger, this payload **does** carry context: the description names the cluster (`clusterName`) and, when the Lambda-side checks fired, lists `detectedIssues` and a `k8sChecks` config line. | Confirm the detected issues, then scan the named cluster for any in-flight or recently-resolved fault chains and re-classify each. Catches: (1) `Monitor` incidents that have now succeeded (emit `Resolved`), (2) `Monitor` incidents stuck past their re-check budget (escalate), (3) recurring patterns that didn't trigger an EventBridge event recently but persist statistically. |
 
 In both modes the same Phase 1 / Phase 2 / Phase 3 / Phase 4 logic
 applies. The differences are noted inline below.
@@ -95,12 +95,14 @@ For the incident referenced in the trigger event (cluster name + optional
 instance id), collect these in parallel. **Do not stop on a single
 signal — gather all of them before classifying.**
 
-**Audit mode**: the trigger payload won't carry a cluster name or
-instance id. Use the cluster(s) reachable from this Agent Space's AWS
-account association (typically just one HyperPod cluster — discover
-it via `sagemaker list-clusters`). For each cluster, run the full
-Phase 1 gather. Then in Phase 3, classify per open fault chain found
-in the cluster-events window, not per single trigger.
+**Audit mode**: the trigger payload **does** carry the cluster name
+in its description (the periodic-audit Lambda synthesizes it), so use
+that. Only if the name is genuinely absent, fall back to the cluster(s)
+reachable from this Agent Space's AWS account association (typically
+just one HyperPod cluster — discover it via `sagemaker list-clusters`).
+Run the full Phase 1 gather for the cluster. Then in Phase 3, classify
+per open fault chain found in the cluster-events window (plus any
+`detectedIssues` the payload already carries), not per single trigger.
 
 1. **Cluster state**: `aws sagemaker describe-cluster --cluster-name <name>`
    — current `ClusterStatus`, `NodeRecovery`, `Orchestrator` (Eks vs.
