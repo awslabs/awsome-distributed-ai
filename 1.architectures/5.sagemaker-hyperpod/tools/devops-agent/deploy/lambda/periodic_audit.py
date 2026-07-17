@@ -334,9 +334,14 @@ def _detect_issues(cluster_name: str, eks_cluster_name: str, region: str) -> lis
         try:
             issues.extend(_detect_crashloops(eks_cluster_name, region, cfg))
             issues.extend(_detect_notready_nodes(eks_cluster_name, region, cfg))
-        except (HTTPError, URLError, ssl.SSLError) as e:
+        except Exception as e:  # noqa: BLE001 — ANY cluster-read failure must surface as AuditReadFailure, not crash the audit
             # Don't silently swallow: a cluster-read failure could hide a real
             # issue. Surface it as an issue so an operator investigates the gap.
+            # The block reads more than HTTP: describe_cluster + the STS signer
+            # raise botocore ClientError, urlopen can raise a bare TimeoutError,
+            # and json.loads raises ValueError on a truncated response — all of
+            # which previously escaped the handler and crashed the audit with no
+            # AuditReadFailure emitted (a silent monitoring outage).
             body = ""
             if isinstance(e, HTTPError):
                 try:
