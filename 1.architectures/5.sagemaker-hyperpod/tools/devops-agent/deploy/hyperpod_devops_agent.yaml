@@ -476,8 +476,8 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource:
-                  - "arn:aws:logs:*:*:log-group:/aws/lambda/*"
-                  - "arn:aws:logs:*:*:log-group:/aws/lambda/*:log-stream:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
 
   WebhookProvisionerFunction:
     Type: AWS::Lambda::Function
@@ -778,8 +778,8 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource:
-                  - "arn:aws:logs:*:*:log-group:/aws/lambda/*"
-                  - "arn:aws:logs:*:*:log-group:/aws/lambda/*:log-stream:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
               - Effect: Allow
                 Action:
                   - sagemaker:DescribeClusterEvent
@@ -1339,17 +1339,22 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource:
-                  - "arn:aws:logs:*:*:log-group:/aws/lambda/*"
-                  - "arn:aws:logs:*:*:log-group:/aws/lambda/*:log-stream:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
               # The audit Lambda reads Kubernetes Pod/Node state via the EKS
               # API. Only eks:DescribeCluster is needed here (to get the API
               # endpoint + CA); the K8s reads themselves are authorized by the
               # Lambda's EKS access entry, not IAM. HyperPod control-plane faults
               # are handled event-driven by the bridge, so no sagemaker perms.
-              - Effect: Allow
-                Action:
-                  - eks:DescribeCluster
-                Resource: "*"
+              # Scoped to this stack's EKS cluster, and only granted when there
+              # is one — on Slurm (no EksClusterName) the audit never calls it.
+              - !If
+                - AuditLambdaNeedsEks
+                - Effect: Allow
+                  Action:
+                    - eks:DescribeCluster
+                  Resource: !Sub "arn:aws:eks:${AWS::Region}:${AWS::AccountId}:cluster/${EksClusterName}"
+                - !Ref "AWS::NoValue"
 
   PeriodicAuditFunction:
     Type: AWS::Lambda::Function
@@ -2045,8 +2050,8 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource:
-                  - "arn:aws:logs:*:*:log-group:/aws/lambda/*"
-                  - "arn:aws:logs:*:*:log-group:/aws/lambda/*:log-stream:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
               - Effect: Allow
                 Action:
                   - ses:SendEmail
@@ -2931,8 +2936,8 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource:
-                  - "arn:aws:logs:*:*:log-group:/aws/lambda/*"
-                  - "arn:aws:logs:*:*:log-group:/aws/lambda/*:log-stream:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
 
   SkillUploaderFunction:
     Type: AWS::Lambda::Function
