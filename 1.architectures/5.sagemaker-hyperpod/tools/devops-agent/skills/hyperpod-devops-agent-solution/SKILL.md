@@ -58,22 +58,15 @@ alive and reaching the console — not incident detection (the 15-minute
 audit and the event-driven bridge do that). Do not treat a heartbeat as
 an incident.
 
-The heartbeat run still inspects cluster state, so there are two cases:
+The heartbeat run still inspects cluster state:
 
 - **Healthy cluster (the usual case):** an "all clear, no open issues"
-  heartbeat. This is a **silent liveness signal** — visible in the
-  console and logs but intentionally **never emailed**. Disposition is
-  silent either way: triage typically **SKIPs** it — because the
-  all-clear payload carries no fault to investigate (per the triage
-  skill's periodic-audit rules), not because the payload changed shape —
-  and the skipped task is itself the liveness signal; or, if it PROCEEDs,
-  RCA emits `Suppress — periodic audit, no open incidents`. So an
-  operator looking for a daily "Suppress" verdict may instead find a
-  SKIPPED task.
+  heartbeat — a **silent liveness signal**, visible in the console but
+  never emailed. Triage skips it (nothing to investigate); the skipped
+  task is itself the liveness signal.
 - **A real issue exists at heartbeat time:** the Lambda builds an
-  *issues* payload (not the all-clear one), which triages and is
-  root-caused like any detection — and **can email**. In that case it is
-  no longer a silent heartbeat.
+  *issues* payload instead, which is triaged and root-caused like any
+  detection and **can email**.
 
 ## Triage → RCA → notification
 

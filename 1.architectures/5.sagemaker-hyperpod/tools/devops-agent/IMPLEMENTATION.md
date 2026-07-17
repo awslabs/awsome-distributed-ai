@@ -54,9 +54,7 @@ updates, per-node provisioning notices, etc.). The Lambda drops events whose
 investigations against the monthly quota.
 
 `DropEventLevels` (default `Info`) and `ClusterFilter` (empty — the default —
-forwards only this stack's `HyperPodClusterName`; the template wires the empty
-value to that cluster name, so there is no "forward all" setting — widen by
-listing cluster names explicitly) are CloudFormation parameters. To change either after deployment, set them in `params.json` and
+forwards only this stack's `HyperPodClusterName`) are CloudFormation parameters. To change either after deployment, set them in `params.json` and
 re-run `make deploy`:
 
 ```json

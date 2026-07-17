@@ -889,14 +889,10 @@ instance separately so the operator can run the commands in parallel.
 
 ## Inputs the skill expects from the trigger
 
-The webhook payload built by the bridge Lambda carries these fields.
-**Retrieval note:** the DevOps Agent platform preserves the top-level
-`description` string verbatim but flattens nested payload sub-objects,
-so the `data.metadata.*` / `data.originalEvent.detail.*` paths below
-name the *logical* source — the bridge also mirrors the same facts
-(cluster name, detail-type, instance/instance-group) into the human-
-readable `description`, which is the reliable place to read them from
-at runtime:
+The webhook payload built by the bridge Lambda carries these fields. Per the
+flattening note in Phase 1 step 8, read them from the task `description` at
+runtime — the `data.metadata.*` / `data.originalEvent.detail.*` paths below
+name the logical source:
 
 - `data.metadata.clusterName` — HyperPod cluster name (required)
 - `data.metadata.detailType` — `Cluster State Change` /
