@@ -1631,9 +1631,13 @@ Resources:
                       if cond.get("type") == "Ready":
                           ready = cond
                           break
-                  if ready is None or ready.get("status") == "True":
+                  # A node that posted NO Ready condition (ready is None) is treated as
+                  # NotReady, not skipped — a node wedged early in registration is arguably
+                  # the least ready in the fleet. Only a node explicitly Ready=True is
+                  # skipped. (Mirrors the missing-lastTransitionTime fail-open below.)
+                  if ready is not None and ready.get("status") == "True":
                       continue
-                  since = _parse_k8s_time(ready.get("lastTransitionTime", ""))
+                  since = _parse_k8s_time(ready.get("lastTransitionTime", "")) if ready else None
                   mins = (now - since).total_seconds() / 60 if since else duration_min + 1
                   if mins >= duration_min:
                       not_ready.append(name)
