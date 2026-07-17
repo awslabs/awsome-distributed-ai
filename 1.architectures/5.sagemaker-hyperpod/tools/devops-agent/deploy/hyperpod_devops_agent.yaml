@@ -2223,16 +2223,30 @@ Resources:
               return result
 
 
+          def _has_verdict_symptom(journal: dict) -> bool:
+              """True if the journal carries a 'Triage verdict:' symptom."""
+              return any(
+                  (s.get("title") or "").strip().startswith("Triage verdict")
+                  for s in journal["symptoms"]
+              )
+
+
           def _has_actionable_content(journal: dict) -> bool:
-              """Email-worthy investigations have identifiable findings.
+              """Email-worthy investigations have findings OR a (non-Suppress) verdict.
 
               Empirically, the RCA skill sometimes marks findings as `cause` rather
               than `root_cause` even when the causal chain terminates. Any non-empty
               findings list means the RCA phase produced conclusions worth reporting.
-              Suppress-style audits (no fault activity in the window) produce no
-              findings at all and are correctly dropped.
+
+              A verdict symptom also counts: a Monitor/Escalate/Resolved verdict with no
+              `finding` records must still email ("Monitor verdicts are not silent" —
+              IMPLEMENTATION.md), matching the documented "zero findings AND no verdict
+              symptom" drop condition. Suppress verdicts never reach here — they are
+              filtered by _is_suppress_verdict earlier in the handler — so any verdict
+              symptom present at this point is non-Suppress. Suppress-style audits with no
+              fault activity produce neither findings nor a verdict and are dropped.
               """
-              return bool(journal["findings"])
+              return bool(journal["findings"]) or _has_verdict_symptom(journal)
 
 
           def _marker_key(execution_id: str) -> str:
