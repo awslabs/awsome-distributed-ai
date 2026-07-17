@@ -1159,7 +1159,7 @@ Resources:
           def _build_payload(event: dict) -> dict:
               title, description = _title_and_description(event)
               detail = event.get("detail", {})
-              event_id = event.get("id") or event.get("time") or datetime.datetime.utcnow().isoformat()
+              event_id = event.get("id") or event.get("time") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
               return {
                   "eventType": "incident",
@@ -1169,7 +1169,7 @@ Resources:
                   "title": title,
                   "description": description,
                   "timestamp": event.get("time")
-                  or datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                  or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
                   "service": "SageMakerHyperPod",
                   "data": {
                       "metadata": {
@@ -1190,7 +1190,7 @@ Resources:
 
           def _post(webhook_url: str, secret: str, payload: dict) -> None:
               body = json.dumps(payload).encode("utf-8")
-              timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000Z")
+              timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
               signature = base64.b64encode(
                   hmac.new(
                       secret.encode("utf-8"),
@@ -2563,7 +2563,7 @@ Resources:
 
           def _format_subject(event: dict, headline: str, priority: str) -> str:
               priority_tag = {"HIGH": "[H]", "MEDIUM": "[M]", "LOW": "[L]"}.get(priority, "[?]")
-              return f"{priority_tag} HyperPod: {headline}"[:200]
+              return re.sub(r"[\r\n]+", " ", f"{priority_tag} HyperPod: {headline}")[:200]
 
 
           def _render_section(esc, heading: str, rows_html: str) -> str:

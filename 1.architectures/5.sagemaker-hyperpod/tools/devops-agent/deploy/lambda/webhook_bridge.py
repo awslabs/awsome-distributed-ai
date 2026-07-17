@@ -355,7 +355,7 @@ def _title_and_description(event: dict) -> tuple[str, str]:
 def _build_payload(event: dict) -> dict:
     title, description = _title_and_description(event)
     detail = event.get("detail", {})
-    event_id = event.get("id") or event.get("time") or datetime.datetime.utcnow().isoformat()
+    event_id = event.get("id") or event.get("time") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
     return {
         "eventType": "incident",
@@ -365,7 +365,7 @@ def _build_payload(event: dict) -> dict:
         "title": title,
         "description": description,
         "timestamp": event.get("time")
-        or datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
         "service": "SageMakerHyperPod",
         "data": {
             "metadata": {
