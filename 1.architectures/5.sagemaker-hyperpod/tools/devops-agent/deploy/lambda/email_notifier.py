@@ -117,7 +117,7 @@ def _fetch_journal(agent_space_id: str, execution_id: str) -> dict:
             "raw_count": int,
         }
     """
-    result = {"symptoms": [], "findings": [], "gaps": [], "raw": [], "raw_count": 0}
+    result = {"symptoms": [], "findings": [], "gaps": [], "raw": [], "raw_count": 0, "error": None}
     if not agent_space_id or not execution_id:
         return result
     try:
@@ -143,7 +143,12 @@ def _fetch_journal(agent_space_id: str, execution_id: str) -> dict:
                         text = str(content)
                     result["gaps"].append(text)
     except Exception as exc:
+        # Record the failure instead of returning an indistinguishable empty
+        # journal: a throttled/failed list_journal_records must NOT look like
+        # "no findings" (which the handler would skip with a 200, so EventBridge
+        # never retries and a real HIGH-priority investigation goes unemailed).
         print(f"list_journal_records failed: {exc!r}")
+        result["error"] = repr(exc)
     return result
 
 
@@ -642,6 +647,16 @@ def lambda_handler(event, context):
     task = _fetch_task(meta["agent_space_id"], meta["task_id"])
     journal = _fetch_journal(meta["agent_space_id"], meta["execution_id"])
     print(f"journal: symptoms={len(journal['symptoms'])} findings={len(journal['findings'])} gaps={len(journal['gaps'])} raw={journal['raw_count']}")
+
+    # If the journal fetch itself failed, we cannot tell "no findings" from "API
+    # error". Raise so EventBridge retries this event rather than silently
+    # dropping a possibly-actionable investigation (no marker is written on this
+    # path, so a retry re-sends cleanly).
+    if journal.get("error"):
+        raise RuntimeError(
+            f"list_journal_records failed for execution_id={meta['execution_id']}: "
+            f"{journal['error']} — raising so EventBridge retries"
+        )
 
     # Daily heartbeat is a silent liveness signal — visible in the console/logs
     # but never emailed. The audit Lambda marks heartbeat runs deterministically
