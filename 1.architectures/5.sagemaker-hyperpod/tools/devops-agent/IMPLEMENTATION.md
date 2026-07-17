@@ -266,7 +266,7 @@ Two rules, both gated behind `K8sChecksEnabled=true` (default):
 
 | Rule | Escalates when | Configurable via |
 |---|---|---|
-| **CrashLoopBackOff duration** | Any Pod is in CrashLoopBackOff for longer than the threshold | `CrashLoopHoursThreshold` (default 4 h) |
+| **CrashLoopBackOff loop** | A container's `restartCount` reaches the floor and its last crash is recent (K8s exposes no loop-start in a snapshot, so `restartCount` is the crash-evidence signal) | `CrashLoopMinRestarts` (default 5) + `CrashLoopRecencyMinutes` (default 15) |
 | **NotReady node percentage** | ≥ percent of nodes have been NotReady for ≥ duration | `NotReadyNodePercentThreshold` (default 10) + `NotReadyDurationMinutes` (default 15) |
 
 Namespace handling uses **two plain lists**, no DSL. The Lambda validates at cold

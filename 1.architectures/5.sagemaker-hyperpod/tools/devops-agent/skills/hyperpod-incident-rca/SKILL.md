@@ -162,7 +162,8 @@ in the cluster-events window, not per single trigger.
    ```json
    {
      "enabled": true,
-     "crashLoopHoursThreshold": 4,
+     "crashLoopMinRestarts": 5,
+     "crashLoopRecencyMinutes": 15,
      "notReadyNodePercentThreshold": 10,
      "notReadyDurationMinutes": 15,
      "ignoreNamespaces": ["kube-public", "kube-node-lease"],
@@ -189,7 +190,7 @@ in the cluster-events window, not per single trigger.
    defaults regardless of whether they equal the defaults.
 
    If the block is absent from the description entirely, use
-   defaults: `crashLoopHoursThreshold=4`,
+   defaults: `crashLoopMinRestarts=5`, `crashLoopRecencyMinutes=15`,
    `notReadyNodePercentThreshold=10`, `notReadyDurationMinutes=15`,
    `ignoreNamespaces=["kube-public","kube-node-lease"]`,
    `systemNamespaces=["kube-system","aws-hyperpod","amazon-cloudwatch"]`.
@@ -368,7 +369,7 @@ opted out of the k8s-state Escalate) — but Phase 1's kubectl gather
 still ran because it's part of general state discovery, and its
 data may still surface in Phase 4 report context.
 
-**Pod check — CrashLoopBackOff duration.** For each Pod in the
+**Pod check — CrashLoopBackOff loop.** For each Pod in the
 `kubectl get pods -A -o json` output:
 
 1. **Namespace classification.** Look up `pod.metadata.namespace`:
@@ -384,20 +385,28 @@ data may still surface in Phase 4 report context.
    at most one list.
 
 2. **CrashLoopBackOff detection.** For each container in
-   `pod.status.containerStatuses[]`, check
-   `state.waiting.reason == "CrashLoopBackOff"`. If so, compute the
-   duration since `state.waiting.startedAt` (fall back to
-   `lastTransitionTime` on the container's `Ready` condition if
-   `startedAt` is not present).
-3. **Threshold check.** If duration exceeds
-   `k8sChecks.crashLoopHoursThreshold` hours → emit an `Escalate`
-   verdict with:
-   - Title: `Triage verdict: Escalate — CrashLoopBackOff exceeded threshold :: (<namespace>/<pod>:<container>)`
+   `pod.status.containerStatuses[]`, decide whether it is in a
+   persistent crash loop. Kubernetes does **not** expose when the
+   loop started in a snapshot — `containerStatuses[].state.waiting`
+   carries only `reason`/`message` (no timestamp), and
+   `lastState.terminated` holds only the *most recent* crashed run —
+   so use crash evidence, not a duration:
+   - **Loop present** when `state.waiting.reason == "CrashLoopBackOff"`
+     OR a `lastState.terminated` record exists (persistent evidence,
+     stable across the backoff cycle).
+   - **Enough restarts:** `restartCount >= k8sChecks.crashLoopMinRestarts`.
+   - **Still active:** the last crash
+     (`lastState.terminated.finishedAt`) is within
+     `k8sChecks.crashLoopRecencyMinutes` minutes — or the container is
+     currently in `CrashLoopBackOff` (treat a missing `finishedAt` as
+     active only in that case).
+3. **Verdict.** If all three hold → emit an `Escalate` verdict with:
+   - Title: `Triage verdict: Escalate — CrashLoopBackOff loop active :: (<namespace>/<pod>:<container>)`
    - Workload class tag in the description (`system-workload` or
      `customer-workload`) so downstream email routing can decide who
      to page.
-   - Include: pod name, namespace, container name, restart count,
-     duration in CrashLoopBackOff, and the most recent
+   - Include: pod name, namespace, container name, `restartCount`,
+     whether it is currently in backoff, and the most recent
      `lastState.terminated.reason` / `.exitCode` if available.
 
 **Node check — NotReady percentage.** From

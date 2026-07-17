@@ -289,7 +289,7 @@ and only forward events for two named clusters:
   "EmailSender": "alerts@example.com",
   "EmailRecipients": "oncall@example.com",
 
-  "CrashLoopHoursThreshold": "1",
+  "CrashLoopMinRestarts": "3",
   "ClusterFilter": "my-hyperpod-cluster,my-other-cluster"
 }
 ```
@@ -302,7 +302,8 @@ and only forward events for two named clusters:
 | `AuditSchedule` | `rate(15 minutes)` | EventBridge Scheduler expression for the periodic audit. |
 | `HeartbeatSchedule` | `cron(0 12 * * ? *)` | Scheduler expression for the daily "all clear" heartbeat. |
 | `K8sChecksEnabled` | `true` | Master switch for the Kubernetes-state checks (CrashLoopBackOff, NotReady). |
-| `CrashLoopHoursThreshold` | `4` | Escalate if a Pod is CrashLoopBackOff longer than this many hours. `0` = fire on any. |
+| `CrashLoopMinRestarts` | `5` | Fire only when a container's `restartCount` reaches this. Kubernetes doesn't expose loop-start in a snapshot, so `restartCount` is the crash-evidence signal. |
+| `CrashLoopRecencyMinutes` | `15` | The most recent crash must be within this window to count as an active loop (a pod that looped then recovered stops firing). |
 | `NotReadyNodePercentThreshold` | `10` | Escalate if ≥ this percent of nodes are NotReady (after the duration gate). |
 | `NotReadyDurationMinutes` | `15` | A node must be NotReady this long to count toward the percent threshold. |
 | `IgnoreNamespaces` | `kube-public,kube-node-lease` | Namespaces skipped entirely. Must not overlap `SystemNamespaces`. |
@@ -380,8 +381,9 @@ recurring issue produces an identical title and the platform/triage skill LINK o
 SKIP the repeat instead of emailing every cycle.
 
 Relevant params: `AuditSchedule` (`rate(15 minutes)`), `HeartbeatSchedule`
-(`cron(0 12 * * ? *)`), `K8sChecksEnabled` (`true`), `CrashLoopHoursThreshold` (4),
-`NotReadyNodePercentThreshold` (10), `NotReadyDurationMinutes` (15).
+(`cron(0 12 * * ? *)`), `K8sChecksEnabled` (`true`), `CrashLoopMinRestarts` (5),
+`CrashLoopRecencyMinutes` (15), `NotReadyNodePercentThreshold` (10),
+`NotReadyDurationMinutes` (15).
 
 ## Slurm clusters
 

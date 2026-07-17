@@ -58,7 +58,8 @@ Metadata:
           - AuditSchedule
           - HeartbeatSchedule
           - K8sChecksEnabled
-          - CrashLoopHoursThreshold
+          - CrashLoopMinRestarts
+          - CrashLoopRecencyMinutes
           - NotReadyNodePercentThreshold
           - NotReadyDurationMinutes
           - IgnoreNamespaces
@@ -172,12 +173,19 @@ Parameters:
     AllowedValues: ["true", "false"]
     Description: "Master switch for Kubernetes-state checks (CrashLoopBackOff, NotReady) during audit mode."
 
-  CrashLoopHoursThreshold:
+  CrashLoopMinRestarts:
     Type: Number
-    Default: 4
-    MinValue: 0
-    MaxValue: 168
-    Description: "Escalate if any Pod has been in CrashLoopBackOff for more than this many hours. 0 = fire on any active CrashLoopBackOff."
+    Default: 5
+    MinValue: 1
+    MaxValue: 10000
+    Description: "Fire only when a container's restartCount reaches this. Kubernetes does not expose loop-start in a snapshot, so restartCount is the crash-evidence signal for a persistent CrashLoopBackOff loop."
+
+  CrashLoopRecencyMinutes:
+    Type: Number
+    Default: 15
+    MinValue: 1
+    MaxValue: 1440
+    Description: "The most recent crash (lastState.terminated.finishedAt) must be within this many minutes to count as an active loop, so a pod that looped then recovered stops firing."
 
   NotReadyNodePercentThreshold:
     Type: Number
@@ -619,7 +627,8 @@ Resources:
           EKS_CLUSTER_NAME: !Ref EksClusterName
           AWS_ACCOUNT_ID: !Sub "${AWS::AccountId}"
           K8S_CHECKS_ENABLED: !Ref K8sChecksEnabled
-          CRASHLOOP_HOURS_THRESHOLD: !Ref CrashLoopHoursThreshold
+          CRASHLOOP_MIN_RESTARTS: !Ref CrashLoopMinRestarts
+          CRASHLOOP_RECENCY_MINUTES: !Ref CrashLoopRecencyMinutes
           NOT_READY_NODE_PERCENT_THRESHOLD: !Ref NotReadyNodePercentThreshold
           NOT_READY_DURATION_MINUTES: !Ref NotReadyDurationMinutes
           IGNORE_NAMESPACES: !Join [",", !Ref IgnoreNamespaces]

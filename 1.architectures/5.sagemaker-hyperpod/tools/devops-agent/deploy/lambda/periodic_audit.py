@@ -28,7 +28,8 @@ Env vars:
   CLUSTER_NAME                     HyperPod cluster name (payload metadata)
   EKS_CLUSTER_NAME                 Underlying EKS cluster name (empty for Slurm — kubectl checks skipped)
   K8S_CHECKS_ENABLED               "true"/"false" — enable CrashLoop/NotReady checks
-  CRASHLOOP_HOURS_THRESHOLD        Fire if a pod is CrashLoopBackOff longer than this (0 = any)
+  CRASHLOOP_MIN_RESTARTS           Fire only when a container's restartCount >= this
+  CRASHLOOP_RECENCY_MINUTES        Last crash must be within this window to count as an active loop
   NOT_READY_NODE_PERCENT_THRESHOLD Fire if >= this percent of nodes are NotReady (after duration gate)
   NOT_READY_DURATION_MINUTES       A node must be NotReady this long to count
   IGNORE_NAMESPACES                Comma-separated; pods here are skipped entirely
@@ -89,7 +90,8 @@ def _build_k8s_checks_block() -> dict | None:
     ignore, system = _namespace_config()
     return {
         "enabled": True,
-        "crashLoopHoursThreshold": int(os.environ.get("CRASHLOOP_HOURS_THRESHOLD", "4")),
+        "crashLoopMinRestarts": int(os.environ.get("CRASHLOOP_MIN_RESTARTS", "5")),
+        "crashLoopRecencyMinutes": int(os.environ.get("CRASHLOOP_RECENCY_MINUTES", "15")),
         "notReadyNodePercentThreshold": int(os.environ.get("NOT_READY_NODE_PERCENT_THRESHOLD", "10")),
         "notReadyDurationMinutes": int(os.environ.get("NOT_READY_DURATION_MINUTES", "15")),
         "ignoreNamespaces": ignore,
@@ -197,10 +199,28 @@ def _k8s_list_all(path: str, eks_cluster_name: str, region: str,
 # ----------------------------------------------------------------- detection
 
 def _detect_crashloops(eks_cluster_name: str, region: str, cfg: dict) -> list[dict]:
-    """Pods in CrashLoopBackOff longer than the threshold (proxy: pod age)."""
+    """Pods stuck in a CrashLoopBackOff loop.
+
+    Kubernetes does NOT expose when the loop started in a single snapshot: the
+    only monotonic evidence of a persistent loop is `restartCount`, and
+    `lastState.terminated` holds only the most-recent crashed run. So instead of
+    a pod-age proxy (which fired for any old pod that just started crashing), we
+    gate on crash evidence:
+
+      * detect the loop from PERSISTENT state — `state.waiting.reason ==
+        CrashLoopBackOff` OR a `lastState.terminated` crash record — so
+        detection no longer depends on catching the instantaneous backoff phase
+        (that instability made the "stable" title flap across the backoff cycle
+        and spawned duplicate investigations for one ongoing fault);
+      * require `restartCount >= crashLoopMinRestarts`; and
+      * require the last crash to be recent (`lastState.terminated.finishedAt`
+        within `crashLoopRecencyMinutes`) so a pod that looped and then
+        recovered doesn't keep firing.
+    """
     ignore = set(cfg["ignoreNamespaces"])
     system = set(cfg["systemNamespaces"])
-    threshold_h = cfg["crashLoopHoursThreshold"]
+    min_restarts = cfg["crashLoopMinRestarts"]
+    recency_min = cfg["crashLoopRecencyMinutes"]
     now = _now()
     issues: list[dict] = []
     pods = _k8s_list_all("/api/v1/pods", eks_cluster_name, region)
@@ -210,19 +230,44 @@ def _detect_crashloops(eks_cluster_name: str, region: str, cfg: dict) -> list[di
         if ns in ignore:
             continue
         status = pod.get("status", {})
-        start = _parse_k8s_time(status.get("startTime", "")) or _parse_k8s_time(
-            meta.get("creationTimestamp", "")
-        )
-        age_h = (now - start).total_seconds() / 3600 if start else 0.0
         for cs in status.get("containerStatuses", []) or []:
-            waiting = (cs.get("state", {}) or {}).get("waiting", {}) or {}
-            if waiting.get("reason") == "CrashLoopBackOff" and (threshold_h == 0 or age_h >= threshold_h):
-                issues.append({
-                    "type": "CrashLoopBackOff",
-                    "resource": f"{ns}/{meta.get('name')}:{cs.get('name')}",
-                    "detail": f"restartCount={cs.get('restartCount')}, podAgeHours={age_h:.1f}, threshold={threshold_h}h",
-                    "tag": "system-workload" if ns in system else "customer-workload",
-                })
+            state = cs.get("state", {}) or {}
+            waiting = state.get("waiting", {}) or {}
+            last_term = (cs.get("lastState", {}) or {}).get("terminated", {}) or {}
+            restarts = cs.get("restartCount", 0) or 0
+
+            in_backoff = waiting.get("reason") == "CrashLoopBackOff"
+            has_crash_evidence = bool(last_term)
+            # A loop needs both persistent crash evidence and enough restarts.
+            if not (in_backoff or has_crash_evidence) or restarts < min_restarts:
+                continue
+
+            # Confirm the loop is still active: the last crash must be recent.
+            # If finishedAt is missing but we're currently in backoff, treat it
+            # as active (fail-open toward reporting).
+            finished = _parse_k8s_time(last_term.get("finishedAt", ""))
+            if finished is not None:
+                since_last_crash_min = (now - finished).total_seconds() / 60
+                if since_last_crash_min > recency_min and not in_backoff:
+                    continue
+            elif not in_backoff:
+                continue
+
+            reason = last_term.get("reason", "")
+            exit_code = last_term.get("exitCode")
+            detail = (
+                f"restartCount={restarts} (>= {min_restarts}), "
+                f"inBackoff={in_backoff}, "
+                f"lastTerminated={reason or 'unknown'}"
+            )
+            if exit_code is not None:
+                detail += f"/exit={exit_code}"
+            issues.append({
+                "type": "CrashLoopBackOff",
+                "resource": f"{ns}/{meta.get('name')}:{cs.get('name')}",
+                "detail": detail,
+                "tag": "system-workload" if ns in system else "customer-workload",
+            })
     return issues
 
 
