@@ -290,9 +290,9 @@ solution keeps audit investigation titles issue-descriptive and timestamp-free
 produces an identical title and the platform triage stage (plus the
 `hyperpod-incident-triage` skill) LINKs or SKIPs the repeat instead of emailing
 every cycle. A genuinely new signature (a new Xid type, or the same Xid spreading
-to a new instance group) produces a different title and re-notifies. On top of
-that, the RCA skill emits `Suppress — periodic audit, evidence is stale` when the
-signature set is unchanged, and the email notifier drops `Triage verdict:
+to a new instance group) produces a different title and re-notifies. As a second
+layer, when an audit finds nothing open the RCA skill emits `Suppress — periodic
+audit, no open incidents`, and the email notifier drops `Triage verdict:
 Suppress —*` from delivery.
 
 ## How notifications work
