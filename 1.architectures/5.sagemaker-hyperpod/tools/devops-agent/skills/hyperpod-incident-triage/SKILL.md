@@ -19,8 +19,9 @@ kinds arrive:
 - **Cluster events** (a real HyperPod fault) — the description contains the
   instance group, a `Description:`, and often a `FailureMessage:`.
 - **Periodic audits** (a scheduled health sweep) — the description begins with
-  "Periodic audit invocation for HyperPod cluster" and says the audit should
-  look for open fault chains.
+  either "Periodic audit for HyperPod cluster '<name>' detected N issue(s)"
+  (issues found) or "Daily heartbeat audit for HyperPod cluster" (the once-daily
+  all-clear liveness signal). Both ask the RCA skill to run in audit mode.
 
 ## Linking rules for HyperPod fault events
 
