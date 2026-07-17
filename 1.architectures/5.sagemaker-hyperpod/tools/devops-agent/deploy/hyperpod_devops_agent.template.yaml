@@ -110,9 +110,9 @@ Parameters:
 
   NamePrefix:
     Type: String
-    Default: ""
-    AllowedPattern: "^$|^[a-z0-9][a-z0-9-]{0,18}[a-z0-9]$"
-    Description: "Bucket-safe (lowercased, hyphenated, <=20 char) slug of the cluster name, set by the Makefile. Used to make per-cluster resource names unique so multiple clusters can coexist in one account/region. Empty falls back to the stack name."
+    MinLength: 1
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{0,18}[a-z0-9]$"
+    Description: "Bucket-safe (lowercased, hyphenated, 2-20 char) slug of the cluster name, set by the Makefile. Used to make per-cluster resource names unique so multiple clusters can coexist in one account/region. REQUIRED: it forms the S3 bucket names, which (unlike stack names) forbid uppercase and >63 chars — an empty/StackName fallback would fail mid-create for a console deploy with a stack name like 'HyperPodDevOpsAgent'."
 
   AssetsBucket:
     Type: String
@@ -273,7 +273,6 @@ Conditions:
   HasAgentSpaceDescription: !Not [!Equals [!Ref AgentSpaceDescription, ""]]
   HasAgentSpaceRoleName: !Not [!Equals [!Ref AgentSpaceRoleName, ""]]
   HasWebappRoleName: !Not [!Equals [!Ref WebappRoleName, ""]]
-  HasNamePrefix: !Not [!Equals [!Ref NamePrefix, ""]]
 
 Resources:
 
@@ -703,9 +702,10 @@ Resources:
     Properties:
       # Per-cluster unique so multiple clusters can coexist in one account/region.
       # <=63 chars: 'hpda-markers-' (13) + prefix (<=20) + account (12) + region (<=14) + 2 hyphens = <=61.
-      BucketName: !Sub
-        - "hpda-markers-${Prefix}-${AWS::AccountId}-${AWS::Region}"
-        - Prefix: !If [HasNamePrefix, !Ref NamePrefix, !Ref "AWS::StackName"]
+      # NamePrefix is required + bucket-safe (see its parameter), so it forms the
+      # name directly — no AWS::StackName fallback (stack names allow uppercase /
+      # >63 chars, which are illegal in an S3 bucket name).
+      BucketName: !Sub "hpda-markers-${NamePrefix}-${AWS::AccountId}-${AWS::Region}"
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
