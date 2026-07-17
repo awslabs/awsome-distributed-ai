@@ -294,8 +294,13 @@ Resources:
             Condition:
               StringEquals:
                 "aws:SourceAccount": !Sub "${AWS::AccountId}"
-              ArnLike:
-                "aws:SourceArn": !Sub "arn:aws:aidevops:${AWS::Region}:${AWS::AccountId}:agentspace/*"
+                # Scope to THIS stack's Agent Space, not agentspace/* — otherwise
+                # every per-cluster stack's Agent Space could assume every sibling
+                # stack's monitoring role (managed read policy + that stack's
+                # LCS-bucket grant), defeating the per-cluster isolation. No cycle:
+                # AgentSpace references only WebappRole, and AgentSpaceRole is
+                # consumed by AwsMonitorAssociation/EksAccessEntry created AFTER it.
+                "aws:SourceArn": !GetAtt AgentSpace.Arn
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/AIDevOpsAgentAccessPolicy"
       Policies:
@@ -343,6 +348,9 @@ Resources:
               StringEquals:
                 "aws:SourceAccount": !Sub "${AWS::AccountId}"
               ArnLike:
+                # Stays agentspace/* (unlike AgentSpaceRole): AgentSpace.OperatorApp
+                # references WebappRole.Arn, so scoping this to !GetAtt AgentSpace.Arn
+                # would be a circular dependency. Bounded by aws:SourceAccount above.
                 "aws:SourceArn": !Sub "arn:aws:aidevops:${AWS::Region}:${AWS::AccountId}:agentspace/*"
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/AIDevOpsOperatorAppAccessPolicy"
