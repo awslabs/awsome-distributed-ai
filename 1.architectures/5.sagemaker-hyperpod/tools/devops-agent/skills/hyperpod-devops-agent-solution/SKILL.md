@@ -52,18 +52,25 @@ findings.
 
 ## Daily heartbeat (liveness)
 
-Once per day the audit Lambda fires a **heartbeat** even when the
-cluster is healthy, so operators can see the pipeline is alive. The
-heartbeat is a **silent liveness signal**: it is visible in the console
-and logs but is intentionally **not emailed**. Do not treat a heartbeat
-as an incident.
+Once per day the audit Lambda fires a **heartbeat**. Its purpose is
+**pipeline liveness** — letting operators confirm the solution itself is
+alive and reaching the console — not incident detection (the 15-minute
+audit and the event-driven bridge do that). Do not treat a heartbeat as
+an incident.
 
-Disposition can take either of two paths, both silent: triage typically
-**SKIPs** the heartbeat (the skipped task is itself the console liveness
-signal), or — if it PROCEEDs — RCA emits `Suppress — periodic audit, no
-open incidents`. Either way it is visible in the console and never
-emailed, so an operator looking for a daily "Suppress" verdict may
-instead find a SKIPPED task.
+The heartbeat run still inspects cluster state, so there are two cases:
+
+- **Healthy cluster (the usual case):** an "all clear, no open issues"
+  heartbeat. This is a **silent liveness signal** — visible in the
+  console and logs but intentionally **never emailed**. Disposition is
+  silent either way: triage typically **SKIPs** it (the skipped task is
+  itself the liveness signal), or — if it PROCEEDs — RCA emits
+  `Suppress — periodic audit, no open incidents`. So an operator looking
+  for a daily "Suppress" verdict may instead find a SKIPPED task.
+- **A real issue exists at heartbeat time:** the Lambda builds an
+  *issues* payload (not the all-clear one), which triages and is
+  root-caused like any detection — and **can email**. In that case it is
+  no longer a silent heartbeat.
 
 ## Triage → RCA → notification
 
