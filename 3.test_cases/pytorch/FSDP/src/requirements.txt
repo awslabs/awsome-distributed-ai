@@ -1,6 +1,6 @@
 --extra-index-url https://download.pytorch.org/whl/cu130
 datasets
-torch==2.9.1
+torch==2.12.1+cu130
 torchaudio==2.9.1
 torchvision==0.24.1
 transformers==4.57.6
