@@ -326,7 +326,15 @@ def build_skill_uploader(bucket: str, region: str) -> None:
                     zf.writestr(info, fp.read())
         blob = buf.getvalue()
 
-        key = "lambda/skill_uploader.zip"
+        # Content-address the key: CloudFormation does NOT auto-detect changes to
+        # an S3 deployment package during a stack update (AWS::Lambda::Function
+        # Code docs). A fixed key therefore leaves the deployed function running
+        # stale code after the first deploy — including the CR whose Delete path
+        # gates teardown. The zip is deterministic (fixed timestamps, sorted
+        # members), so its hash moves only when the code moves; a changed hash
+        # yields a new key -> a template diff -> a real function update.
+        digest = hashlib.sha256(blob).hexdigest()[:16]
+        key = f"lambda/skill_uploader-{digest}.zip"
         with tempfile.NamedTemporaryFile(suffix=".zip") as tmp:
             tmp.write(blob)
             tmp.flush()
