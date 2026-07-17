@@ -158,7 +158,7 @@ Parameters:
   ClusterFilter:
     Type: String
     Default: ""
-    Description: "Comma-separated allowlist of HyperPod cluster names to forward. Empty = only this stack's HyperPodClusterName (see the default wiring below); set explicitly to widen or to forward all."
+    Description: "Comma-separated allowlist of HyperPod cluster names to forward. Empty = only this stack's HyperPodClusterName (the empty value is wired to that name below). To widen, list cluster names explicitly; there is no forward-all setting."
 
   DropEventLevels:
     Type: String
