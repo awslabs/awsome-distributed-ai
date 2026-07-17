@@ -90,12 +90,22 @@ echo "    Name prefix:      ${NAME_PREFIX}"
 echo "    Stack name:       ${STACK_NAME}"
 
 # ------------------------------------------------- auto-discover EKS cluster name
-EKS_ARN="$(aws sagemaker describe-cluster \
-    --cluster-name "${HYPERPOD_CLUSTER_NAME}" \
-    --region "${REGION}" \
-    --query 'Orchestrator.Eks.ClusterArn' \
-    --output text 2>/dev/null || echo "")"
-if [[ -n "${EKS_ARN}" && "${EKS_ARN}" != "None" ]]; then
+# One describe-cluster call, WITHOUT suppressing stderr, so a nonexistent cluster
+# (typo) or an API failure (permissions, wrong region) is a hard error — not
+# silently treated as "Slurm". A typo'd name must not deploy a billing-relevant
+# stack that monitors nothing.
+if ! CLUSTER_JSON="$(aws sagemaker describe-cluster \
+        --cluster-name "${HYPERPOD_CLUSTER_NAME}" \
+        --region "${REGION}" --output json)"; then
+    echo "Error: could not describe HyperPod cluster '${HYPERPOD_CLUSTER_NAME}' in ${REGION}." >&2
+    echo "  Verify the cluster name and region (and that your credentials can call" >&2
+    echo "  sagemaker:DescribeCluster). See the error above." >&2
+    exit 1
+fi
+
+# Branch on the presence of the EKS orchestrator ARN in the SUCCESSFUL response.
+EKS_ARN="$(printf '%s' "${CLUSTER_JSON}" | python3 -c "import json,sys; print((json.load(sys.stdin).get('Orchestrator') or {}).get('Eks', {}).get('ClusterArn') or '')")"
+if [[ -n "${EKS_ARN}" ]]; then
     EKS_CLUSTER_NAME="${EKS_ARN##*/}"
     echo "    EKS cluster:      ${EKS_CLUSTER_NAME} (auto-discovered)"
     # Pre-flight: EKS access entries need API/API_AND_CONFIG_MAP auth mode.
@@ -110,15 +120,14 @@ if [[ -n "${EKS_ARN}" && "${EKS_ARN}" != "None" ]]; then
     fi
 else
     EKS_CLUSTER_NAME=""
-    echo "    EKS cluster:      <none — Slurm or undiscovered; EKS access skipped>"
+    echo "    EKS cluster:      <none — Slurm-orchestrated; EKS access skipped>"
     # Continuous Provisioning is a prerequisite for Slurm clusters: without it,
     # SageMaker does not support list-cluster-events (the canonical record of
     # replacement attempts the RCA skill reconstructs its timeline from), and the
     # HyperPod EventBridge event shape differs from what the webhook bridge and
     # skills expect. Warn loudly; don't hard-fail (the operator may accept the
     # reduced coverage, and EKS-orchestrated clusters are always Continuous).
-    PROV_MODE="$(aws sagemaker describe-cluster --cluster-name "${HYPERPOD_CLUSTER_NAME}" \
-        --region "${REGION}" --query 'NodeProvisioningMode' --output text 2>/dev/null || echo "")"
+    PROV_MODE="$(printf '%s' "${CLUSTER_JSON}" | python3 -c "import json,sys; print(json.load(sys.stdin).get('NodeProvisioningMode') or '')")"
     echo "    Provisioning:     ${PROV_MODE:-<none>}"
     if [[ "${PROV_MODE}" != "Continuous" ]]; then
         echo "    WARNING: cluster '${HYPERPOD_CLUSTER_NAME}' is NOT in Continuous Provisioning mode." >&2
