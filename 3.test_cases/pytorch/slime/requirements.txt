@@ -22,7 +22,7 @@
 # pin is required.
 numpy<2
 
-nltk==3.9.4
+nltk==3.10.0
 awscli==1.45.26
 pynvml==13.0.1
 ray[default]==2.55.1
