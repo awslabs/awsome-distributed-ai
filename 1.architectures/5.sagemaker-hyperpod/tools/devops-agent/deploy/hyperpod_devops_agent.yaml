@@ -46,6 +46,8 @@ Metadata:
           - AssetsBucket
           - SkillsVersion
           - SkillsManifest
+          - SkillUploaderS3Bucket
+          - SkillUploaderS3Key
       - Label:
           default: "Webhook bridge"
         Parameters:
@@ -78,6 +80,19 @@ Metadata:
           - AgentSpaceRoleName
           - WebappRoleName
           - LcsBucketArnPattern
+
+# Enforce the SkillUploaderS3Bucket/Key <-> AssetsBucket coupling up front, at
+# CreateChangeSet, instead of failing mid-create on SkillUploaderFunction with an
+# opaque S3 error (which then rolls the whole stack back). When AssetsBucket is
+# set, the skill uploader is created and needs its packaged-Lambda location.
+Rules:
+  SkillUploaderLocationRequiredWithAssets:
+    RuleCondition: !Not [!Equals [!Ref AssetsBucket, ""]]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref SkillUploaderS3Bucket, ""]]
+        AssertDescription: "SkillUploaderS3Bucket is required when AssetsBucket is set (both are populated by 'make deploy')."
+      - Assert: !Not [!Equals [!Ref SkillUploaderS3Key, ""]]
+        AssertDescription: "SkillUploaderS3Key is required when AssetsBucket is set (both are populated by 'make deploy')."
 
 Parameters:
 
