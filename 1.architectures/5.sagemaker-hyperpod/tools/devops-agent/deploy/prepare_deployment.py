@@ -79,6 +79,7 @@ def embed(template_in: str, template_out: str) -> None:
         lines = f.readlines()
 
     out: list[str] = []
+    replaced: set[str] = set()
     for line in lines:
         stripped = line.strip()
         marker = stripped.lstrip("# ").strip()
@@ -88,12 +89,25 @@ def embed(template_in: str, template_out: str) -> None:
             with open(src_path) as sf:
                 for code_line in sf.read().splitlines():
                     out.append((indent + code_line).rstrip() + "\n" if code_line else "\n")
+            replaced.add(marker)
         else:
             out.append(line)
 
+    # Every placeholder MUST be replaced. A renamed/typo'd marker comment would
+    # otherwise leave a ZipFile body that is just the stale comment line, and
+    # 'aws cloudformation deploy' would ship it — for a custom-resource Lambda
+    # that means a comment-only handler that never signals CFN, hanging the stack
+    # for up to an hour before rollback. Fail loudly here instead.
+    missing = set(PLACEHOLDERS) - replaced
+    if missing:
+        sys.exit(
+            f"embed: {len(missing)} placeholder(s) not found in {template_in}: "
+            f"{sorted(missing)}. Check the '# <NAME>_CODE_PLACEHOLDER' markers."
+        )
+
     with open(template_out, "w") as f:
         f.writelines(out)
-    print(f"embedded {len(PLACEHOLDERS)} Lambda sources -> {template_out}")
+    print(f"embedded {len(replaced)} Lambda sources -> {template_out}")
 
 
 def _parse_skill_frontmatter(skill_md: str) -> tuple[str, list[str]]:
