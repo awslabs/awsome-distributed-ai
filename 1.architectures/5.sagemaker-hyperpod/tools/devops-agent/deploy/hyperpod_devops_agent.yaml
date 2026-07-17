@@ -1293,6 +1293,11 @@ Resources:
 
   HyperPodEventRule:
     Type: AWS::Events::Rule
+    # Wait for the webhook secret to be populated before routing events: without
+    # this, a HyperPod event firing during initial create can invoke the bridge
+    # while WebhookSecret is still empty, and GetSecretValue raises. No cycle —
+    # WebhookProvisioner doesn't reference this rule.
+    DependsOn: WebhookProvisioner
     Properties:
       Description: "Route HyperPod cluster events to the DevOps Agent webhook bridge."
       State: ENABLED
@@ -1975,6 +1980,9 @@ Resources:
   PeriodicAuditSchedule:
     Type: AWS::Scheduler::Schedule
     Condition: PeriodicAuditEnabled
+    # See HyperPodEventRule: don't let a scheduled audit fire before the webhook
+    # secret is populated (GetSecretValue would raise).
+    DependsOn: WebhookProvisioner
     Properties:
       ScheduleExpression: !Ref AuditSchedule
       FlexibleTimeWindow:
@@ -1992,6 +2000,9 @@ Resources:
   AuditHeartbeatSchedule:
     Type: AWS::Scheduler::Schedule
     Condition: PeriodicAuditEnabled
+    # See HyperPodEventRule: don't let the heartbeat fire before the webhook
+    # secret is populated (GetSecretValue would raise).
+    DependsOn: WebhookProvisioner
     Properties:
       ScheduleExpression: !Ref HeartbeatSchedule
       FlexibleTimeWindow:
