@@ -33,7 +33,7 @@ def send(event, context, response_status, response_data=None, physical_resource_
         headers={"content-type": "", "content-length": str(len(encoded))},
     )
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:
             print(f"cfnresponse status={resp.status}")
     except Exception as e:  # noqa: BLE001 - CFN will time out if we can't respond
         print(f"cfnresponse send failed: {e!r}")
