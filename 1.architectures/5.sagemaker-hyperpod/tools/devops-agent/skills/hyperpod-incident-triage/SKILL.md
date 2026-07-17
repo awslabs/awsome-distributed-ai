@@ -53,6 +53,13 @@ prevent.
 A periodic audit is a scheduled sweep, not a specific fault. Decide based on
 whether the cluster's condition has **changed** since the last audit:
 
+- **Skip** the **daily heartbeat / all-clear audit** (description begins "Daily
+  heartbeat audit for HyperPod cluster", or otherwise reports no open issues).
+  It carries no fault to investigate — its only job is to show the pipeline is
+  alive, which the task's presence in the console already does. There is nothing
+  for RCA to root-cause, so do not PROCEED it. (This is why a healthy heartbeat
+  is skipped at triage and never reaches RCA — it is the all-clear payload being
+  skipped, not an issue payload.)
 - **Skip** the audit if another periodic-audit investigation for the same
   cluster is **currently in progress** — let it finish rather than starting or
   re-activating a parallel one.
