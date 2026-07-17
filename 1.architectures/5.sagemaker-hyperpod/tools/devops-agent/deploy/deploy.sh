@@ -101,6 +101,24 @@ echo "    HyperPod cluster: ${HYPERPOD_CLUSTER_NAME}"
 echo "    Name prefix:      ${NAME_PREFIX}"
 echo "    Stack name:       ${STACK_NAME}"
 
+# --------------------------------------------- DevOps Agent CFN types preflight
+# The DevOps Agent data-plane API answers in more regions than the CloudFormation
+# resource types are registered in (e.g. us-east-2 has the API but not the types).
+# The stack must live in the monitored cluster's region (the EventBridge rule is
+# regional), so a type-less region is unsupportable — check it BEFORE creating the
+# assets bucket + uploading the ~15 MB uploader zip, rather than failing at
+# CreateChangeSet with "Unrecognized resource types" after that work is done.
+if ! aws cloudformation describe-type --type RESOURCE \
+        --type-name AWS::DevOpsAgent::AgentSpace --region "${REGION}" \
+        >/dev/null 2>&1; then
+    echo "Error: the AWS DevOps Agent CloudFormation resource types are not available in ${REGION}." >&2
+    echo "  The stack must be deployed in the cluster's region, so this region is unsupported." >&2
+    echo "  Confirm availability with:" >&2
+    echo "    aws cloudformation describe-type --type RESOURCE \\" >&2
+    echo "      --type-name AWS::DevOpsAgent::AgentSpace --region ${REGION}" >&2
+    exit 1
+fi
+
 # ------------------------------------------------- auto-discover EKS cluster name
 # One describe-cluster call, WITHOUT suppressing stderr, so a nonexistent cluster
 # (typo) or an API failure (permissions, wrong region) is a hard error — not

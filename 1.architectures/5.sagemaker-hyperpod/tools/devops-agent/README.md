@@ -187,6 +187,7 @@ for Slurm clusters).
 - AWS CLI v2 configured for the target account, with a region set (`aws configure set region <region>`) or `Region` in `params.json`.
 - Python 3.9+ with **boto3 ≥ 1.43.25** installed in the environment you run `make deploy` from — it's bundled into the skill-uploader Lambda (the Lambda runtime's built-in boto3 predates the DevOps Agent Asset API, which first ships in boto3 1.43.25). The deploy fails fast with an install hint if it's missing or too old; it never installs boto3 for you. Install it into a venv, e.g. `python3 -m venv .venv && source .venv/bin/activate && pip install 'boto3>=1.43.25'`.
 - An existing HyperPod cluster (EKS or Slurm orchestrator). For Slurm, **Continuous Provisioning is required** for `list-cluster-events` and the correct EventBridge event format (see [Slurm clusters](#slurm-clusters) below).
+- The **AWS DevOps Agent CloudFormation resource types must be available in the cluster's region** — the DevOps Agent data-plane API answers in more regions than the CFN types are registered in, and the stack must live in the cluster's region. Check with `aws cloudformation describe-type --type RESOURCE --type-name AWS::DevOpsAgent::AgentSpace --region <region>` (`make deploy` preflights this too).
 - Permission to create IAM roles, Secrets Manager secrets, CloudFormation stacks, `aidevops:*`, `eks:CreateAccessEntry`, and (for email) `ses:SendEmail` from a verified sender.
 - An SES-verified sender identity in the target region (and, in SES sandbox, verified recipients).
 
