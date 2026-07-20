@@ -66,14 +66,20 @@ it.
   code change to the pipeline.
 
 Every investigation lands in the DevOps Agent console, where HyperPod events are
-triaged into linked, skipped, and completed investigations (left); each verdict
-email leads with a headline, then a *what happened / likely cause / recommended
-action* breakdown (right):
+triaged into linked, skipped, and completed investigations, and each verdict email
+leads with a headline followed by a *what happened / likely cause / recommended
+action* breakdown:
 
-<p>
-  <img src="./images/incident-response-dashboard.jpeg" alt="DevOps Agent Incident Response dashboard listing HyperPod investigations" width="440" valign="middle">
-  <img src="./images/investigation-verdict-email.jpeg" alt="Verdict email for a HyperPod capacity-shortage investigation, showing headline, what happened, likely cause, and recommended action" width="320" valign="middle">
-</p>
+![DevOps Agent console showing the HyperPod incident dashboard and investigation timeline, alongside verdict emails for GPU-fault, lifecycle-script, and capacity-shortage investigations](./images/screenshots.jpg)
+
+### Ask the agent directly
+
+Beyond the automated emails, you can open any investigation in the DevOps Agent's
+AI chat and ask follow-up questions in plain English — *"Did the GPU error get
+resolved now?"*, *"Are there unhealthy Pods on my cluster?"* — and it answers from
+the live cluster state and the investigation history:
+
+![DevOps Agent AI chat answering whether a GPU failure was resolved, with a root-cause explanation and a timeline of HyperPod's automatic node recovery](./images/screenshot-agent-chat.jpg)
 
 ## Architecture
 
