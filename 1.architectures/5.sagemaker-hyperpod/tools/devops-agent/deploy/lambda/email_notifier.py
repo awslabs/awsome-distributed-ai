@@ -29,7 +29,11 @@ Environment variables:
   MARKER_BUCKET             S3 bucket name for per-execution dedup markers. Required.
   MARKER_PREFIX             Key prefix inside the bucket (default: "emailed/").
   FORCE_SEND                If "1"/"true", bypass every filter (including the
-                            marker check). Useful for debugging.
+                            marker check). Useful for debugging. Note: this
+                            does NOT bypass the journal-fetch-error raise — if
+                            list_journal_records fails we still raise (and let
+                            EventBridge retry) rather than force a content-free
+                            email.
 """
 import datetime
 import html
