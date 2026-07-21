@@ -924,7 +924,7 @@ HyperPod cluster name — check the webhook bridge's payload mapping."
 - `logs:FilterLogEvents`, `logs:DescribeLogStreams` on
   `/aws/sagemaker/Clusters/*`
 - `eks:DescribeCluster` (read-only) and `kubectl get/describe`
-  (via the access entry created by `make eks-access`)
+  (via the `AWS::EKS::AccessEntry` created by the CloudFormation stack)
 - `cloudwatch:GetMetricData` on `ClusterAgent` and
   `SagemakerHealthMonitoringAgent` namespaces — useful for time-series
   confirmation when individual log events are sparse
