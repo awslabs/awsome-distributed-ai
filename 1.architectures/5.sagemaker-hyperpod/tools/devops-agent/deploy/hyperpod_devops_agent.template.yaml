@@ -1,0 +1,977 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Single-template deployment for the HyperPod x AWS DevOps Agent solution.
+#
+# Deploys everything in one stack:
+#   - Foundation: IAM roles, AWS::DevOpsAgent::AgentSpace (with IAM operator app),
+#     and the AWS-monitor association (native resource types).
+#   - EKS access: native AWS::EKS::AccessEntry granting the Agent Space role
+#     read-only kubectl on the underlying EKS cluster (skipped for Slurm).
+#   - Webhook bridge: EventBridge rule on aws.sagemaker HyperPod events -> Lambda
+#     -> HMAC-signed POST to the DevOps Agent generic webhook.
+#   - Periodic audit (toggleable): EventBridge Scheduler -> Lambda -> webhook,
+#     runs the RCA skill in audit mode incl. Kubernetes CrashLoop/NotReady checks.
+#   - Email notifier: EventBridge rule on aws.aidevops Investigation events ->
+#     Lambda -> SES email, with an S3 dedup-marker bucket.
+#   - Two custom resources for the two gaps CloudFormation cannot cover natively:
+#       * WebhookProvisioner - register/associate the eventChannel + capture the
+#         once-shown webhook URL/HMAC secret into Secrets Manager. (No eventChannel
+#         ServiceType; Association does not expose the URL/secret as Fn::GetAtt.)
+#       * SkillUploader - create/update/delete skill assets from the S3 assets
+#         bucket. (No AWS::DevOpsAgent::Asset resource type exists.)
+#
+# Lambda source lives in deploy/lambda/*.py and is embedded at the
+# "# <name>_CODE_PLACEHOLDER" markers by the Makefile at deploy time.
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: "HyperPod x AWS DevOps Agent - single-stack deployment (foundation, EKS access, webhook bridge, periodic audit, email notifier)."
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Required"
+        Parameters:
+          - HyperPodClusterName
+          - EmailSender
+          - EmailRecipients
+      - Label:
+          default: "Auto-discovered (set by the Makefile; override only if needed)"
+        Parameters:
+          - EksClusterName
+          - AgentSpaceName
+          - NamePrefix
+          - AssetsBucket
+          - SkillsVersion
+          - SkillsManifest
+          - SkillUploaderS3Bucket
+          - SkillUploaderS3Key
+      - Label:
+          default: "Webhook bridge"
+        Parameters:
+          - ClusterFilter
+          - DropEventLevels
+      - Label:
+          default: "Periodic audit"
+        Parameters:
+          - EnablePeriodicAudit
+          - AuditSchedule
+          - HeartbeatSchedule
+          - K8sChecksEnabled
+          - CrashLoopMinRestarts
+          - CrashLoopRecencyMinutes
+          - NotReadyNodePercentThreshold
+          - NotReadyDurationMinutes
+          - IgnoreNamespaces
+          - SystemNamespaces
+      - Label:
+          default: "Email notifier"
+        Parameters:
+          - EmailDetailTypes
+          - ConsoleUrlTemplate
+          - ForceSend
+          - MarkerExpirationDays
+      - Label:
+          default: "Advanced"
+        Parameters:
+          - AgentSpaceDescription
+          - AgentSpaceRoleName
+          - WebappRoleName
+          - LcsBucketArnPattern
+
+# Enforce the SkillUploaderS3Bucket/Key <-> AssetsBucket coupling up front, at
+# CreateChangeSet, instead of failing mid-create on SkillUploaderFunction with an
+# opaque S3 error (which then rolls the whole stack back). When AssetsBucket is
+# set, the skill uploader is created and needs its packaged-Lambda location.
+Rules:
+  SkillUploaderLocationRequiredWithAssets:
+    RuleCondition: !Not [!Equals [!Ref AssetsBucket, ""]]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref SkillUploaderS3Bucket, ""]]
+        AssertDescription: "SkillUploaderS3Bucket is required when AssetsBucket is set (both are populated by 'make deploy')."
+      - Assert: !Not [!Equals [!Ref SkillUploaderS3Key, ""]]
+        AssertDescription: "SkillUploaderS3Key is required when AssetsBucket is set (both are populated by 'make deploy')."
+
+Parameters:
+
+  # ----------------------------------------------------------------- Required
+  HyperPodClusterName:
+    Type: String
+    MinLength: 1
+    Description: "Name of the HyperPod cluster this Agent Space monitors. Used to name the Agent Space and to default the webhook cluster filter."
+
+  EmailSender:
+    Type: String
+    MinLength: 1
+    Description: "SES-verified From address (must be verified in this region's SES)."
+
+  EmailRecipients:
+    Type: String
+    MinLength: 1
+    Description: "Comma-separated list of recipient email addresses. Each must be verified if SES is in sandbox mode."
+
+  # ------------------------------------------------- Auto-discovered by Makefile
+  EksClusterName:
+    Type: String
+    Default: ""
+    Description: "Underlying EKS cluster name. The Makefile auto-discovers this from the HyperPod cluster's Orchestrator.Eks.ClusterArn. Leave empty for Slurm clusters (EKS access is then skipped)."
+
+  AgentSpaceName:
+    Type: String
+    Default: ""
+    Description: "Friendly Agent Space name. Empty = hyperpod-<cluster>-devops-agent."
+
+  NamePrefix:
+    Type: String
+    MinLength: 1
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{0,18}[a-z0-9]$"
+    Description: "Bucket-safe (lowercased, hyphenated, 2-20 char) slug of the cluster name, set by the Makefile. Used to make per-cluster resource names unique so multiple clusters can coexist in one account/region. REQUIRED: it forms the S3 bucket names, which (unlike stack names) forbid uppercase and >63 chars — an empty/StackName fallback would fail mid-create for a console deploy with a stack name like 'HyperPodDevOpsAgent'."
+
+  AssetsBucket:
+    Type: String
+    Default: ""
+    Description: "S3 bucket holding staged skill zips (set by 'make sync-skills'). Empty = skill upload is skipped."
+
+  SkillsVersion:
+    Type: String
+    Default: "none"
+    Description: "Content hash of the staged skills (set by 'make sync-skills'). A change forces the SkillUploader custom resource to re-upload."
+
+  SkillsManifest:
+    Type: String
+    Default: "[]"
+    Description: "JSON array of {name, zipKey, agentTypes} describing the staged skills (set by 'make sync-skills')."
+
+  SkillUploaderS3Bucket:
+    Type: String
+    Default: ""
+    Description: "S3 bucket holding the packaged skill-uploader Lambda zip (set by 'make deploy'). Required when AssetsBucket is set."
+
+  SkillUploaderS3Key:
+    Type: String
+    Default: ""
+    Description: "S3 key of the packaged skill-uploader Lambda zip (set by 'make deploy')."
+
+  # -------------------------------------------------------------- Webhook bridge
+  ClusterFilter:
+    Type: String
+    Default: ""
+    Description: "Comma-separated allowlist of HyperPod cluster names to forward. Empty = only this stack's HyperPodClusterName (the empty value is wired to that name below). To widen, list cluster names explicitly; there is no forward-all setting."
+
+  DropEventLevels:
+    Type: String
+    Default: "Info"
+    Description: "Comma-separated EventLevel values to drop (HyperPod 'Cluster Event' detail-type only). Default drops noisy Info-level events."
+
+  # --------------------------------------------------------------- Periodic audit
+  EnablePeriodicAudit:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: "Deploy the 15-minute periodic-audit Scheduler + Lambda. false = live event bridging only."
+
+  AuditSchedule:
+    Type: String
+    Default: "rate(15 minutes)"
+    Description: "EventBridge Scheduler expression for the periodic audit."
+
+  HeartbeatSchedule:
+    Type: String
+    Default: "cron(0 12 * * ? *)"
+    Description: "EventBridge Scheduler expression for the daily heartbeat. Fires one 'all clear' audit per day even when the cluster is healthy, so operators see the pipeline is alive. Default: 12:00 UTC daily."
+
+  K8sChecksEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: "Master switch for Kubernetes-state checks (CrashLoopBackOff, NotReady) during audit mode."
+
+  CrashLoopMinRestarts:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    MaxValue: 10000
+    Description: "Fire only when a container's restartCount reaches this. Kubernetes does not expose loop-start in a snapshot, so restartCount is the crash-evidence signal for a persistent CrashLoopBackOff loop."
+
+  CrashLoopRecencyMinutes:
+    Type: Number
+    Default: 15
+    MinValue: 1
+    MaxValue: 1440
+    Description: "The most recent crash (lastState.terminated.finishedAt) must be within this many minutes to count as an active loop, so a pod that looped then recovered stops firing."
+
+  NotReadyNodePercentThreshold:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 100
+    Description: "Escalate if this percent or more of nodes are NotReady (after the duration gate)."
+
+  NotReadyDurationMinutes:
+    Type: Number
+    Default: 15
+    MinValue: 1
+    MaxValue: 1440
+    Description: "A node must be NotReady for at least this many minutes to count toward the percent threshold."
+
+  IgnoreNamespaces:
+    Type: CommaDelimitedList
+    Default: "kube-public,kube-node-lease"
+    Description: "Namespaces to skip entirely. Must not overlap with SystemNamespaces (the Lambda validates at cold start)."
+
+  SystemNamespaces:
+    Type: CommaDelimitedList
+    Default: "kube-system,aws-hyperpod,amazon-cloudwatch"
+    Description: "Namespaces holding platform workloads; CrashLoop verdicts here are tagged 'system-workload'. Must not overlap with IgnoreNamespaces."
+
+  # ---------------------------------------------------------------- Email notifier
+  EmailDetailTypes:
+    Type: String
+    Default: "Investigation Completed"
+    Description: "Comma-separated EventBridge detail-types to send on. Default: Completed only (one email per incident lifecycle)."
+
+  ConsoleUrlTemplate:
+    Type: String
+    Default: "https://%agent_space_id%.aidevops.global.app.aws/investigation/%task_id%"
+    Description: "Per-investigation Operator Web App URL included in emails. Tokens: %region%, %account%, %agent_space_id%, %task_id%. Points at the Agent Space Operator Web App (<agent_space_id>.aidevops.global.app.aws), where investigations open directly."
+
+  ForceSend:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: "If true, bypass all email filters (dedup, no-findings, suppress). Debugging only."
+
+  MarkerExpirationDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 365
+    Description: "Retention (days) for per-execution email dedup markers before auto-expiry."
+
+  # --------------------------------------------------------------------- Advanced
+  AgentSpaceDescription:
+    Type: String
+    Default: ""
+    Description: "Free-text Agent Space description. Empty = an auto-generated description."
+    MaxLength: 1000
+
+  AgentSpaceRoleName:
+    Type: String
+    Default: ""
+    Description: "Optional explicit name for the role assumed by aidevops.amazonaws.com. Empty = CloudFormation auto-generates a unique name (recommended so multiple clusters can coexist in one account)."
+
+  WebappRoleName:
+    Type: String
+    Default: ""
+    Description: "Optional explicit name for the Operator web app role. Empty = CloudFormation auto-generates a unique name (recommended for multi-cluster)."
+
+  LcsBucketArnPattern:
+    Type: String
+    Default: "arn:aws:s3:::sagemaker-*-bucket"
+    Description: "ARN pattern for HyperPod lifecycle-script buckets, granting the Agent Space role s3:GetObject/ListBucket so RCA can read on_create.sh. Set to '' to skip."
+
+Conditions:
+
+  IsEksCluster: !Not [!Equals [!Ref EksClusterName, ""]]
+  IsClusterFilterSet: !Not [!Equals [!Ref ClusterFilter, ""]]
+  PeriodicAuditEnabled: !Equals [!Ref EnablePeriodicAudit, "true"]
+  # Audit Lambda gets read-only EKS access only when audit is enabled AND the
+  # cluster is EKS (the Lambda inspects Kubernetes state).
+  AuditLambdaNeedsEks: !And
+    - !Condition PeriodicAuditEnabled
+    - !Condition IsEksCluster
+  GrantLcsBucketAccess: !Not [!Equals [!Ref LcsBucketArnPattern, ""]]
+  UploadSkills: !Not [!Equals [!Ref AssetsBucket, ""]]
+  HasAgentSpaceName: !Not [!Equals [!Ref AgentSpaceName, ""]]
+  HasAgentSpaceDescription: !Not [!Equals [!Ref AgentSpaceDescription, ""]]
+  HasAgentSpaceRoleName: !Not [!Equals [!Ref AgentSpaceRoleName, ""]]
+  HasWebappRoleName: !Not [!Equals [!Ref WebappRoleName, ""]]
+
+Resources:
+
+  # ============================================================ Foundation
+
+  AgentSpaceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !If [HasAgentSpaceRoleName, !Ref AgentSpaceRoleName, !Ref "AWS::NoValue"]
+      Description: "AWS DevOps Agent monitoring role (managed by hyperpod_devops_agent solution)."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: aidevops.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Sub "${AWS::AccountId}"
+                # Scope to THIS stack's Agent Space, not agentspace/* — otherwise
+                # every per-cluster stack's Agent Space could assume every sibling
+                # stack's monitoring role (managed read policy + that stack's
+                # LCS-bucket grant), defeating the per-cluster isolation. No cycle:
+                # AgentSpace references only WebappRole, and AgentSpaceRole is
+                # consumed by AwsMonitorAssociation/EksAccessEntry created AFTER it.
+                "aws:SourceArn": !GetAtt AgentSpace.Arn
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AIDevOpsAgentAccessPolicy"
+      Policies:
+        - PolicyName: AllowCreateServiceLinkedRoles
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AllowResourceExplorerServiceLinkedRole
+                Effect: Allow
+                Action:
+                  - iam:CreateServiceLinkedRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/aws-service-role/resource-explorer-2.amazonaws.com/AWSServiceRoleForResourceExplorer"
+        - !If
+          - GrantLcsBucketAccess
+          - PolicyName: AllowLcsBucketRead
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Sid: ReadLifecycleScripts
+                  Effect: Allow
+                  Action:
+                    - s3:GetObject
+                    - s3:ListBucket
+                  Resource:
+                    - !Ref LcsBucketArnPattern
+                    - !Sub "${LcsBucketArnPattern}/*"
+          - !Ref AWS::NoValue
+
+  WebappRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !If [HasWebappRoleName, !Ref WebappRoleName, !Ref "AWS::NoValue"]
+      Description: "AWS DevOps Agent Operator web app role (managed by hyperpod_devops_agent solution)."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: aidevops.amazonaws.com
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Sub "${AWS::AccountId}"
+              ArnLike:
+                # Stays agentspace/* (unlike AgentSpaceRole): AgentSpace.OperatorApp
+                # references WebappRole.Arn, so scoping this to !GetAtt AgentSpace.Arn
+                # would be a circular dependency. Bounded by aws:SourceAccount above.
+                "aws:SourceArn": !Sub "arn:aws:aidevops:${AWS::Region}:${AWS::AccountId}:agentspace/*"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AIDevOpsOperatorAppAccessPolicy"
+
+  AgentSpace:
+    Type: AWS::DevOpsAgent::AgentSpace
+    Properties:
+      Name: !If
+        - HasAgentSpaceName
+        - !Ref AgentSpaceName
+        - !Sub "hyperpod-${HyperPodClusterName}-devops-agent"
+      Description: !If
+        - HasAgentSpaceDescription
+        - !Ref AgentSpaceDescription
+        - !Sub "AWS DevOps Agent monitoring HyperPod cluster ${HyperPodClusterName}."
+      OperatorApp:
+        Iam:
+          OperatorAppRoleArn: !GetAtt WebappRole.Arn
+
+  AwsMonitorAssociation:
+    Type: AWS::DevOpsAgent::Association
+    Properties:
+      AgentSpaceId: !GetAtt AgentSpace.AgentSpaceId
+      ServiceId: aws
+      Configuration:
+        Aws:
+          AccountId: !Sub "${AWS::AccountId}"
+          AccountType: monitor
+          AssumableRoleArn: !GetAtt AgentSpaceRole.Arn
+
+  # ============================================================ EKS access (native)
+
+  EksAccessEntry:
+    Type: AWS::EKS::AccessEntry
+    Condition: IsEksCluster
+    Properties:
+      ClusterName: !Ref EksClusterName
+      PrincipalArn: !GetAtt AgentSpaceRole.Arn
+      Type: STANDARD
+      AccessPolicies:
+        - PolicyArn: "arn:aws:eks::aws:cluster-access-policy/AmazonAIOpsAssistantPolicy"
+          AccessScope:
+            Type: cluster
+
+  # Read-only cluster access for the audit Lambda itself (distinct principal from
+  # the Agent Space role — an access entry is keyed to exactly one IAM ARN). Used
+  # by the Lambda's own CrashLoopBackOff / NotReady detection in lambda mode.
+  AuditLambdaEksAccessEntry:
+    Type: AWS::EKS::AccessEntry
+    Condition: AuditLambdaNeedsEks
+    Properties:
+      ClusterName: !Ref EksClusterName
+      PrincipalArn: !GetAtt PeriodicAuditExecutionRole.Arn
+      Type: STANDARD
+      # AmazonAIOpsAssistantPolicy (read-only) rather than AmazonEKSViewPolicy:
+      # the EKS "view" role excludes cluster-scoped resources like nodes, so it
+      # can't satisfy the NotReady-node check. AIOpsAssistant is the same
+      # read-only policy the Agent Space role uses and can list pods AND nodes.
+      AccessPolicies:
+        - PolicyArn: "arn:aws:eks::aws:cluster-access-policy/AmazonAIOpsAssistantPolicy"
+          AccessScope:
+            Type: cluster
+
+  # ============================================================ Webhook secret + provisioner (CR #1)
+
+  WebhookSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "hyperpod-devops-agent/${HyperPodClusterName}/webhook"
+      Description: "AWS DevOps Agent generic webhook {url, secret} for HyperPod cluster events. Populated by the WebhookProvisioner custom resource."
+
+  WebhookProvisionerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WebhookProvisionerPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - aidevops:RegisterService
+                  - aidevops:DeregisterService
+                  - aidevops:AssociateService
+                  - aidevops:DisassociateService
+                  - aidevops:GetAssociation
+                  - aidevops:ListAssociations
+                  - aidevops:ListAgentSpaces
+                  - aidevops:DescribeServices
+                  - aidevops:ListServices
+                  - aidevops:GetService
+                  - aidevops:ListWebhooks
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                Resource: !Ref WebhookSecret
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
+
+  WebhookProvisionerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt WebhookProvisionerRole.Arn
+      Runtime: python3.13
+      Handler: index.handler
+      Timeout: 120
+      Code:
+        ZipFile: |
+          # CR_WEBHOOK_PROVISIONER_CODE_PLACEHOLDER
+
+  WebhookProvisioner:
+    Type: Custom::WebhookProvisioner
+    # Ordering vs. AgentSpace + WebhookSecret is enforced by the GetAtt/Ref
+    # references below: this resource is created after them and (critically)
+    # deleted BEFORE them, so the eventChannel is disassociated before the
+    # AgentSpace is torn down (a leftover association blocks AgentSpace delete).
+    Properties:
+      ServiceToken: !GetAtt WebhookProvisionerFunction.Arn
+      AgentSpaceId: !GetAtt AgentSpace.AgentSpaceId
+      SecretArn: !Ref WebhookSecret
+
+  # ============================================================ Webhook bridge
+
+  WebhookBridgeExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WebhookBridgeExecutionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref WebhookSecret
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
+              - Effect: Allow
+                Action:
+                  - sagemaker:DescribeClusterEvent
+                Resource: "*"
+
+  WebhookBridgeFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt WebhookBridgeExecutionRole.Arn
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Timeout: 30
+      Environment:
+        Variables:
+          WEBHOOK_SECRET_ARN: !Ref WebhookSecret
+          WEBHOOK_CLUSTER_FILTER: !If
+            - IsClusterFilterSet
+            - !Ref ClusterFilter
+            - !Ref HyperPodClusterName
+          WEBHOOK_DROP_EVENT_LEVELS: !Ref DropEventLevels
+      Code:
+        ZipFile: |
+          # WEBHOOK_BRIDGE_CODE_PLACEHOLDER
+
+  WebhookBridgeEventRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgeInvokeLambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt WebhookBridgeFunction.Arn
+
+  HyperPodEventRule:
+    Type: AWS::Events::Rule
+    # Wait for the webhook secret to be populated before routing events: without
+    # this, a HyperPod event firing during initial create can invoke the bridge
+    # while WebhookSecret is still empty, and GetSecretValue raises. No cycle —
+    # WebhookProvisioner doesn't reference this rule.
+    DependsOn: WebhookProvisioner
+    Properties:
+      Description: "Route HyperPod cluster events to the DevOps Agent webhook bridge."
+      State: ENABLED
+      EventPattern: |
+        {
+          "source": ["aws.sagemaker"],
+          "detail-type": [
+            "SageMaker HyperPod Cluster State Change",
+            "SageMaker HyperPod Cluster Node Health Event",
+            "SageMaker HyperPod Cluster Event"
+          ]
+        }
+      Targets:
+        - Arn: !GetAtt WebhookBridgeFunction.Arn
+          Id: "WebhookBridgeLambdaTarget"
+          RoleArn: !GetAtt WebhookBridgeEventRole.Arn
+
+  # ============================================================ Periodic audit (toggleable)
+
+  PeriodicAuditExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: PeriodicAuditEnabled
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PeriodicAuditExecutionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref WebhookSecret
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
+              # The audit Lambda reads Kubernetes Pod/Node state via the EKS
+              # API. Only eks:DescribeCluster is needed here (to get the API
+              # endpoint + CA); the K8s reads themselves are authorized by the
+              # Lambda's EKS access entry, not IAM. HyperPod control-plane faults
+              # are handled event-driven by the bridge, so no sagemaker perms.
+              # Scoped to this stack's EKS cluster, and only granted when there
+              # is one — on Slurm (no EksClusterName) the audit never calls it.
+              - !If
+                - AuditLambdaNeedsEks
+                - Effect: Allow
+                  Action:
+                    - eks:DescribeCluster
+                  Resource: !Sub "arn:aws:eks:${AWS::Region}:${AWS::AccountId}:cluster/${EksClusterName}"
+                - !Ref "AWS::NoValue"
+
+  PeriodicAuditFunction:
+    Type: AWS::Lambda::Function
+    Condition: PeriodicAuditEnabled
+    Properties:
+      Role: !GetAtt PeriodicAuditExecutionRole.Arn
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Timeout: 60
+      Environment:
+        Variables:
+          WEBHOOK_SECRET_ARN: !Ref WebhookSecret
+          CLUSTER_NAME: !Ref HyperPodClusterName
+          EKS_CLUSTER_NAME: !Ref EksClusterName
+          AWS_ACCOUNT_ID: !Sub "${AWS::AccountId}"
+          K8S_CHECKS_ENABLED: !Ref K8sChecksEnabled
+          CRASHLOOP_MIN_RESTARTS: !Ref CrashLoopMinRestarts
+          CRASHLOOP_RECENCY_MINUTES: !Ref CrashLoopRecencyMinutes
+          NOT_READY_NODE_PERCENT_THRESHOLD: !Ref NotReadyNodePercentThreshold
+          NOT_READY_DURATION_MINUTES: !Ref NotReadyDurationMinutes
+          IGNORE_NAMESPACES: !Join [",", !Ref IgnoreNamespaces]
+          SYSTEM_NAMESPACES: !Join [",", !Ref SystemNamespaces]
+      Code:
+        ZipFile: |
+          # PERIODIC_AUDIT_CODE_PLACEHOLDER
+
+  PeriodicAuditSchedulerRole:
+    Type: AWS::IAM::Role
+    Condition: PeriodicAuditEnabled
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SchedulerInvokeLambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt PeriodicAuditFunction.Arn
+
+  PeriodicAuditSchedule:
+    Type: AWS::Scheduler::Schedule
+    Condition: PeriodicAuditEnabled
+    # See HyperPodEventRule: don't let a scheduled audit fire before the webhook
+    # secret is populated (GetSecretValue would raise).
+    DependsOn: WebhookProvisioner
+    Properties:
+      ScheduleExpression: !Ref AuditSchedule
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      State: ENABLED
+      Description: "Periodic HyperPod audit. In lambda mode the Lambda inspects the cluster and only invokes an investigation when a real issue is found."
+      Target:
+        Arn: !GetAtt PeriodicAuditFunction.Arn
+        RoleArn: !GetAtt PeriodicAuditSchedulerRole.Arn
+        Input: '{"trigger":"periodic"}'
+
+  # Daily heartbeat: fires one "all clear" audit per day even when healthy, so
+  # operators see the pipeline is alive. Reuses the same Lambda + scheduler role;
+  # the "heartbeat" input forces a webhook POST.
+  AuditHeartbeatSchedule:
+    Type: AWS::Scheduler::Schedule
+    Condition: PeriodicAuditEnabled
+    # See HyperPodEventRule: don't let the heartbeat fire before the webhook
+    # secret is populated (GetSecretValue would raise).
+    DependsOn: WebhookProvisioner
+    Properties:
+      ScheduleExpression: !Ref HeartbeatSchedule
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      State: ENABLED
+      Description: "Daily HyperPod audit heartbeat — forces one 'all clear' investigation per day so the pipeline's liveness is visible."
+      Target:
+        Arn: !GetAtt PeriodicAuditFunction.Arn
+        RoleArn: !GetAtt PeriodicAuditSchedulerRole.Arn
+        Input: '{"trigger":"heartbeat"}'
+
+  # ============================================================ Email notifier
+
+  MarkerBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      # Per-cluster unique so multiple clusters can coexist in one account/region.
+      # <=63 chars: 'hpda-markers-' (13) + prefix (<=20) + account (12) + region (<=14) + 2 hyphens = <=61.
+      # NamePrefix is required + bucket-safe (see its parameter), so it forms the
+      # name directly — no AWS::StackName fallback (stack names allow uppercase /
+      # >63 chars, which are illegal in an S3 bucket name).
+      BucketName: !Sub "hpda-markers-${NamePrefix}-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldMarkers
+            Status: Enabled
+            ExpirationInDays: !Ref MarkerExpirationDays
+
+  EmailNotifierExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EmailNotifierExecutionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    "ses:FromAddress": !Ref EmailSender
+              - Effect: Allow
+                Action:
+                  - aidevops:GetBacklogTask
+                  - aidevops:ListJournalRecords
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${MarkerBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt MarkerBucket.Arn
+              # Custom metric emitted when a dedup-marker write fails (so
+              # "duplicate emails likely" is alarmable). PutMetricData does not
+              # support resource-level scoping; the Namespace condition limits it
+              # to this solution's metrics.
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    "cloudwatch:namespace": "HyperPodDevOpsAgent"
+
+  EmailNotifierFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt EmailNotifierExecutionRole.Arn
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Timeout: 30
+      Environment:
+        Variables:
+          EMAIL_SENDER: !Ref EmailSender
+          EMAIL_RECIPIENTS: !Ref EmailRecipients
+          EMAIL_DETAIL_TYPES: !Ref EmailDetailTypes
+          CONSOLE_URL_TEMPLATE: !Ref ConsoleUrlTemplate
+          FORCE_SEND: !Ref ForceSend
+          MARKER_BUCKET: !Ref MarkerBucket
+          MARKER_PREFIX: "emailed/"
+      Code:
+        ZipFile: |
+          # EMAIL_NOTIFIER_CODE_PLACEHOLDER
+
+  EmailNotifierEventRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgeInvokeLambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt EmailNotifierFunction.Arn
+
+  InvestigationLifecycleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "Route THIS Agent Space's investigation lifecycle events to the email notifier."
+      State: ENABLED
+      # Scope to THIS stack's Agent Space. Without the agent_space_id filter,
+      # every stack's notifier matches every cluster's investigations account-wide,
+      # producing one duplicate email per deployed stack.
+      EventPattern:
+        source:
+          - aws.aidevops
+        detail-type:
+          - prefix: "Investigation"
+        detail:
+          metadata:
+            agent_space_id:
+              - !GetAtt AgentSpace.AgentSpaceId
+      Targets:
+        - Arn: !GetAtt EmailNotifierFunction.Arn
+          Id: "EmailNotifierTarget"
+          RoleArn: !GetAtt EmailNotifierEventRole.Arn
+
+  # ============================================================ Skill uploader (CR #2)
+
+  SkillUploaderRole:
+    Type: AWS::IAM::Role
+    Condition: UploadSkills
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SkillUploaderPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - aidevops:ListAssets
+                  - aidevops:GetAsset
+                  - aidevops:CreateAsset
+                  - aidevops:UpdateAsset
+                  - aidevops:DeleteAsset
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "arn:aws:s3:::${AssetsBucket}/*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
+
+  SkillUploaderFunction:
+    Type: AWS::Lambda::Function
+    Condition: UploadSkills
+    Properties:
+      Role: !GetAtt SkillUploaderRole.Arn
+      Runtime: python3.13
+      Handler: index.handler
+      Timeout: 120
+      # Packaged as an S3 zip (not inline) because it bundles a current boto3 —
+      # the Lambda runtime's bundled boto3 predates the DevOps Agent Asset API.
+      # Built + uploaded by prepare_deployment.py build-skill-uploader.
+      Code:
+        S3Bucket: !Ref SkillUploaderS3Bucket
+        S3Key: !Ref SkillUploaderS3Key
+
+  SkillUploader:
+    Type: Custom::SkillUploader
+    Condition: UploadSkills
+    # Ordering vs. AgentSpace is enforced by the GetAtt reference below: created
+    # after the AgentSpace, deleted before it, so skill assets are removed before
+    # the AgentSpace is torn down.
+    Properties:
+      ServiceToken: !GetAtt SkillUploaderFunction.Arn
+      AgentSpaceId: !GetAtt AgentSpace.AgentSpaceId
+      AssetsBucket: !Ref AssetsBucket
+      SkillsVersion: !Ref SkillsVersion
+      Manifest: !Ref SkillsManifest
+
+Outputs:
+
+  AgentSpaceId:
+    Value: !GetAtt AgentSpace.AgentSpaceId
+    Description: "Unique identifier of the Agent Space."
+
+  AgentSpaceArn:
+    Value: !GetAtt AgentSpace.Arn
+    Description: "ARN of the Agent Space."
+
+  AgentSpaceRoleArn:
+    Value: !GetAtt AgentSpaceRole.Arn
+    Description: "ARN of the Agent Space monitoring role (also the EKS access-entry principal)."
+
+  WebhookSecretArn:
+    Value: !Ref WebhookSecret
+    Description: "ARN of the Secrets Manager secret holding the webhook {url, secret}."
+
+  ConsoleUrl:
+    Value: !Sub "https://${AgentSpace.AgentSpaceId}.aidevops.global.app.aws/home"
+    Description: "AWS DevOps Agent Operator Web App URL for this Agent Space."
+
+  MarkerBucketName:
+    Value: !Ref MarkerBucket
+    Description: "S3 bucket storing per-execution email dedup markers."
+
+  WebhookBridgeFunctionName:
+    Value: !Ref WebhookBridgeFunction
+    Description: "Name of the webhook bridge Lambda (for log tailing)."
+
+  PeriodicAuditFunctionName:
+    Condition: PeriodicAuditEnabled
+    Value: !Ref PeriodicAuditFunction
+    Description: "Name of the periodic-audit Lambda (for log tailing)."
+
+  EmailNotifierFunctionName:
+    Value: !Ref EmailNotifierFunction
+    Description: "Name of the email notifier Lambda (for log tailing)."

@@ -1,0 +1,3037 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Single-template deployment for the HyperPod x AWS DevOps Agent solution.
+#
+# Deploys everything in one stack:
+#   - Foundation: IAM roles, AWS::DevOpsAgent::AgentSpace (with IAM operator app),
+#     and the AWS-monitor association (native resource types).
+#   - EKS access: native AWS::EKS::AccessEntry granting the Agent Space role
+#     read-only kubectl on the underlying EKS cluster (skipped for Slurm).
+#   - Webhook bridge: EventBridge rule on aws.sagemaker HyperPod events -> Lambda
+#     -> HMAC-signed POST to the DevOps Agent generic webhook.
+#   - Periodic audit (toggleable): EventBridge Scheduler -> Lambda -> webhook,
+#     runs the RCA skill in audit mode incl. Kubernetes CrashLoop/NotReady checks.
+#   - Email notifier: EventBridge rule on aws.aidevops Investigation events ->
+#     Lambda -> SES email, with an S3 dedup-marker bucket.
+#   - Two custom resources for the two gaps CloudFormation cannot cover natively:
+#       * WebhookProvisioner - register/associate the eventChannel + capture the
+#         once-shown webhook URL/HMAC secret into Secrets Manager. (No eventChannel
+#         ServiceType; Association does not expose the URL/secret as Fn::GetAtt.)
+#       * SkillUploader - create/update/delete skill assets from the S3 assets
+#         bucket. (No AWS::DevOpsAgent::Asset resource type exists.)
+#
+# Lambda source lives in deploy/lambda/*.py and is embedded at the
+# "# <name>_CODE_PLACEHOLDER" markers by the Makefile at deploy time.
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: "HyperPod x AWS DevOps Agent - single-stack deployment (foundation, EKS access, webhook bridge, periodic audit, email notifier)."
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Required"
+        Parameters:
+          - HyperPodClusterName
+          - EmailSender
+          - EmailRecipients
+      - Label:
+          default: "Auto-discovered (set by the Makefile; override only if needed)"
+        Parameters:
+          - EksClusterName
+          - AgentSpaceName
+          - NamePrefix
+          - AssetsBucket
+          - SkillsVersion
+          - SkillsManifest
+          - SkillUploaderS3Bucket
+          - SkillUploaderS3Key
+      - Label:
+          default: "Webhook bridge"
+        Parameters:
+          - ClusterFilter
+          - DropEventLevels
+      - Label:
+          default: "Periodic audit"
+        Parameters:
+          - EnablePeriodicAudit
+          - AuditSchedule
+          - HeartbeatSchedule
+          - K8sChecksEnabled
+          - CrashLoopMinRestarts
+          - CrashLoopRecencyMinutes
+          - NotReadyNodePercentThreshold
+          - NotReadyDurationMinutes
+          - IgnoreNamespaces
+          - SystemNamespaces
+      - Label:
+          default: "Email notifier"
+        Parameters:
+          - EmailDetailTypes
+          - ConsoleUrlTemplate
+          - ForceSend
+          - MarkerExpirationDays
+      - Label:
+          default: "Advanced"
+        Parameters:
+          - AgentSpaceDescription
+          - AgentSpaceRoleName
+          - WebappRoleName
+          - LcsBucketArnPattern
+
+# Enforce the SkillUploaderS3Bucket/Key <-> AssetsBucket coupling up front, at
+# CreateChangeSet, instead of failing mid-create on SkillUploaderFunction with an
+# opaque S3 error (which then rolls the whole stack back). When AssetsBucket is
+# set, the skill uploader is created and needs its packaged-Lambda location.
+Rules:
+  SkillUploaderLocationRequiredWithAssets:
+    RuleCondition: !Not [!Equals [!Ref AssetsBucket, ""]]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref SkillUploaderS3Bucket, ""]]
+        AssertDescription: "SkillUploaderS3Bucket is required when AssetsBucket is set (both are populated by 'make deploy')."
+      - Assert: !Not [!Equals [!Ref SkillUploaderS3Key, ""]]
+        AssertDescription: "SkillUploaderS3Key is required when AssetsBucket is set (both are populated by 'make deploy')."
+
+Parameters:
+
+  # ----------------------------------------------------------------- Required
+  HyperPodClusterName:
+    Type: String
+    MinLength: 1
+    Description: "Name of the HyperPod cluster this Agent Space monitors. Used to name the Agent Space and to default the webhook cluster filter."
+
+  EmailSender:
+    Type: String
+    MinLength: 1
+    Description: "SES-verified From address (must be verified in this region's SES)."
+
+  EmailRecipients:
+    Type: String
+    MinLength: 1
+    Description: "Comma-separated list of recipient email addresses. Each must be verified if SES is in sandbox mode."
+
+  # ------------------------------------------------- Auto-discovered by Makefile
+  EksClusterName:
+    Type: String
+    Default: ""
+    Description: "Underlying EKS cluster name. The Makefile auto-discovers this from the HyperPod cluster's Orchestrator.Eks.ClusterArn. Leave empty for Slurm clusters (EKS access is then skipped)."
+
+  AgentSpaceName:
+    Type: String
+    Default: ""
+    Description: "Friendly Agent Space name. Empty = hyperpod-<cluster>-devops-agent."
+
+  NamePrefix:
+    Type: String
+    MinLength: 1
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{0,18}[a-z0-9]$"
+    Description: "Bucket-safe (lowercased, hyphenated, 2-20 char) slug of the cluster name, set by the Makefile. Used to make per-cluster resource names unique so multiple clusters can coexist in one account/region. REQUIRED: it forms the S3 bucket names, which (unlike stack names) forbid uppercase and >63 chars — an empty/StackName fallback would fail mid-create for a console deploy with a stack name like 'HyperPodDevOpsAgent'."
+
+  AssetsBucket:
+    Type: String
+    Default: ""
+    Description: "S3 bucket holding staged skill zips (set by 'make sync-skills'). Empty = skill upload is skipped."
+
+  SkillsVersion:
+    Type: String
+    Default: "none"
+    Description: "Content hash of the staged skills (set by 'make sync-skills'). A change forces the SkillUploader custom resource to re-upload."
+
+  SkillsManifest:
+    Type: String
+    Default: "[]"
+    Description: "JSON array of {name, zipKey, agentTypes} describing the staged skills (set by 'make sync-skills')."
+
+  SkillUploaderS3Bucket:
+    Type: String
+    Default: ""
+    Description: "S3 bucket holding the packaged skill-uploader Lambda zip (set by 'make deploy'). Required when AssetsBucket is set."
+
+  SkillUploaderS3Key:
+    Type: String
+    Default: ""
+    Description: "S3 key of the packaged skill-uploader Lambda zip (set by 'make deploy')."
+
+  # -------------------------------------------------------------- Webhook bridge
+  ClusterFilter:
+    Type: String
+    Default: ""
+    Description: "Comma-separated allowlist of HyperPod cluster names to forward. Empty = only this stack's HyperPodClusterName (the empty value is wired to that name below). To widen, list cluster names explicitly; there is no forward-all setting."
+
+  DropEventLevels:
+    Type: String
+    Default: "Info"
+    Description: "Comma-separated EventLevel values to drop (HyperPod 'Cluster Event' detail-type only). Default drops noisy Info-level events."
+
+  # --------------------------------------------------------------- Periodic audit
+  EnablePeriodicAudit:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: "Deploy the 15-minute periodic-audit Scheduler + Lambda. false = live event bridging only."
+
+  AuditSchedule:
+    Type: String
+    Default: "rate(15 minutes)"
+    Description: "EventBridge Scheduler expression for the periodic audit."
+
+  HeartbeatSchedule:
+    Type: String
+    Default: "cron(0 12 * * ? *)"
+    Description: "EventBridge Scheduler expression for the daily heartbeat. Fires one 'all clear' audit per day even when the cluster is healthy, so operators see the pipeline is alive. Default: 12:00 UTC daily."
+
+  K8sChecksEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: "Master switch for Kubernetes-state checks (CrashLoopBackOff, NotReady) during audit mode."
+
+  CrashLoopMinRestarts:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    MaxValue: 10000
+    Description: "Fire only when a container's restartCount reaches this. Kubernetes does not expose loop-start in a snapshot, so restartCount is the crash-evidence signal for a persistent CrashLoopBackOff loop."
+
+  CrashLoopRecencyMinutes:
+    Type: Number
+    Default: 15
+    MinValue: 1
+    MaxValue: 1440
+    Description: "The most recent crash (lastState.terminated.finishedAt) must be within this many minutes to count as an active loop, so a pod that looped then recovered stops firing."
+
+  NotReadyNodePercentThreshold:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 100
+    Description: "Escalate if this percent or more of nodes are NotReady (after the duration gate)."
+
+  NotReadyDurationMinutes:
+    Type: Number
+    Default: 15
+    MinValue: 1
+    MaxValue: 1440
+    Description: "A node must be NotReady for at least this many minutes to count toward the percent threshold."
+
+  IgnoreNamespaces:
+    Type: CommaDelimitedList
+    Default: "kube-public,kube-node-lease"
+    Description: "Namespaces to skip entirely. Must not overlap with SystemNamespaces (the Lambda validates at cold start)."
+
+  SystemNamespaces:
+    Type: CommaDelimitedList
+    Default: "kube-system,aws-hyperpod,amazon-cloudwatch"
+    Description: "Namespaces holding platform workloads; CrashLoop verdicts here are tagged 'system-workload'. Must not overlap with IgnoreNamespaces."
+
+  # ---------------------------------------------------------------- Email notifier
+  EmailDetailTypes:
+    Type: String
+    Default: "Investigation Completed"
+    Description: "Comma-separated EventBridge detail-types to send on. Default: Completed only (one email per incident lifecycle)."
+
+  ConsoleUrlTemplate:
+    Type: String
+    Default: "https://%agent_space_id%.aidevops.global.app.aws/investigation/%task_id%"
+    Description: "Per-investigation Operator Web App URL included in emails. Tokens: %region%, %account%, %agent_space_id%, %task_id%. Points at the Agent Space Operator Web App (<agent_space_id>.aidevops.global.app.aws), where investigations open directly."
+
+  ForceSend:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: "If true, bypass all email filters (dedup, no-findings, suppress). Debugging only."
+
+  MarkerExpirationDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 365
+    Description: "Retention (days) for per-execution email dedup markers before auto-expiry."
+
+  # --------------------------------------------------------------------- Advanced
+  AgentSpaceDescription:
+    Type: String
+    Default: ""
+    Description: "Free-text Agent Space description. Empty = an auto-generated description."
+    MaxLength: 1000
+
+  AgentSpaceRoleName:
+    Type: String
+    Default: ""
+    Description: "Optional explicit name for the role assumed by aidevops.amazonaws.com. Empty = CloudFormation auto-generates a unique name (recommended so multiple clusters can coexist in one account)."
+
+  WebappRoleName:
+    Type: String
+    Default: ""
+    Description: "Optional explicit name for the Operator web app role. Empty = CloudFormation auto-generates a unique name (recommended for multi-cluster)."
+
+  LcsBucketArnPattern:
+    Type: String
+    Default: "arn:aws:s3:::sagemaker-*-bucket"
+    Description: "ARN pattern for HyperPod lifecycle-script buckets, granting the Agent Space role s3:GetObject/ListBucket so RCA can read on_create.sh. Set to '' to skip."
+
+Conditions:
+
+  IsEksCluster: !Not [!Equals [!Ref EksClusterName, ""]]
+  IsClusterFilterSet: !Not [!Equals [!Ref ClusterFilter, ""]]
+  PeriodicAuditEnabled: !Equals [!Ref EnablePeriodicAudit, "true"]
+  # Audit Lambda gets read-only EKS access only when audit is enabled AND the
+  # cluster is EKS (the Lambda inspects Kubernetes state).
+  AuditLambdaNeedsEks: !And
+    - !Condition PeriodicAuditEnabled
+    - !Condition IsEksCluster
+  GrantLcsBucketAccess: !Not [!Equals [!Ref LcsBucketArnPattern, ""]]
+  UploadSkills: !Not [!Equals [!Ref AssetsBucket, ""]]
+  HasAgentSpaceName: !Not [!Equals [!Ref AgentSpaceName, ""]]
+  HasAgentSpaceDescription: !Not [!Equals [!Ref AgentSpaceDescription, ""]]
+  HasAgentSpaceRoleName: !Not [!Equals [!Ref AgentSpaceRoleName, ""]]
+  HasWebappRoleName: !Not [!Equals [!Ref WebappRoleName, ""]]
+
+Resources:
+
+  # ============================================================ Foundation
+
+  AgentSpaceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !If [HasAgentSpaceRoleName, !Ref AgentSpaceRoleName, !Ref "AWS::NoValue"]
+      Description: "AWS DevOps Agent monitoring role (managed by hyperpod_devops_agent solution)."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: aidevops.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Sub "${AWS::AccountId}"
+                # Scope to THIS stack's Agent Space, not agentspace/* — otherwise
+                # every per-cluster stack's Agent Space could assume every sibling
+                # stack's monitoring role (managed read policy + that stack's
+                # LCS-bucket grant), defeating the per-cluster isolation. No cycle:
+                # AgentSpace references only WebappRole, and AgentSpaceRole is
+                # consumed by AwsMonitorAssociation/EksAccessEntry created AFTER it.
+                "aws:SourceArn": !GetAtt AgentSpace.Arn
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AIDevOpsAgentAccessPolicy"
+      Policies:
+        - PolicyName: AllowCreateServiceLinkedRoles
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AllowResourceExplorerServiceLinkedRole
+                Effect: Allow
+                Action:
+                  - iam:CreateServiceLinkedRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/aws-service-role/resource-explorer-2.amazonaws.com/AWSServiceRoleForResourceExplorer"
+        - !If
+          - GrantLcsBucketAccess
+          - PolicyName: AllowLcsBucketRead
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Sid: ReadLifecycleScripts
+                  Effect: Allow
+                  Action:
+                    - s3:GetObject
+                    - s3:ListBucket
+                  Resource:
+                    - !Ref LcsBucketArnPattern
+                    - !Sub "${LcsBucketArnPattern}/*"
+          - !Ref AWS::NoValue
+
+  WebappRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !If [HasWebappRoleName, !Ref WebappRoleName, !Ref "AWS::NoValue"]
+      Description: "AWS DevOps Agent Operator web app role (managed by hyperpod_devops_agent solution)."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: aidevops.amazonaws.com
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Sub "${AWS::AccountId}"
+              ArnLike:
+                # Stays agentspace/* (unlike AgentSpaceRole): AgentSpace.OperatorApp
+                # references WebappRole.Arn, so scoping this to !GetAtt AgentSpace.Arn
+                # would be a circular dependency. Bounded by aws:SourceAccount above.
+                "aws:SourceArn": !Sub "arn:aws:aidevops:${AWS::Region}:${AWS::AccountId}:agentspace/*"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AIDevOpsOperatorAppAccessPolicy"
+
+  AgentSpace:
+    Type: AWS::DevOpsAgent::AgentSpace
+    Properties:
+      Name: !If
+        - HasAgentSpaceName
+        - !Ref AgentSpaceName
+        - !Sub "hyperpod-${HyperPodClusterName}-devops-agent"
+      Description: !If
+        - HasAgentSpaceDescription
+        - !Ref AgentSpaceDescription
+        - !Sub "AWS DevOps Agent monitoring HyperPod cluster ${HyperPodClusterName}."
+      OperatorApp:
+        Iam:
+          OperatorAppRoleArn: !GetAtt WebappRole.Arn
+
+  AwsMonitorAssociation:
+    Type: AWS::DevOpsAgent::Association
+    Properties:
+      AgentSpaceId: !GetAtt AgentSpace.AgentSpaceId
+      ServiceId: aws
+      Configuration:
+        Aws:
+          AccountId: !Sub "${AWS::AccountId}"
+          AccountType: monitor
+          AssumableRoleArn: !GetAtt AgentSpaceRole.Arn
+
+  # ============================================================ EKS access (native)
+
+  EksAccessEntry:
+    Type: AWS::EKS::AccessEntry
+    Condition: IsEksCluster
+    Properties:
+      ClusterName: !Ref EksClusterName
+      PrincipalArn: !GetAtt AgentSpaceRole.Arn
+      Type: STANDARD
+      AccessPolicies:
+        - PolicyArn: "arn:aws:eks::aws:cluster-access-policy/AmazonAIOpsAssistantPolicy"
+          AccessScope:
+            Type: cluster
+
+  # Read-only cluster access for the audit Lambda itself (distinct principal from
+  # the Agent Space role — an access entry is keyed to exactly one IAM ARN). Used
+  # by the Lambda's own CrashLoopBackOff / NotReady detection in lambda mode.
+  AuditLambdaEksAccessEntry:
+    Type: AWS::EKS::AccessEntry
+    Condition: AuditLambdaNeedsEks
+    Properties:
+      ClusterName: !Ref EksClusterName
+      PrincipalArn: !GetAtt PeriodicAuditExecutionRole.Arn
+      Type: STANDARD
+      # AmazonAIOpsAssistantPolicy (read-only) rather than AmazonEKSViewPolicy:
+      # the EKS "view" role excludes cluster-scoped resources like nodes, so it
+      # can't satisfy the NotReady-node check. AIOpsAssistant is the same
+      # read-only policy the Agent Space role uses and can list pods AND nodes.
+      AccessPolicies:
+        - PolicyArn: "arn:aws:eks::aws:cluster-access-policy/AmazonAIOpsAssistantPolicy"
+          AccessScope:
+            Type: cluster
+
+  # ============================================================ Webhook secret + provisioner (CR #1)
+
+  WebhookSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "hyperpod-devops-agent/${HyperPodClusterName}/webhook"
+      Description: "AWS DevOps Agent generic webhook {url, secret} for HyperPod cluster events. Populated by the WebhookProvisioner custom resource."
+
+  WebhookProvisionerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WebhookProvisionerPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - aidevops:RegisterService
+                  - aidevops:DeregisterService
+                  - aidevops:AssociateService
+                  - aidevops:DisassociateService
+                  - aidevops:GetAssociation
+                  - aidevops:ListAssociations
+                  - aidevops:ListAgentSpaces
+                  - aidevops:DescribeServices
+                  - aidevops:ListServices
+                  - aidevops:GetService
+                  - aidevops:ListWebhooks
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                Resource: !Ref WebhookSecret
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
+
+  WebhookProvisionerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt WebhookProvisionerRole.Arn
+      Runtime: python3.13
+      Handler: index.handler
+      Timeout: 120
+      Code:
+        ZipFile: |
+          """CloudFormation custom resource: provision the DevOps Agent eventChannel webhook.
+
+          CloudFormation has no native path for the generic-webhook event channel:
+          `AWS::DevOpsAgent::Service` does not list `eventChannel` as a ServiceType, and
+          `AWS::DevOpsAgent::Association` with an EventChannel configuration does not
+          expose the generated webhook URL / HMAC secret as a Fn::GetAtt. So this custom
+          resource performs the same imperative flow the old scripts/02_provision_webhook.sh
+          did, and stashes the once-shown credentials into the Secrets Manager secret the
+          rest of the template references.
+
+          Resource properties (from the template):
+            AgentSpaceId   - the Agent Space to attach the eventChannel to
+            SecretArn      - Secrets Manager secret to receive {"url": ..., "secret": ...}
+
+          Lifecycle:
+            Create/Update  - reuse an existing eventChannel association if present (its
+                             HMAC secret is not recoverable, so we only re-populate the
+                             URL in that case); otherwise register-service + associate-service
+                             and write the fresh {url, secret} into the secret.
+            Delete         - disassociate + deregister the eventChannel so the AgentSpace
+                             (deleted after this resource, via DependsOn) has no leftover
+                             associations blocking its own deletion.
+
+          The DevOps Agent API uses camelCase member names (mirrors the AWS CLI JSON shapes
+          in the original scripts), so boto3 kwargs are camelCase here.
+          """
+          import json
+          import os
+
+          import boto3
+          import cfnresponse
+
+
+          _devops = boto3.client("devops-agent")
+          _secrets = boto3.client("secretsmanager")
+
+
+          def _find_event_channel_association(agent_space_id: str) -> dict | None:
+              """Return an existing eventChannel association for the space, or None.
+
+              list_associations is paginated; follow nextToken so an association past the
+              first page isn't missed (mirrors _find_asset_id in cr_skill_uploader.py).
+              """
+              kwargs = {"agentSpaceId": agent_space_id}
+              while True:
+                  resp = _devops.list_associations(**kwargs)
+                  for assoc in resp.get("associations", []) or []:
+                      if (assoc.get("configuration") or {}).get("eventChannel") is not None:
+                          return assoc
+                  token = resp.get("nextToken")
+                  if not token:
+                      return None
+                  kwargs["nextToken"] = token
+
+
+          def _find_event_channel_service() -> str | None:
+              """Return the account-wide eventChannel serviceId, or None.
+
+              The eventChannel service is a per-account singleton: register_service fails
+              with 'Event Channel service is already registered for this account' once one
+              exists. So we reuse it across Agent Spaces (each space gets its own
+              association + webhook against the same service).
+
+              list_services is paginated; follow nextToken so the service isn't missed on
+              an account with more services than fit one page.
+              """
+              kwargs: dict = {}
+              while True:
+                  resp = _devops.list_services(**kwargs)
+                  for svc in resp.get("services", []) or []:
+                      if svc.get("serviceType") == "eventChannel":
+                          return svc.get("serviceId")
+                  token = resp.get("nextToken")
+                  if not token:
+                      return None
+                  kwargs["nextToken"] = token
+
+
+          def _register_or_reuse_service() -> str:
+              """Reuse the account's eventChannel service if present; else register one."""
+              svc_id = _find_event_channel_service()
+              if svc_id:
+                  print(f"reusing account eventChannel service {svc_id}")
+                  return svc_id
+              print("registering eventChannel service")
+              return _devops.register_service(
+                  service="eventChannel",
+                  serviceDetails={"eventChannel": {"type": "webhook"}},
+              )["serviceId"]
+
+
+          def _write_secret(secret_arn: str, url: str, secret: str) -> None:
+              _secrets.put_secret_value(
+                  SecretId=secret_arn,
+                  SecretString=json.dumps({"url": url, "secret": secret}),
+              )
+              print("wrote webhook url + secret into Secrets Manager")
+
+
+          def _provision(agent_space_id: str, secret_arn: str) -> dict:
+              """Register + associate the eventChannel; populate the secret. Idempotent."""
+              existing = _find_event_channel_association(agent_space_id)
+              if existing is not None:
+                  assoc_id = existing.get("associationId", "")
+                  svc_id = existing.get("serviceId", "")
+                  print(f"reusing existing eventChannel association {assoc_id} (service {svc_id})")
+                  # The HMAC secret is only returned at associate time and cannot be
+                  # recovered. Re-populate the URL so downstream Lambdas at least have it;
+                  # a fresh secret requires disassociate + re-associate (teardown/redeploy).
+                  webhooks = _devops.list_webhooks(
+                      agentSpaceId=agent_space_id, associationId=assoc_id
+                  ).get("webhooks", []) or []
+                  url = (webhooks[0].get("webhookUrl") if webhooks else "") or ""
+                  if url:
+                      existing_secret = json.loads(
+                          _secrets.get_secret_value(SecretId=secret_arn)["SecretString"]
+                      ) if _secret_populated(secret_arn) else {}
+                      _write_secret(secret_arn, url, existing_secret.get("secret", ""))
+                  # Do NOT return the webhook URL in the CR Data: it is a credential-bearing
+                  # endpoint whose home is Secrets Manager (written above). CR Data is logged
+                  # by the cfnresponse module and readable via DescribeStacks, so returning
+                  # it would leak the endpoint to two surfaces broader than the secret.
+                  return {"AssociationId": assoc_id, "ServiceId": svc_id}
+
+              svc_id = _register_or_reuse_service()
+              print(f"associating eventChannel service {svc_id} to {agent_space_id}")
+              resp = _devops.associate_service(
+                  agentSpaceId=agent_space_id,
+                  serviceId=svc_id,
+                  configuration={"eventChannel": {}},
+              )
+              assoc_id = resp["association"]["associationId"]
+              url = resp["webhook"]["webhookUrl"]
+              secret = resp["webhook"]["webhookSecret"]
+              _write_secret(secret_arn, url, secret)
+              # See the note in the reuse branch above: the webhook URL is deliberately
+              # NOT returned in the CR Data (Secrets Manager is its only home).
+              return {"AssociationId": assoc_id, "ServiceId": svc_id}
+
+
+          def _secret_populated(secret_arn: str) -> bool:
+              try:
+                  _secrets.get_secret_value(SecretId=secret_arn)
+                  return True
+              except _secrets.exceptions.ResourceNotFoundException:
+                  return False
+
+
+          def _event_channel_in_use_elsewhere(this_space_id: str) -> bool:
+              """True if any OTHER Agent Space still has an eventChannel association.
+
+              The eventChannel service is account-wide (singleton). We must NOT deregister
+              it while another cluster's Agent Space still uses it — that would break the
+              other deployment. Returns False if listing spaces isn't possible (safer to
+              skip deregister than to break a sibling).
+              """
+              # list_agent_spaces is paginated; walk every page so a sibling space on a
+              # later page can't be missed (which would wrongly deregister the singleton).
+              spaces: list[dict] = []
+              kwargs: dict = {}
+              try:
+                  while True:
+                      resp = _devops.list_agent_spaces(**kwargs)
+                      spaces.extend(resp.get("agentSpaces", []) or [])
+                      token = resp.get("nextToken")
+                      if not token:
+                          break
+                      kwargs["nextToken"] = token
+              except Exception as e:  # noqa: BLE001
+                  print(f"list_agent_spaces failed ({e!r}); assuming service is in use")
+                  return True
+              for space in spaces:
+                  sid = space.get("agentSpaceId")
+                  if not sid or sid == this_space_id:
+                      continue
+                  try:
+                      if _find_event_channel_association(sid) is not None:
+                          return True
+                  except Exception as e:  # noqa: BLE001
+                      print(f"list_associations failed for {sid} ({e!r}); assuming in use")
+                      return True
+              return False
+
+
+          def _deprovision(agent_space_id: str) -> None:
+              """Disassociate this space's eventChannel(s); deregister the account-wide
+              service only if no other space still uses it. Best-effort throughout."""
+              svc_id = None
+              existing = _find_event_channel_association(agent_space_id)
+              while existing is not None:
+                  assoc_id = existing.get("associationId", "")
+                  svc_id = existing.get("serviceId", "") or svc_id
+                  try:
+                      _devops.disassociate_service(
+                          agentSpaceId=agent_space_id, associationId=assoc_id
+                      )
+                      print(f"disassociated eventChannel association {assoc_id}")
+                  except Exception as e:  # noqa: BLE001 - best-effort teardown
+                      print(f"disassociate failed for {assoc_id}: {e!r}")
+                  nxt = _find_event_channel_association(agent_space_id)
+                  # Guard against an association that refuses to delete so we don't spin.
+                  if nxt is not None and nxt.get("associationId") == assoc_id:
+                      print(f"association {assoc_id} still present after disassociate; stopping")
+                      break
+                  existing = nxt
+
+              # Deregister the shared service only when no sibling space still uses it.
+              if svc_id and not _event_channel_in_use_elsewhere(agent_space_id):
+                  try:
+                      _devops.deregister_service(serviceId=svc_id)
+                      print(f"deregistered eventChannel service {svc_id} (no other space uses it)")
+                  except Exception as e:  # noqa: BLE001 - best-effort teardown
+                      print(f"deregister failed for {svc_id}: {e!r}")
+              elif svc_id:
+                  print(f"leaving eventChannel service {svc_id} registered (still used by another space)")
+
+
+          def handler(event, context):
+              request_type = event.get("RequestType")
+              props = event.get("ResourceProperties", {}) or {}
+              agent_space_id = props.get("AgentSpaceId", "")
+              secret_arn = props.get("SecretArn", "")
+              physical_id = event.get("PhysicalResourceId") or f"webhook-{agent_space_id}"
+
+              print(f"RequestType={request_type} agentSpaceId={agent_space_id!r} secretArn={'set' if secret_arn else 'unset'}")
+
+              # Delete must NEVER fail the stack. If the eventChannel can't be
+              # disassociated here, AgentSpace deletion may still fail downstream, but a
+              # FAILED signal from this resource guarantees the stack is stuck — so report
+              # SUCCESS and log loudly instead.
+              if request_type == "Delete":
+                  try:
+                      if agent_space_id:
+                          _deprovision(agent_space_id)
+                  except Exception as e:  # noqa: BLE001 - best-effort cleanup only
+                      print(f"delete cleanup error (ignored so stack can delete): {e!r}")
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, physical_id)
+                  return
+
+              try:
+                  # Create or Update
+                  if not agent_space_id or not secret_arn:
+                      raise ValueError("AgentSpaceId and SecretArn are required properties")
+                  data = _provision(agent_space_id, secret_arn)
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, data, physical_id)
+              except Exception as e:  # noqa: BLE001 - must always signal CFN
+                  print(f"ERROR: {e!r}")
+                  cfnresponse.send(
+                      event, context, cfnresponse.FAILED, {"Error": str(e)}, physical_id
+                  )
+
+  WebhookProvisioner:
+    Type: Custom::WebhookProvisioner
+    # Ordering vs. AgentSpace + WebhookSecret is enforced by the GetAtt/Ref
+    # references below: this resource is created after them and (critically)
+    # deleted BEFORE them, so the eventChannel is disassociated before the
+    # AgentSpace is torn down (a leftover association blocks AgentSpace delete).
+    Properties:
+      ServiceToken: !GetAtt WebhookProvisionerFunction.Arn
+      AgentSpaceId: !GetAtt AgentSpace.AgentSpaceId
+      SecretArn: !Ref WebhookSecret
+
+  # ============================================================ Webhook bridge
+
+  WebhookBridgeExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WebhookBridgeExecutionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref WebhookSecret
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
+              - Effect: Allow
+                Action:
+                  - sagemaker:DescribeClusterEvent
+                Resource: "*"
+
+  WebhookBridgeFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt WebhookBridgeExecutionRole.Arn
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Timeout: 30
+      Environment:
+        Variables:
+          WEBHOOK_SECRET_ARN: !Ref WebhookSecret
+          WEBHOOK_CLUSTER_FILTER: !If
+            - IsClusterFilterSet
+            - !Ref ClusterFilter
+            - !Ref HyperPodClusterName
+          WEBHOOK_DROP_EVENT_LEVELS: !Ref DropEventLevels
+      Code:
+        ZipFile: |
+          """Forward HyperPod EventBridge events to the AWS DevOps Agent generic webhook.
+
+          The webhook URL and HMAC secret live in AWS Secrets Manager as a single
+          JSON blob with two keys: {"url": "...", "secret": "..."}. The secret ARN
+          is passed in via the WEBHOOK_SECRET_ARN env var.
+
+          For every HyperPod event this Lambda receives, it builds the DevOps Agent
+          incident payload, HMAC-signs the request, and POSTs it. A non-2xx response
+          is logged and re-raised so EventBridge will retry.
+          """
+          import base64
+          import datetime
+          import hashlib
+          import hmac
+          import json
+          import os
+          import urllib.request
+          from urllib.error import HTTPError, URLError
+
+          import boto3
+
+
+          # EventLevel values that should NOT trigger an investigation. "Info" is by far
+          # the most common (e.g. routine cluster update lifecycle, EKS access entry
+          # refreshes, instance group scaling). Override with WEBHOOK_DROP_EVENT_LEVELS
+          # (comma-separated) if needed without redeploying.
+          _DEFAULT_DROP_LEVELS = {"info"}
+
+
+          _secrets_cache: dict[str, str] = {}
+          _sagemaker_client = None
+
+
+          def _log(level: str, event: str, **kwargs) -> None:
+              """Emit one structured-JSON log line so CloudWatch Logs Insights can parse it.
+
+              Unstructured f-string logs can't be reliably aggregated (e.g. "how many
+              webhook POSTs failed in the last 24h?"). A single JSON object per line makes
+              fields like event/status/incidentId queryable. Diagnostic-only lines stay as
+              plain print().
+              """
+              print(json.dumps({"level": level, "event": event, **kwargs}, default=str))
+
+
+          class _WebhookAuthError(Exception):
+              """A 401/403 from the webhook — signals a likely stale HMAC secret."""
+
+              def __init__(self, status: int):
+                  super().__init__(f"webhook rejected request with status {status}")
+                  self.status = status
+
+
+          def _sagemaker():
+              """SageMaker client, lazily created + reused across warm invocations."""
+              global _sagemaker_client
+              if _sagemaker_client is None:
+                  _sagemaker_client = boto3.client("sagemaker")
+              return _sagemaker_client
+
+
+          def _describe_cluster_event(cluster_name: str, event_id: str) -> dict:
+              """Fetch the enriched event detail via DescribeClusterEvent.
+
+              The EventBridge envelope carries EventMetadata.Instance as null even for
+              events (e.g. capacity failures) where DescribeClusterEvent returns a
+              populated FailureMessage. Bridge calls this API for every non-Info
+              event so the enriched fields can be forwarded to the webhook.
+
+              Returns the top-level EventDetails dict or an empty dict on failure.
+              Failure modes handled: ValidationException (not Continuous
+              NodeProvisioningMode), throttling, transient network errors.
+              """
+              if not (cluster_name and event_id):
+                  return {}
+              try:
+                  resp = _sagemaker().describe_cluster_event(
+                      ClusterName=cluster_name,
+                      EventId=event_id,
+                  )
+                  return resp.get("EventDetails", {}) or {}
+              except Exception as e:
+                  # Log but don't fail the invocation — description-only forwarding is
+                  # the fallback behaviour. Never silently drop the event.
+                  print(f"describe_cluster_event failed cluster={cluster_name!r} eventId={event_id!r} err={e!r}")
+                  return {}
+
+
+          def _load_webhook_credentials(force_refresh: bool = False) -> tuple[str, str]:
+              """Fetch webhook URL + HMAC secret from Secrets Manager, cached per cold start.
+
+              force_refresh bypasses (and repopulates) the cache. The provisioner rewrites
+              the secret on re-associate, after which a warm sandbox would otherwise keep
+              signing with the stale HMAC key — every POST rejected, EventBridge retrying
+              forever until the sandbox recycles. The handler forces a refresh + one retry
+              on a 401/403 to break that loop.
+              """
+              if not force_refresh and "url" in _secrets_cache and "secret" in _secrets_cache:
+                  return _secrets_cache["url"], _secrets_cache["secret"]
+
+              secret_arn = os.environ["WEBHOOK_SECRET_ARN"]
+              client = boto3.client("secretsmanager")
+              resp = client.get_secret_value(SecretId=secret_arn)
+              payload = json.loads(resp["SecretString"])
+              _secrets_cache["url"] = payload["url"]
+              _secrets_cache["secret"] = payload["secret"]
+              return _secrets_cache["url"], _secrets_cache["secret"]
+
+
+          def _drop_levels() -> set[str]:
+              raw = os.environ.get("WEBHOOK_DROP_EVENT_LEVELS")
+              if not raw:
+                  return _DEFAULT_DROP_LEVELS
+              return {tok.strip().lower() for tok in raw.split(",") if tok.strip()}
+
+
+          def _event_level(event: dict) -> str | None:
+              """Pull EventLevel from the EventBridge envelope.
+
+              SageMaker HyperPod Cluster Event payloads wrap ListClusterEvents data under
+              detail.EventDetails, so EventLevel lives at detail.EventDetails.EventLevel.
+              The other detail-types (Cluster State Change, Cluster Node Health Event)
+              don't carry EventLevel; for those, treat as unknown -> never drop.
+              """
+              return (
+                  event.get("detail", {})
+                  .get("EventDetails", {})
+                  .get("EventLevel")
+              )
+
+
+          def _is_scale_progress_noise(event: dict) -> bool:
+              """Detect 'lost orchestration-ready' Warn events emitted during scaling.
+
+              These are progress updates during customer-initiated UpdateCluster
+              operations, not incident signals. Filtering here avoids forwarding
+              noise to the DevOps Agent webhook. See the mental-model doc section
+              "Scale-in-progress emits spurious Warn events with misleading
+              FailureMessage" for details. Interim until HyperPod engineering
+              removes these from the Warn-level stream.
+              """
+              detail = event.get("detail", {})
+              ev_details = detail.get("EventDetails", {})
+              description = ev_details.get("Description", "")
+              return "lost orchestration-ready status" in description
+
+
+          def _should_drop(event: dict) -> tuple[bool, str | None]:
+              level = _event_level(event)
+              if level is None:
+                  return False, None
+              if level.lower() in _drop_levels():
+                  return True, level
+              return False, level
+
+
+          def _cluster_filter() -> set[str]:
+              raw = os.environ.get("WEBHOOK_CLUSTER_FILTER", "")
+              return {tok.strip() for tok in raw.split(",") if tok.strip()}
+
+
+          def _event_cluster_name(event: dict) -> str | None:
+              detail = event.get("detail", {})
+              return (
+                  detail.get("ClusterName")
+                  or detail.get("EventDetails", {}).get("ClusterName")
+              )
+
+
+          def _priority_for(event: dict) -> str:
+              """Map HyperPod event severity onto DevOps Agent priority levels."""
+              detail = event.get("detail", {})
+              detail_type = event.get("detail-type", "")
+
+              if detail_type == "SageMaker HyperPod Cluster Node Health Event":
+                  health_status = (
+                      detail.get("HealthSummary", {}).get("HealthStatus", "").lower()
+                  )
+                  if "unhealthy" in health_status or "degraded" in health_status:
+                      return "HIGH"
+                  return "MEDIUM"
+
+              if detail_type == "SageMaker HyperPod Cluster State Change":
+                  status = detail.get("ClusterStatus", "").lower()
+                  if status in {"failed", "rollingback"}:
+                      return "HIGH"
+                  if status in {"updating", "deleting"}:
+                      return "LOW"
+                  return "MEDIUM"
+
+              return "MEDIUM"
+
+
+          def _shorten(text: str, limit: int = 120) -> str:
+              """Trim a fault-summary string for use in the incident title.
+
+              Whitespace-collapse first, then truncate at word boundary if possible,
+              then append an ellipsis if trimmed. 120 chars fits the operator-visible
+              FailureMessage lengths we've observed (e.g. the capacity error at 91
+              chars) while staying under most dashboard title-column widths.
+              """
+              text = " ".join((text or "").split())
+              if len(text) <= limit:
+                  return text
+              cut = text.rfind(" ", 0, limit - 1)
+              if cut <= limit // 2:
+                  cut = limit - 1
+              return text[:cut].rstrip(".,;: ") + "…"
+
+
+          def _title_and_description(event: dict) -> tuple[str, str]:
+              detail = event.get("detail", {})
+              detail_type = event.get("detail-type", "unknown")
+              region = event.get("region", "unknown")
+              account = event.get("account", "unknown")
+              cluster_name = (
+                  detail.get("ClusterName")
+                  or detail.get("EventDetails", {}).get("ClusterName")
+                  or "unknown-cluster"
+              )
+
+              if detail_type == "SageMaker HyperPod Cluster Node Health Event":
+                  health = detail.get("HealthSummary", {})
+                  instance_id = detail.get("InstanceId", "unknown-instance")
+                  instance_group = detail.get("InstanceGroupName") or "cluster"
+                  # Short fault summary from HMA fields for the title.
+                  health_reason = health.get("HealthStatusReason", "").strip()
+                  repair_action = health.get("RepairAction", "").strip()
+                  summary_parts = []
+                  if health_reason:
+                      summary_parts.append(health_reason)
+                  if repair_action:
+                      summary_parts.append(f"Repair action: {repair_action}")
+                  fault_summary = _shorten(" — ".join(summary_parts) or health.get("HealthStatus", "unknown"))
+                  title = f"HyperPod {instance_group} / {fault_summary}"
+                  description = (
+                      f"HyperPod cluster '{cluster_name}' (account {account}, {region}) reported a node "
+                      f"health event for instance {instance_id}. "
+                      f"HealthStatus={health.get('HealthStatus', 'n/a')}; "
+                      f"Reason={health.get('HealthStatusReason', 'n/a')}; "
+                      f"RepairAction={health.get('RepairAction', 'n/a')}; "
+                      f"Recommendation={health.get('Recommendation', 'n/a')}. "
+                      f"Resolve the underlying EKS cluster (for EKS-orchestrated clusters) via "
+                      f"'aws sagemaker describe-cluster --cluster-name {cluster_name}' and inspect "
+                      f"node {instance_id} via the SageMaker HyperPod control plane."
+                  )
+                  return title, description
+
+              if detail_type == "SageMaker HyperPod Cluster State Change":
+                  status = detail.get("ClusterStatus", "unknown")
+                  title = f"HyperPod {cluster_name} / cluster status → {status}"
+                  groups = detail.get("InstanceGroups", []) or []
+                  groups_summary = ", ".join(
+                      f"{g.get('InstanceGroupName')}: {g.get('CurrentCount')}/{g.get('TargetCount')} ({g.get('Status')})"
+                      for g in groups
+                  )
+                  description = (
+                      f"HyperPod cluster '{cluster_name}' (account {account}, {region}) transitioned to status "
+                      f"{status}. Instance groups: {groups_summary or 'none'}. Investigate via SageMaker "
+                      f"DescribeCluster and the underlying EKS resources."
+                  )
+                  return title, description
+
+              if detail_type == "SageMaker HyperPod Cluster Event":
+                  ev_details = detail.get("EventDetails", {})
+                  resource_type = ev_details.get("ResourceType", "n/a")
+                  description_text = ev_details.get("Description", "")
+                  sm_event_id = ev_details.get("EventId", "")
+                  instance_group = ev_details.get("InstanceGroupName") or "cluster"
+
+                  # For non-Info events, enrich the description with fields the
+                  # EventBridge envelope omits (notably FailureMessage). See
+                  # README + engineering-team report for why this workaround exists.
+                  #
+                  # Walk EVERY subtree under EventMetadata (Cluster, Instance,
+                  # InstanceGroup, InstanceGroupScaling, InstanceMonitor,
+                  # InstanceHealth, etc.) — different fault classes populate
+                  # different subtrees. Cluster-level events put FailureMessage
+                  # under EventMetadata.Cluster; instance-level under
+                  # EventMetadata.Instance; a similar pattern likely holds for
+                  # the other subtrees when populated.
+                  # Keys are prefixed with the subtree name so
+                  # `Cluster.FailureMessage` and `Instance.FailureMessage` are
+                  # distinguishable, and either can drive the title.
+                  enriched = {}
+                  if ev_details.get("EventLevel", "").lower() != "info" and sm_event_id:
+                      api_ev = _describe_cluster_event(cluster_name, sm_event_id)
+                      api_metadata = (
+                          api_ev.get("EventDetails", {}).get("EventMetadata", {}) or {}
+                      )
+                      for subtree_name, subtree in api_metadata.items():
+                          if not isinstance(subtree, dict):
+                              continue
+                          for k, v in subtree.items():
+                              if v not in (None, "", {}, []):
+                                  enriched[f"{subtree_name}.{k}"] = v
+
+                  # Title picks the most operator-actionable text available:
+                  # any *.FailureMessage > event Description > resource-type fallback.
+                  # If multiple subtrees carry a FailureMessage, prefer Instance
+                  # (most fault-specific), then Cluster, then whatever alphabetical
+                  # order gives us.
+                  def _pick_failure_message() -> str:
+                      preferred = ["Instance.FailureMessage", "Cluster.FailureMessage"]
+                      for key in preferred:
+                          v = enriched.get(key)
+                          if isinstance(v, str) and v.strip():
+                              return v.strip()
+                      for key in sorted(enriched):
+                          if key.endswith(".FailureMessage"):
+                              v = enriched[key]
+                              if isinstance(v, str) and v.strip():
+                                  return v.strip()
+                      return ""
+
+                  failure_message = _pick_failure_message()
+                  if failure_message:
+                      title_fault = _shorten(failure_message)
+                  elif description_text:
+                      title_fault = _shorten(description_text)
+                  else:
+                      title_fault = resource_type
+                  title = f"HyperPod {instance_group} / {title_fault}"
+
+                  description = (
+                      f"HyperPod cluster '{cluster_name}' (account {account}, {region}) emitted a cluster "
+                      f"event for resource type {resource_type}. "
+                      f"InstanceGroup={ev_details.get('InstanceGroupName', 'n/a')}; "
+                      f"InstanceId={ev_details.get('InstanceId', 'n/a')}; "
+                      f"EventId={sm_event_id or 'n/a'}. "
+                      f"Description: {description_text or 'n/a'}."
+                  )
+                  if failure_message:
+                      description += f" FailureMessage: {failure_message}."
+                  # Include any other populated fields (from any subtree) so
+                  # downstream categorization keys benefit from them too.
+                  extras = {
+                      k: v for k, v in enriched.items()
+                      if not k.endswith(".FailureMessage")
+                  }
+                  if extras:
+                      extras_str = ", ".join(
+                          f"{k}={json.dumps(v, default=str) if isinstance(v, (dict, list)) else v}"
+                          for k, v in sorted(extras.items())
+                      )
+                      description += f" EventMetadata: {extras_str}."
+                  return title, description
+
+              return (
+                  f"HyperPod event: {detail_type} on {cluster_name}",
+                  f"HyperPod cluster '{cluster_name}' (account {account}, {region}) emitted an event of type "
+                  f"'{detail_type}'. Raw detail attached.",
+              )
+
+
+          def _build_payload(event: dict) -> dict:
+              title, description = _title_and_description(event)
+              detail = event.get("detail", {})
+              event_id = event.get("id") or event.get("time") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+              return {
+                  "eventType": "incident",
+                  "incidentId": f"hyperpod-{event_id}",
+                  "action": "created",
+                  "priority": _priority_for(event),
+                  "title": title,
+                  "description": description,
+                  "timestamp": event.get("time")
+                  or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                  "service": "SageMakerHyperPod",
+                  "data": {
+                      "metadata": {
+                          "region": event.get("region"),
+                          "account": event.get("account"),
+                          "detailType": event.get("detail-type"),
+                          "clusterName": detail.get("ClusterName")
+                          or detail.get("EventDetails", {}).get("ClusterName"),
+                      },
+                      "originalEvent": event,
+                  },
+              }
+
+
+          def _truthy(env_var: str) -> bool:
+              return os.environ.get(env_var, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+          def _post(webhook_url: str, secret: str, payload: dict) -> None:
+              body = json.dumps(payload).encode("utf-8")
+              timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+              signature = base64.b64encode(
+                  hmac.new(
+                      secret.encode("utf-8"),
+                      f"{timestamp}:{body.decode('utf-8')}".encode("utf-8"),
+                      hashlib.sha256,
+                  ).digest()
+              ).decode("utf-8")
+
+              if _truthy("WEBHOOK_LOG_PAYLOAD"):
+                  # Debug aid: log the signed timestamp + body so a POST can be correlated
+                  # with the receiver's view. Log only a TRUNCATED signature — the full
+                  # signature + signed timestamp + exact body together are everything
+                  # needed to replay the POST verbatim, so we deliberately keep the log
+                  # non-replayable. The webhook URL (a credential-bearing endpoint from
+                  # Secrets Manager) is likewise never logged in clear text.
+                  print(f"webhook POST timestamp={timestamp} signature={signature[:12]}… (truncated)")
+                  print(f"webhook POST body bytes={len(body)} json={body.decode('utf-8')}")
+
+              if _truthy("WEBHOOK_DRY_RUN"):
+                  print("webhook DRY RUN: skipping POST (WEBHOOK_DRY_RUN=true)")
+                  return
+
+              request = urllib.request.Request(
+                  webhook_url,
+                  data=body,
+                  method="POST",
+                  headers={
+                      "Content-Type": "application/json",
+                      "x-amzn-event-timestamp": timestamp,
+                      "x-amzn-event-signature": signature,
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=10) as resp:
+                      _log("INFO", "webhook_post_success", status=resp.status, incidentId=payload.get("incidentId"))
+              except HTTPError as e:
+                  _log("ERROR", "webhook_post_failed", status=e.code, body=repr(e.read()))
+                  # 401/403 most likely means the signing secret is stale (re-provisioned
+                  # while this sandbox stayed warm). Surface it distinctly so the handler
+                  # can refresh the cached secret and retry once.
+                  if e.code in (401, 403):
+                      raise _WebhookAuthError(e.code) from e
+                  raise
+              except URLError as e:
+                  _log("ERROR", "webhook_post_failed", error=repr(e))
+                  raise
+
+
+          def lambda_handler(event, context):
+              _log("INFO", "event_received", detailType=event.get("detail-type"), id=event.get("id"))
+              if _truthy("WEBHOOK_LOG_FULL_EVENT"):
+                  print(f"full event: {json.dumps(event)}")
+              allowlist = _cluster_filter()
+              if allowlist:
+                  cluster = _event_cluster_name(event)
+                  if cluster not in allowlist:
+                      _log("INFO", "event_dropped", reason="cluster-not-in-filter", cluster=cluster, filter=sorted(allowlist))
+                      return {"statusCode": 200, "body": json.dumps({"dropped": True, "reason": "cluster-not-in-filter"})}
+
+              drop, level = _should_drop(event)
+              if drop:
+                  _log("INFO", "event_dropped", reason="event-level", eventLevel=level)
+                  return {"statusCode": 200, "body": json.dumps({"dropped": True, "eventLevel": level})}
+
+              if _is_scale_progress_noise(event):
+                  _log("INFO", "event_dropped", reason="scale-progress-noise")
+                  return {"statusCode": 200, "body": json.dumps({"dropped": True, "reason": "scale-progress-noise"})}
+
+              webhook_url, secret = _load_webhook_credentials()
+              payload = _build_payload(event)
+              _log("INFO", "payload_built", incidentId=payload["incidentId"], priority=payload["priority"], title=payload["title"], eventLevel=level)
+              try:
+                  _post(webhook_url, secret, payload)
+              except _WebhookAuthError as e:
+                  # Stale cached secret (re-provisioned while this sandbox stayed warm):
+                  # refresh from Secrets Manager and retry once before giving up.
+                  _log("WARN", "webhook_auth_retry", status=e.status)
+                  webhook_url, secret = _load_webhook_credentials(force_refresh=True)
+                  _post(webhook_url, secret, payload)
+              return {"statusCode": 200, "body": json.dumps({"incidentId": payload["incidentId"]})}
+
+  WebhookBridgeEventRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgeInvokeLambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt WebhookBridgeFunction.Arn
+
+  HyperPodEventRule:
+    Type: AWS::Events::Rule
+    # Wait for the webhook secret to be populated before routing events: without
+    # this, a HyperPod event firing during initial create can invoke the bridge
+    # while WebhookSecret is still empty, and GetSecretValue raises. No cycle —
+    # WebhookProvisioner doesn't reference this rule.
+    DependsOn: WebhookProvisioner
+    Properties:
+      Description: "Route HyperPod cluster events to the DevOps Agent webhook bridge."
+      State: ENABLED
+      EventPattern: |
+        {
+          "source": ["aws.sagemaker"],
+          "detail-type": [
+            "SageMaker HyperPod Cluster State Change",
+            "SageMaker HyperPod Cluster Node Health Event",
+            "SageMaker HyperPod Cluster Event"
+          ]
+        }
+      Targets:
+        - Arn: !GetAtt WebhookBridgeFunction.Arn
+          Id: "WebhookBridgeLambdaTarget"
+          RoleArn: !GetAtt WebhookBridgeEventRole.Arn
+
+  # ============================================================ Periodic audit (toggleable)
+
+  PeriodicAuditExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: PeriodicAuditEnabled
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PeriodicAuditExecutionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref WebhookSecret
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
+              # The audit Lambda reads Kubernetes Pod/Node state via the EKS
+              # API. Only eks:DescribeCluster is needed here (to get the API
+              # endpoint + CA); the K8s reads themselves are authorized by the
+              # Lambda's EKS access entry, not IAM. HyperPod control-plane faults
+              # are handled event-driven by the bridge, so no sagemaker perms.
+              # Scoped to this stack's EKS cluster, and only granted when there
+              # is one — on Slurm (no EksClusterName) the audit never calls it.
+              - !If
+                - AuditLambdaNeedsEks
+                - Effect: Allow
+                  Action:
+                    - eks:DescribeCluster
+                  Resource: !Sub "arn:aws:eks:${AWS::Region}:${AWS::AccountId}:cluster/${EksClusterName}"
+                - !Ref "AWS::NoValue"
+
+  PeriodicAuditFunction:
+    Type: AWS::Lambda::Function
+    Condition: PeriodicAuditEnabled
+    Properties:
+      Role: !GetAtt PeriodicAuditExecutionRole.Arn
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Timeout: 60
+      Environment:
+        Variables:
+          WEBHOOK_SECRET_ARN: !Ref WebhookSecret
+          CLUSTER_NAME: !Ref HyperPodClusterName
+          EKS_CLUSTER_NAME: !Ref EksClusterName
+          AWS_ACCOUNT_ID: !Sub "${AWS::AccountId}"
+          K8S_CHECKS_ENABLED: !Ref K8sChecksEnabled
+          CRASHLOOP_MIN_RESTARTS: !Ref CrashLoopMinRestarts
+          CRASHLOOP_RECENCY_MINUTES: !Ref CrashLoopRecencyMinutes
+          NOT_READY_NODE_PERCENT_THRESHOLD: !Ref NotReadyNodePercentThreshold
+          NOT_READY_DURATION_MINUTES: !Ref NotReadyDurationMinutes
+          IGNORE_NAMESPACES: !Join [",", !Ref IgnoreNamespaces]
+          SYSTEM_NAMESPACES: !Join [",", !Ref SystemNamespaces]
+      Code:
+        ZipFile: |
+          """Periodic-audit Lambda for the HyperPod x DevOps Agent solution.
+
+          Fired on a schedule by EventBridge Scheduler. It inspects Kubernetes Pod/Node
+          state HERE (CrashLoopBackOff pods, NotReady nodes) and POSTs the DevOps Agent
+          webhook ONLY when a real issue is found. On a healthy cluster nothing is POSTed,
+          so no investigation runs and no cost is incurred. A separate daily "heartbeat"
+          schedule (event input {"trigger":"heartbeat"}) forces one POST per day so
+          operators can see the pipeline is alive.
+
+          Scope note: HyperPod control-plane faults (node health, capacity errors,
+          lifecycle-script failures, cluster state changes) are handled event-driven by the
+          webhook bridge — which reads the native EventLevel from the EventBridge event and
+          forwards the real FailureMessage verbatim. This audit deliberately does NOT
+          re-scan list-cluster-events; it only covers Kubernetes state, which is not in the
+          HyperPod event stream. On Slurm (no kubectl) the audit fires only the heartbeat.
+
+          Either way the POST is an HMAC-signed "periodic audit" event, identical in shape
+          to what the webhook bridge sends, so the RCA skill's audit-mode path handles it.
+          The payload carries data.metadata.detectedIssues so the RCA skill starts from
+          the finding instead of rediscovering it.
+
+          Cluster reads use the EKS API server directly (SigV4 bearer token via boto3 +
+          stdlib urllib) — no kubernetes client / Lambda layer. The Lambda's execution
+          role is granted read-only cluster access by its own AWS::EKS::AccessEntry.
+
+          Env vars:
+            WEBHOOK_SECRET_ARN               Secrets Manager secret {"url","secret"} (shared with bridge)
+            CLUSTER_NAME                     HyperPod cluster name (payload metadata)
+            EKS_CLUSTER_NAME                 Underlying EKS cluster name (empty for Slurm — kubectl checks skipped)
+            K8S_CHECKS_ENABLED               "true"/"false" — enable CrashLoop/NotReady checks
+            CRASHLOOP_MIN_RESTARTS           Fire only when a container's restartCount >= this
+            CRASHLOOP_RECENCY_MINUTES        Last crash must be within this window to count as an active loop
+            NOT_READY_NODE_PERCENT_THRESHOLD Fire if >= this percent of nodes are NotReady (after duration gate)
+            NOT_READY_DURATION_MINUTES       A node must be NotReady this long to count
+            IGNORE_NAMESPACES                Comma-separated; pods here are skipped entirely
+            SYSTEM_NAMESPACES                Comma-separated; CrashLoop here is tagged "system-workload"
+          """
+          import base64
+          import datetime
+          import hashlib
+          import hmac
+          import json
+          import os
+          import ssl
+          import urllib.request
+          from urllib.error import HTTPError, URLError
+
+          import boto3
+          from botocore.signers import RequestSigner
+
+
+          _secrets_cache: dict[str, str] = {}
+          _eks_cache: dict[str, tuple[str, str]] = {}  # cluster -> (endpoint, ca_file_path)
+
+
+          def _log(level: str, event: str, **kwargs) -> None:
+              """Emit one structured-JSON log line for CloudWatch Logs Insights.
+
+              Enables queries like "issues detected per cluster over the last week".
+              Diagnostic-only lines stay as plain print().
+              """
+              print(json.dumps({"level": level, "event": event, **kwargs}, default=str))
+
+
+          class _WebhookAuthError(Exception):
+              """A 401/403 from the webhook — signals a likely stale HMAC secret."""
+
+              def __init__(self, status: int):
+                  super().__init__(f"webhook rejected request with status {status}")
+                  self.status = status
+
+
+          # ----------------------------------------------------------------- config helpers
+
+          def _parse_namespace_list(env_name: str) -> list[str]:
+              """Parse a comma-separated env var into a de-duplicated, trimmed list."""
+              raw = os.environ.get(env_name, "")
+              seen: dict[str, None] = {}
+              for token in raw.split(","):
+                  tok = token.strip()
+                  if tok:
+                      seen[tok] = None
+              return list(seen.keys())
+
+
+          def _k8s_checks_enabled() -> bool:
+              return os.environ.get("K8S_CHECKS_ENABLED", "true").strip().lower() in ("true", "1", "yes", "on")
+
+
+          def _namespace_config() -> tuple[list[str], list[str]]:
+              """Return (ignore, system) namespace lists; raise on overlap."""
+              ignore = _parse_namespace_list("IGNORE_NAMESPACES")
+              system = _parse_namespace_list("SYSTEM_NAMESPACES")
+              overlap = sorted(set(ignore) & set(system))
+              if overlap:
+                  raise ValueError(
+                      f"IGNORE_NAMESPACES and SYSTEM_NAMESPACES must not overlap; "
+                      f"conflicting entries: {overlap}. Fix the CFN parameters and redeploy."
+                  )
+              return ignore, system
+
+
+          def _build_k8s_checks_block() -> dict | None:
+              """The structured k8sChecks block echoed into the payload, or None if disabled."""
+              if not _k8s_checks_enabled():
+                  return None
+              ignore, system = _namespace_config()
+              return {
+                  "enabled": True,
+                  "crashLoopMinRestarts": int(os.environ.get("CRASHLOOP_MIN_RESTARTS", "5")),
+                  "crashLoopRecencyMinutes": int(os.environ.get("CRASHLOOP_RECENCY_MINUTES", "15")),
+                  "notReadyNodePercentThreshold": int(os.environ.get("NOT_READY_NODE_PERCENT_THRESHOLD", "10")),
+                  "notReadyDurationMinutes": int(os.environ.get("NOT_READY_DURATION_MINUTES", "15")),
+                  "ignoreNamespaces": ignore,
+                  "systemNamespaces": system,
+              }
+
+
+          # ----------------------------------------------------------------- kubernetes reads
+
+          def _now() -> datetime.datetime:
+              return datetime.datetime.now(datetime.timezone.utc)
+
+
+          def _parse_k8s_time(ts: str) -> datetime.datetime | None:
+              """Parse a K8s RFC3339 timestamp (e.g. 2026-07-10T12:00:00Z)."""
+              if not ts:
+                  return None
+              try:
+                  return datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+              except ValueError:
+                  return None
+
+
+          def _eks_token(cluster_name: str, region: str) -> str:
+              """Generate the EKS bearer token (same scheme as `aws eks get-token`)."""
+              session = boto3.session.Session()
+              client = session.client("sts", region_name=region)
+              signer = RequestSigner(
+                  client.meta.service_model.service_id,
+                  region,
+                  "sts",
+                  "v4",
+                  session.get_credentials(),
+                  session.events,
+              )
+              signed_url = signer.generate_presigned_url(
+                  {
+                      "method": "GET",
+                      "url": f"https://sts.{region}.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15",
+                      "body": {},
+                      "headers": {"x-k8s-aws-id": cluster_name},
+                      "context": {},
+                  },
+                  region_name=region,
+                  expires_in=60,
+                  operation_name="",
+              )
+              return "k8s-aws-v1." + base64.urlsafe_b64encode(signed_url.encode()).decode().rstrip("=")
+
+
+          def _eks_endpoint_and_ca(eks_cluster_name: str, region: str) -> tuple[str, str]:
+              """Return (api_endpoint, ca_file_path), cached across warm invocations."""
+              if eks_cluster_name in _eks_cache:
+                  return _eks_cache[eks_cluster_name]
+              desc = boto3.client("eks", region_name=region).describe_cluster(name=eks_cluster_name)["cluster"]
+              endpoint = desc["endpoint"]
+              ca_data = desc["certificateAuthority"]["data"]
+              ca_path = f"/tmp/eks-ca-{eks_cluster_name}.pem"
+              with open(ca_path, "wb") as f:
+                  f.write(base64.b64decode(ca_data))
+              _eks_cache[eks_cluster_name] = (endpoint, ca_path)
+              return endpoint, ca_path
+
+
+          def _k8s_get(path: str, eks_cluster_name: str, region: str) -> dict:
+              """GET a Kubernetes API path and return the parsed JSON."""
+              endpoint, ca_path = _eks_endpoint_and_ca(eks_cluster_name, region)
+              token = _eks_token(eks_cluster_name, region)
+              ctx = ssl.create_default_context(cafile=ca_path)
+              req = urllib.request.Request(
+                  f"{endpoint}{path}",
+                  headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                  method="GET",
+              )
+              with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+                  return json.loads(resp.read())
+
+
+          def _k8s_list_all(path: str, eks_cluster_name: str, region: str,
+                            page_limit: int = 500) -> list[dict]:
+              """List every item across all pages of a K8s collection endpoint.
+
+              The API server paginates large collections: a single /api/v1/pods (or
+              /nodes) call returns at most one page (500 items on EKS), so on a large
+              cluster CrashLoopBackOff pods / NotReady nodes in the tail are silently
+              dropped. Follow metadata.continue to read every page.
+              """
+              from urllib.parse import quote
+
+              items: list[dict] = []
+              continue_token: str | None = None
+              safe_max_pages = 200  # 200 * 500 = 100k items ceiling — a runaway guard
+              for _ in range(safe_max_pages):
+                  query = f"?limit={page_limit}"
+                  if continue_token:
+                      query += f"&continue={quote(continue_token, safe='')}"
+                  response = _k8s_get(f"{path}{query}", eks_cluster_name, region)
+                  items.extend(response.get("items") or [])
+                  continue_token = (response.get("metadata") or {}).get("continue")
+                  if not continue_token:
+                      break
+              else:
+                  # Loop exhausted the runaway guard with a continue token still set:
+                  # the list is truncated. Surface it so a capped audit isn't mistaken
+                  # for full cluster coverage.
+                  if continue_token:
+                      _log("WARN", "k8s_list_truncated", path=path, pages=safe_max_pages,
+                           page_limit=page_limit, items=len(items))
+              return items
+
+
+          # ----------------------------------------------------------------- detection
+
+          def _detect_crashloops(eks_cluster_name: str, region: str, cfg: dict) -> list[dict]:
+              """Pods stuck in a CrashLoopBackOff loop.
+
+              Kubernetes does NOT expose when the loop started in a single snapshot: the
+              only monotonic evidence of a persistent loop is `restartCount`, and
+              `lastState.terminated` holds only the most-recent crashed run. So instead of
+              a pod-age proxy (which fired for any old pod that just started crashing), we
+              gate on crash evidence:
+
+                * detect the loop from PERSISTENT state — `state.waiting.reason ==
+                  CrashLoopBackOff` OR a `lastState.terminated` crash record — so
+                  detection no longer depends on catching the instantaneous backoff phase
+                  (that instability made the "stable" title flap across the backoff cycle
+                  and spawned duplicate investigations for one ongoing fault);
+                * require `restartCount >= crashLoopMinRestarts`; and
+                * require the last crash to be recent (`lastState.terminated.finishedAt`
+                  within `crashLoopRecencyMinutes`) so a pod that looped and then
+                  recovered doesn't keep firing.
+              """
+              ignore = set(cfg["ignoreNamespaces"])
+              system = set(cfg["systemNamespaces"])
+              min_restarts = cfg["crashLoopMinRestarts"]
+              recency_min = cfg["crashLoopRecencyMinutes"]
+              now = _now()
+              issues: list[dict] = []
+              pods = _k8s_list_all("/api/v1/pods", eks_cluster_name, region)
+              for pod in pods:
+                  meta = pod.get("metadata", {})
+                  ns = meta.get("namespace", "")
+                  if ns in ignore:
+                      continue
+                  status = pod.get("status", {})
+                  for cs in status.get("containerStatuses", []) or []:
+                      state = cs.get("state", {}) or {}
+                      waiting = state.get("waiting", {}) or {}
+                      last_term = (cs.get("lastState", {}) or {}).get("terminated", {}) or {}
+                      restarts = cs.get("restartCount", 0) or 0
+
+                      in_backoff = waiting.get("reason") == "CrashLoopBackOff"
+                      # Crash evidence = a NON-clean last termination. A clean exit
+                      # (exitCode 0 / reason Completed) is not a crash, so a deliberate
+                      # exit-and-restart sidecar isn't reported as a fault on the strength
+                      # of restartCount alone. A genuine exit-0 loop that Kubernetes is
+                      # actively throttling still shows waiting.reason == CrashLoopBackOff
+                      # and is caught by the in_backoff leg below.
+                      has_crash_evidence = bool(last_term) and last_term.get("exitCode") not in (0, None)
+                      # A loop needs both persistent crash evidence and enough restarts.
+                      if not (in_backoff or has_crash_evidence) or restarts < min_restarts:
+                          continue
+
+                      # Confirm the loop is still active: the last crash must be recent.
+                      # If finishedAt is missing but we're currently in backoff, treat it
+                      # as active (fail-open toward reporting).
+                      finished = _parse_k8s_time(last_term.get("finishedAt", ""))
+                      if finished is not None:
+                          since_last_crash_min = (now - finished).total_seconds() / 60
+                          if since_last_crash_min > recency_min and not in_backoff:
+                              continue
+                      elif not in_backoff:
+                          continue
+
+                      reason = last_term.get("reason", "")
+                      exit_code = last_term.get("exitCode")
+                      detail = (
+                          f"restartCount={restarts} (>= {min_restarts}), "
+                          f"inBackoff={in_backoff}, "
+                          f"lastTerminated={reason or 'unknown'}"
+                      )
+                      if exit_code is not None:
+                          detail += f"/exit={exit_code}"
+                      issues.append({
+                          "type": "CrashLoopBackOff",
+                          "resource": f"{ns}/{meta.get('name')}:{cs.get('name')}",
+                          "detail": detail,
+                          "tag": "system-workload" if ns in system else "customer-workload",
+                      })
+              return issues
+
+
+          def _detect_notready_nodes(eks_cluster_name: str, region: str, cfg: dict) -> list[dict]:
+              """NotReady nodes past the duration gate, if they cross the percent threshold."""
+              duration_min = cfg["notReadyDurationMinutes"]
+              percent_threshold = cfg["notReadyNodePercentThreshold"]
+              now = _now()
+              nodes = _k8s_list_all("/api/v1/nodes", eks_cluster_name, region)
+              total = len(nodes)
+              if total == 0:
+                  return []
+              not_ready: list[str] = []
+              for node in nodes:
+                  name = node.get("metadata", {}).get("name", "")
+                  ready = None
+                  for cond in node.get("status", {}).get("conditions", []) or []:
+                      if cond.get("type") == "Ready":
+                          ready = cond
+                          break
+                  # A node that posted NO Ready condition (ready is None) is treated as
+                  # NotReady, not skipped — a node wedged early in registration is arguably
+                  # the least ready in the fleet. Only a node explicitly Ready=True is
+                  # skipped. (Mirrors the missing-lastTransitionTime fail-open below.)
+                  if ready is not None and ready.get("status") == "True":
+                      continue
+                  since = _parse_k8s_time(ready.get("lastTransitionTime", "")) if ready else None
+                  mins = (now - since).total_seconds() / 60 if since else duration_min + 1
+                  if mins >= duration_min:
+                      not_ready.append(name)
+              if not not_ready:
+                  return []
+              pct = 100.0 * len(not_ready) / total
+              if pct < percent_threshold:
+                  return []
+              return [{
+                  "type": "NotReadyNodes",
+                  "resource": ",".join(sorted(not_ready)),
+                  "detail": f"{len(not_ready)}/{total} nodes NotReady ({pct:.0f}%) >= {percent_threshold}% for >= {duration_min}min",
+                  "tag": "infrastructure",
+              }]
+
+
+          def _detect_issues(cluster_name: str, eks_cluster_name: str, region: str) -> list[dict]:
+              """Run all applicable detectors and return the combined issue list.
+
+              NOTE: HyperPod control-plane fault events (node health, capacity errors,
+              lifecycle-script failures, cluster state changes) are NOT detected here —
+              they are already delivered event-driven by the webhook bridge, which reads
+              the native `EventLevel` field from the EventBridge event and forwards the
+              real FailureMessage without interpreting it. The periodic audit only covers
+              what the event stream cannot: Kubernetes Pod/Node state (CrashLoopBackOff,
+              NotReady), which is not in the HyperPod event stream. On Slurm (no kubectl)
+              the audit therefore has nothing to poll — it fires only the daily heartbeat.
+              """
+              issues: list[dict] = []
+              # kubectl-based checks require an EKS cluster + K8s checks enabled.
+              if eks_cluster_name and _k8s_checks_enabled():
+                  cfg = _build_k8s_checks_block()
+                  try:
+                      issues.extend(_detect_crashloops(eks_cluster_name, region, cfg))
+                      issues.extend(_detect_notready_nodes(eks_cluster_name, region, cfg))
+                  except Exception as e:  # noqa: BLE001 — ANY cluster-read failure must surface as AuditReadFailure, not crash the audit
+                      # Don't silently swallow: a cluster-read failure could hide a real
+                      # issue. Surface it as an issue so an operator investigates the gap.
+                      # The block reads more than HTTP: describe_cluster + the STS signer
+                      # raise botocore ClientError, urlopen can raise a bare TimeoutError,
+                      # and json.loads raises ValueError on a truncated response — all of
+                      # which previously escaped the handler and crashed the audit with no
+                      # AuditReadFailure emitted (a silent monitoring outage).
+                      body = ""
+                      if isinstance(e, HTTPError):
+                          try:
+                              body = e.read().decode()[:500]
+                          except Exception:  # noqa: BLE001
+                              body = "<unreadable>"
+                      print(f"kubectl read failed: {e!r} body={body}")
+                      issues.append({
+                          "type": "AuditReadFailure",
+                          "resource": eks_cluster_name,
+                          "detail": f"Could not read cluster state: {e!r}. Investigate audit access.",
+                          "tag": "infrastructure",
+                      })
+              return issues
+
+
+          # ----------------------------------------------------------------- webhook
+
+          def _load_webhook_credentials(force_refresh: bool = False) -> tuple[str, str]:
+              """Fetch webhook URL + HMAC secret, cached per cold start.
+
+              force_refresh bypasses (and repopulates) the cache — used to recover from a
+              stale HMAC key after the provisioner re-associates the webhook while this
+              sandbox stays warm (see the 401/403 retry in lambda_handler).
+              """
+              if not force_refresh and "url" in _secrets_cache and "secret" in _secrets_cache:
+                  return _secrets_cache["url"], _secrets_cache["secret"]
+              secret_arn = os.environ["WEBHOOK_SECRET_ARN"]
+              resp = boto3.client("secretsmanager").get_secret_value(SecretId=secret_arn)
+              payload = json.loads(resp["SecretString"])
+              _secrets_cache["url"] = payload["url"]
+              _secrets_cache["secret"] = payload["secret"]
+              return _secrets_cache["url"], _secrets_cache["secret"]
+
+
+          def _build_title(cluster_name: str, detected_issues: list[dict], heartbeat: bool) -> str:
+              """A STABLE, issue-descriptive title.
+
+              Intentionally has NO timestamp: the same ongoing issue must produce the same
+              title on every audit so the DevOps Agent platform links the repeat
+              investigations (one email per issue, not one per 15-min audit). The title
+              names what the Lambda detected, e.g.:
+                  HyperPod my-cluster: CrashLoopBackOff (my-namespace/my-pod)
+                  HyperPod my-cluster: NotReadyNodes; ClusterFaultEvent (worker-ig)
+              """
+              if not detected_issues:
+                  # heartbeat / healthy — stable so consecutive all-clears don't spawn new
+                  # investigations either.
+                  return f"HyperPod {cluster_name}: periodic audit — no open issues"
+              # Group by issue type, list the affected resources (sorted for determinism).
+              by_type: dict[str, list[str]] = {}
+              for i in detected_issues:
+                  by_type.setdefault(i["type"], []).append(i.get("resource", ""))
+              parts = []
+              for itype in sorted(by_type):
+                  resources = sorted({r for r in by_type[itype] if r})
+                  shown = ", ".join(resources[:3]) + ("…" if len(resources) > 3 else "")
+                  parts.append(f"{itype} ({shown})" if shown else itype)
+              return f"HyperPod {cluster_name}: " + "; ".join(parts)
+
+
+          def _build_payload(cluster_name: str, k8s_checks: dict | None,
+                             detected_issues: list[dict], heartbeat: bool) -> dict:
+              now_iso = _now().strftime("%Y-%m-%dT%H:%M:%S.000Z")
+              now_compact = _now().strftime("%Y%m%dT%H%M%SZ")
+              incident_id = f"hyperpod-audit-{now_compact}"
+              metadata = {
+                  "region": os.environ.get("AWS_REGION", "unknown"),
+                  "account": os.environ.get("AWS_ACCOUNT_ID", "unknown"),
+                  "detailType": "HyperPod Periodic Audit",
+                  "clusterName": cluster_name,
+                  "triggerMode": "audit",
+                  "heartbeat": heartbeat,
+                  "detectedIssues": detected_issues,
+              }
+              if k8s_checks is not None:
+                  metadata["k8sChecks"] = k8s_checks
+
+              # Inline the finding + k8sChecks into the human-readable description. DevOps
+              # Agent preserves the top-level `description` verbatim but flattens nested
+              # payload sub-objects, so the skill can only rely on what's in this string.
+              if heartbeat and not detected_issues:
+                  description = (
+                      f"Daily heartbeat audit for HyperPod cluster '{cluster_name}'. "
+                      f"The audit Lambda inspected cluster state and found NO open issues. "
+                      f"This is an informational 'all clear' liveness signal, not an incident. "
+                      f"Triage will typically SKIP it (the skipped task is itself the "
+                      f"console liveness signal); if it does PROCEED, the hyperpod-incident-rca "
+                      f"skill should emit 'Suppress — periodic audit, no open incidents'. "
+                      f"Either way it is visible in the console and never emailed."
+                  )
+              elif detected_issues:
+                  lines = "\n".join(
+                      f"- [{i['tag']}] {i['type']} on {i['resource']}: {i['detail']}" for i in detected_issues
+                  )
+                  description = (
+                      f"Periodic audit for HyperPod cluster '{cluster_name}' detected "
+                      f"{len(detected_issues)} issue(s) at the Lambda-side check. The "
+                      f"hyperpod-incident-rca skill should investigate these in audit mode, "
+                      f"confirm current state, reconstruct the timeline, and classify each as "
+                      f"Monitor / Escalate / Resolved:\n{lines}"
+                  )
+              else:
+                  # Defensive fallback (the handler POSTs only on detected issues or the
+                  # heartbeat, so this is not normally reached).
+                  description = (
+                      f"Periodic audit invocation for HyperPod cluster '{cluster_name}'. "
+                      f"The hyperpod-incident-rca skill should run in audit mode: discover "
+                      f"open fault chains in list-cluster-events, classify each, and emit "
+                      f"Resolved / Monitor / Escalate. If no open chains exist, emit "
+                      f"'Suppress — periodic audit, no open incidents'."
+                  )
+              if k8s_checks is not None:
+                  description += (
+                      "\n\nk8sChecks configuration (parse as JSON, then apply per Phase 1 step 8 + Phase 3d):\n"
+                      f"{json.dumps(k8s_checks)}"
+                  )
+
+              priority = "MEDIUM" if detected_issues else "LOW"
+              return {
+                  "eventType": "incident",
+                  "incidentId": incident_id,
+                  "action": "created",
+                  "priority": priority,
+                  "title": _build_title(cluster_name, detected_issues, heartbeat),
+                  "description": description,
+                  "timestamp": now_iso,
+                  "service": "SageMakerHyperPod",
+                  "data": {
+                      "metadata": metadata,
+                      "originalEvent": {
+                          "source": "hyperpod-devops-agent-periodic-audit",
+                          "detail-type": "HyperPod Periodic Audit",
+                          "time": now_iso,
+                          "detail": {
+                              "ClusterName": cluster_name,
+                              "Mode": "audit",
+                              "Heartbeat": heartbeat,
+                              "DetectedIssues": detected_issues,
+                          },
+                      },
+                  },
+              }
+
+
+          def _post(webhook_url: str, secret: str, payload: dict) -> None:
+              body = json.dumps(payload).encode("utf-8")
+              timestamp = _now().strftime("%Y-%m-%dT%H:%M:%S.000Z")
+              signature = base64.b64encode(
+                  hmac.new(
+                      secret.encode("utf-8"),
+                      f"{timestamp}:{body.decode('utf-8')}".encode("utf-8"),
+                      hashlib.sha256,
+                  ).digest()
+              ).decode("utf-8")
+              request = urllib.request.Request(
+                  webhook_url,
+                  data=body,
+                  method="POST",
+                  headers={
+                      "Content-Type": "application/json",
+                      "x-amzn-event-timestamp": timestamp,
+                      "x-amzn-event-signature": signature,
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=10) as resp:
+                      _log("INFO", "webhook_post_success", status=resp.status, incidentId=payload.get("incidentId"))
+              except HTTPError as e:
+                  _log("ERROR", "webhook_post_failed", status=e.code, body=repr(e.read()))
+                  # 401/403 most likely means a stale signing secret (re-provisioned while
+                  # this sandbox stayed warm); surface it so the caller can refresh + retry.
+                  if e.code in (401, 403):
+                      raise _WebhookAuthError(e.code) from e
+                  raise
+              except URLError as e:
+                  _log("ERROR", "webhook_post_failed", error=repr(e))
+                  raise
+
+
+          # ----------------------------------------------------------------- handler
+
+          def lambda_handler(event, context):
+              cluster_name = os.environ.get("CLUSTER_NAME", "unknown-cluster")
+              eks_cluster_name = os.environ.get("EKS_CLUSTER_NAME", "").strip()
+              region = os.environ.get("AWS_REGION", "us-west-2")
+              trigger = (event or {}).get("trigger", "periodic")
+              heartbeat = trigger == "heartbeat"
+              k8s_checks = _build_k8s_checks_block()
+
+              # Inspect cluster state and POST only when a real issue is found (plus the
+              # daily heartbeat), so a healthy cluster costs zero investigations.
+              issues = _detect_issues(cluster_name, eks_cluster_name, region)
+              _log("INFO", "audit_ran", cluster=cluster_name, trigger=trigger,
+                   heartbeat=heartbeat, issueCount=len(issues),
+                   issueTypes=sorted({i["type"] for i in issues}))
+
+              if not issues and not heartbeat:
+                  _log("INFO", "audit_no_post", reason="healthy", cluster=cluster_name)
+                  return {"statusCode": 200, "body": json.dumps({"posted": False, "reason": "healthy"})}
+
+              payload = _build_payload(cluster_name, k8s_checks, issues, heartbeat=heartbeat)
+              reason = "issues-detected" if issues else "heartbeat"
+              _log("INFO", "audit_posting", reason=reason, incidentId=payload["incidentId"],
+                   issueCount=len(issues), cluster=cluster_name)
+              url, secret = _load_webhook_credentials()
+              try:
+                  _post(url, secret, payload)
+              except _WebhookAuthError as e:
+                  # Stale cached secret (re-provisioned while this sandbox stayed warm):
+                  # refresh from Secrets Manager and retry once before giving up.
+                  _log("WARN", "webhook_auth_retry", status=e.status)
+                  url, secret = _load_webhook_credentials(force_refresh=True)
+                  _post(url, secret, payload)
+              return {"statusCode": 200, "body": json.dumps(
+                  {"posted": True, "reason": reason, "issues": len(issues), "incidentId": payload["incidentId"]}
+              )}
+
+  PeriodicAuditSchedulerRole:
+    Type: AWS::IAM::Role
+    Condition: PeriodicAuditEnabled
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SchedulerInvokeLambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt PeriodicAuditFunction.Arn
+
+  PeriodicAuditSchedule:
+    Type: AWS::Scheduler::Schedule
+    Condition: PeriodicAuditEnabled
+    # See HyperPodEventRule: don't let a scheduled audit fire before the webhook
+    # secret is populated (GetSecretValue would raise).
+    DependsOn: WebhookProvisioner
+    Properties:
+      ScheduleExpression: !Ref AuditSchedule
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      State: ENABLED
+      Description: "Periodic HyperPod audit. In lambda mode the Lambda inspects the cluster and only invokes an investigation when a real issue is found."
+      Target:
+        Arn: !GetAtt PeriodicAuditFunction.Arn
+        RoleArn: !GetAtt PeriodicAuditSchedulerRole.Arn
+        Input: '{"trigger":"periodic"}'
+
+  # Daily heartbeat: fires one "all clear" audit per day even when healthy, so
+  # operators see the pipeline is alive. Reuses the same Lambda + scheduler role;
+  # the "heartbeat" input forces a webhook POST.
+  AuditHeartbeatSchedule:
+    Type: AWS::Scheduler::Schedule
+    Condition: PeriodicAuditEnabled
+    # See HyperPodEventRule: don't let the heartbeat fire before the webhook
+    # secret is populated (GetSecretValue would raise).
+    DependsOn: WebhookProvisioner
+    Properties:
+      ScheduleExpression: !Ref HeartbeatSchedule
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      State: ENABLED
+      Description: "Daily HyperPod audit heartbeat — forces one 'all clear' investigation per day so the pipeline's liveness is visible."
+      Target:
+        Arn: !GetAtt PeriodicAuditFunction.Arn
+        RoleArn: !GetAtt PeriodicAuditSchedulerRole.Arn
+        Input: '{"trigger":"heartbeat"}'
+
+  # ============================================================ Email notifier
+
+  MarkerBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      # Per-cluster unique so multiple clusters can coexist in one account/region.
+      # <=63 chars: 'hpda-markers-' (13) + prefix (<=20) + account (12) + region (<=14) + 2 hyphens = <=61.
+      # NamePrefix is required + bucket-safe (see its parameter), so it forms the
+      # name directly — no AWS::StackName fallback (stack names allow uppercase /
+      # >63 chars, which are illegal in an S3 bucket name).
+      BucketName: !Sub "hpda-markers-${NamePrefix}-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldMarkers
+            Status: Enabled
+            ExpirationInDays: !Ref MarkerExpirationDays
+
+  EmailNotifierExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EmailNotifierExecutionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    "ses:FromAddress": !Ref EmailSender
+              - Effect: Allow
+                Action:
+                  - aidevops:GetBacklogTask
+                  - aidevops:ListJournalRecords
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${MarkerBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt MarkerBucket.Arn
+              # Custom metric emitted when a dedup-marker write fails (so
+              # "duplicate emails likely" is alarmable). PutMetricData does not
+              # support resource-level scoping; the Namespace condition limits it
+              # to this solution's metrics.
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    "cloudwatch:namespace": "HyperPodDevOpsAgent"
+
+  EmailNotifierFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt EmailNotifierExecutionRole.Arn
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Timeout: 30
+      Environment:
+        Variables:
+          EMAIL_SENDER: !Ref EmailSender
+          EMAIL_RECIPIENTS: !Ref EmailRecipients
+          EMAIL_DETAIL_TYPES: !Ref EmailDetailTypes
+          CONSOLE_URL_TEMPLATE: !Ref ConsoleUrlTemplate
+          FORCE_SEND: !Ref ForceSend
+          MARKER_BUCKET: !Ref MarkerBucket
+          MARKER_PREFIX: "emailed/"
+      Code:
+        ZipFile: |
+          """Compose HTML email from a completed DevOps Agent investigation.
+
+          Design (v2): the notifier receives the aws.aidevops EventBridge event, extracts
+          the task/execution ids, and pulls the FULL investigation context via
+          `get_backlog_task` + `list_journal_records`. It composes the email from the
+          raw journal records — symptoms, findings, investigation_gaps — rather than
+          depending on a specific verdict-title shape from the RCA skill.
+
+          This makes the notifier resilient to skill output drift. As long as the
+          investigation identifies a root cause, the notifier will surface it.
+
+          Filtering (in order):
+            1. Only "Investigation Completed" events (single email per lifecycle).
+            2. Dedup by execution_id: check S3 for a marker under
+               s3://$MARKER_BUCKET/$MARKER_PREFIX/<execution_id>. If present, we've
+               already emailed for this execution and drop the event. Otherwise
+               write the marker after the email is sent successfully. This is
+               robust to DevOps Agent's periodic-audit trigger re-emitting the
+               same execution's Investigation Completed event many times.
+            3. Suppress-verdict skip: the RCA marked this investigation as Suppress.
+            4. No-findings skip: the RCA produced no findings; nothing to report.
+
+          Environment variables:
+            EMAIL_SENDER              SES-verified From address. Required.
+            EMAIL_RECIPIENTS          Comma-separated To addresses. Required.
+            EMAIL_DETAIL_TYPES        Detail-types to consider (default: "Investigation Completed").
+            CONSOLE_URL_TEMPLATE      URL template. Tokens: %region%, %account%,
+                                      %agent_space_id%, %task_id%.
+            MARKER_BUCKET             S3 bucket name for per-execution dedup markers. Required.
+            MARKER_PREFIX             Key prefix inside the bucket (default: "emailed/").
+            FORCE_SEND                If "1"/"true", bypass every filter (including the
+                                      marker check). Useful for debugging. Note: this
+                                      does NOT bypass the journal-fetch-error raise — if
+                                      list_journal_records fails we still raise (and let
+                                      EventBridge retry) rather than force a content-free
+                                      email.
+          """
+          import datetime
+          import html
+          import json
+          import os
+          import re
+
+          import boto3
+
+
+          _ses_client = None
+          _devops_client = None
+          _s3_client = None
+          _cloudwatch_client = None
+
+
+          def _log(level: str, event: str, **kwargs) -> None:
+              """Emit one structured-JSON log line for CloudWatch Logs Insights.
+
+              Diagnostic-only lines stay as plain print().
+              """
+              print(json.dumps({"level": level, "event": event, **kwargs}, default=str))
+
+
+          def _cloudwatch():
+              global _cloudwatch_client
+              if _cloudwatch_client is None:
+                  _cloudwatch_client = boto3.client("cloudwatch")
+              return _cloudwatch_client
+
+
+          def _emit_metric(name: str, value: float = 1.0) -> None:
+              """Emit a single CloudWatch custom metric for operational alerting.
+
+              Best-effort: a metric-publish failure must never break email delivery.
+              """
+              try:
+                  _cloudwatch().put_metric_data(
+                      Namespace="HyperPodDevOpsAgent",
+                      MetricData=[{"MetricName": name, "Value": value, "Unit": "Count"}],
+                  )
+              except Exception as exc:  # noqa: BLE001
+                  print(f"put_metric_data failed for {name}: {exc!r}")
+
+
+          def _ses():
+              global _ses_client
+              if _ses_client is None:
+                  _ses_client = boto3.client("ses")
+              return _ses_client
+
+
+          def _s3():
+              global _s3_client
+              if _s3_client is None:
+                  _s3_client = boto3.client("s3")
+              return _s3_client
+
+
+          def _devops():
+              global _devops_client
+              if _devops_client is None:
+                  _devops_client = boto3.client("devops-agent")
+              return _devops_client
+
+
+          def _env_list(name: str, default: str) -> list[str]:
+              raw = os.environ.get(name, default)
+              return [tok.strip() for tok in raw.split(",") if tok.strip()]
+
+
+          def _env_bool(name: str, default: bool = False) -> bool:
+              v = os.environ.get(name, "").strip().lower()
+              if not v:
+                  return default
+              return v in ("1", "true", "yes", "on")
+
+
+          def _extract_meta(event: dict) -> dict:
+              """Pull the identifiers we need from the aws.aidevops event envelope."""
+              detail = event.get("detail", {})
+              metadata = detail.get("metadata", {}) or {}
+              data = detail.get("data", {}) or {}
+              return {
+                  "agent_space_id": metadata.get("agent_space_id") or "",
+                  "task_id": metadata.get("task_id") or "",
+                  "execution_id": metadata.get("execution_id") or "",
+                  "priority": (data.get("priority") or "").upper(),
+                  "status": data.get("status") or "",
+                  "created_at": data.get("created_at") or "",
+                  "updated_at": data.get("updated_at") or "",
+              }
+
+
+          def _fetch_task(agent_space_id: str, task_id: str) -> dict:
+              if not agent_space_id or not task_id:
+                  return {}
+              try:
+                  resp = _devops().get_backlog_task(agentSpaceId=agent_space_id, taskId=task_id)
+                  return resp.get("task", {}) or {}
+              except Exception as exc:
+                  print(f"get_backlog_task failed: {exc!r}")
+                  return {}
+
+
+          def _fetch_journal(agent_space_id: str, execution_id: str) -> dict:
+              """Return parsed records grouped by type, plus the raw records.
+
+              Shape:
+                  {
+                      "symptoms":  [ {title, description, ...}, ... ],
+                      "findings":  [ {title, description, finding_type, ...}, ... ],
+                      "gaps":      [ str, ... ],
+                      "raw":       [ raw record dict, ... ],   # keeps createdAt etc.
+                      "raw_count": int,
+                  }
+              """
+              result = {"symptoms": [], "findings": [], "gaps": [], "raw": [], "raw_count": 0, "error": None}
+              if not agent_space_id or not execution_id:
+                  return result
+              try:
+                  paginator = _devops().get_paginator("list_journal_records")
+                  for page in paginator.paginate(agentSpaceId=agent_space_id, executionId=execution_id):
+                      for record in page.get("records", []):
+                          result["raw_count"] += 1
+                          result["raw"].append(record)
+                          rtype = record.get("recordType") or ""
+                          try:
+                              content = json.loads(record.get("content", "{}")) if record.get("content") else {}
+                          except (ValueError, TypeError):
+                              content = {}
+                          if rtype == "symptom":
+                              result["symptoms"].append(content)
+                          elif rtype == "finding":
+                              result["findings"].append(content)
+                          elif rtype in ("investigation_gap", "gap"):
+                              # Content may be a plain string or a dict; capture whichever.
+                              if isinstance(content, dict):
+                                  text = content.get("title") or content.get("description") or json.dumps(content)
+                              else:
+                                  text = str(content)
+                              result["gaps"].append(text)
+              except Exception as exc:
+                  # Record the failure instead of returning an indistinguishable empty
+                  # journal: a throttled/failed list_journal_records must NOT look like
+                  # "no findings" (which the handler would skip with a 200, so EventBridge
+                  # never retries and a real HIGH-priority investigation goes unemailed).
+                  print(f"list_journal_records failed: {exc!r}")
+                  result["error"] = repr(exc)
+              return result
+
+
+          def _has_verdict_symptom(journal: dict) -> bool:
+              """True if the journal carries a 'Triage verdict:' symptom."""
+              return any(
+                  (s.get("title") or "").strip().startswith("Triage verdict")
+                  for s in journal["symptoms"]
+              )
+
+
+          def _has_actionable_content(journal: dict) -> bool:
+              """Email-worthy investigations have findings OR a (non-Suppress) verdict.
+
+              Empirically, the RCA skill sometimes marks findings as `cause` rather
+              than `root_cause` even when the causal chain terminates. Any non-empty
+              findings list means the RCA phase produced conclusions worth reporting.
+
+              A verdict symptom also counts: a Monitor/Escalate/Resolved verdict with no
+              `finding` records must still email ("Monitor verdicts are not silent" —
+              IMPLEMENTATION.md), matching the documented "zero findings AND no verdict
+              symptom" drop condition. Suppress verdicts never reach here — they are
+              filtered by _is_suppress_verdict earlier in the handler — so any verdict
+              symptom present at this point is non-Suppress. Suppress-style audits with no
+              fault activity produce neither findings nor a verdict and are dropped.
+              """
+              return bool(journal["findings"]) or _has_verdict_symptom(journal)
+
+
+          def _marker_key(execution_id: str) -> str:
+              prefix = os.environ.get("MARKER_PREFIX", "emailed/")
+              if not prefix.endswith("/"):
+                  prefix = prefix + "/"
+              return f"{prefix}{execution_id}"
+
+
+          def _already_emailed(execution_id: str) -> bool:
+              """True if we've already emailed for this execution_id.
+
+              Reads a marker object under s3://$MARKER_BUCKET/<prefix>/<execution_id>.
+              HeadObject returns 200 for exists, 404 for absent. Any other error we
+              treat as 'unknown' → don't skip (fail-open toward sending); the
+              put-after-send path will still write the marker so subsequent events
+              dedup normally.
+              """
+              bucket = os.environ.get("MARKER_BUCKET", "")
+              if not bucket or not execution_id:
+                  return False
+              key = _marker_key(execution_id)
+              try:
+                  _s3().head_object(Bucket=bucket, Key=key)
+                  return True
+              except Exception as exc:
+                  # 404 is the normal "object doesn't exist" case. S3 also returns 403
+                  # for missing objects when the caller lacks ListBucket on the bucket
+                  # — treat that the same way. Any OTHER error (throttling, network)
+                  # is logged and we fall through to sending (fail-open).
+                  code = None
+                  if hasattr(exc, "response"):
+                      code = (exc.response or {}).get("Error", {}).get("Code")
+                  if code in ("404", "403", "NoSuchKey", "NotFound") or "Not Found" in str(exc):
+                      return False
+                  print(f"head_object failed for {bucket}/{key}: {exc!r} (treating as not-emailed)")
+                  return False
+
+
+          def _write_marker(execution_id: str, event: dict, meta: dict) -> None:
+              """Record that we emailed for this execution_id.
+
+              The body records enough context to trace back to the source event if
+              someone later inspects the bucket for debugging.
+              """
+              bucket = os.environ.get("MARKER_BUCKET", "")
+              if not bucket or not execution_id:
+                  return
+              key = _marker_key(execution_id)
+              body = json.dumps({
+                  "execution_id": execution_id,
+                  "task_id": meta.get("task_id", ""),
+                  "agent_space_id": meta.get("agent_space_id", ""),
+                  "event_id": event.get("id", ""),
+                  "event_time": event.get("time", ""),
+                  "priority": meta.get("priority", ""),
+              }, sort_keys=True).encode("utf-8")
+              try:
+                  _s3().put_object(
+                      Bucket=bucket,
+                      Key=key,
+                      Body=body,
+                      ContentType="application/json",
+                  )
+              except Exception as exc:
+                  # Log but do not fail — the email has already been sent. Worst-case a
+                  # subsequent event resends, which is what our old behavior was. Emit a
+                  # metric so "dedup markers are failing to write" (→ duplicate emails
+                  # likely) becomes dashboardable/alarmable rather than buried in log tails.
+                  print(f"put_object failed for {bucket}/{key}: {exc!r} (email sent OK, dedup marker not written)")
+                  _emit_metric("S3DedupMarkerWriteFailed")
+
+
+          def _is_heartbeat(task: dict) -> bool:
+              """Detect the daily heartbeat audit (silent liveness — never emailed).
+
+              The periodic-audit Lambda marks heartbeat runs deterministically: the task
+              title is 'HyperPod <cluster>: periodic audit — no open issues' and the
+              description begins 'Daily heartbeat audit for HyperPod cluster'. Match either
+              so this is independent of RCA-skill wording.
+              """
+              title = (task.get("title") or "")
+              desc = (task.get("description") or "")
+              return (
+                  "Daily heartbeat audit for HyperPod cluster" in desc
+                  or "periodic audit — no open issues" in title
+              )
+
+
+          def _is_suppress_verdict(journal: dict) -> bool:
+              """Detect a Suppress verdict in the journal.
+
+              The RCA SKILL.md contract is: emit a first symptom titled
+                  "Triage verdict: <Suppress|Monitor|Escalate|Resolved> — ..."
+              We check for that prefix on any symptom title. As a fallback for
+              prompt drift, we also scan the first symptom's description for a
+              "Verdict: Suppress" line, which the skill's description block also
+              contains.
+              """
+              for s in journal["symptoms"]:
+                  title = (s.get("title") or "").strip()
+                  if title.startswith("Triage verdict"):
+                      body = title.replace("Triage verdict:", "", 1).strip()
+                      first_word = body.split()[0] if body.split() else ""
+                      if first_word.lower() == "suppress":
+                          return True
+              if journal["symptoms"]:
+                  desc = (journal["symptoms"][0].get("description") or "").strip()
+                  m = re.search(r"^\s*Verdict:\s*Suppress", desc, re.MULTILINE | re.IGNORECASE)
+                  if m:
+                      return True
+              return False
+
+
+          def _verdict_symptom(journal: dict) -> dict:
+              """Return the first symptom whose title starts with 'Triage verdict:', or {}."""
+              for s in journal["symptoms"]:
+                  if (s.get("title") or "").strip().startswith("Triage verdict"):
+                      return s
+              return journal["symptoms"][0] if journal["symptoms"] else {}
+
+
+          # Section headers the RCA skill emits AFTER the Summary paragraph in the verdict
+          # description. The Summary paragraph runs from 'Summary:' up to the first of these.
+          _SUMMARY_END_HEADERS = re.compile(
+              r"^\s*(What HyperPod is doing right now|Timeline|Most recent event at|"
+              r"Next re-check|Recommended actions|Recommendation)\s*:",
+              re.IGNORECASE,
+          )
+
+
+          def _parse_summary_text(description: str) -> str:
+              """Extract the RCA skill's free-text 'Summary:' paragraph, or "".
+
+              Contract (RCA SKILL.md Phase 4): the verdict symptom's description contains a
+              single natural-language paragraph under a 'Summary:' line that weaves together
+              what happened -> likely cause -> recommended action. We capture from just
+              after 'Summary:' up to the next known section header (or a blank line that
+              precedes one). Deliberately NOT field-structured — nothing to drift. Returns
+              "" if no Summary block is present (graceful fallback).
+              """
+              if not description or "Summary:" not in description:
+                  return ""
+              after = description.split("Summary:", 1)[1]
+              lines: list[str] = []
+              for raw in after.splitlines():
+                  if _SUMMARY_END_HEADERS.match(raw):
+                      break
+                  line = raw.strip()
+                  if not line:
+                      # A blank line ends the paragraph only once we've collected content.
+                      if lines:
+                          break
+                      continue
+                  lines.append(line)
+              return _strip_confidence_tags(" ".join(lines))
+
+
+          def _first_sentence(text: str, limit: int = 160) -> str:
+              """First sentence of a paragraph, for use as a headline."""
+              if not text:
+                  return ""
+              m = re.search(r"(.+?[.!?])(\s|$)", text)
+              sentence = m.group(1).strip() if m else text
+              return sentence[:limit]
+
+
+          def _strip_confidence_tags(text: str) -> str:
+              """Remove RCA confidence annotations ([direct]/[proxy]/[unverified]) and tidy.
+
+              Those tags are meaningful on detailed evidence claims (kept in the body), but
+              they're noise in the one-line email subject/headline.
+              """
+              cleaned = re.sub(r"\[(?:direct|proxy|unverified)\]\s*", "", text, flags=re.IGNORECASE)
+              return re.sub(r"\s{2,}", " ", cleaned).strip()
+
+
+          def _pick_headline(journal: dict, task: dict) -> str:
+              """Best short headline for the subject line.
+
+              Priority:
+              1. First sentence of the Summary paragraph (specific, human-readable).
+              2. The verdict name (post-colon body of the 'Triage verdict:' title).
+              3. The first symptom's title.
+              4. The task title.
+              5. A generic string.
+
+              Confidence tags are already stripped by _parse_summary_text; we also strip
+              the fallback branches for safety.
+              """
+              vs = _verdict_symptom(journal)
+              summary = _parse_summary_text(vs.get("description") or "")
+              if summary:
+                  return _first_sentence(summary)
+
+              def _raw() -> str:
+                  for s in journal["symptoms"]:
+                      t = (s.get("title") or "").strip()
+                      if t.startswith("Triage verdict"):
+                          return t.replace("Triage verdict:", "", 1).strip().split(" :: ", 1)[0]
+                  if journal["symptoms"]:
+                      first = (journal["symptoms"][0].get("title") or "").strip()
+                      if first:
+                          return first
+                  if task.get("title"):
+                      return task["title"]
+                  return "HyperPod investigation"
+
+              return _strip_confidence_tags(_raw())[:160]
+
+
+          def _console_url(event: dict, meta: dict) -> str:
+              template = os.environ.get("CONSOLE_URL_TEMPLATE", "")
+              if not template:
+                  return ""
+              values = {
+                  "%region%": event.get("region", ""),
+                  "%account%": event.get("account", ""),
+                  "%agent_space_id%": meta.get("agent_space_id", ""),
+                  "%task_id%": meta.get("task_id", ""),
+              }
+              result = template
+              for token, value in values.items():
+                  result = result.replace(token, value or "")
+              return result
+
+
+          _PRIORITY_STYLE = {
+              "HIGH":   ("HIGH",   "#c62828", "#ffebee"),
+              "MEDIUM": ("MEDIUM", "#e65100", "#fff3e0"),
+              "LOW":    ("LOW",    "#1565c0", "#e3f2fd"),
+          }
+
+
+          def _priority_chip_html(priority: str) -> str:
+              label, fg, bg = _PRIORITY_STYLE.get(priority, ("?", "#424242", "#eeeeee"))
+              return (
+                  f'<span style="background:{bg};color:{fg};font-weight:600;'
+                  f'padding:2px 8px;border-radius:3px;font-size:12px;'
+                  f'letter-spacing:0.5px;font-family:Helvetica,Arial,sans-serif;">'
+                  f'{html.escape(label)}</span>'
+              )
+
+
+          def _format_ts(iso: str) -> str:
+              if not iso:
+                  return "—"
+              try:
+                  dt = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00"))
+                  return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+              except Exception:
+                  return iso
+
+
+          def _format_subject(event: dict, headline: str, priority: str) -> str:
+              priority_tag = {"HIGH": "[H]", "MEDIUM": "[M]", "LOW": "[L]"}.get(priority, "[?]")
+              return re.sub(r"[\r\n]+", " ", f"{priority_tag} HyperPod: {headline}")[:200]
+
+
+          def _render_section(esc, heading: str, rows_html: str) -> str:
+              return (
+                  f'<h3 style="font-size:13px;color:#616161;text-transform:uppercase;'
+                  f'letter-spacing:1px;margin:24px 0 8px 0;">{esc(heading)}</h3>'
+                  f'{rows_html}'
+              )
+
+
+          def _render_record_card(esc, title: str, description: str, badge: str = "") -> str:
+              badge_html = ""
+              if badge:
+                  badge_html = (
+                      f'<span style="background:#eeeeee;color:#424242;font-size:11px;'
+                      f'font-weight:600;padding:2px 8px;border-radius:3px;'
+                      f'letter-spacing:0.5px;margin-right:8px;">{esc(badge)}</span>'
+                  )
+              return (
+                  f'<div style="background:#fafafa;border:1px solid #e0e0e0;'
+                  f'padding:12px 16px;margin:0 0 12px 0;">'
+                  f'<div style="font-size:13px;font-weight:600;color:#212121;margin-bottom:6px;">'
+                  f'{badge_html}{esc(title)}</div>'
+                  f'<pre style="white-space:pre-wrap;word-wrap:break-word;'
+                  f'font-family:Menlo,Consolas,monospace;font-size:12px;'
+                  f'line-height:1.5;color:#212121;margin:0;">{esc(description)}</pre>'
+                  f'</div>'
+              )
+
+
+          def _format_body_html(
+              event: dict,
+              meta: dict,
+              task: dict,
+              journal: dict,
+              headline: str,
+              console_url: str,
+          ) -> str:
+              esc = html.escape
+              priority = meta["priority"]
+              reference = task.get("reference") or {}
+
+              facts_rows = "".join(
+                  f'<tr><td style="color:#616161;padding:4px 12px 4px 0;vertical-align:top;white-space:nowrap;">{esc(k)}</td>'
+                  f'<td style="padding:4px 0;vertical-align:top;font-family:Menlo,Consolas,monospace;font-size:13px;">{v}</td></tr>'
+                  for k, v in [
+                      ("Priority", _priority_chip_html(priority)),
+                      ("Event", esc(event.get("detail-type", ""))),
+                      ("Status", esc(meta.get("status", ""))),
+                      ("Trigger source", esc(reference.get("system") or "—")),
+                      ("Trigger title", esc(reference.get("title") or "—")),
+                      ("Investigation ID", esc(meta.get("task_id", "—"))),
+                      ("Account", esc(event.get("account", "—"))),
+                      ("Region", esc(event.get("region", "—"))),
+                      ("Created", esc(_format_ts(meta.get("created_at", "")))),
+                      ("Updated", esc(_format_ts(meta.get("updated_at", "")))),
+                  ]
+              )
+
+              # Symptoms — first is often the verdict, remaining are per-resource
+              symptoms_html = ""
+              if journal["symptoms"]:
+                  rows = []
+                  for i, s in enumerate(journal["symptoms"][:6]):
+                      title = (s.get("title") or "").strip() or f"symptom #{i+1}"
+                      desc = (s.get("description") or "").strip()
+                      badge = "VERDICT" if title.startswith("Triage verdict") else ("SYMPTOM" if i > 0 else "PRIMARY")
+                      rows.append(_render_record_card(esc, title, desc[:2000], badge))
+                  extra = len(journal["symptoms"]) - 6
+                  if extra > 0:
+                      rows.append(
+                          f'<div style="font-size:12px;color:#616161;margin-top:-4px;">'
+                          f'…and {extra} more symptom{"s" if extra != 1 else ""}. Open the investigation for full detail.'
+                          f'</div>'
+                      )
+                  symptoms_html = _render_section(esc, f"Symptoms ({len(journal['symptoms'])})", "".join(rows))
+
+              # Findings — grouped by finding_type
+              findings_html = ""
+              if journal["findings"]:
+                  by_type: dict[str, list[dict]] = {}
+                  for f in journal["findings"]:
+                      ft = (f.get("finding_type") or "unknown").lower()
+                      by_type.setdefault(ft, []).append(f)
+                  order = ["root_cause", "cause", "hypothesis"]
+                  rows = []
+                  for ft in order + [k for k in by_type if k not in order]:
+                      items = by_type.get(ft, [])
+                      for f in items:
+                          title = (f.get("title") or "").strip() or f"{ft} finding"
+                          desc = (f.get("description") or "").strip()
+                          rows.append(_render_record_card(esc, title, desc[:2000], ft.replace("_", " ").upper()))
+                  findings_html = _render_section(esc, f"Findings ({len(journal['findings'])})", "".join(rows))
+
+              # Investigation gaps
+              gaps_html = ""
+              if journal["gaps"]:
+                  items = "".join(
+                      f'<li style="margin-bottom:4px;">{esc(g)}</li>'
+                      for g in journal["gaps"][:10]
+                  )
+                  gaps_html = _render_section(
+                      esc,
+                      "Investigation gaps",
+                      f'<ul style="margin:0;padding-left:20px;font-size:13px;color:#212121;">{items}</ul>'
+                  )
+
+              link_block = ""
+              if console_url:
+                  link_block = (
+                      f'<div style="margin-top:24px;">'
+                      f'<a href="{esc(console_url)}" '
+                      f'style="display:inline-block;background:#0b5cad;color:#ffffff;'
+                      f'text-decoration:none;padding:10px 20px;font-weight:600;'
+                      f'font-size:13px;border-radius:3px;">Open investigation</a></div>'
+                  )
+
+              banner_html = (
+                  f'<div style="background:#fff3e0;border-left:4px solid #e65100;'
+                  f'padding:12px 16px;margin:0 0 16px 0;">'
+                  f'<div style="color:#616161;font-size:11px;letter-spacing:1px;'
+                  f'text-transform:uppercase;margin-bottom:4px;">Headline</div>'
+                  f'<div style="font-size:16px;font-weight:600;color:#111;">{esc(headline)}</div>'
+                  f'</div>'
+              )
+
+              # RCA summary — a single free-text paragraph (what happened -> likely cause
+              # -> recommended action) from the verdict symptom's description. Rendered
+              # prominently up top.
+              summary = _parse_summary_text(_verdict_symptom(journal).get("description") or "")
+              summary_html = ""
+              if summary:
+                  summary_html = (
+                      f'<div style="background:#f8f9fa;border:1px solid #e0e0e0;'
+                      f'border-radius:3px;padding:14px 16px;margin:0 0 16px 0;">'
+                      f'<div style="color:#616161;font-size:11px;letter-spacing:1px;'
+                      f'text-transform:uppercase;margin-bottom:4px;">Summary</div>'
+                      f'<div style="font-size:14px;color:#111;">{esc(summary)}</div></div>'
+                  )
+
+              return (
+                  f'<html><body style="margin:0;padding:24px;background:#f5f5f5;'
+                  f'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Helvetica,Arial,sans-serif;'
+                  f'color:#212121;font-size:14px;line-height:1.5;">'
+                  f'<div style="max-width:720px;margin:0 auto;background:#ffffff;'
+                  f'padding:24px;border:1px solid #e0e0e0;">'
+                  f'<div style="font-size:11px;color:#9e9e9e;letter-spacing:1px;'
+                  f'text-transform:uppercase;margin-bottom:4px;">AWS DevOps Agent</div>'
+                  f'<h1 style="font-size:20px;color:#111;margin:0 0 12px 0;font-weight:600;">'
+                  f'HyperPod investigation completed</h1>'
+                  f'{banner_html}'
+                  f'{summary_html}'
+                  f'<table style="border-collapse:collapse;font-size:13px;margin:0 0 8px 0;">'
+                  f'<tbody>{facts_rows}</tbody></table>'
+                  f'{symptoms_html}'
+                  f'{findings_html}'
+                  f'{gaps_html}'
+                  f'{link_block}'
+                  f'</div></body></html>'
+              )
+
+
+          def _format_body_text(
+              event: dict,
+              meta: dict,
+              task: dict,
+              journal: dict,
+              headline: str,
+              console_url: str,
+          ) -> str:
+              """Plain-text fallback."""
+              lines = ["HyperPod investigation completed", "=" * 32, "", f"Headline: {headline}", ""]
+              summary = _parse_summary_text(_verdict_symptom(journal).get("description") or "")
+              if summary:
+                  lines += ["Summary:", summary, ""]
+              lines += [
+                  f"Priority:         {meta['priority'] or 'n/a'}",
+                  f"Event:            {event.get('detail-type', '')}",
+                  f"Status:           {meta.get('status', '')}",
+                  f"Trigger:          {(task.get('reference') or {}).get('title', '—')}",
+                  f"Investigation ID: {meta.get('task_id', '—')}",
+                  f"Account:          {event.get('account', '—')}",
+                  f"Region:           {event.get('region', '—')}",
+                  f"Created:          {_format_ts(meta.get('created_at', ''))}",
+                  f"Updated:          {_format_ts(meta.get('updated_at', ''))}",
+              ]
+              if console_url:
+                  lines += ["", f"Open investigation: {console_url}"]
+
+              if journal["symptoms"]:
+                  lines += ["", "-- Symptoms --"]
+                  for s in journal["symptoms"][:6]:
+                      lines += ["", (s.get("title") or "").strip(), (s.get("description") or "").strip()[:1500]]
+              if journal["findings"]:
+                  lines += ["", "-- Findings --"]
+                  for f in journal["findings"]:
+                      ft = (f.get("finding_type") or "").upper()
+                      lines += ["", f"[{ft}] {(f.get('title') or '').strip()}", (f.get("description") or "").strip()[:1500]]
+              if journal["gaps"]:
+                  lines += ["", "-- Investigation gaps --"]
+                  for g in journal["gaps"][:10]:
+                      lines.append(f"- {g}")
+
+              return "\n".join(lines)
+
+
+          def lambda_handler(event, context):
+              detail_type = event.get("detail-type", "")
+              _log("INFO", "event_received", detailType=detail_type, id=event.get("id"))
+
+              allowed = _env_list("EMAIL_DETAIL_TYPES", "Investigation Completed")
+              if detail_type not in allowed:
+                  _log("INFO", "email_skipped", reason="detail-type", detailType=detail_type)
+                  return {"statusCode": 200, "body": json.dumps({"skipped": True, "reason": "detail-type"})}
+
+              meta = _extract_meta(event)
+              if not meta["agent_space_id"] or not meta["execution_id"]:
+                  _log("INFO", "email_skipped", reason="missing-ids")
+                  return {"statusCode": 200, "body": json.dumps({"skipped": True, "reason": "missing-ids"})}
+
+              force = _env_bool("FORCE_SEND")
+
+              # Cheap dedup check first — before any API calls to DevOps Agent.
+              # If we've already emailed for this execution_id, drop the event.
+              if not force and _already_emailed(meta["execution_id"]):
+                  _log("INFO", "email_skipped", reason="already-emailed", executionId=meta["execution_id"])
+                  return {"statusCode": 200, "body": json.dumps({"skipped": True, "reason": "already-emailed"})}
+
+              task = _fetch_task(meta["agent_space_id"], meta["task_id"])
+              journal = _fetch_journal(meta["agent_space_id"], meta["execution_id"])
+              _log("INFO", "journal_fetched", symptoms=len(journal["symptoms"]), findings=len(journal["findings"]), gaps=len(journal["gaps"]), raw=journal["raw_count"])
+
+              # If the journal fetch itself failed, we cannot tell "no findings" from "API
+              # error". Raise so EventBridge retries this event rather than silently
+              # dropping a possibly-actionable investigation (no marker is written on this
+              # path, so a retry re-sends cleanly).
+              if journal.get("error"):
+                  raise RuntimeError(
+                      f"list_journal_records failed for execution_id={meta['execution_id']}: "
+                      f"{journal['error']} — raising so EventBridge retries"
+                  )
+
+              # Daily heartbeat is a silent liveness signal — visible in the console/logs
+              # but never emailed. The audit Lambda marks heartbeat runs deterministically
+              # in the task title/description; match either (skill-independent).
+              if not force and _is_heartbeat(task):
+                  _log("INFO", "email_skipped", reason="heartbeat")
+                  return {"statusCode": 200, "body": json.dumps({"skipped": True, "reason": "heartbeat"})}
+
+              if not force and _is_suppress_verdict(journal):
+                  _log("INFO", "email_skipped", reason="suppress-verdict")
+                  return {"statusCode": 200, "body": json.dumps({"skipped": True, "reason": "suppress-verdict"})}
+              if not force and not _has_actionable_content(journal):
+                  _log("INFO", "email_skipped", reason="no-actionable-content")
+                  return {"statusCode": 200, "body": json.dumps({"skipped": True, "reason": "no-findings"})}
+
+              console_url = _console_url(event, meta)
+              headline = _pick_headline(journal, task)
+              subject = _format_subject(event, headline, meta["priority"])
+              body_html = _format_body_html(event, meta, task, journal, headline, console_url)
+              body_text = _format_body_text(event, meta, task, journal, headline, console_url)
+
+              recipients = _env_list("EMAIL_RECIPIENTS", "")
+              if not recipients:
+                  raise RuntimeError("EMAIL_RECIPIENTS is empty")
+              sender = os.environ.get("EMAIL_SENDER")
+              if not sender:
+                  raise RuntimeError("EMAIL_SENDER is unset")
+
+              _log("INFO", "email_sending", sender=sender, recipientCount=len(recipients), subject=subject, htmlBytes=len(body_html))
+              resp = _ses().send_email(
+                  Source=sender,
+                  Destination={"ToAddresses": recipients},
+                  Message={
+                      "Subject": {"Data": subject, "Charset": "UTF-8"},
+                      "Body": {
+                          "Text": {"Data": body_text, "Charset": "UTF-8"},
+                          "Html": {"Data": body_html, "Charset": "UTF-8"},
+                      },
+                  },
+              )
+              _log("INFO", "email_sent", messageId=resp["MessageId"], executionId=meta["execution_id"], priority=meta.get("priority"))
+
+              # Record the send in the dedup bucket so subsequent re-emissions for
+              # the same execution_id are skipped. Best-effort: a failure here means
+              # a duplicate email might slip through later, not a hard error.
+              _write_marker(meta["execution_id"], event, meta)
+
+              return {"statusCode": 200, "body": json.dumps({"messageId": resp["MessageId"]})}
+
+  EmailNotifierEventRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgeInvokeLambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt EmailNotifierFunction.Arn
+
+  InvestigationLifecycleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "Route THIS Agent Space's investigation lifecycle events to the email notifier."
+      State: ENABLED
+      # Scope to THIS stack's Agent Space. Without the agent_space_id filter,
+      # every stack's notifier matches every cluster's investigations account-wide,
+      # producing one duplicate email per deployed stack.
+      EventPattern:
+        source:
+          - aws.aidevops
+        detail-type:
+          - prefix: "Investigation"
+        detail:
+          metadata:
+            agent_space_id:
+              - !GetAtt AgentSpace.AgentSpaceId
+      Targets:
+        - Arn: !GetAtt EmailNotifierFunction.Arn
+          Id: "EmailNotifierTarget"
+          RoleArn: !GetAtt EmailNotifierEventRole.Arn
+
+  # ============================================================ Skill uploader (CR #2)
+
+  SkillUploaderRole:
+    Type: AWS::IAM::Role
+    Condition: UploadSkills
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SkillUploaderPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - aidevops:ListAssets
+                  - aidevops:GetAsset
+                  - aidevops:CreateAsset
+                  - aidevops:UpdateAsset
+                  - aidevops:DeleteAsset
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "arn:aws:s3:::${AssetsBucket}/*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
+
+  SkillUploaderFunction:
+    Type: AWS::Lambda::Function
+    Condition: UploadSkills
+    Properties:
+      Role: !GetAtt SkillUploaderRole.Arn
+      Runtime: python3.13
+      Handler: index.handler
+      Timeout: 120
+      # Packaged as an S3 zip (not inline) because it bundles a current boto3 —
+      # the Lambda runtime's bundled boto3 predates the DevOps Agent Asset API.
+      # Built + uploaded by prepare_deployment.py build-skill-uploader.
+      Code:
+        S3Bucket: !Ref SkillUploaderS3Bucket
+        S3Key: !Ref SkillUploaderS3Key
+
+  SkillUploader:
+    Type: Custom::SkillUploader
+    Condition: UploadSkills
+    # Ordering vs. AgentSpace is enforced by the GetAtt reference below: created
+    # after the AgentSpace, deleted before it, so skill assets are removed before
+    # the AgentSpace is torn down.
+    Properties:
+      ServiceToken: !GetAtt SkillUploaderFunction.Arn
+      AgentSpaceId: !GetAtt AgentSpace.AgentSpaceId
+      AssetsBucket: !Ref AssetsBucket
+      SkillsVersion: !Ref SkillsVersion
+      Manifest: !Ref SkillsManifest
+
+Outputs:
+
+  AgentSpaceId:
+    Value: !GetAtt AgentSpace.AgentSpaceId
+    Description: "Unique identifier of the Agent Space."
+
+  AgentSpaceArn:
+    Value: !GetAtt AgentSpace.Arn
+    Description: "ARN of the Agent Space."
+
+  AgentSpaceRoleArn:
+    Value: !GetAtt AgentSpaceRole.Arn
+    Description: "ARN of the Agent Space monitoring role (also the EKS access-entry principal)."
+
+  WebhookSecretArn:
+    Value: !Ref WebhookSecret
+    Description: "ARN of the Secrets Manager secret holding the webhook {url, secret}."
+
+  ConsoleUrl:
+    Value: !Sub "https://${AgentSpace.AgentSpaceId}.aidevops.global.app.aws/home"
+    Description: "AWS DevOps Agent Operator Web App URL for this Agent Space."
+
+  MarkerBucketName:
+    Value: !Ref MarkerBucket
+    Description: "S3 bucket storing per-execution email dedup markers."
+
+  WebhookBridgeFunctionName:
+    Value: !Ref WebhookBridgeFunction
+    Description: "Name of the webhook bridge Lambda (for log tailing)."
+
+  PeriodicAuditFunctionName:
+    Condition: PeriodicAuditEnabled
+    Value: !Ref PeriodicAuditFunction
+    Description: "Name of the periodic-audit Lambda (for log tailing)."
+
+  EmailNotifierFunctionName:
+    Value: !Ref EmailNotifierFunction
+    Description: "Name of the email notifier Lambda (for log tailing)."
