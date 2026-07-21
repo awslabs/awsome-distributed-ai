@@ -261,7 +261,13 @@ def _detect_crashloops(eks_cluster_name: str, region: str, cfg: dict) -> list[di
             restarts = cs.get("restartCount", 0) or 0
 
             in_backoff = waiting.get("reason") == "CrashLoopBackOff"
-            has_crash_evidence = bool(last_term)
+            # Crash evidence = a NON-clean last termination. A clean exit
+            # (exitCode 0 / reason Completed) is not a crash, so a deliberate
+            # exit-and-restart sidecar isn't reported as a fault on the strength
+            # of restartCount alone. A genuine exit-0 loop that Kubernetes is
+            # actively throttling still shows waiting.reason == CrashLoopBackOff
+            # and is caught by the in_backoff leg below.
+            has_crash_evidence = bool(last_term) and last_term.get("exitCode") not in (0, None)
             # A loop needs both persistent crash evidence and enough restarts.
             if not (in_backoff or has_crash_evidence) or restarts < min_restarts:
                 continue
