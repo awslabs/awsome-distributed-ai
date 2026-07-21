@@ -118,7 +118,6 @@ Resources:
           CHART_PATH: !Ref HelmRepoPath
           NAMESPACE: !Ref Namespace
           RELEASE_NAME: !Ref HelmRelease
-          LD_LIBRARY_PATH: '/opt/python/lib'
       Handler: lambda_function.lambda_handler
       Role: !GetAtt HelmCustomResourceRole.Arn
       Runtime: python3.12
