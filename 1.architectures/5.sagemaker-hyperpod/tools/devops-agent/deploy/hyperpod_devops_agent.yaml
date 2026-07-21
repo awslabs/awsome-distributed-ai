@@ -1596,6 +1596,13 @@ Resources:
                   continue_token = (response.get("metadata") or {}).get("continue")
                   if not continue_token:
                       break
+              else:
+                  # Loop exhausted the runaway guard with a continue token still set:
+                  # the list is truncated. Surface it so a capped audit isn't mistaken
+                  # for full cluster coverage.
+                  if continue_token:
+                      _log("WARN", "k8s_list_truncated", path=path, pages=safe_max_pages,
+                           page_limit=page_limit, items=len(items))
               return items
 
 
