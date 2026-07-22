@@ -509,7 +509,8 @@ Resources:
                     "ec2:DescribeSubnets",
                     "ec2:DescribeSecurityGroups",
                     "ec2:DetachNetworkInterface",
-                    "ec2:CreateTags"
+                    "ec2:CreateTags",
+                    "fsx:DescribeFileSystems"
                 ]
                 Resource: "*"
   LCScriptsBucket:
