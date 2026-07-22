@@ -110,7 +110,8 @@ resource "aws_iam_policy" "sagemaker_execution_policy" {
           "ec2:DescribeVpcs",
           "ec2:DescribeDhcpOptions",
           "ec2:DescribeSecurityGroups",
-          "ec2:DetachNetworkInterface"
+          "ec2:DetachNetworkInterface",
+          "fsx:DescribeFileSystems"
         ]
         Resource = "*"
 
