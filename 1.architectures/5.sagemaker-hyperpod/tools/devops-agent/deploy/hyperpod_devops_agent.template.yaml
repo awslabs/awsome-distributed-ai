@@ -74,6 +74,12 @@ Metadata:
           - ForceSend
           - MarkerExpirationDays
       - Label:
+          default: "HMA CloudWatch bridge (Slurm-only)"
+        Parameters:
+          - EnableHmaCloudWatchBridge
+          - HmaLogGroupName
+          - HmaBridgeLambdaMemory
+      - Label:
           default: "Advanced"
         Parameters:
           - AgentSpaceDescription
@@ -272,6 +278,46 @@ Parameters:
     Default: "arn:aws:s3:::sagemaker-*-bucket"
     Description: "ARN pattern for HyperPod lifecycle-script buckets, granting the Agent Space role s3:GetObject/ListBucket so RCA can read on_create.sh. Set to '' to skip."
 
+  # ------------------------------------------------- HMA CloudWatch bridge (Slurm-only workaround)
+  #
+  # On EKS-orchestrated HyperPod clusters the control plane emits a Warn-level
+  # `SageMaker HyperPod Cluster Event` on EventBridge when HMA detects a GPU
+  # fault, and the webhook bridge picks it up natively -- no extra wiring needed.
+  #
+  # On Slurm-orchestrated HyperPod clusters today the control plane does NOT
+  # emit that Warn event for HMA-attributed faults, so the DevOps Agent pipeline
+  # never runs and no investigation email is produced. HMA still writes its
+  # detection JSON to the cluster's CloudWatch log group.
+  #
+  # These parameters enable a CloudWatch Logs subscription filter + tiny Lambda
+  # (`hma_cw_bridge`) that reads the HMA JSON record and forwards it onto
+  # EventBridge shaped exactly like the native EKS event. The existing bridge
+  # picks it up unchanged.
+  #
+  # `deploy.sh` sets EnableHmaCloudWatchBridge = "true" for Slurm and "false"
+  # for EKS automatically. Deploying on EKS with "true" would produce duplicate
+  # investigations (native + synthesized) -- triage-skill LINK dedup mitigates
+  # but it's still wasted work; keep the default.
+  EnableHmaCloudWatchBridge:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: "Deploy the HMA CloudWatch bridge (Slurm-only workaround). Set to 'true' for Slurm clusters. 'make deploy' auto-sets this based on orchestrator."
+
+  HmaLogGroupName:
+    Type: String
+    Default: ""
+    Description: "CloudWatch log group where HMA writes its detection events. Empty (default) means 'make deploy' auto-derives it as /aws/sagemaker/Clusters/<ClusterName>/<ClusterId>. Only used when EnableHmaCloudWatchBridge=true."
+
+  HmaBridgeLambdaMemory:
+    Type: Number
+    Default: 128
+    MinValue: 128
+    MaxValue: 1024
+    Description: "Memory (MB) for the HMA CloudWatch bridge Lambda. Small event-transform workload; default is sufficient. Only used when EnableHmaCloudWatchBridge=true."
+
 Conditions:
 
   IsEksCluster: !Not [!Equals [!Ref EksClusterName, ""]]
@@ -288,6 +334,7 @@ Conditions:
   HasAgentSpaceDescription: !Not [!Equals [!Ref AgentSpaceDescription, ""]]
   HasAgentSpaceRoleName: !Not [!Equals [!Ref AgentSpaceRoleName, ""]]
   HasWebappRoleName: !Not [!Equals [!Ref WebappRoleName, ""]]
+  HmaCloudWatchBridgeEnabled: !Equals [!Ref EnableHmaCloudWatchBridge, "true"]
 
 Resources:
 
@@ -584,19 +631,124 @@ Resources:
     Properties:
       Description: "Route HyperPod cluster events to the DevOps Agent webhook bridge."
       State: ENABLED
+      # Detail-type match: keeps the three explicit detail-types from PR #1191
+      # (Cluster State Change, Cluster Node Health Event, Cluster Event) and
+      # adds a `prefix: "SageMaker HyperPod"` catch-all so any future
+      # `SageMaker HyperPod <NewName>` variant HyperPod adds is routed too.
+      # Unknown/unhandled detail-types fall to the bridge Lambda's generic
+      # fallback branch, which inlines the raw detail JSON into the description
+      # so operators still get an actionable investigation email.
+      #
+      # Two accepted sources:
+      #   - `aws.sagemaker`: native HyperPod-emitted events (all clusters).
+      #   - `hyperpod-devops-agent-hma-cw-bridge`: synthesized events from the
+      #     Slurm-only HMA CW bridge Lambda. EventBridge reserves the `aws.`
+      #     prefix for AWS service events, so the workaround publishes onto a
+      #     custom source that this rule explicitly accepts. Name matches the
+      #     pattern used by the periodic-audit synthesized events
+      #     (`hyperpod-devops-agent-periodic-audit`) for within-codebase
+      #     consistency.
       EventPattern: |
         {
-          "source": ["aws.sagemaker"],
+          "source": ["aws.sagemaker", "hyperpod-devops-agent-hma-cw-bridge"],
           "detail-type": [
             "SageMaker HyperPod Cluster State Change",
             "SageMaker HyperPod Cluster Node Health Event",
-            "SageMaker HyperPod Cluster Event"
+            "SageMaker HyperPod Cluster Event",
+            {"prefix": "SageMaker HyperPod"}
           ]
         }
       Targets:
         - Arn: !GetAtt WebhookBridgeFunction.Arn
           Id: "WebhookBridgeLambdaTarget"
           RoleArn: !GetAtt WebhookBridgeEventRole.Arn
+
+  # ============================================================ HMA CloudWatch bridge (Slurm-only workaround)
+  #
+  # See the parameter block for the "why". Four resources, all gated by
+  # HmaCloudWatchBridgeEnabled so an EKS deploy creates zero of them:
+  #
+  #   HmaCwBridgeExecutionRole  - IAM role for the Lambda: log-writes + events:PutEvents.
+  #   HmaCwBridgeFunction       - The Lambda itself. Small event-transform.
+  #   HmaCwBridgeLogPermission  - Grants CloudWatch Logs the right to invoke the Lambda.
+  #   HmaCwBridgeLogSubscription - The subscription filter that triggers the Lambda
+  #                                on HMA detection log records.
+
+  HmaCwBridgeExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: HmaCloudWatchBridgeEnabled
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: HmaCwBridgeExecutionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
+              # events:PutEvents scoped to the default event bus in THIS
+              # account+region. The Lambda synthesizes a `SageMaker HyperPod
+              # Cluster Event` and PutEvents-forwards it back onto the default
+              # bus, where HyperPodEventRule (above) picks it up.
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource:
+                  - !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
+
+  HmaCwBridgeFunction:
+    Type: AWS::Lambda::Function
+    Condition: HmaCloudWatchBridgeEnabled
+    Properties:
+      Role: !GetAtt HmaCwBridgeExecutionRole.Arn
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Timeout: 30
+      MemorySize: !Ref HmaBridgeLambdaMemory
+      Environment:
+        Variables:
+          CLUSTER_NAME: !Ref HyperPodClusterName
+          EVENT_BUS_NAME: "default"
+      Code:
+        ZipFile: |
+          # HMA_CW_BRIDGE_CODE_PLACEHOLDER
+
+  HmaCwBridgeLogPermission:
+    Type: AWS::Lambda::Permission
+    Condition: HmaCloudWatchBridgeEnabled
+    Properties:
+      FunctionName: !Ref HmaCwBridgeFunction
+      Action: lambda:InvokeFunction
+      Principal: !Sub "logs.${AWS::Region}.amazonaws.com"
+      SourceArn: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${HmaLogGroupName}:*"
+
+  HmaCwBridgeLogSubscription:
+    Type: AWS::Logs::SubscriptionFilter
+    Condition: HmaCloudWatchBridgeEnabled
+    # The permission must exist before CloudWatch Logs can validate the
+    # subscription target -- otherwise CreateSubscriptionFilter fails with an
+    # InvalidParameterException on the destination Lambda.
+    DependsOn: HmaCwBridgeLogPermission
+    Properties:
+      LogGroupName: !Ref HmaLogGroupName
+      # HMA writes one JSON object per log line with a discriminator field
+      # `HealthMonitoringAgentDetectionEvent`. Selecting on that field means
+      # unrelated lines in the same log group (e.g., LifecycleConfig streams)
+      # never invoke the Lambda.
+      FilterPattern: '{ $.HealthMonitoringAgentDetectionEvent = "HealthEvent" }'
+      DestinationArn: !GetAtt HmaCwBridgeFunction.Arn
 
   # ============================================================ Periodic audit (toggleable)
 
@@ -975,3 +1127,8 @@ Outputs:
   EmailNotifierFunctionName:
     Value: !Ref EmailNotifierFunction
     Description: "Name of the email notifier Lambda (for log tailing)."
+
+  HmaCwBridgeFunctionName:
+    Condition: HmaCloudWatchBridgeEnabled
+    Value: !Ref HmaCwBridgeFunction
+    Description: "Name of the HMA CloudWatch bridge Lambda (Slurm-only, for log tailing)."

@@ -20,5 +20,10 @@
   "__off_ConsoleUrlTemplate": "https://%agent_space_id%.aidevops.global.app.aws/investigation/%task_id%",
   "__off_ForceSend": "false",
   "__off_MarkerExpirationDays": "30",
-  "__off_LcsBucketArnPattern": "arn:aws:s3:::sagemaker-*-bucket"
+  "__off_LcsBucketArnPattern": "arn:aws:s3:::sagemaker-*-bucket",
+
+  "__README_HMA_BRIDGE__": "HMA CloudWatch bridge (Slurm-only workaround). 'make deploy' auto-sets EnableHmaCloudWatchBridge=true for Slurm clusters and 'false' for EKS. HmaLogGroupName is auto-derived from the cluster's ARN. Override these only if you have a non-standard cluster log-group naming pattern OR you want to force-disable the bridge on a Slurm cluster.",
+  "__off_EnableHmaCloudWatchBridge": "false",
+  "__off_HmaLogGroupName": "",
+  "__off_HmaBridgeLambdaMemory": "128"
 }

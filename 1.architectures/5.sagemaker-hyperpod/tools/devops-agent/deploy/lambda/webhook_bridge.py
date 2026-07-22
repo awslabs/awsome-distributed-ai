@@ -345,10 +345,24 @@ def _title_and_description(event: dict) -> tuple[str, str]:
             description += f" EventMetadata: {extras_str}."
         return title, description
 
+    # -------------------- Generic fallback (improved) --------------------
+    # Any unrecognized detail-type falls here. Rather than emitting an empty
+    # description that hides the event body from the RCA skill, inline a
+    # compact JSON of the raw detail so operators still get an actionable
+    # investigation email. Truncated to a reasonable size to keep the payload
+    # bounded — the full event is still available in `data.originalEvent`.
+    try:
+        detail_json = json.dumps(detail, default=str, sort_keys=True)
+    except (TypeError, ValueError):
+        detail_json = str(detail)
+    if len(detail_json) > 2000:
+        detail_json = detail_json[:2000] + "…(truncated)"
+
     return (
         f"HyperPod event: {detail_type} on {cluster_name}",
         f"HyperPod cluster '{cluster_name}' (account {account}, {region}) emitted an event of type "
-        f"'{detail_type}'. Raw detail attached.",
+        f"'{detail_type}'. No dedicated handler for this detail-type; the RCA skill should treat "
+        f"the following inlined detail as ground truth. Detail: {detail_json}",
     )
 
 

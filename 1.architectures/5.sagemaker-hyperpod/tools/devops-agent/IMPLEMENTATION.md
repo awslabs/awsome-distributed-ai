@@ -26,8 +26,9 @@ custom resources for the two gaps CloudFormation can't cover natively:
 | **Foundation** | `AWS::IAM::Role` (Agent Space monitor role + Webapp role), `AWS::DevOpsAgent::AgentSpace` (with IAM operator app), `AWS::DevOpsAgent::Association` (AWS-monitor, topology discovery). |
 | **EKS access** (EKS only) | `AWS::EKS::AccessEntry` granting the Agent Space role read-only `AmazonAIOpsAssistantPolicy` (cluster scope). Skipped for Slurm. |
 | **Webhook** | `AWS::SecretsManager::Secret` + `Custom::WebhookProvisioner` — registers/associates the eventChannel and stashes the once-shown URL+HMAC secret. (No native `eventChannel` ServiceType, and the URL/secret aren't exposed via `Fn::GetAtt`, so a custom resource is required.) |
-| **Webhook bridge** | Lambda + EventBridge rule (`source: aws.sagemaker`, the 3 HyperPod detail-types) → HMAC-signed POST to the webhook. |
+| **Webhook bridge** | Lambda + EventBridge rule (`source: aws.sagemaker` or `hyperpod-devops-agent-hma-cw-bridge`; `detail-type` is the three HyperPod detail-types plus a `SageMaker HyperPod` prefix catch-all) → HMAC-signed POST to the webhook. |
 | **Periodic audit** | Lambda + `AWS::Scheduler::Schedule` (15 min) + daily heartbeat schedule. Detects Kubernetes CrashLoop/NotReady (EKS) and fires only on a real issue; heartbeat-only on Slurm. |
+| **HMA CloudWatch bridge** (Slurm only) | Lambda + `AWS::Logs::SubscriptionFilter` on the cluster's log group → `events:PutEvents` a synthetic `SageMaker HyperPod Cluster Event Warn`. Closes the Slurm-specific gap where HyperPod's control plane does not emit HMA-attribution events natively (see [dedicated section](#hma-cloudwatch-bridge-slurm-only)). |
 | **Email notifier** | Lambda + EventBridge rule (`source: aws.aidevops`, scoped to this Agent Space) + S3 dedup-marker bucket → SES email. |
 | **Skills** | `Custom::SkillUploader` uploads the triage + RCA skills (and any staged upstream skills) from the S3 assets bucket. |
 
@@ -345,6 +346,50 @@ Three channels stack:
 3. **Slack / ServiceNow / PagerDuty / Microsoft Teams** — configure once in the
    Agent Space console. The same `aws.aidevops` event stream the email notifier
    listens on is available for any additional fan-out.
+
+Note on Monitor re-checks: the RCA skill emits verdict text like "next re-check
+in 30 min" for `Monitor` chains, but there is no dedicated re-check timer. Those
+re-checks ride on the next HyperPod EventBridge event for the same instance
+group (a state-change, a replacement completion, an escalation) — the triage
+skill links it, the RCA skill sees the updated cluster state, and the verdict is
+recomputed. A control-plane `Monitor` chain on a Slurm cluster that emits no
+follow-up event will be re-checked at the next daily heartbeat run instead.
+
+## HMA CloudWatch bridge (Slurm only)
+
+**Why**: EKS-orchestrated HyperPod clusters emit a `Warn`-level `Cluster Event`
+on EventBridge whenever HMA detects a GPU fault. Slurm-orchestrated clusters
+do not emit that event today — HMA still writes to CloudWatch Logs and
+HyperPod still initiates replacement, but no operator-visible EventBridge event
+is produced, so the DevOps Agent pipeline never runs.
+
+**Approach**: On Slurm deployments, a `AWS::Logs::SubscriptionFilter` on the
+cluster's log group with FilterPattern
+`{ $.HealthMonitoringAgentDetectionEvent = "HealthEvent" }` invokes a small
+Lambda (`hma_cw_bridge`). It parses the HMA JSON record, extracts fault type +
+repair action + instance ID, and calls `events:PutEvents` with a synthetic
+`SageMaker HyperPod Cluster Event Warn` shaped identically to the native EKS
+event. The existing webhook bridge picks it up unchanged.
+
+**Why not alternatives**: polling HMA CloudWatch every 15 min from the periodic
+audit would add 0–15 min latency to a fault path that HyperPod handles in
+minutes. A CloudWatch metric filter with an alarm would be per-threshold, not
+per-event, and would lose the per-fault detail needed by the RCA skill.
+
+**Gating**: `deploy.sh` auto-resolves `EnableHmaCloudWatchBridge=true` for
+Slurm and `false` for EKS. Deploying on EKS with `true` would produce duplicate
+investigations (native event + synthesized twin); the triage skill's LINK
+dedup would mitigate but the extra work is wasted. Override in `params.json`
+only if you have a specific reason.
+
+**Failure semantics**: the CloudWatch Logs → Lambda invocation is async. If
+the Lambda errors, CloudWatch retries by default. If `events:PutEvents`
+throttles, the Lambda retries once before returning. A permanent failure
+(e.g., malformed HMA record) is logged as a structured JSON `WARN` event and
+that single record is skipped — subsequent records in the same batch still
+process. The workaround is an additive path; disabling it (set
+`EnableHmaCloudWatchBridge=false` and redeploy) cleanly deletes all four new
+CFN resources.
 
 ## DevOps Agent integration surfaces
 

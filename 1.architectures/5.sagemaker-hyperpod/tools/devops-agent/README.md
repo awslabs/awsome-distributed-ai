@@ -420,6 +420,44 @@ is enabled. On a Continuous Slurm cluster, a capacity-error fault is caught and
 notified via the bridge with a specific "What happened" email subject; the audit
 stays out of it and the heartbeat fires as expected.
 
+### HMA CloudWatch bridge (Slurm-only workaround)
+
+On EKS-orchestrated HyperPod clusters the control plane emits a `Warn`-level
+`SageMaker HyperPod Cluster Event` on EventBridge whenever HMA detects a GPU
+fault (e.g. `NvidiaGPUUnhealthy` / Xid errors / ECC DBE). That flows through the
+webhook bridge into DevOps Agent, produces an investigation, and delivers an
+email — no extra wiring needed.
+
+On **Slurm-orchestrated** HyperPod clusters, the control plane does not
+currently emit that Warn event for HMA-attributed faults today. HMA still
+writes its detection JSON to the cluster's CloudWatch log group
+(`/aws/sagemaker/Clusters/<name>/<id>` under
+`SagemakerHealthMonitoringAgent/<group>/<instance>` streams), and HyperPod
+still initiates node replacement — but no operator-visible EventBridge event
+is produced, so the DevOps Agent pipeline never runs for HMA-origin faults on
+Slurm.
+
+This solution ships a Slurm-only workaround: a CloudWatch Logs subscription
+filter on the cluster's log group, plus a tiny `hma_cw_bridge` Lambda that
+parses the HMA JSON record and calls `events:PutEvents` with a synthetic
+`SageMaker HyperPod Cluster Event Warn` shaped exactly like the native EKS
+event. The existing webhook bridge Lambda picks it up unchanged.
+
+`make deploy` auto-enables the workaround for Slurm clusters and disables it
+for EKS (where it would produce duplicate investigations for the same fault).
+Override via `params.json` if you have a specific reason:
+
+```json
+"__off_EnableHmaCloudWatchBridge": "false",
+"__off_HmaLogGroupName": "/aws/sagemaker/Clusters/my-cluster/abc123"
+```
+
+When set to `false`, the four bridge resources (Lambda, IAM role, subscription
+filter, permission) are not deployed. Rollback is `EnableHmaCloudWatchBridge=false`
++ redeploy. See [IMPLEMENTATION.md](IMPLEMENTATION.md#hma-cloudwatch-bridge-slurm-only)
+for the design rationale, latency (~1–5 s end-to-end from HMA detection to
+DevOps Agent), and failure semantics.
+
 ## Layout
 
 ```
@@ -437,6 +475,7 @@ stays out of it and the heartbeat fires as expected.
 │   │   ├── webhook_bridge.py         - HyperPod event -> DevOps Agent payload
 │   │   ├── periodic_audit.py         - K8s-state audit (CrashLoop/NotReady) + heartbeat
 │   │   ├── email_notifier.py         - Investigation event -> formatted SES email
+│   │   ├── hma_cw_bridge.py          - HMA CloudWatch log record -> synthesized EventBridge event (Slurm-only)
 │   │   ├── cr_webhook_provisioner.py - custom resource: register/associate eventChannel + write secret
 │   │   ├── cr_skill_uploader.py      - custom resource: upload skill assets from S3
 │   │   └── cfnresponse.py            - CFN response shim for the S3-packaged skill uploader

@@ -3,6 +3,14 @@
 Enhancement ideas beyond the current solution. None are built yet; each notes
 what it would take and the main constraint to check first.
 
+## Shipped
+
+- **HMA CloudWatch bridge (Slurm)** — subscription-filter → tiny Lambda →
+  `events:PutEvents` synthetic Warn. Closes the Slurm-side gap where HyperPod
+  does not natively emit HMA-attribution EventBridge events. Slurm-only,
+  gated by `EnableHmaCloudWatchBridge` (auto-set by `make deploy`). See
+  [IMPLEMENTATION.md > HMA CloudWatch bridge](IMPLEMENTATION.md#hma-cloudwatch-bridge-slurm-only).
+
 ## Weekly digest for GPU-utilization + FinOps signals
 
 Absolute-utilization thresholds (e.g. "average <80% over 7d") don't work as
