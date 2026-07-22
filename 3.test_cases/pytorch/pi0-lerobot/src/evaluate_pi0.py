@@ -299,7 +299,7 @@ def main():
     parser.add_argument(
         "--eval-episodes", type=int, nargs="+", default=None,
         help="Episode indices to evaluate on (held-out set). "
-             "Default: last 20 episodes for DROID, last 100 for LIBERO.",
+             "Default: last 20 episodes for DROID, last 75 for LIBERO.",
     )
     parser.add_argument(
         "--action-horizon", type=int, default=50,
@@ -390,10 +390,10 @@ def main():
     eval_episodes = args.eval_episodes
     if eval_episodes is None:
         # Default: last 20% of episodes as held-out test set
-        # DROID-100: episodes 80-99; LIBERO-10: episodes 400-499
+        # DROID-100: episodes 80-99; LIBERO-10: episodes 304-378
         eval_episodes_defaults = {
             "droid": list(range(80, 100)),
-            "libero": list(range(400, 500)),
+            "libero": list(range(304, 379)),
         }
         eval_episodes = eval_episodes_defaults.get(args.dataset)
 

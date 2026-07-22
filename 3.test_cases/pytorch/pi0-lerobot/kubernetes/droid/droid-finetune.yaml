@@ -29,7 +29,7 @@ spec:
               effect: NoSchedule
           containers:
             - name: pytorch
-              image: 763104351884.dkr.ecr.us-east-2.amazonaws.com/pytorch-training:2.9.0-gpu-py312-cu130-ubuntu22.04-sagemaker-v1.9
+              image: 763104351884.dkr.ecr.us-west-2.amazonaws.com/pytorch-training:2.9.0-gpu-py312-cu130-ubuntu22.04-sagemaker-v1.9
               imagePullPolicy: IfNotPresent
               command: ["/bin/bash", "-c"]
               args:
@@ -42,7 +42,7 @@ spec:
                   # --- Configuration ---
                   MAX_STEPS="${MAX_STEPS:-20000}"
                   BATCH_SIZE="${BATCH_SIZE:-4}"
-                  SAVE_INTERVAL="${SAVE_INTERVAL:-2000}"
+                  SAVE_INTERVAL="${SAVE_INTERVAL:-20000}"
                   LEARNING_RATE="${LEARNING_RATE:-2.5e-5}"
                   ACTION_HORIZON="${ACTION_HORIZON:-50}"
                   DATASET_PATH="/fsx/datasets/droid_100"
@@ -66,20 +66,21 @@ spec:
                   git config --global filter.lfs.required false
 
                   # --- Step 2: Install lerobot ---
-                  echo "[2/4] Installing lerobot[pi,dataset]..."
+                  echo "[2/4] Installing lerobot..."
                   pip install --quiet --upgrade pip
-                  pip install --quiet "lerobot[pi,dataset]@git+https://github.com/huggingface/lerobot.git@v0.5.0"
+                  pip install --quiet "lerobot[pi,dataset]@git+https://github.com/huggingface/lerobot.git@ddc2aa7a27ba725ae527959c7e4814aed550e452" av
                   # Remove flash_attn (CUDA 13 image, flash_attn needs CUDA 12)
                   pip uninstall -y flash-attn 2>/dev/null || true
 
+                  # Verify install
                   python -c "
-                  import torch
                   from lerobot.policies.pi0 import PI0Policy
+                  import torch
                   print(f'PyTorch: {torch.__version__}, CUDA: {torch.cuda.is_available()}, GPUs: {torch.cuda.device_count()}')
                   "
 
                   # --- Install local-dataset patch ---
-                  # LeRobot v0.5.0 handles local datasets natively when passed
+                  # LeRobot handles local datasets natively when passed
                   # --dataset.root pointing to a local directory. No monkey-patch needed.
 
                   # --- Step 3: HF Login ---
@@ -113,7 +114,7 @@ spec:
                   export PYTHONUNBUFFERED=1
 
                   # Handle existing output directory.
-                  # LeRobot v0.5.0 raises FileExistsError if output_dir exists.
+                  # LeRobot raises FileExistsError if output_dir exists.
                   # If FORCE_RESTART=1, remove and start fresh. Otherwise, error early.
                   if [ -d "$OUTPUT_DIR/training" ]; then
                     if [ "${FORCE_RESTART:-0}" = "1" ]; then
@@ -161,7 +162,7 @@ spec:
                       --batch_size=$BATCH_SIZE \
                       --output_dir=$OUTPUT_DIR/training \
                       --job_name=pi0_droid_finetune \
-                      --save_freq=$SAVE_INTERVAL \
+                      --save_freq=20000 \
                       --optimizer.lr=$LEARNING_RATE \
                       --num_workers=4
 

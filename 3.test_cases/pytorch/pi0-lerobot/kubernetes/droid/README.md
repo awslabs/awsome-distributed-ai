@@ -17,8 +17,8 @@ SageMaker HyperPod-on-EKS.
 
 ## 1. Submit the Training Job
 
-Training downloads DROID-100, installs LeRobot v0.5.0, and runs FSDP on 8 GPUs
-for 20K steps (~6.5 hours). Only episodes 0-79 are used for training.
+Training downloads DROID-100, installs LeRobot (pinned commit `ddc2aa7`), and runs
+FSDP on 8 GPUs for 20K steps (~6.5 hours). Only episodes 0-79 are used for training.
 
 ```bash
 kubectl apply -f droid-finetune.yaml
@@ -45,7 +45,22 @@ kubectl delete job pi0-lerobot-droid-eval
 
 | Set | Episodes | Purpose |
 |-----|----------|---------|
-| Train | 0-79 | Passed via `--dataset.episodes` |
-| Eval (held-out) | 80-99 | Passed via `--eval-episodes` to evaluate_pi0.py |
+| Train | 0-79 (80 episodes) | Passed via `--dataset.episodes` |
+| Eval (held-out) | 80-99 (20 episodes) | Passed via `--eval-episodes` to evaluate_pi0.py |
 
-> **Note:** Results pending re-run with this proper split. See top-level README.
+## Results (p5.48xlarge — 8× H100 80GB)
+
+| Metric | Base | Fine-Tuned | Improvement |
+|--------|------|-----------|-------------|
+| MSE | 5.478e-01 | 5.664e-02 | **89.7%** |
+| MAE | 5.534e-01 | 1.504e-01 | **72.8%** |
+| Latency (1 ODE step) | — | 199ms | — |
+
+**ODE step-count sweep (fine-tuned):**
+
+| ODE Steps | MSE |
+|-----------|-----|
+| 1 | 5.151e-02 |
+| 3 | 5.398e-02 |
+| 5 | 5.479e-02 |
+| 10 | 5.664e-02 |

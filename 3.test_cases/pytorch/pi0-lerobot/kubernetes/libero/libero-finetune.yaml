@@ -1,6 +1,6 @@
 # Pi0 LeRobot — LIBERO Fine-tuning PyTorchJob
-# Trains π0 on LIBERO-10 (episodes 0-399) with FSDP on 8× GPU.
-# Uses the DLC image directly and installs LeRobot v0.5.0 at runtime.
+# Trains π0 on LIBERO-10 (episodes 0-303) with FSDP on 8× GPU.
+# Uses the DLC image directly and installs LeRobot at runtime.
 
 apiVersion: "kubeflow.org/v1"
 kind: PyTorchJob
@@ -30,25 +30,25 @@ spec:
               effect: NoSchedule
           containers:
             - name: pytorch
-              image: 763104351884.dkr.ecr.us-east-2.amazonaws.com/pytorch-training:2.9.0-gpu-py312-cu130-ubuntu22.04-sagemaker-v1.9
+              image: 763104351884.dkr.ecr.us-west-2.amazonaws.com/pytorch-training:2.9.0-gpu-py312-cu130-ubuntu22.04-sagemaker-v1.9
               imagePullPolicy: IfNotPresent
               command: ["/bin/bash", "-c"]
               args:
                 - |
                   set -e
                   echo "============================================================"
-                  echo "  Pi0 Fine-Tuning — LIBERO (episodes 0-399)"
+                  echo "  Pi0 Fine-Tuning — LIBERO (episodes 0-303)"
                   echo "============================================================"
 
                   # --- Config ---
                   MAX_STEPS="${MAX_STEPS:-20000}"
                   BATCH_SIZE="${BATCH_SIZE:-4}"
-                  SAVE_INTERVAL="${SAVE_INTERVAL:-2000}"
+                  SAVE_INTERVAL="${SAVE_INTERVAL:-20000}"
                   LEARNING_RATE="${LEARNING_RATE:-2.5e-5}"
                   ACTION_HORIZON="${ACTION_HORIZON:-50}"
                   DATASET_PATH="/fsx/datasets/libero_10"
                   OUTPUT_DIR="/fsx/runs/pi0-libero"
-                  LOCAL_DATASET_NAME="libero_local"
+                  LOCAL_DATASET_NAME="lerobot/libero_10"
                   RENAME_MAP='{"observation.images.exterior_image_1_left":"observation.images.base_0_rgb","observation.images.wrist_image_left":"observation.images.left_wrist_0_rgb","observation.images.image":"observation.images.base_0_rgb","observation.images.wrist_image":"observation.images.left_wrist_0_rgb"}'
                   EMPTY_CAMERAS=1
 
@@ -57,14 +57,14 @@ spec:
                   echo "  DATASET=$DATASET_PATH, OUTPUT=$OUTPUT_DIR"
 
                   # [1/4] Install LeRobot
-                  echo "[1/4] Installing LeRobot v0.5.0..."
+                  echo "[1/4] Installing LeRobot..."
                   export GIT_LFS_SKIP_SMUDGE=1
                   git config --global filter.lfs.clean cat
                   git config --global filter.lfs.smudge cat
                   git config --global filter.lfs.process ""
                   git config --global filter.lfs.required false
                   pip install --quiet --upgrade pip
-                  pip install --quiet "lerobot[pi,dataset]@git+https://github.com/huggingface/lerobot.git@v0.5.0"
+                  pip install --quiet "lerobot[pi,dataset]@git+https://github.com/huggingface/lerobot.git@ddc2aa7a27ba725ae527959c7e4814aed550e452" av
                   pip uninstall -y flash-attn 2>/dev/null || true
 
                   python -c "
@@ -88,8 +88,7 @@ spec:
                     hf download lerobot/libero_10 --repo-type dataset --local-dir "$DATASET_PATH"
                   fi
 
-                  ln -snf "$DATASET_PATH" "$HF_LEROBOT_HOME/$LOCAL_DATASET_NAME"
-                  echo "  Dataset linked: $HF_LEROBOT_HOME/$LOCAL_DATASET_NAME -> $DATASET_PATH"
+                  echo "  Dataset at: $DATASET_PATH"
 
                   # [4/4] Launch training
                   echo "[4/4] Launching training..."
@@ -112,8 +111,8 @@ spec:
                     fi
                   fi
 
-                  # Train episodes: use a Python one-liner to generate the list
-                  TRAIN_EPS=$(python -c "print(str(list(range(400))))")
+                  # Train episodes: 80% split (libero_10 has 379 episodes, 0-indexed)
+                  TRAIN_EPS=$(python -c "print(str(list(range(304))))")
 
                   accelerate launch \
                       --num_processes=$NUM_GPUS \
@@ -146,7 +145,7 @@ spec:
                       --batch_size=$BATCH_SIZE \
                       --output_dir=$OUTPUT_DIR/training \
                       --job_name=pi0_libero_finetune \
-                      --save_freq=$SAVE_INTERVAL \
+                      --save_freq=20000 \
                       --optimizer.lr=$LEARNING_RATE \
                       --num_workers=4
 

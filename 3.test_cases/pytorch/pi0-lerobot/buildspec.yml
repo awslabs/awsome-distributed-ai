@@ -2,7 +2,7 @@ version: 0.2
 
 env:
   variables:
-    AWS_REGION: "us-east-2"
+    AWS_REGION: "us-west-2"
     IMAGE_REPO: "pi0-lerobot"
     IMAGE_TAG: "v1.0.0"
 

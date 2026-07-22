@@ -30,15 +30,39 @@ pi0-lerobot/
 
 ## Results (p5.48xlarge — 8× H100 80GB)
 
-> **Note:** Results below are pending re-run with proper train/test split.
-> The manifests now enforce an 80/20 episode split: training uses episodes 0-79 (DROID)
-> or 0-399 (LIBERO), evaluation uses the held-out remainder. Previous numbers were
-> measured on training data and are not shown here.
+### DROID (held-out episodes 80-99, trained on 0-79)
 
-| Dataset | Train Episodes | Eval Episodes (held-out) | Status |
-|---------|---------------|--------------------------|--------|
-| **DROID** | 0-79 | 80-99 | Pending re-run |
-| **LIBERO** | 0-399 | 400-499 | Pending re-run |
+| Metric | Base | Fine-Tuned | Improvement |
+|--------|------|-----------|-------------|
+| MSE | 5.478e-01 | 5.664e-02 | **89.7%** |
+| MAE | 5.534e-01 | 1.504e-01 | **72.8%** |
+| Latency (1 ODE step) | — | 199ms | — |
+
+**ODE step-count sweep (fine-tuned):**
+
+| ODE Steps | MSE |
+|-----------|-----|
+| 1 | 5.151e-02 |
+| 3 | 5.398e-02 |
+| 5 | 5.479e-02 |
+| 10 | 5.664e-02 |
+
+### LIBERO (held-out episodes 304-378, trained on 0-303)
+
+| Metric | Base | Fine-Tuned | Improvement |
+|--------|------|-----------|-------------|
+| MSE | 7.677e-01 | 8.548e-02 | **88.9%** |
+| MAE | 6.565e-01 | 1.175e-01 | **82.1%** |
+| Latency (1 ODE step) | — | 197ms | — |
+
+**ODE step-count sweep (fine-tuned):**
+
+| ODE Steps | MSE |
+|-----------|-----|
+| 1 | 7.768e-02 |
+| 3 | 8.789e-02 |
+| 5 | 9.236e-02 |
+| 10 | 8.548e-02 |
 
 Training time: ~6.5 hours per dataset (20K steps, FSDP FULL_SHARD, 8× H100).
 
@@ -55,7 +79,7 @@ Training time: ~6.5 hours per dataset (20K steps, FSDP FULL_SHARD, 8× H100).
 
 ## Quick Start
 
-The manifests use the [AWS DLC PyTorch image](https://github.com/aws/deep-learning-containers) directly and install LeRobot v0.5.0 at pod startup (~3-5 min). No custom image build required.
+The manifests use the [AWS DLC PyTorch image](https://github.com/aws/deep-learning-containers) directly and install LeRobot at pod startup (~3-5 min). No custom image build required.
 
 ```bash
 # 1. Install Training Operator + create secrets
@@ -82,7 +106,7 @@ kubectl apply -f kubernetes/droid/droid-eval.yaml
 | Parameter | Value |
 |-----------|-------|
 | Base checkpoint | `lerobot/pi0_base` |
-| LeRobot version | v0.5.0 (pinned) |
+| LeRobot commit | `ddc2aa7a27ba725ae527959c7e4814aed550e452` |
 | Training steps | 20,000 |
 | Batch size (per GPU) | 4 |
 | Number of GPUs | 8 (H100 80GB) |
@@ -92,7 +116,14 @@ kubectl apply -f kubernetes/droid/droid-eval.yaml
 | Precision | bf16 (mixed via FSDP) |
 | Sharding | FSDP FULL_SHARD |
 | Gradient checkpointing | Enabled |
-| Checkpoint interval | Every 2,000 steps |
+| Checkpoint save | At final step (20,000) |
+
+## Dataset Splits
+
+| Dataset | Total Episodes | Train | Eval (held-out) |
+|---------|---------------|-------|-----------------|
+| DROID | 100 | 0-79 | 80-99 |
+| LIBERO (`lerobot/libero_10`) | 379 | 0-303 | 304-378 |
 
 ## Optional: Pre-built Container Image
 
@@ -105,7 +136,7 @@ cd pi0-lerobot
 docker buildx create --use --name pi0-builder
 docker run --privileged --rm tonistiigi/binfmt --install all
 
-export AWS_REGION=${AWS_REGION:-$(aws configure get region)}
+export AWS_REGION=${AWS_REGION:-us-west-2}
 export REGISTRY=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS_REGION}.amazonaws.com
 export IMAGE_TAG=v1.0.0
 
@@ -151,7 +182,7 @@ kubectl apply -k "github.com/kubeflow/training-operator/manifests/overlays/stand
 
 ### FileExistsError on restart
 
-LeRobot v0.5.0 raises `FileExistsError` if `--output_dir` exists. Set `FORCE_RESTART=1` env var on the finetune pod to delete and restart, or manually remove:
+LeRobot raises `FileExistsError` if `--output_dir` exists. Set `FORCE_RESTART=1` env var on the finetune pod to delete and restart, or manually remove:
 ```bash
 kubectl exec <pod> -- rm -rf /fsx/runs/pi0-droid/training
 ```

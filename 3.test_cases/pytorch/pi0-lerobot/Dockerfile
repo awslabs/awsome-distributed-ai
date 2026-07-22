@@ -14,7 +14,7 @@
 #     | docker login --username AWS --password-stdin ${REGISTRY}
 #   docker image push ${REGISTRY}/pi0-lerobot:${IMAGE_TAG}
 
-ARG AWS_REGION=us-east-2
+ARG AWS_REGION=us-west-2
 FROM 763104351884.dkr.ecr.${AWS_REGION}.amazonaws.com/pytorch-training:2.9.0-gpu-py312-cu130-ubuntu22.04-sagemaker-v1.9
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -25,7 +25,7 @@ RUN apt-get update -qq && \
     apt-get install -y -qq curl ffmpeg libx11-dev libgl1 libglib2.0-0 git-lfs tree wget && \
     rm -rf /var/lib/apt/lists/*
 
-# ── Install LeRobot with π0 extras (pinned to v0.5.0 for reproducibility) ──
+# ── Install LeRobot with π0 extras (pinned commit for reproducibility) ──
 # Dependency versions are resolved by LeRobot's own pyproject.toml constraints.
 ENV GIT_LFS_SKIP_SMUDGE=1
 RUN git config --global filter.lfs.clean cat && \
@@ -35,7 +35,7 @@ RUN git config --global filter.lfs.clean cat && \
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
-        "lerobot[pi,dataset] @ git+https://github.com/huggingface/lerobot.git@v0.5.0"
+        "lerobot[pi,dataset] @ git+https://github.com/huggingface/lerobot.git@ddc2aa7a27ba725ae527959c7e4814aed550e452" av
 
 # ── Remove flash_attn (compiled for CUDA 12, this image is CUDA 13) ──
 RUN pip uninstall -y flash-attn 2>/dev/null || true

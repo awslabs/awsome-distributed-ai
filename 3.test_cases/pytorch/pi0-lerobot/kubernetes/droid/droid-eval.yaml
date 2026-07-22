@@ -30,7 +30,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: eval
-          image: 763104351884.dkr.ecr.us-east-2.amazonaws.com/pytorch-training:2.9.0-gpu-py312-cu130-ubuntu22.04-sagemaker-v1.9
+          image: 763104351884.dkr.ecr.us-west-2.amazonaws.com/pytorch-training:2.9.0-gpu-py312-cu130-ubuntu22.04-sagemaker-v1.9
           imagePullPolicy: IfNotPresent
           command: ["/bin/bash", "-c"]
           args:
@@ -40,11 +40,11 @@ spec:
               echo "  Pi0 Evaluation — DROID (held-out episodes 80-99)"
               echo "============================================================"
 
-              # [1/3] Install LeRobot (pinned v0.5.0)
+              # [1/3] Install LeRobot (pinned commit ddc2aa7)
               echo "[1/3] Installing LeRobot..."
               export GIT_LFS_SKIP_SMUDGE=1
               git config --global filter.lfs.required false
-              pip install --quiet "lerobot[pi,dataset]@git+https://github.com/huggingface/lerobot.git@v0.5.0"
+              pip install --quiet "lerobot[pi,dataset]@git+https://github.com/huggingface/lerobot.git@ddc2aa7a27ba725ae527959c7e4814aed550e452" av
               pip uninstall -y flash-attn 2>/dev/null || true
 
               # [2/3] HF Login (required for PaliGemma tokenizer — Gemma license)
