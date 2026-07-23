@@ -28,7 +28,7 @@ SEVERITY_PRIORITY = {
 ACTIONS = {
     "ISOLATE": "Drain node from Slurm, initiate instance replacement",
     "REBOOT":  "Drain/cordon node, reboot (scontrol reboot nextstate=resume)",
-    "RESET":   "Attempt GPU reset via nvidia-smi --gpu-reset",
+    "RESET":   "Reboot the instance (nvidia-smi --gpu-reset is often insufficient)",
     "MONITOR": "Keep in service, flag for review",
     "PASS":    "No action required",
 }
