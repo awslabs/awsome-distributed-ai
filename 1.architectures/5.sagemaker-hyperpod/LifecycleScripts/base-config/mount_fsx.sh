@@ -178,6 +178,26 @@ mount_fs() {
     echo "[INFO] Mounting FSx Lustre on $MOUNT_POINT..."
     echo "[INFO] Using test file: $test_file"
 
+    # Build the mount options. When EFA was configured for this client
+    # (configure_efa_lustre set EFA_CONFIGURED=true), order the automount
+    # *after* configure-efa-fsx-lustre-client.service so the mount does not
+    # race ahead of EFA/LNet setup on reboot.
+    #
+    # We use x-systemd.after= (ordering only), NOT x-systemd.requires=, on
+    # purpose:
+    #   - requires= would fail the mount outright if the EFA config service
+    #     fails, losing the safe TCP fallback the client otherwise keeps;
+    #   - requires= also pulls the service in even when an operator has
+    #     deliberately disabled it (e.g. running EFA-off as a mitigation),
+    #     which would fight that operational choice.
+    # after= gives the correct ordering when EFA is on, is a no-op when the
+    # service is disabled/masked, and preserves TCP fallback if config fails.
+    local mount_opts="noatime,flock,_netdev,x-systemd.automount,x-systemd.requires=network-online.target"
+    if [[ "$EFA_CONFIGURED" == "true" ]]; then
+        mount_opts="${mount_opts},x-systemd.after=configure-efa-fsx-lustre-client.service"
+        echo "[INFO] EFA configured — ordering the FSx automount after configure-efa-fsx-lustre-client.service"
+    fi
+
     while (( attempt <= max_attempts )); do
         echo "============================"
         echo "[INFO] Attempt $attempt of $max_attempts"
@@ -185,7 +205,7 @@ mount_fs() {
 
         echo "[STEP] Mounting FSx..."
         if ! ansible localhost -b -m ansible.posix.mount -a \
-            "path=$MOUNT_POINT src=$FSX_DNS_NAME@tcp:/$FSX_MOUNTNAME fstype=lustre opts=noatime,flock,_netdev,x-systemd.automount,x-systemd.requires=network-online.target dump=0 passno=0 state=mounted"; then
+            "path=$MOUNT_POINT src=$FSX_DNS_NAME@tcp:/$FSX_MOUNTNAME fstype=lustre opts=$mount_opts dump=0 passno=0 state=mounted"; then
             echo "[WARN] Mount command failed — retrying in $delay seconds"
             sleep "$delay"; ((attempt++)); continue
         fi
