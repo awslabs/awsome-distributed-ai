@@ -213,7 +213,7 @@ def _build_synthetic_event(
 
     detail = {
         "EventDetails": {
-            "EventId": "synthetic-hma-cw-bridge",  # not a real cluster-event ID
+            "EventId": "",  # not a real cluster-event ID
             "ClusterArn": cluster_arn,
             "ClusterName": cluster_name,
             "InstanceGroupName": instance_group,

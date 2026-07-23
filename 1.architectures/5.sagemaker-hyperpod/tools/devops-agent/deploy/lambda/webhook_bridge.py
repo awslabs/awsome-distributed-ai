@@ -26,6 +26,27 @@ import boto3
 # (comma-separated) if needed without redeploying.
 _DEFAULT_DROP_LEVELS = {"info"}
 
+# Known detail-types with dedicated handlers in `_title_and_description`.
+# Any detail-type NOT in this set (e.g. a future `SageMaker HyperPod
+# <NewName>` variant that the widened prefix rule newly routes here) is
+# gated by EventLevel in `lambda_handler` before reaching the generic-
+# fallback branch — see `_is_unknown_detail_type_below_severity`. This
+# preserves the "POST only on real issues" cost model on the DevOps
+# Agent side: we only pay for a triage/RCA when the emitter labels the
+# event severity as high, or when the detail-type is one of the three
+# we already know how to shape.
+_KNOWN_DETAIL_TYPES = frozenset({
+    "SageMaker HyperPod Cluster State Change",
+    "SageMaker HyperPod Cluster Node Health Event",
+    "SageMaker HyperPod Cluster Event",
+})
+
+# EventLevel values considered "real issue" for unknown detail-types.
+# Missing/empty EventLevel is treated as below threshold — safer default
+# since a level-less unknown-type emission gives us no signal to base
+# a paid investigation on.
+_UNKNOWN_TYPE_FORWARD_LEVELS = frozenset({"warn", "error", "critical"})
+
 
 _secrets_cache: dict[str, str] = {}
 _sagemaker_client = None
@@ -142,6 +163,26 @@ def _is_scale_progress_noise(event: dict) -> bool:
     ev_details = detail.get("EventDetails", {})
     description = ev_details.get("Description", "")
     return "lost orchestration-ready status" in description
+
+
+def _is_unknown_detail_type_below_severity(event: dict) -> bool:
+    """Drop-check for detail-types the prefix rule caught but we don't
+    have a dedicated handler for.
+
+    Rationale: the widened rule (`prefix: "SageMaker HyperPod"`) routes
+    all current AND future HyperPod-native detail-types to this Lambda.
+    For the three we know (see `_KNOWN_DETAIL_TYPES`), the existing per-
+    detail-type handlers in `_title_and_description` produce structured
+    titles. For anything else we don't know the shape, so gate on
+    EventLevel to keep the cost model of "one paid investigation per
+    real issue". Level-less or `Info` events from an unknown detail-type
+    are dropped here.
+    """
+    detail_type = event.get("detail-type", "")
+    if detail_type in _KNOWN_DETAIL_TYPES:
+        return False
+    level = (_event_level(event) or "").lower()
+    return level not in _UNKNOWN_TYPE_FORWARD_LEVELS
 
 
 def _should_drop(event: dict) -> tuple[bool, str | None]:
@@ -345,12 +386,18 @@ def _title_and_description(event: dict) -> tuple[str, str]:
             description += f" EventMetadata: {extras_str}."
         return title, description
 
-    # -------------------- Generic fallback (improved) --------------------
-    # Any unrecognized detail-type falls here. Rather than emitting an empty
-    # description that hides the event body from the RCA skill, inline a
-    # compact JSON of the raw detail so operators still get an actionable
-    # investigation email. Truncated to a reasonable size to keep the payload
-    # bounded — the full event is still available in `data.originalEvent`.
+    # -------------------- Generic fallback (post-severity-gate) --------------------
+    # By the time execution reaches here we know:
+    #   (a) detail_type is NOT one of the three known types (they returned
+    #       above via their dedicated branches), AND
+    #   (b) EventLevel is Warn/Error/Critical (else
+    #       `_is_unknown_detail_type_below_severity` in lambda_handler
+    #       already dropped this event before we were called).
+    # So this is a real-severity unknown detail-type — worth an investigation
+    # email. Inline a compact JSON of the raw detail so the RCA skill has
+    # structured signal to reason from. Truncated to a reasonable size to
+    # keep the payload bounded — the full event is still available in
+    # `data.originalEvent`.
     try:
         detail_json = json.dumps(detail, default=str, sort_keys=True)
     except (TypeError, ValueError):
@@ -468,6 +515,13 @@ def lambda_handler(event, context):
     if _is_scale_progress_noise(event):
         _log("INFO", "event_dropped", reason="scale-progress-noise")
         return {"statusCode": 200, "body": json.dumps({"dropped": True, "reason": "scale-progress-noise"})}
+
+    if _is_unknown_detail_type_below_severity(event):
+        _log("INFO", "event_dropped",
+             reason="unknown-detail-type-below-severity",
+             detailType=event.get("detail-type"),
+             eventLevel=_event_level(event) or "unset")
+        return {"statusCode": 200, "body": json.dumps({"dropped": True, "reason": "unknown-detail-type-below-severity"})}
 
     webhook_url, secret = _load_webhook_credentials()
     payload = _build_payload(event)
