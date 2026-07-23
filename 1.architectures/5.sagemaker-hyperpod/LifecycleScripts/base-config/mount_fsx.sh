@@ -107,6 +107,66 @@ verify_fsx_efa_compatibility()
     return 0
 }
 
+# Gate configure-efa-fsx-lustre-client.service on IMDS readiness and retry failures
+# (the shipped unit is a oneshot with no Restart=, and network-online.target does not
+# guarantee IMDS is reachable yet)
+harden_efa_client_service_startup()
+{
+    local imds_wait_script="/usr/local/sbin/wait-for-ec2-imds"
+    local dropin_dir="/etc/systemd/system/configure-efa-fsx-lustre-client.service.d"
+
+    sudo tee "$imds_wait_script" > /dev/null <<'EOF'
+#!/usr/bin/env bash
+
+set -u
+
+readonly imds_base_url="http://169.254.169.254/latest"
+readonly deadline=$((SECONDS + 120))
+
+while ((SECONDS < deadline)); do
+    token="$(
+        curl --fail --silent --show-error \
+            --connect-timeout 2 \
+            --max-time 3 \
+            --request PUT \
+            --header "X-aws-ec2-metadata-token-ttl-seconds: 21600" \
+            "${imds_base_url}/api/token" 2>/dev/null
+    )"
+
+    if [[ -n "$token" ]] && curl --fail --silent --show-error \
+        --connect-timeout 2 \
+        --max-time 3 \
+        --header "X-aws-ec2-metadata-token: $token" \
+        "${imds_base_url}/meta-data/instance-type" >/dev/null 2>&1; then
+        exit 0
+    fi
+
+    echo "[INFO] EC2 instance metadata is not ready; retrying in 2 seconds"
+    sleep 2
+done
+
+echo "[ERROR] EC2 instance metadata did not become ready within 2 minutes" >&2
+exit 1
+EOF
+    sudo chmod 0755 "$imds_wait_script"
+
+    sudo mkdir -p "$dropin_dir"
+    sudo tee "$dropin_dir/network-readiness.conf" > /dev/null <<EOF
+[Unit]
+After=cloud-init.service
+Wants=cloud-init.service
+StartLimitIntervalSec=600
+StartLimitBurst=20
+
+[Service]
+ExecStartPre=$imds_wait_script
+Restart=on-failure
+RestartSec=10s
+EOF
+
+    sudo systemctl daemon-reload
+}
+
 # Configure EFA for Lustre if supported
 configure_efa_lustre()
 {
@@ -145,8 +205,13 @@ configure_efa_lustre()
     # Extract the zip file
     ansible localhost -m ansible.builtin.unarchive -a "src=/tmp/configure-efa-fsx-lustre-client.zip dest=/tmp remote_src=yes"
 
-    # Make script executable and run it
+    # Make script executable
     ansible localhost -b -m ansible.builtin.file -a "path=/tmp/configure-efa-fsx-lustre-client/setup.sh mode='0755'"
+
+    # Install the IMDS readiness override before setup.sh creates and starts the unit
+    harden_efa_client_service_startup
+
+    # Run the setup script
     ansible localhost -b -m ansible.builtin.command -a "/tmp/configure-efa-fsx-lustre-client/setup.sh"
 
     # Cleanup
