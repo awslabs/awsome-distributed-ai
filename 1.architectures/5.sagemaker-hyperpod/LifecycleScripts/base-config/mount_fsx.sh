@@ -238,10 +238,11 @@ verify_efa_transport()
         return 1
     fi
 
-    # Capture baseline EFA counters before generating I/O
+    # Capture baseline EFA counters before generating I/O, summed across all
+    # EFA interfaces (multi-EFA instances report one counter line per interface)
     local send_before recv_before
-    send_before=$(lnetctl net show -v --net efa | awk '/send_count:/ {print $2}')
-    recv_before=$(lnetctl net show -v --net efa | awk '/recv_count:/ {print $2}')
+    send_before=$(lnetctl net show -v --net efa | awk '/send_count:/ {sum += $2} END {print sum + 0}')
+    recv_before=$(lnetctl net show -v --net efa | awk '/recv_count:/ {sum += $2} END {print sum + 0}')
 
     echo "[INFO] EFA counters before I/O — send: $send_before, recv: $recv_before"
 
@@ -255,8 +256,8 @@ verify_efa_transport()
 
     # Capture EFA counters after I/O
     local send_after recv_after
-    send_after=$(lnetctl net show -v --net efa | awk '/send_count:/ {print $2}')
-    recv_after=$(lnetctl net show -v --net efa | awk '/recv_count:/ {print $2}')
+    send_after=$(lnetctl net show -v --net efa | awk '/send_count:/ {sum += $2} END {print sum + 0}')
+    recv_after=$(lnetctl net show -v --net efa | awk '/recv_count:/ {sum += $2} END {print sum + 0}')
 
     echo "[INFO] EFA counters after I/O — send: $send_after, recv: $recv_after"
 
