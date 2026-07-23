@@ -59,6 +59,7 @@ PLACEHOLDERS = {
     "PERIODIC_AUDIT_CODE_PLACEHOLDER": "periodic_audit.py",
     "EMAIL_NOTIFIER_CODE_PLACEHOLDER": "email_notifier.py",
     "CR_WEBHOOK_PROVISIONER_CODE_PLACEHOLDER": "cr_webhook_provisioner.py",
+    "HMA_CW_BRIDGE_CODE_PLACEHOLDER": "hma_cw_bridge.py",
 }
 
 # Minimum boto3 that includes the DevOps Agent Asset API (list_assets etc.).

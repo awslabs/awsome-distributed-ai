@@ -168,6 +168,78 @@ else
     fi
 fi
 
+# --------------------- auto-resolve HMA CloudWatch bridge (Slurm-only workaround)
+# The HMA CW bridge is a Slurm-only workaround: on EKS, HyperPod natively emits
+# the HMA-attribution Warn event on EventBridge, so deploying the bridge would
+# produce duplicate investigations. On Slurm the native emission does not
+# happen today, so the bridge fills the gap by tailing HMA CloudWatch logs and
+# synthesizing an equivalent EventBridge event.
+#
+# `deploy.sh` auto-resolves BOTH parameters unless the user set them in
+# params.json. To force-override (e.g., disable on a Slurm cluster or enable
+# on EKS for testing), set them explicitly in params.json.
+#
+# HmaLogGroupName is derived from the HyperPod cluster's ARN suffix (the
+# 12-char cluster ID) — matches the pattern
+#   /aws/sagemaker/Clusters/<ClusterName>/<ClusterId>
+# under which HMA writes its detection log streams.
+
+# Only auto-resolve if the user didn't set it. The USER_PARAMS array is
+# `Key=Value` entries; grep the array to see if the key is present.
+_user_has_param() {
+    local key="$1"
+    local p
+    for p in "${USER_PARAMS[@]}"; do
+        [[ "${p%%=*}" == "${key}" ]] && return 0
+    done
+    return 1
+}
+
+HMA_BRIDGE_ENABLED_AUTO=""
+if [[ -z "${EKS_CLUSTER_NAME}" ]]; then
+    # Slurm cluster — enable the bridge by default.
+    HMA_BRIDGE_ENABLED_AUTO="true"
+else
+    # EKS cluster — disable the bridge by default.
+    HMA_BRIDGE_ENABLED_AUTO="false"
+fi
+
+if _user_has_param "EnableHmaCloudWatchBridge"; then
+    HMA_BRIDGE_ENABLED="$(for p in "${USER_PARAMS[@]}"; do [[ "${p%%=*}" == "EnableHmaCloudWatchBridge" ]] && printf '%s' "${p#*=}"; done)"
+    echo "    HMA CW bridge:    ${HMA_BRIDGE_ENABLED} (user-set)"
+    # Sanity: warn if enabling on EKS (duplicate events risk).
+    if [[ "${HMA_BRIDGE_ENABLED}" == "true" && -n "${EKS_CLUSTER_NAME}" ]]; then
+        echo "    WARNING: EnableHmaCloudWatchBridge=true on an EKS cluster produces DUPLICATE" >&2
+        echo "             investigations (HyperPod already emits HMA Warn events natively on EKS)." >&2
+        echo "             Set EnableHmaCloudWatchBridge=false or remove the entry to use the default." >&2
+    fi
+else
+    HMA_BRIDGE_ENABLED="${HMA_BRIDGE_ENABLED_AUTO}"
+    echo "    HMA CW bridge:    ${HMA_BRIDGE_ENABLED} (auto-resolved from orchestrator)"
+fi
+
+# HmaLogGroupName: only derive when the bridge is enabled AND the user didn't
+# set the log-group name. Auto-derivation reads the cluster's ARN suffix from
+# the describe-cluster response we already fetched.
+HMA_LOG_GROUP_AUTO=""
+if [[ "${HMA_BRIDGE_ENABLED}" == "true" ]] && ! _user_has_param "HmaLogGroupName"; then
+    HMA_CLUSTER_ID="$(printf '%s' "${CLUSTER_JSON}" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+arn = d.get('ClusterArn') or ''
+# ARN shape: arn:aws:sagemaker:<region>:<account>:cluster/<cluster-id>
+print(arn.rsplit('/', 1)[-1] if arn else '')
+")"
+    if [[ -n "${HMA_CLUSTER_ID}" ]]; then
+        HMA_LOG_GROUP_AUTO="/aws/sagemaker/Clusters/${HYPERPOD_CLUSTER_NAME}/${HMA_CLUSTER_ID}"
+        echo "    HMA log group:    ${HMA_LOG_GROUP_AUTO} (auto-derived)"
+    else
+        echo "Error: HMA CW bridge enabled but cluster ARN missing — cannot derive HmaLogGroupName." >&2
+        echo "       Set HmaLogGroupName explicitly in params.json or disable the bridge." >&2
+        exit 1
+    fi
+fi
+
 # --------------------------------------------------------- boto3 preflight
 # Building the skill-uploader Lambda bundles a current boto3 (the Lambda runtime's
 # built-in boto3 predates the DevOps Agent Asset API). Verify it's present up front
@@ -239,6 +311,16 @@ PARAMS+=("SkillsVersion=${SKILLS_VERSION}")
 PARAMS+=("SkillsManifest=${SKILLS_MANIFEST}")
 PARAMS+=("SkillUploaderS3Bucket=${UPLOADER_BUCKET}")
 PARAMS+=("SkillUploaderS3Key=${UPLOADER_KEY}")
+
+# HMA CW bridge params: append the auto-resolved values ONLY when the user
+# didn't set them (auto-derived values need to appear AFTER user params so the
+# CFN "later value wins" rule doesn't clobber a deliberate user override).
+if ! _user_has_param "EnableHmaCloudWatchBridge"; then
+    PARAMS+=("EnableHmaCloudWatchBridge=${HMA_BRIDGE_ENABLED}")
+fi
+if [[ -n "${HMA_LOG_GROUP_AUTO}" ]]; then
+    PARAMS+=("HmaLogGroupName=${HMA_LOG_GROUP_AUTO}")
+fi
 
 echo
 echo "==> Deploying stack ${STACK_NAME}"
