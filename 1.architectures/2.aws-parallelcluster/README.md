@@ -39,7 +39,7 @@ Before you begin, ensure you have the following tools installed on your local ma
 - **Git**: For cloning the repository and version control
   - Installation: [Git download page](https://git-scm.com/downloads)
 
-- **Python 3.8 or later**: Required for AWS ParallelCluster CLI
+- **Python 3.9 or later**: Required for AWS ParallelCluster CLI
   - Installation: [Python download page](https://www.python.org/downloads/)
   - Verify with: `python3 --version`
 
@@ -65,7 +65,7 @@ Then create a directory under home directory to store cluster config files:
 # For example
 export AWS_REGION=ap-northeast-1
 export CLUSTER_NAME=ml-cluster
-export PCLUSTER_VERSION=3.14.2
+export PCLUSTER_VERSION=3.15.1
 export CONFIG_DIR="${HOME}/${CLUSTER_NAME}_${AWS_REGION}_${PCLUSTER_VERSION}"
 
 mkdir -p ${CONFIG_DIR}
@@ -89,7 +89,7 @@ The rest of this section describes following required/optional components.
 To deploy AWS ParallelCluster, you need to be an Administrator user of the AWS account. See [this issue](https://github.com/aws/aws-parallelcluster/issues/2060) for the related discussion. You need to use the IAM user to create clusters using AWS ParallelCluster CLI from local console, for that you need to configure your AWS credentials by running `aws configure`.
 
 #### AWS ParallelCluster CLI for cluster deployment and management
-The AWS ParallelCluster CLI is a command-line tool that helps you deploy and manage HPC clusters on AWS. It provides commands for creating, updating, and deleting clusters, as well as managing cluster resources. The CLI is built on top of the AWS SDK and provides a simple interface for interacting with AWS ParallelCluster. For detailed information about the CLI and its commands, refer to the [AWS ParallelCluster Command Line Interface Reference](https://docs.aws.amazon.com/parallelcluster/latest/ug/commands-v3.html). The CLI requires Python 3.8 or later installed on your local environment.
+The AWS ParallelCluster CLI is a command-line tool that helps you deploy and manage HPC clusters on AWS. It provides commands for creating, updating, and deleting clusters, as well as managing cluster resources. The CLI is built on top of the AWS SDK and provides a simple interface for interacting with AWS ParallelCluster. For detailed information about the CLI and its commands, refer to the [AWS ParallelCluster Command Line Interface Reference](https://docs.aws.amazon.com/parallelcluster/latest/ug/commands-v3.html). The CLI requires Python 3.9 or later installed on your local environment.
 
 You can install the AWS ParallelCluster CLI using pip in a Python virtual environment:
 
@@ -333,7 +333,7 @@ cat  ${CONFIG_DIR}/config.yaml
 # Example values - these will vary by environment
 CLUSTER_NAME: ml-cluster
 AWS_REGION: eu-west-2
-PCLUSTER_VERSION: 3.14.2
+PCLUSTER_VERSION: 3.15.1
 CAPACITY_RESERVATION_ID: cr-XXXXXXXXXXXXXXXXX
 AZ: eu-west-2c
 NUM_INSTANCES: "16"
@@ -410,7 +410,7 @@ You should see output similar to:
     "cloudformationStackStatus": "CREATE_IN_PROGRESS",
     "cloudformationStackArn": "arn:aws:cloudformation:ap-northeast-1:123456789012:stack/ml-cluster/abcd1234-...",
     "region": "ap-northeast-1",
-    "version": "3.14.2",
+    "version": "3.15.1",
     "clusterStatus": "CREATE_IN_PROGRESS",
     "scheduler": {
       "type": "slurm"
