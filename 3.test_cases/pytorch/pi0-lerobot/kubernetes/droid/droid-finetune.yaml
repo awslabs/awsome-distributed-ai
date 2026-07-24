@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Pi0 LeRobot — DROID Fine-tuning PyTorchJob
 # Trains π0 on DROID-100 with FSDP on 8× GPU via accelerate + lerobot-train.
 

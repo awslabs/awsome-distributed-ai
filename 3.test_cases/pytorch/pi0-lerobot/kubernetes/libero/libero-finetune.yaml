@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Pi0 LeRobot — LIBERO Fine-tuning PyTorchJob
 # Trains π0 on LIBERO-10 (episodes 0-303) with FSDP on 8× GPU.
 # Uses the DLC image directly and installs LeRobot at runtime.
