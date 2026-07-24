@@ -2719,18 +2719,11 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
-      VersioningConfiguration:
-        Status: Enabled
       LifecycleConfiguration:
         Rules:
           - Id: ExpireOldMarkers
             Status: Enabled
             ExpirationInDays: !Ref MarkerExpirationDays
-            # Versioning turns the expiration above into delete markers rather than
-            # real deletes; expire the noncurrent versions too so short-lived dedup
-            # markers don't accumulate indefinitely.
-            NoncurrentVersionExpiration:
-              NoncurrentDays: !Ref MarkerExpirationDays
 
   EmailNotifierExecutionRole:
     Type: AWS::IAM::Role
