@@ -732,6 +732,10 @@ Resources:
       FunctionName: !Ref HmaCwBridgeFunction
       Action: lambda:InvokeFunction
       Principal: !Sub "logs.${AWS::Region}.amazonaws.com"
+      # Confine the grant to CloudWatch Logs in THIS account (not just the SourceArn),
+      # so the CloudWatch Logs service principal cannot invoke this function on behalf
+      # of any other account (LAMBDA_FUNCTION_PUBLIC_ACCESS_PROHIBITED).
+      SourceAccount: !Sub "${AWS::AccountId}"
       SourceArn: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${HmaLogGroupName}:*"
 
   HmaCwBridgeLogSubscription:
@@ -898,11 +902,18 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
       LifecycleConfiguration:
         Rules:
           - Id: ExpireOldMarkers
             Status: Enabled
             ExpirationInDays: !Ref MarkerExpirationDays
+            # Versioning turns the expiration above into delete markers rather than
+            # real deletes; expire the noncurrent versions too so short-lived dedup
+            # markers don't accumulate indefinitely.
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref MarkerExpirationDays
 
   EmailNotifierExecutionRole:
     Type: AWS::IAM::Role

@@ -176,6 +176,11 @@ def _eks_endpoint_and_ca(eks_cluster_name: str, region: str) -> tuple[str, str]:
 def _k8s_get(path: str, eks_cluster_name: str, region: str) -> dict:
     """GET a Kubernetes API path and return the parsed JSON."""
     endpoint, ca_path = _eks_endpoint_and_ca(eks_cluster_name, region)
+    # The endpoint comes from DescribeCluster (always https); validate the scheme
+    # before urlopen so it can't be coerced into file:// or a custom scheme
+    # (Bandit B310).
+    if not endpoint.lower().startswith("https://"):
+        raise ValueError("EKS endpoint must be an https URL")
     token = _eks_token(eks_cluster_name, region)
     ctx = ssl.create_default_context(cafile=ca_path)
     req = urllib.request.Request(
@@ -183,7 +188,8 @@ def _k8s_get(path: str, eks_cluster_name: str, region: str) -> dict:
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
         method="GET",
     )
-    with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+    # scheme validated as https above
+    with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:  # nosec B310
         return json.loads(resp.read())
 
 
@@ -514,6 +520,11 @@ def _build_payload(cluster_name: str, k8s_checks: dict | None,
 
 
 def _post(webhook_url: str, secret: str, payload: dict) -> None:
+    # The webhook URL comes from Secrets Manager, but validate the scheme before
+    # handing it to urlopen so a misconfigured secret can't select file:// or a
+    # custom scheme (Bandit B310).
+    if not webhook_url.lower().startswith("https://"):
+        raise ValueError("webhook URL must be an https URL")
     body = json.dumps(payload).encode("utf-8")
     timestamp = _now().strftime("%Y-%m-%dT%H:%M:%S.000Z")
     signature = base64.b64encode(
@@ -534,7 +545,8 @@ def _post(webhook_url: str, secret: str, payload: dict) -> None:
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=10) as resp:
+        # scheme validated as https above
+        with urllib.request.urlopen(request, timeout=10) as resp:  # nosec B310
             _log("INFO", "webhook_post_success", status=resp.status, incidentId=payload.get("incidentId"))
     except HTTPError as e:
         _log("ERROR", "webhook_post_failed", status=e.code, body=repr(e.read()))

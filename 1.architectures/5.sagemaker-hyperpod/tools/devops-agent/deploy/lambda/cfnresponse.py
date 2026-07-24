@@ -14,6 +14,11 @@ FAILED = "FAILED"
 
 def send(event, context, response_status, response_data=None, physical_resource_id=None, no_echo=False, reason=None):
     response_url = event["ResponseURL"]
+    # CloudFormation always hands us an https pre-signed S3 URL; reject anything
+    # else so a malformed event can't coerce urlopen into file:// or a custom
+    # scheme (Bandit B310).
+    if not response_url.lower().startswith("https://"):
+        raise ValueError("ResponseURL must be an https URL")
     body = {
         "Status": response_status,
         "Reason": reason
@@ -33,7 +38,8 @@ def send(event, context, response_status, response_data=None, physical_resource_
         headers={"content-type": "", "content-length": str(len(encoded))},
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        # scheme validated as https above
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310
             print(f"cfnresponse status={resp.status}")
     except Exception as e:  # noqa: BLE001 - CFN will time out if we can't respond
         print(f"cfnresponse send failed: {e!r}")

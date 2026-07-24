@@ -446,6 +446,11 @@ def _truthy(env_var: str) -> bool:
 
 
 def _post(webhook_url: str, secret: str, payload: dict) -> None:
+    # The webhook URL comes from Secrets Manager, but validate the scheme before
+    # handing it to urlopen so a misconfigured secret can't select file:// or a
+    # custom scheme (Bandit B310).
+    if not webhook_url.lower().startswith("https://"):
+        raise ValueError("webhook URL must be an https URL")
     body = json.dumps(payload).encode("utf-8")
     timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     signature = base64.b64encode(
@@ -481,7 +486,8 @@ def _post(webhook_url: str, secret: str, payload: dict) -> None:
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=10) as resp:
+        # scheme validated as https above
+        with urllib.request.urlopen(request, timeout=10) as resp:  # nosec B310
             _log("INFO", "webhook_post_success", status=resp.status, incidentId=payload.get("incidentId"))
     except HTTPError as e:
         _log("ERROR", "webhook_post_failed", status=e.code, body=repr(e.read()))
