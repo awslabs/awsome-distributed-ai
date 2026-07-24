@@ -91,16 +91,12 @@ To deploy AWS ParallelCluster, you need to be an Administrator user of the AWS a
 #### AWS ParallelCluster CLI for cluster deployment and management
 The AWS ParallelCluster CLI is a command-line tool that helps you deploy and manage HPC clusters on AWS. It provides commands for creating, updating, and deleting clusters, as well as managing cluster resources. The CLI is built on top of the AWS SDK and provides a simple interface for interacting with AWS ParallelCluster. For detailed information about the CLI and its commands, refer to the [AWS ParallelCluster Command Line Interface Reference](https://docs.aws.amazon.com/parallelcluster/latest/ug/commands-v3.html). The CLI requires Python 3.9 or later installed on your local environment.
 
-You also need the AWS CLI to configure your credentials (`aws configure`). Install
-**AWS CLI v2** if it is not already available on your machine — note that v2 is *not*
-distributed via pip and must be installed with the official installer:
-
-```bash
-# Skip this if `aws --version` already reports aws-cli/2.x
-curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-unzip awscliv2.zip && sudo ./aws/install
-# For Graviton/ARM hosts, use awscli-exe-linux-aarch64.zip instead
-```
+You also need the AWS CLI to configure your credentials (`aws configure`). If it is
+not already available on your machine (run `aws --version` to check), install
+**AWS CLI v2** by following the official
+[Install or update to the latest version of the AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+guide, which covers Linux, macOS, and Windows. Note that AWS CLI v2 is *not*
+distributed via pip.
 
 You can then install the AWS ParallelCluster CLI using pip in a Python virtual environment:
 
