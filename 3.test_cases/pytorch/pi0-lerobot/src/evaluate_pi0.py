@@ -432,7 +432,10 @@ def main():
             print(f"    Results will compare raw model output to raw ground truth (no un-normalization).")
             preprocess, postprocess = None, None
 
-        return p, preprocess, postprocess
+        # Track whether processors are active for result integrity
+        processors_active = preprocess is not None
+
+        return p, preprocess, postprocess, processors_active
 
     # Evaluate
     print(f"\n[5/5] Evaluating {args.num_trajectories} trajectories per model...")
@@ -443,7 +446,7 @@ def main():
         if args.device == "cuda":
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats()
-        policy, preprocess, postprocess = load_policy(source, label)
+        policy, preprocess, postprocess, processors_active = load_policy(source, label)
 
         if num_inference_steps is not None:
             policy.config.num_inference_steps = num_inference_steps
@@ -457,8 +460,10 @@ def main():
 
         results = []
         # Evaluate on held-out episodes (by episode index into full dataset)
-        episodes_to_eval = eval_episodes[:args.num_trajectories]
+        episodes_to_eval = eval_episodes if args.num_trajectories is None else eval_episodes[:args.num_trajectories]
         for ep in episodes_to_eval:
+            # Seed ODE noise for reproducibility (same noise per episode across models)
+            torch.manual_seed(ep)
             r = evaluate_policy_on_trajectory(
                 policy, dataset, ep, rename_map,
                 n_empty_cameras=n_empty_cameras,
@@ -495,6 +500,7 @@ def main():
             "avg_mae": avg_mae,
             "avg_time_ms_per_chunk": avg_time,
             "peak_vram_mb": peak_vram_mb,
+            "processors_active": processors_active,
         }
 
     # Run base
@@ -552,7 +558,7 @@ def main():
         "num_trajectories": args.num_trajectories,
         "action_horizon": args.action_horizon,
         "action_dim": ds_cfg["action_dim"],
-        "eval_episodes": eval_episodes[:args.num_trajectories],
+        "eval_episodes": eval_episodes if args.num_trajectories is None else eval_episodes[:args.num_trajectories],
         "base": base_results,
         "finetuned": finetuned_results,
         "finetuned_step_sweep": {str(n): r for n, r in finetuned_sweep.items()},
