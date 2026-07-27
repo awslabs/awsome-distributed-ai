@@ -331,13 +331,13 @@ variable "helm_release_name_hpio" {
 variable "helm_repo_revision" {
   description = "Git revision for normal mode"
   type        = string
-  default     = "9f496a6364759553f73ff534434a057ef4bdc004"
+  default     = "bb6a9f9534217c55a5806ae968e1dd8b285d4b8c"
 }
 
 variable "helm_repo_revision_rig" {
   description = "Git revision for RIG mode"
   type        = string
-  default     = "c5275ddbbca58164d1f5bd3a2811e0fc952f7ff4"
+  default     = "5b703ed8b2f1f60176013ead2519541381f0e177"
 }
 
 variable "namespace" {
