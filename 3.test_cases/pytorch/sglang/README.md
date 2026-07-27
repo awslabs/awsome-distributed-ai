@@ -20,5 +20,6 @@ networking and expert-parallel MoE all-to-all
 For the kernel-level DeepEP-on-EFA dispatch/combine benchmarks (Slurm and EKS
 launchers, 1–32 nodes) see
 [`micro-benchmarks/expert-parallelism/deepep-benchmark`](../../../micro-benchmarks/expert-parallelism/deepep-benchmark).
-For the same model and fabric served by vLLM in a PD-disaggregated topology see
-[`3.test_cases/pytorch/vllm/dsr1-deepep-efa`](../vllm/dsr1-deepep-efa).
+For a PD-disaggregated MoE deployment on vLLM — UCCL-EP rather than DeepEP, KV
+over NIXL, orchestrated on EKS — see
+[`3.test_cases/pytorch/vllm/dsv3-uccl-nixl`](../vllm/dsv3-uccl-nixl).
