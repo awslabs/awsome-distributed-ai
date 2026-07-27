@@ -47,7 +47,14 @@ offered only the IBRC/IBGDA InfiniBand transports.
 3. **UCCL rows are not included here.** UCCL-EP in the same 2P2D topology, on both H100 and H200,
    is in [`RESULTS-2p2d.md`](./RESULTS-2p2d.md); `ep-backend-comparison` has the matched-config
    kernel-level comparison.
-4. **The H100 2P2D table below moved the KV cache over TCP, not EFA** — it predates the
+4. **Every run here predates `NCCL_NET_PLUGIN=ofi`, so NCCL ran over TCP sockets.** The image did
+   not set it and the EFA installer ships the plugin under a name NCCL does not auto-load, so NCCL
+   fell back to `NET/Socket` with GPU Direct RDMA disabled. Now fixed in the Dockerfile and
+   asserted by `recipe/verify-image.sh`. It penalises `baseline` (fused-MoE all-to-all over NCCL)
+   and `pure TP` (all tensor-parallel collectives over NCCL) more than DeepEP, so the DeepEP-vs-rest
+   comparisons here are, if anything, generous to DeepEP. See
+   [`RESULTS-2p2d.md`](./RESULTS-2p2d.md) caveat 4.
+5. **The H100 2P2D table below moved the KV cache over TCP, not EFA** — it predates the
    `MOONCAKE_PROTOCOL=efa` fix. Baseline-vs-DeepEP there is still fair (both handicapped
    identically, and both stay below the concurrency where the TCP path collapses), but the absolute
    numbers are low. See [`RESULTS-2p2d.md`](./RESULTS-2p2d.md#required-setting-mooncake_protocolefa).
@@ -127,7 +134,7 @@ TTFT ms (lower better) / input tok/s (higher better). **Bold = best in row.**
 Baseline beats DeepEP on decode by ~1.6–2.8× throughput and is roughly par on prefill — the same
 conclusion as the H200 colocated runs, reached on different hardware and a different topology.
 Note the prefill sweep stops at concurrency 4 here, well short of where DeepEP's advantage appears
-(see caveat 4 on the transport, and `RESULTS-2p2d.md` for the full concurrency ramp on H200).
+(see caveat 5 on the KV transport, and `RESULTS-2p2d.md` for the full concurrency ramp on H200).
 
 ---
 
@@ -142,6 +149,17 @@ H200, 2 nodes, 4096 tokens × hidden 7168:
 | 16-EP combine (RDMA) | 43 GB/s | **59.4** |
 | 32-EP dispatch (RDMA) | 58 GB/s | 47.1 (FP8) / 51.5 (BF16) |
 | 32-EP combine (RDMA) | 57 GB/s | 53.2 |
+
+Single-node smoke results from `recipe/run-kernel-test.sh` on `p5.48xlarge` (8×H100), run against
+the image built from the committed Dockerfile on 2026-07-27 — these are the pre-flight checks the
+README tells you to run, not a benchmark:
+
+| Test | Correctness | Bandwidth |
+|---|---|---|
+| `intranode` (NVLink, no NVSHMEM) | 24/24 passed | 306.9 GB/s dispatch (BF16), 303.8 GB/s combine |
+| `low_latency` (NVSHMEM, 8 ranks) | passed | 108 GB/s dispatch / 200 GB/s combine, ~69/73 µs |
+
+`internode` needs both nodes and has not been run against this image yet.
 
 Different hardware on each side (H200 + EFA vs H800 + CX7), so read this as a sanity band rather
 than a controlled A/B. The point is that **EFA delivers IB-class dispatch/combine bandwidth** for

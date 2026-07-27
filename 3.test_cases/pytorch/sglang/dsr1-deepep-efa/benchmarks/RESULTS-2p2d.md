@@ -90,11 +90,21 @@ sample does not ship it. Its launch requirements also differ from DeepEP's; see
    all.** The bridge was only run for prefill — there is **no cross-image control on the decode
    sweeps**, so the UCCL decode rows carry an unquantified image delta. Given they are the basis of
    this document's decode recommendation, that control is the first thing to add on a re-run.
-4. **Kernel-level bandwidth is out of scope here.** For matched-config dispatch/combine numbers
+4. **Every run below predates `NCCL_NET_PLUGIN=ofi`, so NCCL was on TCP sockets, not EFA.** The
+   image did not set it, and the EFA installer ships the plugin under a name NCCL does not
+   auto-load, so NCCL logged *"Could not find: libnccl-net.so"* and used `NET/Socket` with GPU
+   Direct RDMA disabled. This is now fixed in the Dockerfile and asserted by
+   `recipe/verify-image.sh`. It **understates the two NCCL-dependent backends most** — `baseline`
+   routes its fused-MoE all-to-all over NCCL, and `pure TP` routes every layer's tensor-parallel
+   collectives over it — while DeepEP and UCCL move their expert traffic over NVSHMEM/libfabric and
+   their own transport respectively, touching NCCL only for the non-MoE collectives. So the DeepEP
+   prefill win below is, if anything, **overstated against baseline and TP**, and the decode gap
+   where they lead is understated. A re-run with the fix is the highest-value next measurement.
+5. **Kernel-level bandwidth is out of scope here.** For matched-config dispatch/combine numbers
    across NCCL/UCCL/NVSHMEM out to 256 ranks, see
    [`ep-backend-comparison`](../../../../../micro-benchmarks/expert-parallelism/ep-backend-comparison).
    This page is only about what a served model does.
-5. **Peak input throughput is a saturation metric, not a latency metric.** The high-concurrency
+6. **Peak input throughput is a saturation metric, not a latency metric.** The high-concurrency
    points have TTFT in the seconds. Read the TTFT column too if you care about interactive
    prefill.
 
@@ -372,11 +382,10 @@ So **check the log rather than assuming**, on every role, before benchmarking:
 docker logs r1-pd-prefill 2>&1 | grep -E 'EfaTransport|Installing TCP transport'
 ```
 
-`recipe/serve-pd.sh` sets the variable and prints this grep. Two plausible-looking explanations for
-the deadlock are worth ruling out up front, because both cost debugging time here: it is **not**
-NVSHMEM contention (it reproduces with `MOE_BACKEND=tp`, which never loads DeepEP) and **not**
-NCCL-over-EFA (unaffected images run `aws-ofi-nccl` 1.19.0 with `efa-direct` over 16 NICs and are
-fine). It is Mooncake, and only Mooncake.
+`recipe/serve-pd.sh` sets the variable and prints this grep. One plausible-looking explanation for
+the deadlock is worth ruling out up front, because it cost debugging time here: it is **not**
+NVSHMEM contention — the wedge reproduces with `MOE_BACKEND=tp`, which never loads DeepEP. The KV
+path is Mooncake's alone, so the fix is Mooncake's alone.
 
 ## UCCL-EP launch configuration that actually matters
 
