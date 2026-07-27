@@ -9,7 +9,12 @@ and the NCCL/UCCL cross-backend comparison — see
 [`micro-benchmarks/expert-parallelism/deepep-benchmark`](../../../../../micro-benchmarks/expert-parallelism/deepep-benchmark)
 and [`ep-backend-comparison`](../../../../../micro-benchmarks/expert-parallelism/ep-backend-comparison).
 For the same model and fabric served by SGLang, see
-[`3.test_cases/pytorch/sglang/dsr1-deepep-efa`](../../../sglang/dsr1-deepep-efa/benchmarks/RESULTS.md).
+[`3.test_cases/pytorch/sglang/dsr1-deepep-efa`](../../../sglang/dsr1-deepep-efa/benchmarks/RESULTS.md) —
+and in particular
+[its 2P2D results](../../../sglang/dsr1-deepep-efa/benchmarks/RESULTS-2p2d.md), which cover the
+same 4-node topology with four MoE backends, both stages, and a decode configuration that is not
+handicapped by caveat 2 below. **If you want to know how the MoE backends compare on R1, read that
+document, not this one.**
 
 ## Read this first
 
@@ -21,9 +26,15 @@ InfiniBand transports.
 
 **What it does not establish: a DeepEP win.** At 2 nodes per role / 16 GPUs, each GPU already owns
 16 of 256 experts, the MoE fan-out is small and largely intra-node NVLink, and DeepEP's per-layer
-dispatch/combine launches plus NVSHMEM RDMA setup cost more than they save. DeepEP targets
-large-scale EP — tens of nodes, experts spread thin enough that every token must cross the fabric.
-That crossover is not reachable here.
+dispatch/combine launches plus NVSHMEM RDMA setup cost more than they save on decode. DeepEP
+targets large-scale EP — tens of nodes, experts spread thin enough that every token must cross the
+fabric — and that decode crossover is not reachable here.
+
+**Prefill is where a win does exist at this scale, and this sample failed to measure it.** The
+DeepEP prefill engine died repeatably on the out=1 PD path (caveat 3), so there is no vLLM prefill
+number here at all. The SGLang sample, same hardware and same 4-node topology, reaches **161.5k
+input tok/s with DeepEP at 1K×conc256 — 3× its baseline** — so "no DeepEP win at 16 GPUs" is a
+statement about *decode*, and about this sample's incomplete prefill data, not about DeepEP.
 
 ## Caveats — please read before quoting any number
 

@@ -15,7 +15,7 @@ networking and expert-parallel MoE all-to-all
 
 | Test case | Orchestrator | Description |
 | --- | --- | --- |
-| [`dsr1-deepep-efa`](./dsr1-deepep-efa) | EC2 (Docker) | DeepSeek-R1 colocated 2-node inference (TP16/EP16) on `p5`/`p5en.48xlarge` with SGLang 0.5.13.post1 and **DeepEP** MoE all-to-all over NVSHMEM-libfabric/EFA. Also selects SGLang's ordinary all-to-all and pure TP for comparison. |
+| [`dsr1-deepep-efa`](./dsr1-deepep-efa) | EC2 (Docker) | DeepSeek-R1 inference on `p5`/`p5en.48xlarge` with SGLang 0.5.13.post1 and **DeepEP** MoE all-to-all over NVSHMEM-libfabric/EFA — colocated 2-node (TP16/EP16) and 2P2D prefill/decode-disaggregated (4-node, KV over EFA via Mooncake). Selects DeepEP, SGLang's ordinary all-to-all, pure TP, or UCCL-EP for comparison, ± DP-attention. |
 
 For the kernel-level DeepEP-on-EFA dispatch/combine benchmarks (Slurm and EKS
 launchers, 1–32 nodes) see

@@ -10,7 +10,10 @@ InfiniBand anywhere.
 
 The same image also serves as the head-to-head harness: `recipe/serve.sh` selects between the
 DeepEP all-to-all, SGLang's ordinary fused-MoE all-to-all, and pure tensor parallelism, so all
-three can be measured on identical hardware and fabric.
+three can be measured on identical hardware and fabric. `recipe/serve-pd.sh` does the same in a
+**4-node prefill/decode-disaggregated (2P2D)** topology, with the KV cache moving over EFA RDMA via
+Mooncake — which is where the interesting result is, because **prefill and decode pick different
+winners** ([`benchmarks/RESULTS-2p2d.md`](./benchmarks/RESULTS-2p2d.md)).
 
 | | |
 |---|---|
@@ -62,6 +65,24 @@ the pip copy with the v3.7.0 build so the single soname resolves to v3.7.0 for b
 
 `recipe/verify-image.sh` checks all three in one shot.
 
+### And a fourth, if you run PD-disaggregated: Mooncake silently falls back to TCP
+
+**Without `MOONCAKE_PROTOCOL=efa`, Mooncake moves the KV cache over TCP sockets instead of EFA
+RDMA.** The server still comes up, still returns correct tokens, and still passes a smoke test —
+then deadlocks past concurrency ~48 with `KVTransferError ... session is not alive`. The only
+evidence is one line in the server log:
+
+```
+transfer_engine_py.cpp:241] Installing TCP transport (auto_discover disabled in EFA build)   # WRONG
+efa_transport.cpp:1025]     EfaTransport: Initialized EFA device rdmap160s0 ...              # right
+```
+
+`recipe/serve-pd.sh` sets it and prints the grep to confirm it. Same image, same config, only the
+env var differing, at 1K input with DeepEP: concurrency 64 goes from 145/192 requests at 5.2k
+input tok/s to **192/192 at 87.0k**, and concurrency 256 from wedged to **512/512 at 161.5k**. The
+[full A/B](./benchmarks/RESULTS-2p2d.md#the-trap-that-cost-the-most-time-mooncake_protocolefa) shows
+the same collapse for pure TP, so it is not backend-specific.
+
 ### Runtime requirements that are easy to miss
 
 | Setting | Why |
@@ -72,17 +93,32 @@ the pip copy with the v3.7.0 build so the single soname resolves to v3.7.0 for b
 | `NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE` | Gives each GPU exclusive use of the NIC on its own PCIe switch. Recommended for RDMA performance on p5/p5en, which pair multiple EFA NICs across PCIe switches. |
 | `NVSHMEM_DISABLE_CUDA_VMM` — **regime-specific** | Set it to `1` for the **normal** dispatch/combine kernels, or NVSHMEM topology / transport-map init fails in-container. **Leave it unset for low-latency kernels**, or the RDMA-buffer `cudaMemset` fails with *"invalid argument"* (`deep_ep.cpp:371`). Because the server uses `--deepep-mode auto` (low-latency on the decode path), `recipe/serve.sh` leaves VMM **enabled**; `recipe/run-kernel-test.sh` sets it per test. |
 | `--network host --ipc host --ulimit memlock=-1 --shm-size 32g` | EFA needs host networking, IPC and unlimited locked memory. |
+| `MOONCAKE_PROTOCOL=efa` — **PD-disaggregated only** | KV cache over EFA RDMA. Omitting it is a *silent* fallback to TCP, not an error. See trap 4 above. |
 
 The first four are baked into the image as `ENV`; the launchers re-export them anyway so the
 transport config is visible at the launch surface and overridable per run.
 
+### If you enable DP-attention
+
+`--dp-size 16 --enable-dp-attention` is orthogonal to the MoE backend and worth a lot on decode
+(~+25–30% for the EP backends), but it needs two things or the server does not start:
+
+| Setting | Why |
+|---|---|
+| Pre-compile DeepGEMM on **both** prefill nodes (`recipe/serve-pd.sh precompile <rank>`) | DP+EP uses `num_groups=16` grouped-GEMM shapes that are absent from the cache. Their first-time JIT compile is slow enough to trip DeepEP's dispatch warmup timeout — *"DeepEP error: timeout (dispatch CPU)"*. A single-node precompile cannot initialise 16-rank EP, so it must run on both. |
+| `--cuda-graph-bs 128 --max-running-requests 256` on the **decode** role, with `--mem-fraction-static 0.78` | Otherwise all 16 DP ranks each capture the full default batch-size list and CUDA-graph capture OOMs. The symptom is *"scheduler died"* during startup, not an OOM message. |
+
+`recipe/serve-pd.sh` applies the second automatically when `DP_ATTENTION=1`; the precompile step is
+a separate command because it only needs running once per host.
+
 ## Prerequisites
 
-- **2 nodes**, `p5.48xlarge` or `p5en.48xlarge` (8×H100/H200, EFA), Docker with GPU support.
+- **2 nodes** for the colocated recipe, **4** for the PD-disaggregated one (2 prefill + 2 decode),
+  `p5.48xlarge` or `p5en.48xlarge` (8×H100/H200, EFA), Docker with GPU support.
 - `/dev/infiniband` and `/dev/gdrdrv` present on the host (`ls /dev/gdrdrv`). If `gdrdrv` is
   missing, install GDRCopy on the host — the in-container library cannot create the device node.
-- **~640 GB of fast local NVMe per node** for the DeepSeek-R1 FP8 weights, present on *both*
-  nodes (`HF_CACHE_DIR`).
+- **~640 GB of fast local NVMe per node** for the DeepSeek-R1 FP8 weights, present on *every*
+  node (`HF_CACHE_DIR`).
 - A HuggingFace token with DeepSeek-R1 access.
 
 ## Build
@@ -149,6 +185,48 @@ curl -s localhost:30000/health && echo OK
 
 Swap the MoE backend by restarting with `MOE_BACKEND=baseline` or `MOE_BACKEND=tp`.
 
+## Serve PD-disaggregated (2P2D, 4 nodes)
+
+Two prefill nodes and two decode nodes, each role its own TP16/EP16 group, KV cache flowing
+prefill→decode over EFA, one router in front. Fill in the PD block of `setup/env_vars` first.
+
+```bash
+source setup/env_vars
+
+# Only for DeepEP + DP_ATTENTION=1 — warm the DeepGEMM cache on BOTH prefill nodes first.
+DP_ATTENTION=1 recipe/serve-pd.sh precompile 0
+DP_ATTENTION=1 recipe/serve-pd.sh precompile 1
+
+recipe/serve-pd.sh serve prefill 0      # prefill node 0
+recipe/serve-pd.sh serve prefill 1      # prefill node 1
+recipe/serve-pd.sh serve decode  0      # decode node 0
+recipe/serve-pd.sh serve decode  1      # decode node 1
+
+# Wait for all four to print "The server is fired up", then:
+recipe/serve-pd.sh router               # on $ROUTER_IP
+curl -s localhost:8000/health && echo OK
+
+recipe/serve-pd.sh stop                 # on every node, when done
+```
+
+Before trusting any number, confirm the KV path came up on EFA rather than TCP:
+
+```bash
+docker logs r1-pd-prefill 2>&1 | grep -E 'EfaTransport|Installing TCP transport'
+```
+
+`UCCL=1` is for benchmarking **UCCL-EP** in the same topology. It needs an SGLang image built with
+UCCL's `ep/deep_ep_wrapper` (which exposes UCCL under DeepEP's Python API, so
+`--moe-a2a-backend deepep` drives it unchanged) — **that image is not in this repo**; the closest
+starting points are [`uccl-ep-benchmark`](../../../../micro-benchmarks/expert-parallelism/uccl-ep-benchmark)
+(kernels only) and [`dsv3-uccl-nixl`](../../vllm/dsv3-uccl-nixl) (the same wrapper on vLLM). Point
+`IMAGE_URI` at it and set `UCCL=1`: that switches on `--privileged` (UCCL registers GPU memory
+through dma-buf/ibverbs, which DeepEP does not need) and drops the decode `--mem-fraction-static`
+to 0.70. The script always pins `--deepep-mode` per role, which UCCL requires — with
+`--deepep-mode auto` its prefill path segfaults at startup. It is worth the trouble for one reason:
+**with DP-attention, UCCL-EP is the fastest decode configuration measured**
+([RESULTS-2p2d.md](./benchmarks/RESULTS-2p2d.md#dp-attention-the-lever-that-reverses-the-decode-ranking)).
+
 ## Benchmark
 
 Prefill and decode are swept separately, because the two stages stress the MoE all-to-all very
@@ -159,15 +237,28 @@ recipe/benchmark.sh prefill      # --random-output-len 1 => TTFT is ~pure prefil
 recipe/benchmark.sh decode       # short in, long out => TPOT-dominated
 ```
 
-Raw JSON lands in `benchmarks/raw/$MOE_BACKEND/`.
+Raw JSON lands in `benchmarks/raw/$MOE_BACKEND/`. For the 2P2D deployment use the PD sweeps
+instead — same split, driven through the router, with the concurrency pushed much further:
 
-See [`benchmarks/RESULTS.md`](./benchmarks/RESULTS.md) for measured numbers, and read the caveats
-there before quoting anything: **at 2 nodes / 16 GPUs, DeepEP does not beat the ordinary
-all-to-all or pure TP.** That is the expected result, not a defect in the EFA port — DeepEP is
-built for large-scale EP (experts spread thin across many nodes so every token must cross the
-network), and the crossover is not reachable at this scale. What this sample demonstrates is that
-the DeepEP kernels are **correct and run at IB-class bandwidth over EFA**, and plug into a real
-R1 server end to end.
+```bash
+recipe/benchmark-pd.sh decode        # run decode FIRST; see the script header for why
+recipe/benchmark-pd.sh prefill
+```
+
+Measured numbers, with caveats to read before quoting anything:
+
+- [`benchmarks/RESULTS.md`](./benchmarks/RESULTS.md) — colocated 2-node, H200 and H100.
+- [`benchmarks/RESULTS-2p2d.md`](./benchmarks/RESULTS-2p2d.md) — 2P2D, four MoE backends
+  (DeepEP / baseline / pure TP / UCCL-EP) × prefill and decode, ± DP-attention.
+
+The short version: **no single backend wins both stages.** DeepEP takes prefill decisively —
+161.5k input tok/s at 1K×conc256, 3× everything else — while on decode at 16 GPUs it is last, and
+pure TP ≈ baseline lead. With DP-attention on, UCCL-EP takes decode at 4094 tok/s / TPOT 28 ms.
+Because a PD deployment runs the two stages on separate nodes, the actionable answer is **DeepEP on
+prefill, UCCL-EP + DP-attention on decode**. DeepEP losing decode at this scale is expected rather
+than a defect in the EFA port: it is built for large-scale EP where experts are spread thin enough
+that every token must cross the network. What this sample demonstrates is that the DeepEP kernels
+are **correct and run at IB-class bandwidth over EFA**, and plug into a real R1 server end to end.
 
 ## Keeping the vendored script in sync
 
@@ -184,9 +275,13 @@ referenced. Drift should be guarded in CI alongside the other vendored copy — 
 
 ## Known limitations
 
-- **Launch surface**: validated as raw `docker run` on EC2 across 2 nodes. No Slurm or Kubernetes
-  launchers are provided here, because none were exercised — for cluster-scheduled kernel
-  benchmarks use `deepep-benchmark`, which has both.
+- **Launch surface**: validated as raw `docker run` on EC2 across 2 nodes (colocated) and 4 nodes
+  (2P2D). No Slurm or Kubernetes launchers are provided here, because none were exercised — for
+  cluster-scheduled kernel benchmarks use `deepep-benchmark`, which has both.
+- **2P2D input length tops out around 64K.** 128K prefill computes fine but the Mooncake/EFA KV
+  transfer times out (`EFA submitSlicesOnPeer: CQ drain wr_depth=256, max=256`); a larger `MC_MAX_WR`
+  or chunked KV transfer is the untried fix. 64K at concurrency ≥4 exhausts the 2-node prefill KV
+  pool.
 - **Hopper only** (`sm_90`). The kernel benchmark image covers Blackwell; this one was not tested
   there.
 - **DeepEP pinned to `567632d`** (pre-EPv2). The setup script hard-checks the tree and its EFA

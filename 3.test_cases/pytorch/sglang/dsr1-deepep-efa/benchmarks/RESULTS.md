@@ -11,7 +11,7 @@ and [`ep-backend-comparison`](../../../../../micro-benchmarks/expert-parallelism
 
 ## Read this first
 
-**At 2 nodes / 16 GPUs, DeepEP does not beat SGLang's ordinary all-to-all, and neither beats pure
+**On decode at 16 GPUs, DeepEP does not beat SGLang's ordinary all-to-all, and neither beats pure
 TP.** That is the expected result at this scale, not a defect in the EFA port:
 
 - With 16 ranks and 256 experts, each GPU already owns 16 experts. The MoE fan-out is small and
@@ -20,7 +20,13 @@ TP.** That is the expected result at this scale, not a defect in the EFA port:
   when so little traffic crosses the network.
 - DeepEP targets **large-scale** expert parallelism — tens of nodes, experts spread thin enough
   that every token must cross the fabric, where an ordinary all-to-all's message count and lack of
-  compute/comm overlap make it collapse. That crossover is not reachable on 2 nodes.
+  compute/comm overlap make it collapse. That crossover is not reachable on 2 nodes for decode.
+
+**Prefill is the exception, and this sweep does not go far enough to show it.** The concurrency
+here stops at 32, where DeepEP has only just overtaken the baseline. Pushed to concurrency 256 in
+the PD-disaggregated runs, DeepEP reaches **161.5k input tok/s — 3× the alternatives** at 16 GPUs.
+See [`RESULTS-2p2d.md`](./RESULTS-2p2d.md). So the scale story is really *per stage*: DeepEP wins
+prefill once the batch is large, and loses decode at 16 GPUs regardless.
 
 **What these runs do establish:** the DeepEP dispatch/combine kernels are correct and run at
 IB-class bandwidth over EFA with no InfiniBand present, and the build plugs into a real
@@ -35,10 +41,16 @@ offered only the IBRC/IBGDA InfiniBand transports.
 2. **The two tables below are different topologies.** The H200 table is **colocated** 2-node
    TP16/EP16 — the configuration `recipe/serve.sh` reproduces. The H100 table is **2P2D
    PD-disaggregated** (4 nodes: 2 prefill + 2 decode, fronted by `sglang_router
-   --pd-disaggregation`, benched with `--pd-separated`), which these recipe scripts do **not**
-   set up. Do not read across the two tables as a hardware A/B — the topologies differ.
-3. **UCCL rows are not included here.** The UCCL-vs-DeepEP comparison was measured under a
-   different harness; see `ep-backend-comparison` for a matched-config backend comparison.
+   --pd-disaggregation`, benched with `--pd-separated`), reproduced by `recipe/serve-pd.sh` and
+   `recipe/benchmark-pd.sh`, **not** by `recipe/serve.sh`. Do not read across the two tables as a
+   hardware A/B — the topologies differ.
+3. **UCCL rows are not included here.** UCCL-EP in the same 2P2D topology, on both H100 and H200,
+   is in [`RESULTS-2p2d.md`](./RESULTS-2p2d.md); `ep-backend-comparison` has the matched-config
+   kernel-level comparison.
+4. **The H100 2P2D table below moved the KV cache over TCP, not EFA** — it predates the
+   `MOONCAKE_PROTOCOL=efa` fix. Baseline-vs-DeepEP there is still fair (both handicapped
+   identically, and both stay below the concurrency where the TCP path collapses), but the absolute
+   numbers are low. See [`RESULTS-2p2d.md`](./RESULTS-2p2d.md#the-trap-that-cost-the-most-time-mooncake_protocolefa).
 
 ---
 
@@ -109,11 +121,13 @@ TTFT ms (lower better) / input tok/s (higher better). **Bold = best in row.**
 |---|---|---|
 | 1024 × 1 | **360** / **2834** | 402 / 2538 |
 | 4096 × 1 | 1462 / 2794 | **1267** / **3230** |
-| 8192 × 1 | **2277** / **3684** | 2277 / 3596 |
+| 8192 × 1 | **2223** / **3684** | 2277 / 3596 |
 | 4096 × 4 | **2451** / **6256** | 2744 / 5638 |
 
 Baseline beats DeepEP on decode by ~1.6–2.8× throughput and is roughly par on prefill — the same
 conclusion as the H200 colocated runs, reached on different hardware and a different topology.
+Note the prefill sweep stops at concurrency 4 here, well short of where DeepEP's advantage appears
+(see caveat 4 on the transport, and `RESULTS-2p2d.md` for the full concurrency ramp on H200).
 
 ---
 
@@ -136,7 +150,13 @@ live in the `deepep-benchmark` and `ep-backend-comparison` directories.
 
 ## To actually demonstrate a DeepEP win
 
-Re-run on **≥8–16 nodes** so experts are spread across many nodes and the all-to-all becomes
-network-bound, with a larger `--ep-size` and `--deepep-mode low_latency` pinned for decode. On 2
-nodes the crossover is not reachable. The scaling behaviour of the kernels themselves out to 32
-nodes / 256 ranks is already characterised in `ep-backend-comparison`.
+Two routes, and the cheap one comes first:
+
+1. **Push prefill concurrency at this same scale.** The sweep above stops at 32. At concurrency 256
+   DeepEP hits 161.5k input tok/s versus ~44k for the baseline — a 3× win on 16 GPUs. Already
+   measured: [`RESULTS-2p2d.md`](./RESULTS-2p2d.md).
+2. **For decode, re-run on ≥8–16 nodes** so experts are spread across many nodes and the
+   all-to-all becomes network-bound, with a larger `--ep-size` and `--deepep-mode low_latency`
+   pinned. On 2 nodes the decode crossover is not reachable — though enabling DP-attention recovers
+   ~25% of the gap, and does so for UCCL-EP too. The scaling behaviour of the kernels themselves
+   out to 32 nodes / 256 ranks is already characterised in `ep-backend-comparison`.

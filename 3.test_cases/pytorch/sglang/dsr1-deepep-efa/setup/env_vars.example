@@ -72,3 +72,38 @@ export EP_SIZE=16
 export SERVE_PORT=30000
 export DIST_PORT=29500
 export MEM_FRACTION_STATIC=0.85
+
+# ---------------------------------------------------------------------------
+# PD-disaggregated (2P2D) config — only needed for recipe/serve-pd.sh and
+# recipe/benchmark-pd.sh. Requires 4 nodes: 2 prefill + 2 decode, each role a
+# TP16/EP16 group. Leave these unset if you only run the colocated recipe.
+#
+# The KV cache moves prefill -> decode over EFA RDMA via Mooncake. Private IPs
+# again, node 0 of each role being that role's rank-0 / master.
+# See benchmarks/RESULTS-2p2d.md for what these topologies measured.
+# ---------------------------------------------------------------------------
+export PREFILL_NODE_0_IP="REPLACE_ME"    # prefill rank 0 / master
+export PREFILL_NODE_1_IP="REPLACE_ME"    # prefill rank 1
+export DECODE_NODE_0_IP="REPLACE_ME"     # decode rank 0 / master
+export DECODE_NODE_1_IP="REPLACE_ME"     # decode rank 1
+# Host running sglang_router. Can be any of the four nodes or a separate one;
+# benchmark-pd.sh drives the router, not the servers.
+export ROUTER_IP="REPLACE_ME"
+
+export PREFILL_PORT=30000
+export DECODE_PORT=30001
+export ROUTER_PORT=8000
+export BOOTSTRAP_PORT=8998               # prefill KV bootstrap, per-prefill-node
+export PREFILL_DIST_PORT=29500
+export DECODE_DIST_PORT=29501
+
+# Attention data-parallel across all 16 ranks of a role. Orthogonal to
+# MOE_BACKEND, and it FLIPS the decode winner (helps EP-MoE ~+25-30%, hurts
+# TP-MoE ~-10%) while hurting prefill for every backend. Off by default.
+export DP_ATTENTION=0
+export DP_SIZE=16
+
+# Set UCCL=1 only when IMAGE_URI points at the UCCL-EP image. It switches on
+# --privileged and a lower decode --mem-fraction-static, both of which UCCL
+# needs and DeepEP does not.
+export UCCL=0
