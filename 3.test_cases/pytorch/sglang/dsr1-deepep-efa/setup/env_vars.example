@@ -46,7 +46,8 @@ export NUM_GPU_PER_NODE=8
 
 # EFA-backed NIC used for the torch/NCCL/gloo rendezvous (NOT for RDMA itself —
 # NVSHMEM picks EFA devices via NVSHMEM_NETDEVS_POLICY). On p5/p5en this is the
-# primary ENA interface. Check with: ip -o -4 addr show
+# primary ENA interface; on p6-b200/p6-b300 it differs, so do not assume this
+# value. Check with: ip -o -4 addr show
 export IFACE="enp71s0"
 
 # ---------------------------------------------------------------------------

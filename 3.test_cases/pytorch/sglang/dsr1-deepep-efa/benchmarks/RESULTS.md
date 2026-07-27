@@ -166,6 +166,69 @@ than a controlled A/B. The point is that **EFA delivers IB-class dispatch/combin
 these kernels. Full kernel tables, the `NVSHMEM_NETDEVS_POLICY` ablation, and the H100/H200 deltas
 live in the `deepep-benchmark` and `ep-backend-comparison` directories.
 
+## Blackwell: expect DeepEP to lose at 2 nodes
+
+No serving run on Blackwell is in this repo. But the question comes up — *"we benchmarked DeepEP
+vs the NCCL all-to-all on 2× B300 and DeepEP was slower in every configuration; is that
+expected?"* — and the answer from the data that **is** here is **yes, at 2 nodes it is expected,
+and it is not an EFA problem.** Reported shape of such a result, for reference: output throughput
+−7% to −26%, median TTFT +17% to +82%, P99 ITL 1.2–1.9 s vs 0.8–0.9 s, with the `normal` (HT) mode
+the slowest where it ran at all — at TP16/EP16 across two nodes, 8K input / 1K output, concurrency
+128.
+
+Three reasons this is the expected result rather than a misconfiguration:
+
+1. **16 ranks is DeepEP's worst case, on any GPU.** Every table on this page says so. With 256
+   experts over 16 ranks each GPU owns 16 experts, so most of the fan-out never leaves NVLink and
+   the per-layer dispatch/combine launches cost more than they save. The H200 colocated decode
+   sweep has DeepEP at 0.54–0.74× the baseline's throughput and ~1.8× its TPOT; the H100 2P2D
+   sweep has 1.6–2.8×. A −7% to −26% *aggregate* regression on a mixed 8K/1K workload is **milder
+   than what we measure on Hopper**, not worse.
+2. **The published B300 kernel numbers are healthy, which localises the gap above the transport.**
+   At 2 nodes / 16 ranks on `p6-b300`, DeepEP-over-EFA dispatch/combine is **126.6 / 106.4 GB/s**
+   — the best of the three backends there, and *above* the NCCL all-to-all's 104.9 GB/s at matched
+   payload
+   ([`ep-backend-comparison`](../../../../../micro-benchmarks/expert-parallelism/ep-backend-comparison/RESULTS.md)).
+   So the fabric and the kernels are fine at that scale; the serving regression is per-layer
+   launch/scheduling overhead and MoE-runner choice, not bytes on the wire.
+3. **`normal`/HT being the slowest at decode-heavy concurrency is by design.** HT is the
+   high-throughput dispatch for large prefill batches; on a 1K-output workload the run is
+   TPOT-dominated, where `low_latency` is the intended mode. `--deepep-mode auto` landing between
+   the two is consistent with that, and matches the ordering here.
+
+### Confounds worth eliminating before concluding anything from such a run
+
+- **`NCCL_NET_PLUGIN=ofi`, on both arms.** Without it NCCL silently runs on TCP sockets, which
+  *penalises the NCCL baseline* — so its absence makes DeepEP look better, not worse. A DeepEP
+  loss measured with it missing is therefore a *lower* bound on the loss. See caveat 4.
+- **The MoE runner is not held constant** in the usual formulation of this comparison: DeepEP rows
+  run `--moe-runner-backend deep_gemm` while the no-DeepEP rows resolve `auto` to
+  `flashinfer_trtllm` on Blackwell. That is two variables — the all-to-all *and* the grouped-GEMM
+  implementation — and TRT-LLM's Blackwell MoE kernels are heavily tuned. Re-run DeepEP against
+  `--moe-runner-backend flashinfer_trtllm` (or the baseline against `deep_gemm`) before attributing
+  the delta to the all-to-all.
+- **DeepGEMM JIT warmup.** `deep_gemm` compiles shapes on first use; 32 requests at concurrency 16
+  is not necessarily enough to cover the shapes a concurrency-128 run then hits. It inflates early
+  TTFT and P99 ITL specifically — the two metrics that move most in reports like the one above.
+  Pre-warm with `python3 -m sglang.compile_deep_gemm` on **both** nodes (`recipe/serve-pd.sh
+  precompile <rank>` does this).
+- **`--deepep-mode auto` on a mixed workload.** Pin `normal` and `low_latency` separately, or
+  better, disaggregate: this repo's own answer to "which backend wins" is *neither, per stage* —
+  see [`RESULTS-2p2d.md`](./RESULTS-2p2d.md).
+- **An HT-path hang that does not reproduce** is worth keeping an eye on rather than dismissing.
+  At ≥128 ranks the NVSHMEM-libfabric host proxy exhausts libfabric retries
+  (`EAGAIN` in `nvshmemi_process_multisend_rma`) and kills a different pair of ranks each run;
+  that is a documented statistical fan-out limit, not a bad node. At 16 ranks it should not fire,
+  but a non-reproducing hang on the HT path has the same signature.
+
+**The load-bearing point for a 72-node fleet: 2 nodes measures the wrong thing.** DeepEP is built
+for EP domains where experts are spread thin enough that every token crosses the fabric. The
+kernel-level scaling out to 256 ranks on `p6-b300` is already characterised, and it says the
+useful envelope is ~64–160 ranks flat, with hard implementation caps past that (HT: 160 PEs at
+`deep_ep.cpp:158`; low-latency: between 64 and 128 PEs). Training deployments stay inside it by
+running EP32/EP64 groups within a larger world. A production-EP-width run — EP32 or EP64, not
+EP16 — is the measurement that decides this, and it is a different experiment from the one above.
+
 ## To actually demonstrate a DeepEP win
 
 Two routes, and the cheap one comes first:

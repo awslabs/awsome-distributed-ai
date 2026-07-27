@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT-0
 #
 # SGLang + DeepEP over NVSHMEM-libfabric (AWS EFA), for serving DeepSeek-R1
-# with MoE expert parallelism on p5/p5en nodes (8x H100/H200, sm_90).
+# with MoE expert parallelism on p5/p5en (8x H100/H200, sm_90) and p6-b300
+# (8x B300, sm_103) nodes.
 #
 # Layers on top of the official SGLang image:
 #   - EFA:      aws-efa-installer (libfabric + EFA provider)
@@ -19,6 +20,10 @@
 # Build (no GPU needed; build context is this directory):
 #   DOCKER_BUILDKIT=1 docker build -t sglang-deepep-efa:latest .
 
+# The base must be a CUDA 13 (cu130) build. Beyond Blackwell codegen, CUDA <= 12.9
+# CUPTI returns CUPTI_ERROR_INVALID_DEVICE on B200/B300, which breaks the
+# internode / low-latency tuning phase (it profiles kernels) -- correctness checks
+# pass first, so the failure looks unrelated. Do not downgrade for Blackwell.
 ARG SGLANG_BASE=lmsysorg/sglang:v0.5.13.post1-cu130
 FROM ${SGLANG_BASE}
 
@@ -93,9 +98,18 @@ ARG DEEPEP_REPO=https://github.com/deepseek-ai/DeepEP.git
 ARG DEEPEP_COMMIT=567632d
 ARG NVSHMEM_REPO=https://github.com/NVIDIA/nvshmem.git
 ARG NVSHMEM_TAG=v3.7.0-0
-# Hopper only: this image is validated on p5 (H100) and p5en (H200). The
-# benchmark image supports Blackwell too, but that is not exercised here.
-ARG TORCH_CUDA_ARCH_LIST=9.0
+# Hopper + Blackwell, matching the canonical benchmark image so one image runs on
+# p5/p5en (sm_90) and p6-b300 (sm_103; B200 is sm_100).
+#
+# Two consequences of the multi-arch default, both intentional:
+#   - setup_deepep_efa.sh enables DeepEP's aggressive PTX instructions ONLY when
+#     the list is exactly "9.0" (they are Hopper-specific), so a multi-arch build
+#     compiles Hopper without them. The H100/H200 numbers in benchmarks/RESULTS.md
+#     were measured from a `9.0` build -- pass that build-arg to reproduce them
+#     bit-for-bit.
+#   - three architectures roughly triples the DeepEP/NVSHMEM device-code compile.
+# Single-arch builds: 9.0 (Hopper), 10.0 (B200), 10.3 (B300).
+ARG TORCH_CUDA_ARCH_LIST="9.0;10.0;10.3"
 
 ENV DEEPEP_SRC=/opt/DeepEP
 ENV NVSHMEM_SRC=/opt/nvshmem

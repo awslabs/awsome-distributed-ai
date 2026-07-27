@@ -21,7 +21,7 @@ winners** ([`benchmarks/RESULTS-2p2d.md`](./benchmarks/RESULTS-2p2d.md)).
 | DeepEP | `deepseek-ai/DeepEP` @ `567632d` + the EFA patch (pre-EPv2, NVSHMEM backend) |
 | NVSHMEM | `v3.7.0-0`, built with **only** the libfabric transport (IBRC/IBGDA off) |
 | Mooncake | `kvcache-ai/Mooncake` @ main, `-DUSE_EFA=ON` (KV transfer for PD-disaggregation) |
-| GPU arch | Hopper `sm_90` (validated on H100 and H200) |
+| GPU arch | Hopper `sm_90` + Blackwell `sm_100`/`sm_103` — **serving validated on H100/H200 only**; see [Blackwell](#blackwell-b200--b300) |
 
 > SGLang 0.5.13.post1 already carries the EFA-protocol change upstream, so no SGLang patch is
 > needed. Older bases required one.
@@ -116,7 +116,8 @@ a separate command because it only needs running once per host.
 ## Prerequisites
 
 - **2 nodes** for the colocated recipe, **4** for the PD-disaggregated one (2 prefill + 2 decode),
-  `p5.48xlarge` or `p5en.48xlarge` (8×H100/H200, EFA), Docker with GPU support.
+  `p5.48xlarge` / `p5en.48xlarge` (8×H100/H200) or `p6-b200`/`p6-b300` (8×B200/B300), EFA, Docker
+  with GPU support.
 - `/dev/infiniband` and `/dev/gdrdrv` present on the host (`ls /dev/gdrdrv`). If `gdrdrv` is
   missing, install GDRCopy on the host — the in-container library cannot create the device node.
 - **~640 GB of fast local NVMe per node** for the DeepSeek-R1 FP8 weights, present on *every*
@@ -145,9 +146,37 @@ Then verify, on a GPU node:
 recipe/verify-image.sh
 ```
 
-Build args worth knowing: `SGLANG_BASE` (base tag), `DEEPEP_COMMIT` (hard-checked by the setup
-script — do not change without changing the script's pin), `NVSHMEM_TAG`, `GDRCOPY_VERSION`, and
-`TORCH_CUDA_ARCH_LIST` (`9.0`; this sample is Hopper-only).
+Build args worth knowing: `SGLANG_BASE` (base tag — must be a `cu130` build, see below),
+`DEEPEP_COMMIT` (hard-checked by the setup script — do not change without changing the script's
+pin), `NVSHMEM_TAG`, `GDRCOPY_VERSION`, and `TORCH_CUDA_ARCH_LIST`.
+
+### Blackwell (B200 / B300)
+
+`TORCH_CUDA_ARCH_LIST` defaults to `9.0;10.0;10.3`, so one image covers `p5`/`p5en` (`sm_90`),
+`p6-b200` (`sm_100`) and `p6-b300` (`sm_103`). Build single-arch to cut compile time:
+
+```bash
+docker build --build-arg TORCH_CUDA_ARCH_LIST=10.3 ...   # B300 only
+docker build --build-arg TORCH_CUDA_ARCH_LIST=9.0  ...   # Hopper only
+```
+
+Three things to know before running this on Blackwell:
+
+- **Keep CUDA 13.** Beyond codegen, CUDA ≤ 12.9 CUPTI returns `CUPTI_ERROR_INVALID_DEVICE` on
+  B200/B300, and the `internode`/`low_latency` tests profile their kernels during tuning — so they
+  fail *after* the correctness checks pass, which reads as an unrelated bug.
+- **`9.0` is not just a subset.** `setup_deepep_efa.sh` enables DeepEP's aggressive PTX
+  instructions only when the arch list is exactly `9.0` (they are Hopper-specific). A multi-arch
+  image therefore builds Hopper *without* them — pass `TORCH_CUDA_ARCH_LIST=9.0` to reproduce the
+  H100/H200 numbers in [`benchmarks/RESULTS.md`](./benchmarks/RESULTS.md) exactly.
+- **A `p6-b300.48xlarge` has 16 EFA NICs, not `p5`'s 32.** Nothing in the launchers needs changing,
+  but `IFACE` in `setup/env_vars` is not `enp71s0` there — check `ip -br link`.
+
+**Serving on Blackwell is not validated here.** The DeepEP-EFA kernels are — the same
+`567632d` + EFA patch, same NVSHMEM 3.7.0, is measured out to 256 ranks on `p6-b300` in
+[`ep-backend-comparison`](../../../../micro-benchmarks/expert-parallelism/ep-backend-comparison/RESULTS.md).
+The serving-side gap matters, because **on B300 the published SGLang comparison goes the other
+way**: see [Blackwell: expect DeepEP to lose at 2 nodes](./benchmarks/RESULTS.md#blackwell-expect-deepep-to-lose-at-2-nodes).
 
 ## Smoke-test the EFA transport before loading the model
 
@@ -284,8 +313,10 @@ referenced. Drift should be guarded in CI alongside the other vendored copy — 
   transfer times out (`EFA submitSlicesOnPeer: CQ drain wr_depth=256, max=256`); a larger `MC_MAX_WR`
   or chunked KV transfer is the untried fix. 64K at concurrency ≥4 exhausts the 2-node prefill KV
   pool.
-- **Hopper only** (`sm_90`). The kernel benchmark image covers Blackwell; this one was not tested
-  there.
+- **Serving is validated on Hopper only.** The image builds for Blackwell (`sm_100`/`sm_103`) and
+  the DeepEP-EFA kernels are measured on `p6-b300` in `ep-backend-comparison`, but no end-to-end
+  serving run on Blackwell is in this repo. Do not assume the H100/H200 backend ranking transfers —
+  it does not ([RESULTS.md](./benchmarks/RESULTS.md#blackwell-expect-deepep-to-lose-at-2-nodes)).
 - **DeepEP pinned to `567632d`** (pre-EPv2). The setup script hard-checks the tree and its EFA
   patch only applies at that commit. EPv2 restructures the kernels and moves to the NCCL GIN
   backend, which is out of scope.
