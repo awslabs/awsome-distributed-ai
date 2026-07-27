@@ -182,6 +182,23 @@ ENV NVSHMEM_LIBFABRIC_PROVIDER=efa
 # switch for best RDMA performance (p5/p5en pair multiple EFA NICs across PCIe
 # switches). Recommended by the NVSHMEM/EFA integration.
 ENV NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE
+
+# ---- NCCL aws-ofi-nccl plugin name ----
+# On NGC-based images the EFA installer lays down libnccl-ofi-ngc-v3, which ships
+# ONLY libnccl-net-ofi.so -- NOT the default name libnccl-net.so that NCCL
+# auto-loads. Without this, NCCL logs "NET/Plugin: Could not find: libnccl-net.so"
+# and falls back to TCP sockets (~14 GB/s vs ~400 GB/s over EFA), which shows up as
+# 3-5x slower prefill TTFT rather than as an error.
+# Use the SHORT name "ofi": NCCL templates it into libnccl-net-<value>.so and
+# resolves that through ldconfig, where the EFA installer registered
+# /opt/amazon/ofi-nccl/lib. Do NOT use an absolute path -- NCCL 2.27.x applies the
+# same templating to it, yielding the bogus
+# "libnccl-net-/opt/.../libnccl-net-ofi.so.so" -> not found -> silent TCP fallback.
+# (2.28+ happens to accept an absolute path, so this matters only if the base image
+# moves back to 2.27, but "ofi" is correct on both.)
+# Verify: NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET should log
+# "NET/OFI Selected provider is efa" -- not "NET/Socket".
+ENV NCCL_NET_PLUGIN=ofi
 # NOTE on CUDA VMM: it is REGIME-SPECIFIC and therefore NOT set here.
 #   - normal dispatch/combine (test_intranode / test_internode): set
 #     NVSHMEM_DISABLE_CUDA_VMM=1 at runtime, else NVSHMEM topo / transport-map

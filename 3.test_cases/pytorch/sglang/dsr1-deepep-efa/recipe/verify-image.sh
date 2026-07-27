@@ -57,6 +57,24 @@ for lib in $(find / -name "libnvshmem_host.so.3" -not -path "/proc/*" 2>/dev/nul
     esac
 done
 
+echo "--- NCCL aws-ofi-nccl plugin is loadable under the name NCCL will use ---"
+# The EFA installer ships libnccl-net-ofi.so, not the libnccl-net.so that NCCL
+# auto-loads, so NCCL_NET_PLUGIN=ofi must be set AND the .so must resolve through
+# ldconfig. Getting this wrong is a silent fall back to TCP sockets.
+if [ "${NCCL_NET_PLUGIN:-}" != "ofi" ]; then
+    echo "FAIL: NCCL_NET_PLUGIN=${NCCL_NET_PLUGIN:-<unset>}, expected \"ofi\" (see Dockerfile)"; fail=1
+else
+    python3 - <<PY || fail=1
+import ctypes, sys
+so = "libnccl-net-%s.so" % "ofi"   # exactly how NCCL templates the short name
+try:
+    ctypes.CDLL(so, ctypes.RTLD_GLOBAL)
+except OSError as e:
+    print("FAIL: NCCL would not find %s -> silent TCP fallback (%s)" % (so, e)); sys.exit(1)
+print("OK:", so, "resolves via ldconfig")
+PY
+fi
+
 echo "--- mooncake imports (EFA build) ---"
 python3 -c "import mooncake; print(\"OK: mooncake\", mooncake.__file__)" || fail=1
 

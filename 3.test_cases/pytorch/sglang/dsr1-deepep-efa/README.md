@@ -90,12 +90,15 @@ pure TP too, which never loads DeepEP.
 | `NVSHMEM_REMOTE_TRANSPORT=libfabric` | NVSHMEM is built with **only** the libfabric transport, so the default `ibrc` finds nothing → *"Peer GPU not accessible / building transport map failed"*. |
 | `NVSHMEM_LIBFABRIC_PROVIDER=efa` | Select the EFA provider. |
 | `NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE` | Gives each GPU exclusive use of the NIC on its own PCIe switch. Recommended for RDMA performance on p5/p5en, which pair multiple EFA NICs across PCIe switches. |
+| `NCCL_NET_PLUGIN=ofi` — **short name, not a path** | The EFA installer's `libnccl-ofi-ngc-v3` ships only `libnccl-net-ofi.so`, not the `libnccl-net.so` NCCL auto-loads, so NCCL logs *"NET/Plugin: Could not find: libnccl-net.so"* and **silently uses TCP sockets** (~14 GB/s vs ~400 GB/s) — visible only as 3–5× worse prefill TTFT. NCCL templates the value into `libnccl-net-<value>.so`, so an absolute path becomes a bogus filename and falls back too. |
 | `NVSHMEM_DISABLE_CUDA_VMM` — **regime-specific** | Set it to `1` for the **normal** dispatch/combine kernels, or NVSHMEM topology / transport-map init fails in-container. **Leave it unset for low-latency kernels**, or the RDMA-buffer `cudaMemset` fails with *"invalid argument"* (`deep_ep.cpp:371`). Because the server uses `--deepep-mode auto` (low-latency on the decode path), `recipe/serve.sh` leaves VMM **enabled**; `recipe/run-kernel-test.sh` sets it per test. |
 | `--network host --ipc host --ulimit memlock=-1 --shm-size 32g` | EFA needs host networking, IPC and unlimited locked memory. |
 | `MOONCAKE_PROTOCOL=efa` — **PD-disaggregated only** | KV cache over EFA RDMA. Omitting it is a *silent* fallback to TCP, not an error. See trap 4 above. |
 
-The first four are baked into the image as `ENV`; the launchers re-export them anyway so the
-transport config is visible at the launch surface and overridable per run.
+The four transport variables (`NVSHMEM_REMOTE_TRANSPORT`, `NVSHMEM_LIBFABRIC_PROVIDER`,
+`NVSHMEM_NETDEVS_POLICY`, `NCCL_NET_PLUGIN`) are baked into the image as `ENV`; the launchers
+re-export them anyway so the transport config is visible at the launch surface and overridable per
+run. The device flags and `MOONCAKE_PROTOCOL` have to come from the launcher.
 
 ### If you enable DP-attention
 

@@ -126,6 +126,9 @@ COMMON_ENV=(
     -e HF_HOME=/hf
     -e HF_TOKEN="${HF_TOKEN:-}"
     -e NCCL_SOCKET_IFNAME="$IFACE" -e GLOO_SOCKET_IFNAME="$IFACE"
+    # Short name, not an absolute path: NCCL templates it into
+    # libnccl-net-ofi.so. Omitting it silently falls back to TCP. See Dockerfile.
+    -e NCCL_NET_PLUGIN=ofi
     -e FI_PROVIDER=efa -e FI_EFA_USE_DEVICE_RDMA=1
     -e NVSHMEM_REMOTE_TRANSPORT=libfabric
     -e NVSHMEM_LIBFABRIC_PROVIDER=efa

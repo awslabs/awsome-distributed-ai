@@ -73,6 +73,7 @@ docker run -d --name "$NAME" \
     -v "${HF_CACHE_DIR}/../dg-cache:/root/.cache/deep_gemm" \
     -v "${HF_CACHE_DIR}/../sgl-cache:/root/.cache/sglang" \
     -e NCCL_SOCKET_IFNAME="$IFACE" -e GLOO_SOCKET_IFNAME="$IFACE" \
+    -e NCCL_NET_PLUGIN=ofi \
     -e FI_PROVIDER=efa -e FI_EFA_USE_DEVICE_RDMA=1 \
     -e NVSHMEM_REMOTE_TRANSPORT=libfabric \
     -e NVSHMEM_LIBFABRIC_PROVIDER=efa \
