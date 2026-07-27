@@ -47,9 +47,9 @@ firmer of the two claims.
         └──────── sglang_router --pd-disaggregation ────────┘
 ```
 
-KV cache moves prefill→decode over **EFA RDMA** via Mooncake — which requires
-`MOONCAKE_PROTOCOL=efa`; see [the silent-TCP-fallback trap](#the-trap-that-cost-the-most-time-mooncake_protocolefa)
-below, because without it every number on this page is wrong.
+KV cache moves prefill→decode over **EFA RDMA** via Mooncake, which requires
+[`MOONCAKE_PROTOCOL=efa`](#required-setting-mooncake_protocolefa) — omit it and Mooncake silently
+falls back to TCP sockets, which invalidates every number on this page.
 
 ## The four configurations
 
@@ -195,12 +195,13 @@ as plain TP. **UCCL-EP is a clear third but healthy** (~13% below baseline at co
 low-latency dispatch/combine is not amortised when each of 16 ranks already owns 16 of 256
 experts and most of the fan-out stays on NVLink.
 
-All four scale cleanly to concurrency 128 with no wedge. (An earlier ceiling around concurrency 48
-was an artifact of the KV transport falling back to TCP — see the trap below.)
+All four scale cleanly to concurrency 128 with no wedge. (Earlier runs hit a ceiling well below
+that, which turned out to be the KV transport falling back to TCP — see
+[`MOONCAKE_PROTOCOL=efa`](#required-setting-mooncake_protocolefa).)
 
 ---
 
-## DP-attention — the lever that reverses the decode ranking
+## DP-attention: the lever that reverses the decode ranking
 
 SGLang's high-throughput option runs **attention data-parallel** across all 16 ranks
 (`--dp-size 16 --enable-dp-attention --enable-dp-lm-head --moe-dense-tp-size 1`). It is
@@ -323,8 +324,8 @@ predate the `MOONCAKE_PROTOCOL=efa` fix described below, and the DeepEP and base
 not set it while the UCCL launcher always did. So on p5:
 
 - **DeepEP vs baseline is still a fair comparison** — both ran with KV over TCP, both handicapped
-  identically, and both swept only to concurrency 32, below the ~48 point where the TCP fallback
-  collapses.
+  identically, and both swept only to concurrency 32, low enough that neither hit the
+  `session is not alive` wedge.
 - **UCCL vs the other two is not.** The p5 prefill sweep (output 1, input tok/s / TTFT ms) makes
   UCCL look dominant:
 
@@ -346,51 +347,36 @@ leaving a misleading comparison on the record.
 
 ---
 
-## The trap that cost the most time: `MOONCAKE_PROTOCOL=efa`
+## Required setting: `MOONCAKE_PROTOCOL=efa`
 
-**Without `MOONCAKE_PROTOCOL=efa`, Mooncake silently moves the KV cache over TCP sockets instead
-of EFA RDMA, and the only evidence is one line in the server log.**
+**Every number on this page was measured with the KV cache on EFA RDMA, which requires
+`MOONCAKE_PROTOCOL=efa`.** On EFA hardware there is no reason to run the KV path any other way, so
+treat this as part of the deployment, not as a tuning knob.
 
-What it looks like when it is wrong:
+It matters because **omitting it is a silent fallback to TCP sockets, not an error.** The server
+comes up, returns correct tokens, and passes a smoke test; under a sustained high-concurrency
+prefill burst it then deadlocks with `KVTransferError ... session is not alive`. The only evidence
+of which transport you are on is one line in the server log:
 
 ```
-transfer_engine_py.cpp:100] Using default malloc/free for protocol: rdma
-transfer_engine_py.cpp:241] Installing TCP transport (auto_discover disabled in EFA build)
+transfer_engine_py.cpp:241] Installing TCP transport (auto_discover disabled in EFA build)   # WRONG
 tcp_transport.cpp:678]      TcpTransport: listen on port 16705
-```
 
-What it looks like when it is right:
-
-```
-transfer_engine_py.cpp:100] Using default malloc/free for protocol: efa
-topology.cpp:125]           Device rdmap85s0 port 1 is available
+transfer_engine_py.cpp:100] Using default malloc/free for protocol: efa                      # right
 efa_transport.cpp:1025]     EfaTransport: Initialized EFA device rdmap160s0 ...
 ```
 
-At low concurrency TCP merely costs throughput, so the server comes up, serves correct tokens, and
-passes a smoke test. Past concurrency ~48 it collapses into a sticky
-`KVTransferError ... session is not alive` deadlock. Same image, same config, only the env var
-differing, at 1K input / output 1 — requests completed, input tok/s, mean TTFT:
+So **check the log rather than assuming**, on every role, before benchmarking:
 
-| conc | DeepEP, KV over TCP | DeepEP, KV over EFA | pure TP, KV over TCP | pure TP, KV over EFA |
-|---|---|---|---|---|
-| 1   | 4/4, 2.0k, 521 ms | 4/4, **4.2k**, 244 ms | 4/4, 2.3k, 434 ms | 4/4, **3.0k**, 344 ms |
-| 8   | 24/24, 7.9k, 938 ms | 24/24, **13.1k**, 617 ms | 24/24, 6.5k, 1175 ms | 24/24, **8.9k**, 912 ms |
-| 64  | **145/192**, 5.2k, 8308 ms | 192/192, **87.0k**, 711 ms | **145/192**, 4.9k, 9082 ms | 192/192, **27.1k**, 2231 ms |
-| 256 | **wedged, no result** | 512/512, **161.5k**, 1399 ms | **wedged, no result** | 512/512, **43.8k**, 4310 ms |
-| 512 | **wedged, no result** | 1024/1024, 68.5k, 5242 ms | **wedged, no result** | 1024/1024, 48.2k, 6766 ms |
+```bash
+docker logs r1-pd-prefill 2>&1 | grep -E 'EfaTransport|Installing TCP transport'
+```
 
-So the cost of missing the flag is ~2× at low concurrency and *total failure* above 48 — and the
-16.7× gap at concurrency 64 is transport, not backend.
-
-Two hypotheses were wrong before this was found, and both are worth naming because they are the
-obvious suspects: it was **not** NVSHMEM contention (the DeepEP image's NVSHMEM preload does not
-touch the prefill path at all, and the wedge reproduced with `MOE_BACKEND=tp`, which never loads
-DeepEP) and **not** NCCL-over-EFA (both images run `aws-ofi-nccl` 1.19.0 with `efa-direct` over 16
-NICs identically).
-
-`recipe/serve-pd.sh` sets it. **Any SGLang PD deployment using Mooncake on EFA must set
-`MOONCAKE_PROTOCOL=efa`**; nothing else in the stack will tell you it is missing.
+`recipe/serve-pd.sh` sets the variable and prints this grep. Two plausible-looking explanations for
+the deadlock are worth ruling out up front, because both cost debugging time here: it is **not**
+NVSHMEM contention (it reproduces with `MOE_BACKEND=tp`, which never loads DeepEP) and **not**
+NCCL-over-EFA (unaffected images run `aws-ofi-nccl` 1.19.0 with `efa-direct` over 16 NICs and are
+fine). It is Mooncake, and only Mooncake.
 
 ## UCCL-EP launch configuration that actually matters
 

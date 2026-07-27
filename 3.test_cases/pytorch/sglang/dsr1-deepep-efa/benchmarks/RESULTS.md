@@ -50,7 +50,7 @@ offered only the IBRC/IBGDA InfiniBand transports.
 4. **The H100 2P2D table below moved the KV cache over TCP, not EFA** — it predates the
    `MOONCAKE_PROTOCOL=efa` fix. Baseline-vs-DeepEP there is still fair (both handicapped
    identically, and both stay below the concurrency where the TCP path collapses), but the absolute
-   numbers are low. See [`RESULTS-2p2d.md`](./RESULTS-2p2d.md#the-trap-that-cost-the-most-time-mooncake_protocolefa).
+   numbers are low. See [`RESULTS-2p2d.md`](./RESULTS-2p2d.md#required-setting-mooncake_protocolefa).
 
 ---
 
@@ -96,7 +96,7 @@ decode at this scale.
 
 ---
 
-## H100 — 2P2D PD-disaggregated (different topology; see caveat 2)
+## H100 2P2D PD-disaggregated (different topology; see caveat 2)
 
 **Cluster:** 4× `p5.48xlarge` (8×H100 80GB HBM3, sm_90), us-east-2, **32** EFA NICs/node, iface
 `enp71s0`. Same image. Date: 2026-06-23. Server flags: `--mem-fraction-static 0.82

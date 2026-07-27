@@ -69,19 +69,18 @@ the pip copy with the v3.7.0 build so the single soname resolves to v3.7.0 for b
 
 **Without `MOONCAKE_PROTOCOL=efa`, Mooncake moves the KV cache over TCP sockets instead of EFA
 RDMA.** The server still comes up, still returns correct tokens, and still passes a smoke test —
-then deadlocks past concurrency ~48 with `KVTransferError ... session is not alive`. The only
-evidence is one line in the server log:
+then deadlocks under sustained high-concurrency prefill with `KVTransferError ... session is not
+alive`. The only evidence is one line in the server log:
 
 ```
 transfer_engine_py.cpp:241] Installing TCP transport (auto_discover disabled in EFA build)   # WRONG
 efa_transport.cpp:1025]     EfaTransport: Initialized EFA device rdmap160s0 ...              # right
 ```
 
-`recipe/serve-pd.sh` sets it and prints the grep to confirm it. Same image, same config, only the
-env var differing, at 1K input with DeepEP: concurrency 64 goes from 145/192 requests at 5.2k
-input tok/s to **192/192 at 87.0k**, and concurrency 256 from wedged to **512/512 at 161.5k**. The
-[full A/B](./benchmarks/RESULTS-2p2d.md#the-trap-that-cost-the-most-time-mooncake_protocolefa) shows
-the same collapse for pure TP, so it is not backend-specific.
+On EFA hardware there is no reason to run the KV path any other way, so `recipe/serve-pd.sh` always
+sets it — and prints the grep above, because the only way to know which transport you got is to
+check. Do that on every role before benchmarking. The fallback is not backend-specific: it wedges
+pure TP too, which never loads DeepEP.
 
 ### Runtime requirements that are easy to miss
 

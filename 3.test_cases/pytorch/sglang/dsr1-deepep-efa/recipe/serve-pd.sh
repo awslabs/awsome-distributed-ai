@@ -119,8 +119,8 @@ mkdir -p "${HF_CACHE_DIR}" "${HF_CACHE_DIR}/../dg-cache" "${HF_CACHE_DIR}/../sgl
 # MOONCAKE_PROTOCOL=efa is NOT optional. Without it Mooncake silently installs
 # its TCP transport ("Installing TCP transport" in the server log) and moves the
 # KV cache over sockets: correct output, passes a smoke test, then deadlocks with
-# "KVTransferError ... session is not alive" under a concurrency >= 64 prefill
-# burst. Nothing else in the stack reports the fallback.
+# "KVTransferError ... session is not alive" under sustained high-concurrency
+# prefill. Nothing else in the stack reports the fallback.
 # MC_FORCE_AUTO_DISCOVERY=1 lets Mooncake enumerate the EFA devices itself.
 COMMON_ENV=(
     -e HF_HOME=/hf
