@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Example env_vars for the SGLang + DeepEP-on-EFA DeepSeek-R1 sample.
+# Copy this to setup/env_vars and fill in every REPLACE_ME:
+#
+#   cp setup/env_vars.example setup/env_vars
+#   $EDITOR setup/env_vars
+#   grep REPLACE_ME setup/env_vars   # should print nothing when fully set
+#   source setup/env_vars
+#
+# Never commit setup/env_vars — it contains your HF token and account id.
+
+# ---------------------------------------------------------------------------
+# AWS / ECR (only needed if you push the image to ECR; a local build works too)
+#
+# Discover values once:
+#   AWS_REGION=$(aws ec2 describe-availability-zones \
+#                  --output text --query 'AvailabilityZones[0].[RegionName]')
+#   ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+# Then paste the literals below — sourcing this file should not make AWS calls.
+# ---------------------------------------------------------------------------
+export AWS_REGION="REPLACE_ME"           # e.g. us-east-2
+export ACCOUNT="REPLACE_ME"              # 12-digit AWS account id
+export REGISTRY="${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/"
+export IMAGE="sglang-deepep-efa"
+export TAG="sglang0.5.13.post1-deepep567632d-nvshmem3.7.0"
+
+# Local image name used by the recipe scripts. Set this to
+# "${REGISTRY}${IMAGE}:${TAG}" once the image is in ECR and pulled on every node.
+export IMAGE_URI="sglang-deepep-efa:latest"
+
+# ---------------------------------------------------------------------------
+# Cluster topology — 2 nodes (p5.48xlarge or p5en.48xlarge), 8 GPU each.
+#
+# NODE_0 is the rank-0 / master node. Use PRIVATE IPs (the EFA-backed VPC
+# interface), not public DNS. Discover with `hostname -I | awk '{print $1}'`
+# on each node.
+# ---------------------------------------------------------------------------
+export NODE_0_IP="REPLACE_ME"            # e.g. 172.31.6.205 — rank 0 / master
+export NODE_1_IP="REPLACE_ME"            # e.g. 172.31.3.52
+
+export NUM_NODES=2
+export NUM_GPU_PER_NODE=8
+
+# EFA-backed NIC used for the torch/NCCL/gloo rendezvous (NOT for RDMA itself —
+# NVSHMEM picks EFA devices via NVSHMEM_NETDEVS_POLICY). On p5/p5en this is the
+# primary ENA interface. Check with: ip -o -4 addr show
+export IFACE="enp71s0"
+
+# ---------------------------------------------------------------------------
+# Model
+# ---------------------------------------------------------------------------
+export MODEL="deepseek-ai/DeepSeek-R1"
+export HF_TOKEN="REPLACE_ME"             # HuggingFace token with DeepSeek-R1 access
+# Host directory for the HF cache. DeepSeek-R1 is ~640 GB in FP8, so this must
+# be on fast local NVMe, and the model must be present on BOTH nodes.
+export HF_CACHE_DIR="/opt/dlami/nvme/hf"
+
+# ---------------------------------------------------------------------------
+# Serving config. TP=16 spans both nodes (2 x 8 GPU).
+#
+# MOE_BACKEND selects what is being compared:
+#   deepep   = DeepEP-on-EFA dispatch/combine  (this sample)
+#   baseline = SGLang's ordinary fused-MoE all-to-all over NCCL
+#   tp       = no expert parallelism at all (MoE weights TP-sharded)
+# ---------------------------------------------------------------------------
+export MOE_BACKEND="deepep"
+export TP_SIZE=16
+export EP_SIZE=16
+export SERVE_PORT=30000
+export DIST_PORT=29500
+export MEM_FRACTION_STATIC=0.85

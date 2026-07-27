@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Example env_vars for the vLLM + DeepEP-on-EFA DeepSeek-R1 sample.
+# Copy this to setup/env_vars and fill in every REPLACE_ME:
+#
+#   cp setup/env_vars.example setup/env_vars
+#   $EDITOR setup/env_vars
+#   grep REPLACE_ME setup/env_vars   # should print nothing when fully set
+#   source setup/env_vars
+#
+# Never commit setup/env_vars — it contains your HF token and account id.
+
+# ---------------------------------------------------------------------------
+# AWS / ECR (only needed if you push the image to ECR; a local build works too)
+#
+# Discover values once:
+#   AWS_REGION=$(aws ec2 describe-availability-zones \
+#                  --output text --query 'AvailabilityZones[0].[RegionName]')
+#   ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+# Then paste the literals below — sourcing this file should not make AWS calls.
+# ---------------------------------------------------------------------------
+export AWS_REGION="REPLACE_ME"           # e.g. us-east-2
+export ACCOUNT="REPLACE_ME"              # 12-digit AWS account id
+export REGISTRY="${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/"
+export IMAGE="vllm-deepep-efa"
+export TAG="vllm0.23.0-deepep567632d-nvshmem3.7.0"
+
+# Local image name used by the recipe scripts. Set this to
+# "${REGISTRY}${IMAGE}:${TAG}" once the image is in ECR and pulled on every node.
+export IMAGE_URI="vllm-deepep-efa:latest"
+
+# ---------------------------------------------------------------------------
+# Cluster topology
+#
+# This sample is PD-DISAGGREGATED: 4 nodes in two roles, each role a 2-node
+# Ray cluster running TP=16 / EP=16.
+#
+#   prefill role: PREFILL_HEAD_IP (Ray head) + PREFILL_WORKER_IP
+#   decode  role: DECODE_HEAD_IP  (Ray head) + DECODE_WORKER_IP
+#
+# Use PRIVATE IPs (the EFA-backed VPC interface), not public DNS. Discover with
+# `hostname -I | awk '{print $1}'` on each node.
+#
+# To run a single COLOCATED 2-node server instead (no PD split), set only the
+# prefill pair and use `recipe/serve-colocated.sh`.
+# ---------------------------------------------------------------------------
+export PREFILL_HEAD_IP="REPLACE_ME"      # e.g. 172.31.6.205
+export PREFILL_WORKER_IP="REPLACE_ME"    # e.g. 172.31.3.52
+export DECODE_HEAD_IP="REPLACE_ME"       # e.g. 172.31.9.17
+export DECODE_WORKER_IP="REPLACE_ME"     # e.g. 172.31.12.90
+
+# The node that runs the router. Usually the prefill head.
+export ROUTER_HOST="${PREFILL_HEAD_IP}"
+
+export NUM_GPU_PER_NODE=8
+
+# EFA-backed NIC used for the torch/NCCL/gloo rendezvous and the Ray control
+# plane (NOT for RDMA itself — NVSHMEM picks EFA devices via
+# NVSHMEM_NETDEVS_POLICY). On p5/p5en this is the primary ENA interface.
+# Check with: ip -o -4 addr show
+export IFACE="enp71s0"
+
+# ---------------------------------------------------------------------------
+# Model
+#
+# vLLM is pointed at a LOCAL directory here rather than a HF repo id, because a
+# 4-node PD cluster otherwise races 4 concurrent 640 GB downloads. Pre-stage the
+# weights on every node (e.g. `hf download deepseek-ai/DeepSeek-R1
+# --local-dir $MODEL_DIR`) and keep them on fast local NVMe.
+# ---------------------------------------------------------------------------
+export MODEL_DIR="/opt/dlami/nvme/DeepSeek-R1"
+export SERVED_MODEL_NAME="deepseek-ai/DeepSeek-R1"
+export HF_TOKEN="REPLACE_ME"             # HuggingFace token with DeepSeek-R1 access
+# Host directory for the compile / HF caches, shared by every role on the host.
+export CACHE_DIR="/opt/dlami/nvme/cache"
+
+# ---------------------------------------------------------------------------
+# Serving config. TP=16 spans both nodes of a role (2 x 8 GPU).
+#
+# MOE_BACKEND selects what is being compared:
+#   deepep   = DeepEP-on-EFA dispatch/combine (deepep_high_throughput on the
+#              prefill role, deepep_low_latency on the decode role)
+#   baseline = vLLM's default all-to-all, still --enable-expert-parallel
+# ---------------------------------------------------------------------------
+export MOE_BACKEND="deepep"
+export TP_SIZE=16
+export PREFILL_PORT=8001
+export DECODE_PORT=8002
+export ROUTER_PORT=8000
+export RAY_PORT=6379
+# NIXL side-channel ports; must differ between the two roles on shared hosts.
+export PREFILL_NIXL_PORT=5557
+export DECODE_NIXL_PORT=5558

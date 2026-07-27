@@ -1,9 +1,11 @@
-# Fails if the vendored copy of setup_deepep_efa.sh drifts from its canonical source.
+# Fails if any vendored copy of setup_deepep_efa.sh drifts from its canonical source.
 #
-# megatron-bridge vendors a verbatim copy of the deepep-benchmark EFA setup script (Docker
-# can only COPY from within the build context). The copy is kept in sync by hand, so silent
-# drift would mean the megatron-bridge image builds a different DeepEP than documented. This
-# gate diffs the two and fails on any mismatch. Runs only when either file changes.
+# Several test cases vendor a verbatim copy of the deepep-benchmark EFA setup script (Docker
+# can only COPY from within the build context). The copies are kept in sync by hand, so silent
+# drift would mean those images build a different DeepEP than documented. This gate diffs every
+# copy against the canonical file and fails on any mismatch. Runs only when one of them changes.
+#
+# Adding another vendored copy? Add it to VENDORED below and to the paths filter.
 
 name: DeepEP vendor sync
 
@@ -11,6 +13,8 @@ on:
   pull_request:
     paths:
       - "3.test_cases/megatron/megatron-bridge/deepep/setup_deepep_efa.sh"
+      - "3.test_cases/pytorch/sglang/dsr1-deepep-efa/setup_deepep_efa.sh"
+      - "3.test_cases/pytorch/vllm/dsr1-deepep-efa/setup_deepep_efa.sh"
       - "micro-benchmarks/expert-parallelism/deepep-benchmark/setup_deepep_efa.sh"
 
 permissions:
@@ -21,12 +25,43 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Compare vendored copy against canonical source
+      - name: Compare vendored copies against canonical source
         run: |
           CANON=micro-benchmarks/expert-parallelism/deepep-benchmark/setup_deepep_efa.sh
-          VENDORED=3.test_cases/megatron/megatron-bridge/deepep/setup_deepep_efa.sh
-          if ! diff -u "$CANON" "$VENDORED"; then
-            echo "::error::$VENDORED has drifted from $CANON. Re-copy: cp $CANON $VENDORED"
-            exit 1
-          fi
-          echo "OK: vendored setup_deepep_efa.sh matches canonical source."
+          VENDORED=(
+            3.test_cases/pytorch/sglang/dsr1-deepep-efa/setup_deepep_efa.sh
+            3.test_cases/pytorch/vllm/dsr1-deepep-efa/setup_deepep_efa.sh
+          )
+          # Copies that are KNOWN to differ from the canonical script today. They are
+          # reported as warnings, not failures, so this gate does not block unrelated PRs on
+          # pre-existing drift. megatron-bridge vendors an older fork of the script (the
+          # --venv / --gpu-arch interface) and its Dockerfile calls it with those flags, so
+          # re-copying the canonical file requires updating that Dockerfile too. Move the
+          # path into VENDORED above once that is done.
+          KNOWN_DRIFT=(
+            3.test_cases/megatron/megatron-bridge/deepep/setup_deepep_efa.sh
+          )
+          rc=0
+          for v in "${VENDORED[@]}"; do
+            if [ ! -f "$v" ]; then
+              echo "::error::expected vendored copy $v does not exist"
+              rc=1
+              continue
+            fi
+            if ! diff -u "$CANON" "$v"; then
+              echo "::error::$v has drifted from $CANON. Re-copy: cp $CANON $v"
+              rc=1
+            else
+              echo "OK: $v matches canonical source."
+            fi
+          done
+          for v in "${KNOWN_DRIFT[@]}"; do
+            if [ ! -f "$v" ]; then
+              echo "::warning::known-drift copy $v no longer exists; remove it from KNOWN_DRIFT"
+            elif diff -q "$CANON" "$v" >/dev/null; then
+              echo "::warning::$v now matches $CANON — move it from KNOWN_DRIFT into VENDORED"
+            else
+              echo "::warning::$v differs from $CANON (known pre-existing drift, not gated)"
+            fi
+          done
+          exit $rc

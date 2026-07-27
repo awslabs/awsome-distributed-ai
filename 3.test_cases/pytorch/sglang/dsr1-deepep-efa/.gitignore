@@ -1,0 +1,8 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+# Local env vars contain HF token and account ID — never commit them.
+setup/env_vars
+
+# Benchmark outputs.
+results/

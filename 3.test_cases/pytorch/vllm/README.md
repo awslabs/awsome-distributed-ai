@@ -18,3 +18,4 @@ prefill/decode KV-cache transfer
 | Test case | Orchestrator | Description |
 | --- | --- | --- |
 | [`dsv3-uccl-nixl`](./dsv3-uccl-nixl) | EKS / HyperPod EKS | DeepSeek-V3 disaggregated inference (1P+ND) on `p5en.48xlarge` with vLLM 0.21.0, UCCL-EP, and NIXL over EFA. |
+| [`dsr1-deepep-efa`](./dsr1-deepep-efa) | EC2 (Docker + Ray) | DeepSeek-R1 2P2D disaggregated inference on `p5`/`p5en.48xlarge` with vLLM 0.23.0, **DeepEP** MoE all-to-all over NVSHMEM-libfabric/EFA, and NIXL over EFA. |
