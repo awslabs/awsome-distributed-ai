@@ -73,23 +73,25 @@ fi
 #   - enroot as an installed apt package
 # DLAMI also handles the mount-aware enroot.conf tuning for NVMe / /opt/sagemaker
 # / /fsx
-# Running `install_enroot_pyxis.sh` on top of that produces:
+#
+# Running `install_enroot_pyxis.sh` on top of a full DLAMI baseline produces:
 #   - a duplicate SPANK registration ("srun: spank: option ... provided by both
 #     spank_pyxis.so and spank_pyxis.so" on every job launch), because LCS
 #     installs a second pyxis under /usr/local/lib/slurm/ and adds an
 #     `include .../pyxis.conf` line on top of the DLAMI's direct `required` line;
-#   - redundant apt install of the same enroot version;
-#   - redundant idempotent sed of enroot.conf paths already tuned by HostAgent.
+#   - redundant apt install of the same enroot version.
 #
 # Detect each independently so partial-baseline DLAMIs (e.g. pyxis present but
 # not enroot, or vice versa) still get the piece they are missing, and so LCS
 # behavior on older Packer-built AMIs / bare Ubuntu is unchanged.
 #
 # What is NOT skipped, regardless of detection:
-#   - `cp $BIN_DIR/enroot.conf /etc/enroot/enroot.conf` (LCS copies a different,
-#     broader scoped enroot config that differs from the DLAMI's defaults in ways
-#     containers depend on: ENROOT_ROOTFS_WRITABLE=yes, ENROOT_MOUNT_HOME=no,
-#     ENROOT_RESTRICT_DEV=no, `-comp lzo` squash options, ENROOT_CONFIG_PATH).
+#   - `cp $BIN_DIR/enroot.conf /etc/enroot/enroot.conf` (LCS ships broader flags
+#     that customer container workloads depend on: ENROOT_ROOTFS_WRITABLE=yes,
+#     ENROOT_MOUNT_HOME=no, ENROOT_RESTRICT_DEV=no, `-comp lzo` squash options,
+#     ENROOT_CONFIG_PATH).
+#   - Mount-aware sed for /opt/dlami/nvme / /opt/sagemaker / /fsx (paired with
+#     the cp above - cp brings the flags, sed rescues the paths).
 #   - slurmctld / slurmd restart at the bottom of the script.
 # ------------------------------------------------------------------------------
 DLAMI_PYXIS_INSTALLED=0
@@ -102,14 +104,14 @@ if [[ -f "$SLURM_INSTALL_DIR/lib/slurm/spank_pyxis.so" ]] \
     echo "[INFO] pyxis is already installed and registered by the HyperPod DLAMI"
     echo "[INFO]   binary: $SLURM_INSTALL_DIR/lib/slurm/spank_pyxis.so"
     echo "[INFO]   registration: $(grep -E 'spank_pyxis\.so' "$SLURM_INSTALL_DIR/etc/plugstack.conf" | head -1)"
-    echo "[INFO] LC will skip pyxis build/install and plugstack.conf edit to avoid a duplicate SPANK registration."
+    echo "[INFO] LCS will skip pyxis build/install and plugstack.conf edit to avoid a duplicate SPANK registration."
 fi
 
 if command -v enroot >/dev/null 2>&1; then
     DLAMI_ENROOT_INSTALLED=1
     echo "[INFO] enroot is already installed by the HyperPod DLAMI (version: $(enroot version 2>/dev/null | head -1))"
-    echo "[INFO] LC will skip enroot deb download/install and mount-aware enroot.conf sed"
-    echo "[INFO] (the DLAMI's on-boot HostAgent handles ENROOT_*_PATH tuning for NVMe / /opt/sagemaker / /fsx)."
+    echo "[INFO] LCS will skip the redundant enroot deb download/install."
+    echo "[INFO] Mount-aware enroot.conf tuning still runs below, since LCS's cp overwrites the file with static paths."
 fi
 
 # Guard the destructive rm of $SLURM_INSTALL_DIR/pyxis so we don't wipe the
@@ -164,89 +166,92 @@ chmod 777 -R /tmp/enroot /opt/enroot
 ################################################################################
 # Mount-aware enroot.conf tuning.
 #
-# Skipped when the DLAMI already provisioned enroot (`DLAMI_ENROOT_INSTALLED=1`),
+# ALWAYS runs, regardless of DLAMI detection. The `cp $BIN_DIR/enroot.conf ...`
+# step above unconditionally overwrites /etc/enroot/enroot.conf with LCS's
+# broad flags but *static* paths (ENROOT_CACHE_PATH=/opt/enroot on the
+# root volume, ENROOT_RUNTIME_PATH=/tmp/..., etc.). Without this sed pass
+# immediately after, ENROOT_CACHE_PATH stays on the root volume leading to
+# the first large container pull to fill the root volume and the node degrades.
+#  See: https://github.com/awslabs/awsome-distributed-training/issues/427
 #
-# On older AMIs / bare Ubuntu where LCS installed enroot itself, this block still
-# runs and does the mount-aware sed as before.
+# The `cp` and this sed are a *pair* by design: `cp` brings LCS's broadened
+# flags (writable rootfs, no home mount, lzo squash, etc.), this sed rescues
+# the paths from the `cp`'s static defaults. Do not separate them.
 ################################################################################
-if [[ "$DLAMI_ENROOT_INSTALLED" -eq 0 ]]; then
-    # Below while loop instituted to combat race condition when mapping enroot path to /opt/dlami/nvme
-    MAX_WAIT_TIME=120
-    ELAPSED_TIME=0
-    CHECK_INTERVAL=5
+# Below while loop instituted to combat race condition when mapping enroot path to /opt/dlami/nvme
+MAX_WAIT_TIME=120
+ELAPSED_TIME=0
+CHECK_INTERVAL=5
 
-    while true; do
-        # Check the ActiveState of the lib/systemd/system/dlami-nvme.service
-        ACTIVE_STATE=$(systemctl show dlami-nvme | grep "ActiveState" | cut -d '=' -f 2)
-        # Check the ExecMainStatus of the lib/systemd/system/dlami-nvme.service
-        RESULT_STATE=$(systemctl show dlami-nvme | grep "ExecMainStatus" | cut -d '=' -f 2)
+while true; do
+    # Check the ActiveState of the lib/systemd/system/dlami-nvme.service
+    ACTIVE_STATE=$(systemctl show dlami-nvme | grep "ActiveState" | cut -d '=' -f 2)
+    # Check the ExecMainStatus of the lib/systemd/system/dlami-nvme.service
+    RESULT_STATE=$(systemctl show dlami-nvme | grep "ExecMainStatus" | cut -d '=' -f 2)
 
-        echo "dlami-nvme.service ActiveState: $ACTIVE_STATE"
-        echo "dlami-nvme.service ExecMainStatus: $RESULT_STATE"
+    echo "dlami-nvme.service ActiveState: $ACTIVE_STATE"
+    echo "dlami-nvme.service ExecMainStatus: $RESULT_STATE"
 
-        if [[ "$ACTIVE_STATE" == "active" && "$RESULT_STATE" == "0" ]]; then
-            echo "dlami-nvme.service is active and successful. Proceeding with Enroot configuration on /opt/dlami/nvme if available"
-            break
-        fi
+    if [[ "$ACTIVE_STATE" == "active" && "$RESULT_STATE" == "0" ]]; then
+        echo "dlami-nvme.service is active and successful. Proceeding with Enroot configuration on /opt/dlami/nvme if available"
+        break
+    fi
 
-        ELAPSED_TIME=$((ELAPSED_TIME + CHECK_INTERVAL))
+    ELAPSED_TIME=$((ELAPSED_TIME + CHECK_INTERVAL))
 
-        if [[ $ELAPSED_TIME -ge $MAX_WAIT_TIME ]]; then
-            echo "WARN: Timeout reached: dlami-nvme.service did not become active and successful, it is possible enroot default path is /opt/sagemaker. When training larger models, dragons be here. See https://github.com/awslabs/awsome-distributed-training/issues/427 for corrective actions"
-            break
-        fi
+    if [[ $ELAPSED_TIME -ge $MAX_WAIT_TIME ]]; then
+        echo "WARN: Timeout reached: dlami-nvme.service did not become active and successful, it is possible enroot default path is /opt/sagemaker. When training larger models, dragons be here. See https://github.com/awslabs/awsome-distributed-training/issues/427 for corrective actions"
+        break
+    fi
 
-        sleep $CHECK_INTERVAL
-    done
+    sleep $CHECK_INTERVAL
+done
 
 ####################################################################################################
 
-    # Configure enroot paths based on available mounts
-    if [[ $(mount | grep /opt/dlami/nvme) ]]; then
-        sed -i \
-            -e 's|^\(ENROOT_RUNTIME_PATH  *\).*$|\1/opt/dlami/nvme/tmp/enroot/user-$(id -u)|' \
-            -e 's|^\(ENROOT_CACHE_PATH  *\).*$|\1/opt/dlami/nvme/enroot|' \
-            -e 's|^\(ENROOT_DATA_PATH  *\).*$|\1/opt/dlami/nvme/tmp/enroot/data/user-$(id -u)|' \
-            -e 's|^#\(ENROOT_TEMP_PATH  *\).*$|\1/opt/dlami/nvme/tmp|' \
-            /etc/enroot/enroot.conf
+# Configure enroot paths based on available mounts
+if [[ $(mount | grep /opt/dlami/nvme) ]]; then
+    sed -i \
+        -e 's|^\(ENROOT_RUNTIME_PATH  *\).*$|\1/opt/dlami/nvme/tmp/enroot/user-$(id -u)|' \
+        -e 's|^\(ENROOT_CACHE_PATH  *\).*$|\1/opt/dlami/nvme/enroot|' \
+        -e 's|^\(ENROOT_DATA_PATH  *\).*$|\1/opt/dlami/nvme/tmp/enroot/data/user-$(id -u)|' \
+        -e 's|^#\(ENROOT_TEMP_PATH  *\).*$|\1/opt/dlami/nvme/tmp|' \
+        /etc/enroot/enroot.conf
 
-        mkdir -p /opt/dlami/nvme/tmp/enroot/
-        chmod 1777 /opt/dlami/nvme/tmp
-        chmod 1777 /opt/dlami/nvme/tmp/enroot/
+    mkdir -p /opt/dlami/nvme/tmp/enroot/
+    chmod 1777 /opt/dlami/nvme/tmp
+    chmod 1777 /opt/dlami/nvme/tmp/enroot/
 
-        mkdir -p /opt/dlami/nvme/tmp/enroot/data/
-        chmod 1777 /opt/dlami/nvme/tmp/enroot/data/
+    mkdir -p /opt/dlami/nvme/tmp/enroot/data/
+    chmod 1777 /opt/dlami/nvme/tmp/enroot/data/
 
-        mkdir -p /opt/dlami/nvme/enroot
-        chmod 1777 /opt/dlami/nvme/enroot
+    mkdir -p /opt/dlami/nvme/enroot
+    chmod 1777 /opt/dlami/nvme/enroot
 
-    elif [[ $(mount | grep /opt/sagemaker) ]]; then
-        sed -i \
-            -e 's|^\(ENROOT_RUNTIME_PATH  *\).*$|\1/opt/sagemaker/tmp/enroot/user-$(id -u)|' \
-            -e 's|^\(ENROOT_CACHE_PATH  *\).*$|\1/opt/sagemaker/enroot|' \
-            -e 's|^\(ENROOT_DATA_PATH  *\).*$|\1/opt/sagemaker/tmp/enroot/data/user-$(id -u)|' \
-            -e 's|^#\(ENROOT_TEMP_PATH  *\).*$|\1/opt/sagemaker/tmp|' \
-            /etc/enroot/enroot.conf
+elif [[ $(mount | grep /opt/sagemaker) ]]; then
+    sed -i \
+        -e 's|^\(ENROOT_RUNTIME_PATH  *\).*$|\1/opt/sagemaker/tmp/enroot/user-$(id -u)|' \
+        -e 's|^\(ENROOT_CACHE_PATH  *\).*$|\1/opt/sagemaker/enroot|' \
+        -e 's|^\(ENROOT_DATA_PATH  *\).*$|\1/opt/sagemaker/tmp/enroot/data/user-$(id -u)|' \
+        -e 's|^#\(ENROOT_TEMP_PATH  *\).*$|\1/opt/sagemaker/tmp|' \
+        /etc/enroot/enroot.conf
 
-        mkdir -p /opt/sagemaker/tmp/enroot/
-        chmod 1777 /opt/sagemaker/tmp
-        chmod 1777 /opt/sagemaker/tmp/enroot/
+    mkdir -p /opt/sagemaker/tmp/enroot/
+    chmod 1777 /opt/sagemaker/tmp
+    chmod 1777 /opt/sagemaker/tmp/enroot/
 
-        mkdir -p /opt/sagemaker/tmp/enroot/data/
-        chmod 1777 /opt/sagemaker/tmp/enroot/data/
+    mkdir -p /opt/sagemaker/tmp/enroot/data/
+    chmod 1777 /opt/sagemaker/tmp/enroot/data/
 
-        mkdir -p /opt/sagemaker/enroot
-        chmod 1777 /opt/sagemaker/enroot
-    fi
+    mkdir -p /opt/sagemaker/enroot
+    chmod 1777 /opt/sagemaker/enroot
+fi
 
-    # Configure FSX for enroot cache if available
-    if [[ $(mount | grep /fsx) ]]; then
-        sed -i -e 's|^\(ENROOT_CACHE_PATH  *\).*$|\1/fsx/enroot|' /etc/enroot/enroot.conf
-        mkdir -p /fsx/enroot
-        chmod 1777 /fsx/enroot
-    fi
-else
-    echo "[INFO] Skipping mount-aware enroot.conf tuning (DLAMI HostAgent handles NVMe / /opt/sagemaker / /fsx)."
+# Configure FSX for enroot cache if available
+if [[ $(mount | grep /fsx) ]]; then
+    sed -i -e 's|^\(ENROOT_CACHE_PATH  *\).*$|\1/fsx/enroot|' /etc/enroot/enroot.conf
+    mkdir -p /fsx/enroot
+    chmod 1777 /fsx/enroot
 fi
 
 # Restart Slurm services if they're running
