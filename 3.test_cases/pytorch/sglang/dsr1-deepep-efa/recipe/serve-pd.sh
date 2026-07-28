@@ -178,6 +178,15 @@ COMMON_ENV=(
     # failing length, so it is not the provider or the fabric.
     -e FI_HMEM=cuda
 )
+# Forwarded only when the caller sets it, so the default launch is unchanged.
+# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False keeps the torch caching
+# allocator off CUDA VMM-backed segments. Worth having as a lever because VMM
+# memory (cuMemCreate + cuMemMap) fails fi_mr_regattr with EFAULT on this image
+# at the same length cudaMalloc registers cleanly -- so if the KV pool is
+# VMM-backed, that is a candidate mechanism for the registration failure above.
+if [[ -n "${PYTORCH_CUDA_ALLOC_CONF:-}" ]]; then
+    COMMON_ENV+=(-e PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF}")
+fi
 # NVSHMEM is DeepEP's transport, and the UCCL image does not contain it -- the
 # LD_PRELOAD would resolve to a missing file. UCCL talks to EFA directly.
 if [[ "$UCCL" != "1" ]]; then
