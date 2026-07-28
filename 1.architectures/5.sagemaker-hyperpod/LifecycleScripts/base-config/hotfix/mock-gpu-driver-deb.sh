@@ -10,7 +10,7 @@ MOCK_PKG=libnvidia-compute-${DRV_VERSION_MAJOR}
 apt-get -y -o DPkg::Lock::Timeout=120 install equivs
 
 # 1) Try exact-patch match first (preferred: mock matches the running kmod exactly).
-for SUFFIX in "-1ubuntu1" "-0ubuntu1" ""; do
+for SUFFIX in "-0ubuntu0.22.04.1" "-1ubuntu1" "-0ubuntu1" ""; do
     if apt-cache show ${MOCK_PKG}=${DRV_VERSION}${SUFFIX} 2>/dev/null | egrep '^Package|^Version|^Provides' &> ${MOCK_PKG}; then
         echo "Found exact match for ${DRV_VERSION} with suffix: ${SUFFIX}"
         break
