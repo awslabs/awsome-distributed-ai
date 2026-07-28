@@ -110,9 +110,9 @@ server without capping prefill.
   `libnccl-net.so` name, where it auto-loads; do not infer the transport from the installer version.
 - **KV cache on EFA**, for 2P2D only. Requires
   [`MOONCAKE_PROTOCOL=efa`](#required-setting-mooncake_protocolefa) — omitting it silently falls back
-  to TCP — plus `--privileged`; and note the
-  [open GPU-registration blocker](#open-blocker-gpu-memory-registration-on-libfabric-24) on the
-  current image.
+  to TCP — plus `--privileged` and `FI_HMEM=cuda`. On the current image the KV path is **blocked
+  regardless**: see [Open blocker](#open-blocker-gpu-memory-registration-on-libfabric-24). 2P2D cannot
+  be benchmarked on this image; the colocated Part 1 path is unaffected.
 - **Run the kernel tests first.** `recipe/run-kernel-test.sh intranode|low_latency|internode`. The
   first two are single-node and cheap; only `internode` puts bytes on EFA.
 
@@ -327,13 +327,21 @@ image — see [section 5](#5-disable-the-prefix-cache-or-the-sweep-measures-the-
 `enp71s0`. SGLang 0.5.13.post1. Benched through the router with `--pd-separated` and
 `--random-range-ratio 1`.
 
-> **Read Part 2 as directional.** Unlike Part 1, these sweeps predate two of the measurement rules
-> above. The DeepEP rows ran `--deepep-mode auto` rather than pinned per role, and the radix prefix
-> cache was on for the non-DP rows and off for the DP rows — so a "DP effect" column mixes the DP
-> lever with a cache difference. Both effects push in DeepEP's favour on prefill and neither is
-> quantified here. The *shape* of Part 2 (DeepEP wins prefill, loses decode; DP-attention reverses the
-> decode order and hurts prefill) is confirmed independently by the clean Part 1 tables; the absolute
-> figures below, especially the 161.5k 1K-prefill peak, are not directly comparable to Part 1's.
+> **Read Part 2 as directional, and note it cannot currently be re-measured.** Unlike Part 1, these
+> sweeps predate two of the measurement rules above. The DeepEP rows ran `--deepep-mode auto` rather
+> than pinned per role, and the radix prefix cache was on for the non-DP rows and off for the DP rows
+> — so a "DP effect" column mixes the DP lever with a cache difference. Both effects push in DeepEP's
+> favour on prefill and neither is quantified here. The *shape* of Part 2 (DeepEP wins prefill, loses
+> decode; DP-attention reverses the decode order and hurts prefill) is confirmed independently by the
+> clean Part 1 tables; the absolute figures below, especially the 161.5k 1K-prefill peak, are not
+> directly comparable to Part 1's.
+>
+> Re-running them under the Part 1 rules was attempted on 2026-07-28 and **could not be done**: on the
+> current image the KV transfer fails on the first real request through the router, before any sweep
+> point is collected. See [Open blocker](#open-blocker-gpu-memory-registration-on-libfabric-24). Every
+> attempt aborted identically at a single-request smoke test through the router, so no 2P2D point below
+> has been superseded — they stand as the last valid measurement, taken on an earlier EFA/libfabric
+> stack.
 
 ```
   Prefill role (TP=16 / EP=16)          Decode role (TP=16 / EP=16)
