@@ -136,16 +136,47 @@ COMMON_ENV=(
     -e FI_PROVIDER=efa -e FI_EFA_USE_DEVICE_RDMA=1
     -e MOONCAKE_PROTOCOL=efa
     -e MC_FORCE_AUTO_DISCOVERY=1
-    # Do NOT set FI_HMEM here. Mooncake's EFA context only defaults it to
-    # "system" on a non-GPU build, so a GPU build already leaves CUDA enabled --
-    # and setting it explicitly makes fi_getinfo return FI_ENODATA for every
-    # device ("fi_getinfo failed for device rdmapXXs0: No data available",
-    # then "EfaTransport: Disable device ..." for all 32, then a hard
-    # "Mooncake Transfer Engine initialization failed" at startup).
-    # FI_EFA_USE_DATA_PATH_DIRECT changes nothing here either -- both the "efa"
-    # and "efa-direct" fabrics are enumerated regardless. See the KV-path note in
-    # benchmarks/README.md for the GPU-registration limitation that is currently
-    # open on this image.
+    # FI_HMEM must be exactly "cuda" -- not unset, and never a list containing
+    # "system". Necessary but, on this image, not sufficient; see the tail of
+    # this comment and the open blocker in benchmarks/README.md.
+    #
+    # Mooncake's EFA context calls setenv("FI_HMEM", "system", 0) before it opens
+    # a domain. overwrite=0, so a value we set here wins; leaving it unset lets
+    # "system" through. libfabric 2.4's EFA provider then restricts the domain's
+    # HMEM ifaces to host memory, and every
+    # fi_mr_regattr(iface=FI_HMEM_CUDA) -- which is how the GPU-resident KV cache
+    # is registered -- fails with ENOSYS ("Operation not supported"):
+    #
+    #   efa_context.cpp:402] fi_mr_regattr failed for GPU memory 0x... (device N)
+    #   efa_transport.cpp:460] Failed to register memory region chunk 0
+    #
+    # Startup then continues as if healthy -- SGLang's own PD warmup passes,
+    # because its 4-token prompt does not need a registered GPU buffer -- and the
+    # first real request fails as "Decode instance could be dead" on prefill and
+    # "Failed to get kvcache from prefill instance" on decode. Neither role is
+    # dead; the KV buffer was never registered.
+    #
+    # Measured directly against this image (fi_mr_regattr with Mooncake's exact
+    # hints, 64 MiB of cudaMalloc'd memory, all 32 EFA domains):
+    #   FI_HMEM=cuda           -> 0  (OK)
+    #   FI_HMEM unset          -> 0  (OK, but Mooncake sets "system" itself)
+    #   FI_HMEM=system         -> -38 ENOSYS
+    #   FI_HMEM=system,cuda    -> -38 ENOSYS
+    #   FI_HMEM=cuda,system    -> -38 ENOSYS
+    # So the plain "cuda" value is the only safe setting; any list including
+    # "system" disables CUDA registration even though CUDA is named.
+    #
+    # FI_EFA_USE_DATA_PATH_DIRECT changes nothing here -- both the "efa" and
+    # "efa-direct" fabrics are enumerated regardless, and Mooncake only ever
+    # opens "efa".
+    #
+    # Caveat: with FI_HMEM=cuda confirmed live in the container, registration on
+    # this image STILL fails -- but with EOPNOTSUPP rather than the ENOSYS above,
+    # so that is a second, separate defect inside Mooncake's EFA transport. The
+    # same fi_mr_regattr call succeeds from a standalone C program in the same
+    # container while the failing server runs, on every device and at the exact
+    # failing length, so it is not the provider or the fabric.
+    -e FI_HMEM=cuda
 )
 # NVSHMEM is DeepEP's transport, and the UCCL image does not contain it -- the
 # LD_PRELOAD would resolve to a missing file. UCCL talks to EFA directly.

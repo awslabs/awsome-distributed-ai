@@ -574,24 +574,25 @@ docker logs r1-pd-prefill 2>&1 | grep -E 'EfaTransport|Installing TCP transport'
 contention — it reproduces with `MOE_BACKEND=tp`, which never loads DeepEP. The KV path is
 Mooncake's alone.
 
-## The 2P2D KV path has two container-level requirements
+## The 2P2D KV path has three container-level requirements
 
-`MOONCAKE_PROTOCOL=efa` is one of two. Both share a failure signature that makes them hard to
+`MOONCAKE_PROTOCOL=efa` is one of three. All three share a failure signature that makes them hard to
 tell apart: **each one logs a warning, lets startup complete, passes the built-in PD warmup, and then
 kills the first real KV transfer.** The visible error is always on the wrong side — prefill reports
 `Decode instance could be dead, remote mooncake session <ip:port> is not alive`, decode reports
 `Failed to get kvcache from prefill instance, it might be dead`. Nothing is dead; the buffers were
-never registered. `recipe/serve-pd.sh` sets both for both roles and every backend.
+never registered. `recipe/serve-pd.sh` sets all three for both roles and every backend.
 
 | Requirement | Warning it emits | Why |
 |---|---|---|
 | `--privileged` | `memory_location.cpp: Failed to get NUMA node, addr: … Operation not permitted` | Mooncake asks the kernel which NUMA node each registered buffer sits on; the query is not permitted under Docker's default capability set. |
 | `MOONCAKE_PROTOCOL=efa` | `Installing TCP transport` | Silent fallback to sockets; see above. |
+| `FI_HMEM=cuda` | `efa_context.cpp: fi_mr_regattr failed for GPU memory … ` | Mooncake calls `setenv("FI_HMEM","system",0)` itself; any value naming `system` makes `fi_mr_regattr(iface=FI_HMEM_CUDA)` return `ENOSYS`. `overwrite=0`, so setting `cuda` from the launcher wins. Must be exactly `cuda` — `cuda,system` fails too. |
 
-Verify both on one role before benchmarking — this must print nothing:
+Verify all three on one role before benchmarking — this must print nothing:
 
 ```bash
-docker logs r1-pd-decode 2>&1 | grep -E "Operation not permitted|Installing TCP transport"
+docker logs r1-pd-decode 2>&1 | grep -E "Operation not permitted|Installing TCP transport|fi_mr_regattr failed"
 ```
 
 **The PD warmup does not cover this.** SGLang's own disaggregation warmup request succeeds even with
@@ -610,39 +611,50 @@ efa_transport.cpp:460] Failed to register memory region chunk 0 with EFA context
 efa_transport.cpp:643] EfaTransport: Failed to register memory: addr 0x… length 1229029632
 ```
 
-and the transfer then dies as described above. **The cause is in Mooncake's EFA transport, not in the
-launch configuration** — no environment variable fixes it. `EfaContext::construct` builds its
-`fi_getinfo` hints with
+and the transfer then dies as described above, with the error reported on the wrong side.
 
-```c
-hints_->caps = FI_MSG | FI_RMA | FI_READ | FI_WRITE | FI_REMOTE_READ | FI_REMOTE_WRITE;
-hints_->domain_attr->mr_mode = … | FI_MR_HMEM;     // mr_mode asks for HMEM
-```
-
-i.e. `FI_MR_HMEM` in `mr_mode` but **no `FI_HMEM` in `caps`**. libfabric 2.4's EFA provider only
-enables the HMEM interface when `FI_HMEM` is requested in `caps`, so the returned domain has it off,
-and every `fi_mr_regattr(iface=FI_HMEM_CUDA)` against it returns `-FI_ENOSYS`. Reproduced directly
-against libfabric, outside Mooncake:
+**The cause is inside Mooncake's EFA transport, not in the launch configuration.** The decisive
+evidence is that the same call succeeds from a plain C program in the *same container, on the same
+GPUs, while the failing server is running*. `recipe/probe-kv-registration.c` is that probe (build and
+run instructions are in its header): it replicates `EfaContext::construct`'s `fi_getinfo` hints
+exactly — `caps = FI_MSG|FI_RMA|FI_READ|FI_WRITE|FI_REMOTE_READ|FI_REMOTE_WRITE`,
+`domain_attr->mr_mode = FI_MR_LOCAL|FI_MR_VIRT_ADDR|FI_MR_ALLOCATED|FI_MR_PROV_KEY|FI_MR_HMEM` — then
+opens each domain and registers `cudaMalloc`'d memory with `iface = FI_HMEM_CUDA`:
 
 ```
-MOONCAKE_HINTS getinfo=0
-  fabric=efa caps_hmem=0 mr_mode_hmem=1     # Mooncake's hints
-  fabric=efa caps_hmem=1                    # identical hints + FI_HMEM in caps
+[0] fabric=efa dom=rdmap85s0-rdm  caps_hmem=0  regattr=0 (OK)     # all 32 domains
+dev=0 regattr=0 (OK)   dev=4 regattr=0 (OK)   dev=5 regattr=0 (OK)
+size=64MiB  regattr=0 (OK)    size=1229029632  regattr=0 (OK)     # the failing length
 ```
 
-Things that are **not** the cause, each ruled out by measurement: the prefill/decode port split, the
-decode `--chunked-prefill-size`, `--disable-radix-cache`, the MoE backend (reproduces under
-`MOE_BACKEND=tp`, which loads neither DeepEP nor NVSHMEM), the `efa` vs `efa-direct` fabric
-(`FI_EFA_USE_DATA_PATH_DIRECT` changes neither enumeration nor the outcome), and `FI_HMEM` itself —
-setting it explicitly is actively harmful, since Mooncake's `setenv("FI_HMEM", "system", 0)` default
-only applies to non-GPU builds and an explicit value makes `fi_getinfo` return `FI_ENODATA` for all
-32 devices and hard-fail startup with `Mooncake Transfer Engine initialization failed`.
+So the provider, the fabric, the CUDA device index and the buffer length are all fine; something
+about *how Mooncake allocates or describes the buffer* is not. Two candidates the probe did narrow
+down:
 
-**The fix belongs in Mooncake**: add `FI_HMEM` to `hints_->caps` on a CUDA/HIP build, alongside the
-`FI_MR_HMEM` that is already conditional on it. Until then, Part 2's 2P2D numbers cannot be
-re-measured on this image — the environment they were taken in (EFA installer 1.47 / libfabric ≤2.3,
-where the provider did not gate on `caps`) is not the one in the current image. The colocated Part 1
-results are unaffected: they use no KV transfer at all.
+- **`FI_HMEM` must not include `system`.** Registering with `iface=FI_HMEM_CUDA` returns `-38`
+  (`ENOSYS`) whenever the env var names `system` — `system`, `system,cuda` and `cuda,system` all
+  fail; `cuda` and unset both succeed. Mooncake calls `setenv("FI_HMEM", "system", 0)` itself, and
+  `overwrite=0` means an explicit `FI_HMEM=cuda` from the launcher wins. `recipe/serve-pd.sh` sets
+  it. This is necessary but **not** sufficient: with `FI_HMEM=cuda` confirmed live in the container,
+  registration still fails — and with `EOPNOTSUPP`, not the `ENOSYS` this lever produces, so it is a
+  different failure.
+- **CUDA VMM allocations cannot be registered.** `cuMemCreate` + `cuMemMap` memory fails with
+  `-14` (`EFAULT`) at the same length that `cudaMalloc` registers fine, with or without an exportable
+  handle type. If Mooncake (or SGLang's allocator underneath it) hands the transport a VMM-backed
+  buffer, that is a plausible mechanism — untested against the live server.
+
+Also ruled out, each by measurement: adding `FI_HMEM` to `hints_->caps` via an `LD_PRELOAD`
+`fi_getinfo` shim (the shim fires, and registration still fails — the `caps` bit is simply not what
+gates this); the prefill/decode port split; the decode `--chunked-prefill-size`;
+`--disable-radix-cache`; the MoE backend (reproduces under `MOE_BACKEND=tp`, which loads neither
+DeepEP nor NVSHMEM); and the `efa` vs `efa-direct` fabric — `FI_EFA_USE_DATA_PATH_DIRECT` changes
+neither enumeration nor the outcome, and `fi_getinfo` with `prov_name="efa"` never returns
+`efa-direct` (requesting it by fabric name returns `-61`).
+
+Until this is resolved, **Part 2's 2P2D numbers cannot be re-measured on this image**; they were taken
+under EFA installer 1.47 / libfabric ≤2.3, and the current image ships libfabric 2.4 with
+`mooncake-transfer-engine 0.3.12.post1`. The colocated Part 1 results are unaffected — they use no KV
+transfer at all.
 
 ## UCCL-EP launch configuration that actually matters
 
@@ -808,9 +820,14 @@ Then repeat with `MOE_BACKEND=baseline`, `MOE_BACKEND=tp`, and `DP_ATTENTION=1` 
 
 # Open items
 
-- **Re-measure Part 2 under the Part 1 rules** — prefix cache off on every row and `--deepep-mode`
-  pinned per role — so the DP-effect columns isolate the DP lever alone and the two parts share a
-  harness exactly. `recipe/serve-pd.sh` now does both by construction; only the tables are stale.
+- **Unblock GPU-memory registration in Mooncake's EFA transport**, then re-measure Part 2 under the
+  Part 1 rules — prefix cache off on every row and `--deepep-mode` pinned per role — so the DP-effect
+  columns isolate the DP lever alone and the two parts share a harness exactly.
+  `recipe/serve-pd.sh` already does both by construction; the tables are stale and cannot be redone
+  until [the blocker](#open-blocker-gpu-memory-registration-on-libfabric-24) is fixed. Next step
+  there: instrument which allocator backs the buffer Mooncake registers (`cudaMalloc` vs CUDA VMM),
+  since VMM memory fails with `EFAULT` in isolation at the same length that `cudaMalloc` registers
+  cleanly.
 - **The per-role split recommendation is inferred, not measured.** DeepEP prefill and UCCL+DP decode
   were each measured in a same-backend-both-roles deployment; the mixed deployment was never run end
   to end. It should work — the roles share only the KV stream — but it is untested.
