@@ -25,7 +25,7 @@ numpy<2
 nltk==3.9.4
 awscli==1.45.26
 pynvml==13.0.1
-ray[default]==2.55.1
+ray[default]==2.56.0
 kernels==0.10.4
 huggingface-hub==1.18.0
 tokenizers==0.22.2
