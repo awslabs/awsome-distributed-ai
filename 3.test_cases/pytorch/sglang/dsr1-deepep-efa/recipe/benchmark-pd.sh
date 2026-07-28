@@ -90,7 +90,7 @@ for point in "${POINTS[@]}"; do
     # disaggregated roles; --random-range-ratio 1 pins the input length exactly
     # (the default jitters it, which blurs the per-length comparison).
     # Mount the HF cache -- see the note in benchmark.sh.
-    docker run --rm --network host \
+    docker run --rm --network host --privileged \
         -v "${OUT_DIR}:/out" \
         -v "${HF_CACHE_DIR}:/hf" -e HF_HOME=/hf \
         -e HF_TOKEN="${HF_TOKEN:-}" \

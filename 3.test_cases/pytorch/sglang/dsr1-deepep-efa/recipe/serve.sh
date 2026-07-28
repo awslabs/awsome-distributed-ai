@@ -22,9 +22,19 @@
 #
 # To benchmark UCCL-EP instead of DeepEP, point IMAGE_URI at an SGLang image built
 # with UCCL's ep/deep_ep_wrapper (which presents UCCL under DeepEP's Python API, so
-# --moe-a2a-backend deepep drives it unchanged) and set UCCL=1. That image is not in
-# this repo -- see the README. UCCL needs --privileged, a pinned --deepep-mode, and
+# --moe-a2a-backend deepep drives it unchanged) and set UCCL=1. That image is
+# ../Dockerfile.uccl. UCCL needs --privileged, a pinned --deepep-mode, and
 # a lower --mem-fraction-static; all three are applied below when UCCL=1.
+#
+# --disable-radix-cache is passed unconditionally, and it is not a tuning choice.
+# recipe/benchmark.sh pins --seed 42, so every point that shares an input length
+# replays the same prompts: with the cache on, the conc-1 point populates it and
+# the conc-8/32 points that follow read their prefixes back instead of prefilling.
+# Measured on one live server, 4096-in conc-8: 27.2k input tok/s with the cache
+# flushed vs 334k on an immediate re-run of the identical point -- a 12x
+# artefact, and the hit rate is not stable run to run, so it does not even cancel
+# out across a comparison. Nothing in the sweep output flags it. If you want to
+# measure cache-hit behaviour, that is a separate experiment with varied prompts.
 
 set -euo pipefail
 
@@ -118,13 +128,6 @@ esac
 # chain does not apply, so nothing else lowers it.)
 MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC:-0.85}
 
-# UCCL registers GPU memory for RDMA through the dma-buf/ibverbs path, which needs
-# full privileges. DeepEP/NVSHMEM go through GDRCopy and do not.
-PRIV=()
-if [[ "$UCCL" == "1" ]]; then
-    PRIV=(--privileged)
-fi
-
 mkdir -p "${HF_CACHE_DIR}" "${HF_CACHE_DIR}/../dg-cache" "${HF_CACHE_DIR}/../sgl-cache"
 
 # CUDA VMM has to follow the kernel regime, so it is derived from DEEPEP_MODE
@@ -158,8 +161,14 @@ fi
 
 docker rm -f "$NAME" 2>/dev/null || true
 set -x
+# --privileged for every backend, not just UCCL. UCCL needs it to register GPU
+# memory for RDMA through the dma-buf/ibverbs path, and Mooncake needs it to query
+# the NUMA node of a registered buffer -- under Docker's default capability set
+# that query fails with "Operation not permitted", registration silently proceeds
+# anyway, and the first KV transfer then dies with "Memory region not registered by
+# any active EFA device(s)". See recipe/serve-pd.sh.
 docker run -d --name "$NAME" \
-    --gpus all --network host --ipc host "${PRIV[@]}" \
+    --gpus all --network host --ipc host --privileged \
     --device /dev/infiniband --device /dev/gdrdrv \
     --ulimit memlock=-1 --shm-size 32g \
     -v "${HF_CACHE_DIR}:/hf" -e HF_HOME=/hf \
@@ -177,6 +186,7 @@ docker run -d --name "$NAME" \
             --nnodes ${NUM_NODES} --node-rank ${NODE_RANK} \
             --dist-init-addr ${NODE_0_IP}:${DIST_PORT} \
             --host 0.0.0.0 --port ${SERVE_PORT} \
+            --disable-radix-cache \
             --mem-fraction-static ${MEM_FRACTION_STATIC} 2>&1
     "
 set +x

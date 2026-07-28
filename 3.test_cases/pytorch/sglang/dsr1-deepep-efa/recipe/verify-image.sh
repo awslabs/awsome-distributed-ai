@@ -22,7 +22,7 @@ UCCL=${UCCL:-0}
 
 echo "==> Checking image ${IMAGE_URI} (UCCL=${UCCL})"
 
-docker run --rm --gpus all \
+docker run --rm --gpus all --privileged \
     --device /dev/infiniband --device /dev/gdrdrv \
     --ulimit memlock=-1 \
     -e "UCCL=${UCCL}" \

@@ -78,7 +78,7 @@ for point in "${POINTS[@]}"; do
     # (256 MB) to source its token ids, and the container is --rm, so an unmounted
     # cache refetches it per point -- and a stalled fetch looks exactly like a hung
     # benchmark (idle GPUs, no output) against a healthy server.
-    docker run --rm --network host \
+    docker run --rm --network host --privileged \
         -v "${OUT_DIR}:/out" \
         -v "${HF_CACHE_DIR}:/hf" -e HF_HOME=/hf \
         -e HF_TOKEN="${HF_TOKEN:-}" \

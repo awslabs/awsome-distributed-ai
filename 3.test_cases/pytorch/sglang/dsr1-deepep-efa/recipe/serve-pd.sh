@@ -38,7 +38,7 @@
 # To benchmark UCCL-EP instead of DeepEP, point IMAGE_URI at an SGLang image
 # built with UCCL's ep/deep_ep_wrapper (which presents UCCL under DeepEP's Python
 # API, so --moe-a2a-backend deepep drives it unchanged) and set UCCL=1. That
-# image is not in this repo -- see the README. UCCL needs a pinned
+# image is ../Dockerfile.uccl. UCCL needs a pinned
 # --deepep-mode, --privileged, and a lower decode --mem-fraction-static; all
 # three are applied below when UCCL=1.
 
@@ -75,23 +75,27 @@ stop_all() {
 # sglang_router in --pd-disaggregation mode. Each --prefill takes the server URL
 # AND its bootstrap port (that is how the decode side learns where to pull KV
 # from); each --decode takes only the URL.
+#
+# ONE URL per role, node rank 0 only -- NOT one per node. A TP16 group spanning
+# two nodes runs the HTTP frontend on rank 0 alone; rank 1 is a worker with no
+# API. Registering rank 1 as a second worker looks fine (its /health returns 200,
+# because that only proves the process is alive) and then fails every request the
+# round-robin policy sends to it with "Decode server returned error status
+# status=404", which surfaces as "Warmup failed ... Error: Not Found" from
+# bench_serving rather than as a routing error.
 run_router() {
     : "${PREFILL_NODE_0_IP:?source setup/env_vars first}"
-    : "${PREFILL_NODE_1_IP:?source setup/env_vars first}"
     : "${DECODE_NODE_0_IP:?source setup/env_vars first}"
-    : "${DECODE_NODE_1_IP:?source setup/env_vars first}"
 
     docker rm -f "${NAME_PREFIX}-router" 2>/dev/null || true
     set -x
     docker run -d --name "${NAME_PREFIX}-router" \
-        --network host \
+        --network host --privileged \
         --entrypoint python3 "$IMAGE_URI" \
         -m sglang_router.launch_router \
             --pd-disaggregation \
             --prefill "http://${PREFILL_NODE_0_IP}:${PREFILL_PORT}" "${BOOTSTRAP_PORT}" \
-            --prefill "http://${PREFILL_NODE_1_IP}:${PREFILL_PORT}" "${BOOTSTRAP_PORT}" \
             --decode  "http://${DECODE_NODE_0_IP}:${DECODE_PORT}" \
-            --decode  "http://${DECODE_NODE_1_IP}:${DECODE_PORT}" \
             --policy round_robin \
             --host 0.0.0.0 --port "${ROUTER_PORT}"
     set +x
@@ -132,6 +136,19 @@ COMMON_ENV=(
     -e FI_PROVIDER=efa -e FI_EFA_USE_DEVICE_RDMA=1
     -e MOONCAKE_PROTOCOL=efa
     -e MC_FORCE_AUTO_DISCOVERY=1
+    # FI_HMEM must include cuda. Mooncake's EFA context does
+    # setenv("FI_HMEM", "system", 0) -- a default that only applies if the caller
+    # left it unset -- and that value tells libfabric to enable the system
+    # interface ONLY. The KV cache lives in GPU memory, and the EFA provider's
+    # fi_mr_reg() hardcodes FI_HMEM_SYSTEM, so Mooncake registers device buffers
+    # through fi_mr_regattr() with iface=FI_HMEM_CUDA -- which then fails
+    # "Operation not supported" because cuda was never enabled. The failure is
+    # again not fatal at startup: you get "fi_mr_regattr failed for GPU memory"
+    # plus "Failed to register memory region chunk 0 with EFA context 0" in the
+    # server log, startup completes, and the first KV transfer dies with
+    # "Memory region not registered by any active EFA device(s)" on prefill /
+    # "it might be dead" on decode.
+    -e FI_HMEM=system,cuda
 )
 # NVSHMEM is DeepEP's transport, and the UCCL image does not contain it -- the
 # LD_PRELOAD would resolve to a missing file. UCCL talks to EFA directly.
@@ -149,16 +166,23 @@ COMMON_MOUNTS=(
     -v "${HF_CACHE_DIR}/../dg-cache:/root/.cache/deep_gemm"
     -v "${HF_CACHE_DIR}/../sgl-cache:/root/.cache/sglang"
 )
+# --privileged is required for the KV path, on BOTH roles and for every backend.
+# Mooncake's memory_location.cpp asks the kernel which NUMA node each registered
+# buffer sits on, and that query is not permitted under Docker's default
+# capability set. The failure is not a permission error at startup: registration
+# logs "Failed to get NUMA node ... Operation not permitted", carries on, and then
+# the first KV transfer fails with "Memory region not registered by any active EFA
+# device(s)" on the prefill side and "it might be dead" on the decode side -- as if
+# the peer had crashed. Neither role is dead; the buffer was never registered
+# against a device. Confirmed with MOE_BACKEND=tp, which loads neither DeepEP nor
+# NVSHMEM, so this is Mooncake's registration path alone.
+# (UCCL needs the same privilege for a different reason: it registers GPU memory
+# for RDMA through the dma-buf/ibverbs path.)
 DOCKER_FLAGS=(
-    --gpus all --network host --ipc host
+    --gpus all --network host --ipc host --privileged
     --device /dev/infiniband --device /dev/gdrdrv
     --ulimit memlock=-1 --shm-size 32g
 )
-# UCCL registers GPU memory for RDMA through the dma-buf/ibverbs path, which
-# needs full privileges. DeepEP/NVSHMEM go through GDRCopy and do not.
-if [[ "$UCCL" == "1" ]]; then
-    DOCKER_FLAGS+=(--privileged)
-fi
 
 # --- precompile -------------------------------------------------------------
 # Warms the mounted DeepGEMM JIT cache. Required once per prefill host for
@@ -232,7 +256,7 @@ esac
 DP_FLAGS=()
 if [[ "$DP_ATTENTION" == "1" ]]; then
     DP_FLAGS=(--dp-size "$DP_SIZE" --enable-dp-attention --enable-dp-lm-head
-              --moe-dense-tp-size 1 --disable-radix-cache)
+              --moe-dense-tp-size 1)
     if [[ "$ROLE" == "decode" ]]; then
         # Without a pinned graph batch-size list, each of the 16 DP ranks
         # captures the whole default list and CUDA-graph capture OOMs; the
@@ -264,6 +288,10 @@ docker run -d --name "$NAME" \
             --nnodes ${NUM_NODES} --node-rank ${RANK} \
             --dist-init-addr ${DIST_ADDR} \
             --host 0.0.0.0 --port ${SERVE_PORT} \
+            `# Unconditional, and not a tuning choice -- see recipe/serve.sh. The` \
+            `# sweeps pin --seed, so cached prefixes from one point silently turn` \
+            `# the next point's prefill into a cache read (measured 12x).` \
+            --disable-radix-cache \
             --mem-fraction-static ${MEMFRAC} \
             --watchdog-timeout ${WATCHDOG_TIMEOUT:-1200} 2>&1
     "

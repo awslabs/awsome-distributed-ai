@@ -55,7 +55,7 @@ NVSHMEM_HOST_LIB=/opt/nvshmem/install/lib/libnvshmem_host.so.3.7.0
 
 set -x
 docker run --rm \
-    --gpus all --network host --ipc host \
+    --gpus all --network host --ipc host --privileged \
     --device /dev/infiniband --device /dev/gdrdrv \
     --ulimit memlock=-1 --shm-size 32g \
     -e MASTER_ADDR="$NODE_0_IP" -e MASTER_PORT="$PORT" \

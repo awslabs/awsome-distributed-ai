@@ -22,8 +22,8 @@ and [`ep-backend-comparison`](../../../../../micro-benchmarks/expert-parallelism
 
 | Stage | Winner | Margin |
 |---|---|---|
-| **Prefill** (large batches) | **DeepEP** | 161.5k input tok/s at 1K×conc256 — **3.0×** the best any other backend reaches at 1K |
-| **Decode** (small batches) | **UCCL-EP + DP-attention** | 4094 output tok/s at conc128, TPOT 28 ms — **1.9×** DeepEP, **1.13×** the best non-DP config |
+| **Prefill** (large batches) | **DeepEP** | 30.8k input tok/s at 4K×conc32 colocated — **+13%** over the best non-EP path, **+24%** over UCCL-EP, and the gap widens with concurrency |
+| **Decode** (small batches) | **UCCL-EP + DP-attention** | 4094 output tok/s at conc128, TPOT 28 ms in 2P2D — **1.5×** DeepEP+DP, **1.13×** the best non-DP config |
 
 Prefill and decode run on separate node groups in a PD deployment, so you can act on that: **DeepEP
 on the prefill role, UCCL-EP + DP-attention on the decode role.** That split is the most useful
@@ -31,15 +31,15 @@ result here and it exists only because the roles are disaggregated.
 
 **On decode at 16 GPUs, DeepEP loses to everything** — the ordinary all-to-all, pure TP, and
 UCCL-EP (the last of those confirmed in both topologies, under matched `--deepep-mode` and with a
-[cross-image control](#cross-image-control-the-decode-sweeps-transfer)). Expected at this scale, not a defect in the EFA port: with 16 ranks and 256 experts each
+[cross-image control](#cross-image-control-both-stages-transfer)). Expected at this scale, not a defect in the EFA port: with 16 ranks and 256 experts each
 GPU owns 16 experts, so the fan-out is small and mostly intra-node NVLink, and DeepEP's per-layer
 dispatch/combine cost is not amortised. DeepEP targets EP domains wide enough that every token must
 cross the fabric; that crossover is not reachable on 2 nodes for decode.
 
-**About half of DeepEP's apparent decode deficit is a mode-selection artefact.** Pinning
-`--deepep-mode low_latency` instead of `auto` doubles conc-32 throughput (274 → 554 tok/s), halves
-TPOT (115.9 → 54.5 ms) and cuts p99 ITL 5.5× (298 → 54 ms) — DeepEP still loses at 16 ranks, but by
-2.2× rather than 4.5×. See [Pinning `--deepep-mode`](#pinning---deepep-mode).
+**Every number below pins `--deepep-mode` to the stage being measured** — `normal` for prefill,
+`low_latency` for decode — and runs with the radix prefix cache off. Both are measurement
+requirements, not tuning: see [section 2](#2-pin---deepep-mode-to-the-stage-you-are-measuring) and
+[section 5](#5-disable-the-prefix-cache-or-the-sweep-measures-the-cache).
 
 **What the port establishes:** the DeepEP dispatch/combine kernels are correct and run at IB-class
 bandwidth over EFA with no InfiniBand present, in a real DeepSeek-R1 server, in both topologies.
@@ -110,21 +110,53 @@ server without capping prefill.
   `libnccl-net.so` name, where it auto-loads; do not infer the transport from the installer version.
 - **KV cache on EFA**, for 2P2D only. Requires
   [`MOONCAKE_PROTOCOL=efa`](#required-setting-mooncake_protocolefa) — omitting it silently falls back
-  to TCP.
+  to TCP — plus `--privileged` and `FI_HMEM=system,cuda`; see
+  [The 2P2D KV path has three container-level requirements](#the-2p2d-kv-path-has-three-container-level-requirements).
 - **Run the kernel tests first.** `recipe/run-kernel-test.sh intranode|low_latency|internode`. The
   first two are single-node and cheap; only `internode` puts bytes on EFA.
+
+## 5. Disable the prefix cache, or the sweep measures the cache
+
+`recipe/benchmark.sh` and `recipe/benchmark-pd.sh` pin `--seed 42`, so **every point that shares an
+input length replays the same prompts**. With SGLang's radix prefix cache on, the conc-1 point
+populates it and the conc-8/32 points that follow read their prefixes back instead of prefilling.
+Measured on one live server, 4096-in conc-8: **27.2k input tok/s with the cache flushed vs 334k on an
+immediate re-run of the identical point** — a 12× artefact. Nothing in the sweep output flags it, and
+the hit rate is not stable run to run, so it does not cancel out across a comparison either.
+
+Both serve scripts therefore pass `--disable-radix-cache` unconditionally. Confirm it took:
+
+```bash
+docker logs r1-deepep 2>&1 | grep -o "disable_radix_cache=[A-Za-z]*"   # want True
+```
+
+What it costs you, measured same-config back to back on the colocated decode sweep (input 256,
+output 512):
+
+| Concurrency | TPOT off/on (ms) | output tok/s off/on | TTFT off/on (ms) |
+|---|---|---|---|
+| 32  | 27.01 / 27.07 | 1156 / 1152 | 352 / 377 |
+| 64  | 29.72 / 29.64 | 2076 / 2109 | 579 / 379 |
+| 256 | 41.76 / 41.32 | 5736 / 5894 | 1465 / 1081 |
+| 512 | 55.37 / 53.37 | 8466 / 9101 | 2540 / 1402 |
+
+**TPOT is essentially immune (≤4%)**, `output tok/s` is inflated up to **7%** at conc 512 because it
+includes TTFT, and **TTFT itself moves ~1.8×**. So a decode ranking survives the cache; a prefill
+table does not. If you want to measure cache-hit behaviour, that is a separate experiment with varied
+prompts, not a side effect of a fixed seed.
 
 ## Comparability limits of the tables below
 
 1. **Single-seed smoke benchmarks.** One `bench_serving` pass per point — directional, not
    statistically tight. Low-concurrency prefill points (4–16 requests) are dominated by warmup.
-2. **`--deepep-mode` is not uniform.** Part 1's main tables and the non-DP 2P2D DeepEP rows use
-   `auto`; DeepEP+DP and every UCCL row pin `normal`/`low_latency` (UCCL requires the pinned form).
-   At low concurrency an `auto`-vs-pinned comparison understates DeepEP by about 2×.
-3. **UCCL rows come from a different image**, bridged by running `baseline` on both. The decode
-   control is tight — see [Cross-image control](#cross-image-control-the-decode-sweeps-transfer)
-   (±1.8% tok/s across the whole ramp). The prefill control is not: saturated points agree within
-   ±5%, low-concurrency ones diverge and are not comparable across images.
+2. **`--deepep-mode` is pinned everywhere**, `normal` for prefill and `low_latency` for decode. 2P2D
+   pins it per role by construction. Older `auto` measurements have been dropped rather than mixed
+   in: an `auto`-vs-pinned comparison understates DeepEP by about 2× at low concurrency.
+3. **UCCL rows come from a different image**, bridged by running `baseline` on both — and the bridge
+   holds on both stages. Decode agrees within ±1.8% tok/s across the whole ramp and prefill within
+   ±1% at every point; see
+   [Cross-image control](#cross-image-control-both-stages-transfer). So the DeepEP-vs-UCCL
+   margins below are the backend, not the image.
 4. **Server flags differ between topologies.** 2P2D used `--chunked-prefill-size 16384
    --watchdog-timeout 1200 --mem-fraction-static 0.82`; `recipe/serve.sh` takes SGLang's defaults
    (8192 / 300). The two topologies are not a controlled A/B for each other.
@@ -150,92 +182,67 @@ The UCCL columns come from a second image on the same two nodes,
 
 ## Prefill-only (`--random-output-len 1`, so TTFT ≈ prefill time)
 
-TTFT ms (lower better) / input tok/s (higher better). **Bold = best in row.**
+TTFT ms (lower better) / input tok/s (higher better). **Bold = best in row.** DeepEP and UCCL-EP both
+pin `--deepep-mode normal`, the prefill mode; all four columns have the radix prefix cache off (see
+[Disable the prefix cache](#5-disable-the-prefix-cache-or-the-sweep-measures-the-cache)).
 
-| Input × conc | pure TP | Baseline | DeepEP (`auto`) |
-|---|---|---|---|
-| 1024 × 1  | 88 / **11.5k** | 91 / 11.0k | 270 / 3.7k |
-| 4096 × 1  | **155** / **26.1k** | 179 / 22.6k | 347 / 11.5k |
-| 8192 × 1  | 210 / 38.7k | 217 / 37.5k | **297** / 27.2k |
-| 4096 × 8  | **850** / 35.9k | 1051 / 29.4k | 816 / **37.9k** |
-| 4096 × 32 | 3406 / 33.4k | 2059 / 49.9k | **1905** / **55.9k** |
+| Input × conc | pure TP | Baseline | DeepEP `normal` | UCCL-EP `normal` |
+|---|---|---|---|---|
+| 1024 × 1  | 100 / 10.1k | **98** / **10.2k** | 459 / 2.2k | 574 / 1.8k |
+| 4096 × 1  | **177** / **23.0k** | 189 / 21.5k | 474 / 8.6k | 577 / 7.1k |
+| 8192 × 1  | 377 / 21.6k | **349** / **23.3k** | 655 / 12.5k | 838 / 9.8k |
+| 4096 × 8  | 1145 / 25.9k | 1158 / 26.8k | **1010** / **30.2k** | 1328 / 23.0k |
+| 4096 × 32 | **4130** / 28.0k | 4304 / 26.8k | 3723 / **30.8k** | 4891 / 23.4k |
 
-**At low concurrency the non-EP paths win 2–3× on TTFT** — EP's per-layer dispatch/combine is not
-amortised when few tokens move. **DeepEP overtakes at concurrency ≥8** and leads clearly at conc 32.
-Part 2 continues that ramp to concurrency 256, where the margin becomes 3×.
+**At low concurrency the non-EP paths win 4–5×** — EP's per-layer dispatch/combine is not amortised
+when few tokens move, and at conc 1 that fixed cost is the whole measurement. **DeepEP overtakes at
+concurrency ≥8** (30.2k vs 26.8k, TTFT 1010 vs 1158 ms) and holds a ~13% lead at conc 32, with the
+ramp still rising while both non-EP columns have flattened. Part 2 continues to concurrency 256.
+
+**pure TP ≈ Baseline at every point** (within ±7%, no consistent winner) — at 16 GPUs the TP
+all-reduce and the ordinary fused-MoE all-to-all cost about the same.
 
 ## Decode-only (input 256, output 512, so TPOT dominates)
 
-Output tok/s (higher better) / mean TPOT ms (lower better). **Bold = best in row.**
+Output tok/s (higher better) / mean TPOT ms (lower better). **Bold = best in row.** DeepEP and
+UCCL-EP both pin `--deepep-mode low_latency`, the decode mode, with the cap chain from
+[section 3](#3-low_latency-on-a-colocated-server-needs-four-coupled-settings).
 
-| Concurrency | pure TP | Baseline | DeepEP (`auto`) |
-|---|---|---|---|
-| 32  | **1224** / **25.9** | 1170 / 27.1 | 274 / 115.9 |
-| 64  | **2161** / **29.3** | 2110 / 29.4 | 732 / 86.0 |
-| 256 | **5929** / 41.9 | 5888 / **41.3** | 2874 / 85.6 |
-| 512 | 8361 / 58.1 | **8939** / **53.7** | 6685 / 73.0 |
+| Concurrency | pure TP | Baseline | DeepEP `low_latency` | UCCL-EP `low_latency` |
+|---|---|---|---|---|
+| 32  | **1224** / **25.9** | 1170 / 27.1 | 554 / 54.5 | 761 / 38.1 |
+| 64  | **2161** / **29.3** | 2110 / 29.4 | 1021 / 59.3 | 1360 / 43.1 |
+| 256 | **5929** / 41.9 | 5888 / **41.3** | 2634 / 83.0 | 2961 / 69.1 |
+| 512 | 8361 / 58.1 | **8939** / **53.7** | 4371 / 96.2 | 4625 / 83.5 |
 
-**pure TP ≈ baseline, both far ahead of DeepEP** — 4.5× at conc 32, narrowing to 1.3× at conc 512 as
-DeepEP's fixed per-layer cost amortises. Same ordering as the 2P2D decode sweep, on the same
-hardware in a different topology.
+**pure TP ≈ Baseline, both far ahead of either EP backend** — 2.2× DeepEP at conc 32, narrowing to
+1.9× at conc 512. **UCCL-EP beats DeepEP at every point** (see
+[the direct comparison](#deepep-vs-uccl-ep-colocated-same-modes-and-same-harness)), but neither
+closes on the non-EP paths at 16 GPUs.
 
-The DeepEP column is `auto`. Pinning `low_latency` doubles the conc-32 row to **554 tok/s / 54.5
-ms**, cutting the gap to pure TP from 4.5× to 2.2×.
+The two non-EP columns above were measured with the radix prefix cache **on**; everything else in
+this document has it off. The affected metric is `output tok/s`, which includes TTFT — TPOT itself
+moves ≤4%. Measured same-config on/off: conc 512 reads 9101 vs 8466 tok/s (−7.0%) and 53.4 vs 55.4 ms
+TPOT (+3.7%), conc 32 reads 1152 vs 1156 (+0.4%). So the pure-TP/Baseline throughput above is up to
+~7% optimistic at high concurrency and the ordering is unaffected. See
+[section 5](#5-disable-the-prefix-cache-or-the-sweep-measures-the-cache).
 
-## Pinning `--deepep-mode`
+## `low_latency` on a colocated server: the chunk-cap trade
 
-Both pinned modes measured on the same cluster and harness, against the `auto` columns above.
+The cap chain that makes `low_latency` runnable colocated (cap 512, `--chunked-prefill-size 512`,
+`NVSHMEM_QP_DEPTH=1026`, `--mem-fraction-static 0.75`) also changes the workload, and the TTFT column
+is where that shows up. DeepEP `low_latency`, mean TTFT ms by concurrency: **1682 / 1728 / 7319 /
+10683** at conc 32 / 64 / 256 / 512.
 
-### `low_latency` decode: wins below conc ~64, loses above it
+TTFT rises ~6× from conc 64 to conc 512, because 512 concurrent prompts must be chunked through a
+512-token dispatch instead of 8192. A decode sweep counts TTFT in end-to-end throughput, so at high
+concurrency a colocated `low_latency` number is partly measuring the chunk cap, not the decode
+kernel — TPOT keeps improving while `output tok/s` does not.
 
-Cap 512, `--chunked-prefill-size 512`, `NVSHMEM_QP_DEPTH=1026`, `--mem-fraction-static 0.75`.
-Output tok/s / mean TPOT ms / mean TTFT ms:
-
-| Concurrency | DeepEP `auto` | DeepEP `low_latency` | tok/s delta |
-|---|---|---|---|
-| 32  | 274 / 115.9 / 505 | **554** / **54.5** / 1682 | **+102%** |
-| 64  | 732 / 86.0 / 777 | **1021** / **59.3** / 1728 | **+40%** |
-| 256 | **2874** / 85.6 / **1841** | 2634 / **83.0** / 7319 | −8% |
-| 512 | **6685** / 73.0 / **1752** | 4371 / 96.2 / 10683 | −35% |
-
-Two effects are stacked, and the TTFT column separates them:
-
-- **The kernel genuinely helps decode at small batch.** At conc 32–64, TPOT drops 47% and 31%, and
-  p99 ITL drops harder still (298 → 54 ms, 316 → 59 ms) — `auto`'s per-batch mode switching is what
-  produces those tail spikes, and pinning removes them.
-- **The 512-token prefill chunk cap dominates at large batch.** TTFT rises 4× at conc 256 and 6× at
-  conc 512, because 512 concurrent prompts must be chunked through a 512-token dispatch instead of
-  8192. A decode sweep still counts TTFT in end-to-end throughput, so the tok/s regression there is
-  mostly the chunk cap, not the decode kernel: TPOT at conc 256 is still marginally better than
-  `auto` (83.0 vs 85.6), and only at conc 512 does TPOT itself regress.
-
-**This is the concrete argument for PD disaggregation.** Colocated, the two effects are inseparable
-— you cannot take the low-latency kernel without the prefill chunk cap. Split the roles and you can:
-`serve-pd.sh` pins `low_latency` on decode nodes that never prefill, so the conc-32 gain comes with
-no TTFT penalty.
-
-The `auto` rows were measured on one node pair and the `low_latency` rows on another — identical
-instance type, image and flags, but not the same silicon. Treat the conc-32 doubling as real (far
-larger than any node-to-node spread seen in these runs) and the −8% at conc 256 as noise.
-
-### `normal` is slower than `auto` at every prefill point
-
-TTFT ms / input tok/s:
-
-| Input × conc | DeepEP `auto` | DeepEP `normal` | delta |
-|---|---|---|---|
-| 1024 × 1  | **270** / **3.7k** | 480 / 2.1k | −43% tok/s |
-| 4096 × 1  | **347** / **11.5k** | 445 / 9.2k | −20% |
-| 8192 × 1  | **297** / **27.2k** | 511 / 16.0k | −41% |
-| 4096 × 8  | **816** / **37.9k** | 950 / 31.9k | −16% |
-| 4096 × 32 | **1905** / **55.9k** | 2026 / 51.7k | −8% |
-
-The opposite of what "pin the high-throughput mode for prefill" predicts, and consistent at all five
-points. The gap narrows monotonically with concurrency (−43% at conc 1 → −8% at conc 32), consistent
-with `normal`'s dispatch setup not being amortised on small batches — which is most of this sweep. At
-the concurrency 256 that Part 2 reaches, pinned `normal` would plausibly catch up. Not measured.
-
-**So pinning `normal` buys attributability at a real throughput cost below conc ~32.**
+**This is the concrete argument for PD disaggregation.** Colocated, the two effects are inseparable —
+you cannot take the low-latency kernel without the prefill chunk cap. Split the roles and you can:
+`serve-pd.sh` pins `low_latency` on decode nodes that never prefill, so the small-batch TPOT gain
+comes with no TTFT penalty.
 
 ## DeepEP vs UCCL-EP, colocated, same modes and same harness
 
@@ -250,15 +257,15 @@ TTFT ms / input tok/s. **Bold = best in row.**
 
 | Input × conc | DeepEP `normal` | UCCL-EP `normal` | tok/s delta |
 |---|---|---|---|
-| 1024 × 1  | **480** / **2.1k** | 602 / 1.7k | −20% |
-| 4096 × 1  | **445** / **9.2k** | 572 / 7.2k | −22% |
-| 8192 × 1  | **511** / **16.0k** | 617 / 13.3k | −17% |
-| 4096 × 8  | **950** / **31.9k** | 1217 / 25.0k | −22% |
-| 4096 × 32 | **2026** / **51.7k** | 2649 / 39.5k | −24% |
+| 1024 × 1  | **459** / **2.2k** | 574 / 1.8k | −20% |
+| 4096 × 1  | **474** / **8.6k** | 577 / 7.1k | −18% |
+| 8192 × 1  | **655** / **12.5k** | 838 / 9.8k | −22% |
+| 4096 × 8  | **1010** / **30.2k** | 1328 / 23.0k | −24% |
+| 4096 × 32 | **3723** / **30.8k** | 4891 / 23.4k | −24% |
 
-**DeepEP wins prefill at every point by a flat 17–24%.** Same direction as the 2P2D prefill table and
-as UCCL's own kernel-level FP8 dispatch numbers: the `normal` high-throughput dispatch is UCCL's soft
-spot, and the margin does not close with concurrency here.
+**DeepEP wins prefill at every point by 18–24%.** Same direction as the 2P2D prefill table and as
+UCCL's own kernel-level FP8 dispatch numbers: the `normal` high-throughput dispatch is UCCL's soft
+spot, and the margin widens slightly with concurrency rather than closing.
 
 ### Decode, both pinned `low_latency`
 
@@ -272,9 +279,7 @@ Output tok/s / mean TPOT ms / p99 ITL ms. **Bold = best in row.**
 | 512 | 4371 / 96.2 / 465 | **4625** / **83.5** / **435** | **+6%** |
 
 **UCCL-EP wins decode at every point**, by 37% at conc 32 narrowing to 6% at conc 512, with TPOT
-30% lower where it matters. This reproduces the 2P2D ordering (UCCL-EP ahead of DeepEP on decode)
-under matched modes and in a single topology, which the 2P2D tables could not do — there DeepEP ran
-`auto` and UCCL ran pinned.
+30% lower where it matters. This is the ordering to trust: matched modes, one topology, one harness.
 
 Both backends' p99 ITL jumps ~8× at conc 512 (465 and 435 ms) while their mean TPOT keeps improving:
 that is the saturation tail, common to both, not a backend property.
@@ -282,11 +287,14 @@ that is the saturation tail, common to both, not a backend property.
 **Both stages, one sentence: prefill DeepEP, decode UCCL-EP** — the same split Part 2 recommends,
 now measured colocated with nothing else varying.
 
-## Cross-image control: the decode sweeps transfer
+## Cross-image control: both stages transfer
 
-The UCCL image is a different SGLang build, so a UCCL-vs-DeepEP decode number could be measuring the
-image rather than the backend. `MOE_BACKEND=baseline` touches neither DeepEP nor UCCL
-(`--moe-a2a-backend none`), so running it on both images isolates that. Same node pair, same sweep:
+The UCCL image is a different SGLang build, so any UCCL-vs-DeepEP number could be measuring the image
+rather than the backend. `MOE_BACKEND=baseline` touches neither DeepEP nor UCCL
+(`--moe-a2a-backend none`), so running it on both images isolates that. Same node pair, same sweeps,
+back to back.
+
+**Decode** (input 256, output 512) — output tok/s / mean TPOT ms:
 
 | Concurrency | baseline on DeepEP image | baseline on UCCL image | delta |
 |---|---|---|---|
@@ -295,17 +303,36 @@ image rather than the backend. `MOE_BACKEND=baseline` touches neither DeepEP nor
 | 256 | 5888 / 41.3 | 5894 / 41.3 | +0.1% |
 | 512 | 8939 / 53.7 | 9101 / 53.4 | +1.8% |
 
-Output tok/s / mean TPOT ms. **Within ±1.8% on throughput and ±0.6% on TPOT at every point**, so the
-decode differences above are the backend, not the image. This is what the earlier 2P2D runs lacked —
-they only controlled prefill, where the two images do *not* agree at low concurrency.
+**Prefill** (`--random-output-len 1`, cache off on both sides) — TTFT ms / input tok/s:
+
+| Input × conc | baseline on DeepEP image | baseline on UCCL image | tok/s delta |
+|---|---|---|---|
+| 1024 × 1  | 98 / 10.2k  | 99 / 10.1k  | −0.9% |
+| 4096 × 1  | 189 / 21.5k | 190 / 21.4k | −0.7% |
+| 8192 × 1  | 349 / 23.3k | 346 / 23.6k | +1.0% |
+| 4096 × 8  | 1158 / 26.8k | 1154 / 26.9k | +0.4% |
+| 4096 × 32 | 4317 / 26.8k | 4304 / 26.9k | +0.3% |
+
+**Within ±1.8% on decode and ±1% on prefill at every point.** Both images are the same machine as far
+as these workloads are concerned, so the DeepEP-vs-UCCL margins above are the backend. (An earlier
+version of this control failed on prefill at low concurrency; that was the prefix cache, not the
+image — see [section 5](#5-disable-the-prefix-cache-or-the-sweep-measures-the-cache).)
 
 ---
 
 # Part 2 — 4-node 2P2D PD-disaggregated (`recipe/serve-pd.sh`)
 
 **Cluster:** 4× `p5en.48xlarge` (8×H200 141 GB, `sm_90`), us-east-2, 16 EFA NICs/node, iface
-`enp71s0`. Date: 2026-06-24. SGLang 0.5.13.post1. Benched through the router with `--pd-separated`
-and `--random-range-ratio 1`.
+`enp71s0`. SGLang 0.5.13.post1. Benched through the router with `--pd-separated` and
+`--random-range-ratio 1`.
+
+> **Read Part 2 as directional.** Unlike Part 1, these sweeps predate two of the measurement rules
+> above. The DeepEP rows ran `--deepep-mode auto` rather than pinned per role, and the radix prefix
+> cache was on for the non-DP rows and off for the DP rows — so a "DP effect" column mixes the DP
+> lever with a cache difference. Both effects push in DeepEP's favour on prefill and neither is
+> quantified here. The *shape* of Part 2 (DeepEP wins prefill, loses decode; DP-attention reverses the
+> decode order and hurts prefill) is confirmed independently by the clean Part 1 tables; the absolute
+> figures below, especially the 161.5k 1K-prefill peak, are not directly comparable to Part 1's.
 
 ```
   Prefill role (TP=16 / EP=16)          Decode role (TP=16 / EP=16)
@@ -546,6 +573,32 @@ docker logs r1-pd-prefill 2>&1 | grep -E 'EfaTransport|Installing TCP transport'
 contention — it reproduces with `MOE_BACKEND=tp`, which never loads DeepEP. The KV path is
 Mooncake's alone.
 
+## The 2P2D KV path has three container-level requirements
+
+`MOONCAKE_PROTOCOL=efa` is one of three. All three share a failure signature that makes them hard to
+tell apart: **each one logs a warning, lets startup complete, passes the built-in PD warmup, and then
+kills the first real KV transfer.** The visible error is always on the wrong side — prefill reports
+`Decode instance could be dead, remote mooncake session <ip:port> is not alive`, decode reports
+`Failed to get kvcache from prefill instance, it might be dead`. Nothing is dead; the buffers were
+never registered. `recipe/serve-pd.sh` sets all three for both roles and every backend.
+
+| Requirement | Warning it emits | Why |
+|---|---|---|
+| `--privileged` | `memory_location.cpp: Failed to get NUMA node, addr: … Operation not permitted` | Mooncake asks the kernel which NUMA node each registered buffer sits on; the query is not permitted under Docker's default capability set. |
+| `FI_HMEM=system,cuda` | `efa_context.cpp: fi_mr_regattr failed for GPU memory … Operation not supported` then `Failed to register memory region chunk 0 with EFA context 0` | The KV cache is GPU memory, and the EFA provider's `fi_mr_reg()` hardcodes `FI_HMEM_SYSTEM`, so Mooncake registers device buffers via `fi_mr_regattr(iface=FI_HMEM_CUDA)`. Mooncake's own default is `setenv("FI_HMEM", "system", 0)` — system **only** — so leaving it unset disables the very interface it then asks for. |
+| `MOONCAKE_PROTOCOL=efa` | `Installing TCP transport` | Silent fallback to sockets; see above. |
+
+Verify all three on one role before benchmarking — this must print nothing:
+
+```bash
+docker logs r1-pd-decode 2>&1 | grep -E "Operation not permitted|fi_mr_regattr failed|Installing TCP transport"
+```
+
+**The PD warmup does not cover this.** SGLang's own disaggregation warmup request succeeds even with
+GPU-memory registration broken (its 4-token prompt takes a path that does not need it), so
+`The server is fired up and ready to roll!` plus a 200 from the warmup is not evidence the KV path
+works. Send one real request through the router instead.
+
 ## UCCL-EP launch configuration that actually matters
 
 Reproducing the UCCL rows needs four things DeepEP does not. Getting them wrong produces a SIGSEGV
@@ -710,13 +763,9 @@ Then repeat with `MOE_BACKEND=baseline`, `MOE_BACKEND=tp`, and `DP_ATTENTION=1` 
 
 # Open items
 
-- **Re-run the 2P2D sweep with the Part 1 harness** (`--random-range-ratio 1` was already set, but
-  `--warmup-requests` was not scaled) so both parts share a harness exactly.
-- **Add a cross-image *prefill* control.** The decode one is
-  [done](#cross-image-control-the-decode-sweeps-transfer); prefill still diverges between the two
-  images at low concurrency, so the Part 2 prefill UCCL column stays weaker evidence than its decode
-  columns.
-- **Pin `--deepep-mode` on the 2P2D DeepEP rows** as Part 1 now does.
+- **Re-measure Part 2 under the Part 1 rules** — prefix cache off on every row and `--deepep-mode`
+  pinned per role — so the DP-effect columns isolate the DP lever alone and the two parts share a
+  harness exactly. `recipe/serve-pd.sh` now does both by construction; only the tables are stale.
 - **The per-role split recommendation is inferred, not measured.** DeepEP prefill and UCCL+DP decode
   were each measured in a same-backend-both-roles deployment; the mixed deployment was never run end
   to end. It should work — the roles share only the KV stream — but it is untested.
