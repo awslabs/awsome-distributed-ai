@@ -136,19 +136,16 @@ COMMON_ENV=(
     -e FI_PROVIDER=efa -e FI_EFA_USE_DEVICE_RDMA=1
     -e MOONCAKE_PROTOCOL=efa
     -e MC_FORCE_AUTO_DISCOVERY=1
-    # FI_HMEM must include cuda. Mooncake's EFA context does
-    # setenv("FI_HMEM", "system", 0) -- a default that only applies if the caller
-    # left it unset -- and that value tells libfabric to enable the system
-    # interface ONLY. The KV cache lives in GPU memory, and the EFA provider's
-    # fi_mr_reg() hardcodes FI_HMEM_SYSTEM, so Mooncake registers device buffers
-    # through fi_mr_regattr() with iface=FI_HMEM_CUDA -- which then fails
-    # "Operation not supported" because cuda was never enabled. The failure is
-    # again not fatal at startup: you get "fi_mr_regattr failed for GPU memory"
-    # plus "Failed to register memory region chunk 0 with EFA context 0" in the
-    # server log, startup completes, and the first KV transfer dies with
-    # "Memory region not registered by any active EFA device(s)" on prefill /
-    # "it might be dead" on decode.
-    -e FI_HMEM=system,cuda
+    # Do NOT set FI_HMEM here. Mooncake's EFA context only defaults it to
+    # "system" on a non-GPU build, so a GPU build already leaves CUDA enabled --
+    # and setting it explicitly makes fi_getinfo return FI_ENODATA for every
+    # device ("fi_getinfo failed for device rdmapXXs0: No data available",
+    # then "EfaTransport: Disable device ..." for all 32, then a hard
+    # "Mooncake Transfer Engine initialization failed" at startup).
+    # FI_EFA_USE_DATA_PATH_DIRECT changes nothing here either -- both the "efa"
+    # and "efa-direct" fabrics are enumerated regardless. See the KV-path note in
+    # benchmarks/README.md for the GPU-registration limitation that is currently
+    # open on this image.
 )
 # NVSHMEM is DeepEP's transport, and the UCCL image does not contain it -- the
 # LD_PRELOAD would resolve to a missing file. UCCL talks to EFA directly.
