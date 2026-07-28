@@ -4,7 +4,7 @@
 #
 # Benchmark a running 2P2D deployment through the router. Prefill and decode are
 # swept separately because the two stages stress the MoE all-to-all in opposite
-# directions (see benchmarks/RESULTS-2p2d.md, where the two stages have
+# directions (see benchmarks/README.md, where the two stages have
 # different winners):
 #
 #   prefill : --random-output-len 1     => TTFT is ~pure prefill time
@@ -29,6 +29,7 @@ STAGE=${1:?need STAGE: prefill | decode}
 : "${IMAGE_URI:?source setup/env_vars first}"
 : "${MODEL:?source setup/env_vars first}"
 : "${ROUTER_IP:?source setup/env_vars first}"
+: "${HF_CACHE_DIR:?source setup/env_vars first}"
 MOE_BACKEND=${MOE_BACKEND:-deepep}
 DP_ATTENTION=${DP_ATTENTION:-0}
 ROUTER_PORT=${ROUTER_PORT:-8000}
@@ -88,8 +89,14 @@ for point in "${POINTS[@]}"; do
     # --pd-separated makes the harness attribute TTFT/TPOT correctly across the
     # disaggregated roles; --random-range-ratio 1 pins the input length exactly
     # (the default jitters it, which blurs the per-length comparison).
+    # Mount the HF cache: --dataset-name random still downloads the 256 MB
+    # ShareGPT blob for its token ids, and --rm means an unmounted cache refetches
+    # it per point (and can stall for tens of minutes inside huggingface_hub --
+    # see the note in benchmark.sh).
     docker run --rm --network host \
         -v "${OUT_DIR}:/out" \
+        -v "${HF_CACHE_DIR}:/hf" -e HF_HOME=/hf \
+        -e HF_TOKEN="${HF_TOKEN:-}" \
         --entrypoint python3 "$IMAGE_URI" \
         -m sglang.bench_serving \
             --backend sglang-oai \

@@ -13,7 +13,7 @@ DeepEP all-to-all, SGLang's ordinary fused-MoE all-to-all, and pure tensor paral
 three can be measured on identical hardware and fabric. `recipe/serve-pd.sh` does the same in a
 **4-node prefill/decode-disaggregated (2P2D)** topology, with the KV cache moving over EFA RDMA via
 Mooncake — which is where the interesting result is, because **prefill and decode pick different
-winners** ([`benchmarks/RESULTS-2p2d.md`](./benchmarks/RESULTS-2p2d.md)).
+winners** ([`benchmarks/`](./benchmarks/README.md)).
 
 | | |
 |---|---|
@@ -168,7 +168,7 @@ Three things to know before running this on Blackwell:
 - **`9.0` is not just a subset.** `setup_deepep_efa.sh` enables DeepEP's aggressive PTX
   instructions only when the arch list is exactly `9.0` (they are Hopper-specific). A multi-arch
   image therefore builds Hopper *without* them — pass `TORCH_CUDA_ARCH_LIST=9.0` to reproduce the
-  H100/H200 numbers in [`benchmarks/RESULTS.md`](./benchmarks/RESULTS.md) exactly.
+  H200 numbers in [`benchmarks/`](./benchmarks/README.md) exactly.
 - **A `p6-b300.48xlarge` has 16 EFA NICs, not `p5`'s 32.** Nothing in the launchers needs changing,
   but `IFACE` in `setup/env_vars` is not `enp71s0` there — check `ip -br link`.
 
@@ -176,7 +176,7 @@ Three things to know before running this on Blackwell:
 `567632d` + EFA patch, same NVSHMEM 3.7.0, is measured out to 256 ranks on `p6-b300` in
 [`ep-backend-comparison`](../../../../micro-benchmarks/expert-parallelism/ep-backend-comparison/RESULTS.md).
 The serving-side gap matters, because **on B300 the published SGLang comparison goes the other
-way**: see [Blackwell: expect DeepEP to lose at 2 nodes](./benchmarks/RESULTS.md#blackwell-expect-deepep-to-lose-at-2-nodes).
+way**: see [Blackwell: expect DeepEP to lose at 2 nodes](./benchmarks/README.md#blackwell-expect-deepep-to-lose-at-2-nodes).
 
 ## Smoke-test the EFA transport before loading the model
 
@@ -256,7 +256,7 @@ through dma-buf/ibverbs, which DeepEP does not need) and drops the decode `--mem
 to 0.70. The script always pins `--deepep-mode` per role, which UCCL requires — with
 `--deepep-mode auto` its prefill path segfaults at startup. It is worth the trouble for one reason:
 **with DP-attention, UCCL-EP is the fastest decode configuration measured**
-([RESULTS-2p2d.md](./benchmarks/RESULTS-2p2d.md#dp-attention-the-lever-that-reverses-the-decode-ranking)).
+([`benchmarks/`](./benchmarks/README.md#dp-attention-the-lever-that-reverses-the-decode-ranking)).
 
 ## Benchmark
 
@@ -278,9 +278,9 @@ recipe/benchmark-pd.sh prefill
 
 Measured numbers, with caveats to read before quoting anything:
 
-- [`benchmarks/RESULTS.md`](./benchmarks/RESULTS.md) — colocated 2-node, H200 and H100.
-- [`benchmarks/RESULTS-2p2d.md`](./benchmarks/RESULTS-2p2d.md) — 2P2D, four MoE backends
-  (DeepEP / baseline / pure TP / UCCL-EP) × prefill and decode, ± DP-attention.
+[`benchmarks/README.md`](./benchmarks/README.md) — all H200, in two parts: the colocated 2-node
+topology this sample's `serve.sh` launches, and the 4-node 2P2D topology with four MoE backends
+(DeepEP / baseline / pure TP / UCCL-EP) × prefill and decode, ± DP-attention.
 
 The short version: **no single backend wins both stages.** DeepEP takes prefill decisively —
 161.5k input tok/s at 1K×conc256, 3× everything else — while on decode at 16 GPUs it is last, and
@@ -316,9 +316,12 @@ referenced. Drift should be guarded in CI alongside the other vendored copy — 
 - **Serving is validated on Hopper only.** The image builds for Blackwell (`sm_100`/`sm_103`) and
   the DeepEP-EFA kernels are measured on `p6-b300` in `ep-backend-comparison`, but no end-to-end
   serving run on Blackwell is in this repo. Do not assume the H100/H200 backend ranking transfers —
-  it does not ([RESULTS.md](./benchmarks/RESULTS.md#blackwell-expect-deepep-to-lose-at-2-nodes)).
+  it does not ([`benchmarks/`](./benchmarks/README.md#blackwell-expect-deepep-to-lose-at-2-nodes)).
 - **DeepEP pinned to `567632d`** (pre-EPv2). The setup script hard-checks the tree and its EFA
   patch only applies at that commit. EPv2 restructures the kernels and moves to the NCCL GIN
   backend, which is out of scope.
-- `--deepep-mode auto` leaves CUDA VMM enabled for the whole server, since the decode path needs
-  it. If you pin `--deepep-mode normal`, set `NVSHMEM_DISABLE_CUDA_VMM=1` as well.
+- **`--deepep-mode` and CUDA VMM are coupled.** `low_latency`/`auto` need VMM enabled (the
+  low-latency RDMA buffers), `normal` needs `NVSHMEM_DISABLE_CUDA_VMM=1` (or NVSHMEM's
+  topology/transport-map init fails in-container). `recipe/serve.sh` derives this from `DEEPEP_MODE`
+  and `recipe/serve-pd.sh` from the role, so pass the mode rather than setting VMM by hand. Getting
+  it wrong is a startup failure, not a slow server.

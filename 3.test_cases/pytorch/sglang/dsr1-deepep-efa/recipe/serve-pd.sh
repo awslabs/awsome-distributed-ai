@@ -28,7 +28,7 @@
 #
 # DP_ATTENTION=1 additionally runs attention data-parallel across all 16 ranks.
 # It is orthogonal to MOE_BACKEND and it reverses the decode ranking — see
-# benchmarks/RESULTS-2p2d.md. It also needs two things this script handles:
+# benchmarks/README.md. It also needs two things this script handles:
 #   - `precompile` must be run first on BOTH prefill nodes for deepep, or
 #     DeepEP's dispatch warmup times out while DeepGEMM JIT-compiles the
 #     num_groups=16 grouped-GEMM shapes.
