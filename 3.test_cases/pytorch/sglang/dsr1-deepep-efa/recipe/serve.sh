@@ -50,45 +50,29 @@ case "$MOE_BACKEND" in
         PARALLEL=(--tp-size "$TP_SIZE" --ep-size "$EP_SIZE")
         # DEEPEP_MODE selects the dispatch/combine kernels:
         #   normal      = high-throughput; pin it when benchmarking prefill
-        #   low_latency = decode-optimised; pin it when benchmarking decode, but
-        #                 read the token-cap note below first -- on a COLOCATED
-        #                 server it needs three more settings or it crashes
+        #   low_latency = decode-optimised; pin it when benchmarking decode
         #   auto        = SGLang picks per batch (default; what a deployment runs)
         #
-        # LOW_LATENCY TOKEN CAP. The low-latency dispatch caps tokens per rank per
-        # call at SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK, default 128. In a
-        # colocated server the same ranks also serve prefill, where a chunk is
-        # chunked_prefill_size tokens (8192 by default) -- far over the cap. The
-        # server starts, answers /health, then every rank dies on the first real
-        # request with:
-        #   deep_ep.cpp:1553 'x.size(0) <= num_max_dispatch_tokens_per_rank'
-        # (measured on 2 x p5en, 2026-07-28: 8/8 ranks down on request one).
-        #
-        # So pinning low_latency here also requires FOUR settings, which this
-        # script applies for you. LL_MAX_TOKENS is the cap (default 512):
-        #   1. SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=$LL_MAX_TOKENS
-        #      SGLang asserts <= 1024: DeepEP internode low-latency dispatch uses
+        # low_latency on a COLOCATED server needs four coupled settings, which the
+        # block below applies from LL_MAX_TOKENS (default 512). The low-latency
+        # dispatch caps tokens per rank per call, and here the same ranks also serve
+        # prefill, whose chunks are far larger:
+        #   1. SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK = the cap. Must be
+        #      <= 1024; DeepEP's internode low-latency dispatch uses
         #      FINISHED_SUM_TAG=1024 and needs the per-rank-pair count below it.
-        #   2. --chunked-prefill-size $LL_MAX_TOKENS, so prefill chunks fit the cap.
-        #   3. NVSHMEM_QP_DEPTH >= (LL_MAX_TOKENS + 1) * 2, asserted in
-        #      deep_ep/buffer.py:601. Its default is 1024, which only covers a cap
-        #      of 511 -- so raising the cap without this fails the same way, on the
-        #      first request, after /health has already gone green.
-        #   4. A lower --mem-fraction-static (0.75 instead of 0.85). The
-        #      low-latency RDMA buffers scale with the cap: at 1024 a single
-        #      low_latency_dispatch allocation is 1.75 GiB and scheduler init dies
-        #      with torch.OutOfMemoryError on 141GB H200 at 0.85.
+        #   2. --chunked-prefill-size = the cap, so prefill chunks fit it.
+        #   3. NVSHMEM_QP_DEPTH >= (cap + 1) * 2 (deep_ep/buffer.py:601). Its
+        #      default 1024 only covers a cap of 511.
+        #   4. --mem-fraction-static 0.75: the low-latency RDMA buffers scale with
+        #      the cap, 1.75 GiB per allocation at cap 1024.
+        # All four fail on the FIRST REQUEST, after /health already returns 200, so
+        # a green health check proves nothing. 512/0.75 is what fits 141GB H200;
+        # override via LL_MAX_TOKENS / MEM_FRACTION_STATIC if you have headroom.
         #
-        # Constraints 1 and 3 squeeze from opposite sides and 4 prices the result,
-        # so the default cap here is 512, not the 1024 maximum: 512 still covers a
-        # concurrency-512 decode batch and leaves the buffers room. Override with
-        # LL_MAX_TOKENS / MEM_FRACTION_STATIC if you have the headroom.
-        #
-        # Step 2 is a real workload change: cap-sized prefill chunks instead of
-        # 8192. So DEEPEP_MODE=low_latency is for measuring DECODE ONLY; prefill
-        # numbers taken under it are not comparable to anything.
-        #
-        # serve-pd.sh needs none of this: there the decode role never prefills.
+        # Setting 2 changes the workload (cap-sized prefill chunks instead of 8192),
+        # so DEEPEP_MODE=low_latency measures DECODE ONLY -- prefill numbers taken
+        # under it are not comparable to anything. serve-pd.sh needs none of this:
+        # there the decode role never prefills.
         A2A=(--moe-a2a-backend deepep --deepep-mode "${DEEPEP_MODE:-auto}")
         if [[ "${DEEPEP_MODE:-auto}" == "low_latency" ]]; then
             LL_MAX_TOKENS=${LL_MAX_TOKENS:-512}
