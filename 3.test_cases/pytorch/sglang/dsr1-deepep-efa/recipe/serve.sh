@@ -19,6 +19,12 @@
 #   baseline = SGLang's ordinary fused-MoE all-to-all over NCCL, still EP
 #   tp       = no expert parallelism at all; MoE weights TP-sharded, the only
 #              cross-GPU traffic is the TP all-reduce (no dispatch/combine)
+#
+# To benchmark UCCL-EP instead of DeepEP, point IMAGE_URI at an SGLang image built
+# with UCCL's ep/deep_ep_wrapper (which presents UCCL under DeepEP's Python API, so
+# --moe-a2a-backend deepep drives it unchanged) and set UCCL=1. That image is not in
+# this repo -- see the README. UCCL needs --privileged, a pinned --deepep-mode, and
+# a lower --mem-fraction-static; all three are applied below when UCCL=1.
 
 set -euo pipefail
 
@@ -30,6 +36,7 @@ NODE_RANK=${1:?need NODE_RANK (0 or 1)}
 : "${HF_CACHE_DIR:?source setup/env_vars first}"
 : "${IFACE:?source setup/env_vars first}"
 MOE_BACKEND=${MOE_BACKEND:-deepep}
+UCCL=${UCCL:-0}
 LL_ENV=()
 NUM_NODES=${NUM_NODES:-2}
 TP_SIZE=${TP_SIZE:-16}
@@ -73,13 +80,27 @@ case "$MOE_BACKEND" in
         # so DEEPEP_MODE=low_latency measures DECODE ONLY -- prefill numbers taken
         # under it are not comparable to anything. serve-pd.sh needs none of this:
         # there the decode role never prefills.
+        #
+        # UCCL cannot run auto at all: its prefill path segfaults at startup. So
+        # DEEPEP_MODE is required, not defaulted, when UCCL=1 -- either default
+        # would be wrong for one of the two stages.
+        if [[ "$UCCL" == "1" && -z "${DEEPEP_MODE:-}" ]]; then
+            echo "ERROR: UCCL=1 requires DEEPEP_MODE=normal (prefill) or low_latency (decode)." >&2
+            echo "       --deepep-mode auto segfaults UCCL's prefill path at startup." >&2
+            exit 1
+        fi
         A2A=(--moe-a2a-backend deepep --deepep-mode "${DEEPEP_MODE:-auto}")
         if [[ "${DEEPEP_MODE:-auto}" == "low_latency" ]]; then
             LL_MAX_TOKENS=${LL_MAX_TOKENS:-512}
             MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC:-0.75}
             A2A+=(--chunked-prefill-size "$LL_MAX_TOKENS")
-            LL_ENV=(-e "SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=$LL_MAX_TOKENS"
-                    -e "NVSHMEM_QP_DEPTH=$(( (LL_MAX_TOKENS + 1) * 2 ))")
+            LL_ENV=(-e "SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=$LL_MAX_TOKENS")
+            # Setting 3 is NVSHMEM's, so it is DeepEP-only. Keeping settings 1-2
+            # for UCCL as well is deliberate: the two backends then serve the
+            # same workload and their numbers stay comparable.
+            if [[ "$UCCL" != "1" ]]; then
+                LL_ENV+=(-e "NVSHMEM_QP_DEPTH=$(( (LL_MAX_TOKENS + 1) * 2 ))")
+            fi
         fi
         NAME=r1-deepep ;;
     baseline)
@@ -90,8 +111,19 @@ case "$MOE_BACKEND" in
         echo "ERROR: MOE_BACKEND must be deepep, baseline or tp" >&2; exit 1 ;;
 esac
 
-# Everything except low_latency (which set 0.75 above) gets the usual 0.85.
+# Everything except low_latency (which set 0.75 above) gets the usual 0.85. Both
+# backends get the same value here on purpose, so their tables stay comparable;
+# 0.75 has been verified to hold UCCL's larger low_latency RDMA buffers too.
+# (serve-pd.sh drops the UCCL decode role to 0.70 -- there the low_latency cap
+# chain does not apply, so nothing else lowers it.)
 MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC:-0.85}
+
+# UCCL registers GPU memory for RDMA through the dma-buf/ibverbs path, which needs
+# full privileges. DeepEP/NVSHMEM go through GDRCopy and do not.
+PRIV=()
+if [[ "$UCCL" == "1" ]]; then
+    PRIV=(--privileged)
+fi
 
 mkdir -p "${HF_CACHE_DIR}" "${HF_CACHE_DIR}/../dg-cache" "${HF_CACHE_DIR}/../sgl-cache"
 
@@ -104,14 +136,30 @@ mkdir -p "${HF_CACHE_DIR}" "${HF_CACHE_DIR}/../dg-cache" "${HF_CACHE_DIR}/../sgl
 #                         transport-map init fails in-container.
 # Getting this wrong is a startup failure, not a slow server. See README.
 VMM_ENV=()
-if [[ "$MOE_BACKEND" == "deepep" && "${DEEPEP_MODE:-auto}" == "normal" ]]; then
+if [[ "$UCCL" != "1" && "$MOE_BACKEND" == "deepep" && "${DEEPEP_MODE:-auto}" == "normal" ]]; then
     VMM_ENV=(-e NVSHMEM_DISABLE_CUDA_VMM=1)
+fi
+
+# NVSHMEM is DeepEP's transport only. UCCL talks to EFA directly and its image
+# does not contain NVSHMEM at all, so the LD_PRELOAD would name a missing file;
+# baseline/tp never load it either. Set it only where it is used.
+NVSHMEM_ENV=()
+if [[ "$UCCL" == "1" ]]; then
+    NVSHMEM_ENV=(-e MOONCAKE_PROTOCOL=efa -e MC_FORCE_AUTO_DISCOVERY=1)
+elif [[ "$MOE_BACKEND" == "deepep" ]]; then
+    NVSHMEM_ENV=(
+        -e NVSHMEM_REMOTE_TRANSPORT=libfabric
+        -e NVSHMEM_LIBFABRIC_PROVIDER=efa
+        -e NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE
+        -e NVSHMEM_BOOTSTRAP=UID
+        -e LD_PRELOAD=/opt/nvshmem/install/lib/libnvshmem_host.so.3.7.0
+    )
 fi
 
 docker rm -f "$NAME" 2>/dev/null || true
 set -x
 docker run -d --name "$NAME" \
-    --gpus all --network host --ipc host \
+    --gpus all --network host --ipc host "${PRIV[@]}" \
     --device /dev/infiniband --device /dev/gdrdrv \
     --ulimit memlock=-1 --shm-size 32g \
     -v "${HF_CACHE_DIR}:/hf" -e HF_HOME=/hf \
@@ -121,12 +169,7 @@ docker run -d --name "$NAME" \
     -e NCCL_SOCKET_IFNAME="$IFACE" -e GLOO_SOCKET_IFNAME="$IFACE" \
     -e NCCL_NET_PLUGIN=ofi \
     -e FI_PROVIDER=efa -e FI_EFA_USE_DEVICE_RDMA=1 \
-    -e NVSHMEM_REMOTE_TRANSPORT=libfabric \
-    -e NVSHMEM_LIBFABRIC_PROVIDER=efa \
-    -e NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE \
-    -e NVSHMEM_BOOTSTRAP=UID \
-    "${VMM_ENV[@]}" "${LL_ENV[@]}" \
-    -e LD_PRELOAD=/opt/nvshmem/install/lib/libnvshmem_host.so.3.7.0 \
+    "${NVSHMEM_ENV[@]}" "${VMM_ENV[@]}" "${LL_ENV[@]}" \
     --entrypoint bash "$IMAGE_URI" -c "
         python3 -m sglang.launch_server \
             --model-path ${MODEL} --trust-remote-code \

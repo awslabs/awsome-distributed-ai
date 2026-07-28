@@ -246,17 +246,27 @@ Before trusting any number, confirm the KV path came up on EFA rather than TCP:
 docker logs r1-pd-prefill 2>&1 | grep -E 'EfaTransport|Installing TCP transport'
 ```
 
-`UCCL=1` is for benchmarking **UCCL-EP** in the same topology. It needs an SGLang image built with
-UCCL's `ep/deep_ep_wrapper` (which exposes UCCL under DeepEP's Python API, so
-`--moe-a2a-backend deepep` drives it unchanged) — **that image is not in this repo**; the closest
-starting points are [`uccl-ep-benchmark`](../../../../micro-benchmarks/expert-parallelism/uccl-ep-benchmark)
-(kernels only) and [`dsv3-uccl-nixl`](../../vllm/dsv3-uccl-nixl) (the same wrapper on vLLM). Point
-`IMAGE_URI` at it and set `UCCL=1`: that switches on `--privileged` (UCCL registers GPU memory
-through dma-buf/ibverbs, which DeepEP does not need) and drops the decode `--mem-fraction-static`
-to 0.70. The script always pins `--deepep-mode` per role, which UCCL requires — with
-`--deepep-mode auto` its prefill path segfaults at startup. It is worth the trouble for one reason:
-**with DP-attention, UCCL-EP is the fastest decode configuration measured**
-([`benchmarks/`](./benchmarks/README.md#dp-attention-the-lever-that-reverses-the-decode-ranking)).
+`UCCL=1` benchmarks **UCCL-EP** in either topology, from the second image in this directory,
+[`Dockerfile.uccl`](./Dockerfile.uccl):
+
+```bash
+docker build -t ucclep-sglang-efa:latest -f Dockerfile.uccl .
+```
+
+Same base, EFA and Mooncake stack as `Dockerfile`, with UCCL's `ep/deep_ep_wrapper` in place of
+DeepEP/NVSHMEM. The wrapper exposes UCCL under DeepEP's Python API, so `--moe-a2a-backend deepep`
+drives it unchanged and the image is the only variable. Hopper-only; for Blackwell or for kernels
+without a serving engine see
+[`uccl-ep-benchmark`](../../../../micro-benchmarks/expert-parallelism/uccl-ep-benchmark), and for
+UCCL under vLLM see [`dsv3-uccl-nixl`](../../vllm/dsv3-uccl-nixl).
+
+Point `IMAGE_URI` at it and set `UCCL=1`: that switches on `--privileged` (UCCL registers GPU memory
+through dma-buf/ibverbs, which DeepEP does not need), drops the NVSHMEM environment UCCL has no use
+for, drops the 2P2D decode role's `--mem-fraction-static` to 0.70, and makes `DEEPEP_MODE`
+mandatory — with `--deepep-mode auto` UCCL's prefill path segfaults at startup. It is worth the
+trouble for one reason: **UCCL-EP wins decode**, by 6–37% over DeepEP colocated and, with
+DP-attention on the disaggregated decode role, at 4094 tok/s / TPOT 28 ms — the fastest decode
+measured here ([`benchmarks/`](./benchmarks/README.md#decode-both-pinned-low_latency)).
 
 ## Benchmark
 
@@ -283,8 +293,9 @@ topology this sample's `serve.sh` launches, and the 4-node 2P2D topology with fo
 (DeepEP / baseline / pure TP / UCCL-EP) × prefill and decode, ± DP-attention.
 
 The short version: **no single backend wins both stages.** DeepEP takes prefill decisively —
-161.5k input tok/s at 1K×conc256, 3× everything else — while on decode at 16 GPUs it is last, and
-pure TP ≈ baseline lead. With DP-attention on, UCCL-EP takes decode at 4094 tok/s / TPOT 28 ms.
+161.5k input tok/s at 1K×conc256, 3× everything else, and 17–24% ahead of UCCL-EP at every
+colocated point — while on decode at 16 GPUs it is last, and pure TP ≈ baseline lead. UCCL-EP beats
+DeepEP on decode in both topologies, reaching 4094 tok/s / TPOT 28 ms with DP-attention.
 Because a PD deployment runs the two stages on separate nodes, the actionable answer is **DeepEP on
 prefill, UCCL-EP + DP-attention on decode**. DeepEP losing decode at this scale is expected rather
 than a defect in the EFA port: it is built for large-scale EP where experts are spread thin enough

@@ -30,7 +30,8 @@ on the prefill role, UCCL-EP + DP-attention on the decode role.** That split is 
 result here and it exists only because the roles are disaggregated.
 
 **On decode at 16 GPUs, DeepEP loses to everything** — the ordinary all-to-all, pure TP, and
-UCCL-EP. Expected at this scale, not a defect in the EFA port: with 16 ranks and 256 experts each
+UCCL-EP (the last of those confirmed in both topologies, under matched `--deepep-mode` and with a
+[cross-image control](#cross-image-control-the-decode-sweeps-transfer)). Expected at this scale, not a defect in the EFA port: with 16 ranks and 256 experts each
 GPU owns 16 experts, so the fan-out is small and mostly intra-node NVLink, and DeepEP's per-layer
 dispatch/combine cost is not amortised. DeepEP targets EP domains wide enough that every token must
 cross the fabric; that crossover is not reachable on 2 nodes for decode.
@@ -120,10 +121,10 @@ server without capping prefill.
 2. **`--deepep-mode` is not uniform.** Part 1's main tables and the non-DP 2P2D DeepEP rows use
    `auto`; DeepEP+DP and every UCCL row pin `normal`/`low_latency` (UCCL requires the pinned form).
    At low concurrency an `auto`-vs-pinned comparison understates DeepEP by about 2×.
-3. **UCCL rows come from a different image.** Bridged by running `baseline` and `pure TP` on both:
-   the saturated prefill points agree within ±5%, the low-concurrency ones diverge wildly and are
-   not comparable. **There is no cross-image control on the decode sweeps**, which is where the
-   decode recommendation comes from — the first thing to add on a re-run.
+3. **UCCL rows come from a different image**, bridged by running `baseline` on both. The decode
+   control is tight — see [Cross-image control](#cross-image-control-the-decode-sweeps-transfer)
+   (±1.8% tok/s across the whole ramp). The prefill control is not: saturated points agree within
+   ±5%, low-concurrency ones diverge and are not comparable across images.
 4. **Server flags differ between topologies.** 2P2D used `--chunked-prefill-size 16384
    --watchdog-timeout 1200 --mem-fraction-static 0.82`; `recipe/serve.sh` takes SGLang's defaults
    (8192 / 300). The two topologies are not a controlled A/B for each other.
@@ -136,8 +137,12 @@ server without capping prefill.
 
 **Cluster:** 4× `p5en.48xlarge` (8×H200 141GB, sm_90), us-east-2, 16 EFA NICs/node, iface
 `enp71s0`. SGLang 0.5.13.post1 + DeepEP `567632d` + NVSHMEM v3.7.0 (libfabric/EFA). 2 nodes, TP=16,
-EP=16, `--mem-fraction-static 0.85`. Date: **2026-07-28**. All kernel correctness checks passed
-first.
+EP=16, `--mem-fraction-static 0.85` except where a `low_latency` section says 0.75. Date:
+**2026-07-28**. All kernel correctness checks passed first.
+
+The UCCL columns come from a second image on the same two nodes,
+[`Dockerfile.uccl`](../Dockerfile.uccl): SGLang `v0.5.13.post1-cu130` + UCCL `f071f2e3` + Mooncake
+`622104e`.
 
 `pure TP` = `--tp-size 16` with no `--ep-size` (MoE weights TP-sharded, no dispatch/combine) =
 `MOE_BACKEND=tp`. `Baseline` = EP with the ordinary fused-MoE all-to-all = `MOE_BACKEND=baseline`.
@@ -232,6 +237,68 @@ the concurrency 256 that Part 2 reaches, pinned `normal` would plausibly catch u
 
 **So pinning `normal` buys attributability at a real throughput cost below conc ~32.**
 
+## DeepEP vs UCCL-EP, colocated, same modes and same harness
+
+UCCL-EP presents itself under DeepEP's Python API (`ep/deep_ep_wrapper`), so `--moe-a2a-backend
+deepep` drives either one and only the image changes. Both columns pin the same `--deepep-mode`, the
+same `LL_MAX_TOKENS=512` / `--chunked-prefill-size 512` cap chain and the same
+`--mem-fraction-static`, on the same node pair, back to back.
+
+### Prefill, both pinned `normal`
+
+TTFT ms / input tok/s. **Bold = best in row.**
+
+| Input × conc | DeepEP `normal` | UCCL-EP `normal` | tok/s delta |
+|---|---|---|---|
+| 1024 × 1  | **480** / **2.1k** | 602 / 1.7k | −20% |
+| 4096 × 1  | **445** / **9.2k** | 572 / 7.2k | −22% |
+| 8192 × 1  | **511** / **16.0k** | 617 / 13.3k | −17% |
+| 4096 × 8  | **950** / **31.9k** | 1217 / 25.0k | −22% |
+| 4096 × 32 | **2026** / **51.7k** | 2649 / 39.5k | −24% |
+
+**DeepEP wins prefill at every point by a flat 17–24%.** Same direction as the 2P2D prefill table and
+as UCCL's own kernel-level FP8 dispatch numbers: the `normal` high-throughput dispatch is UCCL's soft
+spot, and the margin does not close with concurrency here.
+
+### Decode, both pinned `low_latency`
+
+Output tok/s / mean TPOT ms / p99 ITL ms. **Bold = best in row.**
+
+| Concurrency | DeepEP `low_latency` | UCCL-EP `low_latency` | tok/s delta |
+|---|---|---|---|
+| 32  | 554 / 54.5 / 54 | **761** / **38.1** / **37** | **+37%** |
+| 64  | 1021 / 59.3 / 59 | **1360** / **43.1** / **41** | **+33%** |
+| 256 | 2634 / 83.0 / 70 | **2961** / **69.1** / **55** | **+12%** |
+| 512 | 4371 / 96.2 / 465 | **4625** / **83.5** / **435** | **+6%** |
+
+**UCCL-EP wins decode at every point**, by 37% at conc 32 narrowing to 6% at conc 512, with TPOT
+30% lower where it matters. This reproduces the 2P2D ordering (UCCL-EP ahead of DeepEP on decode)
+under matched modes and in a single topology, which the 2P2D tables could not do — there DeepEP ran
+`auto` and UCCL ran pinned.
+
+Both backends' p99 ITL jumps ~8× at conc 512 (465 and 435 ms) while their mean TPOT keeps improving:
+that is the saturation tail, common to both, not a backend property.
+
+**Both stages, one sentence: prefill DeepEP, decode UCCL-EP** — the same split Part 2 recommends,
+now measured colocated with nothing else varying.
+
+## Cross-image control: the decode sweeps transfer
+
+The UCCL image is a different SGLang build, so a UCCL-vs-DeepEP decode number could be measuring the
+image rather than the backend. `MOE_BACKEND=baseline` touches neither DeepEP nor UCCL
+(`--moe-a2a-backend none`), so running it on both images isolates that. Same node pair, same sweep:
+
+| Concurrency | baseline on DeepEP image | baseline on UCCL image | delta |
+|---|---|---|---|
+| 32  | 1170 / 27.1 | 1152 / 27.1 | −1.6% |
+| 64  | 2110 / 29.4 | 2108 / 29.6 | −0.1% |
+| 256 | 5888 / 41.3 | 5894 / 41.3 | +0.1% |
+| 512 | 8939 / 53.7 | 9101 / 53.4 | +1.8% |
+
+Output tok/s / mean TPOT ms. **Within ±1.8% on throughput and ±0.6% on TPOT at every point**, so the
+decode differences above are the backend, not the image. This is what the earlier 2P2D runs lacked —
+they only controlled prefill, where the two images do *not* agree at low concurrency.
+
 ---
 
 # Part 2 — 4-node 2P2D PD-disaggregated (`recipe/serve-pd.sh`)
@@ -259,13 +326,14 @@ and `--random-range-ratio 1`.
 | **baseline** | `--ep-size 16 --moe-a2a-backend none` | Expert-parallel, but SGLang's ordinary fused-MoE all-to-all over NCCL |
 | **pure TP** | `--tp-size 16`, **no** `--ep-size` | No expert parallelism; MoE weights TP-sharded, only the TP all-reduce crosses GPUs |
 
-**The UCCL-EP image is not in this repo.** UCCL's kernels are packaged by
-[`uccl-ep-benchmark`](../../../../../micro-benchmarks/expert-parallelism/uccl-ep-benchmark) (kernel
-harness, no serving engine) and combined with *vLLM* by
-[`dsv3-uccl-nixl`](../../../vllm/dsv3-uccl-nixl). The rows below came from a third image: an SGLang
-base plus UCCL's `ep/deep_ep_wrapper`, which presents UCCL under DeepEP's Python API so
-`--moe-a2a-backend deepep` drives it unchanged. Its launch requirements differ — see
-[UCCL-EP launch configuration](#uccl-ep-launch-configuration-that-actually-matters).
+**The UCCL-EP image is [`../Dockerfile.uccl`](../Dockerfile.uccl)** — same base, EFA and Mooncake
+stack as this sample's `Dockerfile`, with UCCL's `ep/deep_ep_wrapper` in place of DeepEP/NVSHMEM. The
+wrapper presents UCCL under DeepEP's Python API, so `--moe-a2a-backend deepep` drives it unchanged
+and the image is the only variable. Its launch requirements differ — see
+[UCCL-EP launch configuration](#uccl-ep-launch-configuration-that-actually-matters). It is Hopper-only
+(`sm_90`); for Blackwell, or for kernel-level UCCL numbers with no serving engine, see
+[`uccl-ep-benchmark`](../../../../../micro-benchmarks/expert-parallelism/uccl-ep-benchmark), and for
+UCCL under *vLLM* see [`dsv3-uccl-nixl`](../../../vllm/dsv3-uccl-nixl).
 
 ## Prefill — input 1K→64K, adaptive concurrency
 
@@ -419,7 +487,7 @@ prefill advantage comes from a big fused dispatch. **Never enable DP-attention o
 | Role | Configuration | Why |
 |---|---|---|
 | **Prefill** | **DeepEP**, no DP-attention, operate at concurrency ~256 for 1K inputs | 161.5k input tok/s, 3× the alternatives; DP would cost 63% |
-| **Decode** | **UCCL-EP + DP-attention**, `--cuda-graph-bs 128`, `--deepep-mode low_latency` | 4094 tok/s / TPOT 28 ms, the fastest decode measured (but see limit 3) |
+| **Decode** | **UCCL-EP + DP-attention**, `--cuda-graph-bs 128`, `--deepep-mode low_latency` | 4094 tok/s / TPOT 28 ms, the fastest decode measured |
 | **Decode**, same-image fallback | **baseline**, no DP-attention | 3626 tok/s / TPOT 34 ms — 13% behind, needs no second image |
 
 Different backends per role means different *images* per role, which PD makes practical — the roles
@@ -596,11 +664,23 @@ Then repeat with `MOE_BACKEND=baseline` and `MOE_BACKEND=tp`. `recipe/serve.sh` 
 topology/transport-map init fails, `low_latency`/`auto` need it on or the RDMA-buffer `cudaMemset`
 fails at `deep_ep.cpp:371`. Getting it wrong is a startup failure, not a slow server.
 
+For the UCCL columns, build [`Dockerfile.uccl`](../Dockerfile.uccl), point `IMAGE_URI` at it and add
+`UCCL=1`, which switches on
+`--privileged`, drops the NVSHMEM environment UCCL has no use for, and makes `DEEPEP_MODE`
+mandatory. Everything else — the cap chain, `--mem-fraction-static`, the sweep — is identical, which
+is what keeps the two backends' tables comparable:
+
+```bash
+IMAGE_URI=<uccl-image> UCCL=1 DEEPEP_MODE=low_latency MOE_BACKEND=deepep recipe/serve.sh 0
+```
+
+For the cross-image control, run `MOE_BACKEND=baseline` on both images: it selects
+`--moe-a2a-backend none`, so it exercises neither DeepEP nor UCCL and any difference is the image.
+
 ## 2P2D, 4 nodes
 
-Fill in the PD block of `setup/env_vars` first. The UCCL rows need a separate image this sample does
-not ship (see [the four configurations](#the-four-configurations)); once built, point `IMAGE_URI` at
-it and add `UCCL=1`.
+Fill in the PD block of `setup/env_vars` first. The UCCL rows need the second image
+([`Dockerfile.uccl`](../Dockerfile.uccl)); point `IMAGE_URI` at it and add `UCCL=1`.
 
 ```bash
 source setup/env_vars
@@ -632,8 +712,10 @@ Then repeat with `MOE_BACKEND=baseline`, `MOE_BACKEND=tp`, and `DP_ATTENTION=1` 
 
 - **Re-run the 2P2D sweep with the Part 1 harness** (`--random-range-ratio 1` was already set, but
   `--warmup-requests` was not scaled) so both parts share a harness exactly.
-- **Add a cross-image decode control** — `baseline` decode on both the DeepEP and UCCL images — so
-  limit 3 stops applying to this page's decode recommendation.
+- **Add a cross-image *prefill* control.** The decode one is
+  [done](#cross-image-control-the-decode-sweeps-transfer); prefill still diverges between the two
+  images at low concurrency, so the Part 2 prefill UCCL column stays weaker evidence than its decode
+  columns.
 - **Pin `--deepep-mode` on the 2P2D DeepEP rows** as Part 1 now does.
 - **The per-role split recommendation is inferred, not measured.** DeepEP prefill and UCCL+DP decode
   were each measured in a same-backend-both-roles deployment; the mixed deployment was never run end

@@ -9,17 +9,23 @@
 #
 # Usage:
 #   source setup/env_vars
-#   recipe/verify-image.sh
+#   recipe/verify-image.sh          # the DeepEP image
+#   UCCL=1 recipe/verify-image.sh   # the Dockerfile.uccl image
+#
+# UCCL=1 swaps the two backend-specific checks: that image has no NVSHMEM, and its
+# deep_ep is UCCL's wrapper, so the DeepEP versions would fail on a correct build.
 
 set -euo pipefail
 
 : "${IMAGE_URI:?source setup/env_vars first}"
+UCCL=${UCCL:-0}
 
-echo "==> Checking image ${IMAGE_URI}"
+echo "==> Checking image ${IMAGE_URI} (UCCL=${UCCL})"
 
 docker run --rm --gpus all \
     --device /dev/infiniband --device /dev/gdrdrv \
     --ulimit memlock=-1 \
+    -e "UCCL=${UCCL}" \
     --entrypoint bash "$IMAGE_URI" -c '
 set -euo pipefail
 fail=0
@@ -30,6 +36,34 @@ if fi_info -p efa >/dev/null 2>&1; then
 else
     echo "FAIL: fi_info -p efa found no EFA provider"; fail=1
 fi
+
+if [ "${UCCL:-0}" = "1" ]; then
+
+echo "--- deep_ep is UCCL'\''s wrapper, and real DeepEP is gone ---"
+# SGLang drives UCCL through a package that is ALSO named deep_ep, so the check is
+# which one won: the wrapper imports from uccl.ep, real DeepEP does not.
+python3 - <<PY || fail=1
+import os, sys
+import deep_ep, uccl.ep
+print("deep_ep ->", os.path.dirname(deep_ep.__file__))
+if "uccl" not in open(deep_ep.__file__).read():
+    print("FAIL: deep_ep is NOT the UCCL wrapper — real DeepEP is shadowing it")
+    sys.exit(1)
+print("OK: deep_ep -> uccl.ep, and uccl.ep imports")
+PY
+
+echo "--- no /opt/nvshmem EFA build (this is not the DeepEP image) ---"
+# Only the source-built /opt/nvshmem tree matters, and only because serve.sh
+# LD_PRELOADs it for DeepEP: finding it here would mean IMAGE_URI is the DeepEP
+# image, not the UCCL one. The SGLang base ships an unrelated nvshmem pip wheel
+# under site-packages/nvidia/ that UCCL never loads, so do not flag that.
+if [ -e /opt/nvshmem ]; then
+    echo "FAIL: /opt/nvshmem exists — IMAGE_URI looks like the DeepEP image"; fail=1
+else
+    echo "OK: absent"
+fi
+
+else
 
 echo "--- deep_ep resolves to the EFA build in the venv ---"
 python3 - <<PY || fail=1
@@ -56,6 +90,8 @@ for lib in $(find / -name "libnvshmem_host.so.3" -not -path "/proc/*" 2>/dev/nul
         *) echo "  FAIL: expected NVSHMEM v3.7.0"; fail=1 ;;
     esac
 done
+
+fi
 
 echo "--- NCCL aws-ofi-nccl plugin is loadable under the name NCCL will use ---"
 # The EFA installer ships libnccl-net-ofi.so, not the libnccl-net.so that NCCL

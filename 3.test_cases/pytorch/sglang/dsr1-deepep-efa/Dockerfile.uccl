@@ -1,0 +1,139 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# SGLang + UCCL-EP over EFA, for serving DeepSeek-R1 on p5/p5en (8x H100/H200,
+# sm_90). The comparison image for this sample: same base, same EFA and Mooncake
+# stack as ./Dockerfile, but the MoE all-to-all backend is UCCL-EP instead of
+# DeepEP/NVSHMEM. There is no NVSHMEM and no DeepEP in this image.
+#
+# UCCL ships ep/deep_ep_wrapper, which presents UCCL under DeepEP's Python API,
+# so SGLang's `--moe-a2a-backend deepep` drives it unchanged and only the image
+# differs between the two backends. That is what makes the tables in
+# benchmarks/README.md comparable; recipe/serve.sh applies the few flags UCCL
+# needs when UCCL=1.
+#
+# Layers on top of the official SGLang image:
+#   - EFA:      aws-efa-installer (libfabric + EFA provider)
+#   - GDRCopy:  GPU memory registration for EFA VRAM transfer
+#   - Mooncake: kvcache-ai, built -DUSE_EFA=ON (KV transfer for PD-disagg)
+#   - UCCL-EP:  uccl-project/uccl, built for sm_90 + EFA
+#
+# Blackwell is not covered: TORCH_CUDA_ARCH_LIST below is Hopper-only, and the
+# UCCL rows in benchmarks/README.md were only ever measured on H100/H200. For a
+# B300 UCCL build see
+# micro-benchmarks/expert-parallelism/uccl-ep-benchmark/uccl-ep.Dockerfile.
+#
+# Build (no GPU and no build context needed):
+#   docker build -t ucclep-sglang-efa:latest -f Dockerfile.uccl .
+
+ARG SGLANG_BASE=lmsysorg/sglang:v0.5.13.post1-cu130
+FROM ${SGLANG_BASE}
+
+# Both pinned to the commits the benchmarks/README.md UCCL rows were measured
+# with. Neither project tags releases on the cadence this sample needs, and
+# unpinned `main` on both was how the measured image was originally built --
+# reproducing the numbers requires these.
+ARG UCCL_COMMIT=f071f2e3
+ARG MOONCAKE_COMMIT=622104e
+
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y \
+        git cmake build-essential wget curl \
+        libgflags-dev autoconf automake libtool
+# NOTE: do NOT purge /var/lib/apt/lists here -- the EFA installer below runs its
+# own apt-get install and needs the package index.
+
+# ---- GDRCopy (GPU memreg for EFA, required by Mooncake) ----
+ARG GDRCOPY_VERSION=2.5.2
+RUN cd /tmp && \
+    wget -q https://github.com/NVIDIA/gdrcopy/archive/refs/tags/v${GDRCOPY_VERSION}.tar.gz && \
+    tar xf v${GDRCOPY_VERSION}.tar.gz && cd gdrcopy-${GDRCOPY_VERSION} && \
+    make -j$(nproc) lib lib_install CUDA=/usr/local/cuda PREFIX=/usr/local && \
+    rm -rf /tmp/gdrcopy* /tmp/v${GDRCOPY_VERSION}.tar.gz
+
+# ---- AWS EFA installer (libfabric + EFA provider) ----
+RUN cd /tmp && \
+    curl -O https://efa-installer.amazonaws.com/aws-efa-installer-latest.tar.gz && \
+    tar xzf aws-efa-installer-latest.tar.gz && \
+    cd aws-efa-installer && \
+    . /etc/os-release && \
+    case "$VERSION_ID" in \
+      24.04) DEBS_DIR=UBUNTU2404 ;; \
+      22.04) DEBS_DIR=UBUNTU2204 ;; \
+      *)     DEBS_DIR=UBUNTU2404 ;; \
+    esac && \
+    echo "Using EFA DEBS dir: $DEBS_DIR (Ubuntu $VERSION_ID)" && \
+    (apt-get install -y ./DEBS/${DEBS_DIR}/x86_64/rdma-core/*.deb || true) && \
+    ./efa_installer.sh -y --skip-kmod -g --no-verify --skip-rdma-core
+
+# ---- Mooncake (KV transfer over EFA for the PD-disaggregated recipe) ----
+# Identical to ./Dockerfile's step, so the KV path is not a variable between the
+# two images.
+RUN pip uninstall -y mooncake-transfer-engine mooncake 2>/dev/null || true
+RUN cd /tmp && \
+    git clone https://github.com/kvcache-ai/Mooncake.git && \
+    cd Mooncake && git checkout ${MOONCAKE_COMMIT} && git log --oneline -1 && \
+    bash dependencies.sh -y && \
+    apt-get install -y libgflags-dev && \
+    mkdir build && cd build && \
+    PYBIN=$(which python3) && \
+    PYINC=$(python3 -c "import sysconfig; print(sysconfig.get_path('include'))") && \
+    cmake .. -DUSE_EFA=ON -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DPython3_EXECUTABLE="$PYBIN" -DPython3_INCLUDE_DIR="$PYINC" -DPython_EXECUTABLE="$PYBIN" && \
+    make -j$(nproc) && \
+    cp mooncake-integration/engine.cpython-*.so ../mooncake-wheel/mooncake/ && \
+    cp mooncake-integration/store.cpython-*.so ../mooncake-wheel/mooncake/ 2>/dev/null || true && \
+    cp mooncake-common/libasio.so ../mooncake-wheel/mooncake/ && \
+    pip install ../mooncake-wheel --no-build-isolation && \
+    MCDIR=$(python3 -c "import mooncake, os; print(os.path.dirname(mooncake.__file__))") && \
+    cp -v mooncake-integration/engine.cpython-*.so "$MCDIR/" && \
+    cp -v mooncake-integration/store.cpython-*.so "$MCDIR/" 2>/dev/null || true && \
+    cp -v mooncake-common/libasio.so "$MCDIR/" && \
+    rm -rf /tmp/Mooncake /var/lib/apt/lists/*
+
+# ---- UCCL-EP, replacing DeepEP as the MoE all-to-all backend ----
+# The SGLang base ships DeepEP; it must go first, because deep_ep_wrapper
+# installs itself under the same `deep_ep` package name.
+RUN pip uninstall deep_ep deep-ep -y 2>/dev/null; \
+    rm -rf /sgl-workspace/DeepEP
+RUN apt-get update && \
+    pip install nanobind pybind11 && \
+    apt-get install -y rdma-core libibverbs-dev libnuma-dev patchelf && \
+    cd /tmp && \
+    git clone --recursive https://github.com/uccl-project/uccl.git && \
+    cd uccl && git checkout ${UCCL_COMMIT} && \
+    git submodule update --init --recursive && git log --oneline -1 && \
+    cd ep && \
+    EFA_HOME=/opt/amazon/efa TORCH_CUDA_ARCH_LIST="9.0+PTX" \
+    python setup.py build_ext --inplace && \
+    cd /tmp/uccl && \
+    pip install .
+
+# build_ext --inplace leaves ep.abi3.so in the source tree, so copy it into the
+# installed package, then install the DeepEP-API shim on top.
+RUN UCCL_DIR=$(python3 -c "import uccl; print(uccl.__path__[0])") && \
+    find /tmp/uccl/ep -name "ep.abi3.so" | head -1 | xargs -I{} cp -v {} "${UCCL_DIR}/" && \
+    ls -la "${UCCL_DIR}/ep.abi3.so" && \
+    cd /tmp/uccl/ep/deep_ep_wrapper && \
+    pip install --no-deps . && \
+    rm -rf /tmp/uccl && \
+    DEEP_EP_INIT=$(python3 -c "import importlib.util as u; print(u.find_spec('deep_ep').origin)") && \
+    grep -q "uccl" "$DEEP_EP_INIT" && \
+    echo "OK: deep_ep -> uccl.ep ($DEEP_EP_INIT)"
+# find_spec, not `import deep_ep`: importing it pulls in torch, and torch's oneMKL
+# init fails under buildkit even though it is fine at runtime. The failure mode this
+# guards against is a name collision, which the spec origin already answers.
+# recipe/verify-image.sh does the real import check against the finished image.
+
+# ---- EFA runtime env ----
+ENV FI_PROVIDER=efa
+ENV FI_EFA_USE_DEVICE_RDMA=1
+# Short name, not a path: NCCL templates it into libnccl-net-ofi.so. This image
+# ships only that name, not NCCL's default libnccl-net.so, so without this NCCL
+# silently falls back to TCP. Same reason as ./Dockerfile.
+ENV NCCL_NET_PLUGIN=ofi
+ENV PATH="/opt/amazon/efa/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/lib/python3.12/dist-packages/torch/lib:/opt/amazon/efa/lib:/usr/local/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
+
+WORKDIR /workspace

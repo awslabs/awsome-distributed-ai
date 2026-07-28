@@ -130,14 +130,20 @@ COMMON_ENV=(
     # libnccl-net-ofi.so. Omitting it silently falls back to TCP. See Dockerfile.
     -e NCCL_NET_PLUGIN=ofi
     -e FI_PROVIDER=efa -e FI_EFA_USE_DEVICE_RDMA=1
-    -e NVSHMEM_REMOTE_TRANSPORT=libfabric
-    -e NVSHMEM_LIBFABRIC_PROVIDER=efa
-    -e NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE
-    -e NVSHMEM_BOOTSTRAP=UID
     -e MOONCAKE_PROTOCOL=efa
     -e MC_FORCE_AUTO_DISCOVERY=1
-    -e LD_PRELOAD=/opt/nvshmem/install/lib/libnvshmem_host.so.3.7.0
 )
+# NVSHMEM is DeepEP's transport, and the UCCL image does not contain it -- the
+# LD_PRELOAD would resolve to a missing file. UCCL talks to EFA directly.
+if [[ "$UCCL" != "1" ]]; then
+    COMMON_ENV+=(
+        -e NVSHMEM_REMOTE_TRANSPORT=libfabric
+        -e NVSHMEM_LIBFABRIC_PROVIDER=efa
+        -e NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE
+        -e NVSHMEM_BOOTSTRAP=UID
+        -e LD_PRELOAD=/opt/nvshmem/install/lib/libnvshmem_host.so.3.7.0
+    )
+fi
 COMMON_MOUNTS=(
     -v "${HF_CACHE_DIR}:/hf"
     -v "${HF_CACHE_DIR}/../dg-cache:/root/.cache/deep_gemm"
