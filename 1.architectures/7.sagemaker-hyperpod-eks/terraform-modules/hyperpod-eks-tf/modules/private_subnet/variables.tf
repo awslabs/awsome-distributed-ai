@@ -14,6 +14,23 @@ variable "private_subnet_cidrs" {
   default     = ["10.1.0.0/16", "10.2.0.0/16", "10.3.0.0/16", "10.4.0.0/16"]
 }
 
+variable "availability_zone_ids" {
+  description = <<-EOT
+    Optional list of Availability Zone IDs to place subnets in, 1:1 with
+    private_subnet_cidrs. When empty (default), AZs are discovered automatically
+    (standard opt-in-not-required zones only). Set this to target specific zones,
+    including opt-in zones such as Local Zones (e.g. usw2-phx2-az1) that the
+    discovery filter excludes.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.availability_zone_ids) == 0 || length(var.availability_zone_ids) == length(var.private_subnet_cidrs)
+    error_message = "When set, availability_zone_ids must have the same length as private_subnet_cidrs."
+  }
+}
+
 variable "nat_gateway_id" {
   description = "The Id of a NAT Gateway to route internet bound traffic (ignored if closed_network is true)"
   type        = string

@@ -68,6 +68,13 @@ locals {
   create_hyperpod_training_operator_module  = !local.rig_mode && var.create_hyperpod_training_operator_module
   create_observability_module               = !local.rig_mode && var.create_observability_module
   create_hyperpod_inference_operator_module = !local.rig_mode && var.create_hyperpod_inference_operator_module
+
+  # FSx subnet: by default the first instance group's subnet (primary_subnet_id).
+  # If fsx_availability_zone_id is set (e.g. the instance group is in a Local Zone
+  # where FSx is not offered), place FSx in the private subnet matching that AZ ID.
+  fsx_subnet_id = local.create_fsx_module ? (
+    var.fsx_availability_zone_id != "" ? local.az_to_subnet_map[var.fsx_availability_zone_id] : module.hyperpod_cluster[0].primary_subnet_id
+  ) : null
 }
 
 module "vpc" {
@@ -85,11 +92,12 @@ module "private_subnet" {
   count  = var.create_private_subnet_module ? 1 : 0
   source = "./modules/private_subnet"
 
-  resource_name_prefix = var.resource_name_prefix
-  vpc_id               = local.vpc_id
-  private_subnet_cidrs = var.private_subnet_cidrs
-  nat_gateway_id       = local.nat_gateway_id
-  closed_network       = var.closed_network
+  resource_name_prefix  = var.resource_name_prefix
+  vpc_id                = local.vpc_id
+  private_subnet_cidrs  = var.private_subnet_cidrs
+  availability_zone_ids = var.private_subnet_availability_zone_ids
+  nat_gateway_id        = local.nat_gateway_id
+  closed_network        = var.closed_network
 }
 
 module "security_group" {
@@ -282,7 +290,7 @@ module "fsx_lustre" {
 
   resource_name_prefix       = var.resource_name_prefix
   eks_cluster_name           = local.eks_cluster_name
-  subnet_id                  = module.hyperpod_cluster[0].primary_subnet_id
+  subnet_id                  = local.fsx_subnet_id
   security_group_id          = local.security_group_id
   create_new_filesystem      = var.create_new_fsx_filesystem
   storage_capacity           = var.fsx_storage_capacity
