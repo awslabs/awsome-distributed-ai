@@ -659,10 +659,30 @@ DeepEP nor NVSHMEM); and the `efa` vs `efa-direct` fabric — `FI_EFA_USE_DATA_P
 neither enumeration nor the outcome, and `fi_getinfo` with `prov_name="efa"` never returns
 `efa-direct` (requesting it by fabric name returns `-61`).
 
+**The image's Mooncake is old, and that is the first thing to change.** It ships
+`mooncake-transfer-engine 0.3.12.post1`. Upstream `main` has since reworked exactly this code path —
+`EfaContext::construct` now adds `FI_HMEM` to `hints_->caps` (citing
+[ofiwg/libfabric#12328](https://github.com/ofiwg/libfabric/issues/12328): without it the SHM
+sub-provider does a host `memcpy()` into a CUDA device VA and SIGSEGVs during SAR), and it guards the
+`setenv("FI_HMEM", "system", 0)` behind `#if !defined(USE_CUDA) && !defined(USE_HIP)` with a comment
+explaining that the variable exists only to stop a non-GPU build from leaking a ~616 MiB CUDA primary
+context. Neither change is in 0.3.12.post1. **Rebuild the image against current Mooncake before
+spending more time on env levers** — that, not a launch flag, is the likely fix.
+
+Two notes for anyone continuing the diagnosis:
+
+- **Mooncake's `access` flags are narrower than the obvious guess.**
+  `registerMemoryRegionInternal` passes `FI_READ|FI_WRITE|FI_REMOTE_READ|FI_REMOTE_WRITE` — no
+  `FI_SEND|FI_RECV`. `recipe/probe-kv-registration.c` matches this exactly; a probe that adds the
+  send/recv bits is asking the provider to validate something different and is not a faithful
+  replica.
+- **`max_mr_size` bounds the whole path.** Mooncake refuses any single registration larger than it and
+  splits above it (`MC_MAX_MR_SIZE` overrides the device default), which is why the failing log line
+  says "chunk 0". Worth confirming the chunking is sane, not just the registration.
+
 Until this is resolved, **Part 2's 2P2D numbers cannot be re-measured on this image**; they were taken
-under EFA installer 1.47 / libfabric ≤2.3, and the current image ships libfabric 2.4 with
-`mooncake-transfer-engine 0.3.12.post1`. The colocated Part 1 results are unaffected — they use no KV
-transfer at all.
+under EFA installer 1.47 / libfabric ≤2.3, and the current image ships libfabric 2.4 with that old
+Mooncake. The colocated Part 1 results are unaffected — they use no KV transfer at all.
 
 ## UCCL-EP launch configuration that actually matters
 

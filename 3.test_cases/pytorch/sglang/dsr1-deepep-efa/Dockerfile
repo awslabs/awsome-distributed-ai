@@ -66,6 +66,15 @@ RUN cd /tmp && \
 # ---- Mooncake transfer engine (EFA + CUDA) ----
 # Any mooncake already in the base image is a pip wheel built WITHOUT EFA
 # support, so it is replaced with a -DUSE_EFA=ON source build.
+#
+# Deliberately unpinned (`--depth 1` of main), and the 2P2D KV path needs it to
+# be recent: an image built from a main older than the FI_HMEM-in-caps change to
+# EfaContext::construct cannot register the GPU-resident KV cache at all. It
+# fails with "fi_mr_regattr failed for GPU memory ... Operation not supported",
+# lets startup finish, passes SGLang's PD warmup, and then kills the first real
+# request while blaming the peer. `git log --oneline -1` below records which
+# commit an image was built from -- check it before debugging a KV failure, and
+# rebuild before trying env levers. See benchmarks/README.md, "Open blocker".
 RUN pip uninstall -y mooncake-transfer-engine mooncake 2>/dev/null || true
 RUN cd /tmp && \
     git clone --depth 1 https://github.com/kvcache-ai/Mooncake.git && \

@@ -35,6 +35,11 @@
 // FI_HMEM matters and is worth sweeping: any value naming "system" makes every
 // registration below fail with -38 (ENOSYS), including "cuda,system".
 //   for v in cuda system system,cuda; do FI_HMEM=$v /probe; done
+//
+// One more knob worth ruling in or out: Mooncake refuses to register anything
+// larger than max_mr_size and splits above it (MC_MAX_MR_SIZE overrides the
+// device default). If the failing length here is at or near that boundary, the
+// chunking is worth checking as well as the registration itself.
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,11 +48,16 @@
 #include <rdma/fabric.h>
 #include <rdma/fi_domain.h>
 
-// Mooncake's hints, verbatim: FI_MR_HMEM in mr_mode, no FI_HMEM in caps.
+// Mooncake 0.3.12.post1's hints, verbatim: FI_MR_HMEM in mr_mode, and no
+// FI_HMEM in caps. Upstream main adds FI_HMEM here; set ADD_FI_HMEM=1 to
+// compare against that (it is not what fixes this failure -- see the blocker
+// section in benchmarks/README.md).
 static struct fi_info *mooncake_hints(void) {
     struct fi_info *h = fi_allocinfo();
     h->caps = FI_MSG | FI_RMA | FI_READ | FI_WRITE | FI_REMOTE_READ |
               FI_REMOTE_WRITE;
+    if (getenv("ADD_FI_HMEM"))
+        h->caps |= FI_HMEM;
     h->mode = FI_CONTEXT;
     h->ep_attr->type = FI_EP_RDM;
     h->fabric_attr->prov_name = strdup("efa");
@@ -70,8 +80,10 @@ static int reg_cuda(struct fid_domain *dom, size_t len, int dev) {
     memset(&attr, 0, sizeof attr);
     attr.mr_iov = &iov;
     attr.iov_count = 1;
-    attr.access = FI_SEND | FI_RECV | FI_READ | FI_WRITE | FI_REMOTE_READ |
-                  FI_REMOTE_WRITE;
+    // Mooncake's access flags exactly (EfaContext::registerMemoryRegionInternal):
+    // no FI_SEND/FI_RECV. Adding those changes what the provider validates, so
+    // keep this list identical or the probe stops being a faithful replica.
+    attr.access = FI_READ | FI_WRITE | FI_REMOTE_READ | FI_REMOTE_WRITE;
     attr.iface = FI_HMEM_CUDA;
     attr.device.cuda = dev;
 
