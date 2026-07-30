@@ -33,8 +33,7 @@ pi0-lerobot/
 All numbers below are averaged over the **first 5 held-out episodes (N=5)** — episodes
 80-84 for DROID and 304-308 for LIBERO. The eval Jobs pass the full held-out range via
 `--eval-episodes`, but `evaluate_pi0.py` scores `--num-trajectories` of them (default: 5).
-Pass `--num-trajectories` explicitly to score more; at N=5 the direction and magnitude of
-the improvement are clear, but fine ordering within the ODE sweep is inside the noise.
+Pass `--num-trajectories` explicitly to score more.
 
 ### DROID (first 5 held-out episodes 80-84, N=5; trained on 0-79)
 
