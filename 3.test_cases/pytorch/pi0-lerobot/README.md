@@ -30,7 +30,13 @@ pi0-lerobot/
 
 ## Results (p5.48xlarge — 8× H100 80GB)
 
-### DROID (held-out episodes 80-99, trained on 0-79)
+All numbers below are averaged over the **first 5 held-out episodes (N=5)** — episodes
+80-84 for DROID and 304-308 for LIBERO. The eval Jobs pass the full held-out range via
+`--eval-episodes`, but `evaluate_pi0.py` scores `--num-trajectories` of them (default: 5).
+Pass `--num-trajectories` explicitly to score more; at N=5 the direction and magnitude of
+the improvement are clear, but fine ordering within the ODE sweep is inside the noise.
+
+### DROID (first 5 held-out episodes 80-84, N=5; trained on 0-79)
 
 | Metric | Base | Fine-Tuned | Improvement |
 |--------|------|-----------|-------------|
@@ -47,7 +53,7 @@ pi0-lerobot/
 | 5 | 5.479e-02 |
 | 10 | 5.664e-02 |
 
-### LIBERO (held-out episodes 304-378, trained on 0-303)
+### LIBERO (first 5 held-out episodes 304-308, N=5; trained on 0-303)
 
 | Metric | Base | Fine-Tuned | Improvement |
 |--------|------|-----------|-------------|
@@ -120,10 +126,13 @@ kubectl apply -f kubernetes/droid/droid-eval.yaml
 
 ## Dataset Splits
 
-| Dataset | Total Episodes | Train | Eval (held-out) |
-|---------|---------------|-------|-----------------|
-| DROID | 100 | 0-79 | 80-99 |
-| LIBERO (`lerobot/libero_10`) | 379 | 0-303 | 304-378 |
+| Dataset | Total Episodes | Train | Eval (held-out) | Scored in reported results |
+|---------|---------------|-------|-----------------|----------------------------|
+| DROID | 100 | 0-79 | 80-99 | 80-84 (N=5) |
+| LIBERO (`lerobot/libero_10`) | 379 | 0-303 | 304-378 | 304-308 (N=5) |
+
+Training never sees the held-out range. The reported metrics cover the first 5 of those
+held-out episodes; raise `--num-trajectories` in the eval Job to score the full range.
 
 ## Optional: Pre-built Container Image
 

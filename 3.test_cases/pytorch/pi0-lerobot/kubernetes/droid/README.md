@@ -27,7 +27,9 @@ kubectl logs -f pi0-lerobot-droid-finetune-worker-0
 
 ## 2. Submit the Evaluation Job
 
-After training completes, evaluate on held-out episodes 80-99:
+After training completes, evaluate on held-out episodes 80-99. The Job passes the full
+held-out range, and `evaluate_pi0.py` scores the first `--num-trajectories` of them
+(default: 5, i.e. episodes 80-84):
 
 ```bash
 kubectl delete pytorchjob pi0-lerobot-droid-finetune
@@ -47,8 +49,9 @@ kubectl delete job pi0-lerobot-droid-eval
 |-----|----------|---------|
 | Train | 0-79 (80 episodes) | Passed via `--dataset.episodes` |
 | Eval (held-out) | 80-99 (20 episodes) | Passed via `--eval-episodes` to evaluate_pi0.py |
+| Scored | 80-84 (5 episodes) | `--num-trajectories` (default: 5) takes the first N |
 
-## Results (p5.48xlarge — 8× H100 80GB)
+## Results (p5.48xlarge — 8× H100 80GB, first 5 held-out episodes 80-84, N=5)
 
 | Metric | Base | Fine-Tuned | Improvement |
 |--------|------|-----------|-------------|
