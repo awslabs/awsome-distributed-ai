@@ -51,16 +51,16 @@ require_env() {
     fi
 }
 
-# Detect instance type: IMDS first, then K8s node label fallback
+# Detect instance type: IMDS first, then K8s node label fallback.
+# NOTE: detect_instance_type() in lib/common.sh already implements this exact
+# fallback chain (IMDS -> ec2-metadata -> kubectl node-label, gated on
+# NODE_NAME being set) as of the common.sh fix for the check-2 vacuous-PASS
+# defect -- this wrapper now just adds agent.sh's own "unknown" default
+# instead of reinventing the kubectl fallback here. NODE_NAME is required by
+# main()'s require_env call before this runs, so the k8s-label branch inside
+# detect_instance_type() is live for this caller.
 detect_instance() {
-    # Try IMDS (works with hostNetwork: true)
     INSTANCE_TYPE=$(detect_instance_type 2>/dev/null || true)
-
-    if [[ -z "${INSTANCE_TYPE}" ]]; then
-        log_info "IMDS unavailable, falling back to node label"
-        INSTANCE_TYPE=$(kubectl get node "${NODE_NAME}" \
-            -o jsonpath='{.metadata.labels.node\.kubernetes\.io/instance-type}' 2>/dev/null || true)
-    fi
 
     if [[ -z "${INSTANCE_TYPE}" ]]; then
         log_warn "Unable to detect instance type -- using defaults"

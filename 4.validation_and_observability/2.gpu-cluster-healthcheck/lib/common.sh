@@ -26,7 +26,11 @@ DRY_RUN="${DRY_RUN:-0}"
 JSON_OUTPUT="${JSON_OUTPUT:-0}"
 
 # Instance profile variables (populated by load_instance_profile)
-INSTANCE_TYPE=""
+# INSTANCE_TYPE may be pre-exported by the caller (e.g. a k8s manifest
+# threading the node's `node.kubernetes.io/instance-type` label down as an
+# env var) to bypass IMDS detection entirely -- see detect_instance_type()
+# below for why IMDS alone is not sufficient inside an EKS pod.
+INSTANCE_TYPE="${INSTANCE_TYPE:-}"
 EXPECTED_GPU_COUNT=""
 EXPECTED_EFA_COUNT=""
 NVLINK_EXPECTED=""
@@ -54,6 +58,13 @@ log_verbose() {
 
 # ─── Instance Detection ─────────────────────────────────────────────────────
 
+# IMDS is unreachable from a pod running inside EKS under default hop-limit
+# settings (confirmed: IMDSv2 token request returns empty, IMDSv1 fallback
+# also empty). load_instance_profile() below only calls this when
+# INSTANCE_TYPE is not already set -- callers that know their instance type
+# some other way (e.g. a k8s Downward API / node-label lookup) should export
+# INSTANCE_TYPE before sourcing this file, or before calling
+# load_instance_profile(), to skip IMDS entirely.
 detect_instance_type() {
     # Try IMDSv2 first, fall back to IMDSv1, then ec2-metadata CLI
     local token
@@ -73,8 +84,20 @@ detect_instance_type() {
         INSTANCE_TYPE=$(ec2-metadata --instance-type 2>/dev/null | awk '{print $2}' || true)
     fi
 
+    # Last resort: k8s node label, when running as a pod with NODE_NAME set
+    # (downward API `spec.nodeName`) and `kubectl` reachable. This mirrors
+    # kubernetes/agent.sh's own IMDS-unavailable fallback (agent.sh:59-63) --
+    # centralized here so any caller of load_instance_profile() gets it, not
+    # just the DaemonSet agent. Requires the ServiceAccount to have `get` on
+    # `nodes` (already granted: kubernetes/manifests/02-rbac.yaml:19-20).
+    if [[ -z "${INSTANCE_TYPE}" && -n "${NODE_NAME:-}" ]] && command -v kubectl > /dev/null 2>&1; then
+        log_warn "IMDS unavailable -- falling back to k8s node label for instance type"
+        INSTANCE_TYPE=$(kubectl get node "${NODE_NAME}" \
+            -o jsonpath='{.metadata.labels.node\.kubernetes\.io/instance-type}' 2>/dev/null || true)
+    fi
+
     if [[ -z "${INSTANCE_TYPE}" ]]; then
-        log_error "Unable to detect instance type via IMDS or ec2-metadata"
+        log_error "Unable to detect instance type via IMDS, ec2-metadata, or k8s node label"
         return 1
     fi
 
