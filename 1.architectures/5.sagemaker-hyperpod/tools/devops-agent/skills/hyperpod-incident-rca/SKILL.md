@@ -526,6 +526,25 @@ these without updating the mental-model doc first.
 
 ### Phase 4 — Report (using DevOps Agent's native schema)
 
+> **MUST — the two things every report needs (read this first).** Before you
+> call `write_final_investigation_report`, the report MUST contain:
+> 1. A **verdict symptom** — the FIRST `symptom` record, its `title` beginning
+>    with `Triage verdict:` (see the title contract below).
+> 2. A **`Summary:` paragraph** inside that verdict symptom's `description` — one
+>    plain-English paragraph covering, in order, **(1) what happened → (2) the
+>    likely cause → (3) the recommended action**. This paragraph is the single
+>    highest-value output: it is what the operator reads in the email body and
+>    its first sentence becomes the email subject.
+>
+> These two are the parts most often dropped under a long investigation. Treat
+> them as non-negotiable deliverables, authored with the same care as the
+> evidence. The pre-report self-check at the end of this phase verifies both.
+> **This is about report QUALITY, not gating: always emit the report** — never
+> abort, stall, or skip the terminal tool because a piece is missing. If the
+> self-check finds the verdict symptom or Summary absent, AUTHOR IT NOW from the
+> findings you already have, then emit. A report that reaches the operator is
+> the goal; the checklist just makes sure it carries the summary.
+
 DevOps Agent's investigation output is structured: the terminal tool
 is `write_final_investigation_report`, and the agent emits `symptom`
 and `finding` records along the way that get serialized into the
@@ -662,7 +681,31 @@ The agent's schema supports these record types:
    operators reviewing the report should escalate to the HyperPod team
    with those EventIds as evidence.
 
-5. **`write_final_investigation_report`** — listing the verdict
+5. **Pre-report self-check (do this, then ALWAYS emit — never abort).**
+   Immediately before calling the terminal tool, verify the report you
+   are about to write:
+
+   - [ ] Is the FIRST `symptom` a verdict symptom (title begins
+         `Triage verdict:`)? If not — you have the verdict from Phase 3
+         and the signature set from Phase 2d; **author it now** and move
+         it to position 1.
+   - [ ] Does that verdict symptom's `description` contain a `Summary:`
+         paragraph covering what happened → likely cause → recommended
+         action? If not (or it is just the title restated) — **write it
+         now** from the findings and timeline you already have. Do not
+         re-investigate; synthesize from what Phase 1–3 produced.
+   - [ ] (Non-Suppress verdicts) Is there at least one `finding`
+         (`root_cause` or `cause`)?
+
+   This check is a QUALITY gate, not a delivery gate. If something is
+   missing, the correct action is always to **fill it in and then emit
+   the report** — never to withhold, delay, or skip
+   `write_final_investigation_report`. An emitted report with a
+   best-effort summary is strictly better than no report: a withheld
+   report means the operator gets **no email at all**, which is the
+   worst outcome. When in doubt, emit.
+
+6. **`write_final_investigation_report`** — listing the verdict
    symptom FIRST in `symptoms[]`, then the per-resource symptoms.
    Findings listed under their `finding_type` arrays (`root_cause[]`,
    `cause[]`, `hypothesis[]`). `investigation_gaps[]` populated from
@@ -680,6 +723,14 @@ This has been observed to fail in RCA runs. **The first
 `symptom` record you emit MUST have `title` beginning with
 `Triage verdict:`.** Descriptive titles are for the *second* and later
 symptom records, which capture per-resource observations.
+
+**The verdict symptom's title is not enough on its own — its
+`description` MUST also carry the `Summary:` paragraph** (what happened
+→ likely cause → recommended action). A verdict symptom whose
+description is just the title restated, or omits the `Summary:` block,
+is an incomplete report: the email still sends but arrives with no
+summary body, which is the exact failure this contract exists to
+prevent. Author the title AND the Summary together, as one unit.
 
 ### Few-shot examples of the first symptom record
 

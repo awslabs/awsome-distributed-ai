@@ -1,10 +1,23 @@
 """Compose HTML email from a completed DevOps Agent investigation.
 
-Design (v2): the notifier receives the aws.aidevops EventBridge event, extracts
+Design (v3): the notifier receives the aws.aidevops EventBridge event, extracts
 the task/execution ids, and pulls the FULL investigation context via
-`get_backlog_task` + `list_journal_records`. It composes the email from the
-raw journal records — symptoms, findings, investigation_gaps — rather than
-depending on a specific verdict-title shape from the RCA skill.
+`get_backlog_task` + `list_journal_records`.
+
+Content source — the RCA skill emits, on every COMPLETED investigation, a single
+curated `investigation_summary` record: a JSON object with `symptoms`,
+`findings` (each carrying `type` ∈ {cause, root_cause}, `observations`, and
+`cascades_to`), and `investigation_gaps`. This is the *finalized* conclusion —
+deduped, and it promotes one finding to `root_cause` — whereas the live
+`symptom`/`finding` records are the raw working stream (often noisier, and they
+never settle a `root_cause`). So when the summary record is present we render
+from it and fall back to the live records only when it is absent.
+
+The Summary box prefers the RCA's free-text `Summary:` paragraph when present;
+otherwise it is synthesized from the curated root-cause finding. This fixes the
+earlier failure mode where an investigation that produced findings but no
+`Triage verdict:` symptom (with a `Summary:` line) yielded an email with no
+Summary section at all.
 
 This makes the notifier resilient to skill output drift. As long as the
 investigation identifies a root cause, the notifier will surface it.
@@ -144,14 +157,24 @@ def _fetch_journal(agent_space_id: str, execution_id: str) -> dict:
 
     Shape:
         {
-            "symptoms":  [ {title, description, ...}, ... ],
-            "findings":  [ {title, description, finding_type, ...}, ... ],
-            "gaps":      [ str, ... ],
+            "symptoms":  [ {title, description, ...}, ... ],   # live records
+            "findings":  [ {title, description, finding_type, ...}, ... ],  # live
+            "gaps":      [ str, ... ],                          # live
+            "summary":   { symptoms, findings, investigation_gaps } | None,
             "raw":       [ raw record dict, ... ],   # keeps createdAt etc.
             "raw_count": int,
         }
+
+    `summary` is the parsed content of the single `investigation_summary`
+    record (the curated final conclusion). It is the preferred render source;
+    the live `symptoms`/`findings`/`gaps` lists remain the fallback and continue
+    to drive the send/skip filters (heartbeat, suppress, actionable-content),
+    which are keyed off the live verdict symptom and are well-tested.
     """
-    result = {"symptoms": [], "findings": [], "gaps": [], "raw": [], "raw_count": 0, "error": None}
+    result = {
+        "symptoms": [], "findings": [], "gaps": [],
+        "summary": None, "raw": [], "raw_count": 0, "error": None,
+    }
     if not agent_space_id or not execution_id:
         return result
     try:
@@ -176,6 +199,11 @@ def _fetch_journal(agent_space_id: str, execution_id: str) -> dict:
                     else:
                         text = str(content)
                     result["gaps"].append(text)
+                elif rtype == "investigation_summary":
+                    # The curated final conclusion. Keep the last one seen (there
+                    # is exactly one per completed investigation in practice).
+                    if isinstance(content, dict) and content.get("findings") is not None:
+                        result["summary"] = content
     except Exception as exc:
         # Record the failure instead of returning an indistinguishable empty
         # journal: a throttled/failed list_journal_records must NOT look like
@@ -184,6 +212,75 @@ def _fetch_journal(agent_space_id: str, execution_id: str) -> dict:
         print(f"list_journal_records failed: {exc!r}")
         result["error"] = repr(exc)
     return result
+
+
+def _render_symptoms(journal: dict) -> list[dict]:
+    """Symptoms to render: curated summary symptoms if present, else live."""
+    summary = journal.get("summary")
+    if summary and summary.get("symptoms"):
+        return summary["symptoms"]
+    return journal["symptoms"]
+
+
+def _render_findings(journal: dict) -> list[dict]:
+    """Findings to render, normalized to a common shape.
+
+    The curated `investigation_summary` findings use key `type`
+    (cause/root_cause) and nest evidence under `observations` [{title,
+    analysis}]. Live `finding` records use `finding_type` and
+    `supporting_observations`. Normalize both to {title, description,
+    finding_type, observations:[{title, analysis}]} so the renderer is
+    source-agnostic. Prefer the curated set — it is deduped and promotes a
+    `root_cause` the live stream never settles.
+    """
+    summary = journal.get("summary")
+    out = []
+    if summary and summary.get("findings"):
+        for f in summary["findings"]:
+            out.append({
+                "title": f.get("title") or "",
+                "description": f.get("description") or "",
+                "finding_type": (f.get("type") or f.get("finding_type") or "").lower(),
+                "observations": f.get("observations") or [],
+            })
+        return out
+    for f in journal["findings"]:
+        obs = []
+        for o in f.get("supporting_observations") or []:
+            if isinstance(o, dict):
+                obs.append({"title": o.get("title") or "", "analysis": o.get("analysis") or o.get("description") or ""})
+        out.append({
+            "title": f.get("title") or "",
+            "description": f.get("description") or "",
+            "finding_type": (f.get("finding_type") or f.get("type") or "").lower(),
+            "observations": obs,
+        })
+    return out
+
+
+def _render_gaps(journal: dict) -> list[str]:
+    """Gap strings to render: curated summary gaps if present, else live."""
+    summary = journal.get("summary")
+    if summary and summary.get("investigation_gaps"):
+        gaps = []
+        for g in summary["investigation_gaps"]:
+            if isinstance(g, dict):
+                gaps.append(g.get("title") or g.get("description") or json.dumps(g))
+            else:
+                gaps.append(str(g))
+        return gaps
+    return journal["gaps"]
+
+
+def _root_cause_finding(findings: list[dict]) -> dict:
+    """First finding typed root_cause, else first cause, else first of any."""
+    for f in findings:
+        if f.get("finding_type") == "root_cause":
+            return f
+    for f in findings:
+        if f.get("finding_type") == "cause":
+            return f
+    return findings[0] if findings else {}
 
 
 def _has_verdict_symptom(journal: dict) -> bool:
@@ -368,6 +465,39 @@ def _parse_summary_text(description: str) -> str:
     return _strip_confidence_tags(" ".join(lines))
 
 
+def _summary_text(journal: dict) -> str:
+    """Best Summary paragraph for the email, with a graceful fallback chain.
+
+    1. The RCA's free-text 'Summary:' paragraph, searched in (a) the curated
+       investigation_summary symptoms, then (b) the live verdict symptom. This
+       is the richest form (what happened -> cause -> recommended action).
+    2. If no free-text Summary block exists (common — most investigations don't
+       emit a 'Triage verdict:' symptom), synthesize one from the curated
+       root-cause finding's title + description. This is why the fix is robust:
+       every completed investigation carries a curated root-cause finding even
+       when it carries no Summary paragraph.
+    3. "" if neither is available (the box is then omitted).
+    """
+    summary = journal.get("summary") or {}
+    for s in summary.get("symptoms", []):
+        text = _parse_summary_text(s.get("description") or "")
+        if text:
+            return text
+    text = _parse_summary_text(_verdict_symptom(journal).get("description") or "")
+    if text:
+        return text
+
+    # Synthesize from the curated root-cause finding.
+    rc = _root_cause_finding(_render_findings(journal))
+    if rc:
+        title = _strip_confidence_tags(rc.get("title") or "")
+        desc = _strip_confidence_tags(rc.get("description") or "")
+        if title and desc:
+            return f"{title}. {desc}" if not title.endswith((".", "!", "?")) else f"{title} {desc}"
+        return title or desc
+    return ""
+
+
 def _first_sentence(text: str, limit: int = 160) -> str:
     """First sentence of a paragraph, for use as a headline."""
     if not text:
@@ -400,8 +530,7 @@ def _pick_headline(journal: dict, task: dict) -> str:
     Confidence tags are already stripped by _parse_summary_text; we also strip
     the fallback branches for safety.
     """
-    vs = _verdict_symptom(journal)
-    summary = _parse_summary_text(vs.get("description") or "")
+    summary = _summary_text(journal)
     if summary:
         return _first_sentence(summary)
 
@@ -410,8 +539,9 @@ def _pick_headline(journal: dict, task: dict) -> str:
             t = (s.get("title") or "").strip()
             if t.startswith("Triage verdict"):
                 return t.replace("Triage verdict:", "", 1).strip().split(" :: ", 1)[0]
-        if journal["symptoms"]:
-            first = (journal["symptoms"][0].get("title") or "").strip()
+        rendered = _render_symptoms(journal)
+        if rendered:
+            first = (rendered[0].get("title") or "").strip()
             if first:
                 return first
         if task.get("title"):
@@ -497,6 +627,42 @@ def _render_record_card(esc, title: str, description: str, badge: str = "") -> s
     )
 
 
+def _render_finding_card(esc, finding_type: str, title: str, description: str, observations: list) -> str:
+    """A finding card with an optional nested 'Supporting observations' block.
+
+    Observations are {title, analysis} objects carried by the curated
+    investigation_summary findings; live findings normalize into the same shape
+    (see _render_findings). Rendered as an indented sub-list so the evidence
+    trail is visible without opening the console.
+    """
+    badge = finding_type.replace("_", " ").upper()
+    card = _render_record_card(esc, title, description, badge)
+    if not observations:
+        return card
+    obs_rows = []
+    for o in observations[:6]:
+        if not isinstance(o, dict):
+            continue
+        o_title = (o.get("title") or "").strip()
+        o_analysis = (o.get("analysis") or o.get("description") or "").strip()
+        obs_rows.append(
+            f'<div style="margin:0 0 8px 0;">'
+            f'<div style="font-size:12px;font-weight:600;color:#424242;">{esc(o_title)}</div>'
+            f'<div style="font-size:12px;color:#616161;line-height:1.5;">{esc(o_analysis[:1200])}</div>'
+            f'</div>'
+        )
+    if not obs_rows:
+        return card
+    obs_block = (
+        f'<div style="margin:-8px 0 12px 16px;padding:8px 12px;'
+        f'border-left:2px solid #e0e0e0;background:#ffffff;">'
+        f'<div style="font-size:11px;color:#9e9e9e;letter-spacing:0.5px;'
+        f'text-transform:uppercase;margin-bottom:6px;">Supporting observations</div>'
+        f'{"".join(obs_rows)}</div>'
+    )
+    return card + obs_block
+
+
 def _format_body_html(
     event: dict,
     meta: dict,
@@ -526,29 +692,33 @@ def _format_body_html(
         ]
     )
 
+    render_symptoms = _render_symptoms(journal)
+    render_findings = _render_findings(journal)
+    render_gaps = _render_gaps(journal)
+
     # Symptoms — first is often the verdict, remaining are per-resource
     symptoms_html = ""
-    if journal["symptoms"]:
+    if render_symptoms:
         rows = []
-        for i, s in enumerate(journal["symptoms"][:6]):
+        for i, s in enumerate(render_symptoms[:6]):
             title = (s.get("title") or "").strip() or f"symptom #{i+1}"
             desc = (s.get("description") or "").strip()
             badge = "VERDICT" if title.startswith("Triage verdict") else ("SYMPTOM" if i > 0 else "PRIMARY")
             rows.append(_render_record_card(esc, title, desc[:2000], badge))
-        extra = len(journal["symptoms"]) - 6
+        extra = len(render_symptoms) - 6
         if extra > 0:
             rows.append(
                 f'<div style="font-size:12px;color:#616161;margin-top:-4px;">'
                 f'…and {extra} more symptom{"s" if extra != 1 else ""}. Open the investigation for full detail.'
                 f'</div>'
             )
-        symptoms_html = _render_section(esc, f"Symptoms ({len(journal['symptoms'])})", "".join(rows))
+        symptoms_html = _render_section(esc, f"Symptoms ({len(render_symptoms)})", "".join(rows))
 
-    # Findings — grouped by finding_type
+    # Findings — grouped by finding_type, with curated supporting observations
     findings_html = ""
-    if journal["findings"]:
+    if render_findings:
         by_type: dict[str, list[dict]] = {}
-        for f in journal["findings"]:
+        for f in render_findings:
             ft = (f.get("finding_type") or "unknown").lower()
             by_type.setdefault(ft, []).append(f)
         order = ["root_cause", "cause", "hypothesis"]
@@ -558,15 +728,15 @@ def _format_body_html(
             for f in items:
                 title = (f.get("title") or "").strip() or f"{ft} finding"
                 desc = (f.get("description") or "").strip()
-                rows.append(_render_record_card(esc, title, desc[:2000], ft.replace("_", " ").upper()))
-        findings_html = _render_section(esc, f"Findings ({len(journal['findings'])})", "".join(rows))
+                rows.append(_render_finding_card(esc, ft, title, desc[:2000], f.get("observations") or []))
+        findings_html = _render_section(esc, f"Findings ({len(render_findings)})", "".join(rows))
 
     # Investigation gaps
     gaps_html = ""
-    if journal["gaps"]:
+    if render_gaps:
         items = "".join(
             f'<li style="margin-bottom:4px;">{esc(g)}</li>'
-            for g in journal["gaps"][:10]
+            for g in render_gaps[:10]
         )
         gaps_html = _render_section(
             esc,
@@ -594,9 +764,10 @@ def _format_body_html(
     )
 
     # RCA summary — a single free-text paragraph (what happened -> likely cause
-    # -> recommended action) from the verdict symptom's description. Rendered
+    # -> recommended action). Sourced from the RCA's Summary paragraph when
+    # present, else synthesized from the curated root-cause finding. Rendered
     # prominently up top.
-    summary = _parse_summary_text(_verdict_symptom(journal).get("description") or "")
+    summary = _summary_text(journal)
     summary_html = ""
     if summary:
         summary_html = (
@@ -639,7 +810,7 @@ def _format_body_text(
 ) -> str:
     """Plain-text fallback."""
     lines = ["HyperPod investigation completed", "=" * 32, "", f"Headline: {headline}", ""]
-    summary = _parse_summary_text(_verdict_symptom(journal).get("description") or "")
+    summary = _summary_text(journal)
     if summary:
         lines += ["Summary:", summary, ""]
     lines += [
@@ -656,18 +827,24 @@ def _format_body_text(
     if console_url:
         lines += ["", f"Open investigation: {console_url}"]
 
-    if journal["symptoms"]:
+    render_symptoms = _render_symptoms(journal)
+    render_findings = _render_findings(journal)
+    render_gaps = _render_gaps(journal)
+    if render_symptoms:
         lines += ["", "-- Symptoms --"]
-        for s in journal["symptoms"][:6]:
+        for s in render_symptoms[:6]:
             lines += ["", (s.get("title") or "").strip(), (s.get("description") or "").strip()[:1500]]
-    if journal["findings"]:
+    if render_findings:
         lines += ["", "-- Findings --"]
-        for f in journal["findings"]:
+        for f in render_findings:
             ft = (f.get("finding_type") or "").upper()
             lines += ["", f"[{ft}] {(f.get('title') or '').strip()}", (f.get("description") or "").strip()[:1500]]
-    if journal["gaps"]:
+            for o in (f.get("observations") or [])[:6]:
+                if isinstance(o, dict):
+                    lines += [f"    * {(o.get('title') or '').strip()}", f"      {(o.get('analysis') or o.get('description') or '').strip()[:1000]}"]
+    if render_gaps:
         lines += ["", "-- Investigation gaps --"]
-        for g in journal["gaps"][:10]:
+        for g in render_gaps[:10]:
             lines.append(f"- {g}")
 
     return "\n".join(lines)

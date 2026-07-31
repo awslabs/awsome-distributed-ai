@@ -241,6 +241,19 @@ still degrades gracefully — it picks the first symptom's title or the task tit
 if no verdict-prefixed symptom exists — but dedup will miss and downstream
 automation loses the verdict category.
 
+The verdict symptom's **`description` must also carry a `Summary:` paragraph**
+(what happened → likely cause → recommended action). This paragraph is the
+richest email content — the notifier renders it as the Summary box and uses its
+first sentence as the subject headline. Phase 4 pins this down with a MUST block
+at the top, a restatement in the CRITICAL section, and a **pre-report
+self-check** that verifies both the verdict symptom and its Summary before the
+terminal tool. The self-check is deliberately a **quality gate, not a delivery
+gate**: if a piece is missing the skill authors it from the findings already
+gathered and *always* emits the report — it never aborts or withholds, because a
+missing email is the worst outcome. When the Summary paragraph is nonetheless
+absent, the notifier synthesizes a fallback summary from the curated root-cause
+finding (see below), so the email always has a Summary box.
+
 ### Recurrence detection
 
 Webhook-triggered investigations are single-shot: the agent writes a report and
@@ -323,6 +336,18 @@ Three channels stack:
      symptoms, findings, and investigation_gaps directly. It does not rely on
      parsing a single verdict-title string, so it degrades gracefully when the RCA
      skill drifts.
+   - **Summary sourcing is free-form-first, then first-class fallback.** The
+     Summary box and subject headline come from `_summary_text`, which reads in
+     this order: (1) the free-text `Summary:` paragraph the RCA skill writes into
+     the verdict symptom's `description` (highest quality — it states what
+     happened → cause → recommended action, and empirically carries mitigation
+     detail the structured fields lack); (2) if absent, it synthesizes a summary
+     from the curated `investigation_summary` record's root-cause finding
+     (`type: root_cause`, else `cause`). Every COMPLETED investigation emits one
+     `investigation_summary` JSON — deduped and more curated than the live
+     `symptom`/`finding` stream — so the fallback always has structured findings
+     to draw from. The result: a Summary box renders even when the skill drops the
+     free-text paragraph, but the richer free-form text wins when present.
    - **Dedup is S3-marker-based, keyed by `execution_id`.** Before every send the
      Lambda does a `HeadObject` against
      `s3://hpda-markers-<slug>-<account>-<region>/emailed/<execution_id>`. If the
