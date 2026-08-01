@@ -26,7 +26,13 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   On-Demand → `MarketType=null, crid=null, pg=<new>`;
   `capacity-block` → `MarketType=capacity-block, crid=<id>, pg=null`;
   `targeted-odcr` → `MarketType=null, crid=<id>, pg=<existing group>`.
-  Actual reserved-capacity consumption on real p5 hardware is still to be confirmed.
+  **Confirmed end-to-end on real hardware** (2026-08-01): a PCS GPU node group
+  created with `CapacityReservationType=targeted-odcr` and an existing
+  placement group launched 2x p5.48xlarge that EC2 attributed to the targeted
+  reservation (`CapacityReservationId` set on both instances,
+  `Placement.GroupName` = the passed-in group) and the reservation's
+  `AvailableInstanceCount` went 2 -> 0, i.e. the capacity was actually consumed.
+  A Slurm job on the resulting `gpu` partition ran on both nodes.
 - [ ] 🟡 **Scope down the instance role's `AmazonS3ReadOnlyAccess`.** The PCS instance
   role in `cluster.yaml` attaches `AmazonS3ReadOnlyAccess` **unconditionally** (every node
   can read every S3 bucket in the account). The upstream
