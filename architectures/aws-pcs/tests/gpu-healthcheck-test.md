@@ -74,9 +74,43 @@ per-deploy gate.
   a node with other GPU work.
 
 > **⚠️ Validate multi-node NCCL via [compute-test.md Test 6](./compute-test.md#test-6-nccl-multi-node-efa),
-> not intensive check 5.** The suite's `checks/5-nccl-allreduce.sh` defaults to an ECR image
-> URI that enroot rejects (needs the `#` registry separator,
-> `docker://public.ecr.aws#hpc-cloud/nccl-tests:<tag>`), and invokes `all_reduce_perf` by
-> bare name when that image keeps the binaries under `/opt/nccl-tests/build/` (not on
-> `PATH`). The canonical `nccl-tests-container.sbatch` in Test 6 handles both correctly and
-> ran to 377 GB/s on this cluster.
+> not intensive check 5** — until the suite fix lands. The suite's
+> `checks/5-nccl-allreduce.sh` defaults to an ECR image URI that enroot rejects (needs the
+> `#` registry separator, `docker://public.ecr.aws#hpc-cloud/nccl-tests:<tag>`), and invokes
+> `all_reduce_perf` by bare name when that image keeps the binaries under
+> `/opt/nccl-tests/build/` (not on `PATH`). The canonical `nccl-tests-container.sbatch` in
+> Test 6 handles both correctly and ran to 377 GB/s on this cluster.
+>
+> Measured consequence on **p5.48xlarge ×2** (Slurm 25.11, 2026-08-01): stock
+> `--check 5` exits 1 after **2.7 s** and reports **severity RESET** on nodes that sustain
+> **445.33 GB/s** all-reduce with `#wrong=0` immediately afterwards — i.e. a false RESET on
+> healthy hardware. Both causes are fixed by
+> `checks/5-nccl-allreduce.sh`'s `NCCL_CONTAINER` (`#` separator) and the new
+> `NCCL_TESTS_BIN` override; once that is merged, check 5 is usable here and this warning
+> can be reduced to a version note.
+
+### Verified on p5.48xlarge (us-east-1, 2026-08-01, Slurm 25.11)
+
+Lightweight suite on **p5.48xlarge** via `srun -p gpu`, per-check wall clock
+(driver 595.71.05, DCGM 4.6.0, libfabric 2.4.0amzn1.0, 32 EFA devices):
+
+| Check | Result | Wall clock |
+|---|---|---|
+| 0 nvidia-smi | PASS — 8× H100 80GB HBM3, no Xid/SXid | **3.12 s** |
+| 1 DCGM L2 | PASS — all Level-2 diagnostics | **254.62 s** |
+| 2 EFA enumeration | PASS — 32 EFA PCI / 32 RDMA / 32 uverbs | **2.24 s** |
+| 3 Topology | PASS — 8 GPUs, NVLink validated | **3.27 s** |
+| **lightweight total** | 4/4 PASS | **≈263 s** (**8.6 s** without DCGM L2) |
+| 6 EFA loopback | PASS ×6 consecutive runs, 32 domains each | **138.70–139.10 s** |
+| prolog (checks 0+2) | ×3 runs | **3.46 / 3.37 / 3.37 s** |
+
+Two notes for PCS specifically:
+
+- **The PCS-Ready DLAMI ships the EFA userspace** at `/opt/amazon/efa/bin`
+  (`fi_info`, `fi_pingpong`, libfabric 2.4.0amzn1.0) but does **not** put it on `PATH`,
+  so checks 2 and 6 log `fi_info not found` / `fi_pingpong not found on PATH` as a WARN.
+  Check 6 then adds the directory itself and runs normally — the WARN is cosmetic, not a
+  skipped test. (Contrast with EKS GPU AMIs, where `/opt/amazon/efa` is genuinely empty.)
+- Under `sbatch`, `PATH` may be **unset**, so a script that does
+  `export PATH=/some/dir:$PATH` ends up with only `/some/dir` and loses coreutils. Seed the
+  standard directories explicitly in Slurm job scripts.
