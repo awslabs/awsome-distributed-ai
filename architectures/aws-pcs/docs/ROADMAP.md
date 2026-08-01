@@ -14,21 +14,19 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   NAT gateway). This unblocks `OpenZFSDeploymentType=MULTI_AZ` and higher-availability
   layouts. *(Note: OpenZFS MULTI_AZ wiring of the 2nd subnet into the FSx resource is a
   follow-up; the subnets + routing are in place.)*
-- [ ] 🟡 **Targeted ODCR support for GPU node groups.** Today `CapacityReservationId`
-  on `add-cng-p5`/`add-cng-p6-b200`/`add-cng-p6-b300` is **Capacity Block for ML only** —
-  setting it forces `MarketType=capacity-block` and drops the placement group, so a
-  *targeted* On-Demand Capacity Reservation (ODCR) cannot be consumed (only "open" ODCRs,
-  via the empty/On-Demand path, work). Add a `CapacityReservationType` enum
-  (`none` | `capacity-block` | `targeted-odcr`) and branch the launch template:
-  `targeted-odcr` sets `CapacityReservationTarget` **without** `MarketType=capacity-block`
-  and **keeps** the placement group (On-Demand billing against the reservation).
-  `none`/`capacity-block` stay equivalent to today (backward compatible). Replaces the
-  current "do not put an ODCR ID here" caveat. Verification can be done **without GPU
-  capacity**: (1) static — create the GPU CNGs with `Min/MaxCount=0` and assert the
-  generated launch template's `CapacityReservationSpecification`/`InstanceMarketOptions`/
-  `Placement` per type; (2) dynamic — the branch logic is instance-family-independent, so
-  exercise actual targeted-ODCR consumption (`InstanceLifecycle` empty = On-Demand, reserved
-  count decrements) on a cheap type (c6i/g5).
+- [x] ✅ **Targeted ODCR support for GPU node groups.** Done: `CapacityReservationType`
+  (`capacity-block` | `targeted-odcr`) on `add-cng-p5`/`add-cng-p6-b200`/`add-cng-p6-b300`
+  plus a `PlacementGroupName` parameter for reusing an existing cluster placement group
+  (`PseriesPlacementGroupName` on deploy-all). `targeted-odcr` sets
+  `CapacityReservationTarget` **without** `MarketType=capacity-block` and **keeps** the
+  placement group (On-Demand billing against the reservation);
+  `capacity-block` (the default) is unchanged and backward compatible. Verified without
+  GPU capacity by the static method below: a launch-template-only harness deployed in all
+  three modes, reading back the generated `LaunchTemplateData` —
+  On-Demand → `MarketType=null, crid=null, pg=<new>`;
+  `capacity-block` → `MarketType=capacity-block, crid=<id>, pg=null`;
+  `targeted-odcr` → `MarketType=null, crid=<id>, pg=<existing group>`.
+  Actual reserved-capacity consumption on real p5 hardware is still to be confirmed.
 - [ ] 🟡 **Scope down the instance role's `AmazonS3ReadOnlyAccess`.** The PCS instance
   role in `cluster.yaml` attaches `AmazonS3ReadOnlyAccess` **unconditionally** (every node
   can read every S3 bucket in the account). The upstream

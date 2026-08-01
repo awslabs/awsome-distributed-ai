@@ -63,7 +63,9 @@ See [GPU compute](../README.md#gpu-compute-p5p6) for instance/EFA/capacity guida
 | `PseriesInstanceType` | `p5.48xlarge` | GPU instance type; selects the matching multi-NIC template **and** EFA interface count automatically |
 | `PseriesMinCount` | `0` | GPU queue minimum nodes |
 | `PseriesMaxCount` | `4` | GPU queue maximum nodes |
-| `CapacityReservationId` | *(empty)* | Capacity **Block** reservation ID (sets `MarketType=capacity-block`). Leave empty for On-Demand / ODCR — **do not** put an ODCR ID here |
+| `CapacityReservationId` | *(empty)* | Capacity reservation ID for the GPU queue, interpreted per `CapacityReservationType`. Empty = plain On-Demand (an "open" ODCR with matching attributes is still consumed automatically) |
+| `CapacityReservationType` | `capacity-block` | How to read `CapacityReservationId`. `capacity-block` sets `MarketType=capacity-block` and uses no placement group. `targeted-odcr` targets an ODCR that accepts only targeted launches, keeps On-Demand billing, and **keeps** the placement group — required when the ODCR was created inside a placement group |
+| `PseriesPlacementGroupName` | *(empty)* | Name of an **existing** cluster placement group for the GPU queue. Empty creates a new one. Set it when the reservation you are consuming was created inside a specific placement group |
 | `PseriesCngName` | `gpu-p5` | GPU node-group name |
 | `PseriesQueueName` | `gpu-p5` | GPU Slurm queue name |
 

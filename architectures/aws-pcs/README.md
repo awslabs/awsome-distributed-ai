@@ -132,7 +132,9 @@ complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 |---|---|---|
 | `DeployPseriesCNG` | `false` | Deploy a multi-NIC GPU (P5/P6) queue |
 | `PseriesInstanceType` | `p5.48xlarge` | Picks the matching template + EFA NIC count automatically. See [GPU compute](#gpu-compute-p5p6) for the accepted types |
-| `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR |
+| `CapacityReservationId` | *(empty)* | Capacity reservation ID for the GPU queue; empty for plain On-Demand / "open" ODCR |
+| `CapacityReservationType` | `capacity-block` | `capacity-block` (default) or `targeted-odcr`. See [Capacity options](#gpu-compute-p5p6) |
+| `PseriesPlacementGroupName` | *(empty)* | Existing cluster placement group for the GPU queue; required with a placement-group-scoped ODCR |
 
 **5.1. Additional Cluster Configuration: Monitoring**
 
@@ -194,8 +196,9 @@ automatically.
 **Capacity options:**
 
 - **On-Demand**: leave `CapacityReservationId` empty.
-- **On-Demand Capacity Reservation (ODCR)**: also leave `CapacityReservationId` **empty** — create the ODCR with **"open"** instance matching and it is consumed automatically by the node group's On-Demand launches. (Do **not** put the ODCR ID in `CapacityReservationId`; that parameter forces Capacity-Block mode.)
-- **Capacity Blocks for ML**: set `CapacityReservationId` to the Capacity Block ID. The template then launches with `MarketType=capacity-block` against it.
+- **"Open" On-Demand Capacity Reservation (ODCR)**: also leave `CapacityReservationId` **empty** — an ODCR created with **"open"** instance matching is consumed automatically by the node group's On-Demand launches.
+- **Targeted ODCR, or any ODCR created inside a placement group**: set `CapacityReservationId` to the ODCR ID **and** `CapacityReservationType` to `targeted-odcr`. This keeps On-Demand billing and retains the cluster placement group. If the ODCR was created inside an existing placement group, also pass that group's name as `PseriesPlacementGroupName`: EC2 only matches an instance to such a reservation when the instance's **placement group ARN** matches the reservation's, alongside instance type, AZ, platform and tenancy ([Use Capacity Reservations with placement groups](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/cr-cpg.html)). Without it the node group creates its own group, the ARNs differ, and the launch silently falls through to unreserved On-Demand capacity.
+- **Capacity Blocks for ML**: set `CapacityReservationId` to the Capacity Block ID and leave `CapacityReservationType` at its `capacity-block` default. The template then launches with `MarketType=capacity-block` against it, with no placement group (Capacity Blocks carry their own physical placement).
 
 > **Capacity Block billing:** a block bills for its whole reserved window once it
 > starts and cannot be stopped early. When the block is active, run the GPU node
@@ -256,8 +259,10 @@ aws cloudformation create-stack \
 The `add-cng-p6-b300.yaml` template is selected automatically from `PseriesInstanceType`,
 and the EFA interface count is derived from the instance type — no interface-count
 parameter to set. For `p6-b200.48xlarge` or any P5 type, just change
-`PseriesInstanceType`. `CapacityReservationId` here is the **Capacity Block** ID; for
-On-Demand or an "open" ODCR, leave it empty (see [GPU compute](#gpu-compute-p5p6)).
+`PseriesInstanceType`. `CapacityReservationId` here defaults to being read as a
+**Capacity Block** ID; for a targeted ODCR set `CapacityReservationType=targeted-odcr`,
+and for On-Demand or an "open" ODCR leave it empty (see
+[GPU compute](#gpu-compute-p5p6)).
 
 ### Example 3: HPC EFA on the CPU queue (hpc7a)
 
@@ -707,8 +712,8 @@ parameter and default, see [PARAMETERS.md](./docs/PARAMETERS.md).
 | [`pcs-ready-dlami-with-enroot-pyxis.yaml`](./assets/pcs-ready-dlami-with-enroot-pyxis.yaml) | EC2 Image Builder: bake Enroot 3.5.0 + Pyxis 0.20.0 into the PCS-Ready DLAMI | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/pcs-ready-dlami-with-enroot-pyxis.yaml&stackName=pcs-dlami) |
 
 `add-cng*` templates create a Slurm queue only when `QueueName` is set (leave it empty
-for login nodes). The P-series templates need a `CapacityReservationId` when using a
-Capacity Block.
+for login nodes). The P-series templates take a `CapacityReservationId` when using a
+Capacity Block or a targeted ODCR; `CapacityReservationType` selects which.
 
 ### Template nesting structure (deploy-all)
 
