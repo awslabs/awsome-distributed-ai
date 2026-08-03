@@ -77,6 +77,69 @@ variable "private_subnet_availability_zone_ids" {
   }
 }
 
+# ============================================================================
+# Local Zone egress inputs (backward-compatible: default empty = disabled)
+# ============================================================================
+# By default, private subnets in a Local Zone route 0.0.0.0/0 to the regional
+# NAT gateway (created in a standard-AZ public subnet). Every packet then
+# hairpins to the parent Region, adding 24-35 ms per RTT.
+#
+# Setting local_zone_egress_zone_ids (with matching public subnet CIDRs and
+# network border groups) creates one LZ-local NAT gateway per listed zone.
+# The private_subnet module routes matching subnets to their LZ NAT via the
+# nat_gateway_ids_by_zone_id map output by the vpc module.
+#
+# Only the private_subnet module receives the map. The eks_cluster module
+# keeps using the regional NAT because EKS control-plane subnets cannot live
+# in a Local Zone.
+#
+# Measured impact (LAX A/B, c5.large, 2026-08-03):
+#   - Traceroute hop 1: 23.8 ms -> 0.095 ms (250x)
+#   - PyPI download total: 797 ms -> 143 ms (5.6x)
+#   - Cloudflare 25 MB total: 565 ms -> 132 ms (4.3x)
+variable "local_zone_egress_zone_ids" {
+  description = <<-EOT
+    Optional list of Local Zone AZ IDs (e.g. usw2-phx2-az1) that should get
+    an LZ-local NAT gateway. Each entry must be matched 1:1 in
+    local_zone_public_subnet_cidrs and local_zone_network_border_groups.
+    When empty (default), all private subnets fall back to the regional NAT.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
+variable "local_zone_public_subnet_cidrs" {
+  description = <<-EOT
+    LZ public subnet CIDRs, 1:1 with local_zone_egress_zone_ids. Typically
+    carved from the VPC primary CIDR (secondary CIDRs are usually fully
+    consumed by the private worker subnet).
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.local_zone_public_subnet_cidrs) == length(var.local_zone_egress_zone_ids)
+    error_message = "local_zone_public_subnet_cidrs must have the same length as local_zone_egress_zone_ids."
+  }
+}
+
+variable "local_zone_network_border_groups" {
+  description = <<-EOT
+    NetworkBorderGroup names for the LZ NAT EIPs, 1:1 with
+    local_zone_egress_zone_ids. Required: a plain vpc-scoped EIP cannot
+    attach to a NAT in an LZ subnet. The border group is the LZ zone name
+    minus the trailing zone letter (us-west-2-phx-2a -> us-west-2-phx-2,
+    us-west-2-lax-1a -> us-west-2-lax-1).
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.local_zone_network_border_groups) == length(var.local_zone_egress_zone_ids)
+    error_message = "local_zone_network_border_groups must have the same length as local_zone_egress_zone_ids."
+  }
+}
+
 variable "existing_nat_gateway_id" {
   description = "The ID of an existing NAT Gateway"
   type        = string

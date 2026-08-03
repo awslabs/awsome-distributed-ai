@@ -61,10 +61,17 @@ resource "aws_route_table_association" "private" {
   route_table_id = aws_route_table.private[count.index].id
 }
 
-# NAT Gateway route - only created if NOT closed network
+# NAT Gateway route - only created if NOT closed network.
+# Per-AZ NAT selection: if this subnet's AZ ID has an entry in
+# nat_gateway_ids_by_zone_id (used for Local Zone-local NATs), use it;
+# otherwise fall back to the regional var.nat_gateway_id.
 resource "aws_route" "nat_gateway" {
   count                  = var.closed_network ? 0 : local.subnet_count
   route_table_id         = aws_route_table.private[count.index].id
   destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = var.nat_gateway_id
+  nat_gateway_id = lookup(
+    var.nat_gateway_ids_by_zone_id,
+    local.subnet_zone_ids[count.index],
+    var.nat_gateway_id
+  )
 }

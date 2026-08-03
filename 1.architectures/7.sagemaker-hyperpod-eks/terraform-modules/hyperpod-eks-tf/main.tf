@@ -29,18 +29,21 @@ locals {
   ]
   is_amp_allowed = contains(local.amp_allowed_regions, var.aws_region)
 
-  vpc_id                   = var.create_vpc_module ? module.vpc[0].vpc_id : var.existing_vpc_id
-  private_subnet_ids       = var.create_private_subnet_module ? module.private_subnet[0].private_subnet_ids : var.existing_private_subnet_ids
-  security_group_id        = var.create_security_group_module ? module.security_group[0].security_group_id : var.existing_security_group_id
-  eks_cluster_name         = var.create_eks_module ? module.eks_cluster[0].eks_cluster_name : var.existing_eks_cluster_name
-  eks_cluster_arn          = var.create_eks_module ? module.eks_cluster[0].eks_cluster_arn : data.aws_eks_cluster.existing_eks_cluster[0].arn
-  sagemaker_iam_role_name  = var.create_sagemaker_iam_role_module ? module.sagemaker_iam_role[0].sagemaker_iam_role_name : var.existing_sagemaker_iam_role_name
-  create_hyperpod_module   = var.create_hyperpod_module && !(var.create_eks_module && !var.create_helm_chart_module)
-  karpenter_role_arn       = var.create_sagemaker_iam_role_module && length(module.sagemaker_iam_role[0].karpenter_role_arn) > 0 ? module.sagemaker_iam_role[0].karpenter_role_arn[0] : null
-  nat_gateway_id           = var.create_vpc_module ? module.vpc[0].nat_gateway_1_id : var.existing_nat_gateway_id
-  private_route_table_ids  = var.create_private_subnet_module ? module.private_subnet[0].private_route_table_ids : var.existing_private_route_table_ids
-  eks_private_subnet_cidrs = [var.eks_private_subnet_1_cidr, var.eks_private_subnet_2_cidr]
-  enable_guardduty_cleanup = var.enable_guardduty_cleanup && (var.create_vpc_module || var.create_private_subnet_module || var.create_eks_module)
+  vpc_id                  = var.create_vpc_module ? module.vpc[0].vpc_id : var.existing_vpc_id
+  private_subnet_ids      = var.create_private_subnet_module ? module.private_subnet[0].private_subnet_ids : var.existing_private_subnet_ids
+  security_group_id       = var.create_security_group_module ? module.security_group[0].security_group_id : var.existing_security_group_id
+  eks_cluster_name        = var.create_eks_module ? module.eks_cluster[0].eks_cluster_name : var.existing_eks_cluster_name
+  eks_cluster_arn         = var.create_eks_module ? module.eks_cluster[0].eks_cluster_arn : data.aws_eks_cluster.existing_eks_cluster[0].arn
+  sagemaker_iam_role_name = var.create_sagemaker_iam_role_module ? module.sagemaker_iam_role[0].sagemaker_iam_role_name : var.existing_sagemaker_iam_role_name
+  create_hyperpod_module  = var.create_hyperpod_module && !(var.create_eks_module && !var.create_helm_chart_module)
+  karpenter_role_arn      = var.create_sagemaker_iam_role_module && length(module.sagemaker_iam_role[0].karpenter_role_arn) > 0 ? module.sagemaker_iam_role[0].karpenter_role_arn[0] : null
+  nat_gateway_id          = var.create_vpc_module ? module.vpc[0].nat_gateway_1_id : var.existing_nat_gateway_id
+  # Per-AZ NAT map: only populated when this module manages the VPC. When
+  # BYO-VPC, callers currently have to set up LZ-local NATs themselves.
+  nat_gateway_ids_by_zone_id = var.create_vpc_module ? module.vpc[0].nat_gateway_ids_by_zone_id : {}
+  private_route_table_ids    = var.create_private_subnet_module ? module.private_subnet[0].private_route_table_ids : var.existing_private_route_table_ids
+  eks_private_subnet_cidrs   = [var.eks_private_subnet_1_cidr, var.eks_private_subnet_2_cidr]
+  enable_guardduty_cleanup   = var.enable_guardduty_cleanup && (var.create_vpc_module || var.create_private_subnet_module || var.create_eks_module)
 
   # Cilium CNI
   skip_vpc_cni  = var.enable_cilium && var.cilium_mode != "chaining"
@@ -81,23 +84,27 @@ module "vpc" {
   count  = var.create_vpc_module ? 1 : 0
   source = "./modules/vpc"
 
-  resource_name_prefix = var.resource_name_prefix
-  vpc_cidr             = var.vpc_cidr
-  public_subnet_1_cidr = var.public_subnet_1_cidr
-  public_subnet_2_cidr = var.public_subnet_2_cidr
-  closed_network       = var.closed_network
+  resource_name_prefix             = var.resource_name_prefix
+  vpc_cidr                         = var.vpc_cidr
+  public_subnet_1_cidr             = var.public_subnet_1_cidr
+  public_subnet_2_cidr             = var.public_subnet_2_cidr
+  closed_network                   = var.closed_network
+  local_zone_egress_zone_ids       = var.local_zone_egress_zone_ids
+  local_zone_public_subnet_cidrs   = var.local_zone_public_subnet_cidrs
+  local_zone_network_border_groups = var.local_zone_network_border_groups
 }
 
 module "private_subnet" {
   count  = var.create_private_subnet_module ? 1 : 0
   source = "./modules/private_subnet"
 
-  resource_name_prefix  = var.resource_name_prefix
-  vpc_id                = local.vpc_id
-  private_subnet_cidrs  = var.private_subnet_cidrs
-  availability_zone_ids = var.private_subnet_availability_zone_ids
-  nat_gateway_id        = local.nat_gateway_id
-  closed_network        = var.closed_network
+  resource_name_prefix       = var.resource_name_prefix
+  vpc_id                     = local.vpc_id
+  private_subnet_cidrs       = var.private_subnet_cidrs
+  availability_zone_ids      = var.private_subnet_availability_zone_ids
+  nat_gateway_id             = local.nat_gateway_id
+  nat_gateway_ids_by_zone_id = local.nat_gateway_ids_by_zone_id
+  closed_network             = var.closed_network
 }
 
 module "security_group" {

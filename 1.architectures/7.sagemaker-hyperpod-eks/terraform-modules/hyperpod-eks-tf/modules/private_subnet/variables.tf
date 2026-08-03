@@ -36,6 +36,18 @@ variable "nat_gateway_id" {
   type        = string
 }
 
+variable "nat_gateway_ids_by_zone_id" {
+  description = <<-EOT
+    Optional per-AZ-ID NAT gateway override. When a private subnet's AZ ID is
+    a key in this map, its default route uses the mapped NAT gateway instead
+    of var.nat_gateway_id. Used to route Local Zone subnets to an LZ-local
+    NAT gateway. Falls back to var.nat_gateway_id for unmapped AZs.
+    Default: empty map (all subnets use var.nat_gateway_id).
+  EOT
+  type        = map(string)
+  default     = {}
+}
+
 variable "closed_network" {
   description = "Whether to deploy in closed network mode (no NAT gateway routes)"
   type        = bool
