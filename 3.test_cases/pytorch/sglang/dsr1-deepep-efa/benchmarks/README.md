@@ -22,12 +22,14 @@ and [`ep-backend-comparison`](../../../../../micro-benchmarks/expert-parallelism
 
 | Stage | Winner | Margin |
 |---|---|---|
-| **Prefill** (large batches) | **DeepEP** | 30.8k input tok/s at 4K×conc32 colocated — **+13%** over the best non-EP path, **+24%** over UCCL-EP, and the gap widens with concurrency |
+| **Prefill** (large batches) | **DeepEP** | 30.8k input tok/s at 4K×conc32 colocated — **+10%** over the best non-EP path (pure TP, 28.0k) and **+32%** over UCCL-EP (23.4k), with the gap widening as concurrency rises |
 | **Decode** (small batches) | **UCCL-EP + DP-attention** | 4094 output tok/s at conc128, TPOT 28 ms in 2P2D — **1.5×** DeepEP+DP, **1.13×** the best non-DP config |
 
-Prefill and decode run on separate node groups in a PD deployment, so you can act on that: **DeepEP
-on the prefill role, UCCL-EP + DP-attention on the decode role.** That split is the most useful
-result here and it exists only because the roles are disaggregated.
+Prefill and decode run on separate node groups in a PD deployment, so the configuration these numbers
+point to is **DeepEP on the prefill role, UCCL-EP + DP-attention on the decode role.** That split is
+the most useful result here and it exists only because the roles are disaggregated — but it is
+assembled from two separately-measured same-backend deployments and **has not been run end to end**
+(see [Open items](#open-items)).
 
 **On decode at 16 GPUs, DeepEP loses to everything** — the ordinary all-to-all, pure TP, and
 UCCL-EP (the last of those confirmed in both topologies, under matched `--deepep-mode` and with a
@@ -36,10 +38,17 @@ GPU owns 16 experts, so the fan-out is small and mostly intra-node NVLink, and D
 dispatch/combine cost is not amortised. DeepEP targets EP domains wide enough that every token must
 cross the fabric; that crossover is not reachable on 2 nodes for decode.
 
-**Every number below pins `--deepep-mode` to the stage being measured** — `normal` for prefill,
+**Part 1 pins `--deepep-mode` to the stage being measured** — `normal` for prefill,
 `low_latency` for decode — and runs with the radix prefix cache off. Both are measurement
 requirements, not tuning: see [section 2](#2-pin---deepep-mode-to-the-stage-you-are-measuring) and
 [section 5](#5-disable-the-prefix-cache-or-the-sweep-measures-the-cache).
+
+Two documented exceptions, both called out again at the tables themselves:
+- The **pure-TP and Baseline decode columns** were measured with the prefix cache **on** — and those
+  are the columns behind "DeepEP is last on decode". The effect is quantified where the table appears
+  (up to ~7% optimistic on `output tok/s` at high concurrency, ≤4% on TPOT, ordering unaffected).
+- **Part 2's 2P2D tables** predate both rules: the DeepEP rows ran `--deepep-mode auto`, and the cache
+  was on for the non-DP rows and off for the DP rows. Part 2 opens with this caveat.
 
 **What the port establishes:** the DeepEP dispatch/combine kernels are correct and run at IB-class
 bandwidth over EFA with no InfiniBand present, in a real DeepSeek-R1 server, in both topologies.
@@ -110,11 +119,13 @@ server without capping prefill.
   `libnccl-net.so` name, where it auto-loads; do not infer the transport from the installer version.
 - **KV cache on EFA**, for 2P2D only. Requires
   [`MOONCAKE_PROTOCOL=efa`](#required-setting-mooncake_protocolefa) — omitting it silently falls back
-  to TCP — plus `--privileged` and `FI_HMEM=cuda`. On the current image the KV path is **blocked
-  regardless**: see [Open blocker](#open-blocker-gpu-memory-registration-on-libfabric-24). 2P2D cannot
-  be benchmarked on this image; the colocated Part 1 path is unaffected.
-- **Run the kernel tests first.** `recipe/run-kernel-test.sh intranode|low_latency|internode`. The
-  first two are single-node and cheap; only `internode` puts bytes on EFA.
+  to TCP — plus `--privileged` and `FI_HMEM=cuda`, and a Mooncake at or after
+  [`a7413723`](https://github.com/kvcache-ai/Mooncake/commit/a7413723), which both Dockerfiles pin. On
+  an older Mooncake the KV path fails regardless of the launch configuration; see
+  [Resolved: GPU-memory registration](#resolved-gpu-memory-registration-needed-a-cuda-context-on-the-registering-thread).
+- **Run the kernel tests first.** `recipe/run-kernel-test.sh intranode|low_latency|internode`.
+  `intranode` is single-node and cheap; `internode` **and** `low_latency` both put bytes on EFA, so
+  skipping `low_latency` skips half the EFA coverage.
 
 ## 5. Disable the prefix cache, or the sweep measures the cache
 
@@ -150,8 +161,9 @@ prompts, not a side effect of a fixed seed.
 
 1. **Single-seed smoke benchmarks.** One `bench_serving` pass per point — directional, not
    statistically tight. Low-concurrency prefill points (4–16 requests) are dominated by warmup.
-2. **`--deepep-mode` is pinned everywhere**, `normal` for prefill and `low_latency` for decode. 2P2D
-   pins it per role by construction. Older `auto` measurements have been dropped rather than mixed
+2. **`--deepep-mode` is pinned throughout Part 1**, `normal` for prefill and `low_latency` for
+   decode. 2P2D pins it per role by construction, but the Part 2 *legacy* tables further down ran
+   `auto` and say so. Older colocated `auto` measurements have been dropped rather than mixed
    in: an `auto`-vs-pinned comparison understates DeepEP by about 2× at low concurrency.
 3. **UCCL rows come from a different image**, bridged by running `baseline` on both — and the bridge
    holds on both stages. Decode agrees within ±1.8% tok/s across the whole ramp and prefill within
@@ -197,7 +209,8 @@ pin `--deepep-mode normal`, the prefill mode; all four columns have the radix pr
 
 **At low concurrency the non-EP paths win 4–5×** — EP's per-layer dispatch/combine is not amortised
 when few tokens move, and at conc 1 that fixed cost is the whole measurement. **DeepEP overtakes at
-concurrency ≥8** (30.2k vs 26.8k, TTFT 1010 vs 1158 ms) and holds a ~13% lead at conc 32, with the
+concurrency ≥8** (30.2k vs 26.8k, TTFT 1010 vs 1158 ms) and at conc 32 leads the best non-EP column by
+10% (30.8k vs pure TP's 28.0k; +15% vs Baseline's 26.8k), with the
 ramp still rising while both non-EP columns have flattened. Part 2 continues to concurrency 256.
 
 **pure TP ≈ Baseline at every point** (within ±7%, no consistent winner) — at 16 GPUs the TP
@@ -280,7 +293,11 @@ Output tok/s / mean TPOT ms / p99 ITL ms. **Bold = best in row.**
 | 512 | 4371 / 96.2 / 465 | **4625** / **83.5** / **435** | **+6%** |
 
 **UCCL-EP wins decode at every point**, by 37% at conc 32 narrowing to 6% at conc 512, with TPOT
-30% lower where it matters. This is the ordering to trust: matched modes, one topology, one harness.
+30% lower where it matters. This is the best-controlled ordering here — matched modes, one topology,
+one harness — but it is still single-pass: run-to-run variance was not characterised, and the smallest
+margin promoted to a conclusion is about 6%, so treat the ordering as directional rather than
+statistically established (see
+[Comparability limits](#comparability-limits-of-the-tables-below)).
 
 Both backends' p99 ITL jumps ~8× at conc 512 (465 and 435 ms) while their mean TPOT keeps improving:
 that is the saturation tail, common to both, not a backend property.
@@ -336,12 +353,13 @@ image — see [section 5](#5-disable-the-prefix-cache-or-the-sweep-measures-the-
 > clean Part 1 tables; the absolute figures below, especially the 161.5k 1K-prefill peak, are not
 > directly comparable to Part 1's.
 >
-> Re-running them under the Part 1 rules was attempted on 2026-07-28 and **could not be done**: on the
-> current image the KV transfer fails on the first real request through the router, before any sweep
-> point is collected. See [Open blocker](#open-blocker-gpu-memory-registration-on-libfabric-24). Every
-> attempt aborted identically at a single-request smoke test through the router, so no 2P2D point below
-> has been superseded — they stand as the last valid measurement, taken on an earlier EFA/libfabric
-> stack.
+> Re-running them under the Part 1 rules was attempted on 2026-07-28 and could not be done at the
+> time: the KV transfer failed on the first real request through the router, before any sweep point was
+> collected. That was the CUDA-context registration bug —
+> [now fixed upstream and pinned](#resolved-gpu-memory-registration-needed-a-cuda-context-on-the-registering-thread),
+> so **the re-measurement is now unblocked and simply has not been done yet.** No 2P2D point below has
+> been superseded; they stand as the last valid measurement, taken on an earlier EFA/libfabric stack
+> with the pre-fix Mooncake.
 
 ```
   Prefill role (TP=16 / EP=16)          Decode role (TP=16 / EP=16)
@@ -524,7 +542,7 @@ prefill advantage comes from a big fused dispatch. **Never enable DP-attention o
 |---|---|---|
 | **Prefill** | **DeepEP**, no DP-attention, operate at concurrency ~256 for 1K inputs | 161.5k input tok/s, 3× the alternatives; DP would cost 63% |
 | **Decode** | **UCCL-EP + DP-attention**, `--cuda-graph-bs 128`, `--deepep-mode low_latency` | 4094 tok/s / TPOT 28 ms, the fastest decode measured |
-| **Decode**, same-image fallback | **baseline**, no DP-attention | 3626 tok/s / TPOT 34 ms — 13% behind, needs no second image |
+| **Decode**, same-image fallback | **baseline**, no DP-attention | 3626 tok/s / TPOT 34 ms — 11% behind, needs no second image |
 
 Different backends per role means different *images* per role, which PD makes practical — the roles
 share nothing but the KV stream. If one image is a hard requirement, **DeepEP prefill + baseline
@@ -608,68 +626,62 @@ GPU-memory registration broken (its 4-token prompt takes a path that does not ne
 `The server is fired up and ready to roll!` plus a 200 from the warmup is not evidence the KV path
 works. Send one real request through the router instead.
 
-### Open blocker: GPU-memory registration on libfabric 2.4
+### Resolved: GPU-memory registration needed a CUDA context on the registering thread
 
-With both requirements above satisfied, the KV path on **this image** still fails on the first real
-request. Registration of the GPU-resident KV cache logs:
+**This was an open blocker in earlier revisions of this sample. It is fixed upstream; pin Mooncake at
+or after [`a7413723`](https://github.com/kvcache-ai/Mooncake/commit/a7413723) and it does not occur.**
+Both Dockerfiles now default to that commit.
+
+On an older Mooncake, registration of the GPU-resident KV cache logs:
 
 ```
-efa_context.cpp:402]   fi_mr_regattr failed for GPU memory 0x… (device 3): Operation not supported
+efa_context.cpp:402]   fi_mr_regattr failed for GPU memory 0x... (device 3): Operation not supported
 efa_transport.cpp:460] Failed to register memory region chunk 0 with EFA context 0
-efa_transport.cpp:643] EfaTransport: Failed to register memory: addr 0x… length 1229029632
+efa_transport.cpp:643] EfaTransport: Failed to register memory: addr 0x... length 1229029632
 ```
 
 and the transfer then dies as described above, with the error reported on the wrong side.
 
-**The cause is inside Mooncake's EFA transport, not in the launch configuration.** The decisive
-evidence is that the same call succeeds from a plain C program in the *same container, on the same
-GPUs, while the failing server is running*. `recipe/probe-kv-registration.c` is that probe (build and
-run instructions are in its header): it replicates `EfaContext::construct`'s `fi_getinfo` hints
-exactly — `caps = FI_MSG|FI_RMA|FI_READ|FI_WRITE|FI_REMOTE_READ|FI_REMOTE_WRITE`,
-`domain_attr->mr_mode = FI_MR_LOCAL|FI_MR_VIRT_ADDR|FI_MR_ALLOCATED|FI_MR_PROV_KEY|FI_MR_HMEM` — then
-opens each domain and registers `cudaMalloc`'d memory with `iface = FI_HMEM_CUDA`:
+**Root cause** ([kvcache-ai/Mooncake#3177](https://github.com/kvcache-ai/Mooncake/pull/3177), merged
+2026-07-30): the registering thread had no current CUDA driver context. libfabric's
+`cuda_get_dmabuf_fd()` (`src/hmem_cuda.c`) calls the driver API
+`cuMemGetHandleForAddressRange()` with no context management of its own, so a thread that has only
+ever used the CUDA **runtime** API gets `CUDA_ERROR_INVALID_CONTEXT`. The EFA provider has no dmabuf
+fallback for `FI_HMEM_CUDA`, so it ends at `efa_mr.c`'s `if (!errno) errno = ENOTSUP` — surfacing as
+a bare "Operation not supported". `registerLocalMemory()` then rolls the chunk back, leaving the
+buffer registered on no NIC at all, which is why the first transfer touching it fails.
 
-```
-[0] fabric=efa dom=rdmap85s0-rdm  caps_hmem=0  regattr=0 (OK)     # all 32 domains
-dev=0 regattr=0 (OK)   dev=4 regattr=0 (OK)   dev=5 regattr=0 (OK)
-size=64MiB  regattr=0 (OK)    size=1229029632  regattr=0 (OK)     # the failing length
-```
+This also explains the observation that made the failure so confusing: **the same call succeeds from a
+plain C program in the same container, on the same GPUs, while the failing server is running.**
+`recipe/probe-kv-registration.c` is that probe, and it succeeded on all 32 domains at the exact
+failing length — because the probe's own thread had a CUDA context. The probe is kept because it
+remains the right tool for separating "this host cannot register GPU memory" from "the caller is
+doing it wrong"; its header documents what a pass and a fail each mean.
 
-So the provider, the fabric, the CUDA device index and the buffer length are all fine; something
-about *how Mooncake allocates or describes the buffer* is not. Two candidates the probe did narrow
-down:
+Two things that were investigated at length and are **not** the cause, recorded so nobody repeats the
+search:
 
-- **`FI_HMEM` must not include `system`.** Registering with `iface=FI_HMEM_CUDA` returns `-38`
-  (`ENOSYS`) whenever the env var names `system` — `system`, `system,cuda` and `cuda,system` all
-  fail; `cuda` and unset both succeed. Mooncake calls `setenv("FI_HMEM", "system", 0)` itself, and
-  `overwrite=0` means an explicit `FI_HMEM=cuda` from the launcher wins. `recipe/serve-pd.sh` sets
-  it. This is necessary but **not** sufficient: with `FI_HMEM=cuda` confirmed live in the container,
-  registration still fails — and with `EOPNOTSUPP`, not the `ENOSYS` this lever produces, so it is a
-  different failure.
-- **CUDA VMM allocations cannot be registered.** `cuMemCreate` + `cuMemMap` memory fails with
-  `-14` (`EFAULT`) at the same length that `cudaMalloc` registers fine, with or without an exportable
-  handle type. If Mooncake (or SGLang's allocator underneath it) hands the transport a VMM-backed
-  buffer, that is a plausible mechanism — untested against the live server.
+- **`FI_HMEM` naming `system`.** This is a real and separate failure: registering with
+  `iface=FI_HMEM_CUDA` returns `-38` (`ENOSYS`) whenever the env var names `system` — `system`,
+  `system,cuda` and `cuda,system` all fail; `cuda` and unset both succeed. Mooncake calls
+  `setenv("FI_HMEM", "system", 0)` itself, and `overwrite=0` means an explicit `FI_HMEM=cuda` from the
+  launcher wins, which is why `recipe/serve-pd.sh` sets it. But it produces `ENOSYS`, not the
+  `EOPNOTSUPP` above, and with `FI_HMEM=cuda` confirmed live the registration still failed.
+- **`FI_HMEM` missing from `hints_->caps`.** Adding it via an `LD_PRELOAD` `fi_getinfo` shim did not
+  help (the shim fired; registration still failed). Upstream did add the bit, citing
+  [ofiwg/libfabric#12328](https://github.com/ofiwg/libfabric/issues/12328) — the SHM sub-provider
+  otherwise `memcpy()`s into a CUDA device VA and SIGSEGVs during SAR — but that is a different bug
+  from this one.
 
-Also ruled out, each by measurement: adding `FI_HMEM` to `hints_->caps` via an `LD_PRELOAD`
-`fi_getinfo` shim (the shim fires, and registration still fails — the `caps` bit is simply not what
-gates this); the prefill/decode port split; the decode `--chunked-prefill-size`;
-`--disable-radix-cache`; the MoE backend (reproduces under `MOE_BACKEND=tp`, which loads neither
-DeepEP nor NVSHMEM); and the `efa` vs `efa-direct` fabric — `FI_EFA_USE_DATA_PATH_DIRECT` changes
-neither enumeration nor the outcome, and `fi_getinfo` with `prov_name="efa"` never returns
-`efa-direct` (requesting it by fabric name returns `-61`).
+Also ruled out by measurement: CUDA VMM allocations (`cuMemCreate` + `cuMemMap` fails `-14 EFAULT`
+where `cudaMalloc` succeeds, so it looked promising, but it is not what the server hits); the
+prefill/decode port split; the decode `--chunked-prefill-size`; `--disable-radix-cache`; the MoE
+backend (reproduced under `MOE_BACKEND=tp`, which loads neither DeepEP nor NVSHMEM); and the `efa` vs
+`efa-direct` fabric — `FI_EFA_USE_DATA_PATH_DIRECT` changes neither enumeration nor the outcome, and
+`fi_getinfo` with `prov_name="efa"` never returns `efa-direct` (requesting it by fabric name returns
+`-61`).
 
-**The image's Mooncake is old, and that is the first thing to change.** It ships
-`mooncake-transfer-engine 0.3.12.post1`. Upstream `main` has since reworked exactly this code path —
-`EfaContext::construct` now adds `FI_HMEM` to `hints_->caps` (citing
-[ofiwg/libfabric#12328](https://github.com/ofiwg/libfabric/issues/12328): without it the SHM
-sub-provider does a host `memcpy()` into a CUDA device VA and SIGSEGVs during SAR), and it guards the
-`setenv("FI_HMEM", "system", 0)` behind `#if !defined(USE_CUDA) && !defined(USE_HIP)` with a comment
-explaining that the variable exists only to stop a non-GPU build from leaking a ~616 MiB CUDA primary
-context. Neither change is in 0.3.12.post1. **Rebuild the image against current Mooncake before
-spending more time on env levers** — that, not a launch flag, is the likely fix.
-
-Two notes for anyone continuing the diagnosis:
+One note for anyone reading the probe or the failing log:
 
 - **Mooncake's `access` flags are narrower than the obvious guess.**
   `registerMemoryRegionInternal` passes `FI_READ|FI_WRITE|FI_REMOTE_READ|FI_REMOTE_WRITE` — no
@@ -678,11 +690,12 @@ Two notes for anyone continuing the diagnosis:
   replica.
 - **`max_mr_size` bounds the whole path.** Mooncake refuses any single registration larger than it and
   splits above it (`MC_MAX_MR_SIZE` overrides the device default), which is why the failing log line
-  says "chunk 0". Worth confirming the chunking is sane, not just the registration.
+  says "chunk 0".
 
-Until this is resolved, **Part 2's 2P2D numbers cannot be re-measured on this image**; they were taken
-under EFA installer 1.47 / libfabric ≤2.3, and the current image ships libfabric 2.4 with that old
-Mooncake. The colocated Part 1 results are unaffected — they use no KV transfer at all.
+**Provenance of Part 2's numbers.** They were taken on EFA installer 1.47 / libfabric <= 2.3 with the
+pre-fix Mooncake, and were *not* re-measured on the current pinned image — the blocker above is why
+they could not be at the time. They are reported as measured. The colocated Part 1 results are
+unaffected: they use no KV transfer at all.
 
 ## UCCL-EP launch configuration that actually matters
 
@@ -736,17 +749,27 @@ finding out.
 
 # Blackwell: expect DeepEP to lose at 2 nodes
 
-No Blackwell serving run is in this repo. But the question comes up — *"we benchmarked DeepEP vs the
+The serving tables in this document are H200. The question comes up — *"we benchmarked DeepEP vs the
 NCCL all-to-all on 2× B300 and DeepEP was slower in every configuration; is that expected?"* — and
 the answer from the data that **is** here is **yes at 2 nodes, and it is not an EFA problem.**
 Reported shape of such a result: output throughput −7% to −26%, median TTFT +17% to +82%, P99 ITL
 1.2–1.9 s vs 0.8–0.9 s, `normal` (HT) slowest where it ran, at TP16/EP16 across two nodes, 8K input
 / 1K output, concurrency 128.
 
-1. **16 ranks is DeepEP's worst case, on any GPU.** Every table here says so. The colocated decode
-   sweep has DeepEP at 0.23–0.75× the baseline's throughput and 1.4–4.3× its TPOT; the 2P2D sweep
-   0.55–0.71× at 1.4–1.8× TPOT. A −7% to −26% *aggregate* regression on a mixed 8K/1K workload is
-   **milder than what we measure on Hopper**, not worse.
+Read this section as a **mechanism argument extrapolated from H200 serving data plus B300 kernel
+data** — not as a Blackwell serving measurement. No B300 serving sweep exists here yet.
+
+1. **16 ranks is DeepEP's worst case on the hardware measured here, and the mechanism is not
+   GPU-specific.** Every table in this document says so: the colocated decode sweep has DeepEP at
+   0.23–0.75× the baseline's throughput and 1.4–4.3× its TPOT; the 2P2D sweep 0.55–0.71× at 1.4–1.8×
+   TPOT. The reason — 256 experts over 16 ranks means 16 experts per GPU, so the fan-out is small and
+   mostly intra-node NVLink, and DeepEP's per-layer dispatch/combine cost is not amortised — is a
+   function of EP width and expert count, not of the GPU generation. That makes a −7% to −26%
+   *aggregate* regression on a mixed 8K/1K workload **milder than what we measure on Hopper**, though
+   confirming the H200 magnitude carries to B300 requires the B300 sweep.
+   **One Blackwell configuration note either way:** on B200 every rank logs `Only use 20 SMs for DeepEP
+   communication ... Consider using --deepep-config`, so any Blackwell number taken with the default
+   config is a **floor**, not DeepEP's best (thanks @KeitaW for the observation).
 2. **The published B300 kernel numbers are healthy, which localises the gap above the transport.**
    At 2 nodes / 16 ranks on `p6-b300`, DeepEP-over-EFA dispatch/combine is **126.6 / 106.4 GB/s** —
    best of the three backends there, *above* the NCCL all-to-all's 104.9 GB/s at matched payload

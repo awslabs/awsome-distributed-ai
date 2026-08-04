@@ -122,7 +122,8 @@ a separate command because it only needs running once per host.
   missing, install GDRCopy on the host — the in-container library cannot create the device node.
 - **~640 GB of fast local NVMe per node** for the DeepSeek-R1 FP8 weights, present on *every*
   node (`HF_CACHE_DIR`).
-- A HuggingFace token with DeepSeek-R1 access.
+- (Optional) A HuggingFace token. DeepSeek-R1 is **not** gated — the weights download without one;
+  a token only helps with rate limits.
 
 ## Build
 
@@ -132,7 +133,7 @@ directory.
 
 ```bash
 cp setup/env_vars.example setup/env_vars
-$EDITOR setup/env_vars                 # fill in every REPLACE_ME
+"${EDITOR:-vi}" setup/env_vars         # fill in every REPLACE_ME
 grep REPLACE_ME setup/env_vars         # should print nothing
 source setup/env_vars
 
@@ -156,8 +157,8 @@ pin), `NVSHMEM_TAG`, `GDRCOPY_VERSION`, and `TORCH_CUDA_ARCH_LIST`.
 `p6-b200` (`sm_100`) and `p6-b300` (`sm_103`). Build single-arch to cut compile time:
 
 ```bash
-docker build --build-arg TORCH_CUDA_ARCH_LIST=10.3 ...   # B300 only
-docker build --build-arg TORCH_CUDA_ARCH_LIST=9.0  ...   # Hopper only
+docker build --build-arg TORCH_CUDA_ARCH_LIST=10.3 -t sglang-deepep-efa:b300 .    # B300 only
+docker build --build-arg TORCH_CUDA_ARCH_LIST=9.0  -t sglang-deepep-efa:hopper .  # Hopper only
 ```
 
 Three things to know before running this on Blackwell:
@@ -293,11 +294,14 @@ topology this sample's `serve.sh` launches, and the 4-node 2P2D topology with fo
 (DeepEP / baseline / pure TP / UCCL-EP) × prefill and decode, ± DP-attention.
 
 The short version: **no single backend wins both stages.** DeepEP takes prefill decisively —
-161.5k input tok/s at 1K×conc256, 3× everything else, and 17–24% ahead of UCCL-EP at every
+161.5k input tok/s at 1K×conc256, 3× everything else, and 21–32% ahead of UCCL-EP at every
 colocated point — while on decode at 16 GPUs it is last, and pure TP ≈ baseline lead. UCCL-EP beats
 DeepEP on decode in both topologies, reaching 4094 tok/s / TPOT 28 ms with DP-attention.
-Because a PD deployment runs the two stages on separate nodes, the actionable answer is **DeepEP on
-prefill, UCCL-EP + DP-attention on decode**. DeepEP losing decode at this scale is expected rather
+Because a PD deployment runs the two stages on separate nodes, the candidate configuration these
+numbers point to is **DeepEP on prefill, UCCL-EP + DP-attention on decode** — assembled from
+per-stage measurements and **not yet run end to end as a single deployment**. Treat the per-stage
+results as directional rather than statistically tight: they are single-pass, and the smallest margin
+promoted to a conclusion here is about 6%. DeepEP losing decode at this scale is expected rather
 than a defect in the EFA port: it is built for large-scale EP where experts are spread thin enough
 that every token must cross the network. What this sample demonstrates is that the DeepEP kernels
 are **correct and run at IB-class bandwidth over EFA**, and plug into a real R1 server end to end.
