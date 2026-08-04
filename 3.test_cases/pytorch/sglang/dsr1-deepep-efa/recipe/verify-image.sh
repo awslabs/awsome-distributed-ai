@@ -80,7 +80,15 @@ PY
 echo "--- NVSHMEM host library is v3.7.0 everywhere ---"
 # Any libnvshmem_host.so.3 that resolves to something other than 3.7.0 will
 # abort DeepEP at nvshmem init with a device/host version mismatch.
-for lib in $(find / -name "libnvshmem_host.so.3" -not -path "/proc/*" 2>/dev/null); do
+# Collected first, so "no host library at all" fails instead of skipping the loop
+# body and reporting success -- exactly the silent-pass class this script exists to
+# catch. Expect at least two: the /opt/nvshmem build and the overwritten pip copy.
+libs=$(find / -name "libnvshmem_host.so.3" -not -path "/proc/*" 2>/dev/null)
+if [ -z "$libs" ]; then
+    echo "  FAIL: no libnvshmem_host.so.3 found anywhere in the image"
+    fail=1
+fi
+for lib in $libs; do
     # No early-exiting stage in this pipeline: under `set -o pipefail`, a
     # `grep -m1` would SIGPIPE `strings` and make the whole pipeline look failed.
     ver=$(strings "$lib" | grep -o "NVSHMEM v3\.[0-9]*\.[0-9]*" | sort -u | tr "\n" " ")

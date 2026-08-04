@@ -67,6 +67,11 @@ fi
 # this only matters if you rebuild on a base image that ships a different one.
 NVSHMEM_HOST_LIB=/opt/nvshmem/install/lib/libnvshmem_host.so.3.7.0
 
+# NCCL gets the exclusion form below (repo convention, matches
+# micro-benchmarks/nccl-tests): instance-type-agnostic, so it needs no NIC name and
+# keeps working on p5, p5en, p6-b200, p6-b300 and whatever comes next. Gloo does not
+# support `^` exclusion -- it takes concrete comma-separated names only -- so it gets
+# $IFACE, which setup/env_vars derives from the default route.
 set -x
 docker run --rm \
     --gpus all --network host --ipc host --privileged \
@@ -74,7 +79,7 @@ docker run --rm \
     --ulimit memlock=-1 --shm-size 32g \
     -e MASTER_ADDR="$NODE_0_IP" -e MASTER_PORT="$PORT" \
     -e WORLD_SIZE="$WS" -e RANK="$RANK" \
-    -e NCCL_SOCKET_IFNAME="$IFACE" -e GLOO_SOCKET_IFNAME="$IFACE" \
+    -e NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-^docker,lo,veth}" -e GLOO_SOCKET_IFNAME="$IFACE" \
     -e FI_PROVIDER=efa -e FI_EFA_USE_DEVICE_RDMA=1 \
     -e NVSHMEM_REMOTE_TRANSPORT=libfabric \
     -e NVSHMEM_LIBFABRIC_PROVIDER=efa \

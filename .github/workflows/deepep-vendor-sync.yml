@@ -1,4 +1,5 @@
-# Fails if any vendored copy of setup_deepep_efa.sh drifts from its canonical source.
+# Fails if any vendored copy of setup_deepep_efa.sh drifts from its canonical source, except
+# for copies listed in KNOWN_DRIFT below, which warn instead (see the comment there).
 #
 # Several test cases vendor a verbatim copy of the deepep-benchmark EFA setup script (Docker
 # can only COPY from within the build context). The copies are kept in sync by hand, so silent

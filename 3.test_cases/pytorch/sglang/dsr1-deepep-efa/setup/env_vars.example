@@ -44,17 +44,25 @@ export NODE_1_IP="REPLACE_ME"            # rank 1
 export NUM_NODES=2
 export NUM_GPU_PER_NODE=8
 
-# EFA-backed NIC used for the torch/NCCL/gloo rendezvous (NOT for RDMA itself —
-# NVSHMEM picks EFA devices via NVSHMEM_NETDEVS_POLICY). On p5/p5en this is the
-# primary ENA interface; on p6-b200/p6-b300 it differs, so do not assume this
-# value. Check with: ip -o -4 addr show
-export IFACE="enp71s0"
+# Primary ENA interface, used for the torch/gloo rendezvous (NOT for RDMA itself --
+# NVSHMEM picks EFA devices via NVSHMEM_NETDEVS_POLICY).
+#
+# Derived from the default route rather than hardcoded. It resolves to enp71s0 on
+# p5, p5en, p6-b200 and p6-b300 today, but a hardcoded name plus a prose table of
+# which instance families it holds for rots as families come and go -- so this is
+# the check written as code. Override by exporting IFACE before sourcing this file.
+#
+# Only GLOO_SOCKET_IFNAME actually needs a concrete name (it takes comma-separated
+# names only, no exclusion syntax). NCCL gets the instance-type-agnostic exclusion
+# form NCCL_SOCKET_IFNAME=^docker,lo,veth from the serve scripts, matching
+# micro-benchmarks/nccl-tests.
+export IFACE="${IFACE:-$(ip -o -4 route show to default | awk '{print $5}' | head -1)}"
 
 # ---------------------------------------------------------------------------
 # Model
 # ---------------------------------------------------------------------------
 export MODEL="deepseek-ai/DeepSeek-R1"
-export HF_TOKEN="REPLACE_ME"             # HuggingFace token with DeepSeek-R1 access
+export HF_TOKEN="REPLACE_ME"             # Optional: R1 is not gated, this only helps rate limits
 # Host directory for the HF cache. DeepSeek-R1 is ~640 GB in FP8, so this must
 # be on fast local NVMe, and the model must be present on BOTH nodes.
 export HF_CACHE_DIR="/opt/dlami/nvme/hf"

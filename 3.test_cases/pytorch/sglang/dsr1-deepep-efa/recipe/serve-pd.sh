@@ -137,7 +137,10 @@ export HF_TOKEN="${HF_TOKEN:-}"
 COMMON_ENV=(
     -e HF_HOME=/hf
     -e HF_TOKEN
-    -e NCCL_SOCKET_IFNAME="$IFACE" -e GLOO_SOCKET_IFNAME="$IFACE"
+    # NCCL gets the exclusion form (repo convention, matches micro-benchmarks/nccl-tests):
+    # instance-type-agnostic, no NIC name needed. Gloo takes concrete names only, so it
+    # gets $IFACE, which env_vars derives from the default route.
+    -e NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-^docker,lo,veth}" -e GLOO_SOCKET_IFNAME="$IFACE"
     # Short name, not an absolute path: NCCL templates it into
     # libnccl-net-ofi.so. Omitting it silently falls back to TCP. See Dockerfile.
     -e NCCL_NET_PLUGIN=ofi

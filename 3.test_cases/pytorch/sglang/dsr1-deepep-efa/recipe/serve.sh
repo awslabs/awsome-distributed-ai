@@ -167,6 +167,11 @@ docker rm -f "$NAME" 2>/dev/null || true
 # capture or shared tmux pane. The `:-` keeps the previous default-empty semantics.
 export HF_TOKEN="${HF_TOKEN:-}"
 
+# NCCL gets the exclusion form below (repo convention, matches
+# micro-benchmarks/nccl-tests): instance-type-agnostic, so it needs no NIC name and
+# keeps working on p5, p5en, p6-b200, p6-b300 and whatever comes next. Gloo does not
+# support `^` exclusion -- it takes concrete comma-separated names only -- so it gets
+# $IFACE, which setup/env_vars derives from the default route.
 set -x
 # --privileged for every backend, not just UCCL. UCCL needs it to register GPU
 # memory for RDMA through the dma-buf/ibverbs path, and Mooncake needs it to query
@@ -182,7 +187,7 @@ docker run -d --name "$NAME" \
     -e HF_TOKEN \
     -v "${HF_CACHE_DIR}/../dg-cache:/root/.cache/deep_gemm" \
     -v "${HF_CACHE_DIR}/../sgl-cache:/root/.cache/sglang" \
-    -e NCCL_SOCKET_IFNAME="$IFACE" -e GLOO_SOCKET_IFNAME="$IFACE" \
+    -e NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-^docker,lo,veth}" -e GLOO_SOCKET_IFNAME="$IFACE" \
     -e NCCL_NET_PLUGIN=ofi \
     -e FI_PROVIDER=efa -e FI_EFA_USE_DEVICE_RDMA=1 \
     "${NVSHMEM_ENV[@]}" "${VMM_ENV[@]}" "${LL_ENV[@]}" \

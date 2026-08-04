@@ -4,5 +4,6 @@
 # Local env vars contain HF token and account ID — never commit them.
 setup/env_vars
 
-# Benchmark outputs.
-results/
+# Benchmark outputs. This is where benchmark.sh / benchmark-pd.sh default OUT_DIR,
+# so running the documented sweeps does not dirty the tree.
+benchmarks/raw/
