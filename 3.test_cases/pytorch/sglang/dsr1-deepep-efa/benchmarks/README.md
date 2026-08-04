@@ -823,7 +823,10 @@ recipe/benchmark.sh prefill      # or: recipe/benchmark.sh decode
 Then repeat with `MOE_BACKEND=baseline` and `MOE_BACKEND=tp`. `recipe/serve.sh` also derives
 `NVSHMEM_DISABLE_CUDA_VMM` from `DEEPEP_MODE` — `normal` needs VMM off or NVSHMEM's
 topology/transport-map init fails, `low_latency`/`auto` need it on or the RDMA-buffer `cudaMemset`
-fails at `deep_ep.cpp:371`. Getting it wrong is a startup failure, not a slow server.
+fails at `deep_ep.cpp:371`. Getting it wrong is a startup failure, not a slow server. This applies
+to the colocated server and the standalone kernel tests, which is where it was measured; the
+PD-disaggregated `recipe/serve-pd.sh` does not set the variable and its `normal`-pinned prefill role
+starts with VMM enabled.
 
 For the UCCL columns, build [`Dockerfile.uccl`](../Dockerfile.uccl), point `IMAGE_URI` at it and add
 `UCCL=1`, which switches on
@@ -871,14 +874,13 @@ Then repeat with `MOE_BACKEND=baseline`, `MOE_BACKEND=tp`, and `DP_ATTENTION=1` 
 
 # Open items
 
-- **Unblock GPU-memory registration in Mooncake's EFA transport**, then re-measure Part 2 under the
-  Part 1 rules — prefix cache off on every row and `--deepep-mode` pinned per role — so the DP-effect
-  columns isolate the DP lever alone and the two parts share a harness exactly.
-  `recipe/serve-pd.sh` already does both by construction; the tables are stale and cannot be redone
-  until [the blocker](#open-blocker-gpu-memory-registration-on-libfabric-24) is fixed. Next step
-  there: instrument which allocator backs the buffer Mooncake registers (`cudaMalloc` vs CUDA VMM),
-  since VMM memory fails with `EFAULT` in isolation at the same length that `cudaMalloc` registers
-  cleanly.
+- **Re-measure Part 2 under the Part 1 rules** — prefix cache off on every row and `--deepep-mode`
+  pinned per role — so the DP-effect columns isolate the DP lever alone and the two parts share a
+  harness exactly. `recipe/serve-pd.sh` already does both by construction, so this is a rerun rather
+  than a code change. The KV-registration failure that used to block it is
+  [fixed](#resolved-gpu-memory-registration-needed-a-cuda-context-on-the-registering-thread); the
+  Part 2 tables predate the fix and the harness change, so treat them as provisional until the rerun
+  lands.
 - **The per-role split recommendation is inferred, not measured.** DeepEP prefill and UCCL+DP decode
   were each measured in a same-backend-both-roles deployment; the mixed deployment was never run end
   to end. It should work — the roles share only the KV stream — but it is untested.
