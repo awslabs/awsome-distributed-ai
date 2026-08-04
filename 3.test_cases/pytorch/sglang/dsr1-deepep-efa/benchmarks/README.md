@@ -778,6 +778,39 @@ a different date — so the EFA transport reproduces. Only `internode` puts byte
 other two anyway, because them failing tells you the image is broken before you spend two nodes
 finding out.
 
+Repeated on 2× `p5.48xlarge` (H100, so lower per-GPU numbers than the `p5en` row above), 2026-08-04,
+image built from the committed Dockerfile with `TORCH_CUDA_ARCH_LIST=9.0`. Both ranks exited 0:
+
+| Test | Bandwidth |
+|---|---|
+| `intranode` (NVLink only, 8 ranks) | 311.6 GB/s combine, NVLink — and see the note below |
+| `internode` (NVSHMEM/EFA, 2 nodes, 16 EP ranks) | dispatch FP8 **50.94** GB/s RDMA / 166.27 NVL; BF16 **61.07** / 199.33; combine **56.97** / 185.94 (rank 1: 57.26 / 187.32) |
+| `low_latency` (NVSHMEM, 2 nodes) | ~16 GB/s |
+
+`intranode` **never initialises NVSHMEM** — grepping its logs for `nvshmem` returns one incidental
+mention with VMM off and zero with it on. It is NVLink end to end, which makes it useless for
+anything transport-related: it cannot exercise EFA, and it cannot test the VMM coupling below. It
+earns its place as the cheap "is the image broken" check and nothing more.
+
+#### The `--deepep-mode` / CUDA VMM coupling, measured both ways
+
+The coupling was documented in both directions from failures seen during bring-up. Run as a 2×2 on
+2× `p5.48xlarge` (`internode` and `low_latency` — the only tests that touch NVSHMEM), one direction
+holds and the other does not:
+
+| Regime | VMM enabled (default) | VMM off (`NVSHMEM_DISABLE_CUDA_VMM=1`) |
+|---|---|---|
+| `low_latency` | exit 0 | **exit 1** — `RuntimeError: Failed: CUDA error /opt/DeepEP/csrc/deep_ep.cpp:371 'invalid argument'` |
+| `internode` (`normal`) | exit 0, BF16 dispatch **60.97** GB/s RDMA, zero NVSHMEM/topology/transport-map errors | exit 0, BF16 dispatch **61.07** GB/s RDMA |
+
+So: **`low_latency` genuinely requires VMM enabled**, reproducing the documented signature verbatim,
+line number included. **`normal` does not require VMM off** — it runs clean with VMM enabled, at
+bandwidth indistinguishable from the VMM-off run (0.2%, inside run-to-run noise). The scripts still
+set the variable for `normal`, kept as belt-and-braces: it costs nothing measurable, and the failure
+it was added for was real on some host during bring-up, just not one that has been re-identified
+since. Treat it as a knob to try if NVSHMEM init fails on a `normal` role, not as a requirement —
+and do not conclude from a passing `normal` run that your host disagrees with this table.
+
 # Blackwell: expect DeepEP to lose at 2 nodes
 
 The serving tables in this document are H200. The question comes up — *"we benchmarked DeepEP vs the
@@ -852,12 +885,10 @@ recipe/benchmark.sh prefill      # or: recipe/benchmark.sh decode
 ```
 
 Then repeat with `MOE_BACKEND=baseline` and `MOE_BACKEND=tp`. `recipe/serve.sh` also derives
-`NVSHMEM_DISABLE_CUDA_VMM` from `DEEPEP_MODE` — `normal` needs VMM off or NVSHMEM's
-topology/transport-map init fails, `low_latency`/`auto` need it on or the RDMA-buffer `cudaMemset`
-fails at `deep_ep.cpp:371`. Getting it wrong is a startup failure, not a slow server. This applies
-to the colocated server and the standalone kernel tests, which is where it was measured; the
-PD-disaggregated `recipe/serve-pd.sh` does not set the variable and its `normal`-pinned prefill role
-starts with VMM enabled.
+`NVSHMEM_DISABLE_CUDA_VMM` from `DEEPEP_MODE`. The direction that matters is `low_latency`/`auto`,
+which need VMM **on** or the RDMA-buffer `cudaMemset` fails at `deep_ep.cpp:371` — a startup
+failure, not a slow server. `normal` gets VMM off as belt-and-braces only; it runs clean either way
+([matrix](#the-deepep-mode--cuda-vmm-coupling-measured-both-ways)).
 
 For the UCCL columns, build [`Dockerfile.uccl`](../Dockerfile.uccl), point `IMAGE_URI` at it and add
 `UCCL=1`, which switches on

@@ -91,7 +91,7 @@ pure TP too, which never loads DeepEP.
 | `NVSHMEM_LIBFABRIC_PROVIDER=efa` | Select the EFA provider. |
 | `NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE` | Gives each GPU exclusive use of the NIC on its own PCIe switch. Recommended for RDMA performance on p5/p5en, which pair multiple EFA NICs across PCIe switches. |
 | `NCCL_NET_PLUGIN=ofi` — **short name, not a path** | The EFA installer's `libnccl-ofi-ngc-v3` ships only `libnccl-net-ofi.so`, not the `libnccl-net.so` NCCL auto-loads, so NCCL logs *"NET/Plugin: Could not find: libnccl-net.so"* and **silently uses TCP sockets** (~14 GB/s vs ~400 GB/s) — visible only as 3–5× worse prefill TTFT. NCCL templates the value into `libnccl-net-<value>.so`, so an absolute path becomes a bogus filename and falls back too. |
-| `NVSHMEM_DISABLE_CUDA_VMM` — **regime-specific** | Set it to `1` for the **normal** dispatch/combine kernels, or NVSHMEM topology / transport-map init fails in-container. **Leave it unset for low-latency kernels**, or the RDMA-buffer `cudaMemset` fails with *"invalid argument"* (`deep_ep.cpp:371`). Because the server uses `--deepep-mode auto` (low-latency on the decode path), `recipe/serve.sh` leaves VMM **enabled**; `recipe/run-kernel-test.sh` sets it per test. Scoped to those two paths: `recipe/serve-pd.sh` does not set it, and its `normal`-pinned prefill role initialises NVSHMEM with VMM enabled. |
+| `NVSHMEM_DISABLE_CUDA_VMM` | **Leave it unset for low-latency kernels** (VMM enabled), or the RDMA-buffer `cudaMemset` fails with *"invalid argument"* (`deep_ep.cpp:371`) — measured, and the one direction that matters. Because the server uses `--deepep-mode auto` (low-latency on the decode path), `recipe/serve.sh` leaves VMM enabled. The scripts set it to `1` for `normal`, but that is belt-and-braces, not a requirement: `normal` also runs clean with VMM enabled ([matrix](./benchmarks/README.md#the-deepep-mode--cuda-vmm-coupling-measured-both-ways)). |
 | `--network host --ipc host --ulimit memlock=-1 --shm-size 32g` | EFA needs host networking, IPC and unlimited locked memory. |
 | `MOONCAKE_PROTOCOL=efa` — **PD-disaggregated only** | KV cache over EFA RDMA. Omitting it is a *silent* fallback to TCP, not an error. See trap 4 above. |
 
@@ -335,16 +335,18 @@ referenced. Drift should be guarded in CI alongside the other vendored copy — 
 - **DeepEP pinned to `567632d`** (pre-EPv2). The setup script hard-checks the tree and its EFA
   patch only applies at that commit. EPv2 restructures the kernels and moves to the NCCL GIN
   backend, which is out of scope.
-- **`--deepep-mode` and CUDA VMM are coupled in the standalone kernel tests.** `low_latency` needs
-  VMM enabled (the low-latency RDMA buffers, or the buffer `cudaMemset` fails with *"invalid
-  argument"*, `deep_ep.cpp:371`); `normal` needs `NVSHMEM_DISABLE_CUDA_VMM=1`, or NVSHMEM's
-  topology/transport-map init fails in-container. `recipe/run-kernel-test.sh` sets it per test and
-  `recipe/serve.sh` derives it from `DEEPEP_MODE`, so pass the mode rather than setting VMM by hand.
-  Getting it wrong there is a startup failure, not a slow server.
+- **`low_latency` requires CUDA VMM enabled.** Without it the low-latency RDMA-buffer `cudaMemset`
+  fails with *"invalid argument"* (`deep_ep.cpp:371`), at init, before any bandwidth is printed.
+  `recipe/run-kernel-test.sh` sets VMM per test and `recipe/serve.sh` derives it from `DEEPEP_MODE`,
+  so pass the mode rather than setting VMM by hand.
 
-  **The coupling has not been observed on the PD-disaggregated path**, and `recipe/serve-pd.sh`
-  deliberately does not set the variable: its prefill role pins `normal`, and NVSHMEM initialises
-  there with VMM left enabled on both H200 and B200 (the latter reported by @KeitaW). So the rule
-  above is scoped to what it was measured on rather than generalised. If you do hit an NVSHMEM
-  topology/transport-map failure on a `normal` prefill role, `-e NVSHMEM_DISABLE_CUDA_VMM=1` is the
-  thing to try first.
+  **The converse — that `normal` requires VMM *off* — did not reproduce when it was tested
+  directly**, so do not treat it as a rule. Two-node `internode` on `p5.48xlarge` runs clean with
+  VMM left enabled: 60.97 GB/s BF16 dispatch (RDMA) against 61.07 with VMM off, both ranks exit 0,
+  no NVSHMEM topology or transport-map error in either log. The scripts still set
+  `NVSHMEM_DISABLE_CUDA_VMM=1` for `normal`, now as harmless belt-and-braces rather than a
+  requirement — it costs nothing measurable and the original failure was real on some host, just not
+  one that has been re-identified. `recipe/serve-pd.sh` does not set it at all, and its
+  `normal`-pinned prefill role initialises NVSHMEM with VMM enabled on both H200 and B200 (the
+  latter reported by @KeitaW), which is consistent with the p5 measurement. See
+  [the matrix](./benchmarks/README.md#the-deepep-mode--cuda-vmm-coupling-measured-both-ways).

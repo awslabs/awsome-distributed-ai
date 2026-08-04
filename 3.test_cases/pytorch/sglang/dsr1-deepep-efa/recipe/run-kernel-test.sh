@@ -51,11 +51,15 @@ else
     WS=${NUM_NODES:-2}
 fi
 
-# CUDA VMM is REGIME-SPECIFIC (verified on p5 + p5en over EFA):
-#   - normal dispatch/combine (intranode/internode): VMM must be DISABLED, else
-#     NVSHMEM topo / transport-map init fails inside the container.
+# CUDA VMM follows the kernel regime:
 #   - low_latency: VMM must be ENABLED, else the RDMA buffer cudaMemset fails
-#     with "invalid argument" (deep_ep.cpp:371).
+#     with "invalid argument" (deep_ep.cpp:371). Measured on p5, 2 nodes: exit 1
+#     with that exact error when VMM is off. This is the direction that matters.
+#   - normal (intranode/internode): VMM off is belt-and-braces, NOT a
+#     requirement. internode also runs clean with VMM enabled (60.97 vs 61.07
+#     GB/s BF16 dispatch RDMA, no NVSHMEM/topology/transport-map error). Kept
+#     because it costs nothing and an NVSHMEM init failure was seen during
+#     bring-up on a host that has not been re-identified. See benchmarks/README.
 if [[ "$TEST" == "low_latency" ]]; then
     VMM_ENV=()                                    # leave CUDA VMM enabled
 else

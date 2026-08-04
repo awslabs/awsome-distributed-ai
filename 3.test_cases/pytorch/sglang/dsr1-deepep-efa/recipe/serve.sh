@@ -130,14 +130,16 @@ MEM_FRACTION_STATIC=${MEM_FRACTION_STATIC:-0.85}
 
 mkdir -p "${HF_CACHE_DIR}" "${HF_CACHE_DIR}/../dg-cache" "${HF_CACHE_DIR}/../sgl-cache"
 
-# CUDA VMM has to follow the kernel regime, so it is derived from DEEPEP_MODE
-# rather than hardcoded:
+# CUDA VMM is derived from DEEPEP_MODE rather than hardcoded:
 #   low_latency / auto -> VMM ENABLED. The low-latency kernels need it, or the
 #                         RDMA-buffer cudaMemset fails ("invalid argument",
-#                         deep_ep.cpp:371). "auto" can reach them at any time.
-#   normal             -> NVSHMEM_DISABLE_CUDA_VMM=1, or NVSHMEM topology /
-#                         transport-map init fails in-container.
-# Getting this wrong is a startup failure, not a slow server. See README.
+#                         deep_ep.cpp:371) at startup, not slowly. "auto" can
+#                         reach them at any time. Measured; this is the direction
+#                         that matters.
+#   normal             -> NVSHMEM_DISABLE_CUDA_VMM=1 as belt-and-braces only.
+#                         normal runs clean with VMM enabled too (measured on p5,
+#                         2-node internode), so this is not a requirement.
+# See benchmarks/README.md for the 2x2.
 VMM_ENV=()
 if [[ "$UCCL" != "1" && "$MOE_BACKEND" == "deepep" && "${DEEPEP_MODE:-auto}" == "normal" ]]; then
     VMM_ENV=(-e NVSHMEM_DISABLE_CUDA_VMM=1)
