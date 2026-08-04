@@ -658,6 +658,37 @@ failing length — because the probe's own thread had a CUDA context. The probe 
 remains the right tool for separating "this host cannot register GPU memory" from "the caller is
 doing it wrong"; its header documents what a pass and a fail each mean.
 
+#### What was verified directly, and what was not
+
+Measured on `p5.48xlarge` (8×H100, libfabric `2.4.0amzn5.0`, EFA installer 1.49.0 — the pinned
+stack) with [`recipe/probe-cuda-context.c`](../recipe/probe-cuda-context.c), which is the
+cross-thread companion to `probe-kv-registration.c` (that one cannot see this defect: it registers on
+the allocating thread, which always has a context). Its header has the build/run command:
+
+| Call | Thread state | Result |
+|---|---|---|
+| `cuMemGetHandleForAddressRange` | main thread, context present | `CUDA_SUCCESS`, fd returned |
+| `cuMemGetHandleForAddressRange` | fresh thread, **no context** | **`CUDA_ERROR_INVALID_CONTEXT` (201)** |
+| `cuMemGetHandleForAddressRange` | fresh thread, primary context bound | `CUDA_SUCCESS`, fd returned |
+
+So the **mechanism is confirmed**: the exact driver call libfabric's `cuda_get_dmabuf_fd()` makes
+fails with `CUDA_ERROR_INVALID_CONTEXT` on a context-less thread, and binding the primary context —
+which is what `a7413723` does — is what fixes it.
+
+**The end-to-end failure could not be reproduced on p5**, and that is worth stating plainly. Full
+`fi_mr_regattr(iface=FI_HMEM_CUDA)` from a context-less thread **succeeds** here, even with
+`FI_HMEM_CUDA_USE_DMABUF=1` (confirmed honoured: `read bool var hmem_cuda_use_dmabuf=1`). The reason
+is that reaching the failing call requires EFA to take the **dmabuf** registration path, and these
+nodes have `efa_nv_peermem` loaded, which gives it a working non-dmabuf route. The originally
+observed failure was on `p5en` with the same libfabric, so the trigger is a host/driver condition
+that selects dmabuf, not the libfabric version alone.
+
+Practical consequence: **the Mooncake pin is still the fix, and it is also cheap insurance** — on a
+host where the dmabuf path is taken, a context-less caller fails, and `a7413723` makes the caller
+correct regardless of which path the provider picks. But if you hit `fi_mr_regattr` failures on a
+Mooncake that already has the fix, do not stop at the pin: check whether `efa_nv_peermem` is loaded,
+since that is what decides which path is exercised.
+
 Two things that were investigated at length and are **not** the cause, recorded so nobody repeats the
 search:
 
