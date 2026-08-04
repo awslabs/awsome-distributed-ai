@@ -29,12 +29,24 @@
 ARG SGLANG_BASE=lmsysorg/sglang:v0.5.13.post1-cu130
 FROM ${SGLANG_BASE}
 
-# Both pinned to the commits the benchmarks/README.md UCCL rows were measured
-# with. Neither project tags releases on the cadence this sample needs, and
-# unpinned `main` on both was how the measured image was originally built --
-# reproducing the numbers requires these.
+# UCCL is pinned to the commit the benchmarks/README.md UCCL rows were measured
+# with: it does not tag releases on the cadence this sample needs, and unpinned
+# `main` was how the measured image was originally built.
 ARG UCCL_COMMIT=f071f2e3
-ARG MOONCAKE_COMMIT=622104e
+
+# Mooncake is pinned to the SAME commit as ./Dockerfile, and deliberately NOT to
+# what the UCCL rows were measured with (622104e, 2026-07-28). a7413723
+# (kvcache-ai/Mooncake#3177, 2026-07-30) is the CUDA-context registration fix
+# without which the 2P2D KV path does not work at all -- see ./Dockerfile for the
+# mechanism. UCCL=1 is the recommended decode backend for the 2P2D deployment, so
+# this is the image where that fix matters most.
+#
+# Provenance: the KV fix POSTDATES the measured UCCL rows, so those rows were
+# collected on 622104e. Their expert-parallel dispatch/combine path is UCCL's and
+# is unaffected by a Mooncake KV change, but if you are reproducing them
+# bit-for-bit, build with --build-arg MOONCAKE_COMMIT=622104e and expect the
+# 2P2D KV blocker to reappear.
+ARG MOONCAKE_COMMIT=a7413723
 
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
@@ -53,9 +65,12 @@ RUN cd /tmp && \
     rm -rf /tmp/gdrcopy* /tmp/v${GDRCOPY_VERSION}.tar.gz
 
 # ---- AWS EFA installer (libfabric + EFA provider) ----
+# Pinned to the same version as ./Dockerfile: libfabric and the EFA provider are
+# the stack under measurement, so `latest` lets a rebuild move the numbers.
+ARG EFA_INSTALLER_VERSION=1.49.0
 RUN cd /tmp && \
-    curl -O https://efa-installer.amazonaws.com/aws-efa-installer-latest.tar.gz && \
-    tar xzf aws-efa-installer-latest.tar.gz && \
+    curl -fsSL -O https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz && \
+    tar xzf aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz && \
     cd aws-efa-installer && \
     . /etc/os-release && \
     case "$VERSION_ID" in \
@@ -68,8 +83,9 @@ RUN cd /tmp && \
     ./efa_installer.sh -y --skip-kmod -g --no-verify --skip-rdma-core
 
 # ---- Mooncake (KV transfer over EFA for the PD-disaggregated recipe) ----
-# Identical to ./Dockerfile's step, so the KV path is not a variable between the
-# two images.
+# Same source build and the same MOONCAKE_COMMIT default as ./Dockerfile, so the
+# KV path is not a variable between the two images. Override the ARG on only one
+# of them and it becomes one.
 RUN pip uninstall -y mooncake-transfer-engine mooncake 2>/dev/null || true
 RUN cd /tmp && \
     git clone https://github.com/kvcache-ai/Mooncake.git && \
@@ -83,12 +99,12 @@ RUN cd /tmp && \
       -DPython3_EXECUTABLE="$PYBIN" -DPython3_INCLUDE_DIR="$PYINC" -DPython_EXECUTABLE="$PYBIN" && \
     make -j$(nproc) && \
     cp mooncake-integration/engine.cpython-*.so ../mooncake-wheel/mooncake/ && \
-    cp mooncake-integration/store.cpython-*.so ../mooncake-wheel/mooncake/ 2>/dev/null || true && \
+    { cp mooncake-integration/store.cpython-*.so ../mooncake-wheel/mooncake/ 2>/dev/null || true; } && \
     cp mooncake-common/libasio.so ../mooncake-wheel/mooncake/ && \
     pip install ../mooncake-wheel --no-build-isolation && \
     MCDIR=$(python3 -c "import mooncake, os; print(os.path.dirname(mooncake.__file__))") && \
     cp -v mooncake-integration/engine.cpython-*.so "$MCDIR/" && \
-    cp -v mooncake-integration/store.cpython-*.so "$MCDIR/" 2>/dev/null || true && \
+    { cp -v mooncake-integration/store.cpython-*.so "$MCDIR/" 2>/dev/null || true; } && \
     cp -v mooncake-common/libasio.so "$MCDIR/" && \
     rm -rf /tmp/Mooncake /var/lib/apt/lists/*
 
@@ -134,6 +150,15 @@ ENV FI_EFA_USE_DEVICE_RDMA=1
 # silently falls back to TCP. Same reason as ./Dockerfile.
 ENV NCCL_NET_PLUGIN=ofi
 ENV PATH="/opt/amazon/efa/bin:${PATH}"
-ENV LD_LIBRARY_PATH="/usr/local/lib/python3.12/dist-packages/torch/lib:/opt/amazon/efa/lib:/usr/local/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="/opt/amazon/efa/lib:/usr/local/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
+# torch's lib dir is resolved at build time and registered with ldconfig, exactly
+# as ./Dockerfile does it. It used to be hardcoded as the python3.12 dist-packages
+# path, which SGLANG_BASE being an ARG made a silent trap: a base image on a
+# different Python minor would point it at nothing, and verify-image.sh computes
+# the path dynamically so it would still pass.
+RUN TORCH_LIB=$(python3 -c "import torch, os; print(os.path.dirname(torch.__file__) + '/lib')") && \
+    printf '%s\n' "$TORCH_LIB" > /etc/ld.so.conf.d/zz-torch.conf && \
+    ldconfig && \
+    echo "registered torch lib dir with ldconfig: $TORCH_LIB"
 
 WORKDIR /workspace

@@ -18,7 +18,8 @@
 #
 # WORLD_SIZE here is the NODE count, matching what DeepEP's tests expect; each
 # node spawns one process per GPU. intranode is single-node (NVLink only, no
-# NVSHMEM); internode and low_latency use NVSHMEM over EFA/libfabric.
+# NVSHMEM) and is forced to WORLD_SIZE=1 below; internode and low_latency use
+# NVSHMEM over EFA/libfabric and take the node count from NUM_NODES.
 
 set -euo pipefail
 
@@ -29,13 +30,26 @@ shift 2
 : "${IMAGE_URI:?source setup/env_vars first}"
 : "${NODE_0_IP:?source setup/env_vars first}"
 : "${IFACE:?source setup/env_vars first}"
-WS=${NUM_NODES:-2}
 PORT=${MASTER_PORT:-8361}
 
 case "$TEST" in
     intranode|internode|low_latency) ;;
     *) echo "ERROR: TEST must be intranode, internode or low_latency" >&2; exit 1 ;;
 esac
+
+# WORLD_SIZE is a NODE count, and intranode must get 1 regardless of NUM_NODES.
+# DeepEP's tests/utils.py::init_dist computes
+#   world_size = int(os.getenv('WORLD_SIZE')) * num_local_ranks
+# so with setup/env_vars sourced (NUM_NODES=2) the documented single-node command
+# `run-kernel-test.sh intranode 0` opens a 16-rank rendezvous with only 8
+# processes present and blocks in init_process_group forever -- and this is the
+# pre-flight check users run BEFORE the 640 GB model load, so it has to be the
+# one thing that cannot hang.
+if [[ "$TEST" == "intranode" ]]; then
+    WS=1
+else
+    WS=${NUM_NODES:-2}
+fi
 
 # CUDA VMM is REGIME-SPECIFIC (verified on p5 + p5en over EFA):
 #   - normal dispatch/combine (intranode/internode): VMM must be DISABLED, else
@@ -69,4 +83,4 @@ docker run --rm \
     -e NVSHMEM_BOOTSTRAP=UID \
     -e LD_PRELOAD="$NVSHMEM_HOST_LIB" \
     --entrypoint bash "$IMAGE_URI" \
-    -c "cd /opt/DeepEP && python3 tests/test_${TEST}.py $*"
+    -c 'cd /opt/DeepEP && python3 tests/test_'"${TEST}"'.py "$@"' -- "$@"

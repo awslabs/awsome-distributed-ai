@@ -80,20 +80,35 @@ esac
 
 echo "==> ${STAGE} sweep, backend=${MOE_BACKEND}${SUFFIX}, ${#POINTS[@]} points -> ${OUT_DIR}"
 
+# Forwarded by name into the client container; see the docker run below.
+export HF_TOKEN="${HF_TOKEN:-}"
+
+# See benchmark.sh: without this a fully-failed sweep still exits 0.
+rc=0
+
 for point in "${POINTS[@]}"; do
     IFS=: read -r in_len out_len conc num_prompts <<< "$point"
     tag="${STAGE}_in${in_len}_out${out_len}_conc${conc}"
     echo
     echo "--- ${tag} ---"
 
+    # Warm at this point's concurrency, matching benchmark.sh. bench_serving's
+    # default is ONE warmup request, which at conc 512 leaves the whole ramp-up
+    # inside the measured window.
+    warmup=${WARMUP_REQUESTS:-$conc}
+
+    # bench_serving appends to --output-file; see benchmark.sh.
+    rm -f "${OUT_DIR}/${tag}.jsonl"
+
     # --pd-separated makes the harness attribute TTFT/TPOT correctly across the
     # disaggregated roles; --random-range-ratio 1 pins the input length exactly
     # (the default jitters it, which blurs the per-length comparison).
     # Mount the HF cache -- see the note in benchmark.sh.
-    docker run --rm --network host --privileged \
+    # No --privileged: plain HTTP client, same reasoning as benchmark.sh.
+    docker run --rm --network host \
         -v "${OUT_DIR}:/out" \
         -v "${HF_CACHE_DIR}:/hf" -e HF_HOME=/hf \
-        -e HF_TOKEN="${HF_TOKEN:-}" \
+        -e HF_TOKEN \
         --entrypoint python3 "$IMAGE_URI" \
         -m sglang.bench_serving \
             --backend sglang-oai \
@@ -104,13 +119,20 @@ for point in "${POINTS[@]}"; do
             --random-input-len "${in_len}" \
             --random-output-len "${out_len}" \
             --random-range-ratio 1 \
+            --seed "${SEED:-42}" \
             --max-concurrency "${conc}" \
             --num-prompts "${num_prompts}" \
+            --warmup-requests "${warmup}" \
             --output-file "/out/${tag}.jsonl" \
-        || echo "WARN: ${tag} failed; continuing"
+        || { echo "WARN: ${tag} failed; continuing"; rc=1; }
 done
 
 echo
-echo "==> Done. Raw results in ${OUT_DIR}"
+if [[ "$rc" -ne 0 ]]; then
+    echo "==> FINISHED WITH FAILURES. Partial results in ${OUT_DIR}"
+else
+    echo "==> Done. Raw results in ${OUT_DIR}"
+fi
 echo "Compare by re-running with MOE_BACKEND=baseline, =tp, and DP_ATTENTION=1"
 echo "after relaunching all four servers."
+exit "$rc"

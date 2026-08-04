@@ -47,9 +47,14 @@ RUN cd /tmp && \
 # ---- AWS EFA installer (libfabric + EFA provider) ----
 # Bundled rdma-core + --skip-rdma-core so the build does not depend on whether
 # the build host has EFA devices. DEBS dir is matched to the base image OS.
-ARG EFA_INSTALLER_VERSION=latest
+# Pinned, not `latest`: libfabric, the EFA provider and the aws-ofi-nccl plugin
+# are the stack this sample measures, so an unpinned rebuild can move the numbers
+# with no change to this repo. 1.49.0 ships libfabric 2.4.0amzn5.0 and
+# libnccl-ofi-ngc-v3 1.20.0; the image records the full set in
+# /opt/amazon/efa_installed_packages.
+ARG EFA_INSTALLER_VERSION=1.49.0
 RUN cd /tmp && \
-    curl -O https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz && \
+    curl -fsSL -O https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz && \
     tar xzf aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz && \
     cd aws-efa-installer && \
     . /etc/os-release && \
@@ -67,18 +72,25 @@ RUN cd /tmp && \
 # Any mooncake already in the base image is a pip wheel built WITHOUT EFA
 # support, so it is replaced with a -DUSE_EFA=ON source build.
 #
-# Deliberately unpinned (`--depth 1` of main), and the 2P2D KV path needs it to
-# be recent: an image built from a main older than the FI_HMEM-in-caps change to
-# EfaContext::construct cannot register the GPU-resident KV cache at all. It
-# fails with "fi_mr_regattr failed for GPU memory ... Operation not supported",
-# lets startup finish, passes SGLang's PD warmup, and then kills the first real
-# request while blaming the peer. `git log --oneline -1` below records which
-# commit an image was built from -- check it before debugging a KV failure, and
-# rebuild before trying env levers. See benchmarks/README.md, "Open blocker".
+# MOONCAKE_COMMIT must be >= a7413723 ("[TE] fix(efa): bind a CUDA context before
+# registering GPU memory", kvcache-ai/Mooncake#3177, merged 2026-07-30) or the
+# 2P2D KV path does not work at all. Before that commit, fi_mr_regattr() on
+# FI_HMEM_CUDA memory fails with a bare "Operation not supported": libfabric's
+# cuda_get_dmabuf_fd() calls cuMemGetHandleForAddressRange() without binding a
+# context, so a thread that has only used the CUDA runtime API gets
+# CUDA_ERROR_INVALID_CONTEXT, and the EFA provider -- which has no dmabuf
+# fallback for FI_HMEM_CUDA -- reports it as ENOTSUP. registerLocalMemory() then
+# rolls the chunk back, leaving the buffer registered on no NIC.
+#
+# The failure is invisible until it matters: startup finishes, SGLang's PD warmup
+# passes (its 4-token prompt does not exercise the path), and the first real
+# request dies with "remote mooncake session ... is not alive" -- blaming the peer,
+# which is alive. Do not go looking for env levers; check this pin first.
+ARG MOONCAKE_COMMIT=a7413723
 RUN pip uninstall -y mooncake-transfer-engine mooncake 2>/dev/null || true
 RUN cd /tmp && \
-    git clone --depth 1 https://github.com/kvcache-ai/Mooncake.git && \
-    cd Mooncake && git log --oneline -1 && \
+    git clone https://github.com/kvcache-ai/Mooncake.git && \
+    cd Mooncake && git checkout ${MOONCAKE_COMMIT} && git log --oneline -1 && \
     bash dependencies.sh -y && \
     apt-get install -y libgflags-dev && \
     mkdir build && cd build && \
@@ -90,12 +102,12 @@ RUN cd /tmp && \
       -DPython_EXECUTABLE="$PYBIN" && \
     make -j$(nproc) && \
     cp mooncake-integration/engine.cpython-*.so ../mooncake-wheel/mooncake/ && \
-    cp mooncake-integration/store.cpython-*.so ../mooncake-wheel/mooncake/ 2>/dev/null || true && \
+    { cp mooncake-integration/store.cpython-*.so ../mooncake-wheel/mooncake/ 2>/dev/null || true; } && \
     cp mooncake-common/libasio.so ../mooncake-wheel/mooncake/ && \
     pip install ../mooncake-wheel --no-build-isolation && \
     MCDIR=$(python3 -c "import mooncake, os; print(os.path.dirname(mooncake.__file__))") && \
     cp -v mooncake-integration/engine.cpython-*.so "$MCDIR/" && \
-    cp -v mooncake-integration/store.cpython-*.so "$MCDIR/" 2>/dev/null || true && \
+    { cp -v mooncake-integration/store.cpython-*.so "$MCDIR/" 2>/dev/null || true; } && \
     cp -v mooncake-common/libasio.so "$MCDIR/" && \
     rm -rf /tmp/Mooncake
 

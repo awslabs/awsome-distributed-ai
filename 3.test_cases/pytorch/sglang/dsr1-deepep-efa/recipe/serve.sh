@@ -160,6 +160,13 @@ elif [[ "$MOE_BACKEND" == "deepep" ]]; then
 fi
 
 docker rm -f "$NAME" 2>/dev/null || true
+
+# Exported so the `-e HF_TOKEN` below can forward it by NAME. Passing
+# -e HF_TOKEN="$HF_TOKEN" instead would expand the secret into the xtrace output
+# that `set -x` writes to the terminal, and from there into any CI log, `script`
+# capture or shared tmux pane. The `:-` keeps the previous default-empty semantics.
+export HF_TOKEN="${HF_TOKEN:-}"
+
 set -x
 # --privileged for every backend, not just UCCL. UCCL needs it to register GPU
 # memory for RDMA through the dma-buf/ibverbs path, and Mooncake needs it to query
@@ -172,7 +179,7 @@ docker run -d --name "$NAME" \
     --device /dev/infiniband --device /dev/gdrdrv \
     --ulimit memlock=-1 --shm-size 32g \
     -v "${HF_CACHE_DIR}:/hf" -e HF_HOME=/hf \
-    -e HF_TOKEN="${HF_TOKEN:-}" \
+    -e HF_TOKEN \
     -v "${HF_CACHE_DIR}/../dg-cache:/root/.cache/deep_gemm" \
     -v "${HF_CACHE_DIR}/../sgl-cache:/root/.cache/sglang" \
     -e NCCL_SOCKET_IFNAME="$IFACE" -e GLOO_SOCKET_IFNAME="$IFACE" \

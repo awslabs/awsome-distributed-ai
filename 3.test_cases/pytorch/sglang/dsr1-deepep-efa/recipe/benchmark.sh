@@ -62,6 +62,15 @@ esac
 
 echo "==> ${STAGE} sweep, backend=${MOE_BACKEND}, ${#POINTS[@]} points -> ${OUT_DIR}"
 
+# Forwarded by name into the client container; see the docker run below.
+export HF_TOKEN="${HF_TOKEN:-}"
+
+# Tracks whether any point failed, so a sweep that produced no usable data exits
+# nonzero instead of printing "Done". Without it every point can fail and the
+# script still reports success, which is indistinguishable from a clean sweep in
+# a log or a CI step.
+rc=0
+
 for point in "${POINTS[@]}"; do
     IFS=: read -r in_len out_len conc num_prompts <<< "$point"
     tag="${STAGE}_in${in_len}_out${out_len}_conc${conc}"
@@ -71,6 +80,11 @@ for point in "${POINTS[@]}"; do
     # Warm at this point's concurrency (bench_serving caps warmup output_len at 32).
     warmup=${WARMUP_REQUESTS:-$conc}
 
+    # bench_serving opens --output-file in APPEND mode, so without this a re-run
+    # silently concatenates onto the previous run's results and nothing in the
+    # file distinguishes the two. Stale numbers then read as fresh ones.
+    rm -f "${OUT_DIR}/${tag}.jsonl"
+
     # Run the bench client inside the image so the harness version matches the
     # server's. --network host so localhost reaches the server on this node.
     #
@@ -78,10 +92,13 @@ for point in "${POINTS[@]}"; do
     # (256 MB) to source its token ids, and the container is --rm, so an unmounted
     # cache refetches it per point -- and a stalled fetch looks exactly like a hung
     # benchmark (idle GPUs, no output) against a healthy server.
-    docker run --rm --network host --privileged \
+    # No --privileged and no GPU/EFA devices: this is a plain HTTP client. It
+    # registers no GPU memory and touches no fabric, unlike the serving
+    # containers, whose --privileged rationale is documented in serve.sh.
+    docker run --rm --network host \
         -v "${OUT_DIR}:/out" \
         -v "${HF_CACHE_DIR}:/hf" -e HF_HOME=/hf \
-        -e HF_TOKEN="${HF_TOKEN:-}" \
+        -e HF_TOKEN \
         --entrypoint python3 "$IMAGE_URI" \
         -m sglang.bench_serving \
             --backend sglang \
@@ -96,9 +113,14 @@ for point in "${POINTS[@]}"; do
             --num-prompts "${num_prompts}" \
             --warmup-requests "${warmup}" \
             --output-file "/out/${tag}.jsonl" \
-        || echo "WARN: ${tag} failed; continuing"
+        || { echo "WARN: ${tag} failed; continuing"; rc=1; }
 done
 
 echo
-echo "==> Done. Raw results in ${OUT_DIR}"
+if [[ "$rc" -ne 0 ]]; then
+    echo "==> FINISHED WITH FAILURES. Partial results in ${OUT_DIR}"
+else
+    echo "==> Done. Raw results in ${OUT_DIR}"
+fi
+exit "$rc"
 echo "Repeat with MOE_BACKEND=baseline (and =tp) after restarting the server to compare."

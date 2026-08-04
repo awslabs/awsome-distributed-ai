@@ -89,8 +89,11 @@ run_router() {
 
     docker rm -f "${NAME_PREFIX}-router" 2>/dev/null || true
     set -x
+    # No --privileged: the router only proxies HTTP between the prefill and decode
+    # frontends. It opens no GPU memory and no EFA device, so it does not need what
+    # the serving containers below need.
     docker run -d --name "${NAME_PREFIX}-router" \
-        --network host --privileged \
+        --network host \
         --entrypoint python3 "$IMAGE_URI" \
         -m sglang_router.launch_router \
             --pd-disaggregation \
@@ -120,6 +123,11 @@ esac
 
 mkdir -p "${HF_CACHE_DIR}" "${HF_CACHE_DIR}/../dg-cache" "${HF_CACHE_DIR}/../sgl-cache"
 
+# Exported so COMMON_ENV can forward it by NAME below. This file runs `docker run`
+# under `set -x`, and -e HF_TOKEN="$HF_TOKEN" would expand the secret into the
+# xtrace output -- and from there into any CI log or shared terminal capture.
+export HF_TOKEN="${HF_TOKEN:-}"
+
 # MOONCAKE_PROTOCOL=efa is NOT optional. Without it Mooncake silently installs
 # its TCP transport ("Installing TCP transport" in the server log) and moves the
 # KV cache over sockets: correct output, passes a smoke test, then deadlocks with
@@ -128,7 +136,7 @@ mkdir -p "${HF_CACHE_DIR}" "${HF_CACHE_DIR}/../dg-cache" "${HF_CACHE_DIR}/../sgl
 # MC_FORCE_AUTO_DISCOVERY=1 lets Mooncake enumerate the EFA devices itself.
 COMMON_ENV=(
     -e HF_HOME=/hf
-    -e HF_TOKEN="${HF_TOKEN:-}"
+    -e HF_TOKEN
     -e NCCL_SOCKET_IFNAME="$IFACE" -e GLOO_SOCKET_IFNAME="$IFACE"
     # Short name, not an absolute path: NCCL templates it into
     # libnccl-net-ofi.so. Omitting it silently falls back to TCP. See Dockerfile.
