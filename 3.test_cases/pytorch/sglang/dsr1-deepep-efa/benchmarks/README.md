@@ -121,7 +121,8 @@ server without capping prefill.
   [`MOONCAKE_PROTOCOL=efa`](#required-setting-mooncake_protocolefa) — omitting it silently falls back
   to TCP — plus `--privileged` and `FI_HMEM=cuda`, and a Mooncake at or after
   [`a7413723`](https://github.com/kvcache-ai/Mooncake/commit/a7413723), which both Dockerfiles pin. On
-  an older Mooncake the KV path fails regardless of the launch configuration; see
+  an older Mooncake the KV path fails on hosts where EFA takes the dmabuf registration path, and no
+launch flag works around it; see
   [Resolved: GPU-memory registration](#resolved-gpu-memory-registration-needed-a-cuda-context-on-the-registering-thread).
 - **Run the kernel tests first.** `recipe/run-kernel-test.sh intranode|low_latency|internode`.
   `intranode` is single-node and cheap; `internode` **and** `low_latency` both put bytes on EFA, so
@@ -269,7 +270,7 @@ same `LL_MAX_TOKENS=512` / `--chunked-prefill-size 512` cap chain and the same
 
 TTFT ms / input tok/s. **Bold = best in row.**
 
-| Input × conc | DeepEP `normal` | UCCL-EP `normal` | tok/s delta |
+| Input × conc | DeepEP `normal` | UCCL-EP `normal` | tok/s delta (UCCL vs DeepEP) |
 |---|---|---|---|
 | 1024 × 1  | **459** / **2.2k** | 574 / 1.8k | −20% |
 | 4096 × 1  | **474** / **8.6k** | 577 / 7.1k | −18% |
@@ -277,7 +278,8 @@ TTFT ms / input tok/s. **Bold = best in row.**
 | 4096 × 8  | **1010** / **30.2k** | 1328 / 23.0k | −24% |
 | 4096 × 32 | **3723** / **30.8k** | 4891 / 23.4k | −24% |
 
-**DeepEP wins prefill at every point by 18–24%.** Same direction as the 2P2D prefill table and as
+**DeepEP wins prefill at every point by 21–32%** (row-wise, DeepEP over UCCL; the delta column
+is the same gap stated as UCCL's shortfall, which is why its numbers are smaller). Same direction as the 2P2D prefill table and as
 UCCL's own kernel-level FP8 dispatch numbers: the `normal` high-throughput dispatch is UCCL's soft
 spot, and the margin widens slightly with concurrency rather than closing.
 
@@ -285,7 +287,7 @@ spot, and the margin widens slightly with concurrency rather than closing.
 
 Output tok/s / mean TPOT ms / p99 ITL ms. **Bold = best in row.**
 
-| Concurrency | DeepEP `low_latency` | UCCL-EP `low_latency` | tok/s delta |
+| Concurrency | DeepEP `low_latency` | UCCL-EP `low_latency` | tok/s delta (UCCL vs DeepEP) |
 |---|---|---|---|
 | 32  | 554 / 54.5 / 54 | **761** / **38.1** / **37** | **+37%** |
 | 64  | 1021 / 59.3 / 59 | **1360** / **43.1** / **41** | **+33%** |
@@ -344,7 +346,7 @@ image — see [section 5](#5-disable-the-prefix-cache-or-the-sweep-measures-the-
 `enp71s0`. SGLang 0.5.13.post1. Benched through the router with `--pd-separated` and
 `--random-range-ratio 1`.
 
-> **Read Part 2 as directional, and note it cannot currently be re-measured.** Unlike Part 1, these
+> **Read Part 2 as directional: it has not been re-measured under the Part 1 rules.** Unlike Part 1, these
 > sweeps predate two of the measurement rules above. The DeepEP rows ran `--deepep-mode auto` rather
 > than pinned per role, and the radix prefix cache was on for the non-DP rows and off for the DP rows
 > — so a "DP effect" column mixes the DP lever with a cache difference. Both effects push in DeepEP's
@@ -774,9 +776,9 @@ point is that **EFA delivers IB-class dispatch/combine bandwidth**. Full kernel 
 | `internode` (NVSHMEM/EFA, 2 nodes, 16 EP ranks) | **32/32 passed on both ranks** | dispatch FP8 **62.1** GB/s RDMA / 202.8 NVL; BF16 **71.1** / 232.2; combine **59.2** / 193.3 |
 
 The internode figures land within ±2% of the 16-EP column above, measured on different instances on
-a different date — so the EFA transport reproduces. Only `internode` puts bytes on EFA; run the
-other two anyway, because them failing tells you the image is broken before you spend two nodes
-finding out.
+a different date — so the EFA transport reproduces. `internode` and `low_latency` both put bytes on
+EFA; `intranode` does not (see below). Run `intranode` anyway — it failing tells you the image is
+broken before you spend two nodes finding out.
 
 Repeated on 2× `p5.48xlarge` (H100, so lower per-GPU numbers than the `p5en` row above), 2026-08-04,
 image built from the committed Dockerfile with `TORCH_CUDA_ARCH_LIST=9.0`. Both ranks exited 0:

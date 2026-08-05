@@ -122,5 +122,5 @@ if [[ "$rc" -ne 0 ]]; then
 else
     echo "==> Done. Raw results in ${OUT_DIR}"
 fi
-exit "$rc"
 echo "Repeat with MOE_BACKEND=baseline (and =tp) after restarting the server to compare."
+exit "$rc"

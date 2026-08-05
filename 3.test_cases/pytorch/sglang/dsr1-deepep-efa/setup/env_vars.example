@@ -47,10 +47,11 @@ export NUM_GPU_PER_NODE=8
 # Primary ENA interface, used for the torch/gloo rendezvous (NOT for RDMA itself --
 # NVSHMEM picks EFA devices via NVSHMEM_NETDEVS_POLICY).
 #
-# Derived from the default route rather than hardcoded. It resolves to enp71s0 on
-# p5, p5en, p6-b200 and p6-b300 today, but a hardcoded name plus a prose table of
-# which instance families it holds for rots as families come and go -- so this is
-# the check written as code. Override by exporting IFACE before sourcing this file.
+# Derived from the default route rather than hardcoded. It is enp71s0 on p5 and
+# p5en (measured here) and on p6-b200 (reported by @KeitaW, 2026-08-03), but a
+# hardcoded name plus a prose table of which families it holds for rots as families
+# come and go -- so this is the check written as code, and the name stops mattering.
+# Override by exporting IFACE before sourcing this file.
 #
 # Only GLOO_SOCKET_IFNAME actually needs a concrete name (it takes comma-separated
 # names only, no exclusion syntax). NCCL gets the instance-type-agnostic exclusion

@@ -83,7 +83,16 @@ echo "--- NVSHMEM host library is v3.7.0 everywhere ---"
 # Collected first, so "no host library at all" fails instead of skipping the loop
 # body and reporting success -- exactly the silent-pass class this script exists to
 # catch. Expect at least two: the /opt/nvshmem build and the overwritten pip copy.
-libs=$(find / -name "libnvshmem_host.so.3" -not -path "/proc/*" 2>/dev/null)
+#
+# The trailing "|| true" is required, not decorative: this runs under set -e, where
+# a plain assignment takes the exit status of the command substitution, so v=$(false)
+# aborts the script. find exits nonzero on any unreadable or vanishing directory
+# (/proc is full of them), so without the guard the script would die right here --
+# before the empty-check below or any FAIL/PASS line -- and look mysteriously
+# truncated. The search roots are enumerated for the same reason: nothing outside
+# them can legitimately hold the library, and skipping /proc also makes it faster.
+# NOTE: this whole block runs inside single quotes, so no apostrophes in comments.
+libs=$(find /opt /usr/local /usr/lib -name "libnvshmem_host.so.3" 2>/dev/null || true)
 if [ -z "$libs" ]; then
     echo "  FAIL: no libnvshmem_host.so.3 found anywhere in the image"
     fail=1

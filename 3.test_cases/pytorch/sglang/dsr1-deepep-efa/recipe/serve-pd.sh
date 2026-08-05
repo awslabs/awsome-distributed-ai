@@ -148,8 +148,9 @@ COMMON_ENV=(
     -e MOONCAKE_PROTOCOL=efa
     -e MC_FORCE_AUTO_DISCOVERY=1
     # FI_HMEM must be exactly "cuda" -- not unset, and never a list containing
-    # "system". Necessary but, on this image, not sufficient; see the tail of
-    # this comment and the open blocker in benchmarks/README.md.
+    # "system". Still load-bearing with the pinned Mooncake: a7413723 retains
+    # setenv("FI_HMEM", "system", 0), so leaving this unset still lets "system"
+    # through. See the tail of this comment.
     #
     # Mooncake's EFA context calls setenv("FI_HMEM", "system", 0) before it opens
     # a domain. overwrite=0, so a value we set here wins; leaving it unset lets
@@ -181,12 +182,14 @@ COMMON_ENV=(
     # "efa-direct" fabrics are enumerated regardless, and Mooncake only ever
     # opens "efa".
     #
-    # Caveat: with FI_HMEM=cuda confirmed live in the container, registration on
-    # this image STILL fails -- but with EOPNOTSUPP rather than the ENOSYS above,
-    # so that is a second, separate defect inside Mooncake's EFA transport. The
-    # same fi_mr_regattr call succeeds from a standalone C program in the same
-    # container while the failing server runs, on every device and at the exact
-    # failing length, so it is not the provider or the fabric.
+    # There was a second failure beyond this one: with FI_HMEM=cuda confirmed live,
+    # registration still failed, with EOPNOTSUPP rather than the ENOSYS above. That
+    # is RESOLVED -- it was kvcache-ai/Mooncake#3177 (registering GPU memory from a
+    # thread with no CUDA driver context), fixed in a7413723, which both Dockerfiles
+    # now pin. It is not a provider or fabric bug, which is why the same
+    # fi_mr_regattr call succeeded from a standalone C program in the same container
+    # while the server failed. See "Resolved: GPU-memory registration" in
+    # benchmarks/README.md; do not re-open that hunt.
     -e FI_HMEM=cuda
 )
 # Forwarded only when the caller sets it, so the default launch is unchanged.

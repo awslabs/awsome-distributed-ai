@@ -80,23 +80,43 @@ static int drv_call(const char *label, int bind_ctx) {
     return (int)r;
 }
 
-static int g_drv_noctx;
+/* Pre-set to a sentinel no CUresult uses, so a pthread_create failure cannot be
+ * mistaken for CUDA_SUCCESS (0) by the verdict logic below. */
+#define NOT_RUN (-1)
+
+static int g_drv_noctx = NOT_RUN;
 static void *drv_thread(void *unused) {
     (void)unused;
     g_drv_noctx = drv_call("fresh thread, no context", 0);
     return NULL;
 }
-static int g_drv_ctx;
+static int g_drv_ctx = NOT_RUN;
 static void *drv_thread_ctx(void *unused) {
     (void)unused;
     g_drv_ctx = drv_call("fresh thread, context bound", 1);
     return NULL;
 }
 
+/* A thread that cannot be created leaves the result at NOT_RUN rather than
+ * silently reading as success. */
+static void run_thread(void *(*fn)(void *), void *arg) {
+    pthread_t t;
+    int rc = pthread_create(&t, NULL, fn, arg);
+    if (rc) {
+        printf("    pthread_create failed (%s) -- result unavailable\n",
+               strerror(rc));
+        return;
+    }
+    pthread_join(t, NULL);
+}
+
 /* ---- layer 2: the full registration through libfabric ---- */
 
-/* Mooncake's fi_getinfo hints, verbatim -- keep identical to
- * probe-kv-registration.c or the two probes stop being comparable. */
+/* Mooncake's PRE-FIX (0.3.12-era) fi_getinfo hints, verbatim -- deliberately NOT
+ * updated to the pinned a7413723, which adds FI_HMEM to hints_->caps and requests
+ * FI_VERSION(1, 18). These hints are what reproduces the defect and what keeps this
+ * probe comparable to probe-kv-registration.c; "fixing" them to match the pin would
+ * change what the probe demonstrates. */
 static struct fi_info *mooncake_hints(void) {
     struct fi_info *h = fi_allocinfo();
     h->caps = FI_MSG | FI_RMA | FI_READ | FI_WRITE | FI_REMOTE_READ |
@@ -128,11 +148,11 @@ static int reg(struct fid_domain *dom, void *p) {
 }
 
 struct regjob { struct fid_domain *dom; void *p; int bind_ctx; int ret; };
+/* ret starts at NOT_RUN via the initialisers in main(), same reason as above. */
 
 static void *reg_thread(void *arg) {
     struct regjob *j = arg;
     CUcontext cur = NULL;
-    cuCtxGetCurrent(&cur);
     if (j->bind_ctx) {
         CUdevice d;
         CUcontext pc;
@@ -140,6 +160,10 @@ static void *reg_thread(void *arg) {
             cuDevicePrimaryCtxRetain(&pc, d) == CUDA_SUCCESS)
             cuCtxSetCurrent(pc);
     }
+    /* Sampled AFTER the bind, so the printed state is the state the registration
+     * actually ran under -- matching drv_call(). Sampling before made the
+     * "context bound" row report ctx=NONE, the opposite of what it demonstrates. */
+    cuCtxGetCurrent(&cur);
     j->ret = reg(j->dom, j->p);
     printf("    %-32s ctx=%-7s ret=%-4d %s\n",
            j->bind_ctx ? "fresh thread, context bound"
@@ -171,15 +195,12 @@ int main(void) {
 
     printf("[1] cuMemGetHandleForAddressRange -- the call libfabric makes:\n");
     int drv_main = drv_call("main thread", 0);
-    pthread_t t;
-    pthread_create(&t, NULL, drv_thread, NULL);
-    pthread_join(t, NULL);
-    pthread_create(&t, NULL, drv_thread_ctx, NULL);
-    pthread_join(t, NULL);
+    run_thread(drv_thread, NULL);
+    run_thread(drv_thread_ctx, NULL);
 
     printf("\n[2] fi_mr_regattr(FI_HMEM_CUDA) through libfabric:\n");
     struct fi_info *info = NULL, *hints = mooncake_hints();
-    int reg_same = -1, reg_noctx = -1;
+    int reg_same = NOT_RUN, reg_noctx = NOT_RUN, reg_ctx = NOT_RUN;
     if (fi_getinfo(FI_VERSION(1, 21), NULL, NULL, 0, hints, &info)) {
         printf("    fi_getinfo(efa) failed -- skipping layer 2\n");
     } else {
@@ -192,33 +213,66 @@ int main(void) {
             reg_same = reg(dom, p);
             printf("    %-32s ctx=present ret=%-4d %s\n", "same thread",
                    reg_same, reg_same ? fi_strerror(-reg_same) : "OK");
-            struct regjob j = {dom, p, 0, -1};
-            pthread_create(&t, NULL, reg_thread, &j);
-            pthread_join(t, NULL);
+            struct regjob j = {dom, p, 0, NOT_RUN};
+            run_thread(reg_thread, &j);
             reg_noctx = j.ret;
-            struct regjob j2 = {dom, p, 1, -1};
-            pthread_create(&t, NULL, reg_thread, &j2);
-            pthread_join(t, NULL);
+            struct regjob j2 = {dom, p, 1, NOT_RUN};
+            run_thread(reg_thread, &j2);
+            reg_ctx = j2.ret;
         }
     }
 
-    printf("\nVERDICT\n");
-    if (drv_main == 0 && g_drv_noctx != 0 && g_drv_ctx == 0)
-        printf("  mechanism CONFIRMED: the driver call fails only on a thread with\n"
-               "  no CUDA context, and binding the primary context fixes it. That is\n"
-               "  what Mooncake a7413723 does -- pin at or after it.\n");
-    else
-        printf("  mechanism NOT reproduced at the driver layer (rc main=%d noctx=%d "
-               "ctx=%d).\n", drv_main, g_drv_noctx, g_drv_ctx);
+    /* Exit status so this is scriptable: 0 only when layer 1 showed exactly the
+     * predicted mechanism, 2 when it did not, 3 when layer 2 could not run. */
+    int status = 0;
 
-    if (reg_noctx == 0 && reg_same == 0)
+    printf("\nVERDICT\n");
+    /* The mechanism predicts one specific error, so require it. Any other failure
+     * code means something else is wrong and must not read as confirmation. */
+    if (drv_main == 0 && g_drv_noctx == (int)CUDA_ERROR_INVALID_CONTEXT &&
+        g_drv_ctx == 0) {
+        printf("  mechanism CONFIRMED: the driver call fails only on a thread with\n"
+               "  no CUDA context, with exactly CUDA_ERROR_INVALID_CONTEXT (201), and\n"
+               "  binding the primary context fixes it. That is what Mooncake\n"
+               "  a7413723 does -- pin at or after it.\n");
+    } else {
+        printf("  mechanism NOT reproduced at the driver layer (rc main=%d noctx=%d "
+               "ctx=%d;\n  expected 0 / %d / 0). A nonzero noctx that is NOT 201 is a\n"
+               "  different defect -- do not read it as this one.\n",
+               drv_main, g_drv_noctx, g_drv_ctx,
+               (int)CUDA_ERROR_INVALID_CONTEXT);
+        status = 2;
+    }
+
+    /* Every layer-2 combination gets a line: printing nothing for the half the
+     * reader came for is worse than printing "inconclusive". */
+    if (reg_same == NOT_RUN) {
+        printf("  layer 2 did not run (no EFA fabric/domain here), so nothing is\n"
+               "  known about the full registration path on this host.\n");
+        status = status ? status : 3;
+    } else if (reg_same != 0) {
+        printf("  registration fails even on the ALLOCATING thread (ret=%d, %s), which\n"
+               "  is not this defect -- the context is present there. Suspect the EFA\n"
+               "  setup itself; run recipe/probe-kv-registration.c.\n",
+               reg_same, fi_strerror(-reg_same));
+        status = status ? status : 3;
+    } else if (reg_noctx == 0) {
         printf("  full registration succeeds even without a context, so THIS host is\n"
                "  not taking the dmabuf path -- check whether efa_nv_peermem is loaded\n"
                "  (lsmod | grep peermem). A pass here does not clear the caller.\n");
-    else if (reg_noctx != 0 && reg_same == 0)
-        printf("  full registration fails from a context-less thread on this host:\n"
-               "  the dmabuf path IS being taken. The Mooncake pin is required here.\n");
+    } else if (reg_ctx == 0) {
+        printf("  full registration fails from a context-less thread and SUCCEEDS with\n"
+               "  the primary context bound: the dmabuf path IS being taken and the\n"
+               "  Mooncake pin fixes it here.\n");
+    } else {
+        printf("  full registration fails from a context-less thread (ret=%d) AND with\n"
+               "  the context bound (ret=%d, %s). Binding a context is therefore NOT\n"
+               "  sufficient on this host -- the Mooncake pin alone will not fix it.\n",
+               reg_noctx, reg_ctx,
+               reg_ctx == NOT_RUN ? "not run" : fi_strerror(-reg_ctx));
+        status = status ? status : 3;
+    }
 
     cudaFree(p);
-    return 0;
+    return status;
 }

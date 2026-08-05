@@ -20,7 +20,7 @@ winners** ([`benchmarks/`](./benchmarks/README.md)).
 | Base image | `lmsysorg/sglang:v0.5.13.post1-cu130` |
 | DeepEP | `deepseek-ai/DeepEP` @ `567632d` + the EFA patch (pre-EPv2, NVSHMEM backend) |
 | NVSHMEM | `v3.7.0-0`, built with **only** the libfabric transport (IBRC/IBGDA off) |
-| Mooncake | `kvcache-ai/Mooncake` @ main, `-DUSE_EFA=ON` (KV transfer for PD-disaggregation) |
+| Mooncake | `kvcache-ai/Mooncake` @ [`a7413723`](https://github.com/kvcache-ai/Mooncake/commit/a7413723), `-DUSE_EFA=ON` (KV transfer for PD-disaggregation) |
 | GPU arch | Hopper `sm_90` + Blackwell `sm_100`/`sm_103` — **serving validated on H100/H200 only**; see [Blackwell](#blackwell-b200--b300) |
 
 > SGLang 0.5.13.post1 already carries the EFA-protocol change upstream, so no SGLang patch is
@@ -170,8 +170,9 @@ Three things to know before running this on Blackwell:
   instructions only when the arch list is exactly `9.0` (they are Hopper-specific). A multi-arch
   image therefore builds Hopper *without* them — pass `TORCH_CUDA_ARCH_LIST=9.0` to reproduce the
   H200 numbers in [`benchmarks/`](./benchmarks/README.md) exactly.
-- **A `p6-b300.48xlarge` has 16 EFA NICs, not `p5`'s 32.** Nothing in the launchers needs changing,
-  but `IFACE` in `setup/env_vars` is not `enp71s0` there — check `ip -br link`.
+- **A `p6-b300.48xlarge` has 16 EFA NICs, not `p5`'s 32.** Nothing in the launchers needs changing:
+  `setup/env_vars` derives `IFACE` from the default route, so the interface name is not something you
+  need to know per instance family.
 
 **Serving on Blackwell is not validated here.** The DeepEP-EFA kernels are — the same
 `567632d` + EFA patch, same NVSHMEM 3.7.0, is measured out to 256 ranks on `p6-b300` in

@@ -8,7 +8,7 @@
 # Layers on top of the official SGLang image:
 #   - EFA:      aws-efa-installer (libfabric + EFA provider)
 #   - GDRCopy:  GPU memory registration for EFA VRAM transfer (NVSHMEM needs it)
-#   - Mooncake: kvcache-ai @ main, built -DUSE_EFA=ON (KV transfer for PD-disagg)
+#   - Mooncake: kvcache-ai @ a7413723, built -DUSE_EFA=ON (KV transfer for PD-disagg)
 #   - DeepEP:   deepseek-ai @ 567632d + the EFA patch, on NVSHMEM v3.7.0-0
 #
 # DeepEP and NVSHMEM are built by setup_deepep_efa.sh, which is a vendored copy
@@ -73,9 +73,12 @@ RUN cd /tmp && \
 # support, so it is replaced with a -DUSE_EFA=ON source build.
 #
 # MOONCAKE_COMMIT must be >= a7413723 ("[TE] fix(efa): bind a CUDA context before
-# registering GPU memory", kvcache-ai/Mooncake#3177, merged 2026-07-30) or the
-# 2P2D KV path does not work at all. Before that commit, fi_mr_regattr() on
-# FI_HMEM_CUDA memory fails with a bare "Operation not supported": libfabric's
+# registering GPU memory", kvcache-ai/Mooncake#3177, merged 2026-07-30), or the 2P2D
+# KV path breaks on hosts where EFA takes the dmabuf registration path. (It is
+# host-conditional: a host with efa_nv_peermem loaded has a working non-dmabuf route
+# and does not hit it -- which is why it reproduced on p5en but not on p5.) Before
+# that commit, fi_mr_regattr() on FI_HMEM_CUDA memory fails with a bare
+# "Operation not supported": libfabric's
 # cuda_get_dmabuf_fd() calls cuMemGetHandleForAddressRange() without binding a
 # context, so a thread that has only used the CUDA runtime API gets
 # CUDA_ERROR_INVALID_CONTEXT, and the EFA provider -- which has no dmabuf
@@ -234,13 +237,16 @@ ENV NVSHMEM_NETDEVS_POLICY=EXTERNAL_SHARING_PCIE_SWITCH_NIC_EXCLUSIVE
 # Verify: NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET should log
 # "NET/OFI Selected provider is efa" -- not "NET/Socket".
 ENV NCCL_NET_PLUGIN=ofi
-# NOTE on CUDA VMM: it is REGIME-SPECIFIC and therefore NOT set here.
-#   - normal dispatch/combine (test_intranode / test_internode): set
-#     NVSHMEM_DISABLE_CUDA_VMM=1 at runtime, else NVSHMEM topo / transport-map
-#     init fails inside the container.
-#   - low_latency (test_low_latency): leave CUDA VMM ENABLED, else the RDMA
-#     buffer cudaMemset fails with "invalid argument" (deep_ep.cpp:371).
-# recipe/run-kernel-test.sh sets this per test; see README.
+# NOTE on CUDA VMM: NOT set here, because the one real constraint is a
+# leave-it-alone.
+#   - low_latency (test_low_latency): CUDA VMM must stay ENABLED, else the RDMA
+#     buffer cudaMemset fails with "invalid argument" (deep_ep.cpp:371). Measured
+#     on 2x p5: exit 1 with that exact error when VMM is disabled.
+#   - normal dispatch/combine (test_intranode / test_internode): no constraint
+#     found. test_internode also runs clean with VMM enabled (60.97 vs 61.07 GB/s
+#     BF16 dispatch RDMA, no NVSHMEM topo / transport-map error). The launchers
+#     still pass NVSHMEM_DISABLE_CUDA_VMM=1 for normal as belt-and-braces.
+# recipe/run-kernel-test.sh sets this per test; see benchmarks/README.md for the 2x2.
 ENV PATH="/opt/amazon/efa/bin:${PATH}"
 # TORCH_LIB is the base image's torch/lib. It is resolved at build time and
 # baked in below, because ENV cannot run a command; the sanity check in

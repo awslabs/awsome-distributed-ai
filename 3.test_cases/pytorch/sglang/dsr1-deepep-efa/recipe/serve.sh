@@ -23,8 +23,11 @@
 # To benchmark UCCL-EP instead of DeepEP, point IMAGE_URI at an SGLang image built
 # with UCCL's ep/deep_ep_wrapper (which presents UCCL under DeepEP's Python API, so
 # --moe-a2a-backend deepep drives it unchanged) and set UCCL=1. That image is
-# ../Dockerfile.uccl. UCCL needs --privileged, a pinned --deepep-mode, and
-# a lower --mem-fraction-static; all three are applied below when UCCL=1.
+# ../Dockerfile.uccl. What UCCL=1 actually changes here is the pinned --deepep-mode
+# (required, not defaulted -- see the block below) and dropping the NVSHMEM
+# environment UCCL has no use for. --privileged is unconditional in this script for
+# every backend, and --mem-fraction-static is the same 0.85/0.75 DeepEP gets; the
+# lower 0.70 UCCL decode value lives in serve-pd.sh, where it is needed.
 #
 # --disable-radix-cache is passed unconditionally, and it is not a tuning choice.
 # recipe/benchmark.sh pins --seed 42, so every point that shares an input length
@@ -175,12 +178,13 @@ export HF_TOKEN="${HF_TOKEN:-}"
 # support `^` exclusion -- it takes concrete comma-separated names only -- so it gets
 # $IFACE, which setup/env_vars derives from the default route.
 set -x
-# --privileged for every backend, not just UCCL. UCCL needs it to register GPU
-# memory for RDMA through the dma-buf/ibverbs path, and Mooncake needs it to query
-# the NUMA node of a registered buffer -- under Docker's default capability set
-# that query fails with "Operation not permitted", registration silently proceeds
-# anyway, and the first KV transfer then dies with "Memory region not registered by
-# any active EFA device(s)". See recipe/serve-pd.sh.
+# --privileged for every backend, not just UCCL. What needs it in THIS script is
+# UCCL=1: registering GPU memory for RDMA through the dma-buf/ibverbs path. This is
+# the colocated launcher, so no Mooncake and no KV transfer runs here -- that
+# rationale belongs to recipe/serve-pd.sh, which carries it. Applied
+# unconditionally so every backend runs under identical container privileges and
+# the comparison is not confounded by them. Whether baseline/tp could drop it is
+# plausible but unmeasured; do not change it blind.
 docker run -d --name "$NAME" \
     --gpus all --network host --ipc host --privileged \
     --device /dev/infiniband --device /dev/gdrdrv \
