@@ -100,8 +100,39 @@ DOCKER_BUILDKIT=1 docker build --progress=plain \
 ```
 
 The build ends in smoke tests that fail the build rather than a multi-node job: `deep_ep` imports,
-vLLM's `has_deep_ep()` returns true, `deep_ep_cpp` links `libnvshmem_host.so` with no unresolved
-deps, the stale pip wheel is absent, and the libfabric transport plugin is present.
+vLLM's `has_deep_ep()` returns true, `deep_ep_cpp`'s NVSHMEM resolves inside
+`/opt/amazon/nvshmem/lib`, NVSHMEM is ≥ 3.7.0, no pip NVSHMEM `.so` files remain, and the libfabric
+transport plugin is present.
+
+## Validating on real nodes
+
+The build-time tests cannot check the one thing that matters most — that expert traffic actually
+moves over EFA — because the nvidia container runtime only injects the host driver at `docker run`,
+never during `docker build`. `validate_2node.sbatch` covers that on two GPU nodes:
+
+```bash
+sbatch validate_2node.sbatch /fsx/$USER/containers/vllm-deepep-efa.sqsh
+```
+
+It asserts the four transport vars survived `enroot import` into the squashfs, that the driver and
+EFA endpoints are visible inside the container, and then runs DeepEP's own `test_internode.py`.
+
+Measured on 2 × p5en.48xlarge (16 × H200), job `11495`, all steps `COMPLETED 0:0` with zero errors
+and zero recv timeouts:
+
+| | RDMA (EFA) | NVLink |
+|---|---|---|
+| Best dispatch (BF16) | **71.30 GB/s** | 232.71 GB/s |
+| Best combine | **63.38 GB/s** | 206.88 GB/s |
+
+Those RDMA figures land within 0.6% of the standalone micro-benchmark's published result on the same
+hardware (71.73 dispatch / 63.27 combine in
+[`benchmarks/inference-.../ep-dispatch-combine-bf16/p5en-2nodes`](../../../../micro-benchmarks/expert-parallelism/deepep-benchmark/)),
+which is the intended check: adding vLLM to the image costs nothing on the DeepEP path.
+
+Note this validation uses **one Slurm task per node**. DeepEP's tests spawn their own 8 ranks per
+node via `torch.multiprocessing`, so `--ntasks-per-node 8` makes every task build its own 8-rank
+group and the run dies on `num_ranks > NUM_MAX_NVL_PEERS or low_latency_mode` or `EADDRINUSE`.
 
 ### Slurm / pyxis notes
 
