@@ -23,7 +23,7 @@
 numpy<2
 
 nltk==3.9.4
-awscli==1.45.26
+awscli==1.45.28
 pynvml==13.0.1
 ray[default]==2.55.1
 kernels==0.10.4
