@@ -8,8 +8,9 @@
 #     p5en.48xlarge(H200): vpc.amazonaws.com/efa: "16"  ← this file
 #     p6-b200.48xlarge   : vpc.amazonaws.com/efa: "8", and set DEEPEP_ARCH_LIST=10.0
 #
-# Image: build ../docker/ (NGC-from-scratch, public sources only) and push to YOUR registry:
-#   docker build -t <your-registry>/vllm-deepep-v2-guide:local ../docker/
+# Image: build the sample-root Dockerfile (NGC-from-scratch, public sources only) and push to
+# YOUR registry (setup/build-push.sh does this):
+#   docker build -t <your-registry>/vllm-deepep-v2-guide:local .
 # Then replace image: below. Do NOT point at anyone's private registry.
 #
 # privileged: true is REQUIRED where /dev/gdrdrv is not advertised by a device plugin
@@ -76,7 +77,7 @@ spec:
         - |
           set -uo pipefail
           echo "=== vLLM DeepEP-V2 guide pod $(hostname) $(date -u +%FT%TZ) ==="
-          cat /opt/GUIDE-PROVENANCE.txt
+          echo "DeepEP effective SHA: $(cat /opt/deepep.effective.sha 2>/dev/null || echo unknown)"
 
           # 1) DeepEP-V2 _C.so — built ONCE per pod (needs the live CUDA context;
           #    that is why it is not baked into the image). ~2 min. Idempotent guard.
@@ -92,15 +93,15 @@ spec:
           # 3) serve — leader on ordinal 0, workers derive start-rank from ordinal.
           #    Leader must be up first (receiver-before-sender); workers wait on DNS above.
           if [ "$ORDINAL" = "0" ]; then
-            exec bash /opt/serve_vllm.sh leader "$LEADER_IP"
+            exec bash /opt/serve.sh leader "$LEADER_IP"
           else
-            exec bash /opt/serve_vllm.sh worker "$LEADER_IP" $((ORDINAL * 8))
+            exec bash /opt/serve.sh worker "$LEADER_IP" $((ORDINAL * 8))
           fi
         env:
         # ---- scale + model (the two knobs; defaults = measured EP16 shape) ----
         - { name: SERVE_DP,    value: "16" }        # total DP = EP size; 32 for 4 nodes
-        - { name: SERVE_MODEL, value: "Qwen/Qwen3-30B-A3B-FP8" }  # see ../docs/MODEL-SELECTION.md
-        # - { name: SERVE_ENFORCE_EAGER, value: "1" }   # 1 = default & KNOWN-GOOD; see docs/EAGER-VS-NONEAGER.md
+        - { name: SERVE_MODEL, value: "Qwen/Qwen3-30B-A3B-FP8" }  # any MoE with n_routed_experts % DP == 0 (serve.sh asserts)
+        # - { name: SERVE_ENFORCE_EAGER, value: "1" }   # 1 = default & KNOWN-GOOD; non-eager needs the fix stack (README "eager vs non-eager")
         # - { name: HF_TOKEN, valueFrom: { secretKeyRef: { name: hf-token, key: token } } }  # gated models only
 
         # ---- proxy-Gin + EFA contract, VERBATIM (also baked as image ENV; repeated
@@ -108,7 +109,7 @@ spec:
         - { name: NCCL_GIN_TYPE,             value: "2" }     # 2 = CPU-proxy GIN (the EFA-viable path)
         - { name: NCCL_GIN_ENABLE,           value: "1" }
         - { name: OFI_NCCL_GIN_GDAKI,        value: "0" }     # GPU-initiated: not the shipped path on EFA
-        - { name: OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY, value: "1" }  # aws-ofi-nccl PR#1351 (see docker/Dockerfile L5)
+        - { name: OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY, value: "1" }  # aws-ofi-nccl PR#1354 (baked in setup_deepep_v2_efa.sh)
         - { name: EP_REUSE_NCCL_COMM,        value: "0" }     # DeepEP own-comm; never borrow torch lazy comm (2026-08-14 fix)
         - { name: OFI_NCCL_GIN_MAX_REQUESTS, value: "512" }
         - { name: NCCL_CUMEM_ENABLE,         value: "1" }

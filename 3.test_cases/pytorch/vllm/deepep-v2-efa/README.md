@@ -40,7 +40,8 @@ deterministically ~48 s into startup in `profile_run` (`deepep_v2.py` combine). 
 it; the fix stack above lets default compilation serve. Numbers for both modes are in `benchmarks/`.
 
 ## Prerequisites
-- An EKS or Slurm cluster of p5en.48xlarge (H200) with EFA + the EFA K8s device plugin, or Pyxis/Enroot.
+- An EKS cluster of p5en.48xlarge (H200) with EFA + the EFA K8s device plugin (the shipped launcher);
+  the container also runs under raw `docker run` on any 2 EFA hosts if you wire the rendezvous by hand.
 - An ECR repo you own (set in `setup/env_vars`); this sample never hardcodes a registry.
 - Hugging Face access for the model (`Qwen/Qwen3-30B-A3B-FP8` is public, no token required).
 
@@ -59,11 +60,24 @@ first boot (needs a live CUDA context) by `recipe/`-invoked `build_deepep.sh`.
 > canonical, reviewable build.
 
 ## Smoke-test the EFA transport before loading the model
+
+**1. Static image check (single node, no rendezvous):**
 ```bash
 bash recipe/verify-image.sh $REGISTRY/vllm-deepep-v2:$IMAGE_TAG
 ```
 Asserts (fail-loud) `fi_info -p efa` shows `efa-direct`, the GIN plugin exports `ncclGinPlugin`, and
 `import deep_ep` resolves `ElasticBuffer`.
+
+**2. Cross-node kernel smoke (prove bytes move over EFA before the model load):**
+```bash
+# in the pods/containers, one per node — runs DeepEP-V2's own elastic EP test
+bash /opt/run-kernel-test.sh leader <leader-ip>            # node 0
+bash /opt/run-kernel-test.sh worker <leader-ip> 1          # node 1
+```
+Runs `DeepEP/tests/elastic/test_ep.py` across the nodes with the exact proxy-Gin/EFA env the serve
+uses, and only prints `KERNEL-TEST PASS` when the test passes **and** the `NCCL_DEBUG=INFO` log shows
+the `efa-direct` banner (so a green result cannot be a silent TCP/SHM fallback). This is the one step
+that cannot hang for hours — run it before committing a node to the multi-hundred-GB weight load.
 
 ## Serve
 ```bash
@@ -73,8 +87,8 @@ SERVE_DP=16 bash recipe/serve.sh worker <leader-ip> 8     # on node 1
 # non-eager (CUDA graphs): apply the fix stack first, then serve without --enforce-eager
 bash recipe/apply-noneager-fix-stack.sh && EAGER=0 SERVE_DP=16 bash recipe/serve.sh leader <leader-ip>
 ```
-Kubernetes: `kubectl apply -f kubernetes/` (2-node LeaderWorkerSet; the proxy-Gin env contract + EFA
-device requests are set there).
+Kubernetes: `kubectl apply -f kubernetes/` (2-node StatefulSet + headless service; the proxy-Gin env
+contract + EFA device requests are set there).
 
 ## Benchmark
 ```bash
@@ -88,3 +102,8 @@ See `benchmarks/README.md` for the measured eager and non-eager tables + environ
   greedy decode, single sweep per mode), **not** a tuned per-token-latency (TTFT) baseline.
 - The non-eager fix stack pins two already-merged upstream PRs + a one-line guard staged for upstream;
   when they land in a tagged vLLM release, the `apply-noneager-fix-stack.sh` step retires.
+- Only a **Kubernetes** launcher is shipped and exercised (`kubernetes/`). No Slurm/Pyxis `.sbatch` is
+  provided because none was run; the raw two-node `recipe/serve.sh` path is the manual fallback.
+- `setup_deepep_v2_efa.sh` is first-party-authored for the V2 / NCCL-GIN path and is deliberately
+  **outside** `.github/workflows/deepep-vendor-sync.yml` (that CI gates the NVSHMEM `setup_deepep_efa.sh`
+  vendored copy — a different script). Do not add this script to that workflow.

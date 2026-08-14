@@ -8,16 +8,18 @@
 # so this is an AT-SCALE THROUGHPUT + relative latency-shape datapoint, NOT a pristine
 # p50 latency baseline. Purpose: first quantitative number at EP32 scale (we only had
 # functional 16/16 PASS before).
-import json, time, urllib.request, urllib.error, statistics, sys
+import argparse, json, time, urllib.request, urllib.error, statistics, sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Defaults keep the probe runnable standalone inside the pod (127.0.0.1 loopback);
+# recipe/benchmark.sh overrides --url (leader IP) and --out (raw JSONL path).
 URL = "http://127.0.0.1:8000/v1/chat/completions"
 MODEL = "Qwen/Qwen3-30B-A3B-FP8"
 MAX_TOKENS = 128
 PROMPT = "Explain expert parallelism in mixture-of-experts models in two sentences."
 CONCURRENCIES = [1, 8, 16, 32, 64]
 
-def one_request():
+def one_request(url):
     body = json.dumps({
         "model": MODEL,
         "messages": [{"role": "user", "content": PROMPT}],
@@ -25,7 +27,7 @@ def one_request():
         "temperature": 0.0,
         "stream": False,
     }).encode()
-    req = urllib.request.Request(URL, data=body, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
     t0 = time.time()
     try:
         with urllib.request.urlopen(req, timeout=300) as r:
@@ -46,11 +48,11 @@ def pct(xs, p):
     f = int(k)
     return xs[f] if f + 1 >= len(xs) else xs[f] + (xs[f + 1] - xs[f]) * (k - f)
 
-def sweep(conc):
+def sweep(conc, url):
     t0 = time.time()
     lat, toks, ok, codes = [], [], 0, {}
     with ThreadPoolExecutor(max_workers=conc) as ex:
-        futs = [ex.submit(one_request) for _ in range(conc)]
+        futs = [ex.submit(one_request, url) for _ in range(conc)]
         for fu in as_completed(futs):
             success, dt, ct, code = fu.result()
             lat.append(dt); toks.append(ct)
@@ -69,13 +71,27 @@ def sweep(conc):
     }
 
 if __name__ == "__main__":
-    print("=== DP32/EP32 live-serve throughput probe ===")
-    print(f"url={URL} model={MODEL} max_tokens={MAX_TOKENS}")
+    ap = argparse.ArgumentParser(description="vLLM DeepEP-V2 live-serve throughput/latency probe")
+    ap.add_argument("--url", default=URL, help="chat-completions endpoint (default: 127.0.0.1 loopback)")
+    ap.add_argument("--out", default=None, help="write one JSON object per concurrency level to this path (JSONL)")
+    args = ap.parse_args()
+
+    print("=== vLLM DeepEP-V2 live-serve throughput probe ===")
+    print(f"url={args.url} model={MODEL} max_tokens={MAX_TOKENS}")
     print(f"{'conc':>5} {'ok':>4} {'wall_s':>7} {'out_tok':>8} {'agg_tok/s':>10} {'p50_s':>7} {'p90_s':>7} {'p99_s':>7} codes")
     rows = []
-    for c in CONCURRENCIES:
-        r = sweep(c)
-        rows.append(r)
-        print(f"{r['conc']:>5} {r['ok']:>4} {r['wall_s']:>7} {r['total_out_tok']:>8} "
-              f"{r['agg_tok_s']:>10} {r['lat_p50_s']:>7} {r['lat_p90_s']:>7} {r['lat_p99_s']:>7} {r['codes']}")
+    out_fh = open(args.out, "w") if args.out else None
+    try:
+        for c in CONCURRENCIES:
+            r = sweep(c, args.url)
+            rows.append(r)
+            print(f"{r['conc']:>5} {r['ok']:>4} {r['wall_s']:>7} {r['total_out_tok']:>8} "
+                  f"{r['agg_tok_s']:>10} {r['lat_p50_s']:>7} {r['lat_p90_s']:>7} {r['lat_p99_s']:>7} {r['codes']}")
+            if out_fh:
+                out_fh.write(json.dumps(r) + "\n"); out_fh.flush()
+    finally:
+        if out_fh:
+            out_fh.close()
     print("JSON_ROWS=" + json.dumps(rows))
+    # non-zero exit if no level saw an HTTP 200 (so benchmark.sh fails loud on a dead serve)
+    sys.exit(0 if any(rw["codes"].get("200", 0) > 0 for rw in rows) else 1)

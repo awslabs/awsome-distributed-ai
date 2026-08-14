@@ -67,9 +67,10 @@ RUN pip3 install --no-cache-dir "${VLLM_WHEEL_URL}" \
 # ---- Layer 6: the serve/build scripts (LAST — script iteration never invalidates heavy layers) ----
 COPY recipe/build_deepep.sh /opt/build_deepep.sh
 COPY recipe/serve.sh /opt/serve.sh
+COPY recipe/run-kernel-test.sh /opt/run-kernel-test.sh
 COPY recipe/apply-noneager-fix-stack.sh /opt/apply-noneager-fix-stack.sh
 COPY recipe/benchmark_probe.py /opt/benchmark_probe.py
-RUN chmod +x /opt/build_deepep.sh /opt/serve.sh /opt/apply-noneager-fix-stack.sh
+RUN chmod +x /opt/build_deepep.sh /opt/serve.sh /opt/run-kernel-test.sh /opt/apply-noneager-fix-stack.sh
 
 # The segfault-fix env (EP_REUSE_NCCL_COMM=0) + proxy-Gin contract are set by recipe/serve.sh at launch.
 CMD ["/bin/bash", "-lc", "echo 'run: recipe/serve.sh {leader|worker} <ip>; build_deepep.sh runs once on first boot'; sleep infinity"]

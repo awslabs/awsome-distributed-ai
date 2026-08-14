@@ -1,17 +1,17 @@
 #!/bin/bash
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
-# serve_vllm.sh — vLLM DP/EP serve with the DeepEP-V2 all-to-all backend over AWS EFA
+# serve.sh — vLLM DP/EP serve with the DeepEP-V2 all-to-all backend over AWS EFA
 # (NCCL-GIN CPU-proxy). One invocation per NODE (leader on node 0, worker on the rest).
 #
-#   leader:  serve_vllm.sh leader <leader-pod-ip>
-#   worker:  serve_vllm.sh worker <leader-pod-ip> <start-rank>     # 8 / 16 / 24 ...
+#   leader:  serve.sh leader <leader-pod-ip>
+#   worker:  serve.sh worker <leader-pod-ip> <start-rank>     # 8 / 16 / 24 ...
 #
 # Scale is env-driven (the proven 2-node DP16 default is byte-identical unless overridden):
 #   SERVE_DP=16|32...    total data-parallel size across all nodes (= EP size)
 #   SERVE_DP_LOCAL=8     ranks per node (= GPUs per node)
 #   SERVE_MODEL=...      any MoE whose n_routed_experts % SERVE_DP == 0 (preflighted below)
 #
-# ── EAGER vs DEFAULT COMPILATION (READ ../docs/EAGER-VS-NONEAGER.md FIRST) ──────────────
+# ── EAGER vs DEFAULT COMPILATION (see README "eager vs non-eager") ──────────────
 # SERVE_ENFORCE_EAGER=1 (DEFAULT) — the KNOWN-GOOD path. Every measured E2E validation of
 #   this stack ran eager: our H200 EP16/EP32 (2026-08-01, 16/16 chat 200) AND the
 #   independent B200 EP16 run (0/384 request failures) — both at vLLM e2f993dc4.
@@ -91,7 +91,7 @@ print(f"EP preflight OK: {model} n_routed_experts={n} % DP={dp} == 0 ({n//dp} ex
 PY
 fi
 
-# ---- eager / non-eager selection (see header + ../docs/EAGER-VS-NONEAGER.md) ----
+# ---- eager / non-eager selection (see header + README "eager vs non-eager") ----
 SERVE_ENFORCE_EAGER="${SERVE_ENFORCE_EAGER:-1}"
 EAGER_FLAG="--enforce-eager"
 if [ "$SERVE_ENFORCE_EAGER" != "1" ]; then
