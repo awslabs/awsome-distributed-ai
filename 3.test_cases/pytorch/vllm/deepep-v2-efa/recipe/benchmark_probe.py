@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
 # Throughput + latency-vs-concurrency probe for the live DP32/EP32 vLLM serve.
 # Stdlib only (urllib + concurrent.futures) so it runs in the pod with no pip.
 # Fires a fixed set of concurrent chat-completions per concurrency level, measures

@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
 # serve_vllm.sh — vLLM DP/EP serve with the DeepEP-V2 all-to-all backend over AWS EFA
 # (NCCL-GIN CPU-proxy). One invocation per NODE (leader on node 0, worker on the rest).
 #

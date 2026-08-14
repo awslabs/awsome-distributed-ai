@@ -1,3 +1,4 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
 # vLLM + DeepEP-V2 multi-node MoE serve over AWS EFA — 2× p5en.48xlarge (H200), DP16/EP16.
 #
 # Scale seams (no other change needed — measured EP16→EP32 was launcher-args only):

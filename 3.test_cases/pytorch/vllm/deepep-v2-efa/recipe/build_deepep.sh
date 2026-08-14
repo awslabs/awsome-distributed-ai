@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
 # build_deepep.sh — build DeepEP-V2 _C.so IN-POD (needs a live CUDA context, so it
 # cannot run in the Docker build sandbox). Run ONCE on first pod boot.
 #

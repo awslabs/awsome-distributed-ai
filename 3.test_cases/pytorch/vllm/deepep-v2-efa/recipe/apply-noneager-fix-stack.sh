@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
 # Fable-confirmed non-eager fix stack onto /opt/vllm @ e2f993dc4 (NONEAGER-ROOTCAUSE 2026-08-13 §2):
 # cherry-pick vllm e48592066 (#46404) + 04c2a8dea (#46432) + meta-None H2 guard. Idempotent.
 set -uo pipefail
