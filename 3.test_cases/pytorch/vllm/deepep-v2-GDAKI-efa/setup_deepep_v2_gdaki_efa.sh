@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
+#
+# setup_deepep_v2_gdaki_efa.sh — build aws-ofi-nccl with the GDAKI (GPU-initiated,
+# kernel-posted WQE) GIN backend + stage DeepEP-V2 source for the vLLM deepep_v2 backend
+# on EFA. This is the NCCL_GIN_TYPE=3 counterpart to ../deepep-v2-efa/setup_deepep_v2_efa.sh
+# (which builds the NCCL_GIN_TYPE=2 CPU-proxy plugin) — same DeepEP base+PR, the delta is
+# --enable-gdaki + the newer rdma-core/libfabric substrate the Dockerfile builds first.
+# Distinct from the NVSHMEM-path setup_deepep_efa.sh gated by
+# .github/workflows/deepep-vendor-sync.yml — intentionally NOT vendor-synced to that copy.
+#
+# Runs inside the Docker build, AFTER the Dockerfile has built /opt/rdma-core-gdaki
+# (post-PR#1701 comp-cntr verbs) + /opt/libfabric-gdaki (post-PR#12591) and pip-installed
+# the cu13 torch stack. The DeepEP _C.so itself is compiled IN-POD at first boot
+# (recipe/build_deepep.sh) because it needs a live CUDA context the build sandbox lacks.
+set -euo pipefail
+
+# ---- pins (every one justified; no 'latest'; a bare refs/pull/N/head is a MOVING ref) ----
+AWS_OFI_NCCL_REPO="${AWS_OFI_NCCL_REPO:-https://github.com/aws/aws-ofi-nccl.git}"
+AWS_OFI_NCCL_SHA="${AWS_OFI_NCCL_SHA:-a3d268024576c159e97916151666c2ef20f91813}"  # master lineage: PR#1311 hw-counter tristate + 6e504db GIN seq-space fix + 80f2c78 auto-GDAKI
+AWS_OFI_NCCL_PR="${AWS_OFI_NCCL_PR:-1351}"                                        # OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY override
+AWS_OFI_NCCL_PR_SHA="${AWS_OFI_NCCL_PR_SHA:-c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b}"  # IMMUTABLE PR#1351 head (moving-ref trap; NOT merged at the base SHA)
+DEEPEP_REPO="${DEEPEP_REPO:-https://github.com/deepseek-ai/DeepEP.git}"
+DEEPEP_SHA="${DEEPEP_SHA:-b306af06afd412c88e51e71802951606e40b7358}"             # measured substrate base (same as the proxy package)
+DEEPEP_PR="${DEEPEP_PR:-612}"                                                     # EFA auto-QP cap
+DEEPEP_PR_SHA="${DEEPEP_PR_SHA:-28d1f7fb173f728be51632ce0026fea23243e350}"        # IMMUTABLE PR#612 head (moving-ref trap)
+V13_SHIM_PATCH="${V13_SHIM_PATCH:-/opt/v13-host-uc-shim.patch}"                   # COPY'd by the Dockerfile before this runs
+
+echo "== aws-ofi-nccl GDAKI @ ${AWS_OFI_NCCL_SHA} + PR#${AWS_OFI_NCCL_PR} (@ ${AWS_OFI_NCCL_PR_SHA}) =="
+git clone "${AWS_OFI_NCCL_REPO}" /opt/aws-ofi-nccl-src
+cd /opt/aws-ofi-nccl-src
+git config user.email build@local; git config user.name build
+git fetch origin "${AWS_OFI_NCCL_SHA}"; git checkout "${AWS_OFI_NCCL_SHA}"
+git fetch origin "refs/pull/${AWS_OFI_NCCL_PR}/head"
+git cherry-pick "${AWS_OFI_NCCL_PR_SHA}"
+grep -q GDRCOPY_FORCED_PCIE_COPY include/nccl_ofi_param.h        # assert the forced-PCIe param landed (fail-loud)
+grep -rq GDAKI_EFA_HW_COUNTER include/ src/                      # assert the PR#1311 hw-counter tristate present (fail-loud)
+{ git rev-parse HEAD; echo "= ${AWS_OFI_NCCL_SHA} + PR#${AWS_OFI_NCCL_PR}"; } > /opt/aws-ofi-nccl-gdaki.sha
+./autogen.sh
+# --enable-gdaki (the GPU-initiated backend) against the newer libfabric+rdma-core the Dockerfile built.
+./configure --prefix=/opt/aws-ofi-nccl-gdaki \
+  --with-libfabric=/opt/libfabric-gdaki \
+  --with-cuda=/usr/local/cuda \
+  --with-nccl-headers="$(python3 -c 'import nvidia.nccl; print(nvidia.nccl.__path__[0])')/include" \
+  --enable-gdaki \
+  --enable-cudart-dynamic --enable-platform-aws
+make -C src -j"$(nproc)"; make -C src install
+test -f /opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so
+[ "$(nm -D /opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so | grep -c ncclGinPlugin)" -ge 1 ]                 # GIN symbol present (fail-loud)
+[ "$(strings /opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so | grep -ci gdaki)" -ge 1 ]                     # GDAKI code compiled in (fail-loud)
+[ "$(strings /opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so | grep -c GDRCOPY_FORCED_PCIE_COPY)" -ge 1 ]   # forced-PCIe param baked (fail-loud)
+[ "$(strings /opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so | grep -c GDAKI_EFA_HW_COUNTER)" -ge 1 ]       # hw-counter tristate baked (fail-loud)
+ldconfig
+cd /; rm -rf /opt/aws-ofi-nccl-src
+
+echo "== DeepEP-V2 source @ ${DEEPEP_SHA} + V13_HOST_UC_SHIM + PR#${DEEPEP_PR} (@ ${DEEPEP_PR_SHA}) =="
+git clone "${DEEPEP_REPO}" /opt/DeepEP
+cd /opt/DeepEP
+git config user.email build@local; git config user.name build
+git fetch origin "${DEEPEP_SHA}"; git checkout "${DEEPEP_SHA}"
+git rev-parse HEAD > /opt/deepep.base.sha
+# V13_HOST_UC_SHIM: dlsym-guarded host-UC workspace hook. INERT (logs a fallback line and no-ops)
+# unless the running plugin exports nccl_ofi_gin_register_host_uc_workspace_with_default — upstream
+# a3d2680 does NOT export it. Applied at the BASE commit BEFORE the PR#612 merge (context-exact;
+# merge-order is load-bearing). Provenance: 2026-05-20 efa-gda evidence image, ledger
+# OPTION-1-STAGE-3-DEEPEP-SHIM-PASS.
+test -f "${V13_SHIM_PATCH}" || { echo "FATAL: ${V13_SHIM_PATCH} not COPY'd into the build context"; exit 3; }
+patch -p0 csrc/elastic/buffer.hpp < "${V13_SHIM_PATCH}"
+grep -q V13_HOST_UC_SHIM csrc/elastic/buffer.hpp
+git add csrc/elastic/buffer.hpp
+git commit -m "apply V13_HOST_UC_SHIM (2026-05-20 evidence image; ledger OPTION-1-STAGE-3-DEEPEP-SHIM-PASS)"
+git fetch origin "refs/pull/${DEEPEP_PR}/head"
+git merge --no-edit "${DEEPEP_PR_SHA}"                       # pin the IMMUTABLE PR head, not the moving ref
+git rev-parse HEAD > /opt/deepep.effective.sha
+grep -q V13_HOST_UC_SHIM csrc/elastic/buffer.hpp            # shim survives the merge (fail-loud)
+test -f /opt/DeepEP/tests/elastic/test_ep.py
+test -f /opt/DeepEP/csrc/elastic/buffer.hpp
+echo "== setup_deepep_v2_gdaki_efa.sh complete; DeepEP _C.so builds in-pod via recipe/build_deepep.sh =="

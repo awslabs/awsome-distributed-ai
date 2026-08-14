@@ -1,0 +1,179 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
+# vLLM + DeepEP-V2 multi-node MoE serve over AWS EFA — GDAKI (GPU-initiated,
+# NCCL_GIN_TYPE=3) variant. 2× p5en.48xlarge (H200), DP16/EP16.
+#
+# Mirrors ../../deepep-v2-efa/kubernetes/vllm-deepep-v2-2node.yaml (the CPU-proxy
+# TYPE=2 package) — the transport contract is the only delta:
+#   NCCL_GIN_TYPE                  2 → 3
+#   OFI_NCCL_GIN_GDAKI             0 → 1
+#   NCCL_NET_PLUGIN                → the GDAKI-enabled plugin build (/opt/aws-ofi-nccl-gdaki)
+#   OFI_NCCL_GDAKI_EFA_HW_COUNTER  → explicit; see NODE PRECONDITION below
+#
+# Scale seams (measured EP16→EP32 was launcher-args only):
+#   4 nodes / EP32:  replicas: 4  +  SERVE_DP "32"  (worker start-ranks derive from ordinal)
+#   other instance types (per-node EFA NIC count differs):
+#     p5.48xlarge  (H100): vpc.amazonaws.com/efa: "32", nodeSelector p5.48xlarge
+#     p5en.48xlarge(H200): vpc.amazonaws.com/efa: "16"  ← this file
+#     p6-b200.48xlarge   : vpc.amazonaws.com/efa: "8",  and set DEEPEP_ARCH_LIST=10.0
+#
+# Image: build the sample-root Dockerfile (NGC-from-scratch, public sources only) and push to
+# YOUR registry (setup/build-push.sh does this), then replace image: below. Do NOT point at
+# anyone's private registry.
+#
+# NODE PRECONDITION (beyond the proxy package): the GDAKI EFA hardware completion counter needs
+# node efa.ko >= 3.3.0 (efa_linux_3.3.0, 2026-07-28; check: cat /sys/module/efa/version). On older
+# nodes (3.0.x/3.1.x) set OFI_NCCL_GDAKI_EFA_HW_COUNTER=off — the PR#1311 tristate — and GDAKI runs
+# in its non-hw-counter mode. This file defaults to "off" (the honest validated setting); flip to
+# "auto" (or drop the env) on 3.3.0+ nodes. The value is a STRING enum: "0"/"1" abort plugin init.
+#
+# KNOWN FAILURE SIGNATURE to watch: GDAKI-CQE send errors of the shape
+#   "GDAKI-CQE send err: status 9 req_id <n> seq <n> target_qpn <n> outstanding <n>"
+# If the serve hits status-9 send CQEs, that is a known upstream failure mode under investigation —
+# capture the full log and correlate; do not treat as new.
+#
+# privileged: true is REQUIRED where /dev/gdrdrv is not advertised by a device plugin (the
+# unprivileged device cgroup blocks open("/dev/gdrdrv") with EPERM even after CAP_MKNOD + chmod;
+# only privileged allow-all-devices passes; the GIN path needs gdrcopy). If your cluster runs a
+# gdrdrv device plugin, drop privileged and request the device instead.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vllm-deepep-gdaki
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-deepep-v2-gdaki
+  namespace: vllm-deepep-gdaki
+spec:
+  clusterIP: None            # headless — stable per-pod DNS for the DP rendezvous
+  selector:
+    app: vllm-deepep-v2-gdaki
+  ports:
+  - { port: 29500, name: dp-rpc }
+  - { port: 8000,  name: http }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vllm-deepep-v2-gdaki
+  namespace: vllm-deepep-gdaki
+spec:
+  serviceName: vllm-deepep-v2-gdaki
+  replicas: 2                # 2 nodes = DP16/EP16 ; 4 nodes = DP32/EP32 (also set SERVE_DP)
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: vllm-deepep-v2-gdaki
+  template:
+    metadata:
+      labels:
+        app: vllm-deepep-v2-gdaki
+    spec:
+      # one pod per node — EFA/GPU are node resources; same-node EFA loopback is
+      # silently dropped by SRD anyway, so co-scheduling two pods is never right
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: vllm-deepep-v2-gdaki
+            topologyKey: kubernetes.io/hostname
+      nodeSelector:
+        node.kubernetes.io/instance-type: p5en.48xlarge
+      tolerations:
+      - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: vllm
+        image: REPLACE_WITH_YOUR_REGISTRY/vllm-deepep-v2-gdaki-efa:latest
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -uo pipefail
+          echo "=== vLLM DeepEP-V2 GDAKI pod $(hostname) $(date -u +%FT%TZ) ==="
+          cat /opt/GUIDE-PROVENANCE.txt
+          echo "node efa.ko: $(cat /sys/module/efa/version 2>/dev/null || echo unreadable)"
+
+          # 0) non-eager fix stack — applied at boot ONLY when SERVE_ENFORCE_EAGER=0 (it patches
+          #    /opt/vllm in the container filesystem, which every restart resets). Idempotent.
+          if [ "${SERVE_ENFORCE_EAGER:-1}" != "1" ]; then bash /opt/apply-noneager-fix-stack.sh || true; fi
+
+          # 1) DeepEP-V2 _C.so — built ONCE per pod (live CUDA context required). Idempotent.
+          python3 -c "import deep_ep" 2>/dev/null || bash /opt/build_deepep.sh
+
+          # 2) resolve the leader (pod ordinal 0) through headless-service DNS
+          ORDINAL=${HOSTNAME##*-}
+          LEADER_DNS="vllm-deepep-v2-gdaki-0.vllm-deepep-v2-gdaki.vllm-deepep-gdaki.svc.cluster.local"
+          for i in $(seq 1 120); do getent hosts "$LEADER_DNS" >/dev/null 2>&1 && break; sleep 1; done
+          LEADER_IP=$(getent hosts "$LEADER_DNS" | awk '{print $1}' | head -1)
+          echo "=== ordinal=$ORDINAL leader=$LEADER_IP ==="
+
+          # 3) serve — leader on ordinal 0, workers derive start-rank from ordinal.
+          #    Leader must be up first (receiver-before-sender); workers wait on DNS above.
+          if [ "$ORDINAL" = "0" ]; then
+            exec bash /opt/serve.sh leader "$LEADER_IP"
+          else
+            exec bash /opt/serve.sh worker "$LEADER_IP" $((ORDINAL * 8))
+          fi
+        env:
+        # ---- scale + model (the two knobs; defaults = measured EP16 shape) ----
+        - { name: SERVE_DP,    value: "16" }        # total DP = EP size; 32 for 4 nodes
+        - { name: SERVE_MODEL, value: "Qwen/Qwen3-30B-A3B-FP8" }  # any MoE with n_routed_experts % DP == 0 (serve.sh asserts)
+        # - { name: SERVE_ENFORCE_EAGER, value: "1" }   # 1 = default & KNOWN-GOOD; non-eager needs the fix stack (README "eager vs non-eager")
+        # - { name: SERVE_I_UNDERSTAND_NONEAGER_CRASHES, value: "1" }  # required to flip SERVE_ENFORCE_EAGER=0
+        # - { name: HF_TOKEN, valueFrom: { secretKeyRef: { name: hf-token, key: token } } }  # gated models only
+
+        # ---- GDAKI GIN + EFA contract, VERBATIM (also baked as image ENV; repeated
+        #      here so the manifest alone documents the transport contract) ----
+        - { name: NCCL_GIN_TYPE,             value: "3" }     # 3 = GDAKI (GPU-initiated, kernel-posted WQE)
+        - { name: NCCL_GIN_ENABLE,           value: "1" }
+        - { name: OFI_NCCL_GIN_GDAKI,        value: "1" }     # GPU-initiated backend (contrast proxy: 0)
+        - { name: OFI_NCCL_GDAKI_EFA_HW_COUNTER, value: "off" } # PR#1311 tristate (auto|on|off — STRINGS); "off" for node efa.ko<3.3.0 (see header)
+        - { name: OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY, value: "1" }  # aws-ofi-nccl PR#1351 (cherry-picked in setup_deepep_v2_gdaki_efa.sh)
+        - { name: EP_REUSE_NCCL_COMM,        value: "0" }     # DeepEP own-comm; never borrow torch lazy comm
+        - { name: OFI_NCCL_GIN_MAX_REQUESTS, value: "512" }
+        - { name: NCCL_CUMEM_ENABLE,         value: "1" }
+        - { name: NCCL_NVLS_ENABLE,          value: "0" }
+        - { name: NCCL_IGNORE_DISABLED_P2P,  value: "1" }
+        - { name: FI_PROVIDER,               value: "efa" }
+        - { name: FI_EFA_USE_DEVICE_RDMA,    value: "1" }
+        - { name: FI_EFA_ENABLE_SHM_TRANSFER, value: "0" }
+        - { name: FI_EFA_FORK_SAFE,          value: "1" }
+        - { name: OFI_NCCL_PROTOCOL,         value: "RDMA" }
+        - { name: DEEP_EP_BACKEND,           value: "nccl" }
+        - { name: NCCL_NET_PLUGIN,           value: "/opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so" }
+        - { name: SERVE_NCCL_DEBUG,          value: "INFO" }  # bring-up proof (efa-direct banner). MUST be SERVE_NCCL_DEBUG: serve.sh exports NCCL_DEBUG=${SERVE_NCCL_DEBUG:-WARN}, so a bare NCCL_DEBUG here is silently overridden. Drop to WARN once green.
+        resources:
+          limits:
+            nvidia.com/gpu: "8"
+            vpc.amazonaws.com/efa: "16"      # p5en=16, p5=32, p6-b200=8
+            hugepages-2Mi: 5120Mi
+            cpu: "90"
+            memory: 1024Gi
+          requests:
+            nvidia.com/gpu: "8"
+            vpc.amazonaws.com/efa: "16"
+            hugepages-2Mi: 5120Mi
+            cpu: "32"
+            memory: 256Gi
+        securityContext:
+          privileged: true                   # gdrdrv device-cgroup (see header)
+          capabilities:
+            add: [IPC_LOCK]                  # RDMA memory pinning
+        ports:
+        - { containerPort: 8000,  name: http }
+        - { containerPort: 29500, name: dp-rpc }
+        volumeMounts:
+        - { name: shm,            mountPath: /dev/shm }
+        - { name: dev-infiniband, mountPath: /dev/infiniband }
+        - { name: work,           mountPath: /work }     # HF cache + logs (per-pod, ephemeral)
+      volumes:
+      - name: shm
+        emptyDir: { medium: Memory, sizeLimit: 128Gi }
+      - name: dev-infiniband
+        hostPath: { path: /dev/infiniband }
+      - name: work
+        emptyDir: { sizeLimit: 900Gi }       # big MoE weights land here; size for your model
