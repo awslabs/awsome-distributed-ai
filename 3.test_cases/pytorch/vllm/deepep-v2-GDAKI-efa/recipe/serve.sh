@@ -21,8 +21,8 @@
 #   deterministically during startup profile_run with a Triton illegal-memory-access in
 #   deepep_v2.py:347 (buffer.combine). This is transport-independent (inherited from the
 #   proxy package's root-cause). This script refuses =0 unless you also set
-#   SERVE_I_UNDERSTAND_NONEAGER_CRASHES=1; the non-eager fix stack
-#   (apply-noneager-fix-stack.sh) is the supported non-eager path.
+#   SERVE_I_UNDERSTAND_NONEAGER_CRASHES=1. Non-eager is pending the empty-ExpertTokensMetadata guard, filed upstream (vLLM PR <PENDING-PR>);
+#   once merged, bump the vLLM pin past it — no patch step.
 set -uo pipefail
 ROLE="$1"; DP_MASTER_IP="$2"
 DP_MASTER_PORT="${DP_MASTER_PORT:-29500}"
@@ -101,11 +101,11 @@ if [ "$SERVE_ENFORCE_EAGER" != "1" ]; then
   if [ "${SERVE_I_UNDERSTAND_NONEAGER_CRASHES:-0}" != "1" ]; then
     echo "REFUSING SERVE_ENFORCE_EAGER=0: default compilation is KNOWN-CRASH at vLLM"
     echo "e2f993dc4 (Triton IMA, deepep_v2.py:347 combine during profile_run). Run"
-    echo "apply-noneager-fix-stack.sh first (the deploy YAML does this at boot), then set"
+    echo "wait for the upstream guard (vLLM PR <PENDING-PR>) + a pin bump, or set"
     echo "SERVE_I_UNDERSTAND_NONEAGER_CRASHES=1 — or keep eager (the default)."
     exit 4
   fi
-  echo "WARNING: running WITHOUT --enforce-eager — the fix stack must be applied (see README)."
+  echo "WARNING: running WITHOUT --enforce-eager — requires a vLLM pin past the upstream guard (see README)."
   EAGER_FLAG=""
 fi
 

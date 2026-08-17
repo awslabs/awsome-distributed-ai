@@ -97,9 +97,6 @@ spec:
           cat /opt/GUIDE-PROVENANCE.txt
           echo "node efa.ko: $(cat /sys/module/efa/version 2>/dev/null || echo unreadable)"
 
-          # 0) non-eager fix stack — applied at boot ONLY when SERVE_ENFORCE_EAGER=0 (it patches
-          #    /opt/vllm in the container filesystem, which every restart resets). Idempotent.
-          if [ "${SERVE_ENFORCE_EAGER:-1}" != "1" ]; then bash /opt/apply-noneager-fix-stack.sh || true; fi
 
           # 1) DeepEP-V2 _C.so — built ONCE per pod (live CUDA context required). Idempotent.
           python3 -c "import deep_ep" 2>/dev/null || bash /opt/build_deepep.sh
@@ -122,7 +119,7 @@ spec:
         # ---- scale + model (the two knobs; defaults = measured EP16 shape) ----
         - { name: SERVE_DP,    value: "16" }        # total DP = EP size; 32 for 4 nodes
         - { name: SERVE_MODEL, value: "Qwen/Qwen3-30B-A3B-FP8" }  # any MoE with n_routed_experts % DP == 0 (serve.sh asserts)
-        # - { name: SERVE_ENFORCE_EAGER, value: "1" }   # 1 = default & KNOWN-GOOD; non-eager needs the fix stack (README "eager vs non-eager")
+        # - { name: SERVE_ENFORCE_EAGER, value: "1" }   # 1 = default & KNOWN-GOOD; non-eager pending the upstream guard (README "eager vs non-eager")
         # - { name: SERVE_I_UNDERSTAND_NONEAGER_CRASHES, value: "1" }  # required to flip SERVE_ENFORCE_EAGER=0
         # - { name: HF_TOKEN, valueFrom: { secretKeyRef: { name: hf-token, key: token } } }  # gated models only
 

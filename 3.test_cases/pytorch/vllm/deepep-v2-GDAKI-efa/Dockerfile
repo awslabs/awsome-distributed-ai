@@ -30,7 +30,7 @@
 # KNOWN-MISSING UPSTREAM FIX (documented, NOT applied): vLLM PR#47785 ("handle topk_ids
 # padding in align sum kernel", merged 2026-07-10) post-dates the pinned vLLM e2f993dc4 and
 # patches a COMPILED kernel — a source cherry-pick is INERT under the precompiled-wheel
-# install. Kept at e2f993dc4 because the eager/non-eager fix stack is validated at this pin.
+# install. Kept at e2f993dc4 (first commit with the deepep_v2 backend; eager path validated at this pin).
 # Swap seam: move VLLM_SHA + wheel URL to any commit >= f378f79b and re-run the gate.
 #
 ARG CUDA_VER=13.0.0                                   # cu13 to match the torch 2.11+cu130 ABI DeepEP links
@@ -231,9 +231,8 @@ ENV DEEP_EP_BACKEND=nccl
 # ---- Layer 9: the serve/build scripts (LAST — script iteration never invalidates heavy layers) ----
 COPY recipe/serve.sh /opt/serve.sh
 COPY recipe/run-kernel-test.sh /opt/run-kernel-test.sh
-COPY recipe/apply-noneager-fix-stack.sh /opt/apply-noneager-fix-stack.sh
 COPY recipe/benchmark_probe.py /opt/benchmark_probe.py
-RUN chmod +x /opt/serve.sh /opt/run-kernel-test.sh /opt/apply-noneager-fix-stack.sh
+RUN chmod +x /opt/serve.sh /opt/run-kernel-test.sh
 
 RUN { echo "vllm-deepep-v2-GDAKI-efa image (GPU-initiated, NCCL_GIN_TYPE=3)"; \
       echo "efa:           $(cat /opt/efa-installer.version)"; \
