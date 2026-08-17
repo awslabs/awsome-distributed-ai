@@ -37,7 +37,9 @@ fi
 export KUBE_NAMESPACE="${KUBE_NAMESPACE:-default}"
 export REGISTRY="${REGISTRY:?REGISTRY must be set (ECR registry URL with trailing slash)}"
 export IMAGE="${IMAGE:-verl-grpo-lora}"
-export TAG="${TAG:-latest}"
+# Never default to `latest`: an eval must be reproducible against the exact image
+# that trained the checkpoint. Keep this in step with build-push.sh.
+export TAG="${TAG:-v0.8.0-vllm020.dev2}"
 # Node selection lives in the manifest (nodeAffinity matches both
 # `p6-b200.48xlarge` Karpenter-launched nodes and `ml.p6-b200.48xlarge`
 # HyperPod-managed nodes) — no shell-side knob needed.
