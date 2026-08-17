@@ -38,6 +38,9 @@ fi
 make -C src -j"$(nproc)"; make -C src install
 test -f /opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
 [ "$(nm -D /opt/aws-ofi-nccl/lib/libnccl-net-ofi.so | grep -c ncclGinPlugin)" -ge 1 ]  # GIN symbol present (fail-loud)
+# GIN needs gdrcopy COMPILED IN (gdrapi.h at configure time) — a gdrapi-less build carries this
+# exact runtime-warn string and fails nccl_ofi_gin_init at serve with ginType==NONE. Assert absence.
+[ "$(strings /opt/aws-ofi-nccl/lib/libnccl-net-ofi.so | grep -c 'GDRCopy support not available at compile time')" -eq 0 ]
 ldconfig
 cd /; rm -rf /opt/aws-ofi-nccl-src
 

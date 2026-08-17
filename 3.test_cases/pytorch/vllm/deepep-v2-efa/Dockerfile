@@ -44,6 +44,16 @@ RUN NCCL_ROOT=$(python3 -c "import nvidia.nccl, pathlib; print(pathlib.Path(nvid
     && echo "$NCCL_ROOT/lib" > /etc/ld.so.conf.d/00-pip-nccl.conf && ldconfig \
     && ldconfig -p | grep "libnccl.so.2 " | head -1 | grep -q "$NCCL_ROOT/lib"   # assert the pinned NCCL resolves FIRST (2.28.x lacks the GIN/LSA symbols the plugin needs)
 
+# ---- Layer 3b: gdrcopy userspace (PUBLIC: github.com/NVIDIA/gdrcopy) ----
+# aws-ofi-nccl's GIN path REQUIRES gdrapi.h at configure time — without it the plugin
+# compiles with "GDRCopy support not available", nccl_ofi_gin_init fails at serve, and
+# DeepEP's ElasticBuffer asserts ginType==NCCL_GIN_TYPE_NONE. Userspace 2.5.2 on a
+# gdrdrv-2.4 host is exactly the pairing OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1 (#1351) fixes.
+ARG GDRCOPY_VER=v2.5.2
+RUN git clone --depth 1 --branch ${GDRCOPY_VER} https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
+    && cd /tmp/gdrcopy && make prefix=/usr/local lib lib_install && ldconfig \
+    && rm -rf /tmp/gdrcopy
+
 # ---- Layer 4: aws-ofi-nccl GIN + DeepEP-V2 source (in-tree script, COPY'd not curled) ----
 COPY setup_deepep_v2_efa.sh /opt/setup_deepep_v2_efa.sh
 ARG AWS_OFI_NCCL_SHA=9c44d34476f90ddbf4a12d0ac4fc412d46bd8ab4
