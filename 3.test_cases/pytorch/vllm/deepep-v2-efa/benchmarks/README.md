@@ -28,7 +28,7 @@ tok/s + per-request latency percentiles. Raw JSONL lands in `raw/` (gitignored).
 | 32 | 151.9 | 26.97 | 26.95 | 200 |
 | 64 | 301.8 | 27.15 | 27.11 | 200 |
 
-### Non-eager (default compilation + the 3-commit fix stack) — 153/153 HTTP 200
+### Non-eager (default compilation; historical — measured with the then-unmerged upstream guard, vLLM PR <PENDING-PR>) — 153/153 HTTP 200
 | conc | agg tok/s | wall s | p50 s | codes |
 |---|---|---|---|---|
 | 1 | 5.0 | 25.48 | 25.48 | 200 |

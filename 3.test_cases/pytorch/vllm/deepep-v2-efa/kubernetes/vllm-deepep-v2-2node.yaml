@@ -101,7 +101,7 @@ spec:
         # ---- scale + model (the two knobs; defaults = measured EP16 shape) ----
         - { name: SERVE_DP,    value: "16" }        # total DP = EP size; 32 for 4 nodes
         - { name: SERVE_MODEL, value: "Qwen/Qwen3-30B-A3B-FP8" }  # any MoE with n_routed_experts % DP == 0 (serve.sh asserts)
-        # - { name: SERVE_ENFORCE_EAGER, value: "1" }   # 1 = default & KNOWN-GOOD; non-eager needs the fix stack (README "eager vs non-eager")
+        # - { name: SERVE_ENFORCE_EAGER, value: "1" }   # 1 = default & KNOWN-GOOD; non-eager pending the upstream guard (README "eager vs non-eager")
         # - { name: HF_TOKEN, valueFrom: { secretKeyRef: { name: hf-token, key: token } } }  # gated models only
 
         # ---- proxy-Gin + EFA contract, VERBATIM (also baked as image ENV; repeated
