@@ -64,6 +64,17 @@ ARG VLLM_WHEEL_URL="https://wheels.vllm.ai/${VLLM_SHA}/vllm-0.22.1rc1.dev283%2Bg
 RUN pip3 install --no-cache-dir "${VLLM_WHEEL_URL}" \
     && python3 -c "import vllm; print('vllm', vllm.__version__)"
 
+# ---- Layer 5b: re-pin the ABI-critical cu13 libs AFTER the last pip layer (order matters) ----
+# The vLLM wheel's dependency resolution drags nvidia-nccl-cu13 back down to torch's 2.28.9
+# (and nvshmem to 3.4.5) — silently, into the SAME directory, so the Layer-3 linker-precedence
+# assert stays green while the GIN/LSA device symbols vanish and DeepEP's nccl.cu no longer
+# compiles in-pod. Any pip layer added later must keep this re-pin LAST.
+RUN pip3 install --no-cache-dir --no-deps --force-reinstall \
+      "nvidia-nccl-cu13==${NVIDIA_NCCL_CU13}" "nvidia-nvshmem-cu13==${NVSHMEM_CU13}" \
+    && NCCL_ROOT=$(python3 -c "import nvidia.nccl, pathlib; print(pathlib.Path(nvidia.nccl.__path__[0]))") \
+    && grep -rq ncclGetLsaDevicePointer "$NCCL_ROOT/include/" \
+    && [ "$(nm -D "$NCCL_ROOT/lib/libnccl.so.2" | grep -c ncclGetLsaDevicePointer)" -ge 1 ]  # GIN/LSA symbols present (2.28.x lacks them)
+
 # ---- Layer 6: the serve/build scripts (LAST — script iteration never invalidates heavy layers) ----
 COPY recipe/build_deepep.sh /opt/build_deepep.sh
 COPY recipe/serve.sh /opt/serve.sh
