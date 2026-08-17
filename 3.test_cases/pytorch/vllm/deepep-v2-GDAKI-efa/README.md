@@ -47,7 +47,7 @@ evidence lineage, not a live code path on the shipped plugin.
 | Mode | Status | How |
 |---|---|---|
 | `--enforce-eager` | **Serves, zero extra patches** | the default this sample ships |
-| default compilation (CUDA graphs) | **Pending one upstream fix — no patch shipped here** | vLLM [#46404](https://github.com/vllm-project/vllm/pull/46404) + [#46432](https://github.com/vllm-project/vllm/pull/46432) are merged; the remaining empty-`ExpertTokensMetadata` guard is filed upstream (vLLM PR <PENDING-PR>). Once merged, bump the vLLM pin past it and serve without `--enforce-eager` — no build-time patch step. |
+| default compilation (CUDA graphs) | **Pending one upstream fix — no patch shipped here** | vLLM [#46404](https://github.com/vllm-project/vllm/pull/46404) + [#46432](https://github.com/vllm-project/vllm/pull/46432) are merged; the remaining empty-`ExpertTokensMetadata` guard is filed upstream ([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)). Once merged, bump the vLLM pin past it and serve without `--enforce-eager` — no build-time patch step. |
 
 At stock `e2f993dc4` (the first commit with the `deepep_v2` backend), default compilation crashes
 deterministically during startup in `profile_run` (`deepep_v2.py` combine, a Triton illegal-memory
@@ -103,7 +103,7 @@ run it before committing a node to the multi-hundred-GB weight load.
 SERVE_DP=16 bash recipe/serve.sh leader <leader-ip>       # on node 0
 SERVE_DP=16 bash recipe/serve.sh worker <leader-ip> 8     # on node 1
 # non-eager (CUDA graphs): apply the fix stack first, then serve without --enforce-eager
-# non-eager: pending the upstream guard (vLLM PR <PENDING-PR>) — pin bump enables it, no patch step
+# non-eager: pending the upstream guard ([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)) — pin bump enables it, no patch step
 ```
 Kubernetes: `kubectl apply -f kubernetes/` (2-node StatefulSet + headless service; the GDAKI-Gin env
 contract, the `OFI_NCCL_GDAKI_EFA_HW_COUNTER` tristate, and EFA device requests are all set there).
@@ -124,7 +124,7 @@ same-node-set **GDAKI-vs-proxy transport A/B** tables (EP16 + EP32) + environmen
   boot banner + coherent EP output), **not** a byte-level `/sys` hw-counter tally — that needs
   efa.ko ≥ 3.3.0. See `benchmarks/README.md` caveats.
 - The non-eager fix stack pins two already-merged upstream PRs + a one-line guard staged for upstream;
-- Default-compilation serving is deliberately not shipped until the upstream guard (vLLM PR <PENDING-PR>) merges; the non-eager numbers in `benchmarks/` are historical measurements taken with that guard applied. Also,
+- Default-compilation serving is deliberately not shipped until the upstream guard ([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)) merges; the non-eager numbers in `benchmarks/` are historical measurements taken with that guard applied. Also,
   vLLM [#47785](https://github.com/vllm-project/vllm/pull/47785) (a compiled align-sum kernel fix)
   post-dates the pinned `e2f993dc4` and is **documented-missing** — a source cherry-pick is inert
   under the precompiled wheel; the swap seam is a newer `VLLM_SHA` + wheel URL (see the Dockerfile).

@@ -31,7 +31,7 @@ aggregate output tok/s + per-request latency percentiles. Raw JSONL lands in `ra
 
 Near-linear concurrency scaling at flat per-request latency.
 
-## Serve results — non-eager (historical; measured with the then-unmerged upstream guard, vLLM PR <PENDING-PR>), DP16/EP16
+## Serve results — non-eager (historical; measured with the then-unmerged upstream guard, [vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)), DP16/EP16
 
 Ramp 31/31 (c=1→16, no wedge), coherence 200, sweep 121/121 HTTP 200, zero status-9.
 

@@ -21,7 +21,7 @@
 #   deterministically during startup profile_run with a Triton illegal-memory-access in
 #   deepep_v2.py:347 (buffer.combine). This is transport-independent (inherited from the
 #   proxy package's root-cause). This script refuses =0 unless you also set
-#   SERVE_I_UNDERSTAND_NONEAGER_CRASHES=1. Non-eager is pending the empty-ExpertTokensMetadata guard, filed upstream (vLLM PR <PENDING-PR>);
+#   SERVE_I_UNDERSTAND_NONEAGER_CRASHES=1. Non-eager is pending the empty-ExpertTokensMetadata guard, filed upstream (vLLM PR #52632);
 #   once merged, bump the vLLM pin past it — no patch step.
 set -uo pipefail
 ROLE="$1"; DP_MASTER_IP="$2"
@@ -101,7 +101,7 @@ if [ "$SERVE_ENFORCE_EAGER" != "1" ]; then
   if [ "${SERVE_I_UNDERSTAND_NONEAGER_CRASHES:-0}" != "1" ]; then
     echo "REFUSING SERVE_ENFORCE_EAGER=0: default compilation is KNOWN-CRASH at vLLM"
     echo "e2f993dc4 (Triton IMA, deepep_v2.py:347 combine during profile_run). Run"
-    echo "wait for the upstream guard (vLLM PR <PENDING-PR>) + a pin bump, or set"
+    echo "wait for the upstream guard (vLLM PR #52632) + a pin bump, or set"
     echo "SERVE_I_UNDERSTAND_NONEAGER_CRASHES=1 — or keep eager (the default)."
     exit 4
   fi
