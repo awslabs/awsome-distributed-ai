@@ -1,0 +1,24 @@
+# P6-B200 cluster: 6 nodes x 8 B200 GPUs (48 total, 183GB each)
+# Any EKS cluster with 6 x 8-GPU B200 nodes (see env_vars: EKS_CLUSTER_NAME)
+instance_type: p6-b200.48xlarge
+head_instance_type: m5.24xlarge
+num_nodes: 6
+gpus_per_node: 8
+num_efa_per_node: 32
+
+# Memory optimization (B200 has plenty — offloading not needed)
+param_offload: false
+optimizer_offload: false
+gpu_memory_utilization: 0.85
+
+# FSx shared storage
+fsx_home: /fsx/data/verl
+
+# Agent loop workers
+agent_num_workers: 8
+
+# Kubernetes
+namespace: default
+# Informational only -- no script reads this. Set EKS_CLUSTER_NAME in env_vars
+# for anything that actually talks to the cluster.
+eks_cluster: ${oc.env:EKS_CLUSTER_NAME,unset}

@@ -1,0 +1,48 @@
+# Custom pass@10 variant of MBPP for the Qwen3-235B GRPO benchmark.
+#
+# Stock lm-eval `mbpp` reports pass@1 only (utils.pass_at_1 hardcodes k=[1]).
+# This variant samples 10 generations/problem at temperature 0.2 and reports
+# BOTH pass@1 and pass@10 via a parameterized pass_at_k (see utils.py in this
+# dir, mounted via --include_path). Self-contained (does not `include: mbpp.yaml`)
+# so the metric + filter functions resolve to THIS dir's utils.py.
+task: mbpp_p1
+dataset_path: google-research-datasets/mbpp
+dataset_name: full
+unsafe_code: true
+output_type: generate_until
+test_split: test
+doc_to_text: "You are an expert Python programmer, and here is your task: {{text}} Your code should pass these tests:\n\n{{test_list[0]}}\n{{test_list[1]}}\n{{test_list[2]}}\n[BEGIN]\n"
+doc_to_target: "{% if is_fewshot is defined %}{{code}}\n[DONE]{% else %}{{test_list[0]}}\n{{test_list[1]}}\n{{test_list[2]}}{% endif %}"
+target_delimiter: ""
+metric_list:
+  - metric: !function utils.pass_at_k
+    aggregation: mean
+    higher_is_better: true
+    k: [1]
+repeats: 1
+generation_kwargs:
+  until:
+    - "[DONE]"
+  # Raised 1024 -> 16384 to match training rollout length (mean 8,300-9,600
+  # tokens). MBPP was less damaged than HumanEval by the old 1024 cap because
+  # it is 3-shot and the examples elicit short direct code, but any answer that
+  # DID need to reason past 1024 tokens was truncated and scored 0. See
+  # humaneval_p10.yaml for the full analysis.
+  # 16384 was still truncating 22% of generations (measured 2026-07-31:
+  # clip_ratio 0.218 at cap 16384 vs 0.035 at 24576). Sized to match the
+  # corrected training cap so eval does not suppress scores the same way.
+  max_gen_toks: 24576
+  do_sample: true
+  temperature: 0.2
+  top_p: 0.95
+num_fewshot: 3
+fewshot_config:
+  sampler: first_n
+  samples: !function utils.list_fewshot_samples
+filter_list:
+  - name: "create_test"
+    filter:
+      - function: "custom"
+        filter_fn: !function utils.build_predictions_mbpp
+metadata:
+  version: 1.0

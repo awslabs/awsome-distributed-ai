@@ -1,0 +1,76 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: eval-mlflow-log
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: eval-mlflow-log
+    project: verl
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: eval-mlflow-log
+    spec:
+      restartPolicy: Never
+      # Use the same SA the training run used so it can write to its MLflow run.
+      serviceAccountName: ray-cluster
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: In
+                    values: ["p6-b200.48xlarge", "ml.p6-b200.48xlarge", "m5.xlarge", "m5.8xlarge", "ml.m5.24xlarge"]
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: logger
+          image: python:3.11-slim
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export TMPDIR=/work/tmp PIP_CACHE_DIR=/work/pipcache
+              mkdir -p "$TMPDIR" "$PIP_CACHE_DIR"
+              pip install "mlflow>=3.0,<4.0" sagemaker-mlflow boto3 >/work/pip.log 2>&1 || { tail -30 /work/pip.log; exit 1; }
+              python3 /fsx/data/verl/eval_scripts/compare_eval_results.py \
+                --curve --steps 50,350,750 \
+                --baseline qwen3-235b-base \
+                --run-prefix qwen3-235b- \
+                --results-dir /fsx/data/verl/eval_results \
+                --markdown-out /fsx/data/verl/eval_results/qwen3-235b-curve.md \
+                --json-out /fsx/data/verl/eval_results/qwen3-235b-curve.json \
+                --mlflow-run-id ${MLFLOW_RUN_ID}
+              echo "[mlflow-log] DONE"
+          env:
+            - name: MLFLOW_TRACKING_URI
+              value: "${MLFLOW_TRACKING_URI}"
+            - name: AWS_REGION
+              value: "${AWS_REGION}"
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+              ephemeral-storage: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+              ephemeral-storage: "4Gi"
+          volumeMounts:
+            - name: fsx-storage
+              mountPath: /fsx
+            - name: work
+              mountPath: /work
+      volumes:
+        - name: fsx-storage
+          persistentVolumeClaim:
+            claimName: fsx-lustre
+        - name: work
+          emptyDir:
+            sizeLimit: 8Gi

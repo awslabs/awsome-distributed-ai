@@ -1,0 +1,67 @@
+# =============================================================================
+# FSx Utility Pod
+# Persistent lightweight pod with FSx mounted at /fsx for running data
+# preparation and model download scripts independently of the Ray cluster.
+#
+# Deploy:
+#   source env_vars
+#   envsubst < kubernetes/fsx-utils.yaml | kubectl apply -f -
+#   kubectl wait --for=condition=Ready pod/fsx-utils -n ${KUBE_NAMESPACE} --timeout=180s
+#
+# Tear down:
+#   kubectl delete pod fsx-utils -n ${KUBE_NAMESPACE}
+# =============================================================================
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fsx-utils
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: fsx-utils
+    project: verl
+spec:
+  # Pin to the same CPU node type as the Ray head (no GPU needed)
+  nodeSelector:
+    node.kubernetes.io/instance-type: ${HEAD_INSTANCE_TYPE}
+
+  restartPolicy: Always
+
+  containers:
+    - name: fsx-utils
+      image: python:3.12-slim
+      imagePullPolicy: IfNotPresent
+
+      # Install HuggingFace libraries on startup, then sleep forever.
+      # The pod is ready once pip install completes (~30-60s).
+      command:
+        - bash
+        - -c
+        - |
+          set -e
+          echo "Installing dependencies..."
+          pip install --no-cache-dir datasets huggingface_hub 2>&1 | tail -1
+          echo "FSx utility pod ready."
+          sleep infinity
+
+      # HuggingFace token for authenticated dataset/model downloads.
+      # Substituted by envsubst from your local env_vars.
+      env:
+        - name: HF_TOKEN
+          value: "${HF_TOKEN}"
+
+      resources:
+        requests:
+          cpu: "1"
+          memory: "4Gi"
+        limits:
+          cpu: "4"
+          memory: "16Gi"
+
+      volumeMounts:
+        - name: fsx-storage
+          mountPath: /fsx
+
+  volumes:
+    - name: fsx-storage
+      persistentVolumeClaim:
+        claimName: fsx-lustre

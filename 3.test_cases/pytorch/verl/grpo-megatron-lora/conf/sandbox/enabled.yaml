@@ -1,0 +1,66 @@
+# @package _global_
+# SandboxFusion — remote code execution for reward scoring
+# Deployed as a K8s service (see kubernetes/sandbox-fusion.yaml)
+sandbox:
+  enabled: true
+  url: http://sandbox-fusion.default.svc.cluster.local:8080/run_code
+  memory_limit_mb: 1024
+
+  # DEAD CONFIG — read before touching.
+  # This value is referenced by NOTHING. submit_training.py only plumbs
+  # sandbox_fusion_url and memory_limit_mb into verl (see the cfg.sandbox.enabled
+  # block), so changing max_concurrent has ZERO effect on anything.
+  #
+  # verl's real concurrency knob is `concurrent_semaphore`, a threading.Semaphore
+  # object passed into default_compute_score. It cannot come from a CLI override,
+  # so it is constructed in scripts/custom_reward_fn.py and tuned with the env var
+  # SANDBOX_MAX_CONCURRENT_PER_WORKER (per RewardLoopWorker process, default 5).
+  #
+  # Left in place only because removing it would silently change nothing while
+  # implying the opposite. Prior guidance to "lower max_concurrent to 192" to stop
+  # sandbox OOM was a no-op; unbounded concurrency OOM-killed all 5 pods 24-30x on
+  # 2026-08-04 during a baseline measurement.
+  #
+  # 2026-08-06: THE SEMAPHORE BOUNDS REQUESTS, NOT EXECUTIONS. raysubmit_fmtziTNTWV433sz1
+  # ran at 10 for its whole 9.9h life and all 5 pods were STILL OOMKilled 6-7x each (466
+  # "Max retries"), even though the documented arithmetic
+  # (8 workers x 10 = 80 in flight -> 16/pod x memory_limit_mb=1024 = 16 GiB) predicts only
+  # 33% of the 48Gi limit. Measured from [SANDBOX-STATS]: 77,654 test-case outcomes across
+  # 2,000 code samples = ~39 TEST CASES PER REQUEST (taco worst at 52,252). memory_limit_mb
+  # caps one EXECUTION; this semaphore caps in-flight REQUESTS; nothing bounds concurrent
+  # executions, which is what actually consumes pod memory. That is why 16 -> 10 did nothing.
+  # Also NOT validation-driven (OOMs landed 6h into pure training, and the training-window
+  # error density 5.66/1k exceeded the baseline-validation window's 4.14/1k) and NOT a leak
+  # (all 5 pods died within 36s of each other = coordinated load spike).
+  # Lowered to 5 on 2026-08-06. RESULT: OOM is NOT fixed -- all 5 pods still OOMKilled in a
+  # synchronized 13-second burst (raysubmit_RrFbeS5J9266nr9B, 01:38:56-01:39:09Z, 3 restarts
+  # each), at a HIGHER restart rate than semaphore 10 (~1.3 vs ~0.67 /pod/h). What it DID buy
+  # is a 5.0x drop in sandbox error density (2.77 vs 13.89 per 1k log lines, identical regex),
+  # because fewer in-flight requests are destroyed when a pod dies. That is exactly what the
+  # requests-vs-executions diagnosis predicts: the semaphore bounds blast radius, not peak
+  # memory. Lowering it further will keep buying error density and never fix the OOM.
+  #
+  # The only knob that bounds a single EXECUTION is memory_limit_mb above -- but it caps the
+  # memory available to the candidate program, so lowering it makes legitimate solutions fail
+  # and CHANGES SCORES. Same for capping test cases per request. Neither may be touched while
+  # a run is measuring. A real fix needs an execution-level bound that does not exist today
+  # (e.g. a second semaphore around the per-test-case loop, or batching test cases into fewer
+  # sandbox calls) plus a scores-unchanged proof.
+  max_concurrent: 256  # NOT WIRED — see above
+
+  # Pre-submit health guardrail. Before submitting the Ray job, run a tiny
+  # code-exec smoke test against the sandbox from inside the cluster and abort
+  # if it is slow/unhealthy. Catches the OTel-injection meltdown (2026-07-12,
+  # 2026-07-11, 2026-07-10) where sandbox latency ballooned ~0.03s -> ~10s,
+  # zeroing out all code rewards and silently poisoning training.
+  preflight:
+    enabled: true
+    # Pod + namespace to exec the probe from (has cluster-internal DNS + python3).
+    exec_pod: fsx-utils
+    namespace: ${oc.env:KUBE_NAMESPACE,default}
+    kube_context: ${oc.env:KUBE_CONTEXT,null}
+    # A healthy sandbox executes print(42) in well under 1s; the broken OTel
+    # path took ~10s. Fail fast above this wall-clock latency (seconds).
+    max_latency_s: 3.0
+    # Per-request timeout for the probe itself (seconds).
+    request_timeout_s: 20

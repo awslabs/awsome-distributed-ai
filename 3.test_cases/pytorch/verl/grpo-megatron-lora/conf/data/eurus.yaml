@@ -1,0 +1,7 @@
+# @package _global_
+# Eurus dataset for code reasoning tasks
+data_name: eurus
+data_paths:
+  train_file: /fsx/data/verl/data/eurus/train.parquet
+  val_file: /fsx/data/verl/data/eurus/val.parquet
+  prompt_key: prompt

@@ -1,0 +1,5 @@
+# @package _global_
+# Console-only logging (no MLflow dependency)
+tracking:
+  logger:
+    - console

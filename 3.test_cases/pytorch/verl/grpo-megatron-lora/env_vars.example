@@ -1,0 +1,124 @@
+# =============================================================================
+# Infrastructure, Deployment & Secrets
+#
+# Training configuration (model, hyperparameters, parallelism, LoRA, etc.)
+# has moved to Hydra config files under conf/. Use submit_training.py with
+# Hydra overrides instead of editing variables here.
+#
+# This file now holds only:
+#   - AWS & Docker settings (build-push.sh)
+#   - Kubernetes deployment settings (kubernetes/, models/run_on_cluster.sh)
+#   - Sandbox Fusion K8s deployment settings (kubernetes/sandbox-fusion.yaml)
+#   - Ray & shared storage paths (data/submit_data_prep.sh, models/*.sh)
+#   - Credentials & secrets (HF_TOKEN, MLflow)
+#   - NCCL/communication tuning (runtime environment propagation)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# AWS & Docker Configuration
+# -----------------------------------------------------------------------------
+export AWS_REGION=$(aws ec2 describe-availability-zones --output text --query 'AvailabilityZones[0].[RegionName]')
+export ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+export REGISTRY=${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/
+export IMAGE=verl-grpo-lora
+# Pin to an immutable tag, never `latest` -- an eval must be reproducible against
+# the exact image that trained the checkpoint. Bump this when you rebuild.
+export TAG=v0.8.0-vllm020.dev2
+export EKS_CLUSTER_NAME="<eks-cluster-name>"
+export S3_BUCKET_NAME="<your-s3-bucket>"
+
+# -----------------------------------------------------------------------------
+# FSx for Lustre (used by envsubst when applying lustre/*.yaml)
+# Create the filesystem first, then read these off
+# `aws fsx describe-file-systems`:
+#   FSX_FILESYSTEM_ID -> FileSystemId
+#   FSX_MOUNT_NAME    -> LustreConfiguration.MountName (NOT the filesystem id)
+# Subnet and security group must match your EKS worker nodes or the PV will
+# provision but never mount.
+# -----------------------------------------------------------------------------
+export FSX_FILESYSTEM_ID="<fs-xxxxxxxxxxxxxxxxx>"
+export FSX_MOUNT_NAME="<mountname>"
+export FSX_SUBNET_ID="<subnet-xxxxxxxxxxxxxxxxx>"
+export FSX_SECURITY_GROUP_ID="<sg-xxxxxxxxxxxxxxxxx>"
+export FSX_STORAGE_CAPACITY="4800Gi"
+
+# -----------------------------------------------------------------------------
+# Kubernetes Configuration
+# -----------------------------------------------------------------------------
+export KUBE_NAMESPACE="default"
+export HEAD_INSTANCE_TYPE="m5.8xlarge"  # CPU node for Ray head / fsx-utils pod
+
+# -----------------------------------------------------------------------------
+# Sandbox Fusion K8s Deployment
+# These are used by envsubst when deploying kubernetes/sandbox-fusion.yaml.
+# The sandbox URL and training-time settings (concurrency, memory limit) are
+# configured in conf/sandbox/enabled.yaml (Hydra).
+# -----------------------------------------------------------------------------
+export SANDBOX_INSTANCE_TYPE="m5.8xlarge"
+export SANDBOX_FUSION_IMAGE="volcengine/sandbox-fusion:server-20250609"
+export SANDBOX_REPLICAS=2
+
+# -----------------------------------------------------------------------------
+# Ray & Shared Storage
+# -----------------------------------------------------------------------------
+export RAY_DATA_HOME="/fsx/data/verl"
+# Default assumes a local port-forward, which needs no authentication:
+#   kubectl port-forward -n "$KUBE_NAMESPACE" svc/<ray-head-svc> 8265:8265
+# Behind an authenticating proxy, also export RAY_HEADERS -- see docs/cluster.md.
+export RAY_ADDRESS="http://localhost:8265"
+
+# -----------------------------------------------------------------------------
+# vLLM Evaluation Server (kubernetes/vllm-eval.yaml)
+# Used by scripts/deploy_vllm_eval.sh to serve a checkpoint for evaluation
+# (HumanEval/MBPP via lm-evaluation-harness + val-split scoring).
+# See docs/eval-pipeline.md for the full workflow.
+# VLLM_MODEL_PATH and VLLM_SERVED_NAME are set per-deploy on the CLI.
+#
+# The three values below marked REQUIRED were each derived from a failure while
+# serving a large MoE LoRA adapter. See docs/results.md for the diagnoses.
+# -----------------------------------------------------------------------------
+export VLLM_NODE_INSTANCE_TYPE="p6-b200.48xlarge"
+export VLLM_TP_SIZE=8
+# REQUIRED: must match LMEVAL_MAX_LENGTH (scripts/submit_lmeval.sh defaults to
+# 32768). If the server allows less than the client requests, requests fail.
+export VLLM_MAX_MODEL_LEN=32768
+export VLLM_MAX_NUM_SEQS=128
+# REQUIRED at 0.95 for large adapters. At 0.85 the KV cache loses ~23 GiB and the
+# server CrashLoopBackOffs with "No available memory for the cache blocks".
+export VLLM_GPU_MEM_UTIL=0.95
+# REQUIRED at 1. Each LoRA slot is sized for the EXPANDED adapter (~25 GiB per
+# GPU per slot for a 235B MoE), so >1 exhausts GPU memory. One adapter per server:
+# registering two and swapping OOMKills the host (exit 137).
+export VLLM_MAX_LORAS=1
+# REQUIRED for large adapters: a 105 GB adapter load far exceeds vLLM's 300 s
+# default and the first request returns HTTP 500 "RPC call to sample_tokens
+# timed out".
+export VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS=3600
+
+# -----------------------------------------------------------------------------
+# Credentials (DO NOT COMMIT)
+# -----------------------------------------------------------------------------
+export HF_TOKEN="<your-huggingface-token>"
+
+# -----------------------------------------------------------------------------
+# MLflow Tracking (SageMaker Managed MLflow) -- optional
+# Leave unset to use `tracking=console` instead of MLflow.
+# MLFLOW_TRACKING_ARN is auto-injected into Ray pods if your Helm chart does so;
+# set it here for local testing outside the cluster.
+# MLFLOW_TRACKING_URI is read by Hydra (conf/config.yaml) via ${oc.env:...}.
+# MLFLOW_TRACKING_NAME is used with the AWS CLI to generate presigned URLs:
+#   aws sagemaker create-presigned-mlflow-tracking-server-url \
+#     --tracking-server-name ${MLFLOW_TRACKING_NAME} --region ${AWS_REGION}
+# -----------------------------------------------------------------------------
+export MLFLOW_TRACKING_NAME="<your-mlflow-tracking-server>"
+export MLFLOW_TRACKING_ARN="arn:aws:sagemaker:${AWS_REGION}:${ACCOUNT}:mlflow-tracking-server/${MLFLOW_TRACKING_NAME}"
+export MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_ARN}"
+
+# -----------------------------------------------------------------------------
+# NCCL/Communication Settings (tuned for P6-B200)
+# These propagate via the shell environment to Ray workers at runtime.
+# -----------------------------------------------------------------------------
+export NCCL_DEBUG=INFO
+export NCCL_IB_DISABLE=0
+export NCCL_NET_GDR_LEVEL=2
+export RAY_memory_usage_threshold=0.85

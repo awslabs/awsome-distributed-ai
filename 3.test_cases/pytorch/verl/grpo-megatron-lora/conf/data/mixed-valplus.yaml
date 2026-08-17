@@ -1,0 +1,76 @@
+# @package _global_
+# Mixed code/math with an ENLARGED, CLEAN math validation split.
+#
+# TRAIN IS BYTE-IDENTICAL TO THE CONTROL. `train_file` points at the same
+# mixed-code-math/train.parquet that raysubmit_D5itzNTe4SyxeDsq trained on. Only
+# the VAL file changes, so a run using this group differs from the control in
+# whatever training parameter is overridden on the CLI and in nothing else. This
+# is the group to use for single-variable experiments.
+#
+# WHY THE VAL SPLIT NEEDED ENLARGING
+# The weighted MATH aggregate had n=515, giving it a 95% margin of +-0.060 -- the
+# same size as the effect it was being used to measure (+0.0661 at step 100,
+# 2.14 sigma). Every MATH claim was therefore marginal by construction, and a
+# single run could only clear 2 sigma with an implausible +0.12 gain.
+#
+#     MATH legacy   n=515    margin +-0.060    2-sigma threshold +0.12
+#     MATH extended n=4515   margin +-0.020    2-sigma threshold +0.041
+#
+# Built by data/build_val_holdout.py --n-holdout 4000. All 21 verification gates
+# passed: schema identical, 12117 rows, every legacy per-source count unchanged,
+# zero prompt-hash overlap with the control's train or val, holdout rows unique.
+#
+# AND WHY MATH IS NOW THE PRIMARY READOUT (instrument bug #12)
+# Prompt-hash comparison of the existing split against the training set found:
+#
+#     apps           4730/5067   93.3% of val rows also appear in TRAIN
+#     codecontests    652/1272   51.3%
+#     taco            295/1199   24.6%
+#     codeforces        5/  63    7.9%
+#     CODE total     5682/7601   74.8%   <-- NOT a held-out measurement
+#     MATH total        3/ 516    0.6%   <-- clean
+#
+# So weighted CODE largely measures fit to problems the model trained on, which
+# is real learning but is NOT generalization, and it is dominated by apps (66.7%
+# of CODE val by weight, 93.3% contaminated). It also explains the previously
+# unexplained gap between internal CODE (+1.4pp, mostly-seen problems) and
+# HumanEval (unseen, no detectable change).
+#
+# A clean CODE holdout CANNOT be built from data on disk: every row in
+# /fsx/data/verl/data/{apps,taco,codecontests}/{train,val}.parquet is already in
+# the mix (verified -- zero never-seen unique prompts across all six files). That
+# needs a freshly downloaded code set and is follow-on work. Until then:
+#   - extended MATH  -> primary, clean, well-powered
+#   - weighted CODE  -> secondary, reported as train-set fit, NOT generalization
+#   - legacy MATH    -> reported for continuity with prior runs
+#
+# FREE DISTRIBUTION-SHIFT CHECK
+# The legacy 515 math rows came from eurus/val.parquet; the 4000 holdout rows
+# come from the never-sampled remainder of eurus/train.parquet. If eurus' own
+# split was random these are the same distribution, but that is an assumption.
+# With val_before_train=true, compare base@legacy-MATH against
+# base@extended-MATH: agreement within their margins confirms the pools match; a
+# large gap means the extended metric needs re-examination before it is trusted.
+#
+# SCORING PATH IS PROVABLY IDENTICAL, NOT ASSUMED
+# Holdout rows carry a `_h2` suffix so verl reports them under separate
+# `val-core/<data_source>/acc/mean@1` keys -- which is what keeps the legacy
+# 515-row aggregate computable. A suffixed label is NOT in
+# custom_reward_fn._KNOWN_DATA_SOURCES, so without the suffix-strip in
+# _routing_source() it would take the `fallback-math` path and be scored as
+# numina_olympiads rather than as its own source. That fix ships with this data
+# and is covered by scripts/test_reward_routing.py (41 offline checks, including
+# a negative control proving the strip is load-bearing).
+#
+# REQUIRES the updated scorer at /fsx/data/verl/custom_reward_fn.py:
+#     kubectl exec fsx-utils -- grep -c _routing_source \
+#         /fsx/data/verl/custom_reward_fn.py     # must be non-zero
+#
+# COST: 8117 -> 12117 val rows. Code rows are unchanged at 7601 and dominate
+# generation time (math answers are short), so the validation pass grows by well
+# under the +49% row count -- budget ~2.2h -> ~2.4h.
+data_name: mixed-code-math-valplus
+data_paths:
+  train_file: /fsx/data/verl/data/mixed-code-math/train.parquet
+  val_file: /fsx/data/verl/data/mixed-code-math-valplus/val.parquet
+  prompt_key: prompt

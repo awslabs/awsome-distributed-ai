@@ -1,0 +1,156 @@
+# =============================================================================
+# Sandbox Fusion — Standalone Code Execution Service for verl Reward Scoring
+# Deployed independently from the RayCluster. verl connects via HTTP using
+# reward_model.sandbox_fusion.url set in the training scripts.
+#
+# Deploy: source env_vars && envsubst < kubernetes/sandbox-fusion.yaml | kubectl apply -f -
+# Verify: kubectl rollout status deploy/sandbox-fusion
+# Test:   kubectl exec <any-ray-pod> -c ray-head -- wget -qO- --header='Content-Type: application/json' \
+#           --post-data='{"code":"print(42)","language":"python"}' http://sandbox-fusion.default.svc.cluster.local:8080/run_code
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox-fusion
+  labels:
+    app: sandbox-fusion
+    project: verl
+spec:
+  replicas: ${SANDBOX_REPLICAS}
+  selector:
+    matchLabels:
+      app: sandbox-fusion
+
+  # Rollout strategy (2026-07-12): the single eligible CPU node runs at its
+  # kubelet pod-capacity limit (49), so a surge pod cannot get a CNI IP and
+  # the rollout deadlocks (new pod never Ready, old pods never released).
+  # Roll by replacing: free a pod slot first, then start the new pod.  A
+  # transient 4/5 serving capacity is preferable to a wedged rollout.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+
+  template:
+    metadata:
+      labels:
+        app: sandbox-fusion
+        project: verl
+      # CRITICAL (2026-07-12 incident): the CloudWatch Application Signals
+      # operator auto-injects OpenTelemetry instrumentation into pods in this
+      # namespace.  The injected PYTHONPATH is inherited by every sandboxed
+      # child process, adding ~10s of OTel startup to each code-execution —
+      # a bare print(42) took 10.4s and hit TimeLimitExceeded, so ALL code
+      # rewards failed and the service saturated.  Explicitly opt out.
+      annotations:
+        instrumentation.opentelemetry.io/inject-python: "false"
+        instrumentation.opentelemetry.io/inject-java: "false"
+        instrumentation.opentelemetry.io/inject-nodejs: "false"
+        instrumentation.opentelemetry.io/inject-dotnet: "false"
+        cloudwatch.aws.amazon.com/auto-annotate-python: "false"
+        cloudwatch.aws.amazon.com/auto-annotate-java: "false"
+        cloudwatch.aws.amazon.com/auto-annotate-nodejs: "false"
+        cloudwatch.aws.amazon.com/auto-annotate-dotnet: "false"
+    spec:
+      # Schedule on a CPU-only m5 node — NOT on the Ray head or GPU workers
+      nodeSelector:
+        node.kubernetes.io/instance-type: ${SANDBOX_INSTANCE_TYPE}
+
+      # Avoid co-scheduling with the Ray head pod, and spread sandbox replicas
+      # across nodes when more than one eligible CPU node exists.  Both terms
+      # are "preferred" (not required): the cluster often has a single eligible
+      # CPU node, and a required term would make extra replicas unschedulable.
+      # During the 2026-07-10 235B run, both replicas shared one node with the
+      # Ray head and crashed together under scoring load (issue #32 pattern).
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    ray-node-type: head
+                topologyKey: kubernetes.io/hostname
+            - weight: 90
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: sandbox-fusion
+                topologyKey: kubernetes.io/hostname
+
+      containers:
+        - name: sandbox-fusion
+          image: ${SANDBOX_FUSION_IMAGE}
+          imagePullPolicy: Always
+
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+
+          # SandboxFusion requires privileged mode for cgroup-based process
+          # isolation when executing untrusted code in sandboxed environments.
+          securityContext:
+            privileged: true
+
+          resources:
+            requests:
+              cpu: "8"
+              memory: "24Gi"
+            limits:
+              cpu: "24"
+              memory: "48Gi"
+
+          # Health checks — SandboxFusion serves an HTTP API on port 8080.
+          # CRITICAL TUNING (2026-07-11 + 2026-07-12 incidents): under
+          # concurrent scoring load the "/" endpoint can take >30s to respond
+          # even though the sandbox is healthy and processing requests.
+          # HTTP-based liveness caused a death spiral even with generous
+          # thresholds (2026-07-12: 33-38 restarts/pod in 22h, exit 137):
+          # liveness kill -> in-flight work lost -> retries pile onto the
+          # remaining pods -> they saturate -> all replicas NotReady -> empty
+          # Service endpoints -> code rewards zero out and poison training
+          # scores.
+          #
+          # Liveness is therefore a TCP socket check only: it kills a truly
+          # wedged process (port not accepting connections) but NEVER an
+          # overloaded-yet-working one.  Readiness stays HTTP so a slow pod
+          # sheds load, with thresholds tolerant enough that transient
+          # saturation does not empty the endpoint list.
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 30
+            failureThreshold: 10
+
+      # Do NOT tolerate GPU taints — keep this off GPU nodes
+      # (no tolerations block means GPU-tainted nodes are excluded)
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-fusion
+  labels:
+    app: sandbox-fusion
+    project: verl
+spec:
+  type: ClusterIP
+  selector:
+    app: sandbox-fusion
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP

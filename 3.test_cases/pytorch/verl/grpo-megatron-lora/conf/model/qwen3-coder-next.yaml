@@ -1,0 +1,12 @@
+# Qwen3-Coder-Next — target production model (159GB)
+name: Qwen3-Coder-Next
+hf_path: Qwen/Qwen3-Coder-Next
+fsx_path: ${cluster.fsx_home}/models/${model.name}
+tensor_parallel_size: 4
+use_shm: true
+
+# Megatron parallelism (ignored by FSDP backend)
+# 48 GPUs / (TP=4 * PP=4) = 3 data parallel replicas
+pipeline_parallel_size: 4
+expert_parallel_size: 1
+context_parallel_size: 1

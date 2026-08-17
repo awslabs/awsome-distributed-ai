@@ -1,0 +1,18 @@
+# P6-B200 single node: 1 node x 8 B200 GPUs (for validation runs)
+instance_type: p6-b200.48xlarge
+head_instance_type: m5.24xlarge
+num_nodes: 1
+gpus_per_node: 8
+num_efa_per_node: 32
+
+param_offload: false
+optimizer_offload: false
+gpu_memory_utilization: 0.85
+
+fsx_home: /fsx/data/verl
+agent_num_workers: 4
+
+namespace: default
+# Informational only -- no script reads this. Set EKS_CLUSTER_NAME in env_vars
+# for anything that actually talks to the cluster.
+eks_cluster: ${oc.env:EKS_CLUSTER_NAME,unset}

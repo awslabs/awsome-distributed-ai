@@ -1,0 +1,82 @@
+# Megatron backend — Megatron-Core + Megatron-Bridge native LoRA
+# Required for models >72B and MoE architectures (e.g. Qwen3-235B-A22B, Qwen3-30B-A3B)
+name: megatron
+verl_config_name: ppo_megatron_trainer.yaml
+
+# Megatron-Bridge enables native LoRA within Megatron-Core
+use_mbridge: true
+use_fused_kernels: true
+vanilla_mbridge: false
+
+# Expert tensor parallelism (separate from model-level EP)
+expert_tensor_parallel_size: 1
+
+# Megatron kernel fusions (gated by use_fused_kernels)
+fused_kernels:
+  apply_rope_fusion: true
+  masked_softmax_fusion: true
+  bias_activation_fusion: true
+  bias_dropout_fusion: true
+  gradient_accumulation_fusion: true
+  deallocate_pipeline_outputs: true
+  persist_layer_norm: true
+
+# MoE-specific Megatron-Core overrides (applied when model has EP > 1).
+# These are critical for performance and correctness with MoE models.
+# Gated by expert_parallel_size > 1 in submit_training.py.
+moe_overrides:
+  moe_grouped_gemm: true
+  moe_permute_fusion: true
+  moe_token_dispatcher_type: alltoall
+  moe_router_dtype: fp32
+  moe_enable_deepep: false
+  # Pipeline split accounting — treats embedding and loss as virtual layers
+  # for balanced pipeline stage assignment (e.g., 94+2=96 layers / PP=3 = 32/stage).
+  account_for_loss_in_pipeline_split: true
+  account_for_embedding_in_pipeline_split: true
+
+# Megatron-specific offloading (separate from FSDP offloading in cluster config)
+grad_offload: false
+
+# Megatron-specific rollout/training flags
+free_cache_engine: true
+enable_chunked_prefill: true
+loss_agg_mode: token-mean
+clip_grad: 1.0
+
+# Resume behavior. verl v0.8.0 accepts exactly three values (see
+# verl/trainer/ppo/ray_trainer.py::_load_checkpoint):
+#   resume_mode=auto         -> resume from the latest checkpoint in
+#                               default_local_dir (per its tracker file), or
+#                               train from scratch if there is none.
+#   resume_mode=disable      -> ignore checkpoints, always start from base.
+#   resume_mode=resume_path  -> resume from the explicit checkpoint dir given by
+#                               resume_from_path (below). Use this to roll back to
+#                               a known-good step, e.g. when a later checkpoint was
+#                               trained on corrupted rewards. Set on the CLI:
+#                                 backend.resume_mode=resume_path \
+#                                 backend.resume_from_path=/fsx/.../global_step_150
+#
+# WARNING: the mode is "resume_path", NOT "resume_from_path" (that is the name of
+# the path FIELD, not the mode). verl does not validate this value — an
+# unrecognised mode silently falls through to "newest checkpoint in
+# default_local_dir", so resume_from_path is ignored and you resume from the wrong
+# step, or crash with "'NoneType' object has no attribute 'split'" when the
+# checkpoint tree is empty. submit_training.py now rejects invalid values up front.
+resume_mode: auto
+resume_from_path: null
+
+# Restore the LR / optimizer parameter scheduler from the checkpoint on resume.
+#
+# verl's default is false, which means a resumed run RE-RUNS LR warmup from zero
+# instead of continuing where the checkpoint left off. Observed on the v3 resume
+# from global_step_150: actor/lr ramped 1e-6, 2e-6 ... over steps 151-160 rather
+# than starting at the configured 1e-5, so the first `lr_warmup_steps` after every
+# resume train at a fraction of the intended learning rate. Harmless once, but it
+# compounds across a resume-heavy run and means the effective LR schedule is not
+# the one in this config.
+#
+# Set false only if you deliberately want a fresh warmup (e.g. resuming with a
+# DIFFERENT learning rate or total step count, where the stored schedule no longer
+# applies and Megatron may complain about mismatched scheduler state).
+use_checkpoint_opt_param_scheduler: true

@@ -1,0 +1,59 @@
+# BigCodeBench (Complete split) pass@1/pass@4 variant for the Qwen3-235B GRPO benchmark.
+#
+# WHY THIS TASK EXISTS (watchdog/MEASUREMENT.md §8.1): HumanEval's n=164 is the
+# binding power constraint on the external code estimator — replication is a weak
+# lever (√R shortfall, measured 1.14–1.18x). BigCodeBench-Complete has n=1140, so
+# the paired SE shrinks ~√(1140/164)=2.64x (HE-class MDE ±0.0284 → ~±0.0108). It is
+# also NOT derived from the eurus/apps/taco/codecontests training mix, so unlike the
+# internal CODE split (bug #12: 74.8% train overlap) it is a generalization measure.
+#
+# COMPLETION MODE, TEMPLATE OFF — identical discipline to humaneval_p4/mbpp_p4:
+#   - doc_to_text uses complete_prompt (PEP257 docstring prompt: imports+signature),
+#     NOT instruct_prompt. Pairs with LMEVAL_APPLY_CHAT_TEMPLATE=false.
+#   - until is the completion-mode stop set. Mirrors humaneval_p4 but WITHOUT bare
+#     "\ndef": a BigCodeBench canonical solution is `def task_func(...):` written at
+#     column 0, so "\ndef" would truncate the answer immediately. Reasoning models
+#     still self-write a test harness, so we stop on the unittest/class markers and
+#     let utils._repair() drop any trailing prose. "\n#" is also dropped for the same
+#     column-0 reason (docstring/prompt bodies contain top-level comments).
+#
+# SCORING (see utils.build_predictions_bcb / build_references_bcb): BigCodeBench
+# ships a unittest.TestCase per task calling task_func. The reference wraps it with a
+# runner that exits non-zero on any failure/error; the prediction is a standalone
+# program defining task_func (fence-aware + _repair, same machinery as HumanEval).
+# code_eval executes prediction + "\n" + reference. THIRD-PARTY LIBS
+# (pandas/numpy/sklearn/…) MUST be installed in the driver pod or correct solutions
+# raise ImportError and score 0. A canonical-solution HARD GATE (>=0.95) gates any
+# model number.
+#
+# NOTE: bigcode/bigcodebench has no test split; all rows load under split "v0.1.4".
+task: bigcodebench_p4
+dataset_path: bigcode/bigcodebench
+unsafe_code: true
+output_type: generate_until
+test_split: v0.1.4
+doc_to_text: "{{complete_prompt}}"
+doc_to_target: !function utils.reference_bcb
+metric_list:
+  - metric: !function utils.pass_at_k
+    aggregation: mean
+    higher_is_better: true
+    k: [1, 4]
+repeats: 4
+generation_kwargs:
+  until:
+    - "<|im_end|>"
+    - "\nclass"
+    - "\nif __name__"
+  max_gen_toks: 8192
+  do_sample: true
+  temperature: 0.2
+  top_p: 0.95
+num_fewshot: 0
+filter_list:
+  - name: "create_test"
+    filter:
+      - function: "custom"
+        filter_fn: !function utils.build_predictions_bcb
+metadata:
+  version: 1.0
