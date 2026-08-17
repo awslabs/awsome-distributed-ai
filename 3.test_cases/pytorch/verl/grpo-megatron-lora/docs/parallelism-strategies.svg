@@ -37,7 +37,7 @@
   <text x="550" y="56" fill="#94A3B8" font-size="13">EP carves out of DP (MoE only)</text>
 
   <!-- Source tag -->
-  <text x="1568" y="30" fill="#64748B" font-size="11" text-anchor="end" dominant-baseline="middle">grpo-megatron-lora / NOTES.md Appendix A</text>
+  <text x="1568" y="30" fill="#64748B" font-size="11" text-anchor="end" dominant-baseline="middle">grpo-megatron-lora</text>
   <text x="1568" y="56" fill="#64748B" font-size="11" text-anchor="end">48 B200 GPUs  |  6 nodes x 8 GPUs  |  NVLink intra-node  |  EFA inter-node</text>
 
 
@@ -159,7 +159,7 @@
   <text x="28" y="746" fill="white" font-size="13" font-weight="600">FSDP — Fully Sharded Data Parallelism</text>
   <text x="28" y="772" fill="#075985" font-size="11" font-weight="600">Alternative backend: shards params + grads + optim states</text>
   <text x="28" y="787" fill="#374151" font-size="10">Simpler setup. Best for models ≤ 72B. No TP/PP/EP needed.</text>
-  <text x="28" y="802" fill="#0369A1" font-size="9" font-style="italic">Megatron is 2.7x faster on this cluster (see NOTES.md §22)</text>
+  <text x="28" y="802" fill="#0369A1" font-size="9" font-style="italic">Megatron is 2.7x faster on this cluster (measured; see docs/results.md)</text>
 
 
   <!-- ========================================================== -->

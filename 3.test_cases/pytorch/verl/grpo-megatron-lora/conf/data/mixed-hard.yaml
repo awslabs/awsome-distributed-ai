@@ -4,7 +4,7 @@
 # PURPOSE
 # Treatment arm for the difficulty-filter experiment. The control is the
 # unfiltered `mixed` group (conf/data/mixed.yaml), which is what
-# raysubmit_D5itzNTe4SyxeDsq trains on. Everything else about the two runs is
+# the control run trains on. Everything else about the two runs is
 # held identical (r=128/alpha=256, cap 32768, max_num_seqs=56), so the ONLY
 # variable is which code problems are in the training set.
 #
@@ -53,7 +53,7 @@
 # the control's. This is load-bearing:
 #   - the measured base@32768 stays valid (weighted CODE 0.7231, MATH 0.4971),
 #     so val_before_train is NOT needed -- saves a ~3h validation pass
-#   - watchdog/rescore.py's VERIFIED_COUNTS still apply (8117 rows: apps 5067,
+#   - the verified row counts still apply (8117 rows: apps 5067,
 #     codecontests 1272, taco 1199, codeforces 63, numina_* 516)
 #   - treatment and control are measured on the SAME instrument
 # Filtering val would void all three at once.

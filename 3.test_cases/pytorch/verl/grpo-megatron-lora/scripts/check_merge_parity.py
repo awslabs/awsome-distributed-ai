@@ -1,9 +1,9 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-"""Logit-parity gate for a merged Megatron+LoRA -> HF checkpoint (issue #41 verification).
+"""Logit-parity gate for a merged Megatron+LoRA -> HF checkpoint.
 
 Confirms the merged HF model produced by scripts/merge_megatron_lora_ckpt.py is
-NOT a silent "base-only" merge (the #41 failure mode) and is numerically sane.
+NOT a silent "base-only" merge (the historical failure mode) and is numerically sane.
 
 It runs two cheap, single-GPU checks with plain HF transformers (no Megatron):
 

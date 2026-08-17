@@ -125,7 +125,8 @@ _KNOWN_DATA_SOURCES = {
     "searchR1_bamboogle",
 }
 
-# Data sources whose scoring goes through Sandbox Fusion (i.e. subject to bug #8).
+# Data sources whose scoring goes through Sandbox Fusion (i.e. subject to the
+# sandbox-failure scoring bug described below).
 # Must match the "# Code" block above.
 _CODE_DATA_SOURCES = frozenset({"codecontests", "apps", "codeforces", "taco"})
 
@@ -135,7 +136,7 @@ _CODE_DATA_SOURCES = frozenset({"codecontests", "apps", "codeforces", "taco"})
 # =============================================================================
 # The MATH val aggregate has n=515, giving it a +-0.060 margin of error -- the
 # same size as the effect being measured (+0.0661 at step 100). Enlarging it is
-# the cheapest resolution win available (see watchdog/MEASUREMENT.md §4), so a
+# the cheapest resolution win available, so a
 # holdout split of never-trained rows is appended to the val parquet.
 #
 # Those rows need a data_source that verl reports SEPARATELY, because verl keys
@@ -220,13 +221,13 @@ def _is_code_ground_truth(ground_truth):
 # verl's sandbox path accepts a `concurrent_semaphore` and, when given one,
 # wraps every execute-API call in it
 # (verl/utils/reward_score/sandbox_fusion/utils.py:295-298).  It defaults to
-# None == UNBOUNDED, and nothing in this repo used to pass one.  Unbounded
+# None == UNBOUNDED, and nothing here used to pass one.  Unbounded
 # concurrency OOM-kills the sandbox:
 #
 #   5 pods x 48Gi limit, each in-flight request allowed memory_limit_mb=1024
 #   -> ~51.2 concurrent/pod x 1024MB = 51.2 GiB > 48 GiB -> exitCode 137
 #
-# Observed 2026-08-04 on raysubmit_5Uzzc6E85WE43rgn: all 5 sandbox pods
+# Observed 2026-08-04: all 5 sandbox pods
 # OOMKilled 24-30 times, ~13 min between restarts, 290 "Max retries" in the
 # reward path -- while val_before_train was measuring the BASELINE.  A flapping
 # scorer silently biases CODE downward, which is precisely the class of bug that
@@ -250,7 +251,7 @@ def _is_code_ground_truth(ground_truth):
 # -----------------------------------------------------------------------------
 # 2026-08-06: THE MODEL ABOVE IS WRONG. It bounds REQUESTS, not EXECUTIONS.
 # -----------------------------------------------------------------------------
-# raysubmit_fmtziTNTWV433sz1 ran at 10 (not 16) for its whole 9.9h life and ALL
+# One run ran at 10 (not 16) for its whole 9.9h life and ALL
 # FIVE pods were still OOMKilled 6-7 times each, with 466 "Max retries" in the
 # reward path. So lowering 16 -> 10 did not work, and the arithmetic above
 # predicted only 33% of the limit at that setting. The arithmetic is not merely
@@ -277,7 +278,7 @@ def _is_code_ground_truth(ground_truth):
 # knob that is safe to move (raising limits/replicas is forbidden above, and
 # capping test cases per request would change SCORES and void comparability).
 #
-# RESULT (raysubmit_RrFbeS5J9266nr9B): **the OOM is NOT fixed.** All 5 pods still
+# RESULT: **the OOM is NOT fixed.** All 5 pods still
 # OOMKilled in a synchronized 13-second burst at 01:38:56-01:39:09Z, 3 restarts each,
 # at a HIGHER restart rate than semaphore 10 (~1.3 vs ~0.67 per pod per hour). What it
 # DID buy is a **5.0x drop in sandbox error density** (2.77 vs 13.89 per 1k log lines,
@@ -301,7 +302,7 @@ _sandbox_semaphore = (
 
 
 # =============================================================================
-# Bug #8 — sandbox INFRASTRUCTURE failures were scored as WRONG ANSWERS
+# Sandbox INFRASTRUCTURE failures were scored as WRONG ANSWERS
 # =============================================================================
 # verl's sandbox scorer DOES have an error channel. It returns a tuple:
 #
@@ -327,7 +328,7 @@ _sandbox_semaphore = (
 # The deflation is completely silent, which is why `Exception in
 # default_compute_score` has always read 0 while CODE was being biased downward.
 #
-# Measured impact on raysubmit_D5itzNTe4SyxeDsq: 468 exhausted-retry API errors.
+# Measured impact on the r=32 control run: 468 exhausted-retry API errors.
 # In the r=32 run the error density per validation window was 10.7 / 6.9 / 27.8
 # per 1k log lines at steps 50 / 100 / 150 — a 4x spike in the window whose CODE
 # score was lowest. A drifting scorer manufactures apparent capability decay.
@@ -516,7 +517,7 @@ def compute_score(
     # Respect an explicit semaphore from verl if one is ever supplied.
     kwargs.setdefault("concurrent_semaphore", _sandbox_semaphore)
 
-    # Bug #8 path: for CODE tasks, score via the sandbox directly so the metadata
+    # Sandbox-failure path: for CODE tasks, score via the sandbox directly so the metadata
     # (and therefore api_error vs wrong_answer) survives, and infrastructure
     # failures get retried instead of silently becoming zeros. Falls back to
     # default_compute_score if the verl internals are not the expected shape.

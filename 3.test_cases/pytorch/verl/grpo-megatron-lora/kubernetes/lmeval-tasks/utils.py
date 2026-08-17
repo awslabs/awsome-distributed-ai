@@ -10,7 +10,7 @@ but MBPP's utils.pass_at_1 is not), so this file is mounted via --include_path.
 MBPP fewshot samples are reused from the installed lm-eval package to avoid
 duplicating the long hardcoded list.
 
-WHY THESE BUILDERS EXTRACT FENCED CODE (instrument bug #10)
+WHY THESE BUILDERS EXTRACT FENCED CODE
 -----------------------------------------------------------
 `code_eval` executes `prediction + "\\n" + test_code`, so a prediction MUST be a
 syntactically valid program that defines the target function.

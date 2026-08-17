@@ -6,12 +6,12 @@ with Megatron-LM or FSDP, on Ray/KubeRay over EKS. Supports LoRA (7B to 235B+ Mo
 fine-tuning. Tuned for AWS P6-B200 (NVIDIA Blackwell, 8x183 GB per node).
 
 There is **nothing to pip-install locally**. Training code is verl, installed on the Ray nodes
-at job submission time via `scripts/runtime_env.yaml`. This repo is config, scripts and
+at job submission time via `scripts/runtime_env.yaml`. This test case is config, scripts and
 manifests.
 
 ---
 
-## Repo map
+## Directory map
 
 | Path | What lives there |
 |------|------------------|
@@ -45,7 +45,7 @@ manifests.
 
 - An EKS cluster with GPU nodes (validated on 6 x `p6-b200.48xlarge`, 48 B200 GPUs)
 - An FSx for Lustre filesystem (provisioned as the `fsx-lustre` PVC via `lustre/`)
-- KubeRay operator installed (here: deployed via ArgoCD)
+- KubeRay operator installed
 - A HuggingFace token with access to the model you intend to train
 - `kubectl`, `awscli`, `docker`, `envsubst`, Python 3.12
 
@@ -96,7 +96,7 @@ ray job stop  <submission_id>
 ## Configuration
 
 **Training params live in `conf/` (Hydra). `env_vars` is infrastructure only.** That split is
-the most common source of confusion in this repo.
+the most common source of confusion in this test case.
 
 Select options with `group=option`; override scalars with dotted paths.
 

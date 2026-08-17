@@ -1,5 +1,5 @@
 # =============================================================================
-# lm-evaluation-harness eval Job (issue #44)
+# lm-evaluation-harness eval Job
 #
 # Replaces the dead bigcode-evaluation-harness path. Runs EleutherAI's
 # lm-eval-harness in `local-completions` mode against the already-running
@@ -66,7 +66,7 @@ spec:
               OUT_DIR="/fsx/data/verl/eval_results/${EVAL_RUN_NAME}/lmeval"
               mkdir -p "${OUT_DIR}"
               # IMPORTANT: run from a clean cwd. A local dir named "mbpp"/"humaneval"
-              # shadows the task and yields "no tasks found" (issue #44 gotcha).
+              # shadows the task and yields "no tasks found".
               cd /work
 
               BASE_URL="http://vllm-eval.${KUBE_NAMESPACE}.svc.cluster.local:8000/v1/completions"

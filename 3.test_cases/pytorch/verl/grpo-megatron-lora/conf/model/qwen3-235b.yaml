@@ -20,14 +20,14 @@
 #
 # Upstream reference: verl run_qwen3-235b_megatron_96gb.sh (TP=4,PP=8,EP=4 on 32 GPUs)
 # Previous config (TP=4, PP=1, EP=4) OOM'd at vLLM init with TP=4 rollout.
-# See NOTES.md sections 27-28 for full failure analysis.
+# Full failure analysis is in local notes (not shipped).
 name: Qwen3-235B-A22B
 hf_path: Qwen/Qwen3-235B-A22B
 fsx_path: ${cluster.fsx_home}/models/${model.name}
 tensor_parallel_size: 4
 # Disable /dev/shm model cache — the 440 GB disk footprint combined with
 # param_offload (actor + ref) exhausts CPU RAM during vLLM init.
-# See NOTES.md section 28.
+# Diagnosed in local notes (not shipped).
 use_shm: false
 
 # Megatron parallelism (ignored by FSDP backend)
@@ -67,9 +67,9 @@ lora_alpha: 64
 #   - README's "naming mismatch syncing LoRA to vLLM -> runtime errors" (verl#5479) DOES
 #     NOT REPRODUCE: `lora_merge: true` below means verl merges the adapter into base
 #     weights before syncing, so adapter tensor names never cross the boundary. 0 Tracebacks,
-#     0 KeyError/naming hits over init + 7 steps of raysubmit_RrFbeS5J9266nr9B.
-#     If you ever set lora_merge: false on an MoE model, expect #5479 to return.
-#   - FOLLOWON.md's "1.68B trainable params/GPU -> ~20GB Adam -> will OOM" was WRONG BY 33x.
+#     0 KeyError/naming hits over init + 7 steps.
+#     If you ever set lora_merge: false on an MoE model, expect verl#5479 to return.
+#   - The predicted "1.68B trainable params/GPU -> ~20GB Adam -> will OOM" was WRONG BY 33x.
 #     Megatron-Bridge peft/lora.py defaults `share_expert_adapters=True` (one adapter shared
 #     across all local experts on the EP rank, not one per expert) and verl never references
 #     that field, so the per-expert branch is unreachable. 128 experts / EP=4 = 32/GPU = the 32x.

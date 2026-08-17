@@ -331,8 +331,8 @@ The comparator:
   `humaneval_p4`/`mbpp_p4` tasks now carry a **completion-mode `until` list**
   (`['<|im_end|>', '\nclass', '\ndef', '\n#', '\nif', '\nprint']`) that is coupled
   to the template being **off**. Turning the template on makes `"\ndef"` fire on a
-  fenced ` ```python ` block and truncate every generation — instrument bug #13 in
-  reverse. Required:
+  fenced ` ```python ` block and truncate every generation — the stop-sequence
+  bug in reverse. Required:
 
   ```bash
   export LMEVAL_APPLY_CHAT_TEMPLATE=false          # NOT the script default (true)
@@ -370,7 +370,7 @@ Two distinct causes — check them in this order.
    `--model local-completions`.
 2. **You ran the `_p4` tasks with the chat template ON.** The `_p4` `until` list is
    the completion-mode list, so `"\ndef"` fires on a fenced ` ```python ` block and
-   truncates every generation to nothing (instrument bug #13 in reverse). Fix:
+   truncates every generation to nothing (the stop-sequence bug in reverse). Fix:
    `LMEVAL_APPLY_CHAT_TEMPLATE=false`. **This is NOT the script default** —
    `submit_lmeval.sh` still defaults it to `true`, which is stale.
 

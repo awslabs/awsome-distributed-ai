@@ -94,13 +94,13 @@ ray:
 #           and the load fails with
 #             InductorError: Failed to run autotuning code block:
 #             CUDA driver error: file not found
-#           That killed raysubmit_VQwgS3DNfiNzdpaj at max_model_len=34816 on
+#           That killed a run at max_model_len=34816 on
 #           2026-08-03. It is a write-visibility race on a network filesystem,
 #           NOT the stale-artifact case described in build_verl_overrides, and
 #           NOT an OOM. Bumping CACHE_STACK_VERSION does not fix it.
 #
 # Historical note: caches were moved to FSx because /tmp exhausted at 100 GB and
-# caused an NCCL timeout (NOTES.md §24). That no longer applies on p6-b200 —
+# caused an NCCL timeout (local notes). That no longer applies on p6-b200 —
 # /tmp is NVMe with ~462 GB free and the whole Triton cache is ~740 MB. Re-check
 # `df -h /tmp` before using "local" on a different instance type.
 #
@@ -113,5 +113,4 @@ compile_cache: fsx
 # Secrets — read from environment, never committed
 # =============================================================================
 secrets:
-  hf_token: ${oc.env:HF_TOKEN,""}
   mlflow_tracking_uri: ${oc.env:MLFLOW_TRACKING_URI,""}

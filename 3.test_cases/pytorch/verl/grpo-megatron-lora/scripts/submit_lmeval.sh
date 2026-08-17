@@ -2,7 +2,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 # =============================================================================
-# Submit the lm-evaluation-harness eval Job (issue #44)
+# Submit the lm-evaluation-harness eval Job
 #
 # Runs HumanEval + MBPP (pass@1, pass@10) against the warm `vllm-eval` service
 # via lm-eval-harness `local-completions`. Driver is CPU-only and reuses the
@@ -105,7 +105,7 @@ export LMEVAL_TOKENIZER="${LMEVAL_TOKENIZER:-/fsx/data/verl/models/Qwen3-235B-A2
 # the corrected max_gen_toks=24576 that is 2048-24576 = NEGATIVE, which drives
 # the request's max_tokens to <= 0 and every call dies with
 #   HTTP 400 "max_tokens must be at least 1, got 0"
-# It looks exactly like issue #44 (chat-templated prompts rejected by
+# It looks exactly like the chat-template pitfall (chat-templated prompts rejected by
 # /v1/completions) but is unrelated: chat prompts are accepted fine, and
 # reverting LMEVAL_APPLY_CHAT_TEMPLATE would only restore the broken
 # completion-mode config that produced HumanEval pass@1 = 0.2634.
@@ -125,7 +125,7 @@ export LMEVAL_MAX_LENGTH="${LMEVAL_MAX_LENGTH:-32768}"
 # the build_predictions extraction filter only makes sense for prose responses,
 # and AGENTS.md prescribes `local-completions` + --apply_chat_template.
 #
-# CAUTION (issue #44): chat-templated prompts sent to /v1/completions have
+# CAUTION: chat-templated prompts sent to /v1/completions have
 # previously returned HTTP 400. ALWAYS smoke-test first before spending eval
 # GPU-hours:  LMEVAL_LIMIT=2 ./scripts/submit_lmeval.sh <run-name>
 # If it 400s, set LMEVAL_APPLY_CHAT_TEMPLATE=false AND revert the task YAMLs to

@@ -39,7 +39,7 @@ generation_kwargs:
   # rather than dying at ~1024 tokens). Baselines measured under the old
   # settings are NOT comparable and must be re-measured.
   until:
-    # INSTRUMENT BUG #13 (2026-08-06). These stops are COMPLETION-MODE stops and
+    # INSTRUMENT BUG (2026-08-06). These stops are COMPLETION-MODE stops and
     # are COUPLED to LMEVAL_APPLY_CHAT_TEMPLATE=false. Do not change one without
     # the other.
     #

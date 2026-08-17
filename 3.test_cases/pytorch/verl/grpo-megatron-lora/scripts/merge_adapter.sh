@@ -4,7 +4,7 @@
 # =============================================================================
 # Merge a verl v0.8.0 native PEFT adapter into a standalone HF model (Ray job).
 #
-# Since verl v0.8.0 (issue #41 fix), a Megatron+LoRA checkpoint already contains
+# Since verl v0.8.0, a Megatron+LoRA checkpoint already contains
 # a standard HF PEFT adapter at:
 #   <ckpt>/global_step_<N>/actor/huggingface/adapter/
 # so merging is just peft merge_and_unload() — no Megatron-Bridge replay merger.

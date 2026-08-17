@@ -13,7 +13,8 @@ pip:
   # --- Core training framework ---
   # Pinned to the v0.8.0 release tag (2026-06-01). This release includes the
   # native Megatron+LoRA HF adapter export (bridge.save_hf_adapter) used when
-  # 'hf_model' is in checkpoint.save_contents — fixes issue #41 for new runs.
+  # 'hf_model' is in checkpoint.save_contents — closes the pre-v0.8.0
+  # adapter-export gap for new runs.
   - "verl[mcore] @ git+https://github.com/volcengine/verl.git@v0.8.0"
 
   # --- Megatron-Core pin ---

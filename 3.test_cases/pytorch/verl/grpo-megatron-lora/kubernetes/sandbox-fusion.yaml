@@ -62,7 +62,7 @@ spec:
       # are "preferred" (not required): the cluster often has a single eligible
       # CPU node, and a required term would make extra replicas unschedulable.
       # During the 2026-07-10 235B run, both replicas shared one node with the
-      # Ray head and crashed together under scoring load (issue #32 pattern).
+      # Ray head and crashed together under scoring load (the co-scheduling failure pattern).
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:

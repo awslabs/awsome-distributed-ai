@@ -111,7 +111,6 @@ but generalized poorly.
 | **Key params** | kl=0.02, lr=1e-5, max_response=6144 |
 | **Status** | Running (step 142 / 1851 as of 2026-04-15) |
 | **MLflow run** | `b1b140ec344d44ef88041ff931c3739e` |
-| **Job ID** | `raysubmit_F8Mpr1tRw59fa4jL` |
 
 **Changes from Run 1**:
 
@@ -139,7 +138,6 @@ but generalized poorly.
 | **Dataset** | mixed-code-math (train byte-identical to Run 2), val = mixed-code-math-valplus |
 | **Key params** | **kl=0.001**, lr=1e-5, max_response=32768, max_num_seqs=56 |
 | **Duration** | 9.86 h, stopped at step 35 |
-| **Job ID** | `raysubmit_fmtziTNTWV433sz1` |
 | **Outcome** | **Stopped on 3 pre-registered tripwires -- entropy collapse** |
 
 **Why it was run**: Run 2 changed four things at once versus Run 1 and credited `kl_loss_coef` for
@@ -201,7 +199,6 @@ term for exploration -- not the KL leash.
 | **Model** | Qwen3-235B-A22B, Megatron + LoRA (rank 128 / alpha 256) |
 | **Dataset** | mixed-code-math (train byte-identical to Runs 2/3), val = mixed-code-math-valplus |
 | **Key params** | kl=0.02, lr=1e-5, max_response=32768, **`target_modules=linear_qkv,linear_proj,linear_fc1,linear_fc2`** |
-| **Job ID** | `raysubmit_RrFbeS5J9266nr9B` |
 | **Duration** | 45.05 h, stopped at step 165 (target was 150) |
 | **Health** | **0 Traceback / 0 OOM / 0 NCCL / 0 NaN** |
 | **Outcome** | **Feasible and trains correctly, but NO measurable capability gain over attention-only** |
@@ -236,7 +233,7 @@ grouped-GEMM expert weights).
 
 ### Result: strong vs base, NULL vs the control
 
-Sample-weighted via `watchdog/rescore.py`; validations at steps 50/100/150.
+Sample-weighted with a local rescoring script (not shipped); validations at steps 50/100/150.
 
 | | base | s50 | s100 | s150 | base→s150 |
 |---|---|---|---|---|---|
@@ -256,8 +253,8 @@ a **well-powered null** (+0.0006, 0.06 sigma, MDE +/-0.0202).
 
 ### External paired eval confirms it (the better-powered instrument)
 
-`humaneval_p4` + `mbpp_p4`, runtime-LoRA vLLM, analysed with `watchdog/paired_eval.py`. Both step-100
-arms were measured **twice** and pooled (`watchdog/pool_replicates.py`):
+`humaneval_p4` + `mbpp_p4`, runtime-LoRA vLLM, analysed per-problem with a local paired-eval
+script (not shipped). Both step-100 arms were measured **twice** and pooled:
 
 | comparison | HE p@1 | HE p@4 | MBPP p@1 | MBPP p@4 |
 |---|---|---|---|---|
@@ -278,8 +275,9 @@ the experts bought no measurable capability, at +11.4% throughput and a 105.7 GB
 Every earlier MATH number was on an internal, in-distribution holdout. These are public
 benchmarks, verified absent from the training mix (`gsm8k` and `hendrycks/MATH` appear
 nowhere in apps/taco/codeforces/codecontests + numina_*). Greedy decoding, so the
-measurement is **deterministic** — no replicate needed. Analysed paired per-problem with
-`watchdog/paired_eval_math.py` (cross-validated against two published reference results).
+measurement is **deterministic** — no replicate needed. Analysed paired per-problem with a
+local math paired-eval script (not shipped), cross-validated against two published reference
+results.
 
 | arm | GSM8K (n=1319, 5-shot, strict-match) | MATH-500 scoreable subset (n=472) |
 |---|---|---|
@@ -323,7 +321,7 @@ only more problems can (`minerva_math`, n=5000, would take the MDE to ~±0.008).
 Instrument notes: MATH-500's own gold answers score only 0.9440 through Minerva's `is_equiv`
 (sympy cannot compare tuples/intervals/matrices), so full-n MATH-500 absolutes have a 0.944
 ceiling and are not leaderboard-comparable — hence the pre-registered n=472 scoreable subset.
-GSM8K's gold gate is 1.0000. Details in `watchdog/MEASUREMENT.md` §11.
+GSM8K's gold gate is 1.0000. Recorded in the local measurement notes (not shipped).
 
 > **Always name the denominator on a MATH-500 delta.** The 28 gold-unscoreable items are
 > fixed by ground truth alone, so they enter the paired difference as ties and dilute it:
@@ -344,14 +342,14 @@ GSM8K's gold gate is 1.0000. Details in `watchdog/MEASUREMENT.md` §11.
 - **Base is a STABLE arm.** Its first-ever replicate: HE p@1 0.2774/0.2729, MBPP p@1 0.7845/0.7915. So
   the base denominator every vs-base number rests on is trustworthy; prior HE vs-base noise came from
   the trained arms (§8.2), not base. Measured pooled SE reduction 1.15-1.18x vs the sqrt(2)=1.41x
-  ceiling, consistent with `watchdog/MEASUREMENT.md` §8.1 (replication is a weak lever).
+  ceiling — replication is a weak lever.
 - **A larger code eval set (BigCodeBench, n=1140) was authored but is NOT yet usable.** The task
   (`kubernetes/lmeval-tasks/bigcodebench_p4.yaml` + `utils.py` builders, completion-mode, added
   additively) is ready, but a canonical-solution HARD GATE proved lm-eval's `code_eval` executor is
   the WRONG scorer for it: `code_eval`'s `reliability_guard()` disables the filesystem/network/plotting
   that BigCodeBench tasks require, so even ground-truth solutions score only ~3/5. BigCodeBench needs
   its own sandbox executor (its official Docker image) -- a generate-then-score split is the next-
-  reservation task. No BigCodeBench model number was produced. Full detail in `watchdog/FOLLOWON.md`.
+  reservation task. No BigCodeBench model number was produced.
 
 ### Serving an expert-LoRA adapter: three non-default settings are REQUIRED
 
@@ -376,5 +374,5 @@ materialises one adapter per expert (26.0B params vs 76.2M trained).
 > 26.428B -> 1.220B params)**, confirmed by a bit-exact expand round trip on all 72,944 tensors.
 > (The "342x / ~0.8 GB" figure conflated inflation-vs-trained-params with recoverable redundancy.)
 > This shrinks disk/transfer/load; it does NOT shrink the GPU KV-cache/slot (still the expanded
-> 26.0B), so on vLLM 0.20.2 it does not by itself unblock multi-adapter serving. Prototype exporter
-> lives in `watchdog/` (local).
+> 26.0B), so on vLLM 0.20.2 it does not by itself unblock multi-adapter serving. The prototype
+> exporter is local and not shipped with this test case.

@@ -52,7 +52,7 @@ lora_merge: true
 # Megatron normalizes: ppo_mini_batch_size = config_value * n // dp_size.
 # Global default (16): 16 * 4 // 6 = 10 → 64 % 10 != 0 → crash.
 # Override (24):        24 * 4 // 6 = 16 → 64 % 16 = 0 → valid.
-# See NOTES.md §30.
+# Diagnosed in local notes (not shipped).
 ppo_mini_batch_size: 24
 
 # Activation recomputation (MoE-specific, reduces memory at cost of compute)

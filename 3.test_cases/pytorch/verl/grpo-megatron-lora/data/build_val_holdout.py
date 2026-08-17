@@ -9,7 +9,7 @@
 # the same size as the effect it is used to measure (+0.0661 at step 100, 2.14
 # sigma). That makes every MATH claim marginal by construction. Enlarging the
 # split is the cheapest resolution win in the project and costs ZERO GPU training
-# time. See watchdog/MEASUREMENT.md §4.
+# time.
 #
 #   MATH val 515 -> 2515 rows  =>  margin +-0.060 -> +-0.027 (2.2x)
 #   single-run 2-sigma success threshold  +0.12 -> +0.054
@@ -81,10 +81,10 @@ OUT_DIR = "/fsx/data/verl/data/mixed-code-math-valplus"
 HOLDOUT_SUFFIX = "_h2"
 
 # Legacy MATH per-source counts in mixed-code-math/val.parquet, verified by
-# direct count (watchdog/rescore.py VAL_COUNTS). numina_amc_aime is EXCLUDED from
-# the stratification: it has n=1 in the legacy split and is dropped by
-# rescore.py's --min-n 10, so adding to it would change what the legacy MATH
-# aggregate spans instead of just sharpening it.
+# direct count. numina_amc_aime is EXCLUDED from
+# the stratification: it has n=1 in the legacy split and is dropped by the
+# aggregate's --min-n 10 threshold, so adding to it would change what the legacy
+# MATH aggregate spans instead of just sharpening it.
 LEGACY_MATH_COUNTS = {
     "numina_cn_k12": 216,
     "numina_synthetic_math": 173,
@@ -297,14 +297,15 @@ def main() -> int:
 
     legacy_math = sum(counts.get(s, 0) for s in LEGACY_MATH_COUNTS)
     ext_math = legacy_math + sum(counts.get(f"{s}{HOLDOUT_SUFFIX}", 0) for s in LEGACY_MATH_COUNTS)
-    # Margins: watchdog/rescore.py is AUTHORITATIVE -- it computes the correct
-    # sample-weighted aggregate variance from the observed per-source accuracies.
-    # Reported here only as the relative improvement, which is what this script
-    # controls and which is independent of p: margin scales as 1/sqrt(n).
+    # Margins: the authoritative figure comes from the sample-weighted aggregate
+    # variance over the observed per-source accuracies (computed by a local
+    # rescoring script, not shipped). Reported here only as the relative
+    # improvement, which is what this script controls and which is independent
+    # of p: margin scales as 1/sqrt(n).
     print(f"\n      MATH legacy   n={legacy_math}")
     print(f"      MATH extended n={ext_math}   ({(ext_math / legacy_math) ** 0.5:.2f}x tighter margin)")
     print(f"      published legacy margin +-0.060  =>  extended ~ +-{0.060 * (legacy_math / ext_math) ** 0.5:.4f}")
-    print("      (exact figure from: python3 watchdog/rescore.py <log>)")
+    print("      (approximate: exact figure requires sample-weighted rescoring of a run log)")
 
     print("\n" + ("ALL GATES PASSED" if ok else "GATES FAILED"))
     return 0 if ok else 1

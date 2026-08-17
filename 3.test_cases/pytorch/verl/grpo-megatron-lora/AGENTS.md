@@ -1,6 +1,6 @@
 # AGENTS.md — grpo-megatron-lora
 
-## What This Repo Is
+## What This Test Case Is
 
 Infrastructure-as-code for GRPO training on Kubernetes. Shell scripts, a Dockerfile,
 Hydra config (YAML), and one Python entry point (`scripts/submit_training.py`) that
@@ -8,11 +8,11 @@ orchestrate the upstream [verl](https://github.com/volcengine/verl) framework wi
 Megatron-LM for distributed RL fine-tuning of LLMs. Supports LoRA and full fine-tuning.
 
 There are **no Python packages to install locally**. The training code is verl (installed
-at job submission time via `scripts/runtime_env.yaml`). The repo's only Python files are
+at job submission time via `scripts/runtime_env.yaml`). The only Python files here are
 `scripts/submit_training.py` (Hydra job submitter), `scripts/custom_reward_fn.py`
 (reward wrapper), and data prep scripts under `data/`.
 
-## Repository Layout
+## Directory Layout
 
 ```
 conf/                  # Hydra config groups (THE source of truth for training params)
@@ -52,7 +52,7 @@ lustre/                # FSx PV/PVC/StorageClass (envsubst templates, needs FSX_
 docs/                  # cluster, configuration, eval-pipeline, results, profiling,
                        #   troubleshooting, parallelism-strategies.svg
 Dockerfile             # EFA + Megatron-Bridge + blinker fix + vLLM LoRA patch
-build-push.sh          # Docker build + ECR push (at repo root, NOT setup/)
+build-push.sh          # Docker build + ECR push (at the test-case root, NOT setup/)
 env_vars.example       # Template for env_vars (infra-only: AWS, K8s, secrets, NCCL)
 ```
 
@@ -145,7 +145,7 @@ python3 scripts/compare_eval_results.py \
 ## Architecture: How Training Submits
 
 1. `submit_training.py` loads Hydra config from `conf/` (composable YAML groups)
-2. Resolves env vars via `${oc.env:RAY_ADDRESS}`, `${oc.env:HF_TOKEN}`, etc.
+2. Resolves env vars via `${oc.env:RAY_ADDRESS}`, `${oc.env:MLFLOW_TRACKING_URI}`, etc.
 3. Translates config into ~80 verl CLI override args (`actor_rollout_ref.model.path=...`)
 4. Calls `ray job submit` with `runtime_env.yaml` (which pip-installs verl + deps on nodes)
 5. Ray workers run `python3 -m verl.trainer.main_ppo` with the generated overrides
@@ -210,7 +210,8 @@ To add a new model: create `conf/model/my-model.yaml` with `name`, `hf_path`, `f
 - **Cache dirs must point to /fsx** — `submit_training.py` redirects TRITON_CACHE_DIR,
   TORCH_COMPILE_CACHE_DIR, VLLM_CACHE_ROOT to `/fsx/data/cache/` to prevent /tmp exhaustion
   on Ray nodes.
-- **`build-push.sh` is at repo root**, not `setup/`. The `setup/` directory no longer exists.
+- **`build-push.sh` is at the test-case root**, not `setup/`. The `setup/` directory no
+  longer exists.
 - **MoE models** may need per-model overrides for `lora_target_modules`, `lora_merge`,
   `lora_alpha`, `rollout_tensor_parallel_size`, `gpu_memory_utilization`, and
   `ppo_mini_batch_size`. These are resolved in `submit_training.py` via `OmegaConf.select()`
@@ -230,7 +231,7 @@ To add a new model: create `conf/model/my-model.yaml` with `name`, `hf_path`, `f
 - **Eval: code benchmarks now go through lm-evaluation-harness, not bigcode.**
   Eval code benchmarks now run via lm-evaluation-harness (`local-completions`
   against the `vllm-eval` service), NOT bigcode-harness (which had no working
-  OpenAI backend and no published image — issue #44). Use `local-completions` +
+  OpenAI backend and no published image). Use `local-completions` +
   `--apply_chat_template`; `local-chat-completions` gives `pass@1=0` on
   instruct models.
 - **Eval: `lmeval-tasks/bigcodebench_p4.yaml` is authored but NOT USABLE.** lm-eval's
@@ -296,7 +297,7 @@ ruff check --line-length 120 --select E,F,UP,B,I,G scripts/ data/ kubernetes/lme
 
 ## Detailed Documentation
 
-- `README.md` — short entry point: repo map, prerequisites, quickstart, doc index
+- `README.md` — short entry point: directory map, prerequisites, quickstart, doc index
 - `docs/cluster.md` — cluster topology, Ray, storage, networking, monitoring, and the
   full workload-setup path (sandbox, fsx-utils, data/model staging, Ray auth, MLflow)
 - `docs/configuration.md` — every Hydra config group, per-model recommended settings,

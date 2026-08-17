@@ -1,11 +1,11 @@
 # BigCodeBench (Complete split) pass@1/pass@4 variant for the Qwen3-235B GRPO benchmark.
 #
-# WHY THIS TASK EXISTS (watchdog/MEASUREMENT.md §8.1): HumanEval's n=164 is the
+# WHY THIS TASK EXISTS: HumanEval's n=164 is the
 # binding power constraint on the external code estimator — replication is a weak
 # lever (√R shortfall, measured 1.14–1.18x). BigCodeBench-Complete has n=1140, so
 # the paired SE shrinks ~√(1140/164)=2.64x (HE-class MDE ±0.0284 → ~±0.0108). It is
 # also NOT derived from the eurus/apps/taco/codecontests training mix, so unlike the
-# internal CODE split (bug #12: 74.8% train overlap) it is a generalization measure.
+# internal CODE split (74.8% train overlap) it is a generalization measure.
 #
 # COMPLETION MODE, TEMPLATE OFF — identical discipline to humaneval_p4/mbpp_p4:
 #   - doc_to_text uses complete_prompt (PEP257 docstring prompt: imports+signature),

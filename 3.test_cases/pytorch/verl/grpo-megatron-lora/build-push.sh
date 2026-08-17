@@ -6,10 +6,11 @@
 # =============================================================================
 set -euo pipefail
 
-# Load environment variables
+# Load environment variables. env_vars sits next to this script, at the test-case
+# root (see env_vars.example); it is gitignored because it holds real tokens.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "${SCRIPT_DIR}/../env_vars" ]; then
-    source "${SCRIPT_DIR}/../env_vars"
+if [ -f "${SCRIPT_DIR}/env_vars" ]; then
+    source "${SCRIPT_DIR}/env_vars"
 fi
 
 # Configuration
@@ -17,7 +18,9 @@ AWS_REGION=${AWS_REGION:-$(aws ec2 describe-availability-zones --output text --q
 ACCOUNT=${ACCOUNT:-$(aws sts get-caller-identity --query Account --output text)}
 REGISTRY=${REGISTRY:-"${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/"}
 IMAGE=${IMAGE:-"verl-grpo-lora"}
-TAG=${TAG:-"latest"}
+# Default to an immutable tag, never `latest` -- an eval must be reproducible
+# against the exact image that trained the checkpoint. Override via env_vars.
+TAG=${TAG:-"v0.8.0-vllm020.dev2"}
 
 FULL_IMAGE="${REGISTRY}${IMAGE}:${TAG}"
 

@@ -116,7 +116,7 @@ trap cleanup EXIT
 
 # --- Create remote temp directory ---
 # Mirror the repo layout so scripts' relative env_vars sourcing works:
-#   ${REMOTE_TMP_DIR}/env_vars            (repo root level -- generated, not copied)
+#   ${REMOTE_TMP_DIR}/env_vars            (test-case root level -- generated, not copied)
 #   ${REMOTE_TMP_DIR}/models/<script>     (models/ subdirectory)
 # Scripts do: SCRIPT_DIR="$(dirname ${BASH_SOURCE[0]})" -> ${REMOTE_TMP_DIR}/models
 # Then:       source "${SCRIPT_DIR}/../env_vars"        -> ${REMOTE_TMP_DIR}/env_vars

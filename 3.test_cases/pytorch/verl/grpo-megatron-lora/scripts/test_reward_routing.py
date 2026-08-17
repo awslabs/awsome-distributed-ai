@@ -143,7 +143,7 @@ check(
     crf._resolve_route("totally_unrelated_h2", MATH_GT) == ("numina_olympiads", "fallback-math"),
 )
 
-# 5. Holdout CODE labels must still be recognised as code, or bug #8's metadata
+# 5. Holdout CODE labels must still be recognised as code, or the sandbox-failure metadata
 #    path (and the sandbox semaphore) would be bypassed for them.
 print("\n5 holdout code labels stay on the sandbox path")
 for src in LEGACY_CODE:

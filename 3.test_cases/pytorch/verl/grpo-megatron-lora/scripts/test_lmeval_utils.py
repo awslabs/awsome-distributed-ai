@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-"""Offline unit tests for kubernetes/lmeval-tasks/utils.py (instrument bug #10).
+"""Offline unit tests for kubernetes/lmeval-tasks/utils.py (fenced-code extraction).
 
 Runs with NO GPU, NO network and NO vLLM. `utils.py` calls
 `evaluate.load("code_eval")` at import time, so a stub `evaluate` module is
@@ -85,7 +85,7 @@ out = he(LEGACY_BODY)
 check("1 no-fence completion output is byte-identical to legacy prompt+r", out == HE_PROMPT + LEGACY_BODY)
 check("1b legacy result parses", u._parses(out))
 
-# 2. The actual bug #10 case: prose + fence defining the entry point.
+# 2. The actual failure case: prose + fence defining the entry point.
 chat = (
     "Okay, I need to check whether any two numbers in the list are closer\n"
     "together than the given threshold. Let me compare every pair.\n\n"
@@ -214,7 +214,7 @@ check("14d multi-fence candidate executes", executes(he(multi)))
 check("14e truncated-fence candidate executes", executes(he(truncated)))
 check("14f unfenced-with-prose candidate executes", executes(he(raw)))
 # Negative control: the OLD builder on chat-mode output must FAIL, proving the
-# test would have caught bug #10 rather than passing vacuously.
+# test would have caught the extraction bug rather than passing vacuously.
 check("14g NEGATIVE CONTROL: old prompt+r on chat output fails", not executes(HE_PROMPT + chat))
 
 print()

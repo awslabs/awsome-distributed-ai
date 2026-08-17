@@ -89,14 +89,18 @@ ENV PMIX_MCA_gds=hash
 # pip-managed copy so mlflow >=3.0 can upgrade it normally (via runtime_env).
 RUN rm -rf /usr/lib/python3/dist-packages/blinker* \
            /usr/lib/python3.12/dist-packages/blinker* && \
-    pip install --no-cache-dir blinker
+    pip install --no-cache-dir "blinker>=1.9,<2"
 
 #####################
 # Install Megatron-Bridge for LoRA support (REQUIRED for Megatron LoRA)
 # Provides the `megatron.bridge` namespace used by verl when vanilla_mbridge=False.
-# --no-deps: megatron-core 0.15.0 and TransformerEngine 2.10 are already in the
-# base image, so we skip the heavy transitive deps (nv-grouped-gemm, nvidia-modelopt,
-# mamba-ssm, etc.) that would require CUDA extensions to build.
+# --no-deps: megatron-core 0.16.1 and TransformerEngine v2.15 are already in the
+# base image (see verl v0.8.0 docker/Dockerfile.stable.vllm: MCORE_VERSION=core_v0.16.1,
+# TRANSFORMER_ENGINE_VERSION=v2.15), so we skip the heavy transitive deps
+# (nv-grouped-gemm, nvidia-modelopt, mamba-ssm, etc.) that would require CUDA
+# extensions to build. NOTE: runtime_env.yaml then upgrades megatron-core to
+# 0.18.0, which is what actually runs -- Megatron-Bridge v0.5.0 needs
+# megatron.core._rank_utils.safe_get_world_size (mcore >= 0.18.0).
 # NOTE: Megatron-Bridge is NOT bundled in verl main — still an external dependency.
 # NOTE: Megatron-Bridge stays in the Docker image (not runtime_env) because
 # runtime_env pip does not support --no-deps.
@@ -109,8 +113,11 @@ RUN pip install --no-cache-dir --no-deps \
 # `from modelopt.torch.quantization.utils import is_quantized`) and modelopt
 # imports pulp. Installed --no-deps: quantization is unused in our path, we
 # only need the modules importable. scipy (also imported) comes from
-# runtime_env.yaml.
-RUN pip install --no-cache-dir --no-deps nvidia-modelopt pulp
+# runtime_env.yaml. Bounded pins keep the build reproducible; pulp is held below
+# 4.0 because only 4.0.0a* pre-releases exist for that major.
+RUN pip install --no-cache-dir --no-deps \
+    "nvidia-modelopt>=0.45.0,<0.46" \
+    "pulp>=3.3.2,<4"
 
 # Pin Ray to match the KubeRay cluster head (rayproject/ray:2.53.0-py312).
 # The vllm020.dev2 base image ships Ray 2.55.1, but Ray requires matching
@@ -121,7 +128,7 @@ RUN pip install --no-cache-dir "ray[default]==2.53.0"
 
 # Blackwell B200 (SM100) vLLM LoRA PDL/GDC fix — vllm-project/vllm#30872.
 # Triton's LLVM pipeliner cannot handle gdc_wait() inline ASM on SM100.
-# vLLM 0.20.2 includes PR #32836, which adds this env-var switch to force the
+# vLLM 0.20.2 includes vllm-project/vllm#32836, which adds this env-var switch to force the
 # non-PDL kernel path. This replaces the old sed patch of
 # vllm/lora/ops/triton_ops/utils.py that was required on vLLM 0.12.0.
 ENV VLLM_LORA_DISABLE_PDL=1

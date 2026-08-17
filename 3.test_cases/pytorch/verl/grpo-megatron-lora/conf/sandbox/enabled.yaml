@@ -21,7 +21,7 @@ sandbox:
   # sandbox OOM was a no-op; unbounded concurrency OOM-killed all 5 pods 24-30x on
   # 2026-08-04 during a baseline measurement.
   #
-  # 2026-08-06: THE SEMAPHORE BOUNDS REQUESTS, NOT EXECUTIONS. raysubmit_fmtziTNTWV433sz1
+  # 2026-08-06: THE SEMAPHORE BOUNDS REQUESTS, NOT EXECUTIONS. One run
   # ran at 10 for its whole 9.9h life and all 5 pods were STILL OOMKilled 6-7x each (466
   # "Max retries"), even though the documented arithmetic
   # (8 workers x 10 = 80 in flight -> 16/pod x memory_limit_mb=1024 = 16 GiB) predicts only
@@ -33,7 +33,7 @@ sandbox:
   # error density 5.66/1k exceeded the baseline-validation window's 4.14/1k) and NOT a leak
   # (all 5 pods died within 36s of each other = coordinated load spike).
   # Lowered to 5 on 2026-08-06. RESULT: OOM is NOT fixed -- all 5 pods still OOMKilled in a
-  # synchronized 13-second burst (raysubmit_RrFbeS5J9266nr9B, 01:38:56-01:39:09Z, 3 restarts
+  # synchronized 13-second burst (01:38:56-01:39:09Z, 3 restarts
   # each), at a HIGHER restart rate than semaphore 10 (~1.3 vs ~0.67 /pod/h). What it DID buy
   # is a 5.0x drop in sandbox error density (2.77 vs 13.89 per 1k log lines, identical regex),
   # because fewer in-flight requests are destroyed when a pod dies. That is exactly what the

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT-0
 """Merge a verl v0.8.0 native PEFT adapter into a standalone HuggingFace model.
 
-Since verl v0.8.0 (PR #45, issue #41), every Megatron+LoRA checkpoint save writes
+Since verl v0.8.0, every Megatron+LoRA checkpoint save writes
 a standard HF PEFT adapter to:
 
     <ckpt>/global_step_<N>/actor/huggingface/adapter/

@@ -4,7 +4,7 @@ The Hydra config system, every config group, per-model recommended settings, and
 parallelism / LoRA / memory / rollout / NCCL tuning guides.
 
 **Training params live in `conf/`, not `env_vars`.** `env_vars` holds infrastructure only
-(AWS, K8s, secrets, NCCL). This is the most common source of confusion in this repo.
+(AWS, K8s, secrets, NCCL). This is the most common source of confusion in this test case.
 
 Start with [Config Groups](#config-groups); jump to [Recommended Configurations by Model
 Size](#recommended-configurations-by-model-size) for a known-good starting point.
@@ -14,8 +14,10 @@ groups. The entry point is `scripts/submit_training.py`, which loads `conf/confi
 as the root config and merges in config groups from subdirectories under `conf/`.
 
 Infrastructure settings (AWS, Docker, K8s, secrets, Ray address, NCCL) remain in
-`env_vars` -- see `env_vars.example`. Hydra reads `RAY_ADDRESS`, `HF_TOKEN`, and
-`MLFLOW_TRACKING_URI` from the environment via `${oc.env:...}` resolvers. All training
+`env_vars` -- see `env_vars.example`. Hydra reads `RAY_ADDRESS` and
+`MLFLOW_TRACKING_URI` from the environment via `${oc.env:...}` resolvers. `HF_TOKEN` is
+read directly from the shell environment by the data/model staging scripts and pod
+manifests, not through Hydra. All training
 parameters (model, parallelism, LoRA, hyperparameters, offloading, sandbox, tracking)
 are managed exclusively through the config files below.
 
@@ -386,19 +388,19 @@ and only optimizer offload is needed.
 > [verl#5479](https://github.com/volcengine/verl/issues/5479).~~
 >
 > **CORRECTED 2026-08-07 — expert-layer LoRA WORKS on this stack. Both documented
-> blockers were wrong.** Run `raysubmit_RrFbeS5J9266nr9B`
+> blockers were wrong.** An expert-FFN run
 > (`target_modules=linear_qkv,linear_proj,linear_fc1,linear_fc2`, r=128/alpha=256,
 > `lora_merge=true`, verl v0.8.0 + Megatron-Bridge v0.5.0, EP=4, `moe_grouped_gemm=True`):
 >
 > | claimed blocker | source | outcome |
 > |---|---|---|
 > | vLLM weight-sync naming mismatch -> runtime errors (verl#5479) | this note | **Does not reproduce.** 0 Tracebacks, 0 KeyError/naming/size-mismatch hits across init and 7 steps. Rollouts ran normally. |
-> | ~1.68B trainable params/GPU -> ~20 GB Adam state -> OOM | `watchdog/FOLLOWON.md` | **Wrong by 33x.** Measured `Adapter parameters: 76,185,600` (0.39%). No OOM. |
+> | ~1.68B trainable params/GPU -> ~20 GB Adam state -> OOM | local follow-on notes | **Wrong by 33x.** Measured `Adapter parameters: 76,185,600` (0.39%). No OOM. |
 >
-> **Why #5479 does not bite here: `lora_merge: true`.** verl merges the adapter into the
+> **Why verl#5479 does not bite here: `lora_merge: true`.** verl merges the adapter into the
 > base weights *before* syncing to vLLM, so what crosses the boundary is merged model
 > weights, not adapter tensors under Megatron-fused names. The naming mismatch has nothing
-> to bite on. (If you ever set `lora_merge: false` for an MoE model, expect #5479 to return.)
+> to bite on. (If you ever set `lora_merge: false` for an MoE model, expect verl#5479 to return.)
 >
 > **Why the OOM estimate was 33x off:** Megatron-Bridge `peft/lora.py` sets
 > `share_expert_adapters: bool = True` by default — one adapter shared across all local

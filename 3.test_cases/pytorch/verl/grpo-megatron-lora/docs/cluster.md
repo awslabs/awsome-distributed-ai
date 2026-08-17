@@ -16,7 +16,7 @@ works. Cluster name, account and region come from `env_vars` (`EKS_CLUSTER_NAME`
 
 The underlying infrastructure (VPC, EKS, Karpenter, FSx, the KubeRay operator and the MLflow
 tracking server) was provisioned separately with Terraform/Terragrunt + ArgoCD; that IaC is
-outside this repo.
+outside this test case.
 
 ## Cluster Overview
 
@@ -367,8 +367,8 @@ export RAY_HEADERS='{"Cookie": "<session-cookie>"}'
 ## SageMaker Managed MLflow
 
 MLflow tracks training metrics (loss, reward, KL divergence, throughput) and displays
-them in the MLflow dashboard. The tracking server is provisioned outside this repo (the
-reference setup used Terraform); this repo only reads `MLFLOW_TRACKING_ARN`. MLflow is
+them in the MLflow dashboard. The tracking server is provisioned outside this test case
+(the reference setup used Terraform); this test case only reads `MLFLOW_TRACKING_ARN`. MLflow is
 optional -- use `tracking=console` to skip it entirely.
 
 | Component | Value |

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-"""Offline tests for the merge_adapter provenance gate (instrument bug #11).
+"""Offline tests for the merge_adapter provenance gate (adapter-rank mismatch).
 
 No GPU, no Ray, no /fsx. merge_adapter.py imports only stdlib at module level,
 so it can be imported directly.
@@ -60,7 +60,7 @@ print("=" * 78)
 
 # THE CASE THAT MATTERS: the real default-tree adapter against our expectation.
 exited, msg = gate(OLD_EXPERIMENT, 128, 256)
-check("1 r=32 adapter rejected when r=128 expected (the bug #11 scenario)", exited)
+check("1 r=32 adapter rejected when r=128 expected (the rank-mismatch scenario)", exited)
 check("1b failure names the wrong-tree cause", "mixed-code-math-v2" in msg, msg[:200])
 check("1c failure reports both values", "r=128" in msg and "r=32" in msg, msg[:200])
 

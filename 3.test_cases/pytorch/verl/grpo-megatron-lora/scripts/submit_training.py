@@ -295,7 +295,7 @@ def _build_megatron_overrides(cfg: DictConfig) -> list[str]:
                 f"actor_rollout_ref.model.lora.target_modules=[{lora_targets}]",
                 f"actor_rollout_ref.actor.megatron.use_mbridge={cfg.backend.use_mbridge}",
                 f"actor_rollout_ref.actor.megatron.vanilla_mbridge={cfg.backend.vanilla_mbridge}",
-                # Native HF PEFT adapter export at every checkpoint save (issue #41).
+                # Native HF PEFT adapter export at every checkpoint save.
                 # With 'hf_model' in save_contents and peft_cls set, verl v0.8.0's
                 # MegatronCheckpointManager calls bridge.save_hf_adapter() to write a
                 # standard PEFT adapter to <ckpt>/actor/huggingface/adapter/. This is
@@ -462,7 +462,7 @@ def build_verl_overrides(cfg: DictConfig) -> list[str]:
 
     # Cache directories — redirect from /tmp to /fsx to prevent disk exhaustion.
     # The Ray pip virtualenv + Triton/torch compile caches filled /tmp (100 GB)
-    # on step 3 of the first FSDP run, causing an NCCL timeout.  See NOTES.md §24.
+    # on step 3 of the first FSDP run, causing an NCCL timeout (local notes).
     # NOTE: These MUST go through +ray_kwargs.ray_init.runtime_env.env_vars, not
     # runtime_env.yaml env_vars, because verl's inner ray.init() builds its own
     # runtime_env dict that overwrites the outer job-level env vars.

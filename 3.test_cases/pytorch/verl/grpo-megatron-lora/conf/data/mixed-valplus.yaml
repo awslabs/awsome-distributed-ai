@@ -2,7 +2,7 @@
 # Mixed code/math with an ENLARGED, CLEAN math validation split.
 #
 # TRAIN IS BYTE-IDENTICAL TO THE CONTROL. `train_file` points at the same
-# mixed-code-math/train.parquet that raysubmit_D5itzNTe4SyxeDsq trained on. Only
+# mixed-code-math/train.parquet that the control run trained on. Only
 # the VAL file changes, so a run using this group differs from the control in
 # whatever training parameter is overridden on the CLI and in nothing else. This
 # is the group to use for single-variable experiments.
@@ -20,7 +20,7 @@
 # passed: schema identical, 12117 rows, every legacy per-source count unchanged,
 # zero prompt-hash overlap with the control's train or val, holdout rows unique.
 #
-# AND WHY MATH IS NOW THE PRIMARY READOUT (instrument bug #12)
+# AND WHY MATH IS NOW THE PRIMARY READOUT (CODE train/test overlap)
 # Prompt-hash comparison of the existing split against the training set found:
 #
 #     apps           4730/5067   93.3% of val rows also appear in TRAIN
