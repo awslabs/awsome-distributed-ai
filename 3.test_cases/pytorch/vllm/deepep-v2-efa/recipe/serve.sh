@@ -98,7 +98,7 @@ if [ "$SERVE_ENFORCE_EAGER" != "1" ]; then
   if [ "${SERVE_I_UNDERSTAND_NONEAGER_CRASHES:-0}" != "1" ]; then
     echo "REFUSING SERVE_ENFORCE_EAGER=0: default compilation is KNOWN-CRASH at vLLM"
     echo "e2f993dc4 (Triton IMA, deepep_v2.py:347 combine during profile_run — bounded"
-    echo "repro on B200 EP16; fix filed upstream as vLLM PR <PENDING-PR> — bump the pin once merged)."
+    echo "repro on B200 EP16; fix filed upstream as vLLM PR #52632 — bump the pin once merged)."
     echo "Set SERVE_I_UNDERSTAND_NONEAGER_CRASHES=1 to try anyway"
     echo "(useful ONLY for reproducing/triaging the crash), or keep eager (the default)."
     exit 4

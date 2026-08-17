@@ -33,7 +33,7 @@ non-obvious integration fixes, not config:
 | Mode | Status | How |
 |---|---|---|
 | `--enforce-eager` | **Serves, zero extra patches** | the default this sample ships |
-| default compilation (CUDA graphs) | **Pending one upstream fix — no patch shipped here** | vLLM [#46404](https://github.com/vllm-project/vllm/pull/46404) + [#46432](https://github.com/vllm-project/vllm/pull/46432) are merged; the remaining piece is the empty-`ExpertTokensMetadata` guard, now filed upstream (vLLM PR <PENDING-PR>). Once it merges, bump the vLLM pin past it and serve without `--enforce-eager` — no build-time patch step. |
+| default compilation (CUDA graphs) | **Pending one upstream fix — no patch shipped here** | vLLM [#46404](https://github.com/vllm-project/vllm/pull/46404) + [#46432](https://github.com/vllm-project/vllm/pull/46432) are merged; the remaining piece is the empty-`ExpertTokensMetadata` guard, now filed upstream ([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)). Once it merges, bump the vLLM pin past it and serve without `--enforce-eager` — no build-time patch step. |
 
 At stock `e2f993dc4` (the first commit with the `deepep_v2` backend), default compilation crashes
 deterministically ~48 s into startup in `profile_run` (`deepep_v2.py` combine). `--enforce-eager` avoids
@@ -87,7 +87,7 @@ SERVE_DP=16 bash recipe/serve.sh leader <leader-ip>       # on node 0
 SERVE_DP=16 bash recipe/serve.sh worker <leader-ip> 8     # on node 1
 ```
 Default compilation (CUDA graphs) is not enabled in this sample until the upstream guard
-(vLLM PR <PENDING-PR>) merges; then bump the vLLM pin past it and drop `--enforce-eager` — no patch step.
+([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)) merges; then bump the vLLM pin past it and drop `--enforce-eager` — no patch step.
 Kubernetes: `kubectl apply -f kubernetes/` (2-node StatefulSet + headless service; the proxy-Gin env
 contract + EFA device requests are set there).
 
@@ -102,7 +102,7 @@ See `benchmarks/README.md` for the measured eager and non-eager tables + environ
 - The `benchmarks/` numbers are an **at-scale throughput + relative-latency** datapoint (fixed 128-token
   greedy decode, single sweep per mode), **not** a tuned per-token-latency (TTFT) baseline.
 - Default-compilation (non-eager) serving is deliberately **not shipped** here: it requires the
-  empty-`ExpertTokensMetadata` guard now filed upstream (vLLM PR <PENDING-PR>). This sample carries **no
+  empty-`ExpertTokensMetadata` guard now filed upstream ([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)). This sample carries **no
   build-time patches** — when the guard merges, a vLLM pin bump enables non-eager with zero recipe changes.
   The non-eager numbers in `benchmarks/` are historical measurements taken with that guard applied.
 - Only a **Kubernetes** launcher is shipped and exercised (`kubernetes/`). No Slurm/Pyxis `.sbatch` is
