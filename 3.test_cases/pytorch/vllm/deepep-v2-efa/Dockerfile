@@ -42,7 +42,7 @@ RUN pip3 install --no-cache-dir --index-url "${TORCH_INDEX}" "${TORCH_SPEC}" \
 # resolve the pip nccl onto the linker path (dynamic — never hardcode python3.NN) so it wins over any system libnccl
 RUN NCCL_ROOT=$(python3 -c "import nvidia.nccl, pathlib; print(pathlib.Path(nvidia.nccl.__path__[0]))") \
     && echo "$NCCL_ROOT/lib" > /etc/ld.so.conf.d/00-pip-nccl.conf && ldconfig \
-    && ldconfig -p | grep -q "libnccl.so.2 => $NCCL_ROOT/lib"   # assert 2.30.4 wins (fail-loud; the ncclTeamWorld null-deref guard)
+    && ldconfig -p | grep "libnccl.so.2 " | head -1 | grep -q "$NCCL_ROOT/lib"   # assert the pinned NCCL resolves FIRST (2.28.x lacks the GIN/LSA symbols the plugin needs)
 
 # ---- Layer 4: aws-ofi-nccl GIN + DeepEP-V2 source (in-tree script, COPY'd not curled) ----
 COPY setup_deepep_v2_efa.sh /opt/setup_deepep_v2_efa.sh
