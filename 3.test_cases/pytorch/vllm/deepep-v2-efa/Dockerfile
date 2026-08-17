@@ -6,7 +6,7 @@
 # curled) so it is in-tree + reviewable. The DeepEP _C.so is built IN-POD on first boot
 # (recipe/build_deepep.sh) — it needs a live CUDA context the build sandbox lacks.
 #
-#   DOCKER_BUILDKIT=1 docker build --build-arg AWS_OFI_NCCL_PR_SHA=<pr1354-head> -t vllm-deepep-v2-efa:latest .
+#   DOCKER_BUILDKIT=1 docker build -t vllm-deepep-v2-efa:latest .
 #
 ARG CUDA_VER=13.0.0                                   # cu13 to match the torch 2.11+cu130 ABI DeepEP links
 FROM nvcr.io/nvidia/cuda:${CUDA_VER}-devel-ubuntu22.04
@@ -47,8 +47,8 @@ RUN NCCL_ROOT=$(python3 -c "import nvidia.nccl, pathlib; print(pathlib.Path(nvid
 # ---- Layer 4: aws-ofi-nccl GIN + DeepEP-V2 source (in-tree script, COPY'd not curled) ----
 COPY setup_deepep_v2_efa.sh /opt/setup_deepep_v2_efa.sh
 ARG AWS_OFI_NCCL_SHA=9c44d34476f90ddbf4a12d0ac4fc412d46bd8ab4
-ARG AWS_OFI_NCCL_PR=1354
-ARG AWS_OFI_NCCL_PR_SHA=""                             # pass the immutable head of PR#1354 at build
+ARG AWS_OFI_NCCL_PR=1351
+ARG AWS_OFI_NCCL_PR_SHA=c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b  # IMMUTABLE PR#1351 head (FORCED_PCIE param; a bare refs/pull/N/head is a moving ref)
 ARG DEEPEP_SHA=b306af06afd412c88e51e71802951606e40b7358
 ARG DEEPEP_PR=612
 ARG DEEPEP_PR_SHA=28d1f7fb173f728be51632ce0026fea23243e350

@@ -13,8 +13,8 @@ set -euo pipefail
 # ---- pins (every one justified; no 'latest'; a bare refs/pull/N/head is a MOVING ref) ----
 AWS_OFI_NCCL_REPO="${AWS_OFI_NCCL_REPO:-https://github.com/aws/aws-ofi-nccl.git}"
 AWS_OFI_NCCL_SHA="${AWS_OFI_NCCL_SHA:-9c44d34476f90ddbf4a12d0ac4fc412d46bd8ab4}"  # GIN plugin, gdrdrv-2.4 v1-fallback baked
-AWS_OFI_NCCL_PR="${AWS_OFI_NCCL_PR:-1354}"                                       # OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY param
-AWS_OFI_NCCL_PR_SHA="${AWS_OFI_NCCL_PR_SHA:-}"                                   # immutable head of PR#1354 (set at build)
+AWS_OFI_NCCL_PR="${AWS_OFI_NCCL_PR:-1351}"                                       # OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY param
+AWS_OFI_NCCL_PR_SHA="${AWS_OFI_NCCL_PR_SHA:-c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b}"  # IMMUTABLE PR#1351 head (a bare refs/pull/N/head is a moving ref)
 DEEPEP_REPO="${DEEPEP_REPO:-https://github.com/deepseek-ai/DeepEP.git}"
 DEEPEP_SHA="${DEEPEP_SHA:-b306af06afd412c88e51e71802951606e40b7358}"            # measured substrate base
 DEEPEP_PR="${DEEPEP_PR:-612}"                                                    # EFA auto-QP cap

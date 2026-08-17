@@ -109,7 +109,7 @@ spec:
         - { name: NCCL_GIN_TYPE,             value: "2" }     # 2 = CPU-proxy GIN (the EFA-viable path)
         - { name: NCCL_GIN_ENABLE,           value: "1" }
         - { name: OFI_NCCL_GIN_GDAKI,        value: "0" }     # GPU-initiated: not the shipped path on EFA
-        - { name: OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY, value: "1" }  # aws-ofi-nccl PR#1354 (baked in setup_deepep_v2_efa.sh)
+        - { name: OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY, value: "1" }  # aws-ofi-nccl PR#1351 (baked in setup_deepep_v2_efa.sh)
         - { name: EP_REUSE_NCCL_COMM,        value: "0" }     # DeepEP own-comm; never borrow torch lazy comm (2026-08-14 fix)
         - { name: OFI_NCCL_GIN_MAX_REQUESTS, value: "512" }
         - { name: NCCL_CUMEM_ENABLE,         value: "1" }

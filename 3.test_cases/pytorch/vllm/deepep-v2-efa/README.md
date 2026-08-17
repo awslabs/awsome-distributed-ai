@@ -24,7 +24,7 @@ non-obvious integration fixes, not config:
    create-own-comm path. (Env, set in `recipe/serve.sh` and `kubernetes/`.)
 2. **The gdrcopy forced-PCIe capability** for the GIN plugin on gdrdrv-2.4 hosts, via
    `OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1` — the parameterized fix from
-   [aws/aws-ofi-nccl#1354](https://github.com/aws/aws-ofi-nccl/pull/1354), cherry-picked at a pinned SHA
+   [aws/aws-ofi-nccl#1351](https://github.com/aws/aws-ofi-nccl/pull/1351), cherry-picked at a pinned SHA
    in `setup_deepep_v2_efa.sh` (no local patch file).
 3. **DeepEP-V2 source** = `b306af06` + [PR#612](https://github.com/deepseek-ai/DeepEP/pull/612) (EFA
    auto-QP cap), pinned to the PR's **immutable head SHA** (a bare `refs/pull/N/head` is a moving ref).
@@ -52,7 +52,7 @@ cp setup/env_vars.example setup/env_vars && $EDITOR setup/env_vars   # set REGIS
 bash setup/build-push.sh
 ```
 The image is NGC-from-scratch (`FROM nvcr.io/nvidia/cuda:...`). `setup_deepep_v2_efa.sh` builds
-aws-ofi-nccl (GIN + the #1354 param) and stages DeepEP-V2 source; the `_C.so` is compiled in-pod on
+aws-ofi-nccl (GIN + the #1351 param) and stages DeepEP-V2 source; the `_C.so` is compiled in-pod on
 first boot (needs a live CUDA context) by `recipe/`-invoked `build_deepep.sh`.
 
 > **Fast path (no clone):** the same image is also buildable from a single self-fetching Dockerfile —

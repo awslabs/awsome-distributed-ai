@@ -12,7 +12,7 @@ tok/s + per-request latency percentiles. Raw JSONL lands in `raw/` (gitignored).
 | Transport | DeepEP-V2 `ElasticBuffer`, NCCL-GIN CPU-proxy (`NCCL_GIN_TYPE=2`, `OFI_NCCL_GIN_GDAKI=0`), `efa-direct` |
 | Model | `Qwen/Qwen3-30B-A3B-FP8`, DP16/EP16 (`--enable-expert-parallel --all2all-backend deepep_v2`) |
 | vLLM | `0.22.1rc1.dev283+ge2f993dc4` (first commit with the `deepep_v2` backend, [PR#41183](https://github.com/vllm-project/vllm/pull/41183)) |
-| Stack | torch 2.11.0+cu130, nvidia-nccl-cu13 2.30.4, DeepEP `b306af06`+PR#612, aws-ofi-nccl GIN `9c44d34`+#1354 |
+| Stack | torch 2.11.0+cu130, nvidia-nccl-cu13 2.30.4, DeepEP `b306af06`+PR#612, aws-ofi-nccl GIN `9c44d34`+#1351 |
 | Serve fingerprint | `vllm-0.22.1rc1.dev283+ge2f993dc4-dp16-ep-1f3ed125` |
 | Probe | `recipe/benchmark.sh` (stdlib urllib+threads, 127.0.0.1 loopback), `max_tokens=128`, `temperature=0.0` (greedy), concurrency 1/8/16/32/64 |
 | Date | 2026-08-14 |

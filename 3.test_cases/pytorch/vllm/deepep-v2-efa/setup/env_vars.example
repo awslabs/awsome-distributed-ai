@@ -4,9 +4,9 @@ export REGISTRY="123456789012.dkr.ecr.us-east-2.amazonaws.com"   # YOUR ECR — 
 export IMAGE_NAME="vllm-deepep-v2-efa"
 export IMAGE_TAG="latest"
 export AWS_REGION="us-east-2"
-# Immutable head SHA of aws-ofi-nccl PR#1354 (the OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY param). Look it up:
-#   gh api repos/aws/aws-ofi-nccl/pulls/1354 --jq .head.sha
-export AWS_OFI_NCCL_PR_SHA=""
+# aws-ofi-nccl PR#1351 (OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY param) is pinned at its immutable
+# head SHA in the Dockerfile; override here only to test a newer head:
+# export AWS_OFI_NCCL_PR_SHA=""
 # Model: any MoE whose n_routed_experts % (data-parallel size) == 0. Default is public (no HF token).
 export SERVE_MODEL="Qwen/Qwen3-30B-A3B-FP8"
 export SERVE_DP="16"        # total data-parallel = EP size
