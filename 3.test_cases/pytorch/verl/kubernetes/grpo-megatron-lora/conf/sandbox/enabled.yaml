@@ -3,7 +3,11 @@
 # Deployed as a K8s service (see kubernetes/sandbox-fusion.yaml)
 sandbox:
   enabled: true
-  url: http://sandbox-fusion.default.svc.cluster.local:8080/run_code
+  # The namespace segment must track KUBE_NAMESPACE, which is what
+  # kubernetes/sandbox-fusion.yaml is deployed into. Hardcoding `default` here
+  # means every reward call resolves a name with no Service behind it as soon as
+  # KUBE_NAMESPACE is anything else -- which is the whole reason the variable exists.
+  url: http://sandbox-fusion.${oc.env:KUBE_NAMESPACE,default}.svc.cluster.local:8080/run_code
 
   # Caps the memory available to a single candidate program. It does NOT bound
   # how many programs run at once: one scoring request fans out to ~39 test-case

@@ -84,7 +84,18 @@ training:
   # ~1.19x KV margin -- lower max_num_seqs first if you need it.
   max_response_length: 24576
   n_responses_per_prompt: 4
-  ppo_mini_batch_size: 16
+  # Both backends re-derive this per group, and an indivisible combination fails
+  # minutes into step 3 rather than at submit. scripts/submit_training.py now
+  # asserts the arithmetic up front (_validate_batch_divisibility).
+  #
+  # 24 is the value that satisfies every shipped shape at 48 GPUs:
+  #   FSDP    (mini*n)//world = 24*4//48 = 2, and 2 % micro(2) == 0
+  #   Megatron TP4*PP4 (dp=3) 24*4//3 = 32, and per_dp 96*4//3 = 128, 128 % 32 == 0
+  # At 16 the FSDP path yielded 64//48 = 1, which is not divisible by micro=2 -- that
+  # is why a literal 24 used to be hardcoded in the FSDP branch, silently overriding
+  # this key. It also left qwen25-72b and qwen3-coder-next on Megatron invalid
+  # (eff=21, per_dp=128) even though both are documented as supported.
+  ppo_mini_batch_size: 24
   ppo_micro_batch_size_per_gpu: 2
   total_epochs: 10
   data_truncation: error   # error | left | right | middle

@@ -78,18 +78,23 @@ namespace (e.g., `default`) but the service is deployed in another (e.g., `mvinc
 which namespace your service is in:
 
 ```bash
-kubectl get svc sandbox-fusion -o jsonpath='{.metadata.namespace}'
+kubectl get svc sandbox-fusion -n "${KUBE_NAMESPACE}" -o jsonpath='{.metadata.namespace}'
 ```
 
-Ensure `KUBE_NAMESPACE` in `env_vars` matches your actual namespace. The sandbox URL
-in `conf/sandbox/enabled.yaml` uses the namespace in the FQDN:
+Both the Deployment/Service and the reward URL are driven by `KUBE_NAMESPACE`, so they
+cannot disagree: `kubernetes/sandbox-fusion.yaml` sets `namespace: ${KUBE_NAMESPACE}` and
+`conf/sandbox/enabled.yaml` interpolates the same variable into the FQDN:
 
 ```yaml
 # conf/sandbox/enabled.yaml
 sandbox:
-  url: http://sandbox-fusion.default.svc.cluster.local:8080/run_code
-  #                         ^^^^^^^ must match your KUBE_NAMESPACE
+  url: http://sandbox-fusion.${oc.env:KUBE_NAMESPACE,default}.svc.cluster.local:8080/run_code
 ```
+
+What still has to be true is that `KUBE_NAMESPACE` is exported in the shell that runs
+`envsubst` **and** in the shell that runs `submit_training.py`. If you deployed with one
+value and submit with another, the preflight fails against a name with no Service behind
+it. `source env_vars` in both.
 
 **Sandbox Fusion pod is `Pending`** (not scheduling):
 

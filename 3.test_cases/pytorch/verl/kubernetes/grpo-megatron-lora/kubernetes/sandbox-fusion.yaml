@@ -4,14 +4,20 @@
 # reward_model.sandbox_fusion.url set in the training scripts.
 #
 # Deploy: source env_vars && envsubst < kubernetes/sandbox-fusion.yaml | kubectl apply -f -
-# Verify: kubectl rollout status deploy/sandbox-fusion
+# Verify: kubectl rollout status -n "${KUBE_NAMESPACE}" deploy/sandbox-fusion
 # Test:   kubectl exec <any-ray-pod> -c ray-head -- wget -qO- --header='Content-Type: application/json' \
-#           --post-data='{"code":"print(42)","language":"python"}' http://sandbox-fusion.default.svc.cluster.local:8080/run_code
+#           --post-data='{"code":"print(42)","language":"python"}' \
+#           "http://sandbox-fusion.${KUBE_NAMESPACE}.svc.cluster.local:8080/run_code"
 # =============================================================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sandbox-fusion
+  # Every other manifest here is namespaced, and conf/sandbox/enabled.yaml builds
+  # the reward URL from KUBE_NAMESPACE. Without this the Deployment lands in
+  # whatever namespace the current kubectl context points at, and the reward calls
+  # resolve a name with no Service behind it.
+  namespace: ${KUBE_NAMESPACE}
   labels:
     app: sandbox-fusion
     project: verl
@@ -63,6 +69,14 @@ spec:
       # CPU node, and a required term would make extra replicas unschedulable.
       # During the 2026-07-10 235B run, both replicas shared one node with the
       # Ray head and crashed together under scoring load (the co-scheduling failure pattern).
+      #
+      # KubeRay labels Ray pods `ray.io/node-type`, with the prefix. An unprefixed
+      # `ray-node-type` selector matches nothing, so this term scored zero on every node
+      # and the anti-affinity added in response to that crash was inert. Verify against
+      # your own cluster with:
+      #   kubectl get pod <ray-head-pod> -n "$KUBE_NAMESPACE" --show-labels
+      # Left as `preferred` so a small cluster can still schedule; see docs/cluster.md
+      # for the isolation this does and does not buy a privileged executor.
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -70,7 +84,7 @@ spec:
               podAffinityTerm:
                 labelSelector:
                   matchLabels:
-                    ray-node-type: head
+                    ray.io/node-type: head
                 topologyKey: kubernetes.io/hostname
             - weight: 90
               podAffinityTerm:
@@ -142,6 +156,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: sandbox-fusion
+  namespace: ${KUBE_NAMESPACE}
   labels:
     app: sandbox-fusion
     project: verl

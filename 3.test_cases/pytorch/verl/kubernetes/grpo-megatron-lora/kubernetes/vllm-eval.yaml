@@ -75,7 +75,9 @@ spec:
               podAffinityTerm:
                 labelSelector:
                   matchExpressions:
-                    - key: ray-node-type
+                    # Prefixed form -- KubeRay labels Ray pods `ray.io/node-type`.
+                    # An unprefixed key matches nothing and the term scores zero.
+                    - key: ray.io/node-type
                       operator: In
                       values: ["worker", "head"]
                 topologyKey: kubernetes.io/hostname

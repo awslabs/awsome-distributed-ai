@@ -47,12 +47,12 @@ lora_target_modules: linear_qkv,linear_proj
 # Megatron-Bridge merges LoRA adapters into base weights before export_weights().
 lora_merge: true
 
-# PPO mini-batch size override for DP=6 divisibility.
+# PPO mini-batch size, stated explicitly for DP=6 divisibility.
 # With TP=2, PP=2, CP=2 on 48 GPUs: dp_world_size = 48 / (2*2*2) = 6.
-# Megatron normalizes: ppo_mini_batch_size = config_value * n // dp_size.
-# Global default (16): 16 * 4 // 6 = 10 → 64 % 10 != 0 → crash.
-# Override (24):        24 * 4 // 6 = 16 → 64 % 16 = 0 → valid.
-# Diagnosed in local notes (not shipped).
+# Megatron normalizes: effective = config_value * n // dp_size, and the per-DP batch
+# must be divisible by it: 24 * 4 // 6 = 16, per_dp = 96 * 4 // 6 = 64, 64 % 16 = 0.
+# Matches the global default; kept because this model's CP=2 makes dp unusual and the
+# arithmetic is worth having next to the parallelism it depends on.
 ppo_mini_batch_size: 24
 
 # Activation recomputation (MoE-specific, reduces memory at cost of compute)

@@ -74,11 +74,9 @@ def _build_shared_overrides(cfg: DictConfig) -> list[str]:
         f"actor_rollout_ref.actor.optim.lr_warmup_steps={t.lr_warmup_steps}",
         f"actor_rollout_ref.actor.optim.weight_decay={t.weight_decay}",
         # Actor PPO
-        # Per-model ppo_mini_batch_size override — MoE models with non-standard
-        # DP sizes need a value that satisfies the Megatron normalization:
-        #   effective = config_value * rollout_n // dp_world_size
-        #   per_dp_batch % effective == 0
-        # Falls back to the training config default when model doesn't override.
+        # Emitted exactly once, here, for BOTH backends. Per-model overrides win over
+        # training.ppo_mini_batch_size; _validate_batch_divisibility below checks the
+        # resulting value against the backend's normalization before submit.
         f"actor_rollout_ref.actor.ppo_mini_batch_size="
         f"{OmegaConf.select(cfg.model, 'ppo_mini_batch_size', default=t.ppo_mini_batch_size)}",
         f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu={t.ppo_micro_batch_size_per_gpu}",
@@ -154,11 +152,6 @@ def _build_fsdp_overrides(cfg: DictConfig) -> list[str]:
         # FSDP model flags
         "actor_rollout_ref.model.use_remove_padding=True",
         "actor_rollout_ref.model.enable_gradient_checkpointing=True",
-        # FSDP normalizes ppo_mini_batch_size per-GPU as:
-        #   (mini_batch * rollout.n) // world_size
-        # With 48 GPUs and n=4, the shared default (16) yields 64//48=1,
-        # which isn't divisible by micro_batch=2.  Use 24 → 96//48=2.
-        "actor_rollout_ref.actor.ppo_mini_batch_size=24",
         # FSDP sharding config
         f"actor_rollout_ref.actor.fsdp_config.param_offload={cfg.compute.param_offload}",
         f"actor_rollout_ref.actor.fsdp_config.optimizer_offload={cfg.compute.optimizer_offload}",
@@ -420,8 +413,79 @@ def _build_profiling_overrides(cfg: DictConfig) -> list[str]:
 # =============================================================================
 # Main override builder — dispatches by backend
 # =============================================================================
+def _validate_batch_divisibility(cfg: DictConfig) -> None:
+    """Fail at submit time on a batch/parallelism combination verl cannot normalize.
+
+    Both backends re-derive ppo_mini_batch_size per-group, and an indivisible
+    combination does not fail at submit -- it fails several minutes into step 3, after
+    the model has loaded. The arithmetic is fully determined by values already in the
+    config, so it can be checked before the job is sent.
+
+    FSDP normalizes across the whole world:
+        effective = (mini * n) // world_size          must be > 0 and % micro == 0
+    Megatron normalizes across the data-parallel group:
+        dp        = world_size // (TP * PP * CP)
+        effective = (mini * n) // dp                  must be > 0
+        per_dp    = (train_batch * n) // dp           must be % effective == 0
+    """
+    t = cfg.training
+    world_size = cfg.compute.num_nodes * cfg.compute.gpus_per_node
+    mini = OmegaConf.select(cfg.model, "ppo_mini_batch_size", default=t.ppo_mini_batch_size)
+    n = t.n_responses_per_prompt
+    micro = t.ppo_micro_batch_size_per_gpu
+
+    if cfg.backend.name == "megatron":
+        tp = cfg.model.tensor_parallel_size
+        pp = cfg.model.pipeline_parallel_size
+        cp = cfg.model.context_parallel_size
+        dp = world_size // (tp * pp * cp)
+        if dp < 1:
+            raise SystemExit(
+                f"ABORT: TP*PP*CP = {tp}*{pp}*{cp} = {tp * pp * cp} exceeds the "
+                f"{world_size} GPUs requested ({cfg.compute.num_nodes} nodes x "
+                f"{cfg.compute.gpus_per_node}). Raise compute.num_nodes or lower the "
+                f"parallelism in conf/model/."
+            )
+        effective = (mini * n) // dp
+        per_dp = (t.train_batch_size * n) // dp
+        if effective < 1 or per_dp % effective != 0:
+            raise SystemExit(
+                f"ABORT: ppo_mini_batch_size={mini} is not valid for this shape.\n"
+                f"  world_size = {world_size}, dp = {world_size}/(TP{tp}*PP{pp}*CP{cp}) = {dp}\n"
+                f"  effective  = {mini}*{n}//{dp} = {effective}\n"
+                f"  per_dp     = {t.train_batch_size}*{n}//{dp} = {per_dp}\n"
+                f"  need effective >= 1 and per_dp % effective == 0 "
+                f"(got {per_dp} % {effective} = {per_dp % effective if effective else 'n/a'})\n"
+                f"Set training.ppo_mini_batch_size, or ppo_mini_batch_size in "
+                f"conf/model/, to a value that divides evenly."
+            )
+    else:
+        effective = (mini * n) // world_size
+        if effective < 1 or effective % micro != 0:
+            raise SystemExit(
+                f"ABORT: ppo_mini_batch_size={mini} is not valid for this shape.\n"
+                f"  world_size = {world_size} "
+                f"({cfg.compute.num_nodes} nodes x {cfg.compute.gpus_per_node})\n"
+                f"  effective  = {mini}*{n}//{world_size} = {effective}\n"
+                f"  need effective >= 1 and effective % micro({micro}) == 0 "
+                f"(got {effective % micro if effective else 'n/a'})\n"
+                f"Set training.ppo_mini_batch_size, or lower "
+                f"training.ppo_micro_batch_size_per_gpu."
+            )
+
+
+# =============================================================================
 def build_verl_overrides(cfg: DictConfig) -> list[str]:
     """Convert our Hydra config into verl CLI overrides."""
+    if cfg.backend.name not in ("megatron", "fsdp"):
+        raise SystemExit(
+            f"ABORT: unknown backend.name={cfg.backend.name!r}. Expected 'megatron' or "
+            f"'fsdp'. A typo here used to fall through to the FSDP path and submit a "
+            f"real job with the wrong parallelism."
+        )
+
+    _validate_batch_divisibility(cfg)
+
     overrides = _build_shared_overrides(cfg)
 
     if cfg.backend.name == "megatron":
@@ -443,10 +507,16 @@ def build_verl_overrides(cfg: DictConfig) -> list[str]:
 
     # Sandbox Fusion (conditional, backend-agnostic)
     # verl 0.8.0.dev moved custom_reward_function under the `reward` config group
+    #
+    # The path is the copy baked into the training image (Dockerfile COPYs
+    # scripts/custom_reward_fn.py to /workspace/custom_reward_fn.py), which is the
+    # image the Ray workers run. Do not point this at FSx: nothing in this test case
+    # stages the file there, and a second copy on a shared filesystem makes "which
+    # one is actually running?" unanswerable. Rebuild the image to change it.
     if cfg.sandbox.enabled:
         overrides.extend(
             [
-                f"reward.custom_reward_function.path={cfg.compute.fsx_home}/custom_reward_fn.py",
+                "reward.custom_reward_function.path=/workspace/custom_reward_fn.py",
                 "reward.custom_reward_function.name=compute_score",
                 f"+reward.custom_reward_function.reward_kwargs.sandbox_fusion_url={cfg.sandbox.url}",
                 f"+reward.custom_reward_function.reward_kwargs.memory_limit_mb={cfg.sandbox.memory_limit_mb}",
@@ -558,13 +628,28 @@ def print_config_summary(cfg: DictConfig) -> None:
         f"  Batch:     {cfg.training.train_batch_size} "
         f"(n={cfg.training.n_responses_per_prompt} per prompt)"
     )
-    # Show effective mini-batch size when a per-model override is active
-    effective_mbs = OmegaConf.select(cfg.model, "ppo_mini_batch_size", default=None)
-    if effective_mbs is not None:
-        print(
-            f"  MiniBatch: {effective_mbs} (model override, "
-            f"default={cfg.training.ppo_mini_batch_size})"
+    # Mini-batch: always print the value that is actually emitted, plus the per-group
+    # figure verl derives from it, so the summary cannot disagree with the job.
+    mbs = OmegaConf.select(
+        cfg.model, "ppo_mini_batch_size", default=cfg.training.ppo_mini_batch_size
+    )
+    mbs_source = (
+        "model override"
+        if OmegaConf.select(cfg.model, "ppo_mini_batch_size", default=None) is not None
+        else "training default"
+    )
+    world_size = cfg.compute.num_nodes * cfg.compute.gpus_per_node
+    if cfg.backend.name == "megatron":
+        dp = world_size // (
+            cfg.model.tensor_parallel_size
+            * cfg.model.pipeline_parallel_size
+            * cfg.model.context_parallel_size
         )
+        effective = (mbs * cfg.training.n_responses_per_prompt) // dp if dp else 0
+        print(f"  MiniBatch: {mbs} ({mbs_source}) -> {effective} per DP group of {dp}")
+    else:
+        effective = (mbs * cfg.training.n_responses_per_prompt) // world_size
+        print(f"  MiniBatch: {mbs} ({mbs_source}) -> {effective} per GPU of {world_size}")
     print(f"  LR:        {cfg.training.learning_rate}")
     print(f"  Epochs:    {cfg.training.total_epochs}")
     logger_list = OmegaConf.to_container(cfg.tracking.logger)
@@ -646,6 +731,13 @@ def preflight_sandbox_check(cfg: DictConfig) -> None:
             "ABORT: sandbox preflight timed out. Sandbox is likely wedged. "
             f"Check pods: kubectl get pods -n {namespace} -l app=sandbox-fusion. "
             "Override with sandbox.preflight.enabled=false to bypass."
+        )
+    except (FileNotFoundError, OSError) as exc:
+        print("  RESULT: FAILED — could not run kubectl")
+        print("=" * 60)
+        sys.exit(
+            f"ABORT: sandbox preflight could not run kubectl ({exc}). Install kubectl and "
+            "ensure it is on PATH, or bypass with sandbox.preflight.enabled=false."
         )
 
     # The probe prints one JSON line to stdout; kubectl may prepend warnings.
@@ -765,12 +857,27 @@ def preflight_resume_check(cfg: DictConfig) -> None:
         kexec += ["--context", context]
     kexec += ["exec", "-n", pf.namespace, pf.exec_pod, "--", "sh", "-c", f"cat {tracker} 2>/dev/null || true"]
 
+    # A failed probe must not be reported as "no checkpoint". `cat ... || true` means the
+    # remote command always exits 0, so a non-zero return code here is kubectl itself
+    # failing -- pod missing, wrong namespace, not authenticated, RBAC denied. Every one
+    # of those produced an empty `step` and printed "fresh run", which is the opposite of
+    # what verl does under resume_mode=auto.
     step = ""
+    probe_failed = False
+    probe_error = ""
     try:
         proc = subprocess.run(kexec, capture_output=True, text=True, timeout=60, check=False)
         step = proc.stdout.strip()
+        if proc.returncode != 0:
+            probe_failed = True
+            stderr_lines = (proc.stderr or "").strip().splitlines()
+            probe_error = stderr_lines[-1] if stderr_lines else "(no stderr)"
     except subprocess.TimeoutExpired:
-        step = ""
+        probe_failed = True
+        probe_error = "kubectl exec timed out after 60s"
+    except (FileNotFoundError, OSError) as exc:
+        probe_failed = True
+        probe_error = f"could not run kubectl: {exc}"
 
     if step:
         print(f"  --> WARNING: will SILENTLY RESUME from global_step_{step}")
@@ -778,6 +885,14 @@ def preflight_resume_check(cfg: DictConfig) -> None:
         print("      If that checkpoint is not known-good, abort now and pass:")
         print("        backend.resume_mode=resume_path \\")
         print(f"        backend.resume_from_path={ckpt_dir}/global_step_<N>")
+    elif probe_failed:
+        print("  --> WARNING: could not read the tracker file, so the resume target is UNKNOWN.")
+        print(f"      ({probe_error})")
+        print(f"      tracker: {tracker}")
+        print("      This is NOT the same as 'no checkpoint'. resume_mode=auto will still")
+        print("      resume from the newest checkpoint if one exists on FSx.")
+        print("      For a guaranteed fresh start, pass:")
+        print("        backend.resume_mode=disable")
     else:
         print("  --> no tracker file found: starting from the base model (fresh run)")
     print("=" * 60)
