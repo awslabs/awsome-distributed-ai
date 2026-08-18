@@ -1,0 +1,17 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# build-push.sh uses this directory as the Docker build context, and env_vars lives
+# here. .gitignore does not apply to build contexts, so without this the file is sent
+# to the daemon -- and to a remote builder if one is configured. Nothing COPYs it into
+# a layer today; a future `COPY . .` would bake the token in.
+env_vars
+
+# Not needed in the image, and sending them slows every build.
+.git/
+outputs/
+profiling/
+__pycache__/
+.ruff_cache/
+.venv/
+.DS_Store

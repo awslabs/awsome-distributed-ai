@@ -1,3 +1,5 @@
+<!-- Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. -->
+<!-- SPDX-License-Identifier: MIT-0 -->
 # Configuration Reference
 
 The Hydra config system, every config group, per-model recommended settings, and the

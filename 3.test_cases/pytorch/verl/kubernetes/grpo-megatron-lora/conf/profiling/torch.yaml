@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # @package _global_
 # PyTorch Profiler — Chrome trace output, ~5-15% overhead per profiled step.
 # View traces in Perfetto (https://ui.perfetto.dev/) or Chrome chrome://tracing.

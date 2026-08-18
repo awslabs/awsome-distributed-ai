@@ -1,3 +1,5 @@
+<!-- Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. -->
+<!-- SPDX-License-Identifier: MIT-0 -->
 # Troubleshooting
 
 Symptoms and fixes for OOM, slow training, slow model loading, Megatron-Bridge errors, and

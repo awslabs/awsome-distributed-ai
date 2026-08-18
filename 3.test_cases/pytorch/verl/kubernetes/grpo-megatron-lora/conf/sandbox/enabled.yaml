@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # @package _global_
 # SandboxFusion — remote code execution for reward scoring
 # Deployed as a K8s service (see kubernetes/sandbox-fusion.yaml)

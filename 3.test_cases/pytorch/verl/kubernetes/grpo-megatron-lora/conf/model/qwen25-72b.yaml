@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Qwen2.5-72B-Instruct — large dense model
 name: Qwen2.5-72B-Instruct
 hf_path: Qwen/Qwen2.5-72B-Instruct

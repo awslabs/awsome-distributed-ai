@@ -89,7 +89,10 @@ export LMEVAL_CONCURRENCY="${LMEVAL_CONCURRENCY:-24}"
 export LMEVAL_TIMEOUT="${LMEVAL_TIMEOUT:-7200}"
 export LMEVAL_TEMPERATURE="${LMEVAL_TEMPERATURE:-0.2}"
 export LMEVAL_TOP_P="${LMEVAL_TOP_P:-0.95}"
-export LMEVAL_IMAGE="${LMEVAL_IMAGE:-python:3.11-slim}"
+# Patch-pinned: the reported runs recorded Python 3.11.15, which is what the floating
+# `python:3.11-slim` tag resolved to then. CPU torch and lm-eval are pip-installed at
+# pod start (see kubernetes/lmeval-job.yaml).
+export LMEVAL_IMAGE="${LMEVAL_IMAGE:-python:3.11.15-slim}"
 export LMEVAL_VERSION="${LMEVAL_VERSION:-0.4.9}"
 export LMEVAL_INSTANCE_TYPE="${LMEVAL_INSTANCE_TYPE:-m5.xlarge}"
 # lm-eval builds a tokenizer from the model name; point it at the base model dir

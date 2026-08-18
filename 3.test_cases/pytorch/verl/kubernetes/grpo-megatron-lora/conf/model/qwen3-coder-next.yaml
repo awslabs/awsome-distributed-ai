@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Qwen3-Coder-Next — target production model (159GB)
 name: Qwen3-Coder-Next
 hf_path: Qwen/Qwen3-Coder-Next

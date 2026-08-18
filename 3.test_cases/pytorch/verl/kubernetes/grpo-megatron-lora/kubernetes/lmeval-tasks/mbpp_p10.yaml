@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Custom pass@10 variant of MBPP for the Qwen3-235B GRPO benchmark.
 #
 # Stock lm-eval `mbpp` reports pass@1 only (utils.pass_at_1 hardcodes k=[1]).

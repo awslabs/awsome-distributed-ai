@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # =============================================================================
 # Dockerfile for VERL with Megatron LoRA and EFA support
 # Extends verlai/verl vllm020.dev2 which matches verl v0.8.0's stable stack:

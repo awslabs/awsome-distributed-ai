@@ -1,3 +1,5 @@
+<!-- Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. -->
+<!-- SPDX-License-Identifier: MIT-0 -->
 # Evaluating a Saved Checkpoint
 
 End-to-end guide for taking a verl v0.8.0 training checkpoint (Megatron + LoRA

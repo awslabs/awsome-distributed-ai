@@ -67,7 +67,11 @@ RUNTIME_ENV_JSON='{"env_vars": {"HF_HOME": "'"${HF_HOME_VAL}"'"'
 if [ -n "${HF_TOKEN:-}" ]; then
     RUNTIME_ENV_JSON="${RUNTIME_ENV_JSON}"', "HF_TOKEN": "'"${HF_TOKEN}"'"'
 fi
-RUNTIME_ENV_JSON="${RUNTIME_ENV_JSON}"'}, "pip": {"packages": ["datasets>=3.0", "numpy", "pyarrow", "huggingface_hub"], "pip_check": false}}'
+# Upper bounds matter here: this step produces the parquet every run trains and
+# evaluates on, so an unbounded datasets/pyarrow major bump can silently change the
+# on-disk schema between two runs being compared, and "pip_check": false hides it.
+# numpy is pinned exactly to the version the reported eval runs recorded.
+RUNTIME_ENV_JSON="${RUNTIME_ENV_JSON}"'}, "pip": {"packages": ["datasets>=3.0,<5", "numpy==2.4.6", "pyarrow>=14,<25", "huggingface_hub>=0.26,<1"], "pip_check": false}}'
 
 # Build Ray CLI auth headers if available (OIDC-protected dashboard)
 HEADERS_ARGS=()

@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # =============================================================================
 # vLLM Evaluation Server — OpenAI-Compatible API on a Single p6-b200 Node
 #
@@ -92,7 +94,9 @@ spec:
       containers:
         - name: vllm
           image: ${REGISTRY}${IMAGE}:${TAG}
-          imagePullPolicy: Always
+          # TAG is pinned to an immutable tag by build-push.sh / env_vars.example, never
+          # `latest`, so IfNotPresent is correct and works air-gapped.
+          imagePullPolicy: IfNotPresent
 
           # Launch vLLM's OpenAI-compatible server.  Args are tuned for 235B MoE
           # on 8×B200:
@@ -146,6 +150,11 @@ spec:
               if [ "${VLLM_ENFORCE_EAGER:-false}" = "true" ]; then
                 EAGER_ARGS+=( --enforce-eager )
               fi
+              # --trust-remote-code below executes Python from the model repo at load
+              # time. Required for the Qwen3 MoE architectures used here. The model is a
+              # local FSx path staged by models/, not fetched from the Hub at serve time,
+              # so what is trusted is whatever was downloaded and shard-verified at
+              # staging time -- pin HF_REVISION there to make that auditable.
               exec python3 -m vllm.entrypoints.openai.api_server \
                 --model "${VLLM_MODEL_PATH}" \
                 --served-model-name "${VLLM_SERVED_NAME}" \

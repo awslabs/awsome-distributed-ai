@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # =============================================================================
 # Validation-Split reward eval Job (K8s, not Ray)
 #
@@ -55,8 +57,17 @@ spec:
               mkdir -p "$TMPDIR" "$PIP_CACHE_DIR" "$HF_HOME"
               echo "[valeval] installing deps (verl reward-score + aiohttp/pandas/pyarrow) ..."
               apt-get update -qq && apt-get install -y -qq git curl >/work/apt.log 2>&1 || { cat /work/apt.log; exit 1; }
-              pip install --index-url https://download.pytorch.org/whl/cpu torch >/work/pip-torch.log 2>&1 || { tail -30 /work/pip-torch.log; exit 1; }
-              pip install aiohttp tqdm pandas pyarrow "transformers>=4.48,<4.50" \
+              # torch and transformers are pinned exactly -- the reported eval runs recorded
+              # torch 2.13.0+cpu / transformers 4.49.0. The rest are bounded rather than
+              # exact: no run recorded what this pod resolved for them, so an `==` here
+              # would be an invented number dressed up as a measurement.
+              pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.13.0+cpu" >/work/pip-torch.log 2>&1 || { tail -30 /work/pip-torch.log; exit 1; }
+              pip install \
+                "aiohttp>=3.9,<4" \
+                "tqdm>=4.66,<5" \
+                "pandas>=2.0,<3" \
+                "pyarrow>=14,<25" \
+                "transformers==4.49.0" \
                 "verl[mcore] @ git+https://github.com/volcengine/verl.git@${VERL_PIN}" >/work/pip.log 2>&1 || { tail -50 /work/pip.log; exit 1; }
 
               OUT="/fsx/data/verl/eval_results/${EVAL_RUN_NAME}/val_split.json"

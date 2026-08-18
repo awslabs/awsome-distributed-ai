@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Qwen3-8B — recommended for pipeline validation
 name: Qwen3-8B
 hf_path: Qwen/Qwen3-8B

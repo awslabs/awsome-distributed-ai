@@ -149,8 +149,10 @@ RUNTIME_ENV=$(cat <<RTEOF
   "excludes": ["outputs/", "profiling/", ".git/", "*.pyc", "__pycache__/"],
   "pip": {
     "packages": [
-      "peft>=0.11",
-      "safetensors>=0.4",
+      # peft performs the actual merge_and_unload(), so an unbounded major bump changes
+      # merge behaviour with no signal -- "pip_check": false below would not catch it.
+      "peft>=0.11,<0.20",
+      "safetensors>=0.4,<1",
       "verl[mcore] @ git+https://github.com/volcengine/verl.git@${VERL_PIN}"
     ],
     "pip_check": false

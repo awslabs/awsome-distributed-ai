@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # =============================================================================
 # Sandbox Fusion — Standalone Code Execution Service for verl Reward Scoring
 # Deployed independently from the RayCluster. verl connects via HTTP using
@@ -60,6 +62,11 @@ spec:
         cloudwatch.aws.amazon.com/auto-annotate-dotnet: "false"
     spec:
       # Schedule on a CPU-only m5 node — NOT on the Ray head or GPU workers
+      # This is a privileged container that executes model-written programs. It has no
+      # reason to hold Kubernetes API credentials; see docs/cluster.md for the intended
+      # blast radius and what is and is not enforced here.
+      automountServiceAccountToken: false
+
       nodeSelector:
         node.kubernetes.io/instance-type: ${SANDBOX_INSTANCE_TYPE}
 
@@ -96,7 +103,9 @@ spec:
       containers:
         - name: sandbox-fusion
           image: ${SANDBOX_FUSION_IMAGE}
-          imagePullPolicy: Always
+          # The tag is already pinned (env_vars.example: server-20250609), so re-pulling
+          # on every restart buys nothing and breaks air-gapped clusters.
+          imagePullPolicy: IfNotPresent
 
           ports:
             - containerPort: 8080

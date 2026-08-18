@@ -18,7 +18,7 @@
 # Env overrides:
 #   VLLM_SERVED_NAME (default = run-name; use the LoRA module name for a step),
 #   VAL_PARQUET, VAL_N_SAMPLES (default 4), VAL_CONCURRENCY (default 32),
-#   VALEVAL_IMAGE (default python:3.11-slim), VERL_PIN (default v0.8.0),
+#   VALEVAL_IMAGE (default python:3.11.15-slim), VERL_PIN (default v0.8.0),
 #   FSX_UTILS_POD (default fsx-utils).
 # =============================================================================
 set -euo pipefail
@@ -73,7 +73,7 @@ export VAL_MAX_TOKENS="${VAL_MAX_TOKENS:-24576}"
 # Stratified subset: with VAL_LIMIT, sample evenly across data_source groups.
 export VAL_STRATIFY="${VAL_STRATIFY:-false}"
 export VAL_LIMIT="${VAL_LIMIT:-0}"
-export VALEVAL_IMAGE="${VALEVAL_IMAGE:-python:3.11-slim}"
+export VALEVAL_IMAGE="${VALEVAL_IMAGE:-python:3.11.15-slim}"
 export VERL_PIN="${VERL_PIN:-v0.8.0}"
 
 FSX_UTILS_POD="${FSX_UTILS_POD:-fsx-utils}"

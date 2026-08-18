@@ -1,3 +1,5 @@
+<!-- Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. -->
+<!-- SPDX-License-Identifier: MIT-0 -->
 # Profiling
 
 Built-in metrics, the PyTorch profiler, Nsight Systems, the memory profiler, and how to

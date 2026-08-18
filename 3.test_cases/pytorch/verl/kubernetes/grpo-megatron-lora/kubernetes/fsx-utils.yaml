@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # =============================================================================
 # FSx Utility Pod
 # Persistent lightweight pod with FSx mounted at /fsx for running data
@@ -5,6 +7,8 @@
 #
 # Deploy:
 #   source env_vars
+#   kubectl create secret generic hf-token -n "${KUBE_NAMESPACE}" \
+#       --from-literal=HF_TOKEN="${HF_TOKEN}"
 #   envsubst < kubernetes/fsx-utils.yaml | kubectl apply -f -
 #   kubectl wait --for=condition=Ready pod/fsx-utils -n ${KUBE_NAMESPACE} --timeout=180s
 #
@@ -26,28 +30,61 @@ spec:
 
   restartPolicy: Always
 
+  # This pod does not talk to the Kubernetes API, and it is long-lived.
+  automountServiceAccountToken: false
+
   containers:
     - name: fsx-utils
-      image: python:3.12-slim
+      # Patch-pinned to the interpreter the reported eval runs recorded (3.11.15, which
+      # is what `python:3.11-slim` resolved to at the time). A floating tag re-resolves
+      # on every pull, which makes "what did this pod run?" unanswerable afterwards.
+      # Also removes the 3.11/3.12 drift this pod used to have against the driver Jobs.
+      image: python:3.11.15-slim
       imagePullPolicy: IfNotPresent
 
-      # Install HuggingFace libraries on startup, then sleep forever.
-      # The pod is ready once pip install completes (~30-60s).
+      # Install dependencies on startup, then sleep forever. Readiness is gated on the
+      # install actually finishing -- see readinessProbe below.
+      #
+      # Versions: bounded rather than exact. Unlike the lm-eval driver, no run recorded
+      # what this pod resolved, so an `==` pin here would be invented rather than
+      # measured. safetensors is present because models/download_model.sh's shard
+      # integrity check imports it; without it that gate used to skip silently.
       command:
         - bash
         - -c
         - |
-          set -e
+          set -euo pipefail
           echo "Installing dependencies..."
-          pip install --no-cache-dir datasets huggingface_hub 2>&1 | tail -1
+          pip install --no-cache-dir \
+            "datasets>=3.0,<5" \
+            "huggingface_hub>=0.26,<1" \
+            "safetensors>=0.4,<1" > /tmp/pip.log 2>&1 || { tail -20 /tmp/pip.log; exit 1; }
+          touch /tmp/ready
           echo "FSx utility pod ready."
           sleep infinity
 
+      # `kubectl wait --for=condition=Ready` returned as soon as the container process
+      # started, so a script that exec'd in straight afterwards could find datasets
+      # missing. Gate readiness on the install completing.
+      readinessProbe:
+        exec:
+          command: ["test", "-f", "/tmp/ready"]
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 60
+
       # HuggingFace token for authenticated dataset/model downloads.
-      # Substituted by envsubst from your local env_vars.
+      # Read from a Secret rather than substituted inline: envsubst would put the real
+      # token into the Pod spec, where it is stored in etcd and readable by anyone with
+      # `get pod` in the namespace -- on a pod that sleeps forever. Create it with:
+      #   kubectl create secret generic hf-token -n "$KUBE_NAMESPACE" \
+      #       --from-literal=HF_TOKEN="$HF_TOKEN"
       env:
         - name: HF_TOKEN
-          value: "${HF_TOKEN}"
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
 
       resources:
         requests:

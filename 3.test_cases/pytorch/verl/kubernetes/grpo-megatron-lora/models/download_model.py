@@ -36,8 +36,13 @@ MODEL_ALIASES = {
 }
 
 
-def download_model(model_id, output_dir, hf_token=None):
-    """Download model from HuggingFace Hub to local directory."""
+def download_model(model_id, output_dir, hf_token=None, revision=None):
+    """Download model from HuggingFace Hub to local directory.
+
+    `revision` pins the commit. Left unset the download tracks a mutable branch, so an
+    upstream repo update silently changes the base model underneath a checkpoint
+    comparison -- same reproducibility rule as the pinned image tags.
+    """
     from huggingface_hub import snapshot_download
 
     model_name = model_id.split("/")[-1]
@@ -50,11 +55,15 @@ def download_model(model_id, output_dir, hf_token=None):
     print("=" * 60)
 
     t0 = time.time()
+    if revision is None:
+        print("WARNING: --revision unset -- tracking the mutable default branch.")
+        print("         Pass --revision <commit-sha> for a reproducible download.")
     snapshot_download(
         repo_id=model_id,
         local_dir=model_dir,
         local_dir_use_symlinks=False,
         token=hf_token,
+        revision=revision,
     )
     elapsed = time.time() - t0
     print(f"\nDownload completed in {elapsed:.0f}s")
@@ -123,6 +132,13 @@ def main():
         help="Base output directory (default: /fsx/data/verl/models)",
     )
     parser.add_argument(
+        "--revision",
+        default=None,
+        help="Pin the download to a commit sha. Unset tracks the mutable default "
+             "branch, which is not reproducible -- set it when the weights back a "
+             "reported number.",
+    )
+    parser.add_argument(
         "--skip-verify",
         action="store_true",
         help="Skip safetensor shard verification",
@@ -141,7 +157,7 @@ def main():
     hf_token = os.environ.get("HF_TOKEN")
 
     # Download
-    model_dir = download_model(model_id, output_dir, hf_token)
+    model_dir = download_model(model_id, output_dir, hf_token, revision=args.revision)
 
     # Verify
     if not args.skip_verify:

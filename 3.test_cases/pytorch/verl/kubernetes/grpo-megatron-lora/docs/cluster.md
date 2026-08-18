@@ -1,3 +1,5 @@
+<!-- Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. -->
+<!-- SPDX-License-Identifier: MIT-0 -->
 # Cluster & Setup Reference
 
 Cluster topology (compute, Ray, storage, networking, monitoring), how to connect, and the
@@ -202,6 +204,41 @@ sandbox reward function args when `sandbox.enabled` is `true` (the default). To 
 ```bash
 python3 scripts/submit_training.py sandbox=disabled
 ```
+
+### Blast radius: two places model-generated code executes
+
+This test case runs untrusted, model-written programs in two places. Both are deliberate,
+and neither is presented as a hardened sandbox — read this before running it on a cluster
+you share with anything you care about.
+
+**1. `sandbox-fusion`, during training.** Runs `privileged: true`, which SandboxFusion
+requires for its cgroup-based process isolation. A privileged container executing
+model-written code is a node-level escape path, so what contains it is the pod's
+placement and permissions, not the container boundary. What this test case does set:
+
+| Control | State | Note |
+|---|---|---|
+| `automountServiceAccountToken: false` | set | No Kubernetes API credentials in the pod |
+| FSx mount | none | The sandbox has no access to checkpoints or datasets |
+| Anti-affinity from the Ray head | `preferred`, weight 100 | Best-effort only — the scheduler will co-locate it if that is the only option |
+| `NetworkPolicy` | **not set** | The pod can reach anything the cluster's default policy allows |
+| Dedicated node / taint | **not set** | Constrained only by `SANDBOX_INSTANCE_TYPE` |
+
+If you are running this on a cluster with other workloads, the two worth adding are a
+`NetworkPolicy` restricting egress to what the reward path needs, and a tainted node group
+so `nodeSelector` + `tolerations` keep the executor off the training control plane. Note
+also that the anti-affinity term was inert until the `ray.io/node-type` label prefix was
+fixed — confirm it matches on your cluster with
+`kubectl get pod <ray-head-pod> -n "$KUBE_NAMESPACE" --show-labels` before relying on it.
+
+**2. The `lmeval` driver pod, during evaluation.** This is the less obvious one. lm-eval
+is invoked with `HF_ALLOW_CODE_EVAL=1` and `--confirm_run_unsafe_code`, so generated
+programs execute **in the driver pod itself**, not in `sandbox-fusion`. That pod is
+otherwise ordinary, which made it strictly *less* isolated than the sandbox deployed for
+the same purpose during training. It now runs with `automountServiceAccountToken: false`,
+`/fsx` mounted **read-only**, and a single narrow read-write mount at `/eval-out`
+(`subPath: data/verl/eval_results`) for its own results — so generated code cannot reach
+the checkpoints or other runs' numbers.
 
 ## Deploy FSx Utility Pod
 

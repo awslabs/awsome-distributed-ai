@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # =============================================================================
 # lm-evaluation-harness eval Job
 #
@@ -36,6 +38,11 @@ spec:
         project: verl
     spec:
       restartPolicy: Never
+      # This driver runs HF_ALLOW_CODE_EVAL=1 + --confirm_run_unsafe_code, i.e. it
+      # EXECUTES model-generated programs in this pod. That makes it a code executor, so
+      # it gets the same treatment as one: no API credentials, and read-only access to the
+      # checkpoints and results it is measuring (see the volumeMounts below).
+      automountServiceAccountToken: false
       nodeSelector:
         node.kubernetes.io/instance-type: ${LMEVAL_INSTANCE_TYPE}
       containers:
@@ -57,13 +64,21 @@ spec:
               # CPU-only torch first so transformers (an lm-eval dep) does not drag
               # in the multi-GB CUDA wheels. local-completions never runs a model
               # locally, so CPU torch is sufficient for the tokenizer imports.
-              pip install --index-url https://download.pytorch.org/whl/cpu torch >/work/pip-torch.log 2>&1 || { tail -30 /work/pip-torch.log; exit 1; }
+              #
+              # These two are pinned EXACTLY because they are measured, not guessed: the
+              # lm-eval results.json from the reported code runs records
+              # torch 2.13.0+cpu and transformers 4.49.0 under Python 3.11.15. Leaving
+              # them unpinned meant every re-run resolved whatever was current, so two
+              # numbers compared against each other could come from different stacks.
+              pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.13.0+cpu" >/work/pip-torch.log 2>&1 || { tail -30 /work/pip-torch.log; exit 1; }
               pip install "lm-eval[api]==${LMEVAL_VERSION}" >/work/pip.log 2>&1 || { tail -40 /work/pip.log; exit 1; }
               # lm-eval 0.4.9 imports transformers.AutoModelForVision2Seq, removed in
-              # transformers v5. Pin to a 4.x that still has it (driver only tokenizes).
-              pip install "transformers>=4.48,<4.50" >/work/pip-tf.log 2>&1 || { tail -30 /work/pip-tf.log; exit 1; }
+              # transformers v5. 4.49.0 is the version the reported runs used.
+              pip install "transformers==4.49.0" >/work/pip-tf.log 2>&1 || { tail -30 /work/pip-tf.log; exit 1; }
 
-              OUT_DIR="/fsx/data/verl/eval_results/${EVAL_RUN_NAME}/lmeval"
+              # /eval-out is the only writable FSx path in this pod; it is
+              # data/verl/eval_results via subPath. /fsx itself is mounted read-only.
+              OUT_DIR="/eval-out/${EVAL_RUN_NAME}/lmeval"
               mkdir -p "${OUT_DIR}"
               # IMPORTANT: run from a clean cwd. A local dir named "mbpp"/"humaneval"
               # shadows the task and yields "no tasks found".
@@ -153,8 +168,15 @@ spec:
               memory: "12Gi"
               ephemeral-storage: "4Gi"
           volumeMounts:
+            # Read-only: generated code must not be able to reach the checkpoints or
+            # other runs' results. The one path this job legitimately writes is mounted
+            # separately below.
             - name: fsx-storage
               mountPath: /fsx
+              readOnly: true
+            - name: fsx-storage
+              mountPath: /eval-out
+              subPath: data/verl/eval_results
             - name: work
               mountPath: /work
             - name: tasks

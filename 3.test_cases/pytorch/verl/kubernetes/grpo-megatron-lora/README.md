@@ -1,3 +1,5 @@
+<!-- Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. -->
+<!-- SPDX-License-Identifier: MIT-0 -->
 # GRPO + Megatron Training (LoRA & Full Fine-Tuning)
 
 Train large language models with **Group Relative Policy Optimization (GRPO)** and verifiable
@@ -86,8 +88,10 @@ source env_vars
 # 2. Build and push the training image to ECR
 ./build-push.sh
 
-# 3. Deploy the supporting services.
-#    Assumes the `fsx-lustre` PVC already exists -- see Prerequisites.
+# 3. HF token as a Secret (the fsx-utils pod reads it via secretKeyRef), then the
+#    supporting services. Assumes the `fsx-lustre` PVC exists -- see Prerequisites.
+kubectl create secret generic hf-token -n "${KUBE_NAMESPACE}" \
+    --from-literal=HF_TOKEN="${HF_TOKEN}"
 envsubst < kubernetes/sandbox-fusion.yaml | kubectl apply -f -   # code-reward execution
 envsubst < kubernetes/fsx-utils.yaml      | kubectl apply -f -   # FSx shell/inspection pod
 kubectl wait --for=condition=ready pod -l app=sandbox-fusion \

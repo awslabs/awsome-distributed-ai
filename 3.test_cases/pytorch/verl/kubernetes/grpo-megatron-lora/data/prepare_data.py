@@ -41,27 +41,37 @@ import numpy as np
 # Dataset Registry
 # =============================================================================
 
+# trust_remote_code EXECUTES Python fetched from the Hub at load time. It is set only
+# for the three datasets that shipped a legacy loading script, and it is a no-op on the
+# `datasets` versions pinned in data/submit_data_prep.sh (>=3.0), which removed loading
+# scripts entirely -- that removal is exactly what the "scripts are no longer supported"
+# fallback in load_hf_dataset() handles. The flags are kept only so an older pinned
+# `datasets` still loads these repos; if you drop support for that, drop them too.
 DATASET_REGISTRY = {
     "eurus": {
         "hf_name": "PRIME-RL/Eurus-2-RL-Data",
+        # Ships a loading script; see the note above the registry.
         "trust_remote_code": True,
         "transform_fn": "transform_eurus",
         "description": "Reasoning + code RL data from PRIME-RL",
     },
     "apps": {
         "hf_name": "codeparrot/apps",
+        # Ships a loading script; see the note above the registry.
         "trust_remote_code": True,
         "transform_fn": "transform_apps",
         "description": "APPS coding problems",
     },
     "taco": {
         "hf_name": "BAAI/TACO",
+        # Ships a loading script; see the note above the registry.
         "trust_remote_code": True,
         "transform_fn": "transform_taco",
         "description": "TACO coding problems from BAAI",
     },
     "codecontests": {
         "hf_name": "ByteDance-Seed/Code-Contests-Plus",
+        # Parquet-native, no loading script -- so no remote code execution needed.
         "trust_remote_code": False,
         "transform_fn": "transform_codecontests",
         "description": "Competitive programming with augmented test cases",
@@ -666,7 +676,7 @@ def prepare_dataset(name, output_dir):
             dataset_dict = datasets.load_dataset(hf_name, subset, **load_kwargs)
         else:
             dataset_dict = datasets.load_dataset(hf_name, **load_kwargs)
-    except (RuntimeError, Exception) as e:
+    except Exception as e:  # noqa: BLE001 -- inspected below and re-raised if unhandled
         if "scripts are no longer supported" in str(e):
             # Dataset uses a legacy loading script; try loading as json/parquet directly
             print("  Legacy script detected, trying direct file loading...")

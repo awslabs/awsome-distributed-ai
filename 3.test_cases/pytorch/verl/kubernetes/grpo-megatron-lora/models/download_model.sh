@@ -21,6 +21,9 @@
 # created under ${RAY_DATA_HOME}/models/. It must match conf/model/*.yaml `name`,
 # because fsx_path is ${compute.fsx_home}/models/${model.name}.
 #
+# HF_REVISION pins the commit downloaded. Unset means the mutable `main` branch, which
+# is not reproducible -- set it when the weights back a reported number.
+#
 # Model IDs for the shipped conf/model/ groups are listed in
 # docs/configuration.md ("Model download reference").
 # =============================================================================
@@ -62,10 +65,19 @@ echo "=============================================="
 # Download model using huggingface_hub Python API
 # snapshot_download creates a self-contained copy (no symlinks to HF cache)
 # This is required for verl/vLLM to load from a local path correctly
-HF_MODEL_ID="${HF_MODEL_ID}" MODEL_DIR="${MODEL_DIR}" python3 -c "
+#
+# HF_REVISION pins the commit. Without it the download tracks a mutable branch, so an
+# upstream repo update silently changes the base model underneath a checkpoint
+# comparison -- the same reproducibility rule the image tags follow. Set it to the
+# commit sha you want; the default (main) is convenient but not reproducible.
+HF_MODEL_ID="${HF_MODEL_ID}" MODEL_DIR="${MODEL_DIR}" HF_REVISION="${HF_REVISION:-main}" python3 -c "
 import os
 from huggingface_hub import snapshot_download
-snapshot_download(os.environ['HF_MODEL_ID'], local_dir=os.environ['MODEL_DIR'])
+rev = os.environ['HF_REVISION']
+if rev == 'main':
+    print('WARNING: HF_REVISION unset -- tracking the mutable `main` branch.')
+    print('         Set HF_REVISION=<commit-sha> for a reproducible download.')
+snapshot_download(os.environ['HF_MODEL_ID'], local_dir=os.environ['MODEL_DIR'], revision=rev)
 "
 
 # Verify download -- config.json must exist

@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Secrets and local infrastructure config -- NEVER commit.
 # env_vars.example is the tracked template; env_vars holds real tokens and ARNs.
 /env_vars

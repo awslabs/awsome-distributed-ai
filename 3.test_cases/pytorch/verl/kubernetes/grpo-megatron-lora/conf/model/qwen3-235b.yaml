@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Qwen3-235B-A22B — 235B MoE (22B active), 128 experts (8 active)
 # Megatron backend required (qwen3_moe supported by mbridge v0.3.0)
 #

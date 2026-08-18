@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # FSDP backend — HuggingFace PEFT LoRA, PyTorch FSDP sharding
 # Suitable for models up to ~72B parameters
 name: fsdp

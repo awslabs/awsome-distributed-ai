@@ -91,10 +91,10 @@ RUNTIME_ENV=$(cat <<RTEOF
   "excludes": ["outputs/", "profiling/", ".git/", "*.pyc", "__pycache__/"],
   "pip": {
     "packages": [
-      "aiohttp>=3.9",
-      "tqdm",
-      "pandas>=2.0",
-      "pyarrow>=14.0",
+      "aiohttp>=3.9,<4",
+      "tqdm>=4.66,<5",
+      "pandas>=2.0,<3",
+      "pyarrow>=14,<25",
       "verl[mcore] @ git+https://github.com/volcengine/verl.git@v0.8.0"
     ],
     "pip_check": false

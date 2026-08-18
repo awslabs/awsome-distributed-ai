@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Megatron backend — Megatron-Core + Megatron-Bridge native LoRA
 # Required for models >72B and MoE architectures (e.g. Qwen3-235B-A22B, Qwen3-30B-A3B)
 name: megatron

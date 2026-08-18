@@ -1,3 +1,5 @@
+<!-- Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. -->
+<!-- SPDX-License-Identifier: MIT-0 -->
 # Results & Insights
 
 Qwen3-235B-A22B, GRPO + LoRA (rank 128 / alpha 256), verl v0.8.0 + Megatron on SageMaker

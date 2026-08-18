@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # @package _global_
 # MLflow + console logging
 # MLFLOW_TRACKING_URI must be set in the environment (injected by K8s secret
