@@ -1,0 +1,190 @@
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  labels:
+    app: miles-grpo
+  name: miles-ray
+  namespace: ${NAMESPACE}
+spec:
+  enableInTreeAutoscaling: false
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: 0.0.0.0
+      num-gpus: '0'
+    template:
+      metadata:
+        labels:
+          ray.io/node-type: head
+        annotations:
+          # The head holds the Ray GCS and is a long-lived singleton. On clusters with a
+          # Karpenter (or similar) consolidator, protect its node from being reclaimed as
+          # "underutilized" while the head is running. A no-op on clusters without Karpenter.
+          karpenter.sh/do-not-disrupt: "true"
+      spec:
+        containers:
+        - env:
+          - name: NVIDIA_VISIBLE_DEVICES
+            value: void
+          - name: RAY_memory_monitor_refresh_ms
+            value: '0'
+          - name: PYTHONPATH
+            value: /root/Megatron-LM:/root/miles
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                key: HF_TOKEN
+                name: hf-token
+          - name: NCCL_DEBUG
+            value: WARN
+          image: ${FULL_IMAGE}
+          imagePullPolicy: IfNotPresent
+          name: ray-head
+          ports:
+          - containerPort: 6379
+            protocol: TCP
+          - containerPort: 8265
+            protocol: TCP
+          - containerPort: 10001
+            protocol: TCP
+          resources:
+            limits:
+              cpu: '4'
+              memory: 16Gi
+              ephemeral-storage: 60Gi
+            requests:
+              cpu: '2'
+              memory: 8Gi
+              ephemeral-storage: 40Gi
+          volumeMounts:
+          - mountPath: /fsx
+            name: fsx
+          - mountPath: /dev/shm
+            name: dshm
+        restartPolicy: Never
+        terminationGracePeriodSeconds: 120
+        volumes:
+        - name: fsx
+          persistentVolumeClaim:
+            claimName: ${FSX_CLAIM}
+        - emptyDir:
+            medium: Memory
+            # medium:Memory counts against the pod's memory limit (16Gi above), so
+            # keep this <= that limit. The head is a CPU coordinator and needs little
+            # shared memory; the GPU workers (below) get the large 256Gi /dev/shm.
+            sizeLimit: 8Gi
+          name: dshm
+        # The head MUST land on a node that has the CUDA driver (libcuda.so.1): miles's Ray
+        # control actors (e.g. the rollout manager) import Megatron/transformer_engine at
+        # startup even though they request num-gpus 0, and that import hard-fails on a
+        # GPU-less node. Point ${CPU_NODE_ROLE} at a GPU pool's node-role label; the default
+        # env sets it equal to ${GPU_NODE_ROLE} so the head co-locates on a GPU node (it
+        # still runs num-gpus 0 and consumes no GPU, only the node's CPU/disk). Do NOT place
+        # the head on a CPU-only pool. The toleration below lets it schedule onto the (tainted)
+        # GPU pool.
+        nodeSelector:
+          ${CPU_NODE_LABEL_KEY}: ${CPU_NODE_ROLE}
+        tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+  rayVersion: 2.55.1
+  workerGroupSpecs:
+  # Worker (GPU node) count is ${WORKER_REPLICAS}. For a COLOCATED run this equals
+  # ACTOR_NUM_NODES; for a DISAGGREGATED run (COLOCATE=false) the actor and rollout GPU pools
+  # are separate, so it must cover BOTH: ceil((ACTOR_NUM_NODES*ACTOR_GPUS_PER_NODE +
+  # ROLLOUT_NUM_GPUS) / 8). Setting it to ACTOR_NUM_NODES alone under-sizes a disaggregated run
+  # and the job waits forever on placement it can never get. env_vars derives it (see the file).
+  # podAntiAffinity (below) keeps the workers on separate nodes so a multi-node actor spans them.
+  - groupName: gpu-workers
+    maxReplicas: ${WORKER_REPLICAS}
+    minReplicas: ${WORKER_REPLICAS}
+    numOfHosts: 1
+    rayStartParams:
+      num-gpus: '8'
+      resources: '"{\"gpu_node\": 1}"'
+    replicas: ${WORKER_REPLICAS}
+    template:
+      metadata:
+        labels:
+          ray.io/node-type: worker
+      spec:
+        affinity:
+          podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                - key: ray.io/node-type
+                  operator: In
+                  values:
+                  - worker
+              topologyKey: kubernetes.io/hostname
+        containers:
+        - env:
+          - name: RAY_memory_monitor_refresh_ms
+            value: '0'
+          - name: PYTHONPATH
+            value: /root/Megatron-LM:/root/miles
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                key: HF_TOKEN
+                name: hf-token
+          - name: FI_PROVIDER
+            value: efa
+          - name: FI_EFA_USE_DEVICE_RDMA
+            value: '1'
+          - name: FI_EFA_FORK_SAFE
+            value: '1'
+          - name: NCCL_PROTO
+            value: Simple
+          - name: NCCL_DEBUG
+            value: WARN
+          - name: RDMAV_FORK_SAFE
+            value: '1'
+          - name: NCCL_SOCKET_IFNAME
+            value: ^lo
+          - name: TOKENIZERS_PARALLELISM
+            value: 'false'
+          image: ${FULL_IMAGE}
+          imagePullPolicy: IfNotPresent
+          name: ray-worker
+          resources:
+            # EFA: request the node's FULL allocatable count, not a fraction. See the
+            # EFA_PER_NODE note in env_vars.colocated.example -- a partial request is a
+            # correctness problem on point-to-point paths (pipeline / expert parallel),
+            # not just a throughput one.
+            limits:
+              cpu: '96'
+              memory: 1900Gi
+              nvidia.com/gpu: '8'
+              vpc.amazonaws.com/efa: '${EFA_PER_NODE}'
+            requests:
+              cpu: '90'
+              memory: 1800Gi
+              nvidia.com/gpu: '8'
+              vpc.amazonaws.com/efa: '${EFA_PER_NODE}'
+          volumeMounts:
+          - mountPath: /fsx
+            name: fsx
+          - mountPath: /dev/shm
+            name: dshm
+        # ${GPU_NODE_ROLE} selects the accelerator pool: e.g. "gpu-p5en" (H200) or
+        # "gpu-b300" (B300) -- whatever node-role label your cluster's GPU NodePool
+        # carries (see README Hardware Requirements). Both generations expose the
+        # same node-role label scheme; only the value differs per cluster.
+        nodeSelector:
+          ${GPU_NODE_LABEL_KEY}: ${GPU_NODE_ROLE}
+        restartPolicy: Never
+        terminationGracePeriodSeconds: 300
+        tolerations:
+        - effect: NoSchedule
+          key: nvidia.com/gpu
+          operator: Exists
+        volumes:
+        - name: fsx
+          persistentVolumeClaim:
+            claimName: ${FSX_CLAIM}
+        - emptyDir:
+            medium: Memory
+            sizeLimit: 256Gi
+          name: dshm
