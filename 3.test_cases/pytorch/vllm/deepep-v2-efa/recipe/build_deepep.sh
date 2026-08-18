@@ -58,7 +58,11 @@ if [ -z "$FAST_BASE" ] && { [ -z "$CU13" ] || [ ! -x "$CU13/bin/nvcc" ]; }; then
   # cuda_toolkit.h hard-errors ("CUDA compiler and CUDA toolkit headers are incompatible") unless
   # CUDART_VERSION matches the nvcc compiler version. An unpinned runtime resolves to 13.3 while nvcc
   # is 13.0.88 -> the error. Pin runtime==13.0.88 too. (cccl 13.0.85 is the nearest 13.0.x cccl.)
-  pip install --no-cache-dir --break-system-packages --force-reinstall \
+  # NOTE: no --break-system-packages — the image ships pip 22.0.2 and that flag arrived
+  # in pip 23.0; passing it makes pip exit 2 ("no such option") BEFORE installing, and
+  # the || true then masks a wrong-ABI fallback build. (Ubuntu 22.04 python3.10 is not
+  # PEP-668-managed, so the flag is unnecessary here anyway.)
+  pip install --no-cache-dir --force-reinstall \
       "nvidia-cuda-nvcc==13.0.88" "nvidia-cuda-crt==13.0.88" "nvidia-nvvm==13.0.88" \
       "nvidia-cuda-runtime==13.0.88" "nvidia-cuda-cccl==13.0.85" 2>&1 | tail -4 || true
   CU13="$(find_cu13 || true)"
@@ -77,8 +81,10 @@ else
 fi
 
 # DeepEP's extension device-links (dlink=True), which REQUIRES ninja (distutils backend
-# cannot device-link). The NGC base lacks ninja, so install it.
-python3 -c "import ninja" 2>/dev/null || { echo "=== installing ninja (required for dlink CUDA ext) ==="; pip install --no-cache-dir --break-system-packages ninja 2>&1 | tail -2; }
+# cannot device-link). The Dockerfile pre-installs ninja at build time (a first-boot pip
+# install assumes PyPI egress from the pod — wrong on private-subnet/air-gapped clusters);
+# this guard remains only for non-canonical bases.
+python3 -c "import ninja" 2>/dev/null || { echo "=== installing ninja (required for dlink CUDA ext; MISSING from image — non-canonical base?) ==="; pip install --no-cache-dir ninja 2>&1 | tail -2; }
 
 cd "$DEEPEP_DIR"
 rm -rf build/temp.* deep_ep/_C*.so 2>/dev/null || true
@@ -115,9 +121,10 @@ python3 setup.py build_ext --inplace 2>&1 | tail -30
 
 echo "=== editable install so 'import deep_ep' resolves here (best-effort) ==="
 # The _C.so is now in-tree, so `import deep_ep` from /opt/DeepEP works directly. The pip
-# editable install can fail (it re-triggers a sandboxed build) but is NOT required — fall
-# back to a .pth that puts /opt/DeepEP on sys.path so every interpreter resolves it.
-pip install --no-cache-dir --break-system-packages -e . 2>&1 | tail -3 || {
+# editable install can fail (pip build isolation re-triggers a sandboxed build) but is
+# NOT required — fall back to a .pth that puts /opt/DeepEP on sys.path so every
+# interpreter resolves it.
+pip install --no-cache-dir -e . 2>&1 | tail -3 || {
   echo "(editable install failed — using a .pth fallback instead)"
   SITE="$(python3 -c 'import site;print(site.getsitepackages()[0])')"
   echo "$DEEPEP_DIR" > "$SITE/deep_ep_src.pth"

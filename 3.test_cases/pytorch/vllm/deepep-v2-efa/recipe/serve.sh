@@ -23,8 +23,9 @@
 #   mode NONE without --enforce-eager still crashes). Track the upstream item before
 #   flipping this. This script therefore refuses =0 unless you also set
 #   SERVE_I_UNDERSTAND_NONEAGER_CRASHES=1.
-set -uo pipefail
-ROLE="$1"; DP_MASTER_IP="$2"
+set -euo pipefail   # -e: preflight failures below must STOP the launch, not fall through to vllm serve
+ROLE="${1:?usage: serve.sh {leader|worker} <leader-ip> [start-rank]}"; DP_MASTER_IP="${2:?need leader ip}"
+case "$ROLE" in leader|worker) ;; *) echo "FATAL: unrecognized role '$ROLE' (leader|worker)"; exit 2 ;; esac
 DP_MASTER_PORT="${DP_MASTER_PORT:-29500}"
 
 # ---- proxy-Gin + EFA env contract (identical to the measured runs + deploy YAML) ----
@@ -36,6 +37,14 @@ export NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
 export OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1   # PR#1351: assert forced-PCIe on gdrdrv-2.4-kernel nodes
 export EP_REUSE_NCCL_COMM=0   # DeepEP creates its own comm; torch's is lazy/null under vLLM (segfault rootcause 2026-08-14)
 export NCCL_DEBUG=${SERVE_NCCL_DEBUG:-WARN}
+# EP_EFA_MAX_QPS=2 is the value the published benchmarks/ numbers were measured with
+# (DeepEP PR#612's conservative EFA default) — kept as the default so the sample
+# reproduces its own tables. It may leave throughput on the table on newer aws-ofi-nccl:
+# the 128-slot GIN request-ring overflow the cap was written for was replaced by the
+# seq-window design upstream (6e504db), and the plugin pinned here (9c44d34) includes
+# that; a 2x B200 A/B through this same vLLM path measured +29% throughput / -23% p50
+# uncapped (=129) with 0/384 failures. If you tune it, re-measure at YOUR concurrency
+# and record the value — both knobs are part of the benchmark provenance table.
 export EP_EFA_MAX_QPS=${EP_EFA_MAX_QPS:-2} EP_EFA_RDMA_GBS=${EP_EFA_RDMA_GBS:-25.0}
 
 # ---- vLLM PR#41183 (DeepEPV2All2AllManager) envs — V2-native, shim OFF ----

@@ -6,12 +6,14 @@
 #   other instance types (per-node EFA NIC count differs):
 #     p5.48xlarge  (H100): vpc.amazonaws.com/efa: "32", nodeSelector p5.48xlarge
 #     p5en.48xlarge(H200): vpc.amazonaws.com/efa: "16"  ← this file
-#     p6-b200.48xlarge   : vpc.amazonaws.com/efa: "8", and set DEEPEP_ARCH_LIST=10.0
+#     p6-b200.48xlarge   : vpc.amazonaws.com/efa: "8",  and set DEEPEP_ARCH_LIST=10.0 (env below)
+#     p6-b300.48xlarge   : vpc.amazonaws.com/efa: "16", and set DEEPEP_ARCH_LIST=10.3 (env below).
+#       NOTE (B300): the pinned vLLM wheel carries no sm_103 SASS (sm_75..90a/100/120, PTX to
+#       sm_90) — B300 runs on sm_100 SASS compatibility; the in-pod DeepEP build is native 10.3.
 #
 # Image: build the sample-root Dockerfile (NGC-from-scratch, public sources only) and push to
-# YOUR registry (setup/build-push.sh does this):
-#   docker build -t <your-registry>/vllm-deepep-v2-guide:local .
-# Then replace image: below. Do NOT point at anyone's private registry.
+# YOUR registry — setup/build-push.sh builds ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} from
+# setup/env_vars; set image: below to that SAME name. Do NOT point at anyone's private registry.
 #
 # privileged: true is REQUIRED where /dev/gdrdrv is not advertised by a device plugin
 # (measured 2026-08-01: the unprivileged device cgroup blocks open("/dev/gdrdrv") with
@@ -31,6 +33,10 @@ metadata:
   namespace: vllm-deepep
 spec:
   clusterIP: None            # headless — stable per-pod DNS for the DP rendezvous
+  # publishNotReadyAddresses pairs with the container readinessProbe below: workers
+  # resolve the leader through this Service's DNS A-record BEFORE vLLM is up, so the
+  # not-ready leader address must still publish or the rendezvous deadlocks.
+  publishNotReadyAddresses: true
   selector:
     app: vllm-deepep-v2
   ports:
@@ -70,12 +76,13 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
       - name: vllm
-        image: REPLACE_WITH_YOUR_REGISTRY/vllm-deepep-v2-guide:local
+        image: REPLACE_WITH_YOUR_REGISTRY/vllm-deepep-v2-efa:v1-20260818   # = ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} from setup/env_vars
         imagePullPolicy: IfNotPresent
         command: ["/bin/bash", "-c"]
         args:
         - |
-          set -uo pipefail
+          set -euo pipefail   # -e: a failed DeepEP build must STOP startup here, not
+                              # surface later as an opaque vLLM import error
           echo "=== vLLM DeepEP-V2 guide pod $(hostname) $(date -u +%FT%TZ) ==="
           echo "DeepEP effective SHA: $(cat /opt/deepep.effective.sha 2>/dev/null || echo unknown)"
 
@@ -88,20 +95,24 @@ spec:
           LEADER_DNS="vllm-deepep-v2-0.vllm-deepep-v2.vllm-deepep.svc.cluster.local"
           for i in $(seq 1 120); do getent hosts "$LEADER_DNS" >/dev/null 2>&1 && break; sleep 1; done
           LEADER_IP=$(getent hosts "$LEADER_DNS" | awk '{print $1}' | head -1)
+          test -n "$LEADER_IP" || { echo "FATAL: leader DNS $LEADER_DNS never resolved"; exit 1; }
           echo "=== ordinal=$ORDINAL leader=$LEADER_IP ==="
 
-          # 3) serve — leader on ordinal 0, workers derive start-rank from ordinal.
+          # 3) serve — leader on ordinal 0, workers derive start-rank from ordinal
+          #    x SERVE_DP_LOCAL (the GPUs-per-node knob — keep manifest + serve.sh consistent).
           #    Leader must be up first (receiver-before-sender); workers wait on DNS above.
           if [ "$ORDINAL" = "0" ]; then
             exec bash /opt/serve.sh leader "$LEADER_IP"
           else
-            exec bash /opt/serve.sh worker "$LEADER_IP" $((ORDINAL * 8))
+            exec bash /opt/serve.sh worker "$LEADER_IP" $((ORDINAL * ${SERVE_DP_LOCAL:-8}))
           fi
         env:
-        # ---- scale + model (the two knobs; defaults = measured EP16 shape) ----
-        - { name: SERVE_DP,    value: "16" }        # total DP = EP size; 32 for 4 nodes
+        # ---- scale + model (the knobs; defaults = measured EP16 shape) ----
+        - { name: SERVE_DP,       value: "16" }     # total DP = EP size; 32 for 4 nodes
+        - { name: SERVE_DP_LOCAL, value: "8" }      # GPUs per node — worker start-ranks derive from this
         - { name: SERVE_MODEL, value: "Qwen/Qwen3-30B-A3B-FP8" }  # any MoE with n_routed_experts % DP == 0 (serve.sh asserts)
         # - { name: SERVE_ENFORCE_EAGER, value: "1" }   # 1 = default & KNOWN-GOOD; non-eager pending the upstream guard (README "eager vs non-eager")
+        # - { name: DEEPEP_ARCH_LIST, value: "10.0" }   # in-pod DeepEP build arch; default 9.0 (H100/H200) — set 10.0 on p6-b200
         # - { name: HF_TOKEN, valueFrom: { secretKeyRef: { name: hf-token, key: token } } }  # gated models only
 
         # ---- proxy-Gin + EFA contract, VERBATIM (also baked as image ENV; repeated
@@ -123,6 +134,24 @@ spec:
         - { name: DEEP_EP_BACKEND,           value: "nccl" }
         - { name: NCCL_NET_PLUGIN,           value: "/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so" }
         - { name: NCCL_DEBUG,                value: "WARN" }  # INFO to see the efa-direct banner proof
+        # readiness reports real serving state (vLLM /health on the leader's :8000; workers
+        # are --headless so probe the DP-rpc port instead). The in-pod DeepEP compile (~2 min)
+        # + model load happen before Ready — pairs with publishNotReadyAddresses on the Service
+        # (workers need the leader's DNS record BEFORE it is Ready, or the rendezvous deadlocks).
+        # leader (ordinal 0): vLLM /health on :8000 = the real "serving" signal.
+        # workers run --headless (no HTTP server), so their probe is process-liveness only.
+        startupProbe:
+          exec:
+            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health; else pgrep -f 'vllm serve' >/dev/null; fi"]
+          periodSeconds: 30
+          failureThreshold: 120              # up to 60 min: in-pod compile + multi-hundred-GB model load
+        readinessProbe:
+          exec:
+            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health; else pgrep -f 'vllm serve' >/dev/null; fi"]
+          periodSeconds: 15
+        # requests == limits (Guaranteed QoS): NCCL_GIN_TYPE=2 is the CPU-PROXY path, so
+        # proxy-thread CPU sits on the data path — Burstable QoS + CFS throttling under node
+        # pressure would degrade network throughput and silently taint published numbers.
         resources:
           limits:
             nvidia.com/gpu: "8"
@@ -134,8 +163,8 @@ spec:
             nvidia.com/gpu: "8"
             vpc.amazonaws.com/efa: "16"
             hugepages-2Mi: 5120Mi
-            cpu: "32"
-            memory: 256Gi
+            cpu: "90"
+            memory: 1024Gi
         securityContext:
           privileged: true                   # gdrdrv device-cgroup (see header)
           capabilities:

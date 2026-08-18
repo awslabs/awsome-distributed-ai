@@ -1,8 +1,11 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
 # Copy to setup/env_vars (gitignored) and edit. Sourced by setup/build-push.sh + recipe/*.sh.
-export REGISTRY="123456789012.dkr.ecr.us-east-2.amazonaws.com"   # YOUR ECR — no registry is hardcoded anywhere
+export REGISTRY="<your-account-id>.dkr.ecr.<your-region>.amazonaws.com"   # YOUR ECR — no registry is hardcoded anywhere
 export IMAGE_NAME="vllm-deepep-v2-efa"
-export IMAGE_TAG="latest"
+# Immutable tag — never "latest": with the manifest's imagePullPolicy: IfNotPresent, a
+# node that cached "latest" silently keeps running the OLD image after a rebuild-and-push.
+# Bump the tag on every rebuild (date or git SHA both work).
+export IMAGE_TAG="v1-20260818"
 export AWS_REGION="us-east-2"
 # aws-ofi-nccl PR#1351 (OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY param) is pinned at its immutable
 # head SHA in the Dockerfile; override here only to test a newer head:

@@ -6,7 +6,8 @@
 # curled) so it is in-tree + reviewable. The DeepEP _C.so is built IN-POD on first boot
 # (recipe/build_deepep.sh) — it needs a live CUDA context the build sandbox lacks.
 #
-#   DOCKER_BUILDKIT=1 docker build -t vllm-deepep-v2-efa:latest .
+#   setup/build-push.sh builds + pushes ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} (setup/env_vars);
+#   manual equivalent: DOCKER_BUILDKIT=1 docker build -t <registry>/vllm-deepep-v2-efa:<tag> .
 #
 ARG CUDA_VER=13.0.0                                   # cu13 to match the torch 2.11+cu130 ABI DeepEP links
 FROM nvcr.io/nvidia/cuda:${CUDA_VER}-devel-ubuntu22.04
@@ -23,10 +24,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ---- Layer 2: AWS EFA (public installer; pinned, verified fresher than 1.48 per freshness rule) ----
+# --disable-ngc: this NGC base ships /opt/nvidia/nvidia_entrypoint.sh, which trips the
+# installer's NGC auto-detect and silently reroutes it down the libnccl-ofi-ngc path.
+# We build aws-ofi-nccl from source ourselves (Layer 4), so force the normal install —
+# same explicit choice as the sibling sglang/dsr1-deepep-efa and vllm/dsv3-uccl-nixl samples.
 ARG EFA_INSTALLER_VER=1.49.0                          # pin — no 'latest' (the stack under test)
 RUN apt-get update \
     && curl -fsSL https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VER}.tar.gz | tar -xzf - -C /tmp \
-    && cd /tmp/aws-efa-installer && ./efa_installer.sh -y --skip-kmod --skip-limit-conf --no-verify \
+    && cd /tmp/aws-efa-installer && ./efa_installer.sh -y --skip-kmod --skip-limit-conf --no-verify --disable-ngc \
     && echo "${EFA_INSTALLER_VER}" > /opt/efa-installer.version \
     && rm -rf /tmp/aws-efa-installer /var/lib/apt/lists/*
 ENV PATH=/opt/amazon/efa/bin:/opt/amazon/openmpi/bin:$PATH
@@ -38,7 +43,10 @@ ARG TORCH_INDEX="https://download.pytorch.org/whl/cu130"
 ARG NVIDIA_NCCL_CU13="2.30.4"                         # 2.28.x lacks the GIN/LSA symbols the plugin needs
 ARG NVSHMEM_CU13="3.6.5"
 RUN pip3 install --no-cache-dir --index-url "${TORCH_INDEX}" "${TORCH_SPEC}" \
-    && pip3 install --no-cache-dir "nvidia-nccl-cu13==${NVIDIA_NCCL_CU13}" "nvidia-nvshmem-cu13==${NVSHMEM_CU13}"
+    && pip3 install --no-cache-dir "nvidia-nccl-cu13==${NVIDIA_NCCL_CU13}" "nvidia-nvshmem-cu13==${NVSHMEM_CU13}" ninja
+# ninja is baked here EXPLICITLY (build_deepep.sh device-links the DeepEP extension, which
+# requires it): first pod boot must not depend on PyPI egress — private-subnet/air-gapped
+# clusters would otherwise fail inside a compile step instead of a clear network error.
 # resolve the pip nccl onto the linker path (dynamic — never hardcode python3.NN) so it wins over any system libnccl
 RUN NCCL_ROOT=$(python3 -c "import nvidia.nccl, pathlib; print(pathlib.Path(nvidia.nccl.__path__[0]))") \
     && echo "$NCCL_ROOT/lib" > /etc/ld.so.conf.d/00-pip-nccl.conf && ldconfig \
@@ -69,9 +77,15 @@ RUN chmod +x /opt/setup_deepep_v2_efa.sh \
 ENV LD_LIBRARY_PATH=/opt/aws-ofi-nccl/lib:${LD_LIBRARY_PATH}
 
 # ---- Layer 5: vLLM (pinned wheel = the first commit with the deepep_v2 backend, PR#41183) ----
+# The wheel FILENAME is derived from the per-commit index at build time, so bumping
+# VLLM_SHA ALONE is sufficient (hardcoding the filename would embed the SHA twice and a
+# lone bump 404s — the exact edit the README recommends once vLLM #52632 merges).
+# NOTE: wheels.vllm.ai nightly wheels are garbage-collected upstream, so this pin has a
+# shelf life independent of this repo; the fail-loud check below names that cause.
 ARG VLLM_SHA=e2f993dc4116ba96ea10ec40b7bd2ee45b27b2b8
-ARG VLLM_WHEEL_URL="https://wheels.vllm.ai/${VLLM_SHA}/vllm-0.22.1rc1.dev283%2Bge2f993dc4-cp38-abi3-manylinux_2_28_x86_64.whl"
-RUN pip3 install --no-cache-dir "${VLLM_WHEEL_URL}" \
+RUN WHEEL_HREF=$(curl -fsSL "https://wheels.vllm.ai/${VLLM_SHA}/vllm/" | grep -oE 'href="[^"]*manylinux[^"]*x86_64\.whl"' | head -1 | cut -d'"' -f2) \
+    && { [ -n "$WHEEL_HREF" ] || { echo "FATAL: no x86_64 vllm wheel indexed for ${VLLM_SHA} (bad SHA, or nightly wheel garbage-collected upstream)"; exit 1; }; } \
+    && pip3 install --no-cache-dir "https://wheels.vllm.ai/${VLLM_SHA}/$(basename "$WHEEL_HREF")" \
     && python3 -c "import vllm; print('vllm', vllm.__version__)"
 
 # ---- Layer 5b: re-pin the ABI-critical cu13 libs AFTER the last pip layer (order matters) ----
@@ -90,7 +104,8 @@ COPY recipe/build_deepep.sh /opt/build_deepep.sh
 COPY recipe/serve.sh /opt/serve.sh
 COPY recipe/run-kernel-test.sh /opt/run-kernel-test.sh
 COPY recipe/benchmark_probe.py /opt/benchmark_probe.py
-RUN chmod +x /opt/build_deepep.sh /opt/serve.sh /opt/run-kernel-test.sh
+COPY recipe/benchmark.sh /opt/benchmark.sh
+RUN chmod +x /opt/build_deepep.sh /opt/serve.sh /opt/run-kernel-test.sh /opt/benchmark.sh
 
 # The segfault-fix env (EP_REUSE_NCCL_COMM=0) + proxy-Gin contract are set by recipe/serve.sh at launch.
 CMD ["/bin/bash", "-lc", "echo 'run: recipe/serve.sh {leader|worker} <ip>; build_deepep.sh runs once on first boot'; sleep infinity"]
