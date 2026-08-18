@@ -462,6 +462,21 @@ def _validate_batch_divisibility(cfg: DictConfig) -> None:
     else:
         effective = (mini * n) // world_size
         if effective < 1 or effective % micro != 0:
+            hint = (
+                "Set training.ppo_mini_batch_size, or lower "
+                "training.ppo_micro_batch_size_per_gpu."
+            )
+            # A per-model override is sized for that model's Megatron data-parallel
+            # layout, which FSDP does not share. Say so rather than leaving the reader to
+            # work out why a value the model config blesses is being rejected.
+            if OmegaConf.select(cfg.model, "ppo_mini_batch_size", default=None) is not None:
+                hint = (
+                    f"{mini} comes from conf/model/ and was chosen for this model's "
+                    f"Megatron DP layout, which FSDP does not share. If you meant to run "
+                    f"this model, use backend=megatron; conf/backend/fsdp.yaml is scoped "
+                    f"to models up to ~72B. Otherwise override "
+                    f"training.ppo_mini_batch_size on the CLI."
+                )
             raise SystemExit(
                 f"ABORT: ppo_mini_batch_size={mini} is not valid for this shape.\n"
                 f"  world_size = {world_size} "
@@ -469,8 +484,7 @@ def _validate_batch_divisibility(cfg: DictConfig) -> None:
                 f"  effective  = {mini}*{n}//{world_size} = {effective}\n"
                 f"  need effective >= 1 and effective % micro({micro}) == 0 "
                 f"(got {effective % micro if effective else 'n/a'})\n"
-                f"Set training.ppo_mini_batch_size, or lower "
-                f"training.ppo_micro_batch_size_per_gpu."
+                f"{hint}"
             )
 
 

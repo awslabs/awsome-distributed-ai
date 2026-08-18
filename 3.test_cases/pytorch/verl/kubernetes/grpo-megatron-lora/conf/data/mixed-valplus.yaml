@@ -1,6 +1,6 @@
+# @package _global_
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-# @package _global_
 # Mixed code/math with an ENLARGED, CLEAN math validation split.
 #
 # TRAIN IS BYTE-IDENTICAL TO THE CONTROL. `train_file` points at the same

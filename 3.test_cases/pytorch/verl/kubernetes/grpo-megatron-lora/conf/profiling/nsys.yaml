@@ -1,6 +1,6 @@
+# @package _global_
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-# @package _global_
 # Nsight Systems — deep GPU/NCCL analysis, ~20-30% overhead.
 # View reports with Nsight Systems GUI (nsys-ui).
 profiling:
