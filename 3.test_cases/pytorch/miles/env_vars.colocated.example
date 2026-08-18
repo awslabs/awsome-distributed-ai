@@ -1,0 +1,200 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# ============================================================
+# miles on EKS - Environment (COLOCATED)
+#
+# Colocated Qwen3-4B GRPO: training (Megatron) and rollout (SGLang) time-share
+# the same GPUs. This is the simplest topology and the default reference run.
+#
+# Copy to env_vars and adjust paths:
+#   cp env_vars.colocated.example env_vars && vim env_vars
+# (HF_TOKEN is provided to the pods via the k8s Secret `hf-token`, not this file.)
+# ============================================================
+
+# ----- AWS / ECR -----
+# Region and account are derived from your current AWS credentials/config so
+# nothing environment-specific is hard-coded. Override AWS_REGION if needed.
+export AWS_REGION="${AWS_REGION:-$(aws configure get region)}"
+export AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+export REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/"
+export IMAGE="miles-hyperpod"
+# Pinned build tag, matching kubernetes/buildkit-job.yaml (avoid ":latest").
+#
+# BUMP THIS ON EVERY REBUILD. The Ray pods use imagePullPolicy: IfNotPresent, so pushing a
+# new image under a tag a node has already pulled leaves that node running the OLD image,
+# with no error and no log line saying so -- and a cluster where some nodes pulled before
+# the push and some after is running two different builds in one job. Changing the tag is
+# what makes the rollout observable.
+export TAG="miles-cuda13-efa-0.1"
+export FULL_IMAGE="${REGISTRY}${IMAGE}:${TAG}"
+
+# ----- HuggingFace -----
+# The pods read HF_TOKEN from the k8s Secret `hf-token` (see raycluster.yaml), so
+# it is NOT passed via the Ray runtime-env. Create the Secret once:
+#   kubectl create secret generic hf-token --from-literal=HF_TOKEN=hf_xxx -n "${NAMESPACE:-default}"
+
+# ----- Model (Qwen3-4B dense, bf16) -----
+export MODEL_NAME="Qwen/Qwen3-4B"                      # HF repo id, for the download step
+                                                       # only; the recipes read MODEL_LOCAL
+                                                       # and MODEL_DIST, not this
+export MODEL_LOCAL="/fsx/models/Qwen3-4B"              # SGLang rollout init (--hf-checkpoint)
+export MODEL_DIST="/fsx/models/Qwen3-4B_torch_dist"    # Megatron training (--ref-load), bf16
+export COLOCATE="true"
+export TP_SIZE=1
+export PP_SIZE=1
+export CP_SIZE=1
+export EP_SIZE=1
+export ROLLOUT_NUM_GPUS=8
+export ROLLOUT_GPUS_PER_ENGINE=1
+export ACTOR_NUM_NODES=1
+export ACTOR_GPUS_PER_NODE=8
+export MAX_TOKENS_PER_GPU=8192
+export ROLLOUT_MAX_RESPONSE_LEN=8192
+export MODEL_SCRIPT="qwen3-4B.sh"
+
+# ----- Cluster -----
+export NAMESPACE="default"
+export FSX_CLAIM="fsx-claim"
+# Node/GPU topology comes from ACTOR_NUM_NODES / ACTOR_GPUS_PER_NODE / ROLLOUT_NUM_GPUS above;
+# ACTOR_NUM_NODES also drives the RayCluster's worker replica count, so the manifest and the
+# recipe cannot disagree.
+#
+# GPU_NODE_ROLE is the `node-role` label on your GPU pool, substituted into
+# kubernetes/raycluster.yaml's nodeSelector. Only this value is GPU-generation-specific; see
+# the README's Verification Status for what has and has not been run on which hardware.
+# Node placement is a label KEY:VALUE pair, and BOTH are cluster-specific. The manifest
+# schedules workers on ${GPU_NODE_LABEL_KEY}:${GPU_NODE_ROLE} and the head on
+# ${CPU_NODE_LABEL_KEY}:${CPU_NODE_ROLE}. The defaults below (key "node-role") match the
+# awsome-distributed-ai Terraform EKS reference; a generic EKS or HyperPod cluster has NO
+# "node-role" label. Find yours with `kubectl get nodes --show-labels` -- e.g. the well-known
+# `node.kubernetes.io/instance-type` (value "p5en.48xlarge"), an EKS managed-nodegroup label
+# `eks.amazonaws.com/nodegroup`, or a HyperPod `sagemaker.amazonaws.com/instance-group-name`.
+# A wrong key OR value leaves pods stuck Pending with FailedScheduling, not an obvious error.
+export GPU_NODE_LABEL_KEY="node-role"
+export GPU_NODE_ROLE="gpu-p5en"          # e.g. "gpu-b300" on a B300 pool
+# The Ray head must land on a node that has the CUDA driver (libcuda.so.1): miles's control
+# actors import Megatron/transformer_engine at startup even though they request num-gpus 0,
+# and that import hard-fails on a GPU-less node. So the head defaults to the SAME pool as the
+# workers (it runs num-gpus 0 and consumes no GPU, only CPU/disk); the manifest carries a
+# toleration for the GPU pool's taint. Do NOT point these at a CPU-only pool.
+export CPU_NODE_LABEL_KEY="${GPU_NODE_LABEL_KEY}"
+export CPU_NODE_ROLE="${GPU_NODE_ROLE}"
+
+# WORKER_REPLICAS: number of GPU worker nodes the RayCluster launches. COLOCATE=true shares one
+# pool, so this equals ACTOR_NUM_NODES. COLOCATE=false uses SEPARATE actor and rollout GPUs, so
+# it must cover both: ceil((ACTOR_NUM_NODES*ACTOR_GPUS_PER_NODE + ROLLOUT_NUM_GPUS)/8). Setting
+# it to ACTOR_NUM_NODES for a disaggregated run under-sizes the cluster and the job hangs on
+# placement. Derived here so the two layouts cannot silently disagree with the manifest:
+if [ "${COLOCATE}" = "true" ]; then
+  export WORKER_REPLICAS="${ACTOR_NUM_NODES}"
+else
+  export WORKER_REPLICAS=$(( ( ACTOR_NUM_NODES*ACTOR_GPUS_PER_NODE + ROLLOUT_NUM_GPUS + 7 ) / 8 ))
+fi
+# EFA_PER_NODE: EFA devices each worker pod requests, substituted into
+# kubernetes/raycluster.yaml. Set it to your node's FULL allocatable count:
+#
+#   kubectl get node <gpu-node> \
+#     -o jsonpath='{.status.allocatable.vpc\.amazonaws\.com/efa}'
+#
+# p5en.48xlarge reports 15 allocatable (16 physical, one held back by the device
+# plugin); p5.48xlarge reports 32. Do NOT guess from the instance spec -- read it
+# off the node, because the allocatable count is what the scheduler honours.
+#
+# A partial request is a CORRECTNESS problem, not just a throughput one. When a pod
+# claims fewer cards than the node exposes, the device plugin chooses which ones,
+# the two pods can end up with different EFA-device-to-NIC-rail mappings, and
+# aws-ofi-nccl aborts:
+#
+#   NET/OFI Unexpected number of remote rails for dev N. Expected 1 but got 2
+#   ncclInternalError: Internal check failed
+#
+# This does not appear in an all-reduce smoke test -- all-reduce across the node
+# boundary passes with a partial request. It surfaces only on point-to-point
+# traffic, i.e. pipeline parallel (PP>1) and MoE expert parallel (EP>1), so an
+# EFA validation that only runs all_reduce_perf will report success and the failure
+# lands later inside training. Requesting the full count avoids it entirely.
+export EFA_PER_NODE=15
+
+# ----- Training -----
+export PROMPT_DATA="/fsx/data/dapo-math-17k/dapo-math-17k.jsonl"
+export EVAL_DATA="/fsx/data/aime-2024/aime-2024.jsonl"
+# Each run MUST get its own CHECKPOINT_DIR: --load otherwise tries to resume a
+# scheduler built for a different total-iteration count. train_iters = num_rollout
+# here (16 x 8 // 128 = 1 step/rollout), so NUM_ROLLOUT == optimizer steps.
+export CHECKPOINT_DIR="/fsx/runs/qwen3-4b/ckpt"
+# SAVE_INTERVAL is set beyond NUM_ROLLOUT on purpose: miles's save_model() currently
+# fails with a pickle-truncation error (see README Known Issues), so a mid-run save
+# would crash the job. Lower this ONLY once that issue is resolved; until then a
+# checkpoint-triggering value is a guaranteed failure, so the default must not trigger one.
+export SAVE_INTERVAL=1000
+export NUM_ROLLOUT=100
+export ROLLOUT_BATCH_SIZE=16
+export N_SAMPLES_PER_PROMPT=8
+export GLOBAL_BATCH_SIZE=128
+export NUM_STEPS_PER_ROLLOUT=1
+export LEARNING_RATE="1e-6"
+export ROLLOUT_TEMPERATURE=1.0
+
+# ----- Reward -----
+# Default: in-process rule-based reward (runs on the GPU rollout nodes).
+# Built-in types include: deepscaler, dapo, math, f1, gpqa.
+export RM_TYPE="deepscaler"
+
+# ----- Observability (optional) -----
+# TENSORBOARD_DIR is forwarded into the Ray runtime env by the recipe so
+# --use-tensorboard writes event files onto shared storage. Extra train.py flags
+# can be appended without editing the recipe via EXTRA_TRAIN_ARGS (see the
+# EXTRA_TRAIN_ARGS_ARR block in recipe/run_grpo_qwen3_4b.sh).
+export TENSORBOARD_DIR="/fsx/tb/qwen3-4b"
+export EXTRA_TRAIN_ARGS="--use-tensorboard"
+
+# ============================================================
+# ALTERNATE: Qwen3-30B-A3B MoE, colocated on 2 nodes (16 GPU)
+# ------------------------------------------------------------
+# To run the 30B MoE case instead of 4B, override the model block above with the
+# values below (uncomment) and launch recipe/run_grpo_qwen3_30b_a3b.sh.
+#
+# This block trains cleanly as written: rollout/raw_reward 0.578, repetition 0.0 over
+# NUM_ROLLOUT=2 (comparable to the dense 4B run). Here EP_SIZE equals ROLLOUT_GPUS_PER_ENGINE
+# (both 2), so the rollout MoE runs pure expert-parallel (moe_tp=1). Setting
+# ROLLOUT_GPUS_PER_ENGINE larger than EP_SIZE runs the MoE tensor-parallel AND expert-parallel
+# at once (moe_tp>1 and moe_ep>1), which trips a FlashInfer allreduce-fusion bug in this SGLang
+# build; the recipe detects that and disables the fusion so those geometries train too (at some
+# rollout-throughput cost). See README.md Known Issues item 2.
+#
+# The actor spans ALL 16 GPU (2 nodes x 8) with --use-distributed-optimizer
+# (added by the recipe) so the 30B optimizer state is sharded and fits H200
+# (141GB). Confining the actor to 8 GPU OOMs. Colocated rollout time-shares the
+# same 16 GPU. MoE online weight update needs the triton runner + explicit
+# --sglang-expert-parallel-size (both added by the recipe from EP_SIZE).
+#
+# On B300 (288GB HBM/GPU, ~2x H200's 141GB), the disaggregated 8-actor layout
+# that OOMs on H200 is expected to fit without --use-distributed-optimizer --
+# UNVERIFIED, not run on this hardware. If you have B300 capacity, that is the
+# natural next verification step (see README Verification Status).
+#
+# export MODEL_NAME="Qwen/Qwen3-30B-A3B"
+# export MODEL_LOCAL="/fsx/models/Qwen3-30B-A3B"
+# export MODEL_DIST="/fsx/models/Qwen3-30B-A3B_torch_dist"
+# export MODEL_SCRIPT="qwen3-30B-A3B.sh"
+# export COLOCATE="true"
+# export TP_SIZE=2
+# export PP_SIZE=1
+# export CP_SIZE=1
+# export EP_SIZE=2
+# export ACTOR_NUM_NODES=2
+# export ACTOR_GPUS_PER_NODE=8
+# export ROLLOUT_NUM_GPUS=16
+# export ROLLOUT_GPUS_PER_ENGINE=2
+# export MAX_TOKENS_PER_GPU=8192
+# export SGLANG_MEM_FRACTION=0.75
+# export CHECKPOINT_DIR="/fsx/runs/qwen3-30b/ckpt"
+# export TENSORBOARD_DIR="/fsx/tb/qwen3-30b"
+# NOTE: do NOT set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True for the 30B
+# colocated run -- SGLang's torch_memory_saver (used to release rollout memory
+# during the training phase) is incompatible with expandable_segments and aborts
+# the rollout engine at init. The 4B run tolerates it; the 30B colocated run must
+# omit it. CUDA_DEVICE_MAX_CONNECTIONS=1 is required by Megatron whenever TP>1 (or
+# CP>1); the 30B recipe sets it in its runtime-env. The 4B recipe does NOT (the
+# baseline is TP=1); if you raise the 4B config to TP>1, add it to that recipe's
+# runtime-env too or the run asserts at startup.

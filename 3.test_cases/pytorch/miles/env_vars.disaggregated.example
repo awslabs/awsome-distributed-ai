@@ -1,0 +1,75 @@
+# STATUS: UNVERIFIED overlay -- disaggregated reward on a CPU pool; not run on miles.
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# DISAGGREGATED workload profile for the miles GRPO sample.
+#
+# An overlay sourced ON TOP OF the base env_vars. It moves reward scoring to a
+# separate CPU instance group (disaggregating it from the GPU rollout) and turns
+# up the workload on both tiers.
+#
+# Usage:
+#   cp env_vars.colocated.example env_vars && edit secrets (HF_TOKEN)
+#   cp env_vars.disaggregated.example env_vars.disaggregated
+#   source env_vars && source env_vars.disaggregated
+#
+# This profile deliberately increases load on BOTH tiers:
+#   * GPU tier  -- larger rollout batch, more samples/prompt, longer responses
+#                  and bigger global batch => more generation + more optimizer
+#                  work per step on the p5 nodes.
+#   * Reward tier -- a real reward MODEL (deberta-v3-large) scaled to one replica
+#                  per CPU node, so the CPU pool is the busy, independently-scaled
+#                  tier instead of a millisecond rule-based check.
+#
+# Assumes:
+#   * env_vars (Option A: Qwen3-4B, colocated) has already been sourced.
+#   * A CPU node pool named ${REWARD_NODE_GROUP} already exists, in the same AZ as the GPU
+#     pool, with no EFA. Create it however your cluster provisions capacity -- a Karpenter
+#     NodePool, an EKS managed node group, or a SageMaker HyperPod instance group -- then set
+#     the name below to match. This test case does not create it for you.
+
+# ----- Heavier GRPO config (GPU tier) -----
+export ROLLOUT_BATCH_SIZE=64          # was 16  -> 4x more prompts per rollout
+export N_SAMPLES_PER_PROMPT=16        # was 8   -> 2x more responses per prompt
+# GRPO batch-size constraint: ROLLOUT_BATCH_SIZE × N_SAMPLES_PER_PROMPT = GLOBAL_BATCH_SIZE × NUM_STEPS_PER_ROLLOUT
+export GLOBAL_BATCH_SIZE=512          # was 128 -> 4x bigger optimizer step
+export NUM_STEPS_PER_ROLLOUT=2        # adjusted to satisfy constraint: 64*16 = 512*2
+export ROLLOUT_MAX_RESPONSE_LEN=16384 # was 8192 -> 2x longer generations
+export NUM_ROLLOUT=20                 # short but heavy run for the demo
+export ROLLOUT_TEMPERATURE=1.0
+# 64 prompts x 16 samples = 1024 generations scored per rollout step, which is
+# what drives sustained load onto the c5 reward pool.
+
+# ----- Heavier reward tier (CPU Spot pool, e.g. c5) -----
+export RM_TYPE="remote_rm"
+export REWARD_BACKEND="reward_model"
+export REWARD_MODEL_NAME="OpenAssistant/reward-model-deberta-v3-large-v2"
+# Image for the reward pods. kubernetes/reward-service.yaml substitutes ${REWARD_IMAGE}
+# through envsubst, so leaving it unset renders `image: ""` and the Deployment is rejected.
+# It is built from reward_service.Dockerfile, which is CPU-only and much smaller than the
+# miles GPU image, so it is a separate build:
+#   docker build -f reward_service.Dockerfile -t "${REWARD_IMAGE}" .
+#   docker push "${REWARD_IMAGE}"
+# On a cluster with no local Docker daemon, build it in-cluster the same way the main image is
+# built (see the BuildKit step in README.md), but with a ConfigMap that carries all three build
+# inputs -- Dockerfile, reward_service/requirements.txt, and reward_service/app.py -- since
+# reward_service.Dockerfile COPYs the latter two from the build context.
+export REWARD_IMAGE_NAME="miles-reward"
+export REWARD_TAG="v1"                 # pinned; avoid ":latest" per CONTRIBUTING
+export REWARD_IMAGE="${REGISTRY}${REWARD_IMAGE_NAME}:${REWARD_TAG}"
+# Name of the CPU node pool hosting the reward pods; it must already exist (see the Assumes
+# block at the top of this file -- this test case does not create it for you).
+#
+# Weigh Spot carefully here. The reward service is stateless, but miles's `remote_rm` client
+# has no retry-with-backoff (see the README's Known Issues), so a Spot interruption landing
+# mid-rollout can fail the reward call and take the training job with it. Multiple replicas
+# behind the Service narrow that window without closing it. Use On-Demand if the run must not
+# be interrupted.
+export REWARD_NODE_GROUP="reward-spot-c5"
+export REWARD_REPLICAS=4               # one per node
+# ml.c5.4xlarge is 16 physical vCPU, but this sample provisions the group with
+# ThreadsPerCore=1 (hyperthreading off) -> ~8 logical / 7.9 allocatable vCPU on
+# EKS. TORCH_NUM_THREADS is sized to fit alongside the pod cpu request below.
+# If you provision with ThreadsPerCore=2, raise this toward ~14.
+export REWARD_TORCH_THREADS=6
+export RM_URL="http://miles-reward.${NAMESPACE}.svc.cluster.local:8000/score"
