@@ -69,6 +69,12 @@ spec:
                 if curl -sf "http://vllm-eval.${KUBE_NAMESPACE}.svc.cluster.local:8000/v1/models" >/dev/null; then
                   echo "[valeval] vLLM up"; break; fi
                 sleep 15
+                # Fail at the readiness gate rather than falling through into the eval
+                # driver with a dead endpoint.
+                if [ "$i" -eq 120 ]; then
+                  echo "[valeval] ERROR: vLLM never became ready at ${VLLM_URL}" >&2
+                  exit 1
+                fi
               done
 
               LIMIT_ARG=""

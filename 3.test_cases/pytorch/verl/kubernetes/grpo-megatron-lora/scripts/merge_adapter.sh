@@ -80,7 +80,11 @@ DTYPE="${DTYPE:-bfloat16}"
 # r=128/alpha=256 lives in its own tree. So `merge_adapter.sh 100` with default
 # arguments merges the WRONG experiment's adapter, and the non-zero gate, the
 # delta gate and check_merge_parity.py all pass -- none of them look at WHICH
-# adapter it is. Set EXPECT_LORA_RANK to make that failure loud and immediate.
+# adapter it is.
+#
+# This is therefore fail-closed. A gate that is off unless you already know to turn it
+# on protects nobody, and README points at check_merge_parity.py as the thing to run
+# "before spending eval GPU-hours" -- so the identity check has to be on by default.
 EXPECT_LORA_RANK="${EXPECT_LORA_RANK:-}"
 EXPECT_LORA_ALPHA="${EXPECT_LORA_ALPHA:-}"
 EXPECT_ARGS=()
@@ -90,9 +94,17 @@ fi
 if [ -n "${EXPECT_LORA_ALPHA}" ]; then
     EXPECT_ARGS+=( --expect-alpha "${EXPECT_LORA_ALPHA}" )
 fi
-if [ ${#EXPECT_ARGS[@]} -eq 0 ]; then
-    echo "WARNING: EXPECT_LORA_RANK unset -- nothing will verify WHICH adapter is merged." >&2
-    echo "         DATASET currently resolves to '${DATASET}'." >&2
+if [ ${#EXPECT_ARGS[@]} -eq 0 ] && [ "${ALLOW_UNVERIFIED_ADAPTER:-0}" != "1" ]; then
+    echo "ERROR: EXPECT_LORA_RANK unset -- nothing verifies WHICH adapter is merged." >&2
+    echo "       DATASET currently resolves to '${DATASET}'." >&2
+    echo "       Every other gate (non-zero, delta, check_merge_parity.py) passes on an" >&2
+    echo "       adapter from the wrong experiment, so merging without this is untraceable." >&2
+    echo "" >&2
+    echo "       Set the rank the run was trained at:" >&2
+    echo "         EXPECT_LORA_RANK=32 EXPECT_LORA_ALPHA=64 $0 $*" >&2
+    echo "       Or, to merge without an identity check:" >&2
+    echo "         ALLOW_UNVERIFIED_ADAPTER=1 $0 $*" >&2
+    exit 1
 fi
 
 # Single verl pin — matches scripts/runtime_env.yaml (v0.8.0). Keep in sync.

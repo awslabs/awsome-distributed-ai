@@ -120,8 +120,11 @@ is already in native HF PEFT format, so merging is a plain
 `PeftModel.from_pretrained(base, adapter).merge_and_unload()`:
 
 ```bash
-./scripts/merge_adapter.sh 350                        # full merge
-DRY_RUN=1 ./scripts/merge_adapter.sh 350              # load base+adapter, run gates, do NOT export
+# The provenance gate is fail-closed: state the rank/alpha the run was trained at, so a
+# checkpoint from a different experiment cannot be merged silently. Use
+# ALLOW_UNVERIFIED_ADAPTER=1 only if you accept an unverifiable merge.
+EXPECT_LORA_RANK=32 EXPECT_LORA_ALPHA=64 ./scripts/merge_adapter.sh 350            # full merge
+EXPECT_LORA_RANK=32 EXPECT_LORA_ALPHA=64 DRY_RUN=1 ./scripts/merge_adapter.sh 350  # gates only, no export
 ```
 
 What it does:

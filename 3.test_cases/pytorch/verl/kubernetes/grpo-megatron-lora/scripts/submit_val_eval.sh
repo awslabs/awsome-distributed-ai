@@ -108,6 +108,12 @@ if [ "${VAL_LIMIT}" -gt 0 ]; then
     EXTRA_ARGS+=(--limit "${VAL_LIMIT}")
 fi
 
+# Generation budget. Must match training's max_response_length (conf/config.yaml) or the
+# two val-split paths are not comparable with each other, nor with in-training validation.
+# Stated here rather than inherited from the argparse default so the value is visible in
+# both submitters -- submit_val_eval_k8s.sh sets the same figure.
+VAL_MAX_TOKENS="${VAL_MAX_TOKENS:-24576}"
+
 ray job submit \
     --address "${RAY_ADDRESS}" \
     ${HEADERS_ARGS[@]+"${HEADERS_ARGS[@]}"} \
@@ -122,6 +128,7 @@ ray job submit \
         --output "${OUTPUT}" \
         --n-samples "${N_SAMPLES}" \
         --concurrency "${CONCURRENCY}" \
+        --max-tokens "${VAL_MAX_TOKENS}" \
         ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 
 echo ""

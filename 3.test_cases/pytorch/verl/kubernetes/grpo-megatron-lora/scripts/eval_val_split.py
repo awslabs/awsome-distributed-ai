@@ -70,7 +70,14 @@ def _parse_args():
         "--concurrency", type=int, default=32, help="Max concurrent HTTP requests"
     )
     p.add_argument(
-        "--max-tokens", type=int, default=10240, help="Generation max_tokens"
+        "--max-tokens",
+        type=int,
+        default=24576,
+        help="Generation max_tokens. Must match training's max_response_length "
+             "(conf/config.yaml) or scores are not comparable: a truncated response has "
+             "no \\boxed{} to extract and does not compile, so it scores zero. At 16384 "
+             "~22%% of every batch was a forced zero and corr(response_length, score) "
+             "was -0.457; below that the censoring is worse.",
     )
     p.add_argument(
         "--temperature",

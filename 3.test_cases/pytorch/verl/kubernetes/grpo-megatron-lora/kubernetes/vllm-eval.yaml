@@ -34,6 +34,11 @@ metadata:
     role: eval
 spec:
   replicas: 1
+  # The startupProbe below budgets ~90 min for the documented ~60-min 235B weight load.
+  # Kubernetes defaults progressDeadlineSeconds to 600, so `kubectl rollout status`
+  # reported ProgressDeadlineExceeded about ten minutes in -- while the pod was starting
+  # exactly as designed. Keep this >= the startupProbe budget.
+  progressDeadlineSeconds: 7200
   strategy:
     # Recreate — we need all 8 GPUs exclusively; rolling update would require
     # 16 GPUs during the cutover.

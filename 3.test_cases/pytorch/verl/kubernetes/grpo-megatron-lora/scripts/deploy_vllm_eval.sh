@@ -33,8 +33,21 @@ if [ -f "${REPO_DIR}/env_vars" ]; then
     source "${REPO_DIR}/env_vars"
 fi
 
-# Defaults (override via env_vars or export in shell)
 export KUBE_NAMESPACE="${KUBE_NAMESPACE:-default}"
+
+# Tear-down mode. Handled before any deploy-only validation below: teardown needs
+# nothing but the namespace, and requiring REGISTRY first meant the documented
+# `--delete` failed in a clean shell (env_vars is optional) and left an 8-GPU
+# Deployment running.
+if [ "${1:-}" = "--delete" ] || [ "${1:-}" = "-d" ]; then
+    echo "Tearing down vllm-eval Deployment + Service in namespace ${KUBE_NAMESPACE}..."
+    kubectl delete -n "${KUBE_NAMESPACE}" deploy/vllm-eval --ignore-not-found
+    kubectl delete -n "${KUBE_NAMESPACE}" svc/vllm-eval --ignore-not-found
+    echo "Done."
+    exit 0
+fi
+
+# Defaults (override via env_vars or export in shell)
 export REGISTRY="${REGISTRY:?REGISTRY must be set (ECR registry URL with trailing slash)}"
 export IMAGE="${IMAGE:-verl-grpo-lora}"
 # Never default to `latest`: an eval must be reproducible against the exact image
@@ -44,9 +57,17 @@ export TAG="${TAG:-v0.8.0-vllm020.dev2}"
 # `p6-b200.48xlarge` Karpenter-launched nodes and `ml.p6-b200.48xlarge`
 # HyperPod-managed nodes) — no shell-side knob needed.
 export VLLM_TP_SIZE="${VLLM_TP_SIZE:-8}"
-export VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-12288}"
+# REQUIRED: must be >= what the eval clients request. submit_lmeval.sh defaults
+# LMEVAL_MAX_LENGTH=32768 and the val-split path generates at 24576, and training's own
+# budget is max_prompt_length + max_response_length = 2048 + 24576 = 26624. If the server
+# allows less than the client asks for, requests fail. 12288 -- the previous default --
+# was below all three.
+export VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-32768}"
 export VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-128}"
-export VLLM_GPU_MEM_UTIL="${VLLM_GPU_MEM_UTIL:-0.85}"
+# REQUIRED at 0.95 for large adapters. At 0.85 the KV cache loses ~23 GiB and the server
+# CrashLoopBackOffs with "No available memory for the cache blocks" (see docs/results.md).
+# 0.85 was the previous default, i.e. the documented failure value.
+export VLLM_GPU_MEM_UTIL="${VLLM_GPU_MEM_UTIL:-0.95}"
 # Runtime-LoRA serving (optional). Set VLLM_ENABLE_LORA=true and
 # VLLM_LORA_MODULES="name=/path/to/adapter" to serve base + adapter without a
 # pre-merge. The served model name for requests is then the LoRA module name.
@@ -62,15 +83,6 @@ export VLLM_ENFORCE_EAGER="${VLLM_ENFORCE_EAGER:-false}"
 # default and the first request returns HTTP 500 "RPC call to sample_tokens
 # timed out". See docs/results.md.
 export VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS="${VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS:-3600}"
-
-# Tear-down mode
-if [ "${1:-}" = "--delete" ] || [ "${1:-}" = "-d" ]; then
-    echo "Tearing down vllm-eval Deployment + Service in namespace ${KUBE_NAMESPACE}..."
-    kubectl delete -n "${KUBE_NAMESPACE}" deploy/vllm-eval --ignore-not-found
-    kubectl delete -n "${KUBE_NAMESPACE}" svc/vllm-eval --ignore-not-found
-    echo "Done."
-    exit 0
-fi
 
 # Required for deploy
 : "${VLLM_MODEL_PATH:?Set VLLM_MODEL_PATH to the merged HF model dir on FSx}"
@@ -98,8 +110,11 @@ SUBST_VARS='${REGISTRY} ${IMAGE} ${TAG} ${KUBE_NAMESPACE} ${VLLM_MODEL_PATH} ${V
 envsubst "${SUBST_VARS}" < "${MANIFEST}" | kubectl apply -n "${KUBE_NAMESPACE}" -f -
 
 echo ""
-echo "Waiting for rollout (may take 10-15 min for 235B model loading)..."
-kubectl rollout status -n "${KUBE_NAMESPACE}" deploy/vllm-eval --timeout=20m
+# The startupProbe budgets ~90 min for a 235B weight load, and the Deployment sets
+# progressDeadlineSeconds to match. Waiting less than that here reports a failure while
+# the pod is starting exactly as designed.
+echo "Waiting for rollout (a 235B + large-adapter load can take ~60 min)..."
+kubectl rollout status -n "${KUBE_NAMESPACE}" deploy/vllm-eval --timeout=100m
 
 echo ""
 echo "=============================================="

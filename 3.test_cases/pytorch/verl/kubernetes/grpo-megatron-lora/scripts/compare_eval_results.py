@@ -51,7 +51,21 @@ from pathlib import Path
 
 # lm-eval task -> the metric keys we surface. lm-eval reports pass@1 (and pass@10
 # when the harness is configured for it) under results.<task>.<metric>,<filter>.
-LMEVAL_TASKS = ("humaneval", "mbpp")
+#
+# These are matched EXACTLY, not by prefix. kubernetes/lmeval-tasks/ ships humaneval_p4,
+# humaneval_p10 and mbpp_p1/p4/p10, and LMEVAL_TASKS accepts a comma list -- so a prefix
+# match collapsed every variant onto one key and silently kept whichever the JSON
+# happened to iterate last. They are distinct benchmarks at distinct sample counts and
+# must not be merged.
+LMEVAL_TASKS = (
+    "humaneval",
+    "humaneval_p4",
+    "humaneval_p10",
+    "mbpp",
+    "mbpp_p1",
+    "mbpp_p4",
+    "mbpp_p10",
+)
 # Metric name fragments lm-eval uses; we match on prefix to be robust to the
 # ",create_test" / ",none" filter suffixes lm-eval appends.
 LMEVAL_METRIC_PREFIXES = ("pass@1", "pass@10", "pass_at_1", "pass_at_10")
@@ -63,63 +77,106 @@ def _norm_metric(name: str) -> str:
     return base.replace("@", "_at_")
 
 
-def _load_lmeval_metrics(results_dir: Path, run: str) -> dict:
+def _load_lmeval_metrics(results_dir: Path, run: str, strict: bool = True) -> dict:
     """Parse lm-eval results.json -> {'humaneval_pass_at_1': float, ...}.
 
     lm-eval shape:
       {"results": {"humaneval": {"pass@1,create_test": 0.42, "pass@1_stderr,...": ...},
                    "mbpp": {...}}, ...}
+
+    Raises FileNotFoundError / ValueError when the run's results are absent or
+    unreadable, so a missing input cannot render as a complete-looking report. Pass
+    strict=False to treat a missing file as "not run" (used by --curve, where an
+    intermediate step legitimately may not have been evaluated).
     """
     out: dict = {}
     path = results_dir / run / "lmeval" / "results.json"
     if not path.exists():
+        if strict:
+            raise FileNotFoundError(f"no lm-eval results for run {run!r}: {path}")
         return out
     try:
         data = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return out
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ValueError(f"could not read lm-eval results for run {run!r} ({path}): {exc}") from exc
     results = data.get("results", data)
     for task, metrics in results.items():
-        # match task even if lm-eval used a variant name (humaneval_greedy etc.)
-        base_task = next((t for t in LMEVAL_TASKS if task.startswith(t)), None)
-        if base_task is None or not isinstance(metrics, dict):
+        # Exact task id. humaneval / humaneval_p4 / humaneval_p10 are separate
+        # benchmarks and must keep separate metric keys.
+        if task not in LMEVAL_TASKS or not isinstance(metrics, dict):
             continue
         for mkey, mval in metrics.items():
             if not isinstance(mval, (int, float)):
                 continue
+            # Keep stderr: docs/results.md quotes sigma and p-values throughout, and
+            # dropping it made those claims unreproducible from the committed tooling.
             if "stderr" in mkey:
+                base = _norm_metric(mkey.replace("_stderr", ""))
+                if any(base.startswith(_norm_metric(pfx)) for pfx in LMEVAL_METRIC_PREFIXES):
+                    out[f"{task}_{base}_stderr"] = float(mval)
                 continue
             if any(mkey.startswith(p) for p in LMEVAL_METRIC_PREFIXES):
-                out[f"{base_task}_{_norm_metric(mkey)}"] = float(mval)
+                out[f"{task}_{_norm_metric(mkey)}"] = float(mval)
     return out
 
 
-def _load_val_split(results_dir: Path, run: str) -> dict:
-    """Return dict of val-split metrics (per-data_source + __all__)."""
+def _load_val_split(results_dir: Path, run: str, strict: bool = True) -> dict:
+    """Return dict of val-split metrics (per-data_source + __all__).
+
+    An absent mean_score is reported as missing, NOT as 0.0. Coercing it to a float
+    produced a real-looking measured zero that rendered as a large negative delta and
+    was indistinguishable in the table from a genuine score of 0.
+    """
     path = results_dir / run / "val_split.json"
     if not path.exists():
+        if strict:
+            raise FileNotFoundError(f"no val-split results for run {run!r}: {path}")
         return {}
     try:
         data = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {}
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ValueError(f"could not read val-split results for run {run!r} ({path}): {exc}") from exc
     summary = data.get("summary", {})
     out = {}
     for ds, stats in summary.items():
         norm = ds.replace("/", "_").replace(".", "_")
-        out[f"valsplit_{norm}_mean_score"] = float(stats.get("mean_score", 0.0))
+        if "mean_score" in stats:
+            out[f"valsplit_{norm}_mean_score"] = float(stats["mean_score"])
         for k, v in stats.items():
             if k.startswith("pass@"):
                 out[f"valsplit_{norm}_{k.replace('@', '_at_')}"] = float(v)
-        out[f"valsplit_{norm}_count"] = int(stats.get("count", 0))
-        out[f"valsplit_{norm}_errors"] = int(stats.get("errors", 0))
+        if "count" in stats:
+            out[f"valsplit_{norm}_count"] = int(stats["count"])
+        if "errors" in stats:
+            out[f"valsplit_{norm}_errors"] = int(stats["errors"])
     return out
 
 
-def _load_run(results_dir: Path, run: str) -> dict:
+def _load_run(results_dir: Path, run: str, strict: bool = True) -> dict:
+    """Load both instruments for one run.
+
+    In strict mode a run must yield at least one metric: an empty result means the run
+    name is wrong or the eval never completed, and reporting that as a table of dashes
+    with exit 0 is how a bad input becomes a plausible-looking answer.
+    """
     m = {}
-    m.update(_load_lmeval_metrics(results_dir, run))
-    m.update(_load_val_split(results_dir, run))
+    # A run may legitimately have only one of the two instruments, so each is tolerated
+    # individually; the combined result being empty is not.
+    errors = []
+    for loader in (_load_lmeval_metrics, _load_val_split):
+        try:
+            m.update(loader(results_dir, run, strict=False))
+        except ValueError as exc:
+            errors.append(str(exc))
+    if errors:
+        raise ValueError("; ".join(errors))
+    if strict and not m:
+        raise FileNotFoundError(
+            f"run {run!r} produced no metrics. Looked for\n"
+            f"  {results_dir / run / 'lmeval' / 'results.json'}\n"
+            f"  {results_dir / run / 'val_split.json'}\n"
+            f"Check --results-dir and the run name."
+        )
     return m
 
 
@@ -350,15 +407,21 @@ def main():
 
     results_dir = Path(args.results_dir)
 
+    def load(run: str) -> dict:
+        try:
+            return _load_run(results_dir, run)
+        except (FileNotFoundError, ValueError) as exc:
+            raise SystemExit(f"ERROR: {exc}") from exc
+
     base_metrics = {}
     if args.baseline:
-        base_metrics = _load_run(results_dir, args.baseline)
+        base_metrics = load(args.baseline)
 
     if args.curve:
         if not args.steps:
             p.error("--curve requires --steps (e.g. --steps 50,350,750)")
         steps = [int(s) for s in args.steps.split(",") if s.strip()]
-        step_metrics = {s: _load_run(results_dir, f"{args.run_prefix}step{s}") for s in steps}
+        step_metrics = {s: load(f"{args.run_prefix}step{s}") for s in steps}
         md = _build_markdown_curve(steps, step_metrics, args.baseline, base_metrics)
         print(md, flush=True)
         _write_outputs(args, md, {"steps": step_metrics, "baseline": base_metrics})
@@ -368,7 +431,7 @@ def main():
 
     if not args.run:
         p.error("provide --run (single mode) or --curve --steps ... (curve mode)")
-    run_metrics = _load_run(results_dir, args.run)
+    run_metrics = load(args.run)
     md = _build_markdown_single(args.run, args.baseline, run_metrics, base_metrics)
     print(md, flush=True)
     _write_outputs(args, md, {"run": run_metrics, "baseline": base_metrics})

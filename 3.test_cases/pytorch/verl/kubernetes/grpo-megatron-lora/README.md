@@ -167,7 +167,10 @@ Scale the Ray worker group down first so vLLM has a free GPU node.
 ```bash
 ./scripts/scale_ray_workers.sh 0                      # free a node for vLLM
 
-./scripts/merge_adapter.sh 350                        # merge adapter -> standalone HF model
+# EXPECT_LORA_RANK/ALPHA assert the adapter is from the run you think it is -- every
+# other gate passes on an adapter from a different experiment. Required by default.
+EXPECT_LORA_RANK=32 EXPECT_LORA_ALPHA=64 \
+    ./scripts/merge_adapter.sh 350                    # merge adapter -> standalone HF model
 python3 scripts/check_merge_parity.py \
     --base-model   /fsx/data/verl/models/Qwen3-235B-A22B \
     --merged-model /fsx/data/verl/merged/Qwen3-235B-A22B/step_350

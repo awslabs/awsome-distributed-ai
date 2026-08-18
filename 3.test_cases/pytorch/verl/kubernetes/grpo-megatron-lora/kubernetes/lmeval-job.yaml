@@ -77,6 +77,13 @@ spec:
                   echo "[lmeval] vLLM is up"; break
                 fi
                 sleep 15
+                # Without this the loop simply falls out after 30 min and lm_eval runs
+                # against a dead endpoint, burning the retry budget and failing with an
+                # asyncio timeout instead of at the readiness gate.
+                if [ "$i" -eq 120 ]; then
+                  echo "[lmeval] ERROR: vLLM never became ready at ${MODELS_URL}" >&2
+                  exit 1
+                fi
               done
 
               LIMIT_ARG=""
