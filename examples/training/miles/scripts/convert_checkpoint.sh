@@ -39,7 +39,9 @@ case "${DIRECTION}" in
         MODEL_SCRIPT=""
         HF_PATH=""
         SAVE_PATH=""
-        NUM_GPUS=1
+        # Single process by default (validated); set CONVERT_NUM_GPUS or pass --num-gpus to
+        # parallelize the conversion with torchrun.
+        NUM_GPUS="${CONVERT_NUM_GPUS:-1}"
 
         while [[ $# -gt 0 ]]; do
             case "$1" in

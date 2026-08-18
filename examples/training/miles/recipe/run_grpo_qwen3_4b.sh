@@ -274,7 +274,7 @@ TRAIN_ARGS=(
     --sglang-mem-fraction-static "${MEM_FRACTION}"
     # Lowercase only: this reaches uvicorn's log_level, whose LOG_LEVELS dict has no "WARN"
     # key, and the KeyError kills the rollout server before it binds -- training then hangs
-    # on a health check that never passes. See docs/PORT_NOTES.md.
+    # on a health check that never passes. See README (miles-specific requirements).
     --sglang-log-level warning
 
     # Flags injected via the EXTRA_TRAIN_ARGS env var. The shipped default is just
