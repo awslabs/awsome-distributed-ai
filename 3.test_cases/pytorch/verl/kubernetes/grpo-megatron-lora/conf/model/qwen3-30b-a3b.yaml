@@ -1,0 +1,63 @@
+# Qwen3-30B-A3B — 30.5B MoE (3.3B active), 128 experts (8 active)
+# Megatron backend recommended (qwen3_moe supported by mbridge v0.3.0)
+#
+# Architecture: 48 layers, hidden=2048, 32 Q / 4 KV heads (GQA),
+#   128 experts (8 active), moe_intermediate=768, vocab=151936
+# Disk: ~61 GB (bf16 safetensors, 16 shards)
+# model_type: qwen3_moe
+#
+# Parallelism for 48 GPUs (6 nodes x 8 B200):
+#   TP=2, PP=2, CP=2, EP=4
+#   DP = 48 / (TP*PP) = 12, effective DP = 12/EP = 3 replicas
+#   Per-GPU expert params: 24 layers x 32 experts x 3 x 2048 x 768 x 2B / TP=2 ≈ 3.6 GB
+#   Fits comfortably on B200 (183 GB)
+#
+# Reference: upstream verl run_qwen3moe-30b_megatron_lora.sh
+name: Qwen3-30B-A3B
+hf_path: Qwen/Qwen3-30B-A3B
+fsx_path: ${compute.fsx_home}/models/${model.name}
+tensor_parallel_size: 2
+use_shm: true
+
+# Megatron parallelism (ignored by FSDP backend)
+pipeline_parallel_size: 2
+expert_parallel_size: 4
+context_parallel_size: 2
+
+# Rollout uses full-node TP for vLLM inference (upstream recommendation)
+rollout_tensor_parallel_size: 8
+
+# Lower vLLM memory reservation — MoE models need headroom for expert routing
+gpu_memory_utilization: 0.25
+
+# LoRA override (upstream uses rank=32, alpha=64 for this model)
+lora_alpha: 64
+
+# Attention-only LoRA targets — exclude MoE expert layers (linear_fc1, linear_fc2).
+# vLLM wraps FusedMoE layers with LoRA adapters, renaming base params from
+# w13.weight → w13_base_layer.weight.  Megatron sends original names → KeyError.
+# See: verl#5479, vllm#17429.  Re-enable expert targets once upstream is fixed.
+lora_target_modules: linear_qkv,linear_proj
+
+# Merge LoRA into base weights before syncing to vLLM.
+# Required for MoE models: vLLMHttpServer reads model.lora.rank and enables
+# --enable_lora on vLLM, which wraps ALL supported modules (including MoE experts)
+# with LoRA adapters regardless of target_modules.  With merge=true, verl sets
+# lora_rank=0 on the vLLM side → no wrapping → no _base_layer rename → no crash.
+# Megatron-Bridge merges LoRA adapters into base weights before export_weights().
+lora_merge: true
+
+# PPO mini-batch size override for DP=6 divisibility.
+# With TP=2, PP=2, CP=2 on 48 GPUs: dp_world_size = 48 / (2*2*2) = 6.
+# Megatron normalizes: ppo_mini_batch_size = config_value * n // dp_size.
+# Global default (16): 16 * 4 // 6 = 10 → 64 % 10 != 0 → crash.
+# Override (24):        24 * 4 // 6 = 16 → 64 % 16 = 0 → valid.
+# Diagnosed in local notes (not shipped).
+ppo_mini_batch_size: 24
+
+# Activation recomputation (MoE-specific, reduces memory at cost of compute)
+# Gated in submit_training.py — only applied with Megatron backend
+recompute:
+  method: uniform
+  granularity: full
+  num_layers: 1

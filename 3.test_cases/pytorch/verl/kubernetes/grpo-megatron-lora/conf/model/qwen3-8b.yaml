@@ -1,0 +1,11 @@
+# Qwen3-8B — recommended for pipeline validation
+name: Qwen3-8B
+hf_path: Qwen/Qwen3-8B
+fsx_path: ${compute.fsx_home}/models/${model.name}
+tensor_parallel_size: 2
+use_shm: true
+
+# Megatron parallelism (ignored by FSDP backend)
+pipeline_parallel_size: 1
+expert_parallel_size: 1
+context_parallel_size: 1

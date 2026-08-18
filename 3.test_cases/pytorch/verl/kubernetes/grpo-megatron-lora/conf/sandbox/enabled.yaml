@@ -1,0 +1,37 @@
+# @package _global_
+# SandboxFusion — remote code execution for reward scoring
+# Deployed as a K8s service (see kubernetes/sandbox-fusion.yaml)
+sandbox:
+  enabled: true
+  url: http://sandbox-fusion.default.svc.cluster.local:8080/run_code
+
+  # Caps the memory available to a single candidate program. It does NOT bound
+  # how many programs run at once: one scoring request fans out to ~39 test-case
+  # executions and nothing bounds those. Lowering this makes legitimate solutions
+  # fail and CHANGES SCORES, so it must not be touched while a run is measuring.
+  # See docs/results.md ("Sandbox concurrency and OOM") for the measurements.
+  memory_limit_mb: 1024
+
+  # Concurrency is bounded per RewardLoopWorker process by the env var
+  # SANDBOX_MAX_CONCURRENT_PER_WORKER (default 5, read in
+  # scripts/custom_reward_fn.py). verl's real knob is a threading.Semaphore
+  # object, which cannot come from a CLI override, so there is nothing to plumb
+  # from this file. That semaphore bounds in-flight REQUESTS, not executions —
+  # it limits the blast radius of a pod death but does not fix sandbox OOM.
+
+  # Pre-submit health guardrail. Before submitting the Ray job, run a tiny
+  # code-exec smoke test against the sandbox from inside the cluster and abort
+  # if it is slow/unhealthy. Catches the OTel-injection meltdown (2026-07-12,
+  # 2026-07-11, 2026-07-10) where sandbox latency ballooned ~0.03s -> ~10s,
+  # zeroing out all code rewards and silently poisoning training.
+  preflight:
+    enabled: true
+    # Pod + namespace to exec the probe from (has cluster-internal DNS + python3).
+    exec_pod: fsx-utils
+    namespace: ${oc.env:KUBE_NAMESPACE,default}
+    kube_context: ${oc.env:KUBE_CONTEXT,null}
+    # A healthy sandbox executes print(42) in well under 1s; the broken OTel
+    # path took ~10s. Fail fast above this wall-clock latency (seconds).
+    max_latency_s: 3.0
+    # Per-request timeout for the probe itself (seconds).
+    request_timeout_s: 20

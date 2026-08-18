@@ -1,0 +1,6 @@
+# @package _global_
+# SandboxFusion disabled — coding tasks use local execution
+sandbox:
+  enabled: false
+  url: ""
+  memory_limit_mb: 1024

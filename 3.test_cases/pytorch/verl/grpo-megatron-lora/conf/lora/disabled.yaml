@@ -1,7 +1,0 @@
-# LoRA disabled — full fine-tuning (no adapters)
-enabled: false
-rank: 0
-alpha: 0
-target_modules: null
-load_format: auto
-layered_summon: false

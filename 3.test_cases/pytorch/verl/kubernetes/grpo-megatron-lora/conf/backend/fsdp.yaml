@@ -1,0 +1,13 @@
+# FSDP backend — HuggingFace PEFT LoRA, PyTorch FSDP sharding
+# Suitable for models up to ~72B parameters
+name: fsdp
+verl_config_name: null  # uses verl default ppo_trainer
+
+# FSDP does not use Megatron-Bridge or fused kernels
+use_mbridge: false
+use_fused_kernels: false
+
+# NOTE: gradient checkpointing and unpadded attention are not configurable here.
+# scripts/submit_training.py emits them unconditionally for FSDP
+# (model.enable_gradient_checkpointing=True, model.use_remove_padding=True),
+# so a key in this file would not be read.
