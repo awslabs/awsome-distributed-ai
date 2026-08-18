@@ -64,9 +64,10 @@ export FSX_CLAIM="fsx-claim"
 # the README's Verification Status for what has and has not been run on which hardware.
 # Node placement is a label KEY:VALUE pair, and BOTH are cluster-specific. The manifest
 # schedules workers on ${GPU_NODE_LABEL_KEY}:${GPU_NODE_ROLE} and the head on
-# ${CPU_NODE_LABEL_KEY}:${CPU_NODE_ROLE}. The defaults below (key "node-role") match the
-# awsome-distributed-ai Terraform EKS reference; a generic EKS or HyperPod cluster has NO
-# "node-role" label. Find yours with `kubectl get nodes --show-labels` -- e.g. the well-known
+# ${CPU_NODE_LABEL_KEY}:${CPU_NODE_ROLE}. The defaults below use a custom key "node-role",
+# which a generic EKS or HyperPod cluster does NOT carry until you add it
+# (`kubectl label node <gpu-node> node-role=gpu`). Find an existing label with
+# `kubectl get nodes --show-labels` -- e.g. the well-known
 # `node.kubernetes.io/instance-type` (value "p5en.48xlarge"), an EKS managed-nodegroup label
 # `eks.amazonaws.com/nodegroup`, or a HyperPod `sagemaker.amazonaws.com/instance-group-name`.
 # A wrong key OR value leaves pods stuck Pending with FailedScheduling, not an obvious error.
@@ -122,10 +123,10 @@ export EVAL_DATA="/fsx/data/aime-2024/aime-2024.jsonl"
 # scheduler built for a different total-iteration count. train_iters = num_rollout
 # here (16 x 8 // 128 = 1 step/rollout), so NUM_ROLLOUT == optimizer steps.
 export CHECKPOINT_DIR="/fsx/runs/qwen3-4b/ckpt"
-# SAVE_INTERVAL is set beyond NUM_ROLLOUT on purpose: miles's save_model() currently
-# fails with a pickle-truncation error (see README Known Issues), so a mid-run save
-# would crash the job. Lower this ONLY once that issue is resolved; until then a
-# checkpoint-triggering value is a guaranteed failure, so the default must not trigger one.
+# SAVE_INTERVAL is kept at or above NUM_ROLLOUT so short smoke runs do not pay the
+# ~270s in-loop save cost on every rollout; the single end-of-run save still fires and
+# succeeded on every verification run (a torch_dist checkpoint is written to CHECKPOINT_DIR).
+# Reloading that checkpoint and the megatron2hf back-conversion are untested (README Known Issues).
 export SAVE_INTERVAL=1000
 export NUM_ROLLOUT=100
 export ROLLOUT_BATCH_SIZE=16

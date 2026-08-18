@@ -3,13 +3,11 @@
 # ============================================================================
 # miles (radixark/miles) + EFA image for Amazon EKS
 # ============================================================================
-# Strategy C (see docs/PORT_NOTES.md): the miles upstream image already bundles
-# a matched PyTorch 2.11 / CUDA 13.0.1 stack, the sglang-miles fork, the radixark
-# Megatron-LM fork, prebuilt flash_attn / TE / apex wheels, and the B300 sm_103 TE
-# FA2 whitelist patch. (Unlike an SGLang-fork HTTP weight-sync path, miles drives
-# weight sync through Ray actor methods on the rollout engine -- see README /
-# docs/PORT_NOTES.md.) Rebuilding that stack on an NGC base is infeasible (wheel
-# ABI mismatch), so we take the miles image as-is and add ONLY the AWS EFA stack.
+# The miles upstream image already bundles a matched PyTorch 2.11 / CUDA 13.0.1
+# stack, the sglang-miles fork, the radixark Megatron-LM fork, prebuilt
+# flash_attn / TE / apex wheels, and the sm_103 TE FA2 whitelist patch. Rebuilding
+# that stack on an NGC base is infeasible due to wheel ABI mismatch, so we take the
+# miles image as-is and add ONLY the AWS EFA stack. See README.
 #
 # Pin the base by DIGEST, not by tag. radixark publishes dev-* as mutable snapshots and
 # has already deleted a tag this file previously pinned, so a dated tag alone gives neither

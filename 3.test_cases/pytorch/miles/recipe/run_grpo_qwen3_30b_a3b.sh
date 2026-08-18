@@ -219,7 +219,7 @@ TRAIN_ARGS=(
     # (empty otherwise); the fusion mis-handles that combined path in this build.
     ${SGLANG_FUSION_ARGS[@]+"${SGLANG_FUSION_ARGS[@]}"}
     # Lowercase only: this reaches uvicorn's log_level, whose LOG_LEVELS dict has no "WARN"
-    # key, and the KeyError kills the rollout server before it binds. See docs/PORT_NOTES.md.
+    # key, and the KeyError kills the rollout server before it binds. See README (miles-specific requirements).
     --sglang-log-level warning
     # Careful when adding --sglang-* flags: miles registers them from SGLang's live
     # ServerArgs with ignore_unknown_args, so a flag SGLang has since removed is silently

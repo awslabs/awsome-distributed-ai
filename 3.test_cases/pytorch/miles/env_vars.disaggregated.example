@@ -24,8 +24,7 @@
 # Assumes:
 #   * env_vars (Option A: Qwen3-4B, colocated) has already been sourced.
 #   * A CPU node pool named ${REWARD_NODE_GROUP} already exists, in the same AZ as the GPU
-#     pool, with no EFA. Create it however your cluster provisions capacity -- a Karpenter
-#     NodePool, an EKS managed node group, or a SageMaker HyperPod instance group -- then set
+#     pool, with no EFA. Create it however your cluster provisions capacity, then set
 #     the name below to match. This test case does not create it for you.
 
 # ----- Heavier GRPO config (GPU tier) -----
