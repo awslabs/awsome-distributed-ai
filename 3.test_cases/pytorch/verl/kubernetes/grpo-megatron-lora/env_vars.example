@@ -52,7 +52,12 @@ export RAY_DATA_HOME="/fsx/data/verl"
 # Default assumes a local port-forward, which needs no authentication:
 #   kubectl port-forward -n "$KUBE_NAMESPACE" svc/<ray-head-svc> 8265:8265
 # Behind an authenticating proxy, also export RAY_HEADERS -- see docs/cluster.md.
-export RAY_ADDRESS="http://localhost:8265"
+#
+# Conditional on purpose. Every submitter sources this file BEFORE applying its own
+# ${RAY_ADDRESS:-...} default, so an unconditional export here silently overwrote a
+# caller's deliberate override -- which is why merge_adapter.sh used to carry a bespoke
+# save-and-restore around the source. Keep the :- form.
+export RAY_ADDRESS="${RAY_ADDRESS:-http://localhost:8265}"
 
 # -----------------------------------------------------------------------------
 # vLLM Evaluation Server (kubernetes/vllm-eval.yaml)

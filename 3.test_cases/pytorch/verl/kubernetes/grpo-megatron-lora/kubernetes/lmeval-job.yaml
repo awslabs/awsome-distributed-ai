@@ -16,9 +16,10 @@
 # answer extraction (widely reported pass@1=0). We use local-completions +
 # --apply_chat_template, which preserves the harness's answer parsing.
 #
-# Image: published vllm/vllm-openai (has torch/transformers/openai client);
-# lm-eval is pip-installed at start from a pinned tag. NO phantom ghcr image,
-# NO ghcr-pull secret needed.
+# Image: python:3.11.15-slim (LMEVAL_IMAGE). CPU torch, lm-eval and transformers are
+# pip-installed at pod start, all version-pinned. This is a driver only -- it makes HTTP
+# calls to the vllm-eval service and never loads a model locally, so it needs no GPU and
+# no CUDA wheels. NO phantom ghcr image, NO ghcr-pull secret needed.
 # =============================================================================
 apiVersion: batch/v1
 kind: Job

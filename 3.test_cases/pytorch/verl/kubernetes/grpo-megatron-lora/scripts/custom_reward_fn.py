@@ -41,7 +41,7 @@ import os
 import threading
 import time
 
-from verl.utils.reward_score import default_compute_score
+from verl.utils.reward_score import default_compute_score, sandbox_fusion
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_REWARD_LOG_LEVEL", "INFO"))
@@ -331,14 +331,16 @@ def _record_statuses(data_source: str, statuses: list, recovered: bool, had_infr
 def _score_code_with_metadata(url, memory_limit_mb, completion, test_cases, data_source):
     """Score a code sample via verl's sandbox scorer, preserving metadata.
 
-    Returns the float score, or None if the verl internals did not behave as
-    expected (caller then falls back to default_compute_score).
-    """
-    try:
-        from verl.utils.reward_score import sandbox_fusion
-    except ImportError:
-        return None
+    Returns the float score. Raises if verl's internals do not behave as expected.
 
+    Deliberately does NOT degrade to default_compute_score. scripts/runtime_env.yaml pins
+    verl to exactly v0.8.0, so there is no version to be compatible with, and the
+    fallback is the scorer this module's header spends 45 lines explaining is broken --
+    it drops the metadata that distinguishes "the sandbox was down" from "the model got
+    it wrong". A silent return to that path produces neither an error nor a
+    [SANDBOX-UNRECOVERED] line, so the operator sees a deflated score and no signal.
+    Failing loudly at submit time is the correct trade.
+    """
     last_score = None
     saw_infra_earlier = False
     for attempt in range(_SANDBOX_INFRA_RETRIES + 1):
@@ -350,12 +352,23 @@ def _score_code_with_metadata(url, memory_limit_mb, completion, test_cases, data
             test_cases,
             continuous=True,  # MUST match default_compute_score for score parity
         )
-        # Expected: (score, [metadata, ...]). Anything else -> let caller fall back.
+        # Expected: (score, [metadata, ...]). Raise rather than returning None: falling
+        # back to default_compute_score would silently reinstate the metadata-dropping
+        # bug this function exists to fix, and a verl upgrade that changes this shape is
+        # something the operator must see, not something to route around.
         if not (isinstance(res, tuple) and len(res) == 2):
-            return None
+            raise TypeError(
+                f"sandbox_fusion.compute_score returned {type(res).__name__} "
+                f"{res!r:.120}, expected a 2-tuple of (score, metadata_list). verl's "
+                f"return shape changed; scripts/runtime_env.yaml pins v0.8.0."
+            )
         score, meta = res
         if not isinstance(meta, list):
-            return None
+            raise TypeError(
+                f"sandbox_fusion.compute_score returned metadata of type "
+                f"{type(meta).__name__}, expected list. Infra-vs-wrong-answer "
+                f"classification depends on the per-test-case status entries."
+            )
 
         statuses = [m.get("status") for m in meta if isinstance(m, dict)]
         had_infra = any(s in _INFRA_STATUSES for s in statuses)
@@ -465,7 +478,13 @@ def compute_score(
             direct = _score_code_with_metadata(
                 sandbox_fusion_url, memory_limit_mb, solution_str, ground_truth, data_source
             )
-        except Exception:  # noqa: BLE001 — never let the fix break scoring
+        except TypeError:
+            # verl's return contract changed. That is a version problem, not a transient
+            # failure, and falling back here would silently reinstate the scorer that
+            # cannot tell "sandbox was down" from "model was wrong" -- for the whole run.
+            # Propagate so it surfaces immediately instead of as a deflated CODE number.
+            raise
+        except Exception:  # noqa: BLE001 — a transient sandbox failure must not kill a 45h run
             logger.exception(
                 "[REWARD] direct sandbox scoring failed (data_source=%s), "
                 "falling back to default_compute_score",

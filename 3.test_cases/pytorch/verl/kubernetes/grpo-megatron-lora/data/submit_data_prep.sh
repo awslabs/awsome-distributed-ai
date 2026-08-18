@@ -10,6 +10,9 @@
 #   ./data/submit_data_prep.sh --datasets eurus apps taco codecontests \
 #       --output-dir /fsx/data/verl/data
 #
+#   Add --assume-yes (or ASSUME_YES=1) for non-interactive use: it skips the dashboard
+#   reachability prompt, which otherwise needs a TTY to answer.
+#
 #   ./data/submit_data_prep.sh --datasets eurus apps taco codecontests \
 #       --output-dir /fsx/data/verl/data \
 #       --mix --mix-output /fsx/data/verl/data/mixed \
@@ -20,8 +23,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# --assume-yes / ASSUME_YES=1 skips the reachability prompt below, for non-interactive
+# use. Consumed here so it is not forwarded to prepare_data.py.
+ASSUME_YES="${ASSUME_YES:-0}"
+PREP_ARGS=()
+for arg in "$@"; do
+    case "${arg}" in
+        --assume-yes|-y) ASSUME_YES=1 ;;
+        *) PREP_ARGS+=("${arg}") ;;
+    esac
+done
+
 # Load environment variables
 if [ -f "${REPO_DIR}/env_vars" ]; then
+    # shellcheck disable=SC1091
     source "${REPO_DIR}/env_vars"
 fi
 
@@ -43,18 +58,34 @@ echo "Submit Data Preparation Job"
 echo "=============================================="
 echo "Ray address: ${RAY_ADDRESS}"
 echo "Working dir: ${REPO_DIR}"
-echo "Arguments:   $*"
+echo "Arguments:   ${PREP_ARGS[*]}"
 echo "=============================================="
 
-# Check Ray dashboard is reachable
-if ! curl -s --connect-timeout 5 "${RAY_ADDRESS}" > /dev/null 2>&1; then
+# Check the Ray dashboard is reachable. Advisory only -- `ray job submit` below is the
+# authority. The probe sends RAY_HEADERS, because without them an authenticating proxy
+# answers 401/403 and this reports "unreachable" for a dashboard the submit reaches fine.
+_probe=(curl -s --connect-timeout 5)
+if [ -n "${RAY_HEADERS:-}" ]; then
+    _probe+=(-H "${RAY_HEADERS}")
+fi
+if ! "${_probe[@]}" "${RAY_ADDRESS}" > /dev/null 2>&1; then
     echo ""
     echo "WARNING: Cannot reach Ray dashboard at ${RAY_ADDRESS}"
     echo ""
     echo "Set RAY_ADDRESS or RAY_DASHBOARD_HOSTNAME to the correct address."
     echo ""
-    read -r -p "Continue anyway? [y/N] " response
-    if [[ ! "${response}" =~ ^[Yy]$ ]]; then
+    # Only prompt when there is a human to answer. Blocking on `read` with no TTY hangs
+    # any non-interactive use, or aborts under set -e -- and the failure then looks like
+    # a connectivity problem rather than a missing terminal.
+    if [ "${ASSUME_YES}" = "1" ]; then
+        echo "--assume-yes given: submitting anyway."
+    elif [ -t 0 ]; then
+        read -r -p "Continue anyway? [y/N] " response
+        if [[ ! "${response}" =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    else
+        echo "No TTY, so not prompting. Re-run with --assume-yes to submit anyway."
         exit 1
     fi
 fi
@@ -88,7 +119,7 @@ ray job submit \
     --working-dir "${REPO_DIR}" \
     --no-wait \
     --runtime-env-json "${RUNTIME_ENV_JSON}" \
-    -- python data/prepare_data.py "$@"
+    -- python data/prepare_data.py ${PREP_ARGS[@]+"${PREP_ARGS[@]}"}
 
 echo ""
 echo "=============================================="

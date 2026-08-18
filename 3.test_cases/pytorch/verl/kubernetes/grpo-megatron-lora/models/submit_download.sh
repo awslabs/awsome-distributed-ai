@@ -28,6 +28,7 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Load environment variables
 if [ -f "${REPO_DIR}/env_vars" ]; then
+    # shellcheck disable=SC1091
     source "${REPO_DIR}/env_vars"
 fi
 
@@ -58,7 +59,10 @@ fi
 
 MODEL="$1"
 shift
-EXTRA_ARGS="$*"
+# Array, not "$*". Flattening the remaining arguments into one string and expanding it
+# unquoted at the submit line word-split any path containing a space and glob-expanded
+# any wildcard on the submit host. The sibling submitters already use the array form.
+EXTRA_ARGS=("$@")
 
 # Build env vars for runtime_env
 ENV_VARS_JSON="{}"
@@ -82,17 +86,27 @@ echo "Submit Model Download Job"
 echo "=============================================="
 echo "Ray address: ${RAY_ADDRESS}"
 echo "Model:       ${MODEL}"
-echo "Extra args:  ${EXTRA_ARGS:-none}"
+echo "Extra args:  ${EXTRA_ARGS[*]:-none}"
 echo "=============================================="
+
+# Build Ray CLI auth headers if available (OIDC-protected dashboard). This script was
+# the only Ray submitter that omitted them, so model download was the one workflow that
+# failed with an auth error behind an authenticating proxy while the others succeeded.
+HEADERS_ARGS=()
+if [ -n "${RAY_HEADERS:-}" ]; then
+    HEADERS_ARGS=(--headers "${RAY_HEADERS}")
+fi
 
 # Submit — request only CPUs (no GPU needed for download)
 # entrypoint-num-cpus=4 ensures it lands on a node with spare CPU
 ray job submit \
     --address "${RAY_ADDRESS}" \
+    ${HEADERS_ARGS[@]+"${HEADERS_ARGS[@]}"} \
     --runtime-env-json "${RUNTIME_ENV}" \
     --entrypoint-num-cpus 4 \
     --no-wait \
-    -- python models/download_model.py --model "${MODEL}" ${EXTRA_ARGS}
+    -- python models/download_model.py --model "${MODEL}" \
+       ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 
 echo ""
 echo "=============================================="

@@ -8,7 +8,7 @@
 # (lm-evaluation-harness, val-split scoring) — NOT for production training rollouts.
 #
 # Uses the project's training ECR image because it bakes in:
-#   - vLLM 0.12.0 with the Blackwell PDL patch (see Dockerfile)
+#   - vLLM 0.20.2 with the Blackwell PDL workaround (VLLM_LORA_DISABLE_PDL, see Dockerfile)
 #   - The exact transformers + torch versions used during training
 # This guarantees numerical parity between training rollouts and eval.
 #

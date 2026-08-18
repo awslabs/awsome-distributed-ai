@@ -503,6 +503,13 @@ These control how the model is split across GPUs. The fundamental constraint is:
 automatically: `DP = total_GPUs / (TP x PP)`. Expert parallelism (EP) applies only to MoE
 models and is handled separately by Megatron.
 
+![How tensor, pipeline, expert and context parallelism partition a transformer layer across GPUs, and which dimension each one splits](parallelism-strategies.svg)
+
+`submit_training.py` asserts up front that the resulting shape is workable -- that
+`TP x PP x CP` does not exceed the GPUs requested, and that `ppo_mini_batch_size`
+normalizes evenly over the data-parallel group. A bad combination fails at submit rather
+than several minutes into step 3.
+
 All parallelism settings are in the model config group (`conf/model/*.yaml`):
 
 ```bash

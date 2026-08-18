@@ -32,13 +32,7 @@ import sys
 import time
 from pathlib import Path
 
-# Optional progress bar — fall back to plain prints if tqdm not installed.
-try:
-    from tqdm import tqdm
-except ImportError:
-
-    def tqdm(it, **kwargs):
-        return it
+from tqdm import tqdm
 
 
 def _parse_args():

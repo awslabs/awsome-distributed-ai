@@ -193,10 +193,10 @@ LMEVAL_LIMIT=5 ./scripts/submit_lmeval.sh qwen3-235b-step350   # smoke test
 
 This applies `kubernetes/lmeval-job.yaml` — a CPU-only driver Job that:
 
-- Runs the published `vllm/vllm-openai:v0.20.2` image (the **driver**;
-  no GPU, no model reload).
-- Pip-installs `lm-eval==0.4.9` at start (no phantom `ghcr.io` image, no
-  `ghcr-pull` secret).
+- Runs `python:3.11.15-slim` (the **driver**; no GPU, no model reload).
+- Pip-installs CPU `torch==2.13.0+cpu`, `lm-eval[api]==0.4.9` and
+  `transformers==4.49.0` at start — the versions the reported runs recorded (no phantom
+  `ghcr.io` image, no `ghcr-pull` secret).
 - Calls `lm_eval --model local-completions --model_args
   base_url=http://vllm-eval:8000/v1,model=${VLLM_SERVED_NAME} ...
   --tasks humaneval_p4,mbpp_p4` with the chat template **OFF**.
@@ -325,7 +325,8 @@ The comparator:
   published image.** The server (`kubernetes/vllm-eval.yaml`) points at
   `${REGISTRY}${IMAGE}:${TAG}` so vLLM 0.20.2 + `VLLM_LORA_DISABLE_PDL=1`
   matches training rollouts exactly. The lm-eval driver only issues HTTP
-  requests, so it can safely use `vllm/vllm-openai:v0.20.2` from Docker Hub.
+  requests, so it uses a plain pinned `python:3.11.15-slim` and installs the CPU-only
+  deps it needs — it never loads a model, so it does not need a vLLM image at all.
 - **lm-eval uses `local-completions` with the chat template OFF.**
   `local-chat-completions` gives `pass@1=0` on instruct-tuned models because the
   harness's default prompt template is wrong for chat models, so

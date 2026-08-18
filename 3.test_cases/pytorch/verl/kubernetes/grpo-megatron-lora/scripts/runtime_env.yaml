@@ -48,3 +48,7 @@ pip:
 
   # --- Utilities ---
   - "tenacity>=9.0.0,<10.0"
+  # scripts/eval_val_split.py imports tqdm at module scope. It was previously guarded
+  # with a try/except that swapped in a no-op shim, which meant the Ray path silently
+  # ran without progress output while the k8s path (which installs tqdm) had it.
+  - "tqdm>=4.66,<5"

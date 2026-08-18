@@ -4,9 +4,14 @@
 # =============================================================================
 # Submit the lm-evaluation-harness eval Job
 #
-# Runs HumanEval + MBPP (pass@1, pass@10) against the warm `vllm-eval` service
-# via lm-eval-harness `local-completions`. Driver is CPU-only and reuses the
-# already-deployed vLLM server (deploy_vllm_eval.sh) — no model reload, no GPU.
+# Runs HumanEval + MBPP against the warm `vllm-eval` service via lm-eval-harness
+# `local-completions`. Driver is CPU-only and reuses the already-deployed vLLM server
+# (deploy_vllm_eval.sh) — no model reload, no GPU.
+#
+# Defaults produce pass@1 ONLY. pass@10 additionally needs a sample count, which the
+# harness takes via metadata, so it is opt-in:
+#   LMEVAL_GEN_KWARGS="do_sample=True,temperature=0.8,top_p=0.95" \
+#   LMEVAL_METADATA='{"num_samples":10}' ./scripts/submit_lmeval.sh <run-name>
 #
 # Prerequisites:
 #   - vllm-eval Deployment running + ready (scripts/deploy_vllm_eval.sh)
@@ -27,9 +32,10 @@
 #                       server capacity; see the sizing note below)
 #   LMEVAL_TEMPERATURE  sampling temp (default 0.2 — pass@1 paper-comparable)
 #   LMEVAL_TOP_P        default 0.95
-#   LMEVAL_IMAGE        driver image (default vllm/vllm-openai:v0.20.2)
+#   LMEVAL_IMAGE        driver image (default python:3.11.15-slim; CPU torch and lm-eval
+#                       are pip-installed at pod start, see kubernetes/lmeval-job.yaml)
 #   LMEVAL_VERSION      lm-eval pip version (default 0.4.9)
-#   LMEVAL_INSTANCE_TYPE  CPU node instance-type (default m5.8xlarge)
+#   LMEVAL_INSTANCE_TYPE  CPU node instance-type (default m5.xlarge)
 #   VLLM_SERVED_NAME    served-model-name on the vLLM server (default = run-name)
 # =============================================================================
 set -euo pipefail
@@ -134,7 +140,8 @@ export LMEVAL_MAX_LENGTH="${LMEVAL_MAX_LENGTH:-32768}"
 # If it 400s, set LMEVAL_APPLY_CHAT_TEMPLATE=false AND revert the task YAMLs to
 # completion-mode `until` stops — do not mix the two.
 export LMEVAL_APPLY_CHAT_TEMPLATE="${LMEVAL_APPLY_CHAT_TEMPLATE:-true}"
-# gen_kwargs + metadata. Default = greedy pass@1. For pass@10, set e.g.
+# gen_kwargs + metadata. Default is pass@1 at temperature 0.2 (sampling, not greedy --
+# 0.2 is the paper-comparable setting). For pass@10, set e.g.
 #   LMEVAL_GEN_KWARGS="do_sample=True,temperature=0.8,top_p=0.95"
 #   LMEVAL_METADATA='{"num_samples":10}'   (task computes pass@1 AND pass@10)
 export LMEVAL_GEN_KWARGS="${LMEVAL_GEN_KWARGS:-temperature=${LMEVAL_TEMPERATURE},top_p=${LMEVAL_TOP_P}}"

@@ -29,23 +29,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# env_vars does an UNCONDITIONAL `export RAY_ADDRESS=...`, so sourcing it below
-# silently clobbers a caller's deliberate override -- e.g. the documented
-# kubectl port-forward workflow:
-#     export RAY_ADDRESS=http://localhost:8265
-# On an ALB-protected dashboard the symptom is a confusing
-# ray.exceptions.AuthenticationError even though the caller pointed at a local,
-# unauthenticated tunnel. Capture the caller's value first and restore it after
-# sourcing.
-_RAY_ADDRESS_PRESET="${RAY_ADDRESS:-}"
-
 if [ -f "${REPO_DIR}/env_vars" ]; then
     # shellcheck disable=SC1091
     source "${REPO_DIR}/env_vars"
-fi
-
-if [ -n "${_RAY_ADDRESS_PRESET}" ]; then
-    export RAY_ADDRESS="${_RAY_ADDRESS_PRESET}"
 fi
 
 if [ $# -lt 1 ]; then

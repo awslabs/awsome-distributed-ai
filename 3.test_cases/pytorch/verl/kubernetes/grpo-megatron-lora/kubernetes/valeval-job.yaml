@@ -41,7 +41,10 @@ spec:
               - matchExpressions:
                   - key: node.kubernetes.io/instance-type
                     operator: In
-                    values: ["p6-b200.48xlarge", "ml.p6-b200.48xlarge", "m5.xlarge", "m5.8xlarge"]
+                    # m5.xlarge removed: 4 vCPU against the container's cpu: "8" /
+                    # memory: "16Gi" requests below, so that branch could never schedule
+                    # and the Job sat Pending if it was the only match.
+                    values: ["p6-b200.48xlarge", "ml.p6-b200.48xlarge", "m5.8xlarge"]
       tolerations:
         - key: nvidia.com/gpu
           operator: Exists

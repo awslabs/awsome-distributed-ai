@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT-0
 """Logit-parity gate for a merged Megatron+LoRA -> HF checkpoint.
 
-Confirms the merged HF model produced by scripts/merge_megatron_lora_ckpt.py is
+Confirms the merged HF model produced by scripts/merge_adapter.py is
 NOT a silent "base-only" merge (the historical failure mode) and is numerically sane.
 
 It runs two cheap, single-GPU checks with plain HF transformers (no Megatron):
@@ -22,7 +22,7 @@ Usage (small-model smoke -- recommended first):
     python scripts/check_merge_parity.py \
         --base-model /fsx/.../models/<small> \
         --merged-model /fsx/.../merged/<small>/step_N \
-        --max-new-tokens 0 --num-prompts 4
+        --num-prompts 4
 
 For 235B, run as a Ray job on a GPU node (device_map="auto" across the 8 GPUs).
 """
