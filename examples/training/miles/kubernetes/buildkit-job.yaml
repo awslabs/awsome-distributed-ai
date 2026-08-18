@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: miles-efa-build
+  namespace: ${NAMESPACE}
+spec:
+  ttlSecondsAfterFinished: 172800
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      # Schedule the build on any node with ample ephemeral-storage (the ~18GB
+      # base image plus extraction needs ~120GB+ free). buildkit is a pure CPU/IO
+      # workload and requests NO GPUs, so it does not contend with training. Pin
+      # it to a node with large local disk via a nodeSelector matching your
+      # cluster (e.g. a CPU nodegroup with a >=200GB gp3 root, or a GPU node with
+      # NVMe scratch). Example:
+      #   nodeSelector:
+      #     node.kubernetes.io/instance-type: <a-node-type-with-large-ephemeral>
+      containers:
+        - name: buildkit
+          image: moby/buildkit:v0.18.2
+          securityContext: { privileged: true }
+          command:
+            - sh
+            - -c
+            - |
+              set -eux
+              buildkitd &
+              for i in $(seq 1 30); do buildctl debug workers >/dev/null 2>&1 && break; sleep 2; done
+              buildctl build \
+                --frontend dockerfile.v0 \
+                --local context=/workspace \
+                --local dockerfile=/workspace \
+                --output type=image,name=${FULL_IMAGE},push=true \
+                --progress=plain
+          env:
+            - { name: DOCKER_CONFIG, value: /root/.docker }
+          resources:
+            requests: { cpu: "16", memory: "64Gi", ephemeral-storage: "120Gi" }
+            limits:   { cpu: "40", memory: "160Gi", ephemeral-storage: "400Gi" }
+          volumeMounts:
+            - { name: ctx, mountPath: /workspace }
+            - { name: docker-config, mountPath: /root/.docker }
+      volumes:
+        - name: ctx
+          configMap:
+            name: miles-build-context
+            items:
+              - { key: Dockerfile, path: Dockerfile }
+        - name: docker-config
+          secret:
+            secretName: ecr-miles-push
+            items:
+              - { key: .dockerconfigjson, path: config.json }
