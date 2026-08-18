@@ -33,18 +33,27 @@ NODE_RANK="$NODE_RANK_ARG"; [ "$ROLE" = "leader" ] && NODE_RANK=0
 echo "===== DeepEP-V2 kernel smoke: role=$ROLE node_rank=$NODE_RANK nnodes=$NNODES gpus/node=$GPUS_PER_NODE leader=$LEADER_IP $(hostname) $(date -u +%FT%TZ) ====="
 
 set -o pipefail
-torchrun --nnodes="$NNODES" --nproc-per-node="$GPUS_PER_NODE" --node-rank="$NODE_RANK" \
-  --master-addr="$LEADER_IP" --master-port=29501 "$TEST" 2>&1 | tee /tmp/kernel-test.$NODE_RANK.log
+# ONE torchrun process per node: test_ep.py spawns its own local ranks internally
+# (torch.multiprocessing.spawn with --num-processes, default 8) and DeepEP's init_dist
+# reads WORLD_SIZE as a NODE count (num_nodes = WORLD_SIZE, world = nodes x local_ranks).
+# --nproc-per-node=8 double-fans-out (2 nodes -> 16 procs x 8 spawns = 128 ranks on 16
+# GPUs) and collides MASTER_PORT 29501 with torchrun's own rendezvous -> NCCL "invalid
+# usage" at init_process_group, every time. One proc/node lets the test own the fan-out.
+torchrun --nnodes="$NNODES" --nproc-per-node=1 --node-rank="$NODE_RANK" \
+  --master-addr="$LEADER_IP" --master-port=29501 "$TEST" --num-processes "$GPUS_PER_NODE" 2>&1 | tee /tmp/kernel-test.$NODE_RANK.log
 rc=${PIPESTATUS[0]}
 
-# fail-loud contract: torchrun rc must be 0 AND the test must have printed a pass marker
-if [ "$rc" -eq 0 ] && grep -qiE "passed|\bPASS\b|all tests? ok" /tmp/kernel-test.$NODE_RANK.log; then
-  # confirm EFA (not TCP/SHM) actually carried it — the efa-direct/OFI banner from NCCL_DEBUG=INFO
-  if grep -qiE "efa-direct|Selected Provider is efa|NET/OFI" /tmp/kernel-test.$NODE_RANK.log; then
+# fail-loud contract: gate on the exit code (the test is assertion-based and prints no
+# pass marker — any grep for one would fail a genuinely green run), then separately
+# require the EFA transport banner.
+if [ "$rc" -eq 0 ]; then
+  # confirm EFA (not TCP/SHM) actually carried it — only provider-specific banners count;
+  # a bare "NET/OFI" line also prints for tcp;ofi_rxm fallback, the exact case to rule out
+  if grep -qiE "efa-direct|Selected Provider is efa" /tmp/kernel-test.$NODE_RANK.log; then
     echo "KERNEL-TEST PASS (node_rank=$NODE_RANK) — DeepEP-V2 dispatch/combine over EFA verified"
     exit 0
   fi
-  echo "KERNEL-TEST INCONCLUSIVE: test passed but no EFA banner in log — confirm transport before trusting"
+  echo "KERNEL-TEST INCONCLUSIVE: test passed but no EFA-provider banner in log — confirm transport before trusting"
   exit 2
 fi
 echo "KERNEL-TEST FAIL (node_rank=$NODE_RANK, torchrun rc=$rc) — see /tmp/kernel-test.$NODE_RANK.log"
