@@ -6,6 +6,11 @@
 # (${FSX_FS_ID}). Apply ONE of the two, not both — each creates the RWX PVC named
 # by ${FSX_CLAIM} that the training/generation jobs mount at /fsx.
 #
+# The PV is cluster-scoped and hard-bound 1:1 to this PVC via volumeName, so its
+# name (${FSX_PV_NAME}) must be unique per claim. It defaults to tracking
+# ${FSX_CLAIM}, so changing FSX_CLAIM (or applying in a second namespace) yields a
+# distinct PV instead of colliding with one already bound to the old claim.
+#
 # DRA itself is an FSx API (not a native K8s CRD). Create it ONCE against your
 # FSx filesystem, then apply the PV/PVC below. Render with envsubst.
 #
@@ -23,7 +28,7 @@
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: fsx-dra-pv
+  name: ${FSX_PV_NAME}
 spec:
   capacity:
     storage: ${FSX_CAPACITY}
@@ -52,4 +57,4 @@ spec:
   resources:
     requests:
       storage: ${FSX_CAPACITY}
-  volumeName: fsx-dra-pv
+  volumeName: ${FSX_PV_NAME}

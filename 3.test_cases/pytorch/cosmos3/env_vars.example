@@ -36,6 +36,7 @@ export FSX_FS_ID="fs-0123456789abcdef0"        # your FSx for Lustre filesystem 
 export FSX_DNS_NAME="${FSX_FS_ID}.fsx.${AWS_REGION}.amazonaws.com"
 export FSX_MOUNT_NAME="<mountname>"            # from: aws fsx describe-file-systems
 export FSX_CAPACITY="4800Gi"                   # match your FSx provisioned size
+export FSX_PV_NAME="${FSX_CLAIM}-pv"           # cluster-scoped PV, bound 1:1 to $FSX_CLAIM; keep unique per claim
 export DRA_S3_BUCKET="<your-in-region-bucket>" # S3 origin for datasets/models
 export DRA_S3_PREFIX="cosmos3"                 # prefix under the bucket
 
