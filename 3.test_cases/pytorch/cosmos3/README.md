@@ -127,8 +127,8 @@ emits the same metrics to Amazon Managed Prometheus.
 | `kubernetes/train-vision-sft.yaml` | **Vision SFT** (Nano) + Cosmos3-Super LoRA (parameterized `SFT_TOML`+`DATASET_PATH`). |
 | `kubernetes/generate-vllm-omni-super.yaml` | **Generation (SDG)** — Super video-to-video (V2V) via the official `vllm/vllm-omni:cosmos3` engine (a separate stack from the training image). |
 | `kubernetes/serve-policy.yaml` | **Policy-server eval** (Deployment + Service). |
-| `storage/storage-fsx-efa-sc.yaml` | EFA-enabled PERSISTENT_2 FSx for Lustre StorageClass + PersistentVolumeClaim (PVC). Shared by both deployment paths. |
-| `storage/storage-fsx-dra.yaml` | **S3→FSx-Lustre Data Repository Association (DRA)** hydration — the recommended data plane (in-region S3 origin → FSx hot tier). Shared by both deployment paths. |
+| `storage/storage-fsx-dra.yaml` | **S3→FSx-Lustre Data Repository Association (DRA)** hydration against an **existing** filesystem — the recommended data plane (in-region S3 origin → FSx hot tier). One of two storage options; see `storage/` (apply one, not both). |
+| `storage/storage-fsx-efa-sc.yaml` | **Alternative** storage option: dynamically provision a **new** EFA-enabled PERSISTENT_2 FSx for Lustre StorageClass + PersistentVolumeClaim (PVC). |
 | `build-push.sh` | Build the **AWS DLC image** (`Dockerfile`) and push to ECR via `docker buildx` (see **Deployment**). |
 
 > **Training and inference take different CLIs — don't conflate them.** Training
@@ -283,13 +283,15 @@ that each one uses.
 
 ### Storage & checkpoint I/O
 
-The storage path shipped in this sample is **FSx for Lustre with EFA**
-(`storage/storage-fsx-efa-sc.yaml`) fronting an in-region S3 origin via a Data Repository
-Association (`storage/storage-fsx-dra.yaml`) — a shared, hydrate-on-demand hot tier across
-nodes. The data path is read-heavy during training and the checkpoint path uses
-**Distributed Checkpoint (DCP)**; both run on FSx in the shipped manifests. (Benchmark
-the read-path backends and checkpoint cadence on your own cluster for your dataset and
-failure profile.)
+This sample ships **two alternative FSx for Lustre storage options** (apply one, not
+both — see [`storage/`](storage/)). The **recommended** path is a Data Repository
+Association (`storage/storage-fsx-dra.yaml`) binding a PVC to an **existing** filesystem
+and hydrating it on-demand from an in-region S3 origin, with checkpoints exported back to
+S3. The alternative (`storage/storage-fsx-efa-sc.yaml`) **dynamically provisions a new**
+EFA-enabled filesystem. Either way the data path is read-heavy during training and the
+checkpoint path uses **Distributed Checkpoint (DCP)**; both run on FSx in the shipped
+manifests. (Benchmark the read-path backends and checkpoint cadence on your own cluster
+for your dataset and failure profile.)
 
 #### Real action-policy warm-start recipe (HF → DCP)
 The `cosmos-framework` `checkpoint.load_path` consumes **DCP**, but the `Cosmos3-Nano` Hugging Face (HF)

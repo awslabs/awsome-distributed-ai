@@ -1,8 +1,10 @@
 # S3 -> FSx for Lustre Data Repository Association (DRA) hydration.
-# This is the recommended data plane: dataset + model assets
-# live in an in-region S3 origin and hydrate on-demand onto the FSx-Lustre hot
-# tier. storage-fsx-efa-sc.yaml defines the EFA-enabled StorageClass; this file
-# wires the S3<->FSx link and the PV/PVC the training/generation jobs mount.
+# This is the recommended data plane: dataset + model assets live in an in-region
+# S3 origin and hydrate on-demand onto the FSx-Lustre hot tier, with checkpoints
+# exported back to S3. Unlike storage-fsx-efa-sc.yaml (which dynamically provisions
+# a NEW filesystem), this path binds a PV/PVC to an EXISTING filesystem
+# (${FSX_FS_ID}). Apply ONE of the two, not both — each creates the RWX PVC named
+# by ${FSX_CLAIM} that the training/generation jobs mount at /fsx.
 #
 # DRA itself is an FSx API (not a native K8s CRD). Create it ONCE against your
 # FSx filesystem, then apply the PV/PVC below. Render with envsubst.

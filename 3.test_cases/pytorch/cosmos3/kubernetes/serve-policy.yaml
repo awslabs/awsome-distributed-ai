@@ -3,10 +3,12 @@
 # flywheel's eval stage: latency-bound, light, single-GPU replicated server.
 # Render (a8m/envsubst — see top-level README "Deployment"): `set -a; . ./env_vars; set +a; envsubst < kubernetes/serve-policy.yaml | kubectl apply -f -`
 #
-# EVAL_CHECKPOINT options:
-#   - nvidia/Cosmos3-Nano-Policy-DROID  (public post-trained DROID policy)
-#   - /fsx/<run>/.../checkpoints/iter_0000000NN/model  (our own action-policy output;
+# EVAL_CHECKPOINT must be a LOCAL checkpoint directory on the /fsx mount. The LIBERO
+# policy server invoked below does NOT resolve Hugging Face repo ids — pass a path, e.g.:
+#   - /fsx/<run>/.../checkpoints/iter_0000000NN/model  (your own action-policy output;
 #     export DCP->consolidated first via cosmos_framework.scripts.export_model)
+#   - a local dir holding a downloaded public policy (e.g. nvidia/Cosmos3-Nano-Policy-DROID
+#     pre-downloaded to FSx) — the bare "nvidia/..." repo id itself is NOT accepted here.
 # Affinity/tolerations mirror the cosmos-reason template: HyperPod-friendly,
 # harmless on EKS.
 apiVersion: apps/v1

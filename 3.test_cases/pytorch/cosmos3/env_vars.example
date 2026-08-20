@@ -84,8 +84,12 @@ export OUT="/fsx/results/run"   # output dir for runs (training IMAGINAIRE_OUTPU
 
 # --- Policy eval serving ---
 export INVOCATION_PORT="8000"
-# Public post-trained policy, OR an exported action-policy checkpoint dir:
-export EVAL_CHECKPOINT="nvidia/Cosmos3-Nano-Policy-DROID"
+# The LIBERO policy server takes a LOCAL checkpoint directory on the FSx mount — it
+# does NOT resolve Hugging Face repo ids. Point this at an exported action-policy
+# checkpoint dir (DCP -> consolidated via cosmos_framework.scripts.export_model), e.g.
+# ${OUT}/checkpoints/iter_00000010/model. To eval the public nvidia/Cosmos3-Nano-Policy-DROID
+# policy, download it to FSx first and set this to that local path.
+export EVAL_CHECKPOINT="/fsx/results/run/checkpoints/iter_00000010/model"
 
 # --- Native observability (optional; see observability/README.md) ---
 # Land cosmos-framework trainer metrics in Amazon Managed Prometheus, unified

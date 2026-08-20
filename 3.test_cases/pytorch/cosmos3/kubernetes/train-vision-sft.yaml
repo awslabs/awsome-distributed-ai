@@ -11,8 +11,8 @@
 # ($OUT, $NODE_RANK, $MASTER, $JOB_COMPLETION_INDEX, $BASE_CHECKPOINT_PATH,
 # $DATASET_PATH):
 #
-#   set -a; . ./env_vars; set +a
-#   export IMAGE_URI=... NAMESPACE=$NAMESPACE INSTANCE_TYPE=p5en.48xlarge FSX_CLAIM=fsx-claim \
+#   set -a; . ./env_vars; set +a   # provides FSX_CLAIM, among others
+#   export IMAGE_URI=... NAMESPACE=$NAMESPACE INSTANCE_TYPE=p5en.48xlarge \
 #          GPUS_PER_NODE=8 EFA_PER_NODE=16 MASTER_PORT=12360 SFT_MAX_ITER=10 \
 #          WAN_VAE_PATH=/fsx/pretrained/tokenizers/video/wan2pt2/Wan2.2_VAE.pth HF_HOME=/fsx/hf-cache
 #   # Nano: SFT_TOML=vision_sft_nano.toml BASE_CHECKPOINT_PATH=/fsx/pretrained/Cosmos3-Nano-dcp

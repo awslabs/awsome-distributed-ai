@@ -37,8 +37,8 @@ backed by a Capacity Block for ML or an On-Demand Capacity Reservation). See
 - The **JobSet controller** (`jobset.x-k8s.io`) installed — the multi-node training
   manifests launch the gang as a `JobSet` (see "Why JobSet" in the top README).
 - An **FSx for Lustre** filesystem mounted via a PersistentVolumeClaim (PVC) named
-  `fsx-claim` (datasets, checkpoints, and outputs live here), created by the shared
-  manifests in [`../storage/`](../storage/).
+  by `$FSX_CLAIM` (datasets, checkpoints, and outputs live here), created by one of
+  the shared manifests in [`../storage/`](../storage/).
 - The **AWS Deep Learning Container (DLC) image** built and pushed to your Elastic
   Container Registry (ECR) (`../build-push.sh`), plus the `hf-token` Secret in your
   namespace (with the `nvidia/Cosmos-Guardrail1` license accepted on that account).
@@ -55,9 +55,11 @@ backed by a Capacity Block for ML or an On-Demand Capacity Reservation). See
 | `generate-vllm-omni-super.yaml` | Synthetic data generation (SDG) — Super video-to-video via the official `vllm/vllm-omni:cosmos3` engine (a separate image from the training stack). |
 | `serve-policy.yaml` | Policy-server eval (Deployment + Service). |
 
-Storage is shared by both deployment paths and lives in [`../storage/`](../storage/)
-(`storage-fsx-efa-sc.yaml` for the EFA-enabled StorageClass + PVC, and `storage-fsx-dra.yaml`
-for the optional S3→FSx-Lustre DRA data plane).
+Storage lives in [`../storage/`](../storage/) and is shared by both deployment
+paths. The two manifests are **alternatives** — pick one (see [Render & apply](#render--apply)):
+`storage-fsx-dra.yaml` (recommended) binds a PVC to an existing filesystem and hydrates
+it from S3 via a Data Repository Association, while `storage-fsx-efa-sc.yaml` dynamically
+provisions a new EFA-enabled filesystem. Both create the PVC named by `$FSX_CLAIM`.
 
 ## Render & apply
 
@@ -76,11 +78,17 @@ set -a; . ./env_vars; set +a
 kubectl create secret generic hf-token -n "$NAMESPACE" --from-literal=token="$HF_TOKEN"
 ```
 
-**Storage (once):**
+**Storage (once). Choose one** — both create the RWX PVC named by `$FSX_CLAIM`
+(mounted at `/fsx`). Do **not** apply both, or you provision two filesystems and
+leave one unmounted:
 
 ```bash
+# Option A (recommended): S3 -> FSx DRA against an existing filesystem.
+# Datasets/models hydrate from an in-region S3 origin; checkpoints export back to S3.
+envsubst < storage/storage-fsx-dra.yaml | kubectl apply -f -
+
+# Option B: dynamically provision a new EFA-enabled PERSISTENT_2 filesystem.
 envsubst < storage/storage-fsx-efa-sc.yaml | kubectl apply -f -
-envsubst < storage/storage-fsx-dra.yaml    | kubectl apply -f -   # optional S3->FSx DRA
 ```
 
 **Action-policy post-training (multi-node).** Smoke vs real is **env-driven** (no YAML

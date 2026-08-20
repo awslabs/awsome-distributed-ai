@@ -1,9 +1,15 @@
-# EFA-enabled PERSISTENT_2 FSx for Lustre for the storage read-path / checkpoint data point.
+# EFA-enabled PERSISTENT_2 FSx for Lustre. This is the ALTERNATIVE to
+# storage-fsx-dra.yaml: it DYNAMICALLY provisions a brand-new filesystem via the
+# FSx CSI driver, whereas the DRA path binds a PV to an EXISTING filesystem and
+# hydrates it from S3. Apply ONE of the two, not both — each creates the RWX PVC
+# named by ${FSX_CLAIM} that the workloads mount at /fsx.
+#
 # Reuse your cluster's GPU-node subnet + a security group that has the self-referencing
 # all-traffic EFA rule (set ${SUBNET_ID} / ${SECURITY_GROUP_ID}). Provision in the same AZ
 # as your GPU nodes.
 #
-# Render (a8m/envsubst — see top-level README): SUBNET_ID=subnet-xxxx SECURITY_GROUP_ID=sg-xxxx NAMESPACE=$NAMESPACE \
+# Render (a8m/envsubst — see top-level README):
+#   set -a; . ./env_vars; set +a
 #   envsubst < storage/storage-fsx-efa-sc.yaml | kubectl apply -f -
 #
 # Sized for a throughput target: 9600 GiB @ 1000 MBps/TiB. Capacity governs the
@@ -34,7 +40,7 @@ allowVolumeExpansion: true
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: fsx-efa-claim
+  name: ${FSX_CLAIM}
   namespace: ${NAMESPACE}
 spec:
   accessModes: ["ReadWriteMany"]
