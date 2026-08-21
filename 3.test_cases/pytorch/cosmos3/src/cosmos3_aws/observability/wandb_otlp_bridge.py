@@ -25,9 +25,8 @@ OTLPCallback's own gauges reached the sink). The fix wraps
 ``wandb.log`` IS ``run.log``, the class-level wrap survives re-init. The
 module-level patch is kept for any pre-init logging.
 
-This is a documented, sample-side runtime bridge, in the same spirit as
-``norm_monitor_guard.py`` (a framework monkeypatch installed via
-``sitecustomize.py``). It is importable WITHOUT ``wandb`` or ``opentelemetry``
+This is a documented, sample-side runtime bridge. It is importable WITHOUT
+``wandb`` or ``opentelemetry``
 present and degrades to a no-op when either is missing. Mirror failures are
 swallowed: the bridge must never break training or the real ``wandb.log``.
 """
