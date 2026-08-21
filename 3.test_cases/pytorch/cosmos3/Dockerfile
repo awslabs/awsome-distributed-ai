@@ -85,7 +85,7 @@ WORKDIR /workspace
 # Clone + install cosmos-framework (pin via --build-arg COSMOS_FRAMEWORK_REF) on
 # the uv-managed Python 3.13. The cu130-train group pins
 # torch 2.10.0+cu130 + NCCL 2.28.9 (the NCCL that matches the DLC's aws-ofi-nccl).
-ARG COSMOS_FRAMEWORK_REF=90cd348877c37b888942c988b631eb1611bf2950
+ARG COSMOS_FRAMEWORK_REF=5eee9ed574255f017b192161bfbb5a10253d65cf
 RUN git clone https://github.com/NVIDIA/cosmos-framework.git && \
     cd cosmos-framework && git checkout ${COSMOS_FRAMEWORK_REF} && \
     uv sync --all-extras --group=cu130-train --python 3.13
