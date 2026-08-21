@@ -55,8 +55,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # truncated download fails the build loudly instead of baking a bad lib. If the
 # asset is gone, mirror the tarball to your own ECR/S3 (or pin a newer BtbN build)
 # and update FFMPEG_URL + FFMPEG_SHA256 to match. Override both via --build-arg.
-ARG FFMPEG_URL=https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-06-18-14-21/ffmpeg-N-125093-gd2d371d10d-linux64-gpl-shared.tar.xz
-ARG FFMPEG_SHA256=d322b8b53cc8068da2b1a511df60d3279493364c609c6c9b2baa9149243adff4
+#
+# VERSION CONSTRAINT: torchcodec 0.10 (framework-pinned) only binds FFmpeg 4..7
+# (libavutil.so.56..60). Pin an ffmpeg 7.x "gpl-shared" build (this one ships
+# libavutil.so.59); an ffmpeg 8.x build (libavutil.so.61) will NOT load and breaks
+# video decode. Prefer BtbN MONTH-END autobuild tags — daily tags get pruned,
+# month-end ones persist.
+ARG FFMPEG_URL=https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-31-14-10/ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-shared-7.1.tar.xz
+ARG FFMPEG_SHA256=df7e15a2d2fe0ee15ae36e0e3b83596dd088ee0a0767874241d9a54380df0add
 RUN cd /tmp && curl -sL --retry 3 -o ff.tar.xz "${FFMPEG_URL}" && \
     echo "${FFMPEG_SHA256}  ff.tar.xz" | sha256sum -c - && \
     mkdir -p ffx && tar -xf ff.tar.xz -C ffx --strip-components=1 && \
