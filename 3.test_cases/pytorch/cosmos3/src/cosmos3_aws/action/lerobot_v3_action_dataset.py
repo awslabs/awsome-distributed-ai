@@ -30,7 +30,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 
-from cosmos_framework.data.vfm.action.domain_utils import get_domain_id
+from cosmos_framework.data.generator.action.utils.domain_utils import get_domain_id
 
 _CONCAT_VIEW_DESCRIPTION = (
     "The top row is from the wrist-mounted camera. The bottom row contains two "

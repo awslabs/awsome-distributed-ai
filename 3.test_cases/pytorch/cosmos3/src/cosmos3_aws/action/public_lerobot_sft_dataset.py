@@ -19,11 +19,11 @@ from __future__ import annotations
 
 from torch.utils.data import Dataset
 
-from cosmos_framework.data.vfm.action.datasets.action_sft_dataset import (
+from cosmos_framework.data.generator.action.datasets.action_sft_dataset import (
     ActionSFTDataset,
     ActionIterableShuffleDataset,
 )
-from cosmos_framework.data.vfm.action.transforms import ActionTransformPipeline
+from cosmos_framework.data.generator.action.utils.transforms import ActionTransformPipeline
 
 from cosmos3_aws.action.lerobot_v3_action_dataset import LeRobotV3ActionDataset
 
