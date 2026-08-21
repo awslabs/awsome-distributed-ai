@@ -26,9 +26,9 @@ OTLPCallback's own gauges reached the sink). The fix wraps
 module-level patch is kept for any pre-init logging.
 
 This is a documented, sample-side runtime bridge. It is importable WITHOUT
-``wandb`` or ``opentelemetry``
-present and degrades to a no-op when either is missing. Mirror failures are
-swallowed: the bridge must never break training or the real ``wandb.log``.
+``wandb`` or ``opentelemetry`` present and degrades to a no-op when either is
+missing. Mirror failures are swallowed: the bridge must never break training or
+the real ``wandb.log``.
 """
 from __future__ import annotations
 
