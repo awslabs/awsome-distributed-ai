@@ -34,7 +34,7 @@ def get_action_public_lerobot_sft_dataset(
     root: str | None = None,
     fps: float = 15.0,
     chunk_length: int = 32,
-    mode: str = "policy",
+    mode: str = "wam",
     camera_keys: list[str] | None = None,
     domain_name: str = "droid_lerobot",
     resolution: str | int = "480",

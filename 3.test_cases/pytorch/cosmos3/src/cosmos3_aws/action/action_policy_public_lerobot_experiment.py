@@ -137,7 +137,7 @@ action_policy_public_lerobot = LazyDict(
                             root="${oc.env:DROID_DATASET_PATH,/fsx/datasets/droid_lerobot_v3}",
                             fps=15.0,
                             chunk_length=32,
-                            mode="policy",
+                            mode="wam",
                             camera_keys=[
                                 "observation.images.wrist_image_left",
                                 "observation.images.exterior_image_1_left",
