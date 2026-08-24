@@ -49,11 +49,12 @@ The common logical-byte numerator counts the useful dispatch tensor, FP8 scales 
 CAMPAIGN_ID=fair-ep-b200-$(date -u +%Y%m%d%H%M%S) \
 FAIR_EP_NODES=node-a,node-b,node-c,node-d \
 PROTECTED_NODES_CSV=foreign-node-a,foreign-node-b \
-EXPECTED_LOCK_HOLDER=foreign-campaign-id \
 ARTIFACT_ROOT=/shared/artifacts/${CAMPAIGN_ID} \
 KUBECTL_CONTEXT=target-context \
 ./run_fair_ep_comparison.sh
 ```
+
+The default `LOCK_MODE=exclusive` claims the shared Lease only when it is empty and releases it during verified teardown. If an explicitly coordinated campaign is still active on a disjoint node set, use `LOCK_MODE=observe EXPECTED_LOCK_HOLDER=foreign-campaign-id`; this mode checks the holder throughout the run and never mutates the Lease.
 
 DeepEP V2 admission is conditional on `uvm_disable_hmm=Y` on every selected host and requires a logged GDAKI context. The runner aborts before the scored matrix if either condition is absent.
 

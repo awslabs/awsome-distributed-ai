@@ -4,12 +4,14 @@ set -euo pipefail
 : "${CAMPAIGN_ID:?Set a unique CAMPAIGN_ID}"
 : "${FAIR_EP_NODES:?Set 4 comma-separated B200 node names}"
 : "${PROTECTED_NODES_CSV:?Set the concurrent campaign protected node names}"
-: "${EXPECTED_LOCK_HOLDER:?Set the observed shared Lease holder}"
 : "${ARTIFACT_ROOT:?Set the durable artifact directory}"
 : "${KUBECTL_CONTEXT:=aps1}"
 : "${CAMPAIGN_NAMESPACE:=${CAMPAIGN_ID}}"
 : "${SHARED_LOCK_NAME:=adai-ap-south-1-gpu-campaign-lock}"
 : "${SHARED_LOCK_NAMESPACE:=default}"
+: "${LOCK_MODE:=exclusive}"
+: "${EXPECTED_LOCK_HOLDER:=}"
+: "${LOCK_DURATION_SECONDS:=28800}"
 : "${INDEPENDENT_STARTS:=3}"
 : "${WARMUP_ITERATIONS:=20}"
 : "${MEASURED_ITERATIONS:=100}"
@@ -21,6 +23,11 @@ set -euo pipefail
 
 [[ "${CAMPAIGN_ID}" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]
 [[ "${CAMPAIGN_NAMESPACE}" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]
+[[ "${LOCK_MODE}" == exclusive || "${LOCK_MODE}" == observe ]]
+if [[ "${LOCK_MODE}" == observe && -z "${EXPECTED_LOCK_HOLDER}" ]]; then
+    printf 'LOCK_MODE=observe requires EXPECTED_LOCK_HOLDER\n' >&2
+    exit 2
+fi
 [[ "${INDEPENDENT_STARTS}" -eq 3 ]] || {
     printf 'This scored matrix requires exactly 3 independent starts\n' >&2
     exit 2
@@ -58,16 +65,83 @@ declare -A images=(
 
 current_case=""
 namespace_created=0
+lock_claimed=0
 
 check_shared_lock() {
     local holder
     holder="$("${K[@]}" -n "${SHARED_LOCK_NAMESPACE}" get lease \
         "${SHARED_LOCK_NAME}" -o jsonpath='{.spec.holderIdentity}' 2>/dev/null || true)"
-    if [[ -n "${holder}" && "${holder}" != "${EXPECTED_LOCK_HOLDER}" ]]; then
+    if [[ "${LOCK_MODE}" == exclusive ]]; then
+        [[ "${holder}" == "${CAMPAIGN_ID}" ]] || {
+            printf 'Exclusive shared Lease is no longer held by %s: holder=%s\n' \
+                "${CAMPAIGN_ID}" "${holder}" >&2
+            return 1
+        }
+    elif [[ -n "${holder}" && "${holder}" != "${EXPECTED_LOCK_HOLDER}" ]]; then
         printf 'Shared Lease holder changed from protected campaign %s to %s\n' \
             "${EXPECTED_LOCK_HOLDER}" "${holder}" >&2
         return 1
     fi
+}
+
+claim_shared_lock() {
+    local attempt current holder now candidate
+    [[ "${LOCK_MODE}" == exclusive ]] || return 0
+    for attempt in 1 2 3; do
+        current="$("${K[@]}" -n "${SHARED_LOCK_NAMESPACE}" get lease \
+            "${SHARED_LOCK_NAME}" -o json)"
+        holder="$(jq -r '.spec.holderIdentity // ""' <<<"${current}")"
+        if [[ "${holder}" == "${CAMPAIGN_ID}" ]]; then
+            lock_claimed=1
+            printf '%s\n' "${current}" >"${ARTIFACT_ROOT}/control/shared-lease-claimed.json"
+            return 0
+        fi
+        [[ -z "${holder}" ]] || {
+            printf 'Shared Lease is held by another campaign: %s\n' "${holder}" >&2
+            return 1
+        }
+        now="$(date -u +%FT%T.000000Z)"
+        candidate="$(jq \
+            --arg holder "${CAMPAIGN_ID}" --arg now "${now}" \
+            --argjson duration "${LOCK_DURATION_SECONDS}" '
+                .spec.holderIdentity=$holder |
+                .spec.acquireTime=$now |
+                .spec.renewTime=$now |
+                .spec.leaseDurationSeconds=$duration |
+                .metadata.labels["adai.aws/campaign"]=$holder |
+                .metadata.labels["adai.aws/owner"]="fair-ep-comparison"' \
+            <<<"${current}")"
+        if printf '%s\n' "${candidate}" | "${K[@]}" replace -f - \
+            >"${ARTIFACT_ROOT}/control/shared-lease-claim-attempt-${attempt}.json" 2>&1; then
+            lock_claimed=1
+            "${K[@]}" -n "${SHARED_LOCK_NAMESPACE}" get lease "${SHARED_LOCK_NAME}" -o json \
+                >"${ARTIFACT_ROOT}/control/shared-lease-claimed.json"
+            return 0
+        fi
+    done
+    printf 'Failed to claim shared Lease after 3 optimistic attempts\n' >&2
+    return 1
+}
+
+release_shared_lock() {
+    local current holder now
+    ((lock_claimed == 1)) || return 0
+    current="$("${K[@]}" -n "${SHARED_LOCK_NAMESPACE}" get lease \
+        "${SHARED_LOCK_NAME}" -o json 2>/dev/null || true)"
+    holder="$(jq -r '.spec.holderIdentity // ""' <<<"${current}")"
+    [[ "${holder}" == "${CAMPAIGN_ID}" ]] || {
+        printf 'Refusing to release shared Lease held by %s\n' "${holder}" >&2
+        return 1
+    }
+    now="$(date -u +%FT%T.000000Z)"
+    jq --arg now "${now}" '
+        .spec.holderIdentity="" |
+        .spec.renewTime=$now |
+        .spec.leaseDurationSeconds=1 |
+        del(.metadata.labels["adai.aws/campaign"], .metadata.labels["adai.aws/owner"])' \
+        <<<"${current}" | "${K[@]}" replace -f - \
+        >"${ARTIFACT_ROOT}/teardown/shared-lease-release.json"
+    lock_claimed=0
 }
 
 gpu_requests_on_node() {
@@ -122,6 +196,7 @@ finish() {
             teardown_status=1
         fi
     fi
+    release_shared_lock || teardown_status=1
     "${K[@]}" get all -A -l "adai.aws/campaign=${CAMPAIGN_ID}" -o json \
         >"${ARTIFACT_ROOT}/teardown/remaining-resources.json" 2>&1 || teardown_status=1
     remaining="$(jq '.items | length' "${ARTIFACT_ROOT}/teardown/remaining-resources.json" 2>/dev/null || printf '1')"
@@ -145,12 +220,13 @@ trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-check_shared_lock
 "${K[@]}" get nodes -o json >"${ARTIFACT_ROOT}/control/fleet-nodes-before.json"
 "${K[@]}" get pods -A -o json >"${ARTIFACT_ROOT}/control/fleet-pods-before.json"
 "${K[@]}" get namespaces -o json >"${ARTIFACT_ROOT}/control/namespaces-before.json"
 "${K[@]}" -n "${SHARED_LOCK_NAMESPACE}" get lease "${SHARED_LOCK_NAME}" -o json \
     >"${ARTIFACT_ROOT}/control/shared-lease-before.json"
+claim_shared_lock
+check_shared_lock
 aws sts get-caller-identity --output json >"${ARTIFACT_ROOT}/control/aws-caller-identity.json"
 printf '%s\n' "${selected_nodes[@]}" >"${ARTIFACT_ROOT}/control/selected-nodes.txt"
 printf '%s\n' "${protected_nodes[@]}" | sort -u >"${ARTIFACT_ROOT}/control/protected-nodes.txt"
