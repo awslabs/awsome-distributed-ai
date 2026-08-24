@@ -139,6 +139,10 @@ GLOBAL_BATCH="${GLOBAL_BATCH:-256}"
 MICRO_BATCH="${MICRO_BATCH:-4}"
 SEQ_LEN="${SEQ_LEN:-4096}"
 MOE_A2A_OVERLAP="${MOE_A2A_OVERLAP:-off}"
+PRESERVE_ROUTE_TRACE_RAW="${PRESERVE_ROUTE_TRACE_RAW:-0}"
+HARVEST_PARALLELISM="${HARVEST_PARALLELISM:-4}"
+[[ "${PRESERVE_ROUTE_TRACE_RAW}" =~ ^[01]$ ]] || { echo "PRESERVE_ROUTE_TRACE_RAW must be 0 or 1" >&2; exit 2; }
+[[ "${HARVEST_PARALLELISM}" =~ ^[1-9][0-9]*$ && "${HARVEST_PARALLELISM}" -le 16 ]] || { echo "HARVEST_PARALLELISM must be an integer from 1 through 16" >&2; exit 2; }
 
 cat > "${LOCAL_RUN_DIR}/environment.txt" <<EOF
 campaign_id=${CAMPAIGN_ID}
@@ -158,6 +162,8 @@ global_batch_samples=${GLOBAL_BATCH}
 micro_batch_samples=${MICRO_BATCH}
 sequence_length_tokens=${SEQ_LEN}
 ep_overlap=${MOE_A2A_OVERLAP}
+route_trace_raw_preserved=${PRESERVE_ROUTE_TRACE_RAW}
+harvest_parallelism=${HARVEST_PARALLELISM}
 expected_dispatcher=${EXPECTED_DISPATCHER}
 expected_backend=${EXPECTED_BACKEND}
 run_kind=${RUN_KIND}
@@ -260,7 +266,11 @@ spec:
           2>&1 | tee /run-artifacts/node-rank-${rank}.log;
           train_rc=\${PIPESTATUS[0]};
           python3 /opt/benchmark/case/bench/summarize-route-trace.py /run-artifacts/router-trace /run-artifacts/route-summary.json || true;
-          find /run-artifacts/router-trace -type f -name '*.jsonl' -exec gzip -9 -n {} + 2>/dev/null || true;
+          if [[ "\${PRESERVE_ROUTE_TRACE_RAW}" = 1 ]]; then
+            find /run-artifacts/router-trace -type f -name '*.jsonl' -exec gzip -9 -n {} + 2>/dev/null || true;
+          else
+            find /run-artifacts/router-trace -type f -name '*.jsonl' -delete 2>/dev/null || true;
+          fi;
           kill \${telemetry_pid} >/dev/null 2>&1 || true; wait \${telemetry_pid} || true;
           (cd /run-artifacts && find . -type f ! -name custody.sha256 -print0 | sort -z | xargs -0 sha256sum > custody.sha256);
           exit \${train_rc}
@@ -282,6 +292,7 @@ spec:
         - {name: RUN_BENCHMARK_SOURCE_B64, value: "${RUN_BENCHMARK_SOURCE_B64}"}
         - {name: RUN_INPUT_JSON_B64, value: "${RUN_INPUT_JSON_B64}"}
         - {name: ROUTER_TRACE_DIR, value: "/run-artifacts/router-trace"}
+        - {name: PRESERVE_ROUTE_TRACE_RAW, value: "${PRESERVE_ROUTE_TRACE_RAW}"}
         - {name: FI_PROVIDER, value: "efa"}
         - {name: FI_EFA_USE_DEVICE_RDMA, value: "1"}
         - {name: NCCL_DEBUG, value: "INFO"}
@@ -330,11 +341,12 @@ done
 cleanup_snapshot
 trap - EXIT
 
-harvest_failures=0
-for rank in $(seq 0 $((NNODES - 1))); do
+harvest_rank() {
+  local rank="$1"
+  local copied=0
+  local attempt target
   "${KN[@]}" logs "${JOB}-${rank}" -c trainer --timestamps > "${LOCAL_RUN_DIR}/pod-logs/node-rank-${rank}.log" 2>&1 || true
   "${KN[@]}" logs "${JOB}-${rank}" -c harvester --timestamps > "${LOCAL_RUN_DIR}/pod-logs/harvester-node-rank-${rank}.log" 2>&1 || true
-  copied=0
   for attempt in 1 2 3; do
     target="${LOCAL_RUN_DIR}/node-${rank}"
     if [[ -e "${target}" ]]; then
@@ -348,9 +360,25 @@ for rank in $(seq 0 $((NNODES - 1))); do
     fi
     printf 'HARVEST_RETRY node_rank=%d attempt=%d timestamp_utc=%s\n' "${rank}" "${attempt}" "$(date -u +%FT%TZ)" >> "${LOCAL_RUN_DIR}/harvest-errors.log"
   done
-  if [[ "${copied}" -ne 1 ]]; then
-    harvest_failures=$((harvest_failures + 1))
+  [[ "${copied}" -eq 1 ]]
+}
+
+harvest_failures=0
+for ((batch_start = 0; batch_start < NNODES; batch_start += HARVEST_PARALLELISM)); do
+  harvest_pids=()
+  batch_end=$((batch_start + HARVEST_PARALLELISM))
+  if (( batch_end > NNODES )); then
+    batch_end="${NNODES}"
   fi
+  for ((rank = batch_start; rank < batch_end; rank++)); do
+    harvest_rank "${rank}" &
+    harvest_pids+=("$!")
+  done
+  for harvest_pid in "${harvest_pids[@]}"; do
+    if ! wait "${harvest_pid}"; then
+      harvest_failures=$((harvest_failures + 1))
+    fi
+  done
 done
 pods_after="$("${KN[@]}" get pods -l app="${JOB}" -o json)"
 printf '%s\n' "${pods_after}" > "${LOCAL_RUN_DIR}/manifests/pods-after.json"
