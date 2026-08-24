@@ -63,13 +63,19 @@ def elastic_moe(inputs, indices, probabilities, expert_scale, experts):
         async_finish=False,
         allocate_on_comm_stream=False,
     )
-    first = dist.get_rank() * (experts // dist.get_world_size())
-    last = first + experts // dist.get_world_size()
+    experts_per_rank = experts // dist.get_world_size()
+    first = dist.get_rank() * experts_per_rank
+    valid_recv_indices = recv_indices[recv_indices >= 0]
+    assert valid_recv_indices.numel() > 0
+    assert int(valid_recv_indices.max()) < experts_per_rank
     local = torch.zeros_like(recv_x)
-    for expert in range(first, last):
-        selected = recv_indices == expert
+    # ElasticBuffer returns destination-local expert indices, matching the
+    # local-index contract consumed by MCore's _indices_to_multihot().
+    for local_expert in range(experts_per_rank):
+        global_expert = first + local_expert
+        selected = recv_indices == local_expert
         coefficient = (recv_probabilities * selected).sum(dim=1, keepdim=True)
-        local = local + recv_x * coefficient.to(recv_x.dtype) * expert_scale[expert]
+        local = local + recv_x * coefficient.to(recv_x.dtype) * expert_scale[global_expert]
     output, _ = elastic_fused_combine(local, handle._mcore_elastic_buffer, handle)
     return output, counts
 
@@ -182,6 +188,7 @@ def main() -> None:
                     "hidden_units": args.hidden,
                     "experts": args.experts,
                     "topk": args.topk,
+                    "dispatched_index_space": "destination-local-expert",
                     "route_hashes": gathered_hashes,
                     "no_token_drop": no_token_drop,
                     "global_expert_token_counts": {
