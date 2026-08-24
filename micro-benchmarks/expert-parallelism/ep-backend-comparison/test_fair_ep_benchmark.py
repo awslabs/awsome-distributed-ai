@@ -68,6 +68,28 @@ class FairEpBenchmarkTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "exactly one"):
                 MODULE.deepep_v2_build_lib(root)
 
+    def test_received_fp8_accepts_noncontiguous_scales(self):
+        adapter = object.__new__(MODULE.BackendAdapter)
+        adapter.arm = "uccl"
+        adapter.hidden = 256
+        observed = {}
+
+        def cast_back(fp8, scales):
+            observed["fp8_shape"] = tuple(fp8.shape)
+            observed["scales_shape"] = tuple(scales.shape)
+            return torch.zeros((fp8.shape[0], 256), dtype=torch.bfloat16)
+
+        adapter._cast_back = cast_back
+        fp8 = torch.zeros((2, 3, 256), dtype=torch.float8_e4m3fn)
+        scales = torch.arange(12, dtype=torch.float32).reshape(2, 6).t()
+        self.assertFalse(scales.is_contiguous())
+
+        received = adapter.received_as_bf16((fp8, scales), "fp8")
+
+        self.assertEqual(observed["fp8_shape"], (6, 256))
+        self.assertEqual(observed["scales_shape"], (6, 2))
+        self.assertEqual(tuple(received.shape), (2, 3, 256))
+
 
 if __name__ == "__main__":
     unittest.main()

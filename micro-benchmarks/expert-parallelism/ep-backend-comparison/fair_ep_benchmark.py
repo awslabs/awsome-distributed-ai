@@ -313,9 +313,9 @@ class BackendAdapter:
             return self._cast_back(recv_x[0], recv_x[1])
         fp8, scales = recv_x
         return self._cast_back(
-            fp8.view(-1, self.hidden),
-            scales.view(-1, self.hidden // 128),
-        ).view(fp8.shape)
+            fp8.reshape(-1, self.hidden),
+            scales.reshape(-1, self.hidden // 128),
+        ).reshape(fp8.shape)
 
     def combine(
         self,
