@@ -112,7 +112,9 @@ KN=("${K[@]}" -n "${NS}")
 
 safe_arm="${EP_ARM//[^a-z0-9-]/-}"
 JOB="mk2-${CELL//[^a-z0-9-]/-}-r${REPEAT}-${safe_arm}"
-JOB="${JOB:0:62}"
+# Leave room for the largest 32-node rank suffix ("-31") so both the Pod
+# metadata name and explicit hostname remain valid DNS labels.
+JOB="${JOB:0:60}"
 PORT=23456
 TP="${TENSOR_PARALLEL:-8}"
 PP="${PIPELINE_PARALLEL:-8}"

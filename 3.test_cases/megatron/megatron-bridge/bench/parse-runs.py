@@ -47,6 +47,16 @@ def runtime_manifests(run: Path) -> list[dict]:
     return found
 
 
+def route_summaries(run: Path) -> list[dict]:
+    found = []
+    for path in run.glob("node-*/route-summary.json"):
+        try:
+            found.append(json.loads(path.read_text()))
+        except (OSError, json.JSONDecodeError):
+            pass
+    return found
+
+
 def parse_run(run: Path, warmup: int) -> dict:
     env = read_environment(run)
     arm = env.get("ep_arm", run.name)
@@ -71,21 +81,37 @@ def parse_run(run: Path, warmup: int) -> dict:
     gradients = [record["gradient_norm"] for _, record in ordered if "gradient_norm" in record]
     tflops = [record["tflops"] for record in steady if "tflops" in record]
     manifests = runtime_manifests(run)
+    routes = route_summaries(run)
+    expected_nodes = len([node for node in env.get("nodes", "").split(",") if node])
+    manifests_complete = expected_nodes > 0 and len(manifests) == expected_nodes
+    routes_complete = expected_nodes > 0 and len(routes) == expected_nodes
 
-    identity = bool(manifests) and all(item.get("ep_arm") == arm and item.get("backend_identity", {}).get("ep_arm") == arm for item in manifests)
-    single_nccl = bool(manifests) and all(item.get("single_nccl") is True for item in manifests)
-    build_runtime = bool(manifests) and all(item.get("nccl_build_runtime_match") is True for item in manifests)
-    efa_manifest = bool(manifests) and all("provider: efa" in item.get("efa_devices", "").lower() for item in manifests)
+    identity = manifests_complete and all(
+        item.get("ep_arm") == arm and item.get("backend_identity", {}).get("ep_arm") == arm
+        for item in manifests
+    )
+    single_nccl = manifests_complete and all(item.get("single_nccl") is True for item in manifests)
+    build_runtime = manifests_complete and all(
+        item.get("nccl_build_runtime_match") is True for item in manifests
+    )
+    efa_manifest = manifests_complete and all(
+        "provider: efa" in item.get("efa_devices", "").lower() for item in manifests
+    )
     validity = {
         "image_identity": identity and marker(text, r"EP_IMAGE_IDENTITY_OK|EP_BACKEND_REQUEST"),
         "elastic_buffer": marker(text, r"buffer=ElasticBuffer|DEEPEP_V2_IMPORT_OK ElasticBuffer=true"),
         "deepep_v2_manager": marker(text, r"manager=_DeepepV2Manager"),
         "single_nccl": single_nccl,
         "nccl_build_runtime_match": build_runtime,
-        "gin_type_5": bool(manifests) and all(item.get("environment", {}).get("NCCL_GIN_TYPE") == "5" for item in manifests),
+        "gin_type_5": manifests_complete
+        and all(item.get("environment", {}).get("NCCL_GIN_TYPE") == "5" for item in manifests),
         "gdaki_context": marker(text, r"GIN GDAKI:\s*createContext done|GDAKI.*createContext.*done"),
         "efa": efa_manifest and marker(text, r"Selected provider is efa|NET/OFI.*efa|provider: efa"),
-        "no_token_drop": marker(text, r"NO_TOKEN_DROP_CONFIG capacity_factor=None token_dropping=False"),
+        "no_token_drop": (
+            marker(text, r"NO_TOKEN_DROP_CONFIG capacity_factor=None token_dropping=False")
+            and routes_complete
+            and all(item.get("records", 0) > 0 and item.get("no_token_drop") is True for item in routes)
+        ),
         "steady_timing": finite(times),
         "finite_loss": finite(losses),
         "finite_gradient": finite(gradients),
@@ -132,7 +158,12 @@ def parse_run(run: Path, warmup: int) -> dict:
         "metrics": metrics,
         "validity": validity,
         "required_validity_gates": required,
-        "artifacts": {"run_directory": str(run), "pod_logs": len(log_paths), "runtime_manifests": len(manifests)},
+        "artifacts": {
+            "run_directory": str(run),
+            "pod_logs": len(log_paths),
+            "runtime_manifests": len(manifests),
+            "route_summaries": len(routes),
+        },
     }
     (run / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     return result
