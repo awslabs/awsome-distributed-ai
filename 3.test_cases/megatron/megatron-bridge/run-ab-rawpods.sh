@@ -36,6 +36,7 @@ HARVEST_IMAGE="${HARVEST_IMAGE:-${IMG_NCCL_ALLTOALL:-${IMAGE}}}"
 RUN_ENTRYPOINT="${RUN_ENTRYPOINT:-/opt/benchmark/case/kimi-k2/benchmarks/bench_kimi_k2_pretrain.py}"
 RUN_ENTRYPOINT_ARGS_JSON="${RUN_ENTRYPOINT_ARGS_JSON:-[]}"
 RUN_ENTRYPOINT_LOCAL_FILE="${RUN_ENTRYPOINT_LOCAL_FILE:-}"
+RUN_BENCHMARK_LOCAL_FILE="${RUN_BENCHMARK_LOCAL_FILE:-}"
 RUN_INPUT_JSON_B64="${RUN_INPUT_JSON_B64:-}"
 python3 - "${RUN_ENTRYPOINT_ARGS_JSON}" <<'PY'
 import json, sys
@@ -53,6 +54,14 @@ if [[ -n "${RUN_ENTRYPOINT_LOCAL_FILE}" ]]; then
   RUN_ENTRYPOINT=/run-artifacts/run-entrypoint.py
 else
   [[ "${RUN_ENTRYPOINT}" =~ ^/opt/benchmark/case/[A-Za-z0-9_./-]+$ ]] || { echo "invalid image entrypoint: ${RUN_ENTRYPOINT}" >&2; exit 2; }
+fi
+RUN_BENCHMARK_SOURCE_B64=""
+RUN_BENCHMARK_SOURCE_SHA256=""
+if [[ -n "${RUN_BENCHMARK_LOCAL_FILE}" ]]; then
+  [[ -f "${RUN_BENCHMARK_LOCAL_FILE}" ]] || { echo "missing local benchmark source: ${RUN_BENCHMARK_LOCAL_FILE}" >&2; exit 2; }
+  RUN_BENCHMARK_SOURCE_B64="$(base64 -w0 < "${RUN_BENCHMARK_LOCAL_FILE}")"
+  (( ${#RUN_BENCHMARK_SOURCE_B64} < 700000 )) || { echo "local benchmark source is too large for a pod environment" >&2; exit 2; }
+  RUN_BENCHMARK_SOURCE_SHA256="$(sha256sum "${RUN_BENCHMARK_LOCAL_FILE}" | awk '{print $1}')"
 fi
 if [[ -n "${RUN_INPUT_JSON_B64}" ]]; then
   printf '%s' "${RUN_INPUT_JSON_B64}" | base64 -d >/dev/null
@@ -103,6 +112,9 @@ sha256sum "${SELF_DIR}/kimi-k2/benchmarks/bench_kimi_k2_pretrain.py" > "${LOCAL_
 if [[ -n "${RUN_ENTRYPOINT_LOCAL_FILE}" ]]; then
   cp "${RUN_ENTRYPOINT_LOCAL_FILE}" "${LOCAL_RUN_DIR}/manifests/run-entrypoint.py"
 fi
+if [[ -n "${RUN_BENCHMARK_LOCAL_FILE}" ]]; then
+  cp "${RUN_BENCHMARK_LOCAL_FILE}" "${LOCAL_RUN_DIR}/manifests/benchmark-entrypoint.py"
+fi
 
 if "${K[@]}" get namespace "${NS}" >/dev/null 2>&1; then
   owner="$("${K[@]}" get namespace "${NS}" -o jsonpath='{.metadata.labels.adai-campaign}')"
@@ -152,6 +164,7 @@ run_kind=${RUN_KIND}
 run_entrypoint=${RUN_ENTRYPOINT}
 run_entrypoint_args_json=${RUN_ENTRYPOINT_ARGS_JSON}
 run_entrypoint_source_sha256=${RUN_ENTRYPOINT_SOURCE_SHA256}
+benchmark_entrypoint_source_sha256=${RUN_BENCHMARK_SOURCE_SHA256}
 EOF
 
 cat <<EOF | "${KN[@]}" apply -f -
@@ -236,6 +249,7 @@ spec:
           cp /opt/benchmark/common-build-manifest.json /run-artifacts/common-build-manifest.json;
           cp /opt/benchmark/image-verification.json /run-artifacts/image-verification.json;
           if [[ -n "\${RUN_ENTRYPOINT_SOURCE_B64}" ]]; then printf '%s' "\${RUN_ENTRYPOINT_SOURCE_B64}" | base64 -d > /run-artifacts/run-entrypoint.py; chmod 0444 /run-artifacts/run-entrypoint.py; fi;
+          if [[ -n "\${RUN_BENCHMARK_SOURCE_B64}" ]]; then printf '%s' "\${RUN_BENCHMARK_SOURCE_B64}" | base64 -d > /run-artifacts/benchmark-entrypoint.py; chmod 0444 /run-artifacts/benchmark-entrypoint.py; export KIMI_BENCHMARK_ENTRYPOINT=/run-artifacts/benchmark-entrypoint.py; fi;
           if [[ -n "\${RUN_INPUT_JSON_B64}" ]]; then printf '%s' "\${RUN_INPUT_JSON_B64}" | base64 -d > /run-artifacts/run-input.json; fi;
           mapfile -t run_args < <(python3 -c 'import base64,json,os; [print(value) for value in json.loads(base64.b64decode(os.environ["RUN_ENTRYPOINT_ARGS_B64"]))]');
           python3 /opt/benchmark/case/bench/collect-runtime-manifest.py /run-artifacts/runtime-manifest.json;
@@ -262,6 +276,7 @@ spec:
         - {name: RUN_KIND, value: "${RUN_KIND}"}
         - {name: RUN_ENTRYPOINT_ARGS_B64, value: "${RUN_ENTRYPOINT_ARGS_B64}"}
         - {name: RUN_ENTRYPOINT_SOURCE_B64, value: "${RUN_ENTRYPOINT_SOURCE_B64}"}
+        - {name: RUN_BENCHMARK_SOURCE_B64, value: "${RUN_BENCHMARK_SOURCE_B64}"}
         - {name: RUN_INPUT_JSON_B64, value: "${RUN_INPUT_JSON_B64}"}
         - {name: ROUTER_TRACE_DIR, value: "/run-artifacts/router-trace"}
         - {name: FI_PROVIDER, value: "efa"}
