@@ -29,13 +29,15 @@ from pathlib import Path
 
 patch_sha = os.environ["MCORE_DEEPEP_V2_EAGER_COMM_PATCH_SHA256"]
 parent = os.environ["QUALIFIED_PARENT_REFERENCE"]
-for path in (
-    Path("/opt/benchmark/backend.json"),
-    Path("/opt/benchmark/common-build-manifest.json"),
-):
-    value = json.loads(path.read_text())
-    value["mcore_deepep_v2_eager_comm_patch_sha256"] = patch_sha
-    value["qualified_parent_reference"] = parent
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+backend_path = Path("/opt/benchmark/backend.json")
+backend = json.loads(backend_path.read_text())
+backend["mcore_deepep_v2_eager_comm_patch_sha256"] = patch_sha
+backend["qualified_parent_reference"] = parent
+backend_path.write_text(json.dumps(backend, indent=2, sort_keys=True) + "\n")
+
+common_path = Path("/opt/benchmark/common-build-manifest.json")
+common = json.loads(common_path.read_text())
+common["mcore_deepep_v2_eager_comm_patch_sha256"] = patch_sha
+common_path.write_text(json.dumps(common, indent=2, sort_keys=True) + "\n")
 PY
 EP_ARM="${EP_ARM}" /opt/benchmark/verify-image.sh
