@@ -97,7 +97,10 @@ release_lock() {
   [[ "${LOCK_HELD}" -eq 1 ]] || return 0
   local current holder
   current="$("${K[@]}" -n "${LOCK_NS}" get lease "${CLUSTER_LOCK}" -o json 2>/dev/null || true)"
-  holder="$(jq -r '.spec.holderIdentity // ""' <<<"${current:-{}}")"
+  holder=""
+  if [[ -n "${current}" ]]; then
+    holder="$(jq -r '.spec.holderIdentity // ""' <<<"${current}")"
+  fi
   if [[ "${holder}" = "${HOLDER_ID}" ]]; then
     jq '.spec.holderIdentity="" | .spec.leaseDurationSeconds=1' <<<"${current}" | "${K[@]}" replace -f - >/dev/null
   fi
