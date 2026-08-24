@@ -132,7 +132,7 @@ index 4447606..e0c26db 100644
 +    def backward(
 +        ctx, grad_output, grad_token_indices, grad_token_probs, grad_tokens_per_expert, grad_handle
 +    ):
-+        grad_probs = grad_token_probs.float() if grad_token_probs is not None else None
++        grad_probs = grad_token_probs.float().contiguous() if grad_token_probs is not None else None
 +        grad_x, grad_token_probs, event = ctx.buffer.combine(
 +            grad_output.contiguous(),
 +            ctx.handle,
