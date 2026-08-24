@@ -184,7 +184,8 @@ index 4447606..e0c26db 100644
 +        grad_x, _, _, _, event = ctx.buffer.dispatch(
 +            grad_output.contiguous(),
 +            handle=ctx.handle,
-+            num_sms=ctx.num_sms or 0,
++            num_experts=ctx.handle.num_experts,
++            num_sms=ctx.handle.num_sms,
 +            num_qps=ctx.num_qps,
 +            async_with_compute_stream=ctx.async_finish,
 +            allocate_on_comm_stream=ctx.allocate_on_comm_stream,
