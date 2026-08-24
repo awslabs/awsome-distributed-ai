@@ -149,7 +149,7 @@ gpu_requests_on_node() {
     "${K[@]}" get pods -A --field-selector "spec.nodeName=${node}" -o json | jq '
         [.items[]
          | select(.status.phase != "Succeeded" and .status.phase != "Failed")
-         | [.spec.containers[]?.resources.requests["nvidia.com/gpu"] // 0]
+         | [.spec.containers[]?.resources.requests["nvidia.com/gpu"] // 0 | tonumber]
          | add // 0]
         | add // 0'
 }
