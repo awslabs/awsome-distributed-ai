@@ -20,7 +20,7 @@ index 4447606..e0c26db 100644
  
  
  def get_hidden_bytes(x: torch.Tensor) -> int:
-@@ -68,6 +76,47 @@ def get_buffer(group: torch.distributed.ProcessGroup, hidden_bytes: int):
+@@ -68,6 +76,54 @@ def get_buffer(group: torch.distributed.ProcessGroup, hidden_bytes: int):
      return _buffer
  
  
@@ -60,15 +60,22 @@ index 4447606..e0c26db 100644
 +            allow_multiple_reduction=allow_multiple_reduction,
 +            prefer_overlap_with_compute=prefer_overlap_with_compute,
 +            num_allocated_qps=num_allocated_qps,
++            explicitly_destroy=True,
 +        )
 +        _elastic_buffers[key] = buffer
 +    return buffer
 +
 +
++def destroy_elastic_buffers():
++    for buffer in _elastic_buffers.values():
++        buffer.destroy()
++    _elastic_buffers.clear()
++
++
  class FusedDispatch(torch.autograd.Function):
      """Fused dispatch operation for MoE routing combining computation and communication."""
  
-@@ -209,6 +258,131 @@ class FusedCombine(torch.autograd.Function):
+@@ -209,6 +265,131 @@ class FusedCombine(torch.autograd.Function):
          return grad_x, None, None, None, None
  
  
@@ -200,7 +207,7 @@ index 4447606..e0c26db 100644
  if HAVE_DEEP_EP:
  
      def fused_dispatch(
-@@ -267,6 +441,63 @@ else:
+@@ -267,6 +448,63 @@ else:
      set_deepep_num_sms = None
  
  

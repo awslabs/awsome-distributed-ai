@@ -12,6 +12,7 @@ import torch.distributed as dist
 import deep_ep
 
 from megatron.core.transformer.moe.fused_a2a import (
+    destroy_elastic_buffers,
     elastic_fused_combine,
     elastic_fused_dispatch,
 )
@@ -67,11 +68,11 @@ def one_flight(tokens: int, hidden: int, experts: int, topk: int, asynchronous: 
 def multiple_in_flight(tokens: int, hidden: int, experts: int, topk: int) -> None:
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     flights = []
-    for offset in (0, 1):
-        indices, probabilities = route(tokens + offset, experts, topk, device)
+    for _ in range(2):
+        indices, probabilities = route(tokens, experts, topk, device)
         probabilities.requires_grad_(True)
         inputs = torch.randn(
-            (tokens + offset, hidden),
+            (tokens, hidden),
             device=device,
             dtype=torch.bfloat16,
             requires_grad=True,
@@ -160,6 +161,7 @@ def main() -> None:
                 sort_keys=True,
             )
         )
+    destroy_elastic_buffers()
     dist.destroy_process_group()
 
 

@@ -11,8 +11,8 @@ set -euo pipefail
 
 test "$(git -C /opt/Megatron-Bridge rev-parse HEAD)" = "${BRIDGE_COMMIT}"
 test "$(git -C /opt/Megatron-Bridge/3rdparty/Megatron-LM rev-parse HEAD)" = "${MCORE_COMMIT}"
-echo '9d54dd664daded6c3e4b105a77d578fea4340121188ea3a4261e33cec1523ce0  /opt/benchmark/patches/bridge-deepep-v2.patch' | sha256sum --check --strict
-echo 'de9e5da201c0200fbc665d3a97c3f3191120616ff7c46d705f86c7b18fadc80c  /opt/benchmark/patches/mcore-deepep-v2-elastic.patch' | sha256sum --check --strict
+echo '0287441f2843e8072cefc85c8b548da2ef638517a24fa697a28b1b51f656efa2  /opt/benchmark/patches/bridge-deepep-v2.patch' | sha256sum --check --strict
+echo 'a3400c9aa61ad0797bf408e4a8e763ddb6b9490a0c91ca5b361fb1d7e7afba3e  /opt/benchmark/patches/mcore-deepep-v2-elastic.patch' | sha256sum --check --strict
 git -C /opt/Megatron-Bridge apply --check /opt/benchmark/patches/bridge-deepep-v2.patch
 git -C /opt/Megatron-Bridge apply /opt/benchmark/patches/bridge-deepep-v2.patch
 git -C /opt/Megatron-Bridge/3rdparty/Megatron-LM apply --check /opt/benchmark/patches/mcore-deepep-v2-elastic.patch

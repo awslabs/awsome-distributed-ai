@@ -38,8 +38,8 @@ common:
   nvshmem_cuda13_sha256: f954ed91fa270f4b905391e03d808f60c73b894d88ef0aae865916d685353b8c
 
 patches:
-  bridge_deepep_v2_sha256: 9d54dd664daded6c3e4b105a77d578fea4340121188ea3a4261e33cec1523ce0
-  mcore_deepep_v2_elastic_sha256: de9e5da201c0200fbc665d3a97c3f3191120616ff7c46d705f86c7b18fadc80c
+  bridge_deepep_v2_sha256: 0287441f2843e8072cefc85c8b548da2ef638517a24fa697a28b1b51f656efa2
+  mcore_deepep_v2_elastic_sha256: a3400c9aa61ad0797bf408e4a8e763ddb6b9490a0c91ca5b361fb1d7e7afba3e
 
 backends:
   uccl:

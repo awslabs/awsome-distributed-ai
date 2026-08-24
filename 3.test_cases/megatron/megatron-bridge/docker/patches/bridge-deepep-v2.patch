@@ -29,3 +29,17 @@ index 7431c24..77c065f 100644
              if not (
                  device_properties.major in (8, 9) or device_properties.name.startswith(("NVIDIA B200", "NVIDIA B300"))
              ):
+diff --git a/src/megatron/bridge/training/pretrain.py b/src/megatron/bridge/training/pretrain.py
+--- a/src/megatron/bridge/training/pretrain.py
++++ b/src/megatron/bridge/training/pretrain.py
+@@ -281,6 +281,10 @@ def _maybe_destroy_process_group(
+             # cleanup may run while peer ranks are still blocked in those calls.
+             dist.distributed_c10d._abort_process_group()
+             return
++        from megatron.core.transformer.moe.fused_a2a import destroy_elastic_buffers
++
++        destroy_elastic_buffers()
++
+         if synchronize:
+             dist.barrier()
+         dist.destroy_process_group()

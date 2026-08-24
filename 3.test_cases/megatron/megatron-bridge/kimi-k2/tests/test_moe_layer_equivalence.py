@@ -12,6 +12,7 @@ import torch
 import torch.distributed as dist
 
 from megatron.core.transformer.moe.fused_a2a import (
+    destroy_elastic_buffers,
     elastic_fused_combine,
     elastic_fused_dispatch,
 )
@@ -196,6 +197,7 @@ def main() -> None:
                 sort_keys=True,
             )
         )
+    destroy_elastic_buffers()
     dist.destroy_process_group()
     if not passed:
         raise SystemExit(1)
