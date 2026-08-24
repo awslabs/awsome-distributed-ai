@@ -23,5 +23,9 @@ COPY 3.test_cases/megatron/megatron-bridge/docker/patches/mcore-deepep-v2-overla
 COPY 3.test_cases/megatron/megatron-bridge/docker/apply-mcore-deepep-v2-overlap-schedule.sh /opt/benchmark/apply-mcore-deepep-v2-overlap-schedule.sh
 COPY 3.test_cases/megatron/megatron-bridge/kimi-k2/tests/test_deepep_v2_overlap_schedule.py /opt/benchmark/case/kimi-k2/tests/test_deepep_v2_overlap_schedule.py
 RUN bash /opt/benchmark/apply-mcore-deepep-v2-overlap-schedule.sh
-RUN python3 /opt/benchmark/case/kimi-k2/tests/test_deepep_v2_overlap_schedule.py
+RUN set -e; \
+    ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1; \
+    trap 'rm -f /usr/local/cuda/lib64/stubs/libcuda.so.1' EXIT; \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH} \
+      python3 /opt/benchmark/case/kimi-k2/tests/test_deepep_v2_overlap_schedule.py
 WORKDIR /opt/benchmark/case
