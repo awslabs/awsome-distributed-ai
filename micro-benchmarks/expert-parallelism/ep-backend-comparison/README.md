@@ -37,6 +37,26 @@ docker run --rm ${NVSHMEM_IMAGE_URI} sed -n '1,60p' /DeepEP/tests/test_internode
 If the DeepEP values differ from 4096/7168/8/256, edit the bench args in
 `../uccl-ep-benchmark/kubernetes/test-*.yaml` to match.
 
+### Fair common-boundary decode comparison
+
+The backend-native reports above do not share one timing boundary or byte numerator. Use [`fair_ep_benchmark.py`](fair_ep_benchmark.py) when making a direct cross-backend latency or effective-bandwidth claim. It supplies all 3 backends with the same deterministic BF16 input, exact top-k route, and weights, then times BF16-input readiness through dispatch and combine completion with one CUDA Event boundary. Each iteration uses the slowest rank's elapsed time.
+
+The common logical-byte numerator counts the useful dispatch tensor, FP8 scales when selected, and BF16 combine tensor for each valid expert assignment. It excludes backend metadata. Backend-native UCCL, NVSHMEM RDMA, and DeepEP V2 SO/SU measurements remain useful diagnostics, but they are reported separately.
+
+[`run_fair_ep_comparison.sh`](run_fair_ep_comparison.sh) runs the B200 decode matrix at 128 tokens/rank for EP16 and EP32. It uses the same named nodes for every arm, performs 3 independent process starts per cell in rotated arm order, validates route and input hashes, and tears down only its labeled namespace. The concurrent campaign's nodes and shared Lease are read and protected, never modified.
+
+```bash
+CAMPAIGN_ID=fair-ep-b200-$(date -u +%Y%m%d%H%M%S) \
+FAIR_EP_NODES=node-a,node-b,node-c,node-d \
+PROTECTED_NODES_CSV=foreign-node-a,foreign-node-b \
+EXPECTED_LOCK_HOLDER=foreign-campaign-id \
+ARTIFACT_ROOT=/shared/artifacts/${CAMPAIGN_ID} \
+KUBECTL_CONTEXT=target-context \
+./run_fair_ep_comparison.sh
+```
+
+DeepEP V2 admission is conditional on `uvm_disable_hmm=Y` on every selected host and requires a logged GDAKI context. The runner aborts before the scored matrix if either condition is absent.
+
 ## Prerequisites
 
 - EKS cluster with EFA + GPU nodes; NVIDIA device plugin + AWS EFA device plugin; Kubeflow MPI
@@ -159,7 +179,7 @@ The historical UCCL and DeepEP V1 matrix was pushed to 16 and 32 nodes, or 128 a
 - **Internode = RDMA leg.** DeepEP/UCCL print both an RDMA (cross-node) and an NVL (intra-node)
   bandwidth on the same line; only the RDMA number reflects the inter-node transport being
   compared.
-- **DeepEP V2 accounting differs.** V2 prints SO and SU bandwidth plus per-operation latency. SO is the cross-node leg, but it is not numerically interchangeable with the V1/UCCL RDMA accounting. Use latency as the primary cross-backend metric and retain backend-native bandwidth as directional evidence.
+- **Backend-native accounting differs.** V2 prints SO and SU bandwidth plus per-operation latency, while V1 and UCCL use their own aggregate timing and byte accounting. Neither the native GB/s values nor the native latency values establish an apples-to-apples ranking. Use the common-boundary harness for cross-backend claims and retain native values as diagnostics.
 - **`num-experts` must divide the world size.** Both tests assert `num_experts % num_ranks == 0`.
   At 8 nodes (64 ranks) the comparison uses 256 (= 4/rank). The DeepEP low-latency default (288)
   is not divisible by 64 and must be overridden (see the run-order note).
