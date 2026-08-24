@@ -39,11 +39,13 @@ If the DeepEP values differ from 4096/7168/8/256, edit the bench args in
 
 ### Fair common-boundary decode comparison
 
-The backend-native reports above do not share one timing boundary or byte numerator. Use [`fair_ep_benchmark.py`](fair_ep_benchmark.py) when making a direct cross-backend latency or effective-bandwidth claim. It supplies all 3 backends with the same deterministic BF16 input, exact top-k route, and weights, then times BF16-input readiness through dispatch and combine completion with one CUDA Event boundary. Each iteration uses the slowest rank's elapsed time.
+The backend-native benchmark outputs do not share one timing boundary or byte numerator. Use [`fair_ep_benchmark.py`](fair_ep_benchmark.py) when making a direct cross-backend latency or effective-bandwidth claim. It supplies all 3 backends with the same deterministic BF16 input, exact top-k route, and weights, then times BF16-input readiness through dispatch and combine completion with one CUDA Event boundary. Each iteration uses the slowest rank's elapsed time.
 
 The common logical-byte numerator counts the useful dispatch tensor, FP8 scales when selected, and BF16 combine tensor for each valid expert assignment. It excludes backend metadata. Backend-native UCCL, NVSHMEM RDMA, and DeepEP V2 SO/SU measurements remain useful diagnostics, but they are reported separately.
 
 [`run_fair_ep_comparison.sh`](run_fair_ep_comparison.sh) runs the B200 decode matrix at 128 tokens/rank for EP16 and EP32. It uses the same named nodes for every arm, performs 3 independent process starts per cell in rotated arm order, validates route and input hashes, and tears down only its labeled namespace. The concurrent campaign's nodes and shared Lease are read and protected, never modified.
+
+The completed 24 August 2026 rerun, including common logical throughput, paired latency deltas, 95% bootstrap intervals, correctness, and scope limits, is reported in [`RESULTS-b200.md`](RESULTS-b200.md#fair-common-boundary-decode-rerun). Keep its primary table separate from the historical backend-native tables on the same page.
 
 ```bash
 CAMPAIGN_ID=fair-ep-b200-$(date -u +%Y%m%d%H%M%S) \
