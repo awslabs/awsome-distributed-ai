@@ -116,9 +116,9 @@ def main() -> None:
     local_rank = int(os.environ["LOCAL_RANK"])
     device = torch.device("cuda", local_rank)
     torch.cuda.set_device(device)
-    # DeepEP reuses the ProcessGroupNCCL communicator pointer. Supplying the
-    # device eagerly creates that communicator before ElasticBuffer queries it.
-    dist.init_process_group("nccl", device_id=device)
+    # Keep the NCCL communicator lazy. MCore must materialize it before
+    # ElasticBuffer borrows ProcessGroupNCCL's internal communicator pointer.
+    dist.init_process_group("nccl")
     assert args.experts % dist.get_world_size() == 0
     sync_loss, sync_handle, sync_count = one_flight(
         args.tokens, args.hidden, args.experts, args.topk, False

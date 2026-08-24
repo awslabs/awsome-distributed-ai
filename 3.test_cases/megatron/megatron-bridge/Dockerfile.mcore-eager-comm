@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1.7
+ARG QUALIFIED_PARENT=159553542841.dkr.ecr.ap-south-1.amazonaws.com/adai/kimi-k2-megatron-ep-2608-nccl-alltoall@sha256:b6fca544b3fd5a5fe56596ab5a28332f5185a684d71e043f0eae581acd74ca28
+FROM ${QUALIFIED_PARENT}
+
+ARG QUALIFIED_PARENT
+ARG EP_ARM
+ARG MCORE_COMMIT=16ad357ee7973af32916fc1ca39d71065e5f03d4
+ARG MCORE_DEEPEP_V2_EAGER_COMM_PATCH_SHA256=e24e92a166adb562ee3144711a757285f29988ec486e90cac3482309def62ca1
+ARG MCORE_FUSED_A2A_PARENT_SHA256=7f2094760d07c97e786baf373dacb64adf7b70b56d3f80a4538528c2aed1cfda
+ARG MCORE_FUSED_A2A_RESULT_SHA256=29747ce2781202fa285a64cdf8d72c18a872d971584fa911a87350364850a24c
+ENV QUALIFIED_PARENT_REFERENCE=${QUALIFIED_PARENT} \
+    EP_ARM=${EP_ARM} \
+    MCORE_COMMIT=${MCORE_COMMIT} \
+    MCORE_DEEPEP_V2_EAGER_COMM_PATCH_SHA256=${MCORE_DEEPEP_V2_EAGER_COMM_PATCH_SHA256} \
+    MCORE_FUSED_A2A_PARENT_SHA256=${MCORE_FUSED_A2A_PARENT_SHA256} \
+    MCORE_FUSED_A2A_RESULT_SHA256=${MCORE_FUSED_A2A_RESULT_SHA256}
+
+COPY 3.test_cases/megatron/megatron-bridge/docker/patches/mcore-deepep-v2-eager-comm.patch /opt/benchmark/patches/mcore-deepep-v2-eager-comm.patch
+COPY 3.test_cases/megatron/megatron-bridge/docker/apply-mcore-deepep-v2-eager-comm.sh /opt/benchmark/apply-mcore-deepep-v2-eager-comm.sh
+RUN /opt/benchmark/apply-mcore-deepep-v2-eager-comm.sh
+WORKDIR /opt/benchmark/case

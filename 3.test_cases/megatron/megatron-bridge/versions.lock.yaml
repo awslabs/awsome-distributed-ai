@@ -1,5 +1,5 @@
 schema_version: 2
-generated_at_utc: "2026-08-23T22:36:11Z"
+generated_at_utc: "2026-08-24T09:05:33Z"
 
 base:
   nemo_image: nvcr.io/nvidia/nemo:26.08
@@ -40,6 +40,7 @@ common:
 patches:
   bridge_deepep_v2_sha256: 0287441f2843e8072cefc85c8b548da2ef638517a24fa697a28b1b51f656efa2
   mcore_deepep_v2_elastic_sha256: a3400c9aa61ad0797bf408e4a8e763ddb6b9490a0c91ca5b361fb1d7e7afba3e
+  mcore_deepep_v2_eager_comm_sha256: e24e92a166adb562ee3144711a757285f29988ec486e90cac3482309def62ca1
 
 backends:
   uccl:
