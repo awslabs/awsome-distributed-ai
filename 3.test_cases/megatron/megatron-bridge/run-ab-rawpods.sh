@@ -73,14 +73,16 @@ EFA_PER_NODE="${EFA_PER_NODE:-16}"
 GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
 [[ "${GPUS_PER_NODE}" =~ ^[1-8]$ ]] || { echo "GPUS_PER_NODE must be an integer from 1 through 8" >&2; exit 2; }
 WORLD=$((NNODES * GPUS_PER_NODE))
+nodes_json="$("${K[@]}" get nodes -o json)"
 live_pods_json="$("${K[@]}" get pods -A -o json)"
 for node in "${NODES[@]}"; do
-  actual="$("${K[@]}" get node "${node}" -o jsonpath='{.metadata.labels.node\.kubernetes\.io/instance-type}')"
+  node_json="$(jq -c --arg n "${node}" '[.items[] | select(.metadata.name==$n)] | if length == 1 then .[0] else error("expected one named node") end' <<<"${nodes_json}")"
+  actual="$(jq -r '.metadata.labels["node.kubernetes.io/instance-type"] // ""' <<<"${node_json}")"
   [[ "${actual}" = "${INSTANCE_TYPE}" ]] || { echo "node ${node} is ${actual}, expected ${INSTANCE_TYPE}" >&2; exit 3; }
-  ready="$("${K[@]}" get node "${node}" -o jsonpath='{range .status.conditions[?(@.type=="Ready")]}{.status}{end}')"
+  ready="$(jq -r '[.status.conditions[] | select(.type=="Ready") | .status][0] // ""' <<<"${node_json}")"
   [[ "${ready}" = True ]] || { echo "node ${node} is not Ready" >&2; exit 3; }
-  allocatable_gpu="$("${K[@]}" get node "${node}" -o json | jq -r '.status.allocatable["nvidia.com/gpu"] // "0" | tonumber')"
-  allocatable_efa="$("${K[@]}" get node "${node}" -o json | jq -r '.status.allocatable["vpc.amazonaws.com/efa"] // "0" | tonumber')"
+  allocatable_gpu="$(jq -r '.status.allocatable["nvidia.com/gpu"] // "0" | tonumber' <<<"${node_json}")"
+  allocatable_efa="$(jq -r '.status.allocatable["vpc.amazonaws.com/efa"] // "0" | tonumber' <<<"${node_json}")"
   [[ "${allocatable_gpu}" -ge "${GPUS_PER_NODE}" ]] || { echo "node ${node} exposes ${allocatable_gpu} GPUs, expected at least ${GPUS_PER_NODE}" >&2; exit 3; }
   [[ "${allocatable_efa}" -ge "${EFA_PER_NODE}" ]] || { echo "node ${node} exposes ${allocatable_efa} EFA devices, expected at least ${EFA_PER_NODE}" >&2; exit 3; }
   occupied="$(jq --arg n "${node}" '[.items[] | select(.spec.nodeName==$n and (.status.phase=="Running" or .status.phase=="Pending")) | .spec.containers[]?.resources.requests["nvidia.com/gpu"] // "0" | tonumber] | add // 0' <<<"${live_pods_json}")"
@@ -175,7 +177,11 @@ snapshot() {
 snapshot &
 SNAPSHOT_PID=$!
 # shellcheck disable=SC2317  # Invoked indirectly by the EXIT trap.
-cleanup_snapshot() { kill "${SNAPSHOT_PID}" >/dev/null 2>&1 || true; wait "${SNAPSHOT_PID}" >/dev/null 2>&1 || true; }
+cleanup_snapshot() {
+  pkill -TERM -P "${SNAPSHOT_PID}" >/dev/null 2>&1 || true
+  kill "${SNAPSHOT_PID}" >/dev/null 2>&1 || true
+  wait "${SNAPSHOT_PID}" >/dev/null 2>&1 || true
+}
 trap cleanup_snapshot EXIT
 
 EXTRA_ENV=""
