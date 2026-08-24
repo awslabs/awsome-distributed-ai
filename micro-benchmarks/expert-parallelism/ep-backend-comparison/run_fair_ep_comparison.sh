@@ -170,19 +170,26 @@ verify_node_free() {
 }
 
 cleanup_case() {
+    local case_to_delete cleanup_status=0
     [[ -n "${current_case}" ]] || return 0
-    "${K[@]}" -n "${CAMPAIGN_NAMESPACE}" delete statefulset "${current_case}" \
-        --ignore-not-found --wait=true --timeout=5m >/dev/null 2>&1 || true
-    "${K[@]}" -n "${CAMPAIGN_NAMESPACE}" delete service "${current_case}" \
-        --ignore-not-found >/dev/null 2>&1 || true
+    case_to_delete="${current_case}"
+    "${K[@]}" -n "${CAMPAIGN_NAMESPACE}" delete statefulset "${case_to_delete}" \
+        --ignore-not-found --wait=true --timeout=5m >/dev/null 2>&1 || cleanup_status=1
+    # StatefulSet deletion can return before its cascading Pod deletions finish.
+    # Wait for the GPU requests to disappear before admitting the next arm.
+    "${K[@]}" -n "${CAMPAIGN_NAMESPACE}" wait --for=delete pod \
+        -l "app=${case_to_delete}" --timeout=5m >/dev/null 2>&1 || cleanup_status=1
+    "${K[@]}" -n "${CAMPAIGN_NAMESPACE}" delete service "${case_to_delete}" \
+        --ignore-not-found >/dev/null 2>&1 || cleanup_status=1
     current_case=""
+    return "${cleanup_status}"
 }
 
 finish() {
     local command_status=$? teardown_status=0 owned="" remaining=0
     trap - EXIT INT TERM
     set +e
-    cleanup_case
+    cleanup_case || teardown_status=1
     if ((namespace_created == 1)); then
         owned="$("${K[@]}" get namespace "${CAMPAIGN_NAMESPACE}" \
             -o jsonpath='{.metadata.labels.adai\.aws/campaign}' 2>/dev/null || true)"
