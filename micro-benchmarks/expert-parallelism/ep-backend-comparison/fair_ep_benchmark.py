@@ -48,6 +48,14 @@ def deepep_v2_build_lib(root: Path = Path("/opt/amazon/deepep-v2")) -> Path:
     return candidates[0]
 
 
+def preload_backend(arm: str) -> None:
+    """Load V2 before NCCL initializes its OFI plugin and tuner libraries."""
+
+    if arm == "deepep-v2-gin-gda":
+        sys.path.insert(0, str(deepep_v2_build_lib()))
+        __import__("deep_ep")
+
+
 def percentile(values: list[float], quantile: float) -> float:
     """Return a linearly interpolated percentile without a NumPy dependency."""
 
@@ -224,7 +232,6 @@ class BackendAdapter:
                 allow_mnnvl=False,
             )
         elif arm == "deepep-v2-gin-gda":
-            sys.path.insert(0, str(deepep_v2_build_lib()))
             import deep_ep  # type: ignore[import-not-found]
             from deep_ep.utils.math import (  # type: ignore[import-not-found]
                 per_token_cast_back,
@@ -542,6 +549,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    preload_backend(args.arm)
     rank, world_size, local_world_size, device, group = initialize_distributed()
     if args.experts % world_size:
         raise SystemExit("experts must divide the distributed world size")
