@@ -260,7 +260,10 @@ spec:
           2>&1 | tee /run-artifacts/node-rank-${rank}.log;
           train_rc=\${PIPESTATUS[0]};
           python3 /opt/benchmark/case/bench/summarize-route-trace.py /run-artifacts/router-trace /run-artifacts/route-summary.json || true;
-          kill \${telemetry_pid} >/dev/null 2>&1 || true; wait \${telemetry_pid} || true; exit \${train_rc}
+          find /run-artifacts/router-trace -type f -name '*.jsonl' -exec gzip -9 -n {} + 2>/dev/null || true;
+          kill \${telemetry_pid} >/dev/null 2>&1 || true; wait \${telemetry_pid} || true;
+          (cd /run-artifacts && find . -type f ! -name custody.sha256 -print0 | sort -z | xargs -0 sha256sum > custody.sha256);
+          exit \${train_rc}
       env:
         - {name: EP_ARM, value: "${EP_ARM}"}
         - {name: TENSOR_PARALLEL, value: "${TP}"}
@@ -327,14 +330,32 @@ done
 cleanup_snapshot
 trap - EXIT
 
+harvest_failures=0
 for rank in $(seq 0 $((NNODES - 1))); do
   "${KN[@]}" logs "${JOB}-${rank}" -c trainer --timestamps > "${LOCAL_RUN_DIR}/pod-logs/node-rank-${rank}.log" 2>&1 || true
   "${KN[@]}" logs "${JOB}-${rank}" -c harvester --timestamps > "${LOCAL_RUN_DIR}/pod-logs/harvester-node-rank-${rank}.log" 2>&1 || true
-  "${KN[@]}" cp "${JOB}-${rank}:/run-artifacts/." "${LOCAL_RUN_DIR}/node-${rank}" -c harvester 2>>"${LOCAL_RUN_DIR}/harvest-errors.log" || true
+  copied=0
+  for attempt in 1 2 3; do
+    target="${LOCAL_RUN_DIR}/node-${rank}"
+    if [[ -e "${target}" ]]; then
+      mv "${target}" "${target}.incomplete-attempt-$((attempt - 1))"
+    fi
+    if "${KN[@]}" cp "${JOB}-${rank}:/run-artifacts/." "${target}" -c harvester 2>>"${LOCAL_RUN_DIR}/harvest-errors.log" &&
+       [[ -s "${target}/custody.sha256" ]] &&
+       (cd "${target}" && sha256sum -c custody.sha256) > "${LOCAL_RUN_DIR}/manifests/node-${rank}-custody-verify-attempt-${attempt}.log" 2>&1; then
+      copied=1
+      break
+    fi
+    printf 'HARVEST_RETRY node_rank=%d attempt=%d timestamp_utc=%s\n' "${rank}" "${attempt}" "$(date -u +%FT%TZ)" >> "${LOCAL_RUN_DIR}/harvest-errors.log"
+  done
+  if [[ "${copied}" -ne 1 ]]; then
+    harvest_failures=$((harvest_failures + 1))
+  fi
 done
 pods_after="$("${KN[@]}" get pods -l app="${JOB}" -o json)"
 printf '%s\n' "${pods_after}" > "${LOCAL_RUN_DIR}/manifests/pods-after.json"
 if [[ "${terminal}" -ne "${NNODES}" ]]; then status=TIMEOUT; exit_code=1
+elif [[ "${harvest_failures}" -ne 0 ]]; then status=FAIL_HARVEST; exit_code=1
 elif jq -e --argjson expected "${NNODES}" '(.items | length) == $expected and all(.items[]; any(.status.containerStatuses[]?; .name == "trainer" and .state.terminated.exitCode == 0))' <<<"${pods_after}" >/dev/null; then status=PASS; exit_code=0
 else status=FAIL; exit_code=1
 fi
