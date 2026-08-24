@@ -70,7 +70,7 @@ ENV DEEPEP_V1_COMMIT=${DEEPEP_V1_COMMIT} \
     NVSHMEM_LIBFABRIC_PROVIDER=efa \
     LD_LIBRARY_PATH=/opt/amazon/nvshmem/lib:${LD_LIBRARY_PATH} \
     LD_PRELOAD=/opt/amazon/nvshmem/lib/libnvshmem_host.so.3:${LD_PRELOAD}
-COPY 3.test_cases/megatron/megatron-bridge/deepep/setup_deepep_efa.sh /opt/benchmark/setup_deepep_efa.sh
+COPY micro-benchmarks/expert-parallelism/deepep-benchmark/setup_deepep_efa.sh /opt/benchmark/setup_deepep_efa.sh
 COPY 3.test_cases/megatron/megatron-bridge/docker/install-deepep-v1.sh /opt/benchmark/install-deepep-v1.sh
 RUN --mount=type=cache,target=/root/.cache/ccache /opt/benchmark/install-deepep-v1.sh
 RUN printf '%s\n' '{"ep_arm":"deepep-v1-nvshmem","dispatcher":"flex","backend":"deepep"}' > /opt/benchmark/backend.json
