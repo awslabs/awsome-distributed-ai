@@ -14,8 +14,9 @@ esac
 : "${CAMPAIGN_ID:?set CAMPAIGN_ID}"
 : "${NODE_NAMES:?set comma-separated NODE_NAMES}"
 : "${LOCAL_ARTIFACT_ROOT:?set LOCAL_ARTIFACT_ROOT to durable controller storage}"
-NS="${NS:-adai-kimi-k2-megatron-ep-${CAMPAIGN_ID,,}}"
+NS="${NS:-${CAMPAIGN_NAMESPACE:-adai-kimi-k2-megatron-ep-${CAMPAIGN_ID,,}}}"
 case "${NS}" in adai-kimi-k2-megatron-ep-*) ;; *) echo "refusing non-campaign namespace ${NS}" >&2; exit 2;; esac
+[[ "${#NS}" -le 63 ]] || { echo "campaign namespace exceeds 63 characters: ${NS}" >&2; exit 2; }
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 ARMS_FILE="${ARMS_FILE:-${SELF_DIR}/bench/arms.yaml}"
@@ -29,6 +30,33 @@ PY
 IMAGE="${!IMAGE_ENV:-}"
 : "${IMAGE:?set ${IMAGE_ENV} to an immutable image URI}"
 [[ "${IMAGE}" == *@sha256:* ]] || { echo "image must be resolved by digest: ${IMAGE}" >&2; exit 2; }
+HARVEST_IMAGE="${HARVEST_IMAGE:-${IMG_NCCL_ALLTOALL:-${IMAGE}}}"
+[[ "${HARVEST_IMAGE}" == *@sha256:* ]] || { echo "harvest image must be resolved by digest: ${HARVEST_IMAGE}" >&2; exit 2; }
+
+RUN_ENTRYPOINT="${RUN_ENTRYPOINT:-/opt/benchmark/case/kimi-k2/benchmarks/bench_kimi_k2_pretrain.py}"
+RUN_ENTRYPOINT_ARGS_JSON="${RUN_ENTRYPOINT_ARGS_JSON:-[]}"
+RUN_ENTRYPOINT_LOCAL_FILE="${RUN_ENTRYPOINT_LOCAL_FILE:-}"
+RUN_INPUT_JSON_B64="${RUN_INPUT_JSON_B64:-}"
+python3 - "${RUN_ENTRYPOINT_ARGS_JSON}" <<'PY'
+import json, sys
+args = json.loads(sys.argv[1])
+assert isinstance(args, list) and all(isinstance(value, str) and "\n" not in value for value in args), args
+PY
+RUN_ENTRYPOINT_ARGS_B64="$(printf '%s' "${RUN_ENTRYPOINT_ARGS_JSON}" | base64 -w0)"
+RUN_ENTRYPOINT_SOURCE_B64=""
+RUN_ENTRYPOINT_SOURCE_SHA256=""
+if [[ -n "${RUN_ENTRYPOINT_LOCAL_FILE}" ]]; then
+  [[ -f "${RUN_ENTRYPOINT_LOCAL_FILE}" ]] || { echo "missing local entrypoint source: ${RUN_ENTRYPOINT_LOCAL_FILE}" >&2; exit 2; }
+  RUN_ENTRYPOINT_SOURCE_B64="$(base64 -w0 < "${RUN_ENTRYPOINT_LOCAL_FILE}")"
+  (( ${#RUN_ENTRYPOINT_SOURCE_B64} < 700000 )) || { echo "local entrypoint source is too large for a pod environment" >&2; exit 2; }
+  RUN_ENTRYPOINT_SOURCE_SHA256="$(sha256sum "${RUN_ENTRYPOINT_LOCAL_FILE}" | awk '{print $1}')"
+  RUN_ENTRYPOINT=/run-artifacts/run-entrypoint.py
+else
+  [[ "${RUN_ENTRYPOINT}" =~ ^/opt/benchmark/case/[A-Za-z0-9_./-]+$ ]] || { echo "invalid image entrypoint: ${RUN_ENTRYPOINT}" >&2; exit 2; }
+fi
+if [[ -n "${RUN_INPUT_JSON_B64}" ]]; then
+  printf '%s' "${RUN_INPUT_JSON_B64}" | base64 -d >/dev/null
+fi
 
 IFS=',' read -r -a NODES <<<"${NODE_NAMES}"
 [[ "${#NODES[@]}" -eq "${NNODES}" ]] || { echo "NODE_NAMES has ${#NODES[@]} nodes, expected ${NNODES}" >&2; exit 2; }
@@ -42,19 +70,25 @@ done
 K=(kubectl --context "${CTX}")
 INSTANCE_TYPE="${INSTANCE_TYPE:-p6-b300.48xlarge}"
 EFA_PER_NODE="${EFA_PER_NODE:-16}"
-GPUS_PER_NODE=8
+GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
+[[ "${GPUS_PER_NODE}" =~ ^[1-8]$ ]] || { echo "GPUS_PER_NODE must be an integer from 1 through 8" >&2; exit 2; }
 WORLD=$((NNODES * GPUS_PER_NODE))
 for node in "${NODES[@]}"; do
   actual="$("${K[@]}" get node "${node}" -o jsonpath='{.metadata.labels.node\.kubernetes\.io/instance-type}')"
   [[ "${actual}" = "${INSTANCE_TYPE}" ]] || { echo "node ${node} is ${actual}, expected ${INSTANCE_TYPE}" >&2; exit 3; }
   ready="$("${K[@]}" get node "${node}" -o jsonpath='{range .status.conditions[?(@.type=="Ready")]}{.status}{end}')"
   [[ "${ready}" = True ]] || { echo "node ${node} is not Ready" >&2; exit 3; }
+  allocatable_gpu="$("${K[@]}" get node "${node}" -o json | jq -r '.status.allocatable["nvidia.com/gpu"] // "0" | tonumber')"
+  allocatable_efa="$("${K[@]}" get node "${node}" -o json | jq -r '.status.allocatable["vpc.amazonaws.com/efa"] // "0" | tonumber')"
+  [[ "${allocatable_gpu}" -ge "${GPUS_PER_NODE}" ]] || { echo "node ${node} exposes ${allocatable_gpu} GPUs, expected at least ${GPUS_PER_NODE}" >&2; exit 3; }
+  [[ "${allocatable_efa}" -ge "${EFA_PER_NODE}" ]] || { echo "node ${node} exposes ${allocatable_efa} EFA devices, expected at least ${EFA_PER_NODE}" >&2; exit 3; }
   occupied="$("${K[@]}" get pods -A -o json | jq --arg n "${node}" '[.items[] | select(.spec.nodeName==$n and (.status.phase=="Running" or .status.phase=="Pending")) | .spec.containers[]?.resources.requests["nvidia.com/gpu"] // "0" | tonumber] | add // 0')"
   [[ "${occupied}" -eq 0 ]] || { echo "node ${node} already has ${occupied} requested GPUs" >&2; exit 3; }
 done
 
 CELL="${CELL:-qualification}"
 REPEAT="${REPEAT:-1}"
+RUN_KIND="${RUN_KIND:-training}"
 RUN_KEY="${CELL}/repeat-${REPEAT}/${EP_ARM}"
 LOCAL_RUN_DIR="${LOCAL_ARTIFACT_ROOT}/${CAMPAIGN_ID}/26.08/kimi-k2/${RUN_KEY}"
 mkdir -p "${LOCAL_RUN_DIR}/pod-logs" "${LOCAL_RUN_DIR}/snapshots" "${LOCAL_RUN_DIR}/manifests"
@@ -63,6 +97,9 @@ mkdir -p "${LOCAL_RUN_DIR}/pod-logs" "${LOCAL_RUN_DIR}/snapshots" "${LOCAL_RUN_D
 "${K[@]}" get pods -A -o json > "${LOCAL_RUN_DIR}/manifests/pods-before.json"
 cp "${ARMS_FILE}" "${LOCAL_RUN_DIR}/manifests/arms.yaml"
 sha256sum "${SELF_DIR}/kimi-k2/benchmarks/bench_kimi_k2_pretrain.py" > "${LOCAL_RUN_DIR}/manifests/model-config.sha256"
+if [[ -n "${RUN_ENTRYPOINT_LOCAL_FILE}" ]]; then
+  cp "${RUN_ENTRYPOINT_LOCAL_FILE}" "${LOCAL_RUN_DIR}/manifests/run-entrypoint.py"
+fi
 
 if "${K[@]}" get namespace "${NS}" >/dev/null 2>&1; then
   owner="$("${K[@]}" get namespace "${NS}" -o jsonpath='{.metadata.labels.adai-campaign}')"
@@ -92,6 +129,7 @@ cell=${CELL}
 repeat=${REPEAT}
 ep_arm=${EP_ARM}
 image=${IMAGE}
+harvest_image=${HARVEST_IMAGE}
 nodes=${NODE_NAMES}
 world_size=${WORLD}
 tp=${TP}
@@ -105,6 +143,10 @@ sequence_length_tokens=${SEQ_LEN}
 ep_overlap=${MOE_A2A_OVERLAP}
 expected_dispatcher=${EXPECTED_DISPATCHER}
 expected_backend=${EXPECTED_BACKEND}
+run_kind=${RUN_KIND}
+run_entrypoint=${RUN_ENTRYPOINT}
+run_entrypoint_args_json=${RUN_ENTRYPOINT_ARGS_JSON}
+run_entrypoint_source_sha256=${RUN_ENTRYPOINT_SOURCE_SHA256}
 EOF
 
 cat <<EOF | "${KN[@]}" apply -f -
@@ -122,7 +164,7 @@ snapshot() {
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
     "${KN[@]}" get pods -l app="${JOB}" -o json > "${LOCAL_RUN_DIR}/snapshots/pods-${stamp}.json" 2>/dev/null || true
     for rank in $(seq 0 $((NNODES - 1))); do
-      "${KN[@]}" logs "${JOB}-${rank}" --timestamps > "${LOCAL_RUN_DIR}/snapshots/${stamp}-node-rank-${rank}.log" 2>&1 || true
+      "${KN[@]}" logs "${JOB}-${rank}" -c trainer --timestamps > "${LOCAL_RUN_DIR}/snapshots/${stamp}-node-rank-${rank}.log" 2>&1 || true
     done
     sleep 30
   done
@@ -184,11 +226,14 @@ spec:
           cp /opt/benchmark/backend.json /run-artifacts/backend.json;
           cp /opt/benchmark/common-build-manifest.json /run-artifacts/common-build-manifest.json;
           cp /opt/benchmark/image-verification.json /run-artifacts/image-verification.json;
+          if [[ -n "\${RUN_ENTRYPOINT_SOURCE_B64}" ]]; then printf '%s' "\${RUN_ENTRYPOINT_SOURCE_B64}" | base64 -d > /run-artifacts/run-entrypoint.py; chmod 0444 /run-artifacts/run-entrypoint.py; fi;
+          if [[ -n "\${RUN_INPUT_JSON_B64}" ]]; then printf '%s' "\${RUN_INPUT_JSON_B64}" | base64 -d > /run-artifacts/run-input.json; fi;
+          mapfile -t run_args < <(python3 -c 'import base64,json,os; [print(value) for value in json.loads(base64.b64decode(os.environ["RUN_ENTRYPOINT_ARGS_B64"]))]');
           python3 /opt/benchmark/case/bench/collect-runtime-manifest.py /run-artifacts/runtime-manifest.json;
           /opt/benchmark/case/bench/collect-node-telemetry.sh /run-artifacts/telemetry & telemetry_pid=\$!;
           ${profile_prefix} torchrun --nnodes=${NNODES} --nproc-per-node=${GPUS_PER_NODE} --node-rank=${rank}
           --master-addr=${JOB}-0.${JOB}.${NS}.svc.cluster.local --master-port=${PORT}
-          /opt/benchmark/case/kimi-k2/benchmarks/bench_kimi_k2_pretrain.py
+          ${RUN_ENTRYPOINT} "\${run_args[@]}"
           2>&1 | tee /run-artifacts/node-rank-${rank}.log;
           train_rc=\${PIPESTATUS[0]};
           python3 /opt/benchmark/case/bench/summarize-route-trace.py /run-artifacts/router-trace /run-artifacts/route-summary.json || true;
@@ -205,6 +250,10 @@ spec:
         - {name: MOE_A2A_OVERLAP, value: "${MOE_A2A_OVERLAP}"}
         - {name: MOE_FORCE_BALANCE, value: "on"}
         - {name: PERFORMANCE_SEED, value: "1234"}
+        - {name: RUN_KIND, value: "${RUN_KIND}"}
+        - {name: RUN_ENTRYPOINT_ARGS_B64, value: "${RUN_ENTRYPOINT_ARGS_B64}"}
+        - {name: RUN_ENTRYPOINT_SOURCE_B64, value: "${RUN_ENTRYPOINT_SOURCE_B64}"}
+        - {name: RUN_INPUT_JSON_B64, value: "${RUN_INPUT_JSON_B64}"}
         - {name: ROUTER_TRACE_DIR, value: "/run-artifacts/router-trace"}
         - {name: FI_PROVIDER, value: "efa"}
         - {name: FI_EFA_USE_DEVICE_RDMA, value: "1"}
@@ -219,6 +268,15 @@ ${EXTRA_ENV}
         - {name: run-artifacts, mountPath: /run-artifacts}
         - {name: shm, mountPath: /dev/shm}
         ${gdr_mount}
+    - name: harvester
+      image: ${HARVEST_IMAGE}
+      imagePullPolicy: IfNotPresent
+      command: [bash, -lc]
+      args: ['printf "HARVEST_SIDECAR_READY timestamp_utc=%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; sleep infinity']
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+      volumeMounts:
+        - {name: run-artifacts, mountPath: /run-artifacts}
   volumes:
     - {name: run-artifacts, hostPath: {path: /mnt/k8s-disks/0/adai-kimi-k2-megatron-ep/${CAMPAIGN_ID}/${RUN_KEY}, type: DirectoryOrCreate}}
     - {name: shm, emptyDir: {medium: Memory, sizeLimit: 64Gi}}
@@ -229,20 +287,25 @@ done
 deadline=$((SECONDS + ${RUN_TIMEOUT_SECONDS:-7200}))
 terminal=0
 while (( SECONDS < deadline )); do
-  phases="$("${KN[@]}" get pods -l app="${JOB}" -o json | jq -r '[.items[].status.phase] | group_by(.) | map({(.[0]): length}) | add // {}')"
+  pods_json="$("${KN[@]}" get pods -l app="${JOB}" -o json)"
+  phases="$(jq -r '[.items[].status.phase] | group_by(.) | map({(.[0]): length}) | add // {}' <<<"${pods_json}")"
+  trainer_states="$(jq -c '[.items[] | {pod:.metadata.name, state:([.status.containerStatuses[]? | select(.name=="trainer") | if .state.terminated then {terminated:true,exit_code:.state.terminated.exitCode} else {terminated:false} end][0] // {terminated:false})}]' <<<"${pods_json}")"
   echo "${phases}"
-  terminal="$(jq -r '(.Succeeded // 0) + (.Failed // 0)' <<<"${phases}")"
+  echo "${trainer_states}"
+  terminal="$(jq -r '[.[].state | select(.terminated)] | length' <<<"${trainer_states}")"
   [[ "${terminal}" -eq "${NNODES}" ]] && break
   sleep 15
 done
 
 for rank in $(seq 0 $((NNODES - 1))); do
-  "${KN[@]}" logs "${JOB}-${rank}" --timestamps > "${LOCAL_RUN_DIR}/pod-logs/node-rank-${rank}.log" 2>&1 || true
-  "${KN[@]}" cp "${JOB}-${rank}:/run-artifacts/." "${LOCAL_RUN_DIR}/node-${rank}" 2>>"${LOCAL_RUN_DIR}/harvest-errors.log" || true
+  "${KN[@]}" logs "${JOB}-${rank}" -c trainer --timestamps > "${LOCAL_RUN_DIR}/pod-logs/node-rank-${rank}.log" 2>&1 || true
+  "${KN[@]}" logs "${JOB}-${rank}" -c harvester --timestamps > "${LOCAL_RUN_DIR}/pod-logs/harvester-node-rank-${rank}.log" 2>&1 || true
+  "${KN[@]}" cp "${JOB}-${rank}:/run-artifacts/." "${LOCAL_RUN_DIR}/node-${rank}" -c harvester 2>>"${LOCAL_RUN_DIR}/harvest-errors.log" || true
 done
-"${KN[@]}" get pods -l app="${JOB}" -o json > "${LOCAL_RUN_DIR}/manifests/pods-after.json"
+pods_after="$("${KN[@]}" get pods -l app="${JOB}" -o json)"
+printf '%s\n' "${pods_after}" > "${LOCAL_RUN_DIR}/manifests/pods-after.json"
 if [[ "${terminal}" -ne "${NNODES}" ]]; then status=TIMEOUT; exit_code=1
-elif "${KN[@]}" get pods -l app="${JOB}" -o json | jq -e 'all(.items[]; .status.phase == "Succeeded")' >/dev/null; then status=PASS; exit_code=0
+elif jq -e --argjson expected "${NNODES}" '(.items | length) == $expected and all(.items[]; any(.status.containerStatuses[]?; .name == "trainer" and .state.terminated.exitCode == 0))' <<<"${pods_after}" >/dev/null; then status=PASS; exit_code=0
 else status=FAIL; exit_code=1
 fi
 printf '%s finished_at_utc=%s\n' "${status}" "$(date -u +%FT%TZ)" > "${LOCAL_RUN_DIR}/STATUS"
