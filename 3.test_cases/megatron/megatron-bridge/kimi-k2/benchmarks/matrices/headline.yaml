@@ -1,0 +1,11 @@
+schema_version: 1
+hardware:
+  nodes: 32
+  gpus_per_node: 8
+  accelerator: B300
+parallelism: {tp: 8, pp: 8, ep: 32, etp: 1, dp: 4}
+iterations: 40
+warmup_iterations: 8
+repeats: 3
+primary_cell: throughput-no-overlap
+arm_order: deterministic-random-per-repeat
