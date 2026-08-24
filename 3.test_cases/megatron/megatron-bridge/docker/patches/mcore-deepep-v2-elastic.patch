@@ -68,7 +68,7 @@ index 4447606..e0c26db 100644
  class FusedDispatch(torch.autograd.Function):
      """Fused dispatch operation for MoE routing combining computation and communication."""
  
-@@ -209,6 +258,130 @@ class FusedCombine(torch.autograd.Function):
+@@ -209,6 +258,131 @@ class FusedCombine(torch.autograd.Function):
          return grad_x, None, None, None, None
  
  
@@ -200,7 +200,7 @@ index 4447606..e0c26db 100644
  if HAVE_DEEP_EP:
  
      def fused_dispatch(
-@@ -267,6 +440,63 @@ else:
+@@ -267,6 +441,63 @@ else:
      set_deepep_num_sms = None
  
  
