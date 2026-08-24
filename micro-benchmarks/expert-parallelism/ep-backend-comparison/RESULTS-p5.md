@@ -1,7 +1,9 @@
 # EP-Backend Comparison Results — P5 (H100)
 
 Same harness and matched config as [`RESULTS.md`](RESULTS.md) (B300), run on `p5.48xlarge`
-(H100). Use this to compare the three dispatchers **across GPU generations**.
+(H100). Use this to compare the three historical dispatchers **across GPU generations**. The
+newer B200 direct comparison with DeepEP V2 is in [`RESULTS-b200.md`](RESULTS-b200.md) and is
+not mixed with these H100 measurements.
 
 ## Environment
 

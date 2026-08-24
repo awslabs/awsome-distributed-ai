@@ -5,13 +5,14 @@
 # edit, then source it before applying the per-backend manifests.
 #   cp env_vars.example env_vars && source env_vars
 
-# GPU node instance type and per-node device counts (p6-b300.48xlarge => 16 EFA).
+# GPU node instance type and per-node device counts. The defaults retain the
+# historical B300 run. For B200 use p6-b200.48xlarge and 8 EFA devices per node.
 export INSTANCE_TYPE=p6-b300.48xlarge
 export GPU_PER_NODE=8
 export EFA_PER_NODE=16
-# 8 = primary 3-way comparison. 32 (256 ranks) works for NCCL and the low-latency kernels
-# only — both HT internode paths hit hard caps past 64-160 ranks (see README "Scaling
-# beyond 8 nodes").
+# B200 direct EP16 uses 2 nodes and EP32 uses 4 nodes. The historical B300/H100
+# primary comparison uses 8 nodes. The 32-node findings apply only to the
+# historical V1-era matrix; see README "Scaling beyond 8 nodes".
 export NUM_NODES=8
 export NP=$((NUM_NODES * GPU_PER_NODE))   # ranks; used by the NCCL baseline (64 at 8 nodes)
 
@@ -22,4 +23,5 @@ export NP=$((NUM_NODES * GPU_PER_NODE))   # ranks; used by the NCCL baseline (64
 #          sm_100 gencode, so reuse it for the baseline -- no separate nccl-tests build.
 export NVSHMEM_IMAGE_URI=<account>.dkr.ecr.<region>.amazonaws.com/deepep:efa1.48.0-nvshmem3.7.0-deepep567632d-cuda13
 export UCCL_IMAGE_URI=<account>.dkr.ecr.<region>.amazonaws.com/uccl-ep:efa1.48.0-uccl0dc87eb-cu13
+export DEEPEP_V2_IMAGE_URI=<account>.dkr.ecr.<region>.amazonaws.com/deepep-v2@sha256:<digest>
 export NCCL_IMAGE_URI=$NVSHMEM_IMAGE_URI
