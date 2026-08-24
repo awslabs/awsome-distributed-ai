@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gate B final MoE output and gradient equivalence against an analytic reference."""
+"""Gate B final MoE output and gradient equivalence against NCCL all-to-all."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import os
 import torch
 import torch.distributed as dist
 
+from megatron.core.tensor_parallel.mappings import all_to_all
 from megatron.core.transformer.moe.fused_a2a import (
     destroy_elastic_buffers,
     elastic_fused_combine,
@@ -80,10 +81,61 @@ def elastic_moe(inputs, indices, probabilities, expert_scale, experts):
     return output, counts
 
 
-def reference_moe(inputs, indices, probabilities, expert_scale):
-    factors = expert_scale[indices]
-    coefficient = (probabilities * factors).sum(dim=1, keepdim=True)
-    return inputs * coefficient.to(inputs.dtype)
+def exchange_splits(
+    destination: torch.Tensor, world: int
+) -> tuple[list[int], list[int]]:
+    input_splits_tensor = torch.bincount(destination, minlength=world).to(torch.int64)
+    gathered = [torch.empty_like(input_splits_tensor) for _ in range(world)]
+    dist.all_gather(gathered, input_splits_tensor)
+    rank = dist.get_rank()
+    input_splits = [int(value) for value in input_splits_tensor.cpu().tolist()]
+    output_splits = [int(counts[rank]) for counts in gathered]
+    return input_splits, output_splits
+
+
+def nccl_moe(inputs, indices, probabilities, expert_scale, experts):
+    world = dist.get_world_size()
+    rank = dist.get_rank()
+    experts_per_rank = experts // world
+    destination = torch.div(indices, experts_per_rank, rounding_mode="floor").flatten()
+    permutation = torch.argsort(destination, stable=True)
+    input_splits, output_splits = exchange_splits(destination, world)
+
+    token_ids = (
+        torch.arange(inputs.shape[0], device=inputs.device, dtype=torch.int64)
+        .unsqueeze(1)
+        .expand_as(indices)
+        .flatten()
+        .index_select(0, permutation)
+    )
+    send_experts = indices.flatten().index_select(0, permutation).contiguous()
+    send_x = inputs.index_select(0, token_ids).contiguous()
+    send_probabilities = (
+        probabilities.flatten().index_select(0, permutation).contiguous()
+    )
+
+    recv_x = all_to_all(dist.group.WORLD, send_x, output_splits, input_splits)
+    recv_probabilities = all_to_all(
+        dist.group.WORLD, send_probabilities, output_splits, input_splits
+    )
+    recv_experts = torch.empty(
+        (sum(output_splits),), device=inputs.device, dtype=torch.int64
+    )
+    dist.all_to_all_single(
+        recv_experts,
+        send_experts,
+        output_split_sizes=output_splits,
+        input_split_sizes=input_splits,
+    )
+    first_expert = rank * experts_per_rank
+    last_expert = first_expert + experts_per_rank
+    assert bool(((recv_experts >= first_expert) & (recv_experts < last_expert)).all())
+
+    local_scale = expert_scale.index_select(0, recv_experts).to(recv_x.dtype)
+    local_output = recv_x * recv_probabilities.unsqueeze(1).to(recv_x.dtype)
+    local_output = local_output * local_scale.unsqueeze(1)
+    returned = all_to_all(dist.group.WORLD, local_output, input_splits, output_splits)
+    return torch.zeros_like(inputs).index_add(0, token_ids, returned)
 
 
 def max_error(left: torch.Tensor, right: torch.Tensor) -> float:
@@ -109,6 +161,18 @@ def main() -> None:
     torch.cuda.set_device(device)
     dist.init_process_group("nccl", device_id=device)
     assert args.experts % dist.get_world_size() == 0
+    expected_shape = {
+        "world_size_ranks": dist.get_world_size(),
+        "tokens_per_rank": args.tokens,
+        "hidden_units": args.hidden,
+        "experts": args.experts,
+        "topk": args.topk,
+    }
+    for name, value in expected_shape.items():
+        if name in tolerance_payload:
+            assert tolerance_payload[name] == value, (
+                f"tolerance {name}={tolerance_payload[name]} does not match test {value}"
+            )
     generator = torch.Generator(device=device).manual_seed(20260823 + dist.get_rank())
     scores = torch.randn(
         (args.tokens, args.experts),
@@ -126,43 +190,40 @@ def main() -> None:
         dtype=torch.bfloat16,
         requires_grad=True,
     )
-    x_reference = x_elastic.detach().clone().requires_grad_(True)
+    x_nccl = x_elastic.detach().clone().requires_grad_(True)
     p_elastic = probabilities.detach().clone().requires_grad_(True)
-    p_reference = probabilities.detach().clone().requires_grad_(True)
+    p_nccl = probabilities.detach().clone().requires_grad_(True)
     scale_elastic = torch.linspace(
         0.5, 1.5, args.experts, device=device, dtype=torch.float32, requires_grad=True
     )
-    scale_reference = scale_elastic.detach().clone().requires_grad_(True)
+    scale_nccl = scale_elastic.detach().clone().requires_grad_(True)
 
     out_elastic, local_counts = elastic_moe(
         x_elastic, indices, p_elastic, scale_elastic, args.experts
     )
-    out_reference = reference_moe(x_reference, indices, p_reference, scale_reference)
+    out_nccl = nccl_moe(x_nccl, indices, p_nccl, scale_nccl, args.experts)
     loss_elastic = out_elastic.float().square().mean()
-    loss_reference = out_reference.float().square().mean()
+    loss_nccl = out_nccl.float().square().mean()
     loss_elastic.backward()
-    loss_reference.backward()
-    dist.all_reduce(scale_reference.grad)
+    loss_nccl.backward()
 
     local = slice(
         dist.get_rank() * (args.experts // dist.get_world_size()),
         (dist.get_rank() + 1) * (args.experts // dist.get_world_size()),
     )
     errors = {
-        "output": max_error(out_elastic, out_reference),
-        "loss": max_error(loss_elastic.reshape(1), loss_reference.reshape(1)),
-        "d_input": max_error(x_elastic.grad, x_reference.grad),
-        "d_router_probability": max_error(p_elastic.grad, p_reference.grad),
+        "output": max_error(out_elastic, out_nccl),
+        "loss": max_error(loss_elastic.reshape(1), loss_nccl.reshape(1)),
+        "d_input": max_error(x_elastic.grad, x_nccl.grad),
+        "d_router_probability": max_error(p_elastic.grad, p_nccl.grad),
         "d_expert_parameter": max_error(
-            scale_elastic.grad[local], scale_reference.grad[local]
+            scale_elastic.grad[local], scale_nccl.grad[local]
         ),
     }
     passed = all(errors[name] <= float(tolerance[name]) for name in errors)
     updated_elastic = scale_elastic.detach()[local] - 1e-3 * scale_elastic.grad[local]
-    updated_reference = (
-        scale_reference.detach()[local] - 1e-3 * scale_reference.grad[local]
-    )
-    errors["optimizer_step"] = max_error(updated_elastic, updated_reference)
+    updated_nccl = scale_nccl.detach()[local] - 1e-3 * scale_nccl.grad[local]
+    errors["optimizer_step"] = max_error(updated_elastic, updated_nccl)
     passed = passed and errors["optimizer_step"] <= float(tolerance["optimizer_step"])
     gathered_hashes = [None] * dist.get_world_size()
     dist.all_gather_object(gathered_hashes, route_hash)
@@ -172,8 +233,13 @@ def main() -> None:
     ]
     dist.all_gather(gathered_counts, local_counts_cuda)
     global_counts = torch.cat(gathered_counts).to(torch.int64)
+    expected_counts = torch.bincount(indices.flatten(), minlength=args.experts).to(
+        torch.int64
+    )
+    dist.all_reduce(expected_counts)
     expected_routes = args.tokens * dist.get_world_size() * args.topk
-    no_token_drop = int(global_counts.sum()) == expected_routes
+    exact_route_counts = torch.equal(global_counts, expected_counts)
+    no_token_drop = exact_route_counts and int(global_counts.sum()) == expected_routes
     passed = passed and no_token_drop
     if dist.get_rank() == 0:
         print(
@@ -188,8 +254,10 @@ def main() -> None:
                     "hidden_units": args.hidden,
                     "experts": args.experts,
                     "topk": args.topk,
+                    "reference_backend": "nccl-alltoall",
                     "dispatched_index_space": "destination-local-expert",
                     "route_hashes": gathered_hashes,
+                    "exact_global_expert_token_counts": exact_route_counts,
                     "no_token_drop": no_token_drop,
                     "global_expert_token_counts": {
                         "sum": int(global_counts.sum()),
