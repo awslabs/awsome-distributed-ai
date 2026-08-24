@@ -17,6 +17,7 @@ from megatron.core.transformer.moe.fused_a2a import (
     elastic_fused_combine,
     elastic_fused_dispatch,
 )
+from megatron.core.transformer.moe.moe_utils import permute, unpermute
 from megatron.core.transformer.moe.router_replay import RouterReplay, RouterReplayAction
 
 
@@ -69,14 +70,52 @@ def elastic_moe(inputs, indices, probabilities, expert_scale, experts):
     valid_recv_indices = recv_indices[recv_indices >= 0]
     assert valid_recv_indices.numel() > 0
     assert int(valid_recv_indices.max()) < experts_per_rank
-    local = torch.zeros_like(recv_x)
-    # ElasticBuffer returns destination-local expert indices, matching the
-    # local-index contract consumed by MCore's _indices_to_multihot().
-    for local_expert in range(experts_per_rank):
-        global_expert = first + local_expert
-        selected = recv_indices == local_expert
-        coefficient = (recv_probabilities * selected).sum(dim=1, keepdim=True)
-        local = local + recv_x * coefficient.to(recv_x.dtype) * expert_scale[global_expert]
+
+    # Reproduce _BaseDeepepManager's destination-local multihot conversion and
+    # the TE fused permute/unpermute path used by the Kimi configuration. Keeping
+    # one row per expert assignment also matches where MCore applies router
+    # probabilities before the expert FC2 parameter operation.
+    batch_size = recv_indices.shape[0]
+    routing_map = torch.zeros(
+        (batch_size, experts_per_rank), dtype=torch.bool, device=recv_indices.device
+    )
+    multihot_probabilities = torch.zeros(
+        (batch_size, experts_per_rank),
+        dtype=torch.float32,
+        device=recv_indices.device,
+    )
+    mask = recv_indices != -1
+    valid_indices = recv_indices[mask]
+    row_indices = torch.arange(
+        batch_size, device=recv_indices.device
+    ).repeat_interleave(mask.sum(dim=1))
+    routing_map[row_indices, valid_indices] = True
+    multihot_probabilities[row_indices, valid_indices] = recv_probabilities[mask]
+    permuted_x, permuted_probabilities, reversed_mapping, pad_offsets, _ = permute(
+        recv_x,
+        routing_map,
+        probs=multihot_probabilities,
+        num_out_tokens=int(counts.sum()),
+        fused=True,
+        tokens_per_expert=counts,
+    )
+    assert pad_offsets is None
+    local_experts = torch.arange(
+        experts_per_rank, device=recv_x.device, dtype=torch.int64
+    ).repeat_interleave(counts.to(device=recv_x.device, dtype=torch.int64))
+    assert local_experts.numel() == permuted_x.shape[0]
+    global_experts = local_experts + first
+    weighted_x = (permuted_x * permuted_probabilities.unsqueeze(1)).to(permuted_x.dtype)
+    local_scale = expert_scale.index_select(0, global_experts).to(permuted_x.dtype)
+    expert_output = weighted_x * local_scale.unsqueeze(1)
+    local = unpermute(
+        expert_output,
+        reversed_mapping,
+        restore_shape=recv_x.shape,
+        routing_map=routing_map,
+        fused=True,
+        pad_offsets=pad_offsets,
+    )
     output, _ = elastic_fused_combine(local, handle._mcore_elastic_buffer, handle)
     return output, counts
 
@@ -170,9 +209,9 @@ def main() -> None:
     }
     for name, value in expected_shape.items():
         if name in tolerance_payload:
-            assert tolerance_payload[name] == value, (
-                f"tolerance {name}={tolerance_payload[name]} does not match test {value}"
-            )
+            assert (
+                tolerance_payload[name] == value
+            ), f"tolerance {name}={tolerance_payload[name]} does not match test {value}"
     generator = torch.Generator(device=device).manual_seed(20260823 + dist.get_rank())
     scores = torch.randn(
         (args.tokens, args.experts),
@@ -256,6 +295,7 @@ def main() -> None:
                     "topk": args.topk,
                     "reference_backend": "nccl-alltoall",
                     "dispatched_index_space": "destination-local-expert",
+                    "local_permutation": "mcore-te-fused",
                     "route_hashes": gathered_hashes,
                     "exact_global_expert_token_counts": exact_route_counts,
                     "no_token_drop": no_token_drop,
