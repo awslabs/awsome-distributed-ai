@@ -45,7 +45,7 @@ def one_flight(tokens: int, hidden: int, experts: int, topk: int, asynchronous: 
         allocate_on_comm_stream=asynchronous,
     )
     assert counts.numel() == experts // dist.get_world_size()
-    global_count = counts.to(torch.int64).sum()
+    global_count = counts.to(device=device, dtype=torch.int64).sum()
     dist.all_reduce(global_count)
     assert int(global_count) == tokens * dist.get_world_size() * topk
     assert recv_indices.shape == recv_probabilities.shape
