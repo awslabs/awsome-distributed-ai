@@ -56,7 +56,7 @@ KUBECTL_CONTEXT=target-context \
 
 The default `LOCK_MODE=exclusive` claims the shared Lease only when it is empty and releases it during verified teardown. If an explicitly coordinated campaign is still active on a disjoint node set, use `LOCK_MODE=observe EXPECTED_LOCK_HOLDER=foreign-campaign-id`; this mode checks the holder throughout the run and never mutates the Lease.
 
-DeepEP V2 admission is conditional on `uvm_disable_hmm=Y` on every selected host and requires a logged GDAKI context. The runner aborts before the scored matrix if either condition is absent.
+DeepEP V2 admission is conditional on `uvm_disable_hmm=Y` and a character-device `/dev/gdrdrv` on every selected host, and requires a logged GDAKI context. The runner aborts before the scored matrix if any condition is absent.
 
 ## Prerequisites
 

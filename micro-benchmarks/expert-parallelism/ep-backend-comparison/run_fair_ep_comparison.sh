@@ -270,15 +270,19 @@ spec:
           printf 'NODE=%s\n' "\${NODE_NAME}"
           printf 'UVM_DISABLE_HMM='; cat /host-sys/module/nvidia_uvm/parameters/uvm_disable_hmm
           printf 'EFA_KMOD='; cat /host-sys/module/efa/version
+          printf 'GDRDRV='; if test -c /host-dev/gdrdrv; then echo character-device; else echo missing; fi
           sleep 300
       env:
         - name: NODE_NAME
           valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
       volumeMounts:
         - {name: host-sys, mountPath: /host-sys, readOnly: true}
+        - {name: host-dev, mountPath: /host-dev, readOnly: true}
   volumes:
     - name: host-sys
       hostPath: {path: /sys, type: Directory}
+    - name: host-dev
+      hostPath: {path: /dev, type: Directory}
 YAML
 done
 "${K[@]}" -n "${CAMPAIGN_NAMESPACE}" wait --for=condition=Ready pod \
@@ -288,6 +292,11 @@ for index in 0 1 2 3; do
         >"${ARTIFACT_ROOT}/control/host-audit-${index}.log"
     rg -q '^UVM_DISABLE_HMM=(Y|1)$' "${ARTIFACT_ROOT}/control/host-audit-${index}.log" || {
         printf 'DeepEP V2 admission blocked by active UVM HMM on node %s\n' \
+            "${selected_nodes[${index}]}" >&2
+        exit 1
+    }
+    rg -q '^GDRDRV=character-device$' "${ARTIFACT_ROOT}/control/host-audit-${index}.log" || {
+        printf 'Benchmark admission blocked by missing /dev/gdrdrv on node %s\n' \
             "${selected_nodes[${index}]}" >&2
         exit 1
     }
