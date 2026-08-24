@@ -23,7 +23,7 @@
     },
     "validity": {
       "type": "object",
-      "required": ["image_identity", "single_nccl", "efa", "no_token_drop", "finite_loss", "finite_gradient"],
+      "required": ["image_identity", "single_nccl", "nccl_build_runtime_match", "efa", "no_token_drop", "steady_timing", "finite_loss", "finite_gradient"],
       "properties": {
         "image_identity": {"type": "boolean"},
         "elastic_buffer": {"type": "boolean"},
@@ -34,11 +34,24 @@
         "gdaki_context": {"type": "boolean"},
         "efa": {"type": "boolean"},
         "no_token_drop": {"type": "boolean"},
+        "steady_timing": {"type": "boolean"},
         "finite_loss": {"type": "boolean"},
         "finite_gradient": {"type": "boolean"}
       },
       "additionalProperties": false
     }
   },
+  "allOf": [
+    {
+      "if": {"properties": {"ep_arm": {"const": "deepep-v2-gin-gda"}}},
+      "then": {
+        "properties": {
+          "validity": {
+            "required": ["elastic_buffer", "deepep_v2_manager", "gin_type_5", "gdaki_context"]
+          }
+        }
+      }
+    }
+  ],
   "additionalProperties": true
 }

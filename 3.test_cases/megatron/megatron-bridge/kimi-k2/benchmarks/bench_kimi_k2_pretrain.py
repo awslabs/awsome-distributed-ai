@@ -17,17 +17,16 @@ This mirrors ``../../dsv3/benchmarks/bench_dsv3_pretrain.py`` but swaps the reci
   supplies the correct Kimi-K2 model provider (all coupled MLA / expert / group dims read from
   the HF config); we graft it onto ``cfg.model`` and re-derive the 61-layer pipeline layout.
 
-Validated this session on the image (Bridge 0.4.2, nemo:26.04.01): AutoBridge routes
-Kimi-K2-Base (``architectures=["DeepseekV3ForCausalLM"]``) to DeepSeekV3Bridge and yields
+The locked NeMo 26.08 image routes Kimi-K2-Base
+(``architectures=["DeepseekV3ForCausalLM"]``) to DeepSeekV3Bridge and yields
 num_moe_experts=384, moe_router_num_groups=1, num_attention_heads=64, num_layers=61,
-multi_latent_attention=True, mtp_num_layers=0. ``trust_remote_code=True`` is REQUIRED (the HF
-config uses auto_map -> configuration_deepseek.DeepseekV3Config, custom code).
+multi_latent_attention=True, mtp_num_layers=0. ``trust_remote_code=True`` is required because the
+HF config uses auto_map -> configuration_deepseek.DeepseekV3Config custom code.
 
-Why this is a valid A/B: model/data/parallelism/precision/seed are byte-identical across arms,
-so the iter-time ratio isolates the dispatcher. The per-iteration ``lm loss`` line (log_interval=1)
-is compared across the two arms to confirm they perform the same numerical work (a dispatcher
-that dropped/mis-routed tokens would diverge). All knobs come from env so the launcher is the
-single source of truth and arms differ only in EP_ARM plus their backend image and environment.
+Model, data, parallelism, precision, and seed are held identical across all 4 arms. The
+per-iteration ``lm loss`` line (log_interval=1) is retained as a validity signal. The launcher is
+the single source of truth, and backend overlays alter only EP_ARM, image, backend environment,
+and required device mounts.
 """
 
 import hashlib

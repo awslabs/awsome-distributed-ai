@@ -14,10 +14,24 @@ K=(kubectl --context "${CTX}")
 LOCK_NS="${LOCK_NS:-default}"
 CLUSTER_LOCK="${CLUSTER_LOCK:-adai-ap-south-1-gpu-campaign-lock}"
 HOLDER_ID="kimi-k2-megatron-ep-${CAMPAIGN_ID}"
+LOCK_DURATION_SECONDS="${LOCK_DURATION_SECONDS:-57600}"
 LOCK_HELD=0
+VLLM_NAMESPACE="${VLLM_NAMESPACE:-dsv3-ep-backend-comparison-20260823}"
+DEFAULT_VLLM_PROTECTED_NODES="ip-10-6-100-229.ap-south-1.compute.internal,ip-10-6-105-109.ap-south-1.compute.internal,ip-10-6-105-110.ap-south-1.compute.internal,ip-10-6-106-109.ap-south-1.compute.internal"
+mapfile -t DISCOVERED_PROTECTED_NODES < <(
+  "${K[@]}" -n "${VLLM_NAMESPACE}" get pods -o json 2>/dev/null |
+    jq -r '.items[].spec.nodeName // empty' | sort -u
+)
+IFS=',' read -r -a EXPLICIT_PROTECTED_NODES <<<"${PROTECTED_NODES:-${DEFAULT_VLLM_PROTECTED_NODES}}"
+PROTECTED_NODE_SET=("${DISCOVERED_PROTECTED_NODES[@]}" "${EXPLICIT_PROTECTED_NODES[@]}")
+mapfile -t PROTECTED_NODE_SET < <(printf '%s\n' "${PROTECTED_NODE_SET[@]}" | sed '/^$/d' | sort -u)
+PROTECTED_NODES="$(IFS=,; echo "${PROTECTED_NODE_SET[*]}")"
+export PROTECTED_NODES
+printf '%s\n' "${PROTECTED_NODE_SET[@]}" > "${OUT}/control/protected-nodes.txt"
 
 census() {
-  local label="$1" dir="${OUT}/census/${label}"
+  local label="$1"
+  local dir="${OUT}/census/${label}"
   mkdir -p "${dir}"
   date -u +%FT%TZ > "${dir}/time.txt"
   aws sts get-caller-identity > "${dir}/aws-caller.json"
@@ -52,10 +66,11 @@ acquire_lock() {
   now="$(date -u +%FT%TZ)"
   if current="$("${K[@]}" -n "${LOCK_NS}" get lease "${CLUSTER_LOCK}" -o json 2>/dev/null)"; then
     jq --arg holder "${HOLDER_ID}" --arg now "${now}" \
-      '.spec.holderIdentity=$holder | .spec.acquireTime=$now | .spec.renewTime=$now | .spec.leaseDurationSeconds=7200' \
+      --argjson duration "${LOCK_DURATION_SECONDS}" \
+      '.spec.holderIdentity=$holder | .spec.acquireTime=$now | .spec.renewTime=$now | .spec.leaseDurationSeconds=$duration' \
       <<<"${current}" | "${K[@]}" replace -f - >/dev/null
   else
-    "${K[@]}" -n "${LOCK_NS}" create lease "${CLUSTER_LOCK}" --duration=7200s --holder-identity="${HOLDER_ID}" >/dev/null
+    "${K[@]}" -n "${LOCK_NS}" create lease "${CLUSTER_LOCK}" --duration="${LOCK_DURATION_SECONDS}s" --holder-identity="${HOLDER_ID}" >/dev/null
   fi
   LOCK_HELD=1
 }
@@ -83,7 +98,13 @@ release_lock() {
 
 teardown() {
   local ns="adai-kimi-k2-megatron-ep-${CAMPAIGN_ID,,}"
-  "${K[@]}" delete namespace "${ns}" --ignore-not-found --wait=true --timeout=300s >/dev/null 2>&1 || true
+  local owner
+  owner="$("${K[@]}" get namespace "${ns}" -o jsonpath='{.metadata.labels.adai-campaign}' 2>/dev/null || true)"
+  if [[ "${owner}" = "${CAMPAIGN_ID}" ]]; then
+    "${K[@]}" delete namespace "${ns}" --wait=true --timeout=300s >/dev/null 2>&1 || true
+  elif [[ -n "${owner}" ]]; then
+    printf 'REFUSED_FOREIGN_NAMESPACE namespace=%s owner=%s\n' "${ns}" "${owner}" > "${OUT}/control/teardown-refusal.STATUS"
+  fi
   release_lock
 }
 trap teardown EXIT
@@ -95,7 +116,16 @@ free_nodes() {
     ($pods[0].items | map(select(.spec.nodeName == $node.metadata.name and (.status.phase == "Running" or .status.phase == "Pending")) | [.spec.containers[]?.resources.requests["nvidia.com/gpu"] // "0" | tonumber] | add // 0) | add // 0) as $used |
     select($used == 0) |
     select(any($node.status.conditions[]; .type == "Ready" and .status == "True")) |
-    $node.metadata.name' | sort
+    $node.metadata.name' | sort | while IFS= read -r candidate; do
+      protected=0
+      for node in "${PROTECTED_NODE_SET[@]}"; do
+        if [[ "${candidate}" = "${node}" ]]; then
+          protected=1
+          break
+        fi
+      done
+      [[ "${protected}" -eq 1 ]] || printf '%s\n' "${candidate}"
+    done
 }
 
 census before
@@ -134,6 +164,35 @@ else
   NNODES="${QUAL_NODES}"
   PROFILE=qualification
 fi
+
+CAPACITY_BLOCK_END="$(
+  aws ec2 describe-capacity-reservations --region ap-south-1 |
+    jq -r --arg instance_type "${INSTANCE_TYPE}" \
+      '[.CapacityReservations[] | select(.State == "active" and .InstanceType == $instance_type) | .EndDate] | sort | .[0] // empty'
+)"
+if [[ -z "${CAPACITY_BLOCK_END}" ]]; then
+  printf 'NOT_RUN_NO_CAPACITY_BLOCK timestamp_utc=%s instance_type=%s\n' \
+    "$(date -u +%FT%TZ)" "${INSTANCE_TYPE}" > "${OUT}/results/${PROFILE}.STATUS"
+  exit 0
+fi
+CAPACITY_BLOCK_END_EPOCH="$(date -u -d "${CAPACITY_BLOCK_END}" +%s)"
+RUN_TIMEOUT_SECONDS="${RUN_TIMEOUT_SECONDS:-7200}"
+RUN_CLEANUP_BUFFER_SECONDS="${RUN_CLEANUP_BUFFER_SECONDS:-600}"
+RUN_WINDOW_SECONDS=$((RUN_TIMEOUT_SECONDS + RUN_CLEANUP_BUFFER_SECONDS))
+export RUN_TIMEOUT_SECONDS
+if [[ "${PROFILE}" = headline ]]; then initial_runs=4; else initial_runs=1; fi
+remaining_seconds=$((CAPACITY_BLOCK_END_EPOCH - $(date -u +%s)))
+if (( remaining_seconds < initial_runs * RUN_WINDOW_SECONDS )); then
+  printf 'NOT_RUN_RECLAIM_WINDOW timestamp_utc=%s remaining_seconds=%d required_seconds=%d capacity_block_end=%s\n' \
+    "$(date -u +%FT%TZ)" "${remaining_seconds}" "$((initial_runs * RUN_WINDOW_SECONDS))" "${CAPACITY_BLOCK_END}" \
+    > "${OUT}/results/${PROFILE}.STATUS"
+  exit 0
+fi
+
+run_window_available() {
+  (( CAPACITY_BLOCK_END_EPOCH - $(date -u +%s) >= RUN_WINDOW_SECONDS ))
+}
+
 NODE_NAMES="$(IFS=,; echo "${SELECTED[*]}")"
 export NODE_NAMES
 printf '%s\n' "${SELECTED[@]}" > "${OUT}/control/selected-nodes.txt"
@@ -148,6 +207,7 @@ else
   REPEATS=(1)
 fi
 
+STOP_CAMPAIGN=0
 for repeat in "${REPEATS[@]}"; do
   mapfile -t ORDER < <(python3 - "${repeat}" <<'PY'
 import random, sys
@@ -161,13 +221,22 @@ PY
     if [[ "${cell}" == *overlap && "${cell}" != *no-overlap ]]; then overlap=on; else overlap=off; fi
     if [[ "${cell}" == small-message* || "${PROFILE}" = qualification ]]; then mb=1; else mb=4; fi
     for arm in "${ORDER[@]}"; do
+      if ! run_window_available; then
+        printf 'NOT_RUN_RECLAIM_WINDOW timestamp_utc=%s cell=%s repeat=%s next_arm=%s capacity_block_end=%s\n' \
+          "$(date -u +%FT%TZ)" "${cell}" "${repeat}" "${arm}" "${CAPACITY_BLOCK_END}" \
+          > "${OUT}/results/remaining-matrix.STATUS"
+        STOP_CAMPAIGN=1
+        break
+      fi
       renew_lock
       CELL="${cell}" REPEAT="${repeat}" MICRO_BATCH="${mb}" MOE_A2A_OVERLAP="${overlap}" \
         "${CASE_DIR}/run-ab-rawpods.sh" "${arm}" "${NNODES}"
       ns="adai-kimi-k2-megatron-ep-${CAMPAIGN_ID,,}"
       "${K[@]}" -n "${ns}" delete pods,service -l adai-campaign="${CAMPAIGN_ID}" --wait=true --timeout=300s >/dev/null
     done
+    if [[ "${STOP_CAMPAIGN}" -eq 1 ]]; then break; fi
   done
+  if [[ "${STOP_CAMPAIGN}" -eq 1 ]]; then break; fi
 done
 
 python3 "${SELF_DIR}/parse-runs.py" "${OUT}/26.08/kimi-k2" --warmup 8 --output "${OUT}/results/index.json"

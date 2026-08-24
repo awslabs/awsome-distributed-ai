@@ -86,10 +86,20 @@ def parse_run(run: Path, warmup: int) -> dict:
         "gdaki_context": marker(text, r"GIN GDAKI:\s*createContext done|GDAKI.*createContext.*done"),
         "efa": efa_manifest and marker(text, r"Selected provider is efa|NET/OFI.*efa|provider: efa"),
         "no_token_drop": marker(text, r"NO_TOKEN_DROP_CONFIG capacity_factor=None token_dropping=False"),
+        "steady_timing": finite(times),
         "finite_loss": finite(losses),
         "finite_gradient": finite(gradients),
     }
-    required = ["image_identity", "single_nccl", "nccl_build_runtime_match", "efa", "no_token_drop", "finite_loss", "finite_gradient"]
+    required = [
+        "image_identity",
+        "single_nccl",
+        "nccl_build_runtime_match",
+        "efa",
+        "no_token_drop",
+        "steady_timing",
+        "finite_loss",
+        "finite_gradient",
+    ]
     if arm == "deepep-v2-gin-gda":
         required.extend(["elastic_buffer", "deepep_v2_manager", "gin_type_5", "gdaki_context"])
     status_file = (run / "STATUS").read_text(errors="replace") if (run / "STATUS").exists() else ""
@@ -98,14 +108,17 @@ def parse_run(run: Path, warmup: int) -> dict:
     median_ms = statistics.median(times) if times else math.nan
     global_batch = int(env.get("global_batch_samples", "0"))
     sequence = int(env.get("sequence_length_tokens", "0"))
-    metrics = {
-        "steady_iteration_time_ms": median_ms,
-        "tokens_per_second": global_batch * sequence * 1000.0 / median_ms if median_ms > 0 else math.nan,
-        "tflops_per_gpu": statistics.mean(tflops) if tflops else math.nan,
-        "steady_iterations": len(times),
-        "loss_last": losses[-1] if losses else math.nan,
-        "gradient_norm_last": gradients[-1] if gradients else math.nan,
-    }
+    metrics = {"steady_iterations": len(times)}
+    if math.isfinite(median_ms):
+        metrics["steady_iteration_time_ms"] = median_ms
+        if median_ms > 0:
+            metrics["tokens_per_second"] = global_batch * sequence * 1000.0 / median_ms
+    if tflops and finite(tflops):
+        metrics["tflops_per_gpu"] = statistics.mean(tflops)
+    if losses and math.isfinite(losses[-1]):
+        metrics["loss_last"] = losses[-1]
+    if gradients and math.isfinite(gradients[-1]):
+        metrics["gradient_norm_last"] = gradients[-1]
     cell = env.get("cell", run.parent.parent.name)
     repeat_text = env.get("repeat", run.parent.name.removeprefix("repeat-"))
     result = {
@@ -121,7 +134,7 @@ def parse_run(run: Path, warmup: int) -> dict:
         "required_validity_gates": required,
         "artifacts": {"run_directory": str(run), "pod_logs": len(log_paths), "runtime_manifests": len(manifests)},
     }
-    (run / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True, allow_nan=True) + "\n")
+    (run / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     return result
 
 
@@ -185,7 +198,7 @@ def main() -> None:
         "runs": results,
         "summary": summarize(results),
     }
-    rendered = json.dumps(document, indent=2, sort_keys=True, allow_nan=True) + "\n"
+    rendered = json.dumps(document, indent=2, sort_keys=True) + "\n"
     if args.output:
         Path(args.output).write_text(rendered)
     print(rendered, end="")

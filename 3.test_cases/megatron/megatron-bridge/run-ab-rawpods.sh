@@ -129,6 +129,7 @@ snapshot() {
 }
 snapshot &
 SNAPSHOT_PID=$!
+# shellcheck disable=SC2317  # Invoked indirectly by the EXIT trap.
 cleanup_snapshot() { kill "${SNAPSHOT_PID}" >/dev/null 2>&1 || true; wait "${SNAPSHOT_PID}" >/dev/null 2>&1 || true; }
 trap cleanup_snapshot EXIT
 

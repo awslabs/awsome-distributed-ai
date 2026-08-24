@@ -23,6 +23,8 @@ All citations below refer to the locked upstream source commits in `versions.loc
 ## NCCL identity
 
 - DeepEP v2 checks `/proc/self/maps`, rejects duplicate NCCL mappings, and compares the loaded binary byte-for-byte with its linked NCCL root at `deep_ep/__init__.py:46-68`; it runs this check before importing ElasticBuffer at lines 82-95.
+- NCCL `v2.31.2-1` defines EFA-GDA as GIN type 5 at `src/include/nccl_device/core.h:86-90`; plugin selection honors `NCCL_GIN_TYPE` at `src/plugin/gin.cc:137-151`. The scored V2 arm therefore sets `NCCL_GIN_TYPE=5`. NCCL's symmetric GIN kernel control is declared at `src/sym_kernels.cc:131`, so the isolation profile explicitly sets `NCCL_SYM_GIN_KERNELS_ENABLE=0`.
+- DeepEP checks the communicator's direct or railed GIN capability and refuses `NCCL_GIN_TYPE_NONE` at patched `csrc/kernels/backend/nccl.cu:98-109`. In debug mode, its selected QP, GIN-context, and indexed-signal budgets are printed at lines 89-93 and 137-144. The PR 5 scale runner enables that output and preserves every node log.
 - The common image replaces NCCL, aws-ofi-nccl/libfabric, and GDRCopy for every arm. Image acceptance independently records `torch.cuda.nccl.version()`, `ncclGetVersion()`, extension `ldd`, mapped paths, and the resolved library SHA-256.
 - The exact supplied NeMo digest currently reports Torch built for NCCL 2.30.5 and runtime NCCL 2.30.7. GIN requires the common NCCL 2.31.2-1 replacement. Because the exact Torch source commit is not shipped and is not fetchable from the public PyTorch repository, the acceptance script fails rather than masking a Torch build/runtime mismatch.
 
@@ -31,3 +33,4 @@ All citations below refer to the locked upstream source commits in `versions.loc
 - `EP_ARM` is mandatory and is checked against `/opt/benchmark/backend.json`. The four accepted values are `nccl-alltoall`, `uccl`, `deepep-v1-nvshmem`, and `deepep-v2-gin-gda`.
 - The three flex arms share dispatcher metadata, local permutation, GroupedMLP, the model configuration, and the common network stack. The NCCL all-to-all arm is reported as the legacy end-to-end baseline, not as a transport-only control.
 - The initial V2 headline profile excludes expanded and sync-free layouts. `matrices/optimized.yaml` keeps that experiment separate.
+- The campaign acquires the shared Kubernetes Lease with optimistic resource-version replacement before selecting nodes, rechecks requested GPU occupancy immediately before every pod claim, and records the concurrent vLLM namespace's named nodes as an immutable protected set for the campaign. Those nodes are excluded even if their instantaneous GPU request count falls to 0 GPUs.

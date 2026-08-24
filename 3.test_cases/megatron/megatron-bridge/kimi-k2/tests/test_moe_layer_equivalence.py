@@ -17,7 +17,9 @@ from megatron.core.transformer.moe.router_replay import RouterReplay, RouterRepl
 def replay_route(scores: torch.Tensor, topk: int) -> tuple[torch.Tensor, torch.Tensor, str]:
     RouterReplay.clear_global_router_replay_instances()
     replay = RouterReplay()
-    compute = lambda tensor, count, num_groups=None, group_topk=None: torch.topk(tensor, count, dim=1, sorted=False)
+    def compute(tensor, count, num_groups=None, group_topk=None):
+        del num_groups, group_topk
+        return torch.topk(tensor, count, dim=1, sorted=False)
     replay.set_router_replay_action(RouterReplayAction.RECORD)
     probabilities, indices = replay.get_replay_topk(scores, topk, default_compute_topk=compute)
     recorded = replay.get_recorded_indices().detach().clone()
