@@ -5,6 +5,7 @@ set -euo pipefail
 : "${DEEPEP_PR3_PATCH_SHA256:?}"
 : "${DEEPEP_PR5_HEAD:?}"
 : "${DEEPEP_PR5_PATCH_SHA256:?}"
+: "${DEEPEP_NOTIFY_WARPS_PATCH_SHA256:?}"
 : "${DEEPEP_SYNTHETIC_TREE:?}"
 : "${DEEPEP_SYNTHETIC_COMMIT:?}"
 : "${NVSHMEM_VERSION:?}"
@@ -31,26 +32,31 @@ rm -f "/tmp/${archive}"
 
 echo "${DEEPEP_PR3_PATCH_SHA256}  /opt/benchmark/patches/deepep-pr3.patch" | sha256sum --check --strict
 echo "${DEEPEP_PR5_PATCH_SHA256}  /opt/benchmark/patches/deepep-pr5.patch" | sha256sum --check --strict
+echo "${DEEPEP_NOTIFY_WARPS_PATCH_SHA256}  /opt/benchmark/patches/deepep-v2-notify-warps.patch" | sha256sum --check --strict
 git clone --no-checkout https://github.com/amazon-contributing/DeepEP.git /opt/amazon/deepep-v2
 repo=/opt/amazon/deepep-v2
 git -C "${repo}" fetch --no-tags --depth=1 origin "${DEEPEP_V2_BASE}"
 git -C "${repo}" checkout --detach "${DEEPEP_V2_BASE}"
 git -C "${repo}" apply --index /opt/benchmark/patches/deepep-pr3.patch
 git -C "${repo}" apply --index /opt/benchmark/patches/deepep-pr5.patch
+git -C "${repo}" apply --index /opt/benchmark/patches/deepep-v2-notify-warps.patch
 tree="$(git -C "${repo}" write-tree)"
 test "${tree}" = "${DEEPEP_SYNTHETIC_TREE}"
 export GIT_AUTHOR_NAME='AWSome Distributed AI Benchmark'
 export GIT_AUTHOR_EMAIL='adai-benchmark@amazon.com'
 export GIT_COMMITTER_NAME="${GIT_AUTHOR_NAME}" GIT_COMMITTER_EMAIL="${GIT_AUTHOR_EMAIL}"
-export GIT_AUTHOR_DATE='2026-08-23T18:41:17Z' GIT_COMMITTER_DATE='2026-08-23T18:41:17Z'
-message='DeepEP v2 synthetic: base + PR #3 + PR #5
+export GIT_AUTHOR_DATE='2026-08-24T06:42:00Z' GIT_COMMITTER_DATE='2026-08-24T06:42:00Z'
+message='DeepEP v2 synthetic: base + PR #3 + PR #5 + notify-warp fix
 
 base: 02efc268a37802fc00812ede8f5ad7f535ceea0e
 pr3-head: dd0f87261a80cf0ce8aa66e4ab2041843851d810
-pr5-head: 2542d9641f2ec280213e875feb04be7862dda57c'
+pr5-head: 2542d9641f2ec280213e875feb04be7862dda57c
+notify-warp-patch-sha256: 198fe6148b14b3c4533542f43e043835c47a861af37021628f4942f5b114a039'
 synthetic="$(printf '%s\n' "${message}" | git -C "${repo}" commit-tree "${tree}" -p "${DEEPEP_V2_BASE}")"
 test "${synthetic}" = "${DEEPEP_SYNTHETIC_COMMIT}"
 git -C "${repo}" reset --hard "${synthetic}"
+printf '%s  %s\n' "${DEEPEP_NOTIFY_WARPS_PATCH_SHA256}" /opt/benchmark/patches/deepep-v2-notify-warps.patch \
+  > /opt/benchmark/deepep-v2-notify-warps.patch.sha256
 (cd "${repo}" && find deep_ep/include -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}' > /opt/benchmark/deepep-v2-jit-headers.sha256)
 python3 -m pip install --no-build-isolation -v "${repo}"
 python3 - <<'PY'

@@ -1,0 +1,54 @@
+diff --git a/csrc/elastic/buffer.hpp b/csrc/elastic/buffer.hpp
+index a24907f..51115a1 100644
+--- a/csrc/elastic/buffer.hpp
++++ b/csrc/elastic/buffer.hpp
+@@ -900,10 +900,11 @@ public:
+         if (nccl_context->num_scaleout_ranks > 1) {
+             const auto dispatch_token_layout = get_dispatch_token_layout(hidden, x.element_size(), num_sf_packs, num_topk);
+             const auto combine_token_layout = get_combine_token_layout(hidden, sizeof(nv_bfloat16), num_topk);
++            const int num_notify_warps = get_num_notify_warps(nccl_context->num_ranks, num_experts);
+             EP_HOST_ASSERT(num_sms <= kNumMaxSMs);
+             num_channels_per_sm = std::min<int>(
+                 (num_smem_bytes - get_num_notify_smem_bytes(nccl_context->num_ranks, num_experts)) / dispatch_token_layout.get_num_bytes<true>(),
+-                32 - kNumNotifyWarps);
++                32 - num_notify_warps);
+             num_channels_per_sm = std::min<int>(
+                 num_smem_bytes / combine_token_layout.get_num_bytes<true>(),
+                 num_channels_per_sm);
+diff --git a/csrc/kernels/elastic/dispatch.hpp b/csrc/kernels/elastic/dispatch.hpp
+index 7306e5d..09a473f 100644
+--- a/csrc/kernels/elastic/dispatch.hpp
++++ b/csrc/kernels/elastic/dispatch.hpp
+@@ -191,10 +191,20 @@ static void __instantiate_kernel() {{
+     }
+ };
+ 
+-constexpr int kNumNotifyWarps = 4;
++static int get_num_notify_warps(const int& num_ranks, const int& num_experts) {
++    EP_HOST_ASSERT(num_ranks > 0 and num_experts % num_ranks == 0);
++    // One notify thread is required for each scale-up rank and local expert.
++    // Using num_ranks is conservative for hybrid groups, where the number of
++    // scale-up ranks is no larger than the total number of ranks.
++    const int num_required_threads = num_ranks + num_experts / num_ranks;
++    const int num_notify_warps = math::align(math::ceil_div(num_required_threads, 32), 4);
++    EP_HOST_ASSERT(num_notify_warps > 0 and num_notify_warps < 32);
++    return num_notify_warps;
++}
+ 
+ static int get_num_notify_smem_bytes(const int& num_ranks, const int& num_experts) {
+-    return math::align(num_ranks + num_experts, kNumNotifyWarps * 32) * sizeof(int);
++    return math::align(num_ranks + num_experts,
++                       get_num_notify_warps(num_ranks, num_experts) * 32) * sizeof(int);
+ }
+ 
+ static layout::TokenLayout get_dispatch_token_layout(
+@@ -247,8 +257,7 @@ static void launch_dispatch(void* x, void* sf,
+     const auto num_ranks = num_scaleout_ranks * num_scaleup_ranks;
+ 
+     // Notify warps
+-    // TODO: why don't we use 4 notify warps?
+-    const int num_notify_warps = cached_mode ? 0 : kNumNotifyWarps;
++    const int num_notify_warps = cached_mode ? 0 : get_num_notify_warps(num_ranks, num_experts);
+     const bool reuse_slot_indices = cached_mode;
+     const int num_notify_smem_bytes = cached_mode ? 0 : get_num_notify_smem_bytes(num_ranks, num_experts);
+     EP_HOST_ASSERT(num_notify_warps % 4 == 0);

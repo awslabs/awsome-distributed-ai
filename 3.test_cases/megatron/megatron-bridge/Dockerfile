@@ -83,8 +83,9 @@ ARG DEEPEP_PR3_HEAD=dd0f87261a80cf0ce8aa66e4ab2041843851d810
 ARG DEEPEP_PR3_PATCH_SHA256=1a7b3604ff5e01d97cdc043ae2c2480ac64ae229dfb34ea457633ac8f5362bc4
 ARG DEEPEP_PR5_HEAD=2542d9641f2ec280213e875feb04be7862dda57c
 ARG DEEPEP_PR5_PATCH_SHA256=36d6fcac58dcc197f8bc0419822b9381296cecba40bd640440c7633796c25f7e
-ARG DEEPEP_SYNTHETIC_TREE=4da3a118b3b316de79b5af2b4770646035dc5802
-ARG DEEPEP_SYNTHETIC_COMMIT=b56ebf8bb4ece24cd78aa8c12550b24e35ac255b
+ARG DEEPEP_NOTIFY_WARPS_PATCH_SHA256=198fe6148b14b3c4533542f43e043835c47a861af37021628f4942f5b114a039
+ARG DEEPEP_SYNTHETIC_TREE=ab43791defa8961b88fdee1a63e8877e317da9af
+ARG DEEPEP_SYNTHETIC_COMMIT=0ff264eb08d196621f49c7d011270c62f8716996
 ARG NVSHMEM_VERSION=3.7.0
 ARG NVSHMEM_SHA256=f954ed91fa270f4b905391e03d808f60c73b894d88ef0aae865916d685353b8c
 ENV DEEPEP_V2_BASE=${DEEPEP_V2_BASE} \
@@ -92,6 +93,7 @@ ENV DEEPEP_V2_BASE=${DEEPEP_V2_BASE} \
     DEEPEP_PR3_PATCH_SHA256=${DEEPEP_PR3_PATCH_SHA256} \
     DEEPEP_PR5_HEAD=${DEEPEP_PR5_HEAD} \
     DEEPEP_PR5_PATCH_SHA256=${DEEPEP_PR5_PATCH_SHA256} \
+    DEEPEP_NOTIFY_WARPS_PATCH_SHA256=${DEEPEP_NOTIFY_WARPS_PATCH_SHA256} \
     DEEPEP_SYNTHETIC_TREE=${DEEPEP_SYNTHETIC_TREE} \
     DEEPEP_SYNTHETIC_COMMIT=${DEEPEP_SYNTHETIC_COMMIT} \
     EP_NCCL_ROOT_DIR=/opt/nccl/build \
@@ -102,7 +104,7 @@ ENV DEEPEP_V2_BASE=${DEEPEP_V2_BASE} \
     LD_LIBRARY_PATH=/opt/amazon/nvshmem/lib:${LD_LIBRARY_PATH}
 COPY 3.test_cases/megatron/megatron-bridge/docker/install-deepep-v2.sh /opt/benchmark/install-deepep-v2.sh
 RUN --mount=type=cache,target=/root/.cache/ccache /opt/benchmark/install-deepep-v2.sh
-RUN printf '%s\n' '{"ep_arm":"deepep-v2-gin-gda","dispatcher":"flex","backend":"deepep_v2"}' > /opt/benchmark/backend.json
+RUN printf '%s\n' '{"ep_arm":"deepep-v2-gin-gda","dispatcher":"flex","backend":"deepep_v2","synthetic_tree":"ab43791defa8961b88fdee1a63e8877e317da9af","synthetic_commit":"0ff264eb08d196621f49c7d011270c62f8716996","notify_warps_patch_sha256":"198fe6148b14b3c4533542f43e043835c47a861af37021628f4942f5b114a039"}' > /opt/benchmark/backend.json
 RUN EP_ARM=deepep-v2-gin-gda /opt/benchmark/verify-image.sh
 WORKDIR /opt/benchmark/case
 
