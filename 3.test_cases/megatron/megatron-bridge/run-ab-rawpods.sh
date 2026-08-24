@@ -216,6 +216,8 @@ case "${EP_ARM}" in
         - {name: NCCL_SYM_GIN_KERNELS_ENABLE, value: "0"}' ;;
 esac
 
+POD_MANIFEST="${LOCAL_RUN_DIR}/manifests/pods.yaml"
+: > "${POD_MANIFEST}"
 for rank in $(seq 0 $((NNODES - 1))); do
   node="${NODES[$rank]}"
   profile_prefix=""
@@ -230,7 +232,8 @@ for rank in $(seq 0 $((NNODES - 1))); do
     gdr_volume='- {name: gdrdrv, hostPath: {path: /dev/gdrdrv, type: CharDevice}}'
     privileged='securityContext: {privileged: true}'
   fi
-  cat <<EOF | "${KN[@]}" apply -f -
+  cat <<EOF >> "${POD_MANIFEST}"
+---
 apiVersion: v1
 kind: Pod
 metadata:
@@ -321,6 +324,7 @@ ${EXTRA_ENV}
     ${gdr_volume}
 EOF
 done
+"${KN[@]}" apply -f "${POD_MANIFEST}"
 
 deadline=$((SECONDS + ${RUN_TIMEOUT_SECONDS:-7200}))
 terminal=0
