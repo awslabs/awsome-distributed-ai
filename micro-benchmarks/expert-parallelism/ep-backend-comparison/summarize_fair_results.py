@@ -11,8 +11,9 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
+from fair_result_io import load_result_log
 
-PREFIX = "ADAI_FAIR_RESULT "
+
 ARMS = ("uccl", "deepep-v1-nvshmem", "deepep-v2-gin-gda")
 WORLD_SIZES = (16, 32)
 DTYPES = ("fp8", "bf16")
@@ -43,10 +44,7 @@ def load_results(root: Path) -> list[dict[str, Any]]:
     results: dict[tuple[str, int, int, str], dict[str, Any]] = {}
     sources: dict[tuple[str, int, int, str], Path] = {}
     for path in sorted(root.rglob("*.log")):
-        for line in path.read_text(errors="replace").splitlines():
-            if not line.startswith(PREFIX):
-                continue
-            result = json.loads(line[len(PREFIX) :])
+        for result in load_result_log(path):
             key = (
                 result["arm"],
                 result["world_size_ranks"],

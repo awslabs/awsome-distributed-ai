@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 
@@ -78,6 +79,17 @@ class SummarizeFairResultsTest(unittest.TestCase):
         self.results[0]["route_hash_sha256"] = "different"
         with self.assertRaises(ValueError):
             summary_module.validate(self.results, 3)
+
+    def test_load_results_accepts_native_diagnostic_after_json(self):
+        result = fake_result("deepep-v2-gin-gda", 32, 1, "fp8", 0.9)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rank-zero.log"
+            path.write_text(
+                "ADAI_FAIR_RESULT "
+                + summary_module.json.dumps(result)
+                + "Elastic buffer uses 3 channels per SM\n"
+            )
+            self.assertEqual(summary_module.load_results(Path(directory)), [result])
 
 
 if __name__ == "__main__":

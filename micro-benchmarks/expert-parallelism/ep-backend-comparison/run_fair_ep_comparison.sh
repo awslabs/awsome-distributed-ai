@@ -471,12 +471,13 @@ YAML
         return 1
     }
     local rank_zero_log="${out}/${current_case}-0.log" result_count
-    result_count="$(rg -c '^ADAI_FAIR_RESULT ' "${rank_zero_log}" || true)"
+    python3 "${case_dir}/extract_fair_results.py" \
+        "${rank_zero_log}" "${out}/results.jsonl" >/dev/null
+    result_count="$(wc -l <"${out}/results.jsonl")"
     [[ "${result_count}" -eq 2 ]] || {
         printf 'Expected 2 fair results in %s, found %s\n' "${rank_zero_log}" "${result_count}" >&2
         return 1
     }
-    rg '^ADAI_FAIR_RESULT ' "${rank_zero_log}" >"${out}/results.jsonl"
     printf 'PASS arm=%s EP%s repeat=%s label=%s at %s UTC\n' \
         "${arm}" "${world_size}" "${run_index}" "${label}" "$(date -u +%FT%TZ)" \
         >"${out}/STATUS"
