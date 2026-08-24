@@ -65,24 +65,42 @@ class RuntimeDispatcherIdentity(Callback):
         return [context.model]
 
     def on_train_start(self, context: CallbackContext) -> None:
+        from megatron.core.transformer.moe.moe_layer import BaseMoELayer
         from megatron.core.transformer.moe.token_dispatcher import (
+            MoEAlltoAllTokenDispatcher,
             MoEFlexTokenDispatcher,
             _DeepepManager,
             _DeepepV2Manager,
         )
 
         arm = os.environ["EP_ARM"]
-        dispatchers = [
+        moe_layers = [
             module
             for chunk in self._model_chunks(context)
             for module in chunk.modules()
-            if isinstance(module, MoEFlexTokenDispatcher)
+            if isinstance(module, BaseMoELayer)
         ]
-        managers = [dispatcher._comm_manager for dispatcher in dispatchers]
+        if not moe_layers:
+            raise RuntimeError(f"{arm} built no BaseMoELayer instances")
+        dispatchers = [
+            layer.token_dispatcher for layer in moe_layers if layer.token_dispatcher is not None
+        ]
+        if len(dispatchers) != len(moe_layers):
+            raise RuntimeError(
+                f"{arm} left MoE layers without token dispatchers: "
+                f"layers={len(moe_layers)} dispatchers={len(dispatchers)}"
+            )
+
         if arm == "nccl-alltoall":
-            if dispatchers:
+            wrong_dispatchers = [
+                type(dispatcher).__name__
+                for dispatcher in dispatchers
+                if not isinstance(dispatcher, MoEAlltoAllTokenDispatcher)
+            ]
+            if wrong_dispatchers:
                 raise RuntimeError(
-                    f"legacy all-to-all arm unexpectedly built {len(dispatchers)} flex dispatchers"
+                    "legacy all-to-all arm selected unexpected dispatchers: "
+                    f"expected={MoEAlltoAllTokenDispatcher.__name__} actual={wrong_dispatchers}"
                 )
             expected_manager = None
         elif arm in ("uccl", "deepep-v1-nvshmem"):
@@ -92,9 +110,19 @@ class RuntimeDispatcherIdentity(Callback):
         else:
             raise RuntimeError(f"unknown EP_ARM during runtime inspection: {arm}")
 
+        flex_dispatchers = [
+            dispatcher
+            for dispatcher in dispatchers
+            if isinstance(dispatcher, MoEFlexTokenDispatcher)
+        ]
+        managers = [dispatcher._comm_manager for dispatcher in flex_dispatchers]
         if expected_manager is not None:
-            if not managers:
-                raise RuntimeError(f"{arm} built no MoEFlexTokenDispatcher instances")
+            if len(flex_dispatchers) != len(dispatchers):
+                actual = [type(dispatcher).__name__ for dispatcher in dispatchers]
+                raise RuntimeError(
+                    f"{arm} selected non-flex dispatchers: "
+                    f"expected={MoEFlexTokenDispatcher.__name__} actual={actual}"
+                )
             wrong = [
                 type(manager).__name__
                 for manager in managers
@@ -105,18 +133,16 @@ class RuntimeDispatcherIdentity(Callback):
                     f"{arm} selected unexpected flex managers: expected={expected_manager.__name__} actual={wrong}"
                 )
 
-        group_sizes = sorted(
-            {dist.get_world_size(manager.group) for manager in managers if hasattr(manager, "group")}
-        )
-        if managers:
-            expected_group_size = _int("EXPERT_PARALLEL", 32)
-            if group_sizes != [expected_group_size]:
-                raise RuntimeError(
-                    f"expert dispatcher group drift: expected={[expected_group_size]} actual={group_sizes}"
-                )
+        group_sizes = sorted({dist.get_world_size(layer.ep_group) for layer in moe_layers})
+        expected_group_size = _int("EXPERT_PARALLEL", 32)
+        if group_sizes != [expected_group_size]:
+            raise RuntimeError(
+                f"expert dispatcher group drift: expected={[expected_group_size]} actual={group_sizes}"
+            )
         payload = {
             "arm": arm,
             "dispatcher_instances_on_rank": len(dispatchers),
+            "moe_layer_instances_on_rank": len(moe_layers),
             "group_sizes": group_sizes,
             "manager": expected_manager.__name__ if expected_manager is not None else None,
         }
