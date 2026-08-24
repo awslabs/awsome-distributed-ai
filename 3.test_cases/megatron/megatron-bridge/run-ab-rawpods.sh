@@ -209,7 +209,7 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: ${JOB}-${rank}
-  labels: {app: ${JOB}, adai-campaign: "${CAMPAIGN_ID}", rank: "${rank}"}
+  labels: {app: ${JOB}, adai-campaign: "${CAMPAIGN_ID}", adai-owner: kimi-k2-megatron-ep, rank: "${rank}"}
 spec:
   restartPolicy: Never
   nodeName: ${node}
