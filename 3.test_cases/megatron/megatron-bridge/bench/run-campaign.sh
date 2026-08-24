@@ -5,7 +5,11 @@ set -euo pipefail
 : "${CTX:?set CTX}"
 : "${LOCAL_ARTIFACT_ROOT:?set LOCAL_ARTIFACT_ROOT}"
 CAMPAIGN_ID="${CAMPAIGN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-kimi-k2-megatron-ep-2608}"
-export CAMPAIGN_ID CTX LOCAL_ARTIFACT_ROOT
+namespace_suffix="$(printf '%s' "${CAMPAIGN_ID}" | sha256sum | cut -c1-16)"
+CAMPAIGN_NAMESPACE="${CAMPAIGN_NAMESPACE:-adai-kimi-k2-megatron-ep-${namespace_suffix}}"
+case "${CAMPAIGN_NAMESPACE}" in adai-kimi-k2-megatron-ep-*) ;; *) echo "refusing non-campaign namespace ${CAMPAIGN_NAMESPACE}" >&2; exit 2;; esac
+[[ "${#CAMPAIGN_NAMESPACE}" -le 63 ]] || { echo "campaign namespace exceeds 63 characters: ${CAMPAIGN_NAMESPACE}" >&2; exit 2; }
+export CAMPAIGN_ID CAMPAIGN_NAMESPACE CTX LOCAL_ARTIFACT_ROOT
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 CASE_DIR="$(cd "${SELF_DIR}/.." && pwd)"
 OUT="${LOCAL_ARTIFACT_ROOT}/${CAMPAIGN_ID}"
@@ -101,7 +105,7 @@ release_lock() {
 }
 
 teardown() {
-  local ns="adai-kimi-k2-megatron-ep-${CAMPAIGN_ID,,}"
+  local ns="${CAMPAIGN_NAMESPACE}"
   local owner
   owner="$("${K[@]}" get namespace "${ns}" -o jsonpath='{.metadata.labels.adai-campaign}' 2>/dev/null || true)"
   if [[ "${owner}" = "${CAMPAIGN_ID}" ]]; then
@@ -115,10 +119,13 @@ trap teardown EXIT
 
 free_nodes() {
   local instance_type="$1"
-  "${K[@]}" get nodes -l "node.kubernetes.io/instance-type=${instance_type}" -o json | jq -r --slurpfile pods <("${K[@]}" get pods -A -o json) '
+  local efa_per_node="$2"
+  "${K[@]}" get nodes -l "node.kubernetes.io/instance-type=${instance_type}" -o json | jq -r --argjson efa_per_node "${efa_per_node}" --slurpfile pods <("${K[@]}" get pods -A -o json) '
     .items[] as $node |
     ($pods[0].items | map(select(.spec.nodeName == $node.metadata.name and (.status.phase == "Running" or .status.phase == "Pending")) | [.spec.containers[]?.resources.requests["nvidia.com/gpu"] // "0" | tonumber] | add // 0) | add // 0) as $used |
     select($used == 0) |
+    select(($node.status.allocatable["nvidia.com/gpu"] // "0" | tonumber) >= 8) |
+    select(($node.status.allocatable["vpc.amazonaws.com/efa"] // "0" | tonumber) >= $efa_per_node) |
     select(any($node.status.conditions[]; .type == "Ready" and .status == "True")) |
     $node.metadata.name' | sort | while IFS= read -r candidate; do
       protected=0
@@ -133,7 +140,7 @@ free_nodes() {
 }
 
 census before
-mapfile -t B300_FREE < <(free_nodes p6-b300.48xlarge)
+mapfile -t B300_FREE < <(free_nodes p6-b300.48xlarge 16)
 if [[ "${#B300_FREE[@]}" -lt 32 ]]; then
   printf 'NOT_RUN_INSUFFICIENT_CAPACITY timestamp_utc=%s required_nodes=32 available_free_b300_nodes=%d\n' \
     "$(date -u +%FT%TZ)" "${#B300_FREE[@]}" > "${OUT}/results/headline-256gpu.STATUS"
@@ -147,7 +154,7 @@ fi
 
 # Re-evaluate occupancy after the atomic lease claim. A census taken before the
 # claim is provenance, not permission to use a node whose state has changed.
-mapfile -t B300_FREE < <(free_nodes p6-b300.48xlarge)
+mapfile -t B300_FREE < <(free_nodes p6-b300.48xlarge 16)
 
 if [[ "${#B300_FREE[@]}" -ge 32 ]]; then
   SELECTED=("${B300_FREE[@]:0:32}")
@@ -155,7 +162,7 @@ if [[ "${#B300_FREE[@]}" -ge 32 ]]; then
   NNODES=32
   PROFILE=headline
 else
-  mapfile -t B200_FREE < <(free_nodes p6-b200.48xlarge)
+  mapfile -t B200_FREE < <(free_nodes p6-b200.48xlarge 8)
   if [[ "${FULL_B200_FALLBACK:-0}" = 1 ]]; then
     requested_b200_nodes=32
   else
@@ -210,7 +217,7 @@ export NODE_NAMES
 printf '%s\n' "${SELECTED[@]}" > "${OUT}/control/selected-nodes.txt"
 
 if [[ "${PROFILE}" != qualification ]]; then
-  export TENSOR_PARALLEL=8 PIPELINE_PARALLEL=8 EXPERT_PARALLEL=32 TRAIN_ITERS=40 GLOBAL_BATCH=256
+  export TENSOR_PARALLEL=8 PIPELINE_PARALLEL=8 EXPERT_PARALLEL=32 TRAIN_ITERS="${TRAIN_ITERS_OVERRIDE:-40}" GLOBAL_BATCH="${GLOBAL_BATCH_OVERRIDE:-256}"
   CELLS=(throughput-no-overlap throughput-overlap small-message small-message-overlap)
   REPEATS=(1 2 3)
 else
@@ -245,7 +252,7 @@ PY
       renew_lock
       CELL="${cell}" REPEAT="${repeat}" MICRO_BATCH="${mb}" MOE_A2A_OVERLAP="${overlap}" \
         "${CASE_DIR}/run-ab-rawpods.sh" "${arm}" "${NNODES}"
-      ns="adai-kimi-k2-megatron-ep-${CAMPAIGN_ID,,}"
+      ns="${CAMPAIGN_NAMESPACE}"
       "${K[@]}" -n "${ns}" delete pods,service -l adai-campaign="${CAMPAIGN_ID}" --wait=true --timeout=300s >/dev/null
     done
     if [[ "${STOP_CAMPAIGN}" -eq 1 ]]; then break; fi
