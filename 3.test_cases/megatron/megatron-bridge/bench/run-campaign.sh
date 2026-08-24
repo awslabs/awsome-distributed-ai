@@ -198,18 +198,36 @@ CAPACITY_BLOCK_END_EPOCH="$(date -u -d "${CAPACITY_BLOCK_END}" +%s)"
 RUN_TIMEOUT_SECONDS="${RUN_TIMEOUT_SECONDS:-7200}"
 RUN_CLEANUP_BUFFER_SECONDS="${RUN_CLEANUP_BUFFER_SECONDS:-600}"
 RUN_WINDOW_SECONDS=$((RUN_TIMEOUT_SECONDS + RUN_CLEANUP_BUFFER_SECONDS))
+RUN_START_MIN_REMAINING_SECONDS="${RUN_START_MIN_REMAINING_SECONDS_OVERRIDE:-${RUN_WINDOW_SECONDS}}"
 export RUN_TIMEOUT_SECONDS
 if [[ "${PROFILE}" = qualification ]]; then initial_runs=1; else initial_runs=4; fi
+INITIAL_MATRIX_EXPECTED_SECONDS="${INITIAL_MATRIX_EXPECTED_SECONDS_OVERRIDE:-$((initial_runs * RUN_WINDOW_SECONDS))}"
+[[ "${RUN_START_MIN_REMAINING_SECONDS}" =~ ^[1-9][0-9]*$ ]] || {
+  echo "RUN_START_MIN_REMAINING_SECONDS_OVERRIDE must be a positive integer" >&2
+  exit 2
+}
+[[ "${INITIAL_MATRIX_EXPECTED_SECONDS}" =~ ^[1-9][0-9]*$ ]] || {
+  echo "INITIAL_MATRIX_EXPECTED_SECONDS_OVERRIDE must be a positive integer" >&2
+  exit 2
+}
+cat > "${OUT}/control/reclaim-window.txt" <<EOF
+capacity_block_end=${CAPACITY_BLOCK_END}
+run_timeout_seconds=${RUN_TIMEOUT_SECONDS}
+run_cleanup_buffer_seconds=${RUN_CLEANUP_BUFFER_SECONDS}
+run_start_min_remaining_seconds=${RUN_START_MIN_REMAINING_SECONDS}
+initial_runs=${initial_runs}
+initial_matrix_expected_seconds=${INITIAL_MATRIX_EXPECTED_SECONDS}
+EOF
 remaining_seconds=$((CAPACITY_BLOCK_END_EPOCH - $(date -u +%s)))
-if (( remaining_seconds < initial_runs * RUN_WINDOW_SECONDS )); then
+if (( remaining_seconds < INITIAL_MATRIX_EXPECTED_SECONDS )); then
   printf 'NOT_RUN_RECLAIM_WINDOW timestamp_utc=%s remaining_seconds=%d required_seconds=%d capacity_block_end=%s\n' \
-    "$(date -u +%FT%TZ)" "${remaining_seconds}" "$((initial_runs * RUN_WINDOW_SECONDS))" "${CAPACITY_BLOCK_END}" \
+    "$(date -u +%FT%TZ)" "${remaining_seconds}" "${INITIAL_MATRIX_EXPECTED_SECONDS}" "${CAPACITY_BLOCK_END}" \
     > "${OUT}/results/${PROFILE}.STATUS"
   exit 0
 fi
 
 run_window_available() {
-  (( CAPACITY_BLOCK_END_EPOCH - $(date -u +%s) >= RUN_WINDOW_SECONDS ))
+  (( CAPACITY_BLOCK_END_EPOCH - $(date -u +%s) >= RUN_START_MIN_REMAINING_SECONDS ))
 }
 
 NODE_NAMES="$(IFS=,; echo "${SELECTED[*]}")"
