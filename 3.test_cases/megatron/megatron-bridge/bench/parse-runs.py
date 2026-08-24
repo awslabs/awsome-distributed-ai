@@ -1,205 +1,194 @@
 #!/usr/bin/env python3
-# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-# SPDX-License-Identifier: MIT-0
-"""Parse a megatron-bridge-bench campaign tree into a per-run loss curve + a summary index.
+"""Parse durable four-arm runs and apply backend-specific validity gates."""
+from __future__ import annotations
 
-Walks ``<campaign>/<model>/<arm>-mb<m>-ovl<on|off>/logs/`` and, for each run, parses the
-HIGHEST-numbered ``rank-<r>.log`` (the last PP stage is where Megatron prints the
-per-iteration training line: ``iteration N/M | elapsed time per iteration (ms) | lm loss |
-throughput per GPU (TFLOP/s/GPU)``) plus ``rank-0.log`` for the EFA/UCCL init signals, and emits:
-
-  - ``<run_dir>/loss_curve.csv``  : iter, lm_loss, iter_time_s   (the loss-equivalence source)
-  - one row appended to ``<campaign>/index.csv``                : perf + validity summary
-
-Reads only; never deletes. Idempotent — re-running rewrites loss_curve.csv and rebuilds
-index.csv from scratch so it always reflects the current tree.
-
-Usage:  parse-runs.py <campaign_dir> [--warmup N]
-The Megatron per-iteration log format varies by build; the regexes below are deliberately
-tolerant and the script warns (does not crash) when a field is missing, so the first real
-rank-0.log can be eyeballed against `--debug` output before trusting the numbers.
-"""
-import csv
-import glob
-import os
+import argparse
+import hashlib
+import json
+import math
+import random
 import re
-import sys
+import statistics
+from pathlib import Path
 
-WARMUP_DEFAULT = 4
-
-# Tolerant patterns for the standard Megatron-LM / Megatron-Bridge training log line, e.g.:
-#  " iteration       5/      24 | ... | elapsed time per iteration (ms): 6263.0 | ... |
-#    lm loss: 1.189735E+01 | ... | throughput per GPU (TFLOP/s/GPU): 170.5 | ..."
-RE_ITER = re.compile(r"\biteration\s+(\d+)\s*/\s*(\d+)")
-RE_TIME_MS = re.compile(r"elapsed time per iteration \(ms\):\s*([\d.]+)")
-RE_LOSS = re.compile(r"\blm loss:\s*([0-9.]+[eE]?[+-]?[0-9]*)")
-RE_TFLOPS = re.compile(r"(?:throughput per GPU \(TFLOP/s/GPU\)|TFLOP/s/GPU|tflops?)[^\d-]*([\d.]+)", re.I)
-RE_GBS = re.compile(r"global batch size:\s*(\d+)")
-RE_EFA = re.compile(r"Selected provider is efa")
-RE_UCCL = re.compile(r"Registered proxies|high-throughput mode")
-# NVSHMEM init banner (NVIDIA DeepEP arm). Must be NVSHMEM-SPECIFIC — the generic
-# "libfabric ... efa" string also appears in the NCCL/aws-ofi init of every arm, so we key
-# only on NVSHMEM's own version/init lines (e.g. "NVSHMEM v3.7.0"). This is the analogue of
-# RE_UCCL for the UCCL arm. The hard EFA gate (RE_EFA) still applies to ALL arms.
-RE_NVSHMEM = re.compile(r"NVSHMEM INFO|nvshmem_init|Initializing NVSHMEM|NVSHMEM v[0-9]")
+ITER = re.compile(r"\biteration\s+(\d+)\s*/\s*(\d+)", re.I)
+TIME_MS = re.compile(r"elapsed time per iteration \(ms\):\s*([0-9.eE+-]+)", re.I)
+LOSS = re.compile(r"\blm loss:\s*([0-9.eE+-]+)", re.I)
+GRAD = re.compile(r"grad(?:ient)? norm:\s*([0-9.eE+-]+)", re.I)
+TFLOPS = re.compile(r"(?:TFLOP/s/GPU|tflops?)[^0-9+-]*([0-9.eE+-]+)", re.I)
 
 
-def parse_run(run_dir, warmup, debug=False):
-    # Megatron prints the per-iteration training line (lm loss / elapsed time / TFLOP) on
-    # the LAST rank (last PP stage) — i.e. the HIGHEST-numbered node log. rank-0.log only
-    # carries the Bridge "Step Time" logger plus the EFA/UCCL init lines. Verified against
-    # the preserved 2026-06-01 logs (abrun-*-31.log has the iteration lines; rank0 does not).
-    logs = glob.glob(os.path.join(run_dir, "logs", "rank-*.log"))
-    if not logs:
-        return None
-    def _rank(p):
+def marker(text: str, *patterns: str) -> bool:
+    return any(re.search(pattern, text, re.I) is not None for pattern in patterns)
+
+
+def finite(values: list[float]) -> bool:
+    return bool(values) and all(math.isfinite(item) for item in values)
+
+
+def read_environment(run: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    path = run / "environment.txt"
+    if path.exists():
+        for line in path.read_text(errors="replace").splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                result[key] = value
+    return result
+
+
+def runtime_manifests(run: Path) -> list[dict]:
+    found = []
+    for path in run.glob("node-*/runtime-manifest.json"):
         try:
-            return int(os.path.basename(p).split("-")[1].split(".")[0])
-        except ValueError:
-            return -1
-    iter_log = max(logs, key=_rank)              # last node: per-iteration training lines
-    rank0_log = min(logs, key=_rank)             # first node: EFA / UCCL-proxy init signals
-    iters = []  # (iter, loss, time_s, tflops, gbs)
-    efa_ok = uccl_ok = nvshmem_ok = False
-    for sig_log in {rank0_log, iter_log}:
-        with open(sig_log, errors="replace") as f:
-            for line in f:
-                if RE_EFA.search(line):
-                    efa_ok = True
-                if RE_UCCL.search(line):
-                    uccl_ok = True
-                if RE_NVSHMEM.search(line):
-                    nvshmem_ok = True
-    with open(iter_log, errors="replace") as f:
-        for line in f:
-            mi = RE_ITER.search(line)
-            mt = RE_TIME_MS.search(line)
-            ml = RE_LOSS.search(line)
-            if mi and (mt or ml):
-                it = int(mi.group(1))
-                t = float(mt.group(1)) / 1000.0 if mt else float("nan")
-                loss = float(ml.group(1)) if ml else float("nan")
-                tf = float(RE_TFLOPS.search(line).group(1)) if RE_TFLOPS.search(line) else float("nan")
-                gbs = int(RE_GBS.search(line).group(1)) if RE_GBS.search(line) else 0
-                iters.append((it, loss, t, tf, gbs))
-                if debug and len(iters) <= 3:
-                    sys.stderr.write("  [debug] %s %s\n" % (os.path.basename(iter_log), iters[-1]))
-
-    # write the loss curve (all iters, no drop — the curve IS the equivalence evidence)
-    with open(os.path.join(run_dir, "loss_curve.csv"), "w", newline="") as fh:
-        w = csv.writer(fh)
-        w.writerow(["iter", "lm_loss", "iter_time_s", "tflops_per_gpu"])
-        for it, loss, t, tf, _ in iters:
-            w.writerow([it, "%.6f" % loss, "%.4f" % t, "%.2f" % tf])
-
-    # perf summary over steady state (drop the first `warmup` iters incl. compile/init)
-    steady = [r for r in iters if r[0] > warmup]
-    times = [r[2] for r in steady if r[2] == r[2]]
-    tfs = [r[3] for r in steady if r[3] == r[3]]
-    gbs = next((r[4] for r in iters if r[4]), 0)
-    # Sequence length for the tok/s derivation: read it from env.txt (recorded as "seq=NNNN")
-    # rather than hardcoding, so a SEQ_LEN override doesn't silently skew derived tok/s.
-    seq = 4096
-    _envp = os.path.join(run_dir, "env.txt")
-    if os.path.isfile(_envp):
-        _m = re.search(r"\bseq=(\d+)", open(_envp, errors="replace").read())
-        if _m:
-            seq = int(_m.group(1))
-    n = len(times)
-    mean_t = sum(times) / n if n else float("nan")
-    med_t = sorted(times)[n // 2] if n else float("nan")
-    mean_tf = sum(tfs) / len(tfs) if tfs else float("nan")
-    # stalls: steady iters > 3x the median (the untrained-router hang signature)
-    stalls = sum(1 for t in times if t == t and med_t == med_t and t > 3 * med_t) if n else 0
-    tok_s = (gbs * seq / mean_t) if (mean_t == mean_t and mean_t and gbs) else float("nan")
-    return {
-        "n_iters_total": len(iters),
-        "warmup_dropped": warmup,
-        "n_steady": n,
-        "mean_iter_s": mean_t,
-        "median_iter_s": med_t,
-        "tflops_per_gpu": mean_tf,
-        "global_batch": gbs,
-        "tok_s": tok_s,
-        "stalls": stalls,
-        "efa_ok": efa_ok,
-        "uccl_ok": uccl_ok,
-        "nvshmem_ok": nvshmem_ok,
-    }
+            found.append(json.loads(path.read_text()))
+        except (OSError, json.JSONDecodeError):
+            pass
+    return found
 
 
-def read_env(run_dir):
-    env = {}
-    p = os.path.join(run_dir, "env.txt")
-    if os.path.isfile(p):
-        for line in open(p, errors="replace"):
-            for tok in line.split():
-                if "=" in tok:
-                    k, v = tok.split("=", 1)
-                    env[k] = v
-    return env
-
-
-def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    warmup = WARMUP_DEFAULT
-    debug = "--debug" in sys.argv
-    if "--warmup" in sys.argv:
-        warmup = int(sys.argv[sys.argv.index("--warmup") + 1])
-    if not args:
-        sys.exit("usage: parse-runs.py <campaign_dir> [--warmup N] [--debug]")
-    campaign = args[0].rstrip("/")
-
-    rows = []
-    for logdir in sorted(glob.glob(os.path.join(campaign, "*", "*", "logs"))):
-        run_dir = os.path.dirname(logdir)
-        model = os.path.basename(os.path.dirname(run_dir))
-        tag = os.path.basename(run_dir)  # arm-mb<m>-ovl<on|off>
-        s = parse_run(run_dir, warmup, debug)
-        if s is None:
+def parse_run(run: Path, warmup: int) -> dict:
+    env = read_environment(run)
+    arm = env.get("ep_arm", run.name)
+    log_paths = sorted(run.glob("pod-logs/node-rank-*.log"))
+    text = "\n".join(path.read_text(errors="replace") for path in log_paths)
+    records: dict[int, dict[str, float]] = {}
+    for line in text.splitlines():
+        match = ITER.search(line)
+        if not match:
             continue
-        env = read_env(run_dir)
-        status = ""
-        sp = os.path.join(run_dir, "STATUS")
-        if os.path.isfile(sp):
-            status = open(sp).read().strip().replace("\n", " ")
-        # backend (uccl|nvshmem|"") labels the deepep transport for the 3-way comparison;
-        # arm_label is the full per-run label (e.g. deepep-nvshmem-ep32). Both come from
-        # env.txt (older runs without them fall back to deriving from the run tag).
-        rows.append({
-            "model": model, "run": tag,
-            "arm": env.get("arm", tag.split("-")[0]),
-            "arm_label": env.get("arm_label", tag.split("-mb")[0]),
-            "backend": env.get("ep_backend", ""),
-            "ep": env.get("EP", ""),
-            "mb": env.get("mb", ""), "overlap": env.get("overlap", ""),
-            "mean_iter_s": "%.4f" % s["mean_iter_s"],
-            "median_iter_s": "%.4f" % s["median_iter_s"],
-            "tflops_per_gpu": "%.2f" % s["tflops_per_gpu"],
-            "tok_s": "%.1f" % s["tok_s"],
-            "stalls": s["stalls"], "n_steady": s["n_steady"],
-            "efa_ok": s["efa_ok"], "uccl_ok": s["uccl_ok"], "nvshmem_ok": s["nvshmem_ok"],
-            "git_rev": env.get("git_rev", ""), "status": status,
-        })
+        iteration = int(match.group(1))
+        record = records.setdefault(iteration, {})
+        for name, regex in (("time_ms", TIME_MS), ("loss", LOSS), ("gradient_norm", GRAD), ("tflops", TFLOPS)):
+            value = regex.search(line)
+            if value:
+                record[name] = float(value.group(1))
 
-    if not rows:
-        sys.exit("no runs with logs/rank-0.log found under %s" % campaign)
-    cols = ["model", "run", "arm", "arm_label", "backend", "ep", "mb", "overlap",
-            "mean_iter_s", "median_iter_s", "tflops_per_gpu", "tok_s", "stalls",
-            "n_steady", "efa_ok", "uccl_ok", "nvshmem_ok", "git_rev", "status"]
-    idx = os.path.join(campaign, "index.csv")
-    with open(idx, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=cols)
-        w.writeheader()
-        w.writerows(rows)
-    sys.stderr.write("wrote %s (%d runs)\n" % (idx, len(rows)))
-    # echo a readable table to stdout (one shared fmt so header and rows always align)
-    _FMT = "%-10s %-28s %8s %9s %10s %10s %6s %6s %9s"
-    print(_FMT % ("model", "run", "backend", "mean_s", "tflop/gpu", "tok/s", "efa", "stalls", "transport"))
-    for r in rows:
-        transport = "uccl" if r["uccl_ok"] else ("nvshmem" if r["nvshmem_ok"] else "-")
-        print(_FMT % (r["model"], r["run"], r["backend"] or "-", r["mean_iter_s"],
-                      r["tflops_per_gpu"], r["tok_s"], r["efa_ok"], r["stalls"], transport))
+    ordered = [(iteration, records[iteration]) for iteration in sorted(records)]
+    steady = [record for iteration, record in ordered if iteration > warmup]
+    times = [record["time_ms"] for record in steady if "time_ms" in record]
+    losses = [record["loss"] for _, record in ordered if "loss" in record]
+    gradients = [record["gradient_norm"] for _, record in ordered if "gradient_norm" in record]
+    tflops = [record["tflops"] for record in steady if "tflops" in record]
+    manifests = runtime_manifests(run)
+
+    identity = bool(manifests) and all(item.get("ep_arm") == arm and item.get("backend_identity", {}).get("ep_arm") == arm for item in manifests)
+    single_nccl = bool(manifests) and all(item.get("single_nccl") is True for item in manifests)
+    build_runtime = bool(manifests) and all(item.get("nccl_build_runtime_match") is True for item in manifests)
+    efa_manifest = bool(manifests) and all("provider: efa" in item.get("efa_devices", "").lower() for item in manifests)
+    validity = {
+        "image_identity": identity and marker(text, r"EP_IMAGE_IDENTITY_OK|EP_BACKEND_REQUEST"),
+        "elastic_buffer": marker(text, r"buffer=ElasticBuffer|DEEPEP_V2_IMPORT_OK ElasticBuffer=true"),
+        "deepep_v2_manager": marker(text, r"manager=_DeepepV2Manager"),
+        "single_nccl": single_nccl,
+        "nccl_build_runtime_match": build_runtime,
+        "gin_type_5": bool(manifests) and all(item.get("environment", {}).get("NCCL_GIN_TYPE") == "5" for item in manifests),
+        "gdaki_context": marker(text, r"GIN GDAKI:\s*createContext done|GDAKI.*createContext.*done"),
+        "efa": efa_manifest and marker(text, r"Selected provider is efa|NET/OFI.*efa|provider: efa"),
+        "no_token_drop": marker(text, r"NO_TOKEN_DROP_CONFIG capacity_factor=None token_dropping=False"),
+        "finite_loss": finite(losses),
+        "finite_gradient": finite(gradients),
+    }
+    required = ["image_identity", "single_nccl", "nccl_build_runtime_match", "efa", "no_token_drop", "finite_loss", "finite_gradient"]
+    if arm == "deepep-v2-gin-gda":
+        required.extend(["elastic_buffer", "deepep_v2_manager", "gin_type_5", "gdaki_context"])
+    status_file = (run / "STATUS").read_text(errors="replace") if (run / "STATUS").exists() else ""
+    complete = status_file.startswith("PASS")
+    status = "PASS" if complete and all(validity[name] for name in required) else ("INVALID" if complete else "FAIL")
+    median_ms = statistics.median(times) if times else math.nan
+    global_batch = int(env.get("global_batch_samples", "0"))
+    sequence = int(env.get("sequence_length_tokens", "0"))
+    metrics = {
+        "steady_iteration_time_ms": median_ms,
+        "tokens_per_second": global_batch * sequence * 1000.0 / median_ms if median_ms > 0 else math.nan,
+        "tflops_per_gpu": statistics.mean(tflops) if tflops else math.nan,
+        "steady_iterations": len(times),
+        "loss_last": losses[-1] if losses else math.nan,
+        "gradient_norm_last": gradients[-1] if gradients else math.nan,
+    }
+    cell = env.get("cell", run.parent.parent.name)
+    repeat_text = env.get("repeat", run.parent.name.removeprefix("repeat-"))
+    result = {
+        "schema_version": 1,
+        "campaign_id": env.get("campaign_id", "unknown"),
+        "model": "kimi-k2",
+        "cell": cell,
+        "repeat": int(repeat_text),
+        "ep_arm": arm,
+        "status": status,
+        "metrics": metrics,
+        "validity": validity,
+        "required_validity_gates": required,
+        "artifacts": {"run_directory": str(run), "pod_logs": len(log_paths), "runtime_manifests": len(manifests)},
+    }
+    (run / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True, allow_nan=True) + "\n")
+    return result
+
+
+def bootstrap_ci(values: list[float], samples: int = 10000) -> list[float] | None:
+    if not values:
+        return None
+    rng = random.Random(1234)
+    draws = []
+    for _ in range(samples):
+        draws.append(statistics.mean(rng.choice(values) for _ in values))
+    draws.sort()
+    return [draws[int(0.025 * samples)], draws[int(0.975 * samples)]]
+
+
+def summarize(results: list[dict]) -> dict:
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for result in results:
+        if result["status"] == "PASS":
+            groups.setdefault((result["cell"], result["ep_arm"]), []).append(result)
+    cells: dict[str, dict] = {}
+    for (cell, arm), items in sorted(groups.items()):
+        values = [item["metrics"]["steady_iteration_time_ms"] for item in items]
+        mean = statistics.mean(values)
+        cv = statistics.stdev(values) / mean if len(values) > 1 and mean else 0.0
+        cells.setdefault(cell, {})[arm] = {
+            "independent_job_starts": len(values),
+            "median_of_run_medians_ms": statistics.median(values),
+            "run_to_run_cv_dimensionless": cv,
+        }
+    paired: dict[str, dict] = {}
+    for cell in cells:
+        baseline = {item["repeat"]: item for item in groups.get((cell, "nccl-alltoall"), [])}
+        for arm in ("uccl", "deepep-v1-nvshmem", "deepep-v2-gin-gda"):
+            treatment = {item["repeat"]: item for item in groups.get((cell, arm), [])}
+            deltas = []
+            for repeat in sorted(set(baseline) & set(treatment)):
+                base = baseline[repeat]["metrics"]["steady_iteration_time_ms"]
+                value = treatment[repeat]["metrics"]["steady_iteration_time_ms"]
+                deltas.append((base - value) / base * 100.0)
+            paired.setdefault(cell, {})[arm] = {
+                "paired_speedup_percent": statistics.mean(deltas) if deltas else None,
+                "bootstrap_95_percent_ci": bootstrap_ci(deltas),
+                "paired_repeats": len(deltas),
+            }
+    return {"cells": cells, "paired_vs_nccl_alltoall": paired}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("campaign")
+    parser.add_argument("--warmup", type=int, default=8)
+    parser.add_argument("--output")
+    args = parser.parse_args()
+    root = Path(args.campaign)
+    runs = sorted(path for path in root.glob("*/repeat-*/*") if path.is_dir())
+    results = [parse_run(path, args.warmup) for path in runs]
+    document = {
+        "schema_version": 1,
+        "campaign_root": str(root),
+        "campaign_tree_sha256": hashlib.sha256("\n".join(str(path) for path in runs).encode()).hexdigest(),
+        "runs": results,
+        "summary": summarize(results),
+    }
+    rendered = json.dumps(document, indent=2, sort_keys=True, allow_nan=True) + "\n"
+    if args.output:
+        Path(args.output).write_text(rendered)
+    print(rendered, end="")
 
 
 if __name__ == "__main__":
