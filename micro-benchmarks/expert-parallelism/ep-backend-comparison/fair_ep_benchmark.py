@@ -32,6 +32,22 @@ RESULT_PREFIX = "ADAI_FAIR_RESULT "
 SCHEMA_VERSION = 1
 
 
+def deepep_v2_build_lib(root: Path = Path("/opt/amazon/deepep-v2")) -> Path:
+    """Locate the single built DeepEP V2 package containing its C extension."""
+
+    candidates = [
+        path
+        for path in sorted((root / "build").glob("lib.*"))
+        if any((path / "deep_ep").glob("_C*.so"))
+    ]
+    if len(candidates) != 1:
+        rendered = ", ".join(str(path) for path in candidates) or "none"
+        raise RuntimeError(
+            f"expected exactly one built DeepEP V2 package, found: {rendered}"
+        )
+    return candidates[0]
+
+
 def percentile(values: list[float], quantile: float) -> float:
     """Return a linearly interpolated percentile without a NumPy dependency."""
 
@@ -208,7 +224,7 @@ class BackendAdapter:
                 allow_mnnvl=False,
             )
         elif arm == "deepep-v2-gin-gda":
-            sys.path.insert(0, "/opt/amazon/deepep-v2")
+            sys.path.insert(0, str(deepep_v2_build_lib()))
             import deep_ep  # type: ignore[import-not-found]
             from deep_ep.utils.math import (  # type: ignore[import-not-found]
                 per_token_cast_back,

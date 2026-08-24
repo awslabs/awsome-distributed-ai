@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 try:
@@ -52,6 +53,20 @@ class FairEpBenchmarkTest(unittest.TestCase):
     def test_percentile_interpolates(self):
         self.assertEqual(MODULE.percentile([1.0, 2.0, 3.0], 0.5), 2.0)
         self.assertAlmostEqual(MODULE.percentile([1.0, 2.0], 0.95), 1.95)
+
+    def test_deepep_v2_build_lib_requires_one_extension_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "build" / "lib.linux-x86_64-cpython-312" / "deep_ep"
+            package.mkdir(parents=True)
+            (package / "_C.cpython-312-x86_64-linux-gnu.so").touch()
+            self.assertEqual(MODULE.deepep_v2_build_lib(root), package.parent)
+
+            second = root / "build" / "lib.second" / "deep_ep"
+            second.mkdir(parents=True)
+            (second / "_C.so").touch()
+            with self.assertRaisesRegex(RuntimeError, "exactly one"):
+                MODULE.deepep_v2_build_lib(root)
 
 
 if __name__ == "__main__":
