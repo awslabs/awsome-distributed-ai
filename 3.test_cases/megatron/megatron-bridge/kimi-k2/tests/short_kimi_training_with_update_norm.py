@@ -145,16 +145,111 @@ class SampledOptimizerUpdate(Callback):
             )
 
 
+class RouteTrace(Callback):
+    """Attach MCore's router tracer to the Bridge-owned training loop."""
+
+    def __init__(self, output_dir: str, max_steps: int) -> None:
+        if max_steps <= 0:
+            raise ValueError("route trace max_steps must be positive")
+        self.output_dir = output_dir
+        self.max_steps = max_steps
+        self.completed_steps = 0
+
+    def on_train_start(self, context: CallbackContext) -> None:
+        from megatron.core.transformer.moe.router_trace import (
+            get_moe_router_tracer,
+            init_moe_router_tracer,
+        )
+
+        if get_moe_router_tracer() is not None:
+            raise RuntimeError("an MoE router tracer is already active")
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        init_moe_router_tracer(
+            output_dir=self.output_dir,
+            max_steps=self.max_steps,
+            rank=rank,
+            training_mode=True,
+        )
+        tracer = get_moe_router_tracer()
+        if tracer is None:
+            raise RuntimeError("MCore did not initialize the MoE router tracer")
+        tracer.register_hooks(context.model)
+        hook_count = len(tracer._hook_handles)
+        if hook_count == 0:
+            raise RuntimeError("MoE router tracer found no TopKRouter modules")
+        if rank == 0:
+            print(
+                "ROUTER_TRACE_ACTIVE "
+                + json.dumps(
+                    {
+                        "max_steps": self.max_steps,
+                        "output_dir": self.output_dir,
+                        "router_hooks": hook_count,
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+
+    def on_train_step_end(self, context: CallbackContext) -> None:
+        if self.completed_steps >= self.max_steps:
+            return
+        from megatron.core.transformer.moe.router_trace import get_moe_router_tracer
+
+        tracer = get_moe_router_tracer()
+        if tracer is None:
+            raise RuntimeError("MoE router tracer disappeared during training")
+        tracer.advance_step(int(context.state.train_state.step))
+        self.completed_steps += 1
+
+    def on_train_end(self, context: CallbackContext) -> None:
+        del context
+        from megatron.core.transformer.moe.router_trace import get_moe_router_tracer
+
+        tracer = get_moe_router_tracer()
+        if tracer is None:
+            raise RuntimeError("MoE router tracer is missing at train end")
+        tracer.flush()
+        trace_path = Path(tracer.output_path)
+        records = sum(1 for line in trace_path.read_text().splitlines() if line.strip())
+        if records == 0:
+            raise RuntimeError(f"MoE router trace is empty: {trace_path}")
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        if rank == 0:
+            print(
+                "ROUTER_TRACE_COMPLETE "
+                + json.dumps(
+                    {
+                        "completed_steps": self.completed_steps,
+                        "records": records,
+                        "trace_path": str(trace_path),
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+
+
 def main() -> None:
     benchmark = load_benchmark()
     config = benchmark.build_config()
     if hasattr(config, "logger") and hasattr(config.logger, "log_params_norm"):
         config.logger.log_params_norm = True
     sample_elements = int(os.environ.get("UPDATE_NORM_SAMPLE_ELEMENTS", "262144"))
+    callbacks: list[Callback] = []
+    route_trace_dir = os.environ.get("ROUTER_TRACE_DIR")
+    if route_trace_dir:
+        callbacks.append(
+            RouteTrace(
+                route_trace_dir,
+                int(os.environ.get("ROUTER_TRACE_MAX_TRAINING_ITERS", "1")),
+            )
+        )
+    callbacks.append(SampledOptimizerUpdate(sample_elements))
     pretrain(
         config=config,
         forward_step_func=forward_step,
-        callbacks=[SampledOptimizerUpdate(sample_elements)],
+        callbacks=callbacks,
     )
 
 
