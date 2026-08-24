@@ -33,8 +33,12 @@ import hashlib
 import json
 import logging
 import os
+from pathlib import Path
 
 import torch
+import torch.distributed as dist
+
+from megatron.bridge.training.callbacks import Callback, CallbackContext
 
 logger = logging.getLogger("bench_kimi_k2_pretrain")
 logging.basicConfig(level=logging.INFO)
@@ -46,6 +50,197 @@ HF_REVISION = os.environ.get("KIMI_K2_REVISION", "ce72df012259dcc55d945e890f815f
 
 def _int(name: str, default: int) -> int:
     return int(os.environ.get(name, str(default)))
+
+
+class RuntimeDispatcherIdentity(Callback):
+    """Fail closed unless the built model owns the requested dispatcher objects."""
+
+    def __init__(self) -> None:
+        self.elastic_buffer_observed = False
+
+    @staticmethod
+    def _model_chunks(context: CallbackContext):
+        if isinstance(context.model, (list, tuple)):
+            return context.model
+        return [context.model]
+
+    def on_train_start(self, context: CallbackContext) -> None:
+        from megatron.core.transformer.moe.token_dispatcher import (
+            MoEFlexTokenDispatcher,
+            _DeepepManager,
+            _DeepepV2Manager,
+        )
+
+        arm = os.environ["EP_ARM"]
+        dispatchers = [
+            module
+            for chunk in self._model_chunks(context)
+            for module in chunk.modules()
+            if isinstance(module, MoEFlexTokenDispatcher)
+        ]
+        managers = [dispatcher._comm_manager for dispatcher in dispatchers]
+        if arm == "nccl-alltoall":
+            if dispatchers:
+                raise RuntimeError(
+                    f"legacy all-to-all arm unexpectedly built {len(dispatchers)} flex dispatchers"
+                )
+            expected_manager = None
+        elif arm in ("uccl", "deepep-v1-nvshmem"):
+            expected_manager = _DeepepManager
+        elif arm == "deepep-v2-gin-gda":
+            expected_manager = _DeepepV2Manager
+        else:
+            raise RuntimeError(f"unknown EP_ARM during runtime inspection: {arm}")
+
+        if expected_manager is not None:
+            if not managers:
+                raise RuntimeError(f"{arm} built no MoEFlexTokenDispatcher instances")
+            wrong = [
+                type(manager).__name__
+                for manager in managers
+                if not isinstance(manager, expected_manager)
+            ]
+            if wrong:
+                raise RuntimeError(
+                    f"{arm} selected unexpected flex managers: expected={expected_manager.__name__} actual={wrong}"
+                )
+
+        group_sizes = sorted(
+            {dist.get_world_size(manager.group) for manager in managers if hasattr(manager, "group")}
+        )
+        if managers:
+            expected_group_size = _int("EXPERT_PARALLEL", 32)
+            if group_sizes != [expected_group_size]:
+                raise RuntimeError(
+                    f"expert dispatcher group drift: expected={[expected_group_size]} actual={group_sizes}"
+                )
+        payload = {
+            "arm": arm,
+            "dispatcher_instances_on_rank": len(dispatchers),
+            "group_sizes": group_sizes,
+            "manager": expected_manager.__name__ if expected_manager is not None else None,
+        }
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            print("RUNTIME_DISPATCHER_IDENTITY " + json.dumps(payload, sort_keys=True), flush=True)
+            if expected_manager is not None:
+                backend = "deepep_v2" if arm == "deepep-v2-gin-gda" else "deepep"
+                print(
+                    f"EP_BACKEND_IDENTITY backend={backend} "
+                    f"manager={expected_manager.__name__} group_size={group_sizes[0]}",
+                    flush=True,
+                )
+
+    def on_train_step_end(self, context: CallbackContext) -> None:
+        del context
+        if os.environ["EP_ARM"] != "deepep-v2-gin-gda" or self.elastic_buffer_observed:
+            return
+        import deep_ep
+        from megatron.core.transformer.moe import fused_a2a
+
+        buffers = list(fused_a2a._elastic_buffers.values())
+        if not buffers:
+            raise RuntimeError("DeepEP v2 completed a step without an ElasticBuffer instance")
+        if not all(isinstance(buffer, deep_ep.ElasticBuffer) for buffer in buffers):
+            raise RuntimeError(
+                "DeepEP v2 cache contains non-ElasticBuffer objects: "
+                f"{[type(value).__name__ for value in buffers]}"
+            )
+        self.elastic_buffer_observed = True
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            print(
+                f"ELASTIC_BUFFER_RUNTIME_IDENTITY buffer=ElasticBuffer instances={len(buffers)}",
+                flush=True,
+            )
+
+    def on_train_end(self, context: CallbackContext) -> None:
+        del context
+        if os.environ["EP_ARM"] == "deepep-v2-gin-gda" and not self.elastic_buffer_observed:
+            raise RuntimeError("DeepEP v2 training ended without runtime ElasticBuffer proof")
+
+
+class RouteTrace(Callback):
+    """Trace only discarded warmup routing while preserving a durable route hash."""
+
+    def __init__(self, output_dir: str, max_steps: int) -> None:
+        if max_steps <= 0:
+            raise ValueError("route trace max_steps must be positive")
+        self.output_dir = output_dir
+        self.max_steps = max_steps
+        self.completed_steps = 0
+
+    def on_train_start(self, context: CallbackContext) -> None:
+        from megatron.core.transformer.moe.router_trace import (
+            get_moe_router_tracer,
+            init_moe_router_tracer,
+        )
+
+        if get_moe_router_tracer() is not None:
+            raise RuntimeError("an MoE router tracer is already active")
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        init_moe_router_tracer(
+            output_dir=self.output_dir,
+            max_steps=self.max_steps,
+            rank=rank,
+            training_mode=True,
+        )
+        tracer = get_moe_router_tracer()
+        if tracer is None:
+            raise RuntimeError("MCore did not initialize the MoE router tracer")
+        tracer.register_hooks(context.model)
+        hook_count = len(tracer._hook_handles)
+        if hook_count == 0:
+            raise RuntimeError("MoE router tracer found no TopKRouter modules")
+        if rank == 0:
+            print(
+                "ROUTER_TRACE_ACTIVE "
+                + json.dumps(
+                    {
+                        "max_steps": self.max_steps,
+                        "output_dir": self.output_dir,
+                        "router_hooks": hook_count,
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+
+    def on_train_step_end(self, context: CallbackContext) -> None:
+        if self.completed_steps >= self.max_steps:
+            return
+        from megatron.core.transformer.moe.router_trace import get_moe_router_tracer
+
+        tracer = get_moe_router_tracer()
+        if tracer is None:
+            raise RuntimeError("MoE router tracer disappeared during training")
+        tracer.advance_step(int(context.state.train_state.step))
+        self.completed_steps += 1
+
+    def on_train_end(self, context: CallbackContext) -> None:
+        del context
+        from megatron.core.transformer.moe.router_trace import get_moe_router_tracer
+
+        tracer = get_moe_router_tracer()
+        if tracer is None:
+            raise RuntimeError("MoE router tracer is missing at train end")
+        tracer.flush()
+        trace_path = Path(tracer.output_path)
+        records = sum(1 for line in trace_path.read_text().splitlines() if line.strip())
+        if records == 0:
+            raise RuntimeError(f"MoE router trace is empty: {trace_path}")
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        if rank == 0:
+            print(
+                "ROUTER_TRACE_COMPLETE "
+                + json.dumps(
+                    {
+                        "completed_steps": self.completed_steps,
+                        "records": records,
+                        "trace_path": str(trace_path),
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
 
 
 def build_config():
@@ -150,11 +345,6 @@ def build_config():
     cfg.rng.seed = performance_seed
     if hasattr(cfg.dataset, "random_seed"):
         cfg.dataset.random_seed = performance_seed
-    route_trace = os.environ.get("ROUTER_TRACE_DIR")
-    if route_trace:
-        cfg.train.moe_routing_trace_path = route_trace
-        cfg.train.moe_routing_trace_max_training_iters = 1
-
     # 5) One explicit four-arm selector. Image identity is independent evidence that a
     # deepep-compatible import did not silently select the wrong implementation.
     arm = os.environ["EP_ARM"]
@@ -202,6 +392,35 @@ def build_config():
         m.expert_tensor_parallel_size,
         m.expert_model_parallel_size,
         m.expert_tensor_parallel_size * m.expert_model_parallel_size,
+    )
+    print(
+        "EP_BACKEND_REQUEST arm=%s dispatcher=%s backend=%s image_identity_sha256=%s"
+        % (
+            arm,
+            m.moe_token_dispatcher_type,
+            m.moe_flex_dispatcher_backend,
+            hashlib.sha256(identity_bytes).hexdigest(),
+        ),
+        flush=True,
+    )
+    print(
+        "NO_TOKEN_DROP_CONFIG capacity_factor=%r token_dropping=%r experts=%d topk=%d"
+        % (
+            getattr(m, "moe_expert_capacity_factor", None),
+            getattr(m, "moe_token_dropping", False),
+            m.num_moe_experts,
+            m.moe_router_topk,
+        ),
+        flush=True,
+    )
+    print(
+        "EXPERT_GROUP_EXPECTATION expert_tensor_parallel=%d expert_parallel=%d group_size=%d"
+        % (
+            m.expert_tensor_parallel_size,
+            m.expert_model_parallel_size,
+            m.expert_tensor_parallel_size * m.expert_model_parallel_size,
+        ),
+        flush=True,
     )
 
     # moe_shared_expert_overlap is alltoall-only; hold OFF on BOTH arms to isolate the dispatcher.
@@ -290,7 +509,16 @@ def main():
             return out, wrapped
 
     cfg = build_config()
-    pretrain(config=cfg, forward_step_func=fwd)
+    callbacks: list[Callback] = [RuntimeDispatcherIdentity()]
+    route_trace_dir = os.environ.get("ROUTER_TRACE_DIR")
+    if route_trace_dir:
+        callbacks.append(
+            RouteTrace(
+                route_trace_dir,
+                _int("ROUTER_TRACE_MAX_TRAINING_ITERS", 1),
+            )
+        )
+    pretrain(config=cfg, forward_step_func=fwd, callbacks=callbacks)
 
 
 if __name__ == "__main__":

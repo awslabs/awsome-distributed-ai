@@ -236,7 +236,7 @@ def main() -> None:
     if hasattr(config, "logger") and hasattr(config.logger, "log_params_norm"):
         config.logger.log_params_norm = True
     sample_elements = int(os.environ.get("UPDATE_NORM_SAMPLE_ELEMENTS", "262144"))
-    callbacks: list[Callback] = []
+    callbacks: list[Callback] = [benchmark.RuntimeDispatcherIdentity()]
     route_trace_dir = os.environ.get("ROUTER_TRACE_DIR")
     if route_trace_dir:
         callbacks.append(
