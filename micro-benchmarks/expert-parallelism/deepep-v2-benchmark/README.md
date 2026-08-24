@@ -1,22 +1,24 @@
 # DeepEP V2 Benchmark (NCCL GIN / EFA-GDA)
 
 [DeepEP](https://github.com/deepseek-ai/DeepEP) is a communication library for
-Mixture-of-Experts (MoE) **expert parallelism** — its dispatch and combine kernels perform the
+Mixture-of-Experts (MoE) **expert parallelism** where its dispatch and combine kernels perform the
 GPU all-to-all that routes tokens to experts and gathers the results back.
 
-This directory provides **[`setup_deepep_gin.sh`](./setup_deepep_gin.sh)**, which installs the
-**DeepEP V2** Python package — the version whose internode transport is **NCCL GIN
-(GPU-Initiated Networking)** — into your container or environment (for example a vLLM image
+This directory provides:
+
+- **[`setup_deepep_gin.sh`](./setup_deepep_gin.sh)**, which installs the
+**DeepEP V2** Python package, the version whose internode transport is **NCCL GIN
+(GPU-Initiated Networking)**, into your container or environment (for example a vLLM image
 that already ships a DeepEP): it uninstalls any existing `deep_ep`, validates that the NCCL it
 is pointed at is GIN-capable (`include/nccl_device.h`, errors out otherwise), and builds +
-installs DeepEP against your torch. No arguments needed for the default flow; see `--help`.
+installs DeepEP against your torch. No arguments needed for the default flow, see `--help`.
 
 Everything else here is reference material for using the script and testing that the
 installation works:
 
 - **[`deepep.Dockerfile`](./deepep.Dockerfile)** — a reference image showing the full stack the
-  script needs (EFA userspace, a GIN-capable NCCL, aws-ofi-nccl with the EFA-GDA backend,
-  torch), built from a bare CUDA base; it can also be used directly for testing.
+  script needs (the EFA installer, which bundles the EFA-GDA-capable aws-ofi-nccl plugin, a
+  GIN-capable NCCL, torch), built from a bare CUDA base; it can also be used directly for testing.
 - **[`slurm/`](./slurm/)** — launchers that run DeepEP's own `tests/elastic/test_ep.py` to
   validate the installation:
 
@@ -29,15 +31,15 @@ installation works:
 
 > - **NCCL >= 2.31** — the GIN device API (`nccl_device.h`) DeepEP V2 links against.
 >   The Dockerfile builds NCCL from source and fails the build if the header is missing.
-> - **EFA installer >= 1.50** — EFA-GDA requires **libfabric >= 2.5**; installers up to
->   1.49.0 ship libfabric 2.4 and will not work (the image build fails loudly on a
->   too-old installer).
-> - **aws-ofi-nccl built against that libfabric** — required for the **EFA-GDA** GIN backend
->   (GIN type 5) this benchmark measures. DeepEP's kernels can also run over the CPU-proxy
->   GIN backend, which has no such floor.
+> - **EFA installer >= 1.50** — provides everything EFA-GDA needs in the container (the
+>   userspace runtime and the aws-ofi-nccl plugin with the EFA-GDA GIN backend, type 5,
+>   this benchmark measures). Installers up to 1.49.0 will not work; the image build fails
+>   loudly on a too-old installer. DeepEP's kernels can also run over the CPU-proxy GIN
+>   backend, which has no such floor.
 > - A host EFA kernel driver **>= 3.3.0**, the first release with the completion-counter API
->   (`efadv_create_comp_cntr`). Check with `modinfo efa | grep ^version`; stock AMIs may ship
->   older and need a driver upgrade. The container ships only the userspace stack.
+>   (`efadv_create_comp_cntr`). Run the EFA installer **on the node itself** (not in the
+>   container) to install/upgrade the kernel driver; the container ships only the userspace
+>   stack. Check with `modinfo efa | grep ^version`; stock AMIs may ship older.
 > - The **gdrcopy kernel module (`gdrdrv`) loaded on compute nodes** — the launchers
 >   bind-mount `/dev/gdrdrv`, and the plugin's GIN initialization opens a gdr handle.
 >   Check with `lsmod | grep gdrdrv`.
@@ -51,7 +53,7 @@ in two kinds: GPU-initiated ones, where the NIC work queues are mapped into GPU 
 kernels post RDMA themselves, and the CPU-proxy backend (available on EFA as well as IB/RoCE),
 where the GPU hands work to a proxy thread. On EFA, the **aws-ofi-nccl** plugin provides the
 GPU-initiated backend, **EFA-GDA** (GIN type 5). The launchers pin `NCCL_GIN_TYPE=5` to select
-it; left unset, NCCL selects the CPU-proxy backend.
+it, if left unset, NCCL selects the CPU-proxy backend when running on EFA.
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
@@ -79,7 +81,11 @@ it; left unset, NCCL selects the CPU-proxy backend.
 
 The script refuses to run if the NCCL at `--nccl-root` lacks the GIN device API, so it cannot
 silently produce a DeepEP that falls back to a slower path. Runtime still requires the
-aws-ofi-nccl GIN plugin built with EFA-GDA support.
+EFA-GDA-capable aws-ofi-nccl GIN plugin (bundled with EFA installer >= 1.50): run the EFA
+installer **inside your container** too (with `--skip-kmod`, as the reference Dockerfile does)
+to provide the userspace stack and the plugin, then point `NCCL_NET_PLUGIN` and
+`NCCL_GIN_PLUGIN` at `/opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so`. The host installer run
+(previous section) provides only the kernel driver.
 
 ## Building the reference image
 

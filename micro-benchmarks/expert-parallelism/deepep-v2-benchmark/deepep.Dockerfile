@@ -16,9 +16,9 @@ ARG TORCH_VERSION=2.11.0
 ARG TORCH_CUDA_INDEX=cu130
 ARG GDRCOPY_VERSION=v2.5.2
 
-# EFA installer: provides OpenMPI, the EFA userspace runtime, and libfabric.
-# EFA-GDA requires libfabric >= 2.5, so installer >= 1.50 is required (1.49.0 and
-# older ship libfabric 2.4; the build fails loudly on a too-old installer).
+# EFA installer: provides the complete EFA userspace stack (OpenMPI, the EFA
+# runtime, and the aws-ofi-nccl plugin). EFA-GDA requires installer >= 1.50;
+# the build fails loudly on a too-old installer (plugin gate below).
 # EFA_INSTALLER_TARBALL overrides the download with a local tarball staged next
 # to this Dockerfile.
 ARG EFA_INSTALLER_VERSION=1.50.0
@@ -28,14 +28,6 @@ ARG EFA_INSTALLER_TARBALL=
 # the upstream fork + staging branch (see build instructions in README.md).
 ARG NCCL_REPO=https://github.com/NVIDIA/nccl.git
 ARG NCCL_REF=v2.31.2-1
-
-# aws-ofi-nccl: built from source at a pinned tag so the plugin version is
-# controlled by this file rather than by whatever the EFA installer bundles.
-# EFA-GDA is auto-detected by configure from
-# the libfabric >= 2.5 GDA ops + hardware counters + CUDA; the build gate below
-# fails the image if the detection did not fire.
-ARG AWS_OFI_NCCL_REPO=https://github.com/aws/aws-ofi-nccl.git
-ARG AWS_OFI_NCCL_REF=v1.21.1
 
 # DeepEP V2. The repo is pinned to amazon-contributing/DeepEP inside
 # setup_deepep_gin.sh; only the ref is overridable.
@@ -110,9 +102,9 @@ RUN --mount=type=bind,target=/ctx \
     && cd aws-efa-installer \
     && ./efa_installer.sh --disable-ngc -y --skip-kmod --skip-limit-conf --no-verify \
     && ldconfig \
-    && FI_VER=$(/opt/amazon/efa/bin/fi_info --version | grep -oP "libfabric: \K[0-9]+\.[0-9]+") \
-    && { [ "$(printf "%s\n2.5\n" "$FI_VER" | sort -V | head -1)" = "2.5" ] \
-         || { echo "ERROR: installer libfabric $FI_VER < 2.5; EFA-GDA requires >= 2.5 (use installer >= 1.50)" >&2; exit 1; }; } \
+    && { nm -D /opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so 2>/dev/null | grep -qw ncclGinPlugin_v14 \
+         && echo "OK: bundled plugin is EFA-GDA-capable (ncclGinPlugin_v14 present)" \
+         || { echo "ERROR: installer's plugin has no ncclGinPlugin_v14 export: EFA-GDA requires installer >= 1.50" >&2; exit 1; }; } \
     && rm -rf /tmp/aws-efa-installer* /var/lib/apt/lists/*
 ENV LD_LIBRARY_PATH=/opt/amazon/openmpi/lib:$LD_LIBRARY_PATH
 ENV PATH=/opt/amazon/openmpi/bin:/opt/amazon/efa/bin:$PATH
@@ -128,34 +120,11 @@ RUN git clone ${NCCL_REPO} /opt/nccl \
        || (echo "ERROR: nccl_device.h missing -- this NCCL is not GIN-capable" >&2 && exit 1)
 ENV LD_LIBRARY_PATH="${NCCL_HOME}/lib:${LD_LIBRARY_PATH}"
 
-## aws-ofi-nccl. EFA-GDA support is auto-detected by configure from the libfabric
-## above; the ncclGinPlugin_v14 export check makes the detection authoritative
-## (v11/v13 op-tables are exported by every build; the v14 table is EFA-GDA-only).
-ENV OFI_HOME=/opt/aws-ofi-nccl
-RUN set -e; \
-    git clone --recursive ${AWS_OFI_NCCL_REPO} /tmp/aws-ofi-nccl \
-    && cd /tmp/aws-ofi-nccl \
-    && git checkout ${AWS_OFI_NCCL_REF} \
-    && git submodule sync && git submodule update --init --recursive \
-    && ./autogen.sh \
-    && { ./configure \
-        --prefix=${OFI_HOME} \
-        --with-mpi=/opt/amazon/openmpi \
-        --with-libfabric=${EFA_PREFIX} \
-        --with-nccl=${NCCL_HOME} \
-        --with-cuda=${CUDA_HOME} \
-        --with-gdrcopy=${GDRCOPY_PREFIX} \
-        --enable-platform-aws \
-      || { tail -n 160 config.log 2>/dev/null; exit 1; }; } \
-    && make -j"$(nproc)" \
-    && make install \
-    && if nm -D "${OFI_HOME}/lib/libnccl-net-ofi.so" 2>/dev/null | grep -qw ncclGinPlugin_v14; then \
-         echo "OK: EFA-GDA (ncclGinPlugin_v14) present"; \
-       else \
-         echo "ERROR: no ncclGinPlugin_v14 export -- configure did not detect EFA-GDA (libfabric >= 2.5 with hw counters + CUDA required)" >&2; exit 1; \
-       fi \
-    && echo "${OFI_HOME}/lib" > /etc/ld.so.conf.d/aws-ofi-nccl.conf && ldconfig \
-    && rm -rf /tmp/aws-ofi-nccl
+## aws-ofi-nccl: the EFA installer (>= 1.50) bundles the plugin with EFA-GDA
+## support; the installer layer above gates on the plugin's ncclGinPlugin_v14
+## export (v11/v13 op-tables are exported by every build; the v14 table is
+## EFA-GDA-only), so a too-old installer fails that layer immediately.
+ENV OFI_HOME=/opt/amazon/ofi-nccl
 ENV LD_LIBRARY_PATH="${OFI_HOME}/lib:${LD_LIBRARY_PATH}"
 ENV NCCL_NET_PLUGIN="${OFI_HOME}/lib/libnccl-net-ofi.so"
 ENV NCCL_GIN_PLUGIN="${OFI_HOME}/lib/libnccl-net-ofi.so"
