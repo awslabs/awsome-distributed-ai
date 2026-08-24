@@ -1,0 +1,473 @@
+{
+  "bootstrap_samples_dimensionless": 20000,
+  "campaign_provenance": {
+    "campaign_id": "fair-ep-b200-20260824t195145z",
+    "cluster": "ml-clusters-shared-ap-south-1",
+    "comparison": {
+      "experts": 256,
+      "hidden_dimensions": 7168,
+      "independent_starts": 3,
+      "measured_iterations": 100,
+      "tokens_per_rank": 128,
+      "top_k_dimensionless": 8,
+      "warmup_iterations": 20
+    },
+    "created_at_utc": "2026-08-24T21:33:19Z",
+    "git_commit": "249f9e53113cf7706813b19520ddba2c2983e7d6",
+    "images": {
+      "deepep-v1-nvshmem": "159553542841.dkr.ecr.ap-south-1.amazonaws.com/adai/dsv3-ep-backend-comparison-deepep-v1-nvshmem@sha256:175a8470e11bc7832024941d1775923d5e8ecae2c6dc06183d5f1653d66b4fac",
+      "deepep-v2-gin-gda": "159553542841.dkr.ecr.ap-south-1.amazonaws.com/adai/dsv3-ep-backend-comparison-deepep-v2-gin-gda@sha256:4d07367ea290c5d6ec3c02b223ac819feed5240a46fd4a6492421e9c0853dbeb",
+      "uccl": "159553542841.dkr.ecr.ap-south-1.amazonaws.com/adai/dsv3-ep-backend-comparison-uccl@sha256:a703a0d35916bbd51b2d34d968626d9617cbceb328d64b920f21ad159d93c91a"
+    },
+    "region": "ap-south-1"
+  },
+  "cells": [
+    {
+      "arms": {
+        "deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_latency_ms": [
+            1.0167359709739685,
+            1.0202720165252686
+          ],
+          "median_aggregate_input_tokens_per_second": 2011977.5863053314,
+          "median_effective_logical_gigabytes_per_second_per_rank": 21.85812449762112,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 10.92906224881056,
+          "median_latency_ms": 1.017903983592987,
+          "per_start_median_latency_ms": [
+            1.017903983592987,
+            1.0167359709739685,
+            1.0202720165252686
+          ],
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3
+          ],
+          "run_to_run_cv_percent": 0.17692560833015608,
+          "starts": 3
+        },
+        "deepep-v2-gin-gda": {
+          "bootstrap_95_percent_ci_latency_ms": [
+            0.6179679930210114,
+            0.6375360190868378
+          ],
+          "median_aggregate_input_tokens_per_second": 3293197.584829476,
+          "median_effective_logical_gigabytes_per_second_per_rank": 35.777298561587436,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 17.888649280793718,
+          "median_latency_ms": 0.6218879818916321,
+          "per_start_median_latency_ms": [
+            0.6375360190868378,
+            0.6179679930210114,
+            0.6218879818916321
+          ],
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3
+          ],
+          "run_to_run_cv_percent": 1.6544046759560789,
+          "starts": 3
+        },
+        "uccl": {
+          "bootstrap_95_percent_ci_latency_ms": [
+            0.5190079808235168,
+            0.5276960134506226
+          ],
+          "median_aggregate_input_tokens_per_second": 3928790.5148029686,
+          "median_effective_logical_gigabytes_per_second_per_rank": 42.68238015281945,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 21.341190076409724,
+          "median_latency_ms": 0.5212800204753876,
+          "per_start_median_latency_ms": [
+            0.5190079808235168,
+            0.5276960134506226,
+            0.5212800204753876
+          ],
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3
+          ],
+          "run_to_run_cv_percent": 0.8620724389950091,
+          "starts": 3
+        }
+      },
+      "comparisons": {
+        "deepep-v2-gin-gda_vs_deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_reduction_percent": [
+            37.36776460619894,
+            39.22040621528938
+          ],
+          "direction_supported": true,
+          "median_paired_latency_reduction_percent": 39.04684517276182,
+          "paired_latency_reduction_percent_per_start": [
+            37.36776460619894,
+            39.22040621528938,
+            39.04684517276182
+          ]
+        },
+        "deepep-v2-gin-gda_vs_uccl": {
+          "bootstrap_95_percent_ci_reduction_percent": [
+            -22.837421126983617,
+            -17.10681477013578
+          ],
+          "direction_supported": true,
+          "median_paired_latency_reduction_percent": -19.300176002236547,
+          "paired_latency_reduction_percent_per_start": [
+            -22.837421126983617,
+            -17.10681477013578,
+            -19.300176002236547
+          ]
+        }
+      },
+      "dispatch_dtype": "fp8",
+      "input_hash_sha256": "829eba61c7ee2f8a7ff38ac4a993ee4508b1d7e6dd1e2182be31943d13e58ed2",
+      "route_hash_sha256": "2faaa30925b7e296347a15963d52ab5f828cccbced161eac81c84c3134f26884",
+      "world_size_ranks": 16
+    },
+    {
+      "arms": {
+        "deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_latency_ms": [
+            1.0250880122184753,
+            1.0304319858551025
+          ],
+          "median_aggregate_input_tokens_per_second": 1988936.5642491602,
+          "median_effective_logical_gigabytes_per_second_per_rank": 28.51339458507596,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 14.25669729253798,
+          "median_latency_ms": 1.029695987701416,
+          "per_start_median_latency_ms": [
+            1.0304319858551025,
+            1.0250880122184753,
+            1.029695987701416
+          ],
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3
+          ],
+          "run_to_run_cv_percent": 0.2816354149488261,
+          "starts": 3
+        },
+        "deepep-v2-gin-gda": {
+          "bootstrap_95_percent_ci_latency_ms": [
+            0.48263999819755554,
+            0.504287987947464
+          ],
+          "median_aggregate_input_tokens_per_second": 4222332.229970289,
+          "median_effective_logical_gigabytes_per_second_per_rank": 60.53135484885407,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 30.265677424427036,
+          "median_latency_ms": 0.48503999412059784,
+          "per_start_median_latency_ms": [
+            0.504287987947464,
+            0.48503999412059784,
+            0.48263999819755554
+          ],
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3
+          ],
+          "run_to_run_cv_percent": 2.418493715218177,
+          "starts": 3
+        },
+        "uccl": {
+          "bootstrap_95_percent_ci_latency_ms": [
+            0.5917760133743286,
+            0.5978399813175201
+          ],
+          "median_aggregate_input_tokens_per_second": 3459365.896020597,
+          "median_effective_logical_gigabytes_per_second_per_rank": 49.59346948535127,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 24.796734742675635,
+          "median_latency_ms": 0.5920160114765167,
+          "per_start_median_latency_ms": [
+            0.5920160114765167,
+            0.5978399813175201,
+            0.5917760133743286
+          ],
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3
+          ],
+          "run_to_run_cv_percent": 0.5782085314350778,
+          "starts": 3
+        }
+      },
+      "comparisons": {
+        "deepep-v2-gin-gda_vs_deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_reduction_percent": [
+            51.06052656847785,
+            53.12791309647133
+          ],
+          "direction_supported": true,
+          "median_paired_latency_reduction_percent": 52.6830878579017,
+          "paired_latency_reduction_percent_per_start": [
+            51.06052656847785,
+            52.6830878579017,
+            53.12791309647133
+          ]
+        },
+        "deepep-v2-gin-gda_vs_uccl": {
+          "bootstrap_95_percent_ci_reduction_percent": [
+            14.818522105551635,
+            18.86792297636796
+          ],
+          "direction_supported": true,
+          "median_paired_latency_reduction_percent": 18.442115379850478,
+          "paired_latency_reduction_percent_per_start": [
+            14.818522105551635,
+            18.86792297636796,
+            18.442115379850478
+          ]
+        }
+      },
+      "dispatch_dtype": "bf16",
+      "input_hash_sha256": "829eba61c7ee2f8a7ff38ac4a993ee4508b1d7e6dd1e2182be31943d13e58ed2",
+      "route_hash_sha256": "2faaa30925b7e296347a15963d52ab5f828cccbced161eac81c84c3134f26884",
+      "world_size_ranks": 16
+    },
+    {
+      "arms": {
+        "deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_latency_ms": [
+            1.55131196975708,
+            1.5627520084381104
+          ],
+          "median_aggregate_input_tokens_per_second": 2635371.6483700224,
+          "median_effective_logical_gigabytes_per_second_per_rank": 14.315338793945964,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 10.736504095459473,
+          "median_latency_ms": 1.5542399883270264,
+          "per_start_median_latency_ms": [
+            1.5542399883270264,
+            1.5627520084381104,
+            1.55131196975708
+          ],
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3
+          ],
+          "run_to_run_cv_percent": 0.3819040831100996,
+          "starts": 3
+        },
+        "deepep-v2-gin-gda": {
+          "bootstrap_95_percent_ci_latency_ms": [
+            0.9216639995574951,
+            0.9674720168113708
+          ],
+          "median_aggregate_input_tokens_per_second": 4294725.449273138,
+          "median_effective_logical_gigabytes_per_second_per_rank": 23.32894864045168,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 17.496711480338764,
+          "median_latency_ms": 0.9537280201911926,
+          "per_start_median_latency_ms": [
+            0.9537280201911926,
+            0.9216639995574951,
+            0.9674720168113708
+          ],
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3
+          ],
+          "run_to_run_cv_percent": 2.4805943961903028,
+          "starts": 3
+        },
+        "uccl": {
+          "bootstrap_95_percent_ci_latency_ms": [
+            0.7640160024166107,
+            0.7714239954948425
+          ],
+          "median_aggregate_input_tokens_per_second": 5350835.031806838,
+          "median_effective_logical_gigabytes_per_second_per_rank": 29.065735892774743,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 21.799301919581055,
+          "median_latency_ms": 0.7654879987239838,
+          "per_start_median_latency_ms": [
+            0.7640160024166107,
+            0.7654879987239838,
+            0.7714239954948425
+          ],
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3
+          ],
+          "run_to_run_cv_percent": 0.5113275578246953,
+          "starts": 3
+        }
+      },
+      "comparisons": {
+        "deepep-v2-gin-gda_vs_deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_reduction_percent": [
+            37.635238064793164,
+            41.02301615477362
+          ],
+          "direction_supported": true,
+          "median_paired_latency_reduction_percent": 38.637016975880336,
+          "paired_latency_reduction_percent_per_start": [
+            38.637016975880336,
+            41.02301615477362,
+            37.635238064793164
+          ]
+        },
+        "deepep-v2-gin-gda_vs_uccl": {
+          "bootstrap_95_percent_ci_reduction_percent": [
+            -25.413783141496673,
+            -20.402148837584143
+          ],
+          "direction_supported": true,
+          "median_paired_latency_reduction_percent": -24.830895841777636,
+          "paired_latency_reduction_percent_per_start": [
+            -24.830895841777636,
+            -20.402148837584143,
+            -25.413783141496673
+          ]
+        }
+      },
+      "dispatch_dtype": "fp8",
+      "input_hash_sha256": "f60cdd82e9a2396f8e4ae7800e19205dd438d4a179b7d4185c479cf895ffacc3",
+      "route_hash_sha256": "96c8e609e9944e3b151c8ad8d4f5b52d102fbd4b2757f81cf65fe21b1cf7e0e2",
+      "world_size_ranks": 32
+    },
+    {
+      "arms": {
+        "deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_latency_ms": [
+            1.552623987197876,
+            1.5713760256767273
+          ],
+          "median_aggregate_input_tokens_per_second": 2627446.5313618258,
+          "median_effective_logical_gigabytes_per_second_per_rank": 18.833536736801566,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 14.125152552601175,
+          "median_latency_ms": 1.5589280128479004,
+          "per_start_median_latency_ms": [
+            1.5589280128479004,
+            1.5713760256767273,
+            1.552623987197876
+          ],
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3
+          ],
+          "run_to_run_cv_percent": 0.6113033112150486,
+          "starts": 3
+        },
+        "deepep-v2-gin-gda": {
+          "bootstrap_95_percent_ci_latency_ms": [
+            0.9481759965419769,
+            0.9605599939823151
+          ],
+          "median_aggregate_input_tokens_per_second": 4307661.165769053,
+          "median_effective_logical_gigabytes_per_second_per_rank": 30.87731523623257,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 23.15798642717443,
+          "median_latency_ms": 0.9508640170097351,
+          "per_start_median_latency_ms": [
+            0.9481759965419769,
+            0.9605599939823151,
+            0.9508640170097351
+          ],
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3
+          ],
+          "run_to_run_cv_percent": 0.683392543166502,
+          "starts": 3
+        },
+        "uccl": {
+          "bootstrap_95_percent_ci_latency_ms": [
+            0.868256002664566,
+            0.8695679903030396
+          ],
+          "median_aggregate_input_tokens_per_second": 4715590.93391919,
+          "median_effective_logical_gigabytes_per_second_per_rank": 33.80135581433276,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 25.351016860749567,
+          "median_latency_ms": 0.8686079978942871,
+          "per_start_median_latency_ms": [
+            0.8686079978942871,
+            0.868256002664566,
+            0.8695679903030396
+          ],
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3
+          ],
+          "run_to_run_cv_percent": 0.07816060809911046,
+          "starts": 3
+        }
+      },
+      "comparisons": {
+        "deepep-v2-gin-gda_vs_deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_reduction_percent": [
+            38.75761131799704,
+            39.177692059698245
+          ],
+          "direction_supported": true,
+          "median_paired_latency_reduction_percent": 38.87141089806043,
+          "paired_latency_reduction_percent_per_start": [
+            39.177692059698245,
+            38.87141089806043,
+            38.75761131799704
+          ]
+        },
+        "deepep-v2-gin-gda_vs_uccl": {
+          "bootstrap_95_percent_ci_reduction_percent": [
+            -10.630964949793603,
+            -9.16040363899269
+          ],
+          "direction_supported": true,
+          "median_paired_latency_reduction_percent": -9.349013258683126,
+          "paired_latency_reduction_percent_per_start": [
+            -9.16040363899269,
+            -10.630964949793603,
+            -9.349013258683126
+          ]
+        }
+      },
+      "dispatch_dtype": "bf16",
+      "input_hash_sha256": "f60cdd82e9a2396f8e4ae7800e19205dd438d4a179b7d4185c479cf895ffacc3",
+      "route_hash_sha256": "96c8e609e9944e3b151c8ad8d4f5b52d102fbd4b2757f81cf65fe21b1cf7e0e2",
+      "world_size_ranks": 32
+    }
+  ],
+  "comparison_scope": "synthetic decode dispatch-plus-combine communication workload; not end-to-end training or serving",
+  "configuration": {
+    "dispatch_dtypes": [
+      "fp8",
+      "bf16"
+    ],
+    "experts_dimensionless": 256,
+    "hidden_dimensions": 7168,
+    "measured_iterations_dimensionless": 100,
+    "tokens_per_rank": 128,
+    "top_k_dimensionless": 8,
+    "warmup_iterations_dimensionless": 20,
+    "world_sizes_ranks": [
+      16,
+      32
+    ]
+  },
+  "images": {
+    "deepep-v1-nvshmem": "159553542841.dkr.ecr.ap-south-1.amazonaws.com/adai/dsv3-ep-backend-comparison-deepep-v1-nvshmem@sha256:175a8470e11bc7832024941d1775923d5e8ecae2c6dc06183d5f1653d66b4fac",
+    "deepep-v2-gin-gda": "159553542841.dkr.ecr.ap-south-1.amazonaws.com/adai/dsv3-ep-backend-comparison-deepep-v2-gin-gda@sha256:4d07367ea290c5d6ec3c02b223ac819feed5240a46fd4a6492421e9c0853dbeb",
+    "uccl": "159553542841.dkr.ecr.ap-south-1.amazonaws.com/adai/dsv3-ep-backend-comparison-uccl@sha256:a703a0d35916bbd51b2d34d968626d9617cbceb328d64b920f21ad159d93c91a"
+  },
+  "independent_starts_per_cell": 3,
+  "logical_payload_definition": "per valid expert assignment: dispatch tensor plus FP8 scales when selected plus BF16 combine tensor; backend metadata excluded",
+  "maximum_run_to_run_cv_percent_for_direction_support": 5.0,
+  "runtime": {
+    "cuda_version": "13.0",
+    "gpu": "NVIDIA B200",
+    "nccl_version": [
+      2,
+      29,
+      7
+    ],
+    "torch_version": "2.13.0+cu130"
+  },
+  "schema_version_dimensionless": 1,
+  "scored_result_records_dimensionless": 36,
+  "status": "PASS",
+  "timing_boundary": "BF16 input ready through dispatch and combine completion; slowest rank CUDA elapsed time"
+}

@@ -3,9 +3,9 @@ set -euo pipefail
 
 : "${CAMPAIGN_ID:?Set a unique CAMPAIGN_ID}"
 : "${FAIR_EP_NODES:?Set 4 comma-separated B200 node names}"
-: "${PROTECTED_NODES_CSV:?Set the concurrent campaign protected node names}"
+: "${PROTECTED_NODES_CSV:=}"
 : "${ARTIFACT_ROOT:?Set the durable artifact directory}"
-: "${KUBECTL_CONTEXT:=aps1}"
+: "${KUBECTL_CONTEXT:?Set the target kubectl context explicitly}"
 : "${CAMPAIGN_NAMESPACE:=${CAMPAIGN_ID}}"
 : "${SHARED_LOCK_NAME:=adai-ap-south-1-gpu-campaign-lock}"
 : "${SHARED_LOCK_NAMESPACE:=default}"
@@ -24,22 +24,49 @@ set -euo pipefail
 [[ "${CAMPAIGN_ID}" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]
 [[ "${CAMPAIGN_NAMESPACE}" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]
 [[ "${LOCK_MODE}" == exclusive || "${LOCK_MODE}" == observe ]]
+for value in "${LOCK_DURATION_SECONDS}" "${INDEPENDENT_STARTS}" \
+    "${WARMUP_ITERATIONS}" "${MEASURED_ITERATIONS}" \
+    "${CASE_TIMEOUT_SECONDS}" "${EFA_PER_NODE}"; do
+    [[ "${value}" =~ ^[1-9][0-9]*$ ]] || {
+        printf 'Iteration, timeout, Lease, and EFA values must be positive integers\n' >&2
+        exit 2
+    }
+done
 if [[ "${LOCK_MODE}" == observe && -z "${EXPECTED_LOCK_HOLDER}" ]]; then
     printf 'LOCK_MODE=observe requires EXPECTED_LOCK_HOLDER\n' >&2
+    exit 2
+fi
+if [[ "${LOCK_MODE}" == observe && -z "${PROTECTED_NODES_CSV}" ]]; then
+    printf 'LOCK_MODE=observe requires PROTECTED_NODES_CSV\n' >&2
     exit 2
 fi
 [[ "${INDEPENDENT_STARTS}" -eq 3 ]] || {
     printf 'This scored matrix requires exactly 3 independent starts\n' >&2
     exit 2
 }
+[[ "${WARMUP_ITERATIONS}" -eq 20 && "${MEASURED_ITERATIONS}" -eq 100 ]] || {
+    printf 'This scored matrix requires 20 warmup and 100 measured iterations\n' >&2
+    exit 2
+}
 
 case_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -e "${ARTIFACT_ROOT}" && ! -d "${ARTIFACT_ROOT}" ]]; then
+    printf 'ARTIFACT_ROOT exists and is not a directory: %s\n' "${ARTIFACT_ROOT}" >&2
+    exit 2
+fi
+if [[ -d "${ARTIFACT_ROOT}" && -n "$(find "${ARTIFACT_ROOT}" -mindepth 1 -print -quit)" ]]; then
+    printf 'Refusing to reuse nonempty ARTIFACT_ROOT: %s\n' "${ARTIFACT_ROOT}" >&2
+    exit 2
+fi
 mkdir -p "${ARTIFACT_ROOT}/control" "${ARTIFACT_ROOT}/runs" \
     "${ARTIFACT_ROOT}/summary" "${ARTIFACT_ROOT}/teardown"
 K=(kubectl --context "${KUBECTL_CONTEXT}")
 
 IFS=, read -r -a selected_nodes <<<"${FAIR_EP_NODES}"
-IFS=, read -r -a protected_nodes <<<"${PROTECTED_NODES_CSV}"
+protected_nodes=()
+if [[ -n "${PROTECTED_NODES_CSV}" ]]; then
+    IFS=, read -r -a protected_nodes <<<"${PROTECTED_NODES_CSV}"
+fi
 ((${#selected_nodes[@]} == 4)) || {
     printf 'FAIR_EP_NODES must contain exactly 4 nodes\n' >&2
     exit 2
@@ -62,6 +89,13 @@ declare -A images=(
     [deepep-v1-nvshmem]="${DEEPEP_V1_IMAGE}"
     [deepep-v2-gin-gda]="${DEEPEP_V2_IMAGE}"
 )
+for arm in "${!images[@]}"; do
+    [[ "${images[${arm}]}" =~ @sha256:[0-9a-f]{64}$ ]] || {
+        printf 'Image for %s is not pinned by digest: %s\n' \
+            "${arm}" "${images[${arm}]}" >&2
+        exit 2
+    }
+done
 
 current_case=""
 namespace_created=0
@@ -77,7 +111,7 @@ check_shared_lock() {
                 "${CAMPAIGN_ID}" "${holder}" >&2
             return 1
         }
-    elif [[ -n "${holder}" && "${holder}" != "${EXPECTED_LOCK_HOLDER}" ]]; then
+    elif [[ "${holder}" != "${EXPECTED_LOCK_HOLDER}" ]]; then
         printf 'Shared Lease holder changed from protected campaign %s to %s\n' \
             "${EXPECTED_LOCK_HOLDER}" "${holder}" >&2
         return 1
@@ -149,8 +183,11 @@ gpu_requests_on_node() {
     "${K[@]}" get pods -A --field-selector "spec.nodeName=${node}" -o json | jq '
         [.items[]
          | select(.status.phase != "Succeeded" and .status.phase != "Failed")
-         | [.spec.containers[]?.resources.requests["nvidia.com/gpu"] // 0 | tonumber]
-         | add // 0]
+         | ([.spec.containers[]?.resources.requests["nvidia.com/gpu"] // 0 | tonumber]
+            | add // 0) as $app
+         | ([.spec.initContainers[]?.resources.requests["nvidia.com/gpu"] // 0 | tonumber]
+            | max // 0) as $init
+         | [$app, $init] | max]
         | add // 0'
 }
 
@@ -186,7 +223,7 @@ cleanup_case() {
 }
 
 finish() {
-    local command_status=$? teardown_status=0 owned="" remaining=0
+    local command_status=$? teardown_status=0 owned="" remaining=0 namespace_remaining=0
     trap - EXIT INT TERM
     set +e
     cleanup_case || teardown_status=1
@@ -203,21 +240,37 @@ finish() {
             teardown_status=1
         fi
     fi
+    if "${K[@]}" get namespace "${CAMPAIGN_NAMESPACE}" >/dev/null 2>&1; then
+        namespace_remaining=1
+        teardown_status=1
+    fi
+    if ((namespace_created == 1 || lock_claimed == 1)); then
+        check_shared_lock || teardown_status=1
+    fi
     release_shared_lock || teardown_status=1
     "${K[@]}" get all -A -l "adai.aws/campaign=${CAMPAIGN_ID}" -o json \
         >"${ARTIFACT_ROOT}/teardown/remaining-resources.json" 2>&1 || teardown_status=1
     remaining="$(jq '.items | length' "${ARTIFACT_ROOT}/teardown/remaining-resources.json" 2>/dev/null || printf '1')"
     [[ "${remaining}" -eq 0 ]] || teardown_status=1
     "${K[@]}" -n "${SHARED_LOCK_NAMESPACE}" get lease "${SHARED_LOCK_NAME}" -o json \
-        >"${ARTIFACT_ROOT}/teardown/shared-lease-untouched.json" 2>&1 || true
+        >"${ARTIFACT_ROOT}/teardown/shared-lease-after.json" 2>&1 || true
+    "${K[@]}" get nodes -o json >"${ARTIFACT_ROOT}/control/fleet-nodes-after.json" 2>&1 || \
+        teardown_status=1
+    "${K[@]}" get pods -A -o json >"${ARTIFACT_ROOT}/control/fleet-pods-after.json" 2>&1 || \
+        teardown_status=1
+    if ((command_status == 0 && teardown_status == 0)); then
+        printf 'PASS teardown_verified=1_dimensionless remaining_resources=0_resources\n' \
+            >"${ARTIFACT_ROOT}/STATUS"
+        printf 'PASS completed_at=%s\n' "$(date -u +%FT%TZ)" \
+            >"${ARTIFACT_ROOT}/CAMPAIGN_COMPLETE"
+    else
+        printf 'FAIL command_status=%s_dimensionless teardown_status=%s_dimensionless remaining_resources=%s_resources namespace_remaining=%s_namespaces\n' \
+            "${command_status}" "${teardown_status}" "${remaining}" \
+            "${namespace_remaining}" >"${ARTIFACT_ROOT}/STATUS"
+        rm -f "${ARTIFACT_ROOT}/CAMPAIGN_COMPLETE"
+    fi
     find "${ARTIFACT_ROOT}" -type f ! -name SHA256SUMS -print0 | sort -z | \
         xargs -0 sha256sum >"${ARTIFACT_ROOT}/SHA256SUMS"
-    if ((command_status == 0 && teardown_status == 0)); then
-        printf 'PASS\n' >"${ARTIFACT_ROOT}/STATUS"
-    else
-        printf 'FAIL command_status=%s_dimensionless teardown_status=%s_dimensionless remaining_resources=%s_resources\n' \
-            "${command_status}" "${teardown_status}" "${remaining}" >"${ARTIFACT_ROOT}/STATUS"
-    fi
     if ((command_status == 0 && teardown_status != 0)); then
         command_status=1
     fi
@@ -232,11 +285,19 @@ trap 'exit 143' TERM
 "${K[@]}" get namespaces -o json >"${ARTIFACT_ROOT}/control/namespaces-before.json"
 "${K[@]}" -n "${SHARED_LOCK_NAMESPACE}" get lease "${SHARED_LOCK_NAME}" -o json \
     >"${ARTIFACT_ROOT}/control/shared-lease-before.json"
+if "${K[@]}" get namespace "${CAMPAIGN_NAMESPACE}" >/dev/null 2>&1; then
+    printf 'Refusing to reuse existing namespace: %s\n' "${CAMPAIGN_NAMESPACE}" >&2
+    exit 1
+fi
 claim_shared_lock
 check_shared_lock
 aws sts get-caller-identity --output json >"${ARTIFACT_ROOT}/control/aws-caller-identity.json"
 printf '%s\n' "${selected_nodes[@]}" >"${ARTIFACT_ROOT}/control/selected-nodes.txt"
-printf '%s\n' "${protected_nodes[@]}" | sort -u >"${ARTIFACT_ROOT}/control/protected-nodes.txt"
+: >"${ARTIFACT_ROOT}/control/protected-nodes.txt"
+if ((${#protected_nodes[@]} > 0)); then
+    printf '%s\n' "${protected_nodes[@]}" | sort -u \
+        >"${ARTIFACT_ROOT}/control/protected-nodes.txt"
+fi
 
 for node in "${selected_nodes[@]}"; do
     verify_node_free "${node}"
@@ -246,7 +307,7 @@ done
     jq --arg campaign "${CAMPAIGN_ID}" '
         .metadata.labels["adai.aws/campaign"]=$campaign |
         .metadata.labels["adai.aws/owner"]="fair-ep-comparison"' | \
-    "${K[@]}" apply -f - >/dev/null
+    "${K[@]}" create -f - >/dev/null
 namespace_created=1
 
 # Read the live host mitigation before invoking DeepEP V2.  The EFA 3.3.0g
@@ -508,11 +569,13 @@ for world_size in 16 32; do
     done
 done
 
+check_shared_lock
+for node in "${selected_nodes[@]}"; do
+    verify_node_free "${node}"
+done
 python3 "${case_dir}/summarize_fair_results.py" "${ARTIFACT_ROOT}/runs" \
     --starts="${INDEPENDENT_STARTS}" \
+    --provenance="${ARTIFACT_ROOT}/control/provenance.json" \
     --json="${ARTIFACT_ROOT}/summary/summary.json" \
     --markdown="${ARTIFACT_ROOT}/summary/summary.md"
-"${K[@]}" get nodes -o json >"${ARTIFACT_ROOT}/control/fleet-nodes-after.json"
-"${K[@]}" get pods -A -o json >"${ARTIFACT_ROOT}/control/fleet-pods-after.json"
-touch "${ARTIFACT_ROOT}/CAMPAIGN_COMPLETE"
 printf 'PASS fair EP comparison completed at %s UTC\n' "$(date -u +%FT%TZ)"

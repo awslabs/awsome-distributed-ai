@@ -1,192 +1,192 @@
-# Expert-Parallelism Backend Comparison on EFA
+# Fair Expert-Parallelism Backend Comparison on EFA
 
-Head-to-head MoE dispatch/combine micro-benchmark across 3 EP backends, with raw NCCL all-to-all retained as a separately labeled transport reference. Runs within a result set use the same EP world size, problem shape, common dependency stack, and GPU nodes. The latest campaign adds DeepEP V2 over NCCL GIN EFA-GDA on B200 at EP16 and EP32. The historical B300 campaign used 64 ranks and also exercised a 256-rank transport reference.
+This directory compares 3 expert-parallel dispatch/combine backends through one common semantic workload and one external timing boundary:
 
-This directory provides comparison orchestration and log collation. Backend build and launch harnesses live in sibling directories or the linked DeepEP V2 contribution.
-
-| Config | What it is | Source benchmark |
-|---|---|---|
-| **NCCL** (reference) | Raw all-to-all over EFA. It moves bytes but does *not* do token routing or combine-reduction, so it is not an EP-backend row. | [`nccl-alltoall.yaml`](nccl-alltoall.yaml) (built from [`../../nccl-tests`](../../nccl-tests)) |
-| **UCCL** | DeepEP-style dispatch/combine over the UCCL all-to-all backend. | [`../uccl-ep-benchmark/kubernetes`](../uccl-ep-benchmark/kubernetes) |
-| **DeepEP V1 NVSHMEM** | DeepEP V1 dispatch/combine over NVSHMEM libfabric/EFA. | [`../deepep-benchmark/kubernetes`](../deepep-benchmark/kubernetes) |
-| **DeepEP V2 NCCL GIN** | DeepEP V2 `ElasticBuffer` dispatch/combine over NCCL GIN EFA-GDA. | [DeepEP V2 benchmark PR 1234](https://github.com/awslabs/awsome-distributed-ai/pull/1234) and [`deepep_v2_selected_cases.py`](deepep_v2_selected_cases.py) |
-
-> **Backend naming.** DeepEP V1 at commit `567632d` has no internode path without an external transport, so this comparison names its NVSHMEM transport explicitly. DeepEP V2 is a distinct NCCL GIN backend and does not replace the raw NCCL transport reference. Raw NCCL remains context only and is never treated as an equal dispatch/combine measurement.
-
-## Matched configuration (what makes the numbers comparable)
-
-Compare backends only within the same platform campaign. B200, B300, and H100 measurements are kept on separate result pages. The latest B200 campaign used the following matched shapes:
-
-| Parameter | Value |
+| Backend | Implementation and transport |
 |---|---|
-| World size | EP16: 2 nodes × 8 GPUs = 16 ranks; EP32: 4 nodes × 8 GPUs = 32 ranks |
-| `num-tokens` | 4096 (internode) / 128 (low-latency) |
-| `hidden` | 7168 |
-| `num-topk` | 8 |
-| `num-experts` | 256 |
-| dispatch dtype | FP8 and BF16 |
-| combine dtype | BF16 headline; DeepEP V2 also prints FP8 diagnostic data |
+| UCCL | DeepEP-compatible dispatch/combine over UCCL all-to-all and EFA |
+| DeepEP V1 NVSHMEM | DeepEP V1 `Buffer` over NVSHMEM, libfabric, and EFA |
+| DeepEP V2 NCCL GIN | DeepEP V2 `ElasticBuffer` over NCCL GIN EFA-GDA |
 
-The historical B300 and H100 result pages use 4-node and 8-node topologies with the same token, hidden-size, top-k, and expert values. The UCCL manifests bake these arguments into the `python3 bench/test_*.py` invocation; the DeepEP V1 test hard-codes its config in-image. Before running V1, confirm the image config and align UCCL to it:
+The primary metric is slowest-rank CUDA latency from BF16 input readiness through dispatch and combine completion. Backend-native latency and bandwidth fields are not used for cross-backend rankings because they do not share one timing boundary or byte numerator.
 
-```bash
-# Read the DeepEP test config from the NVSHMEM image and match UCCL's CLI args to it.
-docker run --rm ${NVSHMEM_IMAGE_URI} sed -n '1,60p' /DeepEP/tests/test_internode.py
+The validated B200 result is in [RESULTS.md](RESULTS.md). EP32 means 32 GPU ranks on 4 B200 nodes, not 32 B200 nodes.
+
+## What makes the comparison fair
+
+The backend implementation is the intended independent variable. The harness holds these inputs and measurement rules constant:
+
+| Control | Rule |
+|---|---|
+| Input | One deterministic BF16 tensor per EP size |
+| Routing | One exact top-k route and one set of weights, verified by SHA-256 across all arms and starts |
+| Shape | 128 tokens/rank, hidden size 7,168, 256 experts, top-k 8 experts/token |
+| Operations | FP8 or BF16 dispatch followed by BF16 combine |
+| Timing | One CUDA Event boundary around input preparation, dispatch, and combine |
+| Rank reduction | Maximum elapsed time across all ranks for each measured iteration |
+| Warmup | 20 warmup iterations per dtype and process start |
+| Measurement | 100 measured iterations per dtype and process start |
+| Replication | 3 independent process starts per arm and workload cell |
+| Order | Backend order rotates across starts; dtype order also rotates |
+| Hardware | The same named nodes serve every arm at a given EP size |
+| Runtime | Every result must report the same GPU, PyTorch, CUDA, and NCCL versions |
+| Correctness | Every rank must pass the common identity-expert result before timing |
+
+Each process start contributes its median of 100 slowest-rank iteration latencies. The report then takes the median across 3 process starts. Iterations within one process are not treated as independent replicates.
+
+### Common logical throughput
+
+The harness derives effective logical throughput from a common useful-payload numerator. Each valid expert assignment contributes:
+
+- the dispatch tensor;
+- FP8 scales when FP8 dispatch is selected; and
+- the BF16 combine tensor.
+
+Backend metadata is excluded. Scale-out logical bytes include only assignments whose destination expert is on another node.
+
+```text
+logical GB/s/rank = average logical bytes/rank / median slowest-rank latency
+scale-out logical GB/s/rank = average remote logical bytes/rank / median slowest-rank latency
 ```
 
-If the DeepEP values differ from 4096/7168/8/256, edit the bench args in
-`../uccl-ep-benchmark/kubernetes/test-*.yaml` to match.
+These are logical efficiency metrics, not observed wire bandwidth. DeepEP V2 SO/SU bandwidth, DeepEP V1 native bandwidth, and UCCL native bandwidth remain useful backend diagnostics, but their numerators and aggregation boundaries differ and must not be compared directly.
 
-### Fair common-boundary decode comparison
+## Files
 
-The backend-native benchmark outputs do not share one timing boundary or byte numerator. Use [`fair_ep_benchmark.py`](fair_ep_benchmark.py) when making a direct cross-backend latency or effective-bandwidth claim. It supplies all 3 backends with the same deterministic BF16 input, exact top-k route, and weights, then times BF16-input readiness through dispatch and combine completion with one CUDA Event boundary. Each iteration uses the slowest rank's elapsed time.
+| File | Purpose |
+|---|---|
+| [`fair_ep_benchmark.py`](fair_ep_benchmark.py) | Common workload, backend adapters, correctness check, CUDA timing, and logical-byte accounting |
+| [`run_fair_ep_rank.sh`](run_fair_ep_rank.sh) | Per-node `torchrun` entry point and backend-specific transport environment |
+| [`run_fair_ep_comparison.sh`](run_fair_ep_comparison.sh) | EKS admission, shared-Lease coordination, rotated matrix, durable harvest, and verified teardown |
+| [`fair_result_io.py`](fair_result_io.py) | Robust result-marker parsing from interleaved native output |
+| [`extract_fair_results.py`](extract_fair_results.py) | Canonical JSONL extraction from a rank-zero log |
+| [`summarize_fair_results.py`](summarize_fair_results.py) | Matrix validation, per-start aggregation, paired deltas, and bootstrap intervals |
+| [`results/b200-ap-south-1-2026-08-24.json`](results/b200-ap-south-1-2026-08-24.json) | Machine-readable validated result summary |
+| [`RESULTS.md`](RESULTS.md) | Human-readable result, provenance, and scope limits |
 
-The common logical-byte numerator counts the useful dispatch tensor, FP8 scales when selected, and BF16 combine tensor for each valid expert assignment. It excludes backend metadata. Backend-native UCCL, NVSHMEM RDMA, and DeepEP V2 SO/SU measurements remain useful diagnostics, but they are reported separately.
+## Requirements
 
-[`run_fair_ep_comparison.sh`](run_fair_ep_comparison.sh) runs the B200 decode matrix at 128 tokens/rank for EP16 and EP32. It uses the same named nodes for every arm, performs 3 independent process starts per cell in rotated arm order, validates route and input hashes, and tears down only its labeled namespace. The concurrent campaign's nodes and shared Lease are read and protected, never modified.
+The scored B200 matrix requires:
 
-The completed 24 August 2026 rerun, including common logical throughput, paired latency deltas, 95% bootstrap intervals, correctness, and scope limits, is reported in [`RESULTS-b200.md`](RESULTS-b200.md#fair-common-boundary-decode-rerun). Keep its primary table separate from the historical backend-native tables on the same page.
+- 4 named, Ready `p6-b200.48xlarge` nodes in one EKS cluster;
+- 8 allocatable GPUs and 8 allocatable EFA devices on every selected node;
+- no active GPU requests on the selected nodes before each arm;
+- the NVIDIA and EFA Kubernetes device plugins;
+- `uvm_disable_hmm=Y` or `uvm_disable_hmm=1` on every selected host;
+- `/dev/gdrdrv` as a character device on every selected host;
+- `aws`, `kubectl`, `jq`, `rg`, Python 3, and Bash on the launch host; and
+- access to the 3 digest-pinned backend images.
+
+DeepEP V2 receives an INFO-level EP16 admission run before the scored matrix. The admission must log a GDAKI context. A missing HMM mitigation, GDRCopy device, or GDAKI proof stops the campaign before scoring.
+
+## Run on an exclusive node set
+
+Use a unique namespace and durable artifact directory. `KUBECTL_CONTEXT` is required explicitly so a concurrent process changing the default context cannot redirect the campaign.
 
 ```bash
-CAMPAIGN_ID=fair-ep-b200-$(date -u +%Y%m%d%H%M%S) \
+campaign_id=fair-ep-b200-$(date -u +%Y%m%d%H%M%S)
+CAMPAIGN_ID="${campaign_id}" \
 FAIR_EP_NODES=node-a,node-b,node-c,node-d \
-PROTECTED_NODES_CSV=foreign-node-a,foreign-node-b \
-ARTIFACT_ROOT=/shared/artifacts/${CAMPAIGN_ID} \
-KUBECTL_CONTEXT=target-context \
+PROTECTED_NODES_CSV="" \
+ARTIFACT_ROOT="/shared/artifacts/${campaign_id}" \
+KUBECTL_CONTEXT=aps1-shared \
+LOCK_MODE=exclusive \
 ./run_fair_ep_comparison.sh
 ```
 
-The default `LOCK_MODE=exclusive` claims the shared Lease only when it is empty and releases it during verified teardown. If an explicitly coordinated campaign is still active on a disjoint node set, use `LOCK_MODE=observe EXPECTED_LOCK_HOLDER=foreign-campaign-id`; this mode checks the holder throughout the run and never mutates the Lease.
+`LOCK_MODE=exclusive` claims the configured shared Lease only when its holder is empty. The runner releases only a Lease that it still owns.
 
-DeepEP V2 admission is conditional on `uvm_disable_hmm=Y` and a character-device `/dev/gdrdrv` on every selected host, and requires a logged GDAKI context. The runner aborts before the scored matrix if any condition is absent.
+## Run beside a coordinated campaign
 
-## Prerequisites
-
-- EKS cluster with EFA + GPU nodes; NVIDIA device plugin + AWS EFA device plugin; Kubeflow MPI
-  Operator (`kubectl get crd mpijobs.kubeflow.org`). See each benchmark's `kubernetes/README.md`.
-- The container images in ECR:
-  - DeepEP V1 NVSHMEM: `../deepep-benchmark/deepep.Dockerfile` (CUDA 13, `sm_90`+`sm_100`)
-  - UCCL: `../uccl-ep-benchmark/uccl-ep.Dockerfile` (CUDA 13; pinned UCCL commit; Hopper + Blackwell via PTX)
-  - DeepEP V2 NCCL GIN: the standalone build and launch workflow from [PR 1234](https://github.com/awslabs/awsome-distributed-ai/pull/1234), with all revisions pinned to the campaign being reproduced
-  - NCCL: **reuse the NVSHMEM/DeepEP image** — it already builds `/opt/nccl-tests/build/alltoall_perf`
-    with `sm_100` gencode, so no separate `nccl-tests` build is needed for the baseline.
-- For EFA-GDA, verify the host EFA driver and GDRCopy requirements documented by the DeepEP V2 harness before scheduling a multi-node run.
-
-## Account / cluster safety (run first)
+Observe mode is allowed only when the other campaign has a known Lease holder and a disjoint named node set:
 
 ```bash
-aws sts get-caller-identity                          # confirm the target account
-kubectl config current-context                       # confirm the target cluster
-kubectl get nodes -l node.kubernetes.io/instance-type=p6-b300.48xlarge   # confirm $NUM_NODES schedulable
-kubectl get crd mpijobs.kubeflow.org                 # confirm MPI Operator
+campaign_id=fair-ep-b200-$(date -u +%Y%m%d%H%M%S)
+CAMPAIGN_ID="${campaign_id}" \
+FAIR_EP_NODES=node-a,node-b,node-c,node-d \
+PROTECTED_NODES_CSV=foreign-node-a,foreign-node-b \
+ARTIFACT_ROOT="/shared/artifacts/${campaign_id}" \
+KUBECTL_CONTEXT=aps1-shared \
+LOCK_MODE=observe \
+EXPECTED_LOCK_HOLDER=foreign-campaign-id \
+./run_fair_ep_comparison.sh
 ```
 
-## Run order
+Observe mode never mutates the shared Lease. It verifies the exact holder before every arm and again before aggregation. Any selected/protected node overlap or Lease-holder change stops the run.
 
-Run backends serially on the same named node set. Smoke each image on 1 node first. An intranode smoke is NVLink-only and is not a scored EFA comparison row. The commands below cover the existing DeepEP V1, UCCL, and raw NCCL EKS manifests. Run DeepEP V2 with the linked harness and the matched wrapper in this directory, using 4,096 tokens/rank for prefill and 128 tokens/rank for decode.
+## Execution matrix
 
-`deepep_v2_selected_cases.py` matches the synthetic DeepEP V2 revision pinned in [`RESULTS-b200.md`](RESULTS-b200.md). Review its upstream `Namespace` fields before using it with a different DeepEP V2 revision.
+The scored order is a 3-start rotation:
+
+| Start index | Backend order | Dtype order |
+|---:|---|---|
+| 1 | UCCL, DeepEP V1, DeepEP V2 | FP8, BF16 |
+| 2 | DeepEP V2, UCCL, DeepEP V1 | BF16, FP8 |
+| 3 | DeepEP V1, DeepEP V2, UCCL | FP8, BF16 |
+
+The runner executes this rotation first at 16 ranks on 2 nodes and then at 32 ranks on 4 nodes. Arms run serially, and every StatefulSet and its GPU pods must be gone before the next arm is admitted.
+
+## Durable artifacts and teardown
+
+The campaign writes the following layout under `ARTIFACT_ROOT`:
+
+```text
+control/
+  aws-caller-identity.json
+  fleet-nodes-before.json
+  fleet-nodes-after.json
+  fleet-pods-before.json
+  fleet-pods-after.json
+  provenance.json
+  selected-nodes.txt
+runs/
+  ep16/{admission,measurement}-repeat-*/<backend>/
+  ep32/measurement-repeat-*/<backend>/
+summary/
+  summary.json
+  summary.md
+teardown/
+  namespace-delete.log
+  remaining-resources.json
+  shared-lease-after.json
+CAMPAIGN_COMPLETE
+SHA256SUMS
+STATUS
+```
+
+Every rank log, rendered Pod manifest, Pod description, canonical rank-zero JSONL result, case status, input/route hash, and immutable image reference is retained. `CAMPAIGN_COMPLETE` is written only after the full scored matrix succeeds and teardown verifies that the owned namespace and labeled resources are absent. `SHA256SUMS` is generated after the final status markers.
+
+## Re-aggregate preserved logs
+
+The normal campaign aggregates automatically. To validate a preserved artifact tree again:
 
 ```bash
-cp env_vars.example env_vars   # then edit image URIs / topology
-source env_vars
-
-# 1) DeepEP V1 NVSHMEM
-( cd ../deepep-benchmark/kubernetes
-  IMAGE_URI=$NVSHMEM_IMAGE_URI NUM_NODES=$NUM_NODES \
-  envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' < test-internode.yaml | kubectl apply -f -
-  # ...wait, save logs, delete. Then low-latency -- see the override note below. )
-
-# 2) UCCL (UCCL-EP) — one MPI rank per GPU (NP = NUM_NODES * GPU_PER_NODE)
-( cd ../uccl-ep-benchmark/kubernetes
-  IMAGE_URI=$UCCL_IMAGE_URI NUM_NODES=$NUM_NODES NP=$NP \
-  envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES $NP' < test-internode.yaml | kubectl apply -f -
-  # ...then test-low-latency.yaml (already pinned to --num-experts=256) )
-
-# 3) DeepEP V2 NCCL GIN
-# Run an INFO-level admission first and require NCCL_GIN_TYPE=5, a successful
-# Libfabric_GDAKI context, a nonzero GIN layout, and bidirectional EFA deltas.
-# Use deepep_v2_selected_cases.py inside the pinned V2 image, then repeat with
-# NCCL_DEBUG=WARN for the scored run.
-# The multi-node launcher must provide WORLD_SIZE, RANK, MASTER_ADDR, and
-# MASTER_PORT to each node. Inside each node's container, run one of:
-# python3 deepep_v2_selected_cases.py --num-processes=8 --num-tokens=4096 --hidden=7168 --num-topk=8 --num-experts=256
-# python3 deepep_v2_selected_cases.py --num-processes=8 --num-tokens=128  --hidden=7168 --num-topk=8 --num-experts=256
-
-# 4) NCCL reference (reuses the DeepEP V1 image's alltoall_perf)
-IMAGE_URI=$NCCL_IMAGE_URI \
-envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES $NP' < nccl-alltoall.yaml | kubectl apply -f -
+python3 summarize_fair_results.py /path/to/artifacts/runs \
+  --starts=3 \
+  --provenance=/path/to/artifacts/control/provenance.json \
+  --json=/path/to/artifacts/summary/summary.json \
+  --markdown=/path/to/artifacts/summary/summary.md
 ```
 
-> **DeepEP low-latency at 8 nodes — required override.** The merged DeepEP low-latency manifest
-> runs `python3 /DeepEP/tests/test_low_latency.py` with no args, so it uses the upstream default
-> `--num-experts=288`. The test asserts `num_experts % num_ranks == 0`; at 8 nodes (64 ranks),
-> `288 % 64 ≠ 0` and it aborts. Match the comparison's 256 by patching the rendered manifest:
-> ```bash
-> cd ../deepep-benchmark/kubernetes
-> IMAGE_URI=$NVSHMEM_IMAGE_URI NUM_NODES=$NUM_NODES \
-> envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' < test-low-latency.yaml \
->   | sed 's#test_low_latency.py#test_low_latency.py --num-experts 256#' | kubectl apply -f -
-> ```
-> (DeepEP internode defaults are already 4096/7168/8/**256**, so internode needs no override.)
-
-Save each launcher log (`kubectl logs <…-launcher> > <name>.log`) and **delete the job before
-the next run** (MPIJob names are fixed; re-applying collides, and each job needs all 8 nodes):
+If a native library appends a diagnostic to the JSON marker's physical line, extract the JSON object with the repository parser rather than `grep` or line splitting:
 
 ```bash
-kubectl delete mpijob deepep-internode uccl-ep-internode nccl-alltoall   # etc.
+python3 extract_fair_results.py rank-zero.log results.jsonl
 ```
 
-## Collate
+The summarizer rejects an incomplete matrix, correctness failure, mutable image tag, route/input mismatch, runtime-stack mismatch, or disagreement in the common logical payload.
+
+## Local validation
 
 ```bash
-python3 collect_results.py \
-    --nvshmem-internode nvshmem_internode.log \
-    --nvshmem-lowlat   nvshmem_lowlat.log \
-    --uccl-internode   uccl_internode.log \
-    --uccl-lowlat      uccl_lowlat.log \
-    --deepep-v2-prefill deepep_v2_prefill.log \
-    --deepep-v2-decode  deepep_v2_decode.log \
-    --nccl             nccl_alltoall.log
+python3 -m pytest -q test_fair_ep_benchmark.py test_summarize_fair_results.py
+python3 -m py_compile \
+  fair_ep_benchmark.py fair_result_io.py extract_fair_results.py \
+  summarize_fair_results.py
+bash -n run_fair_ep_comparison.sh run_fair_ep_rank.sh
+shellcheck run_fair_ep_comparison.sh run_fair_ep_rank.sh
 ```
 
-For DeepEP V1 and UCCL internode logs, the parser reports the RDMA leg of the `Best dispatch/combine` line, not the intra-node NVL value printed beside it. For DeepEP V2, it reports rank-zero SO bandwidth, SU bandwidth, and latency for each dispatch dtype and operation. For raw NCCL, it reports bus bandwidth at the EP per-rank payload size, approximately 56 MiB, plus the asymptotic peak. Eyeball one real launcher log against the parser before trusting it.
+## Scope limits
 
-Results are recorded per platform: [`RESULTS-b200.md`](RESULTS-b200.md) (B200 with DeepEP V2), [`RESULTS.md`](RESULTS.md) (B300 historical), and [`RESULTS-p5.md`](RESULTS-p5.md) (P5/H100 historical). For other instance types set `INSTANCE_TYPE` and `EFA_PER_NODE` to the devices actually exposed by the target nodes.
-
-## Scaling beyond 8 nodes (256-rank findings)
-
-The historical UCCL and DeepEP V1 matrix was pushed to 16 and 32 nodes, or 128 and 256 ranks, on a 32-node `p6-b300.48xlarge` Capacity Block on 14 July 2026. Those V1-era kernels hit implementation limits between 65 and 256 ranks; only the raw NCCL reference ran at 256 ranks. These findings do not establish a DeepEP V2 limit. Details and per-limit source citations are in [`RESULTS.md`](RESULTS.md). Operational notes for rerunning the V1-era matrix at scale:
-
-- **HT internode**: DeepEP asserts at >160 ranks (`NUM_MAX_NVL_PEERS 8 × NUM_MAX_RDMA_PEERS 20`,
-  `kernels/configs.cuh`) and its stock combine tuning tables already abort at 16 nodes; UCCL
-  overflows an `int32` buffer bound above 64 ranks. Treat the HT comparison as an
-  **8-nodes-per-EP-domain benchmark** — which matches how training deploys these kernels
-  (EP32/EP64 groups inside a larger world).
-- **Low-latency**: both implementations cap between 64 and 128 ranks (UCCL: compile-time
-  signaling-buffer arena; NVSHMEM/DeepEP: libfabric host-proxy retry exhaustion with moving
-  victims per run).
-- **GDRCopy at scale (NVSHMEM)**: past ~1 GiB of LL buffer, NVSHMEM grows its symmetric heap
-  dynamically and must register each chunk over libfabric via **GDRCopy inside the container**.
-  The manifests set `NVIDIA_GDRCOPY=enabled`, but some clusters' nvidia container toolkit
-  ignores it — if every rank dies at `mem_heap.cpp:1361 register_mem_handle failed` after a
-  `GDRCopy support not enabled` warning, hostPath-mount `/dev/gdrdrv` into the worker
-  (requires `privileged: true`) and ensure the host loads `gdrdrv` (gdrcopy-loader DaemonSet
-  or DLAMI).
-- **NCCL at 32 nodes** works unmodified (`NUM_NODES=32`, `NP=256`); expect matched-size busbw
-  to drop vs 8 nodes (fan-out cost).
-
-## Caveats
-
-- **NCCL is a reference, not an equal.** `alltoall_perf` busbw is pure transport throughput, while EP dispatch/combine includes routing and reduction and uses backend-specific bandwidth accounting. Treat matched-size NCCL bus bandwidth as transport context, not as a hard ceiling or an EP-backend row.
-- **Internode = RDMA leg.** DeepEP/UCCL print both an RDMA (cross-node) and an NVL (intra-node)
-  bandwidth on the same line; only the RDMA number reflects the inter-node transport being
-  compared.
-- **Backend-native accounting differs.** V2 prints SO and SU bandwidth plus per-operation latency, while V1 and UCCL use their own aggregate timing and byte accounting. Neither the native GB/s values nor the native latency values establish an apples-to-apples ranking. Use the common-boundary harness for cross-backend claims and retain native values as diagnostics.
-- **`num-experts` must divide the world size.** Both tests assert `num_experts % num_ranks == 0`.
-  At 8 nodes (64 ranks) the comparison uses 256 (= 4/rank). The DeepEP low-latency default (288)
-  is not divisible by 64 and must be overridden (see the run-order note).
-- **Toolchain.** Verify the exact toolchain per result page. The B200 comparison used CUDA 13.0.3 and the same vLLM wheel in all 3 EP-backend images. The historical raw NCCL reference shares the DeepEP V1 image.
-- **UCCL bench scripts** are pulled from upstream `uccl/ep/bench` at image-build time and pinned
-  via `UCCL_COMMIT`. If upstream renames CLI flags, adjust the bench args in the UCCL
-  manifests.
+This harness measures a synthetic decode dispatch-plus-combine communication workload. It does not measure prefill, expert compute, communication/computation overlap, end-to-end training, serving throughput, TTFT, TPOT, or E2E latency. A result from this harness does not establish a universal backend winner or a limit at an unmeasured EP size.

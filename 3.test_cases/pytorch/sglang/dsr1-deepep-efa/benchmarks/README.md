@@ -813,60 +813,36 @@ it was added for was real on some host during bring-up, just not one that has be
 since. Treat it as a knob to try if NVSHMEM init fails on a `normal` role, not as a requirement —
 and do not conclude from a passing `normal` run that your host disagrees with this table.
 
-# Blackwell: expect DeepEP to lose at 2 nodes
+# Blackwell serving needs a matched measurement
 
-The serving tables in this document are H200. The question comes up — *"we benchmarked DeepEP vs the
-NCCL all-to-all on 2× B300 and DeepEP was slower in every configuration; is that expected?"* — and
-the answer from the data that **is** here is **yes at 2 nodes, and it is not an EFA problem.**
-Reported shape of such a result: output throughput −7% to −26%, median TTFT +17% to +82%, P99 ITL
-1.2–1.9 s vs 0.8–0.9 s, `normal` (HT) slowest where it ran, at TP16/EP16 across two nodes, 8K input
-/ 1K output, concurrency 128.
+The serving tables in this document are H200. No matched B200 or B300 serving sweep is reported
+here, so the H200 direction must not be assumed to carry across GPU generations.
 
-Read this section as a **mechanism argument extrapolated from H200 serving data plus B300 kernel
-data** — not as a Blackwell serving measurement. No B300 serving sweep exists here yet.
+The current
+[`ep-backend-comparison`](../../../../../micro-benchmarks/expert-parallelism/ep-backend-comparison/RESULTS.md)
+is useful transport evidence with a common CUDA timing boundary and a common logical payload. It is
+still a synthetic decode dispatch-plus-combine workload. It excludes expert compute, scheduling,
+communication/computation overlap, and request-level serving behavior. Its EP16 B200 result is also
+mixed by dtype: UCCL has lower FP8 latency, while DeepEP V2 has lower BF16 latency. At EP32, UCCL has
+lower latency for both measured dtypes. None of those cells is a B300 serving result.
 
-1. **16 ranks is DeepEP's worst case on the hardware measured here, and the mechanism is not
-   GPU-specific.** Every table in this document says so: the colocated decode sweep has DeepEP at
-   0.23–0.75× the baseline's throughput and 1.4–4.3× its TPOT; the 2P2D sweep 0.55–0.71× at 1.4–1.8×
-   TPOT. The reason — 256 experts over 16 ranks means 16 experts per GPU, so the fan-out is small and
-   mostly intra-node NVLink, and DeepEP's per-layer dispatch/combine cost is not amortised — is a
-   function of EP width and expert count, not of the GPU generation. That makes a −7% to −26%
-   *aggregate* regression on a mixed 8K/1K workload **milder than what we measure on Hopper**, though
-   confirming the H200 magnitude carries to B300 requires the B300 sweep.
-   **One Blackwell configuration note either way:** on B200 every rank logs `Only use 20 SMs for DeepEP
-   communication ... Consider using --deepep-config`, so any Blackwell number taken with the default
-   config is a **floor**, not DeepEP's best (thanks @KeitaW for the observation).
-2. **The published B300 kernel numbers are healthy, which localises the gap above the transport.**
-   At 2 nodes / 16 ranks on `p6-b300`, DeepEP-over-EFA dispatch/combine is **126.6 / 106.4 GB/s** —
-   best of the three backends there, *above* the NCCL all-to-all's 104.9 GB/s at matched payload
-   ([`ep-backend-comparison`](../../../../../micro-benchmarks/expert-parallelism/ep-backend-comparison/RESULTS.md)).
-   So fabric and kernels are fine at that scale; the serving regression is per-layer
-   launch/scheduling overhead and MoE-runner choice, not bytes on the wire.
-3. **`normal`/HT being slowest at decode-heavy concurrency is by design.** On a 1K-output workload
-   the run is TPOT-dominated, where `low_latency` is the intended mode.
+Before attributing a Blackwell serving delta to the all-to-all backend, control these variables:
 
-Before concluding anything from such a run, eliminate these:
+- Apply the 4 settings in [How to measure this correctly](#how-to-measure-this-correctly), including
+  the harness defaults and explicit mode pinning. `--random-range-ratio` alone moved a nominal
+  256-token/512-token/concurrency-64 point from 374 tokens/s to 1,127 tokens/s in the H200 campaign.
+- Hold the MoE runner constant. DeepEP rows commonly select `deep_gemm`, while no-DeepEP rows can
+  resolve `auto` to `flashinfer_trtllm` on Blackwell. Changing both the MoE kernel and communication
+  backend does not isolate either effect.
+- Pre-warm DeepGEMM JIT on every node with `recipe/serve-pd.sh precompile` before collecting TTFT or
+  P99 ITL.
+- Match model, EP and TP widths, input and output lengths, concurrency, request seeds, image digests,
+  runtime versions, and named nodes. Rotate backend order across independent process starts.
+- Compare request-level throughput and latency directly. Treat each backend's native GB/s fields as
+  diagnostics unless they share the same timing boundary and byte numerator.
+- Test the production EP width. An EP16 result cannot decide an EP32 or EP64 deployment.
 
-- **The four settings in [How to measure this correctly](#how-to-measure-this-correctly)** — the
-  harness defaults and the mode pinning in particular. `--random-range-ratio` alone moved a nominal
-  256/512/conc-64 point from 374 to 1127 tok/s.
-- **The MoE runner is not held constant** in the usual formulation: DeepEP rows run
-  `--moe-runner-backend deep_gemm` while the no-DeepEP rows resolve `auto` to `flashinfer_trtllm` on
-  Blackwell. That is two variables, and TRT-LLM's Blackwell MoE kernels are heavily tuned. Re-run
-  DeepEP against `flashinfer_trtllm` (or the baseline against `deep_gemm`) before attributing the
-  delta to the all-to-all.
-- **DeepGEMM JIT warmup.** It inflates early TTFT and P99 ITL specifically — the two metrics that
-  move most in reports like this. Pre-warm on **both** nodes (`recipe/serve-pd.sh precompile`).
-- **An HT-path hang that does not reproduce.** At ≥128 ranks the NVSHMEM-libfabric host proxy
-  exhausts libfabric retries (`EAGAIN` in `nvshmemi_process_multisend_rma`) and kills a different
-  pair of ranks each run — a documented statistical fan-out limit, not a bad node. At 16 ranks it
-  should not fire, but a non-reproducing hang on the HT path has the same signature.
-
-**The load-bearing point for a large fleet: 2 nodes measures the wrong thing.** DeepEP is built for
-EP domains where experts are spread thin enough that every token crosses the fabric. Kernel scaling
-to 256 ranks on `p6-b300` is already characterised: the useful envelope is ~64–160 ranks, with hard
-implementation caps past that (HT: 160 PEs at `deep_ep.cpp:158`; low-latency: between 64 and 128
-PEs). **A production-EP-width run — EP32 or EP64, not EP16 — is the measurement that decides this.**
+The fair conclusion for Blackwell serving remains unmeasured until that matched sweep is run.
 
 # Reproduce
 
