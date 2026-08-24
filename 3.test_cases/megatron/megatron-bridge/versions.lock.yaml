@@ -5,6 +5,8 @@ base:
   nemo_image: nvcr.io/nvidia/nemo:26.08
   nemo_digest_amd64: sha256:d8257dd0c4da714843aa1e371fe4dc8ee5a7972c247abbfd28d680bb197b6195
   shipped_torch: 2.13.0a0+8145d630e8.nv26.06
+  shipped_torch_commit: 8145d630e811c9ec098a632d9ea7f4d52a2ea16e
+  shipped_torch_onnx_commit: e709452ef2bbc1d113faf678c24e6d3467696e83
   shipped_bridge_version: 0.6.0
   shipped_bridge_commit: c93251151adeeadbae3ff2a2bf5ee7a1c34cff01
   shipped_mcore_version: 0.19.0
@@ -18,6 +20,8 @@ base:
   shipped_gdrcopy: "2.5"
 
 common:
+  rebuilt_torch: 2.13.0a0+8145d630e8.nv26.06
+  rebuilt_torch_nccl_build: 2.31.2
   nccl_repository: https://github.com/NVIDIA/nccl.git
   nccl_tag: v2.31.2-1
   nccl_commit: 7b83616df3ae082a1f32bb74c27458bfe8153a13

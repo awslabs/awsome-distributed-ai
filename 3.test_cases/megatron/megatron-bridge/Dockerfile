@@ -31,8 +31,21 @@ COPY 3.test_cases/megatron/megatron-bridge/versions.lock.yaml /opt/benchmark/ver
 COPY 3.test_cases/megatron/megatron-bridge/bench/ /opt/benchmark/case/bench/
 COPY 3.test_cases/megatron/megatron-bridge/kimi-k2/ /opt/benchmark/case/kimi-k2/
 RUN --mount=type=cache,target=/root/.cache/ccache /opt/benchmark/install-common.sh
+COPY 3.test_cases/megatron/megatron-bridge/docker/rebuild-pytorch-nccl.sh /opt/benchmark/rebuild-pytorch-nccl.sh
+RUN --mount=type=cache,target=/root/.cache/ccache /opt/benchmark/rebuild-pytorch-nccl.sh
 ENV LD_PRELOAD=/opt/nccl/build/lib/libnccl.so.2
 RUN /opt/benchmark/collect-build-manifest.sh common /opt/benchmark/common-build-manifest.json
+RUN python3 - <<'PY'
+import json
+from pathlib import Path
+
+manifest_path = Path("/opt/benchmark/common-build-manifest.json")
+manifest = json.loads(manifest_path.read_text())
+manifest["torch_source_commit"] = Path("/opt/benchmark/pytorch-upstream-commit.txt").read_text().strip()
+manifest["torch_onnx_commit"] = Path("/opt/benchmark/pytorch-onnx-commit.txt").read_text().strip()
+manifest["torch_source_tree_sha256"] = Path("/opt/benchmark/pytorch-source-tree.sha256").read_text().split()[0]
+manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+PY
 
 FROM common-build AS nccl-alltoall-final
 RUN printf '%s\n' '{"ep_arm":"nccl-alltoall","dispatcher":"alltoall","backend":null}' > /opt/benchmark/backend.json

@@ -6,7 +6,7 @@ set -euo pipefail
 : "${DEEPEP_CONTROL_COMMIT:?}"
 : "${NVSHMEM_VERSION:?}"
 : "${NVSHMEM_SHA256:?}"
-export CUDA_HOME=/usr/local/cuda TORCH_CUDA_ARCH_LIST='10.0' DISABLE_AGGRESSIVE_PTX_INSTRS=1
+export CUDA_HOME=/usr/local/cuda TORCH_CUDA_ARCH_LIST='10.0' DISABLE_AGGRESSIVE_PTX_INSTRS=1 MAX_JOBS="${MAX_JOBS:-16}"
 export EP_NCCL_ROOT_DIR=/opt/nccl/build EP_NVSHMEM_ROOT_DIR=/opt/amazon/nvshmem NVSHMEM_DIR=/opt/amazon/nvshmem
 archive="libnvshmem-linux-x86_64-${NVSHMEM_VERSION}_cuda13-archive.tar.xz"
 curl --fail --location --retry 5 \

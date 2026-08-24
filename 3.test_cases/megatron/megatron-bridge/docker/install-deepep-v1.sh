@@ -3,6 +3,7 @@ set -euo pipefail
 : "${DEEPEP_V1_COMMIT:?}"
 : "${NVSHMEM_VERSION:?}"
 export TORCH_CUDA_ARCH_LIST='10.0'
+export MAX_JOBS="${MAX_JOBS:-16}"
 export NVSHMEM_REMOTE_TRANSPORT=libfabric NVSHMEM_LIBFABRIC_PROVIDER=efa
 export LIBRARY_PATH="/usr/local/cuda/lib64/stubs${LIBRARY_PATH:+:${LIBRARY_PATH}}"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64/stubs${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
