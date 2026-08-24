@@ -1,134 +1,36 @@
-#!/bin/bash
-# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-# SPDX-License-Identifier: MIT-0
-
-# Build the model-agnostic Megatron-Bridge + UCCL-EP environment image and push
-# it to Amazon ECR. This image is shared by every model test case under this
-# library — per-model SFT configs are mounted at runtime, not baked in.
-#
-# Usage:
-#   ./1.build-and-push.sh
-#
-# Override defaults via environment variables:
-#   EP_BACKEND=<uccl|nvshmem>  deep_ep provider to build (default: uccl). nvshmem
-#                              builds NVIDIA DeepEP over NVSHMEM-libfabric/EFA.
-#   TAG=<tag>       Image tag (default depends on EP_BACKEND, see below)
-#   REGION=<region> AWS region (default: us-west-2)
-#   ACCOUNT=<id>    AWS account ID (REQUIRED — your account)
-#   REPO_NAME=<name> ECR repository name (default: megatron-bridge-uccl)
-#
-# Build BOTH images for the 3-way dispatcher comparison (NCCL / UCCL / NVSHMEM):
-#   ./1.build-and-push.sh                      # EP_BACKEND=uccl    -> nemo-26.04.01-uccl-0dc87eb
-#   EP_BACKEND=nvshmem ./1.build-and-push.sh   # -> nemo-26.04.01-deepep-nvshmem-567632d-cu13
-#
-# Prerequisites:
-#   - AWS CLI configured with credentials that have ECR push access.
-#   - Docker running (buildx not required; plain docker build is used).
-#   - Run from the directory containing Dockerfile.
-
+#!/usr/bin/env bash
 set -euo pipefail
+REGION="${REGION:-ap-south-1}"
+ACCOUNT_ID="${ACCOUNT_ID:-$(aws sts get-caller-identity --query Account --output text)}"
+TAG="${TAG:-$(git rev-parse --short=12 HEAD)-2608}"
+ARTIFACT_DIR="${ARTIFACT_DIR:-/mnt/fsx/ubuntu/workspace/artifacts/adai-kimi-k2-megatron-ep/image-build-${TAG}}"
+REPOSITORY_PREFIX="${REPOSITORY_PREFIX:-adai/kimi-k2-megatron-ep-2608}"
+mkdir -p "${ARTIFACT_DIR}"
+ROOT="$(git rev-parse --show-toplevel)"
+DOCKERFILE="${ROOT}/3.test_cases/megatron/megatron-bridge/Dockerfile"
 
-###########################
-###### User Variables #####
-###########################
+aws ecr get-login-password --region "${REGION}" | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com" >/dev/null
 
-EP_BACKEND="${EP_BACKEND:-uccl}"
-case "${EP_BACKEND}" in
-    uccl)    DEFAULT_TAG="nemo-26.04.01-uccl-0dc87eb" ;;
-    nvshmem) DEFAULT_TAG="nemo-26.04.01-deepep-nvshmem-567632d-cu13" ;;
-    *) echo "ERROR: EP_BACKEND must be 'uccl' or 'nvshmem', got '${EP_BACKEND}'"; exit 1 ;;
-esac
+declare -A TARGETS=(
+  [nccl-alltoall]=nccl-alltoall-final
+  [uccl]=uccl-final
+  [deepep-v1-nvshmem]=deepep-v1-nvshmem-final
+  [deepep-v2-gin-gda]=deepep-v2-gin-gda-final
+  [deepep-v2-pr5-control]=deepep-v2-pr5-control
+)
 
-TAG="${TAG:-${DEFAULT_TAG}}"
-REGION="${REGION:-us-west-2}"
-ACCOUNT="${ACCOUNT:?set ACCOUNT to your AWS account id}"
-REPO_NAME="${REPO_NAME:-megatron-bridge-uccl}"
-
-###########################
-###### Derived Values #####
-###########################
-
-REGISTRY="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com"
-LOCAL_IMAGE="${REPO_NAME}:${TAG}"
-REMOTE_IMAGE="${REGISTRY}/${REPO_NAME}:${TAG}"
-DOCKERFILE="Dockerfile"
-
-echo "============================================"
-echo "Megatron-Bridge MoE env image — Docker Build & Push"
-echo "============================================"
-echo "Dockerfile : ${DOCKERFILE}"
-echo "EP_BACKEND : ${EP_BACKEND}"
-echo "Local tag  : ${LOCAL_IMAGE}"
-echo "ECR image  : ${REMOTE_IMAGE}"
-echo "Region     : ${REGION}"
-echo "Account    : ${ACCOUNT}"
-echo "============================================"
-
-###########################
-####### Verify Dockerfile #
-###########################
-
-if [ ! -f "${DOCKERFILE}" ]; then
-    echo "ERROR: ${DOCKERFILE} not found in $(pwd)."
-    echo "Run this script from the directory that contains it."
-    exit 1
-fi
-
-###########################
-######### Build ###########
-###########################
-
-echo ""
-echo "Building image: ${LOCAL_IMAGE} ..."
-docker build \
-    --progress=plain \
-    -f "${DOCKERFILE}" \
-    --build-arg EP_BACKEND="${EP_BACKEND}" \
-    -t "${LOCAL_IMAGE}" \
-    .
-
-###########################
-######### ECR Setup #######
-###########################
-
-echo ""
-echo "Logging in to ECR: ${REGISTRY} ..."
-aws ecr get-login-password --region "${REGION}" \
-    | docker login --username AWS --password-stdin "${REGISTRY}"
-
-echo ""
-echo "Ensuring ECR repository '${REPO_NAME}' exists ..."
-if aws ecr describe-repositories \
-        --repository-names "${REPO_NAME}" \
-        --region "${REGION}" \
-        >/dev/null 2>&1; then
-    echo "  Repository already exists — skipping creation."
-else
-    echo "  Repository not found — creating..."
-    aws ecr create-repository \
-        --repository-name "${REPO_NAME}" \
-        --region "${REGION}" \
-        --image-scanning-configuration scanOnPush=true
-    echo "  Repository created."
-fi
-
-###########################
-######## Tag & Push #######
-###########################
-
-echo ""
-echo "Tagging: ${LOCAL_IMAGE} -> ${REMOTE_IMAGE}"
-docker tag "${LOCAL_IMAGE}" "${REMOTE_IMAGE}"
-
-echo ""
-echo "Pushing: ${REMOTE_IMAGE} ..."
-docker push "${REMOTE_IMAGE}"
-
-echo ""
-echo "============================================"
-echo "Done!  Image available at:"
-echo "  ${REMOTE_IMAGE}"
-echo ""
-echo "Export for subsequent scripts:"
-echo "  export IMAGE=${REMOTE_IMAGE}"
-echo "============================================"
+for arm in nccl-alltoall uccl deepep-v1-nvshmem deepep-v2-gin-gda deepep-v2-pr5-control; do
+  repository="${REPOSITORY_PREFIX}-${arm}"
+  aws ecr describe-repositories --region "${REGION}" --repository-names "${repository}" >/dev/null 2>&1 || \
+    aws ecr create-repository --region "${REGION}" --repository-name "${repository}" \
+      --image-scanning-configuration scanOnPush=true >/dev/null
+  image="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${repository}:${TAG}"
+  docker buildx build --progress=plain --load --target "${TARGETS[$arm]}" -f "${DOCKERFILE}" -t "${image}" "${ROOT}" \
+    2>&1 | tee "${ARTIFACT_DIR}/${arm}.build.log"
+  docker push "${image}" 2>&1 | tee "${ARTIFACT_DIR}/${arm}.push.log"
+  digest="$(aws ecr describe-images --region "${REGION}" --repository-name "${repository}" \
+    --image-ids imageTag="${TAG}" --query 'imageDetails[0].imageDigest' --output text)"
+  [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+  printf '%s=%s@%s\n' "${arm}" "${image%:*}" "${digest}" | tee -a "${ARTIFACT_DIR}/images.env"
+done
+sha256sum "${ARTIFACT_DIR}"/*.log "${ARTIFACT_DIR}/images.env" > "${ARTIFACT_DIR}/SHA256SUMS"

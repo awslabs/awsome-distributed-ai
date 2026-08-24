@@ -1,0 +1,84 @@
+schema_version: 2
+generated_at_utc: "2026-08-23T22:36:11Z"
+
+base:
+  nemo_image: nvcr.io/nvidia/nemo:26.08
+  nemo_digest_amd64: sha256:d8257dd0c4da714843aa1e371fe4dc8ee5a7972c247abbfd28d680bb197b6195
+  shipped_torch: 2.13.0a0+8145d630e8.nv26.06
+  shipped_bridge_version: 0.6.0
+  shipped_bridge_commit: c93251151adeeadbae3ff2a2bf5ee7a1c34cff01
+  shipped_mcore_version: 0.19.0
+  shipped_mcore_commit: 16ad357ee7973af32916fc1ca39d71065e5f03d4
+  shipped_transformer_engine: 2.17.1+4329ff84
+  shipped_transformer_engine_commit: 4329ff84bfbdaa778a33cba02a15fb0807c64689
+  shipped_cuda_toolkit: "13.3.33"
+  shipped_torch_nccl_build: 2.30.5
+  shipped_nccl_runtime: 2.30.7
+  shipped_libfabric: 2.4.0amzn3.0
+  shipped_gdrcopy: "2.5"
+
+common:
+  nccl_repository: https://github.com/NVIDIA/nccl.git
+  nccl_tag: v2.31.2-1
+  nccl_commit: 7b83616df3ae082a1f32bb74c27458bfe8153a13
+  efa_installer: 1.50.0
+  efa_installer_url: https://efa-installer.amazonaws.com/aws-efa-installer-1.50.0.tar.gz
+  efa_installer_sha256: fa6dff8593d866866c13cb4640d9059835cd4efa427971f100ab40c97bef2841
+  aws_ofi_nccl: 1.21.1
+  aws_ofi_nccl_commit: 2475c4c736907e68ebeadb3848f31231ee4a44d0
+  libfabric: 2.6.0
+  libfabric_commit: 5de2d6a2df83595bcc38531cb91bf59495559495
+  gdrcopy_repository: https://github.com/NVIDIA/gdrcopy.git
+  gdrcopy_tag: v2.5.2
+  nvshmem_version: 3.7.0
+  nvshmem_cuda13_sha256: f954ed91fa270f4b905391e03d808f60c73b894d88ef0aae865916d685353b8c
+
+patches:
+  bridge_deepep_v2_sha256: 9d54dd664daded6c3e4b105a77d578fea4340121188ea3a4261e33cec1523ce0
+  mcore_deepep_v2_elastic_sha256: 78349a76f66a678446daedf3cbd5cff8d8d183cb52925cff3eef3d0a3db1926b
+
+backends:
+  uccl:
+    repository: https://github.com/uccl-project/uccl.git
+    commit: a8c94e485da302b7cc963d2f74edb5b4e9115748
+  deepep_v1:
+    repository: https://github.com/deepseek-ai/DeepEP.git
+    commit: 567632dd59810d77b3cc05553df953cc0f779799
+  deepep_v2:
+    repository: https://github.com/amazon-contributing/DeepEP.git
+    base: 02efc268a37802fc00812ede8f5ad7f535ceea0e
+    pr3_head: dd0f87261a80cf0ce8aa66e4ab2041843851d810
+    pr3_patch_sha256: 1a7b3604ff5e01d97cdc043ae2c2480ac64ae229dfb34ea457633ac8f5362bc4
+    pr5_head: 2542d9641f2ec280213e875feb04be7862dda57c
+    pr5_patch_sha256: 36d6fcac58dcc197f8bc0419822b9381296cecba40bd640440c7633796c25f7e
+    synthetic_tree: 4da3a118b3b316de79b5af2b4770646035dc5802
+    synthetic_commit: b56ebf8bb4ece24cd78aa8c12550b24e35ac255b
+    synthetic_author: AWSome Distributed AI Benchmark <adai-benchmark@amazon.com>
+    synthetic_date_utc: "2026-08-23T18:41:17Z"
+    pr5_control_tree: 6624dfd5ca88aa53fc680cd00c659191cc38c481
+    pr5_control_commit: 9533c8e34ae2608ca256dff2ffe665ade9b6430c
+
+benchmark:
+  region: ap-south-1
+  target_instance_type: p6-b300.48xlarge
+  nodes: 32
+  gpus_per_node: 8
+  gpus: 256
+  model: literal-kimi-k2
+  layers: 61
+  experts: 384
+  top_k: 8
+  precision: bf16
+  tensor_parallel: 8
+  pipeline_parallel: 8
+  expert_parallel: 32
+  expert_tensor_parallel: 1
+  data_parallel: 4
+  sequence_length_tokens: 4096
+  global_batch_samples: 256
+  iterations: 40
+  warmup_iterations: 8
+  repeats: 3
+  performance_seed: 1234
+  model_repository: moonshotai/Kimi-K2-Base
+  model_revision: ce72df012259dcc55d945e890f815fe7ef69159c

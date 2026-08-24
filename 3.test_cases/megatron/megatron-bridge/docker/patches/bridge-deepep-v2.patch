@@ -1,0 +1,31 @@
+diff --git a/src/megatron/bridge/training/flex_dispatcher_backend.py b/src/megatron/bridge/training/flex_dispatcher_backend.py
+index 7431c24..77c065f 100644
+--- a/src/megatron/bridge/training/flex_dispatcher_backend.py
++++ b/src/megatron/bridge/training/flex_dispatcher_backend.py
+@@ -34,7 +34,7 @@ def apply_flex_dispatcher_backend(
+     model_config: TransformerConfig,
+     moe_flex_dispatcher_backend: str | None = None,
+ ) -> None:
+-    """Apply DeepEP or HybridEP optimizations to the model config.
++    """Apply DeepEP, DeepEP v2, or HybridEP optimizations to the model config.
+ 
+     DeepEP is applicable only for MoE models on Ampere, Hopper, B200 and B300 GPUs.
+     HybridEP is applicable only for MoE models on GB200, GB300 with NVL72 and on Ampere, Hopper, B200 and B300 GPUs.
+@@ -50,7 +50,7 @@ def apply_flex_dispatcher_backend(
+         return
+ 
+     device_properties = torch.cuda.get_device_properties(0)
+-    if moe_flex_dispatcher_backend == "deepep":
++    if moe_flex_dispatcher_backend in ("deepep", "deepep_v2"):
+         if not (
+             device_properties.major in [8, 9] or device_properties.name.startswith(("NVIDIA B200", "NVIDIA B300"))
+         ):
+@@ -84,7 +84,7 @@ def validate_flex_dispatcher_backend(model_config: TransformerConfig) -> None:
+     """Validate DeepEP or HybridEP is supported for the current GPU architecture."""
+     if model_config.moe_token_dispatcher_type == "flex":
+         device_properties = torch.cuda.get_device_properties(0)
+-        if model_config.moe_flex_dispatcher_backend == "deepep":
++        if model_config.moe_flex_dispatcher_backend in ("deepep", "deepep_v2"):
+             if not (
+                 device_properties.major in (8, 9) or device_properties.name.startswith(("NVIDIA B200", "NVIDIA B300"))
+             ):

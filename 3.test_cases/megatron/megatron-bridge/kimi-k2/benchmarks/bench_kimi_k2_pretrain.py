@@ -5,11 +5,8 @@
 Builds the LITERAL Kimi-K2 architecture (384 routed experts, 64 attention heads, node-group
 routing n_group=1, MLA, 61 layers, NO MTP) via Megatron-Bridge's AutoBridge from the HF config,
 with **mock data** and **random-init weights**, then runs ``pretrain()`` for a fixed number of
-iterations. The ONLY thing that changes between the two benchmark arms is the MoE token
-dispatcher, selected by ``MOE_DISPATCHER``:
-
-    MOE_DISPATCHER=alltoall  -> moe_token_dispatcher_type="alltoall"  (NCCL all-to-all / EFA)  [baseline]
-    MOE_DISPATCHER=deepep    -> flex + moe_flex_dispatcher_backend="deepep" (UCCL EFA drop-in) [treatment]
+iterations. ``EP_ARM`` is the only dispatcher selector and is checked against the immutable
+``/opt/benchmark/backend.json`` identity embedded in each image.
 
 This mirrors ``../../dsv3/benchmarks/bench_dsv3_pretrain.py`` but swaps the recipe-native DeepSeek-V3
 256-expert model for the real Kimi-K2 provider:
@@ -30,10 +27,11 @@ Why this is a valid A/B: model/data/parallelism/precision/seed are byte-identica
 so the iter-time ratio isolates the dispatcher. The per-iteration ``lm loss`` line (log_interval=1)
 is compared across the two arms to confirm they perform the same numerical work (a dispatcher
 that dropped/mis-routed tokens would diverge). All knobs come from env so the launcher is the
-single source of truth and both arms differ only in MOE_DISPATCHER (and MOE_A2A_OVERLAP, held
-identical across arms within a run).
+single source of truth and arms differ only in EP_ARM plus their backend image and environment.
 """
 
+import hashlib
+import json
 import logging
 import os
 
@@ -43,7 +41,8 @@ logger = logging.getLogger("bench_kimi_k2_pretrain")
 logging.basicConfig(level=logging.INFO)
 
 # HF Kimi-K2 repo dir staged on FSx (config.json + configuration_deepseek.py; weights unused).
-HF_PATH = os.environ.get("KIMI_K2_HF_PATH", "/fsx/kimi-k2/hf")
+HF_PATH = os.environ.get("KIMI_K2_HF_PATH", "moonshotai/Kimi-K2-Base")
+HF_REVISION = os.environ.get("KIMI_K2_REVISION", "ce72df012259dcc55d945e890f815fe7ef69159c")
 
 
 def _int(name: str, default: int) -> int:
@@ -54,9 +53,9 @@ def build_config():
     from megatron.bridge import AutoBridge
     from megatron.bridge.recipes.deepseek.deepseek_v3 import (
         deepseek_v3_pretrain_config_32nodes,
-        apply_flex_dispatcher_backend,
         set_deepseek_v3_pipeline_model_parallel_layout,
     )
+    from megatron.bridge.training.flex_dispatcher_backend import apply_flex_dispatcher_backend
 
     # Parallelism — manifest/launcher contract. Canonical 256-GPU layout:
     # TP8 * PP8 = 64; world 256 -> DP=4; EP=32 divides TP*DP=32 (ETP=1). 384 experts / 32 = 12/rank.
@@ -77,11 +76,23 @@ def build_config():
 
     # 2) Build the literal Kimi-K2 provider from the HF config (random init; no ~2 TB weights).
     #    trust_remote_code=True is REQUIRED (config auto_map -> configuration_deepseek.DeepseekV3Config).
-    k2 = AutoBridge.from_hf_pretrained(HF_PATH, trust_remote_code=True).to_megatron_provider(
+    k2 = AutoBridge.from_hf_pretrained(
+        HF_PATH, revision=HF_REVISION, trust_remote_code=True
+    ).to_megatron_provider(
         load_weights=False
     )
     cfg.model = k2
     m = cfg.model
+    literal = {
+        "num_layers": 61,
+        "hidden_size": 7168,
+        "num_moe_experts": 384,
+        "moe_router_topk": 8,
+    }
+    drift = {name: (expected, getattr(m, name, None)) for name, expected in literal.items()
+             if getattr(m, name, None) != expected}
+    if drift:
+        raise RuntimeError(f"Kimi-K2 architecture drift at revision {HF_REVISION}: {drift}")
 
     # 3) Re-apply the runtime knobs. The AutoBridge provider carries only the architecture; the
     #    recipe's runtime/parallelism settings lived on the model object we just replaced, so we
@@ -121,27 +132,63 @@ def build_config():
     cfg.train.train_iters = train_iters
     cfg.train.global_batch_size = global_batch
     cfg.train.micro_batch_size = micro_batch
+    performance_seed = _int("PERFORMANCE_SEED", 1234)
+    cfg.rng.seed = performance_seed
+    if hasattr(cfg.dataset, "random_seed"):
+        cfg.dataset.random_seed = performance_seed
+    route_trace = os.environ.get("ROUTER_TRACE_DIR")
+    if route_trace:
+        cfg.train.moe_routing_trace_path = route_trace
+        cfg.train.moe_routing_trace_max_training_iters = 1
 
-    # 5) the single A/B toggle (identical logic + B300-allowlist guard as bench_dsv3_pretrain.py).
-    dispatcher = os.environ.get("MOE_DISPATCHER", "deepep").lower()
-    if dispatcher == "alltoall":
-        m.moe_token_dispatcher_type = "alltoall"          # NCCL all-to-all over EFA (baseline)
+    # 5) One explicit four-arm selector. Image identity is independent evidence that a
+    # deepep-compatible import did not silently select the wrong implementation.
+    arm = os.environ["EP_ARM"]
+    identity_path = os.environ.get("EP_BACKEND_IDENTITY", "/opt/benchmark/backend.json")
+    with open(identity_path, encoding="utf-8") as stream:
+        identity_bytes = stream.read().encode()
+    identity = json.loads(identity_bytes)
+    if identity.get("ep_arm") != arm:
+        raise RuntimeError(f"EP_ARM/image mismatch: requested={arm!r}, identity={identity!r}")
+
+    if arm == "nccl-alltoall":
+        m.moe_token_dispatcher_type = "alltoall"
         m.moe_flex_dispatcher_backend = None
-    elif dispatcher == "deepep":
-        m.moe_flex_dispatcher_backend = "deepep"          # flex + deepep -> UCCL deep_ep over EFA
-        apply_flex_dispatcher_backend(m, "deepep")        # sets type="flex" + clears shared-expert overlap
-        # A/B VALIDITY GUARD. apply_flex_dispatcher_backend early-returns (leaving type != "flex")
-        # if the device-name allowlist doesn't match, which would silently run the deepep arm as
-        # plain alltoall and zero out the A/B delta. Fail loudly instead.
-        if m.moe_token_dispatcher_type != "flex":
-            raise RuntimeError(
-                "deepep arm did not become flex (got %r): apply_flex_dispatcher_backend "
-                "early-returned — device %r not in the B200/B300 allowlist. The deepep A/B arm "
-                "would silently run alltoall; aborting to avoid an invalid A/B."
-                % (m.moe_token_dispatcher_type, torch.cuda.get_device_properties(0).name)
-            )
+    elif arm in ("uccl", "deepep-v1-nvshmem"):
+        apply_flex_dispatcher_backend(m, "deepep")
+        assert m.moe_token_dispatcher_type == "flex"
+        assert m.moe_flex_dispatcher_backend == "deepep"
+    elif arm == "deepep-v2-gin-gda":
+        apply_flex_dispatcher_backend(m, "deepep_v2")
+        assert m.moe_token_dispatcher_type == "flex"
+        assert m.moe_flex_dispatcher_backend == "deepep_v2"
+        m.moe_deepep_v2_num_qps = _int("DEEPEP_V2_NUM_QPS", 0)
+        m.moe_deepep_v2_deterministic = False
+        m.moe_deepep_v2_allow_multiple_reduction = True
+        m.moe_deepep_v2_prefer_overlap_with_compute = True
     else:
-        raise ValueError("MOE_DISPATCHER must be 'alltoall' or 'deepep', got %r" % dispatcher)
+        raise ValueError(f"Unknown EP_ARM: {arm}")
+
+    logger.info(
+        "EP_BACKEND_REQUEST arm=%s dispatcher=%s backend=%s image_identity_sha256=%s",
+        arm,
+        m.moe_token_dispatcher_type,
+        m.moe_flex_dispatcher_backend,
+        hashlib.sha256(identity_bytes).hexdigest(),
+    )
+    logger.info(
+        "NO_TOKEN_DROP_CONFIG capacity_factor=%r token_dropping=%r experts=%d topk=%d",
+        getattr(m, "moe_expert_capacity_factor", None),
+        getattr(m, "moe_token_dropping", False),
+        m.num_moe_experts,
+        m.moe_router_topk,
+    )
+    logger.info(
+        "EXPERT_GROUP_EXPECTATION expert_tensor_parallel=%d expert_parallel=%d group_size=%d",
+        m.expert_tensor_parallel_size,
+        m.expert_model_parallel_size,
+        m.expert_tensor_parallel_size * m.expert_model_parallel_size,
+    )
 
     # moe_shared_expert_overlap is alltoall-only; hold OFF on BOTH arms to isolate the dispatcher.
     if hasattr(m, "moe_shared_expert_overlap"):
@@ -189,9 +236,9 @@ def build_config():
             cfg.logger.log_interval = 1
 
     logger.info(
-        "bench cfg (KIMI-K2): dispatcher=%s overlap=%s | L=%s h=%s experts=%s topk=%s "
+        "bench cfg (KIMI-K2): arm=%s overlap=%s | L=%s h=%s experts=%s topk=%s "
         "n_group=%s heads=%s mtp=%s MLA=%s | TP%s PP%s EP%s CP%s | iters=%s gbs=%s mbs=%s seq=%s",
-        dispatcher, overlap, m.num_layers, m.hidden_size, m.num_moe_experts, m.moe_router_topk,
+        arm, overlap, m.num_layers, m.hidden_size, m.num_moe_experts, m.moe_router_topk,
         getattr(m, "moe_router_num_groups", "?"), m.num_attention_heads, m.mtp_num_layers,
         getattr(m, "multi_latent_attention", "?"),
         tp, pp, ep, cp, train_iters, global_batch, micro_batch, seq_len,

@@ -1,280 +1,117 @@
-# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-# SPDX-License-Identifier: MIT-0
+# syntax=docker/dockerfile:1.7
+ARG NEMO_IMAGE=nvcr.io/nvidia/nemo@sha256:d8257dd0c4da714843aa1e371fe4dc8ee5a7972c247abbfd28d680bb197b6195
+FROM ${NEMO_IMAGE} AS common-build
 
-# Model-agnostic Megatron-Bridge + UCCL-EP environment image: NVIDIA
-# Megatron-Bridge + Megatron-Core (MoE flex/deepep token dispatcher) with UCCL-EP
-# providing the expert-parallel all-to-all over AWS EFA. UCCL ships a top-level
-# `deep_ep` python module that SHADOWS NVIDIA DeepEP (which is NVSHMEM/IB-bound
-# and does not run on EFA). Model SFT configs are mounted at runtime, not baked
-# in, so this single image is reused by every model test case under this library.
-#
-# Base: NeMo Framework container 26.04.01. Per Megatron-Bridge's own install guidance
-# ("use a matching NeMo Framework container"), the curated stack is consumed via the
-# container rather than pip-pinned. This tag ships a SELF-CONSISTENT, B300-ready stack
-# (verified by probing the live container):
-#   megatron-bridge 0.4.2, megatron-core 0.17.1, torch 2.11.0a0, transformer-engine 2.14.1.
-# Why 26.04.01 and not 25.11.01: the older base shipped Megatron-Bridge 0.2.0, whose
-# flex/deepep GPU allowlist rejects p6-b300 — device name "NVIDIA B300 SXM6 AC" fails
-# the exact-string match `name in ["NVIDIA B300"]`, and the major-version clause only
-# admits 8/9 (Ampere/Hopper), not Blackwell major 10. Bridge 0.4.0+ fixed this
-# (`name.startswith("NVIDIA B300")`), and 26.04.01 ships 0.4.2 with a matching
-# megatron-core (0.17.1) so `import megatron.bridge` is consistent — pip-forcing 0.4.2
-# onto the 25.11.01 base instead DOWNGRADES core to 0.13.1 and breaks the import.
-# This Dockerfile then strips the IB fabric, lays down EFA + GDRCopy, and builds
-# UCCL / UCCL-EP / the deep_ep shadow wrapper against this base's torch/TE.
-FROM nvcr.io/nvidia/nemo:26.04.01
+ARG BRIDGE_COMMIT=c93251151adeeadbae3ff2a2bf5ee7a1c34cff01
+ARG MCORE_COMMIT=16ad357ee7973af32916fc1ca39d71065e5f03d4
+ARG NCCL_TAG=v2.31.2-1
+ARG NCCL_COMMIT=7b83616df3ae082a1f32bb74c27458bfe8153a13
+ARG EFA_INSTALLER_VERSION=1.50.0
+ARG EFA_INSTALLER_SHA256=fa6dff8593d866866c13cb4640d9059835cd4efa427971f100ab40c97bef2841
+ARG GDRCOPY_TAG=v2.5.2
+ENV BRIDGE_COMMIT=${BRIDGE_COMMIT} \
+    MCORE_COMMIT=${MCORE_COMMIT} \
+    NCCL_TAG=${NCCL_TAG} \
+    NCCL_COMMIT=${NCCL_COMMIT} \
+    EFA_INSTALLER_VERSION=${EFA_INSTALLER_VERSION} \
+    EFA_INSTALLER_SHA256=${EFA_INSTALLER_SHA256} \
+    GDRCOPY_TAG=${GDRCOPY_TAG} \
+    CUDA_HOME=/usr/local/cuda \
+    PATH=/opt/amazon/efa/bin:/opt/amazon/openmpi/bin:/opt/gdrcopy/bin:${PATH} \
+    LD_LIBRARY_PATH=/opt/nccl/build/lib:/opt/amazon/ofi-nccl/lib:/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu:/opt/amazon/efa/lib:/opt/gdrcopy/lib:/usr/local/cuda/lib64 \
+    LIBRARY_PATH=/opt/nccl/build/lib:/opt/amazon/efa/lib:/opt/gdrcopy/lib \
+    CPATH=/opt/nccl/build/include:/opt/amazon/efa/include:/opt/gdrcopy/include
 
-######################
-# Pinned versions (ARGs)
-#
-# GDRCopy / EFA / UCCL are built here. NCCL and aws-ofi-nccl are provided by the
-# NeMo base image and the bundled EFA installer (>=1.47.0); the ARG values below
-# are declared so the repo's CI version-gate (which greps "nccl"/"efa" lines from
-# the Dockerfile) sees values at or above the enforced minimums
-# (EFA >= 1.47.0, NCCL >= 2.28). They are not separately installed here.
-######################
-ARG GDRCOPY_VERSION=v2.5.2
-ARG EFA_INSTALLER_VERSION=1.48.0
-ARG NCCL_VERSION=v2.30.4-1
-ARG AWS_OFI_NCCL_VERSION=v1.19.0
+RUN mkdir -p /opt/benchmark/patches /opt/benchmark/case
+COPY 3.test_cases/megatron/megatron-bridge/docker/patches/ /opt/benchmark/patches/
+COPY 3.test_cases/megatron/megatron-bridge/docker/install-common.sh /opt/benchmark/install-common.sh
+COPY 3.test_cases/megatron/megatron-bridge/docker/collect-build-manifest.sh /opt/benchmark/collect-build-manifest.sh
+COPY 3.test_cases/megatron/megatron-bridge/docker/verify-image.sh /opt/benchmark/verify-image.sh
+COPY 3.test_cases/megatron/megatron-bridge/versions.lock.yaml /opt/benchmark/versions.lock.yaml
+COPY 3.test_cases/megatron/megatron-bridge/bench/ /opt/benchmark/case/bench/
+COPY 3.test_cases/megatron/megatron-bridge/kimi-k2/ /opt/benchmark/case/kimi-k2/
+RUN --mount=type=cache,target=/root/.cache/ccache /opt/benchmark/install-common.sh
+ENV LD_PRELOAD=/opt/nccl/build/lib/libnccl.so.2
+RUN /opt/benchmark/collect-build-manifest.sh common /opt/benchmark/common-build-manifest.json
 
-# UCCL: pin the exact commit (no tags/branches) for reproducibility.
-ARG UCCL_COMMIT=0dc87eb3b40c372a16b70ef320f37daaa5299ca7
-# B200 (sm_100, 10.0a) + B300 (sm_103, 10.3a). This box is B300 only, but we
-# build both so the same image runs on either Blackwell datacenter SKU.
-ARG TORCH_CUDA_ARCH_LIST="10.0a+PTX;10.3a+PTX"
-# nanobind is a UCCL build-time dependency. Pinned per the repo "no latest" rule.
-ARG NANOBIND_VERSION=2.4.0
+FROM common-build AS nccl-alltoall-final
+RUN printf '%s\n' '{"ep_arm":"nccl-alltoall","dispatcher":"alltoall","backend":null}' > /opt/benchmark/backend.json
+RUN EP_ARM=nccl-alltoall /opt/benchmark/verify-image.sh
+WORKDIR /opt/benchmark/case
 
-# EP backend selector — which library provides the top-level `deep_ep` module that
-# Megatron-Core's flex/deepep dispatcher (`moe_flex_dispatcher_backend="deepep"`)
-# resolves at `import deep_ep`. ONE Dockerfile, TWO image tags:
-#   uccl    (default) -> UCCL EFA-native deep_ep shadow (the existing build)
-#   nvshmem           -> NVIDIA DeepEP, EFA-patched to run NVSHMEM over libfabric
-#                        (host-proxy, no IBGDA — see micro-benchmarks/expert-
-#                         parallelism/deepep-benchmark/setup_deepep_efa.sh).
-# Both arms then run the SAME `MOE_DISPATCHER=deepep` code path; only the image
-# (hence which `deep_ep` is importable) differs. This is what lets the dsv3/qwen3
-# benchmarks compare DeepEP+UCCL vs DeepEP+NVSHMEM with no Megatron-Core changes.
-ARG EP_BACKEND=uccl
-# nvshmem-backend pins (used only when EP_BACKEND=nvshmem). DeepEP commit + NVSHMEM
-# tag match micro-benchmarks/.../deepep-benchmark (proven on p6-b300 / sm_103).
-# DEEPEP_GPU_ARCH=100 (sm_100) is the Blackwell cubin the deepep-benchmark image
-# was built with and ran on these sm_103 B300 nodes.
-ARG NVSHMEM_VERSION=v3.7.0-0
-ARG DEEPEP_COMMIT=567632d
-ARG DEEPEP_GPU_ARCH=100
+FROM common-build AS uccl-final
+ARG UCCL_COMMIT=a8c94e485da302b7cc963d2f74edb5b4e9115748
+ENV UCCL_COMMIT=${UCCL_COMMIT} PER_EXPERT_BATCHING=1
+COPY 3.test_cases/megatron/megatron-bridge/docker/install-uccl.sh /opt/benchmark/install-uccl.sh
+RUN --mount=type=cache,target=/root/.cache/ccache /opt/benchmark/install-uccl.sh
+RUN printf '%s\n' '{"ep_arm":"uccl","dispatcher":"flex","backend":"deepep"}' > /opt/benchmark/backend.json
+RUN EP_ARM=uccl /opt/benchmark/verify-image.sh
+WORKDIR /opt/benchmark/case
 
-ARG OPEN_MPI_PATH=/opt/amazon/openmpi
-
-######################
-# EFA-only fabric on the 26.04.01 base.
-#
-# IMPORTANT: do NOT remove libibverbs / ibverbs-providers here. On 25.11.01 the IB
-# libverbs were separable and this Dockerfile apt-removed them to force EFA-only. On
-# 26.04.01 the curated EFA stack (libfabric-aws, openmpi40/50-aws, efa-profile, DOCA
-# SDK) DEPENDS ON libibverbs1/ibverbs-providers — apt-removing them cascades into
-# removing the entire EFA + OpenMPI stack (verified via apt-get remove --simulate).
-# EFA-only is instead enforced at RUNTIME via FI_PROVIDER=efa (set in the ENV block
-# below) plus the OMPI ^ucx / btl=tcp,self settings.
-#
-# Also do NOT `rm -rf /opt/hpcx/ompi`: on 26.04.01 the bundled torch's
-# libtorch_global_deps.so links libmpi.so.40 -> /opt/hpcx/ompi/lib (verified via ldd),
-# so removing the HPC-X tree breaks `import torch` (OSError: libmpi.so.40). On 25.11.01
-# torch didn't depend on it, so the old Dockerfile could drop it; here we keep it.
-#
-# Also do NOT `apt-get upgrade`: a blanket upgrade can pull a newer
-# libcusparselt0-cuda-1x that removes the libcusparseLt.so.0 symlink the bundled
-# torch is linked against, breaking `import torch`. Only refresh the index and
-# install the extra build deps we need.
-######################
-# GDRCopy + EFA: PRE-PROVIDED by the nemo:26.04.01 base — NOT reinstalled.
-#   Verified in the base (dpkg/ls): GDRCopy /usr/lib/x86_64-linux-gnu/libgdrapi.so.2.5;
-#   EFA efa-profile 1.7, libfabric-aws 2.3.1amzn4.0 (/opt/amazon/efa/lib/libfabric.so.1.29.1),
-#   aws-ofi-nccl (libnccl-net-ofi.so), NCCL 2.29.3+cuda13.1.
-#   On 25.11.01 this Dockerfile built GDRCopy from source and ran the EFA installer; on
-#   26.04.01 both are curated into the base. Re-running the EFA installer FAILS its own
-#   self-check ("000_efa.conf is installed by efa-profile but doesn't exist"). The
-#   GDRCOPY_VERSION / EFA_INSTALLER_VERSION ARGs are retained at the top so the repo CI
-#   version-gate still sees values >= the enforced minimums.
-#
-# NOTE: ALL setup below is collapsed into ONE RUN layer. The 26.04.01 base is 120
-# image layers deep; overlay2's hard limit is 128, so each extra RUN/ENV counts. The
-# UCCL clone/build/wrapper steps further down stay separate (long + cache-valuable).
-# Megatron-Bridge is NOT installed — the base already ships a curated, B300-ready 0.4.2
-# with matching megatron-core 0.17.1 (the verify RUN asserts both).
-RUN set -eux; \
-    apt-get update -y; \
-    DEBIAN_FRONTEND=noninteractive apt install -y --allow-unauthenticated \
-      apt-utils autoconf automake build-essential cmake curl gcc gdb git kmod \
-      libtool openssh-client openssh-server vim; \
-    apt remove -y python3-blinker; apt autoremove -y; \
-    mkdir -p /var/run/sshd; \
-    sed -i 's/[ #]\(.*StrictHostKeyChecking \).*/ \1no/g' /etc/ssh/ssh_config; \
-    echo "    UserKnownHostsFile /dev/null" >> /etc/ssh/ssh_config; \
-    sed -i 's/#\(StrictModes \).*/\1no/g' /etc/ssh/sshd_config; \
-    sed 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@g' -i /etc/pam.d/sshd; \
-    rm -rf /root/.ssh/; mkdir -p /root/.ssh/; \
-    ssh-keygen -q -t rsa -N '' -f /root/.ssh/id_rsa; \
-    cp /root/.ssh/id_rsa.pub /root/.ssh/authorized_keys; \
-    printf "Host *\n  StrictHostKeyChecking no\n" >> /root/.ssh/config; \
-    echo "hwloc_base_binding_policy = none" >> /opt/amazon/openmpi/etc/openmpi-mca-params.conf; \
-    echo "rmaps_base_mapping_policy = slot" >> /opt/amazon/openmpi/etc/openmpi-mca-params.conf; \
-    pip3 install awscli pynvml wandb python-etcd; \
-    mv $OPEN_MPI_PATH/bin/mpirun $OPEN_MPI_PATH/bin/mpirun.real; \
-    printf '#!/bin/bash\n/opt/amazon/openmpi/bin/mpirun.real "$@"\n' > $OPEN_MPI_PATH/bin/mpirun; \
-    chmod a+x $OPEN_MPI_PATH/bin/mpirun; \
-    rm -rf /var/lib/apt/lists/*
-
-# Env: OFI-NCCL plugin search paths + cuda compat; keep /opt/venv/bin FIRST so python3
-# resolves to the venv that has torch + Megatron-Core + Megatron-Bridge + (later) UCCL.
-ENV LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:/opt/amazon/openmpi/lib:/opt/nccl/build/lib:/opt/amazon/efa/lib:/opt/amazon/aws-ofi-nccl/lib:/opt/amazon/ofi-nccl/lib:/opt/aws-ofi-nccl/install/lib:/usr/local/cuda/compat:$LD_LIBRARY_PATH \
-    LIBRARY_PATH=/usr/local/cuda/compat/:$LIBRARY_PATH \
-    PATH=/opt/venv/bin:/opt/amazon/openmpi/bin:/opt/amazon/efa/bin:$PATH
-
-#####################################################
-## deep_ep provider — UCCL (default) OR NVIDIA DeepEP + NVSHMEM-over-EFA
-##
-## Exactly one of the two RUN blocks below executes, gated on EP_BACKEND, and each
-## installs a TOP-LEVEL python `deep_ep` module into /opt/venv that shadows the
-## NVIDIA DeepEP the base ships in dist-packages (IB/NVSHMEM-bound). Megatron-Core's
-## flex/deepep dispatcher (`moe_flex_dispatcher_backend="deepep"`) then resolves
-## `import deep_ep` to whichever was installed.
-#####################################################
-# --- EP_BACKEND=uccl: UCCL core + UCCL-EP + deep_ep shadow wrapper ---
-# Use `python3 -m pip` for ALL of UCCL so packages land in the SAME env as python3
-# (/opt/venv, first on PATH, where torch + Megatron live). A bare `pip` targets
-# /usr/local; combined with the `ep` extension that setup.py installs into /opt/venv,
-# that splits the `uccl` package across two dirs (core in /usr/local, ep.abi3.so in
-# /opt/venv) so `from uccl.ep import ...` — and therefore `import deep_ep` — fails.
-#
-# All UCCL steps are ONE RUN (overlay2 layer-depth budget — see the setup RUN above):
-#   nanobind (build dep) -> clone+checkout pinned SHA + submodules -> UCCL core ->
-#   UCCL-EP kernels (PER_EXPERT_BATCHING + Blackwell arch list; the ";" in
-#   TORCH_CUDA_ARCH_LIST must stay quoted) -> deep_ep shadow wrapper.
-RUN if [ "${EP_BACKEND}" = "uccl" ]; then set -eux; \
-    python3 -m pip install nanobind==${NANOBIND_VERSION}; \
-    git clone https://github.com/uccl-project/uccl.git /opt/uccl; \
-    cd /opt/uccl; \
-    git checkout ${UCCL_COMMIT}; \
-    git submodule update --init --recursive; \
-    cd /opt/uccl && python3 -m pip install .; \
-    cd /opt/uccl/ep && PER_EXPERT_BATCHING=1 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" python3 setup.py install; \
-    cd /opt/uccl/ep/deep_ep_wrapper && python3 -m pip install .; \
-    else echo "EP_BACKEND=${EP_BACKEND}: skipping UCCL build"; fi
-
-# --- EP_BACKEND=nvshmem: NVIDIA DeepEP, EFA-patched (NVSHMEM over libfabric) ---
-# Reuses the proven build recipe from
-# micro-benchmarks/expert-parallelism/deepep-benchmark/setup_deepep_efa.sh, vendored
-# into this dir (deepep/) so it is in the build context (Docker can't COPY outside it).
-# It patches DeepEP (put+signal, an IBGDA->host-proxy shim, fake IBGDA state,
-# NVSHMEM_MAX_TEAMS 7->8), builds NVSHMEM v3.7 (libfabric/EFA, IBGDA OFF), then builds
-# DeepEP into /opt/venv. GDRCopy is built from source (NVSHMEM cmake needs its headers).
-# Replaces the base's torch-bundled nvidia-nvshmem so the from-source NVSHMEM is used.
-COPY deepep/setup_deepep_efa.sh /tmp/setup_deepep_efa.sh
-RUN if [ "${EP_BACKEND}" = "nvshmem" ]; then set -eux; \
-    git clone -b ${GDRCOPY_VERSION} https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy; \
-    cd /tmp/gdrcopy && make prefix=/opt/gdrcopy install && cd / && rm -rf /tmp/gdrcopy; \
-    python3 -m pip uninstall -y nvidia-nvshmem-cu13 nvidia-nvshmem-cu12 deep_ep 2>/dev/null || true; \
-    git clone -b ${NVSHMEM_VERSION} https://github.com/NVIDIA/nvshmem.git /opt/nvshmem_src; \
-    git clone https://github.com/deepseek-ai/DeepEP.git /opt/deepep-efa-src; \
-    cd /opt/deepep-efa-src && git checkout ${DEEPEP_COMMIT}; \
-    chmod +x /tmp/setup_deepep_efa.sh; \
-    /tmp/setup_deepep_efa.sh \
-      --cuda-home /usr/local/cuda \
-      --libfabric-home /opt/amazon/efa \
-      --gdrcopy-home /opt/gdrcopy \
-      --gpu-arch "${DEEPEP_GPU_ARCH}" \
-      --venv /opt/venv \
-      --deepep-src /opt/deepep-efa-src \
-      --nvshmem-src /opt/nvshmem_src; \
-    rm -rf /opt/nvshmem_src/build /opt/deepep-efa-src; \
-    else echo "EP_BACKEND=${EP_BACKEND}: skipping NVSHMEM/DeepEP build"; fi
-
-# NVSHMEM runtime env. Set UNCONDITIONALLY on purpose: `ENV` cannot be gated on the
-# `EP_BACKEND` build ARG, so these are baked into the uccl image too. Harmless there because
-# the dirs are absent (nothing dlopens libfabric); the only latent risk is a future uccl
-# image that also ships NVSHMEM bits, which would then inherit a libfabric transport — revisit
-# this block if the uccl build ever gains NVSHMEM.
-# Must PRECEDE the verify RUN so the nvshmem build's `import deep_ep` can dlopen
-# libnvshmem; LD_LIBRARY_PATH puts the from-source NVSHMEM ahead of any torch-bundled one.
-ENV NVSHMEM_DIR=/opt/nvshmem_src/install \
-    NVSHMEM_HOME=/opt/nvshmem_src/install \
+FROM common-build AS deepep-v1-nvshmem-final
+ARG DEEPEP_V1_COMMIT=567632dd59810d77b3cc05553df953cc0f779799
+ARG NVSHMEM_VERSION=3.7.0
+ENV DEEPEP_V1_COMMIT=${DEEPEP_V1_COMMIT} \
+    NVSHMEM_VERSION=${NVSHMEM_VERSION} \
     NVSHMEM_REMOTE_TRANSPORT=libfabric \
     NVSHMEM_LIBFABRIC_PROVIDER=efa \
-    LD_LIBRARY_PATH=/opt/nvshmem_src/install/lib:/opt/gdrcopy/lib:$LD_LIBRARY_PATH
+    LD_LIBRARY_PATH=/opt/amazon/nvshmem/lib:${LD_LIBRARY_PATH} \
+    LD_PRELOAD=/opt/amazon/nvshmem/lib/libnvshmem_host.so.3:${LD_PRELOAD}
+COPY 3.test_cases/megatron/megatron-bridge/deepep/setup_deepep_efa.sh /opt/benchmark/setup_deepep_efa.sh
+COPY 3.test_cases/megatron/megatron-bridge/docker/install-deepep-v1.sh /opt/benchmark/install-deepep-v1.sh
+RUN --mount=type=cache,target=/root/.cache/ccache /opt/benchmark/install-deepep-v1.sh
+RUN printf '%s\n' '{"ep_arm":"deepep-v1-nvshmem","dispatcher":"flex","backend":"deepep"}' > /opt/benchmark/backend.json
+RUN EP_ARM=deepep-v1-nvshmem /opt/benchmark/verify-image.sh
+WORKDIR /opt/benchmark/case
 
-#####################################################
-## Build verification (backend-aware)
-##
-## Runs via the SAME python3 the training uses (/opt/venv, first on PATH). We REALLY
-## `import deep_ep` here (not just find_spec): for uccl the wrapper does
-## `from uccl.ep import ...`, and for nvshmem the C extension dlopens libnvshmem — a
-## find_spec-only check would PASS even when those fail. Importing deep_ep does NOT
-## require a GPU/driver at import time (NVSHMEM init / Buffer instantiation does, which
-## 2.sanity-singlenode.sh Gate 2/5 exercises on a real node). Both arms must resolve
-## `import deep_ep` to our /opt build, NOT the base's IB/NVSHMEM-bound DeepEP in
-## dist-packages. import megatron.core/bridge is GPU-less-safe.
-#####################################################
-RUN if [ "${EP_BACKEND}" = "uccl" ]; then \
- python3 -c "import importlib.util as u, importlib.metadata as md; \
- from packaging.version import Version; \
- import deep_ep, uccl, megatron.core, megatron.bridge; \
- assert hasattr(deep_ep, 'Buffer'), 'deep_ep.Buffer missing (uccl.ep not wired into the deep_ep shadow)'; \
- assert '/opt/venv/' in deep_ep.__file__, \
-   'import deep_ep resolved to %s, NOT the UCCL venv copy: the base also ships NVIDIA DeepEP in dist-packages (IB/NVSHMEM-bound). sys.path order must keep /opt/venv first.' % deep_ep.__file__; \
- bridge_ver = md.version('megatron-bridge'); \
- assert Version(bridge_ver) >= Version('0.4.0'), \
-   'megatron-bridge %s < 0.4.0: flex/deepep allowlist rejects B300 (the pin did not take)' % bridge_ver; \
- from megatron.bridge.training.flex_dispatcher_backend import validate_flex_dispatcher_backend as _v; \
- import inspect; \
- assert 'startswith' in inspect.getsource(_v), 'flex dispatcher allowlist is not the startswith() form (B300 unsupported)'; \
- print('python ->', __import__('sys').executable); \
- print('deep_ep ->', deep_ep.__file__); \
- print('uccl ->', uccl.__file__, '(has ep:', u.find_spec('uccl.ep') is not None, ')'); \
- print('megatron-core', md.version('megatron-core')); \
- print('megatron-bridge', bridge_ver, '(B300 flex/deepep allowlist OK)')"; \
- else \
- python3 -c "import importlib.util as u, importlib.metadata as md, inspect; \
- from packaging.version import Version; \
- import megatron.core, megatron.bridge; \
- spec = u.find_spec('deep_ep'); \
- assert spec is not None and spec.origin, 'deep_ep not importable (NVIDIA DeepEP/NVSHMEM build failed)'; \
- assert '/opt/venv/' in spec.origin, \
-   'deep_ep spec at %s, NOT the from-source EFA build in /opt/venv: the base ships an IB/NVSHMEM-bound DeepEP (dist-packages or editable /opt/DeepEP). Our setup.py install must shadow it.' % spec.origin; \
- bridge_ver = md.version('megatron-bridge'); \
- assert Version(bridge_ver) >= Version('0.4.0'), \
-   'megatron-bridge %s < 0.4.0: flex/deepep allowlist rejects B300 (the pin did not take)' % bridge_ver; \
- from megatron.bridge.training.flex_dispatcher_backend import validate_flex_dispatcher_backend as _v; \
- assert 'startswith' in inspect.getsource(_v), 'flex dispatcher allowlist is not the startswith() form (B300 unsupported)'; \
- print('python ->', __import__('sys').executable); \
- print('deep_ep spec ->', spec.origin, '(NVIDIA DeepEP, EFA/NVSHMEM-libfabric; real import+Buffer is GPU-gated to 2.sanity-singlenode.sh)'); \
- print('megatron-core', md.version('megatron-core')); \
- print('megatron-bridge', bridge_ver, '(B300 flex/deepep allowlist OK)')"; \
- fi
+FROM common-build AS deepep-v2-gin-gda-final
+ARG DEEPEP_V2_BASE=02efc268a37802fc00812ede8f5ad7f535ceea0e
+ARG DEEPEP_PR3_HEAD=dd0f87261a80cf0ce8aa66e4ab2041843851d810
+ARG DEEPEP_PR3_PATCH_SHA256=1a7b3604ff5e01d97cdc043ae2c2480ac64ae229dfb34ea457633ac8f5362bc4
+ARG DEEPEP_PR5_HEAD=2542d9641f2ec280213e875feb04be7862dda57c
+ARG DEEPEP_PR5_PATCH_SHA256=36d6fcac58dcc197f8bc0419822b9381296cecba40bd640440c7633796c25f7e
+ARG DEEPEP_SYNTHETIC_TREE=4da3a118b3b316de79b5af2b4770646035dc5802
+ARG DEEPEP_SYNTHETIC_COMMIT=b56ebf8bb4ece24cd78aa8c12550b24e35ac255b
+ARG NVSHMEM_VERSION=3.7.0
+ARG NVSHMEM_SHA256=f954ed91fa270f4b905391e03d808f60c73b894d88ef0aae865916d685353b8c
+ENV DEEPEP_V2_BASE=${DEEPEP_V2_BASE} \
+    DEEPEP_PR3_HEAD=${DEEPEP_PR3_HEAD} \
+    DEEPEP_PR3_PATCH_SHA256=${DEEPEP_PR3_PATCH_SHA256} \
+    DEEPEP_PR5_HEAD=${DEEPEP_PR5_HEAD} \
+    DEEPEP_PR5_PATCH_SHA256=${DEEPEP_PR5_PATCH_SHA256} \
+    DEEPEP_SYNTHETIC_TREE=${DEEPEP_SYNTHETIC_TREE} \
+    DEEPEP_SYNTHETIC_COMMIT=${DEEPEP_SYNTHETIC_COMMIT} \
+    EP_NCCL_ROOT_DIR=/opt/nccl/build \
+    EP_NVSHMEM_ROOT_DIR=/opt/amazon/nvshmem \
+    NVSHMEM_DIR=/opt/amazon/nvshmem \
+    NVSHMEM_VERSION=${NVSHMEM_VERSION} \
+    NVSHMEM_SHA256=${NVSHMEM_SHA256} \
+    LD_LIBRARY_PATH=/opt/amazon/nvshmem/lib:${LD_LIBRARY_PATH}
+COPY 3.test_cases/megatron/megatron-bridge/docker/install-deepep-v2.sh /opt/benchmark/install-deepep-v2.sh
+RUN --mount=type=cache,target=/root/.cache/ccache /opt/benchmark/install-deepep-v2.sh
+RUN printf '%s\n' '{"ep_arm":"deepep-v2-gin-gda","dispatcher":"flex","backend":"deepep_v2"}' > /opt/benchmark/backend.json
+RUN EP_ARM=deepep-v2-gin-gda /opt/benchmark/verify-image.sh
+WORKDIR /opt/benchmark/case
 
-#####################################################
-## Fabric / EFA environment
-##
-## NCCL_SOCKET_IFNAME uses the canonical exclude list (^docker,lo,veth).
-#####################################################
-## NCCL/EFA + OpenMPI (^ucx, tcp,self) + PMIx fix, in ONE ENV (overlay2 layer-depth
-## budget). FI_PROVIDER=efa is what enforces EFA-only at runtime (we no longer remove
-## IB libverbs — the base's curated EFA depends on them). PMIX_MCA_gds=hash works around
-## https://github.com/open-mpi/ompi/issues/7516.
-ENV NCCL_SOCKET_IFNAME=^docker,lo,veth \
-    FI_PROVIDER=efa \
-    FI_EFA_USE_DEVICE_RDMA=1 \
-    FI_EFA_FORK_SAFE=1 \
-    PER_EXPERT_BATCHING=1 \
-    OMPI_MCA_pml=^ucx \
-    OMPI_MCA_btl=tcp,self \
-    OMPI_MCA_btl_tcp_if_exclude=lo,docker0,veth \
-    OPAL_PREFIX=/opt/amazon/openmpi \
-    PMIX_MCA_gds=hash
-
-# This image is model-agnostic: it ships only the Megatron-Bridge + UCCL-over-EFA
-# environment, so it can be reused by any model test case under this library.
-# Per-model SFT configs are NOT baked in — each model mounts its own conf at
-# runtime at /workspace/conf (e.g. via a ConfigMap; see the per-model README).
-WORKDIR /workspace
+# Acceptance-only PR #5 control. PR #3 remains present on Blackwell.
+FROM common-build AS deepep-v2-pr5-control
+ARG DEEPEP_V2_BASE=02efc268a37802fc00812ede8f5ad7f535ceea0e
+ARG DEEPEP_PR3_PATCH_SHA256=1a7b3604ff5e01d97cdc043ae2c2480ac64ae229dfb34ea457633ac8f5362bc4
+ARG DEEPEP_CONTROL_TREE=6624dfd5ca88aa53fc680cd00c659191cc38c481
+ARG DEEPEP_CONTROL_COMMIT=9533c8e34ae2608ca256dff2ffe665ade9b6430c
+ARG NVSHMEM_VERSION=3.7.0
+ARG NVSHMEM_SHA256=f954ed91fa270f4b905391e03d808f60c73b894d88ef0aae865916d685353b8c
+ENV DEEPEP_V2_BASE=${DEEPEP_V2_BASE} \
+    DEEPEP_PR3_PATCH_SHA256=${DEEPEP_PR3_PATCH_SHA256} \
+    DEEPEP_CONTROL_TREE=${DEEPEP_CONTROL_TREE} \
+    DEEPEP_CONTROL_COMMIT=${DEEPEP_CONTROL_COMMIT} \
+    EP_NCCL_ROOT_DIR=/opt/nccl/build \
+    EP_NVSHMEM_ROOT_DIR=/opt/amazon/nvshmem \
+    NVSHMEM_DIR=/opt/amazon/nvshmem \
+    NVSHMEM_VERSION=${NVSHMEM_VERSION} \
+    NVSHMEM_SHA256=${NVSHMEM_SHA256} \
+    LD_LIBRARY_PATH=/opt/amazon/nvshmem/lib:${LD_LIBRARY_PATH}
+COPY 3.test_cases/megatron/megatron-bridge/docker/install-deepep-v2-control.sh /opt/benchmark/install-deepep-v2-control.sh
+RUN --mount=type=cache,target=/root/.cache/ccache /opt/benchmark/install-deepep-v2-control.sh
+RUN printf '%s\n' '{"ep_arm":"deepep-v2-pr5-control","dispatcher":"native-gate","backend":"deepep_v2_base_pr3"}' > /opt/benchmark/backend.json
+WORKDIR /opt/benchmark/case
