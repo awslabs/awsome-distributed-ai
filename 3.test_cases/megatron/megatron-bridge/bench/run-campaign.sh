@@ -63,14 +63,18 @@ acquire_lock() {
     return 1
   fi
   local now current
-  now="$(date -u +%FT%TZ)"
+  now="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)"
   if current="$("${K[@]}" -n "${LOCK_NS}" get lease "${CLUSTER_LOCK}" -o json 2>/dev/null)"; then
     jq --arg holder "${HOLDER_ID}" --arg now "${now}" \
       --argjson duration "${LOCK_DURATION_SECONDS}" \
       '.spec.holderIdentity=$holder | .spec.acquireTime=$now | .spec.renewTime=$now | .spec.leaseDurationSeconds=$duration' \
       <<<"${current}" | "${K[@]}" replace -f - >/dev/null
   else
-    "${K[@]}" -n "${LOCK_NS}" create lease "${CLUSTER_LOCK}" --duration="${LOCK_DURATION_SECONDS}s" --holder-identity="${HOLDER_ID}" >/dev/null
+    jq -n --arg namespace "${LOCK_NS}" --arg name "${CLUSTER_LOCK}" \
+      --arg holder "${HOLDER_ID}" --arg now "${now}" \
+      --argjson duration "${LOCK_DURATION_SECONDS}" \
+      '{apiVersion:"coordination.k8s.io/v1",kind:"Lease",metadata:{namespace:$namespace,name:$name},spec:{holderIdentity:$holder,acquireTime:$now,renewTime:$now,leaseDurationSeconds:$duration}}' |
+      "${K[@]}" create -f - >/dev/null
   fi
   LOCK_HELD=1
 }
@@ -81,7 +85,7 @@ renew_lock() {
   current="$("${K[@]}" -n "${LOCK_NS}" get lease "${CLUSTER_LOCK}" -o json)"
   holder="$(jq -r '.spec.holderIdentity' <<<"${current}")"
   [[ "${holder}" = "${HOLDER_ID}" ]] || { echo "lost cluster lock to ${holder}" >&2; exit 20; }
-  now="$(date -u +%FT%TZ)"
+  now="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)"
   jq --arg now "${now}" '.spec.renewTime=$now' <<<"${current}" | "${K[@]}" replace -f - >/dev/null
 }
 
@@ -152,17 +156,25 @@ if [[ "${#B300_FREE[@]}" -ge 32 ]]; then
   PROFILE=headline
 else
   mapfile -t B200_FREE < <(free_nodes p6-b200.48xlarge)
-  QUAL_NODES="${QUAL_NODES:-2}"
-  if [[ "${ALLOW_FALLBACK_B200:-1}" != 1 || "${#B200_FREE[@]}" -lt "${QUAL_NODES}" ]]; then
+  if [[ "${FULL_B200_FALLBACK:-0}" = 1 ]]; then
+    requested_b200_nodes=32
+  else
+    requested_b200_nodes="${QUAL_NODES:-2}"
+  fi
+  if [[ "${ALLOW_FALLBACK_B200:-1}" != 1 || "${#B200_FREE[@]}" -lt "${requested_b200_nodes}" ]]; then
     printf 'NOT_RUN_INSUFFICIENT_CAPACITY timestamp_utc=%s requested_fallback_nodes=%d available_free_b200_nodes=%d\n' \
-      "$(date -u +%FT%TZ)" "${QUAL_NODES}" "${#B200_FREE[@]}" > "${OUT}/results/qualification.STATUS"
+      "$(date -u +%FT%TZ)" "${requested_b200_nodes}" "${#B200_FREE[@]}" > "${OUT}/results/qualification.STATUS"
     census insufficient-fallback
     exit 0
   fi
-  SELECTED=("${B200_FREE[@]:0:${QUAL_NODES}}")
+  SELECTED=("${B200_FREE[@]:0:${requested_b200_nodes}}")
   export INSTANCE_TYPE=p6-b200.48xlarge EFA_PER_NODE=8
-  NNODES="${QUAL_NODES}"
-  PROFILE=qualification
+  NNODES="${requested_b200_nodes}"
+  if [[ "${FULL_B200_FALLBACK:-0}" = 1 ]]; then
+    PROFILE=b200-256gpu
+  else
+    PROFILE=qualification
+  fi
 fi
 
 CAPACITY_BLOCK_END="$(
@@ -180,7 +192,7 @@ RUN_TIMEOUT_SECONDS="${RUN_TIMEOUT_SECONDS:-7200}"
 RUN_CLEANUP_BUFFER_SECONDS="${RUN_CLEANUP_BUFFER_SECONDS:-600}"
 RUN_WINDOW_SECONDS=$((RUN_TIMEOUT_SECONDS + RUN_CLEANUP_BUFFER_SECONDS))
 export RUN_TIMEOUT_SECONDS
-if [[ "${PROFILE}" = headline ]]; then initial_runs=4; else initial_runs=1; fi
+if [[ "${PROFILE}" = qualification ]]; then initial_runs=1; else initial_runs=4; fi
 remaining_seconds=$((CAPACITY_BLOCK_END_EPOCH - $(date -u +%s)))
 if (( remaining_seconds < initial_runs * RUN_WINDOW_SECONDS )); then
   printf 'NOT_RUN_RECLAIM_WINDOW timestamp_utc=%s remaining_seconds=%d required_seconds=%d capacity_block_end=%s\n' \
@@ -197,7 +209,7 @@ NODE_NAMES="$(IFS=,; echo "${SELECTED[*]}")"
 export NODE_NAMES
 printf '%s\n' "${SELECTED[@]}" > "${OUT}/control/selected-nodes.txt"
 
-if [[ "${PROFILE}" = headline ]]; then
+if [[ "${PROFILE}" != qualification ]]; then
   export TENSOR_PARALLEL=8 PIPELINE_PARALLEL=8 EXPERT_PARALLEL=32 TRAIN_ITERS=40 GLOBAL_BATCH=256
   CELLS=(throughput-no-overlap throughput-overlap small-message small-message-overlap)
   REPEATS=(1 2 3)
@@ -206,6 +218,8 @@ else
   CELLS=(qualification-no-overlap qualification-overlap)
   REPEATS=(1)
 fi
+if [[ -n "${CELLS_OVERRIDE:-}" ]]; then read -r -a CELLS <<<"${CELLS_OVERRIDE}"; fi
+if [[ -n "${REPEATS_OVERRIDE:-}" ]]; then read -r -a REPEATS <<<"${REPEATS_OVERRIDE}"; fi
 
 STOP_CAMPAIGN=0
 for repeat in "${REPEATS[@]}"; do
