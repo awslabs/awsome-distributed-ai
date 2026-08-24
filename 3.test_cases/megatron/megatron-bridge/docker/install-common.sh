@@ -12,7 +12,7 @@ set -euo pipefail
 test "$(git -C /opt/Megatron-Bridge rev-parse HEAD)" = "${BRIDGE_COMMIT}"
 test "$(git -C /opt/Megatron-Bridge/3rdparty/Megatron-LM rev-parse HEAD)" = "${MCORE_COMMIT}"
 echo '9d54dd664daded6c3e4b105a77d578fea4340121188ea3a4261e33cec1523ce0  /opt/benchmark/patches/bridge-deepep-v2.patch' | sha256sum --check --strict
-echo '78349a76f66a678446daedf3cbd5cff8d8d183cb52925cff3eef3d0a3db1926b  /opt/benchmark/patches/mcore-deepep-v2-elastic.patch' | sha256sum --check --strict
+echo '1f182f801ec2d086158000d9bd6300305129aecd12ce6dcc3a8d5eb966ceb0a8  /opt/benchmark/patches/mcore-deepep-v2-elastic.patch' | sha256sum --check --strict
 git -C /opt/Megatron-Bridge apply --check /opt/benchmark/patches/bridge-deepep-v2.patch
 git -C /opt/Megatron-Bridge apply /opt/benchmark/patches/bridge-deepep-v2.patch
 git -C /opt/Megatron-Bridge/3rdparty/Megatron-LM apply --check /opt/benchmark/patches/mcore-deepep-v2-elastic.patch
@@ -63,4 +63,3 @@ ldconfig
 rm -rf /tmp/aws-efa-installer /tmp/aws-efa-installer.tar.gz
 apt-get clean
 rm -rf /var/lib/apt/lists/*
-

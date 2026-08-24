@@ -39,7 +39,7 @@ common:
 
 patches:
   bridge_deepep_v2_sha256: 9d54dd664daded6c3e4b105a77d578fea4340121188ea3a4261e33cec1523ce0
-  mcore_deepep_v2_elastic_sha256: 78349a76f66a678446daedf3cbd5cff8d8d183cb52925cff3eef3d0a3db1926b
+  mcore_deepep_v2_elastic_sha256: 1f182f801ec2d086158000d9bd6300305129aecd12ce6dcc3a8d5eb966ceb0a8
 
 backends:
   uccl:
