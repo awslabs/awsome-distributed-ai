@@ -129,6 +129,19 @@ ENV FI_EFA_USE_DEVICE_RDMA=1
 ENV FI_EFA_FORK_SAFE=1
 ENV PYTHONHASHSEED=42
 
+# Disable Inductor's mix-order-reduction fusion for torch.compile (compile
+# enabled=true is the framework default for MoT training). On torch 2.10 this
+# fusion (new in 2.10; the code ran fine on 2.9) fuses the Qwen3-VL RMSNorm
+# backward reductions together with the RoPE token-mask into ONE persistent
+# Triton reduction kernel over the full hidden axis. That kernel needs ~272 KB
+# of shared memory and exceeds the ~227 KB/SM limit on H100/H200 (p5/p5en), so
+# loss.backward() fails to compile with:
+#   "No valid triton configs. OutOfMemoryError: out of resource: shared memory".
+# Setting this to 0 makes Inductor emit the reductions as separate looped
+# (non-persistent) kernels that fit shared memory, keeping compile enabled.
+# Upstream PyTorch bug (fix in flight): https://github.com/pytorch/pytorch/issues/175250
+ENV TORCHINDUCTOR_MIX_ORDER_REDUCTION=0
+
 # venv torchrun on PATH.
 ENV PATH="/workspace/cosmos-framework/.venv/bin:${PATH}"
 WORKDIR /workspace/cosmos-framework

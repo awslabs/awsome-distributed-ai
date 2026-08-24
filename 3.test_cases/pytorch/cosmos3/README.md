@@ -410,6 +410,28 @@ the `Dockerfile` header). The pinned, validated versions:
 | `uv` | 0.10.8 |
 | Generation engine | `vllm/vllm-omni:cosmos3` (separate image from the training stack) |
 
+### torch.compile: Inductor mix-order-reduction shared-memory OOM
+
+The image sets `TORCHINDUCTOR_MIX_ORDER_REDUCTION=0` (in the `Dockerfile`). MoT
+post-training runs with `torch.compile` enabled, and on **PyTorch 2.10** Inductor's
+mix-order-reduction fusion (new in 2.10 — the same code compiles fine on 2.9) fuses the
+Qwen3-VL RMSNorm backward reductions together with the RoPE token-mask into a single
+*persistent* Triton reduction kernel spanning the full hidden axis. That kernel needs
+~272 KB of shared memory, over the ~227 KB-per-SM limit on H100/H200 (p5/p5en), so the
+first `loss.backward()` fails to **compile** with:
+
+```
+torch._inductor.exc.InductorError: RuntimeError: No valid triton configs.
+OutOfMemoryError: out of resource: shared memory, Required: 278688, Hardware limit: 232448
+```
+
+Setting `TORCHINDUCTOR_MIX_ORDER_REDUCTION=0` disables just that fusion, so Inductor emits
+the reductions as separate looped (non-persistent) kernels that fit shared memory —
+`torch.compile` stays enabled and there is no measured throughput regression. This is an
+upstream PyTorch bug with a fix in flight; track
+[pytorch/pytorch#175250](https://github.com/pytorch/pytorch/issues/175250) and remove the
+env var once the pinned PyTorch version includes the fix.
+
 ## References
 
 - NVIDIA Cosmos 3 model collection — [huggingface.co/collections/nvidia/cosmos3](https://huggingface.co/collections/nvidia/cosmos3)
