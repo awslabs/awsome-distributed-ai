@@ -97,10 +97,11 @@ def main() -> None:
     args = parser.parse_args()
     tolerance_payload = json.loads(open(args.tolerance_json, encoding="utf-8").read())
     tolerance = tolerance_payload.get("tolerance", tolerance_payload)
-    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
-    dist.init_process_group("nccl")
+    local_rank = int(os.environ["LOCAL_RANK"])
+    device = torch.device("cuda", local_rank)
+    torch.cuda.set_device(device)
+    dist.init_process_group("nccl", device_id=device)
     assert args.experts % dist.get_world_size() == 0
-    device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     generator = torch.Generator(device=device).manual_seed(20260823 + dist.get_rank())
     scores = torch.randn(
         (args.tokens, args.experts),
@@ -158,10 +159,11 @@ def main() -> None:
     passed = passed and errors["optimizer_step"] <= float(tolerance["optimizer_step"])
     gathered_hashes = [None] * dist.get_world_size()
     dist.all_gather_object(gathered_hashes, route_hash)
+    local_counts_cuda = local_counts.to(device=device, dtype=torch.int64)
     gathered_counts = [
-        torch.empty_like(local_counts) for _ in range(dist.get_world_size())
+        torch.empty_like(local_counts_cuda) for _ in range(dist.get_world_size())
     ]
-    dist.all_gather(gathered_counts, local_counts)
+    dist.all_gather(gathered_counts, local_counts_cuda)
     global_counts = torch.cat(gathered_counts).to(torch.int64)
     expected_routes = args.tokens * dist.get_world_size() * args.topk
     no_token_drop = int(global_counts.sum()) == expected_routes

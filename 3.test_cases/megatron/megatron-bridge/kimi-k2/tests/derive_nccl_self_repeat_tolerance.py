@@ -185,11 +185,11 @@ def main() -> None:
     args = parser.parse_args()
 
     local_rank = int(os.environ["LOCAL_RANK"])
-    torch.cuda.set_device(local_rank)
-    dist.init_process_group("nccl")
+    device = torch.device("cuda", local_rank)
+    torch.cuda.set_device(device)
+    dist.init_process_group("nccl", device_id=device)
     world = dist.get_world_size()
     assert args.experts % world == 0
-    device = torch.device("cuda", local_rank)
     generator = torch.Generator(device=device).manual_seed(20260823 + dist.get_rank())
     scores = torch.randn(
         (args.tokens, args.experts),
