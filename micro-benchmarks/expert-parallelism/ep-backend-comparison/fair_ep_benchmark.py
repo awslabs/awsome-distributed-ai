@@ -172,6 +172,7 @@ def logical_payload_bytes_per_rank(
 @dataclass
 class DispatchState:
     recv_x: Any
+    recv_topk_idx: torch.Tensor | None
     recv_topk_weights: torch.Tensor | None
     handle: Any
 
@@ -278,7 +279,7 @@ class BackendAdapter:
         dispatch_dtype: str,
     ) -> DispatchState:
         if self.is_elastic:
-            recv_x, _, recv_weights, handle, event = self.buffer.dispatch(
+            recv_x, recv_idx, recv_weights, handle, event = self.buffer.dispatch(
                 x=prepared_x,
                 topk_idx=topk_idx,
                 topk_weights=topk_weights,
@@ -291,7 +292,7 @@ class BackendAdapter:
                 do_cpu_sync=True,
             )
             event.current_stream_wait()
-            return DispatchState(recv_x, recv_weights, handle)
+            return DispatchState(recv_x, recv_idx, recv_weights, handle)
 
         recv_x, _, handle, event, _ = self.buffer.low_latency_dispatch(
             prepared_x,
@@ -303,7 +304,7 @@ class BackendAdapter:
             return_recv_hook=False,
         )
         event.current_stream_wait()
-        return DispatchState(recv_x, None, handle)
+        return DispatchState(recv_x, None, None, handle)
 
     def received_as_bf16(self, recv_x: Any, dispatch_dtype: str) -> torch.Tensor:
         if dispatch_dtype == "bf16":
@@ -382,6 +383,18 @@ def run_dtype(
     correctness_input = adapter.received_as_bf16(
         correctness_state.recv_x, dispatch_dtype
     )
+    if adapter.is_elastic:
+        assert correctness_state.recv_topk_idx is not None
+        assert correctness_state.recv_topk_weights is not None
+        # V2's non-expanded dispatch sends each token once per destination rank.
+        # Model the identity experts' local gated reduction before the network
+        # combine so that every backend returns the same weighted token.
+        local_weights = correctness_state.recv_topk_weights.masked_fill(
+            correctness_state.recv_topk_idx < 0, 0
+        ).sum(dim=1, keepdim=True)
+        correctness_input = correctness_input * local_weights.to(
+            correctness_input.dtype
+        )
     correctness_output = adapter.combine(
         correctness_input, correctness_state, route, topk_weights
     )
