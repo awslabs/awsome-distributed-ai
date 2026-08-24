@@ -112,8 +112,12 @@ def main() -> None:
     parser.add_argument("--experts", type=int, default=384)
     parser.add_argument("--topk", type=int, default=8)
     args = parser.parse_args()
-    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
-    dist.init_process_group("nccl")
+    local_rank = int(os.environ["LOCAL_RANK"])
+    device = torch.device("cuda", local_rank)
+    torch.cuda.set_device(device)
+    # DeepEP reuses the ProcessGroupNCCL communicator pointer. Supplying the
+    # device eagerly creates that communicator before ElasticBuffer queries it.
+    dist.init_process_group("nccl", device_id=device)
     assert args.experts % dist.get_world_size() == 0
     sync_loss, sync_handle, sync_count = one_flight(
         args.tokens, args.hidden, args.experts, args.topk, False
