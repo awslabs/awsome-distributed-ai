@@ -56,6 +56,7 @@ backends:
     pr5_head: 2542d9641f2ec280213e875feb04be7862dda57c
     pr5_patch_sha256: 36d6fcac58dcc197f8bc0419822b9381296cecba40bd640440c7633796c25f7e
     notify_warps_patch_sha256: 198fe6148b14b3c4533542f43e043835c47a861af37021628f4942f5b114a039
+    qualified_parent_digest: sha256:112738c87d35af42802f3eed80bf6a867ca7e3879345f7830f82870cd30ae5c1
     synthetic_tree: ab43791defa8961b88fdee1a63e8877e317da9af
     synthetic_commit: 0ff264eb08d196621f49c7d011270c62f8716996
     synthetic_author: AWSome Distributed AI Benchmark <adai-benchmark@amazon.com>

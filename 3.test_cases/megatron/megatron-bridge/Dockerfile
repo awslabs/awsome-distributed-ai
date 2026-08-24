@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.7
 ARG NEMO_IMAGE=nvcr.io/nvidia/nemo@sha256:d8257dd0c4da714843aa1e371fe4dc8ee5a7972c247abbfd28d680bb197b6195
+ARG DEEPEP_V2_QUALIFIED_PARENT=159553542841.dkr.ecr.ap-south-1.amazonaws.com/adai/kimi-k2-megatron-ep-2608-deepep-v2-gin-gda@sha256:112738c87d35af42802f3eed80bf6a867ca7e3879345f7830f82870cd30ae5c1
 FROM ${NEMO_IMAGE} AS common-build
 
 ARG BRIDGE_COMMIT=c93251151adeeadbae3ff2a2bf5ee7a1c34cff01
@@ -105,6 +106,22 @@ ENV DEEPEP_V2_BASE=${DEEPEP_V2_BASE} \
 COPY 3.test_cases/megatron/megatron-bridge/docker/install-deepep-v2.sh /opt/benchmark/install-deepep-v2.sh
 RUN --mount=type=cache,target=/root/.cache/ccache /opt/benchmark/install-deepep-v2.sh
 RUN printf '%s\n' '{"ep_arm":"deepep-v2-gin-gda","dispatcher":"flex","backend":"deepep_v2","synthetic_tree":"ab43791defa8961b88fdee1a63e8877e317da9af","synthetic_commit":"0ff264eb08d196621f49c7d011270c62f8716996","notify_warps_patch_sha256":"198fe6148b14b3c4533542f43e043835c47a861af37021628f4942f5b114a039"}' > /opt/benchmark/backend.json
+RUN EP_ARM=deepep-v2-gin-gda /opt/benchmark/verify-image.sh
+WORKDIR /opt/benchmark/case
+
+# Fast, reproducible qualification derivative of the prior accepted V2 image.
+# The parent digest already contains base + PR #3 + PR #5 and the byte-identical
+# common stack. The full source target above independently constructs the same
+# resulting synthetic tree for clean rebuilds.
+FROM ${DEEPEP_V2_QUALIFIED_PARENT} AS deepep-v2-gin-gda-notify-final
+ENV DEEPEP_NOTIFY_WARPS_PATCH_SHA256=198fe6148b14b3c4533542f43e043835c47a861af37021628f4942f5b114a039 \
+    DEEPEP_SYNTHETIC_TREE=ab43791defa8961b88fdee1a63e8877e317da9af \
+    DEEPEP_SYNTHETIC_COMMIT=0ff264eb08d196621f49c7d011270c62f8716996
+COPY 3.test_cases/megatron/megatron-bridge/docker/patches/deepep-v2-notify-warps.patch /opt/benchmark/patches/deepep-v2-notify-warps.patch
+COPY 3.test_cases/megatron/megatron-bridge/docker/apply-deepep-v2-notify-hotfix.sh /opt/benchmark/apply-deepep-v2-notify-hotfix.sh
+COPY 3.test_cases/megatron/megatron-bridge/versions.lock.yaml /opt/benchmark/versions.lock.yaml
+RUN --mount=type=cache,target=/root/.cache/ccache /opt/benchmark/apply-deepep-v2-notify-hotfix.sh
+RUN printf '%s\n' '{"ep_arm":"deepep-v2-gin-gda","dispatcher":"flex","backend":"deepep_v2","parent_digest":"sha256:112738c87d35af42802f3eed80bf6a867ca7e3879345f7830f82870cd30ae5c1","synthetic_tree":"ab43791defa8961b88fdee1a63e8877e317da9af","synthetic_commit":"0ff264eb08d196621f49c7d011270c62f8716996","notify_warps_patch_sha256":"198fe6148b14b3c4533542f43e043835c47a861af37021628f4942f5b114a039"}' > /opt/benchmark/backend.json
 RUN EP_ARM=deepep-v2-gin-gda /opt/benchmark/verify-image.sh
 WORKDIR /opt/benchmark/case
 
