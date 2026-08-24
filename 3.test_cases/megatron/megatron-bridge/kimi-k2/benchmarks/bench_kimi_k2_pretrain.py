@@ -131,6 +131,21 @@ def build_config():
     cfg.train.train_iters = train_iters
     cfg.train.global_batch_size = global_batch
     cfg.train.micro_batch_size = micro_batch
+
+    # Benchmark runs consume random-init mock data and score training-step time. Do not write a
+    # final ~1T-parameter checkpoint or run the recipe's post-training validation/test passes:
+    # both happen outside the measured iterations, hold all 256 GPUs, and add minutes of work to
+    # every arm without contributing a correctness or performance signal.
+    if hasattr(cfg, "checkpoint"):
+        cfg.checkpoint.save = None
+        cfg.checkpoint.load = None
+        if hasattr(cfg.checkpoint, "save_interval"):
+            cfg.checkpoint.save_interval = None
+    if hasattr(cfg.train, "eval_iters"):
+        cfg.train.eval_iters = 0
+    if hasattr(cfg.train, "eval_interval"):
+        cfg.train.eval_interval = train_iters + 1000
+
     performance_seed = _int("PERFORMANCE_SEED", 1234)
     cfg.rng.seed = performance_seed
     if hasattr(cfg.dataset, "random_seed"):
