@@ -192,7 +192,7 @@ for rank in $(seq 0 $((NNODES - 1))); do
   node="${NODES[$rank]}"
   profile_prefix=""
   if [[ "${NSYS_PROFILE:-0}" = 1 && "${rank}" -eq 0 ]]; then
-    profile_prefix='nsys profile --force-overwrite=true --trace=cuda,nvtx,osrt --output=/run-artifacts/nsys-node-rank-0'
+    profile_prefix='nsys profile --force-overwrite=true --trace=cuda,nvtx,osrt --output=/run-artifacts/nsys-node-rank-0 '
   fi
   gdr_mount=""
   gdr_volume=""
@@ -231,7 +231,7 @@ spec:
           mapfile -t run_args < <(python3 -c 'import base64,json,os; [print(value) for value in json.loads(base64.b64decode(os.environ["RUN_ENTRYPOINT_ARGS_B64"]))]');
           python3 /opt/benchmark/case/bench/collect-runtime-manifest.py /run-artifacts/runtime-manifest.json;
           /opt/benchmark/case/bench/collect-node-telemetry.sh /run-artifacts/telemetry & telemetry_pid=\$!;
-          ${profile_prefix} torchrun --nnodes=${NNODES} --nproc-per-node=${GPUS_PER_NODE} --node-rank=${rank}
+          ${profile_prefix}torchrun --nnodes=${NNODES} --nproc-per-node=${GPUS_PER_NODE} --node-rank=${rank}
           --master-addr=${JOB}-0.${JOB}.${NS}.svc.cluster.local --master-port=${PORT}
           ${RUN_ENTRYPOINT} "\${run_args[@]}"
           2>&1 | tee /run-artifacts/node-rank-${rank}.log;
