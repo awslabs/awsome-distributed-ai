@@ -73,6 +73,7 @@ EFA_PER_NODE="${EFA_PER_NODE:-16}"
 GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
 [[ "${GPUS_PER_NODE}" =~ ^[1-8]$ ]] || { echo "GPUS_PER_NODE must be an integer from 1 through 8" >&2; exit 2; }
 WORLD=$((NNODES * GPUS_PER_NODE))
+live_pods_json="$("${K[@]}" get pods -A -o json)"
 for node in "${NODES[@]}"; do
   actual="$("${K[@]}" get node "${node}" -o jsonpath='{.metadata.labels.node\.kubernetes\.io/instance-type}')"
   [[ "${actual}" = "${INSTANCE_TYPE}" ]] || { echo "node ${node} is ${actual}, expected ${INSTANCE_TYPE}" >&2; exit 3; }
@@ -82,7 +83,7 @@ for node in "${NODES[@]}"; do
   allocatable_efa="$("${K[@]}" get node "${node}" -o json | jq -r '.status.allocatable["vpc.amazonaws.com/efa"] // "0" | tonumber')"
   [[ "${allocatable_gpu}" -ge "${GPUS_PER_NODE}" ]] || { echo "node ${node} exposes ${allocatable_gpu} GPUs, expected at least ${GPUS_PER_NODE}" >&2; exit 3; }
   [[ "${allocatable_efa}" -ge "${EFA_PER_NODE}" ]] || { echo "node ${node} exposes ${allocatable_efa} EFA devices, expected at least ${EFA_PER_NODE}" >&2; exit 3; }
-  occupied="$("${K[@]}" get pods -A -o json | jq --arg n "${node}" '[.items[] | select(.spec.nodeName==$n and (.status.phase=="Running" or .status.phase=="Pending")) | .spec.containers[]?.resources.requests["nvidia.com/gpu"] // "0" | tonumber] | add // 0')"
+  occupied="$(jq --arg n "${node}" '[.items[] | select(.spec.nodeName==$n and (.status.phase=="Running" or .status.phase=="Pending")) | .spec.containers[]?.resources.requests["nvidia.com/gpu"] // "0" | tonumber] | add // 0' <<<"${live_pods_json}")"
   [[ "${occupied}" -eq 0 ]] || { echo "node ${node} already has ${occupied} requested GPUs" >&2; exit 3; }
 done
 
