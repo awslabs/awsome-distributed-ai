@@ -1,0 +1,25 @@
+diff --git a/megatron/core/models/common/utils.py b/megatron/core/models/common/utils.py
+--- a/megatron/core/models/common/utils.py
++++ b/megatron/core/models/common/utils.py
+@@ -66,8 +66,8 @@ def should_free_input(name, is_moe, config, num_local_experts):
+     if not is_moe:
+         return False
+     enable_deepep = (
+         config.moe_token_dispatcher_type == "flex"
+-        and config.moe_flex_dispatcher_backend == "deepep"
++        and config.moe_flex_dispatcher_backend in ("deepep", "deepep_v2")
+     )
+     enable_hybridep = (
+         config.moe_token_dispatcher_type == "flex"
+diff --git a/megatron/core/models/gpt/fine_grained_callables.py b/megatron/core/models/gpt/fine_grained_callables.py
+--- a/megatron/core/models/gpt/fine_grained_callables.py
++++ b/megatron/core/models/gpt/fine_grained_callables.py
+@@ -53,7 +53,7 @@ def build_transformer_layer_callables(layer: TransformerLayer):
+     is_moe = isinstance(layer.mlp, MoELayer)
+     enable_deepep = (
+         layer.config.moe_token_dispatcher_type == "flex"
+-        and layer.config.moe_flex_dispatcher_backend == "deepep"
++        and layer.config.moe_flex_dispatcher_backend in ("deepep", "deepep_v2")
+     )
+     enable_hybridep = (
+         layer.config.moe_token_dispatcher_type == "flex"

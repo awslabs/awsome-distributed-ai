@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1.7
+ARG QUALIFIED_PARENT
+FROM ${QUALIFIED_PARENT}
+
+ARG QUALIFIED_PARENT
+ARG EP_ARM
+ARG MCORE_COMMIT=16ad357ee7973af32916fc1ca39d71065e5f03d4
+ARG MCORE_DEEPEP_V2_OVERLAP_SCHEDULE_PATCH_SHA256=97e64f71a9810f7144e46a626e50813d1c2d82ec3be2fb82dc8b2bc7eb8f7ff3
+ARG MCORE_COMMON_UTILS_PARENT_SHA256=1fedbe06d3ea56abe7cd0449fd178e058bb2291793aac8eac69d59391c712009
+ARG MCORE_COMMON_UTILS_RESULT_SHA256=400b0dfcb7287a5e60c030549c3d644e2825c0d265ee2b9cf09c38cbd50b0be9
+ARG MCORE_FINE_GRAINED_PARENT_SHA256=bcfa2a35376bd8f0b4b69c2f80c30006c0ef7f60c8927081db72f42fe147c060
+ARG MCORE_FINE_GRAINED_RESULT_SHA256=f3a4fd09fb3113d66779bbda65fd080db34daa42e5d54244c9e1ef453d72ff51
+ENV QUALIFIED_PARENT_REFERENCE=${QUALIFIED_PARENT} \
+    EP_ARM=${EP_ARM} \
+    MCORE_COMMIT=${MCORE_COMMIT} \
+    MCORE_DEEPEP_V2_OVERLAP_SCHEDULE_PATCH_SHA256=${MCORE_DEEPEP_V2_OVERLAP_SCHEDULE_PATCH_SHA256} \
+    MCORE_COMMON_UTILS_PARENT_SHA256=${MCORE_COMMON_UTILS_PARENT_SHA256} \
+    MCORE_COMMON_UTILS_RESULT_SHA256=${MCORE_COMMON_UTILS_RESULT_SHA256} \
+    MCORE_FINE_GRAINED_PARENT_SHA256=${MCORE_FINE_GRAINED_PARENT_SHA256} \
+    MCORE_FINE_GRAINED_RESULT_SHA256=${MCORE_FINE_GRAINED_RESULT_SHA256}
+
+COPY 3.test_cases/megatron/megatron-bridge/docker/patches/mcore-deepep-v2-overlap-schedule.patch /opt/benchmark/patches/mcore-deepep-v2-overlap-schedule.patch
+COPY 3.test_cases/megatron/megatron-bridge/docker/apply-mcore-deepep-v2-overlap-schedule.sh /opt/benchmark/apply-mcore-deepep-v2-overlap-schedule.sh
+COPY 3.test_cases/megatron/megatron-bridge/kimi-k2/tests/test_deepep_v2_overlap_schedule.py /opt/benchmark/case/kimi-k2/tests/test_deepep_v2_overlap_schedule.py
+RUN bash /opt/benchmark/apply-mcore-deepep-v2-overlap-schedule.sh
+RUN python3 /opt/benchmark/case/kimi-k2/tests/test_deepep_v2_overlap_schedule.py
+WORKDIR /opt/benchmark/case
