@@ -13,6 +13,12 @@ export CUDA_HOME=/usr/local/cuda TORCH_CUDA_ARCH_LIST='10.0'
 export DISABLE_AGGRESSIVE_PTX_INSTRS=1
 export EP_NCCL_ROOT_DIR=/opt/nccl/build EP_NVSHMEM_ROOT_DIR=/opt/amazon/nvshmem
 export NVSHMEM_DIR=/opt/amazon/nvshmem MAX_JOBS="${MAX_JOBS:-16}"
+export LIBRARY_PATH="/usr/local/cuda/lib64/stubs${LIBRARY_PATH:+:${LIBRARY_PATH}}"
+export LD_LIBRARY_PATH="/usr/local/cuda/lib64/stubs${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+cuda_stub=/usr/local/cuda/lib64/stubs/libcuda.so
+test -f "${cuda_stub}"
+[[ -e "${cuda_stub}.1" ]] || ln -s "${cuda_stub}" "${cuda_stub}.1"
+trap 'rm -f /usr/local/cuda/lib64/stubs/libcuda.so.1' EXIT
 
 archive="libnvshmem-linux-x86_64-${NVSHMEM_VERSION}_cuda13-archive.tar.xz"
 curl --fail --location --retry 5 \
@@ -52,4 +58,3 @@ import deep_ep
 assert hasattr(deep_ep, "ElasticBuffer")
 print("DeepEP v2 ElasticBuffer API: PASS")
 PY
-
