@@ -154,7 +154,7 @@ EOF
 cat <<EOF | "${KN[@]}" apply -f -
 apiVersion: v1
 kind: Service
-metadata: {name: ${JOB}, labels: {adai-campaign: "${CAMPAIGN_ID}"}}
+metadata: {name: ${JOB}, labels: {adai-campaign: "${CAMPAIGN_ID}", adai-owner: kimi-k2-megatron-ep, app: ${JOB}}}
 spec:
   clusterIP: None
   selector: {app: ${JOB}}
@@ -298,6 +298,12 @@ while (( SECONDS < deadline )); do
   [[ "${terminal}" -eq "${NNODES}" ]] && break
   sleep 15
 done
+
+# Freeze the snapshot tree before the final harvest and custody hash. Leaving
+# the background logger alive here permits a last in-flight kubectl write to
+# race with SHA256SUMS generation.
+cleanup_snapshot
+trap - EXIT
 
 for rank in $(seq 0 $((NNODES - 1))); do
   "${KN[@]}" logs "${JOB}-${rank}" -c trainer --timestamps > "${LOCAL_RUN_DIR}/pod-logs/node-rank-${rank}.log" 2>&1 || true
