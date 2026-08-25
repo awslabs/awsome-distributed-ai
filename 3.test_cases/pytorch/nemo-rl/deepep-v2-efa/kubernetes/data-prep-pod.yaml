@@ -1,0 +1,40 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Lightweight CPU pod for staging the model + dataset onto FSx (full GRPO path
+# only — the recipe gates in recipe/ need NO weights and NO dataset).
+#
+#   envsubst < kubernetes/data-prep-pod.yaml | kubectl apply -f -
+#   kubectl -n ${NAMESPACE} exec -it data-prep -- bash
+#   # inside: pip install "huggingface_hub[cli]" && \
+#   #   hf download ${MODEL_NAME} --local-dir ${MODEL_LOCAL}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: data-prep
+  namespace: ${NAMESPACE}
+  labels:
+    app: nemo-rl-deepep-data-prep
+spec:
+  containers:
+    - name: data-prep
+      image: python:3.12-slim
+      command: ["sleep", "infinity"]
+      env:
+        - name: HF_TOKEN
+          value: ""  # Set before applying, or pass via kubectl set env
+      resources:
+        requests:
+          cpu: "4"
+          memory: "16Gi"
+        limits:
+          cpu: "8"
+          memory: "32Gi"
+      volumeMounts:
+        - name: fsx
+          mountPath: /fsx
+  volumes:
+    - name: fsx
+      persistentVolumeClaim:
+        claimName: ${FSX_CLAIM}
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 30

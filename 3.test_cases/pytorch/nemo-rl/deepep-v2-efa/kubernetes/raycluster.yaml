@@ -1,0 +1,214 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# NeMo-RL + DeepEP V2 over EFA — RayCluster (1 CPU head + ${NUM_NODES} GPU workers).
+#
+# Apply with variables substituted (source env_vars first — see env_vars.example):
+#   envsubst < kubernetes/raycluster.yaml | kubectl apply -f -
+#
+# TOPOLOGY (honest shape — read before scaling expectations):
+#   head:      Ray GCS + dashboard only, CPU node, no GPUs (slime-sibling pattern).
+#   workers:   one per GPU node. The recipe GATES run in these pods via kubectl exec
+#              (torchrun leader/worker across the two pods — see README Quick Start):
+#     kubectl -n ${NAMESPACE} exec <worker-1> -- bash -lc \
+#       'nohup /opt/run-rollout-probe.sh worker <worker-0-pod-ip> 1 > /tmp/probe.log 2>&1 &'
+#     kubectl -n ${NAMESPACE} exec <worker-0> -- /opt/run-rollout-probe.sh leader <worker-0-pod-ip>
+#   The FULL NeMo-RL GRPO run additionally needs the opt-in draft-PR image flavor
+#   (APPLY_DRAFT_ROLLOUT_PATCHES=1) — see README "Measured vs staged".
+#
+# Image: build nemo-rl.Dockerfile (NGC-from-scratch, public sources only) and push to
+# YOUR registry; ${FULL_IMAGE} comes from env_vars. Do NOT point at anyone's private
+# registry.
+#
+# privileged: true is REQUIRED where /dev/gdrdrv is not advertised by a device plugin
+# (the unprivileged device cgroup blocks open("/dev/gdrdrv") with EPERM even after
+# CAP_MKNOD; without GDRCopy aws-ofi-nccl reports ginType=NONE and the NCCL-GIN
+# CPU-proxy path is dead). If your cluster runs a gdrdrv device plugin, drop privileged
+# and request the device instead.
+#
+# Scale seams (per-node EFA NIC count differs by instance type — set in env_vars):
+#   p5.48xlarge  (H100): EFA_PER_NODE=32   |   p5en.48xlarge (H200): EFA_PER_NODE=16
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: nemo-rl-deepep
+  namespace: ${NAMESPACE}
+  labels:
+    app: nemo-rl-deepep
+spec:
+  rayVersion: "2.49.2"          # matches the ray pin in requirements.txt
+  enableInTreeAutoscaling: false
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: "0.0.0.0"
+      num-gpus: "0"
+      # Head runs the Ray GCS and dashboard only — no training on head.
+    template:
+      metadata:
+        labels:
+          ray.io/node-type: head
+      spec:
+        containers:
+          - name: ray-head
+            image: ${FULL_IMAGE}
+            imagePullPolicy: IfNotPresent
+            ports:
+              - containerPort: 6379   # Ray GCS
+              - containerPort: 8265   # Ray Dashboard
+              - containerPort: 10001  # Ray Client
+            env:
+              # On GPU-operator/HyperPod nodes the NVIDIA runtime auto-injects GPU
+              # tooling; on a GPU-less head node that injection fails and the
+              # container cannot start. "void" skips it — correct for the head.
+              - name: NVIDIA_VISIBLE_DEVICES
+                value: "void"
+              - name: RAY_memory_monitor_refresh_ms
+                value: "0"
+              # Create with: kubectl create secret generic hf-token \
+              #   --from-literal=HF_TOKEN=$HF_TOKEN -n ${NAMESPACE}
+              - name: HF_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: hf-token
+                    key: HF_TOKEN
+            resources:
+              requests:
+                cpu: "2"
+                memory: "8Gi"
+              limits:
+                cpu: "4"
+                memory: "16Gi"
+            volumeMounts:
+              - name: fsx
+                mountPath: /fsx
+              - name: dshm
+                mountPath: /dev/shm
+        volumes:
+          - name: fsx
+            persistentVolumeClaim:
+              claimName: ${FSX_CLAIM}
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: "16Gi"
+        # Keep the head off GPU nodes so it never blocks a GPU worker from
+        # scheduling (label from NVIDIA gpu-feature-discovery — portable).
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: nvidia.com/gpu.present
+                      operator: NotIn
+                      values:
+                        - "true"
+        restartPolicy: Never
+        terminationGracePeriodSeconds: 120
+  workerGroupSpecs:
+    - groupName: gpu-workers
+      replicas: ${NUM_NODES}
+      minReplicas: ${NUM_NODES}
+      maxReplicas: ${NUM_NODES}
+      rayStartParams:
+        num-gpus: "${GPUS_PER_NODE}"
+      template:
+        metadata:
+          labels:
+            ray.io/node-type: worker
+        spec:
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+          containers:
+            - name: ray-worker
+              image: ${FULL_IMAGE}
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: RAY_memory_monitor_refresh_ms
+                  value: "0"
+                - name: HF_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: hf-token
+                      key: HF_TOKEN
+                # ---- NCCL-GIN proxy + EFA contract, VERBATIM (baked in the image
+                #      ENV and re-exported by every recipe script; repeated here so
+                #      the manifest alone documents the transport contract) ----
+                - { name: NCCL_GIN_TYPE,              value: "2" }    # 2 = CPU-proxy GIN (the EFA-viable path)
+                - { name: NCCL_GIN_ENABLE,            value: "1" }
+                - { name: OFI_NCCL_GIN_GDAKI,         value: "0" }    # GPU-initiated: not the shipped path on EFA
+                - { name: OFI_NCCL_GIN_MAX_REQUESTS,  value: "512" }
+                - { name: OFI_NCCL_PROTOCOL,          value: "RDMA" }
+                - { name: NCCL_NET_PLUGIN,            value: "/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so" }
+                - { name: NCCL_NVLS_ENABLE,           value: "0" }
+                - { name: NCCL_DEBUG,                 value: "WARN" } # INFO to see the efa provider banner proof
+                - { name: FI_PROVIDER,                value: "efa" }
+                - { name: FI_EFA_USE_DEVICE_RDMA,     value: "1" }
+                - { name: FI_EFA_ENABLE_SHM_TRANSFER, value: "0" }
+                - { name: FI_EFA_FORK_SAFE,           value: "1" }
+                - { name: RDMAV_FORK_SAFE,            value: "1" }
+                # Exclusion form: governs only NCCL's TCP bootstrap/control socket,
+                # not the EFA data path. Robust if the primary CNI NIC is not eth0.
+                - { name: NCCL_SOCKET_IFNAME,         value: "^lo,docker,veth" }
+                # ---- DeepEP V2 knobs ----
+                - { name: DEEP_EP_USE_V2_SHIM,        value: "0" }
+                # Read only by the PATCHED deep_ep (DeepEP#612); inert on baseline.
+                - { name: EP_EFA_MAX_QPS,             value: "2" }
+                - { name: EP_EFA_RDMA_GBS,            value: "25.0" }
+                - { name: TOKENIZERS_PARALLELISM,     value: "false" }
+              # requests == limits (Guaranteed QoS): NCCL_GIN_TYPE=2 is the CPU-PROXY
+              # path, so proxy-thread CPU sits on the data path — Burstable QoS + CFS
+              # throttling under node pressure would degrade network throughput and
+              # silently taint any number this cluster produces.
+              resources:
+                requests:
+                  cpu: "90"
+                  memory: "1024Gi"
+                  nvidia.com/gpu: "${GPUS_PER_NODE}"
+                  vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
+                  hugepages-2Mi: "5120Mi"   # needs 2Mi hugepages pre-allocated on the node; without them the pod sits Pending
+                limits:
+                  cpu: "90"
+                  memory: "1024Gi"
+                  nvidia.com/gpu: "${GPUS_PER_NODE}"
+                  vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
+                  hugepages-2Mi: "5120Mi"
+              securityContext:
+                privileged: true            # gdrdrv device-cgroup (see header)
+                capabilities:
+                  add: [IPC_LOCK]           # RDMA memory pinning
+              volumeMounts:
+                - name: fsx
+                  mountPath: /fsx
+                - name: dshm
+                  mountPath: /dev/shm
+                - name: dev-infiniband
+                  mountPath: /dev/infiniband
+          volumes:
+            - name: fsx
+              persistentVolumeClaim:
+                claimName: ${FSX_CLAIM}
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: "128Gi"
+            - name: dev-infiniband
+              hostPath:
+                path: /dev/infiniband
+          restartPolicy: Never
+          terminationGracePeriodSeconds: 300
+          # One worker per physical node — EFA/GPU are node resources, and same-node
+          # EFA loopback is silently dropped by SRD anyway, so co-scheduling two
+          # workers on one node is never right.
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchExpressions:
+                      - key: ray.io/node-type
+                        operator: In
+                        values:
+                          - worker
+                  topologyKey: kubernetes.io/hostname

@@ -1,0 +1,47 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+# NeMo-RL runtime dependencies for the deepep-v2-efa image.
+#
+# NeMo-RL itself is installed with --no-deps (nemo-rl.Dockerfile Layer 7)
+# because its pyproject pins torch EXACTLY (torch==2.9.0 at the pinned SHA):
+# letting pip resolve that would DOWNGRADE the NGC-baked torch and orphan the
+# baked TransformerEngine/apex/flash-attn ABI. This file carries the rest of
+# NeMo-RL's [project.dependencies] set, at the same specifiers the pinned SHA
+# declares, MINUS the entries the base image already provides or that conflict
+# with this test case's substrate:
+#   - torch, triton, torchvision : NGC-baked (the ABI anchor; never reinstall)
+#   - setuptools, pip, ninja     : present in the base
+#   - nvidia-nvshmem-cu12        : cu12 wheel on a cu13 base, and unused here —
+#                                  this image's deep_ep is the NCCL-GIN backend
+#                                  (no NVSHMEM linked at all)
+# When bumping NEMO_RL_SHA, re-diff this list against the new pyproject.
+colored==2.2.3
+ray[default]==2.49.2
+transformers==4.57.1
+wandb
+numpy
+datasets>=4.0.0
+rich
+math-verify
+accelerate>=0.26
+tensorboard
+omegaconf
+torchdata
+nvidia-ml-py
+hydra-core
+tiktoken
+blobfile
+debugpy
+nvtx
+matplotlib
+plotly
+sympy>=1.14.0
+pillow>=11.3.0
+num2words>=0.5.14
+mlflow>=3.5.0,<3.6.0
+swanlab
+pyzmq
+
+# megatron.core (PYTHONPATH tree) import-time dependency not in NeMo-RL's set.
+einops
