@@ -21,6 +21,7 @@ import math
 import os
 import statistics
 import sys
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -726,6 +727,7 @@ def main() -> None:
         args.experts,
         args.top_k,
     )
+    completed = False
     try:
         for dispatch_dtype in args.dispatch_dtypes:
             result = run_dtype(
@@ -745,10 +747,39 @@ def main() -> None:
             )
             if rank == 0:
                 print(RESULT_PREFIX + json.dumps(result, sort_keys=True), flush=True)
+        completed = True
+    except BaseException:
+        if args.arm == "uccl" and args.profile == "prefill":
+            # The pinned UCCL high-throughput proxy teardown can strand the
+            # interpreter after an error. Preserve the traceback and let
+            # torchrun observe an unambiguous worker failure instead.
+            traceback.print_exc()
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(1)
+        raise
     finally:
-        adapter.destroy()
-        dist.barrier(group=group)
-        dist.destroy_process_group()
+        if args.arm == "uccl" and args.profile == "prefill":
+            if completed:
+                # UCCL's pinned normal-mode proxy cleanup destroys the CUDA
+                # context while PyTorch still owns CUDA tensors, which hangs
+                # worker shutdown. All communication has completed here and
+                # this barrier keeps every rank alive through result output.
+                # Process exit then releases the CUDA context, QPs, and file
+                # descriptors outside the measured benchmark boundary.
+                if rank == 0:
+                    print(
+                        "ADAI_EP_PROCESS_LIFETIME_CLEANUP arm=uccl profile=prefill",
+                        flush=True,
+                    )
+                dist.barrier(group=group)
+                sys.stdout.flush()
+                sys.stderr.flush()
+                os._exit(0)
+        else:
+            adapter.destroy()
+            dist.barrier(group=group)
+            dist.destroy_process_group()
 
 
 if __name__ == "__main__":
