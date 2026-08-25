@@ -144,11 +144,13 @@ HARVEST_PARALLELISM="${HARVEST_PARALLELISM:-4}"
 FAIL_FAST_GRACE_SECONDS="${FAIL_FAST_GRACE_SECONDS:-180}"
 EFA_MODULE_VERSION_REQUIRED="${EFA_MODULE_VERSION_REQUIRED:-3.3.0g}"
 DISTRIBUTED_TIMEOUT_MINUTES="${DISTRIBUTED_TIMEOUT_MINUTES:-30}"
+BATCH_P2P_COMM="${BATCH_P2P_COMM:-on}"
 [[ "${PRESERVE_ROUTE_TRACE_RAW}" =~ ^[01]$ ]] || { echo "PRESERVE_ROUTE_TRACE_RAW must be 0 or 1" >&2; exit 2; }
 [[ "${HARVEST_PARALLELISM}" =~ ^[1-9][0-9]*$ && "${HARVEST_PARALLELISM}" -le 16 ]] || { echo "HARVEST_PARALLELISM must be an integer from 1 through 16" >&2; exit 2; }
 [[ "${FAIL_FAST_GRACE_SECONDS}" =~ ^[1-9][0-9]*$ ]] || { echo "FAIL_FAST_GRACE_SECONDS must be a positive integer" >&2; exit 2; }
 [[ "${EFA_MODULE_VERSION_REQUIRED}" =~ ^[A-Za-z0-9._+-]+$ ]] || { echo "EFA_MODULE_VERSION_REQUIRED contains invalid characters" >&2; exit 2; }
 [[ "${DISTRIBUTED_TIMEOUT_MINUTES}" =~ ^[1-9][0-9]*$ ]] || { echo "DISTRIBUTED_TIMEOUT_MINUTES must be a positive integer" >&2; exit 2; }
+[[ "${BATCH_P2P_COMM}" = on || "${BATCH_P2P_COMM}" = off ]] || { echo "BATCH_P2P_COMM must be on or off" >&2; exit 2; }
 
 cat > "${LOCAL_RUN_DIR}/environment.txt" <<EOF
 campaign_id=${CAMPAIGN_ID}
@@ -173,6 +175,7 @@ harvest_parallelism=${HARVEST_PARALLELISM}
 fail_fast_grace_seconds=${FAIL_FAST_GRACE_SECONDS}
 efa_module_version_required=${EFA_MODULE_VERSION_REQUIRED}
 distributed_timeout_minutes=${DISTRIBUTED_TIMEOUT_MINUTES}
+batch_p2p_comm=${BATCH_P2P_COMM}
 expected_dispatcher=${EXPECTED_DISPATCHER}
 expected_backend=${EXPECTED_BACKEND}
 run_kind=${RUN_KIND}
@@ -296,6 +299,7 @@ spec:
         - {name: EXPERT_PARALLEL, value: "${EP}"}
         - {name: TRAIN_ITERS, value: "${TRAIN_ITERS}"}
         - {name: DISTRIBUTED_TIMEOUT_MINUTES, value: "${DISTRIBUTED_TIMEOUT_MINUTES}"}
+        - {name: BATCH_P2P_COMM, value: "${BATCH_P2P_COMM}"}
         - {name: GLOBAL_BATCH, value: "${GLOBAL_BATCH}"}
         - {name: MICRO_BATCH, value: "${MICRO_BATCH}"}
         - {name: SEQ_LEN, value: "${SEQ_LEN}"}

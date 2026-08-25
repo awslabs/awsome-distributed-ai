@@ -316,9 +316,9 @@ def build_config():
     distributed_timeout_minutes = _int("DISTRIBUTED_TIMEOUT_MINUTES", 30)
     if distributed_timeout_minutes <= 0:
         raise ValueError("DISTRIBUTED_TIMEOUT_MINUTES must be positive")
-    # A new micro-batch shape can spend more than the upstream 10-minute default in the
-    # first TorchInductor compile while adjacent pipeline stages wait in P2P operations.
-    # This timeout is common to every arm and does not alter the scored steady-state steps.
+    # A new micro-batch shape can spend more than the upstream 10-minute default before all
+    # pipeline stages reach the same P2P operation. This timeout is common to every arm and
+    # does not alter the scored steady-state steps.
     cfg.dist.distributed_timeout_minutes = distributed_timeout_minutes
 
     # 2) Build the literal Kimi-K2 provider from the HF config (random init; no ~2 TB weights).
@@ -355,6 +355,13 @@ def build_config():
     m.sequence_parallel = tp > 1
     m.seq_length = seq_len
     m.pipeline_dtype = torch.bfloat16
+    batch_p2p_comm_value = os.environ.get("BATCH_P2P_COMM", "on").lower()
+    if batch_p2p_comm_value not in ("on", "off"):
+        raise ValueError("BATCH_P2P_COMM must be 'on' or 'off'")
+    m.batch_p2p_comm = batch_p2p_comm_value == "on"
+    # batch_p2p_sync only applies to batch_isend_irecv. Keep the inactive value explicit so
+    # the resolved pipeline communication mode is unambiguous in the benchmark log.
+    m.batch_p2p_sync = m.batch_p2p_comm
     m.transformer_impl = "transformer_engine"
     if hasattr(m, "cuda_graph_impl"):
         m.cuda_graph_impl = "none"  # CUDA graphs + EP all-to-all do not mix well
@@ -536,7 +543,7 @@ def build_config():
     logger.info(
         "bench cfg (KIMI-K2): arm=%s overlap=%s | L=%s h=%s experts=%s topk=%s "
         "n_group=%s heads=%s mtp=%s MLA=%s | TP%s PP%s EP%s CP%s | iters=%s gbs=%s mbs=%s seq=%s "
-        "distributed_timeout_minutes=%s",
+        "distributed_timeout_minutes=%s batch_p2p_comm=%s",
         arm,
         overlap,
         m.num_layers,
@@ -556,6 +563,7 @@ def build_config():
         micro_batch,
         seq_len,
         distributed_timeout_minutes,
+        m.batch_p2p_comm,
     )
     return cfg
 
