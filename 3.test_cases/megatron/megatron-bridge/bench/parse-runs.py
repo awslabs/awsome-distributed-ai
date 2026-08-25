@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Parse durable four-arm runs and apply backend-specific validity gates."""
+
 from __future__ import annotations
 
 import argparse
@@ -57,6 +58,19 @@ def route_summaries(run: Path) -> list[dict]:
     return found
 
 
+def runtime_dispatcher_identities(text: str) -> list[dict]:
+    found = []
+    prefix = "RUNTIME_DISPATCHER_IDENTITY "
+    for line in text.splitlines():
+        if prefix not in line:
+            continue
+        try:
+            found.append(json.loads(line.partition(prefix)[2]))
+        except json.JSONDecodeError:
+            pass
+    return found
+
+
 def parse_run(run: Path, warmup: int) -> dict:
     env = read_environment(run)
     arm = env.get("ep_arm", run.name)
@@ -69,7 +83,12 @@ def parse_run(run: Path, warmup: int) -> dict:
             continue
         iteration = int(match.group(1))
         record = records.setdefault(iteration, {})
-        for name, regex in (("time_ms", TIME_MS), ("loss", LOSS), ("gradient_norm", GRAD), ("tflops", TFLOPS)):
+        for name, regex in (
+            ("time_ms", TIME_MS),
+            ("loss", LOSS),
+            ("gradient_norm", GRAD),
+            ("tflops", TFLOPS),
+        ):
             value = regex.search(line)
             if value:
                 record[name] = float(value.group(1))
@@ -78,46 +97,93 @@ def parse_run(run: Path, warmup: int) -> dict:
     steady = [record for iteration, record in ordered if iteration > warmup]
     times = [record["time_ms"] for record in steady if "time_ms" in record]
     losses = [record["loss"] for _, record in ordered if "loss" in record]
-    gradients = [record["gradient_norm"] for _, record in ordered if "gradient_norm" in record]
+    gradients = [
+        record["gradient_norm"] for _, record in ordered if "gradient_norm" in record
+    ]
     tflops = [record["tflops"] for record in steady if "tflops" in record]
     manifests = runtime_manifests(run)
     routes = route_summaries(run)
+    dispatcher_identities = runtime_dispatcher_identities(text)
     expected_nodes = len([node for node in env.get("nodes", "").split(",") if node])
     manifests_complete = expected_nodes > 0 and len(manifests) == expected_nodes
     routes_complete = expected_nodes > 0 and len(routes) == expected_nodes
 
     identity = manifests_complete and all(
-        item.get("ep_arm") == arm and item.get("backend_identity", {}).get("ep_arm") == arm
+        item.get("ep_arm") == arm
+        and item.get("backend_identity", {}).get("ep_arm") == arm
         for item in manifests
     )
-    single_nccl = manifests_complete and all(item.get("single_nccl") is True for item in manifests)
+    single_nccl = manifests_complete and all(
+        item.get("single_nccl") is True for item in manifests
+    )
     build_runtime = manifests_complete and all(
         item.get("nccl_build_runtime_match") is True for item in manifests
     )
     efa_manifest = manifests_complete and all(
         "provider: efa" in item.get("efa_devices", "").lower() for item in manifests
     )
+    source_path = run / "manifests" / "run-entrypoint.py"
+    source_hash = env.get("run_entrypoint_source_sha256", "")
+    source_matches = (
+        re.fullmatch(r"[0-9a-f]{64}", source_hash) is not None
+        and source_path.is_file()
+        and hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
+    )
+    expected_manager = {
+        "nccl-alltoall": None,
+        "uccl": "_DeepepManager",
+        "deepep-v1-nvshmem": "_DeepepManager",
+        "deepep-v2-gin-gda": "_DeepepV2Manager",
+    }.get(arm)
+    expected_ep = int(env.get("ep", "0"))
+    runtime_dispatcher_identity = any(
+        item.get("arm") == arm
+        and item.get("manager") == expected_manager
+        and item.get("group_sizes") == [expected_ep]
+        and item.get("dispatcher_instances_on_rank", 0) > 0
+        and item.get("dispatcher_instances_on_rank")
+        == item.get("moe_layer_instances_on_rank")
+        for item in dispatcher_identities
+    )
     validity = {
-        "image_identity": identity and marker(text, r"EP_IMAGE_IDENTITY_OK|EP_BACKEND_REQUEST"),
-        "elastic_buffer": marker(text, r"buffer=ElasticBuffer|DEEPEP_V2_IMPORT_OK ElasticBuffer=true"),
+        "entrypoint_source": source_matches,
+        "image_identity": identity
+        and marker(text, r"EP_IMAGE_IDENTITY_OK|EP_BACKEND_REQUEST"),
+        "runtime_dispatcher_identity": runtime_dispatcher_identity,
+        "elastic_buffer": marker(
+            text, r"buffer=ElasticBuffer|DEEPEP_V2_IMPORT_OK ElasticBuffer=true"
+        ),
         "deepep_v2_manager": marker(text, r"manager=_DeepepV2Manager"),
         "single_nccl": single_nccl,
         "nccl_build_runtime_match": build_runtime,
         "gin_type_5": manifests_complete
-        and all(item.get("environment", {}).get("NCCL_GIN_TYPE") == "5" for item in manifests),
-        "gdaki_context": marker(text, r"GIN GDAKI:\s*createContext done|GDAKI.*createContext.*done"),
-        "efa": efa_manifest and marker(text, r"Selected provider is efa|NET/OFI.*efa|provider: efa"),
+        and all(
+            item.get("environment", {}).get("NCCL_GIN_TYPE") == "5"
+            for item in manifests
+        ),
+        "gdaki_context": marker(
+            text, r"GIN GDAKI:\s*createContext done|GDAKI.*createContext.*done"
+        ),
+        "efa": efa_manifest
+        and marker(text, r"Selected provider is efa|NET/OFI.*efa|provider: efa"),
         "no_token_drop": (
-            marker(text, r"NO_TOKEN_DROP_CONFIG capacity_factor=None token_dropping=False")
+            marker(
+                text, r"NO_TOKEN_DROP_CONFIG capacity_factor=None token_dropping=False"
+            )
             and routes_complete
-            and all(item.get("records", 0) > 0 and item.get("no_token_drop") is True for item in routes)
+            and all(
+                item.get("records", 0) > 0 and item.get("no_token_drop") is True
+                for item in routes
+            )
         ),
         "steady_timing": finite(times),
         "finite_loss": finite(losses),
         "finite_gradient": finite(gradients),
     }
     required = [
+        "entrypoint_source",
         "image_identity",
+        "runtime_dispatcher_identity",
         "single_nccl",
         "nccl_build_runtime_match",
         "efa",
@@ -127,10 +193,20 @@ def parse_run(run: Path, warmup: int) -> dict:
         "finite_gradient",
     ]
     if arm == "deepep-v2-gin-gda":
-        required.extend(["elastic_buffer", "deepep_v2_manager", "gin_type_5", "gdaki_context"])
-    status_file = (run / "STATUS").read_text(errors="replace") if (run / "STATUS").exists() else ""
+        required.extend(
+            ["elastic_buffer", "deepep_v2_manager", "gin_type_5", "gdaki_context"]
+        )
+    status_file = (
+        (run / "STATUS").read_text(errors="replace")
+        if (run / "STATUS").exists()
+        else ""
+    )
     complete = status_file.startswith("PASS")
-    status = "PASS" if complete and all(validity[name] for name in required) else ("INVALID" if complete else "FAIL")
+    status = (
+        "PASS"
+        if complete and all(validity[name] for name in required)
+        else ("INVALID" if complete else "FAIL")
+    )
     median_ms = statistics.median(times) if times else math.nan
     global_batch = int(env.get("global_batch_samples", "0"))
     sequence = int(env.get("sequence_length_tokens", "0"))
@@ -165,7 +241,9 @@ def parse_run(run: Path, warmup: int) -> dict:
             "route_summaries": len(routes),
         },
     }
-    (run / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    (run / "result.json").write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n"
+    )
     return result
 
 
@@ -197,7 +275,9 @@ def summarize(results: list[dict]) -> dict:
         }
     paired: dict[str, dict] = {}
     for cell in cells:
-        baseline = {item["repeat"]: item for item in groups.get((cell, "nccl-alltoall"), [])}
+        baseline = {
+            item["repeat"]: item for item in groups.get((cell, "nccl-alltoall"), [])
+        }
         for arm in ("uccl", "deepep-v1-nvshmem", "deepep-v2-gin-gda"):
             treatment = {item["repeat"]: item for item in groups.get((cell, arm), [])}
             deltas = []
@@ -225,7 +305,9 @@ def main() -> None:
     document = {
         "schema_version": 1,
         "campaign_root": str(root),
-        "campaign_tree_sha256": hashlib.sha256("\n".join(str(path) for path in runs).encode()).hexdigest(),
+        "campaign_tree_sha256": hashlib.sha256(
+            "\n".join(str(path) for path in runs).encode()
+        ).hexdigest(),
         "runs": results,
         "summary": summarize(results),
     }

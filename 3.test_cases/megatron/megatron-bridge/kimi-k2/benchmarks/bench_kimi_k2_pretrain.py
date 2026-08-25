@@ -45,7 +45,9 @@ logging.basicConfig(level=logging.INFO)
 
 # HF Kimi-K2 repo dir staged on FSx (config.json + configuration_deepseek.py; weights unused).
 HF_PATH = os.environ.get("KIMI_K2_HF_PATH", "moonshotai/Kimi-K2-Base")
-HF_REVISION = os.environ.get("KIMI_K2_REVISION", "ce72df012259dcc55d945e890f815fe7ef69159c")
+HF_REVISION = os.environ.get(
+    "KIMI_K2_REVISION", "ce72df012259dcc55d945e890f815fe7ef69159c"
+)
 
 
 def _int(name: str, default: int) -> int:
@@ -83,7 +85,9 @@ class RuntimeDispatcherIdentity(Callback):
         if not moe_layers:
             raise RuntimeError(f"{arm} built no BaseMoELayer instances")
         dispatchers = [
-            layer.token_dispatcher for layer in moe_layers if layer.token_dispatcher is not None
+            layer.token_dispatcher
+            for layer in moe_layers
+            if layer.token_dispatcher is not None
         ]
         if len(dispatchers) != len(moe_layers):
             raise RuntimeError(
@@ -133,7 +137,9 @@ class RuntimeDispatcherIdentity(Callback):
                     f"{arm} selected unexpected flex managers: expected={expected_manager.__name__} actual={wrong}"
                 )
 
-        group_sizes = sorted({dist.get_world_size(layer.ep_group) for layer in moe_layers})
+        group_sizes = sorted(
+            {dist.get_world_size(layer.ep_group) for layer in moe_layers}
+        )
         expected_group_size = _int("EXPERT_PARALLEL", 32)
         if group_sizes != [expected_group_size]:
             raise RuntimeError(
@@ -144,10 +150,15 @@ class RuntimeDispatcherIdentity(Callback):
             "dispatcher_instances_on_rank": len(dispatchers),
             "moe_layer_instances_on_rank": len(moe_layers),
             "group_sizes": group_sizes,
-            "manager": expected_manager.__name__ if expected_manager is not None else None,
+            "manager": expected_manager.__name__
+            if expected_manager is not None
+            else None,
         }
         if not dist.is_initialized() or dist.get_rank() == 0:
-            print("RUNTIME_DISPATCHER_IDENTITY " + json.dumps(payload, sort_keys=True), flush=True)
+            print(
+                "RUNTIME_DISPATCHER_IDENTITY " + json.dumps(payload, sort_keys=True),
+                flush=True,
+            )
             if expected_manager is not None:
                 backend = "deepep_v2" if arm == "deepep-v2-gin-gda" else "deepep"
                 print(
@@ -165,7 +176,9 @@ class RuntimeDispatcherIdentity(Callback):
 
         buffers = list(fused_a2a._elastic_buffers.values())
         if not buffers:
-            raise RuntimeError("DeepEP v2 completed a step without an ElasticBuffer instance")
+            raise RuntimeError(
+                "DeepEP v2 completed a step without an ElasticBuffer instance"
+            )
         if not all(isinstance(buffer, deep_ep.ElasticBuffer) for buffer in buffers):
             raise RuntimeError(
                 "DeepEP v2 cache contains non-ElasticBuffer objects: "
@@ -180,8 +193,13 @@ class RuntimeDispatcherIdentity(Callback):
 
     def on_train_end(self, context: CallbackContext) -> None:
         del context
-        if os.environ["EP_ARM"] == "deepep-v2-gin-gda" and not self.elastic_buffer_observed:
-            raise RuntimeError("DeepEP v2 training ended without runtime ElasticBuffer proof")
+        if (
+            os.environ["EP_ARM"] == "deepep-v2-gin-gda"
+            and not self.elastic_buffer_observed
+        ):
+            raise RuntimeError(
+                "DeepEP v2 training ended without runtime ElasticBuffer proof"
+            )
 
 
 class RouteTrace(Callback):
@@ -275,7 +293,9 @@ def build_config():
         deepseek_v3_pretrain_config_32nodes,
         set_deepseek_v3_pipeline_model_parallel_layout,
     )
-    from megatron.bridge.training.flex_dispatcher_backend import apply_flex_dispatcher_backend
+    from megatron.bridge.training.flex_dispatcher_backend import (
+        apply_flex_dispatcher_backend,
+    )
 
     # Parallelism — manifest/launcher contract. Canonical 256-GPU layout:
     # TP8 * PP8 = 64; world 256 -> DP=4; EP=32 divides TP*DP=32 (ETP=1). 384 experts / 32 = 12/rank.
@@ -298,9 +318,7 @@ def build_config():
     #    trust_remote_code=True is REQUIRED (config auto_map -> configuration_deepseek.DeepseekV3Config).
     k2 = AutoBridge.from_hf_pretrained(
         HF_PATH, revision=HF_REVISION, trust_remote_code=True
-    ).to_megatron_provider(
-        load_weights=False
-    )
+    ).to_megatron_provider(load_weights=False)
     cfg.model = k2
     m = cfg.model
     literal = {
@@ -309,10 +327,15 @@ def build_config():
         "num_moe_experts": 384,
         "moe_router_topk": 8,
     }
-    drift = {name: (expected, getattr(m, name, None)) for name, expected in literal.items()
-             if getattr(m, name, None) != expected}
+    drift = {
+        name: (expected, getattr(m, name, None))
+        for name, expected in literal.items()
+        if getattr(m, name, None) != expected
+    }
     if drift:
-        raise RuntimeError(f"Kimi-K2 architecture drift at revision {HF_REVISION}: {drift}")
+        raise RuntimeError(
+            f"Kimi-K2 architecture drift at revision {HF_REVISION}: {drift}"
+        )
 
     # 3) Re-apply the runtime knobs. The AutoBridge provider carries only the architecture; the
     #    recipe's runtime/parallelism settings lived on the model object we just replaced, so we
@@ -327,7 +350,7 @@ def build_config():
     m.pipeline_dtype = torch.bfloat16
     m.transformer_impl = "transformer_engine"
     if hasattr(m, "cuda_graph_impl"):
-        m.cuda_graph_impl = "none"          # CUDA graphs + EP all-to-all do not mix well
+        m.cuda_graph_impl = "none"  # CUDA graphs + EP all-to-all do not mix well
     m.moe_grouped_gemm = True
     m.moe_permute_fusion = True
     # Kimi-K2 has NO multi-token-prediction layer (DSV3 ships MTP=1). Use None — NOT 0:
@@ -336,10 +359,16 @@ def build_config():
     # overlap_moe_expert_parallel_comm is enabled — an int 0 trips that assert
     # ("MTP layernum only supports 1 when enabling overlap_moe_expert_parallel_comm").
     m.mtp_num_layers = None
-    for f in ("account_for_embedding_in_pipeline_split", "account_for_loss_in_pipeline_split"):
+    for f in (
+        "account_for_embedding_in_pipeline_split",
+        "account_for_loss_in_pipeline_split",
+    ):
         if hasattr(m, f):
             setattr(m, f, False)
-    for f in ("num_layers_in_first_pipeline_stage", "num_layers_in_last_pipeline_stage"):
+    for f in (
+        "num_layers_in_first_pipeline_stage",
+        "num_layers_in_last_pipeline_stage",
+    ):
         if hasattr(m, f):
             setattr(m, f, None)
 
@@ -362,10 +391,9 @@ def build_config():
         cfg.checkpoint.load = None
         if hasattr(cfg.checkpoint, "save_interval"):
             cfg.checkpoint.save_interval = None
-    if hasattr(cfg.train, "eval_iters"):
-        cfg.train.eval_iters = 0
-    if hasattr(cfg.train, "eval_interval"):
-        cfg.train.eval_interval = train_iters + 1000
+    if hasattr(cfg, "validation"):
+        cfg.validation.eval_iters = 0
+        cfg.validation.eval_interval = train_iters + 1000
 
     performance_seed = _int("PERFORMANCE_SEED", 1234)
     cfg.rng.seed = performance_seed
@@ -379,7 +407,9 @@ def build_config():
         identity_bytes = stream.read().encode()
     identity = json.loads(identity_bytes)
     if identity.get("ep_arm") != arm:
-        raise RuntimeError(f"EP_ARM/image mismatch: requested={arm!r}, identity={identity!r}")
+        raise RuntimeError(
+            f"EP_ARM/image mismatch: requested={arm!r}, identity={identity!r}"
+        )
 
     if arm == "nccl-alltoall":
         m.moe_token_dispatcher_type = "alltoall"
@@ -466,7 +496,9 @@ def build_config():
     #    because the swapped Kimi-K2 model starts with pipeline_model_parallel_layout=None.
     overlap = os.environ.get("MOE_A2A_OVERLAP", "on").lower() == "on"
     if overlap and pp > 1:
-        m.virtual_pipeline_model_parallel_size = 2        # recipe's shipped (8,2) 16-chunk layout
+        m.virtual_pipeline_model_parallel_size = (
+            2  # recipe's shipped (8,2) 16-chunk layout
+        )
         m.recompute_granularity = None
         m.recompute_method = None
         m.recompute_num_layers = None
@@ -474,10 +506,10 @@ def build_config():
             m.recompute_modules = [x for x in m.recompute_modules if x != "moe"]
     else:
         m.virtual_pipeline_model_parallel_size = None
-        m.recompute_granularity = "full"                  # fit activation memory at 384 experts
+        m.recompute_granularity = "full"  # fit activation memory at 384 experts
         m.recompute_method = "uniform"
         m.recompute_num_layers = 1
-    set_deepseek_v3_pipeline_model_parallel_layout(m)     # mtp=0 -> last stage ["loss"]
+    set_deepseek_v3_pipeline_model_parallel_layout(m)  # mtp=0 -> last stage ["loss"]
 
     for obj in (getattr(cfg, "comm_overlap", None), m):
         if obj is None:
@@ -497,10 +529,24 @@ def build_config():
     logger.info(
         "bench cfg (KIMI-K2): arm=%s overlap=%s | L=%s h=%s experts=%s topk=%s "
         "n_group=%s heads=%s mtp=%s MLA=%s | TP%s PP%s EP%s CP%s | iters=%s gbs=%s mbs=%s seq=%s",
-        arm, overlap, m.num_layers, m.hidden_size, m.num_moe_experts, m.moe_router_topk,
-        getattr(m, "moe_router_num_groups", "?"), m.num_attention_heads, m.mtp_num_layers,
+        arm,
+        overlap,
+        m.num_layers,
+        m.hidden_size,
+        m.num_moe_experts,
+        m.moe_router_topk,
+        getattr(m, "moe_router_num_groups", "?"),
+        m.num_attention_heads,
+        m.mtp_num_layers,
         getattr(m, "multi_latent_attention", "?"),
-        tp, pp, ep, cp, train_iters, global_batch, micro_batch, seq_len,
+        tp,
+        pp,
+        ep,
+        cp,
+        train_iters,
+        global_batch,
+        micro_batch,
+        seq_len,
     )
     return cfg
 
@@ -517,17 +563,26 @@ def main():
         _n = {"i": 0}
 
         def fwd(state, data_iterator, model, return_schedule_plan=False):
-            out, loss_fn = _forward_step(state, data_iterator, model, return_schedule_plan)
+            out, loss_fn = _forward_step(
+                state, data_iterator, model, return_schedule_plan
+            )
 
             def wrapped(*a, **k):
                 res = loss_fn(*a, **k)
                 try:
                     loss_sum = float(res[0].detach().float().item())
-                    ntok = float(res[1].item()) if len(res) > 1 and res[1] is not None else float("nan")
+                    ntok = (
+                        float(res[1].item())
+                        if len(res) > 1 and res[1] is not None
+                        else float("nan")
+                    )
                     mean = loss_sum / ntok if ntok == ntok and ntok else float("nan")
                     _n["i"] += 1
-                    print("[LOSSPROBE] call=%d loss_sum=%.6f num_tokens=%.0f mean_loss=%.6f"
-                          % (_n["i"], loss_sum, ntok, mean), flush=True)
+                    print(
+                        "[LOSSPROBE] call=%d loss_sum=%.6f num_tokens=%.0f mean_loss=%.6f"
+                        % (_n["i"], loss_sum, ntok, mean),
+                        flush=True,
+                    )
                 except Exception as e:  # never let the probe break the run
                     print("[LOSSPROBE] err %r" % (e,), flush=True)
                 return res

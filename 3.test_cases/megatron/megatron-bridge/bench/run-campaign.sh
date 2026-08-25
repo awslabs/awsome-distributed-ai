@@ -12,6 +12,8 @@ case "${CAMPAIGN_NAMESPACE}" in adai-kimi-k2-megatron-ep-*) ;; *) echo "refusing
 export CAMPAIGN_ID CAMPAIGN_NAMESPACE CTX LOCAL_ARTIFACT_ROOT
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 CASE_DIR="$(cd "${SELF_DIR}/.." && pwd)"
+RUN_ENTRYPOINT_LOCAL_FILE="${RUN_ENTRYPOINT_LOCAL_FILE:-${CASE_DIR}/kimi-k2/benchmarks/bench_kimi_k2_pretrain.py}"
+export RUN_ENTRYPOINT_LOCAL_FILE
 OUT="${LOCAL_ARTIFACT_ROOT}/${CAMPAIGN_ID}"
 mkdir -p "${OUT}/census" "${OUT}/control" "${OUT}/results"
 K=(kubectl --context "${CTX}")
