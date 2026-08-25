@@ -313,6 +313,13 @@ def build_config():
     #    cfg.dataset.blend=None, plus train/optim/ddp/logger/seed). We keep all of that and
     #    replace ONLY cfg.model with Kimi-K2.
     cfg = deepseek_v3_pretrain_config_32nodes()
+    distributed_timeout_minutes = _int("DISTRIBUTED_TIMEOUT_MINUTES", 30)
+    if distributed_timeout_minutes <= 0:
+        raise ValueError("DISTRIBUTED_TIMEOUT_MINUTES must be positive")
+    # A new micro-batch shape can spend more than the upstream 10-minute default in the
+    # first TorchInductor compile while adjacent pipeline stages wait in P2P operations.
+    # This timeout is common to every arm and does not alter the scored steady-state steps.
+    cfg.dist.distributed_timeout_minutes = distributed_timeout_minutes
 
     # 2) Build the literal Kimi-K2 provider from the HF config (random init; no ~2 TB weights).
     #    trust_remote_code=True is REQUIRED (config auto_map -> configuration_deepseek.DeepseekV3Config).
@@ -528,7 +535,8 @@ def build_config():
 
     logger.info(
         "bench cfg (KIMI-K2): arm=%s overlap=%s | L=%s h=%s experts=%s topk=%s "
-        "n_group=%s heads=%s mtp=%s MLA=%s | TP%s PP%s EP%s CP%s | iters=%s gbs=%s mbs=%s seq=%s",
+        "n_group=%s heads=%s mtp=%s MLA=%s | TP%s PP%s EP%s CP%s | iters=%s gbs=%s mbs=%s seq=%s "
+        "distributed_timeout_minutes=%s",
         arm,
         overlap,
         m.num_layers,
@@ -547,6 +555,7 @@ def build_config():
         global_batch,
         micro_batch,
         seq_len,
+        distributed_timeout_minutes,
     )
     return cfg
 
