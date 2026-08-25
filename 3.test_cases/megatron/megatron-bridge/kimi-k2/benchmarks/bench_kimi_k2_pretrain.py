@@ -84,6 +84,39 @@ class RuntimeDispatcherIdentity(Callback):
         ]
         if not moe_layers:
             raise RuntimeError(f"{arm} built no BaseMoELayer instances")
+        pipeline_p2p_modes = {
+            (
+                bool(layer.config.batch_p2p_comm),
+                bool(layer.config.overlap_p2p_comm),
+            )
+            for layer in moe_layers
+        }
+        if len(pipeline_p2p_modes) != 1:
+            raise RuntimeError(
+                f"{arm} built inconsistent pipeline P2P modes: {pipeline_p2p_modes}"
+            )
+        batch_p2p_comm, overlap_p2p_comm = pipeline_p2p_modes.pop()
+        requested_batch_p2p_comm = os.environ.get("BATCH_P2P_COMM", "auto").lower()
+        if requested_batch_p2p_comm != "auto":
+            expected_batch_p2p_comm = requested_batch_p2p_comm == "on"
+            if batch_p2p_comm != expected_batch_p2p_comm:
+                raise RuntimeError(
+                    f"{arm} pipeline P2P mode mismatch: "
+                    f"requested_batch_p2p_comm={expected_batch_p2p_comm} "
+                    f"actual_batch_p2p_comm={batch_p2p_comm}"
+                )
+        print(
+            "PIPELINE_P2P_IDENTITY "
+            + json.dumps(
+                {
+                    "batch_p2p_comm": batch_p2p_comm,
+                    "overlap_p2p_comm": overlap_p2p_comm,
+                    "requested_batch_p2p_comm": requested_batch_p2p_comm,
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
         dispatchers = [
             layer.token_dispatcher
             for layer in moe_layers
@@ -320,6 +353,18 @@ def build_config():
     # pipeline stages reach the same P2P operation. This timeout is common to every arm and
     # does not alter the scored steady-state steps.
     cfg.dist.distributed_timeout_minutes = distributed_timeout_minutes
+    batch_p2p_comm_value = os.environ.get("BATCH_P2P_COMM", "auto").lower()
+    if batch_p2p_comm_value not in ("auto", "on", "off"):
+        raise ValueError("BATCH_P2P_COMM must be 'auto', 'on', or 'off'")
+    requested_batch_p2p_comm = (
+        None if batch_p2p_comm_value == "auto" else batch_p2p_comm_value == "on"
+    )
+    if requested_batch_p2p_comm is not None:
+        if cfg.comm_overlap is None:
+            raise RuntimeError("BATCH_P2P_COMM requires cfg.comm_overlap")
+        # Bridge applies CommOverlapConfig after this function returns. Set the user override
+        # as well as the provider field so finalization cannot silently restore its PP default.
+        cfg.comm_overlap.batch_p2p_comm = requested_batch_p2p_comm
 
     # 2) Build the literal Kimi-K2 provider from the HF config (random init; no ~2 TB weights).
     #    trust_remote_code=True is REQUIRED (config auto_map -> configuration_deepseek.DeepseekV3Config).
@@ -355,13 +400,11 @@ def build_config():
     m.sequence_parallel = tp > 1
     m.seq_length = seq_len
     m.pipeline_dtype = torch.bfloat16
-    batch_p2p_comm_value = os.environ.get("BATCH_P2P_COMM", "on").lower()
-    if batch_p2p_comm_value not in ("on", "off"):
-        raise ValueError("BATCH_P2P_COMM must be 'on' or 'off'")
-    m.batch_p2p_comm = batch_p2p_comm_value == "on"
-    # batch_p2p_sync only applies to batch_isend_irecv. Keep the inactive value explicit so
-    # the resolved pipeline communication mode is unambiguous in the benchmark log.
-    m.batch_p2p_sync = m.batch_p2p_comm
+    if requested_batch_p2p_comm is not None:
+        m.batch_p2p_comm = requested_batch_p2p_comm
+        # batch_p2p_sync only applies to batch_isend_irecv. Keep the inactive value explicit so
+        # the resolved pipeline communication mode is unambiguous in the benchmark log.
+        m.batch_p2p_sync = requested_batch_p2p_comm
     m.transformer_impl = "transformer_engine"
     if hasattr(m, "cuda_graph_impl"):
         m.cuda_graph_impl = "none"  # CUDA graphs + EP all-to-all do not mix well
@@ -543,7 +586,7 @@ def build_config():
     logger.info(
         "bench cfg (KIMI-K2): arm=%s overlap=%s | L=%s h=%s experts=%s topk=%s "
         "n_group=%s heads=%s mtp=%s MLA=%s | TP%s PP%s EP%s CP%s | iters=%s gbs=%s mbs=%s seq=%s "
-        "distributed_timeout_minutes=%s batch_p2p_comm=%s",
+        "distributed_timeout_minutes=%s requested_batch_p2p_comm=%s",
         arm,
         overlap,
         m.num_layers,
@@ -563,7 +606,7 @@ def build_config():
         micro_batch,
         seq_len,
         distributed_timeout_minutes,
-        m.batch_p2p_comm,
+        batch_p2p_comm_value,
     )
     return cfg
 
