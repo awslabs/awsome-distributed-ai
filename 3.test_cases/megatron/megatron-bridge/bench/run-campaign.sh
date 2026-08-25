@@ -5,6 +5,7 @@ set -euo pipefail
 : "${CTX:?set CTX}"
 : "${LOCAL_ARTIFACT_ROOT:?set LOCAL_ARTIFACT_ROOT}"
 CAMPAIGN_ID="${CAMPAIGN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-kimi-k2-megatron-ep-2608}"
+[[ "${#CAMPAIGN_ID}" -le 63 ]] || { echo "campaign ID exceeds the Kubernetes label limit: ${CAMPAIGN_ID}" >&2; exit 2; }
 namespace_suffix="$(printf '%s' "${CAMPAIGN_ID}" | sha256sum | cut -c1-16)"
 CAMPAIGN_NAMESPACE="${CAMPAIGN_NAMESPACE:-adai-kimi-k2-megatron-ep-${namespace_suffix}}"
 case "${CAMPAIGN_NAMESPACE}" in adai-kimi-k2-megatron-ep-*) ;; *) echo "refusing non-campaign namespace ${CAMPAIGN_NAMESPACE}" >&2; exit 2;; esac
