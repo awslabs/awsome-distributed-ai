@@ -1,0 +1,177 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
+# TensorRT-LLM NcclEP MoE all-to-all over AWS EFA — 2× p5en.48xlarge (H200).
+#
+# TOPOLOGY (honest shape — read before scaling expectations):
+#   ordinal 0: single-node trtllm-serve, tp_size=ep_size=8 (serve.sh) — the SERVED proof.
+#   ordinal 1: probe peer — idles, then joins the 16-rank CROSS-NODE NcclEP probe
+#              (run-kernel-test.sh) that proves dispatch/combine crosses the EFA node
+#              boundary.
+#   Why not one serve spanning both nodes: a node-spanning trtllm-serve needs mpirun,
+#   and mpirun's OOB cannot route between EKS pods (AWS VPC-CNI gives each pod a /32
+#   eth0, so OMPI's opal_net_samenetwork() never matches a peer and the HNP reports
+#   "no route to" the remote orted). The torchrun-driven probe does not share that
+#   limitation — hence serve-on-one-node + probe-across-two. See README "Known limitations".
+#
+#   Cross-node probe, once both pods are Running:
+#     kubectl -n trtllm-nccl-ep exec trtllm-nccl-ep-1 -- bash -lc \
+#       'nohup /opt/run-kernel-test.sh worker <pod-0-ip> 1 > /tmp/kt.log 2>&1 &'
+#     kubectl -n trtllm-nccl-ep exec trtllm-nccl-ep-0 -- /opt/run-kernel-test.sh leader <pod-0-ip>
+#   (stop the serve on ordinal 0 first if it holds the GPUs: pkill -f '[t]rtllm-serve')
+#
+# Scale seams (per-node EFA NIC count differs by instance type):
+#   p5.48xlarge  (H100): vpc.amazonaws.com/efa: "32", nodeSelector p5.48xlarge
+#   p5en.48xlarge(H200): vpc.amazonaws.com/efa: "16"  ← this file (the measured topology)
+#
+# Image: build the sample-root Dockerfile (NGC-from-scratch, public sources only) and push
+# to YOUR registry — setup/build-push.sh builds ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} from
+# setup/env_vars; set image: below to that SAME name. Do NOT point at anyone's private registry.
+#
+# privileged: true is REQUIRED where /dev/gdrdrv is not advertised by a device plugin
+# (measured: the unprivileged device cgroup blocks open("/dev/gdrdrv") with EPERM even
+# after CAP_MKNOD; without GDRCopy aws-ofi-nccl reports ginType=NONE and the NCCL-GIN
+# CPU-proxy path is dead). If your cluster runs a gdrdrv device plugin, drop privileged
+# and request the device instead.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: trtllm-nccl-ep
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trtllm-nccl-ep
+  namespace: trtllm-nccl-ep
+spec:
+  clusterIP: None            # headless — stable per-pod DNS for the probe rendezvous
+  # publishNotReadyAddresses pairs with the probes below: the probe peer resolves pod 0
+  # through this Service's DNS A-record BEFORE the serve is up, so the not-ready address
+  # must still publish or the torchrun rendezvous deadlocks.
+  publishNotReadyAddresses: true
+  selector:
+    app: trtllm-nccl-ep
+  ports:
+  - { port: 8000,  name: http }
+  - { port: 29501, name: probe-rdzv }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: trtllm-nccl-ep
+  namespace: trtllm-nccl-ep
+spec:
+  serviceName: trtllm-nccl-ep
+  replicas: 2                # pod 0 = EP8 serve; pod 1 = cross-node probe peer (header)
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: trtllm-nccl-ep
+  template:
+    metadata:
+      labels:
+        app: trtllm-nccl-ep
+    spec:
+      # one pod per node — EFA/GPU are node resources; same-node EFA loopback is
+      # silently dropped by SRD anyway, so co-scheduling two pods is never right
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: trtllm-nccl-ep
+            topologyKey: kubernetes.io/hostname
+      nodeSelector:
+        node.kubernetes.io/instance-type: p5en.48xlarge
+      tolerations:
+      - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: trtllm
+        image: REPLACE_WITH_YOUR_REGISTRY/trtllm-nccl-ep-efa:v1-20260825   # = ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} from setup/env_vars
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -euo pipefail
+          echo "=== trtllm-nccl-ep pod $(hostname) $(date -u +%FT%TZ) ==="
+          echo "aws-ofi-nccl effective SHA: $(cat /opt/aws-ofi-nccl.effective.sha 2>/dev/null || echo unknown)"
+          ORDINAL=${HOSTNAME##*-}
+          if [ "$ORDINAL" = "0" ]; then
+            exec /opt/serve.sh
+          else
+            echo "probe peer ready — join the cross-node kernel test with:"
+            echo "  /opt/run-kernel-test.sh worker <pod-0-ip> $ORDINAL"
+            touch /tmp/probe-peer.ready
+            exec sleep infinity
+          fi
+        env:
+        # ---- model + shape knobs (defaults = the measured EP8 serve) ----
+        - { name: SERVE_MODEL, value: "Qwen/Qwen3-30B-A3B" }  # any MoE with routed-experts % EP == 0 (serve.sh asserts)
+        - { name: SERVE_TP, value: "8" }
+        - { name: SERVE_EP, value: "8" }
+        - { name: TRTLLM_NCCL_EP_ALGO, value: "LOW_LATENCY" } # HIGH_THROUGHPUT needs APPLY_HT_FLAT_PATCH=1 image (serve.sh refuses otherwise)
+        # - { name: HF_TOKEN, valueFrom: { secretKeyRef: { name: hf-token, key: token } } }  # gated models only
+
+        # ---- NCCL-GIN proxy + EFA contract, VERBATIM (also exported by serve.sh and
+        #      run-kernel-test.sh; repeated here so the manifest alone documents the
+        #      transport contract) ----
+        - { name: NCCL_GIN_TYPE,             value: "2" }     # 2 = CPU-proxy GIN (the EFA-viable path)
+        - { name: NCCL_GIN_ENABLE,           value: "1" }
+        - { name: OFI_NCCL_GIN_GDAKI,        value: "0" }     # GPU-initiated: not the shipped path on EFA
+        - { name: OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY, value: "1" }  # aws-ofi-nccl PR#1351 (baked in setup_trtllm_nccl_ep_efa.sh)
+        - { name: OFI_NCCL_GIN_MAX_REQUESTS, value: "512" }
+        - { name: NCCL_CUMEM_ENABLE,         value: "1" }
+        - { name: NCCL_NVLS_ENABLE,          value: "0" }
+        - { name: NCCL_IGNORE_DISABLED_P2P,  value: "1" }
+        - { name: FI_PROVIDER,               value: "efa" }
+        - { name: FI_EFA_USE_DEVICE_RDMA,    value: "1" }
+        - { name: FI_EFA_ENABLE_SHM_TRANSFER, value: "0" }
+        - { name: FI_EFA_FORK_SAFE,          value: "1" }
+        - { name: OFI_NCCL_PROTOCOL,         value: "RDMA" }
+        - { name: NCCL_NET_PLUGIN,           value: "/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so" }
+        - { name: NCCL_DEBUG,                value: "WARN" }  # INFO to see the efa-direct banner proof
+        # pod 0: trtllm-serve /health on :8000 = the real "serving" signal (weights loaded,
+        # NcclEP groups created). pod 1 is an idle probe peer, ready once its shell settles.
+        startupProbe:
+          exec:
+            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health; else test -f /tmp/probe-peer.ready; fi"]
+          periodSeconds: 30
+          failureThreshold: 60               # up to 30 min: 30B-class weight download + load
+        readinessProbe:
+          exec:
+            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health; else test -f /tmp/probe-peer.ready; fi"]
+          periodSeconds: 15
+        # requests == limits (Guaranteed QoS): NCCL_GIN_TYPE=2 is the CPU-PROXY path, so
+        # proxy-thread CPU sits on the data path — Burstable QoS + CFS throttling under node
+        # pressure would degrade network throughput and silently taint published numbers.
+        resources:
+          limits:
+            nvidia.com/gpu: "8"
+            vpc.amazonaws.com/efa: "16"      # p5en=16, p5=32
+            hugepages-2Mi: 5120Mi            # needs 2Mi hugepages pre-allocated on the node (they were on the nodes the measured runs used; without them the pod sits Pending)
+            cpu: "90"
+            memory: 1024Gi
+          requests:
+            nvidia.com/gpu: "8"
+            vpc.amazonaws.com/efa: "16"
+            hugepages-2Mi: 5120Mi
+            cpu: "90"
+            memory: 1024Gi
+        securityContext:
+          privileged: true                   # gdrdrv device-cgroup (see header)
+          capabilities:
+            add: [IPC_LOCK]                  # RDMA memory pinning
+        ports:
+        - { containerPort: 8000,  name: http }
+        - { containerPort: 29501, name: probe-rdzv }
+        volumeMounts:
+        - { name: shm,            mountPath: /dev/shm }
+        - { name: dev-infiniband, mountPath: /dev/infiniband }
+        - { name: work,           mountPath: /work }     # HF cache + logs (per-pod, ephemeral)
+      volumes:
+      - name: shm
+        emptyDir: { medium: Memory, sizeLimit: 64Gi }
+      - name: dev-infiniband
+        hostPath: { path: /dev/infiniband }
+      - name: work
+        emptyDir: { sizeLimit: 200Gi }       # Qwen3-30B ~60GB of weights + HF cache; size for your model
