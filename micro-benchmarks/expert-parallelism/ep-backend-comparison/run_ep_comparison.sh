@@ -2,7 +2,7 @@
 set -euo pipefail
 
 : "${CAMPAIGN_ID:?Set a unique CAMPAIGN_ID}"
-: "${FAIR_EP_NODES:?Set 4 comma-separated B200 node names}"
+: "${EP_BENCHMARK_NODES:?Set 4 comma-separated B200 node names}"
 : "${PROTECTED_NODES_CSV:=}"
 : "${ARTIFACT_ROOT:?Set the durable artifact directory}"
 : "${KUBECTL_CONTEXT:?Set the target kubectl context explicitly}"
@@ -62,13 +62,13 @@ mkdir -p "${ARTIFACT_ROOT}/control" "${ARTIFACT_ROOT}/runs" \
     "${ARTIFACT_ROOT}/summary" "${ARTIFACT_ROOT}/teardown"
 K=(kubectl --context "${KUBECTL_CONTEXT}")
 
-IFS=, read -r -a selected_nodes <<<"${FAIR_EP_NODES}"
+IFS=, read -r -a selected_nodes <<<"${EP_BENCHMARK_NODES}"
 protected_nodes=()
 if [[ -n "${PROTECTED_NODES_CSV}" ]]; then
     IFS=, read -r -a protected_nodes <<<"${PROTECTED_NODES_CSV}"
 fi
 ((${#selected_nodes[@]} == 4)) || {
-    printf 'FAIR_EP_NODES must contain exactly 4 nodes\n' >&2
+    printf 'EP_BENCHMARK_NODES must contain exactly 4 nodes\n' >&2
     exit 2
 }
 [[ "$(printf '%s\n' "${selected_nodes[@]}" | sort -u | wc -l)" -eq 4 ]]
@@ -143,7 +143,7 @@ claim_shared_lock() {
                 .spec.renewTime=$now |
                 .spec.leaseDurationSeconds=$duration |
                 .metadata.labels["adai.aws/campaign"]=$holder |
-                .metadata.labels["adai.aws/owner"]="fair-ep-comparison"' \
+                .metadata.labels["adai.aws/owner"]="ep-backend-comparison"' \
             <<<"${current}")"
         if printf '%s\n' "${candidate}" | "${K[@]}" replace -f - \
             >"${ARTIFACT_ROOT}/control/shared-lease-claim-attempt-${attempt}.json" 2>&1; then
@@ -306,7 +306,7 @@ done
 "${K[@]}" create namespace "${CAMPAIGN_NAMESPACE}" --dry-run=client -o json | \
     jq --arg campaign "${CAMPAIGN_ID}" '
         .metadata.labels["adai.aws/campaign"]=$campaign |
-        .metadata.labels["adai.aws/owner"]="fair-ep-comparison"' | \
+        .metadata.labels["adai.aws/owner"]="ep-backend-comparison"' | \
     "${K[@]}" create -f - >/dev/null
 namespace_created=1
 
@@ -372,9 +372,9 @@ done
 "${K[@]}" -n "${CAMPAIGN_NAMESPACE}" delete pod -l \
     "adai.aws/campaign=${CAMPAIGN_ID}" --wait=true --timeout=5m >/dev/null
 
-"${K[@]}" -n "${CAMPAIGN_NAMESPACE}" create configmap fair-ep-scripts \
-    --from-file=fair_ep_benchmark.py="${case_dir}/fair_ep_benchmark.py" \
-    --from-file=run_fair_ep_rank.sh="${case_dir}/run_fair_ep_rank.sh" \
+"${K[@]}" -n "${CAMPAIGN_NAMESPACE}" create configmap ep-benchmark-scripts \
+    --from-file=ep_benchmark.py="${case_dir}/ep_benchmark.py" \
+    --from-file=run_ep_rank.sh="${case_dir}/run_ep_rank.sh" \
     --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 
 jq -n \
@@ -392,19 +392,23 @@ jq -n \
     '{campaign_id:$campaign_id,created_at_utc:$created_at_utc,region:$region,
       cluster:$cluster,git_commit:$git_commit,
       images:{uccl:$uccl,"deepep-v1-nvshmem":$v1,"deepep-v2-gin-gda":$v2},
-      comparison:{tokens_per_rank:128,hidden_dimensions:7168,experts:256,
-                  top_k_dimensionless:8,warmup_iterations:$warmups,
-                  measured_iterations:$iterations,independent_starts:$starts}}' \
+      comparison:{profiles:{decode:{tokens_per_rank:128,api_mode:"low-latency",
+                                    primary_metric:"slowest-rank latency in milliseconds"},
+                            prefill:{tokens_per_rank:4096,api_mode:"normal",
+                                     primary_metric:"effective logical gigabytes per second per rank"}},
+                  hidden_dimensions:7168,experts:256,top_k_dimensionless:8,
+                  warmup_iterations:$warmups,measured_iterations:$iterations,
+                  independent_starts:$starts}}' \
     >"${ARTIFACT_ROOT}/control/provenance.json"
 
 run_case() {
-    local arm="$1" world_size="$2" run_index="$3" dtype_order="$4"
-    local warmups="${5:-${WARMUP_ITERATIONS}}" iterations="${6:-${MEASURED_ITERATIONS}}"
-    local nccl_debug="${7:-WARN}" label="${8:-measurement}"
+    local profile="$1" arm="$2" world_size="$3" run_index="$4" dtype_order="$5"
+    local warmups="${6:-${WARMUP_ITERATIONS}}" iterations="${7:-${MEASURED_ITERATIONS}}"
+    local nccl_debug="${8:-WARN}" label="${9:-measurement}"
     local nodes=$((world_size / 8)) safe_arm="${arm//-}" node_values="" out=""
-    current_case="fair-ep${world_size}-r${run_index}-${safe_arm:0:20}-${label}"
+    current_case="ep-${profile:0:1}${world_size}-r${run_index}-${safe_arm:0:20}-${label}"
     current_case="${current_case:0:63}"
-    out="${ARTIFACT_ROOT}/runs/ep${world_size}/${label}-repeat-${run_index}/${arm}"
+    out="${ARTIFACT_ROOT}/runs/${profile}/ep${world_size}/${label}-repeat-${run_index}/${arm}"
     mkdir -p "${out}"
 
     check_shared_lock
@@ -466,7 +470,7 @@ spec:
         - name: benchmark
           image: ${images[${arm}]}
           imagePullPolicy: IfNotPresent
-          command: [/bin/bash, /opt/benchmark/run_fair_ep_rank.sh]
+          command: [/bin/bash, /opt/benchmark/run_ep_rank.sh]
           securityContext: {privileged: true}
           env:
             - {name: EP_ARM, value: "${arm}"}
@@ -476,6 +480,7 @@ spec:
             - name: POD_NAME
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
             - {name: EP_RUN_INDEX, value: "${run_index}"}
+            - {name: EP_WORKLOAD_PROFILE, value: "${profile}"}
             - {name: EP_DISPATCH_DTYPES, value: "${dtype_order}"}
             - {name: EP_WARMUPS, value: "${warmups}"}
             - {name: EP_ITERATIONS, value: "${iterations}"}
@@ -485,13 +490,13 @@ spec:
             requests: {nvidia.com/gpu: 8, vpc.amazonaws.com/efa: ${EFA_PER_NODE}}
             limits: {nvidia.com/gpu: 8, vpc.amazonaws.com/efa: ${EFA_PER_NODE}}
           volumeMounts:
-            - {name: scripts, mountPath: /opt/benchmark/fair_ep_benchmark.py, subPath: fair_ep_benchmark.py}
-            - {name: scripts, mountPath: /opt/benchmark/run_fair_ep_rank.sh, subPath: run_fair_ep_rank.sh}
+            - {name: scripts, mountPath: /opt/benchmark/ep_benchmark.py, subPath: ep_benchmark.py}
+            - {name: scripts, mountPath: /opt/benchmark/run_ep_rank.sh, subPath: run_ep_rank.sh}
             - {name: dshm, mountPath: /dev/shm}
             - {name: gdrdrv, mountPath: /dev/gdrdrv}
       volumes:
         - name: scripts
-          configMap: {name: fair-ep-scripts, defaultMode: 0755}
+          configMap: {name: ep-benchmark-scripts, defaultMode: 0755}
         - name: dshm
           emptyDir: {medium: Memory, sizeLimit: 64Gi}
         - name: gdrdrv
@@ -506,10 +511,10 @@ YAML
         for ((index = 0; index < nodes; index++)); do
             pod="${current_case}-${index}"
             if "${K[@]}" -n "${CAMPAIGN_NAMESPACE}" logs "${pod}" --tail=30 2>/dev/null | \
-                rg -q '^ADAI_FAIR_COMPLETE$'; then
+                rg -q '^ADAI_EP_COMPLETE$'; then
                 complete=$((complete + 1))
             elif "${K[@]}" -n "${CAMPAIGN_NAMESPACE}" logs "${pod}" --tail=80 2>/dev/null | \
-                rg -q '^ADAI_FAIR_FAILED$'; then
+                rg -q '^ADAI_EP_FAILED$'; then
                 complete=-1
                 break
             fi
@@ -527,28 +532,28 @@ YAML
             >"${out}/${pod}-describe.txt" 2>&1 || true
     done
     ((complete == nodes)) || {
-        printf 'Case failed or timed out: arm=%s EP%s repeat=%s label=%s complete=%s/%s\n' \
-            "${arm}" "${world_size}" "${run_index}" "${label}" "${complete}" "${nodes}" >&2
+        printf 'Case failed or timed out: profile=%s arm=%s EP%s repeat=%s label=%s complete=%s/%s\n' \
+            "${profile}" "${arm}" "${world_size}" "${run_index}" "${label}" "${complete}" "${nodes}" >&2
         return 1
     }
     local rank_zero_log="${out}/${current_case}-0.log" result_count
-    python3 "${case_dir}/extract_fair_results.py" \
+    python3 "${case_dir}/extract_results.py" \
         "${rank_zero_log}" "${out}/results.jsonl" >/dev/null
     result_count="$(wc -l <"${out}/results.jsonl")"
     [[ "${result_count}" -eq 2 ]] || {
-        printf 'Expected 2 fair results in %s, found %s\n' "${rank_zero_log}" "${result_count}" >&2
+        printf 'Expected 2 benchmark results in %s, found %s\n' "${rank_zero_log}" "${result_count}" >&2
         return 1
     }
-    printf 'PASS arm=%s EP%s repeat=%s label=%s at %s UTC\n' \
-        "${arm}" "${world_size}" "${run_index}" "${label}" "$(date -u +%FT%TZ)" \
+    printf 'PASS profile=%s arm=%s EP%s repeat=%s label=%s at %s UTC\n' \
+        "${profile}" "${arm}" "${world_size}" "${run_index}" "${label}" "$(date -u +%FT%TZ)" \
         >"${out}/STATUS"
     cleanup_case
 }
 
 # A short V2-only admission run proves the HMM mitigation, GIN/GDAKI path, and
 # common-harness correctness before any scored matrix work.
-run_case deepep-v2-gin-gda 16 0 bf16,fp8 2 5 INFO admission
-v2_admission_dir="${ARTIFACT_ROOT}/runs/ep16/admission-repeat-0/deepep-v2-gin-gda"
+run_case decode deepep-v2-gin-gda 16 0 bf16,fp8 2 5 INFO admission
+v2_admission_dir="${ARTIFACT_ROOT}/runs/decode/ep16/admission-repeat-0/deepep-v2-gin-gda"
 rg -q 'GDAKI.*createContext|gin GDAKI: createContext done' \
     "${v2_admission_dir}"/*.log || {
     printf 'DeepEP V2 admission completed without a GDAKI context proof\n' >&2
@@ -556,15 +561,35 @@ rg -q 'GDAKI.*createContext|gin GDAKI: createContext done' \
 }
 printf 'PASS\n' >"${v2_admission_dir}/GIN_ADMISSION_STATUS"
 
+# Exercise every backend's normal high-throughput API before entering the
+# doubled scored matrix.  These short runs are admission evidence only.
+for arm in uccl deepep-v1-nvshmem deepep-v2-gin-gda; do
+    run_case prefill "${arm}" 16 0 fp8,bf16 2 5 WARN admission
+done
+
 for world_size in 16 32; do
     for run_index in 1 2 3; do
         case "${run_index}" in
-            1) order=(uccl deepep-v1-nvshmem deepep-v2-gin-gda); dtypes=fp8,bf16 ;;
-            2) order=(deepep-v2-gin-gda uccl deepep-v1-nvshmem); dtypes=bf16,fp8 ;;
-            3) order=(deepep-v1-nvshmem deepep-v2-gin-gda uccl); dtypes=fp8,bf16 ;;
+            1)
+                order=(uccl deepep-v1-nvshmem deepep-v2-gin-gda)
+                profiles=(decode prefill)
+                dtypes=fp8,bf16
+                ;;
+            2)
+                order=(deepep-v2-gin-gda uccl deepep-v1-nvshmem)
+                profiles=(prefill decode)
+                dtypes=bf16,fp8
+                ;;
+            3)
+                order=(deepep-v1-nvshmem deepep-v2-gin-gda uccl)
+                profiles=(decode prefill)
+                dtypes=fp8,bf16
+                ;;
         esac
-        for arm in "${order[@]}"; do
-            run_case "${arm}" "${world_size}" "${run_index}" "${dtypes}"
+        for profile in "${profiles[@]}"; do
+            for arm in "${order[@]}"; do
+                run_case "${profile}" "${arm}" "${world_size}" "${run_index}" "${dtypes}"
+            done
         done
     done
 done
@@ -573,9 +598,9 @@ check_shared_lock
 for node in "${selected_nodes[@]}"; do
     verify_node_free "${node}"
 done
-python3 "${case_dir}/summarize_fair_results.py" "${ARTIFACT_ROOT}/runs" \
+python3 "${case_dir}/summarize_results.py" "${ARTIFACT_ROOT}/runs" \
     --starts="${INDEPENDENT_STARTS}" \
     --provenance="${ARTIFACT_ROOT}/control/provenance.json" \
     --json="${ARTIFACT_ROOT}/summary/summary.json" \
     --markdown="${ARTIFACT_ROOT}/summary/summary.md"
-printf 'PASS fair EP comparison completed at %s UTC\n' "$(date -u +%FT%TZ)"
+printf 'PASS EP backend comparison completed at %s UTC\n' "$(date -u +%FT%TZ)"

@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from fair_result_io import PREFIX, load_result_log
+from result_io import PREFIX, load_result_log
 
 
 def main() -> None:
@@ -18,11 +18,13 @@ def main() -> None:
 
     results = load_result_log(args.input_log)
     if not results:
-        raise SystemExit(f"no fair results found in {args.input_log}")
+        raise SystemExit(f"no benchmark results found in {args.input_log}")
     args.output_jsonl.write_text(
-        "".join(PREFIX + json.dumps(result, sort_keys=True) + "\n" for result in results)
+        "".join(
+            PREFIX + json.dumps(result, sort_keys=True) + "\n" for result in results
+        )
     )
-    print(f"extracted {len(results)} fair results from {args.input_log}")
+    print(f"extracted {len(results)} benchmark results from {args.input_log}")
 
 
 if __name__ == "__main__":

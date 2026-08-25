@@ -6,9 +6,10 @@ accounting.  Every arm receives the same deterministic BF16 input, exact route
 indices, and top-k weights.  A CUDA event pair surrounds the complete dispatch
 followed by combine operation, and the slowest rank is the iteration latency.
 
-For FP8 dispatch, the timed boundary starts with a BF16 input.  DeepEP V2's
-explicit BF16-to-FP8 preparation is therefore inside the timed region, matching
-the conversion already performed inside the V1 and UCCL low-latency APIs.
+The decode profile uses each backend's low-latency path with 128 tokens/rank.
+The prefill profile uses the normal high-throughput path with 4,096 tokens/rank
+and includes any required dispatch-layout work.  FP8 conversion starts from a
+BF16 input and remains inside both profiles' timed region.
 """
 
 from __future__ import annotations
@@ -28,8 +29,11 @@ import torch
 import torch.distributed as dist
 
 
-RESULT_PREFIX = "ADAI_FAIR_RESULT "
-SCHEMA_VERSION = 1
+RESULT_PREFIX = "ADAI_EP_RESULT "
+SCHEMA_VERSION = 2
+NORMAL_NUM_NVL_BYTES = 2_000_000_000
+NORMAL_NUM_RDMA_BYTES = 1_000_000_000
+NORMAL_NUM_QPS_PER_RANK = 24
 
 
 def deepep_v2_build_lib(root: Path = Path("/opt/amazon/deepep-v2")) -> Path:
@@ -103,9 +107,7 @@ def make_route(
         num_tokens, dtype=torch.int64, device=device
     )
     slots = torch.arange(top_k, dtype=torch.int64, device=device)
-    route = (
-        global_token[:, None] * 17 + slots[None, :] * stride + seed
-    ) % num_experts
+    route = (global_token[:, None] * 17 + slots[None, :] * stride + seed) % num_experts
     if top_k > num_experts:
         raise ValueError("top_k cannot exceed num_experts")
     return route.contiguous()
@@ -116,9 +118,7 @@ def make_input(
 ) -> torch.Tensor:
     """Create deterministic, bounded BF16 data without backend RNG state."""
 
-    row = rank * num_tokens + torch.arange(
-        num_tokens, dtype=torch.int64, device=device
-    )
+    row = rank * num_tokens + torch.arange(num_tokens, dtype=torch.int64, device=device)
     column = torch.arange(hidden, dtype=torch.int64, device=device)
     values = (row[:, None] * 17 + column[None, :] * 13 + 19) % 257
     return ((values - 128).to(torch.float32) / 128.0).to(torch.bfloat16)
@@ -169,6 +169,39 @@ def logical_payload_bytes_per_rank(
     )
 
 
+@dataclass(frozen=True)
+class WorkloadProfile:
+    name: str
+    tokens_per_rank: int
+    api_mode: str
+    primary_metric: str
+    timing_boundary: str
+
+
+WORKLOAD_PROFILES = {
+    "decode": WorkloadProfile(
+        name="decode",
+        tokens_per_rank=128,
+        api_mode="low-latency",
+        primary_metric="slowest-rank latency in milliseconds",
+        timing_boundary=(
+            "BF16 input ready through dispatch and combine completion; "
+            "slowest rank CUDA elapsed time"
+        ),
+    ),
+    "prefill": WorkloadProfile(
+        name="prefill",
+        tokens_per_rank=4_096,
+        api_mode="normal",
+        primary_metric="effective logical gigabytes per second per rank",
+        timing_boundary=(
+            "BF16 input and route ready through required layout, dispatch, and "
+            "combine completion; slowest rank CUDA elapsed time"
+        ),
+    ),
+}
+
+
 @dataclass
 class DispatchState:
     recv_x: Any
@@ -182,12 +215,15 @@ class BackendAdapter:
         self,
         arm: str,
         group: dist.ProcessGroup,
+        profile: WorkloadProfile,
         num_tokens: int,
         hidden: int,
         num_experts: int,
+        top_k: int,
     ) -> None:
         self.arm = arm
         self.group = group
+        self.profile = profile
         self.num_tokens = num_tokens
         self.hidden = hidden
         self.num_experts = num_experts
@@ -199,39 +235,68 @@ class BackendAdapter:
         if arm == "uccl":
             sys.path.insert(0, "/opt/uccl/ep/bench")
             from buffer import Buffer  # type: ignore[import-not-found]
-            from utils import per_token_cast_back  # type: ignore[import-not-found]
+            from utils import (  # type: ignore[import-not-found]
+                per_token_cast_back,
+                per_token_cast_to_fp8,
+            )
 
             self._cast_back = per_token_cast_back
-            rdma_bytes = Buffer.get_low_latency_rdma_size_hint(
-                num_tokens, hidden, self.world_size, num_experts
-            )
-            self.buffer = Buffer(
-                group,
-                num_rdma_bytes=rdma_bytes,
-                low_latency_mode=True,
-                num_qps_per_rank=num_experts // self.world_size,
-                allow_nvlink_for_low_latency_mode=True,
-                explicitly_destroy=True,
-            )
+            self._cast_to_fp8 = per_token_cast_to_fp8
+            if profile.api_mode == "low-latency":
+                rdma_bytes = Buffer.get_low_latency_rdma_size_hint(
+                    num_tokens, hidden, self.world_size, num_experts
+                )
+                self.buffer = Buffer(
+                    group,
+                    num_rdma_bytes=rdma_bytes,
+                    low_latency_mode=True,
+                    num_qps_per_rank=num_experts // self.world_size,
+                    allow_nvlink_for_low_latency_mode=True,
+                    explicitly_destroy=True,
+                )
+            else:
+                self.buffer = Buffer(
+                    group,
+                    num_nvl_bytes=NORMAL_NUM_NVL_BYTES,
+                    num_rdma_bytes=NORMAL_NUM_RDMA_BYTES,
+                    low_latency_mode=False,
+                    num_qps_per_rank=NORMAL_NUM_QPS_PER_RANK,
+                    explicitly_destroy=True,
+                )
         elif arm == "deepep-v1-nvshmem":
             sys.path.insert(0, "/opt/amazon/deepep/tests")
             sys.path.insert(0, "/opt/amazon/deepep")
             import deep_ep  # type: ignore[import-not-found]
-            from utils import per_token_cast_back  # type: ignore[import-not-found]
+            from utils import (  # type: ignore[import-not-found]
+                per_token_cast_back,
+                per_token_cast_to_fp8,
+            )
 
             self._cast_back = per_token_cast_back
-            rdma_bytes = deep_ep.Buffer.get_low_latency_rdma_size_hint(
-                num_tokens, hidden, self.world_size, num_experts
-            )
-            self.buffer = deep_ep.Buffer(
-                group,
-                num_rdma_bytes=rdma_bytes,
-                low_latency_mode=True,
-                num_qps_per_rank=num_experts // self.world_size,
-                allow_nvlink_for_low_latency_mode=True,
-                explicitly_destroy=True,
-                allow_mnnvl=False,
-            )
+            self._cast_to_fp8 = per_token_cast_to_fp8
+            if profile.api_mode == "low-latency":
+                rdma_bytes = deep_ep.Buffer.get_low_latency_rdma_size_hint(
+                    num_tokens, hidden, self.world_size, num_experts
+                )
+                self.buffer = deep_ep.Buffer(
+                    group,
+                    num_rdma_bytes=rdma_bytes,
+                    low_latency_mode=True,
+                    num_qps_per_rank=num_experts // self.world_size,
+                    allow_nvlink_for_low_latency_mode=True,
+                    explicitly_destroy=True,
+                    allow_mnnvl=False,
+                )
+            else:
+                self.buffer = deep_ep.Buffer(
+                    group,
+                    num_nvl_bytes=NORMAL_NUM_NVL_BYTES,
+                    num_rdma_bytes=NORMAL_NUM_RDMA_BYTES,
+                    low_latency_mode=False,
+                    num_qps_per_rank=NORMAL_NUM_QPS_PER_RANK,
+                    explicitly_destroy=True,
+                    allow_mnnvl=False,
+                )
         elif arm == "deepep-v2-gin-gda":
             import deep_ep  # type: ignore[import-not-found]
             from deep_ep.utils.math import (  # type: ignore[import-not-found]
@@ -245,6 +310,7 @@ class BackendAdapter:
                 group,
                 num_max_tokens_per_rank=num_tokens,
                 hidden=hidden,
+                num_topk=top_k,
                 deterministic=False,
                 allow_hybrid_mode=True,
                 allow_multiple_reduction=True,
@@ -267,7 +333,7 @@ class BackendAdapter:
             return x
         if dispatch_dtype != "fp8":
             raise ValueError(f"unsupported dispatch dtype: {dispatch_dtype}")
-        if self.is_elastic:
+        if self.is_elastic or self.profile.api_mode == "normal":
             return self._cast_to_fp8(x)
         return x
 
@@ -290,6 +356,36 @@ class BackendAdapter:
                 allocate_on_comm_stream=False,
                 do_handle_copy=True,
                 do_cpu_sync=True,
+            )
+            event.current_stream_wait()
+            return DispatchState(recv_x, recv_idx, recv_weights, handle)
+
+        if self.profile.api_mode == "normal":
+            (
+                num_tokens_per_rank,
+                num_tokens_per_rdma_rank,
+                num_tokens_per_expert,
+                is_token_in_rank,
+                _,
+            ) = self.buffer.get_dispatch_layout(topk_idx, self.num_experts)
+            (
+                recv_x,
+                recv_idx,
+                recv_weights,
+                _,
+                handle,
+                event,
+            ) = self.buffer.dispatch(
+                x=prepared_x,
+                num_tokens_per_rank=num_tokens_per_rank,
+                num_tokens_per_rdma_rank=num_tokens_per_rdma_rank,
+                is_token_in_rank=is_token_in_rank,
+                num_tokens_per_expert=num_tokens_per_expert,
+                topk_idx=topk_idx,
+                topk_weights=topk_weights,
+                expert_alignment=1,
+                async_finish=True,
+                allocate_on_comm_stream=False,
             )
             event.current_stream_wait()
             return DispatchState(recv_x, recv_idx, recv_weights, handle)
@@ -317,6 +413,17 @@ class BackendAdapter:
             scales.reshape(-1, self.hidden // 128),
         ).reshape(fp8.shape)
 
+    def identity_expert_output(
+        self, state: DispatchState, dispatch_dtype: str
+    ) -> torch.Tensor:
+        output = self.received_as_bf16(state.recv_x, dispatch_dtype)
+        if state.recv_topk_idx is None or state.recv_topk_weights is None:
+            return output
+        local_weights = state.recv_topk_weights.masked_fill(
+            state.recv_topk_idx < 0, 0
+        ).sum(dim=1, keepdim=True)
+        return output * local_weights.to(output.dtype)
+
     def combine(
         self,
         combine_input: torch.Tensor,
@@ -330,6 +437,17 @@ class BackendAdapter:
                 handle=state.handle,
                 topk_weights=state.recv_topk_weights,
                 async_with_compute_stream=True,
+                allocate_on_comm_stream=False,
+            )
+            event.current_stream_wait()
+            return combined
+
+        if self.profile.api_mode == "normal":
+            combined, _, event = self.buffer.combine(
+                x=combine_input,
+                handle=state.handle,
+                topk_weights=state.recv_topk_weights,
+                async_finish=True,
                 allocate_on_comm_stream=False,
             )
             event.current_stream_wait()
@@ -380,21 +498,12 @@ def run_dtype(
 ) -> dict[str, Any]:
     prepared = adapter.prepare_dispatch_input(x, dispatch_dtype)
     correctness_state = adapter.dispatch(prepared, route, topk_weights, dispatch_dtype)
-    correctness_input = adapter.received_as_bf16(
-        correctness_state.recv_x, dispatch_dtype
+    # Normal and ElasticBuffer dispatch send one token per destination rank.
+    # Apply the local identity experts' gated reduction before combine.  The
+    # low-latency API performs its corresponding reduction internally.
+    correctness_input = adapter.identity_expert_output(
+        correctness_state, dispatch_dtype
     )
-    if adapter.is_elastic:
-        assert correctness_state.recv_topk_idx is not None
-        assert correctness_state.recv_topk_weights is not None
-        # V2's non-expanded dispatch sends each token once per destination rank.
-        # Model the identity experts' local gated reduction before the network
-        # combine so that every backend returns the same weighted token.
-        local_weights = correctness_state.recv_topk_weights.masked_fill(
-            correctness_state.recv_topk_idx < 0, 0
-        ).sum(dim=1, keepdim=True)
-        correctness_input = correctness_input * local_weights.to(
-            correctness_input.dtype
-        )
     correctness_output = adapter.combine(
         correctness_input, correctness_state, route, topk_weights
     )
@@ -448,16 +557,14 @@ def run_dtype(
         dist.all_reduce(local_latency, op=dist.ReduceOp.MAX, group=adapter.group)
         max_rank_latency_ms.append(float(local_latency.item()))
 
-    logical_bytes, scaleout_bytes, valid_selections = (
-        logical_payload_bytes_per_rank(
-            route,
-            rank,
-            world_size,
-            local_world_size,
-            args.hidden,
-            dispatch_dtype,
-            args.experts,
-        )
+    logical_bytes, scaleout_bytes, valid_selections = logical_payload_bytes_per_rank(
+        route,
+        rank,
+        world_size,
+        local_world_size,
+        args.hidden,
+        dispatch_dtype,
+        args.experts,
     )
     counters = torch.tensor(
         [logical_bytes, scaleout_bytes, valid_selections],
@@ -475,6 +582,12 @@ def run_dtype(
     result = {
         "schema_version_dimensionless": SCHEMA_VERSION,
         "benchmark": "common-boundary-dispatch-combine",
+        "workload_profile": args.profile,
+        "backend_api_mode": (
+            "elastic" if adapter.is_elastic else adapter.profile.api_mode
+        ),
+        "primary_metric": adapter.profile.primary_metric,
+        "layout_in_timed_region": args.profile == "prefill",
         "arm": args.arm,
         "run_index_dimensionless": args.run_index,
         "dispatch_dtype": dispatch_dtype,
@@ -492,7 +605,7 @@ def run_dtype(
         "global_valid_expert_selections": global_valid_selections,
         "warmup_iterations": warmups,
         "measured_iterations": iterations,
-        "timing_boundary": "BF16 input ready through dispatch and combine completion; slowest rank CUDA elapsed time",
+        "timing_boundary": adapter.profile.timing_boundary,
         "logical_payload_definition": "per valid expert assignment: dispatch tensor plus FP8 scales when selected plus BF16 combine tensor; backend metadata excluded",
         "avg_logical_payload_bytes_per_rank": avg_logical_bytes,
         "avg_scaleout_logical_payload_bytes_per_rank": avg_scaleout_bytes,
@@ -538,7 +651,7 @@ def parse_args() -> argparse.Namespace:
         required=True,
         choices=("uccl", "deepep-v1-nvshmem", "deepep-v2-gin-gda"),
     )
-    parser.add_argument("--tokens", type=int, default=128)
+    parser.add_argument("--profile", required=True, choices=tuple(WORKLOAD_PROFILES))
     parser.add_argument("--hidden", type=int, default=7168)
     parser.add_argument("--top-k", type=int, default=8)
     parser.add_argument("--experts", type=int, default=256)
@@ -552,6 +665,7 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated dtype order; allowed values are fp8 and bf16",
     )
     args = parser.parse_args()
+    args.tokens = WORKLOAD_PROFILES[args.profile].tokens_per_rank
     args.dispatch_dtypes = args.dispatch_dtypes.split(",")
     if sorted(args.dispatch_dtypes) != ["bf16", "fp8"]:
         parser.error("--dispatch-dtypes must contain fp8 and bf16 exactly once")
@@ -566,9 +680,7 @@ def main() -> None:
     rank, world_size, local_world_size, device, group = initialize_distributed()
     if args.experts % world_size:
         raise SystemExit("experts must divide the distributed world size")
-    route = make_route(
-        rank, args.tokens, args.experts, args.top_k, args.seed, device
-    )
+    route = make_route(rank, args.tokens, args.experts, args.top_k, args.seed, device)
     x = make_input(rank, args.tokens, args.hidden, device)
     topk_weights = torch.full(
         (args.tokens, args.top_k),
@@ -578,17 +690,18 @@ def main() -> None:
     )
     route_hash = global_digest(tensor_sha256(route), device)
     input_hash = global_digest(tensor_sha256(x), device)
-    route_histogram = torch.bincount(
-        route.flatten(), minlength=args.experts
-    ).to(torch.int64)
+    route_histogram = torch.bincount(route.flatten(), minlength=args.experts).to(
+        torch.int64
+    )
     dist.all_reduce(route_histogram, op=dist.ReduceOp.SUM, group=group)
 
     if rank == 0:
         print(
-            "ADAI_FAIR_CONFIG "
+            "ADAI_EP_CONFIG "
             + json.dumps(
                 {
                     "arm": args.arm,
+                    "workload_profile": args.profile,
                     "world_size_ranks": world_size,
                     "tokens_per_rank": args.tokens,
                     "hidden_dimensions": args.hidden,
@@ -596,12 +709,8 @@ def main() -> None:
                     "top_k_dimensionless": args.top_k,
                     "route_hash_sha256": route_hash,
                     "input_hash_sha256": input_hash,
-                    "route_histogram_min_selections": int(
-                        route_histogram.min().item()
-                    ),
-                    "route_histogram_max_selections": int(
-                        route_histogram.max().item()
-                    ),
+                    "route_histogram_min_selections": int(route_histogram.min().item()),
+                    "route_histogram_max_selections": int(route_histogram.max().item()),
                 },
                 sort_keys=True,
             ),
@@ -609,7 +718,13 @@ def main() -> None:
         )
 
     adapter = BackendAdapter(
-        args.arm, group, args.tokens, args.hidden, args.experts
+        args.arm,
+        group,
+        WORKLOAD_PROFILES[args.profile],
+        args.tokens,
+        args.hidden,
+        args.experts,
+        args.top_k,
     )
     try:
         for dispatch_dtype in args.dispatch_dtypes:

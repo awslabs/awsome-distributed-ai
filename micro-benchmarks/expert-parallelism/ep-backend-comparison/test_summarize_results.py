@@ -5,33 +5,44 @@ import tempfile
 import unittest
 
 
-module_path = Path(__file__).with_name("summarize_fair_results.py")
-spec = importlib.util.spec_from_file_location("summarize_fair_results", module_path)
+module_path = Path(__file__).with_name("summarize_results.py")
+sys.path.insert(0, str(module_path.parent))
+spec = importlib.util.spec_from_file_location("summarize_results", module_path)
 assert spec and spec.loader
 summary_module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = summary_module
 spec.loader.exec_module(summary_module)
 
 
-def fake_result(arm, world_size, run_index, dtype, latency_ms):
+def fake_result(profile, arm, world_size, run_index, dtype, latency_ms):
     digest = {
         "uccl": "a",
         "deepep-v1-nvshmem": "b",
         "deepep-v2-gin-gda": "c",
     }[arm]
-    logical_bytes = 22_249_472 if dtype == "fp8" else 29_360_128
+    tokens_per_rank = summary_module.PROFILE_CONFIG[profile]["tokens_per_rank"]
+    decode_logical_bytes = 22_249_472 if dtype == "fp8" else 29_360_128
+    logical_bytes = decode_logical_bytes * tokens_per_rank // 128
     scaleout_bytes = logical_bytes * (world_size - 8) // world_size
     tolerance = 9e-4 if dtype == "fp8" else 1e-5
-    global_input_tokens = 128 * world_size
+    global_input_tokens = tokens_per_rank * world_size
     result = {
         "benchmark": "common-boundary-dispatch-combine",
+        "workload_profile": profile,
+        "backend_api_mode": (
+            "elastic"
+            if arm == "deepep-v2-gin-gda"
+            else summary_module.PROFILE_CONFIG[profile]["api_mode"]
+        ),
+        "primary_metric": summary_module.PROFILE_CONFIG[profile]["primary_metric"],
+        "layout_in_timed_region": profile == "prefill",
         "arm": arm,
         "world_size_ranks": world_size,
         "nodes": world_size // 8,
         "gpus_per_node": 8,
         "run_index_dimensionless": run_index,
         "dispatch_dtype": dtype,
-        "tokens_per_rank": 128,
+        "tokens_per_rank": tokens_per_rank,
         "global_input_tokens": global_input_tokens,
         "hidden_dimensions": 7168,
         "experts": 256,
@@ -63,13 +74,13 @@ def fake_result(arm, world_size, run_index, dtype, latency_ms):
         "effective_scaleout_logical_gigabytes_per_second_per_rank": scaleout_bytes
         / (latency_ms / 1e3)
         / 1e9,
-        "timing_boundary": summary_module.TIMING_BOUNDARY,
+        "timing_boundary": summary_module.PROFILE_CONFIG[profile]["timing_boundary"],
         "logical_payload_definition": summary_module.LOGICAL_PAYLOAD_DEFINITION,
     }
     return result
 
 
-class SummarizeFairResultsTest(unittest.TestCase):
+class SummarizeResultsTest(unittest.TestCase):
     def setUp(self):
         arm_latency = {
             "uccl": 1.0,
@@ -78,12 +89,14 @@ class SummarizeFairResultsTest(unittest.TestCase):
         }
         self.results = [
             fake_result(
+                profile,
                 arm,
                 world,
                 run,
                 dtype,
                 arm_latency[arm] * (1 + (run - 2) * 0.01),
             )
+            for profile in summary_module.PROFILES
             for arm in summary_module.ARMS
             for world in summary_module.WORLD_SIZES
             for run in range(1, 4)
@@ -94,12 +107,22 @@ class SummarizeFairResultsTest(unittest.TestCase):
         summary_module.validate(self.results, 3)
         summary = summary_module.summarize(self.results, 3)
         self.assertEqual(summary["status"], "PASS")
-        self.assertEqual(len(summary["cells"]), 4)
+        self.assertEqual(len(summary["cells"]), 8)
         comparison = summary["cells"][0]["comparisons"]["deepep-v2-gin-gda_vs_uccl"]
-        self.assertAlmostEqual(
-            comparison["median_paired_latency_reduction_percent"], 20.0
-        )
+        self.assertAlmostEqual(comparison["median_paired_improvement_percent"], 20.0)
         self.assertTrue(comparison["direction_supported"])
+
+        prefill = next(
+            cell
+            for cell in summary["cells"]
+            if cell["workload_profile"] == "prefill"
+            and cell["world_size_ranks"] == 16
+            and cell["dispatch_dtype"] == "fp8"
+        )
+        prefill_comparison = prefill["comparisons"]["deepep-v2-gin-gda_vs_uccl"]
+        self.assertAlmostEqual(
+            prefill_comparison["median_paired_improvement_percent"], 25.0
+        )
 
     def test_missing_start_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -141,7 +164,18 @@ class SummarizeFairResultsTest(unittest.TestCase):
                 for arm in summary_module.ARMS
             },
             "comparison": {
-                "tokens_per_rank": 128,
+                "profiles": {
+                    profile: {
+                        "tokens_per_rank": summary_module.PROFILE_CONFIG[profile][
+                            "tokens_per_rank"
+                        ],
+                        "api_mode": summary_module.PROFILE_CONFIG[profile]["api_mode"],
+                        "primary_metric": summary_module.PROFILE_CONFIG[profile][
+                            "primary_metric"
+                        ],
+                    }
+                    for profile in summary_module.PROFILES
+                },
                 "hidden_dimensions": 7168,
                 "experts": 256,
                 "top_k_dimensionless": 8,
@@ -155,11 +189,11 @@ class SummarizeFairResultsTest(unittest.TestCase):
             summary_module.validate_provenance(provenance, self.results, 3)
 
     def test_load_results_accepts_native_diagnostic_after_json(self):
-        result = fake_result("deepep-v2-gin-gda", 32, 1, "fp8", 0.9)
+        result = fake_result("decode", "deepep-v2-gin-gda", 32, 1, "fp8", 0.9)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "rank-zero.log"
             path.write_text(
-                "ADAI_FAIR_RESULT "
+                "ADAI_EP_RESULT "
                 + summary_module.json.dumps(result)
                 + "Elastic buffer uses 3 channels per SM\n"
             )

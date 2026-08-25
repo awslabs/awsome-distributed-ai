@@ -178,8 +178,9 @@ Three things to know before running this on Blackwell:
 here has been retired because its backend-native timing and byte accounting did not support a
 cross-backend ranking. The replacement
 [`ep-backend-comparison`](../../../../micro-benchmarks/expert-parallelism/ep-backend-comparison/RESULTS.md)
-uses a common boundary for a synthetic decode communication workload at EP16 and EP32 on B200. It
-does not establish B300 serving behavior. See
+defines common boundaries for synthetic Decode-like and Prefill-like communication workloads at
+EP16 and EP32 on B200. Its replacement result matrix is pending and does not establish B300 serving
+behavior. See
 [Blackwell serving needs a matched measurement](./benchmarks/README.md#blackwell-serving-needs-a-matched-measurement).
 
 ## Smoke-test the EFA transport before loading the model

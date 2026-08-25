@@ -1,4 +1,4 @@
-"""Parse fair benchmark result markers despite interleaved native stdout."""
+"""Parse benchmark result markers despite interleaved native stdout."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-PREFIX = "ADAI_FAIR_RESULT "
+PREFIX = "ADAI_EP_RESULT "
 
 
 def iter_result_objects(text: str, source: str = "<text>") -> Iterator[dict[str, Any]]:
@@ -31,11 +31,11 @@ def iter_result_objects(text: str, source: str = "<text>") -> Iterator[dict[str,
                 result, consumed = decoder.raw_decode(line[payload_start:])
             except json.JSONDecodeError as error:
                 raise ValueError(
-                    f"invalid fair result in {source}:{line_number}: {error}"
+                    f"invalid benchmark result in {source}:{line_number}: {error}"
                 ) from error
             if not isinstance(result, dict):
                 raise ValueError(
-                    f"fair result in {source}:{line_number} is not a JSON object"
+                    f"benchmark result in {source}:{line_number} is not a JSON object"
                 )
             yield result
             search_from = payload_start + consumed

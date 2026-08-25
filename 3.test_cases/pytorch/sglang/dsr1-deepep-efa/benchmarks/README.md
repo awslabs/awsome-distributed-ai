@@ -820,11 +820,10 @@ here, so the H200 direction must not be assumed to carry across GPU generations.
 
 The current
 [`ep-backend-comparison`](../../../../../micro-benchmarks/expert-parallelism/ep-backend-comparison/RESULTS.md)
-is useful transport evidence with a common CUDA timing boundary and a common logical payload. It is
-still a synthetic decode dispatch-plus-combine workload. It excludes expert compute, scheduling,
-communication/computation overlap, and request-level serving behavior. Its EP16 B200 result is also
-mixed by dtype: UCCL has lower FP8 latency, while DeepEP V2 has lower BF16 latency. At EP32, UCCL has
-lower latency for both measured dtypes. None of those cells is a B300 serving result.
+defines common CUDA timing boundaries and common logical payload accounting for synthetic
+Decode-like and Prefill-like dispatch-plus-combine workloads. The replacement result matrix is
+pending. It excludes expert compute, scheduling, communication/computation overlap, and
+request-level serving behavior, and it does not provide a B300 serving result.
 
 Before attributing a Blackwell serving delta to the all-to-all backend, control these variables:
 
@@ -842,7 +841,7 @@ Before attributing a Blackwell serving delta to the all-to-all backend, control 
   diagnostics unless they share the same timing boundary and byte numerator.
 - Test the production EP width. An EP16 result cannot decide an EP32 or EP64 deployment.
 
-The fair conclusion for Blackwell serving remains unmeasured until that matched sweep is run.
+The Blackwell serving conclusion remains unmeasured until that matched sweep is run.
 
 # Reproduce
 

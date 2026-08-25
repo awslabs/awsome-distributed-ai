@@ -13,12 +13,33 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from fair_result_io import load_result_log
+from result_io import load_result_log
 
 
 ARMS = ("uccl", "deepep-v1-nvshmem", "deepep-v2-gin-gda")
 WORLD_SIZES = (16, 32)
 DTYPES = ("fp8", "bf16")
+PROFILES = ("decode", "prefill")
+PROFILE_CONFIG = {
+    "decode": {
+        "tokens_per_rank": 128,
+        "api_mode": "low-latency",
+        "primary_metric": "slowest-rank latency in milliseconds",
+        "timing_boundary": (
+            "BF16 input ready through dispatch and combine completion; "
+            "slowest rank CUDA elapsed time"
+        ),
+    },
+    "prefill": {
+        "tokens_per_rank": 4_096,
+        "api_mode": "normal",
+        "primary_metric": ("effective logical gigabytes per second per rank"),
+        "timing_boundary": (
+            "BF16 input and route ready through required layout, dispatch, and "
+            "combine completion; slowest rank CUDA elapsed time"
+        ),
+    },
+}
 ARM_LABELS = {
     "uccl": "UCCL",
     "deepep-v1-nvshmem": "DeepEP V1 NVSHMEM",
@@ -29,10 +50,6 @@ MAX_RUN_TO_RUN_CV_PERCENT = 5.0
 EXPECTED_STARTS = 3
 EXPECTED_WARMUPS = 20
 EXPECTED_ITERATIONS = 100
-TIMING_BOUNDARY = (
-    "BF16 input ready through dispatch and combine completion; "
-    "slowest rank CUDA elapsed time"
-)
 LOGICAL_PAYLOAD_DEFINITION = (
     "per valid expert assignment: dispatch tensor plus FP8 scales when selected "
     "plus BF16 combine tensor; backend metadata excluded"
@@ -62,11 +79,12 @@ def bootstrap_median_ci(
 
 
 def load_results(root: Path) -> list[dict[str, Any]]:
-    results: dict[tuple[str, int, int, str], dict[str, Any]] = {}
-    sources: dict[tuple[str, int, int, str], Path] = {}
+    results: dict[tuple[str, str, int, int, str], dict[str, Any]] = {}
+    sources: dict[tuple[str, str, int, int, str], Path] = {}
     for path in sorted(root.rglob("*.log")):
         for result in load_result_log(path):
             key = (
+                result["workload_profile"],
                 result["arm"],
                 result["world_size_ranks"],
                 result["run_index_dimensionless"],
@@ -85,7 +103,8 @@ def validate(results: list[dict[str, Any]], starts: int) -> None:
     if starts != EXPECTED_STARTS:
         raise ValueError(f"scored matrix requires exactly {EXPECTED_STARTS} starts")
     expected = {
-        (arm, world, run, dtype)
+        (profile, arm, world, run, dtype)
+        for profile in PROFILES
         for arm in ARMS
         for world in WORLD_SIZES
         for run in range(1, starts + 1)
@@ -93,6 +112,7 @@ def validate(results: list[dict[str, Any]], starts: int) -> None:
     }
     observed = {
         (
+            result["workload_profile"],
             result["arm"],
             result["world_size_ranks"],
             result["run_index_dimensionless"],
@@ -113,19 +133,33 @@ def validate(results: list[dict[str, Any]], starts: int) -> None:
         raise ValueError(
             f"result matrix has {len(measured)} scored records; expected {len(expected)}"
         )
-    expected_shape = {
+    common_shape = {
         "benchmark": "common-boundary-dispatch-combine",
-        "tokens_per_rank": 128,
         "hidden_dimensions": 7168,
         "experts": 256,
         "top_k_dimensionless": 8,
         "gpus_per_node": 8,
         "warmup_iterations": EXPECTED_WARMUPS,
         "measured_iterations": EXPECTED_ITERATIONS,
-        "timing_boundary": TIMING_BOUNDARY,
         "logical_payload_definition": LOGICAL_PAYLOAD_DEFINITION,
     }
     for result in measured:
+        profile = result.get("workload_profile")
+        if profile not in PROFILE_CONFIG:
+            raise ValueError(f"unexpected workload profile: {profile}")
+        profile_config = PROFILE_CONFIG[profile]
+        expected_shape = {
+            **common_shape,
+            "tokens_per_rank": profile_config["tokens_per_rank"],
+            "timing_boundary": profile_config["timing_boundary"],
+            "primary_metric": profile_config["primary_metric"],
+            "layout_in_timed_region": profile == "prefill",
+            "backend_api_mode": (
+                "elastic"
+                if result.get("arm") == "deepep-v2-gin-gda"
+                else profile_config["api_mode"]
+            ),
+        }
         for field, expected_value in expected_shape.items():
             if result.get(field) != expected_value:
                 raise ValueError(
@@ -134,7 +168,8 @@ def validate(results: list[dict[str, Any]], starts: int) -> None:
         world_size = result["world_size_ranks"]
         if result.get("nodes") != world_size // 8:
             raise ValueError(f"invalid node count for EP{world_size}: {result}")
-        if result.get("global_input_tokens") != 128 * world_size:
+        tokens_per_rank = profile_config["tokens_per_rank"]
+        if result.get("global_input_tokens") != tokens_per_rank * world_size:
             raise ValueError(f"invalid global input token count: {result}")
         if result["correctness"]["status"] != "PASS":
             raise ValueError(f"correctness did not pass: {result}")
@@ -166,7 +201,7 @@ def validate(results: list[dict[str, Any]], starts: int) -> None:
         dispatch_bytes = 7_168 * 2
         if result["dispatch_dtype"] == "fp8":
             dispatch_bytes = 7_168 + math.ceil(7_168 / 128) * 4
-        expected_logical_bytes = 128 * 8 * (dispatch_bytes + 7_168 * 2)
+        expected_logical_bytes = tokens_per_rank * 8 * (dispatch_bytes + 7_168 * 2)
         logical_bytes = result.get("avg_logical_payload_bytes_per_rank")
         scaleout_bytes = result.get("avg_scaleout_logical_payload_bytes_per_rank")
         if logical_bytes != expected_logical_bytes:
@@ -215,7 +250,6 @@ def validate(results: list[dict[str, Any]], starts: int) -> None:
     common_fields = (
         "warmup_iterations",
         "measured_iterations",
-        "timing_boundary",
         "logical_payload_definition",
     )
     for field in common_fields:
@@ -247,31 +281,36 @@ def validate(results: list[dict[str, Any]], starts: int) -> None:
                 f"{arm} did not use one immutable image: {image_references}"
             )
 
-    for world in WORLD_SIZES:
-        same_world = [
-            result for result in measured if result["world_size_ranks"] == world
-        ]
-        route_hashes = {result["route_hash_sha256"] for result in same_world}
-        input_hashes = {result["input_hash_sha256"] for result in same_world}
-        if len(route_hashes) != 1 or len(input_hashes) != 1:
-            raise ValueError(
-                f"EP{world} did not replay one route/input: "
-                f"routes={route_hashes}, inputs={input_hashes}"
-            )
-        for dtype in DTYPES:
-            same_cell = [
-                result for result in same_world if result["dispatch_dtype"] == dtype
+    for profile in PROFILES:
+        for world in WORLD_SIZES:
+            same_world = [
+                result
+                for result in measured
+                if result["workload_profile"] == profile
+                and result["world_size_ranks"] == world
             ]
-            for field in (
-                "avg_logical_payload_bytes_per_rank",
-                "avg_scaleout_logical_payload_bytes_per_rank",
-                "global_valid_expert_selections",
-            ):
-                values = {result[field] for result in same_cell}
-                if len(values) != 1:
-                    raise ValueError(
-                        f"EP{world} {dtype} disagrees on {field}: {sorted(values)}"
-                    )
+            route_hashes = {result["route_hash_sha256"] for result in same_world}
+            input_hashes = {result["input_hash_sha256"] for result in same_world}
+            if len(route_hashes) != 1 or len(input_hashes) != 1:
+                raise ValueError(
+                    f"{profile} EP{world} did not replay one route/input: "
+                    f"routes={route_hashes}, inputs={input_hashes}"
+                )
+            for dtype in DTYPES:
+                same_cell = [
+                    result for result in same_world if result["dispatch_dtype"] == dtype
+                ]
+                for field in (
+                    "avg_logical_payload_bytes_per_rank",
+                    "avg_scaleout_logical_payload_bytes_per_rank",
+                    "global_valid_expert_selections",
+                ):
+                    values = {result[field] for result in same_cell}
+                    if len(values) != 1:
+                        raise ValueError(
+                            f"{profile} EP{world} {dtype} disagrees on {field}: "
+                            f"{sorted(values)}"
+                        )
 
 
 def validate_provenance(
@@ -291,7 +330,14 @@ def validate_provenance(
             f"provenance images do not match scored results: {provenance.get('images')}"
         )
     expected_comparison = {
-        "tokens_per_rank": 128,
+        "profiles": {
+            profile: {
+                "tokens_per_rank": PROFILE_CONFIG[profile]["tokens_per_rank"],
+                "api_mode": PROFILE_CONFIG[profile]["api_mode"],
+                "primary_metric": PROFILE_CONFIG[profile]["primary_metric"],
+            }
+            for profile in PROFILES
+        },
         "hidden_dimensions": 7_168,
         "experts": 256,
         "top_k_dimensionless": 8,
@@ -309,7 +355,15 @@ def validate_provenance(
             raise ValueError(f"provenance is missing {field}")
 
 
-def arm_summary(results: Iterable[dict[str, Any]], seed: int) -> dict[str, Any]:
+def primary_metric_value(result: dict[str, Any]) -> float:
+    if result["workload_profile"] == "decode":
+        return result["latency_ms"]["median"]
+    return result["effective_logical_gigabytes_per_second_per_rank"]
+
+
+def arm_summary(
+    results: Iterable[dict[str, Any]], seed: int, profile: str
+) -> dict[str, Any]:
     ordered = sorted(results, key=lambda item: item["run_index_dimensionless"])
     latencies = [item["latency_ms"]["median"] for item in ordered]
     token_rates = [item["aggregate_input_tokens_per_second"] for item in ordered]
@@ -320,9 +374,10 @@ def arm_summary(results: Iterable[dict[str, Any]], seed: int) -> dict[str, Any]:
         item["effective_scaleout_logical_gigabytes_per_second_per_rank"]
         for item in ordered
     ]
-    mean_latency = statistics.fmean(latencies)
-    stdev_latency = statistics.stdev(latencies) if len(latencies) > 1 else 0.0
-    ci_low, ci_high = bootstrap_median_ci(latencies, seed)
+    primary_values = [primary_metric_value(item) for item in ordered]
+    primary_mean = statistics.fmean(primary_values)
+    primary_stdev = statistics.stdev(primary_values) if len(primary_values) > 1 else 0.0
+    ci_low, ci_high = bootstrap_median_ci(primary_values, seed)
     return {
         "starts": len(ordered),
         "run_indices_dimensionless": [
@@ -330,9 +385,12 @@ def arm_summary(results: Iterable[dict[str, Any]], seed: int) -> dict[str, Any]:
         ],
         "per_start_median_latency_ms": latencies,
         "median_latency_ms": statistics.median(latencies),
-        "bootstrap_95_percent_ci_latency_ms": [ci_low, ci_high],
+        "primary_metric": PROFILE_CONFIG[profile]["primary_metric"],
+        "per_start_primary_values": primary_values,
+        "median_primary_value": statistics.median(primary_values),
+        "bootstrap_95_percent_ci_primary_value": [ci_low, ci_high],
         "run_to_run_cv_percent": (
-            stdev_latency / mean_latency * 100 if mean_latency else 0.0
+            primary_stdev / primary_mean * 100 if primary_mean else 0.0
         ),
         "median_aggregate_input_tokens_per_second": statistics.median(token_rates),
         "median_effective_logical_gigabytes_per_second_per_rank": statistics.median(
@@ -350,63 +408,103 @@ def summarize(
     provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     measured = [result for result in results if result["run_index_dimensionless"] > 0]
-    by_cell_arm: dict[tuple[int, str, str], list[dict[str, Any]]] = defaultdict(list)
+    by_cell_arm: dict[tuple[str, int, str, str], list[dict[str, Any]]] = defaultdict(
+        list
+    )
     for result in measured:
         by_cell_arm[
-            (result["world_size_ranks"], result["dispatch_dtype"], result["arm"])
+            (
+                result["workload_profile"],
+                result["world_size_ranks"],
+                result["dispatch_dtype"],
+                result["arm"],
+            )
         ].append(result)
 
     cells = []
-    for world in WORLD_SIZES:
-        for dtype in DTYPES:
-            arms = {
-                arm: arm_summary(
-                    by_cell_arm[(world, dtype, arm)],
-                    seed=20260824 + world + len(dtype) + index,
-                )
-                for index, arm in enumerate(ARMS)
-            }
-            comparisons = {}
-            v2_by_run = {
-                result["run_index_dimensionless"]: result["latency_ms"]["median"]
-                for result in by_cell_arm[(world, dtype, "deepep-v2-gin-gda")]
-            }
-            for index, baseline in enumerate(("uccl", "deepep-v1-nvshmem")):
-                baseline_by_run = {
-                    result["run_index_dimensionless"]: result["latency_ms"]["median"]
-                    for result in by_cell_arm[(world, dtype, baseline)]
+    for profile_index, profile in enumerate(PROFILES):
+        for world in WORLD_SIZES:
+            for dtype in DTYPES:
+                arms = {
+                    arm: arm_summary(
+                        by_cell_arm[(profile, world, dtype, arm)],
+                        seed=(
+                            20260824
+                            + profile_index * 1_000
+                            + world
+                            + len(dtype)
+                            + index
+                        ),
+                        profile=profile,
+                    )
+                    for index, arm in enumerate(ARMS)
                 }
-                paired = [
-                    (baseline_by_run[run] - v2_by_run[run]) / baseline_by_run[run] * 100
-                    for run in range(1, starts + 1)
+                comparisons = {}
+                v2_by_run = {
+                    result["run_index_dimensionless"]: primary_metric_value(result)
+                    for result in by_cell_arm[
+                        (profile, world, dtype, "deepep-v2-gin-gda")
+                    ]
+                }
+                for index, baseline in enumerate(("uccl", "deepep-v1-nvshmem")):
+                    baseline_by_run = {
+                        result["run_index_dimensionless"]: primary_metric_value(result)
+                        for result in by_cell_arm[(profile, world, dtype, baseline)]
+                    }
+                    if profile == "decode":
+                        paired = [
+                            (baseline_by_run[run] - v2_by_run[run])
+                            / baseline_by_run[run]
+                            * 100
+                            for run in range(1, starts + 1)
+                        ]
+                    else:
+                        paired = [
+                            (v2_by_run[run] - baseline_by_run[run])
+                            / baseline_by_run[run]
+                            * 100
+                            for run in range(1, starts + 1)
+                        ]
+                    ci_low, ci_high = bootstrap_median_ci(
+                        paired,
+                        20260900 + profile_index * 1_000 + world + index,
+                    )
+                    stable = (
+                        arms[baseline]["run_to_run_cv_percent"]
+                        <= MAX_RUN_TO_RUN_CV_PERCENT
+                        and arms["deepep-v2-gin-gda"]["run_to_run_cv_percent"]
+                        <= MAX_RUN_TO_RUN_CV_PERCENT
+                    )
+                    comparisons[f"deepep-v2-gin-gda_vs_{baseline}"] = {
+                        "primary_metric": PROFILE_CONFIG[profile]["primary_metric"],
+                        "paired_improvement_percent_per_start": paired,
+                        "median_paired_improvement_percent": statistics.median(paired),
+                        "bootstrap_95_percent_ci_improvement_percent": [
+                            ci_low,
+                            ci_high,
+                        ],
+                        "direction_supported": stable and (ci_low > 0 or ci_high < 0),
+                    }
+                same_cell = [
+                    result
+                    for result in measured
+                    if result["workload_profile"] == profile
+                    and result["world_size_ranks"] == world
+                    and result["dispatch_dtype"] == dtype
                 ]
-                ci_low, ci_high = bootstrap_median_ci(paired, 20260900 + world + index)
-                stable = (
-                    arms[baseline]["run_to_run_cv_percent"] <= MAX_RUN_TO_RUN_CV_PERCENT
-                    and arms["deepep-v2-gin-gda"]["run_to_run_cv_percent"]
-                    <= MAX_RUN_TO_RUN_CV_PERCENT
+                cells.append(
+                    {
+                        "workload_profile": profile,
+                        "world_size_ranks": world,
+                        "dispatch_dtype": dtype,
+                        "tokens_per_rank": PROFILE_CONFIG[profile]["tokens_per_rank"],
+                        "primary_metric": PROFILE_CONFIG[profile]["primary_metric"],
+                        "route_hash_sha256": same_cell[0]["route_hash_sha256"],
+                        "input_hash_sha256": same_cell[0]["input_hash_sha256"],
+                        "arms": arms,
+                        "comparisons": comparisons,
+                    }
                 )
-                comparisons[f"deepep-v2-gin-gda_vs_{baseline}"] = {
-                    "paired_latency_reduction_percent_per_start": paired,
-                    "median_paired_latency_reduction_percent": statistics.median(
-                        paired
-                    ),
-                    "bootstrap_95_percent_ci_reduction_percent": [ci_low, ci_high],
-                    "direction_supported": stable and (ci_low > 0 or ci_high < 0),
-                }
-            same_world = [
-                result for result in measured if result["world_size_ranks"] == world
-            ]
-            cells.append(
-                {
-                    "world_size_ranks": world,
-                    "dispatch_dtype": dtype,
-                    "route_hash_sha256": same_world[0]["route_hash_sha256"],
-                    "input_hash_sha256": same_world[0]["input_hash_sha256"],
-                    "arms": arms,
-                    "comparisons": comparisons,
-                }
-            )
     images = {
         arm: next(
             result["runtime"]["image_reference"]
@@ -420,19 +518,31 @@ def summarize(
         for field in ("gpu", "torch_version", "cuda_version", "nccl_version")
     }
     summary = {
-        "schema_version_dimensionless": 1,
+        "schema_version_dimensionless": 2,
         "status": "PASS",
         "scored_result_records_dimensionless": len(measured),
         "independent_starts_per_cell": starts,
         "bootstrap_samples_dimensionless": BOOTSTRAP_SAMPLES,
         "maximum_run_to_run_cv_percent_for_direction_support": MAX_RUN_TO_RUN_CV_PERCENT,
-        "timing_boundary": measured[0]["timing_boundary"],
+        "timing_boundaries": {
+            profile: PROFILE_CONFIG[profile]["timing_boundary"] for profile in PROFILES
+        },
         "logical_payload_definition": measured[0]["logical_payload_definition"],
-        "comparison_scope": "synthetic decode dispatch-plus-combine communication workload; not end-to-end training or serving",
+        "comparison_scope": (
+            "synthetic decode-like and prefill-like dispatch-plus-combine "
+            "communication workloads; not end-to-end training or serving"
+        ),
         "configuration": {
             "world_sizes_ranks": list(WORLD_SIZES),
             "dispatch_dtypes": list(DTYPES),
-            "tokens_per_rank": 128,
+            "profiles": {
+                profile: {
+                    "tokens_per_rank": PROFILE_CONFIG[profile]["tokens_per_rank"],
+                    "api_mode": PROFILE_CONFIG[profile]["api_mode"],
+                    "primary_metric": PROFILE_CONFIG[profile]["primary_metric"],
+                }
+                for profile in PROFILES
+            },
             "hidden_dimensions": 7_168,
             "experts_dimensionless": 256,
             "top_k_dimensionless": 8,
@@ -452,41 +562,73 @@ def markdown(summary: dict[str, Any]) -> str:
     lines = [
         "# Common-Boundary EP Results",
         "",
-        f"Each cell has {summary['independent_starts_per_cell']} independent process starts. Latency is the slowest-rank CUDA elapsed time from BF16 input readiness through dispatch and combine completion. Values are medians across independent starts. This is a synthetic communication workload, not an end-to-end training or serving result.",
-        "",
-        "| EP size | Dispatch dtype | Backend | Latency (ms) | 95% bootstrap CI (ms) | Run-to-run CV (%) | Input throughput (tokens/s) | Logical throughput (GB/s/rank) | Scale-out logical throughput (GB/s/rank) |",
-        "|---:|:---:|:---|---:|:---:|---:|---:|---:|---:|",
+        f"Each cell has {summary['independent_starts_per_cell']} independent process starts. Values are medians across independent starts. Decode-like results use slowest-rank latency as the primary metric; prefill-like results use common logical throughput. These are synthetic communication workloads, not end-to-end training or serving results.",
     ]
-    for cell in summary["cells"]:
-        for arm in ARMS:
-            value = cell["arms"][arm]
-            ci = value["bootstrap_95_percent_ci_latency_ms"]
-            lines.append(
-                f"| {cell['world_size_ranks']} ranks | {cell['dispatch_dtype'].upper()} | {ARM_LABELS[arm]} | "
-                f"{value['median_latency_ms']:.4f} ms | [{ci[0]:.4f}, {ci[1]:.4f}] ms | "
-                f"{value['run_to_run_cv_percent']:.2f}% | "
-                f"{value['median_aggregate_input_tokens_per_second']:,.2f} tokens/s | "
-                f"{value['median_effective_logical_gigabytes_per_second_per_rank']:.2f} GB/s/rank | "
-                f"{value['median_effective_scaleout_logical_gigabytes_per_second_per_rank']:.2f} GB/s/rank |"
+    for profile in PROFILES:
+        title = (
+            "Decode-like latency" if profile == "decode" else "Prefill-like throughput"
+        )
+        tokens = PROFILE_CONFIG[profile]["tokens_per_rank"]
+        lines.extend(["", f"## {title}, {tokens:,} tokens/rank", ""])
+        if profile == "decode":
+            lines.extend(
+                [
+                    "| EP size | Dispatch dtype | Backend | Latency (ms) | 95% bootstrap CI (ms) | Run-to-run CV (%) | Input throughput (tokens/s) | Logical throughput (GB/s/rank) | Scale-out logical throughput (GB/s/rank) |",
+                    "|---:|:---:|:---|---:|:---:|---:|---:|---:|---:|",
+                ]
             )
+        else:
+            lines.extend(
+                [
+                    "| EP size | Dispatch dtype | Backend | Logical throughput (GB/s/rank) | 95% bootstrap CI (GB/s/rank) | Run-to-run CV (%) | Latency (ms) | Input throughput (tokens/s) | Scale-out logical throughput (GB/s/rank) |",
+                    "|---:|:---:|:---|---:|:---:|---:|---:|---:|---:|",
+                ]
+            )
+        for cell in summary["cells"]:
+            if cell["workload_profile"] != profile:
+                continue
+            for arm in ARMS:
+                value = cell["arms"][arm]
+                ci = value["bootstrap_95_percent_ci_primary_value"]
+                if profile == "decode":
+                    row = (
+                        f"{value['median_latency_ms']:.4f} ms | "
+                        f"[{ci[0]:.4f}, {ci[1]:.4f}] ms"
+                    )
+                else:
+                    row = (
+                        f"{value['median_effective_logical_gigabytes_per_second_per_rank']:.2f} GB/s/rank | "
+                        f"[{ci[0]:.2f}, {ci[1]:.2f}] GB/s/rank"
+                    )
+                lines.append(
+                    f"| {cell['world_size_ranks']} ranks | {cell['dispatch_dtype'].upper()} | {ARM_LABELS[arm]} | "
+                    f"{row} | {value['run_to_run_cv_percent']:.2f}% | "
+                    + (
+                        f"{value['median_aggregate_input_tokens_per_second']:,.2f} tokens/s | "
+                        f"{value['median_effective_logical_gigabytes_per_second_per_rank']:.2f} GB/s/rank | "
+                        if profile == "decode"
+                        else f"{value['median_latency_ms']:.4f} ms | {value['median_aggregate_input_tokens_per_second']:,.2f} tokens/s | "
+                    )
+                    + f"{value['median_effective_scaleout_logical_gigabytes_per_second_per_rank']:.2f} GB/s/rank |"
+                )
     lines.extend(
         [
             "",
-            "## Paired DeepEP V2 latency deltas",
+            "## Paired DeepEP V2 improvements",
             "",
-            "Positive values mean DeepEP V2 had lower latency. A direction is supported for this workload only when the paired bootstrap interval excludes 0% and both arms have at most 5% run-to-run CV.",
+            "Positive values mean DeepEP V2 had lower latency for Decode-like cells or higher logical throughput for Prefill-like cells. A direction is supported only when the paired bootstrap interval excludes 0% and both arms have at most 5% run-to-run CV.",
             "",
-            "| EP size | Dispatch dtype | Baseline | Median reduction (%) | 95% bootstrap CI (%) | Direction supported |",
-            "|---:|:---:|:---|---:|:---:|:---:|",
+            "| Profile | EP size | Dispatch dtype | Baseline | Primary metric | Median improvement (%) | 95% bootstrap CI (%) | Direction supported |",
+            "|:---|---:|:---:|:---|:---|---:|:---:|:---:|",
         ]
     )
     for cell in summary["cells"]:
         for baseline in ("uccl", "deepep-v1-nvshmem"):
             comparison = cell["comparisons"][f"deepep-v2-gin-gda_vs_{baseline}"]
-            ci = comparison["bootstrap_95_percent_ci_reduction_percent"]
+            ci = comparison["bootstrap_95_percent_ci_improvement_percent"]
             lines.append(
-                f"| {cell['world_size_ranks']} ranks | {cell['dispatch_dtype'].upper()} | {ARM_LABELS[baseline]} | "
-                f"{comparison['median_paired_latency_reduction_percent']:.2f}% | "
+                f"| {cell['workload_profile']} | {cell['world_size_ranks']} ranks | {cell['dispatch_dtype'].upper()} | {ARM_LABELS[baseline]} | {comparison['primary_metric']} | "
+                f"{comparison['median_paired_improvement_percent']:.2f}% | "
                 f"[{ci[0]:.2f}, {ci[1]:.2f}]% | "
                 f"{'yes' if comparison['direction_supported'] else 'no'} |"
             )
@@ -510,7 +652,7 @@ def main() -> None:
     args.json.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     args.markdown.write_text(markdown(summary))
     print(
-        f"PASS fair EP matrix: {len(summary['cells'])} cells, "
+        f"PASS EP matrix: {len(summary['cells'])} cells, "
         f"{args.starts} independent starts per arm/cell"
     )
 

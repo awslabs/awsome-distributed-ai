@@ -7,6 +7,7 @@ set -euo pipefail
 : "${EP_MASTER_ADDR:?Set EP_MASTER_ADDR}"
 : "${POD_NAME:?Set POD_NAME}"
 : "${EP_RUN_INDEX:?Set EP_RUN_INDEX}"
+: "${EP_WORKLOAD_PROFILE:?Set EP_WORKLOAD_PROFILE}"
 : "${EP_DISPATCH_DTYPES:?Set EP_DISPATCH_DTYPES}"
 : "${EP_WARMUPS:=20}"
 : "${EP_ITERATIONS:=100}"
@@ -50,8 +51,8 @@ case "${EP_ARM}" in
         ;;
 esac
 
-printf 'ADAI_FAIR_LAUNCH arm=%s nodes=%s ranks=%s run_index=%s_dimensionless dtype_order=%s warmups=%s_iterations measured=%s_iterations\n' \
-    "${EP_ARM}" "${EP_NODES}" "$((EP_NODES * 8))" "${EP_RUN_INDEX}" \
+printf 'ADAI_EP_LAUNCH profile=%s arm=%s nodes=%s ranks=%s run_index=%s_dimensionless dtype_order=%s warmups=%s_iterations measured=%s_iterations\n' \
+    "${EP_WORKLOAD_PROFILE}" "${EP_ARM}" "${EP_NODES}" "$((EP_NODES * 8))" "${EP_RUN_INDEX}" \
     "${EP_DISPATCH_DTYPES}" "${EP_WARMUPS}" "${EP_ITERATIONS}"
 
 set +e
@@ -61,9 +62,9 @@ torchrun \
     --node-rank="${ordinal}" \
     --master-addr="${EP_MASTER_ADDR}" \
     --master-port=29400 \
-    /opt/benchmark/fair_ep_benchmark.py \
+    /opt/benchmark/ep_benchmark.py \
     --arm="${EP_ARM}" \
-    --tokens=128 \
+    --profile="${EP_WORKLOAD_PROFILE}" \
     --hidden=7168 \
     --top-k=8 \
     --experts=256 \
@@ -75,10 +76,10 @@ torchrun \
 status=$?
 set -e
 
-printf 'ADAI_FAIR_EXIT_STATUS=%s_dimensionless\n' "${status}"
+printf 'ADAI_EP_EXIT_STATUS=%s_dimensionless\n' "${status}"
 if ((status == 0)); then
-    printf 'ADAI_FAIR_COMPLETE\n'
+    printf 'ADAI_EP_COMPLETE\n'
 else
-    printf 'ADAI_FAIR_FAILED\n'
+    printf 'ADAI_EP_FAILED\n'
 fi
 sleep infinity

@@ -12,8 +12,8 @@ except ModuleNotFoundError:
 
 MODULE = None
 if torch is not None:
-    module_path = Path(__file__).with_name("fair_ep_benchmark.py")
-    spec = importlib.util.spec_from_file_location("fair_ep_benchmark", module_path)
+    module_path = Path(__file__).with_name("ep_benchmark.py")
+    spec = importlib.util.spec_from_file_location("ep_benchmark", module_path)
     assert spec and spec.loader
     MODULE = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = MODULE
@@ -21,7 +21,7 @@ if torch is not None:
 
 
 @unittest.skipIf(torch is None, "PyTorch is required for benchmark helper tests")
-class FairEpBenchmarkTest(unittest.TestCase):
+class EpBenchmarkTest(unittest.TestCase):
     def test_route_is_balanced_and_unique(self):
         routes = [
             MODULE.make_route(rank, 128, 256, 8, 20260824, torch.device("cpu"))
@@ -50,6 +50,25 @@ class FairEpBenchmarkTest(unittest.TestCase):
         self.assertLess(bf16_remote, bf16_all)
         self.assertLess(fp8_remote, fp8_all)
 
+    def test_profile_shapes_are_fixed(self):
+        self.assertEqual(MODULE.WORKLOAD_PROFILES["decode"].tokens_per_rank, 128)
+        self.assertEqual(MODULE.WORKLOAD_PROFILES["decode"].api_mode, "low-latency")
+        self.assertEqual(MODULE.WORKLOAD_PROFILES["prefill"].tokens_per_rank, 4096)
+        self.assertEqual(MODULE.WORKLOAD_PROFILES["prefill"].api_mode, "normal")
+
+    def test_prefill_payload_scales_with_tokens(self):
+        decode_route = MODULE.make_route(0, 128, 256, 8, 20260824, torch.device("cpu"))
+        prefill_route = MODULE.make_route(
+            0, 4096, 256, 8, 20260824, torch.device("cpu")
+        )
+        decode_bytes, _, _ = MODULE.logical_payload_bytes_per_rank(
+            decode_route, 0, 16, 8, 7168, "bf16", 256
+        )
+        prefill_bytes, _, _ = MODULE.logical_payload_bytes_per_rank(
+            prefill_route, 0, 16, 8, 7168, "bf16", 256
+        )
+        self.assertEqual(prefill_bytes, decode_bytes * 32)
+
     def test_percentile_interpolates(self):
         self.assertEqual(MODULE.percentile([1.0, 2.0, 3.0], 0.5), 2.0)
         self.assertAlmostEqual(MODULE.percentile([1.0, 2.0], 0.95), 1.95)
@@ -71,6 +90,7 @@ class FairEpBenchmarkTest(unittest.TestCase):
     def test_received_fp8_accepts_noncontiguous_scales(self):
         adapter = object.__new__(MODULE.BackendAdapter)
         adapter.arm = "uccl"
+        adapter.profile = MODULE.WORKLOAD_PROFILES["decode"]
         adapter.hidden = 256
         observed = {}
 
@@ -89,6 +109,23 @@ class FairEpBenchmarkTest(unittest.TestCase):
         self.assertEqual(observed["fp8_shape"], (6, 256))
         self.assertEqual(observed["scales_shape"], (6, 2))
         self.assertEqual(tuple(received.shape), (2, 3, 256))
+
+    def test_identity_expert_output_applies_local_gates(self):
+        adapter = object.__new__(MODULE.BackendAdapter)
+        adapter.arm = "uccl"
+        adapter.hidden = 2
+        adapter.profile = MODULE.WORKLOAD_PROFILES["prefill"]
+        state = MODULE.DispatchState(
+            recv_x=torch.tensor([[2.0, 4.0]], dtype=torch.bfloat16),
+            recv_topk_idx=torch.tensor([[0, -1, 1]]),
+            recv_topk_weights=torch.tensor([[0.25, 0.5, 0.125]]),
+            handle=None,
+        )
+        output = adapter.identity_expert_output(state, "bf16")
+        torch.testing.assert_close(
+            output,
+            torch.tensor([[0.75, 1.5]], dtype=torch.bfloat16),
+        )
 
 
 if __name__ == "__main__":
