@@ -1,0 +1,148 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+apiVersion: kubeflow.org/v2beta1
+kind: MPIJob
+metadata:
+  name: deepep-v2-internode
+spec:
+  runPolicy:
+    cleanPodPolicy: Running
+    backoffLimit: 3
+  # One MPI slot per node: each worker process spawns 8 local GPU ranks itself
+  # (torch.multiprocessing.spawn). The test reads WORLD_SIZE = number of nodes
+  # and RANK = node rank, so MPI launches exactly one process per node.
+  slotsPerWorker: 1
+  mpiReplicaSpecs:
+    Launcher:
+      replicas: 1
+      template:
+        spec:
+          # The launcher runs the full benchmark image (~20GB) just to invoke
+          # mpirun. Co-locate it on the GPU node pool, whose nodes have enough
+          # ephemeral storage; small CPU nodes hit DiskPressure and evict it.
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                  - key: training.kubeflow.org/job-name
+                    operator: In
+                    values:
+                    - deepep-v2-internode
+                topologyKey: kubernetes.io/hostname
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+          restartPolicy: OnFailure
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: workload
+            value: bench
+            operator: Equal
+            effect: NoSchedule
+          - key: capacity-reservation
+            operator: Exists
+            effect: NoSchedule
+          containers:
+          - image: ${IMAGE_URI}
+            imagePullPolicy: IfNotPresent
+            name: deepep-v2-internode-launcher
+            resources:
+              requests:
+                cpu: "1"
+                memory: 2Gi
+            command:
+            - /bin/bash
+            - -c
+            - |
+              # MASTER_ADDR must be worker-0 and must resolve from the other workers
+              # (the torch rendezvous runs on the worker pods). Read it from the
+              # mpi-operator-injected hostfile so we use exactly the DNS name the
+              # operator made cluster-resolvable.
+              # Wait for each worker's sshd to accept connections before launching.
+              # mpi-operator starts the launcher as soon as workers are Running, but
+              # their sshd may not be ready yet; without this wait the launcher loses
+              # the SSH race, exits non-zero, and burns Job retries (backoffLimit).
+              for host in $(awk '{print $1}' /etc/mpi/hostfile); do
+                until ssh -o ConnectTimeout=3 -o BatchMode=yes -o StrictHostKeyChecking=no "$host" true 2>/dev/null; do
+                  echo "waiting for sshd on $host"; sleep 3
+                done
+              done
+              MASTER_ADDR=$(head -n1 /etc/mpi/hostfile | awk '{print $1}')
+              # SSH-launched workers do not inherit Dockerfile ENV, so pass every
+              # needed variable through `mpirun -x`.
+              /opt/amazon/openmpi/bin/mpirun \
+                --allow-run-as-root --tag-output \
+                -np ${NUM_NODES} -N 1 --bind-to none \
+                -x PATH -x LD_LIBRARY_PATH \
+                -x NCCL_SOCKET_IFNAME -x LD_PRELOAD \
+                -x NCCL_DEBUG=INFO \
+                -x NCCL_NET_PLUGIN=ofi -x NCCL_TUNER_PLUGIN=ofi \
+                -x TORCHDYNAMO_DISABLE=1 \
+                -x TORCH_COMPILE_DISABLE=1 \
+                -x NCCL_GIN_TYPE=5 \
+                -x NCCL_SYM_GIN_KERNELS_ENABLE=0 \
+                -x MASTER_ADDR=$MASTER_ADDR -x MASTER_PORT=8361 \
+                bash -c 'RANK=$OMPI_COMM_WORLD_RANK WORLD_SIZE=$OMPI_COMM_WORLD_SIZE \
+                         python3 /opt/amazon/deepep/tests/elastic/test_ep.py --test-first-only --num-tokens=8192 --num-topk=8 --num-sms=12'
+    Worker:
+      replicas: ${NUM_NODES}
+      template:
+        spec:
+          # Schedule all workers in the same availability zone
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchExpressions:
+                      - key: training.kubeflow.org/job-name
+                        operator: In
+                        values:
+                          - deepep-v2-internode
+                      - key: training.kubeflow.org/job-role
+                        operator: In
+                        values:
+                          - worker
+                  topologyKey: topology.kubernetes.io/zone
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: workload
+            value: bench
+            operator: Equal
+            effect: NoSchedule
+          - key: capacity-reservation
+            operator: Exists
+            effect: NoSchedule
+          containers:
+          - image: ${IMAGE_URI}
+            imagePullPolicy: IfNotPresent
+            name: deepep-v2-internode-worker
+            env:
+              - name: NVIDIA_GDRCOPY
+                value: "enabled"
+            # The tuning phase profiles kernels via CUPTI. These nodes set the
+            # driver's RmProfilingAdminOnly=1, so the workload needs SYS_ADMIN to
+            # profile. Remove if your cluster allows non-admin GPU profiling.
+            securityContext:
+              capabilities:
+                add: ["SYS_ADMIN", "IPC_LOCK"]
+            volumeMounts:
+            - name: shmem
+              mountPath: /dev/shm
+            resources:
+              limits:
+                nvidia.com/gpu: ${GPU_PER_NODE}
+                vpc.amazonaws.com/efa: ${EFA_PER_NODE}
+              requests:
+                nvidia.com/gpu: ${GPU_PER_NODE}
+                vpc.amazonaws.com/efa: ${EFA_PER_NODE}
+          volumes:
+          - name: shmem
+            emptyDir:
+              medium: Memory
+              sizeLimit: 200Gi
