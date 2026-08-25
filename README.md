@@ -106,4 +106,4 @@ Thanks to all the contributors for building, reviewing and testing.
 
 ## 7. Star History
 
-[![Star History Chart](https://star-history.dera.page/svg?repos=awslabs/awsome-distributed&type=Date)](https://star-history.dera.page/#awslabs/awsome-distributed&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=awslabs/awsome-distributed-ai&type=Date)](https://star-history.dera.page/#awslabs/awsome-distributed-ai&Date)
