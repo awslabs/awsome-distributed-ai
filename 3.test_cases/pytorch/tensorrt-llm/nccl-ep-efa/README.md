@@ -181,7 +181,7 @@ Methodology, provenance knobs, and status live in [benchmarks/README.md](benchma
   companion issue documenting the HT/FLAT selection gap.
 - [aws/aws-ofi-nccl PR#1351](https://github.com/aws/aws-ofi-nccl/pull/1351) —
   `OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY` (cherry-picked at its immutable head SHA).
-- Sibling test cases: [vLLM + DeepEP-V2 over EFA](../../vllm/deepep-v2-efa/) (same NCCL-GIN
-  CPU-proxy substrate, different EP kernel package),
-  [SGLang + DeepEP over EFA](../../sglang/dsr1-deepep-efa/) (NVSHMEM host-proxy substrate), and the
-  [expert-parallelism micro-benchmarks](../../../../micro-benchmarks/expert-parallelism/).
+- Sibling test cases: [SGLang + DeepEP over EFA](../../sglang/dsr1-deepep-efa/) (NVSHMEM host-proxy
+  substrate), the [expert-parallelism micro-benchmarks](../../../../micro-benchmarks/expert-parallelism/),
+  and — once [#1230](https://github.com/awslabs/awsome-distributed-ai/pull/1230) merges — vLLM +
+  DeepEP-V2 over EFA (same NCCL-GIN CPU-proxy substrate, different EP kernel package).

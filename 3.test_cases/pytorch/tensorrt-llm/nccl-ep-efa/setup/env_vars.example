@@ -18,4 +18,5 @@ export SERVE_EP="8"
 # algorithm on an unpatched image rather than silently ignoring it.
 export TRTLLM_NCCL_EP_ALGO="LOW_LATENCY"
 # Build the opt-in patched image: APPLY_HT_FLAT_PATCH=1 setup/build-push.sh
-export APPLY_HT_FLAT_PATCH="0"
+# (:- default so a value pre-set on the command line survives this file being sourced after it)
+export APPLY_HT_FLAT_PATCH="${APPLY_HT_FLAT_PATCH:-0}"

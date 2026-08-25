@@ -21,6 +21,7 @@ ARG TRTLLM_BASE   # re-declare: pre-FROM ARGs go out of scope after FROM (used i
 
 LABEL org.opencontainers.image.description="TensorRT-LLM + NcclEP MoE all-to-all over AWS EFA (NCCL-GIN CPU-proxy)"
 LABEL org.opencontainers.image.licenses="MIT-0"
+LABEL org.opencontainers.image.source="https://github.com/awslabs/awsome-distributed-ai"
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-c"]
 USER root
