@@ -141,8 +141,10 @@ SEQ_LEN="${SEQ_LEN:-4096}"
 MOE_A2A_OVERLAP="${MOE_A2A_OVERLAP:-off}"
 PRESERVE_ROUTE_TRACE_RAW="${PRESERVE_ROUTE_TRACE_RAW:-0}"
 HARVEST_PARALLELISM="${HARVEST_PARALLELISM:-4}"
+FAIL_FAST_GRACE_SECONDS="${FAIL_FAST_GRACE_SECONDS:-180}"
 [[ "${PRESERVE_ROUTE_TRACE_RAW}" =~ ^[01]$ ]] || { echo "PRESERVE_ROUTE_TRACE_RAW must be 0 or 1" >&2; exit 2; }
 [[ "${HARVEST_PARALLELISM}" =~ ^[1-9][0-9]*$ && "${HARVEST_PARALLELISM}" -le 16 ]] || { echo "HARVEST_PARALLELISM must be an integer from 1 through 16" >&2; exit 2; }
+[[ "${FAIL_FAST_GRACE_SECONDS}" =~ ^[1-9][0-9]*$ ]] || { echo "FAIL_FAST_GRACE_SECONDS must be a positive integer" >&2; exit 2; }
 
 cat > "${LOCAL_RUN_DIR}/environment.txt" <<EOF
 campaign_id=${CAMPAIGN_ID}
@@ -164,6 +166,7 @@ sequence_length_tokens=${SEQ_LEN}
 ep_overlap=${MOE_A2A_OVERLAP}
 route_trace_raw_preserved=${PRESERVE_ROUTE_TRACE_RAW}
 harvest_parallelism=${HARVEST_PARALLELISM}
+fail_fast_grace_seconds=${FAIL_FAST_GRACE_SECONDS}
 expected_dispatcher=${EXPECTED_DISPATCHER}
 expected_backend=${EXPECTED_BACKEND}
 run_kind=${RUN_KIND}
@@ -328,6 +331,8 @@ done
 
 deadline=$((SECONDS + ${RUN_TIMEOUT_SECONDS:-7200}))
 terminal=0
+pod_phase_failure=0
+failed_phase_count=0
 while (( SECONDS < deadline )); do
   pods_json="$("${KN[@]}" get pods -l app="${JOB}" -o json)"
   phases="$(jq -r '[.items[].status.phase] | group_by(.) | map({(.[0]): length}) | add // {}' <<<"${pods_json}")"
@@ -335,9 +340,46 @@ while (( SECONDS < deadline )); do
   echo "${phases}"
   echo "${trainer_states}"
   terminal="$(jq -r '[.[].state | select(.terminated)] | length' <<<"${trainer_states}")"
+  failed_phase_count="$(jq -r '[.items[] | select(.status.phase == "Failed")] | length' <<<"${pods_json}")"
+  if [[ "${failed_phase_count}" -ne 0 ]]; then
+    pod_phase_failure=1
+    printf '%s\n' "${pods_json}" > "${LOCAL_RUN_DIR}/manifests/pod-phase-failures.json"
+    break
+  fi
   [[ "${terminal}" -eq "${NNODES}" ]] && break
   sleep 15
 done
+
+if [[ "${pod_phase_failure}" -eq 1 ]]; then
+  # A failed Pod can never contribute a trainer exit code. Ask every remaining
+  # trainer to finish its local cleanup and custody manifest before harvesting.
+  mapfile -t live_trainers < <(
+    jq -r '.items[]
+      | select(.status.phase != "Failed")
+      | select(any(.status.containerStatuses[]?; .name == "trainer" and (.state.terminated | not)))
+      | .metadata.name' <<<"${pods_json}"
+  )
+  terminate_pids=()
+  for pod in "${live_trainers[@]}"; do
+    "${KN[@]}" --request-timeout=10s exec "${pod}" -c trainer -- \
+      pkill -TERM -f '^/opt/venv/bin/python3 /opt/venv/bin/torchrun ' >/dev/null 2>&1 &
+    terminate_pids+=("$!")
+  done
+  for terminate_pid in "${terminate_pids[@]}"; do
+    wait "${terminate_pid}" >/dev/null 2>&1 || true
+  done
+
+  fail_fast_deadline=$((SECONDS + FAIL_FAST_GRACE_SECONDS))
+  while (( SECONDS < fail_fast_deadline )); do
+    pods_json="$("${KN[@]}" get pods -l app="${JOB}" -o json)"
+    live_trainer_count="$(jq -r '[.items[]
+      | select(.status.phase != "Failed")
+      | select(any(.status.containerStatuses[]?; .name == "trainer" and (.state.terminated | not)))]
+      | length' <<<"${pods_json}")"
+    [[ "${live_trainer_count}" -eq 0 ]] && break
+    sleep 5
+  done
+fi
 
 # Freeze the snapshot tree before the final harvest and custody hash. Leaving
 # the background logger alive here permits a last in-flight kubectl write to
@@ -386,7 +428,8 @@ for ((batch_start = 0; batch_start < NNODES; batch_start += HARVEST_PARALLELISM)
 done
 pods_after="$("${KN[@]}" get pods -l app="${JOB}" -o json)"
 printf '%s\n' "${pods_after}" > "${LOCAL_RUN_DIR}/manifests/pods-after.json"
-if [[ "${terminal}" -ne "${NNODES}" ]]; then status=TIMEOUT; exit_code=1
+if [[ "${pod_phase_failure}" -eq 1 ]]; then status=FAIL_POD_PHASE; exit_code=1
+elif [[ "${terminal}" -ne "${NNODES}" ]]; then status=TIMEOUT; exit_code=1
 elif [[ "${harvest_failures}" -ne 0 ]]; then status=FAIL_HARVEST; exit_code=1
 elif jq -e --argjson expected "${NNODES}" '(.items | length) == $expected and all(.items[]; any(.status.containerStatuses[]?; .name == "trainer" and .state.terminated.exitCode == 0))' <<<"${pods_after}" >/dev/null; then status=PASS; exit_code=0
 else status=FAIL; exit_code=1
