@@ -4,7 +4,7 @@ Status: `PASS`
 
 The previous Decode-only result has been discarded. It must not be combined with this two-profile matrix because Prefill-like uses the normal high-throughput API and a different timing boundary.
 
-This is a synthetic expert-parallel communication microbenchmark. It does not target Kimi K2 and does not model a Kimi K2 training replica.
+This is a synthetic expert-parallel communication microbenchmark.
 
 ## Campaign configuration
 
