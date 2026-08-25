@@ -121,7 +121,38 @@ teardown() {
   fi
   release_lock
 }
-trap teardown EXIT
+
+finalize() {
+  local controller_rc=$?
+  local parse_rc=0
+  local census_rc=0
+  local teardown_rc=0
+  local checksum_rc=0
+  trap - EXIT
+  set +e
+
+  python3 "${SELF_DIR}/parse-runs.py" "${OUT}/26.08/kimi-k2" --warmup 8 \
+    --output "${OUT}/results/index.json" > "${OUT}/results/parse-runs.stdout.json"
+  parse_rc=$?
+  census after-exit
+  census_rc=$?
+  teardown
+  teardown_rc=$?
+  printf '%s\n' \
+    "controller_exit_code=${controller_rc}" \
+    "parse_exit_code=${parse_rc}" \
+    "census_exit_code=${census_rc}" \
+    "teardown_exit_code=${teardown_rc}" \
+    > "${OUT}/control/finalization.STATUS"
+  find "${OUT}" -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > "${OUT}/SHA256SUMS"
+  checksum_rc=$?
+
+  if [[ "${controller_rc}" -eq 0 && ( "${parse_rc}" -ne 0 || "${census_rc}" -ne 0 || "${teardown_rc}" -ne 0 || "${checksum_rc}" -ne 0 ) ]]; then
+    controller_rc=1
+  fi
+  exit "${controller_rc}"
+}
+trap finalize EXIT
 
 free_nodes() {
   local instance_type="$1"
@@ -283,9 +314,3 @@ PY
   done
   if [[ "${STOP_CAMPAIGN}" -eq 1 ]]; then break; fi
 done
-
-python3 "${SELF_DIR}/parse-runs.py" "${OUT}/26.08/kimi-k2" --warmup 8 --output "${OUT}/results/index.json"
-census after
-teardown
-trap - EXIT
-find "${OUT}" -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > "${OUT}/SHA256SUMS"
