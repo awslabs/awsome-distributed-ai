@@ -332,7 +332,9 @@ done
 deadline=$((SECONDS + ${RUN_TIMEOUT_SECONDS:-7200}))
 terminal=0
 pod_phase_failure=0
+trainer_exit_failure=0
 failed_phase_count=0
+nonzero_trainer_count=0
 while (( SECONDS < deadline )); do
   pods_json="$("${KN[@]}" get pods -l app="${JOB}" -o json)"
   phases="$(jq -r '[.items[].status.phase] | group_by(.) | map({(.[0]): length}) | add // {}' <<<"${pods_json}")"
@@ -341,18 +343,24 @@ while (( SECONDS < deadline )); do
   echo "${trainer_states}"
   terminal="$(jq -r '[.[].state | select(.terminated)] | length' <<<"${trainer_states}")"
   failed_phase_count="$(jq -r '[.items[] | select(.status.phase == "Failed")] | length' <<<"${pods_json}")"
+  nonzero_trainer_count="$(jq -r '[.[].state | select(.terminated and .exit_code != 0)] | length' <<<"${trainer_states}")"
   if [[ "${failed_phase_count}" -ne 0 ]]; then
     pod_phase_failure=1
     printf '%s\n' "${pods_json}" > "${LOCAL_RUN_DIR}/manifests/pod-phase-failures.json"
+    break
+  fi
+  if [[ "${nonzero_trainer_count}" -ne 0 ]]; then
+    trainer_exit_failure=1
+    printf '%s\n' "${pods_json}" > "${LOCAL_RUN_DIR}/manifests/trainer-exit-failures.json"
     break
   fi
   [[ "${terminal}" -eq "${NNODES}" ]] && break
   sleep 15
 done
 
-if [[ "${pod_phase_failure}" -eq 1 ]]; then
-  # A failed Pod can never contribute a trainer exit code. Ask every remaining
-  # trainer to finish its local cleanup and custody manifest before harvesting.
+if (( pod_phase_failure == 1 || trainer_exit_failure == 1 )); then
+  # Once one rank is irrecoverably lost, ask every remaining trainer to finish
+  # its local cleanup and custody manifest before harvesting the failed run.
   mapfile -t live_trainers < <(
     jq -r '.items[]
       | select(.status.phase != "Failed")
@@ -379,6 +387,9 @@ if [[ "${pod_phase_failure}" -eq 1 ]]; then
     [[ "${live_trainer_count}" -eq 0 ]] && break
     sleep 5
   done
+  trainer_states="$(jq -c '[.items[] | {pod:.metadata.name, state:([.status.containerStatuses[]? | select(.name=="trainer") | if .state.terminated then {terminated:true,exit_code:.state.terminated.exitCode} else {terminated:false} end][0] // {terminated:false})}]' <<<"${pods_json}")"
+  terminal="$(jq -r '[.[].state | select(.terminated)] | length' <<<"${trainer_states}")"
+  printf '%s\n' "${pods_json}" > "${LOCAL_RUN_DIR}/manifests/runtime-failure-final.json"
 fi
 
 # Freeze the snapshot tree before the final harvest and custody hash. Leaving
@@ -429,6 +440,7 @@ done
 pods_after="$("${KN[@]}" get pods -l app="${JOB}" -o json)"
 printf '%s\n' "${pods_after}" > "${LOCAL_RUN_DIR}/manifests/pods-after.json"
 if [[ "${pod_phase_failure}" -eq 1 ]]; then status=FAIL_POD_PHASE; exit_code=1
+elif [[ "${trainer_exit_failure}" -eq 1 ]]; then status=FAIL_TRAINER_EXIT; exit_code=1
 elif [[ "${terminal}" -ne "${NNODES}" ]]; then status=TIMEOUT; exit_code=1
 elif [[ "${harvest_failures}" -ne 0 ]]; then status=FAIL_HARVEST; exit_code=1
 elif jq -e --argjson expected "${NNODES}" '(.items | length) == $expected and all(.items[]; any(.status.containerStatuses[]?; .name == "trainer" and .state.terminated.exitCode == 0))' <<<"${pods_after}" >/dev/null; then status=PASS; exit_code=0
