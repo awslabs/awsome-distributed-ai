@@ -94,7 +94,7 @@ spec:
           ORDINAL=${HOSTNAME##*-}
           LEADER_DNS="vllm-deepep-v2-0.vllm-deepep-v2.vllm-deepep.svc.cluster.local"
           for i in $(seq 1 120); do getent hosts "$LEADER_DNS" >/dev/null 2>&1 && break; sleep 1; done
-          LEADER_IP=$(getent hosts "$LEADER_DNS" | awk '{print $1}' | head -1)
+          LEADER_IP=$(getent hosts "$LEADER_DNS" | awk '{print $1}' | head -1 || true)
           test -n "$LEADER_IP" || { echo "FATAL: leader DNS $LEADER_DNS never resolved"; exit 1; }
           echo "=== ordinal=$ORDINAL leader=$LEADER_IP ==="
 
@@ -112,7 +112,7 @@ spec:
         - { name: SERVE_DP_LOCAL, value: "8" }      # GPUs per node — worker start-ranks derive from this
         - { name: SERVE_MODEL, value: "Qwen/Qwen3-30B-A3B-FP8" }  # any MoE with n_routed_experts % DP == 0 (serve.sh asserts)
         # - { name: SERVE_ENFORCE_EAGER, value: "1" }   # 1 = default & KNOWN-GOOD; non-eager pending the upstream guard (README "eager vs non-eager")
-        # - { name: DEEPEP_ARCH_LIST, value: "10.0" }   # in-pod DeepEP build arch; default 9.0 (H100/H200) — set 10.0 on p6-b200
+        # - { name: DEEPEP_ARCH_LIST, value: "10.0" }   # in-pod DeepEP build arch; default 9.0 = H100/H200 — set 10.0 on p6-b200, 10.3 on p6-b300 (Blackwell)
         # - { name: HF_TOKEN, valueFrom: { secretKeyRef: { name: hf-token, key: token } } }  # gated models only
 
         # ---- proxy-Gin + EFA contract, VERBATIM (also baked as image ENV; repeated
@@ -142,12 +142,12 @@ spec:
         # workers run --headless (no HTTP server), so their probe is process-liveness only.
         startupProbe:
           exec:
-            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health; else pgrep -f 'vllm serve' >/dev/null; fi"]
+            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health; else pgrep -f '[v]llm serve' >/dev/null; fi"]
           periodSeconds: 30
           failureThreshold: 120              # up to 60 min: in-pod compile + multi-hundred-GB model load
         readinessProbe:
           exec:
-            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health; else pgrep -f 'vllm serve' >/dev/null; fi"]
+            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health; else pgrep -f '[v]llm serve' >/dev/null; fi"]
           periodSeconds: 15
         # requests == limits (Guaranteed QoS): NCCL_GIN_TYPE=2 is the CPU-PROXY path, so
         # proxy-thread CPU sits on the data path — Burstable QoS + CFS throttling under node
@@ -156,7 +156,7 @@ spec:
           limits:
             nvidia.com/gpu: "8"
             vpc.amazonaws.com/efa: "16"      # p5en=16, p5=32, p6-b200=8
-            hugepages-2Mi: 5120Mi
+            hugepages-2Mi: 5120Mi          # needs 2Mi hugepages pre-allocated on the node (they were on the nodes the measured runs used; without them the pod sits Pending)
             cpu: "90"
             memory: 1024Gi
           requests:

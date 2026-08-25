@@ -38,13 +38,15 @@ export OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1   # PR#1351: assert forced-PCIe on gd
 export EP_REUSE_NCCL_COMM=0   # DeepEP creates its own comm; torch's is lazy/null under vLLM (segfault rootcause 2026-08-14)
 export NCCL_DEBUG=${SERVE_NCCL_DEBUG:-WARN}
 # EP_EFA_MAX_QPS=2 is the value the published benchmarks/ numbers were measured with
-# (DeepEP PR#612's conservative EFA default) — kept as the default so the sample
-# reproduces its own tables. It may leave throughput on the table on newer aws-ofi-nccl:
-# the 128-slot GIN request-ring overflow the cap was written for was replaced by the
-# seq-window design upstream (6e504db), and the plugin pinned here (9c44d34) includes
-# that; a 2x B200 A/B through this same vLLM path measured +29% throughput / -23% p50
-# uncapped (=129) with 0/384 failures. If you tune it, re-measure at YOUR concurrency
-# and record the value — both knobs are part of the benchmark provenance table.
+# (DeepEP PR#612's conservative EFA default: its commit message caps auto-QP at 2 to avoid
+# a 128-slot GIN request-ring overflow) — kept as the default so the sample reproduces its
+# own tables. It may leave throughput on the table on newer aws-ofi-nccl: that 128-slot ring
+# was replaced by the seq-window design upstream (6e504db), and the plugin pinned here
+# (9c44d34) is 76 commits PAST that redesign (github.com/aws/aws-ofi-nccl/compare/6e504db...9c44d34),
+# so the image is not in the condition the cap was written for; a 2x B200 A/B through this
+# same vLLM path measured +29% throughput / -23% p50 uncapped (=129) with 0/384 failures, so
+# uncapping is worth testing on p5en. If you tune it, re-measure at YOUR concurrency and
+# record the value — both knobs are part of the benchmark provenance table.
 export EP_EFA_MAX_QPS=${EP_EFA_MAX_QPS:-2} EP_EFA_RDMA_GBS=${EP_EFA_RDMA_GBS:-25.0}
 
 # ---- vLLM PR#41183 (DeepEPV2All2AllManager) envs — V2-native, shim OFF ----
@@ -116,6 +118,10 @@ if [ "$SERVE_ENFORCE_EAGER" != "1" ]; then
   EAGER_FLAG=""
 fi
 
+# --trust-remote-code is ON because the DeepSeek-V3/R1 + Kimi-K2 models serve.sh's preflight
+# supports execute repo-side modeling code from their HF repos; the default Qwen3-30B-A3B does
+# NOT need it. Kept unconditional because removing it breaks the DeepSeek/Kimi SERVE_MODEL path;
+# a SERVE_MODEL you do not trust should not be pointed at this serve.
 COMMON="--tensor-parallel-size ${SERVE_TP} --data-parallel-size ${SERVE_DP} --data-parallel-size-local ${SERVE_DP_LOCAL} \
   --data-parallel-address ${DP_MASTER_IP} --data-parallel-rpc-port ${DP_MASTER_PORT} \
   --data-parallel-backend mp --enable-expert-parallel --all2all-backend deepep_v2 \

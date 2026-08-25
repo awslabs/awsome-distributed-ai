@@ -111,7 +111,7 @@ contract + EFA device requests are set there).
 ## Benchmark
 ```bash
 # from inside the leader pod (both scripts are baked into the image at /opt):
-kubectl -n vllm-deepep exec vllm-deepep-v2-0 -- bash /opt/benchmark.sh 127.0.0.1
+kubectl -n vllm-deepep exec vllm-deepep-v2-0 -- env OUT_ROOT=/work/benchmarks bash /opt/benchmark.sh 127.0.0.1
 
 # or from outside the cluster, via a port-forward to the leader pod:
 kubectl -n vllm-deepep port-forward pod/vllm-deepep-v2-0 8000:8000 &

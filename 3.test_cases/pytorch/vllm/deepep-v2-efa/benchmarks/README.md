@@ -86,3 +86,4 @@ measure at your target concurrency** — the crossover is workload-dependent.
   delta was reproduced once.** These are at-scale **throughput + relative-latency** datapoints, not tuned
   TTFT baselines: the ~26–34 s wall reflects 128-token generation, not a latency-optimized single token.
 - Both modes: 0 errors, 0 crashes, all HTTP 200. `raw/` holds the per-level JSONL from the sweeps.
+- No alternative-backend baseline was measured: every table is `--all2all-backend deepep_v2`. The sweeps show the EFA path works and how it scales — not that it outperforms vLLM's default all-to-all on this hardware.

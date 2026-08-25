@@ -12,8 +12,9 @@
 set -uo pipefail
 
 ROLE="${1:?usage: run-kernel-test.sh {leader|worker} <leader-ip> [node-rank]}"
+case "$ROLE" in leader|worker) ;; *) echo "FATAL: unrecognized role '$ROLE' (leader|worker)"; exit 2 ;; esac
 LEADER_IP="${2:?need leader ip}"
-NODE_RANK_ARG="${3:-0}"
+if [ "$ROLE" = "worker" ]; then NODE_RANK_ARG="${3:?worker requires an explicit node-rank (1,2,...)}"; else NODE_RANK_ARG=0; fi
 NNODES="${NNODES:-2}"
 GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
 TEST="/opt/DeepEP/tests/elastic/test_ep.py"

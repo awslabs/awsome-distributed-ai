@@ -27,7 +27,7 @@ git config user.email build@local; git config user.name build
 git fetch origin "${AWS_OFI_NCCL_SHA}"; git checkout "${AWS_OFI_NCCL_SHA}"
 grep -q FALLBACK_V1_FOR_GDRDRV_24 src/nccl_ofi_gdrcopy.cpp   # assert the v1-fallback is present (fail-loud)
 if [ -n "${AWS_OFI_NCCL_PR_SHA}" ]; then
-  git fetch origin "refs/pull/${AWS_OFI_NCCL_PR}/head"
+  git fetch origin "${AWS_OFI_NCCL_PR_SHA}"
   git cherry-pick "${AWS_OFI_NCCL_PR_SHA}"
   grep -q GDRCOPY_FORCED_PCIE_COPY include/nccl_ofi_param.h  # assert the param landed (fail-loud)
 fi
@@ -49,7 +49,7 @@ git clone "${DEEPEP_REPO}" /opt/DeepEP
 cd /opt/DeepEP
 git config user.email build@local; git config user.name build
 git fetch origin "${DEEPEP_SHA}"; git checkout "${DEEPEP_SHA}"
-git fetch origin "refs/pull/${DEEPEP_PR}/head"
+git fetch origin "${DEEPEP_PR_SHA}"
 git merge --no-edit "${DEEPEP_PR_SHA}"                       # pin the IMMUTABLE PR head, not the moving ref
 git rev-parse HEAD > /opt/deepep.effective.sha
 test -f /opt/DeepEP/tests/elastic/test_ep.py

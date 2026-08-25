@@ -117,7 +117,7 @@ LIBRARY_PATH="${NVSHMEM_LIB:-}:${CUDART_DIR}:${LIBRARY_PATH:-}" \
 LD_LIBRARY_PATH="${NVSHMEM_LIB:-}:${CUDART_DIR}:${LD_LIBRARY_PATH:-}" \
 TORCH_CUDA_ARCH_LIST="${DEEPEP_ARCH_LIST:-9.0}" \
 MAX_JOBS="$(nproc)" \
-python3 setup.py build_ext --inplace 2>&1 | tail -30
+python3 setup.py build_ext --inplace 2>&1 | tee /tmp/deepep-build.log | tail -30   # full log at /tmp/deepep-build.log for failed-build diagnostics
 
 echo "=== editable install so 'import deep_ep' resolves here (best-effort) ==="
 # The _C.so is now in-tree, so `import deep_ep` from /opt/DeepEP works directly. The pip

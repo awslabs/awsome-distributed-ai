@@ -15,13 +15,13 @@
 #   - a missing usage block in a 200 response is a FAILURE (code "200-no-usage"), not a
 #     zero-token success that silently deflates throughput
 #   - exit 0 only if EVERY request at EVERY level succeeded
-import argparse, json, time, urllib.request, urllib.error, sys
+import argparse, json, os, time, urllib.request, urllib.error, sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Defaults keep the probe runnable standalone inside the pod (127.0.0.1 loopback);
 # recipe/benchmark.sh overrides --url (leader IP) and --out (raw JSONL path).
 URL = "http://127.0.0.1:8000/v1/chat/completions"
-MODEL = "Qwen/Qwen3-30B-A3B-FP8"
+MODEL = os.environ.get("SERVE_MODEL", "Qwen/Qwen3-30B-A3B-FP8")
 MAX_TOKENS = 128
 PROMPT = "Explain expert parallelism in mixture-of-experts models in two sentences."
 CONCURRENCIES = [1, 8, 16, 32, 64]

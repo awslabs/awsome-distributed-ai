@@ -57,9 +57,12 @@ RUN NCCL_ROOT=$(python3 -c "import nvidia.nccl, pathlib; print(pathlib.Path(nvid
 # compiles with "GDRCopy support not available", nccl_ofi_gin_init fails at serve, and
 # DeepEP's ElasticBuffer asserts ginType==NCCL_GIN_TYPE_NONE. Userspace 2.5.2 on a
 # gdrdrv-2.4 host is exactly the pairing OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1 (#1351) fixes.
-ARG GDRCOPY_VER=v2.5.2
-RUN git clone --depth 1 --branch ${GDRCOPY_VER} https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
-    && cd /tmp/gdrcopy && make prefix=/usr/local lib lib_install && ldconfig \
+# gdrcopy v2.5.2 == commit c91ad9f: pin the commit, not the tag (a bare tag is a moving ref
+# upstream can re-point — every other dep here is SHA-pinned).
+ARG GDRCOPY_SHA=c91ad9f178e5fb729fc5b6dc62a77c3bb364d6c9
+RUN git clone https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
+    && cd /tmp/gdrcopy && git fetch origin ${GDRCOPY_SHA} && git checkout ${GDRCOPY_SHA} \
+    && make prefix=/usr/local lib lib_install && ldconfig \
     && rm -rf /tmp/gdrcopy
 
 # ---- Layer 4: aws-ofi-nccl GIN + DeepEP-V2 source (in-tree script, COPY'd not curled) ----
@@ -113,4 +116,4 @@ COPY recipe/benchmark.sh /opt/benchmark.sh
 RUN chmod +x /opt/build_deepep.sh /opt/serve.sh /opt/run-kernel-test.sh /opt/benchmark.sh
 
 # The segfault-fix env (EP_REUSE_NCCL_COMM=0) + proxy-Gin contract are set by recipe/serve.sh at launch.
-CMD ["/bin/bash", "-lc", "echo 'run: recipe/serve.sh {leader|worker} <ip>; build_deepep.sh runs once on first boot'; sleep infinity"]
+CMD ["/bin/bash", "-lc", "echo 'run: /opt/serve.sh {leader|worker} <ip>; /opt/build_deepep.sh runs once on first boot'; sleep infinity"]
