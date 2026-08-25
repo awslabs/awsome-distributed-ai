@@ -1,7 +1,5 @@
 # Fair EP Backend Comparison Results on B200
 
-This report replaces the retired backend-native B300, B200, and H100 tables. Those tables mixed timing boundaries and byte numerators, so their latency and bandwidth columns were not suitable for cross-backend ranking.
-
 The replacement measures one synthetic decode dispatch-plus-combine workload with one external CUDA timing boundary and one logical payload definition. It is not an end-to-end training or serving benchmark. EP32 means 32 GPU ranks on 4 `p6-b200.48xlarge` nodes, not 32 instances.
 
 ## Result
