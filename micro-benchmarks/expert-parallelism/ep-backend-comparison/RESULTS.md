@@ -30,6 +30,10 @@ Decode-like reports slowest-rank latency. Prefill-like reports logical GB/s/rank
 
 Each cell has 3 independent process starts. Values are medians across independent starts. Decode-like results use slowest-rank latency as the primary metric; prefill-like results use common logical throughput. These are synthetic communication workloads, not end-to-end training or serving results.
 
+![Box plots comparing the three backend arms for every Decode-like and Prefill-like workload cell](results/b200-ap-south-1-2026-08-25-boxplots.png)
+
+Each box contains the 3 independent process-start medians for one backend arm and workload cell. The box spans Q1 to Q3, the center line is the median, the whiskers are the minimum and maximum, and the markers show all 3 values. The individual markers are the primary evidence because each box contains only 3 independent starts.
+
 ## Decode-like latency, 128 tokens/rank
 
 | EP size | Dispatch dtype | Backend | Latency (ms) | 95% bootstrap CI (ms) | Run-to-run CV (%) | Input throughput (tokens/s) | Logical throughput (GB/s/rank) | Scale-out logical throughput (GB/s/rank) |

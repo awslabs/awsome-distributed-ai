@@ -10,7 +10,7 @@ This directory compares 3 expert-parallel dispatch/combine backends through comm
 
 Each workload uses one external CUDA timing boundary and one logical payload definition. Backend-native latency and bandwidth fields remain diagnostics because they do not share one timing boundary or byte numerator.
 
-The B200 report is in [RESULTS.md](RESULTS.md). EP32 means 32 GPU ranks on 4 B200 nodes, not 32 B200 nodes.
+The B200 report and backend box plots are in [RESULTS.md](RESULTS.md). EP32 means 32 GPU ranks on 4 B200 nodes, not 32 B200 nodes.
 
 ## Workload profiles
 
@@ -61,6 +61,7 @@ These are logical efficiency metrics, not observed wire bandwidth.
 | [`result_io.py`](result_io.py) | Robust result-marker parsing from interleaved native output |
 | [`extract_results.py`](extract_results.py) | Canonical JSONL extraction from a rank-zero log |
 | [`summarize_results.py`](summarize_results.py) | Matrix validation, per-start aggregation, paired deltas, and bootstrap intervals |
+| [`plot_results.py`](plot_results.py) | Box plots of the independent-start primary values for every backend arm |
 | [`RESULTS.md`](RESULTS.md) | Human-readable result, provenance, and scope limits |
 
 ## Requirements
@@ -175,12 +176,21 @@ python3 extract_results.py rank-zero.log results.jsonl
 
 The summarizer rejects an incomplete matrix, correctness failure, mutable image tag, route/input mismatch, runtime-stack mismatch, or disagreement in common logical payload accounting.
 
+Regenerate the box plots from the committed machine-readable summary:
+
+```bash
+python3 plot_results.py results/b200-ap-south-1-2026-08-25.json \
+  --output=results/b200-ap-south-1-2026-08-25-boxplots.png
+```
+
+Plot generation requires Matplotlib. Each box uses the 3 independent process-start medians for one backend and workload cell. The plot also shows every underlying point.
+
 ## Local validation
 
 ```bash
 python3 -m pytest -q test_ep_benchmark.py test_summarize_results.py
 python3 -m py_compile \
-  ep_benchmark.py result_io.py extract_results.py summarize_results.py
+  ep_benchmark.py result_io.py extract_results.py summarize_results.py plot_results.py
 bash -n run_ep_comparison.sh run_ep_rank.sh
 shellcheck run_ep_comparison.sh run_ep_rank.sh
 ```
