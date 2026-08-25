@@ -282,16 +282,29 @@ else
 fi
 if [[ -n "${CELLS_OVERRIDE:-}" ]]; then read -r -a CELLS <<<"${CELLS_OVERRIDE}"; fi
 if [[ -n "${REPEATS_OVERRIDE:-}" ]]; then read -r -a REPEATS <<<"${REPEATS_OVERRIDE}"; fi
+ARMS=(nccl-alltoall uccl deepep-v1-nvshmem deepep-v2-gin-gda)
+if [[ -n "${ARMS_OVERRIDE:-}" ]]; then read -r -a ARMS <<<"${ARMS_OVERRIDE}"; fi
+[[ "${#ARMS[@]}" -gt 0 ]] || { echo "ARMS_OVERRIDE must select at least one arm" >&2; exit 2; }
+for arm in "${ARMS[@]}"; do
+  case "${arm}" in
+    nccl-alltoall|uccl|deepep-v1-nvshmem|deepep-v2-gin-gda) ;;
+    *) echo "unsupported arm in ARMS_OVERRIDE: ${arm}" >&2; exit 2 ;;
+  esac
+done
 
 STOP_CAMPAIGN=0
 for repeat in "${REPEATS[@]}"; do
-  mapfile -t ORDER < <(python3 - "${repeat}" <<'PY'
+  if [[ -n "${ARMS_OVERRIDE:-}" ]]; then
+    ORDER=("${ARMS[@]}")
+  else
+    mapfile -t ORDER < <(python3 - "${repeat}" <<'PY'
 import random, sys
 arms = ["nccl-alltoall", "uccl", "deepep-v1-nvshmem", "deepep-v2-gin-gda"]
 random.Random(1234 + int(sys.argv[1])).shuffle(arms)
 print(*arms, sep="\n")
 PY
-  )
+    )
+  fi
   printf '%s\n' "${ORDER[@]}" > "${OUT}/control/arm-order-repeat-${repeat}.txt"
   for cell in "${CELLS[@]}"; do
     if [[ "${cell}" == *overlap && "${cell}" != *no-overlap ]]; then overlap=on; else overlap=off; fi
