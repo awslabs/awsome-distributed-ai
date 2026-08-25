@@ -142,9 +142,11 @@ MOE_A2A_OVERLAP="${MOE_A2A_OVERLAP:-off}"
 PRESERVE_ROUTE_TRACE_RAW="${PRESERVE_ROUTE_TRACE_RAW:-0}"
 HARVEST_PARALLELISM="${HARVEST_PARALLELISM:-4}"
 FAIL_FAST_GRACE_SECONDS="${FAIL_FAST_GRACE_SECONDS:-180}"
+EFA_MODULE_VERSION_REQUIRED="${EFA_MODULE_VERSION_REQUIRED:-3.3.0g}"
 [[ "${PRESERVE_ROUTE_TRACE_RAW}" =~ ^[01]$ ]] || { echo "PRESERVE_ROUTE_TRACE_RAW must be 0 or 1" >&2; exit 2; }
 [[ "${HARVEST_PARALLELISM}" =~ ^[1-9][0-9]*$ && "${HARVEST_PARALLELISM}" -le 16 ]] || { echo "HARVEST_PARALLELISM must be an integer from 1 through 16" >&2; exit 2; }
 [[ "${FAIL_FAST_GRACE_SECONDS}" =~ ^[1-9][0-9]*$ ]] || { echo "FAIL_FAST_GRACE_SECONDS must be a positive integer" >&2; exit 2; }
+[[ "${EFA_MODULE_VERSION_REQUIRED}" =~ ^[A-Za-z0-9._+-]+$ ]] || { echo "EFA_MODULE_VERSION_REQUIRED contains invalid characters" >&2; exit 2; }
 
 cat > "${LOCAL_RUN_DIR}/environment.txt" <<EOF
 campaign_id=${CAMPAIGN_ID}
@@ -167,6 +169,7 @@ ep_overlap=${MOE_A2A_OVERLAP}
 route_trace_raw_preserved=${PRESERVE_ROUTE_TRACE_RAW}
 harvest_parallelism=${HARVEST_PARALLELISM}
 fail_fast_grace_seconds=${FAIL_FAST_GRACE_SECONDS}
+efa_module_version_required=${EFA_MODULE_VERSION_REQUIRED}
 expected_dispatcher=${EXPECTED_DISPATCHER}
 expected_backend=${EXPECTED_BACKEND}
 run_kind=${RUN_KIND}
@@ -256,6 +259,9 @@ spec:
       args:
         - >-
           set -o pipefail;
+          actual_efa_module_version="\$(cat /sys/module/efa/version 2>/dev/null || true)";
+          printf 'EFA_MODULE_VERSION actual=%s required=%s\n' "\${actual_efa_module_version}" "\${EFA_MODULE_VERSION_REQUIRED}";
+          [[ "\${actual_efa_module_version}" = "\${EFA_MODULE_VERSION_REQUIRED}" ]] || { printf 'EFA_MODULE_VERSION_MISMATCH actual=%s required=%s\n' "\${actual_efa_module_version}" "\${EFA_MODULE_VERSION_REQUIRED}" >&2; exit 86; };
           python3 -c 'import json,os; p=json.load(open("/opt/benchmark/backend.json")); assert p["ep_arm"]==os.environ["EP_ARM"],p';
           cp /opt/benchmark/backend.json /run-artifacts/backend.json;
           cp /opt/benchmark/common-build-manifest.json /run-artifacts/common-build-manifest.json;
@@ -299,6 +305,7 @@ spec:
         - {name: RUN_INPUT_JSON_B64, value: "${RUN_INPUT_JSON_B64}"}
         - {name: ROUTER_TRACE_DIR, value: "/run-artifacts/router-trace"}
         - {name: PRESERVE_ROUTE_TRACE_RAW, value: "${PRESERVE_ROUTE_TRACE_RAW}"}
+        - {name: EFA_MODULE_VERSION_REQUIRED, value: "${EFA_MODULE_VERSION_REQUIRED}"}
         - {name: FI_PROVIDER, value: "efa"}
         - {name: FI_EFA_USE_DEVICE_RDMA, value: "1"}
         - {name: NCCL_DEBUG, value: "INFO"}
