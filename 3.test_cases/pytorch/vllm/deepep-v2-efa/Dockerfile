@@ -79,10 +79,15 @@ ENV LD_LIBRARY_PATH=/opt/aws-ofi-nccl/lib:${LD_LIBRARY_PATH}
 # ---- Layer 5: vLLM (pinned wheel = the first commit with the deepep_v2 backend, PR#41183) ----
 # The wheel FILENAME is derived from the per-commit index at build time, so bumping
 # VLLM_SHA ALONE is sufficient (hardcoding the filename would embed the SHA twice and a
-# lone bump 404s — the exact edit the README recommends once vLLM #52632 merges).
+# lone bump 404s).
 # NOTE: wheels.vllm.ai nightly wheels are garbage-collected upstream, so this pin has a
 # shelf life independent of this repo; the fail-loud check below names that cause.
-ARG VLLM_SHA=e2f993dc4116ba96ea10ec40b7bd2ee45b27b2b8
+# Pin is now on vLLM main at the merge commit of #52632 (merged 2026-08-20), the
+# empty-ExpertTokensMetadata guard that unblocks default (CUDA-graph) compilation; this
+# commit also carries #47785 (shared-experts -1 sentinel fix, merged earlier). This is
+# the "bump the pin past #52632" edit the README describes. Was e2f993dc (PR#41183's
+# first deepep_v2 backend commit); wheel for the new SHA verified indexed 2026-08-25.
+ARG VLLM_SHA=14617c2b6c1257ac0d6c7b5e05b195ca30013827
 RUN WHEEL_HREF=$(curl -fsSL "https://wheels.vllm.ai/${VLLM_SHA}/vllm/" | grep -oE 'href="[^"]*manylinux[^"]*x86_64\.whl"' | head -1 | cut -d'"' -f2) \
     && { [ -n "$WHEEL_HREF" ] || { echo "FATAL: no x86_64 vllm wheel indexed for ${VLLM_SHA} (bad SHA, or nightly wheel garbage-collected upstream)"; exit 1; }; } \
     && pip3 install --no-cache-dir "https://wheels.vllm.ai/${VLLM_SHA}/$(basename "$WHEEL_HREF")" \

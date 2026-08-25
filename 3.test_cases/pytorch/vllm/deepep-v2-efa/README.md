@@ -35,7 +35,7 @@ non-obvious integration fixes, not config:
 | Mode | Status | How |
 |---|---|---|
 | `--enforce-eager` | **Serves, zero extra patches** | the default this sample ships |
-| default compilation (CUDA graphs) | **Pending one upstream fix — no patch shipped here** | vLLM [#46404](https://github.com/vllm-project/vllm/pull/46404) + [#46432](https://github.com/vllm-project/vllm/pull/46432) are merged; the remaining piece is the empty-`ExpertTokensMetadata` guard, now filed upstream ([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)). Once it merges, bump the vLLM pin past it and serve without `--enforce-eager` — no build-time patch step. |
+| default compilation (CUDA graphs) | **Unblocked upstream — no patch shipped here** | vLLM [#46404](https://github.com/vllm-project/vllm/pull/46404) + [#46432](https://github.com/vllm-project/vllm/pull/46432) and the empty-`ExpertTokensMetadata` guard ([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632), merged 2026-08-20) are all in main. The `VLLM_SHA` pin is now on #52632's merge commit, so default compilation works without `--enforce-eager` and with no build-time patch step. |
 
 At stock `e2f993dc4` (the first commit with the `deepep_v2` backend), default compilation crashes
 deterministically ~48 s into startup in `profile_run` (`deepep_v2.py` combine). `--enforce-eager` avoids
@@ -102,8 +102,9 @@ that cannot hang for hours — run it before committing a node to the multi-hund
 SERVE_DP=16 bash recipe/serve.sh leader <leader-ip>       # on node 0
 SERVE_DP=16 bash recipe/serve.sh worker <leader-ip> 8     # on node 1
 ```
-Default compilation (CUDA graphs) is not enabled in this sample until the upstream guard
-([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)) merges; then bump the vLLM pin past it and drop `--enforce-eager` — no patch step.
+Default compilation (CUDA graphs) works with the shipped pin: the upstream guard
+([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)) merged 2026-08-20 and the `VLLM_SHA`
+pin is now on its merge commit, so you can drop `--enforce-eager` — no patch step.
 Kubernetes: `kubectl apply -f kubernetes/` (2-node StatefulSet + headless service; the proxy-Gin env
 contract + EFA device requests are set there).
 
@@ -124,10 +125,11 @@ eager and non-eager tables + environment provenance.
 - Measured on **H200 (p5en) only**; no Blackwell serving run is in this sample.
 - The `benchmarks/` numbers are an **at-scale throughput + relative-latency** datapoint (fixed 128-token
   greedy decode, single sweep per mode), **not** a tuned per-token-latency (TTFT) baseline.
-- Default-compilation (non-eager) serving is deliberately **not shipped** here: it requires the
-  empty-`ExpertTokensMetadata` guard now filed upstream ([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)). This sample carries **no
-  build-time patches** — when the guard merges, a vLLM pin bump enables non-eager with zero recipe changes.
-  The non-eager numbers in `benchmarks/` are historical measurements taken with that guard applied.
+- Default-compilation (non-eager) serving needs the empty-`ExpertTokensMetadata` guard
+  ([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632), merged 2026-08-20). This sample
+  carries **no build-time patches**: the `VLLM_SHA` pin is now on #52632's merge commit, so non-eager
+  works with zero recipe changes (drop `--enforce-eager`). The non-eager numbers in `benchmarks/` were
+  measured with that guard applied and remain representative.
 - Only a **Kubernetes** launcher is shipped and exercised (`kubernetes/`). No Slurm/Pyxis `.sbatch` is
   provided because none was run; the raw two-node `recipe/serve.sh` path is the manual fallback.
 - `setup_deepep_v2_efa.sh` is first-party-authored for the V2 / NCCL-GIN path and is deliberately
