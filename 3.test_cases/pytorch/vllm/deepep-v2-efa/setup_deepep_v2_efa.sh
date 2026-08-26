@@ -15,8 +15,15 @@ AWS_OFI_NCCL_REPO="${AWS_OFI_NCCL_REPO:-https://github.com/aws/aws-ofi-nccl.git}
 AWS_OFI_NCCL_SHA="${AWS_OFI_NCCL_SHA:-9c44d34476f90ddbf4a12d0ac4fc412d46bd8ab4}"  # GIN plugin, gdrdrv-2.4 v1-fallback baked
 AWS_OFI_NCCL_PR="${AWS_OFI_NCCL_PR:-1351}"                                       # OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY param
 AWS_OFI_NCCL_PR_SHA="${AWS_OFI_NCCL_PR_SHA:-c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b}"  # IMMUTABLE PR#1351 head (a bare refs/pull/N/head is a moving ref)
+# DeepEP source divergence from the canonical setup_deepep_gin.sh (deepep-v2-benchmark): the canonical
+# pins the amazon-contributing/DeepEP fork; this sample pins deepseek-ai/DeepEP@b306af06 + PR#612 — the
+# substrate the shipped H200 (sm_90) numbers were measured on. The cost is Blackwell-only: the fork
+# carries the st.bulk 64-bit-operand fix (amazon-contributing/DeepEP#3, merged 2026-08-24) that makes
+# CUDA 13.0 codegen work on p6/Blackwell; this pin does not, so the manifest's DEEPEP_ARCH_LIST=10.x
+# knobs are documented-not-verified (README "Known limitations"). To enable Blackwell, set
+# DEEPEP_REPO=https://github.com/amazon-contributing/DeepEP.git + a fork SHA and re-verify on p6.
 DEEPEP_REPO="${DEEPEP_REPO:-https://github.com/deepseek-ai/DeepEP.git}"
-DEEPEP_SHA="${DEEPEP_SHA:-b306af06afd412c88e51e71802951606e40b7358}"            # measured substrate base
+DEEPEP_SHA="${DEEPEP_SHA:-b306af06afd412c88e51e71802951606e40b7358}"            # measured substrate base (H200 sm_90)
 DEEPEP_PR="${DEEPEP_PR:-612}"                                                    # EFA auto-QP cap
 DEEPEP_PR_SHA="${DEEPEP_PR_SHA:-28d1f7fb173f728be51632ce0026fea23243e350}"       # IMMUTABLE PR#612 head (moving-ref trap)
 

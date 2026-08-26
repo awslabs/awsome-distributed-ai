@@ -5,7 +5,7 @@ export IMAGE_NAME="vllm-deepep-v2-efa"
 # Immutable tag — never "latest": with the manifest's imagePullPolicy: IfNotPresent, a
 # node that cached "latest" silently keeps running the OLD image after a rebuild-and-push.
 # Bump the tag on every rebuild (date or git SHA both work).
-export IMAGE_TAG="v1-20260818"
+export IMAGE_TAG="v2-20260825"   # postdates the 2026-08-20 VLLM_SHA bump to #52632; keep in sync with kubernetes/ image:
 export AWS_REGION="us-east-2"
 # aws-ofi-nccl PR#1351 (OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY param) is pinned at its immutable
 # head SHA in the Dockerfile. Set a real alternate SHA here ONLY to test a newer PR head —

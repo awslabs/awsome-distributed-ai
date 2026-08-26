@@ -79,7 +79,7 @@ RUN chmod +x /opt/setup_deepep_v2_efa.sh \
        /opt/setup_deepep_v2_efa.sh
 ENV LD_LIBRARY_PATH=/opt/aws-ofi-nccl/lib:${LD_LIBRARY_PATH}
 
-# ---- Layer 5: vLLM (pinned wheel = the first commit with the deepep_v2 backend, PR#41183) ----
+# ---- Layer 5: vLLM (pinned wheel = vLLM #52632's merge commit — the empty-ExpertTokensMetadata guard that unblocks default compilation) ----
 # The wheel FILENAME is derived from the per-commit index at build time, so bumping
 # VLLM_SHA ALONE is sufficient (hardcoding the filename would embed the SHA twice and a
 # lone bump 404s).

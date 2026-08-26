@@ -11,7 +11,7 @@ tok/s + per-request latency percentiles. Raw JSONL lands in `raw/` (gitignored).
 | Instance | 2× p5en.48xlarge (H200), cross-node EFA |
 | Transport | DeepEP-V2 `ElasticBuffer`, NCCL-GIN CPU-proxy (`NCCL_GIN_TYPE=2`, `OFI_NCCL_GIN_GDAKI=0`), `efa-direct` |
 | Model | `Qwen/Qwen3-30B-A3B-FP8`, DP16/EP16 (`--enable-expert-parallel --all2all-backend deepep_v2`) |
-| vLLM | `0.22.1rc1.dev283+ge2f993dc4` (first commit with the `deepep_v2` backend, [PR#41183](https://github.com/vllm-project/vllm/pull/41183)) |
+| vLLM | measured on `0.22.1rc1.dev283+ge2f993dc4` (first commit with the `deepep_v2` backend, [PR#41183](https://github.com/vllm-project/vllm/pull/41183)). **The shipped `Dockerfile` now pins `14617c2b` = `0.26.1rc1.dev1000+g14617c2b6`** (vLLM [#52632](https://github.com/vllm-project/vllm/pull/52632)'s merge commit) — four minor versions newer, so a rebuild will not reproduce these tables. |
 | Stack | torch 2.11.0+cu130, nvidia-nccl-cu13 2.30.4, DeepEP `b306af06`+PR#612, aws-ofi-nccl GIN `9c44d34`+#1351 |
 | Serve fingerprint | `vllm-0.22.1rc1.dev283+ge2f993dc4-dp16-ep-1f3ed125` |
 | Probe | stdlib urllib+threads, 127.0.0.1 loopback, `max_tokens=128`, `temperature=0.0` (greedy), concurrency 1/8/16/32/64, **one shot per level** (N requests at concurrency N), identical prompt every request |
@@ -30,19 +30,23 @@ since been upgraded — see below — so a re-run will NOT reproduce these table
 The current `recipe/benchmark_probe.py` fixes all three (5× requests per level so percentiles are
 distributions; a unique prompt prefix per request so prefix-cache can't serve prefill;
 `ignore_eos: true` pinning tokens = `max_tokens`; failures excluded from percentiles/throughput and
-failing the run). Numbers from the new probe are comparable in shape but not byte-identical to
-these tables.
+failing the run). The new probe changes the sample count, the cache behaviour and the decode length,
+so the measured population differs — its numbers are **not directly comparable** to these tables;
+re-measure before quoting.
 
 ## Results
 
 **What these tables are:** one concurrency sweep of the same backend per mode — the two endpoints
-of each sweep are NOT a before/after comparison. The server never reaches saturation in either
-sweep: per-stream rate stays pinned at ~4.75 tok/s while aggregate scales ≈ concurrency × constant
-(4.8 → 301.8 tok/s for 64× concurrency with wall flat at ~27 s). Read the numbers as the
-**DeepEP-V2-over-EFA per-stream latency floor at each concurrency**, not as a throughput ceiling —
-a saturation point was never measured (concurrency was not pushed until wall time rose).
+of each sweep are NOT a before/after comparison. In the **eager** sweep per-stream rate stays pinned
+at ~4.75 tok/s while aggregate scales ≈ concurrency × constant (4.8 → 301.8 tok/s for 64× concurrency
+with wall flat at ~27 s), so no saturation point is reached. The **non-eager** sweep does show a
+wall-time rise at `conc=64` (26.61 → 34.18 s; per-stream 3.75 tok/s) — the one place in either sweep
+where the server is visibly under strain — while still stopping short of a measured saturation point.
+Read the numbers as the **DeepEP-V2-over-EFA per-stream latency floor at each concurrency**, not as a
+throughput ceiling — a saturation point was never measured (concurrency was not pushed until wall
+time rose across the whole sweep).
 
-### Eager (`--enforce-eager`) — 121/121 HTTP 200 (sweep = 1+8+16+32+64 requests)
+### Eager (`--enforce-eager`; historical — measured on the previous pin `e2f993dc4`, not the shipped `14617c2b`) — 121/121 HTTP 200 (sweep = 1+8+16+32+64 requests)
 | conc | agg tok/s | wall s | p50 s | codes |
 |---|---|---|---|---|
 | 1 | 4.8 | 26.91 | 26.91 | 200 |
