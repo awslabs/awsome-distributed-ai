@@ -25,10 +25,22 @@ Dispatcher selection (MOE_DISPATCHER):
             (Megatron-LM#4632); train-step.sh refuses it on an unpatched
             image rather than failing with a distant import error.
 
-Every rank sees the same synthetic batch, so data-parallel gradient
-all-reduce would be a mathematical no-op — the loop deliberately runs without
-a DDP wrapper to stay independent of megatron's DDP config API, and the
-cross-rank loss-agreement gate (2) is what makes that sound.
+The loop deliberately runs without megatron's DDP wrapper (to stay independent
+of its DDP config API) but reproduces the two things DDP does that this gate
+needs, restricted to the REPLICATED (non-expert) params:
+  - at construction, broadcast them from rank 0 — megatron inits the router
+    weight and position embeddings under a per-rank-varying RNG context
+    (measured ~1.5e-1 cross-rank divergence at step 0);
+  - each step, all-reduce (average) their gradients — with the same batch this
+    is NOT a no-op for replicated params, because each rank backprops through
+    DIFFERENT local experts, so the shared router receives different per-rank
+    gradients and would re-diverge every step (measured spread 5.7e-4 -> 8.9e-3
+    over 3 steps without the sync).
+Expert params are deliberately left per-rank distinct at init and their
+gradients are NOT reduced — that asymmetry is expert parallelism itself. With
+replicated params in lock-step and the same batch, gate (2) cross-rank loss
+agreement is a true transport test at any step count: a rank whose dispatched
+tokens were corrupted in the MoE all-to-all disagrees, a correct one does not.
 """
 import os
 import sys
@@ -92,9 +104,32 @@ def main():
         moe_enable_deepep=(DISPATCHER == "flex"),
         expert_model_parallel_size=ep_size,
         add_bias_linear=False,
-        params_dtype=torch.bfloat16,
-        pipeline_dtype=torch.bfloat16,
-        bf16=True,
+        # Dropout OFF. This is a transport-DETERMINISM gate: gate 2 asserts every rank
+        # computes the SAME loss from the SAME seeded batch after the MoE all-to-all
+        # round-trip. hidden/attention dropout default to 0.1 and inject per-rank-random
+        # masks (the divergence compounds through weight updates: measured cross-rank
+        # spread grew 0.07 -> 0.15 -> 0.47 over 3 steps with dropout on), which defeats
+        # that invariant without indicating any transport fault. moe_input_jitter and
+        # aux-loss are already off by default, so with dropout off the router decision and
+        # expert compute are deterministic and a correct all-to-all yields bit-consistent
+        # cross-rank loss (modulo FP-reduction noise, well under the 1e-2 gate).
+        hidden_dropout=0.0,
+        attention_dropout=0.0,
+        # fp32 throughout — this is a transport-correctness gate, not a fidelity run.
+        # The megatron `local` layer spec (get_gpt_layer_local_spec, chosen to keep this
+        # driver free of megatron's TE/DDP wrapper machinery) emits fp32 LayerNorm
+        # activations; with bf16 params the router's te_general_gemm then sees a
+        # bf16-weight x fp32-input GEMM, which this NGC base's TransformerEngine cuBLASLt
+        # build rejects ("unsupported value or parameter") regardless of moe_router_dtype
+        # (measured: moe_utils RouterGatingLinearFunction always takes the TE path for any
+        # router_dtype != fp64). fp32 params make every GEMM (fp32,fp32,fp32) — proven to
+        # run fwd+bwd+opt here — and NCCL/DeepEP all-to-all is dtype-agnostic (DeepEP even
+        # requires fp32 probs), so fp32 exercises the same transport path a bf16 run would
+        # while making the cross-rank loss-agreement gate exact (no bf16 rounding near the
+        # 1e-2 threshold). A bf16 run would instead need the TE layer spec, pulling in the
+        # megatron wrapper machinery this driver deliberately avoids.
+        params_dtype=torch.float32,
+        pipeline_dtype=torch.float32,
         use_cpu_initialization=False,
     )
     model = GPTModel(
@@ -105,6 +140,20 @@ def main():
     ).to(dev)
     n_params = sum(p.numel() for p in model.parameters())
     log(f"model up: {n_params/1e6:.1f}M params on this rank")
+
+    # Sync REPLICATED params from rank 0 (what DDP does at construction; this driver
+    # is deliberately DDP-free — see docstring). Megatron's default RNG tracker seeds
+    # most replicated params identically, but the router weight and position embeddings
+    # init under a per-rank-varying RNG context — MEASURED cross-rank divergence 1.5e-1
+    # (router.weight) / 1.6e-1 (position_embeddings) at step 0, before any update. Left
+    # unsynced, ranks route the same batch differently and gate 2 false-fails on a fully
+    # correct image + transport. Broadcast makes gate 2's invariant hold AND keeps it a
+    # real transport test (a corrupted all-to-all still diverges the combined output ->
+    # loss). Expert params (.experts./.local_experts.) are correctly left per-rank
+    # distinct — that asymmetry IS expert parallelism.
+    for name, p in model.named_parameters():
+        if ".experts." not in name and ".local_experts." not in name:
+            dist.broadcast(p.data, src=0)
 
     # Same seeded batch on every rank — see the module docstring for why that
     # makes the DDP-less loop sound and turns loss agreement into a gate.
@@ -117,13 +166,31 @@ def main():
     ).unsqueeze(0).unsqueeze(0)
     labels = torch.roll(tokens, shifts=-1, dims=1)
 
+    # Partition params once: replicated (kept in lock-step across ranks, DDP-style) vs
+    # expert (per-rank distinct — expert parallelism). Same split as the init broadcast.
+    replicated_params = [p for n, p in model.named_parameters()
+                         if ".experts." not in n and ".local_experts." not in n]
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
     losses = []
     for step in range(STEPS):
         optimizer.zero_grad(set_to_none=True)
+        # fp32 model (see config) — no autocast needed; every linear sees fp32 x fp32.
         per_token_loss = model(tokens, position_ids, attention_mask, labels=labels)
         loss = per_token_loss.float().mean()
         loss.backward()
+        # All-reduce (average) gradients of REPLICATED params — the other half of what
+        # DDP does. The original "same batch => grad all-reduce is a no-op" premise is
+        # FALSE for these: each rank backprops through DIFFERENT local experts, so the
+        # shared router/embeddings receive different gradients per rank. Left unsynced the
+        # router re-diverges after every step (MEASURED: cross-rank spread grew
+        # 5.7e-4 -> 8.9e-3 over 3 steps without this). Syncing keeps replicated params
+        # bit-identical across ranks at every step, so gate 2 stays a tight transport test
+        # regardless of TRAIN_STEPS, and the loss decrease is a true synchronized-train
+        # decrease. Expert grads are deliberately NOT reduced — that is expert parallelism.
+        for p in replicated_params:
+            if p.grad is not None:
+                dist.all_reduce(p.grad, op=dist.ReduceOp.AVG)
         optimizer.step()
         losses.append(loss.item())
         # gate 2: cross-rank agreement (same batch => same loss on every rank)

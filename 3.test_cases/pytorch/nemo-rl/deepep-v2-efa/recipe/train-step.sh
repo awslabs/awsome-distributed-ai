@@ -12,7 +12,7 @@
 # TRAIN_STEPS (default 3), EP_EXPERTS/EP_TOPK/EP_HIDDEN (see env_vars.example).
 set -uo pipefail
 
-ROLE="${1:?usage: train-step.sh {leader|worker} <leader-ip> [node-rank]}"
+ROLE="${1:?usage: train-step.sh leader|worker <leader-ip> [node-rank]}"
 case "$ROLE" in leader|worker) ;; *) echo "FATAL: unrecognized role '$ROLE' (leader|worker)"; exit 2 ;; esac
 LEADER_IP="${2:?need leader ip}"
 if [ "$ROLE" = "worker" ]; then NODE_RANK_ARG="${3:?worker requires an explicit node-rank (1,2,...)}"; else NODE_RANK_ARG=0; fi
