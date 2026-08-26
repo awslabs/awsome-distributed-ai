@@ -19,12 +19,11 @@
 set -euo pipefail   # -e: preflight failures below must STOP the launch, not fall through to trtllm-serve
 
 # ---- NCCL-GIN proxy + EFA env contract (identical to the measured runs + deploy YAML) ----
-export NCCL_GIN_TYPE=2 NCCL_GIN_ENABLE=1 OFI_NCCL_GIN_GDAKI=0 OFI_NCCL_GIN_MAX_REQUESTS=512
+export NCCL_GIN_TYPE=2 NCCL_GIN_ENABLE=1   # 2 = CPU-proxy GIN, the EFA-viable GIN mode
 export NCCL_CUMEM_ENABLE=1 NCCL_NVLS_ENABLE=0 NCCL_IGNORE_DISABLED_P2P=1
 export FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_FORK_SAFE=1
 export OFI_NCCL_PROTOCOL=RDMA
 export NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
-export OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1   # aws-ofi-nccl PR#1351: forced-PCIe on gdrdrv-2.4-kernel nodes
 export NCCL_DEBUG=${SERVE_NCCL_DEBUG:-WARN}  # INFO to see the efa-direct banner proof
 
 # ---- NcclEP selection — the point of this sample ----
@@ -56,15 +55,25 @@ export HUGGINGFACE_HUB_CACHE=${HUGGINGFACE_HUB_CACHE:-$HF_HOME/hub}
 mkdir -p "$HUGGINGFACE_HUB_CACHE"
 
 # ---- lib path: pip NCCL 2.30.4 first (the container's baked NCCL must NOT win) ----
+# No `2>/dev/null || true`: that swallowed every failure, left NCCL_LIB empty, silently
+# dropped the "pip NCCL wins" contract (README trap 3), and put a leading empty element on
+# LD_LIBRARY_PATH (the loader then searches $PWD first). Fail loud instead — the whole
+# sample depends on this resolving, and the downstream symptom otherwise misdirects
+# ("nccl-ep is not installed" points at nccl4py when the real cause is a lost lib path).
 NCCL_LIB="$(python3 -c 'import importlib.util,os
 s=importlib.util.find_spec("nvidia.nccl")
 p=(s.submodule_search_locations[0] if s and s.submodule_search_locations else None)
-print(os.path.join(p,"lib") if p else "")' 2>/dev/null || true)"
+print(os.path.join(p,"lib") if p else "")')"
+: "${NCCL_LIB:?could not locate the pip nvidia-nccl-cu13 lib dir — NcclEP needs it first on LD_LIBRARY_PATH (README trap 3)}"
 export LD_LIBRARY_PATH="${NCCL_LIB}:/opt/aws-ofi-nccl/lib:/opt/amazon/efa/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 export PATH=/opt/amazon/efa/bin:$PATH
 
 # ---- scale + model (defaults = the measured single-node EP8 shape) ----
 SERVE_MODEL="${SERVE_MODEL:-Qwen/Qwen3-30B-A3B}"
+# --trust_remote_code executes arbitrary repo Python in a privileged root container, so pin
+# WHAT executes: SERVE_REVISION (a commit SHA/tag) makes the model an immutable artifact like
+# every other pin here, instead of "whatever main points at today". Empty = HF default branch.
+SERVE_REVISION="${SERVE_REVISION:-}"
 SERVE_TP="${SERVE_TP:-8}"
 SERVE_EP="${SERVE_EP:-8}"
 SERVE_HOST="${SERVE_HOST:-0.0.0.0}"
@@ -78,11 +87,12 @@ SERVE_KV_FRACTION="${SERVE_KV_FRACTION:-0.5}"
 # Qwen3 family=128 (ok 8/16/32), DeepSeek-V3/R1=256 (ok), Qwen1.5-MoE=60 (FAILS 8/16).
 # Reads the model's config.json via huggingface_hub.
 if [ "${SKIP_EP_PREFLIGHT:-0}" != "1" ]; then
-  python3 - "$SERVE_MODEL" "$SERVE_EP" <<'PY' || exit 3
+  python3 - "$SERVE_MODEL" "$SERVE_EP" "$SERVE_REVISION" <<'PY' || exit 3
 import json, sys
 from huggingface_hub import hf_hub_download
 model, ep = sys.argv[1], int(sys.argv[2])
-cfg = json.load(open(hf_hub_download(model, "config.json")))
+rev = sys.argv[3] or None   # validate the SAME pinned revision the serve will run
+cfg = json.load(open(hf_hub_download(model, "config.json", revision=rev)))
 n = cfg.get("n_routed_experts") or cfg.get("num_experts")
 assert n, f"{model}: no n_routed_experts/num_experts in config.json — not a routed-MoE model?"
 assert n % ep == 0, (f"EP-DIVISIBILITY GATE FAILED: {model} has {n} routed experts, "
@@ -108,6 +118,7 @@ python3 -c "import nccl.ep; print('nccl.ep OK (nccl4py)')"
 # --trust_remote_code: MoE models whose HF repos ship modeling code (DeepSeek family) need
 # it; a SERVE_MODEL you do not trust should not be pointed at this serve.
 exec trtllm-serve "$SERVE_MODEL" \
+  ${SERVE_REVISION:+--revision "$SERVE_REVISION"} \
   --host "$SERVE_HOST" --port "$SERVE_PORT" \
   --tp_size "$SERVE_TP" --ep_size "$SERVE_EP" --pp_size 1 \
   --max_batch_size "$SERVE_MAX_BATCH_SIZE" --max_num_tokens "$SERVE_MAX_NUM_TOKENS" \

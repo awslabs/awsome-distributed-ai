@@ -27,7 +27,10 @@ docker run --rm --gpus all "${DEV_ARGS[@]}" -e HAVE_EFA_DEV="${HAVE_EFA_DEV}" "$
     echo "   (run this script on an EFA host for the live efa-direct fabric check)"
   fi
   echo "== single libnccl 2.30.4 wins (path + version string — the NGC base bakes an older NCCL in a DIFFERENT dir, so path matters) =="
-  NCCL_SO=$(ldconfig -p | grep "libnccl.so.2 " | head -1 | awk "{print \$NF}")
+  # draining form (awk NR==1, no `head`): `head -1` closes the pipe after one line, so grep
+  # takes SIGPIPE-141 under pipefail — worst exactly when there are 2+ libnccl entries (the
+  # baked-shadows-pip case this check exists to catch). Same trap the Dockerfile calls out.
+  NCCL_SO=$(ldconfig -p | grep "libnccl.so.2 " | awk "NR==1{print \$NF}")
   echo "$NCCL_SO" | grep -q "nvidia/nccl" || { echo "FAIL: baked libnccl shadows pip ($NCCL_SO)"; exit 1; }
   [ "$(strings "$NCCL_SO" | grep -c "NCCL version 2.30.4")" -ge 1 ] || { echo "FAIL: $NCCL_SO is not 2.30.4 — NcclEP is_nccl_ep_installed() gates on >= 2.30.4"; exit 1; }
   echo "== GIN plugin symbol =="; [ "$(nm -D /opt/aws-ofi-nccl/lib/libnccl-net-ofi.so | grep -c ncclGinPlugin)" -ge 1 ] || { echo "FAIL: no ncclGinPlugin"; exit 1; }

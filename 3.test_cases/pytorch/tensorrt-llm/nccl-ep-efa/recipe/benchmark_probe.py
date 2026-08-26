@@ -24,9 +24,15 @@ URL = "http://127.0.0.1:8000/v1/chat/completions"
 MODEL = os.environ.get("SERVE_MODEL", "Qwen/Qwen3-30B-A3B")
 MAX_TOKENS = 128
 PROMPT = "Explain expert parallelism in mixture-of-experts models in two sentences."
-CONCURRENCIES = [1, 2, 4]  # sized to the measured serve shape (--max_batch_size 4); raise
-                           # SERVE_MAX_BATCH_SIZE/SERVE_MAX_NUM_TOKENS before sweeping higher
+CONCURRENCIES = [int(c) for c in os.environ.get("BENCH_CONCURRENCIES", "1,2,4").split(",")]
+                           # sized to the measured serve shape (--max_batch_size 4); raise
+                           # SERVE_MAX_BATCH_SIZE/SERVE_MAX_NUM_TOKENS before sweeping higher.
+                           # Env-read (not a module constant) so a higher sweep needs no image
+                           # rebuild — the file is baked at /opt/benchmark_probe.py.
 NREQ_MULT = 5  # requests per level = conc * this (>=5x so p50/p90 are distributions)
+WARMUP = 3     # discarded requests before the FIRST measured level: level 0 otherwise absorbs
+               # lazy CUDA module load / allocator growth / tokenizer init as ~20% of its n=5
+               # sample, inflating its percentiles and making the sweep look superlinear
 
 def one_request(url, idx):
     body = json.dumps({
@@ -49,7 +55,14 @@ def one_request(url, idx):
         if not usage or "completion_tokens" not in usage:
             # a 200 without usage is a malformed success — surface it, don't count 0 tokens
             return (False, dt, 0, "200-no-usage")
-        return (True, dt, usage["completion_tokens"], 200)
+        ct = usage["completion_tokens"]
+        if ct != MAX_TOKENS:
+            # ignore_eos is supposed to pin completion_tokens == MAX_TOKENS ("fixed denominator
+            # by construction"). CHECK it rather than assert it in prose: an endpoint that
+            # accepts the field but honours it loosely would otherwise book a short generation
+            # as a success with a variable numerator, quietly deflating tok/s.
+            return (False, dt, ct, f"short-gen-{ct}")
+        return (True, dt, ct, 200)
     except urllib.error.HTTPError as e:
         return (False, time.time() - t0, 0, e.code)
     except Exception as e:
@@ -63,12 +76,17 @@ def pct(xs, p):
     f = int(k)
     return xs[f] if f + 1 >= len(xs) else xs[f] + (xs[f + 1] - xs[f]) * (k - f)
 
-def sweep(conc, url, nreq_mult):
+def sweep(conc, url, nreq_mult, base_idx):
+    # base_idx makes the prompt index MONOTONIC across levels: with a per-level range(n)
+    # the index restarts at 0 every level, so a prefix/KV cache warmed by level i serves
+    # level i+1's prefills for free — defeating the "unique prefix per request" control the
+    # methodology relies on. A run-global counter keeps uniqueness across the axis the sweep
+    # exists to compare, not just within a level.
     n = conc * nreq_mult
     t0 = time.time()
     lat, toks, ok, codes = [], [], 0, {}
     with ThreadPoolExecutor(max_workers=conc) as ex:
-        futs = [ex.submit(one_request, url, i) for i in range(n)]
+        futs = [ex.submit(one_request, url, base_idx + i) for i in range(n)]
         for fu in as_completed(futs):
             success, dt, ct, code = fu.result()
             if success:
@@ -94,16 +112,30 @@ if __name__ == "__main__":
     ap.add_argument("--requests-per-level-mult", type=int, default=NREQ_MULT,
                     help=f"requests per level = concurrency x this (default {NREQ_MULT})")
     args = ap.parse_args()
+    # floor the multiplier: at 0 every level sends n=0, the final all(ok==n) gate is 0==0
+    # (vacuously true), and the probe exits 0 having never touched the endpoint — which
+    # silently breaks the "exit code is the sole pass/fail authority" contract.
+    if args.requests_per_level_mult < 1:
+        ap.error("--requests-per-level-mult must be >= 1 (0 sends no requests and false-passes)")
 
     print("=== trtllm-serve NcclEP live-serve throughput probe ===")
     print(f"url={args.url} model={MODEL} max_tokens={MAX_TOKENS} (ignore_eos) "
-          f"requests/level={args.requests_per_level_mult}x concurrency")
+          f"requests/level={args.requests_per_level_mult}x concurrency warmup={WARMUP}")
     print(f"{'conc':>5} {'n':>5} {'ok':>5} {'wall_s':>7} {'out_tok':>8} {'agg_tok/s':>10} {'p50_s':>7} {'p90_s':>7} {'p99_s':>7} codes")
     rows = []
+    # run-global monotonic index (warmup requests consume the first WARMUP ids so the first
+    # measured request is still unique against them too).
+    base_idx = 0
+    # discarded warmup so level 0 does not absorb lazy CUDA load / tokenizer init as ~20% of
+    # its sample — fired serially, results ignored, but the ids are still spent (uniqueness).
+    for _ in range(WARMUP):
+        one_request(args.url, base_idx)
+        base_idx += 1
     out_fh = open(args.out, "w") if args.out else None
     try:
         for c in CONCURRENCIES:
-            r = sweep(c, args.url, args.requests_per_level_mult)
+            r = sweep(c, args.url, args.requests_per_level_mult, base_idx)
+            base_idx += r["n"]
             rows.append(r)
             print(f"{r['conc']:>5} {r['n']:>5} {r['ok']:>5} {r['wall_s']:>7} {r['total_out_tok']:>8} "
                   f"{r['agg_tok_s']:>10} {r['lat_p50_s']:>7} {r['lat_p90_s']:>7} {r['lat_p99_s']:>7} {r['codes']}")

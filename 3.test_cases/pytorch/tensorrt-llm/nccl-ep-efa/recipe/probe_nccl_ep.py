@@ -25,9 +25,11 @@ import traceback
 import torch
 import torch.distributed as dist
 
-RANK = int(os.environ["RANK"])
-WORLD = int(os.environ["WORLD_SIZE"])
-LOCAL = int(os.environ["LOCAL_RANK"])
+# RANK/WORLD/LOCAL are the one required (torchrun-set) trio; they are read inside
+# main() — under the bottom try/except — so a run outside torchrun surfaces as PROBE-EXC
+# rather than a bare KeyError traceback. -1 sentinels keep log()/the except usable if the
+# read never happened. The EP_* knobs below use .get() defaults, so they cannot KeyError.
+RANK = WORLD = LOCAL = -1
 
 E = int(os.environ.get("EP_EXPERTS", "128"))
 TOK = int(os.environ.get("EP_TOKENS", "128"))
@@ -59,6 +61,10 @@ def install_mpi_shim():
             return dist.get_world_size()
 
         def Split(self, color, key):
+            # Returns the world communicator, valid ONLY while ep_size == world_size (this
+            # probe's shape — see build_model_config's moe_ep_size=WORLD): the EP group then
+            # IS the world group. At any shape where ep_size < world_size this would silently
+            # build the wrong group; the probe would need a real color-keyed split first.
             return self
 
         def bcast(self, obj, root=0):
@@ -120,11 +126,28 @@ def build_model_config(mapping):
 
 
 def main():
+    global RANK, WORLD, LOCAL
+    # Read the torchrun-set trio here (not at module scope) so a run outside torchrun
+    # surfaces as PROBE-EXC via the bottom handler, not a bare KeyError at import.
+    RANK = int(os.environ["RANK"])
+    WORLD = int(os.environ["WORLD_SIZE"])
+    LOCAL = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(LOCAL)
     dist.init_process_group("nccl", rank=RANK, world_size=WORLD)
     dev = torch.device("cuda", LOCAL)
     os.environ.setdefault("NCCL_EP_NUM_QP_PER_RANK", str(NUM_QP))
     log(f"probe start world={WORLD} algo={os.environ.get('TRTLLM_NCCL_EP_ALGO', '(upstream default)')}")
+
+    # EP requires the experts to shard evenly across ranks. At an indivisible world size
+    # (e.g. a 3-node run, WORLD=24, E=128) the E//WORLD floor orphans the tail experts:
+    # tokens still route to them, their contributions never enter moe_out, and the probe
+    # would report a false PROBE-MISMATCH on a healthy fabric. E and WORLD are rank-invariant
+    # (env default + torchrun), so this fires identically on every rank — no split-hang — and
+    # also guards the expert_size_per_partition=E//WORLD arg handed to the factory below.
+    assert E % WORLD == 0, (
+        f"EP_EXPERTS={E} must be divisible by world size {WORLD} "
+        f"({E % WORLD} experts would be orphaned) — pick nodes×8 that divides {E}"
+    )
 
     install_mpi_shim()
 
@@ -163,8 +186,16 @@ def main():
         expert_size_per_partition=E // WORLD,
     )
     log(f"PROBE-SELECTED type={type(strategy).__name__}")
-    if not isinstance(strategy, NcclEP):
-        log(f"PROBE-FAIL factory returned {type(strategy).__name__}, not NcclEP")
+    # Agree the selection verdict across ranks BEFORE any rank returns: the factory's
+    # feasibility gate (_get_nccl_ep_unavailable_reason's per-device shared-memory check)
+    # and NcclEP.__init__'s is_nccl_ep_installed() are per-rank evaluations that a
+    # heterogeneous node or a divergent library path can split. A bare per-rank return
+    # would leave the survivors blocked in the bootstrap collectives until torchrun's
+    # timeout — same all-reduce(MIN) contract the combine verdict below uses.
+    sel_ok = torch.tensor([1 if isinstance(strategy, NcclEP) else 0], device=dev, dtype=torch.int32)
+    dist.all_reduce(sel_ok, op=dist.ReduceOp.MIN)
+    if int(sel_ok.item()) != 1:
+        log(f"PROBE-FAIL factory returned {type(strategy).__name__}, not NcclEP (on this or a peer rank)")
         return 5
 
     ctx = strategy._get_context()
@@ -185,11 +216,16 @@ def main():
     # Exercise the factory-selected instance cross-node — selection alone does not
     # prove the group works, and the whole defect class here is a first-dispatch IMA.
     g = torch.Generator(device="cpu").manual_seed(4242 + RANK)
-    x = (torch.randn(TOK, H, generator=g, dtype=torch.float32) / 8.0).to(dev, torch.bfloat16)
-    slots = torch.stack([torch.randperm(E, generator=g)[:K] for _ in range(TOK)]).to(
-        dev, torch.int32
-    )
-    scales = torch.rand(TOK, K, generator=g, dtype=torch.float32).to(dev)
+    # Snapshot the oracle inputs on CPU FIRST, then hand independent device copies to
+    # dispatch. expect (below) is derived from these CPU snapshots, so a kernel that
+    # mutated its caller-owned inputs in place could not corrupt the reference and the
+    # result identically and still pass — the docstring's "CPU-derived oracle" is now literal.
+    x_cpu = (torch.randn(TOK, H, generator=g, dtype=torch.float32) / 8.0).to(torch.bfloat16)
+    slots_cpu = torch.stack([torch.randperm(E, generator=g)[:K] for _ in range(TOK)]).to(torch.int32)
+    scales_cpu = torch.rand(TOK, K, generator=g, dtype=torch.float32)
+    x = x_cpu.to(dev)
+    slots = slots_cpu.to(dev)
+    scales = scales_cpu.to(dev)
 
     recv_hs, _, recv_slots, recv_scales = strategy.dispatch(
         hidden_states=x,
@@ -220,8 +256,10 @@ def main():
     combined = strategy.combine(moe_out, all_rank_max_num_tokens=TOK)
     torch.cuda.synchronize()
 
-    fac = ((slots.to(torch.float32) + 1.0) / E) * scales
-    expect = x.to(torch.float32) * fac.sum(1, keepdim=True)
+    # Oracle from the CPU snapshots (not the tensors dispatch received), moved to device
+    # only for the comparison against the device-resident combined output.
+    fac = ((slots_cpu.to(torch.float32) + 1.0) / E) * scales_cpu
+    expect = (x_cpu.to(torch.float32) * fac.sum(1, keepdim=True)).to(dev)
     got = combined.to(torch.float32)
     relmax = ((got - expect).abs().max() / expect.abs().max().clamp_min(1e-6)).item()
     nz = int((got.abs().sum(1) > 0).sum())

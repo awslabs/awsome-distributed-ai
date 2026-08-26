@@ -24,15 +24,16 @@ PROBE="/opt/probe_nccl_ep.py"
 [ -f "$PROBE" ] || { echo "FAIL: $PROBE not in image — rebuild from the Dockerfile"; exit 3; }
 
 # ---- NCCL-GIN proxy + EFA contract, VERBATIM from serve.sh (same transport under test) ----
-export NCCL_GIN_TYPE=2 NCCL_GIN_ENABLE=1 OFI_NCCL_GIN_GDAKI=0 OFI_NCCL_GIN_MAX_REQUESTS=512
+export NCCL_GIN_TYPE=2 NCCL_GIN_ENABLE=1   # 2 = CPU-proxy GIN, the EFA-viable GIN mode
 export NCCL_CUMEM_ENABLE=1 NCCL_NVLS_ENABLE=0 NCCL_IGNORE_DISABLED_P2P=1
 export FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_FORK_SAFE=1
 export OFI_NCCL_PROTOCOL=RDMA
 export NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
-export OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1
 # ---- NcclEP selection (same knobs the serve exports) ----
 export TRTLLM_FORCE_COMM_METHOD=NCCL_EP
 export NCCL_EP_NUM_QP_PER_RANK="${NCCL_EP_NUM_QP_PER_RANK:-32}"
+export ENABLE_CONFIGURABLE_MOE=1   # match serve.sh: the correctness gate must exercise the
+                                   # SAME configurable-MoE path the serve runs, not a variant
 export TLLM_LOG_LEVEL=info   # TLLM_, not TRTLLM_ — the latter is silently ignored (README trap 1)
 export TRTLLM_NCCL_EP_ALGO="${TRTLLM_NCCL_EP_ALGO:-LOW_LATENCY}"
 if [ "$TRTLLM_NCCL_EP_ALGO" != "LOW_LATENCY" ] && [ ! -f /opt/.ht-flat-patch-applied ]; then
@@ -44,10 +45,14 @@ fi
 export NCCL_DEBUG=${KERNEL_TEST_NCCL_DEBUG:-INFO}   # INFO so the efa-direct banner prints = transport proof
 
 # ---- lib path: pip NCCL 2.30.4 first (the container's baked NCCL must NOT win) ----
+# Fail loud rather than swallow (see serve.sh): an empty NCCL_LIB would silently drop the
+# "pip NCCL wins" contract (README trap 3) and prepend an empty LD_LIBRARY_PATH element.
+# The :? guard fires even though set -e is off here (parameter expansion exits regardless).
 NCCL_LIB="$(python3 -c 'import importlib.util,os
 s=importlib.util.find_spec("nvidia.nccl")
 p=(s.submodule_search_locations[0] if s and s.submodule_search_locations else None)
-print(os.path.join(p,"lib") if p else "")' 2>/dev/null || true)"
+print(os.path.join(p,"lib") if p else "")')"
+: "${NCCL_LIB:?could not locate the pip nvidia-nccl-cu13 lib dir — NcclEP needs it first on LD_LIBRARY_PATH (README trap 3)}"
 export LD_LIBRARY_PATH="${NCCL_LIB}:/opt/aws-ofi-nccl/lib:/opt/amazon/efa/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 export PATH=/opt/amazon/efa/bin:$PATH
 
