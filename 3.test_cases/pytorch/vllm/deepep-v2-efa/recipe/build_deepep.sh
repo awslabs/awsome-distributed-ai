@@ -60,12 +60,18 @@ if [ -z "$FAST_BASE" ] && { [ -z "$CU13" ] || [ ! -x "$CU13/bin/nvcc" ]; }; then
   # is 13.0.88 -> the error. Pin runtime==13.0.88 too. (cccl 13.0.85 is the nearest 13.0.x cccl.)
   # NOTE: no --break-system-packages — the image ships pip 22.0.2 and that flag arrived
   # in pip 23.0; passing it makes pip exit 2 ("no such option") BEFORE installing, and
-  # the || true then masks a wrong-ABI fallback build. (Ubuntu 22.04 python3.10 is not
+  # would then mask a wrong-ABI fallback build. (Ubuntu 22.04 python3.10 is not
   # PEP-668-managed, so the flag is unnecessary here anyway.)
+  # FAIL LOUD, do NOT `|| true`: a masked pip failure here (no PyPI egress, resolver conflict,
+  # no disk) is indistinguishable from success — find_cu13 then yields empty and the build
+  # silently falls back to the base /usr/local/cuda, i.e. the wrong-ABI build this block exists
+  # to prevent. A clear "cu13 toolchain unavailable" beats an ABI error three steps later.
+  # (pipefail is set, so a pip failure through the tail pipe aborts here.)
   pip install --no-cache-dir --force-reinstall \
       "nvidia-cuda-nvcc==13.0.88" "nvidia-cuda-crt==13.0.88" "nvidia-nvvm==13.0.88" \
-      "nvidia-cuda-runtime==13.0.88" "nvidia-cuda-cccl==13.0.85" 2>&1 | tail -4 || true
+      "nvidia-cuda-runtime==13.0.88" "nvidia-cuda-cccl==13.0.85" 2>&1 | tail -4
   CU13="$(find_cu13 || true)"
+  [ -n "$CU13" ] && [ -x "$CU13/bin/nvcc" ] || { echo "FATAL: cu13 toolchain install succeeded but no nvcc found under $SITE/nvidia/cu13 — cannot build the cu130-ABI DeepEP extension (base /usr/local/cuda would be the wrong ABI)"; exit 4; }
 fi
 
 # ---- choose the build toolchain ---------------------------------------------
@@ -104,7 +110,10 @@ NVSHMEM_LIB="$(python3 -c 'import importlib.util,os
 s=importlib.util.find_spec("nvidia.nvshmem")
 p=(s.submodule_search_locations[0] if s and s.submodule_search_locations else None)
 print(os.path.join(p,"lib") if p else "")' 2>/dev/null || true)"
-[ -d "$NVSHMEM_LIB" ] || NVSHMEM_LIB="$(ls -d "$SITE"/nvidia/nvshmem/lib /usr/local/lib/python3.*/dist-packages/nvidia/nvshmem/lib 2>/dev/null | head -1)"
+# `ls -d A B` with only A present prints A but exits 2; pipefail carries that through | head,
+# and since this assignment is the last command in the `||` list, `set -e` would abort the
+# very fallback this line exists to provide. `|| true` keeps the recovered path and the script.
+[ -d "$NVSHMEM_LIB" ] || NVSHMEM_LIB="$(ls -d "$SITE"/nvidia/nvshmem/lib /usr/local/lib/python3.*/dist-packages/nvidia/nvshmem/lib 2>/dev/null | head -1 || true)"
 if [ -n "$NVSHMEM_LIB" ] && [ -d "$NVSHMEM_LIB" ]; then
   [ -e "$NVSHMEM_LIB/libnvshmem_host.so" ] || ln -sf "$(ls "$NVSHMEM_LIB"/libnvshmem_host.so.* | head -1)" "$NVSHMEM_LIB/libnvshmem_host.so" 2>/dev/null || true
 fi
@@ -137,7 +146,7 @@ NVSHMEM_LIB="$(python3 -c 'import importlib.util,os
 s=importlib.util.find_spec("nvidia.nvshmem")
 p=(s.submodule_search_locations[0] if s and s.submodule_search_locations else None)
 print(os.path.join(p,"lib") if p else "")' 2>/dev/null || true)"
-[ -d "$NVSHMEM_LIB" ] || NVSHMEM_LIB="$(ls -d /usr/local/lib/python3.*/dist-packages/nvidia/nvshmem/lib 2>/dev/null | head -1)"
+[ -d "$NVSHMEM_LIB" ] || NVSHMEM_LIB="$(ls -d /usr/local/lib/python3.*/dist-packages/nvidia/nvshmem/lib 2>/dev/null | head -1 || true)"   # same ls-exit-2-under-pipefail guard as above
 LD_LIBRARY_PATH="${NVSHMEM_LIB:-}:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}" \
   python3 -c "import deep_ep; print('deep_ep:', deep_ep.__file__); assert hasattr(deep_ep,'ElasticBuffer'), 'ElasticBuffer MISSING'; print('ElasticBuffer: OK')"
 echo "=== build_deepep DONE (remember: set LD_LIBRARY_PATH to include $NVSHMEM_LIB at serve time) ==="

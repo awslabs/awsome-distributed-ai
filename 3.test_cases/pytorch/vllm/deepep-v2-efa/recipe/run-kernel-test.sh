@@ -40,7 +40,11 @@ set -o pipefail
 # --nproc-per-node=8 double-fans-out (2 nodes -> 16 procs x 8 spawns = 128 ranks on 16
 # GPUs) and collides MASTER_PORT 29501 with torchrun's own rendezvous -> NCCL "invalid
 # usage" at init_process_group, every time. One proc/node lets the test own the fan-out.
-torchrun --nnodes="$NNODES" --nproc-per-node=1 --node-rank="$NODE_RANK" \
+# `timeout` bounds the run so the "cannot hang for hours" claim is enforced, not just
+# asserted: a wrong NNODES, a worker that never starts, or a stalled NCCL init would
+# otherwise block here indefinitely. timeout exits 124 on expiry, which the rc check
+# below reports as a FAIL rather than a silent hang.
+timeout "${KERNEL_TEST_TIMEOUT:-600}" torchrun --nnodes="$NNODES" --nproc-per-node=1 --node-rank="$NODE_RANK" \
   --master-addr="$LEADER_IP" --master-port=29501 "$TEST" --num-processes "$GPUS_PER_NODE" 2>&1 | tee /tmp/kernel-test.$NODE_RANK.log
 rc=${PIPESTATUS[0]}
 

@@ -18,6 +18,14 @@
 import argparse, json, os, time, urllib.request, urllib.error, sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+def positive_int(s):
+    # reject <1: a mult of 0 fires zero requests per level and the run exits 0 with empty
+    # tables, quietly defeating the fail-loud contract. argparse reports the message below.
+    v = int(s)
+    if v < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1 (got {v}); 0 would fire no requests and pass vacuously")
+    return v
+
 # Defaults keep the probe runnable standalone inside the pod (127.0.0.1 loopback);
 # recipe/benchmark.sh overrides --url (leader IP) and --out (raw JSONL path).
 URL = "http://127.0.0.1:8000/v1/chat/completions"
@@ -42,13 +50,19 @@ def one_request(url, idx):
     t0 = time.time()
     try:
         with urllib.request.urlopen(req, timeout=300) as r:
+            status = r.status   # the ACTUAL code; a 2xx that isn't 200 must not be recorded as 200
             d = json.loads(r.read())
         dt = time.time() - t0
         usage = d.get("usage")
         if not usage or "completion_tokens" not in usage:
             # a 200 without usage is a malformed success — surface it, don't count 0 tokens
             return (False, dt, 0, "200-no-usage")
-        return (True, dt, usage["completion_tokens"], 200)
+        ct = usage["completion_tokens"]
+        # ignore_eos:true makes the contract EXACTLY max_tokens generated tokens — enforce the
+        # fixed denominator rather than assume it (same fail-loud treatment as 200-no-usage).
+        if ct != MAX_TOKENS:
+            return (False, dt, ct, f"{status}-tok{ct}!={MAX_TOKENS}")
+        return (True, dt, ct, status)
     except urllib.error.HTTPError as e:
         return (False, time.time() - t0, 0, e.code)
     except Exception as e:
@@ -67,7 +81,11 @@ def sweep(conc, url, nreq_mult):
     t0 = time.time()
     lat, toks, ok, codes = [], [], 0, {}
     with ThreadPoolExecutor(max_workers=conc) as ex:
-        futs = [ex.submit(one_request, url, i) for i in range(n)]
+        # prompt idx must be unique ACROSS levels, not just within one: range(n) restarts at
+        # 0 each level, so conc=16's first 8 prompts would be byte-identical to conc=8's and
+        # get served from the prefix cache — biasing later (higher-conc) levels favourably.
+        # Prefixing with `conc` makes every prompt run-wide-unique (concurrency is unchanged).
+        futs = [ex.submit(one_request, url, f"{conc}-{i}") for i in range(n)]
         for fu in as_completed(futs):
             success, dt, ct, code = fu.result()
             if success:
@@ -90,8 +108,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="vLLM DeepEP-V2 live-serve throughput/latency probe")
     ap.add_argument("--url", default=URL, help="chat-completions endpoint (default: 127.0.0.1 loopback)")
     ap.add_argument("--out", default=None, help="write one JSON object per concurrency level to this path (JSONL)")
-    ap.add_argument("--requests-per-level-mult", type=int, default=NREQ_MULT,
-                    help=f"requests per level = concurrency x this (default {NREQ_MULT})")
+    ap.add_argument("--requests-per-level-mult", type=positive_int, default=NREQ_MULT,
+                    help=f"requests per level = concurrency x this, must be >= 1 (default {NREQ_MULT})")
     args = ap.parse_args()
 
     print("=== vLLM DeepEP-V2 live-serve throughput probe ===")
