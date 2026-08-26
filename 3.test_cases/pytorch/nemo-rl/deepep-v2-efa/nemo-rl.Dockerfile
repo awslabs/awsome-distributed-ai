@@ -81,12 +81,22 @@ SHELL ["/bin/bash", "-c"]
 # Same removal the slime sibling does: the EFA installer below provides
 # libfabric + Open MPI, and a leftover HPC-X/UCX on the loader path is a
 # classic source of wrong-transport surprises.
+# The `|| true` is scoped to the removal ONLY (an already-absent verbs package
+# is fine); update+install stay fail-hard, or a transient mirror miss would ship
+# an image silently missing cmake/autoconf/libtool and fail 100s of lines later
+# inside the gdrcopy/aws-ofi-nccl build with no link to the cause.
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
       autoconf automake build-essential cmake curl git jq kmod libtool \
       libhwloc-dev pkg-config \
-    && apt-get remove -y --allow-change-held-packages \
-      ibverbs-utils libibverbs-dev libibverbs1 libmlx5-1 || true
+    && { apt-get remove -y --allow-change-held-packages \
+      ibverbs-utils libibverbs-dev libibverbs1 libmlx5-1 || true; }
+# OPAL_PREFIX: the NGC base sets it to /opt/hpcx/ompi, which the next line
+# deletes — reset it to the Open MPI the EFA installer provides (Layer 2 puts
+# /opt/amazon/openmpi on PATH). Nothing in the recipe runs mpirun, so this only
+# matters to someone invoking MPI from the image, but a dangling OPAL_PREFIX is
+# a latent trap worth closing.
 RUN rm -rf /opt/hpcx/ompi /usr/local/mpi /usr/local/ucx && ldconfig
+ENV OPAL_PREFIX=/opt/amazon/openmpi
 
 # ---- Layer 2: AWS EFA userspace (public installer) -------------------------
 # --disable-ngc/--disable-build-ngc: the NGC base trips the installer's NGC
@@ -212,7 +222,6 @@ ENV FI_PROVIDER=efa \
     NCCL_GIN_TYPE=2 \
     NCCL_GIN_ENABLE=1 \
     OFI_NCCL_GIN_GDAKI=0 \
-    OFI_NCCL_GIN_MAX_REQUESTS=512 \
     OFI_NCCL_PROTOCOL=RDMA \
     NCCL_NVLS_ENABLE=0 \
     NCCL_DEBUG=WARN \

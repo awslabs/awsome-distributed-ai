@@ -23,7 +23,7 @@ PROBE="/opt/probe_rollout.py"
 
 # ---- NCCL-GIN proxy + EFA contract, VERBATIM (baked in the image ENV; re-exported so an
 #      ad-hoc shell that scrubbed its env still probes the transport under test) ----
-export NCCL_GIN_TYPE=2 NCCL_GIN_ENABLE=1 OFI_NCCL_GIN_GDAKI=0 OFI_NCCL_GIN_MAX_REQUESTS=512
+export NCCL_GIN_TYPE=2 NCCL_GIN_ENABLE=1 OFI_NCCL_GIN_GDAKI=0
 export NCCL_NVLS_ENABLE=0
 export FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_FORK_SAFE=1
 export OFI_NCCL_PROTOCOL=RDMA
