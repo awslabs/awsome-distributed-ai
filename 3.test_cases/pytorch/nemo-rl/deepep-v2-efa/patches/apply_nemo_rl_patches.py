@@ -20,15 +20,21 @@ Design goals (why this shape — mirrors the slime sibling's patch layer):
   * Fail-loud. Every commit is ``git apply --check``ed before applying; if a
     hunk no longer applies against the pinned base, the BUILD fails — an image
     whose patch state is ambiguous must not ship.
-  * Self-neutralizing. Before applying anything, each PR's content probe is
-    checked: if it already passes — because the PR merged upstream and the
-    tree pin advanced past it — the whole PR is skipped and reported (a
-    per-commit reverse-check would false-negative on multi-commit PRs whose
-    later commits touch the same hunks). When a PR reports already-present,
-    delete its entry here.
-  * Post-asserted. After each PR a content probe (needle in file) confirms the
-    intended change is really in the tree, catching apply-succeeded-but-wrong-
-    tree mistakes.
+  * Self-neutralizing, at CHANGE granularity. Each PR carries one content
+    probe per independently-required change (not one probe for the whole PR).
+    Before applying, ALL of a PR's probes are checked: only if EVERY probe
+    already passes — the PR merged upstream and the tree pin advanced past all
+    of it — is the PR skipped and reported. A partially-merged tree (some
+    probes pass, some don't) is NOT skipped; its commits are applied, and a
+    commit that then fails --check is a fail-loud build error (the pinned tree
+    drifted), never a silent skip. When every probe reports already-present,
+    delete the entry here. (A per-commit reverse-check is deliberately absent:
+    it false-negatives on multi-commit PRs whose later commits touch the same
+    hunks, and the all-probes decision above makes it redundant.)
+  * Post-asserted, on the full list. After a PR applies, EVERY one of its
+    probes is re-checked before the marker is written — so the marker can never
+    record a patch state the tree does not actually have (a partially-present
+    PR fails here), and verify-image.sh can trust the marker it reads.
 
 Each entry links the upstream PR that will make it unnecessary.
 
@@ -48,8 +54,19 @@ from pathlib import Path
 
 # One entry per draft PR. `commits` are the PR's commits in order, at the
 # immutable SHAs they had when this test case was authored (2026-08-25).
-# `probe` = (relative path, needle) asserted present after the PR applies;
-# needle None = the file's existence is the assertion.
+# `probes` = a list of (relative path, needle) — ONE per independently-required
+# change in the PR (needle None = the file's existence is the assertion). The
+# list is deliberately per-CHANGE, not per-PR: a single per-PR probe would let a
+# partially-merged upstream tree satisfy the probe while lacking later commits,
+# and the marker would then record a patch state the tree does not have. A PR is
+# skipped only when EVERY probe passes; after applying, EVERY probe is
+# re-asserted before the marker is written.
+#
+# Pure-cleanup commits (no detectable content addition — e.g. a comment/URL
+# removal) intentionally have NO probe: commits are applied atomically in order
+# and are never skipped individually, and a PR-level skip fires only when the
+# whole PR is already upstream (i.e. merged past the cleanup too), so a cleanup
+# commit can be verified by neither presence nor absence without ambiguity.
 PATCH_SETS = [
     {
         "name": "deepseek-ai/DeepEP#612 — aws-efa: QP cap, get_rdma_gbs fast path, scaleout interval",
@@ -61,7 +78,12 @@ PATCH_SETS = [
             "922a1fa7c0cd3ef047c0919638a87f9a2360346b",  # EFA fast path in get_rdma_gbs (SM auto-sizing)
             "28d1f7fb173f728be51632ce0026fea23243e350",  # dispatch kScaleoutUpdateInterval 6 -> 16
         ],
-        "probe": ("deep_ep/buffers/elastic.py", "EP_EFA_MAX_QPS"),
+        "probes": [
+            ("deep_ep/buffers/elastic.py", "EP_EFA_MAX_QPS"),                       # commit 1
+            ("deep_ep/utils/envs.py", "EP_EFA_RDMA_GBS"),                           # commit 2
+            ("deep_ep/include/deep_ep/impls/hybrid_dispatch.cuh",
+             "kScaleoutUpdateInterval = 16"),                                        # commit 3
+        ],
     },
     {
         "name": "NVIDIA/Megatron-LM#4632 — moe: DeepEP V2 ElasticBuffer support in the flex dispatcher",
@@ -72,9 +94,13 @@ PATCH_SETS = [
             "e132d5dd15358940aeb962105e44b402919084c5",  # ElasticBuffer support in _DeepepManager
             "f5ac3d481a8baca2596f20ae213dee25f87e35bf",  # graceful EventOverlap import fallback under V2
             "99b8824ee9c8d26b115e05b3ac563d1ea73b2b6b",  # pass num_experts explicitly to V2 backward dispatch
-            "8056d6d489c73a353d590b8079497fceda4f9aa7",  # drop downstream repro URLs + dead conditional
+            "8056d6d489c73a353d590b8079497fceda4f9aa7",  # drop downstream repro URLs + dead conditional (cleanup — no probe)
         ],
-        "probe": ("megatron/core/transformer/moe/fused_a2a.py", "ElasticBuffer"),
+        "probes": [
+            ("megatron/core/transformer/moe/fused_a2a.py", "ElasticBuffer"),        # commit 1
+            ("megatron/core/transformer/moe/fused_a2a.py", "deep_ep.utils.event"),  # commit 2
+            ("megatron/core/transformer/moe/fused_a2a.py", "_handle_num_experts"),  # commit 3
+        ],                                                                           # commit 4 = cleanup, see header
     },
     {
         "name": "NVIDIA-NeMo/RL#2410 — deps: re-export LD_LIBRARY_PATH for AWS EFA OFI discovery",
@@ -93,7 +119,9 @@ PATCH_SETS = [
         ],
         # The PR also ships the worked 2-node EFA GRPO recipe config this test
         # case's README points at for the full rollout path.
-        "probe": ("examples/configs/recipes/llm/aws-efa-grpo-qwen3-30ba3b-2n8g-megatron.yaml", None),
+        "probes": [
+            ("examples/configs/recipes/llm/aws-efa-grpo-qwen3-30ba3b-2n8g-megatron.yaml", None),
+        ],
     },
 ]
 
@@ -112,15 +140,19 @@ def fetch_patch(repo: str, sha: str) -> bytes:
 
 
 def apply_commit(root: Path, repo: str, sha: str) -> str:
-    """Apply one pinned commit into the tree at `root`. Returns a status word."""
+    """Apply one pinned commit into the tree at `root`. Returns a status word.
+
+    No per-commit reverse-check: the whole-PR probe gate in main() decides
+    skip-vs-apply (a PR is skipped only when EVERY probe already passes). Here we
+    apply unconditionally and fail loud if the pinned tree drifted under a hunk —
+    a per-commit reverse-check would false-negative on multi-commit PRs whose
+    later commits touch the same hunks (the docstring's stated design).
+    """
     # absolute: git apply runs with cwd=root, so a relative path would resolve
     # inside the tree twice
     patch_path = (root / f".{sha}.patch").resolve()
     patch_path.write_bytes(fetch_patch(repo, sha))
     try:
-        # Already present? (PR merged upstream and the pin moved past it.)
-        if run(["git", "apply", "--reverse", "--check", str(patch_path)], root).returncode == 0:
-            return "already-present-upstream"
         check = run(["git", "apply", "--check", str(patch_path)], root)
         if check.returncode != 0:
             raise RuntimeError(
@@ -144,6 +176,16 @@ def probe_ok(root: Path, probe: tuple[str, str | None]) -> bool:
     return needle is None or needle in target.read_text(errors="replace")
 
 
+def missing_probes(root: Path, probes: list[tuple[str, str | None]]) -> list[tuple[str, str | None]]:
+    """The subset of `probes` NOT yet satisfied in the tree at `root`."""
+    return [p for p in probes if not probe_ok(root, p)]
+
+
+def describe_probe(probe: tuple[str, str | None]) -> str:
+    rel, needle = probe
+    return f"{rel}" if needle is None else f"{needle!r} in {rel}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--deepep-root", required=True, type=Path)
@@ -165,23 +207,38 @@ def main() -> int:
             print(f"FATAL: {root} is not a git checkout — cannot apply {pset['name']}", file=sys.stderr)
             return 1
         print(f"== {pset['name']} ==")
-        if probe_ok(root, pset["probe"]):
-            # PR-level neutralization: the content probe already passes, so the
-            # tree pin advanced past this PR's merge — delete its entry here.
-            print(f"   already present in the tree (probe satisfied) — skipping; retire this entry")
+        probes = pset["probes"]
+        missing = missing_probes(root, probes)
+        if not missing:
+            # Every per-change probe already passes — the tree pin advanced past
+            # ALL of this PR's changes (fully merged upstream). Only then skip;
+            # a partially-merged tree (some probes missing) is NOT skipped, so it
+            # can never be recorded as already-present. Delete the entry here.
+            print(f"   all {len(probes)} change-probes already present — skipping; retire this entry")
             record.extend(f"{pset['repo']}@{sha} already-present" for sha in pset["commits"])
             continue
+        if len(missing) != len(probes):
+            # Partially-present: some changes are in the tree, some are not. Apply
+            # the PR's commits (git apply --check will fail loud on any hunk that
+            # the already-present change collides with) rather than silently
+            # trusting the single-needle hit the old per-PR probe would have.
+            print(f"   partially present ({len(probes) - len(missing)}/{len(probes)} "
+                  f"change-probes hit) — applying to complete: "
+                  f"{', '.join(describe_probe(p) for p in missing)}")
         for sha in pset["commits"]:
             status = apply_commit(root, pset["repo"], sha)
             print(f"   {sha[:12]}  {status}")
             record.append(f"{pset['repo']}@{sha} {status}")
-        if not probe_ok(root, pset["probe"]):
-            rel, needle = pset["probe"]
+        # Post-assert the FULL probe list — a partially-present PR that failed to
+        # complete, or an apply-succeeded-but-wrong-tree mistake, fails here so
+        # the marker never records a patch state the tree does not have.
+        still_missing = missing_probes(root, probes)
+        if still_missing:
             print(f"FATAL: post-assert failed for {pset['name']}: "
-                  f"{'missing file' if needle is None else f'needle {needle!r} absent in'} {root / rel}",
-                  file=sys.stderr)
+                  f"{'; '.join(describe_probe(p) for p in still_missing)} "
+                  f"absent under {root}", file=sys.stderr)
             return 1
-        print(f"   post-assert OK ({pset['url']})")
+        print(f"   post-assert OK — all {len(probes)} change-probes present ({pset['url']})")
 
     # Stale bytecode from the pre-patch install must not shadow the patched
     # sources (NeMo-RL is installed -e; Megatron rides PYTHONPATH).

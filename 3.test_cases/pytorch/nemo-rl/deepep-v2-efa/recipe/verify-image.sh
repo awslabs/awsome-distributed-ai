@@ -28,9 +28,17 @@ docker run --rm --gpus all "${DEV_ARGS[@]}" -e HAVE_EFA_DEV="${HAVE_EFA_DEV}" "$
     echo "   (run this script on an EFA host for the live efa-direct fabric check)"
   fi
 
-  echo "== single GIN-capable libnccl wins (path + version string — the NGC base bakes its own NCCL in a DIFFERENT dir, so path matters) =="
-  NCCL_SO=$(ldconfig -p | grep "libnccl.so.2 " | head -1 | awk "{print \$NF}")
-  echo "$NCCL_SO" | grep -q "/opt/nccl/build" || { echo "FAIL: baked libnccl shadows the GIN build ($NCCL_SO)"; exit 1; }
+  echo "== the libnccl the LOADER resolves is the GIN build (path + version) =="
+  # Ask the loader, not the ld.so cache. The image sets LD_LIBRARY_PATH to the
+  # GIN build, and dlopen searches LD_LIBRARY_PATH BEFORE the cache, so
+  # "ldconfig -p | head -1" (cache order) is not what decides resolution.
+  # dlopen("libnccl.so.2") reproduces the real loader search (RPATH,
+  # LD_LIBRARY_PATH, LD_PRELOAD, then cache); /proc/self/maps then reports the
+  # file actually mapped — the same evidence deep_ep.check_nccl_so() acts on at
+  # import. This catches a scrubbed LD_LIBRARY_PATH or an LD_PRELOAD shadow,
+  # which the cache-order check reads right past.
+  NCCL_SO=$(python3 -c "import ctypes, pathlib; ctypes.CDLL(\"libnccl.so.2\"); print(next(l.split()[-1] for l in pathlib.Path(\"/proc/self/maps\").read_text().splitlines() if \"libnccl.so.2\" in l))")
+  echo "$NCCL_SO" | grep -q "/opt/nccl/build" || { echo "FAIL: loader resolves libnccl to $NCCL_SO, not the GIN build under /opt/nccl/build (LD_LIBRARY_PATH scrubbed, or a baked libnccl shadows it)"; exit 1; }
   [ "$(strings "$NCCL_SO" | grep -c "NCCL version 2.30.4")" -ge 1 ] || { echo "FAIL: $NCCL_SO is not 2.30.4 — wrong NCCL resolved"; exit 1; }
 
   echo "== aws-ofi-nccl GIN plugin =="
@@ -50,11 +58,21 @@ docker run --rm --gpus all "${DEV_ARGS[@]}" -e HAVE_EFA_DEV="${HAVE_EFA_DEV}" "$
 
   echo "== patch-marker consistency (marker and trees/site-packages must agree) =="
   if [ -f /opt/.draft-rollout-patches-applied ]; then
+    # Probe one needle PER independently-required change, not one per PR: a
+    # partially-merged tree satisfies a single needle while lacking later commits
+    # (e.g. EP_EFA_MAX_QPS present but the get_rdma_gbs EFA fast path absent;
+    # ElasticBuffer present but the num_experts backward-dispatch fix absent).
+    # This mirrors the per-change probe list in patches/apply_nemo_rl_patches.py.
     DEEP_EP_DIR=$(python3 -c "import deep_ep, pathlib; print(pathlib.Path(deep_ep.__file__).parent)")
     grep -q EP_EFA_MAX_QPS "$DEEP_EP_DIR/buffers/elastic.py" \
-      || { echo "FAIL: marker says patched but DeepEP#612 EFA cap not in installed deep_ep"; exit 1; }
-    grep -q ElasticBuffer /opt/Megatron-LM/megatron/core/transformer/moe/fused_a2a.py \
-      || { echo "FAIL: marker says patched but Megatron-LM#4632 not in the flex dispatcher"; exit 1; }
+      || { echo "FAIL: marker says patched but DeepEP#612 QP cap (EP_EFA_MAX_QPS) not in installed deep_ep"; exit 1; }
+    grep -q EP_EFA_RDMA_GBS "$DEEP_EP_DIR/utils/envs.py" \
+      || { echo "FAIL: marker says patched but DeepEP#612 get_rdma_gbs EFA fast path (EP_EFA_RDMA_GBS) not in installed deep_ep — partially-applied PR"; exit 1; }
+    MEGA_A2A=/opt/Megatron-LM/megatron/core/transformer/moe/fused_a2a.py
+    grep -q ElasticBuffer "$MEGA_A2A" \
+      || { echo "FAIL: marker says patched but Megatron-LM#4632 ElasticBuffer support not in the flex dispatcher"; exit 1; }
+    grep -q _handle_num_experts "$MEGA_A2A" \
+      || { echo "FAIL: marker says patched but Megatron-LM#4632 num_experts backward-dispatch fix absent — partially-applied PR"; exit 1; }
     test -f /opt/NeMo-RL/examples/configs/recipes/llm/aws-efa-grpo-qwen3-30ba3b-2n8g-megatron.yaml \
       || { echo "FAIL: marker says patched but NeMo-RL#2410 EFA recipe config missing"; exit 1; }
     echo "   patched image (3 draft PRs baked — full GRPO rollout-over-DeepEP path staged)"
