@@ -76,7 +76,7 @@ spec:
                 --allow-run-as-root --tag-output \
                 -np ${NUM_NODES} -N 1 --bind-to none \
                 -x PATH -x LD_LIBRARY_PATH \
-                -x NCCL_SOCKET_IFNAME -x LD_PRELOAD \
+                -x NCCL_SOCKET_IFNAME \
                 -x NCCL_DEBUG=INFO \
                 -x NCCL_NET_PLUGIN=ofi -x NCCL_TUNER_PLUGIN=ofi \
                 -x TORCHDYNAMO_DISABLE=1 \

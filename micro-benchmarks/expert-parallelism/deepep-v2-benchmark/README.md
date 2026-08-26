@@ -21,7 +21,7 @@ installation works:
   GIN-capable NCCL, torch), built from a bare CUDA base; it can also be used directly for testing.
 - **[`slurm/`](./slurm/)** - launchers that run DeepEP's own `tests/elastic/test_ep.py` to
   validate the installation.
-- **[`kubernetes/`](./kubernetes/))** - launchers that run DeepEP's own `tests/elastic/test_ep.py` to
+- **[`kubernetes/`](./kubernetes/)** - launchers that run DeepEP's own `tests/elastic/test_ep.py` to
   validate the installation.
 
 | Benchmark | Nodes | Measures |

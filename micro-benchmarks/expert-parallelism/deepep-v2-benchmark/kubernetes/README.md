@@ -17,6 +17,9 @@ An EKS cluster with EFA-enabled GPU nodes (e.g. `p6-b300.48xlarge`), the
 [AWS EFA device plugin](https://github.com/aws/eks-charts/tree/master/stable/aws-efa-k8s-device-plugin)
 installed. See the [EKS architectures](../../../../1.architectures) in this repo.
 
+> NOTE: To expose the GDRCopy gdrdrv kernel driver, install the NVIDIA device plugin with `gdrcopyEnabled=true`. \
+> [AI/ML on EKS - NVIDIA device plugin](https://docs.aws.amazon.com/eks/latest/userguide/device-management-nvidia-dra-device-plugin.html#eks-nvidia-device-plugin)
+
 ```bash
 aws eks update-kubeconfig --name <EKS_CLUSTER_NAME>
 kubectl config current-context
@@ -35,8 +38,8 @@ kubectl get crd mpijobs.kubeflow.org      # confirm the CRD exists
 ## Build & push the container image
 
 Build the image from [`../deepep.Dockerfile`](../deepep.Dockerfile) and push it to ECR. The
-default image is built for **both Hopper (`sm_90`) and Blackwell (`sm_100`)**, so it runs on
-`p5`/`p5en` and `p6-b300` nodes without a rebuild.
+default image is built for **both Hopper (`sm_90`) and Blackwell (`sm_100`, `sm_103`)**, so it runs on
+`p5`/`p5en` and `p6` instances family without a rebuild.
 
 ```bash
 export AWS_REGION=$(aws ec2 describe-availability-zones --output text --query 'AvailabilityZones[0].[RegionName]')
@@ -44,7 +47,7 @@ export ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 export REGISTRY=${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com
 export IMAGE_URI=${REGISTRY}/deepep-v2:efa1.50.0-nccl2.31.2
 
-aws ecr create-repository --repository-name deepep --region ${AWS_REGION} 2>/dev/null || true
+aws ecr create-repository --repository-name deepep-v2 --region ${AWS_REGION} 2>/dev/null || true
 aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${REGISTRY}
 
 cd ..   # build context is the deepep-v2-benchmark/ directory
@@ -60,6 +63,7 @@ substitution to the known variables so the launcher's runtime shell vars
 (`$OMPI_COMM_WORLD_RANK`, `$MASTER_ADDR`, `$PATH`, …) are left intact:
 
 ```bash
+cd kubernetes
 cp env_vars.example env_vars   # then edit env_vars
 source env_vars
 
@@ -77,7 +81,7 @@ envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' \
 ```bash
 kubectl get mpijob
 watch kubectl get pods -o wide
-kubectl logs -f $(kubectl get pods | grep deepep.*launcher | cut -d ' ' -f 1)
+kubectl logs -l training.kubeflow.org/job-name=deepep-internode -f
 ```
 
 ## Clean up
@@ -100,7 +104,7 @@ envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' \
 - **Multi-node DNS:** the launcher sets `MASTER_ADDR` from the first entry of the
   mpi-operator hostfile (`/etc/mpi/hostfile`), which is worker-0's cluster-resolvable name. If
   `init_process_group` hangs, confirm name resolution from a peer:
-  `kubectl exec deepep-internode-worker-1 -- getent hosts <worker-0-name>`.
+  `kubectl exec deepep-v2-internode-worker-1 -- getent hosts <worker-0-name>`.
 - **GPU profiling (internode / low-latency tuning):** the `internode` and `intranode` tests
   profile their kernels with the Kineto/CUPTI profiler during the tuning phase.
   Two requirements, both already handled here for `p6-b300`:

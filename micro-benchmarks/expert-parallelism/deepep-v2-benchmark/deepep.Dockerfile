@@ -4,15 +4,13 @@ ARG CUDA_VERSION=13.0.2
 
 FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu22.04
 
-ARG TARGETARCH
-
 ARG GDRCOPY_VERSION=v2.5.2
 ARG EFA_INSTALLER_VERSION=1.50.0
-ARG DEEPEP_REPO="https://github.com/amazon-contributing/DeepEP.git"
 ARG DEEPEP_REF="main"
 ARG NCCL_VERSION=2.31.2
 ARG PYTHON_VERSION=3.10
 ARG TORCH_VERSION=2.11.0
+ARG TORCH_CUDA_INDEX=cu130
 
 # CUDA architecture(s), semicolon-separated:
 # 9.0 = Hopper (H100, sm_90), 10.0 and 10.3 = Blackwell (B200/B300, sm_100,sm_103). Defaults to
@@ -40,7 +38,7 @@ RUN rm -rf /opt/hpcx \
     && rm -f /etc/ld.so.conf.d/hpcx.conf \
     && ldconfig
 
-RUN apt-get install -y --allow-unauthenticated \
+RUN apt-get install -y --no-install-recommends \
     apt-utils \
     autoconf \
     automake \
@@ -114,9 +112,7 @@ ENV OMPI_MCA_pml=^ucx            \
 ENV PMIX_MCA_gds=hash
 
 ################################ PyTorch ########################################
-RUN CUDA_VER=$(nvcc --version | grep -oP 'release \K[0-9]+\.[0-9]+' | tr -d '.') && \
-    CUDA_MAJOR=$(nvcc --version | grep -oP 'release \K[0-9]+') && \
-    pip3 install torch==${TORCH_VERSION} numpy --index-url https://download.pytorch.org/whl/cu${CUDA_VER}
+RUN pip3 install torch==${TORCH_VERSION} numpy --index-url https://download.pytorch.org/whl/${TORCH_CUDA_INDEX}
 
 ################################ DeepEP v2 ########################################
 RUN --mount=type=bind,source=setup_deepep_gin.sh,target=/tmp/setup_deepep_gin.sh \
@@ -124,9 +120,9 @@ RUN --mount=type=bind,source=setup_deepep_gin.sh,target=/tmp/setup_deepep_gin.sh
     CUDA_MAJOR=$(nvcc --version | grep -oP 'release \K[0-9]+') && \
     pip3 install --no-deps nvidia-nccl-cu${CUDA_MAJOR}==${NCCL_VERSION} && \
     /tmp/setup_deepep_gin.sh \
-      --deepep-repo $DEEPEP_REPO \
       --deepep-ref $DEEPEP_REF \
       --nccl-root "/usr/local/lib/python${PYTHON_VERSION}/dist-packages/nvidia/nccl"
 
+ENV NVIDIA_GDRCOPY=enabled
 ENV NCCL_NET_PLUGIN=ofi
 ENV NCCL_TUNER_PLUGIN=ofi
