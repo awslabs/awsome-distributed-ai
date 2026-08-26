@@ -269,6 +269,30 @@ def compare_group(
             )
             for record in run.records
         )
+        update_samples_required = run.environment.get("run_kind") == "correctness"
+        update_samples_valid = not update_samples_required or (
+            len(run.update_samples) == expected
+            and all(
+                sample.get("finite") is True
+                and sample.get("skipped_iteration") is False
+                and all(
+                    math.isfinite(float(sample[name]))
+                    for name in (
+                        "gradient_norm",
+                        "update_l2_parameter_units",
+                        "update_max_abs_parameter_units",
+                        "update_mean_abs_parameter_units",
+                    )
+                )
+                for sample in run.update_samples
+            )
+        )
+        expected_nodes = len(
+            [node for node in run.environment.get("nodes", "").split(",") if node]
+        )
+        route_hashes_complete = (
+            expected_nodes > 0 and len(run.route_hashes) == expected_nodes
+        )
         run_results[run.arm] = {
             "artifact_path": str(run.path),
             "environment_sha256": sha256(run.path / "environment.txt"),
@@ -278,7 +302,10 @@ def compare_group(
             "all_metrics_finite": finite,
             "no_skipped_or_nan_iterations": no_skips,
             "learning_rate_matches_environment": learning_rate_matches,
+            "optimizer_update_samples_valid": update_samples_valid,
             "route_hashes_observed": len(run.route_hashes),
+            "route_hashes_expected": expected_nodes,
+            "route_hashes_complete": route_hashes_complete,
             "optimizer_update_samples_observed": len(run.update_samples),
             "loss_first_dimensionless": (
                 float(run.records[0]["lm_loss_dimensionless"]) if run.records else None
@@ -304,10 +331,14 @@ def compare_group(
             int(record["iteration_dimensionless"]): record
             for record in baseline.records
         }
+        baseline_updates = {
+            int(sample["iteration"]): sample for sample in baseline.update_samples
+        }
         for arm, run in by_arm.items():
             if arm == "nccl-alltoall":
                 continue
             deltas = []
+            gradient_deltas = []
             for record in run.records:
                 iteration = int(record["iteration_dimensionless"])
                 reference = baseline_by_iteration.get(iteration)
@@ -324,6 +355,22 @@ def compare_group(
                         "within_nccl_self_repeat_tolerance": delta <= tolerance,
                     }
                 )
+                gradient_deltas.append(
+                    abs(
+                        float(record["gradient_norm_parameter_gradient_units"])
+                        - float(reference["gradient_norm_parameter_gradient_units"])
+                    )
+                )
+            update_deltas = []
+            for sample in run.update_samples:
+                reference = baseline_updates.get(int(sample["iteration"]))
+                if reference is not None:
+                    update_deltas.append(
+                        abs(
+                            float(sample["update_l2_parameter_units"])
+                            - float(reference["update_l2_parameter_units"])
+                        )
+                    )
             route_hashes_match = (
                 bool(baseline.route_hashes)
                 and len(run.route_hashes) == len(baseline.route_hashes)
@@ -335,6 +382,12 @@ def compare_group(
                     max(item["absolute_loss_delta_dimensionless"] for item in deltas)
                     if deltas
                     else None
+                ),
+                "max_absolute_gradient_norm_delta_parameter_gradient_units": (
+                    max(gradient_deltas) if gradient_deltas else None
+                ),
+                "max_absolute_sampled_update_l2_delta_parameter_units": (
+                    max(update_deltas) if update_deltas else None
                 ),
                 "loss_curve_within_nccl_self_repeat_tolerance": bool(deltas)
                 and all(item["within_nccl_self_repeat_tolerance"] for item in deltas),
@@ -355,6 +408,8 @@ def compare_group(
         and result["all_metrics_finite"]
         and result["no_skipped_or_nan_iterations"]
         and result["learning_rate_matches_environment"]
+        and result["optimizer_update_samples_valid"]
+        and (result["route_hashes_complete"] or not require_route_hashes)
         for result in run_results.values()
     )
     comparison_pass = bool(comparisons) and all(
@@ -484,8 +539,8 @@ def write_markdown(document: dict, output_path: Path) -> None:
                 "",
                 f"Group status: `{group['status']}`.",
                 "",
-                "| Arm | Iterations, dimensionless | First loss, dimensionless | Last loss, dimensionless | Maximum absolute loss delta vs NCCL, dimensionless | Curve gate | Route hash gate |",
-                "|---|---:|---:|---:|---:|---|---|",
+                "| Arm | Iterations, dimensionless | First loss, dimensionless | Last loss, dimensionless | Maximum absolute loss delta vs NCCL, dimensionless | Maximum gradient-norm delta, parameter-gradient units | Maximum sampled update-L2 delta, parameter units | Curve gate | Route hash gate |",
+                "|---|---:|---:|---:|---:|---:|---:|---|---|",
             ]
         )
         for arm in ARMS:
@@ -512,10 +567,27 @@ def write_markdown(document: dict, output_path: Path) -> None:
                 if arm == "nccl-alltoall"
                 else ("PASS" if comparison["route_hashes_match_nccl"] else "FAIL")
             )
+            gradient_delta = (
+                "Reference"
+                if arm == "nccl-alltoall"
+                else f"{comparison['max_absolute_gradient_norm_delta_parameter_gradient_units']:.10g}"
+            )
+            update_value = (
+                None
+                if arm == "nccl-alltoall"
+                else comparison["max_absolute_sampled_update_l2_delta_parameter_units"]
+            )
+            update_delta = (
+                "Reference"
+                if arm == "nccl-alltoall"
+                else (
+                    "Not recorded" if update_value is None else f"{update_value:.10g}"
+                )
+            )
             lines.append(
                 f"| `{arm}` | {run['iterations_observed_dimensionless']} | "
                 f"{run['loss_first_dimensionless']:.10g} | {run['loss_last_dimensionless']:.10g} | "
-                f"{max_delta} | {curve_gate} | {route_gate} |"
+                f"{max_delta} | {gradient_delta} | {update_delta} | {curve_gate} | {route_gate} |"
             )
         lines.append("")
     output_path.write_text("\n".join(lines) + "\n")

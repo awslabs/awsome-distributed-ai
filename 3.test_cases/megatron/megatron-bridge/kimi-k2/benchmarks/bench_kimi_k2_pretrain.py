@@ -454,11 +454,24 @@ def build_config():
         raise ValueError(
             "BENCHMARK_LEARNING_RATE must be greater than 0 and less than 1"
         )
-    cfg.scheduler.max_lr = benchmark_learning_rate
-    cfg.scheduler.min_lr = benchmark_learning_rate
+    cfg.optimizer.lr = benchmark_learning_rate
+    cfg.optimizer.min_lr = benchmark_learning_rate
     cfg.scheduler.lr_warmup_iters = 0
     if hasattr(cfg.scheduler, "lr_decay_iters"):
         cfg.scheduler.lr_decay_iters = train_iters
+    print(
+        "BENCHMARK_OPTIMIZER_CONTROL "
+        + json.dumps(
+            {
+                "lr_decay_iters": getattr(cfg.scheduler, "lr_decay_iters", None),
+                "lr_warmup_iters": cfg.scheduler.lr_warmup_iters,
+                "max_lr": cfg.optimizer.lr,
+                "min_lr": cfg.optimizer.min_lr,
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
 
     # Benchmark runs consume random-init mock data and score training-step time. Do not write a
     # final ~1T-parameter checkpoint or run the recipe's post-training validation/test passes:

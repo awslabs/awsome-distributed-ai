@@ -215,6 +215,20 @@ def parse_run(run: Path, warmup: int) -> dict:
         for record in ordered
         if "learning_rate_dimensionless" in record
     ]
+    expected_learning_rate = float(env.get("benchmark_learning_rate", "nan"))
+    learning_rate_control = (
+        math.isfinite(expected_learning_rate)
+        and bool(learning_rates)
+        and all(
+            math.isclose(
+                value,
+                expected_learning_rate,
+                rel_tol=0.0,
+                abs_tol=max(abs(expected_learning_rate) * 1e-7, 1e-15),
+            )
+            for value in learning_rates
+        )
+    )
     skipped_iterations = [
         record["skipped_iterations_count"]
         for record in ordered
@@ -301,6 +315,7 @@ def parse_run(run: Path, warmup: int) -> dict:
         "finite_loss": finite(losses),
         "finite_gradient": finite(gradients),
         "finite_learning_rate": finite(learning_rates),
+        "learning_rate_control": learning_rate_control,
         "no_skipped_iterations": bool(skipped_iterations)
         and max(skipped_iterations) == 0,
         "no_nan_iterations": bool(nan_iterations) and max(nan_iterations) == 0,
@@ -318,6 +333,7 @@ def parse_run(run: Path, warmup: int) -> dict:
         "finite_loss",
         "finite_gradient",
         "finite_learning_rate",
+        "learning_rate_control",
         "no_skipped_iterations",
         "no_nan_iterations",
     ]
