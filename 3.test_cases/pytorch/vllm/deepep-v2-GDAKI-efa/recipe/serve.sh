@@ -36,7 +36,6 @@ export NCCL_CUMEM_ENABLE=1 NCCL_NVLS_ENABLE=0 NCCL_IGNORE_DISABLED_P2P=1
 export FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_FORK_SAFE=1
 export OFI_NCCL_PROTOCOL=RDMA DEEP_EP_BACKEND=nccl
 export NCCL_NET_PLUGIN=${NCCL_NET_PLUGIN:-/opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so}
-export OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1   # PR#1351: forced-PCIe on gdrdrv-2.4-kernel nodes
 export EP_REUSE_NCCL_COMM=0   # DeepEP creates its own comm; torch's is lazy/null under vLLM (segfault rootcause)
 export NCCL_DEBUG=${SERVE_NCCL_DEBUG:-WARN}   # SERVE_NCCL_DEBUG=INFO to see the efa-direct banner + GDAKI createContext
 export EP_EFA_MAX_QPS=${EP_EFA_MAX_QPS:-2} EP_EFA_RDMA_GBS=${EP_EFA_RDMA_GBS:-25.0}

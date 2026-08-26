@@ -9,12 +9,12 @@
 #             2026-08-04, no release tag yet)
 #   Layer 2c  libfabric @ main post-PR#12591  (prov/efa comp-cntr caps; merged 2026-07-28)
 #             built against that rdma-core
-#   Layer 5   aws-ofi-nccl @ a3d2680 --enable-gdaki (+PR#1351 forced-PCIe cherry-pick);
+#   Layer 5   aws-ofi-nccl @ a3d2680 --enable-gdaki (SHA pin, no local patches);
 #             a3d2680 carries PR#1311/5b1f6dd (per-platform EFA hw-counter tristate) and
 #             6e504db (GIN seq-space aliasing fix). Built in setup_deepep_v2_gdaki_efa.sh.
-#   Layer 5   DeepEP b306af06+PR#612 + the V13_HOST_UC_SHIM patch (dlsym-guarded, INERT
-#             unless the plugin exports the host-UC register hook, which upstream a3d2680
-#             does not). Staged in setup_deepep_v2_gdaki_efa.sh (COPY'd, not curled).
+#   Layer 5   DeepEP b306af06 + PR#612 (deepseek-ai/DeepEP, filed upstream, OPEN — EFA
+#             auto-QP cap; pinned to the PR's immutable head SHA). No local source patches.
+#             Staged in setup_deepep_v2_gdaki_efa.sh.
 #
 #   DOCKER_BUILDKIT=1 docker build -t vllm-deepep-v2-gdaki-efa:latest .
 #
@@ -101,8 +101,12 @@ RUN set -eux; \
     rm -rf /tmp/libfabric
 
 # ---- Layer 3: gdrcopy userspace (PUBLIC: github.com/NVIDIA/gdrcopy) ----
-# Host gdrdrv kernel module is commonly 2.4 — PR#1351 (Layer 5 cherry-pick) +
-# OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1 make that combination work.
+# NODE PRECONDITION: the host gdrdrv kernel module must be GDRCopy >= 2.5 (this image bakes
+# the 2.5.2 userspace; a mismatched < 2.5 host gdrdrv is the config aws-ofi-nccl PR#1351 was
+# opened for, but the maintainer closed #1351 in favour of requiring GDRCopy 2.5+ on the node
+# instead — so we require it here rather than carrying that cherry-pick). Check the node:
+#   cat /sys/module/gdrdrv/version   # must be >= 2.5  (or `modinfo gdrdrv | grep ^version`)
+# recipe/verify-image.sh + the K8s launcher fail loud if the node gdrdrv is < 2.5.
 ARG GDRCOPY_VER=v2.5.2
 RUN git clone --depth 1 --branch ${GDRCOPY_VER} https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
     && cd /tmp/gdrcopy && make prefix=/usr/local lib lib_install && ldconfig \
@@ -123,19 +127,17 @@ RUN NCCL_ROOT=$(python3 -c "import nvidia.nccl, pathlib; print(pathlib.Path(nvid
     && ldconfig -p | grep "libnccl.so.2 " | head -1 | grep -q "$NCCL_ROOT/lib"   # assert the pinned NCCL resolves FIRST (2.28.x lacks the GIN/LSA symbols the plugin needs)
 
 # ---- Layer 5: aws-ofi-nccl GDAKI + DeepEP-V2 source (in-tree script, COPY'd not curled) ----
-# The setup script builds --enable-gdaki against Layer 2c libfabric + Layer 2b rdma-core, and
-# stages DeepEP b306af06 + the V13 shim + PR#612. The DeepEP _C.so is built IN-POD on first
-# boot (recipe/build_deepep.sh) — it needs a live CUDA context the build sandbox lacks.
-COPY v13-host-uc-shim.patch /opt/v13-host-uc-shim.patch
+# The setup script builds --enable-gdaki against Layer 2c libfabric + Layer 2b rdma-core (SHA
+# pin, no local patches), and stages DeepEP b306af06 + PR#612 (filed upstream, open). The
+# DeepEP _C.so is built IN-POD on first boot (recipe/build_deepep.sh) — it needs a live CUDA
+# context the build sandbox lacks.
 COPY setup_deepep_v2_gdaki_efa.sh /opt/setup_deepep_v2_gdaki_efa.sh
 ARG AWS_OFI_NCCL_SHA=a3d268024576c159e97916151666c2ef20f91813
-ARG AWS_OFI_NCCL_PR=1351
-ARG AWS_OFI_NCCL_PR_SHA=c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b
 ARG DEEPEP_SHA=b306af06afd412c88e51e71802951606e40b7358
 ARG DEEPEP_PR=612
 ARG DEEPEP_PR_SHA=28d1f7fb173f728be51632ce0026fea23243e350
 RUN chmod +x /opt/setup_deepep_v2_gdaki_efa.sh \
-    && AWS_OFI_NCCL_SHA=${AWS_OFI_NCCL_SHA} AWS_OFI_NCCL_PR=${AWS_OFI_NCCL_PR} AWS_OFI_NCCL_PR_SHA=${AWS_OFI_NCCL_PR_SHA} \
+    && AWS_OFI_NCCL_SHA=${AWS_OFI_NCCL_SHA} \
        DEEPEP_SHA=${DEEPEP_SHA} DEEPEP_PR=${DEEPEP_PR} DEEPEP_PR_SHA=${DEEPEP_PR_SHA} \
        /opt/setup_deepep_v2_gdaki_efa.sh
 ENV LD_LIBRARY_PATH=/opt/aws-ofi-nccl-gdaki/lib:/opt/libfabric-gdaki/lib:/opt/rdma-core-gdaki/lib:${LD_LIBRARY_PATH}
@@ -215,7 +217,6 @@ ENV NCCL_NET_PLUGIN=/opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so
 ENV NCCL_GIN_ENABLE=1
 ENV NCCL_GIN_TYPE=3
 ENV OFI_NCCL_GIN_GDAKI=1
-ENV OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1
 ENV EP_REUSE_NCCL_COMM=0
 ENV OFI_NCCL_GIN_MAX_REQUESTS=512
 ENV FI_PROVIDER=efa
@@ -238,8 +239,8 @@ RUN { echo "vllm-deepep-v2-GDAKI-efa image (GPU-initiated, NCCL_GIN_TYPE=3)"; \
       echo "efa:           $(cat /opt/efa-installer.version)"; \
       echo "rdma-core:     $(cat /opt/rdma-core-gdaki.sha) (post-PR#1701 comp-cntr)"; \
       echo "libfabric:     $(cat /opt/libfabric-gdaki.sha) (post-PR#12591)"; \
-      echo "aws-ofi-nccl:  $(cat /opt/aws-ofi-nccl-gdaki.sha) (--enable-gdaki +PR#1351)"; \
-      echo "deepep base:   $(cat /opt/deepep.base.sha) + PR612 + V13_HOST_UC_SHIM (built in-pod)"; \
+      echo "aws-ofi-nccl:  $(cat /opt/aws-ofi-nccl-gdaki.sha) (--enable-gdaki, SHA pin)"; \
+      echo "deepep base:   $(cat /opt/deepep.base.sha) + PR#612 (upstream, open; built in-pod)"; \
       echo "vllm:          $(cat /opt/vllm/.git-sha) (PR#41183, wheel-pinned; PR#47785 documented-missing)"; \
       echo "built:         $(date -u +%Y-%m-%dT%H:%M:%SZ)"; } > /opt/GUIDE-PROVENANCE.txt \
     && cat /opt/GUIDE-PROVENANCE.txt

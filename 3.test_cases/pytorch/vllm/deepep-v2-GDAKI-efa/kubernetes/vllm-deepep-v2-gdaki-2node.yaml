@@ -31,6 +31,11 @@
 # If the serve hits status-9 send CQEs, that is a known upstream failure mode under investigation —
 # capture the full log and correlate; do not treat as new.
 #
+# NODE PRECONDITION (GDRCopy): the GIN path needs the host gdrdrv kernel module at GDRCopy >= 2.5
+# (check: cat /sys/module/gdrdrv/version). This replaces the old aws-ofi-nccl PR#1351 forced-PCIe
+# workaround, which the maintainer closed in favour of requiring GDRCopy 2.5+ on the node — so this
+# manifest sets no OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY; ensure the node driver is 2.5+ instead.
+#
 # privileged: true is REQUIRED where /dev/gdrdrv is not advertised by a device plugin (the
 # unprivileged device cgroup blocks open("/dev/gdrdrv") with EPERM even after CAP_MKNOD + chmod;
 # only privileged allow-all-devices passes; the GIN path needs gdrcopy). If your cluster runs a
@@ -129,7 +134,6 @@ spec:
         - { name: NCCL_GIN_ENABLE,           value: "1" }
         - { name: OFI_NCCL_GIN_GDAKI,        value: "1" }     # GPU-initiated backend (contrast proxy: 0)
         - { name: OFI_NCCL_GDAKI_EFA_HW_COUNTER, value: "off" } # PR#1311 tristate (auto|on|off — STRINGS); "off" for node efa.ko<3.3.0 (see header)
-        - { name: OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY, value: "1" }  # aws-ofi-nccl PR#1351 (cherry-picked in setup_deepep_v2_gdaki_efa.sh)
         - { name: EP_REUSE_NCCL_COMM,        value: "0" }     # DeepEP own-comm; never borrow torch lazy comm
         - { name: OFI_NCCL_GIN_MAX_REQUESTS, value: "512" }
         - { name: NCCL_CUMEM_ENABLE,         value: "1" }

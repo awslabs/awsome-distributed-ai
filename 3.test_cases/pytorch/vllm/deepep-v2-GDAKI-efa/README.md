@@ -25,23 +25,23 @@ public source:
    provider and GDAKI's hw-counter mode consume. No release tag carries it yet, so pinned by SHA.
 2. **libfabric @ main post-[PR#12591](https://github.com/ofiwg/libfabric/pull/12591)** (merged
    2026-07-28) — makes `prov/efa` consume the comp-cntr caps; built against the rdma-core above.
-3. **aws-ofi-nccl @ `a3d2680` `--enable-gdaki`** — carries
-   [PR#1311](https://github.com/aws/aws-ofi-nccl/pull/1311) (the per-platform EFA hw-counter
-   tristate `OFI_NCCL_GDAKI_EFA_HW_COUNTER`) and the GIN seq-space aliasing fix, plus a
-   [PR#1351](https://github.com/aws/aws-ofi-nccl/pull/1351) cherry-pick (the `OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY`
-   override — the same forced-PCIe fix the proxy sample carries).
+3. **aws-ofi-nccl @ `a3d2680` `--enable-gdaki`** (SHA pin, **no local patches**) — `a3d2680`
+   carries [PR#1311](https://github.com/aws/aws-ofi-nccl/pull/1311) (the per-platform EFA hw-counter
+   tristate `OFI_NCCL_GDAKI_EFA_HW_COUNTER`) and the GIN seq-space aliasing fix. It does **not** carry
+   [PR#1351](https://github.com/aws/aws-ofi-nccl/pull/1351) (the `OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY`
+   forced-PCIe override): the maintainer **closed #1351** in favour of requiring **GDRCopy 2.5+** on the
+   node, so this sample follows that guidance — no cherry-pick, and GDRCopy 2.5+ is a documented
+   [node precondition](#prerequisites) instead.
 
 Everything else — `EP_REUSE_NCCL_COMM=0` (or serve init segfaults; DeepEP must create its own comm
 because torch's is lazy/null under vLLM), the DeepEP-V2 source pin (`b306af06` +
-[PR#612](https://github.com/deepseek-ai/DeepEP/pull/612), EFA auto-QP cap, pinned to the PR's
-**immutable head SHA**), and the vLLM wheel-pin — is identical to the proxy sample.
+[PR#612](https://github.com/deepseek-ai/DeepEP/pull/612), EFA auto-QP cap — **filed upstream and
+still open**, merged in by the PR's **immutable head SHA**, the one upstream reference this folder
+carries), and the vLLM wheel-pin — is the standard V2/GDAKI contract.
 
-### The V13 host-UC shim (dlsym-guarded, INERT on upstream)
-The DeepEP source additionally applies `v13-host-uc-shim.patch`: a `dlsym`-guarded hook in
-`csrc/elastic/buffer.hpp` that registers a `cudaHostAlloc`'d UC workspace with the plugin **only if**
-the running plugin exports `nccl_ofi_gin_register_host_uc_workspace_with_default`. Upstream `a3d2680`
-does **not** export it, so the shim logs a fallback line and is a no-op; it is carried as falsifiable
-evidence lineage, not a live code path on the shipped plugin.
+**Net:** this folder is **post-merge upstream SHA pins + one open upstream DeepEP reference (PR#612),
+with zero local source patches.** The merged-upstream substrate fixes (rdma-core #1701, libfabric
+#12591, aws-ofi-nccl #1311, carried by the `a3d2680` pin) are plain SHA pins, not patches.
 
 ### eager vs non-eager (both measured; see `benchmarks/`)
 | Mode | Status | How |
@@ -58,6 +58,12 @@ compilation serve. Numbers for both modes are in `benchmarks/`.
 ## Prerequisites
 - An EKS cluster of p5en.48xlarge (H200) with EFA + the EFA K8s device plugin (the shipped launcher);
   the container also runs under raw `docker run` on any 2 EFA hosts if you wire the rendezvous by hand.
+- **Node GDRCopy >= 2.5:** the GIN path needs the host `gdrdrv` kernel module at GDRCopy 2.5 or newer
+  (check `cat /sys/module/gdrdrv/version`, or `modinfo gdrdrv | grep ^version`). This replaces the
+  older aws-ofi-nccl [PR#1351](https://github.com/aws/aws-ofi-nccl/pull/1351) forced-PCIe workaround,
+  which the maintainer closed in favour of requiring GDRCopy 2.5+ on the node — so this sample carries
+  **no** `OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY` and no #1351 cherry-pick; make sure the node driver is 2.5+
+  (`recipe/verify-image.sh` and the K8s launcher fail loud if it is older).
 - **Node efa.ko for GDAKI hw-counter mode:** the byte-level hardware completion counter needs node
   `efa.ko >= 3.3.0` (efa_linux_3.3.0, 2026-07-28; check `cat /sys/module/efa/version`). On older
   nodes set `OFI_NCCL_GDAKI_EFA_HW_COUNTER=off` (the kubernetes/ YAML default) and GDAKI runs in its
@@ -72,8 +78,9 @@ bash setup/build-push.sh
 ```
 The image is NGC-from-scratch (`FROM nvcr.io/nvidia/cuda:...`). It builds rdma-core (post-#1701) and
 libfabric (post-#12591) from source, then `setup_deepep_v2_gdaki_efa.sh` builds aws-ofi-nccl
-`--enable-gdaki` (+ the #1351 param) against them and stages DeepEP-V2 source + the V13 shim; the
-`_C.so` is compiled in-pod on first boot (needs a live CUDA context) by `recipe/build_deepep.sh`.
+`--enable-gdaki` at its pinned SHA (no local patches) against them and stages DeepEP-V2 source
+(`b306af06` + upstream PR#612); the `_C.so` is compiled in-pod on first boot (needs a live CUDA
+context) by `recipe/build_deepep.sh`.
 
 ## Smoke-test the substrate before loading the model
 
@@ -83,7 +90,8 @@ bash recipe/verify-image.sh $REGISTRY/vllm-deepep-v2-gdaki-efa:$IMAGE_TAG
 ```
 Asserts (fail-loud) the EFA provider resolves, the rdma-core comp-cntr verbs are present, a single
 NCCL 2.30.4 wins on the linker path, the GIN plugin exports `ncclGinPlugin`, GDAKI + the
-`OFI_NCCL_GDAKI_EFA_HW_COUNTER` param are compiled in, and the V13 shim marker is in the DeepEP tree.
+`OFI_NCCL_GDAKI_EFA_HW_COUNTER` param are compiled in, and (when run on a node) the host gdrdrv is
+GDRCopy 2.5+.
 
 **2. Cross-node kernel smoke (prove bytes move over EFA before the model load):**
 ```bash

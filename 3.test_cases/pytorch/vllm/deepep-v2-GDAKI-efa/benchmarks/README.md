@@ -12,7 +12,7 @@ aggregate output tok/s + per-request latency percentiles. Raw JSONL lands in `ra
 | Transport | DeepEP-V2 `ElasticBuffer`, NCCL-GIN **GDAKI** (`NCCL_GIN_TYPE=3`, `OFI_NCCL_GIN_GDAKI=1`), `efa-direct` |
 | Model | `Qwen/Qwen3-30B-A3B-FP8`, DP16/EP16 and DP32/EP32 (`--enable-expert-parallel --all2all-backend deepep_v2`) |
 | vLLM | `0.22.1rc1.dev283+ge2f993dc4` (first commit with the `deepep_v2` backend, [PR#41183](https://github.com/vllm-project/vllm/pull/41183)) |
-| Stack | torch 2.11.0+cu130, nvidia-nccl-cu13 2.30.4, DeepEP `b306af06`+PR#612+V13 shim, aws-ofi-nccl `a3d2680` `--enable-gdaki`+PR#1351, rdma-core post-#1701, libfabric post-#12591 |
+| Stack | torch 2.11.0+cu130, nvidia-nccl-cu13 2.30.4, DeepEP `b306af06`+PR#612 (upstream, open), aws-ofi-nccl `a3d2680` `--enable-gdaki` (SHA pin), rdma-core post-#1701, libfabric post-#12591 — zero local source patches |
 | Node efa.ko | **3.0.0g / 3.1.0g (heterogeneous)** on the validation cluster → `OFI_NCCL_GDAKI_EFA_HW_COUNTER=off` (< 3.3.0) |
 | Probe | `recipe/benchmark_probe.py` (stdlib urllib+threads, 127.0.0.1 loopback), `max_tokens=128`, `temperature=0.0` (greedy), concurrency 1/8/16/32/64 |
 | Date | 2026-08-14 |

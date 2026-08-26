@@ -8,6 +8,6 @@ export AWS_REGION="us-east-2"
 export SERVE_MODEL="Qwen/Qwen3-30B-A3B-FP8"
 export SERVE_DP="16"        # total data-parallel = EP size (16 = 2 nodes, 32 = 4 nodes)
 export SERVE_DP_LOCAL="8"   # GPUs per node
-# The GDAKI-stack pins (rdma-core / libfabric / aws-ofi-nccl SHAs, PR#1351 head, DeepEP base+PR)
+# The GDAKI-stack pins (rdma-core / libfabric / aws-ofi-nccl SHAs, DeepEP base + open upstream PR#612)
 # all carry immutable-SHA defaults in the Dockerfile + setup_deepep_v2_gdaki_efa.sh. Override an
 # ARG at build time only to move a pin — the defaults reproduce the 2026-08-14 measured image.
