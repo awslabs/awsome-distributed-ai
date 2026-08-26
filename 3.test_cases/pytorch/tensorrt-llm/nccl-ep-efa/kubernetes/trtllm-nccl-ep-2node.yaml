@@ -12,11 +12,15 @@
 #   "no route to" the remote orted). The torchrun-driven probe does not share that
 #   limitation — hence serve-on-one-node + probe-across-two. See README "Known limitations".
 #
-#   Cross-node probe, once both pods are Running:
+#   Cross-node probe, once both pods are Running. LEADER is the stable headless-Service DNS
+#   name (this is what publishNotReadyAddresses + the headless clusterIP below are FOR —
+#   it survives pod restarts, where a raw pod IP does not, and needs no manual lookup):
+#     LEADER=trtllm-nccl-ep-0.trtllm-nccl-ep.trtllm-nccl-ep.svc.cluster.local
 #     kubectl -n trtllm-nccl-ep exec trtllm-nccl-ep-1 -- bash -lc \
-#       'nohup /opt/run-kernel-test.sh worker <pod-0-ip> 1 > /tmp/kt.log 2>&1 &'
-#     kubectl -n trtllm-nccl-ep exec trtllm-nccl-ep-0 -- /opt/run-kernel-test.sh leader <pod-0-ip>
-#   (stop the serve on ordinal 0 first if it holds the GPUs: pkill -f '[t]rtllm-serve')
+#       "nohup /opt/run-kernel-test.sh worker $LEADER 1 > /tmp/kt.log 2>&1 &"
+#     kubectl -n trtllm-nccl-ep exec trtllm-nccl-ep-0 -- /opt/run-kernel-test.sh leader $LEADER
+#   Free ordinal 0's GPUs for the probe by deploying with RUN_SERVE=0 (env below) so it holds
+#   idle, then flip RUN_SERVE=1 to serve; or, if it is already serving, pkill -f '[t]rtllm-serve'.
 #
 # Scale seams (per-node EFA NIC count differs by instance type):
 #   p5.48xlarge  (H100): vpc.amazonaws.com/efa: "32", nodeSelector p5.48xlarge
@@ -96,16 +100,24 @@ spec:
           echo "=== trtllm-nccl-ep pod $(hostname) $(date -u +%FT%TZ) ==="
           echo "aws-ofi-nccl effective SHA: $(cat /opt/aws-ofi-nccl.effective.sha 2>/dev/null || echo unknown)"
           ORDINAL=${HOSTNAME##*-}
-          if [ "$ORDINAL" = "0" ]; then
+          # RUN_SERVE gates whether ordinal 0 becomes the serve (PID 1). Deploy once with
+          # RUN_SERVE=0 to hold ordinal 0 idle for the cross-node probe (the header's
+          # deploy->probe->serve order — otherwise serve is PID 1 and the "pkill -f
+          # [t]rtllm-serve" step has nothing to hand the GPUs to), then flip to 1 to serve.
+          if [ "$ORDINAL" = "0" ] && [ "${RUN_SERVE:-1}" = "1" ]; then
             exec /opt/serve.sh
           else
             echo "probe peer ready — join the cross-node kernel test with:"
-            echo "  /opt/run-kernel-test.sh worker <pod-0-ip> $ORDINAL"
+            echo "  /opt/run-kernel-test.sh worker trtllm-nccl-ep-0.trtllm-nccl-ep.trtllm-nccl-ep.svc.cluster.local $ORDINAL"
             touch /tmp/probe-peer.ready
             exec sleep infinity
           fi
         env:
         # ---- model + shape knobs (defaults = the measured EP8 serve) ----
+        # RUN_SERVE=1 (default) makes ordinal 0 the EP8 serve; set 0 to hold it idle as a
+        # probe peer for the deploy->probe->serve order (args block + header). The probes
+        # below key off it too, so RUN_SERVE=0 does not restart-loop waiting on :8000/health.
+        - { name: RUN_SERVE, value: "1" }
         - { name: SERVE_MODEL, value: "Qwen/Qwen3-30B-A3B" }  # any MoE with routed-experts % EP == 0 (serve.sh asserts)
         - { name: SERVE_TP, value: "8" }
         - { name: SERVE_EP, value: "8" }
@@ -117,9 +129,6 @@ spec:
         #      transport contract) ----
         - { name: NCCL_GIN_TYPE,             value: "2" }     # 2 = CPU-proxy GIN (the EFA-viable path)
         - { name: NCCL_GIN_ENABLE,           value: "1" }
-        - { name: OFI_NCCL_GIN_GDAKI,        value: "0" }     # GPU-initiated: not the shipped path on EFA
-        - { name: OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY, value: "1" }  # aws-ofi-nccl PR#1351 (baked in setup_trtllm_nccl_ep_efa.sh)
-        - { name: OFI_NCCL_GIN_MAX_REQUESTS, value: "512" }
         - { name: NCCL_CUMEM_ENABLE,         value: "1" }
         - { name: NCCL_NVLS_ENABLE,          value: "0" }
         - { name: NCCL_IGNORE_DISABLED_P2P,  value: "1" }
@@ -130,17 +139,23 @@ spec:
         - { name: OFI_NCCL_PROTOCOL,         value: "RDMA" }
         - { name: NCCL_NET_PLUGIN,           value: "/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so" }
         - { name: NCCL_DEBUG,                value: "WARN" }  # INFO to see the efa-direct banner proof
-        # pod 0: trtllm-serve /health on :8000 = the real "serving" signal (weights loaded,
-        # NcclEP groups created). pod 1 is an idle probe peer, ready once its shell settles.
+        # pod 0 WHEN SERVING (RUN_SERVE=1): trtllm-serve /health on :8000 = the real "serving"
+        # signal (weights loaded, NcclEP groups created). Every other case — pod 1, or pod 0
+        # held idle with RUN_SERVE=0 — is a probe peer, ready once its shell touches the file
+        # (so RUN_SERVE=0 does not restart-loop against a :8000 that will never come up).
         startupProbe:
           exec:
-            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health; else test -f /tmp/probe-peer.ready; fi"]
+            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ] && [ \"${RUN_SERVE:-1}\" = \"1\" ]; then curl -sf http://127.0.0.1:8000/health; else test -f /tmp/probe-peer.ready; fi"]
           periodSeconds: 30
           failureThreshold: 60               # up to 30 min: 30B-class weight download + load
         readinessProbe:
           exec:
-            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health; else test -f /tmp/probe-peer.ready; fi"]
+            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ] && [ \"${RUN_SERVE:-1}\" = \"1\" ]; then curl -sf http://127.0.0.1:8000/health; else test -f /tmp/probe-peer.ready; fi"]
           periodSeconds: 15
+        # No livenessProbe by deliberate choice: a serve that wedges after startup drops out of
+        # the Service endpoints (readiness) but is NOT auto-restarted, so its logs/GPU state
+        # survive for inspection — the right trade for a two-pod diagnostic sample over a
+        # self-healing production serve. Add a livenessProbe (same command) to flip that.
         # requests == limits (Guaranteed QoS): NCCL_GIN_TYPE=2 is the CPU-PROXY path, so
         # proxy-thread CPU sits on the data path — Burstable QoS + CFS throttling under node
         # pressure would degrade network throughput and silently taint published numbers.
@@ -151,27 +166,39 @@ spec:
             hugepages-2Mi: 5120Mi            # needs 2Mi hugepages pre-allocated on the node (they were on the nodes the measured runs used; without them the pod sits Pending)
             cpu: "90"
             memory: 1024Gi
+            ephemeral-storage: 200Gi         # reserve the `work` emptyDir (below): sizeLimit alone bounds but does not RESERVE it, so the scheduler could place this on a node without room and evict mid-run
           requests:
             nvidia.com/gpu: "8"
             vpc.amazonaws.com/efa: "16"
             hugepages-2Mi: 5120Mi
             cpu: "90"
             memory: 1024Gi
+            ephemeral-storage: 200Gi
         securityContext:
           privileged: true                   # gdrdrv device-cgroup (see header)
           capabilities:
-            add: [IPC_LOCK]                  # RDMA memory pinning
+            # IPC_LOCK is redundant UNDER privileged (privileged already grants the full
+            # capability set) — kept so it stays load-bearing for the non-privileged/
+            # device-plugin variant the header offers: drop `privileged`, add `--device
+            # /dev/gdrdrv`, and IPC_LOCK is then the capability RDMA memory pinning needs.
+            add: [IPC_LOCK]
         ports:
         - { containerPort: 8000,  name: http }
         - { containerPort: 29501, name: probe-rdzv }
         volumeMounts:
         - { name: shm,            mountPath: /dev/shm }
         - { name: dev-infiniband, mountPath: /dev/infiniband }
+        # NON-PRIVILEGED variant (drop `privileged: true` above): also mount /dev/gdrdrv, the
+        # way the sibling megatron-bridge and sglang samples do — GIN's gdrcopy handle needs
+        # the device node, which privileged grants implicitly but an unprivileged pod does not.
+        # - { name: dev-gdrdrv,     mountPath: /dev/gdrdrv }
         - { name: work,           mountPath: /work }     # HF cache + logs (per-pod, ephemeral)
       volumes:
       - name: shm
         emptyDir: { medium: Memory, sizeLimit: 64Gi }
       - name: dev-infiniband
         hostPath: { path: /dev/infiniband }
+      # - name: dev-gdrdrv                                # pairs with the non-privileged mount above
+      #   hostPath: { path: /dev/gdrdrv, type: CharDevice }
       - name: work
         emptyDir: { sizeLimit: 200Gi }       # Qwen3-30B ~60GB of weights + HF cache; size for your model
