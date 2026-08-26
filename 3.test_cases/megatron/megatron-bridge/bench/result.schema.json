@@ -23,9 +23,11 @@
     },
     "validity": {
       "type": "object",
-      "required": ["image_identity", "single_nccl", "nccl_build_runtime_match", "efa", "no_token_drop", "steady_timing", "finite_loss", "finite_gradient"],
+      "required": ["entrypoint_source", "image_identity", "runtime_dispatcher_identity", "single_nccl", "nccl_build_runtime_match", "efa", "no_token_drop", "steady_timing", "finite_loss", "finite_gradient"],
       "properties": {
+        "entrypoint_source": {"type": "boolean"},
         "image_identity": {"type": "boolean"},
+        "runtime_dispatcher_identity": {"type": "boolean"},
         "elastic_buffer": {"type": "boolean"},
         "deepep_v2_manager": {"type": "boolean"},
         "single_nccl": {"type": "boolean"},
