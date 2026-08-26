@@ -50,7 +50,6 @@ What was **not** measured, and is therefore not claimed here:
 |---|---|---|
 | `TRTLLM_NCCL_EP_ALGO` (+ layout) | `LOW_LATENCY` (+RANK_MAJOR) | different EP kernels entirely; patched image required for non-default (README trap 4) |
 | `NCCL_EP_NUM_QP_PER_RANK` | 32 | QP fan-out per rank on EFA — throughput-relevant |
-| `OFI_NCCL_GIN_MAX_REQUESTS` | 512 | GIN request-ring depth |
 | `SERVE_TP` / `SERVE_EP` | 8 / 8 | the parallel shape |
 | `SERVE_MAX_BATCH_SIZE` / `SERVE_MAX_NUM_TOKENS` / `SERVE_MAX_SEQ_LEN` | 4 / 2048 / 2048 | serving-engine ceilings that bound every level |
 | model | `Qwen/Qwen3-30B-A3B` | expert count/hidden size change the all-to-all shape |
