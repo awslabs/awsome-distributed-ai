@@ -46,8 +46,8 @@ stock `alltoall` dispatcher (`train-step.sh`). Never read a build-gate as an E2E
 |---|---|---|
 | Base image | `nvcr.io/nvidia/pytorch:26.02-py3` | Same NGC base as the slime RL sibling. Bakes torch 2.11/CUDA 13 with TransformerEngine/apex/flash-attn compiled against that exact ABI — what megatron.core's H100 path needs. |
 | EFA installer | 1.48.0 | The userspace of the measured NCCL-GIN substrate. Bumping is a re-measure event. |
-| NCCL | `v2.30.4-1` (source build) | GIN device API generation (`nccl_device.h` asserted at build). Same NCCL line the NGC base bakes — the ld.so.conf override introduces no drift; source-built so DeepEP has one controlled header/lib root. |
-| aws-ofi-nccl | commit `9c44d34` + PR#1351 head `c2e773d` | The GIN CPU-proxy plugin pins of the measured substrate (same as the TensorRT-LLM NcclEP sibling). Immutable SHAs — `refs/pull/N/head` is a moving ref. |
+| NCCL | `v2.30.4-1` (source build) | GIN device API generation (`nccl_device.h` asserted at build). The NGC base bakes an OLDER NCCL line (2.29.x), so this source-built copy is a deliberately newer line and the `00-nccl-gin.conf` ld.so.conf entry is **load-bearing** — it makes this GIN-capable build win the loader search over the base's baked copy (`verify-image.sh` asserts which one resolves). Source-built so DeepEP has one controlled header/lib root. |
+| aws-ofi-nccl | commit `9c44d34` + PR#1351 head `c2e773d` | The GIN CPU-proxy plugin lineage this folder standardises on (same pins as the TensorRT-LLM NcclEP sibling). These SHAs postdate the Wave-28 run, so they are the standardised lineage, not that run's exact pins. Immutable SHAs — `refs/pull/N/head` is a moving ref. |
 | gdrcopy | commit `c91ad9f` (= v2.5.2) | GIN **requires** gdrcopy compiled in (trap 4). Commit pin, not tag. |
 | DeepEP | `01dc3aa` (upstream `deepseek-ai/DeepEP` main) | Carries EPv2 (ElasticBuffer + NCCL backend) and is the **exact base of draft PR #612**, so the opt-in layer applies `--check`-clean. Stock upstream — NOT a fork. |
 | Megatron-LM | `19deef67` (main) | The **exact base of draft PR #4632** (ElasticBuffer in the flex dispatcher). |
@@ -85,7 +85,8 @@ PR states below are as of 2026-08-25 — check them before relying on this table
 3. **Two NCCLs in one image — the resolved path matters.** The NGC base bakes its own libnccl in a
    different directory; if it wins the loader search, you silently run a non-GIN-verified copy.
    The image ranks the source build first via `/etc/ld.so.conf.d/00-nccl-gin.conf`, and
-   `verify-image.sh` asserts **which path** `libnccl.so.2` resolves to *and* its version string.
+   `verify-image.sh` asserts **which `libnccl.so.2` the loader actually resolves** (via `dlopen` +
+   `/proc/self/maps`, not the `ldconfig -p` cache order) *and* its version string.
 4. **GIN needs gdrcopy at compile time and gdrdrv at run time.** An aws-ofi-nccl built without
    `gdrapi.h` carries "GDRCopy support not available at compile time" and GIN init fails at run
    time; the setup script asserts that string is *absent* from the built plugin. At run time,
@@ -113,7 +114,6 @@ PR states below are as of 2026-08-25 — check them before relying on this table
 |---|---|
 | `NCCL_GIN_TYPE=2`, `NCCL_GIN_ENABLE=1` | GIN CPU-proxy — the EFA-viable GIN mode |
 | `OFI_NCCL_GIN_GDAKI=0` | GPU-initiated GIN is not the shipped path on EFA |
-| `OFI_NCCL_GIN_MAX_REQUESTS=512` | GIN request-ring depth of the measured substrate |
 | `FI_PROVIDER=efa`, `FI_EFA_USE_DEVICE_RDMA=1` | EFA with GPU-direct RDMA |
 | `FI_EFA_ENABLE_SHM_TRANSFER=0`, `FI_EFA_FORK_SAFE=1` | no SHM shortcut; fork-safe for the proxy |
 | `NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so` | the GIN-capable plugin, explicitly |
@@ -158,6 +158,8 @@ docker build -f nemo-rl.Dockerfile --build-arg APPLY_DRAFT_ROLLOUT_PATCHES=1 \
   -t ${FULL_IMAGE}-draftprs .
 
 docker push ${FULL_IMAGE}
+# push the draft-PR flavor too if you built it (distinct tag — never overwrite the baseline)
+docker push ${FULL_IMAGE}-draftprs
 ```
 
 ### 3. Gate the image before any cluster deploy
@@ -201,8 +203,13 @@ kubectl -n ${NAMESPACE} exec ${W1} -c ray-worker -- bash -lc \
   "nohup /opt/train-step.sh worker ${W0_IP} 1 > /tmp/train.log 2>&1 &"
 kubectl -n ${NAMESPACE} exec ${W0} -c ray-worker -- /opt/train-step.sh leader ${W0_IP}
 # ... TRAIN-STEP-PASS dispatcher=alltoall world=16 ep=16
-# on the -draftprs image:
-#   MOE_DISPATCHER=flex /opt/train-step.sh leader ${W0_IP}
+# on the -draftprs image, run the flex (DeepEP V2 ElasticBuffer) dispatcher — set
+# MOE_DISPATCHER=flex on BOTH nodes (it is one torchrun job across both; if only one
+# rank sets flex the ranks disagree on the dispatcher and the collective hangs):
+#   kubectl -n ${NAMESPACE} exec ${W1} -c ray-worker -- bash -lc \
+#     "MOE_DISPATCHER=flex nohup /opt/train-step.sh worker ${W0_IP} 1 > /tmp/train.log 2>&1 &"
+#   kubectl -n ${NAMESPACE} exec ${W0} -c ray-worker -- \
+#     env MOE_DISPATCHER=flex /opt/train-step.sh leader ${W0_IP}
 ```
 
 ### 7. Full GRPO run (STAGED — draft-PR image only, not re-measured from this folder)
@@ -230,8 +237,10 @@ Treat results as your own measurement — this folder publishes none for this pa
   p5.48xlarge, rebuild Layer 4 with the define raised (documented one-liner in the issue) — not
   baked here because it is a non-upstream one-off.
 - **No performance numbers.** Dispatch/combine latency and GRPO throughput on this substrate are
-  future work; for kernel-level EP benchmarks on the same NCCL-GIN substrate see
-  [`micro-benchmarks/expert-parallelism`](../../../../micro-benchmarks/expert-parallelism).
+  future work; for kernel-level EP benchmarks see
+  [`micro-benchmarks/expert-parallelism`](../../../../micro-benchmarks/expert-parallelism) — note
+  that benchmark runs DeepEP V2 on the **EFA-GDA** NCCL-GIN backend (`NCCL_GIN_TYPE=5`), not this
+  folder's CPU-proxy one (`NCCL_GIN_TYPE=2`).
 
 ## File structure
 
@@ -264,4 +273,5 @@ deepep-v2-efa/
   mirrors its shape), [`sglang/dsr1-deepep-efa`](../../sglang/dsr1-deepep-efa) (the NVSHMEM-path
   DeepEP serving sample)
 - [`micro-benchmarks/expert-parallelism`](../../../../micro-benchmarks/expert-parallelism) —
-  kernel-level EP benchmarks, including a DeepEP V2 (NCCL GIN) benchmark
+  kernel-level EP benchmarks, including a DeepEP V2 EFA-GDA (`NCCL_GIN_TYPE=5`) benchmark — a
+  different GIN backend from this folder's CPU-proxy (`NCCL_GIN_TYPE=2`)

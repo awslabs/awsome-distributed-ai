@@ -18,6 +18,6 @@ expert-parallel MoE all-to-all.
 
 For RL post-training with a different stack (SLIME + SGLang) on the same HyperPod-EKS Ray-cluster
 pattern, see [`3.test_cases/pytorch/slime`](../slime). For kernel-level expert-parallelism
-dispatch/combine benchmarks over EFA — including a DeepEP V2 benchmark on the same NCCL-GIN
-substrate this test case uses — see
+dispatch/combine benchmarks over EFA — including a DeepEP V2 benchmark on the EFA-GDA NCCL-GIN
+backend (this test case runs the CPU-proxy one) — see
 [`micro-benchmarks/expert-parallelism`](../../../micro-benchmarks/expert-parallelism).

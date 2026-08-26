@@ -12,9 +12,21 @@
 #           compiled against the GIN-capable NCCL under $NCCL_HOME. Run AFTER
 #           the optional draft-PR patch layer so patched kernels compile in.
 #
-# Distinct from the NVSHMEM-path setup_deepep_efa.sh (vendor-synced via
-# .github/workflows/deepep-vendor-sync.yml) — this script builds the NCCL-GIN
-# V2 backend, links NO NVSHMEM, and is intentionally NOT vendor-synced.
+# The deepep phase builds the SAME DeepEP V2 NCCL-GIN backend as the repo's
+# canonical V2 builder,
+# micro-benchmarks/expert-parallelism/deepep-v2-benchmark/setup_deepep_gin.sh.
+# This is the NeMo-RL test case's self-contained variant: it ALSO builds the
+# aws-ofi-nccl GIN plugin (the ofi phase), and it compiles the stock-upstream
+# deepseek-ai/DeepEP tree the Dockerfile pins (@01dc3aa, the base of draft PR
+# #612) rather than gin's amazon-contributing default.
+# NOTE on NVSHMEM: deep_ep's _C.so IS build-linked against NVSHMEM — see the
+# Dockerfile's Layer 7b, which makes the pip nvidia-nvshmem-cu13 lib win the
+# loader search (without it `import deep_ep` dies on an nvshmem undefined
+# symbol). NVSHMEM is simply NOT the run-time transport on the V2 NCCL-GIN
+# path; the GIN backend carries the traffic.
+# Only the V1 NVSHMEM-path setup_deepep_efa.sh copies are vendor-synced (via
+# .github/workflows/deepep-vendor-sync.yml); neither this script nor the
+# canonical setup_deepep_gin.sh is in that sync.
 #
 # Runs inside the Docker build (no GPU needed).
 set -euo pipefail
