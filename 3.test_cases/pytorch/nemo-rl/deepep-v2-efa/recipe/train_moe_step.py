@@ -42,6 +42,7 @@ replicated params in lock-step and the same batch, gate (2) cross-rank loss
 agreement is a true transport test at any step count: a rank whose dispatched
 tokens were corrupted in the MoE all-to-all disagrees, a correct one does not.
 """
+import datetime
 import os
 import sys
 import traceback
@@ -70,8 +71,18 @@ def log(msg):
 
 def main():
     torch.cuda.set_device(LOCAL)
-    dist.init_process_group("nccl", rank=RANK, world_size=WORLD)
+    # Explicit timeout so a wedged peer fails fast instead of holding the nodes
+    # for the default 30-min NCCL timeout (see run-rollout-probe.sh / the docs:
+    # the worker runs detached under kubectl exec).
+    dist.init_process_group(
+        "nccl", rank=RANK, world_size=WORLD,
+        timeout=datetime.timedelta(minutes=10),
+    )
     dev = torch.device("cuda", LOCAL)
+    # gate 2 (cross-rank loss agreement) is a per-step invariant tracked across
+    # ALL steps below — needs at least two steps, and losses[-1] < losses[0]
+    # (the decrease gate) is meaningless with fewer.
+    assert STEPS >= 2, f"TRAIN_STEPS must be >= 2 (got {STEPS})"
 
     from megatron.core import parallel_state
     from megatron.core.models.gpt.gpt_layer_specs import get_gpt_layer_local_spec
@@ -173,6 +184,7 @@ def main():
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
     losses = []
+    max_spread = 0.0
     for step in range(STEPS):
         optimizer.zero_grad(set_to_none=True)
         # fp32 model (see config) — no autocast needed; every linear sees fp32 x fp32.
@@ -199,11 +211,14 @@ def main():
         dist.all_reduce(t_min, op=dist.ReduceOp.MIN)
         dist.all_reduce(t_max, op=dist.ReduceOp.MAX)
         spread = (t_max - t_min).item()
+        max_spread = max(max_spread, spread)
         log(f"TRAIN-STEP step={step} loss={loss.item():.4f} cross-rank-spread={spread:.2e}")
 
     finite = all(l == l and abs(l) != float("inf") for l in losses)
     decreasing = losses[-1] < losses[0]
-    agree = spread < 1e-2
+    # gate 2 is a PER-STEP invariant — check the worst step, not just the last
+    # (an early-step transport fault that later clears must still fail the gate).
+    agree = max_spread < 1e-2
     ok = finite and decreasing and agree
     log(f"TRAIN-STEP losses={['%.4f' % l for l in losses]} "
         f"finite={finite} decreasing={decreasing} cross-rank-agree={agree}")
@@ -219,9 +234,15 @@ def main():
 
 
 if __name__ == "__main__":
+    rc = 1
     try:
-        sys.exit(main())
+        rc = main()
     except Exception:
         traceback.print_exc()
         print(f"[rank{RANK}] TRAIN-STEP-EXC", flush=True)
-        sys.exit(1)
+    finally:
+        # Tear the group down on every path so a rank that raised does not leave
+        # its peers blocked in the MIN all_reduce / barrier until the timeout.
+        if dist.is_initialized():
+            dist.destroy_process_group()
+    sys.exit(rc)

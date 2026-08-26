@@ -23,6 +23,7 @@ therefore passes `num_allocated_qps`/`num_sms`/`num_qps` EXPLICITLY
 (EP_NUM_QPS=2 is the value the #612 evidence validated on p5en), which keeps
 the unpatched baseline probeable; on a patched image the auto-sizers also work.
 """
+import datetime
 import os
 import sys
 import traceback
@@ -48,7 +49,13 @@ def log(msg):
 
 def main():
     torch.cuda.set_device(LOCAL)
-    dist.init_process_group("nccl", rank=RANK, world_size=WORLD)
+    # Explicit timeout so a wedged peer fails fast instead of sitting in the
+    # default 30-min NCCL timeout (the documented flow runs the worker detached
+    # under kubectl exec, so a worker-side stall surfaces as a hung leader).
+    dist.init_process_group(
+        "nccl", rank=RANK, world_size=WORLD,
+        timeout=datetime.timedelta(minutes=10),
+    )
     dev = torch.device("cuda", LOCAL)
     assert E % WORLD == 0, f"experts ({E}) must divide by EP size ({WORLD})"
 
@@ -77,7 +84,10 @@ def main():
     # tokens by (e+1)/E, weights folded in during local compute, so the
     # combined output must equal x * sum_k(((idx_k+1)/E) * w_k) per token —
     # checkable without real weights.
-    idx_dtype = getattr(deep_ep, "topk_idx_t", torch.int64)
+    # deep_ep._C exports topk_idx_t unconditionally at the pinned SHA — access
+    # it directly so a future rename fails loudly at import with the real name,
+    # rather than silently substituting a possibly-wrong index width.
+    idx_dtype = deep_ep.topk_idx_t
     g = torch.Generator(device="cpu").manual_seed(4242 + RANK)
     x = (torch.randn(TOK, H, generator=g, dtype=torch.float32) / 8.0).to(dev, torch.bfloat16)
     topk_idx = torch.stack([torch.randperm(E, generator=g)[:K] for _ in range(TOK)]).to(dev, idx_dtype)
@@ -101,7 +111,10 @@ def main():
     num_local = E // WORLD
     lo, hi = RANK * num_local, RANK * num_local + num_local
     sl = recv_topk_idx.to(torch.int64)
-    if sl.numel() > 0 and int(sl.max()) < num_local and E > num_local:
+    # Rank 0's local experts ARE 0..num_local-1, so global- and local-mapped ids
+    # are indistinguishable there (sl.max() < num_local always holds) — restrict
+    # the detector to ranks >= 1 so it can't misfire on a normal run.
+    if RANK > 0 and sl.numel() > 0 and int(sl.max()) < num_local and E > num_local:
         log("PROBE-NOTE recv_topk_idx looks local-mapped; offsetting by rank base")
         sl = torch.where(sl >= 0, sl + lo, sl)
     moe_out = torch.zeros_like(recv_x, dtype=torch.bfloat16)
@@ -121,7 +134,13 @@ def main():
     fac = ((topk_idx.to(torch.float32) + 1.0) / E) * topk_weights
     expect = x.to(torch.float32) * fac.sum(1, keepdim=True)
     got = combined_x.to(torch.float32)
-    relmax = ((got - expect).abs().max() / expect.abs().max().clamp_min(1e-6)).item()
+    # Score each token against ITS OWN scale, not one global maximum: a global
+    # normaliser averages away exactly the failure this probe exists to catch —
+    # a handful of badly-wrong low-amplitude rows from a partial dispatch or a
+    # dropped QP channel. bf16-appropriate absolute floor on the row scale.
+    row_err = (got - expect).abs().amax(dim=1)
+    row_scale = expect.abs().amax(dim=1).clamp_min(1e-3)
+    relmax = (row_err / row_scale).max().item()
     nz = int((got.abs().sum(1) > 0).sum())
     ok = (nz == TOK) and (relmax < 0.05)
     log(f"PROBE-COMBINE nonzero={nz}/{TOK} relmax={relmax:.4g} {'OK' if ok else 'MISMATCH'}")
@@ -139,9 +158,15 @@ def main():
 
 
 if __name__ == "__main__":
+    rc = 1
     try:
-        sys.exit(main())
+        rc = main()
     except Exception:
         traceback.print_exc()
         print(f"[rank{RANK}] PROBE-EXC", flush=True)
-        sys.exit(1)
+    finally:
+        # Tear the group down on every path — a rank that raised must not leave
+        # its peers blocked in the MIN all_reduce / barrier until the timeout.
+        if dist.is_initialized():
+            dist.destroy_process_group()
+    sys.exit(rc)
