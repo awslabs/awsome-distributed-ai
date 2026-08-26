@@ -81,7 +81,7 @@ envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' \
 ```bash
 kubectl get mpijob
 watch kubectl get pods -o wide
-kubectl logs -l training.kubeflow.org/job-name=deepep-internode -f
+kubectl logs -l training.kubeflow.org/job-name=deepep-v2-internode -f
 ```
 
 ## Clean up
