@@ -23,7 +23,11 @@
 # CUDA 13 with TransformerEngine, apex and flash-attn compiled against that
 # exact ABI — which is what megatron.core's H100 path needs; rebuilding any of
 # those from PyPI against the baked torch is where images usually go wrong.
-ARG NGC_PYTORCH_BASE=nvcr.io/nvidia/pytorch:26.02-py3
+# Digest-pinned: the tag is the readable name, the @sha256 is the immutable
+# contract — NVIDIA can re-push :26.02-py3, and since it is the ABI anchor the
+# whole image builds around, a silent re-push is the most consequential drift
+# possible here. Override NGC_PYTORCH_BASE to move it (a re-measure event).
+ARG NGC_PYTORCH_BASE=nvcr.io/nvidia/pytorch:26.02-py3@sha256:bbc2b67e2533edd63ff1496bb1ed00a00338cdc1478af6c1a0bf9f4b369977e7
 FROM ${NGC_PYTORCH_BASE}
 ARG NGC_PYTORCH_BASE   # re-declare: pre-FROM ARGs go out of scope after FROM
 
@@ -32,11 +36,16 @@ LABEL org.opencontainers.image.licenses="MIT-0"
 LABEL org.opencontainers.image.source="https://github.com/awslabs/awsome-distributed-ai"
 
 # ---- pins (every one justified; no floating refs) --------------------------
-# NCCL v2.30.4-1: the GIN device API generation the measured substrate ran
-# (ships include/nccl_device.h — asserted below). Same NCCL line the NGC base
-# bakes, so the ld.so.conf override below introduces no version drift; built
-# from source so the DeepEP build has one controlled root of headers + libs.
-ARG NCCL_VERSION=v2.30.4-1
+# NCCL v2.30.4-1 == commit 1933fdd6: the GIN device API generation the measured
+# substrate ran (ships include/nccl_device.h — asserted below). Commit-pinned,
+# not the bare tag: held to the same "a tag is a moving ref" standard as the
+# gdrcopy/DeepEP/Megatron pins below. The NGC base bakes an OLDER NCCL line
+# (2.29.x), so this is deliberately a NEWER line and the 00-nccl-gin.conf
+# ld.so.conf entry (Layer 4) is LOAD-BEARING — it makes this GIN-capable source
+# build win the loader search over the base's baked copy (verify-image.sh
+# asserts which one resolves). Built from source so DeepEP has one controlled
+# root of headers + libs.
+ARG NCCL_VERSION=1933fdd6360a8bfccaa0166bd71bce363d32e5b6
 # EFA 1.48.0: the userspace of the measured substrate (see README pins table).
 # Bumping it is a re-measure event, not a routine bump.
 ARG EFA_INSTALLER_VERSION=1.48.0
@@ -44,16 +53,38 @@ ARG EFA_INSTALLER_VERSION=1.48.0
 # moving ref upstream can re-point). GIN REQUIRES gdrapi.h at aws-ofi-nccl
 # configure time; without it GIN init fails at run time.
 ARG GDRCOPY_SHA=c91ad9f178e5fb729fc5b6dc62a77c3bb364d6c9
-# aws-ofi-nccl @9c44d34 + PR#1351 head c2e773d: the GIN CPU-proxy plugin pins
-# of the measured NCCL-GIN substrate (same pins as the TensorRT-LLM NcclEP
+# aws-ofi-nccl @9c44d34 + PR#1351 head c2e773d: the GIN CPU-proxy plugin
+# lineage this folder standardises on (same pins as the TensorRT-LLM NcclEP
 # sibling sample). Immutable SHAs — refs/pull/N/head is a moving ref.
+# NOTE on #1351: it is CLOSED-UNMERGED upstream (adds the
+# OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY capability override), so unlike the draft
+# PRs in patches/ it will NOT "self-neutralize once merged" — this cherry-pick
+# is a PERMANENT baseline carry, not a temporary patch. It is applied on EVERY
+# build (baseline included): the "baseline has zero dependence on unmerged PRs"
+# statement refers to the four draft PRs in the opt-in layer, not this plugin
+# pin. Verified applies clean across the ~3-month gap with both fail-loud asserts
+# passing (setup_nemo_rl_deepep_efa.sh). Retire by rebasing onto an aws-ofi-nccl
+# release that carries the override, when one ships.
 ARG AWS_OFI_NCCL_SHA=9c44d34476f90ddbf4a12d0ac4fc412d46bd8ab4
 ARG AWS_OFI_NCCL_PR=1351
 ARG AWS_OFI_NCCL_PR_SHA=c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b
 # DeepEP: upstream deepseek-ai/DeepEP main @01dc3aa — carries EPv2 (the
 # ElasticBuffer + NCCL backend, merged upstream in PR#605) and is the EXACT
 # base of draft PR deepseek-ai/DeepEP#612, so the opt-in layer applies
-# --check-clean. NOT the amazon-contributing fork: baseline is stock upstream.
+# --check-clean. NOT the amazon-contributing fork: baseline is stock upstream
+# (the repo's NGC-from-scratch, no-fork-base convention — this folder mirrors
+# the slime sibling's stock-upstream stance).
+# TRADE-OFF, stated honestly: amazon-contributing/DeepEP main = 01dc3aa + ~8 AWS
+# commits that fix the trap-2 failure modes STRUCTURALLY rather than by the knob
+# clamps this folder documents — a sysfs-based get_rdma_gbs() (provider-agnostic,
+# reads /sys/class/infiniband/<nic>/ports/*/rate) and a restructured GIN QP
+# allocator (more QPs on the unordered path than EP_EFA_MAX_QPS=2). Most of those
+# commits are days old (2026-08-21/25). The baseline stays on stock 01dc3aa on
+# purpose: it is the #612 --check-clean base AND keeps to the no-fork convention;
+# the knob clamps (via #612 in the opt-in layer, or the inert ENV defaults on
+# baseline) are the portable equivalent. Adopting the fork's structural fixes is
+# a deliberate future re-pin + re-measure, tracked separately — not a silent
+# freeze. See README traps 2 + the pins table.
 ARG DEEPEP_SHA=01dc3aaac82068020353dce2c302e38153c0bfaa
 # Megatron-LM: the exact base of draft PR NVIDIA/Megatron-LM#4632 (DeepEP V2
 # ElasticBuffer support in the flex dispatcher) for --check-clean opt-in.
