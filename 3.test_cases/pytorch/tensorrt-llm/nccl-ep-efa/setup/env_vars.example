@@ -10,6 +10,11 @@ export AWS_REGION="us-east-2"
 # Model: any MoE whose routed-expert count divides by the EP size (serve.sh preflights this).
 # Default is public + ungated. The measured E2E used exactly this model at EP8.
 export SERVE_MODEL="Qwen/Qwen3-30B-A3B"
+# Pin the model revision (commit SHA or tag) alongside the name: --trust_remote_code runs
+# repo Python in a privileged root container, so what executes should be an immutable
+# artifact, not "whatever main points at today". Empty = HF default branch. Look up a SHA on
+# the model's HF page ("Files and versions") and paste it here for a reproducible serve.
+export SERVE_REVISION=""
 export SERVE_TP="8"          # single-node: tp_size == ep_size == GPUs on the node
 export SERVE_EP="8"
 # Algorithm selection is meaningful ONLY on an image built with APPLY_HT_FLAT_PATCH=1

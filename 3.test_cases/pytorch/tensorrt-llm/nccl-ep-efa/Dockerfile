@@ -36,14 +36,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libevent-core-2.1-7t64 libevent-pthreads-2.1-7t64 \
       pciutils environment-modules tcl udev dmidecode ethtool iproute2 kmod
 
-# ---- Layer 2: AWS EFA (public installer; pinned = the measured substrate) ----
-# 1.48.0 is the EFA userspace the correctness E2E was measured with (2026-08-07: real
+# ---- Layer 2: AWS EFA (public installer) ----
+# 1.50.0 is the current EFA userspace and what the sibling deepep-v2-benchmark builds; its
+# tarball resolves (verified) and it ships aws-ofi-nccl 1.21.1 in-box, lining this sample up
+# with the rest of the repo. BUILD-PIN only: the 2026-08-07 correctness E2E (real
 # trtllm-serve HTTP-200-correct + 16-rank cross-node dispatch/combine, IMA=0, efa-direct on
-# every rank). 1.49.0 exists upstream; bumping it is a re-measure event, not a routine bump.
+# every rank) ran on 1.48.0 — this assembly is not yet cluster-re-measured on 1.50.0, which
+# is exactly what recipe/verify-image.sh + run-kernel-test.sh exist to re-verify on-cluster.
 # --disable-ngc/--disable-build-ngc: the NGC base trips the installer's NGC auto-detect,
 # which would silently reroute to the libnccl-ofi-ngc path — we build aws-ofi-nccl from
 # source ourselves (Layer 5), same explicit choice as the sibling vllm/deepep-v2-efa sample.
-ARG EFA_INSTALLER_VER=1.48.0
+ARG EFA_INSTALLER_VER=1.50.0
 RUN apt-get update \
     && curl -fsSL https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VER}.tar.gz | tar -xzf - -C /tmp \
     && cd /tmp/aws-efa-installer \
@@ -68,8 +71,16 @@ RUN git clone https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
 # THE crux: tensorrt_llm's is_nccl_ep_installed() gates on libnccl >= 2.30.4, while the NGC
 # TRT-LLM container bakes an older nvidia-nccl-cu13 — so NcclEP is dead on arrival as
 # shipped. --no-deps so pip does not drag torch/TRT-LLM's pinned dependency graph backwards;
-# we are deliberately overriding exactly one pin. nccl4py ships the `nccl.ep` python package
-# + libnccl_ep.so (0.1.0 — the version whose HT-kernel ABI details the README documents).
+# we are deliberately overriding exactly one pin. nccl4py 0.3.1 ships the `nccl.ep` python
+# package + libnccl_ep.so 0.1.0 (the version whose HT-kernel int64/int32 ABI detail the README
+# documents). This nccl4py pin is REQUIRED, not merely current: nccl4py 0.4.1 ships no `nccl.ep`
+# package at all (only nccl.bindings + nccl.core), so a bump to latest breaks `import nccl.ep`.
+# Why 2.30.4 and not the newer 2.31.2: 2.31.2 also clears the >= 2.30.4 floor, but libnccl_ep 0.1.0
+# (shipped by the nccl4py pin above) is built against the NCCL 2.30 device-side API that the GIN
+# CPU-proxy path calls into. Moving the runtime to 2.31.x is an ABI change on that device API that
+# has NOT been re-measured on this substrate; 2.30.4 is the version the correctness E2E actually ran.
+# Held at 2.30.4 as the measured-matching floor, not as an upper bound — bump it together with a
+# libnccl_ep rebuilt against the newer device API, and re-run verify-image.sh + run-kernel-test.sh.
 ARG NVIDIA_NCCL_CU13=2.30.4
 ARG NCCL4PY_VER=0.3.1
 RUN pip3 install --no-cache-dir --no-deps --force-reinstall "nvidia-nccl-cu13==${NVIDIA_NCCL_CU13}" \
@@ -84,14 +95,23 @@ RUN pip3 install --no-cache-dir --no-deps --force-reinstall "nvidia-nccl-cu13==$
 # which runs with GPUs — the build sandbox has none.
 
 # ---- Layer 5: aws-ofi-nccl GIN plugin (in-tree script, COPY'd not curled) ----
+# Built from the released tag v1.21.1 (same tag the sibling deepep-v2-benchmark builds): it
+# exports the CPU-proxy GIN op-tables (ncclGinPlugin_v11/_v13) NCCL_GIN_TYPE=2 uses, and its
+# forced-PCIe-with-fallback gdrcopy path is the released default — so no closed-PR cherry-pick
+# and no OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY override are needed. gdrdrv >= 2.5 is a host
+# precondition (README Prerequisites) rather than a private plugin fork.
 COPY setup_trtllm_nccl_ep_efa.sh /opt/setup_trtllm_nccl_ep_efa.sh
-ARG AWS_OFI_NCCL_SHA=9c44d34476f90ddbf4a12d0ac4fc412d46bd8ab4
-ARG AWS_OFI_NCCL_PR=1351
-ARG AWS_OFI_NCCL_PR_SHA=c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b  # IMMUTABLE PR#1351 head (FORCED_PCIE param; a bare refs/pull/N/head is a moving ref)
+ARG AWS_OFI_NCCL_REF=v1.21.1
 RUN chmod +x /opt/setup_trtllm_nccl_ep_efa.sh \
-    && AWS_OFI_NCCL_SHA=${AWS_OFI_NCCL_SHA} AWS_OFI_NCCL_PR=${AWS_OFI_NCCL_PR} AWS_OFI_NCCL_PR_SHA=${AWS_OFI_NCCL_PR_SHA} \
-       /opt/setup_trtllm_nccl_ep_efa.sh
+    && AWS_OFI_NCCL_REF=${AWS_OFI_NCCL_REF} /opt/setup_trtllm_nccl_ep_efa.sh
 ENV LD_LIBRARY_PATH=/opt/aws-ofi-nccl/lib:${LD_LIBRARY_PATH}
+# NCCL_GIN_PLUGIN pairs with NCCL_NET_PLUGIN — one .so supplies both the net and GIN tables;
+# set both as ENV (matching the sibling deepep-v2-benchmark) so the image is correct for
+# anyone running it outside the launchers. NVIDIA_GDRCOPY=enabled matches the two sibling
+# GIN images and the non-privileged/device-plugin path the manifest header offers.
+ENV NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so \
+    NCCL_GIN_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so \
+    NVIDIA_GDRCOPY=enabled
 
 # ---- Layer 6 (OPT-IN, default OFF): the HIGH_THROUGHPUT+FLAT selectability patch ----
 # Upstream's NcclEP hardcodes LOW_LATENCY + RANK_MAJOR. On THIS substrate (NCCL 2.30.4 +
@@ -99,11 +119,14 @@ ENV LD_LIBRARY_PATH=/opt/aws-ofi-nccl/lib:${LD_LIBRARY_PATH}
 # serve and at 16 ranks cross-node — so the UNPATCHED image is the baseline and this layer
 # defaults OFF. NVIDIA/TensorRT-LLM PR #17715 (open) makes algorithm/layout selectable via
 # TRTLLM_NCCL_EP_ALGO / TRTLLM_NCCL_EP_LAYOUT; build with APPLY_HT_FLAT_PATCH=1 to bake the
-# PR's four commits (pinned at their immutable SHAs) into the container's site-packages.
+# PR's three change commits (pinned at their immutable SHAs) into the container's site-packages.
 # Fail-loud: if a hunk no longer applies against this base tag, the BUILD fails — do not
 # ship an image whose patch state is ambiguous. Retire this layer when #17715 merges.
 ARG APPLY_HT_FLAT_PATCH=0
-ARG HT_FLAT_PATCH_SHAS="6035d66353142d70ff41041b13dda1b3e788371a 2e3de8a3ccbb6bb1f78cd1504852045db989abfb 4e7cba789f4d928babc6199e895961f54ee30e11 e14a6f64e624b326b7c1e6e44cc12059cd2541ee"
+# The three single-parent commits of PR#17715 (NOT the branch-head merge commit
+# e14a6f64 — GitHub's .patch endpoint 403s for a merge, so git format-patch emits nothing
+# and the layer would die on it every time).
+ARG HT_FLAT_PATCH_SHAS="6035d66353142d70ff41041b13dda1b3e788371a 2e3de8a3ccbb6bb1f78cd1504852045db989abfb 4e7cba789f4d928babc6199e895961f54ee30e11"
 RUN set -euo pipefail; \
     if [ "${APPLY_HT_FLAT_PATCH}" = "1" ]; then \
       SP_PARENT=$(python3 -c "import tensorrt_llm, pathlib; print(pathlib.Path(tensorrt_llm.__file__).parent.parent)"); \
@@ -111,6 +134,7 @@ RUN set -euo pipefail; \
       for sha in ${HT_FLAT_PATCH_SHAS}; do \
            echo "== applying NVIDIA/TensorRT-LLM PR#17715 commit ${sha} =="; \
            curl -fsSL "https://github.com/NVIDIA/TensorRT-LLM/commit/${sha}.patch" > /tmp/${sha}.patch; \
+           [ -s /tmp/${sha}.patch ] || { echo "FATAL: PR#17715 ${sha} yielded an empty patch (a merge commit has no format-patch output) — pin a single-parent commit"; exit 1; }; \
            git apply --include='tensorrt_llm/*' --check /tmp/${sha}.patch \
              || { echo "FATAL: PR#17715 ${sha} does not apply on ${TRTLLM_BASE} — base moved under the patch"; exit 1; }; \
            git apply --include='tensorrt_llm/*' /tmp/${sha}.patch; \

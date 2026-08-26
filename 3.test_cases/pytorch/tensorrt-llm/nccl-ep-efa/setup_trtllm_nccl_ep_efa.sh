@@ -14,29 +14,28 @@
 # Runs inside the Docker build (no GPU needed).
 set -euo pipefail
 
-# ---- pins (every one justified; no 'latest'; a bare refs/pull/N/head is a MOVING ref) ----
+# ---- pin (released tag; no 'latest') ----
+# v1.21.1 is the released tag that carries the CPU-proxy GIN op-tables this sample uses
+# (src/rdma/gin/nccl_ofi_gin_api.cpp exports ncclGinPlugin_v11 + _v13; only _v14 is
+# EFA-GDA-specific, which we do not use). It is the same tag the sibling
+# micro-benchmarks/expert-parallelism/deepep-v2-benchmark/deepep.Dockerfile builds from
+# source, so it is known-good in this repo. The plugin vendors its own GIN headers
+# (3rd-party/nccl/cuda/include/nccl/gin_v13.h), so its GIN interface is not coupled to the
+# pip NCCL headers — which is why no --with-nccl-headers flag is needed (and why that flag,
+# not being an AC_ARG_WITH this project defines, was silently ignored before).
 AWS_OFI_NCCL_REPO="${AWS_OFI_NCCL_REPO:-https://github.com/aws/aws-ofi-nccl.git}"
-AWS_OFI_NCCL_SHA="${AWS_OFI_NCCL_SHA:-9c44d34476f90ddbf4a12d0ac4fc412d46bd8ab4}"  # GIN plugin, gdrdrv-2.4 v1-fallback baked
-AWS_OFI_NCCL_PR="${AWS_OFI_NCCL_PR:-1351}"                                        # OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY param
-AWS_OFI_NCCL_PR_SHA="${AWS_OFI_NCCL_PR_SHA:-c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b}"  # IMMUTABLE PR#1351 head
+AWS_OFI_NCCL_REF="${AWS_OFI_NCCL_REF:-v1.21.1}"
 
-echo "== aws-ofi-nccl GIN @ ${AWS_OFI_NCCL_SHA} + PR#${AWS_OFI_NCCL_PR} =="
-git clone "${AWS_OFI_NCCL_REPO}" /opt/aws-ofi-nccl-src
+echo "== aws-ofi-nccl GIN @ ${AWS_OFI_NCCL_REF} =="
+git clone --depth 1 --branch "${AWS_OFI_NCCL_REF}" "${AWS_OFI_NCCL_REPO}" /opt/aws-ofi-nccl-src
 cd /opt/aws-ofi-nccl-src
-git config user.email build@local; git config user.name build
-git fetch origin "${AWS_OFI_NCCL_SHA}"; git checkout "${AWS_OFI_NCCL_SHA}"
-grep -q FALLBACK_V1_FOR_GDRDRV_24 src/nccl_ofi_gdrcopy.cpp   # assert the v1-fallback is present (fail-loud)
-if [ -n "${AWS_OFI_NCCL_PR_SHA}" ]; then
-  git fetch origin "${AWS_OFI_NCCL_PR_SHA}"
-  git cherry-pick "${AWS_OFI_NCCL_PR_SHA}"
-  grep -q GDRCOPY_FORCED_PCIE_COPY include/nccl_ofi_param.h  # assert the param landed (fail-loud)
-fi
 git rev-parse HEAD > /opt/aws-ofi-nccl.effective.sha
 ./autogen.sh
-# --with-nccl-headers points at the pip nvidia-nccl-cu13 2.30.4 tree installed in Layer 4:
-# GIN needs the ncclGin* device API headers that only >= 2.30.x carries.
+# Released v1.21.1 already attempts gdr_pin_buffer_v2 with GDR_PIN_FLAG_FORCE_PCIE and falls
+# back to flags=0 on failure — so the forced-PCIe attempt is the default and needs no env
+# override. The gdrdrv-2.4 kernel-module fallback that the old dev-line pin carried is a host
+# precondition instead: gdrdrv >= 2.5 on the compute nodes (see README Prerequisites).
 ./configure --prefix=/opt/aws-ofi-nccl --with-libfabric=/opt/amazon/efa --with-cuda=/usr/local/cuda \
-  --with-nccl-headers="$(python3 -c 'import nvidia.nccl; print(nvidia.nccl.__path__[0])')/include" \
   --enable-cudart-dynamic --enable-platform-aws
 make -C src -j"$(nproc)"; make -C src install
 test -f /opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
