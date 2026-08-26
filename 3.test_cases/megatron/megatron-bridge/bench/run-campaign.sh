@@ -17,6 +17,8 @@ RUN_ENTRYPOINT_LOCAL_FILE="${RUN_ENTRYPOINT_LOCAL_FILE:-${CASE_DIR}/kimi-k2/benc
 export RUN_ENTRYPOINT_LOCAL_FILE
 OUT="${LOCAL_ARTIFACT_ROOT}/${CAMPAIGN_ID}"
 mkdir -p "${OUT}/census" "${OUT}/control" "${OUT}/results"
+PARSER_WARMUP="${PARSER_WARMUP_OVERRIDE:-8}"
+[[ "${PARSER_WARMUP}" =~ ^[0-9]+$ ]] || { echo "PARSER_WARMUP_OVERRIDE must be a non-negative integer" >&2; exit 2; }
 K=(kubectl --context "${CTX}")
 LOCK_NS="${LOCK_NS:-default}"
 CLUSTER_LOCK="${CLUSTER_LOCK:-adai-ap-south-1-gpu-campaign-lock}"
@@ -131,7 +133,7 @@ finalize() {
   trap - EXIT
   set +e
 
-  python3 "${SELF_DIR}/parse-runs.py" "${OUT}/26.08/kimi-k2" --warmup 8 \
+  python3 "${SELF_DIR}/parse-runs.py" "${OUT}/26.08/kimi-k2" --warmup "${PARSER_WARMUP}" \
     --output "${OUT}/results/index.json" > "${OUT}/results/parse-runs.stdout.json"
   parse_rc=$?
   census after-exit

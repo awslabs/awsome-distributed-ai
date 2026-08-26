@@ -54,6 +54,10 @@ def _int(name: str, default: int) -> int:
     return int(os.environ.get(name, str(default)))
 
 
+def _float(name: str, default: float) -> float:
+    return float(os.environ.get(name, str(default)))
+
+
 class RuntimeDispatcherIdentity(Callback):
     """Fail closed unless the built model owns the requested dispatcher objects."""
 
@@ -439,6 +443,23 @@ def build_config():
     cfg.train.global_batch_size = global_batch
     cfg.train.micro_batch_size = micro_batch
 
+    # The upstream recipe linearly warms its 3e-4 learning rate over the complete short
+    # benchmark. On random-init mock data that schedule becomes numerically chaotic late in a
+    # 40-step run: even independent NCCL control starts diverge after the same initial curve.
+    # Use one explicit constant rate for this synthetic benchmark so the loss trajectory remains
+    # a useful backend-equivalence signal. The 5e-6 default is also the repository's Kimi-K2
+    # full-parameter SFT rate. This control is common to every arm and is recorded by the runner.
+    benchmark_learning_rate = _float("BENCHMARK_LEARNING_RATE", 5e-6)
+    if not 0.0 < benchmark_learning_rate < 1.0:
+        raise ValueError(
+            "BENCHMARK_LEARNING_RATE must be greater than 0 and less than 1"
+        )
+    cfg.scheduler.max_lr = benchmark_learning_rate
+    cfg.scheduler.min_lr = benchmark_learning_rate
+    cfg.scheduler.lr_warmup_iters = 0
+    if hasattr(cfg.scheduler, "lr_decay_iters"):
+        cfg.scheduler.lr_decay_iters = train_iters
+
     # Benchmark runs consume random-init mock data and score training-step time. Do not write a
     # final ~1T-parameter checkpoint or run the recipe's post-training validation/test passes:
     # both happen outside the measured iterations, hold all 256 GPUs, and add minutes of work to
@@ -586,7 +607,8 @@ def build_config():
     logger.info(
         "bench cfg (KIMI-K2): arm=%s overlap=%s | L=%s h=%s experts=%s topk=%s "
         "n_group=%s heads=%s mtp=%s MLA=%s | TP%s PP%s EP%s CP%s | iters=%s gbs=%s mbs=%s seq=%s "
-        "distributed_timeout_minutes=%s requested_batch_p2p_comm=%s",
+        "distributed_timeout_minutes=%s requested_batch_p2p_comm=%s "
+        "benchmark_learning_rate=%s",
         arm,
         overlap,
         m.num_layers,
@@ -607,6 +629,7 @@ def build_config():
         seq_len,
         distributed_timeout_minutes,
         batch_p2p_comm_value,
+        benchmark_learning_rate,
     )
     return cfg
 

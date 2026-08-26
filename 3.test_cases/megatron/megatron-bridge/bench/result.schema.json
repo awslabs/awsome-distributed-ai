@@ -23,7 +23,7 @@
     },
     "validity": {
       "type": "object",
-      "required": ["entrypoint_source", "image_identity", "runtime_dispatcher_identity", "single_nccl", "nccl_build_runtime_match", "efa", "no_token_drop", "steady_timing", "finite_loss", "finite_gradient"],
+      "required": ["entrypoint_source", "image_identity", "runtime_dispatcher_identity", "single_nccl", "nccl_build_runtime_match", "efa", "no_token_drop", "steady_timing", "iteration_metrics_complete", "finite_loss", "finite_gradient", "finite_learning_rate", "no_skipped_iterations", "no_nan_iterations"],
       "properties": {
         "entrypoint_source": {"type": "boolean"},
         "image_identity": {"type": "boolean"},
@@ -37,8 +37,12 @@
         "efa": {"type": "boolean"},
         "no_token_drop": {"type": "boolean"},
         "steady_timing": {"type": "boolean"},
+        "iteration_metrics_complete": {"type": "boolean"},
         "finite_loss": {"type": "boolean"},
-        "finite_gradient": {"type": "boolean"}
+        "finite_gradient": {"type": "boolean"},
+        "finite_learning_rate": {"type": "boolean"},
+        "no_skipped_iterations": {"type": "boolean"},
+        "no_nan_iterations": {"type": "boolean"}
       },
       "additionalProperties": false
     }

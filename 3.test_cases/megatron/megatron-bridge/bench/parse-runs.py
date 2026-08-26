@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import math
@@ -17,6 +18,10 @@ TIME_MS = re.compile(r"elapsed time per iteration \(ms\):\s*([0-9.eE+-]+)", re.I
 LOSS = re.compile(r"\blm loss:\s*([0-9.eE+-]+)", re.I)
 GRAD = re.compile(r"grad(?:ient)? norm:\s*([0-9.eE+-]+)", re.I)
 TFLOPS = re.compile(r"(?:TFLOP/s/GPU|tflops?)[^0-9+-]*([0-9.eE+-]+)", re.I)
+LEARNING_RATE = re.compile(r"\blearning rate:\s*([0-9.eE+-]+)", re.I)
+PARAMETERS_NORM = re.compile(r"\bparams norm:\s*([0-9.eE+-]+)", re.I)
+SKIPPED_ITERATIONS = re.compile(r"\bnumber of skipped iterations:\s*(\d+)", re.I)
+NAN_ITERATIONS = re.compile(r"\bnumber of nan iterations:\s*(\d+)", re.I)
 
 
 def marker(text: str, *patterns: str) -> bool:
@@ -71,40 +76,155 @@ def runtime_dispatcher_identities(text: str) -> list[dict]:
     return found
 
 
-def parse_run(run: Path, warmup: int) -> dict:
-    env = read_environment(run)
-    arm = env.get("ep_arm", run.name)
-    log_paths = sorted(run.glob("pod-logs/node-rank-*.log"))
-    text = "\n".join(path.read_text(errors="replace") for path in log_paths)
-    records: dict[int, dict[str, float]] = {}
+def parse_iteration_records(text: str) -> list[dict[str, float | int]]:
+    """Extract one normalized metric record for each optimizer iteration."""
+
+    records: dict[int, dict[str, float | int]] = {}
     for line in text.splitlines():
         match = ITER.search(line)
         if not match:
             continue
         iteration = int(match.group(1))
-        record = records.setdefault(iteration, {})
+        record = records.setdefault(
+            iteration,
+            {
+                "iteration_dimensionless": iteration,
+                "total_iterations_dimensionless": int(match.group(2)),
+            },
+        )
         for name, regex in (
-            ("time_ms", TIME_MS),
-            ("loss", LOSS),
-            ("gradient_norm", GRAD),
-            ("tflops", TFLOPS),
+            ("elapsed_time_ms", TIME_MS),
+            ("lm_loss_dimensionless", LOSS),
+            ("gradient_norm_parameter_gradient_units", GRAD),
+            ("parameters_norm_parameter_units", PARAMETERS_NORM),
+            ("learning_rate_dimensionless", LEARNING_RATE),
+            ("tflops_per_gpu", TFLOPS),
         ):
             value = regex.search(line)
             if value:
                 record[name] = float(value.group(1))
+        for name, regex in (
+            ("skipped_iterations_count", SKIPPED_ITERATIONS),
+            ("nan_iterations_count", NAN_ITERATIONS),
+        ):
+            value = regex.search(line)
+            if value:
+                record[name] = int(value.group(1))
+    return [records[iteration] for iteration in sorted(records)]
 
-    ordered = [(iteration, records[iteration]) for iteration in sorted(records)]
-    steady = [record for iteration, record in ordered if iteration > warmup]
-    times = [record["time_ms"] for record in steady if "time_ms" in record]
-    losses = [record["loss"] for _, record in ordered if "loss" in record]
-    gradients = [
-        record["gradient_norm"] for _, record in ordered if "gradient_norm" in record
+
+def write_iteration_artifacts(
+    run: Path, records: list[dict[str, float | int]]
+) -> dict[str, dict[str, str | int]]:
+    columns = [
+        "iteration_dimensionless",
+        "total_iterations_dimensionless",
+        "elapsed_time_ms",
+        "lm_loss_dimensionless",
+        "gradient_norm_parameter_gradient_units",
+        "parameters_norm_parameter_units",
+        "learning_rate_dimensionless",
+        "tflops_per_gpu",
+        "skipped_iterations_count",
+        "nan_iterations_count",
     ]
-    tflops = [record["tflops"] for record in steady if "tflops" in record]
+    iteration_path = run / "iteration_metrics.csv"
+    with iteration_path.open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(records)
+
+    loss_path = run / "loss_curve.csv"
+    with loss_path.open("w", newline="") as stream:
+        writer = csv.DictWriter(
+            stream,
+            fieldnames=["iteration_dimensionless", "lm_loss_dimensionless"],
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        writer.writerows(records)
+
+    return {
+        "iteration_metrics": {
+            "path": str(iteration_path),
+            "records": len(records),
+            "sha256": hashlib.sha256(iteration_path.read_bytes()).hexdigest(),
+        },
+        "loss_curve": {
+            "path": str(loss_path),
+            "records": len(records),
+            "sha256": hashlib.sha256(loss_path.read_bytes()).hexdigest(),
+        },
+    }
+
+
+def parse_run(run: Path, warmup: int) -> dict:
+    env = read_environment(run)
+    arm = env.get("ep_arm", run.name)
+    log_paths = sorted(run.glob("pod-logs/node-rank-*.log"))
+    text = "\n".join(path.read_text(errors="replace") for path in log_paths)
+    ordered = parse_iteration_records(text)
+    iteration_artifacts = write_iteration_artifacts(run, ordered)
+    steady = [
+        record for record in ordered if record["iteration_dimensionless"] > warmup
+    ]
+    times = [
+        record["elapsed_time_ms"] for record in steady if "elapsed_time_ms" in record
+    ]
+    losses = [
+        record["lm_loss_dimensionless"]
+        for record in ordered
+        if "lm_loss_dimensionless" in record
+    ]
+    gradients = [
+        record["gradient_norm_parameter_gradient_units"]
+        for record in ordered
+        if "gradient_norm_parameter_gradient_units" in record
+    ]
+    tflops = [
+        record["tflops_per_gpu"] for record in steady if "tflops_per_gpu" in record
+    ]
     manifests = runtime_manifests(run)
     routes = route_summaries(run)
     dispatcher_identities = runtime_dispatcher_identities(text)
     expected_nodes = len([node for node in env.get("nodes", "").split(",") if node])
+    expected_iterations = int(env.get("train_iterations", "0"))
+    expected_iteration_numbers = list(range(1, expected_iterations + 1))
+    observed_iteration_numbers = [
+        int(record["iteration_dimensionless"]) for record in ordered
+    ]
+    required_iteration_fields = {
+        "elapsed_time_ms",
+        "lm_loss_dimensionless",
+        "gradient_norm_parameter_gradient_units",
+        "learning_rate_dimensionless",
+        "skipped_iterations_count",
+        "nan_iterations_count",
+    }
+    iteration_metrics_complete = (
+        expected_iterations > 0
+        and observed_iteration_numbers == expected_iteration_numbers
+        and all(required_iteration_fields <= record.keys() for record in ordered)
+        and all(
+            record["total_iterations_dimensionless"] == expected_iterations
+            for record in ordered
+        )
+    )
+    learning_rates = [
+        record["learning_rate_dimensionless"]
+        for record in ordered
+        if "learning_rate_dimensionless" in record
+    ]
+    skipped_iterations = [
+        record["skipped_iterations_count"]
+        for record in ordered
+        if "skipped_iterations_count" in record
+    ]
+    nan_iterations = [
+        record["nan_iterations_count"]
+        for record in ordered
+        if "nan_iterations_count" in record
+    ]
     manifests_complete = expected_nodes > 0 and len(manifests) == expected_nodes
     routes_complete = expected_nodes > 0 and len(routes) == expected_nodes
 
@@ -177,8 +297,13 @@ def parse_run(run: Path, warmup: int) -> dict:
             )
         ),
         "steady_timing": finite(times),
+        "iteration_metrics_complete": iteration_metrics_complete,
         "finite_loss": finite(losses),
         "finite_gradient": finite(gradients),
+        "finite_learning_rate": finite(learning_rates),
+        "no_skipped_iterations": bool(skipped_iterations)
+        and max(skipped_iterations) == 0,
+        "no_nan_iterations": bool(nan_iterations) and max(nan_iterations) == 0,
     }
     required = [
         "entrypoint_source",
@@ -189,8 +314,12 @@ def parse_run(run: Path, warmup: int) -> dict:
         "efa",
         "no_token_drop",
         "steady_timing",
+        "iteration_metrics_complete",
         "finite_loss",
         "finite_gradient",
+        "finite_learning_rate",
+        "no_skipped_iterations",
+        "no_nan_iterations",
     ]
     if arm == "deepep-v2-gin-gda":
         required.extend(
@@ -239,6 +368,7 @@ def parse_run(run: Path, warmup: int) -> dict:
             "pod_logs": len(log_paths),
             "runtime_manifests": len(manifests),
             "route_summaries": len(routes),
+            **iteration_artifacts,
         },
     }
     (run / "result.json").write_text(
