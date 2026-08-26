@@ -4,9 +4,13 @@ Primary scored campaign ID: `20260825T111800Z-k2-b200-scored-clean-3r-r3`
 
 UCCL repeat 3 retry campaign ID: `20260825T142107Z-k2-b200-r3-uccl-retry-r1`
 
+Expanded overlap source campaign ID: `20260825T210749Z-k2-b200-expanded-3c-3r-r5`
+
+DeepEP v2 overlap completion campaign ID: `20260826T215100Z-k2-b200-v2-completion-r1`
+
 Correctness qualification campaign ID: `20260824T030931Z-kimi-k2-megatron-ep-b200-256g`
 
-Performance date: `2026-08-25 UTC`
+Performance dates: `2026-08-25 UTC` through `2026-08-26 UTC`
 
 The requested 256-GPU B300 headline remains `NOT_RUN_INSUFFICIENT_CAPACITY`. At `2026-08-25T11:19:24Z`, the ap-south-1 cluster had 0 available B300 nodes, below the requirement of 32 B300 nodes. The primary scored milestone ran on 32 `p6-b200.48xlarge` instances and 256 B200 GPUs from the same Capacity Block.
 
@@ -80,6 +84,17 @@ The accepted dataset contains exactly 1 `PASS` result for each `(cell, repeat, a
 
 The original repeat 3 UCCL attempt entered the training loop but emitted no iteration metric for more than 720 seconds. The runner recorded `FAIL_TRAINER_EXIT` at `2026-08-25T14:14:51Z`. That attempt was excluded before aggregation and remains durably preserved with 32 of 32 node directories and 32 of 32 custody logs. A same-condition UCCL-only retry used the identical 32-node list, image digest, model configuration, and training entrypoint SHA-256. It completed 40 of 40 iterations and recorded `PASS` at `2026-08-25T14:35:02Z`.
 
+## DeepEP v2 overlap completion
+
+DeepEP v2 now has 3 accepted fresh job starts for each overlap-on cell. Repeats 1 and 2 come from the expanded overlap source campaign, and repeat 3 comes from the DeepEP v2 completion campaign. Both campaigns used the same 32 B200 nodes, immutable image digest, training entrypoint SHA-256, model topology, batch configuration, 1,234 dimensionless random seed, and timing protocol. Each job completed 40 optimizer iterations; the first 8 iterations were discarded and the remaining 32 steady iterations were scored.
+
+| Cell | Microbatch, samples | Repeat 1 median, ms | Repeat 2 median, ms | Repeat 3 median, ms | Median of run medians, ms | Median throughput, tokens/s | Median performance, TFLOPS/GPU | Run-to-run CV, % |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `throughput-overlap` | 4 | 3,451.55 | 3,469.55 | 3,450.85 | 3,451.55 | 303,799 | 226.866 | 0.307 |
+| `small-message-overlap` | 1 | 9,730.80 | 9,748.15 | 9,694.60 | 9,730.80 | 107,758 | 83.066 | 0.281 |
+
+All 6 DeepEP v2 jobs are `PASS`. Each job passes all 14 required validity gates, including `_DeepepV2Manager`, `ElasticBuffer`, `NCCL_GIN_TYPE=5`, a GDAKI context, EFA, finite loss and gradient norm, 0 dropped token selections, and exactly 1 loaded NCCL library. Each job preserves 32 trainer logs, 32 runtime manifests, 32 route summaries, and 32 node custody files. Cross-arm ranking is not reported for these cells until the remaining arm and repeat keys have accepted results under the same conditions.
+
 ## Final image quartet
 
 | Arm | Immutable ap-south-1 image digest |
@@ -132,6 +147,20 @@ The UCCL repeat 3 retry artifacts are under:
 
 Its root `SHA256SUMS` file has SHA-256 `0866a88491255838a3920d03cd9e9169d0ca94554f8fa7bcabb4b51f9f38171b`, `results/index.json` has SHA-256 `6995fa4ef5cb5ff84708b0dd519d7ef10427228c3383e91d61912fcd2cd3e52d`, and the accepted UCCL arm's `SHA256SUMS` file has SHA-256 `bcb33b8a5bb89c374c986d0f2c6e7ac284a91ca89780122dec5462934f55a542`. Full root checksum verification passes for both scored artifact roots.
 
+The expanded overlap source artifacts are under:
+
+`/mnt/fsx/ubuntu/workspace/artifacts/adai-kimi-k2-megatron-ep/20260825T210749Z-k2-b200-expanded-3c-3r-r5`
+
+Its root `SHA256SUMS` file has SHA-256 `591d53da34a3f672c219a161315d960565823f0e4d329e53493b0f6d3013f940`, and `results/index.json` has SHA-256 `5d4566e2ea1a830f91deb7e5815b557e1ec5e68144874160af62a166c06902c8`.
+
+The DeepEP v2 overlap completion artifacts are under:
+
+`/mnt/fsx/ubuntu/workspace/artifacts/adai-kimi-k2-megatron-ep/20260826T215100Z-k2-b200-v2-completion-r1`
+
+Its root `SHA256SUMS` file has SHA-256 `68e0017f0bf577c031fc7fef42613689d698a5cf0c8595fd08e7cf07af2e8a37`, and `results/index.json` has SHA-256 `a1026bb415090284a66a4dc65b14c9561248e68e08fa78ddc6b6bdf459a63566`. Full root checksum verification passes.
+
 ## Teardown
 
 Both scored campaign controllers deleted only their owned Kubernetes resources, released the shared Lease claim, and preserved the Capacity Block, EC2 instances, EKS nodes, and foreign workload objects. Finalization recorded controller, parser, census, and teardown exit codes. The primary controller exit code is 1 dimensionless because the excluded UCCL attempt failed; parser, census, and teardown exit codes are each 0 dimensionless. All retry exit codes are 0 dimensionless. The terminal live census found both owned namespaces absent, 0 owned GPU pods, and an empty Lease holder with a 1-second lease duration.
+
+The DeepEP v2 overlap completion controller also recorded controller, parser, census, and teardown exit codes of 0 dimensionless. Its terminal live census found the owned namespace absent, 0 owned pods, 0 active GPU pods, 0 requested GPUs, and an empty Lease holder with a 1-second lease duration.
