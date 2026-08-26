@@ -15,7 +15,7 @@
 #       -> BASELINE: upstream-only trees. Gates: imports, ElasticBuffer
 #          bring-up, cross-node EFA transport probe, non-DeepEP train step.
 #   docker build --build-arg APPLY_DRAFT_ROLLOUT_PATCHES=1 ...
-#       -> OPT-IN: additionally bakes 4 DRAFT upstream PRs (see the patches/
+#       -> OPT-IN: additionally bakes 3 DRAFT upstream PRs (see the patches/
 #          script) that the full NeMo-RL GRPO rollout-over-DeepEP path needs.
 #          The baseline image has ZERO dependence on them.
 
@@ -58,10 +58,17 @@ ARG DEEPEP_SHA=01dc3aaac82068020353dce2c302e38153c0bfaa
 # Megatron-LM: the exact base of draft PR NVIDIA/Megatron-LM#4632 (DeepEP V2
 # ElasticBuffer support in the flex dispatcher) for --check-clean opt-in.
 ARG MEGATRON_LM_SHA=19deef67f910c96c213f33b33b30277be8b94d6d
-# NeMo-RL: the exact shared base of draft PRs NVIDIA-NeMo/RL#2410 + #2411.
-# The measured Wave-28 evidence ran 0.5.0rc0 (see README, measured-vs-staged);
-# re-pinning to a release tag is a re-measure event.
-ARG NEMO_RL_SHA=cc75cadfe061301bd121306f1648957583760528
+# NeMo-RL @46be4e8: the exact base of the EFA-recipe draft PR NVIDIA-NeMo/RL#2410
+# (its parent commit) — declares requires-python ">=3.12" and torch==2.9.0, both
+# of which the NGC base above satisfies. requirements.txt is generated from THIS
+# revision (its version pins match line-for-line). Do NOT bump to #2411's base
+# cc75cad: that revision bumped requires-python to ">=3.13.13" and torch to
+# 2.10.0, so `pip install -e` (Layer 7) hard-fails the interpreter check on this
+# py3.12 base (--no-deps does NOT suppress the Requires-Python floor). #2411 is
+# metadata-only for this image (deep_ep is built from /opt/DeepEP, not NeMo-RL's
+# pin) and is dropped from the opt-in layer; #2410 applies clean on this base.
+# Re-pinning to a release tag is a re-measure event.
+ARG NEMO_RL_SHA=46be4e8e2b335722c9af75f84e82ad807dad5bf5
 # 9.0 = Hopper (H100/H200, sm_90) — the only measured arch. Override for
 # Blackwell with "9.0;10.0" / matching gencode; that is a re-measure event.
 ARG TORCH_CUDA_ARCH_LIST="9.0"
@@ -153,8 +160,24 @@ RUN python3 -c 'import sys; assert sys.version_info >= (3, 12), f"NeMo-RL needs 
     && pip3 install --no-cache-dir --no-deps -e /opt/NeMo-RL
 ENV PYTHONPATH=/opt/Megatron-LM:${PYTHONPATH:-}
 
-# ---- Layer 8 (OPT-IN, default OFF): the 4 draft upstream PRs ----------------
-# NVIDIA-NeMo/RL#2410 + #2411, NVIDIA/Megatron-LM#4632, deepseek-ai/DeepEP#612
+# ---- Layer 7b: make the pip NVSHMEM (linked into deep_ep/_C.so) win at runtime
+# deep_ep/_C.so is built against the pip nvidia-nvshmem-cu13 wheel (Layer 7, 3.7.x),
+# but torch/lib/libtorch_nvshmem.so — imported before deep_ep — has a NEEDED
+# libnvshmem_host.so.3 with a RUNPATH ending in /usr/local/cuda/lib64, where the
+# NGC base's OLDER dpkg NVSHMEM (3.4.x, no nvshmem_selected_device_transport) lives.
+# RUNPATH OUTRANKS ld.so.cache in the loader search order, so an ld.so.conf.d entry
+# does NOT win: the 3.4.x lib loads first by soname and `import deep_ep` then dies
+# with `undefined symbol: nvshmem_selected_device_transport, version NVSHMEM`. Only
+# LD_LIBRARY_PATH outranks RUNPATH — so symlink the wheel's lib dir to a stable path
+# (version-agnostic: no python3.X hardcode) and PREPEND it. Verified: recipe/
+# verify-image.sh deep_ep+ElasticBuffer gate fails without this, passes with it.
+RUN ln -sfn "$(python3 -c 'import nvidia.nvshmem; print(nvidia.nvshmem.__path__[0])')/lib" /opt/nvshmem-pip-lib \
+    && test -f /opt/nvshmem-pip-lib/libnvshmem_host.so.3 \
+       || { echo "ERROR: pip nvshmem lib dir not found — requirements.txt must install nvidia-nvshmem-cu13" >&2; exit 1; }
+ENV LD_LIBRARY_PATH=/opt/nvshmem-pip-lib:${LD_LIBRARY_PATH}
+
+# ---- Layer 8 (OPT-IN, default OFF): the 3 draft upstream PRs ----------------
+# NVIDIA-NeMo/RL#2410, NVIDIA/Megatron-LM#4632, deepseek-ai/DeepEP#612
 # — the full GRPO rollout-over-DeepEP path depends on them; the BASELINE image
 # does not. Commits are pinned inside patches/apply_nemo_rl_patches.py at
 # immutable SHAs and applied fail-loud (git apply --check first): if a hunk no

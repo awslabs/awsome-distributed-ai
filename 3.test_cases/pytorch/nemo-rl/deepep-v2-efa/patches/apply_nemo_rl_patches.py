@@ -5,9 +5,10 @@
 
 The BASELINE image installs three upstream trees as-is (deepseek-ai/DeepEP,
 NVIDIA/Megatron-LM, NVIDIA-NeMo/RL) at pinned SHAs and depends on nothing
-else. The full GRPO rollout-over-DeepEP path additionally needs four upstream
+else. The full GRPO rollout-over-DeepEP path additionally needs three upstream
 PRs that are still DRAFT/open — this script bakes them in, and ONLY when the
-image is built with ``--build-arg APPLY_DRAFT_ROLLOUT_PATCHES=1``.
+image is built with ``--build-arg APPLY_DRAFT_ROLLOUT_PATCHES=1``. (A fourth,
+NVIDIA-NeMo/RL#2411, is intentionally excluded — see the #2410 entry below.)
 
 Design goals (why this shape — mirrors the slime sibling's patch layer):
   * Default is upstream. Running this script is opt-in; the baseline image
@@ -80,24 +81,19 @@ PATCH_SETS = [
         "url": "https://github.com/NVIDIA-NeMo/RL/pull/2410",
         "repo": "NVIDIA-NeMo/RL",
         "root_arg": "nemo_rl_root",
+        # This PR's commit is cut directly on NEMO_RL_SHA=46be4e8 (its parent),
+        # so it applies --check-clean on the baseline tree. (#2411, the deep_ep
+        # pin bump, is intentionally NOT applied here: its base is cc75cad —
+        # 116 commits ahead of 46be4e8, across the requires-python 3.12->3.13.13
+        # bump — so it neither applies here NOR belongs on this py3.12 substrate,
+        # and it is metadata-only for this image since deep_ep is built from
+        # /opt/DeepEP, not from NeMo-RL's pin.)
         "commits": [
             "7f0f21a7a8d7205d2d741f2bc9cff837462091a5",
         ],
         # The PR also ships the worked 2-node EFA GRPO recipe config this test
         # case's README points at for the full rollout path.
         "probe": ("examples/configs/recipes/llm/aws-efa-grpo-qwen3-30ba3b-2n8g-megatron.yaml", None),
-    },
-    {
-        "name": "NVIDIA-NeMo/RL#2411 — deps: bump deep_ep pin to the V2 merge commit",
-        "url": "https://github.com/NVIDIA-NeMo/RL/pull/2411",
-        "repo": "NVIDIA-NeMo/RL",
-        "root_arg": "nemo_rl_root",
-        "commits": [
-            "711147f4401a3f532cbcdb6cb6b7e00e2023569e",
-        ],
-        # Metadata-only for this image (deep_ep is built from /opt/DeepEP, not
-        # from NeMo-RL's pin), but applied so the tree is self-consistent.
-        "probe": ("pyproject.toml", "b306af0"),
     },
 ]
 

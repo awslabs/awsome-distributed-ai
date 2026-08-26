@@ -34,7 +34,7 @@ sources.**
 
 **Staged, NOT re-measured:** the image assembly in this folder is **build-staged and has not been
 cluster-re-run**; no performance numbers are published from this folder. The **full GRPO
-rollout-over-DeepEP path depends on 4 draft upstream PRs** (opt-in image layer, default **OFF** —
+rollout-over-DeepEP path depends on 3 draft upstream PRs** (opt-in image layer, default **OFF** —
 see below). What the recipe gates re-verify on the **baseline (upstream-only)** image: static
 substrate asserts (`verify-image.sh`), cross-node `ElasticBuffer` dispatch/combine with an EFA
 TX-counter assert (`run-rollout-probe.sh`), and a loss-decreasing Megatron MoE train step on the
@@ -51,10 +51,10 @@ stock `alltoall` dispatcher (`train-step.sh`). Never read a build-gate as an E2E
 | gdrcopy | commit `c91ad9f` (= v2.5.2) | GIN **requires** gdrcopy compiled in (trap 4). Commit pin, not tag. |
 | DeepEP | `01dc3aa` (upstream `deepseek-ai/DeepEP` main) | Carries EPv2 (ElasticBuffer + NCCL backend) and is the **exact base of draft PR #612**, so the opt-in layer applies `--check`-clean. Stock upstream — NOT a fork. |
 | Megatron-LM | `19deef67` (main) | The **exact base of draft PR #4632** (ElasticBuffer in the flex dispatcher). |
-| NeMo-RL | `cc75cad` (main) | The **exact shared base of draft PRs #2410 + #2411**. The measured Wave-28 evidence ran 0.5.0rc0; re-pinning to a release tag is a re-measure event. |
+| NeMo-RL | `46be4e8` | The **exact base (parent commit) of draft PR #2410** — declares `requires-python ">=3.12"`, which the py3.12 NGC base satisfies. `requirements.txt` is generated from this revision. NOT #2411's base `cc75cad` (which bumps `requires-python` to `>=3.13.13` and hard-fails `pip install -e` on this base). The measured Wave-28 evidence ran 0.5.0rc0; re-pinning to a release tag is a re-measure event. |
 | GPU arch | `TORCH_CUDA_ARCH_LIST=9.0` (H100/H200) | The only measured arch. Blackwell needs an arch-list override and a re-measure. |
 
-## The 4 draft upstream PRs (opt-in layer, default OFF)
+## The 3 draft upstream PRs (opt-in layer, default OFF)
 
 Baked only with `--build-arg APPLY_DRAFT_ROLLOUT_PATCHES=1`; commits pinned at immutable SHAs in
 [`patches/apply_nemo_rl_patches.py`](patches/apply_nemo_rl_patches.py), applied fail-loud,
@@ -65,8 +65,9 @@ PR states below are as of 2026-08-25 — check them before relying on this table
 |---|---|---|
 | [deepseek-ai/DeepEP#612](https://github.com/deepseek-ai/DeepEP/pull/612) | open | EFA awareness: auto-QP capped at `EP_EFA_MAX_QPS` (aws-ofi-nccl's GIN request ring is 128 slots; upstream's auto formula overruns it → `CUDA_ERROR_LAUNCH_FAILED` at first dispatch), `get_rdma_gbs()` EFA fast path (SM auto-sizing), dispatch scaleout-interval tuning. |
 | [NVIDIA/Megatron-LM#4632](https://github.com/NVIDIA/Megatron-LM/pull/4632) | open | DeepEP **V2 ElasticBuffer** support in the MoE flex dispatcher (`fused_a2a.py`) — without it, `--moe-enable-deepep` binds the V1 NVSHMEM `Buffer`, which this NCCL-GIN image intentionally does not build. |
-| [NVIDIA-NeMo/RL#2410](https://github.com/NVIDIA-NeMo/RL/pull/2410) | draft, closed unmerged | `LD_LIBRARY_PATH` re-export for OFI plugin discovery in NeMo-RL's own containers, plus the worked 2-node EFA GRPO recipe config (`examples/configs/recipes/llm/aws-efa-grpo-qwen3-30ba3b-2n8g-megatron.yaml`) the full rollout path uses. |
-| [NVIDIA-NeMo/RL#2411](https://github.com/NVIDIA-NeMo/RL/pull/2411) | draft, closed unmerged | Bumps NeMo-RL's `deep_ep` pin to the V2 merge commit (metadata-only for this image — deep_ep is built from `/opt/DeepEP` — applied for tree self-consistency). |
+| [NVIDIA-NeMo/RL#2410](https://github.com/NVIDIA-NeMo/RL/pull/2410) | draft, closed unmerged | `LD_LIBRARY_PATH` re-export for OFI plugin discovery in NeMo-RL's own containers, plus the worked 2-node EFA GRPO recipe config (`examples/configs/recipes/llm/aws-efa-grpo-qwen3-30ba3b-2n8g-megatron.yaml`) the full rollout path uses. Applied at its parent commit `46be4e8` (= `NEMO_RL_SHA`), so it lands `--check`-clean. |
+
+> **Not applied: [NVIDIA-NeMo/RL#2411](https://github.com/NVIDIA-NeMo/RL/pull/2411)** (deep_ep pin bump). Its base is `cc75cad` — 116 commits ahead of `46be4e8`, across a `requires-python` bump to `>=3.13.13` — so it neither applies to this tree nor belongs on this py3.12 base, and it is metadata-only anyway (deep_ep is built from `/opt/DeepEP`, not NeMo-RL's pin). Retained here as a note so the pin history is auditable.
 
 ## The integration traps
 
@@ -152,7 +153,7 @@ aws ecr create-repository --repository-name ${IMAGE} --region ${AWS_REGION} || t
 
 # baseline (upstream-only)
 docker build -f nemo-rl.Dockerfile -t ${FULL_IMAGE} .
-# opt-in flavor with the 4 draft PRs baked (use a DISTINCT tag — never overwrite the baseline)
+# opt-in flavor with the 3 draft PRs baked (use a DISTINCT tag — never overwrite the baseline)
 docker build -f nemo-rl.Dockerfile --build-arg APPLY_DRAFT_ROLLOUT_PATCHES=1 \
   -t ${FULL_IMAGE}-draftprs .
 
@@ -218,9 +219,9 @@ Treat results as your own measurement — this folder publishes none for this pa
 - **Build-staged, not cluster-re-run.** The NGC-from-scratch assembly here reproduces the measured
   Wave-28 mechanism chain from public sources, but this exact image has not itself been re-run on
   a cluster. The recipe gates exist so you (or we, next capacity window) can re-verify cheaply.
-- **The full rollout path is draft-PR-dependent.** Four upstream PRs, one of them with two entries
-  closed-unmerged upstream (see the table). If upstream supersedes them, the patch layer fails
-  loud or self-neutralizes — either way the image never ships an ambiguous patch state.
+- **The full rollout path is draft-PR-dependent.** Three upstream PRs, closed-unmerged upstream
+  (see the table). If upstream supersedes them, the patch layer fails loud or self-neutralizes —
+  either way the image never ships an ambiguous patch state.
 - **Baseline DeepEP gates use explicit SM/QP counts** (trap 2). A probe pass with explicit counts
   does not certify upstream's auto-sizing on EFA — that certification is exactly PR #612.
 - **NCCL topology XML on 32-NIC p5 nodes:** stock NCCL can hit the open issue
@@ -242,7 +243,7 @@ deepep-v2-efa/
 ├── requirements.txt               <- NeMo-RL deps minus the NGC-baked ABI anchors
 ├── env_vars.example               <- copy to env_vars (gitignored), fill in, source
 ├── patches/
-│   └── apply_nemo_rl_patches.py   <- the 4 draft PRs, pinned SHAs, fail-loud, self-neutralizing
+│   └── apply_nemo_rl_patches.py   <- the 3 draft PRs, pinned SHAs, fail-loud, self-neutralizing
 ├── recipe/
 │   ├── verify-image.sh            <- static substrate gate (run before any deploy)
 │   ├── run-rollout-probe.sh       <- cross-node ElasticBuffer probe + EFA TX-counter assert

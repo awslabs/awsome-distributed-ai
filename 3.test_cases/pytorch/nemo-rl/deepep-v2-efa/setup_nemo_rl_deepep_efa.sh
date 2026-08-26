@@ -19,7 +19,7 @@
 # Runs inside the Docker build (no GPU needed).
 set -euo pipefail
 
-PHASE="${1:?usage: setup_nemo_rl_deepep_efa.sh {ofi|deepep}}"
+PHASE="${1:?usage: setup_nemo_rl_deepep_efa.sh <ofi|deepep>}"
 
 # ---- pins (defaults match the Dockerfile ARGs; immutable SHAs only) --------
 AWS_OFI_NCCL_REPO="${AWS_OFI_NCCL_REPO:-https://github.com/aws/aws-ofi-nccl.git}"
@@ -78,15 +78,24 @@ build_deepep() {
   # image (the pip nvidia-nccl wheels are exactly what Layer 4 removed).
   pip3 install --no-cache-dir --no-build-isolation --no-deps -v .
   # Build sandbox has no GPU, so no import smoke here (recipe/verify-image.sh
-  # does that on an EFA/GPU host). Assert the compiled extension landed.
-  SO_COUNT=$(python3 - <<'PY'
-import glob, importlib.util, os, sys
-spec = importlib.util.find_spec("deep_ep")
-if spec is None or not spec.submodule_search_locations:
-    sys.exit("deep_ep not installed")
-root = list(spec.submodule_search_locations)[0]
-print(len(glob.glob(os.path.join(os.path.dirname(root), "deep_ep*", "**", "*.so"), recursive=True)
-          + glob.glob(os.path.join(root, "**", "*.so"), recursive=True)))
+  # does that on an EFA/GPU host). Assert the compiled extension landed by
+  # reading the INSTALLED distribution's file manifest (the wheel RECORD, via
+  # importlib.metadata) — NOT importlib.util.find_spec: this runs with cwd set
+  # to ${DEEPEP_SRC} (the `cd` above), and Python puts cwd on sys.path, so
+  # find_spec("deep_ep") would resolve the SOURCE tree's deep_ep/ package —
+  # which has no compiled .so — and shadow the pip-installed copy, turning this
+  # into a false-negative that fails the build even though the .so was built and
+  # installed. metadata.files() is cwd-independent and imports nothing (no GPU
+  # touched); `cd /` is belt-and-suspenders against any cwd-on-path shadowing.
+  SO_COUNT=$(cd / && python3 - <<'PY'
+import sys
+import importlib.metadata as md
+try:
+    files = md.files("deep_ep")
+except md.PackageNotFoundError:
+    sys.exit("deep_ep is not installed (no distribution metadata found)")
+so = [f for f in (files or []) if str(f).endswith(".so") and f.locate().is_file()]
+print(len(so))
 PY
 )
   [ "${SO_COUNT}" -ge 1 ] || { echo "ERROR: no compiled deep_ep extension (.so) found after install" >&2; exit 1; }

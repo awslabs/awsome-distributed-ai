@@ -22,7 +22,7 @@ export TAG="v1-20260825"
 export FULL_IMAGE="${REGISTRY}${IMAGE}:${TAG}"
 
 # ----- Opt-in draft-PR image flavor -----
-# 1 = bake the 4 draft upstream PRs (NeMo-RL#2410/#2411, Megatron-LM#4632,
+# 1 = bake the 3 draft upstream PRs (NeMo-RL#2410, Megatron-LM#4632,
 # DeepEP#612) that the full GRPO rollout-over-DeepEP path needs; 0 = the
 # upstream-only baseline. The ":-" default keeps a value pre-set on the
 # command line (APPLY_DRAFT_ROLLOUT_PATCHES=1 docker build ...) from being
@@ -81,7 +81,7 @@ export EP_EFA_RDMA_GBS=25.0
 
 # ----- DeepEP V2 selection -----
 export DEEP_EP_USE_V2_SHIM=0         # V2-native path, no compatibility shim
-export HAVE_DEEP_EP_V2=True          # rollout bridge feature flag (draft NeMo-RL#2411 path)
+export HAVE_DEEP_EP_V2=True          # rollout bridge feature flag (draft-PR rollout path)
 
 # ----- NVSHMEM contract (INERT on this image - kept for the rebuild case) -----
 # This image links NO NVSHMEM (the V2 NCCL-GIN backend replaces it). If you

@@ -57,7 +57,7 @@ docker run --rm --gpus all "${DEV_ARGS[@]}" -e HAVE_EFA_DEV="${HAVE_EFA_DEV}" "$
       || { echo "FAIL: marker says patched but Megatron-LM#4632 not in the flex dispatcher"; exit 1; }
     test -f /opt/NeMo-RL/examples/configs/recipes/llm/aws-efa-grpo-qwen3-30ba3b-2n8g-megatron.yaml \
       || { echo "FAIL: marker says patched but NeMo-RL#2410 EFA recipe config missing"; exit 1; }
-    echo "   patched image (4 draft PRs baked — full GRPO rollout-over-DeepEP path staged)"
+    echo "   patched image (3 draft PRs baked — full GRPO rollout-over-DeepEP path staged)"
   else
     DEEP_EP_DIR=$(python3 -c "import deep_ep, pathlib; print(pathlib.Path(deep_ep.__file__).parent)")
     if grep -q EP_EFA_MAX_QPS "$DEEP_EP_DIR/buffers/elastic.py" 2>/dev/null; then

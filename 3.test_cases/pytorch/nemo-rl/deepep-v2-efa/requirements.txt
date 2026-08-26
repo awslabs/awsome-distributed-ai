@@ -4,17 +4,26 @@
 # NeMo-RL runtime dependencies for the deepep-v2-efa image.
 #
 # NeMo-RL itself is installed with --no-deps (nemo-rl.Dockerfile Layer 7)
-# because its pyproject pins torch EXACTLY (torch==2.9.0 at the pinned SHA):
+# because its pyproject pins torch EXACTLY (torch==2.9.0 at NEMO_RL_SHA=46be4e8):
 # letting pip resolve that would DOWNGRADE the NGC-baked torch and orphan the
 # baked TransformerEngine/apex/flash-attn ABI. This file carries the rest of
-# NeMo-RL's [project.dependencies] set, at the same specifiers the pinned SHA
+# NeMo-RL's [project.dependencies] set, at the same specifiers that SHA
 # declares, MINUS the entries the base image already provides or that conflict
 # with this test case's substrate:
 #   - torch, triton, torchvision : NGC-baked (the ABI anchor; never reinstall)
 #   - setuptools, pip, ninja     : present in the base
-#   - nvidia-nvshmem-cu12        : cu12 wheel on a cu13 base, and unused here —
-#                                  this image's deep_ep is the NCCL-GIN backend
-#                                  (no NVSHMEM linked at all)
+# NVSHMEM IS required as a BUILD-TIME dependency, not stripped: upstream DeepEP's
+# setup.py links NVSHMEM UNCONDITIONALLY for the deep_ep extension (its own
+# `# TODO: make NVSHMEM and legacy optional` is still open at 01dc3aa, at main
+# HEAD, and in the amazon-contributing fork), via find_nvshmem_root(optional=
+# False) which asserts if NVSHMEM is absent. The NGC base's baked NVSHMEM is the
+# dpkg `libnvshmem3-cuda-13` RUNTIME package — it has NO nvshmem.h header and NO
+# libnvshmem_device.a, so the Layer-9 deep_ep build would fail at compile/link.
+# The pip wheel below ships both (header + static device lib) and resolves
+# through find_pkg_root; cu13 to match the base's CUDA line. This mirrors what
+# upstream NeMo-RL 46be4e8 lists as `nvidia-nvshmem-cu12  # for deep_ep build`.
+# The NCCL-GIN backend does not USE NVSHMEM at run time (the network path is
+# nccl.cu), but the extension is still LINKED against it — so it must be present.
 # When bumping NEMO_RL_SHA, re-diff this list against the new pyproject.
 colored==2.2.3
 ray[default]==2.49.2
@@ -43,5 +52,23 @@ mlflow>=3.5.0,<3.6.0
 swanlab
 pyzmq
 
+# NVSHMEM: build-time link dependency of the deep_ep C extension (see header).
+# cu13 wheel to match the base's CUDA 13 line; ships nvshmem.h + the static
+# libnvshmem_device.a that the dpkg runtime package omits.
+nvidia-nvshmem-cu13
+
 # megatron.core (PYTHONPATH tree) import-time dependency not in NeMo-RL's set.
 einops
+
+# decord: imported by nemo_rl/data/multimodal_utils.py, which the GRPO data path
+# pulls in — so `import nemo_rl.algorithms.grpo` (recipe/verify-image.sh Gate) is
+# an ImportError without it. Absent from the NGC base; not in NeMo-RL's own
+# [project.dependencies] at 46be4e8 (it's an extra), so it must be listed here.
+decord
+
+# nvidia-resiliency-ext: import-time dependency of megatron.core's
+# dist_checkpointing strategies (strategies/{nvrx,torch}.py, tensor_aware_state_dict.py),
+# so `import megatron.core.transformer.moe.fused_a2a` fails without it. The NGC
+# base ships 0.5.0; megatron.core at MEGATRON_LM_SHA needs >=0.6.0 (the 0.5.0
+# API is missing symbols it imports) — pin the floor, not an exact version.
+nvidia-resiliency-ext>=0.6.0
