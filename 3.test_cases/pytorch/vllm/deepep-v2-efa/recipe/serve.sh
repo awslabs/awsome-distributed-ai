@@ -12,17 +12,16 @@
 #   SERVE_MODEL=...      any MoE whose n_routed_experts % SERVE_DP == 0 (preflighted below)
 #
 # ── EAGER vs DEFAULT COMPILATION (see README "eager vs non-eager") ──────────────
-# SERVE_ENFORCE_EAGER=1 (DEFAULT) — the KNOWN-GOOD path. Every measured E2E validation of
-#   this stack ran eager: our H200 EP16/EP32 (2026-08-01, 16/16 chat 200) AND the
-#   independent B200 EP16 run (0/384 request failures) — both at vLLM e2f993dc4.
-# SERVE_ENFORCE_EAGER=0 — KNOWN-CRASH as of vLLM e2f993dc4: default compilation dies
-#   deterministically during startup profile_run with a Triton illegal-memory-access in
-#   deepep_v2.py:347 (buffer.combine, reached via finalize_async) on 12+/16 ranks
-#   (bounded on B200 EP16, 2/2 repro; Xid 43; ECC clean). NOT a DeepEP kernel bug
-#   (standalone test_ep.py passes the same dims) and NOT cudagraphs alone (compilation
-#   mode NONE without --enforce-eager still crashes). Track the upstream item before
-#   flipping this. This script therefore refuses =0 unless you also set
-#   SERVE_I_UNDERSTAND_NONEAGER_CRASHES=1.
+# SERVE_ENFORCE_EAGER=1 (DEFAULT) — eager is the default because it is what the published
+#   benchmarks/ tables were measured with. Every measured E2E validation of this stack ran
+#   eager: our H200 EP16/EP32 (2026-08-01, 16/16 chat 200) AND the independent B200 EP16 run
+#   (0/384 request failures) — both at vLLM e2f993dc4.
+# SERVE_ENFORCE_EAGER=0 — default (CUDA-graph) compilation. ALLOWED at the shipped pin: the
+#   empty-ExpertTokensMetadata guard (vLLM #52632) merged 2026-08-20 and the VLLM_SHA pin
+#   (14617c2b) IS its merge commit, so the deterministic profile_run crash that bit the old
+#   e2f993dc4 pin (Triton IMA in deepep_v2.py combine, reached via finalize_async) is fixed.
+#   The published tables were NOT re-measured on non-eager at this pin — measure at your
+#   target concurrency before quoting non-eager numbers.
 set -euo pipefail   # -e: preflight failures below must STOP the launch, not fall through to vllm serve
 ROLE="${1:?usage: serve.sh {leader|worker} <leader-ip> [start-rank]}"; DP_MASTER_IP="${2:?need leader ip}"
 case "$ROLE" in leader|worker) ;; *) echo "FATAL: unrecognized role '$ROLE' (leader|worker)"; exit 2 ;; esac
@@ -34,6 +33,7 @@ export NCCL_CUMEM_ENABLE=1 NCCL_NVLS_ENABLE=0 NCCL_IGNORE_DISABLED_P2P=1
 export FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_FORK_SAFE=1
 export OFI_NCCL_PROTOCOL=RDMA DEEP_EP_BACKEND=nccl
 export NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
+export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-^lo,docker,veth}   # exclusion, never positive selection: EFA nodes expose efa*/enp* and CNI adds bridges; auto-select can pick a non-routing iface -> rendezvous hang. Repo convention (nccl-tests Dockerfile).
 export OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1   # PR#1351: assert forced-PCIe on gdrdrv-2.4-kernel nodes
 export EP_REUSE_NCCL_COMM=0   # DeepEP creates its own comm; torch's is lazy/null under vLLM (segfault rootcause 2026-08-14)
 export NCCL_DEBUG=${SERVE_NCCL_DEBUG:-WARN}
@@ -76,10 +76,19 @@ export PATH=/opt/amazon/efa/bin:$PATH
 
 # ---- scale + model (defaults = the measured EP16 2-node shape) ----
 SERVE_MODEL="${SERVE_MODEL:-Qwen/Qwen3-30B-A3B-FP8}"
+# Pin the model REVISION too: --trust-remote-code (below) executes repo-side modeling code
+# in-pod, so an unpinned repo could change the code between preflight and load, or between
+# runs. Default = the measured commit of the default model; empty for any other SERVE_MODEL
+# (set SERVE_MODEL_REVISION to pin yours). Threaded into BOTH the preflight fetch and serve.
+if [ "$SERVE_MODEL" = "Qwen/Qwen3-30B-A3B-FP8" ]; then
+  SERVE_MODEL_REVISION="${SERVE_MODEL_REVISION:-d206ba732169f29bb77fbf80fc2c4b81d4d30782}"
+else
+  SERVE_MODEL_REVISION="${SERVE_MODEL_REVISION:-}"
+fi
 SERVE_DP="${SERVE_DP:-16}"
 SERVE_DP_LOCAL="${SERVE_DP_LOCAL:-8}"
 SERVE_TP="${SERVE_TP:-1}"
-START_RANK="${3:-8}"
+START_RANK="${3:-$SERVE_DP_LOCAL}"   # derive from ranks/node (assigned above), not a hardcoded 8: a 4-GPU node wants worker ranks 4-7, not 8-11
 SERVE_MAX_MODEL_LEN="${SERVE_MAX_MODEL_LEN:-4096}"
 SERVE_MAX_NUM_SEQS="${SERVE_MAX_NUM_SEQS:-16}"
 SERVE_MAX_BATCHED_TOKENS="${SERVE_MAX_BATCHED_TOKENS:-256}"
@@ -89,11 +98,12 @@ SERVE_GPU_MEM_UTIL="${SERVE_GPU_MEM_UTIL:-0.70}"
 # Qwen3 family=128 (ok 16/32), DeepSeek-V3/R1=256 (ok), Kimi-K2=384 (ok), DeepSeek-V2-Lite=64 (ok),
 # Qwen1.5-MoE=60 (FAILS 16/32). Reads the model's config.json via huggingface_hub.
 if [ "${SKIP_EP_PREFLIGHT:-0}" != "1" ]; then
-  python3 - "$SERVE_MODEL" "$SERVE_DP" <<'PY' || exit 3
+  python3 - "$SERVE_MODEL" "$SERVE_DP" "$SERVE_MODEL_REVISION" <<'PY' || exit 3
 import json, sys
 from huggingface_hub import hf_hub_download
 model, dp = sys.argv[1], int(sys.argv[2])
-cfg = json.load(open(hf_hub_download(model, "config.json")))
+rev = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None   # pin the same revision the serve loads
+cfg = json.load(open(hf_hub_download(model, "config.json", revision=rev)))
 n = cfg.get("n_routed_experts") or cfg.get("num_experts")
 assert n, f"{model}: no n_routed_experts/num_experts in config.json — not a routed-MoE model?"
 assert n % dp == 0, (f"EP-DIVISIBILITY GATE FAILED: {model} has {n} routed experts, "
@@ -103,29 +113,28 @@ PY
 fi
 
 # ---- eager / non-eager selection (see header + README "eager vs non-eager") ----
+# SERVE_ENFORCE_EAGER=1 (default) = eager, the mode the published tables were measured with.
+# =0 = default (CUDA-graph) compilation, unblocked at this pin by vLLM #52632 (the VLLM_SHA
+# pin is its merge commit). The tables were not re-measured on non-eager here — see README.
 SERVE_ENFORCE_EAGER="${SERVE_ENFORCE_EAGER:-1}"
 EAGER_FLAG="--enforce-eager"
 if [ "$SERVE_ENFORCE_EAGER" != "1" ]; then
-  if [ "${SERVE_I_UNDERSTAND_NONEAGER_CRASHES:-0}" != "1" ]; then
-    echo "REFUSING SERVE_ENFORCE_EAGER=0: default compilation is KNOWN-CRASH at vLLM"
-    echo "e2f993dc4 (Triton IMA, deepep_v2.py:347 combine during profile_run — bounded"
-    echo "repro on B200 EP16; fix filed upstream as vLLM PR #52632 — bump the pin once merged)."
-    echo "Set SERVE_I_UNDERSTAND_NONEAGER_CRASHES=1 to try anyway"
-    echo "(useful ONLY for reproducing/triaging the crash), or keep eager (the default)."
-    exit 4
-  fi
-  echo "WARNING: running WITHOUT --enforce-eager — expect the profile_run crash (~48s in)."
+  echo "SERVE_ENFORCE_EAGER=0: default (CUDA-graph) compilation, unblocked by vLLM #52632 (in this pin)."
+  echo "Note: the published benchmarks/ tables were measured eager — re-measure before quoting non-eager numbers."
   EAGER_FLAG=""
 fi
 
 # --trust-remote-code is ON because the DeepSeek-V3/R1 + Kimi-K2 models serve.sh's preflight
 # supports execute repo-side modeling code from their HF repos; the default Qwen3-30B-A3B does
 # NOT need it. Kept unconditional because removing it breaks the DeepSeek/Kimi SERVE_MODEL path;
-# a SERVE_MODEL you do not trust should not be pointed at this serve.
+# a SERVE_MODEL you do not trust should not be pointed at this serve. Because that code runs
+# in-pod, SERVE_MODEL_REVISION (above) pins WHICH commit's code executes — passed as --revision
+# so the served code matches the preflighted code and cannot drift between runs.
+REV_FLAG=""; [ -n "$SERVE_MODEL_REVISION" ] && REV_FLAG="--revision ${SERVE_MODEL_REVISION}"
 COMMON="--tensor-parallel-size ${SERVE_TP} --data-parallel-size ${SERVE_DP} --data-parallel-size-local ${SERVE_DP_LOCAL} \
   --data-parallel-address ${DP_MASTER_IP} --data-parallel-rpc-port ${DP_MASTER_PORT} \
   --data-parallel-backend mp --enable-expert-parallel --all2all-backend deepep_v2 \
-  ${EAGER_FLAG} --max-model-len ${SERVE_MAX_MODEL_LEN} --max-num-seqs ${SERVE_MAX_NUM_SEQS} \
+  ${EAGER_FLAG} ${REV_FLAG} --max-model-len ${SERVE_MAX_MODEL_LEN} --max-num-seqs ${SERVE_MAX_NUM_SEQS} \
   --max-num-batched-tokens ${SERVE_MAX_BATCHED_TOKENS} \
   --gpu-memory-utilization ${SERVE_GPU_MEM_UTIL} --trust-remote-code --dtype bfloat16"
 
