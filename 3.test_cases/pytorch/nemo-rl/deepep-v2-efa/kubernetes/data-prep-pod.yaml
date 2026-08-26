@@ -3,10 +3,17 @@
 # Lightweight CPU pod for staging the model + dataset onto FSx (full GRPO path
 # only — the recipe gates in recipe/ need NO weights and NO dataset).
 #
+# Create the HF token Secret first (same Secret raycluster.yaml consumes):
+#   kubectl create secret generic hf-token \
+#     --from-literal=HF_TOKEN=$HF_TOKEN -n ${NAMESPACE}
+#
 #   envsubst < kubernetes/data-prep-pod.yaml | kubectl apply -f -
 #   kubectl -n ${NAMESPACE} exec -it data-prep -- bash
-#   # inside: pip install "huggingface_hub[cli]" && \
+#   # inside: pip install "huggingface_hub[cli]==1.28.0" && \
 #   #   hf download ${MODEL_NAME} --local-dir ${MODEL_LOCAL}
+#   # NOTE: the GRPO recipe consumes the hub id (policy.model_name:
+#   #   Qwen/Qwen3-30B-A3B), not ${MODEL_LOCAL} — set HF_HOME on the Ray pods to
+#   #   ${MODEL_LOCAL}'s parent, or override model_name, if you stage to a path.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -15,13 +22,34 @@ metadata:
   labels:
     app: nemo-rl-deepep-data-prep
 spec:
+  # CPU-only staging workload — keep it off GPU nodes so a `sleep infinity` pod
+  # can never park on (and hold) a p5 node a GPU worker needs. Same label +
+  # rationale as raycluster.yaml's head group.
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: nvidia.com/gpu.present
+                operator: NotIn
+                values:
+                  - "true"
+  automountServiceAccountToken: false
   containers:
     - name: data-prep
-      image: python:3.12-slim
+      # Pinned patch release, never a floating tag — same "never latest"
+      # reasoning env_vars.example states for the training image.
+      image: python:3.12.14-slim
       command: ["sleep", "infinity"]
       env:
+        # Reuse the hf-token Secret (created above); a plaintext env value would
+        # sit in etcd for the life of this sleep-infinity pod and is visible in
+        # `kubectl get pod -o yaml`.
         - name: HF_TOKEN
-          value: ""  # Set before applying, or pass via kubectl set env
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
       resources:
         requests:
           cpu: "4"
