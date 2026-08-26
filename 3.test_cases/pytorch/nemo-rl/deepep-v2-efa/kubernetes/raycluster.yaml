@@ -47,6 +47,9 @@ spec:
         labels:
           ray.io/node-type: head
       spec:
+        # Nothing here talks to the Kubernetes API server — don't mount the
+        # default ServiceAccount token.
+        automountServiceAccountToken: false
         containers:
           - name: ray-head
             image: ${FULL_IMAGE}
@@ -83,9 +86,14 @@ spec:
               - name: dshm
                 mountPath: /dev/shm
         volumes:
+          # /fsx defaults to emptyDir so the recipe GATES (which touch NO shared
+          # storage — see README) run with zero PVC setup and never sit Pending
+          # on an unbound claim. For the FULL GRPO path, swap this to the FSx PVC:
+          #   - name: fsx
+          #     persistentVolumeClaim:
+          #       claimName: ${FSX_CLAIM}
           - name: fsx
-            persistentVolumeClaim:
-              claimName: ${FSX_CLAIM}
+            emptyDir: {}
           - name: dshm
             emptyDir:
               medium: Memory
@@ -115,6 +123,10 @@ spec:
           labels:
             ray.io/node-type: worker
         spec:
+          # These are privileged root containers running model + training code;
+          # nothing here talks to the API server, so don't also hand them the
+          # default ServiceAccount token.
+          automountServiceAccountToken: false
           nodeSelector:
             node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
           tolerations:
@@ -133,13 +145,27 @@ spec:
                     secretKeyRef:
                       name: hf-token
                       key: HF_TOKEN
+                # ---- recipe-gate shape (read INSIDE the pod by the kubectl-exec
+                #      gates) ----
+                # A client-side `source env_vars` does NOT cross `kubectl exec`;
+                # only the pod's own env does. run-rollout-probe.sh / train-step.sh
+                # read NNODES (not NUM_NODES) and GPUS_PER_NODE; probe_rollout.py /
+                # train_moe_step.py read the EP_* shape. Without these the gates run
+                # on hardcoded script defaults regardless of what the operator set.
+                - { name: NNODES,                    value: "${NUM_NODES}" }
+                - { name: GPUS_PER_NODE,             value: "${GPUS_PER_NODE}" }
+                - { name: EP_EXPERTS,                value: "${EP_EXPERTS}" }
+                - { name: EP_TOPK,                   value: "${EP_TOPK}" }
+                - { name: EP_HIDDEN,                 value: "${EP_HIDDEN}" }
+                - { name: EP_TOKENS,                 value: "${EP_TOKENS}" }
+                - { name: EP_NUM_SMS,                value: "${EP_NUM_SMS}" }    # load-bearing on EFA (trap 2)
+                - { name: EP_NUM_QPS,                value: "${EP_NUM_QPS}" }    # load-bearing on EFA (trap 2)
                 # ---- NCCL-GIN proxy + EFA contract, VERBATIM (baked in the image
                 #      ENV and re-exported by every recipe script; repeated here so
                 #      the manifest alone documents the transport contract) ----
                 - { name: NCCL_GIN_TYPE,              value: "2" }    # 2 = CPU-proxy GIN (the EFA-viable path)
                 - { name: NCCL_GIN_ENABLE,            value: "1" }
                 - { name: OFI_NCCL_GIN_GDAKI,         value: "0" }    # GPU-initiated: not the shipped path on EFA
-                - { name: OFI_NCCL_GIN_MAX_REQUESTS,  value: "512" }
                 - { name: OFI_NCCL_PROTOCOL,          value: "RDMA" }
                 - { name: NCCL_NET_PLUGIN,            value: "/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so" }
                 - { name: NCCL_NVLS_ENABLE,           value: "0" }
@@ -187,9 +213,13 @@ spec:
                 - name: dev-infiniband
                   mountPath: /dev/infiniband
           volumes:
+            # /fsx defaults to emptyDir (see head group) — the recipe gates need
+            # no shared storage. Swap to the FSx PVC for the full GRPO path:
+            #   - name: fsx
+            #     persistentVolumeClaim:
+            #       claimName: ${FSX_CLAIM}
             - name: fsx
-              persistentVolumeClaim:
-                claimName: ${FSX_CLAIM}
+              emptyDir: {}
             - name: dshm
               emptyDir:
                 medium: Memory
