@@ -41,9 +41,14 @@ echo "===== DeepEP-V2 rollout probe: role=$ROLE node_rank=$NODE_RANK nnodes=$NNO
 
 # EFA hardware TX bytes across all NICs — the counter delta is the honest "bytes actually
 # left this node over EFA" assert (a PASS on SHM/TCP fallback would show delta≈0).
+# Sum the byte-counter FAMILIES, not tx_bytes alone: with FI_EFA_USE_DEVICE_RDMA=1 the
+# bytes can be accounted as rdma_write_bytes rather than sends, so tx_bytes alone could
+# read ~0 on a perfectly healthy RDMA run and false-FAIL the >=1 MiB check below. Missing
+# families are skipped (the glob simply finds fewer files), so this is portable across
+# kernels that expose different subsets.
 efa_tx_total() {
   local total=0 v
-  for f in /sys/class/infiniband/*/ports/1/hw_counters/tx_bytes; do
+  for f in /sys/class/infiniband/*/ports/1/hw_counters/{tx_bytes,send_bytes,rdma_write_bytes,rdma_read_resp_bytes}; do
     [ -f "$f" ] && v=$(cat "$f") && total=$((total + v))
   done
   echo "$total"
@@ -53,7 +58,10 @@ TX_BEFORE=$(efa_tx_total)
 set -o pipefail
 # GPUS_PER_NODE torchrun procs per node (one per GPU): NNODES x GPUS_PER_NODE = the EP16
 # shape the Wave-28 measured run used on 2 nodes.
-torchrun --nnodes="$NNODES" --nproc-per-node="$GPUS_PER_NODE" --node-rank="$NODE_RANK" \
+# Wall-clock bound (timeout 900) so a wedged rendezvous returns a verdict instead of
+# holding the nodes; the python side also passes an init_process_group timeout. timeout
+# exit 124 => treated as a probe failure by the rc check below.
+timeout 900 torchrun --nnodes="$NNODES" --nproc-per-node="$GPUS_PER_NODE" --node-rank="$NODE_RANK" \
   --master-addr="$LEADER_IP" --master-port=29501 "$PROBE" 2>&1 | tee /tmp/rollout-probe.$NODE_RANK.log
 rc=${PIPESTATUS[0]}
 
