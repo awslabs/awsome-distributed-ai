@@ -98,6 +98,11 @@ uses, and only prints `KERNEL-TEST PASS` when the test passes **and** the `NCCL_
 the `efa-direct` banner (so a green result cannot be a silent TCP/SHM fallback). This is the one step
 that cannot hang for hours — run it before committing a node to the multi-hundred-GB weight load.
 
+For a standalone DeepEP-V2 dispatch/combine benchmark of the fabric itself (numbers, not just
+pass/fail — and without any vLLM in the loop), use the repo's runnable V2 micro-benchmark:
+[`micro-benchmarks/expert-parallelism/deepep-v2-benchmark/`](../../../../micro-benchmarks/expert-parallelism/deepep-v2-benchmark/)
+(own image + Slurm launchers; same NCCL-GIN/EFA transport this sample serves over).
+
 ## Serve
 ```bash
 # eager (default). SERVE_DP = total data-parallel = EP size; SERVE_DP_LOCAL = GPUs/node.
