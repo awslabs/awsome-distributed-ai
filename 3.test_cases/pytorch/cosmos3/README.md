@@ -360,9 +360,11 @@ verify the transport in your own logs rather than assuming it.
 torchcodec decodes the DROID camera MP4s, and two build-time packaging requirements
 follow from running it on the AWS DLC base. Both are handled in `Dockerfile`:
 1. **FFmpeg version.** Ubuntu 22.04 apt ships FFmpeg 4.4 (`libavutil.so.56`), but
-   torchcodec 0.10.0 needs FFmpeg 5–8. The image bakes a prebuilt **shared
-   FFmpeg 8** (`libavutil.so.60`) onto `/usr/local/lib` + `ldconfig` — deliberately
-   not via `LD_LIBRARY_PATH`, to leave the DLC's EFA stack untouched.
+   torchcodec 0.10.0 needs FFmpeg 5–7. The image bakes a prebuilt **shared
+   FFmpeg 7.1** (`libavutil.so.59`) onto `/usr/local/lib` + `ldconfig` — deliberately
+   not via `LD_LIBRARY_PATH`, to leave the DLC's EFA stack untouched. (An FFmpeg 8.x
+   build ships `libavutil.so.61`, which torchcodec 0.10 cannot load — pin a `7.1.x`
+   gpl-shared build.)
 2. **Shared `libpython3.13.so.1.0`.** torchcodec's custom-ops `.so` links it, but the
    AWS DLC builds system Python without `--enable-shared`. `cosmos-framework`'s
    `cosmos-dependencies` wheels are **cp313-only** (an AL2023 cp312 base does not work —
@@ -405,7 +407,7 @@ the `Dockerfile` header). The pinned, validated versions:
 | `cosmos-framework` (`COSMOS_FRAMEWORK_REF`) | `5eee9ed574255f017b192161bfbb5a10253d65cf` |
 | NCCL | 2.28.9 (from the `cosmos-framework` venv's `nvidia-nccl-cu13`) |
 | EFA installer | 1.47.0 (libfabric 2.4, aws-ofi-nccl 1.18.0, gdrcopy 2.5.1 — baked into the DLC) |
-| FFmpeg (shared, for torchcodec) | 8.x (pinned BtbN build, SHA-256 verified) |
+| FFmpeg (shared, for torchcodec) | 7.1.x (pinned BtbN gpl-shared build, SHA-256 verified) |
 | torchcodec | 0.10.0 |
 | `uv` | 0.10.8 |
 | Generation engine | `vllm/vllm-omni:cosmos3` (separate image from the training stack) |
