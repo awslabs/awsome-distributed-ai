@@ -66,11 +66,14 @@ def route_summaries(run: Path) -> list[dict]:
 def runtime_dispatcher_identities(text: str) -> list[dict]:
     found = []
     prefix = "RUNTIME_DISPATCHER_IDENTITY "
+    decoder = json.JSONDecoder()
     for line in text.splitlines():
         if prefix not in line:
             continue
         try:
-            found.append(json.loads(line.partition(prefix)[2]))
+            payload, _ = decoder.raw_decode(line.partition(prefix)[2].lstrip())
+            if isinstance(payload, dict):
+                found.append(payload)
         except json.JSONDecodeError:
             pass
     return found
@@ -158,13 +161,27 @@ def write_iteration_artifacts(
     }
 
 
-def parse_run(run: Path, warmup: int) -> dict:
+def parse_run(run: Path, warmup: int, write_artifacts: bool = True) -> dict:
     env = read_environment(run)
     arm = env.get("ep_arm", run.name)
     log_paths = sorted(run.glob("pod-logs/node-rank-*.log"))
     text = "\n".join(path.read_text(errors="replace") for path in log_paths)
     ordered = parse_iteration_records(text)
-    iteration_artifacts = write_iteration_artifacts(run, ordered)
+    if write_artifacts:
+        iteration_artifacts = write_iteration_artifacts(run, ordered)
+    else:
+        iteration_artifacts = {}
+        for name, filename in (
+            ("iteration_metrics", "iteration_metrics.csv"),
+            ("loss_curve", "loss_curve.csv"),
+        ):
+            path = run / filename
+            if path.is_file():
+                iteration_artifacts[name] = {
+                    "path": str(path),
+                    "records": len(ordered),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                }
     steady = [
         record for record in ordered if record["iteration_dimensionless"] > warmup
     ]
@@ -387,9 +404,10 @@ def parse_run(run: Path, warmup: int) -> dict:
             **iteration_artifacts,
         },
     }
-    (run / "result.json").write_text(
-        json.dumps(result, indent=2, sort_keys=True) + "\n"
-    )
+    if write_artifacts:
+        (run / "result.json").write_text(
+            json.dumps(result, indent=2, sort_keys=True) + "\n"
+        )
     return result
 
 
@@ -444,10 +462,15 @@ def main() -> None:
     parser.add_argument("campaign")
     parser.add_argument("--warmup", type=int, default=8)
     parser.add_argument("--output")
+    parser.add_argument(
+        "--read-only",
+        action="store_true",
+        help="parse preserved artifacts without rewriting files inside the campaign",
+    )
     args = parser.parse_args()
     root = Path(args.campaign)
     runs = sorted(path for path in root.glob("*/repeat-*/*") if path.is_dir())
-    results = [parse_run(path, args.warmup) for path in runs]
+    results = [parse_run(path, args.warmup, not args.read_only) for path in runs]
     document = {
         "schema_version": 1,
         "campaign_root": str(root),
