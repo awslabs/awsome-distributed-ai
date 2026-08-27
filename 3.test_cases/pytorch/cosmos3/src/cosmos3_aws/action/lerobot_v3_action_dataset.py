@@ -30,7 +30,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 
-from cosmos_framework.data.vfm.action.domain_utils import get_domain_id
+from cosmos_framework.data.generator.action.utils.domain_utils import get_domain_id
 
 _CONCAT_VIEW_DESCRIPTION = (
     "The top row is from the wrist-mounted camera. The bottom row contains two "
@@ -55,9 +55,13 @@ class LeRobotV3ActionDataset(Dataset):
     fps:
         Sampling rate used to build the ``delta_timestamps`` window.
     mode:
-        Action generation mode: ``"policy"`` (default), ``"forward_dynamics"``,
-        ``"inverse_dynamics"``, or ``"image2video"``. ``"joint"`` randomizes per
-        sample across the three action modes (matches DROIDLeRobotDataset).
+        Action generation mode: ``"wam"`` (default, world-action-model: jointly
+        denoise video and actions given the first frame), ``"forward_dynamics"``,
+        or ``"inverse_dynamics"``. ``"joint"`` randomizes per sample across the
+        three action modes (matches DROIDLeRobotDataset). NOTE: the framework
+        renamed this mode from ``"policy"`` to ``"wam"`` (commit dcb3761); a
+        separate action-only ``"policy"`` mode now exists upstream and is not
+        used here.
     camera_keys:
         Ordered camera feature keys. The first is treated as the wrist view
         (top row); the remaining two are concatenated side-by-side on the bottom
@@ -68,7 +72,7 @@ class LeRobotV3ActionDataset(Dataset):
         ``"droid_lerobot"``).
     """
 
-    _MODE_CHOICES = ("forward_dynamics", "inverse_dynamics", "policy")
+    _MODE_CHOICES = ("forward_dynamics", "inverse_dynamics", "wam")
 
     def __init__(
         self,
@@ -76,7 +80,7 @@ class LeRobotV3ActionDataset(Dataset):
         root: str | None = None,
         chunk_length: int = 16,
         fps: float = 15.0,
-        mode: str = "policy",
+        mode: str = "wam",
         camera_keys: list[str] | None = None,
         domain_name: str = "droid_lerobot",
     ) -> None:

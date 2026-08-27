@@ -24,7 +24,7 @@ _ROOT = os.environ.get("DROID_DATASET_PATH", "/fsx/datasets/droid_lerobot_v3")
 _REPO = "lerobot/droid_100"
 
 
-def _make(mode: str = "policy", chunk_length: int = 16) -> LeRobotV3ActionDataset:
+def _make(mode: str = "wam", chunk_length: int = 16) -> LeRobotV3ActionDataset:
     return LeRobotV3ActionDataset(
         repo_id=_REPO,
         root=_ROOT,
@@ -80,9 +80,9 @@ def test_caption_is_nonempty_string() -> None:
 
 
 def test_mode_and_scalars_typed() -> None:
-    ds = _make(mode="policy")
+    ds = _make(mode="wam")
     s = ds[0]
-    assert s["mode"] == "policy"
+    assert s["mode"] == "wam"
     assert torch.is_tensor(s["conditioning_fps"]) and s["conditioning_fps"].dtype == torch.long
     assert torch.is_tensor(s["domain_id"]) and s["domain_id"].dtype == torch.long
 

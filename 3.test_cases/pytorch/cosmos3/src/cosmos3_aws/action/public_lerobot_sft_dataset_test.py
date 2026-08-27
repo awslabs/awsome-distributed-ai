@@ -65,7 +65,7 @@ def test_factory_returns_iterable_shuffle_when_enabled(monkeypatch):
     """When iterable_shuffle=True, the factory wraps the map-style ActionSFTDataset
     in the framework's ActionIterableShuffleDataset."""
     import cosmos3_aws.action.public_lerobot_sft_dataset as mod
-    from cosmos_framework.data.vfm.action.datasets.action_sft_dataset import (
+    from cosmos_framework.data.generator.action.datasets.action_sft_dataset import (
         ActionIterableShuffleDataset,
     )
 
@@ -84,7 +84,7 @@ def test_factory_returns_iterable_shuffle_when_enabled(monkeypatch):
 def test_factory_returns_mapstyle_by_default(monkeypatch):
     """Default (iterable_shuffle=False) returns the plain ActionSFTDataset."""
     import cosmos3_aws.action.public_lerobot_sft_dataset as mod
-    from cosmos_framework.data.vfm.action.datasets.action_sft_dataset import ActionSFTDataset
+    from cosmos_framework.data.generator.action.datasets.action_sft_dataset import ActionSFTDataset
 
     class _FakeInner:
         def __init__(self, *a, **k): ...

@@ -18,7 +18,7 @@ from hydra.core.config_store import ConfigStore
 from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.utils.lazy_config import LazyDict
 from cosmos_framework.configs.base.experiment.sft.models.nano_model_config import NANO_MODEL_CONFIG
-from cosmos_framework.data.vfm.joint_dataloader import (
+from cosmos_framework.data.generator.joint_dataloader import (
     PackingDataLoader,
     RankPartitionedDataLoader,
 )
@@ -137,7 +137,7 @@ action_policy_public_lerobot = LazyDict(
                             root="${oc.env:DROID_DATASET_PATH,/fsx/datasets/droid_lerobot_v3}",
                             fps=15.0,
                             chunk_length=32,
-                            mode="policy",
+                            mode="wam",
                             camera_keys=[
                                 "observation.images.wrist_image_left",
                                 "observation.images.exterior_image_1_left",

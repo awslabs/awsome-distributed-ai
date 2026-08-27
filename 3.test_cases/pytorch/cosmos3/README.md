@@ -360,9 +360,11 @@ verify the transport in your own logs rather than assuming it.
 torchcodec decodes the DROID camera MP4s, and two build-time packaging requirements
 follow from running it on the AWS DLC base. Both are handled in `Dockerfile`:
 1. **FFmpeg version.** Ubuntu 22.04 apt ships FFmpeg 4.4 (`libavutil.so.56`), but
-   torchcodec 0.10.0 needs FFmpeg 5–8. The image bakes a prebuilt **shared
-   FFmpeg 8** (`libavutil.so.60`) onto `/usr/local/lib` + `ldconfig` — deliberately
-   not via `LD_LIBRARY_PATH`, to leave the DLC's EFA stack untouched.
+   torchcodec 0.10.0 needs FFmpeg 5–7. The image bakes a prebuilt **shared
+   FFmpeg 7.1** (`libavutil.so.59`) onto `/usr/local/lib` + `ldconfig` — deliberately
+   not via `LD_LIBRARY_PATH`, to leave the DLC's EFA stack untouched. (An FFmpeg 8.x
+   build ships `libavutil.so.61`, which torchcodec 0.10 cannot load — pin a `7.1.x`
+   gpl-shared build.)
 2. **Shared `libpython3.13.so.1.0`.** torchcodec's custom-ops `.so` links it, but the
    AWS DLC builds system Python without `--enable-shared`. `cosmos-framework`'s
    `cosmos-dependencies` wheels are **cp313-only** (an AL2023 cp312 base does not work —
@@ -402,13 +404,35 @@ the `Dockerfile` header). The pinned, validated versions:
 | Component | Version |
 |-----------|---------|
 | AWS DLC base (`DLC_TAG`) | `2.10.0-gpu-py313-cu130-ubuntu22.04-ec2` (PyTorch 2.10.0+cu130, Python 3.13, CUDA 13.0, Ubuntu 22.04) |
-| `cosmos-framework` (`COSMOS_FRAMEWORK_REF`) | `90cd348877c37b888942c988b631eb1611bf2950` |
+| `cosmos-framework` (`COSMOS_FRAMEWORK_REF`) | `5eee9ed574255f017b192161bfbb5a10253d65cf` |
 | NCCL | 2.28.9 (from the `cosmos-framework` venv's `nvidia-nccl-cu13`) |
 | EFA installer | 1.47.0 (libfabric 2.4, aws-ofi-nccl 1.18.0, gdrcopy 2.5.1 — baked into the DLC) |
-| FFmpeg (shared, for torchcodec) | 8.x (pinned BtbN build, SHA-256 verified) |
+| FFmpeg (shared, for torchcodec) | 7.1.x (pinned BtbN gpl-shared build, SHA-256 verified) |
 | torchcodec | 0.10.0 |
 | `uv` | 0.10.8 |
 | Generation engine | `vllm/vllm-omni:cosmos3` (separate image from the training stack) |
+
+### torch.compile: Inductor mix-order-reduction shared-memory OOM
+
+The image sets `TORCHINDUCTOR_MIX_ORDER_REDUCTION=0` (in the `Dockerfile`). MoT
+post-training runs with `torch.compile` enabled, and on **PyTorch 2.10** Inductor's
+mix-order-reduction fusion (new in 2.10 — the same code compiles fine on 2.9) fuses the
+Qwen3-VL RMSNorm backward reductions together with the RoPE token-mask into a single
+*persistent* Triton reduction kernel spanning the full hidden axis. That kernel needs
+~272 KB of shared memory, over the ~227 KB-per-SM limit on H100/H200 (p5/p5en), so the
+first `loss.backward()` fails to **compile** with:
+
+```
+torch._inductor.exc.InductorError: RuntimeError: No valid triton configs.
+OutOfMemoryError: out of resource: shared memory, Required: 278688, Hardware limit: 232448
+```
+
+Setting `TORCHINDUCTOR_MIX_ORDER_REDUCTION=0` disables just that fusion, so Inductor emits
+the reductions as separate looped (non-persistent) kernels that fit shared memory —
+`torch.compile` stays enabled and there is no measured throughput regression. This is an
+upstream PyTorch bug with a fix in flight; track
+[pytorch/pytorch#175250](https://github.com/pytorch/pytorch/issues/175250) and remove the
+env var once the pinned PyTorch version includes the fix.
 
 ## References
 

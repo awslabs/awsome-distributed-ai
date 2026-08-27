@@ -55,8 +55,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # truncated download fails the build loudly instead of baking a bad lib. If the
 # asset is gone, mirror the tarball to your own ECR/S3 (or pin a newer BtbN build)
 # and update FFMPEG_URL + FFMPEG_SHA256 to match. Override both via --build-arg.
-ARG FFMPEG_URL=https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-06-18-14-21/ffmpeg-N-125093-gd2d371d10d-linux64-gpl-shared.tar.xz
-ARG FFMPEG_SHA256=d322b8b53cc8068da2b1a511df60d3279493364c609c6c9b2baa9149243adff4
+#
+# VERSION CONSTRAINT: torchcodec 0.10 (framework-pinned) only binds FFmpeg 4..7
+# (libavutil.so.56..60). Pin an ffmpeg 7.x "gpl-shared" build (this one ships
+# libavutil.so.59); an ffmpeg 8.x build (libavutil.so.61) will NOT load and breaks
+# video decode. Prefer BtbN MONTH-END autobuild tags — daily tags get pruned,
+# month-end ones persist.
+ARG FFMPEG_URL=https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-31-14-10/ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-shared-7.1.tar.xz
+ARG FFMPEG_SHA256=df7e15a2d2fe0ee15ae36e0e3b83596dd088ee0a0767874241d9a54380df0add
 RUN cd /tmp && curl -sL --retry 3 -o ff.tar.xz "${FFMPEG_URL}" && \
     echo "${FFMPEG_SHA256}  ff.tar.xz" | sha256sum -c - && \
     mkdir -p ffx && tar -xf ff.tar.xz -C ffx --strip-components=1 && \
@@ -85,7 +91,7 @@ WORKDIR /workspace
 # Clone + install cosmos-framework (pin via --build-arg COSMOS_FRAMEWORK_REF) on
 # the uv-managed Python 3.13. The cu130-train group pins
 # torch 2.10.0+cu130 + NCCL 2.28.9 (the NCCL that matches the DLC's aws-ofi-nccl).
-ARG COSMOS_FRAMEWORK_REF=90cd348877c37b888942c988b631eb1611bf2950
+ARG COSMOS_FRAMEWORK_REF=5eee9ed574255f017b192161bfbb5a10253d65cf
 RUN git clone https://github.com/NVIDIA/cosmos-framework.git && \
     cd cosmos-framework && git checkout ${COSMOS_FRAMEWORK_REF} && \
     uv sync --all-extras --group=cu130-train --python 3.13
@@ -122,6 +128,19 @@ ENV FI_PROVIDER=efa
 ENV FI_EFA_USE_DEVICE_RDMA=1
 ENV FI_EFA_FORK_SAFE=1
 ENV PYTHONHASHSEED=42
+
+# Disable Inductor's mix-order-reduction fusion for torch.compile (compile
+# enabled=true is the framework default for MoT training). On torch 2.10 this
+# fusion (new in 2.10; the code ran fine on 2.9) fuses the Qwen3-VL RMSNorm
+# backward reductions together with the RoPE token-mask into ONE persistent
+# Triton reduction kernel over the full hidden axis. That kernel needs ~272 KB
+# of shared memory and exceeds the ~227 KB/SM limit on H100/H200 (p5/p5en), so
+# loss.backward() fails to compile with:
+#   "No valid triton configs. OutOfMemoryError: out of resource: shared memory".
+# Setting this to 0 makes Inductor emit the reductions as separate looped
+# (non-persistent) kernels that fit shared memory, keeping compile enabled.
+# Upstream PyTorch bug (fix in flight): https://github.com/pytorch/pytorch/issues/175250
+ENV TORCHINDUCTOR_MIX_ORDER_REDUCTION=0
 
 # venv torchrun on PATH.
 ENV PATH="/workspace/cosmos-framework/.venv/bin:${PATH}"
