@@ -48,6 +48,8 @@ ARM_MARKERS = {
     "deepep-v1-nvshmem": "^",
     "deepep-v2-gin-gda": "D",
 }
+REPEAT_LINESTYLES = ("-", "--", ":")
+REPEAT_MARKERS = ("o", "s", "^")
 
 ITERATION = re.compile(r"\biteration\s+(\d+)\s*/\s*(\d+)", re.I)
 FIELDS = {
@@ -750,72 +752,93 @@ def safe_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
 
 
+def save_figure(figure, path: Path, suffix: str) -> None:
+    figure.savefig(path, dpi=180, metadata={"Date": None} if suffix == "svg" else None)
+    if suffix == "svg":
+        lines = path.read_text().splitlines()
+        path.write_text("\n".join(line.rstrip() for line in lines) + "\n")
+
+
 def format_optional_metric(value: float | int | None) -> str:
     return "Not recorded" if value is None else f"{value:.10g}"
 
 
+def repeat_plot_style(index: int, repeat_count: int) -> dict:
+    """Keep overlapping repeat traces visible without offsetting their values."""
+    marker_step = max(1, repeat_count * 2)
+    return {
+        "linestyle": REPEAT_LINESTYLES[index % len(REPEAT_LINESTYLES)],
+        "marker": REPEAT_MARKERS[index % len(REPEAT_MARKERS)],
+        "markevery": (index * 2, marker_step),
+        "markerfacecolor": "white",
+        "markeredgewidth": 0.9,
+    }
+
+
 def plot_cell(cell: str, runs: list[Run], output_dir: Path) -> list[str]:
     repeats = sorted({run.repeat for run in runs})
+    arms = [arm for arm in ARMS if any(run.arm == arm for run in runs)]
     figure, axes = plt.subplots(
-        len(repeats),
         1,
-        figsize=(9.2, 3.7 * len(repeats)),
+        len(arms),
+        figsize=(4.2 * len(arms), 4.9),
         sharex=True,
+        sharey=True,
         squeeze=False,
         constrained_layout=False,
     )
-    for axis, repeat in zip(axes[:, 0], repeats, strict=True):
-        selected = [run for run in runs if run.repeat == repeat]
-        all_losses = []
-        for run in sorted(selected, key=lambda item: ARMS.index(item.arm)):
+    all_losses = []
+    for column, arm in enumerate(arms):
+        axis = axes[0, column]
+        selected = sorted(
+            (run for run in runs if run.arm == arm), key=lambda item: item.repeat
+        )
+        for index, run in enumerate(selected):
             iterations = [int(item["iteration_dimensionless"]) for item in run.records]
             losses = [float(item["lm_loss_dimensionless"]) for item in run.records]
             all_losses.extend(losses)
             axis.plot(
                 iterations,
                 losses,
-                label=ARM_LABELS[run.arm],
-                color=ARM_COLORS[run.arm],
-                linewidth=1.9,
-                linestyle=ARM_LINESTYLES[run.arm],
-                marker=ARM_MARKERS[run.arm] if len(iterations) <= 8 else None,
-                markersize=3.5,
+                label=f"Repeat {run.repeat} (dimensionless)",
+                color=ARM_COLORS[arm],
+                linewidth=1.7,
+                markersize=4.2,
+                **repeat_plot_style(index, len(selected)),
             )
-        if (
-            all_losses
-            and min(all_losses) > 0.0
-            and max(all_losses) / min(all_losses) >= 10.0
-        ):
-            axis.set_yscale("log")
-        axis.text(
-            0.01,
-            0.97,
-            f"Repeat {repeat} (dimensionless)",
-            transform=axis.transAxes,
-            ha="left",
-            va="top",
-        )
-        axis.set_ylabel("LM loss (dimensionless)")
+        axis.set_title(ARM_LABELS[arm], color=ARM_COLORS[arm])
+        axis.set_xlabel("Optimizer iteration (dimensionless)")
         axis.grid(True, alpha=0.25)
-    axes[-1, 0].set_xlabel("Optimizer iteration (dimensionless)")
-    figure.subplots_adjust(top=0.78, bottom=0.16, left=0.1, right=0.98, hspace=0.4)
+    if (
+        all_losses
+        and min(all_losses) > 0.0
+        and max(all_losses) / min(all_losses) >= 10.0
+    ):
+        axes[0, 0].set_yscale("log")
+    axes[0, 0].set_ylabel("LM loss (dimensionless)")
+    figure.subplots_adjust(top=0.72, bottom=0.17, left=0.07, right=0.99, wspace=0.12)
     handles, labels = axes[0, 0].get_legend_handles_labels()
     figure.legend(
         handles,
         labels,
         loc="upper center",
-        bbox_to_anchor=(0.5, 0.9),
-        ncol=4,
+        bbox_to_anchor=(0.5, 0.88),
+        ncol=len(repeats),
         frameon=False,
+    )
+    figure.text(
+        0.5,
+        0.79,
+        "Each EP arm has its own panel; metric scales are shared across panels.",
+        ha="center",
+        fontsize=9,
     )
     figure.suptitle(f"Kimi-K2 EP arm loss curves: {cell}", fontsize=14, y=0.98)
     stem = f"loss-curves-{safe_name(cell)}"
     paths = []
     for suffix in ("svg", "png"):
         path = output_dir / f"{stem}.{suffix}"
-        figure.savefig(
-            path, dpi=180, metadata={"Date": None} if suffix == "svg" else None
-        )
+        save_figure(figure, path, suffix)
         paths.append(path.name)
     plt.close(figure)
     return paths
@@ -823,31 +846,36 @@ def plot_cell(cell: str, runs: list[Run], output_dir: Path) -> list[str]:
 
 def plot_training_outputs(cell: str, runs: list[Run], output_dir: Path) -> list[str]:
     repeats = sorted({run.repeat for run in runs})
+    arms = [arm for arm in ARMS if any(run.arm == arm for run in runs)]
     has_update_samples = any(run.update_samples for run in runs)
-    column_count = 3 if has_update_samples else 2
+    row_count = 3 if has_update_samples else 2
     figure, axes = plt.subplots(
-        len(repeats),
-        column_count,
-        figsize=((15.2 if has_update_samples else 13.2), 3.7 * len(repeats)),
+        row_count,
+        len(arms),
+        figsize=(4.2 * len(arms), 3.25 * row_count),
+        sharex="col",
+        sharey="row",
         squeeze=False,
         constrained_layout=False,
     )
-    for row, repeat in enumerate(repeats):
-        selected = [run for run in runs if run.repeat == repeat]
-        for run in sorted(selected, key=lambda item: ARMS.index(item.arm)):
+    for column, arm in enumerate(arms):
+        selected = sorted(
+            (run for run in runs if run.arm == arm), key=lambda item: item.repeat
+        )
+        for index, run in enumerate(selected):
+            style = repeat_plot_style(index, len(selected))
             record_iterations = [
                 int(item["iteration_dimensionless"]) for item in run.records
             ]
             losses = [float(item["lm_loss_dimensionless"]) for item in run.records]
-            axes[row, 0].plot(
+            axes[0, column].plot(
                 record_iterations,
                 losses,
-                label=ARM_LABELS[run.arm],
-                color=ARM_COLORS[run.arm],
-                linewidth=1.9,
-                linestyle=ARM_LINESTYLES[run.arm],
-                marker=ARM_MARKERS[run.arm],
-                markersize=3.5,
+                label=f"Repeat {run.repeat} (dimensionless)",
+                color=ARM_COLORS[arm],
+                linewidth=1.7,
+                markersize=4.2,
+                **style,
             )
             if run.update_samples:
                 gradient_iterations = [
@@ -862,14 +890,13 @@ def plot_training_outputs(cell: str, runs: list[Run], output_dir: Path) -> list[
                     float(item["gradient_norm_parameter_gradient_units"])
                     for item in run.records
                 ]
-            axes[row, 1].plot(
+            axes[1, column].plot(
                 gradient_iterations,
                 gradients,
-                color=ARM_COLORS[run.arm],
-                linewidth=1.9,
-                linestyle=ARM_LINESTYLES[run.arm],
-                marker=ARM_MARKERS[run.arm],
-                markersize=3.5,
+                color=ARM_COLORS[arm],
+                linewidth=1.7,
+                markersize=4.2,
+                **style,
             )
             if run.update_samples:
                 update_iterations = [
@@ -879,44 +906,50 @@ def plot_training_outputs(cell: str, runs: list[Run], output_dir: Path) -> list[
                     float(sample["update_l2_parameter_units"])
                     for sample in run.update_samples
                 ]
-                axes[row, 2].plot(
+                axes[2, column].plot(
                     update_iterations,
                     updates,
-                    color=ARM_COLORS[run.arm],
-                    linewidth=1.9,
-                    linestyle=ARM_LINESTYLES[run.arm],
-                    marker=ARM_MARKERS[run.arm],
-                    markersize=3.5,
+                    color=ARM_COLORS[arm],
+                    linewidth=1.7,
+                    markersize=4.2,
+                    **style,
                 )
-        axes[row, 0].set_ylabel(
-            f"Repeat {repeat} (dimensionless)\nLM loss (dimensionless)"
-        )
-        axes[row, 1].set_ylabel("Gradient norm\n(parameter-gradient units)")
-        if has_update_samples:
-            axes[row, 2].set_ylabel("Sampled update L2\n(parameter units)")
-        for axis in axes[row, :]:
+        axes[0, column].set_title(ARM_LABELS[arm], color=ARM_COLORS[arm])
+        axes[-1, column].set_xlabel("Optimizer iteration (dimensionless)")
+        for axis in axes[:, column]:
             axis.grid(True, alpha=0.25)
-            axis.set_xlabel("Optimizer iteration (dimensionless)")
+    axes[0, 0].set_ylabel("LM loss (dimensionless)")
+    axes[1, 0].set_ylabel("Gradient norm\n(parameter-gradient units)")
+    if has_update_samples:
+        axes[2, 0].set_ylabel("Sampled update L2\n(parameter units)")
     handles, labels = axes[0, 0].get_legend_handles_labels()
     figure.subplots_adjust(
-        top=0.78, bottom=0.16, left=0.08, right=0.98, hspace=0.45, wspace=0.3
+        top=0.76, bottom=0.11, left=0.07, right=0.99, hspace=0.18, wspace=0.12
     )
     figure.legend(
         handles,
         labels,
         loc="upper center",
-        bbox_to_anchor=(0.5, 0.9),
-        ncol=4,
+        bbox_to_anchor=(0.5, 0.89),
+        ncol=len(repeats),
         frameon=False,
+    )
+    figure.text(
+        0.5,
+        0.81,
+        (
+            "EP arms are faceted by column with shared metric scales. "
+            "Repeat markers are staggered; values are not offset."
+        ),
+        ha="center",
+        fontsize=9,
     )
     figure.suptitle(f"Kimi-K2 EP arm training outputs: {cell}", fontsize=14, y=0.98)
     stem = f"training-output-curves-{safe_name(cell)}"
     paths = []
     for suffix in ("svg", "png"):
         path = output_dir / f"{stem}.{suffix}"
-        figure.savefig(
-            path, dpi=180, metadata={"Date": None} if suffix == "svg" else None
-        )
+        save_figure(figure, path, suffix)
         paths.append(path.name)
     plt.close(figure)
     return paths
@@ -1096,9 +1129,7 @@ def plot_output_deltas(
     paths = []
     for suffix in ("svg", "png"):
         path = output_dir / f"{stem}.{suffix}"
-        figure.savefig(
-            path, dpi=180, metadata={"Date": None} if suffix == "svg" else None
-        )
+        save_figure(figure, path, suffix)
         paths.append(path.name)
     plt.close(figure)
     return paths

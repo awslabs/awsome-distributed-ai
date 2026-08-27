@@ -89,6 +89,8 @@ Each non-NCCL arm was compared point by point with `nccl-alltoall` from the same
 
 All 12 jobs have 40 of 40 loss records, a constant 0.000005 dimensionless learning rate, finite loss and gradient norm, 0 skipped iterations, 0 NaN iterations, and 0 dropped token selections. The scored logs report gradient norms rounded to 0.001 parameter-gradient units, so their curves are a diagnostic and are not used as a full-precision numeric gate. The preceding 8-iteration correctness campaign records full-precision gradient norms and sampled optimizer update L2 norms and passes those gates against the same NCCL-derived envelope.
 
+Because the absolute trajectories are nearly coincident at this scale, the figure facets the four EP arms into separate columns. Each metric uses a shared y-axis across the arm columns. Repeat markers are staggered for visibility, but neither metric values nor optimizer iterations are offset. The companion delta figure retains the point-by-point comparison against same-repeat NCCL.
+
 ![Accepted loss and logged gradient-norm curves](results/26.08-scored/training-output-curves-throughput-no-overlap.png)
 
 ![Accepted output deltas against same-repeat NCCL](results/26.08-scored/training-output-deltas-throughput-no-overlap.png)
@@ -196,7 +198,7 @@ The scored training-output analysis is under:
 
 `/mnt/fsx/ubuntu/workspace/artifacts/adai-kimi-k2-megatron-ep/20260827T041022Z-k2-b200-scored-output-analysis-r1`
 
-Its `SHA256SUMS` file has SHA-256 `b68f0a3c3bcdf372bec01e82d6a8cae0c43d3d60f78e99c9eb5beef126b9d98b`. It preserves the machine-readable comparison, combined iteration metrics, performance summary, loss and gradient figures, and post-release teardown verification. The checked-in correctness and scored result bundles have `SHA256SUMS` file hashes `bb3d62a49eb04248a1545083dd438e20db2f2eb8d7b2ff4502890a6e2e239d02` and `31667caa8a00aa8f2f1198c3295d1ee632054d5d13d94305d910be6babfba73e`, respectively.
+Its `SHA256SUMS` file has SHA-256 `b68f0a3c3bcdf372bec01e82d6a8cae0c43d3d60f78e99c9eb5beef126b9d98b`. It preserves the machine-readable comparison, combined iteration metrics, performance summary, loss and gradient figures, and post-release teardown verification. The checked-in correctness and scored result bundles have `SHA256SUMS` file hashes `5d69263c3186c4f1130617ce82fe149442c188192760cec2f6d473c782faca00` and `290b5521cd9e7875c440a242b245c631efc427301d924cca47f25d781ff86f51`, respectively.
 
 The superseded scored campaign and UCCL retry remain preserved only as excluded diagnostic evidence under `20260825T111800Z-k2-b200-scored-clean-3r-r3` and `20260825T142107Z-k2-b200-r3-uccl-retry-r1`. Neither contributes to a table, ranking, interval, or conclusion in this report.
 
