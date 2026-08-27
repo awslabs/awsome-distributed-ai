@@ -4,6 +4,7 @@ Overall status: `PASS`.
 
 The absolute loss tolerance is 0.001114845276 dimensionless and comes from the preserved NCCL BF16 self-repeat envelope.
 Gradient-norm and sampled update-L2 bounds are derived without a fitted multiplier as `elementwise NCCL BF16 tolerance * sqrt(sampled elements)`.
+For performance runs without full-precision optimizer samples, the rounded gradient norms from iteration logs are plotted as diagnostics and are not used as a numeric gate.
 
 ## NCCL training self-repeat
 
@@ -28,5 +29,6 @@ Group status: `PASS`.
 
 ![Loss curves for throughput-no-overlap](loss-curves-throughput-no-overlap.png)
 
-![Training-output deltas for throughput-no-overlap](training-output-deltas-throughput-no-overlap.png)
+![Training-output curves for throughput-no-overlap](training-output-curves-throughput-no-overlap.png)
 
+![Training-output deltas for throughput-no-overlap](training-output-deltas-throughput-no-overlap.png)

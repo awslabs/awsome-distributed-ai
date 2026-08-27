@@ -15,6 +15,7 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
+matplotlib.rcParams["svg.hashsalt"] = "kimi-k2-ep-training-output-v1"
 from matplotlib import pyplot as plt  # noqa: E402
 
 ARMS = (
@@ -749,6 +750,10 @@ def safe_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
 
 
+def format_optional_metric(value: float | int | None) -> str:
+    return "Not recorded" if value is None else f"{value:.10g}"
+
+
 def plot_cell(cell: str, runs: list[Run], output_dir: Path) -> list[str]:
     repeats = sorted({run.repeat for run in runs})
     figure, axes = plt.subplots(
@@ -808,7 +813,9 @@ def plot_cell(cell: str, runs: list[Run], output_dir: Path) -> list[str]:
     paths = []
     for suffix in ("svg", "png"):
         path = output_dir / f"{stem}.{suffix}"
-        figure.savefig(path, dpi=180)
+        figure.savefig(
+            path, dpi=180, metadata={"Date": None} if suffix == "svg" else None
+        )
         paths.append(path.name)
     plt.close(figure)
     return paths
@@ -816,10 +823,12 @@ def plot_cell(cell: str, runs: list[Run], output_dir: Path) -> list[str]:
 
 def plot_training_outputs(cell: str, runs: list[Run], output_dir: Path) -> list[str]:
     repeats = sorted({run.repeat for run in runs})
+    has_update_samples = any(run.update_samples for run in runs)
+    column_count = 3 if has_update_samples else 2
     figure, axes = plt.subplots(
         len(repeats),
-        3,
-        figsize=(15.2, 3.7 * len(repeats)),
+        column_count,
+        figsize=((15.2 if has_update_samples else 13.2), 3.7 * len(repeats)),
         squeeze=False,
         constrained_layout=False,
     )
@@ -841,25 +850,35 @@ def plot_training_outputs(cell: str, runs: list[Run], output_dir: Path) -> list[
                 markersize=3.5,
             )
             if run.update_samples:
-                update_iterations = [
+                gradient_iterations = [
                     int(sample["iteration"]) + 1 for sample in run.update_samples
                 ]
                 gradients = [
                     float(sample["gradient_norm"]) for sample in run.update_samples
                 ]
+            else:
+                gradient_iterations = record_iterations
+                gradients = [
+                    float(item["gradient_norm_parameter_gradient_units"])
+                    for item in run.records
+                ]
+            axes[row, 1].plot(
+                gradient_iterations,
+                gradients,
+                color=ARM_COLORS[run.arm],
+                linewidth=1.9,
+                linestyle=ARM_LINESTYLES[run.arm],
+                marker=ARM_MARKERS[run.arm],
+                markersize=3.5,
+            )
+            if run.update_samples:
+                update_iterations = [
+                    int(sample["iteration"]) + 1 for sample in run.update_samples
+                ]
                 updates = [
                     float(sample["update_l2_parameter_units"])
                     for sample in run.update_samples
                 ]
-                axes[row, 1].plot(
-                    update_iterations,
-                    gradients,
-                    color=ARM_COLORS[run.arm],
-                    linewidth=1.9,
-                    linestyle=ARM_LINESTYLES[run.arm],
-                    marker=ARM_MARKERS[run.arm],
-                    markersize=3.5,
-                )
                 axes[row, 2].plot(
                     update_iterations,
                     updates,
@@ -873,7 +892,8 @@ def plot_training_outputs(cell: str, runs: list[Run], output_dir: Path) -> list[
             f"Repeat {repeat} (dimensionless)\nLM loss (dimensionless)"
         )
         axes[row, 1].set_ylabel("Gradient norm\n(parameter-gradient units)")
-        axes[row, 2].set_ylabel("Sampled update L2\n(parameter units)")
+        if has_update_samples:
+            axes[row, 2].set_ylabel("Sampled update L2\n(parameter units)")
         for axis in axes[row, :]:
             axis.grid(True, alpha=0.25)
             axis.set_xlabel("Optimizer iteration (dimensionless)")
@@ -894,7 +914,9 @@ def plot_training_outputs(cell: str, runs: list[Run], output_dir: Path) -> list[
     paths = []
     for suffix in ("svg", "png"):
         path = output_dir / f"{stem}.{suffix}"
-        figure.savefig(path, dpi=180)
+        figure.savefig(
+            path, dpi=180, metadata={"Date": None} if suffix == "svg" else None
+        )
         paths.append(path.name)
     plt.close(figure)
     return paths
@@ -904,10 +926,12 @@ def plot_output_deltas(
     cell: str, runs: list[Run], tolerances: dict[str, float], output_dir: Path
 ) -> list[str]:
     repeats = sorted({run.repeat for run in runs})
+    has_update_samples = any(run.update_samples for run in runs)
+    column_count = 3 if has_update_samples else 2
     figure, axes = plt.subplots(
         len(repeats),
-        3,
-        figsize=(15.2, 3.7 * len(repeats)),
+        column_count,
+        figsize=((15.2 if has_update_samples else 13.2), 3.7 * len(repeats)),
         squeeze=False,
         constrained_layout=False,
     )
@@ -958,8 +982,8 @@ def plot_output_deltas(
                 linewidth=1.9,
                 markersize=3.5,
             )
-            if run.update_samples:
-                update_iterations = [
+            if run.update_samples and baseline_updates:
+                gradient_iterations = [
                     int(sample["iteration"]) + 1 for sample in run.update_samples
                 ]
                 gradient_deltas = [
@@ -970,6 +994,32 @@ def plot_output_deltas(
                         )
                     )
                     for sample in run.update_samples
+                ]
+            else:
+                gradient_iterations = iterations
+                gradient_deltas = [
+                    abs(
+                        float(record["gradient_norm_parameter_gradient_units"])
+                        - float(
+                            baseline_records[int(record["iteration_dimensionless"])][
+                                "gradient_norm_parameter_gradient_units"
+                            ]
+                        )
+                    )
+                    for record in run.records
+                ]
+            axes[row, 1].plot(
+                gradient_iterations,
+                gradient_deltas,
+                color=ARM_COLORS[run.arm],
+                linestyle=ARM_LINESTYLES[run.arm],
+                marker=ARM_MARKERS[run.arm],
+                linewidth=1.9,
+                markersize=3.5,
+            )
+            if run.update_samples and baseline_updates:
+                update_iterations = [
+                    int(sample["iteration"]) + 1 for sample in run.update_samples
                 ]
                 update_deltas = [
                     abs(
@@ -982,15 +1032,6 @@ def plot_output_deltas(
                     )
                     for sample in run.update_samples
                 ]
-                axes[row, 1].plot(
-                    update_iterations,
-                    gradient_deltas,
-                    color=ARM_COLORS[run.arm],
-                    linestyle=ARM_LINESTYLES[run.arm],
-                    marker=ARM_MARKERS[run.arm],
-                    linewidth=1.9,
-                    markersize=3.5,
-                )
                 axes[row, 2].plot(
                     update_iterations,
                     update_deltas,
@@ -1005,22 +1046,40 @@ def plot_output_deltas(
         )
         if gradient_tolerance is not None:
             axes[row, 1].axhline(gradient_tolerance, color="#666666", linestyle=":")
-        if update_tolerance is not None:
+        if has_update_samples and update_tolerance is not None:
             axes[row, 2].axhline(update_tolerance, color="#666666", linestyle=":")
-        axes[row, 0].set_ylabel(
-            f"Repeat {repeat} (dimensionless)\nAbsolute loss delta\n(dimensionless)"
+        axes[row, 0].text(
+            0.01,
+            0.97,
+            f"Repeat {repeat} (dimensionless)",
+            transform=axes[row, 0].transAxes,
+            ha="left",
+            va="top",
+            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.8, "pad": 1.0},
         )
-        axes[row, 1].set_ylabel(
+        axes[row, 0].set_ylabel("Absolute loss delta\n(dimensionless)")
+        gradient_label = (
             "Absolute gradient-norm delta\n(parameter-gradient units)"
+            if has_update_samples
+            else "Logged gradient-norm delta\n(parameter-gradient units; rounded)"
         )
-        axes[row, 2].set_ylabel("Absolute update-L2 delta\n(parameter units)")
+        axes[row, 1].set_ylabel(gradient_label)
+        if has_update_samples:
+            axes[row, 2].set_ylabel("Absolute update-L2 delta\n(parameter units)")
         for axis in axes[row, :]:
-            axis.set_yscale("log")
             axis.grid(True, which="both", alpha=0.25)
             axis.set_xlabel("Optimizer iteration (dimensionless)")
+        axes[row, 0].set_yscale("log")
+        if has_update_samples:
+            axes[row, 1].set_yscale("log")
+            axes[row, 2].set_yscale("log")
+        else:
+            axes[row, 1].ticklabel_format(
+                axis="y", style="sci", scilimits=(-3, -3), useMathText=True
+            )
     handles, labels = axes[0, 0].get_legend_handles_labels()
     figure.subplots_adjust(
-        top=0.78, bottom=0.16, left=0.08, right=0.98, hspace=0.45, wspace=0.32
+        top=0.78, bottom=0.16, left=0.09, right=0.98, hspace=0.45, wspace=0.38
     )
     figure.legend(
         handles,
@@ -1037,7 +1096,9 @@ def plot_output_deltas(
     paths = []
     for suffix in ("svg", "png"):
         path = output_dir / f"{stem}.{suffix}"
-        figure.savefig(path, dpi=180)
+        figure.savefig(
+            path, dpi=180, metadata={"Date": None} if suffix == "svg" else None
+        )
         paths.append(path.name)
     plt.close(figure)
     return paths
@@ -1057,6 +1118,11 @@ def write_markdown(document: dict, output_path: Path) -> None:
         (
             "Gradient-norm and sampled update-L2 bounds are derived without a fitted "
             "multiplier as `elementwise NCCL BF16 tolerance * sqrt(sampled elements)`."
+        ),
+        (
+            "For performance runs without full-precision optimizer samples, the rounded "
+            "gradient norms from iteration logs are plotted as diagnostics and are not "
+            "used as a numeric gate."
         ),
         "",
     ]
@@ -1091,6 +1157,14 @@ def write_markdown(document: dict, output_path: Path) -> None:
                 "",
             ]
         )
+    last_repeat_by_cell = {
+        cell: max(
+            group["repeat_dimensionless"]
+            for group in document["groups"]
+            if group["cell"] == cell
+        )
+        for cell in {group["cell"] for group in document["groups"]}
+    }
     for group in document["groups"]:
         lines.extend(
             [
@@ -1107,10 +1181,17 @@ def write_markdown(document: dict, output_path: Path) -> None:
             if run is None:
                 continue
             comparison = group["comparisons_vs_nccl_alltoall"].get(arm)
+            loss_delta_value = (
+                None
+                if arm == "nccl-alltoall"
+                else comparison["max_absolute_loss_delta_dimensionless"]
+            )
             max_delta = (
                 "Reference"
                 if arm == "nccl-alltoall"
-                else f"{comparison['max_absolute_loss_delta_dimensionless']:.10g}"
+                else "Not comparable"
+                if loss_delta_value is None
+                else f"{loss_delta_value:.10g}"
             )
             curve_gate = (
                 "Reference"
@@ -1126,13 +1207,31 @@ def write_markdown(document: dict, output_path: Path) -> None:
                 if arm == "nccl-alltoall"
                 else ("PASS" if comparison["route_hashes_match_nccl"] else "FAIL")
             )
+            output_norm_gate_required = (
+                False
+                if arm == "nccl-alltoall"
+                else comparison["short_training_output_norm_gate_required"]
+            )
+            gradient_value = (
+                None
+                if arm == "nccl-alltoall"
+                else comparison[
+                    "max_absolute_gradient_norm_delta_parameter_gradient_units"
+                ]
+            )
+            gradient_bound = (
+                None
+                if arm == "nccl-alltoall"
+                else comparison["gradient_norm_tolerance_parameter_gradient_units"]
+            )
             gradient_delta = (
                 "Reference"
                 if arm == "nccl-alltoall"
-                else (
-                    f"{comparison['max_absolute_gradient_norm_delta_parameter_gradient_units']:.10g} / "
-                    f"{comparison['gradient_norm_tolerance_parameter_gradient_units']:.10g}"
-                )
+                else "Not recorded"
+                if gradient_value is None
+                else f"{gradient_value:.10g} / Not gated"
+                if not output_norm_gate_required or gradient_bound is None
+                else f"{gradient_value:.10g} / {gradient_bound:.10g}"
             )
             update_value = (
                 None
@@ -1145,6 +1244,8 @@ def write_markdown(document: dict, output_path: Path) -> None:
                 else (
                     "Not recorded"
                     if update_value is None
+                    else f"{update_value:.10g} / Not gated"
+                    if not output_norm_gate_required
                     else (
                         f"{update_value:.10g} / "
                         f"{comparison['sampled_update_l2_tolerance_parameter_units']:.10g}"
@@ -1154,6 +1255,8 @@ def write_markdown(document: dict, output_path: Path) -> None:
             gradient_gate = (
                 "Reference"
                 if arm == "nccl-alltoall"
+                else "Not required"
+                if not output_norm_gate_required
                 else (
                     "PASS"
                     if comparison["gradient_norm_within_nccl_bf16_bound"]
@@ -1163,6 +1266,8 @@ def write_markdown(document: dict, output_path: Path) -> None:
             update_gate = (
                 "Reference"
                 if arm == "nccl-alltoall"
+                else "Not required"
+                if not output_norm_gate_required
                 else (
                     "PASS"
                     if comparison["sampled_update_l2_within_nccl_bf16_bound"]
@@ -1171,18 +1276,29 @@ def write_markdown(document: dict, output_path: Path) -> None:
             )
             lines.append(
                 f"| `{arm}` | {run['iterations_observed_dimensionless']} | "
-                f"{run['loss_first_dimensionless']:.10g} | {run['loss_last_dimensionless']:.10g} | "
+                f"{format_optional_metric(run['loss_first_dimensionless'])} | "
+                f"{format_optional_metric(run['loss_last_dimensionless'])} | "
                 f"{max_delta} | {gradient_delta} | {update_delta} | {curve_gate} | "
                 f"{gradient_gate} | {update_gate} | {route_gate} |"
             )
         lines.append("")
+        if group["repeat_dimensionless"] != last_repeat_by_cell[group["cell"]]:
+            continue
         figures = document["figures"].get(group["cell"], {})
         loss_figures = figures.get("loss_curves", [])
+        output_figures = figures.get("training_output_curves", [])
         delta_figures = figures.get("training_output_deltas", [])
         if loss_figures:
             lines.extend(
                 [
                     f"![Loss curves for {group['cell']}]({loss_figures[-1]})",
+                    "",
+                ]
+            )
+        if output_figures:
+            lines.extend(
+                [
+                    f"![Training-output curves for {group['cell']}]({output_figures[-1]})",
                     "",
                 ]
             )
@@ -1193,6 +1309,8 @@ def write_markdown(document: dict, output_path: Path) -> None:
                     "",
                 ]
             )
+    while lines and not lines[-1]:
+        lines.pop()
     output_path.write_text("\n".join(lines) + "\n")
 
 
