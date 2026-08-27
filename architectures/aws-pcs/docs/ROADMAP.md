@@ -75,7 +75,7 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   The *client side* — installing the Lustre client + EFA modules, configuring LNet over
   EFA via the AWS-provided `setup.sh --optimized-for-gds`, and (for GDS) building/loading
   `nvidia-fs.ko` with `cufile.json` — is currently out of scope and not handled by
-  `install-enroot-pyxis.sh`. Add a new opt-in post-install path
+  `install-enroot-pyxis.sh`. Add a new opt-in lifecycle-action script
   (e.g. `scripts/install-fsx-lustre-efa.sh`) that runs the
   [official FSx EFA client setup](https://docs.aws.amazon.com/fsx/latest/LustreGuide/configure-efa-clients.html)
   and the GDS driver build, surface a `OnDemandEnableFSxLustreEfaClient` /
@@ -95,7 +95,7 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
 - [ ] 🟡 **Spack as a first-class install option.** Today the cluster ships Enroot/Pyxis
   (containers) + the PCS-Ready DLAMI's pre-installed CUDA/NCCL/EFA stack, but no native
   package manager for HPC software (MPI variants, BLAS/LAPACK, scientific libraries,
-  source-built apps). Add an opt-in `Spack` install path — e.g. a `PostInstallScriptUrl`
+  source-built apps). Add an opt-in `Spack` install path — e.g. a node lifecycle action
   variant that bootstraps Spack into shared `/fsx`, configures
   [aws-pcluster-spack](https://github.com/spack/spack-configs)-style external packages
   for PCS (Slurm, EFA libfabric, FSx for Lustre client), and uses the
@@ -106,7 +106,7 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   workloads, add an opt-in install path (apt repo or shared `/fsx` install) that places
   Intel oneAPI HPC Toolkit on the cluster, with `module load`-style discoverability that
   composes with the Spack option above. Likely a separate
-  `PostInstallScriptUrl`-style script invoked by users explicitly (large download, not
+  lifecycle-action script invoked by users explicitly (large download, not
   every cluster needs it).
 - [ ] 🟢 **NVIDIA HPC SDK install option.** Same shape as the Intel one — opt-in
   install of the NVIDIA HPC SDK (nvhpc, nvfortran, NCCL/CUDA-aware MPI variants) for

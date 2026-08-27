@@ -542,7 +542,7 @@ srun -N 1 -n 1 bash -c 'sudo sss_cache -E; sudo systemctl restart sssd'
 ```bash
 sudo systemctl status slapd
 sudo journalctl -u slapd -n 20
-cat /var/log/directory-setup.log
+sudo cat /var/log/amazon/pcs/lifecycle/actions/nodeBootstrapped/setup-directory.log
 ```
 
 ### 5.3 Home directory not created

@@ -35,7 +35,8 @@ BANNED=(
   $'OnDemandEnableEfa\tremoved\tOnDemandEnableEfa was replaced by OnDemandEfaInterfaceCount (0/1/2)'
   $'GrafanaPublicAccessCidr\t[Rr]enamed|→ ?`?GrafanaAccessCidr\tGrafanaPublicAccessCidr was renamed to GrafanaAccessCidr'
   $'DeployMonitoring=true\tMonitoringStack|internally|nested\tDeployMonitoring (bool) was replaced by MonitoringStack at the deploy-all layer'
-  $'S3 (public )?hosting is not allowed\tNEVERMATCH\tPostInstallScriptUrl now accepts s3:// URLs'
+  $'S3 (public )?hosting is not allowed\tNEVERMATCH\tthe Enroot/Pyxis installer is fetched from S3 by the PCS agent'
+  $'PostInstallScript(Url|Args)\t[Rr]enamed|replaced\tPostInstallScriptUrl/Args were replaced by InstallEnrootPyxis (custom scripts: use PCS node lifecycle actions directly)'
   $'architectures/aws-pcs/iam/\tNEVERMATCH\tthe iam/ directory was removed; use docs/IAM.md + assets/cluster-*-iam.yaml'
   $'aws:pcs:compute-node-group-name\tNEVERMATCH\ttag key does not exist — use `aws pcs list-compute-node-groups` + `tag:aws:pcs:compute-node-group-id`'
   $'Name=tag:Name,Values=PCS-\tNEVERMATCH\tthe Name tag is <ClusterName>-<CngName>; resolve the login node via the PCS API instead'
@@ -49,15 +50,6 @@ for entry in "${BANNED[@]}"; do
   fi
 done
 
-# 2. PostInstallScriptUrl: docs must not say empty = skip (empty now = auto-install;
-#    a single space is the skip sentinel). The literal `PostInstallScriptUrl=""`
-#    (empty string) shown as a skip is the wrong pattern; the correct "single
-#    space to skip" wording is fine.
-hits=$(grep -rnE 'PostInstallScriptUrl=""' "${DOC_GLOBS[@]}" 2>/dev/null || true)
-if [ -n "$hits" ]; then
-  report 'PostInstallScriptUrl="" (empty) shown as skip — empty now auto-installs; use a single space to skip:'
-  echo "$hits" | sed 's/^/    /'
-fi
 
 # 3. Every parameter the deploy-all template declares should be documented in
 #    PARAMETERS.md (catches a new param added without a docs row).
@@ -66,52 +58,50 @@ for prm in $params; do
   grep -q "\`$prm\`" docs/PARAMETERS.md || report "deploy-all parameter '$prm' is not documented in docs/PARAMETERS.md"
 done
 
-# 4. The needrestart/slurmd guard block must be byte-identical across the four
-#    CNG templates. It is hand-duplicated (no shared include), so an edit that
-#    lands in only some of the copies is exactly the drift this catches.
-guard_extract() {  # print the guard block: comment header through the log line
+# 4. The NodeLifecycleActions block (needrestart guard + FSx mounts) must be
+#    byte-identical across the four CNG templates. It is hand-duplicated (no
+#    shared include), so an edit that lands in only some of the copies is
+#    exactly the drift this catches.
+lifecycle_extract() {  # print the block: NodeLifecycleActions through the end of the resource
   # Leading whitespace is stripped because the four templates legitimately nest
-  # the block at different depths. Side effect: the check cannot see RELATIVE
-  # indentation drift inside the block (e.g. an indented NRCONF terminator, or
-  # <<'NRCONF' switched to the tab-stripping <<-'NRCONF' in one template) —
-  # those would change deployed behavior while still comparing as identical.
-  awk '/--- Protect running jobs from unattended-upgrades \/ needrestart ---/{p=1}
-       p{print}
-       p&&/pcs-needrestart-guard\.log/{exit}' "$1" | sed -E 's/^[[:space:]]+//'
+  # the block at different depths. The block ends where the next 2-space-indented
+  # resource ID starts (NodeLifecycleActions is the last property of the CNG).
+  # Side effect: the check cannot see RELATIVE indentation drift inside the block.
+  awk '/^      NodeLifecycleActions:/{p=1; print; next}
+       p&&/^  [A-Za-z0-9]+:/{exit}
+       p{print}' "$1" | sed -E 's/^[[:space:]]+//'
 }
-ref=$(guard_extract assets/add-cng.yaml)
+ref=$(lifecycle_extract assets/add-cng.yaml)
 if [ -z "$ref" ]; then
-  report "needrestart guard block not found in assets/add-cng.yaml"
+  report "NodeLifecycleActions block not found in assets/add-cng.yaml"
 else
   for t in add-cng-p5 add-cng-p6-b200 add-cng-p6-b300; do
-    other=$(guard_extract "assets/$t.yaml")
+    other=$(lifecycle_extract "assets/$t.yaml")
     if [ "$other" != "$ref" ]; then
-      report "needrestart guard block in assets/$t.yaml differs from assets/add-cng.yaml (keep the four copies byte-identical):"
+      report "NodeLifecycleActions block in assets/$t.yaml differs from assets/add-cng.yaml (keep the four copies byte-identical):"
       diff <(printf '%s\n' "$ref") <(printf '%s\n' "$other") | sed 's/^/    /'
     fi
   done
 fi
 
-# 5. The monitoring install block (dpkg lock wait + retry) must also be
-#    byte-identical across the four CNG templates. Same rationale as the
-#    needrestart guard: hand-duplicated UserData drifts silently otherwise.
-monitoring_extract() {
-  awk '/Monitoring stack installation/{p=1}
-       p{print}
-       p&&/Monitoring installation complete \(exit/{exit}' "$1" | sed -E 's/^[[:space:]]+//'
-}
-mref=$(monitoring_extract assets/add-cng.yaml)
-if [ -z "$mref" ]; then
-  report "monitoring install block not found in assets/add-cng.yaml"
-else
-  for t in add-cng-p5 add-cng-p6-b200 add-cng-p6-b300; do
-    other=$(monitoring_extract "assets/$t.yaml")
-    if [ "$other" != "$mref" ]; then
-      report "monitoring install block in assets/$t.yaml differs from assets/add-cng.yaml (keep the four copies byte-identical):"
-      diff <(printf '%s\n' "$mref") <(printf '%s\n' "$other") | sed 's/^/    /'
-    fi
-  done
-fi
+# 5. Every lifecycle script referenced by a template OR by another boot script
+#    must exist in assets/scripts/ (a typo'd ScriptLocation only fails at node
+#    boot, which costs a 30-minute deploy to discover) — AND be listed in the
+#    publish manifest. The manifest is an explicit allowlist: a script
+#    missing from it never reaches the production bucket, so post-merge
+#    deploys would fail at the agent's script download (mount scripts
+#    TERMINATE — a node replace loop). Scan the scripts too, not just the
+#    templates: ldap-add-user.sh is fetched at boot by setup-directory.sh, not
+#    by a ScriptLocation, so a template-only glob would miss it. Skipped when
+#    the manifest is absent (e.g. a partial checkout).
+MANIFEST="../../.github/template-publish-manifest.yml"
+for scr in $(grep -hoE 'scripts/[a-z0-9-]+\.sh' assets/*.yaml assets/scripts/*.sh | sort -u); do
+  [ -f "assets/$scr" ] || report "lifecycle script assets/$scr is referenced by a template or boot script but does not exist"
+  if [ -f "$MANIFEST" ]; then
+    grep -q "key: aws-pcs/$scr" "$MANIFEST" \
+      || report "assets/$scr is referenced by a template or boot script but missing from .github/template-publish-manifest.yml (would not be published to the production bucket)"
+  fi
+done
 
 # 6. Same-file Markdown anchor links in README.md resolve to a real heading.
 #    (Cross-file and external links are out of scope — kept simple on purpose.)
@@ -125,6 +115,6 @@ while IFS= read -r anchor; do
 done < <(grep -oE '\]\(#[a-z0-9-]+\)' README.md | sed -E 's/\]\(#//; s/\)//' | sort -u)
 
 if [ "$fail" -eq 0 ]; then
-  echo "docs lint: PASS (no stale parameter references, no empty=skip wording, all deploy-all params documented, needrestart guard + monitoring install in lock-step, README anchors resolve)"
+  echo "docs lint: PASS (no stale parameter references, all deploy-all params documented, NodeLifecycleActions in lock-step, lifecycle scripts exist, README anchors resolve)"
 fi
 exit $fail

@@ -37,7 +37,15 @@ entries:
     key: aws-pcs/pcs-ready-dlami-with-enroot-pyxis.yaml
   - source: architectures/aws-pcs/assets/scripts/install-enroot-pyxis.sh
     key: aws-pcs/scripts/install-enroot-pyxis.sh
+  - source: architectures/aws-pcs/assets/scripts/install-monitoring.sh
+    key: aws-pcs/scripts/install-monitoring.sh
   - source: architectures/aws-pcs/assets/scripts/ldap-add-user.sh
     key: aws-pcs/scripts/ldap-add-user.sh
+  - source: architectures/aws-pcs/assets/scripts/mount-lustre-fsx.sh
+    key: aws-pcs/scripts/mount-lustre-fsx.sh
+  - source: architectures/aws-pcs/assets/scripts/mount-openzfs-home.sh
+    key: aws-pcs/scripts/mount-openzfs-home.sh
+  - source: architectures/aws-pcs/assets/scripts/needrestart-guard.sh
+    key: aws-pcs/scripts/needrestart-guard.sh
   - source: architectures/aws-pcs/assets/scripts/setup-directory.sh
     key: aws-pcs/scripts/setup-directory.sh

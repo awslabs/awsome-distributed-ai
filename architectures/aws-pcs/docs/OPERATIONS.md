@@ -37,24 +37,23 @@ doesn't include it, and `install-enroot-pyxis.sh` builds Pyxis only for 25.05/25
 This section covers the node image (`AmiId`) and how the Enroot/Pyxis container
 runtime gets onto it — two facets of the same decision.
 
-### 2.1 Container runtime: PostInstall vs. pre-baked AMI
+### 2.1 Container runtime: first-boot install vs. pre-baked AMI
 
 Two paths install Enroot/Pyxis on a node. They are **decoupled**: the cluster stack
 (`pcs-ml-cluster-deploy-all.yaml`) does not run Image Builder — it accepts a ready
 `AmiId`. To get a pre-baked AMI you run `pcs-ready-dlami-with-enroot-pyxis.yaml` once
 as a separate stack, then pass its output to the cluster.
 
-- **PostInstall (default)** — `PostInstallScriptUrl` runs `install-enroot-pyxis.sh`
+- **First-boot install (default)** — `InstallEnrootPyxis=true` runs `install-enroot-pyxis.sh`
   on every node at first boot. Adds ~2-3 min to boot but the cluster stack itself is
   faster to create (no Image Builder step). This is what `AmiId=""` (default) plus
-  the default `PostInstallScriptUrl` delivers.
+  the default `InstallEnrootPyxis=true` delivers.
 - **Pre-baked AMI** — build the AMI separately (see the README's
   *Pre-baking Enroot/Pyxis into a custom AMI* section), then pass its `ami-xxx` as
-  the cluster's `AmiId`. Set `PostInstallScriptUrl=' '` (a single space) for the
+  the cluster's `AmiId`. Set `InstallEnrootPyxis=false` for the
   cleanest boot — that skips the Enroot/Pyxis install entirely. (Leaving it at the
-  default — empty, which auto-installs from the templates bucket — also works on a
-  pre-baked AMI: the installer is idempotent and detects Enroot/Pyxis is already
-  present, a fast no-op; the single space just avoids the download+check.)
+  default `true` also works on a pre-baked AMI: the installer detects Enroot/Pyxis is
+  already present and is a fast no-op.)
 
 ### 2.2 The AMI is single-Slurm-version, by design
 
@@ -65,14 +64,15 @@ against**. A `spank_pyxis.so` built for 25.11 makes a 25.05 slurmd refuse to sta
 `SlurmVersion` value on the AMI build stack and on the cluster stack, otherwise nodes
 won't come up.
 
-### 2.3 PostInstall passes the version via `PCS_SLURM_VERSION`
+### 2.3 The installer receives the Slurm version as its first argument
 
-For the PostInstall path, `add-cng*.yaml`'s UserData exports
-`PCS_SLURM_VERSION="${SlurmVersion}"` before invoking the script. The script can't
-discover the cluster's Slurm version itself at first boot (cloud-init runs before
-slurmd / `/etc/profile.d/slurm.sh` / the controller config exist), so it relies on this
-explicit hand-off. When PCS adds a native post-install hook in the future, it should
-expose the cluster Slurm version the same way.
+For the first-boot path, `add-cng*.yaml`'s `install-enroot-pyxis` lifecycle action passes
+the cluster's `SlurmVersion` as the script's **first positional argument** (lifecycle
+actions can't set environment variables). The script can't discover the cluster's
+Slurm version itself at first boot (it runs before slurmd /
+`/etc/profile.d/slurm.sh` / the controller config exist), so it relies on this
+explicit hand-off. The `PCS_SLURM_VERSION` environment variable is still honored
+for the custom-AMI build path and manual runs.
 
 If you run `install-enroot-pyxis.sh` manually with `PCS_SLURM_VERSION` unset, the
 script falls back to building every supported version and using the newest installed
@@ -90,7 +90,7 @@ Pinning Pyxis and slurmd's PATH to one Slurm version sounds brittle, but Slurm's
 So `scontrol`/`srun` from version *N* interoperate with a `slurmctld` of *N+1* (or
 *N+2/N+3* on 24.11+) — a cluster upgrade does not break nodes built for the prior
 version. When you do want to advance, set the new `SlurmVersion` and redeploy: the
-PostInstall path rebuilds Pyxis for the new version on first boot, and the AMI build
+first-boot path rebuilds Pyxis for the new version on first boot, and the AMI build
 path bakes a new AMI for it. Nothing dynamic is needed on the running node side.
 
 The single-version pin is also why the AMI is *not* a one-AMI-fits-all artifact —
@@ -267,8 +267,8 @@ to `relatime` (the kernel default, which updates atime at most once per day).
 with `_netdev` reliably waits for network readiness. Lustre requires not just
 network but the `lustre` kernel module and LNet initialization to be complete;
 fstab + `_netdev` alone doesn't guarantee this ordering. Mounting explicitly
-in cloud-init `runcmd` (which runs after network + module load) is the most
-portable approach.
+in the `mount-lustre-fsx` node lifecycle action (which runs after network +
+module load, before slurmd) is the most portable approach.
 
 ### 4.2 Lustre runtime performance tuning (recommended)
 
@@ -276,10 +276,10 @@ The mount options above handle metadata behaviour. For I/O throughput and
 metadata IOPS, the following `lctl` runtime tunables are recommended for ML
 training workloads. They are **not set by the templates by default** (to keep
 the base minimal and avoid surprising users), but can be added to a
-post-install script or run manually on the login/compute nodes.
+custom lifecycle action or run manually on the login/compute nodes.
 
-These settings do not persist across reboot — add them to a boot script or
-UserData if you want them permanent.
+These settings do not persist across reboot — add them to an `EVERY_BOOT`
+lifecycle action if you want them permanent.
 
 ```bash
 # --- Data path (OSC): controls per-OST throughput ---
@@ -386,8 +386,8 @@ relevant regardless of transport.
 
 These require a **reboot** (or module reload) to take effect. For the
 reference architecture, the recommended path is to add them to a custom AMI
-(via `pcs-ready-dlami-with-enroot-pyxis.yaml`) or to early UserData before
-the Lustre mount.
+(via `pcs-ready-dlami-with-enroot-pyxis.yaml`) or to an `EVERY_BOOT`
+lifecycle action ordered before `mount-lustre-fsx`.
 
 ### 4.5 OS-level sysctl (optional)
 
@@ -448,7 +448,7 @@ The `cpuset.*` "No space left on device" message is a kernel-level error that
 surfaces when systemd hands the cgroup controller an empty cpuset value; the ensuing
 forced restart of slurmd is what actually breaks the prolog handshake. Nothing the PCS
 templates or this repo's install scripts touch is in the path — `/etc/default/slurmd`
-is written to by `install-enroot-pyxis.sh` but post-install completes before slurmd's
+is written to by `install-enroot-pyxis.sh`, but that lifecycle action completes before slurmd's
 first start, and no slurmd unit / cgroup config is modified afterwards.
 
 **Workaround.**
@@ -460,8 +460,8 @@ first start, and no slurmd unit / cgroup config is modified afterwards.
   prolog path while a sibling is still cold.
 
 **Why we don't paper over it.** The trigger lives below this repo's code (PCS
-bootstrap + systemd + slurmd 25.05/25.11 cgroup-v2 handling). Wrapping the post-install
-or the install script wouldn't change the timing of the systemd cgroup setup. The
+bootstrap + systemd + slurmd 25.05/25.11 cgroup-v2 handling). Wrapping the
+install script wouldn't change the timing of the systemd cgroup setup. The
 cleanest mitigation is upstream — recording it here so users seeing it know the
 workaround and the next contributor doesn't waste time looking for a bug in this PR's
 scripts.
@@ -473,13 +473,14 @@ When an unattended security upgrade updates a base library `slurmd` links (e.g. 
 it — **stopping every job on the node**. It is reproducible, not random, and not a reboot
 or a Slurm-package upgrade.
 
-The compute-node-group templates already guard against this: each `add-cng*` UserData
-writes a `needrestart` drop-in so `slurmd` is never auto-restarted (security updates still
-install; `needrestart` only defers the `slurmd` restart):
+The compute-node-group templates already guard against this: each `add-cng*` template's
+`needrestart-guard` lifecycle action writes a `needrestart` drop-in so `slurmd` is never
+auto-restarted (security updates still install; `needrestart` only defers the `slurmd`
+restart):
 
 ```perl
-# /etc/needrestart/conf.d/90-pcs-slurm.conf  (written by add-cng* UserData)
-$nrconf{override_rc} = { qr(^slurmd) => 0 };
+# /etc/needrestart/conf.d/90-pcs-slurm.conf  (written by scripts/needrestart-guard.sh)
+$nrconf{override_rc}{qr(^slurmd)} = 0;
 ```
 
 `slurmd` is the only Slurm systemd service on these nodes (the controller is managed by
@@ -501,3 +502,37 @@ For a new production deploy:
 - Default `DcgmExporterImage` covers H100/B200/B300; override only to pin a different build
 - Minimum-CIDR `GrafanaAccessCidr` if used at all; otherwise empty (SSM port-forward)
 - Throughput values that match the chosen FSx deployment types
+
+## 8. Upgrading from UserData-based templates (pre-lifecycle-actions)
+
+Node setup moved from cloud-init UserData to [PCS node lifecycle
+actions](https://docs.aws.amazon.com/pcs/latest/userguide/cng-node-lifecycle-actions.html).
+Existing deployed stacks keep working as-is (their nodes carry the old
+UserData); the changes below apply when you **update a stack to, or deploy
+with, the current templates**.
+
+**Updating an existing stack cycles the whole fleet.** The compute node
+group's launch-template version tracks `LatestVersionNumber`, and adding
+`NodeLifecycleActions` is itself a CNG config change, so the update triggers
+PCS's DRAIN strategy: running jobs finish, then **every node is replaced**. No
+jobs are lost, but a cluster with a multi-day run in flight will cycle all of
+its nodes — plan the update window accordingly. This is the opposite of
+*not* updating, where the fleet is left untouched.
+
+**Before updating a stack that points at your own `S3BucketName` /
+`S3KeyPrefix`,** sync the current scripts to that bucket first (see
+[DEPLOY-TESTING §2](./DEPLOY-TESTING.md)). This revision adds
+`needrestart-guard.sh`, `mount-openzfs-home.sh`, `mount-lustre-fsx.sh`, and
+`install-monitoring.sh` — none of which exist in a bucket populated before
+they were added. A bucket missing them fails the `mount-openzfs-home`
+lifecycle action on **every** replacement node (`OnError: TERMINATE`): an
+unbounded replace loop that drains the cluster to zero.
+
+| Change | What to do |
+|---|---|
+| `PostInstallScriptUrl` / `PostInstallScriptArgs` replaced by **`InstallEnrootPyxis`** (`true`/`false`) | The generic hook only ever shipped the Enroot/Pyxis installer. Was skipping with a single space? Set `InstallEnrootPyxis=false`. Running a **custom** script? Attach it to the compute node group's node lifecycle actions directly — PCS runs it natively, with per-script logs and error policy. |
+| **Standalone `add-cng*.yaml` now default `InstallEnrootPyxis=true`** | Deploying a compute node group directly from `add-cng.yaml` / `add-cng-p5.yaml` / `add-cng-p6-b200.yaml` / `add-cng-p6-b300.yaml` (rather than through deploy-all, which already defaulted to `true`) now installs Enroot/Pyxis at first boot unless you set `InstallEnrootPyxis=false`. A stack that relied on the earlier standalone default of `false` gains the first-boot install on its next update; set the parameter explicitly to keep the old behavior. |
+| The AMI must carry **PCS agent >= 1.5.0-1** | PCS-Ready DLAMI builds since 2026-07-20 qualify ([PCS-READY-DLAMI.md](./PCS-READY-DLAMI.md)); the default SSM `latest` resolution always does. Re-base pinned or custom AMIs built off an older base before updating. |
+| Boot logs moved to `/var/log/amazon/pcs/lifecycle/actions/<stage>/<name>.log` (root-readable) | Update runbooks that read `/var/log/pcs-post-install.log`, `monitoring-install.log`, or `directory-setup.log`. The agent's own download/orchestration log is `.../actions/executor.log`. |
+| A failed `/home` or `/fsx` mount now **terminates and replaces the node** | Previously the node stayed in service without shared storage. An FSx-side problem now shows up as node churn — check the mount script's lifecycle log (local to the instance) and the CNG's instance history. A *fleet-wide* mount failure leaves **no surviving node** to read logs from; to debug that case, temporarily set the mount action's `OnError: STOP_SEQUENCE` to keep a failed instance for inspection, or add the AWS-maintained `configure-cloudwatch-logs.sh` lifecycle action to ship the log directory off-instance. |
+| Custom-script argument contract | The Enroot/Pyxis installer receives the cluster's `SlurmVersion` as its first argument (`PCS_SLURM_VERSION` env still honored on the custom-AMI build path). |

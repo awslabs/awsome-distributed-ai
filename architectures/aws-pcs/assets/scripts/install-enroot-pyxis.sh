@@ -26,13 +26,14 @@
 #      succeeds; CPU-only nodes intentionally skip it.
 #
 # EXECUTION CONTEXT:
-#   Designed to run as a first-boot hook (PCS PostInstallScriptUrl) or during a
-#   custom-AMI build -- i.e. BEFORE slurmd starts. It does NOT restart slurmd, so
-#   the slurmd PATH it writes only takes effect on the next slurmd start (the
-#   first boot). If you run it on an already-running node, restart slurmd yourself.
+#   Designed to run as the install-enroot-pyxis node lifecycle action
+#   (nodeBootstrapped stage) or during a custom-AMI build -- i.e. BEFORE slurmd
+#   starts. It does NOT restart slurmd, so the slurmd PATH it writes only takes
+#   effect on the next slurmd start (the first boot). If you run it on an
+#   already-running node, restart slurmd yourself.
 #
 # IDEMPOTENT:
-#   Safe to run more than once (e.g. PostInstallScriptUrl left at the default on a
+#   Safe to run more than once (e.g. InstallEnrootPyxis left at 'true' on a
 #   node booted from a pre-baked AMI where Enroot/Pyxis is already installed). Each
 #   component is skipped when already present at the expected version; a version
 #   mismatch is overwritten. So a redundant re-run is a fast no-op rather than a
@@ -50,14 +51,16 @@ PYXIS_RELEASE=v0.20.0
 # the templates don't expose it, and it is not validated here, so a 24.11 cluster
 # would get no Pyxis plugstack. Keep this list in sync with cluster.yaml's
 # AllowedValues if that list changes.
-# This cluster's Slurm version, passed in by the CNG UserData as the PCS_SLURM_VERSION
-# environment variable (sourced from the template's SlurmVersion parameter). The node
-# itself cannot reliably discover the cluster version at post-install time -- this runs
-# during cloud-init, before slurmd starts and before the slurmd unit / profile.d /
-# controller config that name the version exist. Passing it in is authoritative and
-# timing-safe. (When PCS gains a native post-install hook, the cluster Slurm version is
-# the kind of context it should likewise expose to the script.)
+# This cluster's Slurm version, passed by the install-enroot-pyxis lifecycle
+# action as the first positional argument (sourced from the template's
+# SlurmVersion parameter; lifecycle actions cannot set environment variables).
+# The node itself cannot reliably discover the cluster version at this point --
+# nodeBootstrapped runs before slurmd starts and before the slurmd unit /
+# profile.d / controller config that name the version exist. Passing it in is
+# authoritative and timing-safe. The PCS_SLURM_VERSION environment variable
+# remains as a fallback for the custom-AMI build path and manual runs.
 PCS_SLURM_VERSION="${PCS_SLURM_VERSION:-}"
+if [ -n "${1:-}" ]; then PCS_SLURM_VERSION="$1"; fi
 
 # Build Pyxis ONLY for this cluster's Slurm version when it's known. Building for a
 # version the cluster doesn't run is wasted work and risks the wrong spank_pyxis.so
@@ -216,9 +219,9 @@ done
 # Use exactly the cluster's version, never a glob of all installed versions: the PCS
 # DLAMI ships several (slurm-24.11/25.05/25.11) and an OLDER scontrol fatally fails to
 # parse a NEWER slurm.conf key (e.g. 24.11 chokes on MetricsType, set by 25.11 for the
-# monitoring OpenMetrics endpoint). The version comes from PCS_SLURM_VERSION (passed by
-# the UserData from the template's SlurmVersion); fall back to the newest installed
-# version only if it wasn't provided (e.g. a manual run).
+# monitoring OpenMetrics endpoint). The version is passed as $1 by the lifecycle action
+# (from the template's SlurmVersion), with the PCS_SLURM_VERSION env var as a fallback;
+# fall back to the newest installed version only if neither was provided (e.g. a manual run).
 if [ -n "${PCS_SLURM_VERSION}" ] && [ -d "/opt/aws/pcs/scheduler/slurm-${PCS_SLURM_VERSION}/bin" ]; then
   SLURM_BIN="/opt/aws/pcs/scheduler/slurm-${PCS_SLURM_VERSION}/bin"
 else

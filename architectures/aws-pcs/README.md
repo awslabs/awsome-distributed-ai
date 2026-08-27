@@ -27,7 +27,7 @@ A default deployment (`pcs-ml-cluster-deploy-all.yaml`) provisions:
 - Login node group (public subnet) with the monitoring stack (Prometheus + Grafana + Nginx); SSH/Grafana can be opened to a trusted CIDR
 - CPU compute node group (private subnet); EFA can be enabled for HPC/MPI workloads
 - Optional GPU (P5/P6) node group with multi-NIC EFA, plus DCGM Exporter for the GPU dashboards
-- Enroot/Pyxis container runtime installed at first boot via `PostInstallScriptUrl` (or pre-baked into a custom AMI you build separately and pass as `AmiId`)
+- Enroot/Pyxis container runtime installed at first boot (`InstallEnrootPyxis`, on by default; or pre-baked into a custom AMI you build separately and pass as `AmiId`)
 
 Every node runs on the AWS-managed **PCS-Ready DLAMI** (NVIDIA driver, CUDA, PCS agent,
 and Slurm pre-installed), so no custom AMI build is required.
@@ -147,11 +147,11 @@ complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 |---|---|---|
 | `DirectoryService` | `none` | `OpenLDAP-LoginNode` for a multi-user cluster. See [§8.3](#83-user-management) |
 
-**5.3. Additional Cluster Configuration: Post-Install Script**
+**5.3. Additional Cluster Configuration: Container Runtime (Enroot/Pyxis)**
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `PostInstallScriptUrl` | *(empty → auto)* | First-boot script on every node; empty (default) auto-installs the Enroot/Pyxis container runtime from your templates bucket. Point at your own script to customize. See [PARAMETERS.md](./docs/PARAMETERS.md) |
+| `InstallEnrootPyxis` | `true` | Install the Enroot/Pyxis container runtime on every node at first boot. Set `false` when it's pre-baked into `AmiId`. For other first-boot customization, add your own script to the node group's [node lifecycle actions](https://docs.aws.amazon.com/pcs/latest/userguide/cng-node-lifecycle-actions.html). See [PARAMETERS.md](./docs/PARAMETERS.md) |
 
 **See [PARAMETERS.md](./docs/PARAMETERS.md) for the complete parameter reference** (all
 console parameter groups, with every default). The concept guides below cover the
@@ -166,7 +166,7 @@ needed. Enroot 3.5.0 + Pyxis 0.20.0 are layered on at first boot via
 [`assets/scripts/install-enroot-pyxis.sh`](./assets/scripts/install-enroot-pyxis.sh)
 (~8–12 min boot). For **frequent scaling**, pre-bake Enroot/Pyxis into a custom DLAMI
 once with [§8.5](#85-pre-baking-enrootpyxis-into-a-custom-ami) and pass that
-`ami-xxx` as `AmiId` (~3 min boot, deterministic state). The post-install hook is
+`ami-xxx` as `AmiId` (~3 min boot, deterministic state). The installer is
 idempotent — it no-ops on a pre-baked AMI.
 
 > **Production tip — pin the AMI.** CloudFormation re-resolves SSM `/latest/`
@@ -557,7 +557,7 @@ NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 > (`v2.6.4`+ carry the other PCS fixes: node-local `/opt` install + the Docker-29.x
 > DCGM tag). Override `DcgmExporterImage`
 > only to pin a different build; details:
-> [OPERATIONS.md §3.1](./docs/OPERATIONS.md#31-dcgmexporterimage-the-default-and-when-to-change-it).
+> [OPERATIONS.md §3.1](./docs/OPERATIONS.md#31-dcgmexporterimage--the-default-and-when-to-change-it).
 
 > **Note — node-type tagging.** The monitoring stack identifies login vs compute nodes by
 > the `monitoring-role` tag (`login`/`compute`), **not** the EC2 `Name` tag — so the `Name`
@@ -616,7 +616,7 @@ for roles, deploy instructions, security considerations, and the verification ma
 ### 8.5 Pre-baking Enroot/Pyxis into a custom AMI
 
 The all-in-one template installs Enroot/Pyxis at **first boot** via
-`PostInstallScriptUrl` (no Image Builder step). For **frequent scaling** in production,
+the `install-enroot-pyxis` lifecycle action (no Image Builder step). For **frequent scaling** in production,
 pre-baking Enroot/Pyxis into a custom AMI drops node boot from ~8–12 min to ~3 min and
 pins every node to a deterministic state. It's a standalone path: build the AMI once with
 [`pcs-ready-dlami-with-enroot-pyxis.yaml`](./assets/pcs-ready-dlami-with-enroot-pyxis.yaml)
@@ -666,7 +666,7 @@ CPG from the GPU templates is a future item.)
 **Multi-NIC bandwidth needs multiple MPI pairs.** A single MPI pair uses one
 libfabric endpoint and only one NIC. Use `osu_mbw_mr -np 32 -N 16` (or your
 application's natural multi-pair pattern) to actually exercise both NICs on
-hpc7a/hpc8a. See [tests/README.md Test 9](./tests/README.md#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a)
+hpc7a/hpc8a. See [tests/hpc-efa-test.md Test 9](./tests/hpc-efa-test.md#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a)
 for the full benchmark setup and validated bandwidth numbers.
 
 ### 8.7 Deploying updated templates before they are published
@@ -716,20 +716,22 @@ pcs-ml-cluster-deploy-all.yaml                    ← user deploys this
 │     • MonitoringRole=login → Prometheus/Grafana
 │     • DirectoryService=OpenLDAP-LoginNode → slapd server
 │     │
-│     └─ UserData fetches external scripts:
-│          ├─ PostInstallScriptUrl (default: install-enroot-pyxis.sh)
-│          ├─ MonitoringRepo/MonitoringVersion → post-install.sh
-│          └─ setup-directory.sh server (when DirectoryRole=server)
+│     └─ Node lifecycle actions run external scripts:
+│          ├─ needrestart-guard.sh, mount-openzfs-home.sh, mount-lustre-fsx.sh
+│          ├─ setup-directory.sh server (when DirectoryRole=server)
+│          ├─ install-enroot-pyxis.sh (InstallEnrootPyxis=true)
+│          └─ install-monitoring.sh (nodeReady)
 │
 ├─► add-cng.yaml (compute)                        ← CPU queue (dynamic scaling 0→N)
 │     • MonitoringRole=compute → Node Exporter
 │     • DirectoryService=OpenLDAP-LoginNode → SSSD client
 │     • EfaInterfaceCount>0 → EFA NetworkInterfaces + PG
 │     │
-│     └─ UserData fetches external scripts:
-│          ├─ PostInstallScriptUrl (same as login)
-│          ├─ MonitoringRepo/MonitoringVersion → post-install.sh
-│          └─ setup-directory.sh client (when DirectoryRole=client)
+│     └─ Node lifecycle actions run external scripts:
+│          ├─ needrestart-guard.sh, mount-openzfs-home.sh, mount-lustre-fsx.sh
+│          ├─ setup-directory.sh client (when DirectoryRole=client)
+│          ├─ install-enroot-pyxis.sh (same as login)
+│          └─ install-monitoring.sh (nodeReady)
 │
 └─► add-cng-p5.yaml / add-cng-p6-b200.yaml       ← GPU queue (optional)
     / add-cng-p6-b300.yaml
@@ -737,14 +739,15 @@ pcs-ml-cluster-deploy-all.yaml                    ← user deploys this
       • MonitoringRole=compute → DCGM Exporter
       • Same external script pattern as compute CNG
 
-Boot scripts (fetched at first boot from S3: s3://<S3BucketName>/<S3KeyPrefix>scripts/):
-  assets/scripts/install-enroot-pyxis.sh           ← Enroot 3.5.0 + Pyxis 0.20.0
+Lifecycle-action scripts (fetched by the PCS agent from S3: s3://<S3BucketName>/<S3KeyPrefix>scripts/):
+  assets/scripts/needrestart-guard.sh             ← keep security upgrades from restarting slurmd
+  assets/scripts/mount-openzfs-home.sh            ← FSx OpenZFS → /home
+  assets/scripts/mount-lustre-fsx.sh              ← FSx Lustre → /fsx
   assets/scripts/setup-directory.sh               ← multi-user directory (server + client)
-
-External boot scripts (fetched from GitHub):
-  aws-parallelcluster-monitoring post-install.sh   ← monitoring stack installer
-    (https://github.com/aws-samples/aws-parallelcluster-monitoring)
-    fetched from: ${MonitoringRepo} @ ${MonitoringVersion}
+  assets/scripts/install-enroot-pyxis.sh           ← Enroot 3.5.0 + Pyxis 0.20.0
+  assets/scripts/install-monitoring.sh            ← monitoring stack installer wrapper
+    (fetches aws-parallelcluster-monitoring post-install.sh from
+    GitHub: ${MonitoringRepo} @ ${MonitoringVersion})
 
 Helper scripts (NOT run at boot — for admin use on the login node):
   assets/scripts/ldap-add-user.sh                 ← add POSIX users to LDAP directory
@@ -777,7 +780,7 @@ numbers is in **[tests/README.md](./tests/README.md)**.
 
 In this repo:
 - [Parameter reference](./docs/PARAMETERS.md) — every deploy-all parameter and default
-- [Operations guide](./docs/OPERATIONS.md) — version trade-offs, AMI pinning, monitoring/DCGM, FSx coupling, Lustre tuning, production settings
+- [Operations guide](./docs/OPERATIONS.md) — version trade-offs, AMI pinning, monitoring/DCGM, FSx coupling, Lustre tuning, production settings, migration notes from UserData-based releases
 - [User management guide](./docs/USER-MANAGEMENT.md) — multi-user setup with OpenLDAP (add/remove users, groups, Slurm accounting)
 - [Jupyter on a compute node](./docs/JUPYTER.md) — run Jupyter as a Slurm job, browser access via SSM port forwarding
 - [IAM permissions guide](./docs/IAM.md) — cluster admin / cluster user roles, policy deploy, security considerations
