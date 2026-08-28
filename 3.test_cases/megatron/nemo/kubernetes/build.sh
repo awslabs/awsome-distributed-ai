@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 
 # Build the AWS-optimized NeMo container for P4 and P5 instances
 # This script builds the Docker image with EFA support optimizations
