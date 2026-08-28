@@ -118,18 +118,34 @@ spec:
         - name: ray-worker
           image: PLACEHOLDER_IMAGE             ## IMAGE: Here you may choose which image your head node will run
           env:
+            ## EFA CONFIGURATION
             - name: FI_PROVIDER
               value: "efa"
             - name: FI_EFA_USE_DEVICE_RDMA
               value: "1"
             - name: FI_EFA_FORK_SAFE
               value: "1"
-            - name: NCCL_PROTO
-              value: "simple"
+            ## NCCL CONFIGURATION
             - name: NCCL_SOCKET_IFNAME
               value: "^docker,lo,veth"
+            - name: NCCL_BUFFSIZE
+              value: "8388608"
+            - name: NCCL_P2P_NET_CHUNKSIZE
+              value: "8388608"
+            - name: NCCL_TUNER_PLUGIN
+              value: "/nccl-links/lib64/libnccl-tuner-aws-ofi.so"
             - name: NCCL_DEBUG
               value: "INFO"
+            - name: LD_LIBRARY_PATH
+              value: "/nccl-links/lib64:/host-ofi-nccl/lib64:/host-efa/lib64:/usr/local/lib/python3.12/dist-packages/torch/lib:/usr/local/lib:/usr/lib/x86_64-linux-gnu"
+            ## VLLM AND PYTORCH
+            - name: VLLM_USE_V1
+              value: "1"
+            - name: TOKENIZERS_PARALLELISM
+              value: "true"
+            - name: PYTORCH_CUDA_ALLOC_CONF
+              value: "expandable_segments:True"
+            ## TORCH NCCL
             - name: TORCH_NCCL_DUMP_ON_TIMEOUT
               value: "1"
             - name: TORCH_NCCL_ASYNC_ERROR_HANDLING
@@ -142,32 +158,78 @@ spec:
                 command: ["/bin/sh","-c","ray stop"]
           resources:
             limits:                                    ## LIMITS: Set resource limits for your worker pods
-              cpu: 16
-              memory: 200Gi
+              cpu: PLACEHOLDER_WORKER_CPU
+              memory: PLACEHOLDER_WORKER_MEMORY
               nvidia.com/gpu: PLACEHOLDER_NUM_GPU_PER_NODE
               vpc.amazonaws.com/efa: PLACEHOLDER_NUM_EFA_PER_NODE
             requests:                                    ## REQUESTS: Set resource requests for your worker pods
-              cpu: 16
-              memory: 200Gi
+              cpu: PLACEHOLDER_WORKER_CPU
+              memory: PLACEHOLDER_WORKER_MEMORY
               nvidia.com/gpu: PLACEHOLDER_NUM_GPU_PER_NODE
               vpc.amazonaws.com/efa: PLACEHOLDER_NUM_EFA_PER_NODE
           ports:
           - containerPort: 8080
             name: metrics
-          volumeMounts:                                    ## VOLUMEMOUNTS: Mount your S3 CSI EKS Add-On to worker pods
+          volumeMounts:                                    ## VOLUMEMOUNTS: Mount EFA/NCCL host libs and shared storage
+          - name: host-efa
+            mountPath: /host-efa
+            readOnly: true
+          - name: host-ofi-nccl
+            mountPath: /host-ofi-nccl
+            readOnly: true
+          - name: nccl-links
+            mountPath: /nccl-links
           - name: ray-logs
             mountPath: /tmp/ray
           - name: fsx-storage
             mountPath: /fsx
-          # - name: checkpoint-logs
-          #   mountPath: /var/log/sagemaker_checkpointing
+          - name: dshm
+            mountPath: /dev/shm
+        ## INIT CONTAINER: Create NCCL symlinks from host OFI-NCCL libs
+        ## Required when the Docker image does not bundle EFA/OFI-NCCL libraries.
+        ## The host nodes (e.g. p5en) have these at /opt/amazon/ofi-nccl but with
+        ## different filenames than what NCCL expects. The init container creates
+        ## the expected symlinks in a shared emptyDir volume.
+        initContainers:
+        - name: nccl-symlinks
+          image: busybox:latest
+          command: ["sh", "-c"]
+          args:
+          - |
+            mkdir -p /nccl-links/lib64
+            ln -sf /host-ofi-nccl/lib64/libnccl-net-ofi.so /nccl-links/lib64/libnccl-net-aws-ofi.so
+            ln -sf /host-ofi-nccl/lib64/libnccl-ofi-tuner.so /nccl-links/lib64/libnccl-tuner-aws-ofi.so
+            ls -la /nccl-links/lib64/
+            echo "NCCL symlinks created"
+          volumeMounts:
+          - name: nccl-links
+            mountPath: /nccl-links
+          - name: host-ofi-nccl
+            mountPath: /host-ofi-nccl
+            readOnly: true
         volumes:
+        ## HOST EFA AND OFI-NCCL LIBRARIES
+        ## These are pre-installed on EFA-enabled nodes (p5, p5e, p5en, etc.)
+        ## at /opt/amazon/efa and /opt/amazon/ofi-nccl. Mount them into the pod
+        ## so NCCL can use EFA for inter-node communication.
+        - name: host-efa
+          hostPath:
+            path: /opt/amazon/efa
+            type: Directory
+        - name: host-ofi-nccl
+          hostPath:
+            path: /opt/amazon/ofi-nccl
+            type: Directory
+        - name: nccl-links
+          emptyDir: {}
         - name: fsx-storage
           persistentVolumeClaim:
             claimName: fsx-claim
         - name: ray-logs
           emptyDir: {}
-        # - name: checkpoint-logs
-        #   hostPath:
-        #     path: /var/logs/sagemaker_checkpointing
-        #     type: DirectoryOrCreate
+        ## SHARED MEMORY: Required for PyTorch DataLoader shared memory and
+        ## NCCL shared-memory transport. Size should be generous for large models.
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 200Gi

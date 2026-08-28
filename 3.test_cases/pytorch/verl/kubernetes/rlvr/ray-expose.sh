@@ -8,9 +8,9 @@ if [ "$?" == 0 ]; then
 	echo "Ray is exposed on port ${RAY_DASHBOARD_PORT}"
 else
 	PID_FILE="$HOME/port-forward.pid"
-	export SERVICEHEAD=$(kubectl get service | grep head-svc | awk '{print $1}' | head -n 1)
+	export SERVICEHEAD=$(kubectl get service -n "${RAY_NAMESPACE}" | grep head-svc | awk '{print $1}' | head -n 1)
 
-	kubectl port-forward --address 0.0.0.0 service/${SERVICEHEAD} ${RAY_DASHBOARD_PORT}:8265 > /dev/null 2>&1 &
+	kubectl port-forward -n "${RAY_NAMESPACE}" --address 0.0.0.0 service/${SERVICEHEAD} ${RAY_DASHBOARD_PORT}:8265 > /dev/null 2>&1 &
 	echo $! > "$PID_FILE"
 	echo "Port-forward started, PID $! saved in $PID_FILE"
 	sleep 1
