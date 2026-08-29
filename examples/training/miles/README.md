@@ -191,7 +191,7 @@ envsubst < kubernetes/buildkit-job.yaml | kubectl apply -f -
 
 ### 3. Download and Prepare the Model
 
-As in the sibling slime test case, this uses a data-prep pod and `huggingface-cli` inside it:
+As in the sibling slime test case, this uses a data-prep pod and the Hugging Face CLI inside it. The command is `hf`: `huggingface-cli` is a stub in `huggingface_hub` 1.x that prints a deprecation notice and exits non-zero without downloading anything.
 
 ```bash
 envsubst < kubernetes/data-prep-pod.yaml | kubectl apply -f -
@@ -199,9 +199,9 @@ kubectl wait --for=condition=Ready pod/data-prep -n "${NAMESPACE}" --timeout=300
 kubectl exec -it data-prep -n "${NAMESPACE}" -- bash
 # Inside the pod:
 pip install -U "huggingface_hub[cli]"
-huggingface-cli download Qwen/Qwen3-4B --local-dir /fsx/models/Qwen3-4B
-huggingface-cli download --repo-type dataset zhuzilin/dapo-math-17k --local-dir /fsx/data/dapo-math-17k
-huggingface-cli download --repo-type dataset zhuzilin/aime-2024 --local-dir /fsx/data/aime-2024
+hf download Qwen/Qwen3-4B --local-dir /fsx/models/Qwen3-4B
+hf download --repo-type dataset zhuzilin/dapo-math-17k --local-dir /fsx/data/dapo-math-17k
+hf download --repo-type dataset zhuzilin/aime-2024 --local-dir /fsx/data/aime-2024
 ```
 
 ### 4. Deploy the Ray Cluster
