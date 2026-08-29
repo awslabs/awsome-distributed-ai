@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# STATUS: UNVERIFIED -- mirrors slime scripts/evaluate.sh; not executed on miles.
+# STATUS: Partly verified -- the grader this selects was exercised in the pinned image
+#   (\boxed{\frac{1}{2}} against 0.5 grades equivalent). The script itself has not been run
+#   end to end on miles.
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 # ============================================================
 # Evaluation Script for miles-trained Models
 #
-# Evaluates a HuggingFace-format checkpoint on AIME-2024 using
-# SGLang for inference, then scores with the math reward function.
+# Evaluates a HuggingFace-format checkpoint on AIME-2024: serves it with SGLang, samples
+# responses, and grades them with the same verifier the training reward uses.
 #
 # Usage:
 #   bash scripts/evaluate.sh \
@@ -91,7 +93,9 @@ trap cleanup_sglang EXIT
 SGLANG_STARTUP_TIMEOUT=${SGLANG_STARTUP_TIMEOUT:-300}
 echo "[INFO] Waiting for SGLang server to start (timeout=${SGLANG_STARTUP_TIMEOUT}s)..."
 for i in $(seq 1 ${SGLANG_STARTUP_TIMEOUT}); do
-    if curl -s "http://localhost:${SERVER_PORT}/health" > /dev/null 2>&1; then
+    # -f, not just -s: without it curl exits 0 on a 4xx or 5xx body and the loop announces a
+    # ready server against an endpoint that is answering with an error.
+    if curl -sf "http://localhost:${SERVER_PORT}/health" > /dev/null 2>&1; then
         echo "[INFO] SGLang server ready."
         break
     fi
@@ -118,7 +122,6 @@ python3 - <<'EVAL_SCRIPT'
 import json
 import sys
 import os
-import re
 import asyncio
 import aiohttp
 
@@ -135,6 +138,7 @@ SERVER_URL = f"http://localhost:{os.environ.get('SERVER_PORT', '30000')}/v1/chat
 MAX_CONCURRENCY = int(os.environ.get("EVAL_MAX_CONCURRENCY", "32"))
 REQUEST_TIMEOUT = float(os.environ.get("EVAL_REQUEST_TIMEOUT", "1800"))
 ERROR_FRACTION_ABORT = float(os.environ.get("EVAL_ERROR_FRACTION_ABORT", "0.05"))
+GRADER_TIMEOUT_S = float(os.environ.get("EVAL_GRADER_TIMEOUT_S", "10"))
 
 # Load evaluation prompts
 prompts = []
@@ -171,6 +175,59 @@ def extract_boxed(text):
     return out[-1].strip() if out else ""
 
 
+# grade_answer_verl first: it is the verifier the training reward uses, and it is in the image.
+# math_verify is not -- requirements.txt pins it but the Dockerfile does not install it, so
+# preferring it fell through to exact match on every run. Installing math_verify instead would
+# put the eval and the reward on different verifiers.
+_GRADER = None
+_GRADER_NAME = "exact_string_match"
+try:
+    from miles.rollout.rm_hub.math_utils import grade_answer_verl as _GRADER
+    _GRADER_NAME = "grade_answer_verl"
+except ImportError:
+    try:
+        from math_verify import parse as _mv_parse, verify as _mv_verify
+
+        def _GRADER(response_text, label):  # noqa: N802 - slot for the same call shape
+            gold = _mv_parse(label if "\\boxed" in label else f"\\boxed{{{label}}}")
+            return bool(_mv_verify(gold, _mv_parse(response_text)))
+
+        _GRADER_NAME = "math_verify"
+    except ImportError:
+        print("WARNING: no semantic grader is importable, so grading falls back to exact string "
+              "comparison. Equivalent answers such as 0.5 against 1/2 count as wrong and the "
+              "reported accuracy understates the model.", file=sys.stderr)
+
+
+
+def grade(response_text: str, predicted: str, label: str):
+    """Return (correct, how). Exact string match first, then mathematical equivalence.
+
+    Comparing the extracted \\boxed{} content to the label with == alone counts a correct
+    answer wrong whenever it is written differently -- 0.5 against 1/2, a trailing "\\!" from
+    LaTeX spacing -- and the reported accuracy then understates the model for a reason that has
+    nothing to do with the model.
+
+    The grader takes the whole response, not the extracted answer, because grade_answer_verl does
+    its own extraction and may find an answer this one does not. `predicted` is still used for the
+    exact-match shortcut and is reported, so a label the grader cannot parse still counts as
+    correct when the answer is character-identical.
+    """
+    if not predicted:
+        return False, "no_answer"
+    if predicted == label:
+        return True, "exact"
+    if _GRADER is None:
+        return False, "exact_only"
+    try:
+        if _GRADER(response_text, label):
+            return True, "equivalent"
+    except Exception as e:  # noqa: BLE001 - a verifier fault must not be reported as a score
+        print(f"WARNING: {_GRADER_NAME} failed on label={label!r} predicted={predicted!r}: {e}",
+              file=sys.stderr)
+        return False, "verifier_error"
+    return False, "incorrect"
+
 async def evaluate_prompt(session, prompt_item, prompt_idx, sample_idx, sem):
     """Generate a response and check correctness."""
     messages = [{"role": "user", "content": prompt_item.get("prompt", prompt_item.get("question", ""))}]
@@ -199,13 +256,31 @@ async def evaluate_prompt(session, prompt_item, prompt_idx, sample_idx, sem):
                 # AttributeError -- which the except below would turn into "incorrect" for
                 # every sample.
                 label = str(prompt_item.get("label", prompt_item.get("answer", ""))).strip()
+                #
+                # And it needs a ceiling: sympy on model-shaped text can run for a very long
+                # time, and one such response would otherwise hold a slot until the script is
+                # killed. wait_for abandons the coroutine, not the thread, so a wedged
+                # verification leaks one thread for the rest of the run, bounded by the default
+                # thread pool rather than by the semaphore, which wait_for has already released.
+                # The cheaper trade here; app.py pays for a killable
+                # process pool instead because it serves a training run rather than one script.
+                try:
+                    correct, how = await asyncio.wait_for(
+                        asyncio.to_thread(grade, response_text, predicted, label),
+                        timeout=GRADER_TIMEOUT_S,
+                    )
+                except asyncio.TimeoutError:
+                    print(f"WARNING: {_GRADER_NAME} exceeded {GRADER_TIMEOUT_S}s on "
+                          f"label={label!r} predicted={predicted!r}", file=sys.stderr)
+                    correct, how = False, "verifier_error"
 
                 return {
                     "prompt_idx": prompt_idx,
                     "sample_idx": sample_idx,
                     "predicted": predicted,
                     "label": label,
-                    "correct": predicted == label if predicted else False,
+                    "correct": correct,
+                    "graded_by": how,
                     "response_length": len(response_text),
                 }
     except Exception as e:
@@ -238,12 +313,22 @@ async def main():
     total = len(results)
     correct = sum(1 for r in results if r.get("correct", False))
     errors = sum(1 for r in results if r.get("error"))
-    accuracy = correct / total if total > 0 else 0
+    equivalent = sum(1 for r in results if r.get("graded_by") == "equivalent")
+    verifier_errors = sum(1 for r in results if r.get("graded_by") == "verifier_error")
+    # A verifier fault is not a score, so it does not belong in the denominator. Counting it as
+    # an incorrect sample made accuracy depend on how often the verifier broke: one correct
+    # answer beside one verifier error reported 0.5, which is not a measurement of the model.
+    graded = total - verifier_errors - errors
+    accuracy = correct / graded if graded > 0 else 0
 
     # Per-prompt pass@k (at least one correct)
     from collections import defaultdict
     prompt_results = defaultdict(list)
     for r in results:
+        # Same reason as the accuracy denominator: a prompt whose samples all failed to be
+        # graded has not been measured, so it is not a pass@k miss either.
+        if r.get("graded_by") == "verifier_error" or r.get("error"):
+            continue
         prompt_results[r["prompt_idx"]].append(r.get("correct", False))
 
     pass_at_k = sum(1 for prs in prompt_results.values() if any(prs)) / len(prompt_results) if prompt_results else 0
@@ -252,9 +337,13 @@ async def main():
     print(f"  Evaluation Results")
     print(f"{'='*60}")
     print(f"  Total samples:    {total}")
+    print(f"  Graded samples:   {graded} (accuracy denominator)")
     print(f"  Correct:          {correct}")
+    print(f"    of which equivalent, not string-identical: {equivalent}")
     print(f"  Errors:           {errors}")
-    print(f"  Accuracy:         {accuracy:.4f}")
+    if verifier_errors:
+        print(f"  Verifier errors:  {verifier_errors} (not graded; see warnings above)")
+    print(f"  Accuracy:         {accuracy:.4f}  (over graded samples)")
     print(f"  Pass@{NUM_SAMPLES}:          {pass_at_k:.4f}")
     print(f"  Prompts evaluated:{len(prompt_results)}")
     print(f"{'='*60}")
@@ -269,6 +358,10 @@ async def main():
             "metrics": {
                 "total_samples": total,
                 "correct": correct,
+                "graded_samples": graded,
+                "correct_by_equivalence": equivalent,
+                "verifier_errors": verifier_errors,
+                "graded_with": _GRADER_NAME,
                 "errors": errors,
                 "accuracy": accuracy,
                 "pass_at_k": pass_at_k,
@@ -281,11 +374,20 @@ async def main():
 
     # A run where a large share of requests failed has not measured accuracy, it has
     # measured the timeout. Exiting non-zero keeps that out of a results table.
-    if total and errors / total > ERROR_FRACTION_ABORT:
-        print(f"\nERROR: {errors}/{total} requests failed "
-              f"(> {ERROR_FRACTION_ABORT:.0%}). These count as incorrect, so the accuracy "
-              "above understates the model. Raise SGLANG_MEM_FRACTION, lower "
-              "EVAL_MAX_CONCURRENCY, or raise EVAL_REQUEST_TIMEOUT, then re-run.")
+    # Both kinds of non-measurement abort the run, because either one makes the number above
+    # something other than accuracy. Without counting verifier faults here, a run where every
+    # single sample failed to be graded exited zero and published a figure.
+    ungraded = errors + verifier_errors
+    if total and ungraded / total > ERROR_FRACTION_ABORT:
+        print(f"\nERROR: {ungraded}/{total} samples were not graded "
+              f"({errors} request failures, {verifier_errors} verifier faults; "
+              f"> {ERROR_FRACTION_ABORT:.0%}). The figure above is therefore not this model's "
+              "accuracy. For request failures raise SGLANG_MEM_FRACTION, lower "
+              "EVAL_MAX_CONCURRENCY, or raise EVAL_REQUEST_TIMEOUT; for verifier faults read the "
+              "warnings above. Then re-run.")
+        sys.exit(2)
+    if total and graded == 0:
+        print("\nERROR: no sample was graded, so there is no accuracy to report.")
         sys.exit(2)
 
 asyncio.run(main())
