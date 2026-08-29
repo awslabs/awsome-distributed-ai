@@ -23,8 +23,16 @@ spec:
       spec:
         containers:
         - env:
+          # "none" asks the NVIDIA container runtime for the driver libraries without
+          # assigning a GPU device: the head gets libcuda.so.1 but no /dev/nvidia*, and
+          # `nvidia-smi` reporting no devices is the expected result. The head needs the
+          # driver because Ray control actors (the rollout manager, for one) import
+          # megatron.core, which loads transformer_engine, which dlopens libcuda.so.1 at
+          # import time even at num-gpus 0. "void" is what makes the runtime behave like
+          # plain runc and inject no driver at all, on a GPU node included, so a control
+          # actor scheduled here dies with OSError: libcuda.so.1 seconds after submission.
           - name: NVIDIA_VISIBLE_DEVICES
-            value: void
+            value: none
           - name: RAY_memory_monitor_refresh_ms
             value: '0'
           - name: PYTHONPATH
@@ -73,14 +81,15 @@ spec:
             # shared memory; the GPU workers (below) get the large 256Gi /dev/shm.
             sizeLimit: 8Gi
           name: dshm
-        # The head MUST land on a node that has the CUDA driver (libcuda.so.1): miles's Ray
-        # control actors (e.g. the rollout manager) import Megatron/transformer_engine at
-        # startup even though they request num-gpus 0, and that import hard-fails on a
-        # GPU-less node. Point ${CPU_NODE_ROLE} at a GPU pool's node-role label; the default
-        # env sets it equal to ${GPU_NODE_ROLE} so the head co-locates on a GPU node (it
-        # still runs num-gpus 0 and consumes no GPU, only the node's CPU/disk). Do NOT place
-        # the head on a CPU-only pool. The toleration below lets it schedule onto the (tainted)
-        # GPU pool.
+        # The head MUST land on a node whose host carries the CUDA driver: miles's Ray control
+        # actors (e.g. the rollout manager) import Megatron/transformer_engine at startup even
+        # though they request num-gpus 0, and that import dlopens libcuda.so.1. Both halves are
+        # required -- a driver on the host AND NVIDIA_VISIBLE_DEVICES=none above, which is what
+        # makes the runtime mount it into this container. Point ${CPU_NODE_ROLE} at a GPU pool's
+        # node-role label; the default env sets it equal to ${GPU_NODE_ROLE} so the head
+        # co-locates on a GPU node (it still runs num-gpus 0 and consumes no GPU, only the
+        # node's CPU/disk). Do NOT place the head on a CPU-only pool. The toleration below lets
+        # it schedule onto the (tainted) GPU pool.
         nodeSelector:
           ${CPU_NODE_LABEL_KEY}: ${CPU_NODE_ROLE}
         tolerations:

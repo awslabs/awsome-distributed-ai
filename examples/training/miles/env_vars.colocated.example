@@ -73,11 +73,13 @@ export FSX_CLAIM="fsx-claim"
 # A wrong key OR value leaves pods stuck Pending with FailedScheduling, not an obvious error.
 export GPU_NODE_LABEL_KEY="node-role"
 export GPU_NODE_ROLE="gpu-p5en"          # e.g. "gpu-b300" on a B300 pool
-# The Ray head must land on a node that has the CUDA driver (libcuda.so.1): miles's control
-# actors import Megatron/transformer_engine at startup even though they request num-gpus 0,
-# and that import hard-fails on a GPU-less node. So the head defaults to the SAME pool as the
-# workers (it runs num-gpus 0 and consumes no GPU, only CPU/disk); the manifest carries a
-# toleration for the GPU pool's taint. Do NOT point these at a CPU-only pool.
+# The Ray head must land on a node whose host carries the CUDA driver: miles's control actors
+# reach transformer_engine through megatron.core at startup even though they request num-gpus 0,
+# and that import dlopens libcuda.so.1. So the head defaults to the SAME pool as the workers
+# (it runs num-gpus 0 and consumes no GPU, only CPU/disk); the manifest carries a toleration
+# for the GPU pool's taint and sets NVIDIA_VISIBLE_DEVICES=none on the head container, which is
+# what mounts the driver libraries in without assigning a GPU device. Do NOT point these at a
+# CPU-only pool.
 export CPU_NODE_LABEL_KEY="${GPU_NODE_LABEL_KEY}"
 export CPU_NODE_ROLE="${GPU_NODE_ROLE}"
 

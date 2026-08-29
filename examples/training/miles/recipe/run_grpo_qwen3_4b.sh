@@ -294,10 +294,12 @@ TRAIN_ARGS=(
 # can source the right model definition.
 #
 # --entrypoint-resources '{"gpu_node": 0.001}' pins the Ray job DRIVER to a GPU
-# worker. miles imports mooncake (libcuda-dependent) at module load, and the head
-# is a non-GPU pod, so a head-scheduled driver dies with a libcuda import error.
-# The 0.001 fractional request lands the driver on a worker without consuming a
-# whole GPU (does not disturb the colocated placement group). HF_TOKEN is NOT set
+# worker, where the training it drives actually runs. The driver reaches
+# transformer_engine through megatron.core and that import dlopens libcuda.so.1,
+# so it needs the driver libraries; mooncake is not the reason, its import is
+# guarded by try/except ImportError. The 0.001 fractional request lands the driver
+# on a worker without consuming a whole GPU (does not disturb the colocated
+# placement group). HF_TOKEN is NOT set
 # here: it is injected into the pod env from the k8s Secret in raycluster.yaml, so
 # it never lands in the Ray GCS runtime-env (visible via the dashboard API).
 echo "[INFO] Submitting Ray job..."

@@ -273,7 +273,7 @@ miles adds the sm_103 Transformer Engine FA2 whitelist patch that the sibling sl
 
 2. **Qwen2.5-72B does not fit the 16-GPU H200 layout.** The disaggregated TP4 PP2 configuration runs out of memory on 2x p5en.48xlarge. It needs a larger cluster or optimizer and activation offload, neither of which has been run here.
 
-3. **The Ray head must run on a CUDA-capable node.** miles's control actors link `libcuda.so.1` at import even with `num-gpus 0`, so the manifest places the head on the GPU pool rather than a CPU node. Requiring a GPU-capable node for a zero-GPU control process is an upstream limitation in miles, not a constraint introduced by this test case.
+3. **The Ray head must run on a CUDA-capable node.** miles's control actors reach `transformer_engine` through `megatron.core` at import time and that dlopens `libcuda.so.1`, even with `num-gpus 0`. Two settings together satisfy it: the manifest places the head on the GPU pool rather than a CPU node, and the head container sets `NVIDIA_VISIBLE_DEVICES=none`, which asks the NVIDIA container runtime for the driver libraries without assigning a GPU device. `nvidia-smi` in the head therefore reports no devices, which is expected. Requiring a driver-capable node for a zero-GPU control process is an upstream limitation in miles, not a constraint introduced by this test case.
 
 ## Reward Function
 

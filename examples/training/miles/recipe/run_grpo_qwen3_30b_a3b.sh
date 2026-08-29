@@ -248,8 +248,10 @@ TRAIN_ARGS+=(${EXTRA_TRAIN_ARGS_ARR[@]+"${EXTRA_TRAIN_ARGS_ARR[@]}"})
 # /root/miles (on PYTHONPATH below). MODEL_SCRIPT is forwarded so the launcher
 # can source the right model definition.
 #
-# --entrypoint-resources '{"gpu_node": 0.001}' pins the driver to a GPU worker
-# (miles imports mooncake / libcuda at module load; the head is a non-GPU pod).
+# --entrypoint-resources '{"gpu_node": 0.001}' pins the driver to a GPU worker,
+# where the training it drives actually runs. The driver reaches transformer_engine
+# through megatron.core and that import dlopens libcuda.so.1; mooncake is not the
+# reason, its import is guarded by try/except ImportError.
 # CUDA_DEVICE_MAX_CONNECTIONS=1 is required by Megatron for TP>1 (30B is TP=2).
 # HF_TOKEN is NOT set here: it is injected into the pod env from the k8s Secret in
 # raycluster.yaml, so it never lands in the Ray GCS runtime-env.
