@@ -57,7 +57,7 @@ for var in MODEL_LOCAL MODEL_DIST PROMPT_DATA CHECKPOINT_DIR MODEL_SCRIPT RM_TYP
            ROLLOUT_NUM_GPUS ROLLOUT_GPUS_PER_ENGINE NUM_ROLLOUT ROLLOUT_BATCH_SIZE \
            N_SAMPLES_PER_PROMPT GLOBAL_BATCH_SIZE MAX_TOKENS_PER_GPU \
            ROLLOUT_MAX_RESPONSE_LEN ROLLOUT_TEMPERATURE LEARNING_RATE SAVE_INTERVAL EVAL_DATA \
-           CLUSTER_GPUS; do
+           CLUSTER_GPUS GPUS_PER_WORKER WORKER_REPLICAS; do
     if [[ -z "${!var:-}" ]]; then
         echo "[ERROR] ${var} is not set. Configure env_vars, or re-copy it from"
         echo "[ERROR] env_vars.moe.example if it predates this variable."
@@ -78,7 +78,7 @@ fi
 # Zero is invalid for every count here, EP_SIZE included: it reaches the modulo below as a
 # division by zero.
 for _v in ACTOR_NUM_NODES ACTOR_GPUS_PER_NODE ROLLOUT_NUM_GPUS ROLLOUT_GPUS_PER_ENGINE \
-          EP_SIZE CLUSTER_GPUS; do
+          EP_SIZE CLUSTER_GPUS GPUS_PER_WORKER WORKER_REPLICAS; do
     if ! [[ "${!_v}" =~ ^[1-9][0-9]*$ ]]; then
         echo "[ERROR] ${_v} must be a positive decimal integer with no leading zero," >&2
         echo "[ERROR] got '${!_v}'." >&2
@@ -320,8 +320,11 @@ TRAIN_ARGS+=(${EXTRA_TRAIN_ARGS_ARR[@]+"${EXTRA_TRAIN_ARGS_ARR[@]}"})
 # CUDA_DEVICE_MAX_CONNECTIONS=1 is required by Megatron for TP>1 (30B is TP=2).
 # HF_TOKEN is NOT set here: it is injected into the pod env from the k8s Secret in
 # raycluster.yaml, so it never lands in the Ray GCS runtime-env.
-# A real JSON encoder, not string interpolation: a quote or backslash in a path is legal and
-# would close the literal early. Values reach python through the environment, not the text.
+# Build the Ray runtime env with a real JSON encoder, not by interpolating values into a
+# quoted string. A path holding a double quote or a backslash -- both legal in a POSIX path
+# and both plausible on a mount someone else set up -- closes or escapes the literal early
+# and Ray rejects the submission with a parse error that names neither the variable nor the
+# character. Values reach python through the environment, never through the program text.
 command -v python3 >/dev/null 2>&1 || {
     echo "[ERROR] python3 not found; it is needed to encode --runtime-env-json." >&2
     exit 1
@@ -350,18 +353,7 @@ ray job submit \
     --address="http://127.0.0.1:8265" \
     --entrypoint-resources '{"gpu_node": 0.001}' \
     --working-dir "${SCRIPT_DIR}/launcher" \
-    --runtime-env-json="{
-        \"env_vars\": {
-            \"PYTHONPATH\": \"/root/Megatron-LM:/root/miles\",
-            \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-            \"MODEL_SCRIPT\": \"${MODEL_SCRIPT}\",
-            \"TOKENIZERS_PARALLELISM\": \"false\",
-            \"NCCL_DEBUG\": \"WARN\",
-            \"FI_PROVIDER\": \"efa\",
-            \"FI_EFA_USE_DEVICE_RDMA\": \"1\",
-            \"TENSORBOARD_DIR\": \"${TENSORBOARD_DIR:-}\"
-        }
-    }" \
+    --runtime-env-json="${RUNTIME_ENV_JSON}" \
     -- bash grpo_launch.sh "${TRAIN_ARGS[@]}"
 
 echo "[INFO] Job submitted. Monitor at http://localhost:8265"

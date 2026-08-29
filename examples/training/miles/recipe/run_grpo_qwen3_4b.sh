@@ -44,7 +44,8 @@ for var in MODEL_LOCAL MODEL_DIST PROMPT_DATA CHECKPOINT_DIR MODEL_SCRIPT RM_TYP
            COLOCATE TP_SIZE PP_SIZE CP_SIZE EP_SIZE ACTOR_NUM_NODES ACTOR_GPUS_PER_NODE \
            ROLLOUT_NUM_GPUS ROLLOUT_GPUS_PER_ENGINE NUM_ROLLOUT ROLLOUT_BATCH_SIZE \
            N_SAMPLES_PER_PROMPT GLOBAL_BATCH_SIZE MAX_TOKENS_PER_GPU ROLLOUT_MAX_RESPONSE_LEN \
-           ROLLOUT_TEMPERATURE LEARNING_RATE SAVE_INTERVAL EVAL_DATA CLUSTER_GPUS; do
+           ROLLOUT_TEMPERATURE LEARNING_RATE SAVE_INTERVAL EVAL_DATA CLUSTER_GPUS \
+           GPUS_PER_WORKER WORKER_REPLICAS; do
     if [[ -z "${!var:-}" ]]; then
         echo "[ERROR] ${var} is not set. Configure env_vars, or re-copy it from"
         echo "[ERROR] env_vars.colocated.example or env_vars.moe.example if it predates this variable."
@@ -82,7 +83,7 @@ esac
 # `08` satisfies ^[0-9]+$ but bash rejects it as invalid octal inside (( )) and [[ ]], so both
 # comparisons evaluated false and the recipe submitted anyway. Zero is invalid for every count.
 for _v in ACTOR_NUM_NODES ACTOR_GPUS_PER_NODE ROLLOUT_NUM_GPUS ROLLOUT_GPUS_PER_ENGINE \
-          CLUSTER_GPUS; do
+          CLUSTER_GPUS GPUS_PER_WORKER WORKER_REPLICAS; do
     if ! [[ "${!_v}" =~ ^[1-9][0-9]*$ ]]; then
         echo "[ERROR] ${_v} must be a positive decimal integer with no leading zero," >&2
         echo "[ERROR] got '${!_v}'." >&2
@@ -347,17 +348,7 @@ ray job submit \
     --address="http://127.0.0.1:8265" \
     --entrypoint-resources '{"gpu_node": 0.001}' \
     --working-dir "${SCRIPT_DIR}/launcher" \
-    --runtime-env-json="{
-        \"env_vars\": {
-            \"PYTHONPATH\": \"/root/Megatron-LM:/root/miles\",
-            \"MODEL_SCRIPT\": \"${MODEL_SCRIPT}\",
-            \"TOKENIZERS_PARALLELISM\": \"false\",
-            \"NCCL_DEBUG\": \"WARN\",
-            \"FI_PROVIDER\": \"efa\",
-            \"FI_EFA_USE_DEVICE_RDMA\": \"1\",
-            \"TENSORBOARD_DIR\": \"${TENSORBOARD_DIR:-}\"
-        }
-    }" \
+    --runtime-env-json="${RUNTIME_ENV_JSON}" \
     -- bash grpo_launch.sh "${TRAIN_ARGS[@]}"
 
 echo "[INFO] Job submitted. Monitor at http://localhost:8265"
