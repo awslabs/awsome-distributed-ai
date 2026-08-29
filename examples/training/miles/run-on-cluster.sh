@@ -112,7 +112,7 @@ done < <(kubectl -n "${NAMESPACE}" get pods -l "${SELECTOR}" \
            -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
 if [[ "${#HEADS[@]}" -eq 0 ]]; then
   echo "[ERROR] no Ray head pod matching '${SELECTOR}' in namespace '${NAMESPACE}'." >&2
-  echo "[ERROR] Deploy the RayCluster first (README step 5). If your cluster has a different" >&2
+  echo "[ERROR] Deploy the RayCluster first (README step 4). If your cluster has a different" >&2
   echo "[ERROR] metadata.name, pass --cluster <name>." >&2
   exit 1
 fi

@@ -86,7 +86,7 @@ export CHECKPOINT_DIR="/fsx/runs/qwen3-30b/ckpt"
 # SAVE_INTERVAL is kept at or above NUM_ROLLOUT so short smoke runs do not pay the
 # ~270s in-loop save cost on every rollout; the single end-of-run save still fires and
 # succeeded on every verification run (a torch_dist checkpoint is written to CHECKPOINT_DIR).
-# Reloading that checkpoint and the megatron2hf back-conversion are untested (README Known Issues).
+# Reloading that checkpoint and the megatron2hf back-conversion are untested.
 export SAVE_INTERVAL=1000
 export NUM_ROLLOUT=100
 export ROLLOUT_BATCH_SIZE=16

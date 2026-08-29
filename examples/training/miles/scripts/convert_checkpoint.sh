@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# STATUS: UNVERIFIED -- mirrors slime scripts/convert_checkpoint.sh; not executed on miles. Related: HF<->Megatron round-trip untested; see README Known Issues (save_model pickle-truncation).
+# STATUS: UNVERIFIED -- mirrors slime scripts/convert_checkpoint.sh; not executed on miles. The HF-to-Megatron direction is exercised; the reverse is not.
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 # ============================================================

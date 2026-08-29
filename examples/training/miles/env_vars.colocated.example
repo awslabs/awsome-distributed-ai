@@ -83,7 +83,7 @@ export RAY_CLUSTER_NAME="miles-ray"
 #
 # GPU_NODE_ROLE is the `node-role` label on your GPU pool, substituted into
 # kubernetes/raycluster.yaml's nodeSelector. Only this value is GPU-generation-specific; see
-# the README's Verification Status for what has and has not been run on which hardware.
+# the README's Hardware Requirements for what has been run on which hardware.
 # Node placement is a label KEY:VALUE pair, and BOTH are cluster-specific. The manifest
 # schedules workers on ${GPU_NODE_LABEL_KEY}:${GPU_NODE_ROLE} and the head on
 # ${CPU_NODE_LABEL_KEY}:${CPU_NODE_ROLE}. The defaults below use a custom key "node-role",
@@ -138,7 +138,7 @@ export CHECKPOINT_DIR="/fsx/runs/qwen3-4b/ckpt"
 # SAVE_INTERVAL is kept at or above NUM_ROLLOUT so short smoke runs do not pay the
 # ~270s in-loop save cost on every rollout; the single end-of-run save still fires and
 # succeeded on every verification run (a torch_dist checkpoint is written to CHECKPOINT_DIR).
-# Reloading that checkpoint and the megatron2hf back-conversion are untested (README Known Issues).
+# Reloading that checkpoint and the megatron2hf back-conversion are untested.
 export SAVE_INTERVAL=1000
 export NUM_ROLLOUT=100
 export ROLLOUT_BATCH_SIZE=16

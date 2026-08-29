@@ -179,38 +179,50 @@ docker build -t ${FULL_IMAGE} -f miles.Dockerfile .
 docker push ${FULL_IMAGE}
 ```
 
-If no node has a local Docker daemon, `kubernetes/buildkit-job.yaml` builds and pushes the image in-cluster with a rootless BuildKit Job:
+If no node has a local Docker daemon, `kubernetes/buildkit-job.yaml` builds and pushes the image in-cluster with a BuildKit Job. It runs `privileged: true`, so a namespace under the PodSecurity `restricted` profile rejects it:
 
 ```bash
 kubectl create configmap miles-build-context --from-file=Dockerfile=miles.Dockerfile -n "${NAMESPACE}"
 kubectl create secret docker-registry ecr-miles-push \
     --docker-server="${REGISTRY}" --docker-username=AWS \
     --docker-password="$(aws ecr get-login-password --region ${AWS_REGION})" -n "${NAMESPACE}"
-envsubst < kubernetes/buildkit-job.yaml | kubectl apply -f -
+bash scripts/render.sh kubernetes/buildkit-job.yaml | kubectl apply -f -
 ```
 
 ### 3. Download and Prepare the Model
 
 As in the sibling slime test case, this uses a data-prep pod and the Hugging Face CLI inside it. The command is `hf`: `huggingface-cli` is a stub in `huggingface_hub` 1.x that prints a deprecation notice and exits non-zero without downloading anything.
 
+The model to fetch comes from `MODEL_NAME` and `MODEL_LOCAL` in the env file, so this step follows the choice made in step 1 rather than naming a model of its own.
+
 ```bash
-envsubst < kubernetes/data-prep-pod.yaml | kubectl apply -f -
+source env_vars
+bash scripts/render.sh kubernetes/data-prep-pod.yaml | kubectl apply -f -
 kubectl wait --for=condition=Ready pod/data-prep -n "${NAMESPACE}" --timeout=300s
-kubectl exec -it data-prep -n "${NAMESPACE}" -- bash
-# Inside the pod:
+kubectl exec -it data-prep -n "${NAMESPACE}" -- \
+    env MODEL_NAME="${MODEL_NAME}" MODEL_LOCAL="${MODEL_LOCAL}" bash
+```
+
+Then, inside the pod:
+
+```bash
 pip install -U "huggingface_hub[cli]"
-hf download Qwen/Qwen3-4B --local-dir /fsx/models/Qwen3-4B
+hf download "${MODEL_NAME}" --local-dir "${MODEL_LOCAL}"
 hf download --repo-type dataset zhuzilin/dapo-math-17k --local-dir /fsx/data/dapo-math-17k
 hf download --repo-type dataset zhuzilin/aime-2024 --local-dir /fsx/data/aime-2024
 ```
 
 ### 4. Deploy the Ray Cluster
 
+KubeRay does not recreate existing pods when a RayCluster's pod template changes, so applying an updated manifest over a running cluster leaves the old head and workers as they were. If you are redeploying after changing container env, resources, the image, or the topology, delete the cluster first; the `delete` below is a no-op on a first run.
+
 ```bash
 source env_vars
-envsubst < kubernetes/raycluster.yaml | kubectl apply -f -
-kubectl get pods -w -n "${NAMESPACE}" -l ray.io/is-ray-node=yes   # Ctrl-C once head and workers are Running
-kubectl port-forward -n "${NAMESPACE}" svc/miles-ray-head-svc 8265:8265 &
+kubectl delete raycluster "${RAY_CLUSTER_NAME}" -n "${NAMESPACE}" --ignore-not-found
+bash scripts/render.sh kubernetes/raycluster.yaml | kubectl apply -f -
+kubectl get pods -w -n "${NAMESPACE}" \
+    -l "ray.io/cluster=${RAY_CLUSTER_NAME},ray.io/is-ray-node=yes"
+kubectl port-forward -n "${NAMESPACE}" "svc/${RAY_CLUSTER_NAME}-head-svc" 8265:8265 &
 ```
 
 The manifest schedules GPU workers on the GPU pool and the Ray head on the same pool. The head uses no GPU but must sit on a CUDA-capable node; see [Known Issues](#known-issues).
@@ -273,7 +285,16 @@ miles adds the sm_103 Transformer Engine FA2 whitelist patch that the sibling sl
 
 2. **Qwen2.5-72B does not fit the 16-GPU H200 layout.** The disaggregated TP4 PP2 configuration runs out of memory on 2x p5en.48xlarge. It needs a larger cluster or optimizer and activation offload, neither of which has been run here.
 
-3. **The Ray head must run on a CUDA-capable node.** miles's control actors reach `transformer_engine` through `megatron.core` at import time and that dlopens `libcuda.so.1`, even with `num-gpus 0`. Two settings together satisfy it: the manifest places the head on the GPU pool rather than a CPU node, and the head container sets `NVIDIA_VISIBLE_DEVICES=none`, which asks the NVIDIA container runtime for the driver libraries without assigning a GPU device. `nvidia-smi` in the head therefore reports no devices, which is expected. Requiring a driver-capable node for a zero-GPU control process is an upstream limitation in miles, not a constraint introduced by this test case.
+3. **The Ray head must run on a CUDA-capable node.** miles's control actors reach `transformer_engine` through `megatron.core` at import time and that dlopens `libcuda.so.1`, even with `num-gpus 0`. Two settings together satisfy it: the manifest places the head on the GPU pool rather than a CPU node, and the head container sets `NVIDIA_VISIBLE_DEVICES=none`, which asks the NVIDIA container runtime for the driver libraries without assigning a GPU device. `nvidia-smi` in the head therefore reports no devices, which is expected.
+
+   This mechanism depends on the cluster's container runtime honouring the variable. A runtime configured with `accept-nvidia-visible-devices-envvar-when-unprivileged = false`, or a device plugin using the `volume-mounts` device-list strategy, ignores it, and the head is then left without a driver exactly as if the variable were `void`. The symptom is indistinguishable: the job dies about 46 seconds after submission with `OSError: libcuda.so.1`. Check the head before submitting:
+
+   ```bash
+   kubectl exec -n "${NAMESPACE}" <ray-head-pod> -- \
+       python -c "import ctypes; ctypes.CDLL('libcuda.so.1'); print('driver present')"
+   ```
+
+   If that fails, either change the runtime configuration or request `nvidia.com/gpu: 1` for the head, which costs a GPU but obtains the driver through the device plugin instead. Requiring a driver-capable node for a zero-GPU control process is an upstream limitation in miles, not a constraint introduced by this test case.
 
 ## Reward Function
 
@@ -297,21 +318,36 @@ miles/
 │   ├── data-prep-pod.yaml           # model and data download
 │   └── reward-service.yaml          # CPU reward service
 ├── recipe/                          # GRPO recipes and launcher
-└── scripts/                         # convert_checkpoint.sh, evaluate.sh
+└── scripts/
+    ├── convert_checkpoint.sh        # HF <-> Megatron
+    ├── derive_topology.sh           # sourced by env_vars*: validates and derives the topology
+    ├── evaluate.sh                  # AIME-2024
+    └── render.sh                    # envsubst a manifest, refusing an incomplete one
 ```
 
 ## Software Versions
 
+The base image is pinned by digest, and a digest does not name a source commit: the upstream build takes `MILES_COMMIT=main`. The table therefore identifies the image by what does pin it, and the version rows are what that image resolved rather than the floors its metadata declares.
+
 | Component | Version |
 |-----------|---------|
-| miles | `radixark/miles` at commit `fc04f66` |
-| Base image | `radixark/miles`, pinned by `sha256` digest in `miles.Dockerfile` |
-| SGLang | `sglang-miles` branch, based on `v0.5.16` |
+| Base image | `radixark/miles@sha256:ca0bb593dd6f...`, tag `dev-202607310056`, built 2026-07-31 |
+| miles | the commit `main` pointed at on 2026-07-31; read it with `git -C /root/miles rev-parse HEAD` inside the image |
+| SGLang | `0.5.17.dev32+g3fe50ed`: the `sglang-miles` fork installed over a `lmsysorg/sglang:v0.5.16` base, so the installed version is not the base image tag |
 | Megatron-LM | radixark fork, `miles-main` |
-| Ray | 2.55.1 |
+| Ray | 2.56.1. The dependency declares only `ray[default]>=2.55.1`, so the image resolved a newer release than that floor |
 | CUDA | 13.0.1 |
+| NCCL | 2.28.3 |
 | PyTorch | 2.11.0 |
+| numpy | 2.3.5. `requirements.txt` argues for `<2`; that describes the sibling slime build and is not installed here |
 | EFA installer | 1.48.0 |
+
+The miles commit and the Python package versions can be read out of the running image; the base digest and the CUDA, NCCL and EFA rows come from the registry and the image metadata instead:
+
+```bash
+kubectl exec -n "${NAMESPACE}" <ray-pod> -- bash -lc \
+    'git -C /root/miles rev-parse --short HEAD; python -c "import ray, sglang, numpy, torch; print(ray.__version__, sglang.__version__, numpy.__version__, torch.__version__)"'
+```
 
 ## Troubleshooting
 
@@ -324,8 +360,8 @@ kubectl describe pod <pod>
 
 **Ray workers cannot connect to the head**
 ```bash
-kubectl get svc miles-ray-head-svc -n "${NAMESPACE}"
-kubectl exec <worker-pod> -n "${NAMESPACE}" -- nslookup miles-ray-head-svc
+kubectl get svc "${RAY_CLUSTER_NAME}-head-svc" -n "${NAMESPACE}"
+kubectl exec <worker-pod> -n "${NAMESPACE}" -- nslookup "${RAY_CLUSTER_NAME}-head-svc"
 ```
 Separately, if workers are killed mid-run rather than failing to connect, ensure `RAY_memory_monitor_refresh_ms=0` is set to disable the memory monitor.
 

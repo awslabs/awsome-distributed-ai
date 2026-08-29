@@ -1,9 +1,11 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 apiVersion: ray.io/v1
 kind: RayCluster
 metadata:
   labels:
     app: miles-grpo
-  name: miles-ray
+  name: ${RAY_CLUSTER_NAME}
   namespace: ${NAMESPACE}
 spec:
   enableInTreeAutoscaling: false
@@ -33,6 +35,13 @@ spec:
           # actor scheduled here dies with OSError: libcuda.so.1 seconds after submission.
           - name: NVIDIA_VISIBLE_DEVICES
             value: none
+          # NVIDIA_VISIBLE_DEVICES=none injects only the capabilities named here, and
+          # libcuda.so.1 comes from "compute". The nvidia/cuda base under miles sets this
+          # already, so it is stated rather than changed: the head's whole reason for sitting on
+          # a GPU node is that one library, and inheriting it implicitly means a base image
+          # change could remove it with no sign in this manifest.
+          - name: NVIDIA_DRIVER_CAPABILITIES
+            value: compute,utility
           - name: RAY_memory_monitor_refresh_ms
             value: '0'
           - name: PYTHONPATH
@@ -81,28 +90,27 @@ spec:
             # shared memory; the GPU workers (below) get the large 256Gi /dev/shm.
             sizeLimit: 8Gi
           name: dshm
-        # The head MUST land on a node whose host carries the CUDA driver: miles's Ray control
-        # actors (e.g. the rollout manager) import Megatron/transformer_engine at startup even
-        # though they request num-gpus 0, and that import dlopens libcuda.so.1. Both halves are
-        # required -- a driver on the host AND NVIDIA_VISIBLE_DEVICES=none above, which is what
-        # makes the runtime mount it into this container. Point ${CPU_NODE_ROLE} at a GPU pool's
-        # node-role label; the default env sets it equal to ${GPU_NODE_ROLE} so the head
-        # co-locates on a GPU node (it still runs num-gpus 0 and consumes no GPU, only the
-        # node's CPU/disk). Do NOT place the head on a CPU-only pool. The toleration below lets
-        # it schedule onto the (tainted) GPU pool.
+        # The head needs a host with the CUDA driver, because its control actors dlopen
+        # libcuda.so.1 at import even at num-gpus 0; see README Known Issues. Point
+        # ${CPU_NODE_ROLE} at a GPU pool's node-role label -- the default env sets it equal to
+        # ${GPU_NODE_ROLE} -- and not at a CPU-only pool. The toleration lets it schedule onto
+        # the tainted GPU pool.
         nodeSelector:
           ${CPU_NODE_LABEL_KEY}: ${CPU_NODE_ROLE}
         tolerations:
         - key: nvidia.com/gpu
           operator: Exists
           effect: NoSchedule
-  rayVersion: 2.55.1
+  # Must match the ray in ${FULL_IMAGE}; KubeRay uses it for compatibility decisions. The
+  # dependency chain only declares ray[default]>=2.55.1, so the pinned base resolved a newer
+  # release than that floor. Confirm before changing the base:
+  #   python -c "import ray; print(ray.__version__)"
+  rayVersion: 2.56.1
   workerGroupSpecs:
   # Worker (GPU node) count is ${WORKER_REPLICAS}. For a COLOCATED run this equals
   # ACTOR_NUM_NODES; for a DISAGGREGATED run (COLOCATE=false) the actor and rollout GPU pools
-  # are separate, so it must cover BOTH: ceil((ACTOR_NUM_NODES*ACTOR_GPUS_PER_NODE +
-  # ROLLOUT_NUM_GPUS) / GPUS_PER_WORKER). Setting it to ACTOR_NUM_NODES alone under-sizes a
-  # disaggregated run
+  # are separate, so it covers both, sized per pool by scripts/derive_topology.sh. Setting it to
+  # ACTOR_NUM_NODES alone under-sizes a disaggregated run
   # and the job waits forever on placement it can never get. env_vars derives it, along with
   # CLUSTER_GPUS = WORKER_REPLICAS x GPUS_PER_WORKER, which the recipes check a request against.
   # podAntiAffinity (below) keeps the workers on separate nodes so a multi-node actor spans them.

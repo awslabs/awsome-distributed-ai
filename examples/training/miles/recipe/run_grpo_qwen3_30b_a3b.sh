@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # STATUS: Verified -- trains cleanly (colocated, 2 nodes / 16 GPU H200). GRPO steps run to
 #   completion with --colocate + --use-distributed-optimizer + triton MoE runner, and the
 #   resulting generation is healthy: rollout/raw_reward 0.578, rollout/repetition_frac 0.0
@@ -8,12 +10,10 @@
 #   once (moe_tp>1 and moe_ep>1) hits a FlashInfer allreduce-fusion bug in this SGLang build
 #   that drops the moe-tp reduce and yields degenerate, zero-reward text; the recipe detects
 #   that geometry and disables the fusion (--sglang-enforce-disable-flashinfer-allreduce-fusion)
-#   so the combined path trains correctly too. See README.md Known Issues item 2. The
+#   so the combined path trains correctly too. See README.md Known Issues item 1. The
 #   disaggregated actor-8 layout (see the parent slime recipe) needs B300 288GB
 #   and is UNVERIFIED on H200; colocated 16-GPU with the distributed optimizer is the
 #   H200-fitting layout and is the one shipped as default here.
-# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-# SPDX-License-Identifier: MIT-0
 # ============================================================
 # miles GRPO Training — Qwen3-30B-A3B MoE on HyperPod EKS
 # (Colocated Mode: training and rollout time-share the same 16 GPUs)
@@ -145,12 +145,12 @@ SGLANG_MOE_TP=$(( ROLLOUT_GPUS_PER_ENGINE / EP_SIZE ))
 # reward. Disabling the fusion restores the correct two-stage reduce and the combined
 # geometry trains cleanly. Pure expert-parallel (moe_tp=1, EP_SIZE == ROLLOUT_GPUS_PER_ENGINE)
 # and pure tensor-parallel (moe_ep=1) are unaffected and leave the fusion on. See
-# README.md Known Issues item 2.
+# README.md Known Issues item 1.
 SGLANG_FUSION_ARGS=()
 if (( EP_SIZE > 1 && SGLANG_MOE_TP > 1 )); then
     MOE_GEOM_NOTE="(TP+EP; allreduce fusion disabled)"
     echo "[INFO] Rollout MoE runs moe_tp=${SGLANG_MOE_TP} x moe_ep=${EP_SIZE} (both >1);"
-    echo "[INFO] disabling FlashInfer allreduce fusion for this geometry (README Known Issues item 2)."
+    echo "[INFO] disabling FlashInfer allreduce fusion for this geometry (README Known Issues item 1)."
     SGLANG_FUSION_ARGS+=(--sglang-enforce-disable-flashinfer-allreduce-fusion)
 elif (( SGLANG_MOE_TP == 1 )); then
     MOE_GEOM_NOTE="(pure EP)"
@@ -289,8 +289,9 @@ TRAIN_ARGS=(
     # Lowercase only: this reaches uvicorn's log_level, whose LOG_LEVELS dict has no "WARN"
     # key, and the KeyError kills the rollout server before it binds. See README (miles-specific requirements).
     --sglang-log-level warning
-    # miles calls Megatron's parse_args without ignore_unknown_args, so a flag SGLang has
-    # removed aborts the job at startup rather than being ignored.
+    # Check any --sglang-* flag against the SGLang version in the base image: miles calls
+    # Megatron's parse_args without ignore_unknown_args, so a flag SGLang has removed aborts
+    # the job at startup rather than being ignored.
 )
 
 # Optional extra train.py flags injected via EXTRA_TRAIN_ARGS, same mechanism as
