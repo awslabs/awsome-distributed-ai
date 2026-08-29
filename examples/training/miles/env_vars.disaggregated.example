@@ -13,7 +13,10 @@
 #   cp env_vars.disaggregated.example env_vars.disaggregated
 #   source env_vars && source env_vars.disaggregated
 #
-# Sourced AFTER the base env has derived the topology, so it must set no topology value.
+# This overlay is sourced AFTER the base env file has derived WORKER_REPLICAS and CLUSTER_GPUS,
+# so it must not set any topology value: COLOCATE, ACTOR_NUM_NODES, ACTOR_GPUS_PER_NODE,
+# ROLLOUT_NUM_GPUS, ROLLOUT_GPUS_PER_ENGINE, GPUS_PER_WORKER. Change those in the base env file,
+# or start from env_vars.moe.example.
 #
 # This profile deliberately increases load on BOTH tiers:
 #   * GPU tier  -- larger rollout batch, more samples/prompt, longer responses
@@ -75,7 +78,8 @@ export REWARD_REPLICAS=4               # one per node
 export REWARD_TORCH_THREADS=6
 
 # ----- Reward scoring limits -----
-# Ceiling per verification, enforced in a killable worker process, and how many run at once.
+# Wall-clock ceiling on one math_verify call, enforced in a worker process the service can kill,
+# and how many verifications run at once (one process each).
 export REWARD_VERIFY_TIMEOUT_S=10
 export REWARD_VERIFY_SLOTS=4
 export RM_URL="http://miles-reward.${NAMESPACE}.svc.cluster.local:8000/score"

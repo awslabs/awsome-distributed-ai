@@ -80,6 +80,11 @@ spec:
               value: "${REWARD_MODEL_NAME}"
             - name: TORCH_NUM_THREADS
               value: "${REWARD_TORCH_THREADS}"
+            # Wall-clock ceiling per verification, and how many run at once.
+            - name: REWARD_VERIFY_TIMEOUT_S
+              value: "${REWARD_VERIFY_TIMEOUT_S}"
+            - name: REWARD_VERIFY_SLOTS
+              value: "${REWARD_VERIFY_SLOTS}"
             # Create the secret with:
             #   kubectl create secret generic hf-token --from-literal=HF_TOKEN=$HF_TOKEN -n $NAMESPACE
             - name: HF_TOKEN
@@ -106,18 +111,24 @@ spec:
               port: 8000
             periodSeconds: 10
             failureThreshold: 30   # up to ~5 min for a cold model download/load
+          # readiness, not liveness: on scoring failures a pod must leave the Service, not
+          # restart. At the 1s default a slow node looks like a broken scorer.
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: 8000
             initialDelaySeconds: 20
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health
               port: 8000
             initialDelaySeconds: 60
             periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
 ---
 apiVersion: v1
 kind: Service
