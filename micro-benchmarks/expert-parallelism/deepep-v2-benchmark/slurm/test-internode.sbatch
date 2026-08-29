@@ -34,8 +34,6 @@ srun --mpi=pmix --cpu-bind=none \
         # Pin the EFA-GDA GIN backend (type 5); unset, NCCL selects the CPU-proxy backend.
         export NCCL_GIN_TYPE=5
         export NCCL_SYM_GIN_KERNELS_ENABLE=0
-        export EP_NCCL_ROOT_DIR=$NCCL_HOME
-        export LD_PRELOAD=$NCCL_HOME/lib/libnccl.so.2
 
         export TORCHDYNAMO_DISABLE=1
         export TORCH_COMPILE_DISABLE=1
