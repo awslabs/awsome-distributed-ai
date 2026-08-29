@@ -25,7 +25,6 @@ ARG MILES_BASE_TAG=dev-202607310056
 ARG MILES_BASE_DIGEST=sha256:ca0bb593dd6f4011b444f64d478b72c213e4c70421f4d7f94e593a709562429e
 FROM radixark/miles@${MILES_BASE_DIGEST}
 
-ARG GDRCOPY_VERSION=v2.5.2
 ARG EFA_INSTALLER_VERSION=1.48.0
 # NOTE: these two ARGs are REFERENCE VALUES ONLY -- nothing below installs from them.
 # NCCL comes from the miles base image and aws-ofi-nccl is the plugin bundled with the
@@ -43,13 +42,23 @@ ENV TZ=Etc/UTC
 # lmsysorg/sglang (nvidia/cuda:13.0.1), which ships InfiniBand userspace libs;
 # strip them so the EFA installer's libfabric/libibverbs take precedence.
 ######################
+# update stays in this RUN: a separate layer caches independently and would be reused against a
+# stale index. The tolerance is on the remove alone, because these InfiniBand packages are absent
+# from some revisions of the base image and apt fails on a package it cannot find. The outcome is
+# asserted, because if one survives, the EFA libfabric does not take precedence and the failure
+# surfaces much later as an NCCL error inside training.
 RUN apt-get update -y \
-    && apt-get remove -y --allow-change-held-packages \
-        ibverbs-utils libibverbs-dev libibverbs1 libmlx5-1 || true
-
-RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated \
-    autoconf automake build-essential cmake curl gcc gdb git jq kmod libtool \
-    openssh-client openssh-server vim \
+    && { apt-get remove -y --allow-change-held-packages \
+             ibverbs-utils libibverbs-dev libibverbs1 libmlx5-1 || true; } \
+    && for p in ibverbs-utils libibverbs-dev libibverbs1 libmlx5-1; do \
+           if dpkg -l "$p" 2>/dev/null | grep -q "^ii"; then \
+               echo "ERROR: $p is still installed after the remove step." >&2; \
+               exit 1; \
+           fi; \
+       done \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+           autoconf automake build-essential cmake curl gcc gdb git jq kmod libtool \
+           openssh-client openssh-server vim \
     && apt-get autoremove -y
 
 # Permissive SSH for in-cluster MPI/NCCL bootstrap. Port 22 must NOT be exposed
@@ -65,11 +74,8 @@ RUN rm -rf /root/.ssh/ && mkdir -p /root/.ssh/ \
     && printf "Host *\n  StrictHostKeyChecking no\n" >> /root/.ssh/config
 
 #################################################
-## NVIDIA GDRCopy (GPUDirect RDMA copy library)
-RUN git clone -b ${GDRCOPY_VERSION} https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
-    && cd /tmp/gdrcopy \
-    && make prefix=/opt/gdrcopy install \
-    && rm -rf /tmp/gdrcopy
+## CUDA forward-compat driver
+#
 # Physically remove the CUDA forward-compat driver. The slime (NGC) image relied
 # on it, but NGC's entrypoint enables compat only when compat >= host driver;
 # the nvidia/cuda base under miles has no such guard. This base ships an OLDER
@@ -80,10 +86,6 @@ RUN git clone -b ${GDRCOPY_VERSION} https://github.com/NVIDIA/gdrcopy.git /tmp/g
 # this image's CUDA 13.0 toolkit, so we delete compat outright (belt-and-suspenders
 # vs merely dropping it from LD_LIBRARY_PATH, which a future env edit could undo).
 RUN rm -rf /usr/local/cuda/compat /usr/local/cuda-*/compat
-ENV LD_LIBRARY_PATH=/opt/gdrcopy/lib:$LD_LIBRARY_PATH
-ENV LIBRARY_PATH=/opt/gdrcopy/lib:$LIBRARY_PATH
-ENV CPATH=/opt/gdrcopy/include:${CPATH:-}
-ENV PATH=/opt/gdrcopy/bin:$PATH
 
 #################################################
 ## AWS EFA installer (libfabric + aws-ofi-nccl plugin, no kmod in-container)
@@ -95,7 +97,22 @@ RUN cd $HOME \
     && rm -rf $HOME/aws-efa-installer $HOME/aws-efa-installer-*.tar.gz \
     && rm -rf /var/lib/apt/lists/*
 
-# EFA / aws-ofi-nccl library paths. Placed AFTER the gdrcopy block so the EFA
+# --no-verify above is unavoidable: the installer verifies with `fi_info -p efa`, which needs an
+# EFA device that a build node does not have. That leaves the build unchecked unless something
+# replaces it, so assert on the artifacts instead; the provider check belongs at runtime.
+# The plugin is matched by glob because its name and directory have moved between installer
+# versions, and pinning one path would turn a rename into a misleading build failure.
+RUN set -eu; \
+    for f in /opt/amazon/efa/bin/fi_info /opt/amazon/efa/lib/libfabric.so; do \
+        [ -e "$f" ] || { echo "ERROR: EFA installer did not produce $f" >&2; exit 1; }; \
+    done; \
+    if ! find /opt/amazon -name 'libnccl-net*.so*' -print -quit | grep -q .; then \
+        echo "ERROR: no aws-ofi-nccl plugin (libnccl-net*.so) under /opt/amazon" >&2; \
+        exit 1; \
+    fi; \
+    /opt/amazon/efa/bin/fi_info --version
+
+# EFA / aws-ofi-nccl library paths. Placed AFTER the base-image layers so the EFA
 # libfabric resolves ahead of any base-image InfiniBand remnants. The host-driver
 # dirs are appended at the END: the GPU operator / nvidia-container-toolkit injects
 # libcuda.so.1 into /usr/lib64 (AL2023/Bottlerocket) or /usr/lib/x86_64-linux-gnu

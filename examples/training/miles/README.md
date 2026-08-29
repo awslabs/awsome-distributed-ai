@@ -312,7 +312,6 @@ miles/
 | CUDA | 13.0.1 |
 | PyTorch | 2.11.0 |
 | EFA installer | 1.48.0 |
-| GDRCopy | v2.5.2 |
 
 ## Troubleshooting
 
