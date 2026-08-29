@@ -1,0 +1,372 @@
+{
+  "analysis_script": {
+    "path": "/mnt/fsx/ubuntu/workspace/projects/adt/adai-kimi-k2-megatron-ep-codex/3.test_cases/megatron/megatron-bridge/kimi-k2/benchmarks/compare_training_curves.py",
+    "sha256": "e09cc2e581fdf1501126acbe1739aa20cebbf8468136b7be27b98db81cc31336"
+  },
+  "combined_iteration_metrics": {
+    "path": "iteration-metrics.csv",
+    "sha256": "d3b600ff32b65586629b8914b4ee579421d4d4386725fabbb8814299aa2af725"
+  },
+  "figures": {
+    "throughput-no-overlap": {
+      "loss_curves": [
+        "loss-curves-throughput-no-overlap.svg",
+        "loss-curves-throughput-no-overlap.png"
+      ],
+      "training_output_curves": [
+        "training-output-curves-throughput-no-overlap.svg",
+        "training-output-curves-throughput-no-overlap.png"
+      ],
+      "training_output_deltas": [
+        "training-output-deltas-throughput-no-overlap.svg",
+        "training-output-deltas-throughput-no-overlap.png"
+      ]
+    }
+  },
+  "groups": [
+    {
+      "cell": "throughput-no-overlap",
+      "common_control_mismatches": {},
+      "comparisons_vs_nccl_alltoall": {
+        "deepep-v1-nvshmem": {
+          "first_failing_iteration_dimensionless": null,
+          "gradient_norm_comparison_source": "optimizer_update_samples_full_precision",
+          "gradient_norm_tolerance_parameter_gradient_units": 0.91650390625,
+          "gradient_norm_within_nccl_bf16_bound": true,
+          "iterations_compared_dimensionless": 8,
+          "loss_curve_within_nccl_self_repeat_tolerance": true,
+          "max_absolute_gradient_norm_delta_parameter_gradient_units": 0.00031757354736328125,
+          "max_absolute_loss_delta_dimensionless": 9.399999999981645e-05,
+          "max_absolute_sampled_update_l2_delta_parameter_units": 1.5852768669766953e-05,
+          "optimizer_update_sample_layout_matches_nccl": true,
+          "per_iteration": [
+            {
+              "absolute_loss_delta_dimensionless": 6.999999999912632e-05,
+              "iteration_dimensionless": 1,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 2.0000000001019203e-05,
+              "iteration_dimensionless": 2,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 3.900000000101045e-05,
+              "iteration_dimensionless": 3,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 9.399999999981645e-05,
+              "iteration_dimensionless": 4,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 2.9999999999752447e-05,
+              "iteration_dimensionless": 5,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 2.4000000000690136e-05,
+              "iteration_dimensionless": 6,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 5.2999999999858716e-05,
+              "iteration_dimensionless": 7,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 4.600000000021254e-05,
+              "iteration_dimensionless": 8,
+              "within_nccl_self_repeat_tolerance": true
+            }
+          ],
+          "route_hashes_match_nccl": true,
+          "sampled_elements_dimensionless": 67108864,
+          "sampled_update_l2_tolerance_parameter_units": 0.0009765625,
+          "sampled_update_l2_within_nccl_bf16_bound": true,
+          "short_training_output_norm_gate": true,
+          "short_training_output_norm_gate_required": true
+        },
+        "deepep-v2-gin-gda": {
+          "first_failing_iteration_dimensionless": null,
+          "gradient_norm_comparison_source": "optimizer_update_samples_full_precision",
+          "gradient_norm_tolerance_parameter_gradient_units": 0.91650390625,
+          "gradient_norm_within_nccl_bf16_bound": true,
+          "iterations_compared_dimensionless": 8,
+          "loss_curve_within_nccl_self_repeat_tolerance": true,
+          "max_absolute_gradient_norm_delta_parameter_gradient_units": 0.00014352798461914062,
+          "max_absolute_loss_delta_dimensionless": 0.00014700000000011926,
+          "max_absolute_sampled_update_l2_delta_parameter_units": 7.273626715667558e-06,
+          "optimizer_update_sample_layout_matches_nccl": true,
+          "per_iteration": [
+            {
+              "absolute_loss_delta_dimensionless": 5.9999999999504894e-05,
+              "iteration_dimensionless": 1,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 9.000000000014552e-05,
+              "iteration_dimensionless": 2,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 6.000000000128125e-05,
+              "iteration_dimensionless": 3,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 6.599999999945538e-05,
+              "iteration_dimensionless": 4,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 0.00014700000000011926,
+              "iteration_dimensionless": 5,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 1.5999999999571912e-05,
+              "iteration_dimensionless": 6,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 6.500000000020378e-05,
+              "iteration_dimensionless": 7,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 1.7999999999851468e-05,
+              "iteration_dimensionless": 8,
+              "within_nccl_self_repeat_tolerance": true
+            }
+          ],
+          "route_hashes_match_nccl": true,
+          "sampled_elements_dimensionless": 67108864,
+          "sampled_update_l2_tolerance_parameter_units": 0.0009765625,
+          "sampled_update_l2_within_nccl_bf16_bound": true,
+          "short_training_output_norm_gate": true,
+          "short_training_output_norm_gate_required": true
+        },
+        "uccl": {
+          "first_failing_iteration_dimensionless": null,
+          "gradient_norm_comparison_source": "optimizer_update_samples_full_precision",
+          "gradient_norm_tolerance_parameter_gradient_units": 0.91650390625,
+          "gradient_norm_within_nccl_bf16_bound": true,
+          "iterations_compared_dimensionless": 8,
+          "loss_curve_within_nccl_self_repeat_tolerance": true,
+          "max_absolute_gradient_norm_delta_parameter_gradient_units": 0.0002002716064453125,
+          "max_absolute_loss_delta_dimensionless": 0.00023499999999998522,
+          "max_absolute_sampled_update_l2_delta_parameter_units": 1.0866308141579961e-05,
+          "optimizer_update_sample_layout_matches_nccl": true,
+          "per_iteration": [
+            {
+              "absolute_loss_delta_dimensionless": 6.999999999912632e-05,
+              "iteration_dimensionless": 1,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 9.000000000014552e-05,
+              "iteration_dimensionless": 2,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 0.00023499999999998522,
+              "iteration_dimensionless": 3,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 1.4000000000180535e-05,
+              "iteration_dimensionless": 4,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 6.699999999959516e-05,
+              "iteration_dimensionless": 5,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 8.999999999481645e-06,
+              "iteration_dimensionless": 6,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 6.4000000000064e-05,
+              "iteration_dimensionless": 7,
+              "within_nccl_self_repeat_tolerance": true
+            },
+            {
+              "absolute_loss_delta_dimensionless": 6.199999999978445e-05,
+              "iteration_dimensionless": 8,
+              "within_nccl_self_repeat_tolerance": true
+            }
+          ],
+          "route_hashes_match_nccl": true,
+          "sampled_elements_dimensionless": 67108864,
+          "sampled_update_l2_tolerance_parameter_units": 0.0009765625,
+          "sampled_update_l2_within_nccl_bf16_bound": true,
+          "short_training_output_norm_gate": true,
+          "short_training_output_norm_gate_required": true
+        }
+      },
+      "duplicate_or_missing_arm_cardinality": [],
+      "missing_arms": [],
+      "repeat_dimensionless": 1,
+      "runs": {
+        "deepep-v1-nvshmem": {
+          "all_metrics_finite": true,
+          "artifact_path": "/mnt/fsx/ubuntu/workspace/artifacts/adai-kimi-k2-megatron-ep/20260826T235808Z-k2-b200-loss-gate-r2/26.08/kimi-k2/throughput-no-overlap/repeat-1/deepep-v1-nvshmem",
+          "environment_sha256": "ba6ca7882fa6148f63eb7f70ee7f4bc8a4dfa1252b7c2c3c81542d80cc8e585b",
+          "iteration_metrics_complete": true,
+          "iterations_expected_dimensionless": 8,
+          "iterations_observed_dimensionless": 8,
+          "learning_rate_matches_environment": true,
+          "loss_first_dimensionless": 12.03581,
+          "loss_last_dimensionless": 2.296489,
+          "loss_max_dimensionless": 12.03581,
+          "loss_min_dimensionless": 2.296489,
+          "no_skipped_or_nan_iterations": true,
+          "optimizer_update_samples_observed": 8,
+          "optimizer_update_samples_valid": true,
+          "route_hashes_complete": true,
+          "route_hashes_expected": 32,
+          "route_hashes_observed": 32
+        },
+        "deepep-v2-gin-gda": {
+          "all_metrics_finite": true,
+          "artifact_path": "/mnt/fsx/ubuntu/workspace/artifacts/adai-kimi-k2-megatron-ep/20260826T235808Z-k2-b200-loss-gate-r2/26.08/kimi-k2/throughput-no-overlap/repeat-1/deepep-v2-gin-gda",
+          "environment_sha256": "31c747d1f4ec30e2143d08d271a96773cdbe07570b5083dc93c6781c9e1bf60e",
+          "iteration_metrics_complete": true,
+          "iterations_expected_dimensionless": 8,
+          "iterations_observed_dimensionless": 8,
+          "learning_rate_matches_environment": true,
+          "loss_first_dimensionless": 12.0358,
+          "loss_last_dimensionless": 2.296517,
+          "loss_max_dimensionless": 12.0358,
+          "loss_min_dimensionless": 2.296517,
+          "no_skipped_or_nan_iterations": true,
+          "optimizer_update_samples_observed": 8,
+          "optimizer_update_samples_valid": true,
+          "route_hashes_complete": true,
+          "route_hashes_expected": 32,
+          "route_hashes_observed": 32
+        },
+        "nccl-alltoall": {
+          "all_metrics_finite": true,
+          "artifact_path": "/mnt/fsx/ubuntu/workspace/artifacts/adai-kimi-k2-megatron-ep/20260826T235808Z-k2-b200-loss-gate-r2/26.08/kimi-k2/throughput-no-overlap/repeat-1/nccl-alltoall",
+          "environment_sha256": "d15ab37dbb395e8f5cc5ae7f7fce5398402960a9d9c4ca8d33df5912bfde2b5e",
+          "iteration_metrics_complete": true,
+          "iterations_expected_dimensionless": 8,
+          "iterations_observed_dimensionless": 8,
+          "learning_rate_matches_environment": true,
+          "loss_first_dimensionless": 12.03574,
+          "loss_last_dimensionless": 2.296535,
+          "loss_max_dimensionless": 12.03574,
+          "loss_min_dimensionless": 2.296535,
+          "no_skipped_or_nan_iterations": true,
+          "optimizer_update_samples_observed": 8,
+          "optimizer_update_samples_valid": true,
+          "route_hashes_complete": true,
+          "route_hashes_expected": 32,
+          "route_hashes_observed": 32
+        },
+        "uccl": {
+          "all_metrics_finite": true,
+          "artifact_path": "/mnt/fsx/ubuntu/workspace/artifacts/adai-kimi-k2-megatron-ep/20260826T235808Z-k2-b200-loss-gate-r2/26.08/kimi-k2/throughput-no-overlap/repeat-1/uccl",
+          "environment_sha256": "fbc9fcc5eef5bdd155c22798e1c1e959efc71827cd0c6ea60965171d7f041763",
+          "iteration_metrics_complete": true,
+          "iterations_expected_dimensionless": 8,
+          "iterations_observed_dimensionless": 8,
+          "learning_rate_matches_environment": true,
+          "loss_first_dimensionless": 12.03581,
+          "loss_last_dimensionless": 2.296473,
+          "loss_max_dimensionless": 12.03581,
+          "loss_min_dimensionless": 2.296473,
+          "no_skipped_or_nan_iterations": true,
+          "optimizer_update_samples_observed": 8,
+          "optimizer_update_samples_valid": true,
+          "route_hashes_complete": true,
+          "route_hashes_expected": 32,
+          "route_hashes_observed": 32
+        }
+      },
+      "status": "PASS"
+    }
+  ],
+  "loss_tolerance_dimensionless": 0.0011148452758789062,
+  "loss_tolerance_source": "/mnt/fsx/ubuntu/workspace/artifacts/adai-kimi-k2-megatron-ep/20260824T030931Z-kimi-k2-megatron-ep-b200-256g/26.08/kimi-k2/gate-b-16r-t512-ref/repeat-1/nccl-alltoall/node-0/nccl-self-repeat-envelope.json",
+  "loss_tolerance_source_sha256": "3db7291cb9a4ebbac1c82a02a71f9897a07bbc73e373c8d572de13eca162d48f",
+  "nccl_bf16_elementwise_tolerances": {
+    "d_expert_parameter": 0.0001118779182434082,
+    "d_input": 7.450580596923828e-08,
+    "d_router_probability": 7.717031985521317e-05,
+    "loss": 0.0011148452758789062,
+    "optimizer_step": 1.1920928955078125e-07,
+    "output": 0.0625
+  },
+  "nccl_training_self_repeat": {
+    "artifact_status_pass": true,
+    "baseline_artifact_path": "/mnt/fsx/ubuntu/workspace/artifacts/adai-kimi-k2-megatron-ep/20260826T235808Z-k2-b200-loss-gate-r2/26.08/kimi-k2/throughput-no-overlap/repeat-1/nccl-alltoall",
+    "baseline_repeat_dimensionless": 1,
+    "control_mismatches": {},
+    "gradient_norm_gate": true,
+    "gradient_norm_tolerance_parameter_gradient_units": 0.91650390625,
+    "iteration_indices_match": true,
+    "loss_gate": true,
+    "loss_tolerance_dimensionless": 0.0011148452758789062,
+    "max_absolute_gradient_norm_delta_parameter_gradient_units": 0.0001811981201171875,
+    "max_absolute_loss_delta_dimensionless": 8.499999999944663e-05,
+    "max_absolute_sampled_update_l2_delta_parameter_units": 7.495326238900202e-06,
+    "no_skipped_or_nan_iterations": true,
+    "optimizer_update_iteration_indices_match": true,
+    "optimizer_update_sample_layout_matches": true,
+    "optimizer_update_samples_finite": true,
+    "per_iteration_loss_deltas": [
+      {
+        "absolute_loss_delta_dimensionless": 0.0,
+        "iteration_dimensionless": 1
+      },
+      {
+        "absolute_loss_delta_dimensionless": 1.000000000139778e-05,
+        "iteration_dimensionless": 2
+      },
+      {
+        "absolute_loss_delta_dimensionless": 5.699999999997374e-05,
+        "iteration_dimensionless": 3
+      },
+      {
+        "absolute_loss_delta_dimensionless": 5.2999999999414626e-05,
+        "iteration_dimensionless": 4
+      },
+      {
+        "absolute_loss_delta_dimensionless": 8.499999999944663e-05,
+        "iteration_dimensionless": 5
+      },
+      {
+        "absolute_loss_delta_dimensionless": 5.3000000000302805e-05,
+        "iteration_dimensionless": 6
+      },
+      {
+        "absolute_loss_delta_dimensionless": 2.4999999999941735e-05,
+        "iteration_dimensionless": 7
+      },
+      {
+        "absolute_loss_delta_dimensionless": 6.599999999989947e-05,
+        "iteration_dimensionless": 8
+      }
+    ],
+    "repeat_artifact_path": "/mnt/fsx/ubuntu/workspace/artifacts/adai-kimi-k2-megatron-ep/20260827T004700Z-k2-b200-loss-nccl-r2/26.08/kimi-k2/throughput-no-overlap/repeat-2/nccl-alltoall",
+    "repeat_dimensionless": 2,
+    "route_hashes_match": true,
+    "route_hashes_observed": 32,
+    "sampled_elements_dimensionless": 67108864,
+    "sampled_update_l2_gate": true,
+    "sampled_update_l2_tolerance_parameter_units": 0.0009765625,
+    "status": "PASS"
+  },
+  "norm_tolerance_derivation": "elementwise_tolerance * sqrt(sampled_elements)",
+  "require_route_hashes": true,
+  "run_count_dimensionless": 4,
+  "schema_version": 1,
+  "status": "PASS"
+}

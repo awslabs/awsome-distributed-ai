@@ -1,0 +1,83 @@
+{
+  "bootstrap": {
+    "confidence_interval_percent": 95,
+    "method": "paired repeat-level percentile bootstrap of the mean time reduction",
+    "resamples_dimensionless": 10000,
+    "seed_dimensionless": 1234
+  },
+  "campaign_id": "20260827T010936Z-k2-b200-scored-loss-gated-3r-r1",
+  "cell": "throughput-no-overlap",
+  "discarded_iterations_per_run_dimensionless": 8,
+  "runs_per_arm_dimensionless": 3,
+  "scored_iterations_per_run_dimensionless": 32,
+  "source_index": {
+    "path": "/mnt/fsx/ubuntu/workspace/artifacts/adai-kimi-k2-megatron-ep/20260827T010936Z-k2-b200-scored-loss-gated-3r-r1/results/index.json",
+    "sha256": "4117edf39968f22c2702d137255338db3cfdbbe14669caeeeef97408940a1941"
+  },
+  "arms": {
+    "nccl-alltoall": {
+      "first_iteration_seconds": [270.655, 269.112, 270.4058],
+      "median_of_run_medians_ms": 7518.8,
+      "median_tflops_per_gpu": 106.5125,
+      "median_tokens_per_second": 139460.5522157791,
+      "run_medians_ms": [7518.8, 7520.35, 7513.5],
+      "sample_cv_percent": 0.047781591224967376
+    },
+    "uccl": {
+      "first_iteration_seconds": [248.5599, 248.4211, 248.5338],
+      "median_of_run_medians_ms": 6215.65,
+      "median_tflops_per_gpu": 128.228125,
+      "median_tokens_per_second": 168699.33152606728,
+      "run_medians_ms": [6239.15, 6214.0, 6215.65],
+      "sample_cv_percent": 0.2260711384122696
+    },
+    "deepep-v1-nvshmem": {
+      "first_iteration_seconds": [274.9031, 274.4641, 275.941],
+      "median_of_run_medians_ms": 6813.85,
+      "median_tflops_per_gpu": 117.30625,
+      "median_tokens_per_second": 153888.9174255377,
+      "run_medians_ms": [6818.55, 6793.75, 6813.85],
+      "sample_cv_percent": 0.19347002098432659
+    },
+    "deepep-v2-gin-gda": {
+      "first_iteration_seconds": [531.2346, 533.5463, 533.62],
+      "median_of_run_medians_ms": 5861.700000000001,
+      "median_tflops_per_gpu": 135.665625,
+      "median_tokens_per_second": 178885.98870634797,
+      "run_medians_ms": [5861.700000000001, 5873.200000000001, 5861.1],
+      "sample_cv_percent": 0.11626509302065399
+    }
+  },
+  "paired_time_reductions": {
+    "uccl_relative_to_nccl-alltoall": {
+      "bootstrap_95_percent_interval_percent": [17.01933819226473, 17.370867047411362],
+      "mean_percent": 17.22125982424109,
+      "per_repeat_percent": [17.01933819226473, 17.370867047411362, 17.27357423304719]
+    },
+    "deepep-v1-nvshmem_relative_to_nccl-alltoall": {
+      "bootstrap_95_percent_interval_percent": [9.31190523723963, 9.661784358440768],
+      "mean_percent": 9.429003623450628,
+      "per_repeat_percent": [9.313321274671491, 9.661784358440768, 9.31190523723963]
+    },
+    "deepep-v2-gin-gda_relative_to_nccl-alltoall": {
+      "bootstrap_95_percent_interval_percent": [21.902571023954994, 22.039421184231518],
+      "mean_percent": 21.97813528786892,
+      "per_repeat_percent": [22.039421184231518, 21.902571023954998, 21.99241365542024]
+    },
+    "deepep-v2-gin-gda_relative_to_uccl": {
+      "bootstrap_95_percent_interval_percent": [5.484390086900535, 6.049702283163555],
+      "mean_percent": 5.746080792836833,
+      "per_repeat_percent": [6.049702283163555, 5.484390086900535, 5.70415000844641]
+    },
+    "deepep-v2-gin-gda_relative_to_deepep-v1-nvshmem": {
+      "bootstrap_95_percent_interval_percent": [13.549954001839914, 14.033042215720343],
+      "mean_percent": 13.855182154827935,
+      "per_repeat_percent": [14.033042215720343, 13.549954001839914, 13.982550246923545]
+    },
+    "uccl_relative_to_deepep-v1-nvshmem": {
+      "bootstrap_95_percent_interval_percent": [8.497407806645116, 8.779177704234767],
+      "mean_percent": 8.603388055911203,
+      "per_repeat_percent": [8.497407806645116, 8.533578656853726, 8.779177704234767]
+    }
+  }
+}

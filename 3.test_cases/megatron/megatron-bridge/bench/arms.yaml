@@ -1,0 +1,38 @@
+schema_version: 1
+arms:
+  nccl-alltoall:
+    image_env: IMG_NCCL_ALLTOALL
+    dispatcher: alltoall
+    backend: null
+    env:
+      NCCL_DEBUG: INFO
+    mounts: []
+  uccl:
+    image_env: IMG_UCCL
+    dispatcher: flex
+    backend: deepep
+    env:
+      PER_EXPERT_BATCHING: "1"
+      UCCL_SOCKET_IFNAME: eth0
+    mounts: []
+  deepep-v1-nvshmem:
+    image_env: IMG_DEEPEP_V1
+    dispatcher: flex
+    backend: deepep
+    env:
+      NVSHMEM_REMOTE_TRANSPORT: libfabric
+      NVSHMEM_LIBFABRIC_PROVIDER: efa
+    mounts:
+      - /dev/gdrdrv
+  deepep-v2-gin-gda:
+    image_env: IMG_DEEPEP_V2
+    dispatcher: flex
+    backend: deepep_v2
+    env:
+      NCCL_GIN_TYPE: "5"
+      NCCL_SYM_GIN_KERNELS_ENABLE: "0"
+      NCCL_NET: AWS Libfabric
+      FI_PROVIDER: efa
+      FI_EFA_USE_DEVICE_RDMA: "1"
+    mounts:
+      - /dev/gdrdrv

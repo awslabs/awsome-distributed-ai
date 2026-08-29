@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://awslabs.github.io/awsome-distributed-ai/megatron-bridge-result.schema.json",
+  "title": "Megatron-Bridge four-arm run result",
+  "type": "object",
+  "required": ["schema_version", "campaign_id", "model", "cell", "repeat", "ep_arm", "status", "validity"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "campaign_id": {"type": "string", "minLength": 1},
+    "model": {"const": "kimi-k2"},
+    "cell": {"type": "string", "minLength": 1},
+    "repeat": {"type": "integer", "minimum": 1},
+    "ep_arm": {"enum": ["nccl-alltoall", "uccl", "deepep-v1-nvshmem", "deepep-v2-gin-gda"]},
+    "status": {"enum": ["PASS", "FAIL", "INVALID", "NOT_RUN_INSUFFICIENT_CAPACITY"]},
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "steady_iteration_time_ms": {"type": "number", "exclusiveMinimum": 0},
+        "tokens_per_second": {"type": "number", "exclusiveMinimum": 0},
+        "tflops_per_gpu": {"type": "number", "minimum": 0},
+        "steady_iterations": {"type": "integer", "minimum": 0}
+      }
+    },
+    "validity": {
+      "type": "object",
+      "required": ["entrypoint_source", "image_identity", "runtime_dispatcher_identity", "single_nccl", "nccl_build_runtime_match", "efa", "no_token_drop", "steady_timing", "iteration_metrics_complete", "finite_loss", "finite_gradient", "finite_learning_rate", "learning_rate_control", "no_skipped_iterations", "no_nan_iterations"],
+      "properties": {
+        "entrypoint_source": {"type": "boolean"},
+        "image_identity": {"type": "boolean"},
+        "runtime_dispatcher_identity": {"type": "boolean"},
+        "elastic_buffer": {"type": "boolean"},
+        "deepep_v2_manager": {"type": "boolean"},
+        "single_nccl": {"type": "boolean"},
+        "nccl_build_runtime_match": {"type": "boolean"},
+        "gin_type_5": {"type": "boolean"},
+        "gdaki_context": {"type": "boolean"},
+        "efa": {"type": "boolean"},
+        "no_token_drop": {"type": "boolean"},
+        "steady_timing": {"type": "boolean"},
+        "iteration_metrics_complete": {"type": "boolean"},
+        "finite_loss": {"type": "boolean"},
+        "finite_gradient": {"type": "boolean"},
+        "finite_learning_rate": {"type": "boolean"},
+        "learning_rate_control": {"type": "boolean"},
+        "no_skipped_iterations": {"type": "boolean"},
+        "no_nan_iterations": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"ep_arm": {"const": "deepep-v2-gin-gda"}}},
+      "then": {
+        "properties": {
+          "validity": {
+            "required": ["elastic_buffer", "deepep_v2_manager", "gin_type_5", "gdaki_context"]
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": true
+}

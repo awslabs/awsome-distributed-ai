@@ -3,6 +3,12 @@
 
 # Kimi K2 Full-Parameter SFT with Megatron-Bridge + DeepEP-over-EFA dispatchers (UCCL / NVSHMEM)
 
+## NeMo 26.08 four-arm training campaign
+
+The NeMo 26.08 implementation adds explicit `EP_ARM` identities for `nccl-alltoall`, `uccl`, `deepep-v1-nvshmem`, and `deepep-v2-gin-gda`. DeepEP v2 uses a patched Megatron-Core `deepep_v2` backend and `ElasticBuffer`; it never aliases the legacy `deepep` path. See [`../IMPLEMENTATION-26.08.md`](../IMPLEMENTATION-26.08.md) for locked source citations and [`benchmarks/RESULTS-26.08.md`](benchmarks/RESULTS-26.08.md) for the isolated 26.08 campaign status.
+
+The remainder of this document and [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md) describe the historical NeMo 26.04 campaign. Those numbers are not merged with 26.08 results.
+
 This test case provides a reproducible recipe for **full-parameter supervised fine-tuning
 (SFT)** of [Kimi K2](https://huggingface.co/moonshotai/Kimi-K2-Base) (Moonshot AI's
 1.04T-parameter Mixture-of-Experts model) on Amazon EKS, using

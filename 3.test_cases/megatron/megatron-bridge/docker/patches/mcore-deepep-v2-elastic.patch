@@ -1,0 +1,512 @@
+diff --git a/megatron/core/transformer/moe/fused_a2a.py b/megatron/core/transformer/moe/fused_a2a.py
+index 4447606..e0c26db 100644
+--- a/megatron/core/transformer/moe/fused_a2a.py
++++ b/megatron/core/transformer/moe/fused_a2a.py
+@@ -15,9 +15,17 @@ try:
+ except ImportError:
+     HAVE_DEEP_EP = False
+ 
++try:
++    from deep_ep import ElasticBuffer
++
++    HAVE_DEEP_EP_V2 = True
++except ImportError:
++    HAVE_DEEP_EP_V2 = False
++
+ import torch
+ 
+ _buffer = None
++_elastic_buffers = {}
+ 
+ 
+ def get_hidden_bytes(x: torch.Tensor) -> int:
+@@ -68,6 +76,54 @@ def get_buffer(group: torch.distributed.ProcessGroup, hidden_bytes: int):
+     return _buffer
+ 
+ 
++def get_elastic_buffer(
++    group: torch.distributed.ProcessGroup,
++    x: torch.Tensor,
++    num_topk: int,
++    deterministic: bool,
++    allow_multiple_reduction: bool,
++    prefer_overlap_with_compute: bool,
++    num_allocated_qps: int,
++):
++    """Return a shape-compatible ElasticBuffer shared by an ETPxEP group.
++
++    Handles are owned by individual autograd contexts, while the communication
++    workspace is intentionally shared and serialized by ElasticBuffer's stream.
++    """
++    key = (
++        id(group),
++        x.size(1),
++        num_topk,
++        deterministic,
++        allow_multiple_reduction,
++        prefer_overlap_with_compute,
++        num_allocated_qps,
++    )
++    buffer = _elastic_buffers.get(key)
++    if buffer is None or buffer.num_max_tokens_per_rank < x.size(0):
++        buffer = ElasticBuffer(
++            group=group,
++            num_max_tokens_per_rank=x.size(0),
++            hidden=x.size(1),
++            num_topk=num_topk,
++            use_fp8_dispatch=False,
++            deterministic=deterministic,
++            allow_hybrid_mode=True,
++            allow_multiple_reduction=allow_multiple_reduction,
++            prefer_overlap_with_compute=prefer_overlap_with_compute,
++            num_allocated_qps=num_allocated_qps,
++            explicitly_destroy=True,
++        )
++        _elastic_buffers[key] = buffer
++    return buffer
++
++
++def destroy_elastic_buffers():
++    for buffer in _elastic_buffers.values():
++        buffer.destroy()
++    _elastic_buffers.clear()
++
++
+ class FusedDispatch(torch.autograd.Function):
+     """Fused dispatch operation for MoE routing combining computation and communication."""
+ 
+@@ -209,6 +265,131 @@ class FusedCombine(torch.autograd.Function):
+         return grad_x, None, None, None, None
+ 
+ 
++class ElasticFusedDispatch(torch.autograd.Function):
++    """ElasticBuffer dispatch with a per-invocation handle owned by autograd."""
++
++    @staticmethod
++    def forward(
++        ctx,
++        x,
++        token_indices,
++        token_probs,
++        num_experts,
++        group,
++        num_sms,
++        num_qps,
++        deterministic,
++        allow_multiple_reduction,
++        prefer_overlap_with_compute,
++        async_finish=False,
++        allocate_on_comm_stream=False,
++    ):
++        buffer = get_elastic_buffer(
++            group,
++            x,
++            token_indices.size(1),
++            deterministic,
++            allow_multiple_reduction,
++            prefer_overlap_with_compute,
++            num_qps,
++        )
++        recv_x, recv_indices, recv_probs, handle, event = buffer.dispatch(
++            x,
++            topk_idx=token_indices,
++            topk_weights=token_probs,
++            num_experts=num_experts,
++            num_max_tokens_per_rank=x.size(0),
++            expert_alignment=1,
++            num_sms=num_sms or 0,
++            num_qps=num_qps,
++            async_with_compute_stream=async_finish,
++            allocate_on_comm_stream=allocate_on_comm_stream,
++            do_handle_copy=True,
++            do_cpu_sync=True,
++            do_expand=False,
++        )
++        if async_finish:
++            event.current_stream_wait()
++
++        ctx.buffer = buffer
++        ctx.handle = handle
++        ctx.num_sms = num_sms
++        ctx.num_qps = num_qps
++        ctx.async_finish = async_finish
++        ctx.allocate_on_comm_stream = allocate_on_comm_stream
++        handle._mcore_elastic_buffer = buffer
++        tokens_per_expert = torch.tensor(handle.num_recv_tokens_per_expert_list)
++        return recv_x, recv_indices, recv_probs, tokens_per_expert, handle
++
++    @staticmethod
++    def backward(
++        ctx, grad_output, grad_token_indices, grad_token_probs, grad_tokens_per_expert, grad_handle
++    ):
++        grad_probs = grad_token_probs.float().contiguous() if grad_token_probs is not None else None
++        grad_x, grad_token_probs, event = ctx.buffer.combine(
++            grad_output.contiguous(),
++            ctx.handle,
++            topk_weights=grad_probs,
++            num_sms=ctx.num_sms or 0,
++            num_qps=ctx.num_qps,
++            async_with_compute_stream=ctx.async_finish,
++            allocate_on_comm_stream=ctx.allocate_on_comm_stream,
++        )
++        if ctx.async_finish:
++            event.current_stream_wait()
++        return grad_x, None, grad_token_probs, None, None, None, None, None, None, None, None, None
++
++
++class ElasticFusedCombine(torch.autograd.Function):
++    """ElasticBuffer combine whose backward reuses the forward dispatch handle."""
++
++    @staticmethod
++    def forward(
++        ctx,
++        x,
++        buffer,
++        handle,
++        num_sms,
++        num_qps,
++        async_finish=False,
++        allocate_on_comm_stream=False,
++    ):
++        combined_x, _, event = buffer.combine(
++            x,
++            handle,
++            num_sms=num_sms or 0,
++            num_qps=num_qps,
++            async_with_compute_stream=async_finish,
++            allocate_on_comm_stream=allocate_on_comm_stream,
++        )
++        if async_finish:
++            event.current_stream_wait()
++        ctx.buffer = buffer
++        ctx.handle = handle
++        ctx.num_sms = num_sms
++        ctx.num_qps = num_qps
++        ctx.async_finish = async_finish
++        ctx.allocate_on_comm_stream = allocate_on_comm_stream
++        return combined_x, None
++
++    @staticmethod
++    def backward(ctx, grad_output, grad_event=None):
++        grad_x, _, _, _, event = ctx.buffer.dispatch(
++            grad_output.contiguous(),
++            handle=ctx.handle,
++            num_experts=ctx.handle.num_experts,
++            num_sms=ctx.handle.num_sms,
++            num_qps=ctx.num_qps,
++            async_with_compute_stream=ctx.async_finish,
++            allocate_on_comm_stream=ctx.allocate_on_comm_stream,
++            do_cpu_sync=False,
++            do_expand=False,
++        )
++        if ctx.async_finish:
++            event.current_stream_wait()
++        return grad_x, None, None, None, None, None, None
++
++
+ if HAVE_DEEP_EP:
+ 
+     def fused_dispatch(
+@@ -267,6 +448,63 @@ else:
+     set_deepep_num_sms = None
+ 
+ 
++if HAVE_DEEP_EP_V2:
++
++    def elastic_fused_dispatch(
++        x,
++        token_indices,
++        token_probs,
++        num_experts,
++        group,
++        num_sms=0,
++        num_qps=0,
++        deterministic=False,
++        allow_multiple_reduction=True,
++        prefer_overlap_with_compute=True,
++        async_finish=False,
++        allocate_on_comm_stream=False,
++    ):
++        """Dispatch through DeepEP v2 ElasticBuffer in compatibility layout."""
++        return ElasticFusedDispatch.apply(
++            x.contiguous(),
++            token_indices,
++            token_probs,
++            num_experts,
++            group,
++            num_sms,
++            num_qps,
++            deterministic,
++            allow_multiple_reduction,
++            prefer_overlap_with_compute,
++            async_finish,
++            allocate_on_comm_stream,
++        )
++
++    def elastic_fused_combine(
++        x,
++        buffer,
++        handle,
++        num_sms=0,
++        num_qps=0,
++        async_finish=False,
++        allocate_on_comm_stream=False,
++    ):
++        """Combine through the same ElasticBuffer and per-call dispatch handle."""
++        return ElasticFusedCombine.apply(
++            x,
++            buffer,
++            handle,
++            num_sms,
++            num_qps,
++            async_finish,
++            allocate_on_comm_stream,
++        )
++
++else:
++    elastic_fused_dispatch = None
++    elastic_fused_combine = None
++
++
+ try:
+     from deep_ep import HybridEPBuffer
+ 
+diff --git a/megatron/core/transformer/moe/token_dispatcher.py b/megatron/core/transformer/moe/token_dispatcher.py
+index 5743a04..5109752 100644
+--- a/megatron/core/transformer/moe/token_dispatcher.py
++++ b/megatron/core/transformer/moe/token_dispatcher.py
+@@ -22,6 +22,8 @@ from megatron.core.transformer.enums import CudaGraphModule
+ from megatron.core.transformer.moe.fused_a2a import (
+     HYBRIDEP_TOKEN_ALIGNMENT,
+     alloc_ep_symm_buffer,
++    elastic_fused_combine,
++    elastic_fused_dispatch,
+     ensure_nccl_ep_bootstrapped,
+     fused_combine,
+     fused_dispatch,
+@@ -1213,10 +1215,9 @@ class _HybridEPManager(_DispatchManager):
+         return self.tokens_per_expert
+ 
+ 
+-class _DeepepManager(_DispatchManager):
++class _BaseDeepepManager(_DispatchManager):
+     """
+-    A manager class to handle fused all-to-all communication processes for MoE models using
+-    DeepEP backend. See https://github.com/deepseek-ai/deepep for more details.
++    Common metadata and local permutation for DeepEP-compatible backends.
+ 
+     The workflow of the DeepEP dispatcher is:
+     (1) setup_metadata(): Process routing map and probabilities to prepare dispatch metadata
+@@ -1270,18 +1271,6 @@ class _DeepepManager(_DispatchManager):
+         # Handle used for combine operation
+         self.handle = None
+ 
+-        if fused_dispatch is None:
+-            raise ImportError(
+-                "DeepEP is not installed. Please install DeepEP package from "
+-                "https://github.com/deepseek-ai/deepep."
+-            )
+-        # None -> 20 (DeepEP's historical mcore default when moe_flex_dispatcher_num_sms is unset).
+-        set_deepep_num_sms(
+-            config.moe_flex_dispatcher_num_sms
+-            if config.moe_flex_dispatcher_num_sms is not None
+-            else 20
+-        )
+-
+     def setup_metadata(self, routing_map: torch.Tensor, probs: torch.Tensor):
+         num_tokens = routing_map.shape[0]
+ 
+@@ -1308,7 +1297,7 @@ class _DeepepManager(_DispatchManager):
+                 )
+             self.token_probs = self.token_probs.float()  # downcast or upcast
+         hidden_states, dispatched_indices, dispatched_probs, num_tokens_per_expert, handle = (
+-            fused_dispatch(
++            self._dispatch_impl(
+                 hidden_states,
+                 self.token_indices,
+                 self.token_probs,
+@@ -1367,7 +1356,7 @@ class _DeepepManager(_DispatchManager):
+         async_finish: bool = False,
+         allocate_on_comm_stream: bool = False,
+     ) -> torch.Tensor:
+-        hidden_states, _ = fused_combine(
++        hidden_states, _ = self._combine_impl(
+             hidden_states,
+             self.group,
+             self.handle,
+@@ -1459,6 +1448,74 @@ class _DeepepManager(_DispatchManager):
+         return hidden_states
+ 
+ 
++class _DeepepManager(_BaseDeepepManager):
++    """Legacy DeepEP Buffer adapter."""
++
++    def __init__(self, *args, **kwargs):
++        super().__init__(*args, **kwargs)
++        if fused_dispatch is None:
++            raise ImportError("DeepEP v1 Buffer is not installed")
++        set_deepep_num_sms(
++            self.config.moe_flex_dispatcher_num_sms
++            if self.config.moe_flex_dispatcher_num_sms is not None
++            else 20
++        )
++
++    @staticmethod
++    def _dispatch_impl(*args, **kwargs):
++        return fused_dispatch(*args, **kwargs)
++
++    @staticmethod
++    def _combine_impl(*args, **kwargs):
++        return fused_combine(*args, **kwargs)
++
++
++class _DeepepV2Manager(_BaseDeepepManager):
++    """DeepEP v2 ElasticBuffer adapter in V1-compatible non-expanded layout."""
++
++    def __init__(self, *args, **kwargs):
++        super().__init__(*args, **kwargs)
++        if elastic_fused_dispatch is None:
++            raise ImportError("DeepEP v2 ElasticBuffer is not installed")
++        if utils.get_pg_rank(self.group) == 0:
++            logger.warning(
++                "EP_BACKEND_IDENTITY backend=deepep_v2 manager=_DeepepV2Manager "
++                "buffer=ElasticBuffer group_size=%d use_fp8_dispatch=false do_expand=false "
++                "do_cpu_sync=true expert_alignment=1 allow_hybrid_mode=true",
++                utils.get_pg_size(self.group),
++            )
++
++    def _dispatch_impl(self, *args, **kwargs):
++        return elastic_fused_dispatch(
++            *args,
++            **kwargs,
++            num_sms=self.config.moe_flex_dispatcher_num_sms or 0,
++            num_qps=self.config.moe_deepep_v2_num_qps,
++            deterministic=self.config.moe_deepep_v2_deterministic,
++            allow_multiple_reduction=self.config.moe_deepep_v2_allow_multiple_reduction,
++            prefer_overlap_with_compute=self.config.moe_deepep_v2_prefer_overlap_with_compute,
++        )
++
++    def _combine_impl(
++        self,
++        x,
++        group,
++        handle,
++        async_finish=False,
++        allocate_on_comm_stream=False,
++    ):
++        del group
++        return elastic_fused_combine(
++            x,
++            handle._mcore_elastic_buffer,
++            handle,
++            num_sms=self.config.moe_flex_dispatcher_num_sms or 0,
++            num_qps=self.config.moe_deepep_v2_num_qps,
++            async_finish=async_finish,
++            allocate_on_comm_stream=allocate_on_comm_stream,
++        )
++
++
+ class _NCCLEPManager(_DispatchManager):
+     """A manager class to handle dispatch/combine for MoE models using the NCCL Expert
+     Parallelism backend, via TransformerEngine's transformer_engine.pytorch.ep API
+@@ -1776,6 +1833,16 @@ class MoEFlexTokenDispatcher(MoETokenDispatcher):
+                 config=self.config,
+             )
+             self.cudagraph_attrs = ['_comm_manager.token_probs', '_comm_manager.token_indices']
++        elif self.config.moe_flex_dispatcher_backend == "deepep_v2":
++            assert self.tp_size * self.ep_size > 1, "DeepEP v2 dispatcher requires ETPxEP > 1"
++            self._comm_manager = _DeepepV2Manager(
++                group=self.tp_ep_group,
++                num_local_experts=self.num_local_experts,
++                router_topk=self.tp_size * self.config.moe_router_topk,
++                num_experts=self.tp_size * self.config.num_moe_experts,
++                config=self.config,
++            )
++            self.cudagraph_attrs = ['_comm_manager.token_probs', '_comm_manager.token_indices']
+         elif self.config.moe_flex_dispatcher_backend == "hybridep":
+             self._comm_manager = _HybridEPManager(
+                 group=self.tp_ep_group,
+@@ -1797,7 +1864,7 @@ class MoEFlexTokenDispatcher(MoETokenDispatcher):
+         else:
+             raise ValueError(
+                 f"Invalid backend: {self.config.moe_flex_dispatcher_backend}"
+-                "Please set --moe-flex-dispatcher-backend to deepep, hybridep, or ncclep"
++                "Please set --moe-flex-dispatcher-backend to deepep, deepep_v2, hybridep, or ncclep"
+             )
+ 
+     def get_expert_zero_copy_buffers(self):
+diff --git a/megatron/core/models/common/utils.py b/megatron/core/models/common/utils.py
+--- a/megatron/core/models/common/utils.py
++++ b/megatron/core/models/common/utils.py
+@@ -66,8 +66,8 @@ def should_free_input(name, is_moe, config, num_local_experts):
+     if not is_moe:
+         return False
+     enable_deepep = (
+         config.moe_token_dispatcher_type == "flex"
+-        and config.moe_flex_dispatcher_backend == "deepep"
++        and config.moe_flex_dispatcher_backend in ("deepep", "deepep_v2")
+     )
+     enable_hybridep = (
+         config.moe_token_dispatcher_type == "flex"
+diff --git a/megatron/core/models/gpt/fine_grained_callables.py b/megatron/core/models/gpt/fine_grained_callables.py
+--- a/megatron/core/models/gpt/fine_grained_callables.py
++++ b/megatron/core/models/gpt/fine_grained_callables.py
+@@ -53,7 +53,7 @@ def build_transformer_layer_callables(layer: TransformerLayer):
+     is_moe = isinstance(layer.mlp, MoELayer)
+     enable_deepep = (
+         layer.config.moe_token_dispatcher_type == "flex"
+-        and layer.config.moe_flex_dispatcher_backend == "deepep"
++        and layer.config.moe_flex_dispatcher_backend in ("deepep", "deepep_v2")
+     )
+     enable_hybridep = (
+         layer.config.moe_token_dispatcher_type == "flex"
+diff --git a/megatron/core/transformer/transformer_config.py b/megatron/core/transformer/transformer_config.py
+index 4f9de54..d920a49 100644
+--- a/megatron/core/transformer/transformer_config.py
++++ b/megatron/core/transformer/transformer_config.py
+@@ -866,12 +866,24 @@ class TransformerConfig(ModelParallelConfig):
+     moe_enable_deepep: bool = False
+     """[Experimental] Enable DeepEP for efficient token dispatching and combine in MoE models."""
+ 
+-    moe_flex_dispatcher_backend: Literal['deepep', 'hybridep', 'ncclep'] = "deepep"
++    moe_flex_dispatcher_backend: Literal['deepep', 'deepep_v2', 'hybridep', 'ncclep'] = "deepep"
+     """[Experimental] The backend to use for flex token dispatcher. The default is "deepep".
+-    Options are "deepep", "hybridep", and "ncclep". Currently only "hybridep" backend supports
++    Options are "deepep", "deepep_v2", "hybridep", and "ncclep". Currently only "hybridep" backend supports
+     the MNNVL case. "ncclep" uses NVIDIA NCCL Expert Parallelism via TransformerEngine's
+     transformer_engine.pytorch.ep API."""
+ 
++    moe_deepep_v2_num_qps: int = 0
++    """Number of ElasticBuffer GIN queue pairs. Zero selects the DeepEP v2 default."""
++
++    moe_deepep_v2_deterministic: bool = False
++    """Use deterministic DeepEP v2 routing kernels."""
++
++    moe_deepep_v2_allow_multiple_reduction: bool = True
++    """Allow ElasticBuffer to use multiple reductions during combine."""
++
++    moe_deepep_v2_prefer_overlap_with_compute: bool = True
++    """Prefer the ElasticBuffer kernel profile that preserves SMs for compute."""
++
+     moe_permute_fusion_into_hybridep: bool = False
+     """Fuse token rearrangement ops during token dispatching for HybridEP."""
+ 
+@@ -1599,13 +1611,17 @@ class TransformerConfig(ModelParallelConfig):
+ 
+         if self.moe_token_dispatcher_type == "flex":
+             if self.moe_pad_expert_input_to_capacity and (
+-                self.moe_enable_deepep or self.moe_flex_dispatcher_backend == "deepep"
++                self.moe_enable_deepep
++                or self.moe_flex_dispatcher_backend in ("deepep", "deepep_v2")
+             ):
+                 raise ValueError(
+                     "Flex token dispatcher with deepep backend does not support "
+                     "moe_pad_expert_input_to_capacity"
+                 )
+ 
++        if self.moe_deepep_v2_num_qps < 0:
++            raise ValueError("moe_deepep_v2_num_qps must be non-negative")
++
+         if self.moe_flex_dispatcher_backend == "ncclep":
+             if self.moe_token_dispatcher_type != "flex":
+                 raise ValueError(

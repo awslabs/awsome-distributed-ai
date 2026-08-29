@@ -1,0 +1,8 @@
+schema_version: 1
+purpose: strongest-safe-correctness-qualification
+iterations: 8
+warmup_iterations: 0
+repeats: 1
+micro_batch_samples: 1
+ep_overlap_profiles: [false, true]
+required_gates: [A, B, C, D]

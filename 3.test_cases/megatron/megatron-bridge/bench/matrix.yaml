@@ -1,0 +1,28 @@
+schema_version: 1
+model: kimi-k2
+common:
+  train_iterations: 40
+  warmup_iterations: 8
+  independent_job_starts: 3
+  global_batch_samples: 256
+  sequence_length_tokens: 4096
+  performance_seed: 1234
+  force_load_balancing: true
+  cuda_graph: false
+cells:
+  - name: throughput-no-overlap
+    micro_batch_samples: 4
+    ep_overlap: false
+    required: true
+  - name: throughput-overlap
+    micro_batch_samples: 4
+    ep_overlap: true
+    required: true
+  - name: small-message
+    micro_batch_samples: 1
+    ep_overlap: false
+    required: true
+  - name: small-message-overlap
+    micro_batch_samples: 1
+    ep_overlap: true
+    required: false

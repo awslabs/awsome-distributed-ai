@@ -1,220 +1,480 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-#
-# Model-agnostic MoE dispatcher A/B launcher via RAW ranked Pods + headless Service.
-# This cluster's kubeflow PyTorchJob CRD is absent, so we wire static torchrun
-# rendezvous ourselves: 1 headless Service ${JOB} + ${NNODES} Pods ${JOB}-0..N-1,
-# each torchrun with --node_rank from its ordinal, master_addr=${JOB}-0.
-#
-# Runs ONE arm (alltoall|deepep) of ONE model per invocation. Model/data/parallelism
-# are byte-identical across arms; only MOE_DISPATCHER differs.
-#
-#   MODEL=dsv3       -> DeepSeek-V3 256-expert recipe     (BENCH_PY bench_dsv3_pretrain.py)
-#   MODEL=kimi-k2    -> Kimi-K2 384-expert via AutoBridge (BENCH_PY bench_kimi_k2_pretrain.py)
-#   MODEL=qwen3-235b -> Qwen3-235B-A22B 128-expert recipe (BENCH_PY bench_qwen3_pretrain.py)
-#
-# THREE-WAY DISPATCHER COMPARISON (NCCL / DeepEP+UCCL / DeepEP+NVSHMEM): the ARM
-# positional is what the bench reads as MOE_DISPATCHER (alltoall|deepep). The deepep
-# arm's *transport* is set by which IMG is passed (UCCL image -> UCCL deep_ep;
-# NVSHMEM image -> NVIDIA DeepEP). Set ARM_LABEL to disambiguate the two deepep arms
-# in run dirs / pod names (e.g. ARM_LABEL=deepep-nvshmem IMG=<nvshmem-image>).
-#
-# NO-OVERWRITE LOGGING: every run writes to a unique directory on FSx Lustre under
-#   /fsx/megatron-bridge-bench/${CAMPAIGN_ID}/${MODEL}/${ARM_LABEL}-mb${MICRO_BATCH}-ovl${MOE_A2A_OVERLAP}/
-# (logs/rank-<r>.log for all ranks, env.txt, STATUS). A run whose dir already has a
-# completed STATUS is REFUSED (rank-0 aborts) so a retro is never clobbered. CAMPAIGN_ID
-# defaults to a fresh UTC timestamp; the campaign driver passes one shared id for all runs.
-#
-# Usage:  MODEL=<dsv3|kimi-k2|qwen3-235b> CTX=<ctx> IMG=<ecr-uri> ./run-ab-rawpods.sh <alltoall|deepep> [NNODES]
-set -uo pipefail
+set -euo pipefail
 
-ARM="${1:?usage: MODEL=<dsv3|kimi-k2|qwen3-235b> ./run-ab-rawpods.sh <alltoall|deepep> [NNODES]}"
-NNODES="${2:-32}"
-# ARM_LABEL names the run dir / pod set; defaults to ARM. Use it to split the two deepep
-# transports (deepep-uccl vs deepep-nvshmem) into distinct, non-clobbering run dirs.
-ARM_LABEL="${ARM_LABEL:-${ARM}}"
+EP_ARM="${1:?usage: run-ab-rawpods.sh EP_ARM NNODES}"
+NNODES="${2:?usage: run-ab-rawpods.sh EP_ARM NNODES}"
+case "${EP_ARM}" in
+  nccl-alltoall|uccl|deepep-v1-nvshmem|deepep-v2-gin-gda) ;;
+  *) echo "unknown EP_ARM: ${EP_ARM}" >&2; exit 2 ;;
+esac
 
-CTX="${CTX:?set CTX to your kubectl context}"
-NS="${NS:-kimi-k2-bench}"
-IMG="${IMG:?set IMG to your megatron-bridge-uccl ECR image URI}"
-MODEL="${MODEL:-dsv3}"
-GPUS_PER_NODE=8
-# Node type + EFA NIC count per node. Defaults to p6-b300 (16 EFA); set INSTANCE_TYPE=
-# p5.48xlarge EFA_PER_NODE=32 for the H100 runs.
+: "${CTX:?set CTX}"
+: "${CAMPAIGN_ID:?set CAMPAIGN_ID}"
+: "${NODE_NAMES:?set comma-separated NODE_NAMES}"
+: "${LOCAL_ARTIFACT_ROOT:?set LOCAL_ARTIFACT_ROOT to durable controller storage}"
+NS="${NS:-${CAMPAIGN_NAMESPACE:-adai-kimi-k2-megatron-ep-${CAMPAIGN_ID,,}}}"
+case "${NS}" in adai-kimi-k2-megatron-ep-*) ;; *) echo "refusing non-campaign namespace ${NS}" >&2; exit 2;; esac
+[[ "${#NS}" -le 63 ]] || { echo "campaign namespace exceeds 63 characters: ${NS}" >&2; exit 2; }
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+ARMS_FILE="${ARMS_FILE:-${SELF_DIR}/bench/arms.yaml}"
+read -r IMAGE_ENV EXPECTED_DISPATCHER EXPECTED_BACKEND < <(
+  python3 - "${ARMS_FILE}" "${EP_ARM}" <<'PY'
+import sys, yaml
+entry = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))["arms"][sys.argv[2]]
+print(entry["image_env"], entry["dispatcher"], entry["backend"] or "none")
+PY
+)
+IMAGE="${!IMAGE_ENV:-}"
+: "${IMAGE:?set ${IMAGE_ENV} to an immutable image URI}"
+[[ "${IMAGE}" == *@sha256:* ]] || { echo "image must be resolved by digest: ${IMAGE}" >&2; exit 2; }
+HARVEST_IMAGE="${HARVEST_IMAGE:-${IMG_NCCL_ALLTOALL:-${IMAGE}}}"
+[[ "${HARVEST_IMAGE}" == *@sha256:* ]] || { echo "harvest image must be resolved by digest: ${HARVEST_IMAGE}" >&2; exit 2; }
+
+RUN_ENTRYPOINT="${RUN_ENTRYPOINT:-/opt/benchmark/case/kimi-k2/benchmarks/bench_kimi_k2_pretrain.py}"
+RUN_ENTRYPOINT_ARGS_JSON="${RUN_ENTRYPOINT_ARGS_JSON:-[]}"
+RUN_ENTRYPOINT_LOCAL_FILE="${RUN_ENTRYPOINT_LOCAL_FILE:-}"
+RUN_BENCHMARK_LOCAL_FILE="${RUN_BENCHMARK_LOCAL_FILE:-}"
+RUN_INPUT_JSON_B64="${RUN_INPUT_JSON_B64:-}"
+python3 - "${RUN_ENTRYPOINT_ARGS_JSON}" <<'PY'
+import json, sys
+args = json.loads(sys.argv[1])
+assert isinstance(args, list) and all(isinstance(value, str) and "\n" not in value for value in args), args
+PY
+RUN_ENTRYPOINT_ARGS_B64="$(printf '%s' "${RUN_ENTRYPOINT_ARGS_JSON}" | base64 -w0)"
+RUN_ENTRYPOINT_SOURCE_B64=""
+RUN_ENTRYPOINT_SOURCE_SHA256=""
+if [[ -n "${RUN_ENTRYPOINT_LOCAL_FILE}" ]]; then
+  [[ -f "${RUN_ENTRYPOINT_LOCAL_FILE}" ]] || { echo "missing local entrypoint source: ${RUN_ENTRYPOINT_LOCAL_FILE}" >&2; exit 2; }
+  RUN_ENTRYPOINT_SOURCE_B64="$(base64 -w0 < "${RUN_ENTRYPOINT_LOCAL_FILE}")"
+  (( ${#RUN_ENTRYPOINT_SOURCE_B64} < 700000 )) || { echo "local entrypoint source is too large for a pod environment" >&2; exit 2; }
+  RUN_ENTRYPOINT_SOURCE_SHA256="$(sha256sum "${RUN_ENTRYPOINT_LOCAL_FILE}" | awk '{print $1}')"
+  RUN_ENTRYPOINT=/run-artifacts/run-entrypoint.py
+else
+  [[ "${RUN_ENTRYPOINT}" =~ ^/opt/benchmark/case/[A-Za-z0-9_./-]+$ ]] || { echo "invalid image entrypoint: ${RUN_ENTRYPOINT}" >&2; exit 2; }
+fi
+RUN_BENCHMARK_SOURCE_B64=""
+RUN_BENCHMARK_SOURCE_SHA256=""
+if [[ -n "${RUN_BENCHMARK_LOCAL_FILE}" ]]; then
+  [[ -f "${RUN_BENCHMARK_LOCAL_FILE}" ]] || { echo "missing local benchmark source: ${RUN_BENCHMARK_LOCAL_FILE}" >&2; exit 2; }
+  RUN_BENCHMARK_SOURCE_B64="$(base64 -w0 < "${RUN_BENCHMARK_LOCAL_FILE}")"
+  (( ${#RUN_BENCHMARK_SOURCE_B64} < 700000 )) || { echo "local benchmark source is too large for a pod environment" >&2; exit 2; }
+  RUN_BENCHMARK_SOURCE_SHA256="$(sha256sum "${RUN_BENCHMARK_LOCAL_FILE}" | awk '{print $1}')"
+fi
+if [[ -n "${RUN_INPUT_JSON_B64}" ]]; then
+  printf '%s' "${RUN_INPUT_JSON_B64}" | base64 -d >/dev/null
+fi
+
+IFS=',' read -r -a NODES <<<"${NODE_NAMES}"
+[[ "${#NODES[@]}" -eq "${NNODES}" ]] || { echo "NODE_NAMES has ${#NODES[@]} nodes, expected ${NNODES}" >&2; exit 2; }
+IFS=',' read -r -a PROTECTED <<<"${PROTECTED_NODES:-}"
+for node in "${NODES[@]}"; do
+  for protected in "${PROTECTED[@]}"; do
+    [[ -z "${protected}" || "${node}" != "${protected}" ]] || { echo "refusing protected node ${node}" >&2; exit 3; }
+  done
+done
+
+K=(kubectl --context "${CTX}")
 INSTANCE_TYPE="${INSTANCE_TYPE:-p6-b300.48xlarge}"
 EFA_PER_NODE="${EFA_PER_NODE:-16}"
-WORLD=$(( NNODES * GPUS_PER_NODE ))
+GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
+[[ "${GPUS_PER_NODE}" =~ ^[1-8]$ ]] || { echo "GPUS_PER_NODE must be an integer from 1 through 8" >&2; exit 2; }
+WORLD=$((NNODES * GPUS_PER_NODE))
+nodes_json="$("${K[@]}" get nodes -o json)"
+live_pods_json="$("${K[@]}" get pods -A -o json)"
+for node in "${NODES[@]}"; do
+  node_json="$(jq -c --arg n "${node}" '[.items[] | select(.metadata.name==$n)] | if length == 1 then .[0] else error("expected one named node") end' <<<"${nodes_json}")"
+  actual="$(jq -r '.metadata.labels["node.kubernetes.io/instance-type"] // ""' <<<"${node_json}")"
+  [[ "${actual}" = "${INSTANCE_TYPE}" ]] || { echo "node ${node} is ${actual}, expected ${INSTANCE_TYPE}" >&2; exit 3; }
+  ready="$(jq -r '[.status.conditions[] | select(.type=="Ready") | .status][0] // ""' <<<"${node_json}")"
+  [[ "${ready}" = True ]] || { echo "node ${node} is not Ready" >&2; exit 3; }
+  allocatable_gpu="$(jq -r '.status.allocatable["nvidia.com/gpu"] // "0" | tonumber' <<<"${node_json}")"
+  allocatable_efa="$(jq -r '.status.allocatable["vpc.amazonaws.com/efa"] // "0" | tonumber' <<<"${node_json}")"
+  [[ "${allocatable_gpu}" -ge "${GPUS_PER_NODE}" ]] || { echo "node ${node} exposes ${allocatable_gpu} GPUs, expected at least ${GPUS_PER_NODE}" >&2; exit 3; }
+  [[ "${allocatable_efa}" -ge "${EFA_PER_NODE}" ]] || { echo "node ${node} exposes ${allocatable_efa} EFA devices, expected at least ${EFA_PER_NODE}" >&2; exit 3; }
+  occupied="$(jq --arg n "${node}" '[.items[] | select(.spec.nodeName==$n and (.status.phase=="Running" or .status.phase=="Pending")) | .spec.containers[]?.resources.requests["nvidia.com/gpu"] // "0" | tonumber] | add // 0' <<<"${live_pods_json}")"
+  [[ "${occupied}" -eq 0 ]] || { echo "node ${node} already has ${occupied} requested GPUs" >&2; exit 3; }
+done
 
-# Parallelism. TP MUST be >1 (recipe enables sequence_parallel). EP = DP*TP = 32 (ETP=1) at 256 GPU.
+CELL="${CELL:-qualification}"
+REPEAT="${REPEAT:-1}"
+RUN_KIND="${RUN_KIND:-training}"
+RUN_KEY="${CELL}/repeat-${REPEAT}/${EP_ARM}"
+LOCAL_RUN_DIR="${LOCAL_ARTIFACT_ROOT}/${CAMPAIGN_ID}/26.08/kimi-k2/${RUN_KEY}"
+mkdir -p "${LOCAL_RUN_DIR}/pod-logs" "${LOCAL_RUN_DIR}/snapshots" "${LOCAL_RUN_DIR}/manifests"
+[[ ! -e "${LOCAL_RUN_DIR}/STATUS" ]] || { echo "refusing completed run ${LOCAL_RUN_DIR}" >&2; exit 4; }
+"${K[@]}" get nodes "${NODES[@]}" -o json > "${LOCAL_RUN_DIR}/manifests/nodes-before.json"
+"${K[@]}" get pods -A -o json > "${LOCAL_RUN_DIR}/manifests/pods-before.json"
+cp "${ARMS_FILE}" "${LOCAL_RUN_DIR}/manifests/arms.yaml"
+sha256sum "${SELF_DIR}/kimi-k2/benchmarks/bench_kimi_k2_pretrain.py" > "${LOCAL_RUN_DIR}/manifests/model-config.sha256"
+if [[ -n "${RUN_ENTRYPOINT_LOCAL_FILE}" ]]; then
+  cp "${RUN_ENTRYPOINT_LOCAL_FILE}" "${LOCAL_RUN_DIR}/manifests/run-entrypoint.py"
+fi
+if [[ -n "${RUN_BENCHMARK_LOCAL_FILE}" ]]; then
+  cp "${RUN_BENCHMARK_LOCAL_FILE}" "${LOCAL_RUN_DIR}/manifests/benchmark-entrypoint.py"
+fi
+
+if "${K[@]}" get namespace "${NS}" >/dev/null 2>&1; then
+  owner="$("${K[@]}" get namespace "${NS}" -o jsonpath='{.metadata.labels.adai-campaign}')"
+  [[ "${owner}" = "${CAMPAIGN_ID}" ]] || { echo "namespace ${NS} is not owned by ${CAMPAIGN_ID}" >&2; exit 5; }
+else
+  "${K[@]}" create namespace "${NS}"
+  "${K[@]}" label namespace "${NS}" adai-campaign="${CAMPAIGN_ID}" adai-owner=kimi-k2-megatron-ep
+fi
+KN=("${K[@]}" -n "${NS}")
+
+safe_arm="${EP_ARM//[^a-z0-9-]/-}"
+JOB="mk2-${CELL//[^a-z0-9-]/-}-r${REPEAT}-${safe_arm}"
+# Leave room for the largest 32-node rank suffix ("-31") so both the Pod
+# metadata name and explicit hostname remain valid DNS labels.
+JOB="${JOB:0:60}"
+PORT=23456
 TP="${TENSOR_PARALLEL:-8}"
 PP="${PIPELINE_PARALLEL:-8}"
 EP="${EXPERT_PARALLEL:-32}"
-TRAIN_ITERS="${TRAIN_ITERS:-24}"
+TRAIN_ITERS="${TRAIN_ITERS:-40}"
 GLOBAL_BATCH="${GLOBAL_BATCH:-256}"
-MICRO_BATCH="${MICRO_BATCH:-1}"
+MICRO_BATCH="${MICRO_BATCH:-4}"
 SEQ_LEN="${SEQ_LEN:-4096}"
-MOE_A2A_OVERLAP="${MOE_A2A_OVERLAP:-on}"
-MOE_FORCE_BALANCE="${MOE_FORCE_BALANCE:-on}"
-LOSS_PROBE="${LOSS_PROBE:-0}"
-# Optional activation recompute (full|selective|""), passed to the bench. Lets a large
-# per-stage layer count fit on few nodes (e.g. EP32 at PP1). Held identical across arms.
-RECOMPUTE="${RECOMPUTE:-}"
-# Transport label recorded in env.txt for the 3-way comparison (uccl|nvshmem|"" for the
-# NCCL alltoall arm). Informational only — the actual transport is fixed by the IMG.
-EP_BACKEND="${EP_BACKEND:-}"
-# Staging dir on FSx holds the bench entrypoints + the Kimi-K2 HF config dir (hf/).
-STAGE="${STAGE:-/fsx/kimi-k2}"
+MOE_A2A_OVERLAP="${MOE_A2A_OVERLAP:-off}"
+PRESERVE_ROUTE_TRACE_RAW="${PRESERVE_ROUTE_TRACE_RAW:-0}"
+HARVEST_PARALLELISM="${HARVEST_PARALLELISM:-4}"
+FAIL_FAST_GRACE_SECONDS="${FAIL_FAST_GRACE_SECONDS:-180}"
+EFA_MODULE_VERSION_REQUIRED="${EFA_MODULE_VERSION_REQUIRED:-3.3.0g}"
+DISTRIBUTED_TIMEOUT_MINUTES="${DISTRIBUTED_TIMEOUT_MINUTES:-30}"
+BATCH_P2P_COMM="${BATCH_P2P_COMM:-auto}"
+BENCHMARK_LEARNING_RATE="${BENCHMARK_LEARNING_RATE:-5e-6}"
+PERFORMANCE_SEED="${PERFORMANCE_SEED:-1234}"
+[[ "${PRESERVE_ROUTE_TRACE_RAW}" =~ ^[01]$ ]] || { echo "PRESERVE_ROUTE_TRACE_RAW must be 0 or 1" >&2; exit 2; }
+[[ "${HARVEST_PARALLELISM}" =~ ^[1-9][0-9]*$ && "${HARVEST_PARALLELISM}" -le 16 ]] || { echo "HARVEST_PARALLELISM must be an integer from 1 through 16" >&2; exit 2; }
+[[ "${FAIL_FAST_GRACE_SECONDS}" =~ ^[1-9][0-9]*$ ]] || { echo "FAIL_FAST_GRACE_SECONDS must be a positive integer" >&2; exit 2; }
+[[ "${EFA_MODULE_VERSION_REQUIRED}" =~ ^[A-Za-z0-9._+-]+$ ]] || { echo "EFA_MODULE_VERSION_REQUIRED contains invalid characters" >&2; exit 2; }
+[[ "${DISTRIBUTED_TIMEOUT_MINUTES}" =~ ^[1-9][0-9]*$ ]] || { echo "DISTRIBUTED_TIMEOUT_MINUTES must be a positive integer" >&2; exit 2; }
+[[ "${BATCH_P2P_COMM}" = auto || "${BATCH_P2P_COMM}" = on || "${BATCH_P2P_COMM}" = off ]] || { echo "BATCH_P2P_COMM must be auto, on, or off" >&2; exit 2; }
+[[ "${PERFORMANCE_SEED}" =~ ^[0-9]+$ ]] || { echo "PERFORMANCE_SEED must be a non-negative integer" >&2; exit 2; }
+python3 - "${BENCHMARK_LEARNING_RATE}" <<'PY'
+import math
+import sys
 
-# HF hub config/tokenizer access. The qwen3-235b recipe builds its model provider via
-# AutoBridge.from_hf_pretrained(...) (config + tokenizer only; load_weights=False), so it
-# needs either pod egress to huggingface.co OR a pre-staged offline cache. Point HF_HOME at
-# a staged cache on FSx and set HF_HUB_OFFLINE=1 to run without egress. (No-op for dsv3.)
-HF_HOME="${HF_HOME:-${STAGE}/hf-cache}"
-HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-0}"
+value = float(sys.argv[1])
+if not math.isfinite(value) or not 0.0 < value < 1.0:
+    raise SystemExit("BENCHMARK_LEARNING_RATE must be finite, greater than 0, and less than 1")
+PY
 
-# Volume backing /fsx. Default is the FSx Lustre PVC (shared across all nodes). On clusters
-# without FSx (e.g. local-zone capacity blocks), set STORAGE=hostpath to back /fsx with
-# node-local NVMe (HOSTPATH_ROOT). In hostpath mode ${STAGE} must be pre-staged on EVERY
-# node and each node holds only its own rank's logs — harvest with a utility DaemonSet
-# after every cell (see kimi-k2/README.md).
-STORAGE="${STORAGE:-pvc}"
-FSX_PVC="${FSX_PVC:-fsx-kimi-k2}"
-HOSTPATH_ROOT="${HOSTPATH_ROOT:-/mnt/k8s-disks/0/bench-fsx}"
-case "${STORAGE}" in
-  pvc)      FSX_VOLUME_SRC="persistentVolumeClaim: {claimName: ${FSX_PVC}}" ;;
-  hostpath) FSX_VOLUME_SRC="hostPath: {path: ${HOSTPATH_ROOT}, type: DirectoryOrCreate}" ;;
-  *) echo "STORAGE must be 'pvc' or 'hostpath', got '${STORAGE}'" >&2; exit 2 ;;
-esac
+cat > "${LOCAL_RUN_DIR}/environment.txt" <<EOF
+campaign_id=${CAMPAIGN_ID}
+cell=${CELL}
+repeat=${REPEAT}
+ep_arm=${EP_ARM}
+image=${IMAGE}
+harvest_image=${HARVEST_IMAGE}
+nodes=${NODE_NAMES}
+world_size=${WORLD}
+tp=${TP}
+pp=${PP}
+ep=${EP}
+etp=1
+train_iterations=${TRAIN_ITERS}
+global_batch_samples=${GLOBAL_BATCH}
+micro_batch_samples=${MICRO_BATCH}
+sequence_length_tokens=${SEQ_LEN}
+ep_overlap=${MOE_A2A_OVERLAP}
+route_trace_raw_preserved=${PRESERVE_ROUTE_TRACE_RAW}
+harvest_parallelism=${HARVEST_PARALLELISM}
+fail_fast_grace_seconds=${FAIL_FAST_GRACE_SECONDS}
+efa_module_version_required=${EFA_MODULE_VERSION_REQUIRED}
+distributed_timeout_minutes=${DISTRIBUTED_TIMEOUT_MINUTES}
+batch_p2p_comm=${BATCH_P2P_COMM}
+benchmark_learning_rate=${BENCHMARK_LEARNING_RATE}
+performance_seed=${PERFORMANCE_SEED}
+expected_dispatcher=${EXPECTED_DISPATCHER}
+expected_backend=${EXPECTED_BACKEND}
+run_kind=${RUN_KIND}
+run_entrypoint=${RUN_ENTRYPOINT}
+run_entrypoint_args_json=${RUN_ENTRYPOINT_ARGS_JSON}
+run_entrypoint_source_sha256=${RUN_ENTRYPOINT_SOURCE_SHA256}
+benchmark_entrypoint_source_sha256=${RUN_BENCHMARK_SOURCE_SHA256}
+EOF
 
-# GDRCOPY_DEV=on mounts the host's /dev/gdrdrv into the pod (privileged). Needed for the
-# NVSHMEM arm when its symmetric heap outgrows the init chunk: NVSHMEM's dynamic (CUDA-VMM)
-# heap growth registers chunks over libfabric/EFA via GDRCopy, and on clusters whose nvidia
-# container toolkit does not honor NVIDIA_GDRCOPY=enabled the device is absent in-container
-# and every rank dies at register_mem_handle (mem_heap.cpp:1361). No-op for UCCL/alltoall.
-GDRCOPY_DEV="${GDRCOPY_DEV:-off}"
-GDR_MOUNT_LINE=""; GDR_VOLUME_LINE=""; SECURITY_LINE=""
-if [ "${GDRCOPY_DEV}" = "on" ]; then
-  GDR_MOUNT_LINE='- {name: gdrdrv, mountPath: /dev/gdrdrv}'
-  GDR_VOLUME_LINE='- {name: gdrdrv, hostPath: {path: /dev/gdrdrv, type: CharDevice}}'
-  SECURITY_LINE='securityContext: {privileged: true}'
-fi
-case "${MODEL}" in
-  dsv3)       DEFAULT_BENCH="${STAGE}/bench_dsv3_pretrain.py" ;;
-  kimi-k2)    DEFAULT_BENCH="${STAGE}/bench_kimi_k2_pretrain.py" ;;
-  # Both qwen3 sizes share one bench, differentiated by QWEN3_SIZE (235b on B300, 30b on H100).
-  qwen3-235b) DEFAULT_BENCH="${STAGE}/bench_qwen3_pretrain.py"; QWEN3_SIZE="${QWEN3_SIZE:-235b}" ;;
-  qwen3-30b)  DEFAULT_BENCH="${STAGE}/bench_qwen3_pretrain.py"; QWEN3_SIZE="${QWEN3_SIZE:-30b}" ;;
-  *) echo "MODEL must be 'dsv3', 'kimi-k2', 'qwen3-235b', or 'qwen3-30b', got '${MODEL}'" >&2; exit 2 ;;
-esac
-BENCH_PY="${BENCH_PY:-${DEFAULT_BENCH}}"
-QWEN3_SIZE="${QWEN3_SIZE:-}"
-
-# No-overwrite run tree on Lustre. One CAMPAIGN_ID groups a whole campaign.
-CAMPAIGN_ID="${CAMPAIGN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
-RUN_TAG="${ARM_LABEL}-mb${MICRO_BATCH}-ovl${MOE_A2A_OVERLAP}"
-RUN_DIR="${RUN_DIR:-/fsx/megatron-bridge-bench/${CAMPAIGN_ID}/${MODEL}/${RUN_TAG}}"
-LOGDIR="${RUN_DIR}/logs"
-
-GIT_REV="${GIT_REV:-$(git -C "$(dirname "$0")" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
-JOB="abrun-${MODEL}-${ARM_LABEL}"
-PORT=12355
-K="kubectl --context ${CTX} -n ${NS}"
-
-echo "== raw-pod A/B  model=${MODEL} arm=${ARM} nnodes=${NNODES} world=${WORLD} TP${TP}/PP${PP}/EP${EP} mb=${MICRO_BATCH} ovl=${MOE_A2A_OVERLAP} =="
-echo "   img=${IMG}"
-echo "   bench=${BENCH_PY} iters=${TRAIN_ITERS} gbs=${GLOBAL_BATCH} seq=${SEQ_LEN}"
-echo "   RUN_DIR=${RUN_DIR}  (logs/rank-<r>.log, no overwrite)"
-
-# Clean prior pods of THIS job by explicit name (avoids label-selector ambiguity).
-for r in $(seq 0 $(( NNODES - 1 ))); do $K delete pod "${JOB}-${r}" --ignore-not-found --wait=false >/dev/null 2>&1; done
-$K delete svc "${JOB}" --ignore-not-found >/dev/null 2>&1
-sleep 3
-
-cat <<EOF | $K apply -f - >/dev/null
+cat <<EOF | "${KN[@]}" apply -f -
 apiVersion: v1
 kind: Service
-metadata: {name: ${JOB}}
+metadata: {name: ${JOB}, labels: {adai-campaign: "${CAMPAIGN_ID}", adai-owner: kimi-k2-megatron-ep, app: ${JOB}}}
 spec:
   clusterIP: None
   selector: {app: ${JOB}}
-  ports: [{name: rdzv, port: ${PORT}}]
+  ports: [{name: rendezvous, port: ${PORT}}]
 EOF
 
-# rank-0 owns the run dir: no-overwrite guard + env.txt + STATUS. Other ranks only mkdir + log.
-RANK0_PREAMBLE="
-          if [ -f ${RUN_DIR}/STATUS ]; then echo 'REFUSE: ${RUN_DIR} already has STATUS (completed run); not overwriting' ; exit 3 ; fi ;
-          mkdir -p ${LOGDIR} ;
-          { echo run_dir=${RUN_DIR} ; echo model=${MODEL} arm=${ARM} arm_label=${ARM_LABEL} ep_backend=${EP_BACKEND} ; echo nnodes=${NNODES} world=${WORLD} ;
-            echo TP=${TP} PP=${PP} EP=${EP} mb=${MICRO_BATCH} gbs=${GLOBAL_BATCH} seq=${SEQ_LEN} iters=${TRAIN_ITERS} ;
-            echo overlap=${MOE_A2A_OVERLAP} force_balance=${MOE_FORCE_BALANCE} loss_probe=${LOSS_PROBE} ;
-            echo image=${IMG} ; echo bench_py=${BENCH_PY} ; echo git_rev=${GIT_REV} ; echo started=\$(date -u +%FT%TZ) ; } > ${RUN_DIR}/env.txt ;"
+snapshot() {
+  while "${K[@]}" get namespace "${NS}" >/dev/null 2>&1; do
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    "${KN[@]}" get pods -l app="${JOB}" -o json > "${LOCAL_RUN_DIR}/snapshots/pods-${stamp}.json" 2>/dev/null || true
+    for rank in $(seq 0 $((NNODES - 1))); do
+      "${KN[@]}" logs "${JOB}-${rank}" -c trainer --timestamps > "${LOCAL_RUN_DIR}/snapshots/${stamp}-node-rank-${rank}.log" 2>&1 || true
+    done
+    sleep 30
+  done
+}
+snapshot &
+SNAPSHOT_PID=$!
+# shellcheck disable=SC2317  # Invoked indirectly by the EXIT trap.
+cleanup_snapshot() {
+  pkill -TERM -P "${SNAPSHOT_PID}" >/dev/null 2>&1 || true
+  kill "${SNAPSHOT_PID}" >/dev/null 2>&1 || true
+  wait "${SNAPSHOT_PID}" >/dev/null 2>&1 || true
+}
+trap cleanup_snapshot EXIT
 
-launch_pod() {
-  local R="$1"
-  # ALL ranks must skip a completed cell, not just rank-0. If only rank-0 REFUSE-exits, ranks
-  # 1..N-1 still start torchrun, fail rendezvous (no rank-0), and OVERWRITE their rank logs —
-  # corrupting a previously-good run when a campaign is re-run with the same CAMPAIGN_ID.
-  # The skip key is STATUS *existing*, deliberately NOT exit==0: the NVSHMEM arm writes STATUS
-  # then exits 1 at NVSHMEM finalize (validity is judged by efa_ok + n_steady, not exit code —
-  # see RESULTS.md), so a same-CAMPAIGN_ID re-run treats such a cell as complete and skips it.
-  local PREAMBLE="if [ -f ${RUN_DIR}/STATUS ]; then echo 'skip: completed run' ; exit 0 ; fi ; mkdir -p ${LOGDIR} ;"
-  local EPILOGUE=""
-  if [ "$R" = "0" ]; then
-    PREAMBLE="${RANK0_PREAMBLE}"
-    EPILOGUE="; echo \"exit=\$? finished=\$(date -u +%FT%TZ)\" > ${RUN_DIR}/STATUS"
+EXTRA_ENV=""
+case "${EP_ARM}" in
+  uccl)
+    EXTRA_ENV='        - {name: PER_EXPERT_BATCHING, value: "1"}
+        - {name: UCCL_SOCKET_IFNAME, value: "eth0"}' ;;
+  deepep-v1-nvshmem)
+    EXTRA_ENV='        - {name: NVSHMEM_REMOTE_TRANSPORT, value: "libfabric"}
+        - {name: NVSHMEM_LIBFABRIC_PROVIDER, value: "efa"}' ;;
+  deepep-v2-gin-gda)
+    EXTRA_ENV='        - {name: NCCL_GIN_TYPE, value: "5"}
+        - {name: NCCL_SYM_GIN_KERNELS_ENABLE, value: "0"}' ;;
+esac
+
+POD_MANIFEST="${LOCAL_RUN_DIR}/manifests/pods.yaml"
+: > "${POD_MANIFEST}"
+for rank in $(seq 0 $((NNODES - 1))); do
+  node="${NODES[$rank]}"
+  profile_prefix=""
+  if [[ "${NSYS_PROFILE:-0}" = 1 && "${rank}" -eq 0 ]]; then
+    profile_prefix='nsys profile --force-overwrite=true --trace=cuda,nvtx,osrt --output=/run-artifacts/nsys-node-rank-0 '
   fi
-  cat <<EOF | $K apply -f - >/dev/null
+  gdr_mount=""
+  gdr_volume=""
+  privileged=""
+  if [[ "${EP_ARM}" = deepep-v1-nvshmem || "${EP_ARM}" = deepep-v2-gin-gda ]]; then
+    gdr_mount='- {name: gdrdrv, mountPath: /dev/gdrdrv}'
+    gdr_volume='- {name: gdrdrv, hostPath: {path: /dev/gdrdrv, type: CharDevice}}'
+    privileged='securityContext: {privileged: true}'
+  fi
+  cat <<EOF >> "${POD_MANIFEST}"
+---
 apiVersion: v1
 kind: Pod
 metadata:
-  name: ${JOB}-${R}
-  labels: {app: ${JOB}, rank: "${R}"}
+  name: ${JOB}-${rank}
+  labels: {app: ${JOB}, adai-campaign: "${CAMPAIGN_ID}", adai-owner: kimi-k2-megatron-ep, rank: "${rank}"}
 spec:
   restartPolicy: Never
-  hostname: ${JOB}-${R}
+  nodeName: ${node}
+  hostname: ${JOB}-${rank}
   subdomain: ${JOB}
-  nodeSelector:
-    node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
-  tolerations:
-    - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
-    - {key: workload, value: bench, operator: Equal, effect: NoSchedule}
-    - {key: capacity-reservation, operator: Exists, effect: NoSchedule}
+  tolerations: [{operator: Exists}]
   containers:
-    - name: c
-      image: ${IMG}
-      command: ["bash","-lc"]
+    - name: trainer
+      image: ${IMAGE}
+      imagePullPolicy: IfNotPresent
+      command: [bash, -lc]
       args:
-        - >
-          ${PREAMBLE}
-          export PYTHONPATH=${STAGE} KIMI_K2_HF_PATH=${STAGE}/hf
-          MOE_DISPATCHER=${ARM} MOE_A2A_OVERLAP=${MOE_A2A_OVERLAP} MOE_FORCE_BALANCE=${MOE_FORCE_BALANCE}
-          TENSOR_PARALLEL=${TP} PIPELINE_PARALLEL=${PP} EXPERT_PARALLEL=${EP}
-          TRAIN_ITERS=${TRAIN_ITERS} GLOBAL_BATCH=${GLOBAL_BATCH} MICRO_BATCH=${MICRO_BATCH} SEQ_LEN=${SEQ_LEN}
-          LOSS_PROBE=${LOSS_PROBE} RECOMPUTE=${RECOMPUTE} NUM_LAYERS=${NUM_LAYERS:-} QWEN3_SIZE=${QWEN3_SIZE}
-          HF_HOME=${HF_HOME} HF_HUB_OFFLINE=${HF_HUB_OFFLINE}
-          FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_FORK_SAFE=1
-          NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET NCCL_SOCKET_IFNAME=^docker,lo,veth ;
-          torchrun --nnodes=${NNODES} --nproc_per_node=${GPUS_PER_NODE}
-          --node_rank=${R} --master_addr=${JOB}-0.${JOB}.${NS}.svc.cluster.local
-          --master_port=${PORT} ${BENCH_PY} > ${LOGDIR}/rank-${R}.log 2>&1 ${EPILOGUE}
+        - >-
+          set -o pipefail;
+          actual_efa_module_version="\$(cat /sys/module/efa/version 2>/dev/null || true)";
+          printf 'EFA_MODULE_VERSION actual=%s required=%s\n' "\${actual_efa_module_version}" "\${EFA_MODULE_VERSION_REQUIRED}";
+          [[ "\${actual_efa_module_version}" = "\${EFA_MODULE_VERSION_REQUIRED}" ]] || { printf 'EFA_MODULE_VERSION_MISMATCH actual=%s required=%s\n' "\${actual_efa_module_version}" "\${EFA_MODULE_VERSION_REQUIRED}" >&2; exit 86; };
+          python3 -c 'import json,os; p=json.load(open("/opt/benchmark/backend.json")); assert p["ep_arm"]==os.environ["EP_ARM"],p';
+          cp /opt/benchmark/backend.json /run-artifacts/backend.json;
+          cp /opt/benchmark/common-build-manifest.json /run-artifacts/common-build-manifest.json;
+          cp /opt/benchmark/image-verification.json /run-artifacts/image-verification.json;
+          if [[ -n "\${RUN_ENTRYPOINT_SOURCE_B64}" ]]; then printf '%s' "\${RUN_ENTRYPOINT_SOURCE_B64}" | base64 -d > /run-artifacts/run-entrypoint.py; chmod 0444 /run-artifacts/run-entrypoint.py; fi;
+          if [[ -n "\${RUN_BENCHMARK_SOURCE_B64}" ]]; then printf '%s' "\${RUN_BENCHMARK_SOURCE_B64}" | base64 -d > /run-artifacts/benchmark-entrypoint.py; chmod 0444 /run-artifacts/benchmark-entrypoint.py; export KIMI_BENCHMARK_ENTRYPOINT=/run-artifacts/benchmark-entrypoint.py; fi;
+          if [[ -n "\${RUN_INPUT_JSON_B64}" ]]; then printf '%s' "\${RUN_INPUT_JSON_B64}" | base64 -d > /run-artifacts/run-input.json; fi;
+          mapfile -t run_args < <(python3 -c 'import base64,json,os; [print(value) for value in json.loads(base64.b64decode(os.environ["RUN_ENTRYPOINT_ARGS_B64"]))]');
+          python3 /opt/benchmark/case/bench/collect-runtime-manifest.py /run-artifacts/runtime-manifest.json;
+          /opt/benchmark/case/bench/collect-node-telemetry.sh /run-artifacts/telemetry & telemetry_pid=\$!;
+          ${profile_prefix}torchrun --nnodes=${NNODES} --nproc-per-node=${GPUS_PER_NODE} --node-rank=${rank}
+          --master-addr=${JOB}-0.${JOB}.${NS}.svc.cluster.local --master-port=${PORT}
+          ${RUN_ENTRYPOINT} "\${run_args[@]}"
+          2>&1 | tee /run-artifacts/node-rank-${rank}.log;
+          train_rc=\${PIPESTATUS[0]};
+          python3 /opt/benchmark/case/bench/summarize-route-trace.py /run-artifacts/router-trace /run-artifacts/route-summary.json || true;
+          if [[ "\${PRESERVE_ROUTE_TRACE_RAW}" = 1 ]]; then
+            find /run-artifacts/router-trace -type f -name '*.jsonl' -exec gzip -9 -n {} + 2>/dev/null || true;
+          else
+            find /run-artifacts/router-trace -type f -name '*.jsonl' -delete 2>/dev/null || true;
+          fi;
+          kill \${telemetry_pid} >/dev/null 2>&1 || true; wait \${telemetry_pid} || true;
+          (cd /run-artifacts && find . -type f ! -name custody.sha256 -print0 | sort -z | xargs -0 sha256sum > custody.sha256);
+          exit \${train_rc}
+      env:
+        - {name: EP_ARM, value: "${EP_ARM}"}
+        - {name: TENSOR_PARALLEL, value: "${TP}"}
+        - {name: PIPELINE_PARALLEL, value: "${PP}"}
+        - {name: EXPERT_PARALLEL, value: "${EP}"}
+        - {name: TRAIN_ITERS, value: "${TRAIN_ITERS}"}
+        - {name: DISTRIBUTED_TIMEOUT_MINUTES, value: "${DISTRIBUTED_TIMEOUT_MINUTES}"}
+        - {name: BATCH_P2P_COMM, value: "${BATCH_P2P_COMM}"}
+        - {name: BENCHMARK_LEARNING_RATE, value: "${BENCHMARK_LEARNING_RATE}"}
+        - {name: GLOBAL_BATCH, value: "${GLOBAL_BATCH}"}
+        - {name: MICRO_BATCH, value: "${MICRO_BATCH}"}
+        - {name: SEQ_LEN, value: "${SEQ_LEN}"}
+        - {name: MOE_A2A_OVERLAP, value: "${MOE_A2A_OVERLAP}"}
+        - {name: MOE_FORCE_BALANCE, value: "on"}
+        - {name: PERFORMANCE_SEED, value: "${PERFORMANCE_SEED}"}
+        - {name: RUN_KIND, value: "${RUN_KIND}"}
+        - {name: RUN_ENTRYPOINT_ARGS_B64, value: "${RUN_ENTRYPOINT_ARGS_B64}"}
+        - {name: RUN_ENTRYPOINT_SOURCE_B64, value: "${RUN_ENTRYPOINT_SOURCE_B64}"}
+        - {name: RUN_BENCHMARK_SOURCE_B64, value: "${RUN_BENCHMARK_SOURCE_B64}"}
+        - {name: RUN_INPUT_JSON_B64, value: "${RUN_INPUT_JSON_B64}"}
+        - {name: ROUTER_TRACE_DIR, value: "/run-artifacts/router-trace"}
+        - {name: PRESERVE_ROUTE_TRACE_RAW, value: "${PRESERVE_ROUTE_TRACE_RAW}"}
+        - {name: EFA_MODULE_VERSION_REQUIRED, value: "${EFA_MODULE_VERSION_REQUIRED}"}
+        - {name: FI_PROVIDER, value: "efa"}
+        - {name: FI_EFA_USE_DEVICE_RDMA, value: "1"}
+        - {name: NCCL_DEBUG, value: "INFO"}
+        - {name: NCCL_DEBUG_SUBSYS, value: "INIT,NET"}
+${EXTRA_ENV}
       resources:
         requests: {nvidia.com/gpu: ${GPUS_PER_NODE}, vpc.amazonaws.com/efa: ${EFA_PER_NODE}}
-        limits:   {nvidia.com/gpu: ${GPUS_PER_NODE}, vpc.amazonaws.com/efa: ${EFA_PER_NODE}}
-      ${SECURITY_LINE}
+        limits: {nvidia.com/gpu: ${GPUS_PER_NODE}, vpc.amazonaws.com/efa: ${EFA_PER_NODE}}
+      ${privileged}
       volumeMounts:
-        - {name: fsx, mountPath: /fsx}
-        - {name: shmem, mountPath: /dev/shm}
-        ${GDR_MOUNT_LINE}
+        - {name: run-artifacts, mountPath: /run-artifacts}
+        - {name: shm, mountPath: /dev/shm}
+        ${gdr_mount}
+    - name: harvester
+      image: ${HARVEST_IMAGE}
+      imagePullPolicy: IfNotPresent
+      command: [bash, -lc]
+      args: ['printf "HARVEST_SIDECAR_READY timestamp_utc=%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; sleep infinity']
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+      volumeMounts:
+        - {name: run-artifacts, mountPath: /run-artifacts}
   volumes:
-    - name: fsx
-      ${FSX_VOLUME_SRC}
-    - name: shmem
-      emptyDir: {medium: Memory, sizeLimit: 32Gi}
-    ${GDR_VOLUME_LINE}
+    - {name: run-artifacts, hostPath: {path: /mnt/k8s-disks/0/adai-kimi-k2-megatron-ep/${CAMPAIGN_ID}/${RUN_KEY}, type: DirectoryOrCreate}}
+    - {name: shm, emptyDir: {medium: Memory, sizeLimit: 64Gi}}
+    ${gdr_volume}
 EOF
+done
+"${KN[@]}" apply -f "${POD_MANIFEST}"
+
+deadline=$((SECONDS + ${RUN_TIMEOUT_SECONDS:-7200}))
+terminal=0
+pod_phase_failure=0
+trainer_exit_failure=0
+failed_phase_count=0
+nonzero_trainer_count=0
+while (( SECONDS < deadline )); do
+  pods_json="$("${KN[@]}" get pods -l app="${JOB}" -o json)"
+  phases="$(jq -r '[.items[].status.phase] | group_by(.) | map({(.[0]): length}) | add // {}' <<<"${pods_json}")"
+  trainer_states="$(jq -c '[.items[] | {pod:.metadata.name, state:([.status.containerStatuses[]? | select(.name=="trainer") | if .state.terminated then {terminated:true,exit_code:.state.terminated.exitCode} else {terminated:false} end][0] // {terminated:false})}]' <<<"${pods_json}")"
+  echo "${phases}"
+  echo "${trainer_states}"
+  terminal="$(jq -r '[.[].state | select(.terminated)] | length' <<<"${trainer_states}")"
+  failed_phase_count="$(jq -r '[.items[] | select(.status.phase == "Failed")] | length' <<<"${pods_json}")"
+  nonzero_trainer_count="$(jq -r '[.[].state | select(.terminated and .exit_code != 0)] | length' <<<"${trainer_states}")"
+  if [[ "${failed_phase_count}" -ne 0 ]]; then
+    pod_phase_failure=1
+    printf '%s\n' "${pods_json}" > "${LOCAL_RUN_DIR}/manifests/pod-phase-failures.json"
+    break
+  fi
+  if [[ "${nonzero_trainer_count}" -ne 0 ]]; then
+    trainer_exit_failure=1
+    printf '%s\n' "${pods_json}" > "${LOCAL_RUN_DIR}/manifests/trainer-exit-failures.json"
+    break
+  fi
+  [[ "${terminal}" -eq "${NNODES}" ]] && break
+  sleep 15
+done
+
+if (( pod_phase_failure == 1 || trainer_exit_failure == 1 )); then
+  # Once one rank is irrecoverably lost, ask every remaining trainer to finish
+  # its local cleanup and custody manifest before harvesting the failed run.
+  mapfile -t live_trainers < <(
+    jq -r '.items[]
+      | select(.status.phase != "Failed")
+      | select(any(.status.containerStatuses[]?; .name == "trainer" and (.state.terminated | not)))
+      | .metadata.name' <<<"${pods_json}"
+  )
+  terminate_pids=()
+  for pod in "${live_trainers[@]}"; do
+    "${KN[@]}" --request-timeout=10s exec "${pod}" -c trainer -- \
+      pkill -TERM -f '^/opt/venv/bin/python3 /opt/venv/bin/torchrun ' >/dev/null 2>&1 &
+    terminate_pids+=("$!")
+  done
+  for terminate_pid in "${terminate_pids[@]}"; do
+    wait "${terminate_pid}" >/dev/null 2>&1 || true
+  done
+
+  fail_fast_deadline=$((SECONDS + FAIL_FAST_GRACE_SECONDS))
+  while (( SECONDS < fail_fast_deadline )); do
+    pods_json="$("${KN[@]}" get pods -l app="${JOB}" -o json)"
+    live_trainer_count="$(jq -r '[.items[]
+      | select(.status.phase != "Failed")
+      | select(any(.status.containerStatuses[]?; .name == "trainer" and (.state.terminated | not)))]
+      | length' <<<"${pods_json}")"
+    [[ "${live_trainer_count}" -eq 0 ]] && break
+    sleep 5
+  done
+  trainer_states="$(jq -c '[.items[] | {pod:.metadata.name, state:([.status.containerStatuses[]? | select(.name=="trainer") | if .state.terminated then {terminated:true,exit_code:.state.terminated.exitCode} else {terminated:false} end][0] // {terminated:false})}]' <<<"${pods_json}")"
+  terminal="$(jq -r '[.[].state | select(.terminated)] | length' <<<"${trainer_states}")"
+  printf '%s\n' "${pods_json}" > "${LOCAL_RUN_DIR}/manifests/runtime-failure-final.json"
+fi
+
+# Freeze the snapshot tree before the final harvest and custody hash. Leaving
+# the background logger alive here permits a last in-flight kubectl write to
+# race with SHA256SUMS generation.
+cleanup_snapshot
+trap - EXIT
+
+harvest_rank() {
+  local rank="$1"
+  local copied=0
+  local attempt target
+  "${KN[@]}" logs "${JOB}-${rank}" -c trainer --timestamps > "${LOCAL_RUN_DIR}/pod-logs/node-rank-${rank}.log" 2>&1 || true
+  "${KN[@]}" logs "${JOB}-${rank}" -c harvester --timestamps > "${LOCAL_RUN_DIR}/pod-logs/harvester-node-rank-${rank}.log" 2>&1 || true
+  for attempt in 1 2 3; do
+    target="${LOCAL_RUN_DIR}/node-${rank}"
+    if [[ -e "${target}" ]]; then
+      mv "${target}" "${target}.incomplete-attempt-$((attempt - 1))"
+    fi
+    if "${KN[@]}" cp "${JOB}-${rank}:/run-artifacts/." "${target}" -c harvester 2>>"${LOCAL_RUN_DIR}/harvest-errors.log" &&
+       [[ -s "${target}/custody.sha256" ]] &&
+       (cd "${target}" && sha256sum -c custody.sha256) > "${LOCAL_RUN_DIR}/manifests/node-${rank}-custody-verify-attempt-${attempt}.log" 2>&1; then
+      copied=1
+      break
+    fi
+    printf 'HARVEST_RETRY node_rank=%d attempt=%d timestamp_utc=%s\n' "${rank}" "${attempt}" "$(date -u +%FT%TZ)" >> "${LOCAL_RUN_DIR}/harvest-errors.log"
+  done
+  [[ "${copied}" -eq 1 ]]
 }
 
-for r in $(seq 0 $(( NNODES - 1 ))); do launch_pod "$r"; done
-echo "   launched ${NNODES} pods: ${JOB}-0..$(( NNODES - 1 ))"
-echo "   tail rank-0:  ${LOGDIR}/rank-0.log   STATUS: ${RUN_DIR}/STATUS"
+harvest_failures=0
+for ((batch_start = 0; batch_start < NNODES; batch_start += HARVEST_PARALLELISM)); do
+  harvest_pids=()
+  batch_end=$((batch_start + HARVEST_PARALLELISM))
+  if (( batch_end > NNODES )); then
+    batch_end="${NNODES}"
+  fi
+  for ((rank = batch_start; rank < batch_end; rank++)); do
+    harvest_rank "${rank}" &
+    harvest_pids+=("$!")
+  done
+  for harvest_pid in "${harvest_pids[@]}"; do
+    if ! wait "${harvest_pid}"; then
+      harvest_failures=$((harvest_failures + 1))
+    fi
+  done
+done
+pods_after="$("${KN[@]}" get pods -l app="${JOB}" -o json)"
+printf '%s\n' "${pods_after}" > "${LOCAL_RUN_DIR}/manifests/pods-after.json"
+if [[ "${pod_phase_failure}" -eq 1 ]]; then status=FAIL_POD_PHASE; exit_code=1
+elif [[ "${trainer_exit_failure}" -eq 1 ]]; then status=FAIL_TRAINER_EXIT; exit_code=1
+elif [[ "${terminal}" -ne "${NNODES}" ]]; then status=TIMEOUT; exit_code=1
+elif [[ "${harvest_failures}" -ne 0 ]]; then status=FAIL_HARVEST; exit_code=1
+elif jq -e --argjson expected "${NNODES}" '(.items | length) == $expected and all(.items[]; any(.status.containerStatuses[]?; .name == "trainer" and .state.terminated.exitCode == 0))' <<<"${pods_after}" >/dev/null; then status=PASS; exit_code=0
+else status=FAIL; exit_code=1
+fi
+printf '%s finished_at_utc=%s\n' "${status}" "$(date -u +%FT%TZ)" > "${LOCAL_RUN_DIR}/STATUS"
+find "${LOCAL_RUN_DIR}" -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > "${LOCAL_RUN_DIR}/SHA256SUMS"
+exit "${exit_code}"

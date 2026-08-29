@@ -1,0 +1,17 @@
+{
+  "campaign_id": "20260827T010936Z-k2-b200-scored-loss-gated-3r-r1",
+  "cluster": "arn:aws:eks:ap-south-1:159553542841:cluster/ml-clusters-shared-ap-south-1",
+  "namespace": "adai-kimi-k2-megatron-ep-ff41f209fefae3bf",
+  "namespace_state": "ABSENT",
+  "owned_pod_count": 0,
+  "owned_requested_gpu_count": 0,
+  "shared_lease": {
+    "holder_identity": "",
+    "lease_duration_seconds": 1,
+    "name": "adai-ap-south-1-gpu-campaign-lock",
+    "namespace": "default",
+    "renew_time": "2026-08-27T03:51:39.000000Z",
+    "resource_version": "22541133"
+  },
+  "verified_at_utc": "2026-08-27T04:13:16Z"
+}

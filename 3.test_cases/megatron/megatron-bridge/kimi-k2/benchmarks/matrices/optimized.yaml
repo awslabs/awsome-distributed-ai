@@ -1,0 +1,8 @@
+schema_version: 1
+status: deferred-until-headline-valid
+arm: deepep-v2-gin-gda
+profiles:
+  - name: expanded-sync-free
+    do_expand: true
+    do_cpu_sync: false
+    scored_as_headline: false

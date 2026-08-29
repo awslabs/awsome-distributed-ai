@@ -1,0 +1,92 @@
+schema_version: 2
+generated_at_utc: "2026-08-24T09:05:33Z"
+
+base:
+  nemo_image: nvcr.io/nvidia/nemo:26.08
+  nemo_digest_amd64: sha256:d8257dd0c4da714843aa1e371fe4dc8ee5a7972c247abbfd28d680bb197b6195
+  shipped_torch: 2.13.0a0+8145d630e8.nv26.06
+  shipped_torch_commit: 8145d630e811c9ec098a632d9ea7f4d52a2ea16e
+  shipped_torch_onnx_commit: e709452ef2bbc1d113faf678c24e6d3467696e83
+  shipped_bridge_version: 0.6.0
+  shipped_bridge_commit: c93251151adeeadbae3ff2a2bf5ee7a1c34cff01
+  shipped_mcore_version: 0.19.0
+  shipped_mcore_commit: 16ad357ee7973af32916fc1ca39d71065e5f03d4
+  shipped_transformer_engine: 2.17.1+4329ff84
+  shipped_transformer_engine_commit: 4329ff84bfbdaa778a33cba02a15fb0807c64689
+  shipped_cuda_toolkit: "13.3.33"
+  shipped_torch_nccl_build: 2.30.5
+  shipped_nccl_runtime: 2.30.7
+  shipped_libfabric: 2.4.0amzn3.0
+  shipped_gdrcopy: "2.5"
+
+common:
+  rebuilt_torch: 2.13.0a0+8145d630e8.nv26.06
+  rebuilt_torch_nccl_build: 2.31.2
+  nccl_repository: https://github.com/NVIDIA/nccl.git
+  nccl_tag: v2.31.2-1
+  nccl_commit: 7b83616df3ae082a1f32bb74c27458bfe8153a13
+  efa_installer: 1.50.0
+  efa_installer_url: https://efa-installer.amazonaws.com/aws-efa-installer-1.50.0.tar.gz
+  efa_installer_sha256: fa6dff8593d866866c13cb4640d9059835cd4efa427971f100ab40c97bef2841
+  aws_ofi_nccl: 1.21.1
+  aws_ofi_nccl_commit: 2475c4c736907e68ebeadb3848f31231ee4a44d0
+  libfabric: 2.6.0
+  libfabric_commit: 5de2d6a2df83595bcc38531cb91bf59495559495
+  gdrcopy_repository: https://github.com/NVIDIA/gdrcopy.git
+  gdrcopy_tag: v2.5.2
+  nvshmem_version: 3.7.0
+  nvshmem_cuda13_sha256: f954ed91fa270f4b905391e03d808f60c73b894d88ef0aae865916d685353b8c
+
+patches:
+  bridge_deepep_v2_sha256: 0287441f2843e8072cefc85c8b548da2ef638517a24fa697a28b1b51f656efa2
+  mcore_deepep_v2_elastic_sha256: 2d203e0bd8de8e33d94737e9f39c294ff830c5ee24587b43c1eaf05bb29fe833
+  mcore_deepep_v2_eager_comm_sha256: e24e92a166adb562ee3144711a757285f29988ec486e90cac3482309def62ca1
+  mcore_deepep_v2_overlap_schedule_sha256: 97e64f71a9810f7144e46a626e50813d1c2d82ec3be2fb82dc8b2bc7eb8f7ff3
+
+backends:
+  uccl:
+    repository: https://github.com/uccl-project/uccl.git
+    commit: a8c94e485da302b7cc963d2f74edb5b4e9115748
+  deepep_v1:
+    repository: https://github.com/deepseek-ai/DeepEP.git
+    commit: 567632dd59810d77b3cc05553df953cc0f779799
+  deepep_v2:
+    repository: https://github.com/amazon-contributing/DeepEP.git
+    base: 02efc268a37802fc00812ede8f5ad7f535ceea0e
+    pr3_head: dd0f87261a80cf0ce8aa66e4ab2041843851d810
+    pr3_patch_sha256: 1a7b3604ff5e01d97cdc043ae2c2480ac64ae229dfb34ea457633ac8f5362bc4
+    pr5_head: 2542d9641f2ec280213e875feb04be7862dda57c
+    pr5_patch_sha256: 36d6fcac58dcc197f8bc0419822b9381296cecba40bd640440c7633796c25f7e
+    notify_warps_patch_sha256: 198fe6148b14b3c4533542f43e043835c47a861af37021628f4942f5b114a039
+    qualified_parent_digest: sha256:112738c87d35af42802f3eed80bf6a867ca7e3879345f7830f82870cd30ae5c1
+    synthetic_tree: ab43791defa8961b88fdee1a63e8877e317da9af
+    synthetic_commit: 0ff264eb08d196621f49c7d011270c62f8716996
+    synthetic_author: AWSome Distributed AI Benchmark <adai-benchmark@amazon.com>
+    synthetic_date_utc: "2026-08-24T06:42:00Z"
+    pr5_control_tree: 6624dfd5ca88aa53fc680cd00c659191cc38c481
+    pr5_control_commit: 9533c8e34ae2608ca256dff2ffe665ade9b6430c
+
+benchmark:
+  region: ap-south-1
+  target_instance_type: p6-b300.48xlarge
+  nodes: 32
+  gpus_per_node: 8
+  gpus: 256
+  model: literal-kimi-k2
+  layers: 61
+  experts: 384
+  top_k: 8
+  precision: bf16
+  tensor_parallel: 8
+  pipeline_parallel: 8
+  expert_parallel: 32
+  expert_tensor_parallel: 1
+  data_parallel: 4
+  sequence_length_tokens: 4096
+  global_batch_samples: 256
+  iterations: 40
+  warmup_iterations: 8
+  repeats: 3
+  performance_seed: 1234
+  model_repository: moonshotai/Kimi-K2-Base
+  model_revision: ce72df012259dcc55d945e890f815fe7ef69159c
