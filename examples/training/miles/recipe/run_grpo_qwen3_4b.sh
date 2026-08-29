@@ -44,9 +44,10 @@ for var in MODEL_LOCAL MODEL_DIST PROMPT_DATA CHECKPOINT_DIR MODEL_SCRIPT RM_TYP
            COLOCATE TP_SIZE PP_SIZE CP_SIZE EP_SIZE ACTOR_NUM_NODES ACTOR_GPUS_PER_NODE \
            ROLLOUT_NUM_GPUS ROLLOUT_GPUS_PER_ENGINE NUM_ROLLOUT ROLLOUT_BATCH_SIZE \
            N_SAMPLES_PER_PROMPT GLOBAL_BATCH_SIZE MAX_TOKENS_PER_GPU ROLLOUT_MAX_RESPONSE_LEN \
-           ROLLOUT_TEMPERATURE LEARNING_RATE SAVE_INTERVAL EVAL_DATA; do
+           ROLLOUT_TEMPERATURE LEARNING_RATE SAVE_INTERVAL EVAL_DATA CLUSTER_GPUS; do
     if [[ -z "${!var:-}" ]]; then
-        echo "[ERROR] ${var} is not set. Please configure env_vars."
+        echo "[ERROR] ${var} is not set. Configure env_vars, or re-copy it from"
+        echo "[ERROR] env_vars.colocated.example or env_vars.moe.example if it predates this variable."
         exit 1
     fi
 done
@@ -77,9 +78,14 @@ esac
 # errors, `if` reads that as false, and the layout check below passes without having run. A
 # check that cannot run is worse than no check, because it reads as a pass. $((...)) also
 # re-evaluates its operands as expressions, so a non-numeric value is an injection surface.
-for _v in ACTOR_NUM_NODES ACTOR_GPUS_PER_NODE ROLLOUT_NUM_GPUS ROLLOUT_GPUS_PER_ENGINE; do
-    if ! [[ "${!_v}" =~ ^[0-9]+$ ]]; then
-        echo "[ERROR] ${_v} must be a non-negative integer, got '${!_v}'." >&2
+#
+# `08` satisfies ^[0-9]+$ but bash rejects it as invalid octal inside (( )) and [[ ]], so both
+# comparisons evaluated false and the recipe submitted anyway. Zero is invalid for every count.
+for _v in ACTOR_NUM_NODES ACTOR_GPUS_PER_NODE ROLLOUT_NUM_GPUS ROLLOUT_GPUS_PER_ENGINE \
+          CLUSTER_GPUS; do
+    if ! [[ "${!_v}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "[ERROR] ${_v} must be a positive decimal integer with no leading zero," >&2
+        echo "[ERROR] got '${!_v}'." >&2
         exit 1
     fi
 done
@@ -112,9 +118,25 @@ TOTAL_GPUS=$((ACTOR_GPUS + ROLLOUT_NUM_GPUS))
 # Holds in either layout: the trainer alone cannot exceed the cluster. Checked before the
 # per-layout rules so an impossible actor size is reported as such, rather than surfacing as
 # whichever layout-specific inequality happens to trip first.
-if [[ -n "${CLUSTER_GPUS:-}" ]] && [[ "${ACTOR_GPUS}" -gt "${CLUSTER_GPUS}" ]]; then
+if [[ "${ACTOR_GPUS}" -gt "${CLUSTER_GPUS}" ]]; then
     echo "[ERROR] actor needs ${ACTOR_NUM_NODES} x ${ACTOR_GPUS_PER_NODE} = ${ACTOR_GPUS} GPUs," >&2
     echo "[ERROR] more than CLUSTER_GPUS=${CLUSTER_GPUS}." >&2
+    exit 1
+fi
+
+if [[ "${ACTOR_GPUS_PER_NODE}" -gt "${GPUS_PER_WORKER}" ]]; then
+    echo "[ERROR] ACTOR_GPUS_PER_NODE=${ACTOR_GPUS_PER_NODE} exceeds GPUS_PER_WORKER=${GPUS_PER_WORKER}." >&2
+    echo "[ERROR] A Ray bundle cannot span workers, so no node can satisfy it." >&2
+    exit 1
+fi
+if [[ "${ACTOR_NUM_NODES}" -gt "${WORKER_REPLICAS}" ]]; then
+    echo "[ERROR] ACTOR_NUM_NODES=${ACTOR_NUM_NODES} exceeds WORKER_REPLICAS=${WORKER_REPLICAS}," >&2
+    echo "[ERROR] the number of GPU workers this env renders into the manifest." >&2
+    exit 1
+fi
+if [[ "${ROLLOUT_GPUS_PER_ENGINE}" -gt "${GPUS_PER_WORKER}" ]]; then
+    echo "[ERROR] ROLLOUT_GPUS_PER_ENGINE=${ROLLOUT_GPUS_PER_ENGINE} exceeds GPUS_PER_WORKER=" >&2
+    echo "[ERROR] ${GPUS_PER_WORKER}; one engine cannot span workers either." >&2
     exit 1
 fi
 
@@ -129,10 +151,9 @@ if [[ "${COLOCATE}" == "true" ]]; then
 else
     # Separate pools must both fit, and over-subscribing does not fail loudly: Ray waits on a
     # placement group that never becomes ready, which reads as a hang rather than as a
-    # misconfiguration. CLUSTER_GPUS is optional because only the caller knows the cluster;
-    # when it is set, refuse here instead. Note that actor == rollout is the INTENDED shape on
-    # a 2-node 8-GPU cluster (8 + 8 = 16), not a mistake to warn about.
-    if [[ -n "${CLUSTER_GPUS:-}" ]] && [[ "${TOTAL_GPUS}" -gt "${CLUSTER_GPUS}" ]]; then
+    # misconfiguration, so refuse here instead. CLUSTER_GPUS comes from the same two numbers the
+    # manifest renders. actor == rollout is the intended colocated shape, not a mistake.
+    if [[ "${TOTAL_GPUS}" -gt "${CLUSTER_GPUS}" ]]; then
         echo "[ERROR] COLOCATE=false needs actor ${ACTOR_GPUS} + rollout ${ROLLOUT_NUM_GPUS}" >&2
         echo "[ERROR] = ${TOTAL_GPUS} GPUs, more than CLUSTER_GPUS=${CLUSTER_GPUS}." >&2
         echo "[ERROR] Ray would wait forever on an unschedulable placement group." >&2
@@ -293,15 +314,33 @@ TRAIN_ARGS=(
 # /root/miles (on PYTHONPATH below). MODEL_SCRIPT is forwarded so the launcher
 # can source the right model definition.
 #
-# --entrypoint-resources '{"gpu_node": 0.001}' pins the Ray job DRIVER to a GPU
-# worker, where the training it drives actually runs. The driver reaches
-# transformer_engine through megatron.core and that import dlopens libcuda.so.1,
-# so it needs the driver libraries; mooncake is not the reason, its import is
-# guarded by try/except ImportError. The 0.001 fractional request lands the driver
-# on a worker without consuming a whole GPU (does not disturb the colocated
-# placement group). HF_TOKEN is NOT set
+# The fractional gpu_node request pins the driver to a GPU worker without consuming a GPU:
+# its import of megatron.core dlopens libcuda.so.1. HF_TOKEN is NOT set
 # here: it is injected into the pod env from the k8s Secret in raycluster.yaml, so
 # it never lands in the Ray GCS runtime-env (visible via the dashboard API).
+# A real JSON encoder, not string interpolation: a quote or backslash in a path is legal and
+# would close the literal early. Values reach python through the environment, not the text.
+command -v python3 >/dev/null 2>&1 || {
+    echo "[ERROR] python3 not found; it is needed to encode --runtime-env-json." >&2
+    exit 1
+}
+RUNTIME_ENV_JSON="$(
+    MODEL_SCRIPT="${MODEL_SCRIPT}" \
+    TENSORBOARD_DIR="${TENSORBOARD_DIR:-}" \
+    python3 -c '
+import json, os
+print(json.dumps({"env_vars": {
+    "PYTHONPATH": "/root/Megatron-LM:/root/miles",
+    "MODEL_SCRIPT": os.environ["MODEL_SCRIPT"],
+    "TOKENIZERS_PARALLELISM": "false",
+    "NCCL_DEBUG": "WARN",
+    "FI_PROVIDER": "efa",
+    "FI_EFA_USE_DEVICE_RDMA": "1",
+    "TENSORBOARD_DIR": os.environ["TENSORBOARD_DIR"],
+}}))
+'
+)"
+
 echo "[INFO] Submitting Ray job..."
 
 ray job submit \

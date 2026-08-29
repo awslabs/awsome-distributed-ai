@@ -28,11 +28,12 @@
 #   - Ray cluster deployed via kubernetes/raycluster.yaml (2 workers for 16 GPU)
 #   - Model downloaded and converted to torch_dist format
 #   - Training data on FSx
-#   - source env_vars with the "ALTERNATE: Qwen3-30B-A3B MoE" block in
-#     env_vars.colocated.example uncommented
+#   - env_vars copied from env_vars.moe.example
 #
-# Usage:
-#   source env_vars  # with the 30B MoE block (env_vars.colocated.example) active
+# The MoE env must be in place BEFORE the RayCluster is deployed: it renders the worker count.
+#
+#   cp env_vars.moe.example env_vars   # then redo README step 4: delete, re-render, re-apply
+#   source env_vars
 #   bash recipe/run_grpo_qwen3_30b_a3b.sh
 # ============================================================
 
@@ -55,9 +56,11 @@ for var in MODEL_LOCAL MODEL_DIST PROMPT_DATA CHECKPOINT_DIR MODEL_SCRIPT RM_TYP
            COLOCATE TP_SIZE PP_SIZE CP_SIZE EP_SIZE ACTOR_NUM_NODES ACTOR_GPUS_PER_NODE \
            ROLLOUT_NUM_GPUS ROLLOUT_GPUS_PER_ENGINE NUM_ROLLOUT ROLLOUT_BATCH_SIZE \
            N_SAMPLES_PER_PROMPT GLOBAL_BATCH_SIZE MAX_TOKENS_PER_GPU \
-           ROLLOUT_MAX_RESPONSE_LEN ROLLOUT_TEMPERATURE LEARNING_RATE SAVE_INTERVAL EVAL_DATA; do
+           ROLLOUT_MAX_RESPONSE_LEN ROLLOUT_TEMPERATURE LEARNING_RATE SAVE_INTERVAL EVAL_DATA \
+           CLUSTER_GPUS; do
     if [[ -z "${!var:-}" ]]; then
-        echo "[ERROR] ${var} is not set. Please configure env_vars."
+        echo "[ERROR] ${var} is not set. Configure env_vars, or re-copy it from"
+        echo "[ERROR] env_vars.moe.example if it predates this variable."
         exit 1
     fi
 done
@@ -68,6 +71,60 @@ if [[ "${COLOCATE:-true}" != "true" ]]; then
     echo "[ERROR] COLOCATE=${COLOCATE}, but this recipe only builds the colocated layout." >&2
     echo "[ERROR] Disaggregating a 30B actor needs B300-class 288GB HBM and a different" >&2
     echo "[ERROR] rollout layout; it is UNVERIFIED here. Set COLOCATE=true." >&2
+    exit 1
+fi
+
+# Same input guards as run_grpo_qwen3_4b.sh; the rationale is there.
+# Zero is invalid for every count here, EP_SIZE included: it reaches the modulo below as a
+# division by zero.
+for _v in ACTOR_NUM_NODES ACTOR_GPUS_PER_NODE ROLLOUT_NUM_GPUS ROLLOUT_GPUS_PER_ENGINE \
+          EP_SIZE CLUSTER_GPUS; do
+    if ! [[ "${!_v}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "[ERROR] ${_v} must be a positive decimal integer with no leading zero," >&2
+        echo "[ERROR] got '${!_v}'." >&2
+        exit 1
+    fi
+done
+unset _v
+
+ACTOR_GPUS=$((ACTOR_NUM_NODES * ACTOR_GPUS_PER_NODE))
+
+# CLUSTER_GPUS is derived from the same two numbers the manifest renders. Without this check an
+# over-sized request reads as a hang: Ray waits on a placement group it cannot satisfy.
+if [[ "${ACTOR_GPUS}" -gt "${CLUSTER_GPUS}" ]]; then
+    echo "[ERROR] actor needs ${ACTOR_NUM_NODES} x ${ACTOR_GPUS_PER_NODE} = ${ACTOR_GPUS} GPUs," >&2
+    echo "[ERROR] more than CLUSTER_GPUS=${CLUSTER_GPUS}." >&2
+    exit 1
+fi
+
+# Totals are not enough: a Ray bundle cannot span workers, so 1 x 16 and 4 x 4 both pass the
+# total check and then wait forever on 8-GPU workers.
+if [[ "${ACTOR_GPUS_PER_NODE}" -gt "${GPUS_PER_WORKER}" ]]; then
+    echo "[ERROR] ACTOR_GPUS_PER_NODE=${ACTOR_GPUS_PER_NODE} exceeds GPUS_PER_WORKER=${GPUS_PER_WORKER}." >&2
+    echo "[ERROR] A Ray bundle cannot span workers, so no node can satisfy it." >&2
+    exit 1
+fi
+if [[ "${ACTOR_NUM_NODES}" -gt "${WORKER_REPLICAS}" ]]; then
+    echo "[ERROR] ACTOR_NUM_NODES=${ACTOR_NUM_NODES} exceeds WORKER_REPLICAS=${WORKER_REPLICAS}," >&2
+    echo "[ERROR] the number of GPU workers this env renders into the manifest." >&2
+    exit 1
+fi
+if [[ "${ROLLOUT_GPUS_PER_ENGINE}" -gt "${GPUS_PER_WORKER}" ]]; then
+    echo "[ERROR] ROLLOUT_GPUS_PER_ENGINE=${ROLLOUT_GPUS_PER_ENGINE} exceeds GPUS_PER_WORKER=" >&2
+    echo "[ERROR] ${GPUS_PER_WORKER}; one engine cannot span workers either." >&2
+    exit 1
+fi
+
+if [[ "${ROLLOUT_NUM_GPUS}" -ne "${ACTOR_GPUS}" ]]; then
+    echo "[ERROR] COLOCATE=true shares devices, so ROLLOUT_NUM_GPUS (${ROLLOUT_NUM_GPUS}) must" >&2
+    echo "[ERROR] equal the actor GPU count (${ACTOR_NUM_NODES} x ${ACTOR_GPUS_PER_NODE} = ${ACTOR_GPUS})." >&2
+    exit 1
+fi
+
+# A remainder leaves GPUs with no engine, or an engine asking for a shard that does not exist.
+if (( ROLLOUT_NUM_GPUS % ROLLOUT_GPUS_PER_ENGINE != 0 )); then
+    echo "[ERROR] ROLLOUT_GPUS_PER_ENGINE (${ROLLOUT_GPUS_PER_ENGINE}) must divide" >&2
+    echo "[ERROR] ROLLOUT_NUM_GPUS (${ROLLOUT_NUM_GPUS})." >&2
     exit 1
 fi
 
@@ -203,6 +260,17 @@ TRAIN_ARGS=(
     # actor to 8 GPU (a single node) OOMs (30B static ~121GB/GPU on 8-way).
     --colocate
     --use-distributed-optimizer
+    # Sharding alone is not enough on 141GB. Measured on p5en.48xlarge: the sharded
+    # state does load, leaving 21GB free per GPU after the model wakes, and the first
+    # optimizer step then dies asking for 2.32GB with 114.85GB already allocated.
+    # Host memory is what upstream miles does for this model and for 235B; the overlap keeps the
+    # copies off the critical path and the precision-aware optimizer is required with it.
+    #
+    # Costly: actor_train_tflops ~37 against ~306 for the dense 4B. A node with more HBM does
+    # not need these flags.
+    --optimizer-cpu-offload
+    --overlap-cpu-optimizer-d2h-h2d
+    --use-precision-aware-optimizer
     --rollout-num-gpus "${ROLLOUT_NUM_GPUS}"
     --rollout-num-gpus-per-engine "${ROLLOUT_GPUS_PER_ENGINE}"
 
@@ -221,9 +289,8 @@ TRAIN_ARGS=(
     # Lowercase only: this reaches uvicorn's log_level, whose LOG_LEVELS dict has no "WARN"
     # key, and the KeyError kills the rollout server before it binds. See README (miles-specific requirements).
     --sglang-log-level warning
-    # Careful when adding --sglang-* flags: miles registers them from SGLang's live
-    # ServerArgs with ignore_unknown_args, so a flag SGLang has since removed is silently
-    # accepted and does nothing. Check it against the SGLang version in the base image.
+    # miles calls Megatron's parse_args without ignore_unknown_args, so a flag SGLang has
+    # removed aborts the job at startup rather than being ignored.
 )
 
 # Optional extra train.py flags injected via EXTRA_TRAIN_ARGS, same mechanism as
@@ -248,13 +315,35 @@ TRAIN_ARGS+=(${EXTRA_TRAIN_ARGS_ARR[@]+"${EXTRA_TRAIN_ARGS_ARR[@]}"})
 # /root/miles (on PYTHONPATH below). MODEL_SCRIPT is forwarded so the launcher
 # can source the right model definition.
 #
-# --entrypoint-resources '{"gpu_node": 0.001}' pins the driver to a GPU worker,
-# where the training it drives actually runs. The driver reaches transformer_engine
-# through megatron.core and that import dlopens libcuda.so.1; mooncake is not the
-# reason, its import is guarded by try/except ImportError.
+# The fractional gpu_node request pins the driver to a GPU worker: its import of megatron.core
+# dlopens libcuda.so.1.
 # CUDA_DEVICE_MAX_CONNECTIONS=1 is required by Megatron for TP>1 (30B is TP=2).
 # HF_TOKEN is NOT set here: it is injected into the pod env from the k8s Secret in
 # raycluster.yaml, so it never lands in the Ray GCS runtime-env.
+# A real JSON encoder, not string interpolation: a quote or backslash in a path is legal and
+# would close the literal early. Values reach python through the environment, not the text.
+command -v python3 >/dev/null 2>&1 || {
+    echo "[ERROR] python3 not found; it is needed to encode --runtime-env-json." >&2
+    exit 1
+}
+RUNTIME_ENV_JSON="$(
+    MODEL_SCRIPT="${MODEL_SCRIPT}" \
+    TENSORBOARD_DIR="${TENSORBOARD_DIR:-}" \
+    python3 -c '
+import json, os
+print(json.dumps({"env_vars": {
+    "PYTHONPATH": "/root/Megatron-LM:/root/miles",
+    "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+    "MODEL_SCRIPT": os.environ["MODEL_SCRIPT"],
+    "TOKENIZERS_PARALLELISM": "false",
+    "NCCL_DEBUG": "WARN",
+    "FI_PROVIDER": "efa",
+    "FI_EFA_USE_DEVICE_RDMA": "1",
+    "TENSORBOARD_DIR": os.environ["TENSORBOARD_DIR"],
+}}))
+'
+)"
+
 echo "[INFO] Submitting Ray job for MoE GRPO training..."
 
 ray job submit \

@@ -1,0 +1,117 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# ============================================================
+# miles on EKS - Environment (COLOCATED, Qwen3-30B-A3B MoE)
+#
+# Colocated Qwen3-30B-A3B GRPO on 2 nodes, 16 GPU. Launch with
+# recipe/run_grpo_qwen3_30b_a3b.sh; the dense 4B run is env_vars.colocated.example.
+# One file describes one run: the derived block at the end must see every value.
+# ============================================================
+
+# ----- AWS / ECR (used outside the cluster only) -----
+if [ -z "${AWS_REGION:-}" ]; then
+  AWS_REGION="$(aws configure get region 2>/dev/null || true)"
+  export AWS_REGION
+fi
+if [ -z "${AWS_ACCOUNT_ID:-}" ]; then
+  AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || true)"
+  export AWS_ACCOUNT_ID
+fi
+export IMAGE="miles-hyperpod"
+export TAG="miles-cuda13-efa-0.1"
+if [ -n "${AWS_REGION}" ] && [ -n "${AWS_ACCOUNT_ID}" ]; then
+  export REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/"
+  export FULL_IMAGE="${REGISTRY}${IMAGE}:${TAG}"
+else
+  export REGISTRY=""
+  export FULL_IMAGE=""
+  echo "[WARN] env_vars: REGISTRY and FULL_IMAGE are empty (no AWS region/account). Expected in" >&2
+  echo "[WARN] the head pod; set both before building, pushing, or rendering a manifest." >&2
+fi
+
+# ----- HuggingFace -----
+
+# ----- Model (Qwen3-30B-A3B MoE, bf16) -----
+# The actor must span all 16 GPU: on 8 the sharded 30B optimizer state does not fit 141GB.
+# EP_SIZE == ROLLOUT_GPUS_PER_ENGINE keeps the rollout MoE pure expert-parallel. Raising
+# ROLLOUT_GPUS_PER_ENGINE above EP_SIZE runs it tensor- AND expert-parallel, which trips a
+# FlashInfer allreduce-fusion bug in this SGLang build (README Known Issues); the recipe then
+# disables the fusion, at some rollout throughput.
+export MODEL_NAME="Qwen/Qwen3-30B-A3B"                         # HF repo id, for the download
+                                                               # step only; the recipes read
+                                                               # MODEL_LOCAL and MODEL_DIST
+export MODEL_LOCAL="/fsx/models/Qwen3-30B-A3B"                  # SGLang rollout (--hf-checkpoint)
+export MODEL_DIST="/fsx/models/Qwen3-30B-A3B_torch_dist"        # Megatron (--ref-load), bf16
+export COLOCATE="true"
+export TP_SIZE=2
+export PP_SIZE=1
+export CP_SIZE=1
+export EP_SIZE=2
+export ROLLOUT_NUM_GPUS=16
+export ROLLOUT_GPUS_PER_ENGINE=2
+export ACTOR_NUM_NODES=2
+export ACTOR_GPUS_PER_NODE=8
+export MAX_TOKENS_PER_GPU=8192
+export ROLLOUT_MAX_RESPONSE_LEN=8192
+export MODEL_SCRIPT="qwen3-30B-A3B.sh"
+# Lowers the rollout KV-pool share so the optimizer state and the engines both fit.
+export SGLANG_MEM_FRACTION=0.75
+# Do NOT set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True here: SGLang's
+# torch_memory_saver is incompatible with it and aborts the rollout engine at init. The dense 4B
+# run tolerates it; this one must not. CUDA_DEVICE_MAX_CONNECTIONS=1 is required for TP>1 and the
+# recipe sets it.
+
+# ----- Cluster -----
+export NAMESPACE="default"
+export FSX_CLAIM="fsx-claim"
+# Renders metadata.name and the ray.io/cluster selector, so they cannot drift.
+export RAY_CLUSTER_NAME="miles-ray"
+export GPU_NODE_LABEL_KEY="node-role"
+export GPU_NODE_ROLE="gpu-p5en"          # e.g. "gpu-b300" on a B300 pool
+# The head needs a host with the CUDA driver, so it defaults to the same pool as the workers.
+# Do NOT point these at a CPU-only pool; see the README's Known Issues.
+export CPU_NODE_LABEL_KEY="${GPU_NODE_LABEL_KEY}"
+export CPU_NODE_ROLE="${GPU_NODE_ROLE}"
+
+export GPUS_PER_WORKER=8
+
+# Your node's FULL allocatable count. A partial request breaks point-to-point paths, which an
+# all-reduce smoke test does not catch.
+export EFA_PER_NODE=15
+
+# ----- Training -----
+export PROMPT_DATA="/fsx/data/dapo-math-17k/dapo-math-17k.jsonl"
+export EVAL_DATA="/fsx/data/aime-2024/aime-2024.jsonl"
+export CHECKPOINT_DIR="/fsx/runs/qwen3-30b/ckpt"
+# SAVE_INTERVAL is kept at or above NUM_ROLLOUT so short smoke runs do not pay the
+# ~270s in-loop save cost on every rollout; the single end-of-run save still fires and
+# succeeded on every verification run (a torch_dist checkpoint is written to CHECKPOINT_DIR).
+# Reloading that checkpoint and the megatron2hf back-conversion are untested (README Known Issues).
+export SAVE_INTERVAL=1000
+export NUM_ROLLOUT=100
+export ROLLOUT_BATCH_SIZE=16
+export N_SAMPLES_PER_PROMPT=8
+export GLOBAL_BATCH_SIZE=128
+export NUM_STEPS_PER_ROLLOUT=1
+export LEARNING_RATE="1e-6"
+export ROLLOUT_TEMPERATURE=1.0
+
+# ----- Reward -----
+export RM_TYPE="deepscaler"
+
+# ----- Observability (optional) -----
+# Forwarded into the Ray runtime env by the recipe. EXTRA_TRAIN_ARGS appends train.py flags.
+export TENSORBOARD_DIR="/fsx/tb/qwen3-30b"
+export EXTRA_TRAIN_ARGS="--use-tensorboard"
+
+# Derived from everything above: WORKER_REPLICAS and CLUSTER_GPUS. Keep this LAST -- anything that
+# sets a topology value below it is read too late.
+_derive="$(dirname "${BASH_SOURCE[0]:-$0}")/scripts/derive_topology.sh"
+if [ ! -f "${_derive}" ]; then
+  echo "[ERROR] env_vars: ${_derive} not found. Keep env_vars in the test case directory," >&2
+  echo "[ERROR] next to scripts/, so the topology derivation can be sourced." >&2
+  unset _derive; return 1 2>/dev/null || exit 1
+fi
+# shellcheck source=scripts/derive_topology.sh
+. "${_derive}"
+unset _derive

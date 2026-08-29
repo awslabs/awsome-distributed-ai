@@ -139,7 +139,7 @@ The KubeRay operator is installed in step 0 below.
 
 ## Quick Start
 
-The default path is Qwen3-4B dense, colocated on one node: it builds the image, prepares the model and data, deploys a Ray cluster, and runs a short GRPO loop. To run the 30B MoE case instead, uncomment the `ALTERNATE` block in `env_vars.colocated.example` and launch the MoE recipe in step 7.
+The default path is Qwen3-4B dense, colocated on one node: it builds the image, prepares the model and data, deploys a Ray cluster, and runs a short GRPO loop. To run the 30B MoE case instead, copy `env_vars.moe.example` in step 1 rather than `env_vars.colocated.example`, and launch the MoE recipe in step 7. Each example file is complete on its own, so the choice is made once.
 
 ### 0. Install the KubeRay Operator, once per cluster
 
@@ -237,7 +237,7 @@ Run the recipe from a machine with a matching Ray CLI and the dashboard port-for
 ```bash
 # Qwen3-4B, colocated:
 bash recipe/run_grpo_qwen3_4b.sh
-# Qwen3-30B-A3B MoE, colocated on 2 nodes: uncomment the ALTERNATE block in env_vars first.
+# Qwen3-30B-A3B MoE, colocated on 2 nodes: this needs env_vars copied from env_vars.moe.example.
 bash recipe/run_grpo_qwen3_30b_a3b.sh
 ```
 
@@ -284,7 +284,8 @@ miles ships rule-based reward types `deepscaler`, `dapo`, `math`, `f1`, and `gpq
 ```
 miles/
 ├── README.md
-├── env_vars.colocated.example       # Qwen3-4B colocated, plus a 30B MoE ALTERNATE block
+├── env_vars.colocated.example       # Qwen3-4B dense, colocated on 1 node
+├── env_vars.moe.example             # Qwen3-30B-A3B MoE, colocated on 2 nodes
 ├── env_vars.disaggregated.example   # overlay: reward model on a CPU pool
 ├── run-on-cluster.sh                # launch a recipe from inside the head pod
 ├── miles.Dockerfile                 # radixark/miles base + AWS EFA layer

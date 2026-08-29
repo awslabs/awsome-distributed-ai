@@ -42,7 +42,7 @@ done
 
 # ---- preconditions (fail-fast, with the fix in the message) ----
 command -v kubectl >/dev/null 2>&1 || { echo "[ERROR] kubectl not found on PATH." >&2; exit 1; }
-[[ -f "${ENV_FILE}" ]] || { echo "[ERROR] env file not found: ${ENV_FILE}. Copy env_vars.colocated.example to env_vars and fill it in (README step 1)." >&2; exit 1; }
+[[ -f "${ENV_FILE}" ]] || { echo "[ERROR] env file not found: ${ENV_FILE}. Copy env_vars.colocated.example (dense 4B) or env_vars.moe.example (30B MoE) to env_vars and fill it in (README step 1)." >&2; exit 1; }
 [[ -f "${SCRIPT_DIR}/recipe/${RECIPE}" ]] || { echo "[ERROR] recipe not found: recipe/${RECIPE}" >&2; exit 1; }
 
 # ---- discover: the Ray head pod ----
