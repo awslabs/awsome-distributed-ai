@@ -1,4 +1,6 @@
-# STATUS: UNVERIFIED -- mirrors slime reward-service.yaml (remote_rm on CPU pool); not deployed on miles. miles remote_rm lacks slime's retry.
+# STATUS: Partly verified -- deployed on miles, four replicas Ready on a CPU pool, endpoints answered as
+#   specified. Not yet used as the reward path of a training run, so whether miles remote_rm retries
+#   a 503 the way slime does is unconfirmed.
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 #
@@ -80,7 +82,6 @@ spec:
               value: "${REWARD_MODEL_NAME}"
             - name: TORCH_NUM_THREADS
               value: "${REWARD_TORCH_THREADS}"
-            # Wall-clock ceiling per verification, and how many run at once.
             - name: REWARD_VERIFY_TIMEOUT_S
               value: "${REWARD_VERIFY_TIMEOUT_S}"
             - name: REWARD_VERIFY_SLOTS

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# STATUS: UNVERIFIED -- mirrors slime scripts/convert_checkpoint.sh; not executed on miles. The HF-to-Megatron direction is exercised; the reverse is not.
+# STATUS: Verified -- executed on miles in both directions: hf2megatron for both models, and megatron2hf
+#   from the dense 4B run's own checkpoint.
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 # ============================================================

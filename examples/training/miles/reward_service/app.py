@@ -1,4 +1,7 @@
-# STATUS: UNVERIFIED -- UNVERIFIED on miles -- reward payload contract matches slime, but the remote_rm path was not exercised with miles.
+# STATUS: Partly verified -- deployed on miles and exercised directly: /health, /ready, /metrics and
+#   /score on both backends. math_verify returns 422 for an unusable gold label; a run of
+#   service-side failures takes /ready to 503 and one success clears it, while bad data does not.
+#   Not yet driven by miles's remote_rm as the reward path of a training run.
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 """
@@ -53,10 +56,11 @@ REWARD_MODEL_NAME = os.environ.get(
 # horizontally with replicas instead.
 TORCH_NUM_THREADS = int(os.environ.get("TORCH_NUM_THREADS", "4"))
 MAX_LENGTH = int(os.environ.get("REWARD_MAX_LENGTH", "2048"))
-# `or` rather than a get default: envsubst renders an unset variable as an empty string.
 
 
 def _env_number(name: str, default: str, cast, minimum):
+    # `or` rather than a get default: envsubst renders an unset variable as an empty string, which a
+    # get default does not replace.
     raw = os.environ.get(name) or default
     try:
         value = cast(raw)
@@ -69,14 +73,16 @@ def _env_number(name: str, default: str, cast, minimum):
     return value
 
 
-# sympy on model-shaped text can run unbounded. The parent waits slightly longer than the
-# library's own ceiling, so a timeout is reported as one rather than as an empty parse.
+# sympy on model-shaped text can run unbounded. The ceiling below is applied by the library to
+# EACH of its three calls (gold parse, response parse, verify), while the parent waits the ceiling
+# plus this grace for all three together. A verification that spends most of the ceiling in more
+# than one call therefore hits the parent's clock first and is reported as a service timeout.
 VERIFY_TIMEOUT_S = _env_number("REWARD_VERIFY_TIMEOUT_S", "10", float, 1)
 VERIFY_PARENT_GRACE_S = _env_number("REWARD_VERIFY_PARENT_GRACE_S", "5", float, 1)
 # One process each, so a wedged verification can be killed on its own.
 VERIFY_SLOTS = int(_env_number("REWARD_VERIFY_SLOTS", "4", float, 1))
-# Short on purpose: /score holds an anyio threadpool token while waiting, and the probes share
-# that pool.
+# Short on purpose: /score is a sync handler, so waiting here holds an anyio threadpool token and
+# starves other /score calls. The probes are async and do not queue behind it.
 VERIFY_SLOT_WAIT_S = _env_number("REWARD_VERIFY_SLOT_WAIT_S", "2", float, 0.1)
 # Consecutive service-side failures before the pod reports itself not ready. Generous: a short
 # burst must not cost a long run its reward service.
@@ -86,11 +92,10 @@ READY_MAX_CONSECUTIVE_FAILURES = _env_number("REWARD_READY_MAX_CONSECUTIVE_FAILU
 class _Outcomes:
     """Scoring outcome counts, plus the consecutive-failure run that drives readiness.
 
-    The reviewer's point was that a persistently broken scorer trains a run to completion on a
-    flat zero signal behind a healthy-looking Deployment. Status codes alone do not fix that: the
-    client retries, so the operator sees latency rather than a broken pod. Counting the outcomes
-    makes the state readable, and a run of consecutive service-side failures takes the pod out of
-    the Service so the remaining replicas carry the load.
+    Status codes alone leave a persistently broken scorer behind a healthy-looking Deployment,
+    because a retrying client turns the failure into latency rather than a bad pod. The counts make
+    the state readable, and a run of consecutive service-side failures takes the pod out of the
+    Service so the remaining replicas carry the load.
 
     A GoldLabelError does not count. It is one bad sample, not a sick service, and letting bad
     data evict pods would turn a dataset problem into an outage.
@@ -136,7 +141,11 @@ class VerifierTimeoutError(Exception):
 
 
 class VerifierBusyError(Exception):
-    """No verifier slot was free. Capacity, not breakage."""
+    """No verifier slot was free: capacity, not breakage.
+
+    It still counts toward the consecutive-failure run that drives readiness, so sustained load
+    above VERIFY_SLOTS can take a healthy pod out of the Service.
+    """
 
 
 class ScoreRequest(BaseModel):
@@ -206,8 +215,8 @@ class RewardModelScorer(Scorer):
             return float(score.reshape(-1)[0].item())
 
 
-# Tags, not exception types: sympy, torch and the tokenizer all raise ValueError, so the worker
-# is the only place that can tell bad data from a service fault.
+# Tags, not exception types: they cross the process boundary without needing picklable exception
+# classes, and only the worker can tell sympy's bad-data ValueError from a real fault.
 _OK = "ok"
 _GOLD_ERROR = "gold_error"
 _TIMEOUT = "timeout"
@@ -243,7 +252,9 @@ def _math_verify_in_worker(label: str, response: str, timeout_s: float):
     if not gold:
         return (_GOLD_ERROR, f"gold label did not parse: {label!r}")
 
-    # An unparseable response is an ordinary wrong answer: an empty list simply does not verify.
+    # raise_on_error=True here as well, so a parser fault is not silently scored 0.0. The cost is
+    # that malformed model output reaches the caller as a service failure rather than as a wrong
+    # answer.
     try:
         pred = parse(response, parsing_timeout=lib_timeout, raise_on_error=True)
     except TimeoutException as e:
@@ -283,8 +294,10 @@ class _VerifierSlot:
 
     def _spawn(self):
         self._pool = self._ctx.Pool(processes=1)
-        # Outside any request's budget: with spawn the child re-imports sympy, which on a cold
-        # filesystem can exceed the ceiling by itself.
+        # With spawn the child re-imports sympy, which on a cold filesystem can exceed the ceiling by
+        # itself, so warmup gets its own budget rather than the request's. At startup nothing is
+        # waiting on it; reached through recycle() after a timeout, the request pays it before its
+        # 503, which is the one path where a caller waits longer than the ceiling suggests.
         self._pool.apply_async(_warmup_in_worker).get(timeout=max(60.0, VERIFY_TIMEOUT_S * 6))
         self.healthy = True
 
@@ -299,8 +312,8 @@ class _VerifierSlot:
             # The child died or the pipe broke: the pool really is unusable.
             self.recycle()
             raise
-        # Ordinary faults arrive as tags, so nothing here should cost a process. Recycling on
-        # every fault let one malformed shard churn every slot.
+        # Ordinary faults arrive as tags, so nothing here should cost a process: recycling on every
+        # fault would let one malformed shard churn every slot.
 
     def recycle(self):
         self.healthy = False
@@ -421,7 +434,9 @@ async def ready(response: Response):
 
     Readiness rather than liveness, deliberately. Wiring failures into the liveness probe would
     crash-loop the pod on one deterministic bad input mid-rollout; taking it out of the Service
-    leaves the remaining replicas serving and lets it recover.
+    leaves the remaining replicas serving. Note that a pod removed from the Service stops receiving
+    the successful score that would reset the run, so past the threshold it needs a restart or a
+    direct request.
     """
     capacity = _scorer.capacity() if hasattr(_scorer, "capacity") else None
     if _scorer is None or capacity == 0:
@@ -446,13 +461,14 @@ async def metrics():
 def score(req: ScoreRequest):
     """Return the reward, or an HTTP error when there is no reward to return.
 
-    miles's remote_rm assigns the returned JSON value directly to sample.reward, so the earlier
-    habit of answering 0.0 on failure did not merely hide the failure: 0.0 is a legitimate reward,
-    and the run trained on it. An error status says instead that this sample was not scored. The
-    client retries with backoff, so a transient fault costs latency rather than correctness, and a
-    fault that persists stops the run instead of quietly flattening the signal.
+    remote_rm assigns the returned JSON value directly to sample.reward, and 0.0 is a legitimate
+    reward, so a failure answered with 0.0 is a failure the run trains on. An error status says
+    instead that this sample was not scored. A client that retries turns a transient fault into
+    latency rather than lost correctness; one that does not will fail the batch, which is still
+    better than training on a reward nobody computed. Which of the two miles is is unconfirmed.
 
-    422 for a label that cannot be used as a gold answer, because retrying will not change it;
+    422 for a label that parses to nothing, because retrying will not change it; a parser fault
+    on the label is a service failure and answers 503 like the rest;
     503 for a timeout, a busy verifier or an internal fault, because retrying might.
     """
     try:

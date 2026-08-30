@@ -1,4 +1,4 @@
-# STATUS: UNVERIFIED -- mirrors slime data-prep-pod.yaml; not executed on miles.
+# STATUS: Verified -- executed on miles; fetched both models and both datasets to FSx.
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 apiVersion: v1
