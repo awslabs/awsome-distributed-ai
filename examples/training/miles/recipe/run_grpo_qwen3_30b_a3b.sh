@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-# STATUS: Verified -- trains cleanly (colocated, 2 nodes / 16 GPU H200). GRPO steps run to
-#   completion with --colocate + --use-distributed-optimizer + triton MoE runner, and the
-#   resulting generation is healthy: rollout/raw_reward 0.578, rollout/repetition_frac 0.0
-#   over NUM_ROLLOUT=2 (comparable to the dense 4B run), weight_version uniform / mixed 0.0.
+# STATUS: Verified -- trains cleanly (colocated, 2 nodes / 16 GPU H200). 100 rollouts run to
+#   completion with --colocate, --use-distributed-optimizer and the optimizer on the host, and
+#   the generation is healthy: rollout/raw_reward rises 0.539 -> 0.688, rollout/truncated falls
+#   0.461 -> 0.242, rollout/repetition_frac 0.0 throughout. Without the host offload below, the
+#   first optimizer step OOMs on 141GB.
 #   The shipped block runs the rollout MoE in pure expert-parallel (moe_tp=1, i.e.
 #   EP_SIZE == ROLLOUT_GPUS_PER_ENGINE). Running it tensor-parallel AND expert-parallel at
 #   once (moe_tp>1 and moe_ep>1) hits a FlashInfer allreduce-fusion bug in this SGLang build
@@ -256,18 +257,15 @@ TRAIN_ARGS=(
     --actor-num-gpus-per-node "${ACTOR_GPUS_PER_NODE}"
     # Colocated on 16 GPU: actor and rollout time-share the same GPUs. Required
     # for 30B on H200 -- with all 16 GPU behind the actor, --use-distributed-optimizer
-    # shards the 30B optimizer state so static memory fits 141GB. Confining the
-    # actor to 8 GPU (a single node) OOMs (30B static ~121GB/GPU on 8-way).
+    # shards the 30B optimizer state. Confining the actor to 8 GPU (a single node)
+    # OOMs (30B static ~121GB/GPU on 8-way).
     --colocate
     --use-distributed-optimizer
-    # Sharding alone is not enough on 141GB. Measured on p5en.48xlarge: the sharded
-    # state does load, leaving 21GB free per GPU after the model wakes, and the first
-    # optimizer step then dies asking for 2.32GB with 114.85GB already allocated.
-    # Host memory is what upstream miles does for this model and for 235B; the overlap keeps the
-    # copies off the critical path and the precision-aware optimizer is required with it.
-    #
-    # Costly: actor_train_tflops ~37 against ~306 for the dense 4B. A node with more HBM does
-    # not need these flags.
+    # Sharding alone does not fit 141GB: the sharded state loads and the first optimizer step
+    # then OOMs. Host memory is what upstream miles does for this model and for 235B; the
+    # overlap keeps the copies off the critical path and the precision-aware optimizer pairs
+    # with it. actor_train_tflops lands near 37 here against ~306 for the dense 4B on the same
+    # cluster; a node with more HBM does not need these flags.
     --optimizer-cpu-offload
     --overlap-cpu-optimizer-d2h-h2d
     --use-precision-aware-optimizer
@@ -289,9 +287,8 @@ TRAIN_ARGS=(
     # Lowercase only: this reaches uvicorn's log_level, whose LOG_LEVELS dict has no "WARN"
     # key, and the KeyError kills the rollout server before it binds. See README (miles-specific requirements).
     --sglang-log-level warning
-    # Check any --sglang-* flag against the SGLang version in the base image: miles calls
-    # Megatron's parse_args without ignore_unknown_args, so a flag SGLang has removed aborts
-    # the job at startup rather than being ignored.
+    # miles calls Megatron's parse_args without ignore_unknown_args, so a flag SGLang has
+    # removed aborts the job at startup rather than being ignored.
 )
 
 # Optional extra train.py flags injected via EXTRA_TRAIN_ARGS, same mechanism as
@@ -321,11 +318,8 @@ TRAIN_ARGS+=(${EXTRA_TRAIN_ARGS_ARR[@]+"${EXTRA_TRAIN_ARGS_ARR[@]}"})
 # CUDA_DEVICE_MAX_CONNECTIONS=1 is required by Megatron for TP>1 (30B is TP=2).
 # HF_TOKEN is NOT set here: it is injected into the pod env from the k8s Secret in
 # raycluster.yaml, so it never lands in the Ray GCS runtime-env.
-# Build the Ray runtime env with a real JSON encoder, not by interpolating values into a
-# quoted string. A path holding a double quote or a backslash -- both legal in a POSIX path
-# and both plausible on a mount someone else set up -- closes or escapes the literal early
-# and Ray rejects the submission with a parse error that names neither the variable nor the
-# character. Values reach python through the environment, never through the program text.
+# A real JSON encoder, not string interpolation: a quote or backslash in a path is legal and
+# would close the literal early. Values reach python through the environment, not the text.
 command -v python3 >/dev/null 2>&1 || {
     echo "[ERROR] python3 not found; it is needed to encode --runtime-env-json." >&2
     exit 1
