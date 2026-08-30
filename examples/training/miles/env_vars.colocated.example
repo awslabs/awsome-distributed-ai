@@ -95,9 +95,12 @@ export RAY_CLUSTER_NAME="miles-ray"
 # A wrong key OR value leaves pods stuck Pending with FailedScheduling, not an obvious error.
 export GPU_NODE_LABEL_KEY="node-role"
 export GPU_NODE_ROLE="gpu-p5en"          # e.g. "gpu-b300" on a B300 pool
-# The head coordinates only, so point this at a CPU pool. Same key/value caveat as above.
+# Where the Ray head goes. It coordinates only -- no GPU, no CUDA driver -- so this should name
+# a CPU pool; the manifest keeps CUDA-importing actors off the head with num-cpus 0 rather than
+# by giving it a driver. Same caveat as the GPU pair above: the key and the value are both
+# cluster-specific, and a wrong one leaves the head Pending with FailedScheduling.
 export CPU_NODE_LABEL_KEY="${GPU_NODE_LABEL_KEY}"
-export CPU_NODE_ROLE="${GPU_NODE_ROLE}"
+export CPU_NODE_ROLE="cpu"
 
 # Per-node GPU count of your instance type (8 on p5en.48xlarge). The pod request, Ray's
 # --num-gpus and the recipe's placement group all have to agree, so all three come from here.

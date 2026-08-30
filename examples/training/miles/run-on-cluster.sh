@@ -15,14 +15,14 @@
 #
 # What it does NOT do: it does not create infrastructure, build images, prepare data, or deploy
 # manifests. Do those first per the README (steps 0-5): the RayCluster must already be deployed
-# with its head Running on a CUDA-capable (GPU) node, and env_vars must be filled in.
+# with its head and workers Running, and env_vars must be filled in.
 #
 # Usage:
 #   ./run-on-cluster.sh [--recipe run_grpo_qwen3_4b.sh] [--env ./env_vars]
 #                       [--namespace <ns>] [--cluster miles-ray] [--dry-run]
 #
 # NAMESPACE: flag, then the caller's export, then the env file; the last two disagreeing is
-# reported. RAY_CLUSTER_NAME: flag, then the env file, so an export cannot retarget silently.
+# reported. RAY_CLUSTER_NAME: flag, then the env file, then an inherited export.
 # --cluster must match metadata.name in kubernetes/raycluster.yaml.
 # ============================================================
 set -euo pipefail

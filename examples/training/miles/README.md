@@ -225,7 +225,7 @@ kubectl get pods -w -n "${NAMESPACE}" \
 kubectl port-forward -n "${NAMESPACE}" "svc/${RAY_CLUSTER_NAME}-head-svc" 8265:8265 &
 ```
 
-The manifest schedules GPU workers on the GPU pool and the Ray head on the same pool. The head uses no GPU but must sit on a CUDA-capable node; see [Known Issues](#known-issues).
+The manifest schedules GPU workers on the GPU pool and the Ray head on a CPU pool. The head coordinates only and holds no CUDA driver; what keeps the actors that need one off it is described in [Known Issues](#known-issues).
 
 ### 5. Convert Model Weights to Megatron Format
 
@@ -275,7 +275,7 @@ Three items surface on the miles base image that do not occur on the sibling sli
 
 - The base image's CUDA forward-compat `libcuda` is older than the node driver, so `miles.Dockerfile` removes `/usr/local/cuda*/compat` and uses the host driver.
 - The SGLang subprocess resolves `libcuda.so.1` only after the driver-injection directories are appended to `LD_LIBRARY_PATH` and registered with `ldconfig`.
-- miles's Ray control actors import Megatron at startup and link `libcuda.so.1`, so they must land on a CUDA-capable node. The manifest keeps every Ray node on the GPU pool and declares a `gpu_node` custom resource so the job driver lands on a GPU worker.
+- miles's Ray control actors import Megatron at startup and link `libcuda.so.1`, so they must land on a CUDA-capable node. The manifest keeps them off the head by advertising zero CPUs there, and declares a `gpu_node` custom resource so the job driver lands on a GPU worker.
 
 miles adds the sm_103 Transformer Engine FA2 whitelist patch that the sibling slime image reached differently, because the miles base is not the NGC image. The residual patches slime carries for CUDA 13 and Blackwell are tracked in [awsome-distributed-ai issue #1163](https://github.com/awslabs/awsome-distributed-ai/issues/1163); miles applies the equivalent set through its own image build.
 
@@ -285,16 +285,18 @@ miles adds the sm_103 Transformer Engine FA2 whitelist patch that the sibling sl
 
 2. **Qwen2.5-72B does not fit the 16-GPU H200 layout.** The disaggregated TP4 PP2 configuration runs out of memory on 2x p5en.48xlarge. It needs a larger cluster or optimizer and activation offload, neither of which has been run here.
 
-3. **The Ray head must run on a CUDA-capable node.** miles's control actors reach `transformer_engine` through `megatron.core` at import time and that dlopens `libcuda.so.1`, even with `num-gpus 0`. Two settings together satisfy it: the manifest places the head on the GPU pool rather than a CPU node, and the head container sets `NVIDIA_VISIBLE_DEVICES=none`, which asks the NVIDIA container runtime for the driver libraries without assigning a GPU device. `nvidia-smi` in the head therefore reports no devices, which is expected.
+3. **Ray control actors need a CUDA driver, and the head does not have one.** miles's control actors reach `transformer_engine` through `megatron.core` at import time and that dlopens `libcuda.so.1`, even with `num-gpus 0`. The head container is `NVIDIA_VISIBLE_DEVICES=void`, so it has no driver on any node. What keeps those actors off it is `num-cpus: '0'` in the head's `rayStartParams`: `RolloutManager` is created with `num_cpus=1`, so a head advertising no CPUs is not a candidate. Scheduled there it would die about 46 seconds after submission with `OSError: libcuda.so.1`. The job driver is placed separately, by `--entrypoint-resources '{"gpu_node": 0.001}'` in the recipes.
 
-   This mechanism depends on the cluster's container runtime honouring the variable. A runtime configured with `accept-nvidia-visible-devices-envvar-when-unprivileged = false`, or a device plugin using the `volume-mounts` device-list strategy, ignores it, and the head is then left without a driver exactly as if the variable were `void`. The symptom is indistinguishable: the job dies about 46 seconds after submission with `OSError: libcuda.so.1`. Check the head before submitting:
+   Two limits, so this is not read as a guarantee. An actor requesting exactly `num_cpus=0` is still eligible for the head, and miles's `MultiLoRAController` is both `num_cpus=0` and hard-pinned to the head; the recipes here never create it. And miles's `--pin-rollout-manager-to-head`, reachable through `EXTRA_TRAIN_ARGS`, cannot be satisfied by a zero-CPU head at all.
+
+   Giving the head a driver instead is the obvious alternative and it is not portable. `NVIDIA_VISIBLE_DEVICES=none` is the value that asks for the driver libraries without a GPU device, and only the legacy injection path understands it. Where the NVIDIA container toolkit runs in CDI mode, which is what the GPU Operator configures once it writes `enable_cdi` into containerd, `none` resolves to the empty CDI device name `management.nvidia.com/gpu=` and the pod does not start at all, failing with `failed to inject CDI devices`. Measured on `p5en.48xlarge` with container toolkit 1.18.1: `none` gives `StartError`, while the CDI-shaped `management.nvidia.com/gpu=all` does start and does provide `libcuda.so.1` but exposes every GPU on the node to the coordinator, and no driver-only CDI device is generated on the node. Confirm the head is advertising no CPUs:
 
    ```bash
    kubectl exec -n "${NAMESPACE}" <ray-head-pod> -- \
-       python -c "import ctypes; ctypes.CDLL('libcuda.so.1'); print('driver present')"
+       python -c "import ray; ray.init(address='auto'); print(ray.cluster_resources())"
    ```
 
-   If that fails, either change the runtime configuration or request `nvidia.com/gpu: 1` for the head, which costs a GPU but obtains the driver through the device plugin instead. Requiring a driver-capable node for a zero-GPU control process is an upstream limitation in miles, not a constraint introduced by this test case.
+   If you do need a CUDA-capable head, for `--pin-rollout-manager-to-head` or anything else that must run there, request `nvidia.com/gpu: 1` for the head container and drop the zero-CPU setting. That costs a GPU but obtains the driver through the device plugin, which allocates a real device and therefore works on both injection paths. Needing a driver for a zero-GPU control process at all is an upstream property of miles, not something this test case introduces.
 
 ## Reward Function
 
@@ -373,7 +375,7 @@ kubectl exec <pod> -- env | grep NCCL
 # allow all traffic to itself on both ingress and egress, since EFA SRD is not IP.
 ```
 
-**`ImportError: libcuda.so.1`** — the Ray job driver or a control actor landed on a node without the driver; see miles-specific requirements.
+**`ImportError: libcuda.so.1`** — the Ray job driver or a control actor landed on the head or another node without the driver; see miles-specific requirements.
 
 **`torch.cuda.is_available()` is `False` or `Error 803`**
 ```bash

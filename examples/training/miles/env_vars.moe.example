@@ -68,10 +68,9 @@ export FSX_CLAIM="fsx-claim"
 export RAY_CLUSTER_NAME="miles-ray"
 export GPU_NODE_LABEL_KEY="node-role"
 export GPU_NODE_ROLE="gpu-p5en"          # e.g. "gpu-b300" on a B300 pool
-# The head needs a host with the CUDA driver, so it defaults to the same pool as the workers.
-# Do NOT point these at a CPU-only pool; see the README's Known Issues.
+# The head coordinates only, with no GPU and no CUDA driver, so point this at a CPU pool.
 export CPU_NODE_LABEL_KEY="${GPU_NODE_LABEL_KEY}"
-export CPU_NODE_ROLE="${GPU_NODE_ROLE}"
+export CPU_NODE_ROLE="cpu"
 
 export GPUS_PER_WORKER=8
 
