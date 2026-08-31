@@ -6,7 +6,7 @@ The major components of this directory are:
 
 ```
 ├── architectures/               # CloudFormation templates for reference architectures
-├── ami_and_containers/          # Scripts to create AMIs and container images
+├── ami/                         # Scripts to create Amazon Machine Images (Packer/Ansible)
 ├── examples/                  # Reference test cases and/or benchmark scripts
 ├── validation_and_observability/# Tools to measure performance or troubleshoot
 └── micro-benchmarks/              # Micro-benchmarks (NCCL, NCCOM, NVSHMEM, etc.)

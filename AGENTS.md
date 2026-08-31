@@ -67,7 +67,7 @@ explanation of what is missing.
 | `examples/inference/` | Serving examples, organized by engine (vLLM, SGLang, NVIDIA Dynamo, …) |
 | `micro-benchmarks/` | Low-level performance benchmarks (NCCL tests, expert-parallelism kernels, NVSHMEM, …) |
 | `validation_and_observability/` | Cluster health checks, exporters, monitoring stacks |
-| `ami_and_containers/` | Machine image build assets (Packer/Ansible) |
+| `ami/` | Machine image build assets (Packer/Ansible) |
 | `docs/` | Cross-cutting prose documentation (e.g. the [EFA cheatsheet](./docs/efa-cheatsheet.md)) |
 
 > **Exception**: two `LifecycleScripts` trees are deliberately retained at
