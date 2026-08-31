@@ -18,7 +18,7 @@ In this section, we provide you with a [helper script](https://github.com/awslab
     - A Private Subnet in the availability zone where your accelerated compute capacity resides. 
     - A Security Group configured for FSx for Lustre and Elastic Fabric Adapter (EFA) communication. 
     - An EKS Cluster to use as the control interface for your HyperPod cluster. 
-    - An S3 Bucket with with the [on_create.sh](https://github.com/awslabs/awsome-distributed-ai/blob/main/architectures/sagemaker-hyperpod-eks/LifecycleScripts/base-config/on_create.sh) lifecycle script auto-uploaded. 
+    - An S3 Bucket with with the [on_create.sh](https://github.com/awslabs/awsome-distributed-ai/blob/main/1.architectures/7.sagemaker-hyperpod-eks/LifecycleScripts/base-config/on_create.sh) lifecycle script auto-uploaded. 
     - An IAM Role which allows the HyperPod cluster to run and communicate with other AWS resource on your behalf. 
 3. Configuring and deploying your HyperPod cluster with the option to add multiple instance groups.
 4. Configuring your EKS cluster, including:

@@ -521,7 +521,7 @@ setup_env_vars() {
 setup_lifecycle_scripts() {
     echo -e "${BLUE}=== Setting Up Lifecycle Scripts ===${NC}"
 
-    cd awsome-distributed-ai/architectures/sagemaker-hyperpod-eks/LifecycleScripts/base-config/
+    cd awsome-distributed-ai/1.architectures/7.sagemaker-hyperpod-eks/LifecycleScripts/base-config/
 
 
     echo -e "${BLUE}Uploading your lifecycle scripts to S3 bucket ${YELLOW}${BUCKET}${NC}"

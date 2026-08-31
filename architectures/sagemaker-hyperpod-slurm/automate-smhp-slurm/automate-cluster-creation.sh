@@ -345,7 +345,7 @@ setup_env_vars() {
 setup_lifecycle_scripts() {
     echo -e "${BLUE}=== Setting Up Lifecycle Scripts ===${NC}"
 
-    cd awsome-distributed-ai/architectures/sagemaker-hyperpod-slurm/LifecycleScripts/
+    cd awsome-distributed-ai/1.architectures/5.sagemaker-hyperpod/LifecycleScripts/
 
     # Check if FSx OpenZFS was deployed in the stack
     echo -e "${BLUE}Checking if FSx OpenZFS was deployed in the stack...${NC}"

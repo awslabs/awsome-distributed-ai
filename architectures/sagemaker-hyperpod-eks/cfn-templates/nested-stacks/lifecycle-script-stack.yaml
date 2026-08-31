@@ -48,7 +48,7 @@ Resources:
       Environment: 
         Variables:
           BUCKET_NAME: !Ref S3BucketName
-          GITHUB_FOLDER_URL: 'https://github.com/awslabs/awsome-distributed-ai/tree/main/architectures/sagemaker-hyperpod-eks/LifecycleScripts/base-config'
+          GITHUB_FOLDER_URL: 'https://github.com/awslabs/awsome-distributed-ai/tree/main/1.architectures/7.sagemaker-hyperpod-eks/LifecycleScripts/base-config'
       Handler: index.lambda_handler
       Role: !GetAtt S3CustomResourceRole.Arn
       Runtime: python3.12

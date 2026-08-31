@@ -231,7 +231,7 @@ variable "create_lifecycle_script_module" {
 variable "lifecycle_scripts_path" {
   description = "Path to lifecycle scripts directory"
   type        = string
-  default     = "../../LifecycleScripts/base-config"
+  default     = "../../../../1.architectures/5.sagemaker-hyperpod/LifecycleScripts/base-config"
 }
 
 # SageMaker IAM Role Module Variables

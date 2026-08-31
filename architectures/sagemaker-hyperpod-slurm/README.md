@@ -89,7 +89,7 @@ Now that we have all our infrastructure in place, we can create a cluster.
 
 ### 3.1 Lifecycle scripts
 
-Lifecycle scripts tell SageMaker HyperPod how to setup your HyperPod cluster. HyperPod clusters can be launched as plain EC2 clusters with nothing installed, or can be created with configurations and users customized to fit a particular machine learning development workflow. We provide a [base configuration](./LifecycleScripts/base-config) to get started, which creates a basic Slurm cluster. Below is a brief description of what each script is doing.
+Lifecycle scripts tell SageMaker HyperPod how to setup your HyperPod cluster. HyperPod clusters can be launched as plain EC2 clusters with nothing installed, or can be created with configurations and users customized to fit a particular machine learning development workflow. We provide a [base configuration](../../1.architectures/5.sagemaker-hyperpod/LifecycleScripts/base-config) to get started, which creates a basic Slurm cluster. Below is a brief description of what each script is doing.
 
 | Script                       | Description                                                                                                                                    |
 |------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -122,7 +122,7 @@ You can edit `lifecycle_script.py` for further customizations. For example, if y
 For now, let's just use the base configuration provided. Upload the scripts to the bucket you created earlier. This needs to be the same S3 bucket and prefix where we uploaded the other lifecycle scripts earlier.
 
 ```
-aws s3 cp --recursive LifecycleScripts/base-config s3://${BUCKET}/LifecycleScripts/base-config
+aws s3 cp --recursive ../../1.architectures/5.sagemaker-hyperpod/LifecycleScripts/base-config s3://${BUCKET}/LifecycleScripts/base-config
 ```
 
 If you created an FSx for Lustre volume in the previous section, we'll need to update one file in the lifecycle scripts to attach it to our cluster.
@@ -157,7 +157,7 @@ Make sure the `instance_group_name` matches the instance group name `InstanceGro
 Copy the updated `provisioning_parameters.json` to S3:
 
 ```
-aws s3 cp LifecycleScripts/base-config/provisioning_parameters.json s3://${BUCKET}/LifecycleScripts/base-config/
+aws s3 cp ../../1.architectures/5.sagemaker-hyperpod/LifecycleScripts/base-config/provisioning_parameters.json s3://${BUCKET}/LifecycleScripts/base-config/
 ```
 
 Lifecycle scripts can be reused across multiple cluster. This can be handy particularly if you want to move the work saved on your FSx for Lustre volume to a new cluster.

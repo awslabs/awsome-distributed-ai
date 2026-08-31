@@ -75,6 +75,6 @@ create_hyperpod_module = true
 # existing_sagemaker_iam_role_name = "my-existing-role"
 
 # Lifecycle Scripts Configuration
-lifecycle_scripts_path = "../../LifecycleScripts/base-config"
+lifecycle_scripts_path = "../../../../1.architectures/5.sagemaker-hyperpod/LifecycleScripts/base-config"
 
 

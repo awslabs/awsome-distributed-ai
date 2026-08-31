@@ -84,7 +84,7 @@ source env_vars
 
 ## Lifecycle scripts
 
-Lifecycle scripts tell SageMaker HyperPod how to setup your HyperPod cluster. You can use this to install any node level customizations needed for your cluster. We provide a [base configuration](./LifecycleScripts/base-config) to get started. Below is a brief description of what each script is doing.
+Lifecycle scripts tell SageMaker HyperPod how to setup your HyperPod cluster. You can use this to install any node level customizations needed for your cluster. We provide a [base configuration](../../1.architectures/7.sagemaker-hyperpod-eks/LifecycleScripts/base-config) to get started. Below is a brief description of what each script is doing.
 
 | Script                       | Description                                                                                                                                    |
 |------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -93,7 +93,7 @@ Lifecycle scripts tell SageMaker HyperPod how to setup your HyperPod cluster. Yo
 
 For now, let's just use the base configuration provided. Upload the scripts to the bucket you created earlier.
 ```
-aws s3 cp --recursive LifecycleScripts/base-config s3://${BUCKET_NAME}/LifecycleScripts/base-config
+aws s3 cp --recursive ../../1.architectures/7.sagemaker-hyperpod-eks/LifecycleScripts/base-config s3://${BUCKET_NAME}/LifecycleScripts/base-config
 ```
 
 ## Cluster configuration

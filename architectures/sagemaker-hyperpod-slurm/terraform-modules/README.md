@@ -113,7 +113,7 @@ fsx_openzfs_storage_capacity = 64
 fsx_openzfs_throughput_capacity = 64
 fsx_openzfs_compression_type = "ZSTD"
 ```
-Then set ```enable_fsx_openzfs = True ``` in ```../../LifecycleScripts/base-config/config.py``` to mount the file system during the lifecycle scripts execution. 
+Then set ```enable_fsx_openzfs = True ``` in ```../../../../1.architectures/5.sagemaker-hyperpod/LifecycleScripts/base-config/config.py``` to mount the file system during the lifecycle scripts execution. 
     
 ## Modules
 
@@ -128,7 +128,7 @@ Then set ```enable_fsx_openzfs = True ``` in ```../../LifecycleScripts/base-conf
 
 ## Lifecycle Scripts
 
-The modules automatically upload the base Slurm configuration from `../../LifecycleScripts/base-config/` to your S3 bucket. These scripts:
+The modules automatically upload the base Slurm configuration from `../../../../1.architectures/5.sagemaker-hyperpod/LifecycleScripts/base-config/` to your S3 bucket. These scripts:
 
 - Configure Slurm scheduler
 - Mount FSx Lustre file system
