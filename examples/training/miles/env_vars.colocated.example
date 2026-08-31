@@ -74,8 +74,8 @@ export MODEL_SCRIPT="qwen3-4B.sh"
 # ----- Cluster -----
 export NAMESPACE="default"
 export FSX_CLAIM="fsx-claim"
-# Renders metadata.name and the ray.io/cluster selector run-on-cluster.sh matches, so they
-# cannot drift.
+# Renders metadata.name and is the default ray.io/cluster selector run-on-cluster.sh
+# matches; --cluster can point a submission somewhere else.
 export RAY_CLUSTER_NAME="miles-ray"
 # Node/GPU topology comes from ACTOR_NUM_NODES / ACTOR_GPUS_PER_NODE / ROLLOUT_NUM_GPUS above;
 # ACTOR_NUM_NODES also drives the RayCluster's worker replica count, so the manifest and the
@@ -95,15 +95,12 @@ export RAY_CLUSTER_NAME="miles-ray"
 # A wrong key OR value leaves pods stuck Pending with FailedScheduling, not an obvious error.
 export GPU_NODE_LABEL_KEY="node-role"
 export GPU_NODE_ROLE="gpu-p5en"          # e.g. "gpu-b300" on a B300 pool
-# Where the Ray head goes. It coordinates only -- no GPU, no CUDA driver -- so this should name
-# a CPU pool; the manifest keeps CUDA-importing actors off the head with num-cpus 0 rather than
-# by giving it a driver. Same caveat as the GPU pair above: the key and the value are both
-# cluster-specific, and a wrong one leaves the head Pending with FailedScheduling.
+# The head coordinates only, so point this at a CPU pool. Same key/value caveat as above.
 export CPU_NODE_LABEL_KEY="${GPU_NODE_LABEL_KEY}"
 export CPU_NODE_ROLE="cpu"
 
 # Per-node GPU count of your instance type (8 on p5en.48xlarge). The pod request, Ray's
-# --num-gpus and the recipe's placement group all have to agree, so all three come from here.
+# --num-gpus come from here, and the recipes check their placement math against it.
 export GPUS_PER_WORKER=8
 
 # EFA_PER_NODE: EFA devices each worker pod requests, substituted into
@@ -141,7 +138,8 @@ export CHECKPOINT_DIR="/fsx/runs/qwen3-4b/ckpt"
 # SAVE_INTERVAL is kept at or above NUM_ROLLOUT so short smoke runs do not pay the
 # ~270s in-loop save cost on every rollout; the single end-of-run save still fires and
 # succeeded on every verification run (a torch_dist checkpoint is written to CHECKPOINT_DIR).
-# Reloading that checkpoint and the megatron2hf back-conversion are untested.
+# The megatron2hf back-conversion has since been run from that checkpoint; reloading it into
+# a resumed run has not.
 export SAVE_INTERVAL=1000
 export NUM_ROLLOUT=100
 export ROLLOUT_BATCH_SIZE=16

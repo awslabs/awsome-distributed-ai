@@ -375,6 +375,8 @@ kubectl exec <pod> -- env | grep NCCL
 # allow all traffic to itself on both ingress and egress, since EFA SRD is not IP.
 ```
 
+**`[Errno 28] No space left on device` during the checkpoint save** — a dense 4B run writes about 53 GB per checkpoint, so `CHECKPOINT_DIR` needs real headroom. On a shared Lustre filesystem near capacity the save can fail this way even when `df` reports hundreds of gigabytes free, because free space is not distributed evenly across the OSTs the write lands on. Check per-OST usage rather than the aggregate, or point `CHECKPOINT_DIR` at a filesystem with room to spare.
+
 **`ImportError: libcuda.so.1`** — the Ray job driver or a control actor landed on the head or another node without the driver; see miles-specific requirements.
 
 **`torch.cuda.is_available()` is `False` or `Error 803`**

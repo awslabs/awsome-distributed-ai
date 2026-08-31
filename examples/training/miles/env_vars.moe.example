@@ -29,8 +29,6 @@ else
   echo "[WARN] the head pod; set both before building, pushing, or rendering a manifest." >&2
 fi
 
-# ----- HuggingFace -----
-
 # ----- Model (Qwen3-30B-A3B MoE, bf16) -----
 # The actor must span all 16 GPU: on 8 the sharded 30B optimizer state does not fit 141GB.
 # EP_SIZE == ROLLOUT_GPUS_PER_ENGINE keeps the rollout MoE pure expert-parallel. Raising
@@ -64,7 +62,7 @@ export SGLANG_MEM_FRACTION=0.75
 # ----- Cluster -----
 export NAMESPACE="default"
 export FSX_CLAIM="fsx-claim"
-# Renders metadata.name and the ray.io/cluster selector, so they cannot drift.
+# Renders metadata.name and is the default ray.io/cluster selector; --cluster can override it.
 export RAY_CLUSTER_NAME="miles-ray"
 export GPU_NODE_LABEL_KEY="node-role"
 export GPU_NODE_ROLE="gpu-p5en"          # e.g. "gpu-b300" on a B300 pool
@@ -85,7 +83,8 @@ export CHECKPOINT_DIR="/fsx/runs/qwen3-30b/ckpt"
 # SAVE_INTERVAL is kept at or above NUM_ROLLOUT so short smoke runs do not pay the
 # ~270s in-loop save cost on every rollout; the single end-of-run save still fires and
 # succeeded on every verification run (a torch_dist checkpoint is written to CHECKPOINT_DIR).
-# Reloading that checkpoint and the megatron2hf back-conversion are untested.
+# The megatron2hf back-conversion has since been run from that checkpoint; reloading it into
+# a resumed run has not.
 export SAVE_INTERVAL=1000
 export NUM_ROLLOUT=100
 export ROLLOUT_BATCH_SIZE=16
