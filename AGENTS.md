@@ -103,27 +103,25 @@ Placement rules for new content:
 
 ## 3. Development Workflow
 
-There is no repo-wide build. Verification is per-asset:
+There is no repo-wide build or test suite, and **pytest cannot verify an
+example**. The only verification that counts is running the example on its
+target hardware, following its own README, end to end.
 
-```bash
-# Docker-build smoke tests (fixtures come from the root conftest.py —
-# run pytest from the repo root or pass the example directory):
-python3 -m pytest examples/training/megatron-lm/ -v
-# Keep the built image for inspection instead of removing it:
-python3 -m pytest examples/training/megatron-bridge/ -v --keep-artifacts
-```
+Supporting checks — useful, but never sufficient on their own:
 
+- A few examples ship a pytest docker-build smoke test (fixtures come from
+  the root `conftest.py`, e.g.
+  `python3 -m pytest examples/training/megatron-lm/ -v`). It proves only
+  that the container builds.
 - Markdown follows the root [`.markdownlint.jsonc`](./.markdownlint.jsonc)
   (`npx markdownlint-cli2 "<changed files>"`).
 - CloudFormation/Terraform changes: validate with the tooling documented in
   the area you are editing (e.g. `terraform validate`, per-area lint
   scripts).
-- Functional changes to an example are verified by running it on the target
-  hardware — a successful `docker build` alone is not verification.
-- Per-asset verification is not single-asset verification: a change to a
-  shared file (the root `conftest.py`, a shared Dockerfile or script, an
-  architecture building block) affects every consumer — enumerate the
-  affected assets and run the applicable check for each.
+- A change to a shared file (the root `conftest.py`, a shared Dockerfile or
+  script, an architecture building block) affects every consumer —
+  enumerate the affected assets and verify each one that the change can
+  break.
 
 ## 4. Domain-Specific Guides
 
