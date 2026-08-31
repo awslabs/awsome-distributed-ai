@@ -62,6 +62,12 @@ short explanation of what is missing.
 
 Placement rules for new content:
 
+- **Extend before create.** Before adding a new example, check whether an
+  existing example already covers the same framework or engine. Prefer
+  updating it — a new variant subdirectory, model recipe, or README
+  section inside the existing example — over adding a parallel top-level
+  example. Add a new example directory only when no existing one fits;
+  unbounded near-duplicate examples are a maintenance liability.
 - A **training framework** example goes to `examples/training/<framework>/`.
 - A **specific model or application** (even if it trains) goes to
   `examples/use-cases/<name>/`.
