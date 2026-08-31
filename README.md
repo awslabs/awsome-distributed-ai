@@ -47,7 +47,7 @@ Architectures are located in `architectures` and consist of utilities and servic
 | [`accounting-database`](./architectures/accounting-database)             | Tooling  | Accounting database for job tracking                 |
 | [`aws-pcs`](./architectures/aws-pcs)                                           | Compute  | AWS Parallel Computing Service templates with Slurm scheduler |
 
-You will also find [documentation](./architectures/efa-cheatsheet.md) for EFA and the recommended environment variables.
+You will also find [documentation](./docs/efa-cheatsheet.md) for EFA and the recommended environment variables.
 
 ## 2. Custom Amazon Machine Images
 

@@ -449,4 +449,4 @@ same license as the rest of `awsome-distributed-ai`.
   https://github.com/ai-dynamo/nixl/blob/main/src/plugins/libfabric/README.md
 - DeepSeek-V3 paper: https://arxiv.org/abs/2412.19437
 - AWS EFA cheat sheet:
-  https://github.com/awslabs/awsome-distributed-ai/blob/main/architectures/efa-cheatsheet.md
+  https://github.com/awslabs/awsome-distributed-ai/blob/main/docs/efa-cheatsheet.md

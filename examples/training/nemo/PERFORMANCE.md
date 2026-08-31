@@ -19,7 +19,7 @@ This document describes the process of performance measurements of NeMo 2.x fram
 * [NVIDIA NeMo Performance Scripts](https://github.com/NVIDIA/NeMo/tree/main/scripts/performance/llm)
 * [NVIDIA NeMo Compatibility Matrix](https://docs.nvidia.com/nemo-framework/user-guide/latest/softwarecomponentversions.html)
 * [AWS EFA Documentation](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-start.html)
-* [EFA Cheatsheet](../../../architectures/efa-cheatsheet.md)
+* [EFA Cheatsheet](../../../docs/efa-cheatsheet.md)
 
 ### NeMo Version Compatibility
 
@@ -90,7 +90,7 @@ Create an `env_vars.json` file with optimized settings for EFA:
 }
 ```
 
-See the [EFA Cheatsheet](../../../architectures/efa-cheatsheet.md) for detailed explanations of each variable.
+See the [EFA Cheatsheet](../../../docs/efa-cheatsheet.md) for detailed explanations of each variable.
 
 ### Run Performance Test
 

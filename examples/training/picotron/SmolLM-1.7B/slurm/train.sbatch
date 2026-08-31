@@ -20,7 +20,7 @@ GPUS_PER_NODE=1
 ######## EFA / NCCL #######
 ###########################
 
-## See architectures/efa-cheatsheet.md for full reference
+## See docs/efa-cheatsheet.md for full reference
 export FI_EFA_USE_HUGE_PAGE=0
 export FI_PROVIDER=efa
 export NCCL_SOCKET_IFNAME=^docker,lo,veth

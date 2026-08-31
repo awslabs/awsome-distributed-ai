@@ -84,7 +84,7 @@ spec:
                 - name: GRPO_MAX_STEPS
                   value: "20"
                 # ── NCCL / EFA ──
-                # Exclusion pattern per repo convention (see architectures/efa-cheatsheet.md).
+                # Exclusion pattern per repo convention (see docs/efa-cheatsheet.md).
                 # hostNetwork: true means the container sees host interfaces — excluding
                 # lo/docker/veth is sufficient to pick the node's primary ENI on g5.
                 - name: NCCL_SOCKET_IFNAME
