@@ -9,6 +9,12 @@ Here are the details of each, along with its usage and the expected output.
 
 See the [`devops-agent/README.md`](./devops-agent/README.md) for architecture, deployment, and usage details.
 
+### [`sagemaker_ftp`](./sagemaker_ftp)
+
+Bash helper that searches available **SageMaker Flexible Training Plan (FTP)** offerings scoped to an Availability Zone and recommends the lowest effective `$/instance/hour`. It wraps `aws sagemaker search-training-plan-offerings`, sweeping multiple reservation durations (the API filters strictly on duration), for both HyperPod clusters and training jobs.
+
+See [`sagemaker_ftp/README.md`](./sagemaker_ftp/README.md) for usage.
+
 ### [`dump_cluster_nodes_info.py`](./dump_cluster_nodes_info.py) 
 
 Utility to dump details of all nodes in a cluster, into a csv file. 
