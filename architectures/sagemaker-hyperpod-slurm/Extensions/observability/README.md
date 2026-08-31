@@ -144,7 +144,7 @@ Deploy the CloudFormation stack that provisions an AMP workspace and an
 Amazon Managed Grafana workspace:
 
 ```bash
-wget https://raw.githubusercontent.com/aws-samples/awsome-distributed-ai/main/validation_and_observability/prometheus-grafana/cluster-observability.yaml
+wget https://raw.githubusercontent.com/aws-samples/awsome-distributed-ai/main/observability/prometheus-grafana/cluster-observability.yaml
 
 aws cloudformation create-stack \
     --stack-name hyperpod-observability \

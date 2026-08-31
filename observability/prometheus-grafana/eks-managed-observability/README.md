@@ -113,7 +113,7 @@ You should see GPU metrics like `DCGM_FI_DEV_GPU_UTIL`, `DCGM_FI_DEV_GPU_TEMP`, 
 Use the provided script for automated setup:
 
 ```bash
-cd awsome-distributed-ai/validation_and_observability/prometheus-grafana/eks-managed-observability
+cd awsome-distributed-ai/observability/prometheus-grafana/eks-managed-observability
 
 # (Optional) Provide custom DCGM metrics. If a custom-dcgm-metrics.csv file
 # exists in this directory, the script builds those metrics into DCGM Exporter.

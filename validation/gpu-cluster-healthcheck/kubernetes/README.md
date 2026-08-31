@@ -52,7 +52,7 @@ The Kubernetes deployment consists of three components:
 ### 1. Build the Container Image
 
 ```bash
-cd validation_and_observability/gpu-cluster-healthcheck
+cd validation/gpu-cluster-healthcheck
 
 # Build
 docker build -f kubernetes/Dockerfile -t gpu-healthcheck:latest .

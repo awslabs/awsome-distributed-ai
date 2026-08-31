@@ -8,7 +8,8 @@ The major components of this directory are:
 ├── architectures/               # CloudFormation templates for reference architectures
 ├── ami/                         # Scripts to create Amazon Machine Images (Packer/Ansible)
 ├── examples/                  # Reference test cases and/or benchmark scripts
-├── validation_and_observability/# Tools to measure performance or troubleshoot
+├── validation/                  # Environment and cluster health validation tools
+├── observability/               # Monitoring, metrics exporters, and profiling
 └── micro-benchmarks/              # Micro-benchmarks (NCCL, NCCOM, NVSHMEM, etc.)
 ```
 
@@ -81,15 +82,15 @@ Browse [`examples/`](./examples) to see the full list of frameworks, engines, an
 
 ## 4. Validation and Observability
 
-Utility scripts and tools for validating your environment and monitoring training jobs are under `validation_and_observability/`.
+Environment and cluster health validation tools live under `validation/`; monitoring stacks, metrics exporters, and profiling guides live under `observability/`.
 
 | Name                                                                                            | Comments                                                        |
 | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| [`pytorch-env-validation`](./validation_and_observability/pytorch-env-validation)         | Validates your PyTorch environment                              |
-| [`gpu-cluster-healthcheck`](./validation_and_observability/gpu-cluster-healthcheck)       | GPU cluster health checks                                       |
-| [`efa-node-exporter`](./validation_and_observability/efa-node-exporter)                   | Node exporter with Amazon EFA monitoring modules                |
-| [`prometheus-grafana`](./validation_and_observability/prometheus-grafana)                  | Monitoring for SageMaker HyperPod and EKS GPU clusters          |
-| [`nsight`](./validation_and_observability/nsight)                                         | Shows how to run Nvidia Nsight Systems to profile your workload |
+| [`pytorch-env-validation`](./validation/pytorch-env-validation)         | Validates your PyTorch environment                              |
+| [`gpu-cluster-healthcheck`](./validation/gpu-cluster-healthcheck)       | GPU cluster health checks                                       |
+| [`efa-node-exporter`](./observability/efa-node-exporter)                   | Node exporter with Amazon EFA monitoring modules                |
+| [`prometheus-grafana`](./observability/prometheus-grafana)                  | Monitoring for SageMaker HyperPod and EKS GPU clusters          |
+| [`nsight`](./observability/nsight)                                         | Shows how to run Nvidia Nsight Systems to profile your workload |
 
 ## 5. Micro-benchmarks
 

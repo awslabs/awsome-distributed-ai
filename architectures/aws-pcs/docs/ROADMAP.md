@@ -148,7 +148,7 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
 
 - [ ] 🟡 **AWS-managed monitoring stack option.** Offer Amazon Managed Service for
   Prometheus + Amazon Managed Grafana as an alternative to the self-hosted stack on the
-  login node (see `validation_and_observability/prometheus-grafana`), so users can
+  login node (see `observability/prometheus-grafana`), so users can
   use a managed backend instead of running the containers themselves.
 - [ ] 🟢 **Persist Prometheus TSDB / Grafana DB across login-node replacement.** Monitoring
   runs on the login node and is otherwise replacement-safe (compute scraping is pull-based

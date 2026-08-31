@@ -150,7 +150,7 @@ if batch_idx == args.nsys_end_step and global_rank == 0:
 
 
 # 4. Profiling NCCL tests
-In this section we will show how to generate Nsight reports for NCCL tests. Follow the instructions [here](https://github.com/awslabs/awsome-distributed-ai/tree/main/validation_and_observability/0.nccl-tests) to setup NCCL tests and generate the Enroot image `nccl.sqsh`. The `0.nsight_nccl.sbatch` script shows an example on how to profile the NCCL run with Nsight and collect EFA metrics. Key differences between `0.nsight_nccl.sbatch` and [this](https://github.com/awslabs/awsome-distributed-ai/blob/main/validation_and_observability/0.nccl-tests/1.nccl-tests.sbatch) are:
+In this section we will show how to generate Nsight reports for NCCL tests. Follow the instructions [here](https://github.com/awslabs/awsome-distributed-ai/tree/main/micro-benchmarks/nccl-tests) to setup NCCL tests and generate the Enroot image `nccl.sqsh`. The `0.nsight_nccl.sbatch` script shows an example on how to profile the NCCL run with Nsight and collect EFA metrics. Key differences between `0.nsight_nccl.sbatch` and [this](https://github.com/awslabs/awsome-distributed-ai/blob/main/micro-benchmarks/nccl-tests/slurm/nccl-tests-container.sbatch) are:
 
 1. `/fsx` needs to be mounted to the container as this is where our Nsight binaries are located.
 2. The `0.nsight_nccl.sbatch` script references the executable `nsys-slurm-exec` which is given below and should exist in `/fsx`

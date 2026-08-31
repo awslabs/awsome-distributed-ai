@@ -20,7 +20,7 @@ phases:
       - export REPO_URI="$(aws ecr describe-repositories | grep repositoryUri | grep /${ECR_REPOSITORY_NAME}\" | cut -d '"' -f 4)"
       - echo "REPO_URI=$REPO_URI"
       - echo "Building ${REPO_URI}:${TAG} ..."
-      - cd validation_and_observability/efa-node-exporter && docker image build --build-arg NODE_EXPORTER_VERSION=$NODE_EXPORTER_VERSION --build-arg PROCFS_EXPORTER_VERSION=$PROCFS_EXPORTER_VERSION -t ${REPO_URI}:${TAG} -f ./Dockerfile .
+      - cd observability/efa-node-exporter && docker image build --build-arg NODE_EXPORTER_VERSION=$NODE_EXPORTER_VERSION --build-arg PROCFS_EXPORTER_VERSION=$PROCFS_EXPORTER_VERSION -t ${REPO_URI}:${TAG} -f ./Dockerfile .
   post_build:
     commands:
       - export ECR_URI=${REPO_URI%"/${ECR_REPOSITORY_NAME}"}

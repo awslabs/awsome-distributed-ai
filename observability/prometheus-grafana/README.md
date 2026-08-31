@@ -37,7 +37,7 @@ The solution uses SageMaker HyperPod [Lifecycle Scripts](https://github.com/awsl
 | Name                                                               | Script Deployment Target | Metrics Description                                             |
 | ------------------------------------------------------------------ | -------- | --------------------------------------------------- |
 | [`0.Prometheus Slurm Exporter`](https://github.com/SckyzO/slurm_exporter)                                   | controller-node  | SLURM Accounting metrics (sinfo, sacct)                                |
-| [`1.EFA-Node-Exporter`](https://github.com/awslabs/awsome-distributed-ai/tree/main/validation_and_observability/efa-node-exporter)                 | cluster-nodes  | Fork of Node exporter to include metrics from emitted from EFA         |
+| [`1.EFA-Node-Exporter`](https://github.com/awslabs/awsome-distributed-ai/tree/main/observability/efa-node-exporter)                 | cluster-nodes  | Fork of Node exporter to include metrics from emitted from EFA         |
 | [`2.NVIDIA-DCGM-Exporter`](https://github.com/NVIDIA/dcgm-exporter) | cluster-nodes  | Nvidia DCGM Metrics about Nvidia Enabled GPUs |
 
 ### Prerequisites 

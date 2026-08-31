@@ -8,7 +8,7 @@ To create the docker image run:
 
 ```bash
 git clone https://github.com/awslabs/awsome-distributed-ai.git
-cd awsome-distributed-ai/validation_and_observability/efa-node-exporter
+cd awsome-distributed-ai/observability/efa-node-exporter
 make
 ```
 
