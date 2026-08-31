@@ -11,6 +11,7 @@ set -euo pipefail
 : "${EP_DISPATCH_DTYPES:?Set EP_DISPATCH_DTYPES}"
 : "${EP_WARMUPS:=20}"
 : "${EP_ITERATIONS:=100}"
+: "${EP_NUM_SMS:=0}"
 : "${EP_SEED:=20260824}"
 : "${EP_NCCL_DEBUG:=WARN}"
 
@@ -37,8 +38,10 @@ case "${EP_ARM}" in
         export FI_EFA_USE_HW_CNTR=1
         export NCCL_GIN_TYPE=5
         export NCCL_SYM_GIN_KERNELS_ENABLE=0
-        export EP_BUFFER_DEBUG=1
+        # EP_BUFFER_DEBUG printfs inside the CPU-wait path cost ~3% on decode,
+        # so scored measurement runs (WARN) leave it off.
         if [[ "${NCCL_DEBUG}" == INFO ]]; then
+            export EP_BUFFER_DEBUG=1
             export NCCL_DEBUG_SUBSYS=INIT,ENV,NET
             export FI_LOG_LEVEL=info
             export FI_LOG_PROV=efa
@@ -71,6 +74,7 @@ torchrun \
     --seed="${EP_SEED}" \
     --warmups="${EP_WARMUPS}" \
     --iterations="${EP_ITERATIONS}" \
+    --num-sms="${EP_NUM_SMS}" \
     --run-index="${EP_RUN_INDEX}" \
     --dispatch-dtypes="${EP_DISPATCH_DTYPES}"
 status=$?

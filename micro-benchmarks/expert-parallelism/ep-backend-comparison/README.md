@@ -17,9 +17,9 @@ The B200 report and backend box plots are in [RESULTS.md](RESULTS.md). EP32 mean
 | Profile | Tokens | UCCL and DeepEP V1 API | DeepEP V2 API | Primary metric |
 |---|---:|---|---|---|
 | Decode-like | 128 tokens/rank | `low_latency_dispatch` and `low_latency_combine` | `ElasticBuffer.dispatch` and `ElasticBuffer.combine` | Slowest-rank latency, in ms |
-| Prefill-like | 4,096 tokens/rank | Normal `Buffer.dispatch` and `Buffer.combine` | `ElasticBuffer.dispatch` and `ElasticBuffer.combine` | Effective logical throughput, in GB/s/rank |
+| Prefill-like | 4,096 tokens/rank | Normal `Buffer.dispatch` and `Buffer.combine` | `ElasticBuffer.dispatch` and `ElasticBuffer.combine` | Slowest-rank latency, in ms |
 
-The Prefill-like timing boundary starts with a BF16 input and exact route ready. It includes the dispatch layout required by the normal UCCL and DeepEP V1 APIs, dispatch, and combine completion. The Decode-like boundary starts with the BF16 input ready and includes dispatch and combine completion. Required FP8 conversion is inside both boundaries.
+The Prefill-like timing boundary starts with the dispatch input and exact route ready. It includes the dispatch layout required by the normal UCCL and DeepEP V1 APIs, dispatch, and combine completion. The Decode-like boundary starts with the dispatch input ready and includes dispatch and combine completion. Host-side FP8 conversion runs once before either boundary, so no arm is charged for its Python quantizer. In the Decode-like FP8 cell the low-latency UCCL and DeepEP V1 kernels still quantize internally, inside the boundary; each backend is measured from its own API's dispatch-ready entry point.
 
 Both profiles hold the following controls constant across backends:
 
@@ -30,15 +30,16 @@ Both profiles hold the following controls constant across backends:
 | Model shape | Hidden size 7,168, 256 experts, top-k 8 experts/token |
 | Operations | FP8 or BF16 dispatch followed by BF16 combine |
 | Rank reduction | Maximum elapsed time across all ranks for each measured iteration |
+| SM count | Each result records the communication-kernel SM count (`num_sms`) where the backend exposes one; `EP_NUM_SMS` pins it explicitly, and 0 keeps each backend's automatic choice |
 | Warmup | 20 warmup iterations per dtype and process start |
 | Measurement | 100 measured iterations per dtype and process start |
-| Replication | 3 independent process starts per arm and workload cell |
+| Replication | 20 independent process starts per arm and workload cell |
 | Order | Backend, dtype, and workload-profile order rotate across starts |
 | Hardware | The same named nodes serve every arm at a given EP size |
-| Runtime | Every result reports the same GPU, PyTorch, CUDA, and NCCL versions |
+| Runtime | Every result reports the same GPU, PyTorch, CUDA, and torch-built NCCL versions, plus the NCCL library actually loaded (consistent within each arm) |
 | Correctness | Every rank passes the common identity-expert result before timing |
 
-Each process start contributes its median of 100 slowest-rank iteration measurements. The report then takes the median across 3 process starts. Iterations within one process are not treated as independent replicates.
+Each process start contributes its median of 100 slowest-rank iteration measurements. The report then takes the median across the independent process starts. Iterations within one process are not treated as independent replicates.
 
 ## Common logical throughput
 
@@ -49,7 +50,7 @@ logical GB/s/rank = average logical bytes/rank / median slowest-rank latency
 scale-out logical GB/s/rank = average remote logical bytes/rank / median slowest-rank latency
 ```
 
-These are logical efficiency metrics, not observed wire bandwidth.
+These are secondary logical efficiency metrics, not observed wire bandwidth. Within one profile, EP size, and dtype cell the byte numerator is a shared constant, so they rank backends identically to the primary latency metric. Compare across EP sizes with aggregate input tokens/s instead: the scale-out numerator counts every remote assignment as a full tensor, while a backend may send one copy per destination node and forward locally, so its over-count factor changes with node count and the scale-out column is comparable only within one EP size.
 
 ## Files
 
@@ -68,7 +69,7 @@ These are logical efficiency metrics, not observed wire bandwidth.
 
 The scored B200 matrix requires:
 
-- 4 named, Ready `p6-b200.48xlarge` nodes in one EKS cluster;
+- enough named, Ready `p6-b200.48xlarge` nodes (`EP_INSTANCE_TYPE`) in one EKS cluster for the largest configured EP size (`EP_WORLD_SIZES`, default `16 32`, needs 4 nodes; a 2-node cluster can run `EP_WORLD_SIZES=16`); `EP_REGION` and `EP_CLUSTER_NAME` label the campaign provenance;
 - 8 allocatable GPUs and 8 allocatable EFA devices on every selected node;
 - no active GPU requests on the selected nodes before each arm;
 - the NVIDIA and EFA Kubernetes device plugins;
@@ -77,7 +78,7 @@ The scored B200 matrix requires:
 - `aws`, `kubectl`, `jq`, `rg`, Python 3, and Bash on the launch host; and
 - access to the 3 digest-pinned backend images.
 
-DeepEP V2 receives an INFO-level EP16 Decode-like admission run before the scored matrix. All 3 backends then receive an EP16 Prefill-like admission run. A missing HMM mitigation, GDRCopy device, GDAKI proof, or profile correctness result stops the campaign before scoring.
+DeepEP V2 receives an INFO-level Decode-like admission run at the smallest configured EP size before the scored matrix. All 3 backends then receive a Prefill-like admission run at that size. A missing HMM mitigation, GDRCopy device, GDAKI proof, or profile correctness result stops the campaign before scoring.
 
 ## Run on an exclusive node set
 
@@ -116,15 +117,15 @@ Observe mode never mutates the shared Lease. It verifies the exact holder before
 
 ## Execution matrix
 
-The scored order uses 3 independent starts:
+The scored order uses 20 independent starts (`INDEPENDENT_STARTS`). Three rotation patterns cycle across the starts:
 
-| Start index | Backend order | Profile order | Dtype order |
+| Start index mod 3 | Backend order | Profile order | Dtype order |
 |---:|---|---|---|
 | 1 | UCCL, DeepEP V1, DeepEP V2 | Decode-like, Prefill-like | FP8, BF16 |
 | 2 | DeepEP V2, UCCL, DeepEP V1 | Prefill-like, Decode-like | BF16, FP8 |
-| 3 | DeepEP V1, DeepEP V2, UCCL | Decode-like, Prefill-like | FP8, BF16 |
+| 0 | DeepEP V1, DeepEP V2, UCCL | Decode-like, Prefill-like | FP8, BF16 |
 
-The runner executes the rotation first at 16 ranks on 2 nodes and then at 32 ranks on 4 nodes. Arms run serially, and every StatefulSet and its GPU pods must be gone before the next arm is admitted. The full matrix contains 36 distributed process starts and 72 scored dtype results.
+The runner executes the rotation at each configured EP size in `EP_WORLD_SIZES` order, by default first at 16 ranks on 2 nodes and then at 32 ranks on 4 nodes. Arms run serially, and every StatefulSet and its GPU pods must be gone before the next arm is admitted. The default matrix contains 240 distributed process starts and 480 scored dtype results.
 
 ## Durable artifacts and teardown
 
@@ -162,11 +163,13 @@ Every rank log, rendered Pod manifest, Pod description, canonical rank-zero JSON
 
 ```bash
 python3 summarize_results.py /path/to/artifacts/runs \
-  --starts=3 \
+  --starts=20 \
   --provenance=/path/to/artifacts/control/provenance.json \
   --json=/path/to/artifacts/summary/summary.json \
   --markdown=/path/to/artifacts/summary/summary.md
 ```
+
+Pass `--world-sizes` for a reduced matrix, for example `--world-sizes=16` for a 2-node EP16-only campaign. Without the flag the summarizer derives the EP sizes from the loaded logs and validates the full arm/dtype/profile/start matrix for each derived size.
 
 If a native library appends a diagnostic to the JSON marker's physical line, use the repository parser:
 
@@ -183,7 +186,7 @@ python3 plot_results.py results/b200-ap-south-1-2026-08-25.json \
   --output=results/b200-ap-south-1-2026-08-25-boxplots.png
 ```
 
-Plot generation requires Matplotlib. Each box uses the 3 independent process-start medians for one backend and workload cell. The plot also shows every underlying point.
+Plot generation requires Matplotlib. Each box uses the independent process-start medians for one backend and workload cell. The plot also shows every underlying point.
 
 ## Local validation
 

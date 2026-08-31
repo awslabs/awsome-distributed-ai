@@ -2,6 +2,8 @@
 
 Status: `PASS`
 
+> **Methodology superseded.** These tables were measured with the FP8 host-side cast inside the timed region, `EP_BUFFER_DEBUG=1` on the DeepEP V2 arm, 3 independent starts, and logical GB/s/rank as the prefill primary metric. The harness has since moved the cast outside the boundary, disabled the debug printfs on scored runs, raised the start count to 20, and made slowest-rank latency the primary metric for both profiles. Re-measurement is pending; treat cross-dtype decode comparisons and cross-EP-size scale-out throughput comparisons here with caution.
+
 The previous Decode-only result has been discarded. It must not be combined with this two-profile matrix because Prefill-like uses the normal high-throughput API and a different timing boundary.
 
 This is a synthetic expert-parallel communication microbenchmark.

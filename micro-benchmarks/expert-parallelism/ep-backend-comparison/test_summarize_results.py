@@ -49,6 +49,10 @@ def fake_result(profile, arm, world_size, run_index, dtype, latency_ms):
         "top_k_dimensionless": 8,
         "warmup_iterations": 20,
         "measured_iterations": 100,
+        "num_sms_dimensionless": 64 if arm == "deepep-v2-gin-gda" else None,
+        "detected_rdma_gigabytes_per_second": (
+            50.0 if arm == "deepep-v2-gin-gda" else None
+        ),
         "route_hash_sha256": ("d" if world_size == 16 else "e") * 64,
         "input_hash_sha256": ("f" if world_size == 16 else "0") * 64,
         "global_valid_expert_selections": global_input_tokens * 8,
@@ -65,6 +69,9 @@ def fake_result(profile, arm, world_size, run_index, dtype, latency_ms):
             "torch_version": "2.13.0+cu130",
             "cuda_version": "13.0",
             "nccl_version": [2, 29, 7],
+            "nccl_version_loaded": (
+                [2, 31, 2] if arm == "deepep-v2-gin-gda" else [2, 29, 7]
+            ),
         },
         "latency_ms": {"median": latency_ms},
         "aggregate_input_tokens_per_second": global_input_tokens / (latency_ms / 1e3),
@@ -98,7 +105,7 @@ class SummarizeResultsTest(unittest.TestCase):
             )
             for profile in summary_module.PROFILES
             for arm in summary_module.ARMS
-            for world in summary_module.WORLD_SIZES
+            for world in (16, 32)
             for run in range(1, 4)
             for dtype in summary_module.DTYPES
         ]
@@ -121,12 +128,33 @@ class SummarizeResultsTest(unittest.TestCase):
         )
         prefill_comparison = prefill["comparisons"]["deepep-v2-gin-gda_vs_uccl"]
         self.assertAlmostEqual(
-            prefill_comparison["median_paired_improvement_percent"], 25.0
+            prefill_comparison["median_paired_improvement_percent"], 20.0
         )
 
     def test_missing_start_is_rejected(self):
         with self.assertRaises(ValueError):
             summary_module.validate(self.results[:-1], 3)
+
+    def test_single_world_size_matrix_is_summarized(self):
+        ep16_only = [
+            result for result in self.results if result["world_size_ranks"] == 16
+        ]
+        summary_module.validate(ep16_only, 3)
+        summary = summary_module.summarize(ep16_only, 3)
+        self.assertEqual(summary["status"], "PASS")
+        self.assertEqual(len(summary["cells"]), 4)
+        self.assertEqual(summary["configuration"]["world_sizes_ranks"], [16])
+
+    def test_explicit_world_sizes_reject_a_missing_matrix(self):
+        ep16_only = [
+            result for result in self.results if result["world_size_ranks"] == 16
+        ]
+        with self.assertRaises(ValueError):
+            summary_module.validate(ep16_only, 3, (16, 32))
+
+    def test_too_few_starts_are_rejected(self):
+        with self.assertRaises(ValueError):
+            summary_module.validate(self.results, 1)
 
     def test_route_mismatch_is_rejected(self):
         self.results[0]["route_hash_sha256"] = "different"
@@ -135,6 +163,27 @@ class SummarizeResultsTest(unittest.TestCase):
 
     def test_runtime_mismatch_is_rejected(self):
         self.results[0]["runtime"]["nccl_version"] = [9, 9, 9]
+        with self.assertRaises(ValueError):
+            summary_module.validate(self.results, 3)
+
+    def test_loaded_nccl_may_differ_across_arms_but_not_within_one(self):
+        summary_module.validate(self.results, 3)
+        summary = summary_module.summarize(self.results, 3)
+        self.assertEqual(
+            summary["loaded_nccl_versions_per_arm"]["deepep-v2-gin-gda"], [2, 31, 2]
+        )
+        self.results[0]["runtime"]["nccl_version_loaded"] = [9, 9, 9]
+        with self.assertRaises(ValueError):
+            summary_module.validate(self.results, 3)
+
+    def test_num_sms_mismatch_within_one_arm_cell_is_rejected(self):
+        target = next(
+            result
+            for result in self.results
+            if result["arm"] == "deepep-v2-gin-gda"
+            and result["run_index_dimensionless"] == 1
+        )
+        target["num_sms_dimensionless"] = 24
         with self.assertRaises(ValueError):
             summary_module.validate(self.results, 3)
 

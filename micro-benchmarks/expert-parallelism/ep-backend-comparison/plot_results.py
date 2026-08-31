@@ -38,22 +38,26 @@ ARM_STYLES = {
         "marker": "^",
     },
 }
-CELL_ORDER = ((16, "fp8"), (16, "bf16"), (32, "fp8"), (32, "bf16"))
+DTYPE_ORDER = ("fp8", "bf16")
 PROFILE_CONFIG = {
     "decode": {
         "title": "Decode-like: slowest-rank latency (lower is better)",
         "ylabel": "Latency (ms)",
     },
     "prefill": {
-        "title": "Prefill-like: common logical throughput (higher is better)",
-        "ylabel": "Logical throughput (GB/s/rank)",
+        "title": "Prefill-like: slowest-rank latency (lower is better)",
+        "ylabel": "Latency (ms)",
     },
 }
 
 
 def load_plot_data(
     path: Path,
-) -> tuple[int, dict[tuple[str, int, str], dict[str, Any]]]:
+) -> tuple[
+    int,
+    dict[tuple[str, int, str], dict[str, Any]],
+    tuple[tuple[int, str], ...],
+]:
     summary = json.loads(path.read_text())
     if summary.get("status") != "PASS":
         raise ValueError("the input summary does not have PASS status")
@@ -61,6 +65,17 @@ def load_plot_data(
     starts = summary.get("independent_starts_per_cell")
     if not isinstance(starts, int) or starts < 1:
         raise ValueError("independent_starts_per_cell must be a positive integer")
+
+    world_sizes = summary.get("configuration", {}).get("world_sizes_ranks")
+    if (
+        not isinstance(world_sizes, list)
+        or not world_sizes
+        or not all(isinstance(world, int) and world > 0 for world in world_sizes)
+    ):
+        raise ValueError("world_sizes_ranks must be a nonempty list of EP sizes")
+    cell_order = tuple(
+        (world_size, dtype) for world_size in world_sizes for dtype in DTYPE_ORDER
+    )
 
     cells: dict[tuple[str, int, str], dict[str, Any]] = {}
     for cell in summary.get("cells", []):
@@ -76,7 +91,7 @@ def load_plot_data(
     expected_keys = {
         (profile, world_size, dtype)
         for profile in PROFILE_CONFIG
-        for world_size, dtype in CELL_ORDER
+        for world_size, dtype in cell_order
     }
     if cells.keys() != expected_keys:
         missing = sorted(expected_keys - cells.keys())
@@ -102,11 +117,11 @@ def load_plot_data(
                 for value in values
             ):
                 raise ValueError(f"{key}/{arm} contains an invalid primary value")
-    return starts, cells
+    return starts, cells, cell_order
 
 
 def render_box_plots(summary_path: Path, output_path: Path) -> None:
-    starts, cells = load_plot_data(summary_path)
+    starts, cells, cell_order = load_plot_data(summary_path)
     matplotlib.rcParams.update(
         {
             "axes.edgecolor": "#333333",
@@ -120,9 +135,13 @@ def render_box_plots(summary_path: Path, output_path: Path) -> None:
     )
 
     figure, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-    group_positions = list(range(1, len(CELL_ORDER) + 1))
+    group_positions = list(range(1, len(cell_order) + 1))
     arm_offsets = (-0.24, 0.0, 0.24)
-    point_offsets = tuple((index - (starts - 1) / 2) * 0.025 for index in range(starts))
+    # Keep the per-start markers inside their 0.19-wide box for any start count.
+    point_spacing = min(0.025, 0.17 / max(starts - 1, 1))
+    point_offsets = tuple(
+        (index - (starts - 1) / 2) * point_spacing for index in range(starts)
+    )
 
     for axis, profile in zip(axes, PROFILE_CONFIG, strict=True):
         all_values: list[float] = []
@@ -131,7 +150,7 @@ def render_box_plots(summary_path: Path, output_path: Path) -> None:
                 cells[(profile, world_size, dtype)]["arms"][arm][
                     "per_start_primary_values"
                 ]
-                for world_size, dtype in CELL_ORDER
+                for world_size, dtype in cell_order
             ]
             all_values.extend(value for values in values_by_cell for value in values)
             positions = [position + arm_offset for position in group_positions]
@@ -173,7 +192,7 @@ def render_box_plots(summary_path: Path, output_path: Path) -> None:
         axis.set_title(config["title"], loc="left", fontweight="bold", pad=10)
         axis.set_ylabel(config["ylabel"])
         axis.set_ylim(0, max(all_values) * 1.12)
-        axis.set_xlim(0.5, len(CELL_ORDER) + 0.5)
+        axis.set_xlim(0.5, len(cell_order) + 0.5)
         axis.grid(axis="y", color="#D9D9D9", linewidth=0.8)
         axis.set_axisbelow(True)
         axis.spines["top"].set_visible(False)
@@ -181,7 +200,7 @@ def render_box_plots(summary_path: Path, output_path: Path) -> None:
 
     axes[-1].set_xticks(
         group_positions,
-        [f"{world_size} ranks\n{dtype.upper()}" for world_size, dtype in CELL_ORDER],
+        [f"{world_size} ranks\n{dtype.upper()}" for world_size, dtype in cell_order],
     )
     axes[-1].set_xlabel("Expert-parallel size and dispatch dtype", labelpad=9)
 

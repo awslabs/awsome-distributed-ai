@@ -17,7 +17,6 @@ from result_io import load_result_log
 
 
 ARMS = ("uccl", "deepep-v1-nvshmem", "deepep-v2-gin-gda")
-WORLD_SIZES = (16, 32)
 DTYPES = ("fp8", "bf16")
 PROFILES = ("decode", "prefill")
 PROFILE_CONFIG = {
@@ -26,17 +25,19 @@ PROFILE_CONFIG = {
         "api_mode": "low-latency",
         "primary_metric": "slowest-rank latency in milliseconds",
         "timing_boundary": (
-            "BF16 input ready through dispatch and combine completion; "
-            "slowest rank CUDA elapsed time"
+            "dispatch input ready through dispatch and combine completion; "
+            "slowest rank CUDA elapsed time; host-side FP8 conversion precedes "
+            "the boundary"
         ),
     },
     "prefill": {
         "tokens_per_rank": 4_096,
         "api_mode": "normal",
-        "primary_metric": ("effective logical gigabytes per second per rank"),
+        "primary_metric": "slowest-rank latency in milliseconds",
         "timing_boundary": (
-            "BF16 input and route ready through required layout, dispatch, and "
-            "combine completion; slowest rank CUDA elapsed time"
+            "dispatch input and route ready through required layout, dispatch, "
+            "and combine completion; slowest rank CUDA elapsed time; host-side "
+            "FP8 conversion precedes the boundary"
         ),
     },
 }
@@ -47,7 +48,8 @@ ARM_LABELS = {
 }
 BOOTSTRAP_SAMPLES = 20_000
 MAX_RUN_TO_RUN_CV_PERCENT = 5.0
-EXPECTED_STARTS = 3
+DEFAULT_STARTS = 20
+MINIMUM_STARTS = 2
 EXPECTED_WARMUPS = 20
 EXPECTED_ITERATIONS = 100
 LOGICAL_PAYLOAD_DEFINITION = (
@@ -99,14 +101,37 @@ def load_results(root: Path) -> list[dict[str, Any]]:
     return list(results.values())
 
 
-def validate(results: list[dict[str, Any]], starts: int) -> None:
-    if starts != EXPECTED_STARTS:
-        raise ValueError(f"scored matrix requires exactly {EXPECTED_STARTS} starts")
+def observed_world_sizes(results: list[dict[str, Any]]) -> tuple[int, ...]:
+    """Derive the scored EP sizes present in the loaded results."""
+
+    worlds = sorted(
+        {
+            result["world_size_ranks"]
+            for result in results
+            if result["run_index_dimensionless"] > 0
+        }
+    )
+    if not worlds:
+        raise ValueError("no scored results found to derive world sizes from")
+    return tuple(worlds)
+
+
+def validate(
+    results: list[dict[str, Any]],
+    starts: int,
+    world_sizes: tuple[int, ...] | None = None,
+) -> None:
+    if starts < MINIMUM_STARTS:
+        raise ValueError(
+            f"scored matrix requires at least {MINIMUM_STARTS} independent starts"
+        )
+    if world_sizes is None:
+        world_sizes = observed_world_sizes(results)
     expected = {
         (profile, arm, world, run, dtype)
         for profile in PROFILES
         for arm in ARMS
-        for world in WORLD_SIZES
+        for world in world_sizes
         for run in range(1, starts + 1)
         for dtype in DTYPES
     }
@@ -280,9 +305,21 @@ def validate(results: list[dict[str, Any]], starts: int) -> None:
             raise ValueError(
                 f"{arm} did not use one immutable image: {image_references}"
             )
+        # The loaded NCCL differs per arm image by design; require agreement
+        # only within one arm.
+        loaded_versions = {
+            json.dumps(result["runtime"].get("nccl_version_loaded"))
+            for result in measured
+            if result["arm"] == arm
+        }
+        if len(loaded_versions) != 1:
+            raise ValueError(
+                f"{arm} results disagree on the loaded NCCL version: "
+                f"{sorted(loaded_versions)}"
+            )
 
     for profile in PROFILES:
-        for world in WORLD_SIZES:
+        for world in world_sizes:
             same_world = [
                 result
                 for result in measured
@@ -310,6 +347,19 @@ def validate(results: list[dict[str, Any]], starts: int) -> None:
                         raise ValueError(
                             f"{profile} EP{world} {dtype} disagrees on {field}: "
                             f"{sorted(values)}"
+                        )
+                # The SM count is a per-backend control, so it must only be
+                # stable within one arm of a cell.
+                for arm in ARMS:
+                    num_sms_values = {
+                        result.get("num_sms_dimensionless")
+                        for result in same_cell
+                        if result["arm"] == arm
+                    }
+                    if len(num_sms_values) != 1:
+                        raise ValueError(
+                            f"{profile} EP{world} {dtype} {arm} disagrees on "
+                            f"num_sms: {sorted(num_sms_values, key=str)}"
                         )
 
 
@@ -356,9 +406,7 @@ def validate_provenance(
 
 
 def primary_metric_value(result: dict[str, Any]) -> float:
-    if result["workload_profile"] == "decode":
-        return result["latency_ms"]["median"]
-    return result["effective_logical_gigabytes_per_second_per_rank"]
+    return result["latency_ms"]["median"]
 
 
 def arm_summary(
@@ -383,6 +431,7 @@ def arm_summary(
         "run_indices_dimensionless": [
             item["run_index_dimensionless"] for item in ordered
         ],
+        "num_sms_dimensionless": ordered[0].get("num_sms_dimensionless"),
         "per_start_median_latency_ms": latencies,
         "median_latency_ms": statistics.median(latencies),
         "primary_metric": PROFILE_CONFIG[profile]["primary_metric"],
@@ -406,7 +455,10 @@ def summarize(
     results: list[dict[str, Any]],
     starts: int,
     provenance: dict[str, Any] | None = None,
+    world_sizes: tuple[int, ...] | None = None,
 ) -> dict[str, Any]:
+    if world_sizes is None:
+        world_sizes = observed_world_sizes(results)
     measured = [result for result in results if result["run_index_dimensionless"] > 0]
     by_cell_arm: dict[tuple[str, int, str, str], list[dict[str, Any]]] = defaultdict(
         list
@@ -423,7 +475,7 @@ def summarize(
 
     cells = []
     for profile_index, profile in enumerate(PROFILES):
-        for world in WORLD_SIZES:
+        for world in world_sizes:
             for dtype in DTYPES:
                 arms = {
                     arm: arm_summary(
@@ -451,20 +503,12 @@ def summarize(
                         result["run_index_dimensionless"]: primary_metric_value(result)
                         for result in by_cell_arm[(profile, world, dtype, baseline)]
                     }
-                    if profile == "decode":
-                        paired = [
-                            (baseline_by_run[run] - v2_by_run[run])
-                            / baseline_by_run[run]
-                            * 100
-                            for run in range(1, starts + 1)
-                        ]
-                    else:
-                        paired = [
-                            (v2_by_run[run] - baseline_by_run[run])
-                            / baseline_by_run[run]
-                            * 100
-                            for run in range(1, starts + 1)
-                        ]
+                    paired = [
+                        (baseline_by_run[run] - v2_by_run[run])
+                        / baseline_by_run[run]
+                        * 100
+                        for run in range(1, starts + 1)
+                    ]
                     ci_low, ci_high = bootstrap_median_ci(
                         paired,
                         20260900 + profile_index * 1_000 + world + index,
@@ -513,6 +557,14 @@ def summarize(
         )
         for arm in ARMS
     }
+    loaded_nccl_versions = {
+        arm: next(
+            result["runtime"].get("nccl_version_loaded")
+            for result in measured
+            if result["arm"] == arm
+        )
+        for arm in ARMS
+    }
     runtime = {
         field: measured[0]["runtime"][field]
         for field in ("gpu", "torch_version", "cuda_version", "nccl_version")
@@ -533,7 +585,7 @@ def summarize(
             "communication workloads; not end-to-end training or serving"
         ),
         "configuration": {
-            "world_sizes_ranks": list(WORLD_SIZES),
+            "world_sizes_ranks": list(world_sizes),
             "dispatch_dtypes": list(DTYPES),
             "profiles": {
                 profile: {
@@ -551,6 +603,7 @@ def summarize(
         },
         "runtime": runtime,
         "images": images,
+        "loaded_nccl_versions_per_arm": loaded_nccl_versions,
         "cells": cells,
     }
     if provenance is not None:
@@ -562,61 +615,41 @@ def markdown(summary: dict[str, Any]) -> str:
     lines = [
         "# Common-Boundary EP Results",
         "",
-        f"Each cell has {summary['independent_starts_per_cell']} independent process starts. Values are medians across independent starts. Decode-like results use slowest-rank latency as the primary metric; prefill-like results use common logical throughput. These are synthetic communication workloads, not end-to-end training or serving results.",
+        f"Each cell has {summary['independent_starts_per_cell']} independent process starts. Values are medians across independent starts. Both profiles use slowest-rank latency as the primary metric; compare across EP sizes with aggregate input tokens/s. Logical throughput columns are secondary, and the scale-out column is comparable only within one EP size. These are synthetic communication workloads, not end-to-end training or serving results.",
     ]
     for profile in PROFILES:
-        title = (
-            "Decode-like latency" if profile == "decode" else "Prefill-like throughput"
-        )
+        title = "Decode-like latency" if profile == "decode" else "Prefill-like latency"
         tokens = PROFILE_CONFIG[profile]["tokens_per_rank"]
-        lines.extend(["", f"## {title}, {tokens:,} tokens/rank", ""])
-        if profile == "decode":
-            lines.extend(
-                [
-                    "| EP size | Dispatch dtype | Backend | Latency (ms) | 95% bootstrap CI (ms) | Run-to-run CV (%) | Input throughput (tokens/s) | Logical throughput (GB/s/rank) | Scale-out logical throughput (GB/s/rank) |",
-                    "|---:|:---:|:---|---:|:---:|---:|---:|---:|---:|",
-                ]
-            )
-        else:
-            lines.extend(
-                [
-                    "| EP size | Dispatch dtype | Backend | Logical throughput (GB/s/rank) | 95% bootstrap CI (GB/s/rank) | Run-to-run CV (%) | Latency (ms) | Input throughput (tokens/s) | Scale-out logical throughput (GB/s/rank) |",
-                    "|---:|:---:|:---|---:|:---:|---:|---:|---:|---:|",
-                ]
-            )
+        lines.extend(
+            [
+                "",
+                f"## {title}, {tokens:,} tokens/rank",
+                "",
+                "| EP size | Dispatch dtype | Backend | Latency (ms) | 95% bootstrap CI (ms) | Run-to-run CV (%) | Input throughput (tokens/s) | Logical throughput (GB/s/rank) | Scale-out logical throughput (GB/s/rank) |",
+                "|---:|:---:|:---|---:|:---:|---:|---:|---:|---:|",
+            ]
+        )
         for cell in summary["cells"]:
             if cell["workload_profile"] != profile:
                 continue
             for arm in ARMS:
                 value = cell["arms"][arm]
                 ci = value["bootstrap_95_percent_ci_primary_value"]
-                if profile == "decode":
-                    row = (
-                        f"{value['median_latency_ms']:.4f} ms | "
-                        f"[{ci[0]:.4f}, {ci[1]:.4f}] ms"
-                    )
-                else:
-                    row = (
-                        f"{value['median_effective_logical_gigabytes_per_second_per_rank']:.2f} GB/s/rank | "
-                        f"[{ci[0]:.2f}, {ci[1]:.2f}] GB/s/rank"
-                    )
                 lines.append(
                     f"| {cell['world_size_ranks']} ranks | {cell['dispatch_dtype'].upper()} | {ARM_LABELS[arm]} | "
-                    f"{row} | {value['run_to_run_cv_percent']:.2f}% | "
-                    + (
-                        f"{value['median_aggregate_input_tokens_per_second']:,.2f} tokens/s | "
-                        f"{value['median_effective_logical_gigabytes_per_second_per_rank']:.2f} GB/s/rank | "
-                        if profile == "decode"
-                        else f"{value['median_latency_ms']:.4f} ms | {value['median_aggregate_input_tokens_per_second']:,.2f} tokens/s | "
-                    )
-                    + f"{value['median_effective_scaleout_logical_gigabytes_per_second_per_rank']:.2f} GB/s/rank |"
+                    f"{value['median_latency_ms']:.4f} ms | "
+                    f"[{ci[0]:.4f}, {ci[1]:.4f}] ms | "
+                    f"{value['run_to_run_cv_percent']:.2f}% | "
+                    f"{value['median_aggregate_input_tokens_per_second']:,.2f} tokens/s | "
+                    f"{value['median_effective_logical_gigabytes_per_second_per_rank']:.2f} GB/s/rank | "
+                    f"{value['median_effective_scaleout_logical_gigabytes_per_second_per_rank']:.2f} GB/s/rank |"
                 )
     lines.extend(
         [
             "",
             "## Paired DeepEP V2 improvements",
             "",
-            "Positive values mean DeepEP V2 had lower latency for Decode-like cells or higher logical throughput for Prefill-like cells. A direction is supported only when the paired bootstrap interval excludes 0% and both arms have at most 5% run-to-run CV.",
+            "Positive values mean DeepEP V2 had lower slowest-rank latency. A direction is supported only when the paired bootstrap interval excludes 0% and both arms have at most 5% run-to-run CV.",
             "",
             "| Profile | EP size | Dispatch dtype | Baseline | Primary metric | Median improvement (%) | 95% bootstrap CI (%) | Direction supported |",
             "|:---|---:|:---:|:---|:---|---:|:---:|:---:|",
@@ -639,16 +672,25 @@ def markdown(summary: dict[str, Any]) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("root", type=Path)
-    parser.add_argument("--starts", type=int, default=3)
+    parser.add_argument("--starts", type=int, default=DEFAULT_STARTS)
+    parser.add_argument(
+        "--world-sizes",
+        type=lambda text: tuple(int(item) for item in text.split(",") if item),
+        default=None,
+        help=(
+            "Comma-separated scored EP sizes; derived from the loaded results "
+            "when omitted"
+        ),
+    )
     parser.add_argument("--provenance", type=Path, required=True)
     parser.add_argument("--json", type=Path, required=True)
     parser.add_argument("--markdown", type=Path, required=True)
     args = parser.parse_args()
     results = load_results(args.root)
-    validate(results, args.starts)
+    validate(results, args.starts, args.world_sizes)
     provenance = json.loads(args.provenance.read_text())
     validate_provenance(provenance, results, args.starts)
-    summary = summarize(results, args.starts, provenance)
+    summary = summarize(results, args.starts, provenance, args.world_sizes)
     args.json.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     args.markdown.write_text(markdown(summary))
     print(

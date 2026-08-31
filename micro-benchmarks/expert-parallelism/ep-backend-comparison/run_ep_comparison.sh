@@ -2,7 +2,7 @@
 set -euo pipefail
 
 : "${CAMPAIGN_ID:?Set a unique CAMPAIGN_ID}"
-: "${EP_BENCHMARK_NODES:?Set 4 comma-separated B200 node names}"
+: "${EP_BENCHMARK_NODES:?Set comma-separated B200 node names}"
 : "${PROTECTED_NODES_CSV:=}"
 : "${ARTIFACT_ROOT:?Set the durable artifact directory}"
 : "${KUBECTL_CONTEXT:?Set the target kubectl context explicitly}"
@@ -11,8 +11,13 @@ set -euo pipefail
 : "${SHARED_LOCK_NAMESPACE:=default}"
 : "${LOCK_MODE:=exclusive}"
 : "${EXPECTED_LOCK_HOLDER:=}"
-: "${LOCK_DURATION_SECONDS:=28800}"
-: "${INDEPENDENT_STARTS:=3}"
+: "${LOCK_DURATION_SECONDS:=172800}"
+: "${INDEPENDENT_STARTS:=20}"
+: "${EP_WORLD_SIZES:=16 32}"
+: "${EP_NUM_SMS:=0}"
+: "${EP_REGION:=ap-south-1}"
+: "${EP_CLUSTER_NAME:=ml-clusters-shared-ap-south-1}"
+: "${EP_INSTANCE_TYPE:=p6-b200.48xlarge}"
 : "${WARMUP_ITERATIONS:=20}"
 : "${MEASURED_ITERATIONS:=100}"
 : "${CASE_TIMEOUT_SECONDS:=1800}"
@@ -32,6 +37,10 @@ for value in "${LOCK_DURATION_SECONDS}" "${INDEPENDENT_STARTS}" \
         exit 2
     }
 done
+[[ "${EP_NUM_SMS}" =~ ^[0-9]+$ ]] || {
+    printf 'EP_NUM_SMS must be a nonnegative integer (0 keeps automatic SM counts)\n' >&2
+    exit 2
+}
 if [[ "${LOCK_MODE}" == observe && -z "${EXPECTED_LOCK_HOLDER}" ]]; then
     printf 'LOCK_MODE=observe requires EXPECTED_LOCK_HOLDER\n' >&2
     exit 2
@@ -40,10 +49,27 @@ if [[ "${LOCK_MODE}" == observe && -z "${PROTECTED_NODES_CSV}" ]]; then
     printf 'LOCK_MODE=observe requires PROTECTED_NODES_CSV\n' >&2
     exit 2
 fi
-[[ "${INDEPENDENT_STARTS}" -eq 3 ]] || {
-    printf 'This scored matrix requires exactly 3 independent starts\n' >&2
+[[ "${INDEPENDENT_STARTS}" -ge 2 ]] || {
+    printf 'This scored matrix requires at least 2 independent starts\n' >&2
     exit 2
 }
+read -r -a world_sizes <<<"${EP_WORLD_SIZES}"
+((${#world_sizes[@]} > 0)) || {
+    printf 'EP_WORLD_SIZES must contain at least one EP size\n' >&2
+    exit 2
+}
+max_world_size=0
+min_world_size=0
+for world_size in "${world_sizes[@]}"; do
+    if ! [[ "${world_size}" =~ ^[1-9][0-9]*$ ]] || ((world_size % 8 != 0)); then
+        printf 'Each EP_WORLD_SIZES entry must be a positive multiple of 8: %s\n' \
+            "${world_size}" >&2
+        exit 2
+    fi
+    ((world_size > max_world_size)) && max_world_size="${world_size}"
+    ((min_world_size == 0 || world_size < min_world_size)) && \
+        min_world_size="${world_size}"
+done
 [[ "${WARMUP_ITERATIONS}" -eq 20 && "${MEASURED_ITERATIONS}" -eq 100 ]] || {
     printf 'This scored matrix requires 20 warmup and 100 measured iterations\n' >&2
     exit 2
@@ -67,11 +93,13 @@ protected_nodes=()
 if [[ -n "${PROTECTED_NODES_CSV}" ]]; then
     IFS=, read -r -a protected_nodes <<<"${PROTECTED_NODES_CSV}"
 fi
-((${#selected_nodes[@]} == 4)) || {
-    printf 'EP_BENCHMARK_NODES must contain exactly 4 nodes\n' >&2
+((${#selected_nodes[@]} >= max_world_size / 8)) || {
+    printf 'EP_BENCHMARK_NODES must contain at least %s nodes for EP%s\n' \
+        "$((max_world_size / 8))" "${max_world_size}" >&2
     exit 2
 }
-[[ "$(printf '%s\n' "${selected_nodes[@]}" | sort -u | wc -l)" -eq 4 ]]
+[[ "$(printf '%s\n' "${selected_nodes[@]}" | sort -u | wc -l)" -eq \
+    "${#selected_nodes[@]}" ]]
 
 declare -A protected=()
 for node in "${protected_nodes[@]}"; do
@@ -198,7 +226,7 @@ verify_node_free() {
     gpu="$("${K[@]}" get node "${node}" -o jsonpath='{.status.allocatable.nvidia\.com/gpu}')"
     efa="$("${K[@]}" get node "${node}" -o jsonpath='{.status.allocatable.vpc\.amazonaws\.com/efa}')"
     requests="$(gpu_requests_on_node "${node}")"
-    [[ "${ready}" == True && "${instance_type}" == p6-b200.48xlarge && \
+    [[ "${ready}" == True && "${instance_type}" == "${EP_INSTANCE_TYPE}" && \
        "${gpu}" == 8 && "${efa}" == 8 && "${requests}" -eq 0 ]] || {
         printf 'Node admission failed: node=%s ready=%s type=%s gpu=%s efa=%s requested_gpu=%s\n' \
             "${node}" "${ready}" "${instance_type}" "${gpu}" "${efa}" "${requests}" >&2
@@ -313,7 +341,7 @@ namespace_created=1
 # Read the live host mitigation before invoking DeepEP V2.  The EFA 3.3.0g
 # revalidation exposed a UVM HMM kernel panic, so a non-mitigated node is a hard
 # admission failure rather than a benchmark attempt.
-for index in 0 1 2 3; do
+for ((index = 0; index < ${#selected_nodes[@]}; index++)); do
     node="${selected_nodes[${index}]}"
     "${K[@]}" -n "${CAMPAIGN_NAMESPACE}" apply -f - >/dev/null <<YAML
 apiVersion: v1
@@ -355,7 +383,7 @@ YAML
 done
 "${K[@]}" -n "${CAMPAIGN_NAMESPACE}" wait --for=condition=Ready pod \
     -l "adai.aws/campaign=${CAMPAIGN_ID}" --timeout=10m >/dev/null
-for index in 0 1 2 3; do
+for ((index = 0; index < ${#selected_nodes[@]}; index++)); do
     "${K[@]}" -n "${CAMPAIGN_NAMESPACE}" logs "host-audit-${index}" \
         >"${ARTIFACT_ROOT}/control/host-audit-${index}.log"
     rg -q '^UVM_DISABLE_HMM=(Y|1)$' "${ARTIFACT_ROOT}/control/host-audit-${index}.log" || {
@@ -380,8 +408,8 @@ done
 jq -n \
     --arg campaign_id "${CAMPAIGN_ID}" \
     --arg created_at_utc "$(date -u +%FT%TZ)" \
-    --arg region ap-south-1 \
-    --arg cluster ml-clusters-shared-ap-south-1 \
+    --arg region "${EP_REGION}" \
+    --arg cluster "${EP_CLUSTER_NAME}" \
     --arg git_commit "$(git -C "${case_dir}" rev-parse HEAD)" \
     --arg uccl "${UCCL_IMAGE}" \
     --arg v1 "${DEEPEP_V1_IMAGE}" \
@@ -395,7 +423,7 @@ jq -n \
       comparison:{profiles:{decode:{tokens_per_rank:128,api_mode:"low-latency",
                                     primary_metric:"slowest-rank latency in milliseconds"},
                             prefill:{tokens_per_rank:4096,api_mode:"normal",
-                                     primary_metric:"effective logical gigabytes per second per rank"}},
+                                     primary_metric:"slowest-rank latency in milliseconds"}},
                   hidden_dimensions:7168,experts:256,top_k_dimensionless:8,
                   warmup_iterations:$warmups,measured_iterations:$iterations,
                   independent_starts:$starts}}' \
@@ -484,6 +512,7 @@ spec:
             - {name: EP_DISPATCH_DTYPES, value: "${dtype_order}"}
             - {name: EP_WARMUPS, value: "${warmups}"}
             - {name: EP_ITERATIONS, value: "${iterations}"}
+            - {name: EP_NUM_SMS, value: "${EP_NUM_SMS}"}
             - {name: EP_NCCL_DEBUG, value: "${nccl_debug}"}
             - {name: ADAI_IMAGE_REFERENCE, value: "${images[${arm}]}"}
           resources:
@@ -552,8 +581,8 @@ YAML
 
 # A short V2-only admission run proves the HMM mitigation, GIN/GDAKI path, and
 # common-harness correctness before any scored matrix work.
-run_case decode deepep-v2-gin-gda 16 0 bf16,fp8 2 5 INFO admission
-v2_admission_dir="${ARTIFACT_ROOT}/runs/decode/ep16/admission-repeat-0/deepep-v2-gin-gda"
+run_case decode deepep-v2-gin-gda "${min_world_size}" 0 bf16,fp8 2 5 INFO admission
+v2_admission_dir="${ARTIFACT_ROOT}/runs/decode/ep${min_world_size}/admission-repeat-0/deepep-v2-gin-gda"
 rg -q 'GDAKI.*createContext|gin GDAKI: createContext done' \
     "${v2_admission_dir}"/*.log || {
     printf 'DeepEP V2 admission completed without a GDAKI context proof\n' >&2
@@ -564,23 +593,24 @@ printf 'PASS\n' >"${v2_admission_dir}/GIN_ADMISSION_STATUS"
 # Exercise every backend's normal high-throughput API before entering the
 # doubled scored matrix.  These short runs are admission evidence only.
 for arm in uccl deepep-v1-nvshmem deepep-v2-gin-gda; do
-    run_case prefill "${arm}" 16 0 fp8,bf16 2 5 WARN admission
+    run_case prefill "${arm}" "${min_world_size}" 0 fp8,bf16 2 5 WARN admission
 done
 
-for world_size in 16 32; do
-    for run_index in 1 2 3; do
-        case "${run_index}" in
-            1)
+for world_size in "${world_sizes[@]}"; do
+    for ((run_index = 1; run_index <= INDEPENDENT_STARTS; run_index++)); do
+        # The 3 rotation patterns cycle across however many starts run.
+        case "$(((run_index - 1) % 3))" in
+            0)
                 order=(uccl deepep-v1-nvshmem deepep-v2-gin-gda)
                 profiles=(decode prefill)
                 dtypes=fp8,bf16
                 ;;
-            2)
+            1)
                 order=(deepep-v2-gin-gda uccl deepep-v1-nvshmem)
                 profiles=(prefill decode)
                 dtypes=bf16,fp8
                 ;;
-            3)
+            2)
                 order=(deepep-v1-nvshmem deepep-v2-gin-gda uccl)
                 profiles=(decode prefill)
                 dtypes=fp8,bf16
@@ -600,6 +630,7 @@ for node in "${selected_nodes[@]}"; do
 done
 python3 "${case_dir}/summarize_results.py" "${ARTIFACT_ROOT}/runs" \
     --starts="${INDEPENDENT_STARTS}" \
+    --world-sizes="${EP_WORLD_SIZES// /,}" \
     --provenance="${ARTIFACT_ROOT}/control/provenance.json" \
     --json="${ARTIFACT_ROOT}/summary/summary.json" \
     --markdown="${ARTIFACT_ROOT}/summary/summary.md"

@@ -8,13 +8,15 @@ followed by combine operation, and the slowest rank is the iteration latency.
 
 The decode profile uses each backend's low-latency path with 128 tokens/rank.
 The prefill profile uses the normal high-throughput path with 4,096 tokens/rank
-and includes any required dispatch-layout work.  FP8 conversion starts from a
-BF16 input and remains inside both profiles' timed region.
+and includes any required dispatch-layout work.  Host-side FP8 conversion runs
+once before the timed region; low-latency kernels that quantize internally
+still do so inside it.
 """
 
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import math
@@ -59,6 +61,35 @@ def preload_backend(arm: str) -> None:
     if arm == "deepep-v2-gin-gda":
         sys.path.insert(0, str(deepep_v2_build_lib()))
         __import__("deep_ep")
+
+
+def decode_nccl_version(value: int) -> list[int]:
+    """Split ncclGetVersion's integer encoding into major, minor, and patch."""
+
+    if value < 20_900:
+        return [value // 1_000, value % 1_000 // 100, value % 100]
+    return [value // 10_000, value % 10_000 // 100, value % 100]
+
+
+def loaded_nccl_version() -> list[int] | None:
+    """Read the version of the NCCL library actually loaded in this process.
+
+    torch.cuda.nccl.version() reports torch's compile-time constant, which
+    differs from the loaded library in the source-built-NCCL images GIN
+    requires.  Returns None when no loaded libnccl can be queried.
+    """
+
+    try:
+        with open("/proc/self/maps") as maps:
+            paths = sorted({line.split()[-1] for line in maps if "libnccl.so" in line})
+        for path in paths:
+            library = ctypes.CDLL(path)
+            version = ctypes.c_int(0)
+            if library.ncclGetVersion(ctypes.byref(version)) == 0:
+                return decode_nccl_version(version.value)
+    except (OSError, AttributeError, ValueError):
+        pass
+    return None
 
 
 def percentile(values: list[float], quantile: float) -> float:
@@ -186,18 +217,20 @@ WORKLOAD_PROFILES = {
         api_mode="low-latency",
         primary_metric="slowest-rank latency in milliseconds",
         timing_boundary=(
-            "BF16 input ready through dispatch and combine completion; "
-            "slowest rank CUDA elapsed time"
+            "dispatch input ready through dispatch and combine completion; "
+            "slowest rank CUDA elapsed time; host-side FP8 conversion precedes "
+            "the boundary"
         ),
     ),
     "prefill": WorkloadProfile(
         name="prefill",
         tokens_per_rank=4_096,
         api_mode="normal",
-        primary_metric="effective logical gigabytes per second per rank",
+        primary_metric="slowest-rank latency in milliseconds",
         timing_boundary=(
-            "BF16 input and route ready through required layout, dispatch, and "
-            "combine completion; slowest rank CUDA elapsed time"
+            "dispatch input and route ready through required layout, dispatch, "
+            "and combine completion; slowest rank CUDA elapsed time; host-side "
+            "FP8 conversion precedes the boundary"
         ),
     ),
 }
@@ -221,6 +254,7 @@ class BackendAdapter:
         hidden: int,
         num_experts: int,
         top_k: int,
+        num_sms: int = 0,
     ) -> None:
         self.arm = arm
         self.group = group
@@ -232,6 +266,8 @@ class BackendAdapter:
         self.buffer: Any
         self._cast_back: Any = None
         self._cast_to_fp8: Any = None
+        self.resolved_num_sms: int | None = None
+        self.detected_rdma_gbs: float | None = None
 
         if arm == "uccl":
             sys.path.insert(0, "/opt/uccl/ep/bench")
@@ -325,6 +361,36 @@ class BackendAdapter:
         else:
             raise ValueError(f"unsupported arm: {arm}")
 
+        # Resolve the SM count each timed kernel will actually use so it can be
+        # recorded with the result instead of staying an implicit control.
+        if arm == "deepep-v2-gin-gda":
+            from deep_ep.utils.envs import (  # type: ignore[import-not-found]
+                get_rdma_gbs,
+            )
+
+            self.detected_rdma_gbs = float(get_rdma_gbs())
+            self.resolved_num_sms = (
+                num_sms
+                if num_sms > 0
+                else int(self.buffer.get_theoretical_num_sms(num_experts, top_k))
+            )
+        elif profile.api_mode == "normal":
+            buffer_class = type(self.buffer)
+            if num_sms > 0:
+                if not hasattr(buffer_class, "set_num_sms"):
+                    raise RuntimeError(
+                        f"--num-sms is not supported by the {arm} buffer"
+                    )
+                buffer_class.set_num_sms(num_sms)
+            resolved = getattr(buffer_class, "num_sms", None)
+            self.resolved_num_sms = int(resolved) if resolved is not None else None
+        elif num_sms > 0 and dist.get_rank(group) == 0:
+            # The low-latency kernels take no SM count; the record keeps null.
+            print(
+                f"ADAI_EP_NOTICE num_sms pin ignored by the {arm} low-latency path",
+                flush=True,
+            )
+
     @property
     def is_elastic(self) -> bool:
         return self.arm == "deepep-v2-gin-gda"
@@ -353,6 +419,7 @@ class BackendAdapter:
                 num_experts=self.num_experts,
                 num_max_tokens_per_rank=self.num_tokens,
                 expert_alignment=1,
+                num_sms=self.resolved_num_sms,
                 async_with_compute_stream=True,
                 allocate_on_comm_stream=False,
                 do_handle_copy=True,
@@ -533,9 +600,11 @@ def run_dtype(
     # boundary while retaining the handle created by each timed dispatch.
     combine_input = torch.zeros_like(correctness_input, dtype=torch.bfloat16)
 
+    # x is fixed across the timed loop, so the host-side FP8 cast runs once in
+    # prepare_dispatch_input above.  Low-latency kernels that quantize
+    # internally still do so inside the timed boundary.
     def iteration() -> None:
-        current_x = adapter.prepare_dispatch_input(x, dispatch_dtype)
-        state = adapter.dispatch(current_x, route, topk_weights, dispatch_dtype)
+        state = adapter.dispatch(prepared, route, topk_weights, dispatch_dtype)
         adapter.combine(combine_input, state, route, topk_weights)
 
     for _ in range(warmups):
@@ -606,6 +675,8 @@ def run_dtype(
         "global_valid_expert_selections": global_valid_selections,
         "warmup_iterations": warmups,
         "measured_iterations": iterations,
+        "num_sms_dimensionless": adapter.resolved_num_sms,
+        "detected_rdma_gigabytes_per_second": adapter.detected_rdma_gbs,
         "timing_boundary": adapter.profile.timing_boundary,
         "logical_payload_definition": "per valid expert assignment: dispatch tensor plus FP8 scales when selected plus BF16 combine tensor; backend metadata excluded",
         "avg_logical_payload_bytes_per_rank": avg_logical_bytes,
@@ -638,7 +709,10 @@ def run_dtype(
             "image_reference": os.environ.get("ADAI_IMAGE_REFERENCE", "unknown"),
             "torch_version": torch.__version__,
             "cuda_version": torch.version.cuda,
+            # torch's compile-time constant; must stay uniform across arms.
             "nccl_version": list(torch.cuda.nccl.version()),
+            # The library actually loaded in this process; may differ per arm.
+            "nccl_version_loaded": loaded_nccl_version(),
             "gpu": torch.cuda.get_device_name(),
         },
     }
@@ -659,6 +733,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=20260824)
     parser.add_argument("--warmups", type=int, default=20)
     parser.add_argument("--iterations", type=int, default=100)
+    parser.add_argument(
+        "--num-sms",
+        type=int,
+        default=0,
+        help=(
+            "Pin the communication-kernel SM count; 0 keeps each backend's "
+            "automatic choice. Applies to the DeepEP V2 arm and the "
+            "normal-mode UCCL and DeepEP V1 APIs."
+        ),
+    )
     parser.add_argument("--run-index", type=int, required=True)
     parser.add_argument(
         "--dispatch-dtypes",
@@ -726,6 +810,7 @@ def main() -> None:
         args.hidden,
         args.experts,
         args.top_k,
+        num_sms=args.num_sms,
     )
     completed = False
     try:
