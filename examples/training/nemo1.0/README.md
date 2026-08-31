@@ -1,5 +1,11 @@
 # Train GPT3 NemoMegatron on Slurm with NeMo Framework Launcher <!-- omit from toc -->
 
+> [!WARNING]
+> **DEPRECATED** — this example targets the legacy NeMo 1.0 / NeMo Framework
+> Launcher stack and is no longer maintained. For current NeMo distributed
+> training examples, use [`examples/training/nemo`](../nemo) (NeMo 2.0).
+> This directory is kept for reference and may be removed in a future release.
+
 > [!IMPORTANT]  
 > NeMo Framework Launcher is compatible with NeMo version 1.0 only.
 
