@@ -21,13 +21,26 @@ EFA_INSTALLER_TEST="${EFA_INSTALLER_TEST:-/opt/amazon/efa/test/efa_test.sh}"
 #   - FI_EFA_ENABLE_SHM_TRANSFER=0: force the real EFA hardware path; otherwise
 #     libfabric routes same-host traffic through SHM and the test does not
 #     exercise EFA at all.
-#   - FI_EFA_DEVICE_NAME=<domain>: pin libfabric to the specific EFA domain.
+#   - FI_EFA_IFACE=<kernel device name>: pin libfabric to the specific EFA
+#     device. NOTE: this takes the kernel/ibv device name (e.g. "rdmap80s0"),
+#     not the libfabric domain name (e.g. "rdmap80s0-rdm") -- the "-rdm" suffix
+#     must be stripped from the domain string discovered below.
+#     (FI_EFA_DEVICE_NAME is NOT a real libfabric env var -- it does not
+#     appear in `fi_info -e`'s FI_EFA_* list and is silently ignored, which
+#     previously made every "per-device" iteration below run on whichever
+#     device libfabric picks by default. Confirmed against a running
+#     libfabric.so.1 2.4.0amzn3.0: 0 string occurrences of FI_EFA_DEVICE_NAME,
+#     vs. FI_EFA_IFACE present and honored.)
 #   - explicit -B server_port / -B client_port -P server_port: avoid port
 #     collisions when called per-device in a loop.
 # Returns 0 on success, non-zero on failure. Writes server+client logs to stdout
 # on failure for triage.
 run_pingpong_for_domain() {
     local domain="$1"
+    # FI_EFA_IFACE takes the kernel/ibv device name, not the libfabric domain
+    # name -- strip the "-rdm" suffix (see comment above run_pingpong_for_domain
+    # invocation site / the header comment block for why).
+    local iface="${domain%-rdm}"
     local server_port client_port
     server_port=$(shuf -n 1 -i 49152-57342)
     client_port=$(shuf -n 1 -i 57343-65535)
@@ -36,7 +49,7 @@ run_pingpong_for_domain() {
     server_log=$(mktemp)
     client_log=$(mktemp)
 
-    FI_LOG_LEVEL=warn FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_DEVICE_NAME="${domain}" \
+    FI_LOG_LEVEL=warn FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_IFACE="${iface}" \
         fi_pingpong -e rdm -p efa -B "${server_port}" > "${server_log}" 2>&1 &
     local server_pid=$!
     sleep 3
@@ -50,7 +63,7 @@ run_pingpong_for_domain() {
     fi
 
     local ret=0
-    FI_LOG_LEVEL=warn FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_DEVICE_NAME="${domain}" \
+    FI_LOG_LEVEL=warn FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_IFACE="${iface}" \
         timeout "${EFA_TEST_TIMEOUT}" \
         fi_pingpong -e rdm -p efa -B "${client_port}" -P "${server_port}" localhost \
         > "${client_log}" 2>&1 || ret=$?
@@ -99,11 +112,11 @@ run_check() {
 
     # Discover EFA libfabric DOMAINS, not kernel ibv device names. The two
     # naming spaces differ: ibv_devices returns names like 'rdmap86s0', but
-    # libfabric's -d/FI_EFA_DEVICE_NAME expects domains like 'rdmap86s0-rdm'
-    # (with the '-rdm' suffix added by the EFA provider). Passing kernel names
-    # to fi_pingpong yields fi_getinfo -61 (No data available) and the test
-    # fails on every device. Enumerating via fi_info gets us the correct names
-    # and also naturally excludes back-side Ethernet NICs that show up under
+    # libfabric domains (as reported by `fi_info -p efa -t FI_EP_RDM`) are
+    # named like 'rdmap86s0-rdm'. FI_EFA_IFACE (used to pin below) takes the
+    # kernel/ibv name, so the '-rdm' suffix gets stripped per-device.
+    # Enumerating via fi_info gets us the correct domain names and also
+    # naturally excludes back-side Ethernet NICs that show up under
     # ibv_devices but are not EFA endpoints.
     local domains
     domains=$(fi_info -p efa -t FI_EP_RDM 2>/dev/null \
@@ -118,6 +131,25 @@ run_check() {
     local device_count
     device_count=$(echo "${domains}" | wc -l | tr -d ' ')
     log_info "Testing ${device_count} EFA domain(s)"
+
+    # Regression guard: a bogus, definitely-nonexistent device name MUST fail.
+    # This is the exact failure signature of the FI_EFA_DEVICE_NAME defect
+    # (a per-device pinning env var that libfabric silently ignores, so every
+    # "per-device" iteration -- including one given a nonexistent name -- ran
+    # on whichever device libfabric picked by default and reported PASS). If
+    # this negative control ever passes, per-device pinning is broken again
+    # and the results below cannot be trusted as per-device -- fail loudly
+    # instead of reporting a green per-device sweep that isn't one.
+    log_verbose "Running negative-control check: bogus device name must fail loopback"
+    local negctrl_exit=0
+    run_pingpong_for_domain "definitely-nonexistent-device-rdm" > /dev/null 2>&1 || negctrl_exit=$?
+    if [[ "${negctrl_exit}" -eq 0 ]]; then
+        check_fail "${CHECK_NAME}" \
+            "Negative control failed: a nonexistent device name (definitely-nonexistent-device-rdm) returned PASS. Per-device pinning is not working -- results below cannot be trusted as per-device. (This is the FI_EFA_DEVICE_NAME silent-no-op failure mode; see fix commit.)" \
+            "RESET"
+        return 1
+    fi
+    log_verbose "Negative control OK: bogus device name correctly failed (exit ${negctrl_exit})"
 
     local failures=0
     local results_json="["

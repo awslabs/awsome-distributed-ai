@@ -60,6 +60,12 @@ spec:
               LABEL_PREFIX="gpu-healthcheck.aws-samples.io"
               RESULTS_DIR="/tmp/gpu-healthcheck-quarantine"
               export RESULTS_DIR
+              # NODE_NAME is lib/common.sh's detect_instance_type() kubectl
+              # fallback key (used when IMDS is unreachable, which it is by
+              # default from an EKS pod). This Job's ServiceAccount already
+              # has `get` on nodes (02-rbac.yaml), so exporting this here is
+              # sufficient -- no RBAC or volume changes needed.
+              export NODE_NAME="${NODE}"
 
               echo "=== GPU Quarantine Check: ${NODE} ==="
 
