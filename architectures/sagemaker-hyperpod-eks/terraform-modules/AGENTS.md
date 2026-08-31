@@ -2,11 +2,11 @@
 
 ## Repository Overview
 
-Multi-architecture reference repo for distributed ML training on AWS (SageMaker HyperPod, ParallelCluster, Batch, EKS). Each subdirectory under `1.architectures/` is largely self-contained.
+Multi-architecture reference repo for distributed ML training on AWS (SageMaker HyperPod, ParallelCluster, Batch, EKS). Each subdirectory under `architectures/` is largely self-contained.
 
 ## Active Work Area: Terraform Modules
 
-Path: `1.architectures/7.sagemaker-hyperpod-eks/terraform-modules/hyperpod-eks-tf/`
+Path: `architectures/sagemaker-hyperpod-eks/terraform-modules/hyperpod-eks-tf/`
 
 This Terraform stack deploys a SageMaker HyperPod cluster on EKS. The EKS control plane is a prerequisite for HyperPod — it is NOT an independent EKS deployment. All features must be compatible with HyperPod's SageMaker-managed instances.
 

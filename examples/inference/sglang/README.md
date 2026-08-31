@@ -5,15 +5,23 @@ SPDX-License-Identifier: MIT-0
 
 # SGLang test cases
 
-[SGLang](https://github.com/sgl-project/sglang) deployments on AWS EKS / SageMaker HyperPod. Each sub-directory is a self-contained sample — apply its manifest with `kubectl`.
+[SGLang](https://github.com/sgl-project/sglang) deployments on AWS. Each sub-directory is a self-contained sample — most are EKS / SageMaker HyperPod manifests applied with `kubectl`; `dsr1-deepep-efa` runs directly on EC2 with Docker.
 
 | Test case | Hardware | Topology | Engine image |
 | --- | --- | --- | --- |
+| [`dsr1-deepep-efa`](./dsr1-deepep-efa) | 2–4× `p5`/`p5en.48xlarge` | EC2 (Docker) — DeepSeek-R1 colocated 2-node (TP16/EP16) and 2P2D prefill/decode-disaggregated (4-node, KV over EFA via Mooncake), **DeepEP** MoE all-to-all over NVSHMEM-libfabric/EFA; selects DeepEP, SGLang's ordinary all-to-all, pure TP, or UCCL-EP for comparison, ± DP-attention | Custom build, SGLang 0.5.13.post1 + DeepEP |
 | [`qwen3.5-27b-b300-intra-pd`](./qwen3.5-27b-b300-intra-pd) | 1× B300 (8 GPU) | Intra-node PD — 6 prefill + 2 decode in one pod, NIXL, SGLang router sidecar | `lmsysorg/sglang:v0.5.12.post1-cu130`, no inter-node RDMA support |
 | [`kimi2.6-h200-1p1d`](./kimi2.6-h200-1p1d) | 2× H200 nodes | Node-level 1P1D — prefill + decode StatefulSets, NIXL over EFA | Custom ECR build from [`Dockerfile.efa`](./Dockerfile.efa) (lmsysorg/sglang:v0.5.12.post1-cu130 + EFA layer), inter-node RDMA enabled |
 | [`dsv4pro-b300-single-node`](./dsv4pro-b300-single-node) | 1× B300 (8 GPU) | Unified (non-PD) baseline | `lmsysorg/sglang:v0.5.12.post1-cu130`, no inter-node RDMA support |
 | [`dsv4flash-b300-intra-3p1d`](./dsv4flash-b300-intra-3p1d) | 1× B300 (8 GPU) | Intra-node PD — 3 prefill + 1 decode (tp=2 each) in one pod, NIXL, SGLang router sidecar | `lmsysorg/sglang:v0.5.12.post1-cu130`, no inter-node RDMA support |
 | [`glm5.2-b300-tp2-dp4`](./glm5.2-b300-tp2-dp4) | 1× B300 (8 GPU) | 4× independent tp=2 engines behind an SGLang router (cache-aware LB, cluster-level dp=4) | `lmsysorg/sglang@sha256:bafcd0…` (the `dev-glm52-nvfp4` tag pinned by digest — GLM-5.2 NVFP4 support not yet in a tagged release) |
+
+For the kernel-level DeepEP-on-EFA dispatch/combine benchmarks (Slurm and EKS
+launchers, 1–32 nodes) see
+[`micro-benchmarks/expert-parallelism/deepep-benchmark`](../../../micro-benchmarks/expert-parallelism/deepep-benchmark).
+For a PD-disaggregated MoE deployment on vLLM — UCCL-EP rather than DeepEP, KV
+over NIXL, orchestrated on EKS — see
+[`examples/inference/vllm/dsv3-uccl-nixl`](../vllm/dsv3-uccl-nixl).
 
 > The intra-node PD samples deliberately run several engine processes in one pod — not the usual one-process-per-pod shape. Intra-node KV transfer rides NVLink via CUDA IPC, which requires all engines to share an IPC namespace and see each other's GPUs — impossible across separate pods or containers, so the engines share one container (each sample's README explains the full rationale).
 

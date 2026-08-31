@@ -157,9 +157,9 @@ before deploying.
 | Workload | Source in this repo | PCS-specific delta |
 |---|---|---|
 | NCCL `all_reduce` | [`micro-benchmarks/nccl-tests/slurm/nccl-tests-container.sbatch`](../../../micro-benchmarks/nccl-tests) | Partition name, Enroot import on login node |
-| FSDP Llama-2 7B | [`3.test_cases/pytorch/FSDP`](../../../3.test_cases/pytorch/FSDP) | Cache on `/fsx`, 2 nodes |
-| Megatron-LM GPT-3 (TP/PP/DP) | [`3.test_cases/megatron/megatron-lm`](../../../3.test_cases/megatron/megatron-lm) | Import `.sqsh` to `/fsx`, data under `/fsx/gpt2/`, 4 nodes |
-| GPU Health Check | [`4.validation_and_observability/2.gpu-cluster-healthcheck`](../../../4.validation_and_observability/2.gpu-cluster-healthcheck) | sbatch wrapper, partition name |
+| FSDP Llama-2 7B | [`examples/training/fsdp`](../../../examples/training/fsdp) | Cache on `/fsx`, 2 nodes |
+| Megatron-LM GPT-3 (TP/PP/DP) | [`examples/training/megatron-lm`](../../../examples/training/megatron-lm) | Import `.sqsh` to `/fsx`, data under `/fsx/gpt2/`, 4 nodes |
+| GPU Health Check | [`validation_and_observability/gpu-cluster-healthcheck`](../../../validation_and_observability/gpu-cluster-healthcheck) | sbatch wrapper, partition name |
 
 ---
 

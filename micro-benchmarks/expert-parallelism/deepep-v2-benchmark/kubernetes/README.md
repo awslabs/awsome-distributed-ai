@@ -15,7 +15,7 @@ SSH-launched workers do not inherit the image `ENV`.
 An EKS cluster with EFA-enabled GPU nodes (e.g. `p6-b300.48xlarge`), the
 [NVIDIA device plugin](https://github.com/NVIDIA/k8s-device-plugin) and the
 [AWS EFA device plugin](https://github.com/aws/eks-charts/tree/master/stable/aws-efa-k8s-device-plugin)
-installed. See the [EKS architectures](../../../../1.architectures) in this repo.
+installed. See the [EKS architectures](../../../../architectures) in this repo.
 
 > NOTE: To expose the GDRCopy gdrdrv kernel driver, install the NVIDIA device plugin with `gdrcopyEnabled=true`. \
 > [AI/ML on EKS - NVIDIA device plugin](https://docs.aws.amazon.com/eks/latest/userguide/device-management-nvidia-dra-device-plugin.html#eks-nvidia-device-plugin)

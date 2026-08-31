@@ -13,8 +13,8 @@ name: DeepEP vendor sync
 on:
   pull_request:
     paths:
-      - "3.test_cases/megatron/megatron-bridge/deepep/setup_deepep_efa.sh"
-      - "3.test_cases/pytorch/sglang/dsr1-deepep-efa/setup_deepep_efa.sh"
+      - "examples/training/megatron-bridge/deepep/setup_deepep_efa.sh"
+      - "examples/inference/sglang/dsr1-deepep-efa/setup_deepep_efa.sh"
       - "micro-benchmarks/expert-parallelism/deepep-benchmark/setup_deepep_efa.sh"
 
 permissions:
@@ -29,7 +29,7 @@ jobs:
         run: |
           CANON=micro-benchmarks/expert-parallelism/deepep-benchmark/setup_deepep_efa.sh
           VENDORED=(
-            3.test_cases/pytorch/sglang/dsr1-deepep-efa/setup_deepep_efa.sh
+            examples/inference/sglang/dsr1-deepep-efa/setup_deepep_efa.sh
           )
           # Copies that are KNOWN to differ from the canonical script today. They are
           # reported as warnings, not failures, so this gate does not block unrelated PRs on
@@ -38,7 +38,7 @@ jobs:
           # re-copying the canonical file requires updating that Dockerfile too. Move the
           # path into VENDORED above once that is done.
           KNOWN_DRIFT=(
-            3.test_cases/megatron/megatron-bridge/deepep/setup_deepep_efa.sh
+            examples/training/megatron-bridge/deepep/setup_deepep_efa.sh
           )
           rc=0
           for v in "${VENDORED[@]}"; do

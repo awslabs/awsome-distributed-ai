@@ -172,7 +172,7 @@ chmod 777 -R /tmp/enroot /opt/enroot
 # root volume, ENROOT_RUNTIME_PATH=/tmp/..., etc.). Without this sed pass
 # immediately after, ENROOT_CACHE_PATH stays on the root volume leading to
 # the first large container pull to fill the root volume and the node degrades.
-#  See: https://github.com/awslabs/awsome-distributed-training/issues/427
+#  See: https://github.com/awslabs/awsome-distributed-ai/issues/427
 #
 # The `cp` and this sed are a *pair* by design: `cp` brings LCS's broadened
 # flags (writable rootfs, no home mount, lzo squash, etc.), this sed rescues

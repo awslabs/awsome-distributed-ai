@@ -1,13 +1,13 @@
 # Test 13: GPU Cluster Health Check
 
 Validates GPU hardware, EFA, and NVLink on a PCS GPU node group using the
-repository's [GPU Cluster Health Check Suite](../../../4.validation_and_observability/2.gpu-cluster-healthcheck).
+repository's [GPU Cluster Health Check Suite](../../../validation_and_observability/gpu-cluster-healthcheck).
 
 **This page documents only the PCS-specific deltas.** For the suite itself — what
 each check does, the severity classification (PASS / MONITOR / REBOOT / ISOLATE),
 the lightweight vs intensive check levels, instance profiles, and the per-check
 reference — see the suite's own
-[README](../../../4.validation_and_observability/2.gpu-cluster-healthcheck/README.md).
+[README](../../../validation_and_observability/gpu-cluster-healthcheck/README.md).
 Don't duplicate that here.
 
 **Prerequisites:** a deployed GPU CNG (P5/P5e/P5en/P6-B200/P6-B300) and the suite
@@ -20,7 +20,7 @@ available on shared `/fsx` (so every compute node sees the same scripts).
 1. **Stage the suite on `/fsx`** (shared) so all GPU nodes run the same copy:
    ```bash
    cd /fsx && git clone https://github.com/awslabs/awsome-distributed-ai.git --depth 1
-   HC=/fsx/awsome-distributed-ai/4.validation_and_observability/2.gpu-cluster-healthcheck
+   HC=/fsx/awsome-distributed-ai/validation_and_observability/gpu-cluster-healthcheck
    ```
 
 2. **Drive it through the PCS Slurm queue** — use `srun`/`sbatch` against your GPU
