@@ -1,0 +1,40 @@
+name: require-e2e-evidence
+
+# Enforce that every PR carries end-to-end test evidence from a real AWS
+# run in its "## Test Results" section, or explicitly declares itself
+# docs-only. See .github/PULL_REQUEST_TEMPLATE.md and AGENTS.md.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR body for e2e test evidence
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # Strip CRs and HTML comments first, so template placeholder text
+          # (which itself mentions "docs-only") never satisfies the checks.
+          body=$(tr -d '\r' <<<"${PR_BODY}" | perl -0pe 's/<!--.*?-->//gs')
+
+          # Explicit docs-only declaration is an accepted escape hatch.
+          if grep -qiE '(^|[^a-z])docs-only([^a-z]|$)' <<<"$body"; then
+            echo "PR declared docs-only — skipping e2e evidence requirement."
+            exit 0
+          fi
+
+          # Extract the "## Test Results" section (up to the next ## heading).
+          section=$(awk '/^##[[:space:]]+Test Results/{f=1; next} /^##[[:space:]]/{f=0} f' <<<"$body" | tr -d '[:space:]')
+
+          if [ -z "$section" ]; then
+            echo "::error title=Missing e2e test evidence::PR must include end-to-end test results from a real AWS run under '## Test Results' (environment, commands, output/logs). For changes with no functional impact, write 'docs-only' in that section instead."
+            exit 1
+          fi
+
+          echo "Test Results section present (${#section} chars of content)."

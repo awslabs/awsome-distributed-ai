@@ -38,7 +38,9 @@ substantive work.
     - Why this is not duplicating an existing PR.
     - How the change was verified — for functional changes, the cluster
       type, instance types, and scale used, with relevant command output or
-      logs. For docs-only changes, state that explicitly.
+      logs under `## Test Results`. For changes with no functional impact,
+      write `docs-only` there instead. This is CI-enforced by the
+      `require-e2e-evidence` check.
 
 ### Fail-closed behavior
 
