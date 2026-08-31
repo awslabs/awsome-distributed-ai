@@ -42,3 +42,18 @@ output "availability_zones" {
   description = "List of availability zones used in the VPC"
   value       = var.closed_network ? [] : [aws_subnet.public_1[0].availability_zone, aws_subnet.public_2[0].availability_zone]
 }
+
+output "nat_gateway_ids_by_zone_id" {
+  description = <<-EOT
+    Map of LZ AZ ID -> LZ NAT gateway ID. Consumed by the private_subnet
+    module: when a private subnet is placed in one of these zones, its
+    default route uses this NAT instead of the regional NAT.
+    Empty map when no LZ egress NATs are configured.
+  EOT
+  value       = zipmap(var.local_zone_egress_zone_ids, aws_nat_gateway.lz_nat[*].id)
+}
+
+output "lz_nat_eips_by_zone_id" {
+  description = "Map of LZ AZ ID -> LZ NAT public IP. Empty when no LZ egress NATs are configured."
+  value       = zipmap(var.local_zone_egress_zone_ids, aws_eip.lz_nat[*].public_ip)
+}

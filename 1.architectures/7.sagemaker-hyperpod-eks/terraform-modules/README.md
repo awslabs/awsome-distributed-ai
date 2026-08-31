@@ -492,6 +492,105 @@ python3 tools/verify-aws-connectivity.py
 ```
 
 ---
+
+### Local Zone Deployment
+
+You can place HyperPod worker instance groups in an [AWS Local Zone](https://docs.aws.amazon.com/local-zones/latest/ug/what-is-aws-local-zones.html) to run compute closer to a specific metro area. The EKS control plane stays in the parent Region: EKS cannot create control-plane ENIs in a Local Zone, so only the HyperPod worker subnet lives in the Local Zone while the control-plane subnets remain in standard parent Availability Zones.
+
+Local Zone support is opt-in and additive. All of the variables below default to standard-AZ behavior when unset, so existing deployments are unaffected.
+
+> **Note:** Not every Local Zone is supported by HyperPod, and there is no API to enumerate the supported zones. Confirm your target zone with AWS before deploying. The instance type must also be both offered in the Local Zone and present in HyperPod's `ClusterInstanceType` enum.
+
+#### Local Zone Variables
+
+| Variable | Usage |
+|----------|-------|
+| `private_subnet_availability_zone_ids` | Pins the HyperPod private (worker) subnets to explicit Availability Zone IDs, 1:1 with `private_subnet_cidrs`. This bypasses the `opt-in-status = "opt-in-not-required"` AZ-discovery filter, which excludes opt-in Local Zones. Default `[]` = discover standard AZs automatically. |
+| `local_zone_egress_zone_ids` | List of Local Zone AZ IDs that should get a Local-Zone-local NAT gateway. Default `[]` = worker subnets route through the regional NAT gateway. |
+| `local_zone_public_subnet_cidrs` | Local Zone public subnet CIDRs, 1:1 with `local_zone_egress_zone_ids`. Typically carved from the VPC primary CIDR (secondary CIDRs are usually consumed by the worker subnet). |
+| `local_zone_network_border_groups` | `NetworkBorderGroup` names for the Local Zone NAT Elastic IPs, 1:1 with `local_zone_egress_zone_ids`. Required: a plain VPC-scoped EIP cannot attach to a NAT gateway in a Local Zone subnet. The border group is the Local Zone name minus the trailing zone letter (e.g. `us-west-2-phx-2a` -> `us-west-2-phx-2`). |
+
+#### Local Zone egress (NAT placement)
+
+By default the `vpc` module creates a single regional NAT gateway in a standard-AZ public subnet. A worker subnet in a Local Zone routes `0.0.0.0/0` to that regional NAT, so egress traffic hairpins back to the parent Region and pays an added round trip per packet.
+
+Setting the three `local_zone_*` variables creates one Local-Zone-local NAT gateway per listed zone (with a border-group-scoped EIP) and routes matching worker subnets to it via the `vpc` module's `nat_gateway_ids_by_zone_id` output. Keeping egress in-zone significantly improves first-hop latency and internet throughput for Local Zone workers. Unmapped AZs continue to use the regional NAT. This has been validated with an end-to-end Local Zone HyperPod deployment.
+
+#### Example `custom.tfvars`
+
+```hcl
+resource_name_prefix = "hp-eks"
+aws_region           = "us-west-2"
+
+# VPC
+create_vpc_module    = true
+vpc_cidr             = "10.192.0.0/16"
+public_subnet_1_cidr = "10.192.10.0/24"
+public_subnet_2_cidr = "10.192.11.0/24"
+
+# Private (worker) subnet pinned to the Local Zone AZ ID, 1:1 with the CIDR.
+# This bypasses the opt-in-not-required discovery filter that excludes Local Zones.
+create_private_subnet_module         = true
+private_subnet_cidrs                 = ["10.1.0.0/16"]
+private_subnet_availability_zone_ids = ["usw2-phx2-az1"]
+
+# Optional: Local-Zone-local NAT gateway (all three lists non-empty and 1:1).
+# Uncomment to keep worker egress in-zone instead of hairpinning to the Region.
+# local_zone_egress_zone_ids       = ["usw2-phx2-az1"]
+# local_zone_public_subnet_cidrs   = ["10.192.20.0/24"]
+# local_zone_network_border_groups = ["us-west-2-phx-2"]
+
+# EKS control-plane subnets stay in parent AZs (cannot live in a Local Zone).
+create_eks_module         = true
+create_eks_subnets        = true
+eks_private_subnet_1_cidr = "10.192.7.0/28"
+eks_private_subnet_2_cidr = "10.192.8.0/28"
+
+# FSx placement: default co-locates FSx with the instance group's subnet (in-Local-Zone).
+create_fsx_module         = true
+create_new_fsx_filesystem = true
+fsx_storage_capacity      = 1200
+fsx_throughput            = 250
+# fsx_availability_zone_id = ""  # set to a parent-AZ ID for a cross-zone mount
+                                 # if the Local Zone does not offer FSx (or the tier).
+
+instance_groups = [
+  {
+    name                      = "instance-group-1"
+    instance_type             = "ml.c6i.2xlarge"
+    instance_count            = 1
+    availability_zone_id      = "usw2-phx2-az1" # land workers in the Local Zone
+    ebs_volume_size_in_gb     = 100
+    threads_per_core          = 2
+    enable_stress_check       = false
+    enable_connectivity_check = false
+    lifecycle_script          = "on_create.sh"
+  }
+]
+```
+
+#### FSx for Lustre in a Local Zone
+
+FSx placement is already configurable through `fsx_availability_zone_id` (see the [FSx for Lustre Module](#fsx-for-lustre-module) section). When empty (default), FSx is created in the first instance group's subnet, which co-locates it with compute in the Local Zone. FSx for Lustre availability and per-tier support vary by Local Zone; if your target zone does not offer FSx (or the tier you need), set `fsx_availability_zone_id` to a parent-AZ ID for a cross-zone mount, or set `create_new_fsx_filesystem = false`.
+
+#### Prerequisite: opt in to the Local Zone
+
+The target Local Zone must be opted in before you deploy (a not-yet-opted-in zone makes the private subnet fail to create):
+
+```bash
+# Look up your Local Zone's AZ ID and parent zone
+aws ec2 describe-availability-zones --all-availability-zones \
+  --query "AvailabilityZones[?ZoneType=='local-zone'].[ZoneName,ZoneId,ParentZoneName]" \
+  --output table
+
+# Opt in (opt-in is asynchronous - verify it reports opted-in before deploying)
+aws ec2 modify-availability-zone-group \
+  --group-name us-west-2-phx-2a --opt-in-status opted-in
+```
+
+For a complete, ready-to-run Local Zone example, see the [HyperPod Local Zone quickstart](https://github.com/aravneelaws/hyperpod-local-zone-quickstart/tree/main/terraform/eks). That repository ships only a `local-zone.tfvars` file and applies it against this reference stack (no forked Terraform), so the variable file lives there while the modules live here.
+
+---
 ### Enabling Optional Addons 
 Set the following parameters to `true` in your `custom.tfvars` file to enable optional addons for your HyperPod cluster (e.g. `create_task_governance_module = true`):
 | Parameter | Usage |
