@@ -22,9 +22,12 @@ gh pr list --repo awslabs/awsome-distributed-ai --state open --search "<short ar
 
 ### No low-value busywork PRs
 
-Do not open one-off PRs for tiny edits (single typo, isolated style change,
-link fix, etc.). Mechanical cleanups are acceptable only when bundled with
-substantive work.
+Judge a change by its impact, not its diff size. An atomic fix is welcome
+when it corrects a concrete functional, correctness, or user-facing defect
+(a broken command, a wrong path, a bug in a script) with proportionate
+verification. Do not open PRs for edits with no concrete impact (pure style
+preference, cosmetic rewording), do not bundle unrelated cleanup, and do
+not pad a focused fix to make it look substantive.
 
 ### Accountability
 
@@ -36,16 +39,23 @@ substantive work.
   their stated scale ("if you say 256 A100, test on that scale").
 - PR descriptions for AI-assisted work **must** include:
     - Why this is not duplicating an existing PR.
-    - How the change was verified — for functional changes, the cluster
-      type, instance types, and scale used, with relevant command output or
-      logs under `## Test Results`. For changes with no functional impact,
-      write `docs-only` there instead.
+    - How the change was verified, proportionate to the change:
+        - **New or functionally changed example**: an end-to-end run on
+          the target hardware — cluster type, instance types, and scale
+          used, with relevant command output or logs under
+          `## Test Results`. Running this e2e verification is the PR
+          author's responsibility.
+        - **Small functional fix**: verification proportionate to the
+          change (a build, a targeted test, or a reviewable demonstration
+          of the fix).
+        - **No functional impact**: write `docs-only` under
+          `## Test Results`.
 
 ### Fail-closed behavior
 
-If the work is duplicate or trivial busywork, or you cannot verify a
-functional change on representative hardware, **do not proceed**. Return a
-short explanation of what is missing.
+If the work is duplicate or trivial busywork, or you cannot provide the
+verification required above, **do not proceed**. Return a short
+explanation of what is missing.
 
 ## 2. Repository Layout — where things go
 
@@ -60,14 +70,25 @@ short explanation of what is missing.
 | `ami_and_containers/` | Machine image build assets (Packer/Ansible) |
 | `docs/` | Cross-cutting prose documentation (e.g. the [EFA cheatsheet](./docs/efa-cheatsheet.md)) |
 
+> **Exception**: two `LifecycleScripts` trees are deliberately retained at
+> their legacy numbered paths under `1.architectures/` for SageMaker
+> HyperPod console compatibility (see
+> [`1.architectures/README.md`](./1.architectures/README.md)). Do not
+> move, rename, or delete them as cleanup.
+
 Placement rules for new content:
 
-- **Extend before create.** Before adding a new example, check whether an
-  existing example already covers the same framework or engine. Prefer
-  updating it — a new variant subdirectory, model recipe, or README
-  section inside the existing example — over adding a parallel top-level
-  example. Add a new example directory only when no existing one fits;
-  unbounded near-duplicate examples are a maintenance liability.
+- **Extend before create** (applies repo-wide — examples,
+  micro-benchmarks, and architectures alike). Before adding a new
+  directory, check whether an existing one already covers the same
+  framework, engine, or benchmark. Prefer updating it — a new variant
+  subdirectory, model recipe, or README section — over adding a parallel
+  sibling. A new directory is justified only when its dependencies or
+  execution model differ materially from the closest existing one; name
+  that closest sibling in the PR and explain why extending it is not
+  enough. Existing sibling directories are not presumed duplicates — do
+  not consolidate them retroactively under this rule. Unbounded
+  near-duplicate directories are a maintenance liability.
 - A **training framework** example goes to `examples/training/<framework>/`.
 - A **specific model or application** (even if it trains) goes to
   `examples/use-cases/<name>/`.
@@ -99,6 +120,10 @@ python3 -m pytest examples/training/megatron-bridge/ -v --keep-artifacts
   scripts).
 - Functional changes to an example are verified by running it on the target
   hardware — a successful `docker build` alone is not verification.
+- Per-asset verification is not single-asset verification: a change to a
+  shared file (the root `conftest.py`, a shared Dockerfile or script, an
+  architecture building block) affects every consumer — enumerate the
+  affected assets and run the applicable check for each.
 
 ## 4. Domain-Specific Guides
 
