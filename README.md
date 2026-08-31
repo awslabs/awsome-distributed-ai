@@ -1,6 +1,6 @@
 # ML Training Reference Architectures & Tests <!-- omit from toc -->
 
-This repository contains reference architectures and test cases for distributed model training with [Amazon SageMaker HyperPod](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod.html), [AWS ParallelCluster](https://docs.aws.amazon.com/parallelcluster/latest/ug/what-is-aws-parallelcluster.html), [AWS Parallel Computing Service (PCS)](https://aws.amazon.com/pcs/), [AWS Batch](https://docs.aws.amazon.com/batch/latest/userguide/what-is-batch.html), and [Amazon EKS](https://docs.aws.amazon.com/eks/latest/userguide/getting-started-console.html). The test cases cover different types and sizes of models as well as different frameworks and parallel optimizations (PyTorch DDP/FSDP, Megatron-LM, NeMo...).
+This repository contains reference architectures and test cases for distributed model training with [Amazon SageMaker HyperPod](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod.html), [AWS ParallelCluster](https://docs.aws.amazon.com/parallelcluster/latest/ug/what-is-aws-parallelcluster.html), [AWS Parallel Computing Service (PCS)](https://aws.amazon.com/pcs/), and [Amazon EKS](https://docs.aws.amazon.com/eks/latest/userguide/getting-started-console.html). The test cases cover different types and sizes of models as well as different frameworks and parallel optimizations (PyTorch DDP/FSDP, Megatron-LM, NeMo...).
 
 The major components of this directory are:
 
@@ -12,7 +12,7 @@ The major components of this directory are:
 └── micro-benchmarks/              # Micro-benchmarks (NCCL, NCCOM, NVSHMEM, etc.)
 ```
 
-**NOTE**: The architectures are designed to work with the S3 bucket and VPC created using reference templates `architectures/common/` and `architectures/vpc_network/`. _You're strongly recommended to deploy these two templates **before** deploying any of the reference architectures._
+**NOTE**: Each architecture ships its own prerequisite templates (VPC, storage, IAM). [`architectures/common/`](./architectures/common) and [`architectures/vpc_network/`](./architectures/vpc_network) provide optional standalone building blocks (private S3 bucket, HyperPod event notifications, reference VPC templates) you can reuse where an architecture doesn't bring its own.
 
 ## 0. Workshops
 
@@ -39,7 +39,6 @@ Architectures are located in `architectures` and consist of utilities and servic
 | [`common`](./architectures/common)                                       | Storage  | Common resources (S3 bucket, event notifications)    |
 | [`vpc_network`](./architectures/vpc_network)                             | Network  | Create a VPC with subnets and required resources     |
 | [`aws-parallelcluster`](./architectures/aws-parallelcluster)             | Compute  | Cluster templates for GPU & custom silicon training  |
-| [`aws-batch`](./architectures/aws-batch)                                 | Compute  | AWS Batch template for distributed training          |
 | [`amazon-eks`](./architectures/amazon-eks)                               | Compute  | Manifest files to train with Amazon EKS              |
 | [`sagemaker-hyperpod-slurm`](./architectures/sagemaker-hyperpod-slurm)               | Compute  | SageMaker HyperPod template for distributed training |
 | [`ldap_server`](./architectures/ldap_server)                             | Identity | LDAP server for multi-user cluster access            |

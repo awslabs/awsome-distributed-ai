@@ -1,6 +1,6 @@
 # VPC CloudFormation Stacks
 
-You will find here a collection of cloudformation templates to deploy a VPC with all the network resources to run distributed training workloads with [AWS ParallelCluster](https://docs.aws.amazon.com/parallelcluster/latest/ug/troubleshooting-v3.html), [Amazon EKS](https://docs.aws.amazon.com/eks/latest/userguide/what-is-eks.html) or [AWS Batch](https://docs.aws.amazon.com/batch/latest/userguide/what-is-batch.html). These VPC templates can be deployed in all AWS regions.
+You will find here a collection of cloudformation templates to deploy a VPC with all the network resources to run distributed training workloads with [AWS ParallelCluster](https://docs.aws.amazon.com/parallelcluster/latest/ug/troubleshooting-v3.html) or [Amazon EKS](https://docs.aws.amazon.com/eks/latest/userguide/what-is-eks.html). These VPC templates can be deployed in all AWS regions.
 
 ## Architectures
 
