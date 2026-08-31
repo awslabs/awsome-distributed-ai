@@ -39,8 +39,7 @@ substantive work.
     - How the change was verified — for functional changes, the cluster
       type, instance types, and scale used, with relevant command output or
       logs under `## Test Results`. For changes with no functional impact,
-      write `docs-only` there instead. This is CI-enforced by the
-      `require-e2e-evidence` check.
+      write `docs-only` there instead.
 
 ### Fail-closed behavior
 

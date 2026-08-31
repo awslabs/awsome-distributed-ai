@@ -26,8 +26,7 @@
 
 <!--
 REQUIRED for functional changes: paste evidence of an end-to-end run on a
-real AWS environment (job output, benchmark numbers, relevant logs). PRs
-without e2e evidence fail the `require-e2e-evidence` check.
+real AWS environment (job output, benchmark numbers, relevant logs).
 
 For changes with no functional impact, replace this section's content with
 the single word: docs-only
