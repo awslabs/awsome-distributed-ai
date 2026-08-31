@@ -23,7 +23,7 @@ def docker_build(change_test_dir, request):
         return img_name
 
     yield _build
-    if request.config.option.keep_artifacts == None:
+    if request.config.option.keep_artifacts is None:
         for img in img_list:
             subprocess.check_call(['docker', 'image', 'rm', img])
 

@@ -91,6 +91,13 @@ resource "aws_eks_addon" "task_governance" {
 
 resource "null_resource" "wait_for_kueue_webhook" {
   provisioner "local-exec" {
+    # Pass user-controllable values via the environment map instead of
+    # interpolating them into the command string. This neutralizes shell
+    # metacharacters in the variable values (command injection, CWE-78).
+    environment = {
+      AWS_REGION       = var.aws_region
+      EKS_CLUSTER_NAME = var.eks_cluster_name
+    }
     command = <<-EOT
       set -eu
       echo "Waiting for kueue-controller-manager deployment to be ready..."
@@ -99,8 +106,8 @@ resource "null_resource" "wait_for_kueue_webhook" {
       trap 'rm -f "$KUBECONFIG_FILE"' 0
 
       aws eks update-kubeconfig \
-        --region ${var.aws_region} \
-        --name ${var.eks_cluster_name} \
+        --region "$AWS_REGION" \
+        --name "$EKS_CLUSTER_NAME" \
         --kubeconfig "$KUBECONFIG_FILE"
       kubectl wait --for=condition=available deployment/kueue-controller-manager \
         -n kueue-system \

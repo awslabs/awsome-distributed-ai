@@ -359,6 +359,7 @@ Resources:
 
   PublicRoute:
     Type: AWS::EC2::Route
+    DependsOn: GatewayToInternet
     Properties:
       RouteTableId: !Ref PublicRouteTable
       DestinationCidrBlock: 0.0.0.0/0
@@ -508,7 +509,8 @@ Resources:
                     "ec2:DescribeSubnets",
                     "ec2:DescribeSecurityGroups",
                     "ec2:DetachNetworkInterface",
-                    "ec2:CreateTags"
+                    "ec2:CreateTags",
+                    "fsx:DescribeFileSystems"
                 ]
                 Resource: "*"
   LCScriptsBucket:

@@ -40,12 +40,6 @@ locals {
       } : {}
     )
   ]
-
-  # Optional safety check: allow at most one instance group to carry a training plan ARN
-  training_plan_groups = [
-    for ig in var.instance_groups : ig.name
-    if try(ig.training_plan_arn, null) != null
-  ]
 }
 
 resource "awscc_sagemaker_cluster" "hyperpod_cluster" {
@@ -66,11 +60,4 @@ resource "awscc_sagemaker_cluster" "hyperpod_cluster" {
       value = "${var.resource_name_prefix}-hyperpod-cluster"
     }
   ]
-
-  lifecycle {
-    precondition {
-      condition     = length(local.training_plan_groups) <= 1
-      error_message = "At most one instance group may include training_plan_arn. Found training_plan_arn in: ${join(", ", local.training_plan_groups)}"
-    }
-  }
 }

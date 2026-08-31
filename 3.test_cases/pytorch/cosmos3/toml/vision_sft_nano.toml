@@ -1,0 +1,85 @@
+# Cosmos3-Nano vision SFT (T2V/I2V/V2V). Post-train in the bandwidth/large-file
+# regime. Warm-starts from the mid-trained Cosmos3-Nano DCP checkpoint (same
+# artifact the action-policy post-train uses: /fsx/pretrained/Cosmos3-Nano-dcp). Reads a
+# video+caption SFT dataset via the experiment's
+#   jsonl_paths = ["${oc.env:DATASET_PATH}/train/video_dataset_file.jsonl"]
+# so DATASET_PATH must point at an sft_dataset_* dir (e.g. the public
+# nvidia/BridgeData2-Subset-Synthetic-Captions 'sft_dataset_bridge').
+#
+# Run with: ckpt_type=dcp, env BASE_CHECKPOINT_PATH + WAN_VAE_PATH + DATASET_PATH.
+# Smoke: override trainer.max_iter on the CLI (e.g. =10).
+
+[job]
+task       = "vfm"
+experiment = "vision_sft_nano"
+project    = "cosmos3"
+group      = "sft"
+name       = "vision_sft_nano"
+wandb_mode = "disabled"
+
+[model]
+max_num_tokens_after_packing = 45056
+joint_attn_implementation    = "two_way"
+precision                    = "bfloat16"
+
+[model.ema]
+enabled         = true
+rate            = 0.1
+iteration_shift = 0
+
+[model.parallelism]
+data_parallel_shard_degree     = -1   # auto from WORLD_SIZE
+data_parallel_replicate_degree = 1
+
+[model.compile]
+enabled         = true
+compile_dynamic = true
+
+[model.activation_checkpointing]
+mode               = "full"
+save_ops_regex     = ["fmha"]
+preserve_rng_state = true
+determinism_check  = "default"
+
+[model.tokenizer]
+vae_path = "${oc.env:WAN_VAE_PATH}"
+
+[optimizer]
+betas          = [0.9, 0.95]
+eps            = 1.0e-6
+fused          = true
+keys_to_select = ["moe_gen", "time_embedder", "vae2llm", "llm2vae"]
+lr             = 2.0e-5
+weight_decay   = 0
+
+[scheduler]
+cycle_lengths      = [1000]
+f_max              = [1.0]
+f_min              = [0.0]
+f_start            = [0.0]
+verbosity_interval = 0
+warm_up_steps      = [50]
+
+[trainer]
+distributed_parallelism = "fsdp"
+grad_accum_iter         = 2
+logging_iter            = 1
+max_iter                = 100   # real short run; override via CLI for smoke/full
+
+[trainer.callbacks.compile_tokenizer]
+compile_after_iterations = 3
+enabled                  = false
+
+[trainer.callbacks.grad_clip]
+clip_norm    = 0.1
+force_finite = true
+
+# Warm-start from mid-trained Cosmos3-Nano DCP (skip EMA tensors; vision-SFT
+# initializes/continues the generation expert on top of the Nano backbone).
+[checkpoint]
+keys_to_skip_loading = ["net_ema."]
+load_path            = "${oc.env:BASE_CHECKPOINT_PATH}"
+save_iter            = 1000000   # avoid mid-smoke saves; raise/lower per real run
+
+[dataloader_train]
+max_sequence_length = 45056

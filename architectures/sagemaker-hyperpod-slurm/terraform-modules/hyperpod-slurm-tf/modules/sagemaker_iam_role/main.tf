@@ -37,7 +37,8 @@ data "aws_iam_policy_document" "sagemaker_vpc_policy" {
       "ec2:DescribeSubnets",
       "ec2:DescribeSecurityGroups",
       "ec2:DetachNetworkInterface",
-      "ec2:CreateTags"
+      "ec2:CreateTags",
+      "fsx:DescribeFileSystems"
     ]
     resources = ["*"]
   }

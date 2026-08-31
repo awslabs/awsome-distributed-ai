@@ -1,11 +1,21 @@
 variable "eks_cluster_name" {
   description = "The name of the EKS cluster"
   type        = string
+
+  validation {
+    condition     = can(regex("^[0-9A-Za-z][A-Za-z0-9_-]{0,99}$", var.eks_cluster_name))
+    error_message = "eks_cluster_name must follow EKS cluster naming rules: 1-100 characters, start with a letter or digit, and contain only letters, digits, hyphens, and underscores. This allowlist rejects shell metacharacters before any provisioner runs."
+  }
 }
 
 variable "aws_region" {
   description = "AWS Region where the HyperPod cluster and compute allocations exist"
   type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9-]+$", var.aws_region))
+    error_message = "aws_region must contain only lowercase letters, digits, and hyphens (e.g. us-west-2). This allowlist rejects shell metacharacters before any provisioner runs."
+  }
 }
 
 variable "hyperpod_cluster_arn" {

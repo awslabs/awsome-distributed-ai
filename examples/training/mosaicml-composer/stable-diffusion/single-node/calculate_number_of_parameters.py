@@ -12,7 +12,7 @@ from transformers import CLIPTextModel
 try:
     import xformers
     is_xformers_installed = True
-except:
+except ImportError:
     is_xformers_installed = False
 
 class StableDiffusion(composer.models.ComposerModel):

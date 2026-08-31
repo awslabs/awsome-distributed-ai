@@ -1,0 +1,58 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# DISAGGREGATED workload profile for the SLIME GRPO sample.
+#
+# An overlay sourced ON TOP OF the base env_vars. It moves reward scoring to a
+# separate CPU instance group (disaggregating it from the GPU rollout) and turns
+# up the workload on both tiers.
+#
+# Usage:
+#   cp env_vars.colocated.example env_vars && edit secrets (HF_TOKEN)
+#   cp env_vars.disaggregated.example env_vars.disaggregated
+#   source env_vars && source env_vars.disaggregated
+#
+# This profile deliberately increases load on BOTH tiers:
+#   * GPU tier  -- larger rollout batch, more samples/prompt, longer responses
+#                  and bigger global batch => more generation + more optimizer
+#                  work per step on the p5 nodes.
+#   * Reward tier -- a real reward MODEL (deberta-v3-large) scaled to one replica
+#                  per CPU node, so the CPU pool is the busy, independently-scaled
+#                  tier instead of a millisecond rule-based check.
+#
+# Assumes:
+#   * env_vars (Option A: Qwen3-4B, colocated) has already been sourced.
+#   * A Spot-capacity CPU instance group named ${REWARD_NODE_GROUP} is ALREADY
+#     provisioned on the HyperPod cluster (same AZ as the GPU pool, no EFA,
+#     CapacityRequirements: Spot). See the README Prerequisites for the one-time
+#     `aws sagemaker update-cluster` command, then set the name below to match.
+
+# ----- Heavier GRPO config (GPU tier) -----
+export ROLLOUT_BATCH_SIZE=64          # was 16  -> 4x more prompts per rollout
+export N_SAMPLES_PER_PROMPT=16        # was 8   -> 2x more responses per prompt
+# GRPO batch-size constraint: ROLLOUT_BATCH_SIZE × N_SAMPLES_PER_PROMPT = GLOBAL_BATCH_SIZE × NUM_STEPS_PER_ROLLOUT
+export GLOBAL_BATCH_SIZE=512          # was 128 -> 4x bigger optimizer step
+export NUM_STEPS_PER_ROLLOUT=2        # adjusted to satisfy constraint: 64*16 = 512*2
+export ROLLOUT_MAX_RESPONSE_LEN=16384 # was 8192 -> 2x longer generations
+export NUM_ROLLOUT=20                 # short but heavy run for the demo
+export ROLLOUT_TEMPERATURE=1.0
+# 64 prompts x 16 samples = 1024 generations scored per rollout step, which is
+# what drives sustained load onto the c5 reward pool.
+
+# ----- Heavier reward tier (CPU Spot pool, e.g. c5) -----
+export RM_TYPE="remote_rm"
+export REWARD_BACKEND="reward_model"
+export REWARD_MODEL_NAME="OpenAssistant/reward-model-deberta-v3-large-v2"
+# Name of the CPU instance group hosting the reward pods. This sample assumes a
+# Spot-capacity group (CapacityRequirements: Spot) already exists -- the reward
+# service is stateless and SLIME's remote_rm client retries on transient
+# failures, so Spot interruptions are tolerated. See the README Prerequisites
+# for the one-time `aws sagemaker update-cluster` command that creates it.
+export REWARD_NODE_GROUP="reward-spot-c5"
+export REWARD_REPLICAS=4               # one per node
+# ml.c5.4xlarge is 16 physical vCPU, but this sample provisions the group with
+# ThreadsPerCore=1 (hyperthreading off) -> ~8 logical / 7.9 allocatable vCPU on
+# EKS. TORCH_NUM_THREADS is sized to fit alongside the pod cpu request below.
+# If you provision with ThreadsPerCore=2, raise this toward ~14.
+export REWARD_TORCH_THREADS=6
+export RM_URL="http://slime-reward.${NAMESPACE}.svc.cluster.local:8000/score"

@@ -1,0 +1,31 @@
+# droid_policy_smoke — minimal smoke TOML for the sample-side DROID policy code.
+# Overlays the registered `action_policy_public_lerobot` experiment (which already
+# sets the dataloader, optimizer LR + 5x action multipliers, scheduler, etc.).
+# Run with ckpt_type=dummy + trainer.max_iter=10 for a no-checkpoint smoke.
+
+[job]
+task       = "vfm"
+experiment = "action_policy_public_lerobot"
+project    = "cosmos3"
+group      = "action_policy"
+name       = "droid_policy_smoke"
+wandb_mode = "disabled"
+
+[model]
+precision = "bfloat16"
+
+[model.parallelism]
+data_parallel_shard_degree     = -1   # auto from WORLD_SIZE (8 on 1x p5en)
+data_parallel_replicate_degree = 1
+
+[model.compile]
+enabled = false   # disable torch.compile for a fast smoke
+
+[model.tokenizer]
+vae_path = "${oc.env:WAN_VAE_PATH}"
+
+[trainer]
+distributed_parallelism = "fsdp"
+grad_accum_iter         = 1
+logging_iter            = 1
+max_iter                = 10

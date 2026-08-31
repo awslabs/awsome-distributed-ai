@@ -1,0 +1,17 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# FSx for Lustre PersistentVolume (cluster-scoped, Retain so weights survive ns delete).
+# Applied by scripts/02-download-model.sh on a fresh cluster via:
+#   envsubst '$FSX_HANDLE $FSX_DNS $FSX_MOUNT' | kubectl apply -f -
+apiVersion: v1
+kind: PersistentVolume
+metadata: { name: dynamo-fsx-pv }
+spec:
+  capacity: { storage: 1200Gi }
+  accessModes: ["ReadWriteMany"]
+  persistentVolumeReclaimPolicy: Retain
+  csi:
+    driver: fsx.csi.aws.com
+    volumeHandle: "${FSX_HANDLE}"
+    volumeAttributes: { dnsname: "${FSX_DNS}", mountname: "${FSX_MOUNT}" }

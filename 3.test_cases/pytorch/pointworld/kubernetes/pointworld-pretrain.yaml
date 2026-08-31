@@ -1,0 +1,156 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# PointWorld 3D World Model Pre-training - Kubernetes PyTorchJob (v1)
+# BEHAVIOR domain, large PTv3 backbone.
+# Default: 2 x p5en.48xlarge (16 x NVIDIA H200); scales via NUM_NODES in env_vars.
+#
+# NOTE: This PyTorchJob v1 (Training Operator) path is provided for clusters that
+# do not run Kubeflow Trainer v2. It has NOT been validated multi-node on a live
+# cluster - the validated path is Trainer v2 (see kubernetes/trainer-v2/). The
+# elasticPolicy below is required so the operator runs in elastic/torchrun mode
+# and injects the PET_* rendezvous vars; without it the operator runs in classic
+# mode and each pod rendezvouses as a standalone node 0 (split-brain).
+#
+# Prerequisites:
+#   - Kubeflow PyTorchJob operator (Training Operator) installed
+#   - NVIDIA GPU device plugin enabled (nvidia.com/gpu)
+#   - EFA device plugin enabled (vpc.amazonaws.com/efa)
+#   - FSx for Lustre PVC named "fsx-claim" mounted at /fsx, containing:
+#       /fsx/pointworld/dataset/behavior/wds       (WDS shards from the data-prep Job)
+#       /fsx/pointworld/dinov3/checkpoints/...     (gated DINOv3 weights, 2.download_dinov3.sh)
+#   - Container image built from pointworld.Dockerfile and pushed to ECR
+#
+# Launch pattern:
+#   With elasticPolicy set (rdzvBackend: c10d), the PyTorchJob operator runs in
+#   elastic/torchrun mode and injects the PET_* rendezvous vars (PET_NNODES,
+#   PET_NODE_RANK, PET_MASTER_ADDR/PORT, PET_NPROC_PER_NODE) plus MASTER_ADDR/PORT.
+#   torchrun consumes those to gang-schedule one job across all nodes; PointWorld's
+#   Trainer then calls dist.init_process_group(backend="nccl", init_method="env://")
+#   and reads LOCAL_RANK directly. No thin launcher is required.
+#
+# Usage (renders the ${...} tokens from env_vars via deploy.sh):
+#   source env_vars
+#   ./kubernetes/deploy.sh kubernetes/pointworld-pretrain.yaml
+#   kubectl logs -f pointworld-pretrain-worker-0 -n ${NAMESPACE}
+
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: pointworld-pretrain
+  namespace: ${NAMESPACE}
+spec:
+  # Required for multi-node torchrun: puts the operator in elastic/rendezvous
+  # mode (c10d) so it injects the PET_* vars torchrun needs. Without it the
+  # operator runs in classic mode and a multi-node run splits into independent
+  # single-node jobs. Mirrors the repo's FSDP PyTorchJobs.
+  elasticPolicy:
+    rdzvBackend: c10d
+    minReplicas: 1
+    maxReplicas: ${NUM_NODES}
+    maxRestarts: 100
+  pytorchReplicaSpecs:
+    Worker:
+      replicas: ${NUM_NODES}
+      restartPolicy: OnFailure
+      template:
+        metadata:
+          labels:
+            app: pointworld-pretrain
+        spec:
+          containers:
+            - name: pointworld
+              # Rendered from env_vars by ./deploy.sh (IMAGE_URI). Tag matches the
+              # pinned commit in the Dockerfile.
+              image: ${IMAGE_URI}
+              imagePullPolicy: Always
+              workingDir: /pointworld
+              # A small wrapper links the gated DINOv3 weights from FSx into the
+              # path the scene featurizer expects (kept out of the image), then
+              # execs torchrun. Doing this in the main container guarantees the
+              # symlink lives in the same filesystem as the training process.
+              command:
+                - bash
+                - -c
+                - |
+                  set -euo pipefail
+                  mkdir -p /pointworld/third_party/dinov3/checkpoints
+                  if [ -d /fsx/pointworld/dinov3/checkpoints ] && \
+                     [ -n "$(ls -A /fsx/pointworld/dinov3/checkpoints 2>/dev/null)" ]; then
+                    ln -sfn /fsx/pointworld/dinov3/checkpoints/* \
+                      /pointworld/third_party/dinov3/checkpoints/
+                    echo "Linked DINOv3 weights:"; ls -l /pointworld/third_party/dinov3/checkpoints/
+                  else
+                    echo "ERROR: DINOv3 weights not found at /fsx/pointworld/dinov3/checkpoints." >&2
+                    echo "Run scripts/2.download_dinov3.sh first (gated Meta access)." >&2
+                    exit 1
+                  fi
+                  # With elasticPolicy (rdzvBackend: c10d) the operator injects
+                  # the torchrun rendezvous env (MASTER_ADDR/PORT and the PET_*
+                  # elastic vars), so torchrun only needs the local topology.
+                  exec torchrun \
+                    --nproc_per_node=${GPU_PER_NODE} \
+                    --nnodes=${NUM_NODES} \
+                    train.py \
+                    --distributed=true \
+                    --domains=${DOMAINS} \
+                    --data_dirs=${DATA_DIRS} \
+                    --norm_stats_path=${NORM_STATS_PATH} \
+                    --ptv3_size=${PTV3_SIZE} \
+                    --batch_size=${BATCH_SIZE} \
+                    --num_workers=${NUM_WORKERS} \
+                    --num_epochs=${NUM_EPOCHS} \
+                    --max_train_steps=${MAX_TRAIN_STEPS} \
+                    --eval_freq=${EVAL_FREQ} \
+                    --save_freq=${SAVE_FREQ} \
+                    --log_dir=${LOG_DIR} \
+                    --exp_name=${EXP_NAME}
+              env:
+                # PointWorld maps domains -> $LOCAL_DATASET_DIR/<domain>/wds.
+                # We bind-mount the FSx WDS root here so /dataset/<domain>/wds resolves.
+                - name: LOCAL_DATASET_DIR
+                  value: /dataset
+                - name: WANDB_MODE
+                  value: ${WANDB_MODE}
+                - name: NCCL_DEBUG
+                  value: INFO
+                - name: FI_PROVIDER
+                  value: efa
+                - name: FI_EFA_USE_DEVICE_RDMA
+                  value: "1"
+                - name: NCCL_SOCKET_IFNAME
+                  value: "^docker,lo,veth"
+                - name: PYTHONPATH
+                  value: "/pointworld"
+              resources:
+                limits:
+                  nvidia.com/gpu: ${GPU_PER_NODE}
+                  vpc.amazonaws.com/efa: ${EFA_PER_NODE}
+                  memory: 1100Gi
+                requests:
+                  nvidia.com/gpu: ${GPU_PER_NODE}
+                  vpc.amazonaws.com/efa: ${EFA_PER_NODE}
+                  cpu: "180"
+                  memory: 1000Gi
+              volumeMounts:
+                - name: fsx
+                  mountPath: /fsx
+                # WDS shards live on FSx; expose them at the /dataset root that
+                # LOCAL_DATASET_DIR points to (subPath keeps the droid/ behavior/ layout).
+                - name: fsx
+                  mountPath: /dataset
+                  subPath: pointworld/dataset
+                - name: shmem
+                  mountPath: /dev/shm
+          volumes:
+            - name: fsx
+              persistentVolumeClaim:
+                claimName: ${FSX_PVC_NAME}
+            - name: shmem
+              emptyDir:
+                medium: Memory
+                sizeLimit: 256Gi
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule

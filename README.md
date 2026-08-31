@@ -26,7 +26,7 @@ You can follow the workshops below to train models on AWS. Each contains example
 
 ## Blog
 
-Posts about distributed ML training on AWS are published at <https://awslabs.github.io/awsome-distributed/>. The Hugo source lives on the [`content`](https://github.com/awslabs/awsome-distributed/tree/content) branch.
+Posts about distributed ML training on AWS are published at <https://awslabs.github.io/awsome-distributed-ai/>. The Hugo source lives on the [`content`](https://github.com/awslabs/awsome-distributed/tree/content) branch.
 
 Blog content is editorially curated by AWS authors. Code samples in this repo (`architectures/`, `examples/`, etc.) accept external contributions as usual — see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
@@ -111,4 +111,4 @@ Thanks to all the contributors for building, reviewing and testing.
 
 ## 7. Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=awslabs/awsome-distributed&type=Date)](https://star-history.com/#awslabs/awsome-distributed&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=awslabs/awsome-distributed-ai&type=Date)](https://star-history.dera.page/#awslabs/awsome-distributed-ai&Date)

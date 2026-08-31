@@ -1,0 +1,33 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Optional: dynamically provision an FSx for Lustre filesystem + PVC named
+# fsx-claim (mounted at /fsx by the workflow manifests). Requires the FSx CSI
+# driver installed on the cluster. Size for >=250GB free (14B DCP checkpoint is
+# ~140-206GB). Adjust subnetId/securityGroupIds to your cluster's VPC.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fsx-sc
+provisioner: fsx.csi.aws.com
+parameters:
+  subnetId: ${FSX_SUBNET_ID}
+  securityGroupIds: ${FSX_SECURITY_GROUP_IDS}
+  deploymentType: SCRATCH_2
+mountOptions:
+  - flock
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fsx-claim
+  namespace: ${NAMESPACE}
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: fsx-sc
+  resources:
+    requests:
+      storage: 1200Gi

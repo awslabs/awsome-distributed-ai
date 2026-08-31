@@ -1,0 +1,129 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# PointWorld interactive visualization Pod (single GPU).
+#
+# PointWorld's evaluation visualizer is an INTERACTIVE viser (https://viser.studio)
+# 3D web viewer, not a static artifact export. It launches a web server bound to
+# 0.0.0.0:8080 that renders predicted vs. ground-truth scene point-flow, and it
+# pauses on an interactive TTY prompt between samples
+# ("Press ENTER to continue to the next eval sample ... type q to quit").
+#
+# Because it needs a live web server AND an attached TTY, it CANNOT run as a
+# fire-and-forget batch/v1 Job (the prompt would never receive input and the Job
+# would hang). This manifest therefore uses a bare Pod with stdin/tty enabled, so
+# you can `kubectl attach` to drive it and `kubectl port-forward` to view it.
+#
+# The viz path runs before metrics and uses enable_mask=False, so it does NOT need
+# the DROID expert-confidence artifact -- it works for BEHAVIOR as-is.
+#
+# ----------------------------------------------------------------------------
+# Usage
+# ----------------------------------------------------------------------------
+#   source env_vars                       # sets MODEL_PATH, EVAL_* , IMAGE_URI, ...
+#   ./kubernetes/deploy.sh kubernetes/pointworld-viz.yaml
+#
+#   # 1) In terminal A -- forward the viser port to your laptop:
+#   kubectl port-forward pod/pointworld-viz 8080:8080 -n ${NAMESPACE}
+#
+#   # 2) In terminal B -- attach to drive the ENTER/q prompt:
+#   kubectl attach -it pointworld-viz -n ${NAMESPACE}
+#
+#   # 3) Open http://localhost:8080 in your browser. Press ENTER in terminal B to
+#   #    step to the next sample; type q to quit. The pod exits when viz + the
+#   #    short metrics pass finish.
+#
+#   # Tear down:
+#   ./kubernetes/deploy.sh --delete kubernetes/pointworld-viz.yaml
+#
+# EVAL_VIZ_NUM controls how many eval samples are visualized (default 5 here).
+# MODEL_PATH should point at your trained checkpoint, e.g.
+#   /fsx/pointworld/train_logs/<wandb-run-name>/model-last.pt
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pointworld-viz
+  namespace: ${NAMESPACE}
+  labels:
+    app: pointworld-viz
+spec:
+  restartPolicy: Never
+  containers:
+    - name: pointworld
+      image: ${IMAGE_URI}
+      imagePullPolicy: Always
+      workingDir: /pointworld
+      stdin: true
+      stdinOnce: false
+      tty: true
+      command:
+        - bash
+        - -c
+        - |
+          set -euo pipefail
+          mkdir -p /pointworld/third_party/dinov3/checkpoints
+          if [ -d /fsx/pointworld/dinov3/checkpoints ] && \
+             [ -n "$(ls -A /fsx/pointworld/dinov3/checkpoints 2>/dev/null)" ]; then
+            ln -sfn /fsx/pointworld/dinov3/checkpoints/* \
+              /pointworld/third_party/dinov3/checkpoints/
+          else
+            echo "ERROR: DINOv3 weights not found; run the data-prep Job first." >&2
+            exit 1
+          fi
+          # NOTE: --viewer_host is NOT a registered CLI flag; the viser server
+          # defaults to host 0.0.0.0 (port-forwardable). Only --viewer_port,
+          # --eval_viz_num, and --eval_skip_viz are exposed.
+          CONFIDENCE_ARG=""
+          if [ -n "${EVAL_CONFIDENCE_THRES}" ]; then
+            CONFIDENCE_ARG="--confidence_thres=${EVAL_CONFIDENCE_THRES}"
+          fi
+          echo "[viz] Launching eval with interactive viser viewer on :8080"
+          echo "[viz] port-forward 8080 and open http://localhost:8080; press ENTER here to step samples (q to quit)."
+          exec python eval.py \
+            --model_path "${MODEL_PATH}" \
+            --domains="${EVAL_DOMAIN}" \
+            --data_dirs="${EVAL_DATA_DIR}" \
+            --norm_stats_path=stats/droid_behavior \
+            ${CONFIDENCE_ARG} \
+            --batch_size=1 \
+            --eval_num_batches="${EVAL_NUM_BATCHES}" \
+            --eval_viz_num="${EVAL_VIZ_NUM}" \
+            --viewer_port=8080
+      env:
+        - name: LOCAL_DATASET_DIR
+          value: /dataset
+        - name: WANDB_MODE
+          value: ${WANDB_MODE}
+        - name: PYTHONPATH
+          value: "/pointworld"
+      ports:
+        - name: viser
+          containerPort: 8080
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+          memory: 200Gi
+        requests:
+          nvidia.com/gpu: 1
+          cpu: "24"
+          memory: 180Gi
+      volumeMounts:
+        - name: fsx
+          mountPath: /fsx
+        - name: fsx
+          mountPath: /dataset
+          subPath: pointworld/dataset
+        - name: shmem
+          mountPath: /dev/shm
+  volumes:
+    - name: fsx
+      persistentVolumeClaim:
+        claimName: ${FSX_PVC_NAME}
+    - name: shmem
+      emptyDir:
+        medium: Memory
+        sizeLimit: 32Gi
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule

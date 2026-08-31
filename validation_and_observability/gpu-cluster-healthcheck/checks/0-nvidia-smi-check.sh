@@ -17,7 +17,7 @@ KERNEL_LOG_LINES="${KERNEL_LOG_LINES:-4000}"
 NVIDIA_LOG_TAIL="${NVIDIA_LOG_TAIL:-200}"
 STRICT_PSHC="${STRICT_PSHC:-0}"
 NVLINK5_DEFAULT="${NVLINK5_DEFAULT:-MONITOR}"
-NVLINK_DEFAULT="${NVLINK_DEFAULT:-RESET}"
+NVLINK_DEFAULT="${NVLINK_DEFAULT:-REBOOT}"
 
 # Validate NVLink tunables
 for _var in NVLINK5_DEFAULT NVLINK_DEFAULT; do
@@ -171,13 +171,12 @@ run_check() {
                 # RESET: workflow-driven (Xid 154 parsing may escalate)
                 48)
                     code_severity="RESET"; code_group="WORKFLOW_XID_48" ;;
-                # RESET: DRAM retirement failure (A100 override → REBOOT)
+                # ISOLATE: DRAM retirement / row-remapping failure. The GPU has
+                # exhausted its memory self-repair path, which is an RMA criterion
+                # per NVIDIA GPU Memory Error Management; a reboot may restore
+                # temporary operation but the instance should be replaced.
                 64)
-                    code_severity="RESET"; code_group="DRAM_RETIREMENT_FAILURE"
-                    if [[ "${is_a100}" == true ]]; then
-                        code_severity="REBOOT"
-                    fi
-                    ;;
+                    code_severity="ISOLATE"; code_group="DRAM_RETIREMENT_FAILURE" ;;
                 # RESET: GPU reset required (A100+MIG_off override → REBOOT)
                 95)
                     code_severity="RESET"; code_group="RESET_GPU"
@@ -286,7 +285,7 @@ run_check() {
 
         # SXid alongside Xid 74 suggests NVSwitch root cause
         if [[ -n "${xid_errors}" ]] && echo "${xid_errors}" | sed -nE 's/.*Xid[^)]*\):[[:space:]]*([0-9]+).*/\1/p' | grep -qw '74'; then
-            sxid_msg+="; SXid with Xid 74 indicates likely NVSwitch root cause (recommend RESET)"
+            sxid_msg+="; SXid with Xid 74 indicates a fabric-level fault (recommend REBOOT)"
         fi
 
         check_warn "${CHECK_NAME}" "${sxid_msg}"

@@ -1,0 +1,616 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# One add-cng template per GPU family by design: this file's NetworkInterfaces
+# block is hand-built for the p6-b300 EFA layout, which is the odd one out --
+# 17 network cards where card 0 is ENA-only (no EFA) and EFA runs on cards 1-16
+# with DeviceIndex 0 (p5 and p6-b200 instead put EFA on card 0 with DeviceIndex 1).
+# Folding all families into one parameterized template would be either unreadable
+# (~32 per-card !If plus card-0/DeviceIndex branching) or require a
+# CAPABILITY_AUTO_EXPAND transform that breaks the one-click quick-create links.
+# See the rationale in add-cng-p5.yaml and the consolidation item in
+# docs/ROADMAP.md. InstanceType is locked with AllowedValues to match this block.
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Adding Compute Node Group to PCS Cluster with multi-network interface (EFA) support for P6-B300 (17 network cards; On-Demand or Capacity Block)
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Capacity Blocks for ML Settings (Optional)
+        Parameters:
+          - CapacityReservationId
+      - Label:
+          default: Additional Compute Node Group Settings
+        Parameters:
+          - CngName
+          - QueueName
+          - InstanceType
+          - MaxCount
+          - MinCount
+      - Label:
+          default: PCS Cluster configuration
+        Parameters:
+          - ClusterId
+          - SubnetId
+          - AmiId
+          - ClusterSecurityGroupId
+          - IamProfileArn
+          - FSxLustreFilesystemId
+          - FSxLustreFilesystemMountName
+          - FSxOpenZFSFilesystemId
+      - Label:
+          default: Monitoring configuration
+        Parameters:
+          - DeployMonitoring
+          - MonitoringVersion
+          - MonitoringRepo
+          - MonitoringRole
+      - Label:
+          default: Container runtime (Enroot/Pyxis)
+        Parameters:
+          - InstallEnrootPyxis
+
+Parameters:
+  CapacityReservationId:
+    Type: String
+    Description: >-
+      (Optional) Capacity Block for ML reservation ID. When SET, the node group
+      launches with MarketType=capacity-block against this reservation. Leave
+      EMPTY for On-Demand. NOTE: this is for Capacity Blocks ONLY — do not put an
+      On-Demand Capacity Reservation (ODCR) ID here. An ODCR with "open" matching
+      is consumed automatically by On-Demand launches, so for ODCR leave this empty.
+    Default: ""
+
+  ClusterId:
+    Type: String
+    Description: Cluster ID (actual PCS cluster ID like pcs_xxxxx)
+
+  ClusterName:
+    Type: String
+    Description: User-friendly cluster name
+
+  CngName:
+    Type: String
+    Description: Name for Compute Node Group
+    Default: "gpu-p6-b300"
+
+  QueueName:
+    Type: String
+    Description: Name for Queue (leave empty to skip queue creation)
+    Default: ""
+
+  InstanceType:
+    Type: String
+    Description: >-
+      Instance type for the compute node group. Locked to p6-b300.48xlarge: the
+      NetworkInterfaces block below is hand-built for exactly this family's EFA
+      layout (17 network cards; card 0 is ENA-only with EFA on cards 1-16, and the
+      EFA cards use DeviceIndex 0 -- unlike p5/p6-b200). A different type would
+      launch with the wrong NIC topology. Other GPU families have their own
+      template (add-cng-p5.yaml, add-cng-p6-b200.yaml).
+    Default: "p6-b300.48xlarge"
+    AllowedValues:
+      - p6-b300.48xlarge
+
+  RootVolumeSize:
+    Type: Number
+    Description: >-
+      Root EBS volume size (GiB) for compute nodes. The PCS-Ready DLAMI default (~75
+      GiB) is too small for pulling/importing large container images (Enroot/Pyxis
+      squashfs, Megatron ~20 GB). 300 GiB gives ample headroom.
+    Default: 300
+    MinValue: 75
+
+  MaxCount:
+    Type: Number
+    Description: Maximum number of instance
+
+  MinCount:
+    Type: Number
+    Description: Minimum number of instance. (it must be 0 if you want to use dynamic scaling)
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Select the Subnet where the Compute Node will be launched
+
+  AmiId:
+    Type: String
+    Description: >-
+      (Optional) AMI ID for the nodes. Leave empty to auto-resolve the latest
+      PCS-Ready DLAMI (Ubuntu 24.04 x86_64) from SSM Parameter Store. Set an explicit
+      ami-xxxx only to override (e.g. a custom AMI built with Enroot/Pyxis pre-baked).
+      The AMI must carry PCS agent >= 1.5.0-1 (PCS-Ready DLAMI builds since
+      2026-07-20 — see docs/PCS-READY-DLAMI.md): node setup runs through node
+      lifecycle actions, which older agents do not support.
+    Default: ""
+    AllowedPattern: '^$|^ami-[0-9a-f]{8,17}$'
+    ConstraintDescription: Must be empty or a valid AMI ID (ami-xxxxxxxxxxxxxxxxx)
+
+  ClusterSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Select SecurityGroup for Compute Node Group for Cluster Communication
+
+  IamProfileArn:
+    Type: String
+    Description: IAM Instance Profile for Compute Node Group
+
+  FSxLustreFilesystemId:
+    Type: String
+    Description: Filesystem ID for FSx for Lustre
+    AllowedPattern: '^$|^fs-[0-9a-f]{8,17}$'
+    ConstraintDescription: Must be empty (no /fsx) or a valid FSx filesystem ID
+
+  FSxLustreFilesystemMountName:
+    Type: String
+    Description: MountName for FSx for Lustre
+
+  FSxOpenZFSFilesystemId:
+    Type: String
+    Description: Filesystem ID for FSx for OpenZFS
+    AllowedPattern: '^fs-[0-9a-f]{8,17}$'
+    ConstraintDescription: Must be a valid FSx filesystem ID (fs-xxxxxxxxxxxxxxxxx)
+
+  DeployMonitoring:
+    Type: String
+    Description: Deploy monitoring stack (Prometheus/Grafana on Login Node, DCGM exporter on Compute Node with GPU)
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  MonitoringVersion:
+    Type: String
+    Description: >-
+      aws-parallelcluster-monitoring git ref to install (release tag or branch).
+      Used both to fetch post-install.sh from MonitoringRepo at this
+      ref and as the ref argument passed to it. Pin to a release tag for upstream
+      stability in production; a branch name (e.g. a fork's dev branch) can be
+      used together with MonitoringRepo for testing unreleased changes.
+    Default: 'v2.10.2'
+    AllowedPattern: '^[A-Za-z0-9._/-]+$'
+    ConstraintDescription: Must be a git ref (tag or branch)
+
+  MonitoringRepo:
+    Type: String
+    Description: >-
+      GitHub "owner/repo" to fetch the monitoring stack from. Override with a fork
+      together with a branch in MonitoringVersion to test unreleased changes before
+      they merge upstream.
+    Default: 'aws-samples/aws-parallelcluster-monitoring'
+    AllowedPattern: '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'
+    ConstraintDescription: Must be a GitHub "owner/repo"
+
+  DcgmExporterImage:
+    Type: String
+    Description: >-
+      dcgm-exporter container image used by the monitoring stack on GPU nodes. The
+      default is a DCGM 4.5.2 build pinned by DIGEST -- this covers Hopper / B200 /
+      B300 alike (the digest pull bypasses the Docker 29.x OCI-index failure that
+      breaks newer NVCR tags). To pin to the older monitoring-default 4.2.0 (covers
+      Hopper + B200 only) or any other build, set this to that image reference
+      (preferably also a digest). No effect on CPU nodes.
+    Default: 'nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547d4546eaf4dd5d6b4c0b4db4101e63ef7dc3cdff7f42b767d2c60b706'
+
+  MonitoringRole:
+    Type: String
+    Description: Monitoring role for this node (login=head node with Prometheus/Grafana, compute=compute node with exporters, none=no monitoring)
+    Default: 'none'
+    AllowedValues:
+      - 'login'
+      - 'compute'
+      - 'none'
+
+  InstallEnrootPyxis:
+    Type: String
+    Description: >-
+      Install the Enroot/Pyxis container runtime at first boot (an
+      install-enroot-pyxis node lifecycle action running
+      scripts/install-enroot-pyxis.sh from the templates bucket). Set 'false'
+      when the runtime is pre-baked into AmiId, or when you don't need
+      containers. For any other first-boot customization, add your own script
+      to the compute node group's node lifecycle actions — PCS supports this
+      natively, so this template no longer proxies arbitrary scripts.
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  SlurmVersion:
+    Type: String
+    Description: >-
+      The cluster's Slurm version, passed to the install-enroot-pyxis lifecycle
+      action so it can put the matching Slurm CLI bin on slurmd's PATH
+      (the Pyxis PMI hook needs scontrol). Must match the version the cluster was
+      created with.
+    Default: '25.11'
+    AllowedValues:
+      - '25.05'
+      - '25.11'
+
+  DirectoryDomainSuffix:
+    Type: String
+    Description: >-
+      LDAP domain suffix (e.g. dc=cluster,dc=internal). Only used when
+      DirectoryService != none.
+    Default: 'dc=cluster,dc=internal'
+
+  DirectoryRole:
+    Type: String
+    Description: >-
+      This CNG's role in the directory service. 'server' = install and run
+      the directory (slapd on login node). 'client' = configure SSSD to
+      resolve users from the directory server. 'none' = skip directory setup.
+      deploy-all sets this automatically (login=server, compute=client) when
+      DirectoryService != none.
+    Default: 'none'
+    AllowedValues:
+      - 'none'
+      - 'server'
+      - 'client'
+
+  S3BucketName:
+    Type: String
+    Description: S3 bucket where scripts are stored (same as nested templates bucket)
+    Default: 'awsome-distributed-ai'
+
+  S3KeyPrefix:
+    Type: String
+    Description: S3 key prefix for scripts (e.g. templates/aws-pcs/)
+    Default: 'templates/aws-pcs/'
+
+Conditions:
+  UseCapacityBlock: !Not [!Equals [!Ref CapacityReservationId, ""]]
+  UseOnDemand: !Equals [!Ref CapacityReservationId, ""]
+  CreateQueue: !Not [!Equals [!Ref QueueName, ""]]
+  # Emit the monitoring-role tag for both login and compute nodes (any role
+  # other than 'none'). The monitoring stack identifies login nodes by this
+  # tag (monitoring-role=login) and excludes them from EC2 service discovery.
+  IsMonitoringRoleSet: !Not [!Equals [!Ref MonitoringRole, 'none']]
+  HasAmiId: !Not [!Equals [!Ref AmiId, ""]]
+  DirectoryEnabled: !Not [!Equals [!Ref DirectoryRole, 'none']]
+  HasLustre: !Not [!Equals [!Ref FSxLustreFilesystemId, '']]
+  EnrootPyxisEnabled: !Equals [!Ref InstallEnrootPyxis, 'true']
+  MonitoringEnabled: !Equals [!Ref DeployMonitoring, 'true']
+  HasDcgmImage: !Not [!Equals [!Ref DcgmExporterImage, '']]
+
+Resources:
+
+  # Cluster Placement Group (On-Demand only)
+  PlacementGroup:
+    Type: AWS::EC2::PlacementGroup
+    Condition: UseOnDemand
+    Properties:
+      Strategy: cluster
+
+  # Compute Node groups - Compute Nodes
+  PCSNodeGroupCompute:
+    Type: AWS::PCS::ComputeNodeGroup
+    Properties:
+      ClusterId: !Ref ClusterId
+      Name: !Ref CngName
+      ScalingConfiguration:
+        MinInstanceCount: !Ref MinCount
+        MaxInstanceCount: !Ref MaxCount
+      IamInstanceProfileArn: !Ref IamProfileArn
+      CustomLaunchTemplate:
+        TemplateId: !Ref PCSLaunchTemplate
+        # Track the latest launch template version so template updates (e.g. NIC
+        # or UserData changes) actually reach the node group. Hardcoding Version: 1
+        # pins the node group to the original version and silently ignores updates.
+        Version: !GetAtt PCSLaunchTemplate.LatestVersionNumber
+      SubnetIds:
+        - !Ref SubnetId
+      AmiId: !If
+        - HasAmiId
+        - !Ref AmiId
+        - '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
+      InstanceConfigs:
+        - InstanceType: !Ref InstanceType
+      PurchaseOption: !If [UseCapacityBlock, CAPACITY_BLOCK, !Ref "AWS::NoValue"]
+      # Node lifecycle actions (PCS agent >= 1.5.0-1; included in PCS-Ready
+      # DLAMI builds from 2026-07-20 — see docs/PCS-READY-DLAMI.md). Scripts
+      # run as root, in order, in the NodeBootstrapped stage: after PCS
+      # finishes node setup, BEFORE slurmd starts — the same ordering the
+      # cloud-init runcmd provided. The agent downloads each script itself
+      # (3 retries with backoff built in) and writes per-script logs to
+      # /var/log/amazon/pcs/lifecycle/actions/<stage>/<name>.log.
+      #
+      # Stage rationale:
+      # - needrestart-guard must be in place before the first apt run can
+      #   trigger a slurmd restart (kills jobs). CONTINUE: a missed guard
+      #   degrades protection but the node still works.
+      # - mounts must complete before slurmd starts, or the scheduler could
+      #   dispatch a job to a node without /home //fsx (nodeReady runs AFTER
+      #   the node is job-eligible). TERMINATE: a node without shared
+      #   storage is useless — replace it. EVERY_BOOT + idempotent scripts
+      #   cover reboots.
+      NodeLifecycleActions:
+        ScriptCachingPolicy: CACHE_ONCE
+        Stages:
+          NodeBootstrapped:
+            - Name: needrestart-guard
+              ScriptSource:
+                ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/needrestart-guard.sh'
+              ExecutionPolicy: FIRST_BOOT_ONLY
+              OnError: CONTINUE
+            - Name: mount-openzfs-home
+              ScriptSource:
+                ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/mount-openzfs-home.sh'
+              Arguments:
+                - !Ref FSxOpenZFSFilesystemId
+              ExecutionPolicy: EVERY_BOOT
+              OnError: TERMINATE
+            - !If
+              - HasLustre
+              - Name: mount-lustre-fsx
+                ScriptSource:
+                  ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/mount-lustre-fsx.sh'
+                Arguments:
+                  - !Ref FSxLustreFilesystemId
+                  - !Ref FSxLustreFilesystemMountName
+                ExecutionPolicy: EVERY_BOOT
+                OnError: TERMINATE
+              - !Ref AWS::NoValue
+            # Directory setup must run AFTER mount-openzfs-home: the LDAP DB
+            # lives on shared /home/ldap-db (the script hard-fails if /home is
+            # not a mountpoint). CONTINUE preserves the log-and-continue
+            # invariant: Slurm launches jobs by numeric UID, so a failed
+            # directory client only degrades name resolution — and TERMINATE
+            # here would risk an endless replace loop.
+            - !If
+              - DirectoryEnabled
+              - Name: setup-directory
+                ScriptSource:
+                  ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/setup-directory.sh'
+                Arguments:
+                  - !Ref DirectoryRole
+                  - !Ref DirectoryDomainSuffix
+                  - !Ref ClusterId
+                  - !Ref S3BucketName
+                  - !Ref S3KeyPrefix
+                ExecutionPolicy: FIRST_BOOT_ONLY
+                OnError: CONTINUE
+              - !Ref AWS::NoValue
+            # Enroot/Pyxis install runs last: it is the slowest step, and
+            # Pyxis is a Slurm SPANK plugin whose plugstack config must exist
+            # before slurmd starts — nodeBootstrapped guarantees that. The
+            # cluster's Slurm version goes in as the first argument (the node
+            # cannot discover it before slurmd exists). CONTINUE: a failed
+            # install only degrades container support — TERMINATE would risk
+            # a replace loop. The script is idempotent, so it is a fast no-op
+            # on an AMI with the runtime pre-baked.
+            - !If
+              - EnrootPyxisEnabled
+              - Name: install-enroot-pyxis
+                ScriptSource:
+                  ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-enroot-pyxis.sh'
+                Arguments:
+                  - !Ref SlurmVersion
+                ExecutionPolicy: FIRST_BOOT_ONLY
+                OnError: CONTINUE
+              - !Ref AWS::NoValue
+          # Monitoring goes to nodeReady: it does not depend on slurmd order,
+          # and running it after registration keeps a multi-minute Docker
+          # install from delaying the node's availability.
+          NodeReady: !If
+            - MonitoringEnabled
+            - - Name: install-monitoring
+                ScriptSource:
+                  ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-monitoring.sh'
+                Arguments: !If
+                  - HasDcgmImage
+                  - - !Ref MonitoringVersion
+                    - !Ref MonitoringRepo
+                    - !Ref DcgmExporterImage
+                  - - !Ref MonitoringVersion
+                    - !Ref MonitoringRepo
+                ExecutionPolicy: FIRST_BOOT_ONLY
+                OnError: CONTINUE
+            - !Ref AWS::NoValue
+
+  PCSQueueCompute:
+    Type: AWS::PCS::Queue
+    Condition: CreateQueue
+    Properties:
+      ClusterId: !Ref ClusterId
+      Name: !Ref QueueName
+      ComputeNodeGroupConfigurations:
+        - ComputeNodeGroupId: !GetAtt [PCSNodeGroupCompute, Id]
+
+  PCSLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub 'PCS-lt-${AWS::StackName}'
+
+      LaunchTemplateData:
+        InstanceType: !Ref InstanceType
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: !Ref RootVolumeSize
+              VolumeType: gp3
+              DeleteOnTermination: true
+        InstanceMarketOptions: !If
+          - UseCapacityBlock
+          - MarketType: capacity-block
+          - !Ref AWS::NoValue
+        CapacityReservationSpecification: !If
+          - UseCapacityBlock
+          - CapacityReservationTarget:
+              CapacityReservationId: !Ref CapacityReservationId
+          - !Ref AWS::NoValue
+        Placement: !If
+          - UseOnDemand
+          - GroupName: !Ref PlacementGroup
+          - !Ref AWS::NoValue
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: HPCRecipes
+                Value: "true"
+              # Name defaults to <ClusterName>-<CngName> so the EC2 console
+              # can tell instances of different clusters apart at a glance;
+              # retag freely, nothing operational reads it (monitoring keys
+              # off monitoring-role below, docs look up instances via the
+              # PCS API + aws:pcs:* tags).
+              - Key: Name
+                Value: !Sub '${ClusterName}-${CngName}'
+              - Key: CngName
+                Value: !Ref CngName
+              - Key: ClusterName
+                Value: !Ref ClusterName
+              - Key: pcs-cluster-id
+                Value: !Ref ClusterId
+              # Node type for the monitoring stack. Emitted for both login and
+              # compute (any role != none). Prometheus drops monitoring-role=login
+              # from EC2 SD (the static login_node job scrapes it); everything else
+              # is reported as instance_name=Compute. See aws-parallelcluster-monitoring
+              # prometheus-pcs.yml and issue #45.
+              - !If
+                - IsMonitoringRoleSet
+                - Key: monitoring-role
+                  Value: !Ref MonitoringRole
+                - !Ref AWS::NoValue
+              # Directory (multi-user) role tag, independent of monitoring-role.
+              # Emitted for both server (login) and client (compute) nodes when
+              # DirectoryRole != none. Compute clients discover the OpenLDAP
+              # server by querying for directory-role=server (NOT monitoring-role,
+              # which is owned by the monitoring stack). See setup-directory.sh.
+              - !If
+                - DirectoryEnabled
+                - Key: directory-role
+                  Value: !Ref DirectoryRole
+                - !Ref AWS::NoValue
+        MetadataOptions:
+          HttpEndpoint: enabled
+          HttpPutResponseHopLimit: 4
+          HttpTokens: required
+          InstanceMetadataTags: enabled
+        NetworkInterfaces:
+          # Primary network interface: ENA on network card 0, device index 0.
+          # On P6, network card 0 does not support EFA (EFA limit 0), so this
+          # must be a plain ENA interface (no InterfaceType).
+          - Description: Primary network interface (ENA)
+            DeviceIndex: 0
+            NetworkCardIndex: 0
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          # EFA on network cards 1-16 (device index 0). PCS requires
+          # InterfaceType: efa (not efa-only) to propagate the interface
+          # configuration to the launch instances request correctly.
+          - DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 1
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 2
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 3
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 4
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 5
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 6
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 7
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 8
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 9
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 10
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 11
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 12
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 13
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 14
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 15
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+          - DeviceIndex: 0
+            InterfaceType: efa
+            NetworkCardIndex: 16
+            SubnetId: !Ref SubnetId
+            Groups:
+            - !Ref ClusterSecurityGroupId
+Outputs:
+  NodeGroupId:
+    Description: Compute Node Group ID
+    Value: !GetAtt PCSNodeGroupCompute.Id
+  QueueId:
+    Condition: CreateQueue
+    Description: Queue ID
+    Value: !GetAtt PCSQueueCompute.Id
+  LaunchTemplateId:
+    Description: Launch template Id
+    Value: !Ref PCSLaunchTemplate
+  DefaultVersionNumber:
+    Description: Default version number
+    Value: !GetAtt PCSLaunchTemplate.DefaultVersionNumber
+  LatestVersionNumber:
+    Description: Latest version number
+    Value: !GetAtt PCSLaunchTemplate.DefaultVersionNumber

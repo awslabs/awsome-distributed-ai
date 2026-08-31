@@ -1,0 +1,44 @@
+--- a/rlinf/hybrid_engines/fsdp/strategy/base.py
++++ b/rlinf/hybrid_engines/fsdp/strategy/base.py
+@@ -233,9 +233,41 @@
+                 from torch.distributed import checkpoint as dcp
+ 
+                 dcp_save_path = os.path.join(save_path, "dcp_checkpoint")
++                # EKS root-cause fix (synchronous DCP save): dcp.save's
++                # post-write finalization runs all_reduce("write", write_data,
++                # finish_checkpoint), whose broadcast_object step pickles a
++                # multi-MB result object and broadcasts it via
++                # broadcast_object_list. That helper picks its transport device
++                # from the process group's backend (CUDA when NCCL, CPU when
++                # gloo); with no PG passed, dcp.save uses the default NCCL/CUDA
++                # group, so the object broadcast runs on CUDA and races with
++                # NCCL comm teardown at the end of a long (100s+ GB) checkpoint
++                # write -> non-coordinator ranks read an all-zero buffer ->
++                # `_pickle.UnpicklingError: invalid load key '\x00'`, AFTER
++                # every shard + .metadata are already on disk.
++                # NOTE: this is NOT fixed by upgrading torch -- the synchronous
++                # save() / _save_state_dict() path is byte-identical through at
++                # least torch 2.8 and always broadcasts over the default PG.
++                # (Only async_save requires/uses a CPU+gloo backend.) The fix is
++                # to pass a dedicated gloo process group to dcp.save so the
++                # finalization object-broadcast goes over CPU/gloo, immune to
++                # the CUDA/NCCL teardown race.
++                import datetime as _dt
++
++                gloo_pg = getattr(cls, "_dcp_gloo_pg", None)
++                if gloo_pg is None and torch.distributed.is_initialized():
++                    try:
++                        gloo_pg = torch.distributed.new_group(
++                            backend="gloo",
++                            timeout=_dt.timedelta(minutes=30),
++                        )
++                        cls._dcp_gloo_pg = gloo_pg
++                    except BaseException:
++                        gloo_pg = None
+                 dcp.save(
+                     {"fsdp_checkpoint": training_state},
+                     checkpoint_id=dcp_save_path,
++                    process_group=gloo_pg,
+                 )
+ 
+         except BaseException as e:

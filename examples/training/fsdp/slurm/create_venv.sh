@@ -8,7 +8,7 @@ PYTHON_V=python3
 OS_VERSION=$(cat /etc/os-release | grep VERSION_ID | awk -F '=' '{print $2}')
 OS_VERSION=${OS_VERSION//\"/}
 
-if [ $OS_VERSION = "20.04" ]; then
+if [ "$OS_VERSION" = "20.04" ]; then
 
    PYTHON_VERSION=$(python3.9 --version | awk '{print $2}' | awk -F'.' '{print $1"."$2}')
    PYTHON_V=python3.9

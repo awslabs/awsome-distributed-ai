@@ -1,0 +1,193 @@
+<mxfile host="Electron">
+  <diagram name="DreamZero WAM - Training" id="dreamzero-wam-train">
+    <mxGraphModel dx="1347" dy="1619" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="750" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=14;rounded=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Training: Joint Video-Action Flow Matching&lt;/b&gt;" vertex="1">
+          <mxGeometry height="25" width="400" x="325" y="-70" as="geometry" />
+        </mxCell>
+        <mxCell id="inputs" parent="1" style="swimlane;startSize=22;html=1;fontStyle=1;container=0;rounded=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="Inputs" vertex="1">
+          <mxGeometry height="390" width="160" x="20" y="-20" as="geometry" />
+        </mxCell>
+        <mxCell id="lang_in" parent="inputs" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Language&lt;/b&gt;&lt;br&gt;&quot;Pack up the fruits&lt;br&gt;into the bag&quot;" vertex="1">
+          <mxGeometry height="60" width="140" x="10" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="encoders" parent="1" style="swimlane;startSize=22;html=1;fontStyle=1;container=0;rounded=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="Encoders" vertex="1">
+          <mxGeometry height="390" width="160" x="230" y="-20" as="geometry" />
+        </mxCell>
+        <mxCell id="text_enc" parent="encoders" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;UMT5-XXL&lt;/b&gt;&lt;br&gt;(text → 512 tokens)" vertex="1">
+          <mxGeometry height="50" width="130" x="15" y="35" as="geometry" />
+        </mxCell>
+        <mxCell id="noise_block" parent="1" style="swimlane;startSize=22;html=1;fontStyle=1;container=0;rounded=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="Noise Injection" vertex="1">
+          <mxGeometry height="180" width="150" x="450" y="120" as="geometry" />
+        </mxCell>
+        <mxCell id="flow_label" parent="noise_block" style="text;html=1;align=center;verticalAlign=middle;fontSize=13;rounded=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;font style=&quot;font-size: 12px;&quot;&gt;Flow matching:&lt;br&gt;z_t = t·z₁ + (1−t)·z₀&lt;/font&gt;" vertex="1">
+          <mxGeometry height="30" width="130" x="10" y="144" as="geometry" />
+        </mxCell>
+        <mxCell id="dit" parent="1" style="swimlane;startSize=24;html=1;fontStyle=1;fontSize=12;container=0;rounded=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="Joint Video-Action DiT (14B)" vertex="1">
+          <mxGeometry height="380" width="470" x="660" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="9euWxXnwYbezt-sX6hND-5" parent="dit" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Causal DiT Blocks&lt;/b&gt;&lt;br&gt;(Blockwise Causal Self-Attention)&lt;br&gt;&lt;br&gt;Video + Action + State tokens&lt;br&gt;attend jointly (causal mask)&lt;br&gt;&lt;br&gt;Cross-attn to CLIP + UMT5" vertex="1">
+          <mxGeometry height="130" width="220" x="220" y="120" as="geometry" />
+        </mxCell>
+        <mxCell id="9euWxXnwYbezt-sX6hND-6" parent="dit" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Video Head&lt;/b&gt;&lt;br&gt;predict v(t) on&lt;br&gt;video latents" vertex="1">
+          <mxGeometry height="70" width="100" x="226" y="292" as="geometry" />
+        </mxCell>
+        <mxCell id="9euWxXnwYbezt-sX6hND-7" parent="dit" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Action Decoder&lt;/b&gt;&lt;br&gt;predict v(t) on&lt;br&gt;action tokens" vertex="1">
+          <mxGeometry height="70" width="102" x="338" y="292" as="geometry" />
+        </mxCell>
+        <mxCell id="9euWxXnwYbezt-sX6hND-8" edge="1" parent="dit" source="9euWxXnwYbezt-sX6hND-5" style="rounded=0;html=1;exitX=0.25;exitY=1;exitDx=0;exitDy=0;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="9euWxXnwYbezt-sX6hND-6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="9euWxXnwYbezt-sX6hND-9" edge="1" parent="dit" source="9euWxXnwYbezt-sX6hND-5" style="rounded=0;html=1;exitX=0.769;exitY=1.005;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;exitPerimeter=0;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="9euWxXnwYbezt-sX6hND-7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="9euWxXnwYbezt-sX6hND-10" parent="dit" style="swimlane;startSize=22;html=1;fontStyle=1;rounded=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="Training Loss (Flow Matching)" vertex="1">
+          <mxGeometry height="140" width="280" x="190" y="402" as="geometry" />
+        </mxCell>
+        <mxCell id="9euWxXnwYbezt-sX6hND-11" parent="9euWxXnwYbezt-sX6hND-10" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Dynamics Loss&lt;/b&gt;&lt;br&gt;||v_pred - v_target||&lt;sup&gt;2&lt;/sup&gt;&lt;br&gt;(video)" vertex="1">
+          <mxGeometry height="60" width="101" x="35" y="39" as="geometry" />
+        </mxCell>
+        <mxCell id="9euWxXnwYbezt-sX6hND-12" parent="9euWxXnwYbezt-sX6hND-10" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Action Loss&lt;/b&gt;&lt;br&gt;||v_pred - v_target||&lt;sup&gt;2&lt;/sup&gt;&lt;br&gt;(action)" vertex="1">
+          <mxGeometry height="60" width="103" x="147.5" y="39" as="geometry" />
+        </mxCell>
+        <mxCell id="9euWxXnwYbezt-sX6hND-13" parent="9euWxXnwYbezt-sX6hND-10" style="text;html=1;align=center;verticalAlign=middle;fontSize=10;rounded=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Total = L_dyn + L_act (1:1, bell-shaped w(t) weight)&lt;/b&gt;" vertex="1">
+          <mxGeometry height="20" width="260" x="10" y="110" as="geometry" />
+        </mxCell>
+        <mxCell id="9euWxXnwYbezt-sX6hND-14" edge="1" parent="dit" source="9euWxXnwYbezt-sX6hND-6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="9euWxXnwYbezt-sX6hND-11">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="160" y="327" />
+              <mxPoint x="160" y="471" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="9euWxXnwYbezt-sX6hND-15" edge="1" parent="dit" source="9euWxXnwYbezt-sX6hND-7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="9euWxXnwYbezt-sX6hND-12">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="500" y="327" />
+              <mxPoint x="500" y="471" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_video_vae" edge="1" parent="1" source="video_in" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="vae_enc">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="100" y="175" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_video_clip" edge="1" parent="1" style="rounded=0;html=1;strokeWidth=2;entryX=0.024;entryY=0.486;entryDx=0;entryDy=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryPerimeter=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="clip_enc" value="&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;1st frame&lt;/span&gt;">
+          <mxGeometry relative="1" x="-0.1863" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="167" y="105.00000000000006" as="sourcePoint" />
+            <mxPoint x="242" y="105.00000000000006" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_action_aenc" edge="1" parent="1" source="action_in" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="action_enc">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_proprio_stenc" edge="1" parent="1" source="proprio_in" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="state_enc">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_lang_stenc" edge="1" parent="1" source="lang_in" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="text_enc">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_vae_noise" edge="1" parent="1" source="vae_enc" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="noise_video" value="&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;latents&lt;/span&gt;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_aenc_noise" edge="1" parent="1" source="action_enc" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="noise_action" value="&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;features&lt;/span&gt;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_noisev_dit" edge="1" parent="1" source="noise_video" style="rounded=0;html=1;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="dit_video_tokens">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_noisea_dit" edge="1" parent="1" style="rounded=0;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="585" y="232.5" as="sourcePoint" />
+            <mxPoint x="680" y="232.5" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_stenc_dit" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;entryX=0;entryY=0.75;entryDx=0;entryDy=0;strokeWidth=2;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" value="&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;state register&lt;br&gt;(self-attn)&lt;/span&gt;">
+          <mxGeometry relative="1" x="-0.3947" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="630" y="340" />
+              <mxPoint x="630" y="265" />
+            </Array>
+            <mxPoint x="375" y="340" as="sourcePoint" />
+            <mxPoint x="680" y="265" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_clip_dit" edge="1" parent="1" source="clip_enc" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.25;entryY=0;entryDx=0;entryDy=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="9euWxXnwYbezt-sX6hND-5" value="&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;cross-attn KV&lt;/span&gt;">
+          <mxGeometry relative="1" x="-0.6479" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="375" y="175" as="sourcePoint" />
+            <mxPoint x="880.0799999999999" y="310" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_text_dit" edge="1" parent="1" source="text_enc" style="rounded=0;html=1;strokeWidth=2;edgeStyle=orthogonalEdgeStyle;endArrow=classic;endFill=1;entryX=0.75;entryY=0;entryDx=0;entryDy=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="9euWxXnwYbezt-sX6hND-5" value="&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;cross-attn KV&lt;/span&gt;">
+          <mxGeometry relative="1" x="-0.7273" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="630" y="40" />
+              <mxPoint x="630" y="80" />
+              <mxPoint x="1045" y="80" />
+            </Array>
+            <mxPoint x="880" y="300" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="note_train" parent="1" style="text;html=1;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;rounded=0;fontSize=11;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Training (Teacher Forcing):&lt;/b&gt;&lt;br&gt;- Video chunks conditioned on clean past latents&lt;br&gt;- Both video and action denoised jointly&lt;br&gt;- Flow matching objective: predict velocity v(t)&lt;br&gt;- State features enter as register tokens in self-attn&lt;br&gt;- CLIP image + UMT5 text enter as cross-attn KV" vertex="1">
+          <mxGeometry height="100" width="300" x="20" y="470" as="geometry" />
+        </mxCell>
+        <mxCell id="noise_video" parent="1" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;+ Noise&lt;/b&gt;&lt;br&gt;(video latents)" vertex="1">
+          <mxGeometry height="50" width="120" x="465" y="150" as="geometry" />
+        </mxCell>
+        <mxCell id="noise_action" parent="1" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;+ Noise&lt;/b&gt;&lt;br&gt;(action tokens)" vertex="1">
+          <mxGeometry height="50" width="120" x="465" y="210" as="geometry" />
+        </mxCell>
+        <mxCell id="video_in" parent="1" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Video&lt;/b&gt;&lt;br&gt;(RGB frames)" vertex="1">
+          <mxGeometry height="50" width="140" x="30" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="action_in" parent="1" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Action&lt;/b&gt;&lt;br&gt;(joint trajectories)" vertex="1">
+          <mxGeometry height="50" width="140" x="30" y="210" as="geometry" />
+        </mxCell>
+        <mxCell id="proprio_in" parent="1" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Proprioception&lt;/b&gt;&lt;br&gt;(joint positions)" vertex="1">
+          <mxGeometry height="50" width="140" x="30" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="vae_enc" parent="1" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;VAE Encoder&lt;/b&gt;&lt;br&gt;(Wan2.1)" vertex="1">
+          <mxGeometry height="50" width="130" x="245" y="150" as="geometry" />
+        </mxCell>
+        <mxCell id="action_enc" parent="1" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Action Encoder&lt;/b&gt;&lt;br&gt;(MLP + timestep)" vertex="1">
+          <mxGeometry height="50" width="130" x="245" y="210" as="geometry" />
+        </mxCell>
+        <mxCell id="state_enc" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;State Encoder&lt;/b&gt;&lt;br&gt;(Proprioception MLP)" vertex="1">
+          <mxGeometry height="50" width="130" x="245" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="clip_enc" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;CLIP Image Encoder&lt;/b&gt;&lt;br&gt;(ViT-H/14, 257 tokens)" vertex="1">
+          <mxGeometry height="50" width="130" x="245" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="dit_video_tokens" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Video Latent Tokens&lt;/b&gt;&lt;br&gt;(noisy, from VAE)" vertex="1">
+          <mxGeometry height="50" width="140" x="680" y="151" as="geometry" />
+        </mxCell>
+        <mxCell id="dit_action_reg" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;" value="&lt;b&gt;Action Register&lt;/b&gt;&lt;br&gt;cat([action_tokens, state_tokens])&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;(appended to video in self-attn)&lt;/font&gt;" vertex="1">
+          <mxGeometry height="60" width="145" x="680" y="219" as="geometry" />
+        </mxCell>
+        <mxCell id="e_vtok_causal" edge="1" parent="1" source="dit_video_tokens" style="rounded=0;html=1;strokeWidth=2;entryX=-0.001;entryY=0.203;entryDx=0;entryDy=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryPerimeter=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="9euWxXnwYbezt-sX6hND-5">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="850" y="310" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_areg_causal" edge="1" parent="1" source="dit_action_reg" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;entryX=0;entryY=0.75;entryDx=0;entryDy=0;sketch=1;curveFitting=1;jiggle=2;labelBackgroundColor=none;fontColor=default;" target="9euWxXnwYbezt-sX6hND-5">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="753" y="243" />
+            </Array>
+            <mxPoint x="752.5" y="310" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -331,13 +331,13 @@ variable "helm_release_name_hpio" {
 variable "helm_repo_revision" {
   description = "Git revision for normal mode"
   type        = string
-  default     = "9f496a6364759553f73ff534434a057ef4bdc004"
+  default     = "bb6a9f9534217c55a5806ae968e1dd8b285d4b8c"
 }
 
 variable "helm_repo_revision_rig" {
   description = "Git revision for RIG mode"
   type        = string
-  default     = "c5275ddbbca58164d1f5bd3a2811e0fc952f7ff4"
+  default     = "5b703ed8b2f1f60176013ead2519541381f0e177"
 }
 
 variable "namespace" {
@@ -867,4 +867,48 @@ variable "enable_guardduty_cleanup" {
   description = "Enable automatic cleanup of GuardDuty VPC endpoints during destroy"
   type        = bool
   default     = false
+}
+
+# ==========================================
+# Cilium CNI Configuration
+# ==========================================
+
+variable "enable_cilium" {
+  description = "Enable Cilium CNI. When true and creating a new EKS cluster, deploys Cilium and conditionally skips the VPC CNI addon based on cilium_mode."
+  type        = bool
+  default     = false
+}
+
+variable "cilium_mode" {
+  description = "Cilium operating mode: overlay (VXLAN tunnel), chaining (policy-only on top of VPC CNI), or custom (user provides all Helm values via cilium_helm_values)."
+  type        = string
+  default     = "overlay"
+  validation {
+    condition     = contains(["overlay", "chaining", "custom"], var.cilium_mode)
+    error_message = "cilium_mode must be one of: overlay, chaining, custom."
+  }
+}
+
+variable "cilium_version" {
+  description = "Cilium Helm chart version to deploy."
+  type        = string
+  default     = "1.19.4"
+}
+
+variable "cilium_helm_repository" {
+  description = "Helm chart repository for Cilium. Override for closed-network deployments using a private mirror (e.g. an OCI registry: oci://<account>.dkr.ecr.<region>.amazonaws.com). Leave empty when cilium_helm_chart already contains a fully qualified oci:// reference. Note: this redirects the chart source only — container image registries are set separately via cilium_helm_values (image.repository, etc.)."
+  type        = string
+  default     = "https://helm.cilium.io/"
+}
+
+variable "cilium_helm_chart" {
+  description = "Helm chart name for Cilium, or a fully qualified OCI reference (e.g. oci://<account>.dkr.ecr.<region>.amazonaws.com/cilium) when cilium_helm_repository is empty."
+  type        = string
+  default     = "cilium"
+}
+
+variable "cilium_helm_values" {
+  description = "Custom Helm values merged on top of mode-specific defaults. In custom mode, this IS the entire Helm config (no base defaults applied). For overlay/chaining modes, these values override the base defaults."
+  type        = any
+  default     = {}
 }

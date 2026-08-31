@@ -4,74 +4,175 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Complete AWS PCS ML Cluster deployment with nested stacks.
-  This template orchestrates the deployment of VPC infrastructure, FSx filesystems,
-  custom AMI building, and PCS cluster with compute node groups.
+  This template orchestrates: Prerequisites (VPC, FSx), the PCS cluster, and its
+  compute node groups (login + on-demand CPU + optional GPU). For pre-baking a
+  custom DLAMI, run pcs-ready-dlami-with-enroot-pyxis.yaml as a separate stack
+  and pass its DLAMIforPCSAmiId output as this template's AmiId parameter.
 
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
-          default: Network Configuration
+          default: "1. Network Configuration"
         Parameters:
-          - VPCName
           - PrimarySubnetAZ
+          - AdditionalSubnetAZ2
+          - AdditionalSubnetAZ3
           - CreateS3Endpoint
       - Label:
-          default: PCS Cluster Configuration
+          default: "2. PCS Cluster Configuration"
         Parameters:
           - SlurmVersion
+          - LoginNodeInstanceType
+          - RootVolumeSize
+          - AmiId
+          - SSHAccessCidr
           - ManagedAccounting
           - AccountingPolicyEnforcement
       - Label:
-          default: Login Node Configuration
-        Parameters:
-          - LoginNodeInstanceType
-      - Label:
-          default: On-Demand Compute Node Group
+          default: "3. On-Demand Compute Node Group"
         Parameters:
           - DeployOnDemandCNG
+          - OnDemandInstanceType
+          - OnDemandMinCount
+          - OnDemandMaxCount
           - OnDemandCngName
           - OnDemandQueueName
-          - OnDemandInstanceType
-          - OnDemandMaxCount
-          - OnDemandMinCount
+          - OnDemandEfaInterfaceCount
+          - OnDemandPlacementGroupName
       - Label:
-          default: Additional Multi-NIC Compute Node Group for P5/P6 (Optional)
+          default: "4. GPU Compute Node Group - P5/P6 Series (Optional)"
         Parameters:
           - DeployPseriesCNG
+          - PseriesInstanceType
+          - PseriesMinCount
+          - PseriesMaxCount
           - CapacityReservationId
           - PseriesCngName
           - PseriesQueueName
-          - PseriesInstanceType
-          - NetworkInterfaceCount
-          - PseriesMaxCount
-          - PseriesMinCount
       - Label:
-          default: FSx Storage Configuration
+          default: "5.1. Additional Cluster Configuration: Monitoring"
+        Parameters:
+          - MonitoringStack
+          - GrafanaAccessCidr
+          - MonitoringRepo
+          - MonitoringVersion
+          - DcgmExporterImage
+      - Label:
+          default: "5.2. Additional Cluster Configuration: Multi-User Directory"
+        Parameters:
+          - DirectoryService
+          - DirectoryDomainSuffix
+      - Label:
+          default: "5.3. Additional Cluster Configuration: Container Runtime (Enroot/Pyxis)"
+        Parameters:
+          - InstallEnrootPyxis
+      - Label:
+          default: "6. FSx Storage (/fsx and /home)"
         Parameters:
           - Capacity
+          - LustreDeploymentType
           - PerUnitStorageThroughput
           - Compression
           - LustreVersion
+          - FSxLustreEnableEfa
           - HomeCapacity
           - HomeThroughput
+          - OpenZFSDeploymentType
       - Label:
-          default: AMI Building Configuration
-        Parameters:
-          - BuildAMI
-          - BaseAmiId
-          - SemanticVersion
-          - BuildSchedule
-      - Label:
-          default: HPC Recipes Configuration
-        Parameters:
-          - HpcRecipesS3Bucket
-          - HpcRecipesBranch
-      - Label:
-          default: S3 Configuration for Nested Templates
+          default: "7. Developer / Advanced (do not change for normal use)"
         Parameters:
           - S3BucketName
           - S3KeyPrefix
+    ParameterLabels:
+      # Friendly display names shown in the CloudFormation console 1-click UI,
+      # so users see plain-language labels instead of raw CamelCase parameter keys.
+      PrimarySubnetAZ:
+        default: "Availability Zone (required)"
+      AdditionalSubnetAZ2:
+        default: "(Optional) 2nd AZ for an additional private subnet"
+      AdditionalSubnetAZ3:
+        default: "(Optional) 3rd AZ for an additional private subnet"
+      CreateS3Endpoint:
+        default: "Create S3 VPC endpoint"
+      LoginNodeInstanceType:
+        default: "Login node instance type"
+      SlurmVersion:
+        default: "Slurm version"
+      SSHAccessCidr:
+        default: "SSH access CIDR for login node (empty = SSM only)"
+      MonitoringStack:
+        default: "Monitoring stack (none or Prometheus-LoginNode)"
+      GrafanaAccessCidr:
+        default: "Grafana public access CIDR (empty = SSM port-forward only)"
+      MonitoringVersion:
+        default: "Advanced: Monitoring version (git ref)"
+      MonitoringRepo:
+        default: "Advanced: Monitoring repo (owner/repo)"
+      DcgmExporterImage:
+        default: "Advanced: dcgm-exporter image (default covers H100/B200/B300)"
+      ManagedAccounting:
+        default: "Slurm managed accounting"
+      AccountingPolicyEnforcement:
+        default: "Slurm accounting policy enforcement"
+      InstallEnrootPyxis:
+        default: "Install Enroot/Pyxis container runtime"
+      RootVolumeSize:
+        default: "Root volume size (GiB)"
+      AmiId:
+        default: "AMI ID (empty = SSM auto-resolve; pin in production)"
+      DeployOnDemandCNG:
+        default: "Deploy CPU (on-demand) queue"
+      OnDemandInstanceType:
+        default: "CPU queue instance type"
+      OnDemandMinCount:
+        default: "CPU queue min nodes"
+      OnDemandMaxCount:
+        default: "CPU queue max nodes"
+      OnDemandCngName:
+        default: "CPU node group name"
+      OnDemandQueueName:
+        default: "CPU queue name"
+      OnDemandEfaInterfaceCount:
+        default: "EFA interfaces on CPU queue (0 = off, 1 or 2 for HPC types)"
+      OnDemandPlacementGroupName:
+        default: "Existing placement group name (empty = auto-create when EFA on)"
+      DeployPseriesCNG:
+        default: "Deploy GPU (P5/P6) queue"
+      PseriesInstanceType:
+        default: "GPU instance type"
+      PseriesMinCount:
+        default: "GPU queue min nodes"
+      PseriesMaxCount:
+        default: "GPU queue max nodes"
+      CapacityReservationId:
+        default: "Capacity Block for ML reservation ID (leave empty for On-Demand/ODCR)"
+      PseriesCngName:
+        default: "GPU node group name"
+      PseriesQueueName:
+        default: "GPU queue name"
+      Capacity:
+        default: "FSx for Lustre (/fsx) capacity (GiB)"
+      LustreDeploymentType:
+        default: "FSx for Lustre (/fsx) deployment type"
+      PerUnitStorageThroughput:
+        default: "FSx for Lustre (/fsx) throughput (MB/s/TiB)"
+      Compression:
+        default: "FSx for Lustre (/fsx) compression"
+      LustreVersion:
+        default: "FSx for Lustre (/fsx) version"
+      FSxLustreEnableEfa:
+        default: "FSx for Lustre (/fsx) EFA + GDS support (PERSISTENT_2 only)"
+      HomeCapacity:
+        default: "FSx for OpenZFS (/home) capacity (GiB)"
+      HomeThroughput:
+        default: "FSx for OpenZFS (/home) throughput (MB/s)"
+      OpenZFSDeploymentType:
+        default: "FSx for OpenZFS (/home) deployment type"
+      S3BucketName:
+        default: "Nested templates S3 bucket"
+      S3KeyPrefix:
+        default: "Nested templates S3 key prefix"
 
 Parameters:
   # S3 Configuration
@@ -82,18 +183,31 @@ Parameters:
 
   S3KeyPrefix:
     Type: String
-    Description: S3 key prefix for nested templates (e.g., templates/)
-    Default: "templates/"
+    Description: S3 key prefix for nested templates (e.g., templates/aws-pcs/)
+    Default: "templates/aws-pcs/"
 
   # Network Configuration
-  VPCName:
-    Description: Name of your VPC
-    Default: 'ML-Cluster-VPC'
-    Type: String
-
   PrimarySubnetAZ:
-    Description: Availability zone id in which the public subnet and primary private subnet will be created.
+    Description: >-
+      Availability Zone to deploy the cluster into. The only required choice --
+      the public subnet (login node) and primary private subnet (compute nodes,
+      FSx) are both placed here.
     Type: AWS::EC2::AvailabilityZone::Name
+
+  AdditionalSubnetAZ2:
+    Description: >-
+      (Optional) 2nd Availability Zone for an additional private subnet. Empty
+      (default) = single-AZ. Enables multi-AZ FSx (OpenZFS MULTI_AZ) and future
+      multi-AZ workloads. The NAT gateway stays in the primary AZ.
+    Type: String
+    Default: ""
+
+  AdditionalSubnetAZ3:
+    Description: >-
+      (Optional) 3rd Availability Zone for an additional private subnet. Empty
+      (default) = not created. Requires AdditionalSubnetAZ2 to also be set.
+    Type: String
+    Default: ""
 
   CreateS3Endpoint:
     AllowedValues:
@@ -109,15 +223,25 @@ Parameters:
     Type: Number
     Default: 1200
 
-  PerUnitStorageThroughput:
-    Description: Provisioned Read/Write (MB/s/TiB)
-    Type: Number
-    Default: 250
+  LustreDeploymentType:
+    Description: >-
+      FSx for Lustre deployment type. PERSISTENT_2 (default) supports throughput
+      per TiB of 125/250/500/1000 but is not in every Region; PERSISTENT_1
+      (50/100/200) is available in more Regions. Pick one your Region supports.
+    Type: String
+    Default: PERSISTENT_2
     AllowedValues:
-      - 125
-      - 250
-      - 500
-      - 1000
+      - PERSISTENT_2
+      - PERSISTENT_1
+
+  PerUnitStorageThroughput:
+    Description: >-
+      Lustre throughput (MB/s/TiB). Valid values depend on LustreDeploymentType
+      (enforced by a template Rule): PERSISTENT_2 = 125/250/500/1000;
+      PERSISTENT_1 = 50/100/200.
+    Type: String
+    Default: "250"
+    AllowedValues: ["50", "100", "200", "125", "250", "500", "1000"]
 
   Compression:
     Description: Data compression type
@@ -135,54 +259,124 @@ Parameters:
       - "2.12"
     Default: "2.15"
 
+  FSxLustreEnableEfa:
+    Description: >-
+      (Optional) Enable EFA on the FSx for Lustre filesystem. Default false.
+      PERSISTENT_2 SSD only -- combining with PERSISTENT_1 fails the stack at
+      create time via a Rule (rather than silently ignoring the opt-in). The
+      headline feature is GPUDirect Storage (GDS) for P5/P5e/P5en/P6-B200 GPU
+      clients, which DMAs file data straight into GPU memory (the NVIDIA
+      nvidia-fs/cuFile stack must be installed on the client -- currently a
+      ROADMAP follow-up). EFA-capable CPU CNGs (OnDemandEfaInterfaceCount > 0) get
+      the EFA transport path to storage as a secondary benefit, useful when a
+      single client is pushing past ~10 GBps. **EFA-enabled Lustre has a
+      much higher minimum Capacity than non-EFA**: at PerUnitStorageThroughput=250
+      the minimum is 19200 GiB (16x the non-EFA default of 1200 GiB). Set
+      Capacity to >= the EFA minimum when enabling this; the full minimum-capacity
+      matrix per throughput tier is in the FSx for Lustre User Guide.
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  # Multi-user directory
+  DirectoryService:
+    Type: String
+    Description: >-
+      Multi-user directory service. 'none' = single ubuntu user (default,
+      unchanged). 'OpenLDAP-LoginNode' = deploy slapd on the login node (DB on shared
+      /home/ldap-db), compute nodes configure SSSD as LDAP clients. Future
+      options (SimpleAD, ManagedAD) will be added here. NOTE: OpenLDAP-LoginNode
+      runs the directory server on a SINGLE login node — keep the login node
+      group at 1 instance (do not scale it) while this is enabled. For
+      multi-login-node / HA directories, use the future SimpleAD/ManagedAD options.
+    Default: 'none'
+    AllowedValues:
+      - 'none'
+      - 'OpenLDAP-LoginNode'
+
+  DirectoryDomainSuffix:
+    Type: String
+    Description: >-
+      LDAP domain suffix (e.g. dc=cluster,dc=internal). Only used when
+      DirectoryService != none.
+    Default: 'dc=cluster,dc=internal'
+
   HomeCapacity:
     Description: "Home directories storage capacity in GiB"
     Type: Number
     Default: 512
 
   HomeThroughput:
-    Description: "Home directories storage throughput MB/s"
-    Type: Number
-    Default: 320
-
-  # AMI Building Configuration
-  BuildAMI:
+    Description: >-
+      OpenZFS /home throughput (MB/s). Valid values depend on
+      OpenZFSDeploymentType (enforced by a template Rule):
+      SINGLE_AZ_HA_2 / SINGLE_AZ_2 = 160/320/640/1280/2560/3840/5120/7680/10240;
+      SINGLE_AZ_HA_1 / SINGLE_AZ_1 = 64/128/256/512/1024/2048/3072/4096.
     Type: String
-    Description: Whether to build custom DLAMI for PCS
+    Default: "320"
+    AllowedValues:
+      ["64", "128", "256", "512", "1024", "2048", "3072", "4096",
+       "160", "320", "640", "1280", "2560", "3840", "5120", "7680", "10240"]
+
+  OpenZFSDeploymentType:
+    Description: >-
+      FSx for OpenZFS deployment type for /home. SINGLE_AZ_HA_2 (default) is not
+      in every Region; SINGLE_AZ_1 is available in all Regions. Pick one your
+      Region supports (MULTI_AZ excluded — needs a second subnet).
+    Type: String
+    Default: SINGLE_AZ_HA_2
+    AllowedValues:
+      - SINGLE_AZ_HA_2
+      - SINGLE_AZ_HA_1
+      - SINGLE_AZ_2
+      - SINGLE_AZ_1
+
+  # AMI selection (used by every node group)
+  AmiId:
+    Type: String
+    Description: >-
+      AMI ID for every node group (login + compute). Empty (default) auto-resolves
+      to the latest **PCS-Ready Deep Learning AMI** (Ubuntu 24.04, x86_64) from the
+      SSM public parameter
+      /aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id. CloudFormation
+      re-resolves SSM parameter values on every stack update, so a later scale-out
+      can boot a newer AMI than the original nodes (drift). For production, pin to a
+      specific ami-xxx -- e.g. one produced by pcs-ready-dlami-with-enroot-pyxis.yaml
+      with Enroot/Pyxis pre-baked, or any other AMI built off the PCS-Ready DLAMI base.
+      The AMI must carry PCS agent >= 1.5.0-1 (PCS-Ready DLAMI builds since
+      2026-07-20 -- see docs/PCS-READY-DLAMI.md): node setup runs through node
+      lifecycle actions, which older agents do not support.
+    Default: ''
+    AllowedPattern: '^$|^ami-[0-9a-f]{8,17}$'
+    ConstraintDescription: Must be empty or a valid AMI ID (ami-xxxxxxxxx)
+
+  InstallEnrootPyxis:
+    Type: String
+    Description: >-
+      Install the Enroot/Pyxis container runtime on every node at first boot
+      (an install-enroot-pyxis node lifecycle action running
+      scripts/install-enroot-pyxis.sh from the templates bucket — instance-role
+      fetch, so it works with a private bucket). Set 'false' when the runtime
+      is pre-baked into AmiId, or when you don't need containers (the installer
+      is idempotent either way — a no-op on a pre-baked AMI). For any other
+      first-boot customization, add your own script to the compute node
+      group's node lifecycle actions — PCS supports custom scripts natively,
+      so this stack no longer proxies arbitrary post-install scripts.
     Default: 'true'
     AllowedValues:
       - 'true'
       - 'false'
 
-  BaseAmiId:
-    Type: String
-    Description: (Optional) Base AMI ID to use for custom DLAMI build. Leave empty to auto-resolve from SSM parameter store.
-    Default: ''
-
-  SemanticVersion:
-    Type: String
-    Description: Semantic version for ImageBuilder recipes (format X.Y.Z)
-    Default: '1.0.0'
-    AllowedPattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
-    ConstraintDescription: Must be a valid semantic version (e.g., 1.0.0)
-
-  BuildSchedule:
-    Type: String
-    Description: How often to build new AMIs. Manual requires triggering via console or CLI.
-    Default: Manual
-    AllowedValues:
-      - Manual
-      - Weekly
-      - Monthly
-
   # PCS Cluster Configuration
   SlurmVersion:
     Type: String
-    Default: 25.11
+    Default: "25.11"
     Description: Version of Slurm to use
     AllowedValues:
-      - 25.05
-      - 25.11
+      - "25.05"
+      - "25.11"
 
   ManagedAccounting:
     Type: String
@@ -205,20 +399,64 @@ Parameters:
     Description: Instance Type for Login Node Group
     Default: "m6i.4xlarge"
 
-  # HPC Recipes Configuration
-  HpcRecipesS3Bucket:
+  # Monitoring Configuration
+  SSHAccessCidr:
     Type: String
-    Default: aws-hpc-recipes
-    Description: HPC Recipes for AWS S3 bucket
-    AllowedValues:
-      - aws-hpc-recipes
-      - aws-hpc-recipes-dev
+    Description: >-
+      (Optional) CIDR allowed to reach the login node on SSH/22. Empty (default)
+      = SSH over SSM only. Set to your office IP or VPN range for direct SSH
+      access (multi-user clusters, VS Code Remote, scp).
+    Default: ""
+    AllowedPattern: '^$|^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)/(3[0-2]|[12]?\d)$'
+    ConstraintDescription: Must be empty or a valid IPv4 CIDR (e.g. 203.0.113.4/32)
 
-  HpcRecipesBranch:
+  MonitoringStack:
     Type: String
-    Default: main
-    Description: HPC Recipes for AWS release branch
-    AllowedPattern: '^(?!.*/\.git$)(?!.*/\.)(?!.*\\.\.)[a-zA-Z0-9-_\.]+$'
+    Description: >-
+      Monitoring stack to deploy. 'Prometheus-LoginNode' (default) installs
+      Prometheus + Grafana + DCGM Exporter on the login node. 'none' skips
+      monitoring entirely. Future options (AMP-AMG, CloudWatch) will be added.
+    Default: 'Prometheus-LoginNode'
+    AllowedValues:
+      - 'Prometheus-LoginNode'
+      - 'none'
+
+  GrafanaAccessCidr:
+    Type: String
+    Description: >-
+      (Optional) CIDR allowed to reach the login node on HTTPS/443 (Grafana).
+      Empty (default) = SSM port-forward only. When set, also exposes the
+      unauthenticated /prometheus/, /pushgateway/, /slurmexporter/ proxy paths.
+      Use the tightest CIDR you can; clear it when done.
+    Default: ""
+    AllowedPattern: '^$|^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)/(3[0-2]|[12]?\d)$'
+    ConstraintDescription: Must be empty or a valid IPv4 CIDR (e.g. 203.0.113.4/32)
+
+  MonitoringVersion:
+    Type: String
+    Description: >-
+      aws-parallelcluster-monitoring git ref to install (release tag or branch).
+      Passed down to the CNG stacks, which fetch post-install.sh from
+      MonitoringRepo at this ref and pass it as the ref argument. Pin to a release
+      tag in production; a branch name + MonitoringRepo fork can be used to test
+      unreleased changes.
+    Default: 'v2.10.2'
+
+  MonitoringRepo:
+    Type: String
+    Description: >-
+      GitHub "owner/repo" to fetch the monitoring stack from. Override with a fork
+      together with a branch in MonitoringVersion to test unreleased changes.
+    Default: 'aws-samples/aws-parallelcluster-monitoring'
+
+  DcgmExporterImage:
+    Type: String
+    Description: >-
+      dcgm-exporter image for GPU nodes. Default = DCGM 4.5.2 by digest, covering
+      H100/B200/B300 (digest pull bypasses the Docker 29.x OCI-index failure on
+      newer NVCR tags). Override to pin a different build (also use a digest).
+      No effect on CPU nodes.
+    Default: 'nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547d4546eaf4dd5d6b4c0b4db4101e63ef7dc3cdff7f42b767d2c60b706'
 
   # On-Demand Compute Node Group
   DeployOnDemandCNG:
@@ -256,133 +494,213 @@ Parameters:
     Default: 0
     MinValue: 0
 
-  # Additional Multi-NIC Compute Node Group for P5/P6 (Optional)
+  # EFA on the on-demand CPU CNG (for HPC instances like hpc8a/hpc7a/hpc6a).
+  # GPU CNGs (P5/P6) have their own multi-NIC EFA wiring in the dedicated
+  # add-cng-p5/p6-* templates; this knob does NOT affect those.
+  OnDemandEfaInterfaceCount:
+    Type: Number
+    Description: >-
+      Number of Elastic Fabric Adapter (EFA) interfaces on the on-demand (CPU)
+      compute node group. 0 (default) = no EFA (standard ENA networking). 1 or 2
+      = enable EFA with that many interfaces (switches to a NetworkInterfaces
+      LaunchTemplate + a cluster placement group). Set the count to the instance
+      type's MaximumEfaInterfaces: hpc8a.96xlarge / hpc7a.* / hpc6id.32xlarge = 2;
+      hpc6a.48xlarge / c7i.metal = 1. EFA requires an EFA-capable type — a non-EFA
+      type (e.g. the default c6i.4xlarge) fails to launch with count > 0. No
+      effect on the P-series GPU CNG.
+    Default: 0
+    AllowedValues: [0, 1, 2]
+
+  OnDemandPlacementGroupName:
+    Type: String
+    Description: >-
+      (Optional, advanced) Existing cluster placement group name to launch the
+      on-demand CPU nodes into. Leave empty (default) to auto-create a per-CNG
+      cluster placement group when OnDemandEfaInterfaceCount > 0. Set to reuse an
+      existing PG (e.g. shared across multiple CPU CNGs, or a customer-owned CPG
+      holding reserved capacity). CPU CNG only. Ignored when
+      OnDemandEfaInterfaceCount = 0.
+    Default: ''
+
+  # P-series Compute Node Group
   DeployPseriesCNG:
     Type: String
-    Description: Deploy an additional multi-NIC compute node group for P5/P6 instances (On-Demand or Capacity Block)
+    Description: Deploy P-series (P5/P6) compute node group
     Default: 'false'
     AllowedValues:
       - 'true'
       - 'false'
 
-  CapacityReservationId:
-    Type: String
-    Description: (Optional) Capacity Reservation ID for Capacity Blocks. Leave empty for On-Demand instances.
-    Default: ""
-
   PseriesCngName:
     Type: String
-    Description: Name for multi-NIC compute node group
+    Description: Name for P-series compute node group
     Default: "gpu-p5"
 
   PseriesQueueName:
     Type: String
-    Description: Queue name for multi-NIC compute node group
+    Description: Queue name for P-series compute node group
     Default: "gpu-p5"
 
   PseriesInstanceType:
     Type: String
-    Description: Instance type for multi-NIC compute node group (P5/P6 series with 16 or 32 network interfaces)
+    Description: >-
+      Instance type for the P-series compute node group. The right multi-NIC EFA
+      template AND interface count are selected automatically from this value:
+      p5* use add-cng-p5.yaml (p5/p5e = 32 NICs, p5en = 16), p6-b200.48xlarge uses
+      add-cng-p6-b200.yaml (8 NICs), p6-b300.48xlarge uses add-cng-p6-b300.yaml (17 NICs).
     Default: "p5.48xlarge"
-
-  NetworkInterfaceCount:
-    Type: String
-    Description: Number of network interfaces (16 for p5en.48xlarge, 32 for p5.48xlarge/p5e.48xlarge/p6-b200.48xlarge)
-    Default: "32"
     AllowedValues:
-      - "16"
-      - "32"
+      - p5.48xlarge
+      - p5e.48xlarge
+      - p5en.48xlarge
+      - p6-b200.48xlarge
+      - p6-b300.48xlarge
 
   PseriesMaxCount:
     Type: Number
-    Description: Maximum number of instances for multi-NIC compute node group
+    Description: Maximum number of instances for P-series compute node group
     Default: 4
     MinValue: 0
 
   PseriesMinCount:
     Type: Number
-    Description: Minimum number of instances for multi-NIC compute node group (set to 0 for dynamic scaling with On-Demand, or match reserved capacity count for ODCR/Capacity Blocks)
-    Default: 4
+    Description: Minimum number of instances for P-series compute node group (must be 0 for testing without Capacity Reservation)
+    Default: 0
     MinValue: 0
 
+  CapacityReservationId:
+    Type: String
+    Default: ""
+    Description: >-
+      (Optional) **Capacity Block for ML reservation ID** for the GPU node group.
+      When SET, GPU nodes launch with MarketType=capacity-block against this
+      reservation. Leave EMPTY for On-Demand. This parameter is for Capacity
+      Blocks ONLY -- do NOT put an On-Demand Capacity Reservation (ODCR) ID here;
+      an "open" ODCR is consumed automatically by On-Demand launches, so for ODCR
+      leave this empty.
+
+  RootVolumeSize:
+    Type: Number
+    Description: >-
+      Root EBS volume size (GiB) for all node groups. The PCS-Ready DLAMI default
+      (~75 GiB) is too small for pulling/importing large container images; 300
+      GiB gives ample headroom. Passed down to every compute node group stack.
+    Default: 300
+    MinValue: 75
+
+# FSx throughput is a discrete grid that depends on the chosen deployment type.
+# These Rules reject an invalid (DeploymentType, throughput) pair at stack-create
+# time with a clear message, instead of letting it fail deep inside the nested
+# prerequisites stack as an opaque CreateFileSystem error.
+Rules:
+  LustrePersistent1Throughput:
+    RuleCondition: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_1']
+    Assertions:
+      - Assert: !Contains [["50", "100", "200"], !Ref PerUnitStorageThroughput]
+        AssertDescription: >-
+          PERSISTENT_1 supports PerUnitStorageThroughput of 50, 100, or 200 MB/s/TiB only.
+  LustrePersistent2Throughput:
+    RuleCondition: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_2']
+    Assertions:
+      - Assert: !Contains [["125", "250", "500", "1000"], !Ref PerUnitStorageThroughput]
+        AssertDescription: >-
+          PERSISTENT_2 supports PerUnitStorageThroughput of 125, 250, 500, or 1000 MB/s/TiB only.
+  OpenZFS64GridThroughput:
+    RuleCondition: !Or
+      - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_1']
+      - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_HA_1']
+    Assertions:
+      - Assert: !Contains [["64", "128", "256", "512", "1024", "2048", "3072", "4096"], !Ref HomeThroughput]
+        AssertDescription: >-
+          SINGLE_AZ_1 / SINGLE_AZ_HA_1 support HomeThroughput of
+          64/128/256/512/1024/2048/3072/4096 MB/s only.
+  OpenZFS160GridThroughput:
+    RuleCondition: !Or
+      - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_2']
+      - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_HA_2']
+    Assertions:
+      - Assert: !Contains [["160", "320", "640", "1280", "2560", "3840", "5120", "7680", "10240"], !Ref HomeThroughput]
+        AssertDescription: >-
+          SINGLE_AZ_2 / SINGLE_AZ_HA_2 support HomeThroughput of
+          160/320/640/1280/2560/3840/5120/7680/10240 MB/s only.
+  # FSx EFA is a PERSISTENT_2-only feature. Fail at the parent stack's create
+  # time -- before any nested resources are launched -- if the user opted in
+  # on PERSISTENT_1, instead of silently dropping the EfaEnabled property.
+  FSxLustreEfaRequiresPersistent2:
+    RuleCondition: !Equals [!Ref FSxLustreEnableEfa, 'true']
+    Assertions:
+      - Assert: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_2']
+        AssertDescription: >-
+          FSxLustreEnableEfa=true requires LustreDeploymentType=PERSISTENT_2
+          (EFA on FSx for Lustre is a PERSISTENT_2-only feature).
+
 Conditions:
-  BuildAMIEnabled: !Equals [!Ref BuildAMI, 'true']
-  UseLocalTemplates: !Equals [!Ref S3BucketName, '']
   DeployOnDemandCNGEnabled: !Equals [!Ref DeployOnDemandCNG, 'true']
+  DirectoryEnabled: !Not [!Equals [!Ref DirectoryService, 'none']]
   DeployPseriesCNGEnabled: !Equals [!Ref DeployPseriesCNG, 'true']
+  # Open Grafana (login node, HTTPS/443) to a CIDR only when one is provided.
+  SSHAccessEnabled: !Not [!Equals [!Ref SSHAccessCidr, ""]]
+  GrafanaAccessEnabled: !Not [!Equals [!Ref GrafanaAccessCidr, ""]]
+  LoginAccessEnabled: !Or
+    - !Condition SSHAccessEnabled
+    - !Condition GrafanaAccessEnabled
+  MonitoringEnabled: !Not [!Equals [!Ref MonitoringStack, 'none']]
+  # Select the right multi-NIC EFA template from the P-series instance type.
+  # p6-b200/p6-b300 have different network-card counts than P5, so each family
+  # gets its own nested stack; anything else falls back to the P5 template.
+  PseriesIsP6B200: !And
+    - !Condition DeployPseriesCNGEnabled
+    - !Equals [!Ref PseriesInstanceType, 'p6-b200.48xlarge']
+  PseriesIsP6B300: !And
+    - !Condition DeployPseriesCNGEnabled
+    - !Equals [!Ref PseriesInstanceType, 'p6-b300.48xlarge']
+  PseriesIsP5: !And
+    - !Condition DeployPseriesCNGEnabled
+    - !Not [!Equals [!Ref PseriesInstanceType, 'p6-b200.48xlarge']]
+    - !Not [!Equals [!Ref PseriesInstanceType, 'p6-b300.48xlarge']]
 
 Resources:
   #############################################################################
-  # 1. Network and Storage Prerequisites Stack
+  # 1. Prerequisites Stack (VPC, FSx)
   #############################################################################
   PrerequisitesStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !If
-        - UseLocalTemplates
-        - ml-cluster-prerequisites.yaml
-        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}ml-cluster-prerequisites.yaml'
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}ml-cluster-prerequisites.yaml'
       Parameters:
-        VPCName: !Ref VPCName
+        VPCName: !Sub '${AWS::StackName}-VPC'
         PrimarySubnetAZ: !Ref PrimarySubnetAZ
+        AdditionalSubnetAZ2: !Ref AdditionalSubnetAZ2
+        AdditionalSubnetAZ3: !Ref AdditionalSubnetAZ3
         CreateS3Endpoint: !Ref CreateS3Endpoint
         Capacity: !Ref Capacity
+        LustreDeploymentType: !Ref LustreDeploymentType
         PerUnitStorageThroughput: !Ref PerUnitStorageThroughput
         Compression: !Ref Compression
         LustreVersion: !Ref LustreVersion
+        FSxLustreEnableEfa: !Ref FSxLustreEnableEfa
         HomeCapacity: !Ref HomeCapacity
         HomeThroughput: !Ref HomeThroughput
+        OpenZFSDeploymentType: !Ref OpenZFSDeploymentType
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-Prerequisites'
 
   #############################################################################
-  # 2. PCS-ready DLAMI with Enroot/Pyxis Stack (Optional)
-  #############################################################################
-  DLAMIStack:
-    Type: AWS::CloudFormation::Stack
-    Condition: BuildAMIEnabled
-    Properties:
-      TemplateURL: !If
-        - UseLocalTemplates
-        - pcs-ready-dlami-with-enroot-pyxis.yaml
-        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}pcs-ready-dlami-with-enroot-pyxis.yaml'
-      Parameters:
-        BaseAmiId: !Ref BaseAmiId
-        SemanticVersion: !Ref SemanticVersion
-        BuildSchedule: !Ref BuildSchedule
-        PublishToSsm: 'false'
-        EnableLifecyclePolicy: 'false'
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-PCS-DLAMI'
-
-  #############################################################################
-  # 3. PCS Cluster Stack
+  # 2. PCS Cluster Stack (Scheduler only, no compute nodes)
   #############################################################################
   ClusterStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn:
-      - PrerequisitesStack
     Properties:
-      TemplateURL: !If
-        - UseLocalTemplates
-        - cluster.yaml
-        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}cluster.yaml'
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}cluster.yaml'
       Parameters:
         ClusterName: !Sub '${AWS::StackName}'
-        VpcId: !GetAtt PrerequisitesStack.Outputs.VPC
-        PublicSubnetId: !GetAtt PrerequisitesStack.Outputs.PublicSubnet
         PrivateSubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
         DefaultSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
-        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
-        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
-        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         SlurmVersion: !Ref SlurmVersion
         ManagedAccounting: !Ref ManagedAccounting
         AccountingPolicyEnforcement: !Ref AccountingPolicyEnforcement
-        HpcRecipesS3Bucket: !Ref HpcRecipesS3Bucket
-        HpcRecipesBranch: !Ref HpcRecipesBranch
+        DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-Cluster'
@@ -390,32 +708,76 @@ Resources:
   #############################################################################
   # 4. Login Node Group Stack
   #############################################################################
+  # Optional login-only security group for SSH and/or Grafana access from a
+  # specific CIDR. Created when SSHAccessCidr and/or GrafanaAccessCidr is set.
+  # Attached ONLY to the login node (via ExtraSecurityGroupId) — compute nodes
+  # and FSx (which share the cluster security group) are NOT exposed.
+  LoginAccessSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: LoginAccessEnabled
+    Properties:
+      GroupDescription: Allow inbound SSH/HTTPS to the login node from trusted CIDRs
+      VpcId: !GetAtt PrerequisitesStack.Outputs.VPC
+      SecurityGroupIngress:
+        - !If
+          - SSHAccessEnabled
+          - IpProtocol: tcp
+            FromPort: 22
+            ToPort: 22
+            CidrIp: !Ref SSHAccessCidr
+            Description: SSH from SSHAccessCidr
+          - !Ref AWS::NoValue
+        - !If
+          - GrafanaAccessEnabled
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            CidrIp: !Ref GrafanaAccessCidr
+            Description: Grafana HTTPS from GrafanaAccessCidr
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-login-access'
+
   LoginNodeGroupStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn:
-      - ClusterStack
+    DependsOn: ClusterStack
     Properties:
-      TemplateURL: !If
-        - UseLocalTemplates
-        - add-cng.yaml
-        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng.yaml'
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng.yaml'
       Parameters:
         ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
+        ClusterName: !Sub '${AWS::StackName}'
         CngName: login
         QueueName: ""
         InstanceType: !Ref LoginNodeInstanceType
+        RootVolumeSize: !Ref RootVolumeSize
         MaxCount: 1
         MinCount: 1
         SubnetId: !GetAtt PrerequisitesStack.Outputs.PublicSubnet
-        AmiId: !If
-          - BuildAMIEnabled
-          - !GetAtt DLAMIStack.Outputs.DLAMIforPCSAmiId
-          - !Sub '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
+        AmiId: !Ref AmiId
         ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
-        IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
+        ExtraSecurityGroupId: !If
+          - LoginAccessEnabled
+          - !Ref LoginAccessSecurityGroup
+          - ""
+        # Login node runs the OpenLDAP server, so it gets the login-only profile
+        # (base perms + ldap/* SSM + KMS decrypt). Compute CNGs below keep the
+        # base InstanceProfileArn, which cannot read the LDAP admin password.
+        IamProfileArn: !GetAtt ClusterStack.Outputs.LoginInstanceProfileArn
         FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
         FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
+        MonitoringVersion: !Ref MonitoringVersion
+        MonitoringRepo: !Ref MonitoringRepo
+        DcgmExporterImage: !Ref DcgmExporterImage
+        SlurmVersion: !Ref SlurmVersion
+        MonitoringRole: login
+        InstallEnrootPyxis: !Ref InstallEnrootPyxis
+        DirectoryRole: !If [DirectoryEnabled, 'server', 'none']
+        DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
+        S3BucketName: !Ref S3BucketName
+        S3KeyPrefix: !Ref S3KeyPrefix
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-LoginNodeGroup'
@@ -426,189 +788,185 @@ Resources:
   OnDemandCNGStack:
     Type: AWS::CloudFormation::Stack
     Condition: DeployOnDemandCNGEnabled
-    DependsOn:
-      - ClusterStack
+    DependsOn: ClusterStack
     Properties:
-      TemplateURL: !If
-        - UseLocalTemplates
-        - add-cng.yaml
-        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng.yaml'
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng.yaml'
       Parameters:
         ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
+        ClusterName: !Sub '${AWS::StackName}'
         CngName: !Ref OnDemandCngName
         QueueName: !Ref OnDemandQueueName
         InstanceType: !Ref OnDemandInstanceType
+        RootVolumeSize: !Ref RootVolumeSize
         MaxCount: !Ref OnDemandMaxCount
         MinCount: !Ref OnDemandMinCount
         SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
-        AmiId: !If
-          - BuildAMIEnabled
-          - !GetAtt DLAMIStack.Outputs.DLAMIforPCSAmiId
-          - !Sub '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
+        AmiId: !Ref AmiId
         ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
         IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
         FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
         FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
+        MonitoringVersion: !Ref MonitoringVersion
+        MonitoringRepo: !Ref MonitoringRepo
+        DcgmExporterImage: !Ref DcgmExporterImage
+        SlurmVersion: !Ref SlurmVersion
+        MonitoringRole: compute
+        InstallEnrootPyxis: !Ref InstallEnrootPyxis
+        # EFA on CPU HPC instances (hpc8a/hpc7a/hpc6a). add-cng.yaml enables EFA
+        # when EfaInterfaceCount > 0 and auto-creates a per-CNG cluster placement
+        # group when PlacementGroupName is empty.
+        EfaInterfaceCount: !Ref OnDemandEfaInterfaceCount
+        PlacementGroupName: !Ref OnDemandPlacementGroupName
+        DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
+        DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
+        S3BucketName: !Ref S3BucketName
+        S3KeyPrefix: !Ref S3KeyPrefix
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-OnDemandCNG'
 
   #############################################################################
-  # 6. Additional Multi-NIC Compute Node Group Stack for P5/P6 (Optional)
+  # 6. P-series Compute Node Group Stack
   #############################################################################
   PseriesCNGStack:
     Type: AWS::CloudFormation::Stack
-    Condition: DeployPseriesCNGEnabled
-    DependsOn:
-      - ClusterStack
+    Condition: PseriesIsP5
+    DependsOn: ClusterStack
     Properties:
-      TemplateURL: !If
-        - UseLocalTemplates
-        - add-cng-p5.yaml
-        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng-p5.yaml'
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng-p5.yaml'
       Parameters:
-        CapacityReservationId: !Ref CapacityReservationId
         ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
+        ClusterName: !Sub '${AWS::StackName}'
         CngName: !Ref PseriesCngName
         QueueName: !Ref PseriesQueueName
         InstanceType: !Ref PseriesInstanceType
-        NetworkInterfaceCount: !Ref NetworkInterfaceCount
+        RootVolumeSize: !Ref RootVolumeSize
         MaxCount: !Ref PseriesMaxCount
         MinCount: !Ref PseriesMinCount
         SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
-        AmiId: !If
-          - BuildAMIEnabled
-          - !GetAtt DLAMIStack.Outputs.DLAMIforPCSAmiId
-          - !Sub '{{resolve:ssm:/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id}}'
+        AmiId: !Ref AmiId
         ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
         IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
         FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
         FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        CapacityReservationId: !Ref CapacityReservationId
+        DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
+        MonitoringVersion: !Ref MonitoringVersion
+        MonitoringRepo: !Ref MonitoringRepo
+        DcgmExporterImage: !Ref DcgmExporterImage
+        SlurmVersion: !Ref SlurmVersion
+        MonitoringRole: compute
+        InstallEnrootPyxis: !Ref InstallEnrootPyxis
+        DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
+        DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
+        S3BucketName: !Ref S3BucketName
+        S3KeyPrefix: !Ref S3KeyPrefix
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-PseriesCNG'
+
+  #############################################################################
+  # 6b. P6-B200 Compute Node Group Stack (8 NICs, fixed)
+  #############################################################################
+  P6B200CNGStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: PseriesIsP6B200
+    DependsOn: ClusterStack
+    Properties:
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng-p6-b200.yaml'
+      Parameters:
+        ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
+        ClusterName: !Sub '${AWS::StackName}'
+        CngName: !Ref PseriesCngName
+        QueueName: !Ref PseriesQueueName
+        InstanceType: !Ref PseriesInstanceType
+        RootVolumeSize: !Ref RootVolumeSize
+        MaxCount: !Ref PseriesMaxCount
+        MinCount: !Ref PseriesMinCount
+        SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
+        AmiId: !Ref AmiId
+        ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
+        IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
+        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
+        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
+        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        CapacityReservationId: !Ref CapacityReservationId
+        DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
+        MonitoringVersion: !Ref MonitoringVersion
+        MonitoringRepo: !Ref MonitoringRepo
+        DcgmExporterImage: !Ref DcgmExporterImage
+        SlurmVersion: !Ref SlurmVersion
+        MonitoringRole: compute
+        InstallEnrootPyxis: !Ref InstallEnrootPyxis
+        DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
+        DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
+        S3BucketName: !Ref S3BucketName
+        S3KeyPrefix: !Ref S3KeyPrefix
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-PseriesCNG'
+
+  #############################################################################
+  # 6c. P6-B300 Compute Node Group Stack (17 NICs, fixed)
+  #############################################################################
+  P6B300CNGStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: PseriesIsP6B300
+    DependsOn: ClusterStack
+    Properties:
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng-p6-b300.yaml'
+      Parameters:
+        ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
+        ClusterName: !Sub '${AWS::StackName}'
+        CngName: !Ref PseriesCngName
+        QueueName: !Ref PseriesQueueName
+        InstanceType: !Ref PseriesInstanceType
+        RootVolumeSize: !Ref RootVolumeSize
+        MaxCount: !Ref PseriesMaxCount
+        MinCount: !Ref PseriesMinCount
+        SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
+        AmiId: !Ref AmiId
+        ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
+        IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
+        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
+        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
+        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        CapacityReservationId: !Ref CapacityReservationId
+        DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
+        MonitoringVersion: !Ref MonitoringVersion
+        MonitoringRepo: !Ref MonitoringRepo
+        DcgmExporterImage: !Ref DcgmExporterImage
+        SlurmVersion: !Ref SlurmVersion
+        MonitoringRole: compute
+        InstallEnrootPyxis: !Ref InstallEnrootPyxis
+        DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
+        DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
+        S3BucketName: !Ref S3BucketName
+        S3KeyPrefix: !Ref S3KeyPrefix
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-PseriesCNG'
 
 Outputs:
-  #############################################################################
-  # Prerequisites Stack Outputs
-  #############################################################################
-  VPCId:
-    Description: VPC ID
-    Value: !GetAtt PrerequisitesStack.Outputs.VPC
-    Export:
-      Name: !Sub '${AWS::StackName}-VPC'
-
-  PublicSubnetId:
-    Description: Public Subnet ID
-    Value: !GetAtt PrerequisitesStack.Outputs.PublicSubnet
-    Export:
-      Name: !Sub '${AWS::StackName}-PublicSubnet'
-
-  PrivateSubnetId:
-    Description: Private Subnet ID
-    Value: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
-    Export:
-      Name: !Sub '${AWS::StackName}-PrivateSubnet'
-
-  SecurityGroupId:
-    Description: Security Group ID
-    Value: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
-    Export:
-      Name: !Sub '${AWS::StackName}-SecurityGroup'
-
-  FSxLustreFilesystemId:
-    Description: FSx Lustre Filesystem ID
-    Value: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
-    Export:
-      Name: !Sub '${AWS::StackName}-FSxLustreFilesystemId'
-
-  FSxLustreFilesystemMountname:
-    Description: FSx Lustre Filesystem Mount Name
-    Value: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
-    Export:
-      Name: !Sub '${AWS::StackName}-FSxLustreFilesystemMountname'
-
-  FSxOpenZFSFilesystemId:
-    Description: FSx OpenZFS Filesystem ID
-    Value: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
-    Export:
-      Name: !Sub '${AWS::StackName}-FSxOpenZFSFilesystemId'
-
-  #############################################################################
-  # DLAMI Stack Outputs (Optional)
-  #############################################################################
-  DLAMIforPCSAmiId:
-    Condition: BuildAMIEnabled
-    Description: Built DLAMI for PCS AMI ID (Ubuntu 24.04 x86_64)
-    Value: !GetAtt DLAMIStack.Outputs.DLAMIforPCSAmiId
-    Export:
-      Name: !Sub '${AWS::StackName}-DLAMIforPCSAmiId'
-
-  #############################################################################
-  # Cluster Stack Outputs
-  #############################################################################
   ClusterId:
     Description: PCS Cluster ID
     Value: !GetAtt ClusterStack.Outputs.ClusterId
-    Export:
-      Name: !Sub '${AWS::StackName}-ClusterId'
 
   InstanceProfileArn:
-    Description: IAM Instance Profile ARN for PCS nodes
+    Description: IAM Instance Profile ARN
     Value: !GetAtt ClusterStack.Outputs.InstanceProfileArn
-    Export:
-      Name: !Sub '${AWS::StackName}-InstanceProfileArn'
 
-  PcsConsoleUrl:
-    Description: URL to access the cluster in the PCS console
-    Value: !GetAtt ClusterStack.Outputs.PcsConsoleUrl
+  VPCId:
+    Description: VPC ID
+    Value: !GetAtt PrerequisitesStack.Outputs.VPC
 
-  LoginNodeGroupId:
-    Description: Login Node Group ID
-    Value: !GetAtt LoginNodeGroupStack.Outputs.NodeGroupId
-    Export:
-      Name: !Sub '${AWS::StackName}-LoginNodeGroupId'
+  FSxLustreId:
+    Description: FSx for Lustre filesystem ID
+    Value: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
 
-  OnDemandComputeNodeGroupId:
-    Condition: DeployOnDemandCNGEnabled
-    Description: On-Demand Compute Node Group ID
-    Value: !GetAtt OnDemandCNGStack.Outputs.NodeGroupId
-    Export:
-      Name: !Sub '${AWS::StackName}-OnDemandComputeNodeGroupId'
-
-  #############################################################################
-  # Compute Node Group Outputs
-  #############################################################################
-  OnDemandCNGDeployed:
-    Condition: DeployOnDemandCNGEnabled
-    Description: On-demand compute node group deployed (single NIC)
-    Value: !Sub '${OnDemandCngName} (${OnDemandInstanceType}, ${OnDemandMinCount}-${OnDemandMaxCount} instances)'
-
-  PseriesCNGDeployed:
-    Condition: DeployPseriesCNGEnabled
-    Description: Multi-NIC compute node group deployed (P5/P6 series)
-    Value: !Sub '${PseriesCngName} (${PseriesInstanceType}, ${NetworkInterfaceCount} NICs)'
-
-  #############################################################################
-  # Additional Information for Manual Add-on Stacks
-  #############################################################################
-  AddComputeNodeGroupCommand:
-    Description: Command to manually add additional compute node groups
-    Value: !Sub |
-      For single NIC instances (CPU/GPU), use add-cng.yaml:
-      For multi-NIC instances (P5/P6 series), use add-cng-p5.yaml:
-
-      Common parameters:
-      ClusterId: ${ClusterStack.Outputs.ClusterId}
-      SubnetId: ${PrerequisitesStack.Outputs.PrimaryPrivateSubnet}
-      ClusterSecurityGroupId: ${PrerequisitesStack.Outputs.SecurityGroup}
-      IamProfileArn: ${ClusterStack.Outputs.InstanceProfileArn}
-      FSxLustreFilesystemId: ${PrerequisitesStack.Outputs.FSxLustreFilesystemId}
-      FSxLustreFilesystemMountName: ${PrerequisitesStack.Outputs.FSxLustreFilesystemMountname}
-      FSxOpenZFSFilesystemId: ${PrerequisitesStack.Outputs.FSxOFilesystemId}
-
-      For add-cng-p5.yaml, also specify:
-      NetworkInterfaceCount: 16 or 32
-      CapacityReservationId: (optional, for Capacity Blocks)
+  FSxOpenZFSId:
+    Description: FSx for OpenZFS filesystem ID
+    Value: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId

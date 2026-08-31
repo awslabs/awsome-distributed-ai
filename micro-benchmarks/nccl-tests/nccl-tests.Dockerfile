@@ -79,11 +79,16 @@ ENV PATH=/opt/gdrcopy/bin:$PATH
 
 #################################################
 ## Install EFA installer
+# --disable-build-ngc: on an nvcr.io/nvidia/cuda base the installer auto-detects
+# "NGC build image" mode and skips rdma-core/deps, but this image removes the
+# distro rdma-core above and relies on the EFA bundle to provide libibverbs1 /
+# ibverbs-providers (>=59, newer than jammy's apt). Disabling NGC-build mode
+# forces a full install so libfabric1-aws's deps are satisfied.
 RUN cd $HOME \
     && curl -O https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz \
     && tar -xf $HOME/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz \
     && cd aws-efa-installer \
-    && ./efa_installer.sh -y -g -d --skip-kmod --skip-limit-conf --no-verify \
+    && ./efa_installer.sh -y -g -d --skip-kmod --skip-limit-conf --no-verify --disable-build-ngc \
     && rm -rf $HOME/aws-efa-installer
 
 RUN echo "Verifying AWS OFI NCCL plugin installation..." && \

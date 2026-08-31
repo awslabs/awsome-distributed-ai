@@ -1,0 +1,25 @@
+<!--
+Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+SPDX-License-Identifier: MIT-0
+-->
+
+# SGLang test cases
+
+[SGLang](https://github.com/sgl-project/sglang) is a fast, OpenAI-API-compatible
+serving engine for large language and vision-language models. The samples in this
+directory deploy SGLang on AWS for inference workloads, with high-performance EFA
+networking and expert-parallel MoE all-to-all
+([DeepEP](https://github.com/deepseek-ai/DeepEP)).
+
+## Available test cases
+
+| Test case | Orchestrator | Description |
+| --- | --- | --- |
+| [`dsr1-deepep-efa`](./dsr1-deepep-efa) | EC2 (Docker) | DeepSeek-R1 inference on `p5`/`p5en.48xlarge` with SGLang 0.5.13.post1 and **DeepEP** MoE all-to-all over NVSHMEM-libfabric/EFA — colocated 2-node (TP16/EP16) and 2P2D prefill/decode-disaggregated (4-node, KV over EFA via Mooncake). Selects DeepEP, SGLang's ordinary all-to-all, pure TP, or UCCL-EP for comparison, ± DP-attention. |
+
+For the kernel-level DeepEP-on-EFA dispatch/combine benchmarks (Slurm and EKS
+launchers, 1–32 nodes) see
+[`micro-benchmarks/expert-parallelism/deepep-benchmark`](../../../micro-benchmarks/expert-parallelism/deepep-benchmark).
+For a PD-disaggregated MoE deployment on vLLM — UCCL-EP rather than DeepEP, KV
+over NIXL, orchestrated on EKS — see
+[`3.test_cases/pytorch/vllm/dsv3-uccl-nixl`](../vllm/dsv3-uccl-nixl).

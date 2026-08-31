@@ -15,6 +15,12 @@ We will show how to profile and analyze:
 2. Before profiling the above workloads, make sure you can run them on your cluster.
 3. For EKS, we will be using a 2 node P4de cluster with EFA enabled and FSx for Lustre mounted on the cluster
 
+> [!NOTE]
+> The `nemotron/nemotron-slurm-exec.sh` wrapper reads the Nsight report output location from `NSYS_OUTPUT_DIR`, which defaults to `/fsx/${USER}/nemotron/results/nemotron4--15B-16g/profile_logs`. Export it before running if your shared-filesystem mount differs:
+> ```bash
+> export NSYS_OUTPUT_DIR=/your/shared/mount/profile_logs
+> ```
+
 # 1. Export Environment Variables
 
 Export the following variables to setup the profiling:

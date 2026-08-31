@@ -1,0 +1,64 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# On-cluster Kaniko build for pointworld.Dockerfile -> Amazon ECR.
+#
+# WHY in-cluster: the image targets linux/amd64 (NGC base image, the PyG
+# torch-scatter+pt25cu124 wheels, and p5en.48xlarge nodes are all x86_64-only).
+# Apple Silicon / arm64 workstations cannot build it natively, and emulated
+# `docker buildx` is slow. Kaniko builds on an x86_64 node, daemonless, and
+# pushes straight to ECR.
+#
+# This manifest is rendered by ./build-image.sh, which also creates the
+# pw-dockerfile ConfigMap (from ../pointworld.Dockerfile) and the ecr-cred
+# secret, then cleans them up. ${IMAGE_URI} / ${NAMESPACE} come from env_vars.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pointworld-build
+  namespace: ${NAMESPACE}
+spec:
+  restartPolicy: Never
+  # Build on an x86_64 CPU node so the produced image is linux/amd64.
+  nodeSelector:
+    kubernetes.io/arch: amd64
+  initContainers:
+    - name: stage-context
+      image: busybox:1.37
+      command: ["sh", "-c", "cp /dockerfile/Dockerfile /workspace/Dockerfile && ls -l /workspace"]
+      volumeMounts:
+        - name: dockerfile
+          mountPath: /dockerfile
+        - name: workspace
+          mountPath: /workspace
+  containers:
+    - name: kaniko
+      image: gcr.io/kaniko-project/executor:v1.23.2
+      args:
+        - "--dockerfile=/workspace/Dockerfile"
+        - "--context=dir:///workspace"
+        - "--destination=${IMAGE_URI}"
+        - "--cache=false"
+        - "--verbosity=info"
+      volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        - name: docker-cred
+          mountPath: /kaniko/.docker/config.json
+          subPath: .dockerconfigjson
+      resources:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+        limits:
+          cpu: "30"
+          memory: 60Gi
+  volumes:
+    - name: dockerfile
+      configMap:
+        name: pointworld-dockerfile
+    - name: workspace
+      emptyDir: {}
+    - name: docker-cred
+      secret:
+        secretName: pointworld-ecr-cred

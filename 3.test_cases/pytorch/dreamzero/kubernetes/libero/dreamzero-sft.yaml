@@ -1,0 +1,215 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# DreamZero LIBERO Multi-Node SFT (KubeRay RayJob, FSDP2)
+#
+# Supervised fine-tuning of DreamZero (14B WAM) on LIBERO across 2x
+# p5en.48xlarge nodes (8x H200 each) using upstream RLinf's Cluster (Ray)
+# scheduler with FSDP2 -- warm-started from the DreamZero-DROID checkpoint.
+#
+# Mechanism:
+#   - The KubeRay operator starts the Ray HEAD (headGroupSpec) and one WORKER
+#     (workerGroupSpecs, replicas:1). When the Ray cluster is ready, the operator
+#     runs `entrypoint` on the head: the Ray-agnostic launcher
+#     run_dreamzero_sft_eks.sh. RLinf's Cluster scheduler fans the FSDP2 training
+#     across the whole Ray cluster (no torchrun / DeepSpeed, no manual head
+#     election).
+#   - shutdownAfterJobFinishes tears the RayCluster down when the job completes.
+#
+# Prerequisites:
+#   - KubeRay operator installed (helm install kuberay-operator, chart 1.6.0)
+#   - dataset/model staging job completed
+#     (DreamZero-DROID warm-start + umt5-xxl tokenizer + LIBERO dataset on FSx)
+#   - FSx PVC "fsx-claim" bound, >=250GB free
+#   - training-sa ServiceAccount exists
+#   - ConfigMap "dreamzero-sft-launcher" created from the launcher script
+#
+# Usage:
+#   kubectl -n ${NAMESPACE} create configmap dreamzero-sft-launcher \
+#     --from-file=run_dreamzero_sft_eks.sh=kubernetes/libero/scripts/run_dreamzero_sft_eks.sh \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#   export ECR_URI=<account>.dkr.ecr.<region>.amazonaws.com/<repo>
+#   export NAMESPACE=dreamzero
+#   export IMAGE_TAG=dz-ab790c198fbc   # immutable tag pushed by build-push.sh
+#   # RESTRICTED envsubst -- substitute ONLY ${ECR_URI}, ${NAMESPACE} and ${IMAGE_TAG}.
+#   # (The Ray head-election bash is gone, but keep this habit: other inline
+#   # shell snippets, e.g. the launcher copy, must not be expanded.)
+#   envsubst '${ECR_URI} ${NAMESPACE} ${IMAGE_TAG}' < kubernetes/libero/dreamzero-sft.yaml | kubectl apply -f -
+---
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: dreamzero-sft
+  namespace: ${NAMESPACE}
+  labels:
+    app: dreamzero-sft
+    reference: rlinf
+    example: dreamzero-sft
+spec:
+  # Run the launcher on the head once the Ray cluster is ready. The launcher is
+  # mounted read-only from the dreamzero-sft-launcher ConfigMap at /opt/scripts;
+  # run it directly from there (it is path-independent -- it cd's to
+  # /workspace/RLinf itself). A fallback to a baked-in copy is kept for images
+  # that ship the launcher under /workspace/eks/scripts.
+  entrypoint: >-
+    bash -c '
+    if [ -f /opt/scripts/run_dreamzero_sft_eks.sh ]; then
+      bash /opt/scripts/run_dreamzero_sft_eks.sh;
+    else
+      bash /workspace/eks/scripts/run_dreamzero_sft_eks.sh;
+    fi'
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 600
+  # The KubeRay submitter pod runs `ray job submit` against the head. It does NOT
+  # inherit the head/worker container env, and `ray` lives in the dreamzero venv,
+  # so without this PATH it fails with "ray: command not found". Reuse the head image.
+  submitterPodTemplate:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: ray-job-submitter
+          image: ${ECR_URI}:${IMAGE_TAG}
+          env:
+            - name: PATH
+              value: "/opt/venv/dreamzero/bin:/opt/amazon/openmpi/bin:/opt/amazon/efa/bin:/opt/gdrcopy/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  rayClusterSpec:
+    rayVersion: "2.55.1"
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        num-gpus: "8"
+      template:
+        metadata:
+          labels:
+            app: dreamzero-sft
+            example: dreamzero-sft
+          annotations:
+            karpenter.sh/do-not-disrupt: "true"
+        spec:
+          serviceAccountName: training-sa
+          terminationGracePeriodSeconds: 120
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchExpressions:
+                      - key: app
+                        operator: In
+                        values:
+                          - dreamzero-sft
+                  topologyKey: kubernetes.io/hostname
+          containers:
+            - name: ray-head
+              image: ${ECR_URI}:${IMAGE_TAG}
+              env: &dreamzero_env
+                # KubeRay runs `ray start` as the container command (non-interactive,
+                # ~/.bashrc not sourced). `ray` lives in the dreamzero venv, so prepend
+                # it to PATH or the head/worker crash with "ray: command not found".
+                - name: PATH
+                  value: "/opt/venv/dreamzero/bin:/opt/amazon/openmpi/bin:/opt/amazon/efa/bin:/opt/gdrcopy/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+                - name: VENV_NAME
+                  value: "dreamzero"
+                - name: CONFIG_NAME
+                  value: "libero_sft_dreamzero_14b"
+                - name: MODEL_PATH
+                  value: "/fsx/models/DreamZero-DROID"
+                - name: TOKENIZER_PATH
+                  value: "/fsx/models/umt5-xxl"
+                - name: DATASET_PATH
+                  value: "/fsx/datasets/libero"
+                - name: METADATA_PATH
+                  value: "/fsx/models/metadata-libero.json"
+                - name: CKPT_PATH
+                  value: "/fsx/checkpoints"
+                - name: EXPERIMENT_NAME
+                  value: "dreamzero-libero-sft"
+                - name: NUM_NODES
+                  value: "2"
+                - name: NCCL_DEBUG
+                  value: "INFO"
+                - name: FI_PROVIDER
+                  value: "efa"
+                - name: FI_EFA_USE_DEVICE_RDMA
+                  value: "1"
+                - name: FI_EFA_FORK_SAFE
+                  value: "1"
+                - name: PYTORCH_CUDA_ALLOC_CONF
+                  value: "expandable_segments:True"
+                - name: TOKENIZERS_PARALLELISM
+                  value: "true"
+                - name: TORCH_NCCL_AVOID_RECORD_STREAMS
+                  value: "1"
+                - name: NVIDIA_DRIVER_CAPABILITIES
+                  value: "all"
+              resources: &dreamzero_resources
+                requests:
+                  nvidia.com/gpu: 8
+                  vpc.amazonaws.com/efa: 16
+                  cpu: "90"
+                  memory: "1000Gi"
+                limits:
+                  nvidia.com/gpu: 8
+                  vpc.amazonaws.com/efa: 16
+                  cpu: "96"
+                  memory: "1100Gi"
+              volumeMounts: &dreamzero_mounts
+                - name: fsx
+                  mountPath: /fsx
+                - name: dshm
+                  mountPath: /dev/shm
+                - name: launcher
+                  mountPath: /opt/scripts
+                  readOnly: true
+          volumes: &dreamzero_volumes
+            - name: fsx
+              persistentVolumeClaim:
+                claimName: fsx-claim
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: "128Gi"
+            - name: launcher
+              configMap:
+                name: dreamzero-sft-launcher
+                optional: false
+    workerGroupSpecs:
+      - groupName: worker
+        replicas: 1
+        minReplicas: 1
+        maxReplicas: 1
+        rayStartParams:
+          num-gpus: "8"
+        template:
+          metadata:
+            labels:
+              app: dreamzero-sft
+              example: dreamzero-sft
+            annotations:
+              karpenter.sh/do-not-disrupt: "true"
+          spec:
+            serviceAccountName: training-sa
+            terminationGracePeriodSeconds: 120
+            tolerations:
+              - key: nvidia.com/gpu
+                operator: Exists
+                effect: NoSchedule
+            affinity:
+              podAntiAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchExpressions:
+                        - key: app
+                          operator: In
+                          values:
+                            - dreamzero-sft
+                    topologyKey: kubernetes.io/hostname
+            containers:
+              - name: ray-worker
+                image: ${ECR_URI}:${IMAGE_TAG}
+                env: *dreamzero_env
+                resources: *dreamzero_resources
+                volumeMounts: *dreamzero_mounts
+            volumes: *dreamzero_volumes

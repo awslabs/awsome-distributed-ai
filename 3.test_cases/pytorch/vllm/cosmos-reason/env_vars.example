@@ -1,0 +1,63 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Source this file with: source env_vars
+# All variables here are consumed by the kubernetes/ and hyperpod-eks/ manifests
+# (rendered with `envsubst`) and by the examples/ scripts.
+
+# ---- AWS / cluster context ----
+export AWS_REGION="us-west-2"
+export AWS_ACCOUNT_ID="123456789012"
+export NAMESPACE="default"
+
+# ---- Model selection ----
+# Default: Cosmos-Reason1-7B (Qwen2.5-VL backbone). Fits on A10G 24 GB / L4 24 GB / L40S 48 GB.
+# Alternates:
+#   nvidia/Cosmos-Reason2-2B  (Qwen3-VL, 2B params, also fits 24 GB GPUs)
+#   nvidia/Cosmos-Reason2-8B  (Qwen3-VL, 8B params, requires ≥32 GB GPU)
+export MODEL_ID="nvidia/Cosmos-Reason1-7B"
+
+# Cosmos Reason models are gated on Hugging Face — accept terms on the model card first,
+# then create a token at https://huggingface.co/settings/tokens with read access.
+# DO NOT commit this value. Pass it via your shell or the CI secret store.
+export HF_TOKEN=""
+
+# ---- vLLM container ----
+# kubernetes/ (vanilla EKS) — upstream image
+export VLLM_IMAGE_VANILLA="vllm/vllm-openai:v0.21.0"
+
+# hyperpod-eks/ (Inference Operator) — AWS-managed vLLM DLC
+# Tags: vllm:0.17-gpu-py312 (vLLM 0.17.0)  |  vllm:server-sagemaker-cuda-v1 (vLLM 0.19.1)
+export VLLM_IMAGE_AWS_DLC="763104351884.dkr.ecr.${AWS_REGION}.amazonaws.com/vllm:0.17-gpu-py312"
+
+# Additionally for HyperPod path: set the TLS bucket. You can find this in the HyperPod console within the `Inference` tab called `S3 bucket for TLS certificates`
+export TLS_CERT_S3_URI="s3://hyperpod-tls-<id>/certs"
+
+# ---- Hardware sizing ----
+# Validated combinations (model | GPU | TP | max-model-len):
+#   Cosmos-Reason1-7B  | A10G 24G   | TP=1 | 24576 (reduce to 8192 if OOM during CUDA graph capture)
+#   Cosmos-Reason1-7B  | L4  24G    | TP=1 | 24576 (reduce to 8192 if OOM during CUDA graph capture)
+#   Cosmos-Reason1-7B  | L40S 48G   | TP=1 | 32768
+#   Cosmos-Reason2-2B  | A10G/L4    | TP=1 | 16384
+#   Cosmos-Reason2-8B  | L40S 48G   | TP=1 | 16384
+#   Cosmos-Reason2-8B  | g6.12xl    | TP=4 | 16384  (4× L4, PCIe-only — slower than NVLink)
+#   Cosmos-Reason2-8B  | H100 80G   | TP=1 | 32768
+export INSTANCE_TYPE="g5.8xlarge"
+export HYPERPOD_INSTANCE_TYPE="ml.${INSTANCE_TYPE}"
+export TENSOR_PARALLEL_SIZE="1"
+export MAX_MODEL_LEN="24576"
+export GPU_MEMORY_UTILIZATION="0.92"
+
+# ---- vLLM serving args ----
+# DTYPE: bfloat16 is the only NVIDIA-tested precision for Cosmos Reason
+export DTYPE="bfloat16"
+
+# ---- Reason2 (Qwen3-VL) vLLM args ----
+# If deploying Cosmos-Reason2-*, you must manually edit the deployment manifest:
+#   kubernetes/deployment.yaml: uncomment the --reasoning-parser and --media-io-kwargs lines
+#   hyperpod-eks/endpoint.yaml: uncomment the --reasoning-parser and SM_VLLM_REASONING_PARSER lines
+# See the Troubleshooting section in README.md for details.
+
+# ---- Endpoint defaults ----
+export ENDPOINT_NAME="cosmos-reason"
+export INVOCATION_PORT="8000"

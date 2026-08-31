@@ -1,0 +1,49 @@
+# droid_policy — REAL (non-dummy) action-policy post-training TOML.
+# Unlike droid_policy_smoke.toml (ckpt_type=dummy random init), this warm-starts
+# from the mid-trained Cosmos3-Nano checkpoint converted to DCP:
+#   1. convert once:  python -m cosmos_framework.scripts.convert_model_to_dcp \
+#                       --checkpoint-path Cosmos3-Nano -o $BASE_CHECKPOINT_PATH
+#   2. run with:      ckpt_type=dcp   (NOT dummy)
+# The DistributedCheckpointer reads <load_path>/model (DCP shards + .metadata),
+# so BASE_CHECKPOINT_PATH must be the dir CONTAINING the `model/` subdir, e.g.
+#   /fsx/pretrained/Cosmos3-Nano-dcp   (model shards live under .../model/).
+# Overlays the registered `action_policy_public_lerobot` experiment (dataloader,
+# FusedAdam LR + 5x action multipliers, LambdaLinear scheduler, action-head
+# skip-on-load).
+
+[job]
+task       = "vfm"
+experiment = "action_policy_public_lerobot"
+project    = "cosmos3"
+group      = "action_policy"
+name       = "droid_policy"
+wandb_mode = "disabled"
+
+[model]
+precision = "bfloat16"
+
+[model.parallelism]
+data_parallel_shard_degree     = -1   # auto from WORLD_SIZE (8/node)
+data_parallel_replicate_degree = 1    # set >1 for HSDP across nodes
+
+[model.compile]
+enabled = true    # production: compile the language region (smoke disables this)
+
+[model.tokenizer]
+vae_path = "${oc.env:WAN_VAE_PATH}"
+
+[trainer]
+distributed_parallelism = "fsdp"
+grad_accum_iter         = 1
+logging_iter            = 1
+max_iter                = 100   # real short run; override via CLI for full schedule
+
+# Warm-start from the mid-trained Cosmos3-Nano DCP checkpoint.
+# load_path = dir containing model/ (the DistributedCheckpointer appends `model`).
+# ckpt_type=dcp is the experiment default; the smoke path passes dummy, so be
+# explicit at launch. keys_to_skip_loading is NOT set here on purpose — the
+# experiment already skips net_ema. + the action heads so they init fresh; an
+# override would clobber that.
+[checkpoint]
+load_path            = "${oc.env:BASE_CHECKPOINT_PATH}"
+save_iter            = 100

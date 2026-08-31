@@ -1,0 +1,17 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Stable metrics Service that always points at the active frontend pod (by label).
+# Applied by scripts/01a-setup-observability.sh via: envsubst '$NAMESPACE' | kubectl apply -f -
+apiVersion: v1
+kind: Service
+metadata:
+  name: dynamo-metrics
+  namespace: ${NAMESPACE}
+spec:
+  selector:
+    nvidia.com/dynamo-component-type: frontend
+  ports:
+    - name: metrics
+      port: 8000
+      targetPort: 8000

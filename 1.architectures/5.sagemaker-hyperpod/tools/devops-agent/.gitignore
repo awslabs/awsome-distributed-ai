@@ -1,0 +1,13 @@
+/.venv/
+/.state.json
+/skills/upstream/
+# Curated upstream skills staged by deploy/import_upstream_skills.sh — derived
+# from awslabs/agent-plugins, not tracked here. Re-stage with the import script.
+/skills/hyperpod-cluster-debugger/
+/skills/hyperpod-nccl/
+/skills/hyperpod-node-debugger/
+/skills/hyperpod-performance-debugger/
+/deploy/params.json
+/deploy/params.*.json
+!/deploy/params.example.json
+__pycache__/

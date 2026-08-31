@@ -87,6 +87,14 @@
             "Resource": [
                 "arn:aws:ec2:*:*:network-interface/*"
             ]
+        },
+        {
+            "Sid": "FSxDescribeForEfaVerification",
+            "Effect": "Allow",
+            "Action": [
+                "fsx:DescribeFileSystems"
+            ],
+            "Resource": "*"
         }
     ]
 }

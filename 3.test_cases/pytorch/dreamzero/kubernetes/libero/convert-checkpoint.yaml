@@ -1,0 +1,79 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# DreamZero Checkpoint Conversion (FSDP DCP shards -> single .pt)
+#
+# RLinf SFT writes sharded FSDP2 checkpoints (__<rank>_0.distcp) under
+#   /fsx/checkpoints/<EXPERIMENT_NAME>/<inner>/checkpoints/global_step_<N>/actor/dcp_checkpoint/
+# The LIBERO simulator eval (dreamzero-eval) needs a single consolidated .pt
+# (runner.ckpt_path). This Job runs upstream's convert_dcp_to_pt.py to produce
+#   .../global_step_<N>/actor/model_state_dict/full_weights.pt
+#
+# CPU-only (no GPU). Single node.
+#
+# Prerequisites:
+#   - SFT run produced a global_step_<N> checkpoint on FSx
+#   - Training image built/pushed
+#
+# Usage (restricted envsubst protects the inline ${...} shell vars):
+#   export ECR_URI=<acct>.dkr.ecr.<region>.amazonaws.com/<repo>
+#   export NAMESPACE=dreamzero
+#   export IMAGE_TAG=dz-ab790c198fbc   # immutable tag pushed by build-push.sh
+#   # Optionally override STEP (default global_step_1):
+#   kubectl -n $NAMESPACE create configmap dreamzero-convert-launcher \
+#     --from-file=convert_checkpoint.sh=kubernetes/libero/scripts/convert_checkpoint.sh \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#   envsubst '${ECR_URI} ${NAMESPACE} ${IMAGE_TAG}' < kubernetes/libero/convert-checkpoint.yaml | kubectl apply -f -
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dreamzero-convert
+  namespace: ${NAMESPACE}
+  labels:
+    app: dreamzero-convert
+    example: dreamzero
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app: dreamzero-convert
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: convert
+          image: ${ECR_URI}:${IMAGE_TAG}
+          command: ["bash", "/opt/scripts/convert_checkpoint.sh"]
+          env:
+            - name: VENV_NAME
+              value: "dreamzero"
+            - name: CKPT_PATH
+              value: "/fsx/checkpoints"
+            - name: EXPERIMENT_NAME
+              value: "dreamzero-libero-sft"
+            - name: INNER_EXPERIMENT
+              value: "libero_sft_dreamzero"
+            - name: STEP
+              value: "global_step_1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "64Gi"
+            limits:
+              cpu: "16"
+              memory: "128Gi"
+          volumeMounts:
+            - name: fsx
+              mountPath: /fsx
+            - name: scripts
+              mountPath: /opt/scripts
+              readOnly: true
+      volumes:
+        - name: fsx
+          persistentVolumeClaim:
+            claimName: fsx-claim
+        - name: scripts
+          configMap:
+            name: dreamzero-convert-launcher
+            optional: false
