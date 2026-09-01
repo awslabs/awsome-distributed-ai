@@ -63,15 +63,17 @@ Inbound rules
 The password to access the LDAP was generated randomly and stored in AWS Secret Manager under `LdapPassword` output of the cloudformation stack.
 
 1. Get the Secret ARN
- ```bash
-  SECRET_ARN=$(aws cloudformation describe-stacks --stack-name ldap-server \
-  --query 'Stacks[0].Outputs[?OutputKey==`LdapPassword`].OutputValue' \
-  --output text)
- ```
+
+   ```bash
+   SECRET_ARN=$(aws cloudformation describe-stacks --stack-name ldap-server \
+   --query 'Stacks[0].Outputs[?OutputKey==`LdapPassword`].OutputValue' \
+   --output text)
+   ```
 
 1. Get the password that you will use to login
- ```bash
- aws secretsmanager get-secret-value --secret-id $SECRET_ARN\
-   --query SecretString \
-   --output text
- ```
+
+   ```bash
+   aws secretsmanager get-secret-value --secret-id $SECRET_ARN\
+     --query SecretString \
+     --output text
+   ```
