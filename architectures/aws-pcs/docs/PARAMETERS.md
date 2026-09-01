@@ -4,7 +4,7 @@ Full parameter list for the all-in-one deployment template. The sections and the
 match the CloudFormation console's parameter groups exactly (the console shows friendly
 labels via `AWS::CloudFormation::Interface`). Defaults give the most common production
 setup — the latest PCS-Ready Deep Learning AMI auto-resolved from SSM, Enroot/Pyxis
-installed at first boot via `PostInstallScriptUrl`, monitoring enabled — so a default
+installed at first boot via `InstallEnrootPyxis`, monitoring enabled — so a default
 deploy only needs the Availability Zone (`PrimarySubnetAZ`). To pre-bake Enroot/Pyxis into
 a custom AMI for faster boots, build it separately with
 [`pcs-ready-dlami-with-enroot-pyxis.yaml`](../README.md#85-pre-baking-enrootpyxis-into-a-custom-ami)
@@ -32,10 +32,10 @@ it directly.
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`). Drives which monitoring you get (Slurm OpenMetrics is 25.11+ only) and is also threaded into the CNG UserData so the right-version Pyxis is installed; see [OPERATIONS.md §1](./OPERATIONS.md#1-slurm-version-selection) |
+| `SlurmVersion` | `25.11` | Slurm version (`25.05` or `25.11`). Drives which monitoring you get (Slurm OpenMetrics is 25.11+ only) and is also passed to the `install-enroot-pyxis` lifecycle action so the right-version Pyxis is installed; see [OPERATIONS.md §1](./OPERATIONS.md#1-slurm-version-selection) |
 | `LoginNodeInstanceType` | `m6i.4xlarge` | Login node instance type |
 | `RootVolumeSize` | `300` | Root EBS volume size (GiB) on every node (login + compute); 300 leaves room for large container images (Megatron `.sqsh` ~20 GB) |
-| `AmiId` | *(empty → SSM auto-resolve)* | AMI ID for every node group. **Empty (default) auto-resolves to the latest PCS-Ready Deep Learning AMI** (Ubuntu 24.04, x86_64) from SSM (`/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id`). For production, **pin to a specific `ami-xxx`** so a later scale-out cannot drift onto a newer base. Use a custom AMI built off the PCS-Ready DLAMI base (e.g. via [`pcs-ready-dlami-with-enroot-pyxis.yaml`](../README.md#85-pre-baking-enrootpyxis-into-a-custom-ami)) when you want Enroot/Pyxis pre-baked or other customizations. See [OPERATIONS.md §2.5](./OPERATIONS.md#25-ami-selection-amiid--pin-in-production) |
+| `AmiId` | *(empty → SSM auto-resolve)* | AMI ID for every node group. **Empty (default) auto-resolves to the latest PCS-Ready Deep Learning AMI** (Ubuntu 24.04, x86_64) from SSM (`/aws/service/pcs/ami/dlami-base-ubuntu2404/x86_64/latest/ami-id`). For production, **pin to a specific `ami-xxx`** so a later scale-out cannot drift onto a newer base. Use a custom AMI built off the PCS-Ready DLAMI base (e.g. via [`pcs-ready-dlami-with-enroot-pyxis.yaml`](../README.md#85-pre-baking-enrootpyxis-into-a-custom-ami)) when you want Enroot/Pyxis pre-baked or other customizations. The AMI must carry **PCS agent >= 1.5.0-1** (PCS-Ready DLAMI builds since 2026-07-20 — see [PCS-READY-DLAMI.md](./PCS-READY-DLAMI.md)): node setup runs through node lifecycle actions, which older agents don't support. See [OPERATIONS.md §2.5](./OPERATIONS.md#25-ami-selection-amiid--pin-in-production) |
 | `SSHAccessCidr` | *(empty)* | When set to a CIDR, opens SSH/22 on the login node to that CIDR via a login-only security group (attached to the login node only, never compute). Empty (default) = SSH over SSM only. Set to your office/VPN range for direct `ssh`/`scp`/VS Code Remote (common for multi-user clusters) |
 | `ManagedAccounting` | `disabled` | Enable Slurm managed accounting (requires Slurm 24.11+) |
 | `AccountingPolicyEnforcement` | `none` | Slurm accounting policy enforcement (`none` or `associations,limits,safe`) |
@@ -74,8 +74,8 @@ See [GPU compute](../README.md#gpu-compute-p5p6) for instance/EFA/capacity guida
 | `MonitoringStack` | `Prometheus-LoginNode` | Monitoring stack to deploy. `Prometheus-LoginNode` = self-hosted Prometheus + Grafana + DCGM Exporter on the login node. `none` = no monitoring. (Renamed from the old boolean `DeployMonitoring`; `<what>-<where>` enum, extensible to future `AMP-AMG`/`CloudWatch`) |
 | `GrafanaAccessCidr` | *(empty)* | When set to a CIDR, opens HTTPS/443 (Grafana) on the login node to that CIDR via the login-only security group. Empty = SSM port-forward only. **443 also exposes the unauthenticated `/prometheus/`, `/pushgateway/`, `/slurmexporter/` proxy paths**, not just the password-gated Grafana. Use the tightest CIDR you can. (Renamed from `GrafanaPublicAccessCidr`) |
 | `MonitoringRepo` | `aws-samples/aws-parallelcluster-monitoring` | GitHub `owner/repo` for the monitoring stack; override with a fork + a branch in `MonitoringVersion` to test unreleased changes |
-| `MonitoringVersion` | `v2.10.2` | [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) git ref (release tag, branch, or `latest`). `v2.10.2` adds the `ec2_sd` credential-refresh fix (restarts prometheus on IMDS credential rotation, so compute metrics keep flowing past ~6 h); `v2.9.1` added the `DCGM_EXPORTER_IMAGE` override (needed for B300 GPU metrics) and Grafana 13; `v2.6.4`+ carry the PCS `/opt` install + Docker-29.x DCGM fixes. Pin to a tag for stability. Migration notes: [OPERATIONS.md §3](./OPERATIONS.md#3-monitoring-monitoringversion) |
-| `DcgmExporterImage` | DCGM 4.5.2 by digest | `dcgm-exporter` image used on GPU nodes. Defaults to a DCGM 4.5.2 build pinned by digest (`nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547...`) covering Hopper / B200 / B300. The digest pull bypasses the Docker-29.x OCI-index failure on newer NVCR tags. Override (any image reference, ideally also a digest) to pin to a different build — e.g. the monitoring stack's older default 4.2.0. No effect on CPU nodes. See [OPERATIONS.md §3.1](./OPERATIONS.md#31-dcgmexporterimage-the-default-and-when-to-change-it) |
+| `MonitoringVersion` | `v2.10.2` | [aws-parallelcluster-monitoring](https://github.com/aws-samples/aws-parallelcluster-monitoring) git ref (release tag or branch). `v2.10.2` adds the `ec2_sd` credential-refresh fix (restarts prometheus on IMDS credential rotation, so compute metrics keep flowing past ~6 h); `v2.9.1` added the `DCGM_EXPORTER_IMAGE` override (needed for B300 GPU metrics) and Grafana 13; `v2.6.4`+ carry the PCS `/opt` install + Docker-29.x DCGM fixes. Pin to a tag for stability. Migration notes: [OPERATIONS.md §3](./OPERATIONS.md#3-monitoring-monitoringversion) |
+| `DcgmExporterImage` | DCGM 4.5.2 by digest | `dcgm-exporter` image used on GPU nodes. Defaults to a DCGM 4.5.2 build pinned by digest (`nvcr.io/nvidia/k8s/dcgm-exporter@sha256:a7ad6547...`) covering Hopper / B200 / B300. The digest pull bypasses the Docker-29.x OCI-index failure on newer NVCR tags. Override (any image reference, ideally also a digest) to pin to a different build — e.g. the monitoring stack's older default 4.2.0. No effect on CPU nodes. See [OPERATIONS.md §3.1](./OPERATIONS.md#31-dcgmexporterimage--the-default-and-when-to-change-it) |
 
 ## 5.2. Additional Cluster Configuration: Multi-User Directory
 
@@ -84,15 +84,15 @@ See [GPU compute](../README.md#gpu-compute-p5p6) for instance/EFA/capacity guida
 | `DirectoryService` | `none` | Multi-user directory. `none` = single `ubuntu` user. `OpenLDAP-LoginNode` = slapd on the login node (DB on shared `/home/ldap-db`) + SSSD on all compute nodes. **Single login node only** — keep the login node group at 1 instance while enabled. See [USER-MANAGEMENT.md](./USER-MANAGEMENT.md) |
 | `DirectoryDomainSuffix` | `dc=cluster,dc=internal` | LDAP domain suffix. Only used when `DirectoryService != none` |
 
-## 5.3. Additional Cluster Configuration: Post-Install Script
+## 5.3. Additional Cluster Configuration: Container Runtime (Enroot/Pyxis)
 
-The first-boot hook that runs on every node. By default it installs the
-Enroot/Pyxis container runtime; point it at your own script to customize.
+Whether the Enroot/Pyxis container runtime is installed on every node at first
+boot. For any other first-boot customization, attach your own script to the
+compute node group's node lifecycle actions directly (PCS runs it natively).
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `PostInstallScriptUrl` | *(empty → auto)* | Script run on every node at first boot (PCS equivalent of ParallelCluster `OnNodeConfigured`). **Empty (default) auto-installs Enroot/Pyxis** from `s3://<S3BucketName>/<S3KeyPrefix>scripts/install-enroot-pyxis.sh` (fetched with the instance role, so it works with a **private** bucket — no public S3 needed). Accepts an `s3://` URL (instance-role fetch) or an `http(s)://` URL (curl, public only, e.g. GitHub raw). Set to a single space to skip. Idempotent: a no-op if Enroot/Pyxis is already pre-baked into `AmiId` |
-| `PostInstallScriptArgs` | *(empty)* | Arguments passed to the post-install script. Normally left empty — most users never touch the container-runtime parameters |
+| `InstallEnrootPyxis` | `true` | Install the Enroot/Pyxis container runtime on every node at first boot (an `install-enroot-pyxis` node lifecycle action running `scripts/install-enroot-pyxis.sh` from the templates bucket — instance-role fetch, so a **private** bucket works). Set `false` when the runtime is pre-baked into `AmiId` or containers aren't needed (the installer is idempotent either way — a fast no-op on a pre-baked AMI). PCS now supports [node lifecycle actions](https://docs.aws.amazon.com/pcs/latest/userguide/cng-node-lifecycle-actions.html) natively, so for any other first-boot customization add your own script to the compute node group's lifecycle actions instead of proxying it through this stack |
 
 ## 6. FSx Storage (`/fsx` and `/home`)
 
@@ -115,5 +115,5 @@ availability and the "deploy small, expand after" tip.
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `S3BucketName` | `awsome-distributed-ai` | S3 bucket the nested templates are fetched from |
-| `S3KeyPrefix` | `templates/aws-pcs/` | S3 key prefix for the nested templates |
+| `S3BucketName` | `awsome-distributed-ai` | S3 bucket the nested templates **and the boot-time lifecycle scripts** (`scripts/*.sh`) are fetched from. The compute instance role's S3 read is load-bearing: a node that cannot fetch its mount script is terminated and replaced. Point this at your own bucket only after syncing **both** templates and scripts to it (see [DEPLOY-TESTING](./DEPLOY-TESTING.md)). |
+| `S3KeyPrefix` | `templates/aws-pcs/` | S3 key prefix for the nested templates and the `scripts/` boot scripts under it |

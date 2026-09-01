@@ -29,7 +29,6 @@ srun --mpi=pmix --cpu-bind=none \
         set -x
         export RANK=0
 
-        export EP_NCCL_ROOT_DIR=$NCCL_HOME
         export TORCHDYNAMO_DISABLE=1
         export TORCH_COMPILE_DISABLE=1
 

@@ -63,7 +63,7 @@ sudo usermod -aG docker ubuntu
 
 
 # Opportunistically use /opt/sagemaker or /opt/dlami/nvme if present. Let's be extra careful in the probe.
-# See: https://github.com/awslabs/awsome-distributed-training/issues/127
+# See: https://github.com/awslabs/awsome-distributed-ai/issues/127
 #
 # Docker workdir doesn't like Lustre. Tried with storage driver overlay2, fuse-overlayfs, & vfs.
 if [[ $(mount | grep /opt/sagemaker) ]]; then

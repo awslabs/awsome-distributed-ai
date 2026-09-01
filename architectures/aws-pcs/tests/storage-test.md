@@ -10,7 +10,7 @@ regression/improvement testing.
 Validates that both shared filesystems (Lustre on `/fsx`, OpenZFS on `/home`)
 mount cleanly on every node, are usable, and that the FSx-side configuration
 matches what the template asked for. Most of this is exercised implicitly by
-Tests 1–9 (the post-install script, monitoring stack, OSU / FSDP all touch
+Tests 1–9 (the Enroot/Pyxis install, monitoring stack, OSU / FSDP all touch
 `/fsx`); this test is the explicit health check to run after a fresh deploy
 or after touching `ml-cluster-prerequisites.yaml` / FSx-related parameters.
 
@@ -24,19 +24,21 @@ df -h /home /fsx
 ```
 
 Expected:
+
 - `/fsx` mounted as type `lustre`, source `<fs-id>.fsx.<region>.amazonaws.com@tcp:/<mountname>`,
   size matches the `Capacity` parameter (1200 GiB default; 19200 GiB or larger
   when `FSxLustreEnableEfa=true`).
 - `/home` mounted as type `nfs` over OpenZFS, NFS options include
-  `nconnect=16,rsize=1048576,wsize=1048576` (the deploy-all UserData mount
-  string).
+  `nconnect=16,rsize=1048576,wsize=1048576` (the `mount-openzfs-home.sh`
+  lifecycle-action mount string).
 - Both `df -h` reports show `Avail` greater than zero.
 
-If a mount is missing on a freshly booted node, check
-`/var/log/cloud-init-output.log` and `/var/log/pcs-post-install.log` for the
-`mount` line. The most common first-boot failure is the OpenZFS DNS name not
-being resolvable yet (NFS settle race); the post-install log will show
-`mount.nfs: Failed to resolve server`.
+If a mount is missing on a freshly booted node, check the per-script
+lifecycle logs `/var/log/amazon/pcs/lifecycle/actions/nodeBootstrapped/mount-openzfs-home.log`
+and `mount-lustre-fsx.log` (root-readable). A mount failure TERMINATES and
+replaces the node, so also check the CNG's recent instance churn. The most
+common first-boot failure is the OpenZFS DNS name not being resolvable yet
+(NFS settle race); the mount log will show `mount.nfs: Failed to resolve server`.
 
 ### Step 2 — read/write sanity
 
@@ -71,6 +73,7 @@ aws fsx describe-file-systems --file-system-ids "$FSX_ID" --region <region> \
 ```
 
 Expected (default deploy):
+
 - `StorageCapacity` = your `Capacity` parameter (1200 by default)
 - `StorageType` = `SSD`
 - `DeploymentType` = `PERSISTENT_2` (default; or `PERSISTENT_1` if you set it)
