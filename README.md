@@ -1,6 +1,6 @@
 # Distributed AI on AWS: Reference Architectures & Examples <!-- omit from toc -->
 
-This repository contains reference architectures and examples for distributed AI training and inference on [Amazon SageMaker HyperPod](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod.html), [AWS ParallelCluster](https://docs.aws.amazon.com/parallelcluster/latest/ug/what-is-aws-parallelcluster.html), [AWS Parallel Computing Service (PCS)](https://aws.amazon.com/pcs/), and [Amazon EKS](https://docs.aws.amazon.com/eks/latest/userguide/getting-started-console.html). The examples cover different model families and sizes, training frameworks and parallel optimizations (PyTorch DDP/FSDP, Megatron-LM, NeMo), and serving engines (vLLM, SGLang, NVIDIA Dynamo).
+This repository contains reference architectures and examples for distributed AI training and inference on [Amazon SageMaker HyperPod](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod.html), [AWS ParallelCluster](https://docs.aws.amazon.com/parallelcluster/latest/ug/what-is-aws-parallelcluster.html), [AWS Parallel Computing Service (AWS PCS)](https://aws.amazon.com/pcs/), and [Amazon Elastic Kubernetes Service (Amazon EKS)](https://docs.aws.amazon.com/eks/latest/userguide/getting-started-console.html). The examples cover different model families and sizes, training frameworks and parallel optimizations (PyTorch DDP/FSDP, Megatron-LM, NeMo), and serving engines (vLLM, SGLang, NVIDIA Dynamo).
 
 The major components of this repository are:
 
