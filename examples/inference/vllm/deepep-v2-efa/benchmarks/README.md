@@ -6,6 +6,7 @@ Concurrency sweep of the live DP16/EP16 serve, both execution modes, same pods /
 tok/s + per-request latency percentiles. Raw JSONL lands in `raw/` (gitignored).
 
 ## Environment provenance
+
 | | |
 |---|---|
 | Instance | 2× p5en.48xlarge (H200), cross-node EFA |
@@ -20,6 +21,7 @@ tok/s + per-request latency percentiles. Raw JSONL lands in `raw/` (gitignored).
 
 **Probe methodology caveats for these tables** (the checked-in `recipe/benchmark_probe.py` has
 since been upgraded — see below — so a re-run will NOT reproduce these tables exactly):
+
 - **One shot per level**: at `conc=1` the "percentiles" are a single observation (visible above:
   p50 = wall exactly). Rows describe one batch of N concurrent requests, not a distribution.
 - **Identical prompt, temperature 0**: vLLM's prefix cache serves every prompt after the first, so
@@ -47,6 +49,7 @@ throughput ceiling — a saturation point was never measured (concurrency was no
 time rose across the whole sweep).
 
 ### Eager (`--enforce-eager`; historical — measured on the previous pin `e2f993dc4`, not the shipped `14617c2b`) — 121/121 HTTP 200 (sweep = 1+8+16+32+64 requests)
+
 | conc | agg tok/s | wall s | p50 s | codes |
 |---|---|---|---|---|
 | 1 | 4.8 | 26.91 | 26.91 | 200 |
@@ -56,6 +59,7 @@ time rose across the whole sweep).
 | 64 | 301.8 | 27.15 | 27.11 | 200 |
 
 ### Non-eager (default compilation; historical — measured with the then-unmerged upstream guard, [vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)) — sweep 121/121 HTTP 200
+
 | conc | agg tok/s | wall s | p50 s | codes |
 |---|---|---|---|---|
 | 1 | 5.0 | 25.48 | 25.48 | 200 |
@@ -70,6 +74,7 @@ only — identical 121-request methodology to the eager table; the extra 32 requ
 run's warm/health phases, not extra sweep samples.)
 
 ### Eager vs non-eager (agg tok/s; delta = non-eager relative to eager)
+
 | conc | eager | non-eager | delta |
 |---|---|---|---|
 | 1 | 4.8 | 5.0 | +4.2% |
@@ -85,6 +90,7 @@ concurrency. Guidance: **eager is the zero-patch default; if you flip to non-eag
 measure at your target concurrency** — the crossover is workload-dependent.
 
 ## Honest caveats
+
 - Pods were ~1 day old at measurement (accumulated-state can inflate latency; a fresh-pod baseline would
   differ). Fixed 128-token greedy decode. **Single sweep per mode — no variance bars; the c=64 non-eager
   delta was reproduced once.** These are at-scale **throughput + relative-latency** datapoints, not tuned

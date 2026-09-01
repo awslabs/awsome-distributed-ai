@@ -19,6 +19,7 @@ instead runs its dispatch/combine over `aws-ofi-nccl`'s **GIN CPU-proxy** (`NCCL
 non-obvious integration fixes, not config:
 
 ### Integration fixes baked into this sample
+
 1. **`EP_REUSE_NCCL_COMM=0` (required, or serve init segfaults).** Upstream DeepEP flipped this default
    to `1` (reuse torch's NCCL comm). Under vLLM, torch creates NCCL comms lazily and has run no
    collective on the EP group before `ElasticBuffer` construction, so `_comm_ptr()` returns `0` →
@@ -32,6 +33,7 @@ non-obvious integration fixes, not config:
    auto-QP cap), pinned to the PR's **immutable head SHA** (a bare `refs/pull/N/head` is a moving ref).
 
 ### eager vs non-eager (both measured; see `benchmarks/`)
+
 | Mode | Status | How |
 |---|---|---|
 | `--enforce-eager` | **Serves, zero extra patches** | the default this sample ships |
@@ -54,16 +56,19 @@ then-unmerged guard) remain in `benchmarks/` for reference.
 > earlier), so the "bump the pin past #52632" guidance below picks up both fixes.
 
 ## Prerequisites
+
 - An EKS cluster of p5en.48xlarge (H200) with EFA + the EFA K8s device plugin (the shipped launcher);
   the container also runs under raw `docker run` on any 2 EFA hosts if you wire the rendezvous by hand.
 - An ECR repo you own (set in `setup/env_vars`); this sample never hardcodes a registry.
 - Hugging Face access for the model (`Qwen/Qwen3-30B-A3B-FP8` is public, no token required).
 
 ## Build
+
 ```bash
 cp setup/env_vars.example setup/env_vars && $EDITOR setup/env_vars   # set REGISTRY, IMAGE_TAG
 bash setup/build-push.sh
 ```
+
 The image is NGC-from-scratch (`FROM nvcr.io/nvidia/cuda:...`). `setup_deepep_v2_efa.sh` builds
 aws-ofi-nccl (GIN + the #1351 param) and stages DeepEP-V2 source; the `_C.so` is compiled in-pod on
 first boot (needs a live CUDA context) by `recipe/`-invoked `build_deepep.sh`. The in-tree
@@ -78,9 +83,11 @@ the same).
 ## Smoke-test the EFA transport before loading the model
 
 **1. Static image check (single node, no rendezvous):**
+
 ```bash
 source setup/env_vars && bash recipe/verify-image.sh "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
 ```
+
 Asserts (fail-loud) the efa provider resolves (`fi_info` — the live `efa-direct` fabric check runs
 when `/dev/infiniband` is present on the host), a single pinned libnccl wins **with the GIN/LSA
 symbols present**, the GIN plugin exports `ncclGinPlugin`, and the DeepEP-V2 source (ElasticBuffer +
@@ -88,11 +95,13 @@ the kernel-smoke test) is staged at `/opt/DeepEP`. The `import deep_ep` assertio
 after `build_deepep.sh`, not here — the `_C.so` is deliberately not baked into the image.
 
 **2. Cross-node kernel smoke (prove bytes move over EFA before the model load):**
+
 ```bash
 # in the pods/containers, one per node — runs DeepEP-V2's own elastic EP test
 bash /opt/run-kernel-test.sh leader <leader-ip>            # node 0
 bash /opt/run-kernel-test.sh worker <leader-ip> 1          # node 1
 ```
+
 Runs `DeepEP/tests/elastic/test_ep.py` across the nodes with the exact proxy-Gin/EFA env the serve
 uses, and only prints `KERNEL-TEST PASS` when the test passes **and** the `NCCL_DEBUG=INFO` log shows
 the `efa-direct` banner (so a green result cannot be a silent TCP/SHM fallback). This is the one step
@@ -104,11 +113,13 @@ pass/fail — and without any vLLM in the loop), use the repo's runnable V2 micr
 (own image + Slurm launchers; same NCCL-GIN/EFA transport this sample serves over).
 
 ## Serve
+
 ```bash
 # eager (default). SERVE_DP = total data-parallel = EP size; SERVE_DP_LOCAL = GPUs/node.
 SERVE_DP=16 bash recipe/serve.sh leader <leader-ip>       # on node 0
 SERVE_DP=16 bash recipe/serve.sh worker <leader-ip> 8     # on node 1
 ```
+
 Default compilation (CUDA graphs) works with the shipped pin: the upstream guard
 ([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)) merged 2026-08-20 and the `VLLM_SHA`
 pin is now on its merge commit, so you can drop `--enforce-eager` — no patch step. The knob is
@@ -119,6 +130,7 @@ Kubernetes: `kubectl apply -f kubernetes/` (2-node StatefulSet + headless servic
 contract + EFA device requests are set there).
 
 ## Benchmark
+
 ```bash
 # from inside the leader pod (both scripts are baked into the image at /opt):
 kubectl -n vllm-deepep exec vllm-deepep-v2-0 -- env OUT_ROOT=/work/benchmarks bash /opt/benchmark.sh 127.0.0.1
@@ -127,11 +139,13 @@ kubectl -n vllm-deepep exec vllm-deepep-v2-0 -- env OUT_ROOT=/work/benchmarks ba
 kubectl -n vllm-deepep port-forward pod/vllm-deepep-v2-0 8000:8000 &
 bash recipe/benchmark.sh 127.0.0.1
 ```
+
 Concurrency sweep 1/8/16/32/64 (5× requests per level), writes `benchmarks/raw/`. Exits non-zero
 unless **every** request at **every** level succeeded. See `benchmarks/README.md` for the measured
 eager and non-eager tables + environment provenance.
 
 ## Known limitations
+
 - Measured on **H200 (p5en, `sm_90`) only**; no Blackwell serving run is in this sample. The manifest's
   `DEEPEP_ARCH_LIST=10.0` (p6-b200) / `10.3` (p6-b300) knobs are **documented but not verified** at the
   shipped DeepEP pin: on 2× p6-b300 the DeepEP runtime JIT produced no loadable kernel (a Blackwell PTX
