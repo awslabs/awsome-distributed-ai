@@ -8,8 +8,8 @@ FSDP Llama-2 7B test case.
 ## Test 7: FSDP sample training
 
 A short FSDP Llama-2 7B run, using the repo's canonical training case
-[`3.test_cases/pytorch/FSDP`](../../../3.test_cases/pytorch/FSDP) and its
-[`slurm/llama2_7b-training.sbatch`](../../../3.test_cases/pytorch/FSDP/slurm/llama2_7b-training.sbatch).
+[`examples/training/fsdp`](../../../examples/training/fsdp) and its
+[`slurm/llama2_7b-training.sbatch`](../../../examples/training/fsdp/slurm/llama2_7b-training.sbatch).
 Follow that case's README; the only PCS-specific deltas are where things live on the
 shared filesystems and the node count:
 
@@ -18,7 +18,7 @@ shared filesystems and the node count:
 
    ```bash
    cd /fsx && git clone --depth 1 https://github.com/awslabs/awsome-distributed-ai.git
-   cd /fsx/awsome-distributed-ai/3.test_cases/pytorch/FSDP/slurm && bash create_venv.sh
+   cd /fsx/awsome-distributed-ai/examples/training/fsdp/slurm && bash create_venv.sh
    export HF_TOKEN=hf_xxx          # gated Llama-2 tokenizer
    ```
 
@@ -40,7 +40,7 @@ shared filesystems and the node count:
 
    ```bash
    sbatch --nodes=2 --partition=gpu-p6b200 \
-     --export=ALL,PATH=/fsx/awsome-distributed-ai/3.test_cases/pytorch/FSDP/slurm/env/bin:$PATH,HF_HOME=/fsx/.hf-cache \
+     --export=ALL,PATH=/fsx/awsome-distributed-ai/examples/training/fsdp/slurm/env/bin:$PATH,HF_HOME=/fsx/.hf-cache \
      llama2_7b-training.sbatch
    ```
 
@@ -52,7 +52,7 @@ on the login node and submit with `CONTAINER_IMAGE` — no venv needed:
 
 ```bash
 # On the login node (300 GiB root disk + Docker), build + import to /fsx:
-cd /fsx/awsome-distributed-ai/3.test_cases/pytorch/FSDP
+cd /fsx/awsome-distributed-ai/examples/training/fsdp
 sudo docker build -t fsdp:pytorch -f Dockerfile .
 enroot import -o /fsx/pytorch-fsdp.sqsh dockerd://fsdp:pytorch
 
@@ -82,7 +82,7 @@ cd slurm && sbatch --nodes=2 --partition=gpu-p6b300 \
 
 A second distributed-training path that exercises 3D parallelism (TP/PP/DP) rather than
 FSDP, using the repo's canonical Megatron-LM case
-[`3.test_cases/megatron/megatron-lm`](../../../3.test_cases/megatron/megatron-lm). Unlike
+[`examples/training/megatron-lm`](../../../examples/training/megatron-lm). Unlike
 the FSDP case it does **not** stream from HuggingFace — data is tokenized once to local
 `.bin`/`.idx` on `/fsx`, so it has no HF rate-limit exposure. Two PCS-specific deltas:
 
@@ -90,7 +90,7 @@ the FSDP case it does **not** stream from HuggingFace — data is tokenized once
    Lustre), writing the `.sqsh` to `/fsx`:
 
    ```bash
-   cd /fsx/awsome-distributed-ai/3.test_cases/megatron/megatron-lm
+   cd /fsx/awsome-distributed-ai/examples/training/megatron-lm
    sudo docker build -t aws-megatron-lm -f 0.distributed-training.Dockerfile .
    enroot import -o /fsx/aws-megatron-lm.sqsh dockerd://aws-megatron-lm:latest
    ```

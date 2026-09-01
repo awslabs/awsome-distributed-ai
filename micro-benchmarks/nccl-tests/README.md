@@ -12,7 +12,7 @@ If you are using Slurm, this guide assumes that you have the following:
 - Enroot requires libmd to compile and squashfs-tools to execute.
 - A shared directory mounted on `/apps`
 
-It is recommended that you use the templates in the architectures [directory](../../1.architectures)
+It is recommended that you use the templates in the architectures [directory](../../architectures)
 
 ### Amazon EKS
 If you are using EKS, this guide assumes that you have the following:

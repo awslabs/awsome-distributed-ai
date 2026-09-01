@@ -1,9 +1,11 @@
 {
   "default": true,
+  // Files may start with SPDX/license comments instead of a heading.
   "MD041": false,
-  "MD013": {
-    "line_length": 100,
-    "code_blocks": false
-  },
-  "MD033": false
+  // Long-line prose and wide tables are the repo's established style.
+  "MD013": false,
+  // Inline HTML is required (1-Click Deploy <kbd> buttons, <br> in tables).
+  "MD033": false,
+  // Table pipe alignment is cosmetic; GitHub renders unaligned tables fine.
+  "MD060": false
 }

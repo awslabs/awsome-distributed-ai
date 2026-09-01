@@ -368,7 +368,7 @@ Before a long run, it's also worth checking GPU/EFA/NVLink health with the
 [GPU Cluster Health Check suite](./tests/gpu-healthcheck-test.md) (nvidia-smi, DCGM
 diagnostics, EFA enumeration, NCCL thresholds).
 
-For a full training example, see the [PyTorch FSDP test case](../../3.test_cases/pytorch/FSDP);
+For a full training example, see the [PyTorch FSDP test case](../../examples/training/fsdp);
 the full validation matrix is in [tests/README.md](./tests/README.md).
 
 ---
@@ -437,7 +437,7 @@ and a screenshot.
 
 > **Prefer AWS-managed Prometheus/Grafana?** If you'd rather use Amazon Managed Service
 > for Prometheus + Amazon Managed Grafana instead of the self-hosted stack on the login
-> node, see [`4.validation_and_observability/4.prometheus-grafana`](../../4.validation_and_observability/4.prometheus-grafana).
+> node, see [`observability/prometheus-grafana`](../../observability/prometheus-grafana).
 
 `MonitoringStack` toggles the stack (`Prometheus-LoginNode` / `none`). The defaults work
 out of the box; the source repo/version (`MonitoringRepo` / `MonitoringVersion`) and the
@@ -787,7 +787,7 @@ In this repo:
 - [Deploy & testing procedures](./docs/DEPLOY-TESTING.md) — development deploy workflow with test S3 bucket
 - [PCS-Ready DLAMI version history](./docs/PCS-READY-DLAMI.md) — PCS Agent / Slurm / driver / CUDA / EFA / DCGM per published build
 - [Test & Validation Guide](./tests/README.md) — reproducible matrix with measured numbers
-- [GPU Cluster Health Check](../../4.validation_and_observability/2.gpu-cluster-healthcheck) — comprehensive GPU/EFA/NVLink validation suite (lightweight + intensive modes, Slurm prolog integration)
+- [GPU Cluster Health Check](../../validation/gpu-cluster-healthcheck) — comprehensive GPU/EFA/NVLink validation suite (lightweight + intensive modes, Slurm prolog integration)
 - [Roadmap / TODO](./docs/ROADMAP.md)
 
 External:
