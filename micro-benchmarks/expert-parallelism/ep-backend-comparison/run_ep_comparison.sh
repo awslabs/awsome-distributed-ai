@@ -220,18 +220,26 @@ gpu_requests_on_node() {
 }
 
 verify_node_free() {
-    local node="$1" ready instance_type gpu efa requests
-    ready="$("${K[@]}" get node "${node}" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')"
-    instance_type="$("${K[@]}" get node "${node}" -o jsonpath='{.metadata.labels.node\.kubernetes\.io/instance-type}')"
-    gpu="$("${K[@]}" get node "${node}" -o jsonpath='{.status.allocatable.nvidia\.com/gpu}')"
-    efa="$("${K[@]}" get node "${node}" -o jsonpath='{.status.allocatable.vpc\.amazonaws\.com/efa}')"
-    requests="$(gpu_requests_on_node "${node}")"
-    [[ "${ready}" == True && "${instance_type}" == "${EP_INSTANCE_TYPE}" && \
-       "${gpu}" == 8 && "${efa}" == 8 && "${requests}" -eq 0 ]] || {
-        printf 'Node admission failed: node=%s ready=%s type=%s gpu=%s efa=%s requested_gpu=%s\n' \
-            "${node}" "${ready}" "${instance_type}" "${gpu}" "${efa}" "${requests}" >&2
-        return 1
-    }
+    # A pod from the previous case can still be Terminating (phase Running)
+    # when the next case is admitted, so retry before failing the campaign.
+    local node="$1" attempt ready instance_type gpu efa requests
+    for attempt in $(seq 1 18); do
+        ready="$("${K[@]}" get node "${node}" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')"
+        instance_type="$("${K[@]}" get node "${node}" -o jsonpath='{.metadata.labels.node\.kubernetes\.io/instance-type}')"
+        gpu="$("${K[@]}" get node "${node}" -o jsonpath='{.status.allocatable.nvidia\.com/gpu}')"
+        efa="$("${K[@]}" get node "${node}" -o jsonpath='{.status.allocatable.vpc\.amazonaws\.com/efa}')"
+        requests="$(gpu_requests_on_node "${node}")"
+        if [[ "${ready}" == True && "${instance_type}" == "${EP_INSTANCE_TYPE}" && \
+              "${gpu}" == 8 && "${efa}" == 8 && "${requests}" -eq 0 ]]; then
+            return 0
+        fi
+        printf 'Node not admittable yet (attempt %s/18): node=%s ready=%s type=%s gpu=%s efa=%s requested_gpu=%s\n' \
+            "${attempt}" "${node}" "${ready}" "${instance_type}" "${gpu}" "${efa}" "${requests}" >&2
+        sleep 10
+    done
+    printf 'Node admission failed: node=%s ready=%s type=%s gpu=%s efa=%s requested_gpu=%s\n' \
+        "${node}" "${ready}" "${instance_type}" "${gpu}" "${efa}" "${requests}" >&2
+    return 1
 }
 
 cleanup_case() {
