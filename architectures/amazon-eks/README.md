@@ -17,7 +17,7 @@ The following digram shows a common architecture that can be used for distribute
 
 <img align="center" src="../../assets/eks-model-training-single-az.png" width="60%" />
 
-The EKS cluster has two nodegroups. A `system` nodegroup is used to run pods like kube-dns, kubeflow training operator, etc. which provide internal cluster-scope services and can run on CPU. A worker nodegroup built with an accelerated instance type is used to run the distributed training workload. 
+The EKS cluster has two nodegroups. A `system` nodegroup is used to run pods like kube-dns, kubeflow training operator, etc. which provide internal cluster-scope services and can run on CPU. A worker nodegroup built with an accelerated instance type is used to run the distributed training workload.
 
 ## 2. Cluster configuration
 
@@ -44,31 +44,36 @@ To configure your desired cluster, edit the cluster manifest file that most clos
 
 You will need to replace the following placeholders to deploy your clusters:
 
-- `PLACEHOLDER_AWS_REGION`: region in which to deploy the cluster, replace by `us-east-1` for example.
-- `PLACEHOLDER_AZ_1`: We use 2 AZs for the cluster, replace by `us-east-1a` for example.
-- `PLACEHOLDER_AZ_2`: This AZ is where your compute capacity is located, replace by `us-east-1c` for example if that's where your capacity is located.
-- `PLACEHOLDER_VPC_ID`: ID of the VPC in which you deploy the cluster, it should take the form `vpc-12356790abcd`.
-- `PLACEHOLDER_SUBNET_PUBLIC_1` and `PLACEHOLDER_SUBNET_PUBLIC_2`: change to the id of a public subnet  (`subnet-12356790abcd`).
-- `PLACEHOLDER_SUBNET_PUBLIC_2`: change to the id of a public subnet to host the compute nodes (`subnet-12356790abcd`).
-- `PLACEHOLDER_SUBNET_PRIVATE_1`: change to the id of a public subnet to host the compute nodes (`subnet-12356790abcd`).
-- `PLACEHOLDER_SUBNET_PRIVATE_2`: change to the id of a public subnet to host the compute nodes (`subnet-12356790abcd`). This subnet holds your compute capacity, ensure it is in the right AZ.
-- `PLACEHOLDER_CAPACITY_RESERVATION_ID`: if using a capacity reservation put the ID here (`cr-12356790abcd`).
+* `PLACEHOLDER_AWS_REGION`: region in which to deploy the cluster, replace by `us-east-1` for example.
+* `PLACEHOLDER_AZ_1`: We use 2 AZs for the cluster, replace by `us-east-1a` for example.
+* `PLACEHOLDER_AZ_2`: This AZ is where your compute capacity is located, replace by `us-east-1c` for example if that's where your capacity is located.
+* `PLACEHOLDER_VPC_ID`: ID of the VPC in which you deploy the cluster, it should take the form `vpc-12356790abcd`.
+* `PLACEHOLDER_SUBNET_PUBLIC_1` and `PLACEHOLDER_SUBNET_PUBLIC_2`: change to the id of a public subnet  (`subnet-12356790abcd`).
+* `PLACEHOLDER_SUBNET_PUBLIC_2`: change to the id of a public subnet to host the compute nodes (`subnet-12356790abcd`).
+* `PLACEHOLDER_SUBNET_PRIVATE_1`: change to the id of a public subnet to host the compute nodes (`subnet-12356790abcd`).
+* `PLACEHOLDER_SUBNET_PRIVATE_2`: change to the id of a public subnet to host the compute nodes (`subnet-12356790abcd`). This subnet holds your compute capacity, ensure it is in the right AZ.
+* `PLACEHOLDER_CAPACITY_RESERVATION_ID`: if using a capacity reservation put the ID here (`cr-12356790abcd`).
 
 ### 3.2 Create a cluster
 
 1. Let's assume that your desired cluster configuration is stored in file `cluster.yaml`. Then to create the cluster, execute the following command:
+
     ```bash
     eksctl create cluster -f ./cluster.yaml
     ```
+
     Example output:
+
     ```console
     YYYY-MM-DD HH:mm:SS [ℹ] eksctl version x.yyy.z
     YYYY-MM-DD HH:mm:SS [ℹ] using region <region_name>
     ...
     YYYY-MM-DD HH:mm:SS [✔] EKS cluster "<cluster_name>" in "<region_name>" region is ready
     ```
+
     Cluster creation may take between 15 and 30 minutes. Upon successful creation your local `~/.kube/config` file gets updated with connection information to your cluster.
 2. Execute the following command line in order to verify that the cluster is accessible:
+
     ```bash
     kubectl get nodes
     ```
@@ -84,6 +89,7 @@ kubectl delete cluster -f ./cluster.yaml
 ```
 
 Example output:
+
 ```
 YYYY-MM-DD HH:mm:SS [ℹ] deleting EKS cluster "<cluster_name>"
 ...
@@ -92,9 +98,10 @@ YYYY-MM-DD HH:mm:SS [ℹ] waiting for CloudFormation stack "<stack_name>"
 
 ## 4. References
 
-For further information regarding EKS cluster infrastructure see the [aws-do-eks](https://github.com/aws-samples/aws-do-eks) project. More cluster configurations are available [here](https://github.com/aws-samples/aws-do-eks/tree/main/wd/conf/eksctl/yaml). 
+For further information regarding EKS cluster infrastructure see the [aws-do-eks](https://github.com/aws-samples/aws-do-eks) project. More cluster configurations are available [here](https://github.com/aws-samples/aws-do-eks/tree/main/wd/conf/eksctl/yaml).
 
 Related resources for further reading can be found at the links below:
+
 * [AWS CLI](https://aws.amazon.com/cli)
 * [Amazon EKS](https://aws.amazon.com/eks)
 * [eksctl](https://eksctl.io)

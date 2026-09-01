@@ -1,19 +1,22 @@
 # How to finetune ESM2 with SageMaker Hyperpod using Amazon G5 instances
 
 ## What is SageMaker Hyperpod?
+
 [Amazon SageMaker Hyperpod](https://aws.amazon.com/sagemaker/hyperpod/) offers advanced training tools to help you accelerate scalable, reliable, and secure generative AI application development. It removes the undifferentiated heavy lifting involved in building and optimizing machine learning (ML) infrastructure for training foundation models (FMs) significantly reducing training time. SageMaker Hyperpod ensure customers can continue FM training uninterrupted by periodically saving checkpoints. When a hardware failure occurs during training, SageMaker Hyperpod automatically detects the failure, repairs, or replaces the faulty instance, and resumes the training from the last saved checkpoint, removing the need for customers to manually manage this process and helping them train for week or months in a distributed setting without disruption.
 
-
 ## What is ESM-2?
+
 [ESM-2](https://www.biorxiv.org/content/10.1101/2022.07.20.500902v1) is a pLM trained using unsupervised masked language modelling on 250 Million protein sequences by researchers at [Facebook AI Research (FAIR)](https://www.biorxiv.org/content/10.1101/2022.07.20.500902v1). It is available in several sizes, ranging from 8 Million to 15 Billion parameters. The smaller models are suitable for various sequence and token classification tasks. The FAIR team also adapted the 3 Billion parameter version into the ESMFold protein structure prediction algorithm. They have since used ESMFold to predict the structure of [more than 700 Million metagenomic proteins](https://esmatlas.com/about).
 
 ESM-2 is a powerful pLM. We will demonstrate how to use QLoRA to fine-tune ESM-2 on g5.24xlarge instances. We will use ESM-2 to predict [subcellular localization](https://academic.oup.com/nar/article/50/W1/W228/6576357?login=false). Understanding where proteins appear in cells can help us understand their role in disease and find new drug targets.
 
 ## 0. Prerequisites
+
 You will need to set up a SageMaker Hyperpod cluster using 2 g5.24xlarge instances with a shared parallel filesystem such as [Amazon FSx for Lustre](https://docs.aws.amazon.com/fsx/latest/LustreGuide/getting-started.html).  See the sagemaker-hyperpod section in the [Sagemaker Hyperpod](https://github.com/awslabs/awsome-distributed-ai/tree/main/architectures/sagemaker-hyperpod-slurm) folder for setup instructions.  
 
 > [!NOTE]
 > The `enroot.sh` and `4.train_docker_dpp.sh` scripts read the Enroot image, dataset, and output locations from `ESM2_DATA_DIR`, which defaults to `/fsxl/${USER}/esm2`. Export it before running if your shared-filesystem mount differs:
+>
 > ```bash
 > export ESM2_DATA_DIR=/your/shared/mount/esm2
 > ```
@@ -29,6 +32,7 @@ chmod +x Miniconda3-latest-Linux-x86_64.sh
 
 source ./miniconda3/bin/activate
 ```
+
 ## 2. Create conda environment
 
 You can create conda environment as follows:
@@ -47,6 +51,7 @@ Next we need to download the Uniref50 training data. You can do so by running:
 ```bash
 python3 0.download_data.py
 ```
+
 It would download the data and partitions the data in 50 .csv files in `/fsx/ubuntu/csv` folder. The whole process should take less than 30 mins.
 
 ```bash
@@ -150,13 +155,12 @@ HuggingFace provides an easy to use [Trainer](https://huggingface.co/docs/transf
 
 |  Model | device_batch_size | num_nodes | torch.compile |     Instance   |   Throughput   |
 |:------:|:-----------------:|:---------:|:-------------:| :------------: | :------------: |
-|  ESM2  |         8         |     2     |       No      |  g5.12xlarge   |  160 samples/s | 
+|  ESM2  |         8         |     2     |       No      |  g5.12xlarge   |  160 samples/s |
 |  ESM2  |         8         |     2     |      Yes      |  g5.12xlarge   |  229 samples/s |
-
 
 ### 5.2 Train larger models with Fully Sharded Data Parallel (FSDP)
 
-A disadvantage of DDP training is that it requires the entire model to fit in the GPU memory. The ESM2 150M parameter model easily fits in the A10G GPU of g5.12xlarge instances. However, as models get bigger that may not be possible. For such situations, [PyTorch FSDP](https://pytorch.org/blog/introducing-pytorch-fully-sharded-data-parallel-api/) api is an effective way to shard model parameters which includes optimizer states, gradients and model parameters. However, as model is sharded more, the communication burden between the GPUs also increases. So the best practice is to use FSDP only when DDP is not sufficient. 
+A disadvantage of DDP training is that it requires the entire model to fit in the GPU memory. The ESM2 150M parameter model easily fits in the A10G GPU of g5.12xlarge instances. However, as models get bigger that may not be possible. For such situations, [PyTorch FSDP](https://pytorch.org/blog/introducing-pytorch-fully-sharded-data-parallel-api/) api is an effective way to shard model parameters which includes optimizer states, gradients and model parameters. However, as model is sharded more, the communication burden between the GPUs also increases. So the best practice is to use FSDP only when DDP is not sufficient.
 
 We use the [HuggingFace Accelerate](https://github.com/huggingface/accelerate) repo to setup FSDP with ESM2 on a slurm multinode cluster. To this end, we provide the `train_fsd.sh` script that you can submit as below:
 
@@ -166,16 +170,11 @@ sbatch 3.train_fsdp.sh
 
 |  Model | device_batch_size | num_nodes | Strategy |     Instance   |   Throughput   |
 |:------:|:-----------------:|:---------:|:--------:| :------------: | :------------: |
-|  ESM2  |        14         |     2     |    DDP   |  g5.12xlarge   |  253 samples/s | 
+|  ESM2  |        14         |     2     |    DDP   |  g5.12xlarge   |  253 samples/s |
 |  ESM2  |        14         |     2     |    FSDP  |  g5.12xlarge   |  162 samples/s |
 
 ### 5.3 More results
 
 |  Model | device_batch_size | num_nodes |  Grad Acc  | Strategy |     Instance   |       Throughput       |      GPU Mem       |
 |:------:|:-----------------:|:---------:|:-----------|:--------:| :------------: | :--------------------: |:-----------------: |
-|  ESM2  |        8          |     2     |     16     |   DDP    |  p5.48xlarge   |    4.36 M samples/s    |     | 
-
-
-
-
-
+|  ESM2  |        8          |     2     |     16     |   DDP    |  p5.48xlarge   |    4.36 M samples/s    |     |

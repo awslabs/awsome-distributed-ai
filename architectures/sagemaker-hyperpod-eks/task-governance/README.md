@@ -3,6 +3,7 @@
 SageMaker HyperPod task governance is a management system designed to streamline resource allocation and ensure efficient utilization of compute resources across teams and projects for your Amazon EKS clusters. It provides administrators with the capability to set priority levels for various tasks, allocate compute resources for each team, determine how idle compute is borrowed and lent between teams, and configure whether a team can preempt its own tasks.
 
 HyperPod task governance leverages Kueue for Kubernetes-native job queueing, scheduling, and quota management and is installed using the HyperPod task governance EKS add-on. When installed, HyperPod creates and modifies SageMaker AI-managed Kubernetes resources such as:
+
 - KueueManagerConfig
 - ClusterQueues
 - LocalQueues
@@ -100,18 +101,23 @@ kubectl apply -f 1-imagenet-gpu-team-a.yaml --namespace hyperpod-ns-team-a
 ```
 
 Verify the job is running (pulling the container image might take a moment):
+
 ```
 kubectl get pods -n hyperpod-ns-team-a
 ```
 
 Once the pods are running, you can check the output of logs to identify the elected master:
+
 ```
 kubectl logs imagenet-gpu-team-a-1-worker-0 --namespace hyperpod-ns-team-a | grep master_addr=
 ```
+
 ```
 [2025-02-04 18:58:08,460] torch.distributed.elastic.agent.server.api: [INFO]   master_addr=imagenet-gpu-team-a-1-worker-2
 ```
+
 You can then use the pod referenced in the `master_addr` to look at the current training progress:
+
 ```
 kubectl logs imagenet-gpu-team-a-1-worker-2 --namespace hyperpod-ns-team-a
 ```
@@ -127,10 +133,13 @@ hyperpod start-job --config-file 2-hyperpod-cli-example-team-b.yaml
 ```
 
 After the job has been submitted, you can see that the workers from Job 1 have been preempted, and only the workers in Team B's namespace are running.
+
 ```
 kubectl get pods -n hyperpod-ns-team-a
 ```
+
 Check running pods for Team B:
+
 ```
 kubectl get pods -n hyperpod-ns-team-b
 ```
@@ -138,7 +147,6 @@ kubectl get pods -n hyperpod-ns-team-b
 ### Job 3: Preemption by Priorities
 
 **Scenario:** Team B submits a **high-priority job** requiring **2 instances**. Since high-priority jobs take precedence, **Job 2 is suspended**, ensuring Team B’s critical workload runs first.
-
 
 ```
 kubectl apply -f 3-imagenet-gpu-team-b-higher-prio.yaml --namespace hyperpod-ns-team-b
@@ -149,12 +157,15 @@ Since this job uses a **priority-class** with a higher weight than the other job
 ```
 kubectl get pods -n hyperpod-ns-team-b
 ```
+
 ### Inspecting workloads
 
 We can also inspect the workloads on a particular namespace:
+
 ```
 kubectl get workloads -n hyperpod-ns-team-b
 ```
+
 This is an example output of the command after running all 3 scenarios:
 
 ```
@@ -163,9 +174,11 @@ pod-etcd-gpu-6584d647d4-sp6xx-bb3f9          hyperpod-ns-team-b-localqueue   hyp
 pytorchjob-hyperpod-cli-mnist-team-b-2c720   hyperpod-ns-team-b-localqueue                                     False                 45s
 pytorchjob-imagenet-gpu-team-b-2-ef5c0       hyperpod-ns-team-b-localqueue   hyperpod-ns-team-b-clusterqueue   True                  11s
 ```
+
 We can see that the workload for Job 2 has been set to `ADMITTED: False` because the newly submitted workload took precedence.
 
 When we describe the suspended workload, we can see the reason it was preempted.
+
 ```
 kubectl describe workload pytorchjob-hyperpod-cli-mnist-team-b-2c720 -n hyperpod-ns-team-b
 ```

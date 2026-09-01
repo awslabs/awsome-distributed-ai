@@ -71,14 +71,14 @@ secondary is retained to show how the regime (PP depth + recompute) changes the 
    **96k tok/s**, 227 TFLOP/s/GPU at mb=4), where the DeepEP backends sit at **+68.0%** (UCCL) /
    **+63.4%** (NVSHMEM).
 1b. **The DeepEP penalty grows with EP degree.** At the lower **EP16** the gap nearly closes —
-   DeepEP+NVSHMEM is actually *fastest* at mb=4 overlap=off (**−5.2%** vs NCCL) and UCCL only
+   DeepEP+NVSHMEM is actually _fastest_ at mb=4 overlap=off (**−5.2%** vs NCCL) and UCCL only
    +6.9%; going EP16→EP32 the NVSHMEM delta swings from −5% to **+34%** and UCCL from +7% to
    **+22%**. The same EP-scaling trend appears far more violently on H100/30B
    ([`../../qwen3-30b`](../../qwen3-30b/benchmarks/RESULTS.md)). So the all-to-all fan-out, not
    just the model, decides whether DeepEP is competitive — and on this B300/EFA fabric it only
    is at the lower EP degree.
-2. **This overturns the 4-node EP32 result** (secondary table), where DeepEP+UCCL *looked* 5.6%
-   *faster* than NCCL at EP32. That apparent win was an artifact of the 4-node **PP1 +
+2. **This overturns the 4-node EP32 result** (secondary table), where DeepEP+UCCL _looked_ 5.6%
+   _faster_ than NCCL at EP32. That apparent win was an artifact of the 4-node **PP1 +
    `RECOMPUTE=full`** regime (recompute roughly doubles compute and shrinks the all-to-all's
    share of the step, compressing/distorting the dispatcher delta). At PP2 with lighter
    `selective` recompute the all-to-all is a larger share of the step and **NCCL is unambiguously
@@ -87,7 +87,7 @@ secondary is retained to show how the regime (PP depth + recompute) changes the 
    +40.5%) and at overlap=on (+63.4% vs +68.0%) — NVSHMEM is the marginally stronger DeepEP
    backend in the comm-heavier cells, but neither comes close to NCCL at EP32 on this 6.4
    Tbps/node B300 fabric.
-3. Consistent with the DSV3 "honest bottom line": there is no published EFA *training* win for
+3. Consistent with the DSV3 "honest bottom line": there is no published EFA _training_ win for
    the DeepEP/UCCL path over NCCL all-to-all, and p6-b300's per-node bandwidth makes NCCL's
    all-to-all very strong. (DeepEP/UCCL wins in the literature are inference-scale or on
    InfiniBand / lower-bandwidth fabrics.)
@@ -101,7 +101,7 @@ cells (16 iters, drop 4) except NCCL overlap=on at 7 (teardown truncation; perio
 Work-equivalence is confirmed directly in-campaign: at EP32 overlap=on, iter-1 `lm loss` matches
 across all three arms to ~5 sig figs (NCCL 12.751420 · UCCL 12.751430 · NVSHMEM 12.751400,
 rel ≤2e-6) — the dispatchers compute the same thing, so the timing deltas are not a silent
-mis-route. The NVSHMEM arm exits non-zero at NVSHMEM finalize *after* training — validate via
+mis-route. The NVSHMEM arm exits non-zero at NVSHMEM finalize _after_ training — validate via
 `efa_ok` + `n_steady`, not exit code.
 
 ---

@@ -11,8 +11,6 @@ Ensure you have the following prerequisites:
 - An FSx for Lustre filesystem mounted via a persistent volume claim on `/fsx` in EKS pods. An example of setting up FSx on EKS is available [here](https://docs.aws.amazon.com/eks/latest/userguide/fsx-csi-create.html).
 - To run distributed training jobs as described in this guide, you must also have the [Kubeflow Training Operator](https://www.kubeflow.org/docs/components/training/) installed and configured on your EKS cluster. Please follow the [official Kubeflow Training Operator installation guide](https://www.kubeflow.org/docs/components/training/overview/) to set it up before proceeding with the training steps.
 
-
-
 ### 2. Building the Container
 
 1. Copy the megatron-lm.Dockerfile to your local machine.
@@ -23,7 +21,7 @@ Ensure you have the following prerequisites:
 docker build -t aws-megatron-lm -f aws-megatron-lm.Dockerfile .
 ```
 
-3. Tag and push the image to your container registry:
+1. Tag and push the image to your container registry:
 
 ```bash
 export AWS_REGION=us-east-1  # Set to the AWS region where your EKS cluster and ECR repository are located

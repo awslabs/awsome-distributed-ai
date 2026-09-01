@@ -13,6 +13,7 @@ Reproduce: `./scripts/08-benchmark.sh <scenario>` → saves to `bench_results/<s
 ## GPT-OSS-20B
 
 ### Aggregated (`gpt-oss-agg`)
+
 | Concurrency | TTFT (ms) | ITL (ms) | Output tok/s |
 |---:|---:|---:|---:|
 | 1  | 595   | 7.13  | 105.6 |
@@ -22,6 +23,7 @@ Reproduce: `./scripts/08-benchmark.sh <scenario>` → saves to `bench_results/<s
 | 50 | 604   | 13.29 | 608.1 |
 
 ### Disaggregated (`gpt-oss-disagg`)
+
 | Concurrency | TTFT (ms) | ITL (ms) | Output tok/s |
 |---:|---:|---:|---:|
 | 1  | 1,871 | 7.16  | 68.7  |
@@ -45,6 +47,7 @@ concurrency (continuous batching). gpt-oss runs the **triton** attention backend
 > (16 here) and lower `--mem-fraction-static` or it OOMs.
 
 ### Aggregated (`qwen3.6-agg`)
+
 | Concurrency | TTFT (ms) | ITL (ms) | Output tok/s |
 |---:|---:|---:|---:|
 | 1  | 1,416 | 52.0 | 17.4  |
@@ -53,6 +56,7 @@ concurrency (continuous batching). gpt-oss runs the **triton** attention backend
 | 10 | 1,941 | 50.4 | 97.0  |
 
 ### Disaggregated (`qwen3.6-disagg`)
+
 | Concurrency | TTFT (ms) | ITL (ms) | Output tok/s |
 |---:|---:|---:|---:|
 | 1  | 721   | 48.8 | 19.5  |
@@ -67,5 +71,6 @@ tok/s). The FP8 weights (~27 GB) fit a single L40S; the hybrid design keeps the
 attention KV cache small (only ~1 in 4 layers is full-attention).
 
 ## Notes
+
 - Higher concurrency raises aggregate throughput but per-user latency degrades — the
   usual continuous-batching tradeoff.

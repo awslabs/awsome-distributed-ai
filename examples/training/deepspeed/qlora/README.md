@@ -12,7 +12,6 @@ This project demonstrates how to:
 - Use the LoRA adapter for inference (4-bit or merged full-precision)
 - (Optional) Use NVIDIA MIG to run parallel experiments on partitioned GPUs
 
-
 ## Key Features
 
 - **Memory Efficient**: QLoRA 4-bit training + DeepSpeed ZeRO-2/3 optimizer sharding across 4 GPUs
@@ -288,6 +287,7 @@ Delete training jobs when done:
 ```
 
 To also delete the ECR repository:
+
 ```bash
 aws ecr delete-repository --repository-name qwen3-qlora-training --region $AWS_REGION --force
 ```

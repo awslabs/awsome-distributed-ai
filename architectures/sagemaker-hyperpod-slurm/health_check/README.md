@@ -75,13 +75,13 @@ sbatch --output=/fsx/ubuntu/health-check-results/management_%j.log health_check_
 
 What this command does:
 
-|Flag	|Value	|Meaning	|
-|---	|---	|---	|
-|`--output`	|`/fsx/ubuntu/health-check-results/management_%j.log`	|Instruct Slurm to capture the batch script's standard output and standard error to file `management_<jobid>.log`	|
-|`--target-partition`	|`ml.g5.xlarge`	|Test all available nodes in the `ml.g5.xlarge` partition	|
-|`--output-dir`	|`/fsx/ubuntu/health-check-results`	|Save all logs and results of child slurm jobs to this directory	|
-|`--test-script`	|`/fsx/ubuntu/dcgm.sh`	|Use `dcgm.sh` as the health-check script on each target compute node	|
-|`--test-script-args`	|`'{"level": 2}'`	|Run DCGM Level 2 diagnostics (quick check)	|
+|Flag |Value |Meaning |
+|--- |--- |--- |
+|`--output` |`/fsx/ubuntu/health-check-results/management_%j.log` |Instruct Slurm to capture the batch script's standard output and standard error to file `management_<jobid>.log` |
+|`--target-partition` |`ml.g5.xlarge` |Test all available nodes in the `ml.g5.xlarge` partition |
+|`--output-dir` |`/fsx/ubuntu/health-check-results` |Save all logs and results of child slurm jobs to this directory |
+|`--test-script` |`/fsx/ubuntu/dcgm.sh` |Use `dcgm.sh` as the health-check script on each target compute node |
+|`--test-script-args` |`'{"level": 2}'` |Run DCGM Level 2 diagnostics (quick check) |
 
 You'll see output like:
 
@@ -111,7 +111,6 @@ If the  health check orchestra job completed, you’ll find
 * `worker_<node-name>_<timestamp>.log`: Output from the worker job running on each node.
 * `health_check_summary_<job-id>_<timestamp>.log`: Summary of nodes' health check results.
 * `dcgm_<node-name>_<timestamp>.json`: Raw DCGM output with JSON format.
-    
 
 Open the summary log to see the summary of test results on target compute nodes:
 
@@ -159,10 +158,7 @@ Per-node worker logs:
 ==========================================
 ```
 
-
-
 ### Step 5: Proceed your Slurm workloads on Healthy Nodes
-
 
 After the health check completes, each node is tagged with a Slurm feature (`HealthCheck:Passed`, `Failed`, or `Skipped`). Use Slurm's `--constraint` (`-C`) flag to schedule jobs only on nodes that passed, it matches the `--constraint` value against each node's ActiveFeatures, so only nodes whose health check result is `Passed` will be eligible for your job.
 
@@ -178,8 +174,6 @@ Combine with a partition:
 sbatch -p ml.g5.xlarge  -C "HealthCheck:Passed" -N 4 my_training_job.sh
 ```
 
-
-
 ## Customize Your Own Health Check
 
 While DCGM diagnostics are provided as a reference, the `health_check_orchestrator.sh` is designed to be script-agnostic. You can plug in any custom health check script — it just needs to adhere to a simple output contract.
@@ -192,58 +186,56 @@ Your script **must** print exactly one line to stdout in this format:
 HEALTH_CHECK_RESULT:<host-name>:<status>:<remediation>:<reason>
 ```
 
-|Field	|Required	|Valid Values	|Description	|
-|---	|---	|---	|---	|
-|`host-name`	|Yes	|The node's hostname (use `$(hostname)`)	|Identifies which slurm compute node 	|
-|`status`	|Yes	|`Passed`, `Failed`, `Skipped`	|`Passed` = healthy, `Failed` = health check failed, `Skipped` = test execution failed	|
-|`remediation`	|Yes	|`none`, `reboot`, `replace`	|What action to take: `none` = no action, `reboot` = reboot the node, `replace` = replace the node	|
-|`reason`	|Optional	|Free-form text (no newlines)	|Human-readable explanation of the failure	|
+|Field |Required |Valid Values |Description |
+|--- |--- |--- |--- |
+|`host-name` |Yes |The node's hostname (use `$(hostname)`) |Identifies which slurm compute node  |
+|`status` |Yes |`Passed`, `Failed`, `Skipped` |`Passed` = healthy, `Failed` = health check failed, `Skipped` = test execution failed |
+|`remediation` |Yes |`none`, `reboot`, `replace` |What action to take: `none` = no action, `reboot` = reboot the node, `replace` = replace the node |
+|`reason` |Optional |Free-form text (no newlines) |Human-readable explanation of the failure |
 
 ### How Each Status Is Handled
 
-|Status	|Slurm Feature Set	|Remediation Applied?	|Node State	|
-|---	|---	|---	|---	|
-|`Passed`	|`HealthCheck:Passed`	|No	|Stays available	|
-|`Failed`	|`HealthCheck:Failed`	|Yes (if `--remediate true`)	|Set to `FAIL` with reason	|
-|`Skipped`	|`HealthCheck:Skipped`	|No (inconclusive)	|Stays available	|
+|Status |Slurm Feature Set |Remediation Applied? |Node State |
+|--- |--- |--- |--- |
+|`Passed` |`HealthCheck:Passed` |No |Stays available |
+|`Failed` |`HealthCheck:Failed` |Yes (if `--remediate true`) |Set to `FAIL` with reason |
+|`Skipped` |`HealthCheck:Skipped` |No (inconclusive) |Stays available |
 
 ### Environment Variables Available to Your Script
 
 The orchestrator passes these environment variables to your script:
 
-|Variable	|Description	|Example	|
-|---	|---	|---	|
-|`HC_TEST_PARAMS`	|The JSON string from `--test-script-args`	|`{"level": 2}`	|
-|`HC_RESULTS_DIR`	|The output directory (same as `--output-dir`)	|`/fsx/ubuntu/health-check`	|
-|`HC_TIMESTAMP`	|A timestamp string for file naming	|`20260223_200355`	|
+|Variable |Description |Example |
+|--- |--- |--- |
+|`HC_TEST_PARAMS` |The JSON string from `--test-script-args` |`{"level": 2}` |
+|`HC_RESULTS_DIR` |The output directory (same as `--output-dir`) |`/fsx/ubuntu/health-check` |
+|`HC_TIMESTAMP` |A timestamp string for file naming |`20260223_200355` |
 
+## Configuration Options
 
-
-## Configuration Options 
-
-### Orchestrator Slurm Job Options 
+### Orchestrator Slurm Job Options
 
 ### Target Selection (Specify exactly one of the following options)
 
-|Flag	|Description	|Example	|
-|---	|---	|---	|
-|`--target-nodes`	|Specific node names (comma-separated or Slurm expression)	|`ip-10-0-1-100,ip-10-0-1-101`	|
-|`--target-partition`	|All nodes in a Slurm partition	|`ml.g5.xlarge`	|
-|`--instance-group`	|All nodes in a HyperPod instance group	|`worker-group-1`	|
+|Flag |Description |Example |
+|--- |--- |--- |
+|`--target-nodes` |Specific node names (comma-separated or Slurm expression) |`ip-10-0-1-100,ip-10-0-1-101` |
+|`--target-partition` |All nodes in a Slurm partition |`ml.g5.xlarge` |
+|`--instance-group` |All nodes in a HyperPod instance group |`worker-group-1` |
 
 ### Required Flags
 
-|Flag	|Description	|Example	|
-|---	|---	|---	|
-|`--test-script`	|Path to the health-check script	|`/fsx/ubuntu/dcgm.sh`	|
-|`--output-dir`	|Absolute path for logs and results	|`/fsx/ubuntu/dhc`	|
+|Flag |Description |Example |
+|--- |--- |--- |
+|`--test-script` |Path to the health-check script |`/fsx/ubuntu/dcgm.sh` |
+|`--output-dir` |Absolute path for logs and results |`/fsx/ubuntu/dhc` |
 
 ### Optional Flags
 
-|Flag	|Description	|Example	|
-|---	|---	|---	|
-|`--test-script-args`	|JSON object of parameters for the test script	|'{"level": 3}'	|
-|`--remediate`	|Apply automatic remediation (true or false)	|true	|
+|Flag |Description |Example |
+|--- |--- |--- |
+|`--test-script-args` |JSON object of parameters for the test script |'{"level": 3}' |
+|`--remediate` |Apply automatic remediation (true or false) |true |
 
 ### Management Node Exclusion
 
@@ -253,23 +245,19 @@ If the orchestrator job runs on a node that is also included in the target list 
 WARNING: Management node ip-10-1-52-200 is in target list — excluding to avoid deadlock
 ```
 
-
-
 ### DCGM-Specific Parameters (passed via `-`**`-test-script-args`**)
 
-|JSON Key	|Description	|Default	|Valid Values	|
-|---	|---	|---	|---	|
-|`level`	|DCGM diagnostic level	|4	|`2`, `3`, `4`	|
+|JSON Key |Description |Default |Valid Values |
+|--- |--- |--- |--- |
+|`level` |DCGM diagnostic level |4 |`2`, `3`, `4` |
 
 DCGM Levels Explained:
 
-|Level	|Duration	|What It Tests	|
-|---	|---	|---	|
-|2	|~2 minutes	|Quick hardware checks — memory, PCIe, basic GPU health. Best for routine pre-job checks.	|
-|3	|~10–15 minutes	|Medium diagnostics — adds stress tests for GPU compute and memory bandwidth.	|
-|4	|Up to ~3 hours	|Full diagnostics — comprehensive stress testing including NVLink, PCIe bandwidth, thermal stress. Best for initial cluster validation.	|
-
-
+|Level |Duration |What It Tests |
+|--- |--- |--- |
+|2 |~2 minutes |Quick hardware checks — memory, PCIe, basic GPU health. Best for routine pre-job checks. |
+|3 |~10–15 minutes |Medium diagnostics — adds stress tests for GPU compute and memory bandwidth. |
+|4 |Up to ~3 hours |Full diagnostics — comprehensive stress testing including NVLink, PCIe bandwidth, thermal stress. Best for initial cluster validation. |
 
 ### More examples
 
@@ -303,12 +291,9 @@ sbatch --time=240 --output=/fsx/ubuntu/dhc/management_%j.log health_check_orches
 --test-script /fsx/ubuntu/dcgm.sh
 ```
 
-
-
 ## Automatic Pre-Job DCGM Checks (Slurm Prolog)
 
 If you want every job to automatically verify GPU health before it starts, you can configure the Slurm Prolog. This runs a DCGM Level 2 check each time a node is allocated to a job. If the check fails, the behavior is controlled by the `FAILURE_ACTION` setting in `prolog_dcgm.sh` — by default (`"none"`), the node is marked `HealthCheck:Failed` but the job proceeds normally. Set `FAILURE_ACTION="drain"` to drain the node and requeue the job, or `"remediate"` to trigger HyperPod reboot/replacement.
-
 
 ### Step 1: Place Scripts on Shared Storage
 
@@ -337,6 +322,7 @@ sudo scontrol reconfigure
 ### Step 4: Verify with a Job
 
 Run any job:
+
 ```
 sbatch -p ml.g5.xlarge --gres=gpu:1 -o job_%j.out my_training_job.sh
 ```

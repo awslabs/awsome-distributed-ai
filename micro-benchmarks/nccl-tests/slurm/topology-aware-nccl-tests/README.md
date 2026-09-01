@@ -3,7 +3,8 @@
 [NCCL Tests](https://github.com/NVIDIA/nccl-tests) enable you to evaluate the performance of the network using the Nvidia Collective Communication Library. This test case contains a Docker file and scripts to submit NCCL tests on Slurm. Please refer to the relevant instructions below, depending on your environment.
 
 **This is a newer version of slurm tests with additional features**
-- Run in container mode or AMI mode 
+
+- Run in container mode or AMI mode
 - Batch submission of multiple test combinations
 - Configurable test parameters in the script
 - Conversion of nccl test result summary to csv
@@ -11,7 +12,8 @@
 
 ## 0. Prepare the runtime environment
 
-### Slurm 
+### Slurm
+
 If you are using Slurm, this guide assumes that you have the following:
 
 - A functional Slurm cluster on AWS.
@@ -53,6 +55,7 @@ CONTAINER_IMAGE_NAME_TAG="nccl-tests:${TAG}"
 If you wish to build the container image by yourself, follow this section. Alternatively, you can use a prebuilt image on a public ECR repository `public.ecr.aws/hpc-cloud/nccl-tests`. If you wish to do so, skip this section.
 
 1. Build the container image with the command below:
+
    ```bash
     #Navigate to the slurm directory:
    cd micro-benchmarks/nccl-tests/slurm/
@@ -66,8 +69,9 @@ If you wish to build the container image by yourself, follow this section. Alter
           .
    
    ```
- 
+
 1. Once the container image is prepared, you can check if it is present with `docker images`. You should see an output similar to this one:
+
    ```
    REPOSITORY               TAG                        IMAGE ID       CREATED         SIZE
    nccl                     latest                     6e981e5cf6a5   5 hours ago     8.61GB
@@ -100,12 +104,11 @@ The file will be stored in the `/fsxl` directory.
 clone the awsome-distributed-ai repo on your head node
 `git clone https://github.com/awslabs/awsome-distributed-ai.git`
 
-
 Navigate to the topology-aware-nccl-tests directory:
+
 ```bash
 cd topology-aware-nccl-tests
 ```
-
 
 ### Supported Operations
 
@@ -131,11 +134,12 @@ Here are the two common masks in use to partition the set of GPUs into smaller s
 | `0x0` | All zeros | This is equivalent to NCCL_TESTS_SPLIT="AND 0x0" . This disables the gpu split: all GPUs participate together in a single operation, maximizing intra-group communication and measuring full payload bandwidth for the entire set. Use 0x0 to aggregate all GPUs, focusing on overall system communication performance|
 | `0x7` | Bit pattern 0111 | This is equivalent to NCCL_TESTS_SPLIT="AND 0x7" or NCCL_TESTS_SPLIT="MOD 8": On systems with 8 GPUs, run 8 parallel operations, each with 1 GPU per node (purely communicating over the inter-node network). Use this to split large clusters into many single-GPU groups for measuring individual inter-node or isolated bandwidths |
 
-Refer to [nccl-tests] (https://github.com/NVIDIA/nccl-tests?tab=readme-ov-file#running-multiple-operations-in-parallel) for more information 
+Refer to [nccl-tests] (<https://github.com/NVIDIA/nccl-tests?tab=readme-ov-file#running-multiple-operations-in-parallel>) for more information
 
 ### Advanced Features
 
 #### Topology-Aware Scheduling
+
 Enable topology optimization by providing a sorted hostfile to mpirun:
 
 In November 2023, AWS announced the [Instance Topology API](https://aws.amazon.com/about-aws/whats-new/2023/11/instance-topology-api-ml-hpc-workloads/).
@@ -164,6 +168,7 @@ python hostfile_topologify.py --input hostnames.txt --output topo_sorted_hostnam
 ```
 
 **hostfile_topologify.py Usage:**
+
 ```bash
 # Basic usage with default region (us-east-1)
 python hostfile_topologify.py --input hostnames.txt --output sorted_hostnames.txt
@@ -176,11 +181,13 @@ python hostfile_topologify.py --input hostnames.txt --region eu-west-1
 ```
 
 **Parameters:**
+
 - `--input`: Input hostfile containing node hostnames (required)
 - `--output`: Output file for sorted hostnames (optional, defaults to stdout)
 - `--region`: AWS region where your cluster is deployed (optional, defaults to us-east-1)
 
-#### Container Mode 
+#### Container Mode
+
 ```bash
 # Single test defaults to 0x0 test split mask
 sbatch nccl-tests-container.sbatch allreduce
@@ -189,8 +196,8 @@ sbatch nccl-tests-container.sbatch allreduce
 ./submit_nccl_test_container.sh
 ```
 
+#### AMI Mode
 
-#### AMI Mode 
 ```bash
 # Single test defaults to 0x0 test split mask
 sbatch nccl-tests-ami.sbatch allreduce
@@ -202,6 +209,7 @@ sbatch nccl-tests-ami.sbatch allreduce
 #### Custom Parameters
 
 **Container Mode**: Modify `submit_nccl_test_container.sh`:
+
 ```bash
 # Edit configuration variables in your script
 NODE_COUNTS=(8 16 32)  # Test different scales
@@ -211,6 +219,7 @@ APPS_PATH="/fsxl"  # Container location
 ```
 
 **AMI Mode**: Modify `submit_nccl_test_ami.sh`:
+
 ```bash
 # Edit configuration variables
 NODE_COUNTS=(8 16 32)  # Test different scales
@@ -225,12 +234,12 @@ TOPO_SORTED_FILE="topo_sorted_hostnames.txt" or pass in empty string "" if you d
 
 The `process_nccl_results.sh` script provides automated result processing:
 **Features:**
+
 - Automatic detection of Container vs AMI output formats
 - CSV conversion with descriptive filenames
 - Topology-aware result naming (adds "_topo" suffix when topology sorting is used)
 - Comprehensive job status reporting
 - Organized result storage in `nccl_results/` directory
-
 
 ```bash
 # Process results from container tests (manual job tracking)
@@ -243,6 +252,7 @@ The `process_nccl_results.sh` script provides automated result processing:
 ### Result File Naming Convention
 
 Generated csv files with nccl test results are automatically organized with descriptive names:
+
 ```
 nccl_results/
 ├── nccl_16_ami_allreduce_0x0_20250907_001101_results.csv
@@ -278,7 +288,6 @@ cat logs/submitted_jobs_ami_<timestamp>.txt
 
 ```
 
-
 ## 4. Testing
 
 ### Test Suite for hostfile_topologify.py
@@ -290,6 +299,7 @@ A comprehensive test suite is available to validate the topology sorting functio
 ```
 
 **Test Coverage:**
+
 - **Topology-Based Ordering**: Validates that hosts are output in correct topology-aware order for optimal NCCL placement
 - **Pagination with Ordering**: Tests pagination handling (>64 hosts) while maintaining topology-based grouping
 - **Instance ID Processing**: Validates that the expected EC2 instance IDs are correctly processed from the mock topology API response
@@ -298,6 +308,7 @@ A comprehensive test suite is available to validate the topology sorting functio
 
 **Mock Data Structure:**
 The test suite uses realistic mock EC2 API responses that simulate a hierarchical network topology:
+
 - **Small Test**: 4 instances (i-1example, i-2example, i-3example, i-4example)
 - **Large Test**: 70 instances (i-1example through i-70example) to test pagination
 - **Instance Type**: All instances use p5en.48xlarge for consistency
@@ -308,11 +319,13 @@ The test suite uses realistic mock EC2 API responses that simulate a hierarchica
 
 **Topology Ordering Validation:**
 Tests verify that the output maintains topology-aware ordering where:
+
 - Hosts with the same Level 2 network node are grouped together
 - Groups are contiguous (no interleaving between different topology groups)
 - This ordering optimizes NCCL communication by placing nearby ranks on physically adjacent instances
 
 **Test Files:**
+
 - `test_hostfile_topologify.py`: Comprehensive test suite for topology-aware host ordering
   - `test_topology_based_ordering`: Validates 4-host topology sorting with order verification
   - `test_pagination_with_topology_ordering`: Tests 70-host pagination while maintaining topology groups
@@ -349,7 +362,6 @@ Tests verify that the output maintains topology-aware ordering where:
 | `logs/` | Job output files and submission tracking |
 | `nccl_results/` | Processed CSV results and summaries |
 
-
 ## 3. Understanding NCCL Bandwidth
 
 The NCCL tests reports metrics for the time to execute a given communication collective operation, the Algorithmic bandwidth and the bus bandwidth.
@@ -358,30 +370,28 @@ The algorithm bandwidth is based on the following data_size / time where data_si
 
 | API           | Algbw                                              | Busbw                                    | Theoretical Max BW    | source                              |
 |---------------|----------------------------------------------------|------------------------------------------|-----------------------|-------------------------------------|
-| AllReduce     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw * (2*(nranks - 1)/nranks) | B = S/t * (2*(n-1)/n) | https://tinyurl.com/all-reduce      |
-| ReduceScatter | baseBw = (count * nranks * typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | https://tinyurl.com/reduce-scatter  |
-| AllGather     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | https://tinyurl.com/all-gather      |
-| Broadcast     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | https://tinyurl.com/nccl-broadcast  |
-| Gather        | baseBw = (count * nranks * typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | https://tinyurl.com/nccl-gather     |
-| Reduce        | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | https://tinyurl.com/nccl-reduce     |
-| Scatter       | baseBw = (count * nranks * typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | https://tinyurl.com/nccl-scatter    |
-| AlltoAll      | baseBw = (count * nranks * typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | https://tinyurl.com/nccl-all-to-all |
-| SendRecv      | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | https://tinyurl.com/sendrcv         |
-
-
+| AllReduce     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw *(2*(nranks - 1)/nranks) | B = S/t *(2*(n-1)/n) | <https://tinyurl.com/all-reduce>      |
+| ReduceScatter | baseBw = (count *nranks* typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | <https://tinyurl.com/reduce-scatter>  |
+| AllGather     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | <https://tinyurl.com/all-gather>      |
+| Broadcast     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | <https://tinyurl.com/nccl-broadcast>  |
+| Gather        | baseBw = (count *nranks* typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | <https://tinyurl.com/nccl-gather>     |
+| Reduce        | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | <https://tinyurl.com/nccl-reduce>     |
+| Scatter       | baseBw = (count *nranks* typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | <https://tinyurl.com/nccl-scatter>    |
+| AlltoAll      | baseBw = (count *nranks* typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | <https://tinyurl.com/nccl-all-to-all> |
+| SendRecv      | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | <https://tinyurl.com/sendrcv>         |
 
 #### Notes for Algbw & Busbw**
 
-* `typesize` : size of the data type transferred in bytes (2 bytes for half-precision, 4 for single precision....).
-* `count` : number of elements transferred through the collective communication operation.
-* `nranks` : number of ranks participating to the collective communication operation.
-* `sec` : time in seconds to execute the collective communication operation.
+- `typesize` : size of the data type transferred in bytes (2 bytes for half-precision, 4 for single precision....).
+- `count` : number of elements transferred through the collective communication operation.
+- `nranks` : number of ranks participating to the collective communication operation.
+- `sec` : time in seconds to execute the collective communication operation.
 
 #### Notes for the Theoretical Max BW
 
 The formula defines the maximum theoretical bandwidth that can be achieved on different communication collectives in the ideal case.
 
-* `n` : number of ranks participating to the operation. (similar to nranks for Algbw and Busbw)
-* `t` : time to complete the operation. (similar to sec for Algbw and Busbw)
-* `S` : number of elements being communicated (similar to count for Algbw and Busbw)
-* `B` : theoretical peak bandwidth.
+- `n` : number of ranks participating to the operation. (similar to nranks for Algbw and Busbw)
+- `t` : time to complete the operation. (similar to sec for Algbw and Busbw)
+- `S` : number of elements being communicated (similar to count for Algbw and Busbw)
+- `B` : theoretical peak bandwidth.

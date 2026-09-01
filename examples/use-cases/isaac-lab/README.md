@@ -16,7 +16,6 @@ Train the [Unitree H1 humanoid robot](https://www.unitree.com/h1) to walk on rou
 
 Isaac Sim is built on NVIDIA Omniverse and uses the Omniverse RTX Renderer, which requires GPUs with hardware RT Cores. The G family of AWS GPU instances is suitable for Isaac Lab workloads; the P family is not, as it uses data center GPUs without RT Cores. See the [Isaac Sim 5.1 requirements page](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/requirements.html) for the full list of supported and unsupported hardware.
 
-
 | Instance family | GPU Type and Generation | RT Cores / Isaac Sim Compatibility |
 |---|---|---|
 | ml.g5 | NVIDIA A10G (Ampere) | Yes |
@@ -24,7 +23,6 @@ Isaac Sim is built on NVIDIA Omniverse and uses the Omniverse RTX Renderer, whic
 | ml.g6e | NVIDIA L40S (Ada Lovelace) | Yes |
 | ml.g7e | NVIDIA RTX PRO 6000 (Blackwell) | Yes |
 | ml.p4d, ml.p4de, ml.p5, ml.p5e, ml.p5en, ml.p6-b200, ml.p6-b300, ml.p6e-gb200 | NVIDIA A100 (Ampere), H100 / H200 (Hopper), B200 / B300 / GB200 (Blackwell) | No |
-
 
 ## Prerequisites
 
@@ -185,6 +183,7 @@ MLflow integration is implemented as a runtime hook (`scripts/mlflow_isaaclab.py
 **Configuration:**
 
 Set in `config.yaml`:
+
 ```yaml
 mlflow:
   tracking_uri: "arn:aws:sagemaker:<region>:<account>:mlflow-tracking-server/<name>"
@@ -195,6 +194,7 @@ mlflow:
 **IAM requirements:** The training pod's execution role needs `sagemaker-mlflow:*` permission on the tracking server ARN, plus S3 access to the MLflow artifact bucket.
 
 ---
+
 ## Source Files
 
 | File | Purpose |

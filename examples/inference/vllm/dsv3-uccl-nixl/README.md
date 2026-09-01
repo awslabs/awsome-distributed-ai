@@ -422,6 +422,7 @@ Capacity Block) for a baked-in table to age well. Check the live source:
 - [On-Demand pricing](https://aws.amazon.com/ec2/pricing/on-demand/)
 - [Capacity Block pricing](https://aws.amazon.com/ec2/capacityblocks/pricing/)
 - Or query the AWS pricing API:
+
   ```bash
   aws pricing get-products --service-code AmazonEC2 \
     --filters Type=TERM_MATCH,Field=instanceType,Value=p5en.48xlarge \
@@ -440,13 +441,13 @@ same license as the rest of `awsome-distributed-ai`.
 ## References
 
 - vLLM NixlConnector usage:
-  https://docs.vllm.ai/en/v0.21.0/features/nixl_connector_usage.html
+  <https://docs.vllm.ai/en/v0.21.0/features/nixl_connector_usage.html>
 - vLLM disaggregated serving:
-  https://github.com/vllm-project/vllm/blob/main/docs/source/serving/disaggregated_serving.md
-- UCCL-EP: https://github.com/uccl-project/uccl
-- NIXL: https://github.com/ai-dynamo/nixl
+  <https://github.com/vllm-project/vllm/blob/main/docs/source/serving/disaggregated_serving.md>
+- UCCL-EP: <https://github.com/uccl-project/uccl>
+- NIXL: <https://github.com/ai-dynamo/nixl>
 - NIXL libfabric (EFA) plugin:
-  https://github.com/ai-dynamo/nixl/blob/main/src/plugins/libfabric/README.md
-- DeepSeek-V3 paper: https://arxiv.org/abs/2412.19437
+  <https://github.com/ai-dynamo/nixl/blob/main/src/plugins/libfabric/README.md>
+- DeepSeek-V3 paper: <https://arxiv.org/abs/2412.19437>
 - AWS EFA cheat sheet:
-  https://github.com/awslabs/awsome-distributed-ai/blob/main/docs/efa-cheatsheet.md
+  <https://github.com/awslabs/awsome-distributed-ai/blob/main/docs/efa-cheatsheet.md>

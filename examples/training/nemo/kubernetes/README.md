@@ -30,19 +30,20 @@
    - [Running the Data Processing](#running-the-data-processing)
    - [Processed Data Structure](#processed-data-structure)
 10. [Launching NeMo Training Jobs](#launching-nemo-training-jobs)
-   - [Overview](#overview-2)
-   - [Training Parameters](#training-parameters)
-   - [Pretraining Jobs](#pretraining-jobs)
-   - [Finetuning Jobs](#finetuning-jobs)
-   - [Customizing Datasets](#customizing-datasets)
-   - [Important Notes](#important-notes)
-11. [Monitoring and Debugging](#monitoring-and-debugging)
+
+- [Overview](#overview-2)
+- [Training Parameters](#training-parameters)
+- [Pretraining Jobs](#pretraining-jobs)
+- [Finetuning Jobs](#finetuning-jobs)
+- [Customizing Datasets](#customizing-datasets)
+- [Important Notes](#important-notes)
+ 1. [Monitoring and Debugging](#monitoring-and-debugging)
     - [NeMo-Run Monitoring](#nemo-run-monitoring)
     - [Check Experiment Status](#check-experiment-status)
     - [View Training Logs](#view-training-logs)
     - [View Job Queue](#view-job-queue)
     - [View Job Logs](#view-job-logs)
-12. [References](#references)
+ 2. [References](#references)
 
 ### Key Features of NeMo 2.0
 
@@ -71,12 +72,13 @@ Before you begin, ensure you have the following:
 - **Kubernetes Cluster**: An EKS cluster or SageMaker HyperPod EKS cluster
   - For SageMaker HyperPod EKS: Follow [this workshop](https://catalog.workshops.aws/sagemaker-hyperpod-eks/en-US/00-setup) or [this repository](https://github.com/awslabs/awsome-distributed-ai/tree/main/architectures/sagemaker-hyperpod-eks)
   - For standard EKS: Follow [these instructions](https://github.com/awslabs/awsome-distributed-ai/tree/main/architectures/amazon-eks)
-    
+
     **Additional Setup for Standard EKS (Non-HyperPod):**
-    
+
     If you're using a standard EKS cluster (not SageMaker HyperPod), you'll need to install the following device plugins:
-    
+
     1. **The NVIDIA GPU Operator** (if not already installed):
+
     ```bash
     # Add NVIDIA Helm repo
     helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
@@ -88,14 +90,16 @@ Before you begin, ensure you have the following:
       --set toolkit.enabled=false \
       --wait
     ```
-    
-    2. **AWS EFA Kubernetes Device Plugin** (for instances with EFA support):
+
+    1. **AWS EFA Kubernetes Device Plugin** (for instances with EFA support):
+
     ```bash
     helm repo add eks https://aws.github.io/eks-charts
     helm install efa eks/aws-efa-k8s-device-plugin -n kube-system
     ```
-    
+
     After installation, verify the GPU Operator and EFA plugin are running:
+
     ```bash
     # Check GPU Operator pods
     kubectl get pods -n gpu-operator
@@ -103,9 +107,9 @@ Before you begin, ensure you have the following:
     # Check EFA device plugin
     kubectl get pods -n kube-system | grep aws-efa-k8s-device-plugin
     ```
-    
+
     For P4 instances, you should see `vpc.amazonaws.com/efa: 4` in the node's allocatable resources. For P5.48xlarge instances, you should see `vpc.amazonaws.com/efa: 32` if you check the node details `kubectl describe node <node name>`
-    
+
     > **Note**: If EFA is enabled in the node group, ensure your security group allows all outgoing traffic originating from the same security group for EFA to work properly.
 
 - **Required Tools**:
@@ -118,7 +122,7 @@ Before you begin, ensure you have the following:
 
 ## Testing Configuration and GPU Requirements
 
-> **Important**: All examples in this repository were tested on a minimum node configuration of **1 g6e.24xlarge instance type (4 L40S GPUs)**. 
+> **Important**: All examples in this repository were tested on a minimum node configuration of **1 g6e.24xlarge instance type (4 L40S GPUs)**.
 >
 > **Memory Considerations**: Using lower memory GPU instances like A10G (g5 instance types) might result in **CUDA out of memory errors** for the finetuning examples.
 
@@ -141,12 +145,14 @@ Before you begin, ensure you have the following:
 ```
 
 The script will automatically:
+
 - Create the ECR repository if it doesn't exist
 - Login to ECR
 - Tag the image with the ECR URI
 - Push the image to ECR
 
 You can customize the AWS region by setting the `AWS_REGION` environment variable:
+
 ```bash
 AWS_REGION=us-west-2 ./push.sh
 ```
@@ -164,6 +170,7 @@ Before proceeding, ensure you have the following installed:
 - [socat](https://linux.die.net/man/1/socat) and [netcat](https://netcat.sourceforge.net/) (required by SkyPilot)
 
 **Installation example (Ubuntu/Debian):**
+
 ```bash
 sudo apt update
 sudo apt install wget socat netcat -y
@@ -185,7 +192,7 @@ source nemo-env/bin/activate
 bash venv.sh
 ```
 
-## 3. Getting the Kubernetes Cluster Ready 
+## 3. Getting the Kubernetes Cluster Ready
 
 ### Configure SkyPilot for Kubernetes
 
@@ -199,7 +206,7 @@ NeMo-Run uses [SkyPilot](https://docs.skypilot.co/en/latest/getting-started/inst
 kubectl get nodes
 ```
 
-#### Label your GPU nodes for SkyPilot using the native GPU labeler:
+#### Label your GPU nodes for SkyPilot using the native GPU labeler
 
 SkyPilot provides a built-in GPU labeler that automatically detects and labels all GPU nodes in your cluster with the correct accelerator types.
 
@@ -209,6 +216,7 @@ python -m sky.utils.kubernetes.gpu_labeler
 ```
 
 This command will automatically:
+
 - Detect all GPU nodes in your cluster
 - Identify the GPU types (L40S, H100, A100, etc.)
 - Apply the correct `skypilot.co/accelerator` labels with lowercase names
@@ -254,6 +262,7 @@ kubectl describe pvc fsx-claim
 The repository includes automated data preprocessing capabilities that allow you to prepare custom datasets from Hugging Face for NeMo **pretraining**. This preprocessing step is **only required for pretraining workflows using custom datasets** and involves:
 
 > **Important**: This section is **only required** if you plan to run pretraining with custom datasets using the main `pretrain_custom_dataset.py` script. This preprocessing is **NOT needed** for:
+>
 > - Pretraining with mock data (`pretrain_mock_dataset.py`)
 > - Finetuning workflows (`finetune_default_dataset.py` and `finetune_custom_dataset.py`) - these handle data processing automatically
 
@@ -275,6 +284,7 @@ cd data-processing/
 **Note**: Only run this if you plan to use the pretraining workflow with custom datasets (`pretrain_custom_dataset.py`).
 
 1. **Deploy the Processing Pod**:
+
    ```bash
    # Example: Process the WikiText dataset (default)
    ./data-processing.sh deploy
@@ -284,6 +294,7 @@ cd data-processing/
    ```
 
 2. **Access the Pod and Run Initial Processing**:
+
    ```bash
    # Access the pod shell
    ./data-processing.sh exec
@@ -297,6 +308,7 @@ cd data-processing/
    ```
 
 3. **Preprocess Data for Megatron Training**:
+
    ```bash
    # Still inside the pod, run the Megatron preprocessing script
    cd /tmp
@@ -313,9 +325,10 @@ cd data-processing/
       --workers=4
    ```
 
-      #### Processed Data Structure
+   #### Processed Data Structure
 
       After processing, your data will be organized as follows (Using /mnt/nemo mount path as an example):
+
       ```
       /mnt/nemo/data/
       ├── tokenizer/
@@ -327,11 +340,13 @@ cd data-processing/
       ```
 
 4. **Exit the pod after data processing**:
+
    ```bash
    exit
    ```
 
 5. **Cleanup Pod After Processing**:
+
    ```bash
    ./data-processing.sh delete
    cd ..
@@ -366,20 +381,23 @@ cd data-processing/
 The repository provides multiple training scenarios to meet different needs:
 
 **Pretraining Options:**
+
 - `pretrain_custom_dataset.py` - **Pretraining with custom preprocessed datasets** (requires [Section 4 preprocessing](#data-preprocessing-for-custom-datasets-pretraining-only))
 - `pretrain_mock_dataset.py` - Pretraining with mock data for testing (no preprocessing required)
 
 **Finetuning Options:**
+
 - `finetune_default_dataset.py` - Finetuning using NeMo's default datasets/recipes (no preprocessing required)
 - `finetune_custom_dataset.py` - Finetuning with custom datasets from Hugging Face (automatic data processing included)
 
 > **Data Processing Requirements**:
+>
 > - **Preprocessing Required**: Only `pretrain_custom_dataset.py` (pretraining with custom datasets)
 > - **No Preprocessing Needed**: All other scripts handle data processing automatically or use mock data
 
 ### Training Parameters
 
-#### Common Parameters (All Scripts):
+#### Common Parameters (All Scripts)
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
@@ -395,7 +413,7 @@ The repository provides multiple training scenarios to meet different needs:
 
 > **Note on EFA Devices**: The `--efa-devices` parameter is only needed when using instances that have EFA (Elastic Fabric Adapter) support for high-performance networking. Specify the number of EFA devices an instance supports. For example, for P4 instances, use `--efa-devices 4`, for P5.48xlarge instances, use `--efa-devices 32`.
 
-#### Additional Parameters for Pretraining (pretrain_custom_dataset.py):
+#### Additional Parameters for Pretraining (pretrain_custom_dataset.py)
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
@@ -403,7 +421,7 @@ The repository provides multiple training scenarios to meet different needs:
 | `--micro_batch_size` | Micro batch size for the dataset | 2 |
 | `--global_batch_size` | Global batch size (auto-calculated if not specified) | None |
 
-#### Additional Parameters for Finetuning Scripts:
+#### Additional Parameters for Finetuning Scripts
 
 | Parameter | Description | Default | Scripts |
 |-----------|-------------|---------|---------|
@@ -423,6 +441,7 @@ This is the main pretraining script that uses preprocessed custom datasets. It e
 
 **For EFA enabled instances (using AWS-optimized container):**
 For example, using a p5.48xlarge instance with EFA
+
 ```bash
 python pretrain_custom_dataset.py \
     --max_steps 200 \
@@ -441,6 +460,7 @@ python pretrain_custom_dataset.py \
 
 **For all other instance types without EFA (using default NeMo container):**
 For example, using a g6e.24xlarge instance without EFA
+
 ```bash
 python pretrain_custom_dataset.py \
     --max_steps 200 \
@@ -484,12 +504,14 @@ python pretrain_mock_dataset.py \
 This script performs finetuning using NeMo's built-in datasets and recipes. It supports both full finetuning and LoRA (Low-Rank Adaptation) finetuning, with LoRA enabled by default for efficiency.
 
 **Features:**
+
 - **Model Support**: Uses Gemma-2-2B by default (Llama-3-8B options available via code modification)
 - **LoRA Support**: Enabled by default, can be disabled with `--disable_lora`
 - **Checkpoint Conversion**: Automatically downloads and converts model checkpoints from Hugging Face
 - **Gated Model Access**: Supports Hugging Face tokens for accessing gated models
 
 **Basic Usage:**
+
 ```bash
 python finetune_default_dataset.py \
     --max_steps 200 \
@@ -503,6 +525,7 @@ python finetune_default_dataset.py \
 ```
 
 **With Hugging Face Token (for gated models):**
+
 ```bash
 python finetune_default_dataset.py \
     --max_steps 200 \
@@ -517,6 +540,7 @@ python finetune_default_dataset.py \
 ```
 
 **Full Finetuning (disable LoRA):**
+
 ```bash
 python finetune_default_dataset.py \
     --max_steps 200 \
@@ -539,6 +563,7 @@ python finetune_default_dataset.py \
 This script performs finetuning on custom datasets from Hugging Face. It includes a comprehensive data processing pipeline that handles dataset download, preprocessing, and splitting automatically.
 
 **Features:**
+
 - **Custom Dataset Support**: Uses Databricks Dolly-15k dataset by default (easily configurable)
 - **Automatic Data Processing**: Downloads, preprocesses, and splits data automatically
 - **Flexible Configuration**: Supports custom sequence lengths and batch sizes
@@ -548,6 +573,7 @@ This script performs finetuning on custom datasets from Hugging Face. It include
 **Default Configuration**: Uses `databricks/databricks-dolly-15k` dataset. To change the dataset, modify the `DATASET_NAME` variable at the top of the script.
 
 **Basic Usage:**
+
 ```bash
 python finetune_custom_dataset.py \
     --max_steps 200 \
@@ -564,6 +590,7 @@ python finetune_custom_dataset.py \
 ```
 
 **Advanced Configuration:**
+
 ```bash
 python finetune_custom_dataset.py \
     --max_steps 500 \
@@ -587,6 +614,7 @@ python finetune_custom_dataset.py \
 To use a different dataset in `finetune_custom_dataset.py`:
 
 1. **Change the Dataset**: Modify the `DATASET_NAME` variable at the top of the script:
+
    ```python
    DATASET_NAME = "your-dataset/dataset-name"
    ```
@@ -654,12 +682,14 @@ Example training log output:
 You can also use SkyPilot to monitor your jobs:
 
 #### View Job Queue
+
 ```bash
 # View running jobs
 sky queue
 ```
 
 Example output:
+
 ```
 Fetching and parsing job queue...
 
@@ -669,12 +699,14 @@ ID  NAME         SUBMITTED    STARTED      DURATION  RESOURCES   STATUS   LOG
 ```
 
 #### View Job Logs
+
 ```bash
 # Get logs from a running job
 sky logs <job-id>
 ```
 
 Example training log output:
+
 ```
 Tailing logs of the last job on cluster 'aws-nemo2-pretrain-20250522-194450_1747943090'...
 Job ID not provided. Streaming the logs of the latest job.

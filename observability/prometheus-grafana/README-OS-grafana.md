@@ -6,9 +6,9 @@ This guide supports both **SageMaker HyperPod** and **AWS ParallelCluster** envi
 
 To get started, you will initiate the provisioning of an Amazon CloudFormation Stack within your AWS Account. You can find the complete stack template in [cluster-observability-os-grafana.yaml](./cluster-observability-os-grafana.yaml). This CloudFormation stack will orchestrate the deployment of the following resources dedicated to cluster monitoring in your AWS environment:
 
-  * [Amazon Manged Prometheus WorkSpace](https://aws.amazon.com/prometheus/)
-  * EC2 instance running OSS Grafana
-  * Associated IAM roles and permissions
+* [Amazon Manged Prometheus WorkSpace](https://aws.amazon.com/prometheus/)
+* EC2 instance running OSS Grafana
+* Associated IAM roles and permissions
 
 ### Prerequisites
 
@@ -16,12 +16,12 @@ To get started, you will initiate the provisioning of an Amazon CloudFormation S
 * **For SageMaker HyperPod**: Refer to the [original readme](./README.md) for exporter setup via Lifecycle Scripts.
 * **For AWS ParallelCluster**: See the "Compute Node Setup" section below for node_exporter installation.
 
-### Deploy the CloudFormation Stack 
+### Deploy the CloudFormation Stack
 
 [<kbd> <br> 1-Click Deploy 🚀 <br> </kbd>](https://console.aws.amazon.com/cloudformation/home?#/stacks/quickcreate?templateURL=https://awsome-distributed-ai.s3.amazonaws.com/templates/cluster-observability-os-grafana.yaml&stackName=Cluster-Observability-OS-Grafana)
 
 >[!IMPORTANT]
-> It is strongly recommended you deploy this stack into the same region and same account as your SageMaker HyperPod Cluster.This will ensure successful execution of the Lifecycle Scripts, specifically `install_prometheus.sh`, which relies on AWS CLI commands that assume same account and same region. 
+> It is strongly recommended you deploy this stack into the same region and same account as your SageMaker HyperPod Cluster.This will ensure successful execution of the Lifecycle Scripts, specifically `install_prometheus.sh`, which relies on AWS CLI commands that assume same account and same region.
 
 ### Connect to the EC2 instance running OS Grafana
 
@@ -30,6 +30,7 @@ Connect to the EC2 instance using SSM:
 ```bash
 aws ssm start-session --target ${Instance_ID}  --region ${REGION}
 ```
+
 Then switch to the `ec2-user`:
 
 ```bash
@@ -67,6 +68,7 @@ Set the "Prometheus server URL" with the value retrieved from the AWS console.
 ![](./assets/os-grafana-set-datasource2.png)
 
 For authentication:
+
 * Choose "SigV4 auth"
 * Set "Authentication Provider" as "AWS SDK Default"
 * Set "Default Region" to the region where you deployed the CloudFormation stack.
@@ -107,6 +109,7 @@ echo "PrometheusClusterSecurityGroup: $PROMETHEUS_SG"
 ### Compute Node Setup
 
 The Prometheus Agent scrapes metrics from compute nodes on **port 9100** (node_exporter). To enable this, compute nodes must:
+
 1. Run `node_exporter`
 2. Allow inbound access from the Prometheus Agent via security group
 
@@ -140,4 +143,3 @@ pcluster update-compute-fleet --cluster-name <CLUSTER_NAME> --status START_REQUE
 ```
 
 Once the compute nodes are running with `node_exporter` installed, metrics will automatically appear in your Grafana dashboards.
-

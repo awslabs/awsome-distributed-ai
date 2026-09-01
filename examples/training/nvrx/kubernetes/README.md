@@ -9,6 +9,7 @@ This guide walks you through deploying NVRx resiliency experiments on an Amazon 
 You need an Amazon EKS cluster with GPU nodes and EFA networking. Instructions for creating a cluster can be found in [architectures](../../../../architectures), the [aws-do-eks](https://bit.ly/do-eks) project, or [EKS Blueprints](https://github.com/aws-ia/terraform-aws-eks-blueprints).
 
 Your cluster must have:
+
 - GPU nodes (g5, p4de, or p5 instances) with [NVIDIA device plugin](https://github.com/NVIDIA/k8s-device-plugin)
 - [EFA device plugin](https://github.com/aws/eks-charts/tree/master/stable/aws-efa-k8s-device-plugin) (for multi-node training on p4de/p5)
 - [Amazon FSx for Lustre](https://docs.aws.amazon.com/fsx/latest/LustreGuide/what-is.html) filesystem in the same VPC/AZ as your nodes
@@ -60,6 +61,7 @@ aws fsx describe-file-systems \
 ```
 
 Replace the placeholder values in `fsx-storage.yaml`:
+
 - `<YOUR-FSX-FILESYSTEM-ID>` -- e.g., `fs-0123456789abcdef0`
 - `<YOUR-FSX-DNS-NAME>` -- e.g., `fs-0123456789abcdef0.fsx.us-west-2.amazonaws.com`
 - `<YOUR-FSX-MOUNT-NAME>` -- e.g., `abcd1234`

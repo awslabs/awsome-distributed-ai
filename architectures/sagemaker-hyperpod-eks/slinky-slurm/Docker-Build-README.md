@@ -7,13 +7,14 @@ This build includes Python 3.12.8 + PyTorch 2.6.0 + CUDA 12.6 + NCCL 2.23.4 + EF
 > are for standalone builds outside the automated deployment flow.
 
 Clone the AWSome Distributed Training repo:
+
 ```
 git clone https://github.com/awslabs/awsome-distributed-ai.git
 cd awsome-distributed-ai/architectures/sagemaker-hyperpod-eks/slinky-slurm/
 
 ```
 
-Build the container image: 
+Build the container image:
 
 ```
 
@@ -90,7 +91,7 @@ aws ecr get-login-password --region $AWS_REGION \
  
 ```
 
-Tag the image: 
+Tag the image:
 
 ```
 
@@ -131,7 +132,7 @@ kubectl delete pod test-pod
 
 (Optional) Update the container image used by the Slinky NodeSet:
 
-Note: this step is not required if you specify the image repository and tag in the [slurm-values.yaml.template](./slurm-values.yaml.template) file, but is useful if you want to test a new image build without redeploying the entire Slurm cluster. 
+Note: this step is not required if you specify the image repository and tag in the [slurm-values.yaml.template](./slurm-values.yaml.template) file, but is useful if you want to test a new image build without redeploying the entire Slurm cluster.
 
 ```
 export NODESET_NAME=$(kubectl get nodeset -n slurm -o custom-columns=NAME:metadata.name --no-headers)
@@ -156,4 +157,3 @@ kubectl -n slurm scale nodeset/$NODESET_NAME --replicas=0
 kubectl -n slurm scale nodeset/$NODESET_NAME --replicas=4
 
 ```
-

@@ -6,8 +6,7 @@ The guide assumes that you have the following:
 * An FSx for Lustre filesystem mounted on `/fsx`.
 * `enroot` if you want to run the container example.
 
-We recommend that you setup a Slurm cluster using the templates in the architectures [directory](../../../../architectures). 
-
+We recommend that you setup a Slurm cluster using the templates in the architectures [directory](../../../../architectures).
 
 ## 2. Submit training job using virtual environment on Slurm
 
@@ -20,7 +19,6 @@ bash 0.create-venv.sh
 ```
 
 It will create a Python virtual environment named `pt` that includes `torchrun`
-
 
 Submit DDP training job with:
 
@@ -68,15 +66,14 @@ Node IP: 10.1.96.108
 
 ## 3. Submit training job using Docker container
 
-In this example, you'll learn how to use the official PyTorch Docker image 
+In this example, you'll learn how to use the official PyTorch Docker image
 and execute the container within the Slurm scheduler using Enroot or EKS using
-kubeflow training operator. 
+kubeflow training operator.
 
-
-[Enroot](https://github.com/NVIDIA/enroot) uses the same underlying technologies 
-as containers but removes much of the isolation they inherently provide 
-while preserving filesystem separation. This approach is generally preferred 
-in high-performance environments or virtualized environments where portability 
+[Enroot](https://github.com/NVIDIA/enroot) uses the same underlying technologies
+as containers but removes much of the isolation they inherently provide
+while preserving filesystem separation. This approach is generally preferred
+in high-performance environments or virtualized environments where portability
 and reproducibility is important, but extra isolation is not warranted.
 
 Create Enroot container images:

@@ -9,16 +9,19 @@ This is a test case for multi-node large model GRPO training using [Hugging Face
 ### Download the model
 
 We are going to use HF_HOME environment variable to access the model from the containers, so define it before downloading the model:
+
 ```bash
 export HF_HOME=~/.cache/huggingface # or any other directory that you prefer
 ```
 
 Install huggingface-cli:
+
 ```bash
 pip install -U "huggingface_hub[cli]"
 ```
 
 Download the model:
+
 ```bash
 hf download Qwen/Qwen2.5-72B
 ```
@@ -52,20 +55,26 @@ The training script launches 8 nodes for training and 1 node for generation usin
 The logs can be inspected using tail command:
 
 GRPO Training logs:
+
 ```bash
 tail -f -n +0 grpo-XXX.out 
 ```
+
 sample output:
+
 ```
   1%|          | 17/2264 [01:22<2:55:16,  4.68s/it]
 0: {'loss': 0.0785, 'grad_norm': 0.8229517735973697, 'learning_rate': 9.916077738515903e-06, 'num_tokens': 1498339.0, 'completions/mean_length': 134.934765625, 'completions/min_length': 35.0, 'completions/max_length': 256.0, 'completions/clipped_ratio': 0.08203125, 'completions/mean_terminated_length': 124.83461303710938, 'completions/min_terminated_length': 35.0, 'completions/max_terminated_length': 253.8, 'rewards/format_reward/mean': 0.90703125, 'rewards/format_reward/std': 0.27258416190743445, 'rewards/accuracy_reward/mean': 0.224609375, 'rewards/accuracy_reward/std': 0.4104481041431427, 'reward': 1.131640625, 'reward_std': 0.34059175848960876, 'kl': 0.2958984375, 'clip_ratio/low_mean': 0.0, 'clip_ratio/low_min': 0.0, 'clip_ratio/high_mean': 0.0, 'clip_ratio/high_max': 0.0, 'clip_ratio/region_mean': 0.0, 'epoch': 0.01}
 ```
 
 vLLM logs:
+
 ```bash
 tail -f -n +0 vllm-XXX.out
 ```
+
 sample output:
+
 ```
 0: INFO:     10.4.37.27:41696 - "POST /upda_named_param/ HTTP/1.1" 200 OK
 0: INFO:     10.4.37.27:41696 - "POST /update_named_param/ HTTP/1.1" 200 OK
@@ -90,6 +99,7 @@ srun --mpi=pmix --cpu-bind=none --container-image ./trl-base.sqsh --container-mo
 ```
 
 Example output:
+
 ```
 prompt="<|im_start|>system\nA conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., <think>reasoning process here</think><answer>answer here</answer><|im_end|>\n<|im_start|>user\nMr. D's house has five smoke diagrams. These five smoke diagrams are arranged in a row from shortest to tallest, with a height difference of 2 centimeters between each pair of adjacent smoke diagrams. The height of the tallest smoke diagram is exactly equal to the sum of the heights of the two shortest smoke diagrams. What is the total height of the five smoke diagrams in centimeters?<|im_end|>\n"
 
@@ -123,16 +133,19 @@ As you can see, the GRPO trained model emits "think" tokens between `<think>` an
 Use the following commands to evaluate a model on the test set:
 
 Original base model `Qwen/Qwen2.5-72B`:
+
 ```bash
 srun --mpi=pmix --cpu-bind=none --container-image ./trl-base.sqsh --container-mounts=.:/grpo-math-reasoning,$HF_HOME:$HF_HOME --error=eval.err python /grpo-math-reasoning/eval.py --model Qwen/Qwen2.5-72B
 ```
 
 Instruct fine-tuned model `Qwen/Qwen2.5-72B-Instruct`:
+
 ```bash
 srun --mpi=pmix --cpu-bind=none --container-image ./trl-base.sqsh --container-mounts=.:/grpo-math-reasoning,$HF_HOME:$HF_HOME --error=eval.err python /grpo-math-reasoning/eval.py --model Qwen/Qwen2.5-72B-Instruct
 ```
 
 GRPO trained model after 100 steps: `Qwen/Qwen2.5-72B-GRPO/checkpoint-100`:
+
 ```bash
 srun --mpi=pmix --cpu-bind=none --container-image ./trl-base.sqsh --container-mounts=.:/grpo-math-reasoning,$HF_HOME:$HF_HOME --error=eval.err python /grpo-math-reasoning/eval.py --model /grpo-math-reasoning/YYYY-MM-DD_hh-mm-ss/Qwen/Qwen2.5-72B-GRPO/checkpoint-100
 ```

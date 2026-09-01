@@ -16,10 +16,12 @@ The Helm Chart Injector is an AWS Lambda function that can be used as an [`AWS::
     └── lambda_function.py            <-- lambda function code
     └── requirements.txt              <-- lambda function requirements
 ```
+
 The [Amazon SageMaker HyperPod EKS documentation](https://awslabs.github.io/ai-on-sagemaker-hyperpod/docs/category/eks-orchestration) maintains a copy of the `layer.zip` and `function.zip` files used to instantiate the Helm Chart Injector in an AWS owned S3 bucket, as configured using the `CustomResourceS3Bucket`, `LayerS3Key`, and `FunctionS3Key` parameters in the [main-stack.yaml](./../nested-stacks/main-stack.yaml) template. However, you can follow the steps below to build your own copy of the dependency files and host them in your own S3 bucket.
 
-## How to Build the Helm Chart Injector to Host in Your Own S3 Bucket:
-```bash 
+## How to Build the Helm Chart Injector to Host in Your Own S3 Bucket
+
+```bash
 ## execute the main script
 ./deploy.sh 
 
@@ -30,10 +32,10 @@ BUCKET_NAME=<your-bucket-name-here>
 aws s3 sync ./outputs s3://$BUCKET_NAME --delete
 ```
 
-After completing these steps, you can proceed to deploy the [helm-chart-stack.yaml](./../nested-stacks/helm-chart-stack.yaml) template by itself, or as part of the nested stack configuration in the [main-stack.yaml](./../nested-stacks/main-stack.yaml) template. See the main [README.md](./../README.md) for details. 
+After completing these steps, you can proceed to deploy the [helm-chart-stack.yaml](./../nested-stacks/helm-chart-stack.yaml) template by itself, or as part of the nested stack configuration in the [main-stack.yaml](./../nested-stacks/main-stack.yaml) template. See the main [README.md](./../README.md) for details.
 
-> **IMPORTANT**: Be sure to update the following parameters to reference your S3 Bucket and the artifacts you uploaded there:    
+> **IMPORTANT**: Be sure to update the following parameters to reference your S3 Bucket and the artifacts you uploaded there:
+
 - `CustomResourceS3Bucket`
 - `LayerS3Key`
 - `FunctionS3Key`
-

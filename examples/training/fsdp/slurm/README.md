@@ -5,9 +5,11 @@ The following content provides guidance on how to run PyTorch FSDP on a Slurm cl
 ## Retrieve the guidance on your cluster
 
 On your cluster head node,
+
 1. Navigate to your shared FSx for Lustre file system.
+
 * If you followed the tutorial linked above, it will be location at `/fsx`.
-2. Clone this repo.
+1. Clone this repo.
 
 ```bash
 cd /fsx
@@ -15,22 +17,23 @@ git clone https://github.com/awslabs/awsome-distributed-ai/
 cd awsome-distributed-ai/examples/training/fsdp/slurm
 ```
 
-3. You can launch the training through:
-   - Option 1: Creating a Python Virtual Environment to install the necessary packages.
-   - Option 2: Create a container image to install the packages and run.
+1. You can launch the training through:
+   * Option 1: Creating a Python Virtual Environment to install the necessary packages.
+   * Option 2: Create a container image to install the packages and run.
 
-### Option 1: Creating a Python Virtual Environment to install the necessary packages.
+### Option 1: Creating a Python Virtual Environment to install the necessary packages
+
 Run the `create_venv.sh` script:
 
 ```bash
 . ./create_venv.sh
 ```
+
 * By creating this environment on the shared FSx for Lustre volume, all compute nodes in our cluster will have access to it.
 
-### Option 2: Create a container image to install the packages and run.
+### Option 2: Create a container image to install the packages and run
 
 You will first build the container image with the command below:
-
 
 ```bash
 docker build -f ../Dockerfile -t fsdp:pytorch2.7.1 ..
@@ -106,7 +109,7 @@ You'll find a new file in the FSDP directory of the form `llama3_1_8b-FSDP_[JOB 
 0: 2025-06-17 16:25:08 I [train.py:103] Batch 5 Loss: 14.34635, Speed: 8.98 samples/sec, lr: 0.000099
 ```
 
-###  Mistral 8x7B
+### Mistral 8x7B
 
 To run Mistral 8x7B model, you will need first to review the terms of usage on [HuggingFace](https://huggingface.co/mistralai/Mixtral-8x7B-v0.1).
 Then you will need to create a [user access token](https://huggingface.co/docs/hub/en/security-tokens) to access the gated Mathstral 7B model.
@@ -151,7 +154,7 @@ You'll find a new file in the FSDP directory of the form `mistral_8x7b-FSDP_[JOB
 0: 2025-04-11 16:59:24 I [train.py:103] Batch 5 Loss: 10.31511, Speed: 14.50 samples/sec, lr: 0.000038
 ```
 
-###  Mistral Mathstral 7B
+### Mistral Mathstral 7B
 
 To run Mistral Mathstral 7B model, you will need first to review the terms of usage on [HuggingFace](https://huggingface.co/mistralai/Mistral-7B-v0.1).
 Then you will need to create a [user access token](https://huggingface.co/docs/hub/en/security-tokens) to access the gated Mathstral 7B model.
@@ -198,8 +201,8 @@ For Mathstral, your output should look similar to the one below:
 ```
 
 ## References
-Llama 2 and  Llama 3.x models parameters are based on the values in the [Llama 2 paper](https://arxiv.org/abs/2307.09288) and [Llama 3 paper](https://arxiv.org/abs/2407.21783) 
 
+Llama 2 and  Llama 3.x models parameters are based on the values in the [Llama 2 paper](https://arxiv.org/abs/2307.09288) and [Llama 3 paper](https://arxiv.org/abs/2407.21783)
 
 | Parameter            | Llama 2 7B | Llama 2 13B | Llama 2 70B | Llama 3.1 8B | Llama 3.1 70B | Llama 3.2 1B | Llama 3.2 3B |
 |----------------------|------------|-------------|-------------|--------------|---------------|--------------|--------------|
@@ -209,6 +212,5 @@ Llama 2 and  Llama 3.x models parameters are based on the values in the [Llama 2
 | num_layers           | 32         | 40          | 80          | 32           | 80            | 16           | 28           |
 | num_heads            | 32         | 40          | 64          | 32           | 64            | 32           | 24           |
 | max_context_length   | 4096       | 4096        | 4096        | 8192         | 8192          | 8192         | 8192         |
-
 
 If you need to cancel or modify your job, see the Slurm commands available in the [Slurm documentation](https://slurm.schedmd.com/quickstart.html).

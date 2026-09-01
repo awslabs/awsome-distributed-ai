@@ -1,19 +1,20 @@
 ## 1. Preparation
+
 The guide assumes that you have the following:
 
 * An Amazon EKS cluster on AWS with x86-based CPU nodes, accessible via `kubectl`.
 * An Amazon FSx for Lustre persistent volume claim named `fsx-pv`, you can use an example from [here](https://github.com/aws-samples/aws-do-eks/tree/main/Container-Root/eks/deployment/csi/fsx), if you need to create one.
-* Docker 
+* Docker
 
-We recommend that you setup a Kubernetes cluster using the templates in the architectures [directory](../../../../architectures). 
-
+We recommend that you setup a Kubernetes cluster using the templates in the architectures [directory](../../../../architectures).
 
 ## 3. Submit training job using container
 
-In this example, you'll learn how to use the official PyTorch Docker image 
-and execute the container within Kubernetes using kubeflow training operator. 
+In this example, you'll learn how to use the official PyTorch Docker image
+and execute the container within Kubernetes using kubeflow training operator.
 
 Make sure kubeflow training operator is deployed to your cluster:
+
 ```bash
 kubectl apply -k "github.com/kubeflow/training-operator/manifests/overlays/standalone?ref=v1.7.0"
 ```
@@ -28,6 +29,7 @@ docker build -t ${REGISTRY}ddp:latest ..
 ```
 
 Push the container image to the Elastic Container Registry in your account:
+
 ```bash
 # Create registry if needed
 REGISTRY_COUNT=$(aws ecr describe-repositories | grep \"ddp\" | wc -l)
@@ -44,6 +46,7 @@ docker image push ${REGISTRY}ddp:latest
 ```
 
 Create manifest and launch PyTorchJob:
+
 ```bash
 export IMAGE_URI=${REGISTRY}ddp:latest
 export INSTANCE_TYPE=
@@ -55,6 +58,7 @@ kubectl apply -f ./ddp.yaml
 ```
 
 Check the status of your training job:
+
 ```bash
 kubectl get pytorchjob 
 kubectl get pods 
@@ -70,7 +74,8 @@ ddp-worker-0            1/1     Running   0          18s
 ddp-worker-1            1/1     Running   0          18s
 ```
 
-Each of the pods produces job logs. 
+Each of the pods produces job logs.
+
 ```bash
 kubectl logs ddp-worker-0
 ```
@@ -99,8 +104,8 @@ Epoch 4990 | Training snapshot saved at /fsx/snapshot.pt
 ...
 ```
 
-
 Stop the training job:
+
 ```bash
 kubectl delete -f ./ddp.yaml
 ```

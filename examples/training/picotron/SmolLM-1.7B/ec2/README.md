@@ -7,6 +7,7 @@ This guide demonstrates how to train the SmolLM-1.7B model using 3D parallelism 
 - Pipeline Parallelism (PP): Divides model vertically into pipeline stages
 
 In this example, we configure:
+
 - DP=2: Data parallel across 2 groups
 - TP=2: Each layer split across 2 GPUs
 - PP=2: Model divided into 2 pipeline stages
@@ -15,6 +16,7 @@ This configuration requires 8 GPUs total (2 x 2 x 2 = 8), which can be found in 
 ### Prerequisites
 
 Before running this example, you need to:
+
 1. Build the Picotron container image following the guidance in [here](..)
 2. Have an EC2 instance with 8 GPUs (e.g., p5.48xlarge)
 
@@ -27,7 +29,6 @@ First, export your Hugging Face token as an environment variable:
    ```
 
 Then create configuration file using the aforementioned container:
-
 
    ```bash
    docker run --rm -v ${PWD}:${PWD} picotron python3 /picotron/create_config.py \

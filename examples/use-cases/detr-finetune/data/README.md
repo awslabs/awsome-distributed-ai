@@ -23,7 +23,7 @@ of supermarket shelves annotated with two object classes:
 ## Download Instructions
 
 1. Visit the dataset page:
-   **https://humansintheloop.org/resources/datasets/supermarket-shelves-dataset/**
+   **<https://humansintheloop.org/resources/datasets/supermarket-shelves-dataset/>**
 
 2. Fill in the required fields (name, email, company) and submit to download
    the dataset archive.
@@ -150,6 +150,7 @@ Each annotation file is a Supervisely-format JSON with the following structure:
 ```
 
 The training script automatically:
+
 - Reads all annotation files
 - Maps class titles ("Price", "Product") to numeric indices
 - Normalizes bounding boxes to [0, 1]

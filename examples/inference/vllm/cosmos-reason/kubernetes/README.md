@@ -70,11 +70,13 @@ python3 image_vqa.py --image sample.jpg --model ${MODEL_ID}
 ```
 
 You can also customize the question:
+
 ```bash
 python3 image_vqa.py --image sample.jpg --prompt "How many vehicles are visible and what types are they?"
 ```
 
 Test with auto labeling use case:
+
 ```bash
 python3 auto_label.py --image-dir ./scenes/ --output labels.jsonl --limit 5
 ```

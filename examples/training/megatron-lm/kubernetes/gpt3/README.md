@@ -23,20 +23,18 @@ export NUM_NODES=2
 
 You can refer to the following table to find the correct values for your instance type:
 
-| Instance Type | GPUs | EFA Interfaces 
+| Instance Type | GPUs | EFA Interfaces
 |---------------|------|----------------
-| p5.48xlarge   | 8    | 32             
-| p5e.48xlarge  | 8    | 32             
-| p5en.48xlarge | 8    | 16             
-| p6-b200.48xlarge | 8 | 8             
-
-
+| p5.48xlarge   | 8    | 32
+| p5e.48xlarge  | 8    | 32
+| p5en.48xlarge | 8    | 16
+| p6-b200.48xlarge | 8 | 8
 
 ### 2. Data Preprocessing
 
 1. Run the following snippet to crete a job container that mounts the fsx volume and downloads the input datasets and vocabulary on it:
 
-    #### Step 1: Create and Apply the Data Download Job
+   #### Step 1: Create and Apply the Data Download Job
 
     Generate the `getdata-job.yaml` manifest from the template and apply it:
 
@@ -45,7 +43,7 @@ You can refer to the following table to find the correct values for your instanc
     kubectl apply -f manifests/getdata-job.yaml
     ```
 
-    #### Step 2: Verify Job Creation
+   #### Step 2: Verify Job Creation
 
     List jobs to confirm creation:
 
@@ -65,7 +63,7 @@ You can refer to the following table to find the correct values for your instanc
     kubectl describe job getdata-job
     ```
 
-    #### Step 3: Monitor Job Progress
+   #### Step 3: Monitor Job Progress
 
     Stream the logs to monitor download progress:
 
@@ -100,14 +98,13 @@ You can refer to the following table to find the correct values for your instanc
     Download completed.
     ```
 
-    #### Step 5: Cleanup
+   #### Step 5: Cleanup
 
     Once the job status is `Completed`, delete the job and its pod:
 
     ```bash
     kubectl delete -f manifests/getdata-job.yaml
     ```
-
 
 2. Preprocess the data
 
@@ -195,7 +192,7 @@ kubectl logs -f megatron-worker-0
 An abbreviated sample log is shown below:
 
    An abbreviated sample log is shown below:
-    
+
    ```text
    ...
    using torch.float16 for parameters ...
@@ -231,13 +228,13 @@ An abbreviated sample log is shown below:
    iteration        3/  508626 | consumed samples:          864 | elapsed time per iteration (ms): 243344.4 | learning rate: 0.000E+00 | global batch size:   288 | loss scale: 1073741824.0 | number of skipped iterations:   1 | number of nan iterations:   0 |
    ...
    ```
-    
+
    You can stop the training job by executing:
-    
+
    ```bash
    kubectl delete -f ./pytorchjob.yaml
    ```
-    
+
 ## 4. What's next?
 
 The example is based on the GPT3 example from MegatronLM's [repository](https://github.com/NVIDIA/Megatron-LM/blob/main/examples/pretrain_gpt.sh). You can modify `NUM_ATTENTION_HEADS`, `NUM_LAYERS`, and `HIDDEN_SIZE`  based on the Table 1 (Page 8) of the document [Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM](https://arxiv.org/abs/2104.04473) to change the model size. You can also run the following commands to launch training for different model sizes before submitting a job as follows: `NUM_LAYERS=64 HIDDEN_SIZE=8192 NUM_ATTENTION_HEADS=48 sbatch  3.distributed-training.sbatch`
@@ -310,7 +307,8 @@ By default, the .sbatch scripts specify the number of samples, then the number o
 +        --lr-decay-iters 45 \
 +        --lr-warmup-iters 2 \
 ```
+
 =======
 
-Following the same pattern, you can train other models. Pretraining scripts for models like 
-Bert, ICT, and T5 are already included in the Megatron-LM container under `/workspace/Megatron-LM`. 
+Following the same pattern, you can train other models. Pretraining scripts for models like
+Bert, ICT, and T5 are already included in the Megatron-LM container under `/workspace/Megatron-LM`.

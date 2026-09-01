@@ -49,7 +49,7 @@ Metric of record: mean training-iteration time over 8 steady iters (first 4 of 1
 3. **This is the small-message, comm-bound regime.** Qwen3-30B (hidden 2048) makes each
    all-to-all message small and the step compute-light (NCCL tops out ~44–60 MODEL TFLOP/s/GPU),
    so DeepEP's per-dispatch proxy/kernel-launch overhead dominates and the % deltas are
-   *amplified* relative to a compute-heavy model. Treat these as the **worst case for DeepEP**
+   _amplified_ relative to a compute-heavy model. Treat these as the **worst case for DeepEP**
    (small messages on H100), complementary to the B300/Qwen3-235B numbers (larger messages,
    compute-heavier) where the gaps are smaller.
 
@@ -63,7 +63,7 @@ Metric of record: mean training-iteration time over 8 steady iters (first 4 of 1
 
 Same qualitative conclusion on both fabrics — **NCCL all-to-all wins** — but the DeepEP penalty
 is far larger on H100/30B (smaller messages, lower-bandwidth fabric, compute-light model). No
-EFA *training* configuration tested here favors the DeepEP/UCCL path over NCCL all-to-all.
+EFA _training_ configuration tested here favors the DeepEP/UCCL path over NCCL all-to-all.
 
 ## Validity & caveats
 
@@ -73,7 +73,7 @@ EFA *training* configuration tested here favors the DeepEP/UCCL path over NCCL a
   the only missing cell. NVSHMEM arms exit non-zero at NVSHMEM finalize after training; gate on
   `efa_ok` + `n_steady==8`, not exit code.
 - **Comm-bound amplification** (point 3): the % deltas are larger than a compute-heavy model
-  would show. They measure the dispatcher's *exposed* cost, not end-to-end MFU on a tuned LLM.
+  would show. They measure the dispatcher's _exposed_ cost, not end-to-end MFU on a tuned LLM.
 - Mock data + random-init + forced balancing; single run per cell (within-run σ small).
 
 ## Reproduce

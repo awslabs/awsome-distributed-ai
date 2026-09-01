@@ -12,9 +12,11 @@ The guide assumes that you have the following:
   to the name `fsx-pvc`. If your cluster uses a different name (e.g.,
   `fsx-claim`), update the `claimName` field in the generated YAML before
   applying, or use `sed`:
+
   ```bash
   sed -i 's/fsx-pvc/fsx-claim/g' detr-resnet50-finetune.yaml
   ```
+
 - Docker installed on a machine with **internet access** (the build downloads
   model weights from HuggingFace Hub and bakes them into the image).
 - The dataset uploaded to FSx at `/fsx/data/` (see [data/README.md](../data/README.md)).

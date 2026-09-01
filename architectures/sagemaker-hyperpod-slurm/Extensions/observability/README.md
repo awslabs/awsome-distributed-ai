@@ -78,6 +78,7 @@ exporters.
 | OTel Collector | Y | Y | Y | 4317/4318 | Scrapes all local exporters and remote-writes to AMP |
 
 Node type detection logic:
+
 - `slurmctld` running -> controller
 - `slurmd` running + hostname in `sinfo` output -> compute
 - `slurmd` running + hostname NOT in `sinfo` output -> login
@@ -114,6 +115,7 @@ with specific training runs, and identify which jobs are causing thermal
 or error issues.
 
 The Prolog/Epilog scripts are provided by the HyperPod AMI at:
+
 - `/opt/slurm/etc/prolog.d/700_dcgm_job_map_register.sh`
 - `/opt/slurm/etc/epilog.d/700_dcgm_job_map_cleanup.sh`
 
@@ -259,7 +261,6 @@ aws s3 sync ./observability s3://sagemaker-<your-bucket>/observability/
 > `$'\r': command not found` errors on Linux. The included `.gitattributes`
 > file enforces LF endings when using Git.
 
-
 ## Usage
 
 ### Option A: OnInitComplete (recommended for new clusters)
@@ -289,6 +290,7 @@ automatically, then runs your extension script.
    ```
 
 2. Upload to S3:
+
    ```bash
    aws s3 sync ./observability s3://sagemaker-<your-bucket>/observability/
    ```
@@ -352,6 +354,7 @@ automatically, then runs your extension script.
    ```
 
    Submit with:
+
    ```bash
    aws sagemaker create-cluster --cli-input-json file://create_cluster.json
    ```
@@ -370,6 +373,7 @@ sagemaker-cluster:<cluster-id>_<instance-group-name>-<instance-id>
 ```
 
 Find the cluster ID and instance IDs:
+
 ```bash
 aws sagemaker describe-cluster --cluster-name <cluster-name> --query "ClusterArn"
 # Extract the ID after the last slash, e.g., "abc123def456"
@@ -378,6 +382,7 @@ aws sagemaker list-cluster-nodes --cluster-name <cluster-name>
 ```
 
 Connect and run:
+
 ```bash
 aws ssm start-session \
     --target sagemaker-cluster:<cluster-id>_<group-name>-<instance-id> \
@@ -408,7 +413,6 @@ if Config.enable_observability:
 Ensure the `observability/` directory is uploaded alongside your other
 lifecycle scripts in the same S3 prefix.
 
-
 ## Configuration
 
 All configuration is in `config.json`:
@@ -424,6 +428,7 @@ All configuration is in `config.json`:
 ### Advanced metrics
 
 When `advanced_metrics` is `true`:
+
 - Node Exporter enables additional collectors: `cgroups`, `ksmd`,
   `meminfo_numa`, `ethtool`, `mountstats`, `network_route`, `processes`,
   `tcpstat`
@@ -529,6 +534,7 @@ Each metric carries labels:
 | `p2p_operation` | `Send` or `Recv` (P2P metrics only) |
 
 Example metric output:
+
 ```
 nccl_bus_bandwidth_gbs{slurm_job_id="42",node="ip-10-1-35-255",gpu="GPU0",comm_name="DP Group 0",n_nodes="1",nranks="4",collective="AllReduce",message_size="4-5GB",algo_proto="Ring_ll"} 678.263
 nccl_collective_exec_time_microseconds{slurm_job_id="42",node="ip-10-1-35-255",gpu="GPU0",comm_name="DP Group 0",n_nodes="1",nranks="4",collective="AllReduce",message_size="4-5GB",algo_proto="Ring_ll"} 9498.47
@@ -631,6 +637,7 @@ and choose the AMP workspace.
 ## Stopping observability
 
 To stop all observability containers and services on a node:
+
 ```bash
 sudo python3 stop_observability.py --node-type controller  # or compute, login
 ```

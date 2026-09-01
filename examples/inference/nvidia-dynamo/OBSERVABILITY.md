@@ -11,6 +11,7 @@ Run after installing the platform (step 01):
 ```
 
 This creates:
+
 1. A stable Kubernetes Service (`dynamo-metrics`) that always points to the active frontend pod via label selector
 2. A `customServiceScrapeTarget` in the HyperPod `ObservabilityConfig` CR, which tells the OTEL collector to scrape Dynamo metrics and send them to AMP
 

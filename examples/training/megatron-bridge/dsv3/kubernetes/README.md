@@ -25,11 +25,13 @@ Before proceeding, ensure the following are in place on the target EKS cluster:
 - **EFA device plugin** deployed — `vpc.amazonaws.com/efa` advertised on
   `p6-b300.48xlarge` nodes (expected 16 per node; one of the 17 NIC cards is ENA-only).
   Verify with:
+
   ```bash
   kubectl describe node -l node.kubernetes.io/instance-type=p6-b300.48xlarge \
     | grep -A2 "Allocatable"
   # Expected: vpc.amazonaws.com/efa: 16
   ```
+
 - **NVIDIA device plugin** deployed — `nvidia.com/gpu: 8` per node.
 - **Kubeflow Training Operator** installed (provides `PyTorchJob` CRD).
   Install guide: <https://www.kubeflow.org/docs/components/training/overview/>

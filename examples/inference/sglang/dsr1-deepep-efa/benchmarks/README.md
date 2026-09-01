@@ -44,6 +44,7 @@ requirements, not tuning: see [section 2](#2-pin---deepep-mode-to-the-stage-you-
 [section 5](#5-disable-the-prefix-cache-or-the-sweep-measures-the-cache).
 
 Two documented exceptions, both called out again at the tables themselves:
+
 - The **pure-TP and Baseline decode columns** were measured with the prefix cache **on** — and those
   are the columns behind "DeepEP is last on decode". The effect is quantified where the table appears
   (up to ~7% optimistic on `output tok/s` at high concurrency, ≤4% on TPOT, ordering unaffected).
@@ -615,7 +616,7 @@ never registered. `recipe/serve-pd.sh` sets all three for both roles and every b
 |---|---|---|
 | `--privileged` | `memory_location.cpp: Failed to get NUMA node, addr: … Operation not permitted` | Mooncake asks the kernel which NUMA node each registered buffer sits on; the query is not permitted under Docker's default capability set. |
 | `MOONCAKE_PROTOCOL=efa` | `Installing TCP transport` | Silent fallback to sockets; see above. |
-| `FI_HMEM=cuda` | `efa_context.cpp: fi_mr_regattr failed for GPU memory … ` | Mooncake calls `setenv("FI_HMEM","system",0)` itself; any value naming `system` makes `fi_mr_regattr(iface=FI_HMEM_CUDA)` return `ENOSYS`. `overwrite=0`, so setting `cuda` from the launcher wins. Must be exactly `cuda` — `cuda,system` fails too. |
+| `FI_HMEM=cuda` | `efa_context.cpp: fi_mr_regattr failed for GPU memory …` | Mooncake calls `setenv("FI_HMEM","system",0)` itself; any value naming `system` makes `fi_mr_regattr(iface=FI_HMEM_CUDA)` return `ENOSYS`. `overwrite=0`, so setting `cuda` from the launcher wins. Must be exactly `cuda` — `cuda,system` fails too. |
 
 Verify all three on one role before benchmarking — this must print nothing:
 

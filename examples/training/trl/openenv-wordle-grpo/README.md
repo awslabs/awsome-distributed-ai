@@ -47,7 +47,6 @@ In this test case, the Wordle environment runs as a lightweight CPU pod on a Hyp
 
 For more details, see the [OpenEnv documentation](https://meta-pytorch.org/OpenEnv/) and the [Getting Started tutorials](https://meta-pytorch.org/OpenEnv/auto_getting_started/index.html).
 
-
 ## Overview
 
 | Component | Details |
@@ -98,6 +97,7 @@ For more details, see the [OpenEnv documentation](https://meta-pytorch.org/OpenE
 1. **SageMaker HyperPod EKS cluster** with GPU worker groups (e.g. `ml.g6.12xlarge` or `ml.g6e.12xlarge`). See [`architectures/sagemaker-hyperpod-eks/`](../../../../architectures/sagemaker-hyperpod-eks/) for cluster setup instructions.
 
 2. **HyperPod Helm chart** (`hyperpod-dependencies`) installed in the `kube-system` namespace. This bundles the NVIDIA device plugin, health monitoring agents, and other HyperPod components:
+
    ```bash
    helm list -n kube-system | grep hyperpod
    ```
@@ -105,6 +105,7 @@ For more details, see the [OpenEnv documentation](https://meta-pytorch.org/OpenE
 3. **FSx for Lustre** shared filesystem accessible from all nodes, mounted as a PVC (set the name in `env_vars` as `FSX_PVC`).
 
 4. **NVIDIA device plugin** running on GPU nodes (installed by the HyperPod Helm chart):
+
    ```bash
    kubectl get daemonset -n kube-system dependencies-nvidia-device-plugin
    ```
@@ -315,6 +316,7 @@ envsubst '$NAMESPACE $REGISTRY $IMAGE $TAG $INSTANCE_TYPE $MODEL_NAME $NUM_GENER
 ```
 
 The pod runs two containers:
+
 - **vllm-server**: Starts a vLLM server on GPU 0 (1 GPU), serving the model for fast rollout generation
 - **trainer**: Waits for the vLLM server, then launches Accelerate with 3 processes for FSDP training on GPUs 1-3 (3 GPUs)
 
@@ -376,7 +378,6 @@ kubectl delete -f kubernetes/openenv-wordle-env.yaml
 kubectl delete secret hf-token 2>/dev/null
 ```
 
-
 ## Configuration Reference
 
 ### Training Parameters
@@ -384,7 +385,7 @@ kubectl delete secret hf-token 2>/dev/null
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `--model-id` | Qwen/Qwen3-1.7B | HuggingFace model identifier |
-| `--env-url` | http://openenv-wordle:7860 | OpenEnv Wordle server URL |
+| `--env-url` | <http://openenv-wordle:7860> | OpenEnv Wordle server URL |
 | `--vllm-mode` | colocate | `colocate` (1 GPU) or `server` (multi-GPU) |
 | `--num-generations` | 2 | Rollouts per prompt (higher = better estimates, slower) |
 | `--gradient-accumulation-steps` | 64 | Effective batch = batch_size x grad_accum |

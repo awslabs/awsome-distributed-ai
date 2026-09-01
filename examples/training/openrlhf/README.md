@@ -75,6 +75,7 @@ checkpoints saved at steps 20 and 40. Selected metrics:
 ## Hardware Requirements
 
 Tested on:
+
 - **6× ml.g5.12xlarge** (HyperPod): 4× NVIDIA A10G 24GB per node, 1× EFA
 - Ray Head: 8Gi memory, 4 CPU, `num-gpus=0` (co-located with one worker)
 - 5 GPU Workers: 160Gi memory, 16 CPU, 4 GPU, 1 EFA each
@@ -177,6 +178,7 @@ bash recipe/run_gptoss_grpo.sh
 ```
 
 Monitor progress:
+
 ```bash
 # Ray dashboard (after port-forward)
 open http://localhost:8265
@@ -235,6 +237,7 @@ Running a 20B MoE model on 24GB GPUs is tight. Key optimizations:
 | MoE balancing | `--aux_loss_coef 0.01` | Load balancing loss for MoE experts |
 
 If you hit OOM, try:
+
 1. Add more training nodes to reduce per-node `adam_offload` burden
 2. Reduce `--rollout_batch_size`
 3. Reduce `--generate_max_len` (e.g., 256 → 128)
@@ -262,6 +265,7 @@ def reward_func(queries, prompts, labels, **kwargs):
 > `torch.cat()`, which fails on 0-d tensors.
 
 Scoring (identical logic to the veRL reward function):
+
 - Answer in correct language: **+5.0** / **-5.0**
 - Reasoning in correct language: **+1.5** / **-1.5**
 - Brief final answer (≤2 sentences): **+0.5** / **-1.0**
@@ -303,36 +307,43 @@ Scoring (identical logic to the veRL reward function):
 ## Troubleshooting
 
 **vLLM "No available memory for KV cache"**
+
 - This means `gpu_memory_utilization` is too high for the available GPU memory
 - With Non-Hybrid, vLLM has dedicated GPUs — 0.8 should work
 - If using Hybrid Engine, reduce to 0.4–0.5
 
 **OOM during training (GPU)**
+
 - Ensure `--adam_offload` is set (moves optimizer to CPU)
 - Ensure `--gradient_checkpointing` is set
 - Reduce `--micro_train_batch_size` to 1
 
 **OOM during training (CPU / pod OOMKilled)**
+
 - Add more training nodes to reduce per-node adam_offload burden
 - With 16 training GPUs: ~80GB/node → safe at 160Gi
 - With 12 training GPUs: ~107GB/node → tight, checkpoint saves may OOM
 - Check: `kubectl describe pod <pod> | grep -A5 "Last State"`
 
 **OOM during checkpoint save**
+
 - The HF save gathers all weights to rank 0 (~39GB peak)
 - Ensure per-node adam_offload leaves ≥50GB headroom in the pod limit
 - If needed, increase `--max_ckpt_num` to allow cleanup of old checkpoints
 
 **NCCL/EFA errors on head node**
+
 - Verify `num-gpus: "0"` is set in head's `rayStartParams`
 - The head node may not have EFA configured for GPU traffic
 - All NCCL training must run on worker nodes (which have EFA)
 
 **Ray OOM killer terminates processes during init**
+
 - Set `RAY_memory_monitor_refresh_ms: "0"` in raycluster.yaml env vars
 - This must be in the pod spec, not passed via runtime-env
 
 **FSx disk full during checkpoint save**
+
 - DeepSpeed checkpoints are large (~234GB for 20B model)
 - Clean old DS checkpoints: `rm -rf .../ckpt/_actor/global_step*/`
 - HF checkpoints (39GB) are much smaller and sufficient for evaluation

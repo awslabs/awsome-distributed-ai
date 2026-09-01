@@ -15,6 +15,7 @@ project root with `ml.g5.8xlarge` defaults; `deploy.sh` overrides values for any
 instance type via `--instance-type` and `--instance-count`.
 
 Key automation scripts:
+
 - **`deploy.sh`** — Infrastructure deployment via CloudFormation or Terraform;
   supports `--training-plan <name>` for reserved capacity (auto-resolves ARN and AZ);
   CFN path is idempotent (create or update based on stack status)
@@ -68,6 +69,7 @@ kubectl apply --dry-run=client -f lustre-storageclass.yaml
 ### Markdown Linting
 
 The repo root has `.markdownlint.jsonc` with these rules:
+
 - MD041 (first-line heading): disabled
 - MD013 (line length): 100 chars, code blocks excluded
 - MD033 (inline HTML): disabled
@@ -80,6 +82,7 @@ npx markdownlint-cli2 "architectures/sagemaker-hyperpod-eks/slinky-slurm/**/*.md
 ### CI Static Analysis (PR workflow)
 
 The GitHub Actions workflow `pr-review-and-slurm-test.yml` runs on PRs to `main`:
+
 - `pylint` and `flake8` on any `.py` files
 - `bash -n` syntax checking on `.sh` files
 - Secrets scanning via grep patterns
@@ -110,6 +113,7 @@ bats --verbose-run tests/test_deploy.bats
 ```
 
 Test structure:
+
 - `tests/test_deploy.bats` — 72 unit tests for `deploy.sh` and `lib/deploy_helpers.sh`
 - `tests/test_setup.bats` — 13 unit tests for `setup.sh` argument parsing, profile
   resolution, and template substitution
@@ -128,6 +132,7 @@ Test structure:
   (gitignored, not committed)
 
 When adding new bash scripts, follow this pattern:
+
 1. Extract testable functions into `lib/<script>_helpers.sh`
 2. Source the helpers file from the main script
 3. Add fixture data to `tests/fixtures/`
@@ -139,6 +144,7 @@ When adding new bash scripts, follow this pattern:
 ### EditorConfig (repo-wide)
 
 Defined in `/.editorconfig`:
+
 - **Line endings:** LF (Unix)
 - **Charset:** UTF-8
 - **Trailing whitespace:** trimmed
@@ -157,11 +163,13 @@ Defined in `/.editorconfig`:
 
 - **2-space indentation** throughout (Kubernetes/Helm standard)
 - **helm-docs type annotations** above every configurable value:
+
   ```yaml
   # -- (string)
   # Set the image pull policy.
   imagePullPolicy: IfNotPresent
   ```
+
 - **WARNING:** prefix for destructive/important caveats
 - **NOTE:** prefix for informational notes
 - **Ref:** prefix linking to upstream documentation
@@ -170,6 +178,7 @@ Defined in `/.editorconfig`:
 - Use YAML anchors (`&anchorName`) and aliases (`*anchorName`) for repeated config blocks
   (e.g., `commonAffinity`)
 - Commented-out examples for optional/disabled values:
+
   ```yaml
   resources: {}
     # requests:
@@ -204,20 +213,24 @@ Defined in `/.editorconfig`:
   - For prolog/epilog scripts, prefer `set -euo pipefail`
 - Environment variables: `SCREAMING_SNAKE_CASE`
 - Group variables by category with decorative section headers:
+
   ```bash
   ###########################
   ###### User Variables #####
   ###########################
   ```
+
 - Quote paths and string values in exports: `export CUDA_HOME="/usr/local/cuda"`
 - Use `${VAR}` brace syntax in compound expressions: `${EFA_PATH}/lib`
 - Bash arrays with `declare -a` and 4-space indentation inside:
+
   ```bash
   declare -a TORCHRUN_ARGS=(
       --nproc_per_node=$GPUS_PER_NODE
       --nnodes=$SLURM_JOB_NUM_NODES
   )
   ```
+
 - Expand arrays with proper quoting: `"${TORCHRUN_ARGS[@]}"`
 - Right-align inline comments for visual consistency
 
@@ -234,11 +247,14 @@ Defined in `/.editorconfig`:
 ### License Headers
 
 - Helm values (SchedMD origin): SPDX format
+
   ```yaml
   # SPDX-FileCopyrightText: Copyright (C) SchedMD LLC.
   # SPDX-License-Identifier: Apache-2.0
   ```
+
 - Sbatch scripts (Amazon origin):
+
   ```bash
   # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
   # SPDX-License-Identifier: MIT-0

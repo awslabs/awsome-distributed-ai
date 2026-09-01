@@ -29,8 +29,6 @@ multi-terabyte and out of scope for this test case — see [Section 4](#4-stage-
 For more information on 3d World Models, please watch:
 > [https://www.youtube.com/watch?v=0vfgm8LshmY](https://www.youtube.com/watch?v=0vfgm8LshmY)
 
-
-
 | | |
 |---|---|
 | **Model** | PointWorld (PTv3 backbone + DINOv3 scene featurizer) |
@@ -166,7 +164,6 @@ The image tag (`IMAGE_TAG`) matches `POINTWORLD_COMMIT` in the Dockerfile so the
 running image is traceable to an exact upstream commit.
 
 ## 4. Stage data and weights onto FSx (in-cluster)
-
 
 > FSx for Lustre is a VPC-internal filesystem. The `/fsx` paths in this test case
 > only exist **inside the cluster**, so all downloading, restoring, and WDS
@@ -328,9 +325,11 @@ Two `env_vars` knobs bound the run:
 > PointWorld derives the run directory from the **W&B run name**. With
 > `WANDB_MODE=disabled`, W&B ignores `EXP_NAME` and generates a random name, so
 > the checkpoint is written to:
+>
 > ```text
 > ${LOG_DIR}/<wandb-run-name>/model-last.pt      # e.g. .../dummy-5b5pxh8p/model-last.pt
 > ```
+>
 > Read the run's `Saving to:` log line for the actual directory, and point eval's
 > `MODEL_PATH` at that `.../model-last.pt`. (The released checkpoint is
 > `model-best.pt`; a training run writes `model-last.pt`.) Each run adds a new
@@ -476,6 +475,7 @@ The controls (in the **"prediction controls"** GUI panel) map to this:
 > automatically, which is what makes `port-forward` work.
 
 ## Tuning notes
+
 All of these are exposed as variables in `env_vars` (rendered by `deploy.sh`):
 
 - **Batch size**: `BATCH_SIZE=22` is the upstream default. H200 has 141 GB HBM;

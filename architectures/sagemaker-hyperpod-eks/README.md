@@ -50,7 +50,7 @@ sudo mv /tmp/eksctl /usr/local/bin
 
 ## 3. [Deploy HyperPod Infrastructure using CloudFormation](./cfn-templates/README.md)
 
-## 4. Connect to EKS cluster 
+## 4. Connect to EKS cluster
 
 Once you've deployed the HyperPod Infrastructure, we'll reference the EKS cluster as the orchestrator of the HyperPod compute nodes.
 
@@ -60,7 +60,7 @@ By default, the Amazon EKS service will automatically create an [AccessEntry](ht
 <summary>AWS CLI Examples</summary>
 The create-access-entry  command creates an access entry that gives an IAM principal access your EKS cluster:
 
-```bash 
+```bash
 aws eks create-access-entry \
  --cluster-name $EKS_CLUSTER_NAME \
  --principal-arn arn:aws:iam::xxxxxxxxxxxx:role/ExampleRole \
@@ -70,7 +70,7 @@ aws eks create-access-entry \
 
 The associate-access-policy  command associates an access policy and its scope to an access entry:
 
-```bash 
+```bash
 aws eks associate-access-policy \
  --cluster-name $EKS_CLUSTER_NAME \
  --principal-arn arn:aws:iam::xxxxxxxxxxxx:role/ExampleRole \
@@ -78,6 +78,7 @@ aws eks associate-access-policy \
  --access-scope type=cluster \
  --region $AWS_REGION
 ```
+
 </details>
 
 <sp></sp>
@@ -88,16 +89,20 @@ Run the [aws eks update-kubeconfig](https://awscli.amazonaws.com/v2/documentatio
 aws eks update-kubeconfig --name $EKS_CLUSTER_NAME
 ```
 
-You can verify that you are connected to the EKS cluster by running this commands: 
-```bash 
+You can verify that you are connected to the EKS cluster by running this commands:
+
+```bash
 kubectl config current-context 
 ```
+
 ```
 arn:aws:eks:us-west-2:xxxxxxxxxxxx:cluster/hyperpod-eks-cluster
 ```
+
 ```bash
 kubectl get svc
 ```
+
 ```
 NAME             TYPE        CLUSTER-IP   EXTERNAL-IP PORT(S)   AGE
 svc/kubernetes   ClusterIP   10.100.0.1   <none>      443/TCP   1m
@@ -147,11 +152,11 @@ TARGET_ID=sagemaker-cluster:${CLUSTER_ID}_${CONTROLLER_GROUP}-${INSTANCE_ID}
 aws ssm start-session --target $TARGET_ID
 ```
 
-## 6. Running workloads on the cluster 
+## 6. Running workloads on the cluster
 
-To run workloads on the cluster you can use kubctl(configured in prerequisities) to interact with the EKS control plane and submit jobs. 
+To run workloads on the cluster you can use kubctl(configured in prerequisities) to interact with the EKS control plane and submit jobs.
 
-Amazon SageMaker HyperPod also provides a [CLI](https://github.com/aws/sagemaker-hyperpod-cli) which can be used to manage jobs on the cluster without having to worry about the kubernetes constraints. To setup the CLI follow the below steps. 
+Amazon SageMaker HyperPod also provides a [CLI](https://github.com/aws/sagemaker-hyperpod-cli) which can be used to manage jobs on the cluster without having to worry about the kubernetes constraints. To setup the CLI follow the below steps.
 
 * Install SageMaker HyperPod CLI refering the documentation [here](https://github.com/aws/sagemaker-hyperpod-cli?tab=readme-ov-file#installation)
 * To use the CLI to access cluster and submit jobs refer to the documentation [here](https://github.com/aws/sagemaker-hyperpod-cli?tab=readme-ov-file#usage)

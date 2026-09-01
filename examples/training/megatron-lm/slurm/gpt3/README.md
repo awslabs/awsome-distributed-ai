@@ -13,7 +13,7 @@ export DATA_PATH=/fsx/data # FSx for Lustre shared file-system
 ## 2. Data retrieval and preprocessing
 
 1. Run the code below to retrieve the input datasets and vocabulary.
-    
+
     ```bash
     #!/bin/bash
     mkdir -p gpt2
@@ -47,7 +47,7 @@ export DATA_PATH=/fsx/data # FSx for Lustre shared file-system
     0: Processed 78000 documents (1293.9967304914383 docs/s, 16.67556064420713 MB/s).
     0: Processed 79000 documents (1298.6715286585202 docs/s, 16.763634765830606 MB/s).
     ```
-    
+
    Voilà! You have executed the preprocessing job. Next, you will go through the steps to run your training job.
 
 ## 3. Distributed training
@@ -55,7 +55,6 @@ export DATA_PATH=/fsx/data # FSx for Lustre shared file-system
 Now that the data is preprocessed, we will pretrain a GPT3 model MegatronLM.
 
    Copy the file `2.distributed-training.sbatch` to your cluster then submit a training jobs with the command below:
-
 
    ```bash
    sbatch 2.distributed-training.sbatch
@@ -69,9 +68,8 @@ Now that the data is preprocessed, we will pretrain a GPT3 model MegatronLM.
    1:  iteration       27/73242187 | consumed samples:           54 | elapsed time per iteration (ms): 88.4 | learning rate: 1.769E-08 | global batch size:     2 | lm loss: 1.087129E+01 | loss scale: 4294967296.0 | grad norm: 0.000 | number of skipped iterations:   0 | number of nan iterations:   0 |
    ```
 
-   
    An abbreviated sample log is shown below:
-    
+
    ```text
    ...
    using torch.float16 for parameters ...
@@ -107,13 +105,13 @@ Now that the data is preprocessed, we will pretrain a GPT3 model MegatronLM.
    iteration        3/  508626 | consumed samples:          864 | elapsed time per iteration (ms): 243344.4 | learning rate: 0.000E+00 | global batch size:   288 | loss scale: 1073741824.0 | number of skipped iterations:   1 | number of nan iterations:   0 |
    ...
    ```
-    
+
    You can stop the training job by executing:
-    
+
    ```bash
    scancel [JOB_ID]
    ```
-    
+
 ## 4. What's next?
 
 The example is based on the GPT3 example from MegatronLM's [repository](https://github.com/NVIDIA/Megatron-LM/blob/main/examples/pretrain_gpt.sh). You can modify `NUM_ATTENTION_HEADS`, `NUM_LAYERS`, and `HIDDEN_SIZE`  based on the Table 1 (Page 8) of the document [Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM](https://arxiv.org/abs/2104.04473) to change the model size. You can also run the following commands to launch training for different model sizes before submitting a job as follows: `NUM_LAYERS=64 HIDDEN_SIZE=8192 NUM_ATTENTION_HEADS=48 sbatch  3.distributed-training.sbatch`
@@ -186,7 +184,8 @@ By default, the .sbatch scripts specify the number of samples, then the number o
 +        --lr-decay-iters 45 \
 +        --lr-warmup-iters 2 \
 ```
+
 =======
 
-Following the same pattern, you can train other models. Pretraining scripts for models like 
-Bert, ICT, and T5 are already included in the Megatron-LM container under `/workspace/Megatron-LM`. 
+Following the same pattern, you can train other models. Pretraining scripts for models like
+Bert, ICT, and T5 are already included in the Megatron-LM container under `/workspace/Megatron-LM`.

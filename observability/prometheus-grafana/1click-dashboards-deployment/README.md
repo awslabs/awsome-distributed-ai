@@ -1,11 +1,11 @@
 # Machine Learning Infrastructure Monitoring for Slurm based cluster <!-- omit from toc -->
 
 This solution provides a "1 click" deployment observability stack to monitor your slurm based machine learning infrastructure. It automatically creates:
+
 - Amazon Managed Grafana
 - Amazon Managed Prometheus
 - Setup a Prometheus Agent Collector
 - Create data source and dashboard in Grafana
-
 
 ## Prerequisites
 
@@ -13,11 +13,12 @@ Install AWS Serverless Application Model Command Line Interface (AWS SAM CLI) ve
 
 You will also require to have a VPC Id, Subnet Id in which your cluster is deployed as well as the cluster name.
 
-
 ## Architecture
+
 ![Observability Architecutre](img/observability-dashboard.png)
 
 ## Deploy
+
 You will begin by installing the necessary Python package needed for the lambda function.
 In your shell:
 
@@ -42,8 +43,8 @@ sam deploy -t managed-cluster-observability-pc.yaml\
     ParameterKey=VpcId,ParameterValue=<VPC_ID>
 ```
 
-
 ## Clean up
+
 To delete the SAM application deployment, you can use the terminal and enter:
 
 ```bash

@@ -138,7 +138,7 @@ and `3.8.0/1`.
 ### 3.1. Update OS packages
 
 Not recommended for DLAMI. Occasionally the build may fail. This happens when the Lustre client for
-the new kernel is not yet released *at AMI build time*. 
+the new kernel is not yet released *at AMI build time*.
 
 ### 3.2. Build-image cookbook
 
@@ -156,4 +156,3 @@ the new kernel is not yet released *at AMI build time*.
     <https://github.com/aws/aws-parallelcluster-cookbook/blob/79458c1926ab71bb54d676d93fe975041cf46f75/cookbooks/aws-parallelcluster-platform/libraries/nvidia.rb#L2>
 [pcbi-skip-efa]:
     <https://github.com/aws/aws-parallelcluster-cookbook/blob/79458c1926ab71bb54d676d93fe975041cf46f75/cookbooks/aws-parallelcluster-environment/resources/efa/partial/_common.rb#L24>
-

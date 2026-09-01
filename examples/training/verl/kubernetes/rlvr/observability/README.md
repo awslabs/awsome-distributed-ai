@@ -17,8 +17,9 @@ To integrate Ray metrics into the HyperPod Observability stack, we use the `cust
 ### 1. Add Ray Metrics to ObservabilityConfig
 
 > **Note:** The following script overwrites spec.customServiceScrapeTargets on the ObservabilityConfig. If you've manually added other scrape targets, either:
+>
 > - add Ray targets manually instead of using the following script
-> - run the script then merge your additional customServiceScrapeTargets manually back into the ObservabilityConfig 
+> - run the script then merge your additional customServiceScrapeTargets manually back into the ObservabilityConfig
 
 Run the provided script to add Ray metrics scraping to the HyperPod ObservabilityConfig:
 
@@ -29,6 +30,7 @@ Run the provided script to add Ray metrics scraping to the HyperPod Observabilit
 This patches the ObservabilityConfig CRD to add your Ray cluster's head service as a custom scrape target. The operator will automatically update the OTEL collector configuration.
 
 **What it does:**
+
 - Adds `customServiceScrapeTargets` to the ObservabilityConfig
 - Configures scraping of Ray head service on port 8080
 - Won't be overwritten by the operator's reconciliation loop
@@ -45,6 +47,7 @@ kubectl rollout status deployment hyperpod-observability-central-collector -n hy
 ### 3. Download Grafana Dashboards
 
 1. You can download them directly from your cluster head pod:
+
 ```
 HEAD_POD=$(kubectl get pods --selector ray.io/node-type=head,ray.io/cluster=rayml-efa -o jsonpath='{.items[0].metadata.name}')
 
@@ -52,7 +55,8 @@ HEAD_POD=$(kubectl get pods --selector ray.io/node-type=head,ray.io/cluster=raym
 kubectl cp $HEAD_POD:/tmp/ray/session_latest/metrics/grafana/dashboards/ ./dashboards/
 ```
 
-2. Or you can download them directly from [KubeRay GitHub](https://github.com/ray-project/kuberay/tree/master/config/grafana):
+1. Or you can download them directly from [KubeRay GitHub](https://github.com/ray-project/kuberay/tree/master/config/grafana):
+
 ```
 # Clone the repo
 git clone https://github.com/ray-project/kuberay.git --depth 1
@@ -68,6 +72,7 @@ ls *_grafana_dashboard.json
 - `serve_deployment_grafana_dashboard.json` - Per-deployment metrics
 
 To import:
+
 1. Open your Grafana workspace (check `$GRAFANA_ENDPOINT` in `setup/env_vars`)
 2. Click "+" → "Import"
 3. Upload each JSON file
@@ -93,6 +98,7 @@ Wait 2-3 minutes for metrics to flow to AMP, then check your Grafana dashboards.
 ## Troubleshooting
 
 **No metrics in Grafana?**
+
 - Wait 2-3 minutes for data to propagate
 - Check time range in Grafana (set to "Last 15 minutes")
 - Verify the Ray cluster name in the "Cluster" dropdown
@@ -103,11 +109,13 @@ Edit the script `observability/add-ray-metrics.sh` to change the service name, t
 
 **Want to scrape multiple Ray clusters?**
 You can add multiple entries to `customServiceScrapeTargets`. Edit the ObservabilityConfig:
+
 ```bash
 kubectl edit observabilityconfig hyperpod-observability -n hyperpod-observability
 ```
 
 Add additional targets under `spec.customServiceScrapeTargets`:
+
 ```yaml
 customServiceScrapeTargets:
   - target: "cluster1-head-svc.default.svc.cluster.local:8080"
@@ -121,4 +129,3 @@ customServiceScrapeTargets:
 ## Dashboard Preview
 
 ![Ray Dashboard](img/ray-dashboard.png)
-

@@ -67,6 +67,7 @@ vpc → private_subnet → security_group → eks_cluster → cilium → helm_ch
 ### HyperPod Platform Constraints
 
 HyperPod instances are SageMaker-managed and have these implications:
+
 - **Not visible in EC2 API** — `ec2:DescribeInstances` cannot find them. Any feature requiring EC2 instance discovery will fail.
 - **Cilium ENI mode incompatible** — removed from this stack. Only `overlay`, `chaining`, and `custom` modes are supported.
 - **Node identity** — nodes register as `hyperpod-i-<instance-id>` but the instance ID is internal to SageMaker.
@@ -78,6 +79,7 @@ Path: `modules/cilium/`
 Modes: `overlay` (VXLAN tunnel), `chaining` (VPC CNI + Cilium policy), `custom` (user provides all values)
 
 Key design decisions:
+
 - `skip_vpc_cni` local in root `main.tf` conditionally removes the VPC CNI EKS addon when mode != "chaining"
 - `enable_vxlan_rule` in security_group module adds UDP 8472 rules only for overlay mode
 - Helm chart from `https://helm.cilium.io/`, version pinned via `cilium_version` variable (default `1.19.4`)

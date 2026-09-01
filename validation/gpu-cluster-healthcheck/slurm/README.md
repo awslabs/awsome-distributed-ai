@@ -46,6 +46,7 @@ PrologSlurmctld=
 ```
 
 Or set globally in `/etc/default/gpu-healthcheck`:
+
 ```bash
 GPU_HEALTHCHECK_PROLOG_ENABLE_DCGM=1
 ```
@@ -77,6 +78,7 @@ echo "0 */4 * * * /path/to/slurm/examples/cron-rolling-sweep.sh >> /var/log/gpu-
 ## Epilog Pattern
 
 The `examples/slurm-epilog-example.sh` demonstrates exit-code routing after job completion:
+
 - Normal exit (0): quick nvidia-smi check only
 - Signal kills (137, 139): full prolog-level check
 - Any nvidia-smi failure: immediate node drain

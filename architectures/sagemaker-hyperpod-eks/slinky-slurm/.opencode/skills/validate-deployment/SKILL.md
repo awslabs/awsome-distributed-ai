@@ -77,6 +77,7 @@ kubectl get nodes -o wide
 ```
 
 **Expected:**
+
 - Management nodes: `ml.m5.4xlarge`, STATUS=Ready
 - Accelerated nodes: your chosen instance type (e.g., `ml.g5.8xlarge`),
   STATUS=Ready
@@ -174,12 +175,14 @@ For a full end-to-end validation, submit the Llama2 7B training job.
 Only the `ml.g5.8xlarge` sbatch has been validated end-to-end:
 
 **For `ml.g5.8xlarge`:**
+
 ```bash
 sbatch sbatch/fsdp/g5-llama2_7b-training.sbatch
 squeue  # Monitor
 ```
 
 **For `ml.p5.48xlarge`:**
+
 ```bash
 sbatch sbatch/fsdp/p5-llama2_7b-training.sbatch
 squeue  # Monitor

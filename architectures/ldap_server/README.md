@@ -1,4 +1,4 @@
-# Deploy an OpenLDAP server on Amazon EC2.
+# Deploy an OpenLDAP server on Amazon EC2
 
 This sample setup a OpenLDAP server on an Amazon EC2 instance for HPC and ML cluster.
 It contains two groups:
@@ -26,8 +26,7 @@ Outbound rules
 | -------- | -------- | ---------- | ----------------------------------------------------------------------------------------- | ----------------------------------|
 | Internet | All      | All        | 0.0.0.0/0                                                                                 | Allows access to the internet     |
 
-
-2. ldap-cluster to allow communication to LDAP server in the cluster.
+1. ldap-cluster to allow communication to LDAP server in the cluster.
 
 Inbound rules
 
@@ -39,6 +38,7 @@ Inbound rules
 
 1. Download the `cf_ldap_server.yaml` file
 1. Run the following command
+
   ```bash
   aws cloudformation deploy --stack-name ldap-server \
   --template-file cf_ldap_server.yaml \
@@ -49,27 +49,31 @@ Inbound rules
 ## Connect to the UI
 
 1. Retrieve the `LdapUIUrl` to connect to the LDAP User Interface.
+
   ```bash
   aws cloudformation describe-stacks --stack-name ldap-server \
   --query 'Stacks[0].Outputs[?OutputKey==`LdapUIUrl`].OutputValue' \
   --output text
   ```
+
   Copy URL into a Web Browser.
 
-
 ## Get the LDAP Password
+
 The password to access the LDAP was generated randomly and stored in AWS Secret Manager under `LdapPassword` output of the cloudformation stack.
 
 1. Get the Secret ARN
-	```bash
-	 SECRET_ARN=$(aws cloudformation describe-stacks --stack-name ldap-server \
-	 --query 'Stacks[0].Outputs[?OutputKey==`LdapPassword`].OutputValue' \
-	 --output text)
-	```
+
+   ```bash
+   SECRET_ARN=$(aws cloudformation describe-stacks --stack-name ldap-server \
+   --query 'Stacks[0].Outputs[?OutputKey==`LdapPassword`].OutputValue' \
+   --output text)
+   ```
 
 1. Get the password that you will use to login
-	```bash
-	aws secretsmanager get-secret-value --secret-id $SECRET_ARN\
-	  --query SecretString \
-	  --output text
-	```
+
+   ```bash
+   aws secretsmanager get-secret-value --secret-id $SECRET_ARN\
+     --query SecretString \
+     --output text
+   ```

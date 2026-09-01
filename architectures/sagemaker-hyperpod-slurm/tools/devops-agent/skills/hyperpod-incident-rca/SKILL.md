@@ -283,6 +283,7 @@ different string per fault type), so include it. Concatenated raw
 content is more robust than enum-based categories.
 
 **InstanceGroup extraction**:
+
 - Cluster Event: `detail.EventDetails.InstanceGroupName`
 - Node Health / Cluster State Change: `detail.InstanceGroupName`
 - Cluster-level fault: empty (`""`) — no IG prefix.

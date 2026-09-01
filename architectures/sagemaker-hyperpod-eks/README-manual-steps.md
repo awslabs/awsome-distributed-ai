@@ -1,15 +1,15 @@
 
-# (Optional) Manual Steps for SageMaker HyperPod 
+# (Optional) Manual Steps for SageMaker HyperPod
 
-The following is a reference for executing various operational steps manually as needed. 
+The following is a reference for executing various operational steps manually as needed.
 
-If you opted to [Deploy HyperPod Infrastructure using CloudFormation](./cfn-templates/README.md) with the default settings, the dependencies Helm chart, HyperPod cluster, and lifecycle script have been automatically deployed for you. 
+If you opted to [Deploy HyperPod Infrastructure using CloudFormation](./cfn-templates/README.md) with the default settings, the dependencies Helm chart, HyperPod cluster, and lifecycle script have been automatically deployed for you.
 
 ## Install Dependencies
 
 The HyperPod team provides a Helm chart package, which bundles key dependencies and associated permission configurations. This package contains dependencies such as Health Monitoring Agent, Nvidia device plugins, EFA device plugin, Neuron Device plugin. Below steps shows how to install the helm chart
 
-#### Clone the Repo 
+#### Clone the Repo
 
 ```bash
 git clone https://github.com/aws/sagemaker-hyperpod-cli.git
@@ -18,43 +18,49 @@ cd sagemaker-hyperpod-cli/helm_chart
 
 #### Install the Helm Chart
 
-Locally test the helm chart: 
+Locally test the helm chart:
+
 ```bash
 helm lint HyperPodHelmChart
 ```
-Update the dependencies: 
-```bash 
+
+Update the dependencies:
+
+```bash
 helm dependencies update HyperPodHelmChart
 ```
-Conduct a dry run: 
-```bash 
+
+Conduct a dry run:
+
+```bash
 helm install dependencies HyperPodHelmChart --dry-run
 ```
-Deploy the helm chart: 
-```bash 
+
+Deploy the helm chart:
+
+```bash
 helm install dependencies HyperPodHelmChart --namespace kube-system
 ```
 
-
 ## Create SageMaker HyperPod cluster
 
-Now that we have all our infrastructure in place, we can create a cluster. 
+Now that we have all our infrastructure in place, we can create a cluster.
 
-We need to setup few environment variables required for creating cluster. You will need to set the below environment parameters accordingly as per your requirement. 
+We need to setup few environment variables required for creating cluster. You will need to set the below environment parameters accordingly as per your requirement.
 
 ```bash
 export ACCEL_INSTANCE_TYPE=ml.g5.12xlarge #change this
 export AWS_REGION=us-west-2 #change this
 export ACCEL_COUNT=1 #change this
 export ACCEL_VOLUME_SIZE=500 #the size in GB of the EBS volume attached to the compute node.
-export GEN_INTANCE_TYPE= ml.m5.2xlarge	#The general purpose compute instance type you want to use
-export GEN_COUNT=1	#The number of general purpose compute nodes you want to deploy
+export GEN_INTANCE_TYPE= ml.m5.2xlarge #The general purpose compute instance type you want to use
+export GEN_COUNT=1 #The number of general purpose compute nodes you want to deploy
 export GEN_VOLUME_SIZE=500 #The size in GB of the EBS volume attached to the general purpose compute nodes
 export NODE_RECOVEY=AUTOMATIC 
 
 ```
 
- If you have used the full deployment option while deploying cloud formation you can use the helper script([create_config.sh](./create_config.sh)) to retrieve all the required. 
+ If you have used the full deployment option while deploying cloud formation you can use the helper script([create_config.sh](./create_config.sh)) to retrieve all the required.
 
  If you used Integrative Deployment Mode set the below parameters
 
@@ -63,7 +69,7 @@ export EKS_CLUSTER_ARN=<YOUR_EKS_CLUSTER_ARN_HERE>
 export EKS_CLUSTER_NAME=<YOUR_EKS_CLUSTER_NAME_HERE>
 ```
 
- If you used minimal deployment option you will have to explicitly set the below environment variables 
+ If you used minimal deployment option you will have to explicitly set the below environment variables
 
 ```bash
 export EKS_CLUSTER_ARN=<YOUR_EKS_CLUSTER_ARN_HERE>
@@ -81,7 +87,6 @@ bash ./create_config.sh
 source env_vars
 ```
 
-
 ## Lifecycle scripts
 
 Lifecycle scripts tell SageMaker HyperPod how to setup your HyperPod cluster. You can use this to install any node level customizations needed for your cluster. We provide a [base configuration](../../1.architectures/7.sagemaker-hyperpod-eks/LifecycleScripts/base-config) to get started. Below is a brief description of what each script is doing.
@@ -90,19 +95,19 @@ Lifecycle scripts tell SageMaker HyperPod how to setup your HyperPod cluster. Yo
 |------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | on_create.sh                 | [required] dummy script that is needed to create cluster                                                                           |
 
-
 For now, let's just use the base configuration provided. Upload the scripts to the bucket you created earlier.
+
 ```
 aws s3 cp --recursive ../../1.architectures/7.sagemaker-hyperpod-eks/LifecycleScripts/base-config s3://${BUCKET_NAME}/LifecycleScripts/base-config
 ```
 
 ## Cluster configuration
 
-Next we can configure our actual cluster. In this case, we are creating a cluster with 2 Instance Groups. One with ml.m5.2xlarge instance and one with ml.g5.12xlarge instance. 
+Next we can configure our actual cluster. In this case, we are creating a cluster with 2 Instance Groups. One with ml.m5.2xlarge instance and one with ml.g5.12xlarge instance.
 
 >Note - You can modify the number of instance groups as per your requirement. It is not mandatory to have 2 instance groups for cluster creation.
 
-Lets start by creating cluster-config.json using the below snippet that uses the environment variables. 
+Lets start by creating cluster-config.json using the below snippet that uses the environment variables.
 
 ```json
 cat > cluster-config.json << EOL
@@ -162,17 +167,15 @@ cat > cluster-config.json << EOL
 EOL
 ```
 
-- You can configure up to 20 instance groups under the `InstanceGroups` parameter. 
-- For `Orchestrator.Eks.ClusterArn`, specify the ARN of the EKS cluster you want to use as the orchestrator. 
-- For `OnStartDeepHealthChecks`, add `InstanceStress` and `InstanceConnectivity` to enable deep health checks. 
-- For `NodeRecovery`, specify `Automatic` to enable automatic node recovery. HyperPod replaces or reboots instances (nodes) that fail the basic health or deep health checks (when enabled). 
+- You can configure up to 20 instance groups under the `InstanceGroups` parameter.
+- For `Orchestrator.Eks.ClusterArn`, specify the ARN of the EKS cluster you want to use as the orchestrator.
+- For `OnStartDeepHealthChecks`, add `InstanceStress` and `InstanceConnectivity` to enable deep health checks.
+- For `NodeRecovery`, specify `Automatic` to enable automatic node recovery. HyperPod replaces or reboots instances (nodes) that fail the basic health or deep health checks (when enabled).
 - For the `VpcConfig` parameter, specify the information of the VPC used in the EKS cluster. The subnets must be private
-
 
 ## Launch a new cluster
 
 Now that everything is in place, we can launch our cluster with the below command.
-
 
 ```bash
 aws sagemaker create-cluster \
@@ -201,6 +204,7 @@ You'll see output similar to the following:
 ||  arn:aws:sagemaker:us-west-2:xxxxxxxxxxxx:cluster/uwme6r18mhic |  ml-cluster          |  Creating     |  2024-07-11T16:30:42.219000-04:00   ||
 |+----------------------------------------------------------------+----------------------+----------------+------------------------------------+|
 ```
+
 ## Deleting your HyperPod cluster
 
 When you're done with your HyperPod cluster, you can delete it down with

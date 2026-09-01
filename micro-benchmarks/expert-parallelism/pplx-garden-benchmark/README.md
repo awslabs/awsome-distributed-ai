@@ -28,7 +28,6 @@ Decode (128 tokens) Dispatch and Combine Median Latency(μs):
 | EP16  |   301.1    |    218.0    | 214.8    | 110.2    |   123.9    | x |   834.5    |    244.6    | 241.5    | 185.5    |   203.0    |
 | EP8   |    66.1    |     50.6    |  49.7    |  50.5    |    42.6    | x |    86.6    |     64.1    |  64.2    |  65.3    |    72.0    |
 
-
 Prefill (4096 tokens) Dispatch and Combine Median Latency(μs):
 
 | x     | My pplx-EFA |  pplx-EFA |  pplx-CX7 | DeepEP-CX7 | x | My pplx-EFA |  pplx-EFA |  pplx-CX7 | DeepEP-CX7 |

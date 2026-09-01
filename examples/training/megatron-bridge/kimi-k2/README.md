@@ -131,6 +131,7 @@ nodeSelector:
 > single-node sanity scripts are **model-agnostic** and live one level up at the
 > library root. Before the model-specific steps below, run library steps 1–2 from
 > [`../`](../README.md):
+>
 > ```bash
 > cd ..                      # examples/training/megatron-bridge
 > bash 1.build-and-push.sh   # build & push megatron-bridge-uccl:nemo-26.04.01-uccl-0dc87eb

@@ -66,6 +66,7 @@ cd slurm && sbatch --nodes=2 --partition=gpu-p6b300 \
 > rotated out of the registry, substitute a current tag from that repo before building.
 
 **Expected** (in `logs/llama2_7b-FSDP_<jobid>.out`), either path:
+
 - NCCL initializes over EFA (`found N nics`) and training logs ~100 steps + a validation
   step, saving checkpoints under `./checkpoints`.
 - Throughput per step, e.g. on 2× p6-b300 **~200 TFLOPS/GPU, ~77k tokens/s** (venv) /

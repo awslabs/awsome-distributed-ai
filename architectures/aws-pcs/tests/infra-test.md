@@ -73,6 +73,7 @@ The Test 1/6/7 container jobs are the functional proof that Pyxis works.
 > **⚠️ Regression-test rule for `assets/scripts/install-enroot-pyxis.sh`.** This script has bitten
 > us repeatedly in ways a single 25.11 GPU run does not catch. **Any change to it MUST be
 > retested across the full matrix at the top of this guide**, specifically:
+>
 > - **All supported Slurm versions** (25.05 **and** 25.11). The Pyxis SPANK plugin is
 >   ABI-locked to its Slurm version — a plugin built for the wrong version stops slurmd from
 >   starting (`Incompatible Slurm plugin version`). The script builds Pyxis for the version

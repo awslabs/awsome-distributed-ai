@@ -73,7 +73,7 @@ knobs.
   a distributed-systems axis: each denoising step runs one conditioned and one
   unconditioned forward pass and blends them to steer toward the prompt. *CFG-parallel*
   places those two passes on different GPUs so that they run concurrently.
- - **Ulysses** is a sequence-parallelism algorithm and is the common term across both
+- **Ulysses** is a sequence-parallelism algorithm and is the common term across both
    engines: `cosmos-framework` exposes it as its **context-parallel (CP)** axis
    (`context_parallel_shard_degree`), while vLLM-Omni exposes the same algorithm as
    `--ulysses-degree`. It shards the long video-plus-text token sequence across GPUs,
@@ -109,6 +109,7 @@ emits the same metrics to Amazon Managed Prometheus.
 ## What's here
 
 ### Action-policy code (`src/cosmos3_aws/action/`)
+
 | File | Purpose |
 |------|---------|
 | `lerobot_v3_action_dataset.py` | `LeRobotV3ActionDataset` — wraps the **official** `lerobot.datasets.LeRobotDataset` (v3 chunk-loading, video decode, windowing). Works on any conformant **turnkey public** v3 dataset (droid_100, BridgeData2, LIBERO). Native action (no fabricated forward kinematics (FK)). |
@@ -118,6 +119,7 @@ emits the same metrics to Amazon Managed Prometheus.
 | `*_test.py` | Unit tests: `LeRobotV3ActionDataset` (integration, image-only) + `get_action_public_lerobot_sft_dataset` (monkeypatched, GPU-free). |
 
 ### TOMLs (`toml/`) and manifests (`kubernetes/`)
+
 | File | Purpose |
 |------|---------|
 | `toml/droid_policy_smoke.toml` | Action-policy smoke (10 iters, `ckpt_type=dummy`). |
@@ -294,11 +296,14 @@ manifests. (Benchmark the read-path backends and checkpoint cadence on your own 
 for your dataset and failure profile.)
 
 #### Real action-policy warm-start recipe (HF → DCP)
+
 The `cosmos-framework` `checkpoint.load_path` consumes **DCP**, but the `Cosmos3-Nano` Hugging Face (HF)
 repo ships Diffusers/safetensors. Convert once (CPU job is fine):
+
 ```
 python -m cosmos_framework.scripts.convert_model_to_dcp --checkpoint-path Cosmos3-Nano -o $BASE_CHECKPOINT_PATH
 ```
+
 then run with `ckpt_type=dcp` and `checkpoint.load_path=$BASE_CHECKPOINT_PATH`
 (the loader appends `/model`). The `action_policy_public_lerobot` experiment sets
 `strict_resume=False` and skips the action heads on load, so they initialize fresh
@@ -344,12 +349,14 @@ and forces TCP across nodes — not a multi-node answer.)
 
 On the DLC image, a multi-node run logs NCCL loading the matched plugin and selecting
 EFA with GPUDirect RDMA — for example:
+
 ```
 NET/OFI Initializing aws-ofi-nccl 1.18.0 ... Using Libfabric version 2.4
 NET/OFI Selected provider is efa, fabric is efa-direct (found 16 nics)
 NET/OFI Using transport protocol RDMA
 Connected all rings, use ring PXN 0 GDR 1   # GPUDirect RDMA over EFA
 ```
+
 The training manifest's diagnostic preamble prints these EFA/NCCL/plugin lines before
 training starts, so a run yields both the transport proof (`NET/OFI` = EFA, not
 `NET/Socket` = TCP) and the result in one place. The base-image choice is load-bearing —
@@ -359,6 +366,7 @@ verify the transport in your own logs rather than assuming it.
 
 torchcodec decodes the DROID camera MP4s, and two build-time packaging requirements
 follow from running it on the AWS DLC base. Both are handled in `Dockerfile`:
+
 1. **FFmpeg version.** Ubuntu 22.04 apt ships FFmpeg 4.4 (`libavutil.so.56`), but
    torchcodec 0.10.0 needs FFmpeg 5–7. The image bakes a prebuilt **shared
    FFmpeg 7.1** (`libavutil.so.59`) onto `/usr/local/lib` + `ldconfig` — deliberately
@@ -386,7 +394,7 @@ the container image, since they import `cosmos-framework` (not available in CPU-
 - `public_lerobot_sft_dataset_test.py` — GPU-free and monkeypatched: it stubs the
   `cosmos-framework` classes and verifies the factory wiring without touching real data.
 - `lerobot_v3_action_dataset_test.py` — an integration test that exercises the wrapper
-  + windowing against a small staged public LeRobot v3 dataset (needs
+  - windowing against a small staged public LeRobot v3 dataset (needs
   `DROID_DATASET_PATH` and FFmpeg).
 
 ```bash

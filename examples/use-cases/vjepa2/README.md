@@ -102,6 +102,7 @@ srun -N1 --ntasks=1 --cpus-per-task=48 -p p5en \
 > inflates iteration times and masks true GPU throughput.
 
 Then update your config to point to the generated CSV:
+
 ```yaml
 datasets:
   - /fsx/<your_username>/vjepa2/datasets/synthetic/synthetic_train_paths.csv
@@ -216,18 +217,21 @@ The standard container (based on `pytorch:25.03-py3`) ships NCCL 2.25 and an old
 ### Prerequisites (run once from the login node)
 
 1. **Obtain a NeMo container** with NCCL 2.29+ and EFA support:
+
    ```bash
    enroot import 'docker://nvcr.io#nvidia/nemo:25.11.01'
    # Or use a pre-built .sqsh with the correct EFA/NCCL stack
    ```
 
 2. **Clone the V-JEPA 2 repository** to shared storage:
+
    ```bash
    git clone https://github.com/facebookresearch/vjepa2.git \
        /fsx/${USER}/vjepa2_code
    ```
 
 3. **Install V-JEPA 2 Python dependencies** into a shared directory (use the NeMo container to ensure compatible packages):
+
    ```bash
    srun --partition=b200 --account=root -N1 --ntasks=1 \
        --container-image /fsx/${USER}/nemo-efa-nccl29.sqsh \
@@ -284,6 +288,7 @@ The upstream V-JEPA 2 code unconditionally creates a `torch.cuda.amp.GradScaler(
 ### Model architecture
 
 V-JEPA 2 ViT-g/16:
+
 - **Encoder**: ViT-giant with `embed_dim=1408, depth=40, num_heads=22`
 - **Predictor**: `depth=12, embed_dim=384, num_heads=12`
 - **Input**: 16 frames at 256x256, `patch_size=16`, `tubelet_size=2`

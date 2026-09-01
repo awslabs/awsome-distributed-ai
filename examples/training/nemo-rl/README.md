@@ -191,6 +191,7 @@ kubectl apply -f kubernetes/rayjob.yaml
 ```
 
 This creates:
+
 - A **RayCluster** with 1 head + 1 worker (2 A10G GPUs total)
 - A **Ray job** that runs the training entrypoint
 - Automatic cleanup after the job finishes

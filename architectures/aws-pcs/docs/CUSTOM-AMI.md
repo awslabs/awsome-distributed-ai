@@ -60,6 +60,7 @@ Set it to `false` to skip the download and check entirely.
 ## Optional features of `pcs-ready-dlami-with-enroot-pyxis.yaml`
 
 Defaults are off:
+
 - `BuildSchedule=Weekly`/`Monthly` for scheduled rebuilds against a moving base AMI
 - `EnableLifecyclePolicy=true` to deprecate older AMIs after `LifecycleDeprecateAfterWeeks`
 - `PublishToSsm=true` to publish the latest AMI ID to an SSM parameter for downstream stacks

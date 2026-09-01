@@ -3,6 +3,7 @@
 This guide provides step-by-step instructions for setting up Amazon SageMaker Studio with Amazon SageMaker Hyperpod SLURM, including FSx Lustre storage configuration.
 
 We will help set up your Studio environment so that:
+
 1. You can use familiar environments such as JupyterLab and CodeEditor to interact with your SLURM SMHP cluster
 2. You can access your cluster's FSxL file system from your JupyterLab/CodeEditor instance
 3. Your CodeEditor/JupyterLab instance will essentially function as a login node to the SMHP SLURM cluster!
@@ -17,10 +18,10 @@ Login nodes allow users to login to the cluster, submit jobs, and view and manip
 1. [Prerequisites](#prerequisites)
 2. [Cluster Setup](#cluster-setup)
 3. [FSx for Lustre Configuration](#fsx-for-lustre-configuration)
-5. [SageMaker Studio Domain Setup](#sagemaker-studio-domain-setup)
-6. [SageMaker Studio IDE Configuration](#sagemaker-studio-ide-configuration)
-7. [Monitor SLURM Installation](#monitor-slurm-installation)
-8. [Pitfalls](#pitfalls)
+4. [SageMaker Studio Domain Setup](#sagemaker-studio-domain-setup)
+5. [SageMaker Studio IDE Configuration](#sagemaker-studio-ide-configuration)
+6. [Monitor SLURM Installation](#monitor-slurm-installation)
+7. [Pitfalls](#pitfalls)
 
 ## Prerequisites
 
@@ -61,9 +62,9 @@ You can deploy the CloudFormation template, which creates the following resource
 
 ![SageMaker Studio with Hyperpod integration](/architectures/sagemaker-hyperpod-slurm/slurm-studio/media/07-fsx-shared.png)
 
-4. If **SharedFSx** is set to **False**, a Lambda function that:
+1. If **SharedFSx** is set to **False**, a Lambda function that:
     1. Creates the partition */{user_profile_name}*, and associates it to the Studio user profile
-5. If **SharedFSx** is set to **False**, an Event bridge rule that invokes the previously defined Lambda function each time a new user is created. 
+2. If **SharedFSx** is set to **False**, an Event bridge rule that invokes the previously defined Lambda function each time a new user is created.
 
 ![SageMaker Studio with Hyperpod integration](/architectures/sagemaker-hyperpod-slurm/slurm-studio/media/08-fsx-partitioned.png)
 
@@ -80,6 +81,7 @@ The CloudFormation template requires the following parameters:
 5. `HeadNodeName`: The name of your SMHP SLURM cluster's head node (default `controller-machine`)
 6. `HyperPodClusterName`: The name of your SMHP SLURM cluster (default: `ml-cluster`)
 7. `SecurityGroupId`: Id of the security group that allows communication with the HyperPod Slurm controller node (for MUNGE authentication)
+
 ***
 
 ## SageMaker Studio IDE Configuration
@@ -90,8 +92,7 @@ As an admin user, once your SageMaker Studio Domain is provisioned, you may go i
 > This step *DOES NOT* assume that you already have a Studio Domain. To create one, check out the next section titled **"SageMaker Studio Domain Setup"**.
 ![SageMaker Studio with Hyperpod integration](/architectures/sagemaker-hyperpod-slurm/slurm-studio/media/09-studio-user.png)
 
-
-You can now select your preferred IDE from SageMaker Studio. 
+You can now select your preferred IDE from SageMaker Studio.
 
 ![SageMaker Studio with Hyperpod integration](/architectures/sagemaker-hyperpod-slurm/slurm-studio/media/02-studio-home.png)
 
@@ -105,7 +106,6 @@ From the top-left menu:
 4. Click on **Create Space**
 5. From the **Attach custom filesystem - optional** dropdown menu, select the FSx for Lustre volume
 6. From the **Lifecycle configuration** dropdown menu, select the available lifecycle configuration
- 
 
 ![SageMaker Studio with Hyperpod integration](/architectures/sagemaker-hyperpod-slurm/slurm-studio/media/03-codeditor-fsx.png)
 
@@ -115,14 +115,15 @@ To verify that your file system was mounted, you can check if you have a path mo
 
 ![SageMaker Studio with Hyperpod integration](/architectures/sagemaker-hyperpod-slurm/slurm-studio/media/10-filesystem-check.png)
 
-
 You can also run:
+
 ```bash
 df -h
 ```
 
 If you set `SharedFSx` to `False`, you can verify separate partitions for two users.
 Example output from user1:
+
 ```
 Filesystem                      Size  Used Avail Use% Mounted on
 overlay                          37G  494M   37G   2% /
@@ -138,6 +139,7 @@ tmpfs                           1.9G     0  1.9G   0% /sys/firmware
 ```
 
 Example output from user2:
+
 ```
 Filesystem                      Size  Used Avail Use% Mounted on
 overlay                          37G  478M   37G   2% /
@@ -155,6 +157,7 @@ tmpfs                           1.9G     0  1.9G   0% /sys/firmware
 The difference here is the mountpoint for FSxl (`ylacfb4v`) has separate partitions set up. You can then `cd /mnt/custom-file-systems/fsx_lustre/fs-0104f3de83efe0f33` and write from each user and verify that the other user isn't able to see those files!
 
 Alternatively, if you set `SharedFSx` to `True`, you can check the the mount using `df -h`, and it will show something like:
+
 ```
 Filesystem                       Size  Used Avail Use% Mounted on
 overlay                           37G  478M   37G   2% /
@@ -168,22 +171,25 @@ shm                              392M     0  392M   0% /dev/shm
 tmpfs                            1.9G     0  1.9G   0% /proc/acpi
 tmpfs                            1.9G     0  1.9G   0% /sys/firmware
 ```
-with the `/shared` partition.
 
+with the `/shared` partition.
 
 ***
 
 ## Monitor SLURM Installation
+
 Once you create your JupyterLab/CodeEditor instance, it will kick off the LifeCycleConfiguration (LCC). We've configured the LCC so that:
+
 1. It installs necessary packages and dependencies
 2. Downloads a script to install SLURM and set up MUNGE authentication
 3. Logs progress to a file on your CodeEditor/JupyterLab instance
 
-Before being able to run SLURM commands, please wait until the LCC fully installs SLURM and configures your instance as a login node. You can monitor the progress in the logs. To find the log file, head over to **CloudWatch** --> **Logs** --> **Log Groups**. 
+Before being able to run SLURM commands, please wait until the LCC fully installs SLURM and configures your instance as a login node. You can monitor the progress in the logs. To find the log file, head over to **CloudWatch** --> **Logs** --> **Log Groups**.
 
 In the search box, search for **/aws/sagemaker/studio** and select it. You will be redirected to all the Log Streams under the `/aws/sagemaker/studio` log group.
 
 Under **Log Streams**, search for **<your-domain-id>/j/CodeEditor/default/LifecycleConfigOnStart** (you can find the domain id from your CloudFormation stack outputs). In the logs, you will see
+
 ```
 Starting background installation. Check /tmp/slurm_lifecycle_20250326_053740.log for progress...
 Installation started in the background. Monitor the progress with:
@@ -192,7 +198,8 @@ tail -f /tmp/slurm_lifecycle_20250326_053740.log
 
 Grab the `tail` command, and paste it onto your CodeEditor/JupyterLab terminal. You will see that SLURM is getting installed and configured. This process takes ~5-7 minutes, so go grab a cup of coffee!
 
-You'll know that SLURM is installed when you see 
+You'll know that SLURM is installed when you see
+
 ```
 Testing Slurm configuration...
 PARTITION     AVAIL  TIMELIMIT  NODES  STATE NODELIST
@@ -205,10 +212,12 @@ SLURM is now configured! You can now interact with your cluster from your Studio
 =======================================
 ```
 
-## Pitfalls and known issues 
+## Pitfalls and known issues
+
 1. You can't run `srun`.
 
 You can run all other slurm commands, including `sbatch`, `squeue`, and `sinfo`. However, `srun` requires [specific ports](https://slurm.schedmd.com/network.html#client) to be open for I/O, which isn't possible on Studio IDE containers today. As a workaround, if you MUST run `srun`, try
+
 ```bash
 # Source environment variables, written by your LCC
 source env_vars
@@ -221,11 +230,13 @@ aws ssm start-session \
         "command":["srun -N 4 hostname"]
     }'
 ```
+
 By using ssm, you are still using the controller machine to submit `srun` jobs to your cluster nodes.
 
 We recommend running `sbatch` commands directly instead.
 
 Example `sbatch` script:
+
 ```bash
 #!/bin/bash
 #SBATCH --job-name=test
@@ -239,14 +250,16 @@ hostname
 whoami
 nvidia-smi
 ```
+
 > [!TIP]
 > **Choosing a directory for log/error files**
 >
->  When creating `sbatch` files, make sure you specify your `--output` and `--error` paths to an fsx path that both your Studio User and SLURM user (specified in LCC) have permission to write to. The safest bet would be to specify `/fsx/<partition_name>/`, where `<partition_name>` will either be `shared` or your studio user name, depending on what you set for `SharedFSx`. The permissions are handled via an ACL and automatically done by the LCC scripts.
+> When creating `sbatch` files, make sure you specify your `--output` and `--error` paths to an fsx path that both your Studio User and SLURM user (specified in LCC) have permission to write to. The safest bet would be to specify `/fsx/<partition_name>/`, where `<partition_name>` will either be `shared` or your studio user name, depending on what you set for `SharedFSx`. The permissions are handled via an ACL and automatically done by the LCC scripts.
 
-2. SLURM failed to set up
+1. SLURM failed to set up
 
 This is a rare occurrence, but it may happen because the MUNGE authentication key was incorrectly copied over from the controller machine. To remediate, you can follow the steps in the logs:
+
 ```
 Here are the manual steps you can try:
 
@@ -290,6 +303,7 @@ This project provides automated setup and configuration for integrating Amazon S
 The solution automates the process of setting up the SLURM client configuration, authentication, and connectivity between SageMaker Studio and HyperPod clusters. It handles installation of required dependencies, SLURM client software compilation, security configuration including MUNGE authentication, and proper directory/permission setup. This allows data scientists to leverage SLURM's powerful distributed training capabilities directly from their familiar SageMaker Studio environment.
 
 ## Repository Structure
+
 ```
 .
 └── architectures/

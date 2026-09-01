@@ -36,6 +36,7 @@ resolve_training_plan <plan_name> <region>
 ```
 
 **Steps:**
+
 1. Call `aws sagemaker describe-training-plan --training-plan-name <name>`
 2. Extract `TrainingPlanArn` from response
 3. Check `Status` -- error on `Failed`, warn on `Expired`
@@ -44,6 +45,7 @@ resolve_training_plan <plan_name> <region>
 6. Set `TRAINING_PLAN_ARN` and `TRAINING_PLAN_AZ_ID`
 
 **Error cases:**
+
 - Plan doesn't exist -> error + return 1
 - Status is `Failed` -> error + return 1
 - Status is `Expired` -> warning (continues, user may know what they're doing)
@@ -96,6 +98,7 @@ the 6th arg is non-empty.
 
 The TF module already has `training_plan_arn = optional(string)` in
 its variable type definition at:
+
 - `terraform-modules/hyperpod-eks-tf/variables.tf:472`
 - `terraform-modules/hyperpod-eks-tf/modules/hyperpod_cluster/variables.tf:42`
 

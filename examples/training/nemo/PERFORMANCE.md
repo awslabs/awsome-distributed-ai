@@ -15,6 +15,7 @@ This document describes the process of performance measurements of NeMo 2.x fram
 ## Prerequisites
 
 ### Useful Links and Documentation
+
 * [NVIDIA NeMo Performance Summary](https://docs.nvidia.com/nemo-framework/user-guide/latest/performance/performance-summary.html)
 * [NVIDIA NeMo Performance Scripts](https://github.com/NVIDIA/NeMo/tree/main/scripts/performance/llm)
 * [NVIDIA NeMo Compatibility Matrix](https://docs.nvidia.com/nemo-framework/user-guide/latest/softwarecomponentversions.html)
@@ -63,9 +64,9 @@ Default location is `~/.nemo_run/experiments/`.
 The Dockerfile extends the NVIDIA NeMo container with AWS EFA (Elastic Fabric Adapter) support for high-performance networking. See the [Dockerfile](Dockerfile) in this directory for the complete configuration.
 
 Key components installed:
-- **EFA installer (v1.47.0)** - provides libfabric and Open MPI
-- **GDRCOPY v2.5.1** - for GPU Direct RDMA  
-- **AWS-OFI-NCCL plugin** - bundled with EFA installer at `/opt/amazon/ofi-nccl`
+* **EFA installer (v1.47.0)** - provides libfabric and Open MPI
+* **GDRCOPY v2.5.1** - for GPU Direct RDMA  
+* **AWS-OFI-NCCL plugin** - bundled with EFA installer at `/opt/amazon/ofi-nccl`
 
 For detailed EFA installation instructions, see the [AWS EFA documentation](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-start.html).
 
@@ -104,14 +105,15 @@ export NCCL_DEBUG=INFO
 ## Expected Outputs
 
 Performance tests will generate the following metrics:
-- **Throughput**: samples/sec or tokens/sec
-- **FLOPs utilization**: Percentage of theoretical peak FLOPs achieved
-- **Memory usage**: GPU memory consumption per device
-- **Step time**: Average time per training step in seconds
+* **Throughput**: samples/sec or tokens/sec
+* **FLOPs utilization**: Percentage of theoretical peak FLOPs achieved
+* **Memory usage**: GPU memory consumption per device
+* **Step time**: Average time per training step in seconds
 
 Results are stored in the directory specified by `NEMORUN_HOME` (default: `~/.nemo_run/experiments/`).
 
 Example output:
+
 ```
 Training epoch 1, iteration 10/999 | lr: 4.498e-06 | global_batch_size: 512 | 
 global_step: 29 | reduced_train_loss: 11.03 | train_step_timing in s: 46.84 | 
@@ -123,6 +125,7 @@ consumed_samples: 15360
 The performance scripts support multi-node training via Slurm. The `--num_gpus` parameter specifies total GPUs across all nodes.
 
 **Examples:**
+
 | Total GPUs | GPUs per Node | Number of Nodes |
 |------------|---------------|-----------------|
 | 8 | 8 | 1 |
@@ -185,6 +188,7 @@ python -m scripts.performance.llm.pretrain_llama3_8b \
 ```
 
 mxfp8:
+
 ```bash
 python -m scripts.performance.llm.pretrain_llama3_8b \
     --account $(whoami) --partition p6 -i ./aws-nemo.sqsh \
@@ -211,7 +215,7 @@ python -m scripts.performance.llm.pretrain_llama3_70b \
     --gpu b200 -c fp8 --num_gpus 64 -gb 128 -mb 1 -tp 2 -pp 4 -cp 2 -vp 5 -ep 1
 ```
 
-> **Note:** The configuration above with `-tp 2 -pp 4 -cp 2 -vp 5` uses tensor parallelism (TP) across 2 GPUs, 
+> **Note:** The configuration above with `-tp 2 -pp 4 -cp 2 -vp 5` uses tensor parallelism (TP) across 2 GPUs,
 > pipeline parallelism (PP) across 4 stages, context parallelism (CP) across 2 GPUs, and 5 virtual pipeline stages.
 > This configuration is optimized for B200 GPUs with FP8 precision.
 
@@ -244,7 +248,6 @@ python -m scripts.performance.llm.pretrain_llama4_e128 \
     --account $(whoami) --partition p6 -i ./aws-nemo.sqsh \
     --gpu b200 -c fp8 --num_gpus 128 -gb 1024 -mb 1 -tp 1 -pp 2 -cp 1 -vp 12 -ep 64
 ```
-
 
 ### Mixtral Models
 
@@ -305,7 +308,7 @@ export NEMO_HOME=...
 
 ~~2. Append `FLOPsMeasurementCallback` for task == "none" in `set_exp_logging_configs` in `helpers.py` to get FLOPs measurements.~~
 
-3. To enable `mxfp8` recipe, add `recipe.trainer.strategy.ddp.fp8_param_gather = True` in `finetune_llama3_8b.py`/`finetune_llama3_70b.py`:
+1. To enable `mxfp8` recipe, add `recipe.trainer.strategy.ddp.fp8_param_gather = True` in `finetune_llama3_8b.py`/`finetune_llama3_70b.py`:
 
 ```python
 if args.fp8_recipe == "mxfp8":
@@ -323,6 +326,7 @@ if args.fp8_recipe == "mxfp8":
 | LLAMA3-8B | SFT  | 8      | 8   | 1   | 16384                  | 1  | 1  | 1  | 1  |
 
 **fp8:**
+
 ```bash
 python -m scripts.performance.llm.finetune_llama3_8b \
     --account $(whoami) --partition p6 -i ./aws-nemo.sqsh \
@@ -331,6 +335,7 @@ python -m scripts.performance.llm.finetune_llama3_8b \
 ```
 
 **mxfp8:**
+
 ```bash
 python -m scripts.performance.llm.finetune_llama3_8b \
     --account $(whoami) --partition p6 -i ./aws-nemo.sqsh \
@@ -347,13 +352,16 @@ python -m scripts.performance.llm.finetune_llama3_8b \
 | LLAMA3-70B | SFT  | 32     | 32  | 1   | 4096                   | 2  | 4  | 5  | 8  |
 
 fp8:
+
 ```bash
 python -m scripts.performance.llm.finetune_llama3_70b \
     --account $(whoami) --partition p6 -i ./aws-nemo.sqsh \
     -hf $HF_TOKEN \
     --gpu b200 -c fp8 -f sft --num_gpus 32 -gb 32 -mb 1 -tp 2 -pp 4 -vp 5
 ```
+
 mxfp8:
+
 ```bash
 python -m scripts.performance.llm.finetune_llama3_70b \
     --account $(whoami) --partition p6 -i ./aws-nemo.sqsh \
@@ -368,13 +376,16 @@ python -m scripts.performance.llm.finetune_llama3_70b \
 | LLAMA3-70B | LoRA  | 8      | 32  | 1   | 4096                   | 1  | 4  | 20 | 16 |
 
 fp8:
+
 ```bash
 python -m scripts.performance.llm.finetune_llama3_70b \
     --account $(whoami) --partition p6 -i ./aws-nemo.sqsh \
     -hf $HF_TOKEN \
     --gpu b200 -c fp8 -f lora --num_gpus 8 -gb 32 -mb 1 -tp 1 -pp 4 -vp 20
 ```
+
 mxfp8:
+
 ```bash
 python -m scripts.performance.llm.finetune_llama3_70b \
     --account $(whoami) --partition p6 -i ./aws-nemo.sqsh \
@@ -385,23 +396,25 @@ python -m scripts.performance.llm.finetune_llama3_70b \
 ## Troubleshooting
 
 ### EFA Not Detected
+
 If NCCL falls back to TCP/IP instead of EFA:
+
 1. Verify EFA is installed in the container: `fi_info -p efa`
 2. Check environment variables are set correctly (especially `FI_PROVIDER=efa`)
 3. Ensure security group allows all traffic from within the same security group
 4. Verify EFA devices are available: `ls -la /dev/infiniband/`
 
 ### Out of Memory (OOM) Errors
-- Reduce micro-batch size (`-mb`)
-- Increase tensor parallelism (`-tp`)
-- Enable activation checkpointing
-- Use gradient accumulation (`-ga`)
+* Reduce micro-batch size (`-mb`)
+* Increase tensor parallelism (`-tp`)
+* Enable activation checkpointing
+* Use gradient accumulation (`-ga`)
 
 ### Slow Performance
-- Verify EFA is active: `NCCL_DEBUG=INFO` should show `efa` provider in logs
-- Check NVLink status: `nvidia-smi nvlink -s`
-- Ensure GPUs are not throttling: `nvidia-smi dmon`
+* Verify EFA is active: `NCCL_DEBUG=INFO` should show `efa` provider in logs
+* Check NVLink status: `nvidia-smi nvlink -s`
+* Ensure GPUs are not throttling: `nvidia-smi dmon`
 
 ### Checkpoint Issues
-- Ensure `NEMO_HOME` is set to a shared filesystem accessible from all nodes
-- Verify sufficient disk space for checkpoints
+* Ensure `NEMO_HOME` is set to a shared filesystem accessible from all nodes
+* Verify sufficient disk space for checkpoints

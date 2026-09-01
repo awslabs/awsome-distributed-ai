@@ -7,6 +7,7 @@ Monitor EKS GPU workloads using Amazon Managed Prometheus (AMP) and Amazon Manag
 **Data Flow:** DCGM Exporter → ADOT Collector → Amazon Managed Prometheus → Amazon Managed Grafana
 
 **Key Benefits:**
+
 - No in-cluster Prometheus/Grafana deployment (minimal resource overhead ~200-500MB)
 - Multi-cluster monitoring capability
 - AWS IAM integrated authentication
@@ -51,6 +52,7 @@ kubectl get pods -n gpu-operator
 ```
 
 **Documentation:**
+
 - [NVIDIA GPU Operator GitHub](https://github.com/NVIDIA/gpu-operator)
 - [GPU Operator Documentation](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/index.html)
 
@@ -78,6 +80,7 @@ kubectl get pods -n dcgm-exporter
 ```
 
 **Documentation:**
+
 - [DCGM Exporter GitHub](https://github.com/NVIDIA/dcgm-exporter)
 - [DCGM Exporter Documentation](https://docs.nvidia.com/datacenter/dcgm/latest/gpu-telemetry/dcgm-exporter.html)
 
@@ -124,6 +127,7 @@ cd awsome-distributed-ai/observability/prometheus-grafana/eks-managed-observabil
 ```
 
 The script will prompt for:
+
 - EKS cluster region
 - AMP/AMG region (must support Amazon Managed Grafana)
 - Cluster name
@@ -281,6 +285,7 @@ aws eks create-pod-identity-association \
 The ADOT Collector scrapes DCGM Exporter metrics and sends them to Amazon Managed Prometheus.
 
 **Important:** The `adot-collector-prometheus.yaml` file contains environment variables that need substitution:
+
 - `$AMP_ENDPOINT` - Your AMP remote write endpoint
 - `$AWS_REGION_AMGP` - Your AMP region
 
@@ -300,6 +305,7 @@ kubectl logs -n adot-col -l app.kubernetes.io/component=opentelemetry-collector 
 ```
 
 **Key Configuration Notes:**
+
 - The collector uses Kubernetes service discovery to find DCGM Exporter endpoints
 - TLS config and bearer token are required for Kubernetes API authentication
 - Metrics are scraped every 30 seconds by default
@@ -315,7 +321,7 @@ A reference metrics file is provided at [`../dcgm-metrics.csv`](../dcgm-metrics.
 cp ../dcgm-metrics.csv custom-dcgm-metrics.csv
 ```
 
-#### For GPU Operator Installation:
+#### For GPU Operator Installation
 
 ```bash
 # Create ConfigMap (key must be dcgm-metrics.csv)
@@ -334,7 +340,7 @@ kubectl rollout restart daemonset/nvidia-dcgm-exporter -n gpu-operator
 kubectl rollout status daemonset/nvidia-dcgm-exporter -n gpu-operator
 ```
 
-#### For Standalone DCGM Exporter Installation:
+#### For Standalone DCGM Exporter Installation
 
 ```bash
 # Create ConfigMap
@@ -353,7 +359,7 @@ kubectl rollout restart daemonset/dcgm-exporter -n dcgm-exporter
 kubectl rollout status daemonset/dcgm-exporter -n dcgm-exporter
 ```
 
-#### Verify Custom Metrics:
+#### Verify Custom Metrics
 
 ```bash
 # For GPU Operator
@@ -403,18 +409,21 @@ Alternative dashboard: Try ID **22515** ("Better NVIDIA DCGM Dashboard") for enh
 The default DCGM dashboard doesn't include all custom metrics. Add panels for:
 
 #### XID Errors (GPU Hardware Errors)
+
 ```promql
 DCGM_EXP_XID_ERRORS_COUNT_total
 sum(rate(DCGM_EXP_XID_ERRORS_COUNT_total[5m])) by (gpu, Hostname)
 ```
 
 #### Power Violations
+
 ```promql
 DCGM_FI_DEV_POWER_VIOLATION_total
 sum(rate(DCGM_FI_DEV_POWER_VIOLATION_total[5m])) by (gpu, Hostname)
 ```
 
 #### Thermal Violations
+
 ```promql
 DCGM_FI_DEV_THERMAL_VIOLATION_total
 sum(rate(DCGM_FI_DEV_THERMAL_VIOLATION_total[5m])) by (gpu, Hostname)
@@ -427,11 +436,13 @@ sum(rate(DCGM_FI_DEV_THERMAL_VIOLATION_total[5m])) by (gpu, Hostname)
 ### No Metrics in Amazon Managed Prometheus
 
 Check ADOT Collector logs:
+
 ```bash
 kubectl logs -n adot-col -l app.kubernetes.io/component=opentelemetry-collector --tail=100
 ```
 
 Verify Pod Identity association:
+
 ```bash
 aws eks list-pod-identity-associations --cluster-name $CLUSTER_NAME --region $AWS_REGION
 ```
@@ -439,6 +450,7 @@ aws eks list-pod-identity-associations --cluster-name $CLUSTER_NAME --region $AW
 ### DCGM Exporter Not Being Scraped
 
 Check service and endpoints:
+
 ```bash
 # For GPU Operator installation
 kubectl get svc,endpoints -n gpu-operator | grep dcgm
@@ -448,6 +460,7 @@ kubectl get svc,endpoints -n dcgm-exporter | grep dcgm
 ```
 
 Test metrics endpoint directly:
+
 ```bash
 # For GPU Operator installation
 DCGM_POD=$(kubectl get pods -n gpu-operator -l app=nvidia-dcgm-exporter -o jsonpath='{.items[0].metadata.name}')
@@ -508,6 +521,7 @@ Or use the provided cleanup script:
 ## Architecture Comparison
 
 ### This Solution (EKS + Managed Services)
+
 - **Target:** Amazon EKS clusters
 - **Metrics Collection:** ADOT Collector with Kubernetes service discovery
 - **Storage:** Amazon Managed Prometheus
@@ -516,18 +530,22 @@ Or use the provided cleanup script:
 - **Resource Overhead:** Minimal (~200-500MB for ADOT Collector)
 
 ### Alternative: In-Cluster Prometheus/Grafana
+
 See the parent directory for in-cluster Prometheus/Grafana deployment using kube-prometheus-stack. This approach:
+
 - Deploys Prometheus and Grafana as pods in your cluster
 - Higher resource overhead (several GB)
 - Suitable for single-cluster monitoring
 - No AWS managed service dependencies
 
 ### SageMaker HyperPod Observability
+
 See the parent directory README for SageMaker HyperPod monitoring with SLURM exporter. This is a different architecture designed for HyperPod clusters with SLURM workload manager.
 
 ## Additional Resources
 
 ### NVIDIA GPU Monitoring
+
 - [NVIDIA GPU Operator GitHub](https://github.com/NVIDIA/gpu-operator)
 - [GPU Operator Documentation](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/index.html)
 - [DCGM Exporter GitHub](https://github.com/NVIDIA/dcgm-exporter)
@@ -535,6 +553,7 @@ See the parent directory README for SageMaker HyperPod monitoring with SLURM exp
 - [NVIDIA DCGM Documentation](https://docs.nvidia.com/datacenter/dcgm/latest/)
 
 ### AWS Observability
+
 - [AWS Blog: Monitoring GPU workloads on EKS](https://aws.amazon.com/blogs/mt/monitoring-gpu-workloads-amazon-eks-aws-managed-open-source-services/)
 - [Amazon Managed Prometheus Documentation](https://docs.aws.amazon.com/prometheus/)
 - [Amazon Managed Grafana Documentation](https://docs.aws.amazon.com/grafana/)

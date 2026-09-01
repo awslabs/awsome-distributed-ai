@@ -352,6 +352,7 @@ bash recipe/run_grpo_qwen3_4b.sh
 ```
 
 Monitor training:
+
 ```bash
 # Ray dashboard (after port-forward)
 open http://localhost:8265
@@ -439,7 +440,6 @@ There are two distinct offload boundaries, and only one is CPU-appropriate:
 > pods within `terminationGracePeriodSeconds`, and replacing capacity. See
 > [Spot instances in HyperPod](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-spot.html).
 
-
 ### Step 1: Ensure the Spot CPU reward pool exists
 
 This path requires a Spot-capacity CPU instance group (default name
@@ -496,7 +496,6 @@ training -- the recipe automatically passes `--rm-url ${RM_URL}` because
 ```bash
 bash recipe/run_grpo_qwen3_4b.sh
 ```
-
 
 **Measured on this sample** (2x ml.p5.48xlarge GPU pool + 4x ml.c5.4xlarge
 reward pool, deberta-v3-large reward model, 64 prompts x 16 samples = 1024
@@ -565,13 +564,14 @@ for a separate value model, significantly reducing memory requirements.
 | `--kl-loss-coef` | KL divergence penalty coefficient | 0.0 |
 | `--entropy-coef` | Entropy bonus coefficient | 0.0 |
 
-The constraint `rollout_batch_size * n_samples_per_prompt = global_batch_size * num_steps_per_rollout` (16 * 8 = 128 * 1) must always hold.
+The constraint `rollout_batch_size * n_samples_per_prompt = global_batch_size * num_steps_per_rollout` (16 *8 = 128* 1) must always hold.
 
 ### Parallelism Strategy
 
 SLIME inherits Megatron-LM's full parallelism stack. For our 2-node (16 GPU) setup:
 
 **Qwen3-4B (Colocated mode):**
+
 ```
 Tensor Parallel (TP) = 1
 Pipeline Parallel (PP) = 1
@@ -580,6 +580,7 @@ Data Parallel (DP) = 16 (implicitly: total_gpus / TP / PP)
 ```
 
 **Qwen3-30B-A3B MoE (Disaggregated mode):**
+
 ```
 # Training: 12 GPUs
 Tensor Parallel (TP) = 2
@@ -735,6 +736,7 @@ SLIME scales linearly with additional p5.48xlarge nodes:
 ### Common Issues
 
 **Pod stuck in `Pending` state**
+
 ```bash
 kubectl describe pod <pod-name>
 # Check for resource constraints -- GPU/EFA/memory requests may exceed node capacity
@@ -744,6 +746,7 @@ kubectl get pods --all-namespaces -o json | \
 ```
 
 **Ray workers fail to connect to head node**
+
 ```bash
 # Verify Ray head service is accessible
 kubectl get svc slime-ray-head-svc
@@ -753,6 +756,7 @@ kubectl exec <worker-pod> -- nslookup slime-ray-head-svc
 ```
 
 **NCCL/EFA initialization errors**
+
 ```bash
 # Verify EFA devices are available
 kubectl exec <pod> -- fi_info -p efa
@@ -762,21 +766,25 @@ kubectl exec <pod> -- env | grep NCCL
 ```
 
 **OOM during Megatron training**
+
 - Reduce `--max-tokens-per-gpu` (e.g., from 8192 to 4096)
 - Enable gradient checkpointing: `--recompute-granularity full --recompute-method uniform --recompute-num-layers 1`
 - For colocated mode, reduce `--sglang-mem-fraction-static` (e.g., from 0.8 to 0.6)
 
 **SGLang fails to start (CUDA OOM)**
+
 - In colocated mode, SGLang launches after Megatron occupies GPU memory.
   Reduce `--sglang-mem-fraction-static` to leave room.
 - Ensure the model fits within the available GPU memory per TP shard.
 
 **Weight conversion fails**
+
 - Ensure `PYTHONPATH` includes the Megatron-LM directory
 - Verify model config parameters match (check `--rotary-base`, `--vocab-size`, etc.)
 - For MoE models, ensure `--expert-model-parallel-size` is set correctly
 
 **FSx disk full during checkpointing**
+
 - SLIME Megatron checkpoints can be large (model_params * 12 bytes for Adam)
 - Set `--save-interval` to a higher value
 - Clean old checkpoints: `rm -rf /fsx/checkpoints/*/iter_00*/`
@@ -785,10 +793,12 @@ kubectl exec <pod> -- env | grep NCCL
 ### Monitoring
 
 **Ray Dashboard** (port-forward to 8265):
+
 - View active actors, resource usage, and job logs
 - Monitor GPU utilization per Ray worker
 
 **DCGM Metrics** (pre-installed on HyperPod):
+
 ```bash
 # GPU utilization and memory per node
 kubectl exec -it <dcgm-exporter-pod> -n hyperpod-observability -- \
@@ -796,6 +806,7 @@ kubectl exec -it <dcgm-exporter-pod> -n hyperpod-observability -- \
 ```
 
 **Training Metrics** (logged by SLIME):
+
 - `reward_mean`: Average reward across rollout batch
 - `policy_loss`: GRPO policy gradient loss
 - `kl_divergence`: KL between policy and reference model

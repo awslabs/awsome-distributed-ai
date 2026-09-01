@@ -13,6 +13,7 @@ Deploy the accounting database using the 1-click deploy:
 [<kbd> <br> 1-Click Deploy 🚀 <br> </kbd>](https://console.aws.amazon.com/cloudformation/home?#/stacks/quickcreate?templateURL=https%3A%2F%2Fawsome-distributed-training.s3.amazonaws.com%2Ftemplates%2Fcf_database-accounting.yaml&stackName=slurm-accounting-database)
 
 **Note** or you can deploy using AWS cli and CloudFormation:
+
   ```bash
   aws cloudformation deploy --stack-name slurm-accounting-database \
   --template-file cf_database-accounting.yaml \
@@ -36,11 +37,13 @@ Override the default by appending `EngineVersion=8.0.mysql_aurora.X.Y.Z` to
 when using `aws cloudformation create-stack`).
 
 ## Get database parameters
+
 In this section, you will retrieve the database parameter that are used by Slurm to connect to the accounting database.
 
 ### Get the Database URI
 
 Retrieve the `DatabaseHost` to connect to the database.
+
 ```bash
 DATABASE_URI=$(aws cloudformation describe-stacks \
  --stack-name slurm-accounting-database \
@@ -49,20 +52,24 @@ DATABASE_URI=$(aws cloudformation describe-stacks \
 ```
 
 ### Get the Database Admin User
+
 The database admin user is by default `clusteradmin` if you didn't change it on creation.
 
 Get the Database admin user name
+
 ```bash
  DATABASE_ADMIN=$(aws cloudformation describe-stacks \
- 	--stack-name slurm-accounting-database \
+  --stack-name slurm-accounting-database \
   --query 'Stacks[0].Outputs[?OutputKey==`DatabaseAdminUser`].OutputValue' \
   --output text)
 ```
 
 ### Get the Database password
+
 The password to access the database was generated randomly and stored in AWS Secret Manager under `AccountingClusterAdminSecre-XXX` output of the cloudformation stack.
 
 Get the Secret ARN
+
 ```bash
 DATABASE_SECRET_ARN=$(aws cloudformation describe-stacks \
   --stack-name slurm-accounting-database \
@@ -71,6 +78,7 @@ DATABASE_SECRET_ARN=$(aws cloudformation describe-stacks \
 ```
 
 ## Configure AWS ParallelCluster
+
 Starting with version 3.3.0, AWS ParallelCluster supports Slurm accounting with the cluster configuration parameter `SlurmSettings / Database`.
 
 To use the database created previously for accounting, add the following in the `SlurmSettings` section of your cluster configuration file:
@@ -87,11 +95,14 @@ To use the database created previously for accounting, add the following in the 
 ```
 
 ## Amazon SageMaker HyperPod Orchestrated by Slurm
+
 There are two steps to setup Slurm with the accounting database:
+
 1. Add database configuration file
 1. Configure Slurm accounting
 
 ### Add database configuration file
+
 You need to execute the following command on the controller node to configure the database connectivity for Slurm.
 
 ```bash
@@ -125,14 +136,16 @@ EOF
 ```
 
 Restart the slurmctld to pickup the configuration change.
+
 ```bash
 sudo systemctl restart slurmctld
 sudo scontrol reconfigure
 ```
 
-For more info how to use Slurm accounting you can read some examples on the [HPC blog](https://aws.amazon.com/blogs/compute/enabling-job-accounting-for-hpc-with-aws-parallelcluster-and-amazon-rds/) 
+For more info how to use Slurm accounting you can read some examples on the [HPC blog](https://aws.amazon.com/blogs/compute/enabling-job-accounting-for-hpc-with-aws-parallelcluster-and-amazon-rds/)
 
 ## Delete the database
+
 Once you delete your cluster no longer need to keep Slurm acocunting data, you can delete the database.
 You can use the command below to delete the AWs CloudFormation stack of the database.
 **ALL** accounting will be deleted.

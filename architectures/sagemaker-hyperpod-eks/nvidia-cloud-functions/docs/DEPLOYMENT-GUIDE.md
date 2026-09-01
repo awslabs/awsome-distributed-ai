@@ -7,6 +7,7 @@ cluster discovery through function invocation.
 **Time estimate**: 30-60 minutes (depending on GPU node scale-up time)
 
 **Prerequisites**:
+
 - An existing SageMaker HyperPod EKS cluster in `InService` state
 - AWS CLI configured with permissions for EKS, SageMaker, and EC2
 - NVIDIA NGC account with Cloud Functions access
@@ -55,8 +56,8 @@ to fill in:
 | `NVCA_HELM_URL` | Step 3 | Same Helm command |
 | `NVCA_NCA_ID` | Step 3 | Same Helm command (`--set ncaID`) |
 | `NVCA_CLUSTER_ID` | Step 3 | Same Helm command (`--set clusterID`) |
-| `NGC_API_KEY` | Step 5 | https://org.ngc.nvidia.com/setup/personal-keys |
-| `NGC_ORG_NAME` | Step 5 | https://org.ngc.nvidia.com/profile |
+| `NGC_API_KEY` | Step 5 | <https://org.ngc.nvidia.com/setup/personal-keys> |
+| `NGC_ORG_NAME` | Step 5 | <https://org.ngc.nvidia.com/profile> |
 | `CLUSTER_GROUP` | Step 5 | NVCF UI > Clusters (backend name) |
 | `GPU_TYPE` | Step 5 | NVCF cluster group API (see template) |
 | `INSTANCE_TYPE` | Step 5 | NVCF cluster group API (see template) |
@@ -78,6 +79,7 @@ to fill in:
 
 The script reads `HYPERPOD_CLUSTER_NAME` from `nvcf-config.env`. You can also
 override it on the command line:
+
 ```bash
 ./infra/scripts/00-discover-cluster.sh --cluster-name my-hyperpod-cluster
 ```
@@ -86,6 +88,7 @@ override it on the command line:
 > `nvcf-config.env`.
 
 **What this does**:
+
 - Lists all SageMaker HyperPod clusters in the region
 - Auto-selects the first `InService` cluster (or uses the one you specified)
 - Shows instance groups, GPU quotas, and networking details
@@ -94,6 +97,7 @@ override it on the command line:
 - Saves cluster config to `infra/.cluster-config` for subsequent scripts
 
 **What to check in the output**:
+
 - Cluster status is `InService`
 - At least one GPU instance group exists (e.g., `ml.g5.8xlarge`, `ml.g5.2xlarge`)
 - NAT Gateway is present in the VPC
@@ -110,6 +114,7 @@ override it on the command line:
 ```
 
 **What this does**:
+
 1. Loads cluster config from Step 0
 2. Checks that CLI tools are installed (aws, kubectl, helm, docker, ngc)
 3. Configures `kubeconfig` for the EKS cluster
@@ -118,6 +123,7 @@ override it on the command line:
 
 > **EKS access entry**: If `kubectl` fails to connect after kubeconfig is
 > configured, your IAM identity may not have an EKS access entry. Create one:
+>
 > ```bash
 > # Find your IAM role ARN
 > aws sts get-caller-identity --query 'Arn'
@@ -135,6 +141,7 @@ override it on the command line:
 >     --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
 >     --access-scope type=cluster --region "${AWS_REGION}"
 > ```
+>
 > (Both `EKS_CLUSTER_NAME` and `AWS_REGION` are available after sourcing
 > `nvcf-config.env` and running Step 0.)
 
@@ -160,15 +167,18 @@ kubectl get nodes -w
 
 This installs the GPU Operator with **driver installation disabled** since
 SageMaker HyperPod nodes have pre-installed NVIDIA drivers. It enables:
+
 - Device Plugin (GPU scheduling in Kubernetes)
 - DCGM Exporter (GPU metrics)
 - GPU Feature Discovery (required by NVCA Dynamic GPU Discovery)
 - Node Feature Discovery (hardware labels)
 
 **Environment variables** (optional):
+
 - `GPU_OPERATOR_VERSION`: Helm chart version (default: `v24.9.2`)
 
 **Verify**:
+
 ```bash
 kubectl get pods -n gpu-operator
 # All pods should be Running
@@ -183,7 +193,7 @@ kubectl get nodes -l nvidia.com/gpu.present=true
 
 ### 3a. Register the cluster in the NVCF UI
 
-1. Go to https://nvcf.ngc.nvidia.com
+1. Go to <https://nvcf.ngc.nvidia.com>
 2. Navigate to **Settings** > **Register Cluster**
 3. Fill in:
    - **Cluster Name**: a name for your cluster (e.g., `hyperpod-nvcf`)
@@ -210,6 +220,7 @@ After filling in the four NVCA values in `nvcf-config.env` (from Step 3a):
 ```
 
 **What this does**:
+
 1. Validates environment variables
 2. Checks Kubernetes connectivity, GPU Operator presence, and cluster-admin RBAC
 3. Installs the NVCA Operator via Helm
@@ -219,6 +230,7 @@ After filling in the four NVCA values in `nvcf-config.env` (from Step 3a):
 **Wait**: The NVCA operator deploys the agent. This takes 2-5 minutes.
 
 **Verify**:
+
 ```bash
 kubectl get nvcfbackend -n nvca-operator
 # NAME                    AGE   VERSION   HEALTH
@@ -236,6 +248,7 @@ Also check the NVCF UI: **Settings** > **Clusters** -- the cluster should show a
 ```
 
 This checks:
+
 - Kubernetes connectivity and version (warns if > 1.32)
 - GPU Operator installation and GPU discovery
 - NVCA operator and backend health
@@ -284,14 +297,17 @@ Ensure you have filled in the Step 5 variables in `nvcf-config.env`
 > The `_1x` suffix indicates 1 GPU per instance. For multi-GPU deployments,
 > use `_2x`, `_4x`, `_8x`, etc. To see the exact values registered for your
 > cluster, query the NVCF API:
+>
 > ```bash
 > curl -s https://api.ngc.nvidia.com/v2/nvcf/clusterGroups \
 >   -H "Authorization: Bearer ${NGC_API_KEY}" | python3 -m json.tool
 > ```
+>
 > Look for your cluster group name and note the `gpus[].name` and
 > `gpus[].instanceTypes[].name` values.
 
 This will:
+
 1. Build the container image for `linux/amd64` (Docker or Finch)
 2. Push it to NGC Private Registry at `nvcr.io/${NGC_ORG_NAME}/nvcf-echo:1.0.0`
 3. Create a function in NVCF with `/echo` inference and `/health` health endpoints
@@ -309,11 +325,13 @@ curl --location "https://api.nvcf.nvidia.com/v2/nvcf/pexec/functions/${FUNCTION_
 ```
 
 Expected response:
+
 ```json
 {"echo": "hello from SageMaker HyperPod!"}
 ```
 
 Streaming test:
+
 ```bash
 curl --location "https://api.nvcf.nvidia.com/v2/nvcf/pexec/functions/${FUNCTION_ID}" \
     --header 'Content-Type: application/json' \

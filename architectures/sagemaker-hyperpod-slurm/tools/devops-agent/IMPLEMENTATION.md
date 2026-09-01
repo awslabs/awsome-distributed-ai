@@ -195,6 +195,7 @@ design a side-channel: write the data to CloudWatch Logs or S3, which the
 guardrail can read.
 
 Two skill types appear in the Agent Space's Skills list:
+
 - **USER** — what this repo authors. Edits are deliberate.
 - **LEARNED** — what the agent generates about your environment over time (e.g.
   `understanding-agent-space`). Don't edit these.

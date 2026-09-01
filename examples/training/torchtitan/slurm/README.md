@@ -15,12 +15,12 @@ bash 0.create_venv.sh
 ```
 
 This script:
+
 - Creates a Python 3.11 stdlib virtual environment named `pt_torchtitan`
 - Installs **pinned** versions of `torch` (2.9.1+cu130) and `torchao` (0.17.0+cu130) from `https://download.pytorch.org/whl/cu130`
 - Clones torchtitan at the **`v0.2.2` release tag** (not `main`) and installs it editable
 
 Override the defaults by exporting `PYTHON_BIN`, `TORCH_VERSION`, `TORCHAO_VERSION`, `TORCHTITAN_REF`, or `PYTORCH_INDEX_URL` before invoking the script.
-
 
 ### 2. Download the Tokenizer
 
@@ -48,6 +48,7 @@ sbatch 1.llama_3_8b_torchtitan.sh
 ```
 
 This script:
+
 - Sets the path to the torchtitan training script: `./torchtitan/torchtitan/train.py`
 - Uses the **vendored** default Llama 3 8B configuration: `./configs/llama3_8b.toml` (a copy of torchtitan v0.2.2's preset, included so the test case behavior doesn't drift with upstream `main`)
 - Launches distributed training on your cluster
@@ -75,7 +76,6 @@ Running the llama3_8b.toml default configuration in torchtitan/models/llama/trai
 3: 2025-03-04 00:44:44,441 - root - INFO - [36mstep: 1990  [32mloss:  3.4370  [33mmemory: 68.57GiB(86.69%)  [34mtps: 6,785  [35mmfu: 39.73%[39m
 2: 2025-03-04 00:44:44,441 - root - INFO - [36mstep: 1990  [32mloss:  3.4370  [33mmemory: 68.57GiB(86.69%)  [34mtps: 6,785  [35mmfu: 39.73%[39m
 ```
-
 
 ## Performance Optimizations
 
@@ -108,4 +108,3 @@ Running with this optimized config on 4 x p5.48xlarge (32 H100s) improved throug
 0: 2025-03-04 00:31:19,918 - root - INFO - [36mstep: 1990  [32mloss:  3.4255  [33mmemory: 63.48GiB(80.25%)  [34mtps: 7,865  [35mmfu: 46.06%[39m
 0: 2025-03-04 00:31:19,918 - root - INFO - [36mstep: 1990  [32mloss:  3.4255  [33mmemory: 63.48GiB(80.25%)  [34mtps: 7,865  [35mmfu: 46.06%[39m
 ```
-

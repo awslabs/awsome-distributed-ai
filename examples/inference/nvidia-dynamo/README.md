@@ -58,6 +58,7 @@ operator wires into every scenario.
 # optional: send Dynamo metrics to the HyperPod Grafana dashboard (see OBSERVABILITY.md)
 ./scripts/01a-setup-observability.sh
 ```
+
 Verify: `kubectl get pods -n dynamo-system` → operator, etcd, nats all `Running`.
 
 ## 2. Download a model
@@ -80,10 +81,12 @@ One-time download to FSx Lustre, shared across pods. Public models — no token 
 
 Each scenario is a `DynamoGraphDeployment` (CRD) reconciled by the Dynamo operator into
 the frontend + worker pods. Workers load the model from FSx (~2 min). Watch:
+
 ```bash
 kubectl get dynamographdeployment -n dynamo-system
 kubectl get pods -n dynamo-system -l nvidia.com/dynamo-graph-deployment-name=<name> -w
 ```
+
 > DGD names are dot-free: `gpt-oss-agg`, `gpt-oss-disagg`, `qwen36-agg`, `qwen36-disagg`.
 
 > **GPU budget:** each aggregated scenario uses 1 GPU; each disaggregated scenario uses 2.
@@ -95,10 +98,12 @@ kubectl get pods -n dynamo-system -l nvidia.com/dynamo-graph-deployment-name=<na
 ./scripts/07-test-inference.sh     # one-shot: models + a chat (auto-detects the deployed scenario)
 ./scripts/07b-chat.sh              # interactive multi-turn streaming chat (auto-detects)
 ```
+
 Pass a name (`gpt-oss-agg` | `gpt-oss-disagg` | `qwen36-agg` | `qwen36-disagg`) to override auto-detect.
 
 Or connect directly (OpenAI-compatible) via port-forward to the operator-created frontend
 service `<name>-frontend`:
+
 ```bash
 kubectl port-forward -n dynamo-system svc/<name>-frontend 8000:8000
 curl localhost:8000/v1/chat/completions -H 'Content-Type: application/json' \
@@ -108,6 +113,7 @@ curl localhost:8000/v1/chat/completions -H 'Content-Type: application/json' \
 ## 5. Benchmark
 
 AIPerf concurrency sweep, saved to `bench_results/<scenario>/`:
+
 ```bash
 ./scripts/08-benchmark.sh <scenario>
 # custom: ./scripts/08-benchmark.sh qwen36-agg 2000 256
@@ -124,6 +130,7 @@ AIPerf concurrency sweep, saved to `bench_results/<scenario>/`:
 ## Architecture notes
 
 ### HyperPod specifics
+
 - Node placement: the **platform** (`manifests/platform/values.yaml`) targets the HyperPod
   `sagemaker.amazonaws.com/instance-group-name` labels (`dynamo-control` / `dynamo-workers`),
   while the **scenario manifests** use the portable `node.kubernetes.io/instance-type`
@@ -135,6 +142,7 @@ AIPerf concurrency sweep, saved to `bench_results/<scenario>/`:
   nodes (without requesting a GPU).
 
 ### Per-model notes
+
 - **GPT-OSS-20B**: MXFP4 weights; on L40S (Ada) it requires the `triton` attention backend.
 - **Qwen3.6-27B-FP8**: hybrid (Gated DeltaNet + full attention) multimodal model. FP8
   weights fit a single L40S. For **disaggregated** serving the decode worker reserves a
@@ -142,6 +150,7 @@ AIPerf concurrency sweep, saved to `bench_results/<scenario>/`:
   `--mem-fraction-static` lowered (0.80) in the disagg YAML to fit 48GB.
 
 ### Layout
+
 ```
 manifests/
   scenarios/
@@ -153,6 +162,7 @@ manifests/
   platform/           values.yaml (Dynamo platform Helm values)
 scripts/              01..10 (install, download, deploy, test, benchmark, cleanup)
 ```
+
 Each YAML is a `DynamoGraphDeployment` reconciled by the operator into the frontend +
 worker pods and their Services. The serving image is pinned in each YAML (`image:` field).
 

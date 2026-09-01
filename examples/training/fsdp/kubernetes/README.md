@@ -7,6 +7,7 @@ This document will run you through how to run Llama 3.1 8B model training with F
 ## 0. Prerequisites
 
 ### 0.1. EKS Cluster
+
 Before running this training, you'll need to create an Amazon EKS or a SageMaker HyperPod EKS cluster. Instructions can be found in [architectures](../../../../architectures), the [aws-do-eks](https://bit.ly/do-eks) project, or the [eks-blueprints](https://github.com/aws-ia/terraform-aws-eks-blueprints) project.
 
 ### 0.2. Connect to your EKS Cluster
@@ -16,15 +17,20 @@ Run the [aws eks update-kubeconfig](https://awscli.amazonaws.com/v2/documentatio
 ```bash
 aws eks update-kubeconfig --name <EKS_CLUSTER_NAME>
 ```
+
 You can verify that you are connected to the EKS cluster by running this commands:
+
 ```bash
 kubectl config current-context
 ```
+
 ```
 arn:aws:eks:us-west-1:xxxxxxxxxxxx:cluster/xxx-eks-cluster
 ```
+
 ### 0.3. Clone the awsome-distributed-ai reposource code
-Clone this repo. 
+
+Clone this repo.
 
 ```
 git clone https://github.com/awslabs/awsome-distributed-ai/
@@ -32,9 +38,11 @@ cd awsome-distributed-ai/examples/training/fsdp/kubernetes
 ```
 
 ### 0.4. Envsubst
+
 If the [envsubst](https://github.com/a8m/envsubst) utility is not available in your environment, please install it, following the instructions appropriate for your operating system.
 
 ### 0.5. Kubeflow training operator
+
 Deploy the Kubeflow training operator
 
 ```bash
@@ -102,6 +110,7 @@ EOF
 ```
 
 For reference, we are running the Llama 3.1 8B model on 4 x p5.48xlarge instances and below is the configuration of our environment variables:
+
 ``` bash
 cat << EOF > env_vars
 export IMAGE_URI=${REGISTRY}fsdp:pytorch2.7.1
@@ -121,12 +130,13 @@ source env_vars
 ```
 
 Apply yaml:
+
 ``` bash
 envsubst < llama3_1_8b-fsdp.yaml | kubectl apply -f -
 ```
 
 EFA level variables are available for adjustment in fsdp.yaml-template
-Keep FI_* values commented out for non-efa instances (G5, G4d, P3) or P5
+Keep FI_*values commented out for non-efa instances (G5, G4d, P3) or P5
 Uncomment FI_* values for P4d instances
 
 You can also adjust the training parameters in `TRAINING_ARGS` (for example, to train Llama 3.1 70B). Additional parameters can be found in `src/model_utils/arguments.py`. Note that we use the same directory for both `--checkpoint_dir` and `--resume_from_checkpoint`. If there are multiple checkpoints, `--resume_from_checkpoint` will automatically select the most recent one. This way if our training is interupted for any reason, it will automatically pick up the most recent checkpoint.
@@ -257,8 +267,8 @@ kubectl delete -f ./llama3_1_8b-fsdp.yaml
 If you wish to launch a new job, you must first stop the previous one, even if it is in `Completed` state.
 
 ## References
-Llama 2 and  Llama 3.x models parameters are based on the values in the [Llama 2 paper](https://arxiv.org/abs/2307.09288) and [Llama 3 paper](https://arxiv.org/abs/2407.21783) 
 
+Llama 2 and  Llama 3.x models parameters are based on the values in the [Llama 2 paper](https://arxiv.org/abs/2307.09288) and [Llama 3 paper](https://arxiv.org/abs/2407.21783)
 
 | Parameter            | Llama 2 7B | Llama 2 13B | Llama 2 70B | Llama 3.1 8B | Llama 3.1 70B | Llama 3.2 1B | Llama 3.2 3B |
 |----------------------|------------|-------------|-------------|--------------|---------------|--------------|--------------|

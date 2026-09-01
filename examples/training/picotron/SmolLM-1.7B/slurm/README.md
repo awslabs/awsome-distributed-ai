@@ -17,11 +17,13 @@ This guide demonstrates how to run distributed training across two GPU instances
 3. **Container Setup**
    - Build the `picotron` container image following the guidance in [here](..)
    - Convert the Docker image to a squash file:
+
      ```bash
      enroot import -o picotron.sqsh dockerd://picotron:latest
      ```
 
 4. **Environment Variables**
+
    ```bash
    # Your Hugging Face token is needed to retrieve model and data from HF Hub
    export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
@@ -30,6 +32,7 @@ This guide demonstrates how to run distributed training across two GPU instances
 ### Running the Distributed Training Job
 
 1. **Create Configuration File**
+
    ```bash
    # TensorParallelism on 2 GPUs
    enroot create --name picotron picotron.sqsh
@@ -46,6 +49,7 @@ This guide demonstrates how to run distributed training across two GPU instances
    This will create a config file `./conf/llama-1B-tp2/config.json` describing training configurations, including model architecture, training configuration, and dataset to use.
 
 2. **Submit the Training Job**
+
    ```bash
    sbatch train.sbatch
    ```
@@ -54,4 +58,3 @@ This guide demonstrates how to run distributed training across two GPU instances
    - Check the log directory `log` in the current directory
    - Look for files of the form `picotron_[job-number].out`
    - These logs will be continuously updated with your training progress
-

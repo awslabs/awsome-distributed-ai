@@ -11,21 +11,21 @@ This directory contains configurations for running GRPO training with VERL with 
 
 ## Setup
 
-0. Enabling MTC on Your HyperPod Cluster
+1. Enabling MTC on Your HyperPod Cluster
 
 Before using MTC, ensure your SageMaker HyperPod cluster has Managed Tiered Checkpointing enabled. Follow the [AWS documentation](https://docs.aws.amazon.com/sagemaker/latest/dg/managed-tier-checkpointing-setup.html) to:
 
 - Enable MTC on your cluster during creation or update
 - Configure the memory allocation percentage (20-100%)
 
-
 1. Source environment variables:
+
 ```bash
 # 1. Load environment variables
 source setup/env_vars
 ```
 
-2. Create Service Account for your pods to have S3 access. To do this, please read the [IRSA-README.md](../setup/IRSA-README.md). 
+1. Create Service Account for your pods to have S3 access. To do this, please read the [IRSA-README.md](../setup/IRSA-README.md).
 
 ## Build MTC-Enabled Docker Image
 
@@ -50,6 +50,7 @@ envsubst < managed-tiered-checkpointing/mtc-grpo-cluster.yaml | kubectl apply -f
 ## Clone MTC-enabled VERL Code
 
 Delete existing verl repo if you already cloned:
+
 ```
 rm -rf verl
 ```
@@ -70,7 +71,7 @@ git clone https://github.com/aruncs2005/verl.git
 
 ## Monitoring
 
-- **Ray Dashboard**: http://localhost:8265 (after port forwarding)
+- **Ray Dashboard**: <http://localhost:8265> (after port forwarding)
 - **View logs**: `kubectl logs -f <head-pod-name>`
 - **Check job status**: `ray job status <job-id>`
 - **Follow job logs**: `ray job logs <job-id> --follow`
@@ -87,6 +88,7 @@ Edit `submit-mtc-grpo.sh` to modify training parameters:
 - Model path, data paths, S3 checkpoint location, etc.
 
 **MTC-Specific Parameters**:
+
 - `actor_rollout_ref.actor.checkpoint.s3_base_path` - S3 path for checkpoint storage
 - `actor_rollout_ref.actor.checkpoint.ckpt_namespace` - Unique namespace for this training job
 - `trainer.s3_base_path` - S3 base path for trainer checkpoints
@@ -362,11 +364,10 @@ trainer.s3_base_path=s3://your-bucket/checkpoints
 | Save Operation | Synchronous | Asynchronous with futures |
 | Loading | Direct file loading | Via `SageMakerTieredStorageReader` |
 
-
-
 ## Cleanup
 
 If you need to stop a running job:
+
 ```bash
 # List all jobs
 ray job list --address http://localhost:8265
@@ -379,6 +380,7 @@ ray job delete <job-id> --address http://localhost:8265
 ```
 
 To remove old checkpoints from S3:
+
 ```bash
 aws s3 rm ${S3_CHECKPOINT_BASE} --recursive
 ```
