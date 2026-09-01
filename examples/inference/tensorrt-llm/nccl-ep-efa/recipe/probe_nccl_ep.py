@@ -199,7 +199,14 @@ def main():
         return 5
 
     ctx = strategy._get_context()
-    log(f"PROBE-CONFIG algorithm={ctx._ep_algorithm.name} layout={ctx.layout.name}")
+    # NcclEpContext on 1.3.0rc24 exposes `layout` but NOT `_ep_algorithm` — the algorithm is
+    # not stored on the context in the unpatched factory (upstream hardcodes LOW_LATENCY). A
+    # getattr-guard keeps the diagnostic from AttributeError-ing on a GIN-working substrate:
+    # when the attr is absent, report the requested algo (env), which == what runs on the
+    # unpatched default path. Prefer the real attr if a future base exposes it.
+    _algo = getattr(ctx, "_ep_algorithm", None)
+    algo_name = _algo.name if _algo is not None else os.environ.get("TRTLLM_NCCL_EP_ALGO", "LOW_LATENCY").upper()
+    log(f"PROBE-CONFIG algorithm={algo_name} layout={ctx.layout.name}")
 
     # Upstream default is LOW_LATENCY+RANK_MAJOR; the algorithm knob is only
     # honored on an image built with APPLY_HT_FLAT_PATCH=1 (TensorRT-LLM PR
@@ -207,9 +214,13 @@ def main():
     # would be a false pass — fail loud.
     want = os.environ.get("TRTLLM_NCCL_EP_ALGO", "LOW_LATENCY").upper()
     if want in ("HIGH_THROUGHPUT", "HT"):
-        if ctx._ep_algorithm.name != "HIGH_THROUGHPUT" or ctx.layout.name != "FLAT":
+        # rc24 does not expose the algorithm as a context attr; layout IS observable
+        # (RANK_MAJOR default, FLAT once PR #17715's HT/FLAT patch is baked). Prefer the
+        # algo attr if a future base exposes it, else fall back to the layout==FLAT proof.
+        algo_ok = (_algo.name == "HIGH_THROUGHPUT") if _algo is not None else (ctx.layout.name == "FLAT")
+        if not algo_ok:
             log("PROBE-FAIL env requested HIGH_THROUGHPUT but the factory selected "
-                f"{ctx._ep_algorithm.name}+{ctx.layout.name} — unpatched image? "
+                f"{algo_name}+{ctx.layout.name} — unpatched image? "
                 "(build with APPLY_HT_FLAT_PATCH=1)")
             return 6
 
@@ -270,7 +281,7 @@ def main():
     flag = torch.tensor([1 if ok else 0], device=dev, dtype=torch.int32)
     dist.all_reduce(flag, op=dist.ReduceOp.MIN)
     verdict = "PROBE-PASS" if int(flag.item()) == 1 else "PROBE-MISMATCH"
-    log(f"{verdict} factory-selected NcclEP {ctx._ep_algorithm.name}+{ctx.layout.name} world={WORLD}")
+    log(f"{verdict} factory-selected NcclEP {algo_name}+{ctx.layout.name} world={WORLD}")
 
     strategy.destroy()
     dist.barrier()

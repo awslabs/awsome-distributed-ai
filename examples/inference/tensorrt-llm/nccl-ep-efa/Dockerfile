@@ -92,18 +92,19 @@ RUN git clone https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
 # Why 2.30.4 and not the newer 2.31.2: 2.31.2 also clears the >= 2.30.4 floor, but libnccl_ep 0.1.0
 # (shipped by the nccl4py pin above) is built against the NCCL 2.30 device-side API that the GIN
 # CPU-proxy path calls into. 2.30.4 is the version the 2026-08-07 correctness E2E actually ran.
-# A single-variable 2.31.2 trial (2026-09-01, cgk p5en, --build-arg NVIDIA_NCCL_CU13=2.31.2) showed:
-#   (+) the library ABI loads clean on 2.31.2 — is_nccl_ep_installed() passes and the
-#       CommunicationFactory selects NcclEP on all 16 ranks (no quiet symbol/binding break); BUT
-#   (=) the device dispatch/combine round-trip was UNMEASURABLE on that substrate, for a reason
-#       independent of the NCCL version: the GIN CPU-proxy hard-requires GDRCopy >= 2.5
-#       (aws-ofi-nccl v1.21.1 nccl_ofi_gin_api.cpp:63 -> forced_pcie_copy() -> min(runtime,driver)
-#       version >= 2.5), and cgk's host gdrdrv is 2.4, so nccl_ofi_gin_init() hard-fails and the
-#       Device API is absent -> create_group() raises on BOTH 2.30.4 and 2.31.2. See README trap 7 /
-#       doc gin-getting-started (gdrdrv >= 2.5 is a stated prerequisite of this sample).
-# So the 2.31.2 device-side ABI is NOT yet certified (nor refuted). Held at 2.30.4 as the
-# measured-matching floor, not an upper bound — to bump it, re-run verify-image.sh +
-# run-kernel-test.sh on a host with gdrdrv >= 2.5 so GIN can init and the round-trip + oracle run.
+# Two single-variable 2.31.2 trials on cgk p5en (--build-arg NVIDIA_NCCL_CU13=2.31.2) established:
+#   (+) LIBRARY ABI is clean on 2.31.2 — is_nccl_ep_installed() passes and the CommunicationFactory
+#       selects NcclEP on all 16 ranks (no quiet symbol/binding break). MEASURED.
+#   (=) DEVICE dispatch/combine round-trip: NOT YET measured on either arm. First trial's GIN init
+#       hard-failed because cgk's host gdrdrv is 2.4 (< the sample's GDRCopy-2.5 prereq); a second
+#       trial (2026-09-01) with a throwaway forced_pcie_copy instrument patch DID init GIN on
+#       gdrdrv-2.4 and both arms reached NcclEP selection, but crashed one line before the first
+#       dispatch on a latent probe-diagnostic bug (recipe/probe_nccl_ep.py referenced a
+#       NcclEpContext._ep_algorithm attr absent on rc24 — now getattr-guarded). See VERDICT.md.
+# So the 2.31.2 device-side ABI is NOT yet certified (nor refuted) at the kernel level. Held at
+# 2.30.4 as the measured-matching floor, not an upper bound — to bump it, re-run verify-image.sh +
+# run-kernel-test.sh (probe fix now landed) on a gdrdrv>=2.5 host (or with the instrument patch) so
+# GIN inits and the dispatch/combine round-trip + oracle actually execute on both arms.
 ARG NVIDIA_NCCL_CU13=2.30.4
 ARG NCCL4PY_VER=0.3.1
 RUN pip3 install --no-cache-dir --no-deps --force-reinstall "nvidia-nccl-cu13==${NVIDIA_NCCL_CU13}" \
