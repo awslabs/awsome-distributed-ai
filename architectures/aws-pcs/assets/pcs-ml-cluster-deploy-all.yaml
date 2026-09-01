@@ -64,10 +64,9 @@ Metadata:
           - DirectoryService
           - DirectoryDomainSuffix
       - Label:
-          default: "5.3. Additional Cluster Configuration: Post-Install Script (default: Enroot/Pyxis container runtime)"
+          default: "5.3. Additional Cluster Configuration: Container Runtime (Enroot/Pyxis)"
         Parameters:
-          - PostInstallScriptUrl
-          - PostInstallScriptArgs
+          - InstallEnrootPyxis
       - Label:
           default: "6. FSx Storage (/fsx and /home)"
         Parameters:
@@ -116,10 +115,8 @@ Metadata:
         default: "Slurm managed accounting"
       AccountingPolicyEnforcement:
         default: "Slurm accounting policy enforcement"
-      PostInstallScriptUrl:
-        default: "Post-install script URL (default installs Enroot/Pyxis)"
-      PostInstallScriptArgs:
-        default: "Post-install script arguments"
+      InstallEnrootPyxis:
+        default: "Install Enroot/Pyxis container runtime"
       RootVolumeSize:
         default: "Root volume size (GiB)"
       AmiId:
@@ -348,27 +345,29 @@ Parameters:
       can boot a newer AMI than the original nodes (drift). For production, pin to a
       specific ami-xxx -- e.g. one produced by pcs-ready-dlami-with-enroot-pyxis.yaml
       with Enroot/Pyxis pre-baked, or any other AMI built off the PCS-Ready DLAMI base.
+      The AMI must carry PCS agent >= 1.5.0-1 (PCS-Ready DLAMI builds since
+      2026-07-20 -- see docs/PCS-READY-DLAMI.md): node setup runs through node
+      lifecycle actions, which older agents do not support.
     Default: ''
     AllowedPattern: '^$|^ami-[0-9a-f]{8,17}$'
     ConstraintDescription: Must be empty or a valid AMI ID (ami-xxxxxxxxx)
 
-  PostInstallScriptUrl:
+  InstallEnrootPyxis:
     Type: String
     Description: >-
-      URL of a script run on every node at first boot (PCS equivalent of
-      ParallelCluster OnNodeConfigured). Accepts an s3:// URL (fetched with the
-      instance role — works with a private bucket) or an http(s):// URL (fetched
-      with curl — public only). Leave EMPTY (default) to auto-install Enroot/Pyxis
-      from the templates bucket (s3://<S3BucketName>/<S3KeyPrefix>scripts/install-enroot-pyxis.sh),
-      so it works in dev accounts without public S3. Set to your own s3://or
-      https:// script for custom first-boot setup, or to a single space to skip.
-      Idempotent: a no-op if Enroot/Pyxis is already pre-baked into AmiId.
-    Default: ''
-
-  PostInstallScriptArgs:
-    Type: String
-    Description: Space-separated arguments passed to the post-install script.
-    Default: ''
+      Install the Enroot/Pyxis container runtime on every node at first boot
+      (an install-enroot-pyxis node lifecycle action running
+      scripts/install-enroot-pyxis.sh from the templates bucket — instance-role
+      fetch, so it works with a private bucket). Set 'false' when the runtime
+      is pre-baked into AmiId, or when you don't need containers (the installer
+      is idempotent either way — a no-op on a pre-baked AMI). For any other
+      first-boot customization, add your own script to the compute node
+      group's node lifecycle actions — PCS supports custom scripts natively,
+      so this stack no longer proxies arbitrary post-install scripts.
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
 
   # PCS Cluster Configuration
   SlurmVersion:
@@ -436,8 +435,8 @@ Parameters:
   MonitoringVersion:
     Type: String
     Description: >-
-      aws-parallelcluster-monitoring git ref to install (release tag, branch, or
-      'latest'). Passed down to the CNG stacks, which fetch post-install.sh from
+      aws-parallelcluster-monitoring git ref to install (release tag or branch).
+      Passed down to the CNG stacks, which fetch post-install.sh from
       MonitoringRepo at this ref and pass it as the ref argument. Pin to a release
       tag in production; a branch name + MonitoringRepo fork can be used to test
       unreleased changes.
@@ -636,12 +635,6 @@ Rules:
           (EFA on FSx for Lustre is a PERSISTENT_2-only feature).
 
 Conditions:
-  UseLocalTemplates: !Equals [!Ref S3BucketName, 'local']
-  # When PostInstallScriptUrl is left empty, default it to the Enroot/Pyxis
-  # installer in the templates bucket (s3://, fetched via the instance role —
-  # works with a private bucket). A non-empty value (s3:// or https://) is used
-  # verbatim; a single space disables the post-install hook.
-  PostInstallScriptUrlIsDefault: !Equals [!Ref PostInstallScriptUrl, '']
   DeployOnDemandCNGEnabled: !Equals [!Ref DeployOnDemandCNG, 'true']
   DirectoryEnabled: !Not [!Equals [!Ref DirectoryService, 'none']]
   DeployPseriesCNGEnabled: !Equals [!Ref DeployPseriesCNG, 'true']
@@ -673,10 +666,7 @@ Resources:
   PrerequisitesStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !If
-        - UseLocalTemplates
-        - ml-cluster-prerequisites.yaml
-        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}ml-cluster-prerequisites.yaml'
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}ml-cluster-prerequisites.yaml'
       Parameters:
         VPCName: !Sub '${AWS::StackName}-VPC'
         PrimarySubnetAZ: !Ref PrimarySubnetAZ
@@ -702,10 +692,7 @@ Resources:
   ClusterStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !If
-        - UseLocalTemplates
-        - cluster.yaml
-        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}cluster.yaml'
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}cluster.yaml'
       Parameters:
         ClusterName: !Sub '${AWS::StackName}'
         PrivateSubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
@@ -756,10 +743,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     DependsOn: ClusterStack
     Properties:
-      TemplateURL: !If
-        - UseLocalTemplates
-        - add-cng.yaml
-        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng.yaml'
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng.yaml'
       Parameters:
         ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
         ClusterName: !Sub '${AWS::StackName}'
@@ -789,11 +773,7 @@ Resources:
         DcgmExporterImage: !Ref DcgmExporterImage
         SlurmVersion: !Ref SlurmVersion
         MonitoringRole: login
-        PostInstallScriptUrl: !If
-          - PostInstallScriptUrlIsDefault
-          - !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-enroot-pyxis.sh'
-          - !Ref PostInstallScriptUrl
-        PostInstallScriptArgs: !Ref PostInstallScriptArgs
+        InstallEnrootPyxis: !Ref InstallEnrootPyxis
         DirectoryRole: !If [DirectoryEnabled, 'server', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
         S3BucketName: !Ref S3BucketName
@@ -810,10 +790,7 @@ Resources:
     Condition: DeployOnDemandCNGEnabled
     DependsOn: ClusterStack
     Properties:
-      TemplateURL: !If
-        - UseLocalTemplates
-        - add-cng.yaml
-        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng.yaml'
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng.yaml'
       Parameters:
         ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
         ClusterName: !Sub '${AWS::StackName}'
@@ -836,11 +813,7 @@ Resources:
         DcgmExporterImage: !Ref DcgmExporterImage
         SlurmVersion: !Ref SlurmVersion
         MonitoringRole: compute
-        PostInstallScriptUrl: !If
-          - PostInstallScriptUrlIsDefault
-          - !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-enroot-pyxis.sh'
-          - !Ref PostInstallScriptUrl
-        PostInstallScriptArgs: !Ref PostInstallScriptArgs
+        InstallEnrootPyxis: !Ref InstallEnrootPyxis
         # EFA on CPU HPC instances (hpc8a/hpc7a/hpc6a). add-cng.yaml enables EFA
         # when EfaInterfaceCount > 0 and auto-creates a per-CNG cluster placement
         # group when PlacementGroupName is empty.
@@ -862,10 +835,7 @@ Resources:
     Condition: PseriesIsP5
     DependsOn: ClusterStack
     Properties:
-      TemplateURL: !If
-        - UseLocalTemplates
-        - add-cng-p5.yaml
-        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng-p5.yaml'
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng-p5.yaml'
       Parameters:
         ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
         ClusterName: !Sub '${AWS::StackName}'
@@ -889,11 +859,7 @@ Resources:
         DcgmExporterImage: !Ref DcgmExporterImage
         SlurmVersion: !Ref SlurmVersion
         MonitoringRole: compute
-        PostInstallScriptUrl: !If
-          - PostInstallScriptUrlIsDefault
-          - !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-enroot-pyxis.sh'
-          - !Ref PostInstallScriptUrl
-        PostInstallScriptArgs: !Ref PostInstallScriptArgs
+        InstallEnrootPyxis: !Ref InstallEnrootPyxis
         DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
         S3BucketName: !Ref S3BucketName
@@ -910,10 +876,7 @@ Resources:
     Condition: PseriesIsP6B200
     DependsOn: ClusterStack
     Properties:
-      TemplateURL: !If
-        - UseLocalTemplates
-        - add-cng-p6-b200.yaml
-        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng-p6-b200.yaml'
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng-p6-b200.yaml'
       Parameters:
         ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
         ClusterName: !Sub '${AWS::StackName}'
@@ -937,11 +900,7 @@ Resources:
         DcgmExporterImage: !Ref DcgmExporterImage
         SlurmVersion: !Ref SlurmVersion
         MonitoringRole: compute
-        PostInstallScriptUrl: !If
-          - PostInstallScriptUrlIsDefault
-          - !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-enroot-pyxis.sh'
-          - !Ref PostInstallScriptUrl
-        PostInstallScriptArgs: !Ref PostInstallScriptArgs
+        InstallEnrootPyxis: !Ref InstallEnrootPyxis
         DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
         S3BucketName: !Ref S3BucketName
@@ -958,10 +917,7 @@ Resources:
     Condition: PseriesIsP6B300
     DependsOn: ClusterStack
     Properties:
-      TemplateURL: !If
-        - UseLocalTemplates
-        - add-cng-p6-b300.yaml
-        - !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng-p6-b300.yaml'
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng-p6-b300.yaml'
       Parameters:
         ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
         ClusterName: !Sub '${AWS::StackName}'
@@ -985,11 +941,7 @@ Resources:
         DcgmExporterImage: !Ref DcgmExporterImage
         SlurmVersion: !Ref SlurmVersion
         MonitoringRole: compute
-        PostInstallScriptUrl: !If
-          - PostInstallScriptUrlIsDefault
-          - !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-enroot-pyxis.sh'
-          - !Ref PostInstallScriptUrl
-        PostInstallScriptArgs: !Ref PostInstallScriptArgs
+        InstallEnrootPyxis: !Ref InstallEnrootPyxis
         DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
         S3BucketName: !Ref S3BucketName

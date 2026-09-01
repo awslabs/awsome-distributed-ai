@@ -84,7 +84,7 @@ heap is no workaround (exceeds EFA's single-MR registration limit).
 
 **Reading.** DeepEP-class dispatchers are engineered for EP domains of ~64–160 ranks —
 matching how training actually deploys them (EP32/EP64 groups inside a larger world; the
-[`kimi-k2`](../../../3.test_cases/megatron/megatron-bridge/kimi-k2/benchmarks/RESULTS.md)
+[`kimi-k2`](../../../examples/training/megatron-bridge/kimi-k2/benchmarks/RESULTS.md)
 NVSHMEM arm ran clean on 256 GPUs precisely because its `deep_ep` domains are 32-rank EP
 groups). A *flat* EP domain >64 ranks is already off the map for both low-latency paths on
 EFA, and >160 for HT; NCCL all-to-all is the only working option there. NCCL's per-rank

@@ -94,12 +94,14 @@ envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES $NP' 
 > runs `python3 /DeepEP/tests/test_low_latency.py` with no args, so it uses the upstream default
 > `--num-experts=288`. The test asserts `num_experts % num_ranks == 0`; at 8 nodes (64 ranks),
 > `288 % 64 ≠ 0` and it aborts. Match the comparison's 256 by patching the rendered manifest:
+>
 > ```bash
 > cd ../deepep-benchmark/kubernetes
 > IMAGE_URI=$NVSHMEM_IMAGE_URI NUM_NODES=$NUM_NODES \
 > envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' < test-low-latency.yaml \
 >   | sed 's#test_low_latency.py#test_low_latency.py --num-experts 256#' | kubectl apply -f -
 > ```
+>
 > (DeepEP internode defaults are already 4096/7168/8/**256**, so internode needs no override.)
 
 Save each launcher log (`kubectl logs <…-launcher> > <name>.log`) and **delete the job before
