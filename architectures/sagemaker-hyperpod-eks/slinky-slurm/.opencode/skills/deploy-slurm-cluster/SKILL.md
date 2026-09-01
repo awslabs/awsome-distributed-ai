@@ -70,6 +70,7 @@ in the project directory. The script will fail if it's missing.
 ### Step 2: Wait for completion
 
 `install.sh` will:
+
 1. Install cert-manager and wait for webhook readiness
 2. Tag public subnets with `kubernetes.io/role/elb=1`
 3. Create IAM policy/role for LB Controller (Pod Identity), install chart
@@ -94,6 +95,7 @@ ssh -i ~/.ssh/id_ed25519_slurm root@<NLB_HOSTNAME>
 ### Phase A: Setup (unless --skip-setup)
 
 Calls `setup.sh` with pass-through flags:
+
 ```bash
 bash setup.sh ${SETUP_ARGS}
 ```

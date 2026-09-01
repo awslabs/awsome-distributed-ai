@@ -97,6 +97,7 @@ Split bash scripts into two files:
   and called independently in tests
 
 Functions should:
+
 - Accept inputs as arguments (not rely on global state where possible)
 - Output results to stdout (not write to global variables)
 - Return meaningful exit codes (0 = success, 1 = failure)

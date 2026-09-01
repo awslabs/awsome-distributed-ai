@@ -180,6 +180,7 @@ Same as V-JEPA 2: **`srun` directly** (not `srun + torchrun`). The `run_train.py
 ### Image/Video co-training rank split
 
 With `img_data.rank_ratio: 0.5` on 64 GPUs:
+
 - **Ranks 0-31** (32 GPUs): process images, batch size 72/GPU = 2,304 images/step
 - **Ranks 32-63** (32 GPUs): process video, batch size 24/GPU = 768 videos/step
 
@@ -192,6 +193,7 @@ The upstream V-JEPA 2/2.1 code unconditionally creates a `torch.cuda.amp.GradSca
 ### Model architecture
 
 V-JEPA 2.1 ViT-g/16:
+
 - **Encoder**: ViT-giant with `embed_dim=1408, depth=40, num_heads=22`
 - **Predictor**: `depth=24, embed_dim=384, num_heads=12` (doubled from V-JEPA 2)
 - **Deep Self-Supervision**: 4 intermediate layers (9, 19, 29, 39) concatenated -> `[B, N, 5632]`

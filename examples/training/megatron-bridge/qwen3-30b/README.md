@@ -30,6 +30,7 @@ NVLink. Both swept points satisfy this:
 ## Shared harness
 
 This model reuses the shared Qwen3 bench and campaign (one bench, selected by `QWEN3_SIZE`):
+
 - bench: [`../qwen3-235b/benchmarks/bench_qwen3_pretrain.py`](../qwen3-235b/benchmarks/bench_qwen3_pretrain.py) (`QWEN3_SIZE=30b`)
 - campaign: [`../qwen3-235b/benchmarks/run-qwen3-campaign.sh`](../qwen3-235b/benchmarks/run-qwen3-campaign.sh) (`MODEL=qwen3-30b`)
 

@@ -128,17 +128,22 @@ Per-group `shared_filesystem_mount` overrides the auto-detection for that group.
 ## Deployment
 
 1. Copy the appropriate sample file and edit it:
+
    ```bash
    # For YAML format:
    cp shared_users_sample.yaml shared_users.yaml
    # Or for legacy format:
    cp shared_users_sample.txt shared_users.txt
    ```
+
 2. Upload to S3:
+
    ```bash
    aws s3 cp add-users/ s3://<your-bucket>/add-users/ --recursive
    ```
+
 3. Create or update your cluster with `OnInitComplete`:
+
    ```json
    {
        "LifeCycleConfig": {
@@ -154,20 +159,27 @@ Per-group `shared_filesystem_mount` overrides the auto-detection for that group.
 
 1. Update your user file with the new users (keep existing users in the file)
 2. Upload to S3:
+
    ```bash
    aws s3 cp add-users/shared_users.yaml s3://<your-bucket>/add-users/shared_users.yaml
    ```
+
 3. SSM into the controller and pull scripts to the shared filesystem:
+
    ```bash
    sudo mkdir -p /fsx/cluster-scripts/add-users
    sudo aws s3 cp s3://<your-bucket>/add-users/ /fsx/cluster-scripts/add-users/ --recursive
    sudo chmod +x /fsx/cluster-scripts/add-users/*.sh
    ```
+
 4. Run on the controller:
+
    ```bash
    sudo bash /fsx/cluster-scripts/add-users/add_users.sh
    ```
+
 5. Run on all compute nodes via srun:
+
    ```bash
    sudo srun --partition=<partition-name> bash /fsx/cluster-scripts/add-users/add_users.sh
    ```
@@ -193,6 +205,7 @@ add_users.sh (entrypoint)
 
 The script auto-detects whether it's running on a controller, compute, or login
 node by checking Slurm daemons:
+
 - `slurmctld` running |-- controller
 - `slurmd` running + hostname in `sinfo` |-- compute
 - `slurmd` running + hostname not in `sinfo` |-- login
@@ -206,6 +219,7 @@ This ensures all nodes share the same keys for passwordless SSH.
 ### Idempotency
 
 All scripts are idempotent |-- safe to re-run without errors or duplicates:
+
 - Users that already exist are skipped
 - Home directories that already exist are left alone
 - SSH keys that already exist are not regenerated

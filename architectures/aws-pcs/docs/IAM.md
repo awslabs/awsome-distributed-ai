@@ -45,6 +45,7 @@ There is no `AmazonPCSFullAccess`, so the PCS portion has to stay
 customer-managed.
 
 **Not covered by these policies:**
+
 - The compute instance role (passed to EC2 by `cluster.yaml`) — use the
   AWS-managed `AWSPCSComputeNodePolicy`.
 - The Image Builder build instance role — use the AWS-managed

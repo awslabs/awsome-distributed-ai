@@ -13,6 +13,7 @@ Fine-tuning a model like Qwen3-8B traditionally requires:
 | QLoRA (4-bit + LoRA) | ~0.5-1 GB per billion params | Low |
 
 For Qwen3-8B:
+
 - **Full fine-tuning**: ~128 GB (fp16) - requires multiple high-end GPUs
 - **QLoRA**: ~8-10 GB per GPU - trainable on consumer-grade hardware
 
@@ -55,6 +56,7 @@ With LoRA: y = Wx + BAx  (B is d×r, A is r×k, r << d,k)
 ```
 
 The rank `r` is typically 8-64, so:
+
 - Original parameters: 4096 x 4096 = 16.7M
 - LoRA parameters: (4096 x 16) + (16 x 4096) = 131K
 - **Reduction: 99.2%**
@@ -135,6 +137,7 @@ Effective LoRA weight = (alpha / r) × BA
 ```
 
 Rules of thumb:
+
 - `alpha = r`: Balanced
 - `alpha = 2*r`: Stronger LoRA updates (recommended)
 - `alpha = 4*r`: Very strong updates
@@ -199,6 +202,7 @@ model parameters, but optimizer memory is divided by the number of GPUs:
 ```
 
 Key settings that prevent OOM:
+
 - `max_seq_length: 1536` (reduced from 2048, saves ~25% activation memory)
 - `PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128`
 - `gradient_checkpointing: true` (trades compute for memory)

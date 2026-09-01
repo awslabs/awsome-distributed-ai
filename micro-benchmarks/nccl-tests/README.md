@@ -4,7 +4,8 @@
 
 ## 0. Prepare the runtime environment
 
-### Slurm 
+### Slurm
+
 If you are using Slurm, this guide assumes that you have the following:
 
 - A functional Slurm cluster on AWS.
@@ -15,6 +16,7 @@ If you are using Slurm, this guide assumes that you have the following:
 It is recommended that you use the templates in the architectures [directory](../../architectures)
 
 ### Amazon EKS
+
 If you are using EKS, this guide assumes that you have the following:
 
 - A functional EKS cluster on AWS. <br/>
@@ -24,7 +26,7 @@ If you need to deploy it, please refer to [deployment/nvidia-device-plugin](http
 - EFA device plugin deployed to your cluster. <br/>
 If you need to deploy it, please refer to [deployment/efa-device-plugin](https://github.com/aws-samples/aws-do-eks/tree/main/Container-Root/eks/deployment/efa-device-plugin) or [aws-efa-eks](https://github.com/aws-samples/aws-efa-eks).
 - Kubeflow MPI operator deployed to your cluster. <br/>
-If you need to deploy it, please refer to [deployment/kubeflow/mpi-operator](https://github.com/aws-samples/aws-do-eks/tree/main/Container-Root/eks/deployment/kubeflow/mpi-operator) or [kubeflow/mpi-operator](https://github.com/kubeflow/mpi-operator). 
+If you need to deploy it, please refer to [deployment/kubeflow/mpi-operator](https://github.com/aws-samples/aws-do-eks/tree/main/Container-Root/eks/deployment/kubeflow/mpi-operator) or [kubeflow/mpi-operator](https://github.com/kubeflow/mpi-operator).
 - [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html#cliv2-linux-install)
 
 ## 1. Prepare the container image and other artifacts
@@ -60,6 +62,7 @@ CONTAINER_IMAGE_NAME_TAG="nccl-tests:${TAG}"
 If you wish to build the containar image by yourself, follow this section. Alternatively, you can use a prebuild image on a public ECR repository `public.ecr.aws/hpc-cloud/nccl-tests`. If you wish to do so, skip this section.
 
 1. Build the container image with the command below:
+
    ```bash
    docker build -f nccl-tests.Dockerfile \
           --build-arg="GDRCOPY_VERSION=${GDRCOPY_VERSION}" \
@@ -69,9 +72,11 @@ If you wish to build the containar image by yourself, follow this section. Alter
           -t ${CONTAINER_IMAGE_NAME_TAG} \
           .
    ```
+
    Note: If you are using an arm64 platform (like p6e-gb200.36xlarge, or any ultraserver comprised of that instance, for example), pass in `--platform=linux/arm64` into the `docker build` command above. Or, just build your image directly on an `arm64` based instance!
- 
+
 1. Once the container image is prepared, you can check if it is present with `docker images`. You should see an output similar to this one:
+
    ```
    REPOSITORY               TAG                        IMAGE ID       CREATED         SIZE
    nccl                     latest                     6e981e5cf6a5   5 hours ago     8.61GB
@@ -103,34 +108,40 @@ To run the NCCL tests on EKS with the local image you built in the previous step
 You can skip this part if you use pre-built image on `public.ecr.aws/hpc-cloud/nccl-tests`.
 
 1. Create the ECR repository if it does not exist
+
    ```bash
    ECR_REPOSITORY_NAME="nccl-tests"
    aws ecr create-repository --repository-name ${ECR_REPOSITORY_NAME}
    ```
 
 1. Get the ECR repository URI:
+
    ```bash
    REPO_URI=`aws ecr describe-repositories --query repositories[].[repositoryUri] | grep "/${ECR_REPOSITORY_NAME}" | tr -d '"' | xargs`
    ECR_URI=${REPO_URI%"/${ECR_REPOSITORY_NAME}"}
    ```
 
 1. Build the container image:
+
    ```bash
    docker image build -t ${REPO_URI}:${TAG} -f ./nccl-tests.Dockerfile .
    ```
+
 1. Login to the container registry
+
    ```bash
    aws ecr get-login-password | docker login --username AWS --password-stdin ${ECR_URI}
    ```
 
 1. Push the container image to the registry
+
    ```bash
    docker image push ${REPO_URI}:${TAG}
    ```
 
 ## 2. Running the NCCL Tests
 
-Note: For topology aware NCCL tests, with features like export to csv, 
+Note: For topology aware NCCL tests, with features like export to csv,
 passing in a topologically sorted hostfile to mpirun, look in slurm/topology-aware-nccl-tests
 
 ### Slurm with container
@@ -154,6 +165,7 @@ sbatch nccl-tests.sbatch
 ### Results
 
 All_reduce performance test will be executed from 8B to 2GB on 2x p4de.24xlarg, the output should look as below (with a lot more information).
+
 ```txt
 0: #       size         count      type   redop    root     time   algbw   busbw #wrong     time   algbw   busbw #wrong
 0: #        (B)    (elements)                               (us)  (GB/s)  (GB/s)            (us)  (GB/s)  (GB/s)       
@@ -189,6 +201,7 @@ All_reduce performance test will be executed from 8B to 2GB on 2x p4de.24xlarg, 
 ```
 
 All_reduce performance test will be executed from 8B to 16GB on 2x p5.48xlarge, the output should look as below (with a lot more information).
+
 ```txt
 0: #       size         count      type   redop    root     time   algbw   busbw #wrong     time   algbw   busbw #wrong
 0: #        (B)    (elements)                               (us)  (GB/s)  (GB/s)            (us)  (GB/s)  (GB/s)       
@@ -228,7 +241,6 @@ All_reduce performance test will be executed from 8B to 16GB on 2x p5.48xlarge, 
 
 To change the type of collective to test, modify the line with `srun` in the file `nccl-tests.sbatch` and change `all_reduce_perf` to any of: `all_gather_perf`, `alltoall_perf`, `gather_perf`, `reduce_perf`, `scatter_perf`, `all_reduce_perf`, `broadcast_perf`, `hypercube_perf`, `reduce_scatter_perf`, `sendrecv_perf`.
 
-
 ### Amazon EKS
 
 1. Prepare the MPIJob manifest
@@ -243,22 +255,26 @@ To change the type of collective to test, modify the line with `srun` in the fil
    - `vpc.amazonaws.com/efa: 32`: set to the number of EFA adapters per node in your cluster, adjust in both the limits and requests section
 
    Please note that the current default settings have been specified for instance type p5.48xlarge. Only the image URI is required to be set for running the test on this instance type.
-   The current manifest executes the `all_reduce_perf` test. If you wish to execute other NCCL tests, change the section between lines 59 and 73 in this MPIJob manifest file. 
+   The current manifest executes the `all_reduce_perf` test. If you wish to execute other NCCL tests, change the section between lines 59 and 73 in this MPIJob manifest file.
 
 2. Apply the MPIJob manifest to the cluster
+
    ```bash
    kubectl apply -f ./nccl-tests.yaml
    ```
 
 3. Wait until pods to enter the Running state
    To monitor the state of the pods, execute the following command:
+
    ```bash
    watch kubectl get pods -o wide
    ```
+
    Once the state of the launcher and worker pods becomes "Running", press `Ctrl-C` to return to the command prompt.
 
 4. View test logs
    To follow the test logs, execute the following command:
+
    ```bash
    kubectl logs -f $(kubectl get pods | grep launcher | cut -d ' ' -f 1)
    ```
@@ -280,10 +296,12 @@ To change the type of collective to test, modify the line with `srun` in the fil
    [1,0]<stdout>:# Out of bounds values : 0 OK
    [1,0]<stdout>:# Avg bus bandwidth    : 52.9753
    ```
+
    Press `Ctrl-C` to return to the command prompt if you do not wish to wait until the launcher pod enters the "Completed" state.
 
 5. Clean up test run
    Before running a subsequent test, the current MPIJob needs to be deleted:
+
    ```bash
    kubectl delete -f nccl-tests.yaml
    ```
@@ -296,30 +314,28 @@ The algorithm bandwidth is based on the following data_size / time where data_si
 
 | API           | Algbw                                              | Busbw                                    | Theoretical Max BW    | source                              |
 |---------------|----------------------------------------------------|------------------------------------------|-----------------------|-------------------------------------|
-| AllReduce     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw * (2*(nranks - 1)/nranks) | B = S/t * (2*(n-1)/n) | https://tinyurl.com/all-reduce      |
-| ReduceScatter | baseBw = (count * nranks * typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | https://tinyurl.com/reduce-scatter  |
-| AllGather     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | https://tinyurl.com/all-gather      |
-| Broadcast     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | https://tinyurl.com/nccl-broadcast  |
-| Gather        | baseBw = (count * nranks * typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | https://tinyurl.com/nccl-gather     |
-| Reduce        | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | https://tinyurl.com/nccl-reduce     |
-| Scatter       | baseBw = (count * nranks * typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | https://tinyurl.com/nccl-scatter    |
-| AlltoAll      | baseBw = (count * nranks * typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | https://tinyurl.com/nccl-all-to-all |
-| SendRecv      | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | https://tinyurl.com/sendrcv         |
-
-
+| AllReduce     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw *(2*(nranks - 1)/nranks) | B = S/t *(2*(n-1)/n) | <https://tinyurl.com/all-reduce>      |
+| ReduceScatter | baseBw = (count *nranks* typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | <https://tinyurl.com/reduce-scatter>  |
+| AllGather     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | <https://tinyurl.com/all-gather>      |
+| Broadcast     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | <https://tinyurl.com/nccl-broadcast>  |
+| Gather        | baseBw = (count *nranks* typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | <https://tinyurl.com/nccl-gather>     |
+| Reduce        | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | <https://tinyurl.com/nccl-reduce>     |
+| Scatter       | baseBw = (count *nranks* typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | <https://tinyurl.com/nccl-scatter>    |
+| AlltoAll      | baseBw = (count *nranks* typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | <https://tinyurl.com/nccl-all-to-all> |
+| SendRecv      | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | <https://tinyurl.com/sendrcv>         |
 
 #### Notes for Algbw & Busbw**
 
-* `typesize` : size of the data type transferred in bytes (2 bytes for half-precision, 4 for single precision....).
-* `count` : number of elements transferred through the collective communication operation.
-* `nranks` : number of ranks participating to the collective communication operation.
-* `sec` : time in seconds to execute the collective communication operation.
+- `typesize` : size of the data type transferred in bytes (2 bytes for half-precision, 4 for single precision....).
+- `count` : number of elements transferred through the collective communication operation.
+- `nranks` : number of ranks participating to the collective communication operation.
+- `sec` : time in seconds to execute the collective communication operation.
 
 #### Notes for the Theoretical Max BW
 
 The formula defines the maximum theoretical bandwidth that can be achieved on different communication collectives in the ideal case.
 
-* `n` : number of ranks participating to the operation. (similar to nranks for Algbw and Busbw)
-* `t` : time to complete the operation. (similar to sec for Algbw and Busbw)
-* `S` : number of elements being communicated (similar to count for Algbw and Busbw)
-* `B` : theoretical peak bandwidth.
+- `n` : number of ranks participating to the operation. (similar to nranks for Algbw and Busbw)
+- `t` : time to complete the operation. (similar to sec for Algbw and Busbw)
+- `S` : number of elements being communicated (similar to count for Algbw and Busbw)
+- `B` : theoretical peak bandwidth.

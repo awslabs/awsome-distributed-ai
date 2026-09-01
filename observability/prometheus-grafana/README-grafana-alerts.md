@@ -56,6 +56,7 @@ This guide walks you through how to configure Slack notifications for alerts gen
 ![Slack app in workspace](assets/slack-app-workspace.png)
 
 Then:
+
 1. Open your target Slack channel
 2. Mention the app (`@YourAppName`)
 3. Click **Add to channel** when prompted

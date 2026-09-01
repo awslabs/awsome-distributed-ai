@@ -1,4 +1,4 @@
-# Running Small LLM with 3D Parallelism on Picotron 
+# Running Small LLM with 3D Parallelism on Picotron
 
 This guide explains how to run distributed training using 3D parallelism with Picotron, using a 1.7B parameter LLaMA-based model as an example.
 

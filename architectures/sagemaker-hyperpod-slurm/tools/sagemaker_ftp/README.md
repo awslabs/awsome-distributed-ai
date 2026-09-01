@@ -297,6 +297,7 @@ Things to try:
 - **AZ names vs AZ IDs.** AZ names like `us-west-2b` are scoped to your
   account — the same name maps to different physical AZs in different
   accounts. To compare across accounts, use AZ IDs:
+
   ```bash
   aws ec2 describe-availability-zones --region us-west-2 \
     --query 'AvailabilityZones[].[ZoneName,ZoneId]' --output table

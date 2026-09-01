@@ -1,16 +1,18 @@
 # Perplexity Kernels Benchmark
-https://github.com/ppl-ai/pplx-kernels
+<https://github.com/ppl-ai/pplx-kernels>
 
 Updated to [NVSHMEM 3.4.5-0](https://github.com/NVIDIA/nvshmem/commit/df2814155acfba6227534dd81a8bf338da9e55f2) and PPLX-KERNELS [Aug 6, 2025](https://github.com/ppl-ai/pplx-kernels/commit/12cecfda252e4e646417ac263d96e994d476ee5d)
 
 ## Git clone NVSHMEM
 
 3.4.5-0:
+
 ```
 git clone https://github.com/NVIDIA/nvshmem.git && cd ./nvshmem && git checkout df2814155acfba6227534dd81a8bf338da9e55f2 && cd ..
 ```
 
 devel brach:
+
 ```
 git clone https://github.com/NVIDIA/nvshmem.git && cd ./nvshmem && git checkout devel && cd ..
 ```

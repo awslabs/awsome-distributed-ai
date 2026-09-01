@@ -28,6 +28,7 @@ TP8/EP32/PP8/DP4, seed, image, FSx mounts, EFA env, and the
 ## Measured result — 2026-06-01 (256× B300, balanced routing, overlap off & on)
 
 **Headline — the dispatcher winner DEPENDS ON micro-batch granularity (a crossover):**
+
 - At **micro_batch=4** (16 dispatches/iter, the throughput-efficient operating point):
   **UCCL `deepep` is ~36% FASTER** than NCCL all-to-all (6.263 s vs 9.774 s/iter;
   170.5 vs 109.2 MODEL TFLOP/s/GPU). **✓ Work-equivalence CONFIRMED** by a loss-match

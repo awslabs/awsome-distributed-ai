@@ -16,6 +16,7 @@ Run the automated setup script:
 ```
 
 This script will:
+
 1. Check/create OIDC provider for your EKS cluster
 2. Create an IAM policy with S3 full access
 3. Create an IAM role with trust policy for the service account
@@ -25,14 +26,17 @@ This script will:
 ## What Gets Created
 
 ### IAM Policy
+
 - **Name**: `ray-s3-access-policy`
 - **Permissions**: Full S3 access (`s3:*`)
 
 ### IAM Role
+
 - **Name**: `ray-s3-access-role`
 - **Trust Policy**: Allows the Kubernetes service account to assume this role via OIDC
 
 ### Kubernetes Service Account
+
 - **Name**: `ray-s3-sa`
 - **Namespace**: `default`
 - **Annotation**: Links to the IAM role ARN
@@ -89,6 +93,7 @@ kubectl exec -it $POD_NAME -- aws s3 ls s3://${S3_BUCKET_NAME}/
 If you get an error about OIDC provider, you need to create an IAM OIDC identity provider for your cluster. This allows Kubernetes service accounts to authenticate with AWS IAM.
 
 **Option 1: Using AWS CLI**
+
 ```bash
 # Get your cluster's OIDC issuer URL
 oidc_url=$(aws eks describe-cluster --name $EKS_CLUSTER_NAME \
@@ -101,6 +106,7 @@ aws iam create-open-id-connect-provider \
 ```
 
 **Option 2: Using eksctl**
+
 ```bash
 # Install eksctl first
 # macOS: brew install eksctl
@@ -111,20 +117,27 @@ eksctl utils associate-iam-oidc-provider --cluster $EKS_CLUSTER_NAME --approve
 ```
 
 ### Credentials Not Working
+
 1. Check service account annotation:
+
    ```bash
    kubectl get sa ray-s3-sa -o yaml
    ```
+
 2. Check pod has the service account:
+
    ```bash
    kubectl get pod <pod-name> -o yaml | grep serviceAccountName
    ```
+
 3. Check environment variables in pod:
+
    ```bash
    kubectl exec -it <pod-name> -- env | grep AWS
    ```
 
 ### Permission Denied
+
 1. Verify IAM role has the policy attached
 2. Check the trust policy allows your service account
 3. Ensure the OIDC provider ARN matches in the trust policy
@@ -134,6 +147,7 @@ eksctl utils associate-iam-oidc-provider --cluster $EKS_CLUSTER_NAME --approve
 The current setup grants full S3 access (`s3:*`). For production, consider:
 
 1. **Restrict to specific buckets**:
+
    ```json
    "Resource": [
        "arn:aws:s3:::sagemaker-mtcpt-${ACCOUNT}",
@@ -142,6 +156,7 @@ The current setup grants full S3 access (`s3:*`). For production, consider:
    ```
 
 2. **Limit actions**:
+
    ```json
    "Action": [
        "s3:GetObject",

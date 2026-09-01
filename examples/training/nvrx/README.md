@@ -18,6 +18,7 @@ This test case benchmarks [NVIDIA Resiliency Extension (NVRx)](https://github.co
 ## Parallelism Support
 
 All training scripts support both **FSDP** and **DDP** via the `--parallel_strategy` argument:
+
 - `--parallel_strategy=fsdp` (default) -- Full Sharded Data Parallel, recommended for large models (LLaMA-3.1-8B)
 - `--parallel_strategy=ddp` -- Distributed Data Parallel, suitable for smaller models (GPT-2)
 
@@ -38,6 +39,7 @@ The test case includes a configurable fault injection framework (`src/failure_si
 - **Hang faults** -- Simulates NCCL deadlocks, detected by ft_launcher heartbeat timeout
 
 Two injection modes are supported:
+
 - **Deterministic** (recommended for benchmarks): `--fault_count=5 --fault_seed=42` injects exactly N faults at pre-determined steps for reproducible, apples-to-apples comparisons across recovery mechanisms
 - **Stochastic** (for exploratory testing): `--fault_probability=0.005` injects faults randomly per step per rank
 

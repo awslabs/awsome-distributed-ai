@@ -14,9 +14,11 @@ This example showcases [PyTorch DDP](https://pytorch.org/tutorials/beginner/ddp_
 ### Basic Usage
 
 To run the training with GPUs, use `torchrun` with the appropriate number of GPUs:
+
 ```bash
 torchrun --nproc_per_node=N ddp.py --total_epochs=10 --save_every=1 --batch_size=32
 ```
+
 where N is the number of GPUs you want to use.
 
 ## MLFlow Integration
@@ -26,11 +28,13 @@ This implementation includes [MLFlow](https://mlflow.org/) integration for exper
 ### Setup
 
 1. Install MLFlow:
+
 ```bash
 pip install mlflow
 ```
 
-2. Start the MLFlow tracking server:
+1. Start the MLFlow tracking server:
+
 ```bash
 mlflow ui
 ```
@@ -38,11 +42,13 @@ mlflow ui
 ### Usage
 
 To enable MLFlow logging, add the `--use_mlflow` flag when running the training script:
+
 ```bash
 torchrun --nproc_per_node=N ddp.py --total_epochs=10 --save_every=1 --batch_size=32 --use_mlflow
 ```
 
 By default, MLFlow will log to `file://$HOME/mlruns`. To use a different tracking server, specify the `--tracking_uri`:
+
 ```bash
 torchrun --nproc_per_node=N ddp.py --total_epochs=10 --save_every=1 --batch_size=32 --use_mlflow --tracking_uri=http://localhost:5000
 ```
@@ -50,6 +56,7 @@ torchrun --nproc_per_node=N ddp.py --total_epochs=10 --save_every=1 --batch_size
 ### What's Tracked
 
 MLFlow will track:
+
 - Training metrics (loss per epoch)
 - Model hyperparameters
 - Model checkpoints
@@ -60,6 +67,7 @@ MLFlow will track:
 1. Open your browser and navigate to `http://localhost:5000` (or your specified tracking URI)
 
 The MLFlow UI provides:
+
 - Experiment comparison
 - Metric visualization
 - Parameter tracking

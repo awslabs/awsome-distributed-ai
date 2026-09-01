@@ -50,6 +50,7 @@ Add an optional `--training-plan <name>` flag to `deploy.sh` that:
 The data flow through the upstream CFN templates has been traced and validated:
 
 **CFN path:**
+
 ```
 params.json InstanceGroupSettings1 (JSON string with TrainingPlanArn)
   -> main-stack-eks-based-template.yaml (pass-through)
@@ -63,6 +64,7 @@ params.json InstanceGroupSettings1 (JSON string with TrainingPlanArn)
 ```
 
 **TF path:**
+
 ```
 custom.tfvars instance_groups[0].training_plan_arn
   -> variables.tf: training_plan_arn = optional(string) (already defined)
@@ -78,6 +80,7 @@ in `lib/deploy_helpers.sh`.
 ### API Details
 
 **DescribeTrainingPlan response** (relevant fields):
+
 ```json
 {
   "TrainingPlanArn": "arn:aws:sagemaker:<region>:<account>:training-plan/<name>",
@@ -94,6 +97,7 @@ in `lib/deploy_helpers.sh`.
 ```
 
 **AZ name -> AZ ID resolution:**
+
 ```bash
 aws ec2 describe-availability-zones \
     --zone-names us-west-2a \

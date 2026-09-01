@@ -10,6 +10,7 @@ To easily login to your cluster via [AWS Systems Manager](https://docs.aws.amazo
 ```
 
 You'll need a few pre-requisites for this script:
+
 * JQ: `brew install jq`
 * aws cli
 * `pcluster` cli
@@ -50,7 +51,7 @@ Host ml-cluster
   ProxyCommand sh -c "aws ssm start-session --target i-0095542c11ccb02b5 --document-name AWS-StartSSHSession --parameters 'portNumber=%p'"
 EOF
 ```
-3. Now you ssh in, assuming `ml-cluster` is the name of your cluster with:
+1. Now you ssh in, assuming `ml-cluster` is the name of your cluster with:
 
 ```
 ssh ml-cluster
@@ -96,4 +97,3 @@ Each instance type has its own `Sockets` and `CoresPerSocket` values. Below are 
 | p4d.24xlarge  | 2         | 24               |
 
 For other instance types, you'd need to run an instance to check the values.
-

@@ -1,6 +1,7 @@
 # NCCOM-test on Slurm
 
 ## Prerequisits
+
 This guide assumes that you have the following:
 
 - A functional Slurm cluster on AWS.
@@ -8,9 +9,7 @@ This guide assumes that you have the following:
 
 It is recommended that you use the templates in the architectures [directory](../../../architectures)
 
-
 ## Running NCCOM Tests
-
 
 Copy the file `nccom-tests.sbatch` or its content on your cluster then submit a preprocessing jobs with the command below:
 
@@ -20,7 +19,7 @@ sbatch nccom-tests.sbatch
 
 ## Results
 
-The command above will create output file ` logs/nccom-all_reduce_perf_125.out`. The output shold look as below:
+The command above will create output file `logs/nccom-all_reduce_perf_125.out`. The output shold look as below:
 
 ```txt
     size(B)    count(elems)    type    time:avg(us)    algbw(GB/s)    busbw(GB/s)

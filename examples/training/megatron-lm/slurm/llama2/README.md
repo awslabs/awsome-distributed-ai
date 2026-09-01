@@ -6,7 +6,6 @@ To pretrain Llama2, you must visit <https://huggingface.co/meta-llama/Llama-2-7b
 
 The remaining steps are similar to the GPT3 example. For more information, please refer to the official Megatron-LM documentation on Llama2 [here](https://github.com/NVIDIA/Megatron-LM/blob/main/docs/llama2.md).
 
-
 ## 1. Preparation
 
 Ensure you have the following prerequisites:
@@ -14,7 +13,7 @@ Ensure you have the following prerequisites:
 - A functional Slurm cluster.
 - Docker, Pyxis, and Enroot installed on the head node and compute nodes.
 - An FSx for Lustre filesystem mounted on `/fsx` in all nodes.
-- 
+-
 
 Set up the following environment variables in your terminal:
 
@@ -44,4 +43,3 @@ sbatch pre-train-llama2.sbatch
 ```
 
 Tips: the Llama2 example prints the estimated FLOPS/GPU (enabled via `--log-throughput` in the pretrain `.sbatch` file). You might want to look at [PR-682](https://github.com/NVIDIA/Megatron-LM/pull/682) and decide whether to patch your Megatron-LM to adjust the way FLOPS/GPU is calculated.
-

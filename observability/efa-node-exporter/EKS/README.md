@@ -46,7 +46,7 @@ fi
 docker image push ${REGISTRY}${IMAGE}${TAG}
 ```
 
-# 4. Add Helm repo 
+# 4. Add Helm repo
 
 Before we can install the helm chart, we need to add the repo like below:
 
@@ -62,11 +62,13 @@ We have customized the [values.yaml](https://github.com/prometheus-community/hel
 ```bash
 envsubst < ./efa-exporter-values-temp.yaml > efa-exporter-values.yaml
 ```
+
 Next you can install the chart as below:
 
 ```bash
 helm install efa-node-exporter -f efa-exporter-values.yaml prometheus-community/prometheus-node-exporter
 ```
+
 Once done you can see the chart as below:
 
 ```bash
@@ -83,13 +85,15 @@ efa-node-exporter-prometheus-node-exporter-ctwcf   1/1     Running     0        
 efa-node-exporter-prometheus-node-exporter-r6kvl   1/1     Running     0          4d10h
 efa-node-exporter-prometheus-node-exporter-vh2zg   1/1     Running     0          4d10h
 ```
-Finally, you will also see a new service like below. 
+
+Finally, you will also see a new service like below.
 
 ```bash
 root@cb9511473ccc:/eks/deployment/distributed-training/pytorch/pytorchjob/efa-node-exporter/prometheus-node-exporter# kubectl get service
 NAME                                         TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)     AGE
 efa-node-exporter-prometheus-node-exporter   ClusterIP   10.100.243.108   <none>        9100/TCP    4d10h
 ```
+
 Note, the default port is 9100. If you wish to change it, you can do so in the following lines in `efa-exporter-values.yaml`:
 
 ```bash
@@ -104,7 +108,7 @@ service:
 
 # 6. Port-forwarding
 
-Once the helm chart is installed, you can port forward as below. 
+Once the helm chart is installed, you can port forward as below.
 
 ```bash
 kubectl port-forward svc/efa-node-exporter-prometheus-node-exporter ${LOCAL_PORT}:9100
@@ -252,6 +256,7 @@ To uninstall the exporter, you can do the following which would also stop the re
 ```bash
 helm uninstall efa-node-exporter
 ```
+
 Finally, to free up the ${LOCAL_PORT}, you can find the process from below and kill the process to free the port:
 
 ```bash

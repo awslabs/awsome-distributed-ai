@@ -12,8 +12,7 @@ This guide assumes that you have the following:
 
 It is recommended that you use the templates in the architectures [directory](../../../../architectures) for setting up Amazon SageMaker HyperPod or AWS Parallel Cluster.
 
-Make sure that your current directory is under a shared filesystem such as `/fsx`. 
-
+Make sure that your current directory is under a shared filesystem such as `/fsx`.
 
 ## 3. Clone this repo
 
@@ -83,4 +82,3 @@ In this example, we run the following script to start the LLaMa 8B pretraining j
 - [NVIDIA NeMo resiliency example](https://github.com/NVIDIA/NeMo/tree/main/examples/llm/resiliency)
 - [AWS SageMaker HyperPod Documentation](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod.html)
 - [AWS SageMaker HyperPoc Workshop](https://catalog.workshops.aws/sagemaker-hyperpod/en-US)
-

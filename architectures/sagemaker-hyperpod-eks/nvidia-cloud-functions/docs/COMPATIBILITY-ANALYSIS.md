@@ -80,6 +80,7 @@ considerations require specific configuration choices.
 
 SageMaker HyperPod EKS uses its own device plugin setup. The NVIDIA GPU Operator must be
 installed separately via Helm. The operator should be configured to:
+
 - **Skip driver installation** (SageMaker HyperPod nodes come with pre-installed NVIDIA drivers)
 - Install only the device plugin, DCGM exporter, and GPU feature discovery components
 
@@ -97,6 +98,7 @@ network policies, the security controls described below will not be enforced."_
 **Impact**: Functions will work, but workload pods can communicate without restrictions.
 
 **Mitigation options**:
+
 1. Accept the risk (functions are already isolated by Kubernetes namespaces)
 2. Enable AWS VPC CNI Network Policy support (v1.14+, using eBPF)
 3. Install Calico in policy-only mode alongside VPC CNI
@@ -123,6 +125,7 @@ the EBS CSI driver for any custom persistent storage needs.
 | Outbound internet | Required (NVIDIA endpoints) | Private subnets only | NEEDS NAT GW |
 
 NVCA requires outbound access to:
+
 - `nvcr.io` and `helm.ngc.nvidia.com` (container/chart pulls)
 - `connect.pnats.nvcf.nvidia.com` (control plane messaging)
 - `grpc.api.nvcf.nvidia.com` and `*.api.nvcf.nvidia.com` (API)

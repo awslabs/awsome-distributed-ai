@@ -21,6 +21,7 @@ The `setup.sh` script handles three image build paths:
 | **Skip Build** | `--skip-build` | Image already exists in ECR from a prior build |
 
 After the image build, `setup.sh` always:
+
 1. Generates an SSH key pair (`~/.ssh/id_ed25519_slurm`) if not present
 2. Renders `slurm-values.yaml` from `slurm-values.yaml.template` with
    profile-specific values (GPU count, EFA count, GRES, replicas, etc.)
@@ -116,11 +117,13 @@ ls -la ~/.ssh/id_ed25519_slurm*
 ### Local Docker Path (`--local-build`)
 
 1. Authenticates to the DLC ECR registry in `us-east-1`:
+
    ```bash
    aws ecr get-login-password --region us-east-1 | \
        docker login --username AWS \
        --password-stdin 763104351884.dkr.ecr.us-east-1.amazonaws.com
    ```
+
 2. Builds the image (platform-aware):
    - **macOS**: `docker buildx build --platform linux/amd64`
    - **Linux**: `docker build`
@@ -131,11 +134,13 @@ ls -la ~/.ssh/id_ed25519_slurm*
 ### Skip Build Path (`--skip-build`)
 
 1. Verifies the image exists in ECR:
+
    ```bash
    aws ecr describe-images \
        --repository-name dlc-slurmd \
        --image-ids imageTag=25.11.1-ubuntu24.04
    ```
+
 2. Fails with an error if the image is not found
 
 ### SSH Key Generation (All Paths)
@@ -161,6 +166,7 @@ Calls `resolve_helm_profile()` which sets these variables based on
 
 Then uses `sed` to substitute 10 template variables in
 `slurm-values.yaml.template`:
+
 - `${image_repository}`, `${image_tag}`, `${ssh_key}`
 - `${mgmt_instance_type}`, `${accel_instance_type}`
 - `${gpu_count}`, `${efa_count}`, `${gpu_gres}`

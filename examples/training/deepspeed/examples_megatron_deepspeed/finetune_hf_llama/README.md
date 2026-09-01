@@ -3,6 +3,7 @@
 This test case showcase how to finetune Llama2 model from HuuggingFace Weights using Megatron DeepSpeed.
 
 ## 1. Preparation
+
 Set the following environment variables to run the test cases:
 
 ```bash
@@ -12,6 +13,7 @@ export FSX_PATH=/fsx
 export MODEL_PATH=$FSX_PATH/deepspeed
 export DATA_PATH=$FSX_PATH/alpaca
 ```
+
 In this step, we prepares Llama2 dataset and pretrained weights.
 
 This tutorial uses [Stanford Alphaca](https://github.com/tatsu-lab/stanford_alpaca) dataset. Download the dataset with the command below:
@@ -62,6 +64,7 @@ Finally, transforms the checkpoint into Megatron DeepSpeed format:
 
 ``bash
 bash 2.convert-weights-to-mega-ds.sh
+
 ```
 
 

@@ -2,7 +2,6 @@
 
 This directory contains scripts and instructions for setting up the Megatron-LM training environment on a Slurm cluster. For detailed instructions on running distributed training jobs with this environment, please refer to the subdirectories.
 
-
 ## 1. Preparation
 
 This guide assumes that you have the following:
@@ -21,8 +20,7 @@ export DATA_PATH=/fsx/data # FSx for Lustre shared file-system
 
 The following instructions assume you have cloned this repository under such a shared filesystem and changed your current directory to this directory.
 
-
-## 2. Environment Setup 
+## 2. Environment Setup
 
 This section of the guide how to build a Megatron-LM container then convert it into a Squash file via [Enroot](https://github.com/NVIDIA/enroot).
 
@@ -46,7 +44,7 @@ Below are the steps you need to follow:
 4. Prepare the image for your target environment.
 
    Create the squash file with the command below.
- 
+
    ```bash
    enroot import -o aws-megatron-lm.sqsh  dockerd://aws-megatron-l:latest
    ```
@@ -72,9 +70,6 @@ Below are the steps you need to follow:
     ...
     ```
 
-## 2. Next Steps 
+## 2. Next Steps
 
 Now that you have the Megatron-LM container and have enabled the squash file, you can scale your training job with the container on your Slurm cluster. The subdirectories illustrate detailed end-to-end instructions for different models.
-
-
-

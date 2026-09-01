@@ -33,6 +33,7 @@ official OpenCode SKILL.md format:
 ```
 
 Added YAML frontmatter:
+
 ```yaml
 name: bash-testing
 description: Patterns for unit testing bash scripts using bats-core, including

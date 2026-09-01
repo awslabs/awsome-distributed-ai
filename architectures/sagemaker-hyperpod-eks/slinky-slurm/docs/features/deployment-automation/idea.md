@@ -21,6 +21,7 @@ error-prone, time-consuming, and difficult to reproduce consistently.
 ## Proposed Solution
 
 Create bash scripts (following the `ai-on-eks` reference pattern of `setup.sh`
+
 + `install.sh`) that automate the **Day-2 operations** -- everything after the
 HyperPod EKS infrastructure is already deployed via CloudFormation or Terraform.
 
@@ -46,18 +47,18 @@ Modeled after `ai-on-eks/.../setup.sh`. Handles:
    (inject `image_repository`, `image_tag`, `ssh_key`)
 
 Flags:
-- `--repo-name <name>` (default: `dlc-slurmd`)
-- `--tag <tag>` (default: `25.11.1-ubuntu24.04`)
-- `--region <region>` (default: AWS CLI configured region)
-- `--skip-build` (use existing ECR image)
-- `--profile <g5|p5>` (select hardware profile)
-- `--help`
++ `--repo-name <name>` (default: `dlc-slurmd`)
++ `--tag <tag>` (default: `25.11.1-ubuntu24.04`)
++ `--region <region>` (default: AWS CLI configured region)
++ `--skip-build` (use existing ECR image)
++ `--profile <g5|p5>` (select hardware profile)
++ `--help`
 
 ### Phase 2: `install.sh` (Cluster Installation)
 
 Orchestrates the full Day-2 deployment. Assumes:
-- HyperPod EKS cluster is deployed and `kubectl` context is configured
-- Required env vars are set (`EKS_CLUSTER_NAME`, `VPC_ID`,
++ HyperPod EKS cluster is deployed and `kubectl` context is configured
++ Required env vars are set (`EKS_CLUSTER_NAME`, `VPC_ID`,
   `PRIVATE_SUBNET_ID`, `SECURITY_GROUP_ID`, `AWS_ACCOUNT_ID`, `AWS_REGION`)
 
 Steps automated:
@@ -74,10 +75,10 @@ Steps automated:
 | 8 | NLB Configuration | Find public subnets, annotate login service |
 
 Flags:
-- `--skip-setup` (use previously generated `slurm-values.yaml`)
-- `--profile <g5|p5>` (select hardware profile)
-- `--skip-fsx-openzfs` (skip optional OpenZFS, default: skip)
-- `--help`
++ `--skip-setup` (use previously generated `slurm-values.yaml`)
++ `--profile <g5|p5>` (select hardware profile)
++ `--skip-fsx-openzfs` (skip optional OpenZFS, default: skip)
++ `--help`
 
 ### Phase 3: `destroy.sh` (Cleanup)
 
@@ -100,20 +101,20 @@ following the `ai-on-eks` pattern of using `envsubst` or `sed` for injection.
 ### Prerequisites Check
 
 Each script should validate prerequisites at the start:
-- `aws`, `kubectl`, `helm`, `eksctl`, `docker`, `envsubst` are installed
-- Required env vars are set
-- AWS credentials are valid
-- `kubectl` context points to the correct cluster
++ `aws`, `kubectl`, `helm`, `eksctl`, `docker`, `envsubst` are installed
++ Required env vars are set
++ AWS credentials are valid
++ `kubectl` context points to the correct cluster
 
 ### Key References
 
-- **ai-on-eks reference scripts:**
-  - `ai-on-eks/.../slinky-slurm/install.sh` (93 lines)
-  - `ai-on-eks/.../slinky-slurm/setup.sh` (107 lines)
-  - `ai-on-eks/infra/slinky-slurm/terraform/blueprint.tfvars` (component flags)
-- **Manual steps to automate:**
-  - `README.md` (phases 3-12 of the deployment guide)
-  - `Docker-Build-README.md` (full container build workflow)
++ **ai-on-eks reference scripts:**
+  + `ai-on-eks/.../slinky-slurm/install.sh` (93 lines)
+  + `ai-on-eks/.../slinky-slurm/setup.sh` (107 lines)
+  + `ai-on-eks/infra/slinky-slurm/terraform/blueprint.tfvars` (component flags)
++ **Manual steps to automate:**
+  + `README.md` (phases 3-12 of the deployment guide)
+  + `Docker-Build-README.md` (full container build workflow)
 
 ### Design Decisions
 
@@ -128,7 +129,7 @@ Each script should validate prerequisites at the start:
 
 ## Success Criteria
 
-- [ ] TBD
++ [ ] TBD
 
 ## Notes
 

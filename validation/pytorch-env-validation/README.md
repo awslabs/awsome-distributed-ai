@@ -3,6 +3,7 @@
 This test runs a PyTorch script to screen for NCCL, MPI, OpenMP, CUDA.... on your environment. This script is executed once per instance and helps you verify your environment: The AWS [Deep Learning Container](https://docs.aws.amazon.com/deep-learning-containers/latest/devguide/deep-learning-containers-images.html) is used for that purpose.
 
 Here you will:
+
 - Build a container from the AWS [Deep Learning Container](https://docs.aws.amazon.com/deep-learning-containers/latest/devguide/deep-learning-containers-images.html) and convert it to a squash file using [Enroot](https://github.com/NVIDIA/enroot).
 - Run a Python script to screen the PyTorch environment with [Pyxis](https://github.com/NVIDIA/pyxis) via Slurm.
 - Mount a local directory in the container via Pyxis.
@@ -18,7 +19,6 @@ This guide assumes that you have the following:
 
 It is recommended that you use the templates in the architectures [directory](../../architectures) to deploy Slurm (for example AWS ParallelCluster).
 
-
 ## 1. Build the container and the squash file
 
 We use the AWS [Deep Learning Container](https://docs.aws.amazon.com/deep-learning-containers/latest/devguide/deep-learning-containers-images.html) as a base for your validation container and the EFA libraries to use the latest versions. Here, you will start by building your container image then convert it to a squash file via Enroot.
@@ -27,6 +27,7 @@ To build the container:
 
 1. Copy the file `0.pytorch-screenl.Dockerfile` or its content to your head-node.
 2. Build the container image with the command below
+
    ```bash
    # get the region, this assumes we run on EC2
    AWS_AZ=$(ec2-metadata --availability-zone | cut -d' ' -f2)
@@ -39,7 +40,9 @@ To build the container:
    # Build the container
    docker build -t pytorch-screenl -f 0.pytorch-screenl.Dockerfile --build-arg="AWS_REGION=${AWS_AZ::-1}" .
    ```
+
 3. Once the image is built, you can check if it is present with `docker images`. You should see an output similar to this one:
+
    ```
    REPOSITORY                                                           TAG                                     IMAGE ID       CREATED         SIZE
    pytorch-screen                                                       latest                                  2892fe08195a   2 minutes ago   21.6GB
@@ -47,10 +50,12 @@ To build the container:
    763104351884.dkr.ecr.ap-northeast-2.amazonaws.com/pytorch-training   2.0.1-gpu-py310-cu118-ubuntu20.04-ec2   3d25d3d0f25e   2 months ago    20.8GB
    ...
    ```
-3. Convert the container image to a squash file via Enroot
+4. Convert the container image to a squash file via Enroot
+
    ```bash
    enroot import -o /apps/pytorch-screen.sqsh  dockerd://pytorch-screen:latest
    ```
+
    The file will be stored in the `/apps` directory.
 
 > You can set versions and the branch for NCCL and EFA by editing the variables below in the Dockerfile.
@@ -69,7 +74,6 @@ sbatch 1.torch-screen.sbatch
 ```
 
 An output file named `slurm-XX.out`, with `XX` being the job ID, will be placed in the directory. It will report the environment variables, location of `python`, `nvidia-smi` and PyTorch environment variables for each node (instance). Please keep in mind that each process, 1 per node, will write concurrently to the output file. Each process output is prepended by their ID `:0` for process 0, `:1` for process 1. These can be interleaved. Below is an example of output:
-
 
 ```bash
 0: torch.backends.opt_einsum.strategy=None

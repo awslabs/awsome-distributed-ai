@@ -126,6 +126,7 @@ MIG_PROFILE=3g.20gb NUM_GPUS=2 ./1.deploy-training.sh
 ```
 
 When `MIG_PROFILE` is set, the deploy script automatically:
+
 - Sets the GPU resource to `nvidia.com/mig-<profile>` (e.g., `nvidia.com/mig-3g.20gb`)
 - Reduces pod CPU/memory requests to fit within a partition (40Gi RAM, 8 vCPU by default)
 - Reduces shared memory (`/dev/shm`) to 16Gi

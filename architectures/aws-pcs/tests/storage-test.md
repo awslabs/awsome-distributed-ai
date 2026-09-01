@@ -24,6 +24,7 @@ df -h /home /fsx
 ```
 
 Expected:
+
 - `/fsx` mounted as type `lustre`, source `<fs-id>.fsx.<region>.amazonaws.com@tcp:/<mountname>`,
   size matches the `Capacity` parameter (1200 GiB default; 19200 GiB or larger
   when `FSxLustreEnableEfa=true`).
@@ -72,6 +73,7 @@ aws fsx describe-file-systems --file-system-ids "$FSX_ID" --region <region> \
 ```
 
 Expected (default deploy):
+
 - `StorageCapacity` = your `Capacity` parameter (1200 by default)
 - `StorageType` = `SSD`
 - `DeploymentType` = `PERSISTENT_2` (default; or `PERSISTENT_1` if you set it)

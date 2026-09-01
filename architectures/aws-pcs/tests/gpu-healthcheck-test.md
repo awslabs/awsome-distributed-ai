@@ -18,6 +18,7 @@ available on shared `/fsx` (so every compute node sees the same scripts).
 ## PCS-specific deltas
 
 1. **Stage the suite on `/fsx`** (shared) so all GPU nodes run the same copy:
+
    ```bash
    cd /fsx && git clone https://github.com/awslabs/awsome-distributed-ai.git --depth 1
    HC=/fsx/awsome-distributed-ai/validation/gpu-cluster-healthcheck
@@ -25,6 +26,7 @@ available on shared `/fsx` (so every compute node sees the same scripts).
 
 2. **Drive it through the PCS Slurm queue** — use `srun`/`sbatch` against your GPU
    partition name (e.g. `gpu-p5`, `gpu-b200`), not the suite's bare host invocation:
+
    ```bash
    export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH
    # lightweight suite (checks 0-3) on one GPU node
@@ -32,6 +34,7 @@ available on shared `/fsx` (so every compute node sees the same scripts).
    # multi-node NCCL (check 5) — runs inside the Slurm allocation
    srun -p <gpu-partition> -N2 -n2 --exclusive bash $HC/gpu-healthcheck.sh --check 5
    ```
+
    The suite's `slurm/` directory also ships `sbatch` wrappers and a
    `prolog-gpu-healthcheck.sh` you can wire into PCS as a Slurm prolog (see the
    suite README's Slurm section) — no PCS-specific change needed there.

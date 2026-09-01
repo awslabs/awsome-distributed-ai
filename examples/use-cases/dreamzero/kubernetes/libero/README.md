@@ -23,6 +23,7 @@ prediction acts as a computational scaffold for action reasoning.
 
 > **14B vs 16.48B vs 23B.** These all describe the same released checkpoint,
 > at different scopes:
+>
 > - **14B** — the publisher's headline (the Wan video-diffusion **DiT backbone**;
 >   the HF model card lists "14 Billion" and base model `Wan2.1-I2V-14B-480P`,
 >   an image-to-video (I2V) model).
@@ -48,6 +49,7 @@ warm-start from; continue-SFT adapts it to your target data (here, LIBERO) —
 the same pattern you would follow with your own dataset.
 
 Upstream projects:
+
 - [github.com/RLinf/RLinf](https://github.com/RLinf/RLinf) (training framework)
 - [github.com/RLinf/dreamzero](https://github.com/RLinf/dreamzero) (the `groot`
 package that provides the WAM model code).

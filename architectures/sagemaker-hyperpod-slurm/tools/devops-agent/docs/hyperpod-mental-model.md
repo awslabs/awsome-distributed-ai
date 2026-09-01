@@ -490,6 +490,7 @@ HyperPod API surface) — or, for in-cluster pinning, by labels like
 `sagemaker.amazonaws.com/instance-group-name` that survive replacement.
 
 **Preconditions for `BatchReplaceClusterNodes`**:
+
 - Cluster must have been patched at least once via `UpdateClusterSoftware`.
 - Cluster must be `InService`.
 - Slurm controller nodes cannot be replaced.
@@ -525,6 +526,7 @@ volumes.
 Even after the "root EBS gets wiped" callout above, several `UpdateClusterSoftware` behaviors surprise testers and customer-facing tooling on the first encounter. Consolidated here:
 
 **`SoftwareUpdateStatus` field on `describe-cluster` `InstanceGroups[]`.** This is the canonical per-IG signal for "an AMI update is in flight"; distinct from the generic `Status: Updating` that both `UpdateCluster` and `UpdateClusterSoftware` produce. Observed transitions:
+
 - `n/a` (absent) → `InProgress` → `Succeeded` on the happy path.
 - `n/a` → `InProgress` → `RollbackInProgress` (transient, visible only briefly) → `Failed` on failure.
 
@@ -771,6 +773,7 @@ one incident. Dedup logic that keys on `(IG, description)` or
 signatures (different descriptions).
 
 Options for dedup consumers:
+
 - Time-window collapse: within N seconds of the same fault type on the
   same IG, treat as one.
 - Prefer the "Failed to provision" event (it's typically emitted first
@@ -1221,9 +1224,11 @@ the same across requeues.
 
 Common mistake: writing `sbatch --auto-resume=1 ...`. That doesn't work
 — `sbatch: unrecognized option '--auto-resume=1'`. The correct usage is:
+
 ```
 sbatch ...args... --wrap='srun --auto-resume=1 ./inner.sh'
 ```
+
 The `--auto-resume=1` belongs on the `srun` command inside the batch
 allocation.
 
@@ -1246,6 +1251,7 @@ node sits drained with the operator's reason but no action is taken.
 | `Reboot` / `replace this` | ignored (wrong format) |
 
 Canonical operator commands:
+
 ```
 scontrol update node=<ip> state=fail reason="Action:Reboot"
 scontrol update node=<ip> state=fail reason="Action:Replace"
@@ -1256,6 +1262,7 @@ scontrol update node=<ip> state=fail reason="Action:Replace"
 *(EKS only)*
 
 Two labels emulate the Slurm `Action:...` reasons:
+
 - `sagemaker.amazonaws.com/node-health-status=UnschedulablePendingReboot`
 - `sagemaker.amazonaws.com/node-health-status=UnschedulablePendingReplacement`
 
@@ -1336,6 +1343,7 @@ lockstep on reboot vs. replace — see "Identity stability" above.
 ## Where to find data
 
 ### Cluster identity and instance inventory
+
 - `aws sagemaker describe-cluster --cluster-name <name>` — cluster ARN,
   status, instance group config.
 - `aws sagemaker list-cluster-nodes --cluster-name <name>` — list of
@@ -1344,6 +1352,7 @@ lockstep on reboot vs. replace — see "Identity stability" above.
   — per-instance detail.
 
 ### Slurm state (via SSM to controller)
+
 - `sinfo`, `sinfo -N -l`, `sinfo -R` — partition / node state, drain reasons.
 - `squeue`, `squeue -a` — job queue.
 - `scontrol show config` — live Slurm config (after any reconfigure).
@@ -1351,6 +1360,7 @@ lockstep on reboot vs. replace — see "Identity stability" above.
 - `scontrol show topology` — only meaningful when topology plugin is tree/block.
 
 ### EKS state (via kubectl)
+
 - `kubectl get nodes --show-labels` — includes
   `topology.k8s.aws/network-node-layer-{1,2,3}` and
   `topology.k8s.aws/ultraserver-id` labels per node.
@@ -1360,12 +1370,14 @@ lockstep on reboot vs. replace — see "Identity stability" above.
 ### Logs (via SSM and CloudWatch)
 
 **Canonical CloudWatch log group:**
+
 ```
 /aws/sagemaker/Clusters/<CLUSTER_NAME>/<CLUSTER_ID>
 ```
 
 The `<CLUSTER_ID>` is the **ARN suffix**, not the cluster name. Derive
 via:
+
 ```
 aws sagemaker describe-cluster --cluster-name <name> \
     --query 'ClusterArn' --output text | cut -d/ -f2
@@ -1480,6 +1492,7 @@ issue).
 ### Neuron (Trainium / Inferentia)
 
 Different toolchain:
+
 - Counters live under Neuron sysfs, exposed via `neuron-ls`,
   `neuron-top`, `neuron-monitor`.
 - `nvidia-smi` does not apply.
@@ -1529,6 +1542,7 @@ running workloads.
 | Cordon an EKS node | `kubectl cordon <node>` followed by `kubectl drain <node>` |
 
 Notes:
+
 - HMA fault injection (Xid syslog line, `dcgmi inject`) only works
   on nodes where HMA is actually running:
   - **Slurm**: check `systemctl status sagemaker-health-monitoring-agent.service`.

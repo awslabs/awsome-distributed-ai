@@ -31,6 +31,7 @@ HyperPod writes two JSON config files to `/opt/ml/config/` on every node
   including each instance's `CustomerIpAddress`.
 
 The detection algorithm:
+
 1. Get this node's IP address (via UDP socket |-- no network call needed)
 2. Find which instance group contains this IP in `resource_config.json`
 3. Compare that group's name to `provisioning_parameters.json`:

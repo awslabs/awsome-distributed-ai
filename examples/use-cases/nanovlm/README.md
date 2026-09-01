@@ -1,7 +1,6 @@
 # NanoVLM Test Case
 
-This test case demonstrates distributed training of [NanoVLM](https://github.com/huggingface/nanoVLM/), a repository for training/finetuning a small sized Vision-Language Model with a lightweight implementation in pure PyTorch. 
-
+This test case demonstrates distributed training of [NanoVLM](https://github.com/huggingface/nanoVLM/), a repository for training/finetuning a small sized Vision-Language Model with a lightweight implementation in pure PyTorch.
 
 ## 1. Prerequisites
 
@@ -11,7 +10,7 @@ This guide assumes that you have the following:
 - Docker, for Slurm [Pyxis](https://github.com/NVIDIA/pyxis) and [Enroot](https://github.com/NVIDIA/enroot) need to be installed as well.
 - An FSx for Lustre filesystem mounted on `/fsx` in all Slurm nodes. Also, this test case assumes that the home directory is also a shared directory.
 
-Make sure that your current directory is under a shared filesystem such as `/fsx`. 
+Make sure that your current directory is under a shared filesystem such as `/fsx`.
 
 ## 2. Clone this repo
 
@@ -20,7 +19,6 @@ Make sure that your current directory is under a shared filesystem such as `/fsx
   git clone https://github.com/aws-samples/awsome-distributed-ai/
   cd awsome-distributed-ai/examples/use-cases/nanovlm/
   ```
-
 
 ## 3. Install Dependencies and Prepare Virtual Environment
 
@@ -36,8 +34,7 @@ Create Virtual environment and install the dependencies to download our dataset 
 
 ## 4. Hugging Face token
 
-First, create a Hugging Face account to retrieve a [token](https://huggingface.co/settings/tokens.). Log in to your account and create an access token from Hugging Face Tokens. 
-
+First, create a Hugging Face account to retrieve a [token](https://huggingface.co/settings/tokens.). Log in to your account and create an access token from Hugging Face Tokens.
 
 ### Get huggingface token
 
@@ -68,7 +65,9 @@ Then export the saved token `${HF_TOKEN}` to use in the subsequent steps
 ```bash
 export HF_TOKEN=$(cat /path_where_the_token_is_saved_from_the_above_step)
 ```
+
 for example:
+
 ```bash
 export HF_TOKEN=$(cat /fsx/ubuntu/.cache/huggingface/token)
 ```
@@ -81,7 +80,8 @@ cd nanoVLM
 git checkout 9de5e17ac2f4c578c32085131d966464cdd252b5
 cd ..
 ```
-This sample has been developed with the above commit hash. 
+
+This sample has been developed with the above commit hash.
 
 ## 6. Download the dataset required for the training
 
@@ -91,9 +91,9 @@ Specify path to download dataset for example:
 export DATASET_DIR=$PWD/datasets/cauldron
 ```
 
-The default dataset path will be $DATASET_DIR and the datasets are ["clevr", "vqav2", "docvqa"]. 
+The default dataset path will be $DATASET_DIR and the datasets are ["clevr", "vqav2", "docvqa"].
 
-### (Optional) You can modify this as needed to dowload the entire dataset by setting the configs to the entry below in Line 24 in slurm/download_dataset.sbatch file:
+### (Optional) You can modify this as needed to dowload the entire dataset by setting the configs to the entry below in Line 24 in slurm/download_dataset.sbatch file
 
 ```bash
 configs = get_dataset_config_names("HuggingFaceM4/the_cauldron")
@@ -104,7 +104,7 @@ cd slurm
 sbatch download_dataset.sbatch
 ```
 
-## 7. Update the dataset and checkpoint path in the NanoVLM config 
+## 7. Update the dataset and checkpoint path in the NanoVLM config
 
 ```bash
 cd ..
@@ -126,11 +126,13 @@ sed -i "s|vlm_checkpoint_path: str = '[^']*'|vlm_checkpoint_path: str = '$CHECKP
 ```
 
 Disable logging metrics to wandb for this sample:
+
 ```bash
 sed -i "s/log_wandb: bool = True/log_wandb: bool = False/" $PWD/nanoVLM/models/config.py
 ```
 
-### (Optional) If training and running evaluations on g5 instances, update the configuration as below to avoid OOM issues.
+### (Optional) If training and running evaluations on g5 instances, update the configuration as below to avoid OOM issues
+
 ```bash
 
 sed -i \
@@ -152,18 +154,21 @@ sed -i \
 ```
 
 ## 8. Build and Configure the NaNoVLM Job Container
+
 The provided Dockerfile (`nanoVLM.Dockerfile`) will set up the environment with all required dependencies:
 
 ```bash
 docker build -t nanovlm:latest -f nanovlm.Dockerfile .
 enroot import -o nanovlm.sqsh  dockerd://nanovlm:latest
 ```
+
 ## 9. Launch Training
 
 ```bash
 cd slurm
 sbatch launch_training.sbatch
 ```
+
 Note the path where the checkpoints will be generated from the slurm.out log file as this will be used in the subsequent sections for evaluation and generation
 
 For example:

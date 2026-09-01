@@ -175,6 +175,7 @@ aws cloudformation wait stack-delete-complete --stack-name <stack-name>
 Nested stacks (and FSx) are deleted automatically — back up FSx data first.
 
 If DELETE_FAILED on CNG stacks (PCS timing dependency), delete PCS CNGs first:
+
 ```bash
 CLUSTER_ID=<id>
 for cng in $(aws pcs list-compute-node-groups --cluster-identifier $CLUSTER_ID --query 'computeNodeGroups[].id' --output text); do

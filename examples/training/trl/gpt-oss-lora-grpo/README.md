@@ -1,6 +1,6 @@
 # GPT-OSS 20B Training & Inference Guide
 
-This guide explains how to train the GPT-OSS 20B model with LoRA, then improve it using Group Relative Policy Optimization (GRPO) for better language compliance in reasoning and final answers. It is designed to be as simple as possible, requires no data preparation, and uses a container image. For further background information look at https://developers.openai.com/cookbook/articles/gpt-oss/fine-tune-transformers
+This guide explains how to train the GPT-OSS 20B model with LoRA, then improve it using Group Relative Policy Optimization (GRPO) for better language compliance in reasoning and final answers. It is designed to be as simple as possible, requires no data preparation, and uses a container image. For further background information look at <https://developers.openai.com/cookbook/articles/gpt-oss/fine-tune-transformers>
 
 ## Pipeline Overview
 
@@ -51,12 +51,14 @@ git clone https://github.com/awslabs/awsome-distributed-ai/
 ## 1. Build container image
 
 Copy `env_vars.example` to `env_vars` and update with your values:
+
 ```bash
 cp env_vars.example env_vars
 # Edit env_vars with your AWS account, region, and HuggingFace token
 ```
 
 Alternative to Docker Desktop (macOS):
+
 ```bash
 brew install colima docker
 colima start
@@ -64,6 +66,7 @@ docker context use colima
 ```
 
 Use `/artifacts/build_push.sh` to build and push the image to Amazon ECR.
+
 ```bash
 source env_vars
 # Build the shared TRL base image first
@@ -79,7 +82,6 @@ cd ..
 ```bash
 envsubst '$REGISTRY $IMAGE $TAG $HF_TOKEN' < kubernetes/fsx-storage-manager.yaml | kubectl apply -f -
 ```
-
 
 ## 2. Data
 
@@ -198,7 +200,6 @@ envsubst '$REGISTRY $IMAGE $TAG $HF_TOKEN' < kubernetes/inference-g6e-base.yaml 
 envsubst '$REGISTRY $IMAGE $TAG $HF_TOKEN' < kubernetes/inference-g6e-trained.yaml | kubectl apply -f -
 envsubst '$REGISTRY $IMAGE $TAG $HF_TOKEN' < kubernetes/inference-g6e-grpo.yaml | kubectl apply -f -
 ```
-
 
 ### 5.3. Run inference commands
 

@@ -454,7 +454,7 @@ Override via `params.json` if you have a specific reason:
 
 When set to `false`, the four bridge resources (Lambda, IAM role, subscription
 filter, permission) are not deployed. Rollback is `EnableHmaCloudWatchBridge=false`
-+ redeploy. See [IMPLEMENTATION.md](IMPLEMENTATION.md#hma-cloudwatch-bridge-slurm-only)
+- redeploy. See [IMPLEMENTATION.md](IMPLEMENTATION.md#hma-cloudwatch-bridge-slurm-only)
 for the design rationale, latency (~1–5 s end-to-end from HMA detection to
 DevOps Agent), and failure semantics.
 
@@ -506,4 +506,5 @@ time from `docs/hyperpod-mental-model.md` (single source of truth).
 - **Fan out notifications** — Slack / ServiceNow / PagerDuty / Microsoft Teams all
   listen on the same `aws.aidevops` event stream the email notifier uses. Add them
   via DevOps Agent's built-in integrations or a sibling stack on the same stream.
+
 ```

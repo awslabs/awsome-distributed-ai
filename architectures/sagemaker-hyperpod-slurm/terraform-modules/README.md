@@ -5,6 +5,7 @@ This directory contains Terraform modules to deploy a complete SageMaker HyperPo
 ## Architecture Overview
 
 The Terraform modules create:
+
 - VPC with public and private subnets
 - Security groups configured for EFA communication
 - FSx for Lustre file system
@@ -16,12 +17,14 @@ The Terraform modules create:
 ## Quick Start
 
 1. **Clone and Navigate**
+
    ```bash
    git clone https://github.com/awslabs/awsome-distributed-ai.git
    cd awsome-distributed-ai/architectures/sagemaker-hyperpod-slurm/terraform-modules/hyperpod-slurm-tf
    ```
 
 2. **Customize Configuration**
+
    ```bash
    cp terraform.tfvars.example terraform.tfvars
    # Edit terraform.tfvars with your specific requirements
@@ -102,7 +105,9 @@ existing_vpc_id = "vpc-1234567890abcdef0"
 existing_private_subnet_id = "subnet-1234567890abcdef0"
 existing_security_group_id = "sg-1234567890abcdef0"
 ```
+
 ## OpenZFS
+
 FSx OpenZFS provides NFS-based shared storage suitable for user home directories and general-purpose file sharing. FSx OpenZFS provides NFS-based shared storage suitable for user home directories and general-purpose file sharing.
 
 To enable FSx OpenZFS (refer to `terraform.tfvars.example`), add to your `terraform.tfvars`:
@@ -113,8 +118,9 @@ fsx_openzfs_storage_capacity = 64
 fsx_openzfs_throughput_capacity = 64
 fsx_openzfs_compression_type = "ZSTD"
 ```
-Then set ```enable_fsx_openzfs = True ``` in ```../../../../1.architectures/5.sagemaker-hyperpod/LifecycleScripts/base-config/config.py``` to mount the file system during the lifecycle scripts execution. 
-    
+
+Then set ```enable_fsx_openzfs = True``` in ```../../../../1.architectures/5.sagemaker-hyperpod/LifecycleScripts/base-config/config.py``` to mount the file system during the lifecycle scripts execution.
+
 ## Modules
 
 - **vpc**: Creates VPC with public/private subnets, IGW, NAT Gateway
@@ -145,6 +151,7 @@ After deployment, use the provided helper script:
 ```
 
 Or manually:
+
 ```bash
 aws ssm start-session --target sagemaker-cluster:${CLUSTER_ID}_${CONTROLLER_GROUP}-${INSTANCE_ID}
 ```

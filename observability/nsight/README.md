@@ -1,4 +1,4 @@
-# Profile Distributed Training Applications with Nsight 
+# Profile Distributed Training Applications with Nsight
 
 [Nsight Systems](https://developer.nvidia.com/nsight-systems) is a system-wide performance analysis tool designed to profile and visualize multi-node CPU and GPU workloads such as distributed training and inference to identify the largest opportunities to optimize, and tune to scale efficiently across the cluster. It also enables researchers to add their own markers into their code to surface application-level metrics into the profiler and gain further observability.
 
@@ -17,6 +17,7 @@ We will show how to profile and analyze:
 
 > [!NOTE]
 > The `nemotron/nemotron-slurm-exec.sh` wrapper reads the Nsight report output location from `NSYS_OUTPUT_DIR`, which defaults to `/fsx/${USER}/nemotron/results/nemotron4--15B-16g/profile_logs`. Export it before running if your shared-filesystem mount differs:
+>
 > ```bash
 > export NSYS_OUTPUT_DIR=/your/shared/mount/profile_logs
 > ```
@@ -36,7 +37,7 @@ mkdir -p ${Nsight_Report_Path}
 
 # 2. Installation
 
-If you created the cluster with DLAMI or are using the default ParallelCluster base image, Nsight comes pre-installed. You can check the version in the `/usr/local/cuda/` folder you should see `nsight-systems-202x.x.x` folder. ParallelCluster 3.8.0 has the version 2023.2 version pre-installed. 
+If you created the cluster with DLAMI or are using the default ParallelCluster base image, Nsight comes pre-installed. You can check the version in the `/usr/local/cuda/` folder you should see `nsight-systems-202x.x.x` folder. ParallelCluster 3.8.0 has the version 2023.2 version pre-installed.
 
 To get the latest Nsight 2024.4 version from [here](https://developer.nvidia.com/nsight-systems/get-started). If you are installing it on a remote cluster, then the CLI version would suffice. To install it on a Ubuntu based OS node:
 
@@ -57,7 +58,7 @@ The `nsight-efa`folder will have the necessary dependencies for the `host` which
 
 # 3. How to generate reports
 
-Nsight 2024.4 version supports EFA metrics. In this section we will walkthrough how to generate reports with EFA metrics on a Slurm cluster. 
+Nsight 2024.4 version supports EFA metrics. In this section we will walkthrough how to generate reports with EFA metrics on a Slurm cluster.
 
 ## 3.1 Modify slurm submission script
 
@@ -92,6 +93,7 @@ ${Nsight_Path}/target-linux-x64/nsys profile $NSYS_EXTRAS --sample none --output
 ```
 
 A few key points:
+
 1. This slurm executable will generate 1 report for each GPU if SLURM_NTASKS_PER_NODE is equal to the number of GPUs. If SLURM_NTASKS_PER_NODE=1, one report will get generated for all 8 GPUs.
 2. --sample none argument disables CPU sampling. For a detailed list of CLI switches see [here](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#cli-command-switches)
 3. EFA metrics are shared across all GPUs on the same node so it needs to be enabled only on 1 GPU
@@ -130,26 +132,25 @@ fi
 
 We need a more convinient way to generate reports with start and stop training step user inputs. You can:
 
-
 1. Add `nsys_start_step` and `nsys_end_step` as input arguments to your train.py
 2. Add the following in the training loop to start collecting data from Cuda and OSRT traces:
+
 ```python
 if batch_idx == args.nsys_start_step and global_rank == 0:
     logger.info("====== Start nsys profiling ======")
     torch.cuda.cudart().cudaProfilerStart()
 ```
-3. Add to stop collection:
+1. Add to stop collection:
+
 ```python
 if batch_idx == args.nsys_end_step and global_rank == 0:
     logger.info("====== Stop nsys profiling ======")
     torch.cuda.cudart().cudaProfilerStop()
 ```
-4. Add `--capture-range=cudaProfilerApi --capture-range-end=stop` to the `nsys profile ...` command.
-
-
-
+1. Add `--capture-range=cudaProfilerApi --capture-range-end=stop` to the `nsys profile ...` command.
 
 # 4. Profiling NCCL tests
+
 In this section we will show how to generate Nsight reports for NCCL tests. Follow the instructions [here](https://github.com/awslabs/awsome-distributed-ai/tree/main/micro-benchmarks/nccl-tests) to setup NCCL tests and generate the Enroot image `nccl.sqsh`. The `0.nsight_nccl.sbatch` script shows an example on how to profile the NCCL run with Nsight and collect EFA metrics. Key differences between `0.nsight_nccl.sbatch` and [this](https://github.com/awslabs/awsome-distributed-ai/blob/main/micro-benchmarks/nccl-tests/slurm/nccl-tests-container.sbatch) are:
 
 1. `/fsx` needs to be mounted to the container as this is where our Nsight binaries are located.
@@ -167,6 +168,7 @@ fi
     --force-overwrite true --output <PATH-TO-SAVE-REPORT>/report_<REPORT-NAME-TAG>_job%q{SLURM_JOB_ID}_rank%q{SLURM_PROCID}_on_%q{HOSTNAME}.nsys-rep \
    "$@"
 ```
+
 The above executable needs the following:
 
 ```bash
@@ -175,6 +177,7 @@ The above executable needs the following:
 2. PATH-TO-SAVE-REPORT: One report is generated per GPU. Provide a path to save all reports.
 3. REPORT-NAME-TAG: Unique name tag to group all reports. Use %q{} to include environment variables in report names.
 ```
+
 Here, we are running the Nsight profile with 2 p4de nodes where each node has 4 EFA devices and 8 GPUs. The `nic sampler` metrics from all 4 EFA devices show up in every report so it is okay to collect these metrics only for 1 rank.
 
 Below is a screenshot of the generated Nsight report:
@@ -190,14 +193,15 @@ Here there are the following things to note:
 
 > [!TIP]
 > The *.qdstrm files are temporarily generated first using the nsys binaries in `.../target-linux-x64` while the `*.nsys-rep` report file is generated using the `/host-linux-x64/QdstrmImporter` binary. If for some reason, only `*.qdstrm` files are generated, use the above importer like below to generate a `*.nsys-rep report`
+
 ```bash
 <Path-to-host-linux-x64>/host-linux-x64/QdstrmImporter –input-file <file-name>.qdstrm
 ```
 
-
 ## 4.1 NCCL All Reduce Test
 
 Following the steps above, you can generate a similar result for NCCL All Reduce Test also see NCCL test output in the logs. Here we will visualize the spread in NCCL All Reduce communication for 1GB and 2GB message sizes. To do so you can:
+
 1. Run NCCL test and generate report. Save the result for 1GB and 2GB message sizes.
 2. Right click on `all_reduce_perf > NCCL` row to show in Events View. This Events View shows NCCL Kernel API calls on the CPU. You can see the NCCL Message Size for each call. Note row numbers where NCCL Message Sizes change.
 3. Right click on `ncclDevKernel_AllReduce_Sum_f32_TREE_LL(ncclDevComm *, unsigned long, ncclWork *)` row and show in Events View. This Events View shows NCCL Kernel calls executed on the GPU, it start time and duration. Copy paste the entire table in a csv.
@@ -212,7 +216,6 @@ You can generate the plot below using the python script `/nccl/plot_nccl.py`
 <center><img src="nccl/all_reduce_sum.png" width="80%"/> </br>
 </center>
 
-
 # 5. Working with the report
 
 1. The Nsight Systems GUI offers to view the following. You can see these options by clicking on the Timeline View menu button.
@@ -220,14 +223,14 @@ a.  Output and error logfiles from the training run
 b.  Analysis summary that gives a summary of the profiling session.
 c.  Timeline view of the report
 d.  Diagnostics summary view
-2.  You can right click and pin any row at the top. This helps in analyzing multiple rows simultaneously.
-3.  You can view start and execution times of any kernel by viewing them in the Events view.
-4.  From the Events View, you can zoom to that specific kernel event by right clicking. This provides an easy way to look into kernel events preceding and following a specific kernel even if their durations are in nanoseconds.
-5.  You can export the report in different formats such as sqllite and others as well for custom analysis.
+2. You can right click and pin any row at the top. This helps in analyzing multiple rows simultaneously.
+3. You can view start and execution times of any kernel by viewing them in the Events view.
+4. From the Events View, you can zoom to that specific kernel event by right clicking. This provides an easy way to look into kernel events preceding and following a specific kernel even if their durations are in nanoseconds.
+5. You can export the report in different formats such as sqllite and others as well for custom analysis.
 
 # 6. Nsight Recipes
 
-Once the report is generated, we can generate [recipes](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#available-multi-report-recipes) to analyze the data in the report. We provide the script ` 2.generate_recipes.sh` which will generate multiple recipes for the report and upload to S3. Each recipe run will summarize the relevant data from the report and provide python scripts and jupyter notebooks to analyze the data.
+Once the report is generated, we can generate [recipes](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#available-multi-report-recipes) to analyze the data in the report. We provide the script `2.generate_recipes.sh` which will generate multiple recipes for the report and upload to S3. Each recipe run will summarize the relevant data from the report and provide python scripts and jupyter notebooks to analyze the data.
 
 Next, we will show what kind of analysis can be generated from the recipes.
 
@@ -238,6 +241,7 @@ pip3 install -r ${Nsight_Path}/target-linux-x64/python/packages/nsys_recipe/requ
 pip3 install -r ${Nsight_Path}/target-linux-x64/python/packages/nsys_recipe/requirements/dask.txt
 
 ```
+
 With Nsight 2024.4, the following recipes are available:
 
 ```bash
@@ -336,6 +340,7 @@ profile:
 ## 7.2 Install injector
 
 Install helm chart for the sidecar injector as below:
+
 ```bash
 helm install -f custom_values.yaml \
     devtools-sidecar-injector https://helm.ngc.nvidia.com/nvidia/devtools/charts/devtools-sidecar-injector-1.0.0.tgz
@@ -364,6 +369,7 @@ Run the training job as:
 ```bash
 kubectl apply -f fsdp.yaml
 ```
+
 The report will get saved to `/fsx_shared`
 
 Below is a screenshot of the generated Nsight report:
@@ -395,17 +401,20 @@ kubectl delete cm nvidia-devtools-sidecar-injector-custom
 The sidecar injector approach in Section 7 requires pulling an Nsight Docker image and installing a Helm chart. An alternative, simpler approach is available when nsys is pre-installed on the cluster nodes (as it is on **SageMaker HyperPod EKS** nodes and **DLAMI-based** EKS nodes). This approach mounts the host's nsight-systems directory directly into the training pods.
 
 **Quick start:**
+
 1. Verify nsys is on nodes: `ls /opt/nvidia/nsight-systems/`
 2. Create ConfigMap: `kubectl create configmap nsight-scripts --from-file=nsys-profile.sh=EKS/nsys-profile.sh`
 3. Apply the profiled job: `kubectl apply -f EKS/llama3_2_1b-fsdp-nsight.yaml`
 4. Copy reports and run analysis: `python3 EKS/nsys_analyze.py --reports /tmp/nsight-reports/`
 
 **Prerequisites:**
+
 - An EKS cluster with GPU nodes where nsys is pre-installed (HyperPod EKS, or DLAMI-based nodes)
 - Kubeflow Training Operator installed (for PyTorchJob CRD)
 - nsys >= 2024.5 for `--pytorch=autograd-shapes-nvtx` support (HyperPod ships 2025.6.1)
 
 **Advantages over the sidecar approach:**
+
 - No Helm chart, no webhook, no sidecar image to manage
 - Zero overhead for non-profiled ranks (selective profiling)
 - Auto-detects nsys version on the host
@@ -449,7 +458,7 @@ volumes:
       defaultMode: 0755
 ```
 
-2. **Environment variables** to configure profiling:
+1. **Environment variables** to configure profiling:
 
 ```yaml
 env:
@@ -469,7 +478,7 @@ env:
     value: "true"          # Track CUDA memory allocations
 ```
 
-3. **Command**: Use the wrapper script instead of calling torchrun directly
+1. **Command**: Use the wrapper script instead of calling torchrun directly
 
 ```yaml
 command:
@@ -483,7 +492,7 @@ command:
   - ...training args...
 ```
 
-4. **Volume mounts**: Include nsight and scripts
+1. **Volume mounts**: Include nsight and scripts
 
 ```yaml
 volumeMounts:
@@ -502,6 +511,7 @@ kubectl apply -f EKS/llama3_2_1b-fsdp-nsight.yaml
 ```
 
 The profiling wrapper will:
+
 - Auto-detect the nsys binary from the mounted volume
 - Skip profiling for ranks not in `NSYS_RANKS_TO_PROFILE` (zero overhead)
 - Collect with `--delay` and `--duration` to capture steady-state training
@@ -555,6 +565,7 @@ python3 EKS/nsys_analyze.py --reports /tmp/nsight-reports/ \
 ```
 
 The analysis output includes:
+
 - **GPU Kernel Time Breakdown** by category (NCCL, GEMM, Attention, Optimizer, etc.)
 - **Bottleneck Classification** (Communication Bound, Compute Bound, Sync Bound, etc.)
 - **CUDA API Time** (identifies synchronization overhead)

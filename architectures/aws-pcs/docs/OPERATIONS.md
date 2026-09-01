@@ -172,6 +172,7 @@ the directory-service equivalent in [USER-MANAGEMENT.md](./USER-MANAGEMENT.md)).
 Most of the stack is **replacement-safe by design**; one thing is not.
 
 **Survives a replacement (no action needed):**
+
 - **Compute metrics keep flowing.** Prometheus *pulls* (scrapes) compute exporters;
   compute nodes never push and never store the login IP. The new login node's
   Prometheus re-discovers the running compute nodes automatically via **EC2 service
@@ -188,6 +189,7 @@ Most of the stack is **replacement-safe by design**; one thing is not.
   points at the co-located Prometheus.
 
 **Lost on a replacement (known limitation):**
+
 - **Historical metrics and any hand-made Grafana changes.** The Prometheus TSDB and
   the Grafana DB live in **node-local Docker named volumes** (`/var/lib/docker/volumes/...`
   — deliberately node-local to avoid the shared-`/home` Stale-file-handle race that
@@ -319,11 +321,13 @@ sudo lctl set_param llite.*.statahead_max=512
 ```
 
 **When to apply:**
+
 - Large-scale training (16+ nodes, large datasets on `/fsx`)
 - Checkpoint-heavy workloads (frequent writes of multi-GB files)
 - Python environments on `/fsx` (many small-file imports)
 
 **When to skip:**
+
 - Small PoC / evaluation deploys (default 8 RPCs is sufficient for 1–4 nodes)
 - If the filesystem is 1.2 TiB / 2 OSTs (the throughput ceiling is the
   filesystem's provisioned bandwidth, not the client's RPC parallelism)
@@ -332,6 +336,7 @@ sudo lctl set_param llite.*.statahead_max=512
 
 Stripe settings control how a file's data is distributed across OSTs. The
 default FSx PFL (Progressive File Layout) is reasonable for mixed workloads:
+
 ```
 -E 100M -c 1  -E 10G -c 8  -E 100G -c 16  -E -1 -c 32
 ```
@@ -405,6 +410,7 @@ sudo sysctl -w vm.vfs_cache_pressure=50
 ```
 
 For TCP-based LNet (non-EFA filesystems), also raise socket buffer limits:
+
 ```bash
 sudo sysctl -w net.core.rmem_max=16777216
 sudo sysctl -w net.core.wmem_max=16777216
@@ -452,6 +458,7 @@ is written to by `install-enroot-pyxis.sh`, but that lifecycle action completes 
 first start, and no slurmd unit / cgroup config is modified afterwards.
 
 **Workaround.**
+
 - Resubmit; subsequent `srun`s land on sibling nodes that didn't hit the race.
 - To bring the drained node back, on the login node run:
   `sudo scontrol update nodename=cpu1-N state=resume reason=cleared`.

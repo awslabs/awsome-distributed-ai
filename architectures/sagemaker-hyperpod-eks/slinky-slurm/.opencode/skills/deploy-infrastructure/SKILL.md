@@ -12,10 +12,12 @@ cluster. This is **Phase 1** of the slinky-slurm deployment workflow and must
 complete before running `setup.sh` or `install.sh`.
 
 The `deploy.sh` script supports two infrastructure backends:
+
 - **CloudFormation** (`--infra cfn`) -- uses an AWS-hosted S3 template
 - **Terraform** (`--infra tf`) -- uses local Terraform modules
 
 Deployment takes approximately 20-30 minutes and provisions:
+
 - VPC with public/private subnets
 - EKS cluster
 - HyperPod instance groups (management + accelerated)
@@ -85,6 +87,7 @@ source env_vars.sh
 ```
 
 This sets:
+
 - `AWS_ACCOUNT_ID`
 - `AWS_REGION`
 - `EKS_CLUSTER_NAME`

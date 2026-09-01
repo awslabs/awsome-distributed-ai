@@ -68,6 +68,7 @@ node. EFA itself is exercised by Test 6.
    ```
 
 **Expected** (in `nccl-all_reduce_perf_<jobid>.out`):
+
 - EFA is the provider: `NET/OFI Selected provider is efa, fabric is efa-direct (found N nics)`
   (N = EFA interface count: 32 for p5/p5e, 16 for p5en, 8 for p6-b200, 16 for p6-b300).
 - Correctness: `# Out of bounds values : 0 OK`, every size `#wrong: 0`.

@@ -23,17 +23,20 @@ This guide covers common issues and solutions when running the QLoRA fine-tuning
 **Solutions**:
 
 1. Update kubeconfig for HyperPod EKS:
+
    ```bash
    aws eks update-kubeconfig --region $AWS_REGION --name <cluster-name>
    ```
 
 2. Check context:
+
    ```bash
    kubectl config current-context
    kubectl config get-contexts
    ```
 
 3. Verify cluster is active:
+
    ```bash
    aws eks describe-cluster --name <cluster-name> --query 'cluster.status'
    ```
@@ -45,12 +48,14 @@ This guide covers common issues and solutions when running the QLoRA fine-tuning
 **Solutions**:
 
 1. Check node status and labels:
+
    ```bash
    kubectl get nodes -l node.kubernetes.io/instance-type=ml.g5.12xlarge
    kubectl get nodes -o wide
    ```
 
 2. Check HyperPod node health:
+
    ```bash
    kubectl get nodes -l sagemaker.amazonaws.com/node-health-status=Schedulable
    ```
@@ -69,16 +74,19 @@ This guide covers common issues and solutions when running the QLoRA fine-tuning
 **Solutions**:
 
 1. Check NVIDIA driver:
+
    ```bash
    nvidia-smi
    ```
 
 2. Check CUDA version:
+
    ```bash
    nvcc --version
    ```
 
 3. Reinstall PyTorch with CUDA:
+
    ```bash
    pip install 'torch==2.6.0' --index-url https://download.pytorch.org/whl/cu126
    ```
@@ -94,20 +102,24 @@ during checkpoint saves.
 **Solutions**:
 
 1. **Switch to multi-GPU with DeepSpeed ZeRO-2** (recommended):
+
    ```yaml
    # In configs/training_config_zero2.yaml
    parallel:
      strategy: "deepspeed_zero2"
    ```
+
    Then launch with `torchrun --nproc_per_node=4` on a g5.12xlarge.
 
 2. Reduce sequence length:
+
    ```yaml
    model:
      max_seq_length: 1024  # Reduced from 1536
    ```
 
 3. Reduce batch size:
+
    ```yaml
    training:
      per_device_train_batch_size: 1
@@ -115,11 +127,13 @@ during checkpoint saves.
    ```
 
 4. Enable memory-friendly CUDA allocator:
+
    ```bash
    export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
    ```
 
 5. Enable gradient checkpointing (enabled by default):
+
    ```yaml
    parallel:
      gradient_checkpointing: true
@@ -136,12 +150,14 @@ full model parameters and activations. If you still OOM:
    quadratically with sequence length in attention.
 
 2. Switch to DeepSpeed ZeRO-3 which also shards model parameters:
+
    ```yaml
    parallel:
      strategy: "deepspeed_zero3"
    ```
 
 3. Check for memory fragmentation:
+
    ```bash
    export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
    ```
@@ -155,18 +171,21 @@ On HyperPod EKS, the NVIDIA device plugin is managed by the HyperPod Helm chart.
 **Solutions**:
 
 1. Check device plugin pods:
+
    ```bash
    kubectl get pods -n kube-system -l app=nvidia-device-plugin-ds
    kubectl logs -n kube-system -l app=nvidia-device-plugin-ds
    ```
 
 2. Verify GPU resources are advertised:
+
    ```bash
    kubectl describe node <gpu-node-name> | grep -A5 "Allocatable"
    # Should show nvidia.com/gpu: 4 (or similar)
    ```
 
 3. If device plugin pods are missing, verify the HyperPod Helm chart is installed:
+
    ```bash
    helm list -A | grep -i hyperpod
    ```
@@ -183,6 +202,7 @@ training hangs during the first all-reduce operation.
 **Solutions**:
 
 1. Check NCCL debug output:
+
    ```bash
    # Set in kubernetes/qwen3_8b-qlora-zero2.yaml env vars:
    NCCL_DEBUG=INFO
@@ -190,12 +210,15 @@ training hangs during the first all-reduce operation.
    ```
 
 2. Verify all GPUs are visible within the pod:
+
    ```bash
    kubectl exec -it <pod-name> -n ml-training -- nvidia-smi
    ```
+
    You should see 4 GPUs listed.
 
 3. Increase shared memory. NCCL uses `/dev/shm` for inter-GPU communication:
+
    ```yaml
    # In qwen3_8b-qlora-zero2.yaml (already configured):
    volumes:
@@ -219,6 +242,7 @@ vanilla HF Trainer checkpoints do not.
    checkpoints. If you see this warning, training will restart from scratch.
 
 2. To manually check checkpoint format:
+
    ```bash
    ls /fsx/qwen3-qlora/outputs/checkpoint-*/
    # DeepSpeed: contains global_step*/ directories
@@ -226,6 +250,7 @@ vanilla HF Trainer checkpoints do not.
    ```
 
 3. To force a fresh start, delete old checkpoints:
+
    ```bash
    kubectl exec -it <pod-name> -n ml-training -- rm -rf /fsx/qwen3-qlora/outputs/checkpoint-*
    ```
@@ -256,18 +281,21 @@ vanilla HF Trainer checkpoints do not.
 **Solutions**:
 
 1. Lower learning rate:
+
    ```yaml
    training:
      learning_rate: 1.0e-4  # Reduce from 2e-4
    ```
 
 2. Increase warmup:
+
    ```yaml
    training:
      warmup_ratio: 0.1  # Increase from 0.03
    ```
 
 3. Check data formatting:
+
    ```python
    # Inspect a sample
    from datasets import load_dataset
@@ -282,18 +310,21 @@ vanilla HF Trainer checkpoints do not.
 **Solutions**:
 
 1. Check for OOM:
+
    ```bash
    dmesg | grep -i "killed process"
    ```
 
 2. Auto-resume is enabled by default. The training script uses
    `--resume_from_checkpoint=auto` which finds the latest valid checkpoint:
+
    ```bash
    # Check if checkpoints exist
    kubectl exec -it <pod-name> -n ml-training -- ls /fsx/qwen3-qlora/outputs/
    ```
 
 3. For EKS pods, check shared memory is large enough:
+
    ```yaml
    # In kubernetes/qwen3_8b-qlora-zero2.yaml (already configured):
    volumes:
@@ -310,6 +341,7 @@ vanilla HF Trainer checkpoints do not.
 **Solutions**:
 
 1. Verify all GPUs are being used:
+
    ```python
    import torch
    print(f"GPUs available: {torch.cuda.device_count()}")
@@ -318,6 +350,7 @@ vanilla HF Trainer checkpoints do not.
    ```
 
 2. Check for CPU bottleneck:
+
    ```yaml
    # Increase DataLoader workers
    data:
@@ -325,11 +358,13 @@ vanilla HF Trainer checkpoints do not.
    ```
 
 3. Disable debugging:
+
    ```bash
    export CUDA_LAUNCH_BLOCKING=0
    ```
 
 4. Check NCCL performance. Slow all-reduce can bottleneck multi-GPU training:
+
    ```bash
    export NCCL_DEBUG=INFO  # Check for warnings in logs
    ```
@@ -345,16 +380,19 @@ vanilla HF Trainer checkpoints do not.
 **Solutions**:
 
 1. Check Docker is running:
+
    ```bash
    docker info
    ```
 
 2. Clear Docker cache:
+
    ```bash
    docker system prune -a
    ```
 
 3. Build with verbose output:
+
    ```bash
    docker build --progress=plain -t qwen3-qlora-training:test .
    ```
@@ -366,6 +404,7 @@ vanilla HF Trainer checkpoints do not.
 **Solutions**:
 
 1. Re-authenticate:
+
    ```bash
    aws ecr get-login-password --region us-east-1 | \
        docker login --username AWS --password-stdin \
@@ -373,6 +412,7 @@ vanilla HF Trainer checkpoints do not.
    ```
 
 2. Check ECR repository exists:
+
    ```bash
    aws ecr describe-repositories --repository-names qwen3-qlora-training
    ```
@@ -388,6 +428,7 @@ vanilla HF Trainer checkpoints do not.
 **Symptom**: `KeyError: 'qwen3'` when loading model
 
 **Solution**: Upgrade transformers:
+
 ```bash
 pip install 'transformers>=4.51.0'
 ```
@@ -399,16 +440,19 @@ pip install 'transformers>=4.51.0'
 **Solutions**:
 
 1. Use Hugging Face token:
+
    ```bash
    huggingface-cli login
    ```
 
 2. Set HF_HOME for caching:
+
    ```bash
    export HF_HOME=/path/to/cache
    ```
 
 3. Download manually:
+
    ```bash
    git lfs install
    git clone https://huggingface.co/Qwen/Qwen3-8B
@@ -421,12 +465,14 @@ pip install 'transformers>=4.51.0'
 **Solutions**:
 
 1. Reinstall with CUDA:
+
    ```bash
    pip uninstall bitsandbytes
    pip install 'bitsandbytes>=0.42.0'
    ```
 
 2. Check CUDA compatibility:
+
    ```python
    import bitsandbytes as bnb
    print(bnb.__version__)
@@ -437,6 +483,7 @@ pip install 'transformers>=4.51.0'
    ```
 
 3. Verify bitsandbytes CUDA detection:
+
    ```bash
    python -c "import bitsandbytes; print(bitsandbytes.__version__)"
    # bitsandbytes >= 0.42.0 ships pre-compiled CUDA wheels on PyPI
@@ -454,6 +501,7 @@ The merged full-precision model requires ~16GB VRAM. If your GPU has less:
 
 1. Use 4-bit quantized loading (see `src/inference_demo.py` for an example)
 2. Use CPU offloading:
+
    ```python
    model = AutoModelForCausalLM.from_pretrained(
        "Qwen/Qwen3-8B",
@@ -469,12 +517,14 @@ The merged full-precision model requires ~16GB VRAM. If your GPU has less:
 **Solutions**:
 
 1. Verify the adapter files exist:
+
    ```bash
    ls outputs/final_model/
    # Should contain: adapter_config.json, adapter_model.safetensors
    ```
 
 2. If using the EKS-trained model, copy it from the PVC first:
+
    ```bash
    # Create a temp pod attached to the PVC, then:
    kubectl cp ml-training/<pod-name>:/fsx/qwen3-qlora/outputs/final_model ./outputs/final_model
@@ -487,6 +537,7 @@ The merged full-precision model requires ~16GB VRAM. If your GPU has less:
 ### CUBLAS_STATUS_INVALID_VALUE
 
 **Symptom**: Training crashes on the first forward pass with:
+
 ```
 RuntimeError: CUDA error: CUBLAS_STATUS_INVALID_VALUE when calling cublasGemmEx
 ```
@@ -575,6 +626,7 @@ the conditional logic.
 If you're still stuck:
 
 1. Check the logs:
+
    ```bash
    # EKS pod logs
    kubectl logs qwen3-qlora-training-zero2-master-0 -n ml-training
@@ -589,6 +641,7 @@ If you're still stuck:
    - Steps to reproduce
 
 3. Common commands for debugging:
+
    ```bash
    # System info
    nvidia-smi

@@ -23,6 +23,7 @@ Reasoning VLA models, and video Q&A workloads.
 | Offline RL annotation | Label trajectory data with reasoning traces for offline RL training | Decision Transformer reward labels |
 
 ## Two Paths
+
 This test case provides **two parallel deployment paths**, both `kubectl`-only:
 
 ```
@@ -59,7 +60,7 @@ matches your platform.
 | Requirement | Detail |
 |-------------|--------|
 | EKS cluster | Kubernetes ≥ 1.28, GPU-capable |
-| GPU node | One of: g5.* (A10G 24 GB), g6.12xlarge (4× L4 24 GB), g6e.* (L40S 48 GB), p4d/p5/p5e (H100/H200) |
+| GPU node | One of: g5.*(A10G 24 GB), g6.12xlarge (4× L4 24 GB), g6e.* (L40S 48 GB), p4d/p5/p5e (H100/H200) |
 | NVIDIA device plugin | `nvidia-device-plugin` DaemonSet running on GPU nodes |
 | Hugging Face token | Required — Cosmos Reason models are gated on HF (NVIDIA Open Model License acceptance). [Request access](https://huggingface.co/nvidia/Cosmos-Reason1-7B) on the model card first. |
 | For `hyperpod-eks/` only | HyperPod Inference Operator installed. Recommended: EKS add-on `amazon-sagemaker-hyperpod-inference` (`v1.3.0-eksbuild.1`). Alternatives: `sagemaker-hyperpod-cli` v3.7.0+ (`hyp install`), or Helm chart `hyperpod-inference-operator` v2.1.0 (operator image `v3.1`). See [hyperpod-eks/README.md](hyperpod-eks/README.md#prerequisites). |
@@ -157,6 +158,7 @@ python3 examples/image_vqa.py --image examples/sample.jpg
 > [!NOTE]
 > The default `<think>/<answer>` system prompt and `--reasoning-parser qwen3` are
 > mutually exclusive:
+>
 > - **Reason1 (Qwen2.5-VL):** Keep the default system prompt. Do NOT enable the
 >   reasoning parser. `<think>...</think>` appears inline in `content`.
 > - **Reason2 (Qwen3-VL):** Omit the system prompt (`--system-prompt ""`) and
@@ -239,12 +241,12 @@ kubectl delete secret hf-token
 
 ## References
 
-- NVIDIA Cosmos: https://www.nvidia.com/en-us/ai/cosmos/
-- Cosmos Reason1-7B model card: https://huggingface.co/nvidia/Cosmos-Reason1-7B
-- Cosmos Reason2-8B model card: https://huggingface.co/nvidia/Cosmos-Reason2-8B
-- Cosmos Reason2 repo (NVIDIA): https://github.com/nvidia-cosmos/cosmos-reason2
-- vLLM: https://github.com/vllm-project/vllm
-- vLLM Qwen3-VL recipe: https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3-VL.html
-- AWS vLLM DLC repo: https://github.com/aws/deep-learning-containers
-- HyperPod Inference Operator setup blog: https://aws.amazon.com/blogs/architecture/unlock-efficient-model-deployment-simplified-inference-operator-setup-on-amazon-sagemaker-hyperpod/
-- HyperPod Inference Operator best practices: https://aws.amazon.com/blogs/machine-learning/best-practices-to-run-inference-on-amazon-sagemaker-hyperpod/
+- NVIDIA Cosmos: <https://www.nvidia.com/en-us/ai/cosmos/>
+- Cosmos Reason1-7B model card: <https://huggingface.co/nvidia/Cosmos-Reason1-7B>
+- Cosmos Reason2-8B model card: <https://huggingface.co/nvidia/Cosmos-Reason2-8B>
+- Cosmos Reason2 repo (NVIDIA): <https://github.com/nvidia-cosmos/cosmos-reason2>
+- vLLM: <https://github.com/vllm-project/vllm>
+- vLLM Qwen3-VL recipe: <https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3-VL.html>
+- AWS vLLM DLC repo: <https://github.com/aws/deep-learning-containers>
+- HyperPod Inference Operator setup blog: <https://aws.amazon.com/blogs/architecture/unlock-efficient-model-deployment-simplified-inference-operator-setup-on-amazon-sagemaker-hyperpod/>
+- HyperPod Inference Operator best practices: <https://aws.amazon.com/blogs/machine-learning/best-practices-to-run-inference-on-amazon-sagemaker-hyperpod/>

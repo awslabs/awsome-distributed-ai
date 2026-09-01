@@ -1,20 +1,21 @@
 
 # Deploy HyperPod Infrastructure using CloudFormation
+
 🚨 We recommend following the official [Amazon SageMaker HyperPod EKS documentation](https://awslabs.github.io/ai-on-sagemaker-hyperpod/docs/category/eks-orchestration) to deploy clusters, which contains detailed instructions and latest best-practices.
 
 As depicted below, the workshop infrastructure can be deployed using a series of nested CloudFormation stacks, each of which is responsible for deploying different aspects of a full HyperPod cluster environment.
 
 <img src="./../cfn-templates/nested-stack-modules.png" width="50%"/>
 
-If you wish to create a new HyperPod cluster **without reusing any pre-existing cloud resources**, you may deploy the main stack by clicking the button below and keeping all of the sub-stacks enabled, just be sure to check the default parameter values, including the `AvailabilityZoneId`, which should correspond to the location of your accelerated compute capacity and must be a valid Availability Zone ID for your target region. The default value `usw2-az2` is valid only for `us-west-2` region. 
+If you wish to create a new HyperPod cluster **without reusing any pre-existing cloud resources**, you may deploy the main stack by clicking the button below and keeping all of the sub-stacks enabled, just be sure to check the default parameter values, including the `AvailabilityZoneId`, which should correspond to the location of your accelerated compute capacity and must be a valid Availability Zone ID for your target region. The default value `usw2-az2` is valid only for `us-west-2` region.
 
-Additionally, if you opted to deploy the [SageMaker Code Editor Stack](../cfn-templates/sagemaker-studio-stack.yaml), be sure to use the same `ResourceNamePrefix` and set `UsingSMCodeEditor` to `true` so that an EKS access entry will be created for the IAM Role that Code Editor uses. 
+Additionally, if you opted to deploy the [SageMaker Code Editor Stack](../cfn-templates/sagemaker-studio-stack.yaml), be sure to use the same `ResourceNamePrefix` and set `UsingSMCodeEditor` to `true` so that an EKS access entry will be created for the IAM Role that Code Editor uses.
 
 [<kbd> <br> 1-Click Deploy 🚀 <br> </kbd>](https://console.aws.amazon.com/cloudformation/home?#/stacks/quickcreate?templateURL=https://ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0.s3.us-west-2.amazonaws.com/2433d39e-ccfe-4c00-9d3d-9917b729258e/main-stack.yaml&stackName=hyperpod-eks-main-stack)
 
-If, however, you wish to reuse existing cloud resources, like an existing VPC or EKS cluster for example, simply disable the corresponding sub-stack and supply the ID and or name of the resource your wish to reuse. The diagram above depicts the resource IDs / Names that each sub-stack expects to be supplied, either automatically by a sibling stack, or manually by you. 
+If, however, you wish to reuse existing cloud resources, like an existing VPC or EKS cluster for example, simply disable the corresponding sub-stack and supply the ID and or name of the resource your wish to reuse. The diagram above depicts the resource IDs / Names that each sub-stack expects to be supplied, either automatically by a sibling stack, or manually by you.
 
-Click on the sections below for more details on the respective sub-stacks: 
+Click on the sections below for more details on the respective sub-stacks:
 
 <details>
 <summary>VPCStack</summary>
@@ -37,7 +38,6 @@ Default Parameter Values:
     <li>PublicSubnet1CIDR: 10.192.10.0/24</li>
     <li>PublicSubnet2CIDR: 10.192.11.0/24</li>
 </ul>
-
 
 Parameter Values Required if Disabled:
 <ul>
@@ -67,7 +67,6 @@ Default Parameter Values
     <li>AvailabilityZoneId: usw2-az2</li>
 </ul>
 
-
 Parameter Values Required if Disabled
 <ul>
     <li>PrivateSubnetId - Used by HyperPodClusterStack</li>
@@ -79,13 +78,14 @@ Parameter Values Required if Disabled
 
 <details>
 <summary>SecurityGroupStack</summary>
-This stack creates a security group configured with rules to allow FSx for Lustre communication along with intra-security group communication for EFA and outbound internet access. 
+This stack creates a security group configured with rules to allow FSx for Lustre communication along with intra-security group communication for EFA and outbound internet access.
 
 <sp></sp>
 
-If you are **reusing an existing EKS cluster**, the `SecurityGroupStack` will reference the `SecurityGroupId` parameter to add the required rules to the security group of that cluster. Be sure to provide a valid reference to the target EKS security group using the `SecurityGroupId` parameter. 
+If you are **reusing an existing EKS cluster**, the `SecurityGroupStack` will reference the `SecurityGroupId` parameter to add the required rules to the security group of that cluster. Be sure to provide a valid reference to the target EKS security group using the `SecurityGroupId` parameter.
 
 You can find the EKS cluster security group by running the following command:
+
 ```bash
 SECURITY_GROUP_ID=$(aws eks describe-cluster \
 --name "$EKS_CLUSTER_NAME" \
@@ -94,6 +94,7 @@ SECURITY_GROUP_ID=$(aws eks describe-cluster \
 
 echo $SECURITY_GROUP_ID
 ```
+
 Resources Created:
 <ul>
     <li>Security Group (Conditional, if creating a new EKS clusters)</li>
@@ -122,6 +123,7 @@ This stack creates an EKS cluster for use as a control plane interface for the H
 If you are **reusing an existing EKS cluster**, the `SecurityGroupStack` will reference the `SecurityGroupId` parameter to add the required rules to the security group of that cluster. Be sure to provide a valid reference to the target EKS security group using the `SecurityGroupId` parameter.  
 
 You can find the EKS cluster security group by running the following command:
+
 ```bash
 SECURITY_GROUP_ID=$(aws eks describe-cluster \
 --name "$EKS_CLUSTER_NAME" \
@@ -179,7 +181,7 @@ Parameter Values Required if Disabled:
 
 <details>
 <summary>S3EndpointStack</summary>
-This stack creates a VPC endpoint for S3 to enable private connectivity for VPC-deployed HyperPod instance groups. 
+This stack creates a VPC endpoint for S3 to enable private connectivity for VPC-deployed HyperPod instance groups.
 
 <sp></sp>
 
@@ -195,7 +197,7 @@ Parameter Values Required if Disabled:
 <ul>
     <li>NA</li>
 </ul>
-Note: If you opt to disable the S3BucketStack, please use the S3BucketName parameter to point to the existing S3 bucket you wish to use to store your lifecycle scripts. 
+Note: If you opt to disable the S3BucketStack, please use the S3BucketName parameter to point to the existing S3 bucket you wish to use to store your lifecycle scripts.
 </details>
 
 ---
@@ -209,7 +211,7 @@ This stack deploys an AWS Lambda function that creates a [default lifecycle scri
 Resources Created:
 <ul>
     <li>AWS Lambda Function</li>
-    <li>Default Lifecycle Script</li>   
+    <li>Default Lifecycle Script</li>
 </ul>
 Default Parameter Values:
 <ul>
@@ -226,7 +228,7 @@ Note: If you disable this stack, you must manually upload the default lifecycle 
 
 <details>
 <summary>SageMakerIAMRoleStack</summary>
-This stack creates an [IAM role](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-prerequisites-iam.html#sagemaker-hyperpod-prerequisites-iam-role-for-hyperpod) designed to allow your HyperPod cluster to run and communicate with the necessary AWS resources on your behalf. 
+This stack creates an [IAM role](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-prerequisites-iam.html#sagemaker-hyperpod-prerequisites-iam-role-for-hyperpod) designed to allow your HyperPod cluster to run and communicate with the necessary AWS resources on your behalf.
 
 <sp></sp>
 
@@ -242,7 +244,7 @@ Parameter Values Required if Disabled:
 <ul>
     <li>SageMakerIAMRoleName - Used by HyperPodClusterStack</li>
 </ul>
-Note: If you opt to manually create the necessary IAM role for your HyperPod cluster, be sure to follow [the documentation](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-prerequisites-iam.html#sagemaker-hyperpod-prerequisites-iam-role-for-hyperpod). 
+Note: If you opt to manually create the necessary IAM role for your HyperPod cluster, be sure to follow [the documentation](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-prerequisites-iam.html#sagemaker-hyperpod-prerequisites-iam-role-for-hyperpod).
 </details>
 
 ---
@@ -250,9 +252,9 @@ Note: If you opt to manually create the necessary IAM role for your HyperPod clu
 <details>
 <summary>HelmChartStack</summary>
 
-The HyperPod dependency [Helm charts](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-eks-install-packages-using-helm-chart.html) need to be installed on your EKS cluster prior to kicking off the creation of a new HyperPod cluster. If you choose to disable this stack and you are reusing an existing EKS cluster, be sure to manually install the dependencies prior to deploying the main stack. If you choose to disable this stack but want to create a new EKS cluster using the EKSClusterStack, the HyperPodClusterStack will be automatically disabled as well to avoid any HyperPod cluster creation failures. After the main stack completes, you can then proceed to manually install the dependencies prior to kicking off the manual creation of your HyperPod cluster. 
+The HyperPod dependency [Helm charts](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-eks-install-packages-using-helm-chart.html) need to be installed on your EKS cluster prior to kicking off the creation of a new HyperPod cluster. If you choose to disable this stack and you are reusing an existing EKS cluster, be sure to manually install the dependencies prior to deploying the main stack. If you choose to disable this stack but want to create a new EKS cluster using the EKSClusterStack, the HyperPodClusterStack will be automatically disabled as well to avoid any HyperPod cluster creation failures. After the main stack completes, you can then proceed to manually install the dependencies prior to kicking off the manual creation of your HyperPod cluster.
 
-This stack deploys an AWS Lambda function that automates the instillation of HyperPod dependencies through [Helm charts](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-eks-install-packages-using-helm-chart.html) in the EKS cluster. 
+This stack deploys an AWS Lambda function that automates the instillation of HyperPod dependencies through [Helm charts](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-eks-install-packages-using-helm-chart.html) in the EKS cluster.
 
 <sp></sp>
 
@@ -265,7 +267,7 @@ Resources Created:
 </ul>
 
 Default Parameter Values:
-Note: These parameters should not need to change unless the location of the Helm charts changes. 
+Note: These parameters should not need to change unless the location of the Helm charts changes.
 <ul>
     <li>HelmRepoUrl: sagemaker-hyperpod-cli</li>
     <li>HelmRepoPath: helm_chart/HyperPodHelmChart</li>
@@ -298,11 +300,11 @@ Resources Created:
 Default Parameter Values:
 <ul>
 
-<li>HyperPod Cluster Parameters: 
+<li>HyperPod Cluster Parameters:
 <ul>
-    <li>HyperPodClusterName: ml-cluster</li>    
-    <li>NodeRecovery: Automatic</li> 
-    <li>UseContinuousNodeProvisioningMode: true</li>   
+    <li>HyperPodClusterName: ml-cluster</li>
+    <li>NodeRecovery: Automatic</li>
+    <li>UseContinuousNodeProvisioningMode: true</li>
 </ul>
 </li>
 
@@ -336,7 +338,7 @@ Default Parameter Values:
 </ul>
 </li>
 
-<li>Restricted Instance Group Parameters: 
+<li>Restricted Instance Group Parameters:
 <ul>
    <li>CreateRestrictedInstanceGroup: false</li>
    <li>RestrictedInstanceGroupName: restricted-instance-group</li>
@@ -362,32 +364,35 @@ Parameter Values Required if Disabled:
 
 ---
 
-## How Nested CloudFormation Stacks Work:
-As you can see in the [main-stack.yaml](./nested-stacks/main-stack.yaml) file, the [`AWS::CloudFormation::Stack`](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-cloudformation-stack.html)resources have a `TemplateURL` property that specifies the [S3 URL](https://docs.aws.amazon.com/AmazonS3/latest/userguide/VirtualHosting.html#virtual-hosted-style-access) pointing to the target CloudFormation template. 
+## How Nested CloudFormation Stacks Work
+
+As you can see in the [main-stack.yaml](./nested-stacks/main-stack.yaml) file, the [`AWS::CloudFormation::Stack`](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-cloudformation-stack.html)resources have a `TemplateURL` property that specifies the [S3 URL](https://docs.aws.amazon.com/AmazonS3/latest/userguide/VirtualHosting.html#virtual-hosted-style-access) pointing to the target CloudFormation template.
 
 The `TemplateURL` property is configured to reference a regional mapping of S3 buckets, which by default points to an AWS owned S3 bucket which is used to host the CloudFormation templates for the [Amazon SageMaker HyperPod EKS documentation](https://awslabs.github.io/ai-on-sagemaker-hyperpod/docs/category/eks-orchestration). Again, we recommend following the instructions in the documentation, but we've made the templates available here for your to modify and reuse as necessary to meet your specific needs.
 
-## How to Host the Nested CloudFormation Stacks In Your Own S3 Bucket:  
+## How to Host the Nested CloudFormation Stacks In Your Own S3 Bucket  
 
 ### [Prerequisite: Build the Helm Chart Injector](./helm-chart-injector/README.md)
 
 ---
 
 ### Upload the nested CloudFormation stacks to your S3 bucket
-```bash 
+
+```bash
 BUCKET_NAME=<your-bucket-name-here> 
 
 aws s3 cp /nested-stacks/ s3://$BUCKET_NAME --recursive
 ```
+
 ---
 
 ### Configure the Main Stack to use the correct parameters
 
-When you deploy the [main-stack.yaml](./nested-stacks/main-stack.yaml) template, be sure to updates the following parameters: 
-- `TemplateURL` - Update this to specify the URL of the S3 bucket where you've uploaded the CloudFormation stacks in your own AWS account. 
-- `CustomResourceS3Bucket` - Update this to specify the URL of the S3 bucket where you've uploaded the [Helm Chart Injector](./helm-chart-injector/README.md) dependency files. 
-    - `LayerS3Key` - Update this to specify the S3 key for the `layer.zip` file you uploaded to your S3 bucket. 
-    - `FunctionS3Key` - Update this to specify the S3 key for the `function.zip` file you uploaded to your S3 bucket. 
+When you deploy the [main-stack.yaml](./nested-stacks/main-stack.yaml) template, be sure to updates the following parameters:
+
+- `TemplateURL` - Update this to specify the URL of the S3 bucket where you've uploaded the CloudFormation stacks in your own AWS account.
+- `CustomResourceS3Bucket` - Update this to specify the URL of the S3 bucket where you've uploaded the [Helm Chart Injector](./helm-chart-injector/README.md) dependency files.
+  - `LayerS3Key` - Update this to specify the S3 key for the `layer.zip` file you uploaded to your S3 bucket.
+  - `FunctionS3Key` - Update this to specify the S3 key for the `function.zip` file you uploaded to your S3 bucket.
 
 See the official [Amazon SageMaker HyperPod EKS documentation](https://awslabs.github.io/ai-on-sagemaker-hyperpod/docs/category/eks-orchestration) for a more detailed explanation of the other parameters used in the nested CloudFormation stacks.
-

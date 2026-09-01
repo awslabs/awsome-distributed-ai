@@ -38,17 +38,17 @@ not pad a focused fix to make it look substantive.
   hardware. CONTRIBUTING.md already requires test cases to be verified at
   their stated scale ("if you say 256 A100, test on that scale").
 - PR descriptions for AI-assisted work **must** include:
-    - Why this is not duplicating an existing PR.
-    - How the change was verified, proportionate to the change:
-        - **New or functionally changed example**: an end-to-end run on
+  - Why this is not duplicating an existing PR.
+  - How the change was verified, proportionate to the change:
+    - **New or functionally changed example**: an end-to-end run on
           the target hardware — cluster type, instance types, and scale
           used, with relevant command output or logs under
           `## Test Results`. Running this e2e verification is the PR
           author's responsibility.
-        - **Small functional fix**: verification proportionate to the
+    - **Small functional fix**: verification proportionate to the
           change (a build, a targeted test, or a reviewable demonstration
           of the fix).
-        - **No functional impact**: write `docs-only` under
+    - **No functional impact**: write `docs-only` under
           `## Test Results`.
 
 ### Fail-closed behavior

@@ -16,7 +16,6 @@ This template deploys a VPC with private subnets in multiple Availability zones.
 
 - **Template file**: [`1.vpc-multi-az.yaml`](./1.vpc-multi-az.yaml)
 
-
 #### List of Parameters
 
 The templates takes parameters that are mandatory and optional, see below for more details.
@@ -35,7 +34,6 @@ Please note that the deployment of public subnets is optional.
 #### Deploy with the AWS CLI
 
 The command to deploy the template through the CLI is shown below. Feel free to edit for your own configuration and parameters. Please ensure that the `NumberOfAZs` parameter value matches the number of AZs that you specified.
-
 
 ```bash
 aws cloudformation create-stack --stack-name vpc-stack-ml\
@@ -67,11 +65,9 @@ The templates takes parameters that are mandatory and optional, see below for mo
 | `CreateS3Endpoint`      | Optional    | Create an S3 VPC endpoint, defaults to `true`.                    |
 | `CreateDynamoDBEndpoint`| Optional    | Create a DynamoDB VPC endpoint, defaults to `true`.               |
 
-
 #### Deploy with the AWS CLI
 
 The command to deploy the template through the CLI is shown below. Feel free to edit for your own configuration and parameters.
-
 
 ```bash
 aws cloudformation create-stack --stack-name vpc-stack-ml\

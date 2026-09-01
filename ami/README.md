@@ -5,11 +5,13 @@ This package contains a Packer script to build Amazon Machine Images for self-ma
 ### Initial setup
 
 To build images you will need:
+
 - **GNU Make**: install it via `yum` or `apt` if using Linux, via [`brew`](https://formulae.brew.sh/formula/make) if using OSX or [Chocolatey](https://community.chocolatey.org/packages/make) on MS Windows.
 - **Packer**: it can be downloaded via [Hashicorp](https://www.packer.io/)'s website, you can also use [`brew`](https://formulae.brew.sh/formula/packer#default) on OSX.
 - **Ansible**: get it via your package manager, we recommend via [`brew`](https://formulae.brew.sh/formula/ansible#default) if using OSX.
 
 Initialize Packer (will install plugins):
+
 ```bash
 packer init -upgrade packer-ami.pkr.hcl 
 ```
@@ -39,7 +41,6 @@ The list of arguments you can use is shown in the table below with the AMI origi
 | `ami_eks_gpu`      | [EKS AMI](https://docs.aws.amazon.com/eks/latest/userguide/eks-optimized-ami.html#gpu-ami) | EKS GPU AMI with Lustre, EFA                                                       |
 | `ami`              |AMI dependent| Build all the images                                                               |
 
-
 Once a build is launched, Packer will create an instance and install packages for a period of 10-25 minutes depending on how much software is installed.
 
 ### Software stack: Ansible roles
@@ -64,10 +65,10 @@ You will find below the list of images you can build and which roles are deploye
 | `aws_efa`             |         ❌         |         ✅        |     ✅     |       ❌        |        ❌         |      ❌       |
 | `aws_efa_ofi`         |         ❌         |         ✅        |     ✅     |       ❌        |        ❌         |      ❌       |
 
-
 ## Customizing your AMIs
 
 You can customize your AMIs by:
+
 - Modifying existing roles to install specific software versions: for example a specific version of the EFA driver, Nvidia CUDA or Nvidia GPU driver.
 - Add new roles to install or configure new software or libraries.
 
@@ -80,7 +81,6 @@ Our Ansible roles consist of 3 components: `defaults`, `files` and `tasks`.
 - `defaults`: contain default values for conditionals and versions of software being installed.
 - `files`: hold files that will be copied to the custom AMI such as config files.
 - `tasks`: is the list of tasks executed by Ansible to install and configure software.
-
 
 #### Example
 
@@ -137,8 +137,8 @@ As shared earlier, you can modify the roles and add new ones. Most users would m
 Alternatively, you can add a new role to install a new software component, ensure that you respect the structure used by other roles. Don't forget to list your role in the playbook you want to use, for example `playbook-eks-gpu.yaml`, to add the role as part of your custom AMI deployment.
 
 ## Notes
-* Review `packer-ami.pkr.hcl` for all available variables.
-* For Enroot, we are using shared filesystem (`/fsx`) for container cache, set this accordingly to your cluster in `roles/nvidia_enroot_pyxis/templates/enroot.conf` variable `ENROOT_CACHE_PATH`.
-* Review variables (dependency versions) in `./roles/*/defaults/main.yml` according to [Ansible directory structure](https://docs.ansible.com/ansible/latest/tips_tricks/sample_setup.html).
-* These are based upon using the default VPCs found in the account.  If this does not exist, the default VPC can be recreated with `aws ec2 create-default-vpc`.
-* If packer can't find the AMI with the following message `Error querying AMI: InvalidAMIID.NotFound`, force the region by prepending your `make` command by the region `AWS_REGION=us-east-1`.
+- Review `packer-ami.pkr.hcl` for all available variables.
+- For Enroot, we are using shared filesystem (`/fsx`) for container cache, set this accordingly to your cluster in `roles/nvidia_enroot_pyxis/templates/enroot.conf` variable `ENROOT_CACHE_PATH`.
+- Review variables (dependency versions) in `./roles/*/defaults/main.yml` according to [Ansible directory structure](https://docs.ansible.com/ansible/latest/tips_tricks/sample_setup.html).
+- These are based upon using the default VPCs found in the account.  If this does not exist, the default VPC can be recreated with `aws ec2 create-default-vpc`.
+- If packer can't find the AMI with the following message `Error querying AMI: InvalidAMIID.NotFound`, force the region by prepending your `make` command by the region `AWS_REGION=us-east-1`.

@@ -122,6 +122,7 @@ The file `instance-profiles.conf` defines expected hardware counts per instance 
 | p6-b200.48xlarge | 8 | 8 | Yes | efa |
 
 To add a new instance type, append a line to `instance-profiles.conf`:
+
 ```
 <instance-type>|<gpu-count>|<efa-count>|<nvlink-expected>|<efa-provider>
 ```
@@ -133,6 +134,7 @@ To add a new instance type, append a line to `instance-profiles.conf`:
 **Runtime:** ~5 seconds | **Suite:** Lightweight
 
 Verifies basic GPU driver functionality:
+
 - Confirms `nvidia-smi` executes and returns zero exit code
 - Counts detected GPUs and compares against the instance profile
 - Scans kernel log (`journalctl -k` with `dmesg` fallback) for Xid errors with severity-aware classification aligned with [NVIDIA XID Errors r590](https://docs.nvidia.com/deploy/pdf/XID_Errors.pdf):
@@ -175,6 +177,7 @@ Verifies basic GPU driver functionality:
 **Runtime:** 2.5 - 10.5 minutes | **Suite:** Lightweight
 
 Runs medium-depth NVIDIA Data Center GPU Manager diagnostics:
+
 - Deployment readiness validation
 - PCIe bandwidth verification
 - GPU memory stress test (short)
@@ -196,6 +199,7 @@ DCGM_TIMEOUT=600 ./gpu-healthcheck.sh --check dcgm-l2
 **Runtime:** ~3 seconds | **Suite:** Lightweight
 
 Validates EFA network infrastructure:
+
 - Counts EFA PCI devices via `lspci` and compares against instance profile
   - On `p5en` instances, retries up to 3 times with 5-second intervals for known late EFA initialization
 - Lists RDMA devices via `ibv_devices`
@@ -217,6 +221,7 @@ Validates EFA network infrastructure:
 **Runtime:** ~10 seconds | **Suite:** Lightweight
 
 Validates GPU interconnect topology:
+
 - Captures `nvidia-smi topo -m` matrix and checks for disconnected links
 - Validates NVLink presence and status per GPU pair
 - Checks `nvidia-fabricmanager` service status (RESET severity if not running)
@@ -237,12 +242,14 @@ Validates GPU interconnect topology:
 The most comprehensive GPU diagnostic available. Includes everything in L2 plus Extended Utility Diagnostics (EUD) and pulse power testing.
 
 **Pre-flight requirements** (all validated automatically):
+
 1. Node must be exclusively allocated (no other GPU processes)
 2. MIG must be disabled
 3. Concurrent GPU telemetry services are stopped for the duration
 4. `nv-hostengine` must be running
 
 **Operational warnings:**
+
 - Pulse power test draws variable power -- inform facility operators
 - EUD cannot run with MIG enabled
 - Do not run concurrent GPU monitoring during the test
@@ -259,17 +266,20 @@ The most comprehensive GPU diagnostic available. Includes everything in L2 plus 
 **Runtime:** 10-20 minutes | **Suite:** Intensive | **Requires:** Minimum 2 nodes
 
 Runs `all_reduce_perf` from the NCCL tests container to validate multi-node GPU communication over EFA:
+
 - Message sizes: 8B to 128MB (power-of-2 sweep)
 - Verifies EFA provider selection via `NCCL_DEBUG=INFO`
 - Compares measured bus bandwidth against per-instance-type thresholds
 
 **Optional isolation sub-tests** (`NCCL_ISOLATION_TESTS=1`):
+
 - **NVLink-only test:** Forces `NCCL_P2P_LEVEL=NVL NCCL_NET=Socket` to isolate intra-node NVLink performance. Thresholds: p4d=200 GB/s, p5/p5e/p5en=500 GB/s, p6-b200=600 GB/s
 - **EFA-only test:** Forces `NCCL_P2P_DISABLE=1 NCCL_SHM_DISABLE=1 NCCL_NET='AWS Libfabric'` to isolate inter-node EFA performance (requires >= 2 nodes)
 - Both sub-tests produce MONITOR-level warnings only — the full-stack test remains the authoritative pass/fail
 - Each sub-test has its own timeout: `NCCL_ISOLATION_TIMEOUT` (default: 600s / 10 min)
 
 Environment variables set automatically:
+
 ```bash
 FI_PROVIDER=efa
 FI_EFA_USE_DEVICE_RDMA=1
@@ -291,6 +301,7 @@ NCCL_ISOLATION_TESTS=1 ./gpu-healthcheck.sh --check 5
 **Runtime:** 5-15 minutes | **Suite:** Intensive
 
 Tests each EFA device individually:
+
 - Iterates over all RDMA devices discovered via `ibv_devices`
 - Runs `fi_pingpong` or `ib_write_bw` in loopback mode per device
 - Reports bandwidth and latency per device
@@ -473,6 +484,7 @@ The guiding principle is **replace, don't repair**. On AWS, the primary remediat
 #### Container image pull returns 401 Unauthorized from `registry-1.docker.io`
 
 Symptom in stderr:
+
 ```
 URL https://registry-1.docker.io/v2/public.ecr.aws/hpc-cloud/nccl-tests/manifests/latest returned error code: 401 Unauthorized
 pyxis: failed to import docker image
@@ -506,6 +518,7 @@ Xid severity classification is aligned with the [NVIDIA XID Errors r590](https:/
 Xid 154 carries authoritative recovery action text — the check parses it for "Node Reboot Required" (→REBOOT) or "GPU Reset Required" / "Drain and Reset" / "Drain P2P" (→RESET).
 
 Review kernel log for the specific Xid error and affected GPU:
+
 ```bash
 journalctl -k | grep -i "NVRM.*Xid"
 ```
@@ -513,15 +526,18 @@ journalctl -k | grep -i "NVRM.*Xid"
 ### NVLink error counters show non-zero values
 
 Non-zero replay, recovery, or CRC errors indicate NVLink degradation. Check individual link status:
+
 ```bash
 nvidia-smi nvlink -e        # Error counters
 nvidia-smi nvlink --status  # Link status
 ```
+
 If errors are persistent across reboots, the node should be replaced.
 
 ### GDRCopy sanity check failed
 
 GDRCopy enables GPU memory registration for RDMA. If the sanity check fails:
+
 - Verify the `gdrdrv` kernel module is loaded: `lsmod | grep gdrdrv`
 - Check GDRCopy installation: `/opt/gdrcopy/bin/sanity -v`
 - NCCL may fall back to slower CPU-bounce-buffer paths without GDRCopy
@@ -529,6 +545,7 @@ GDRCopy enables GPU memory registration for RDMA. If the sanity check fails:
 ### MIG prevents DCGM L4
 
 Disable MIG before running L4 diagnostics:
+
 ```bash
 sudo nvidia-smi -i 0 -mig 0    # Disable MIG on GPU 0
 sudo reboot                     # Reboot to apply (preferred over nvidia-smi --gpu-reset)

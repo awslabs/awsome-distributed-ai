@@ -15,10 +15,10 @@ Bash helper that searches available **SageMaker Flexible Training Plan (FTP)** o
 
 See [`sagemaker_ftp/README.md`](./sagemaker_ftp/README.md) for usage.
 
-### [`dump_cluster_nodes_info.py`](./dump_cluster_nodes_info.py) 
+### [`dump_cluster_nodes_info.py`](./dump_cluster_nodes_info.py)
 
-Utility to dump details of all nodes in a cluster, into a csv file. 
+Utility to dump details of all nodes in a cluster, into a csv file.
 
 **Usage:** `python dump_cluster_nodes_info.py –cluster-name <name-of-cluster-whose-node-details-are-needed>`
 
-**Output:** “nodes.csv” file in the current directory, containing details of all nodes in the cluster 
+**Output:** “nodes.csv” file in the current directory, containing details of all nodes in the cluster

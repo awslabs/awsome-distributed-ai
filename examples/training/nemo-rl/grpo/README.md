@@ -46,6 +46,7 @@ NeMo RL orchestrates training with [Ray](https://docs.ray.io/) for cluster manag
 ```
 
 The architecture automatically adapts to the instance type:
+
 - **P5/P5en**: EFA RDMA with NCCL for GPU-direct network transfers
 - **G5/G6E**: TCP socket transport (no EFA required)
 
@@ -175,6 +176,7 @@ resources:
 ## NVRx Fault Tolerance
 
 The training setup includes NVIDIA NVRx resiliency features:
+
 - **GPU health check** at startup (CudaHealthCheck)
 - **Async checkpointing** to FSx Lustre (save_period=25)
 - **Checkpoint resume** -- training restarts from the latest checkpoint
@@ -185,6 +187,7 @@ Tested: kill -9 at step 27 -> RayJob retry -> resume from step 25 checkpoint -> 
 ## NVIDIA Dynamo Inference
 
 After training, serve the model with NVIDIA Dynamo disaggregated inference:
+
 - Cross-node prefill/decode with NIXL LIBFABRIC over EFA RDMA
 - 8 data-parallel workers per node (16 GPUs total)
 
@@ -211,6 +214,7 @@ docker run --rm <your-image> dpkg-query -W -f '${Package},${Version}\n'
 ```
 
 Key versions:
+
 - PyTorch 2.9.0+cu129, CUDA 12.9
 - NCCL: 2.27.5 (pip/PyTorch wheel) / 2.26.5 (system dpkg, from base image)
 - NeMo RL 0.5.0rc0, Ray 2.49.2, vLLM (in worker venvs), NVRx 0.4.1

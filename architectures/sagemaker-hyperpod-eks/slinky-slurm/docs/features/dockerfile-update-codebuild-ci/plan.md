@@ -34,6 +34,7 @@ infrastructure. Each creates:
   (Docker builds), S3 source type
 
 The `buildspec.yml` handles:
+
 1. Authenticating to the DLC ECR registry (account `763104351884`)
 2. Authenticating to the project ECR registry
 3. Building the Docker image from `dlc-slurmd.Dockerfile`

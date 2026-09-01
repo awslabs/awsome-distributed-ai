@@ -13,6 +13,7 @@ provided by HyperPod.
 ---
 
 ### Slinky on HyperPod EKS Architecture
+
 ![Image Description](./slinky-slurm-hp-eks.png)
 
 The diagram above depicts the resulting proof-of-concept deployment outlined in this guide.
@@ -21,6 +22,7 @@ resilient instance group of GPU accelerated compute nodes. The Slinky Slurm oper
 installed to extend Kubernetes with custom resources and actions, and a containerized Slurm
 cluster is deployed using Kubernetes pods via Helm chart. This Slurm cluster includes the
 following components:
+
 | Component | Description |
 |-----------|-------------|
 | Controller (slurmctld) | The central management daemon that monitors resources, accepts jobs, and assigns work to compute nodes. |
@@ -50,6 +52,7 @@ FSx for OpenZFS has proven optimal to avoid IOPS saturation with many small file
 ### Release Notes
 
 The following was tested in two infrastructure scenarios for hosting the compute NodeSet pods:
+
 1. On 4 `ml.g5.8xlarge` instances (1 A10G Tensor Core GPU each)
 2. On 2 `ml.p5.48xlarge` instances (8 H100 Tensor Core GPUs each) with EFAv2
 
@@ -87,6 +90,7 @@ deploy.sh   →   install.sh   →   (run workloads)   →   destroy.sh
 - Docker (only if using `--local-build` for container images)
 
 #### <u>Clone the Repository</u>
+
 ```
 git clone https://github.com/awslabs/awsome-distributed-ai.git
 cp -r awsome-distributed-ai/architectures/sagemaker-hyperpod-eks/slinky-slurm .
@@ -99,23 +103,31 @@ cd slinky-slurm
 availability zones, substitutes parameters, and extracts stack outputs to `env_vars.sh`.
 
 Deploy with 4 `ml.g5.8xlarge` instances using CloudFormation:
+
 ```
 ./deploy.sh --instance-type ml.g5.8xlarge --infra cfn
 ```
+
 Deploy with 2 `ml.p5.48xlarge` instances using CloudFormation:
+
 ```
 ./deploy.sh --instance-type ml.p5.48xlarge --instance-count 2 --infra cfn
 ```
+
 Deploy using Terraform:
+
 ```
 ./deploy.sh --instance-type ml.g5.8xlarge --infra tf
 ```
+
 Override the default region and availability zone:
+
 ```
 ./deploy.sh --instance-type ml.g5.8xlarge --infra cfn --region us-east-1 --az-id use1-az2
 ```
 
 After the script completes, source the environment variables:
+
 ```
 source env_vars.sh
 ```
@@ -135,18 +147,25 @@ Balancer Controller (with Pod Identity), public subnet tagging, FSx Lustre PV/PV
 MariaDB, Slurm operator, and Slurm cluster Helm installations and NLB configuration.
 
 Install with CodeBuild image build (default):
+
 ```
 ./install.sh --instance-type ml.g5.8xlarge --infra cfn
 ```
+
 Install with local Docker build instead of CodeBuild:
+
 ```
 ./install.sh --instance-type ml.g5.8xlarge --infra cfn --local-build
 ```
+
 Install with an existing ECR image (skip build entirely):
+
 ```
 ./install.sh --instance-type ml.g5.8xlarge --infra cfn --skip-build
 ```
+
 Re-install Slurm without rebuilding the image or regenerating values:
+
 ```
 ./install.sh --skip-setup
 ```
@@ -156,6 +175,7 @@ Run `./install.sh --help` for all available options.
 #### <u>Step 3: Verify the Deployment</u>
 
 Update your kubectl context and verify:
+
 ```
 aws eks update-kubeconfig --name $EKS_CLUSTER_NAME
 
@@ -165,6 +185,7 @@ kubectl -n slurm get pods -l app.kubernetes.io/instance=slurm
 ```
 
 Verify cert-manager and the AWS Load Balancer Controller are running:
+
 ```
 kubectl get pods -n cert-manager
 kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller
@@ -193,7 +214,7 @@ Run `./destroy.sh --help` for all available options.
 
 * * *
 
-### Basic Tests:
+### Basic Tests
 
 SSH into the login node as root from the NLB endpoint:
 
@@ -202,6 +223,7 @@ SLURM_LOGIN_HOSTNAME="$(kubectl get services -n slurm -l app.kubernetes.io/insta
 
 ssh -i ~/.ssh/id_ed25519_slurm -p 22 root@$SLURM_LOGIN_HOSTNAME
 ```
+
 ---
 
 Check the available nodes:
@@ -213,6 +235,7 @@ PARTITION AVAIL  TIMELIMIT  NODES  STATE NODELIST
 slinky       up   infinite      4   idle slinky-[0-3]
 all*         up   infinite      4   idle slinky-[0-3]
 ```
+
 Note that in both scenarios (using 4 `ml.g5.8xlarge` instances or 2 `ml.p5.48xlarge`
 instances) we should see the same number of slurm compute nodes. When running on 4
 `ml.g5.8xlarge` instances, each slurm compute node is mapped to 1 available A10G GPU,
@@ -235,6 +258,7 @@ df -h
 
 exit
 ```
+
 ---
 
 Verify FSx for Lustre filesystem mounts on the compute node pods:
@@ -251,6 +275,7 @@ df -h
 # tmpfs                        59G  4.0K   59G   1% /etc/slurm
 # ...
 ```
+
 ---
 
 Check the installed CUDA compiler version on compute node pods:
@@ -264,6 +289,7 @@ nvcc --version
 # Cuda compilation tools, release 12.6, V12.6.85
 # Build cuda_12.6.r12.6/compiler.35059454_0
 ```
+
 ---
 
 Check the NCCL version on compute node pods:
@@ -273,6 +299,7 @@ ldconfig -v | grep "libnccl.so" | tail -n1 | sed -r 's/^.*\.so\.//'
 
 # 2.23.4
 ```
+
 ---
 
 Confirm NCCL headers are installed worker node pods:
@@ -282,26 +309,35 @@ find /usr/local/lib/ -name "nccl.h" 2>/dev/null
 
 # /usr/local/lib/python3.12/site-packages/torch/include/torch/csrc/cuda/nccl.h
 ```
+
 ---
 
 Check EFA availability:
+
 ```
 ls /sys/class/infiniband/
 fi_info -p efa
 ```
+
 Check that the EFA libraries are properly mounted
+
 ```
 ls /opt/amazon/efa/lib
 ls /opt/amazon/ofi-nccl/lib/x86_64-linux-gnu
 ```
+
 Verify EFA device allocation:
+
 ```
 ls -l /dev/infiniband/
 ```
+
 Verify intra-node GPU topology:
+
 ```
 nvidia-smi topo -m
 ```
+
 For `ml.p5.48xlarge` instances, the GPU topology should show all GPUs are connected via
 NVLink (NV18 indicates 18 NVLink connections). The GPUs are split across two NUMA nodes
 (0-3 on NUMA 0, 4-7 on NUMA 1).
@@ -336,8 +372,10 @@ cd awsome-distributed-ai/examples/training/fsdp/slurm
 
 mkdir -p checkpoints
 ```
+
 ---
 Copy the modified sbatch file:
+
 ```
 export SLINKY_PATH=/fsx/awsome-distributed-ai/architectures/sagemaker-hyperpod-eks/slinky-slurm
 
@@ -347,9 +385,11 @@ cp ${SLINKY_PATH}/sbatch/fsdp/g5-llama2_7b-training.sbatch ./llama2_7b-training.
 # for p5 instances
 cp ${SLINKY_PATH}/sbatch/fsdp/p5-llama2_7b-training.sbatch ./llama2_7b-training.sbatch
 ```
+
 ---
 Add your Hugging Face token to stream the
 [allenai/c4](https://huggingface.co/datasets/allenai/c4) dataset without throttling:
+
 ```
 NEW_TOKEN="your_new_token_here"
 sed -i "s/export HF_TOKEN=.*$/export HF_TOKEN=\"$NEW_TOKEN\"/" llama2_7b-training.sbatch
@@ -357,9 +397,11 @@ sed -i "s/export HF_TOKEN=.*$/export HF_TOKEN=\"$NEW_TOKEN\"/" llama2_7b-trainin
 
 ---
 Kick-off the training job:
+
 ```
 sbatch llama2_7b-training.sbatch
 ```
+
 ---
 
 Watch the output logs from the login pod:
@@ -369,6 +411,7 @@ export JOB_ID=$(squeue -h -u root -o "%i" | head -1)
 
 tail -f logs/llama2_7b-FSDP_${JOB_ID}.out
 ```
+
 ---
 
 Watch the error logs from `slurm-worker-slinky-0`:
@@ -411,7 +454,7 @@ watch -n 5 -d "ls -lh checkpoints"
 
 * * *
 
-### Development & Testing:
+### Development & Testing
 
 The deployment scripts and their helper library `lib/deploy_helpers.sh` are
 tested using [bats-core](https://github.com/bats-core/bats-core). The test

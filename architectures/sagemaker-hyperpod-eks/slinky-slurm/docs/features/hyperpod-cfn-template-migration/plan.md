@@ -25,6 +25,7 @@ SageMaker HyperPod service team maintained templates at
   `AvailabilityZoneId`, etc.)
 - **Params files:** `g5/g5-params.json` (17 params), `p5/p5-params.json` (17 params)
 - **Deploy command:**
+
   ```bash
   aws cloudformation create-stack \
     --stack-name hp-eks-slinky-stack \
@@ -47,6 +48,7 @@ SageMaker HyperPod service team maintained templates at
   - `AvailabilityZoneIds` (plural, comma-separated)
   - Task governance, data scientist roles, observability settings
 - **Deploy command:**
+
   ```bash
   aws cloudformation create-stack \
     --region us-west-2 \
@@ -97,6 +99,7 @@ as a JSON array string. A second entry (`InstanceGroupSettings2`) encodes the
 general-purpose group.
 
 **Acceptance criteria:**
+
 - [x] Contains all required parameters for the new template
 - [x] `InstanceGroupSettings1` contains the g5.8xlarge accelerated group config
   (4 instances, 500GB EBS, stress check enabled, connectivity check enabled)
@@ -111,10 +114,12 @@ general-purpose group.
 **File:** `p5/p5-params.json`
 
 Same structure as g5, with p5-specific values:
+
 - `InstanceGroupSettings1`: `ml.p5.48xlarge`, 2 instances
 - All other shared parameters identical to g5
 
 **Acceptance criteria:**
+
 - [x] Same structure as g5-params.json
 - [x] p5.48xlarge instance type, 2 instances
 - [x] JSON is valid and well-formatted
@@ -124,6 +129,7 @@ Same structure as g5, with p5-specific values:
 **File:** `README.md` (lines ~55-93)
 
 Update the "Deploy Using CloudFormation" section to:
+
 1. Remove the `curl` step for downloading `main-stack.yaml`
 2. Change `--template-body file://main-stack.yaml` to
    `--template-url https://aws-sagemaker-hyperpod-cluster-setup-${AWS_REGION}-prod.s3.${AWS_REGION}.amazonaws.com/templates/main-stack-eks-based-template.yaml`
@@ -134,6 +140,7 @@ Update the "Deploy Using CloudFormation" section to:
    `sagemaker-hyperpod-cluster-setup` repo
 
 **Acceptance criteria:**
+
 - [x] No reference to the old `main-stack.yaml` curl/download
 - [x] `--template-url` uses the S3-hosted template
 - [x] `CAPABILITY_AUTO_EXPAND` is included
@@ -147,6 +154,7 @@ Update the "Deploy Using CloudFormation" section to:
 Update the CFN delete-stack command if stack name or region handling changed.
 
 **Acceptance criteria:**
+
 - [x] Cleanup instructions match the new deployment pattern
 
 ### Step 5: Verify g5/p5 params symmetry
@@ -156,6 +164,7 @@ both params files have the same parameter keys and only differ in the
 intentional instance-type-specific values.
 
 **Acceptance criteria:**
+
 - [x] Both files have identical parameter keys
 - [x] Only `InstanceGroupSettings1` values differ (instance type, count)
 
@@ -170,6 +179,7 @@ aws cloudformation validate-template \
 ```
 
 **Acceptance criteria:**
+
 - [x] Template validation succeeds
 - [x] All required parameters are provided in both params files
 

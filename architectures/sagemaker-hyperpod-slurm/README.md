@@ -1,6 +1,5 @@
 # AWS SageMaker HyperPod Distributed Training Reference Architectures
 
-
 > [!IMPORTANT]  
 > 🚨 We recommend following the official [Amazon SageMaker HyperPod Workshop](https://catalog.workshops.aws/sagemaker-hyperpod/en-US) to deploy clusters, which contains detailed instructions and latest best-practices. The below deployment steps are no longer kept up-to-date with latest best practices
 
@@ -12,11 +11,10 @@ The example that follows describes the process of setting up a SageMaker HyperPo
 
 **Note: For a guided set-up experience, check out the [HyperPod automation script](https://github.com/awslabs/awsome-distributed-ai/tree/main/architectures/sagemaker-hyperpod-slurm/automate-smhp-slurm/README.md).**
 
-
 ## 2. Prerequisites
 
 > [!TIP]  
-> For the latests deployment instructions, follow the  [Amazon SageMaker HyperPod Workshop](https://catalog.workshops.aws/sagemaker-hyperpod/en-US). 
+> For the latests deployment instructions, follow the  [Amazon SageMaker HyperPod Workshop](https://catalog.workshops.aws/sagemaker-hyperpod/en-US).
 
 Before creating a cluster, we need to install the latest [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html), and setup the appropriate IAM role, VPC, FSx for Lustre volume, and S3 bucket.
 
@@ -105,7 +103,6 @@ Lifecycle scripts tell SageMaker HyperPod how to setup your HyperPod cluster. Hy
 | shared_users_sample.txt      | Sample of how to specify users for the add_users.sh script.                                                                                    |
 | start_slurm.sh               | Starts the Slurm scheduler daemon.                                                                                                             |
 
-
 If you want to use docker containers, you can install [Docker](https://www.docker.com/), [Enroot](https://github.com/NVIDIA/enroot), and [Pyxis](https://github.com/NVIDIA/pyxis) by setting `Config.enable_docker_enroot_pyxis` in `config.py` to `True` (True by default).
 
 ```python
@@ -115,7 +112,6 @@ class Config:
     # Set true if you want to install Docker/Enroot/Pyxis.
     enable_docker_enroot_pyxis = True
 ```
-
 
 You can edit `lifecycle_script.py` for further customizations. For example, if you'd like to install Miniconda as part of your lifecycles scripts, you can add the script under `utils` and call it using `ExecuteBashScript` in `lifecycle_script.py`.
 
@@ -340,9 +336,9 @@ srun -N 8 python3 hyperpod-precheck.py
 
 Follow the mitigations listed in this table if one of the checks fails:
 
-| Test                           | 	Description	                                                                                                               | Failure  mitigation                                                                                                                                                                                                                                                                                                                                                      |
+| Test                           |  Description                                                                                                                | Failure  mitigation                                                                                                                                                                                                                                                                                                                                                      |
 |--------------------------------|-----------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| check_if_docker_installed	     | Life-cycle scripts ensure that docker is installed on all nodes<br/>This checks if docker is available on all compute nodes | Run life-cycle scripts manually<br/>`cd /tmp/sagemaker-lifecycle-* && cd src/utils/ && srun -N <no of nodes> bash install_docker.sh`                                                                                                                                                                                                                                     |
+| check_if_docker_installed      | Life-cycle scripts ensure that docker is installed on all nodes<br/>This checks if docker is available on all compute nodes | Run life-cycle scripts manually<br/>`cd /tmp/sagemaker-lifecycle-* && cd src/utils/ && srun -N <no of nodes> bash install_docker.sh`                                                                                                                                                                                                                                     |
 | check_enroot_runtime_path      | Make sure the `ENROOT_RUNTIME_PATH` is pointed to the right directory                                                       | Follow [these steps](https://catalog.workshops.aws/sagemaker-hyperpod/en-US/01-cluster/08-docker-setup#enroot) in the workshop (Cluster Setup > Docker Setup > Enroot)                                                                                                                                                                                                   |
 | check_docker_data_root         | Docker data root should be at `/opt/sagemaker` (if mounted) or `/opt/dlami/nvme/data-root`                                                                   | Run life-cycle scripts manually```cd /tmp/sagemaker-lifecycle-* && cd src/utils/ && srun -N <no of nodes> bash install_docker.sh```                                                                                                                                                                                                                                      |
 | check_if_fsx_mounted           | `df -h` should show /fsx as mounted                                                                                         | Speak to AWS; We have ensured provisioning parameters include this. So if it's not mounted, we need to investigate this issue.                                                                                                                                                                                                                                           |
@@ -351,14 +347,12 @@ Follow the mitigations listed in this table if one of the checks fails:
 | check_if_user_directory_on_fsx | This checks if users are sharing /fsx file system mount                                                                     | Multi user setup will create /fsx/<user> mounts. Follow [those steps here](https://catalog.workshops.aws/sagemaker-hyperpod/en-US/04-advanced/01-multi-user)<br />If the user directory doesn't exist for nodes that have been replaced<br />Run a variant of this command for your nodes<br>`srun -N 2 usermod -d /fsx/ubuntu ubuntu`<br>(Replace ubuntu with username) |
 | nvidia_cli_installed           | Nvidia Container CLI is installed via docker life cycle scripts. It's unlikely this will be an issue.                       | Go to [this page](https://catalog.workshops.aws/sagemaker-hyperpod/en-US/03-megatron-lm/01-pre-process) and look for the command that runs the nvidia-container-cli installation.<br /> Create a script from those steps and either use sbatch or srun to execute across all compute nodes                                                                               |
 
-
 You can also run validation on the scripts you wish to run. This ensures you’re not using unsupported operations in the script.
 
 ```
 # Run a check on a specific sbatch script that launches training
 python3 hyperpod-precheck.py -f ../../examples/training/megatron-lm/slurm/gpt3/2.distributed-training.sbatch
 ```
-
 
 ### 3.6 Patching your HyperPod cluster
 
@@ -370,6 +364,7 @@ aws sagemaker update-cluster-software --cluster-name ml-cluster --region us-west
 
 Note that this API replaces the instance root volume and cleans up data in it. You should back up your work before running it.
 We've included a script `patching-backup.sh` that can backup and restore the data via Amazon S3.
+
 ```
 # to backup data to an S3 bucket before patching
 sudo bash patching-backup.sh --create <s3-buckup-bucket-path>

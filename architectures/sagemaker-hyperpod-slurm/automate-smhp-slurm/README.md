@@ -26,12 +26,14 @@ This demo gif showcases the step-by-step process of creating and setting up a Sa
 ### Installation
 
 1. Clone this repository:
+
    ```bash
    git clone https://github.com/awslabs/awsome-distributed-ai.git
    cd architectures/sagemaker-hyperpod-slurm/automate-smhp-slurm
    ```
 
 2. Make the script executable:
+
    ```bash
    chmod +x automate-cluster-creation.sh
    ```
@@ -89,6 +91,7 @@ The automation script follows this general flow:
 ```
 
 Important technical considerations:
+
 - Ensure you have the necessary AWS permissions before running the script.
 - The script modifies the `config.py` file to enable observability if selected.
 - IAM policy attachment requires admin permissions.

@@ -21,6 +21,7 @@ This repository provides reference architectures and deployment templates for se
 ![AWS PCS diagram](./images/ml-pcs-architecture.png)
 
 A default deployment (`pcs-ml-cluster-deploy-all.yaml`) provisions:
+
 - VPC with a public subnet and private subnets in up to 3 AZs, a NAT gateway (primary AZ), and an S3 endpoint
 - FSx for Lustre (`/fsx`, high-performance shared scratch) and FSx for OpenZFS (`/home`)
 - PCS cluster with the Slurm scheduler (25.05 or 25.11), on the PCS-Ready DLAMI
@@ -33,6 +34,7 @@ Every node runs on the AWS-managed **PCS-Ready DLAMI** (NVIDIA driver, CUDA, PCS
 and Slurm pre-installed), so no custom AMI build is required.
 
 Optional add-ons (off by default):
+
 - **Multi-user directory**: OpenLDAP on the login node + SSSD on every compute node (`DirectoryService`)
 - **IAM policy stacks**: least-privilege cluster-admin / cluster-user policies you can deploy separately
 - **Custom AMI**: pin a specific AMI or pre-bake Enroot/Pyxis into your own DLAMI (faster
@@ -190,6 +192,7 @@ automatically.
 | `p6-b300.48xlarge` | 8× B300 | 16 (of 17 interfaces; the primary is ENA-only) | `add-cng-p6-b300.yaml` |
 
 **Capacity options:**
+
 - **On-Demand**: leave `CapacityReservationId` empty.
 - **On-Demand Capacity Reservation (ODCR)**: also leave `CapacityReservationId` **empty** — create the ODCR with **"open"** instance matching and it is consumed automatically by the node group's On-Demand launches. (Do **not** put the ODCR ID in `CapacityReservationId`; that parameter forces Capacity-Block mode.)
 - **Capacity Blocks for ML**: set `CapacityReservationId` to the Capacity Block ID. The template then launches with `MarketType=capacity-block` against it.
@@ -226,6 +229,7 @@ aws cloudformation create-stack \
     ParameterKey=OnDemandMaxCount,ParameterValue=8 \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
+
 Replaces the default `cpu1` queue with a `gpu-g6` queue of g6.12xlarge instances.
 
 ### Example 2: Multi-NIC GPU with a Capacity Block (P6-B300)
@@ -248,6 +252,7 @@ aws cloudformation create-stack \
     ParameterKey=CapacityReservationId,ParameterValue=${CAPACITY_RESERVATION_ID} \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
+
 The `add-cng-p6-b300.yaml` template is selected automatically from `PseriesInstanceType`,
 and the EFA interface count is derived from the instance type — no interface-count
 parameter to set. For `p6-b200.48xlarge` or any P5 type, just change
@@ -271,6 +276,7 @@ aws cloudformation create-stack \
     ParameterKey=OnDemandEfaInterfaceCount,ParameterValue=2 \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
+
 Replaces the default `cpu1` queue with an `hpc` queue of EFA-enabled
 hpc7a.96xlarge nodes. The CNG launches in an auto-created cluster placement
 group. For other HPC types, set `OnDemandInstanceType` and the matching
@@ -344,7 +350,7 @@ sbatch --partition=cpu1 --nodes=2 --wrap='srun bash -c "hostname"'
 ### Example B — multi-node GPU NCCL test (needs a GPU queue)
 
 A 2-node `all_reduce_perf` is the quickest GPU end-to-end check (GPU queue + Pyxis
-+ EFA). Add a GPU queue first (see [Templates](#9-templates)):
+- EFA). Add a GPU queue first (see [Templates](#9-templates)):
 
 ```bash
 # Import the container image (enroot's overlayfs needs the node-local root disk;
@@ -415,6 +421,7 @@ stack on the client — see the Client-side Lustre-on-EFA + GDS item in
 benefit, useful when a single client is pushing past ~10 GBps.
 
 Constraints when enabling this:
+
 - **PERSISTENT_2 SSD only** — a CFN Rule fails the stack at create time on `PERSISTENT_1`.
 - **Much higher minimum `Capacity`** — at `PerUnitStorageThroughput=250` the minimum is
   **19200 GiB** (16× the 1200 GiB default). Set `Capacity` accordingly.
@@ -517,6 +524,7 @@ aws ec2 describe-instances --region "$AWS_REGION" \
 ```
 
 Security notes:
+
 - The security group is attached **only to the login node** — compute nodes and FSx
   (which share the cluster security group) are **not** exposed.
 - **Opening 443 exposes more than Grafana.** The login node's nginx also reverse-proxies
@@ -779,6 +787,7 @@ numbers is in **[tests/README.md](./tests/README.md)**.
 ## 11. Additional Resources
 
 In this repo:
+
 - [Parameter reference](./docs/PARAMETERS.md) — every deploy-all parameter and default
 - [Operations guide](./docs/OPERATIONS.md) — version trade-offs, AMI pinning, monitoring/DCGM, FSx coupling, Lustre tuning, production settings, migration notes from UserData-based releases
 - [User management guide](./docs/USER-MANAGEMENT.md) — multi-user setup with OpenLDAP (add/remove users, groups, Slurm accounting)
@@ -791,5 +800,6 @@ In this repo:
 - [Roadmap / TODO](./docs/ROADMAP.md)
 
 External:
+
 - [AWS PCS Documentation](https://docs.aws.amazon.com/pcs/) · [AI/ML for AWS PCS Workshop](https://catalog.workshops.aws/ml-on-pcs/)
 - [Slurm](https://slurm.schedmd.com/documentation.html) · [Enroot](https://github.com/NVIDIA/enroot) · [Pyxis](https://github.com/NVIDIA/pyxis) · [Capacity Blocks for ML](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-capacity-blocks.html)
