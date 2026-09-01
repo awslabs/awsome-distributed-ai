@@ -14,8 +14,11 @@
 # TRTLLM_NCCL_EP_ALGO (default LOW_LATENCY — see the patched-image guard below).
 set -uo pipefail
 
-ROLE="${1:?usage: run-kernel-test.sh {leader|worker} <leader-ip> [node-rank]}"
-case "$ROLE" in leader|worker) ;; *) echo "FATAL: unrecognized role '$ROLE' (leader|worker)"; exit 2 ;; esac
+# NOTE: keep the usage message brace-free. A literal '}' inside a ${1:?...} message (e.g.
+# "{leader|worker}") closes the parameter expansion early, so ROLE captures the junk tail and
+# the case below never matches -> FATAL on every invocation. Check role in a separate statement.
+ROLE="${1:-}"; : "${ROLE:?usage: run-kernel-test.sh leader-or-worker <leader-ip> [node-rank]}"
+case "$ROLE" in leader|worker) ;; *) echo "FATAL: unrecognized role '$ROLE' (expected leader|worker)"; exit 2 ;; esac
 LEADER_IP="${2:?need leader ip}"
 if [ "$ROLE" = "worker" ]; then NODE_RANK_ARG="${3:?worker requires an explicit node-rank (1,2,...)}"; else NODE_RANK_ARG=0; fi
 NNODES="${NNODES:-2}"

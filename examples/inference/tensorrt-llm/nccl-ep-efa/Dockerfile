@@ -43,18 +43,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # trtllm-serve HTTP-200-correct + 16-rank cross-node dispatch/combine, IMA=0, efa-direct on
 # every rank) ran on 1.48.0 — this assembly is not yet cluster-re-measured on 1.50.0, which
 # is exactly what recipe/verify-image.sh + run-kernel-test.sh exist to re-verify on-cluster.
-# --disable-ngc/--disable-build-ngc: the NGC base trips the installer's NGC auto-detect,
-# which would silently reroute to the libnccl-ofi-ngc path — we build aws-ofi-nccl from
-# source ourselves (Layer 5), same explicit choice as the sibling vllm/deepep-v2-efa sample.
+# --disable-ngc: the NGC base trips the installer's NGC auto-detect, which would silently
+# reroute to the libnccl-ofi-ngc path — we build aws-ofi-nccl from source ourselves
+# (Layer 5), same explicit choice as the sibling vllm/dsv3-uccl-nixl sample (which also
+# passes --disable-ngc alone). Do NOT add --disable-build-ngc: that flag existed in
+# aws-efa-installer 1.48.0 but was REMOVED in 1.49.0+ (the installer no longer auto-detects
+# the build-ngc use case, so the flag became unnecessary and getopt now rejects it — an
+# unknown long-opt makes efa_installer.sh print usage and exit 1, failing this layer). The
+# 2026-08-07 E2E ran on 1.48.0 where both flags were valid; the 1.50.0 bump made the second
+# one a build error, which is why it is dropped here.
 ARG EFA_INSTALLER_VER=1.50.0
 RUN apt-get update \
     && curl -fsSL https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VER}.tar.gz | tar -xzf - -C /tmp \
     && cd /tmp/aws-efa-installer \
-    && ./efa_installer.sh -y --skip-kmod --skip-limit-conf --no-verify --disable-ngc --disable-build-ngc \
+    && ./efa_installer.sh -y --skip-kmod --skip-limit-conf --no-verify --disable-ngc \
     && echo "${EFA_INSTALLER_VER}" > /opt/efa-installer.version \
     && rm -rf /tmp/aws-efa-installer /var/lib/apt/lists/*
-ENV PATH=/opt/amazon/efa/bin:/opt/amazon/openmpi/bin:$PATH
-ENV LD_LIBRARY_PATH=/opt/amazon/efa/lib:/opt/amazon/openmpi/lib:${LD_LIBRARY_PATH:-}
+# Add EFA userspace (libfabric + efa provider) to PATH/LD, but deliberately NOT the EFA
+# installer's bundled OpenMPI (/opt/amazon/openmpi). The NGC TRT-LLM base ships HPC-X OpenMPI
+# (ldconfig default /opt/hpcx/ompi) and tensorrt_llm's MPI_Init resolves libopen-pal through it.
+# The EFA installer's OpenMPI 4.1.7 ships a libopen-pal.so.40 that does NOT export
+# opal_libevent2022_event_assign; prepending /opt/amazon/openmpi/lib here shadows the HPC-X
+# libopen-pal under HPC-X's own mca_ess_hnp.so plugin → undefined symbol → MPI_Init aborts on
+# `import tensorrt_llm`. Neither recipe uses EFA's mpirun (serve.sh is single-node; the probe
+# uses torchrun), so the EFA OpenMPI is unnecessary and its lib on LD is actively harmful.
+ENV PATH=/opt/amazon/efa/bin:$PATH
+ENV LD_LIBRARY_PATH=/opt/amazon/efa/lib:${LD_LIBRARY_PATH:-}
 
 # ---- Layer 3: gdrcopy userspace (PUBLIC: github.com/NVIDIA/gdrcopy) ----
 # aws-ofi-nccl's GIN path REQUIRES gdrapi.h at configure time — without it the plugin
@@ -77,10 +91,19 @@ RUN git clone https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
 # package at all (only nccl.bindings + nccl.core), so a bump to latest breaks `import nccl.ep`.
 # Why 2.30.4 and not the newer 2.31.2: 2.31.2 also clears the >= 2.30.4 floor, but libnccl_ep 0.1.0
 # (shipped by the nccl4py pin above) is built against the NCCL 2.30 device-side API that the GIN
-# CPU-proxy path calls into. Moving the runtime to 2.31.x is an ABI change on that device API that
-# has NOT been re-measured on this substrate; 2.30.4 is the version the correctness E2E actually ran.
-# Held at 2.30.4 as the measured-matching floor, not as an upper bound — bump it together with a
-# libnccl_ep rebuilt against the newer device API, and re-run verify-image.sh + run-kernel-test.sh.
+# CPU-proxy path calls into. 2.30.4 is the version the 2026-08-07 correctness E2E actually ran.
+# A single-variable 2.31.2 trial (2026-09-01, cgk p5en, --build-arg NVIDIA_NCCL_CU13=2.31.2) showed:
+#   (+) the library ABI loads clean on 2.31.2 — is_nccl_ep_installed() passes and the
+#       CommunicationFactory selects NcclEP on all 16 ranks (no quiet symbol/binding break); BUT
+#   (=) the device dispatch/combine round-trip was UNMEASURABLE on that substrate, for a reason
+#       independent of the NCCL version: the GIN CPU-proxy hard-requires GDRCopy >= 2.5
+#       (aws-ofi-nccl v1.21.1 nccl_ofi_gin_api.cpp:63 -> forced_pcie_copy() -> min(runtime,driver)
+#       version >= 2.5), and cgk's host gdrdrv is 2.4, so nccl_ofi_gin_init() hard-fails and the
+#       Device API is absent -> create_group() raises on BOTH 2.30.4 and 2.31.2. See README trap 7 /
+#       doc gin-getting-started (gdrdrv >= 2.5 is a stated prerequisite of this sample).
+# So the 2.31.2 device-side ABI is NOT yet certified (nor refuted). Held at 2.30.4 as the
+# measured-matching floor, not an upper bound — to bump it, re-run verify-image.sh +
+# run-kernel-test.sh on a host with gdrdrv >= 2.5 so GIN can init and the round-trip + oracle run.
 ARG NVIDIA_NCCL_CU13=2.30.4
 ARG NCCL4PY_VER=0.3.1
 RUN pip3 install --no-cache-dir --no-deps --force-reinstall "nvidia-nccl-cu13==${NVIDIA_NCCL_CU13}" \
