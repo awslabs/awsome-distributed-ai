@@ -13,8 +13,6 @@ The major components of this directory are:
 └── micro-benchmarks/              # Micro-benchmarks (NCCL, NCCOM, NVSHMEM, etc.)
 ```
 
-**NOTE**: Each architecture ships its own prerequisite templates (VPC, storage, IAM). [`architectures/common/`](./architectures/common) and [`architectures/vpc_network/`](./architectures/vpc_network) provide optional standalone building blocks (private S3 bucket, HyperPod event notifications, reference VPC templates) you can reuse where an architecture doesn't bring its own.
-
 ## 0. Workshops
 
 You can follow the workshops below to train models on AWS. Each contains examples for several test cases as well as nuggets of information on operating a cluster for LLM training.
