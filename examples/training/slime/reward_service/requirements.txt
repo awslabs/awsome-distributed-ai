@@ -4,7 +4,7 @@
 # Pinned dependencies for the CPU reward service. CPU-only torch keeps the
 # image small (no CUDA). Versions are pinned for reproducible builds.
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.5.1
+torch==2.12.1+cpu
 transformers==4.46.3
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
