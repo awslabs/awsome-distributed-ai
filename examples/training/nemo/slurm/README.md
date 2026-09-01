@@ -20,7 +20,7 @@ Make sure that your current directory is under a shared filesystem such as `/fsx
   ```bash
   cd ~
   git clone https://github.com/awslabs/awsome-distributed-ai/
-  cd awsome-distributed-ai/examples/22.nemo-run/slurm
+  cd awsome-distributed-ai/examples/training/nemo/slurm
   ```
 
 ## 4. Build and Configure the NeMo Job Container

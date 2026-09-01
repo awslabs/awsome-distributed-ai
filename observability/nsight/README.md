@@ -5,8 +5,8 @@
 We will show how to profile and analyze:
 
 1. [NCCL Tests](https://github.com/awslabs/awsome-distributed-ai/tree/main/micro-benchmarks/nccl-tests/slurm)
-2. [Distributed training run with NeMo](https://github.com/awslabs/awsome-distributed-ai/tree/main/examples/2.nemo-launcher)
-3. [Distributed training run with FSDP](https://github.com/awslabs/awsome-distributed-ai/tree/main/examples/10.FSDP)
+2. [Distributed training run with NeMo](https://github.com/awslabs/awsome-distributed-ai/tree/main/examples/training/nemo)
+3. [Distributed training run with FSDP](https://github.com/awslabs/awsome-distributed-ai/tree/main/examples/training/fsdp)
 4. Setup Nsight on an EKS cluster
 
 # 0. Prerequisities

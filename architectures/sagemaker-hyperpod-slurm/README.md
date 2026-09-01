@@ -356,7 +356,7 @@ You can also run validation on the scripts you wish to run. This ensures you’r
 
 ```
 # Run a check on a specific sbatch script that launches training
-python3 hyperpod-precheck.py -f ../../examples/1.megatron-lm/2.distributed-training.sbatch
+python3 hyperpod-precheck.py -f ../../examples/training/megatron-lm/slurm/gpt3/2.distributed-training.sbatch
 ```
 
 
