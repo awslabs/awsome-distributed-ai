@@ -33,7 +33,7 @@ Both profiles hold the following controls constant across backends:
 | SM count | Each result records the communication-kernel SM count (`num_sms`) where the backend exposes one; `EP_NUM_SMS` pins it explicitly, and 0 keeps each backend's automatic choice |
 | Warmup | 20 warmup iterations per dtype and process start |
 | Measurement | 100 measured iterations per dtype and process start |
-| Replication | 20 independent process starts per arm and workload cell |
+| Replication | `INDEPENDENT_STARTS` independent process starts per arm and workload cell, default 20; the reported campaigns used 16 and 4 |
 | Order | Backend, dtype, and workload-profile order rotate across starts |
 | Hardware | The same named nodes serve every arm at a given EP size |
 | Runtime | Every result reports the same GPU, PyTorch, CUDA, and torch-built NCCL versions, plus the NCCL library actually loaded (consistent within each arm) |
@@ -182,8 +182,8 @@ The summarizer rejects an incomplete matrix, correctness failure, mutable image 
 Regenerate the box plots from the committed machine-readable summary:
 
 ```bash
-python3 plot_results.py results/b200-ap-south-1-2026-08-25.json \
-  --output=results/b200-ap-south-1-2026-08-25-boxplots.png
+python3 plot_results.py results/b200-us-east-1-2026-09-01-ep16-n16.json \
+  --output=results/b200-us-east-1-2026-09-01-ep16-n16-boxplots.png
 ```
 
 Plot generation requires Matplotlib. Each box uses the independent process-start medians for one backend and workload cell. The plot also shows every underlying point.
