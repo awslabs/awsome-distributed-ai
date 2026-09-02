@@ -40,10 +40,11 @@ still open**, merged in by the PR's **immutable head SHA**, the one upstream ref
 carries), and the vLLM wheel-pin — is the standard V2/GDAKI contract.
 
 **Net:** this folder is **post-merge upstream SHA pins + one open upstream DeepEP reference (PR#612),
-with zero local source patches.** The merged-upstream substrate fixes (rdma-core #1701, libfabric
-#12591, aws-ofi-nccl #1311, carried by the `a3d2680` pin) are plain SHA pins, not patches.
+with zero local source patches.** The merged-upstream substrate fixes (rdma-core #1701,
+libfabric #12591, aws-ofi-nccl #1311, carried by the `a3d2680` pin) are plain SHA pins, not patches.
 
 ### eager vs non-eager (both measured; see `benchmarks/`)
+
 | Mode | Status | How |
 |---|---|---|
 | `--enforce-eager` | **Serves, zero extra patches** | the default this sample ships |
@@ -56,6 +57,7 @@ because the vLLM pin is identical. `--enforce-eager` avoids it; the fix stack ab
 compilation serve. Numbers for both modes are in `benchmarks/`.
 
 ## Prerequisites
+
 - An EKS cluster of p5en.48xlarge (H200) with EFA + the EFA K8s device plugin (the shipped launcher);
   the container also runs under raw `docker run` on any 2 EFA hosts if you wire the rendezvous by hand.
 - **Node GDRCopy >= 2.5:** the GIN path needs the host `gdrdrv` kernel module at GDRCopy 2.5 or newer
@@ -72,10 +74,12 @@ compilation serve. Numbers for both modes are in `benchmarks/`.
 - Hugging Face access for the model (`Qwen/Qwen3-30B-A3B-FP8` is public, no token required).
 
 ## Build
+
 ```bash
 cp setup/env_vars.example setup/env_vars && $EDITOR setup/env_vars   # set REGISTRY, IMAGE_TAG
 bash setup/build-push.sh
 ```
+
 The image is NGC-from-scratch (`FROM nvcr.io/nvidia/cuda:...`). It builds rdma-core (post-#1701) and
 libfabric (post-#12591) from source, then `setup_deepep_v2_gdaki_efa.sh` builds aws-ofi-nccl
 `--enable-gdaki` at its pinned SHA (no local patches) against them and stages DeepEP-V2 source
@@ -85,20 +89,24 @@ context) by `recipe/build_deepep.sh`.
 ## Smoke-test the substrate before loading the model
 
 **1. Static image check (single node, no rendezvous):**
+
 ```bash
 bash recipe/verify-image.sh $REGISTRY/vllm-deepep-v2-gdaki-efa:$IMAGE_TAG
 ```
+
 Asserts (fail-loud) the EFA provider resolves, the rdma-core comp-cntr verbs are present, a single
 NCCL 2.30.4 wins on the linker path, the GIN plugin exports `ncclGinPlugin`, GDAKI + the
 `OFI_NCCL_GDAKI_EFA_HW_COUNTER` param are compiled in, and (when run on a node) the host gdrdrv is
 GDRCopy 2.5+.
 
 **2. Cross-node kernel smoke (prove bytes move over EFA before the model load):**
+
 ```bash
 # in the pods/containers, one per node — runs DeepEP-V2's own elastic EP test on the GDAKI transport
 bash /opt/run-kernel-test.sh leader <leader-ip>            # node 0
 bash /opt/run-kernel-test.sh worker <leader-ip> 1          # node 1
 ```
+
 Runs `DeepEP/tests/elastic/test_ep.py` across the nodes with the exact GDAKI-Gin/EFA env the serve
 uses, and only prints `KERNEL-TEST PASS` when the test passes **and** the `NCCL_DEBUG=INFO` log shows
 the `efa-direct` banner (so a green result cannot be a silent TCP/SHM fallback). It also warns on the
@@ -106,6 +114,7 @@ known `GDAKI-CQE ... status 9` upstream signature. This is the one step that can
 run it before committing a node to the multi-hundred-GB weight load.
 
 ## Serve
+
 ```bash
 # eager (default). SERVE_DP = total data-parallel = EP size; SERVE_DP_LOCAL = GPUs/node.
 SERVE_DP=16 bash recipe/serve.sh leader <leader-ip>       # on node 0
@@ -113,17 +122,21 @@ SERVE_DP=16 bash recipe/serve.sh worker <leader-ip> 8     # on node 1
 # non-eager (CUDA graphs): apply the fix stack first, then serve without --enforce-eager
 # non-eager: pending the upstream guard ([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)) — pin bump enables it, no patch step
 ```
+
 Kubernetes: `kubectl apply -f kubernetes/` (2-node StatefulSet + headless service; the GDAKI-Gin env
 contract, the `OFI_NCCL_GDAKI_EFA_HW_COUNTER` tristate, and EFA device requests are all set there).
 
 ## Benchmark
+
 ```bash
 bash recipe/benchmark.sh $LEADER_IP    # concurrency sweep 1/8/16/32/64, writes benchmarks/raw/
 ```
+
 See [`benchmarks/README.md`](benchmarks/README.md) for the measured eager, non-eager, and the
 same-node-set **GDAKI-vs-proxy transport A/B** tables (EP16 + EP32) + environment provenance.
 
 ## Known limitations
+
 - Measured on **H200 (p5en) only**; no Blackwell serving run is in this sample.
 - The transport A/B is **one sweep per arm/scale**; the 2×2 (EP16+EP32, GDAKI+proxy, 10 paired
   comparisons, GDAKI ≥ proxy in all 10 by +0.2–3.2%) shows a consistent direction, not a

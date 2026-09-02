@@ -6,6 +6,7 @@ DP32/EP32. `recipe/benchmark.sh` fires N concurrent `/v1/chat/completions` per l
 aggregate output tok/s + per-request latency percentiles. Raw JSONL lands in `raw/` (gitignored).
 
 ## Environment provenance
+
 | | |
 |---|---|
 | Instance | 2× / 4× p5en.48xlarge (H200), cross-node EFA (16 EFA NICs/node) |
@@ -56,6 +57,7 @@ flipped** (`NCCL_GIN_TYPE` 3↔2, `OFI_NCCL_GIN_GDAKI` 1↔0). This removes the 
 different-image variables. Both arms eager, both runtime-env value-verified in the worker processes.
 
 ### DP16/EP16 (2 nodes) — both arms 121/121 HTTP 200
+
 | conc | GDAKI (TYPE=3) tok/s | CPU-proxy (TYPE=2) tok/s | GDAKI Δ |
 |---:|---:|---:|---:|
 | 1  | 5.5   | 5.4   | +1.9% |
@@ -67,6 +69,7 @@ different-image variables. Both arms eager, both runtime-env value-verified in t
 p50 latency at c=64: GDAKI 23.29 s vs proxy 23.92 s (proxy ~0.6 s higher).
 
 ### DP32/EP32 (4 nodes) — both arms 121/121 HTTP 200
+
 Scale-up was launcher-args only (replicas 4 + `SERVE_DP 32`), same as the proxy package found. Same 4
 nodes for both arms, same image, env-flip only.
 
@@ -96,6 +99,7 @@ sample ships; the serve-level numbers above are the ones measured with THIS imag
 distinct when quoting.
 
 ## Honest caveats (do not drop when publishing)
+
 - **Single sweep per arm/scale — variance not statistically bounded.** The 2×2 consistency (10/10
   GDAKI ≥ proxy) demonstrates a direction, not a tight interval.
 - **Wire-proof is functional, not a byte-tally.** The validation nodes ran efa.ko 3.0.x/3.1.x, which
