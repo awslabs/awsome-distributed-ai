@@ -1,0 +1,205 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# DeepSeek V4 Pro unified (non-PD) serving on a single 8-GPU B300 node.
+# One SGLang engine spans all 8 GPUs (tp=8, dp=8, --enable-dp-attention,
+# MXFP4 MoE, EAGLE speculative decoding) on the OpenAI-compatible endpoint :30000.
+#
+# Runs on BOTH SageMaker HyperPod-on-EKS and self-managed (eksctl) EKS:
+#
+#   kubectl apply -f dsv4pro-deploy.yaml
+#
+# Scheduling is handled for both cluster types automatically (see nodeAffinity +
+# tolerations below). The ONE thing you must set per environment is the NVMe
+# hostPath at the bottom of this file — see the WARNING there.
+#
+# On self-managed EKS, create the B300 nodegroup first (labels, GPU taint, NVMe
+# RAID0 auto-mount) — see NODEGROUP-EKS.md and manifests/nodegroup-b300-eks.yaml.
+# On HyperPod-on-EKS, nodes are already provisioned — just apply.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dsv4pro
+spec:
+  selector:
+    app: dsv4pro-unified
+  ports:
+  - name: http
+    port: 30000
+    targetPort: 30000
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dsv4pro-unified
+  labels:
+    app: dsv4pro-unified
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: dsv4pro-unified
+  template:
+    metadata:
+      labels:
+        app: dsv4pro-unified
+        sglang-metrics: "true"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "30000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Target a p6-b300.48xlarge on either cluster type. kubelet always sets
+      # node.kubernetes.io/instance-type; HyperPod instance groups use the
+      # SageMaker-style `ml.` prefix, a plain EKS managed nodegroup uses the
+      # bare EC2 type. A nodeSelector can't express OR, so use nodeAffinity In.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node.kubernetes.io/instance-type
+                operator: In
+                values:
+                - p6-b300.48xlarge      # plain EKS managed nodegroup
+                - ml.p6-b300.48xlarge   # SageMaker HyperPod instance group
+      # The eksctl B300 nodegroup taints nodes nvidia.com/gpu=true:NoSchedule to
+      # keep non-GPU pods off; HyperPod nodes have no such taint. A toleration is
+      # a no-op when the taint is absent, so it's safe to always carry it.
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+      containers:
+      - name: sglang
+        # Same upstream SGLang image as the other examples — DeepSeek-V4-Pro
+        # serves correctly on it; the model/kernel knobs are all driven by the
+        # SGLANG_OPT_* env vars and serve flags below, not by a dedicated image.
+        image: lmsysorg/sglang:v0.5.12.post1-cu130
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          privileged: true
+        env:
+        - name: SGLANG_JIT_DEEPGEMM_PRECOMPILE
+          value: "0"
+        - name: SGLANG_OPT_SWA_SPLIT_LEAF_ON_INSERT
+          value: "1"
+        - name: SGLANG_OPT_USE_JIT_NORM
+          value: "1"
+        - name: SGLANG_OPT_USE_JIT_INDEXER_METADATA
+          value: "1"
+        - name: SGLANG_OPT_USE_TOPK_V2
+          value: "1"
+        - name: SGLANG_OPT_USE_CUSTOM_ALL_REDUCE_V2
+          value: "1"
+        - name: SGLANG_OPT_SWA_EVICT_DROP_PAGE_MARGIN
+          value: "1"
+        - name: SGLANG_OPT_USE_DEEPGEMM_MEGA_MOE
+          value: "0"
+        - name: SGLANG_OPT_FIX_HASH_MEGA_MOE
+          value: "0"
+        - name: SGLANG_OPT_USE_FAST_MASK_EP
+          value: "1"
+        - name: SGLANG_OPT_FIX_MEGA_MOE_MEMORY
+          value: "1"
+        - name: SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK
+          value: "4096"
+        - name: SGLANG_OPT_FIX_NEXTN_MEGA_MOE
+          value: "1"
+        - name: SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK
+          value: "0"
+        ports:
+        - containerPort: 30000
+          name: http
+        volumeMounts:
+        - name: shm
+          mountPath: /dev/shm
+        - name: nvme-hf
+          mountPath: /root/.cache/huggingface
+        - name: nvme-tmp
+          mountPath: /tmp
+        resources:
+          limits:
+            nvidia.com/gpu: 8
+        # /health returns 200 once the API server is up, but the engine can still
+        # wedge on a stuck CUDA-graph capture. Restart after 5 consecutive misses;
+        # the 1800s initial delay clears the cold start (weight download + DeepGEMM
+        # JIT + CUDA-graph capture) so liveness never fires during warmup.
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 30000
+          initialDelaySeconds: 1800
+          periodSeconds: 60
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 30000
+          initialDelaySeconds: 180
+          periodSeconds: 10
+          timeoutSeconds: 5
+        command:
+        - sglang
+        - serve
+        - --trust-remote-code
+        - --model-path
+        - deepseek-ai/DeepSeek-V4-Pro
+        - --tp
+        - "8"
+        - --dp
+        - "8"
+        - --enable-dp-attention
+        - --moe-runner-backend
+        - flashinfer_mxfp4
+        - --disable-flashinfer-autotune
+        - --chunked-prefill-size
+        - "32768"
+        - --swa-full-tokens-ratio
+        - "0.1"
+        - --speculative-algo
+        - EAGLE
+        - --speculative-num-steps
+        - "1"
+        - --speculative-eagle-topk
+        - "1"
+        - --speculative-num-draft-tokens
+        - "2"
+        - --mem-fraction-static
+        - "0.92"
+        - --cuda-graph-max-bs
+        - "256"
+        - --deepep-config
+        - '{"normal_dispatch":{"num_sms":96},"normal_combine":{"num_sms":96}}'
+        - --enable-metrics
+        - --host
+        - 0.0.0.0
+        - --port
+        - "30000"
+      volumes:
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 32Gi
+      # ⚠️  SET THIS PER CLUSTER — the one thing scheduling can't auto-detect.
+      # The node's local NVMe is mounted at different paths on the two AMIs.
+      # Default below is HyperPod's DLAMI mount; for self-managed EKS swap both
+      # paths to the instance-store RAID0 (commented). Picking the WRONG path is
+      # not a hard error: type=DirectoryOrCreate will silently create an empty
+      # dir on the small root disk and the 500GB+ weights will fill it up.
+      #
+      #   HyperPod-on-EKS (DLAMI):           /opt/dlami/nvme/...
+      #   self-managed EKS (RAID0 instance): /mnt/k8s-disks/0/...   (setup-local-disks raid0)
+      - name: nvme-hf
+        hostPath:
+          path: /opt/dlami/nvme/huggingface  #For EKS: /mnt/k8s-disks/0/huggingface
+          type: DirectoryOrCreate
+      - name: nvme-tmp
+        hostPath:
+          path: /opt/dlami/nvme/tmp         #For EKS: /mnt/k8s-disks/0/tmp
+          type: DirectoryOrCreate

@@ -83,6 +83,7 @@ id testuser1
 ```
 
 Expected:
+
 ```
 testuser1:*:10001:3000:Test User 1:/home/testuser1:/bin/bash
 uid=10001(testuser1) gid=3000(clusterusers) groups=3000(clusterusers)
@@ -97,6 +98,7 @@ srun -N 1 -n 1 -p cpu1 bash -c 'getent passwd testuser1; id testuser1'
 
 Expected: same output as B2. If the user is not visible, SSSD cache may need
 a refresh:
+
 ```bash
 srun -N 1 -n 1 -p cpu1 bash -c 'sudo sss_cache -E; sleep 2; getent passwd testuser1'
 ```
@@ -111,6 +113,7 @@ sudo su - testuser1 -c 'pwd; ls -la ~'
 Expected: `/home/testuser1` exists, owned by `testuser1:3000`.
 
 Verify visible from compute:
+
 ```bash
 srun -N 1 -n 1 -p cpu1 bash -c 'ls -la /home/testuser1'
 ```
@@ -156,6 +159,7 @@ ldappasswd -x -H ldap://localhost -D "cn=admin,dc=cluster,dc=internal" -W -S \
 
 Then verify the user can bind with the new password (still on the login
 node):
+
 ```bash
 ldapwhoami -x -H ldap://localhost -D "uid=testuser1,ou=People,dc=cluster,dc=internal" -W
 # Expected: dn:uid=testuser1,ou=People,dc=cluster,dc=internal
@@ -256,6 +260,7 @@ getent passwd testuser2    # should return nothing
 ```
 
 Verify on compute (after cache expires or forced refresh):
+
 ```bash
 srun -N 1 -n 1 -p cpu1 bash -c 'sudo sss_cache -E; sleep 2; getent passwd testuser2 || echo "user not found (correct)"'
 ```
@@ -282,6 +287,7 @@ sudo su - testuser1 -c 'export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH
 ```
 
 Expected:
+
 ```
 testuser1
 uid=10001(testuser1) gid=3000(clusterusers) groups=3000(clusterusers)
@@ -330,6 +336,7 @@ Expected: the second node reads what the first wrote (shared OpenZFS `/home`).
 ### D3. New compute node picks up existing users
 
 If a new compute node scales up after users were created:
+
 ```bash
 # Force a new node to spin up
 srun -N 2 -n 2 -p cpu1 bash -c 'getent passwd testuser1'
@@ -360,6 +367,7 @@ Expected: cached user resolves even with slapd down (SSSD `cache_credentials=tru
 ### E2. LDAP DB survives login node replacement
 
 After login node terminate + PCS replacement:
+
 ```bash
 # On new login node
 ls /home/ldap-db/data.mdb
@@ -425,7 +433,6 @@ Expected: the job reaches `COMPLETED` (ExitCode `0:0`) even though
 `id <user>` / `getent passwd <user>` returns "no such user" on that node —
 name resolution is degraded, the job is not.
 
-
 ---
 
 # Test: Slurm Managed Accounting + Multi-User
@@ -435,6 +442,7 @@ Covers user/account creation, resource limit enforcement, job tracking, and
 reporting.
 
 **Prerequisites**:
+
 - Cluster with `ManagedAccounting=enabled` and `DirectoryService=OpenLDAP-LoginNode`
 - Slurm 25.11 (accounting is available on 24.11+; templates default to 25.11)
 - At least one compute node available
@@ -461,6 +469,7 @@ sacctmgr show account
 ```
 
 If no accounts exist yet, create the default:
+
 ```bash
 sacctmgr -i add account default Description="Default account"
 ```
@@ -491,6 +500,7 @@ sacctmgr show user alice bob format=User,Account,DefaultAccount
 ```
 
 Expected:
+
 ```
      User    Account DefaultAccount
 --------- ---------- --------------
@@ -525,6 +535,7 @@ sudo su - bob -c 'export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; \
 ```
 
 Wait for jobs to complete:
+
 ```bash
 squeue  # should show jobs running then empty
 ```
@@ -562,6 +573,7 @@ sudo su - alice -c 'export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; \
 ```
 
 Check if job is pending with reason `AssocGrpCPURunMinutesLimit`:
+
 ```bash
 squeue -u alice --format="%i %j %T %r"
 ```
@@ -591,6 +603,7 @@ sshare -a --format=Account,User,RawShares,NormShares,RawUsage,FairShare
 ### E1. Test with enforcement=none (default)
 
 An unregistered user can still submit jobs:
+
 ```bash
 # Create a user NOT in sacctmgr
 sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" ldap-add-user.sh charlie 10003 3000
@@ -604,6 +617,7 @@ Expected: job runs (no accounting enforcement).
 
 If `AccountingPolicyEnforcement=associations,limits,safe` was set at cluster
 creation:
+
 ```bash
 # charlie (not in sacctmgr) should be rejected
 sudo su - charlie -c 'export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; \
@@ -625,7 +639,7 @@ commands. Regression guard for the walkthrough in
 [USER-MANAGEMENT.md §4.1](../docs/USER-MANAGEMENT.md#41-register-users-to-accounts).
 
 **Prerequisites**: same as the accounting test (`ManagedAccounting=enabled`
-+ `DirectoryService=OpenLDAP-LoginNode`); alice / bob / carol as LDAP
+- `DirectoryService=OpenLDAP-LoginNode`); alice / bob / carol as LDAP
 users (add carol here if only alice/bob exist).
 
 ### F1. Project accounts and quota

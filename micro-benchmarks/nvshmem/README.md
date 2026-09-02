@@ -4,7 +4,7 @@ NVIDIA NVSHMEM is NVIDIA’s implementation of the OpenSHMEM [PGAS](https://en.w
 
 One of the options for using the NVSHMEM is to implement high-throughput and low-latency MoE dispatch and combine GPU kernels. [DeepEP](https://github.com/deepseek-ai/DeepEP) and [pplx-kernels](https://github.com/ppl-ai/pplx-kernels) are examples of such implementations.
 
-The goal of this document is to provide a guide on how to build NVSHMEM with NCCL with AWS EFA support and run the performance tests. This document reuses NCCL Tests Docker image as a base image and adds NVSHMEM on top. This is done because NVSHMEM is built with NCCL. 
+The goal of this document is to provide a guide on how to build NVSHMEM with NCCL with AWS EFA support and run the performance tests. This document reuses NCCL Tests Docker image as a base image and adds NVSHMEM on top. This is done because NVSHMEM is built with NCCL.
 
 ### Building NCCL Tests Docker image
 
@@ -78,7 +78,7 @@ Common arguments:
 * `-i, --stride <number>` - Stride between elements
 * `-a, --atomic_op <op>` - Atomic operation: inc, add, and, or, xor, set, swap, fetch_inc, add, and, or, xor, compare_swap
 * `--bidir` - Run bidirectional test
-* `--msgrate` - Report message rate (MMPs) 
+* `--msgrate` - Report message rate (MMPs)
 * `--dir <direction>` - Direction (read/write) for put/get operations
 * `--issue <mode>` - Issue mode (on_stream/host) for some host pt-to-pt tests
 
@@ -88,36 +88,36 @@ Common arguments:
 
 Device collective tests are located in `/opt/nvshmem/bin/perftest/device/collective/`:
 
-- alltoall_latency
-- barrier_latency
-- bcast_latency
-- fcollect_latency
-- redmaxloc_latency
-- reducescatter_latency
-- reduction_latency
-- sync_latency
+* alltoall_latency
+* barrier_latency
+* bcast_latency
+* fcollect_latency
+* redmaxloc_latency
+* reducescatter_latency
+* reduction_latency
+* sync_latency
 
 ### Point-to-Point
 
 Device point-to-point tests are located in `/opt/nvshmem/bin/perftest/device/pt-to-pt/`:
 
-- shmem_atomic_bw: 
-- shmem_atomic_latency
-- shmem_atomic_ping_pong_latency
-- shmem_g_bw
-- shmem_g_latency
-- shmem_get_bw
-- shmem_get_latency
-- shmem_p_bw
-- shmem_p_latency
-- shmem_p_ping_pong_latency
-- shmem_put_atomic_ping_pong_latency
-- shmem_put_bw
-- shmem_put_latency
-- shmem_put_ping_pong_latency
-- shmem_put_signal_ping_pong_latency
-- shmem_signal_ping_pong_latency
-- shmem_st_bw
+* shmem_atomic_bw:
+* shmem_atomic_latency
+* shmem_atomic_ping_pong_latency
+* shmem_g_bw
+* shmem_g_latency
+* shmem_get_bw
+* shmem_get_latency
+* shmem_p_bw
+* shmem_p_latency
+* shmem_p_ping_pong_latency
+* shmem_put_atomic_ping_pong_latency
+* shmem_put_bw
+* shmem_put_latency
+* shmem_put_ping_pong_latency
+* shmem_put_signal_ping_pong_latency
+* shmem_signal_ping_pong_latency
+* shmem_st_bw
 
 ## Host
 
@@ -125,22 +125,22 @@ Device point-to-point tests are located in `/opt/nvshmem/bin/perftest/device/pt-
 
 Host collective tests are located in `/opt/nvshmem/bin/perftest/host/collective/`:
 
-- alltoall_on_stream
-- barrier_all_on_stream
-- barrier_on_stream
-- broadcast_on_stream
-- fcollect_on_stream
-- reducescatter_on_stream
-- reduction_on_stream
-- sync_all_on_stream
+* alltoall_on_stream
+* barrier_all_on_stream
+* barrier_on_stream
+* broadcast_on_stream
+* fcollect_on_stream
+* reducescatter_on_stream
+* reduction_on_stream
+* sync_all_on_stream
 
 ### Point-to-Point
 
 Host point-to-point tests are located in `/opt/nvshmem/bin/perftest/host/pt-to-pt/`:
 
-- bw
-- latency     
-- stream_latency
+* bw
+* latency
+* stream_latency
 
 ### Example of running shmem_put_bw benchmark on 2 GPUs on a single node and 2 GPUs on two different nodes
 

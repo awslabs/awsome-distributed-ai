@@ -6,10 +6,10 @@ on:
   push:
     branches: [ "main" ]
     paths: 
-      - '3.test_cases/megatron/megatron-lm/**'
+      - 'examples/training/megatron-lm/**'
   pull_request:
     paths:
-      - '3.test_cases/megatron/megatron-lm/**'
+      - 'examples/training/megatron-lm/**'
 
   workflow_dispatch:
 
@@ -95,7 +95,7 @@ jobs:
         id: build
         working-directory: source-code
         run: |
-          MEGATRON_DIR="${{ env.REMOTE_BUILD_PATH }}/3.test_cases/megatron/megatron-lm"
+          MEGATRON_DIR="${{ env.REMOTE_BUILD_PATH }}/examples/training/megatron-lm"
           ENROOT_IMAGE="${{ env.BASE_PATH }}/enroot-images/megatron-${{ github.run_id }}-${{ matrix.cluster }}.sqsh"
           
           echo "Building Megatron-LM image on cluster..."

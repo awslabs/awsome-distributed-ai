@@ -56,6 +56,7 @@ your workflow.
 ### modular deployment
 
 Pass to your `add-cng.yaml` stacks:
+
 - Login CNG: `DirectoryRole=server`, `IamProfileArn=<LoginInstanceProfileArn>`
 - Compute CNG: `DirectoryRole=client`, `IamProfileArn=<InstanceProfileArn>`
 
@@ -109,6 +110,7 @@ aws ssm get-parameter --region "$AWS_REGION" --with-decryption --name "/pcs/$CLU
 
 > **If SSM has no password** (rare — instance role lacked permission at
 > first boot), fall back to the copy on shared storage:
+>
 > ```bash
 > sudo cat /home/ldap-db/.admin-password
 > ```
@@ -149,6 +151,7 @@ otherwise they can log in with the SSH key you added and change it
 themselves.
 
 Verify:
+
 ```bash
 getent passwd alice
 # alice:*:10001:3000:alice:/home/alice:/bin/bash
@@ -175,6 +178,7 @@ aws ec2 describe-instances --region "$AWS_REGION" --filters "Name=tag:aws:pcs:co
 ```
 
 Then, from the user's workstation:
+
 ```bash
 # alice@laptop
 ssh -i ~/.ssh/id_ed25519 alice@<login-node-public-ip>
@@ -221,6 +225,7 @@ Host pcs-login
 ```
 
 Then:
+
 ```bash
 ssh pcs-login
 ```
@@ -246,6 +251,7 @@ is what a real workflow looks like, so it exercises name resolution,
 > step works as-is with no `--account` argument.
 
 Still logged in as alice from [§2.3](#23-log-in-as-that-user):
+
 ```bash
 # alice@login
 srun -N 1 -n 1 -p cpu1 --time=2:00 bash -c 'id; hostname; touch $HOME/.pcs-verify-ok && ls -l $HOME/.pcs-verify-ok'
@@ -334,6 +340,7 @@ ldappasswd -x -H ldap://localhost -D "cn=admin,dc=cluster,dc=internal" -W -S \
 ```
 
 The user can change their own password after logging in:
+
 ```bash
 # Run by the user themselves
 ldappasswd -x -H ldap://localhost -D "uid=alice,ou=People,dc=cluster,dc=internal" -W -S \
@@ -542,7 +549,7 @@ srun -N 1 -n 1 bash -c 'sudo sss_cache -E; sudo systemctl restart sssd'
 ```bash
 sudo systemctl status slapd
 sudo journalctl -u slapd -n 20
-cat /var/log/directory-setup.log
+sudo cat /var/log/amazon/pcs/lifecycle/actions/nodeBootstrapped/setup-directory.log
 ```
 
 ### 5.3 Home directory not created
@@ -553,6 +560,7 @@ never logged in and immediately runs `sbatch` will hit `chdir: No such
 file or directory`.
 
 Fix by logging in once as the user, or create it manually:
+
 ```bash
 sudo mkdir -p /home/alice
 sudo chown alice:clusterusers /home/alice
@@ -624,4 +632,3 @@ sudo slapadd -l /home/ldap-backup-YYYYMMDD.ldif
 sudo chown -R openldap:openldap /home/ldap-db
 sudo systemctl start slapd
 ```
-

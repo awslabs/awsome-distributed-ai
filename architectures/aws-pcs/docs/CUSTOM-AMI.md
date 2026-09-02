@@ -1,7 +1,7 @@
 # Pre-baking Enroot/Pyxis into a custom AMI
 
 The all-in-one template installs Enroot/Pyxis at **first boot** via
-`PostInstallScriptUrl`, which is fast to deploy and avoids an Image Builder step. For
+the `install-enroot-pyxis` lifecycle action (`InstallEnrootPyxis=true`), which is fast to deploy and avoids an Image Builder step. For
 **frequent scaling** in production, pre-baking Enroot/Pyxis into a custom AMI drops node
 boot time from ~8–12 min to ~3 min and pins every node to a deterministic state.
 
@@ -40,7 +40,7 @@ echo "$AMI_ID"   # ami-0xxxxxxxxxxxxxxxx
 ## Step 3: Pass it to the cluster as `AmiId`
 
 Optionally skip the boot-time Enroot/Pyxis install (it's already baked in) by setting
-`PostInstallScriptUrl` to a single space:
+`InstallEnrootPyxis` to `false`:
 
 ```bash
 aws cloudformation create-stack \
@@ -49,18 +49,18 @@ aws cloudformation create-stack \
   --parameters \
     ParameterKey=PrimarySubnetAZ,ParameterValue=us-east-1a \
     ParameterKey=AmiId,ParameterValue=$AMI_ID \
-    ParameterKey=PostInstallScriptUrl,ParameterValue=' ' \
+    ParameterKey=InstallEnrootPyxis,ParameterValue=false \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
 
-Leaving `PostInstallScriptUrl` at its default (empty → auto-install Enroot/Pyxis from the
-templates bucket) also works on a pre-baked AMI: the installer detects Enroot/Pyxis is
-already present and is a fast idempotent no-op. Passing a single space skips the
-download+check entirely, shaving a few seconds off boot.
+Leaving `InstallEnrootPyxis` at the default (`true`) also works on a pre-baked
+AMI: the installer detects Enroot/Pyxis is already present and is a fast idempotent no-op.
+Set it to `false` to skip the download and check entirely.
 
 ## Optional features of `pcs-ready-dlami-with-enroot-pyxis.yaml`
 
 Defaults are off:
+
 - `BuildSchedule=Weekly`/`Monthly` for scheduled rebuilds against a moving base AMI
 - `EnableLifecyclePolicy=true` to deprecate older AMIs after `LifecycleDeprecateAfterWeeks`
 - `PublishToSsm=true` to publish the latest AMI ID to an SSM parameter for downstream stacks
