@@ -1,0 +1,198 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# =============================================================================
+# lm-evaluation-harness eval Job
+#
+# Replaces the dead bigcode-evaluation-harness path. Runs EleutherAI's
+# lm-eval-harness in `local-completions` mode against the already-running
+# `vllm-eval` OpenAI-compatible service — the driver needs NO GPU and does NOT
+# reload the model, so it lands on a CPU node and reuses the warm vLLM server.
+#
+# Renders via envsubst (see scripts/submit_lmeval.sh). Writes:
+#   /fsx/data/verl/eval_results/${EVAL_RUN_NAME}/lmeval/results.json  (+ samples)
+#
+# Why local-completions (not local-chat-completions): HumanEval/MBPP are
+# completion benchmarks; chat-completions adds instruct preamble that breaks
+# answer extraction (widely reported pass@1=0). We use local-completions +
+# --apply_chat_template, which preserves the harness's answer parsing.
+#
+# Image: python:3.11.15-slim (LMEVAL_IMAGE). CPU torch, lm-eval and transformers are
+# pip-installed at pod start, all version-pinned. This is a driver only -- it makes HTTP
+# calls to the vllm-eval service and never loads a model locally, so it needs no GPU and
+# no CUDA wheels. NO phantom ghcr image, NO ghcr-pull secret needed.
+# =============================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lmeval-${EVAL_RUN_SLUG}
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: lmeval
+    project: verl
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: lmeval
+        project: verl
+    spec:
+      restartPolicy: Never
+      # This driver runs HF_ALLOW_CODE_EVAL=1 + --confirm_run_unsafe_code, i.e. it
+      # EXECUTES model-generated programs in this pod. That makes it a code executor, so
+      # it gets the same treatment as one: no API credentials, and read-only access to the
+      # checkpoints and results it is measuring (see the volumeMounts below).
+      automountServiceAccountToken: false
+      nodeSelector:
+        node.kubernetes.io/instance-type: ${LMEVAL_INSTANCE_TYPE}
+      containers:
+        - name: lmeval
+          image: ${LMEVAL_IMAGE}
+          command: ["/bin/bash", "-c"]
+          args:
+            # NOTE: this block is rendered by `envsubst` with an ALLOWLIST of only
+            # the LMEVAL_*/EVAL_RUN_*/KUBE_NAMESPACE/VLLM_SERVED_NAME template vars
+            # (see scripts/submit_lmeval.sh). All OTHER ${...} below are ordinary
+            # shell variables evaluated at container runtime and are left untouched.
+            - |
+              set -euo pipefail
+              # Keep all writes on the mounted work emptyDir, not the small node root.
+              export TMPDIR=/work/tmp PIP_CACHE_DIR=/work/pipcache HF_HOME=/work/hf
+              mkdir -p "$TMPDIR" "$PIP_CACHE_DIR" "$HF_HOME"
+              echo "[lmeval] installing curl + CPU torch + lm-eval==${LMEVAL_VERSION} ..."
+              apt-get update -qq && apt-get install -y -qq curl >/work/apt.log 2>&1 || { cat /work/apt.log; exit 1; }
+              # CPU-only torch first so transformers (an lm-eval dep) does not drag
+              # in the multi-GB CUDA wheels. local-completions never runs a model
+              # locally, so CPU torch is sufficient for the tokenizer imports.
+              #
+              # These two are pinned EXACTLY because they are measured, not guessed: the
+              # lm-eval results.json from the reported code runs records
+              # torch 2.13.0+cpu and transformers 4.49.0 under Python 3.11.15. Leaving
+              # them unpinned meant every re-run resolved whatever was current, so two
+              # numbers compared against each other could come from different stacks.
+              pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.13.0+cpu" >/work/pip-torch.log 2>&1 || { tail -30 /work/pip-torch.log; exit 1; }
+              pip install "lm-eval[api]==${LMEVAL_VERSION}" >/work/pip.log 2>&1 || { tail -40 /work/pip.log; exit 1; }
+              # lm-eval 0.4.9 imports transformers.AutoModelForVision2Seq, removed in
+              # transformers v5. 4.49.0 is the version the reported runs used.
+              pip install "transformers==4.49.0" >/work/pip-tf.log 2>&1 || { tail -30 /work/pip-tf.log; exit 1; }
+
+              # /eval-out is the only writable FSx path in this pod; it is
+              # data/verl/eval_results via subPath. /fsx itself is mounted read-only.
+              OUT_DIR="/eval-out/${EVAL_RUN_NAME}/lmeval"
+              mkdir -p "${OUT_DIR}"
+              # IMPORTANT: run from a clean cwd. A local dir named "mbpp"/"humaneval"
+              # shadows the task and yields "no tasks found".
+              cd /work
+
+              BASE_URL="http://vllm-eval.${KUBE_NAMESPACE}.svc.cluster.local:8000/v1/completions"
+              MODELS_URL="http://vllm-eval.${KUBE_NAMESPACE}.svc.cluster.local:8000/v1/models"
+              echo "[lmeval] waiting for vLLM at ${MODELS_URL} ..."
+              for i in $(seq 1 120); do
+                if curl -sf "${MODELS_URL}" >/dev/null; then
+                  echo "[lmeval] vLLM is up"; break
+                fi
+                sleep 15
+                # Without this the loop simply falls out after 30 min and lm_eval runs
+                # against a dead endpoint, burning the retry budget and failing with an
+                # asyncio timeout instead of at the readiness gate.
+                if [ "$i" -eq 120 ]; then
+                  echo "[lmeval] ERROR: vLLM never became ready at ${MODELS_URL}" >&2
+                  exit 1
+                fi
+              done
+
+              LIMIT_ARG=""
+              if [ -n "${LMEVAL_LIMIT}" ] && [ "${LMEVAL_LIMIT}" != "0" ]; then
+                LIMIT_ARG="--limit ${LMEVAL_LIMIT}"
+              fi
+
+              echo "[lmeval] running tasks=${LMEVAL_TASKS} served=${VLLM_SERVED_NAME} chat_template=${LMEVAL_APPLY_CHAT_TEMPLATE}"
+              EXTRA_ARGS=()
+              if [ "${LMEVAL_APPLY_CHAT_TEMPLATE}" = "true" ]; then
+                EXTRA_ARGS+=( --apply_chat_template )
+              fi
+              # LMEVAL_METADATA_B64 is base64 of a JSON string (or empty) — avoids all
+              # envsubst/shell quote mangling of the embedded JSON double-quotes.
+              if [ -n "${LMEVAL_METADATA_B64}" ]; then
+                META_JSON="$(echo "${LMEVAL_METADATA_B64}" | base64 -d)"
+                EXTRA_ARGS+=( --metadata "${META_JSON}" )
+              fi
+              # Custom task YAMLs (e.g. humaneval_p10, mbpp_p10) are mounted at /tasks
+              # from a ConfigMap; --include_path registers them.
+              if [ -d /tasks ] && [ -n "$(ls -A /tasks 2>/dev/null)" ]; then
+                EXTRA_ARGS+=( --include_path /tasks )
+              fi
+              HF_ALLOW_CODE_EVAL=1 lm_eval \
+                --model local-completions \
+                --model_args "model=${VLLM_SERVED_NAME},base_url=${BASE_URL},tokenizer=${LMEVAL_TOKENIZER},num_concurrent=${LMEVAL_CONCURRENCY},max_retries=3,timeout=${LMEVAL_TIMEOUT},tokenized_requests=False,max_length=${LMEVAL_MAX_LENGTH}" \
+                --tasks "${LMEVAL_TASKS}" \
+                --confirm_run_unsafe_code \
+                --gen_kwargs "${LMEVAL_GEN_KWARGS}" \
+                --batch_size 1 \
+                --output_path "${OUT_DIR}" \
+                --log_samples \
+                "${EXTRA_ARGS[@]}" \
+                ${LIMIT_ARG}
+
+              # lm-eval writes results to a timestamped subdir; surface a stable
+              # results.json copy for compare_eval_results.py.
+              LATEST=$(find "${OUT_DIR}" -name 'results_*.json' -print0 | xargs -0 ls -t 2>/dev/null | head -1 || true)
+              if [ -n "${LATEST}" ]; then
+                cp "${LATEST}" "${OUT_DIR}/results.json"
+                echo "[lmeval] wrote ${OUT_DIR}/results.json (from ${LATEST})"
+              else
+                echo "[lmeval] WARNING: no results_*.json found under ${OUT_DIR}" >&2
+                exit 1
+              fi
+              echo "[lmeval] DONE"
+          env:
+            # Datasets (HumanEval/MBPP) are fetched from HF Hub, so keep online.
+            # The tokenizer is a LOCAL path (LMEVAL_TOKENIZER), so it won't hit the Hub.
+            - name: LMEVAL_METADATA_B64
+              value: '${LMEVAL_METADATA_B64}'
+            - name: LMEVAL_GEN_KWARGS
+              value: '${LMEVAL_GEN_KWARGS}'
+            - name: LMEVAL_APPLY_CHAT_TEMPLATE
+              value: '${LMEVAL_APPLY_CHAT_TEMPLATE}'
+            - name: HF_HUB_OFFLINE
+              value: "0"
+            - name: TOKENIZERS_PARALLELISM
+              value: "false"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "6Gi"
+              ephemeral-storage: "2Gi"
+            limits:
+              cpu: "3"
+              memory: "12Gi"
+              ephemeral-storage: "4Gi"
+          volumeMounts:
+            # Read-only: generated code must not be able to reach the checkpoints or
+            # other runs' results. The one path this job legitimately writes is mounted
+            # separately below.
+            - name: fsx-storage
+              mountPath: /fsx
+              readOnly: true
+            - name: fsx-storage
+              mountPath: /eval-out
+              subPath: data/verl/eval_results
+            - name: work
+              mountPath: /work
+            - name: tasks
+              mountPath: /tasks
+      volumes:
+        - name: fsx-storage
+          persistentVolumeClaim:
+            claimName: fsx-lustre
+        - name: work
+          emptyDir:
+            sizeLimit: 20Gi
+        # Custom lm-eval task YAMLs (humaneval_p10, mbpp_p10, utils.py). Created
+        # by submit_lmeval.sh from kubernetes/lmeval-tasks/. Optional — if the
+        # ConfigMap is absent the job still runs stock tasks (optional: true).
+        - name: tasks
+          configMap:
+            name: ${LMEVAL_TASKS_CONFIGMAP}
+            optional: true

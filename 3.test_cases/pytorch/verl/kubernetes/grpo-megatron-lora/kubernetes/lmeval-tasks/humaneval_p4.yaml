@@ -1,0 +1,88 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Custom pass@10 variant of HumanEval for the Qwen3-235B GRPO benchmark.
+#
+# Stock lm-eval `humaneval` reports pass@1 only (k:[1], greedy). This variant
+# samples 10 generations/problem at temperature 0.2 and reports BOTH pass@1 and
+# pass@10 via a parameterized pass_at_k (utils.py in this dir, mounted via
+# --include_path). Self-contained so metric/filter functions resolve to THIS
+# dir's utils.py rather than the stock package.
+task: humaneval_p4
+dataset_path: openai/openai_humaneval
+unsafe_code: true
+output_type: generate_until
+test_split: test
+doc_to_text: "{{prompt}}"
+doc_to_target: "{{test}}\ncheck({{entry_point}})"
+metric_list:
+  - metric: !function utils.pass_at_k
+    aggregation: mean
+    higher_is_better: true
+    k: [1, 4]
+repeats: 4
+generation_kwargs:
+  # Qwen3-235B-A22B is a REASONING model: training rollouts average 8,300-9,600
+  # response tokens. The stock HumanEval settings below were sized for a base
+  # completion model and silently destroyed every generation:
+  #
+  #   1. until: ["\nclass","\ndef","\n#","\nif","\nprint"] — these are
+  #      completion-style stops. An instruct model reasons in prose first, so
+  #      "...\nif we consider n=0" or any function written while thinking
+  #      terminated generation before the real answer was ever emitted.
+  #   2. max_gen_toks: 1024 — 8-9x smaller than the model's actual chain length.
+  #
+  # Together these produced HumanEval pass@1 = 0.2634 for a frontier 235B model,
+  # while MBPP (until: ["[DONE]"], 3-shot, short answers) scored 0.7954 — an
+  # inversion that is an artifact of these settings, not of model capability.
+  #
+  # Fix: stop only on the Qwen chat turn terminator and give the model room to
+  # finish reasoning. Code is recovered by the utils.build_predictions filter.
+  # NOTE: this makes the eval substantially slower (generations run to EOS
+  # rather than dying at ~1024 tokens). Baselines measured under the old
+  # settings are NOT comparable and must be re-measured.
+  until:
+    # INSTRUMENT BUG (2026-08-06). These stops are COMPLETION-MODE stops and
+    # are COUPLED to LMEVAL_APPLY_CHAT_TEMPLATE=false. Do not change one without
+    # the other.
+    #
+    # With only ["<|im_end|>"] and the chat template OFF, nothing ever stops
+    # generation: the model writes a correct function body, then keeps going and
+    # writes its OWN `def check(candidate):` with asserts, runs to max_gen_toks,
+    # and gets cut off mid-assert. That trailing fragment is a SyntaxError, and it
+    # also collides with the official check() that lm-eval appends from
+    # doc_to_target. Measured on step100, 164 problems x 4 samples:
+    #   pass@1 = 0.2332, with 92/164 docs scoring 0 -- including doc_id 0
+    #   (has_close_elements) whose generated body was CORRECT.
+    # That is ~= the 0.2634 this PR disowned, i.e. the artifact was never fixed,
+    # only masked: the n=10 smoke read 0.85 because the first 10 HumanEval problems
+    # are easy enough that the model emitted EOS before rambling.
+    #
+    # "\ndef" is the load-bearing one -- it terminates exactly at the model's
+    # self-written test. The others are the standard Codex/lm-eval HumanEval
+    # completion stops. Body lines are indented, so "\nif"/"\nprint" only match at
+    # top level and cannot truncate a solution.
+    #
+    # IF YOU TURN THE CHAT TEMPLATE BACK ON: revert to ["<|im_end|>"] only. A
+    # fenced ```python block starts at column 0, so "\ndef" would fire immediately
+    # and truncate everything.
+    - "<|im_end|>"
+    - "\nclass"
+    - "\ndef"
+    - "\n#"
+    - "\nif"
+    - "\nprint"
+  # 16384 was still truncating 22% of generations (measured 2026-07-31:
+  # clip_ratio 0.218 at cap 16384 vs 0.035 at 24576). Sized to match the
+  # corrected training cap so eval does not suppress scores the same way.
+  max_gen_toks: 24576
+  do_sample: true
+  temperature: 0.2
+  top_p: 0.95
+num_fewshot: 0
+filter_list:
+  - name: "create_test"
+    filter:
+      - function: "custom"
+        filter_fn: !function utils.build_predictions
+metadata:
+  version: 1.1

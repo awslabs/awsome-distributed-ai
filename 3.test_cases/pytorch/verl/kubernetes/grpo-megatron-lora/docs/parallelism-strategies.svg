@@ -1,0 +1,672 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. -->
+<!-- SPDX-License-Identifier: MIT-0 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1100" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
+  <defs>
+    <!-- Arrowheads -->
+    <marker id="arrow-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#3B82F6"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#F59E0B"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#10B981"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8B5CF6"/>
+    </marker>
+    <!-- Drop shadow filter -->
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="1" dy="1" stdDeviation="2" flood-opacity="0.1"/>
+    </filter>
+    <filter id="shadow-lg" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+
+  <!-- ===== BACKGROUND ===== -->
+  <rect width="1600" height="1100" fill="#FAFBFC" rx="8"/>
+
+  <!-- ===== TITLE BAR ===== -->
+  <rect x="0" y="0" width="1600" height="72" fill="#1E293B" rx="8"/>
+  <rect x="0" y="60" width="1600" height="12" fill="#1E293B"/>
+  <text x="32" y="30" fill="#F8FAFC" font-size="22" font-weight="700" dominant-baseline="middle">Distributed Training Parallelism Strategies</text>
+  <text x="32" y="56" fill="#94A3B8" font-size="13">total_GPUs = TP x PP x DP x CP</text>
+  <text x="310" y="56" fill="#94A3B8" font-size="13">|</text>
+  <text x="325" y="56" fill="#94A3B8" font-size="13">effective_DP = DP / EP</text>
+  <text x="535" y="56" fill="#94A3B8" font-size="13">|</text>
+  <text x="550" y="56" fill="#94A3B8" font-size="13">EP carves out of DP (MoE only)</text>
+
+  <!-- Source tag -->
+  <text x="1568" y="30" fill="#64748B" font-size="11" text-anchor="end" dominant-baseline="middle">grpo-megatron-lora</text>
+  <text x="1568" y="56" fill="#64748B" font-size="11" text-anchor="end">48 B200 GPUs  |  6 nodes x 8 GPUs  |  NVLink intra-node  |  EFA inter-node</text>
+
+
+  <!-- ========================================================== -->
+  <!-- ===== LEFT SIDEBAR: Parallelism Explainers (x=16..340) ===== -->
+  <!-- ========================================================== -->
+
+  <!-- TP Explainer -->
+  <rect x="16" y="84" width="320" height="130" rx="6" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="1" filter="url(#shadow)"/>
+  <rect x="16" y="84" width="320" height="26" rx="6" fill="#3B82F6"/>
+  <rect x="16" y="100" width="320" height="10" fill="#3B82F6"/>
+  <text x="28" y="102" fill="white" font-size="13" font-weight="600">TP — Tensor Parallelism</text>
+  <text x="28" y="128" fill="#1E40AF" font-size="11" font-weight="600">Splits each layer horizontally (weight matrix shards)</text>
+  <text x="28" y="143" fill="#374151" font-size="10">Comm: All-reduce per layer  |  Scope: Within node (NVLink)</text>
+  <!-- Mini diagram: 4 GPU slices of a weight matrix -->
+  <rect x="32" y="153" width="60" height="28" rx="3" fill="#DBEAFE" stroke="#3B82F6" stroke-width="1"/>
+  <text x="62" y="171" fill="#1E40AF" font-size="9" text-anchor="middle">W[:,0:1k]</text>
+  <rect x="97" y="153" width="60" height="28" rx="3" fill="#DBEAFE" stroke="#3B82F6" stroke-width="1"/>
+  <text x="127" y="171" fill="#1E40AF" font-size="9" text-anchor="middle">W[:,1k:2k]</text>
+  <rect x="162" y="153" width="60" height="28" rx="3" fill="#DBEAFE" stroke="#3B82F6" stroke-width="1"/>
+  <text x="192" y="171" fill="#1E40AF" font-size="9" text-anchor="middle">W[:,2k:3k]</text>
+  <rect x="227" y="153" width="60" height="28" rx="3" fill="#DBEAFE" stroke="#3B82F6" stroke-width="1"/>
+  <text x="257" y="171" fill="#1E40AF" font-size="9" text-anchor="middle">W[:,3k:4k]</text>
+  <!-- all-reduce arrows -->
+  <line x1="92" y1="186" x2="97" y2="186" stroke="#3B82F6" stroke-width="1.5"/>
+  <line x1="157" y1="186" x2="162" y2="186" stroke="#3B82F6" stroke-width="1.5"/>
+  <line x1="222" y1="186" x2="227" y2="186" stroke="#3B82F6" stroke-width="1.5"/>
+  <text x="32" y="196" fill="#3B82F6" font-size="9">GPU 0</text>
+  <text x="97" y="196" fill="#3B82F6" font-size="9">GPU 1</text>
+  <text x="162" y="196" fill="#3B82F6" font-size="9">GPU 2</text>
+  <text x="227" y="196" fill="#3B82F6" font-size="9">GPU 3</text>
+  <text x="300" y="171" fill="#3B82F6" font-size="9" font-weight="600">TP=4</text>
+  <!-- all-reduce label -->
+  <path d="M48,184 L272,184" stroke="#3B82F6" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arrow-blue)"/>
+  <text x="160" y="207" fill="#3B82F6" font-size="9" text-anchor="middle" font-style="italic">all-reduce after every layer op</text>
+
+  <!-- PP Explainer -->
+  <rect x="16" y="222" width="320" height="130" rx="6" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1" filter="url(#shadow)"/>
+  <rect x="16" y="222" width="320" height="26" rx="6" fill="#F59E0B"/>
+  <rect x="16" y="238" width="320" height="10" fill="#F59E0B"/>
+  <text x="28" y="240" fill="white" font-size="13" font-weight="600">PP — Pipeline Parallelism</text>
+  <text x="28" y="266" fill="#92400E" font-size="11" font-weight="600">Splits model vertically by layer groups (stages)</text>
+  <text x="28" y="281" fill="#374151" font-size="10">Comm: Point-to-point send/recv  |  Scope: Across nodes</text>
+  <!-- Mini diagram: 4 pipeline stages -->
+  <rect x="32" y="291" width="60" height="28" rx="3" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1"/>
+  <text x="62" y="303" fill="#92400E" font-size="8" text-anchor="middle">Stage 0</text>
+  <text x="62" y="313" fill="#92400E" font-size="7" text-anchor="middle">Layers 0-23</text>
+  <rect x="107" y="291" width="60" height="28" rx="3" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1"/>
+  <text x="137" y="303" fill="#92400E" font-size="8" text-anchor="middle">Stage 1</text>
+  <text x="137" y="313" fill="#92400E" font-size="7" text-anchor="middle">Layers 24-47</text>
+  <rect x="182" y="291" width="60" height="28" rx="3" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1"/>
+  <text x="212" y="303" fill="#92400E" font-size="8" text-anchor="middle">Stage 2</text>
+  <text x="212" y="313" fill="#92400E" font-size="7" text-anchor="middle">Layers 48-63</text>
+  <rect x="257" y="291" width="60" height="28" rx="3" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1"/>
+  <text x="287" y="303" fill="#92400E" font-size="8" text-anchor="middle">Stage 3</text>
+  <text x="287" y="313" fill="#92400E" font-size="7" text-anchor="middle">Layers 64-79</text>
+  <!-- send/recv arrows -->
+  <path d="M92,305 L107,305" stroke="#F59E0B" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+  <path d="M167,305 L182,305" stroke="#F59E0B" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+  <path d="M242,305 L257,305" stroke="#F59E0B" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+  <text x="160" y="340" fill="#B45309" font-size="9" text-anchor="middle" font-style="italic">activations flow forward; bubble ≈ (PP-1)/(PP-1+micro_batches)</text>
+
+  <!-- EP Explainer -->
+  <rect x="16" y="360" width="320" height="142" rx="6" fill="#ECFDF5" stroke="#A7F3D0" stroke-width="1" filter="url(#shadow)"/>
+  <rect x="16" y="360" width="320" height="26" rx="6" fill="#10B981"/>
+  <rect x="16" y="376" width="320" height="10" fill="#10B981"/>
+  <text x="28" y="378" fill="white" font-size="13" font-weight="600">EP — Expert Parallelism (MoE only)</text>
+  <text x="28" y="404" fill="#065F46" font-size="11" font-weight="600">Distributes MoE experts across GPUs</text>
+  <text x="28" y="419" fill="#374151" font-size="10">Comm: All-to-all per MoE layer  |  Scope: Within EP group</text>
+  <!-- Mini diagram: 4 GPUs with different experts -->
+  <rect x="32" y="429" width="60" height="32" rx="3" fill="#D1FAE5" stroke="#10B981" stroke-width="1"/>
+  <text x="62" y="443" fill="#065F46" font-size="8" text-anchor="middle">Experts</text>
+  <text x="62" y="455" fill="#065F46" font-size="7" text-anchor="middle">0-31</text>
+  <rect x="97" y="429" width="60" height="32" rx="3" fill="#D1FAE5" stroke="#10B981" stroke-width="1"/>
+  <text x="127" y="443" fill="#065F46" font-size="8" text-anchor="middle">Experts</text>
+  <text x="127" y="455" fill="#065F46" font-size="7" text-anchor="middle">32-63</text>
+  <rect x="162" y="429" width="60" height="32" rx="3" fill="#D1FAE5" stroke="#10B981" stroke-width="1"/>
+  <text x="192" y="443" fill="#065F46" font-size="8" text-anchor="middle">Experts</text>
+  <text x="192" y="455" fill="#065F46" font-size="7" text-anchor="middle">64-95</text>
+  <rect x="227" y="429" width="60" height="32" rx="3" fill="#D1FAE5" stroke="#10B981" stroke-width="1"/>
+  <text x="257" y="443" fill="#065F46" font-size="8" text-anchor="middle">Experts</text>
+  <text x="257" y="455" fill="#065F46" font-size="7" text-anchor="middle">96-127</text>
+  <text x="300" y="450" fill="#10B981" font-size="9" font-weight="600">EP=4</text>
+  <!-- all-to-all pattern -->
+  <path d="M48,463 L62,475 L127,475 L192,475 L257,475 L272,463" stroke="#10B981" stroke-width="1" fill="none" stroke-dasharray="3,2"/>
+  <text x="160" y="490" fill="#059669" font-size="9" text-anchor="middle" font-style="italic">all-to-all: route tokens → expert GPU → gather results</text>
+
+  <!-- DP Explainer -->
+  <rect x="16" y="510" width="320" height="118" rx="6" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1" filter="url(#shadow)"/>
+  <rect x="16" y="510" width="320" height="26" rx="6" fill="#8B5CF6"/>
+  <rect x="16" y="526" width="320" height="10" fill="#8B5CF6"/>
+  <text x="28" y="528" fill="white" font-size="13" font-weight="600">DP — Data Parallelism</text>
+  <text x="28" y="554" fill="#5B21B6" font-size="11" font-weight="600">Replicates full model; each replica gets different data</text>
+  <text x="28" y="569" fill="#374151" font-size="10">Comm: All-reduce per step (gradient sync)  |  Low frequency</text>
+  <!-- Mini diagram: 3 replicas -->
+  <rect x="32" y="579" width="80" height="28" rx="3" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1"/>
+  <text x="72" y="595" fill="#5B21B6" font-size="9" text-anchor="middle">Replica 0</text>
+  <rect x="127" y="579" width="80" height="28" rx="3" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1"/>
+  <text x="167" y="595" fill="#5B21B6" font-size="9" text-anchor="middle">Replica 1</text>
+  <rect x="222" y="579" width="80" height="28" rx="3" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1"/>
+  <text x="262" y="595" fill="#5B21B6" font-size="9" text-anchor="middle">Replica 2</text>
+  <path d="M112,593 L127,593" stroke="#8B5CF6" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#arrow-purple)"/>
+  <path d="M207,593 L222,593" stroke="#8B5CF6" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#arrow-purple)"/>
+  <text x="160" y="621" fill="#7C3AED" font-size="9" text-anchor="middle" font-style="italic">DP = total_GPUs / (TP x PP x CP)  — implicit, not set directly</text>
+
+  <!-- CP Explainer -->
+  <rect x="16" y="636" width="320" height="84" rx="6" fill="#FFF7ED" stroke="#FED7AA" stroke-width="1" filter="url(#shadow)"/>
+  <rect x="16" y="636" width="320" height="26" rx="6" fill="#EA580C"/>
+  <rect x="16" y="652" width="320" height="10" fill="#EA580C"/>
+  <text x="28" y="654" fill="white" font-size="13" font-weight="600">CP — Context Parallelism</text>
+  <text x="28" y="680" fill="#9A3412" font-size="11" font-weight="600">Splits sequence length across GPUs (ring attention)</text>
+  <text x="28" y="695" fill="#374151" font-size="10">For very long contexts. CP=1 in all current configs.</text>
+  <text x="28" y="710" fill="#9A3412" font-size="9" font-style="italic">Seq [0..T/2] on GPU 0, Seq [T/2..T] on GPU 1, etc.</text>
+
+  <!-- FSDP Note -->
+  <rect x="16" y="728" width="320" height="84" rx="6" fill="#F0F9FF" stroke="#BAE6FD" stroke-width="1" filter="url(#shadow)"/>
+  <rect x="16" y="728" width="320" height="26" rx="6" fill="#0284C7"/>
+  <rect x="16" y="744" width="320" height="10" fill="#0284C7"/>
+  <text x="28" y="746" fill="white" font-size="13" font-weight="600">FSDP — Fully Sharded Data Parallelism</text>
+  <text x="28" y="772" fill="#075985" font-size="11" font-weight="600">Alternative backend: shards params + grads + optim states</text>
+  <text x="28" y="787" fill="#374151" font-size="10">Simpler setup. Best for models ≤ 72B. No TP/PP/EP needed.</text>
+  <text x="28" y="802" fill="#0369A1" font-size="9" font-style="italic">Megatron is 2.7x faster on this cluster (measured; see docs/results.md)</text>
+
+
+  <!-- ========================================================== -->
+  <!-- ===== MAIN AREA: Dense Model (Qwen2.5-72B) ===== -->
+  <!-- ========================================================== -->
+
+  <rect x="350" y="84" width="1234" height="280" rx="6" fill="white" stroke="#E2E8F0" stroke-width="1" filter="url(#shadow-lg)"/>
+
+  <!-- Section header -->
+  <text x="366" y="108" fill="#1E293B" font-size="16" font-weight="700">Dense Model: Qwen2.5-72B   |   TP=4, PP=4, DP=3   |   48 GPUs</text>
+  <text x="366" y="124" fill="#64748B" font-size="11">Each DP replica = 16 GPUs (4 TP per stage x 4 pipeline stages). 3 replicas process different batches in parallel.</text>
+
+  <!-- DP Replica 0 -->
+  <rect x="362" y="134" width="390" height="220" rx="5" fill="#F5F3FF" stroke="#C4B5FD" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="370" y="150" fill="#7C3AED" font-size="11" font-weight="600">DP Replica 0  (Nodes 0-1)</text>
+
+  <!-- PP Stage 0 -->
+  <rect x="370" y="158" width="88" height="185" rx="4" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1"/>
+  <text x="414" y="174" fill="#92400E" font-size="9" font-weight="600" text-anchor="middle">PP Stage 0</text>
+  <text x="414" y="186" fill="#92400E" font-size="8" text-anchor="middle">Layers 0-19</text>
+  <!-- 4 TP GPUs -->
+  <rect x="378" y="193" width="72" height="16" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.75"/>
+  <text x="414" y="204" fill="#1E40AF" font-size="8" text-anchor="middle">GPU 0  (TP shard)</text>
+  <rect x="378" y="212" width="72" height="16" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.75"/>
+  <text x="414" y="223" fill="#1E40AF" font-size="8" text-anchor="middle">GPU 1  (TP shard)</text>
+  <rect x="378" y="231" width="72" height="16" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.75"/>
+  <text x="414" y="242" fill="#1E40AF" font-size="8" text-anchor="middle">GPU 2  (TP shard)</text>
+  <rect x="378" y="250" width="72" height="16" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.75"/>
+  <text x="414" y="261" fill="#1E40AF" font-size="8" text-anchor="middle">GPU 3  (TP shard)</text>
+  <!-- TP all-reduce bracket -->
+  <line x1="376" y1="193" x2="376" y2="266" stroke="#3B82F6" stroke-width="1.5"/>
+  <text x="372" y="232" fill="#3B82F6" font-size="7" text-anchor="end" transform="rotate(-90,372,232)">all-reduce</text>
+  <!-- Node label -->
+  <rect x="378" y="272" width="72" height="14" rx="2" fill="#F1F5F9"/>
+  <text x="414" y="282" fill="#475569" font-size="7" text-anchor="middle">Node 0 (NVLink)</text>
+
+  <!-- PP arrow 0→1 -->
+  <path d="M458,240 L470,240" stroke="#F59E0B" stroke-width="2" marker-end="url(#arrow-orange)"/>
+
+  <!-- PP Stage 1 -->
+  <rect x="472" y="158" width="88" height="185" rx="4" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1"/>
+  <text x="516" y="174" fill="#92400E" font-size="9" font-weight="600" text-anchor="middle">PP Stage 1</text>
+  <text x="516" y="186" fill="#92400E" font-size="8" text-anchor="middle">Layers 20-39</text>
+  <rect x="480" y="193" width="72" height="16" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.75"/>
+  <text x="516" y="204" fill="#1E40AF" font-size="8" text-anchor="middle">GPU 4  (TP shard)</text>
+  <rect x="480" y="212" width="72" height="16" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.75"/>
+  <text x="516" y="223" fill="#1E40AF" font-size="8" text-anchor="middle">GPU 5  (TP shard)</text>
+  <rect x="480" y="231" width="72" height="16" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.75"/>
+  <text x="516" y="242" fill="#1E40AF" font-size="8" text-anchor="middle">GPU 6  (TP shard)</text>
+  <rect x="480" y="250" width="72" height="16" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.75"/>
+  <text x="516" y="261" fill="#1E40AF" font-size="8" text-anchor="middle">GPU 7  (TP shard)</text>
+  <line x1="478" y1="193" x2="478" y2="266" stroke="#3B82F6" stroke-width="1.5"/>
+  <rect x="480" y="272" width="72" height="14" rx="2" fill="#F1F5F9"/>
+  <text x="516" y="282" fill="#475569" font-size="7" text-anchor="middle">Node 0 (NVLink)</text>
+
+  <!-- PP arrow 1→2 -->
+  <path d="M560,240 L572,240" stroke="#F59E0B" stroke-width="2" marker-end="url(#arrow-orange)"/>
+  <text x="566" y="233" fill="#B45309" font-size="7" transform="rotate(-45,566,233)">EFA</text>
+
+  <!-- PP Stage 2 -->
+  <rect x="574" y="158" width="88" height="185" rx="4" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1"/>
+  <text x="618" y="174" fill="#92400E" font-size="9" font-weight="600" text-anchor="middle">PP Stage 2</text>
+  <text x="618" y="186" fill="#92400E" font-size="8" text-anchor="middle">Layers 40-59</text>
+  <rect x="582" y="193" width="72" height="16" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.75"/>
+  <text x="618" y="204" fill="#1E40AF" font-size="8" text-anchor="middle">GPU 0  (TP shard)</text>
+  <rect x="582" y="212" width="72" height="16" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.75"/>
+  <text x="618" y="223" fill="#1E40AF" font-size="8" text-anchor="middle">GPU 1  (TP shard)</text>
+  <rect x="582" y="231" width="72" height="16" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.75"/>
+  <text x="618" y="242" fill="#1E40AF" font-size="8" text-anchor="middle">GPU 2  (TP shard)</text>
+  <rect x="582" y="250" width="72" height="16" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.75"/>
+  <text x="618" y="261" fill="#1E40AF" font-size="8" text-anchor="middle">GPU 3  (TP shard)</text>
+  <line x1="580" y1="193" x2="580" y2="266" stroke="#3B82F6" stroke-width="1.5"/>
+  <rect x="582" y="272" width="72" height="14" rx="2" fill="#F1F5F9"/>
+  <text x="618" y="282" fill="#475569" font-size="7" text-anchor="middle">Node 1 (NVLink)</text>
+
+  <!-- PP arrow 2→3 -->
+  <path d="M662,240 L674,240" stroke="#F59E0B" stroke-width="2" marker-end="url(#arrow-orange)"/>
+
+  <!-- PP Stage 3 -->
+  <rect x="676" y="158" width="88" height="185" rx="4" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1"/>
+  <text x="720" y="174" fill="#92400E" font-size="9" font-weight="600" text-anchor="middle">PP Stage 3</text>
+  <text x="720" y="186" fill="#92400E" font-size="8" text-anchor="middle">Layers 60-79</text>
+  <rect x="684" y="193" width="72" height="16" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.75"/>
+  <text x="720" y="204" fill="#1E40AF" font-size="8" text-anchor="middle">GPU 4  (TP shard)</text>
+  <rect x="684" y="212" width="72" height="16" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.75"/>
+  <text x="720" y="223" fill="#1E40AF" font-size="8" text-anchor="middle">GPU 5  (TP shard)</text>
+  <rect x="684" y="231" width="72" height="16" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.75"/>
+  <text x="720" y="242" fill="#1E40AF" font-size="8" text-anchor="middle">GPU 6  (TP shard)</text>
+  <rect x="684" y="250" width="72" height="16" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.75"/>
+  <text x="720" y="261" fill="#1E40AF" font-size="8" text-anchor="middle">GPU 7  (TP shard)</text>
+  <line x1="682" y1="193" x2="682" y2="266" stroke="#3B82F6" stroke-width="1.5"/>
+  <rect x="684" y="272" width="72" height="14" rx="2" fill="#F1F5F9"/>
+  <text x="720" y="282" fill="#475569" font-size="7" text-anchor="middle">Node 1 (NVLink)</text>
+
+  <!-- DP Replica 1 (compressed) -->
+  <rect x="762" y="134" width="200" height="220" rx="5" fill="#F5F3FF" stroke="#C4B5FD" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="770" y="150" fill="#7C3AED" font-size="11" font-weight="600">DP Replica 1  (Nodes 2-3)</text>
+  <text x="862" y="180" fill="#64748B" font-size="11" text-anchor="middle">Same structure:</text>
+  <text x="862" y="196" fill="#64748B" font-size="11" text-anchor="middle">4 PP Stages x 4 TP GPUs</text>
+  <text x="862" y="216" fill="#64748B" font-size="10" text-anchor="middle">= 16 GPUs total</text>
+  <text x="862" y="240" fill="#64748B" font-size="10" text-anchor="middle">Processing Batch Slice B</text>
+  <!-- Compressed PP stages -->
+  <rect x="774" y="258" width="42" height="22" rx="2" fill="#FEF3C7" stroke="#FDE68A" stroke-width="0.75"/>
+  <text x="795" y="272" fill="#92400E" font-size="7" text-anchor="middle">S0</text>
+  <rect x="820" y="258" width="42" height="22" rx="2" fill="#FEF3C7" stroke="#FDE68A" stroke-width="0.75"/>
+  <text x="841" y="272" fill="#92400E" font-size="7" text-anchor="middle">S1</text>
+  <rect x="866" y="258" width="42" height="22" rx="2" fill="#FEF3C7" stroke="#FDE68A" stroke-width="0.75"/>
+  <text x="887" y="272" fill="#92400E" font-size="7" text-anchor="middle">S2</text>
+  <rect x="912" y="258" width="42" height="22" rx="2" fill="#FEF3C7" stroke="#FDE68A" stroke-width="0.75"/>
+  <text x="933" y="272" fill="#92400E" font-size="7" text-anchor="middle">S3</text>
+  <path d="M816,269 L820,269" stroke="#F59E0B" stroke-width="1" marker-end="url(#arrow-orange)"/>
+  <path d="M862,269 L866,269" stroke="#F59E0B" stroke-width="1" marker-end="url(#arrow-orange)"/>
+  <path d="M908,269 L912,269" stroke="#F59E0B" stroke-width="1" marker-end="url(#arrow-orange)"/>
+  <rect x="774" y="285" width="180" height="14" rx="2" fill="#F1F5F9"/>
+  <text x="864" y="295" fill="#475569" font-size="7" text-anchor="middle">Nodes 2-3 (16 GPUs)</text>
+
+  <!-- DP Replica 2 (compressed) -->
+  <rect x="970" y="134" width="200" height="220" rx="5" fill="#F5F3FF" stroke="#C4B5FD" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="978" y="150" fill="#7C3AED" font-size="11" font-weight="600">DP Replica 2  (Nodes 4-5)</text>
+  <text x="1070" y="180" fill="#64748B" font-size="11" text-anchor="middle">Same structure:</text>
+  <text x="1070" y="196" fill="#64748B" font-size="11" text-anchor="middle">4 PP Stages x 4 TP GPUs</text>
+  <text x="1070" y="216" fill="#64748B" font-size="10" text-anchor="middle">= 16 GPUs total</text>
+  <text x="1070" y="240" fill="#64748B" font-size="10" text-anchor="middle">Processing Batch Slice C</text>
+  <rect x="982" y="258" width="42" height="22" rx="2" fill="#FEF3C7" stroke="#FDE68A" stroke-width="0.75"/>
+  <text x="1003" y="272" fill="#92400E" font-size="7" text-anchor="middle">S0</text>
+  <rect x="1028" y="258" width="42" height="22" rx="2" fill="#FEF3C7" stroke="#FDE68A" stroke-width="0.75"/>
+  <text x="1049" y="272" fill="#92400E" font-size="7" text-anchor="middle">S1</text>
+  <rect x="1074" y="258" width="42" height="22" rx="2" fill="#FEF3C7" stroke="#FDE68A" stroke-width="0.75"/>
+  <text x="1095" y="272" fill="#92400E" font-size="7" text-anchor="middle">S2</text>
+  <rect x="1120" y="258" width="42" height="22" rx="2" fill="#FEF3C7" stroke="#FDE68A" stroke-width="0.75"/>
+  <text x="1141" y="272" fill="#92400E" font-size="7" text-anchor="middle">S3</text>
+  <path d="M1024,269 L1028,269" stroke="#F59E0B" stroke-width="1" marker-end="url(#arrow-orange)"/>
+  <path d="M1070,269 L1074,269" stroke="#F59E0B" stroke-width="1" marker-end="url(#arrow-orange)"/>
+  <path d="M1116,269 L1120,269" stroke="#F59E0B" stroke-width="1" marker-end="url(#arrow-orange)"/>
+  <rect x="982" y="285" width="180" height="14" rx="2" fill="#F1F5F9"/>
+  <text x="1072" y="295" fill="#475569" font-size="7" text-anchor="middle">Nodes 4-5 (16 GPUs)</text>
+
+  <!-- DP gradient sync arrows between replicas -->
+  <path d="M752,340 L762,340" stroke="#8B5CF6" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#arrow-purple)"/>
+  <path d="M962,340 L972,340" stroke="#8B5CF6" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#arrow-purple)"/>
+  <text x="860" y="355" fill="#7C3AED" font-size="10" text-anchor="middle" font-weight="600">Gradient All-Reduce across 3 DP Replicas (once per training step, via EFA)</text>
+
+
+  <!-- ========================================================== -->
+  <!-- ===== MAIN AREA: MoE Model (Qwen3-235B) ===== -->
+  <!-- ========================================================== -->
+
+  <rect x="350" y="374" width="1234" height="440" rx="6" fill="white" stroke="#E2E8F0" stroke-width="1" filter="url(#shadow-lg)"/>
+
+  <!-- Section header -->
+  <text x="366" y="398" fill="#1E293B" font-size="16" font-weight="700">MoE Model: Qwen3-235B-A22B   |   TP=4, PP=1, EP=4   |   48 GPUs (128 experts, 94 layers)</text>
+  <text x="366" y="414" fill="#64748B" font-size="11">DP=12 TP groups. EP groups of 4 share experts via all-to-all. Effective DP = 12/4 = 3 replicas. 32 experts per GPU.</text>
+
+  <!-- EP Group 0 / Effective DP Replica 0 -->
+  <rect x="362" y="424" width="602" height="185" rx="5" fill="#ECFDF5" stroke="#6EE7B7" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="370" y="440" fill="#059669" font-size="11" font-weight="700">EP Group 0 — Effective DP Replica 0</text>
+  <text x="620" y="440" fill="#059669" font-size="10">(4 DP ranks share 128 experts via all-to-all)</text>
+
+  <!-- Node 0 box -->
+  <rect x="370" y="448" width="290" height="155" rx="4" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1"/>
+  <text x="515" y="463" fill="#475569" font-size="10" font-weight="600" text-anchor="middle">Node 0  (NVLink interconnect)</text>
+
+  <!-- TP Group 0 in Node 0 -->
+  <rect x="378" y="470" width="133" height="126" rx="3" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1"/>
+  <text x="444" y="484" fill="#1E40AF" font-size="9" font-weight="600" text-anchor="middle">TP Group 0  |  DP rank 0</text>
+  <rect x="386" y="490" width="117" height="14" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.5"/>
+  <text x="444" y="500" fill="#1E40AF" font-size="7" text-anchor="middle">GPU 0 — W shard 0/4</text>
+  <rect x="386" y="507" width="117" height="14" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.5"/>
+  <text x="444" y="517" fill="#1E40AF" font-size="7" text-anchor="middle">GPU 1 — W shard 1/4</text>
+  <rect x="386" y="524" width="117" height="14" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.5"/>
+  <text x="444" y="534" fill="#1E40AF" font-size="7" text-anchor="middle">GPU 2 — W shard 2/4</text>
+  <rect x="386" y="541" width="117" height="14" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.5"/>
+  <text x="444" y="551" fill="#1E40AF" font-size="7" text-anchor="middle">GPU 3 — W shard 3/4</text>
+  <!-- Expert label -->
+  <rect x="386" y="559" width="117" height="16" rx="2" fill="#D1FAE5" stroke="#10B981" stroke-width="0.5"/>
+  <text x="444" y="570" fill="#065F46" font-size="8" text-anchor="middle" font-weight="600">Experts 0-31</text>
+  <!-- TP all-reduce bracket -->
+  <line x1="383" y1="490" x2="383" y2="555" stroke="#3B82F6" stroke-width="1.5"/>
+  <text x="381" y="528" fill="#3B82F6" font-size="6" text-anchor="end" transform="rotate(-90,381,528)">TP all-reduce</text>
+  <!-- 94 layers label -->
+  <text x="444" y="589" fill="#6B7280" font-size="7" text-anchor="middle">94 layers (PP=1, all layers)</text>
+
+  <!-- TP Group 1 in Node 0 -->
+  <rect x="519" y="470" width="133" height="126" rx="3" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1"/>
+  <text x="585" y="484" fill="#1E40AF" font-size="9" font-weight="600" text-anchor="middle">TP Group 1  |  DP rank 1</text>
+  <rect x="527" y="490" width="117" height="14" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.5"/>
+  <text x="585" y="500" fill="#1E40AF" font-size="7" text-anchor="middle">GPU 4 — W shard 0/4</text>
+  <rect x="527" y="507" width="117" height="14" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.5"/>
+  <text x="585" y="517" fill="#1E40AF" font-size="7" text-anchor="middle">GPU 5 — W shard 1/4</text>
+  <rect x="527" y="524" width="117" height="14" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.5"/>
+  <text x="585" y="534" fill="#1E40AF" font-size="7" text-anchor="middle">GPU 6 — W shard 2/4</text>
+  <rect x="527" y="541" width="117" height="14" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.5"/>
+  <text x="585" y="551" fill="#1E40AF" font-size="7" text-anchor="middle">GPU 7 — W shard 3/4</text>
+  <rect x="527" y="559" width="117" height="16" rx="2" fill="#D1FAE5" stroke="#10B981" stroke-width="0.5"/>
+  <text x="585" y="570" fill="#065F46" font-size="8" text-anchor="middle" font-weight="600">Experts 32-63</text>
+  <line x1="524" y1="490" x2="524" y2="555" stroke="#3B82F6" stroke-width="1.5"/>
+  <text x="585" y="589" fill="#6B7280" font-size="7" text-anchor="middle">94 layers (PP=1, all layers)</text>
+
+  <!-- Node 1 box -->
+  <rect x="668" y="448" width="290" height="155" rx="4" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1"/>
+  <text x="813" y="463" fill="#475569" font-size="10" font-weight="600" text-anchor="middle">Node 1  (NVLink interconnect)</text>
+
+  <!-- TP Group 2 in Node 1 -->
+  <rect x="676" y="470" width="133" height="126" rx="3" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1"/>
+  <text x="742" y="484" fill="#1E40AF" font-size="9" font-weight="600" text-anchor="middle">TP Group 2  |  DP rank 2</text>
+  <rect x="684" y="490" width="117" height="14" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.5"/>
+  <text x="742" y="500" fill="#1E40AF" font-size="7" text-anchor="middle">GPU 0 — W shard 0/4</text>
+  <rect x="684" y="507" width="117" height="14" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.5"/>
+  <text x="742" y="517" fill="#1E40AF" font-size="7" text-anchor="middle">GPU 1 — W shard 1/4</text>
+  <rect x="684" y="524" width="117" height="14" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.5"/>
+  <text x="742" y="534" fill="#1E40AF" font-size="7" text-anchor="middle">GPU 2 — W shard 2/4</text>
+  <rect x="684" y="541" width="117" height="14" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.5"/>
+  <text x="742" y="551" fill="#1E40AF" font-size="7" text-anchor="middle">GPU 3 — W shard 3/4</text>
+  <rect x="684" y="559" width="117" height="16" rx="2" fill="#D1FAE5" stroke="#10B981" stroke-width="0.5"/>
+  <text x="742" y="570" fill="#065F46" font-size="8" text-anchor="middle" font-weight="600">Experts 64-95</text>
+  <line x1="681" y1="490" x2="681" y2="555" stroke="#3B82F6" stroke-width="1.5"/>
+  <text x="742" y="589" fill="#6B7280" font-size="7" text-anchor="middle">94 layers (PP=1, all layers)</text>
+
+  <!-- TP Group 3 in Node 1 -->
+  <rect x="817" y="470" width="133" height="126" rx="3" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1"/>
+  <text x="883" y="484" fill="#1E40AF" font-size="9" font-weight="600" text-anchor="middle">TP Group 3  |  DP rank 3</text>
+  <rect x="825" y="490" width="117" height="14" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.5"/>
+  <text x="883" y="500" fill="#1E40AF" font-size="7" text-anchor="middle">GPU 4 — W shard 0/4</text>
+  <rect x="825" y="507" width="117" height="14" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.5"/>
+  <text x="883" y="517" fill="#1E40AF" font-size="7" text-anchor="middle">GPU 5 — W shard 1/4</text>
+  <rect x="825" y="524" width="117" height="14" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.5"/>
+  <text x="883" y="534" fill="#1E40AF" font-size="7" text-anchor="middle">GPU 6 — W shard 2/4</text>
+  <rect x="825" y="541" width="117" height="14" rx="2" fill="#DBEAFE" stroke="#3B82F6" stroke-width="0.5"/>
+  <text x="883" y="551" fill="#1E40AF" font-size="7" text-anchor="middle">GPU 7 — W shard 3/4</text>
+  <rect x="825" y="559" width="117" height="16" rx="2" fill="#D1FAE5" stroke="#10B981" stroke-width="0.5"/>
+  <text x="883" y="570" fill="#065F46" font-size="8" text-anchor="middle" font-weight="600">Experts 96-127</text>
+  <line x1="822" y1="490" x2="822" y2="555" stroke="#3B82F6" stroke-width="1.5"/>
+  <text x="883" y="589" fill="#6B7280" font-size="7" text-anchor="middle">94 layers (PP=1, all layers)</text>
+
+  <!-- EP All-to-all arrows across EP Group 0 -->
+  <path d="M511,600 Q515,614 660,600" stroke="#10B981" stroke-width="2" fill="none" stroke-dasharray="4,3"/>
+  <path d="M511,600 Q515,618 818,600" stroke="#10B981" stroke-width="1.5" fill="none" stroke-dasharray="4,3"/>
+  <path d="M652,600 Q660,614 818,600" stroke="#10B981" stroke-width="1.5" fill="none" stroke-dasharray="4,3"/>
+  <text x="660" y="625" fill="#059669" font-size="10" text-anchor="middle" font-weight="600">All-to-All token dispatch + combine (94 MoE layers x fwd+bwd = 376 ops/step)</text>
+
+  <!-- EP Group 1 / Effective DP Replica 1 (compressed) -->
+  <rect x="362" y="640" width="602" height="82" rx="5" fill="#ECFDF5" stroke="#6EE7B7" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="370" y="656" fill="#059669" font-size="11" font-weight="700">EP Group 1 — Effective DP Replica 1</text>
+  <text x="620" y="656" fill="#059669" font-size="10">(DP ranks 4-7, Nodes 2-3)</text>
+  <!-- Compact TP groups -->
+  <rect x="378" y="666" width="133" height="28" rx="3" fill="#EFF6FF" stroke="#93C5FD" stroke-width="0.75"/>
+  <text x="444" y="678" fill="#1E40AF" font-size="8" text-anchor="middle">TP Grp 4 | rank 4</text>
+  <text x="444" y="689" fill="#065F46" font-size="7" text-anchor="middle">Experts 0-31</text>
+  <rect x="519" y="666" width="133" height="28" rx="3" fill="#EFF6FF" stroke="#93C5FD" stroke-width="0.75"/>
+  <text x="585" y="678" fill="#1E40AF" font-size="8" text-anchor="middle">TP Grp 5 | rank 5</text>
+  <text x="585" y="689" fill="#065F46" font-size="7" text-anchor="middle">Experts 32-63</text>
+  <rect x="676" y="666" width="133" height="28" rx="3" fill="#EFF6FF" stroke="#93C5FD" stroke-width="0.75"/>
+  <text x="742" y="678" fill="#1E40AF" font-size="8" text-anchor="middle">TP Grp 6 | rank 6</text>
+  <text x="742" y="689" fill="#065F46" font-size="7" text-anchor="middle">Experts 64-95</text>
+  <rect x="817" y="666" width="133" height="28" rx="3" fill="#EFF6FF" stroke="#93C5FD" stroke-width="0.75"/>
+  <text x="883" y="678" fill="#1E40AF" font-size="8" text-anchor="middle">TP Grp 7 | rank 7</text>
+  <text x="883" y="689" fill="#065F46" font-size="7" text-anchor="middle">Experts 96-127</text>
+  <!-- All-to-all label -->
+  <path d="M511,695 Q600,706 950,695" stroke="#10B981" stroke-width="1" fill="none" stroke-dasharray="3,2"/>
+  <text x="660" y="715" fill="#059669" font-size="8" text-anchor="middle" font-style="italic">all-to-all within EP group</text>
+
+  <!-- EP Group 2 / Effective DP Replica 2 (compressed) -->
+  <rect x="362" y="724" width="602" height="82" rx="5" fill="#ECFDF5" stroke="#6EE7B7" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="370" y="740" fill="#059669" font-size="11" font-weight="700">EP Group 2 — Effective DP Replica 2</text>
+  <text x="620" y="740" fill="#059669" font-size="10">(DP ranks 8-11, Nodes 4-5)</text>
+  <rect x="378" y="750" width="133" height="28" rx="3" fill="#EFF6FF" stroke="#93C5FD" stroke-width="0.75"/>
+  <text x="444" y="762" fill="#1E40AF" font-size="8" text-anchor="middle">TP Grp 8 | rank 8</text>
+  <text x="444" y="773" fill="#065F46" font-size="7" text-anchor="middle">Experts 0-31</text>
+  <rect x="519" y="750" width="133" height="28" rx="3" fill="#EFF6FF" stroke="#93C5FD" stroke-width="0.75"/>
+  <text x="585" y="762" fill="#1E40AF" font-size="8" text-anchor="middle">TP Grp 9 | rank 9</text>
+  <text x="585" y="773" fill="#065F46" font-size="7" text-anchor="middle">Experts 32-63</text>
+  <rect x="676" y="750" width="133" height="28" rx="3" fill="#EFF6FF" stroke="#93C5FD" stroke-width="0.75"/>
+  <text x="742" y="762" fill="#1E40AF" font-size="8" text-anchor="middle">TP Grp 10 | rank 10</text>
+  <text x="742" y="773" fill="#065F46" font-size="7" text-anchor="middle">Experts 64-95</text>
+  <rect x="817" y="750" width="133" height="28" rx="3" fill="#EFF6FF" stroke="#93C5FD" stroke-width="0.75"/>
+  <text x="883" y="762" fill="#1E40AF" font-size="8" text-anchor="middle">TP Grp 11 | rank 11</text>
+  <text x="883" y="773" fill="#065F46" font-size="7" text-anchor="middle">Experts 96-127</text>
+  <path d="M511,779 Q600,790 950,779" stroke="#10B981" stroke-width="1" fill="none" stroke-dasharray="3,2"/>
+  <text x="660" y="799" fill="#059669" font-size="8" text-anchor="middle" font-style="italic">all-to-all within EP group</text>
+
+  <!-- DP gradient sync between EP Groups (across effective DP replicas) -->
+  <rect x="362" y="808" width="602" height="2" fill="#8B5CF6" rx="1"/>
+  <text x="660" y="822" fill="#7C3AED" font-size="10" text-anchor="middle" font-weight="600">Gradient All-Reduce across 3 Effective DP Replicas (once per step, via EFA)</text>
+
+
+  <!-- ========================================================== -->
+  <!-- ===== RIGHT PANEL: Decision Framework + Constraints ===== -->
+  <!-- ========================================================== -->
+
+  <rect x="976" y="374" width="608" height="250" rx="6" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1" filter="url(#shadow)"/>
+  <text x="992" y="396" fill="#1E293B" font-size="14" font-weight="700">Decision Framework: Setting Parallelism</text>
+
+  <!-- Step 1 -->
+  <rect x="988" y="406" width="28" height="28" rx="14" fill="#3B82F6"/>
+  <text x="1002" y="424" fill="white" font-size="13" font-weight="700" text-anchor="middle">1</text>
+  <text x="1024" y="418" fill="#1E293B" font-size="12" font-weight="600">Set TP first</text>
+  <text x="1024" y="432" fill="#64748B" font-size="10">Min needed for per-layer weights to fit in GPU memory. Keep within node (≤8).</text>
+  <text x="1024" y="444" fill="#3B82F6" font-size="9">Constraint: num_attention_heads % TP == 0 AND num_kv_heads % TP == 0</text>
+
+  <!-- Step 2 -->
+  <rect x="988" y="454" width="28" height="28" rx="14" fill="#10B981"/>
+  <text x="1002" y="472" fill="white" font-size="13" font-weight="700" text-anchor="middle">2</text>
+  <text x="1024" y="466" fill="#1E293B" font-size="12" font-weight="600">Set EP (MoE only)</text>
+  <text x="1024" y="480" fill="#64748B" font-size="10">If expert params dominate memory, increase EP. Must divide num_experts AND DP.</text>
+  <text x="1024" y="492" fill="#10B981" font-size="9">Constraint: num_experts % EP == 0 AND DP % EP == 0</text>
+
+  <!-- Step 3 -->
+  <rect x="988" y="502" width="28" height="28" rx="14" fill="#F59E0B"/>
+  <text x="1002" y="520" fill="white" font-size="13" font-weight="700" text-anchor="middle">3</text>
+  <text x="1024" y="514" fill="#1E293B" font-size="12" font-weight="600">Set PP (last resort)</text>
+  <text x="1024" y="528" fill="#64748B" font-size="10">Only if TP + EP can't fit model. PP=1 is always best for throughput.</text>
+  <text x="1024" y="540" fill="#F59E0B" font-size="9">Constraint: num_layers should be roughly divisible by PP. TP x PP must divide total GPUs.</text>
+
+  <!-- Step 4 -->
+  <rect x="988" y="550" width="28" height="28" rx="14" fill="#8B5CF6"/>
+  <text x="1002" y="568" fill="white" font-size="13" font-weight="700" text-anchor="middle">4</text>
+  <text x="1024" y="562" fill="#1E293B" font-size="12" font-weight="600">DP falls out automatically</text>
+  <text x="1024" y="576" fill="#64748B" font-size="10">DP = total_GPUs / (TP x PP x CP).  Effective DP = DP / EP.  More DP = faster training.</text>
+  <text x="1024" y="588" fill="#8B5CF6" font-size="9">Not explicitly configured — it is whatever is left over.</text>
+
+  <!-- Comparison table header -->
+  <rect x="976" y="630" width="608" height="200" rx="6" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1" filter="url(#shadow)"/>
+  <text x="992" y="652" fill="#1E293B" font-size="14" font-weight="700">Communication Patterns per Dimension</text>
+
+  <!-- Table -->
+  <rect x="988" y="662" width="584" height="22" rx="3" fill="#1E293B"/>
+  <text x="1038" y="677" fill="white" font-size="10" font-weight="600" text-anchor="middle">Dimension</text>
+  <text x="1140" y="677" fill="white" font-size="10" font-weight="600" text-anchor="middle">What it Splits</text>
+  <text x="1276" y="677" fill="white" font-size="10" font-weight="600" text-anchor="middle">Communication</text>
+  <text x="1400" y="677" fill="white" font-size="10" font-weight="600" text-anchor="middle">Frequency</text>
+  <text x="1510" y="677" fill="white" font-size="10" font-weight="600" text-anchor="middle">Bandwidth</text>
+
+  <!-- TP row -->
+  <rect x="988" y="686" width="584" height="22" fill="#EFF6FF"/>
+  <rect x="988" y="686" width="80" height="22" fill="#3B82F6" rx="0"/>
+  <text x="1038" y="701" fill="white" font-size="10" font-weight="600" text-anchor="middle">TP</text>
+  <text x="1140" y="701" fill="#374151" font-size="10" text-anchor="middle">Each layer horizontally</text>
+  <text x="1276" y="701" fill="#374151" font-size="10" text-anchor="middle">All-reduce</text>
+  <text x="1400" y="701" fill="#374151" font-size="10" text-anchor="middle">Per layer op</text>
+  <text x="1510" y="701" fill="#DC2626" font-size="10" font-weight="600" text-anchor="middle">Highest</text>
+
+  <!-- PP row -->
+  <rect x="988" y="710" width="584" height="22" fill="#FFFBEB"/>
+  <rect x="988" y="710" width="80" height="22" fill="#F59E0B" rx="0"/>
+  <text x="1038" y="725" fill="white" font-size="10" font-weight="600" text-anchor="middle">PP</text>
+  <text x="1140" y="725" fill="#374151" font-size="10" text-anchor="middle">Layers into stages</text>
+  <text x="1276" y="725" fill="#374151" font-size="10" text-anchor="middle">Send/Recv</text>
+  <text x="1400" y="725" fill="#374151" font-size="10" text-anchor="middle">Per micro-batch</text>
+  <text x="1510" y="725" fill="#F59E0B" font-size="10" font-weight="600" text-anchor="middle">Moderate</text>
+
+  <!-- EP row -->
+  <rect x="988" y="734" width="584" height="22" fill="#ECFDF5"/>
+  <rect x="988" y="734" width="80" height="22" fill="#10B981" rx="0"/>
+  <text x="1038" y="749" fill="white" font-size="10" font-weight="600" text-anchor="middle">EP</text>
+  <text x="1140" y="749" fill="#374151" font-size="10" text-anchor="middle">MoE experts</text>
+  <text x="1276" y="749" fill="#374151" font-size="10" text-anchor="middle">All-to-All</text>
+  <text x="1400" y="749" fill="#374151" font-size="10" text-anchor="middle">Per MoE layer</text>
+  <text x="1510" y="749" fill="#10B981" font-size="10" font-weight="600" text-anchor="middle">Moderate</text>
+
+  <!-- DP row -->
+  <rect x="988" y="758" width="584" height="22" fill="#F5F3FF"/>
+  <rect x="988" y="758" width="80" height="22" fill="#8B5CF6" rx="0"/>
+  <text x="1038" y="773" fill="white" font-size="10" font-weight="600" text-anchor="middle">DP</text>
+  <text x="1140" y="773" fill="#374151" font-size="10" text-anchor="middle">Data (batch slices)</text>
+  <text x="1276" y="773" fill="#374151" font-size="10" text-anchor="middle">All-reduce</text>
+  <text x="1400" y="773" fill="#374151" font-size="10" text-anchor="middle">Once per step</text>
+  <text x="1510" y="773" fill="#22C55E" font-size="10" font-weight="600" text-anchor="middle">Lowest</text>
+
+  <!-- CP row -->
+  <rect x="988" y="782" width="584" height="22" fill="#FFF7ED"/>
+  <rect x="988" y="782" width="80" height="22" fill="#EA580C" rx="0"/>
+  <text x="1038" y="797" fill="white" font-size="10" font-weight="600" text-anchor="middle">CP</text>
+  <text x="1140" y="797" fill="#374151" font-size="10" text-anchor="middle">Sequence length</text>
+  <text x="1276" y="797" fill="#374151" font-size="10" text-anchor="middle">Ring attention</text>
+  <text x="1400" y="797" fill="#374151" font-size="10" text-anchor="middle">Per attention layer</text>
+  <text x="1510" y="797" fill="#F59E0B" font-size="10" font-weight="600" text-anchor="middle">Moderate</text>
+
+
+  <!-- ========================================================== -->
+  <!-- ===== BOTTOM: Concrete Configs + Key Insight ===== -->
+  <!-- ========================================================== -->
+
+  <!-- Config examples -->
+  <rect x="16" y="836" width="770" height="255" rx="6" fill="white" stroke="#E2E8F0" stroke-width="1" filter="url(#shadow)"/>
+  <text x="32" y="858" fill="#1E293B" font-size="14" font-weight="700">Concrete Configurations from This Cluster (48 B200 GPUs, 6 nodes)</text>
+
+  <!-- Model configs table -->
+  <rect x="28" y="868" width="746" height="20" rx="3" fill="#1E293B"/>
+  <text x="100" y="882" fill="white" font-size="9" font-weight="600" text-anchor="middle">Model</text>
+  <text x="188" y="882" fill="white" font-size="9" font-weight="600" text-anchor="middle">Type</text>
+  <text x="248" y="882" fill="white" font-size="9" font-weight="600" text-anchor="middle">TP</text>
+  <text x="298" y="882" fill="white" font-size="9" font-weight="600" text-anchor="middle">PP</text>
+  <text x="348" y="882" fill="white" font-size="9" font-weight="600" text-anchor="middle">EP</text>
+  <text x="398" y="882" fill="white" font-size="9" font-weight="600" text-anchor="middle">CP</text>
+  <text x="448" y="882" fill="white" font-size="9" font-weight="600" text-anchor="middle">DP</text>
+  <text x="510" y="882" fill="white" font-size="9" font-weight="600" text-anchor="middle">Eff. DP</text>
+  <text x="592" y="882" fill="white" font-size="9" font-weight="600" text-anchor="middle">GPUs/Replica</text>
+  <text x="710" y="882" fill="white" font-size="9" font-weight="600" text-anchor="middle">Notes</text>
+
+  <!-- Qwen3-8B row -->
+  <rect x="28" y="890" width="746" height="22" fill="#F8FAFC"/>
+  <text x="100" y="905" fill="#374151" font-size="9" text-anchor="middle">Qwen3-8B</text>
+  <text x="188" y="905" fill="#374151" font-size="9" text-anchor="middle">Dense</text>
+  <text x="248" y="905" fill="#3B82F6" font-size="10" font-weight="600" text-anchor="middle">2</text>
+  <text x="298" y="905" fill="#6B7280" font-size="10" text-anchor="middle">1</text>
+  <text x="348" y="905" fill="#6B7280" font-size="10" text-anchor="middle">1</text>
+  <text x="398" y="905" fill="#6B7280" font-size="10" text-anchor="middle">1</text>
+  <text x="448" y="905" fill="#8B5CF6" font-size="10" font-weight="600" text-anchor="middle">24</text>
+  <text x="510" y="905" fill="#8B5CF6" font-size="10" text-anchor="middle">24</text>
+  <text x="592" y="905" fill="#374151" font-size="9" text-anchor="middle">2</text>
+  <text x="710" y="905" fill="#6B7280" font-size="8" text-anchor="middle">Validation model, max DP</text>
+
+  <!-- Qwen2.5-Coder-7B row -->
+  <rect x="28" y="914" width="746" height="22" fill="white"/>
+  <text x="100" y="929" fill="#374151" font-size="9" text-anchor="middle">Qwen2.5-Coder-7B</text>
+  <text x="188" y="929" fill="#374151" font-size="9" text-anchor="middle">Dense</text>
+  <text x="248" y="929" fill="#3B82F6" font-size="10" font-weight="600" text-anchor="middle">2</text>
+  <text x="298" y="929" fill="#6B7280" font-size="10" text-anchor="middle">1</text>
+  <text x="348" y="929" fill="#6B7280" font-size="10" text-anchor="middle">1</text>
+  <text x="398" y="929" fill="#6B7280" font-size="10" text-anchor="middle">1</text>
+  <text x="448" y="929" fill="#8B5CF6" font-size="10" font-weight="600" text-anchor="middle">24</text>
+  <text x="510" y="929" fill="#8B5CF6" font-size="10" text-anchor="middle">24</text>
+  <text x="592" y="929" fill="#374151" font-size="9" text-anchor="middle">2</text>
+  <text x="710" y="929" fill="#6B7280" font-size="8" text-anchor="middle">Code-focused, small model</text>
+
+  <!-- Qwen2.5-72B row -->
+  <rect x="28" y="938" width="746" height="22" fill="#F8FAFC"/>
+  <text x="100" y="953" fill="#374151" font-size="9" text-anchor="middle">Qwen2.5-72B</text>
+  <text x="188" y="953" fill="#374151" font-size="9" text-anchor="middle">Dense</text>
+  <text x="248" y="953" fill="#3B82F6" font-size="10" font-weight="600" text-anchor="middle">4</text>
+  <text x="298" y="953" fill="#F59E0B" font-size="10" font-weight="600" text-anchor="middle">4</text>
+  <text x="348" y="953" fill="#6B7280" font-size="10" text-anchor="middle">1</text>
+  <text x="398" y="953" fill="#6B7280" font-size="10" text-anchor="middle">1</text>
+  <text x="448" y="953" fill="#8B5CF6" font-size="10" font-weight="600" text-anchor="middle">3</text>
+  <text x="510" y="953" fill="#8B5CF6" font-size="10" text-anchor="middle">3</text>
+  <text x="592" y="953" fill="#374151" font-size="9" text-anchor="middle">16</text>
+  <text x="710" y="953" fill="#6B7280" font-size="8" text-anchor="middle">PP=4 needed for 72B dense</text>
+
+  <!-- Qwen3-30B-A3B row -->
+  <rect x="28" y="962" width="746" height="22" fill="white"/>
+  <text x="100" y="977" fill="#374151" font-size="9" text-anchor="middle">Qwen3-30B-A3B</text>
+  <text x="188" y="977" fill="#10B981" font-size="9" font-weight="600" text-anchor="middle">MoE</text>
+  <text x="248" y="977" fill="#3B82F6" font-size="10" font-weight="600" text-anchor="middle">2</text>
+  <text x="298" y="977" fill="#F59E0B" font-size="10" font-weight="600" text-anchor="middle">2</text>
+  <text x="348" y="977" fill="#10B981" font-size="10" font-weight="600" text-anchor="middle">4</text>
+  <text x="398" y="977" fill="#EA580C" font-size="10" font-weight="600" text-anchor="middle">2</text>
+  <text x="448" y="977" fill="#8B5CF6" font-size="10" font-weight="600" text-anchor="middle">12</text>
+  <text x="510" y="977" fill="#8B5CF6" font-size="10" text-anchor="middle">3</text>
+  <text x="592" y="977" fill="#374151" font-size="9" text-anchor="middle">4</text>
+  <text x="710" y="977" fill="#6B7280" font-size="8" text-anchor="middle">Uses all 5 dims! CP=2</text>
+
+  <!-- Qwen3-235B-A22B row (highlighted) -->
+  <rect x="28" y="986" width="746" height="24" fill="#ECFDF5" stroke="#10B981" stroke-width="1" rx="2"/>
+  <text x="100" y="1002" fill="#065F46" font-size="9" font-weight="600" text-anchor="middle">Qwen3-235B-A22B</text>
+  <text x="188" y="1002" fill="#10B981" font-size="9" font-weight="600" text-anchor="middle">MoE</text>
+  <text x="248" y="1002" fill="#3B82F6" font-size="10" font-weight="700" text-anchor="middle">4</text>
+  <text x="298" y="1002" fill="#6B7280" font-size="10" text-anchor="middle">1</text>
+  <text x="348" y="1002" fill="#10B981" font-size="10" font-weight="700" text-anchor="middle">4</text>
+  <text x="398" y="1002" fill="#6B7280" font-size="10" text-anchor="middle">1</text>
+  <text x="448" y="1002" fill="#8B5CF6" font-size="10" font-weight="700" text-anchor="middle">12</text>
+  <text x="510" y="1002" fill="#8B5CF6" font-size="10" font-weight="600" text-anchor="middle">3</text>
+  <text x="592" y="1002" fill="#374151" font-size="9" text-anchor="middle">4</text>
+  <text x="710" y="1002" fill="#065F46" font-size="8" font-weight="600" text-anchor="middle">PP=1 avoids bubbles</text>
+
+  <!-- Formula reminder -->
+  <rect x="28" y="1020" width="746" height="62" rx="4" fill="#FEF3C7" stroke="#FDE68A" stroke-width="1"/>
+  <text x="44" y="1038" fill="#92400E" font-size="11" font-weight="700">Key Insight: PP vs EP Tradeoff for MoE Models</text>
+  <text x="44" y="1054" fill="#78350F" font-size="10">Qwen3-235B first tried TP=4, PP=2, EP=1 → OOM (128 experts on every GPU = ~57 GB expert memory alone).</text>
+  <text x="44" y="1068" fill="#78350F" font-size="10">Switching to TP=4, PP=1, EP=4 → 32 experts/GPU (~14 GB) + zero pipeline bubbles. PP distributes layers; EP distributes experts.</text>
+
+
+  <!-- ===== RIGHT BOTTOM: Network Topology Legend ===== -->
+  <rect x="798" y="836" width="786" height="255" rx="6" fill="white" stroke="#E2E8F0" stroke-width="1" filter="url(#shadow)"/>
+  <text x="814" y="858" fill="#1E293B" font-size="14" font-weight="700">Network Topology and Communication</text>
+
+  <!-- Intra-node -->
+  <rect x="810" y="870" width="370" height="100" rx="4" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1"/>
+  <text x="995" y="888" fill="#1E293B" font-size="12" font-weight="600" text-anchor="middle">Within a Node (NVLink/NVSwitch)</text>
+  <text x="995" y="904" fill="#64748B" font-size="10" text-anchor="middle">900 GB/s bidirectional  |  Sub-microsecond latency</text>
+  <line x1="830" y1="916" x2="900" y2="916" stroke="#3B82F6" stroke-width="2.5"/>
+  <text x="910" y="920" fill="#3B82F6" font-size="10" font-weight="600">TP all-reduce (per layer)</text>
+  <text x="910" y="932" fill="#64748B" font-size="9">Highest bandwidth demand — stays on NVLink</text>
+  <line x1="830" y1="946" x2="900" y2="946" stroke="#3B82F6" stroke-width="1.5" stroke-dasharray="4,2"/>
+  <text x="910" y="950" fill="#3B82F6" font-size="10">FSDP all-gather/reduce-scatter</text>
+  <text x="910" y="962" fill="#64748B" font-size="9">Within fsdp_size = gpus_per_node (8)</text>
+
+  <!-- Inter-node -->
+  <rect x="1190" y="870" width="382" height="100" rx="4" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1"/>
+  <text x="1381" y="888" fill="#1E293B" font-size="12" font-weight="600" text-anchor="middle">Across Nodes (EFA / RDMA)</text>
+  <text x="1381" y="904" fill="#64748B" font-size="10" text-anchor="middle">32 EFA adapters/node  |  ~3200 Gbps aggregate</text>
+  <line x1="1210" y1="916" x2="1280" y2="916" stroke="#F59E0B" stroke-width="2.5"/>
+  <text x="1290" y="920" fill="#F59E0B" font-size="10" font-weight="600">PP send/recv (per micro-batch)</text>
+  <text x="1290" y="932" fill="#64748B" font-size="9">Point-to-point between pipeline stages</text>
+  <line x1="1210" y1="946" x2="1280" y2="946" stroke="#10B981" stroke-width="2" stroke-dasharray="4,3"/>
+  <text x="1290" y="950" fill="#10B981" font-size="10" font-weight="600">EP all-to-all (per MoE layer)</text>
+  <text x="1290" y="962" fill="#64748B" font-size="9">Token routing across EP group (376 ops/step)</text>
+
+  <!-- Global communication -->
+  <rect x="810" y="978" width="762" height="50" rx="4" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1"/>
+  <text x="1191" y="996" fill="#7C3AED" font-size="12" font-weight="600" text-anchor="middle">Global: DP Gradient All-Reduce (across all nodes, once per training step)</text>
+  <text x="1191" y="1012" fill="#64748B" font-size="10" text-anchor="middle">Synchronizes gradients across effective DP replicas. Overlapped with backward computation where possible.</text>
+
+  <!-- Training step summary -->
+  <rect x="810" y="1036" width="762" height="50" rx="4" fill="#1E293B"/>
+  <text x="826" y="1054" fill="#94A3B8" font-size="10" font-weight="600">Communication per training step (Qwen3-235B, TP=4 EP=4):</text>
+  <text x="826" y="1072" fill="#E2E8F0" font-size="10">TP: 94 x all-reduce (NVLink, fast)    EP: 376 x all-to-all (EFA, moderate)    DP: 1 x all-reduce (EFA, large but infrequent)</text>
+
+</svg>
