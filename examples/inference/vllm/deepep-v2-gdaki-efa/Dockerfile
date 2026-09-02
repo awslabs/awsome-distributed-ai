@@ -235,7 +235,7 @@ COPY recipe/run-kernel-test.sh /opt/run-kernel-test.sh
 COPY recipe/benchmark_probe.py /opt/benchmark_probe.py
 RUN chmod +x /opt/serve.sh /opt/run-kernel-test.sh
 
-RUN { echo "vllm-deepep-v2-GDAKI-efa image (GPU-initiated, NCCL_GIN_TYPE=3)"; \
+RUN { echo "vllm-deepep-v2-gdaki-efa image (GPU-initiated, NCCL_GIN_TYPE=3)"; \
       echo "efa:           $(cat /opt/efa-installer.version)"; \
       echo "rdma-core:     $(cat /opt/rdma-core-gdaki.sha) (post-PR#1701 comp-cntr)"; \
       echo "libfabric:     $(cat /opt/libfabric-gdaki.sha) (post-PR#12591)"; \
