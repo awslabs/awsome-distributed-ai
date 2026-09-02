@@ -2,11 +2,9 @@
 
 [nccom-test](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/tools/neuron-sys-tools/nccom-test.html) is a benchmarking tool for quickly evaluating the performance of Collective Communication operations on one or more Neuron instances (it is compatible with both trn1 and inf2 instance types) or just for a fast sanity check of the environment before attempting to run a more complex workload.
 
-
 ## Understanding nccom-test output
 
 The command will output a table containing several columns containing performance metrics. There will be a line for every requested data size (by default the data size is 32MB as seen in the previous example).
-
 
 | Column name       | Description                                                                                                                                                                                                                                                                                                                                 |
 |-------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -17,7 +15,8 @@ The command will output a table containing several columns containing performanc
 | algbw(GB/s)       | Algorithm bandwidth in gibibytes (1GiB = 1,073,741,824 bytes) per second which is calculated as   size(B)/time(us)                                                                                                                                                                                                                          |
 | busbw(GB/s)       | Bus bandwidth - bandwidth per data line in gibibytes per second - it provides a bandwidth number that is independent from the number of ranks (unlike algbw).  For a more in-depth explanation on bus Bandwidth,  please refer to [NVIDIA’s nccl-tests documentation](https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md). |
 | Avg bus bandwidth | Average of the values in the busbw column                                                                                                                                                                                                                                                                                                   |
-##  CLI arguments
+
+## CLI arguments
 
 | Argument           | Default value                           | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 |--------------------|-----------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|

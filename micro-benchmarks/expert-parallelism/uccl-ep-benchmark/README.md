@@ -1,6 +1,6 @@
 # UCCL-EP Benchmark
 
-https://uccl-project.github.io/posts/uccl-ep/
+<https://uccl-project.github.io/posts/uccl-ep/>
 
 ```bash
 docker build -t uccl-ep -f uccl-ep.Dockerfile .
@@ -11,11 +11,13 @@ enroot import -o ./uccl-ep.sqsh dockerd://uccl-ep
 ```
 
 test_internode.sbatch
+
 ```bash
 sbatch test_internode.sbatch
 ```
 
 test_intranode.sbatch
+
 ```bash
 sbatch test_intranode.sbatch
 ```
@@ -28,6 +30,7 @@ sbatch test_intranode.sbatch
 | Internode | 32            | 53-55 GB/s (RDMA)    | 32           | 40-42 GB/s (RDMA)    |
 
 test_low_latency.sbatch
+
 ```bash
 sbatch test_low_latency.sbatch
 ```

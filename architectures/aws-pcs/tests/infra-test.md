@@ -27,7 +27,7 @@ login node and DCGM/node exporters on the compute nodes.
 ```bash
 # On the login node:
 docker ps --format "table {{.Names}}\t{{.Status}}"          # login: prometheus, grafana, nginx, cloudwatch-exporter, node-exporter, pushgateway
-tail -5 /var/log/monitoring-install.log                     # ends "...complete (exit 0)"
+sudo tail -5 /var/log/amazon/pcs/lifecycle/actions/nodeReady/install-monitoring.log  # ends "...complete (exit 0)"
 ls -la /opt/aws-parallelcluster-monitoring                  # installed on node-local /opt (NOT /home)
 curl -s http://localhost:9090/api/v1/targets | \
   python3 -c 'import sys,json;[print(t["labels"].get("instance"),t["health"]) for t in json.load(sys.stdin)["data"]["activeTargets"]]'
@@ -46,46 +46,46 @@ on PCS (earlier tags have the ec2_sd credential-expiry bug — see
 ## Test 2: Enroot/Pyxis container runtime (first-boot install)
 
 This is the default path used by every cluster that doesn't override `AmiId`:
-`PostInstallScriptUrl` runs `install-enroot-pyxis.sh` once on each node at first boot.
+The `install-enroot-pyxis` lifecycle action (`InstallEnrootPyxis=true`) runs `install-enroot-pyxis.sh` once on each node at first boot.
 The pre-baked-AMI path is validated separately as [Test 8](#test-8-pre-baked-ami-build-standalone-dlami-template).
 
-Deploy `pcs-ml-cluster-deploy-all.yaml` with both `AmiId` and `PostInstallScriptUrl`
+Deploy `pcs-ml-cluster-deploy-all.yaml` with both `AmiId` and `InstallEnrootPyxis`
 left at their defaults (so SSM auto-resolves the latest PCS-Ready DLAMI and
-post-install runs the Enroot/Pyxis installer), then on any node:
+the lifecycle action runs the Enroot/Pyxis installer), then on any node:
 
-> **The default `PostInstallScriptUrl` is now an `s3://` URL** (empty →
-> `s3://<S3BucketName>/<S3KeyPrefix>scripts/install-enroot-pyxis.sh`, fetched with
-> the instance role). Verified end-to-end against a **private** test bucket: the
-> node's post-install log shows `Downloading post-install script from s3://…` and
-> `pyxis.conf` is installed — so no public S3 is required (works in dev accounts). An
-> `http(s)://` value still works too (curl), for public/GitHub-raw scripts.
+> **The installer is fetched from the templates bucket by the PCS agent**
+> (`s3://<S3BucketName>/<S3KeyPrefix>scripts/install-enroot-pyxis.sh`, instance-role
+> fetch). Verified end-to-end against a **private** test bucket: the executor log
+> shows the s3:// download and `pyxis.conf` is installed — so no public S3 is
+> required (works in dev accounts).
 
 ```bash
 which enroot                                                       # /usr/bin/enroot
 ls /opt/aws/pcs/scheduler/slurm-*/lib/slurm/spank_pyxis.so         # per-version Pyxis SPANK plugin
 cat /etc/aws/pcs/scheduler/slurm-*/plugstack.conf.d/pyxis.conf     # points at the matching .so
-tail -1 /var/log/pcs-post-install.log                              # "...completed (exit 0)"
+sudo tail -1 /var/log/amazon/pcs/lifecycle/actions/nodeBootstrapped/install-enroot-pyxis.log  # "exit=0"
 ```
 
 **Expected:** `enroot` on `PATH`; a `spank_pyxis.so` under the **cluster's** Slurm version
-dir, and the plugstack `pyxis.conf` referencing that exact path; post-install log exits 0.
+dir, and the plugstack `pyxis.conf` referencing that exact path; the install log ends exit=0.
 The Test 1/6/7 container jobs are the functional proof that Pyxis works.
 
 > **⚠️ Regression-test rule for `assets/scripts/install-enroot-pyxis.sh`.** This script has bitten
 > us repeatedly in ways a single 25.11 GPU run does not catch. **Any change to it MUST be
 > retested across the full matrix at the top of this guide**, specifically:
+>
 > - **All supported Slurm versions** (25.05 **and** 25.11). The Pyxis SPANK plugin is
 >   ABI-locked to its Slurm version — a plugin built for the wrong version stops slurmd from
 >   starting (`Incompatible Slurm plugin version`). The script builds Pyxis for the version
->   passed in `PCS_SLURM_VERSION` and installs the `.so` to a per-version path; a regression
+>   passed as the script's first argument (or `PCS_SLURM_VERSION` on the AMI-build path) and installs the `.so` to a per-version path; a regression
 >   here only shows on the *other* version.
 > - **The pre-baked AMI path too** ([Test 8](#test-8-pre-baked-ami-build-standalone-dlami-template)).
 >   `pcs-ready-dlami-with-enroot-pyxis.yaml` carries its **own copy** of the Enroot/Pyxis
 >   steps in its Image Builder UserData — editing `install-enroot-pyxis.sh` does **not**
 >   change the AMI path until you rebuild. Build an AMI per supported `SlurmVersion`,
->   deploy a cluster pinned to it (`AmiId=<ami-xxx>` + `PostInstallScriptUrl=' '`), and
+>   deploy a cluster pinned to it (`AmiId=<ami-xxx>` + `InstallEnrootPyxis=false`), and
 >   run a container job.
-> - **On a clean first boot**, not a hand-patched node — post-install runs before
+> - **On a clean first boot**, not a hand-patched node — the install action runs before
 >   slurmd/profile.d/controller exist, and several bugs only appear there.
 
 ---
@@ -115,7 +115,7 @@ Skip this test if you only touched the cluster templates.
 
 This is an **independent flow**, not a deploy-all parameter: build an AMI with the
 standalone template, then deploy a cluster pinned to that AMI ID with
-`PostInstallScriptUrl=' '` so nothing else runs at boot.
+`InstallEnrootPyxis=false` so nothing else runs at boot.
 
 The AMI is **single-Slurm-version by design** (Pyxis SPANK plugin ABI is
 version-locked) — so when you run this test, run it for **every supported
@@ -155,7 +155,7 @@ aws cloudformation create-stack \
     ParameterKey=PrimarySubnetAZ,ParameterValue=us-west-2a \
     ParameterKey=SlurmVersion,ParameterValue=${SLURM_VERSION} \
     ParameterKey=AmiId,ParameterValue=${AMI_ID} \
-    ParameterKey=PostInstallScriptUrl,ParameterValue=' ' \
+    ParameterKey=InstallEnrootPyxis,ParameterValue=false \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
   --region us-west-2
 ```
@@ -168,7 +168,7 @@ On any node from the new cluster:
 which enroot                                                       # /usr/bin/enroot (pre-baked)
 ls /opt/aws/pcs/scheduler/slurm-${SLURM_VERSION}/lib/slurm/spank_pyxis.so  # built for matching Slurm
 cat /etc/aws/pcs/scheduler/slurm-${SLURM_VERSION}/plugstack.conf.d/pyxis.conf  # references the .so
-test ! -s /var/log/pcs-post-install.log && echo "post-install did not run (PostInstallScriptUrl=' ')"
+sudo test ! -e /var/log/amazon/pcs/lifecycle/actions/nodeBootstrapped/install-enroot-pyxis.log && echo "install-enroot-pyxis did not run (InstallEnrootPyxis=false)"
 ```
 
 Then a container job through the login node (same form as Test 2):
@@ -179,7 +179,7 @@ srun --partition=cpu1 --nodes=1 --ntasks=1 \
 ```
 
 **Expected:** `enroot` and the per-version Pyxis files exist **without** the
-post-install hook running (because `PostInstallScriptUrl=' '`); the container job
+install action running (because `InstallEnrootPyxis=false`); the container job
 prints `PYXIS_FROM_AMI_OK`. Slurmd starts cleanly (no `Incompatible Slurm plugin
 version` in `journalctl -u slurmd`).
 

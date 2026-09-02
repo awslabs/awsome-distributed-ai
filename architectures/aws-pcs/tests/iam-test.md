@@ -56,6 +56,7 @@ aws cloudformation delete-stack --stack-name pcs-iam-test --region <region>
 ```
 
 **Expected:**
+
 - Every nested stack reaches `CREATE_COMPLETE` with **no `AccessDenied`**.
 - The same admin-only role tears the stack down to `DELETE_COMPLETE` with no `AccessDenied`.
 - It works **without `iam:CreatePolicy`** — the instance role's permissions are attached

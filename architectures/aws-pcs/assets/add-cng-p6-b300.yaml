@@ -48,10 +48,9 @@ Metadata:
           - MonitoringRepo
           - MonitoringRole
       - Label:
-          default: Post-install script (OnNodeConfigured)
+          default: Container runtime (Enroot/Pyxis)
         Parameters:
-          - PostInstallScriptUrl
-          - PostInstallScriptArgs
+          - InstallEnrootPyxis
 
 Parameters:
   CapacityReservationId:
@@ -122,6 +121,9 @@ Parameters:
       (Optional) AMI ID for the nodes. Leave empty to auto-resolve the latest
       PCS-Ready DLAMI (Ubuntu 24.04 x86_64) from SSM Parameter Store. Set an explicit
       ami-xxxx only to override (e.g. a custom AMI built with Enroot/Pyxis pre-baked).
+      The AMI must carry PCS agent >= 1.5.0-1 (PCS-Ready DLAMI builds since
+      2026-07-20 — see docs/PCS-READY-DLAMI.md): node setup runs through node
+      lifecycle actions, which older agents do not support.
     Default: ""
     AllowedPattern: '^$|^ami-[0-9a-f]{8,17}$'
     ConstraintDescription: Must be empty or a valid AMI ID (ami-xxxxxxxxxxxxxxxxx)
@@ -137,6 +139,8 @@ Parameters:
   FSxLustreFilesystemId:
     Type: String
     Description: Filesystem ID for FSx for Lustre
+    AllowedPattern: '^$|^fs-[0-9a-f]{8,17}$'
+    ConstraintDescription: Must be empty (no /fsx) or a valid FSx filesystem ID
 
   FSxLustreFilesystemMountName:
     Type: String
@@ -145,6 +149,8 @@ Parameters:
   FSxOpenZFSFilesystemId:
     Type: String
     Description: Filesystem ID for FSx for OpenZFS
+    AllowedPattern: '^fs-[0-9a-f]{8,17}$'
+    ConstraintDescription: Must be a valid FSx filesystem ID (fs-xxxxxxxxxxxxxxxxx)
 
   DeployMonitoring:
     Type: String
@@ -157,12 +163,14 @@ Parameters:
   MonitoringVersion:
     Type: String
     Description: >-
-      aws-parallelcluster-monitoring git ref to install (release tag, branch, or
-      'latest'). Used both to fetch post-install.sh from MonitoringRepo at this
+      aws-parallelcluster-monitoring git ref to install (release tag or branch).
+      Used both to fetch post-install.sh from MonitoringRepo at this
       ref and as the ref argument passed to it. Pin to a release tag for upstream
       stability in production; a branch name (e.g. a fork's dev branch) can be
       used together with MonitoringRepo for testing unreleased changes.
     Default: 'v2.10.2'
+    AllowedPattern: '^[A-Za-z0-9._/-]+$'
+    ConstraintDescription: Must be a git ref (tag or branch)
 
   MonitoringRepo:
     Type: String
@@ -171,6 +179,8 @@ Parameters:
       together with a branch in MonitoringVersion to test unreleased changes before
       they merge upstream.
     Default: 'aws-samples/aws-parallelcluster-monitoring'
+    AllowedPattern: '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'
+    ConstraintDescription: Must be a GitHub "owner/repo"
 
   DcgmExporterImage:
     Type: String
@@ -192,25 +202,26 @@ Parameters:
       - 'compute'
       - 'none'
 
-  PostInstallScriptUrl:
+  InstallEnrootPyxis:
     Type: String
     Description: >-
-      Optional URL of a post-install script to download and run on each node at
-      first boot (PCS equivalent of ParallelCluster OnNodeConfigured). Leave
-      empty to skip. To install Enroot/Pyxis, point this at assets/scripts/install-enroot-pyxis.sh.
-      Accepts an s3:// URL (instance-role fetch; private bucket OK) or an http(s):// URL (curl; public only). For Enroot/Pyxis point at scripts/install-enroot-pyxis.sh in the templates bucket.
-    Default: ''
-
-  PostInstallScriptArgs:
-    Type: String
-    Description: Space-separated arguments passed to the post-install script.
-    Default: ''
+      Install the Enroot/Pyxis container runtime at first boot (an
+      install-enroot-pyxis node lifecycle action running
+      scripts/install-enroot-pyxis.sh from the templates bucket). Set 'false'
+      when the runtime is pre-baked into AmiId, or when you don't need
+      containers. For any other first-boot customization, add your own script
+      to the compute node group's node lifecycle actions — PCS supports this
+      natively, so this template no longer proxies arbitrary scripts.
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
 
   SlurmVersion:
     Type: String
     Description: >-
-      The cluster's Slurm version, exported to the post-install script as
-      PCS_SLURM_VERSION so it can put the matching Slurm CLI bin on slurmd's PATH
+      The cluster's Slurm version, passed to the install-enroot-pyxis lifecycle
+      action so it can put the matching Slurm CLI bin on slurmd's PATH
       (the Pyxis PMI hook needs scontrol). Must match the version the cluster was
       created with.
     Default: '25.11'
@@ -259,6 +270,10 @@ Conditions:
   IsMonitoringRoleSet: !Not [!Equals [!Ref MonitoringRole, 'none']]
   HasAmiId: !Not [!Equals [!Ref AmiId, ""]]
   DirectoryEnabled: !Not [!Equals [!Ref DirectoryRole, 'none']]
+  HasLustre: !Not [!Equals [!Ref FSxLustreFilesystemId, '']]
+  EnrootPyxisEnabled: !Equals [!Ref InstallEnrootPyxis, 'true']
+  MonitoringEnabled: !Equals [!Ref DeployMonitoring, 'true']
+  HasDcgmImage: !Not [!Equals [!Ref DcgmExporterImage, '']]
 
 Resources:
 
@@ -294,6 +309,106 @@ Resources:
       InstanceConfigs:
         - InstanceType: !Ref InstanceType
       PurchaseOption: !If [UseCapacityBlock, CAPACITY_BLOCK, !Ref "AWS::NoValue"]
+      # Node lifecycle actions (PCS agent >= 1.5.0-1; included in PCS-Ready
+      # DLAMI builds from 2026-07-20 — see docs/PCS-READY-DLAMI.md). Scripts
+      # run as root, in order, in the NodeBootstrapped stage: after PCS
+      # finishes node setup, BEFORE slurmd starts — the same ordering the
+      # cloud-init runcmd provided. The agent downloads each script itself
+      # (3 retries with backoff built in) and writes per-script logs to
+      # /var/log/amazon/pcs/lifecycle/actions/<stage>/<name>.log.
+      #
+      # Stage rationale:
+      # - needrestart-guard must be in place before the first apt run can
+      #   trigger a slurmd restart (kills jobs). CONTINUE: a missed guard
+      #   degrades protection but the node still works.
+      # - mounts must complete before slurmd starts, or the scheduler could
+      #   dispatch a job to a node without /home //fsx (nodeReady runs AFTER
+      #   the node is job-eligible). TERMINATE: a node without shared
+      #   storage is useless — replace it. EVERY_BOOT + idempotent scripts
+      #   cover reboots.
+      NodeLifecycleActions:
+        ScriptCachingPolicy: CACHE_ONCE
+        Stages:
+          NodeBootstrapped:
+            - Name: needrestart-guard
+              ScriptSource:
+                ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/needrestart-guard.sh'
+              ExecutionPolicy: FIRST_BOOT_ONLY
+              OnError: CONTINUE
+            - Name: mount-openzfs-home
+              ScriptSource:
+                ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/mount-openzfs-home.sh'
+              Arguments:
+                - !Ref FSxOpenZFSFilesystemId
+              ExecutionPolicy: EVERY_BOOT
+              OnError: TERMINATE
+            - !If
+              - HasLustre
+              - Name: mount-lustre-fsx
+                ScriptSource:
+                  ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/mount-lustre-fsx.sh'
+                Arguments:
+                  - !Ref FSxLustreFilesystemId
+                  - !Ref FSxLustreFilesystemMountName
+                ExecutionPolicy: EVERY_BOOT
+                OnError: TERMINATE
+              - !Ref AWS::NoValue
+            # Directory setup must run AFTER mount-openzfs-home: the LDAP DB
+            # lives on shared /home/ldap-db (the script hard-fails if /home is
+            # not a mountpoint). CONTINUE preserves the log-and-continue
+            # invariant: Slurm launches jobs by numeric UID, so a failed
+            # directory client only degrades name resolution — and TERMINATE
+            # here would risk an endless replace loop.
+            - !If
+              - DirectoryEnabled
+              - Name: setup-directory
+                ScriptSource:
+                  ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/setup-directory.sh'
+                Arguments:
+                  - !Ref DirectoryRole
+                  - !Ref DirectoryDomainSuffix
+                  - !Ref ClusterId
+                  - !Ref S3BucketName
+                  - !Ref S3KeyPrefix
+                ExecutionPolicy: FIRST_BOOT_ONLY
+                OnError: CONTINUE
+              - !Ref AWS::NoValue
+            # Enroot/Pyxis install runs last: it is the slowest step, and
+            # Pyxis is a Slurm SPANK plugin whose plugstack config must exist
+            # before slurmd starts — nodeBootstrapped guarantees that. The
+            # cluster's Slurm version goes in as the first argument (the node
+            # cannot discover it before slurmd exists). CONTINUE: a failed
+            # install only degrades container support — TERMINATE would risk
+            # a replace loop. The script is idempotent, so it is a fast no-op
+            # on an AMI with the runtime pre-baked.
+            - !If
+              - EnrootPyxisEnabled
+              - Name: install-enroot-pyxis
+                ScriptSource:
+                  ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-enroot-pyxis.sh'
+                Arguments:
+                  - !Ref SlurmVersion
+                ExecutionPolicy: FIRST_BOOT_ONLY
+                OnError: CONTINUE
+              - !Ref AWS::NoValue
+          # Monitoring goes to nodeReady: it does not depend on slurmd order,
+          # and running it after registration keeps a multi-minute Docker
+          # install from delaying the node's availability.
+          NodeReady: !If
+            - MonitoringEnabled
+            - - Name: install-monitoring
+                ScriptSource:
+                  ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/install-monitoring.sh'
+                Arguments: !If
+                  - HasDcgmImage
+                  - - !Ref MonitoringVersion
+                    - !Ref MonitoringRepo
+                    - !Ref DcgmExporterImage
+                  - - !Ref MonitoringVersion
+                    - !Ref MonitoringRepo
+                ExecutionPolicy: FIRST_BOOT_ONLY
+                OnError: CONTINUE
+            - !Ref AWS::NoValue
 
   PCSQueueCompute:
     Type: AWS::PCS::Queue
@@ -373,151 +488,6 @@ Resources:
           HttpPutResponseHopLimit: 4
           HttpTokens: required
           InstanceMetadataTags: enabled
-        UserData:
-          Fn::Base64: !Sub |
-            MIME-Version: 1.0
-            Content-Type: multipart/mixed; boundary="==MYBOUNDARY=="
-
-            --==MYBOUNDARY==
-            Content-Type: text/cloud-config; charset="us-ascii"
-            MIME-Version: 1.0
-
-            runcmd:
-            # --- Protect running jobs from unattended-upgrades / needrestart ---
-            # apt-daily-upgrade updates base libraries (e.g. glibc). needrestart then
-            # auto-restarts every service linked against them. slurmd links libc, so it
-            # gets restarted mid-upgrade - which KILLS the jobs running under it (the
-            # step is torn down and the job requeues from scratch). Exclude slurmd
-            # from needrestart's automatic restart so a security upgrade can
-            # never take down a running job. Security packages still install; only the
-            # slurmd auto-restart is suppressed. (PCS runs the controller managed-side;
-            # slurmd is the only Slurm systemd service on login/compute nodes. qr(^slurmd)
-            # also covers the versioned units, e.g. slurmd-25.11.)
-            # runcmd runs under /bin/sh (dash) - keep this POSIX-clean, no bashisms.
-            - |
-              mkdir -p /etc/needrestart/conf.d &&
-              cat > /etc/needrestart/conf.d/90-pcs-slurm.conf <<'NRCONF' &&
-              # AWS PCS: never auto-restart slurmd - restarting it kills
-              # the jobs running under it. Managed by add-cng UserData.
-              $nrconf{override_rc} = { qr(^slurmd) => 0 };
-              NRCONF
-              echo "needrestart: slurmd excluded from auto-restart" | tee /var/log/pcs-needrestart-guard.log
-            # Post-install script (optional) - generic OnNodeConfigured-style hook.
-            # Downloads and runs a user-supplied script (e.g. Enroot/Pyxis install).
-            - |
-              if [ -n "${PostInstallScriptUrl}" ]; then
-                echo "Downloading post-install script from ${PostInstallScriptUrl}..." | tee /var/log/pcs-post-install.log
-                case "${PostInstallScriptUrl}" in
-                  s3://*)
-                    # Resolve the bucket's real region via HTTPS HEAD and pass it as
-                    # --region. Without this, `aws s3 cp` uses the instance's IMDS
-                    # region for signing; if that differs from the bucket's region,
-                    # the HeadObject probe gets 301 Moved Permanently and the CLI's
-                    # CRT S3 client fails to recover (aws-c-s3 AWS_ERROR_S3_INVALID_
-                    # RESPONSE_STATUS 14343). Symptom: post-install exit 127 on GPU
-                    # CNGs when the templates bucket sits in a different region
-                    # than the cluster.
-                    S3_URL="${PostInstallScriptUrl}"
-                    S3_BUCKET_FOR_HEAD=$(printf '%s' "$S3_URL" | sed -E 's#^s3://([^/]+).*#\1#')
-                    S3_BUCKET_REGION=$(curl -sI "https://$S3_BUCKET_FOR_HEAD.s3.amazonaws.com/" \
-                      | tr -d '\r' | awk -F': ' 'tolower($1)=="x-amz-bucket-region"{print tolower($2)}')
-                    if [ -n "$S3_BUCKET_REGION" ]; then
-                      echo "Resolved bucket region: $S3_BUCKET_REGION" | tee -a /var/log/pcs-post-install.log
-                      aws s3 cp "$S3_URL" /tmp/pcs-post-install.sh --region "$S3_BUCKET_REGION" >> /var/log/pcs-post-install.log 2>&1
-                    else
-                      echo "Bucket region lookup failed; falling back to CLI default" | tee -a /var/log/pcs-post-install.log
-                      aws s3 cp "$S3_URL" /tmp/pcs-post-install.sh >> /var/log/pcs-post-install.log 2>&1
-                    fi
-                    ;;
-                  *)      curl -fsSL "${PostInstallScriptUrl}" -o /tmp/pcs-post-install.sh ;;
-                esac
-                chmod +x /tmp/pcs-post-install.sh
-                echo "Executing post-install script..." | tee -a /var/log/pcs-post-install.log
-                # Tell the script this cluster's Slurm version (it can't discover it at
-                # first boot, before slurmd/profile.d/controller exist). See script header.
-                export PCS_SLURM_VERSION="${SlurmVersion}"
-                bash /tmp/pcs-post-install.sh ${PostInstallScriptArgs} >> /var/log/pcs-post-install.log 2>&1
-                echo "Post-install script completed (exit $?)" | tee -a /var/log/pcs-post-install.log
-              else
-                echo "No post-install script configured (PostInstallScriptUrl empty)" | tee /var/log/pcs-post-install.log
-              fi
-            # FSx Home directories mount
-            - mkdir -p /tmp/home
-            - rsync -aA /home/ /tmp/home
-            - echo "${FSxOpenZFSFilesystemId}.fsx.${AWS::Region}.amazonaws.com:/fsx/ /home nfs noatime,nfsvers=3,sync,nconnect=16,rsize=1048576,wsize=1048576,defaults 0 0" >> /etc/fstab
-            - mount -a -t nfs defaults
-            - if [ "enabled" = "$(sestatus | awk '/^SELinux status:/{print $3}')" ]; then setsebool -P use_nfs_home_dirs 1; fi
-            - rsync -aA --ignore-existing /tmp/home/ /home
-            - rm -rf /tmp/home/
-            # If provided, mount FSxL filesystem as /fsx
-            - if [ ! -z "${FSxLustreFilesystemId}" ]; then mkdir -p /fsx; mount -t lustre -o noatime,flock,lazystatfs ${FSxLustreFilesystemId}.fsx.${AWS::Region}.amazonaws.com@tcp:/${FSxLustreFilesystemMountName} /fsx; chmod 1777 /fsx; fi
-            # Monitoring stack installation (optional, enabled on Login Node only)
-            - |
-              if [ "${DeployMonitoring}" = "true" ]; then
-                echo "Installing monitoring stack..."
-                # Fetch post-install.sh from MonitoringRepo at the MonitoringVersion ref, and
-                # pass both the ref and the repo to it so the tarball is pulled from the same
-                # source. This lets a fork + branch be used for testing unreleased changes.
-                # As of v2.6.3 the installer auto-detects the Ubuntu 'ubuntu' user and runs
-                # install.sh itself (PR #44), so no ec2-user shim or local-var patch is needed.
-                # Optional dcgm-exporter image override (e.g. a B300-capable DCGM
-                # >= 4.4.0 build by digest). The monitoring installer reads
-                # DCGM_EXPORTER_IMAGE from its environment and falls back to its
-                # default pin when empty, so leaving DcgmExporterImage empty keeps
-                # the stock behaviour. See aws-parallelcluster-monitoring #50.
-                export DCGM_EXPORTER_IMAGE="${DcgmExporterImage}"
-                curl -fsSL https://raw.githubusercontent.com/${MonitoringRepo}/${MonitoringVersion}/post-install.sh -o /tmp/post-install.sh
-                # Make every child `apt-get` in the upstream installer wait up to 5 min
-                # for the dpkg lock (default is fail-fast). The installer runs unedited,
-                # so we can't pass `-o DPkg::Lock::Timeout=300` per-call — an apt.conf.d
-                # drop-in applies globally to the caller and its children. Fixes the
-                # first-boot race with unattended-upgrades / apt-daily / this node's own
-                # post-install that used to fail with "Could not get lock". Same value
-                # install-enroot-pyxis.sh has been using; sibling helper for the
-                # monitoring path.
-                echo 'DPkg::Lock::Timeout "300";' > /etc/apt/apt.conf.d/99lock-timeout
-                # Retry up to 3 times for non-lock transient failures at first boot
-                # (network, or the shared NFS /home still settling). The installer is
-                # idempotent (reuses the existing Grafana SSM param, recreates
-                # containers), so re-running self-heals a one-off hiccup instead of
-                # leaving the node unmonitored.
-                rc=1
-                for attempt in 1 2 3; do
-                  echo "Monitoring install attempt $attempt/3..." >> /var/log/monitoring-install.log
-                  bash /tmp/post-install.sh ${MonitoringVersion} ${MonitoringRepo} >> /var/log/monitoring-install.log 2>&1
-                  rc=$?
-                  [ $rc -eq 0 ] && break
-                  echo "Monitoring install attempt $attempt failed (exit $rc); retrying in 15s..." >> /var/log/monitoring-install.log
-                  sleep 15
-                done
-                echo "Monitoring installation complete (exit $rc)" >> /var/log/monitoring-install.log
-              fi
-            - |
-              # Multi-user directory setup (optional, DirectoryRole != none)
-              if [ "${DirectoryRole}" != "none" ]; then
-                export LDAP_DOMAIN_SUFFIX="${DirectoryDomainSuffix}"
-                export LDAP_DOMAIN=$(echo "${DirectoryDomainSuffix}" | sed 's/dc=//g; s/,/./g')
-                export LDAP_ADMIN_PASSWORD=$(openssl rand -base64 16)
-                export CLUSTER_ID="${ClusterId}"
-                export DIRECTORY_DNS_IPS=""
-                # Pass the script source so the server role can install the
-                # ldap-add-user.sh helper onto /usr/local/bin from the same bucket.
-                export S3_BUCKET="${S3BucketName}"
-                export S3_KEY_PREFIX="${S3KeyPrefix}"
-                # Resolve the bucket's region (see post-install block above for why —
-                # cross-region cp gets 301 on multi-NIC instances).
-                S3_BUCKET_REGION=$(curl -sI "https://${S3BucketName}.s3.amazonaws.com/" \
-                  | tr -d '\r' | awk -F': ' 'tolower($1)=="x-amz-bucket-region"{print tolower($2)}')
-                if [ -n "$S3_BUCKET_REGION" ]; then
-                  aws s3 cp s3://${S3BucketName}/${S3KeyPrefix}scripts/setup-directory.sh /tmp/setup-directory.sh --region "$S3_BUCKET_REGION"
-                else
-                  aws s3 cp s3://${S3BucketName}/${S3KeyPrefix}scripts/setup-directory.sh /tmp/setup-directory.sh
-                fi
-                chmod +x /tmp/setup-directory.sh
-                bash /tmp/setup-directory.sh "${DirectoryRole}" 2>&1 | tee /var/log/directory-setup.log
-              fi
-
-            --==MYBOUNDARY==
         NetworkInterfaces:
           # Primary network interface: ENA on network card 0, device index 0.
           # On P6, network card 0 does not support EFA (EFA limit 0), so this
