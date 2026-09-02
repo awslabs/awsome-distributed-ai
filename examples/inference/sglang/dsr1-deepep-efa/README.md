@@ -174,11 +174,14 @@ Three things to know before running this on Blackwell:
   `setup/env_vars` derives `IFACE` from the default route, so the interface name is not something you
   need to know per instance family.
 
-**Serving on Blackwell is not validated here.** The DeepEP-EFA kernels are — the same
-`567632d` + EFA patch, same NVSHMEM 3.7.0, is measured out to 256 ranks on `p6-b300` in
-[`ep-backend-comparison`](../../../../micro-benchmarks/expert-parallelism/ep-backend-comparison/RESULTS.md).
-The serving-side gap matters, because **on B300 the published SGLang comparison goes the other
-way**: see [Blackwell: expect DeepEP to lose at 2 nodes](./benchmarks/README.md#blackwell-expect-deepep-to-lose-at-2-nodes).
+**Serving on Blackwell is not validated here.** The older B300 backend comparison previously cited
+here has been retired because its backend-native timing and byte accounting did not support a
+cross-backend ranking. The replacement
+[`ep-backend-comparison`](../../../../micro-benchmarks/expert-parallelism/ep-backend-comparison/RESULTS.md)
+defines common boundaries for synthetic Decode-like and Prefill-like communication workloads at
+EP16 and EP32 on B200. Its replacement result matrix is pending and does not establish B300 serving
+behavior. See
+[Blackwell serving needs a matched measurement](./benchmarks/README.md#blackwell-serving-needs-a-matched-measurement).
 
 ## Smoke-test the EFA transport before loading the model
 

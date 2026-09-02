@@ -1,0 +1,1243 @@
+{
+  "bootstrap_samples_dimensionless": 20000,
+  "campaign_provenance": {
+    "campaign_id": "ep-b200-use1-20260901023226",
+    "cluster": "ml-clusters-shared-us-east-1",
+    "comparison": {
+      "experts": 256,
+      "hidden_dimensions": 7168,
+      "independent_starts": 4,
+      "measured_iterations": 100,
+      "profiles": {
+        "decode": {
+          "api_mode": "low-latency",
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "tokens_per_rank": 128
+        },
+        "prefill": {
+          "api_mode": "normal",
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "tokens_per_rank": 4096
+        }
+      },
+      "top_k_dimensionless": 8,
+      "warmup_iterations": 20
+    },
+    "created_at_utc": "2026-09-01T02:33:40Z",
+    "git_commit": "df6d2943f0348510772bd6fefe50d0b22d99d70f",
+    "images": {
+      "deepep-v1-nvshmem": "159553542841.dkr.ecr.ap-south-1.amazonaws.com/adai/dsv3-ep-backend-comparison-deepep-v1-nvshmem@sha256:175a8470e11bc7832024941d1775923d5e8ecae2c6dc06183d5f1653d66b4fac",
+      "deepep-v2-gin-gda": "159553542841.dkr.ecr.ap-south-1.amazonaws.com/adai/dsv3-ep-backend-comparison-deepep-v2-gin-gda@sha256:4d07367ea290c5d6ec3c02b223ac819feed5240a46fd4a6492421e9c0853dbeb",
+      "uccl": "159553542841.dkr.ecr.ap-south-1.amazonaws.com/adai/dsv3-ep-backend-comparison-uccl@sha256:a703a0d35916bbd51b2d34d968626d9617cbceb328d64b920f21ad159d93c91a"
+    },
+    "region": "us-east-1"
+  },
+  "cells": [
+    {
+      "arms": {
+        "deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_primary_value": [
+            1.0173119902610779,
+            1.0266720056533813
+          ],
+          "median_aggregate_input_tokens_per_second": 2008238.105890834,
+          "median_effective_logical_gigabytes_per_second_per_rank": 21.81749878239802,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 10.90874939119901,
+          "median_latency_ms": 1.0198000073432922,
+          "median_primary_value": 1.0198000073432922,
+          "num_sms_dimensionless": null,
+          "per_start_median_latency_ms": [
+            1.0266720056533813,
+            1.0190080404281616,
+            1.0173119902610779,
+            1.0205919742584229
+          ],
+          "per_start_primary_values": [
+            1.0266720056533813,
+            1.0190080404281616,
+            1.0173119902610779,
+            1.0205919742584229
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.39934868082360114,
+          "starts": 4
+        },
+        "deepep-v2-gin-gda": {
+          "bootstrap_95_percent_ci_primary_value": [
+            0.4625280052423477,
+            0.4785120040178299
+          ],
+          "median_aggregate_input_tokens_per_second": 4388641.2161425175,
+          "median_effective_logical_gigabytes_per_second_per_rank": 47.678198172172316,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 23.839099086086158,
+          "median_latency_ms": 0.46667999774217606,
+          "median_primary_value": 0.46667999774217606,
+          "num_sms_dimensionless": 64,
+          "per_start_median_latency_ms": [
+            0.4697919934988022,
+            0.4635680019855499,
+            0.4785120040178299,
+            0.4625280052423477
+          ],
+          "per_start_primary_values": [
+            0.4697919934988022,
+            0.4635680019855499,
+            0.4785120040178299,
+            0.4625280052423477
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 1.5674916669424408,
+          "starts": 4
+        },
+        "uccl": {
+          "bootstrap_95_percent_ci_primary_value": [
+            0.5101599991321564,
+            0.5261439979076385
+          ],
+          "median_aggregate_input_tokens_per_second": 3943776.299439854,
+          "median_effective_logical_gigabytes_per_second_per_rank": 42.845185717114575,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 21.422592858557287,
+          "median_latency_ms": 0.5193120092153549,
+          "median_primary_value": 0.5193120092153549,
+          "num_sms_dimensionless": null,
+          "per_start_median_latency_ms": [
+            0.5167360007762909,
+            0.5101599991321564,
+            0.5261439979076385,
+            0.521888017654419
+          ],
+          "per_start_primary_values": [
+            0.5167360007762909,
+            0.5101599991321564,
+            0.5261439979076385,
+            0.521888017654419
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 1.3279826839964002,
+          "starts": 4
+        }
+      },
+      "comparisons": {
+        "deepep-v2-gin-gda_vs_deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_improvement_percent": [
+            52.963101919694566,
+            54.68041911867596
+          ],
+          "direction_supported": true,
+          "median_paired_improvement_percent": 54.3745963712967,
+          "paired_improvement_percent_per_start": [
+            54.24127755389383,
+            54.50791518869956,
+            52.963101919694566,
+            54.68041911867596
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds"
+        },
+        "deepep-v2-gin-gda_vs_uccl": {
+          "bootstrap_95_percent_ci_improvement_percent": [
+            9.053033785281377,
+            11.374089920450698
+          ],
+          "direction_supported": true,
+          "median_paired_improvement_percent": 9.108769150108744,
+          "paired_improvement_percent_per_start": [
+            9.084717768253977,
+            9.13282053196351,
+            9.053033785281377,
+            11.374089920450698
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds"
+        }
+      },
+      "dispatch_dtype": "fp8",
+      "input_hash_sha256": "829eba61c7ee2f8a7ff38ac4a993ee4508b1d7e6dd1e2182be31943d13e58ed2",
+      "primary_metric": "slowest-rank latency in milliseconds",
+      "route_hash_sha256": "2faaa30925b7e296347a15963d52ab5f828cccbced161eac81c84c3134f26884",
+      "tokens_per_rank": 128,
+      "workload_profile": "decode",
+      "world_size_ranks": 16
+    },
+    {
+      "arms": {
+        "deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_primary_value": [
+            1.029919981956482,
+            1.0412319898605347
+          ],
+          "median_aggregate_input_tokens_per_second": 1977020.2902959902,
+          "median_effective_logical_gigabytes_per_second_per_rank": 28.342562881683314,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 14.171281440841657,
+          "median_latency_ms": 1.0359120070934296,
+          "median_primary_value": 1.0359120070934296,
+          "num_sms_dimensionless": null,
+          "per_start_median_latency_ms": [
+            1.0390719771385193,
+            1.0412319898605347,
+            1.029919981956482,
+            1.0327520370483398
+          ],
+          "per_start_primary_values": [
+            1.0390719771385193,
+            1.0412319898605347,
+            1.029919981956482,
+            1.0327520370483398
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.5110851319848176,
+          "starts": 4
+        },
+        "deepep-v2-gin-gda": {
+          "bootstrap_95_percent_ci_primary_value": [
+            0.4790079891681671,
+            0.5273279845714569
+          ],
+          "median_aggregate_input_tokens_per_second": 4126801.032782062,
+          "median_effective_logical_gigabytes_per_second_per_rank": 59.16181960596364,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 29.58090980298182,
+          "median_latency_ms": 0.4963119998574257,
+          "median_primary_value": 0.4963119998574257,
+          "num_sms_dimensionless": 64,
+          "per_start_median_latency_ms": [
+            0.4790079891681671,
+            0.5009759962558746,
+            0.5273279845714569,
+            0.49164800345897675
+          ],
+          "per_start_primary_values": [
+            0.4790079891681671,
+            0.5009759962558746,
+            0.5273279845714569,
+            0.49164800345897675
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 4.0975286101088075,
+          "starts": 4
+        },
+        "uccl": {
+          "bootstrap_95_percent_ci_primary_value": [
+            0.5839679837226868,
+            0.5956160128116608
+          ],
+          "median_aggregate_input_tokens_per_second": 3445400.0260293,
+          "median_effective_logical_gigabytes_per_second_per_rank": 49.393254773156045,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 24.696627386578022,
+          "median_latency_ms": 0.594416007399559,
+          "median_primary_value": 0.594416007399559,
+          "num_sms_dimensionless": null,
+          "per_start_median_latency_ms": [
+            0.5839679837226868,
+            0.5940160155296326,
+            0.5948159992694855,
+            0.5956160128116608
+          ],
+          "per_start_primary_values": [
+            0.5839679837226868,
+            0.5940160155296326,
+            0.5948159992694855,
+            0.5956160128116608
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.9226761310329404,
+          "starts": 4
+        }
+      },
+      "comparisons": {
+        "deepep-v2-gin-gda_vs_deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_improvement_percent": [
+            48.7991306305446,
+            53.90040346509024
+          ],
+          "direction_supported": true,
+          "median_paired_improvement_percent": 52.14030381912623,
+          "paired_improvement_percent_per_start": [
+            53.90040346509024,
+            51.88622697589452,
+            48.7991306305446,
+            52.39438066235794
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds"
+        },
+        "deepep-v2-gin-gda_vs_uccl": {
+          "bootstrap_95_percent_ci_improvement_percent": [
+            11.34603218153395,
+            17.97358716233368
+          ],
+          "direction_supported": true,
+          "median_paired_improvement_percent": 16.55921181158276,
+          "paired_improvement_percent_per_start": [
+            17.97358716233368,
+            15.662880602773347,
+            11.34603218153395,
+            17.455543020392174
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds"
+        }
+      },
+      "dispatch_dtype": "bf16",
+      "input_hash_sha256": "829eba61c7ee2f8a7ff38ac4a993ee4508b1d7e6dd1e2182be31943d13e58ed2",
+      "primary_metric": "slowest-rank latency in milliseconds",
+      "route_hash_sha256": "2faaa30925b7e296347a15963d52ab5f828cccbced161eac81c84c3134f26884",
+      "tokens_per_rank": 128,
+      "workload_profile": "decode",
+      "world_size_ranks": 16
+    },
+    {
+      "arms": {
+        "deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_primary_value": [
+            1.542847990989685,
+            1.565551996231079
+          ],
+          "median_aggregate_input_tokens_per_second": 2631129.4593464523,
+          "median_effective_logical_gigabytes_per_second_per_rank": 14.29229522316993,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 10.719221417377447,
+          "median_latency_ms": 1.5567520260810852,
+          "median_primary_value": 1.5567520260810852,
+          "num_sms_dimensionless": null,
+          "per_start_median_latency_ms": [
+            1.542847990989685,
+            1.565551996231079,
+            1.5598400235176086,
+            1.5536640286445618
+          ],
+          "per_start_primary_values": [
+            1.542847990989685,
+            1.565551996231079,
+            1.5598400235176086,
+            1.5536640286445618
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.624762373014811,
+          "starts": 4
+        },
+        "deepep-v2-gin-gda": {
+          "bootstrap_95_percent_ci_primary_value": [
+            0.8295680284500122,
+            0.8669599890708923
+          ],
+          "median_aggregate_input_tokens_per_second": 4898703.912922395,
+          "median_effective_logical_gigabytes_per_second_per_rank": 26.609759654994456,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 19.95731974124584,
+          "median_latency_ms": 0.8361440151929855,
+          "median_primary_value": 0.8361440151929855,
+          "num_sms_dimensionless": 64,
+          "per_start_median_latency_ms": [
+            0.8669599890708923,
+            0.8380800187587738,
+            0.8342080116271973,
+            0.8295680284500122
+          ],
+          "per_start_primary_values": [
+            0.8669599890708923,
+            0.8380800187587738,
+            0.8342080116271973,
+            0.8295680284500122
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 2.0027011709302824,
+          "starts": 4
+        },
+        "uccl": {
+          "bootstrap_95_percent_ci_primary_value": [
+            0.7700800001621246,
+            0.7799360156059265
+          ],
+          "median_aggregate_input_tokens_per_second": 5279730.968040694,
+          "median_effective_logical_gigabytes_per_second_per_rank": 28.679498618397048,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 21.509623963797786,
+          "median_latency_ms": 0.7757999897003174,
+          "median_primary_value": 0.7757999897003174,
+          "num_sms_dimensionless": null,
+          "per_start_median_latency_ms": [
+            0.7772959768772125,
+            0.7700800001621246,
+            0.7743040025234222,
+            0.7799360156059265
+          ],
+          "per_start_primary_values": [
+            0.7772959768772125,
+            0.7700800001621246,
+            0.7743040025234222,
+            0.7799360156059265
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.5454967239331312,
+          "starts": 4
+        }
+      },
+      "comparisons": {
+        "deepep-v2-gin-gda_vs_deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_improvement_percent": [
+            43.80781553763008,
+            46.60570025723393
+          ],
+          "direction_supported": true,
+          "median_paired_improvement_percent": 46.49354292248587,
+          "paired_improvement_percent_per_start": [
+            43.80781553763008,
+            46.46744274374958,
+            46.519643101222165,
+            46.60570025723393
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds"
+        },
+        "deepep-v2-gin-gda_vs_uccl": {
+          "bootstrap_95_percent_ci_improvement_percent": [
+            -11.53537582349327,
+            -6.3636005840205945
+          ],
+          "direction_supported": true,
+          "median_paired_improvement_percent": -8.283375612940784,
+          "paired_improvement_percent_per_start": [
+            -11.53537582349327,
+            -8.830253815491009,
+            -7.736497410390561,
+            -6.3636005840205945
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds"
+        }
+      },
+      "dispatch_dtype": "fp8",
+      "input_hash_sha256": "f60cdd82e9a2396f8e4ae7800e19205dd438d4a179b7d4185c479cf895ffacc3",
+      "primary_metric": "slowest-rank latency in milliseconds",
+      "route_hash_sha256": "96c8e609e9944e3b151c8ad8d4f5b52d102fbd4b2757f81cf65fe21b1cf7e0e2",
+      "tokens_per_rank": 128,
+      "workload_profile": "decode",
+      "world_size_ranks": 32
+    },
+    {
+      "arms": {
+        "deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_primary_value": [
+            1.5464959740638733,
+            1.569599986076355
+          ],
+          "median_aggregate_input_tokens_per_second": 2626007.1376762423,
+          "median_effective_logical_gigabytes_per_second_per_rank": 18.823219162863303,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 14.11741437214748,
+          "median_latency_ms": 1.5598079860210419,
+          "median_primary_value": 1.5598079860210419,
+          "num_sms_dimensionless": null,
+          "per_start_median_latency_ms": [
+            1.5464959740638733,
+            1.569599986076355,
+            1.566111981868744,
+            1.5535039901733398
+          ],
+          "per_start_primary_values": [
+            1.5464959740638733,
+            1.569599986076355,
+            1.566111981868744,
+            1.5535039901733398
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.6923441372697804,
+          "starts": 4
+        },
+        "deepep-v2-gin-gda": {
+          "bootstrap_95_percent_ci_primary_value": [
+            0.9300479888916016,
+            0.9611999988555908
+          ],
+          "median_aggregate_input_tokens_per_second": 4347061.519008434,
+          "median_effective_logical_gigabytes_per_second_per_rank": 31.159736968252457,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 23.36980272618934,
+          "median_latency_ms": 0.9423200041055679,
+          "median_primary_value": 0.9423200041055679,
+          "num_sms_dimensionless": 64,
+          "per_start_median_latency_ms": [
+            0.9300479888916016,
+            0.9339520037174225,
+            0.9611999988555908,
+            0.9506880044937134
+          ],
+          "per_start_primary_values": [
+            0.9300479888916016,
+            0.9339520037174225,
+            0.9611999988555908,
+            0.9506880044937134
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 1.5426687437529003,
+          "starts": 4
+        },
+        "uccl": {
+          "bootstrap_95_percent_ci_primary_value": [
+            0.8695360124111176,
+            0.8757120072841644
+          ],
+          "median_aggregate_input_tokens_per_second": 4698111.155141957,
+          "median_effective_logical_gigabytes_per_second_per_rank": 33.676060760057545,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 25.25704557004316,
+          "median_latency_ms": 0.8718399852514267,
+          "median_primary_value": 0.8718399852514267,
+          "num_sms_dimensionless": null,
+          "per_start_median_latency_ms": [
+            0.8713759779930115,
+            0.8757120072841644,
+            0.8723039925098419,
+            0.8695360124111176
+          ],
+          "per_start_primary_values": [
+            0.8713759779930115,
+            0.8757120072841644,
+            0.8723039925098419,
+            0.8695360124111176
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.2968836879442929,
+          "starts": 4
+        }
+      },
+      "comparisons": {
+        "deepep-v2-gin-gda_vs_deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_improvement_percent": [
+            38.625078539489195,
+            40.49745081534491
+          ],
+          "direction_supported": true,
+          "median_paired_improvement_percent": 39.33229139967528,
+          "paired_improvement_percent_per_start": [
+            39.86094988352108,
+            40.49745081534491,
+            38.625078539489195,
+            38.803632915829475
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds"
+        },
+        "deepep-v2-gin-gda_vs_uccl": {
+          "bootstrap_95_percent_ci_improvement_percent": [
+            -10.190943422140295,
+            -6.650587858658817
+          ],
+          "direction_supported": true,
+          "median_paired_improvement_percent": -8.033026310534792,
+          "paired_improvement_percent_per_start": [
+            -6.733260082946726,
+            -6.650587858658817,
+            -10.190943422140295,
+            -9.332792538122858
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds"
+        }
+      },
+      "dispatch_dtype": "bf16",
+      "input_hash_sha256": "f60cdd82e9a2396f8e4ae7800e19205dd438d4a179b7d4185c479cf895ffacc3",
+      "primary_metric": "slowest-rank latency in milliseconds",
+      "route_hash_sha256": "96c8e609e9944e3b151c8ad8d4f5b52d102fbd4b2757f81cf65fe21b1cf7e0e2",
+      "tokens_per_rank": 128,
+      "workload_profile": "decode",
+      "world_size_ranks": 32
+    },
+    {
+      "arms": {
+        "deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_primary_value": [
+            2.9566080570220947,
+            2.978879928588867
+          ],
+          "median_aggregate_input_tokens_per_second": 22047219.38369958,
+          "median_effective_logical_gigabytes_per_second_per_rank": 239.52099138451223,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 119.76049569225611,
+          "median_latency_ms": 2.9725359678268433,
+          "median_primary_value": 2.9725359678268433,
+          "num_sms_dimensionless": 20,
+          "per_start_median_latency_ms": [
+            2.978879928588867,
+            2.9679999351501465,
+            2.97707200050354,
+            2.9566080570220947
+          ],
+          "per_start_primary_values": [
+            2.978879928588867,
+            2.9679999351501465,
+            2.97707200050354,
+            2.9566080570220947
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.34342494685555125,
+          "starts": 4
+        },
+        "deepep-v2-gin-gda": {
+          "bootstrap_95_percent_ci_primary_value": [
+            2.644816040992737,
+            2.663935899734497
+          ],
+          "median_aggregate_input_tokens_per_second": 24747475.940599002,
+          "median_effective_logical_gigabytes_per_second_per_rank": 268.8565786186675,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 134.42828930933376,
+          "median_latency_ms": 2.64819198846817,
+          "median_primary_value": 2.64819198846817,
+          "num_sms_dimensionless": 64,
+          "per_start_median_latency_ms": [
+            2.6455039978027344,
+            2.644816040992737,
+            2.663935899734497,
+            2.650879979133606
+          ],
+          "per_start_primary_values": [
+            2.6455039978027344,
+            2.644816040992737,
+            2.663935899734497,
+            2.650879979133606
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.3341620395217748,
+          "starts": 4
+        },
+        "uccl": {
+          "bootstrap_95_percent_ci_primary_value": [
+            5.261408090591431,
+            5.28272008895874
+          ],
+          "median_aggregate_input_tokens_per_second": 12424338.794829214,
+          "median_effective_logical_gigabytes_per_second_per_rank": 134.97801666702458,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 67.48900833351229,
+          "median_latency_ms": 5.274808049201965,
+          "median_primary_value": 5.274808049201965,
+          "num_sms_dimensionless": 20,
+          "per_start_median_latency_ms": [
+            5.28272008895874,
+            5.275792121887207,
+            5.273823976516724,
+            5.261408090591431
+          ],
+          "per_start_primary_values": [
+            5.28272008895874,
+            5.275792121887207,
+            5.273823976516724,
+            5.261408090591431
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.1683924197874614,
+          "starts": 4
+        }
+      },
+      "comparisons": {
+        "deepep-v2-gin-gda_vs_deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_improvement_percent": [
+            10.34050073571196,
+            11.191318172533968
+          ],
+          "direction_supported": true,
+          "median_paired_improvement_percent": 10.703601509586964,
+          "paired_improvement_percent_per_start": [
+            11.191318172533968,
+            10.88894545885697,
+            10.51825756031696,
+            10.34050073571196
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds"
+        },
+        "deepep-v2-gin-gda_vs_uccl": {
+          "bootstrap_95_percent_ci_improvement_percent": [
+            49.48758412119048,
+            49.92155644717907
+          ],
+          "direction_supported": true,
+          "median_paired_improvement_percent": 49.742682503991794,
+          "paired_improvement_percent_per_start": [
+            49.92155644717907,
+            49.86883524048598,
+            49.48758412119048,
+            49.61652976749761
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds"
+        }
+      },
+      "dispatch_dtype": "fp8",
+      "input_hash_sha256": "04a406d03e5e0a9d44119896e94ceed7d3257977c5de9474cf39480200b29084",
+      "primary_metric": "slowest-rank latency in milliseconds",
+      "route_hash_sha256": "ee2cd82f82a4f909f261f1d252146085a492a4a74a0e10000a1c48e717ce0b7a",
+      "tokens_per_rank": 4096,
+      "workload_profile": "prefill",
+      "world_size_ranks": 16
+    },
+    {
+      "arms": {
+        "deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_primary_value": [
+            3.519215941429138,
+            3.5455039739608765
+          ],
+          "median_aggregate_input_tokens_per_second": 18504139.06613053,
+          "median_effective_logical_gigabytes_per_second_per_rank": 265.27533765204726,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 132.63766882602363,
+          "median_latency_ms": 3.541696012020111,
+          "median_primary_value": 3.541696012020111,
+          "num_sms_dimensionless": 20,
+          "per_start_median_latency_ms": [
+            3.5455039739608765,
+            3.5443040132522583,
+            3.539088010787964,
+            3.519215941429138
+          ],
+          "per_start_primary_values": [
+            3.5455039739608765,
+            3.5443040132522583,
+            3.539088010787964,
+            3.519215941429138
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.3448356585861127,
+          "starts": 4
+        },
+        "deepep-v2-gin-gda": {
+          "bootstrap_95_percent_ci_primary_value": [
+            3.366368055343628,
+            3.3743680715560913
+          ],
+          "median_aggregate_input_tokens_per_second": 19456817.42820971,
+          "median_effective_logical_gigabytes_per_second_per_rank": 278.9329346508144,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 139.4664673254072,
+          "median_latency_ms": 3.368279993534088,
+          "median_primary_value": 3.368279993534088,
+          "num_sms_dimensionless": 64,
+          "per_start_median_latency_ms": [
+            3.366368055343628,
+            3.3695199489593506,
+            3.3743680715560913,
+            3.3670400381088257
+          ],
+          "per_start_primary_values": [
+            3.366368055343628,
+            3.3695199489593506,
+            3.3743680715560913,
+            3.3670400381088257
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.1076064520339789,
+          "starts": 4
+        },
+        "uccl": {
+          "bootstrap_95_percent_ci_primary_value": [
+            5.48633599281311,
+            5.513792037963867
+          ],
+          "median_aggregate_input_tokens_per_second": 11900024.39118531,
+          "median_effective_logical_gigabytes_per_second_per_rank": 170.5987496720326,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 85.2993748360163,
+          "median_latency_ms": 5.507216095924377,
+          "median_primary_value": 5.507216095924377,
+          "num_sms_dimensionless": 20,
+          "per_start_median_latency_ms": [
+            5.505568027496338,
+            5.513792037963867,
+            5.508864164352417,
+            5.48633599281311
+          ],
+          "per_start_primary_values": [
+            5.505568027496338,
+            5.513792037963867,
+            5.508864164352417,
+            5.48633599281311
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.21841615810779905,
+          "starts": 4
+        }
+      },
+      "comparisons": {
+        "deepep-v2-gin-gda_vs_deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_improvement_percent": [
+            4.324142247960906,
+            5.052481112216213
+          ],
+          "direction_supported": true,
+          "median_paired_improvement_percent": 4.792855958486179,
+          "paired_improvement_percent_per_start": [
+            5.052481112216213,
+            4.931407228030803,
+            4.654304688941554,
+            4.324142247960906
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds"
+        },
+        "deepep-v2-gin-gda_vs_uccl": {
+          "bootstrap_95_percent_ci_improvement_percent": [
+            38.62862131448896,
+            38.889244901524314
+          ],
+          "direction_supported": true,
+          "median_paired_improvement_percent": 38.80089123890183,
+          "paired_improvement_percent_per_start": [
+            38.85520915315096,
+            38.889244901524314,
+            38.74657332465271,
+            38.62862131448896
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds"
+        }
+      },
+      "dispatch_dtype": "bf16",
+      "input_hash_sha256": "04a406d03e5e0a9d44119896e94ceed7d3257977c5de9474cf39480200b29084",
+      "primary_metric": "slowest-rank latency in milliseconds",
+      "route_hash_sha256": "ee2cd82f82a4f909f261f1d252146085a492a4a74a0e10000a1c48e717ce0b7a",
+      "tokens_per_rank": 4096,
+      "workload_profile": "prefill",
+      "world_size_ranks": 16
+    },
+    {
+      "arms": {
+        "deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_primary_value": [
+            12.670192241668701,
+            12.8504638671875
+          ],
+          "median_aggregate_input_tokens_per_second": 10280762.549769565,
+          "median_effective_logical_gigabytes_per_second_per_rank": 55.84510217034827,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 41.88382662776121,
+          "median_latency_ms": 12.749264001846313,
+          "median_primary_value": 12.749264001846313,
+          "num_sms_dimensionless": 20,
+          "per_start_median_latency_ms": [
+            12.735360145568848,
+            12.8504638671875,
+            12.76316785812378,
+            12.670192241668701
+          ],
+          "per_start_primary_values": [
+            12.735360145568848,
+            12.8504638671875,
+            12.76316785812378,
+            12.670192241668701
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.5859717138222018,
+          "starts": 4
+        },
+        "deepep-v2-gin-gda": {
+          "bootstrap_95_percent_ci_primary_value": [
+            6.618959903717041,
+            6.63428807258606
+          ],
+          "median_aggregate_input_tokens_per_second": 19791699.498042516,
+          "median_effective_logical_gigabytes_per_second_per_rank": 107.50851167336694,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 80.63138375502521,
+          "median_latency_ms": 6.622575998306274,
+          "median_primary_value": 6.622575998306274,
+          "num_sms_dimensionless": 64,
+          "per_start_median_latency_ms": [
+            6.618959903717041,
+            6.6259520053863525,
+            6.63428807258606,
+            6.619199991226196
+          ],
+          "per_start_primary_values": [
+            6.618959903717041,
+            6.6259520053863525,
+            6.63428807258606,
+            6.619199991226196
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.10908253927471676,
+          "starts": 4
+        },
+        "uccl": {
+          "bootstrap_95_percent_ci_primary_value": [
+            8.069119930267334,
+            8.118288040161133
+          ],
+          "median_aggregate_input_tokens_per_second": 16202922.980013046,
+          "median_effective_logical_gigabytes_per_second_per_rank": 88.01427762743087,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 66.01070822057315,
+          "median_latency_ms": 8.089407920837402,
+          "median_primary_value": 8.089407920837402,
+          "num_sms_dimensionless": 20,
+          "per_start_median_latency_ms": [
+            8.118288040161133,
+            8.084239959716797,
+            8.094575881958008,
+            8.069119930267334
+          ],
+          "per_start_primary_values": [
+            8.118288040161133,
+            8.084239959716797,
+            8.094575881958008,
+            8.069119930267334
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.25533951874322847,
+          "starts": 4
+        }
+      },
+      "comparisons": {
+        "deepep-v2-gin-gda_vs_deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_improvement_percent": [
+            47.757698818037596,
+            48.43803247986149
+          ],
+          "direction_supported": true,
+          "median_paired_improvement_percent": 48.023481902631296,
+          "paired_improvement_percent_per_start": [
+            48.026912250141216,
+            48.4380324798615,
+            48.02005155512138,
+            47.757698818037596
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds"
+        },
+        "deepep-v2-gin-gda_vs_uccl": {
+          "bootstrap_95_percent_ci_improvement_percent": [
+            17.968749399825825,
+            18.468525987584115
+          ],
+          "direction_supported": true,
+          "median_paired_improvement_percent": 18.039488834173856,
+          "paired_improvement_percent_per_start": [
+            18.468525987584115,
+            18.038652509042176,
+            18.040325159305535,
+            17.968749399825825
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds"
+        }
+      },
+      "dispatch_dtype": "fp8",
+      "input_hash_sha256": "f49abec913e14c19c444e1599a536dde42c0ecf5399444a229f780ebbb8b2181",
+      "primary_metric": "slowest-rank latency in milliseconds",
+      "route_hash_sha256": "9b0358f379e45666ab47399443462b55fd2be657fe4a0b0de5bc0581acfd8930",
+      "tokens_per_rank": 4096,
+      "workload_profile": "prefill",
+      "world_size_ranks": 32
+    },
+    {
+      "arms": {
+        "deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_primary_value": [
+            13.16048002243042,
+            13.215904235839844
+          ],
+          "median_aggregate_input_tokens_per_second": 9947071.174950577,
+          "median_effective_logical_gigabytes_per_second_per_rank": 71.30060618204574,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 53.47545463653431,
+          "median_latency_ms": 13.176944017410278,
+          "median_primary_value": 13.176944017410278,
+          "num_sms_dimensionless": 20,
+          "per_start_median_latency_ms": [
+            13.177056312561035,
+            13.215904235839844,
+            13.176831722259521,
+            13.16048002243042
+          ],
+          "per_start_primary_values": [
+            13.177056312561035,
+            13.215904235839844,
+            13.176831722259521,
+            13.16048002243042
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.17857302707002398,
+          "starts": 4
+        },
+        "deepep-v2-gin-gda": {
+          "bootstrap_95_percent_ci_primary_value": [
+            8.703423976898193,
+            8.72648000717163
+          ],
+          "median_aggregate_input_tokens_per_second": 15048865.626301043,
+          "median_effective_logical_gigabytes_per_second_per_rank": 107.87026880932588,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 80.90270160699441,
+          "median_latency_ms": 8.709759950637817,
+          "median_primary_value": 8.709759950637817,
+          "num_sms_dimensionless": 64,
+          "per_start_median_latency_ms": [
+            8.7117919921875,
+            8.703423976898193,
+            8.72648000717163,
+            8.707727909088135
+          ],
+          "per_start_primary_values": [
+            8.7117919921875,
+            8.703423976898193,
+            8.72648000717163,
+            8.707727909088135
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.11497179134425689,
+          "starts": 4
+        },
+        "uccl": {
+          "bootstrap_95_percent_ci_primary_value": [
+            9.878128051757812,
+            9.902144432067871
+          ],
+          "median_aggregate_input_tokens_per_second": 13253295.684015695,
+          "median_effective_logical_gigabytes_per_second_per_rank": 94.99962346302449,
+          "median_effective_scaleout_logical_gigabytes_per_second_per_rank": 71.24971759726836,
+          "median_latency_ms": 9.889768123626709,
+          "median_primary_value": 9.889768123626709,
+          "num_sms_dimensionless": 20,
+          "per_start_median_latency_ms": [
+            9.878128051757812,
+            9.885791778564453,
+            9.893744468688965,
+            9.902144432067871
+          ],
+          "per_start_primary_values": [
+            9.878128051757812,
+            9.885791778564453,
+            9.893744468688965,
+            9.902144432067871
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds",
+          "run_indices_dimensionless": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "run_to_run_cv_percent": 0.10445347483217275,
+          "starts": 4
+        }
+      },
+      "comparisons": {
+        "deepep-v2-gin-gda_vs_deepep-v1-nvshmem": {
+          "bootstrap_95_percent_ci_improvement_percent": [
+            33.774065032415535,
+            34.1443171682826
+          ],
+          "direction_supported": true,
+          "median_paired_improvement_percent": 33.86046431203877,
+          "paired_improvement_percent_per_start": [
+            33.88666037737897,
+            34.1443171682826,
+            33.774065032415535,
+            33.83426824669857
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds"
+        },
+        "deepep-v2-gin-gda_vs_uccl": {
+          "bootstrap_95_percent_ci_improvement_percent": [
+            11.798004943541967,
+            12.062200578610481
+          ],
+          "direction_supported": true,
+          "median_paired_improvement_percent": 11.88376606476688,
+          "paired_improvement_percent_per_start": [
+            11.80725794866329,
+            11.960274180870469,
+            11.798004943541967,
+            12.062200578610481
+          ],
+          "primary_metric": "slowest-rank latency in milliseconds"
+        }
+      },
+      "dispatch_dtype": "bf16",
+      "input_hash_sha256": "f49abec913e14c19c444e1599a536dde42c0ecf5399444a229f780ebbb8b2181",
+      "primary_metric": "slowest-rank latency in milliseconds",
+      "route_hash_sha256": "9b0358f379e45666ab47399443462b55fd2be657fe4a0b0de5bc0581acfd8930",
+      "tokens_per_rank": 4096,
+      "workload_profile": "prefill",
+      "world_size_ranks": 32
+    }
+  ],
+  "comparison_scope": "synthetic decode-like and prefill-like dispatch-plus-combine communication workloads; not end-to-end training or serving",
+  "configuration": {
+    "dispatch_dtypes": [
+      "fp8",
+      "bf16"
+    ],
+    "experts_dimensionless": 256,
+    "hidden_dimensions": 7168,
+    "measured_iterations_dimensionless": 100,
+    "profiles": {
+      "decode": {
+        "api_mode": "low-latency",
+        "primary_metric": "slowest-rank latency in milliseconds",
+        "tokens_per_rank": 128
+      },
+      "prefill": {
+        "api_mode": "normal",
+        "primary_metric": "slowest-rank latency in milliseconds",
+        "tokens_per_rank": 4096
+      }
+    },
+    "top_k_dimensionless": 8,
+    "warmup_iterations_dimensionless": 20,
+    "world_sizes_ranks": [
+      16,
+      32
+    ]
+  },
+  "images": {
+    "deepep-v1-nvshmem": "159553542841.dkr.ecr.ap-south-1.amazonaws.com/adai/dsv3-ep-backend-comparison-deepep-v1-nvshmem@sha256:175a8470e11bc7832024941d1775923d5e8ecae2c6dc06183d5f1653d66b4fac",
+    "deepep-v2-gin-gda": "159553542841.dkr.ecr.ap-south-1.amazonaws.com/adai/dsv3-ep-backend-comparison-deepep-v2-gin-gda@sha256:4d07367ea290c5d6ec3c02b223ac819feed5240a46fd4a6492421e9c0853dbeb",
+    "uccl": "159553542841.dkr.ecr.ap-south-1.amazonaws.com/adai/dsv3-ep-backend-comparison-uccl@sha256:a703a0d35916bbd51b2d34d968626d9617cbceb328d64b920f21ad159d93c91a"
+  },
+  "independent_starts_per_cell": 4,
+  "loaded_nccl_versions_per_arm": {
+    "deepep-v1-nvshmem": [
+      2,
+      31,
+      2
+    ],
+    "deepep-v2-gin-gda": [
+      2,
+      31,
+      2
+    ],
+    "uccl": [
+      2,
+      31,
+      2
+    ]
+  },
+  "logical_payload_definition": "per valid expert assignment: dispatch tensor plus FP8 scales when selected plus BF16 combine tensor; backend metadata excluded",
+  "maximum_run_to_run_cv_percent_for_direction_support": 5.0,
+  "runtime": {
+    "cuda_version": "13.0",
+    "gpu": "NVIDIA B200",
+    "nccl_version": [
+      2,
+      29,
+      7
+    ],
+    "torch_version": "2.13.0+cu130"
+  },
+  "schema_version_dimensionless": 2,
+  "scored_result_records_dimensionless": 96,
+  "status": "PASS",
+  "timing_boundaries": {
+    "decode": "dispatch input ready through dispatch and combine completion; slowest rank CUDA elapsed time; host-side FP8 conversion precedes the boundary",
+    "prefill": "dispatch input and route ready through required layout, dispatch, and combine completion; slowest rank CUDA elapsed time; host-side FP8 conversion precedes the boundary"
+  }
+}
