@@ -1,0 +1,10 @@
+# ModelOpt FP8 quantization recipe — pinned dependencies.
+# Installed into a dedicated venv by setup.sh.
+nvidia-modelopt[hf]==0.44.0
+
+# Example-script dependencies (examples/llm_ptq) needed for hf_ptq.py.
+# We use --attn_implementation eager, so flash-attn is intentionally NOT required.
+fire
+compressed-tensors
+zstandard
+transformers_stream_generator
