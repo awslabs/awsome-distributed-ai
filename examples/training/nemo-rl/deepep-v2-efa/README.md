@@ -14,7 +14,7 @@ still depend on draft upstream PRs.
 
 ## The mechanism chain
 
-```
+```text
 NeMo-RL (GRPO) ── nemo_rl.models.megatron ── Megatron-core MoE flex dispatcher (fused_a2a)
                      └─ deep_ep.ElasticBuffer (DeepEP V2, NCCL backend)
                            └─ NCCL 2.30.4 GIN device API (NCCL_GIN_TYPE=2, CPU-proxy)
@@ -34,7 +34,7 @@ sources.**
 
 **Staged, NOT re-measured:** the image assembly in this folder is **build-staged and has not been
 cluster-re-run**; no performance numbers are published from this folder. The **full GRPO
-rollout-over-DeepEP path depends on 3 draft upstream PRs** (opt-in image layer, default **OFF** —
+rollout-over-DeepEP path depends on 2 draft upstream PRs** (opt-in image layer, default **OFF** —
 see below). What the recipe gates re-verify on the **baseline (upstream-only)** image: static
 substrate asserts (`verify-image.sh`), cross-node `ElasticBuffer` dispatch/combine with an EFA
 TX-counter assert (`run-rollout-probe.sh`), and a loss-decreasing Megatron MoE train step on the
@@ -49,21 +49,24 @@ stock `alltoall` dispatcher (`train-step.sh`). Never read a build-gate as an E2E
 | NCCL | `v2.30.4-1` = commit `1933fdd6` (source build) | GIN device API generation (`nccl_device.h` asserted at build). Commit-pinned, not the bare tag — held to the same moving-ref standard as the other source pins. The NGC base bakes an OLDER NCCL line (2.29.x), so this source-built copy is a deliberately newer line and the `00-nccl-gin.conf` ld.so.conf entry is **load-bearing** — it makes this GIN-capable build win the loader search over the base's baked copy (`verify-image.sh` asserts which one resolves). Source-built so DeepEP has one controlled header/lib root. |
 | aws-ofi-nccl | commit `9c44d34` + PR#1351 head `c2e773d` | The GIN CPU-proxy plugin lineage this folder standardises on (same pins as the TensorRT-LLM NcclEP sibling). These SHAs postdate the Wave-28 run, so they are the standardised lineage, not that run's exact pins. Immutable SHAs — `refs/pull/N/head` is a moving ref. |
 | gdrcopy | commit `c91ad9f` (= v2.5.2) | GIN **requires** gdrcopy compiled in (trap 4). Commit pin, not tag. |
-| DeepEP | `01dc3aa` (upstream `deepseek-ai/DeepEP` main) | Carries EPv2 (ElasticBuffer + NCCL backend) and is the **exact base of draft PR #612**, so the opt-in layer applies `--check`-clean. Stock upstream — NOT a fork. |
+| DeepEP | `97d8f9bc` (**`amazon-contributing/DeepEP`** fork HEAD) | The AWS EPv2/NCCL-Gin tree. Carries EPv2 (ElasticBuffer + NCCL backend) **and the two former-draft [deepseek-ai/DeepEP#612](https://github.com/deepseek-ai/DeepEP/pull/612) EFA fixes in-code** — the `get_rdma_gbs()` sysfs link-rate fast path (`deep_ep/utils/envs.py`) and the auto-QP overflow clamp (`deep_ep/buffers/elastic.py`) — so **no #612 patch is applied on any flavor**. This is the same fork the repo's [`micro-benchmarks/expert-parallelism`](../../../../micro-benchmarks/expert-parallelism) DeepEP-V2 sample already pins (`setup_deepep_gin.sh`). Full 40-char SHA pinned as `DEEPEP_SHA` in the Dockerfile. |
 | Megatron-LM | `19deef67` (main) | The **exact base of draft PR #4632** (ElasticBuffer in the flex dispatcher). |
 | NeMo-RL | `46be4e8` | The **exact base (parent commit) of draft PR #2410** — declares `requires-python ">=3.12"`, which the py3.12 NGC base satisfies. `requirements.txt` is generated from this revision. NOT #2411's base `cc75cad` (which bumps `requires-python` to `>=3.13.13` and hard-fails `pip install -e` on this base). The measured Wave-28 evidence ran 0.5.0rc0; re-pinning to a release tag is a re-measure event. |
 | GPU arch | `TORCH_CUDA_ARCH_LIST=9.0` (H100/H200) | The only measured arch. Blackwell needs an arch-list override and a re-measure. |
 
-## The 3 draft upstream PRs (opt-in layer, default OFF)
+## The 2 draft upstream PRs (opt-in layer, default OFF)
 
 Baked only with `--build-arg APPLY_DRAFT_ROLLOUT_PATCHES=1`; commits pinned at immutable SHAs in
 [`patches/apply_nemo_rl_patches.py`](patches/apply_nemo_rl_patches.py), applied fail-loud,
 self-neutralizing once merged upstream. **The baseline image has zero dependence on them.**
 PR states below are as of 2026-08-25 — check them before relying on this table.
 
+> DeepEP is **not** in this table: the baseline pins the `amazon-contributing/DeepEP` fork, which
+> already carries the former draft [deepseek-ai/DeepEP#612](https://github.com/deepseek-ai/DeepEP/pull/612)
+> EFA fixes in-code (see the Pins table), so there is no DeepEP patch to opt into on either flavor.
+
 | PR | State | What it carries |
 |---|---|---|
-| [deepseek-ai/DeepEP#612](https://github.com/deepseek-ai/DeepEP/pull/612) | open | EFA awareness: auto-QP capped at `EP_EFA_MAX_QPS` (aws-ofi-nccl's GIN request ring is 128 slots; upstream's auto formula overruns it → `CUDA_ERROR_LAUNCH_FAILED` at first dispatch), `get_rdma_gbs()` EFA fast path (SM auto-sizing), dispatch scaleout-interval tuning. |
 | [NVIDIA/Megatron-LM#4632](https://github.com/NVIDIA/Megatron-LM/pull/4632) | open | DeepEP **V2 ElasticBuffer** support in the MoE flex dispatcher (`fused_a2a.py`) — without it, `--moe-enable-deepep` binds the V1 NVSHMEM `Buffer`, which this NCCL-GIN image intentionally does not build. |
 | [NVIDIA-NeMo/RL#2410](https://github.com/NVIDIA-NeMo/RL/pull/2410) | draft, closed unmerged | `LD_LIBRARY_PATH` re-export for OFI plugin discovery in NeMo-RL's own containers, plus the worked 2-node EFA GRPO recipe config (`examples/configs/recipes/llm/aws-efa-grpo-qwen3-30ba3b-2n8g-megatron.yaml`) the full rollout path uses. Applied at its parent commit `46be4e8` (= `NEMO_RL_SHA`), so it lands `--check`-clean. |
 
@@ -76,12 +79,15 @@ PR states below are as of 2026-08-25 — check them before relying on this table
    TransformerEngine/apex/flash-attn ABI. The Dockerfile installs NeMo-RL `--no-deps` and carries
    the rest of its dependency set in [`requirements.txt`](requirements.txt) (re-diff on every
    `NEMO_RL_SHA` bump).
-2. **Upstream DeepEP's SM/QP auto-sizers are EFA-blind** at the pinned SHA: auto-QP
-   (`num_sms*16+1`) overruns aws-ofi-nccl's 128-slot GIN request ring (hard assert surfaced as
-   `CUDA_ERROR_LAUNCH_FAILED` at the *first* dispatch), and `get_rdma_gbs()` reads 0 on EFA.
-   The probe passes `num_allocated_qps`/`num_sms`/`num_qps` **explicitly** (`EP_NUM_QPS=2` is the
-   value the #612 evidence validated on p5en) so the baseline image stays probeable; the opt-in
-   layer (#612) fixes the auto-sizers.
+2. **Stock DeepEP's SM/QP auto-sizers are EFA-blind — the fork fixes them in-code.** On stock
+   `deepseek-ai/DeepEP` the auto-QP formula (`num_sms*16+1`) overruns aws-ofi-nccl's 128-slot GIN
+   request ring (hard assert surfaced as `CUDA_ERROR_LAUNCH_FAILED` at the *first* dispatch), and
+   `get_rdma_gbs()` reads 0 on EFA. The `amazon-contributing/DeepEP` fork this image pins carries
+   the former-draft #612 fixes structurally — a `get_rdma_gbs()` sysfs link-rate fast path and an
+   auto-QP overflow clamp — so its auto-sizers are EFA-aware on both flavors. The probe still passes
+   `num_allocated_qps`/`num_sms`/`num_qps` **explicitly** (`EP_NUM_QPS=2` is the value the p5en
+   evidence validated) so it is deterministic and auto-sizer-independent; that value survives the
+   fork's clamp unchanged (`max(2, min(2, max_unordered_gin_qps)) == 2`).
 3. **Two NCCLs in one image — the resolved path matters.** The NGC base bakes its own libnccl in a
    different directory; if it wins the loader search, you silently run a non-GIN-verified copy.
    The image ranks the source build first via `/etc/ld.so.conf.d/00-nccl-gin.conf`, and
@@ -119,7 +125,6 @@ PR states below are as of 2026-08-25 — check them before relying on this table
 | `NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so` | the GIN-capable plugin, explicitly |
 | `NCCL_NVLS_ENABLE=0` | prevents NVLS init failures on H100/H200 |
 | `DEEP_EP_USE_V2_SHIM=0` | V2-native path, no compatibility shim |
-| `EP_EFA_MAX_QPS=2`, `EP_EFA_RDMA_GBS=25.0` | read only by the **patched** deep_ep (#612); inert on baseline |
 
 ## Hardware requirements
 
@@ -153,7 +158,7 @@ aws ecr create-repository --repository-name ${IMAGE} --region ${AWS_REGION} || t
 
 # baseline (upstream-only)
 docker build -f nemo-rl.Dockerfile -t ${FULL_IMAGE} .
-# opt-in flavor with the 3 draft PRs baked (use a DISTINCT tag — never overwrite the baseline)
+# opt-in flavor with the 2 draft PRs baked (use a DISTINCT tag — never overwrite the baseline)
 docker build -f nemo-rl.Dockerfile --build-arg APPLY_DRAFT_ROLLOUT_PATCHES=1 \
   -t ${FULL_IMAGE}-draftprs .
 
@@ -226,11 +231,12 @@ Treat results as your own measurement — this folder publishes none for this pa
 - **Build-staged, not cluster-re-run.** The NGC-from-scratch assembly here reproduces the measured
   Wave-28 mechanism chain from public sources, but this exact image has not itself been re-run on
   a cluster. The recipe gates exist so you (or we, next capacity window) can re-verify cheaply.
-- **The full rollout path is draft-PR-dependent.** Three upstream PRs, closed-unmerged upstream
+- **The full rollout path is draft-PR-dependent.** Two upstream PRs, closed-unmerged upstream
   (see the table). If upstream supersedes them, the patch layer fails loud or self-neutralizes —
   either way the image never ships an ambiguous patch state.
 - **Baseline DeepEP gates use explicit SM/QP counts** (trap 2). A probe pass with explicit counts
-  does not certify upstream's auto-sizing on EFA — that certification is exactly PR #612.
+  is deterministic by design; it does not exercise the fork's auto-sizers, and it certifies nothing
+  about *stock* upstream's EFA-blind auto-sizing (the defect the fork fixes in-code).
 - **NCCL topology XML on 32-NIC p5 nodes:** stock NCCL can hit the open issue
   [NVIDIA/nccl#2160](https://github.com/NVIDIA/nccl/issues/2160) (`NCCL_TOPO_XML_MAX_NODES=256`
   overflow during intra-node XML fusion). If NCCL init fails with a topo-XML error on
@@ -244,7 +250,7 @@ Treat results as your own measurement — this folder publishes none for this pa
 
 ## File structure
 
-```
+```text
 deepep-v2-efa/
 ├── README.md                      <- you are here
 ├── nemo-rl.Dockerfile             <- NGC-from-scratch image (baseline + opt-in draft-PR layer)
@@ -252,7 +258,7 @@ deepep-v2-efa/
 ├── requirements.txt               <- NeMo-RL deps minus the NGC-baked ABI anchors
 ├── env_vars.example               <- copy to env_vars (gitignored), fill in, source
 ├── patches/
-│   └── apply_nemo_rl_patches.py   <- the 3 draft PRs, pinned SHAs, fail-loud, self-neutralizing
+│   └── apply_nemo_rl_patches.py   <- the 2 draft PRs, pinned SHAs, fail-loud, self-neutralizing
 ├── recipe/
 │   ├── verify-image.sh            <- static substrate gate (run before any deploy)
 │   ├── run-rollout-probe.sh       <- cross-node ElasticBuffer probe + EFA TX-counter assert
@@ -266,7 +272,9 @@ deepep-v2-efa/
 
 ## References
 
-- [DeepEP](https://github.com/deepseek-ai/DeepEP) — EPv2 / ElasticBuffer (PR#605)
+- [amazon-contributing/DeepEP](https://github.com/amazon-contributing/DeepEP) — the AWS EPv2/NCCL-Gin
+  fork this image builds (pinned at `97d8f9bc`); carries the former-draft #612 EFA fixes in-code
+- [deepseek-ai/DeepEP](https://github.com/deepseek-ai/DeepEP) — upstream EPv2 / ElasticBuffer (PR#605, merged)
 - [aws-ofi-nccl](https://github.com/aws/aws-ofi-nccl) — the GIN-capable NCCL network plugin
 - [NeMo-RL](https://github.com/NVIDIA-NeMo/RL) and [Megatron-LM](https://github.com/NVIDIA/Megatron-LM)
 - Sibling test cases: [`slime`](../../slime) (RL on HyperPod EKS as a Ray cluster — this folder

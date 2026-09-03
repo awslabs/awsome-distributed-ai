@@ -3,12 +3,14 @@
 # SPDX-License-Identifier: MIT-0
 """Opt-in draft-PR layer for the NeMo-RL + DeepEP V2 (EFA) test case.
 
-The BASELINE image installs three upstream trees as-is (deepseek-ai/DeepEP,
+The BASELINE image installs three upstream trees as-is (amazon-contributing/DeepEP,
 NVIDIA/Megatron-LM, NVIDIA-NeMo/RL) at pinned SHAs and depends on nothing
-else. The full GRPO rollout-over-DeepEP path additionally needs three upstream
+else. The full GRPO rollout-over-DeepEP path additionally needs two upstream
 PRs that are still DRAFT/open — this script bakes them in, and ONLY when the
-image is built with ``--build-arg APPLY_DRAFT_ROLLOUT_PATCHES=1``. (A fourth,
-NVIDIA-NeMo/RL#2411, is intentionally excluded — see the #2410 entry below.)
+image is built with ``--build-arg APPLY_DRAFT_ROLLOUT_PATCHES=1``. (A third,
+NVIDIA-NeMo/RL#2411, is intentionally excluded — see the #2410 entry below.
+DeepEP needs NO patch here: the amazon-contributing/DeepEP fork the baseline
+pins carries the former draft deepseek-ai/DeepEP#612 fixes in-code.)
 
 Design goals (why this shape — mirrors the slime sibling's patch layer):
   * Default is upstream. Running this script is opt-in; the baseline image
@@ -68,23 +70,6 @@ from pathlib import Path
 # whole PR is already upstream (i.e. merged past the cleanup too), so a cleanup
 # commit can be verified by neither presence nor absence without ambiguity.
 PATCH_SETS = [
-    {
-        "name": "deepseek-ai/DeepEP#612 — aws-efa: QP cap, get_rdma_gbs fast path, scaleout interval",
-        "url": "https://github.com/deepseek-ai/DeepEP/pull/612",
-        "repo": "deepseek-ai/DeepEP",
-        "root_arg": "deepep_root",
-        "commits": [
-            "4eddba396006b8e4aa1a3a9a505396020aba4ef7",  # cap auto-QP at 2 on EFA (128-slot GIN ring)
-            "922a1fa7c0cd3ef047c0919638a87f9a2360346b",  # EFA fast path in get_rdma_gbs (SM auto-sizing)
-            "28d1f7fb173f728be51632ce0026fea23243e350",  # dispatch kScaleoutUpdateInterval 6 -> 16
-        ],
-        "probes": [
-            ("deep_ep/buffers/elastic.py", "EP_EFA_MAX_QPS"),                       # commit 1
-            ("deep_ep/utils/envs.py", "EP_EFA_RDMA_GBS"),                           # commit 2
-            ("deep_ep/include/deep_ep/impls/hybrid_dispatch.cuh",
-             "kScaleoutUpdateInterval = 16"),                                        # commit 3
-        ],
-    },
     {
         "name": "NVIDIA/Megatron-LM#4632 — moe: DeepEP V2 ElasticBuffer support in the flex dispatcher",
         "url": "https://github.com/NVIDIA/Megatron-LM/pull/4632",

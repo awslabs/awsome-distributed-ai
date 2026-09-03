@@ -13,15 +13,17 @@ rollout-shaped activation tensor with random expert routing, runs a local
 combined output per token — no model weights, no checkpoint download, minutes
 not hours. Runs under torchrun (see run-rollout-probe.sh) so dispatch/combine
 is exercised ACROSS the node boundary, not just instantiated: the defect class
-this exists to catch (e.g. the GIN request-ring overflow that draft PR
-deepseek-ai/DeepEP#612 fixes) only fires at the first real cross-node dispatch.
+this exists to catch (e.g. the GIN request-ring overflow that the former draft
+deepseek-ai/DeepEP#612 addressed) only fires at the first real cross-node
+dispatch.
 
-Baseline-image note: upstream DeepEP's SM/QP auto-sizers are EFA-blind at the
-pinned SHA (auto-QP overruns aws-ofi-nccl's 128-slot GIN request ring;
-`get_rdma_gbs()` reads 0 on EFA) — the exact gaps DeepEP#612 fixes. The probe
-therefore passes `num_allocated_qps`/`num_sms`/`num_qps` EXPLICITLY
-(EP_NUM_QPS=2 is the value the #612 evidence validated on p5en), which keeps
-the unpatched baseline probeable; on a patched image the auto-sizers also work.
+Note on explicit SM/QP counts: the amazon-contributing/DeepEP fork this image
+builds carries the former #612 EFA fixes in-code (the `get_rdma_gbs()` sysfs
+link-rate fast path and the auto-QP overflow clamp), so its auto-sizers ARE
+EFA-aware. The probe still passes `num_allocated_qps`/`num_sms`/`num_qps`
+EXPLICITLY (EP_NUM_QPS=2 is the value the p5en evidence validated) — it makes
+the probe deterministic and independent of the auto-sizer, and it survives the
+fork's clamp unchanged (max(2, min(2, max_unordered_gin_qps)) == 2).
 """
 import datetime
 import os

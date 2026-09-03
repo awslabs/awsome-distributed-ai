@@ -15,7 +15,7 @@
 #       -> BASELINE: upstream-only trees. Gates: imports, ElasticBuffer
 #          bring-up, cross-node EFA transport probe, non-DeepEP train step.
 #   docker build --build-arg APPLY_DRAFT_ROLLOUT_PATCHES=1 ...
-#       -> OPT-IN: additionally bakes 3 DRAFT upstream PRs (see the patches/
+#       -> OPT-IN: additionally bakes 2 DRAFT upstream PRs (see the patches/
 #          script) that the full NeMo-RL GRPO rollout-over-DeepEP path needs.
 #          The baseline image has ZERO dependence on them.
 
@@ -68,24 +68,24 @@ ARG GDRCOPY_SHA=c91ad9f178e5fb729fc5b6dc62a77c3bb364d6c9
 ARG AWS_OFI_NCCL_SHA=9c44d34476f90ddbf4a12d0ac4fc412d46bd8ab4
 ARG AWS_OFI_NCCL_PR=1351
 ARG AWS_OFI_NCCL_PR_SHA=c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b
-# DeepEP: upstream deepseek-ai/DeepEP main @01dc3aa — carries EPv2 (the
-# ElasticBuffer + NCCL backend, merged upstream in PR#605) and is the EXACT
-# base of draft PR deepseek-ai/DeepEP#612, so the opt-in layer applies
-# --check-clean. NOT the amazon-contributing fork: baseline is stock upstream
-# (the repo's NGC-from-scratch, no-fork-base convention — this folder mirrors
-# the slime sibling's stock-upstream stance).
-# TRADE-OFF, stated honestly: amazon-contributing/DeepEP main = 01dc3aa + ~8 AWS
-# commits that fix the trap-2 failure modes STRUCTURALLY rather than by the knob
-# clamps this folder documents — a sysfs-based get_rdma_gbs() (provider-agnostic,
-# reads /sys/class/infiniband/<nic>/ports/*/rate) and a restructured GIN QP
-# allocator (more QPs on the unordered path than EP_EFA_MAX_QPS=2). Most of those
-# commits are days old (2026-08-21/25). The baseline stays on stock 01dc3aa on
-# purpose: it is the #612 --check-clean base AND keeps to the no-fork convention;
-# the knob clamps (via #612 in the opt-in layer, or the inert ENV defaults on
-# baseline) are the portable equivalent. Adopting the fork's structural fixes is
-# a deliberate future re-pin + re-measure, tracked separately — not a silent
-# freeze. See README traps 2 + the pins table.
-ARG DEEPEP_SHA=01dc3aaac82068020353dce2c302e38153c0bfaa
+# DeepEP: the amazon-contributing/DeepEP fork (the AWS EPv2/NCCL-GIN tree) —
+# ElasticBuffer + NCCL backend, merged upstream in deepseek-ai/DeepEP#605. Same
+# fork the house V2 canonical
+# micro-benchmarks/expert-parallelism/deepep-v2-benchmark/setup_deepep_gin.sh
+# clones, and the twin of the vllm/deepep-v2-gdaki-efa sibling's pin. It carries
+# the EFA delta IN-CODE, including both halves of what was draft
+# deepseek-ai/DeepEP#612: the get_rdma_gbs() sysfs link-rate fast path
+# (deep_ep/utils/envs.py, provider-agnostic — reads
+# /sys/class/infiniband/<nic>/ports/*/rate) and the auto-QP overflow clamp
+# (deep_ep/buffers/elastic.py clamps to _C.{min,max}_unordered_gin_qps). So #612
+# is SUPERSEDED: the fork HEAD is strictly ahead of the old stock-01dc3aa +
+# #612-patch pairing, and it addresses the review note that pinning the pre-fix
+# upstream fork-point forfeits exactly those AWS fixes — the baseline now carries
+# them unconditionally, so #612 drops out of the opt-in layer entirely. Pin an
+# IMMUTABLE fork SHA (not the moving `main`) for reproducibility; override
+# DEEPEP_SHA to bump. setup_nemo_rl_deepep_efa.sh fail-loud asserts both fix-halves
+# are present in the clone.
+ARG DEEPEP_SHA=97d8f9bcc1be31e9036db2ab591ef9b9f4e38619
 # Megatron-LM: the exact base of draft PR NVIDIA/Megatron-LM#4632 (DeepEP V2
 # ElasticBuffer support in the flex dispatcher) for --check-clean opt-in.
 ARG MEGATRON_LM_SHA=19deef67f910c96c213f33b33b30277be8b94d6d
@@ -178,10 +178,14 @@ RUN chmod +x /opt/setup_nemo_rl_deepep_efa.sh \
 ENV LD_LIBRARY_PATH=/opt/aws-ofi-nccl/lib:${LD_LIBRARY_PATH}
 ENV NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
 
-# ---- Layer 6: clone the three upstream trees at their pinned SHAs ----------
-# Clones only here; the DeepEP BUILD is deferred to Layer 9 so the opt-in
-# patch layer (Layer 8) can land its .cuh/.py edits BEFORE kernels compile.
-RUN git clone https://github.com/deepseek-ai/DeepEP.git /opt/DeepEP \
+# ---- Layer 6: clone the three pinned trees at their SHAs --------------------
+# DeepEP = the amazon-contributing fork (see the DEEPEP_SHA header); Megatron-LM
+# and NeMo-RL = upstream. Clones only here; the DeepEP BUILD is deferred to
+# Layer 9 so the opt-in patch layer (Layer 8) can land its Megatron/NeMo-RL .py
+# edits before anything that imports them runs. (Layer 8 no longer touches
+# /opt/DeepEP — the fork carries the former DeepEP#612 .cuh/.py edits in-code —
+# but the build stays at Layer 9 to preserve the tested layer order.)
+RUN git clone https://github.com/amazon-contributing/DeepEP.git /opt/DeepEP \
     && cd /opt/DeepEP && git fetch origin ${DEEPEP_SHA} && git checkout ${DEEPEP_SHA} \
     && git clone https://github.com/NVIDIA/Megatron-LM.git /opt/Megatron-LM \
     && cd /opt/Megatron-LM && git fetch origin ${MEGATRON_LM_SHA} && git checkout ${MEGATRON_LM_SHA} \
@@ -217,10 +221,13 @@ RUN ln -sfn "$(python3 -c 'import nvidia.nvshmem; print(nvidia.nvshmem.__path__[
        || { echo "ERROR: pip nvshmem lib dir not found — requirements.txt must install nvidia-nvshmem-cu13" >&2; exit 1; }
 ENV LD_LIBRARY_PATH=/opt/nvshmem-pip-lib:${LD_LIBRARY_PATH}
 
-# ---- Layer 8 (OPT-IN, default OFF): the 3 draft upstream PRs ----------------
-# NVIDIA-NeMo/RL#2410, NVIDIA/Megatron-LM#4632, deepseek-ai/DeepEP#612
+# ---- Layer 8 (OPT-IN, default OFF): the 2 draft upstream PRs ----------------
+# NVIDIA-NeMo/RL#2410, NVIDIA/Megatron-LM#4632
 # — the full GRPO rollout-over-DeepEP path depends on them; the BASELINE image
-# does not. Commits are pinned inside patches/apply_nemo_rl_patches.py at
+# does not. (deepseek-ai/DeepEP#612 is no longer here: its two fix-halves are
+# carried structurally by the amazon-contributing/DeepEP fork the baseline now
+# pins, so it needs no patch.) Commits are pinned inside
+# patches/apply_nemo_rl_patches.py at
 # immutable SHAs and applied fail-loud (git apply --check first): if a hunk no
 # longer applies, the BUILD fails rather than shipping an ambiguous image.
 # Retire each entry when its PR merges (the script self-neutralizes).
@@ -260,10 +267,12 @@ ENV FI_PROVIDER=efa \
     RAY_memory_monitor_refresh_ms=0 \
     TOKENIZERS_PARALLELISM=false \
     DEEP_EP_USE_V2_SHIM=0
-# Read only by the PATCHED deep_ep (DeepEP#612 adds the EFA awareness); inert
-# on the baseline image. Kept here so both flavors run with one manifest.
-ENV EP_EFA_MAX_QPS=2 \
-    EP_EFA_RDMA_GBS=25.0
+# NOTE: EP_EFA_MAX_QPS / EP_EFA_RDMA_GBS are intentionally absent. They were the
+# knobs the old deepseek-ai/DeepEP#612 patch read; the amazon-contributing/DeepEP
+# fork resolves both structurally (get_rdma_gbs() sysfs link-rate + the C++
+# _C.{min,max}_unordered_gin_qps clamp), so nothing in deep_ep reads them — a dead
+# ENV masquerading as config is worse than its absence. The one live QP knob is
+# EP_NUM_QPS (the probe's explicit num_allocated_qps), set in the manifests.
 
 WORKDIR /opt/NeMo-RL
 CMD ["/bin/bash", "-lc", "echo 'gates: /opt/verify-image.sh (in verify mode) | /opt/run-rollout-probe.sh {leader|worker} <ip> | /opt/train-step.sh {leader|worker} <ip>'; sleep infinity"]

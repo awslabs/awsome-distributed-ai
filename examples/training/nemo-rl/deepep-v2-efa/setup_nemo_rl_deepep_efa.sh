@@ -16,9 +16,11 @@
 # canonical V2 builder,
 # micro-benchmarks/expert-parallelism/deepep-v2-benchmark/setup_deepep_gin.sh.
 # This is the NeMo-RL test case's self-contained variant: it ALSO builds the
-# aws-ofi-nccl GIN plugin (the ofi phase), and it compiles the stock-upstream
-# deepseek-ai/DeepEP tree the Dockerfile pins (@01dc3aa, the base of draft PR
-# #612) rather than gin's amazon-contributing default.
+# aws-ofi-nccl GIN plugin (the ofi phase), and it compiles the same
+# amazon-contributing/DeepEP fork the canonical setup_deepep_gin.sh clones (the
+# Dockerfile pins it at an immutable fork SHA). The fork carries the EFA delta
+# in-code — including both halves of what was draft deepseek-ai/DeepEP#612 — so
+# there is no local source patch on the DeepEP tree.
 # NOTE on NVSHMEM: deep_ep's _C.so IS build-linked against NVSHMEM — see the
 # Dockerfile's Layer 7b, which makes the pip nvidia-nvshmem-cu13 lib win the
 # loader search (without it `import deep_ep` dies on an nvshmem undefined
@@ -82,6 +84,14 @@ build_deepep() {
   # so a wrong-SHA checkout fails here and not with a distant include error.
   grep -q EP_NCCL_ROOT_DIR "${DEEPEP_SRC}/setup.py" \
     || { echo "ERROR: ${DEEPEP_SRC}/setup.py has no EP_NCCL_ROOT_DIR — not an EPv2 (NCCL backend) tree" >&2; exit 1; }
+  # Fail-loud: the tree must be the amazon-contributing/DeepEP fork carrying both
+  # halves of the superseded draft deepseek-ai/DeepEP#612 in-code (a stock-upstream
+  # or pre-fix checkout lacks them). This is what makes the baseline image carry the
+  # EFA fixes with no local patch — assert it here, not at a distant runtime failure.
+  grep -q "_get_sysfs_rdma_gbs" "${DEEPEP_SRC}/deep_ep/utils/envs.py" \
+    || { echo "ERROR: ${DEEPEP_SRC} lacks the #612 get_rdma_gbs() sysfs link-rate fast path — not the amazon-contributing fork?" >&2; exit 1; }
+  grep -q "unordered_gin_qps" "${DEEPEP_SRC}/deep_ep/buffers/elastic.py" \
+    || { echo "ERROR: ${DEEPEP_SRC} lacks the #612 auto-QP overflow clamp — not the amazon-contributing fork?" >&2; exit 1; }
   cd "${DEEPEP_SRC}"
   git rev-parse HEAD > /opt/deepep.effective.sha
   export EP_NCCL_ROOT_DIR="${EP_NCCL_ROOT_DIR:-${NCCL_HOME}}"

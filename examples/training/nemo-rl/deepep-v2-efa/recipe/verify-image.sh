@@ -50,24 +50,35 @@ docker run --rm --gpus all "${DEV_ARGS[@]}" -e HAVE_EFA_DEV="${HAVE_EFA_DEV}" "$
   python3 -c "from deep_ep import ElasticBuffer; import deep_ep; print(\"deep_ep at\", deep_ep.__file__)" \
     || { echo "FAIL: deep_ep import / ElasticBuffer missing — not an EPv2 build?"; exit 1; }
 
+  echo "== deep_ep is the amazon-contributing fork (carries the former DeepEP#612 fixes in-code) =="
+  # BASELINE property, asserted on EVERY flavor (patched or not): the image pins the
+  # amazon-contributing/DeepEP fork, which carries both halves of what was draft
+  # deepseek-ai/DeepEP#612 structurally — the get_rdma_gbs() sysfs link-rate fast path
+  # and the auto-QP overflow clamp. So these are NOT gated on the draft-PR marker (as
+  # the old EP_EFA_MAX_QPS/EP_EFA_RDMA_GBS patch was); a stock-upstream or pre-fix
+  # checkout lacks them and fails here, not at a distant runtime error.
+  DEEP_EP_DIR=$(python3 -c "import deep_ep, pathlib; print(pathlib.Path(deep_ep.__file__).parent)")
+  grep -q unordered_gin_qps "$DEEP_EP_DIR/buffers/elastic.py" \
+    || { echo "FAIL: installed deep_ep lacks the #612 auto-QP overflow clamp (unordered_gin_qps) — not the amazon-contributing fork?"; exit 1; }
+  grep -q _get_sysfs_rdma_gbs "$DEEP_EP_DIR/utils/envs.py" \
+    || { echo "FAIL: installed deep_ep lacks the #612 get_rdma_gbs() sysfs link-rate fast path — not the amazon-contributing fork?"; exit 1; }
+
   echo "== nemo_rl + megatron.core imports =="
   python3 -c "import nemo_rl.algorithms.grpo; import nemo_rl.models.megatron; print(\"nemo_rl OK\")" \
     || { echo "FAIL: nemo_rl imports (algorithms.grpo / models.megatron)"; exit 1; }
   python3 -c "import megatron.core; import megatron.core.transformer.moe.fused_a2a; print(\"megatron.core OK, tree:\", megatron.core.__file__)" \
     || { echo "FAIL: megatron.core imports — is /opt/Megatron-LM on PYTHONPATH?"; exit 1; }
 
-  echo "== patch-marker consistency (marker and trees/site-packages must agree) =="
+  echo "== patch-marker consistency (marker and trees must agree) =="
+  # DeepEP is NOT probed here: its former #612 fixes are carried structurally by the
+  # amazon-contributing fork on EVERY flavor, so they are asserted unconditionally in
+  # the fork-discriminator gate above — not gated on this draft-PR marker. This block
+  # covers only the two draft PRs that ARE applied as patches (Megatron-LM#4632,
+  # NeMo-RL#2410). Probe one needle PER independently-required change, not one per PR:
+  # a partially-merged tree satisfies a single needle while lacking later commits
+  # (e.g. ElasticBuffer present but the num_experts backward-dispatch fix absent). This
+  # mirrors the per-change probe list in patches/apply_nemo_rl_patches.py.
   if [ -f /opt/.draft-rollout-patches-applied ]; then
-    # Probe one needle PER independently-required change, not one per PR: a
-    # partially-merged tree satisfies a single needle while lacking later commits
-    # (e.g. EP_EFA_MAX_QPS present but the get_rdma_gbs EFA fast path absent;
-    # ElasticBuffer present but the num_experts backward-dispatch fix absent).
-    # This mirrors the per-change probe list in patches/apply_nemo_rl_patches.py.
-    DEEP_EP_DIR=$(python3 -c "import deep_ep, pathlib; print(pathlib.Path(deep_ep.__file__).parent)")
-    grep -q EP_EFA_MAX_QPS "$DEEP_EP_DIR/buffers/elastic.py" \
-      || { echo "FAIL: marker says patched but DeepEP#612 QP cap (EP_EFA_MAX_QPS) not in installed deep_ep"; exit 1; }
-    grep -q EP_EFA_RDMA_GBS "$DEEP_EP_DIR/utils/envs.py" \
-      || { echo "FAIL: marker says patched but DeepEP#612 get_rdma_gbs EFA fast path (EP_EFA_RDMA_GBS) not in installed deep_ep — partially-applied PR"; exit 1; }
     MEGA_A2A=/opt/Megatron-LM/megatron/core/transformer/moe/fused_a2a.py
     grep -q ElasticBuffer "$MEGA_A2A" \
       || { echo "FAIL: marker says patched but Megatron-LM#4632 ElasticBuffer support not in the flex dispatcher"; exit 1; }
@@ -75,13 +86,9 @@ docker run --rm --gpus all "${DEV_ARGS[@]}" -e HAVE_EFA_DEV="${HAVE_EFA_DEV}" "$
       || { echo "FAIL: marker says patched but Megatron-LM#4632 num_experts backward-dispatch fix absent — partially-applied PR"; exit 1; }
     test -f /opt/NeMo-RL/examples/configs/recipes/llm/aws-efa-grpo-qwen3-30ba3b-2n8g-megatron.yaml \
       || { echo "FAIL: marker says patched but NeMo-RL#2410 EFA recipe config missing"; exit 1; }
-    echo "   patched image (3 draft PRs baked — full GRPO rollout-over-DeepEP path staged)"
+    echo "   patched image (2 draft PRs baked — full GRPO rollout-over-DeepEP path staged)"
   else
-    DEEP_EP_DIR=$(python3 -c "import deep_ep, pathlib; print(pathlib.Path(deep_ep.__file__).parent)")
-    if grep -q EP_EFA_MAX_QPS "$DEEP_EP_DIR/buffers/elastic.py" 2>/dev/null; then
-      echo "FAIL: no marker but the DeepEP#612 patch IS present — ambiguous patch state"; exit 1
-    fi
-    echo "   unpatched baseline (upstream-only trees — probe/train-step run with explicit SM/QP counts)"
+    echo "   unpatched baseline (upstream-only Megatron/NeMo-RL trees — probe/train-step run with explicit SM/QP counts)"
   fi
   echo "ALL CHECKS PASS"
 '

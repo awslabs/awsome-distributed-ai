@@ -180,9 +180,11 @@ spec:
                 - { name: NCCL_SOCKET_IFNAME,         value: "^lo,docker,veth" }
                 # ---- DeepEP V2 knobs ----
                 - { name: DEEP_EP_USE_V2_SHIM,        value: "0" }
-                # Read only by the PATCHED deep_ep (DeepEP#612); inert on baseline.
-                - { name: EP_EFA_MAX_QPS,             value: "2" }
-                - { name: EP_EFA_RDMA_GBS,            value: "25.0" }
+                # EP_EFA_MAX_QPS / EP_EFA_RDMA_GBS intentionally absent: they were the
+                # old draft DeepEP#612 patch knobs; the amazon-contributing/DeepEP fork
+                # this image pins resolves both structurally (get_rdma_gbs() sysfs
+                # link-rate + the _C.{min,max}_unordered_gin_qps clamp), so deep_ep reads
+                # neither. The live QP knob is EP_NUM_QPS above.
                 - { name: TOKENIZERS_PARALLELISM,     value: "false" }
               # requests == limits (Guaranteed QoS): NCCL_GIN_TYPE=2 is the CPU-PROXY
               # path, so proxy-thread CPU sits on the data path — Burstable QoS + CFS

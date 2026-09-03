@@ -22,11 +22,12 @@ export TAG="v1-20260825"
 export FULL_IMAGE="${REGISTRY}${IMAGE}:${TAG}"
 
 # ----- Opt-in draft-PR image flavor -----
-# 1 = bake the 3 draft upstream PRs (NeMo-RL#2410, Megatron-LM#4632,
-# DeepEP#612) that the full GRPO rollout-over-DeepEP path needs; 0 = the
-# upstream-only baseline. The ":-" default keeps a value pre-set on the
-# command line (APPLY_DRAFT_ROLLOUT_PATCHES=1 docker build ...) from being
-# clobbered when this file is sourced afterwards.
+# 1 = bake the 2 draft upstream PRs (NeMo-RL#2410, Megatron-LM#4632) that the
+# full GRPO rollout-over-DeepEP path needs; 0 = the upstream-only baseline.
+# (DeepEP needs no patch: the amazon-contributing/DeepEP fork the image pins
+# carries the former draft DeepEP#612 fixes in-code, on both flavors.) The ":-"
+# default keeps a value pre-set on the command line (APPLY_DRAFT_ROLLOUT_PATCHES=1
+# docker build ...) from being clobbered when this file is sourced afterwards.
 export APPLY_DRAFT_ROLLOUT_PATCHES="${APPLY_DRAFT_ROLLOUT_PATCHES:-0}"
 
 # ----- HuggingFace (full GRPO path only; the recipe gates need no weights) -----
@@ -61,11 +62,11 @@ export EP_EXPERTS=128
 export EP_TOPK=8
 export EP_HIDDEN=2048
 export EP_TOKENS=128
-# Explicit SM/QP counts for the probe. WHY: upstream DeepEP's auto-sizers are
-# EFA-blind at the pinned SHA (auto-QP overruns aws-ofi-nccl's 128-slot GIN
-# ring; get_rdma_gbs() returns 0) - exactly what draft PR DeepEP#612 fixes.
-# Explicit values keep the BASELINE image probeable; the patched image also
-# works with the auto-sizers.
+# Explicit SM/QP counts for the probe. WHY: the amazon-contributing/DeepEP fork
+# carries the former #612 EFA fixes in-code (get_rdma_gbs() sysfs link-rate +
+# the auto-QP overflow clamp), so its auto-sizers are EFA-aware — but the probe
+# pins these anyway so it is deterministic and auto-sizer-independent. 2 QPs is
+# the value the p5en evidence validated; it survives the fork's clamp unchanged.
 export EP_NUM_SMS=8
 export EP_NUM_QPS=2
 
@@ -85,9 +86,11 @@ export OFI_NCCL_GIN_GDAKI=0          # GPU-initiated GIN is not the shipped path
 export OFI_NCCL_PROTOCOL=RDMA
 export NCCL_NVLS_ENABLE=0            # prevents NVLS init failures on H100/H200
 export NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
-# Read only by the PATCHED deep_ep (DeepEP#612); inert on the baseline image.
-export EP_EFA_MAX_QPS=2
-export EP_EFA_RDMA_GBS=25.0
+# NOTE: EP_EFA_MAX_QPS / EP_EFA_RDMA_GBS are intentionally absent. They were the
+# knobs the old draft DeepEP#612 patch read; the amazon-contributing/DeepEP fork
+# resolves both structurally (get_rdma_gbs() sysfs link-rate + the C++
+# _C.{min,max}_unordered_gin_qps clamp), so nothing in deep_ep reads them. The one
+# live QP knob is EP_NUM_QPS above (the probe's explicit num_allocated_qps).
 
 # ----- DeepEP V2 selection -----
 export DEEP_EP_USE_V2_SHIM=0         # V2-native path, no compatibility shim

@@ -31,8 +31,10 @@ export NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
 # ---- probe shape (defaults = the Qwen3-30B-A3B / Wave-28 shape twin) ----
 export EP_EXPERTS="${EP_EXPERTS:-128}" EP_TOKENS="${EP_TOKENS:-128}"
 export EP_HIDDEN="${EP_HIDDEN:-2048}" EP_TOPK="${EP_TOPK:-8}"
-# Explicit SM/QP counts: upstream DeepEP's auto-sizers are EFA-blind at the pinned SHA
-# (DeepEP#612 is the fix; opt-in layer). 2 QPs is the value the #612 evidence validated.
+# Explicit SM/QP counts: the amazon-contributing/DeepEP fork carries the former #612 EFA
+# fixes in-code, so its auto-sizers are EFA-aware — but the probe pins these anyway so it
+# is deterministic and auto-sizer-independent. 2 QPs is the value the p5en evidence
+# validated, and it survives the fork's clamp unchanged (max(2,min(2,max))==2).
 export EP_NUM_SMS="${EP_NUM_SMS:-8}" EP_NUM_QPS="${EP_NUM_QPS:-2}"
 export NCCL_DEBUG="${PROBE_NCCL_DEBUG:-INFO}"   # INFO so the efa provider banner prints = transport proof
 

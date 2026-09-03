@@ -29,7 +29,7 @@ DRIVER="/opt/train_moe_step.py"
 export MOE_DISPATCHER="${MOE_DISPATCHER:-alltoall}"
 if [ "$MOE_DISPATCHER" = "flex" ] && [ ! -f /opt/.draft-rollout-patches-applied ]; then
   echo "FATAL: MOE_DISPATCHER=flex (DeepEP V2 ElasticBuffer) needs an image built with"
-  echo "APPLY_DRAFT_ROLLOUT_PATCHES=1 (bakes Megatron-LM#4632 + DeepEP#612 + NeMo-RL#2410)."
+  echo "APPLY_DRAFT_ROLLOUT_PATCHES=1 (bakes Megatron-LM#4632 + NeMo-RL#2410)."
   echo "This baseline image is upstream-only — run the default alltoall dispatcher gate,"
   echo "or rebuild with the opt-in layer."
   exit 4
