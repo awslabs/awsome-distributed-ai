@@ -12,9 +12,10 @@
 #   Layer 5   aws-ofi-nccl @ a3d2680 --enable-gdaki (SHA pin, no local patches);
 #             a3d2680 carries PR#1311/5b1f6dd (per-platform EFA hw-counter tristate) and
 #             6e504db (GIN seq-space aliasing fix). Built in setup_deepep_v2_gdaki_efa.sh.
-#   Layer 5   DeepEP b306af06 + PR#612 (deepseek-ai/DeepEP, filed upstream, OPEN — EFA
-#             auto-QP cap; pinned to the PR's immutable head SHA). No local source patches.
-#             Staged in setup_deepep_v2_gdaki_efa.sh.
+#   Layer 5   DeepEP @ amazon-contributing/DeepEP (the AWS EPv2/NCCL-GIN fork; carries the
+#             EFA delta in-code, incl. both halves of superseded deepseek-ai/DeepEP#612).
+#             Pinned to an immutable fork SHA. No local source patches. Staged in
+#             setup_deepep_v2_gdaki_efa.sh.
 #
 #   DOCKER_BUILDKIT=1 docker build -t vllm-deepep-v2-gdaki-efa:latest .
 #
@@ -128,17 +129,16 @@ RUN NCCL_ROOT=$(python3 -c "import nvidia.nccl, pathlib; print(pathlib.Path(nvid
 
 # ---- Layer 5: aws-ofi-nccl GDAKI + DeepEP-V2 source (in-tree script, COPY'd not curled) ----
 # The setup script builds --enable-gdaki against Layer 2c libfabric + Layer 2b rdma-core (SHA
-# pin, no local patches), and stages DeepEP b306af06 + PR#612 (filed upstream, open). The
-# DeepEP _C.so is built IN-POD on first boot (recipe/build_deepep.sh) — it needs a live CUDA
-# context the build sandbox lacks.
+# pin, no local patches), and stages DeepEP from the amazon-contributing/DeepEP fork (which
+# carries the EFA delta in-code, superseding draft deepseek-ai/DeepEP#612). The DeepEP _C.so is
+# built IN-POD on first boot (recipe/build_deepep.sh) — it needs a live CUDA context the build
+# sandbox lacks.
 COPY setup_deepep_v2_gdaki_efa.sh /opt/setup_deepep_v2_gdaki_efa.sh
 ARG AWS_OFI_NCCL_SHA=a3d268024576c159e97916151666c2ef20f91813
-ARG DEEPEP_SHA=b306af06afd412c88e51e71802951606e40b7358
-ARG DEEPEP_PR=612
-ARG DEEPEP_PR_SHA=28d1f7fb173f728be51632ce0026fea23243e350
+ARG DEEPEP_SHA=97d8f9bcc1be31e9036db2ab591ef9b9f4e38619
 RUN chmod +x /opt/setup_deepep_v2_gdaki_efa.sh \
     && AWS_OFI_NCCL_SHA=${AWS_OFI_NCCL_SHA} \
-       DEEPEP_SHA=${DEEPEP_SHA} DEEPEP_PR=${DEEPEP_PR} DEEPEP_PR_SHA=${DEEPEP_PR_SHA} \
+       DEEPEP_SHA=${DEEPEP_SHA} \
        /opt/setup_deepep_v2_gdaki_efa.sh
 ENV LD_LIBRARY_PATH=/opt/aws-ofi-nccl-gdaki/lib:/opt/libfabric-gdaki/lib:/opt/rdma-core-gdaki/lib:${LD_LIBRARY_PATH}
 

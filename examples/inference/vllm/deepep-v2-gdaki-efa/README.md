@@ -34,14 +34,20 @@ public source:
    [node precondition](#prerequisites) instead.
 
 Everything else — `EP_REUSE_NCCL_COMM=0` (or serve init segfaults; DeepEP must create its own comm
-because torch's is lazy/null under vLLM), the DeepEP-V2 source pin (`b306af06` +
-[PR#612](https://github.com/deepseek-ai/DeepEP/pull/612), EFA auto-QP cap — **filed upstream and
-still open**, merged in by the PR's **immutable head SHA**, the one upstream reference this folder
-carries), and the vLLM wheel-pin — is the standard V2/GDAKI contract.
+because torch's is lazy/null under vLLM), the DeepEP source pin
+([`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) `97d8f9bc`, the AWS
+EPv2/NCCL-GIN fork — same fork the house V2 canonical
+[`setup_deepep_gin.sh`](../../../../micro-benchmarks/expert-parallelism/deepep-v2-benchmark/setup_deepep_gin.sh)
+clones; it carries the EFA delta **in-code**, including both halves of the superseded draft
+[deepseek-ai/DeepEP#612](https://github.com/deepseek-ai/DeepEP/pull/612) — the `get_rdma_gbs()` sysfs
+link-rate fast path and the auto-QP overflow clamp), and the vLLM wheel-pin — is the standard
+V2/GDAKI contract.
 
-**Net:** this folder is **post-merge upstream SHA pins + one open upstream DeepEP reference (PR#612),
-with zero local source patches.** The merged-upstream substrate fixes (rdma-core #1701,
-libfabric #12591, aws-ofi-nccl #1311, carried by the `a3d2680` pin) are plain SHA pins, not patches.
+**Net:** this folder is **post-merge upstream SHA pins + the amazon-contributing/DeepEP fork (an
+immutable SHA), with zero local source patches.** The fork supersedes the earlier `deepseek-ai`
+base + draft PR#612 (pinning the pre-fix upstream fork-point forfeited exactly those fixes). The
+merged-upstream substrate fixes (rdma-core #1701, libfabric #12591, aws-ofi-nccl #1311, carried by
+the `a3d2680` pin) are plain SHA pins, not patches.
 
 ### eager vs non-eager (both measured; see `benchmarks/`)
 

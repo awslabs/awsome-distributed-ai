@@ -4,7 +4,7 @@
 # setup_deepep_v2_gdaki_efa.sh — build aws-ofi-nccl with the GDAKI (GPU-initiated,
 # kernel-posted WQE) GIN backend + stage DeepEP-V2 source for the vLLM deepep_v2 backend
 # on EFA. This is the NCCL_GIN_TYPE=3 counterpart to ../deepep-v2-efa/setup_deepep_v2_efa.sh
-# (which builds the NCCL_GIN_TYPE=2 CPU-proxy plugin) — same DeepEP base+PR, the delta is
+# (which builds the NCCL_GIN_TYPE=2 CPU-proxy plugin) — same DeepEP fork source, the delta is
 # --enable-gdaki + the newer rdma-core/libfabric substrate the Dockerfile builds first.
 # Distinct from the NVSHMEM-path setup_deepep_efa.sh gated by
 # .github/workflows/deepep-vendor-sync.yml — intentionally NOT vendor-synced to that copy.
@@ -22,10 +22,16 @@ set -euo pipefail
 # instead (see README + Dockerfile Layer 3).
 AWS_OFI_NCCL_REPO="${AWS_OFI_NCCL_REPO:-https://github.com/aws/aws-ofi-nccl.git}"
 AWS_OFI_NCCL_SHA="${AWS_OFI_NCCL_SHA:-a3d268024576c159e97916151666c2ef20f91813}"  # master lineage: PR#1311 hw-counter tristate + 6e504db GIN seq-space fix + 80f2c78 auto-GDAKI
-DEEPEP_REPO="${DEEPEP_REPO:-https://github.com/deepseek-ai/DeepEP.git}"
-DEEPEP_SHA="${DEEPEP_SHA:-b306af06afd412c88e51e71802951606e40b7358}"             # measured substrate base
-DEEPEP_PR="${DEEPEP_PR:-612}"                                                     # filed upstream, OPEN — EFA auto-QP cap
-DEEPEP_PR_SHA="${DEEPEP_PR_SHA:-28d1f7fb173f728be51632ce0026fea23243e350}"        # IMMUTABLE PR#612 head (moving-ref trap)
+# DeepEP source = the amazon-contributing/DeepEP fork (the AWS EPv2/NCCL-GIN tree), matching the
+# house V2 canonical micro-benchmarks/.../deepep-v2-benchmark/setup_deepep_gin.sh (which also clones
+# this fork). The fork carries the EFA delta IN-CODE — including both halves of what was draft
+# deepseek-ai/DeepEP#612: the get_rdma_gbs() sysfs link-rate fast path (deep_ep/utils/envs.py) and
+# the auto-QP overflow guard (deep_ep/buffers/elastic.py clamps to _C.{min,max}_unordered_gin_qps).
+# So #612 is SUPERSEDED here — pinning the fork HEAD is strictly ahead of the old base+PR merge, and
+# it satisfies KeitaW's review (pinning the pre-fix upstream fork-point forfeited those fixes).
+# Pin an IMMUTABLE fork SHA (not the moving `main`) for reproducibility; override DEEPEP_SHA to bump.
+DEEPEP_REPO="${DEEPEP_REPO:-https://github.com/amazon-contributing/DeepEP.git}"
+DEEPEP_SHA="${DEEPEP_SHA:-97d8f9bcc1be31e9036db2ab591ef9b9f4e38619}"             # amazon-contributing/DeepEP main @ 2026-09-03 (carries EFA delta + both #612 fix-halves)
 
 echo "== aws-ofi-nccl GDAKI @ ${AWS_OFI_NCCL_SHA} (SHA pin, no local patches) =="
 git clone "${AWS_OFI_NCCL_REPO}" /opt/aws-ofi-nccl-src
@@ -50,19 +56,15 @@ test -f /opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so
 ldconfig
 cd /; rm -rf /opt/aws-ofi-nccl-src
 
-echo "== DeepEP-V2 source @ ${DEEPEP_SHA} + PR#${DEEPEP_PR} (@ ${DEEPEP_PR_SHA}, filed upstream, open) =="
+echo "== DeepEP source @ amazon-contributing/DeepEP ${DEEPEP_SHA} (fork HEAD; no local patches) =="
 git clone "${DEEPEP_REPO}" /opt/DeepEP
 cd /opt/DeepEP
 git config user.email build@local; git config user.name build
 git fetch origin "${DEEPEP_SHA}"; git checkout "${DEEPEP_SHA}"
-git rev-parse HEAD > /opt/deepep.base.sha
-# PR#612 (deepseek-ai/DeepEP) — EFA auto-QP cap, filed upstream and still OPEN. Merged in by its
-# IMMUTABLE head SHA (not the moving refs/pull ref). This is the ONE upstream reference this
-# folder carries; there is NO local source patch. When #612 merges, re-pin DEEPEP_SHA to the
-# merge commit and drop DEEPEP_PR / DEEPEP_PR_SHA (the merge becomes a plain post-merge SHA pin).
-git fetch origin "refs/pull/${DEEPEP_PR}/head"
-git merge --no-edit "${DEEPEP_PR_SHA}"                       # pin the IMMUTABLE PR head, not the moving ref
 git rev-parse HEAD > /opt/deepep.effective.sha
+# Fail-loud: the fork must be an EPv2 (NCCL-GIN) tree carrying both #612 fix-halves in-code.
 test -f /opt/DeepEP/tests/elastic/test_ep.py
 test -f /opt/DeepEP/csrc/elastic/buffer.hpp
+grep -q "_get_sysfs_rdma_gbs" /opt/DeepEP/deep_ep/utils/envs.py          # #612 half A: get_rdma_gbs() sysfs link-rate fast path
+grep -q "unordered_gin_qps"   /opt/DeepEP/deep_ep/buffers/elastic.py     # #612 half B: auto-QP overflow clamp
 echo "== setup_deepep_v2_gdaki_efa.sh complete; DeepEP _C.so builds in-pod via recipe/build_deepep.sh =="
