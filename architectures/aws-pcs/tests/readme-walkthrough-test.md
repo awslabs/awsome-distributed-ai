@@ -86,7 +86,8 @@ at deploy time.
   drifted (e.g. `ssm:resourceTag/Name` no longer matches the login node's
   actual Name tag). Fix the policy and the docs in lock-step.
 - **Grafana `curl` = 403 / 502 or dashboards missing:** monitoring
-  stack didn't come up — see the login node's `/var/log/monitoring-install.log`.
+  stack didn't come up — see the login node's
+  `/var/log/amazon/pcs/lifecycle/actions/nodeReady/install-monitoring.log`.
   Not this test's fault, but the walkthrough surfaces it.
 
 ## Optional: multi-user variant

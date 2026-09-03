@@ -68,6 +68,7 @@ srun -p hpc -N 1 -n 1 bash -c '
 ```
 
 Expected (hpc7a / hpc8a):
+
 - `fi_info -p efa`: shows `efa-direct` and `efa` fabrics on `rdmap36s0` and
   `rdmap42s0` (or matching device names).
 - `lspci`: 2 lines `Elastic Fabric Adapter` (or `Device efa3` on hpc8a) + 2 lines

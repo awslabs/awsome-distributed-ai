@@ -8,7 +8,7 @@ body:
       value: >
         Thank you for suggesting a feature! For major changes that affect the project's
         architecture or direction, please consider using the
-        [RFC template](https://github.com/awslabs/awsome-distributed-training/issues/new?template=600-RFC.yml) instead.
+        [RFC template](https://github.com/awslabs/awsome-distributed-ai/issues/new?template=600-RFC.yml) instead.
   - type: textarea
     id: description
     attributes:

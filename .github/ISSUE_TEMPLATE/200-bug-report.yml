@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: >
-        #### Before submitting a bug report, please make sure you have searched [existing issues](https://github.com/awslabs/awsome-distributed-training/issues).
+        #### Before submitting a bug report, please make sure you have searched [existing issues](https://github.com/awslabs/awsome-distributed-ai/issues).
 
 
         **IMPORTANT:** Please redact any access keys, secret keys, session tokens,

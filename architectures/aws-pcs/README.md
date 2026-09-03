@@ -21,18 +21,20 @@ This repository provides reference architectures and deployment templates for se
 ![AWS PCS diagram](./images/ml-pcs-architecture.png)
 
 A default deployment (`pcs-ml-cluster-deploy-all.yaml`) provisions:
+
 - VPC with a public subnet and private subnets in up to 3 AZs, a NAT gateway (primary AZ), and an S3 endpoint
 - FSx for Lustre (`/fsx`, high-performance shared scratch) and FSx for OpenZFS (`/home`)
 - PCS cluster with the Slurm scheduler (25.05 or 25.11), on the PCS-Ready DLAMI
 - Login node group (public subnet) with the monitoring stack (Prometheus + Grafana + Nginx); SSH/Grafana can be opened to a trusted CIDR
 - CPU compute node group (private subnet); EFA can be enabled for HPC/MPI workloads
 - Optional GPU (P5/P6) node group with multi-NIC EFA, plus DCGM Exporter for the GPU dashboards
-- Enroot/Pyxis container runtime installed at first boot via `PostInstallScriptUrl` (or pre-baked into a custom AMI you build separately and pass as `AmiId`)
+- Enroot/Pyxis container runtime installed at first boot (`InstallEnrootPyxis`, on by default; or pre-baked into a custom AMI you build separately and pass as `AmiId`)
 
 Every node runs on the AWS-managed **PCS-Ready DLAMI** (NVIDIA driver, CUDA, PCS agent,
 and Slurm pre-installed), so no custom AMI build is required.
 
 Optional add-ons (off by default):
+
 - **Multi-user directory**: OpenLDAP on the login node + SSSD on every compute node (`DirectoryService`)
 - **IAM policy stacks**: least-privilege cluster-admin / cluster-user policies you can deploy separately
 - **Custom AMI**: pin a specific AMI or pre-bake Enroot/Pyxis into your own DLAMI (faster
@@ -147,11 +149,11 @@ complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 |---|---|---|
 | `DirectoryService` | `none` | `OpenLDAP-LoginNode` for a multi-user cluster. See [§8.3](#83-user-management) |
 
-**5.3. Additional Cluster Configuration: Post-Install Script**
+**5.3. Additional Cluster Configuration: Container Runtime (Enroot/Pyxis)**
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `PostInstallScriptUrl` | *(empty → auto)* | First-boot script on every node; empty (default) auto-installs the Enroot/Pyxis container runtime from your templates bucket. Point at your own script to customize. See [PARAMETERS.md](./docs/PARAMETERS.md) |
+| `InstallEnrootPyxis` | `true` | Install the Enroot/Pyxis container runtime on every node at first boot. Set `false` when it's pre-baked into `AmiId`. For other first-boot customization, add your own script to the node group's [node lifecycle actions](https://docs.aws.amazon.com/pcs/latest/userguide/cng-node-lifecycle-actions.html). See [PARAMETERS.md](./docs/PARAMETERS.md) |
 
 **See [PARAMETERS.md](./docs/PARAMETERS.md) for the complete parameter reference** (all
 console parameter groups, with every default). The concept guides below cover the
@@ -166,7 +168,7 @@ needed. Enroot 3.5.0 + Pyxis 0.20.0 are layered on at first boot via
 [`assets/scripts/install-enroot-pyxis.sh`](./assets/scripts/install-enroot-pyxis.sh)
 (~8–12 min boot). For **frequent scaling**, pre-bake Enroot/Pyxis into a custom DLAMI
 once with [§8.5](#85-pre-baking-enrootpyxis-into-a-custom-ami) and pass that
-`ami-xxx` as `AmiId` (~3 min boot, deterministic state). The post-install hook is
+`ami-xxx` as `AmiId` (~3 min boot, deterministic state). The installer is
 idempotent — it no-ops on a pre-baked AMI.
 
 > **Production tip — pin the AMI.** CloudFormation re-resolves SSM `/latest/`
@@ -190,6 +192,7 @@ automatically.
 | `p6-b300.48xlarge` | 8× B300 | 16 (of 17 interfaces; the primary is ENA-only) | `add-cng-p6-b300.yaml` |
 
 **Capacity options:**
+
 - **On-Demand**: leave `CapacityReservationId` empty.
 - **On-Demand Capacity Reservation (ODCR)**: also leave `CapacityReservationId` **empty** — create the ODCR with **"open"** instance matching and it is consumed automatically by the node group's On-Demand launches. (Do **not** put the ODCR ID in `CapacityReservationId`; that parameter forces Capacity-Block mode.)
 - **Capacity Blocks for ML**: set `CapacityReservationId` to the Capacity Block ID. The template then launches with `MarketType=capacity-block` against it.
@@ -226,6 +229,7 @@ aws cloudformation create-stack \
     ParameterKey=OnDemandMaxCount,ParameterValue=8 \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
+
 Replaces the default `cpu1` queue with a `gpu-g6` queue of g6.12xlarge instances.
 
 ### Example 2: Multi-NIC GPU with a Capacity Block (P6-B300)
@@ -248,6 +252,7 @@ aws cloudformation create-stack \
     ParameterKey=CapacityReservationId,ParameterValue=${CAPACITY_RESERVATION_ID} \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
+
 The `add-cng-p6-b300.yaml` template is selected automatically from `PseriesInstanceType`,
 and the EFA interface count is derived from the instance type — no interface-count
 parameter to set. For `p6-b200.48xlarge` or any P5 type, just change
@@ -271,6 +276,7 @@ aws cloudformation create-stack \
     ParameterKey=OnDemandEfaInterfaceCount,ParameterValue=2 \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
+
 Replaces the default `cpu1` queue with an `hpc` queue of EFA-enabled
 hpc7a.96xlarge nodes. The CNG launches in an auto-created cluster placement
 group. For other HPC types, set `OnDemandInstanceType` and the matching
@@ -344,7 +350,7 @@ sbatch --partition=cpu1 --nodes=2 --wrap='srun bash -c "hostname"'
 ### Example B — multi-node GPU NCCL test (needs a GPU queue)
 
 A 2-node `all_reduce_perf` is the quickest GPU end-to-end check (GPU queue + Pyxis
-+ EFA). Add a GPU queue first (see [Templates](#9-templates)):
+- EFA). Add a GPU queue first (see [Templates](#9-templates)):
 
 ```bash
 # Import the container image (enroot's overlayfs needs the node-local root disk;
@@ -368,7 +374,7 @@ Before a long run, it's also worth checking GPU/EFA/NVLink health with the
 [GPU Cluster Health Check suite](./tests/gpu-healthcheck-test.md) (nvidia-smi, DCGM
 diagnostics, EFA enumeration, NCCL thresholds).
 
-For a full training example, see the [PyTorch FSDP test case](../../3.test_cases/pytorch/FSDP);
+For a full training example, see the [PyTorch FSDP test case](../../examples/training/fsdp);
 the full validation matrix is in [tests/README.md](./tests/README.md).
 
 ---
@@ -415,6 +421,7 @@ stack on the client — see the Client-side Lustre-on-EFA + GDS item in
 benefit, useful when a single client is pushing past ~10 GBps.
 
 Constraints when enabling this:
+
 - **PERSISTENT_2 SSD only** — a CFN Rule fails the stack at create time on `PERSISTENT_1`.
 - **Much higher minimum `Capacity`** — at `PerUnitStorageThroughput=250` the minimum is
   **19200 GiB** (16× the 1200 GiB default). Set `Capacity` accordingly.
@@ -437,7 +444,7 @@ and a screenshot.
 
 > **Prefer AWS-managed Prometheus/Grafana?** If you'd rather use Amazon Managed Service
 > for Prometheus + Amazon Managed Grafana instead of the self-hosted stack on the login
-> node, see [`4.validation_and_observability/4.prometheus-grafana`](../../4.validation_and_observability/4.prometheus-grafana).
+> node, see [`observability/prometheus-grafana`](../../observability/prometheus-grafana).
 
 `MonitoringStack` toggles the stack (`Prometheus-LoginNode` / `none`). The defaults work
 out of the box; the source repo/version (`MonitoringRepo` / `MonitoringVersion`) and the
@@ -517,6 +524,7 @@ aws ec2 describe-instances --region "$AWS_REGION" \
 ```
 
 Security notes:
+
 - The security group is attached **only to the login node** — compute nodes and FSx
   (which share the cluster security group) are **not** exposed.
 - **Opening 443 exposes more than Grafana.** The login node's nginx also reverse-proxies
@@ -557,7 +565,7 @@ NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 > (`v2.6.4`+ carry the other PCS fixes: node-local `/opt` install + the Docker-29.x
 > DCGM tag). Override `DcgmExporterImage`
 > only to pin a different build; details:
-> [OPERATIONS.md §3.1](./docs/OPERATIONS.md#31-dcgmexporterimage-the-default-and-when-to-change-it).
+> [OPERATIONS.md §3.1](./docs/OPERATIONS.md#31-dcgmexporterimage--the-default-and-when-to-change-it).
 
 > **Note — node-type tagging.** The monitoring stack identifies login vs compute nodes by
 > the `monitoring-role` tag (`login`/`compute`), **not** the EC2 `Name` tag — so the `Name`
@@ -616,7 +624,7 @@ for roles, deploy instructions, security considerations, and the verification ma
 ### 8.5 Pre-baking Enroot/Pyxis into a custom AMI
 
 The all-in-one template installs Enroot/Pyxis at **first boot** via
-`PostInstallScriptUrl` (no Image Builder step). For **frequent scaling** in production,
+the `install-enroot-pyxis` lifecycle action (no Image Builder step). For **frequent scaling** in production,
 pre-baking Enroot/Pyxis into a custom AMI drops node boot from ~8–12 min to ~3 min and
 pins every node to a deterministic state. It's a standalone path: build the AMI once with
 [`pcs-ready-dlami-with-enroot-pyxis.yaml`](./assets/pcs-ready-dlami-with-enroot-pyxis.yaml)
@@ -666,7 +674,7 @@ CPG from the GPU templates is a future item.)
 **Multi-NIC bandwidth needs multiple MPI pairs.** A single MPI pair uses one
 libfabric endpoint and only one NIC. Use `osu_mbw_mr -np 32 -N 16` (or your
 application's natural multi-pair pattern) to actually exercise both NICs on
-hpc7a/hpc8a. See [tests/README.md Test 9](./tests/README.md#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a)
+hpc7a/hpc8a. See [tests/hpc-efa-test.md Test 9](./tests/hpc-efa-test.md#test-9-efa-on-cpu-hpc-instances-hpc6a--hpc7a--hpc8a)
 for the full benchmark setup and validated bandwidth numbers.
 
 ### 8.7 Deploying updated templates before they are published
@@ -716,20 +724,22 @@ pcs-ml-cluster-deploy-all.yaml                    ← user deploys this
 │     • MonitoringRole=login → Prometheus/Grafana
 │     • DirectoryService=OpenLDAP-LoginNode → slapd server
 │     │
-│     └─ UserData fetches external scripts:
-│          ├─ PostInstallScriptUrl (default: install-enroot-pyxis.sh)
-│          ├─ MonitoringRepo/MonitoringVersion → post-install.sh
-│          └─ setup-directory.sh server (when DirectoryRole=server)
+│     └─ Node lifecycle actions run external scripts:
+│          ├─ needrestart-guard.sh, mount-openzfs-home.sh, mount-lustre-fsx.sh
+│          ├─ setup-directory.sh server (when DirectoryRole=server)
+│          ├─ install-enroot-pyxis.sh (InstallEnrootPyxis=true)
+│          └─ install-monitoring.sh (nodeReady)
 │
 ├─► add-cng.yaml (compute)                        ← CPU queue (dynamic scaling 0→N)
 │     • MonitoringRole=compute → Node Exporter
 │     • DirectoryService=OpenLDAP-LoginNode → SSSD client
 │     • EfaInterfaceCount>0 → EFA NetworkInterfaces + PG
 │     │
-│     └─ UserData fetches external scripts:
-│          ├─ PostInstallScriptUrl (same as login)
-│          ├─ MonitoringRepo/MonitoringVersion → post-install.sh
-│          └─ setup-directory.sh client (when DirectoryRole=client)
+│     └─ Node lifecycle actions run external scripts:
+│          ├─ needrestart-guard.sh, mount-openzfs-home.sh, mount-lustre-fsx.sh
+│          ├─ setup-directory.sh client (when DirectoryRole=client)
+│          ├─ install-enroot-pyxis.sh (same as login)
+│          └─ install-monitoring.sh (nodeReady)
 │
 └─► add-cng-p5.yaml / add-cng-p6-b200.yaml       ← GPU queue (optional)
     / add-cng-p6-b300.yaml
@@ -737,14 +747,15 @@ pcs-ml-cluster-deploy-all.yaml                    ← user deploys this
       • MonitoringRole=compute → DCGM Exporter
       • Same external script pattern as compute CNG
 
-Boot scripts (fetched at first boot from S3: s3://<S3BucketName>/<S3KeyPrefix>scripts/):
-  assets/scripts/install-enroot-pyxis.sh           ← Enroot 3.5.0 + Pyxis 0.20.0
+Lifecycle-action scripts (fetched by the PCS agent from S3: s3://<S3BucketName>/<S3KeyPrefix>scripts/):
+  assets/scripts/needrestart-guard.sh             ← keep security upgrades from restarting slurmd
+  assets/scripts/mount-openzfs-home.sh            ← FSx OpenZFS → /home
+  assets/scripts/mount-lustre-fsx.sh              ← FSx Lustre → /fsx
   assets/scripts/setup-directory.sh               ← multi-user directory (server + client)
-
-External boot scripts (fetched from GitHub):
-  aws-parallelcluster-monitoring post-install.sh   ← monitoring stack installer
-    (https://github.com/aws-samples/aws-parallelcluster-monitoring)
-    fetched from: ${MonitoringRepo} @ ${MonitoringVersion}
+  assets/scripts/install-enroot-pyxis.sh           ← Enroot 3.5.0 + Pyxis 0.20.0
+  assets/scripts/install-monitoring.sh            ← monitoring stack installer wrapper
+    (fetches aws-parallelcluster-monitoring post-install.sh from
+    GitHub: ${MonitoringRepo} @ ${MonitoringVersion})
 
 Helper scripts (NOT run at boot — for admin use on the login node):
   assets/scripts/ldap-add-user.sh                 ← add POSIX users to LDAP directory
@@ -776,17 +787,19 @@ numbers is in **[tests/README.md](./tests/README.md)**.
 ## 11. Additional Resources
 
 In this repo:
+
 - [Parameter reference](./docs/PARAMETERS.md) — every deploy-all parameter and default
-- [Operations guide](./docs/OPERATIONS.md) — version trade-offs, AMI pinning, monitoring/DCGM, FSx coupling, Lustre tuning, production settings
+- [Operations guide](./docs/OPERATIONS.md) — version trade-offs, AMI pinning, monitoring/DCGM, FSx coupling, Lustre tuning, production settings, migration notes from UserData-based releases
 - [User management guide](./docs/USER-MANAGEMENT.md) — multi-user setup with OpenLDAP (add/remove users, groups, Slurm accounting)
 - [Jupyter on a compute node](./docs/JUPYTER.md) — run Jupyter as a Slurm job, browser access via SSM port forwarding
 - [IAM permissions guide](./docs/IAM.md) — cluster admin / cluster user roles, policy deploy, security considerations
 - [Deploy & testing procedures](./docs/DEPLOY-TESTING.md) — development deploy workflow with test S3 bucket
 - [PCS-Ready DLAMI version history](./docs/PCS-READY-DLAMI.md) — PCS Agent / Slurm / driver / CUDA / EFA / DCGM per published build
 - [Test & Validation Guide](./tests/README.md) — reproducible matrix with measured numbers
-- [GPU Cluster Health Check](../../4.validation_and_observability/2.gpu-cluster-healthcheck) — comprehensive GPU/EFA/NVLink validation suite (lightweight + intensive modes, Slurm prolog integration)
+- [GPU Cluster Health Check](../../validation/gpu-cluster-healthcheck) — comprehensive GPU/EFA/NVLink validation suite (lightweight + intensive modes, Slurm prolog integration)
 - [Roadmap / TODO](./docs/ROADMAP.md)
 
 External:
+
 - [AWS PCS Documentation](https://docs.aws.amazon.com/pcs/) · [AI/ML for AWS PCS Workshop](https://catalog.workshops.aws/ml-on-pcs/)
 - [Slurm](https://slurm.schedmd.com/documentation.html) · [Enroot](https://github.com/NVIDIA/enroot) · [Pyxis](https://github.com/NVIDIA/pyxis) · [Capacity Blocks for ML](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-capacity-blocks.html)

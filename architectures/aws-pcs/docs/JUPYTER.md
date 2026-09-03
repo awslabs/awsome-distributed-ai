@@ -285,4 +285,3 @@ requested**. Note that `nvidia-smi` from inside the job may still show
 all physical GPUs on the node — that's expected on these clusters;
 allocation is enforced per-process via `CUDA_VISIBLE_DEVICES`, which
 `torch.cuda.device_count()` respects.
-
