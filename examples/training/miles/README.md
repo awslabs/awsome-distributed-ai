@@ -28,7 +28,7 @@ The `train.py` CLI and GRPO flags are compatible with SLIME's, so the recipes he
 
 ## Architecture
 
-```
+```text
 +---------------------------------------------------------------------+
 |             Amazon EKS Cluster, HyperPod-compatible                 |
 |                 2x p5en.48xlarge, EKS orchestration                 |
@@ -58,7 +58,7 @@ The diagram shows the 2-node layout. A single node is also supported for the den
 
 ## miles Internal Architecture
 
-```
+```text
                     +----------------------+
                     |     Data Buffer      |
                     |  prompt queue and    |
@@ -304,7 +304,7 @@ miles ships rule-based reward types `deepscaler`, `dapo`, `math`, `f1`, and `gpq
 
 ## File Structure
 
-```
+```text
 miles/
 ├── README.md
 ├── env_vars.colocated.example       # Qwen3-4B dense, colocated on 1 node
@@ -353,21 +353,25 @@ kubectl exec -n "${NAMESPACE}" <ray-pod> -- bash -lc \
 
 ## Troubleshooting
 
-**Pod stuck in `Pending`**
+### Pod stuck in `Pending`
+
 ```bash
 kubectl describe pod <pod>
 # Check GPU/EFA/memory/ephemeral-storage requests against node capacity.
 # The head needs enough ephemeral-storage to pull the ~18 GB image.
 ```
 
-**Ray workers cannot connect to the head**
+### Ray workers cannot connect to the head
+
 ```bash
 kubectl get svc "${RAY_CLUSTER_NAME}-head-svc" -n "${NAMESPACE}"
 kubectl exec <worker-pod> -n "${NAMESPACE}" -- nslookup "${RAY_CLUSTER_NAME}-head-svc"
 ```
+
 Separately, if workers are killed mid-run rather than failing to connect, ensure `RAY_memory_monitor_refresh_ms=0` is set to disable the memory monitor.
 
-**NCCL/EFA errors**
+### NCCL/EFA errors
+
 ```bash
 kubectl exec <pod> -- fi_info -p efa
 kubectl exec <pod> -- env | grep NCCL
@@ -375,18 +379,25 @@ kubectl exec <pod> -- env | grep NCCL
 # allow all traffic to itself on both ingress and egress, since EFA SRD is not IP.
 ```
 
-**`[Errno 28] No space left on device` during the checkpoint save** — a dense 4B run writes about 53 GB per checkpoint, so `CHECKPOINT_DIR` needs real headroom. On a shared Lustre filesystem near capacity the save can fail this way even when `df` reports hundreds of gigabytes free, because free space is not distributed evenly across the OSTs the write lands on. Check per-OST usage rather than the aggregate, or point `CHECKPOINT_DIR` at a filesystem with room to spare.
+### `[Errno 28] No space left on device` during the checkpoint save
 
-**`ImportError: libcuda.so.1`** — the Ray job driver or a control actor landed on the head or another node without the driver; see miles-specific requirements.
+A dense 4B run writes about 53 GB per checkpoint, so `CHECKPOINT_DIR` needs real headroom. On a shared Lustre filesystem near capacity the save can fail this way even when `df` reports hundreds of gigabytes free, because free space is not distributed evenly across the OSTs the write lands on. Check per-OST usage rather than the aggregate, or point `CHECKPOINT_DIR` at a filesystem with room to spare.
 
-**`torch.cuda.is_available()` is `False` or `Error 803`**
+### `ImportError: libcuda.so.1`
+
+The Ray job driver or a control actor landed on the head or another node without the driver; see miles-specific requirements.
+
+### `torch.cuda.is_available()` is `False` or `Error 803`
+
 ```bash
 kubectl exec <pod> -- ls /usr/local/cuda*/compat   # expect: not found
 # The base image's CUDA forward-compat library was older than the node driver;
 # miles.Dockerfile removes it.
 ```
 
-**SGLang out-of-memory in colocated mode** — lower `--sglang-mem-fraction-static` to 0.8 for 4B or 0.75 for the 30B MoE colocated run.
+### SGLang out-of-memory in colocated mode
+
+Lower `--sglang-mem-fraction-static` to 0.8 for 4B or 0.75 for the 30B MoE colocated run.
 
 ## References
 
