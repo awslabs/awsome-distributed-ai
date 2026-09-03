@@ -270,8 +270,8 @@ deepep-v2-efa/
 - [aws-ofi-nccl](https://github.com/aws/aws-ofi-nccl) — the GIN-capable NCCL network plugin
 - [NeMo-RL](https://github.com/NVIDIA-NeMo/RL) and [Megatron-LM](https://github.com/NVIDIA/Megatron-LM)
 - Sibling test cases: [`slime`](../../slime) (RL on HyperPod EKS as a Ray cluster — this folder
-  mirrors its shape), [`sglang/dsr1-deepep-efa`](../../sglang/dsr1-deepep-efa) (the NVSHMEM-path
-  DeepEP serving sample)
+  mirrors its shape), [`inference/sglang/dsr1-deepep-efa`](../../../inference/sglang/dsr1-deepep-efa)
+  (the NVSHMEM-path DeepEP serving sample)
 - [`micro-benchmarks/expert-parallelism`](../../../../micro-benchmarks/expert-parallelism) —
   kernel-level EP benchmarks, including a DeepEP V2 EFA-GDA (`NCCL_GIN_TYPE=5`) benchmark — a
   different GIN backend from this folder's CPU-proxy (`NCCL_GIN_TYPE=2`)
