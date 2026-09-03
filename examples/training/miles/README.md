@@ -130,7 +130,7 @@ Each configuration below was launched on 2x p5en.48xlarge and confirmed to compl
 
 ## Prerequisites
 
-1. A SageMaker HyperPod EKS cluster, or a plain EKS cluster, with a p5en.48xlarge GPU instance group and EFA. Validated on p5en.48xlarge; other instance types may need resource-value retuning.
+1. A SageMaker HyperPod EKS cluster, or a plain EKS cluster, with a p5en.48xlarge GPU instance group and EFA, and a CPU node group for the Ray head, which the manifest keeps off the GPU pool. Validated on p5en.48xlarge; other instance types may need resource-value retuning.
 2. An FSx for Lustre `PersistentVolumeClaim` mounted at `/fsx`. The claim name is set through `FSX_CLAIM` and defaults to `fsx-claim`, matching the sibling slime test case.
 3. Amazon ECR access for building and pushing the image.
 4. A Hugging Face account and access token for model downloads.
@@ -161,6 +161,13 @@ cp env_vars.colocated.example env_vars
 source env_vars
 ```
 
+The manifests below are rendered with `envsubst`, which replaces a variable it cannot resolve with an empty string and still exits 0, so an `env_vars` that predates one of them yields `nvidia.com/gpu: ''` or an empty image and fails later as a quantity parse error or `ImagePullBackOff`. Define this once in the shell you run the steps from and use it in place of `envsubst`; it names the missing variable instead. If it reports one, copy `env_vars` from its example again and re-apply your edits.
+
+```bash
+render() { local v; for v in $(envsubst --variables "$(grep -v '^[[:space:]]*#' "$1")"); do
+  [ -n "$(printenv "$v")" ] || { echo "[ERROR] $1 needs $v" >&2; return 1; }; done; envsubst < "$1"; }
+```
+
 `env_vars` includes `NAMESPACE`, which must already exist. The Hugging Face token is read from a Kubernetes Secret named `hf-token`, wired into the pods with `secretKeyRef`, so create it once per namespace. This is the same flow as the sibling slime test case:
 
 ```bash
@@ -186,7 +193,7 @@ kubectl create configmap miles-build-context --from-file=Dockerfile=miles.Docker
 kubectl create secret docker-registry ecr-miles-push \
     --docker-server="${REGISTRY}" --docker-username=AWS \
     --docker-password="$(aws ecr get-login-password --region ${AWS_REGION})" -n "${NAMESPACE}"
-bash scripts/render.sh kubernetes/buildkit-job.yaml | kubectl apply -f -
+render kubernetes/buildkit-job.yaml | kubectl apply -f -
 ```
 
 ### 3. Download and Prepare the Model
@@ -197,7 +204,7 @@ The model to fetch comes from `MODEL_NAME` and `MODEL_LOCAL` in the env file, so
 
 ```bash
 source env_vars
-bash scripts/render.sh kubernetes/data-prep-pod.yaml | kubectl apply -f -
+render kubernetes/data-prep-pod.yaml | kubectl apply -f -
 kubectl wait --for=condition=Ready pod/data-prep -n "${NAMESPACE}" --timeout=300s
 kubectl exec -it data-prep -n "${NAMESPACE}" -- \
     env MODEL_NAME="${MODEL_NAME}" MODEL_LOCAL="${MODEL_LOCAL}" bash
@@ -216,10 +223,13 @@ hf download --repo-type dataset zhuzilin/aime-2024 --local-dir /fsx/data/aime-20
 
 KubeRay does not recreate existing pods when a RayCluster's pod template changes, so applying an updated manifest over a running cluster leaves the old head and workers as they were. If you are redeploying after changing container env, resources, the image, or the topology, delete the cluster first; the `delete` below is a no-op on a first run.
 
+The watch below does not exit on its own: interrupt it once the head and the workers are Running, then
+start the port-forward.
+
 ```bash
 source env_vars
 kubectl delete raycluster "${RAY_CLUSTER_NAME}" -n "${NAMESPACE}" --ignore-not-found
-bash scripts/render.sh kubernetes/raycluster.yaml | kubectl apply -f -
+render kubernetes/raycluster.yaml | kubectl apply -f -
 kubectl get pods -w -n "${NAMESPACE}" \
     -l "ray.io/cluster=${RAY_CLUSTER_NAME},ray.io/is-ray-node=yes"
 kubectl port-forward -n "${NAMESPACE}" "svc/${RAY_CLUSTER_NAME}-head-svc" 8265:8265 &
@@ -283,20 +293,20 @@ miles adds the sm_103 Transformer Engine FA2 whitelist patch that the sibling sl
 
 1. **The 30B MoE rollout degenerates when SGLang runs the MoE tensor-parallel and expert-parallel at the same time**, that is when `moe_tp>1` and `moe_ep>1`. Pure expert-parallel with `moe_tp=1`, the shipped default, and pure tensor-parallel with `moe_ep=1` both train cleanly. This is an upstream SGLang bug in the FlashInfer allreduce+RMSNorm fusion, tracked and being fixed upstream in sgl-project/sglang PRs [#32963](https://github.com/sgl-project/sglang/pull/32963), [#32511](https://github.com/sgl-project/sglang/pull/32511), and [#32012](https://github.com/sgl-project/sglang/pull/32012). Disabling the fusion with `enforce_disable_flashinfer_allreduce_fusion` restores clean generation, with 4-gram repetition at 0.006 on par with pure EP, and the recipe applies this automatically for the combined geometry. The workaround stays correct after upstream ships the fix; once you move to a fixed build you can drop the flag to regain the fusion's throughput.
 
-2. **Qwen2.5-72B does not fit the 16-GPU H200 layout.** The disaggregated TP4 PP2 configuration runs out of memory on 2x p5en.48xlarge. It needs a larger cluster or optimizer and activation offload, neither of which has been run here.
+2. **Qwen2.5-72B does not fit the 16-GPU H200 layout.** The disaggregated TP4 PP2 configuration runs out of memory on 2x p5en.48xlarge. It needs a larger cluster, or activation offload on top of the optimizer offload the 30B recipe already uses. Neither has been run for this model here.
 
-3. **Ray control actors need a CUDA driver, and the head does not have one.** miles's control actors reach `transformer_engine` through `megatron.core` at import time and that dlopens `libcuda.so.1`, even with `num-gpus 0`. The head container is `NVIDIA_VISIBLE_DEVICES=void`, so it has no driver on any node. What keeps those actors off it is `num-cpus: '0'` in the head's `rayStartParams`: `RolloutManager` is created with `num_cpus=1`, so a head advertising no CPUs is not a candidate. Scheduled there it would die about 46 seconds after submission with `OSError: libcuda.so.1`. The job driver is placed separately, by `--entrypoint-resources '{"gpu_node": 0.001}'` in the recipes.
+3. **Ray control actors need a CUDA driver, and the head does not have one.** miles's control actors reach `transformer_engine` through `megatron.core` at import time and that dlopens `libcuda.so.1`, even with `num-gpus 0`. The head container is `NVIDIA_VISIBLE_DEVICES=void`, so it has no driver on any node. What keeps those actors off it is `num-cpus: '0'` in the head's `rayStartParams`: `RolloutManager` is created with `num_cpus=1`, so a head advertising no CPUs is not a candidate. Scheduled there it dies shortly after submission with `OSError: libcuda.so.1`. The job driver is placed separately, by `--entrypoint-resources '{"gpu_node": 0.001}'` in the recipes.
 
-   Two limits, so this is not read as a guarantee. An actor requesting exactly `num_cpus=0` is still eligible for the head, and miles's `MultiLoRAController` is both `num_cpus=0` and hard-pinned to the head; the recipes here never create it. And miles's `--pin-rollout-manager-to-head`, reachable through `EXTRA_TRAIN_ARGS`, cannot be satisfied by a zero-CPU head at all.
+   Two limits. An actor requesting exactly `num_cpus=0` is still eligible for the head, and miles's `MultiLoRAController` is both `num_cpus=0` and hard-pinned to the head; the recipes here never create it. And miles's `--pin-rollout-manager-to-head`, reachable through `EXTRA_TRAIN_ARGS`, cannot be satisfied by a zero-CPU head at all.
 
-   Giving the head a driver instead is the obvious alternative and it is not portable. `NVIDIA_VISIBLE_DEVICES=none` is the value that asks for the driver libraries without a GPU device, and only the legacy injection path understands it. Where the NVIDIA container toolkit runs in CDI mode, which is what the GPU Operator configures once it writes `enable_cdi` into containerd, `none` resolves to the empty CDI device name `management.nvidia.com/gpu=` and the pod does not start at all, failing with `failed to inject CDI devices`. Measured on `p5en.48xlarge` with container toolkit 1.18.1: `none` gives `StartError`, while the CDI-shaped `management.nvidia.com/gpu=all` does start and does provide `libcuda.so.1` but exposes every GPU on the node to the coordinator, and no driver-only CDI device is generated on the node. Confirm the head is advertising no CPUs:
+   Do not reach for `NVIDIA_VISIBLE_DEVICES=none` to give the head a driver. Only the legacy injection path understands that value; where the container toolkit runs in CDI mode, which is what the GPU Operator configures, it resolves to an empty CDI device name and the pod does not start at all. Confirm the head is advertising no CPUs:
 
    ```bash
-   kubectl exec -n "${NAMESPACE}" <ray-head-pod> -- \
-       python -c "import ray; ray.init(address='auto'); print(ray.cluster_resources())"
+   kubectl exec -n "${NAMESPACE}" <ray-head-pod> -- python -c 'import ray; ray.init(address="auto"); \
+       print([n["Resources"] for n in ray.nodes() if n["Alive"] and "gpu_node" not in n["Resources"]])'
    ```
 
-   If you do need a CUDA-capable head, for `--pin-rollout-manager-to-head` or anything else that must run there, request `nvidia.com/gpu: 1` for the head container and drop the zero-CPU setting. That costs a GPU but obtains the driver through the device plugin, which allocates a real device and therefore works on both injection paths. Needing a driver for a zero-GPU control process at all is an upstream property of miles, not something this test case introduces.
+   If you do need a CUDA-capable head, for `--pin-rollout-manager-to-head` or anything else that must run there, request `nvidia.com/gpu: 1` for the head container and drop the zero-CPU setting. That costs a GPU but obtains the driver through the device plugin, which allocates a real device and therefore works on both injection paths.
 
 ## Reward Function
 
@@ -323,8 +333,7 @@ miles/
 └── scripts/
     ├── convert_checkpoint.sh        # HF <-> Megatron
     ├── derive_topology.sh           # sourced by env_vars*: validates and derives the topology
-    ├── evaluate.sh                  # AIME-2024
-    └── render.sh                    # envsubst a manifest, refusing an incomplete one
+    └── evaluate.sh                  # AIME-2024
 ```
 
 ## Software Versions
@@ -341,7 +350,7 @@ The base image is pinned by digest, and a digest does not name a source commit: 
 | CUDA | 13.0.1 |
 | NCCL | 2.28.3 |
 | PyTorch | 2.11.0 |
-| numpy | 2.3.5. `requirements.txt` argues for `<2`; that describes the sibling slime build and is not installed here |
+| numpy | 2.3.5. The sibling slime build pins `<2`; this image does not |
 | EFA installer | 1.48.0 |
 
 The miles commit and the Python package versions can be read out of the running image; the base digest and the CUDA, NCCL and EFA rows come from the registry and the image metadata instead:
@@ -357,9 +366,11 @@ kubectl exec -n "${NAMESPACE}" <ray-pod> -- bash -lc \
 
 ```bash
 kubectl describe pod <pod>
-# Check GPU/EFA/memory/ephemeral-storage requests against node capacity.
-# The head needs enough ephemeral-storage to pull the ~18 GB image.
 ```
+
+`didn't match Pod's node affinity/selector` means no node carries the label the manifest rendered; the
+head needs the CPU pair and the workers the GPU pair. Otherwise compare the pod's GPU, EFA, memory and
+ephemeral-storage requests against node capacity, remembering the head pulls the same ~18 GB image.
 
 ### Ray workers cannot connect to the head
 
