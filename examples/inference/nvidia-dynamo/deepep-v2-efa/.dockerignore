@@ -1,0 +1,7 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
+# .gitignore does NOT apply to the Docker build context, so without this file the
+# gitignored setup/env_vars (your ECR URI) is uploaded to the daemon/CI builder on
+# every `docker build .` even though the Dockerfile COPYs named files (never `COPY . .`).
+# Keep it excluded from the context; benchmarks/raw/ is measurement output, never an input.
+setup/env_vars
+benchmarks/raw/
