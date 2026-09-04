@@ -1,19 +1,61 @@
 ---
-- name: "Download EFA installer"
+- name: Download EFA installer
   ansible.builtin.get_url:
     url: "{{ aws_efa_url }}"
     dest: "{{ aws_efa_work_dir }}/{{ aws_efa_archive }}"
+    checksum: "sha256:{{ aws_efa_sha256 }}"
     mode: "0644"
 
-- name: "Extract EFA installer"
+- name: Create versioned EFA extraction directory
+  ansible.builtin.file:
+    path: "{{ aws_efa_extract_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Extract EFA installer
   ansible.builtin.unarchive:
     src: "{{ aws_efa_work_dir }}/{{ aws_efa_archive }}"
     remote_src: true
-    dest: "{{ aws_efa_work_dir }}"
-    creates: "{{ aws_efa_work_dir }}/aws-efa-installer"
+    dest: "{{ aws_efa_extract_dir }}"
+    extra_opts:
+      - --strip-components=1
+    creates: "{{ aws_efa_extract_dir }}/efa_installer.sh"
 
-- name: "Execute EFA installer"
+- name: Execute EFA installer
   ansible.builtin.command:
-    cmd: "bash efa_installer.sh -y -n {{ '-g' if enable_gpus else '' }}"
+    cmd: >-
+      bash efa_installer.sh -y -n
+      {{ '-m' if aws_efa_minimal else '' }}
+      {{ '-g' if aws_efa_enable_gpus else '' }}
   args:
-    chdir: "{{ aws_efa_work_dir }}/aws-efa-installer"
+    chdir: "{{ aws_efa_extract_dir }}"
+  changed_when: true
+
+- name: Verify EFA kernel module metadata
+  ansible.builtin.command: modinfo efa
+  changed_when: false
+
+- name: Verify rdma-core package
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: Require rdma-core
+  ansible.builtin.assert:
+    that: "'rdma-core' in ansible_facts.packages"
+
+- name: Check components excluded from minimal mode
+  when: aws_efa_minimal
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /opt/amazon/efa/bin/fi_info
+    - /opt/amazon/openmpi
+    - /opt/amazon/ofi-nccl
+  register: aws_efa_excluded_components
+
+- name: Require minimal EFA ownership boundary
+  when: aws_efa_minimal
+  ansible.builtin.assert:
+    that: >-
+      aws_efa_excluded_components.results
+      | selectattr('stat.exists') | list | length == 0

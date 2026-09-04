@@ -1,7 +1,0 @@
----
-dependencies:
-  - role: nvidia_cuda
-
-nccl_tag: v2.18.6-1
-nccl_repo: NVIDIA
-install_nccl_tests: true

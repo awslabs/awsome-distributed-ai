@@ -1,0 +1,134 @@
+---
+# yamllint disable rule:line-length
+- name: Create installer directory
+  ansible.builtin.file:
+    path: "{{ aws_pcs_work_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Install signature verification tooling
+  ansible.builtin.apt:
+    name: gpg
+    state: present
+
+- name: Download AWS PCS agent installer
+  ansible.builtin.get_url:
+    url: "https://aws-pcs-repo-{{ aws_region }}.s3.{{ aws_region }}.amazonaws.com/aws-pcs-agent/aws-pcs-agent-v{{ aws_pcs_agent_version }}.tar.gz"
+    dest: "{{ aws_pcs_work_dir }}/aws-pcs-agent-v{{ aws_pcs_agent_version }}.tar.gz"
+    checksum: "sha256:{{ aws_pcs_agent_sha256 }}"
+    mode: "0644"
+
+- name: Download AWS PCS signing key
+  ansible.builtin.get_url:
+    url: "https://aws-pcs-repo-public-keys-{{ aws_region }}.s3.{{ aws_region }}.amazonaws.com/aws-pcs-public-key.pub"
+    dest: "{{ aws_pcs_work_dir }}/aws-pcs-public-key.pub"
+    mode: "0644"
+
+- name: Create temporary AWS PCS keyring
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: aws-pcs-gnupg-
+  register: aws_pcs_gnupg
+
+- name: Import AWS PCS signing key
+  ansible.builtin.command: >-
+    gpg --batch --homedir {{ aws_pcs_gnupg.path }}
+    --import {{ aws_pcs_work_dir }}/aws-pcs-public-key.pub
+  changed_when: true
+
+- name: Read AWS PCS signing-key fingerprint
+  ansible.builtin.shell: >-
+    set -o pipefail &&
+    gpg --batch --homedir {{ aws_pcs_gnupg.path }} --with-colons
+    --fingerprint 7EEF030EDDF5C21C |
+    awk -F: '/^fpr:/ {print $10; exit}'
+  args:
+    executable: /bin/bash
+  changed_when: false
+  register: aws_pcs_observed_fingerprint
+
+- name: Require expected AWS PCS signing-key fingerprint
+  ansible.builtin.assert:
+    that: aws_pcs_observed_fingerprint.stdout == aws_pcs_signing_key_fingerprint
+
+- name: Download AWS PCS agent signature
+  ansible.builtin.get_url:
+    url: "https://aws-pcs-repo-{{ aws_region }}.s3.{{ aws_region }}.amazonaws.com/aws-pcs-agent/aws-pcs-agent-v{{ aws_pcs_agent_version }}.tar.gz.sig"
+    dest: "{{ aws_pcs_work_dir }}/aws-pcs-agent-v{{ aws_pcs_agent_version }}.tar.gz.sig"
+    mode: "0644"
+
+- name: Verify AWS PCS agent signature
+  ansible.builtin.command: >-
+    gpg --batch --homedir {{ aws_pcs_gnupg.path }} --verify
+    {{ aws_pcs_work_dir }}/aws-pcs-agent-v{{ aws_pcs_agent_version }}.tar.gz.sig
+    {{ aws_pcs_work_dir }}/aws-pcs-agent-v{{ aws_pcs_agent_version }}.tar.gz
+  changed_when: false
+
+- name: Extract AWS PCS agent installer
+  ansible.builtin.unarchive:
+    src: "{{ aws_pcs_work_dir }}/aws-pcs-agent-v{{ aws_pcs_agent_version }}.tar.gz"
+    dest: "{{ aws_pcs_work_dir }}"
+    remote_src: true
+
+- name: Install AWS PCS agent
+  ansible.builtin.command: ./installer.sh
+  args:
+    chdir: "{{ aws_pcs_work_dir }}/aws-pcs-agent"
+  changed_when: true
+
+- name: Download AWS PCS Slurm installer
+  ansible.builtin.get_url:
+    url: "https://aws-pcs-repo-{{ aws_region }}.s3.{{ aws_region }}.amazonaws.com/aws-pcs-slurm/aws-pcs-slurm-{{ aws_pcs_slurm_major }}-installer-{{ aws_pcs_slurm_version }}.tar.gz"
+    dest: "{{ aws_pcs_work_dir }}/aws-pcs-slurm-{{ aws_pcs_slurm_major }}-installer-{{ aws_pcs_slurm_version }}.tar.gz"
+    checksum: "sha256:{{ aws_pcs_slurm_sha256 }}"
+    mode: "0644"
+
+- name: Download AWS PCS Slurm signature
+  ansible.builtin.get_url:
+    url: "https://aws-pcs-repo-{{ aws_region }}.s3.{{ aws_region }}.amazonaws.com/aws-pcs-slurm/aws-pcs-slurm-{{ aws_pcs_slurm_major }}-installer-{{ aws_pcs_slurm_version }}.tar.gz.sig"
+    dest: "{{ aws_pcs_work_dir }}/aws-pcs-slurm-{{ aws_pcs_slurm_major }}-installer-{{ aws_pcs_slurm_version }}.tar.gz.sig"
+    mode: "0644"
+
+- name: Verify AWS PCS Slurm signature
+  ansible.builtin.command: >-
+    gpg --batch --homedir {{ aws_pcs_gnupg.path }} --verify
+    {{ aws_pcs_work_dir }}/aws-pcs-slurm-{{ aws_pcs_slurm_major }}-installer-{{ aws_pcs_slurm_version }}.tar.gz.sig
+    {{ aws_pcs_work_dir }}/aws-pcs-slurm-{{ aws_pcs_slurm_major }}-installer-{{ aws_pcs_slurm_version }}.tar.gz
+  changed_when: false
+
+- name: Extract AWS PCS Slurm installer
+  ansible.builtin.unarchive:
+    src: "{{ aws_pcs_work_dir }}/aws-pcs-slurm-{{ aws_pcs_slurm_major }}-installer-{{ aws_pcs_slurm_version }}.tar.gz"
+    dest: "{{ aws_pcs_work_dir }}"
+    remote_src: true
+
+- name: Install AWS PCS Slurm
+  ansible.builtin.command: ./installer.sh -y
+  args:
+    chdir: "{{ aws_pcs_work_dir }}/aws-pcs-slurm-{{ aws_pcs_slurm_major }}-installer"
+  changed_when: true
+
+- name: Read AWS PCS agent version
+  ansible.builtin.slurp:
+    src: /opt/aws/pcs/version
+  register: aws_pcs_agent_version_file
+
+- name: Read Slurm version
+  ansible.builtin.slurp:
+    src: "/opt/aws/pcs/scheduler/slurm-{{ aws_pcs_slurm_major }}/version"
+  register: aws_pcs_slurm_version_file
+
+- name: Verify AWS PCS software versions
+  ansible.builtin.assert:
+    that:
+      - "('AGENT_VERSION=\u0027' + (aws_pcs_agent_version | regex_replace('-[0-9]+$', '')) + '\u0027') in (aws_pcs_agent_version_file.content | b64decode)"
+      - "('SLURM_VERSION=\u0027' + (aws_pcs_slurm_version | regex_replace('-[0-9]+$', '')) + '\u0027') in (aws_pcs_slurm_version_file.content | b64decode)"
+
+- name: Verify Slurm daemon service definition
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/slurmd-{{ aws_pcs_slurm_major }}.service"
+  register: aws_pcs_slurmd_service
+
+- name: Require Slurm daemon service definition
+  ansible.builtin.assert:
+    that: aws_pcs_slurmd_service.stat.exists
