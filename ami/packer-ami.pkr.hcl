@@ -49,16 +49,20 @@ locals {
 }
 
 data "amazon-parameterstore" "ubuntu_server" {
-  name = "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
+  name   = "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
+  region = var.aws_region
 }
 data "amazon-parameterstore" "dlami" {
-  name = "/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-24.04/latest/ami-id"
+  name   = "/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-24.04/latest/ami-id"
+  region = var.aws_region
 }
 data "amazon-parameterstore" "eks_al2023" {
-  name = "/aws/service/eks/optimized-ami/${var.eks_version}/amazon-linux-2023/x86_64/standard/recommended/image_id"
+  name   = "/aws/service/eks/optimized-ami/${var.eks_version}/amazon-linux-2023/x86_64/standard/recommended/image_id"
+  region = var.aws_region
 }
 data "amazon-parameterstore" "eks_ubuntu" {
-  name = "/aws/service/canonical/ubuntu/eks/24.04/${var.eks_version}/stable/current/amd64/hvm/ebs-gp3/ami-id"
+  name   = "/aws/service/canonical/ubuntu/eks/24.04/${var.eks_version}/stable/current/amd64/hvm/ebs-gp3/ami-id"
+  region = var.aws_region
 }
 
 data "amazon-ami" "pcluster_ubuntu2404" {
@@ -71,6 +75,7 @@ data "amazon-ami" "pcluster_ubuntu2404" {
   }
   most_recent = true
   owners      = ["amazon"]
+  region      = var.aws_region
 }
 
 source "amazon-ebs" "ec2-ubuntu2404" {

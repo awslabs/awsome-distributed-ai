@@ -14,7 +14,7 @@
 
 - name: Install NVIDIA data-center driver
   ansible.builtin.dnf:
-    name: nvidia-driver-cuda
+    name: "nvidia-driver-cuda-{{ nvidia_driver_package_version }}"
     state: present
 
 - name: Reboot after NVIDIA driver installation
@@ -24,3 +24,9 @@
 - name: Verify NVIDIA driver
   ansible.builtin.command: nvidia-smi --query-gpu=driver_version --format=csv,noheader
   changed_when: false
+  register: nvidia_driver_version_output
+
+- name: Require pinned NVIDIA driver version
+  ansible.builtin.assert:
+    that:
+      - nvidia_driver_version_output.stdout_lines | unique == [nvidia_driver_package_version | regex_replace('-[0-9]+\\.amzn2023$', '')]
