@@ -47,6 +47,11 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated \
     vim
 RUN apt-get purge -y cuda-compat-*
 
+# The NVIDIA container runtime bind-mounts the host OpenCL ICD at this path.
+# Create the mount target for Kubernetes runtimes that inject the driver stack.
+RUN mkdir -p /etc/OpenCL/vendors \
+    && touch /etc/OpenCL/vendors/nvidia.icd
+
 RUN mkdir -p /var/run/sshd
 RUN sed -i 's/[ #]\(.*StrictHostKeyChecking \).*/ \1no/g' /etc/ssh/ssh_config && \
     echo "    UserKnownHostsFile /dev/null" >> /etc/ssh/ssh_config && \
