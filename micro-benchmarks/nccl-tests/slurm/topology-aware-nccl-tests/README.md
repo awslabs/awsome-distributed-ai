@@ -27,42 +27,44 @@ It is recommended that you use the templates in the architectures [directory](..
 
 The NCCL tests are packaged in a container.
 
-> You can set versions and the branch for NCCL and EFA by editing the variables below in the Dockerfile.
+Build the shared [`nccl-tests.Dockerfile`](../../nccl-tests.Dockerfile) from the benchmark root. Its pinned release set is EFA installer 1.50.0, bundled aws-ofi-nccl 1.21.1, NCCL 2.31.2-1, nccl-tests 2.20.0, CUDA 13.1.2, and GDRCopy 2.6. See the [aws-ofi-nccl 1.21.1 release notes](https://github.com/aws/aws-ofi-nccl/releases/tag/v1.21.1) and [EFA installer release notes](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-changelog.html) for the tested compatibility set.
 
 > | Variable              | Default     | Repository                                                                                  |
 > |-----------------------|-------------|---------------------------------------------------------------------------------------------|
-> |`CUDA_VERSION`         | `12.8.1`    |                                                                                             |
-> |`GDRCOPY_VERSION`      | `v2.5.1`    | [link](https://github.com/NVIDIA/gdrcopy)                                                   |
-> |`EFA_INSTALLER_VERSION`| `1.43.2`    | [link](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-start.html#efa-start-enable) |
-> |`AWS_OFI_NCCL_VERSION` | `v1.16.3`   | [link](https://github.com/aws/aws-ofi-nccl)                                                 |
-> |`NCCL_VERSION`         | `v2.27.7-1` | [link](https://github.com/NVIDIA/nccl)                                                      |
-> |`NCCL_TESTS_VERSION`   | `v2.16.9`   | [link](https://github.com/NVIDIA/nccl-tests)                                                |
+> |`CUDA_VERSION`         | `13.1.2`    | [CUDA container tag](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/cuda/tags)       |
+> |`GDRCOPY_VERSION`      | `v2.6`      | [GDRCopy v2.6](https://github.com/NVIDIA/gdrcopy/releases/tag/v2.6)                         |
+> |`EFA_INSTALLER_VERSION`| `1.50.0`    | [EFA release notes](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-changelog.html) |
+> |aws-ofi-nccl           | `v1.21.1`   | [aws-ofi-nccl v1.21.1](https://github.com/aws/aws-ofi-nccl/releases/tag/v1.21.1), bundled by EFA installer 1.50.0 |
+> |`NCCL_VERSION`         | `v2.31.2-1` | [NCCL v2.31.2-1](https://github.com/NVIDIA/nccl/releases/tag/v2.31.2-1)                     |
+> |`NCCL_TESTS_VERSION`   | `v2.20.0`   | [nccl-tests v2.20.0](https://github.com/NVIDIA/nccl-tests/releases/tag/v2.20.0)             |
 
-You must pick each version of the library and set them as variables before proceed:
+Set the pinned versions and image tag before building:
 
 ```bash
-GDRCOPY_VERSION=v2.5.1
-EFA_INSTALLER_VERSION=1.43.2
-AWS_OFI_NCCL_VERSION=v1.16.3
-NCCL_VERSION=v2.27.7-1
-NCCL_TESTS_VERSION=v2.16.9
-TAG="efa${EFA_INSTALLER_VERSION}-ofi${AWS_OFI_NCCL_VERSION}-nccl${NCCL_VERSION}-tests${NCCL_TESTS_VERSION}"
+CUDA_VERSION=13.1.2
+GDRCOPY_VERSION=v2.6
+EFA_INSTALLER_VERSION=1.50.0
+AWS_OFI_NCCL_VERSION=v1.21.1
+NCCL_VERSION=v2.31.2-1
+NCCL_TESTS_VERSION=v2.20.0
+TAG="cuda${CUDA_VERSION}-efa${EFA_INSTALLER_VERSION}-ofi${AWS_OFI_NCCL_VERSION}-nccl${NCCL_VERSION}-tests${NCCL_TESTS_VERSION}"
 CONTAINER_IMAGE_NAME_TAG="nccl-tests:${TAG}"
 ```
 
 ### Build the container
 
-If you wish to build the container image by yourself, follow this section. Alternatively, you can use a prebuilt image on a public ECR repository `public.ecr.aws/hpc-cloud/nccl-tests`. If you wish to do so, skip this section.
+Build the container locally with the commands below, or use the matching pinned tag from `public.ecr.aws/hpc-cloud/nccl-tests` after that tag has been published.
 
 1. Build the container image with the command below:
 
    ```bash
-    #Navigate to the slurm directory:
-   cd micro-benchmarks/nccl-tests/slurm/
+   # From the repository root:
+   cd micro-benchmarks/nccl-tests
 
    docker build -f nccl-tests.Dockerfile \
+          --build-arg="CUDA_VERSION=${CUDA_VERSION}" \
+          --build-arg="GDRCOPY_VERSION=${GDRCOPY_VERSION}" \
           --build-arg="EFA_INSTALLER_VERSION=${EFA_INSTALLER_VERSION}" \
-          --build-arg="AWS_OFI_NCCL_VERSION=${AWS_OFI_NCCL_VERSION}" \
           --build-arg="NCCL_VERSION=${NCCL_VERSION}" \
           --build-arg="NCCL_TESTS_VERSION=${NCCL_TESTS_VERSION}" \
           -t ${CONTAINER_IMAGE_NAME_TAG} \
@@ -74,9 +76,9 @@ If you wish to build the container image by yourself, follow this section. Alter
 
    ```
    REPOSITORY               TAG                        IMAGE ID       CREATED         SIZE
-   nccl                     latest                     6e981e5cf6a5   5 hours ago     8.61GB
+   nccl-tests               cuda13.1.2-efa1.50.0-ofiv1.21.1-ncclv2.31.2-1-testsv2.20.0   <image-id>   <created>   <size>
    ...
-   nvidia/cuda              12.8.1-devel-ubuntu22.04   a86c511c87e1   2 weeks ago     6.56GB
+   nvcr.io/nvidia/cuda      13.1.2-devel-ubuntu22.04   <image-id>   <created>   <size>
    ```
 
 ### Slurm

@@ -20,51 +20,54 @@ It is recommended that you use the templates in the architectures [directory](..
 If you are using EKS, this guide assumes that you have the following:
 
 - A functional EKS cluster on AWS. <br/>
-To set up one, please refer to [aws-do-eks](https://bit.ly/do-eks), [Amazon EKS Blueprints for Terraform](https://github.com/aws-ia/terraform-aws-eks-blueprints/tree/main), [Amazon EKS Blueprints for CDK](https://aws-quickstart.github.io/cdk-eks-blueprints/), or others.
+To create one, use an EKS provisioning method supported by your organization.
 - NVIDIA device plugin deployed to your cluster. <br/>
-If you need to deploy it, please refer to [deployment/nvidia-device-plugin](https://github.com/aws-samples/aws-do-eks/blob/main/Container-Root/eks/deployment/nvidia-device-plugin) or [k8s-device-plugin/deployments](https://github.com/NVIDIA/k8s-device-plugin/tree/main/deployments).
+For deployment options, see the [NVIDIA Kubernetes device plugin v0.20.0](https://github.com/NVIDIA/k8s-device-plugin/releases/tag/v0.20.0).
 - EFA device plugin deployed to your cluster. <br/>
-If you need to deploy it, please refer to [deployment/efa-device-plugin](https://github.com/aws-samples/aws-do-eks/tree/main/Container-Root/eks/deployment/efa-device-plugin) or [aws-efa-eks](https://github.com/aws-samples/aws-efa-eks).
+For deployment options, see [aws-efa-eks at commit d801012](https://github.com/aws-samples/aws-efa-eks/tree/d801012b690f0cd17b8e7d5c4231a909faea7c81).
 - Kubeflow MPI operator deployed to your cluster. <br/>
-If you need to deploy it, please refer to [deployment/kubeflow/mpi-operator](https://github.com/aws-samples/aws-do-eks/tree/main/Container-Root/eks/deployment/kubeflow/mpi-operator) or [kubeflow/mpi-operator](https://github.com/kubeflow/mpi-operator).
+For deployment options, see [Kubeflow MPI Operator at commit 1e20021](https://github.com/kubeflow/mpi-operator/tree/1e200217cf1ffcdb1ea45d055f913767dff82ed9).
 - [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html#cliv2-linux-install)
 
 ## 1. Prepare the container image and other artifacts
 
 The NCCL tests are packaged in a container.
 
-> You can set versions and the branch for NCCL and EFA by editing the variables below in the Dockerfile.
+The container pins the following mutually compatible release set. EFA installer 1.50.0 bundles aws-ofi-nccl 1.21.1 and libfabric 2.6.0amzn1.0; the [aws-ofi-nccl 1.21.1 release notes](https://github.com/aws/aws-ofi-nccl/releases/tag/v1.21.1) identify NCCL 2.31.2-1 as its tested NCCL release, and the [EFA installer 1.50.0 release notes](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-changelog.html) identify the bundled plugin version.
 
 > | Variable              | Default     | Repository                                                                                  |
 > |-----------------------|-------------|---------------------------------------------------------------------------------------------|
-> |`CUDA_VERSION`         | `13.0.2`    |                                                                                             |
-> |`GDRCOPY_VERSION`      | `v2.5.2`    | [link](https://github.com/NVIDIA/gdrcopy)                                                   |
-> |`EFA_INSTALLER_VERSION`| `1.48.0`    | [link](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-start.html#efa-start-enable) |
-> |`AWS_OFI_NCCL_VERSION` | *(deprecated)* | AWS OFI NCCL plugin is now bundled with EFA installer                                    |
-> |`NCCL_VERSION`         | `v2.30.4-1` | [link](https://github.com/NVIDIA/nccl)                                                      |
-> |`NCCL_TESTS_VERSION`   | `v2.18.3`   | [link](https://github.com/NVIDIA/nccl-tests)                                                |
+> |`CUDA_VERSION`         | `13.1.2`    | [CUDA container tag](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/cuda/tags)       |
+> |`GDRCOPY_VERSION`      | `v2.6`      | [GDRCopy v2.6](https://github.com/NVIDIA/gdrcopy/releases/tag/v2.6)                         |
+> |`EFA_INSTALLER_VERSION`| `1.50.0`    | [EFA release notes](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-changelog.html) |
+> |aws-ofi-nccl           | `v1.21.1`   | [aws-ofi-nccl v1.21.1](https://github.com/aws/aws-ofi-nccl/releases/tag/v1.21.1), bundled by EFA installer 1.50.0 |
+> |`NCCL_VERSION`         | `v2.31.2-1` | [NCCL v2.31.2-1](https://github.com/NVIDIA/nccl/releases/tag/v2.31.2-1)                     |
+> |`NCCL_TESTS_VERSION`   | `v2.20.0`   | [nccl-tests v2.20.0](https://github.com/NVIDIA/nccl-tests/releases/tag/v2.20.0)             |
 
-The image is built with `NVCC_GENCODE` covering `sm_80`, `sm_86`, `sm_89`, `sm_90`, `sm_100`, and `sm_103` — i.e. native binaries for A100, RTX 30/Ada/Lovelace, H100/H200, B200/GB200, and B300/GB300. PTX is not embedded; if you target a newer architecture, add it to the `NVCC_GENCODE` lines in `nccl-tests.Dockerfile`.
+The image is built with `NVCC_GENCODE` covering `sm_80`, `sm_86`, `sm_89`, `sm_90`, `sm_100`, and `sm_103`, which provides native binaries for A100, RTX 30/Ada/Lovelace, H100/H200, B200/GB200, and B300/GB300. PTX is not embedded; add a new architecture to both `NVCC_GENCODE` lines in `nccl-tests.Dockerfile` before targeting it.
 
-You must pick each version of the library and set them as variables before proceed:
+Set the pinned versions and image tag from the `micro-benchmarks/nccl-tests` directory:
 
 ```bash
-GDRCOPY_VERSION=v2.5.2
-EFA_INSTALLER_VERSION=1.48.0
-NCCL_VERSION=v2.30.4-1
-NCCL_TESTS_VERSION=v2.18.3
-TAG="efa${EFA_INSTALLER_VERSION}-nccl${NCCL_VERSION}-tests${NCCL_TESTS_VERSION}"
+CUDA_VERSION=13.1.2
+GDRCOPY_VERSION=v2.6
+EFA_INSTALLER_VERSION=1.50.0
+AWS_OFI_NCCL_VERSION=v1.21.1
+NCCL_VERSION=v2.31.2-1
+NCCL_TESTS_VERSION=v2.20.0
+TAG="cuda${CUDA_VERSION}-efa${EFA_INSTALLER_VERSION}-ofi${AWS_OFI_NCCL_VERSION}-nccl${NCCL_VERSION}-tests${NCCL_TESTS_VERSION}"
 CONTAINER_IMAGE_NAME_TAG="nccl-tests:${TAG}"
 ```
 
 ### Build the container
 
-If you wish to build the containar image by yourself, follow this section. Alternatively, you can use a prebuild image on a public ECR repository `public.ecr.aws/hpc-cloud/nccl-tests`. If you wish to do so, skip this section.
+Build the container locally with the commands below, or use the matching pinned tag from `public.ecr.aws/hpc-cloud/nccl-tests` after that tag has been published.
 
 1. Build the container image with the command below:
 
    ```bash
    docker build -f nccl-tests.Dockerfile \
+          --build-arg="CUDA_VERSION=${CUDA_VERSION}" \
           --build-arg="GDRCOPY_VERSION=${GDRCOPY_VERSION}" \
           --build-arg="EFA_INSTALLER_VERSION=${EFA_INSTALLER_VERSION}" \
           --build-arg="NCCL_VERSION=${NCCL_VERSION}" \
@@ -79,9 +82,9 @@ If you wish to build the containar image by yourself, follow this section. Alter
 
    ```
    REPOSITORY               TAG                        IMAGE ID       CREATED         SIZE
-   nccl                     latest                     6e981e5cf6a5   5 hours ago     8.61GB
+   nccl-tests               cuda13.1.2-efa1.50.0-ofiv1.21.1-ncclv2.31.2-1-testsv2.20.0   <image-id>   <created>   <size>
    ...
-   nvidia/cuda              13.0.2-devel-ubuntu22.04   a86c511c87e1   2 weeks ago     6.56GB
+   nvcr.io/nvidia/cuda      13.1.2-devel-ubuntu22.04   <image-id>   <created>   <size>
    ```
 
 ### Slurm
@@ -248,7 +251,7 @@ To change the type of collective to test, modify the line with `srun` in the fil
 
    - `slotsPerWorker: 8`: set to the number of GPUs per node in your cluster
    - `<account>.dkr.ecr.<region>.amazonaws.com/<image>:<tag>`: set to your container image URI. You may specify the public ECR image instead as `image: public.ecr.aws/hpc-cloud/nccl-tests:<tag>`. Note: change both locations in the file. You may use `echo ${CONTAINER_IMAGE_NAME_TAG}` to print the image URI.
-   - `-np 16`: set -np option in mpirun to (*`number_of_worker_nodes`* * *`number_of_gpus_per_node`*), other mpirun parameters if needed for your instance type, please refer to [aws-ofi-nccl](https://github.com/aws/aws-ofi-nccl/blob/master/doc/efa-env-var.md)
+   - `-np 16`: set `-np` to `number_of_worker_nodes * number_of_gpus_per_node`. For other `mpirun` parameters, see the [aws-ofi-nccl v1.21.1 EFA environment variables](https://github.com/aws/aws-ofi-nccl/blob/v1.21.1/doc/efa-env-var.md).
    - `replicas: 2`: set to number of worker pods you would like the test to run on. This must be less than or eaqual to the number of nodes in your cluster.
    - `node.kubernetes.io/instance-type: "p5.48xlarge"`: set to the instance type of the nodes in your cluster against which you would like the nccl test to be run
    - `nvidia.com/gpu: 8`: set to the number of GPUs per node in your cluster, adjust in both the limits and requests section
@@ -279,7 +282,7 @@ To change the type of collective to test, modify the line with `srun` in the fil
    kubectl logs -f $(kubectl get pods | grep launcher | cut -d ' ' -f 1)
    ```
 
-   The following is an example exerpt from the logs of a NCCL all_reduce_perf test, executed on a cluster with two p5.48xlarge instances (using EFA_INSTALLER_VERSION=1.28.0, NCCL_TESTS_VERSION=master, NCCL_VERSION=2.18.5):
+   The following historical output is from `all_reduce_perf` on two `p5.48xlarge` instances with EFA installer 1.28.0, nccl-tests v2.13.9, and NCCL 2.18.5. It is an output-format example, not validation of the current release set.
 
    ```log
    [1,0]<stdout>:#                                                              out-of-place                       in-place          

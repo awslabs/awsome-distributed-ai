@@ -26,7 +26,7 @@ spec:
          spec:
           restartPolicy: OnFailure
           containers:
-          - image: public.ecr.aws/u1m6g1t5/nccl-tests-arm64:latest
+          - image: public.ecr.aws/hpc-cloud/nccl-tests:cuda13.1.2-efa1.50.0-ofiv1.21.1-ncclv2.31.2-1-testsv2.20.0
             imagePullPolicy: IfNotPresent
             name: test-nccl-launcher
             env:
@@ -91,7 +91,7 @@ spec:
                     - mpi-worker
                 topologyKey: nvidia.com/gpu.clique
           containers:
-          - image: public.ecr.aws/u1m6g1t5/nccl-tests-arm64:latest
+          - image: public.ecr.aws/hpc-cloud/nccl-tests:cuda13.1.2-efa1.50.0-ofiv1.21.1-ncclv2.31.2-1-testsv2.20.0
             imagePullPolicy: IfNotPresent
             name: nccl-tests-worker
             volumeMounts:
