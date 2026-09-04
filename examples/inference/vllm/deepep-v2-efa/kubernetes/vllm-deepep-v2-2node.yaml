@@ -1,0 +1,198 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
+# vLLM + DeepEP-V2 multi-node MoE serve over AWS EFA — 2× p5en.48xlarge (H200), DP16/EP16.
+#
+# Scale seams (no other change needed — measured EP16→EP32 was launcher-args only):
+#   4 nodes / EP32:  replicas: 4  +  SERVE_DP "32"          (worker start-ranks derive from ordinal)
+#   other instance types (per-node EFA NIC count differs):
+#     p5.48xlarge  (H100): vpc.amazonaws.com/efa: "32", nodeSelector p5.48xlarge
+#     p5en.48xlarge(H200): vpc.amazonaws.com/efa: "16"  ← this file
+#     p6-b200.48xlarge   : vpc.amazonaws.com/efa: "8",  and set DEEPEP_ARCH_LIST=10.0 (env below)
+#     p6-b300.48xlarge   : vpc.amazonaws.com/efa: "16", and set DEEPEP_ARCH_LIST=10.3 (env below).
+#       NOTE (B300): the pinned vLLM wheel carries no sm_103 SASS (sm_75..90a/100/120, PTX to
+#       sm_90) — B300 runs on sm_100 SASS compatibility; the in-pod DeepEP build is native 10.3.
+#
+# Image: build the sample-root Dockerfile (NGC-from-scratch, public sources only) and push to
+# YOUR registry — setup/build-push.sh builds ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} from
+# setup/env_vars; set image: below to that SAME name. Do NOT point at anyone's private registry.
+#
+# privileged: true is REQUIRED where /dev/gdrdrv is not advertised by a device plugin
+# (measured 2026-08-01: the unprivileged device cgroup blocks open("/dev/gdrdrv") with
+# EPERM even after CAP_MKNOD + chmod; only privileged allow-all-devices passes; the
+# CPU-proxy GIN path needs gdrcopy). If your cluster runs a gdrdrv device plugin, drop
+# privileged and request the device instead.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vllm-deepep
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-deepep-v2
+  namespace: vllm-deepep
+spec:
+  clusterIP: None            # headless — stable per-pod DNS for the DP rendezvous
+  # publishNotReadyAddresses pairs with the container readinessProbe below: workers
+  # resolve the leader through this Service's DNS A-record BEFORE vLLM is up, so the
+  # not-ready leader address must still publish or the rendezvous deadlocks.
+  publishNotReadyAddresses: true
+  selector:
+    app: vllm-deepep-v2
+  ports:
+  - { port: 29500, name: dp-rpc }
+  - { port: 8000,  name: http }   # NOTE: headless + publishNotReadyAddresses => this name also resolves to workers (no HTTP server) and to a not-yet-ready leader. Address the leader pod directly (vllm-deepep-v2-0) for the API.
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vllm-deepep-v2
+  namespace: vllm-deepep
+spec:
+  serviceName: vllm-deepep-v2
+  replicas: 2                # 2 nodes = DP16/EP16 ; 4 nodes = DP32/EP32 (also set SERVE_DP)
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: vllm-deepep-v2
+  template:
+    metadata:
+      labels:
+        app: vllm-deepep-v2
+    spec:
+      # one pod per node — EFA/GPU are node resources; same-node EFA loopback is
+      # silently dropped by SRD anyway, so co-scheduling two pods is never right
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: vllm-deepep-v2
+            topologyKey: kubernetes.io/hostname
+      nodeSelector:
+        node.kubernetes.io/instance-type: p5en.48xlarge
+      tolerations:
+      - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: vllm
+        image: REPLACE_WITH_YOUR_REGISTRY/vllm-deepep-v2-efa:v2-20260825   # = ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} from setup/env_vars — bump on every rebuild (IfNotPresent caches by tag; this tag postdates the 2026-08-20 pin bump). Keep in sync with setup/env_vars.example.
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -euo pipefail   # -e: a failed DeepEP build must STOP startup here, not
+                              # surface later as an opaque vLLM import error
+          echo "=== vLLM DeepEP-V2 guide pod $(hostname) $(date -u +%FT%TZ) ==="
+          echo "DeepEP effective SHA: $(cat /opt/deepep.effective.sha 2>/dev/null || echo unknown)"
+
+          # 1) DeepEP-V2 _C.so — built ONCE per pod (needs the live CUDA context;
+          #    that is why it is not baked into the image). ~2 min. Idempotent guard.
+          python3 -c "import deep_ep" 2>/dev/null || bash /opt/build_deepep.sh
+
+          # 2) resolve the leader (pod ordinal 0) through headless-service DNS
+          ORDINAL=${HOSTNAME##*-}
+          LEADER_DNS="vllm-deepep-v2-0.vllm-deepep-v2.vllm-deepep.svc.cluster.local"
+          for i in $(seq 1 120); do getent hosts "$LEADER_DNS" >/dev/null 2>&1 && break; sleep 1; done
+          LEADER_IP=$(getent hosts "$LEADER_DNS" | awk '{print $1}' | head -1 || true)
+          test -n "$LEADER_IP" || { echo "FATAL: leader DNS $LEADER_DNS never resolved"; exit 1; }
+          echo "=== ordinal=$ORDINAL leader=$LEADER_IP ==="
+
+          # 3) serve — leader on ordinal 0, workers derive start-rank from ordinal
+          #    x SERVE_DP_LOCAL (the GPUs-per-node knob — keep manifest + serve.sh consistent).
+          #    Ordering is NOT enforced here: podManagementPolicy: Parallel starts both pods
+          #    together and the worker's only gate is the leader's DNS record (published early
+          #    by publishNotReadyAddresses), so a worker can reach serve.sh before the leader
+          #    binds :29500. vLLM's DP rendezvous tolerates this by retrying (observed across
+          #    our bring-up runs); if you see a rendezvous timeout, add a connect-check on the
+          #    leader's :29500 before this exec rather than relying on start order.
+          if [ "$ORDINAL" = "0" ]; then
+            exec bash /opt/serve.sh leader "$LEADER_IP"
+          else
+            exec bash /opt/serve.sh worker "$LEADER_IP" $((ORDINAL * ${SERVE_DP_LOCAL:-8}))
+          fi
+        env:
+        # ---- scale + model (the knobs; defaults = measured EP16 shape) ----
+        - { name: SERVE_DP,       value: "16" }     # total DP = EP size; 32 for 4 nodes
+        - { name: SERVE_DP_LOCAL, value: "8" }      # GPUs per node — worker start-ranks derive from this
+        - { name: SERVE_MODEL, value: "Qwen/Qwen3-30B-A3B-FP8" }  # any MoE with n_routed_experts % DP == 0 (serve.sh asserts)
+        # - { name: SERVE_ENFORCE_EAGER, value: "1" }   # 1 = eager (the measured default); 0 = default compilation, unblocked by vLLM #52632 which is in this pin (README "eager vs non-eager")
+        # - { name: DEEPEP_ARCH_LIST, value: "10.0" }   # in-pod DeepEP build arch; default 9.0 = H100/H200 — set 10.0 on p6-b200, 10.3 on p6-b300 (Blackwell)
+        # - { name: HF_TOKEN, valueFrom: { secretKeyRef: { name: hf-token, key: token } } }  # gated models only
+
+        # ---- proxy-Gin + EFA contract, VERBATIM (also baked as image ENV; repeated
+        #      here so the manifest alone documents the transport contract) ----
+        - { name: NCCL_GIN_TYPE,             value: "2" }     # 2 = CPU-proxy GIN (the EFA-viable path)
+        - { name: NCCL_GIN_ENABLE,           value: "1" }
+        - { name: OFI_NCCL_GIN_GDAKI,        value: "0" }     # GPU-initiated: not the shipped path on EFA
+        - { name: OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY, value: "1" }  # aws-ofi-nccl PR#1351 (baked in setup_deepep_v2_efa.sh)
+        - { name: EP_REUSE_NCCL_COMM,        value: "0" }     # DeepEP own-comm; never borrow torch lazy comm (2026-08-14 fix)
+        - { name: OFI_NCCL_GIN_MAX_REQUESTS, value: "512" }
+        - { name: NCCL_CUMEM_ENABLE,         value: "1" }
+        - { name: NCCL_NVLS_ENABLE,          value: "0" }
+        - { name: NCCL_IGNORE_DISABLED_P2P,  value: "1" }
+        - { name: FI_PROVIDER,               value: "efa" }
+        - { name: FI_EFA_USE_DEVICE_RDMA,    value: "1" }
+        - { name: FI_EFA_ENABLE_SHM_TRANSFER, value: "0" }
+        - { name: FI_EFA_FORK_SAFE,          value: "1" }
+        - { name: OFI_NCCL_PROTOCOL,         value: "RDMA" }
+        - { name: DEEP_EP_BACKEND,           value: "nccl" }
+        - { name: NCCL_NET_PLUGIN,           value: "/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so" }
+        - { name: NCCL_DEBUG,                value: "WARN" }  # INFO to see the efa-direct banner proof
+        # readiness reports real serving state on the LEADER (vLLM /health on :8000; workers
+        # are --headless, so their probe is process-liveness only — see the caveat below). The
+        # in-pod DeepEP compile (~2 min) + model load happen before the leader is Ready — pairs
+        # with publishNotReadyAddresses on the Service (workers need the leader's DNS record
+        # BEFORE it is Ready, or the rendezvous deadlocks).
+        # leader (ordinal 0): vLLM /health on :8000 = the real "serving" signal, and the
+        # failureThreshold budget below genuinely bounds its compile + load.
+        # workers run --headless (no HTTP server), so their probe is process-liveness only:
+        # `vllm serve` exists from launch, so a worker's startupProbe passes on its first tick
+        # (the 60-min budget does not apply to a worker) and a wedged-but-alive worker stays
+        # Ready. This is a known limitation, not a readiness check — a worker's true progress is
+        # observed via the leader coming Ready (the rendezvous cannot complete without it).
+        startupProbe:
+          exec:
+            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health; else pgrep -f '[v]llm serve' >/dev/null; fi"]
+          periodSeconds: 30
+          timeoutSeconds: 5                  # exec probes default to 1s; a busy vLLM /health can exceed it -> false failure
+          failureThreshold: 120              # up to 60 min: in-pod compile + multi-hundred-GB model load
+        readinessProbe:
+          exec:
+            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health; else pgrep -f '[v]llm serve' >/dev/null; fi"]
+          periodSeconds: 15
+          timeoutSeconds: 5                  # as above — prevents readiness flapping on the leader under load
+        # requests == limits (Guaranteed QoS): NCCL_GIN_TYPE=2 is the CPU-PROXY path, so
+        # proxy-thread CPU sits on the data path — Burstable QoS + CFS throttling under node
+        # pressure would degrade network throughput and silently taint published numbers.
+        resources:
+          limits:
+            nvidia.com/gpu: "8"
+            vpc.amazonaws.com/efa: "16"      # p5en=16, p5=32, p6-b200=8
+            hugepages-2Mi: 5120Mi          # needs 2Mi hugepages pre-allocated on the node (they were on the nodes the measured runs used; without them the pod sits Pending)
+            cpu: "90"
+            memory: 1024Gi
+          requests:
+            nvidia.com/gpu: "8"
+            vpc.amazonaws.com/efa: "16"
+            hugepages-2Mi: 5120Mi
+            cpu: "90"
+            memory: 1024Gi
+        securityContext:
+          privileged: true                   # gdrdrv device-cgroup (see header)
+          capabilities:
+            add: [IPC_LOCK]                  # RDMA memory pinning
+        ports:
+        - { containerPort: 8000,  name: http }
+        - { containerPort: 29500, name: dp-rpc }
+        volumeMounts:
+        - { name: shm,            mountPath: /dev/shm }
+        - { name: dev-infiniband, mountPath: /dev/infiniband }
+        - { name: work,           mountPath: /work }     # HF cache + logs (per-pod, ephemeral)
+      volumes:
+      - name: shm
+        emptyDir: { medium: Memory, sizeLimit: 128Gi }
+      - name: dev-infiniband
+        hostPath: { path: /dev/infiniband }
+      - name: work
+        emptyDir: { sizeLimit: 900Gi }       # big MoE weights land here; size for your model
