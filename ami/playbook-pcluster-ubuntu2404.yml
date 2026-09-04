@@ -4,10 +4,10 @@
   become: true
   gather_facts: false
   tasks:
-    - name: Verify ParallelCluster marker
+    - name: Verify ParallelCluster installation directory
       ansible.builtin.stat:
-        path: /etc/parallelcluster/cfnconfig
+        path: /opt/parallelcluster
       register: pcluster_marker
-    - name: Require ParallelCluster marker
+    - name: Require ParallelCluster installation directory
       ansible.builtin.assert:
         that: pcluster_marker.stat.exists

@@ -5,13 +5,6 @@
     name: nvidia-release
     state: present
 
-- name: Install running-kernel build dependencies
-  ansible.builtin.dnf:
-    name:
-      - "kernel-devel-{{ ansible_kernel }}"
-      - "kernel-headers-{{ ansible_kernel }}"
-    state: present
-
 - name: Install NVIDIA data-center driver
   ansible.builtin.dnf:
     name: "nvidia-driver-cuda-{{ nvidia_driver_package_version }}"

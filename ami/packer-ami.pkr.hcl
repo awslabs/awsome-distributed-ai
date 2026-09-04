@@ -84,6 +84,10 @@ source "amazon-ebs" "ec2-ubuntu2404" {
   region        = var.aws_region
   source_ami    = data.amazon-parameterstore.ubuntu_server.value
   ssh_username  = "ubuntu"
+  metadata_options {
+    http_endpoint = "enabled"
+    http_tokens   = "required"
+  }
   launch_block_device_mappings {
     device_name           = "/dev/sda1"
     volume_size           = 100
@@ -100,6 +104,10 @@ source "amazon-ebs" "ec2-ubuntu2404-dlami" {
   region        = var.aws_region
   source_ami    = data.amazon-parameterstore.dlami.value
   ssh_username  = "ubuntu"
+  metadata_options {
+    http_endpoint = "enabled"
+    http_tokens   = "required"
+  }
   launch_block_device_mappings {
     device_name           = "/dev/sda1"
     volume_size           = 100
@@ -116,6 +124,10 @@ source "amazon-ebs" "pcluster-ubuntu2404" {
   region        = var.aws_region
   source_ami    = data.amazon-ami.pcluster_ubuntu2404.id
   ssh_username  = "ubuntu"
+  metadata_options {
+    http_endpoint = "enabled"
+    http_tokens   = "required"
+  }
   launch_block_device_mappings {
     device_name           = "/dev/sda1"
     volume_size           = 100
@@ -132,6 +144,10 @@ source "amazon-ebs" "eks-al2023" {
   region        = var.aws_region
   source_ami    = data.amazon-parameterstore.eks_al2023.value
   ssh_username  = "ec2-user"
+  metadata_options {
+    http_endpoint = "enabled"
+    http_tokens   = "required"
+  }
   launch_block_device_mappings {
     device_name           = "/dev/xvda"
     volume_size           = 100
@@ -148,6 +164,10 @@ source "amazon-ebs" "eks-ubuntu2404" {
   region        = var.aws_region
   source_ami    = data.amazon-parameterstore.eks_ubuntu.value
   ssh_username  = "ubuntu"
+  metadata_options {
+    http_endpoint = "enabled"
+    http_tokens   = "required"
+  }
   launch_block_device_mappings {
     device_name           = "/dev/sda1"
     volume_size           = 100
@@ -164,6 +184,10 @@ source "amazon-ebs" "pcs-ubuntu2404" {
   region        = var.aws_region
   source_ami    = data.amazon-parameterstore.dlami.value
   ssh_username  = "ubuntu"
+  metadata_options {
+    http_endpoint = "enabled"
+    http_tokens   = "required"
+  }
   launch_block_device_mappings {
     device_name           = "/dev/sda1"
     volume_size           = 100

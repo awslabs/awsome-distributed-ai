@@ -12,6 +12,11 @@
     state: directory
     mode: "0755"
 
+- name: Refresh Ubuntu package metadata
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
 - name: Extract EFA installer
   ansible.builtin.unarchive:
     src: "{{ aws_efa_work_dir }}/{{ aws_efa_archive }}"

@@ -121,8 +121,12 @@
 - name: Verify AWS PCS software versions
   ansible.builtin.assert:
     that:
-      - "('AGENT_VERSION=\u0027' + (aws_pcs_agent_version | regex_replace('-[0-9]+$', '')) + '\u0027') in (aws_pcs_agent_version_file.content | b64decode)"
-      - "('SLURM_VERSION=\u0027' + (aws_pcs_slurm_version | regex_replace('-[0-9]+$', '')) + '\u0027') in (aws_pcs_slurm_version_file.content | b64decode)"
+      - >-
+        ('AGENT_VERSION=' ~ "'" ~ aws_pcs_agent_upstream_version ~ "'")
+        in (aws_pcs_agent_version_file.content | b64decode)
+      - >-
+        ('SLURM_VERSION=' ~ "'" ~ aws_pcs_slurm_upstream_version ~ "'")
+        in (aws_pcs_slurm_version_file.content | b64decode)
 
 - name: Verify Slurm daemon service definition
   ansible.builtin.stat:
