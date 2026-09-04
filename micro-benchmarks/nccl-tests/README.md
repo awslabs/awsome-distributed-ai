@@ -22,11 +22,11 @@ If you are using EKS, this guide assumes that you have the following:
 - A functional EKS cluster on AWS. <br/>
 To create one, use an EKS provisioning method supported by your organization.
 - NVIDIA device plugin deployed to your cluster. <br/>
-For deployment options, see the [NVIDIA Kubernetes device plugin v0.20.0](https://github.com/NVIDIA/k8s-device-plugin/releases/tag/v0.20.0).
+For deployment options, see the [NVIDIA Kubernetes device plugin](https://github.com/NVIDIA/k8s-device-plugin).
 - EFA device plugin deployed to your cluster. <br/>
-For deployment options, see [aws-efa-eks at commit d801012](https://github.com/aws-samples/aws-efa-eks/tree/d801012b690f0cd17b8e7d5c4231a909faea7c81).
+For deployment instructions, see [Install the EFA device plugin](https://docs.aws.amazon.com/eks/latest/userguide/node-efa.html).
 - Kubeflow MPI operator deployed to your cluster. <br/>
-For deployment options, see [Kubeflow MPI Operator at commit 1e20021](https://github.com/kubeflow/mpi-operator/tree/1e200217cf1ffcdb1ea45d055f913767dff82ed9).
+For deployment options, see [Kubeflow MPI Operator](https://github.com/kubeflow/mpi-operator).
 - [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html#cliv2-linux-install)
 
 ## 1. Prepare the container image and other artifacts

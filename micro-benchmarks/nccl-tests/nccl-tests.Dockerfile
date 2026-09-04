@@ -1,7 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 ARG CUDA_VERSION=13.1.2
-FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-devel-ubuntu22.04@sha256:d8332c008e2ef270e82d286e5245e771f839645683075bba21ad9e4fa59dbcbb
+FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-devel-ubuntu22.04
 
 ARG GDRCOPY_VERSION=v2.6
 ARG EFA_INSTALLER_VERSION=1.50.0
