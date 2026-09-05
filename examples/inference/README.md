@@ -13,7 +13,8 @@ Framework-centric inference engine examples, organized by serving engine.
 | [`sglang`](./sglang) | [`dsv4pro-b300-single-node`](./sglang/dsv4pro-b300-single-node) | DeepSeek V4 Pro unified (non-PD) serving on a single B300 node |
 | [`sglang`](./sglang) | [`dsv4flash-b300-intra-3p1d`](./sglang/dsv4flash-b300-intra-3p1d) | DeepSeek-V4-Flash with intra-node 3-prefill / 1-decode disaggregation (tp=2 each) on a single B300 node |
 | [`sglang`](./sglang) | [`glm5.2-b300-tp2-dp4`](./sglang/glm5.2-b300-tp2-dp4) | GLM-5.2 (NVFP4) as 4× independent tp=2 engines behind an SGLang router on a single B300 node |
+| [`tensorrt-llm`](./tensorrt-llm) | [`nccl-ep-efa`](./tensorrt-llm/nccl-ep-efa) | `Qwen/Qwen3-30B-A3B` MoE with TensorRT-LLM's `NcclEP` wide-EP dispatch/combine (ep_size=8) over EFA via the NCCL-GIN CPU-proxy on 2× `p5en.48xlarge` (H200) — EKS |
 
-More engines (TRT-LLM, NIM, Ray Serve, …) are planned, including
+More engines (NIM, Ray Serve, …) are planned, including
 content to be merged from [`aws-samples/awsome-inference`](https://github.com/aws-samples/awsome-inference)
 (see issue #1056).
