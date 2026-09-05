@@ -96,11 +96,13 @@ export NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
 export DEEP_EP_USE_V2_SHIM=0         # V2-native path, no compatibility shim
 export HAVE_DEEP_EP_V2=True          # rollout bridge feature flag (draft-PR rollout path)
 
-# ----- NVSHMEM contract (INERT on this image - kept for the rebuild case) -----
-# This image links NO NVSHMEM (the V2 NCCL-GIN backend replaces it). If you
-# rebuild with the legacy NVSHMEM backend instead, these are the required
-# values on EFA - note IBGDA must be 0 (proxy-based), despite what most
-# upstream DeepEP manifests say.
+# ----- NVSHMEM contract (INERT at run time on this image - kept for the rebuild case) -----
+# deep_ep links NVSHMEM as a BUILD-TIME dependency (upstream setup.py links it
+# unconditionally; see requirements.txt), but the V2 NCCL-GIN backend does NOT
+# USE NVSHMEM at run time - the network path is NCCL-GIN - so these values are
+# inert here. If you rebuild with the legacy NVSHMEM backend instead, these are
+# the required values on EFA - note IBGDA must be 0 (proxy-based), despite what
+# most upstream DeepEP manifests say.
 export NVSHMEM_REMOTE_TRANSPORT=libfabric
 export NVSHMEM_LIBFABRIC_PROVIDER=efa
 export NVSHMEM_IB_ENABLE_IBGDA=0
