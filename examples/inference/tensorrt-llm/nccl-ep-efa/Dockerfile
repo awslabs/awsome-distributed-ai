@@ -91,7 +91,14 @@ RUN git clone https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
 # package at all (only nccl.bindings + nccl.core), so a bump to latest breaks `import nccl.ep`.
 # Why 2.30.4 and not the newer 2.31.2: 2.31.2 also clears the >= 2.30.4 floor, but libnccl_ep 0.1.0
 # (shipped by the nccl4py pin above) is built against the NCCL 2.30 device-side API that the GIN
-# CPU-proxy path calls into. 2.30.4 is the version the 2026-08-07 correctness E2E actually ran.
+# CPU-proxy path calls into — and that device API is NOT append-only across 2.30.4->2.31.2. In the
+# device struct libnccl_ep dereferences by pointer (ncclDevComm), 2.31.2 inserts hybridDenseGinBarrier
+# at field 10 (before lsaMultimem) + backendIndex mid-GIN-block, and shrinks the by-value
+# resourceWindow_inlined member (dropped its reserved padding) — each shifts the byte offsets of the
+# GIN fields the CPU-proxy kernels read (verified by diffing nccl_device/impl/impl_comm__types.h at
+# tags v2.30.4-1 vs v2.31.2-1). ncclGinType_t is append-only (PROXY=2 unchanged, +EFA_GDA=5), so the
+# enum is not the issue — the devComm layout is. This is the silent-corruption class, so a build-only
+# check cannot catch it. 2.30.4 is the version the 2026-08-07 correctness E2E actually ran.
 # Two single-variable 2.31.2 trials on cgk p5en (--build-arg NVIDIA_NCCL_CU13=2.31.2) established:
 #   (+) LIBRARY ABI is clean on 2.31.2 — is_nccl_ep_installed() passes and the CommunicationFactory
 #       selects NcclEP on all 16 ranks (no quiet symbol/binding break). MEASURED.
