@@ -35,7 +35,9 @@ sources.**
 **Staged, NOT re-measured:** the image assembly in this folder is **build-staged and has not been
 cluster-re-run**; no performance numbers are published from this folder. The **full GRPO
 rollout-over-DeepEP path depends on 2 draft upstream PRs** (opt-in image layer, default **OFF** —
-see below). What the recipe gates re-verify on the **baseline (upstream-only)** image: static
+see below). What the recipe gates re-verify on the **baseline** image (the 2 opt-in rollout PRs
+OFF — it does carry the standardized AWS GIN plugin lineage, incl. the closed-unmerged aws-ofi-nccl
+PR#1351, and the `amazon-contributing/DeepEP` fork; see the Pins table): static
 substrate asserts (`verify-image.sh`), cross-node `ElasticBuffer` dispatch/combine with an EFA
 TX-counter assert (`run-rollout-probe.sh`), and a loss-decreasing Megatron MoE train step on the
 stock `alltoall` dispatcher (`train-step.sh`). Never read a build-gate as an E2E pass.
@@ -156,7 +158,7 @@ source env_vars
 aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${REGISTRY}
 aws ecr create-repository --repository-name ${IMAGE} --region ${AWS_REGION} || true
 
-# baseline (upstream-only)
+# baseline (draft rollout PRs OFF — still carries the AWS GIN lineage + amazon-contributing/DeepEP fork; see Pins)
 docker build -f nemo-rl.Dockerfile -t ${FULL_IMAGE} .
 # opt-in flavor with the 2 draft PRs baked (use a DISTINCT tag — never overwrite the baseline)
 docker build -f nemo-rl.Dockerfile --build-arg APPLY_DRAFT_ROLLOUT_PATCHES=1 \
