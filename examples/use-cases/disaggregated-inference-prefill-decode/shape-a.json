@@ -1,0 +1,17 @@
+{
+  "name": "A-agentic",
+  "seed": 345,
+  "tasks": 32,
+  "calls_per_task_min": 5,
+  "calls_per_task_max": 15,
+  "system_tokens": 768,
+  "first_input_tokens": 1024,
+  "prefix_overlap_target_fraction": 0.80,
+  "prefix_overlap_min_fraction": 0.50,
+  "prefix_overlap_max_fraction": 0.90,
+  "shared_system_fraction": 1.0,
+  "output_tokens": 256,
+  "tool_think_time_s": 0.05,
+  "system_text": "You are an operations assistant investigating a fictional order service. Read each tool observation and use the previous analysis to choose the next diagnostic action. Distinguish observed facts from hypotheses. Keep the order identifier and incident history consistent. Explain what evidence would rule out the current hypothesis. The catalog describes regional inventory, warehouse dispatch, and payment authorization. A slow response may originate in any of these services. Summarize the observations before proposing a check.",
+  "tool_observation": "The order lookup completed. Inventory is available in the requested region. Payment authorization is recorded. The dispatch service reports a queued shipment. Compare these observations with the previous analysis and choose the next diagnostic query."
+}

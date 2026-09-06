@@ -1,0 +1,28 @@
+{
+  "namespace": "aim345-lab",
+  "context": "REPLACE_WITH_EKS_CONTEXT",
+  "image": "REPLACE_WITH_REGISTRY/aim345:sglang-0.5.12.post1-nixl-1.1.0",
+  "instance_type": "REPLACE_WITH_APPROVED_INSTANCE_TYPE",
+  "nodes": [
+    "REPLACE_WITH_NODE_A",
+    "REPLACE_WITH_NODE_B"
+  ],
+  "gpus_per_worker": 8,
+  "efa_per_worker": 16,
+  "model_id": "deepseek-ai/DeepSeek-V2-Lite-Chat",
+  "model_revision": "85864749cd611b4353ce1decdb286193298f64c7",
+  "model_cache_host_path": "/mnt/aim345-models",
+  "context_length_tokens": 32768,
+  "chunked_prefill_size_tokens": 8192,
+  "disable_prefix_cache": false,
+  "tolerations": [
+    {
+      "key": "nvidia.com/gpu",
+      "operator": "Exists",
+      "effect": "NoSchedule"
+    }
+  ],
+  "router_image": "REPLACE_WITH_REGISTRY/aim345-router:0.3.2",
+  "engine_ephemeral_storage": "80Gi",
+  "router_ephemeral_storage": "2Gi"
+}
