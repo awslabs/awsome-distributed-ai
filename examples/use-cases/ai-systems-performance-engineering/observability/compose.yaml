@@ -1,0 +1,31 @@
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=2d"]
+    ports: ["127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"]
+    volumes:
+      - ./runtime/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+  pushgateway:
+    image: prom/pushgateway:v1.11.1
+    ports: ["${LOGIN_BIND_IP:?Set a private login-node address}:${PUSHGATEWAY_PORT:-9091}:9091"]
+    restart: unless-stopped
+  grafana:
+    image: grafana/grafana:12.1.1
+    ports: ["127.0.0.1:${GRAFANA_PORT:-3000}:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    secrets: [grafana_password]
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./dashboard.json:/var/lib/grafana/dashboards/aim347.json:ro
+      - grafana-data:/var/lib/grafana
+    restart: unless-stopped
+secrets:
+  grafana_password:
+    file: ./runtime/grafana-password
+volumes:
+  prometheus-data:
+  grafana-data:

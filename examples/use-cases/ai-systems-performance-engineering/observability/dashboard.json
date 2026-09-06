@@ -1,0 +1,739 @@
+{
+  "uid": "aim347",
+  "title": "AIM347: AI systems performance engineering",
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": true,
+  "refresh": "5s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Training throughput",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "aim347_tokens_per_second",
+          "legendFormat": "{{config}} | {{instance_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:tokens/s"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 2,
+      "title": "MFU / measured dense GEMM",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "aim347_mfu_dense_gemm_ratio",
+          "legendFormat": "{{config}} | {{instance_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "description": "Dimensionless ratio. The historical g7e.12xlarge denominator is 429.1 TFLOPS/GPU. Other hardware requires its own measurement."
+    },
+    {
+      "id": 3,
+      "title": "MFU / derived dense theory",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "aim347_mfu_dense_theory_ratio",
+          "legendFormat": "{{config}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "description": "g7e.12xlarge only: 480 TFLOPS/GPU is a derivation, not a vendor-stated dense specification."
+    },
+    {
+      "id": 4,
+      "title": "Useful tokens per allocated GPU-hour",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "aim347_useful_tokens_per_gpu_hour",
+          "legendFormat": "{{config}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:tokens/GPU-hour"
+        },
+        "overrides": []
+      },
+      "description": "Published by the metric computation step. Includes the allocation ledger scope and failed attempts, no automatic restart claim."
+    },
+    {
+      "id": 5,
+      "title": "Step duration",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "aim347_step_duration_ms",
+          "legendFormat": "{{config}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 6,
+      "title": "Tensor pipeline activity",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE",
+          "legendFormat": "{{node}} GPU {{gpu}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 7,
+      "title": "SM activity",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_PROF_SM_ACTIVE",
+          "legendFormat": "{{node}} GPU {{gpu}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 8,
+      "title": "SM occupancy",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_PROF_SM_OCCUPANCY",
+          "legendFormat": "{{node}} GPU {{gpu}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 9,
+      "title": "GPU memory activity",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_PROF_DRAM_ACTIVE",
+          "legendFormat": "{{node}} GPU {{gpu}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 10,
+      "title": "GPU utilization",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_GPU_UTIL",
+          "legendFormat": "{{node}} GPU {{gpu}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 11,
+      "title": "PCIe traffic",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{__name__=~\"DCGM_FI_PROF_PCIE_(TX|RX)_BYTES\"}",
+          "legendFormat": "{{node}} GPU {{gpu}} {{__name__}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "description": "These DCGM fields are already bytes/s. Do not apply rate(). g7e.12xlarge has no NVLink; PCIe covers both GPU P2P and host transfers."
+    },
+    {
+      "id": 12,
+      "title": "EFA traffic",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 40,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate({__name__=~\"node_amazonefa_(tx|rx|rdma_write)_bytes\"}[1m])",
+          "legendFormat": "{{node}} {{device}} {{__name__}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 13,
+      "title": "EFA drops and timeouts",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate({__name__=~\"node_amazonefa_(rx_drops|retrans_timeout_events|unresponsive_remote_events)\"}[1m])",
+          "legendFormat": "{{node}} {{device}} {{__name__}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 14,
+      "title": "EFA retransmitted bytes",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(node_amazonefa_retrans_bytes[1m])",
+          "legendFormat": "{{node}} {{device}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 15,
+      "title": "Lustre metadata operations",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 56,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate({__name__=~\"lustre_(open|getattr)_operations_total\"}[1m])",
+          "legendFormat": "{{node}} {{mount}} {{__name__}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 16,
+      "title": "Lustre bytes",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 56,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate({__name__=~\"lustre_(read|write)_bytes_total\"}[1m])",
+          "legendFormat": "{{node}} {{mount}} {{__name__}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 17,
+      "title": "CPU busy cores",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 64,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(node) (1 - rate(node_cpu_seconds_total{mode=\"idle\"}[1m]))",
+          "legendFormat": "{{node}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:cores"
+        },
+        "overrides": []
+      },
+      "description": "Budget workers against 24 usable cores on PCS g7e.12xlarge, with 8 workers per rank and 2 ranks per node as an uncalibrated starting configuration."
+    },
+    {
+      "id": 18,
+      "title": "I/O pressure waiting",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 64,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(node_pressure_io_waiting_seconds_total[1m])",
+          "legendFormat": "{{node}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 19,
+      "title": "Lustre collector success",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "aim347_lustre_collection_success",
+          "legendFormat": "{{node}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": "Boolean: 1 means collection succeeded, 0 means unavailable or failed. Missing counter data is not zero traffic."
+    },
+    {
+      "id": 20,
+      "title": "EFA ports visible",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 72,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "aim347_efa_ports_visible",
+          "legendFormat": "{{node}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:ports"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 21,
+      "title": "vLLM output throughput",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 80,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(vllm:generation_tokens_total[1m]))",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:tokens/s"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 22,
+      "title": "vLLM TTFT p50",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 80,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by(le) (rate(vllm:time_to_first_token_seconds_bucket[1m])))",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 23,
+      "title": "vLLM ITL p50",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 88,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by(le) (rate(vllm:inter_token_latency_seconds_bucket[1m])))",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 24,
+      "title": "vLLM running requests",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 88,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "vllm:num_requests_running",
+          "legendFormat": "{{node}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:requests"
+        },
+        "overrides": []
+      },
+      "description": ""
+    },
+    {
+      "id": 25,
+      "title": "Scrape target health",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aim347-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 96,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up",
+          "legendFormat": "{{job}} {{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": ""
+    }
+  ]
+}

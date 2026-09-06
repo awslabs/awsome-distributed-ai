@@ -1,0 +1,11 @@
+DCGM_FI_DEV_GPU_UTIL, gauge, GPU utilization percent.
+DCGM_FI_DEV_FB_USED, gauge, Used framebuffer memory MiB.
+DCGM_FI_DEV_POWER_USAGE, gauge, Power usage watts.
+DCGM_FI_DEV_GPU_TEMP, gauge, GPU temperature degrees Celsius.
+DCGM_FI_PROF_GR_ENGINE_ACTIVE, gauge, Graphics engine active dimensionless ratio.
+DCGM_FI_PROF_SM_ACTIVE, gauge, SM active dimensionless ratio.
+DCGM_FI_PROF_SM_OCCUPANCY, gauge, SM occupancy dimensionless ratio.
+DCGM_FI_PROF_PIPE_TENSOR_ACTIVE, gauge, Tensor pipeline active dimensionless ratio.
+DCGM_FI_PROF_DRAM_ACTIVE, gauge, DRAM active dimensionless ratio.
+DCGM_FI_PROF_PCIE_TX_BYTES, gauge, PCIe transmit bytes per second.
+DCGM_FI_PROF_PCIE_RX_BYTES, gauge, PCIe receive bytes per second.

@@ -1,0 +1,28 @@
+services:
+  dcgm:
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:4.6.0-4.8.3-distroless
+    network_mode: host
+    cap_add: [SYS_ADMIN]
+    gpus: all
+    environment:
+      DCGM_EXPORTER_COLLECTORS: /etc/dcgm-exporter/aim347.csv
+      DCGM_EXPORTER_INTERVAL: "5000"
+    volumes: ["./dcgm.csv:/etc/dcgm-exporter/aim347.csv:ro"]
+    restart: unless-stopped
+  node:
+    image: prom/node-exporter:v1.9.1
+    network_mode: host
+    pid: host
+    command: ["--path.rootfs=/host", "--path.procfs=/host/proc", "--path.sysfs=/host/sys", "--collector.textfile.directory=/textfile"]
+    volumes:
+      - /:/host:ro,rslave
+      - ${TEXTFILE_DIR:-/var/lib/aim347/textfile}:/textfile:ro
+    restart: unless-stopped
+  efa:
+    image: python:3.12.10-slim-bookworm
+    network_mode: host
+    command: ["python3", "/app/counters.py", "efa"]
+    volumes:
+      - ../lib/counters.py:/app/counters.py:ro
+      - /sys:/sys:ro
+    restart: unless-stopped
