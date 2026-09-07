@@ -1,3 +1,3 @@
-nvidia_driver_version: "535.129.03"
-install_nvidia_fabric_manager: true
-allow_reboot: true
+---
+nvidia_driver_package_version: "580.126.09-1.amzn2023"
+nvidia_driver_allow_reboot: true

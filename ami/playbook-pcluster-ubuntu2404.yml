@@ -1,0 +1,13 @@
+---
+- name: Validate ParallelCluster 3.15.1 Ubuntu 24.04 AMI
+  hosts: default
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify ParallelCluster installation directory
+      ansible.builtin.stat:
+        path: /opt/parallelcluster
+      register: pcluster_marker
+    - name: Require ParallelCluster installation directory
+      ansible.builtin.assert:
+        that: pcluster_marker.stat.exists

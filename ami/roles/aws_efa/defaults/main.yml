@@ -1,6 +1,10 @@
 ---
-aws_efa_version: "1.30.0"
+# yamllint disable rule:line-length
+aws_efa_version: "1.50.0"
 aws_efa_archive: "aws-efa-installer-{{ aws_efa_version }}.tar.gz"
 aws_efa_url: "https://efa-installer.amazonaws.com/{{ aws_efa_archive }}"
+aws_efa_sha256: "fa6dff8593d866866c13cb4640d9059835cd4efa427971f100ab40c97bef2841"
 aws_efa_work_dir: "/tmp"
-enable_gpus: true
+aws_efa_extract_dir: "{{ aws_efa_work_dir }}/aws-efa-installer-{{ aws_efa_version }}"
+aws_efa_minimal: false
+aws_efa_enable_gpus: true

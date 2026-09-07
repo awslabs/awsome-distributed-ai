@@ -1,0 +1,17 @@
+---
+- name: Configure AWS PCS Ubuntu 24.04 AMI
+  hosts: default
+  become: true
+  gather_facts: true
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+  pre_tasks:
+    - name: Verify parent NVIDIA driver command
+      ansible.builtin.command: >-
+        nvidia-smi --query-gpu=driver_version --format=csv,noheader
+      changed_when: false
+    - name: Verify parent EFA kernel module metadata
+      ansible.builtin.command: modinfo efa
+      changed_when: false
+  roles:
+    - aws_pcs

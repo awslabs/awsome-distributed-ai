@@ -1,13 +1,11 @@
 ---
-- name: "Configure Parallel cluster AMI"
+- name: Configure EKS Ubuntu 24.04 EFA host AMI
   hosts: default
   become: true
   gather_facts: true
-  gather_subset: ['kernel']
   vars:
     ansible_python_interpreter: /usr/bin/python3
+    aws_efa_minimal: true
+    aws_efa_enable_gpus: false
   roles:
-    - base
-    - packages
     - aws_efa
-    - nvidia_driver

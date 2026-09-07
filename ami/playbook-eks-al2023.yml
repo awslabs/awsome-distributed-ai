@@ -1,0 +1,15 @@
+---
+- name: Configure EKS AL2023 GPU AMI
+  hosts: default
+  become: true
+  gather_facts: true
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+  pre_tasks:
+    - name: Require EKS AL2023 parent
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Amazon"
+          - ansible_distribution_major_version == "2023"
+  roles:
+    - nvidia_driver
