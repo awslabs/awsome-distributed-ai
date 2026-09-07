@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
-# Throughput + latency-vs-concurrency probe for the live vLLM DP/EP serve.
+# Throughput + latency-vs-concurrency probe for the live DP/EP serve — vLLM or this sample's
+# Dynamo front; either way the target is the OpenAI-compatible /v1/chat/completions endpoint.
+# (benchmarks/README's tables were measured on the sibling vLLM image with an EARLIER revision
+# of this probe — a run of this one measures a different population; see that README.)
 # Stdlib only (urllib + concurrent.futures) so it runs in the pod with no pip.
 # Methodology (fail-loud, distribution-honest):
 #   - each level fires requests-per-level = conc * NREQ_MULT requests (default 5x) at a
@@ -105,14 +108,14 @@ def sweep(conc, url, nreq_mult):
     }
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="vLLM DeepEP-V2 live-serve throughput/latency probe")
+    ap = argparse.ArgumentParser(description="DeepEP-V2 live-serve throughput/latency probe (Dynamo/vLLM OpenAI endpoint)")
     ap.add_argument("--url", default=URL, help="chat-completions endpoint (default: 127.0.0.1 loopback)")
     ap.add_argument("--out", default=None, help="write one JSON object per concurrency level to this path (JSONL)")
     ap.add_argument("--requests-per-level-mult", type=positive_int, default=NREQ_MULT,
                     help=f"requests per level = concurrency x this, must be >= 1 (default {NREQ_MULT})")
     args = ap.parse_args()
 
-    print("=== vLLM DeepEP-V2 live-serve throughput probe ===")
+    print("=== DeepEP-V2 live-serve throughput probe (Dynamo/vLLM OpenAI endpoint) ===")
     print(f"url={args.url} model={MODEL} max_tokens={MAX_TOKENS} (ignore_eos) "
           f"requests/level={args.requests_per_level_mult}x concurrency")
     print(f"{'conc':>5} {'n':>5} {'ok':>5} {'wall_s':>7} {'out_tok':>8} {'agg_tok/s':>10} {'p50_s':>7} {'p90_s':>7} {'p99_s':>7} codes")

@@ -12,7 +12,8 @@ sample: no NVSHMEM, no IBGDA — DeepEP-V2's `ElasticBuffer` drives the dispatch
 over `aws-ofi-nccl`'s GIN plugin on `efa-direct`.
 
 Validated on **2× and 4× p5en.48xlarge (H200)**, `Qwen/Qwen3-30B-A3B-FP8`: **measured at DP16/EP16**
-(the concurrency sweeps in `benchmarks/`); **DP32/EP32 functionally validated** (16/16 HTTP 200
+(the concurrency sweeps in `benchmarks/` — measured on the sibling vLLM sample's image, not this
+Dynamo image; see `benchmarks/README.md`); **DP32/EP32 functionally validated** (16/16 HTTP 200
 bring-up, no measured sweep — the shipped manifest is the 2-node/EP16 shape).
 
 ## Relationship to the vLLM sample
@@ -141,9 +142,11 @@ keeps pip from re-resolving `ai-dynamo`'s nine unconditional dependencies (`tran
 `prometheus-client`, `msgspec`, `pyzmq`, …) over the versions the pinned vLLM wheel installed. (Its
 `vllm[...]==0.23.0` entry is an opt-in extra a bare install never resolves — see the Dockerfile
 Layer-5c comment for the full mechanism.) The in-tree
-`Dockerfile` is the canonical, reviewable build. The shipped vLLM pin (`e2f993dc4`) is the **exact**
-substrate the `benchmarks/` tables were measured on, so a rebuild reproduces them — see
-`benchmarks/README.md`.
+`Dockerfile` is the canonical, reviewable build. The shipped vLLM pin (`e2f993dc4`) matches the
+substrate the `benchmarks/` tables were measured on — but those tables were measured on the
+**sibling vLLM sample's image** with an earlier probe revision, **not on this Dynamo image**, so a
+rebuild of this sample does **not** reproduce them — see `benchmarks/README.md` for the full
+provenance.
 
 The one image name used everywhere is `${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}` from
 `setup/env_vars` (`build-push.sh` builds and pushes exactly that; point the manifest's `image:` at
@@ -263,8 +266,17 @@ bash recipe/benchmark.sh 127.0.0.1
 ```
 
 Concurrency sweep 1/8/16/32/64 (5× requests per level), writes `benchmarks/raw/`. Exits non-zero
-unless **every** request at **every** level succeeded. See `benchmarks/README.md` for the measured
-eager and non-eager tables + environment provenance.
+unless **every** request at **every** level succeeded.
+
+**Persist the raws off-pod before deleting the pods** — `/work` is an `emptyDir` and dies with the
+pod (the original sweeps' raws were lost exactly this way):
+
+```bash
+kubectl -n dynamo-deepep cp dynamo-deepep-v2-0:/work/benchmarks "./benchmarks-raw-$(date -u +%Y%m%dT%H%M%SZ)"
+```
+
+See `benchmarks/README.md` for the measured eager and non-eager tables + environment provenance
+(measured on the sibling vLLM sample's image — not re-measured on this Dynamo image).
 
 ## Known limitations
 
