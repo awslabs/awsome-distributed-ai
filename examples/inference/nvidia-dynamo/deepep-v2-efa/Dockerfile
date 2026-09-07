@@ -75,6 +75,11 @@ RUN chmod +x /opt/setup_deepep_v2_efa.sh \
     && AWS_OFI_NCCL_REF=${AWS_OFI_NCCL_REF} DEEPEP_SHA=${DEEPEP_SHA} \
        /opt/setup_deepep_v2_efa.sh
 ENV LD_LIBRARY_PATH=/opt/aws-ofi-nccl/lib:${LD_LIBRARY_PATH}
+# nvidia-container-runtime injects /dev/gdrdrv only when NVIDIA_GDRCOPY=enabled is set; required on
+# the raw `docker run` path the README offers (k8s uses privileged instead). Same bake as the
+# canonical deepep-v2-benchmark/deepep.Dockerfile. (Comment sits ABOVE the ENV: BuildKit's key=value
+# parser rejects an inline `#` token on ENV lines.)
+ENV NVIDIA_GDRCOPY=enabled
 
 # ---- Layer 5: vLLM (pinned wheel = PR#41183's merge commit — the first, and only measured-working, deepep_v2 backend) ----
 # The wheel FILENAME is derived from the per-commit index at build time, so bumping
@@ -110,20 +115,25 @@ RUN pip3 install --no-cache-dir --no-deps --force-reinstall \
       "nvidia-nccl-cu13==${NVIDIA_NCCL_CU13}" "nvidia-nvshmem-cu13==${NVSHMEM_CU13}" \
     && NCCL_ROOT=$(python3 -c "import nvidia.nccl, pathlib; print(pathlib.Path(nvidia.nccl.__path__[0]))") \
     && grep -rq ncclGetLsaDevicePointer "$NCCL_ROOT/include/" \
-    && [ "$(nm -D "$NCCL_ROOT/lib/libnccl.so.2" | grep -c ncclGetLsaDevicePointer)" -ge 1 ]  # GIN/LSA symbols present (2.28.x lacks them)
+    && [ "$(nm -D "$NCCL_ROOT/lib/libnccl.so.2" | grep -c ncclGetLsaDevicePointer)" -ge 1 ] \
+    && python3 -c "import torch; assert torch.__version__ == '2.11.0+cu130', f'torch drifted: {torch.__version__} != 2.11.0+cu130'"  # GIN/LSA symbols present (2.28.x lacks them) + the torch build every ABI comment in this file assumes (the vLLM wheel keeps 2.11.0+cu130 only via PEP 440's local-version rule, so assert it rather than trust it)
 
 # ---- Layer 5c: NVIDIA Dynamo serving front (--no-deps: this is the ONLY delta vs the vLLM twin) ----
 # This image is the vLLM-DeepEP-V2 substrate (Layers 1-5b, byte-identical to ../../vllm/deepep-v2-efa)
 # with Dynamo's serving front added on top. dynamo.vllm wraps the SAME vLLM engine (it forwards every
 # unknown CLI flag straight into vLLM's AsyncEngineArgs), so nothing about the DeepEP-V2/EFA transport
 # changes — only an OpenAI-compatible frontend + a DP/EP-aware worker wrapper are added.
-#   --no-deps is LOAD-BEARING, not caution: `ai-dynamo==1.3.1` declares `vllm[...]==0.23.0` as a
-#   dependency (the [vllm] extra). Without --no-deps, pip would pull the 0.23.0 RELEASE wheel and
-#   overwrite the pinned VLLM_SHA build from Layer 5 (which also drags nvidia-nccl-cu13 back to torch's
-#   2.28.x, undoing Layer 5b). With --no-deps, ai-dynamo (pure-python, py3-none-any) + ai-dynamo-runtime
-#   (compiled cp310-abi3, and it carries NO vllm pin at all — it is the vLLM-independent Rust core)
-#   install their own files ONLY; the sole real deps (pydantic, uvloop) are already present from the
-#   vLLM wheel. Both packages are PEP-420 namespace packages under dynamo/, so the compiled core and the
+#   --no-deps is LOAD-BEARING, not caution — but for the unconditional dependency set, not the vLLM
+#   extra: `ai-dynamo==1.3.1` declares `vllm[...]==0.23.0` only behind the `[vllm]` extra, and a bare
+#   `pip install ai-dynamo` never resolves an extra, so the pinned VLLM_SHA wheel from Layer 5 is not
+#   at risk from that with or without this flag. What --no-deps prevents is pip re-resolving
+#   ai-dynamo's nine UNCONDITIONAL deps (ai-dynamo-runtime, aiohttp, kubernetes, msgspec,
+#   prometheus-client, pyzmq, transformers>=4.56, typing-extensions, zstandard) OVER the versions the
+#   pinned vLLM wheel installed — transformers / prometheus-client / msgspec / pyzmq in particular.
+#   With --no-deps, ai-dynamo (pure-python, py3-none-any) + ai-dynamo-runtime (compiled cp310-abi3;
+#   the vLLM-independent Rust core, no vllm pin at all) install their own files ONLY; their real
+#   runtime needs (pydantic, uvloop — ai-dynamo-runtime's deps) are already present from the vLLM
+#   wheel. Both packages are PEP-420 namespace packages under dynamo/, so the compiled core and the
 #   pure-python components union cleanly with no dynamo/__init__.py shadowing.
 #   1.3.1 (not 1.4.x): the pinned vLLM substrate is 0.22 (e2f993dc4, Layer 5). dynamo.vllm is a thin
 #   arg-forwarding wrapper (it delegates every unknown flag to vLLM's own AsyncEngineArgs.add_cli_args
@@ -136,7 +146,9 @@ RUN pip3 install --no-cache-dir --no-deps --force-reinstall \
 #   carries the post-split layout.
 #   The Layer-5c assert imports `dynamo.vllm.MAIN` — the real serve entrypoint (`python3 -m dynamo.vllm`),
 #   NOT bare `dynamo.vllm` (whose __init__ only sets __version__ and imports NO vLLM, so it would gate
-#   nothing). main.py pulls the full serve-path vLLM API surface (vllm.config, vllm.v1.engine.async_llm,
+#   nothing) — and `dynamo.frontend.MAIN` for the same reason: dynamo/frontend/__init__.py is a bare
+#   _version shim, while frontend/main.py is what `python3 -m dynamo.frontend` (serve.sh) actually runs.
+#   main.py pulls the full serve-path vLLM API surface (vllm.config, vllm.v1.engine.async_llm,
 #   vllm.usage.usage_lib, vllm.distributed.kv_events, vllm.v1.metrics.prometheus, and transitively the
 #   ~22 vllm.* paths of its dynamo.vllm.* closure) at MODULE scope, while main() stays behind
 #   `if __name__ == "__main__"` — so the import resolves the 0.22↔1.3.1 API contract WITHOUT running the
@@ -148,7 +160,7 @@ RUN pip3 install --no-cache-dir --no-deps --force-reinstall \
 ARG AI_DYNAMO_VER=1.3.1
 RUN pip3 install --no-cache-dir --no-deps \
       "ai-dynamo-runtime==${AI_DYNAMO_VER}" "ai-dynamo==${AI_DYNAMO_VER}" \
-    && python3 -c "import dynamo.vllm.main, dynamo.frontend; print('dynamo.vllm.main + dynamo.frontend import OK — serve-path vLLM API resolved against the pinned wheel')" \
+    && python3 -c "import dynamo.vllm.main, dynamo.frontend.main; print('dynamo.vllm.main + dynamo.frontend.main import OK — serve-path vLLM API resolved against the pinned wheel')" \
     && NCCL_ROOT=$(python3 -c "import nvidia.nccl, pathlib; print(pathlib.Path(nvidia.nccl.__path__[0]))") \
     && [ "$(nm -D "$NCCL_ROOT/lib/libnccl.so.2" | grep -c ncclGetLsaDevicePointer)" -ge 1 ]  # re-assert Layer 5b survived the dynamo install (must, given --no-deps)
 

@@ -182,10 +182,11 @@ COMMON="--tensor-parallel-size ${SERVE_TP} --data-parallel-size ${SERVE_DP} --da
   --gpu-memory-utilization ${SERVE_GPU_MEM_UTIL} --trust-remote-code --dtype bfloat16"
 
 echo "===== Dynamo serve model=$SERVE_MODEL role=$ROLE tp=${SERVE_TP} dp=${SERVE_DP}/local${SERVE_DP_LOCAL} eager=${SERVE_ENFORCE_EAGER} start_rank=${START_RANK} dp_master=$DP_MASTER_IP http_port=${HTTP_PORT} $(hostname) $(date -u +%FT%TZ) ====="
-# import dynamo.vllm.MAIN (the serve entrypoint), not bare dynamo.vllm (whose __init__ imports no vLLM):
-# this resolves the full serve-path vLLM API surface against the pinned wheel, so a 0.22↔dynamo mismatch
-# fails HERE (seconds) rather than mid-load. main() is behind `if __name__` so importing it does not serve.
-python3 -c "import dynamo.vllm.main, dynamo.frontend, vllm, deep_ep; print('dynamo.vllm.main/frontend OK | vllm', vllm.__version__, '| deep_ep OK')"
+# import dynamo.vllm.MAIN and dynamo.frontend.MAIN (the real entrypoints), not the bare packages
+# (both __init__s are version shims that import no vLLM, so they would gate nothing): this resolves
+# the full serve-path vLLM API surface against the pinned wheel, so a 0.22↔dynamo mismatch fails
+# HERE (seconds) rather than mid-load. main() is behind `if __name__` so importing it does not serve.
+python3 -c "import dynamo.vllm.main, dynamo.frontend.main, vllm, deep_ep; print('dynamo.vllm.main/frontend.main OK | vllm', vllm.__version__, '| deep_ep OK')"
 python3 -c "from vllm.distributed.device_communicators.all2all import DeepEPV2All2AllManager; print('PR#41183 symbol OK')"
 python3 -c "import deep_ep; assert hasattr(deep_ep,'ElasticBuffer'); print('deep_ep ElasticBuffer OK')"
 
