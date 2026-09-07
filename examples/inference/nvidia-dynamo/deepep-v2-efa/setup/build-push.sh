@@ -7,6 +7,6 @@ source setup/env_vars
 : "${REGISTRY:?set REGISTRY in setup/env_vars}"
 IMG="${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
 aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${REGISTRY}"
-DOCKER_BUILDKIT=1 docker build ${AWS_OFI_NCCL_PR_SHA:+--build-arg AWS_OFI_NCCL_PR_SHA="${AWS_OFI_NCCL_PR_SHA}"} -t "${IMG}" .
+DOCKER_BUILDKIT=1 docker build -t "${IMG}" .
 docker push "${IMG}"
 echo "pushed ${IMG}"

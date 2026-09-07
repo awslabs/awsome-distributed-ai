@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # installer's NGC auto-detect and silently reroutes it down the libnccl-ofi-ngc path.
 # We build aws-ofi-nccl from source ourselves (Layer 4), so force the normal install —
 # same explicit choice as the sibling sglang/dsr1-deepep-efa and vllm/dsv3-uccl-nixl samples.
-ARG EFA_INSTALLER_VER=1.49.0                          # pin — no 'latest' (the stack under test)
+ARG EFA_INSTALLER_VER=1.50.0                          # pin, no 'latest'; matches micro-benchmarks/expert-parallelism/deepep-v2-benchmark/deepep.Dockerfile
 RUN apt-get update \
     && curl -fsSL https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VER}.tar.gz | tar -xzf - -C /tmp \
     && cd /tmp/aws-efa-installer && ./efa_installer.sh -y --skip-kmod --skip-limit-conf --no-verify --disable-ngc \
@@ -57,8 +57,8 @@ RUN NCCL_ROOT=$(python3 -c "import nvidia.nccl, pathlib; print(pathlib.Path(nvid
 # ---- Layer 3b: gdrcopy userspace (PUBLIC: github.com/NVIDIA/gdrcopy) ----
 # aws-ofi-nccl's GIN path REQUIRES gdrapi.h at configure time — without it the plugin
 # compiles with "GDRCopy support not available", nccl_ofi_gin_init fails at serve, and
-# DeepEP's ElasticBuffer asserts ginType==NCCL_GIN_TYPE_NONE. Userspace 2.5.2 on a
-# gdrdrv-2.4 host is exactly the pairing OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1 (#1351) fixes.
+# DeepEP's ElasticBuffer asserts ginType==NCCL_GIN_TYPE_NONE. Userspace 2.5.2 pairs with
+# the gdrdrv >= 2.5 kernel module the compute nodes must load (README Prerequisites).
 # gdrcopy v2.5.2 == commit c91ad9f: pin the commit, not the tag (a bare tag is a moving ref
 # upstream can re-point — every other dep here is SHA-pinned).
 ARG GDRCOPY_SHA=c91ad9f178e5fb729fc5b6dc62a77c3bb364d6c9
@@ -69,13 +69,10 @@ RUN git clone https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
 
 # ---- Layer 4: aws-ofi-nccl GIN + DeepEP-V2 source (in-tree script, COPY'd not curled) ----
 COPY setup_deepep_v2_efa.sh /opt/setup_deepep_v2_efa.sh
-ARG AWS_OFI_NCCL_SHA=9c44d34476f90ddbf4a12d0ac4fc412d46bd8ab4
-ARG AWS_OFI_NCCL_PR=1351
-ARG AWS_OFI_NCCL_PR_SHA=c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b  # IMMUTABLE PR#1351 head (FORCED_PCIE param; a bare refs/pull/N/head is a moving ref)
+ARG AWS_OFI_NCCL_REF=v1.21.1                              # released tag (the canonical deepep-v2-benchmark's aws-ofi-nccl version)
 ARG DEEPEP_SHA=97d8f9bcc1be31e9036db2ab591ef9b9f4e38619   # amazon-contributing/DeepEP@main, 2026-09-03 (the canonical V2/GIN source)
 RUN chmod +x /opt/setup_deepep_v2_efa.sh \
-    && AWS_OFI_NCCL_SHA=${AWS_OFI_NCCL_SHA} AWS_OFI_NCCL_PR=${AWS_OFI_NCCL_PR} AWS_OFI_NCCL_PR_SHA=${AWS_OFI_NCCL_PR_SHA} \
-       DEEPEP_SHA=${DEEPEP_SHA} \
+    && AWS_OFI_NCCL_REF=${AWS_OFI_NCCL_REF} DEEPEP_SHA=${DEEPEP_SHA} \
        /opt/setup_deepep_v2_efa.sh
 ENV LD_LIBRARY_PATH=/opt/aws-ofi-nccl/lib:${LD_LIBRARY_PATH}
 

@@ -25,7 +25,7 @@ the recipes re-align as the sibling's review lands.)
 
 | Shared with `../../vllm/deepep-v2-efa` (identical) | Dynamo-specific (the only delta) |
 |---|---|
-| `Dockerfile` Layers 1–5b (NGC base, EFA, torch cu13, gdrcopy, aws-ofi-nccl GIN + #1351, DeepEP-V2, pinned vLLM wheel) | `Dockerfile` Layer 5c: `pip install --no-deps ai-dynamo{,-runtime}==1.3.1` |
+| `Dockerfile` Layers 1–5b (NGC base, EFA, torch cu13, gdrcopy, aws-ofi-nccl GIN v1.21.1, DeepEP-V2, pinned vLLM wheel) | `Dockerfile` Layer 5c: `pip install --no-deps ai-dynamo{,-runtime}==1.3.1` |
 | `setup_deepep_v2_efa.sh`, `recipe/build_deepep.sh`, `recipe/run-kernel-test.sh`, `recipe/verify-image.sh`, `recipe/benchmark*.{sh,py}` | `recipe/serve.sh`: launches `dynamo.frontend` + `dynamo.vllm` (vs `vllm serve`) |
 | The proxy-Gin/EFA env contract, the DP-coordinator flags, the model, the EP-divisibility preflight | `kubernetes/dynamo-deepep-v2-2node.yaml`: readiness probe + names |
 
@@ -50,10 +50,12 @@ non-obvious integration fixes, not config:
    collective on the EP group before `ElasticBuffer` construction, so `_comm_ptr()` returns `0` →
    `ncclTeamWorld(nullptr)` → deterministic segfault on all ranks. Setting `0` restores DeepEP's
    create-own-comm path. (Env, set in `recipe/serve.sh` and `kubernetes/`.)
-2. **The gdrcopy forced-PCIe capability** for the GIN plugin on gdrdrv-2.4 hosts, via
-   `OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1` — the parameterized fix from
-   [aws/aws-ofi-nccl#1351](https://github.com/aws/aws-ofi-nccl/pull/1351), cherry-picked at a pinned SHA
-   in `setup_deepep_v2_efa.sh` (no local patch file).
+2. **gdrcopy compiled into the GIN plugin, with gdrdrv ≥ 2.5 on the host.** aws-ofi-nccl is built
+   from source at the released `v1.21.1` tag with `--with-gdrcopy`, and the build asserts gdrcopy
+   support landed (a gdrapi-less plugin fails `nccl_ofi_gin_init` at serve). The release attempts
+   the forced-PCIe pin path by default and falls back on failure, so no
+   `OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY` override is needed; the gdrdrv **kernel module ≥ 2.5** is a
+   host prerequisite instead (see Prerequisites).
 3. **DeepEP-V2 source** = the
    [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) fork at a pinned SHA
    (`97d8f9bc`) — the same source the repo's canonical V2/GIN provisioner pins ("the benchmark
@@ -99,6 +101,12 @@ At this pin, default (non-eager) compilation crashes deterministically ~48 s int
 
 - An EKS cluster of p5en.48xlarge (H200) with EFA + the EFA K8s device plugin (the shipped launcher);
   the container also runs under raw `docker run` on any 2 EFA hosts if you wire the rendezvous by hand.
+- The **`gdrdrv` kernel module ≥ 2.5 loaded on the host** (`cat /sys/module/gdrdrv/version`;
+  `/dev/gdrdrv` must exist). GIN needs GDRCopy at run time; the manifest's `privileged: true` lets the
+  container open the host's `/dev/gdrdrv`, but privileged cannot conjure the device node if the module
+  was never loaded — and the shipped plugin (released `v1.21.1`) carries no gdrdrv-2.4 workaround. The
+  AWS GPU AMIs ship it; if absent, `sudo modprobe gdrdrv` (gdrcopy ≥ 2.5, matching the image's
+  `c91ad9f`/v2.5.2 userspace build).
 - An ECR repo you own (set in `setup/env_vars`); this sample never hardcodes a registry.
 - Hugging Face access for the model (`Qwen/Qwen3-30B-A3B-FP8` is public, no token required).
 
@@ -110,7 +118,7 @@ bash setup/build-push.sh
 ```
 
 The image is NGC-from-scratch (`FROM nvcr.io/nvidia/cuda:...`). `setup_deepep_v2_efa.sh` builds
-aws-ofi-nccl (GIN + the #1351 param) and stages DeepEP-V2 source; the `_C.so` is compiled in-pod on
+aws-ofi-nccl (GIN, released `v1.21.1`) and stages the DeepEP-V2 source; the `_C.so` is compiled in-pod on
 first boot (needs a live CUDA context) by `recipe/`-invoked `build_deepep.sh`. Dynamo is added in
 Layer 5c as `pip install --no-deps ai-dynamo{,-runtime}==1.3.1` — `--no-deps` is load-bearing: without
 it, pip would pull `ai-dynamo`'s `vllm[...]==0.23.0` dependency and overwrite the pinned `VLLM_SHA`
@@ -250,18 +258,16 @@ eager and non-eager tables + environment provenance.
   EFA under a Dynamo front, not those higher-level Dynamo features.
 - `setup_deepep_v2_efa.sh` is a **documented variant** of the repo's canonical V2/GIN provisioner,
   [`micro-benchmarks/expert-parallelism/deepep-v2-benchmark/setup_deepep_gin.sh`](../../../../micro-benchmarks/expert-parallelism/deepep-v2-benchmark/setup_deepep_gin.sh)
-  (which appeared 2026-08-24). When the canonical moves, that is the file to track. Three deliberate
+  (which appeared 2026-08-24). When the canonical moves, that is the file to track. Two deliberate
   divergences justify a separate script here; the next reader should know they are choices, not drift:
-  1. **The unmerged aws-ofi-nccl #1351 parameter.** This sample cherry-picks
-     [aws/aws-ofi-nccl#1351](https://github.com/aws/aws-ofi-nccl/pull/1351)
-     (`OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY`) at a pinned head SHA; the canonical builds a stock GIN NCCL
-     and does not carry it. Until #1351 merges, this recipe cannot be a thin call into the canonical.
-  2. **CPU-proxy (`NCCL_GIN_TYPE=2`), not EFA-GDA.** This is the GDAKI-off, CPU-proxy transport that is
+  1. **CPU-proxy (`NCCL_GIN_TYPE=2`), not EFA-GDA.** This is the GDAKI-off, CPU-proxy transport that is
      viable on EFA today; the canonical benchmark's defaults and NCCL build target a different point in
      that design space.
-  3. **Coupling to the vLLM wheel's torch/NCCL ABI.** The DeepEP `_C.so` here is built in-pod against
+  2. **Coupling to the vLLM wheel's torch/NCCL ABI.** The DeepEP `_C.so` here is built in-pod against
      the exact `torch 2.11+cu130` / `nvidia-nccl-cu13 2.30.4` the pinned vLLM wheel drags in (Dockerfile
      Layer 5b re-pins it), so the toolchain is wheel-driven rather than a standalone NCCL build tree.
+     (The aws-ofi-nccl plugin itself is the canonical's version — released `v1.21.1`, built from source
+     so gdrcopy support is compiled in by construction.)
 
   The **DeepEP source** matches the canonical: both pin the
   [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) fork — this sample at

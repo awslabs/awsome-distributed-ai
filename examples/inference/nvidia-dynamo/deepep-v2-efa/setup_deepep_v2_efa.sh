@@ -10,11 +10,19 @@
 # (recipe/build_deepep.sh) because it needs a live CUDA context the build sandbox lacks.
 set -euo pipefail
 
-# ---- pins (every one justified; no 'latest'; a bare refs/pull/N/head is a MOVING ref) ----
+# ---- pins (released tag + immutable SHA; no 'latest') ----
+# v1.21.1 is the released aws-ofi-nccl tag that carries the CPU-proxy GIN op-tables this
+# sample uses (src/rdma/gin/nccl_ofi_gin_api.cpp exports ncclGinPlugin_v11 + _v13; only
+# _v14 is EFA-GDA-specific, which we do not use), and it is the aws-ofi-nccl version the
+# canonical micro-benchmarks/expert-parallelism/deepep-v2-benchmark runs on (bundled by
+# EFA installer 1.50.0) — known-good in this repo. Built from source here so gdrcopy
+# support is compiled in BY CONSTRUCTION (asserted below) and the plugin version stays
+# pinned independently of the installer. The plugin vendors its own GIN headers
+# (3rd-party/nccl/cuda/include/nccl/gin_v13.h), so its GIN interface is not coupled to
+# the pip NCCL headers — which is why no --with-nccl-headers flag is needed (and why
+# that flag, not being an AC_ARG_WITH this project defines, was silently ignored before).
 AWS_OFI_NCCL_REPO="${AWS_OFI_NCCL_REPO:-https://github.com/aws/aws-ofi-nccl.git}"
-AWS_OFI_NCCL_SHA="${AWS_OFI_NCCL_SHA:-9c44d34476f90ddbf4a12d0ac4fc412d46bd8ab4}"  # GIN plugin, gdrdrv-2.4 v1-fallback baked
-AWS_OFI_NCCL_PR="${AWS_OFI_NCCL_PR:-1351}"                                       # OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY param
-AWS_OFI_NCCL_PR_SHA="${AWS_OFI_NCCL_PR_SHA:-c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b}"  # IMMUTABLE PR#1351 head (a bare refs/pull/N/head is a moving ref)
+AWS_OFI_NCCL_REF="${AWS_OFI_NCCL_REF:-v1.21.1}"
 # DeepEP source = the amazon-contributing fork, same as the canonical setup_deepep_gin.sh
 # (deepep-v2-benchmark), which pins this fork and states "the benchmark supports no other
 # source". The fork carries the in-tree successors of deepseek PR#612's EFA work — the QP
@@ -24,20 +32,18 @@ AWS_OFI_NCCL_PR_SHA="${AWS_OFI_NCCL_PR_SHA:-c2e773dfb2c75b765b3415f8ffd1b47e7c23
 DEEPEP_REPO="${DEEPEP_REPO:-https://github.com/amazon-contributing/DeepEP.git}"
 DEEPEP_SHA="${DEEPEP_SHA:-97d8f9bcc1be31e9036db2ab591ef9b9f4e38619}"            # amazon-contributing/DeepEP@main, 2026-09-03
 
-echo "== aws-ofi-nccl GIN @ ${AWS_OFI_NCCL_SHA} + PR#${AWS_OFI_NCCL_PR} =="
-git clone "${AWS_OFI_NCCL_REPO}" /opt/aws-ofi-nccl-src
+echo "== aws-ofi-nccl GIN @ ${AWS_OFI_NCCL_REF} =="
+git clone --depth 1 --branch "${AWS_OFI_NCCL_REF}" "${AWS_OFI_NCCL_REPO}" /opt/aws-ofi-nccl-src
 cd /opt/aws-ofi-nccl-src
-git config user.email build@local; git config user.name build
-git fetch origin "${AWS_OFI_NCCL_SHA}"; git checkout "${AWS_OFI_NCCL_SHA}"
-grep -q FALLBACK_V1_FOR_GDRDRV_24 src/nccl_ofi_gdrcopy.cpp   # assert the v1-fallback is present (fail-loud)
-if [ -n "${AWS_OFI_NCCL_PR_SHA}" ]; then
-  git fetch origin "${AWS_OFI_NCCL_PR_SHA}"
-  git cherry-pick "${AWS_OFI_NCCL_PR_SHA}"
-  grep -q GDRCOPY_FORCED_PCIE_COPY include/nccl_ofi_param.h  # assert the param landed (fail-loud)
-fi
+git rev-parse HEAD > /opt/aws-ofi-nccl.effective.sha
 ./autogen.sh
+# Released v1.21.1 already attempts gdr_pin_buffer_v2 with GDR_PIN_FLAG_FORCE_PCIE and falls
+# back to flags=0 on failure — the forced-PCIe attempt is the default and needs no env
+# override. The gdrdrv-2.4 workaround the old dev-line pin carried (a cherry-pick of the
+# closed-unmerged aws-ofi-nccl#1351) is gone; gdrdrv >= 2.5 on the compute nodes is a host
+# precondition instead (see README Prerequisites).
 ./configure --prefix=/opt/aws-ofi-nccl --with-libfabric=/opt/amazon/efa --with-cuda=/usr/local/cuda \
-  --with-nccl-headers="$(python3 -c 'import nvidia.nccl; print(nvidia.nccl.__path__[0])')/include" \
+  --with-gdrcopy=/usr/local \
   --enable-cudart-dynamic --enable-platform-aws
 make -C src -j"$(nproc)"; make -C src install
 test -f /opt/aws-ofi-nccl/lib/libnccl-net-ofi.so

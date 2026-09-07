@@ -54,7 +54,6 @@ export FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_ENABLE_SHM_TRANSFER=0 FI_
 export OFI_NCCL_PROTOCOL=RDMA DEEP_EP_BACKEND=nccl
 export NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
 export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-^lo,docker,veth}   # exclusion, never positive selection: EFA nodes expose efa*/enp* and CNI adds bridges; auto-select can pick a non-routing iface -> rendezvous hang. Repo convention (nccl-tests Dockerfile).
-export OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1   # PR#1351: assert forced-PCIe on gdrdrv-2.4-kernel nodes
 export EP_REUSE_NCCL_COMM=0   # DeepEP creates its own comm; torch's is lazy/null under vLLM (segfault rootcause 2026-08-14)
 export NCCL_DEBUG=${SERVE_NCCL_DEBUG:-WARN}
 # QP sizing + RDMA link rate need no env at the shipped DeepEP pin: the amazon-contributing
