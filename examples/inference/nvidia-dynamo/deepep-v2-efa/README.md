@@ -4,8 +4,10 @@
 Serve a Mixture-of-Experts model with **NVIDIA Dynamo** (`dynamo.frontend` OpenAI ingress +
 `dynamo.vllm` engine) using **DeepEP-V2** (`ElasticBuffer`) expert-parallel all-to-all, routed over
 **AWS EFA** via the NCCL-GIN **CPU-proxy** path (`NCCL_GIN_TYPE=2`). `dynamo.vllm` wraps the same vLLM
-engine as the sibling `../../vllm/deepep-v2-efa` sample (it forwards every unknown CLI flag straight
-into vLLM's `AsyncEngineArgs`), so **nothing about the DeepEP-V2 / EFA transport changes** — this
+engine as the sibling **vLLM DeepEP-V2 sample**
+([PR #1230](https://github.com/awslabs/awsome-distributed-ai/pull/1230) — the `../../vllm/deepep-v2-efa`
+relative links throughout this sample resolve once it merges) (it forwards every unknown CLI flag
+straight into vLLM's `AsyncEngineArgs`), so **nothing about the DeepEP-V2 / EFA transport changes** — this
 sample adds only an OpenAI-compatible frontend and a DP/EP-aware worker wrapper on top of that proven
 substrate. It is the V2 / NCCL-GIN counterpart to the NVSHMEM-backed `../../sglang/dsr1-deepep-efa`
 sample: no NVSHMEM, no IBGDA — DeepEP-V2's `ElasticBuffer` drives the dispatch/combine collectives
@@ -22,7 +24,9 @@ This sample is the vLLM-DeepEP-V2 substrate (`../../vllm/deepep-v2-efa`,
 [PR #1230](https://github.com/awslabs/awsome-distributed-ai/pull/1230)) **plus a Dynamo serving
 front**. Everything below the serving layer is shared by design — same layers, same scripts, same
 env contract. (This sample's substrate pins may lead the sibling's while the two reviews converge;
-the recipes re-align as the sibling's review lands.)
+the recipes re-align as the sibling's review lands.) **Merge order: #1230 lands first** — this
+sample's relative sibling links and its byte-identity claims point at that folder, so until #1230
+merges they have nothing on `main` to resolve against.
 
 | Shared with `../../vllm/deepep-v2-efa` (identical) | Dynamo-specific (the only delta) |
 |---|---|
