@@ -15,17 +15,14 @@ AWS_OFI_NCCL_REPO="${AWS_OFI_NCCL_REPO:-https://github.com/aws/aws-ofi-nccl.git}
 AWS_OFI_NCCL_SHA="${AWS_OFI_NCCL_SHA:-9c44d34476f90ddbf4a12d0ac4fc412d46bd8ab4}"  # GIN plugin, gdrdrv-2.4 v1-fallback baked
 AWS_OFI_NCCL_PR="${AWS_OFI_NCCL_PR:-1351}"                                       # OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY param
 AWS_OFI_NCCL_PR_SHA="${AWS_OFI_NCCL_PR_SHA:-c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b}"  # IMMUTABLE PR#1351 head (a bare refs/pull/N/head is a moving ref)
-# DeepEP source divergence from the canonical setup_deepep_gin.sh (deepep-v2-benchmark): the canonical
-# pins the amazon-contributing/DeepEP fork; this sample pins deepseek-ai/DeepEP@b306af06 + PR#612 — the
-# substrate the shipped H200 (sm_90) numbers were measured on. The cost is Blackwell-only: the fork
-# carries the st.bulk 64-bit-operand fix (amazon-contributing/DeepEP#3, merged 2026-08-24) that makes
-# CUDA 13.0 codegen work on p6/Blackwell; this pin does not, so the manifest's DEEPEP_ARCH_LIST=10.x
-# knobs are documented-not-verified (README "Known limitations"). To enable Blackwell, set
-# DEEPEP_REPO=https://github.com/amazon-contributing/DeepEP.git + a fork SHA and re-verify on p6.
-DEEPEP_REPO="${DEEPEP_REPO:-https://github.com/deepseek-ai/DeepEP.git}"
-DEEPEP_SHA="${DEEPEP_SHA:-b306af06afd412c88e51e71802951606e40b7358}"            # measured substrate base (H200 sm_90)
-DEEPEP_PR="${DEEPEP_PR:-612}"                                                    # EFA auto-QP cap
-DEEPEP_PR_SHA="${DEEPEP_PR_SHA:-28d1f7fb173f728be51632ce0026fea23243e350}"       # IMMUTABLE PR#612 head (moving-ref trap)
+# DeepEP source = the amazon-contributing fork, same as the canonical setup_deepep_gin.sh
+# (deepep-v2-benchmark), which pins this fork and states "the benchmark supports no other
+# source". The fork carries the in-tree successors of deepseek PR#612's EFA work — the QP
+# count clamps into [_C.min_unordered_gin_qps, _C.max_unordered_gin_qps] (elastic.py) and the
+# RDMA link rate is probed from sysfs (envs.py _get_sysfs_rdma_gbs) — plus the Blackwell
+# st.bulk 64-bit-operand fix (e3fd4361), so no EP_EFA_MAX_QPS/EP_EFA_RDMA_GBS env exists here.
+DEEPEP_REPO="${DEEPEP_REPO:-https://github.com/amazon-contributing/DeepEP.git}"
+DEEPEP_SHA="${DEEPEP_SHA:-97d8f9bcc1be31e9036db2ab591ef9b9f4e38619}"            # amazon-contributing/DeepEP@main, 2026-09-03
 
 echo "== aws-ofi-nccl GIN @ ${AWS_OFI_NCCL_SHA} + PR#${AWS_OFI_NCCL_PR} =="
 git clone "${AWS_OFI_NCCL_REPO}" /opt/aws-ofi-nccl-src
@@ -51,14 +48,13 @@ test -f /opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
 ldconfig
 cd /; rm -rf /opt/aws-ofi-nccl-src
 
-echo "== DeepEP-V2 source @ ${DEEPEP_SHA} + PR#${DEEPEP_PR} (@ ${DEEPEP_PR_SHA}) =="
+echo "== DeepEP-V2 source @ ${DEEPEP_SHA} (amazon-contributing fork) =="
 git clone "${DEEPEP_REPO}" /opt/DeepEP
 cd /opt/DeepEP
-git config user.email build@local; git config user.name build
 git fetch origin "${DEEPEP_SHA}"; git checkout "${DEEPEP_SHA}"
-git fetch origin "${DEEPEP_PR_SHA}"
-git merge --no-edit "${DEEPEP_PR_SHA}"                       # pin the IMMUTABLE PR head, not the moving ref
+# third-party/fmt is a submodule setup.py's include_dirs assumes; without it the build only
+# holds while torch keeps vendoring a compatible fmt under torch/include. Same step (and
+# reason) as the canonical setup_deepep_gin.sh.
+git submodule update --init --recursive
 git rev-parse HEAD > /opt/deepep.effective.sha
-test -f /opt/DeepEP/tests/elastic/test_ep.py
-test -f /opt/DeepEP/csrc/elastic/buffer.hpp
 echo "== setup_deepep_v2_efa.sh complete; DeepEP _C.so builds in-pod via recipe/build_deepep.sh =="

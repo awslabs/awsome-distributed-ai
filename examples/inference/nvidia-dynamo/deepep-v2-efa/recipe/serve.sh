@@ -57,17 +57,11 @@ export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-^lo,docker,veth}   # exclusion, 
 export OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1   # PR#1351: assert forced-PCIe on gdrdrv-2.4-kernel nodes
 export EP_REUSE_NCCL_COMM=0   # DeepEP creates its own comm; torch's is lazy/null under vLLM (segfault rootcause 2026-08-14)
 export NCCL_DEBUG=${SERVE_NCCL_DEBUG:-WARN}
-# EP_EFA_MAX_QPS=2 is the value the published benchmarks/ numbers were measured with
-# (DeepEP PR#612's conservative EFA default: its commit message caps auto-QP at 2 to avoid
-# a 128-slot GIN request-ring overflow) — kept as the default so the sample reproduces its
-# own tables. It may leave throughput on the table on newer aws-ofi-nccl: that 128-slot ring
-# was replaced by the seq-window design upstream (6e504db), and the plugin pinned here
-# (9c44d34) is 76 commits PAST that redesign (github.com/aws/aws-ofi-nccl/compare/6e504db...9c44d34),
-# so the image is not in the condition the cap was written for; a 2x B200 A/B through this
-# same vLLM path measured +29% throughput / -23% p50 uncapped (=129) with 0/384 failures, so
-# uncapping is worth testing on p5en. If you tune it, re-measure at YOUR concurrency and
-# record the value — both knobs are part of the benchmark provenance table.
-export EP_EFA_MAX_QPS=${EP_EFA_MAX_QPS:-2} EP_EFA_RDMA_GBS=${EP_EFA_RDMA_GBS:-25.0}
+# QP sizing + RDMA link rate need no env at the shipped DeepEP pin: the amazon-contributing
+# fork clamps the QP count into [_C.min_unordered_gin_qps, _C.max_unordered_gin_qps]
+# (deep_ep/buffers/elastic.py) and probes the link rate from sysfs (deep_ep/utils/envs.py
+# _get_sysfs_rdma_gbs). The old EP_EFA_MAX_QPS / EP_EFA_RDMA_GBS knobs from deepseek PR#612
+# do not exist on this source and are deliberately not exported.
 
 # ---- vLLM PR#41183 (DeepEPV2All2AllManager) envs — V2-native, shim OFF ----
 export DEEP_EP_USE_V2_SHIM=0

@@ -72,12 +72,10 @@ COPY setup_deepep_v2_efa.sh /opt/setup_deepep_v2_efa.sh
 ARG AWS_OFI_NCCL_SHA=9c44d34476f90ddbf4a12d0ac4fc412d46bd8ab4
 ARG AWS_OFI_NCCL_PR=1351
 ARG AWS_OFI_NCCL_PR_SHA=c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b  # IMMUTABLE PR#1351 head (FORCED_PCIE param; a bare refs/pull/N/head is a moving ref)
-ARG DEEPEP_SHA=b306af06afd412c88e51e71802951606e40b7358
-ARG DEEPEP_PR=612
-ARG DEEPEP_PR_SHA=28d1f7fb173f728be51632ce0026fea23243e350
+ARG DEEPEP_SHA=97d8f9bcc1be31e9036db2ab591ef9b9f4e38619   # amazon-contributing/DeepEP@main, 2026-09-03 (the canonical V2/GIN source)
 RUN chmod +x /opt/setup_deepep_v2_efa.sh \
     && AWS_OFI_NCCL_SHA=${AWS_OFI_NCCL_SHA} AWS_OFI_NCCL_PR=${AWS_OFI_NCCL_PR} AWS_OFI_NCCL_PR_SHA=${AWS_OFI_NCCL_PR_SHA} \
-       DEEPEP_SHA=${DEEPEP_SHA} DEEPEP_PR=${DEEPEP_PR} DEEPEP_PR_SHA=${DEEPEP_PR_SHA} \
+       DEEPEP_SHA=${DEEPEP_SHA} \
        /opt/setup_deepep_v2_efa.sh
 ENV LD_LIBRARY_PATH=/opt/aws-ofi-nccl/lib:${LD_LIBRARY_PATH}
 
