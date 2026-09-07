@@ -203,9 +203,12 @@ not a bare `curl -sf /health`. This is deliberate and Dynamo-specific:
 - The engine registers with the frontend **only after the weight load** (`dynamo.vllm`'s
   `register_model()` runs after `AsyncLLM.from_vllm_config`). Once it does, `/health`'s response body
   populates its `endpoints`/`instances` arrays.
-- Therefore the honest readiness signal is **`/health` is 200 *and* has ≥1 endpoint**. The probe uses
-  `curl -sf .../health | grep -qF '"endpoints":["'`, which matches only a populated array (an empty
-  `"endpoints":[]` fails the match).
+- Therefore the honest readiness signal is **`/health` is 200 *and* has ≥1 endpoint**. The probe
+  checks that structurally — `curl -sf .../health | python3 -c 'import json,sys; sys.exit(0 if
+  json.load(sys.stdin).get("endpoints") else 1)'` — so it does not depend on how the frontend
+  happens to serialize the body: a populated `endpoints` array passes, an empty one (or non-JSON)
+  fails, and a formatting change across a Dynamo bump cannot turn a succeeding load into a probe
+  kill.
 
 Workers are `--headless` (no HTTP server, and they never register a discovery endpoint), so their
 probe is **process-liveness only** (`pgrep -f dynamo.vllm`). A worker's startup passes on its first
@@ -214,6 +217,21 @@ true progress is observed through the leader coming Ready: the DP rendezvous can
 leader cannot register its engine) until every worker has joined. This pairs with
 `publishNotReadyAddresses: true` on the headless Service — workers must resolve the leader's DNS
 A-record *before* the leader is Ready, or the rendezvous deadlocks.
+
+### Update / recovery — all pods together, never one at a time
+
+The DP rendezvous is **one-shot**: a restarted pod cannot rejoin a group whose other members kept
+running. The StatefulSet therefore ships `updateStrategy: OnDelete`, and the single update **and**
+recovery procedure is to delete all pods together so the group re-forms from scratch:
+
+```bash
+kubectl -n dynamo-deepep delete pod -l app=dynamo-deepep-v2   # roll a new image tag / recover a wedged group
+```
+
+The default rolling update would replace pods one at a time, each replacement joining a collective
+that no longer exists while the survivor keeps reporting Ready. The leader also carries a
+`livenessProbe` (same exec as readiness, gated by the `startupProbe`) so frontend death or a wedged
+leader turns into a visible restart — after which the all-pods delete above is the recovery.
 
 ## Benchmark
 

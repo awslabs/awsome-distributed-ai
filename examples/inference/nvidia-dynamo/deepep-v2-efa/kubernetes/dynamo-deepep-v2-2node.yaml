@@ -60,6 +60,8 @@ spec:
   serviceName: dynamo-deepep-v2
   replicas: 2                # 2 nodes = DP16/EP16 ; 4 nodes = DP32/EP32 (also set SERVE_DP)
   podManagementPolicy: Parallel
+  updateStrategy:
+    type: OnDelete           # a one-shot DP rendezvous cannot be rolled one pod at a time; recovery is `kubectl delete pod -l app=dynamo-deepep-v2` (all pods together — see README "Update / recovery")
   selector:
     matchLabels:
       app: dynamo-deepep-v2
@@ -128,8 +130,9 @@ spec:
         # - { name: DEEPEP_ARCH_LIST, value: "10.0" }   # in-pod DeepEP build arch; default 9.0 = H100/H200 — set 10.0 on p6-b200, 10.3 on p6-b300 (Blackwell)
         # - { name: HF_TOKEN, valueFrom: { secretKeyRef: { name: hf-token, key: token } } }  # gated models only
 
-        # ---- proxy-Gin + EFA contract, VERBATIM (also baked as image ENV; repeated
-        #      here so the manifest alone documents the transport contract) ----
+        # ---- proxy-Gin + EFA contract, VERBATIM (also exported by recipe/serve.sh; repeated
+        #      here so the manifest alone documents the transport contract — the Dockerfile
+        #      deliberately bakes none of it) ----
         - { name: NCCL_GIN_TYPE,             value: "2" }     # 2 = CPU-proxy GIN (the EFA-viable path)
         - { name: NCCL_GIN_ENABLE,           value: "1" }
         - { name: OFI_NCCL_GIN_GDAKI,        value: "0" }     # GPU-initiated: not the shipped path on EFA
@@ -145,7 +148,8 @@ spec:
         - { name: OFI_NCCL_PROTOCOL,         value: "RDMA" }
         - { name: DEEP_EP_BACKEND,           value: "nccl" }
         - { name: NCCL_NET_PLUGIN,           value: "/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so" }
-        - { name: NCCL_DEBUG,                value: "WARN" }  # INFO to see the efa-direct banner proof
+        - { name: NCCL_SOCKET_IFNAME,        value: "^lo,docker,veth" }  # exclusion list (serve.sh honors an override) — auto-select can pick a non-routing iface -> rendezvous hang
+        - { name: SERVE_NCCL_DEBUG,          value: "WARN" }  # INFO to see the efa-direct banner proof (serve.sh reads SERVE_NCCL_DEBUG, not NCCL_DEBUG)
         # ---- readiness (see README "Readiness on Dynamo — why /health alone lies") ----
         # LEADER (ordinal 0): dynamo.frontend's /health returns 200 as soon as the HTTP server
         # binds (~6 s) — its ServiceObserver defaults to Ready and nothing flips it on engine
@@ -153,8 +157,12 @@ spec:
         # the model is loaded. The engine registers with the frontend ONLY after the weight load
         # (dynamo.vllm register_model() runs after AsyncLLM.from_vllm_config), and once it does the
         # /health body's "endpoints"/"instances" arrays become non-empty. So the honest probe is
-        # "/health is 200 AND has ≥1 endpoint" — `grep -qF '"endpoints":["'` (matches only a
-        # populated array). The failureThreshold budget below then genuinely bounds compile + load.
+        # "/health is 200 AND has ≥1 endpoint" — checked STRUCTURALLY (python3 json.load, non-empty
+        # "endpoints") rather than a substring match, so a serialization change across a Dynamo bump
+        # cannot make the probe lie. The startupProbe budget is aligned to serve.sh's
+        # VLLM_ENGINE_READY_TIMEOUT_S=1800: the ENGINE's 30-min timeout is the real budget and fires
+        # first (its error names the cause); the probe allows +5 min for the pre-engine steps
+        # (in-pod DeepEP build, DNS wait). Raise BOTH knobs together for a bigger model.
         # WORKER (ordinal 1+): --headless, no HTTP server and it never registers a discovery
         # endpoint, so its probe is process-liveness only — `pgrep -f dynamo.vllm`. `dynamo.vllm`
         # exists from launch, so a worker's startupProbe passes on its first tick (the 60-min budget
@@ -165,15 +173,29 @@ spec:
         # record BEFORE it is Ready, or the rendezvous deadlocks).
         startupProbe:
           exec:
-            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health | grep -qF '\"endpoints\":[\"'; else pgrep -f '[d]ynamo.vllm' >/dev/null; fi"]
+            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get(\"endpoints\") else 1)'; else pgrep -f '[d]ynamo.vllm' >/dev/null; fi"]
           periodSeconds: 30
           timeoutSeconds: 5                  # exec probes default to 1s; a busy /health can exceed it -> false failure
-          failureThreshold: 120              # up to 60 min: in-pod compile + multi-hundred-GB model load + engine registration
+          failureThreshold: 70               # 35 min = VLLM_ENGINE_READY_TIMEOUT_S (1800 s, serve.sh) + 5 min pre-engine margin — see the budget note above
         readinessProbe:
           exec:
-            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health | grep -qF '\"endpoints\":[\"'; else pgrep -f '[d]ynamo.vllm' >/dev/null; fi"]
+            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get(\"endpoints\") else 1)'; else pgrep -f '[d]ynamo.vllm' >/dev/null; fi"]
           periodSeconds: 15
           timeoutSeconds: 5                  # as above — prevents readiness flapping on the leader under load
+        # Leader liveness: same exec as readiness, VERBATIM — the startupProbe above gates it, so it
+        # cannot fire during the compile/load. Catches frontend death (the leader otherwise stays
+        # NotReady-but-running forever while publishNotReadyAddresses keeps publishing it) and a
+        # wedged leader. A restarted leader cannot be rejoined by live workers (the DP rendezvous is
+        # one-shot) — recovery is the all-pods delete this file's updateStrategy comment and the
+        # README "Update / recovery" section name. On a worker the pgrep half is plain process
+        # liveness, which the container's exec-ed serve already provides; the probe is uniform for
+        # the same reason the readiness one is.
+        livenessProbe:
+          exec:
+            command: ["/bin/bash", "-c", "if [ \"${HOSTNAME##*-}\" = \"0\" ]; then curl -sf http://127.0.0.1:8000/health | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get(\"endpoints\") else 1)'; else pgrep -f '[d]ynamo.vllm' >/dev/null; fi"]
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 4                # ~1 min of consecutive failure before the restart
         # requests == limits (Guaranteed QoS): NCCL_GIN_TYPE=2 is the CPU-PROXY path, so
         # proxy-thread CPU sits on the data path — Burstable QoS + CFS throttling under node
         # pressure would degrade network throughput and silently taint published numbers.
@@ -205,6 +227,6 @@ spec:
       - name: shm
         emptyDir: { medium: Memory, sizeLimit: 128Gi }
       - name: dev-infiniband
-        hostPath: { path: /dev/infiniband }
+        hostPath: { path: /dev/infiniband, type: Directory }   # fail at mount time on a non-EFA node, not inside NCCL with the devices unnamed
       - name: work
         emptyDir: { sizeLimit: 900Gi }       # big MoE weights land here; size for your model
