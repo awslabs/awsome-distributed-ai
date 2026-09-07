@@ -107,6 +107,22 @@ At this pin, default (non-eager) compilation crashes deterministically ~48 s int
   was never loaded — and the shipped plugin (released `v1.21.1`) carries no gdrdrv-2.4 workaround. The
   AWS GPU AMIs ship it; if absent, `sudo modprobe gdrdrv` (gdrcopy ≥ 2.5, matching the image's
   `c91ad9f`/v2.5.2 userspace build).
+- **2Mi hugepages pre-allocated on the compute nodes.** The manifest requests `hugepages-2Mi: 5120Mi`
+  per pod (= 2560 × 2Mi pages); the consumer is libfabric's EFA provider bounce-buffer pools.
+  Kubernetes only *accounts* hugepages — allocation is a node-bootstrap step (kernel cmdline
+  `hugepages=2560`, or `sysctl vm.nr_hugepages=2560` via a privileged DaemonSet, before the kubelet
+  starts). Without it the pods sit **Pending** with an unsatisfiable `hugepages-2Mi` request. The
+  nodes the measured runs used had them pre-allocated.
+- **Room for the weights where `emptyDir` actually lands.** The manifest's `work` volume
+  (`emptyDir: { sizeLimit: 900Gi }`) is backed by the filesystem holding `/var/lib/kubelet` — on a
+  stock EKS AMI that is the **EBS root volume**, not the p5en instance-store NVMe. A multi-hundred-GB
+  model download there fills the root disk and triggers a **node-wide `DiskPressure` eviction**, not
+  a pod-level failure. Size the root volume for your model, or remap `/var/lib/kubelet` (or the
+  volume) onto the instance store in the node bootstrap.
+- **`cpuManagerPolicy: static` on the kubelet** if you want what the manifest's Guaranteed QoS
+  (requests == limits) is there for: exclusive core pinning for the NCCL-GIN **CPU-proxy** threads,
+  which sit on the network data path. Without the static policy, Guaranteed QoS does **not** exempt
+  the pod from CFS throttling at its `cpu` limit (see the note in the manifest).
 - An ECR repo you own (set in `setup/env_vars`); this sample never hardcodes a registry.
 - Hugging Face access for the model (`Qwen/Qwen3-30B-A3B-FP8` is public, no token required).
 
