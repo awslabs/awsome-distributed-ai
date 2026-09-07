@@ -8,15 +8,18 @@
 #   leader:  run-kernel-test.sh leader <leader-ip>
 #   worker:  run-kernel-test.sh worker <leader-ip> <node-rank>   # node-rank 1,2,3 for the worker nodes
 #
-# Env (shared with serve.sh): NNODES (default 2), GPUS_PER_NODE (default 8).
+# Env (shared with serve.sh): SERVE_DP / SERVE_DP_LOCAL — the gate's NNODES / GPUS_PER_NODE
+# derive from them so the smoke always tests the SAME shape the serve will run (a 4-node
+# SERVE_DP=32 deployment must not smoke-test 2 nodes). Override NNODES/GPUS_PER_NODE only
+# to test a different shape deliberately.
 set -uo pipefail
 
 ROLE="${1:?usage: run-kernel-test.sh leader|worker <leader-ip> [node-rank]}"
 case "$ROLE" in leader|worker) ;; *) echo "FATAL: unrecognized role '$ROLE' (leader|worker)"; exit 2 ;; esac
 LEADER_IP="${2:?need leader ip}"
 if [ "$ROLE" = "worker" ]; then NODE_RANK_ARG="${3:?worker requires an explicit node-rank (1,2,...)}"; else NODE_RANK_ARG=0; fi
-NNODES="${NNODES:-2}"
-GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
+NNODES="${NNODES:-$(( ${SERVE_DP:-16} / ${SERVE_DP_LOCAL:-8} ))}"
+GPUS_PER_NODE="${GPUS_PER_NODE:-${SERVE_DP_LOCAL:-8}}"
 TEST="/opt/DeepEP/tests/elastic/test_ep.py"
 [ -f "$TEST" ] || { echo "FAIL: $TEST not in image — rebuild from setup_deepep_v2_efa.sh"; exit 3; }
 

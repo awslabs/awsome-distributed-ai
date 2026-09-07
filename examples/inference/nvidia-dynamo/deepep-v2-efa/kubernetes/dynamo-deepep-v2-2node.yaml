@@ -123,7 +123,7 @@ spec:
         # ---- scale + model (the knobs; defaults = measured EP16 shape) ----
         - { name: SERVE_DP,       value: "16" }     # total DP = EP size; 32 for 4 nodes
         - { name: SERVE_DP_LOCAL, value: "8" }      # GPUs per node — worker start-ranks derive from this
-        - { name: SERVE_MODEL, value: "Qwen/Qwen3-30B-A3B-FP8" }  # any MoE with n_routed_experts % DP == 0 (serve.sh asserts)
+        - { name: SERVE_MODEL, value: "Qwen/Qwen3-30B-A3B-FP8" }  # any MoE with n_routed_experts % (DP x TP) == 0 (serve.sh asserts)
         # - { name: SERVE_ENFORCE_EAGER, value: "1" }   # 1 = eager (the shipped default + only supported mode at this pin); 0 = default compilation, which crashes at this pin (needs vLLM #52632, only on the deepep_v2-regressing 0.26 line — README "eager vs non-eager"). Leave unset/1.
         # - { name: DEEPEP_ARCH_LIST, value: "10.0" }   # in-pod DeepEP build arch; default 9.0 = H100/H200 — set 10.0 on p6-b200, 10.3 on p6-b300 (Blackwell)
         # - { name: HF_TOKEN, valueFrom: { secretKeyRef: { name: hf-token, key: token } } }  # gated models only

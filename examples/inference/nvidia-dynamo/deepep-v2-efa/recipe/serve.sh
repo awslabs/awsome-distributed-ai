@@ -27,7 +27,7 @@
 # Scale is env-driven (the proven 2-node DP16 default is byte-identical unless overridden):
 #   SERVE_DP=16|32...    total data-parallel size across all nodes (= EP size)
 #   SERVE_DP_LOCAL=8     ranks per node (= GPUs per node)
-#   SERVE_MODEL=...      any MoE whose n_routed_experts % SERVE_DP == 0 (preflighted below)
+#   SERVE_MODEL=...      any MoE whose n_routed_experts % (SERVE_DP x SERVE_TP) == 0 (preflighted below)
 #
 # ── EAGER vs DEFAULT COMPILATION (see README "eager vs non-eager") ──────────────
 # SERVE_ENFORCE_EAGER=1 (DEFAULT, and the ONLY supported mode at the shipped pin) — eager is
@@ -108,18 +108,23 @@ fi
 SERVE_DP="${SERVE_DP:-16}"
 SERVE_DP_LOCAL="${SERVE_DP_LOCAL:-8}"
 SERVE_TP="${SERVE_TP:-1}"
-START_RANK="${3:-$SERVE_DP_LOCAL}"   # derive from ranks/node (assigned above), not a hardcoded 8: a 4-GPU node wants worker ranks 4-7, not 8-11
+# A worker's start-rank must be EXPLICIT: a default (e.g. $SERVE_DP_LOCAL) is right only for
+# the 2-node shape — at 3+ nodes every defaulted worker would claim the same rank window and
+# collide in the DP rendezvous instead of failing at startup. Leader owns ranks 0..local-1.
+if [ "$ROLE" = "worker" ]; then START_RANK="${3:?worker requires an explicit DP start-rank (= node ordinal x SERVE_DP_LOCAL: 8, 16, 24 ...)}"; else START_RANK=0; fi
 SERVE_MAX_MODEL_LEN="${SERVE_MAX_MODEL_LEN:-4096}"
 SERVE_MAX_NUM_SEQS="${SERVE_MAX_NUM_SEQS:-16}"
 SERVE_MAX_BATCHED_TOKENS="${SERVE_MAX_BATCHED_TOKENS:-256}"
 SERVE_GPU_MEM_UTIL="${SERVE_GPU_MEM_UTIL:-0.70}"
 HTTP_PORT="${HTTP_PORT:-8000}"       # dynamo.frontend OpenAI HTTP port
 
-# ---- EP-divisibility preflight (the one per-model gate): n_routed_experts % DP == 0 ----
+# ---- EP-divisibility preflight (the one per-model gate): n_routed_experts % (DP×TP) == 0 ----
+# vLLM's expert-parallel group is DP × TP, not DP alone (docs/serving/data_parallel_deployment.md:
+# "expert layers form a group of size DP × TP"); at the shipped SERVE_TP=1 the product equals DP.
 # Qwen3 family=128 (ok 16/32), DeepSeek-V3/R1=256 (ok), Kimi-K2=384 (ok), DeepSeek-V2-Lite=64 (ok),
 # Qwen1.5-MoE=60 (FAILS 16/32). Reads the model's config.json via huggingface_hub.
 if [ "${SKIP_EP_PREFLIGHT:-0}" != "1" ]; then
-  python3 - "$SERVE_MODEL" "$SERVE_DP" "$SERVE_MODEL_REVISION" <<'PY' || exit 3
+  python3 - "$SERVE_MODEL" "$((SERVE_DP * SERVE_TP))" "$SERVE_MODEL_REVISION" <<'PY' || exit 3
 import json, sys
 from huggingface_hub import hf_hub_download
 model, dp = sys.argv[1], int(sys.argv[2])
@@ -131,6 +136,17 @@ assert n % dp == 0, (f"EP-DIVISIBILITY GATE FAILED: {model} has {n} routed exper
                      f"not divisible by DP/EP={dp}. Pick a DP that divides {n} or another model.")
 print(f"EP preflight OK: {model} n_routed_experts={n} % DP={dp} == 0 ({n//dp} experts/rank)")
 PY
+fi
+
+# ---- per-node GPU-fit preflight: SERVE_TP × SERVE_DP_LOCAL ranks land on THIS node ----
+# The other way the TP knob produces a late failure: vLLM only discovers an over-committed
+# node at engine start. Skipped when no GPU is visible (e.g. linting the script off-node).
+if command -v nvidia-smi >/dev/null 2>&1; then
+  NUM_GPUS="$(nvidia-smi -L 2>/dev/null | grep -c '^GPU' || true)"
+  if [ "${NUM_GPUS:-0}" -gt 0 ] && [ "$((SERVE_TP * SERVE_DP_LOCAL))" -gt "$NUM_GPUS" ]; then
+    echo "FATAL: SERVE_TP(${SERVE_TP}) x SERVE_DP_LOCAL(${SERVE_DP_LOCAL}) = $((SERVE_TP * SERVE_DP_LOCAL)) GPUs/node needed; this node has ${NUM_GPUS}"
+    exit 3
+  fi
 fi
 
 # ---- eager / non-eager selection (see header + README "eager vs non-eager") ----
