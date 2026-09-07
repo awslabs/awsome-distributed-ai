@@ -17,7 +17,9 @@ if [ -d /dev/infiniband ]; then
   HAVE_EFA_DEV=1
 fi
 
-docker run --rm --gpus all "${DEV_ARGS[@]}" -e HAVE_EFA_DEV="${HAVE_EFA_DEV}" "${IMG}" bash -lc '
+# no --gpus: every check below is fi_info/ldconfig/nm/test/grep — none touches a GPU, so this
+# static check also runs on a build/CI host without the nvidia container toolkit.
+docker run --rm "${DEV_ARGS[@]}" -e HAVE_EFA_DEV="${HAVE_EFA_DEV}" "${IMG}" bash -lc '
   set -euo pipefail
   if [ "${HAVE_EFA_DEV}" = "1" ]; then
     echo "== fi_info efa (live fabric) =="
@@ -28,7 +30,8 @@ docker run --rm --gpus all "${DEV_ARGS[@]}" -e HAVE_EFA_DEV="${HAVE_EFA_DEV}" "$
     echo "   (run this script on an EFA host for the live efa-direct fabric check)"
   fi
   echo "== single libnccl 2.30.4 wins (path + GIN/LSA symbol — the wheel downgrade lands in the SAME dir, so path alone cannot catch it) =="
-  NCCL_SO=$(ldconfig -p | grep "libnccl.so.2 " | head -1 | awk "{print \$NF}")
+  NCCL_SO=$(ldconfig -p | grep "libnccl.so.2 " | head -1 | awk "{print \$NF}" || true)
+  [ -n "$NCCL_SO" ] || { echo "FAIL: no libnccl.so.2 on the linker path at all"; exit 1; }   # fail LOUD like every other check — a bare set -e death here printed nothing
   echo "$NCCL_SO" | grep -q "nvidia/nccl" || { echo "FAIL: system libnccl shadows pip ($NCCL_SO)"; exit 1; }
   [ "$(nm -D "$NCCL_SO" | grep -c ncclGetLsaDevicePointer)" -ge 1 ] || { echo "FAIL: $NCCL_SO lacks GIN/LSA symbols (2.28.x downgrade — see Dockerfile Layer 5b)"; exit 1; }
   echo "== GIN plugin symbol =="; [ "$(nm -D /opt/aws-ofi-nccl/lib/libnccl-net-ofi.so | grep -c ncclGinPlugin)" -ge 1 ] || { echo "FAIL: no ncclGinPlugin"; exit 1; }

@@ -186,9 +186,14 @@ echo "===== Dynamo serve model=$SERVE_MODEL role=$ROLE tp=${SERVE_TP} dp=${SERVE
 # (both __init__s are version shims that import no vLLM, so they would gate nothing): this resolves
 # the full serve-path vLLM API surface against the pinned wheel, so a 0.22↔dynamo mismatch fails
 # HERE (seconds) rather than mid-load. main() is behind `if __name__` so importing it does not serve.
-python3 -c "import dynamo.vllm.main, dynamo.frontend.main, vllm, deep_ep; print('dynamo.vllm.main/frontend.main OK | vllm', vllm.__version__, '| deep_ep OK')"
-python3 -c "from vllm.distributed.device_communicators.all2all import DeepEPV2All2AllManager; print('PR#41183 symbol OK')"
-python3 -c "import deep_ep; assert hasattr(deep_ep,'ElasticBuffer'); print('deep_ep ElasticBuffer OK')"
+# One interpreter start for every preflight assert: each separate python3 -c pays the full
+# ~30-60 s torch+vLLM import on every pod start on every node; three of them tripled that.
+python3 -c "
+import dynamo.vllm.main, dynamo.frontend.main, vllm, deep_ep
+from vllm.distributed.device_communicators.all2all import DeepEPV2All2AllManager
+assert hasattr(deep_ep, 'ElasticBuffer'), 'deep_ep has no ElasticBuffer (V1 source?)'
+print('dynamo.vllm.main/frontend.main OK | vllm', vllm.__version__, '| PR#41183 symbol OK | ElasticBuffer OK')
+"
 
 if [ "$ROLE" = "leader" ]; then
   # (1) ingress: dynamo.frontend on 0.0.0.0:$HTTP_PORT. The pod runs WITHOUT hostNetwork and the
@@ -203,7 +208,10 @@ if [ "$ROLE" = "leader" ]; then
     > "$LOG_DIR/frontend.log" 2>&1 &
   FRONTEND_PID=$!
   echo "dynamo.frontend PID $FRONTEND_PID -> $LOG_DIR/frontend.log (http 0.0.0.0:$HTTP_PORT)"
-  # If the frontend dies, the engine is unreachable — fail the pod rather than serve a black hole.
+  # Scope of this trap: ONLY the window between here and the `exec` below — bash does not run
+  # EXIT traps across exec, so this reaps the frontend if a remaining startup step fails (the
+  # exit 4 below), nothing more. The runtime guarantee ("frontend dies => pod fails, not a
+  # black hole") is the manifest's leader livenessProbe, not this trap.
   trap 'kill "$FRONTEND_PID" 2>/dev/null || true' EXIT
   sleep 6
   kill -0 "$FRONTEND_PID" 2>/dev/null || { echo "FATAL: dynamo.frontend exited during startup — see $LOG_DIR/frontend.log"; tail -20 "$LOG_DIR/frontend.log" || true; exit 4; }

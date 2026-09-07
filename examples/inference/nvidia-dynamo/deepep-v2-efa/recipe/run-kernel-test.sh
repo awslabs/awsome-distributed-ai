@@ -36,7 +36,6 @@ export NCCL_DEBUG=${KERNEL_TEST_NCCL_DEBUG:-INFO}   # INFO so the efa-direct ban
 NODE_RANK="$NODE_RANK_ARG"; [ "$ROLE" = "leader" ] && NODE_RANK=0
 echo "===== DeepEP-V2 kernel smoke: role=$ROLE node_rank=$NODE_RANK nnodes=$NNODES gpus/node=$GPUS_PER_NODE leader=$LEADER_IP $(hostname) $(date -u +%FT%TZ) ====="
 
-set -o pipefail
 # ONE torchrun process per node: test_ep.py spawns its own local ranks internally
 # (torch.multiprocessing.spawn with --num-processes, default 8) and DeepEP's init_dist
 # reads WORLD_SIZE as a NODE count (num_nodes = WORLD_SIZE, world = nodes x local_ranks).
@@ -56,7 +55,10 @@ set -o pipefail
 # `timeout` remains as the hard safety bound (a wrong NNODES / a worker that never starts
 # / a stalled NCCL init blocks indefinitely otherwise); 180s is comfortably above the ~90s
 # measured runtime. timeout exits 124 on expiry, reported as FAIL below rather than a hang.
-timeout "${KERNEL_TEST_TIMEOUT:-180}" torchrun --nnodes="$NNODES" --nproc-per-node=1 --node-rank="$NODE_RANK" \
+# --kill-after=30: on expiry timeout signals torchrun ONLY; the spawned per-rank processes
+# can outlive it holding GPU memory (which the serve then contends with) — the SIGKILL
+# follow-up bounds that cleanup.
+timeout --kill-after=30 "${KERNEL_TEST_TIMEOUT:-180}" torchrun --nnodes="$NNODES" --nproc-per-node=1 --node-rank="$NODE_RANK" \
   --master-addr="$LEADER_IP" --master-port=29501 "$TEST" --num-processes "$GPUS_PER_NODE" \
   --test-first-only --skip-perf-test 2>&1 | tee /tmp/kernel-test.$NODE_RANK.log
 rc=${PIPESTATUS[0]}

@@ -197,8 +197,10 @@ spec:
           timeoutSeconds: 5
           failureThreshold: 4                # ~1 min of consecutive failure before the restart
         # requests == limits (Guaranteed QoS): NCCL_GIN_TYPE=2 is the CPU-PROXY path, so
-        # proxy-thread CPU sits on the data path — Burstable QoS + CFS throttling under node
-        # pressure would degrade network throughput and silently taint published numbers.
+        # proxy-thread CPU sits on the network data path. What Guaranteed buys here is EXCLUSIVE
+        # CORE PINNING — and only on nodes whose kubelet runs cpuManagerPolicy: static (README
+        # Prerequisites). It does NOT exempt the pod from CFS throttling: cpu: "90" is still a
+        # limit and the proxy threads throttle there regardless of QoS class.
         resources:
           limits:
             nvidia.com/gpu: "8"
@@ -215,7 +217,7 @@ spec:
         securityContext:
           privileged: true                   # gdrdrv device-cgroup (see header)
           capabilities:
-            add: [IPC_LOCK]                  # RDMA memory pinning
+            add: [IPC_LOCK]                  # inert under privileged: true (all caps already granted); kept to record what RDMA memory pinning needs if privileged is later swapped for a gdrdrv device plugin
         ports:
         - { containerPort: 8000,  name: http }
         - { containerPort: 29500, name: dp-rpc }

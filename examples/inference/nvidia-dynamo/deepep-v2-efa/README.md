@@ -136,9 +136,11 @@ bash setup/build-push.sh
 The image is NGC-from-scratch (`FROM nvcr.io/nvidia/cuda:...`). `setup_deepep_v2_efa.sh` builds
 aws-ofi-nccl (GIN, released `v1.21.1`) and stages the DeepEP-V2 source; the `_C.so` is compiled in-pod on
 first boot (needs a live CUDA context) by `recipe/`-invoked `build_deepep.sh`. Dynamo is added in
-Layer 5c as `pip install --no-deps ai-dynamo{,-runtime}==1.3.1` — `--no-deps` is load-bearing: without
-it, pip would pull `ai-dynamo`'s `vllm[...]==0.23.0` dependency and overwrite the pinned `VLLM_SHA`
-build (and drag `nvidia-nccl-cu13` back to torch's 2.28.x, undoing the ABI re-pin). The in-tree
+Layer 5c as `pip install --no-deps ai-dynamo{,-runtime}==1.3.1` — `--no-deps` is load-bearing: it
+keeps pip from re-resolving `ai-dynamo`'s nine unconditional dependencies (`transformers`,
+`prometheus-client`, `msgspec`, `pyzmq`, …) over the versions the pinned vLLM wheel installed. (Its
+`vllm[...]==0.23.0` entry is an opt-in extra a bare install never resolves — see the Dockerfile
+Layer-5c comment for the full mechanism.) The in-tree
 `Dockerfile` is the canonical, reviewable build. The shipped vLLM pin (`e2f993dc4`) is the **exact**
 substrate the `benchmarks/` tables were measured on, so a rebuild reproduces them — see
 `benchmarks/README.md`.
