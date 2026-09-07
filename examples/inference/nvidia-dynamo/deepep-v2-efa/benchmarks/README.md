@@ -47,8 +47,11 @@ since been upgraded — see below — so a re-run will NOT reproduce these table
   p50 = wall exactly). Rows describe one batch of N concurrent requests, not a distribution.
 - **Identical prompt, temperature 0**: vLLM's prefix cache serves every prompt after the first, so
   prefill is ~free — these are **decode-focused** numbers, not end-to-end serving numbers.
-- **No `ignore_eos`**: the 128-token cap happened to bind for this prompt+model (4.8 × 26.91 ≈ 129),
-  so the denominator was stable here, but the harness did not enforce it.
+- **No `ignore_eos`**: the 128-token cap happened to bind for this prompt+model — every row is
+  consistent with exactly 128 × n output tokens (e.g. conc=16: 74.6 tok/s × 27.45 s = 2048 = 16 × 128;
+  a "4.8 × 26.91 ≈ 129" back-inference is just the 1-decimal rounding artifact) — so the denominator
+  was stable here, but the harness did not enforce it. The shipped probe both enforces it
+  (`ignore_eos`) and records `total_out_tok` per level in the JSONL, which is the number to cite.
 
 The current `recipe/benchmark_probe.py` fixes all three (5× requests per level so percentiles are
 distributions; a unique prompt prefix per request so prefix-cache can't serve prefill;

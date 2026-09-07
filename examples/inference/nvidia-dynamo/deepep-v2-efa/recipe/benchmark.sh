@@ -5,8 +5,9 @@
 # EVERY level succeeded) — no separate grep gate that could disagree with it.
 set -euo pipefail
 LEADER_IP="${1:?usage: benchmark.sh <leader-ip>}"
-# OUT_ROOT: benchmarks/raw in the repo checkout; inside the pod set OUT_ROOT=/work/benchmarks
-OUT_DIR="${OUT_ROOT:-benchmarks/raw}/$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$OUT_DIR"
+# OUT_ROOT default is $0-relative (same resolution as the probe path below), so running from the
+# repo root cannot scatter an untracked raw/ tree there; inside the pod set OUT_ROOT=/work/benchmarks
+OUT_DIR="${OUT_ROOT:-$(dirname "$0")/../benchmarks/raw}/$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$OUT_DIR"
 rc=0
 python3 "$(dirname "$0")/benchmark_probe.py" --url "http://${LEADER_IP}:8000/v1/chat/completions" \
   --out "${OUT_DIR}/sweep.jsonl" | tee "${OUT_DIR}/sweep.txt" || rc=$?

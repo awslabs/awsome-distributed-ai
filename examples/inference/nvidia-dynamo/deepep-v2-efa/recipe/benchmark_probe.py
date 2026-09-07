@@ -17,6 +17,10 @@
 #     prefix cache cannot serve request N's prefill from request 1's
 #   - a missing usage block in a 200 response is a FAILURE (code "200-no-usage"), not a
 #     zero-token success that silently deflates throughput
+#   - a level with ANY failure reports its codes and fails the run, but emits NO rate or
+#     percentiles (agg_tok_s would divide a success-only token count by an all-request wall)
+#   - p99 is emitted only when a level has >= 100 successful samples; below that the
+#     interpolation just returns ~the max, which is not a distribution statement
 #   - exit 0 only if EVERY request at EVERY level succeeded
 import argparse, json, os, time, urllib.request, urllib.error, sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -50,12 +54,12 @@ def one_request(url, idx):
         "stream": False,
     }).encode()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
-    t0 = time.time()
+    t0 = time.monotonic()   # monotonic: a wall-clock (NTP) step during a ~27 s interval must not skew latency
     try:
         with urllib.request.urlopen(req, timeout=300) as r:
             status = r.status   # the ACTUAL code; a 2xx that isn't 200 must not be recorded as 200
             d = json.loads(r.read())
-        dt = time.time() - t0
+        dt = time.monotonic() - t0
         usage = d.get("usage")
         if not usage or "completion_tokens" not in usage:
             # a 200 without usage is a malformed success — surface it, don't count 0 tokens
@@ -67,9 +71,9 @@ def one_request(url, idx):
             return (False, dt, ct, f"{status}-tok{ct}!={MAX_TOKENS}")
         return (True, dt, ct, status)
     except urllib.error.HTTPError as e:
-        return (False, time.time() - t0, 0, e.code)
+        return (False, time.monotonic() - t0, 0, e.code)
     except Exception as e:
-        return (False, time.time() - t0, 0, str(e)[:40])
+        return (False, time.monotonic() - t0, 0, str(e)[:40])
 
 def pct(xs, p):
     if not xs:
@@ -81,7 +85,7 @@ def pct(xs, p):
 
 def sweep(conc, url, nreq_mult):
     n = conc * nreq_mult
-    t0 = time.time()
+    t0 = time.monotonic()
     lat, toks, ok, codes = [], [], 0, {}
     with ThreadPoolExecutor(max_workers=conc) as ex:
         # prompt idx must be unique ACROSS levels, not just within one: range(n) restarts at
@@ -96,14 +100,22 @@ def sweep(conc, url, nreq_mult):
                 lat.append(dt); toks.append(ct)   # successes only (T6): failures must
                 # not deflate percentiles or ride in the throughput denominator
             codes[str(code)] = codes.get(str(code), 0) + 1
-    wall = time.time() - t0
+    wall = time.monotonic() - t0
     total_tok = sum(toks)
+    # rate + percentiles only for a fully-successful level: with ok != n, agg_tok_s divides a
+    # success-only numerator by an all-request wall clock, and fast-returning refusals would ride
+    # in the latency stats — the run already fails below; do not format a measurement row too.
+    complete = (n > 0 and ok == n)
     return {
         "conc": conc, "n": n, "ok": ok, "wall_s": round(wall, 2),
         "total_out_tok": total_tok,
-        "agg_tok_s": round(total_tok / wall, 1) if wall > 0 else 0,
-        "lat_p50_s": round(pct(lat, 50), 2), "lat_p90_s": round(pct(lat, 90), 2),
-        "lat_p99_s": round(pct(lat, 99), 2), "lat_max_s": round(max(lat), 2) if lat else 0,
+        "agg_tok_s": round(total_tok / wall, 1) if complete and wall > 0 else None,
+        "lat_p50_s": round(pct(lat, 50), 2) if complete else None,
+        "lat_p90_s": round(pct(lat, 90), 2) if complete else None,
+        # p99 below ~100 samples interpolates between the two largest values (at n=5 it IS the
+        # max) — that is not a distribution statement, so it is omitted rather than mislabeled
+        "lat_p99_s": round(pct(lat, 99), 2) if complete and len(lat) >= 100 else None,
+        "lat_max_s": round(max(lat), 2) if lat else 0,
         "codes": codes,
     }
 
@@ -125,8 +137,9 @@ if __name__ == "__main__":
         for c in CONCURRENCIES:
             r = sweep(c, args.url, args.requests_per_level_mult)
             rows.append(r)
+            fmt = lambda v: "-" if v is None else v   # None = withheld (failed level / p99 under 100 samples)
             print(f"{r['conc']:>5} {r['n']:>5} {r['ok']:>5} {r['wall_s']:>7} {r['total_out_tok']:>8} "
-                  f"{r['agg_tok_s']:>10} {r['lat_p50_s']:>7} {r['lat_p90_s']:>7} {r['lat_p99_s']:>7} {r['codes']}")
+                  f"{fmt(r['agg_tok_s']):>10} {fmt(r['lat_p50_s']):>7} {fmt(r['lat_p90_s']):>7} {fmt(r['lat_p99_s']):>7} {r['codes']}")
             if out_fh:
                 out_fh.write(json.dumps(r) + "\n"); out_fh.flush()
     finally:
