@@ -5,3 +5,4 @@
 # Keep it excluded from the context; benchmarks/raw/ is measurement output, never an input.
 setup/env_vars
 benchmarks/raw/
+*.log

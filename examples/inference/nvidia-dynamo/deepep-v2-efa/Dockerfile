@@ -29,7 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # --disable-ngc: this NGC base ships /opt/nvidia/nvidia_entrypoint.sh, which trips the
 # installer's NGC auto-detect and silently reroutes it down the libnccl-ofi-ngc path.
 # We build aws-ofi-nccl from source ourselves (Layer 4), so force the normal install —
-# same explicit choice as the sibling sglang/dsr1-deepep-efa and vllm/dsv3-uccl-nixl samples.
+# same explicit choice as the sibling vllm/dsv3-uccl-nixl sample (sglang/dsr1-deepep-efa
+# runs the installer without it).
 ARG EFA_INSTALLER_VER=1.50.0                          # pin, no 'latest'; matches micro-benchmarks/expert-parallelism/deepep-v2-benchmark/deepep.Dockerfile
 RUN apt-get update \
     && curl -fsSL https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VER}.tar.gz | tar -xzf - -C /tmp \
@@ -44,8 +45,9 @@ ARG TORCH_SPEC="torch==2.11.0"                        # DeepEP _C.so links this 
 ARG TORCH_INDEX="https://download.pytorch.org/whl/cu130"
 ARG NVIDIA_NCCL_CU13="2.30.4"                         # 2.28.x lacks the GIN/LSA symbols the plugin needs
 ARG NVSHMEM_CU13="3.6.5"
+ARG NINJA_VER="1.13.2"                                # pinned like every other pip dep here
 RUN pip3 install --no-cache-dir --index-url "${TORCH_INDEX}" "${TORCH_SPEC}" \
-    && pip3 install --no-cache-dir "nvidia-nccl-cu13==${NVIDIA_NCCL_CU13}" "nvidia-nvshmem-cu13==${NVSHMEM_CU13}" ninja
+    && pip3 install --no-cache-dir "nvidia-nccl-cu13==${NVIDIA_NCCL_CU13}" "nvidia-nvshmem-cu13==${NVSHMEM_CU13}" "ninja==${NINJA_VER}"
 # ninja is baked here EXPLICITLY (build_deepep.sh device-links the DeepEP extension, which
 # requires it): first pod boot must not depend on PyPI egress — private-subnet/air-gapped
 # clusters would otherwise fail inside a compile step instead of a clear network error.

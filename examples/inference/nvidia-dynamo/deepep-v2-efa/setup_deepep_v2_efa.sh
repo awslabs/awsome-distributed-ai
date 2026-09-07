@@ -22,7 +22,7 @@ set -euo pipefail
 # the pip NCCL headers — which is why no --with-nccl-headers flag is needed (and why
 # that flag, not being an AC_ARG_WITH this project defines, was silently ignored before).
 AWS_OFI_NCCL_REPO="${AWS_OFI_NCCL_REPO:-https://github.com/aws/aws-ofi-nccl.git}"
-AWS_OFI_NCCL_REF="${AWS_OFI_NCCL_REF:-v1.21.1}"
+AWS_OFI_NCCL_REF="${AWS_OFI_NCCL_REF:?pass from the Dockerfile ARG — the pin has ONE home there; a default here would be an unreachable second copy}"
 # DeepEP source = the amazon-contributing fork, same as the canonical setup_deepep_gin.sh
 # (deepep-v2-benchmark), which pins this fork and states "the benchmark supports no other
 # source". The fork carries the in-tree successors of deepseek PR#612's EFA work — the QP
@@ -30,7 +30,7 @@ AWS_OFI_NCCL_REF="${AWS_OFI_NCCL_REF:-v1.21.1}"
 # RDMA link rate is probed from sysfs (envs.py _get_sysfs_rdma_gbs) — plus the Blackwell
 # st.bulk 64-bit-operand fix (e3fd4361), so no EP_EFA_MAX_QPS/EP_EFA_RDMA_GBS env exists here.
 DEEPEP_REPO="${DEEPEP_REPO:-https://github.com/amazon-contributing/DeepEP.git}"
-DEEPEP_SHA="${DEEPEP_SHA:-97d8f9bcc1be31e9036db2ab591ef9b9f4e38619}"            # amazon-contributing/DeepEP@main, 2026-09-03
+DEEPEP_SHA="${DEEPEP_SHA:?pass from the Dockerfile ARG — the pin has ONE home there; a default here would be an unreachable second copy}"
 
 echo "== aws-ofi-nccl GIN @ ${AWS_OFI_NCCL_REF} =="
 git clone --depth 1 --branch "${AWS_OFI_NCCL_REF}" "${AWS_OFI_NCCL_REPO}" /opt/aws-ofi-nccl-src
