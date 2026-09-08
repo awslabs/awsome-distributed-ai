@@ -1,110 +1,124 @@
+# Amazon EKS GPU cluster architecture
 
-# Amazon EKS distributed training architecture
+This directory provides a CloudFormation template that creates an Amazon EKS cluster with an EFA-enabled GPU node group for distributed training and inference, and the eksctl manifests that preceded it.
 
-This project provides several reference architectures to run distributed training on Amazon EKS for different use cases using `p4d.24xlarge` instances (you can replace them by `p5` or `trn1`. These examples use [eksctl](https://eksctl.io) and a cluster manifest to create your specified Amazon EKS cluster.
-
-## 0. Prerequisites
-
-To deploy the architectures you must install the dependencies below. You are advised to go through the fist two steps of the [Getting started with Amazon EKS](https://docs.aws.amazon.com/eks/latest/userguide/getting-started.html) guide from the AWS Documentation.
-
-1. [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) is the AWS command line interface.
-2. [eksctl](https://eksctl.io) command line tool to manage EKS clusters.
-3. [kubectl](https://kubernetes.io/docs/tasks/tools/#kubectl) command line for Kubernetes.
+- [`assets/eks-gpu-cluster.yaml`](./assets/eks-gpu-cluster.yaml): one-click CloudFormation stack (VPC, EKS cluster, system node group, GPU node group, device plugins).
+- [`eksctl/`](./eksctl/): eksctl cluster manifests for the same topology, kept for users who manage clusters with eksctl. See [section 5](#5-eksctl-manifests).
 
 ## 1. Architecture
 
-The following digram shows a common architecture that can be used for distributed model training on EKS.
-
 <img align="center" src="../../assets/eks-model-training-single-az.png" width="60%" />
 
-The EKS cluster has two nodegroups. A `system` nodegroup is used to run pods like kube-dns, kubeflow training operator, etc. which provide internal cluster-scope services and can run on CPU. A worker nodegroup built with an accelerated instance type is used to run the distributed training workload.
+The stack creates a VPC with a public subnet, a private subnet for the nodes, and a second private subnet in another Availability Zone for the EKS control plane. The EKS cluster runs two managed node groups: `system` (2 x `SystemInstanceType`, default `m6i.xlarge`) for CoreDNS and other cluster services, and `gpu` (`GpuNodeCount` x `GpuInstanceType`) for the workload. The GPU nodes launch from a launch template that places them in a cluster placement group, attaches one EFA interface per network card, targets a capacity reservation when one is given, and assembles the local NVMe drives as a RAID0 volume. A CodeBuild project runs after the node groups exist; it installs the NVIDIA and EFA Kubernetes device plugins with Helm, waits until every GPU node advertises `nvidia.com/gpu` and `vpc.amazonaws.com/efa`, and optionally pulls a container image onto every GPU node.
 
-## 2. Cluster configuration
+## 2. Quick start
 
-The cluster configuration is specified via a yaml manifest file. If a cluster version is not specified in the manifest, then the default EKS API version will be used. For our examples we set the version to 1.27. This setting may be adjusted before creating clusters as needed.
-The following example cluster configurations for distributed training are provided:
+[![Launch](../aws-pcs/images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/amazon-eks/eks-gpu-cluster.yaml&stackName=eks-gpu-cluster)
 
-* [**`eks-g4dn-vpc.yaml`**](./eks-g4dn-vpc.yaml): Cluster using an existing VPC with a nodegroup of 2 * `g4dn.8xlarge` instances. This instance type supports Elastic Fabric Adapter (EFA), usually does not require a capacity reservation, and is a good starting point when developing distributed training architectures. To use this manifest, edit the vpc id and subnets, and specify the desired private subnet for the nodes.
-* [**`eks-g4dn.yaml`**](./eks-g4dn.yaml): Cluster with a nodegroup of 2 * `g4dn.8xlarge` instances, created in a new VPC. This example shows that when a VPC is not specified, one is created for the cluster. The manifest can work without any modifications, however if you wish to change the cluster name, API version, region, availability zones, etc. you can modify the file before using it to create the cluster.
-* [**`eks-p4de-odcr-vpc.yaml`**](./eks-p4de-odcr-vpc.yaml): Cluster using an existing VPC with a nodegroup of 2 * `p4de.24xlarge` instances from an existing on-demand capacity reservation (ODCR). This is the most common configuration for distributed training workloads.Edit the file to specify vpc id, subnets, and capacityReservationID. Please note that the subnet of the nodeGroup should match the one of the capacity reservation.
-* [**`eks-p4de-odcr.yaml`**](./eks-p4de-odcr.yaml): Cluster with 2 * `p4de.24xlarge` instances from an existing ODCR. A new VPC will be created for this cluster. This configuration is useful for distributed training when no VPC is already available. Note that you would have to match the AZ of your ODCR in the nodegroup section of the manifest. Nodegroups in this and previous examples are fully-managed and can be accessed via the EKS console. If you are using an instance type that is not yet supported in managed nodegroups by EKS, you can define a nodegroup in a self-manged nodegroup section as shown at the end of this example.
-* [**`eks-p5-odcr.yaml`**](./eks-p5-odcr.yaml): Cluster with 1 * `p5.48xlarge` instances from an existing ODCR and an existing VPC. Note that you would have to match the AZ of your ODCR in the nodegroup section of the manifest. Nodegroups in this and previous examples are fully-managed and can be accessed via the EKS console. If you are using an instance type that is not yet supported in managed nodegroups by EKS, you can define a nodegroup in a self-manged nodegroup by using the `eks-p5-capacity-block.yaml` template.
-* [**`eks-p5-capacity-block.yaml`**](./eks-p5-capacity-block.yaml): Cluster with 1 * `p5.48xlarge` instances from an existing ML CBR and an existing VPC. Note that you would have to match the AZ of your ML CBR in the node group section of the manifest. Node groups in this and previous examples are fully-managed and can be accessed via the EKS console.
-* [**`eks-g5-node-autorepair.yaml`**](./eks-g5-node-autorepair.yaml): Cluster with 2 * `g5.8xlarge` instances with [node autorepair](https://docs.aws.amazon.com/eks/latest/userguide/node-health.html) enabled, node monitoring agent and cloudwatch observability add-on deployed. You may view enhanced node status using the following command:
+Or from the CLI:
 
-```sh
-kubectl get nodes -o 'custom-columns=NAME:.metadata.name,CONDITIONS:.status.conditions[*].type,STATUS:.status.conditions[*].status'
+```bash
+aws cloudformation deploy \
+  --stack-name eks-gpu-cluster \
+  --template-file assets/eks-gpu-cluster.yaml \
+  --capabilities CAPABILITY_IAM \
+  --parameter-overrides \
+    PrimarySubnetAZ=us-east-1a \
+    SecondarySubnetAZ=us-east-1b \
+    GpuInstanceType=p5.48xlarge \
+    GpuNodeCount=2 \
+    CapacityReservationId=cr-0123456789abcdef0 \
+    CapacityReservationType=targeted-odcr
 ```
 
-## 3. Cluster creation
+`PrimarySubnetAZ` has to be the Availability Zone of the capacity reservation: EFA traffic and the placement group stay within one AZ. Cluster creation takes 15 to 20 minutes; the CodeBuild bootstrap adds a few minutes plus the image pull time when `PrePullImage` is set.
 
-### 3.1 Edit the cluster configuration
+After the stack completes:
 
-To configure your desired cluster, edit the cluster manifest file that most closely matches your desired configuration or copy the file and customize it, following the [cluster manifest schema](https://eksctl.io/usage/schema/). Any of the values in the manifests can be changed and more node groups can be added to the same cluster. The minimal set of values to specify for each file are described above.
-
-You will need to replace the following placeholders to deploy your clusters:
-
-* `PLACEHOLDER_AWS_REGION`: region in which to deploy the cluster, replace by `us-east-1` for example.
-* `PLACEHOLDER_AZ_1`: We use 2 AZs for the cluster, replace by `us-east-1a` for example.
-* `PLACEHOLDER_AZ_2`: This AZ is where your compute capacity is located, replace by `us-east-1c` for example if that's where your capacity is located.
-* `PLACEHOLDER_VPC_ID`: ID of the VPC in which you deploy the cluster, it should take the form `vpc-12356790abcd`.
-* `PLACEHOLDER_SUBNET_PUBLIC_1` and `PLACEHOLDER_SUBNET_PUBLIC_2`: change to the id of a public subnet  (`subnet-12356790abcd`).
-* `PLACEHOLDER_SUBNET_PUBLIC_2`: change to the id of a public subnet to host the compute nodes (`subnet-12356790abcd`).
-* `PLACEHOLDER_SUBNET_PRIVATE_1`: change to the id of a public subnet to host the compute nodes (`subnet-12356790abcd`).
-* `PLACEHOLDER_SUBNET_PRIVATE_2`: change to the id of a public subnet to host the compute nodes (`subnet-12356790abcd`). This subnet holds your compute capacity, ensure it is in the right AZ.
-* `PLACEHOLDER_CAPACITY_RESERVATION_ID`: if using a capacity reservation put the ID here (`cr-12356790abcd`).
-
-### 3.2 Create a cluster
-
-1. Let's assume that your desired cluster configuration is stored in file `cluster.yaml`. Then to create the cluster, execute the following command:
-
-    ```bash
-    eksctl create cluster -f ./cluster.yaml
-    ```
-
-    Example output:
-
-    ```console
-    YYYY-MM-DD HH:mm:SS [ℹ] eksctl version x.yyy.z
-    YYYY-MM-DD HH:mm:SS [ℹ] using region <region_name>
-    ...
-    YYYY-MM-DD HH:mm:SS [✔] EKS cluster "<cluster_name>" in "<region_name>" region is ready
-    ```
-
-    Cluster creation may take between 15 and 30 minutes. Upon successful creation your local `~/.kube/config` file gets updated with connection information to your cluster.
-2. Execute the following command line in order to verify that the cluster is accessible:
-
-    ```bash
-    kubectl get nodes
-    ```
-
-You should see a list of three nodes. One would be a system node instance of type c5.2xlarge, and the others will belong to the nodegroup of instances with your desired instance type for distributed training.
-
-### 3.3 Cleanup
-
-To remove your cluster, execute the following command:
-
-```sh
-kubectl delete cluster -f ./cluster.yaml
+```bash
+aws eks update-kubeconfig --name eks-gpu-cluster --region us-east-1
+kubectl get nodes -l role=gpu -o custom-columns='NAME:.metadata.name,TYPE:.metadata.labels.node\.kubernetes\.io/instance-type,GPU:.status.allocatable.nvidia\.com/gpu,EFA:.status.allocatable.vpc\.amazonaws\.com/efa'
 ```
 
-Example output:
+The `KubeconfigCommand` stack output contains the first command with the stack's cluster name and region.
 
+## 3. GPU instance types
+
+`GpuInstanceType` selects the instance type; the template derives the network interface layout from the `NicLayout` mapping, which records the network card count and whether card 0 supports EFA for each type (`describe-instance-types`, `NetworkInfo.NetworkCards` and `EfaInfo`). Card 0 is device index 0; it receives `InterfaceType: efa` when the type supports EFA on card 0 and omits the property otherwise. Every other card is device index 1 with `InterfaceType: efa`.
+
+| Instance type | GPUs | Network cards | EFA interfaces |
+|---|---|---|---|
+| `g7e.12xlarge` | 2 | 1 | 1 |
+| `g7e.24xlarge` | 4 | 2 | 2 |
+| `g7e.48xlarge` | 8 | 4 | 4 |
+| `p4d.24xlarge` | 8 | 4 | 4 |
+| `p4de.24xlarge` | 8 | 4 | 4 |
+| `p5.48xlarge` | 8 | 32 | 32 |
+| `p5en.48xlarge` | 8 | 16 | 16 |
+| `p6-b200.48xlarge` | 8 | 8 | 8 |
+| `p6-b300.48xlarge` | 8 | 17 | 16 (card 0 is ENA only) |
+
+To add a type, append a `NicLayout` entry with `Cards` and `PrimaryType` and the type to `GpuInstanceType.AllowedValues`.
+
+## 4. Parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `PrimarySubnetAZ` | (required) | AZ of the public and node subnets; the AZ of the capacity reservation |
+| `SecondarySubnetAZ` | (required) | Second AZ for the EKS control plane subnet |
+| `GpuInstanceType` | `p5.48xlarge` | GPU instance type (see section 3) |
+| `GpuNodeCount` | `2` | GPU nodes, min = desired = max. `0` creates the cluster and device plugins without GPU nodes |
+| `CapacityReservationId` | empty | Targeted ODCR or Capacity Block ID. Empty launches On-Demand and consumes an open ODCR with matching attributes |
+| `CapacityReservationType` | `targeted-odcr` | `targeted-odcr` keeps the placement group and On-Demand billing against the reservation; `capacity-block` sets `MarketType=capacity-block` and omits the placement group |
+| `KubernetesVersion` | `1.34` | EKS version; the GPU node group uses the `AL2023_x86_64_NVIDIA` AMI for that version |
+| `SystemInstanceType` | `m6i.xlarge` | Instance type of the 2-node system node group |
+| `PrePullImage` | empty | Image pulled onto every GPU node by a DaemonSet after the device plugins are ready |
+| `AdminRoleArn` | empty | Additional IAM principal that receives `AmazonEKSClusterAdminPolicy`; the stack creator always has it |
+| `VpcCidr` | `10.0.0.0/16` | VPC CIDR, split into three /20 subnets |
+
+Outputs: `ClusterName`, `ClusterArn`, `VPCId`, `GpuNodeGroup`, `GpuInstanceType`, `Region`, `KubeconfigCommand`.
+
+## 5. eksctl manifests
+
+The manifests under [`eksctl/`](./eksctl/) create the same two-node-group topology with [eksctl](https://eksctl.io). Each file names its instance type and capacity source; replace the `PLACEHOLDER_*` values (region, AZs, VPC and subnet IDs, capacity reservation ID) before use.
+
+| Manifest | Nodes | Capacity |
+|---|---|---|
+| `eks-g4dn.yaml` | 2 x g4dn.8xlarge, new VPC | On-Demand |
+| `eks-g4dn-vpc.yaml` | 2 x g4dn.8xlarge, existing VPC | On-Demand |
+| `eks-p4de-odcr.yaml` | 2 x p4de.24xlarge, new VPC | ODCR |
+| `eks-p4de-odcr-vpc.yaml` | 2 x p4de.24xlarge, existing VPC | ODCR |
+| `eks-p5-odcr-vpc.yaml` | 1 x p5.48xlarge, existing VPC | ODCR |
+| `eks-p5-capacity-block.yaml` | 1 x p5.48xlarge, existing VPC | Capacity Block |
+| `eks-g5-node-autorepair.yaml` | 2 x g5.8xlarge with node auto repair and the CloudWatch observability add-on | On-Demand |
+
+```bash
+eksctl create cluster -f eksctl/eks-p4de-odcr-vpc.yaml
+eksctl delete cluster -f eksctl/eks-p4de-odcr-vpc.yaml
 ```
-YYYY-MM-DD HH:mm:SS [ℹ] deleting EKS cluster "<cluster_name>"
-...
-YYYY-MM-DD HH:mm:SS [ℹ] waiting for CloudFormation stack "<stack_name>"
+
+The eksctl path installs the device plugins through `efaEnabled: true`; the CloudFormation path installs them from the CodeBuild bootstrap.
+
+## 6. Cleanup
+
+```bash
+aws cloudformation delete-stack --stack-name eks-gpu-cluster
 ```
 
-## 4. References
+Delete any LoadBalancer services and persistent volumes created inside the cluster first, because the stack does not own them. In accounts with Amazon GuardDuty Runtime Monitoring enabled, GuardDuty creates a managed `guardduty-data` interface VPC endpoint and `GuardDutyManagedSecurityGroup-*` after the VPC appears. Those resources are outside the stack. The endpoint keeps the subnets in use; after it is deleted, the managed security group keeps the VPC in use. If the stack reaches `DELETE_FAILED`, delete the endpoint and managed security group, then retry stack deletion.
 
-For further information regarding EKS cluster infrastructure see the [aws-do-eks](https://github.com/aws-samples/aws-do-eks) project. More cluster configurations are available [here](https://github.com/aws-samples/aws-do-eks/tree/main/wd/conf/eksctl/yaml).
+## 7. Updating the GPU instance type
 
-Related resources for further reading can be found at the links below:
+A managed node group cannot update its launch-template version and its instance type in the same operation; EKS returns `Version and release version updates cannot be combined with other updates`. Choose `GpuInstanceType` when creating the stack. To change it later, replace the `GpuNodeGroup` (or create a second node group) rather than updating the parameter in place.
 
-* [AWS CLI](https://aws.amazon.com/cli)
-* [Amazon EKS](https://aws.amazon.com/eks)
-* [eksctl](https://eksctl.io)
-* [kubectl](https://kubernetes.io/docs/reference/kubectl)
-* [do-framework](https://bit.ly/do-framework)
-* [aws-do-eks](https://bit.ly/do-eks)
+## 8. Testing changes before they are published
+
+The quick-create link and the `Launch` button read the template from the public bucket, which holds the version on `main`. To test a change, deploy the local file with `--template-file` as in section 2; the template has no nested stacks and needs no bucket. `GpuNodeCount=0` exercises the VPC, cluster, system node group, device plugin installation and the launch template without GPU capacity. The generated launch template can be read back with `aws ec2 describe-launch-template-versions` to check the interface list for a given `GpuInstanceType`.
+
+## 9. References
+
+- [Amazon EKS user guide](https://docs.aws.amazon.com/eks/latest/userguide/)
+- [Elastic Fabric Adapter on EKS](https://docs.aws.amazon.com/eks/latest/userguide/node-efa.html)
+- [NVIDIA device plugin for Kubernetes](https://github.com/NVIDIA/k8s-device-plugin)
+- [aws-efa-k8s-device-plugin](https://github.com/aws/eks-charts/tree/master/stable/aws-efa-k8s-device-plugin)
+- [aws-do-eks](https://github.com/aws-samples/aws-do-eks)
