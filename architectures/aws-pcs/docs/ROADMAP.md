@@ -33,6 +33,15 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   `Placement.GroupName` = the passed-in group) and the reservation's
   `AvailableInstanceCount` went 2 -> 0, i.e. the capacity was actually consumed.
   A Slurm job on the resulting `gpu` partition ran on both nodes.
+- [x] ✅ **P4d / P4de support.** `add-cng-p4d.yaml` (4 network cards, all EFA, card 0 on
+  DeviceIndex 0, cards 1-3 on DeviceIndex 1, per `describe-instance-types`
+  `NetworkInfo.NetworkCards` / `EfaInfo.MaximumEfaInterfaces = 4`; identical for
+  p4d.24xlarge and p4de.24xlarge) plus a `P4DCNGStack` branch in deploy-all
+  (`PseriesInstanceType` accepts `p4d.24xlarge` / `p4de.24xlarge`). Verified with the
+  static method (2026-09-08, us-west-2, no GPU capacity): CNGs created with
+  `Min/MaxCount=0` for both types reached ACTIVE and the generated launch template
+  carried the 4-NIC EFA layout, `MarketType=null`, a new placement group. A live boot
+  is pending the re:Invent dry-run ODCR (2x p4d.24xlarge, CTI P508054549).
 - [ ] 🟡 **Scope down the instance role's `AmazonS3ReadOnlyAccess`.** The PCS instance
   role in `cluster.yaml` attaches `AmazonS3ReadOnlyAccess` **unconditionally** (every node
   can read every S3 bucket in the account). The upstream
@@ -61,8 +70,8 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   with a different NIC/EFA layout (e.g. p6e-gb200 = 17 network cards) and likely need an
   arm64 PCS-Ready DLAMI and arm64 Enroot/Pyxis builds — validate the AMI, EFA, and a
   sample run.
-- [ ] 🟢 **Consolidate the per-family GPU add-cng templates (p5 / p6-b200 / p6-b300).**
-  The three `add-cng-p6*`/`add-cng-p5` templates are ~85% identical; the real difference
+- [ ] 🟢 **Consolidate the per-family GPU add-cng templates (p4d / p5 / p6-b200 / p6-b300).**
+  The four `add-cng-p4d`/`add-cng-p5`/`add-cng-p6*` templates are ~85% identical; the real difference
   is the `NetworkInterfaces` EFA layout (card count, whether card 0 is EFA or ENA-only, and
   the EFA DeviceIndex). They are kept separate today so each NIC list stays flat and
   hand-checkable against the EC2 docs. Investigate generating the interface list from a

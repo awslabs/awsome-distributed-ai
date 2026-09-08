@@ -552,10 +552,13 @@ Parameters:
     Description: >-
       Instance type for the P-series compute node group. The right multi-NIC EFA
       template AND interface count are selected automatically from this value:
-      p5* use add-cng-p5.yaml (p5/p5e = 32 NICs, p5en = 16), p6-b200.48xlarge uses
-      add-cng-p6-b200.yaml (8 NICs), p6-b300.48xlarge uses add-cng-p6-b300.yaml (17 NICs).
+      p4d/p4de.24xlarge use add-cng-p4d.yaml (4 NICs), p5* use add-cng-p5.yaml
+      (p5/p5e = 32 NICs, p5en = 16), p6-b200.48xlarge uses add-cng-p6-b200.yaml
+      (8 NICs), p6-b300.48xlarge uses add-cng-p6-b300.yaml (17 NICs).
     Default: "p5.48xlarge"
     AllowedValues:
+      - p4d.24xlarge
+      - p4de.24xlarge
       - p5.48xlarge
       - p5e.48xlarge
       - p5en.48xlarge
@@ -677,8 +680,13 @@ Conditions:
     - !Condition GrafanaAccessEnabled
   MonitoringEnabled: !Not [!Equals [!Ref MonitoringStack, 'none']]
   # Select the right multi-NIC EFA template from the P-series instance type.
-  # p6-b200/p6-b300 have different network-card counts than P5, so each family
-  # gets its own nested stack; anything else falls back to the P5 template.
+  # p4d/p4de, p6-b200 and p6-b300 have different network-card counts than P5, so
+  # each family gets its own nested stack; anything else falls back to the P5 template.
+  PseriesIsP4D: !And
+    - !Condition DeployPseriesCNGEnabled
+    - !Or
+      - !Equals [!Ref PseriesInstanceType, 'p4d.24xlarge']
+      - !Equals [!Ref PseriesInstanceType, 'p4de.24xlarge']
   PseriesIsP6B200: !And
     - !Condition DeployPseriesCNGEnabled
     - !Equals [!Ref PseriesInstanceType, 'p6-b200.48xlarge']
@@ -687,6 +695,8 @@ Conditions:
     - !Equals [!Ref PseriesInstanceType, 'p6-b300.48xlarge']
   PseriesIsP5: !And
     - !Condition DeployPseriesCNGEnabled
+    - !Not [!Equals [!Ref PseriesInstanceType, 'p4d.24xlarge']]
+    - !Not [!Equals [!Ref PseriesInstanceType, 'p4de.24xlarge']]
     - !Not [!Equals [!Ref PseriesInstanceType, 'p6-b200.48xlarge']]
     - !Not [!Equals [!Ref PseriesInstanceType, 'p6-b300.48xlarge']]
 
@@ -953,6 +963,49 @@ Resources:
     DependsOn: ClusterStack
     Properties:
       TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng-p6-b300.yaml'
+      Parameters:
+        ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
+        ClusterName: !Sub '${AWS::StackName}'
+        CngName: !Ref PseriesCngName
+        QueueName: !Ref PseriesQueueName
+        InstanceType: !Ref PseriesInstanceType
+        RootVolumeSize: !Ref RootVolumeSize
+        MaxCount: !Ref PseriesMaxCount
+        MinCount: !Ref PseriesMinCount
+        SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
+        AmiId: !Ref AmiId
+        ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
+        IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
+        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
+        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
+        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        CapacityReservationId: !Ref CapacityReservationId
+        CapacityReservationType: !Ref CapacityReservationType
+        PlacementGroupName: !Ref PseriesPlacementGroupName
+        DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
+        MonitoringVersion: !Ref MonitoringVersion
+        MonitoringRepo: !Ref MonitoringRepo
+        DcgmExporterImage: !Ref DcgmExporterImage
+        SlurmVersion: !Ref SlurmVersion
+        MonitoringRole: compute
+        InstallEnrootPyxis: !Ref InstallEnrootPyxis
+        DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
+        DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
+        S3BucketName: !Ref S3BucketName
+        S3KeyPrefix: !Ref S3KeyPrefix
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-PseriesCNG'
+
+  #############################################################################
+  # 6d. P4d / P4de Compute Node Group Stack (4 NICs, fixed)
+  #############################################################################
+  P4DCNGStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: PseriesIsP4D
+    DependsOn: ClusterStack
+    Properties:
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng-p4d.yaml'
       Parameters:
         ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
         ClusterName: !Sub '${AWS::StackName}'

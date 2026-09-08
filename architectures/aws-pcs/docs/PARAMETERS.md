@@ -55,12 +55,12 @@ it directly.
 
 ## 4. GPU Compute Node Group — P5/P6 (Optional)
 
-See [GPU compute](../README.md#gpu-compute-p5p6) for instance/EFA/capacity guidance.
+See [GPU compute](../README.md#gpu-compute-p4dp5p6) for instance/EFA/capacity guidance.
 
 | Parameter | Default | Purpose |
 |---|---|---|
 | `DeployPseriesCNG` | `false` | Deploy a GPU (P5/P6) queue |
-| `PseriesInstanceType` | `p5.48xlarge` | GPU instance type; selects the matching multi-NIC template **and** EFA interface count automatically |
+| `PseriesInstanceType` | `p5.48xlarge` | GPU instance type (`p4d.24xlarge`, `p4de.24xlarge`, `p5.48xlarge`, `p5e.48xlarge`, `p5en.48xlarge`, `p6-b200.48xlarge`, `p6-b300.48xlarge`); selects the matching multi-NIC template **and** EFA interface count automatically |
 | `PseriesMinCount` | `0` | GPU queue minimum nodes |
 | `PseriesMaxCount` | `4` | GPU queue maximum nodes |
 | `CapacityReservationId` | *(empty)* | Capacity reservation ID for the GPU queue, interpreted per `CapacityReservationType`. Empty = plain On-Demand (an "open" ODCR with matching attributes is still consumed automatically) |
