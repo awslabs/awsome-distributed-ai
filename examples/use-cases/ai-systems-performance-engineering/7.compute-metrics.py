@@ -39,7 +39,7 @@ def main():
         accounting=a.results/config/'allocation.jsonl'
         if accounting.exists():
             attempts=[json.loads(line) for line in accounting.read_text().splitlines()]
-            if any(x['instance_type']!=instance or x['allocated_gpu_seconds']<=0 for x in attempts):
+            if any(x['instance_type']!=instance or x['allocated_gpu_seconds'] is None or x['allocated_gpu_seconds']<=0 for x in attempts):
                 raise ValueError('invalid allocation accounting')
             gpu_hours=sum(x['allocated_gpu_seconds'] for x in attempts)/3600
             useful=sum(x['useful_tokens'] for x in attempts)

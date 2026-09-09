@@ -5,13 +5,20 @@ set -euo pipefail
 # shellcheck disable=SC2016
 source "${LAB_DIR:?}/lib/common.sh"
 action=${1:?}
+GPU_COUNT=unknown
 if [[ "$action" =~ ^v[0-3]$ ]]; then
     out="$LAB_DIR/results/$RUN_ID/$action"
     mkdir -p "$out"
     [[ ! -e "$out/summary.json" ]] || { echo 'Choose a new RUN_ID to preserve the completed run' >&2; exit 2; }
     started=$(date +%s.%N)
-    trap 'status=$?; python3 "$LAB_DIR/lib/allocation.py" "$out" "$started" "$(date +%s.%N)" "$status" "$INSTANCE_TYPE"' EXIT
+    trap 'status=$?; python3 "$LAB_DIR/lib/allocation.py" "$out" "$started" "$(date +%s.%N)" "$status" "$INSTANCE_TYPE" "$GPU_COUNT"' EXIT
 fi
+NNODES=${SLURM_JOB_NUM_NODES:?Run inside a Slurm allocation}
+inventory="$LAB_DIR/results/$RUN_ID/$action-resources.jsonl"
+srun --ntasks="$NNODES" --ntasks-per-node=1 --cpu-bind=none bash "$LAB_DIR/lib/resources.sh" > "$inventory"
+counts=$(python3 "$LAB_DIR/lib/resource_plan.py" "$inventory" --nodes "$NNODES" --output "$LAB_DIR/results/$RUN_ID/$action-resources.json")
+read -r NNODES GPUS_PER_NODE GPU_COUNT <<< "$counts"
+export NNODES GPUS_PER_NODE GPU_COUNT
 MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_ADDR
 export MASTER_PORT=29547
@@ -24,13 +31,20 @@ export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 mounts="$LAB_DIR:/opt/aim347,$DATA_DIR:/data"
 args=(--container-image="$LAB_IMAGE" --container-mounts="$mounts" --container-workdir=/opt/aim347 --cpu-bind=none)
 if [[ "$action" == gemm ]]; then
-    srun --ntasks=2 "${args[@]}" bash -c 'nvidia-smi -q > /opt/aim347/results/"$RUN_ID"/gpu-"$SLURM_PROCID".txt; /usr/local/bin/aim347-gemm > /opt/aim347/results/"$RUN_ID"/gemm-node-"$SLURM_PROCID".json'
+    srun --ntasks="$NNODES" --ntasks-per-node=1 "${args[@]}" bash -c 'nvidia-smi -q > /opt/aim347/results/"$RUN_ID"/gpu-"$SLURM_PROCID".txt; /usr/local/bin/aim347-gemm > /opt/aim347/results/"$RUN_ID"/gemm-node-"$SLURM_PROCID".json'
+    exit
+fi
+if [[ "$action" == bandwidth ]]; then
+    srun --ntasks="$NNODES" --ntasks-per-node=1 "${args[@]}" bash -c '
+      for ((gpu=0; gpu<GPUS_PER_NODE; gpu++)); do
+        /usr/local/bin/aim347-dram "$gpu" > /opt/aim347/results/"$RUN_ID"/dram-node-"$SLURM_PROCID"-gpu-"$gpu".json
+      done'
     exit
 fi
 if [[ "$action" == serving ]]; then
     # Independent tensor-parallel replicas, one per node, using the same allocation.
-    srun --ntasks=2 --container-image="$VLLM_IMAGE" --container-mounts="$DATA_DIR:/data" --cpu-bind=none \
-      vllm serve /data/serving-model --served-model-name aim347 --tensor-parallel-size 2 \
+    srun --ntasks="$NNODES" --ntasks-per-node=1 --container-image="$VLLM_IMAGE" --container-mounts="$DATA_DIR:/data" --cpu-bind=none \
+      vllm serve /data/serving-model --served-model-name aim347 --tensor-parallel-size "$GPUS_PER_NODE" \
       --dtype bfloat16 --max-model-len 2048 --gpu-memory-utilization 0.8 --host 0.0.0.0 --port 8000
     exit
 fi
@@ -41,11 +55,11 @@ else
     [[ "$network" == "AWS Libfabric" ]] || { echo "Unknown NCCL network: $network" >&2; exit 2; }
     export NCCL_NET="$network"
     unset NCCL_NET_PLUGIN
-    srun --ntasks=2 "${args[@]}" fi_info -p efa
+    srun --ntasks="$NNODES" --ntasks-per-node=1 "${args[@]}" fi_info -p efa
 fi
 if [[ "$action" == v0 || "$action" == v1 ]]; then
     # MPI tasks are ranks, so override both ntasks and ntasks-per-node.
-    srun --ntasks=4 --ntasks-per-node=2 --mpi=pmix "${args[@]}" \
+    srun --ntasks="$GPU_COUNT" --ntasks-per-node="$GPUS_PER_NODE" --mpi=pmix "${args[@]}" \
       env LD_PRELOAD=/opt/nccl/build/lib/libnccl.so /opt/nccl-tests/build/all_reduce_perf -b 8M -e 256M -f 2 -g 1 -w 5 -n 20 -c 1
 fi
 : "${DENSE_TFLOPS:?Run the GEMM step and set DENSE_TFLOPS in .env}"
@@ -54,11 +68,8 @@ out="$LAB_DIR/results/$RUN_ID/$action"
 mkdir -p "$out"
 [[ ! -e "$out/summary.json" ]] || { echo 'Choose a new RUN_ID to avoid overwriting a completed run' >&2; exit 2; }
 status=0
-srun --ntasks=2 "${args[@]}" bash -c '
-  if [[ "$INSTANCE_TYPE" == g7e.12xlarge ]]; then
-    [[ "$(env -u OMP_NUM_THREADS -u OMP_THREAD_LIMIT nproc)" -eq 24 && "$SLURM_CPUS_ON_NODE" -eq 24 ]] || { echo "PCS core preflight failed" >&2; exit 1; }
-  fi
-  exec env LD_PRELOAD=/opt/nccl/build/lib/libnccl.so torchrun --nnodes=2 --nproc-per-node=2 --node-rank="$SLURM_PROCID" \
+srun --ntasks="$NNODES" --ntasks-per-node=1 "${args[@]}" bash -c '
+  exec env LD_PRELOAD=/opt/nccl/build/lib/libnccl.so torchrun --nnodes="$NNODES" --nproc-per-node="$GPUS_PER_NODE" --node-rank="$SLURM_PROCID" \
     --master-addr="$MASTER_ADDR" --master-port="$MASTER_PORT" \
     lib/train.py --config="configs/'"$action"'.json" --data=/data/tokens \
     --output="results/$RUN_ID/'"$action"'" --instance-type="$INSTANCE_TYPE" --dense-tflops="$DENSE_TFLOPS" \

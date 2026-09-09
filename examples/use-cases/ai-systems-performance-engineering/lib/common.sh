@@ -20,7 +20,7 @@ submit() {
     export PARTITION LAB_IMAGE DATA_DIR
     mkdir -p "$LAB_DIR/results/$RUN_ID"
     sbatch --wait --parsable --partition="$PARTITION" --job-name="aim347-$action" \
-      --nodelist="$COMPUTE_NODES" --nodes=2 --ntasks-per-node=1 --gres=gpu:2 --exclusive --time=00:20:00 \
+      --nodelist="$COMPUTE_NODES" --nodes=2 --ntasks-per-node=1 --exclusive --time=00:20:00 \
       --output="$LAB_DIR/results/$RUN_ID/$action-%j.log" --export=ALL \
       "$LAB_DIR/lib/job.sh" "$action"
 }

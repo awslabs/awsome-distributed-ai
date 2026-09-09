@@ -1,8 +1,8 @@
 # AI systems performance engineering on AWS
 
-AIM347 is a workshop of 120 minutes at level 300 for Keita Watanabe and Aravind Neelakantan. This draft implements one FSDP training job with cumulative network, host and storage configuration changes. Production uses AWS PCS with Slurm and two `g7e.12xlarge` instances per attendee, for four GPUs total. The metric choice remains open for co-speaker review: the dashboard exposes training throughput, MFU against both dense denominators, and useful tokens per allocated GPU-hour.
+AIM347 is a workshop of 120 minutes at level 300 for Keita Watanabe and Aravind Neelakantan. This example implements one FSDP training job with cumulative network, host and storage configuration changes. AWS PCS with Slurm allocates two assigned nodes exclusively and uses their full GPU count. The dashboard exposes training throughput, MFU against both dense denominators, and useful tokens per allocated GPU-hour. The serving exercise adds weights-only MBU against a measured DRAM read-bandwidth ceiling.
 
-**This is runnable draft content, not a calibrated workshop.** The production training ladder, its monotonic improvement, and the session timing are UNVALIDATED on `g7e.12xlarge`. The [validation record](VALIDATION.md) distinguishes successful Seoul execution checks from the remaining production rehearsal. Historical hardware facts below are attributed to the PI's Oregon measurements; they are not new results from this implementation. Seoul uses `p6-b300.48xlarge` on EKS. That platform can validate code execution and transport selection, but cannot validate PCS core availability, absence of NVLink, the production dense denominator or production performance.
+**This is runnable draft content, not a calibrated workshop.** The production training ladder, its monotonic improvement, and the session timing are UNVALIDATED on `g7e.12xlarge`. The [validation record](VALIDATION.md) distinguishes the historical Seoul checks and the new Oregon EKS training and measured-MBU checks from the remaining PCS rehearsal. Historical hardware facts below are attributed to the PI's Oregon measurements; they are not new results from this implementation. Seoul uses `p6-b300.48xlarge` on EKS. That platform can validate code execution and transport selection, but cannot validate PCS core availability, absence of NVLink, the production dense denominator or production performance.
 
 ## Hardware and evidence boundaries
 
@@ -21,7 +21,7 @@ The production launch template must differ from a p5en template in these ways: c
 
 Use a pre-provisioned PCS cluster. The repository's [PCS architecture](../../../architectures/aws-pcs/README.md) provides the infrastructure starting point; this example deploys the lab onto assigned nodes, rather than creating participant accounts or procuring capacity. Confirm the launch-template changes above with the facilitator before provisioning. A provisioned cluster needs:
 
-- An assigned Slurm partition and two exclusive `g7e.12xlarge` nodes with `--gres=gpu:2`, the EFA driver, NVIDIA driver compatible with CUDA version 13.0.2, and a same-AZ FSx mount shared with the login node.
+- An assigned Slurm partition and two exclusive homogeneous GPU nodes, the EFA driver, NVIDIA driver compatible with CUDA version 13.0.2, and a same-AZ FSx mount shared with the login node.
 - Pyxis and Enroot installed on compute nodes, Slurm PMIx support for the container's MPI, and Docker with the Compose plugin on the preparation/login host. The compute observability containers require Docker, NVIDIA Container Toolkit and access to the GPU devices. These host packages belong in the validated PCS AMI; this draft does not provision or pin a replacement AMI.
 - Host Python and Lustre's `lctl` on compute nodes. The collector runs on the host so it can use the installed Lustre libraries.
 - Private connectivity between the assigned nodes and login node. Allow Prometheus to reach TCP ports 9400, 9100, 9109 and 8000 on assigned compute nodes, and compute nodes to reach Pushgateway on TCP port 9091. EFA needs the cluster's established security-group configuration. Grafana and the Prometheus UI bind to loopback and are accessed through SSH forwarding.
@@ -50,6 +50,13 @@ The generated Grafana password is in `observability/runtime/grafana-password` on
 curl -fsS http://127.0.0.1:9090/api/v1/targets
 ```
 
+Inspect the requested profiling and EFA diagnostic fields on each assigned compute node:
+
+```bash
+curl -s localhost:9400/metrics | grep PIPE_TENSOR_ACTIVE
+curl -s localhost:9109/metrics | grep -E 'retrans|rx_drops'
+```
+
 **UNVALIDATED on production `g7e.12xlarge`:** each compute exporter's target should be healthy after deployment, and the vLLM targets should become healthy when serving starts. A healthy scrape does not prove that every optional profiling field is available. Inspect the actual `/metrics` payload and the Lustre collection-success panel. The serving targets being down before the pivot is normal.
 
 ### Software pins
@@ -67,6 +74,8 @@ curl -fsS http://127.0.0.1:9090/api/v1/targets
 | EFA collector runtime | `python:3.12.10-slim-bookworm` |
 | vLLM | `vllm/vllm-openai:v0.20.2` |
 
+The Dockerfile rebuilds NCCL and the nccl-tests CUDA kernels from the same sources supplied by the base image with native kernels for GPU architecture codes `sm_80`, `sm_90`, `sm_100`, `sm_103` and `sm_120`. The original binary lacked `sm_120` and PTX and failed on the observed RTX PRO Blackwell GPUs. No upstream source patch or NCCL version substitution is applied.
+
 Prometheus, Grafana and Pushgateway are self-hosted containers. Amazon Managed Grafana is unsupported in Workshop Studio according to the PI's confirmed workshop constraint, so this lab does not use it.
 
 ## Run the same workload through the configurations
@@ -75,18 +84,23 @@ Preparation generates deterministic synthetic token records in both small-file a
 
 | Configuration | NCCL network | DataLoader workers | Storage |
 |---|---|---|---|
-| `v0` | Force `Socket` and disable plugin loading | 48 workers per rank, hence 96 workers per production node | One record per file, with repeated real metadata checks |
+| `v0` | Force `Socket` and disable plugin loading | 48 workers per rank × detected GPUs per node | One record per file, with repeated real metadata checks |
 | `v1` | Require `AWS Libfabric`, with `FI_PROVIDER=efa` | Same 48 workers per rank | Same small files |
-| `v2` | Same EFA configuration | 8 workers per rank, hence 16 workers per production node | Same small files |
+| `v2` | Same EFA configuration | 8 workers per rank × detected GPUs per node | Same small files |
 | `v3` | Same EFA configuration | Same 8 workers per rank | Memory-mapped packed shards, without per-record file opens |
 
-The fixed worker budget leaves eight of the 24 usable production cores for rank processes, telemetry, Slurm and the operating system. This is a starting allocation from the PI's spec, not a measured optimal worker count. CPU preprocessing performs the same configurable hashing work in every configuration. Tune `CPU_ROUNDS`, dataset size and the metadata-check count during the production rehearsal; never insert sleeps to manufacture the desired ladder.
+The launcher records GPUs per node, total GPUs and available processors in `results/$RUN_ID/<action>-resources.json`. It uses a positive numeric `SLURM_GPUS_ON_NODE` when supplied, otherwise counts devices from `nvidia-smi -L` inside the allocation. Slurm sets that variable from the allocated GPU bitmap in its [GRES environment implementation](https://github.com/SchedMD/slurm/blob/slurm-24-11-0-1/src/plugins/gres/common/gres_common.c#L278). It clears OpenMP overrides before running `nproc`; processor availability is a recorded measurement, not a fixed-core gate. The inventory must contain one record per assigned node with the same GPU count. `torchrun` starts that many processes per node, and MPI collective tests use the total GPU count. The [Slurm exclusive allocation](https://slurm.schedmd.com/sbatch.html#OPT_exclusive) requests all CPUs and GRES on the assigned nodes; the launcher no longer requests a fixed GPU subset.
 
-Execute the numbered scripts in order. Each training submission waits for completion and returns failure if the job fails. Use the historical production reference of 429.1 TFLOPS per GPU in `.env` for the first baseline. The later metric-computation step recomputes all completed runs against one chosen denominator.
+Multiply workers per rank by the detected GPUs per node, then compare that worker count with the recorded available processors. On the historical `g7e.12xlarge` allocation, two GPUs per node made the reduced configuration 16 workers per node against 24 available cores. Other allocations produce different totals. The fixed per-rank settings are an experiment in host contention, not a measured optimal worker budget. CPU preprocessing performs the same configurable hashing work in every configuration. Tune `CPU_ROUNDS`, dataset size and the metadata-check count during the production rehearsal; never insert sleeps to manufacture the desired ladder.
+
+Execute the numbered scripts in order. Each training submission waits for completion and returns failure if the job fails. Run the GEMM ceiling first and set `DENSE_TFLOPS` in `.env` to its recorded `best_tflops_per_gpu` value before the baseline. The example value of 429.1 TFLOPS per GPU is a historical `g7e.12xlarge` reference. The later metric-computation step recomputes all completed runs against one chosen denominator.
 
 ```bash
-./2.run-v0.sh
 ./3.gemm-ceiling.sh
+cat results/participant-trial-a/gemm-node-0.json
+# Set DENSE_TFLOPS in .env to the measured best_tflops_per_gpu value.
+./2.run-v0.sh
+cat results/participant-trial-a/v0-resources.json
 ./4.run-v1.sh
 ./5.run-v2.sh
 ./6.run-v3.sh
@@ -119,9 +133,9 @@ MFU against measured dense GEMM = training TFLOPS per GPU / dense GEMM TFLOPS pe
 
 The NVIDIA headline of 1 PFLOP per second for BF16 on the RTX PRO 6000 Blackwell Server Edition includes structured sparsity. A dense training workload needs a dense denominator. The arithmetic direction matters: using 1000 TFLOPS per GPU in place of 429.1 TFLOPS per GPU makes the reported MFU smaller by a dimensionless factor of approximately 2.33. It overstates available compute, not achieved utilization. Both source outlines contain wording that reverses or obscures that direction; this implementation follows the formula.
 
-For the production allocation of four GPUs, the historical achievable denominator is 1.7164 PFLOPS for the allocation, and the derived theoretical denominator is 1.92 PFLOPS for the allocation. These are arithmetic totals from the PI's `g7e.12xlarge` reference, not new measurements. The dashboard labels these ratios separately. A value above a measured GEMM reference calls for scrutiny of the numerator and benchmark conditions; it is not clamped away.
+For the historical `g7e.12xlarge` allocation of four GPUs, the historical achievable denominator is 1.7164 PFLOPS for the allocation, and the derived theoretical denominator is 1.92 PFLOPS for the allocation. These are arithmetic totals from the PI's `g7e.12xlarge` reference, not new measurements. The dashboard labels these ratios separately. A value above a measured GEMM reference calls for scrutiny of the numerator and benchmark conditions; it is not clamped away.
 
-The `6N` numerator is a short-sequence approximation. It omits attention's sequence-dependent term and is not a kernel-level FLOP measurement. Training timing includes data wait, host-to-device copies, forward, backward and optimizer execution, using the slowest rank's duration. Warmup updates are excluded from steady-state MFU timing and included in useful completed work. The allocation ledger includes failed attempts with no useful-work credit and successful updates with their token count. Its scope is the training job body, including startup and the network microbenchmark; separately scheduled GEMM and serving allocations are excluded. It is therefore not an account-wide goodput measure or a recovery demonstration. A full-session goodput metric must include those extra allocations and any lost or repeated work in its accounting.
+The `6N` numerator is a short-sequence approximation. It omits attention's sequence-dependent term and is not a kernel-level FLOP measurement. Training timing includes data wait, host-to-device copies, forward, backward and optimizer execution, using the slowest rank's duration. Warmup updates are excluded from steady-state MFU timing and included in useful completed work. The allocation ledger includes failed attempts with no useful-work credit and successful updates with their token count. Its scope is the training job body, including startup and the network microbenchmark; separately scheduled GEMM, DRAM bandwidth and serving allocations are excluded. It is therefore not an account-wide goodput measure or a recovery demonstration. A full-session goodput metric must include those extra allocations and any lost or repeated work in its accounting.
 
 ## Read the dashboard
 
@@ -132,27 +146,66 @@ The `6N` numerator is a short-sequence approximation. It omits attention's seque
 | GPU interconnect | `DCGM_FI_PROF_PCIE_TX_BYTES` and `DCGM_FI_PROF_PCIE_RX_BYTES`: bytes per second, already rates. They include GPU P2P and host transfers, so they cannot uniquely attribute communication to either. Production `g7e.12xlarge` has no NVLink; an NVLink-only panel would teach nothing about its actual link. |
 | EFA | `node_amazonefa_tx_bytes`, `node_amazonefa_rx_bytes`, `node_amazonefa_rdma_write_bytes`, `node_amazonefa_retrans_bytes`: cumulative bytes. `node_amazonefa_rx_drops`, `node_amazonefa_retrans_timeout_events`, `node_amazonefa_unresponsive_remote_events`: cumulative event counts. Apply `rate()` to these counters. |
 | Lustre | `lustre_read_bytes_total`, `lustre_write_bytes_total`: byte sums from `llite` histograms. `lustre_open_operations_total`, `lustre_getattr_operations_total`: operation counts. Compare their rates; high metadata operations with low byte throughput can suggest metadata limitation. |
-| Host | `node_cpu_seconds_total`, `node_pressure_io_waiting_seconds_total`, `node_memory_*`. Interpret CPU utilization against PCS's 24 usable cores per `g7e.12xlarge` node. |
+| Host | `node_cpu_seconds_total`, `node_pressure_io_waiting_seconds_total`, `node_memory_*`. Interpret CPU utilization against the available processors recorded for each allocated node. |
 | Training | `aim347_tokens_per_second`, `aim347_step_duration_ms`, `aim347_tflops_per_gpu`, `aim347_mfu_dense_gemm_ratio`, `aim347_mfu_dense_theory_ratio`. Rank zero pushes these gauges with configuration and instance labels; local JSON remains the measurement record if telemetry fails. |
 | Accounting | `aim347_useful_tokens_per_gpu_hour`, published by the metric-computation script from the allocation ledger. |
 | Serving | `vllm:generation_tokens_total`, `vllm:time_to_first_token_seconds_bucket`, `vllm:inter_token_latency_seconds_bucket`, `vllm:num_requests_running`. |
 
 Profiling requires the DCGM container's `SYS_ADMIN` capability. [DCGM's profiling documentation](https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/feature-overview.html) explains activity metrics and collection limitations. Missing or sentinel-valued profiling fields require investigation before interpreting them as utilization. Do not run an additional profiler that conflicts with an existing DCGM profiling session on a shared node.
 
-## Serving pivot
+## Serving pivot and measured weights-only MBU
 
-The serving script reserves the same assigned nodes and GPUs after training completes. It starts one tensor-parallel vLLM replica on each node, each using two GPUs. This uses the same model architecture with pinned pretrained weights, not the randomly initialized training run's weights. It avoids a distributed serving runtime dependency between the replicas. The common dashboard scrapes both endpoints.
+The serving script reserves the same assigned nodes after training completes. It starts one tensor-parallel vLLM replica per node, using the detected GPU count on that node. It loads the pinned pretrained Qwen checkpoint with the training model's architecture. The common dashboard scrapes both endpoints.
+
+First measure DRAM read bandwidth on every allocated GPU. The script writes raw per-GPU trials, prints each node's aggregate median bandwidth in bytes/s, and creates an endpoint-to-GPU measurement map:
 
 ```bash
-./8.serve-vllm.sh
-# In another terminal, after both /health endpoints succeed:
-python3 9.load-serving.py http://aim347-g7e-1:8000 http://aim347-g7e-2:8000 \
-  --instance-type g7e.12xlarge --output results/participant-trial-a/serving.json
+source .env
+./3b.bandwidth-ceiling.sh
+cat "results/$RUN_ID/bandwidth-map.json"
 ```
 
-**UNVALIDATED on production `g7e.12xlarge`:** serving start, throughput, TTFT and ITL for this configuration. The load generator records request TTFT and output-token counts from real streamed responses. Client chunk intervals are not token-level ITL; use vLLM's server histogram for ITL. Decode can be memory-bandwidth limited, so MFU alone is insufficient. No MBU value is computed here because a defensible byte-traffic numerator and measured bandwidth denominator have not been established for this model. GPU DRAM activity is not MBU.
+The CUDA microbenchmark in [lib/dram.cu](lib/dram.cu) reads a buffer of 1 GiB per trial, requires that buffer to exceed four times the GPU's L2 cache size, uses loads that bypass L1, and times ten warmup trials followed by 30 measured trials with CUDA events. It checks the reduction result against the initialized input. Its reported byte count covers the input reads; the small reduction output is excluded. Record `median_bytes_per_second` for every GPU. The denominator for each replica is the sum of those measured rates multiplied by its measured server decode duration.
 
-The serving job has a time limit of 20 minutes. Cancel its specific Slurm job when the load exercise completes. Failure injection, automatic checkpoint recovery and prerecorded Nsight timelines remain outside this draft; they need an explicit decision and real evidence before being included in the agenda.
+Read the numerator from the actual staged checkpoint, using the GPU count that will become the replica's tensor-parallel size:
+
+```bash
+python3 11.model-bytes.py "$DATA_DIR/serving-model" \
+  --tensor-parallel-size "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["gpus_per_node"])' "results/$RUN_ID/bandwidth-resources.json")" \
+  --output "results/$RUN_ID/model-bytes.json"
+./8.serve-vllm.sh
+```
+
+[lib/serving_metrics.py](lib/serving_metrics.py) reads BF16 tensor shapes and byte offsets from the safetensors headers and the served `config.json`. It counts 2 bytes per element, the tied embedding/output matrix once, replicated normalization parameters once per tensor-parallel rank, and replicated K/V projection parameters when the rank count exceeds the model's KV-head count. The pinned [vLLM Qwen2 implementation](https://github.com/vllm-project/vllm/blob/v0.20.2/vllm/model_executor/models/qwen2.py) defines those parameter uses and partitions. `weights_bytes_per_decode_step` is a logical full-weight-read model. KV-cache traffic, activations, input embedding lookups, padding, and physical cache effects are outside this weights-only numerator.
+
+In another terminal, load the same environment and endpoint map, wait for both health checks, and run the normal load pass followed by a serialized decode measurement:
+
+```bash
+source .env
+mapfile -t SERVING_ENDPOINTS < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))))' "results/$RUN_ID/bandwidth-map.json")
+curl -fsS "${SERVING_ENDPOINTS[0]}/health"
+curl -fsS "${SERVING_ENDPOINTS[1]}/health"
+python3 9.load-serving.py "${SERVING_ENDPOINTS[@]}" \
+  --instance-type "$INSTANCE_TYPE" --output "results/$RUN_ID/serving.json"
+python3 9.load-serving.py "${SERVING_ENDPOINTS[@]}" --concurrency 1 --measure-decode \
+  --instance-type "$INSTANCE_TYPE" --output "results/$RUN_ID/serving-decode.json"
+python3 12.compute-mbu.py "results/$RUN_ID/serving-decode.json" \
+  --model-bytes "results/$RUN_ID/model-bytes.json" --bandwidth-map "results/$RUN_ID/bandwidth-map.json" \
+  --output "results/$RUN_ID/serving-mbu.json"
+```
+
+Keep the endpoints idle between these passes and exclude other clients during decode measurement. The normal pass uses concurrency of four requests; the MBU pass uses one request at a time, preventing decode batching. The client rejects counters that disagree with its completed requests and token usage. Speculative decoding is outside this measurement mode. In pinned vLLM, the first output token belongs to prefill; subsequent output events contribute server ITL samples. The [request statistics implementation](https://github.com/vllm-project/vllm/blob/v0.20.2/vllm/v1/metrics/stats.py) supplies these intervals, and the [Prometheus logger](https://github.com/vllm-project/vllm/blob/v0.20.2/vllm/v1/metrics/loggers.py) exports the generation-token and successful-request counters and ITL histogram.
+
+```text
+decode steps = generated output tokens - completed requests
+modeled weight-read bytes = weights bytes per decode step × decode steps
+measured decode capacity bytes = sum of replica GPU median bandwidths in bytes/s × server decode seconds
+weights-only MBU ratio = modeled weight-read bytes / measured decode capacity bytes
+```
+
+For multiple replicas, sum the numerator and capacity bytes over each replica's own decode interval before dividing. This measures the modeled weights traffic during active server decode, not whole-session allocation utilization or physical DRAM counter utilization. The output keeps MBU as a dimensionless ratio beside output tokens/s, median client TTFT in seconds, and mean server ITL in seconds. Client chunk spacing and GPU DRAM activity remain separate observations. MBU values are not clamped. Compare measurements made with the same byte model, batch policy and bandwidth method.
+
+The serving job has a time limit of 20 minutes. Cancel its specific Slurm job when the exercise completes. Hardware observations and the PCS/Slurm validation boundary are recorded in [VALIDATION.md](VALIDATION.md).
 
 ## Rehearsal and cleanup
 
@@ -169,4 +222,4 @@ Retain `results/` locally. It contains logs, raw GEMM timings, training summarie
 
 Cleanup stops only this lab's Compose projects and the `aim347-lustre` service. It keeps local metrics volumes and staged data for review. It does not delete the PCS cluster, FSx filesystem or another participant's jobs. Remove this participant's staged files and named volumes only after preserving the required evidence.
 
-Local checks use `python3 -m unittest discover -s tests -v`, `bash -n` for the shell entry points and `promtool check config` for the generated Prometheus configuration. Arithmetic test fixtures are synthetic software checks, never hardware benchmark results.
+Local checks in the pinned training container use `python3 -m unittest discover -s tests -v`, `bash -n` for the shell entry points and `promtool check config` for the generated Prometheus configuration. Arithmetic test fixtures are synthetic software checks, never hardware benchmark results.
