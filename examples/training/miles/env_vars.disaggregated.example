@@ -46,7 +46,7 @@ export RM_TYPE="remote_rm"
 export REWARD_BACKEND="reward_model"
 export REWARD_MODEL_NAME="OpenAssistant/reward-model-deberta-v3-large-v2"
 # Image for the reward pods. kubernetes/reward-service.yaml substitutes ${REWARD_IMAGE}
-# through envsubst, so leaving it unset renders `image: ""` and the Deployment is rejected.
+# into the manifest, so leaving it unset renders `image: ""` and the Deployment is rejected.
 # It is built from reward_service.Dockerfile, which is CPU-only and much smaller than the
 # miles GPU image, so it is a separate build:
 #   docker build -f reward_service.Dockerfile -t "${REWARD_IMAGE}" .

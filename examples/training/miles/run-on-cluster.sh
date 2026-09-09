@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT-0
 # ============================================================
 # Run a miles GRPO recipe FROM the Ray head pod, so the operator's machine needs only
-# kubectl (plus AWS auth) -- no local `ray` CLI, no `kubectl port-forward`, no local `envsubst`.
+# kubectl (plus AWS auth) -- no local `ray` CLI and no `kubectl port-forward`.
 #
 # Why this exists: the shipped recipes end in `ray job submit --address http://127.0.0.1:8265`,
 # which normally runs on your laptop and therefore needs the ray CLI installed locally, a

@@ -59,8 +59,8 @@ MAX_LENGTH = int(os.environ.get("REWARD_MAX_LENGTH", "2048"))
 
 
 def _env_number(name: str, default: str, cast, minimum):
-    # `or` rather than a get default: envsubst renders an unset variable as an empty string, which a
-    # get default does not replace.
+    # `or` rather than a get default: a manifest rendered with an unresolved variable delivers an
+    # empty string, which a get default does not replace.
     raw = os.environ.get(name) or default
     try:
         value = cast(raw)

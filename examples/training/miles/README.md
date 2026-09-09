@@ -106,34 +106,35 @@ The TP and PP columns describe Megatron training-side parallelism, which is dist
 | Model | Parameters | Topology | TP | PP | Rollout GPUs | Training GPUs |
 |-------|-----------|----------|----|----|-------------|---------------|
 | Qwen3-4B | 4B Dense | Colocated | 1 | 1 | 8, shared | 8, shared |
+| Qwen3-4B | 4B Dense | Disaggregated | 1 | 1 | 8 | 8 |
 | GLM-Z1-9B | 9B Dense | Colocated | 2 | 1 | 16, shared | 16, shared |
 | Qwen3-30B-A3B | 30B MoE | Colocated | 2 | 1 | 16, shared | 16, shared |
 | Qwen2.5-72B * | 72B Dense | Disaggregated | 4 | 2 | 8 | 8 |
 
-\* Qwen2.5-72B does not fit this 16-GPU H200 layout; see the Validation table and Known Issues.
+\* Qwen2.5-72B does not fit this 16-GPU H200 layout; see [Known Issues](#known-issues).
 
 ## Validation
 
-Each configuration below was launched on 2x p5en.48xlarge and confirmed to complete within the listed wall time. Reward and repetition are the last scalar from the trainer's TensorBoard event files; they indicate the loop closes and generation is healthy, not convergence. Known limitations are the 30B MoE rollout degenerating in one specific parallelism geometry and Qwen2.5-72B not fitting the 16-GPU H200 layout; both are in [Known Issues](#known-issues).
+Both GPU topologies and all three models were run end to end on 2x p5en.48xlarge with the recipes and env files this test case ships. `reward` is the last `rollout/raw_reward`, `repetition` the highest `rollout/repetition_frac` over the run; they say the loop closes and generation is healthy, not that the model converged. Reward rises with rollouts, so compare rows only at equal rollout counts.
 
-| Config | reward | repetition | wall time |
-|--------|--------|------------|-----------|
-| Qwen3-4B dense, colocated 1 node | 0.531 | 0.0 | ~13 min |
-| Qwen3-4B dense, disaggregated 2 nodes | 0.523 | 0.0 | ~12 min |
-| GLM-Z1-9B dense, colocated TP2 | 0.680 | 0.0 | ~13 min |
-| Qwen3-30B-A3B MoE, colocated pure EP, `moe_tp=1` | 0.578 | 0.0 | ~21 min |
-| Qwen3-30B-A3B MoE, colocated pure TP, `moe_ep=1` | 0.531 | 0.0 | ~25 min |
-| Qwen3-30B-A3B MoE, disaggregated pure EP | 0.65 | 0.0 | ~18 min |
-| Qwen3-30B-A3B MoE, colocated combined `moe_tp=2` x `moe_ep=2` | 0.555 | 0.0 | ~21 min |
-| Qwen3-30B-A3B MoE, combined geometry, FlashInfer fusion on | 0.0 | 0.56 | ~20 min, degenerate output |
-| Qwen2.5-72B dense, disaggregated | OOM | -- | did not fit 16x H200 |
+| Config | env file | rollouts | reward | repetition | wall time |
+|--------|----------|----------|--------|------------|-----------|
+| Qwen3-4B dense, colocated 1 node | `env_vars.colocated.example` | 100 | 0.508 | 0.023 | ~3 h 15 min |
+| Qwen3-4B dense, disaggregated 2 nodes | same, with `COLOCATE=false` and its own `CHECKPOINT_DIR` | 60 | 0.461 | 0.008 | ~1 h 50 min |
+| GLM-Z1-9B dense, colocated TP2, 2 nodes | `env_vars.glm.example` | 100 | 0.672 | 0.008 | ~2 h 35 min |
+| Qwen3-30B-A3B MoE, colocated pure EP, 2 nodes | `env_vars.moe.example` | 100 | 0.719 | 0.008 | ~5 h 5 min |
+
+The disaggregated row is the same model and recipe as the first, moved off a shared pool: `COLOCATE=false` puts the actors on one worker and the rollout engines on the other, and the weight sync that a colocated run does through CUDA IPC goes over NCCL and EFA instead. `WORKER_REPLICAS` follows from the topology, so the RayCluster the env renders already has both workers.
 
 ## Prerequisites
 
 1. A SageMaker HyperPod EKS cluster, or a plain EKS cluster, with a p5en.48xlarge GPU instance group and EFA, and a CPU node group for the Ray head, which the manifest keeps off the GPU pool. Validated on p5en.48xlarge; other instance types may need resource-value retuning.
-2. An FSx for Lustre `PersistentVolumeClaim` mounted at `/fsx`. The claim name is set through `FSX_CLAIM` and defaults to `fsx-claim`, matching the sibling slime test case.
-3. Amazon ECR access for building and pushing the image.
-4. A Hugging Face account and access token for model downloads.
+2. Both pools reachable by label. The manifests select nodes with `${GPU_NODE_LABEL_KEY}` and `${CPU_NODE_LABEL_KEY}`, `node-role` by default, which a generic EKS or HyperPod cluster does not carry until you add it (`kubectl label node <node> node-role=gpu-p5en`). A wrong key or value leaves pods `Pending` with `FailedScheduling` and nothing else. The GPU workers also tolerate only `nvidia.com/gpu:NoSchedule`, so a pool taints differently needs that toleration edited in.
+3. The cluster advertising the resources the pods request: `nvidia.com/gpu` from a GPU device plugin or the NVIDIA GPU Operator, and `vpc.amazonaws.com/efa` from the EFA device plugin. Without them the workers stay `Pending`, and the scheduling failure names the resource that is short.
+4. An FSx for Lustre `PersistentVolumeClaim` mounted at `/fsx`, and the FSx CSI driver that binds it. The claim name is set through `FSX_CLAIM` and defaults to `fsx-claim`, matching the sibling slime test case.
+5. Amazon ECR access for building and pushing the image.
+6. A Hugging Face account and access token for model downloads.
+7. `envsubst`, from GNU gettext, which `scripts/render.sh` fills the manifests in with. It is `gettext-base` on Debian and Ubuntu and `gettext` on Amazon Linux and RHEL; macOS carries no copy, so `brew install gettext`.
 
 The KubeRay operator is installed in step 0 below.
 
@@ -161,27 +162,27 @@ cp env_vars.colocated.example env_vars
 source env_vars
 ```
 
-The manifests below are rendered with `envsubst`, which replaces a variable it cannot resolve with an empty string and still exits 0, so an `env_vars` that predates one of them yields `nvidia.com/gpu: ''` or an empty image and fails later as a quantity parse error or `ImagePullBackOff`. Define this once in the shell you run the steps from and use it in place of `envsubst`; it names the missing variable instead. If it reports one, copy `env_vars` from its example again and re-apply your edits.
+The manifests below carry `${VAR}` references that `scripts/render.sh` fills in from `env_vars`. It stops and names any variable that is unset or empty; if it reports one, copy `env_vars` from its example again and re-apply your edits.
+
+The values to check are `NAMESPACE`, `RAY_CLUSTER_NAME`, `FSX_CLAIM`, the two node-label pairs, `EFA_PER_NODE` and the `IMAGE` / `TAG` the image will be pushed under; the rest is derived or model-specific. `NAMESPACE` must already exist. The Hugging Face token is read from a Kubernetes Secret named `hf-token`, wired into the pods with `secretKeyRef`, so create it once per namespace. A public model needs no token, but the key must exist, so an empty value is fine. Piping through `apply` keeps the command rerunnable, which a plain `create` is not. This is the same flow as the sibling slime test case:
 
 ```bash
-render() { local v; for v in $(envsubst --variables "$(grep -v '^[[:space:]]*#' "$1")"); do
-  [ -n "$(printenv "$v")" ] || { echo "[ERROR] $1 needs $v" >&2; return 1; }; done; envsubst < "$1"; }
-```
-
-`env_vars` includes `NAMESPACE`, which must already exist. The Hugging Face token is read from a Kubernetes Secret named `hf-token`, wired into the pods with `secretKeyRef`, so create it once per namespace. This is the same flow as the sibling slime test case:
-
-```bash
-kubectl create secret generic hf-token --from-literal=HF_TOKEN=hf_xxx -n "${NAMESPACE}"
-# Public model with no token: create it with an empty value so the key exists.
+kubectl create secret generic hf-token --from-literal=HF_TOKEN=hf_xxx -n "${NAMESPACE}" \
+    --dry-run=client -o yaml | kubectl apply -f -
 ```
 
 ### 2. Build and Push the Container Image
 
-The image takes `radixark/miles` as its base and adds only the AWS EFA layer. The base is pinned by `sha256` digest in `miles.Dockerfile`.
+The image takes `radixark/miles` as its base and adds only the AWS EFA layer. The base is pinned by `sha256` digest in `miles.Dockerfile`. Either path below pushes to `${FULL_IMAGE}`, so the repository has to exist first:
+
+```bash
+aws ecr create-repository --repository-name ${IMAGE} --region ${AWS_REGION} || true
+```
+
+With a local Docker daemon:
 
 ```bash
 aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${REGISTRY}
-aws ecr create-repository --repository-name ${IMAGE} --region ${AWS_REGION} || true
 docker build -t ${FULL_IMAGE} -f miles.Dockerfile .
 docker push ${FULL_IMAGE}
 ```
@@ -193,18 +194,18 @@ kubectl create configmap miles-build-context --from-file=Dockerfile=miles.Docker
 kubectl create secret docker-registry ecr-miles-push \
     --docker-server="${REGISTRY}" --docker-username=AWS \
     --docker-password="$(aws ecr get-login-password --region ${AWS_REGION})" -n "${NAMESPACE}"
-render kubernetes/buildkit-job.yaml | kubectl apply -f -
+bash scripts/render.sh kubernetes/buildkit-job.yaml | kubectl apply -f -
 ```
 
 ### 3. Download and Prepare the Model
 
 As in the sibling slime test case, this uses a data-prep pod and the Hugging Face CLI inside it. The command is `hf`: `huggingface-cli` is a stub in `huggingface_hub` 1.x that prints a deprecation notice and exits non-zero without downloading anything.
 
-The model to fetch comes from `MODEL_NAME` and `MODEL_LOCAL` in the env file, so this step follows the choice made in step 1 rather than naming a model of its own.
+The model to fetch comes from `MODEL_NAME` and `MODEL_LOCAL` in the env file, so this step follows the choice made in step 1.
 
 ```bash
 source env_vars
-render kubernetes/data-prep-pod.yaml | kubectl apply -f -
+bash scripts/render.sh kubernetes/data-prep-pod.yaml | kubectl apply -f -
 kubectl wait --for=condition=Ready pod/data-prep -n "${NAMESPACE}" --timeout=300s
 kubectl exec -it data-prep -n "${NAMESPACE}" -- \
     env MODEL_NAME="${MODEL_NAME}" MODEL_LOCAL="${MODEL_LOCAL}" bash
@@ -223,13 +224,12 @@ hf download --repo-type dataset zhuzilin/aime-2024 --local-dir /fsx/data/aime-20
 
 KubeRay does not recreate existing pods when a RayCluster's pod template changes, so applying an updated manifest over a running cluster leaves the old head and workers as they were. If you are redeploying after changing container env, resources, the image, or the topology, delete the cluster first; the `delete` below is a no-op on a first run.
 
-The watch below does not exit on its own: interrupt it once the head and the workers are Running, then
-start the port-forward.
+The watch below does not exit on its own: interrupt it once the head and the workers are Running, then start the port-forward.
 
 ```bash
 source env_vars
 kubectl delete raycluster "${RAY_CLUSTER_NAME}" -n "${NAMESPACE}" --ignore-not-found
-render kubernetes/raycluster.yaml | kubectl apply -f -
+bash scripts/render.sh kubernetes/raycluster.yaml | kubectl apply -f -
 kubectl get pods -w -n "${NAMESPACE}" \
     -l "ray.io/cluster=${RAY_CLUSTER_NAME},ray.io/is-ray-node=yes"
 kubectl port-forward -n "${NAMESPACE}" "svc/${RAY_CLUSTER_NAME}-head-svc" 8265:8265 &
@@ -254,13 +254,19 @@ Pick a reward strategy in `env_vars`. The default is the built-in rule-based rew
 
 ### 7. Launch GRPO Training
 
-Run the recipe from a machine with a matching Ray CLI and the dashboard port-forwarded, as in step 4, or use `./run-on-cluster.sh` to launch from inside the head pod with only `kubectl`.
+Run the recipe from a machine whose `ray` CLI matches the version in the image, 2.56.1 as pinned in Software Versions, with the dashboard port-forwarded as in step 4, or use `./run-on-cluster.sh` to launch from inside the head pod with only `kubectl`.
 
 ```bash
 # Qwen3-4B, colocated:
 bash recipe/run_grpo_qwen3_4b.sh
 # Qwen3-30B-A3B MoE, colocated on 2 nodes: this needs env_vars copied from env_vars.moe.example.
 bash recipe/run_grpo_qwen3_30b_a3b.sh
+```
+
+The 4B recipe is model-agnostic apart from its banner and its checkpoint subdirectory, so a dense model with a different parallelism runs through it from its own env file: `env_vars.glm.example` is GLM-Z1-9B at TP=2 across the same two nodes. Changing the worker count means redoing step 4, because the env file renders it. `MODEL_SCRIPT` names a file the image ships rather than one in this directory, so a fourth model starts by finding out what is there:
+
+```bash
+kubectl exec -n "${NAMESPACE}" <ray-worker-pod> -- ls /root/miles/scripts/models/
 ```
 
 Monitor with the Ray dashboard at `http://localhost:8265`, or follow the job log with `ray job logs <submission-id> --address http://localhost:8265 --follow`.
@@ -319,6 +325,7 @@ miles/
 ├── README.md
 ├── env_vars.colocated.example       # Qwen3-4B dense, colocated on 1 node
 ├── env_vars.moe.example             # Qwen3-30B-A3B MoE, colocated on 2 nodes
+├── env_vars.glm.example             # GLM-Z1-9B dense TP2, colocated on 2 nodes
 ├── env_vars.disaggregated.example   # overlay: reward model on a CPU pool
 ├── run-on-cluster.sh                # launch a recipe from inside the head pod
 ├── miles.Dockerfile                 # radixark/miles base + AWS EFA layer
@@ -333,7 +340,8 @@ miles/
 └── scripts/
     ├── convert_checkpoint.sh        # HF <-> Megatron
     ├── derive_topology.sh           # sourced by env_vars*: validates and derives the topology
-    └── evaluate.sh                  # AIME-2024
+    ├── evaluate.sh                  # AIME-2024
+    └── render.sh                    # fills a manifest's ${VAR} refs from env_vars
 ```
 
 ## Software Versions
@@ -368,9 +376,7 @@ kubectl exec -n "${NAMESPACE}" <ray-pod> -- bash -lc \
 kubectl describe pod <pod>
 ```
 
-`didn't match Pod's node affinity/selector` means no node carries the label the manifest rendered; the
-head needs the CPU pair and the workers the GPU pair. Otherwise compare the pod's GPU, EFA, memory and
-ephemeral-storage requests against node capacity, remembering the head pulls the same ~18 GB image.
+`didn't match Pod's node affinity/selector` means no node carries the label the manifest rendered; the head needs the CPU pair and the workers the GPU pair. Otherwise compare the pod's GPU, EFA, memory and ephemeral-storage requests against node capacity, remembering the head pulls the same ~18 GB image.
 
 ### Ray workers cannot connect to the head
 
