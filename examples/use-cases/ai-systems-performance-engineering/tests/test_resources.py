@@ -41,7 +41,7 @@ elif any('torchrun' in x for x in args):
  sys.exit(subprocess.run(args[args.index('bash'):],env=os.environ|{'SLURM_PROCID':'0'}).returncode)
 ''')
             srun.chmod(0o755)
-            (bin_dir/'scontrol').write_text('#!/bin/bash\necho node-a\necho node-b\n'); (bin_dir/'scontrol').chmod(0o755)
+            (bin_dir/'scontrol').write_text('#!/bin/bash\nif [[ $2 == hostnames ]]; then printf "node-a\\nnode-b\\n"; else echo "NodeName=node-a NodeAddr=10.0.0.1"; fi\n'); (bin_dir/'scontrol').chmod(0o755)
             (bin_dir/'torchrun').write_text('#!/usr/bin/env python3\nimport json,os,sys\nwith open(os.environ["COMMAND_LOG"],"a") as f: f.write(json.dumps(["torchrun",*sys.argv[1:]])+"\\n")\nsys.exit(7)\n')
             (bin_dir/'torchrun').chmod(0o755)
             for count in (2,4,8):
@@ -57,6 +57,7 @@ elif any('torchrun' in x for x in args):
                 launch = next(x for x in calls if x[0]=='torchrun')
                 self.assertIn('--nproc-per-node='+str(count),launch)
                 self.assertIn('--nnodes=2',launch)
+                self.assertIn('--master-addr=10.0.0.1',launch)
                 record = json.loads((lab/'results'/run/'v0-resources.json').read_text())
                 self.assertEqual(record['gpus_per_node'],count)
                 ledger = json.loads((lab/'results'/run/'v0/allocation.jsonl').read_text())

@@ -19,7 +19,9 @@ srun --ntasks="$NNODES" --ntasks-per-node=1 --cpu-bind=none bash "$LAB_DIR/lib/r
 counts=$(python3 "$LAB_DIR/lib/resource_plan.py" "$inventory" --nodes "$NNODES" --output "$LAB_DIR/results/$RUN_ID/$action-resources.json")
 read -r NNODES GPUS_PER_NODE GPU_COUNT <<< "$counts"
 export NNODES GPUS_PER_NODE GPU_COUNT
-MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+first_node=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+MASTER_ADDR=$(scontrol show node "$first_node" -o | tr ' ' '\n' | sed -n 's/^NodeAddr=//p')
+[[ -n $MASTER_ADDR ]] || { echo 'Slurm did not return the first node address' >&2; exit 2; }
 export MASTER_ADDR
 export MASTER_PORT=29547
 export NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET FI_PROVIDER=efa
@@ -29,7 +31,8 @@ export NCCL_SOCKET_IFNAME
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 # Keep PyTorch's NCCL aligned with the pinned nccl-tests and OFI plugin stack.
 mounts="$LAB_DIR:/opt/aim347,$DATA_DIR:/data"
-args=(--container-image="$LAB_IMAGE" --container-mounts="$mounts" --container-workdir=/opt/aim347 --cpu-bind=none)
+args=(--container-image="$LAB_IMAGE" --container-mounts="$mounts" --container-workdir=/opt/aim347
+    --container-env=NCCL_SOCKET_IFNAME --no-container-remap-root --cpu-bind=none)
 if [[ "$action" == gemm ]]; then
     srun --ntasks="$NNODES" --ntasks-per-node=1 "${args[@]}" bash -c 'nvidia-smi -q > /opt/aim347/results/"$RUN_ID"/gpu-"$SLURM_PROCID".txt; /usr/local/bin/aim347-gemm > /opt/aim347/results/"$RUN_ID"/gemm-node-"$SLURM_PROCID".json'
     exit
@@ -43,7 +46,8 @@ if [[ "$action" == bandwidth ]]; then
 fi
 if [[ "$action" == serving ]]; then
     # Independent tensor-parallel replicas, one per node, using the same allocation.
-    srun --ntasks="$NNODES" --ntasks-per-node=1 --container-image="$VLLM_IMAGE" --container-mounts="$DATA_DIR:/data" --cpu-bind=none \
+    srun --ntasks="$NNODES" --ntasks-per-node=1 --container-image="$VLLM_IMAGE" --container-mounts="$DATA_DIR:/data" \
+      --container-env=NCCL_SOCKET_IFNAME --cpu-bind=none \
       vllm serve /data/serving-model --served-model-name aim347 --tensor-parallel-size "$GPUS_PER_NODE" \
       --dtype bfloat16 --max-model-len 2048 --gpu-memory-utilization 0.8 --host 0.0.0.0 --port 8000
     exit
@@ -60,7 +64,7 @@ fi
 if [[ "$action" == v0 || "$action" == v1 ]]; then
     # MPI tasks are ranks, so override both ntasks and ntasks-per-node.
     srun --ntasks="$GPU_COUNT" --ntasks-per-node="$GPUS_PER_NODE" --mpi=pmix "${args[@]}" \
-      env LD_PRELOAD=/opt/nccl/build/lib/libnccl.so /opt/nccl-tests/build/all_reduce_perf -b 8M -e 256M -f 2 -g 1 -w 5 -n 20 -c 1
+      bash lib/nccl-rank.sh
 fi
 : "${DENSE_TFLOPS:?Run the GEMM step and set DENSE_TFLOPS in .env}"
 export DENSE_TFLOPS

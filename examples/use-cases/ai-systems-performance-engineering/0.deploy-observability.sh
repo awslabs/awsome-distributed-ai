@@ -15,13 +15,18 @@ case "$mode" in
       chmod 700 runtime
     fi
     python3 - <<'PY'
-import json,os
+import json,os,socket,subprocess
 from pathlib import Path
 nodes=os.environ['COMPUTE_NODES'].split(',')
 if len(nodes)!=2: raise ValueError('exactly two node hostnames are required')
+addresses={}
+for node in nodes:
+ fields=dict(field.split('=',1) for field in subprocess.check_output(['scontrol','show','node',node,'-o'],text=True).split() if '=' in field)
+ addresses[node]=socket.gethostbyname(fields['NodeAddr'])
+Path('runtime/node-addresses.json').write_text(json.dumps(addresses,indent=2)+'\n')
 scrapes=[dict(job_name='pushgateway',honor_labels=True,static_configs=[dict(targets=['pushgateway:9091'])])]
 for name,port in [('dcgm',9400),('node',9100),('efa',9109),('vllm',8000)]:
- scrapes.append(dict(job_name=name,static_configs=[dict(targets=[f'{node}:{port}'],labels=dict(node=node)) for node in nodes]))
+ scrapes.append(dict(job_name=name,static_configs=[dict(targets=[f'{addresses[node]}:{port}'],labels=dict(node=node)) for node in nodes]))
 Path('runtime/prometheus.yml').write_text(json.dumps({'global':{'scrape_interval':'5s'},'scrape_configs':scrapes},indent=2))
 PY
     docker compose -p aim347-observability -f compose.yaml up -d
