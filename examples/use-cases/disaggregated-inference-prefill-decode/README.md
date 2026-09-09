@@ -1,6 +1,6 @@
 # Disaggregated inference: when to split prefill from decode
 
-This Amazon EKS lab compares two unified SGLang replicas behind a round-robin router with a prefill worker and a decode worker on separate NVIDIA GPU instances. Both configurations use the same model, cache policy, GPU count, and latency objectives. Participants measure the cost of handing off the KV cache, then vary traffic to find where isolating decode from prefill helps useful throughput.
+This Amazon EKS lab compares two unified SGLang replicas behind a round-robin router with a prefill worker and a decode worker. Paired mode keeps both stacks resident in separate namespaces on disjoint GPU allocations. Each stack can pack its engine processes onto one node or use separate nodes for its workers. Both configurations use the same model, cache policy, GPU count, and latency objectives. Participants measure the cost of handing off the KV cache, then vary traffic to find where isolating decode from prefill helps useful throughput.
 
 Prefill processes the input tokens in parallel and is often compute-bound. Decode repeatedly reads model weights and KV state to generate the next token and is often memory-bandwidth-bound. In a unified engine, a long prefill forward pass occupies the same GPUs as active decode steps; queued prefills can also raise TTFT. Chunked prefill reduces each interruption, while separate pools remove that source of shared-GPU interference. Neither arrangement removes queueing when its own capacity is exhausted.
 
@@ -19,6 +19,7 @@ Prepared for re:Invent 2026 session AIM345, led by Keita Watanabe with Mijanur P
 | Disaggregated deployment serves both traffic shapes | VALIDATED | Seoul `p6-b300.48xlarge`, short smoke runs at a GPU count of two; full workload/rate calibration remains UNVALIDATED |
 | Matched unified deployment serves both traffic shapes | VALIDATED | Same Seoul model and GPU budget as the disaggregated smoke runs; two replicas behind explicit round-robin routing |
 | Positive SGLang NIXL/LIBFABRIC request transfers KV over EFA | VALIDATED | Seoul `p6-b300.48xlarge`, one GPU per engine; streamed completion and EFA RDMA-write byte increase, supported by the separate GPU-buffer probe |
+| Paired unified and disaggregated endpoints remain resident while both traffic shapes run | VALIDATED | Oregon EKS on 2026-09-09, two `g7e.12xlarge` nodes, two GPUs and one EFA device per stack, packed placement; cross-node KV/EFA transfer is outside this observation |
 | Round 1: cached agentic traffic has worse TTFT after disaggregation | UNVALIDATED | Expected from prior work; not measured with this lab model and instance configuration |
 | Round 1: measured wire time explains only a small part of the handoff penalty | UNVALIDATED | Requires measured fabric bandwidth and full-model KV accounting |
 | Round 1: explicit `makeConnection` during SGLang bootstrap reduces the penalty | UNVALIDATED | Blocked on upstream SGLang support in the pinned release; no local patch |
@@ -33,7 +34,7 @@ The production instance type is unresolved: demand intake names `g7e.24xlarge`, 
 
 Use an existing EKS cluster with separately allocated, same-AZ GPU nodes, EFA interfaces attached at launch, compatible NVIDIA drivers, and working GPU and EFA device plugins. The nodes must support GPUDirect RDMA. Security groups must allow the EFA self-traffic required by the cluster architecture and TCP communication among the lab nodes for serving and bootstrap. The scripts create serving resources, a dedicated namespace, and its nonpreempting PriorityClass; they do not provision nodes or change cluster networking. Cluster administrators can use the repository's [EKS architecture](../../../architectures/sagemaker-hyperpod-eks/) as a platform reference.
 
-The baseline uses two nodes, with one worker per node. Configure GPU and EFA resource counts from the allocated nodes, rather than copying counts from a different instance type. The example reserves 8 GPUs per worker and 16 EFA devices per worker. That is 16 GPUs per architecture, a configuration assumption that remains unvalidated. A mechanism smoke test may use fewer GPUs if the model fits; record that change. Scaling prefill requires a third allocated node and adds one worker's GPU budget.
+The sequential path uses two nodes, with one worker per node. Configure GPU and EFA resource counts from the allocated nodes; the example requires those counts to be supplied. Packed paired mode puts both workers in one pod and requests twice `gpus_per_worker` GPUs and `efa_per_worker` EFA devices for that pod. The observed `g7e.12xlarge` allocation used one GPU per engine, two GPUs per stack and one EFA device per stack. Those counts do not describe `g7e.24xlarge`. Prefill scaling uses the separate-node path and adds an allocated worker.
 
 The checked controller tool versions are Python version `3.12.3`, Docker version `29.7.2`, AWS CLI version `2.36.7`, and `kubectl` version `1.31.0`. Use a `kubectl` version compatible with your EKS API and record any version change. Python client dependencies, including transitive packages, are pinned in [requirements.txt](requirements.txt). Provision these tools before the timed lab. Model download, image pull, and kernel compilation can consume minutes; complete them before attendees arrive.
 
@@ -80,7 +81,89 @@ mkdir -p rendered
 ./1.deploy-disaggregated.sh --config config.json --render > rendered/disaggregated.json
 ```
 
-## Run the comparison
+## Paired endpoints on separate allocations
+
+[paired.py](paired.py) checks that both stacks have the same model revision, images, GPU count, transport request, cache settings and placement mode, then renders separate namespaces and nonpreempting PriorityClasses. It rejects overlapping node sets. The sequential scripts remain available for switching a single allocation in place.
+
+Copy the configuration for each stack:
+
+```bash
+cp config.example.json config.unified.json
+cp config.example.json config.disaggregated.json
+```
+
+Fill both files before deployment. Give them different `aim345-*` namespaces and disjoint assigned node lists. Set `placement` to `packed` for one node per stack, or `separate-nodes` for two nodes per stack. Packed placement requires an even allocated GPU count: set `gpus_per_worker` to half that count and `efa_per_worker` to the pod's assigned EFA count. Each engine process receives a disjoint `CUDA_VISIBLE_DEVICES` list. Packed placement uses pod networking, engine TCP ports 30000 and 30001, and a shared EFA device allocation; the prefill bootstrap listener uses TCP port 8998. The CPU router is pinned to the same assigned node. The packed pod defaults to a CPU request of 8 cores and a memory request of 128 GiB; `packed_cpu` and `packed_memory` configure them equally for both stacks.
+
+For the measured `g7e.12xlarge` shape, both configuration files use `gpus_per_worker: 1` and `efa_per_worker: 1`, requesting two GPUs and one EFA device per stack. Keep hardware labels, model settings and resource requests explicit. Model staging and engine compilation happen before the timed participant session.
+
+Render and deploy both stacks from a fresh pair of namespaces:
+
+```bash
+python3 paired.py render
+python3 paired.py deploy
+```
+
+The deploy operation refuses existing namespaces. It does not replace either live stack when measuring the other. Load the endpoint variables from the prepared configuration files. Set the Region to the event's actual Region before collecting measurements:
+
+```bash
+export LAB_CONTEXT="$(python3 -c 'import json; print(json.load(open("config.unified.json"))["context"])')"
+export LAB_UNIFIED_NAMESPACE="$(python3 -c 'import json; print(json.load(open("config.unified.json"))["namespace"])')"
+export LAB_DISAGG_NAMESPACE="$(python3 -c 'import json; print(json.load(open("config.disaggregated.json"))["namespace"])')"
+export LAB_INSTANCE_TYPE="$(python3 -c 'import json; print(json.load(open("config.unified.json"))["instance_type"])')"
+export LAB_GPUS="$(python3 -c 'import json; print(2 * json.load(open("config.unified.json"))["gpus_per_worker"])')"
+export LAB_REGION=us-west-2
+```
+
+For packed placement, wait for the engine pod and router in each namespace:
+
+```bash
+kubectl --context "$LAB_CONTEXT" -n "$LAB_UNIFIED_NAMESPACE" rollout status deployment/engines --timeout=1800s
+kubectl --context "$LAB_CONTEXT" -n "$LAB_UNIFIED_NAMESPACE" rollout status deployment/router --timeout=1800s
+kubectl --context "$LAB_CONTEXT" -n "$LAB_DISAGG_NAMESPACE" rollout status deployment/engines --timeout=1800s
+kubectl --context "$LAB_CONTEXT" -n "$LAB_DISAGG_NAMESPACE" rollout status deployment/router --timeout=1800s
+```
+
+With separate-node placement, wait for the individual worker Deployments named in the rendered files, using the sequential path's readiness commands in each namespace. Run each port-forward command in its own terminal with the same environment:
+
+```bash
+kubectl --context "$LAB_CONTEXT" -n "$LAB_UNIFIED_NAMESPACE" port-forward service/router 8000:8000
+kubectl --context "$LAB_CONTEXT" -n "$LAB_DISAGG_NAMESPACE" port-forward service/router 8001:8000
+```
+
+Verify both HTTP endpoints and their live GPU requests, then inspect the disaggregated engines' selectors, installed distributions and EFA counters around a real request:
+
+```bash
+python3 paired.py verify --output results/paired-before
+python3 7.verify-transport.py --config config.disaggregated.json --url http://127.0.0.1:8001 --output results/paired-transport.json
+```
+
+The packed verifier reads both live engine processes' command lines and selector environments. A packed request transfers state between processes on one node; its result does not establish cross-node EFA transfer. Record the observed counter deltas, including a flat counter, and the report's `cross_node_efa_status`. With separate-node placement, a passing transport check also requires positive RDMA byte deltas. Preserve provider logs with either result.
+
+Generate the same traffic definitions and run each shape against both resident endpoints. The GPU count passed to every run is the count for one stack:
+
+```bash
+python3 2.generate-agentic.py --output traffic/a.json
+python3 3.generate-long-context.py --output traffic/b.json
+python3 4.ramp.py --traffic traffic/a.json --url http://127.0.0.1:8000 --architecture unified --instance-type "$LAB_INSTANCE_TYPE" --region "$LAB_REGION" --evidence-scope mechanism-validation --gpus "$LAB_GPUS" --rates 0.1 --duration-s 30 --output results/paired-unified-a
+python3 4.ramp.py --traffic traffic/a.json --url http://127.0.0.1:8001 --architecture disaggregated --instance-type "$LAB_INSTANCE_TYPE" --region "$LAB_REGION" --evidence-scope mechanism-validation --gpus "$LAB_GPUS" --rates 0.1 --duration-s 30 --output results/paired-disaggregated-a
+python3 4.ramp.py --traffic traffic/b.json --url http://127.0.0.1:8000 --architecture unified --instance-type "$LAB_INSTANCE_TYPE" --region "$LAB_REGION" --evidence-scope mechanism-validation --gpus "$LAB_GPUS" --rates 0.25 0.5 1 2 4 8 --duration-s 30 --output results/paired-unified-b
+python3 4.ramp.py --traffic traffic/b.json --url http://127.0.0.1:8001 --architecture disaggregated --instance-type "$LAB_INSTANCE_TYPE" --region "$LAB_REGION" --evidence-scope mechanism-validation --gpus "$LAB_GPUS" --rates 0.25 0.5 1 2 4 8 --duration-s 30 --output results/paired-disaggregated-b
+python3 5.collect.py --config config.unified.json --runs results/paired-unified-a results/paired-unified-b --output results/paired-unified-evidence
+python3 5.collect.py --config config.disaggregated.json --runs results/paired-disaggregated-a results/paired-disaggregated-b --output results/paired-disaggregated-evidence
+python3 5.collect.py --runs results/paired-unified-a results/paired-unified-b results/paired-disaggregated-a results/paired-disaggregated-b --output results/paired-comparison
+python3 paired.py verify --output results/paired-after
+```
+
+Compare the before/after pod UIDs and GPU requests to establish that both stacks remained resident. The collector saves both packed engines' metrics and server configuration. The existing common SLO and failure-accounting rules apply. A short execution check can use a rate of 0.1 tasks/s and an offered window of 10 seconds for each shape, as recorded in `VALIDATION.md`; that check does not establish sustained capacity. Keep the two prepared endpoints for one-factor crossover repeats, changing the same traffic definition for both arms.
+
+After saving evidence, remove the pair and its PriorityClasses:
+
+```bash
+python3 paired.py cleanup
+python3 -m unittest -v test_paired test_lab
+```
+
+## Sequential comparison
 
 The numbered scripts follow the preparation and experiment order. Scripts numbered after collection are repeatable diagnostic, scaling, and cleanup steps. The deployment scripts switch architectures on the same allocated nodes by removing only this lab's serving resources. Full GPU allocations cannot host both architectures simultaneously on the same GPUs. Rehearse the switch and weight-loading time; simultaneous predeployment requires separate, equal GPU allocations and separate namespaces.
 

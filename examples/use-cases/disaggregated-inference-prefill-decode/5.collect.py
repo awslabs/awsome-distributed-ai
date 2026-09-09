@@ -51,9 +51,12 @@ def main():
                 continue
             (out / f"{name}.log").write_text(kubectl(c, "logs", name, "--all-containers=true", "--tail=-1", capture_output=True).stdout)
             if pod["metadata"]["labels"].get("component") == "engine" and pod["status"]["phase"] == "Running":
-                for endpoint in ("metrics", "server_info"):
-                    code = f"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:30000/{endpoint}').read().decode())"
-                    (out / f"{name}-{endpoint}.txt").write_text(kubectl(c, "exec", name, "-c", "engine", "--", "python3", "-c", code, capture_output=True).stdout)
+                ports = (30000, 30001) if c.get('placement') == 'packed' else (30000,)
+                for port in ports:
+                    for endpoint in ("metrics", "server_info"):
+                        code = f"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:{port}/{endpoint}').read().decode())"
+                        suffix = f"{port}-{endpoint}" if c.get('placement') == 'packed' else endpoint
+                        (out / f"{name}-{suffix}.txt").write_text(kubectl(c, "exec", name, "-c", "engine", "--", "python3", "-c", code, capture_output=True).stdout)
     print(json.dumps({"summary_csv": str(out / "summary.csv"), "measured_rate_rows": len(rows), "qualified_rates": str(out / "qualified-rates.json")}))
 
 if __name__ == "__main__":

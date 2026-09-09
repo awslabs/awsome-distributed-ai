@@ -7,8 +7,8 @@
     "REPLACE_WITH_NODE_A",
     "REPLACE_WITH_NODE_B"
   ],
-  "gpus_per_worker": 8,
-  "efa_per_worker": 16,
+  "gpus_per_worker": "REPLACE_WITH_ALLOCATED_GPUS_PER_WORKER",
+  "efa_per_worker": "REPLACE_WITH_ALLOCATED_EFA_PER_WORKER",
   "model_id": "deepseek-ai/DeepSeek-V2-Lite-Chat",
   "model_revision": "85864749cd611b4353ce1decdb286193298f64c7",
   "model_cache_host_path": "/mnt/aim345-models",

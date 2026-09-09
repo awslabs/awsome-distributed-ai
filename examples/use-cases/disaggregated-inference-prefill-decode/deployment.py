@@ -18,7 +18,9 @@ def read_config(path):
         image = c[key]
         assert "@sha256:" in image or (":" in image.rsplit("/", 1)[-1] and not image.endswith(":latest"))
     assert c["gpus_per_worker"] > 0 and c["efa_per_worker"] > 0
-    assert len(c["nodes"]) == len(set(c["nodes"])) >= 2
+    minimum_nodes = 1 if c.get("placement") == "packed" else 2
+    assert c.get("placement", "separate-nodes") in ("packed", "separate-nodes")
+    assert len(c["nodes"]) == len(set(c["nodes"])) >= minimum_nodes
     assert c["model_cache_host_path"].startswith("/mnt/"), "Use a dedicated cache under /mnt"
     return c
 
@@ -110,6 +112,7 @@ def main():
     p.add_argument("--render", action="store_true")
     a = p.parse_args()
     c = read_config(a.config)
+    assert c.get("placement") != "packed", "Use paired.py for packed allocations"
     if a.mode == "cleanup":
         owned_namespace(c)
         kubectl(c, "delete", "namespace", c["namespace"], "--wait=true")

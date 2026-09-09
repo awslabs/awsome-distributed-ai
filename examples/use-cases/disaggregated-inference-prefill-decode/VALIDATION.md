@@ -1,6 +1,6 @@
 # Validation evidence
 
-The hardware observations below were collected on 2026-09-06 in `ap-northeast-2`. They validate a transport mechanism on Seoul `p6-b300.48xlarge`, not the production instance choice or the session's expected latency crossover.
+The historical hardware observations in the first sections were collected on 2026-09-06 in `ap-northeast-2`. The final section records new Oregon checks from 2026-09-09. They validate a transport mechanism on Seoul `p6-b300.48xlarge`, not the production instance choice or the session's expected latency crossover.
 
 ## NIXL GPU-buffer transfer: VALIDATED
 
@@ -53,3 +53,28 @@ The first EKS submission exposed a PriorityClass admission requirement for `pree
 A subsequent attempt used the serving image for the CPU router. Pulling and unpacking it exhausted the small image filesystem on system nodes of type `m5.xlarge`; the router was evicted. The test Deployments were scaled to zero, and filesystem reads subsequently showed free space again. The final configuration gives the router a separate small image with pinned dependencies and adds explicit ephemeral-storage requests to both pod types. It does not change system-node storage or delete other workloads.
 
 The EC2 capacity reservation had 32 occupied `p6-b300.48xlarge` instance seats and 0 free instance seats at the check. Normal scheduling nevertheless exposed idle GPUs on existing bench nodes. The probe used those already-running nodes without launching instances, scaling node groups, or preempting other workloads. Future scheduling availability must be checked again.
+
+## Paired resident endpoints on Oregon g7e: VALIDATED, 2026-09-09
+
+Both `g7e.12xlarge` nodes in the shared Oregon EKS cluster supplied two GPUs and one EFA device per stack. The unified stack used `ip-10-3-132-239.us-west-2.compute.internal`; disaggregation used `ip-10-3-133-250.us-west-2.compute.internal`. The stacks occupied separate namespaces, `aim345-pi-20260909-unified` and `aim345-pi-20260909-disaggregated`, each with its own nonpreempting PriorityClass. Packed placement ran two engine processes in one pod per stack, with one GPU per process and disjoint visible-device lists. Each pod requested 8 CPU cores, 128 GiB memory and one EFA device. No other team's workload or namespace was modified.
+
+The engine used ECR manifest-list digest `sha256:772d52067fab28c9eea5fe1fd629694218b4aa1669b257c43e689abdcca59338` from repository `aim-content-decisions-20260909` in `us-west-2`. The image was built from this asset's Dockerfile, with SGLang version `0.5.12.post1`, NIXL version `1.1.0`, and the new packed-process launcher. Package versions were inspected in the live engines. The model was DeepSeek-V2-Lite-Chat revision `85864749cd611b4353ce1decdb286193298f64c7`. The controller used the same `paired.py`, traffic generators, ramp, collector and transport verifier shipped here.
+
+`paired.py verify` returned HTTP status code 200 for both endpoints before and after all traffic passes. The before/after records were exactly equal: unified engine pod UID `ec7c6154-271d-457b-9f42-ff8f1fbf1c02` and disaggregated engine pod UID `1f1b6f7b-2ec6-4fc6-9343-858d0a4a26ed`, the same node placement, and two requested GPUs per stack. Both engine pods retained zero restarts. No stack was redeployed to measure the other.
+
+Each shape ran at 0.1 offered tasks/s for a 10-second offered window on each endpoint, with the harness's separate warmup pass and a measured pass. Shape A completed nine sequential calls per measured task; shape B completed one call with 8192 input tokens. Every call requested and produced 256 output tokens. These short runs establish execution and residency, not capacity or a sustained ranking.
+
+| Stack and shape | Completed calls | Failed/skipped calls | p90 TTFT | p90 average TPOT | Useful calls/s/GPU | Joint attainment |
+|---|---|---|---|---|---|---|
+| Unified A | 9 calls | 0 calls | 455.316 ms | 5.673 ms | 0.289814 calls/s/GPU | 100 percent |
+| Disaggregated A | 9 calls | 0 calls | 715.086 ms | 5.701 ms | 0.269568 calls/s/GPU | 100 percent |
+| Unified B | 1 call | 0 calls | 779.202 ms | 5.748 ms | 0.050000 calls/s/GPU | 100 percent |
+| Disaggregated B | 1 call | 0 calls | 773.852 ms | 5.770 ms | 0.050000 calls/s/GPU | 100 percent |
+
+The collector retained logs, pod identities, image IDs, both packed engine ports' metrics and server configuration, and the combined CSV. Source inspection and live `/proc` reads confirmed the NIXL CLI selector, LIBFABRIC environment selector and EFA provider in both disaggregated engine processes. A verifier request with 1024 input tokens and four output tokens completed successfully. Its EFA RDMA byte-counter increase was 0 bytes. This validates the packed serving path and live selector inspection; **cross-node KV transfer over EFA is UNVALIDATED in this topology**. The two engine processes share a node. The historical Seoul cross-node observations above retain their original hardware and date.
+
+The first packed routers could not schedule on the shared system nodes because of insufficient CPU, while the assigned GPU nodes were tainted. The renderer now pins each packed router to its own assigned node with the same tolerations as its engines. Only these new router Deployments were updated. Both then became ready. After the hardware run, the renderer also included explicit Namespace objects in its saved manifests; this serialization addition was checked by CPU tests, not another deployment.
+
+The combined CPU suite passed eight tests for the existing traffic/accounting path and the paired renderer, including separate namespaces and PriorityClasses, disjoint GPU indices, headless-service ports, node pinning, mismatched-budget rejection and the preserved separate-node renderer. CPU checks do not validate the paired separate-node serving topology. The full offered-rate sweep, crossover, startup-priming effect on packed engines, larger allocations and paired cross-node engine placement remain UNVALIDATED in this tab.
+
+`paired.py cleanup` deleted both new namespaces and their PriorityClasses. Model caches remain only under the documented `/mnt/aim345-models` path on the assigned nodes. The local report at `/tmp/companion-decisions-report.md` records exact commands, image digests and evidence paths.

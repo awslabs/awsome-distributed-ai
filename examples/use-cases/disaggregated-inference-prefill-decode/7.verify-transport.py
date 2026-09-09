@@ -43,17 +43,26 @@ def main():
     c = read_config(a.config)
     owned_namespace(c)
     pods = json.loads(kubectl(c, "get", "pods", "-l", "component=engine", "-o", "json", capture_output=True).stdout)["items"]
-    assert len(pods) >= 2
-    assert len({x["spec"]["nodeName"] for x in pods}) == len(pods), "Transfer must cross nodes"
+    packed = c.get('placement') == 'packed'
+    assert len(pods) == 1 if packed else len(pods) >= 2
+    if not packed:
+        assert len({x["spec"]["nodeName"] for x in pods}) == len(pods), "Transfer must cross nodes"
     versions = {}
+    launches = {}
     for pod in pods:
         engine = next(x for x in pod["spec"]["containers"] if x["name"] == "engine")
-        args = engine["args"]
-        env = {x["name"]: x.get("value") for x in engine["env"]}
-        assert args[args.index("--disaggregation-transfer-backend") + 1] == "nixl"
-        assert "--disaggregation-ib-device" not in args
-        assert env["SGLANG_DISAGGREGATION_NIXL_BACKEND"] == "LIBFABRIC"
-        assert env["FI_PROVIDER"] == "efa"
+        plans = [{'args': engine.get('args', []), 'env': {x['name']: x.get('value') for x in engine['env']}}]
+        if packed:
+            code = "import json,pathlib; plans=json.load(open('/tmp/aim345-engine-plans.json')); print(json.dumps([dict(role=p['role'],args=pathlib.Path('/proc/%s/cmdline'%p['pid']).read_text().strip('\\0').split('\\0'),env=dict(x.split('=',1) for x in pathlib.Path('/proc/%s/environ'%p['pid']).read_text().strip('\\0').split('\\0') if x.startswith(('FI_PROVIDER=','SGLANG_DISAGGREGATION_NIXL_BACKEND=','CUDA_VISIBLE_DEVICES=')))) for p in plans]))"
+            plans = json.loads(kubectl(c, 'exec', pod['metadata']['name'], '-c', 'engine', '--', 'python3', '-c', code, capture_output=True).stdout)
+            assert {x['role'] for x in plans} == {'prefill', 'decode'}
+        for plan in plans:
+            args, env = plan['args'], plan['env']
+            assert args[args.index("--disaggregation-transfer-backend") + 1] == "nixl"
+            assert "--disaggregation-ib-device" not in args
+            assert env["SGLANG_DISAGGREGATION_NIXL_BACKEND"] == "LIBFABRIC"
+            assert env["FI_PROVIDER"] == "efa"
+        launches[pod['metadata']['name']] = plans
         versions[pod["metadata"]["name"]] = json.loads(kubectl(c, "exec", pod["metadata"]["name"], "-c", "engine", "--", "python3", "/lab/verify_image.py", capture_output=True).stdout)
     before = snapshot(c, pods)
     response = asyncio.run(smoke(c, a.url))
@@ -61,7 +70,9 @@ def main():
     deltas = {pod: {key: after[pod][key] - value for key, value in values.items()} for pod, values in before.items()}
     rdma_bytes = sum(max(0, value) for values in deltas.values() for key, value in values.items() if key.endswith(("rdma_write_bytes", "rdma_read_bytes")))
     result = {"instance_type": c["instance_type"], "evidence_scope": "mechanism-validation", "versions": versions, "pods": pods, "response": response, "before_bytes": before, "after_bytes": after, "delta_bytes": deltas,
-              "status": "VALIDATED" if response["ok"] and rdma_bytes > 0 else "UNVALIDATED",
+              "status": "VALIDATED" if response["ok"] and (packed or rdma_bytes > 0) else "UNVALIDATED",
+              "launches": launches, "placement": c.get('placement', 'separate-nodes'),
+              "cross_node_efa_status": "UNVALIDATED: co-located prefill/decode" if packed else ("VALIDATED positive path" if response['ok'] and rdma_bytes > 0 else "UNVALIDATED"),
               "scope": "Positive configured path only. Shared-node counters include other traffic; inspect provider/GPU registration logs. This does not validate negative selector controls or GPUDirect absence of staging by itself."}
     if a.bandwidth_gib_s is not None:
         assert a.bandwidth_gib_s > 0 and a.bandwidth_evidence
@@ -74,7 +85,7 @@ def main():
     out = Path(a.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2))
-    print(json.dumps({"status": result["status"], "instance_type": c["instance_type"], "rdma_counter_delta_bytes": rdma_bytes, "file": str(out)}))
+    print(json.dumps({"status": result["status"], "instance_type": c["instance_type"], "placement": result['placement'], "cross_node_efa_status": result['cross_node_efa_status'], "rdma_counter_delta_bytes": rdma_bytes, "file": str(out)}))
     if result["status"] != "VALIDATED":
         raise SystemExit(1)
 
