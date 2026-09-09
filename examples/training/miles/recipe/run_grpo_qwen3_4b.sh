@@ -332,6 +332,10 @@ RUNTIME_ENV_JSON="$(
 import json, os
 print(json.dumps({"env_vars": {
     "PYTHONPATH": "/root/Megatron-LM:/root/miles",
+    # Megatron asserts on this whenever tensor or context parallelism is on. The dense 4B is
+    # TP=1 so it does not need it, but this recipe is otherwise model-agnostic and a TP>1 env
+    # file run through it dies in the actor before the first step without it.
+    "CUDA_DEVICE_MAX_CONNECTIONS": "1",
     "MODEL_SCRIPT": os.environ["MODEL_SCRIPT"],
     "TOKENIZERS_PARALLELISM": "false",
     "NCCL_DEBUG": "WARN",
