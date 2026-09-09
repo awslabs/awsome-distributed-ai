@@ -6,6 +6,9 @@ set -euo pipefail
 # availability is the independent variable; do not force NCCL_NET=Socket.
 unset NCCL_NET NCCL_NET_PLUGIN NCCL_IB_DISABLE FI_EFA_IFACE FI_EFA_DEVICE_NAME
 export FI_PROVIDER=efa NCCL_DEBUG=INFO
+# Select after the Enroot hook, only inside an MPI rank. Exporting a PMIX_ name
+# around --mpi=none steps makes the hook try to mount nonexistent PMIx paths.
+export PMIX_MCA_gds=hash
 # MPI carries process setup only over TCP, so MPI's OFI MTL cannot mask the
 # NCCL transport result with an independent OFI error.
 export OMPI_MCA_pml=ob1 OMPI_MCA_btl=tcp,self

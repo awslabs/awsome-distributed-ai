@@ -1,0 +1,12 @@
+--- a/validation/gpu-cluster-healthcheck/instance-profiles.conf
++++ b/validation/gpu-cluster-healthcheck/instance-profiles.conf
+@@ -19,4 +19,7 @@
+ 
+ # ─── NVIDIA L40S Instances ──────────────────────────────────────────────────────
+ g6.48xlarge|8|1|false|efa
+-g6.xlarge|1|0|false|efa
+\ No newline at end of file
++g6.xlarge|1|0|false|efa
++
++# NVIDIA RTX PRO 6000 Blackwell Server Edition
++g7e.12xlarge|2|1|false|efa

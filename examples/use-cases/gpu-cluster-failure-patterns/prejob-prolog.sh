@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: MIT-0
 # Facilitator installs this as a compute-node Prolog. See README.md.
 set -euo pipefail
+export PATH="/opt/amazon/efa/bin:${PATH:-/usr/bin:/bin}"
 suite=/opt/aim344-healthcheck/validation/gpu-cluster-healthcheck
 marker=/run/aim344-unhealthy
 log() { logger -t aim344-prolog -- "$*"; }

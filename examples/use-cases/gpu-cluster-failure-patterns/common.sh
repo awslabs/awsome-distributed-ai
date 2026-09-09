@@ -10,6 +10,15 @@ prepare_slurm() {
     [[ ${SLURM_JOB_NUM_NODES:-${SLURM_NNODES:-0}} == 2 ]] || {
         echo 'This exercise requires exactly 2 allocated nodes.' >&2; exit 1;
     }
+    local counts
+    counts=$(srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --mpi=none --cpu-bind=none \
+        bash -c 'if [[ -n ${SLURM_GPUS_ON_NODE:-} ]]; then printf "%s\n" "$SLURM_GPUS_ON_NODE"; else nvidia-smi -L | awk '\''/^GPU [0-9]+:/ {n++} END {print n+0}'\''; fi')
+    mapfile -t gpu_counts <<< "$counts"
+    [[ ${#gpu_counts[@]} == 2 && ${gpu_counts[0]} =~ ^[1-9][0-9]*$ && ${gpu_counts[0]} == "${gpu_counts[1]}" ]] || {
+        echo "Expected the same positive allocated GPU count on both nodes; got: $counts" >&2; exit 1;
+    }
+    export GPUS_PER_NODE=${gpu_counts[0]}
+    printf 'allocation: 2 nodes, %s GPUs per node, %s GPU ranks\n' "$GPUS_PER_NODE" "$((2 * GPUS_PER_NODE))"
     [[ $LAB_DIR != *[:,]* && $LAB_DIR != *' '* ]] || {
         echo 'Use a shared lab path without spaces, commas, or colons.' >&2; exit 1;
     }
@@ -20,7 +29,7 @@ prepare_slurm() {
     CONTAINER_NAME=aim344_$SLURM_JOB_ID
     CONTAINER_ARGS=(--container-image="$NCCL_ENROOT_IMAGE"
         --container-name="$CONTAINER_NAME" --container-writable
-        --container-remap-root --no-container-mount-home
+        --no-container-mount-home
         --container-mounts="$LAB_DIR:/opt/aim344:ro,$RESULTS_DIR:/results")
     # This initializes one private writable root filesystem on each node.
     node_command true
@@ -28,7 +37,7 @@ prepare_slurm() {
 
 node_command() {
     srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --mpi=none --cpu-bind=none \
-        "${CONTAINER_ARGS[@]}" "$@"
+        "${CONTAINER_ARGS[@]}" --container-remap-root "$@"
 }
 
 run_sweep() {
@@ -39,8 +48,8 @@ run_sweep() {
     local start=$SECONDS
     # The absolute binary path and registry separator replace stock check 5.
     timeout --signal=TERM --kill-after=30s 600s \
-        srun --nodes=2 --ntasks=16 --ntasks-per-node=8 --mpi=pmix --cpu-bind=none \
-        "${CONTAINER_ARGS[@]}" bash /opt/aim344/sweep-rank.sh \
+        srun --nodes=2 --ntasks="$((2 * GPUS_PER_NODE))" --ntasks-per-node="$GPUS_PER_NODE" --mpi=pmix --cpu-bind=none \
+        "${CONTAINER_ARGS[@]}" --no-container-remap-root bash /opt/aim344/sweep-rank.sh \
         2>&1 | tee "$RESULTS_DIR/$run_id.nccl.log" || rc=$?
     printf 'sweep_elapsed=%s s; launcher_exit_code=%s (dimensionless)\n' "$((SECONDS-start))" "$rc" \
         | tee "$RESULTS_DIR/$run_id.status.log"
@@ -58,7 +67,10 @@ prepare_torch() {
         --container-name="aim344_torch_$SLURM_JOB_ID" --container-writable
         --no-container-mount-home
         --container-mounts="$LAB_DIR:/opt/aim344:ro,$RESULTS_DIR:/results,$CHECKPOINT_DIR:/checkpoints")
-    MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+    local first_node
+    first_node=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+    MASTER_ADDR=$(scontrol show node "$first_node" -o | tr ' ' '\n' | sed -n 's/^NodeAddr=//p')
+    [[ -n $MASTER_ADDR ]] || { echo 'Slurm did not return the first node address' >&2; exit 1; }
     export MASTER_ADDR
 }
 
