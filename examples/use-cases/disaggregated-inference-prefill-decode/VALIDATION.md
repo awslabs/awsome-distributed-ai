@@ -42,7 +42,7 @@ This validates adding prefill capacity and routing requests through the expanded
 
 ## Remaining serving and measurement status
 
-The installed source confirms that the outer SGLang selector defaults to Mooncake and the NIXL selector defaults to UCX. It also confirms no explicit `make_connection` or `makeConnection` call in the pinned SGLang NIXL connector. The hardware selector negative controls, eager SGLang bootstrap integration, agentic/unified TTFT ranking, load-collapse crossover, and prefill-only recovery remain **UNVALIDATED** until their own observed results are recorded.
+The installed source confirms that the outer SGLang selector defaults to Mooncake and the NIXL selector defaults to UCX. It also confirms no explicit `make_connection` or `makeConnection` call in the pinned SGLang NIXL connector. The control omitting both selectors, eager SGLang bootstrap integration, agentic/unified TTFT ranking, load-collapse crossover, and prefill-only recovery remain **UNVALIDATED** until their own observed results are recorded.
 
 CPU tests passed for agentic continuation semantics, input-token budgets, distinct long-context prefixes across warmup and measurement, joint SLO accounting including failures, streaming truncation handling, and equal-GPU deployment generation. A local mock also exercised the ramp and CSV collector. Mock timings are not inference measurements.
 
@@ -78,3 +78,48 @@ The first packed routers could not schedule on the shared system nodes because o
 The combined CPU suite passed eight tests for the existing traffic/accounting path and the paired renderer, including separate namespaces and PriorityClasses, disjoint GPU indices, headless-service ports, node pinning, mismatched-budget rejection and the preserved separate-node renderer. CPU checks do not validate the paired separate-node serving topology. The full offered-rate sweep, crossover, startup-priming effect on packed engines, larger allocations and paired cross-node engine placement remain UNVALIDATED in this tab.
 
 `paired.py cleanup` deleted both new namespaces and their PriorityClasses. Model caches remain only under the documented `/mnt/aim345-models` path on the assigned nodes. The local report at `/tmp/companion-decisions-report.md` records exact commands, image digests and evidence paths.
+
+## Cross-node Oregon g7e transport, 2026-09-09
+
+The PI-authorized rehearsal used the existing EKS nodes `ip-10-3-132-239.us-west-2.compute.internal` and `ip-10-3-133-250.us-west-2.compute.internal` in `us-west-2d`, each a `g7e.12xlarge` with NVIDIA RTX PRO 6000 Blackwell Server Edition GPUs. One disaggregated stack allocated one GPU and one EFA device per worker, with prefill and decode on different nodes, in namespace `aim345-xnode-20260909`. Each engine requested 16 CPU cores and 128 GiB memory. The engine digest was `sha256:772d52067fab28c9eea5fe1fd629694218b4aa1669b257c43e689abdcca59338` and the router digest was `sha256:670c7f0004e2d068c7219888109362980195e554fb66480955d985dd9c9b52f2`, both in account `159553542841` repository `aim-content-decisions-20260909`. SGLang version `0.5.12.post1` and both NIXL distributions at version `1.1.0` were verified in the running workers. The model revision and node cache matched the earlier packed run.
+
+`7.verify-transport.py --config /tmp/g7e-e2e/phase-a/config.json --url http://127.0.0.1:8011 --output /tmp/g7e-e2e/phase-a/transport.json` completed a streamed request with 1024 input tokens and four output tokens. The cold request observed TTFT of 4670.617346 ms and average TPOT of 4.765288 ms. Both engine processes' `/proc/1/cmdline` and `/proc/1/environ` contained the `nixl` CLI selection, `SGLANG_DISAGGREGATION_NIXL_BACKEND=LIBFABRIC` and `FI_PROVIDER=efa`. Both logs recorded `Backend LIBFABRIC was instantiated`, `cuda dmabuf support status: 1` and `use_device_rdma=1`.
+
+Counters were read at `/sys/class/infiniband/rdmap49s0/ports/1/hw_counters/` on both nodes. The following values surround that single request; each value is in bytes.
+
+| Worker and counter | Before | After | Delta |
+|---|---|---|---|
+| Prefill `rdma_write_bytes` | 67541760 bytes | 99393856 bytes | 31852096 bytes |
+| Decode `rdma_write_bytes` | 67296000 bytes | 67296000 bytes | 0 bytes |
+| Prefill `rdma_read_bytes` | 193370880 bytes | 193370880 bytes | 0 bytes |
+| Decode `rdma_read_bytes` | 130210560 bytes | 130210560 bytes | 0 bytes |
+| Prefill `send_bytes` / decode `recv_bytes` | 7683136 bytes / 4495936 bytes | 7683427 bytes / 4496227 bytes | 291 bytes each |
+| Decode `send_bytes` / prefill `recv_bytes` | 8910624 bytes / 10269520 bytes | 8910664 bytes / 10269560 bytes | 40 bytes each |
+
+The cached model configuration specifies 27 layers, a KV latent dimension of 512 elements and a rotary-key dimension of 64 elements. The logical BF16 MLA estimate is 1024 tokens × 27 layers × (512 elements + 64 elements) × 2 bytes per element = 31850496 bytes. The sending RDMA-write delta exceeds that estimate by 1600 bytes. This establishes the configured cross-node KV/EFA path with byte volume consistent with the model; the extra transfer layout bytes were not separately attributed. The decode-side outgoing RDMA counters remained flat. Counter families are kept separate rather than added into a wire-byte total.
+
+The companion traffic generators, `4.ramp.py` and `5.collect.py` ran each shape once with a separate warmup, 0.1 offered tasks/s and a 10-second offered window, using two GPUs per stack. The comparison below includes the earlier packed observations from this file. All measurements are on `g7e.12xlarge` in Oregon.
+
+| Placement, stack and shape | Completed / failed calls | p90 TTFT | p90 average TPOT | Useful throughput | Joint attainment |
+|---|---|---|---|---|---|
+| Packed unified A, earlier run | 9 calls / 0 calls | 455.316 ms | 5.673 ms | 0.289814 calls/s/GPU | 100 percent |
+| Packed disaggregated A, earlier run | 9 calls / 0 calls | 715.086 ms | 5.701 ms | 0.269568 calls/s/GPU | 100 percent |
+| Cross-node disaggregated A | 9 calls / 0 calls | 285.963897 ms | 5.703108 ms | 0.299581 calls/s/GPU | 100 percent |
+| Packed unified B, earlier run | 1 call / 0 calls | 779.202 ms | 5.748 ms | 0.050000 calls/s/GPU | 100 percent |
+| Packed disaggregated B, earlier run | 1 call / 0 calls | 773.852 ms | 5.770 ms | 0.050000 calls/s/GPU | 100 percent |
+| Cross-node disaggregated B | 1 call / 0 calls | 772.553072 ms | 5.779861 ms | 0.050000 calls/s/GPU | 100 percent |
+
+These observations establish execution on the separate-node topology. The cross-node run used separate engine pods with larger per-engine CPU requests than the earlier packed pod and ran later. It is not a controlled estimate of placement's latency effect, a repeated ranking or a sustained-capacity result.
+
+### Hardware selector controls: observed failures
+
+The installed source at `/sgl-workspace/sglang/python/sglang/srt/server_args.py:798` defines `disaggregation_transfer_backend: str = "mooncake"`. `/sgl-workspace/sglang/python/sglang/srt/environ.py:243` defines `SGLANG_DISAGGREGATION_NIXL_BACKEND = EnvStr("UCX")`; `srt/disaggregation/nixl/conn.py:234` reads that variable. Each control retained the same image, model, allocation and `FI_PROVIDER=efa`, changing only the specified selector in both worker Deployments.
+
+| Control on Oregon g7e | Engine startup | Streamed request | EFA counters and observed log |
+|---|---|---|---|
+| Omit CLI backend; retain `LIBFABRIC` environment | Both engines became ready with Mooncake | Did not complete before the 90-second client deadline | All observed counter deltas were 0 bytes on both nodes. Prefill logged `Failed to create QP: Operation not supported [95]`, then `Fatal Python error: Segmentation fault`. |
+| Retain CLI `nixl`; omit NIXL environment selector | Both engines became ready; both logged `Backend UCX was instantiated` | Did not complete before the 90-second client deadline | All observed counter deltas were 0 bytes on both nodes. UCX tried `169.254.170.23`, reported `Destination is unreachable`, and raised `NIXL_ERR_BACKEND` while loading remote metadata. |
+
+The UCX observation is the default interface-selection behavior of this EKS environment. It does not establish that UCX cannot serve with a separately configured routable interface. Before the recorded UCX engine request, the router rejected an attempt with HTTP status code 503 and `No available prefill workers (all circuits open or unhealthy)`. Restarting only the owned router and verifying both entries in `/workers` as healthy allowed the engine probe. A stale local port forward caused another controller connection failure before the engine probe. Both discarded attempts are retained separately. The initial Mooncake harness also had counter-mount and working-directory defects before any request was sent; its empty counter snapshots are excluded. The corrected independent counter pods mounted host `/sys` read-only at `/host-sys` and retained the per-device paths even if an engine failed.
+
+Exact manifests, request records, command transcripts, source reads, provider logs and unmodified collector output are under `/tmp/g7e-e2e/phase-a/`, with the consolidated report at `/tmp/g7e-e2e-report.md`. The positive path and these two selector controls are now observed on cross-node `g7e.12xlarge`. The control omitting both selectors, routable-interface UCX tuning, an independent g7e CUDA-buffer probe, eager SGLang bootstrap, sustained rate calibration, repeated crossover measurements, and a simultaneous pair of separate-node stacks remain UNVALIDATED.

@@ -236,9 +236,9 @@ The transport script inspects the deployed arguments, installed packages, and EF
 | SGLang CLI selector | NIXL environment selector | Source-validated selection | Hardware status |
 |---|---|---|---|
 | Omitted | Omitted | Mooncake | UNVALIDATED |
-| Omitted | `LIBFABRIC` | Mooncake; inner NIXL variable unused | UNVALIDATED |
-| `nixl` | Omitted | NIXL with UCX | UNVALIDATED |
-| `nixl` | `LIBFABRIC` | NIXL with LIBFABRIC and `FI_PROVIDER=efa` | UNVALIDATED |
+| Omitted | `LIBFABRIC` | Mooncake; inner NIXL variable unused | OBSERVED, Oregon g7e: ready, then QP creation failure and prefill segmentation fault on request |
+| `nixl` | Omitted | NIXL with UCX | OBSERVED, Oregon g7e: ready, then unreachable link-local peer and `NIXL_ERR_BACKEND` on request |
+| `nixl` | `LIBFABRIC` | NIXL with LIBFABRIC and `FI_PROVIDER=efa` | VALIDATED, Oregon g7e cross-node: completed request and matching RDMA byte volume; see [validation record](VALIDATION.md) |
 
 ### Attribute the handoff cost and prepare connections
 
