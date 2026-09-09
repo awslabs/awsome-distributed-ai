@@ -310,3 +310,15 @@ python3 -m unittest -v test_lab
 ```
 
 Common failures include insufficient scheduled GPU/EFA resources, missing EFA devices, incompatible host drivers, insufficient locked-memory permissions, blocked bootstrap TCP, incomplete image pulls, and version mismatches. Inspect pod events and engine logs first. Never treat a successful HTTP response on an unverified transport as an EFA result.
+
+## Facilitator configuration handoff
+
+The facilitator prepares the two resident endpoints and the controller before the participant session. `facilitator/prepare-config.py` generates matched packed configurations from the two explicitly assigned Kubernetes nodes. It requires immutable engine and router images, derives the even GPU count and EFA request from node inventory, copies the assigned node taints as tolerations, and refuses to overwrite an existing configuration. Review the allocation before deploying.
+
+```bash
+python3 facilitator/prepare-config.py --context "$LAB_CONTEXT" --nodes "$LAB_NODES" \
+  --engine-image "$LAB_ENGINE_IMAGE" --router-image "$LAB_ROUTER_IMAGE"
+python3 paired.py render
+```
+
+For an offline configuration review, `--inventory` accepts a saved `kubectl get nodes -o json` result and `--output` selects a new output directory. That path was exercised against the saved two-node Oregon EKS inventory from Phase A. It produced two GPUs per stack and one EFA per stack, matching the earlier packed configuration. This is a configuration check, not a new deployment or serving measurement. The Workshop Studio facilitator runbook handles the released checkout, controller virtual environment, model staging, participant-role kubeconfig, endpoint verification and cache retention. Its new CloudFormation bootstrap has been template-validated but not deployed.
