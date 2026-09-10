@@ -47,7 +47,7 @@ elif any('torchrun' in x for x in args):
             for count in (2,4,8):
                 run = 'test-'+str(count)
                 log = Path(tmp)/(run+'.jsonl')
-                env = os.environ | dict(PATH=str(bin_dir)+':'+os.environ['PATH'],LAB_DIR=str(lab),RUN_ID=run,SLURM_JOB_NUM_NODES='2',SLURM_JOB_NODELIST='node-a,node-b',NCCL_SOCKET_IFNAME='=test',LAB_IMAGE='/test.sqsh',DATA_DIR='/test-data',INSTANCE_TYPE='g7e.12xlarge',DENSE_TFLOPS='123',FAKE_GPUS=str(count),COMMAND_LOG=str(log))
+                env = os.environ | dict(PATH=str(bin_dir)+':'+os.environ['PATH'],LAB_DIR=str(lab),RUN_ID=run,SLURM_JOB_NUM_NODES='2',SLURM_JOB_ID='123',SLURM_CPUS_ON_NODE='96',SLURM_JOB_NODELIST='node-a,node-b',NCCL_SOCKET_IFNAME='=test',LAB_IMAGE='/test.sqsh',DATA_DIR='/test-data',INSTANCE_TYPE='g7e.12xlarge',DENSE_TFLOPS='123',FAKE_GPUS=str(count),COMMAND_LOG=str(log))
                 result = subprocess.run(['bash',str(lab/'lib/job.sh'),'v0'],env=env,capture_output=True,text=True)
                 self.assertEqual(result.returncode,7,result.stderr)
                 calls = [json.loads(x) for x in log.read_text().splitlines()]
@@ -57,6 +57,8 @@ elif any('torchrun' in x for x in args):
                 launch = next(x for x in calls if x[0]=='torchrun')
                 self.assertIn('--nproc-per-node='+str(count),launch)
                 self.assertIn('--nnodes=2',launch)
+                node_launch = next(x for x in calls if any('torchrun' in arg for arg in x) and x[0] != 'torchrun')
+                self.assertIn('--cpus-per-task=96', node_launch)
                 self.assertIn('--master-addr=10.0.0.1',launch)
                 record = json.loads((lab/'results'/run/'v0-resources.json').read_text())
                 self.assertEqual(record['gpus_per_node'],count)

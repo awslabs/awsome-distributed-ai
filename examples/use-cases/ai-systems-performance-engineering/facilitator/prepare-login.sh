@@ -4,7 +4,11 @@ lab=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$lab"
 export PATH="/opt/aws/pcs/scheduler/slurm-${PCS_SLURM_VERSION:-25.05}/bin:$PATH"
 : "${AIM347_PARTITION:=gpu}" "${AIM347_STAGE_DIR:=/fsx/aim347/participant}"
-findmnt -T "$AIM347_STAGE_DIR" -n -o FSTYPE | grep -qx lustre
+if [[ ${AIM347_NODE_LOCAL:-0} == 1 ]]; then
+    [[ $AIM347_STAGE_DIR == /opt/* && -d $AIM347_STAGE_DIR ]] || exit 2
+else
+    findmnt -T "$AIM347_STAGE_DIR" -n -o FSTYPE | grep -qx lustre
+fi
 command -v docker enroot scontrol srun
 docker compose version
 if [[ ! -f .env ]]; then

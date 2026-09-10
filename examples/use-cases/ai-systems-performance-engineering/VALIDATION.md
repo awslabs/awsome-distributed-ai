@@ -1,6 +1,6 @@
 # Validation record
 
-The first sections preserve historical observations from 2026-09-06. The final sections record new Oregon checks from 2026-09-09. The historical GPU tests ran on `p6-b300.48xlarge` in Seoul using EKS. The current participant guide targets `p4d.24xlarge` or `p4de.24xlarge` with AWS PCS and Slurm; the Oregon rehearsal uses `g7e.12xlarge`. Historical sections retain their original hardware labels. A successful test below establishes only the stated scope. None establishes production performance.
+The first sections preserve historical observations from 2026-09-06. Later sections record Oregon checks from 2026-09-09 and Spain checks from 2026-09-10. The historical GPU tests ran on `p6-b300.48xlarge` in Seoul using EKS. The current participant guide targets `p4d.24xlarge` or `p4de.24xlarge` with AWS PCS and Slurm; the Oregon rehearsal uses `g7e.12xlarge`. Historical sections retain their original hardware labels. A successful test below establishes only the stated scope. None establishes production performance.
 
 ## Observed scope
 
@@ -227,6 +227,75 @@ The byte reader observed `6171877376 checkpoint weight bytes` and added `299008 
 
 All nine Prometheus targets, including both vLLM endpoints, were healthy at `17:07:16 UTC`; all four training configuration groups remained queryable. The source is `aim347-serving-targets.log` and `pcs/aim347-evidence-final/prometheus-snapshots/serving-complete.json`. `scancel 39` was issued at `17:07:32 UTC` after load and telemetry capture. The waiting batch command returned its intentional-cancellation status at `17:07:38 UTC`; it was not a startup or load failure. Both nodes subsequently had no compute processes and no queued g7e jobs. The module records include the complete argv omitted from the compact table.
 
-### Remaining AIM347 validation limits
+### Remaining AIM347 validation limits at 2026-09-09
 
 Production `p4d.24xlarge` and `p4de.24xlarge` execution, the four-EFA/NVLink topology, A100 ceilings and serving results remain UNVALIDATED because no A100 allocation was used. CPU saturation, a storage metadata bottleneck, monotonic MFU improvement, same-AZ FSx performance, a common placement-group fabric baseline, calibrated sustained serving, cold-start timing across repeats and the complete participant session budget remain UNVALIDATED. Physical DRAM-counter MBU, concurrent/batched MBU, KV-cache MBU, other models/precisions, failure/recovery goodput and Nsight timelines were not measured. A real four-GPU-per-node or eight-GPU-per-node launch remains UNVALIDATED beyond software allocation tests. Workshop Studio deployment, unpublished-commit fetching, participant-role handoff and replacement-node automation were not executed in a vended workshop account.
+
+## Spain g7.48xlarge as a g7.24xlarge resource stand-in, 2026-09-10
+
+The physical allocation was two `g7.48xlarge` nodes in `eu-south-2a`, each with eight RTX PRO 4500 Blackwell Server Edition GPUs reporting `32623 MiB/GPU`, compute capability version `12.0` (SM120), `192 vCPUs`, `768 GiB RAM` and two EFA interfaces. Every result in the constrained PCS tables used `--gres=gpu:4 --ntasks-per-node=4 --cpus-per-task=24 --mem=384G` on each node, with `FI_EFA_IFACE=rdmap83s0`. Job logs contain the requested resources, actual GPU UUIDs, `96` available logical processors, CPU affinity indices `96-191` and a cgroup memory ceiling of `412316860416 B` (`384 GiB`). The GPUs were device indices `0-3` on both nodes. The second EFA interface, `rdmap176s0`, had zero byte-counter change. This enforces the resource budget; CPU/GPU NUMA placement, cache state and NVMe bandwidth still differ from a literal `g7.24xlarge` instance.
+
+PCS cluster `pcs_lefqlz8o8e` used queue `gpu-g7`, Slurm version `25.05.9`, AMI identifier `ami-02165285ade1d0209`, Ubuntu version `24.04.4`, kernel version `6.17.0-1020-aws` and driver version `595.91.07`. The compute hosts were `gpu-g7-1` (`10.8.30.139`, instance identifier `i-0bbcee65f305fc7c6`) and `gpu-g7-2` (`10.8.17.100`, instance identifier `i-0af87d1628a5f761b`). PCS was configured with `ConstrainDevices=yes`, `ConstrainCores=yes`, `ConstrainRAMSpace=yes` and `SelectTypeParameters=CR_CPU_Memory`; GRES requests alone had not enforced memory. Existing NVMe was bind-mounted under the lab's `/opt` path and staged identically on both nodes. No FSx or EFS filesystem was created.
+
+### Preparation, images and observability
+
+The lab was staged under `/opt/aim347`, backed by existing NVMe. Compute node `gpu-g7-1` performed `1.prepare.sh` and hosted Prometheus version `3.5.0` on TCP port `9092`, Grafana version `12.1.1` on TCP port `3000`, and Pushgateway version `1.11.1` on private TCP port `9091`. The `m5.xlarge` login node did not build images or host monitoring. Preparation, pinned-image tests and upload took `957.820361 s` at the controller. Overlapping initial staging to the second node took `204.754627 s`; the final synchronization and checksum check took `35.982101 s`. Both nodes had `32768` token-record files and `16` shards. The dataset manifest SHA-256 was `9151e3e6456fe85b894fa497b82eafec55eb0b53ffc8916ac7a6f9eeab234bc4`.
+
+The Spain ECR training digest was `sha256:cc952d627df9d4a8b306117f152bd8bf04156f72b7b7dc517cd46c78ee9a2e17`, with Torch version `2.9.1+cu130`, runtime NCCL version `2.30.4+cuda13.0`, aws-ofi-nccl version `1.19.0`, EFA installer version `1.48.0` and libfabric version `2.4.0`. The vLLM version `0.20.2` platform digest was `sha256:68b773151407ca28c05479c02c0c08a573285ba197c8ff35d2103acd97aff78c`. Their imported-image SHA-256 values were `4624e0ccf1e5dec07be1eea75eefcdeafa8646035591c13165dacec06b6f07cc` and `ea16c095d375012bc608d41eb7db8f8ff5f31e685b55c8b18021017fa5070d79`, identical on both nodes. All eleven tests passed in the pinned training image; local checks passed ten tests with one dependency-related skip, resolved by the container run. The new node-local result collector was exercised by both ceiling jobs.
+
+Both compute exporter deployments succeeded. Their initial capture wrappers checked for `lustre.prom` before the first sample existed; later checks passed and the capture procedure now waits for that sample. DCGM exporter version `4.6.0-4.8.3` was configured with `DCGM_EXPORTER_DEVICES=g:0-3`, and its four UUIDs per node matched the job allocation. All seven pre-serving targets and all nine targets during serving were healthy. Grafana's provisioned dashboard and datasource were checked through its API. The Lustre collection-success metric was dimensionless value `0` throughout, with no Lustre byte or metadata series. Thus participant modules with identifiers `010` and `050` did not meet their Lustre-specific completion conditions. Healthy exporters do not supply missing filesystem measurements.
+
+### Dense ceilings and complete training ladder
+
+Job identifiers `6` and `7` ran GEMM and DRAM measurements, each with an allocated runtime of `11 s`. Their participant command wall times were `42.052893 s` and `42.068428 s`, including Slurm polling. GEMM used a square dimension of `8192 elements`, dense BF16 inputs, FP32 accumulation, ten warmup trials and thirty measured trials. Best/median rates were `171.702538 / 150.764417 TFLOP/s/GPU` on the first node and `171.923336 / 152.464990 TFLOP/s/GPU` on the second. The first best rate was used consistently as the denominator.
+
+The DRAM probe read `1 GiB/trial` against a `64 MiB` L2 cache, with ten warmup trials and thirty measured trials. Every allocated GPU passed its reduction check.
+
+| Measured GPU | Median read bandwidth | Correctness |
+|---|---|---|
+| Node index `0`, GPU index `0` | 662482967918.425 B/s | PASS |
+| Node index `0`, GPU index `1` | 662273805061.624 B/s | PASS |
+| Node index `0`, GPU index `2` | 662738097373.843 B/s | PASS |
+| Node index `0`, GPU index `3` | 663059018436.784 B/s | PASS |
+| Node index `1`, GPU index `0` | 662685827116.986 B/s | PASS |
+| Node index `1`, GPU index `1` | 662653064891.405 B/s | PASS |
+| Node index `1`, GPU index `2` | 663314591857.428 B/s | PASS |
+| Node index `1`, GPU index `3` | 662666130390.636 B/s | PASS |
+
+All configurations trained the full randomly initialized Qwen architecture with `2774773760 nonembedding parameters`, `512 tokens/sequence`, one sequence per GPU rank, `4096 tokens/step`, `100 update steps`, ten warmup steps, ninety measured steps and `2000 CPU hashing rounds/record`. Each completed `409600 useful tokens`. The common logical-data SHA-256 was `cbbf272e4c2f6ebf0a502f384425a4d5cbafcc83823ffe00dce86aa8babf4807`. Initial and reduced worker requests were `192 workers/node` and `32 workers/node`, against `96` available logical processors per node.
+
+| Configuration and allocation | Command wall time | Training throughput | Mean measured step | MFU/GEMM, dimensionless ratio | Companion-ledger goodput |
+|---|---|---|---|---|---|
+| `v0`, job identifier `8` | 330.073130 s | 1715.936407 tokens/s | 2387.034848 ms | 0.020797604554 | 603953.105337 tokens/GPU-hour |
+| `v1`, job identifier `9` | 170.063729 s | 5602.045734 tokens/s | 731.161471 ms | 0.067898280738 | 1257976.404918 tokens/GPU-hour |
+| `v2`, job identifier `10` | 138.055873 s | 5713.913125 tokens/s | 716.846741 ms | 0.069254143198 | 1447655.655079 tokens/GPU-hour |
+| `v3`, job identifier `11` | 138.051899 s | 5655.706739 tokens/s | 724.224255 ms | 0.068548666364 | 1429593.640045 tokens/GPU-hour |
+
+All four jobs completed successfully with matching hardware, model, token workload and data fingerprints. NCCL microbenchmarks passed correctness. The initial run selected Socket and changed EFA RDMA counters by `0 B`. The corrected runs selected OFI's RDMA protocol and only `rdmap83s0`; the unused EFA remained unchanged. The first-node RDMA-write increases were `1595981916800 B`, `1565767184000 B` and `1565767184000 B` in the corrected command windows. These sampled windows include startup and microbenchmarks and can omit up to `5 s` at each boundary. Ring logs reported `GDR 0`, so no-host-staging transport is not established.
+
+Throughput rose with the network and worker changes, then fell by about `1.02%` with packed shards. Metric recomputation returned `monotonic_increase_observed=false`. The mean busy logical-processor counts over the assigned CPU indices were about `12.03 / 11.98`, `7.89 / 7.87`, `5.06 / 4.92` and `5.04 / 5.03` on the two hosts across the four command windows. These host samples include startup and do not establish CPU saturation. GPU tensor, SM and DRAM profiling values were present for all eight GPUs; training framebuffer usage peaked at `14276 MiB/GPU`. With no Lustre series, there is no measured metadata-rate comparison or demonstrated storage metadata bottleneck. The ledger counts the training job body after initial allocation-evidence collection, including startup and its collective benchmark, and excludes scheduler polling, ceilings and serving.
+
+### Serving, MBU and time budget
+
+Job identifier `12` launched two vLLM replicas with tensor parallelism across four local GPUs each, BF16 weights, a context limit of `2048 tokens` and dimensionless GPU-memory fraction `0.8`. Serving used the pretrained `Qwen/Qwen2.5-3B` revision `3aab1f1954e9cc14eb9509a215f9e5ca08227a9b`, not the short training run's weights. Both endpoints became healthy `157.319 s` after submission. A shared-memory wait warning during graph profiling cleared without intervention. Each allocated GPU used `26511 MiB` at readiness; all four unused GPUs on each node used `0 MiB`.
+
+The first load pass completed sixteen requests and `2048 output tokens` at concurrency of four requests in `40.475088 s`. Its throughput was `50.599026 output tokens/s` and median TTFT was `17.138386 ms`, but the first four requests had TTFT between `37.432 s` and `38.083 s`. The warm serialized pass completed the same counts in `8.841459 s`. Each replica's server counters matched eight requests, `1024 output tokens` and `1016 decode steps`. The cold and warm passes are not a calibrated concurrency comparison.
+
+| Quantity | Spain observation |
+|---|---|
+| Checkpoint weight bytes | 6171877376 B |
+| Logical weight reads per decode step at TP across four GPUs | 6248308736 B/decode-step |
+| Total modeled weight-read numerator | 12696563351552 B |
+| Measured bandwidth × server decode-time denominator | 22980498037640.95 B |
+| Weights-only MBU | 0.552492958628 dimensionless ratio |
+| Warm serialized output throughput | 231.635971 output tokens/s |
+| Median warm serialized TTFT | 10.535029 ms |
+| Mean server ITL | 4.266153 ms |
+
+The weight model accounts for replicated normalization and KV-head parameters at this tensor-parallel size. It excludes KV-cache traffic, activations, input lookups, padding and physical cache effects. MBU is modeled weights-only traffic over measured active decode capacity, not a physical DRAM byte-counter measurement.
+
+Ceilings, training, metric calls and the model-byte calculation took `864.768077 s` at the controller. Normal load, serialized decode and MBU commands took `40.534715 s`, `8.932377 s` and `0.049278 s`. The serving allocation ran for `299 s`, then was intentionally canceled after evidence capture; its waiting command took about `330 s` and returned exit code dimensionless value `1`. The complete machine participant sequence was about `20.3 minutes`, within the `120-minute` allocation, with cold preparation taking about `20 minutes` separately. Serving's allocation interval includes load and capture, so those times must not be added twice. Human-paced instruction, discussion and recovery time were not rehearsed.
+
+The final queue was empty, both nodes had no GPU compute processes, and no named Enroot containers remained. Monitoring, dataset, weights and images remain staged. The original inactive update timers remain inactive; the native DCGM service is stopped in favor of the companion exporter. The AIM344 Prolog setting is absent and resource enforcement remains enabled. Raw per-node results, allocations, UUIDs, all module argv and exit records, server counters, monitoring histories and final state are under `/tmp/spain-rehearsal/phase2/aim347/`.
+
+Literal g7.24xlarge execution, production A100 execution, shared-filesystem metadata attribution, CPU saturation, a monotonic ladder, repeated-run uncertainty, sustained serving, participant-role access, Workshop Studio deployment and reboot/replacement-node persistence remain UNVALIDATED. Four-GPU-per-node launch, native SM120 ceilings, the complete constrained training ladder and TP across four local GPUs are now observed on this physical G7 allocation.

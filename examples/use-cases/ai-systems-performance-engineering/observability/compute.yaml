@@ -7,6 +7,7 @@ services:
     environment:
       DCGM_EXPORTER_COLLECTORS: /etc/dcgm-exporter/aim347.csv
       DCGM_EXPORTER_INTERVAL: "5000"
+      DCGM_EXPORTER_DEVICES_STR: "${DCGM_EXPORTER_DEVICES:-f}"
     volumes: ["./dcgm.csv:/etc/dcgm-exporter/aim347.csv:ro"]
     restart: unless-stopped
   node:
