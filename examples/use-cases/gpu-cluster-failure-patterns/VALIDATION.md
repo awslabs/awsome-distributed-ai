@@ -257,3 +257,69 @@ The corrected sequence's module records establish completion and exit status for
 The `/run/aim344-checkpoints` fixture is a private `32 MiB` tmpfs. Its ENOSPC/retry/collective-timeout mechanism works without a shared filesystem. FSx quota enforcement or a service outage was not exercised. Both fork and spawn completed, so the historical fork hang did not reproduce. The participant page already accepts this observed outcome.
 
 Raw commands, allocations, UUIDs, health JSON, journals, timing records and complete logs are under `/tmp/spain-rehearsal/phase2/aim344/`; compact derivations are `participant-summary-344.json`, `health-summary.json` and `aim344-efa-rounds.json`. The numbered participant scripts ran in a batch harness, not an interactive participant shell. Literal g7.24xlarge hardware, production A100 execution, optional L4/EUD, stock NCCL health-gate repair, filesystem quotas, participant-role handoff and reboot/replacement-node persistence remain UNVALIDATED.
+
+## Dual-G7 qualification, 2026-09-10
+
+The primary allocation used two exclusive g7.48xlarge nodes, eight GPUs, both EFA devices and all 192 vCPUs per node. Slurm exposed 747110 MiB of schedulable memory per node, requested with its all-memory sentinel. The secondary g7.24xlarge-stand-in repeat used four accessible GPUs, one selected EFA, at most 96 vCPUs and 384 GiB per node on the same physical hosts. Hardware model and DMI labels remain g7.48xlarge in raw stand-in files. Literal g7.24xlarge execution remains unvalidated.
+
+Both repeats unset the participant protocol variable. Every MPI and Torch launcher detected G7 through DMI and printed `OFI_NCCL_PROTOCOL=RDMA`. The full run was Slurm job identifier `16`; the stand-in repeat was job identifier `17`. The source health suite and engine libraries were not patched. The newly added allocation-environment helper read the registered full shape as eight GPUs and 24 vCPUs per rank without an instance-type input.
+
+| Measured allocation | Sweep at 2 GiB | Out-of-place bus bandwidth | In-place bus bandwidth | Correctness |
+|---|---|---|---|---|
+| g7.48xlarge | baseline-20260910T105059Z | 39.73 GB/s | 39.73 GB/s | 0 / 0 mismatches |
+| g7.48xlarge | baseline-20260910T105453Z | 39.83 GB/s | 39.77 GB/s | 0 / 0 mismatches |
+| g7.48xlarge | fallback-20260910T105139Z | 16.89 GB/s | 16.73 GB/s | 0 / 0 mismatches |
+| g7.48xlarge | recovery-20260910T105225Z | 39.80 GB/s | 39.69 GB/s | 0 / 0 mismatches |
+| g7.24xlarge-stand-in | baseline-20260910T105638Z | 20.48 GB/s | 20.57 GB/s | 0 / 0 mismatches |
+| g7.24xlarge-stand-in | baseline-20260910T110020Z | 19.97 GB/s | 19.98 GB/s | 0 / 0 mismatches |
+| g7.24xlarge-stand-in | fallback-20260910T105711Z | 11.91 GB/s | 11.99 GB/s | 0 / 0 mismatches |
+| g7.24xlarge-stand-in | recovery-20260910T105757Z | 20.91 GB/s | 20.96 GB/s | 0 / 0 mismatches |
+
+The earlier g7.24xlarge-stand-in SENDRECV attempt measured 5.20 GB/s, below its Socket control of 11.87 GB/s. Its explicit-RDMA baseline reached 20.27 GB/s. The automatic-gate repeats above preserve that expected transport direction on both allocation shapes.
+
+| Measured allocation | Module | Command wall time | Exit status, dimensionless |
+|---|---|---|---|
+| g7.24xlarge-stand-in | 020-baseline | 30.305663 s | 0 |
+| g7.24xlarge-stand-in | 030-fallback | 51.104230 s | 0 |
+| g7.24xlarge-stand-in | 030-recovery | 23.739729 s | 0 |
+| g7.24xlarge-stand-in | 040-storage-injection | 100.871467 s | 1 |
+| g7.24xlarge-stand-in | 040-storage-recovery | 18.235402 s | 0 |
+| g7.24xlarge-stand-in | 040-fabric-recheck | 24.861210 s | 0 |
+| g7.24xlarge-stand-in | 050-fork | 6.266013 s | 0 |
+| g7.24xlarge-stand-in | 050-spawn | 6.942014 s | 0 |
+| g7.24xlarge-stand-in | 050-cleanup | 2.290309 s | 0 |
+| g7.48xlarge | 020-baseline | 36.629579 s | 0 |
+| g7.48xlarge | 030-fallback | 52.865336 s | 0 |
+| g7.48xlarge | 030-recovery | 21.522610 s | 0 |
+| g7.48xlarge | 040-storage-injection | 104.124892 s | 1 |
+| g7.48xlarge | 040-storage-recovery | 22.482526 s | 0 |
+| g7.48xlarge | 040-fabric-recheck | 28.763585 s | 0 |
+| g7.48xlarge | 050-fork | 8.911737 s | 0 |
+| g7.48xlarge | 050-spawn | 13.533987 s | 0 |
+| g7.48xlarge | 050-cleanup | 2.811254 s | 0 |
+
+Full g7.48xlarge module commands totaled 291.645506 s; the g7.24xlarge-stand-in repeat totaled 264.616037 s. The checkpoint injection returned its expected nonzero status; recovery, the collective recheck, fork non-reproduction, spawn control and cleanup completed. These are machine command durations, not human-paced delivery measurements. The previously qualified Spain Prolog drain, held requeue, manual release onto the alternate and restoration procedure was retained rather than rearmed during these workload runs.
+
+| Measured allocation | Node | Health check identifier | Wall time | Exit status, dimensionless |
+|---|---|---|---|---|
+| g7.48xlarge | ip-10-8-17-100 | 0 | 1.149466 s | 0 |
+| g7.48xlarge | ip-10-8-17-100 | 1 | 305.990523 s | 0 |
+| g7.48xlarge | ip-10-8-17-100 | 2 | 1.055042 s | 0 |
+| g7.48xlarge | ip-10-8-17-100 | 3 | 0.471484 s | 0 |
+| g7.48xlarge | ip-10-8-17-100 | 6 | 12.561965 s | 0 |
+| g7.48xlarge | ip-10-8-30-139 | 0 | 1.171365 s | 0 |
+| g7.48xlarge | ip-10-8-30-139 | 1 | 304.303598 s | 0 |
+| g7.48xlarge | ip-10-8-30-139 | 2 | 1.077465 s | 0 |
+| g7.48xlarge | ip-10-8-30-139 | 3 | 0.457747 s | 0 |
+| g7.48xlarge | ip-10-8-30-139 | 6 | 12.605295 s | 0 |
+
+The first diagnostic attempt began before the retained companion exporter was actually stopped. Its evidence was retained, then the complete matrix was repeated with `aim347-compute-dcgm-1` confirmed stopped. The table reports the clean repeat. Expected-count checks remain skipped by the unmodified upstream G7 profile gap. The unapplied profile candidate remains unapplied.
+
+| Measured allocation | Baseline host | EFA device | RDMA-write received | RDMA-write sent |
+|---|---|---|---|---|
+| g7.48xlarge | ip-10-8-30-139 | rdmap83s0 | 181914273504 B | 181886889712 B |
+| g7.48xlarge | ip-10-8-30-139 | rdmap176s0 | 181904999744 B | 181913760704 B |
+| g7.48xlarge | ip-10-8-17-100 | rdmap83s0 | 181900454512 B | 363803035360 B |
+| g7.48xlarge | ip-10-8-17-100 | rdmap176s0 | 181900195904 B | 16237888 B |
+
+Both devices carried full-run traffic. Both devices’ counter deltas were zero in the Socket control. The selected stand-in EFA carried traffic while the unused EFA remained flat. NCCL reported `GDR 0`; these results do not prove the absence of host staging. Full raw command, cgroup, inventory, checkpoint, process-start and per-device counter evidence is under `/tmp/g7-dual-instance/pcs/aim344/` and the private Spain evidence prefix `g7-dual/aim344/`.

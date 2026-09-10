@@ -2,6 +2,9 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 set -euo pipefail
+# shellcheck source=instance-type.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/instance-type.sh"
+apply_g7_protocol
 # Apply the same environment to baseline, injection and recovery. Plugin
 # availability is the independent variable; do not force NCCL_NET=Socket.
 unset NCCL_NET NCCL_NET_PLUGIN NCCL_IB_DISABLE FI_EFA_IFACE FI_EFA_DEVICE_NAME

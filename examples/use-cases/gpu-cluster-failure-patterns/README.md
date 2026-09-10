@@ -2,7 +2,7 @@
 
 This is the runnable lab draft for re:Invent session AIM344, a 60-minute Builders' Session at level 300. Diagnose in this order: **storage, host, fabric, software**. Preserve evidence, isolate a suspect node, and replace it rather than attempting repairs during the session.
 
-The Workshop Studio participant guide targets **two p4d.24xlarge or p4de.24xlarge nodes per attendee on AWS PCS**. The earlier rehearsal used two g7e.12xlarge nodes with Slurm version 25.05. The Spain rehearsal used two physical g7.48xlarge nodes with a constrained four-GPU allocation per node. Historical p5.48xlarge reference measurements and Seoul p6-b300.48xlarge EKS observations retain their original scope; none supplies an A100 production baseline.
+The Workshop Studio participant guide targets **two g7.48xlarge primary or g7.24xlarge secondary nodes per attendee on AWS PCS**. The earlier rehearsal used two g7e.12xlarge nodes with Slurm version 25.05. The Spain rehearsal used two physical g7.48xlarge nodes with a constrained four-GPU allocation per node. Historical p5.48xlarge reference measurements and Seoul p6-b300.48xlarge EKS observations retain their original scope; each keeps its measured allocation label.
 
 ## Validation status
 
@@ -20,7 +20,7 @@ See [the validation record](VALIDATION.md) for exact commands, timings, image di
 
 ## Prerequisites and deployment
 
-Use the repository's [PCS reference architecture](../../../architectures/aws-pcs/README.md) to provision the production environment before the session. Match the deployed Slurm version and GPU-node configuration to the assigned instance type, use a single Availability Zone and EFA-enabled placement, and provide a shared path for this checkout and logs. The current Workshop Studio wrapper still selects upstream P-series templates that omit p4d/p4de; the facilitator runbook records that deployment gap. The participant node pair must be exclusive, powered on, and idle before the lab. Connect to the login and compute nodes through Systems Manager.
+Use the repository's [PCS reference architecture](../../../architectures/aws-pcs/README.md) to provision the production environment before the session. Match the deployed Slurm version and GPU-node configuration to the assigned instance type, use a single Availability Zone and EFA-enabled placement, and provide a shared path for this checkout and logs. The Workshop Studio wrapper routes both G7 shapes to their family-specific node template and retains the existing P4 and P5/P6 alternatives. The participant node pair must be exclusive, powered on, and idle before the lab. Connect to the login and compute nodes through Systems Manager.
 
 Provision a private attendee checkpoint path with a bounded quota. Do not exhaust a shared filesystem. The injection writes at most 64 MiB and refuses to continue if that does not exhaust the fixture. A 32 MiB private tmpfs can establish the mechanism during validation; it does not validate Lustre quotas or an FSx outage. Keep checkpoint storage separate from `/dev/shm`, which NCCL may use.
 
@@ -191,7 +191,7 @@ The operator supplies `PARTITION`, `GPUS_PER_NODE`, `CPUS_PER_RANK` and `MEMORY_
 ```bash
 sbatch --partition="$PARTITION" --nodes=1 --gres="gpu:$GPUS_PER_NODE" --ntasks-per-node="$GPUS_PER_NODE" --cpus-per-task="$CPUS_PER_RANK" --mem="$MEMORY_PER_NODE" --requeue --job-name=aim344-prejob \
   --output='prejob-%j.out' --wrap='hostname'
-salloc --partition="$PARTITION" --nodes=2 --gres="gpu:$GPUS_PER_NODE" --ntasks-per-node="$GPUS_PER_NODE" --cpus-per-task="$CPUS_PER_RANK" --mem="$MEMORY_PER_NODE" --time=00:45:00
+salloc --exclusive --partition="$PARTITION" --nodes=2 --gres="gpu:$GPUS_PER_NODE" --ntasks-per-node="$GPUS_PER_NODE" --cpus-per-task="$CPUS_PER_RANK" --mem="$MEMORY_PER_NODE" --time=00:45:00
 ```
 
 The rehearsed participant sequence ran in a batch allocation with these same resource flags. The interactive shell handoff remains untested. Node-level launch steps use the allocation's CPU count; MPI steps use one rank per allocated GPU. Inspect each step's GPU UUIDs and finite memory limit before accepting its result.
@@ -199,3 +199,30 @@ The rehearsed participant sequence ran in a batch allocation with these same res
 Without Lustre, set `AIM344_NODE_LOCAL=1` and `AIM344_STAGE_DIR=/opt/aim344` for the preparation helpers. Stage the checkout and identical image files at the same path on both nodes, backed by existing NVMe. Complete image preparation as the attendee before locking the dispatcher directory to root ownership. Run `facilitator/prepare-compute.sh` and `facilitator/prepare-prolog.sh` on each node. Pass `--dispatcher /opt/aim344/.prolog/dispatch.sh` to `facilitator/pcs-prolog.py enable`; restoration reads the path and previous cluster settings from its state file. The default helpers retain their Lustre prerequisite when node-local mode is not selected.
 
 On these G7 nodes, `AIM344_EFA_IFACE=rdmap83s0` and `FI_EFA_IFACE=rdmap83s0` selected one EFA. The first sequence with OFI's default SENDRECV protocol measured only 5.20 GB/s at 2 GiB, slower than Socket. Repeating the full sequence with `OFI_NCCL_PROTOCOL=RDMA` measured 20.27 GB/s at 2 GiB, versus 11.03 GB/s on Socket, with zero mismatches. This is a G7-specific measured setting, not a universal OFI default. The other EFA's byte counters remained flat. The private 32 MiB tmpfs reproduced checkpoint exhaustion and recovery; both DataLoader start methods completed. Full image digests, per-node counters, health-suite limitations and module times are in [VALIDATION.md](VALIDATION.md).
+
+## G7 allocation and protocol
+
+The primary allocation is two `g7.48xlarge` nodes; the secondary allocation is two `g7.24xlarge` nodes. Select the instance type in the infrastructure parameter. In the prepared submission shell, read the registered allocation before the participant baseline:
+
+```bash
+eval "$(python3 facilitator/allocation-env.py --partition "$PARTITION")"
+printf 'GPUs/node=%s; vCPUs/rank=%s; memory request=%s (Slurm all-memory sentinel)\n' "$GPUS_PER_NODE" "$CPUS_PER_RANK" "$MEMORY_PER_NODE"
+```
+
+The MPI and Torch launchers source `instance-type.sh`, which reads the DMI product name and falls back to IMDSv2. For the detected `g7.*` family it sets `OFI_NCCL_PROTOCOL=RDMA`. Participants do not set the instance type or protocol. The Spain `g7.24xlarge-stand-in` baseline at a message size of 2 GiB, with four ranks per node and one selected EFA, measured 5.2 GB/s under the default SENDRECV protocol and 20.3 GB/s under RDMA. See [VALIDATION.md](VALIDATION.md) for the observed comparison and its scope.
+
+Leave `AIM344_EFA_IFACE` unset for a whole-node allocation so the provider can use all attached EFA devices. An explicit selector is reserved for a bounded rehearsal allocation. Record each device's counters and the NCCL log; an environment setting alone is not transport evidence.
+
+## Participant host inventory commands
+
+Run these read-only inventory commands on each assigned compute host before the allocated baseline:
+
+```bash
+cat /sys/devices/virtual/dmi/id/product_name
+nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv
+nvidia-smi topo -m
+/opt/amazon/efa/bin/fi_info -p efa
+for check in 0 2 3; do
+  sudo env PATH="/opt/amazon/efa/bin:$PATH" bash /opt/aim344-healthcheck/validation/gpu-cluster-healthcheck/gpu-healthcheck.sh --check "$check"
+done
+```

@@ -2,6 +2,9 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 set -euo pipefail
+# shellcheck source=instance-type.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/instance-type.sh"
+apply_g7_protocol
 : "${MASTER_ADDR:?Set the primary address of the first node}"
 NODE_RANK=${NODE_RANK:-${SLURM_PROCID:?Set NODE_RANK outside Slurm}}
 GPUS_PER_NODE=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-$(nvidia-smi -L | awk '/^GPU [0-9]+:/ {n++} END {print n+0}')}}
