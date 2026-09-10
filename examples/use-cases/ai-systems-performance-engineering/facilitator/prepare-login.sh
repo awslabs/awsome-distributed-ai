@@ -27,10 +27,13 @@ if not nic:
     peer = fields['NodeAddr']
     discovered = subprocess.check_output(['srun', '-p', partition, '-N1', '-n1', '-w', nodes[1], '--time=00:02:00', 'ip', '-j', 'route', 'get', peer], text=True)
     nic = json.loads(discovered)[0]['dev']
+instance_types = subprocess.check_output(['srun', '-p', partition, '-N2', '-n2', '--ntasks-per-node=1', '--time=00:02:00', 'bash', '-c', 'source "$1"; detect_instance_type', 'bash', str(Path('lib/instance-type.sh').resolve())], text=True).split()
+if len(instance_types) != len(nodes) or len(set(instance_types)) != 1 or instance_types[0] == 'unknown':
+    raise SystemExit('Compute nodes must report the same detected instance type')
 stage = os.environ['AIM347_STAGE_DIR']
 values = dict(PARTITION=partition, COMPUTE_NODES=','.join(nodes), DATA_DIR=stage,
               LAB_IMAGE=f'{stage}/aim347-lab.sqsh', VLLM_IMAGE=f'{stage}/vllm-v0.20.2.sqsh',
-              RUN_ID='participant-trial-a', INSTANCE_TYPE=os.environ.get('AIM347_INSTANCE_TYPE', 'g7e.12xlarge'),
+              RUN_ID='participant-trial-a', INSTANCE_TYPE=instance_types[0],
               NCCL_SOCKET_IFNAME=f'={nic}', DENSE_TFLOPS='', STEPS='100', WARMUP='10', MICROBATCH='1', CPU_ROUNDS='2000',
               LOGIN_BIND_IP=route['prefsrc'], PUSHGATEWAY_URL=f"http://{route['prefsrc']}:9091",
               PROMETHEUS_PORT=os.environ.get('AIM347_PROMETHEUS_PORT', '9092'))

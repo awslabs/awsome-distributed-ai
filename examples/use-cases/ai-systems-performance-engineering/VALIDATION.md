@@ -299,3 +299,83 @@ Ceilings, training, metric calls and the model-byte calculation took `864.768077
 The final queue was empty, both nodes had no GPU compute processes, and no named Enroot containers remained. Monitoring, dataset, weights and images remain staged. The original inactive update timers remain inactive; the native DCGM service is stopped in favor of the companion exporter. The AIM344 Prolog setting is absent and resource enforcement remains enabled. Raw per-node results, allocations, UUIDs, all module argv and exit records, server counters, monitoring histories and final state are under `/tmp/spain-rehearsal/phase2/aim347/`.
 
 Literal g7.24xlarge execution, production A100 execution, shared-filesystem metadata attribution, CPU saturation, a monotonic ladder, repeated-run uncertainty, sustained serving, participant-role access, Workshop Studio deployment and reboot/replacement-node persistence remain UNVALIDATED. Four-GPU-per-node launch, native SM120 ceilings, the complete constrained training ladder and TP across four local GPUs are now observed on this physical G7 allocation.
+
+## Dual-G7 qualification on Lustre, 2026-09-10
+
+The full g7.48xlarge allocation used two exclusive nodes, eight GPUs, both EFAs, 192 vCPUs and all 747110 MiB of schedulable RAM per node. The g7.24xlarge-stand-in repeat constrained those same physical nodes to four GPUs, one selected EFA, 96 vCPUs and 384 GiB per node. Raw DMI labels correctly remain g7.48xlarge. Both runs detected the G7 family without a participant instance-type variable and selected the documented RDMA protocol. Literal secondary hardware remains unvalidated.
+
+Both runs read the same shared FSx for Lustre dataset at `/mnt/aim347-lustre/data`. The token-manifest file SHA-256 is `9151e3e6456fe85b894fa497b82eafec55eb0b53ffc8916ac7a6f9eeab234bc4`; the training summaries record the token-content digest `cbbf272e4c2f6ebf0a502f384425a4d5cbafcc83823ffe00dce86aa8babf4807`. The earlier NVMe-only stand-in had no Lustre evidence and failed the storage checks. These new Lustre runs close that specific gap without changing the historical record.
+
+| Measured quantity | g7.48xlarge full | g7.24xlarge-stand-in |
+|---|---|---|
+| Best dense BF16 GEMM, node indices 0 / 1 | 170.284864 TFLOP/s/GPU / 169.958041 TFLOP/s/GPU | 169.630811 TFLOP/s/GPU / 170.017754 TFLOP/s/GPU |
+| Measured DRAM range | 662.280330 to 663.662281 GB/s/GPU; 16 correctness passes | 661.783954 to 662.679245 GB/s/GPU; 8 correctness passes |
+| Configuration v0: throughput; MFU; step duration | 3663.649623 tokens/s; 0.022387043 dimensionless; 2236.021684 ms | 1674.887242 tokens/s; 0.020548006 dimensionless; 2445.537763 ms |
+| Configuration v1: throughput; MFU; step duration | 15194.399857 tokens/s; 0.092846674 dimensionless; 539.146006 ms | 5686.552654 tokens/s; 0.069764288 dimensionless; 720.295801 ms |
+| Configuration v2: throughput; MFU; step duration | 15152.385589 tokens/s; 0.092589942 dimensionless; 540.640941 ms | 5649.058068 tokens/s; 0.069304294 dimensionless; 725.076632 ms |
+| Configuration v3: throughput; MFU; step duration | 15167.977144 tokens/s; 0.092685216 dimensionless; 540.085202 ms | 5682.618397 tokens/s; 0.069716022 dimensionless; 720.794485 ms |
+| Serialized serving throughput | 232.208423 output tokens/s | 232.508270 output tokens/s |
+| Median client TTFT | 11.278417 ms | 10.560060 ms |
+| Mean server ITL | 4.249024 ms/output token | 4.248957 ms/output token |
+| Weights-only MBU | 0.284036 dimensionless | 0.555166 dimensionless |
+| Modeled weight reads | 13005965230080.000000 B | 12696563351552.000000 B |
+| Measured decode capacity | 45789788696895.617188 B | 22869834945928.429688 B |
+| Complete machine interval, GEMM submission through serving cancellation | 1130.581692 s (18.843 minutes) | 1095.147185 s (18.252 minutes) |
+
+The network change improved throughput in both allocations. Reducing workers slightly reduced throughput; packed shards recovered only a small amount. Neither sequence was monotonic. Each shape used its own measured GEMM denominator throughout. The serialized serving pass completed all 16 requests per shape and preserved the weights-only numerator and denominator. Similar serving throughput with more aggregate measured bandwidth lowers full-shape MBU; it does not establish worse physical DRAM utilization.
+
+| Allocation | Module | Command wall time | Exit status, dimensionless |
+|---|---|---|---|
+| g7.48xlarge | 020-gemm | 42.050070 s | 0 |
+| g7.48xlarge | 020-bandwidth | 42.067664 s | 0 |
+| g7.48xlarge | 020-v0 | 330.076976 s | 0 |
+| g7.48xlarge | 020-metrics | 0.071141 s | 0 |
+| g7.48xlarge | 030-v1 | 170.060434 s | 0 |
+| g7.48xlarge | 030-metrics | 0.074338 s | 0 |
+| g7.48xlarge | 040-v2 | 138.054201 s | 0 |
+| g7.48xlarge | 040-metrics | 0.072543 s | 0 |
+| g7.48xlarge | 050-v3 | 138.054450 s | 0 |
+| g7.48xlarge | 050-metrics | 0.080404 s | 0 |
+| g7.48xlarge | 060-model-bytes | 0.076094 s | 0 |
+| g7.48xlarge | 060-serving-allocation | 266.065116 s | 1 |
+| g7.48xlarge | 060-health-first | 0.006201 s | 0 |
+| g7.48xlarge | 060-health-second | 0.004844 s | 0 |
+| g7.48xlarge | 060-serving-load | 41.051278 s | 0 |
+| g7.48xlarge | 060-serving-decode | 8.909195 s | 0 |
+| g7.48xlarge | 060-serving-mbu | 0.049991 s | 0 |
+| g7.24xlarge-stand-in | 020-gemm | 42.051091 s | 0 |
+| g7.24xlarge-stand-in | 020-bandwidth | 42.067175 s | 0 |
+| g7.24xlarge-stand-in | 020-v0 | 330.073077 s | 0 |
+| g7.24xlarge-stand-in | 020-metrics | 0.070202 s | 0 |
+| g7.24xlarge-stand-in | 030-v1 | 170.062440 s | 0 |
+| g7.24xlarge-stand-in | 030-metrics | 0.073341 s | 0 |
+| g7.24xlarge-stand-in | 040-v2 | 138.055173 s | 0 |
+| g7.24xlarge-stand-in | 040-metrics | 0.074592 s | 0 |
+| g7.24xlarge-stand-in | 050-v3 | 138.054164 s | 0 |
+| g7.24xlarge-stand-in | 050-metrics | 0.075806 s | 0 |
+| g7.24xlarge-stand-in | 060-model-bytes | 0.076819 s | 0 |
+| g7.24xlarge-stand-in | 060-serving-allocation | 234.068775 s | 1 |
+| g7.24xlarge-stand-in | 060-health-first | 0.006440 s | 0 |
+| g7.24xlarge-stand-in | 060-health-second | 0.005049 s | 0 |
+| g7.24xlarge-stand-in | 060-serving-load | 40.551945 s | 0 |
+| g7.24xlarge-stand-in | 060-serving-decode | 8.901738 s | 0 |
+| g7.24xlarge-stand-in | 060-serving-mbu | 0.048718 s | 0 |
+
+The serving-allocation command overlaps its health/load/MBU commands, so those durations must not be added twice. Its nonzero exit is the deliberate cancellation after capture. Startup to both healthy replicas was g7.48xlarge: 190.245355 s; g7.24xlarge-stand-in: 170.188239 s. Both complete machine intervals fit the 120-minute budget. Cold preparation and human-paced instruction are outside these intervals.
+
+| Allocation | Configuration | Node | Mean open rate | Mean getattr rate | Mean read rate |
+|---|---|---|---|---|---|
+| g7.48xlarge | 040-v2 | gpu-g7-1 | 6.171429 operations/s | 42.928571 operations/s | 12560.971429 B/s |
+| g7.48xlarge | 040-v2 | gpu-g7-2 | 6.411429 operations/s | 44.608571 operations/s | 13053.451429 B/s |
+| g7.48xlarge | 050-v3 | gpu-g7-1 | 1.028571 operations/s | 6.928571 operations/s | 1069.771429 B/s |
+| g7.48xlarge | 050-v3 | gpu-g7-2 | 1.085714 operations/s | 7.328571 operations/s | 1187.028571 B/s |
+| g7.24xlarge-stand-in | 040-v2 | gpu-g7-1 | 3.177143 operations/s | 22.111429 operations/s | 6462.234286 B/s |
+| g7.24xlarge-stand-in | 040-v2 | gpu-g7-2 | 3.028571 operations/s | 21.071429 operations/s | 6163.228571 B/s |
+| g7.24xlarge-stand-in | 050-v3 | gpu-g7-1 | 0.554286 operations/s | 3.751429 operations/s | 622.828571 B/s |
+| g7.24xlarge-stand-in | 050-v3 | gpu-g7-2 | 0.600000 operations/s | 4.071429 operations/s | 710.771429 B/s |
+
+Both collector-success flags stayed at dimensionless value 1 through the storage windows. These are means of 30-second rates sampled every 5 seconds over complete command intervals, including startup. Metadata operations fell with packed shards, but the small throughput difference and low observed host activity do not establish a saturated metadata or CPU bottleneck. Raw ranges retain GPU tensor/SM/DRAM activity, CPU activity, EFA per-device traffic and retransmission fields for each module.
+
+The full health matrix was performed before this ladder using the unmodified AIM344 health image. The retained upstream profile skips expected-count checks on G7; the candidate patch remains unapplied. Full and stand-in logs select Socket for v0 and AWS Libfabric for v1 through v3. The correctness-enabled microbenchmarks run with v0 and v1 and report zero out-of-bounds values. DRAM correctness records and endpoint/GPU mappings cover every allocated GPU. All executable module completion checks passed on the new Lustre runs; participant discussion and interpretation were reviewed against the evidence rather than measured with attendees.
+
+Raw results, module commands, exit codes, allocations and Prometheus ranges are retained under `/tmp/g7-dual-instance/pcs/aim347/` and the private Spain evidence prefix `g7-dual/aim347/`.

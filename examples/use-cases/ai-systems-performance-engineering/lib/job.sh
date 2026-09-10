@@ -5,6 +5,10 @@ set -euo pipefail
 # shellcheck disable=SC2016
 source "${LAB_DIR:?}/lib/common.sh"
 action=${1:?}
+# shellcheck source=instance-type.sh
+source "$LAB_DIR/lib/instance-type.sh"
+export INSTANCE_TYPE=$(detect_instance_type)
+apply_g7_protocol
 GPU_COUNT=unknown
 # One launcher per node receives the whole CPU allocation. MPI GPU ranks retain
 # the batch allocation's CPUs per task.
@@ -38,7 +42,7 @@ export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 # Keep PyTorch's NCCL aligned with the pinned nccl-tests and OFI plugin stack.
 mounts="$LAB_DIR:/opt/aim347,$DATA_DIR:/data"
 args=(--container-image="$LAB_IMAGE" --container-mounts="$mounts" --container-workdir=/opt/aim347
-    --container-env=NCCL_SOCKET_IFNAME,FI_EFA_IFACE --no-container-remap-root --cpu-bind=none)
+    --container-env=NCCL_SOCKET_IFNAME,FI_EFA_IFACE,OFI_NCCL_PROTOCOL --no-container-remap-root --cpu-bind=none)
 if [[ "$action" == gemm ]]; then
     srun --ntasks="$NNODES" --ntasks-per-node=1 --cpus-per-task="$NODE_CPUS" "${args[@]}" bash -c 'nvidia-smi -q > /opt/aim347/results/"$RUN_ID"/gpu-"$SLURM_PROCID".txt; /usr/local/bin/aim347-gemm > /opt/aim347/results/"$RUN_ID"/gemm-node-"$SLURM_PROCID".json'
     if [[ ${LAB_NODE_LOCAL:-0} == 1 ]]; then python3 "$LAB_DIR/lib/gather-node-results.py" "$LAB_DIR/results/$RUN_ID"; fi
@@ -55,7 +59,7 @@ fi
 if [[ "$action" == serving ]]; then
     # Independent tensor-parallel replicas, one per node, using the same allocation.
     srun --ntasks="$NNODES" --ntasks-per-node=1 --cpus-per-task="$NODE_CPUS" --container-image="$VLLM_IMAGE" --container-mounts="$DATA_DIR:/data" \
-      --container-env=NCCL_SOCKET_IFNAME,FI_EFA_IFACE --cpu-bind=none \
+      --container-env=NCCL_SOCKET_IFNAME,FI_EFA_IFACE,OFI_NCCL_PROTOCOL --cpu-bind=none \
       vllm serve /data/serving-model --served-model-name aim347 --tensor-parallel-size "$GPUS_PER_NODE" \
       --dtype bfloat16 --max-model-len 2048 --gpu-memory-utilization 0.8 --host 0.0.0.0 --port 8000
     exit

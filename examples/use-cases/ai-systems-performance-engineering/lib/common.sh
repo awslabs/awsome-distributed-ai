@@ -6,7 +6,7 @@ export LAB_DIR
 # shellcheck disable=SC1091
 if [[ -f "$LAB_DIR/.env" ]]; then set -a; source "$LAB_DIR/.env"; set +a; fi
 : "${RUN_ID:=aim347-$(date -u +%Y%m%dT%H%M%SZ)}"
-: "${INSTANCE_TYPE:=g7e.12xlarge}"
+: "${INSTANCE_TYPE:=unknown}"
 : "${STEPS:=100}" "${WARMUP:=10}" "${MICROBATCH:=1}" "${CPU_ROUNDS:=2000}"
 : "${PUSHGATEWAY_URL:=}"
 [[ "$RUN_ID" =~ ^[A-Za-z0-9_-]+$ ]] || { echo 'Use an alphanumeric RUN_ID with hyphens or underscores' >&2; exit 2; }
@@ -21,12 +21,13 @@ submit() {
     mkdir -p "$LAB_DIR/results/$RUN_ID"
     local budget=(--ntasks-per-node=1 --exclusive)
     if [[ -n ${LAB_GPUS_PER_NODE:-} ]]; then
-        [[ $LAB_GPUS_PER_NODE =~ ^[1-9][0-9]*$ && ${LAB_CPUS_PER_TASK:-} =~ ^[1-9][0-9]*$ && ${LAB_MEMORY_PER_NODE:-} =~ ^[1-9][0-9]*[GM]$ ]] || {
-            echo 'Set positive LAB_GPUS_PER_NODE, LAB_CPUS_PER_TASK and LAB_MEMORY_PER_NODE (G or M)' >&2; exit 2;
+        [[ $LAB_GPUS_PER_NODE =~ ^[1-9][0-9]*$ && ${LAB_CPUS_PER_TASK:-} =~ ^[1-9][0-9]*$ && ${LAB_MEMORY_PER_NODE:-} =~ ^(0|[1-9][0-9]*[GM])$ ]] || {
+            echo 'Set positive LAB_GPUS_PER_NODE, LAB_CPUS_PER_TASK and LAB_MEMORY_PER_NODE (G or M; 0 selects all schedulable memory)' >&2; exit 2;
         }
         budget=(--gres="gpu:$LAB_GPUS_PER_NODE" --ntasks-per-node="$LAB_GPUS_PER_NODE"
                 --cpus-per-task="$LAB_CPUS_PER_TASK" --mem="$LAB_MEMORY_PER_NODE")
     fi
+    if [[ ${LAB_EXCLUSIVE:-0} == 1 ]]; then budget+=(--exclusive); fi
     sbatch --wait --parsable --partition="$PARTITION" --job-name="aim347-$action" \
       --nodelist="$COMPUTE_NODES" --nodes=2 "${budget[@]}" --time=00:20:00 \
       --output="$LAB_DIR/results/$RUN_ID/$action-%j.log" --export=ALL \

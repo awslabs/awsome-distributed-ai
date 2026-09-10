@@ -2,24 +2,24 @@
 
 AIM347 is a workshop of 120 minutes at level 300 for Keita Watanabe and Aravind Neelakantan. This example implements one FSDP training job with cumulative network, host and storage configuration changes. AWS PCS with Slurm allocates two assigned nodes exclusively and uses their full GPU count. The dashboard exposes training throughput, MFU against both dense denominators, and useful tokens per allocated GPU-hour. The serving exercise adds weights-only MBU against a measured DRAM read-bandwidth ceiling.
 
-**This is runnable draft content, not a calibrated workshop.** The participant guide targets `p4d.24xlarge` or `p4de.24xlarge`; its training ladder and session timing remain uncalibrated on those instances. The current rehearsal uses `g7e.12xlarge`. The [validation record](VALIDATION.md) distinguishes the historical Seoul checks and the Oregon EKS checks and completed g7e PCS rehearsal from the remaining production A100 validation. Historical hardware facts below are attributed to the PI's Oregon measurements; they are not new results from this implementation. Seoul uses `p6-b300.48xlarge` on EKS. That platform can validate code execution and transport selection, but cannot validate PCS core availability, absence of NVLink, the production dense denominator or production performance.
+The primary allocation is `g7.48xlarge`; the secondary allocation is `g7.24xlarge`. Each uses the same companion code and records its actual GPU, EFA and processor counts. The [validation record](VALIDATION.md) labels the full G7 run, the g7.24xlarge stand-in and historical g7e/Seoul observations separately. Throughput and utilization conclusions are limited to those measured allocations.
 
 ## Hardware and evidence boundaries
 
 | Status and provenance | Observation or limitation |
 |---|---|
 | VALIDATED, PI's Oregon `g7e.12xlarge` run, 2026-08-15 | Two nodes joined Slurm and completed a job with two GPUs and one EFA interface per node. |
-| VALIDATED, PI's Oregon `g7e.12xlarge` run | Inside an exclusive PCS job, `nproc` and `SLURM_CPUS_ON_NODE` both reported 24 usable cores. `lscpu` still displayed 48 logical CPUs. PCS disables SMT at bootstrap; this is not configurable. |
+| VALIDATED, PI's Oregon `g7e.12xlarge` run | Inside an exclusive PCS job, `nproc` and `SLURM_CPUS_ON_NODE` both reported 24 usable cores. `lscpu` still displayed 48 logical CPUs. This is the observed scheduler-visible shape for that historical allocation; the Spain G7 full allocation exposes all 192 logical processors per node. |
 | VALIDATED, PI's Oregon `g7e.12xlarge` run | `nvidia-smi nvlink --status` reported `Device does not have or support Nvlink`; the GPU pair's topology was `PIX`. NVLink counter panels read zero rather than erroring. Use PCIe fields for this instance. |
 | VALIDATED, PI's Oregon `g7e.12xlarge` run | Dense BF16 cuBLAS GEMM reached 429.1 TFLOPS per GPU with FP32 accumulation, a square matrix dimension of 8192 elements, and the best of 30 measured trials. |
 | VALIDATED, PI's Oregon `g7e.12xlarge` run | DCGM returned graphics-engine activity, SM activity, SM occupancy, tensor activity, DRAM activity, PCIe transmit and PCIe receive fields. Lustre client `open`, `getattr`, `read_bytes` and `write_bytes` counters were present and changed with work. |
-| UNVALIDATED, production `p4d.24xlarge` / `p4de.24xlarge` | The container stack as a whole, Slurm/Pyxis launch of this implementation, NCCL TCP versus EFA bandwidth, production model and data sizing, each MFU increase, and serving latency. Historical device visibility is not evidence of collective performance. |
+| UNVALIDATED, tertiary `p4d.24xlarge` / `p4de.24xlarge` | The container stack as a whole, Slurm/Pyxis launch of this implementation, NCCL TCP versus EFA bandwidth, production model and data sizing, each MFU increase, and serving latency. Historical device visibility is not evidence of collective performance. |
 
-The historical g7e rehearsal launch template differed from a p5en template in these ways: configure one EFA interface, use `ONDEMAND` with a standard ODCR target, and omit the placement group. The PI verified those g7e-specific changes in Oregon. They are not a p4d/p4de launch configuration. The current Workshop Studio wrapper still selects upstream P-series templates that omit p4d/p4de; the facilitator runbook records that deployment gap. Place FSx for Lustre in the same Availability Zone as the compute reservation. The historical FSx mount crossed Availability Zones and does not establish production storage bandwidth. Do not substitute `g6e.12xlarge`: the PI deliberately excluded it because GPUDirect RDMA was not documented on its product or accelerated-computing specification pages, and its L40S GPUs with 48 GB per GPU did not fit the PI's measured configuration. Those are the hardware-selection findings from the supplied spec, not a new memory-capacity test of this draft.
+The historical g7e rehearsal launch template differed from a p5en template in these ways: configure one EFA interface, use `ONDEMAND` with a standard ODCR target, and omit the placement group. The PI verified those g7e-specific changes in Oregon. They are not a p4d/p4de launch configuration. The current Workshop Studio wrapper selects the G7-specific node template and retains the existing P4 and P5/P6 alternatives. Place FSx for Lustre in the same Availability Zone as the compute reservation. The historical FSx mount crossed Availability Zones and does not establish production storage bandwidth. Do not substitute `g6e.12xlarge`: the PI deliberately excluded it because GPUDirect RDMA was not documented on its product or accelerated-computing specification pages, and its L40S GPUs with 48 GB per GPU did not fit the PI's measured configuration. Those are the hardware-selection findings from the supplied spec, not a new memory-capacity test of this draft.
 
 ## Prerequisites and preparation
 
-Use a pre-provisioned PCS cluster. The repository's [PCS architecture](../../../architectures/aws-pcs/README.md) provides the infrastructure starting point; this example deploys the lab onto assigned nodes, rather than creating participant accounts or procuring capacity. Confirm the launch-template changes above with the facilitator before provisioning. A provisioned cluster needs:
+Use a pre-provisioned PCS cluster. The repository's [PCS architecture](../../../architectures/aws-pcs/README.md) provides the infrastructure starting point; this example deploys the lab onto assigned nodes, rather than creating participant accounts or procuring capacity. Select the G7 shape in the wrapper and verify the interface list read back from EC2. A provisioned cluster needs:
 
 - An assigned Slurm partition and two exclusive homogeneous GPU nodes, the EFA driver, NVIDIA driver compatible with CUDA version 13.0.2, and a same-AZ FSx mount shared with the login node.
 - Pyxis and Enroot installed on compute nodes, Slurm PMIx support for the container's MPI, and Docker with the Compose plugin on the preparation/login host. The compute observability containers require Docker, NVIDIA Container Toolkit and access to the GPU devices. These host packages belong in the validated PCS AMI; this draft does not provision or pin a replacement AMI.
@@ -58,7 +58,7 @@ curl -s localhost:9400/metrics | grep PIPE_TENSOR_ACTIVE
 curl -s localhost:9109/metrics | grep -E 'retrans|rx_drops'
 ```
 
-**UNVALIDATED on production `p4d.24xlarge` / `p4de.24xlarge`:** each compute exporter's target should be healthy after deployment, and the vLLM targets should become healthy when serving starts. A healthy scrape does not prove that every optional profiling field is available. Inspect the actual `/metrics` payload and the Lustre collection-success panel. The serving targets being down before the pivot is normal.
+**Hardware-dependent expectation:** each compute exporter's target should be healthy after deployment, and the vLLM targets should become healthy when serving starts. A healthy scrape does not prove that every optional profiling field is available. Inspect the actual `/metrics` payload and the Lustre collection-success panel. The serving targets being down before the pivot is normal.
 
 ### Software pins
 
@@ -117,7 +117,7 @@ Load the prepared `.env` in each shell. Inspect both node GEMM measurements befo
 
 Both network configurations run `nccl-tests` with correctness checking before training. Keep their `algbw` and `busbw` values with the instance type and GPU count printed in the job record. Require the NCCL logs to identify `Socket` for `v0` and the OFI/libfabric plugin using EFA for the fixed configurations. [NCCL's network selection settings](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-net) distinguish the network name from the libfabric provider: `NCCL_NET=efa` is not the network name used here. Merely unsetting environment variables does not reliably cause TCP fallback because plugin discovery can succeed automatically.
 
-**UNVALIDATED on production `p4d.24xlarge` / `p4de.24xlarge`:** the intended sequence is network limitation, then CPU contention, then storage metadata limitation. EFA counter silence alone does not prove TCP fallback: an absent metric, idle job or other workload can produce misleading observations. Pair counter deltas with NCCL logs and a controlled collective benchmark. An increase in every MFU step is an untested hypothesis. If a step does not improve, retain the measurement and identify the current limiting resource. Do not replace it with an expected value.
+**Hardware-dependent expectation:** the intended sequence is network limitation, then CPU contention, then storage metadata limitation. EFA counter silence alone does not prove TCP fallback: an absent metric, idle job or other workload can produce misleading observations. Pair counter deltas with NCCL logs and a controlled collective benchmark. An increase in every MFU step is an untested hypothesis. If a step does not improve, retain the measurement and identify the current limiting resource. Do not replace it with an expected value.
 
 ## Dense GEMM ceiling and MFU arithmetic
 
@@ -147,7 +147,7 @@ The `6N` numerator is a short-sequence approximation. It omits attention's seque
 |---|---|
 | GPU compute | `DCGM_FI_PROF_PIPE_TENSOR_ACTIVE`, `DCGM_FI_PROF_GR_ENGINE_ACTIVE`, `DCGM_FI_PROF_SM_ACTIVE`, `DCGM_FI_PROF_SM_OCCUPANCY`: dimensionless activity ratios. The supplied CSV explicitly requests the profiling fields. |
 | GPU memory | `DCGM_FI_PROF_DRAM_ACTIVE`: dimensionless activity ratio; `DCGM_FI_DEV_FB_USED`: MiB of framebuffer memory. |
-| GPU interconnect | `DCGM_FI_PROF_PCIE_TX_BYTES` and `DCGM_FI_PROF_PCIE_RX_BYTES`: bytes per second, already rates. They include GPU P2P and host transfers, so they cannot uniquely attribute communication to either. The rehearsal `g7e.12xlarge` pair has no NVLink. Its PCIe observations do not establish the A100 target's NVLink behavior. |
+| GPU interconnect | `DCGM_FI_PROF_PCIE_TX_BYTES` and `DCGM_FI_PROF_PCIE_RX_BYTES`: bytes per second, already rates. They include GPU P2P and host transfers, so they cannot uniquely attribute communication to either. The rehearsal `g7e.12xlarge` pair has no NVLink. The current G7 allocation also has no NVLink; record the actual topology. |
 | EFA | `node_amazonefa_tx_bytes`, `node_amazonefa_rx_bytes`, `node_amazonefa_rdma_write_bytes`, `node_amazonefa_retrans_bytes`: cumulative bytes. `node_amazonefa_rx_drops`, `node_amazonefa_retrans_timeout_events`, `node_amazonefa_unresponsive_remote_events`: cumulative event counts. Apply `rate()` to these counters. |
 | Lustre | `lustre_read_bytes_total`, `lustre_write_bytes_total`: byte sums from `llite` histograms. `lustre_open_operations_total`, `lustre_getattr_operations_total`: operation counts. Compare their rates; high metadata operations with low byte throughput can suggest metadata limitation. |
 | Host | `node_cpu_seconds_total`, `node_pressure_io_waiting_seconds_total`, `node_memory_*`. Interpret CPU utilization against the available processors recorded for each allocated node. |
@@ -213,7 +213,7 @@ The serving job has a time limit of 20 minutes. Cancel its specific Slurm job wh
 
 ## Rehearsal and cleanup
 
-The proposed module budget is framing for ten minutes, observability for 25 minutes, baseline plus GEMM for 20 minutes, network for 15 minutes, data/host for 15 minutes, storage for 15 minutes, ceiling comparison plus serving for ten minutes, and a buffer of ten minutes. **UNVALIDATED on production `p4d.24xlarge` / `p4de.24xlarge`:** all timing, including the target training duration of at most three minutes per configuration. Model initialization, worker startup and container import can dominate a short run. Pre-staging reduces preparation work but does not establish the timing target.
+The proposed module budget is framing for ten minutes, observability for 25 minutes, baseline plus GEMM for 20 minutes, network for 15 minutes, data/host for 15 minutes, storage for 15 minutes, ceiling comparison plus serving for ten minutes, and a buffer of ten minutes. **Hardware-dependent expectation:** all timing, including the target training duration of at most three minutes per configuration. Model initialization, worker startup and container import can dominate a short run. Pre-staging reduces preparation work but does not establish the timing target.
 
 Retain `results/` locally. It contains logs, raw GEMM timings, training summaries and failed-attempt accounting. The [dashboard JSON](observability/dashboard.json) is the takeaway artifact. Do not add datasets, model weights, container images or result binaries to Git.
 
@@ -230,7 +230,7 @@ Local checks in the pinned training container use `python3 -m unittest discover 
 
 ## Facilitator preparation helper
 
-`facilitator/prepare-login.sh` stages the login prerequisites and is also the entry point for the Workshop Studio SSM preparation document. Set `AIM347_PARTITION`, `AIM347_INSTANCE_TYPE` and, after checking the peer route, `AIM347_SOCKET_INTERFACE`. The helper writes a new `.env` only when one is absent, uses Slurm's `NodeAddr` for the private login route, runs `1.prepare.sh`, starts login monitoring and checks its ready endpoints. A new environment leaves `DENSE_TFLOPS` empty until the GEMM measurement. Existing `.env` files are preserved.
+`facilitator/prepare-login.sh` stages the login prerequisites and is also the entry point for the Workshop Studio SSM preparation document. Set `AIM347_PARTITION` and, after checking the peer route, `AIM347_SOCKET_INTERFACE`. The helper reads the instance type from the assigned compute hosts. The helper writes a new `.env` only when one is absent, uses Slurm's `NodeAddr` for the private login route, runs `1.prepare.sh`, starts login monitoring and checks its ready endpoints. A new environment leaves `DENSE_TFLOPS` empty until the GEMM measurement. Existing `.env` files are preserved.
 
 ```bash
 ./facilitator/prepare-login.sh
@@ -264,3 +264,22 @@ Select the EFA and exporter GPU indices from the actual assignment. The G7-speci
 Set `AIM347_NODE_LOCAL=1` for `facilitator/prepare-login.sh` when using an existing `/opt/aim347` NVMe stage instead of Lustre. Prepare on a compute node, then copy the checkout, `.env`, images, data and pretrained model to the identical path on its peer. `LAB_NODE_LOCAL=1` gathers per-node ceiling results through Slurm steps because those files are not shared. Verify image checksums and dataset fingerprints on both hosts before starting. The default preparation path still requires Lustre. In Spain, Prometheus, Grafana and Pushgateway ran on the first compute node; their private address and ports were written into the prepared environment and dashboard configuration.
 
 Without a Lustre mount, `aim347_lustre_collection_success` remains a dimensionless value of zero. The collector publishes no substitute filesystem counters, and the participant Lustre completion conditions remain unmet. This rehearsal measured the local-NVMe workload and preserved that limitation. Best dense GEMM was 171.702538 TFLOP/s/GPU. Training throughput progressed through 1715.936407, 5602.045734, 5713.913125 and 5655.706739 tokens/s, so the packed-shard change was slower. Serialized weights-only MBU was a dimensionless ratio of 0.552492958628. See [VALIDATION.md](VALIDATION.md) for allocations, full metrics, cold serving latency, per-module times and remaining boundaries.
+
+## G7 allocation and automatic protocol selection
+
+Use two `g7.48xlarge` nodes as the primary allocation or two `g7.24xlarge` nodes as the secondary allocation. The infrastructure parameter selects the shape. Preparation discovers the compute instance type; each job reads it again from DMI, falling back to IMDSv2, and detects its allocated GPU count and available processors. Record the host inventory during the environment check:
+
+```bash
+bash lib/resources.sh
+```
+
+`lib/job.sh` applies `OFI_NCCL_PROTOCOL=RDMA` only when `lib/instance-type.sh` detects `g7.*`, and preserves it through Pyxis. No participant-set instance variable controls the gate. The Spain `g7.24xlarge-stand-in` collective measured 5.2 GB/s with SENDRECV and 20.3 GB/s with RDMA at 2 GiB, four ranks per node and one EFA; [VALIDATION.md](VALIDATION.md) preserves that evidence. Leave `FI_EFA_IFACE` unset to expose all EFA devices in a whole-node run.
+
+The default exclusive submission derives ranks from the allocation. Explicit budgets can additionally set `LAB_EXCLUSIVE=1`; `LAB_MEMORY_PER_NODE=0` selects all scheduler-visible memory. A stand-in rehearsal sets an explicit device, CPU and memory budget without exclusivity. The hardware inventory records physical EFA devices, while `FI_EFA_IFACE` records any deliberately restricted provider selection.
+
+| Allocation | Initial worker request | Reduced worker request | CPU budget per node |
+|---|---|---|---|
+| g7.48xlarge | 48 workers/rank × 8 ranks/node = 384 workers/node | 8 workers/rank × 8 ranks/node = 64 workers/node | 192 vCPUs |
+| g7.24xlarge-stand-in | 48 workers/rank × 4 ranks/node = 192 workers/node | 8 workers/rank × 4 ranks/node = 32 workers/node | 96 vCPUs |
+
+These are configured worker requests, not a claim of saturation or an optimal worker count. Use the recorded job inventory and measured result for each comparison. G7 has no NVLink; inspect PCIe and EFA fields.
