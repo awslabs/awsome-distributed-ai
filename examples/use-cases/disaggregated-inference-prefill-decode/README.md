@@ -367,6 +367,7 @@ python3 deployment.py disaggregated --config config.v4.json
 Wait for prefill, decode and router readiness using the rendered deployment names. The package verifier accepts only the two explicitly qualified version tuples and reports `mainline` or `v4-optional`; the transport verifier also checks that the observed profile matches the configuration. The optional participant commands are:
 
 ```bash
+kubectl --context "$(python3 -c 'import json; print(json.load(open("config.v4.json"))["context"])')" get nodes $(python3 -c 'import json; print(" ".join(json.load(open("config.v4.json"))["nodes"]))') -o 'custom-columns=NODE:.metadata.name,TYPE:.metadata.labels.node\.kubernetes\.io/instance-type,GPUS:.status.allocatable.nvidia\.com/gpu,EFAS:.status.allocatable.vpc\.amazonaws\.com/efa'
 python3 deployment.py disaggregated --config config.v4.json --render > results/v4-rendered.json
 ```
 
