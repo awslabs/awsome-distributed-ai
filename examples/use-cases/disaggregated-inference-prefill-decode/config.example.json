@@ -11,7 +11,7 @@
   "efa_per_worker": "REPLACE_WITH_ALLOCATED_EFA_PER_WORKER",
   "model_id": "deepseek-ai/DeepSeek-V2-Lite-Chat",
   "model_revision": "85864749cd611b4353ce1decdb286193298f64c7",
-  "model_cache_host_path": "/mnt/aim345-models",
+  "model_cache_host_path": "/mnt/k8s-disks/0/aim345-models",
   "context_length_tokens": 32768,
   "chunked_prefill_size_tokens": 8192,
   "disable_prefix_cache": false,

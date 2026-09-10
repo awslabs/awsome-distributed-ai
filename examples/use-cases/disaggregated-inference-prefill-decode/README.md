@@ -28,11 +28,11 @@ Prepared for re:Invent 2026 session AIM345, led by Keita Watanabe with Mijanur P
 | Round 2: adding prefill capacity alone restores the objective | UNVALIDATED | Requires an additional allocated worker and a prefill-bound operating point |
 | Round 3: prompt length, offered rate, and measured cache hits identify a crossover | UNVALIDATED | Requires repeated paired measurements |
 
-The production instance type is unresolved: demand intake names `g7e.24xlarge`, while project guidance names `p5en.48xlarge` or `p6-b200.48xlarge` for GPUDirect RDMA. Set `instance_type` explicitly after that decision. Seoul's `p6-b300.48xlarge` is a mechanism-validation platform, not the session's production calibration platform. This lab makes no production performance claim from Seoul results.
+The production allocation is `g7.48xlarge` primary or `g7.24xlarge` secondary. DeepSeek-V2-Lite-Chat is the common model on both, with the original main-line engine pin. The separate optional V4 profile is restricted to the full primary allocation. Historical Seoul and Oregon rows retain their measured hardware labels.
 
 ## Prerequisites and pins
 
-Use an existing EKS cluster with separately allocated, same-AZ GPU nodes, EFA interfaces attached at launch, compatible NVIDIA drivers, and working GPU and EFA device plugins. The nodes must support GPUDirect RDMA. Security groups must allow the EFA self-traffic required by the cluster architecture and TCP communication among the lab nodes for serving and bootstrap. The scripts create serving resources, a dedicated namespace, and its nonpreempting PriorityClass; they do not provision nodes or change cluster networking. Cluster administrators can use the repository's [EKS architecture](../../../architectures/sagemaker-hyperpod-eks/) as a platform reference.
+Use an existing EKS cluster with separately allocated, same-AZ GPU nodes, EFA interfaces attached at launch, compatible NVIDIA drivers, and working GPU and EFA device plugins. Inspect the actual GPU-memory registration and transfer evidence; EFA counter movement alone does not prove a path without host staging. Security groups must allow the EFA self-traffic required by the cluster architecture and TCP communication among the lab nodes for serving and bootstrap. The scripts create serving resources, a dedicated namespace, and its nonpreempting PriorityClass; they do not provision nodes or change cluster networking. Cluster administrators can use the repository's [EKS architecture](../../../architectures/sagemaker-hyperpod-eks/) as a platform reference.
 
 The sequential path uses two nodes, with one worker per node. Configure GPU and EFA resource counts from the allocated nodes; the example requires those counts to be supplied. Packed paired mode puts both workers in one pod and requests twice `gpus_per_worker` GPUs and `efa_per_worker` EFA devices for that pod. The observed `g7e.12xlarge` allocation used one GPU per engine, two GPUs per stack and one EFA device per stack. Those counts do not describe `g7e.24xlarge`. Prefill scaling uses the separate-node path and adds an allocated worker.
 
@@ -44,7 +44,7 @@ The checked controller tool versions are Python version `3.12.3`, Docker version
 | SGLang router | Version `0.3.2` with dependencies in `router-requirements.txt`, on the pinned Python image in `Dockerfile` | Separate CPU image avoids pulling CUDA onto small system-node disks |
 | NIXL Python stub and CUDA distribution | `nixl==1.1.0`, `nixl-cu13==1.1.0` | Explicit reinstall and build/runtime assertions |
 | EFA userspace installer | Version `1.47.0` | LIBFABRIC EFA provider; kernel modules stay on the host |
-| Example MLA model | `deepseek-ai/DeepSeek-V2-Lite-Chat`, revision `85864749cd611b4353ce1decdb286193298f64c7` | A smaller mechanism-test model; production model selection remains open |
+| Example MLA model | `deepseek-ai/DeepSeek-V2-Lite-Chat`, revision `85864749cd611b4353ce1decdb286193298f64c7` | Common main-line model on both G7 shapes |
 | Traffic data | [shape-a.json](shape-a.json), [shape-b.json](shape-b.json) | Synthetic incident-analysis tasks authored with the lab; no external dataset download |
 
 NIXL version `1.1.0` is deliberate. Prior field work reported a KV-transfer slowdown with version `1.2.0` over EFA, ending in `Decode transfer failed` and `KVPoll.WaitingForInput` timeouts. The upstream root cause remains unconfirmed; this pin is a conservative deployment choice, not an upstream-documented fix. The SGLang Dockerfile installs NIXL without a version pin, so a SGLang image tag alone is insufficient evidence of its installed NIXL version. `verify_image.py` inspects installed distributions during the build and before each engine starts. Do not replace this check with an inference from the image's build date.
@@ -111,7 +111,7 @@ export LAB_UNIFIED_NAMESPACE="$(python3 -c 'import json; print(json.load(open("c
 export LAB_DISAGG_NAMESPACE="$(python3 -c 'import json; print(json.load(open("config.disaggregated.json"))["namespace"])')"
 export LAB_INSTANCE_TYPE="$(python3 -c 'import json; print(json.load(open("config.unified.json"))["instance_type"])')"
 export LAB_GPUS="$(python3 -c 'import json; print(2 * json.load(open("config.unified.json"))["gpus_per_worker"])')"
-export LAB_REGION=us-west-2
+export LAB_REGION="$(python3 -c 'import json; print(json.load(open("config.unified.json"))["context"].split(":")[3])')"
 ```
 
 For packed placement, wait for the engine pod and router in each namespace:
@@ -321,7 +321,7 @@ python3 facilitator/prepare-config.py --context "$LAB_CONTEXT" --nodes "$LAB_NOD
 python3 paired.py render
 ```
 
-For an offline configuration review, `--inventory` accepts a saved `kubectl get nodes -o json` result and `--output` selects a new output directory. That path was exercised against the saved two-node Oregon EKS inventory from Phase A. It produced two GPUs per stack and one EFA per stack, matching the earlier packed configuration. This is a configuration check, not a new deployment or serving measurement. The Workshop Studio facilitator runbook handles the released checkout, controller virtual environment, model staging, participant-role kubeconfig, endpoint verification and cache retention. Its new CloudFormation bootstrap has been template-validated but not deployed.
+For an offline configuration review, `--inventory` accepts a saved `kubectl get nodes -o json` result and `--output` selects a new output directory. That path was exercised against the saved two-node Oregon EKS inventory from Phase A. It produced two GPUs per stack and one EFA per stack, matching the earlier packed configuration. This was a configuration check, not a serving measurement. The Workshop Studio facilitator runbook handles the released checkout, controller virtual environment, model staging, participant-role kubeconfig, endpoint verification and cache retention. The current template deployment evidence is recorded in the facilitator runbook.
 
 ## Spain preparation and constrained paired result, 2026-09-10
 
@@ -331,8 +331,74 @@ For an offline configuration review, `--inventory` accepts a saved `kubectl get 
 python3 facilitator/prepare-config.py --context "$LAB_CONTEXT" --nodes "$LAB_NODES" --engine-image "$LAB_IMAGE" --router-image "$LAB_ROUTER_IMAGE" --namespace-prefix aim345-spain-paired --gpus-per-stack 4 --efas-per-stack 1 --cpu-per-stack 96 --memory-gib-per-stack 384 --model-cache-host-path /mnt/k8s-disks/0/aim345-models
 ```
 
-Each stack receives four GPUs and one EFA. Its engine pod receives 92 vCPUs and 376 GiB, reserving 4 vCPUs and 8 GiB for the local router within the combined limit. Init-container requests and limits are both 2 vCPUs and 4 GiB. The helper validates the selected GPU/EFA budgets against allocatable resources; without explicit GPU/EFA options it uses all allocatable devices. CPU and memory defaults remain 12 vCPUs and 136 GiB per stack. A `/mnt/` host path must be on the intended prepared filesystem; the helper does not mount or provision storage.
+Each stack receives four GPUs and one EFA. Its engine pod receives 92 vCPUs and 376 GiB, reserving 4 vCPUs and 8 GiB for the local router within the combined limit. Init-container requests and limits are both 2 vCPUs and 4 GiB. The helper validates the selected GPU/EFA budgets against allocatable resources; without explicit GPU/EFA options it uses all allocatable devices. The current helper derives its default combined CPU/memory budget from the smaller allocatable quantities across the pair, leaving 3 vCPUs and 4 GiB of headroom for node agents. A `/mnt/` host path must be on the intended prepared filesystem; the helper does not mount or provision storage.
 
-On two physical g7.48xlarge nodes, the complete paired DeepSeek-V2-Lite-Chat flow took 27.85 minutes with unchanged engine pod identities. The long-context sweeps plus collection took about 25 minutes, so the participant introduction now reserves 26 minutes for the load-ramp module. An offered window of 30 seconds does not include warmup or request drain. Unified serving qualified at a highest tested rate of 2 tasks/s, while disaggregation qualified at 0.25 tasks/s; no qualifying disaggregated crossover was observed.
+On the g7.24xlarge-stand-in allocation of two physical g7.48xlarge nodes, the complete paired DeepSeek-V2-Lite-Chat flow took 27.85 minutes with unchanged engine pod identities. The long-context sweeps plus collection took about 25 minutes, so the participant introduction now reserves 26 minutes for the load-ramp module. An offered window of 30 seconds does not include warmup or request drain. Unified serving qualified at a highest tested rate of 2 tasks/s, while disaggregation qualified at 0.25 tasks/s; no qualifying disaggregated crossover was observed.
 
 DeepSeek-V4-Flash weights alone exceeded the four-GPU node budget by 21.22 GiB. Stock SGLang version 0.5.19 served it with all eight GPUs on one node, and an experimental image with NIXL version 1.4.1 served disaggregation across all sixteen physical GPUs. The pinned SGLang version 0.5.12.post1 failed during scale transformation. These experiments do not change the companion's model or package pins. [VALIDATION.md](VALIDATION.md) preserves exact engine digests, errors, memory arithmetic, cold request latency and experimental transport evidence.
+
+## Record the assigned EKS inventory
+
+```bash
+export LAB_NODES="$(python3 -c 'import json; print(" ".join(json.load(open("config.unified.json"))["nodes"] + json.load(open("config.disaggregated.json"))["nodes"]))')"
+kubectl --context "$LAB_CONTEXT" get nodes $LAB_NODES -o 'custom-columns=NODE:.metadata.name,TYPE:.metadata.labels.node\.kubernetes\.io/instance-type,GPUS:.status.allocatable.nvidia\.com/gpu,EFAS:.status.allocatable.vpc\.amazonaws\.com/efa'
+```
+
+## Optional: DeepSeek-V4-Flash on g7.48xlarge
+
+DeepSeek-V2-Lite-Chat remains the common main line on both G7 shapes with SGLang version `0.5.12.post1` and NIXL version `1.1.0`. The optional V4 profile uses [Dockerfile.v4](Dockerfile.v4), SGLang version `0.5.19`, both NIXL distributions at version `1.4.1`, and EFA installer version `1.47.0`. Its amd64 engine manifest is `sha256:7da39d58804be6c781991dad9c099bf65c95c49eec42b3d5e927d89105b2e061`; its image index is `sha256:30fd3480469d257011feba3548ee30ed866ebfb1c3fee50f35252300651967b3`. The separately pinned base image and build-time package/source assertions are written in the Dockerfile. The main-line Dockerfile and pins remain unchanged.
+
+The model revision in [config.v4.example.json](config.v4.example.json) contains `159617149040 B`, or approximately `148.7 GiB`, of weight shards. Each observed GPU reports `32623 MiB`. A `g7.48xlarge` node supplies approximately `254.9 GiB` across eight GPUs; a `g7.24xlarge` node supplies approximately `127.4 GiB` across four GPUs. The weights alone exceed the secondary node’s GPU memory by approximately `21.2 GiB`. Each prefill/decode replica needs its own weights. The optional path therefore requires the full primary node pair, prefill TP size of eight ranks on one node and decode TP size of eight ranks on the other, with both EFA devices per node.
+
+Prepare the optional exercise after saving and cleaning up the resident main-line pair. Build the engine separately and preserve its immutable digest:
+
+```bash
+docker build --target engine -f Dockerfile.v4 -t "$LAB_V4_IMAGE" .
+docker run --rm --entrypoint python3 "$LAB_V4_IMAGE" /lab/verify_image.py
+cp config.v4.example.json config.v4.json
+```
+
+The facilitator fills the context, node names, router digest and image registry in `config.v4.json`, retaining its optional model and engine profile. Stage approximately 160 GB of weights plus download/compilation space on each node’s NVMe filesystem, outside the timed session. The default example requests 188 vCPUs and 672 GiB per engine, below the observed Spain Kubernetes allocatable limits. Read the live limits before deploying elsewhere. Preserve the existing pinned snapshot and compilation cache; do not replace the main-line cache. `deployment.py` rejects the secondary shape, packed placement and partial GPU/EFA requests for this profile.
+
+```bash
+python3 deployment.py disaggregated --config config.v4.json
+```
+
+Wait for prefill, decode and router readiness using the rendered deployment names. The package verifier accepts only the two explicitly qualified version tuples and reports `mainline` or `v4-optional`; the transport verifier also checks that the observed profile matches the configuration. The optional participant commands are:
+
+```bash
+python3 deployment.py disaggregated --config config.v4.json --render > results/v4-rendered.json
+```
+
+```bash
+export LAB_V4_MODEL="$(python3 -c 'import json; print(json.load(open("config.v4.json"))["model_id"])')"
+export LAB_V4_REVISION="$(python3 -c 'import json; print(json.load(open("config.v4.json"))["model_revision"])')"
+export LAB_V4_GPUS="$(python3 -c 'import json; print(2 * json.load(open("config.v4.json"))["gpus_per_worker"])')"
+export LAB_V4_CONTEXT="$(python3 -c 'import json; print(json.load(open("config.v4.json"))["context"])')"
+export LAB_V4_NAMESPACE="$(python3 -c 'import json; print(json.load(open("config.v4.json"))["namespace"])')"
+export LAB_V4_INSTANCE_TYPE="$(python3 -c 'import json; print(json.load(open("config.v4.json"))["instance_type"])')"
+export LAB_V4_REGION="$(python3 -c 'import json; print(json.load(open("config.v4.json"))["context"].split(":")[3])')"
+```
+
+```bash
+kubectl --context "$LAB_V4_CONTEXT" -n "$LAB_V4_NAMESPACE" port-forward service/router 8010:8000
+```
+
+```bash
+python3 7.verify-transport.py --config config.v4.json --url http://127.0.0.1:8010 --output results/v4-transport.json
+```
+
+```bash
+python3 2.generate-agentic.py --model "$LAB_V4_MODEL" --revision "$LAB_V4_REVISION" --output traffic/v4-a.json
+python3 3.generate-long-context.py --model "$LAB_V4_MODEL" --revision "$LAB_V4_REVISION" --output traffic/v4-b.json
+```
+
+```bash
+python3 4.ramp.py --traffic traffic/v4-a.json --url http://127.0.0.1:8010 --architecture disaggregated --instance-type "$LAB_V4_INSTANCE_TYPE" --region "$LAB_V4_REGION" --evidence-scope mechanism-validation --gpus "$LAB_V4_GPUS" --rates 0.1 --duration-s 30 --output results/v4-a
+python3 4.ramp.py --traffic traffic/v4-b.json --url http://127.0.0.1:8010 --architecture disaggregated --instance-type "$LAB_V4_INSTANCE_TYPE" --region "$LAB_V4_REGION" --evidence-scope mechanism-validation --gpus "$LAB_V4_GPUS" --rates 0.1 --duration-s 30 --output results/v4-b
+```
+
+```bash
+python3 4.ramp.py --traffic traffic/v4-b.json --url http://127.0.0.1:8010 --architecture disaggregated --instance-type "$LAB_V4_INSTANCE_TYPE" --region "$LAB_V4_REGION" --evidence-scope mechanism-validation --gpus "$LAB_V4_GPUS" --rates 0.25 0.5 1 2 --duration-s 30 --output results/v4-sweep
+python3 5.collect.py --config config.v4.json --runs results/v4-a results/v4-b results/v4-sweep --output results/v4-evidence
+```

@@ -22,6 +22,11 @@ def read_config(path):
     assert c.get("placement", "separate-nodes") in ("packed", "separate-nodes")
     assert len(c["nodes"]) == len(set(c["nodes"])) >= minimum_nodes
     assert c["model_cache_host_path"].startswith("/mnt/"), "Use a dedicated cache under /mnt"
+    if c.get('engine_profile') == 'v4-optional' or c['model_id'] == 'deepseek-ai/DeepSeek-V4-Flash':
+        assert c.get('engine_profile') == 'v4-optional', 'V4 requires the separately pinned optional engine'
+        assert c['model_id'] == 'deepseek-ai/DeepSeek-V4-Flash', 'The optional profile is qualified only for V4'
+        assert c['instance_type'] == 'g7.48xlarge' and c['gpus_per_worker'] == 8 and c['efa_per_worker'] == 2
+        assert c.get('placement', 'separate-nodes') == 'separate-nodes' and len(c['nodes']) == 2
     return c
 
 
@@ -57,13 +62,20 @@ def worker(c, name, node, role):
     labels = OWNER | {"app": name, "role": role, "component": "engine"}
     model_path = "/models/" + c["model_revision"]
     args = ["--model-path", model_path, "--served-model-name", "aim345", "--host", "0.0.0.0", "--port", "30000", "--tp-size", str(c["gpus_per_worker"]), "--dtype", "bfloat16", "--kv-cache-dtype", "bf16", "--context-length", str(c["context_length_tokens"]), "--chunked-prefill-size", str(c["chunked_prefill_size_tokens"]), "--mem-fraction-static", "0.75", "--enable-metrics", "--stream-interval", "1"]
+    if c.get('engine_profile') == 'v4-optional':
+        # Qualified V4 profile has quantized weights and needs more static memory.
+        for flag in ('--dtype', '--kv-cache-dtype'):
+            index = args.index(flag)
+            del args[index:index + 2]
+        args[args.index('--mem-fraction-static') + 1] = '0.90'
+        args += ['--max-running-requests', '4', '--cuda-graph-max-bs-decode', '4', '--disable-custom-all-reduce', '--disable-flashinfer-autotune']
     if c.get("disable_prefix_cache"):
         args.append("--disable-radix-cache")
     if role != "unified":
         args += ["--disaggregation-mode", role, "--disaggregation-transfer-backend", "nixl"]
         if role == "prefill":
             args += ["--disaggregation-bootstrap-port", "8998"]
-    resources = {"nvidia.com/gpu": c["gpus_per_worker"], "vpc.amazonaws.com/efa": c["efa_per_worker"], "cpu": "16", "memory": "128Gi", "ephemeral-storage": c["engine_ephemeral_storage"]}
+    resources = {"nvidia.com/gpu": c["gpus_per_worker"], "vpc.amazonaws.com/efa": c["efa_per_worker"], "cpu": str(c.get("engine_cpu", "16")), "memory": c.get("engine_memory", "128Gi"), "ephemeral-storage": c["engine_ephemeral_storage"]}
     env = [{"name": "SGLANG_DISAGGREGATION_NIXL_BACKEND", "value": "LIBFABRIC"}, {"name": "FI_PROVIDER", "value": "efa"}, {"name": "FI_EFA_USE_DEVICE_RDMA", "value": "1"}, {"name": "FI_LOG_LEVEL", "value": "info"}]
     mounts = [{"name": "models", "mountPath": "/models"}, {"name": "shm", "mountPath": "/dev/shm"}]
     download = "from huggingface_hub import snapshot_download; import sys; snapshot_download(repo_id=sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3])"
@@ -75,6 +87,10 @@ def worker(c, name, node, role):
         "containers": [{"name": "engine", "image": c["image"], "imagePullPolicy": "IfNotPresent", "command": ["bash", "-c", 'ulimit -l unlimited; python3 /lab/verify_image.py && exec python3 -m sglang.launch_server "$@"', "engine"], "args": args, "env": env, "resources": {"requests": resources, "limits": resources}, "securityContext": {"capabilities": {"add": ["IPC_LOCK"]}}, "volumeMounts": mounts, "startupProbe": {"httpGet": {"path": "/health", "port": 30000}, "periodSeconds": 10, "timeoutSeconds": 10, "failureThreshold": 180}, "readinessProbe": {"httpGet": {"path": "/health", "port": 30000}, "periodSeconds": 10, "timeoutSeconds": 10}}],
         "volumes": [{"name": "models", "hostPath": {"path": c["model_cache_host_path"], "type": "DirectoryOrCreate"}}, {"name": "shm", "emptyDir": {"medium": "Memory", "sizeLimit": "32Gi"}}],
     }
+    if c.get('engine_cache_host_path'):
+        assert c['engine_cache_host_path'].startswith(c['model_cache_host_path'] + '/')
+        spec['volumes'].append({'name': 'engine-cache', 'hostPath': {'path': c['engine_cache_host_path'], 'type': 'DirectoryOrCreate'}})
+        mounts.append({'name': 'engine-cache', 'mountPath': '/root/.cache'})
     return {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": metadata(c, name, labels), "spec": {"replicas": 1, "strategy": {"type": "Recreate"}, "selector": {"matchLabels": {"app": name}}, "template": {"metadata": {"labels": labels}, "spec": spec}}}
 
 

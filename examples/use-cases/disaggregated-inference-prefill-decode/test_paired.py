@@ -50,7 +50,7 @@ class PairedTests(unittest.TestCase):
             inventory = root / 'nodes.json'
             inventory.write_text(json.dumps({'items': [
                 {'metadata': {'name': name, 'labels': {'node.kubernetes.io/instance-type': 'g7.48xlarge'}},
-                 'spec': {}, 'status': {'allocatable': {'nvidia.com/gpu': '8', 'vpc.amazonaws.com/efa': '2'}}}
+                 'spec': {}, 'status': {'allocatable': {'nvidia.com/gpu': '8', 'vpc.amazonaws.com/efa': '2', 'cpu': '191450m', 'memory': '709364952Ki'}}}
                 for name in ('node-a', 'node-b')]}))
             cmd = [sys.executable, 'facilitator/prepare-config.py', '--context', 'test',
                    '--nodes', 'node-a,node-b', '--engine-image', 'engine@sha256:'+'a'*64,
@@ -66,11 +66,29 @@ class PairedTests(unittest.TestCase):
                 self.assertEqual(sum(int(c.get('vpc.amazonaws.com/efa', 0)) for c in limits), 1)
                 self.assertEqual(sum(int(c['cpu']) for c in limits), 96)
                 self.assertEqual(sum(int(c['memory'].removesuffix('Gi')) for c in limits), 384)
-            for flag, value in [('--gpus-per-stack', '10'), ('--gpus-per-stack', '3'), ('--efas-per-stack', '3'), ('--cpu-per-stack', '4'), ('--memory-gib-per-stack', '8')]:
+            for flag, value in [('--gpus-per-stack', '10'), ('--gpus-per-stack', '3'), ('--efas-per-stack', '3'), ('--cpu-per-stack', '4'), ('--memory-gib-per-stack', '8'), ('--memory-gib-per-stack', '740'), ('--cpu-per-stack', '192')]:
                 rejected = cmd.copy()
                 rejected[rejected.index(flag)+1] = value
                 result = subprocess.run(rejected + ['--output', str(root/'invalid')], capture_output=True)
                 self.assertNotEqual(result.returncode, 0)
+
+    def test_optional_profile_rejects_secondary_shape_and_mainline_model(self):
+        from deployment import read_config, render
+        c = json.loads(Path('config.v4.example.json').read_text())
+        c.update(context='test', nodes=['a','b'], image='v4@sha256:'+'a'*64,
+                 router_image='router@sha256:'+'b'*64)
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)/'config.json'
+            path.write_text(json.dumps(c))
+            qualified = read_config(path)
+            workers = [x for x in render(qualified, 'disaggregated')['items'] if x['kind']=='Deployment' and x['metadata']['labels'].get('component')=='engine']
+            self.assertEqual({x['spec']['template']['spec']['nodeSelector']['kubernetes.io/hostname'] for x in workers}, {'a','b'})
+            for update in [dict(instance_type='g7.24xlarge', gpus_per_worker=4, efa_per_worker=1),
+                           dict(placement='packed'), dict(engine_profile='mainline'),
+                           dict(model_id='deepseek-ai/DeepSeek-V2-Lite-Chat')]:
+                path.write_text(json.dumps(c | update))
+                with self.assertRaises(AssertionError):
+                    read_config(path)
 
     def test_separate_node_path_preserves_two_worker_deployments(self):
         a = dict(self.a, placement='separate-nodes', nodes=['a','b'], gpus_per_worker=2)

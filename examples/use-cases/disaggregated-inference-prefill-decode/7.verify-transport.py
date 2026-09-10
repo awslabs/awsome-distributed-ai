@@ -41,6 +41,8 @@ def main():
     p.add_argument("--bandwidth-evidence", help="Path to the matching hardware microbenchmark transcript")
     a = p.parse_args()
     c = read_config(a.config)
+    if a.bandwidth_gib_s is not None and c.get('engine_profile') == 'v4-optional':
+        p.error('The optional V4 cache layout needs separate byte accounting; the V2 MLA wire-time formula does not apply')
     owned_namespace(c)
     pods = json.loads(kubectl(c, "get", "pods", "-l", "component=engine", "-o", "json", capture_output=True).stdout)["items"]
     packed = c.get('placement') == 'packed'
@@ -63,13 +65,16 @@ def main():
             assert env["SGLANG_DISAGGREGATION_NIXL_BACKEND"] == "LIBFABRIC"
             assert env["FI_PROVIDER"] == "efa"
         launches[pod['metadata']['name']] = plans
-        versions[pod["metadata"]["name"]] = json.loads(kubectl(c, "exec", pod["metadata"]["name"], "-c", "engine", "--", "python3", "/lab/verify_image.py", capture_output=True).stdout)
+        versions[pod["metadata"]["name"]] = json.loads(kubectl(c, "exec", pod["metadata"]["name"], "-c", "engine", "--", "python3", "-c", Path(__file__).with_name("verify_image.py").read_text(), capture_output=True).stdout)
+    profiles = {v['engine_profile'] for v in versions.values()}
+    expected = c.get('engine_profile', 'mainline')
+    assert profiles == {expected}, f"Expected {expected}, observed {profiles}"
     before = snapshot(c, pods)
     response = asyncio.run(smoke(c, a.url))
     after = snapshot(c, pods)
     deltas = {pod: {key: after[pod][key] - value for key, value in values.items()} for pod, values in before.items()}
     rdma_bytes = sum(max(0, value) for values in deltas.values() for key, value in values.items() if key.endswith(("rdma_write_bytes", "rdma_read_bytes")))
-    result = {"instance_type": c["instance_type"], "evidence_scope": "mechanism-validation", "versions": versions, "pods": pods, "response": response, "before_bytes": before, "after_bytes": after, "delta_bytes": deltas,
+    result = {"instance_type": c["instance_type"], "evidence_scope": "mechanism-validation", "versions": versions, "engine_profile": expected, "pods": pods, "response": response, "before_bytes": before, "after_bytes": after, "delta_bytes": deltas,
               "status": "VALIDATED" if response["ok"] and (packed or rdma_bytes > 0) else "UNVALIDATED",
               "launches": launches, "placement": c.get('placement', 'separate-nodes'),
               "cross_node_efa_status": "UNVALIDATED: co-located prefill/decode" if packed else ("VALIDATED positive path" if response['ok'] and rdma_bytes > 0 else "UNVALIDATED"),
@@ -85,7 +90,7 @@ def main():
     out = Path(a.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2))
-    print(json.dumps({"status": result["status"], "instance_type": c["instance_type"], "placement": result['placement'], "cross_node_efa_status": result['cross_node_efa_status'], "rdma_counter_delta_bytes": rdma_bytes, "file": str(out)}))
+    print(json.dumps({"status": result["status"], "engine_profile": expected, "instance_type": c["instance_type"], "placement": result['placement'], "cross_node_efa_status": result['cross_node_efa_status'], "rdma_counter_delta_bytes": rdma_bytes, "file": str(out)}))
     if result["status"] != "VALIDATED":
         raise SystemExit(1)
 

@@ -185,3 +185,96 @@ For long-context traffic, the highest tested qualifying rate was `2 tasks/s` for
 The complete paired flow took `1670.738585 s`. Unified and disaggregated shape A commands took `61.690303 s` and `68.287915 s`; the shape B sweeps took `620.158170 s` and `841.868637 s`. The complete load-ramp module, including collection and final identity checks, took about `25 minutes`, exceeding the previous `15-minute` allocation. The revised introduction reserves `26 minutes` for it within the `60-minute` session. Human-paced facilitation and repeated boundary measurements remain UNVALIDATED.
 
 Raw manifests, package versions, per-request data, counter snapshots, paired identities and CSV are under `/tmp/spain-rehearsal/phase1/`. All rehearsal namespaces and PriorityClasses were removed. Device plugins, the open driver and NVMe caches remain. Driver reboot persistence, literal g7.24xlarge execution, cross-node unified V4 on the stand-in, sustained V4 capacity, no-host-staging transport, simultaneous separate-node paired stacks, eager bootstrap and prefill-only SLO recovery remain UNVALIDATED. Engine pins were not changed and engine sources were not patched.
+
+## Dual-G7 main-line qualification, 2026-09-10
+
+DeepSeek-V2-Lite-Chat revision `85864749cd611b4353ce1decdb286193298f64c7` remains on the engine digest `sha256:772d52067fab28c9eea5fe1fd629694218b4aa1669b257c43e689abdcca59338`, with SGLang version `0.5.12.post1` and both NIXL distributions at version `1.1.0`. The router digest remains `sha256:670c7f0004e2d068c7219888109362980195e554fb66480955d985dd9c9b52f2`.
+
+The full g7.48xlarge pair had one resident stack per node, eight GPUs and both EFAs per stack, with two TP groups of four ranks in each packed engine pod. Combined engine/router limits were 188 vCPUs and 672 GiB per node. The original 740 GiB request exceeded Kubernetes allocatable memory and stayed Pending; those manifests/events were retained, and the configuration generator now rejects CPU/memory budgets above live allocatable quantities. No GPU result came from the oversized attempt.
+
+The full flow completed in 1239.817780 s, including endpoint and transport checks, shape generation, both traffic shapes, sweeps, collection and final identity checks. Both engine pod UIDs remained unchanged. The first local port-forward attempt collided with existing controller listeners; the successful flow used local TCP ports 18000 and 18001. The generator and package verifier were then exercised again with the g7.24xlarge-stand-in allocation, shape A/B at 0.1 tasks/s for 10-second offered windows, before/after identity checks and a transport check. The previous complete stand-in sweep remains the comparison below.
+
+Packed placement shares a node between prefill and decode. The verifier passed both package/selector profiles and successful requests while preserving `UNVALIDATED: co-located prefill/decode` for cross-node EFA. Both physical EFA domains were enumerated; flat packed request counters do not establish cross-node transfer.
+
+All rows use a TTFT bound of 2000 ms, TPOT bound of 100 ms/output token and a minimum joint-attainment fraction of 0.9. Each measured offered window lasts 30 seconds, with separate warmup and full request drain. The reported rates are finite-window observations, not sustained-capacity estimates.
+
+| Allocation | Architecture | Shape | Offered rate | p90 TTFT | p90 TPOT | Joint attainment, dimensionless | Useful rate | Qualifies |
+|---|---|---|---|---|---|---|---|---|
+| g7.48xlarge | unified | A-agentic | 0.1 tasks/s | 511.761 ms | 6.485 ms/output token | 1.000000 | 0.087500 calls/s/GPU | True |
+| g7.48xlarge | unified | B-long-context | 0.25 tasks/s | 801.466 ms | 6.350 ms/output token | 1.000000 | 0.012500 calls/s/GPU | True |
+| g7.48xlarge | unified | B-long-context | 0.5 tasks/s | 809.603 ms | 8.711 ms/output token | 1.000000 | 0.042879 calls/s/GPU | True |
+| g7.48xlarge | unified | B-long-context | 1 tasks/s | 801.474 ms | 10.853 ms/output token | 1.000000 | 0.104366 calls/s/GPU | True |
+| g7.48xlarge | unified | B-long-context | 2 tasks/s | 808.791 ms | 22.011 ms/output token | 1.000000 | 0.194294 calls/s/GPU | True |
+| g7.48xlarge | unified | B-long-context | 4 tasks/s | 1449.429 ms | 90.035 ms/output token | 1.000000 | 0.363865 calls/s/GPU | True |
+| g7.48xlarge | unified | B-long-context | 8 tasks/s | 30289.595 ms | 133.672 ms/output token | 0.000000 | 0.000000 calls/s/GPU | False |
+| g7.48xlarge | disaggregated | A-agentic | 0.1 tasks/s | 528.861 ms | 8.340 ms/output token | 1.000000 | 0.085550 calls/s/GPU | True |
+| g7.48xlarge | disaggregated | B-long-context | 0.25 tasks/s | 1396.770 ms | 7.362 ms/output token | 1.000000 | 0.012500 calls/s/GPU | True |
+| g7.48xlarge | disaggregated | B-long-context | 0.5 tasks/s | 1316.110 ms | 8.867 ms/output token | 1.000000 | 0.042467 calls/s/GPU | True |
+| g7.48xlarge | disaggregated | B-long-context | 1 tasks/s | 1512.302 ms | 11.237 ms/output token | 1.000000 | 0.102670 calls/s/GPU | True |
+| g7.48xlarge | disaggregated | B-long-context | 2 tasks/s | 2384.346 ms | 18.617 ms/output token | 0.725490 | 0.135482 calls/s/GPU | False |
+| g7.48xlarge | disaggregated | B-long-context | 4 tasks/s | 26586.201 ms | 20.407 ms/output token | 0.054545 | 0.012413 calls/s/GPU | False |
+| g7.48xlarge | disaggregated | B-long-context | 8 tasks/s | 96870.185 ms | 23.327 ms/output token | 0.016529 | 0.003710 calls/s/GPU | False |
+| g7.24xlarge-stand-in | unified | A-agentic | 0.1 tasks/s | 546.371 ms | 7.555 ms/output token | 1.000000 | 0.175000 calls/s/GPU | True |
+| g7.24xlarge-stand-in | unified | B-long-context | 0.25 tasks/s | 1097.993 ms | 6.703 ms/output token | 1.000000 | 0.025000 calls/s/GPU | True |
+| g7.24xlarge-stand-in | unified | B-long-context | 0.5 tasks/s | 1101.292 ms | 10.923 ms/output token | 1.000000 | 0.084718 calls/s/GPU | True |
+| g7.24xlarge-stand-in | unified | B-long-context | 1 tasks/s | 1142.445 ms | 20.015 ms/output token | 1.000000 | 0.203065 calls/s/GPU | True |
+| g7.24xlarge-stand-in | unified | B-long-context | 2 tasks/s | 1468.162 ms | 62.390 ms/output token | 1.000000 | 0.358609 calls/s/GPU | True |
+| g7.24xlarge-stand-in | unified | B-long-context | 4 tasks/s | 22154.273 ms | 126.522 ms/output token | 0.000000 | 0.000000 calls/s/GPU | False |
+| g7.24xlarge-stand-in | unified | B-long-context | 8 tasks/s | 91537.452 ms | 136.158 ms/output token | 0.000000 | 0.000000 calls/s/GPU | False |
+| g7.24xlarge-stand-in | disaggregated | A-agentic | 0.1 tasks/s | 462.429 ms | 10.730 ms/output token | 1.000000 | 0.158225 calls/s/GPU | True |
+| g7.24xlarge-stand-in | disaggregated | B-long-context | 0.25 tasks/s | 1880.119 ms | 7.868 ms/output token | 1.000000 | 0.025000 calls/s/GPU | True |
+| g7.24xlarge-stand-in | disaggregated | B-long-context | 0.5 tasks/s | 2144.867 ms | 9.443 ms/output token | 0.818182 | 0.068019 calls/s/GPU | False |
+| g7.24xlarge-stand-in | disaggregated | B-long-context | 1 tasks/s | 2631.804 ms | 16.966 ms/output token | 0.576923 | 0.114930 calls/s/GPU | False |
+| g7.24xlarge-stand-in | disaggregated | B-long-context | 2 tasks/s | 10647.037 ms | 19.208 ms/output token | 0.078431 | 0.022717 calls/s/GPU | False |
+| g7.24xlarge-stand-in | disaggregated | B-long-context | 4 tasks/s | 60748.368 ms | 26.812 ms/output token | 0.018182 | 0.005245 calls/s/GPU | False |
+| g7.24xlarge-stand-in | disaggregated | B-long-context | 8 tasks/s | 167975.096 ms | 24.582 ms/output token | 0.004132 | 0.001190 calls/s/GPU | False |
+
+The highest tested qualifying long-context rates were 4 tasks/s unified and 1 task/s disaggregated on g7.48xlarge, versus 2 tasks/s and 0.25 tasks/s on the g7.24xlarge-stand-in. Neither sweep established a qualifying crossover favoring disaggregation. Preserve this result and the common workload/routing policy. The full flow and previous stand-in flow fit the 60-minute machine budget; human-paced delivery, literal secondary hardware and the production account/participant-role path remain unvalidated.
+
+## Optional V4-Flash full-G7 qualification, 2026-09-10
+
+This is a separate optional engine and model qualification. It does not advance the DeepSeek-V2-Lite-Chat main-line pin. `Dockerfile.v4` pins SGLang version `0.5.19`, both NIXL distributions at version `1.4.1` and EFA installer version `1.47.0`. The final amd64 manifest is `sha256:7da39d58804be6c781991dad9c099bf65c95c49eec42b3d5e927d89105b2e061`; the pushed image index is `sha256:30fd3480469d257011feba3548ee30ed866ebfb1c3fee50f35252300651967b3`. The Spain ECR tag is `aim345-v4-g7-dual-final` in repository `aim-spain-rehearsal-20260910`. The initial package-source assertion failed on the newer annotated server-argument default, was corrected in the written verifier, and the final image was rebuilt and pushed. No serving-engine source was patched.
+
+DeepSeek-V4-Flash revision `60d8d70770c6776ff598c94bb586a859a38244f1` uses approximately 148.7 GiB of weight shards. Each full g7.48xlarge node provides approximately 254.9 GiB of GPU memory; a secondary node provides approximately 127.4 GiB and cannot hold that replica. The split arm used prefill TP size of eight ranks on the first node and decode TP size of eight ranks on the second, with both EFA devices and engine limits of 188 vCPUs and 672 GiB per node. The unified comparison used the same pair sequentially. The NVMe snapshot and persisted compilation cache were already warm; these are not cold-download or fresh-JIT timings.
+
+The live transport verifier passed with `engine_profile=v4-optional`, a completed request and 97235456 B of positive cross-node RDMA counter deltas. This proves an EFA path for that request, not absence of host staging. The optional model is excluded from the main-line MLA bandwidth formula. GPU limits and actual node placement are retained in the allocation JSON files.
+
+Both traffic shapes used the V4 tokenizer revision. All rows have a 30-second offered window, separate warmup and complete request drain, with TTFT bound 2000 ms, TPOT bound 100 ms/output token and required joint attainment 0.9 dimensionless. Shape A passed at 0.1 tasks/s for both architectures. Shape B in the split architecture already missed the joint SLO at 0.1 tasks/s, despite all calls completing. Unified first missed at 0.5 tasks/s; its highest tested qualifying long-context rate was 0.25 tasks/s. No qualifying crossover favored disaggregation. The lowest rates contain only three long-context calls per window and do not establish sustained capacity or a precise boundary.
+
+| Allocation | Architecture | Shape | Offered rate | p90 TTFT | p90 TPOT | Joint attainment, dimensionless | Useful rate | Qualifies |
+|---|---|---|---|---|---|---|---|---|
+| g7.48xlarge | unified | A-agentic | 0.1 tasks/s | 531.570 ms | 17.855 ms/output token | 1.000000 | 0.026600 calls/s/GPU | True |
+| g7.48xlarge | unified | B-long-context | 0.1 tasks/s | 1757.166 ms | 16.264 ms/output token | 1.000000 | 0.006250 calls/s/GPU | True |
+| g7.48xlarge | unified | B-long-context | 0.25 tasks/s | 1808.411 ms | 16.246 ms/output token | 1.000000 | 0.006250 calls/s/GPU | True |
+| g7.48xlarge | unified | B-long-context | 0.5 tasks/s | 2074.495 ms | 25.285 ms/output token | 0.818182 | 0.015425 calls/s/GPU | False |
+| g7.48xlarge | unified | B-long-context | 1 tasks/s | 9615.488 ms | 36.344 ms/output token | 0.230769 | 0.008796 calls/s/GPU | False |
+| g7.48xlarge | unified | B-long-context | 2 tasks/s | 33661.477 ms | 36.392 ms/output token | 0.058824 | 0.002616 calls/s/GPU | False |
+| g7.48xlarge | disaggregated | A-agentic | 0.1 tasks/s | 665.327 ms | 20.504 ms/output token | 1.000000 | 0.024349 calls/s/GPU | True |
+| g7.48xlarge | disaggregated | B-long-context | 0.1 tasks/s | 3095.947 ms | 17.404 ms/output token | 0.333333 | 0.002083 calls/s/GPU | False |
+| g7.48xlarge | disaggregated | B-long-context | 0.25 tasks/s | 3085.620 ms | 17.447 ms/output token | 0.333333 | 0.002083 calls/s/GPU | False |
+| g7.48xlarge | disaggregated | B-long-context | 0.5 tasks/s | 5438.538 ms | 19.438 ms/output token | 0.090909 | 0.001622 calls/s/GPU | False |
+| g7.48xlarge | disaggregated | B-long-context | 1 tasks/s | 13294.535 ms | 18.442 ms/output token | 0.038462 | 0.001341 calls/s/GPU | False |
+| g7.48xlarge | disaggregated | B-long-context | 2 tasks/s | 38496.522 ms | 15.828 ms/output token | 0.000000 | 0.000000 calls/s/GPU | False |
+
+| Allocation | Optional command | Wall time | Exit status, dimensionless |
+|---|---|---|---|
+| g7.48xlarge | v4-cleanup | 47.614721 s | 0 |
+| g7.48xlarge | v4-comparison | 0.039760 s | 0 |
+| g7.48xlarge | v4-disaggregated-a | 109.115150 s | 0 |
+| g7.48xlarge | v4-disaggregated-allocation | 1.143256 s | 0 |
+| g7.48xlarge | v4-disaggregated-b | 46.097991 s | 0 |
+| g7.48xlarge | v4-disaggregated-collect | 19.089330 s | 0 |
+| g7.48xlarge | v4-disaggregated-deploy | 16.532956 s | 0 |
+| g7.48xlarge | v4-disaggregated-sweep | 350.248565 s | 0 |
+| g7.48xlarge | v4-generate-a | 1.432091 s | 0 |
+| g7.48xlarge | v4-generate-b | 1.506749 s | 0 |
+| g7.48xlarge | v4-source | 0.835300 s | 0 |
+| g7.48xlarge | v4-transport | 35.377011 s | 0 |
+| g7.48xlarge | v4-unified-a | 117.628601 s | 0 |
+| g7.48xlarge | v4-unified-allocation | 1.046901 s | 0 |
+| g7.48xlarge | v4-unified-b | 42.814948 s | 0 |
+| g7.48xlarge | v4-unified-collect | 18.627997 s | 0 |
+| g7.48xlarge | v4-unified-deploy | 9.926179 s | 0 |
+| g7.48xlarge | v4-unified-sweep | 326.716856 s | 0 |
+
+The optional completion check passes as an experiment: allocation guard, package profile, cross-node transfer, both shape records and an observed rate-dependent SLO miss are preserved. It does not require every measured rate to meet SLO. Both optional deployments were removed after evidence capture. The changed main-line generator was also rerun against full and constrained inventory; its final automatically derived full budget exactly matched the qualified deployment, excluding namespace. Ten controller tests passed.

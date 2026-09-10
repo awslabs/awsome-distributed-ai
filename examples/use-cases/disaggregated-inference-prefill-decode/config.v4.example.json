@@ -1,0 +1,32 @@
+{
+  "namespace": "aim345-optional-v4",
+  "context": "REPLACE_WITH_EKS_CONTEXT",
+  "image": "REPLACE_WITH_REGISTRY/aim345-v4@sha256:7da39d58804be6c781991dad9c099bf65c95c49eec42b3d5e927d89105b2e061",
+  "instance_type": "g7.48xlarge",
+  "nodes": [
+    "REPLACE_WITH_NODE_A",
+    "REPLACE_WITH_NODE_B"
+  ],
+  "gpus_per_worker": 8,
+  "efa_per_worker": 2,
+  "model_id": "deepseek-ai/DeepSeek-V4-Flash",
+  "model_revision": "60d8d70770c6776ff598c94bb586a859a38244f1",
+  "model_cache_host_path": "/mnt/k8s-disks/0/aim345-models",
+  "context_length_tokens": 32768,
+  "chunked_prefill_size_tokens": 8192,
+  "disable_prefix_cache": false,
+  "tolerations": [
+    {
+      "key": "nvidia.com/gpu",
+      "operator": "Exists",
+      "effect": "NoSchedule"
+    }
+  ],
+  "router_image": "REPLACE_WITH_REGISTRY/aim345-router:0.3.2",
+  "engine_ephemeral_storage": "80Gi",
+  "router_ephemeral_storage": "2Gi",
+  "engine_profile": "v4-optional",
+  "engine_cpu": "188",
+  "engine_memory": "672Gi",
+  "engine_cache_host_path": "/mnt/k8s-disks/0/aim345-models/sglang019-root-cache"
+}
