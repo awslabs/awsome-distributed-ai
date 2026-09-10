@@ -71,7 +71,7 @@ def worker(c, name, node, role):
         "hostNetwork": True, "dnsPolicy": "ClusterFirstWithHostNet", "preemptionPolicy": "Never", "priorityClassName": c["namespace"] + "-nonpreempting", "automountServiceAccountToken": False,
         "nodeSelector": {"kubernetes.io/hostname": node, "node.kubernetes.io/instance-type": c["instance_type"]},
         "tolerations": c["tolerations"],
-        "initContainers": [{"name": "model", "image": c["image"], "command": ["python3", "-c", download, c["model_id"], c["model_revision"], model_path], "volumeMounts": [mounts[0]], "resources": {"requests": {"cpu": "2", "memory": "4Gi"}}}],
+        "initContainers": [{"name": "model", "image": c["image"], "command": ["python3", "-c", download, c["model_id"], c["model_revision"], model_path], "volumeMounts": [mounts[0]], "resources": {"requests": {"cpu": "2", "memory": "4Gi"}, "limits": {"cpu": "2", "memory": "4Gi"}}}],
         "containers": [{"name": "engine", "image": c["image"], "imagePullPolicy": "IfNotPresent", "command": ["bash", "-c", 'ulimit -l unlimited; python3 /lab/verify_image.py && exec python3 -m sglang.launch_server "$@"', "engine"], "args": args, "env": env, "resources": {"requests": resources, "limits": resources}, "securityContext": {"capabilities": {"add": ["IPC_LOCK"]}}, "volumeMounts": mounts, "startupProbe": {"httpGet": {"path": "/health", "port": 30000}, "periodSeconds": 10, "timeoutSeconds": 10, "failureThreshold": 180}, "readinessProbe": {"httpGet": {"path": "/health", "port": 30000}, "periodSeconds": 10, "timeoutSeconds": 10}}],
         "volumes": [{"name": "models", "hostPath": {"path": c["model_cache_host_path"], "type": "DirectoryOrCreate"}}, {"name": "shm", "emptyDir": {"medium": "Memory", "sizeLimit": "32Gi"}}],
     }

@@ -322,3 +322,17 @@ python3 paired.py render
 ```
 
 For an offline configuration review, `--inventory` accepts a saved `kubectl get nodes -o json` result and `--output` selects a new output directory. That path was exercised against the saved two-node Oregon EKS inventory from Phase A. It produced two GPUs per stack and one EFA per stack, matching the earlier packed configuration. This is a configuration check, not a new deployment or serving measurement. The Workshop Studio facilitator runbook handles the released checkout, controller virtual environment, model staging, participant-role kubeconfig, endpoint verification and cache retention. Its new CloudFormation bootstrap has been template-validated but not deployed.
+
+## Spain preparation and constrained paired result, 2026-09-10
+
+`facilitator/prepare-config.py` can cap each packed stack below the physical node's inventory. The following options describe the Spain allocation; supply the actual context, allocated node names and immutable engine/router images through the required arguments:
+
+```bash
+python3 facilitator/prepare-config.py --context "$LAB_CONTEXT" --nodes "$LAB_NODES" --engine-image "$LAB_IMAGE" --router-image "$LAB_ROUTER_IMAGE" --namespace-prefix aim345-spain-paired --gpus-per-stack 4 --efas-per-stack 1 --cpu-per-stack 96 --memory-gib-per-stack 384 --model-cache-host-path /mnt/k8s-disks/0/aim345-models
+```
+
+Each stack receives four GPUs and one EFA. Its engine pod receives 92 vCPUs and 376 GiB, reserving 4 vCPUs and 8 GiB for the local router within the combined limit. Init-container requests and limits are both 2 vCPUs and 4 GiB. The helper validates the selected GPU/EFA budgets against allocatable resources; without explicit GPU/EFA options it uses all allocatable devices. CPU and memory defaults remain 12 vCPUs and 136 GiB per stack. A `/mnt/` host path must be on the intended prepared filesystem; the helper does not mount or provision storage.
+
+On two physical g7.48xlarge nodes, the complete paired DeepSeek-V2-Lite-Chat flow took 27.85 minutes with unchanged engine pod identities. The long-context sweeps plus collection took about 25 minutes, so the participant introduction now reserves 26 minutes for the load-ramp module. An offered window of 30 seconds does not include warmup or request drain. Unified serving qualified at a highest tested rate of 2 tasks/s, while disaggregation qualified at 0.25 tasks/s; no qualifying disaggregated crossover was observed.
+
+DeepSeek-V4-Flash weights alone exceeded the four-GPU node budget by 21.22 GiB. Stock SGLang version 0.5.19 served it with all eight GPUs on one node, and an experimental image with NIXL version 1.4.1 served disaggregation across all sixteen physical GPUs. The pinned SGLang version 0.5.12.post1 failed during scale transformation. These experiments do not change the companion's model or package pins. [VALIDATION.md](VALIDATION.md) preserves exact engine digests, errors, memory arithmetic, cold request latency and experimental transport evidence.

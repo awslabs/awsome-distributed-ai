@@ -1,6 +1,6 @@
 # Validation evidence
 
-The historical hardware observations in the first sections were collected on 2026-09-06 in `ap-northeast-2`. The final section records new Oregon checks from 2026-09-09. They validate a transport mechanism on Seoul `p6-b300.48xlarge`, not the production instance choice or the session's expected latency crossover.
+The historical hardware observations in the first sections were collected on 2026-09-06 in `ap-northeast-2`. Later sections record Oregon checks from 2026-09-09 and Spain checks from 2026-09-10. They validate a transport mechanism on Seoul `p6-b300.48xlarge`, not the production instance choice or the session's expected latency crossover.
 
 ## NIXL GPU-buffer transfer: VALIDATED
 
@@ -127,3 +127,61 @@ Exact manifests, request records, command transcripts, source reads, provider lo
 ## Facilitator helper review, 2026-09-09
 
 The new `facilitator/prepare-config.py` was run with `--inventory /tmp/g7e-e2e/phase-a/nodes-before.json` against the saved real EKS node List, the Phase A context and immutable image digests, and `--output /tmp/g7e-e2e/runbook-aim345-configs`. It generated matched packed configurations for the two explicitly assigned g7e nodes, with two GPUs and one EFA per stack. `check_pair` accepted the result. Output is retained in `/tmp/g7e-e2e/runbook-aim345-configs.log`. The controller environment's eight existing tests passed. This establishes offline configuration generation only; the facilitator runbook and its new Workshop Studio CodeBuild phase were not redeployed after the GPUs moved to PCS.
+
+## Spain g7.48xlarge feasibility and constrained paired rehearsal, 2026-09-10
+
+The two EKS nodes in `eu-south-2a` were physical `g7.48xlarge` instances with eight RTX PRO 4500 Blackwell Server Edition GPUs and two EFA interfaces each. Every GPU reported `32623 MiB`, or `31.8583984375 GiB`, and compute capability version `12.0` (SM120). Kubernetes was version `1.35.7-eks-cb19647`, AMI identifier `ami-039041ed3d883ce32`, AL2023 release `2023.12.20260831`, kernel version `6.12.103-127.188.amzn2023.x86_64` and containerd version `2.2.5`.
+
+The inherited proprietary driver version `580.178.04` could not operate the GPUs. Installing and building the open driver version `595.91.07` restored all devices without a reboot or engine-source patch. NVIDIA device-plugin chart version `0.20.0` and EFA device-plugin chart version `v0.5.31` (application version `v0.5.21-eksbuild.9`) then exposed eight GPUs and two EFAs per node. The existing NVMe mount `/mnt/k8s-disks/0` held the weight cache; no model weights were put on the root disk.
+
+### DeepSeek-V4-Flash memory and engine verdict
+
+HF revision `60d8d70770c6776ff598c94bb586a859a38244f1` contains `46` weight shards totaling `159617149040 B`, or `148.655054197 GiB`. Its configuration has `43` layers, a hidden dimension of `4096 elements`, `256` routed experts, `6` active experts per token, FP4 expert weights and FP8 non-expert quantization. The model card reports `284 billion total parameters` and `13 billion active parameters`; the configured context limit is `1048576 tokens`.
+
+Four actual GPUs provide `127.43359375 GiB`, leaving a weight-only deficit of `21.221460447 GiB` before KV cache or runtime memory. A V4 prefill or decode stack therefore cannot fit on one constrained node. A single cross-node unified stack over the eight stand-in GPUs is memory-plausible, but was not tested and would leave no GPUs for a second stack. Eight GPUs on one full physical node provide `254.8671875 GiB`, with nominal weights of `18.581881775 GiB/GPU` and `13.276516663 GiB/GPU` remaining before runtime allocations.
+
+The following tests used all eight GPUs on one node, one EFA, `96 vCPUs` and `384 GiB RAM`. They are full-node GPU tests, outside the four-GPU stand-in. Each successful cold smoke request contained `1024 input tokens` and produced `32 output tokens`.
+
+| Engine version and immutable amd64 digest | Context | Result | Ready GPU memory | Cold TTFT | Cold TPOT |
+|---|---|---|---|---|---|
+| SGLang `0.5.12.post1`, `sha256:0b9ebdd8fbb659500a4abfe8541049923dc768088e0e36cf8bffe8f3728f6f9a` | 32768 tokens | Post-load scale setup failed | No ready measurement | Not served | Not served |
+| SGLang `0.5.19`, `sha256:37bbbd3444732a464bbc68dee4fb0164e0ce9e18e2f027f3fc967f1152d3c262` | 32768 tokens | Served | 29625 MiB/GPU | 11795.476 ms | 11.128198 ms/token |
+| vLLM `0.29.0`, `sha256:082ca6f035279109041ffd3fe0695cb568b29bc580b35c4f297a66a08b216c1b` | 32768 tokens | Weights loaded; KV capacity rejected | No ready measurement | Not served | Not served |
+| Same vLLM digest and version | 8192 tokens | Served | 28039 MiB/GPU | 18716.741 ms | 9.500323 ms/token |
+
+The pinned SGLang failure was `tvm.error.InternalError: Assertion error (/deepgemm/csrc/apis/layout.hpp:59): Unknown SF transformation`. Installed Python call sites were `sglang/srt/models/deepseek_v4.py:1277` and `:1288`, and `deep_gemm/__init__.py:245`. The C++ location is the compiled exception's path. The vLLM failure at installed `vllm/v1/core/kv_cache_utils.py:879` required `6.36 GiB` of KV memory while `5.27 GiB` was available; it was a memory-capacity rejection, not an SM120 architecture assertion. The smaller context succeeded without source changes. Full source excerpts and engine logs are in `/tmp/spain-rehearsal/phase1/`.
+
+An experimental image derived from stock SGLang version `0.5.19`, with NIXL version `1.4.1` and EFA installer version `1.47.0`, served V4 disaggregated on both full physical nodes: prefill across eight GPUs and decode across eight GPUs, with one EFA, `96 vCPUs` and `384 GiB RAM` per node. Its Spain ECR digest is `sha256:85db181b224fe99c8ef474953bd6ef798c68e331dfcd2b4b62dccaac3b3545fe`. The companion's strict `7.verify-transport.py` failed its old package-pin assertion; a separately recorded version-aware request succeeded. A `1024`-input-token, `4`-output-token request increased prefill RDMA-write bytes by `97235456 B` on only one EFA. Shape A completed `9` calls with p90 TTFT `717.771 ms`; shape B completed one `8192`-input-token, `256`-output-token call with p90 TTFT `1797.577 ms`. Both had dimensionless joint attainment `1.0` at `0.1 tasks/s` with a `10 s` offered window. Workload traffic added `5388893184 RDMA-write bytes`. An allocator warning during shape B warmup recovered; all recorded calls completed. This is experimental full-16-GPU feasibility, not a validated replacement for the pinned companion or a sustained-capacity result. vLLM disaggregation was not tested.
+
+V4 weights were downloaded once to the first node's NVMe in `96.550 s` and copied privately to the second node in `41.542 s`. The successful smaller model was DeepSeek-V2-Lite-Chat, `16 billion total parameters`, revision `85864749cd611b4353ce1decdb286193298f64c7`, with `31413626576 B` of weights. It is the largest model demonstrated on both constrained companion layouts in this rehearsal; no exhaustive model-size search was performed.
+
+### Full paired participant flow within the stand-in budget
+
+Both packed resident stacks used four GPUs, one EFA, a combined `96 vCPU` limit and a combined `384 GiB` limit per node. The engine pod received `92 vCPUs` and `376 GiB`; its local CPU router received `4 vCPUs` and `8 GiB`. CPU quota and memory cgroup reads confirmed enforcement. CPU affinity still exposed the full host, so this is a quota-limited comparison. The first node received GPU indices `0-3` and EFA `rdmap83s0`; the second received GPU indices `4-7` and EFA `rdmap176s0`. Each engine process used two GPUs. Both engine pod UIDs were unchanged across the complete comparison.
+
+The Spain ECR engine digest was `sha256:772d52067fab28c9eea5fe1fd629694218b4aa1669b257c43e689abdcca59338`, with SGLang version `0.5.12.post1` and NIXL version `1.1.0`; router digest was `sha256:670c7f0004e2d068c7219888109362980195e554fb66480955d985dd9c9b52f2`. The stock transport verifier passed its request and selector checks, with `0 B` of cross-node EFA traffic because each stack's workers share one node. Cross-node KV transfer is UNVALIDATED by this packed run.
+
+Every row used a `30 s` offered window plus warmup and drain, TTFT bound `2000 ms`, TPOT bound `100 ms/token` and dimensionless attainment target `0.9`. All `928` planned calls completed, with zero failed or skipped calls, and every measured row was client-valid.
+
+| Architecture | Shape | Offered rate | p90 TTFT | p90 TPOT | Joint attainment, dimensionless | Useful rate |
+|---|---|---|---|---|---|---|
+| unified | A-agentic | 0.1 tasks/s | 546.371 ms | 7.555 ms/token | 1.000000 | 0.175000 calls/s/GPU |
+| unified | B-long-context | 0.25 tasks/s | 1097.993 ms | 6.703 ms/token | 1.000000 | 0.025000 calls/s/GPU |
+| unified | B-long-context | 0.5 tasks/s | 1101.292 ms | 10.923 ms/token | 1.000000 | 0.084718 calls/s/GPU |
+| unified | B-long-context | 1 tasks/s | 1142.445 ms | 20.015 ms/token | 1.000000 | 0.203065 calls/s/GPU |
+| unified | B-long-context | 2 tasks/s | 1468.162 ms | 62.390 ms/token | 1.000000 | 0.358609 calls/s/GPU |
+| unified | B-long-context | 4 tasks/s | 22154.273 ms | 126.522 ms/token | 0.000000 | 0.000000 calls/s/GPU |
+| unified | B-long-context | 8 tasks/s | 91537.452 ms | 136.158 ms/token | 0.000000 | 0.000000 calls/s/GPU |
+| disaggregated | A-agentic | 0.1 tasks/s | 462.429 ms | 10.730 ms/token | 1.000000 | 0.158225 calls/s/GPU |
+| disaggregated | B-long-context | 0.25 tasks/s | 1880.119 ms | 7.868 ms/token | 1.000000 | 0.025000 calls/s/GPU |
+| disaggregated | B-long-context | 0.5 tasks/s | 2144.867 ms | 9.443 ms/token | 0.818182 | 0.068019 calls/s/GPU |
+| disaggregated | B-long-context | 1 tasks/s | 2631.804 ms | 16.966 ms/token | 0.576923 | 0.114930 calls/s/GPU |
+| disaggregated | B-long-context | 2 tasks/s | 10647.037 ms | 19.208 ms/token | 0.078431 | 0.022717 calls/s/GPU |
+| disaggregated | B-long-context | 4 tasks/s | 60748.368 ms | 26.812 ms/token | 0.018182 | 0.005245 calls/s/GPU |
+| disaggregated | B-long-context | 8 tasks/s | 167975.096 ms | 24.582 ms/token | 0.004132 | 0.001190 calls/s/GPU |
+
+For long-context traffic, the highest tested qualifying rate was `2 tasks/s` for unified serving and `0.25 tasks/s` for disaggregation. The corresponding useful rates were `0.358609 calls/s/GPU` and `0.025000 calls/s/GPU`. The larger disaggregated useful rate reported at `1 task/s` did not meet the joint SLO. No tested qualifying crossover favored disaggregation. Shape A had lower disaggregated TTFT but higher unified useful throughput; neither metric is replaced with the expected ranking.
+
+The complete paired flow took `1670.738585 s`. Unified and disaggregated shape A commands took `61.690303 s` and `68.287915 s`; the shape B sweeps took `620.158170 s` and `841.868637 s`. The complete load-ramp module, including collection and final identity checks, took about `25 minutes`, exceeding the previous `15-minute` allocation. The revised introduction reserves `26 minutes` for it within the `60-minute` session. Human-paced facilitation and repeated boundary measurements remain UNVALIDATED.
+
+Raw manifests, package versions, per-request data, counter snapshots, paired identities and CSV are under `/tmp/spain-rehearsal/phase1/`. All rehearsal namespaces and PriorityClasses were removed. Device plugins, the open driver and NVMe caches remain. Driver reboot persistence, literal g7.24xlarge execution, cross-node unified V4 on the stand-in, sustained V4 capacity, no-host-staging transport, simultaneous separate-node paired stacks, eager bootstrap and prefill-only SLO recovery remain UNVALIDATED. Engine pins were not changed and engine sources were not patched.
