@@ -2,7 +2,7 @@
 
 This is the runnable lab draft for re:Invent session AIM344, a 60-minute Builders' Session at level 300. Diagnose in this order: **storage, host, fabric, software**. Preserve evidence, isolate a suspect node, and replace it rather than attempting repairs during the session.
 
-The Workshop Studio participant guide targets **two p4d.24xlarge or p4de.24xlarge nodes per attendee on AWS PCS**. This rehearsal uses two g7e.12xlarge nodes with Slurm version 25.05. Historical p5.48xlarge reference measurements and Seoul p6-b300.48xlarge EKS observations retain their original scope; none supplies an A100 production baseline.
+The Workshop Studio participant guide targets **two p4d.24xlarge or p4de.24xlarge nodes per attendee on AWS PCS**. The earlier rehearsal used two g7e.12xlarge nodes with Slurm version 25.05. The Spain rehearsal used two physical g7.48xlarge nodes with a constrained four-GPU allocation per node. Historical p5.48xlarge reference measurements and Seoul p6-b300.48xlarge EKS observations retain their original scope; none supplies an A100 production baseline.
 
 ## Validation status
 
@@ -172,7 +172,7 @@ Run `bash 9.cleanup.sh` before leaving the allocation, then exit the allocation 
 Known issues that change diagnosis:
 
 - **Separate stock check identifier `5` from the participant sweep.** Prior healthy p5.48xlarge nodes on PCS produced a false severity `RESET` in 2.70 s because the Enroot URI lacked the `#` registry separator and the image's `all_reduce_perf` binary was outside `PATH`. The facilitator records the stock gate's actual outcome and verifies that it reaches NCCL before interpreting its severity. The participant sweep uses the staged native-kernel image and absolute binary path. No unmerged upstream patch is installed.
-- **Use `FI_EFA_IFACE`, not `FI_EFA_DEVICE_NAME`.** The latter is silently ignored by libfabric. Prior purported per-device tests repeatedly exercised device index 0, and even a bogus name passed. This lab observes every device's counters and leaves `FI_EFA_IFACE` unset for the full-node sweep. Do not ship or depend on the unmerged per-device health-suite fix.
+- **Use `FI_EFA_IFACE`, not `FI_EFA_DEVICE_NAME`.** The latter is silently ignored by libfabric. Prior purported per-device tests repeatedly exercised device index 0, and even a bogus name passed. This lab observes every device's counters. It leaves `FI_EFA_IFACE` unset for the full-node sweep, or preserves the operator-selected `AIM344_EFA_IFACE` for a restricted EFA allocation. Do not ship or depend on the unmerged per-device health-suite fix.
 - Prior p5.48xlarge attempts using `NCCL_NET=Socket` with `NCCL_IB_DISABLE=1` aborted with exit code 134 (dimensionless), including an assertion in `verify_active`. The `NCCL_NET_PLUGIN=none` and nonexistent-plugin-path attempts initialized, then failed with exit code 137 (dimensionless). These were not silent fallback signatures.
 - MPI can report its own OFI failure before a NCCL watchdog. The checkpoint and DataLoader jobs use `torchrun` without MPI. The bandwidth sweep keeps MPI process setup on TCP while NCCL chooses its own data transport.
 - `tc netem` and `iptables` do not sever EFA data traffic, which bypasses the kernel network stack. This lab does not use them as fabric injections.
@@ -181,3 +181,21 @@ Known issues that change diagnosis:
 - Pre-import images on a node with adequate ephemeral storage. The initial Seoul CPU launcher was evicted during image import. That launcher failure is not an NCCL failure.
 
 Use the [failure-signature runbook](RUNBOOK.md) for the 5-minute wrap-up. The framing takes 5 minutes; the round durations above are session budgets, not measured workload runtimes.
+
+## Resource-bounded PCS preparation and Spain outcome
+
+The Spain rehearsal on 2026-09-10 used four GPUs, one EFA, 96 vCPUs and 384 GiB per node. PCS must enforce `ConstrainDevices=yes`, `ConstrainCores=yes`, `ConstrainRAMSpace=yes` and memory-aware scheduling with `SelectTypeParameters=CR_CPU_Memory`. A Slurm memory request alone did not create a finite memory cgroup in the original cluster configuration. `facilitator/allocation-evidence.sh` records GPU UUIDs, CPU affinity and ancestor memory limits; set `AIM_ENFORCE_STANDIN=1` to reject a step outside this budget.
+
+The operator supplies `PARTITION`, `GPUS_PER_NODE`, `CPUS_PER_RANK` and `MEMORY_PER_NODE`, together with the staged `NCCL_ENROOT_IMAGE`, `TORCH_IMAGE` and `CHECKPOINT_DIR`. Spain used `gpu-g7`, four GPUs per node, 24 vCPUs per rank and `384G` of memory per node. Both the pre-job probe and subsequent workload allocation must request those resources:
+
+```bash
+sbatch --partition="$PARTITION" --nodes=1 --gres="gpu:$GPUS_PER_NODE" --ntasks-per-node="$GPUS_PER_NODE" --cpus-per-task="$CPUS_PER_RANK" --mem="$MEMORY_PER_NODE" --requeue --job-name=aim344-prejob \
+  --output='prejob-%j.out' --wrap='hostname'
+salloc --partition="$PARTITION" --nodes=2 --gres="gpu:$GPUS_PER_NODE" --ntasks-per-node="$GPUS_PER_NODE" --cpus-per-task="$CPUS_PER_RANK" --mem="$MEMORY_PER_NODE" --time=00:45:00
+```
+
+The rehearsed participant sequence ran in a batch allocation with these same resource flags. The interactive shell handoff remains untested. Node-level launch steps use the allocation's CPU count; MPI steps use one rank per allocated GPU. Inspect each step's GPU UUIDs and finite memory limit before accepting its result.
+
+Without Lustre, set `AIM344_NODE_LOCAL=1` and `AIM344_STAGE_DIR=/opt/aim344` for the preparation helpers. Stage the checkout and identical image files at the same path on both nodes, backed by existing NVMe. Complete image preparation as the attendee before locking the dispatcher directory to root ownership. Run `facilitator/prepare-compute.sh` and `facilitator/prepare-prolog.sh` on each node. Pass `--dispatcher /opt/aim344/.prolog/dispatch.sh` to `facilitator/pcs-prolog.py enable`; restoration reads the path and previous cluster settings from its state file. The default helpers retain their Lustre prerequisite when node-local mode is not selected.
+
+On these G7 nodes, `AIM344_EFA_IFACE=rdmap83s0` and `FI_EFA_IFACE=rdmap83s0` selected one EFA. The first sequence with OFI's default SENDRECV protocol measured only 5.20 GB/s at 2 GiB, slower than Socket. Repeating the full sequence with `OFI_NCCL_PROTOCOL=RDMA` measured 20.27 GB/s at 2 GiB, versus 11.03 GB/s on Socket, with zero mismatches. This is a G7-specific measured setting, not a universal OFI default. The other EFA's byte counters remained flat. The private 32 MiB tmpfs reproduced checkpoint exhaustion and recovery; both DataLoader start methods completed. Full image digests, per-node counters, health-suite limitations and module times are in [VALIDATION.md](VALIDATION.md).

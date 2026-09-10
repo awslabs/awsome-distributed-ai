@@ -11,7 +11,10 @@ p.add_argument('action', choices=('enable', 'restore'))
 p.add_argument('--cluster', required=True)
 p.add_argument('--region', required=True)
 p.add_argument('--state-file', type=Path, required=True)
+p.add_argument('--dispatcher', default='/fsx/aim344/.prolog/dispatch.sh')
 a = p.parse_args()
+if not a.dispatcher.startswith('/') or any(c.isspace() for c in a.dispatcher):
+    p.error('--dispatcher must be an absolute path without whitespace')
 
 
 def aws(*arguments):
@@ -28,20 +31,20 @@ if a.action == 'enable':
         raise FileExistsError(f'Preserve the saved configuration: {a.state_file}')
     if any(item['parameterName'] == 'Prolog' for item in current):
         raise RuntimeError('An existing Prolog must be preserved and explicitly chained by the cluster operator')
-    a.state_file.write_text(json.dumps(dict(cluster=a.cluster, region=a.region, settings=current), indent=2) + '\n')
+    a.state_file.write_text(json.dumps(dict(cluster=a.cluster, region=a.region, settings=current, dispatcher=a.dispatcher), indent=2) + '\n')
     settings = [item for item in current if item['parameterName'] != 'JobRequeue'] + [
-        dict(parameterName='Prolog', parameterValue='/fsx/aim344/.prolog/dispatch.sh'),
+        dict(parameterName='Prolog', parameterValue=a.dispatcher),
         dict(parameterName='JobRequeue', parameterValue='1')]
 else:
     saved = json.loads(a.state_file.read_text())
     if saved['cluster'] != a.cluster or saved['region'] != a.region:
         raise ValueError('Saved state belongs to another cluster or Region')
     installed = {item['parameterName']: item['parameterValue'] for item in current}
-    if installed.get('Prolog') != '/fsx/aim344/.prolog/dispatch.sh':
+    if installed.get('Prolog') != saved.get('dispatcher', '/fsx/aim344/.prolog/dispatch.sh'):
         raise RuntimeError('The installed Prolog changed; inspect it before restoring saved state')
     # Do not discard unrelated custom settings added while the lab was active.
     saved_map = {item['parameterName']: item['parameterValue'] for item in saved['settings']}
-    expected = saved_map | {'Prolog': '/fsx/aim344/.prolog/dispatch.sh', 'JobRequeue': '1'}
+    expected = saved_map | {'Prolog': saved.get('dispatcher', '/fsx/aim344/.prolog/dispatch.sh'), 'JobRequeue': '1'}
     if installed != expected:
         raise RuntimeError('Cluster custom settings changed during the lab; reconcile them before restoration')
     settings = saved['settings']

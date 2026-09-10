@@ -1,6 +1,6 @@
 --- a/validation/gpu-cluster-healthcheck/instance-profiles.conf
 +++ b/validation/gpu-cluster-healthcheck/instance-profiles.conf
-@@ -21,2 +21,5 @@
+@@ -21,2 +21,9 @@
  g6.48xlarge|8|1|false|efa
 -g6.xlarge|1|0|false|efa
 \ No newline at end of file
@@ -8,3 +8,7 @@
 +
 +# NVIDIA RTX PRO 6000 Blackwell Server Edition
 +g7e.12xlarge|2|1|false|efa
++
++# NVIDIA RTX PRO 4500 Blackwell Server Edition
++g7.24xlarge|4|1|false|efa
++g7.48xlarge|8|2|false|efa

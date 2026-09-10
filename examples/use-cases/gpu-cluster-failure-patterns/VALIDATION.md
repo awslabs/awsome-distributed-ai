@@ -1,6 +1,6 @@
 # Validation record
 
-The historical sections dated 2026-09-06 record **two p6-b300.48xlarge nodes on EKS in ap-northeast-2, with eight GPU ranks per node and sixteen GPU ranks per run**. The later sections record the 2026-09-09 PCS rehearsal on two g7e.12xlarge nodes in us-west-2d. Each observation establishes only its stated hardware, software and launch path.
+The historical sections dated 2026-09-06 record **two p6-b300.48xlarge nodes on EKS in ap-northeast-2, with eight GPU ranks per node and sixteen GPU ranks per run**. The later sections record the 2026-09-09 PCS rehearsal on two g7e.12xlarge nodes in us-west-2d. The Spain section dated 2026-09-10 records the later constrained G7 rehearsal. Each observation establishes only its stated hardware, software and launch path.
 
 ## Runtime and test boundaries
 
@@ -207,3 +207,53 @@ The late-fork probe and spawn control both completed with zero mismatches. This 
 ### PCS Prolog restoration after AIM344
 
 With no jobs left in the g7e queue, `facilitator/pcs-prolog.py restore --cluster pcs_jdb4dviivh --region us-west-2 --state-file /tmp/aim344-prolog-state.json` restored the original empty custom-setting list. PCS returned ACTIVE at `2026-09-09 16:45:09 UTC`; the command took `199.414638 s` and returned exit code dimensionless value `0`. Effective Slurm configuration no longer contained `Prolog[0]`. Both g7e nodes were idle before AIM347 began. The root-owned dispatcher and suite remain staged for the next rehearsal, but the dispatcher is no longer configured as the cluster Prolog. Evidence: `/tmp/g7e-e2e/pcs-prolog-restore.*`.
+
+## Spain g7.48xlarge as a g7.24xlarge resource stand-in, 2026-09-10
+
+The physical allocation was two `g7.48xlarge` nodes in `eu-south-2a`, each with eight RTX PRO 4500 Blackwell Server Edition GPUs reporting `32623 MiB/GPU`, compute capability version `12.0` (SM120), `192 vCPUs`, `768 GiB RAM` and two EFA interfaces. Every result in the constrained PCS tables used `--gres=gpu:4 --ntasks-per-node=4 --cpus-per-task=24 --mem=384G` on each node, with `FI_EFA_IFACE=rdmap83s0`. Job logs contain the requested resources, actual GPU UUIDs, `96` available logical processors, CPU affinity indices `96-191` and a cgroup memory ceiling of `412316860416 B` (`384 GiB`). The GPUs were device indices `0-3` on both nodes. The second EFA interface, `rdmap176s0`, had zero byte-counter change. This enforces the resource budget; CPU/GPU NUMA placement, cache state and NVMe bandwidth still differ from a literal `g7.24xlarge` instance.
+
+PCS cluster `pcs_lefqlz8o8e` used queue `gpu-g7`, Slurm version `25.05.9`, AMI identifier `ami-02165285ade1d0209`, Ubuntu version `24.04.4`, kernel version `6.17.0-1020-aws` and driver version `595.91.07`. The compute hosts were `gpu-g7-1` (`10.8.30.139`, instance identifier `i-0bbcee65f305fc7c6`) and `gpu-g7-2` (`10.8.17.100`, instance identifier `i-0af87d1628a5f761b`). PCS was configured with `ConstrainDevices=yes`, `ConstrainCores=yes`, `ConstrainRAMSpace=yes` and `SelectTypeParameters=CR_CPU_Memory`; GRES requests alone had not enforced memory. Existing NVMe was bind-mounted under the lab's `/opt` path and staged identically on both nodes. No FSx or EFS filesystem was created.
+
+### Health, scheduler and image qualification
+
+The unmodified health-suite commit was `0e2c2c5b47f434380fefb3ff6bb30938a9c3a606`. Slurm job identifier `2` ran the required matrix inside the constrained allocation. An earlier attempt, job identifier `1`, exposed an unlimited memory cgroup and was canceled after `51 s`; its diagnostic results are excluded. The corrected matrix allocation lasted `184 s`.
+
+| Health check | First node wall time | Second node wall time | Result |
+|---|---|---|---|
+| Check identifier `0` | 0.489578 s | 0.485661 s | Exit code 0 on both nodes |
+| Check identifier `1` | 167.994481 s | 172.573366 s | Exit code 0 on both nodes |
+| Check identifier `2` | 0.673604 s | 0.653570 s | Exit code 0 on both nodes |
+| Check identifier `3` | 0.380483 s | 0.377535 s | Exit code 0 on both nodes |
+| Check identifier `6` | 4.822204 s | 4.500949 s | Exit code 0 on both nodes |
+
+DCGM version `4.6.1` returned software, memory and PCIe PASS results for all four visible GPUs per node. The native host engine was stopped, then started inside the constrained step, and stopped again before monitoring deployment. The suite still has no `g7.48xlarge` or `g7.24xlarge` profile, so expected-count comparisons in checks with identifiers `2` and `3` were skipped despite their successful CLI status. Check identifier `6` exercised only `rdmap83s0-rdm` and established connectivity. Optional check identifier `4` was not run; its earlier duration was about `53 minutes/node`. Stock check identifier `5` was not rerun. The unapplied candidate `upstream-candidates/g7e-instance-profile.patch` now also contains `g7.24xlarge|4|1|false|efa` and `g7.48xlarge|8|2|false|efa`; `git apply --check` passed against the pinned tree. No upstream patch was applied.
+
+The root-owned dispatcher `/opt/aim344/.prolog/dispatch.sh` was enabled through the PCS cluster setting. Job identifier `3` first failed the synthetic gate on node `gpu-g7-1`, drained that node and requeued with a hold. Releasing the held job allowed it to complete on `gpu-g7-2`. Recovery removed the marker, resumed the first node and restored equal scheduler weights. The arm-through-recovery interval was `168.622 s`. The pre-job host gate inventories all physical devices; its lightweight inventory is separate from the constrained GPU workloads. Enabling the setting took `136.022450 s`; restoring the saved settings took `202.055702 s`. Restoration used the saved dispatcher path and preserved memory accounting and cgroup enforcement. A later redundant start-time adjustment was rejected because the job had already completed; it had no effect.
+
+The Spain ECR repository is `159553542841.dkr.ecr.eu-south-2.amazonaws.com/aim-spain-rehearsal-20260910`. The baseline image digest is `sha256:14404e0c24759c7b2a1ec687475d6b67e4a7bbcb98918bfcc8f70f2a1da33287`; the Torch fixture image digest is `sha256:956d1e49609f05738275acaee1010b171a4ee20aaf51bbfb452c36afd54b850d`. Imported-image SHA-256 values are `1eb22e960e290501ba6f9e206282531db4bed07c5f21d5a698a6801cd87ad3d2` and `d766c475e7e12d29e141df852d451a3831f500b5c6ec17d2972a046e33905cd0`, respectively, identical on both nodes. The executed images contain native SM120 kernels, NCCL version `2.30.4+cuda13.0`, aws-ofi-nccl version `1.19.0`, EFA installer version `1.48.0` and libfabric version `2.4.0`; Torch is version `2.9.0+cu130`. MPI uses `PMIX_MCA_gds=hash` inside the rank wrapper.
+
+### Participant sequence and transport correction
+
+The first complete sequence, job identifier `4`, used OFI's default SENDRECV protocol on this unlisted G7 platform. Its baseline was `5.20 / 5.20 GB/s`, Socket fallback was `11.87 / 11.87 GB/s`, and recovery was `5.11 / 5.07 GB/s`, all at `2 GiB` with zero mismatches. This failed the expected direction of the bandwidth comparison. The raw result is retained. OFI selected EFA, so the slow baseline was not a Socket fallback.
+
+Job identifier `5` repeated the same images, allocation and complete sequence with the G7-specific environment setting `OFI_NCCL_PROTOCOL=RDMA`. Native RDMA capability checks remained enabled. The first and second bandwidth values below are out-of-place and in-place bus bandwidth. Module times include launch, workload and collection. The module sum was `267.529678 s`.
+
+| Module | Wall time | Observed output | Page completion result |
+|---|---|---|---|
+| `020-baseline` | 31.571793 s | 20.27 / 20.27 GB/s at 2 GiB; 0 mismatches | PASS |
+| `030-fallback` | 52.722570 s | 11.03 / 11.02 GB/s at 2 GiB; Socket; 0 EFA bytes; 0 mismatches | PASS |
+| `030-recovery` | 24.130863 s | 20.46 / 20.47 GB/s at 2 GiB; OFI restored; 0 mismatches | PASS |
+| `040-storage-injection` | 100.527138 s | ENOSPC after 33546240 B of filler; peer collective timeout | PASS: expected fault, exit code 1 |
+| `040-storage-recovery` | 17.867311 s | Saved step index 0 resumed to step index 1; 0 mismatches | PASS |
+| `040-fabric-recheck` | 24.252407 s | 20.82 / 20.83 GB/s at 2 GiB; 0 mismatches | PASS |
+| `050-fork` | 6.575038 s | 4 batches; 0 mismatches; FI_EFA_FORK_SAFE enabled | PASS: non-reproduction recorded |
+| `050-spawn` | 7.614720 s | 4 batches; 0 mismatches | PASS |
+| `050-cleanup` | 2.267839 s | Private containers and filler removed; last.json retained | PASS |
+
+The corrected baseline increased RDMA-write counters by `197732354992 B` on the first node and `197732094720 B` on the second node. Recovery increased them by `197731752480 B` and `197732051248 B`; the final fabric check increased them by `197731625520 B` and `197732328304 B`. The Socket round changed every exposed EFA byte counter by `0 B`. The unused EFA stayed at zero change throughout both complete sequences. NCCL ring logs reported `GDR 0`; positive EFA traffic does not prove absence of host staging. Set the protocol for the validated G7 environment only; it is not a universal platform default.
+
+The corrected sequence's module records establish completion and exit status for every command, including the expected checkpoint fault. The controller purged job identifier `5` before its final `scontrol show job` state was captured. Its exact final controller state is therefore unavailable; module completion, the node journal and the empty queue are the retained evidence.
+
+The `/run/aim344-checkpoints` fixture is a private `32 MiB` tmpfs. Its ENOSPC/retry/collective-timeout mechanism works without a shared filesystem. FSx quota enforcement or a service outage was not exercised. Both fork and spawn completed, so the historical fork hang did not reproduce. The participant page already accepts this observed outcome.
+
+Raw commands, allocations, UUIDs, health JSON, journals, timing records and complete logs are under `/tmp/spain-rehearsal/phase2/aim344/`; compact derivations are `participant-summary-344.json`, `health-summary.json` and `aim344-efa-rounds.json`. The numbered participant scripts ran in a batch harness, not an interactive participant shell. Literal g7.24xlarge hardware, production A100 execution, optional L4/EUD, stock NCCL health-gate repair, filesystem quotas, participant-role handoff and reboot/replacement-node persistence remain UNVALIDATED.

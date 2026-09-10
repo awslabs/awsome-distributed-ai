@@ -5,8 +5,14 @@ set -euo pipefail
 [[ $(id -u) == 0 ]] || { echo 'Run as root on the login node' >&2; exit 1; }
 partition=${1:?Usage: prepare-prolog.sh LAB_PARTITION}
 [[ $partition =~ ^[A-Za-z0-9_-]+$ ]] || exit 2
-stage=/fsx/aim344
-findmnt -T "$stage" -n -o FSTYPE | grep -qx lustre
+stage=${AIM344_STAGE_DIR:-/fsx/aim344}
+# Node-local staging is an explicit facilitator choice. Copy the prepared tree
+# and images to the same absolute path on every assigned compute node.
+if [[ ${AIM344_NODE_LOCAL:-0} == 1 ]]; then
+    [[ $stage == /opt/* && -d $stage ]] || { echo 'Node-local staging requires an existing /opt directory' >&2; exit 2; }
+else
+    findmnt -T "$stage" -n -o FSTYPE | grep -qx lustre
+fi
 [[ ! -L $stage && ! -L $stage/.prolog ]] || exit 2
 chown root:root "$stage"
 chmod 0755 "$stage"

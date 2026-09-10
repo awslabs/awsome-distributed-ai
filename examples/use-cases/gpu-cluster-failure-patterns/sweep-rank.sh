@@ -5,6 +5,9 @@ set -euo pipefail
 # Apply the same environment to baseline, injection and recovery. Plugin
 # availability is the independent variable; do not force NCCL_NET=Socket.
 unset NCCL_NET NCCL_NET_PLUGIN NCCL_IB_DISABLE FI_EFA_IFACE FI_EFA_DEVICE_NAME
+# A stand-in allocation may expose more host EFAs than the target instance.
+# Preserve an explicit physical-device selection for every NCCL rank.
+if [[ -n ${AIM344_EFA_IFACE:-} ]]; then export FI_EFA_IFACE=$AIM344_EFA_IFACE; fi
 export FI_PROVIDER=efa NCCL_DEBUG=INFO
 # Select after the Enroot hook, only inside an MPI rank. Exporting a PMIX_ name
 # around --mpi=none steps makes the hook try to mount nonexistent PMIx paths.

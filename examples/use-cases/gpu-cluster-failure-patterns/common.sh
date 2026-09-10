@@ -11,7 +11,7 @@ prepare_slurm() {
         echo 'This exercise requires exactly 2 allocated nodes.' >&2; exit 1;
     }
     local counts
-    counts=$(srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --mpi=none --cpu-bind=none \
+    counts=$(srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${SLURM_CPUS_ON_NODE:?}" --mpi=none --cpu-bind=none \
         bash -c 'if [[ -n ${SLURM_GPUS_ON_NODE:-} ]]; then printf "%s\n" "$SLURM_GPUS_ON_NODE"; else nvidia-smi -L | awk '\''/^GPU [0-9]+:/ {n++} END {print n+0}'\''; fi')
     mapfile -t gpu_counts <<< "$counts"
     [[ ${#gpu_counts[@]} == 2 && ${gpu_counts[0]} =~ ^[1-9][0-9]*$ && ${gpu_counts[0]} == "${gpu_counts[1]}" ]] || {
@@ -23,20 +23,20 @@ prepare_slurm() {
         echo 'Use a shared lab path without spaces, commas, or colons.' >&2; exit 1;
     }
     RESULTS_DIR=${RESULTS_DIR:-$LAB_DIR/results/$SLURM_JOB_ID}
-    mkdir -p -- "$RESULTS_DIR"
+    srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --mpi=none --cpu-bind=none mkdir -p -- "$RESULTS_DIR"
     RESULTS_DIR=$(cd -- "$RESULTS_DIR" && pwd)
     [[ $RESULTS_DIR != *[:,]* && $RESULTS_DIR != *' '* ]] || exit 1
     CONTAINER_NAME=aim344_$SLURM_JOB_ID
     CONTAINER_ARGS=(--container-image="$NCCL_ENROOT_IMAGE"
         --container-name="$CONTAINER_NAME" --container-writable
-        --no-container-mount-home
+        --container-env=FI_EFA_IFACE,AIM344_EFA_IFACE,AIM344_SOCKET_IFNAME --no-container-mount-home
         --container-mounts="$LAB_DIR:/opt/aim344:ro,$RESULTS_DIR:/results")
     # This initializes one private writable root filesystem on each node.
     node_command true
 }
 
 node_command() {
-    srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --mpi=none --cpu-bind=none \
+    srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${SLURM_CPUS_ON_NODE:?}" --mpi=none --cpu-bind=none \
         "${CONTAINER_ARGS[@]}" --container-remap-root "$@"
 }
 
@@ -65,7 +65,7 @@ prepare_torch() {
     [[ $TORCH_IMAGE == /* && $CHECKPOINT_DIR == /* && $CHECKPOINT_DIR != *[:,]* && $CHECKPOINT_DIR != *' '* ]] || exit 1
     CONTAINER_ARGS=(--container-image="$TORCH_IMAGE"
         --container-name="aim344_torch_$SLURM_JOB_ID" --container-writable
-        --no-container-mount-home
+        --container-env=FI_EFA_IFACE,AIM344_EFA_IFACE,AIM344_SOCKET_IFNAME --no-container-mount-home
         --container-mounts="$LAB_DIR:/opt/aim344:ro,$RESULTS_DIR:/results,$CHECKPOINT_DIR:/checkpoints")
     local first_node
     first_node=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
@@ -80,7 +80,7 @@ run_torch() {
     prepare_torch
     run_id=$phase-$(date -u +%Y%m%dT%H%M%SZ)
     timeout --signal=TERM --kill-after=30s 180s \
-        srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --mpi=none --cpu-bind=none \
+        srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${SLURM_CPUS_ON_NODE:?}" --mpi=none --cpu-bind=none \
         "${CONTAINER_ARGS[@]}" bash /opt/aim344/torch-node.sh "$@" \
         2>&1 | tee "$RESULTS_DIR/$run_id.log" || rc=$?
     printf 'launcher_exit_code=%s (dimensionless)\n' "$rc" | tee "$RESULTS_DIR/$run_id.status.log"
