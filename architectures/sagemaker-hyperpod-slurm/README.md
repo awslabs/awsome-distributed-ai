@@ -363,13 +363,13 @@ aws sagemaker update-cluster-software --cluster-name ml-cluster --region us-west
 ```
 
 Note that this API replaces the instance root volume and cleans up data in it. You should back up your work before running it.
-We've included a script `patching-backup.sh` that can backup and restore the data via Amazon S3.
+The [`patching-backup.sh`](../../1.architectures/5.sagemaker-hyperpod/patching-backup.sh) script can back up and restore the data via Amazon S3. It is retained at its original path for compatibility with existing documentation links. From this architecture directory, run:
 
 ```
 # to backup data to an S3 bucket before patching
-sudo bash patching-backup.sh --create <s3-buckup-bucket-path>
+sudo bash ../../1.architectures/5.sagemaker-hyperpod/patching-backup.sh --create <s3-buckup-bucket-path>
 # to restore data from an S3 bucket after patching
-sudo bash patching-backup.sh --restore <s3-buckup-bucket-path>
+sudo bash ../../1.architectures/5.sagemaker-hyperpod/patching-backup.sh --restore <s3-buckup-bucket-path>
 ```
 
 ### 3.7 Managing Neuron SDK versions on Trainium/Inferentia clusters
