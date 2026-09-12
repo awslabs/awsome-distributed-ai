@@ -18,9 +18,11 @@ Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
-          default: Capacity Blocks for ML Settings (Optional)
+          default: Capacity Reservation Settings (Optional)
         Parameters:
           - CapacityReservationId
+          - CapacityReservationType
+          - PlacementGroupName
       - Label:
           default: Additional Compute Node Group Settings
         Parameters:
@@ -61,6 +63,35 @@ Parameters:
       EMPTY for On-Demand. NOTE: this is for Capacity Blocks ONLY — do not put an
       On-Demand Capacity Reservation (ODCR) ID here. An ODCR with "open" matching
       is consumed automatically by On-Demand launches, so for ODCR leave this empty.
+    Default: ""
+
+  CapacityReservationType:
+    Type: String
+    Description: >-
+      How to interpret CapacityReservationId. 'capacity-block' (default,
+      backward compatible) launches with MarketType=capacity-block and does NOT
+      use a placement group, as Capacity Blocks already provide their own
+      physical placement. 'targeted-odcr' targets an On-Demand Capacity
+      Reservation that accepts only targeted launches, keeps On-Demand billing,
+      and KEEPS the cluster placement group -- required when the ODCR was
+      created inside a placement group, because EC2 only matches an instance to
+      such a reservation when the placement group ARN also matches. Ignored when
+      CapacityReservationId is empty.
+    Default: capacity-block
+    AllowedValues:
+      - capacity-block
+      - targeted-odcr
+
+  PlacementGroupName:
+    Type: String
+    Description: >-
+      (Optional) Name of an EXISTING cluster placement group to launch the
+      compute nodes into. Leave EMPTY (default) to create and use a new cluster
+      placement group. Set this when the capacity reservation you are consuming
+      was created inside a specific placement group -- the reservation is only
+      matched when the instance's placement group ARN matches the
+      reservation's. Only used on the On-Demand and 'targeted-odcr' paths;
+      Capacity Blocks do not use a placement group.
     Default: ""
 
   ClusterId:
@@ -261,8 +292,22 @@ Parameters:
     Default: 'templates/aws-pcs/'
 
 Conditions:
-  UseCapacityBlock: !Not [!Equals [!Ref CapacityReservationId, ""]]
-  UseOnDemand: !Equals [!Ref CapacityReservationId, ""]
+  HasCapacityReservation: !Not [!Equals [!Ref CapacityReservationId, ""]]
+  # Capacity Block: reservation set AND type is capacity-block. Launches with
+  # MarketType=capacity-block and no placement group.
+  UseCapacityBlock: !And
+    - !Not [!Equals [!Ref CapacityReservationId, ""]]
+    - !Equals [!Ref CapacityReservationType, "capacity-block"]
+  # Targeted ODCR keeps On-Demand billing and the placement group; it is
+  # expressed by UsePlacementGroup below plus the absence of MarketType.
+  UsePlacementGroup: !Or
+    - !Equals [!Ref CapacityReservationId, ""]
+    - !Equals [!Ref CapacityReservationType, "targeted-odcr"]
+  CreatePlacementGroup: !And
+    - !Or
+      - !Equals [!Ref CapacityReservationId, ""]
+      - !Equals [!Ref CapacityReservationType, "targeted-odcr"]
+    - !Equals [!Ref PlacementGroupName, ""]
   CreateQueue: !Not [!Equals [!Ref QueueName, ""]]
   # Emit the monitoring-role tag for both login and compute nodes (any role
   # other than 'none'). The monitoring stack identifies login nodes by this
@@ -280,7 +325,7 @@ Resources:
   # Cluster Placement Group (On-Demand only)
   PlacementGroup:
     Type: AWS::EC2::PlacementGroup
-    Condition: UseOnDemand
+    Condition: CreatePlacementGroup
     Properties:
       Strategy: cluster
 
@@ -437,13 +482,16 @@ Resources:
           - MarketType: capacity-block
           - !Ref AWS::NoValue
         CapacityReservationSpecification: !If
-          - UseCapacityBlock
+          - HasCapacityReservation
           - CapacityReservationTarget:
               CapacityReservationId: !Ref CapacityReservationId
           - !Ref AWS::NoValue
         Placement: !If
-          - UseOnDemand
-          - GroupName: !Ref PlacementGroup
+          - UsePlacementGroup
+          - GroupName: !If
+              - CreatePlacementGroup
+              - !Ref PlacementGroup
+              - !Ref PlacementGroupName
           - !Ref AWS::NoValue
         TagSpecifications:
           - ResourceType: instance

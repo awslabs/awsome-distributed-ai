@@ -14,21 +14,34 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   NAT gateway). This unblocks `OpenZFSDeploymentType=MULTI_AZ` and higher-availability
   layouts. *(Note: OpenZFS MULTI_AZ wiring of the 2nd subnet into the FSx resource is a
   follow-up; the subnets + routing are in place.)*
-- [ ] 🟡 **Targeted ODCR support for GPU node groups.** Today `CapacityReservationId`
-  on `add-cng-p5`/`add-cng-p6-b200`/`add-cng-p6-b300` is **Capacity Block for ML only** —
-  setting it forces `MarketType=capacity-block` and drops the placement group, so a
-  *targeted* On-Demand Capacity Reservation (ODCR) cannot be consumed (only "open" ODCRs,
-  via the empty/On-Demand path, work). Add a `CapacityReservationType` enum
-  (`none` | `capacity-block` | `targeted-odcr`) and branch the launch template:
-  `targeted-odcr` sets `CapacityReservationTarget` **without** `MarketType=capacity-block`
-  and **keeps** the placement group (On-Demand billing against the reservation).
-  `none`/`capacity-block` stay equivalent to today (backward compatible). Replaces the
-  current "do not put an ODCR ID here" caveat. Verification can be done **without GPU
-  capacity**: (1) static — create the GPU CNGs with `Min/MaxCount=0` and assert the
-  generated launch template's `CapacityReservationSpecification`/`InstanceMarketOptions`/
-  `Placement` per type; (2) dynamic — the branch logic is instance-family-independent, so
-  exercise actual targeted-ODCR consumption (`InstanceLifecycle` empty = On-Demand, reserved
-  count decrements) on a cheap type (c6i/g5).
+- [x] ✅ **Targeted ODCR support for GPU node groups.** Done: `CapacityReservationType`
+  (`capacity-block` | `targeted-odcr`) on `add-cng-p5`/`add-cng-p6-b200`/`add-cng-p6-b300`
+  plus a `PlacementGroupName` parameter for reusing an existing cluster placement group
+  (`PseriesPlacementGroupName` on deploy-all). `targeted-odcr` sets
+  `CapacityReservationTarget` **without** `MarketType=capacity-block` and **keeps** the
+  placement group (On-Demand billing against the reservation);
+  `capacity-block` (the default) is unchanged and backward compatible. Verified without
+  GPU capacity by the static method below: a launch-template-only harness deployed in all
+  three modes, reading back the generated `LaunchTemplateData` —
+  On-Demand → `MarketType=null, crid=null, pg=<new>`;
+  `capacity-block` → `MarketType=capacity-block, crid=<id>, pg=null`;
+  `targeted-odcr` → `MarketType=null, crid=<id>, pg=<existing group>`.
+  **Confirmed end-to-end on real hardware** (2026-08-01): a PCS GPU node group
+  created with `CapacityReservationType=targeted-odcr` and an existing
+  placement group launched 2x p5.48xlarge that EC2 attributed to the targeted
+  reservation (`CapacityReservationId` set on both instances,
+  `Placement.GroupName` = the passed-in group) and the reservation's
+  `AvailableInstanceCount` went 2 -> 0, i.e. the capacity was actually consumed.
+  A Slurm job on the resulting `gpu` partition ran on both nodes.
+- [x] ✅ **P4d / P4de support.** `add-cng-p4d.yaml` (4 network cards, all EFA, card 0 on
+  DeviceIndex 0, cards 1-3 on DeviceIndex 1, per `describe-instance-types`
+  `NetworkInfo.NetworkCards` / `EfaInfo.MaximumEfaInterfaces = 4`; identical for
+  p4d.24xlarge and p4de.24xlarge) plus a `P4DCNGStack` branch in deploy-all
+  (`PseriesInstanceType` accepts `p4d.24xlarge` / `p4de.24xlarge`). Verified with the
+  static method (2026-09-08, us-west-2, no GPU capacity): CNGs created with
+  `Min/MaxCount=0` for both types reached ACTIVE and the generated launch template
+  carried the 4-NIC EFA layout, `MarketType=null`, a new placement group. A live boot
+  is pending the re:Invent dry-run ODCR (2x p4d.24xlarge, CTI P508054549).
 - [ ] 🟡 **Scope down the instance role's `AmazonS3ReadOnlyAccess`.** The PCS instance
   role in `cluster.yaml` attaches `AmazonS3ReadOnlyAccess` **unconditionally** (every node
   can read every S3 bucket in the account). The upstream
@@ -57,8 +70,8 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   with a different NIC/EFA layout (e.g. p6e-gb200 = 17 network cards) and likely need an
   arm64 PCS-Ready DLAMI and arm64 Enroot/Pyxis builds — validate the AMI, EFA, and a
   sample run.
-- [ ] 🟢 **Consolidate the per-family GPU add-cng templates (p5 / p6-b200 / p6-b300).**
-  The three `add-cng-p6*`/`add-cng-p5` templates are ~85% identical; the real difference
+- [ ] 🟢 **Consolidate the per-family GPU add-cng templates (p4d / p5 / p6-b200 / p6-b300).**
+  The four `add-cng-p4d`/`add-cng-p5`/`add-cng-p6*` templates are ~85% identical; the real difference
   is the `NetworkInterfaces` EFA layout (card count, whether card 0 is EFA or ENA-only, and
   the EFA DeviceIndex). They are kept separate today so each NIC list stays flat and
   hand-checkable against the EC2 docs. Investigate generating the interface list from a

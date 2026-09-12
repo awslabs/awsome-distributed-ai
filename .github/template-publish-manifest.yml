@@ -17,6 +17,8 @@ obsolete_keys: []
 entries:
   - source: architectures/aws-pcs/assets/add-cng.yaml
     key: aws-pcs/add-cng.yaml
+  - source: architectures/aws-pcs/assets/add-cng-p4d.yaml
+    key: aws-pcs/add-cng-p4d.yaml
   - source: architectures/aws-pcs/assets/add-cng-p5.yaml
     key: aws-pcs/add-cng-p5.yaml
   - source: architectures/aws-pcs/assets/add-cng-p6-b200.yaml
