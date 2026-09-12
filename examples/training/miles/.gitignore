@@ -1,0 +1,9 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+# Local environment files with filled-in secrets/values -- never commit
+env_vars
+env_vars.disaggregated
+
+# Eval / training artifacts
+eval_results/
