@@ -1,0 +1,943 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Amazon EKS GPU cluster for distributed training and inference: VPC, EKS cluster, system
+  node group, EFA-enabled GPU managed node group in a cluster placement group (optional
+  targeted ODCR or Capacity Block), and a CodeBuild bootstrap that installs the NVIDIA and
+  EFA device plugins and optionally pre-pulls a container image on every GPU node.
+
+Parameters:
+  PrimarySubnetAZ:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: Availability Zone for the GPU nodes; the AZ of the ODCR shared into this account.
+  SecondarySubnetAZ:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: A second Availability Zone for the EKS control plane subnet (different from PrimarySubnetAZ).
+  GpuInstanceType:
+    Type: String
+    Default: p5.48xlarge
+    AllowedValues:
+      - g7e.12xlarge
+      - g7e.24xlarge
+      - g7e.48xlarge
+      - p4d.24xlarge
+      - p4de.24xlarge
+      - p5.48xlarge
+      - p5en.48xlarge
+      - p6-b200.48xlarge
+      - p6-b300.48xlarge
+    Description: GPU instance type. The EFA interface count and layout follow the type (see the NicLayout mapping).
+  GpuNodeCount:
+    Type: Number
+    Default: 2
+    MinValue: 0
+    MaxValue: 4
+    Description: Number of GPU nodes (min = desired = max). 0 creates the cluster and device plugins without GPU capacity.
+  CapacityReservationId:
+    Type: String
+    Default: ""
+    Description: Capacity reservation for the GPU nodes (targeted ODCR or Capacity Block for ML). Leave empty for On-Demand or an open ODCR.
+  CapacityReservationType:
+    Type: String
+    Default: targeted-odcr
+    AllowedValues:
+      - targeted-odcr
+      - capacity-block
+    Description: How CapacityReservationId is consumed. capacity-block sets MarketType=capacity-block and omits the placement group.
+  KubernetesVersion:
+    Type: String
+    Default: "1.34"
+  SystemInstanceType:
+    Type: String
+    Default: m6i.xlarge
+    Description: Instance type of the 2-node system node group (CoreDNS and other cluster services).
+  PrePullImage:
+    Type: String
+    Default: ""
+    Description: Container image pulled onto every GPU node after the device plugins are installed. Empty skips the pull.
+  AdminRoleArn:
+    Type: String
+    Default: ""
+    Description: IAM role or user ARN that receives AmazonEKSClusterAdminPolicy in addition to the stack creator. Empty skips it.
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+
+Mappings:
+  NicLayout:
+    g7e.12xlarge:
+      Cards: "1"
+      PrimaryEfa: "true"
+    g7e.24xlarge:
+      Cards: "2"
+      PrimaryEfa: "true"
+    g7e.48xlarge:
+      Cards: "4"
+      PrimaryEfa: "true"
+    p4d.24xlarge:
+      Cards: "4"
+      PrimaryEfa: "true"
+    p4de.24xlarge:
+      Cards: "4"
+      PrimaryEfa: "true"
+    p5.48xlarge:
+      Cards: "32"
+      PrimaryEfa: "true"
+    p5en.48xlarge:
+      Cards: "16"
+      PrimaryEfa: "true"
+    p6-b200.48xlarge:
+      Cards: "8"
+      PrimaryEfa: "true"
+    p6-b300.48xlarge:
+      Cards: "17"
+      PrimaryEfa: "false"
+
+Conditions:
+  HasReservation: !Not [!Equals [!Ref CapacityReservationId, ""]]
+  HasAdmin: !Not [!Equals [!Ref AdminRoleArn, ""]]
+  GpuZero: !Equals [!Ref GpuNodeCount, 0]
+  IsCapacityBlock: !Equals [!Ref CapacityReservationType, capacity-block]
+  UsePlacementGroup: !Not [!Condition IsCapacityBlock]
+  PrimarySupportsEfa: !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, PrimaryEfa], "true"]
+  HasCard1: !Or
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "2"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "4"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "8"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "16"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "17"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard2: !Or
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "4"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "8"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "16"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "17"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard3: !Or
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "4"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "8"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "16"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "17"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard4: !Or
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "8"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "16"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "17"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard5: !Or
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "8"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "16"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "17"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard6: !Or
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "8"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "16"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "17"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard7: !Or
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "8"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "16"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "17"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard8: !Or
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "16"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "17"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard9: !Or
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "16"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "17"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard10: !Or
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "16"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "17"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard11: !Or
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "16"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "17"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard12: !Or
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "16"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "17"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard13: !Or
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "16"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "17"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard14: !Or
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "16"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "17"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard15: !Or
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "16"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "17"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard16: !Or
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "17"]
+    - !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard17: !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard18: !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard19: !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard20: !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard21: !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard22: !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard23: !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard24: !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard25: !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard26: !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard27: !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard28: !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard29: !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard30: !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+  HasCard31: !Equals [!FindInMap [NicLayout, !Ref GpuInstanceType, Cards], "32"]
+
+Resources:
+  # ---------------------------------------------------------------- network
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-vpc"
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref PrimarySubnetAZ
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 8, 12]]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public"
+        - Key: kubernetes.io/role/elb
+          Value: "1"
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref PrimarySubnetAZ
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 8, 12]]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private"
+        - Key: kubernetes.io/role/internal-elb
+          Value: "1"
+  ControlPlaneSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref SecondarySubnetAZ
+      CidrBlock: !Select [2, !Cidr [!Ref VpcCidr, 8, 12]]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-control-plane"
+  NatEip:
+    Type: AWS::EC2::EIP
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      Domain: vpc
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref PublicSubnet
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnetRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+  PrivateSubnetRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+  ControlPlaneSubnetRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref ControlPlaneSubnet
+      RouteTableId: !Ref PrivateRouteTable
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+        - !Ref PublicRouteTable
+
+  # EFA requires all traffic between members of the same security group.
+  NodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: EKS nodes and EFA traffic
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nodes"
+  NodeSecurityGroupSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref NodeSecurityGroup
+      IpProtocol: "-1"
+      SourceSecurityGroupId: !Ref NodeSecurityGroup
+  NodeSecurityGroupSelfEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref NodeSecurityGroup
+      IpProtocol: "-1"
+      DestinationSecurityGroupId: !Ref NodeSecurityGroup
+
+  # ---------------------------------------------------------------- EKS cluster
+  ClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: eks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+  Cluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Sub "${AWS::StackName}"
+      Version: !Ref KubernetesVersion
+      RoleArn: !GetAtt ClusterRole.Arn
+      AccessConfig:
+        AuthenticationMode: API
+        BootstrapClusterCreatorAdminPermissions: true
+      ResourcesVpcConfig:
+        SubnetIds:
+          - !Ref PrivateSubnet
+          - !Ref ControlPlaneSubnet
+        SecurityGroupIds:
+          - !Ref NodeSecurityGroup
+        EndpointPublicAccess: true
+        EndpointPrivateAccess: true
+      Logging:
+        ClusterLogging:
+          EnabledTypes:
+            - Type: api
+            - Type: audit
+  AdminAccessEntry:
+    Type: AWS::EKS::AccessEntry
+    Condition: HasAdmin
+    Properties:
+      ClusterName: !Ref Cluster
+      PrincipalArn: !Ref AdminRoleArn
+      AccessPolicies:
+        - PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+          AccessScope:
+            Type: cluster
+  BootstrapAccessEntry:
+    Type: AWS::EKS::AccessEntry
+    Properties:
+      ClusterName: !Ref Cluster
+      PrincipalArn: !GetAtt BootstrapBuildRole.Arn
+      AccessPolicies:
+        - PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+          AccessScope:
+            Type: cluster
+  VpcCniAddon:
+    Type: AWS::EKS::Addon
+    Properties:
+      ClusterName: !Ref Cluster
+      AddonName: vpc-cni
+      ResolveConflicts: OVERWRITE
+  KubeProxyAddon:
+    Type: AWS::EKS::Addon
+    Properties:
+      ClusterName: !Ref Cluster
+      AddonName: kube-proxy
+      ResolveConflicts: OVERWRITE
+  CoreDnsAddon:
+    Type: AWS::EKS::Addon
+    DependsOn: SystemNodeGroup
+    Properties:
+      ClusterName: !Ref Cluster
+      AddonName: coredns
+      ResolveConflicts: OVERWRITE
+  PodIdentityAddon:
+    Type: AWS::EKS::Addon
+    Properties:
+      ClusterName: !Ref Cluster
+      AddonName: eks-pod-identity-agent
+      ResolveConflicts: OVERWRITE
+
+  # ---------------------------------------------------------------- node groups
+  NodeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+  SystemNodeGroup:
+    Type: AWS::EKS::Nodegroup
+    DependsOn:
+      - VpcCniAddon
+      - KubeProxyAddon
+    Properties:
+      ClusterName: !Ref Cluster
+      NodegroupName: system
+      NodeRole: !GetAtt NodeRole.Arn
+      AmiType: AL2023_x86_64_STANDARD
+      InstanceTypes:
+        - !Ref SystemInstanceType
+      Subnets:
+        - !Ref PrivateSubnet
+      ScalingConfig:
+        MinSize: 2
+        DesiredSize: 2
+        MaxSize: 2
+      Labels:
+        role: system
+
+  GpuPlacementGroup:
+    Type: AWS::EC2::PlacementGroup
+    Properties:
+      Strategy: cluster
+
+  # One interface per network card, count and primary type taken from the NicLayout
+  # mapping (describe-instance-types NetworkInfo.NetworkCards / EfaInfo). Card 0 is
+  # DeviceIndex 0; every other card is DeviceIndex 1 with InterfaceType efa. Cards the
+  # instance type does not have resolve to AWS::NoValue and drop out of the list.
+  # Each interface carries the node security group (EFA self-traffic) and the EKS
+  # cluster security group (control plane). Local NVMe is assembled as RAID0.
+  GpuLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${AWS::StackName}-gpu"
+      LaunchTemplateData:
+        InstanceType: !Ref GpuInstanceType
+        Placement: !If
+          - UsePlacementGroup
+          - GroupName: !Ref GpuPlacementGroup
+          - !Ref AWS::NoValue
+        InstanceMarketOptions: !If
+          - IsCapacityBlock
+          - MarketType: capacity-block
+          - !Ref AWS::NoValue
+        CapacityReservationSpecification: !If
+          - HasReservation
+          - CapacityReservationTarget:
+              CapacityReservationId: !Ref CapacityReservationId
+          - !Ref AWS::NoValue
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: 300
+              VolumeType: gp3
+              DeleteOnTermination: true
+        MetadataOptions:
+          HttpPutResponseHopLimit: 2
+          HttpTokens: required
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            NetworkCardIndex: 0
+            InterfaceType: !If [PrimarySupportsEfa, efa, !Ref AWS::NoValue]
+            Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+          - !If
+            - HasCard1
+            - DeviceIndex: 1
+              NetworkCardIndex: 1
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard2
+            - DeviceIndex: 1
+              NetworkCardIndex: 2
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard3
+            - DeviceIndex: 1
+              NetworkCardIndex: 3
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard4
+            - DeviceIndex: 1
+              NetworkCardIndex: 4
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard5
+            - DeviceIndex: 1
+              NetworkCardIndex: 5
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard6
+            - DeviceIndex: 1
+              NetworkCardIndex: 6
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard7
+            - DeviceIndex: 1
+              NetworkCardIndex: 7
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard8
+            - DeviceIndex: 1
+              NetworkCardIndex: 8
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard9
+            - DeviceIndex: 1
+              NetworkCardIndex: 9
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard10
+            - DeviceIndex: 1
+              NetworkCardIndex: 10
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard11
+            - DeviceIndex: 1
+              NetworkCardIndex: 11
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard12
+            - DeviceIndex: 1
+              NetworkCardIndex: 12
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard13
+            - DeviceIndex: 1
+              NetworkCardIndex: 13
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard14
+            - DeviceIndex: 1
+              NetworkCardIndex: 14
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard15
+            - DeviceIndex: 1
+              NetworkCardIndex: 15
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard16
+            - DeviceIndex: 1
+              NetworkCardIndex: 16
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard17
+            - DeviceIndex: 1
+              NetworkCardIndex: 17
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard18
+            - DeviceIndex: 1
+              NetworkCardIndex: 18
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard19
+            - DeviceIndex: 1
+              NetworkCardIndex: 19
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard20
+            - DeviceIndex: 1
+              NetworkCardIndex: 20
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard21
+            - DeviceIndex: 1
+              NetworkCardIndex: 21
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard22
+            - DeviceIndex: 1
+              NetworkCardIndex: 22
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard23
+            - DeviceIndex: 1
+              NetworkCardIndex: 23
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard24
+            - DeviceIndex: 1
+              NetworkCardIndex: 24
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard25
+            - DeviceIndex: 1
+              NetworkCardIndex: 25
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard26
+            - DeviceIndex: 1
+              NetworkCardIndex: 26
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard27
+            - DeviceIndex: 1
+              NetworkCardIndex: 27
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard28
+            - DeviceIndex: 1
+              NetworkCardIndex: 28
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard29
+            - DeviceIndex: 1
+              NetworkCardIndex: 29
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard30
+            - DeviceIndex: 1
+              NetworkCardIndex: 30
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+          - !If
+            - HasCard31
+            - DeviceIndex: 1
+              NetworkCardIndex: 31
+              InterfaceType: efa
+              Groups: [!Ref NodeSecurityGroup, !GetAtt Cluster.ClusterSecurityGroupId]
+            - !Ref AWS::NoValue
+        UserData:
+          Fn::Base64: |
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="==BOUNDARY=="
+
+            --==BOUNDARY==
+            Content-Type: application/node.eks.aws
+
+            apiVersion: node.eks.aws/v1alpha1
+            kind: NodeConfig
+            spec:
+              instance:
+                localStorage:
+                  strategy: RAID0
+            --==BOUNDARY==--
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub "${AWS::StackName}-gpu"
+  GpuNodeGroup:
+    Type: AWS::EKS::Nodegroup
+    DependsOn:
+      - VpcCniAddon
+      - KubeProxyAddon
+    Properties:
+      ClusterName: !Ref Cluster
+      NodegroupName: gpu
+      NodeRole: !GetAtt NodeRole.Arn
+      AmiType: AL2023_x86_64_NVIDIA
+      Subnets:
+        - !Ref PrivateSubnet
+      LaunchTemplate:
+        Id: !Ref GpuLaunchTemplate
+        Version: !GetAtt GpuLaunchTemplate.LatestVersionNumber
+      ScalingConfig:
+        MinSize: !Ref GpuNodeCount
+        DesiredSize: !Ref GpuNodeCount
+        MaxSize: !If [GpuZero, 1, !Ref GpuNodeCount]
+      Labels:
+        role: gpu
+        instance-type: !Ref GpuInstanceType
+      Taints:
+        - Key: nvidia.com/gpu
+          Value: "true"
+          Effect: NO_SCHEDULE
+
+  # ---------------------------------------------------------------- bootstrap (CodeBuild)
+  BootstrapLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/codebuild/${AWS::StackName}-bootstrap"
+      RetentionInDays: 30
+  BootstrapBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: bootstrap
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - eks:DescribeCluster
+                  - eks:DescribeNodegroup
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${BootstrapLogGroup.Arn}:*"
+  BootstrapProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${AWS::StackName}-bootstrap"
+      ServiceRole: !GetAtt BootstrapBuildRole.Arn
+      TimeoutInMinutes: 60
+      Artifacts:
+        Type: NO_ARTIFACTS
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref BootstrapLogGroup
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
+        EnvironmentVariables:
+          - Name: CLUSTER_NAME
+            Value: !Ref Cluster
+          - Name: GPU_NODE_COUNT
+            Value: !Ref GpuNodeCount
+          - Name: PRE_PULL_IMAGE
+            Value: !Ref PrePullImage
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          env:
+            variables:
+              KUBECTL_VERSION: "1.34.1"
+              HELM_VERSION: "3.19.0"
+          phases:
+            install:
+              commands:
+                - curl -sSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl" && chmod +x /usr/local/bin/kubectl
+                - curl -sSL "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" | tar -xz -C /tmp && mv /tmp/linux-amd64/helm /usr/local/bin/helm
+                - aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+            build:
+              commands:
+                - |
+                  set -euo pipefail
+                  send() { # status reason
+                    [ -n "${CFN_RESPONSE_URL:-}" ] || return 0
+                    printf '{"Status":"%s","Reason":"%s","PhysicalResourceId":"%s-bootstrap","StackId":"%s","RequestId":"%s","LogicalResourceId":"%s","Data":{}}' \
+                      "$1" "$2" "$CLUSTER_NAME" "$CFN_STACK_ID" "$CFN_REQUEST_ID" "$CFN_LOGICAL_ID" > /tmp/resp.json
+                    curl -sS -X PUT -H 'Content-Type:' --data-binary @/tmp/resp.json "$CFN_RESPONSE_URL"
+                  }
+                  trap 'send FAILED "bootstrap failed; see CodeBuild log $CODEBUILD_BUILD_ID"' ERR
+                  helm repo add nvdp https://nvidia.github.io/k8s-device-plugin
+                  helm repo add eks https://aws.github.io/eks-charts
+                  helm repo update
+                  helm upgrade --install nvdp nvdp/nvidia-device-plugin --namespace nvidia-device-plugin --create-namespace --wait --timeout 10m \
+                    --set gfd.enabled=true \
+                    --set-json 'tolerations=[{"key":"nvidia.com/gpu","operator":"Exists","effect":"NoSchedule"}]'
+                  helm upgrade --install aws-efa-k8s-device-plugin eks/aws-efa-k8s-device-plugin --namespace kube-system --wait --timeout 10m \
+                    --set-json 'tolerations=[{"key":"nvidia.com/gpu","operator":"Exists","effect":"NoSchedule"}]'
+                  for i in $(seq 1 60); do
+                    ready=$(kubectl get nodes -l role=gpu -o json | python3 -c 'import sys,json; ns=json.load(sys.stdin)["items"]; print(sum(1 for n in ns if n["status"].get("allocatable",{}).get("nvidia.com/gpu","0")!="0" and n["status"].get("allocatable",{}).get("vpc.amazonaws.com/efa","0")!="0"))')
+                    echo "gpu nodes advertising GPU+EFA: $ready / $GPU_NODE_COUNT"
+                    [ "$ready" -ge "$GPU_NODE_COUNT" ] && break
+                    sleep 20
+                  done
+                  [ "$ready" -ge "$GPU_NODE_COUNT" ]
+                  [ "$GPU_NODE_COUNT" -gt 0 ] || PRE_PULL_IMAGE=""
+                  kubectl get nodes -l role=gpu -o custom-columns='NAME:.metadata.name,TYPE:.metadata.labels.node\.kubernetes\.io/instance-type,GPU:.status.allocatable.nvidia\.com/gpu,EFA:.status.allocatable.vpc\.amazonaws\.com/efa'
+                  if [ -n "$PRE_PULL_IMAGE" ]; then
+                    cat <<EOF | kubectl apply -f -
+                  apiVersion: apps/v1
+                  kind: DaemonSet
+                  metadata: { name: prepull, namespace: kube-system }
+                  spec:
+                    selector: { matchLabels: { app: prepull } }
+                    template:
+                      metadata: { labels: { app: prepull } }
+                      spec:
+                        nodeSelector: { role: gpu }
+                        tolerations: [{ key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }]
+                        initContainers:
+                          - { name: pull, image: "$PRE_PULL_IMAGE", command: ["true"] }
+                        containers:
+                          - { name: hold, image: public.ecr.aws/docker/library/busybox:1.36, command: ["sleep", "infinity"] }
+                  EOF
+                    kubectl rollout status daemonset/prepull -n kube-system --timeout=40m
+                  fi
+                  trap - ERR
+                  send SUCCESS "device plugins installed on $ready GPU nodes"
+  BootstrapTriggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: start-build
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: codebuild:StartBuild
+                Resource: !GetAtt BootstrapProject.Arn
+  BootstrapTrigger:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 60
+      Role: !GetAtt BootstrapTriggerRole.Arn
+      Code:
+        ZipFile: |
+          import json, urllib.request, boto3
+          def respond(event, status, reason):
+              body = json.dumps({"Status": status, "Reason": reason,
+                                 "PhysicalResourceId": event.get("PhysicalResourceId", event["LogicalResourceId"]),
+                                 "StackId": event["StackId"], "RequestId": event["RequestId"],
+                                 "LogicalResourceId": event["LogicalResourceId"], "Data": {}}).encode()
+              req = urllib.request.Request(event["ResponseURL"], data=body, method="PUT", headers={"Content-Type": ""})
+              urllib.request.urlopen(req)
+          def handler(event, context):
+              if event["RequestType"] == "Delete":
+                  respond(event, "SUCCESS", "nothing to delete"); return
+              try:
+                  boto3.client("codebuild").start_build(
+                      projectName=event["ResourceProperties"]["ProjectName"],
+                      environmentVariablesOverride=[
+                          {"name": "CFN_RESPONSE_URL", "value": event["ResponseURL"]},
+                          {"name": "CFN_STACK_ID", "value": event["StackId"]},
+                          {"name": "CFN_REQUEST_ID", "value": event["RequestId"]},
+                          {"name": "CFN_LOGICAL_ID", "value": event["LogicalResourceId"]},
+                      ])
+              except Exception as e:
+                  respond(event, "FAILED", f"start_build: {e}")
+  Bootstrap:
+    Type: Custom::EksBootstrap
+    DependsOn:
+      - GpuNodeGroup
+      - SystemNodeGroup
+      - CoreDnsAddon
+      - BootstrapAccessEntry
+    Properties:
+      ServiceToken: !GetAtt BootstrapTrigger.Arn
+      ProjectName: !Ref BootstrapProject
+      GpuInstanceType: !Ref GpuInstanceType
+      GpuNodeCount: !Ref GpuNodeCount
+      PrePullImage: !Ref PrePullImage
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+  ClusterArn:
+    Value: !GetAtt Cluster.Arn
+  VPCId:
+    Value: !Ref VPC
+  GpuNodeGroup:
+    Value: gpu
+  GpuInstanceType:
+    Value: !Ref GpuInstanceType
+  Region:
+    Value: !Ref AWS::Region
+  KubeconfigCommand:
+    Value: !Sub "aws eks update-kubeconfig --name ${Cluster} --region ${AWS::Region}"

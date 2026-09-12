@@ -49,3 +49,5 @@ entries:
     key: aws-pcs/scripts/needrestart-guard.sh
   - source: architectures/aws-pcs/assets/scripts/setup-directory.sh
     key: aws-pcs/scripts/setup-directory.sh
+  - source: architectures/amazon-eks/assets/eks-gpu-cluster.yaml
+    key: amazon-eks/eks-gpu-cluster.yaml
