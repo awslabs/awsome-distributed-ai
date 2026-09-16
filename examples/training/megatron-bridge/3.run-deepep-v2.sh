@@ -14,7 +14,10 @@ if [ "${STORAGE:-pvc}" != pvc ]; then
   exit 2
 fi
 export STORAGE=pvc
-export MODEL=kimi-k2 EP_BACKEND=deepepv2
+export MODEL=kimi-k2
+# Transport label for env.txt provenance: empty for the NCCL alltoall arm,
+# per the inherited launcher's contract.
+if [ "$ARM" = deepepv2 ]; then export EP_BACKEND=deepepv2; else export EP_BACKEND=; fi
 export BENCH_PY="${BENCH_PY:-/opt/benchmark/bench_kimi_k2_pretrain.py}"
 export MOE_A2A_OVERLAP="${MOE_A2A_OVERLAP:-off}"
 if [ "$MOE_A2A_OVERLAP" != off ]; then

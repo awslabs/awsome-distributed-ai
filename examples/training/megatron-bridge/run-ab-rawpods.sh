@@ -26,7 +26,7 @@
 # completed STATUS is REFUSED (rank-0 aborts) so a retro is never clobbered. CAMPAIGN_ID
 # defaults to a fresh UTC timestamp; the campaign driver passes one shared id for all runs.
 #
-# Usage:  MODEL=<dsv3|kimi-k2|qwen3-235b> CTX=<ctx> IMG=<ecr-uri> ./run-ab-rawpods.sh <alltoall|deepep> [NNODES]
+# Usage:  MODEL=<dsv3|kimi-k2|qwen3-235b> CTX=<ctx> IMG=<ecr-uri> ./run-ab-rawpods.sh <alltoall|deepep|deepepv2> [NNODES]
 set -uo pipefail
 
 # Render manifests without contacting Kubernetes or deleting any existing jobs.
@@ -42,7 +42,7 @@ apply_manifest() {
   fi
 }
 
-ARM="${1:?usage: MODEL=<dsv3|kimi-k2|qwen3-235b> ./run-ab-rawpods.sh <alltoall|deepep> [NNODES]}"
+ARM="${1:?usage: MODEL=<dsv3|kimi-k2|qwen3-235b> ./run-ab-rawpods.sh <alltoall|deepep|deepepv2> [NNODES]}"
 NNODES="${2:-32}"
 # Optional explicit allocation. A hostname selector keeps Kubernetes responsible
 # for resource accounting while preventing placement on another reservation.

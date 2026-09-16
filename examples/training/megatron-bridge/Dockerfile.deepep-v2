@@ -39,6 +39,8 @@ RUN CMAKE_BUILD_PARALLEL_LEVEL=${MAX_JOBS} MAKEFLAGS=-j${MAX_JOBS} \
     test "$(git -C /opt/amazon/deepep rev-parse HEAD)" = "${DEEPEP_COMMIT}"
 
 FROM transport AS upstream
+# These pins are also asserted by the baked source verifier: overriding them at
+# build time is rejected by the final verify step by design.
 ARG MCORE_COMMIT=bb5dfd08f09ce06c5925af453fef06b3129f199d
 ARG BRIDGE_COMMIT=281f4bebfd78eb7cc9e8282c7929e99a9746b6cc
 # Install the pinned sources. The base supplies the training dependencies;
@@ -57,7 +59,7 @@ ENV MEGATRON_VARIANT=dev-deepepv2 MOE_DISPATCHER=deepepv2 MCORE_COMMIT=${MCORE_C
     TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST} \
     NCCL_NET_PLUGIN=/opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so \
     NCCL_GIN_PLUGIN=/opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so \
-    NCCL_GIN_TYPE=5 NVIDIA_GDRCOPY=enabled
+    NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0 NVIDIA_GDRCOPY=enabled
 COPY examples/training/megatron-bridge/mcore-pr5153-comm-init.patch /opt/benchmark/mcore-pr5153-comm-init.patch
 # Only the same-subgroup initialization hunk from PR #5153's pinned head.
 # The verifier requires this exact patch and rejects any other Core/Bridge diff.
