@@ -1,92 +1,25 @@
 ---
-- name: "Check dependencies"
-  block:
-  - name: Install kernel packages for current version
-    yum:
-      name:
-        - kernel-headers-{{ ansible_kernel }}
-        - kernel-devel-{{ ansible_kernel }}
-      state: present
-  rescue:
-  - name: "Update to latest supported version"
-    yum:
-      name:
-        - kernel-devel
-        - kernel-headers
-      state: latest
-
-- name: "Reboot system"
-  reboot:
-  when: allow_reboot
-
-- name: "Install additional dependencies"
-  ansible.builtin.yum:
-    name:
-      - gcc10
-      - kernel-devel
-      - kernel-headers
-      - dkms
+# yamllint disable rule:line-length
+- name: Enable AL2023 NVIDIA repository
+  ansible.builtin.dnf:
+    name: nvidia-release
     state: present
 
-- name: "Blacklist nouveau"
-  community.general.kernel_blacklist:
-    name: nouveau
+- name: Install NVIDIA data-center driver
+  ansible.builtin.dnf:
+    name: "nvidia-driver-cuda-{{ nvidia_driver_package_version }}"
     state: present
 
-- name: "Download the Nvidia Installer"
-  ansible.builtin.get_url:
-    url: "https://us.download.nvidia.com/tesla/{{ nvidia_driver_version }}/NVIDIA-Linux-x86_64-{{ nvidia_driver_version }}.run"
-    dest: "/tmp/nvidia-installer.run"
-    mode: '0755'
-  
-- name: "Install Nvidia drivers"
-  ansible.builtin.shell: "sudo CC=gcc10-cc sh /tmp/nvidia-installer.run -q -a --ui=none"
+- name: Reboot after NVIDIA driver installation
+  ansible.builtin.reboot:
+  when: nvidia_driver_allow_reboot
 
-- name: "Setup persistence mode "
-  block:
-  - name: Configure persistenced service
-    copy:
-      src: "nvidia-persistenced-override.service"
-      dest: "/usr/lib/systemd/system/nvidia-persistenced-override.service"
+- name: Verify NVIDIA driver
+  ansible.builtin.command: nvidia-smi --query-gpu=driver_version --format=csv,noheader
+  changed_when: false
+  register: nvidia_driver_version_output
 
-  - name: Enable persistenced
-    systemd:
-      name: nvidia-persistenced-override
-      daemon-reload: true
-      enabled: true
-
-- name: "Install Nvidia Fabric Manager"
-  when: install_nvidia_fabric_manager
-  block:
-  - name: "Download fabric manager"
-    ansible.builtin.get_url:
-      url: "https://developer.download.nvidia.com/compute/nvidia-driver/redist/fabricmanager/linux-x86_64/fabricmanager-linux-x86_64-{{ nvidia_driver_version }}-archive.tar.xz"
-      dest: "/tmp/nvidia-fabricmanager.tar.xz"
-      mode: "0644"
-
-  - name: "Extract fabric manager"
-    ansible.builtin.unarchive:
-      src: "/tmp/nvidia-fabricmanager.tar.xz"
-      dest: "/usr/"
-      remote_src: true
-      extra_opts:
-        - --strip-components=1
-        - --exclude
-        - LICENSE
-
-  - name: "Link fabric manager service file"
-    copy:
-      remote_src: true
-      src: "/usr/systemd/nvidia-fabricmanager.service"
-      dest: "/usr/lib/systemd/system/nvidia-fabricmanager.service"
-
-  - name: "Enable fabric manager"
-    systemd:
-      name: nvidia-fabricmanager
-      daemon-reload: true
-      enabled: true
-
-  - name: yum clean metadata
-    ansible.builtin.command:
-      cmd: yum clean metadata
-
+- name: Require pinned NVIDIA driver version
+  ansible.builtin.assert:
+    that:
+      - nvidia_driver_version_output.stdout_lines | unique == [nvidia_driver_package_version | regex_replace('-[0-9]+\\.amzn2023$', '')]

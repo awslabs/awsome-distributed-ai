@@ -1,0 +1,11 @@
+---
+- name: Configure EKS Ubuntu 24.04 EFA host AMI
+  hosts: default
+  become: true
+  gather_facts: true
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    aws_efa_minimal: true
+    aws_efa_enable_gpus: false
+  roles:
+    - aws_efa

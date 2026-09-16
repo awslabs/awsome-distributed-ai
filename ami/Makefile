@@ -1,32 +1,35 @@
 IMAGE=registry.gitlab.aws.dev/smml/benchmarking/tools/preflight
 DEPLOY_IMAGE=deploy
-: "${AWS_REGION:=us-east-1}"
+AWS_REGION ?= us-east-1
+SHELL := /bin/bash
+.SHELLFLAGS := -eu -o pipefail -c
+
+.PHONY: ami ami_ec2_ubuntu2404 ami_ec2_ubuntu2404_dlami ami_pcluster_ubuntu2404 ami_eks_al2023 ami_eks_ubuntu2404 ami_pcs_ubuntu2404
+
 container_build:
 	docker build -t ${IMAGE} ./preflight
 container_run:
 	docker run --privileged --device=/dev/infiniband/uverbs0 --device=/dev/infiniband/uverbs1 --device=/dev/infiniband/uverbs2 --device=/dev/infiniband/uverbs3 --gpus=all ${IMAGE}
 container: container_build container_run
 
+ami_ec2_ubuntu2404:
+	packer build -only 'ec2-ubuntu2404.*' -var aws_region=${AWS_REGION} -var "ami_version=1" packer-ami.pkr.hcl | tee ec2-ubuntu2404_ami.log
+ami_ec2_ubuntu2404_dlami:
+	packer build -only 'ec2-ubuntu2404-dlami.*' -var aws_region=${AWS_REGION} -var "ami_version=1" packer-ami.pkr.hcl | tee ec2-ubuntu2404-dlami_ami.log
+ami_pcluster_ubuntu2404:
+	packer build -only 'pcluster-ubuntu2404.*' -var aws_region=${AWS_REGION} -var "ami_version=1" packer-ami.pkr.hcl | tee pcluster-ubuntu2404_ami.log
+ami_eks_al2023:
+	packer build -only 'eks-al2023.*' -var aws_region=${AWS_REGION} -var "ami_version=1" packer-ami.pkr.hcl | tee eks-al2023_ami.log
+ami_eks_ubuntu2404:
+	packer build -only 'eks-ubuntu2404.*' -var aws_region=${AWS_REGION} -var "ami_version=1" packer-ami.pkr.hcl | tee eks-ubuntu2404_ami.log
+ami_pcs_ubuntu2404:
+	packer build -only 'pcs-ubuntu2404.*' -var aws_region=${AWS_REGION} -var "ami_version=1" packer-ami.pkr.hcl | tee pcs-ubuntu2404_ami.log
 
-ami_pcluster_cpu:
-	packer build -only 'aws-pcluster-cpu.*' -var aws_region=${AWS_REGION} -var "ami_version=1" packer-ami.pkr.hcl | tee aws-pcluster-cpu_ami.log
-ami_pcluster_gpu:
-	packer build -only 'aws-pcluster-gpu.*' -var aws_region=${AWS_REGION} -var "ami_version=1" packer-ami.pkr.hcl | tee aws-pcluster-gpu_ami.log
-ami_pcluster_neuron:
-	packer build -only 'aws-pcluster-neuron.*' -var aws_region=${AWS_REGION} -var "ami_version=1" packer-ami.pkr.hcl | tee aws-pcluster-gpu_ami.log
-ami_base:
-	packer build -only 'aws-base-gpu.*' -var aws_region=${AWS_REGION} -var "ami_version=1" packer-ami.pkr.hcl | tee base-gpu_ami.log
-ami_dlami_gpu:
-	packer build -only 'aws-dlami-gpu.*' -var aws_region=${AWS_REGION} -var "ami_version=1" packer-ami.pkr.hcl | tee aws-dlami-gpu_ami.log
-ami_dlami_neuron:
-	packer build -only 'aws-dlami-neuron.*' -var aws_region=${AWS_REGION} -var "ami_version=1" packer-ami.pkr.hcl | tee aws-dlami-neuron_ami.log
-ami_eks_gpu:
-	packer build -only 'aws-eks-gpu.*' -var aws_region=${AWS_REGION} -var "ami_version=1" packer-ami.pkr.hcl | tee aws-eks-gpu_ami.log
 ami:
-	packer build -var aws_region=${AWS_REGION} -var "ami_version=1" packer-ami.pkr.hcl | tee aws-eks-gpu_ami.log
+	@echo "Select one AMI target explicitly; builds create billable AWS resources." >&2
+	@echo "Targets: ami_ec2_ubuntu2404 ami_ec2_ubuntu2404_dlami ami_pcluster_ubuntu2404 ami_eks_al2023 ami_eks_ubuntu2404 ami_pcs_ubuntu2404" >&2
+	@exit 2
 
-ami_example:
-	cd preflight/example_ami && packer build -color=true -var-file variables.json ami.json | tee log
 deploy_build:
 	docker build -t ${DEPLOY_IMAGE} ./test
 deploy: deploy_build

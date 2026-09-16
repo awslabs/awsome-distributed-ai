@@ -71,11 +71,7 @@ explanation of what is missing.
 | `ami/` | Machine image build assets (Packer/Ansible) |
 | `docs/` | Cross-cutting prose documentation (e.g. the [EFA cheatsheet](./docs/efa-cheatsheet.md)) |
 
-> **Exception**: two `LifecycleScripts` trees are deliberately retained at
-> their legacy numbered paths under `1.architectures/` for SageMaker
-> HyperPod console compatibility (see
-> [`1.architectures/README.md`](./1.architectures/README.md)). Do not
-> move, rename, or delete them as cleanup.
+> **Exception**: the two `LifecycleScripts` trees, the HyperPod Slurm `Extensions` directory, and `patching-backup.sh` are deliberately retained at their legacy numbered paths under `1.architectures/` for SageMaker HyperPod console and documentation compatibility (see [`1.architectures/README.md`](./1.architectures/README.md)). Do not move, rename, or delete them as cleanup.
 
 Placement rules for new content:
 

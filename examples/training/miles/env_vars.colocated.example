@@ -1,0 +1,175 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# ============================================================
+# miles on EKS - Environment (COLOCATED)
+#
+# Colocated Qwen3-4B GRPO: training (Megatron) and rollout (SGLang) time-share
+# the same GPUs. This is the simplest topology and the default reference run.
+#
+# Copy to env_vars and adjust paths:
+#   cp env_vars.colocated.example env_vars && vim env_vars
+# (HF_TOKEN is provided to the pods via the k8s Secret `hf-token`, not this file.)
+#
+# The 30B MoE run is env_vars.moe.example. One file describes one run: the derived block at the
+# end must see every value.
+# ============================================================
+
+# ----- AWS / ECR (used outside the cluster only) -----
+# Read only outside the cluster, when building and rendering. This file is also sourced in the
+# head pod, which has no AWS CLI, so the lookups are tolerated and then checked. Avoid
+# `export VAR="$(cmd)"`: its exit status is export's, so a failure is invisible under `set -e`.
+if [ -z "${AWS_REGION:-}" ]; then
+  AWS_REGION="$(aws configure get region 2>/dev/null || true)"
+  export AWS_REGION
+fi
+if [ -z "${AWS_ACCOUNT_ID:-}" ]; then
+  AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || true)"
+  export AWS_ACCOUNT_ID
+fi
+export IMAGE="miles-hyperpod"
+# Pinned build tag, matching kubernetes/buildkit-job.yaml (avoid ":latest").
+#
+# BUMP THIS ON EVERY REBUILD. The Ray pods use imagePullPolicy: IfNotPresent, so pushing a
+# new image under a tag a node has already pulled leaves that node running the OLD image,
+# with no error and no log line saying so -- and a cluster where some nodes pulled before
+# the push and some after is running two different builds in one job. Changing the tag is
+# what makes the rollout observable.
+export TAG="miles-cuda13-efa-0.1"
+# Left EMPTY when the registry cannot be resolved: an unqualified name is a valid reference to a
+# different registry, so it would render a plausible manifest and fail later as ImagePullBackOff.
+if [ -n "${AWS_REGION}" ] && [ -n "${AWS_ACCOUNT_ID}" ]; then
+  export REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/"
+  export FULL_IMAGE="${REGISTRY}${IMAGE}:${TAG}"
+else
+  export REGISTRY=""
+  export FULL_IMAGE=""
+  echo "[WARN] env_vars: REGISTRY and FULL_IMAGE are empty (no AWS region/account). Expected in" >&2
+  echo "[WARN] the head pod; set both before building, pushing, or rendering a manifest." >&2
+fi
+
+# ----- HuggingFace -----
+# The pods read HF_TOKEN from the k8s Secret `hf-token` (see raycluster.yaml), so
+# it is NOT passed via the Ray runtime-env. Create the Secret once:
+#   kubectl create secret generic hf-token --from-literal=HF_TOKEN=hf_xxx -n "${NAMESPACE:-default}"
+
+# ----- Model (Qwen3-4B dense, bf16) -----
+export MODEL_NAME="Qwen/Qwen3-4B"                      # HF repo id, for the download step
+                                                       # only; the recipes read MODEL_LOCAL
+                                                       # and MODEL_DIST, not this
+export MODEL_LOCAL="/fsx/models/Qwen3-4B"              # SGLang rollout init (--hf-checkpoint)
+export MODEL_DIST="/fsx/models/Qwen3-4B_torch_dist"    # Megatron training (--ref-load), bf16
+export COLOCATE="true"
+export TP_SIZE=1
+export PP_SIZE=1
+export CP_SIZE=1
+export EP_SIZE=1
+export ROLLOUT_NUM_GPUS=8
+export ROLLOUT_GPUS_PER_ENGINE=1
+export ACTOR_NUM_NODES=1
+export ACTOR_GPUS_PER_NODE=8
+export MAX_TOKENS_PER_GPU=8192
+export ROLLOUT_MAX_RESPONSE_LEN=8192
+export MODEL_SCRIPT="qwen3-4B.sh"
+
+# ----- Cluster -----
+export NAMESPACE="default"
+export FSX_CLAIM="fsx-claim"
+# Renders metadata.name and is the default ray.io/cluster selector run-on-cluster.sh
+# matches; --cluster can point a submission somewhere else.
+export RAY_CLUSTER_NAME="miles-ray"
+# Node/GPU topology comes from ACTOR_NUM_NODES / ACTOR_GPUS_PER_NODE / ROLLOUT_NUM_GPUS above;
+# ACTOR_NUM_NODES also drives the RayCluster's worker replica count, so the manifest and the
+# recipe cannot disagree.
+#
+# GPU_NODE_ROLE is the `node-role` label on your GPU pool, substituted into
+# kubernetes/raycluster.yaml's nodeSelector. Only this value is GPU-generation-specific; see
+# the README's Hardware Requirements for what has been run on which hardware.
+# Node placement is a label KEY:VALUE pair, and BOTH are cluster-specific. The manifest
+# schedules workers on ${GPU_NODE_LABEL_KEY}:${GPU_NODE_ROLE} and the head on
+# ${CPU_NODE_LABEL_KEY}:${CPU_NODE_ROLE}. The defaults below use a custom key "node-role",
+# which a generic EKS or HyperPod cluster does NOT carry until you add it
+# (`kubectl label node <gpu-node> node-role=gpu`). Find an existing label with
+# `kubectl get nodes --show-labels` -- e.g. the well-known
+# `node.kubernetes.io/instance-type` (value "p5en.48xlarge"), an EKS managed-nodegroup label
+# `eks.amazonaws.com/nodegroup`, or a HyperPod `sagemaker.amazonaws.com/instance-group-name`.
+# A wrong key OR value leaves pods stuck Pending with FailedScheduling, not an obvious error.
+export GPU_NODE_LABEL_KEY="node-role"
+export GPU_NODE_ROLE="gpu-p5en"          # e.g. "gpu-b300" on a B300 pool
+# The head coordinates only, so point this at a CPU pool. Same key/value caveat as above.
+export CPU_NODE_LABEL_KEY="${GPU_NODE_LABEL_KEY}"
+export CPU_NODE_ROLE="cpu"
+
+# Per-node GPU count of your instance type (8 on p5en.48xlarge). The pod request, Ray's
+# --num-gpus come from here, and the recipes check their placement math against it.
+export GPUS_PER_WORKER=8
+
+# EFA_PER_NODE: EFA devices each worker pod requests, substituted into
+# kubernetes/raycluster.yaml. Set it to your node's FULL allocatable count:
+#
+#   kubectl get node <gpu-node> \
+#     -o jsonpath='{.status.allocatable.vpc\.amazonaws\.com/efa}'
+#
+# p5en.48xlarge reports 15 allocatable (16 physical, one held back by the device
+# plugin); p5.48xlarge reports 32. Do NOT guess from the instance spec -- read it
+# off the node, because the allocatable count is what the scheduler honours.
+#
+# A partial request is a CORRECTNESS problem, not just a throughput one. When a pod
+# claims fewer cards than the node exposes, the device plugin chooses which ones,
+# the two pods can end up with different EFA-device-to-NIC-rail mappings, and
+# aws-ofi-nccl aborts:
+#
+#   NET/OFI Unexpected number of remote rails for dev N. Expected 1 but got 2
+#   ncclInternalError: Internal check failed
+#
+# This does not appear in an all-reduce smoke test -- all-reduce across the node
+# boundary passes with a partial request. It surfaces only on point-to-point
+# traffic, i.e. pipeline parallel (PP>1) and MoE expert parallel (EP>1), so an
+# EFA validation that only runs all_reduce_perf will report success and the failure
+# lands later inside training. Requesting the full count avoids it entirely.
+export EFA_PER_NODE=15
+
+# ----- Training -----
+export PROMPT_DATA="/fsx/data/dapo-math-17k/dapo-math-17k.jsonl"
+export EVAL_DATA="/fsx/data/aime-2024/aime-2024.jsonl"
+# Each run MUST get its own CHECKPOINT_DIR: --load otherwise tries to resume a
+# scheduler built for a different total-iteration count. train_iters = num_rollout
+# here (16 x 8 // 128 = 1 step/rollout), so NUM_ROLLOUT == optimizer steps.
+export CHECKPOINT_DIR="/fsx/runs/qwen3-4b/ckpt"
+# SAVE_INTERVAL is kept at or above NUM_ROLLOUT so short smoke runs do not pay the
+# ~270s in-loop save cost on every rollout; the single end-of-run save still fires and
+# succeeded on every verification run (a torch_dist checkpoint is written to CHECKPOINT_DIR).
+# The megatron2hf back-conversion has since been run from that checkpoint; reloading it into
+# a resumed run has not.
+export SAVE_INTERVAL=1000
+export NUM_ROLLOUT=100
+export ROLLOUT_BATCH_SIZE=16
+export N_SAMPLES_PER_PROMPT=8
+export GLOBAL_BATCH_SIZE=128
+export NUM_STEPS_PER_ROLLOUT=1
+export LEARNING_RATE="1e-6"
+export ROLLOUT_TEMPERATURE=1.0
+
+# ----- Reward -----
+# Default: in-process rule-based reward (runs on the GPU rollout nodes).
+# Built-in types include: deepscaler, dapo, math, f1, gpqa.
+export RM_TYPE="deepscaler"
+
+# ----- Observability (optional) -----
+# TENSORBOARD_DIR is forwarded into the Ray runtime env by the recipe so
+# --use-tensorboard writes event files onto shared storage. Extra train.py flags
+# can be appended without editing the recipe via EXTRA_TRAIN_ARGS (see the
+# EXTRA_TRAIN_ARGS_ARR block in recipe/run_grpo_qwen3_4b.sh).
+export TENSORBOARD_DIR="/fsx/tb/qwen3-4b"
+export EXTRA_TRAIN_ARGS="--use-tensorboard"
+
+# Derived from everything above: WORKER_REPLICAS and CLUSTER_GPUS. Keep this LAST -- anything that
+# sets a topology value below it is read too late.
+_derive="$(dirname "${BASH_SOURCE[0]:-$0}")/scripts/derive_topology.sh"
+if [ ! -f "${_derive}" ]; then
+  echo "[ERROR] env_vars: ${_derive} not found. Keep env_vars in the test case directory," >&2
+  echo "[ERROR] next to scripts/, so the topology derivation can be sourced." >&2
+  unset _derive; return 1 2>/dev/null || exit 1
+fi
+# shellcheck source=scripts/derive_topology.sh
+. "${_derive}"
+unset _derive
