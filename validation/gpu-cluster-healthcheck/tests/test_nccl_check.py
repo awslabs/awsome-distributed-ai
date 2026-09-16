@@ -51,6 +51,17 @@ class NcclResultTests(unittest.TestCase):
         self.assertEqual(args[args.index('-g') + 1], '8')
         self.assertEqual(args[args.index('-c') + 1], '1')
 
+    def test_verbose_provider_output_does_not_fail_on_sigpipe(self):
+        output = PROVIDER + ('NCCL INFO channel initialized\n' * 40000) + ROW
+        rc, report, _ = self.run_check(output)
+        self.assertEqual((rc, report['status']), (0, 'PASS'))
+
+    def test_verbose_error_keeps_isolate_severity(self):
+        output = 'NCCL WARN unhandled system error\n' + ('NCCL INFO teardown\n' * 40000)
+        rc, report, _ = self.run_check(output, exit_code=1)
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(report['severity'], 'ISOLATE')
+
     def test_salloc_cpu_layout_without_step_environment(self):
         rc, report, args = self.run_check(PROVIDER + ROW, job_cpus='192(x2)', step_cpus=None)
         self.assertEqual((rc, report['status']), (0, 'PASS'))

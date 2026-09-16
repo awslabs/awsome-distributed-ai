@@ -237,7 +237,7 @@ run_check() {
 
     if [[ ${nccl_exit} -ne 0 ]]; then
         # Check for out-of-bound errors
-        if echo "${nccl_output}" | grep -qi "out of bound\|NCCL WARN\|unhandled system error"; then
+        if grep -qi "out of bound\|NCCL WARN\|unhandled system error" "${RESULTS_DIR}/nccl-allreduce-raw.txt"; then
             check_fail "${CHECK_NAME}" \
                 "NCCL all_reduce failed with errors (exit ${nccl_exit})" "ISOLATE"
         else
@@ -261,7 +261,7 @@ run_check() {
         return 1
     fi
 
-    if ! echo "${nccl_output}" | grep -qi "Selected Provider is efa\|Using network EFA"; then
+    if ! grep -qi "Selected Provider is efa\|Using network EFA" "${RESULTS_DIR}/nccl-allreduce-raw.txt"; then
         check_fail "${CHECK_NAME}" "EFA provider not confirmed in NCCL output" "RESET"
         return 1
     fi
