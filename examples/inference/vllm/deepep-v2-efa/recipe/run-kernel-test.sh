@@ -25,9 +25,10 @@ export NCCL_GIN_TYPE=2 NCCL_GIN_ENABLE=1 OFI_NCCL_GIN_GDAKI=0 OFI_NCCL_GIN_MAX_R
 export NCCL_CUMEM_ENABLE=1 NCCL_NVLS_ENABLE=0 NCCL_IGNORE_DISABLED_P2P=1
 export FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_FORK_SAFE=1
 export OFI_NCCL_PROTOCOL=RDMA DEEP_EP_BACKEND=nccl
-export NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
+export NCCL_NET_PLUGIN=/opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so   # bundled by EFA installer >= 1.50.0 (Dockerfile Layer 2)
 export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-^lo,docker,veth}   # exclusion, never positive selection: EFA nodes expose efa*/enp* and CNI adds bridges; auto-select can pick a non-routing iface -> rendezvous hang. Repo convention (nccl-tests Dockerfile). Kept identical to serve.sh so this claim ("VERBATIM from serve.sh") stays true.
-export OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1
+# no OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY here: the gdrdrv-2.4 override was declined upstream
+# (aws/aws-ofi-nccl#1351) and is absent from the bundled 1.21.1 plugin — host needs gdrcopy >= 2.5.
 export EP_REUSE_NCCL_COMM=0          # DeepEP own-comm (segfault rootcause 2026-08-14)
 export NCCL_DEBUG=${KERNEL_TEST_NCCL_DEBUG:-INFO}   # INFO so the efa-direct banner prints = transport proof
 

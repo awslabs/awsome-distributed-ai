@@ -13,7 +13,7 @@ tok/s + per-request latency percentiles. Raw JSONL lands in `raw/` (gitignored).
 | Transport | DeepEP-V2 `ElasticBuffer`, NCCL-GIN CPU-proxy (`NCCL_GIN_TYPE=2`, `OFI_NCCL_GIN_GDAKI=0`), `efa-direct` |
 | Model | `Qwen/Qwen3-30B-A3B-FP8`, DP16/EP16 (`--enable-expert-parallel --all2all-backend deepep_v2`) |
 | vLLM | measured on `0.22.1rc1.dev283+ge2f993dc4` (first commit with the `deepep_v2` backend, [PR#41183](https://github.com/vllm-project/vllm/pull/41183)). **The shipped `Dockerfile` now pins `14617c2b` = `0.26.1rc1.dev1000+g14617c2b6`** (vLLM [#52632](https://github.com/vllm-project/vllm/pull/52632)'s merge commit) — four minor versions newer, so a rebuild will not reproduce these tables. |
-| Stack | torch 2.11.0+cu130, nvidia-nccl-cu13 2.30.4, DeepEP `b306af06`+PR#612, aws-ofi-nccl GIN `9c44d34`+#1351 |
+| Stack | torch 2.11.0+cu130, nvidia-nccl-cu13 2.30.4, DeepEP `b306af06`+PR#612, aws-ofi-nccl GIN `9c44d34`+#1351 (source-built — historical. **The shipped `Dockerfile` now consumes aws-ofi-nccl 1.21.1 bundled by EFA installer 1.50.0**, so a rebuild runs a different plugin build than these tables) |
 | Serve fingerprint | `vllm-0.22.1rc1.dev283+ge2f993dc4-dp16-ep-1f3ed125` |
 | Probe | stdlib urllib+threads, 127.0.0.1 loopback, `max_tokens=128`, `temperature=0.0` (greedy), concurrency 1/8/16/32/64, **one shot per level** (N requests at concurrency N), identical prompt every request |
 | QP knobs | `EP_EFA_MAX_QPS=2`, `EP_EFA_RDMA_GBS=25.0` (serve.sh defaults — DeepEP PR#612's conservative EFA cap; see the note in serve.sh) |
@@ -48,25 +48,37 @@ Read the numbers as the **DeepEP-V2-over-EFA per-stream latency floor at each co
 throughput ceiling — a saturation point was never measured (concurrency was not pushed until wall
 time rose across the whole sweep).
 
+> **Sample numbers, not absolutes.** Every figure below is one measured sweep from the specific
+> environment in the provenance table above. They are what a user can expect to see in a comparable
+> setup — **not** best/top numbers for the hardware — and they will vary with driver/firmware, the
+> pin set, model, prompt shape, and cluster state. The `scaling` column (aggregate tok/s relative to
+> `conc=1`, with % of ideal linear scaling) is the portable signal; re-measure the absolute numbers
+> in your own environment before quoting them.
+
 ### Eager (`--enforce-eager`; historical — measured on the previous pin `e2f993dc4`, not the shipped `14617c2b`) — 121/121 HTTP 200 (sweep = 1+8+16+32+64 requests)
 
-| conc | agg tok/s | wall s | p50 s | codes |
-|---|---|---|---|---|
-| 1 | 4.8 | 26.91 | 26.91 | 200 |
-| 8 | 37.1 | 27.63 | 27.63 | 200 |
-| 16 | 74.6 | 27.45 | 27.43 | 200 |
-| 32 | 151.9 | 26.97 | 26.95 | 200 |
-| 64 | 301.8 | 27.15 | 27.11 | 200 |
+*Sample numbers (see the note above) — the `scaling` column is derived from this table
+(agg tok/s ÷ 4.8, and that multiple as % of the concurrency).*
+
+| conc | agg tok/s | scaling (vs conc=1) | wall s | p50 s | codes |
+|---|---|---|---|---|---|
+| 1 | 4.8 | 1× (base) | 26.91 | 26.91 | 200 |
+| 8 | 37.1 | 7.7× (96.6% of ideal) | 27.63 | 27.63 | 200 |
+| 16 | 74.6 | 15.5× (97.1% of ideal) | 27.45 | 27.43 | 200 |
+| 32 | 151.9 | 31.6× (98.9% of ideal) | 26.97 | 26.95 | 200 |
+| 64 | 301.8 | 62.9× (98.2% of ideal) | 27.15 | 27.11 | 200 |
 
 ### Non-eager (default compilation; historical — measured with the then-unmerged upstream guard, [vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)) — sweep 121/121 HTTP 200
 
-| conc | agg tok/s | wall s | p50 s | codes |
-|---|---|---|---|---|
-| 1 | 5.0 | 25.48 | 25.48 | 200 |
-| 8 | 39.9 | 25.69 | 25.68 | 200 |
-| 16 | 76.9 | 26.64 | 26.19 | 200 |
-| 32 | 153.9 | 26.61 | 26.17 | 200 |
-| 64 | 239.7 | 34.18 | 33.91 | 200 |
+*Sample numbers (see the note above) — `scaling` derived the same way (agg tok/s ÷ 5.0).*
+
+| conc | agg tok/s | scaling (vs conc=1) | wall s | p50 s | codes |
+|---|---|---|---|---|---|
+| 1 | 5.0 | 1× (base) | 25.48 | 25.48 | 200 |
+| 8 | 39.9 | 8.0× (99.8% of ideal) | 25.69 | 25.68 | 200 |
+| 16 | 76.9 | 15.4× (96.1% of ideal) | 26.64 | 26.19 | 200 |
+| 32 | 153.9 | 30.8× (96.2% of ideal) | 26.61 | 26.17 | 200 |
+| 64 | 239.7 | 47.9× (74.9% of ideal) | 34.18 | 33.91 | 200 |
 
 (The non-eager run's raw log totals 153/153 HTTP 200 = a 31-request warm-up ramp (1+2+4+8+16 at
 `max_tokens=8`) + 1 coherence check + the 121-request sweep above. The table rows are the sweep
@@ -74,6 +86,9 @@ only — identical 121-request methodology to the eager table; the extra 32 requ
 run's warm/health phases, not extra sweep samples.)
 
 ### Eager vs non-eager (agg tok/s; delta = non-eager relative to eager)
+
+*Same caveat: both columns are single sweeps of one environment — the deltas are datapoints, not
+universals (see "Reading" below; the c=64 divergence was reproduced once).*
 
 | conc | eager | non-eager | delta |
 |---|---|---|---|

@@ -31,7 +31,8 @@ docker run --rm --gpus all "${DEV_ARGS[@]}" -e HAVE_EFA_DEV="${HAVE_EFA_DEV}" "$
   NCCL_SO=$(ldconfig -p | grep "libnccl.so.2 " | head -1 | awk "{print \$NF}")
   echo "$NCCL_SO" | grep -q "nvidia/nccl" || { echo "FAIL: system libnccl shadows pip ($NCCL_SO)"; exit 1; }
   [ "$(nm -D "$NCCL_SO" | grep -c ncclGetLsaDevicePointer)" -ge 1 ] || { echo "FAIL: $NCCL_SO lacks GIN/LSA symbols (2.28.x downgrade — see Dockerfile Layer 5b)"; exit 1; }
-  echo "== GIN plugin symbol =="; [ "$(nm -D /opt/aws-ofi-nccl/lib/libnccl-net-ofi.so | grep -c ncclGinPlugin)" -ge 1 ] || { echo "FAIL: no ncclGinPlugin"; exit 1; }
+  echo "== GIN plugin symbol (installer-bundled aws-ofi-nccl; v14 = GIN-capable 1.21.x build) =="
+  nm -D /opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so | grep -qw ncclGinPlugin_v14 || { echo "FAIL: bundled plugin lacks ncclGinPlugin_v14 (EFA installer < 1.50?)"; exit 1; }
   echo "== DeepEP-V2 source staged (built in-pod on first boot; import is asserted there, not here) =="
   test -f /opt/DeepEP/deep_ep/buffers/elastic.py || { echo "FAIL: /opt/DeepEP not staged"; exit 1; }
   grep -q "class ElasticBuffer" /opt/DeepEP/deep_ep/buffers/elastic.py || { echo "FAIL: staged DeepEP has no ElasticBuffer (V1 source?)"; exit 1; }

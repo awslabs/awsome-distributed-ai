@@ -2,9 +2,11 @@
 #
 # vLLM + DeepEP-V2 MoE all-to-all over AWS EFA (NCCL-GIN CPU-proxy). NGC-from-scratch.
 # DeepEP's default NVSHMEM/IBGDA transport is dead on EFA; this uses aws-ofi-nccl's GIN
-# CPU-proxy (NCCL_GIN_TYPE=2). Build logic lives in setup_deepep_v2_efa.sh (COPY'd, not
-# curled) so it is in-tree + reviewable. The DeepEP _C.so is built IN-POD on first boot
-# (recipe/build_deepep.sh) — it needs a live CUDA context the build sandbox lacks.
+# CPU-proxy (NCCL_GIN_TYPE=2). The GIN plugin comes from the EFA installer (>= 1.50.0
+# bundles aws-ofi-nccl 1.21.1 with GA GIN support). DeepEP source staging lives in
+# setup_deepep_v2_efa.sh (COPY'd, not curled) so it is in-tree + reviewable; the DeepEP
+# _C.so is built IN-POD on first boot (recipe/build_deepep.sh) — it needs a live CUDA
+# context the build sandbox lacks.
 #
 #   setup/build-push.sh builds + pushes ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} (setup/env_vars);
 #   manual equivalent: DOCKER_BUILDKIT=1 docker build -t <registry>/vllm-deepep-v2-efa:<tag> .
@@ -23,15 +25,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libnuma-dev libhwloc-dev python3 python3-pip python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# ---- Layer 2: AWS EFA (public installer; pinned, verified fresher than 1.48 per freshness rule) ----
+# ---- Layer 2: AWS EFA (public installer; >= 1.50.0 bundles the GIN-capable aws-ofi-nccl plugin) ----
 # --disable-ngc: this NGC base ships /opt/nvidia/nvidia_entrypoint.sh, which trips the
 # installer's NGC auto-detect and silently reroutes it down the libnccl-ofi-ngc path.
-# We build aws-ofi-nccl from source ourselves (Layer 4), so force the normal install —
-# same explicit choice as the sibling sglang/dsr1-deepep-efa and vllm/dsv3-uccl-nixl samples.
-ARG EFA_INSTALLER_VER=1.49.0                          # pin — no 'latest' (the stack under test)
+# The plain install drops aws-ofi-nccl 1.21.1 at /opt/amazon/ofi-nccl — GIN support is GA
+# there (host-proxy + EFA-GDA) since aws-ofi-nccl v1.21.0 (2026-08), so the plugin is no
+# longer built from source here. Same migration as the canonical deepep-v2-benchmark
+# (upstream #1239): the ncclGinPlugin_v14 gate fails the build loudly on a too-old
+# installer (pre-1.21 GIN builds export at most the v11/v13 op-tables; the v14 table is
+# 1.21.x+), and the strings check asserts the bundled plugin was compiled WITH gdrcopy
+# (a gdrapi-less plugin fails nccl_ofi_gin_init at serve with ginType==NONE).
+ARG EFA_INSTALLER_VER=1.50.0                          # pin — no 'latest' (the stack under test)
 RUN apt-get update \
     && curl -fsSL https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VER}.tar.gz | tar -xzf - -C /tmp \
     && cd /tmp/aws-efa-installer && ./efa_installer.sh -y --skip-kmod --skip-limit-conf --no-verify --disable-ngc \
+    && ldconfig \
+    && { nm -D /opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so 2>/dev/null | grep -qw ncclGinPlugin_v14 \
+         && echo "OK: bundled aws-ofi-nccl is GIN-capable (ncclGinPlugin_v14 present)" \
+         || { echo "ERROR: installer's bundled plugin has no ncclGinPlugin_v14 export — GIN needs installer >= 1.50" >&2; exit 1; }; } \
+    && { [ "$(strings /opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so | grep -c 'GDRCopy support not available at compile time')" -eq 0 ] \
+         || { echo "ERROR: bundled plugin was built WITHOUT gdrcopy — GIN would fail at serve with ginType==NONE" >&2; exit 1; }; } \
     && echo "${EFA_INSTALLER_VER}" > /opt/efa-installer.version \
     && rm -rf /tmp/aws-efa-installer /var/lib/apt/lists/*
 ENV PATH=/opt/amazon/efa/bin:/opt/amazon/openmpi/bin:$PATH
@@ -53,10 +66,12 @@ RUN NCCL_ROOT=$(python3 -c "import nvidia.nccl, pathlib; print(pathlib.Path(nvid
     && ldconfig -p | grep "libnccl.so.2 " | head -1 | grep -q "$NCCL_ROOT/lib"   # assert the pinned NCCL resolves FIRST (2.28.x lacks the GIN/LSA symbols the plugin needs)
 
 # ---- Layer 3b: gdrcopy userspace (PUBLIC: github.com/NVIDIA/gdrcopy) ----
-# aws-ofi-nccl's GIN path REQUIRES gdrapi.h at configure time — without it the plugin
-# compiles with "GDRCopy support not available", nccl_ofi_gin_init fails at serve, and
-# DeepEP's ElasticBuffer asserts ginType==NCCL_GIN_TYPE_NONE. Userspace 2.5.2 on a
-# gdrdrv-2.4 host is exactly the pairing OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1 (#1351) fixes.
+# The GIN plugin dlopens libgdrapi at runtime (it is not a NEEDED dependency of the
+# bundled .so), so the userspace lib must be baked here or nccl_ofi_gin_init fails at
+# serve and DeepEP's ElasticBuffer asserts ginType==NCCL_GIN_TYPE_NONE. The HOST must
+# run gdrcopy/gdrdrv >= 2.5: aws-ofi-nccl declined the gdrdrv-2.4 forced-PCIe override
+# (aws/aws-ofi-nccl#1351, closed 2026-08-21 — gdrcopy 2.4.x has silent-data-corruption
+# issues), so 2.5+ hosts are the only supported pairing for GIN.
 # gdrcopy v2.5.2 == commit c91ad9f: pin the commit, not the tag (a bare tag is a moving ref
 # upstream can re-point — every other dep here is SHA-pinned).
 ARG GDRCOPY_SHA=c91ad9f178e5fb729fc5b6dc62a77c3bb364d6c9
@@ -65,19 +80,18 @@ RUN git clone https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
     && make prefix=/usr/local lib lib_install && ldconfig \
     && rm -rf /tmp/gdrcopy
 
-# ---- Layer 4: aws-ofi-nccl GIN + DeepEP-V2 source (in-tree script, COPY'd not curled) ----
+# ---- Layer 4: DeepEP-V2 source staging (in-tree script, COPY'd not curled) ----
+# The aws-ofi-nccl plugin comes from the EFA installer (Layer 2); this layer only stages
+# the pinned DeepEP-V2 source. The one DeepEP BUILD happens in-pod on first boot
+# (recipe/build_deepep.sh — needs a live CUDA context the build sandbox lacks).
 COPY setup_deepep_v2_efa.sh /opt/setup_deepep_v2_efa.sh
-ARG AWS_OFI_NCCL_SHA=9c44d34476f90ddbf4a12d0ac4fc412d46bd8ab4
-ARG AWS_OFI_NCCL_PR=1351
-ARG AWS_OFI_NCCL_PR_SHA=c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b  # IMMUTABLE PR#1351 head (FORCED_PCIE param; a bare refs/pull/N/head is a moving ref)
 ARG DEEPEP_SHA=b306af06afd412c88e51e71802951606e40b7358
 ARG DEEPEP_PR=612
 ARG DEEPEP_PR_SHA=28d1f7fb173f728be51632ce0026fea23243e350
 RUN chmod +x /opt/setup_deepep_v2_efa.sh \
-    && AWS_OFI_NCCL_SHA=${AWS_OFI_NCCL_SHA} AWS_OFI_NCCL_PR=${AWS_OFI_NCCL_PR} AWS_OFI_NCCL_PR_SHA=${AWS_OFI_NCCL_PR_SHA} \
-       DEEPEP_SHA=${DEEPEP_SHA} DEEPEP_PR=${DEEPEP_PR} DEEPEP_PR_SHA=${DEEPEP_PR_SHA} \
+    && DEEPEP_SHA=${DEEPEP_SHA} DEEPEP_PR=${DEEPEP_PR} DEEPEP_PR_SHA=${DEEPEP_PR_SHA} \
        /opt/setup_deepep_v2_efa.sh
-ENV LD_LIBRARY_PATH=/opt/aws-ofi-nccl/lib:${LD_LIBRARY_PATH}
+ENV LD_LIBRARY_PATH=/opt/amazon/ofi-nccl/lib:${LD_LIBRARY_PATH}
 
 # ---- Layer 5: vLLM (pinned wheel = vLLM #52632's merge commit — the empty-ExpertTokensMetadata guard that unblocks default compilation) ----
 # The wheel FILENAME is derived from the per-commit index at build time, so bumping

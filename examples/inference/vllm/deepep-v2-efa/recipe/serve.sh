@@ -32,17 +32,20 @@ export NCCL_GIN_TYPE=2 NCCL_GIN_ENABLE=1 OFI_NCCL_GIN_GDAKI=0 OFI_NCCL_GIN_MAX_R
 export NCCL_CUMEM_ENABLE=1 NCCL_NVLS_ENABLE=0 NCCL_IGNORE_DISABLED_P2P=1
 export FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_FORK_SAFE=1
 export OFI_NCCL_PROTOCOL=RDMA DEEP_EP_BACKEND=nccl
-export NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
+export NCCL_NET_PLUGIN=/opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so   # bundled by EFA installer >= 1.50.0 (Dockerfile Layer 2)
 export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-^lo,docker,veth}   # exclusion, never positive selection: EFA nodes expose efa*/enp* and CNI adds bridges; auto-select can pick a non-routing iface -> rendezvous hang. Repo convention (nccl-tests Dockerfile).
-export OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1   # PR#1351: assert forced-PCIe on gdrdrv-2.4-kernel nodes
+# gdrcopy host requirement: GIN needs host gdrcopy/gdrdrv >= 2.5. The forced-PCIe override
+# for gdrdrv-2.4 hosts (OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1, aws/aws-ofi-nccl#1351) was
+# DECLINED upstream (gdrcopy 2.4.x has silent-data-corruption issues) and does not exist in
+# the bundled 1.21.1 plugin — on a gdrdrv-2.4 host, upgrade the host driver; do not work around it.
 export EP_REUSE_NCCL_COMM=0   # DeepEP creates its own comm; torch's is lazy/null under vLLM (segfault rootcause 2026-08-14)
 export NCCL_DEBUG=${SERVE_NCCL_DEBUG:-WARN}
 # EP_EFA_MAX_QPS=2 is the value the published benchmarks/ numbers were measured with
 # (DeepEP PR#612's conservative EFA default: its commit message caps auto-QP at 2 to avoid
 # a 128-slot GIN request-ring overflow) — kept as the default so the sample reproduces its
 # own tables. It may leave throughput on the table on newer aws-ofi-nccl: that 128-slot ring
-# was replaced by the seq-window design upstream (6e504db), and the plugin pinned here
-# (9c44d34) is 76 commits PAST that redesign (github.com/aws/aws-ofi-nccl/compare/6e504db...9c44d34),
+# was replaced by the seq-window design upstream (6e504db), which IS in the aws-ofi-nccl
+# 1.21.1 the EFA installer bundles (6e504db is an ancestor of the v1.21.1 tag),
 # so the image is not in the condition the cap was written for; a 2x B200 A/B through this
 # same vLLM path measured +29% throughput / -23% p50 uncapped (=129) with 0/384 failures, so
 # uncapping is worth testing on p5en. If you tune it, re-measure at YOUR concurrency and
@@ -71,7 +74,7 @@ NCCL_LIB="$(python3 -c 'import importlib.util,os
 s=importlib.util.find_spec("nvidia.nccl")
 p=(s.submodule_search_locations[0] if s and s.submodule_search_locations else None)
 print(os.path.join(p,"lib") if p else "")' 2>/dev/null || true)"
-export LD_LIBRARY_PATH="${NVSHMEM_LIB}:${NCCL_LIB}:/opt/aws-ofi-nccl/lib:/opt/amazon/efa/lib:/usr/local/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${NVSHMEM_LIB}:${NCCL_LIB}:/opt/amazon/ofi-nccl/lib:/opt/amazon/efa/lib:/usr/local/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 export PATH=/opt/amazon/efa/bin:$PATH
 
 # ---- scale + model (defaults = the measured EP16 2-node shape) ----

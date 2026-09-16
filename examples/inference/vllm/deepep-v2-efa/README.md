@@ -25,10 +25,13 @@ non-obvious integration fixes, not config:
    collective on the EP group before `ElasticBuffer` construction, so `_comm_ptr()` returns `0` →
    `ncclTeamWorld(nullptr)` → deterministic segfault on all ranks. Setting `0` restores DeepEP's
    create-own-comm path. (Env, set in `recipe/serve.sh` and `kubernetes/`.)
-2. **The gdrcopy forced-PCIe capability** for the GIN plugin on gdrdrv-2.4 hosts, via
-   `OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY=1` — the parameterized fix from
-   [aws/aws-ofi-nccl#1351](https://github.com/aws/aws-ofi-nccl/pull/1351), cherry-picked at a pinned SHA
-   in `setup_deepep_v2_efa.sh` (no local patch file).
+2. **The GIN plugin comes from the EFA installer** (>= 1.50.0 bundles aws-ofi-nccl 1.21.1, whose GIN
+   support is GA since [v1.21.0](https://github.com/aws/aws-ofi-nccl/releases/tag/v1.21.0), 2026-08) —
+   it is no longer built from source here. The host must run **gdrcopy/gdrdrv >= 2.5**: the gdrdrv-2.4
+   forced-PCIe override this sample used to cherry-pick
+   ([aws/aws-ofi-nccl#1351](https://github.com/aws/aws-ofi-nccl/pull/1351)) was declined upstream
+   (gdrcopy 2.4.x has silent-data-corruption issues), so on a 2.4 host the fix is a host driver
+   upgrade, not a container knob.
 3. **DeepEP-V2 source** = `b306af06` + [PR#612](https://github.com/deepseek-ai/DeepEP/pull/612) (EFA
    auto-QP cap), pinned to the PR's **immutable head SHA** (a bare `refs/pull/N/head` is a moving ref).
 
@@ -59,6 +62,8 @@ then-unmerged guard) remain in `benchmarks/` for reference.
 
 - An EKS cluster of p5en.48xlarge (H200) with EFA + the EFA K8s device plugin (the shipped launcher);
   the container also runs under raw `docker run` on any 2 EFA hosts if you wire the rendezvous by hand.
+- Host **gdrcopy/gdrdrv >= 2.5** (check `cat /sys/module/gdrdrv/version` on the node). The GIN plugin
+  does not support gdrdrv 2.4 (see "Integration fixes" above).
 - An ECR repo you own (set in `setup/env_vars`); this sample never hardcodes a registry.
 - Hugging Face access for the model (`Qwen/Qwen3-30B-A3B-FP8` is public, no token required).
 
@@ -69,9 +74,10 @@ cp setup/env_vars.example setup/env_vars && $EDITOR setup/env_vars   # set REGIS
 bash setup/build-push.sh
 ```
 
-The image is NGC-from-scratch (`FROM nvcr.io/nvidia/cuda:...`). `setup_deepep_v2_efa.sh` builds
-aws-ofi-nccl (GIN + the #1351 param) and stages DeepEP-V2 source; the `_C.so` is compiled in-pod on
-first boot (needs a live CUDA context) by `recipe/`-invoked `build_deepep.sh`. The in-tree
+The image is NGC-from-scratch (`FROM nvcr.io/nvidia/cuda:...`). The EFA installer (>= 1.50.0) provides
+the GIN-capable aws-ofi-nccl plugin (build-gated on its `ncclGinPlugin_v14` export);
+`setup_deepep_v2_efa.sh` stages the pinned DeepEP-V2 source; the one DeepEP **build** — the `_C.so` —
+is compiled in-pod on first boot (needs a live CUDA context) by `recipe/`-invoked `build_deepep.sh`. The in-tree
 `Dockerfile` is the canonical, reviewable build. The published benchmark numbers were taken with it at
 the previous pin (`e2f993dc4`); the pin has since moved to `14617c2b` (vLLM #52632's merge commit) and
 the tables have **not** been re-measured on it — see `benchmarks/README.md`.
@@ -167,16 +173,16 @@ eager and non-eager tables + environment provenance.
   provided because none was run; the raw two-node `recipe/serve.sh` path is the manual fallback.
 - `setup_deepep_v2_efa.sh` is a **documented variant** of the repo's canonical V2/GIN provisioner,
   [`micro-benchmarks/expert-parallelism/deepep-v2-benchmark/setup_deepep_gin.sh`](../../../../micro-benchmarks/expert-parallelism/deepep-v2-benchmark/setup_deepep_gin.sh)
-  (which appeared 2026-08-24). When the canonical moves, that is the file to track. Three deliberate
-  divergences justify a separate script here; the next reader should know they are choices, not drift:
-  1. **The unmerged aws-ofi-nccl #1351 parameter.** This sample cherry-picks
-     [aws/aws-ofi-nccl#1351](https://github.com/aws/aws-ofi-nccl/pull/1351)
-     (`OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY`) at a pinned head SHA; the canonical builds a stock GIN NCCL
-     and does not carry it. Until #1351 merges, this recipe cannot be a thin call into the canonical.
-  2. **CPU-proxy (`NCCL_GIN_TYPE=2`), not EFA-GDA.** This is the GDAKI-off, CPU-proxy transport that is
+  (which appeared 2026-08-24). When the canonical moves, that is the file to track. Both scripts now
+  consume the **EFA-installer-bundled aws-ofi-nccl** (the canonical migrated in upstream
+  [#1239](https://github.com/awslabs/awsome-distributed-ai/pull/1239); this sample followed in review
+  round 3 — its earlier aws-ofi-nccl#1351 cherry-pick was declined upstream and is gone). Two
+  deliberate divergences justify a separate script here; the next reader should know they are
+  choices, not drift:
+  1. **CPU-proxy (`NCCL_GIN_TYPE=2`), not EFA-GDA.** This is the GDAKI-off, CPU-proxy transport that is
      viable on EFA today; the canonical benchmark's defaults and NCCL build target a different point in
      that design space.
-  3. **Coupling to the vLLM wheel's torch/NCCL ABI.** The DeepEP `_C.so` here is built in-pod against
+  2. **Coupling to the vLLM wheel's torch/NCCL ABI.** The DeepEP `_C.so` here is built in-pod against
      the exact `torch 2.11+cu130` / `nvidia-nccl-cu13 2.30.4` the pinned vLLM wheel drags in (Dockerfile
      Layer 5b re-pins it), so the toolchain is wheel-driven rather than a standalone NCCL build tree.
 
