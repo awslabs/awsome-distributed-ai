@@ -29,11 +29,53 @@
 # Usage:  MODEL=<dsv3|kimi-k2|qwen3-235b> CTX=<ctx> IMG=<ecr-uri> ./run-ab-rawpods.sh <alltoall|deepep> [NNODES]
 set -uo pipefail
 
+# Render manifests without contacting Kubernetes or deleting any existing jobs.
+# Keep manifests on stdout and progress messages on stderr in this mode.
+RENDER_ONLY="${RENDER_ONLY:-0}"
+if [ "$RENDER_ONLY" = "1" ]; then exec 3>&1; exec 1>&2; fi
+apply_manifest() {
+  if [ "$RENDER_ONLY" = "1" ]; then
+    printf '%s\n' '---' >&3
+    cat >&3
+  else
+    $K apply -f - >/dev/null
+  fi
+}
+
 ARM="${1:?usage: MODEL=<dsv3|kimi-k2|qwen3-235b> ./run-ab-rawpods.sh <alltoall|deepep> [NNODES]}"
 NNODES="${2:-32}"
+# Optional explicit allocation. A hostname selector keeps Kubernetes responsible
+# for resource accounting while preventing placement on another reservation.
+ASSIGNED_NODES=()
+if [ -n "${NODE_NAMES:-}" ]; then
+  IFS=, read -r -a ASSIGNED_NODES <<< "$NODE_NAMES"
+  if [ "${#ASSIGNED_NODES[@]}" -ne "$NNODES" ]; then
+    echo "NODE_NAMES must contain exactly NNODES hostnames" >&2; exit 2
+  fi
+  declare -A SEEN_NODES=()
+  for node in "${ASSIGNED_NODES[@]}"; do
+    if [[ ! "$node" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ || -n "${SEEN_NODES[$node]:-}" ]]; then
+      echo "NODE_NAMES contains an invalid or duplicate hostname" >&2; exit 2
+    fi
+    SEEN_NODES[$node]=1
+  done
+fi
+NODEGROUP_SELECTOR=""
+RESERVATION_SELECTOR=""
+if [ -n "${NODE_GROUP:-}" ]; then NODEGROUP_SELECTOR="eks.amazonaws.com/nodegroup: ${NODE_GROUP}"; fi
+if [ -n "${CAPACITY_RESERVATION_LABEL:-}" ]; then RESERVATION_SELECTOR="capacity-reservation: ${CAPACITY_RESERVATION_LABEL}"; fi
 # ARM_LABEL names the run dir / pod set; defaults to ARM. Use it to split the two deepep
 # transports (deepep-uccl vs deepep-nvshmem) into distinct, non-clobbering run dirs.
 ARM_LABEL="${ARM_LABEL:-${ARM}}"
+# Forward only an explicitly selected NCCL symmetric-kernel setting. Existing
+# launch modes retain their image's default when this variable is absent.
+NCCL_SYM_GIN_EXPORT=""
+if [ -n "${NCCL_SYM_GIN_KERNELS_ENABLE:-}" ]; then
+  case "$NCCL_SYM_GIN_KERNELS_ENABLE" in
+    0|1) NCCL_SYM_GIN_EXPORT="NCCL_SYM_GIN_KERNELS_ENABLE=${NCCL_SYM_GIN_KERNELS_ENABLE}" ;;
+    *) echo 'NCCL_SYM_GIN_KERNELS_ENABLE must be 0 or 1' >&2; exit 2 ;;
+  esac
+fi
 
 CTX="${CTX:?set CTX to your kubectl context}"
 NS="${NS:-kimi-k2-bench}"
@@ -93,10 +135,12 @@ esac
 # container toolkit does not honor NVIDIA_GDRCOPY=enabled the device is absent in-container
 # and every rank dies at register_mem_handle (mem_heap.cpp:1361). No-op for UCCL/alltoall.
 GDRCOPY_DEV="${GDRCOPY_DEV:-off}"
+# GPU Operator installations expose this device under /run/nvidia/driver/dev.
+GDRCOPY_HOST_PATH="${GDRCOPY_HOST_PATH:-/dev/gdrdrv}"
 GDR_MOUNT_LINE=""; GDR_VOLUME_LINE=""; SECURITY_LINE=""
 if [ "${GDRCOPY_DEV}" = "on" ]; then
   GDR_MOUNT_LINE='- {name: gdrdrv, mountPath: /dev/gdrdrv}'
-  GDR_VOLUME_LINE='- {name: gdrdrv, hostPath: {path: /dev/gdrdrv, type: CharDevice}}'
+  GDR_VOLUME_LINE="- {name: gdrdrv, hostPath: {path: ${GDRCOPY_HOST_PATH}, type: CharDevice}}"
   SECURITY_LINE='securityContext: {privileged: true}'
 fi
 case "${MODEL}" in
@@ -127,11 +171,13 @@ echo "   bench=${BENCH_PY} iters=${TRAIN_ITERS} gbs=${GLOBAL_BATCH} seq=${SEQ_LE
 echo "   RUN_DIR=${RUN_DIR}  (logs/rank-<r>.log, no overwrite)"
 
 # Clean prior pods of THIS job by explicit name (avoids label-selector ambiguity).
+if [ "$RENDER_ONLY" != "1" ]; then
 for r in $(seq 0 $(( NNODES - 1 ))); do $K delete pod "${JOB}-${r}" --ignore-not-found --wait=false >/dev/null 2>&1; done
 $K delete svc "${JOB}" --ignore-not-found >/dev/null 2>&1
 sleep 3
+fi
 
-cat <<EOF | $K apply -f - >/dev/null
+apply_manifest <<EOF
 apiVersion: v1
 kind: Service
 metadata: {name: ${JOB}}
@@ -148,10 +194,21 @@ RANK0_PREAMBLE="
           { echo run_dir=${RUN_DIR} ; echo model=${MODEL} arm=${ARM} arm_label=${ARM_LABEL} ep_backend=${EP_BACKEND} ; echo nnodes=${NNODES} world=${WORLD} ;
             echo TP=${TP} PP=${PP} EP=${EP} mb=${MICRO_BATCH} gbs=${GLOBAL_BATCH} seq=${SEQ_LEN} iters=${TRAIN_ITERS} ;
             echo overlap=${MOE_A2A_OVERLAP} force_balance=${MOE_FORCE_BALANCE} loss_probe=${LOSS_PROBE} ;
+            echo NCCL_SYM_GIN_KERNELS_ENABLE=${NCCL_SYM_GIN_KERNELS_ENABLE:-image-default} ;
             echo image=${IMG} ; echo bench_py=${BENCH_PY} ; echo git_rev=${GIT_REV} ; echo started=\$(date -u +%FT%TZ) ; } > ${RUN_DIR}/env.txt ;"
 
 launch_pod() {
   local R="$1"
+  local TORCHRUN_LOG_ARGS=""
+  if [ "${TORCHRUN_LOGS:-off}" = "on" ]; then
+    TORCHRUN_LOG_ARGS="--log-dir=${LOGDIR}/torchrun-${R} --redirects=3 --tee=3"
+  fi
+  local IS_HOST=false
+  if [ "$R" = "0" ]; then IS_HOST=true; fi
+  local HOSTNAME_SELECTOR=""
+  if [ "${#ASSIGNED_NODES[@]}" -gt 0 ]; then
+    HOSTNAME_SELECTOR="kubernetes.io/hostname: ${ASSIGNED_NODES[$R]}"
+  fi
   # ALL ranks must skip a completed cell, not just rank-0. If only rank-0 REFUSE-exits, ranks
   # 1..N-1 still start torchrun, fail rendezvous (no rank-0), and OVERWRITE their rank logs —
   # corrupting a previously-good run when a campaign is re-run with the same CAMPAIGN_ID.
@@ -162,9 +219,9 @@ launch_pod() {
   local EPILOGUE=""
   if [ "$R" = "0" ]; then
     PREAMBLE="${RANK0_PREAMBLE}"
-    EPILOGUE="; echo \"exit=\$? finished=\$(date -u +%FT%TZ)\" > ${RUN_DIR}/STATUS"
+    EPILOGUE="; rc=\$?; echo \"exit=\$rc finished=\$(date -u +%FT%TZ)\" > ${RUN_DIR}/STATUS; exit \$rc"
   fi
-  cat <<EOF | $K apply -f - >/dev/null
+  apply_manifest <<EOF
 apiVersion: v1
 kind: Pod
 metadata:
@@ -176,6 +233,9 @@ spec:
   subdomain: ${JOB}
   nodeSelector:
     node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+    ${NODEGROUP_SELECTOR}
+    ${RESERVATION_SELECTOR}
+    ${HOSTNAME_SELECTOR}
   tolerations:
     - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
     - {key: workload, value: bench, operator: Equal, effect: NoSchedule}
@@ -184,19 +244,24 @@ spec:
     - name: c
       image: ${IMG}
       command: ["bash","-lc"]
+      env:
+        - name: POD_IP
+          valueFrom: {fieldRef: {fieldPath: status.podIP}}
       args:
         - >
           ${PREAMBLE}
-          export PYTHONPATH=${STAGE} KIMI_K2_HF_PATH=${STAGE}/hf
+          export PYTHONPATH=${STAGE}:\${PYTHONPATH:-} KIMI_K2_HF_PATH=${STAGE}/hf
+          BENCHMARK_OUTPUT_DIR=${RUN_DIR}/tensorboard
           MOE_DISPATCHER=${ARM} MOE_A2A_OVERLAP=${MOE_A2A_OVERLAP} MOE_FORCE_BALANCE=${MOE_FORCE_BALANCE}
           TENSOR_PARALLEL=${TP} PIPELINE_PARALLEL=${PP} EXPERT_PARALLEL=${EP}
           TRAIN_ITERS=${TRAIN_ITERS} GLOBAL_BATCH=${GLOBAL_BATCH} MICRO_BATCH=${MICRO_BATCH} SEQ_LEN=${SEQ_LEN}
           LOSS_PROBE=${LOSS_PROBE} RECOMPUTE=${RECOMPUTE} NUM_LAYERS=${NUM_LAYERS:-} QWEN3_SIZE=${QWEN3_SIZE}
           HF_HOME=${HF_HOME} HF_HUB_OFFLINE=${HF_HUB_OFFLINE}
           FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_FORK_SAFE=1
-          NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET NCCL_SOCKET_IFNAME=^docker,lo,veth ;
-          torchrun --nnodes=${NNODES} --nproc_per_node=${GPUS_PER_NODE}
+          NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET NCCL_SOCKET_IFNAME=^docker,lo,veth ${NCCL_SYM_GIN_EXPORT} ;
+          torchrun ${TORCHRUN_LOG_ARGS} --nnodes=${NNODES} --nproc_per_node=${GPUS_PER_NODE}
           --node_rank=${R} --master_addr=${JOB}-0.${JOB}.${NS}.svc.cluster.local
+          --rdzv-conf=is_host=${IS_HOST} --local-addr=\${POD_IP}
           --master_port=${PORT} ${BENCH_PY} > ${LOGDIR}/rank-${R}.log 2>&1 ${EPILOGUE}
       resources:
         requests: {nvidia.com/gpu: ${GPUS_PER_NODE}, vpc.amazonaws.com/efa: ${EFA_PER_NODE}}
@@ -216,5 +281,5 @@ EOF
 }
 
 for r in $(seq 0 $(( NNODES - 1 ))); do launch_pod "$r"; done
-echo "   launched ${NNODES} pods: ${JOB}-0..$(( NNODES - 1 ))"
+echo "   prepared ${NNODES} pods: ${JOB}-0..$(( NNODES - 1 ))"
 echo "   tail rank-0:  ${LOGDIR}/rank-0.log   STATUS: ${RUN_DIR}/STATUS"
