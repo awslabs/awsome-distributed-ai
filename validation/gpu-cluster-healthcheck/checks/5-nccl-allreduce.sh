@@ -67,8 +67,20 @@ run_check() {
         return 1
     fi
 
+    # salloc exports the job CPU layout, but not SLURM_CPUS_ON_NODE.
+    # A homogeneous allocation gives each one-process-per-node launch its CPUs.
+    local cpus_per_node="${SLURM_CPUS_ON_NODE:-1}"
+    if [[ -n "${SLURM_JOB_CPUS_PER_NODE:-}" ]]; then
+        if [[ "${SLURM_JOB_CPUS_PER_NODE}" =~ ^([1-9][0-9]*)(\(x[1-9][0-9]*\))?$ ]]; then
+            cpus_per_node="${BASH_REMATCH[1]}"
+        else
+            check_fail "${CHECK_NAME}" "NCCL check requires a homogeneous CPU allocation; got ${SLURM_JOB_CPUS_PER_NODE}" "RESET"
+            return 1
+        fi
+    fi
+
     if [[ "${DRY_RUN}" == "1" ]]; then
-        echo -e "${YELLOW}[DRY-RUN]${NC} srun --nodes=${num_nodes} --ntasks=${num_nodes} --ntasks-per-node=1 --cpus-per-task=${SLURM_CPUS_ON_NODE:-1} --mpi=${NCCL_MPI} --cpu-bind=none --container-image=${NCCL_CONTAINER} \\" >&2
+        echo -e "${YELLOW}[DRY-RUN]${NC} srun --nodes=${num_nodes} --ntasks=${num_nodes} --ntasks-per-node=1 --cpus-per-task=${cpus_per_node} --mpi=${NCCL_MPI} --cpu-bind=none --container-image=${NCCL_CONTAINER} \\" >&2
         echo -e "${YELLOW}[DRY-RUN]${NC}   ${NCCL_TESTS_BIN} -b 8 -e 128M -f 2 -c 1 -g ${gpus_per_node}" >&2
         check_pass "${CHECK_NAME}" "Dry-run: NCCL all_reduce skipped"
         return 0
@@ -100,14 +112,14 @@ run_check() {
         if srun --help 2>&1 | grep -q "container-image"; then
             nvlink_test_output=$(NCCL_P2P_LEVEL=NVL NCCL_NET=Socket \
                 timeout "${NCCL_ISOLATION_TIMEOUT}" \
-                srun --nodes="${num_nodes}" --ntasks="${num_nodes}" --ntasks-per-node=1 --cpus-per-task="${SLURM_CPUS_ON_NODE:-1}" --mpi="${NCCL_MPI}" --cpu-bind=none \
+                srun --nodes="${num_nodes}" --ntasks="${num_nodes}" --ntasks-per-node=1 --cpus-per-task="${cpus_per_node}" --mpi="${NCCL_MPI}" --cpu-bind=none \
                      --container-image="${NCCL_CONTAINER}" \
                      "${NCCL_TESTS_BIN}" -g "${gpus_per_node}" -b 256M -e 256M \
                 2>&1) || nvlink_test_exit=$?
         elif command -v "${NCCL_TESTS_BIN}" > /dev/null 2>&1; then
             nvlink_test_output=$(NCCL_P2P_LEVEL=NVL NCCL_NET=Socket \
                 timeout "${NCCL_ISOLATION_TIMEOUT}" \
-                srun --nodes="${num_nodes}" --ntasks="${num_nodes}" --ntasks-per-node=1 --cpus-per-task="${SLURM_CPUS_ON_NODE:-1}" --mpi="${NCCL_MPI}" --cpu-bind=none \
+                srun --nodes="${num_nodes}" --ntasks="${num_nodes}" --ntasks-per-node=1 --cpus-per-task="${cpus_per_node}" --mpi="${NCCL_MPI}" --cpu-bind=none \
                      "${NCCL_TESTS_BIN}" -g "${gpus_per_node}" -b 256M -e 256M \
                 2>&1) || nvlink_test_exit=$?
         fi
@@ -145,14 +157,14 @@ run_check() {
             if srun --help 2>&1 | grep -q "container-image"; then
                 efa_test_output=$(NCCL_P2P_DISABLE=1 NCCL_SHM_DISABLE=1 NCCL_NET='AWS Libfabric' \
                     timeout "${NCCL_ISOLATION_TIMEOUT}" \
-                    srun --nodes="${num_nodes}" --ntasks="${num_nodes}" --ntasks-per-node=1 --cpus-per-task="${SLURM_CPUS_ON_NODE:-1}" --mpi="${NCCL_MPI}" --cpu-bind=none \
+                    srun --nodes="${num_nodes}" --ntasks="${num_nodes}" --ntasks-per-node=1 --cpus-per-task="${cpus_per_node}" --mpi="${NCCL_MPI}" --cpu-bind=none \
                          --container-image="${NCCL_CONTAINER}" \
                          "${NCCL_TESTS_BIN}" -g "${gpus_per_node}" -b 256M -e 256M \
                     2>&1) || efa_test_exit=$?
             elif command -v "${NCCL_TESTS_BIN}" > /dev/null 2>&1; then
                 efa_test_output=$(NCCL_P2P_DISABLE=1 NCCL_SHM_DISABLE=1 NCCL_NET='AWS Libfabric' \
                     timeout "${NCCL_ISOLATION_TIMEOUT}" \
-                    srun --nodes="${num_nodes}" --ntasks="${num_nodes}" --ntasks-per-node=1 --cpus-per-task="${SLURM_CPUS_ON_NODE:-1}" --mpi="${NCCL_MPI}" --cpu-bind=none \
+                    srun --nodes="${num_nodes}" --ntasks="${num_nodes}" --ntasks-per-node=1 --cpus-per-task="${cpus_per_node}" --mpi="${NCCL_MPI}" --cpu-bind=none \
                          "${NCCL_TESTS_BIN}" -g "${gpus_per_node}" -b 256M -e 256M \
                     2>&1) || efa_test_exit=$?
             fi
@@ -198,14 +210,14 @@ run_check() {
     if srun --help 2>&1 | grep -q "container-image"; then
         log_info "Using Pyxis/Enroot container runtime"
         nccl_output=$(run_with_timeout "${NCCL_TIMEOUT}" \
-            srun --nodes="${num_nodes}" --ntasks="${num_nodes}" --ntasks-per-node=1 --cpus-per-task="${SLURM_CPUS_ON_NODE:-1}" --mpi="${NCCL_MPI}" --cpu-bind=none \
+            srun --nodes="${num_nodes}" --ntasks="${num_nodes}" --ntasks-per-node=1 --cpus-per-task="${cpus_per_node}" --mpi="${NCCL_MPI}" --cpu-bind=none \
                  --container-image="${NCCL_CONTAINER}" \
                  "${NCCL_TESTS_BIN}" -b 8 -e 128M -f 2 -c 1 -g "${gpus_per_node}" \
             2>&1) || nccl_exit=$?
     elif command -v "${NCCL_TESTS_BIN}" > /dev/null 2>&1; then
         log_info "Using locally installed NCCL tests"
         nccl_output=$(run_with_timeout "${NCCL_TIMEOUT}" \
-            srun --nodes="${num_nodes}" --ntasks="${num_nodes}" --ntasks-per-node=1 --cpus-per-task="${SLURM_CPUS_ON_NODE:-1}" --mpi="${NCCL_MPI}" --cpu-bind=none \
+            srun --nodes="${num_nodes}" --ntasks="${num_nodes}" --ntasks-per-node=1 --cpus-per-task="${cpus_per_node}" --mpi="${NCCL_MPI}" --cpu-bind=none \
                  "${NCCL_TESTS_BIN}" -b 8 -e 128M -f 2 -c 1 -g "${gpus_per_node}" \
             2>&1) || nccl_exit=$?
     else

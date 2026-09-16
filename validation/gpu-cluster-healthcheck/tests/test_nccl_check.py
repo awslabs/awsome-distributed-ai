@@ -12,7 +12,7 @@ PROVIDER = 'NET/OFI Selected Provider is efa\n'
 
 
 class NcclResultTests(unittest.TestCase):
-    def run_check(self, output, *, instance='g7.48xlarge', exit_code=0, threshold=None):
+    def run_check(self, output, *, instance='g7.48xlarge', exit_code=0, threshold=None, job_cpus=None, step_cpus="192"):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for name, body in {
@@ -25,9 +25,14 @@ class NcclResultTests(unittest.TestCase):
                 p.chmod(0o755)
             (root / 'output').write_text(output)
             env = dict(os.environ, PATH=f'{root}:/usr/bin:/bin', SLURM_JOB_NUM_NODES='2',
-                       SLURM_NTASKS='16', SLURM_CPUS_ON_NODE='192', TEST_INSTANCE=instance,
+                       SLURM_NTASKS='16', TEST_INSTANCE=instance,
                        TEST_OUTPUT=str(root / 'output'), TEST_ARGS=str(root / 'args'),
                        TEST_EXIT=str(exit_code), RESULTS_DIR=str(root / 'results'))
+            for key, value in {'SLURM_CPUS_ON_NODE': step_cpus, 'SLURM_JOB_CPUS_PER_NODE': job_cpus}.items():
+                if value is None:
+                    env.pop(key, None)
+                else:
+                    env[key] = value
             if threshold is not None:
                 env['NCCL_MIN_BUS_BW'] = str(threshold)
             else:
@@ -45,6 +50,17 @@ class NcclResultTests(unittest.TestCase):
         self.assertIn('/opt/nccl-tests/build/all_reduce_perf', args)
         self.assertEqual(args[args.index('-g') + 1], '8')
         self.assertEqual(args[args.index('-c') + 1], '1')
+
+    def test_salloc_cpu_layout_without_step_environment(self):
+        rc, report, args = self.run_check(PROVIDER + ROW, job_cpus='192(x2)', step_cpus=None)
+        self.assertEqual((rc, report['status']), (0, 'PASS'))
+        self.assertIn('--cpus-per-task=192', args)
+
+    def test_heterogeneous_cpu_layout_fails_before_launch(self):
+        rc, report, args = self.run_check(PROVIDER + ROW, job_cpus='192,96', step_cpus=None)
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(report['status'], 'FAIL')
+        self.assertEqual(args, [])
 
     def test_nonzero_incorrect_result_fails(self):
         rc, report, _ = self.run_check(PROVIDER + ROW.rsplit('0', 1)[0] + '1\n')
