@@ -85,6 +85,28 @@ def summarize(records, duration_s, gpus, ttft_ms, tpot_ms, attainment, offered_t
             "input_tokens_sum_sent": sum(r.get("input_tokens", 0) for r in attempts)}
 
 
+async def require_reachable_router(url):
+    """Refuse to measure an unreachable endpoint.
+
+    A `kubectl port-forward` dies silently under the load of the highest rates. Without this
+    check the next rate records sent calls with no completions, `None` percentiles and
+    `meets_joint_slo: false`, which is indistinguishable from an engine that actually failed,
+    and `--stop-failure-fraction` then aborts the remaining rates. A client-side connection
+    fault is not a measurement.
+    """
+    probe = url.rstrip("/") + "/health"
+    try:
+        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+            status = (await client.get(probe)).status_code
+    except (httpx.HTTPError, TimeoutError) as exc:
+        raise SystemExit(f"Router unreachable at {probe} ({type(exc).__name__}: {exc}). "
+                         "The port-forward has most likely dropped: restart it, confirm the pods are still Running, "
+                         "and rerun this rate. No measurement file was written.")
+    if status != 200:
+        raise SystemExit(f"Router at {probe} answered HTTP {status}, not 200. "
+                         "Resolve the endpoint before measuring. No measurement file was written.")
+
+
 async def run_rate(data, a, rate, phase, tok):
     # No concurrency semaphore: slower responses must not reduce the offered task arrival rate.
     rng = random.Random(a.seed)
@@ -147,6 +169,7 @@ async def ramp(a):
     out = Path(a.output)
     out.mkdir(parents=True, exist_ok=True)
     for rate in a.rates:
+        await require_reachable_router(a.url)
         if not a.skip_warmup:
             warm = await run_rate(data, a, rate, "warmup", tok)
             (out / f"{rate:g}-warmup.json").write_text(json.dumps(warm, indent=2))
