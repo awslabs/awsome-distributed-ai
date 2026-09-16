@@ -80,7 +80,14 @@ def render(args):
         prefix += "python3 /opt/benchmark/verify_deepep_v2.py --source-only > "
         prefix += f"{run_dir}/logs/source-node-{rank}.log 2>&1 || exit $?; "
         prefix += f"sha256sum {source}/short_kimi_training_with_update_norm.py {source}/bench_kimi_k2_pretrain.py > {run_dir}/logs/source-node-{rank}.sha256; "
-        container["args"][0] = command.replace("MOE_DISPATCHER=deepepv2", "MOE_DISPATCHER=" + backend).replace("torchrun ", prefix + "torchrun ")
+        # Rewrite the dispatcher toggle AND the env.txt receipt tokens so the
+        # on-disk provenance names the arm that actually runs (the launcher
+        # was invoked with its deepepv2 path for every flex arm).
+        container["args"][0] = (
+            command.replace("MOE_DISPATCHER=deepepv2", "MOE_DISPATCHER=" + backend)
+            .replace(" arm=deepepv2 ", " arm=" + args.arm + " ")
+            .replace("torchrun ", prefix + "torchrun ")
+        )
         volumes = pod["spec"]["volumes"]
         if not any("persistentVolumeClaim" in volume for volume in volumes):
             raise ValueError("FSx PVC missing")

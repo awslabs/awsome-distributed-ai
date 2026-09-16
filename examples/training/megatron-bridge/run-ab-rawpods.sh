@@ -7,8 +7,8 @@
 # rendezvous ourselves: 1 headless Service ${JOB} + ${NNODES} Pods ${JOB}-0..N-1,
 # each torchrun with --node_rank from its ordinal, master_addr=${JOB}-0.
 #
-# Runs ONE arm (alltoall|deepep) of ONE model per invocation. Model/data/parallelism
-# are byte-identical across arms; only MOE_DISPATCHER differs.
+# Runs ONE arm (alltoall|deepep|deepepv2) of ONE model per invocation. Model/data/
+# parallelism are byte-identical across arms; only MOE_DISPATCHER differs.
 #
 #   MODEL=dsv3       -> DeepSeek-V3 256-expert recipe     (BENCH_PY bench_dsv3_pretrain.py)
 #   MODEL=kimi-k2    -> Kimi-K2 384-expert via AutoBridge (BENCH_PY bench_kimi_k2_pretrain.py)
@@ -79,7 +79,7 @@ fi
 
 CTX="${CTX:?set CTX to your kubectl context}"
 NS="${NS:-kimi-k2-bench}"
-IMG="${IMG:?set IMG to your megatron-bridge-uccl ECR image URI}"
+IMG="${IMG:?set IMG to your megatron-bridge training image URI (deepep-v2.Dockerfile build for the dev path)}"
 MODEL="${MODEL:-dsv3}"
 GPUS_PER_NODE=8
 # Node type + EFA NIC count per node. Defaults to p6-b300 (16 EFA); set INSTANCE_TYPE=

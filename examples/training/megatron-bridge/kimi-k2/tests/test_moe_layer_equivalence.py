@@ -12,22 +12,21 @@ import os
 
 try:
     import torch
-except ImportError as exc:  # container-only dependency; skip under bare pytest collection
+    import torch.distributed as dist
+    from megatron.core.tensor_parallel.mappings import all_to_all
+    from megatron.core.transformer.moe.fused_a2a import (
+        get_elastic_buffer,
+        deepepv2_combine,
+        deepepv2_dispatch,
+    )
+    from megatron.core.transformer.moe.moe_utils import permute, unpermute
+    from megatron.core.transformer.moe.router_replay import RouterReplay, RouterReplayAction
+except ImportError as exc:  # container-only dependencies; skip under bare pytest collection
     import sys as _sys
     if "pytest" in _sys.modules:
         import pytest
         pytest.skip(f"requires the DeepEP v2 container: {exc}", allow_module_level=True)
     raise
-import torch.distributed as dist
-
-from megatron.core.tensor_parallel.mappings import all_to_all
-from megatron.core.transformer.moe.fused_a2a import (
-    get_elastic_buffer,
-    deepepv2_combine,
-    deepepv2_dispatch,
-)
-from megatron.core.transformer.moe.moe_utils import permute, unpermute
-from megatron.core.transformer.moe.router_replay import RouterReplay, RouterReplayAction
 
 
 def replay_route(

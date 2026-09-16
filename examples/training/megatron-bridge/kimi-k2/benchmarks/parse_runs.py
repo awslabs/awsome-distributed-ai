@@ -289,10 +289,14 @@ def parse_run(run: Path, warmup: int, write_artifacts: bool = True) -> dict:
         "deepep-v2-gin-gda": "_DeepepV2Manager",
     }.get(arm)
     expected_backend = {"nccl-alltoall": "alltoall", "uccl": "deepep",
-                        "deepep-v1-nvshmem": "deepep", "deepep-v2-gin-gda": "deepepv2"}[arm]
+                        "deepep-v1-nvshmem": "deepep",
+                        "deepep-v2-gin-gda": "deepepv2"}.get(arm)
+    world_size = int(env["world_size"]) if env.get("world_size", "").isdigit() else 0
     runtime_dispatcher_identity = (
-        len(dispatcher_identities) == int(env.get("world_size", "0"))
-        and {item["rank"] for item in dispatcher_identities} == set(range(int(env["world_size"])))
+        expected_backend is not None
+        and world_size > 0
+        and len(dispatcher_identities) == world_size
+        and {item["rank"] for item in dispatcher_identities} == set(range(world_size))
         and all(item.get("backend") == expected_backend
                 and item.get("manager") == expected_manager
                 and item.get("local_moe_layers", 0) > 0

@@ -32,7 +32,7 @@ def load_benchmark():
     path = Path(
         os.environ.get(
             "KIMI_BENCHMARK_ENTRYPOINT",
-            "/opt/benchmark/case/kimi-k2/benchmarks/bench_kimi_k2_pretrain.py",
+            "/opt/benchmark/bench_kimi_k2_pretrain.py",
         )
     )
     spec = importlib.util.spec_from_file_location("adai_kimi_k2_benchmark", path)

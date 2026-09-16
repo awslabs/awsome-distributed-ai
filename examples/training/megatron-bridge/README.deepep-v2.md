@@ -85,7 +85,7 @@ This layout requests `32` existing `p6-b300.48xlarge` nodes, with `8` GPUs and `
 
 On 2026-09-16, this pinned image with the initialization backport and `NCCL_SYM_GIN_KERNELS_ENABLE=0` completed the full Kimi configuration above on `32` existing `p6-b300.48xlarge` nodes (`256` GPUs), using FSx for Lustre. All `24` training iterations and the validation/test evaluations completed, all `32` torchrun launchers exited with status `0`, and loss and gradient norms remained finite. All `256` ranks verified their actual `ElasticBuffer` after a completed training step and logged GDAKI context creation. This used random weights, mock data and overlap off. Logs and measurements are retained outside the repository.
 
-The four-backend performance and numerical-equivalence campaign is still in progress. The completed run above establishes execution for its stated configuration, not general autograd correctness or comparative performance. Comparison orchestration and analysis under development are excluded from this initial configuration contribution.
+The completed run above establishes execution for its stated configuration, not general autograd correctness or comparative performance. The four-arm comparison renderer and the post-run analysis tools are published below; the campaign-specific orchestration (cluster lock, serial run driver, harvest/normalization) is environment-specific and stays outside the repository, so the analysis tools document the harvested-run-directory schema they consume.
 
 Additional qualification found two unresolved upstream limitations. A 16-rank autograd contract test produces a non-contiguous FP32 router-probability gradient; the pinned Core passes it through `.float()` without making it contiguous, and DeepEP rejects it during backward. A separate 2-rank test with 384 experts fails JIT compilation with `Insufficient notify threads`. Neither issue is repaired by the communicator-initialization backport. The successful Kimi execution does not establish support for those test cases.
 
@@ -116,10 +116,54 @@ launcher; it prints manifests and never contacts Kubernetes itself. It sets
 `kimi-k2/benchmarks/bench_kimi_k2_pretrain.py` (seed 1234, evaluation off,
 micro batch 4, global batch 256, sequence length 4096, LR 5e-6, TP8/PP8/EP32)
 and refuses any other launch shape. Leave `COMPARISON_PRIMARY` unset for
-ordinary single-arm runs. The UCCL and DeepEP v1 arms build from
-`deepep-v2-backends.Dockerfile` on top of the v2 image.
+ordinary single-arm runs.
 
-Post-run analysis (all read-only over harvested run directories):
+The UCCL and DeepEP v1 arms build from `deepep-v2-backends.Dockerfile` on top
+of the v2 image:
+
+```bash
+docker build -f examples/training/megatron-bridge/deepep-v2-backends.Dockerfile \
+  --build-arg COMMON_IMAGE=<your v2 image> --target uccl -t kimi-uccl .
+docker build -f examples/training/megatron-bridge/deepep-v2-backends.Dockerfile \
+  --build-arg COMMON_IMAGE=<your v2 image> --target deepep-v1 -t kimi-v1 .
+```
+
+Render one arm (the renderer needs host PyYAML, `IMG` as an immutable
+`@sha256:` digest, exactly 32 comma-separated `NODE_NAMES`, and a
+`CAMPAIGN_ID`; it prints the Pod manifests to stdout):
+
+```bash
+CTX=<kubectl context> NS=<namespace> IMG=<image@sha256:digest> \
+STORAGE=pvc FSX_PVC=<pvc> STAGE=/fsx/<campaign>/stage \
+BENCH_PY=/fsx/<campaign>/source/short_kimi_training_with_update_norm.py \
+NODE_NAMES=<32 node names, comma-separated> CAMPAIGN_ID=<campaign id> \
+python3 examples/training/megatron-bridge/4.render-deepep-comparison.py \
+  uccl --repeat 1 --kind performance \
+  --source-dir /fsx/<campaign>/source --tmp-dir /fsx/mc/u1
+```
+
+Post-run analysis (all read-only over harvested run directories). The
+harvest/normalization step itself is environment-specific and not included;
+the analysis tools consume one directory per run with this schema:
+
+- `environment.txt` — `key=value` lines with at least `ep_arm`, `cell`,
+  `repeat`, `world_size`, `train_iterations`, `run_kind`,
+  `benchmark_learning_rate`.
+- `STATUS` — first line begins with `PASS` for a run whose processes all
+  succeeded.
+- `pod-logs/node-rank-<n>.log` — concatenated per-node rank stdout/stderr
+  (the source of Megatron's per-iteration lines and of the
+  `RUNTIME_DISPATCHER_IDENTITY` / `MODEL_INITIALIZATION_IDENTITY` markers
+  that `bench_kimi_k2_pretrain.py` prints in dev mode).
+- `node-<n>/runtime-manifest.json` — per-node summary derived from those
+  markers (NCCL library identity, EFA device list, backend identity).
+- `node-<n>/routes/` — router trace files when route tracing was enabled.
+- optional `manifests/run-entrypoint.py` plus a
+  `run_entrypoint_source_sha256` key in `environment.txt` — the measurement
+  entrypoint copy whose hash the source-identity gate checks (a run without
+  them simply fails that gate and is excluded from scored aggregation).
+
+Post-run analysis tools:
 
 - `kimi-k2/benchmarks/parse_runs.py` — per-run validity gates, steady
   iteration timing (first 8 iterations discarded, 32 scored), paired
