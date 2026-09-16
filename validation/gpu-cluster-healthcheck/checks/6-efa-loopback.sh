@@ -118,6 +118,7 @@ run_check() {
     log_info "Testing ${device_count} EFA domain(s)"
 
     local failures=0
+    local stats_warning=0
     local results_json="["
 
     while IFS= read -r domain; do
@@ -167,10 +168,12 @@ ENDJSON
             retrans_timeouts=$(echo "${efa_stats}" | grep -oP 'retrans_timeout_events\s+\K[0-9]+' | awk '{sum+=$1} END {print sum+0}') || retrans_timeouts=0
 
             if [[ "${rx_drops}" -gt 0 ]]; then
-                check_warn "${CHECK_NAME}" "EFA rx_drops detected (${rx_drops}) -- possible network issues"
+                log_warn "EFA rx_drops detected (${rx_drops}) -- possible network issues"
+                stats_warning=1
             fi
             if [[ "${retrans_timeouts}" -gt 0 ]]; then
-                check_warn "${CHECK_NAME}" "EFA retransmission timeouts detected (${retrans_timeouts})"
+                log_warn "EFA retransmission timeouts detected (${retrans_timeouts})"
+                stats_warning=1
             fi
             if [[ "${rx_drops}" -eq 0 && "${retrans_timeouts}" -eq 0 ]]; then
                 log_verbose "EFA statistics clean -- no drops or retransmissions"
@@ -188,8 +191,11 @@ ENDJSON
         return 1
     fi
 
-    check_pass "${CHECK_NAME}" \
-        "EFA loopback OK: ${device_count} domain(s) tested"
+    if [[ ${stats_warning} -eq 1 ]]; then
+        check_warn "${CHECK_NAME}" "EFA loopback completed for ${device_count} domain(s); cumulative EFA statistics contain drops or retransmission timeouts (see logs)"
+    else
+        check_pass "${CHECK_NAME}" "EFA loopback OK: ${device_count} domain(s) tested"
+    fi
     return 0
 }
 
