@@ -16,14 +16,17 @@ run_check() {
     init_check "${CHECK_NAME}"
 
     local failures=0
+    local binding_failures=0
+    local advisory_count=0
+    warn_efa() { advisory_count=$((advisory_count + 1)); check_warn "$@"; }
 
     # Step 1: Count EFA PCI devices
     log_info "Enumerating EFA PCI devices"
     local efa_pci_count=0
     if [[ "${DRY_RUN}" != "1" ]]; then
-        efa_pci_count=$(lspci | grep -ci "EFA" || true)
+        efa_pci_count=$(lspci -Dn | awk '$3 ~ /^1d0f:efa[0-9a-f]$/ {n++} END {print n+0}' )
     else
-        echo -e "${YELLOW}[DRY-RUN]${NC} lspci | grep -ci EFA" >&2
+        echo -e "${YELLOW}[DRY-RUN]${NC} lspci -Dn (Amazon EFA PCI IDs)" >&2
     fi
     log_verbose "EFA PCI devices found: ${efa_pci_count}"
 
@@ -35,7 +38,7 @@ run_check() {
                 local retry
                 for retry in 1 2 3; do
                     sleep 5
-                    efa_pci_count=$(lspci | grep -ci "EFA" || true)
+                    efa_pci_count=$(lspci -Dn | awk '$3 ~ /^1d0f:efa[0-9a-f]$/ {n++} END {print n+0}' )
                     log_verbose "Retry ${retry}: EFA PCI devices found: ${efa_pci_count}"
                     if [[ "${efa_pci_count}" -eq "${EXPECTED_EFA_COUNT}" ]]; then
                         break
@@ -82,6 +85,20 @@ run_check() {
     fi
     log_verbose "RDMA devices found: ${rdma_count}"
 
+    # Count only RDMA devices bound to the EFA driver. PCI functions remain
+    # visible after driver unbind, and non-EFA RDMA devices may coexist.
+    local bound_efa_count=0 rdma_device
+    for rdma_device in /sys/class/infiniband/*; do
+        [[ -e "${rdma_device}" ]] || continue
+        if [[ "$(basename "$(readlink -f "${rdma_device}/device/driver")")" == efa ]]; then
+            bound_efa_count=$((bound_efa_count + 1))
+        fi
+    done
+    if [[ "${EXPECTED_EFA_COUNT:-0}" -gt 0 && "${bound_efa_count}" -ne "${EXPECTED_EFA_COUNT}" ]]; then
+        log_error "EFA driver-bound RDMA count mismatch: expected=${EXPECTED_EFA_COUNT}, detected=${bound_efa_count}"
+        binding_failures=$((binding_failures + 1))
+    fi
+
     # Step 3: Check libfabric EFA provider
     log_info "Checking libfabric EFA provider"
     if [[ "${DRY_RUN}" != "1" ]]; then
@@ -90,12 +107,19 @@ run_check() {
             fi_output=$(fi_info -p efa 2>&1 || true)
             if echo "${fi_output}" | grep -qi "provider: efa" ; then
                 log_verbose "EFA provider confirmed via fi_info"
+                local domain_count
+                domain_count=$(echo "${fi_output}" | awk '/domain:/ && $2 ~ /-rdm$/ {print $2}' | sort -u | wc -l)
+                if [[ "${EXPECTED_EFA_COUNT:-0}" -gt 0 && "${domain_count}" -ne "${EXPECTED_EFA_COUNT}" ]]; then
+                    log_error "EFA provider domain count mismatch: expected=${EXPECTED_EFA_COUNT}, detected=${domain_count}"
+                    binding_failures=$((binding_failures + 1))
+                fi
             else
-                check_warn "${CHECK_NAME}" \
-                    "fi_info did not confirm EFA provider -- check libfabric installation"
+                log_error "fi_info did not confirm EFA provider -- check libfabric installation"
+                binding_failures=$((binding_failures + 1))
             fi
         else
-            log_warn "fi_info not found -- libfabric may not be installed"
+            log_error "fi_info not found -- libfabric may not be installed"
+            binding_failures=$((binding_failures + 1))
         fi
     else
         echo -e "${YELLOW}[DRY-RUN]${NC} fi_info -p efa" >&2
@@ -115,20 +139,25 @@ run_check() {
     fi
     log_verbose "uverbs device nodes found: ${uverbs_count}"
 
+    if [[ "${EXPECTED_EFA_COUNT:-0}" -gt 0 && "${uverbs_count}" -lt "${EXPECTED_EFA_COUNT}" ]]; then
+        log_error "uverbs node count below expected EFA count: expected=${EXPECTED_EFA_COUNT}, detected=${uverbs_count}"
+        binding_failures=$((binding_failures + 1))
+    fi
+
     # Step 5: Validate required kernel modules
     log_info "Checking EFA kernel modules"
     if [[ "${DRY_RUN}" != "1" ]]; then
         local required_modules=("efa" "ib_uverbs" "ib_core")
         for mod in "${required_modules[@]}"; do
             if ! lsmod | grep -qw "${mod}"; then
-                check_warn "${CHECK_NAME}" "EFA kernel module ${mod} not loaded"
+                warn_efa "${CHECK_NAME}" "EFA kernel module ${mod} not loaded"
             fi
         done
 
         # Optional: check gdrdrv if GDRCopy is installed
         if [[ -d /opt/gdrcopy ]]; then
             if ! lsmod | grep -qw "gdrdrv"; then
-                check_warn "${CHECK_NAME}" \
+                warn_efa "${CHECK_NAME}" \
                     "gdrdrv module not loaded -- GPUDirect RDMA may fall back to slower paths"
             fi
         fi
@@ -143,7 +172,7 @@ run_check() {
             if run_with_timeout 30 /opt/gdrcopy/bin/sanity -v > /dev/null 2>&1; then
                 log_verbose "GDRCopy sanity check passed"
             else
-                check_warn "${CHECK_NAME}" \
+                warn_efa "${CHECK_NAME}" \
                     "GDRCopy sanity check failed -- GPUDirect RDMA may not function"
             fi
         else
@@ -158,7 +187,7 @@ run_check() {
         memlock=$(ulimit -l 2>/dev/null || echo "0")
         if [[ "${memlock}" != "unlimited" ]]; then
             if [[ "${memlock}" -lt 16777216 ]]; then
-                check_warn "${CHECK_NAME}" \
+                warn_efa "${CHECK_NAME}" \
                     "Memory lock limit ${memlock} KB is below 16 GiB -- EFA performance may be degraded"
             else
                 log_verbose "Memory lock limit OK"
@@ -172,7 +201,17 @@ run_check() {
 
     # Final result
     if [[ ${failures} -gt 0 ]]; then
+        check_fail "${CHECK_NAME}" "EFA PCI device count mismatch: expected=${EXPECTED_EFA_COUNT}, detected=${efa_pci_count}; driver-bound=${bound_efa_count}, RDMA=${rdma_count}, uverbs=${uverbs_count}" "ISOLATE"
         return 1
+    fi
+    if [[ ${binding_failures} -gt 0 ]]; then
+        check_fail "${CHECK_NAME}" "EFA driver/provider incomplete: expected=${EXPECTED_EFA_COUNT}, driver-bound=${bound_efa_count}, RDMA=${rdma_count}, uverbs=${uverbs_count}; inspect raw output" "RESET"
+        return 1
+    fi
+
+    if [[ ${advisory_count} -gt 0 ]]; then
+        check_warn "${CHECK_NAME}" "EFA devices enumerated with ${advisory_count} advisories; inspect raw output"
+        return 0
     fi
 
     check_pass "${CHECK_NAME}" \
