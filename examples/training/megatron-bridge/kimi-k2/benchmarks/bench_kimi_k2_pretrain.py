@@ -154,6 +154,11 @@ def build_config():
         # The pinned Core warns against the provider's TE cross-entropy default.
         m.cross_entropy_fusion_impl = "native"
 
+    # COMPARISON_PRIMARY=1 pins the four-arm comparison profile rendered by
+    # 4.render-deepep-comparison.py (seed 1234, eval off, MB4/GBS256/seq4096,
+    # LR 5e-6, TP8/PP8/EP32). The asserts refuse any other launch shape so a
+    # scored comparison cannot silently run off-profile; leave the variable
+    # unset for ordinary single-arm runs. See README.deepep-v2.md.
     if os.environ.get("COMPARISON_PRIMARY") == "1":
         cfg.rng.seed = 1234
         cfg.train.eval_iters = 0
@@ -355,9 +360,8 @@ def main():
     if os.environ.get("CONFIG_ONLY") == "1":
         return
     if _dev_mode():
+        # build_config() already validated MOE_DISPATCHER; read it only for the callback label.
         dispatcher = os.environ.get("MOE_DISPATCHER", "deepep").lower()
-        if dispatcher not in ("alltoall", "deepep", "deepepv2"):
-            raise ValueError("The dev image comparison supports alltoall, deepep, or deepepv2")
         pretrain(config=cfg, forward_step_func=fwd, callbacks=[_runtime_identity_callback(dispatcher)])
     else:
         pretrain(config=cfg, forward_step_func=fwd)

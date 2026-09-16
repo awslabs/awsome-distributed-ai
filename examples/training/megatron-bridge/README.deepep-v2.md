@@ -106,3 +106,32 @@ bash -n examples/training/megatron-bridge/1.build-deepep-v2.sh \
   examples/training/megatron-bridge/3.run-deepep-v2.sh \
   examples/training/megatron-bridge/run-ab-rawpods.sh
 ```
+
+## Four-arm comparison tooling
+
+`4.render-deepep-comparison.py` renders one comparison job (NCCL all-to-all /
+UCCL / DeepEP v1 NVSHMEM / DeepEP v2 GIN-GDA) through the same raw-Pod
+launcher; it prints manifests and never contacts Kubernetes itself. It sets
+`COMPARISON_PRIMARY=1`, which pins the scored comparison profile inside
+`kimi-k2/benchmarks/bench_kimi_k2_pretrain.py` (seed 1234, evaluation off,
+micro batch 4, global batch 256, sequence length 4096, LR 5e-6, TP8/PP8/EP32)
+and refuses any other launch shape. Leave `COMPARISON_PRIMARY` unset for
+ordinary single-arm runs. The UCCL and DeepEP v1 arms build from
+`deepep-v2-backends.Dockerfile` on top of the v2 image.
+
+Post-run analysis (all read-only over harvested run directories):
+
+- `kimi-k2/benchmarks/parse_runs.py` — per-run validity gates, steady
+  iteration timing (first 8 iterations discarded, 32 scored), paired
+  arm-vs-NCCL speedups with a fixed-seed bootstrap interval.
+- `kimi-k2/benchmarks/compare_training_curves.py` — loss/gradient-norm curve
+  overlays and scalar-delta tables for short correctness runs.
+- `kimi-k2/benchmarks/summarize_route_trace.py` — router expert-selection
+  hash comparison across arms.
+- `kimi-k2/tests/` — the 8-step measurement entrypoint with full-precision
+  update-norm sampling, NCCL self-repeat envelope derivation, and CPU unit
+  tests for the DeepEP v2 autograd contract.
+
+Timing numbers from runs whose pods failed after the final iteration
+(DeepEP v1 teardown failures) are recorded as incomplete/exploratory and are
+never substituted into scored statistics.
