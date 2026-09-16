@@ -128,7 +128,8 @@ class ConfigTests(unittest.TestCase):
 
 class LauncherTests(unittest.TestCase):
     def render(self, script, arm, **extra):
-        env = dict(os.environ, CTX="render-only", IMG="review:local", RENDER_ONLY="1", **extra)
+        base = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL")}
+        env = dict(base, CTX="render-only", IMG="review:local", RENDER_ONLY="1", **extra)
         return subprocess.run(["bash", str(HERE / script), arm, "2"],
                               env=env, check=True, capture_output=True, text=True).stdout
 
@@ -180,7 +181,7 @@ class LauncherTests(unittest.TestCase):
             self.assertIn(f"MOE_DISPATCHER={arm}", text)
             self.assertIn("/opt/benchmark/bench_kimi_k2_pretrain.py", text)
             self.assertIn("mountPath: /dev/gdrdrv", text)
-            self.assertIn("${PYTHONPATH:-}", text)
+            self.assertIn("${PYTHONPATH:+:${PYTHONPATH}}", text)
             self.assertIn("NCCL_SYM_GIN_KERNELS_ENABLE=0", text)
 
 

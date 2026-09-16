@@ -71,14 +71,14 @@ def main():
     )
     from megatron.core.transformer.moe import fused_a2a, token_dispatcher
 
-    for module, root, pin in (
-        (megatron.core, "/opt/upstream/Megatron-LM", os.environ["MCORE_COMMIT"]),
-        (megatron.bridge, "/opt/upstream/Megatron-Bridge", os.environ["BRIDGE_COMMIT"]),
+    # Source commits were already asserted by verify_sources(); here only prove
+    # the imported modules resolve to those verified trees.
+    for module, root in (
+        (megatron.core, "/opt/upstream/Megatron-LM"),
+        (megatron.bridge, "/opt/upstream/Megatron-Bridge"),
     ):
         assert Path(module.__file__).resolve().is_relative_to(root), module.__file__
-        actual = subprocess.check_output(["git", "-C", root, "rev-parse", "HEAD"], text=True).strip()
-        assert actual == pin, (actual, pin)
-        print(module.__name__, actual, module.__file__, flush=True)
+        print(module.__name__, module.__file__, flush=True)
     assert hasattr(deep_ep, "ElasticBuffer"), deep_ep.__file__
     assert "874779c" in metadata.version("deep-ep"), metadata.version("deep-ep")
     assert Path(deep_ep.__file__).resolve().is_relative_to("/opt/venv"), deep_ep.__file__

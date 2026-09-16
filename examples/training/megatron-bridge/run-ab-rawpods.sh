@@ -219,6 +219,10 @@ launch_pod() {
   local EPILOGUE=""
   if [ "$R" = "0" ]; then
     PREAMBLE="${RANK0_PREAMBLE}"
+    # exit $rc preserves the training exit code in the pod phase. Note for the
+    # NVSHMEM deepep arm: its documented finalize exit(1) therefore shows the
+    # rank-0 pod as Failed; that cell's validity is still judged by
+    # efa_ok + n_steady from STATUS/logs, not by pod phase.
     EPILOGUE="; rc=\$?; echo \"exit=\$rc finished=\$(date -u +%FT%TZ)\" > ${RUN_DIR}/STATUS; exit \$rc"
   fi
   apply_manifest <<EOF
@@ -250,7 +254,7 @@ spec:
       args:
         - >
           ${PREAMBLE}
-          export PYTHONPATH=${STAGE}:\${PYTHONPATH:-} KIMI_K2_HF_PATH=${STAGE}/hf
+          export PYTHONPATH=${STAGE}\${PYTHONPATH:+:\${PYTHONPATH}} KIMI_K2_HF_PATH=${STAGE}/hf
           BENCHMARK_OUTPUT_DIR=${RUN_DIR}/tensorboard
           MOE_DISPATCHER=${ARM} MOE_A2A_OVERLAP=${MOE_A2A_OVERLAP} MOE_FORCE_BALANCE=${MOE_FORCE_BALANCE}
           TENSOR_PARALLEL=${TP} PIPELINE_PARALLEL=${PP} EXPERT_PARALLEL=${EP}
