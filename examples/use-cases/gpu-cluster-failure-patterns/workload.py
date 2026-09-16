@@ -118,14 +118,15 @@ def dataloader(args, tensor):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['storage', 'dataloader'])
+    parser.add_argument('mode', choices=['storage', 'dataloader', 'device'])
+    parser.add_argument('--duration-seconds', type=int, default=600)
     parser.add_argument('--inject', action='store_true')
     parser.add_argument('--resume', action='store_true')
     parser.add_argument('--start-method', choices=['fork', 'spawn'], default='fork')
     args = parser.parse_args()
     torch.cuda.set_device(int(os.environ['LOCAL_RANK']))
     dist.init_process_group('nccl', timeout=timedelta(seconds=30))
-    tensor = torch.ones(1024 * 1024, device='cuda')
+    tensor = torch.ones(32 * 1024 * 1024 if args.mode == 'device' else 1024 * 1024, device='cuda')
     collective(tensor)
     if dist.get_rank() == 0:
         build_nccl = '.'.join(str(part) for part in torch.cuda.nccl.version())
@@ -134,8 +135,29 @@ def main():
               'Use NCCL startup logs for the loaded runtime version.', flush=True)
     if args.mode == 'storage':
         storage(args, tensor)
-    else:
+    elif args.mode == 'dataloader':
         dataloader(args, tensor)
+    else:
+        # Progress comes only after a completed, correctness-checked collective.
+        # The external controller observes progress and device counters before injection.
+        deadline = time.monotonic() + args.duration_seconds
+        sequence = 0
+        keep_running = torch.ones(1, dtype=torch.int32, device='cuda')
+        while True:
+            # Rank 0 ends the loop collectively; local deadlines can diverge.
+            if dist.get_rank() == 0:
+                keep_running.fill_(int(time.monotonic() < deadline))
+            dist.broadcast(keep_running, src=0)
+            if not keep_running.item():
+                break
+            collective(tensor)
+            sequence += 1
+            if dist.get_rank() == 0 and sequence % 20 == 0:
+                print(f'AIM344 collective_progress={sequence} collectives; '
+                      f'tensor_bytes={tensor.numel() * tensor.element_size()} B; '
+                      f'timestamp={time.time():.6f} s since epoch; 0 mismatches.', flush=True)
+        if dist.get_rank() == 0:
+            print(f'Device workload completed: {sequence} collectives; 0 mismatches.', flush=True)
     dist.destroy_process_group()
 
 

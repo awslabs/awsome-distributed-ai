@@ -323,3 +323,71 @@ The first diagnostic attempt began before the retained companion exporter was ac
 | g7.48xlarge | ip-10-8-17-100 | rdmap176s0 | 181900195904 B | 16237888 B |
 
 Both devices carried full-run traffic. Both devices’ counter deltas were zero in the Socket control. The selected stand-in EFA carried traffic while the unused EFA remained flat. NCCL reported `GDR 0`; these results do not prove the absence of host staging. Full raw command, cgroup, inventory, checkpoint, process-start and per-device counter evidence is under `/tmp/g7-dual-instance/pcs/aim344/` and the private Spain evidence prefix `g7-dual/aim344/`.
+
+## September 16, 2026: device recovery qualification on PCS G7
+
+The development suite revision `a4ba07eb15e6f277063b4000346f9109c98de843` adds G7 profiles and corrects EFA enumeration, physical-device loopback selection, Check 5 launch/result handling and DCGM JSON parsing. The tested deployment has 2 `g7.48xlarge` nodes, each with 8 NVIDIA RTX PRO 4500 Blackwell GPUs and 2 EFA devices. Software versions are Linux `6.17.0-1020-aws`, NVIDIA driver `595.91.07`, DCGM `4.6.1`, EFA driver `3.0.0g` and Slurm `25.05.9`. This revision is a development qualification; upstream main remains `995d296aa8d1dce3cd907268dd84072c0951a426` at the recorded fetch.
+
+The exact suite archive SHA-256 is `2db81e3b8b66aecfbfa7056be969b275fb7b2119305eb2bf6bcb72bf5ce61b88`. The training-image SHA-256 is `d766c475e7e12d29e141df852d451a3831f500b5c6ec17d2972a046e33905cd0`; the NCCL-image SHA-256 is `1eb22e960e290501ba6f9e206282531db4bed07c5f21d5a698a6801cd87ad3d2`.
+
+### Diagnostic coverage and healthy collectives
+
+Checks with identifiers 0, 2 and 3 pass with the expected counts fixed at 8 GPUs and 2 EFA devices per node. Check 6 completes a separate loopback for each physical EFA device. It preserves WARN / MONITOR when cumulative retransmission timeout counters are nonzero. A paired invalid `FI_EFA_IFACE` control returned client exit status 103 and server `ENODATA`, with 0 B growth on all exposed EFA byte counters.
+
+Level 2 passed the software, memory and PCIe tests on both original nodes in 308.694 seconds and 307.984 seconds. The replacement target later passed the same coverage in 342.781 seconds. Level 4 returned FAIL / RESET on both original nodes after its configured 9000-second timeout; wrapper durations were 9067.885 seconds and 9067.880 seconds. The NVBandwidth subprocess stopped advancing its log during that run. Separate process observations after the wrapper returned confirmed cleanup. Level 4 coverage remains incomplete.
+
+Check 5 runs once per allocation from its coordinator, with 1 MPI process per node and 8 GPUs per process. Its 25 message sizes span 8 B through 128 MiB. Successful runs contain 0 mismatches in both correctness columns and EFA provider selection in the raw output. Physical counters increase on both EFA devices on each node. The SENDRECV configuration used RDMA reads: a representative run recorded 5662310400 B in `rdma_read_bytes` per device and 0 B in `rdma_write_bytes`.
+
+### PCS reboot correction and idle GPU recovery
+
+An initial active GPU trial used the EC2 reboot API. PCS subsequently terminated that instance and restored its configured 2-instance minimum inside the existing capacity reservation. That trial failed the instance-retention requirement. The adopted recovery route uses basic `scontrol reboot` after draining the target and ending its allocation, following the [PCS reboot procedure](https://docs.aws.amazon.com/pcs/latest/userguide/slurm-reboot-procedure.html). The existing DRAIN state remains in place through maintenance qualification; explicit resume precedes the fresh job.
+
+On the replacement target, a separate idle Slurm reboot retained the same instance, restored mounts, image paths, the 32 MiB checkpoint tmpfs and prior telemetry service, and passed a fresh collective/storage job. The subsequent idle GPU fault cycle completed in 258.242 seconds. Before recovery, suite identifiers 0 and 3 reported FAIL / ISOLATE for 7 detected GPUs against 8 expected GPUs. The selected GPU remained PCI-visible while the removal helper was pending at its 30-second observation deadline. The helper returned after the Slurm reboot request and before the new boot. The observed process state was `S`.
+
+The idle cycle restored the selected GPU UUID/BDF and retained the same instance. Its fresh Check 5 passed in 19.868 seconds at maximum bus bandwidth 39.59 GB/s, with all 25 size rows and 0 mismatches. The participant storage command resumed step index 0 and completed step index 1 with 0 mismatches. The subsequent persistence-preparation trials are recorded below.
+
+### Active GPU limitation and adopted idle procedure
+
+An active GPU removal with persistence enabled left its removal helper pending. After the allocation was canceled, the basic Slurm reboot stalled during guest shutdown and exceeded the controller's 720-second observation window. A separately recorded EC2 reboot, requested only after Slurm reported `REBOOT_ISSUED`, eventually restored the same instance. Fresh job ID 48 passed Check 5 in 16.155 seconds at 39.49 GB/s and completed storage reuse. This trial is excluded from adoption.
+
+Disabling persistence only on the selected GPU allowed an idle PCI removal to return immediately. Repeating that preparation with an active workload still stalled shutdown. In active job ID 50, collectives continued through progress index 12260 until controller cancellation, with 0 mismatches in the recorded progress. Checks 0 and 3 reported FAIL / ISOLATE for 7 detected GPUs. The kernel subsequently reported shutdown blocked on a mutex likely owned by the pending removal process. An explicit external reboot fallback again restored the same instance. Fresh job ID 51 passed Check 5 in 19.616 seconds at 39.57 GB/s and completed storage reuse. Total controller duration was 1018.499 seconds. Disabling persistence did not qualify active removal for the participant session.
+
+The adopted GPU procedure therefore removes the selected device while the target is idle. The root helper requires no active target allocation, no compute process on the selected GPU and persistence disabled. Preparation records and pauses the actual telemetry owner and saves the selected GPU's original persistence mode. Basic Slurm reboot restores device visibility; maintenance then restores that mode, telemetry, existing mounts and the private fixture before scheduling resumes.
+
+The following consecutive trials used the same narrowed helper and preparation. Controller duration includes preparation, diagnostics, recovery and fresh-job verification. Mutation-to-reuse duration starts at the helper's recorded PCI write and ends when fresh collective and storage verification completes.
+
+| Trial | Fresh job ID | Controller duration | Mutation to verified reuse | Check 5 duration | Maximum bus bandwidth |
+|---|---|---|---|---|---|
+| `gpu-pmoff-idle-2` | job 52 | 205.097 seconds | 180.494 seconds | 16.552 seconds | 39.60 GB/s |
+| `gpu-pmoff-idle-3` | job 53 | 202.197 seconds | 177.526 seconds | 16.117 seconds | 39.64 GB/s |
+| `gpu-pmoff-idle-4` | job 54 | 236.826 seconds | 212.119 seconds | 19.803 seconds | 38.72 GB/s |
+
+All 3 trials completed PCI removal, retained FAIL / ISOLATE for the missing GPU, and recovered the same instance and GPU UUID/BDF through basic Slurm reboot without an external fallback. Each fresh Check 5 completed all 25 rows with 0 mismatches in both correctness columns. Both physical EFAs on both hosts recorded positive RDMA-read, send and receive byte deltas. Storage advanced from step index 0 to step index 1 with 0 mismatches. The original persistence mode, telemetry state, image hashes, existing NVMe filesystem and participant-owned 32 MiB tmpfs were restored. The coordinator's cumulative Check 6 warning remained visible.
+
+### EFA unbind, partial availability and repeated recovery
+
+The idle EFA trial unbound one selected PCI function while a dedicated allocation was held. Both EFA PCI functions remained visible, but the selected function lost its driver binding, RDMA domain and uverbs node. Check 2 returned FAIL / RESET and Check 6 returned FAIL / ISOLATE. Check 5 still completed on the remaining path at 28.24 GB/s, with all 25 rows and 0 mismatches in both columns. That run had no advisory bandwidth floor configured. Targeted rebind restored both devices without reboot; fresh job ID 56 passed Check 5 at 39.53 GB/s and completed storage reuse.
+
+For active trials, the workload selected the allowlisted physical EFA and recorded advancing collective indices and increasing RDMA-write counters immediately before unbind. Existing collectives continued while unbind was pending. After controller cancellation ended the old allocation, unbind returned and the missing-domain diagnostics failed. The recovery then rebound the selected function and verified a fresh job. The following 3 consecutive cycles used that sequence:
+
+| Trial | Active / fresh job ID | Last completed collective index before cancellation | Controller duration | Unbind duration | Mutation to verified reuse | Fresh Check 5 duration | Maximum bus bandwidth |
+|---|---|---|---|---|---|---|---|
+| `efa-active-1` | jobs 57 / 58 | 8760 collectives | 261.754 seconds | 70.793 seconds | 211.457 seconds | 15.098 seconds | 39.62 GB/s |
+| `efa-active-2` | jobs 59 / 60 | 8660 collectives | 261.844 seconds | 70.828 seconds | 211.516 seconds | 15.681 seconds | 38.18 GB/s |
+| `efa-active-3` | jobs 61 / 62 | 8720 collectives | 262.261 seconds | 70.861 seconds | 211.634 seconds | 15.486 seconds | 39.59 GB/s |
+
+All 3 cycles retained the same EC2 instances and boot identifiers. Rebind restored both expected EFA domains without reboot. Fresh Check 5 completed all 25 rows with 0 mismatches in both correctness columns and positive RDMA-read, send and receive deltas on all 4 physical EFAs. The private fixture advanced step index 2 to 3, 3 to 4 and 4 to 5, respectively, with 0 mismatches. Images, mounts, participant ownership, persistence mode, telemetry and Slurm runtime were retained. The coordinator's cumulative Check 6 WARN / MONITOR remained visible.
+
+The active workload's nonzero launcher result followed controller cancellation. These trials did not produce a spontaneous collective timeout or arithmetic mismatch. The kernel recorded MR deregistration errors during old-process teardown; the subsequent per-device tests and fresh communicator succeeded. Keep those teardown errors with the evidence instead of treating the old communicator as recovered by rebind.
+
+## Check 5 advisory and participant storage rehearsal, September 16, 2026
+
+The prepared Spain pair uses an advisory floor of 30 GB/s for Check 5. Across 6 fresh allocations after accepted device recoveries, the maximum bus bandwidth ranged from 38.18 GB/s through 39.64 GB/s with all 25 rows correct. This floor is a review trigger for that configuration. Derive a new floor when the hardware, image or launch mapping changes.
+
+A warning control in job ID 63 set the advisory floor to 10000 GB/s. Check 5 completed in 16.775 seconds at 39.54 GB/s with all 25 rows correct and traffic on all 4 physical EFAs. The original suite result remained WARN / MONITOR, with launcher exit code 0 (dimensionless). Both nodes then received the 30 GB/s workshop setting, with the prior environment retained.
+
+Participant storage job ID 64 reproduced checkpoint ENOSPC before peer collective timeouts. The injected command returned exit code 1 (dimensionless) after 112 seconds. Recovery resumed step index 0, completed step index 1 with 0 mismatches, and returned exit code 0 (dimensionless) after 22 seconds. Private-container cleanup completed in 5 seconds. The private tmpfs filler occupied 33546240 B; shared filesystems were outside the injection.
+
+Fresh job ID 65 then ran the participant Check 5 wrapper in 20 seconds with `NCCL_MIN_BUS_BW=30`. The original suite verdict was PASS at 38.08 GB/s maximum bus bandwidth. All 25 rows from 8 B through 128 MiB had 0 mismatches in both columns; each host selected the EFA provider with 2 NICs, and every physical EFA recorded 5662310400 B of RDMA reads. Fork and spawn each completed 4 batches with 0 mismatches in 20 seconds, with `FI_EFA_FORK_SAFE=1` and the same `FI_EFA_USE_HUGE_PAGE=0` setting. The DataLoader hang was not reproduced. Final cleanup completed in 8 seconds.
+
+The optional transport comparison in job ID 66 completed all 29 rows from 8 B through 2 GiB correctly in each phase. At 2 GiB, baseline bus bandwidth was 39.82 GB/s out of place and 39.75 GB/s in place; the Socket control reached 14.33 GB/s and 14.92 GB/s; recovery reached 39.85 GB/s and 39.81 GB/s. Baseline and recovery used Libfabric and carried traffic on all 4 EFAs. Every exposed EFA byte counter remained unchanged during the Socket control. Full command durations were 37 seconds, 55 seconds and 26 seconds, followed by 1-second cleanup. Small retransmission-byte deltas during the EFA sweeps remain in the raw evidence. These 2 GiB measurements retain their own launch mapping and are separate from Check 5.

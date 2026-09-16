@@ -25,7 +25,12 @@ def aws(*arguments):
 cluster = aws('get-cluster', '--cluster-identifier', a.cluster)['cluster']
 if cluster['status'] != 'ACTIVE':
     raise RuntimeError(f"PCS cluster is {cluster['status']}")
-current = cluster.get('slurmConfiguration', {}).get('slurmCustomSettings', [])
+configuration = cluster.get('slurmConfiguration', {})
+current = configuration.get('slurmCustomSettings', [])
+# Preserve every writable Slurm setting, including retention and cgroups.
+preserved = {key: value for key, value in configuration.items() if key in (
+    'accounting', 'cgroupCustomSettings', 'scaleDownIdleTimeInSeconds',
+    'slurmRest', 'slurmdbdCustomSettings')}
 if a.action == 'enable':
     if a.state_file.exists():
         raise FileExistsError(f'Preserve the saved configuration: {a.state_file}')
@@ -50,7 +55,7 @@ else:
     settings = saved['settings']
 print(json.dumps(dict(action=a.action, cluster=a.cluster, settings=settings)), flush=True)
 aws('update-cluster', '--cluster-identifier', a.cluster,
-    '--slurm-configuration', json.dumps(dict(slurmCustomSettings=settings)))
+    '--slurm-configuration', json.dumps(preserved | dict(slurmCustomSettings=settings)))
 for _ in range(90):
     cluster = aws('get-cluster', '--cluster-identifier', a.cluster)['cluster']
     print(datetime.datetime.now(datetime.timezone.utc).isoformat(), cluster['status'], flush=True)
@@ -58,6 +63,9 @@ for _ in range(90):
         actual = cluster.get('slurmConfiguration', {}).get('slurmCustomSettings', [])
         if {x['parameterName']: x['parameterValue'] for x in actual} != {x['parameterName']: x['parameterValue'] for x in settings}:
             raise RuntimeError('PCS returned different custom settings')
+        observed = cluster.get('slurmConfiguration', {})
+        if any(observed.get(key) != value for key, value in preserved.items()):
+            raise RuntimeError('PCS changed an unrelated Slurm setting')
         break
     if cluster['status'].endswith('FAILED'):
         raise RuntimeError(cluster.get('errorInfo', cluster['status']))

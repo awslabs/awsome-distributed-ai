@@ -5,13 +5,22 @@
 # shellcheck source=pins.env
 source "$LAB_DIR/pins.env"
 
+set_allocation_cpus() {
+    local layout=${SLURM_JOB_CPUS_PER_NODE:-${SLURM_CPUS_ON_NODE:-}}
+    [[ $layout =~ ^([1-9][0-9]*)(\(x[1-9][0-9]*\))?$ ]] || {
+        echo "Expected a homogeneous Slurm CPU allocation; got: $layout" >&2; return 1;
+    }
+    export AIM344_CPUS_PER_NODE=${BASH_REMATCH[1]}
+}
+
 prepare_slurm() {
+    set_allocation_cpus
     : "${SLURM_JOB_ID:?Run inside the dedicated two-node salloc allocation in README.md}"
     [[ ${SLURM_JOB_NUM_NODES:-${SLURM_NNODES:-0}} == 2 ]] || {
         echo 'This exercise requires exactly 2 allocated nodes.' >&2; exit 1;
     }
     local counts
-    counts=$(srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${SLURM_CPUS_ON_NODE:?}" --mpi=none --cpu-bind=none \
+    counts=$(srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
         bash -c 'if [[ -n ${SLURM_GPUS_ON_NODE:-} ]]; then printf "%s\n" "$SLURM_GPUS_ON_NODE"; else nvidia-smi -L | awk '\''/^GPU [0-9]+:/ {n++} END {print n+0}'\''; fi')
     mapfile -t gpu_counts <<< "$counts"
     [[ ${#gpu_counts[@]} == 2 && ${gpu_counts[0]} =~ ^[1-9][0-9]*$ && ${gpu_counts[0]} == "${gpu_counts[1]}" ]] || {
@@ -23,6 +32,7 @@ prepare_slurm() {
         echo 'Use a shared lab path without spaces, commas, or colons.' >&2; exit 1;
     }
     RESULTS_DIR=${RESULTS_DIR:-$LAB_DIR/results/$SLURM_JOB_ID}
+    mkdir -p -- "$RESULTS_DIR"
     srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --mpi=none --cpu-bind=none mkdir -p -- "$RESULTS_DIR"
     RESULTS_DIR=$(cd -- "$RESULTS_DIR" && pwd)
     [[ $RESULTS_DIR != *[:,]* && $RESULTS_DIR != *' '* ]] || exit 1
@@ -36,7 +46,7 @@ prepare_slurm() {
 }
 
 node_command() {
-    srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${SLURM_CPUS_ON_NODE:?}" --mpi=none --cpu-bind=none \
+    srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
         "${CONTAINER_ARGS[@]}" --container-remap-root "$@"
 }
 
@@ -46,9 +56,9 @@ run_sweep() {
     node_command bash /opt/aim344/inventory.sh | tee "$RESULTS_DIR/$run_id.inventory.log"
     node_command python3 /opt/aim344/efa-counters.py snapshot "/results/$run_id.before"
     local start=$SECONDS
-    # The absolute binary path and registry separator replace stock check 5.
+    # The optional sweep uses one MPI rank per GPU within the same CPU budget.
     timeout --signal=TERM --kill-after=30s 600s \
-        srun --nodes=2 --ntasks="$((2 * GPUS_PER_NODE))" --ntasks-per-node="$GPUS_PER_NODE" --mpi=pmix --cpu-bind=none \
+        srun --nodes=2 --ntasks="$((2 * GPUS_PER_NODE))" --ntasks-per-node="$GPUS_PER_NODE" --cpus-per-task="$((AIM344_CPUS_PER_NODE / GPUS_PER_NODE))" --mpi=pmix --cpu-bind=none \
         "${CONTAINER_ARGS[@]}" --no-container-remap-root bash /opt/aim344/sweep-rank.sh \
         2>&1 | tee "$RESULTS_DIR/$run_id.nccl.log" || rc=$?
     printf 'sweep_elapsed=%s s; launcher_exit_code=%s (dimensionless)\n' "$((SECONDS-start))" "$rc" \
@@ -80,7 +90,7 @@ run_torch() {
     prepare_torch
     run_id=$phase-$(date -u +%Y%m%dT%H%M%SZ)
     timeout --signal=TERM --kill-after=30s 180s \
-        srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${SLURM_CPUS_ON_NODE:?}" --mpi=none --cpu-bind=none \
+        srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
         "${CONTAINER_ARGS[@]}" bash /opt/aim344/torch-node.sh "$@" \
         2>&1 | tee "$RESULTS_DIR/$run_id.log" || rc=$?
     printf 'launcher_exit_code=%s (dimensionless)\n' "$rc" | tee "$RESULTS_DIR/$run_id.status.log"
