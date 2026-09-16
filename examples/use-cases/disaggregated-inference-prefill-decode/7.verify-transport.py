@@ -74,10 +74,21 @@ def main():
     after = snapshot(c, pods)
     deltas = {pod: {key: after[pod][key] - value for key, value in values.items()} for pod, values in before.items()}
     rdma_bytes = sum(max(0, value) for values in deltas.values() for key, value in values.items() if key.endswith(("rdma_write_bytes", "rdma_read_bytes")))
+    # Packed placement cannot reach the RDMA assertion: prefill and decode are processes on one node
+    # and libfabric is free to complete the transfer over `shm`, leaving the EFA counters flat. Report
+    # that outcome under its own status value instead of the same `VALIDATED` the cross-node path earns,
+    # so a flat counter is not read as "KV transfer over EFA was verified".
+    if not response["ok"]:
+        status = "UNVALIDATED"
+    elif packed:
+        status = "VALIDATED-SELECTORS-ONLY"
+    else:
+        status = "VALIDATED" if rdma_bytes > 0 else "UNVALIDATED"
     result = {"instance_type": c["instance_type"], "evidence_scope": "mechanism-validation", "versions": versions, "engine_profile": expected, "pods": pods, "response": response, "before_bytes": before, "after_bytes": after, "delta_bytes": deltas,
-              "status": "VALIDATED" if response["ok"] and (packed or rdma_bytes > 0) else "UNVALIDATED",
+              "status": status, "rdma_counter_delta_bytes": rdma_bytes,
               "launches": launches, "placement": c.get('placement', 'separate-nodes'),
               "cross_node_efa_status": "UNVALIDATED: co-located prefill/decode" if packed else ("VALIDATED positive path" if response['ok'] and rdma_bytes > 0 else "UNVALIDATED"),
+              "rdma_counter_note": "Packed placement: a zero delta is the expected observation and shows libfabric selected a same-node provider. It is evidence about provider selection, not a transport failure." if packed else "Separate-node placement: a positive delta is required for VALIDATED.",
               "scope": "Positive configured path only. Shared-node counters include other traffic; inspect provider/GPU registration logs. This does not validate negative selector controls or GPUDirect absence of staging by itself."}
     if a.bandwidth_gib_s is not None:
         assert a.bandwidth_gib_s > 0 and a.bandwidth_evidence
@@ -90,8 +101,8 @@ def main():
     out = Path(a.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2))
-    print(json.dumps({"status": result["status"], "engine_profile": expected, "instance_type": c["instance_type"], "placement": result['placement'], "cross_node_efa_status": result['cross_node_efa_status'], "rdma_counter_delta_bytes": rdma_bytes, "file": str(out)}))
-    if result["status"] != "VALIDATED":
+    print(json.dumps({"status": result["status"], "engine_profile": expected, "instance_type": c["instance_type"], "placement": result['placement'], "cross_node_efa_status": result['cross_node_efa_status'], "rdma_counter_delta_bytes": rdma_bytes, "rdma_counter_note": result["rdma_counter_note"], "file": str(out)}))
+    if result["status"] not in ("VALIDATED", "VALIDATED-SELECTORS-ONLY"):
         raise SystemExit(1)
 
 if __name__ == "__main__":
