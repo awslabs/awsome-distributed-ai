@@ -195,7 +195,7 @@ automatically.
 
 - **On-Demand**: leave `CapacityReservationId` empty.
 - **"Open" On-Demand Capacity Reservation (ODCR)**: also leave `CapacityReservationId` **empty** — an ODCR with **"open"** instance matching is consumed automatically by the node group's On-Demand launches.
-- **"Targeted" ODCR**: set `CapacityReservationId` to the ODCR ID **and** `CapacityReservationType=targeted-odcr`. Launches bill On-Demand against the reservation and keep the cluster placement group. The reservation's instance type and AZ must match the node group's.
+- **"Targeted" ODCR**: set `CapacityReservationId` to the ODCR ID **and** `CapacityReservationType=targeted-odcr`. Launches bill On-Demand against the reservation and keep the cluster placement group. The reservation's instance type and AZ must match the node group's. If the ODCR is held **inside a customer-owned cluster placement group**, also point the node group at that CPG (`PseriesPlacementGroupName` for the GPU queue, `OnDemandPlacementGroupName` for the CPU queue) — a reservation in a CPG is only consumable by launches into it.
 - **Capacity Blocks for ML**: set `CapacityReservationId` to the Capacity Block ID (`CapacityReservationType=capacity-block` is the default). The template then launches with `MarketType=capacity-block` against it.
 
 The CPU queue takes a targeted ODCR too, via `OnDemandCapacityReservationId`
