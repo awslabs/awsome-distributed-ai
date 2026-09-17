@@ -20,6 +20,7 @@ Metadata:
         Parameters:
           - CapacityReservationId
           - CapacityReservationType
+          - PlacementGroupName
       - Label:
           default: Additional Compute Node Group Settings
         Parameters:
@@ -73,6 +74,17 @@ Parameters:
     AllowedValues:
       - 'capacity-block'
       - 'targeted-odcr'
+
+  PlacementGroupName:
+    Type: String
+    Description: >-
+      (Optional) Existing cluster placement group name to launch nodes into —
+      e.g. to share one placement group across CNGs, or to consume a targeted
+      ODCR held in a customer-owned cluster placement group. Leave EMPTY to
+      auto-create a per-CNG placement group. Ignored when
+      CapacityReservationType='capacity-block' and CapacityReservationId is
+      set (a Capacity Block carries its own placement).
+    Default: ''
 
   ClusterId:
     Type: String
@@ -280,7 +292,13 @@ Conditions:
   UseCapacityBlock: !And
     - !Condition HasCapacityReservation
     - !Equals [!Ref CapacityReservationType, 'capacity-block']
-  CreatePlacementGroup: !Not [!Condition UseCapacityBlock]
+  HasUserPlacementGroup: !Not [!Equals [!Ref PlacementGroupName, ""]]
+  # Placement applies on every non-CB path: the user-supplied PG when given,
+  # otherwise an auto-created per-CNG one.
+  UsePlacementGroup: !Not [!Condition UseCapacityBlock]
+  CreatePlacementGroup: !And
+    - !Condition UsePlacementGroup
+    - !Not [!Condition HasUserPlacementGroup]
   CreateQueue: !Not [!Equals [!Ref QueueName, ""]]
   # Emit the monitoring-role tag for both login and compute nodes (any role
   # other than 'none'). The monitoring stack identifies login nodes by this
@@ -461,8 +479,11 @@ Resources:
               CapacityReservationId: !Ref CapacityReservationId
           - !Ref AWS::NoValue
         Placement: !If
-          - CreatePlacementGroup
-          - GroupName: !Ref PlacementGroup
+          - UsePlacementGroup
+          - GroupName: !If
+              - HasUserPlacementGroup
+              - !Ref PlacementGroupName
+              - !Ref PlacementGroup
           - !Ref AWS::NoValue
         TagSpecifications:
           - ResourceType: instance

@@ -50,6 +50,7 @@ Metadata:
           - PseriesMaxCount
           - CapacityReservationId
           - CapacityReservationType
+          - PseriesPlacementGroupName
           - PseriesCngName
           - PseriesQueueName
       - Label:
@@ -153,6 +154,8 @@ Metadata:
         default: "How the GPU reservation ID is consumed (Capacity Block or targeted ODCR)"
       OnDemandCapacityReservationId:
         default: "Targeted ODCR ID for the CPU queue (leave empty for On-Demand / open ODCR)"
+      PseriesPlacementGroupName:
+        default: "Existing placement group for the GPU queue (leave empty to auto-create)"
       PseriesCngName:
         default: "GPU node group name"
       PseriesQueueName:
@@ -607,6 +610,16 @@ Parameters:
       automatically and must NOT be listed here. The reservation's instance
       type and AZ must match OnDemandInstanceType and PrimarySubnetAZ.
 
+  PseriesPlacementGroupName:
+    Type: String
+    Default: ""
+    Description: >-
+      (Optional) Existing cluster placement group name for the GPU node group —
+      e.g. to consume a targeted ODCR held in a customer-owned cluster
+      placement group. Leave EMPTY to auto-create a per-CNG placement group.
+      Ignored on the Capacity Block path (a Capacity Block carries its own
+      placement).
+
   RootVolumeSize:
     Type: Number
     Description: >-
@@ -883,6 +896,7 @@ Resources:
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         CapacityReservationId: !Ref CapacityReservationId
         CapacityReservationType: !Ref CapacityReservationType
+        PlacementGroupName: !Ref PseriesPlacementGroupName
         DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
@@ -925,6 +939,7 @@ Resources:
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         CapacityReservationId: !Ref CapacityReservationId
         CapacityReservationType: !Ref CapacityReservationType
+        PlacementGroupName: !Ref PseriesPlacementGroupName
         DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
@@ -967,6 +982,7 @@ Resources:
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         CapacityReservationId: !Ref CapacityReservationId
         CapacityReservationType: !Ref CapacityReservationType
+        PlacementGroupName: !Ref PseriesPlacementGroupName
         DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
