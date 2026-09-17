@@ -52,6 +52,7 @@ it directly.
 | `OnDemandQueueName` | `cpu1` | CPU Slurm queue name |
 | `OnDemandEfaInterfaceCount` | `0` | EFA interfaces on the CPU CNG. **`0` (default) = no EFA** (standard ENA). `1` or `2` = enable EFA with that many interfaces (switches the LaunchTemplate to a `NetworkInterfaces` block with `InterfaceType=efa` + a cluster placement group). Set the count to the instance type's `MaximumEfaInterfaces`: `hpc8a.96xlarge`/`hpc7a.*`/`hpc6id.32xlarge`=2; `hpc6a.48xlarge`/`c7i.metal`=1. **EFA needs an EFA-capable type** — a non-EFA type (e.g. the default `c6i.4xlarge`) fails to launch with count > 0. No effect on the GPU CNG. See [README §8.6 CPU compute node group](../README.md#86-cpu-compute-node-group--advanced-settings) |
 | `OnDemandPlacementGroupName` | *(empty)* | Existing cluster placement group name to launch nodes into. Empty + `OnDemandEfaInterfaceCount > 0` auto-creates a per-CNG cluster placement group; supplying a name reuses an existing one (e.g. shared across multiple CPU CNGs, or a customer-owned CPG holding reserved capacity). CPU CNG only — the P5/P6 GPU templates don't take a placement-group name. Ignored when `OnDemandEfaInterfaceCount = 0` |
+| `OnDemandCapacityReservationId` | *(empty)* | **Targeted ODCR** ID for the CPU queue: launches bill On-Demand against the reservation, everything else (EFA, placement) is unaffected. Leave empty for plain On-Demand; an "open" ODCR is consumed automatically and must not be listed here. The reservation's instance type / AZ must match `OnDemandInstanceType` / `PrimarySubnetAZ` |
 
 ## 4. GPU Compute Node Group — P5/P6 (Optional)
 
@@ -63,7 +64,8 @@ See [GPU compute](../README.md#gpu-compute-p5p6) for instance/EFA/capacity guida
 | `PseriesInstanceType` | `p5.48xlarge` | GPU instance type; selects the matching multi-NIC template **and** EFA interface count automatically |
 | `PseriesMinCount` | `0` | GPU queue minimum nodes |
 | `PseriesMaxCount` | `4` | GPU queue maximum nodes |
-| `CapacityReservationId` | *(empty)* | Capacity **Block** reservation ID (sets `MarketType=capacity-block`). Leave empty for On-Demand / ODCR — **do not** put an ODCR ID here |
+| `CapacityReservationId` | *(empty)* | Capacity reservation ID for the GPU queue — a Capacity **Block** or a **targeted ODCR**, per `CapacityReservationType`. Leave empty for On-Demand; an "open" ODCR is consumed automatically and must not be listed here |
+| `CapacityReservationType` | `capacity-block` | How `CapacityReservationId` is consumed: `capacity-block` (sets `MarketType=capacity-block`; the reservation's own placement is used) or `targeted-odcr` (On-Demand billing against the reservation; keeps the cluster placement group). Ignored when the ID is empty |
 | `PseriesCngName` | `gpu-p5` | GPU node-group name |
 | `PseriesQueueName` | `gpu-p5` | GPU Slurm queue name |
 

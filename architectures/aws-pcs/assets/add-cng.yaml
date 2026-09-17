@@ -44,6 +44,10 @@ Metadata:
           - EfaInterfaceCount
           - PlacementGroupName
       - Label:
+          default: Capacity Reservation Settings (Optional)
+        Parameters:
+          - CapacityReservationId
+      - Label:
           default: Monitoring configuration
         Parameters:
           - DeployMonitoring
@@ -282,6 +286,19 @@ Parameters:
       EfaInterfaceCount = 0.
     Default: ''
 
+  CapacityReservationId:
+    Type: String
+    Description: >-
+      (Optional) "Targeted" On-Demand Capacity Reservation (ODCR) ID to launch
+      this node group's instances into (On-Demand billing against the
+      reservation; no market-type change). Leave EMPTY for plain On-Demand —
+      an ODCR with "open" matching is consumed automatically and must NOT be
+      listed here. Capacity Blocks for ML do not exist for these instance
+      families; for GPU Capacity Blocks use the add-cng-p5/p6 templates. The
+      reservation's instance type and AZ must match InstanceType and the
+      subnet's AZ.
+    Default: ""
+
 Conditions:
   CreateQueue: !Not [!Equals [!Ref QueueName, ""]]
   # Emit the monitoring-role tag for both login and compute nodes (any role
@@ -300,6 +317,10 @@ Conditions:
     - !Condition EfaEnabled
     - !Not [!Condition HasUserPlacementGroup]
   Has2ndEfaInterface: !Equals [!Ref EfaInterfaceCount, 2]
+  # Targeted ODCR: add a CapacityReservationTarget, nothing else — launches
+  # stay On-Demand (billed against the reservation) and the EFA/placement
+  # logic above is independent of it.
+  HasCapacityReservation: !Not [!Equals [!Ref CapacityReservationId, ""]]
   DirectoryEnabled: !Not [!Equals [!Ref DirectoryRole, 'none']]
   HasLustre: !Not [!Equals [!Ref FSxLustreFilesystemId, '']]
   EnrootPyxisEnabled: !Equals [!Ref InstallEnrootPyxis, 'true']
@@ -506,6 +527,11 @@ Resources:
           HttpPutResponseHopLimit: 4
           HttpTokens: required
           InstanceMetadataTags: enabled
+        CapacityReservationSpecification: !If
+          - HasCapacityReservation
+          - CapacityReservationTarget:
+              CapacityReservationId: !Ref CapacityReservationId
+          - !Ref AWS::NoValue
         # Cluster placement group, only when EFA is enabled. Either the auto-created
         # PG (CreatePlacementGroup) or a user-supplied one (PlacementGroupName).
         Placement: !If

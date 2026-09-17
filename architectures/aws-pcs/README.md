@@ -10,7 +10,7 @@ This repository provides reference architectures and deployment templates for se
 - **Container runtime included**: Enroot/Pyxis is set up automatically, so `srun --container-image=...` works out of the box for containerized training.
 - **Monitoring built in**: Grafana + Prometheus on the login node, with DCGM Exporter on GPU nodes feeding pre-built GPU dashboards (on by default). Reach Grafana privately via SSM port-forward, or open it to a trusted CIDR. See [§8.2 Monitoring](#82-monitoring).
 - **GPU-ready, multi-NIC EFA**: dedicated launch templates for the P5 and P6 families, selected automatically by instance type, for high-bandwidth multi-node training.
-- **Flexible capacity options**: On-Demand, "open" On-Demand Capacity Reservations (consumed automatically), and Capacity Blocks for ML — selected per node group. (Targeting a *specific* ODCR is on the [roadmap](./docs/ROADMAP.md).)
+- **Flexible capacity options**: On-Demand, On-Demand Capacity Reservations ("open" consumed automatically, "targeted" via `CapacityReservationType=targeted-odcr` / `OnDemandCapacityReservationId`), and Capacity Blocks for ML — selected per node group.
 - **High-performance storage**: FSx for Lustre (shared scratch, `/fsx`) and FSx for OpenZFS (home directories, `/home`).
 - **Multi-user ready**: opt-in OpenLDAP directory on the login node with SSSD on every compute node, so a team shares one cluster with consistent users — pairs with Slurm accounting. See [§8.3 User Management](#83-user-management).
 - **Access control built in**: ready-to-deploy least-privilege IAM policy stacks for cluster admins and users, and login-node SSH / Grafana access gated to a trusted CIDR. See [§8.4 IAM Permissions](#84-iam-permissions).
@@ -132,7 +132,7 @@ complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 |---|---|---|
 | `DeployPseriesCNG` | `false` | Deploy a multi-NIC GPU (P5/P6) queue |
 | `PseriesInstanceType` | `p5.48xlarge` | Picks the matching template + EFA NIC count automatically. See [GPU compute](#gpu-compute-p5p6) for the accepted types |
-| `CapacityReservationId` | *(empty)* | Capacity **Block** ID for the GPU queue; empty for On-Demand/ODCR |
+| `CapacityReservationId` | *(empty)* | Capacity reservation ID for the GPU queue (Capacity **Block**, or targeted ODCR with `CapacityReservationType=targeted-odcr`); empty for On-Demand / open ODCR |
 
 **5.1. Additional Cluster Configuration: Monitoring**
 
@@ -194,8 +194,12 @@ automatically.
 **Capacity options:**
 
 - **On-Demand**: leave `CapacityReservationId` empty.
-- **On-Demand Capacity Reservation (ODCR)**: also leave `CapacityReservationId` **empty** — create the ODCR with **"open"** instance matching and it is consumed automatically by the node group's On-Demand launches. (Do **not** put the ODCR ID in `CapacityReservationId`; that parameter forces Capacity-Block mode.)
-- **Capacity Blocks for ML**: set `CapacityReservationId` to the Capacity Block ID. The template then launches with `MarketType=capacity-block` against it.
+- **"Open" On-Demand Capacity Reservation (ODCR)**: also leave `CapacityReservationId` **empty** — an ODCR with **"open"** instance matching is consumed automatically by the node group's On-Demand launches.
+- **"Targeted" ODCR**: set `CapacityReservationId` to the ODCR ID **and** `CapacityReservationType=targeted-odcr`. Launches bill On-Demand against the reservation and keep the cluster placement group. The reservation's instance type and AZ must match the node group's.
+- **Capacity Blocks for ML**: set `CapacityReservationId` to the Capacity Block ID (`CapacityReservationType=capacity-block` is the default). The template then launches with `MarketType=capacity-block` against it.
+
+The CPU queue takes a targeted ODCR too, via `OnDemandCapacityReservationId`
+(no type parameter — Capacity Blocks don't exist for CPU instance families).
 
 > **Capacity Block billing:** a block bills for its whole reserved window once it
 > starts and cannot be stopped early. When the block is active, run the GPU node
@@ -256,8 +260,9 @@ aws cloudformation create-stack \
 The `add-cng-p6-b300.yaml` template is selected automatically from `PseriesInstanceType`,
 and the EFA interface count is derived from the instance type — no interface-count
 parameter to set. For `p6-b200.48xlarge` or any P5 type, just change
-`PseriesInstanceType`. `CapacityReservationId` here is the **Capacity Block** ID; for
-On-Demand or an "open" ODCR, leave it empty (see [GPU compute](#gpu-compute-p5p6)).
+`PseriesInstanceType`. `CapacityReservationId` here is the **Capacity Block** ID; for a
+**targeted ODCR** add `CapacityReservationType=targeted-odcr`, and for On-Demand or an
+"open" ODCR leave it empty (see [GPU compute](#gpu-compute-p5p6)).
 
 ### Example 3: HPC EFA on the CPU queue (hpc7a)
 
@@ -708,7 +713,7 @@ parameter and default, see [PARAMETERS.md](./docs/PARAMETERS.md).
 
 `add-cng*` templates create a Slurm queue only when `QueueName` is set (leave it empty
 for login nodes). The P-series templates need a `CapacityReservationId` when using a
-Capacity Block.
+Capacity Block or a targeted ODCR (`CapacityReservationType` picks which).
 
 ### Template nesting structure (deploy-all)
 

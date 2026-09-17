@@ -40,6 +40,7 @@ Metadata:
           - OnDemandQueueName
           - OnDemandEfaInterfaceCount
           - OnDemandPlacementGroupName
+          - OnDemandCapacityReservationId
       - Label:
           default: "4. GPU Compute Node Group - P5/P6 Series (Optional)"
         Parameters:
@@ -48,6 +49,7 @@ Metadata:
           - PseriesMinCount
           - PseriesMaxCount
           - CapacityReservationId
+          - CapacityReservationType
           - PseriesCngName
           - PseriesQueueName
       - Label:
@@ -146,7 +148,11 @@ Metadata:
       PseriesMaxCount:
         default: "GPU queue max nodes"
       CapacityReservationId:
-        default: "Capacity Block for ML reservation ID (leave empty for On-Demand/ODCR)"
+        default: "Capacity reservation ID for the GPU queue (leave empty for On-Demand / open ODCR)"
+      CapacityReservationType:
+        default: "How the GPU reservation ID is consumed (Capacity Block or targeted ODCR)"
+      OnDemandCapacityReservationId:
+        default: "Targeted ODCR ID for the CPU queue (leave empty for On-Demand / open ODCR)"
       PseriesCngName:
         default: "GPU node group name"
       PseriesQueueName:
@@ -572,12 +578,34 @@ Parameters:
     Type: String
     Default: ""
     Description: >-
-      (Optional) **Capacity Block for ML reservation ID** for the GPU node group.
-      When SET, GPU nodes launch with MarketType=capacity-block against this
-      reservation. Leave EMPTY for On-Demand. This parameter is for Capacity
-      Blocks ONLY -- do NOT put an On-Demand Capacity Reservation (ODCR) ID here;
-      an "open" ODCR is consumed automatically by On-Demand launches, so for ODCR
-      leave this empty.
+      (Optional) Capacity reservation ID for the GPU node group — a Capacity
+      Block for ML or a "targeted" On-Demand Capacity Reservation (ODCR), per
+      CapacityReservationType. Leave EMPTY for On-Demand; an ODCR with "open"
+      matching is consumed automatically by On-Demand launches and must NOT be
+      listed here. The reservation's AZ must match PrimarySubnetAZ.
+
+  CapacityReservationType:
+    Type: String
+    Description: >-
+      How the GPU node group's CapacityReservationId is consumed.
+      'capacity-block' launches with MarketType=capacity-block (the
+      reservation's own placement is used). 'targeted-odcr' targets the ODCR
+      at On-Demand billing and keeps the cluster placement group. Ignored when
+      CapacityReservationId is empty.
+    Default: 'capacity-block'
+    AllowedValues:
+      - 'capacity-block'
+      - 'targeted-odcr'
+
+  OnDemandCapacityReservationId:
+    Type: String
+    Default: ""
+    Description: >-
+      (Optional) "Targeted" On-Demand Capacity Reservation (ODCR) ID for the
+      CPU node group (On-Demand billing against the reservation). Leave EMPTY
+      for plain On-Demand — an ODCR with "open" matching is consumed
+      automatically and must NOT be listed here. The reservation's instance
+      type and AZ must match OnDemandInstanceType and PrimarySubnetAZ.
 
   RootVolumeSize:
     Type: Number
@@ -819,6 +847,7 @@ Resources:
         # group when PlacementGroupName is empty.
         EfaInterfaceCount: !Ref OnDemandEfaInterfaceCount
         PlacementGroupName: !Ref OnDemandPlacementGroupName
+        CapacityReservationId: !Ref OnDemandCapacityReservationId
         DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
         S3BucketName: !Ref S3BucketName
@@ -853,6 +882,7 @@ Resources:
         FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         CapacityReservationId: !Ref CapacityReservationId
+        CapacityReservationType: !Ref CapacityReservationType
         DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
@@ -894,6 +924,7 @@ Resources:
         FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         CapacityReservationId: !Ref CapacityReservationId
+        CapacityReservationType: !Ref CapacityReservationType
         DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
@@ -935,6 +966,7 @@ Resources:
         FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
         FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
         CapacityReservationId: !Ref CapacityReservationId
+        CapacityReservationType: !Ref CapacityReservationType
         DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
