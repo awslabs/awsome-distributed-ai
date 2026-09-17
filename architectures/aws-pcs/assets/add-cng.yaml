@@ -281,9 +281,11 @@ Parameters:
     Description: >-
       (Optional) Name of an existing cluster placement group to launch nodes into.
       Leave empty to auto-create a per-CNG cluster placement group when
-      EfaInterfaceCount > 0. Specify a value to share one placement group across
-      multiple CNGs (e.g. a heterogeneous tightly-coupled job). Ignored when
-      EfaInterfaceCount = 0.
+      EfaInterfaceCount > 0 (with EfaInterfaceCount = 0 empty means no placement
+      group, as before). Specify a value to share one placement group across
+      multiple CNGs (e.g. a heterogeneous tightly-coupled job) — honored with or
+      without EFA, so a targeted ODCR held in a customer-owned cluster placement
+      group is consumable on any instance type.
     Default: ''
 
   CapacityReservationId:
@@ -316,6 +318,13 @@ Conditions:
   CreatePlacementGroup: !And
     - !Condition EfaEnabled
     - !Not [!Condition HasUserPlacementGroup]
+  # Placement applies when EFA needs it (auto or user PG) OR the user named a
+  # PG explicitly without EFA — required to consume a targeted ODCR held in a
+  # customer-owned cluster placement group on a non-EFA instance type. An
+  # empty PlacementGroupName with EFA off stays placement-less as before.
+  UsePlacementGroup: !Or
+    - !Condition EfaEnabled
+    - !Condition HasUserPlacementGroup
   Has2ndEfaInterface: !Equals [!Ref EfaInterfaceCount, 2]
   # Targeted ODCR: add a CapacityReservationTarget, nothing else — launches
   # stay On-Demand (billed against the reservation) and the EFA/placement
@@ -532,10 +541,11 @@ Resources:
           - CapacityReservationTarget:
               CapacityReservationId: !Ref CapacityReservationId
           - !Ref AWS::NoValue
-        # Cluster placement group, only when EFA is enabled. Either the auto-created
-        # PG (CreatePlacementGroup) or a user-supplied one (PlacementGroupName).
+        # Cluster placement group: auto-created (EFA on, no user PG) or the
+        # user-supplied PlacementGroupName (with or without EFA — see the
+        # UsePlacementGroup condition).
         Placement: !If
-          - EfaEnabled
+          - UsePlacementGroup
           - GroupName: !If
               - CreatePlacementGroup
               - !Ref PlacementGroup

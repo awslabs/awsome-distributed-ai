@@ -525,10 +525,11 @@ Parameters:
     Description: >-
       (Optional, advanced) Existing cluster placement group name to launch the
       on-demand CPU nodes into. Leave empty (default) to auto-create a per-CNG
-      cluster placement group when OnDemandEfaInterfaceCount > 0. Set to reuse an
-      existing PG (e.g. shared across multiple CPU CNGs, or a customer-owned CPG
-      holding reserved capacity). CPU CNG only. Ignored when
-      OnDemandEfaInterfaceCount = 0.
+      cluster placement group when OnDemandEfaInterfaceCount > 0 (no placement
+      group when EFA is off). Set to reuse an existing PG (e.g. shared across
+      multiple CPU CNGs, or a customer-owned CPG holding reserved capacity —
+      honored with or without EFA, so a CPG-held targeted ODCR is consumable).
+      The GPU queue's equivalent is PseriesPlacementGroupName.
     Default: ''
 
   # P-series Compute Node Group
