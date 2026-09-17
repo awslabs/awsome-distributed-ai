@@ -132,7 +132,8 @@ complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 |---|---|---|
 | `DeployPseriesCNG` | `false` | Deploy a multi-NIC GPU (P5/P6) queue |
 | `PseriesInstanceType` | `p5.48xlarge` | Picks the matching template + EFA NIC count automatically. See [GPU compute](#gpu-compute-p5p6) for the accepted types |
-| `CapacityReservationId` | *(empty)* | Capacity reservation ID for the GPU queue (Capacity **Block**, or targeted ODCR with `CapacityReservationType=targeted-odcr`); empty for On-Demand / open ODCR |
+| `CapacityReservationId` | *(empty)* | Capacity reservation ID for the GPU queue (a Capacity Block or a targeted ODCR); empty for On-Demand / open ODCR |
+| `CapacityReservationType` | `capacity-block` | How the reservation ID is consumed: Capacity **Block** (`MarketType=capacity-block`) or **targeted ODCR** (On-Demand billing, placement group kept). Ignored when the ID is empty |
 
 **5.1. Additional Cluster Configuration: Monitoring**
 
@@ -645,6 +646,13 @@ deploy procedure and the optional scheduled-rebuild / lifecycle / SSM-publish fe
 The On-Demand CPU queue is configured with `OnDemandInstanceType` (default
 `c6i.4xlarge`) plus `OnDemandQueueName` / `OnDemandCngName` / `OnDemandMinCount` /
 `OnDemandMaxCount`. The settings below cover tightly-coupled HPC / MPI workloads.
+
+**Targeted ODCR:** set `OnDemandCapacityReservationId` to launch the CPU queue
+against a "targeted" On-Demand Capacity Reservation (On-Demand billing; EFA and
+placement settings are unaffected). Leave it empty for plain On-Demand — an
+"open" ODCR is consumed automatically. If the reservation is held in a
+customer-owned cluster placement group, also set `OnDemandPlacementGroupName`
+to that CPG (honored with or without EFA).
 
 #### EFA on CPU HPC instances (`OnDemandEfaInterfaceCount`)
 
