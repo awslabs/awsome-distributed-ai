@@ -7,7 +7,7 @@ import threading
 import time
 import unittest
 import httpx
-from benchmark import stream_request, summarize
+from benchmark import require_reachable_router, stream_request, summarize
 from deployment import render
 from traffic import continuation, common_prefix, initial_prompt, tokenizer
 
@@ -28,6 +28,26 @@ class StreamHandler(BaseHTTPRequestHandler):
             time.sleep(.01)
         if body['input_ids'] != [999]:
             self.wfile.write(b'data: [DONE]\n\n')
+
+
+class RouterHandler(BaseHTTPRequestHandler):
+    """A router whose own /health is 200 while a worker circuit breaker is still open."""
+    open_circuit_calls = 0
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers['Content-Length']))
+        open_circuit = RouterHandler.open_circuit_calls > 0
+        RouterHandler.open_circuit_calls -= open_circuit
+        self.send_response(503 if open_circuit else 200)
+        self.end_headers()
+        self.wfile.write(b'No available decode workers (all circuits open or unhealthy)' if open_circuit else b'{}')
 
 
 class LabTests(unittest.TestCase):
@@ -83,6 +103,24 @@ class LabTests(unittest.TestCase):
                 self.assertFalse(bad['ok'])
         try:
             asyncio.run(check())
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_router_guard_waits_out_an_open_circuit_breaker(self):
+        server = ThreadingHTTPServer(('127.0.0.1', 0), RouterHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        url = f'http://127.0.0.1:{server.server_port}'
+        try:
+            RouterHandler.open_circuit_calls = 3
+            asyncio.run(require_reachable_router(url, settle_s=10, poll_s=.01))
+            self.assertEqual(RouterHandler.open_circuit_calls, 0)
+            RouterHandler.open_circuit_calls = 10 ** 6
+            with self.assertRaises(SystemExit) as refused:
+                asyncio.run(require_reachable_router(url, settle_s=.05, poll_s=.01))
+            self.assertIn('circuit breaker', str(refused.exception))
         finally:
             server.shutdown()
             server.server_close()

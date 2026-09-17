@@ -85,26 +85,56 @@ def summarize(records, duration_s, gpus, ttft_ms, tpot_ms, attainment, offered_t
             "input_tokens_sum_sent": sum(r.get("input_tokens", 0) for r in attempts)}
 
 
-async def require_reachable_router(url):
-    """Refuse to measure an unreachable endpoint.
+async def require_reachable_router(url, settle_s=180, poll_s=5):
+    """Refuse to measure an endpoint that is unreachable or cannot route yet.
 
     A `kubectl port-forward` dies silently under the load of the highest rates. Without this
     check the next rate records sent calls with no completions, `None` percentiles and
     `meets_joint_slo: false`, which is indistinguishable from an engine that actually failed,
     and `--stop-failure-fraction` then aborts the remaining rates. A client-side connection
     fault is not a measurement.
+
+    `/health` reports the router process, not the pair: while a worker's circuit breaker is open
+    the router answers it 200 and `/generate` 503, and `--disable-retries` turns one such 503
+    into a failed task. So probe the path being measured, and wait rather than fail — after an
+    engine pod restart the breaker closed within about 90 s in measurement.
     """
-    probe = url.rstrip("/") + "/health"
+    base = url.rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
-            status = (await client.get(probe)).status_code
+            status = (await client.get(base + "/health")).status_code
     except (httpx.HTTPError, TimeoutError) as exc:
-        raise SystemExit(f"Router unreachable at {probe} ({type(exc).__name__}: {exc}). "
+        raise SystemExit(f"Router unreachable at {base}/health ({type(exc).__name__}: {exc}). "
                          "The port-forward has most likely dropped: restart it, confirm the pods are still Running, "
                          "and rerun this rate. No measurement file was written.")
     if status != 200:
-        raise SystemExit(f"Router at {probe} answered HTTP {status}, not 200. "
+        raise SystemExit(f"Router at {base}/health answered HTTP {status}, not 200. "
                          "Resolve the endpoint before measuring. No measurement file was written.")
+
+    began = time.monotonic()
+    deadline = began + settle_s
+    body = {"input_ids": [0], "sampling_params": {"temperature": 0.0, "max_new_tokens": 1}, "stream": False}
+    waited = False
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
+                response = await client.post(base + "/generate", json=body)
+            if response.status_code == 200:
+                if waited:
+                    print(f"Router became routable after {time.monotonic() - began:.0f} s.", flush=True)
+                return
+            detail = f"HTTP {response.status_code}: {response.text.strip()[:200]}"
+        except (httpx.HTTPError, TimeoutError) as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+        if time.monotonic() >= deadline:
+            raise SystemExit(f"Router at {base}/generate is still not routable after {settle_s} s ({detail}). "
+                             "A worker circuit breaker is most likely still open after a pod restart: confirm both "
+                             "engine pods are Running, then rerun this rate. No measurement file was written.")
+        if not waited:
+            print(f"Router answers /health but not /generate ({detail}). "
+                  f"Waiting up to {settle_s} s for it to become routable.", flush=True)
+            waited = True
+        await asyncio.sleep(poll_s)
 
 
 async def run_rate(data, a, rate, phase, tok):
