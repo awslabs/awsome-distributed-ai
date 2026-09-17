@@ -35,8 +35,11 @@ def main():
         groups.setdefault(key, []).append(r)
     qualified = []
     for key, rs in groups.items():
+        # Both throughput fields read from the SLO-qualifying rows only. Taking the peak over all
+        # rows reports throughput earned by violating the objective, and silently uses a different
+        # scope per architecture depending on where each one happens to break.
         eligible = [r for r in rs if r["meets_joint_slo"]]
-        qualified.append({"group": list(key), "highest_tested_offered_tasks_per_s_meeting_slo": max((r["offered_tasks_per_s"] for r in eligible), default=None), "max_observed_useful_calls_per_s_per_gpu": max(r["useful_calls_per_s_per_gpu"] for r in rs), "qualification": "Finite-window observation including drain; extend duration and repeat before claiming sustained capacity"})
+        qualified.append({"group": list(key), "highest_tested_offered_tasks_per_s_meeting_slo": max((r["offered_tasks_per_s"] for r in eligible), default=None), "max_observed_useful_calls_per_s_per_gpu": max((r["useful_calls_per_s_per_gpu"] for r in eligible), default=None), "qualification": "Finite-window observation including drain; extend duration and repeat before claiming sustained capacity"})
     (out / "qualified-rates.json").write_text(json.dumps(qualified, indent=2))
     if a.config:
         c = read_config(a.config)

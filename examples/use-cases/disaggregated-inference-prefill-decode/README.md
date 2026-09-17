@@ -8,7 +8,7 @@ Prepared for re:Invent 2026 session AIM345, led by Keita Watanabe with Mijanur P
 
 ## Validation status
 
-`VALIDATED` identifies an observed check within the stated scope. `UNVALIDATED` identifies an expected result or a step that still needs evidence. CPU checks do not establish GPU serving correctness.
+`VALIDATED` identifies an observed check within the stated scope. `UNVALIDATED` identifies an expected result or a step that still needs evidence. `CONTRADICTED` identifies an expected result that a measurement in the stated scope has since disproved; the row keeps its original wording so the change is visible. CPU checks do not establish GPU serving correctness.
 
 | Check or expected result | Status | Scope |
 |---|---|---|
@@ -23,7 +23,11 @@ Prepared for re:Invent 2026 session AIM345, led by Keita Watanabe with Mijanur P
 | Round 1: cached agentic traffic has worse TTFT after disaggregation | UNVALIDATED | Expected from prior work; not measured with this lab model and instance configuration |
 | Round 1: measured wire time explains only a small part of the handoff penalty | UNVALIDATED | Requires measured fabric bandwidth and full-model KV accounting |
 | Round 1: explicit `makeConnection` during SGLang bootstrap reduces the penalty | UNVALIDATED | Blocked on upstream SGLang support in the pinned release; no local patch |
-| Round 2: unified violates the objective while disaggregated remains within it | UNVALIDATED | Offered rates and objectives require calibration on the approved production hardware |
+| Round 2: unified violates the objective while disaggregated remains within it | CONTRADICTED | Spain EKS on 2026-09-16, two `g7.48xlarge`, 8 GPUs and 2 EFA devices per stack, packed 4+4; unified qualified at 8× the offered rate of disaggregated on shape B, and disaggregated broke first on both shapes. See [expected direction of the packed paired result](#expected-direction-of-the-packed-paired-result) |
+| Round 2: disaggregation holds TPOT flat as offered load rises | VALIDATED | Same run; p90 TPOT 13.5–14.7 ms from 2 to 8 tasks/s while unified reached 133.8 ms. The joint SLO still fails on TTFT |
+| Packed placement transfers KV over EFA | UNVALIDATED, and unreachable by design | Same run; `rdma_counter_delta_bytes: 0` with a healthy `fi_info -p efa`. Co-located processes complete the transfer over a same-node provider, so this mode reports `VALIDATED-SELECTORS-ONLY` |
+| Separate-node placement transfers KV over EFA | VALIDATED | Spain EKS on 2026-09-17, two `g7.48xlarge`, optional V4 profile, 8 GPUs and 2 EFA devices per engine, prefill and decode on different nodes; `rdma_counter_delta_bytes: 97235456` written one-way from prefill across both of its EFA devices. See [measured optional result](#measured-optional-result-2026-09-17) |
+| Optional V4 shape A meets the joint objective at 0.1 tasks/s | CONTRADICTED | Same run; two of six consecutive phases on one engine missed the objective with the same traffic file and seed, p90 TTFT ranging `919.8`–`13 896.3` ms at flat p90 TPOT. The recorded single value is within the observed spread but is not a reproducible expectation |
 | Add a prefill worker while preserving decode, then serve requests | VALIDATED | Seoul `p6-b300.48xlarge`, total GPU count increased from two to three; decode pod identity and restart count preserved |
 | Round 2: adding prefill capacity alone restores the objective | UNVALIDATED | Requires an additional allocated worker and a prefill-bound operating point |
 | Round 3: prompt length, offered rate, and measured cache hits identify a crossover | UNVALIDATED | Requires repeated paired measurements |
@@ -37,6 +41,12 @@ Use an existing EKS cluster with separately allocated, same-AZ GPU nodes, EFA in
 The sequential path uses two nodes, with one worker per node. Configure GPU and EFA resource counts from the allocated nodes; the example requires those counts to be supplied. Packed paired mode puts both workers in one pod and requests twice `gpus_per_worker` GPUs and `efa_per_worker` EFA devices for that pod. The observed `g7e.12xlarge` allocation used one GPU per engine, two GPUs per stack and one EFA device per stack. Those counts do not describe `g7e.24xlarge`. Prefill scaling uses the separate-node path and adds an allocated worker.
 
 The checked controller tool versions are Python version `3.12.3`, Docker version `29.7.2`, AWS CLI version `2.36.7`, and `kubectl` version `1.31.0`. Use a `kubectl` version compatible with your EKS API and record any version change. Python client dependencies, including transitive packages, are pinned in [requirements.txt](requirements.txt). Provision these tools before the timed lab. Model download, image pull, and kernel compilation can consume minutes; complete them before attendees arrive.
+
+**Python 3.12 or newer is required, and it is usually not the default interpreter.** The pinned `numpy==2.5.2` declares `Requires-Python >=3.12`, so `pip install -r requirements.txt` on an older interpreter fails with `No matching distribution found for numpy==2.5.2` and never says the Python version is the reason. Amazon Linux 2023 ships `python3` as 3.9 with 3.12 available only as `python3.12`; AWS CloudShell and the CodeBuild Amazon Linux images use their own defaults. Name the interpreter explicitly when creating the virtual environment, check it before installing, and remember that a new terminal tab is not inside the environment:
+
+```bash
+python3.12 -V   # expect 3.12 or newer; plain `python3` may be 3.9
+```
 
 | Dependency | Pin | Purpose |
 |---|---|---|
@@ -54,7 +64,7 @@ NIXL version `1.1.0` is deliberate. Prior field work reported a KV-transfer slow
 Run commands from this directory. The registry below is an operator-supplied private ECR repository. Build and publish the image through your normal registry process, then use its digest in `config.json`.
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install -r requirements.txt
 export LAB_IMAGE="${LAB_REGISTRY}/aim345:sglang-0.5.12.post1-nixl-1.1.0"
@@ -126,9 +136,11 @@ kubectl --context "$LAB_CONTEXT" -n "$LAB_DISAGG_NAMESPACE" rollout status deplo
 With separate-node placement, wait for the individual worker Deployments named in the rendered files, using the sequential path's readiness commands in each namespace. Run each port-forward command in its own terminal with the same environment:
 
 ```bash
-kubectl --context "$LAB_CONTEXT" -n "$LAB_UNIFIED_NAMESPACE" port-forward service/router 8000:8000
-kubectl --context "$LAB_CONTEXT" -n "$LAB_DISAGG_NAMESPACE" port-forward service/router 8001:8000
+while true; do kubectl --context "$LAB_CONTEXT" -n "$LAB_UNIFIED_NAMESPACE" port-forward service/router 8000:8000; sleep 1; done
+while true; do kubectl --context "$LAB_CONTEXT" -n "$LAB_DISAGG_NAMESPACE" port-forward service/router 8001:8000; sleep 1; done
 ```
+
+The restart loop is not optional bookkeeping. A bare `port-forward` exits silently under the concurrency of the highest ramp rates, exactly at the operating point the lab is built to demonstrate, and the failure then presents as an engine fault: sent calls with no completions, `None` latency percentiles, and an aborted sweep. Keep each loop in its own terminal that stays open, or under `tmux`/`screen`; a backgrounded `nohup … &` inside an SSH session does not reliably survive. `4.ramp.py` probes `/health` before every rate and stops with a named error rather than writing that outcome as a measurement.
 
 Verify both HTTP endpoints and their live GPU requests, then inspect the disaggregated engines' selectors, installed distributions and EFA counters around a real request:
 
@@ -137,15 +149,15 @@ python3 paired.py verify --output results/paired-before
 python3 7.verify-transport.py --config config.disaggregated.json --url http://127.0.0.1:8001 --output results/paired-transport.json
 ```
 
-The packed verifier reads both live engine processes' command lines and selector environments. A packed request transfers state between processes on one node; its result does not establish cross-node EFA transfer. Record the observed counter deltas, including a flat counter, and the report's `cross_node_efa_status`. With separate-node placement, a passing transport check also requires positive RDMA byte deltas. Preserve provider logs with either result.
+The packed verifier reads both live engine processes' command lines and selector environments. A packed request transfers state between processes on one node; its result does not establish cross-node EFA transfer. Packed placement therefore reports `status: VALIDATED-SELECTORS-ONLY`, never `VALIDATED`: the transport backend selection, both launch plans and the installed distributions are confirmed, and the KV path over EFA is not. Expect `rdma_counter_delta_bytes: 0` in that mode and read it as provider selection rather than as a fault — libfabric completes a same-node transfer over `shm`, which is the concrete reason the cross-node case is the one that needs EFA. With separate-node placement, `VALIDATED` still requires positive RDMA byte deltas. Preserve provider logs with either result.
 
-Generate the same traffic definitions and run each shape against both resident endpoints. The GPU count passed to every run is the count for one stack:
+Generate the same traffic definitions and run each shape against both resident endpoints. Both shapes sweep several rates: a single low rate leaves both architectures at full SLO attainment, which shows no difference between them and locates no crossover. The GPU count passed to every run is the count for one stack:
 
 ```bash
 python3 2.generate-agentic.py --output traffic/a.json
 python3 3.generate-long-context.py --output traffic/b.json
-python3 4.ramp.py --traffic traffic/a.json --url http://127.0.0.1:8000 --architecture unified --instance-type "$LAB_INSTANCE_TYPE" --region "$LAB_REGION" --evidence-scope mechanism-validation --gpus "$LAB_GPUS" --rates 0.1 --duration-s 30 --output results/paired-unified-a
-python3 4.ramp.py --traffic traffic/a.json --url http://127.0.0.1:8001 --architecture disaggregated --instance-type "$LAB_INSTANCE_TYPE" --region "$LAB_REGION" --evidence-scope mechanism-validation --gpus "$LAB_GPUS" --rates 0.1 --duration-s 30 --output results/paired-disaggregated-a
+python3 4.ramp.py --traffic traffic/a.json --url http://127.0.0.1:8000 --architecture unified --instance-type "$LAB_INSTANCE_TYPE" --region "$LAB_REGION" --evidence-scope mechanism-validation --gpus "$LAB_GPUS" --rates 0.25 0.5 1 2 4 --duration-s 30 --output results/paired-unified-a
+python3 4.ramp.py --traffic traffic/a.json --url http://127.0.0.1:8001 --architecture disaggregated --instance-type "$LAB_INSTANCE_TYPE" --region "$LAB_REGION" --evidence-scope mechanism-validation --gpus "$LAB_GPUS" --rates 0.25 0.5 1 2 4 --duration-s 30 --output results/paired-disaggregated-a
 python3 4.ramp.py --traffic traffic/b.json --url http://127.0.0.1:8000 --architecture unified --instance-type "$LAB_INSTANCE_TYPE" --region "$LAB_REGION" --evidence-scope mechanism-validation --gpus "$LAB_GPUS" --rates 0.25 0.5 1 2 4 8 --duration-s 30 --output results/paired-unified-b
 python3 4.ramp.py --traffic traffic/b.json --url http://127.0.0.1:8001 --architecture disaggregated --instance-type "$LAB_INSTANCE_TYPE" --region "$LAB_REGION" --evidence-scope mechanism-validation --gpus "$LAB_GPUS" --rates 0.25 0.5 1 2 4 8 --duration-s 30 --output results/paired-disaggregated-b
 python3 5.collect.py --config config.unified.json --runs results/paired-unified-a results/paired-unified-b --output results/paired-unified-evidence
@@ -155,6 +167,36 @@ python3 paired.py verify --output results/paired-after
 ```
 
 Compare the before/after pod UIDs and GPU requests to establish that both stacks remained resident. The collector saves both packed engines' metrics and server configuration. The existing common SLO and failure-accounting rules apply. A short execution check can use a rate of 0.1 tasks/s and an offered window of 10 seconds for each shape, as recorded in `VALIDATION.md`; that check does not establish sustained capacity. Keep the two prepared endpoints for one-factor crossover repeats, changing the same traffic definition for both arms.
+
+### Expected direction of the packed paired result
+
+**On packed placement with the shipped shapes, expect disaggregated to lose to unified, and expect the margin to be large.** This is the measured outcome, not a caution. Read the numbers below before running the sweep so that a wide gap is understood as the result rather than investigated as a misconfiguration.
+
+Measured on two `g7.48xlarge` nodes in `eu-south-2` on 2026-09-16, 8 GPUs and 2 EFA devices per stack, packed 4+4, DeepSeek-V2-Lite-Chat at the pinned revision, 30-second windows, p90 TTFT 2000 ms and p90 TPOT 100 ms at 0.90 attainment. `qualified-rates.json` for the two arms:
+
+| Arm | Highest offered rate meeting the joint SLO | Useful calls/s/GPU at that rate |
+|---|---|---|
+| unified, shape B | 4.0 tasks/s | 0.345 |
+| disaggregated, shape B | 0.5 tasks/s | 0.042 |
+
+Shape B, p90 latencies by offered rate:
+
+| Rate | unified TTFT | unified TPOT | unified SLO | disaggregated TTFT | disaggregated TPOT | disaggregated SLO |
+|---|---|---|---|---|---|---|
+| 0.25 | 1052 ms | 6.7 ms | met | 1809 ms | 7.6 ms | met |
+| 0.5 | 1059 ms | 9.2 ms | met | 1660 ms | 8.9 ms | met |
+| 1 | 1052 ms | 11.9 ms | met | 2175 ms | 11.1 ms | missed |
+| 2 | 1058 ms | 22.8 ms | met | 16 295 ms | 14.7 ms | missed |
+| 4 | 1670 ms | 93.7 ms | met | 56 345 ms | 13.8 ms | missed |
+| 8 | 30 299 ms | 133.8 ms | missed | 172 743 ms | 13.5 ms | missed |
+
+Shape A behaves the same way, which is why its sweep is worth the extra minutes: unified holds the objective through 4 tasks/s at 0.696 useful calls/s/GPU, while disaggregated misses it at 1 task/s with a p90 TTFT of 8320 ms.
+
+Two readings of this are wrong and both cost session time. It is not a fault: `completed_calls` equalled `sent_calls` at every rate, no pod restarted, and both pod UIDs were unchanged across the whole sweep. It is also not a verdict on disaggregation. The mechanism is visible in the columns: **disaggregated wins TPOT and loses TTFT.** Its TPOT stays near 13 ms while unified's climbs to 133.8 ms and breaks the objective, because decode no longer shares SMs with prefill chunks — that is the designed benefit, and it holds. TTFT collapses because packed 4+4 gives prefill 4 of the node's 8 GPUs while unified prefills on all 8, and both shipped shapes push enough input tokens per second to make prefill the bottleneck. The joint SLO fails on TTFT, so the TPOT win is not counted.
+
+Reallocating GPUs between the two roles is not available as a remedy here, and it is worth knowing why before someone is asked. `paired.py` splits `CUDA_VISIBLE_DEVICES` symmetrically, and each engine's `--tp-size` must divide the model's 16 attention heads, so the admissible splits on 8 GPUs are 4+4 or 8+0. A 6+2 split is not a legal tensor-parallel degree for this model. The granularity of disaggregated resource division is constrained by model parallelism; changing the balance means changing the topology, not a flag. The two topologies that could favour disaggregation are `placement: separate-nodes`, which gives prefill a whole node at twice the node budget per participant, and a decode-bound traffic shape.
+
+**Neither shipped shape is decode-bound.** Both emit 256 output tokens, and shape A's cheaper requests produce enough concurrency that its total prefill demand at a given rate exceeds shape B's (244 calls × 1024 tokens against 26 × 8192 at 1 task/s). A short-input, long-output, high-concurrency third shape is the missing case in which disaggregation would be expected to win; the generators already take `first_input_tokens` and `output_tokens` as parameters. Until such a shape is added and measured, the honest framing of this lab is the cost side of the trade: disaggregation buys decode isolation by taking capacity away from prefill, and whether that is worth it is decided by the traffic shape.
 
 After saving evidence, remove the pair and its PriorityClasses:
 
@@ -311,6 +353,41 @@ python3 -m unittest -v test_lab
 
 Common failures include insufficient scheduled GPU/EFA resources, missing EFA devices, incompatible host drivers, insufficient locked-memory permissions, blocked bootstrap TCP, incomplete image pulls, and version mismatches. Inspect pod events and engine logs first. Never treat a successful HTTP response on an unverified transport as an EFA result.
 
+### Expected log output that is not a fault
+
+Three messages appear in a healthy run. Each one reads like a failure, and each has cost real debugging time in this lab.
+
+Every engine process logs a GDRCopy failure at startup, because the image carries the userspace `libgdrapi.so` from the EFA installer while the `gdrdrv` kernel module is not present on the EKS NVIDIA AMI:
+
+```text
+libfabric:…:core:core:cuda_gdrcopy_hmem_init():183<warn> gdr_open failed!
+libfabric:…:core:core:cuda_hmem_init():816<warn> gdrcopy initialization failed! gdrcopy will not be used.
+```
+
+GPUDirect RDMA is unaffected. The same log reports `cuda dmabuf support status: 1`, and EFA registers GPU memory over dmabuf, which does not need `gdrdrv` or `nvidia_peermem`. GDRCopy would only accelerate small host-device copies. Judge EFA health from `fi_info -p efa` inside the engine container and from the node's `vpc.amazonaws.com/efa` allocatable, not from these two lines. The surrounding `info` lines are worth reading rather than suppressing: `Number of NVIDIA devices detected: 8` alongside `Number of CUDA devices detected: 4` is direct evidence that the packed split of `CUDA_VISIBLE_DEVICES` took effect.
+
+Every controller script prints a `transformers` advisory first:
+
+```text
+None of PyTorch, TensorFlow >= 2.0, or Flax have been found. Models won't be available
+and only tokenizers, model and file utilities can be available.
+```
+
+This is correct and harmless. The controller uses `AutoTokenizer` for token accounting and does not load a model locally; inference happens in the engine pods.
+
+A `ModuleNotFoundError` for `httpx` means the shell is outside the virtual environment, not that a dependency is missing. Run `source .venv/bin/activate`, or invoke `.venv/bin/python3` directly.
+
+### A rate that reports no completions
+
+When a measured rate shows sent calls with zero completions, `None` latency percentiles and `slo_attainment_fraction: 0.0`, **check the endpoint before reading any engine logs**:
+
+```bash
+curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/health
+curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8001/health
+```
+
+`000` with pods still `Running` and no restarts means the `kubectl port-forward` died, which is a client-side fault carrying no information about the engines. Restart the forward and rerun that rate. `4.ramp.py` probes `/health` before each rate and exits with a named error for this case, so it should be caught before a file is written; the check above applies to results collected with older revisions or to a forward that drops mid-rate.
+
 ## Facilitator configuration handoff
 
 The facilitator prepares the two resident endpoints and the controller before the participant session. `facilitator/prepare-config.py` generates matched packed configurations from the two explicitly assigned Kubernetes nodes. It requires immutable engine and router images, derives the even GPU count and EFA request from node inventory, copies the assigned node taints as tolerations, and refuses to overwrite an existing configuration. Review the allocation before deploying.
@@ -346,7 +423,7 @@ kubectl --context "$LAB_CONTEXT" get nodes $LAB_NODES -o 'custom-columns=NODE:.m
 
 ## Optional: DeepSeek-V4-Flash on g7.48xlarge
 
-DeepSeek-V2-Lite-Chat remains the common main line on both G7 shapes with SGLang version `0.5.12.post1` and NIXL version `1.1.0`. The optional V4 profile uses [Dockerfile.v4](Dockerfile.v4), SGLang version `0.5.19`, both NIXL distributions at version `1.4.1`, and EFA installer version `1.47.0`. Its amd64 engine manifest is `sha256:7da39d58804be6c781991dad9c099bf65c95c49eec42b3d5e927d89105b2e061`; its image index is `sha256:30fd3480469d257011feba3548ee30ed866ebfb1c3fee50f35252300651967b3`. The separately pinned base image and build-time package/source assertions are written in the Dockerfile. The main-line Dockerfile and pins remain unchanged.
+DeepSeek-V2-Lite-Chat remains the common main line on both G7 shapes with SGLang version `0.5.12.post1` and NIXL version `1.1.0`. The optional V4 profile uses [Dockerfile.v4](Dockerfile.v4), SGLang version `0.5.19`, both NIXL distributions at version `1.4.1`, and EFA installer version `1.47.0`. Its amd64 engine manifest is `sha256:7da39d58804be6c781991dad9c099bf65c95c49eec42b3d5e927d89105b2e061`; its image index is `sha256:30fd3480469d257011feba3548ee30ed866ebfb1c3fee50f35252300651967b3`. Those two digests identify the authors' own build and exist only in the registry it was pushed to. Container builds are not bit-reproducible, so rebuilding this Dockerfile at this commit resolves to a different digest: the 2026-09-17 rebuild produced engine manifest `sha256:13916e808ae70b0ff658cddbb4faa7164d4b4e92e79f26eb03893a2c54a04738`. Record and deploy the digest you pushed, and treat the digests above as provenance for the authors' measurements rather than as a pull target. The separately pinned base image and build-time package/source assertions are written in the Dockerfile. The main-line Dockerfile and pins remain unchanged.
 
 The model revision in [config.v4.example.json](config.v4.example.json) contains `159617149040 B`, or approximately `148.7 GiB`, of weight shards. Each observed GPU reports `32623 MiB`. A `g7.48xlarge` node supplies approximately `254.9 GiB` across eight GPUs; a `g7.24xlarge` node supplies approximately `127.4 GiB` across four GPUs. The weights alone exceed the secondary node’s GPU memory by approximately `21.2 GiB`. Each prefill/decode replica needs its own weights. The optional path therefore requires the full primary node pair, prefill TP size of eight ranks on one node and decode TP size of eight ranks on the other, with both EFA devices per node.
 
@@ -358,7 +435,7 @@ docker run --rm --entrypoint python3 "$LAB_V4_IMAGE" /lab/verify_image.py
 cp config.v4.example.json config.v4.json
 ```
 
-The facilitator fills the context, node names, router digest and image registry in `config.v4.json`, retaining its optional model and engine profile. Stage approximately 160 GB of weights plus download/compilation space on each node’s NVMe filesystem, outside the timed session. The default example requests 188 vCPUs and 672 GiB per engine, below the observed Spain Kubernetes allocatable limits. Read the live limits before deploying elsewhere. Preserve the existing pinned snapshot and compilation cache; do not replace the main-line cache. `deployment.py` rejects the secondary shape, packed placement and partial GPU/EFA requests for this profile.
+The facilitator fills the context, node names, router digest and image registry in `config.v4.json`, retaining its optional model and engine profile. Stage approximately 160 GB of weights plus download/compilation space on each node’s NVMe filesystem, outside the timed session. Staging both nodes in parallel from the Hugging Face Hub took `95 s` and `113 s` for `159630050304 B` each on 2026-09-17, so plan this around the egress transferred rather than around elapsed time. Use the same `snapshot_download` `local_dir` the init container uses, so that the init container verifies the existing files and skips the download; the Hub cache is keyed by revision, so the optional snapshot coexists with the main-line one. The default example requests 188 vCPUs and 672 GiB per engine, below the observed Spain Kubernetes allocatable limits. Read the live limits before deploying elsewhere. Preserve the existing pinned snapshot and compilation cache; do not replace the main-line cache. `deployment.py` rejects the secondary shape, packed placement and partial GPU/EFA requests for this profile.
 
 ```bash
 python3 deployment.py disaggregated --config config.v4.json
@@ -403,3 +480,26 @@ python3 4.ramp.py --traffic traffic/v4-b.json --url http://127.0.0.1:8010 --arch
 python3 4.ramp.py --traffic traffic/v4-b.json --url http://127.0.0.1:8010 --architecture disaggregated --instance-type "$LAB_V4_INSTANCE_TYPE" --region "$LAB_V4_REGION" --evidence-scope mechanism-validation --gpus "$LAB_V4_GPUS" --rates 0.25 0.5 1 2 --duration-s 30 --output results/v4-sweep
 python3 5.collect.py --config config.v4.json --runs results/v4-a results/v4-b results/v4-sweep --output results/v4-evidence
 ```
+
+### Measured optional result, 2026-09-17
+
+This profile is the only separate-node topology in the lab, so it is where cross-node KV movement is observable at all. Measured on two Spain `g7.48xlarge`, 8 GPUs and 2 EFA devices per engine, prefill TP size eight on one node and decode TP size eight on the other, on an independently rebuilt engine image.
+
+`7.verify-transport.py` reported `status: VALIDATED` with `cross_node_efa_status: VALIDATED positive path` and `rdma_counter_delta_bytes: 97235456`. The per-device deltas were `48611328 B` and `48624128 B` on the prefill pod's two EFA devices and `0 B` on both of the decode pod's, which is the expected direction: prefill issues one-way RDMA writes to push KV to decode, and the two devices carry roughly equal shares. This is the positive counterpart to the packed row, where a flat counter is expected because the processes are co-located.
+
+`deployment.py` appends `--max-running-requests 4` for this profile, and that admission ceiling, not the node's capacity, is what the long-context sweep measures. Offered rate rose 8× while the rate actually admitted saturated, TTFT grew by a factor of 12, and TPOT stayed flat:
+
+| Offered tasks/s | Sent calls/s | p90 TTFT | p90 TPOT | Meets joint SLO |
+|---|---|---|---|---|
+| 0.25 | 0.10 | 3359.7 ms | 18.0 ms | false |
+| 0.5 | 0.28 | 5751.0 ms | 19.8 ms | false |
+| 1 | 0.55 | 13 778.0 ms | 19.4 ms | false |
+| 2 | 0.66 | 39 528.6 ms | 16.9 ms | false |
+
+Read that as queueing at admission rather than as a decode limit: every row completed all of its calls, and the cost lands entirely on TTFT. No tested long-context rate qualified, which reproduces the recorded outcome.
+
+The shape-A result at 0.1 tasks/s is **reproducible once the deployment is warm, and unreliable in the first few phases after an engine pod starts**. Across 22 consecutive warm phases, using the same traffic file and seed, p90 TTFT stayed within `848.7`–`959.4` ms and every phase met the objective; every miss observed — `4072.2`, `13 896.3`, `12 250.4` ms — fell within roughly the first five phases after an engine process start. p90 TPOT stayed within `21.4`–`21.7` ms throughout, `completed_calls` equalled `sent_calls`, and `client_valid` was true, so the spread is TTFT only.
+
+That window belongs to the router, not the engines. After an engine pod restarts while the router keeps running, the router answers its own `/health` with 200 while `POST /generate` returns 503 `no_available_workers (all circuits open or unhealthy)` — measured for 67–110 s *after* `kubectl rollout status` reported both engine deployments Ready, with both engines idle throughout, on the paired flow's plain router as well as this profile's PD router. Since `deployment.py` runs the router with `--disable-retries`, one such 503 fails a whole agent task. `4.ramp.py` now waits for `/generate`, not just `/health`, before each rate; after any engine restart let the router settle rather than measuring immediately. The engine's own periodic `/health` generation is visible in the prefill worker's log at the ten-second probe period and was measured *not* to affect this — `SGLANG_DIAG_BYPASS_HEALTH_GENERATE` removes it and changes nothing.
+
+Recorded TTFT includes the client's round trip. Driving the lab from outside the cluster's region added a fixed p50 `485` ms per call through `kubectl port-forward`, roughly half of a recorded `~900 ms`. Compare rates and architectures against each other from a single client instead of against an absolute number, and record your own `meets_joint_slo` for shape A.
