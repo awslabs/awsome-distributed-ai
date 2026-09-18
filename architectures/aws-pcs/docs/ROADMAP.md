@@ -24,6 +24,15 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   CPU CNG (`add-cng.yaml`) takes a targeted ODCR directly via
   `CapacityReservationId` (deploy-all: `OnDemandCapacityReservationId`; no type
   enum — Capacity Blocks don't exist for CPU families).
+- [ ] 🟢 **Capacity Reservation resource-group targeting (On-Demand backfill).**
+  Direct ODCR-ID targeting deliberately does not backfill: launches beyond the
+  reservation's instance count fail rather than falling back to plain
+  On-Demand, so `MaxCount` must stay at or below the reserved count. EC2's
+  `CapacityReservationTarget.CapacityReservationResourceGroupArn` (a resource
+  group of reservations) is the backfill-capable form — instances prefer
+  reserved capacity and overflow to On-Demand. Expose it as an alternative to
+  the plain ID (mutually exclusive), letting `MaxCount` exceed the reserved
+  count for burst-above-reservation queues.
 - [ ] 🟡 **Scope down the instance role's `AmazonS3ReadOnlyAccess`.** The PCS instance
   role in `cluster.yaml` attaches `AmazonS3ReadOnlyAccess` **unconditionally** (every node
   can read every S3 bucket in the account). The upstream

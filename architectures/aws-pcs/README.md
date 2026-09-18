@@ -196,7 +196,7 @@ automatically.
 
 - **On-Demand**: leave `CapacityReservationId` empty.
 - **"Open" On-Demand Capacity Reservation (ODCR)**: also leave `CapacityReservationId` **empty** — an ODCR with **"open"** instance matching is consumed automatically by the node group's On-Demand launches.
-- **"Targeted" ODCR**: set `CapacityReservationId` to the ODCR ID **and** `CapacityReservationType=targeted-odcr`. Launches bill On-Demand against the reservation and keep the cluster placement group. The reservation's instance type and AZ must match the node group's. If the ODCR is held **inside a customer-owned cluster placement group**, also point the node group at that CPG (`PseriesPlacementGroupName` for the GPU queue, `OnDemandPlacementGroupName` for the CPU queue) — a reservation in a CPG is only consumable by launches into it.
+- **"Targeted" ODCR**: set `CapacityReservationId` to the ODCR ID **and** `CapacityReservationType=targeted-odcr`. Launches bill On-Demand against the reservation and keep the cluster placement group. The reservation's instance type and AZ must match the node group's. If the ODCR is held **inside a customer-owned cluster placement group**, also point the node group at that CPG (`PseriesPlacementGroupName` for the GPU queue, `OnDemandPlacementGroupName` for the CPU queue) — a reservation in a CPG is only consumable by launches into it. Keep `PseriesMaxCount` **at or below the reservation's instance count** — a direct ODCR target does not backfill with plain On-Demand, so launches beyond the reservation fail and jobs wait.
 - **Capacity Blocks for ML**: set `CapacityReservationId` to the Capacity Block ID (`CapacityReservationType=capacity-block` is the default). The template then launches with `MarketType=capacity-block` against it.
 
 The CPU queue takes a targeted ODCR too, via `OnDemandCapacityReservationId`
@@ -652,7 +652,9 @@ against a "targeted" On-Demand Capacity Reservation (On-Demand billing; EFA and
 placement settings are unaffected). Leave it empty for plain On-Demand — an
 "open" ODCR is consumed automatically. If the reservation is held in a
 customer-owned cluster placement group, also set `OnDemandPlacementGroupName`
-to that CPG (honored with or without EFA).
+to that CPG (honored with or without EFA). Keep `OnDemandMaxCount` at or below
+the reservation's instance count — a direct ODCR target does not backfill with
+plain On-Demand, so launches beyond the reservation fail and jobs wait.
 
 #### EFA on CPU HPC instances (`OnDemandEfaInterfaceCount`)
 
