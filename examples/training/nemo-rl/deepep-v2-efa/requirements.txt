@@ -1,0 +1,84 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+# NeMo-RL runtime dependencies for the deepep-v2-efa image.
+#
+# NeMo-RL itself is installed with --no-deps (nemo-rl.Dockerfile Layer 7)
+# because its pyproject pins torch EXACTLY (torch==2.9.0 at NEMO_RL_SHA=46be4e8):
+# letting pip resolve that would DOWNGRADE the NGC-baked torch and orphan the
+# baked TransformerEngine/apex/flash-attn ABI. This file carries the rest of
+# NeMo-RL's [project.dependencies] set, at the specifiers that SHA declares
+# EXCEPT for the documented deviations called out inline below, MINUS the
+# entries the base image already provides, conflict with this substrate, or
+# serve a NeMo-RL feature path this Megatron-GRPO recipe does not exercise:
+#   - torch, triton, torchvision : NGC-baked (the ABI anchor; never reinstall)
+#   - setuptools, pip, ninja     : present in the base
+#   - nccl4py, cuda-bindings     : NeMo-RL's non-colocated-refit path only; this
+#                                  recipe is colocated (GRPO+Megatron), so unused
+#   - pybase64                   : NeMo-RL's SGLang-refit path only (no SGLang here)
+#   - soundfile                  : audio multimodal path (not on this text recipe)
+# Do NOT read this as "identical to upstream": `pip check` is deliberately NOT a
+# build gate, because --no-deps against the NGC-baked torch 2.11 (vs NeMo-RL's
+# declared torch==2.9.0) would make pip check false-fail on that intended ABI
+# substitution. Re-diff by hand on every NEMO_RL_SHA bump (bottom of file).
+# NVSHMEM IS required as a BUILD-TIME dependency, not stripped: upstream DeepEP's
+# setup.py links NVSHMEM UNCONDITIONALLY for the deep_ep extension (its own
+# `# TODO: make NVSHMEM and legacy optional` is still open at 01dc3aa, at main
+# HEAD, and in the amazon-contributing fork), via find_nvshmem_root(optional=
+# False) which asserts if NVSHMEM is absent. The NGC base's baked NVSHMEM is the
+# dpkg `libnvshmem3-cuda-13` RUNTIME package — it has NO nvshmem.h header and NO
+# libnvshmem_device.a, so the Layer-9 deep_ep build would fail at compile/link.
+# The pip wheel below ships both (header + static device lib) and resolves
+# through find_pkg_root; cu13 to match the base's CUDA line. This mirrors what
+# upstream NeMo-RL 46be4e8 lists as `nvidia-nvshmem-cu12  # for deep_ep build`.
+# The NCCL-GIN backend does not USE NVSHMEM at run time (the network path is
+# nccl.cu), but the extension is still LINKED against it — so it must be present.
+# When bumping NEMO_RL_SHA, re-diff this list against the new pyproject.
+colored==2.2.3
+ray[default]==2.49.2
+transformers==4.57.1
+wandb>=0.25.0
+numpy
+datasets>=4.0.0
+rich
+math-verify
+accelerate>=0.26
+tensorboard
+omegaconf
+torchdata
+nvidia-ml-py
+hydra-core
+tiktoken
+blobfile
+debugpy
+nvtx
+matplotlib
+plotly
+sympy>=1.14.0
+pillow>=11.3.0
+num2words>=0.5.14
+mlflow>=3.5.0,<3.6.0
+swanlab
+pyzmq
+
+# NVSHMEM: build-time link dependency of the deep_ep C extension (see header).
+# cu13 wheel to match the base's CUDA 13 line; ships nvshmem.h + the static
+# libnvshmem_device.a that the dpkg runtime package omits.
+nvidia-nvshmem-cu13
+
+# megatron.core (PYTHONPATH tree) import-time dependency not in NeMo-RL's set.
+einops
+
+# decord2: imported (as `decord`) by nemo_rl/data/multimodal_utils.py, which the
+# GRPO data path pulls in — so `import nemo_rl.algorithms.grpo`
+# (recipe/verify-image.sh Gate) is an ImportError without it. Absent from the NGC
+# base. NeMo-RL 46be4e8 declares it as `decord2` (the maintained fork that keeps
+# the `decord` import name), so match that spelling exactly.
+decord2
+
+# nvidia-resiliency-ext: import-time dependency of megatron.core's
+# dist_checkpointing strategies (strategies/{nvrx,torch}.py, tensor_aware_state_dict.py),
+# so `import megatron.core.transformer.moe.fused_a2a` fails without it. The NGC
+# base ships 0.5.0; megatron.core at MEGATRON_LM_SHA needs >=0.6.0 (the 0.5.0
+# API is missing symbols it imports) — pin the floor, not an exact version.
+nvidia-resiliency-ext>=0.6.0

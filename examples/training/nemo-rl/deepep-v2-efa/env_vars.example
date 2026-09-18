@@ -1,0 +1,108 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# ============================================================
+# NeMo-RL + DeepEP V2 over EFA - Environment Variables
+#
+# Copy this file to env_vars (gitignored) and fill in your values:
+#   cp env_vars.example env_vars && vim env_vars
+# Source it before building or applying manifests:
+#   source env_vars
+# ============================================================
+
+# ----- AWS / ECR -----
+# Region and account are derived from your current AWS credentials/config so
+# nothing environment-specific is hard-coded. Override AWS_REGION if needed.
+export AWS_REGION="${AWS_REGION:-$(aws configure get region)}"
+export AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+export REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/"
+export IMAGE="nemo-rl-deepep-efa"
+# Immutable tag - never "latest": with imagePullPolicy: IfNotPresent a node
+# that cached "latest" silently keeps running the OLD image after a rebuild.
+export TAG="v1-20260825"
+export FULL_IMAGE="${REGISTRY}${IMAGE}:${TAG}"
+
+# ----- Opt-in draft-PR image flavor -----
+# 1 = bake the 2 draft upstream PRs (NeMo-RL#2410, Megatron-LM#4632) that the
+# full GRPO rollout-over-DeepEP path needs; 0 = the upstream-only baseline.
+# (DeepEP needs no patch: the amazon-contributing/DeepEP fork the image pins
+# carries the former draft DeepEP#612 fixes in-code, on both flavors.) The ":-"
+# default keeps a value pre-set on the command line (APPLY_DRAFT_ROLLOUT_PATCHES=1
+# docker build ...) from being clobbered when this file is sourced afterwards.
+export APPLY_DRAFT_ROLLOUT_PATCHES="${APPLY_DRAFT_ROLLOUT_PATCHES:-0}"
+
+# ----- HuggingFace (full GRPO path only; the recipe gates need no weights) -----
+export HF_TOKEN=""   # <-- set your HuggingFace token here if the model is gated
+
+# ----- Model / shape (the Wave-28 measured shape twin) -----
+# Qwen3-30B-A3B: 128 routed experts, top-k 8, hidden 2048. Any MoE whose
+# routed-expert count divides by the EP size works; the probe asserts it.
+export MODEL_NAME="Qwen/Qwen3-30B-A3B"
+export MODEL_LOCAL="/fsx/models/Qwen3-30B-A3B"
+
+# ----- Cluster -----
+# HOW THESE REACH THE GATES: sourcing this file sets vars in YOUR shell only — a
+# client-side `source` does NOT cross `kubectl exec`; only the pod's own env
+# does. So `envsubst < kubernetes/raycluster.yaml` substitutes NUM_NODES / the
+# EP_* shape into the worker pod's `env:` block, and the pod carries them.
+# run-rollout-probe.sh / train-step.sh read NNODES (not NUM_NODES); the manifest
+# bridges the names by emitting `{ name: NNODES, value: "${NUM_NODES}" }`. Set
+# NUM_NODES here, and both the RayCluster replica count and the in-pod NNODES the
+# launchers read move together.
+export NAMESPACE="nemo-rl-deepep"
+export FSX_CLAIM="fsx-claim"
+export NUM_NODES=2
+export GPUS_PER_NODE=8
+# Per-node EFA NIC count differs by instance type:
+#   p5.48xlarge (H100): 32   |   p5en.48xlarge (H200): 16
+export EFA_PER_NODE=32
+export INSTANCE_TYPE="p5.48xlarge"
+
+# ----- Probe / train-step shape knobs (defaults mirror the model above) -----
+export EP_EXPERTS=128
+export EP_TOPK=8
+export EP_HIDDEN=2048
+export EP_TOKENS=128
+# Explicit SM/QP counts for the probe. WHY: the amazon-contributing/DeepEP fork
+# carries the former #612 EFA fixes in-code (get_rdma_gbs() sysfs link-rate +
+# the auto-QP overflow clamp), so its auto-sizers are EFA-aware — but the probe
+# pins these anyway so it is deterministic and auto-sizer-independent. 2 QPs is
+# the value the p5en evidence validated; it survives the fork's clamp unchanged.
+export EP_NUM_SMS=8
+export EP_NUM_QPS=2
+
+# ----- EFA / NCCL-GIN transport contract -----
+# Baked into the image ENV and repeated in kubernetes/raycluster.yaml's pod env,
+# so a `kubectl exec` shell already inherits them from the container. Exported
+# here too only so a LOCAL run (docker run on an EFA host, outside k8s) carries
+# the same contract — a client-side `source` does NOT propagate across
+# `kubectl exec`.
+export FI_PROVIDER=efa
+export FI_EFA_USE_DEVICE_RDMA=1
+export FI_EFA_FORK_SAFE=1
+export FI_EFA_ENABLE_SHM_TRANSFER=0
+export NCCL_GIN_TYPE=2               # 2 = CPU-proxy GIN (the EFA-viable path)
+export NCCL_GIN_ENABLE=1
+export OFI_NCCL_GIN_GDAKI=0          # GPU-initiated GIN is not the shipped path on EFA
+export OFI_NCCL_PROTOCOL=RDMA
+export NCCL_NVLS_ENABLE=0            # prevents NVLS init failures on H100/H200
+export NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
+# NOTE: EP_EFA_MAX_QPS / EP_EFA_RDMA_GBS are intentionally absent. They were the
+# knobs the old draft DeepEP#612 patch read; the amazon-contributing/DeepEP fork
+# resolves both structurally (get_rdma_gbs() sysfs link-rate + the C++
+# _C.{min,max}_unordered_gin_qps clamp), so nothing in deep_ep reads them. The one
+# live QP knob is EP_NUM_QPS above (the probe's explicit num_allocated_qps).
+
+# ----- DeepEP V2 selection -----
+export DEEP_EP_USE_V2_SHIM=0         # V2-native path, no compatibility shim
+export HAVE_DEEP_EP_V2=True          # rollout bridge feature flag (draft-PR rollout path)
+
+# ----- NVSHMEM contract (INERT at run time on this image - kept for the rebuild case) -----
+# deep_ep links NVSHMEM as a BUILD-TIME dependency (upstream setup.py links it
+# unconditionally; see requirements.txt), but the V2 NCCL-GIN backend does NOT
+# USE NVSHMEM at run time - the network path is NCCL-GIN - so these values are
+# inert here. If you rebuild with the legacy NVSHMEM backend instead, these are
+# the required values on EFA - note IBGDA must be 0 (proxy-based), despite what
+# most upstream DeepEP manifests say.
+export NVSHMEM_REMOTE_TRANSPORT=libfabric
+export NVSHMEM_LIBFABRIC_PROVIDER=efa
+export NVSHMEM_IB_ENABLE_IBGDA=0
