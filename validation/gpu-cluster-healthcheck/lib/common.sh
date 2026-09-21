@@ -123,14 +123,28 @@ ensure_results_dir() {
 
 # ─── Result Formatting ───────────────────────────────────────────────────────
 
+# Path of the result file a check writes its record to.
+result_file_for() {
+    local check_name="$1"
+    local safe_name
+    safe_name="$(printf '%s' "${check_name}" | tr -cs 'A-Za-z0-9._-' '-')"
+    echo "${RESULTS_DIR}/check-${safe_name}.json"
+}
+
 log_result() {
     local check_name="$1"
     local status="$2"   # PASS, FAIL, WARN, SKIP
     local details="${3:-}"
     local severity="${4:-}"
 
-    # Build JSON via python3 so all string values are properly escaped
-    # (details may contain quotes, newlines, backslashes from command output).
+    local result_file=""
+    if [[ -d "${RESULTS_DIR}" ]]; then
+        result_file="$(result_file_for "${check_name}")"
+    fi
+
+    # Build JSON via python3 so all string values are properly escaped (details
+    # may contain quotes, newlines, backslashes from command output), and merge
+    # it into any record this check has already written.
     local json_result
     json_result="$(
         CHECK_NAME="${check_name}" \
@@ -138,10 +152,21 @@ log_result() {
         DETAILS="${details}" \
         SEVERITY="${severity}" \
         INSTANCE_TYPE="${INSTANCE_TYPE}" \
+        RESULT_FILE="${result_file}" \
         python3 -c '
 import json, os, socket
 from datetime import datetime, timezone
-print(json.dumps({
+
+# One check emits several results -- an Xid FAIL, then a benign
+# persistence-mode WARN -- and they all land in a single file per check.
+# kubernetes/determine-severity.py, lib/aggregate-results.py and
+# slurm/sbatch-quarantine-workflow.sh read only that file to decide whether a
+# node is drained or replaced, so a later benign result must never overwrite
+# an earlier fault. Keep the most severe status and severity seen instead.
+STATUS_RANK = {"FAIL": 4, "WARN": 3, "PASS": 2, "SKIP": 1}
+SEVERITY_RANK = {"ISOLATE": 4, "REBOOT": 3, "RESET": 2, "MONITOR": 1}
+
+record = {
     "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "hostname": socket.gethostname(),
     "instance_type": os.environ.get("INSTANCE_TYPE", ""),
@@ -149,22 +174,55 @@ print(json.dumps({
     "status": os.environ["STATUS"],
     "details": os.environ.get("DETAILS", ""),
     "severity": os.environ.get("SEVERITY", ""),
-}))
+}
+
+# stdout stays a per-emission event stream; only the file is cumulative.
+print(json.dumps(record))
+
+result_file = os.environ.get("RESULT_FILE", "")
+if not result_file:
+    raise SystemExit(0)
+
+previous = {}
+try:
+    with open(result_file) as fh:
+        loaded = json.load(fh)
+    if isinstance(loaded, dict):
+        previous = loaded
+except (OSError, ValueError):
+    previous = {}
+
+# Start from the previous record so the richer fields written directly by
+# parse-dcgm-results.py (per-GPU "tests", "overall_*") survive.
+merged = dict(previous)
+merged.update(record)
+
+if STATUS_RANK.get(previous.get("status", ""), 0) > STATUS_RANK.get(record["status"], 0):
+    merged["status"] = previous["status"]
+if SEVERITY_RANK.get(previous.get("severity", ""), 0) > SEVERITY_RANK.get(record["severity"], 0):
+    merged["severity"] = previous["severity"]
+
+# Keep the evidence from every emission. Details already use "; " internally,
+# so separate accumulated findings with " | ".
+prev_details = previous.get("details", "") or ""
+new_details = record["details"]
+if new_details and new_details not in prev_details:
+    merged["details"] = (prev_details + " | " + new_details) if prev_details else new_details
+else:
+    merged["details"] = prev_details or new_details
+
+# Atomic write: write to tmp then rename to avoid partial files.
+tmp_file = os.path.join(
+    os.path.dirname(result_file), "." + os.path.basename(result_file) + ".tmp"
+)
+with open(tmp_file, "w") as fh:
+    fh.write(json.dumps(merged) + "\n")
+os.replace(tmp_file, result_file)
 '
     )"
 
     if [[ "${JSON_OUTPUT}" == "1" ]]; then
         echo "${json_result}"
-    fi
-
-    # Write to results file if results dir exists
-    if [[ -d "${RESULTS_DIR}" ]]; then
-        local safe_name
-        safe_name="$(printf '%s' "${check_name}" | tr -cs 'A-Za-z0-9._-' '-')"
-        # Atomic write: write to tmp then rename to avoid partial files
-        local tmpfile="${RESULTS_DIR}/.check-${safe_name}.json.tmp"
-        echo "${json_result}" > "${tmpfile}"
-        mv -f "${tmpfile}" "${RESULTS_DIR}/check-${safe_name}.json"
     fi
 }
 
@@ -270,6 +328,10 @@ init_check() {
     local check_name="$1"
     ensure_results_dir
     log_info "Running check: ${check_name}"
+
+    # Results accumulate within one check execution (see log_result), so drop
+    # any record left behind by an earlier run reusing this results directory.
+    rm -f "$(result_file_for "${check_name}")"
 
     # Load instance profile if not already loaded
     if [[ -z "${EXPECTED_GPU_COUNT}" ]]; then
