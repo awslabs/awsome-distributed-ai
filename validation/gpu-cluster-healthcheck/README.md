@@ -495,7 +495,7 @@ NCCL_CONTAINER=/path/to/nccl-tests.sqsh ./gpu-healthcheck.sh --check 5
 
 ### G7 qualification
 
-The G7 profiles expect all physical GPUs and EFA devices. A constrained allocation on a larger host is not a smaller instance profile. For RTX PRO 4500 Blackwell GPUs, stage an NCCL image built with native SM120 kernels, such as the existing [failure-patterns example's Dockerfile](../../examples/use-cases/gpu-cluster-failure-patterns/Dockerfile). The pinned public base image alone does not provide that native build. Preserve its dependency pins and record the built image digest and imported-image hash.
+The G7 profiles expect all physical GPUs and EFA devices. A constrained allocation on a larger host is not a smaller instance profile. For RTX PRO 4500 Blackwell GPUs, stage an NCCL image built with native SM120 kernels, such as the existing [failure-patterns example's Dockerfile at public revision c89c5749](https://github.com/awslabs/awsome-distributed-ai/blob/c89c57495277c49eedabe617e428731e3effacc1/examples/use-cases/gpu-cluster-failure-patterns/Dockerfile). That example is acquired separately; it is not included in this suite checkout. The pinned public base image alone does not provide that native build. Preserve its dependency pins and record the built image digest and imported-image hash.
 
 Use exclusive access for DCGM qualification. A representative G7 allocation for the paired communication check is:
 
