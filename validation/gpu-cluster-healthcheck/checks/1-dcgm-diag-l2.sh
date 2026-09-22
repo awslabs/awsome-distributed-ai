@@ -60,6 +60,8 @@ run_check() {
 
     dcgm_output=$(run_with_timeout "${DCGM_TIMEOUT}" dcgmi diag -r 2 -j 2>&1) || dcgm_exit=$?
 
+    echo "${dcgm_output}" > "${RESULTS_DIR}/dcgm-l2-raw.json"
+
     if [[ ${dcgm_exit} -eq 124 ]]; then
         check_fail "${CHECK_NAME}" \
             "DCGM L2 diagnostics timed out after ${DCGM_TIMEOUT}s" "RESET"
@@ -67,7 +69,6 @@ run_check() {
     fi
 
     # Save raw output
-    echo "${dcgm_output}" > "${RESULTS_DIR}/dcgm-l2-raw.json"
     log_verbose "Raw DCGM output saved to ${RESULTS_DIR}/dcgm-l2-raw.json"
 
     # Parse results through severity classifier
@@ -76,7 +77,7 @@ run_check() {
     parse_result=$(echo "${dcgm_output}" | python3 "${SCRIPT_DIR}/../lib/parse-dcgm-results.py" \
         --level 2 2>&1) || parse_exit=$?
 
-    echo "${parse_result}" > "${RESULTS_DIR}/check-${CHECK_NAME}.json"
+    echo "${parse_result}" > "${RESULTS_DIR}/dcgm-l2-parsed.json"
 
     if [[ ${parse_exit} -ne 0 ]]; then
         check_fail "${CHECK_NAME}" "Failed to parse DCGM results" "RESET"
@@ -100,6 +101,10 @@ print(data.get('overall_status', 'UNKNOWN'))
 
     case "${overall_status}" in
         PASS)
+            if [[ ${dcgm_exit} -ne 0 ]]; then
+                check_fail "${CHECK_NAME}" "DCGM returned exit code ${dcgm_exit} despite passing JSON" "RESET"
+                return 1
+            fi
             check_pass "${CHECK_NAME}" "All DCGM L2 tests passed"
             return 0
             ;;

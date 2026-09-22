@@ -13,8 +13,8 @@ The suite provides two operational modes: **lightweight checks** for regular use
 | NVIDIA Driver | All GPU checks | Pre-installed on GPU AMIs |
 | [DCGM Toolkit](https://developer.nvidia.com/dcgm) | Checks 1, 4 | `apt install datacenter-gpu-manager` or via NVIDIA repo |
 | EFA Installer | Checks 2, 6 | [AWS EFA Installer](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-start.html) |
-| NCCL Tests Container | Check 5 | `docker://public.ecr.aws/hpc-cloud/nccl-tests:latest` |
-| [Pyxis](https://github.com/NVIDIA/pyxis) + [Enroot](https://github.com/NVIDIA/enroot) | Check 5 (container) | Optional -- falls back to local `all_reduce_perf`. Pyxis < v0.20 requires the explicit `docker://` scheme on the image reference; newer Pyxis auto-detects |
+| NCCL Tests Container | Check 5 | `docker://public.ecr.aws#hpc-cloud/nccl-tests:cuda13.0.2-efa1.48.0-ofiv1.19.0-ncclv2.30.4-1-testsv2.18.3` |
+| [Pyxis](https://github.com/NVIDIA/pyxis) + [Enroot](https://github.com/NVIDIA/enroot) | Check 5 (container) | Optional; set `NCCL_TESTS_BIN` to the local executable when Pyxis is absent. Enroot registry references use `#` after the hostname |
 | Python 3.6+ | Result parsing | Pre-installed on most Linux distributions |
 
 ### Installation
@@ -120,6 +120,8 @@ The file `instance-profiles.conf` defines expected hardware counts per instance 
 | p5e.48xlarge | 8 | 32 | Yes | efa |
 | p5en.48xlarge | 8 | 16 | Yes | efa |
 | p6-b200.48xlarge | 8 | 8 | Yes | efa |
+| g7.48xlarge | 8 | 2 | No | efa |
+| g7.24xlarge | 4 | 1 | No | efa |
 
 To add a new instance type, append a line to `instance-profiles.conf`:
 
@@ -239,13 +241,13 @@ Validates GPU interconnect topology:
 
 **Runtime:** 45 minutes - 2.25 hours | **Suite:** Intensive | **Requires:** Exclusive access
 
-The most comprehensive GPU diagnostic available. Includes everything in L2 plus Extended Utility Diagnostics (EUD) and pulse power testing.
+Runs the installed DCGM Level 4 test set. The available tests depend on GPU support and installed packages. Inspect `dcgm-l4-raw.json` and `dcgm-l4-parsed.json`; the run-level argument does not establish that EUD ran. EUD requires a matching separately installed component. Skipped tests remain warnings, and missing or runtime-error results fail classification.
 
-**Pre-flight requirements** (all validated automatically):
+**Pre-flight requirements:**
 
 1. Node must be exclusively allocated (no other GPU processes)
 2. MIG must be disabled
-3. Concurrent GPU telemetry services are stopped for the duration
+3. Systemd GPU telemetry services are stopped and restored; externally managed exporters must be stopped by their owner before the check
 4. `nv-hostengine` must be running
 
 **Operational warnings:**
@@ -267,9 +269,10 @@ The most comprehensive GPU diagnostic available. Includes everything in L2 plus 
 
 Runs `all_reduce_perf` from the NCCL tests container to validate multi-node GPU communication over EFA:
 
-- Message sizes: 8B to 128MB (power-of-2 sweep)
+- Message sizes: 8 B through 128 MiB, doubling at each row; the complete sweep is required
+- Explicit correctness checking with both out-of-place and in-place mismatch columns required to be zero
 - Verifies EFA provider selection via `NCCL_DEBUG=INFO`
-- Compares measured bus bandwidth against per-instance-type thresholds
+- Compares measured bus bandwidth against the configured threshold; a low value retains `WARN` / `MONITOR` in the final result
 
 **Optional isolation sub-tests** (`NCCL_ISOLATION_TESTS=1`):
 
@@ -296,27 +299,16 @@ salloc -N 2 --exclusive
 NCCL_ISOLATION_TESTS=1 ./gpu-healthcheck.sh --check 5
 ```
 
-### Check 6: EFA Loopback Bandwidth/Latency
+### Check 6: Per-device EFA Loopback
 
 **Runtime:** 5-15 minutes | **Suite:** Intensive
 
-Tests each EFA device individually:
+Tests each enumerated EFA domain using `fi_pingpong` self-loopback. `FI_EFA_IFACE` selects the kernel RDMA device corresponding to the domain, and `FI_EFA_ENABLE_SHM_TRANSFER=0` disables shared-memory transfer. Expected domain counts are checked against the instance profile. Client/server output and per-device send/receive counter snapshots are retained.
 
-- Iterates over all RDMA devices discovered via `ibv_devices`
-- Runs `fi_pingpong` or `ib_write_bw` in loopback mode per device
-- Reports bandwidth and latency per device
-- Compares per-device bandwidth against instance-type thresholds (default: 20 Gbps for all supported types)
-  - Override with `EFA_MIN_BW` env var (in Gbps)
-- Collects EFA statistics via `rdma -p statistic show` and warns on `rx_drops` or `retrans_timeout_events`
-  - Statistics saved to `efa-statistics.txt`
+This check establishes device connectivity. It does not implement an `EFA_MIN_BW` threshold or replace the inter-node Check 5. Inspect counter changes to establish physical-device attribution, and use a bogus-selector negative control when qualifying a new libfabric version. Missing counter files are unavailable evidence, not zero traffic.
 
 ```bash
 ./gpu-healthcheck.sh --check 6
-# or
-./gpu-healthcheck.sh --check efa-loopback
-
-# With custom bandwidth threshold (Gbps)
-EFA_MIN_BW=25 ./gpu-healthcheck.sh --check 6
 ```
 
 ## DCGM Operational Guide
@@ -328,7 +320,7 @@ EFA_MIN_BW=25 ./gpu-healthcheck.sh --check 6
 | **Purpose** | Production gate / fast triage | Deep post-mortem / quarantine |
 | **Runtime** | 2.5 - 10.5 min | 45 min - 2.25 hr |
 | **When to run** | Prolog, epilog, periodic sweep | Node drained, exclusive access only |
-| **EUD included** | No | Yes (~20 min, requires MIG disabled) |
+| **EUD included** | No | Only when supported, installed and present in the raw results |
 | **Pulse test** | No | Yes (variable power draw) |
 | **Safe for production** | Yes (with timeout guard) | No -- requires exclusive node access |
 | **hostengine** | Must be running | Must be running; beware systemd auto-restart |
@@ -346,7 +338,7 @@ Before running DCGM Level 4:
 
 ### Severity Classification from DCGM Results
 
-DCGM diagnostic results include a `warning_level` field per test per GPU:
+Older diagnostic schemas use a `warning_level` field per GPU result:
 
 | Warning Level | Severity | Action |
 |--------------|----------|--------|
@@ -355,7 +347,9 @@ DCGM diagnostic results include a `warning_level` field per test per GPU:
 | 1 | **MONITOR** | Keep in service, flag for review |
 | 0 | **PASS** | No action required |
 
-The `parse-dcgm-results.py` script converts raw DCGM JSON into this classification automatically.
+Modern DCGM uses `warnings[].error_severity`, a different enumeration: value `1` means MONITOR, value `2` means ISOLATE and value `6` means RESET. Unknown, triage and configuration errors require review and map to RESET in this suite. See [NVIDIA's severity definitions](https://github.com/NVIDIA/DCGM/blob/master/dcgmlib/dcgm_errors.h). The parser preserves the raw warning fields and entity identifiers. Empty test results and runtime errors fail; skipped coverage cannot become PASS. The wrappers retain the detailed parsed report separately from the final check summary.
+
+A diagnostic severity is an input to an operator decision. A known administrative device removal can produce a count-mismatch ISOLATE verdict without establishing physical damage. Keep the node drained while restoring the known cause and verifying all expected devices.
 
 ### hostengine Management
 
@@ -477,7 +471,7 @@ The guiding principle is **replace, don't repair**. On AWS, the primary remediat
 ### NCCL all_reduce fails
 
 - Verify EFA provider: ensure `NCCL_DEBUG=INFO` output shows "Selected Provider is EFA"
-- Check container image availability: `enroot import docker://public.ecr.aws/hpc-cloud/nccl-tests:latest`
+- Check container image availability: `enroot import docker://public.ecr.aws#hpc-cloud/nccl-tests:cuda13.0.2-efa1.48.0-ofiv1.19.0-ncclv2.30.4-1-testsv2.18.3`
 - Verify inter-node connectivity: security groups must allow all traffic between nodes
 - Check for NCCL version compatibility with driver version
 
@@ -491,14 +485,28 @@ pyxis: failed to import docker image
 spank: required plugin spank_pyxis.so: task_init() failed with rc=-1
 ```
 
-Cause: older Pyxis (< v0.20) does not auto-detect the registry hostname in bare image references and routes the pull through Docker Hub, which returns 401 for the `public.ecr.aws/...` path. Force the registry scheme explicitly:
+Use Enroot's registry separator (`#`) and the explicit binary path. The default selects a pinned base image. A cached SquashFS image avoids an import during diagnosis:
 
 ```bash
-NCCL_CONTAINER=docker://public.ecr.aws/hpc-cloud/nccl-tests:latest \
-  ./gpu-healthcheck.sh --suite intensive --exclusive
+NCCL_CONTAINER=/path/to/nccl-tests.sqsh ./gpu-healthcheck.sh --check 5
 ```
 
-Or update Pyxis to v0.20 or newer. The script's default already uses the `docker://` scheme as of [PR #TBD](https://github.com/awslabs/awsome-distributed-ai/pulls); this troubleshooting note covers customers running older Pyxis with the previous default still pinned in their configuration.
+`NCCL_TESTS_BIN` defaults to `/opt/nccl-tests/build/all_reduce_perf`; `NCCL_MPI` defaults to `pmix`. Match the installed MPI/PMIx stack. Invoke Check 5 once from the allocation coordinator. Invoking it from every allocated node creates competing nested Slurm steps.
+
+### G7 qualification
+
+The G7 profiles expect all physical GPUs and EFA devices. A constrained allocation on a larger host is not a smaller instance profile. For RTX PRO 4500 Blackwell GPUs, stage an NCCL image built with native SM120 kernels, such as the existing [failure-patterns example's Dockerfile](../../examples/use-cases/gpu-cluster-failure-patterns/Dockerfile). The pinned public base image alone does not provide that native build. Preserve its dependency pins and record the built image digest and imported-image hash.
+
+Use exclusive access for DCGM qualification. A representative G7 allocation for the paired communication check is:
+
+```bash
+salloc --nodes=2 --gres=gpu:8 --ntasks-per-node=1 --cpus-per-task=192 --mem=0 --exclusive
+NCCL_CONTAINER=/path/to/native-sm120-nccl.sqsh ./gpu-healthcheck.sh --check 5 --timeout 660
+```
+
+The check starts one MPI process per node and uses the profile's GPU count per process. Compare bandwidth only with repeated baselines using the same message sizes, mapping, image and node pair. G7 has no default bus-bandwidth threshold; set `NCCL_MIN_BUS_BW` from those measurements if an advisory threshold is needed. Correctness and provider confirmation are checked independently of bandwidth.
+
+Parser and launch regression fixtures run with `python3 -m unittest discover -s tests -v` from this directory. They cover error classification and command construction; hardware qualification still requires running the checks on the target pair.
 
 ### Topology shows disconnected GPUs
 

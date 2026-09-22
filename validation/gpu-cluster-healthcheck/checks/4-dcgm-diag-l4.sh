@@ -117,9 +117,8 @@ run_check() {
     local exporter_pids
     exporter_pids=$(pgrep -f "dcgm-exporter" 2>/dev/null || true)
     if [[ -n "${exporter_pids}" ]]; then
-        log_warn "Killing dcgm-exporter process(es): ${exporter_pids}"
-        kill ${exporter_pids} 2>/dev/null || true
-        sleep 2
+        check_fail "${CHECK_NAME}" "Stop the externally managed dcgm-exporter before L4; PIDs: ${exporter_pids}" "RESET"
+        return 1
     fi
 
     # ── Pre-flight 4: Verify nv-hostengine ───────────────────────────────
@@ -161,7 +160,7 @@ run_check() {
     parse_result=$(echo "${dcgm_output}" | python3 "${SCRIPT_DIR}/../lib/parse-dcgm-results.py" \
         --level 4 2>&1) || parse_exit=$?
 
-    echo "${parse_result}" > "${RESULTS_DIR}/check-${CHECK_NAME}.json"
+    echo "${parse_result}" > "${RESULTS_DIR}/dcgm-l4-parsed.json"
 
     if [[ ${parse_exit} -ne 0 ]]; then
         check_fail "${CHECK_NAME}" "Failed to parse DCGM L4 results" "RESET"
@@ -185,6 +184,10 @@ print(data.get('overall_status', 'UNKNOWN'))
 
     case "${overall_status}" in
         PASS)
+            if [[ ${dcgm_exit} -ne 0 ]]; then
+                check_fail "${CHECK_NAME}" "DCGM returned exit code ${dcgm_exit} despite passing JSON" "RESET"
+                return 1
+            fi
             check_pass "${CHECK_NAME}" "All DCGM L4 tests passed"
             return 0
             ;;

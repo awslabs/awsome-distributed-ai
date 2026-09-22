@@ -21,36 +21,37 @@ EFA_INSTALLER_TEST="${EFA_INSTALLER_TEST:-/opt/amazon/efa/test/efa_test.sh}"
 #   - FI_EFA_ENABLE_SHM_TRANSFER=0: force the real EFA hardware path; otherwise
 #     libfabric routes same-host traffic through SHM and the test does not
 #     exercise EFA at all.
-#   - FI_EFA_DEVICE_NAME=<domain>: pin libfabric to the specific EFA domain.
+#   - FI_EFA_IFACE=<kernel-device>: pin libfabric to the specific EFA domain.
 #   - explicit -B server_port / -B client_port -P server_port: avoid port
 #     collisions when called per-device in a loop.
 # Returns 0 on success, non-zero on failure. Writes server+client logs to stdout
 # on failure for triage.
-run_pingpong_for_domain() {
+run_pingpong_for_domain() (
     local domain="$1"
+    local iface="${domain%-rdm}"
     local server_port client_port
     server_port=$(shuf -n 1 -i 49152-57342)
     client_port=$(shuf -n 1 -i 57343-65535)
 
     local server_log client_log
-    server_log=$(mktemp)
-    client_log=$(mktemp)
+    server_log="${RESULTS_DIR}/efa-${domain}-server.log"
+    client_log="${RESULTS_DIR}/efa-${domain}-client.log"
 
-    FI_LOG_LEVEL=warn FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_DEVICE_NAME="${domain}" \
+    FI_LOG_LEVEL=warn FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_IFACE="${iface}" \
         fi_pingpong -e rdm -p efa -B "${server_port}" > "${server_log}" 2>&1 &
     local server_pid=$!
+    trap 'kill "${server_pid}" 2>/dev/null || true' EXIT
     sleep 3
 
     if ! kill -0 "${server_pid}" 2>/dev/null; then
         wait "${server_pid}" 2>/dev/null || true
         log_warn "Domain ${domain}: server failed to start"
         cat "${server_log}" >&2
-        rm -f "${server_log}" "${client_log}"
         return 1
     fi
 
     local ret=0
-    FI_LOG_LEVEL=warn FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_DEVICE_NAME="${domain}" \
+    FI_LOG_LEVEL=warn FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_IFACE="${iface}" \
         timeout "${EFA_TEST_TIMEOUT}" \
         fi_pingpong -e rdm -p efa -B "${client_port}" -P "${server_port}" localhost \
         > "${client_log}" 2>&1 || ret=$?
@@ -66,9 +67,8 @@ run_pingpong_for_domain() {
         cat "${client_log}" >&2
     fi
 
-    rm -f "${server_log}" "${client_log}"
     return "${ret}"
-}
+)
 
 run_check() {
     init_check "${CHECK_NAME}"
@@ -97,14 +97,8 @@ run_check() {
         fi
     fi
 
-    # Discover EFA libfabric DOMAINS, not kernel ibv device names. The two
-    # naming spaces differ: ibv_devices returns names like 'rdmap86s0', but
-    # libfabric's -d/FI_EFA_DEVICE_NAME expects domains like 'rdmap86s0-rdm'
-    # (with the '-rdm' suffix added by the EFA provider). Passing kernel names
-    # to fi_pingpong yields fi_getinfo -61 (No data available) and the test
-    # fails on every device. Enumerating via fi_info gets us the correct names
-    # and also naturally excludes back-side Ethernet NICs that show up under
-    # ibv_devices but are not EFA endpoints.
+    # fi_info yields libfabric domain names. FI_EFA_IFACE selects the kernel
+    # RDMA name, so run_pingpong_for_domain removes the '-rdm' suffix.
     local domains
     domains=$(fi_info -p efa -t FI_EP_RDM 2>/dev/null \
         | awk '/^[[:space:]]*domain:/{print $2}' \
@@ -117,17 +111,28 @@ run_check() {
 
     local device_count
     device_count=$(echo "${domains}" | wc -l | tr -d ' ')
+    if [[ "${EXPECTED_EFA_COUNT:-0}" -gt 0 && "${device_count}" -ne "${EXPECTED_EFA_COUNT}" ]]; then
+        check_fail "${CHECK_NAME}" "EFA domain count mismatch: expected=${EXPECTED_EFA_COUNT}, detected=${device_count}" "ISOLATE"
+        return 1
+    fi
     log_info "Testing ${device_count} EFA domain(s)"
 
     local failures=0
+    local stats_warning=0
     local results_json="["
 
     while IFS= read -r domain; do
         [[ -z "${domain}" ]] && continue
         log_info "Testing domain: ${domain}"
 
+        # Retain attribution evidence for every physical EFA during each test.
+        grep -H . /sys/class/infiniband/*/ports/1/hw_counters/{send_bytes,recv_bytes} \
+            > "${RESULTS_DIR}/efa-${domain}-before.txt" 2>/dev/null || true
         local test_exit=0
         run_pingpong_for_domain "${domain}" || test_exit=$?
+
+        grep -H . /sys/class/infiniband/*/ports/1/hw_counters/{send_bytes,recv_bytes} \
+            > "${RESULTS_DIR}/efa-${domain}-after.txt" 2>/dev/null || true
 
         if [[ "${test_exit}" -ne 0 ]]; then
             failures=$((failures + 1))
@@ -163,10 +168,12 @@ ENDJSON
             retrans_timeouts=$(echo "${efa_stats}" | grep -oP 'retrans_timeout_events\s+\K[0-9]+' | awk '{sum+=$1} END {print sum+0}') || retrans_timeouts=0
 
             if [[ "${rx_drops}" -gt 0 ]]; then
-                check_warn "${CHECK_NAME}" "EFA rx_drops detected (${rx_drops}) -- possible network issues"
+                log_warn "EFA rx_drops detected (${rx_drops}) -- possible network issues"
+                stats_warning=1
             fi
             if [[ "${retrans_timeouts}" -gt 0 ]]; then
-                check_warn "${CHECK_NAME}" "EFA retransmission timeouts detected (${retrans_timeouts})"
+                log_warn "EFA retransmission timeouts detected (${retrans_timeouts})"
+                stats_warning=1
             fi
             if [[ "${rx_drops}" -eq 0 && "${retrans_timeouts}" -eq 0 ]]; then
                 log_verbose "EFA statistics clean -- no drops or retransmissions"
@@ -184,8 +191,11 @@ ENDJSON
         return 1
     fi
 
-    check_pass "${CHECK_NAME}" \
-        "EFA loopback OK: ${device_count} domain(s) tested"
+    if [[ ${stats_warning} -eq 1 ]]; then
+        check_warn "${CHECK_NAME}" "EFA loopback completed for ${device_count} domain(s); cumulative EFA statistics contain drops or retransmission timeouts (see logs)"
+    else
+        check_pass "${CHECK_NAME}" "EFA loopback OK: ${device_count} domain(s) tested"
+    fi
     return 0
 }
 

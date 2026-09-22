@@ -55,7 +55,16 @@ log_verbose() {
 # ─── Instance Detection ─────────────────────────────────────────────────────
 
 detect_instance_type() {
-    # Try IMDSv2 first, fall back to IMDSv1, then ec2-metadata CLI
+    # Nitro exposes the physical instance type without granting IMDS access.
+    # Ignore caller-provided INSTANCE_TYPE; expectations must describe the host.
+    INSTANCE_TYPE=$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || true)
+    if [[ ${INSTANCE_TYPE} =~ ^[a-z][a-z0-9-]*\.[a-z0-9]+$ ]]; then
+        log_verbose "Detected instance type from DMI: ${INSTANCE_TYPE}"
+        echo "${INSTANCE_TYPE}"
+        return 0
+    fi
+    INSTANCE_TYPE=""
+    # Non-Nitro hosts retain IMDSv2, IMDSv1 and ec2-metadata fallbacks.
     local token
     token=$(curl -s --connect-timeout 2 -X PUT "http://169.254.169.254/latest/api/token" \
         -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null || true)
