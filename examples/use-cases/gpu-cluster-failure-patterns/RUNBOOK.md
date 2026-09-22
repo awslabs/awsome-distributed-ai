@@ -2,12 +2,14 @@
 
 Start with the earliest observed failure. Choose a check that tests the suspected component, preserve the raw result, and verify recovery with the affected workload. The diagnostic owner is [validation/gpu-cluster-healthcheck](../../../validation/gpu-cluster-healthcheck).
 
+For the current participant device session, follow the authoritative [Device recovery participant route](facilitator/DEVICE-RECOVERY.md#participant-session): use supported `./12.device-exercise.sh recover` first, retain isolation when recovery cannot qualify the node, and use `./12.device-exercise.sh replace`. External/manual administration belongs only to historical experiments or separately authorized pre-session work, not an instructor session remedy. The [scoped audit](VALIDATION.md#september-19-2026-scoped-participant-recovery-audit) does not grant full hardware qualification or publication approval.
+
 ## Select the next check
 
 | Observed symptom | Evidence to collect | Recovery and reuse check |
 |---|---|---|
-| GPU query fails or a GPU disappears | UUID/BDF mapping, suite identifiers `0` and `3`, kernel journal, process state, and the active job log | Keep the target drained. Use the qualified external reboot route when required, restore runtime paths and services, then run the maintenance checks and a fresh collective/storage job. |
-| EFA binding or provider domain disappears | PCI BDF, driver symlink, RDMA device, unique provider domains, suite identifiers `2` and `6`, and physical counters | End the old communicator before allowlisted rebind. Reboot if recovery remains incomplete. Requalify the node and take a fresh allocation. |
+| GPU query fails or a GPU disappears | UUID/BDF mapping, suite identifiers `0` and `3`, kernel journal, process state, and the active job log | Keep the target isolated. Supported `recover` validates original records and the reboot baseline before recovery; if it cannot qualify the node, retain isolation and use `replace`. Verify reuse with a fresh collective/storage job. |
+| EFA binding or provider domain disappears | PCI BDF, driver symlink, RDMA device, unique provider domains, suite identifiers `2` and `6`, and physical counters | End the old allocation/communicator before supported `recover` attempts allowlisted rebind. Failed EFA rebind without reboot-affected originals requires `replace`, not reboot; retain isolation. After qualification, take a fresh allocation. |
 | Collective times out during checkpointing | Writer error and retry timestamps before the waiting ranks' timeout | Remove only the fixture's filler and partial write with `6.recover-storage.sh`, resume its saved step, and run Check 5 independently. |
 | DataLoader stops after communication initialization | Process-start method, worker stacks, queue/lock state, fork-safety flag and software versions | Compare `fork` and `spawn` with the other settings held fixed. Keep successful non-reproduction as the observed outcome. |
 | Correct collective runs slowly | Provider log, EFA byte deltas, host resources and repeated baseline from the same configuration | Resolve the observed cause and repeat the same sweep. The optional plugin-fallback exercise has its own baseline. |
@@ -18,16 +20,16 @@ Start with the earliest observed failure. Choose a check that tests the suspecte
 | Severity or state | Facilitator response |
 |---|---|
 | `ISOLATE` | Keep the node out of scheduling and preserve the raw failure. A known administrative count mismatch requires recovery and qualification; an unexplained fault needs the platform's repair or replacement investigation. |
-| `RESET` or an explicit reboot recommendation | Keep the node drained, use the approved recovery route, and retest before resuming. Confirm that the diagnostic reached the intended operation. |
+| `RESET` or an explicit reboot recommendation | Keep the node isolated and use supported `recover`/`replace`; a diagnostic recommendation does not authorize a manual reboot or bypass original-state checks. Confirm that the diagnostic reached the intended operation and retest before reuse. |
 | `MONITOR` or `WARN` | Preserve and review the warning, its counters and the executed coverage. Do not rewrite it as PASS. |
-| Incomplete command | Record the deadline and process state. Use the external maintenance route; userspace timeout does not guarantee termination of a D-state task. |
+| Incomplete command | Record the deadline and process state; userspace timeout does not guarantee termination of a D-state task. Follow supported `recover`/`replace` and retain isolation while incomplete; repeat `replace` for the same operation when instructed, not external/manual restoration. |
 | Skipped diagnostic coverage | Record which test did not run and why. A Level 4 invocation does not itself establish EUD execution. |
 
-A drained node cannot receive an ordinary participant job. Use the maintenance route for fault diagnostics, then resume only after the required checks pass and the drain reason belongs to this exercise. The real Prolog runs before fresh participant jobs; its synthetic marker remains an optional scheduler demonstration.
+A drained node cannot receive an ordinary participant job. Use the participant route's `collect` commands for fault diagnostics; supported recovery/replacement handles maintenance checks and admission, and must preserve unrelated isolation. Do not manually resume the node. The real Prolog runs before fresh participant jobs; its synthetic marker remains an optional scheduler demonstration.
 
 ## Verify reuse and retain evidence
 
-After a reboot, verify the changed boot identifier, original instance and device identities, staging filesystem, image hashes, private 32 MiB tmpfs marker/ownership, `slurmd`, Prolog and prior telemetry owner. Keep the target drained during maintenance checks. Take a fresh allocation for suite Check 5 and the storage workload before declaring recovery complete.
+After a supported recovery reboot, retain the controller's checks of the changed boot identifier, original instance and device identities, staging filesystem, image hashes, private 32 MiB tmpfs marker/ownership, `slurmd`, Prolog and prior telemetry owner; these are not manual restoration instructions. Keep isolation through qualification. After recovery or replacement, submit `13.verify-after-recovery.sbatch` from the independent login coordinator for fresh-allocation suite Check 5 and storage verification, as documented in the participant route, before declaring workload reuse verified.
 
 Record the node and rank counts, exact command, suite commit, image digest, library versions, job identifier, start/end times, exit status, both correctness columns and per-device byte deltas. Keep Check 5's 8 B to 128 MiB sweep separate from the optional 8 B to 2 GiB plugin comparison. [VALIDATION.md](VALIDATION.md) preserves earlier measurements with their original hardware and launch scope.
 

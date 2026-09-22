@@ -62,4 +62,15 @@ if [[ ! -d $stage/healthcheck-source ]]; then
     tar -xzf "$stage/healthcheck-pinned.tgz" -C "$stage/healthcheck-source"
 fi
 sha256sum "$stage/healthcheck-pinned.tgz"
+
+# Stage the diagnosis case bundle read-only, if one has been built. The cases
+# live on the coordinator's root volume rather than in $stage: measured on the
+# pair, $stage is a bind mount from the instance-store LVM, so a stop/start
+# would take the case material with it while participants still needed it.
+if [[ -n ${AIM344_CASES_SOURCE:-} ]]; then
+    bash "$(dirname -- "${BASH_SOURCE[0]}")/stage-cases.sh" "$AIM344_CASES_SOURCE"
+else
+    printf 'No case bundle staged; set AIM344_CASES_SOURCE to a built bundle.\n'
+fi
+
 printf 'Prepared images and pinned health suite in %s\n' "$stage"

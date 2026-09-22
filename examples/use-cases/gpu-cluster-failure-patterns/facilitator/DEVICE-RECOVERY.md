@@ -1,117 +1,141 @@
 # GPU and EFA device recovery
 
-The diagnostic owner is [validation/gpu-cluster-healthcheck](https://github.com/awslabs/awsome-distributed-ai/tree/main/validation/gpu-cluster-healthcheck). Run its checks on healthy, unavailable and recovered devices. The helper in this directory performs only the selected device operation; it does not decide whether the node is healthy.
+The diagnostic owner is [validation/gpu-cluster-healthcheck](https://github.com/awslabs/awsome-distributed-ai/tree/main/validation/gpu-cluster-healthcheck). The coordinator applies its verdicts; it does not substitute a hardware diagnosis. GPU PCI removal changes operating-system visibility, not physical hardware, and does not establish NVIDIA Xid 79. EFA driver unbind changes one PCI function and RDMA domain, not an NCCL plugin.
 
-Use a dedicated pair with an external controller and an authorized PCS Slurm reboot route. Keep the instances and reserved capacity throughout the exercise. A GPU PCI removal changes operating-system visibility. It does not reproduce physical damage or establish NVIDIA Xid 79. An EFA driver unbind changes the selected PCI function's binding and RDMA domain; it is a different intervention from hiding an NCCL plugin.
+Independent source/evidence review accepts the measured participant recovery/replacement and fresh workload flow on the dedicated pair. Retained source, payloads and results were checked byte-for-byte. **Full hardware qualification remains withheld** for missing first-hook-held failure/access-denial proof and unqualified IPv6. Candidate publication is separate from hardware or event-readiness approval. Local recording-executor tests are not cloud replacement evidence; see the [scoped audit record](../VALIDATION.md#september-19-2026-scoped-participant-recovery-audit). This document authorizes no new deployment, fault injection or rollout.
 
-## Prepare the target and evidence
+## Participant session
 
-1. Record the live account, Region, instance identity, Slurm node, GPU UUID and PCI BDF, both EFA domains and their PCI BDFs, and the management interface and default route. Fix expected counts before injecting a fault.
-2. Keep the controller on the login node or another host. Confirm that its Slurm administrator can request a reboot of the exact target with `scontrol reboot`. PCS can replace an instance after an EC2 or guest reboot outside Slurm; use the [PCS Slurm procedure](https://docs.aws.amazon.com/pcs/latest/userguide/slurm-reboot.html). Keep the target's logs on that controller or in the event's private evidence destination.
-3. Install `device-fault.sh` as `/usr/local/sbin/aim344-device-fault`, owned by root with mode `0755`. Create `/etc/aim344-device-fault.json`, owned by root with mode `0600`. Derive every identity from that target. The helper requires these fields:
+Use the unprivileged coordinator account and the existing forced-command connection. The authenticated key selects the assignment. There is no participant node, instance, PCI, job, shell or IAM option.
 
-   ```json
-   {
-     "instance_id": "<verified instance identifier>",
-     "slurm_node": "<registered Slurm node>",
-     "gpu_uuid": "<selected GPU UUID>",
-     "gpu_bdf": "<selected GPU PCI BDF>",
-     "gpu_vendor": "0x10de",
-     "gpu_device": "<observed PCI device ID>",
-     "efa_bdf": "<selected EFA PCI BDF>",
-     "efa_vendor": "0x1d0f",
-     "efa_device": "<observed PCI device ID>",
-     "efa_rdma_device": "<observed kernel RDMA name>",
-     "management_bdf": "<management ENA PCI BDF>",
-     "management_interface": "<interface on the default route>",
-     "participant_user": "ubuntu",
-     "slurm_bin": "/opt/aws/pcs/scheduler/slurm-25.05/bin"
-   }
+```bash
+./12.device-exercise.sh start gpu
+./12.device-exercise.sh status
+./12.device-exercise.sh collect 0
+./12.device-exercise.sh collect 3
+./12.device-exercise.sh recover
+```
+
+For the separate EFA round, use `start efa` and checks `2` and `6`. Both starts require an idle target. End the previous allocation before starting or replacing a node. Preserve fault-time logs before recovery.
+
+Supported `recover` is the first route. GPU recovery requires coherent operation-bound original records, a valid recorded reboot baseline, and fresh scheduler/boot observations. Successful EFA rebind does not reuse an old communicator. Failed EFA rebind does not escalate into a reboot without originals; it requires replacement. Missing originals are not reconstructed from an already-modified node. Known statistics-skipped PASS refuses regardless of baseline; WARN auto-qualification is disabled, including source-shaped memlock advisory matches.
+
+When recovery cannot qualify the node, retain isolation and use:
+
+```bash
+./12.device-exercise.sh replace
+./12.device-exercise.sh status
+```
+
+`replace` retires only the failed instance recorded for this assignment. It preserves a coordinator-side round snapshot and attempts to capture the two original-state records without requiring the failed node to answer. Unavailable records remain unavailable. The coordinator checks the assigned scheduler identity, empty queue, PCS membership, protected coordinator/peer IDs, image, launch-template version and reserved-capacity binding. It does not change group bounds, cancel a reservation, launch an arbitrary instance or select a spare node.
+
+Each invocation advances the same recorded operation. A pending retirement, bootstrap or check returns a specific incomplete result; repeat `replace`. A lost termination acknowledgement is reconciled by exact old EC2 ID. Bootstrap/health retries never terminate the new candidate. Another assignment sharing the target cannot claim it during replacement. The per-logical-node binding is shared by legitimate aliases and does not rewrite the unrelated negative-control assignment merely because an IP matches.
+
+After evidence capture, cloud reads and durable dispatch intent, the coordinator rereads the queue and scheduler identity/address, isolation and reason immediately before termination. An unreadable or nonempty queue or a changed binding refuses dispatch. These are fresh dependent-decision observations, not an atomic transaction with Slurm and EC2. A previously terminated exact old ID still reconciles without addressing its successor.
+
+The new instance must register under the same assigned Slurm name with a different EC2 identity. A changed boot alone is not replacement. The fixed, hash-pinned SSM document initializes the new instance and reports its SSH public host key over the authenticated service response; the coordinator never uses blind `ssh-keyscan` or disables host checking. Fresh device allowlists, accounts, pinned materials, runtime initialization and checks `0`, `2`, `3`, `6` precede admission. Old device tokens and warning baselines are not reused.
+
+Runtime readiness is not workload verification. After either recovery or replacement, submit the existing verification job from a fresh allocation:
+
+```bash
+sbatch --wait /opt/aim344/device-recovery/13.verify-after-recovery.sbatch
+```
+
+Check 5 runs once from the allocation coordinator. Keep both correctness columns, every allocated node's per-device EFA deltas and the storage workload result. The verification script checks all allocated nodes, not just whichever rank's log is visible locally, and copies results to each allocated node with digest verification. A fresh replacement initializes the isolated 32 MiB fixture with step 0; that seed is not recovered model/optimizer state. No instructor hand-restoration or facilitator-arranged replacement is a session remedy.
+
+## Pre-session provisioning — separate authorization
+
+Provisioning must finish before participants receive access. It is not something `replace` silently deploys. The one authoritative measured composition is an **independent login coordinator outside the GPU group**, the reviewed environment-independent `aim344-early-imds` LT2 part with unchanged native/custom MIME, **per-node `ssm-install` fixed initialization**, literal `/usr/local/sbin/aim344-replacement-prolog`, and a root-only whole-node Slurm reservation through qualification. The early hook supplies the pre-access boundary; the late SSM service alone does not. Keep the protected peer and coordinator excluded from retirement and fixed-document initialization.
+
+Historical topology placed the coordinator on the other GPU node. The explicitly authorized pre-session login cutover and both-GPU LT1→LT2 roll superseded it. The earlier no-roll-only candidate did not establish first-boot access isolation and is not the current recipe. The generator's default `boothook` mode embeds node-specific initialization and is **not** the reviewed shared-LT part. Neither that default nor a late-SSM-only installation is a substitute for the composition here. Preserve/export evidence before any separately authorized rollout; a shared GPU-group LT change can replace both GPU nodes. Historical GO does not authorize another roll, and no group update is a participant recovery action.
+
+1. Record account, Region, scheduler version, target and protected IDs, Slurm names, partition, current AMI/LT version, scaling bounds, subnets and reservation. Record expected GPU/EFA counts independently of the device being tested. Retain the existing reservation and group minimum/maximum; no launch-before-terminate guarantee exists when all reserved slots are occupied.
+2. Install the existing participant control account/forced-key boundary with `install-participant-control.sh`. Its target setup text describes initial provisioning, not recovery. Confirm matching participant UID/GID on every allocated node; no sudo, docker/lxd group, root maintenance key or instance-profile credentials may be exposed to participants.
+3. Acquire the exact suite pin as described below. Archive the companion candidate and suite separately; re-archiving edited documentation changes the companion release hash and requires a newly reviewed manifest/document. Record all four private S3 object keys, SHA-256 hashes and version IDs when available. Mutable candidate names are not a release pin. No object/image availability or deployed hash is certified by local generation.
+4. Create a private manifest for `prepare-replacement.py`: `node`, `region`, `slurm_bin`, `participants` (list of `name`, numeric `uid`, `gid`), `protected_instance_ids`, `maintenance_public_key` (public ed25519 key only), `release_sha256` (companion archive hash), and `objects`. Object keys are `companion.tgz`, `healthcheck-pinned.tgz`, `aim344.sqsh`, `nccl-baseline.sqsh`; each value has `bucket`, `key`, `sha256`, optional `version_id`. Include only approved table accounts. No old GPU/EFA allowlist or private key goes into this manifest.
+5. Supply a site JSON with **`"provisioning_mode": "ssm-install"`**, `account`, `coordinator_instance_id`, `coordinator_role_id` (the unique `RoleId` returned by IAM GetRole, not a role name), `cluster_id`, `group_id`, `capacity_reservation_id`, `instance_type`, `subnet_ids`, `image_id`, `scaling_configuration` and `launch_template`. The latter two must exactly match PCS response shapes (`minInstanceCount`/`maxInstanceCount`, `id`/`version`). Generate files locally:
+
+   ```bash
+   python3 facilitator/prepare-replacement.py manifest.json site.json generated-replacement
    ```
 
-4. Run `sudo /usr/local/sbin/aim344-device-fault inspect` through the maintenance route. Preserve its output and confirmation tokens outside the target. A token names the instance, operation and GPU UUID or EFA BDF. A token for one operation does not authorize another.
-5. Give participants access to the root-owned helper through the facilitator's maintenance session. Do not grant a general root shell for device manipulation. The facilitator keeps reboot and scheduler-resume authority.
-6. Record mount sources, filesystem UUIDs, image hashes, Prolog configuration and telemetry state. Store the restore script on the root volume, outside a bind mount that disappears at boot. Verify the existing boot script preserves the staged volume.
+6. Review the generated fixed SSM document, coordinator IAM policy, object-read policy and disabled assignment fragment. This mode emits **no MIME/LT artifact**. The document has no free-form parameters. The coordinator grant is constrained to credentials issued to the protected coordinator, one PCS group and the fixed document; explicit denies protect coordinator/peer IDs. It contains no grant, PassRole, group-update or capacity-reservation-change action. The saved actual effective IAM calls passed their scoped allow/deny controls; organization SCPs were not enumerated. A new deployment still needs effective-boundary validation. Read-only DescribeInstances necessarily uses `Resource: "*"`.
+7. Use the separately reviewed shared early part, [early-boothook.sh](early-boothook.sh), unchanged from the measured LT2 component (SHA-256 `87e4dfef46eec5b108e2befff862e78cba7abce31ba3a42feab462db4e9f73a6`). It installs only environment-independent host/forwarding IPv4/IPv6 rules and `aim344-early-imds.service`, not a per-node manifest or initializer. Merge it with the site's existing custom shell and PCS native init/config/finalize MIME parts; the deployment-specific merged MIME is deliberately not distributed. Check combined size and read back actual user data, image, dependencies and hashes. Do not replace this part with the default node-specific generated boothook. Only separately authorized pre-session infrastructure may configure the unique literal `/usr/local/sbin/aim344-replacement-prolog`, after installing its reviewed wrapper and preserving/chaining existing health settings. A non-root account alone does not restrict IMDS; installed IPv6 rules alone do not qualify IPv6 denial.
+8. The generated assignment fragment is intentionally disabled. After separately authorized provisioning, read back the fixed document's actual version/hash and installed LT/group/Prolog/credential boundaries, then install the fragment as `replacement` in the trusted assignment and enable it. A local JSON hash is not the SSM service's document hash. No IAM grant or deployment occurs in the generator.
 
-Run checks with identifiers `0`, `2`, `3` and `6` on both hosts before the exercise. Run identifiers `1` and `4` exclusively before the session; record and stop the actual native service or container that owns telemetry, then restore its previous state afterward. Keep the raw DCGM tests and skipped coverage. The Level 4 command alone does not establish that EUD ran. Invoke Check 5 once from the allocation coordinator using `10.healthcheck-nccl.sh`, with the native-kernel staged image. Keep both correctness columns and EFA byte deltas.
+The measured fixed SSM document installs the pinned initializer and per-node manifest after native registration, then fetches and validates pinned objects, rejects unsafe archive entries, creates matching unprivileged accounts, discovers fresh GPU/EFA/management identities, installs narrow maintenance access and initializes runtime paths. Partial initialization is retryable on the same candidate. It does not depend on native lifecycle-agent support. No formatting of storage or arbitrary lost-original salvage is performed.
 
-## Run one fault
+The shared early boothook must run inside a cloud-init network-stage unit ordered before `sysinit.target`; inspect the actual AMI's units and boot journal. On the inspected PCS Ubuntu 24.04 image, SSH socket/service, cron and user sessions are after that target. Its trap is intended to hold the first boot on setup failure instead of returning an error that cloud-init could ignore. It also enables `aim344-early-imds.service` as an early required dependency of `sysinit.target` for subsequent boots. A held boot requires pre-session infrastructure repair, not participant access or a claim of readiness. Successful fresh boots and reboot persistence were measured, but the actual delayed/failing service test was a **later-boot installed-service `ExecStartPre` failure**, not a first-hook-held trial. First-hook failure/access/job denial remains a missing hardware gate; local Bash trap tests do not fill it. Different image ordering needs separate qualification.
 
-GPU removal uses an idle node. Active-removal trials on this stack left the removal helper pending and guest shutdown waiting for that process, including a trial with persistence disabled. Preserve those trials as diagnostic evidence; do not repeat the active GPU operation in the participant session.
+### Fixed initializer and admission in the measured composition
 
-For an idle GPU trial, end the allocation, record and pause the target's actual telemetry owner, and record the selected GPU's persistence mode before disabling it. Keep the prior mode on the root volume so recovery can restore it:
+The explicit `ssm-install` mode generates a parameterless SSM document that installs the pinned initializer, manifest, admission gate and persistent **late** `aim344-replacement-imds.service` itself. It emits no LT/user-data artifact and does not update the compute group; that does not make the overall measured setup no-roll. The independent early LT2 service remains necessary and is not overwritten by the late payload. The fixed document validates protected identities and exact scheduler binding before installation, serializes durable file installation, applies IPv4/IPv6 host/forwarding restrictions and enables the late service before subsequent slurmd starts. Four object hashes and authenticated SSM host-key response remain requirements. Read back the content-derived document's actual service version/hash before enabling.
 
-```bash
-sudo install -d -m 0755 /var/lib/aim344-device-recovery
-nvidia-smi -i "$GPU_UUID" --query-gpu=persistence_mode --format=csv,noheader,nounits \
-  | sudo tee /var/lib/aim344-device-recovery/selected-persistence-mode.txt
-sudo nvidia-smi -i "$GPU_UUID" --persistence-mode=0
-```
+This composition requires the unique literal cluster Prolog `/usr/local/sbin/aim344-replacement-prolog`, not the historical dispatcher and not a wildcard. Install the reviewed wrapper on the dedicated pair before configuring that Prolog; the protected GPU peer chains its existing health Prolog without receiving target initialization. The coordinator is on the independent login host. Preserve existing configuration and export state first. A fresh successor lacks this literal file until SSM installs it. Actual installed Slurm 25.05.9 missing-literal and present-but-unadmitted denials were observed; another deployment must requalify them before retirement. Do not accept a generic Prolog error as exercise-owned isolation.
 
-The root helper requires an empty target allocation, disabled persistence and no compute process on the selected GPU. Restore the saved persistence mode and telemetry state after recovery. Qualify this exact preparation with at least 3 consecutive idle recovery cycles before adopting it.
+Before retiring the old ID, the coordinator also creates and reads back a whole-node, root-only Slurm reservation named `aim344-replacement-<old-id>` with `Nodes=<assigned-node>`, `Duration=UNLIMITED`, and `Flags=STATIC_ALLOC`. It does not use MAINT, OVERLAP, IGNORE_JOBS, REPLACE or a node count that could substitute the peer. This scheduling reservation is distinct from the EC2 capacity reservation. Durable intent owns create retries; changed/missing confirmed reservations fail closed. It remains through bootstrap, health and scheduler resume, and is deleted only after a durable qualified binding and fresh identity/boot/queue checks. Failed deletion keeps participant/alias entry blocked; the same participant repeats `replace`. No instructor restoration is the remedy.
 
-For active EFA validation, use a dedicated job named `aim344-*` to run `workload.py device` through `torch-node.sh` on the pair. Set `AIM344_EFA_IFACE` to the allowlisted physical RDMA device. The workload logs progress after completed, correctness-checked collectives. Preserve two advancing progress records and that EFA's increasing counters before injection. Immediately before mutation, confirm that the same job is running and that its latest progress record is recent. Abort injection if progress stopped during preparation. Require at least 3 consecutive active EFA recovery cycles before adopting that operation.
+Those are input spellings, not readback values. Slurm 25.05.9 prints `STATIC` and converts unlimited duration to a finite 365-day interval (`Duration=365-00:00:00`). The controller fixes CLI timestamps to UTC, checks start against the durable create intent, persists the observed start/end, and rejects changed intervals or less than one hour remaining. This is not an everlasting scheduler barrier: expiration remains a limit, and the independently verified admission Prolog is still required. Whole-node readback must have matching `CoreCnt` and CPU TRES against the trusted scheduler's socket/core/thread/CPU topology, no partial-core `NodeName`/`CoreIDs` section, and no additional resource or access scope. Incomplete, duplicate, inconsistent or changed fields refuse on creation, retry and release. Every release retry synchronizes the complete binding file and its directory before attempting deletion; a visible rename after failed directory synchronization is not a durability receipt.
 
-For the idle EFA trial, reserve the pair before draining and keep that allocation idle during the unbind. After the mutation, invoke Check 5 once from its coordinator to observe communication with the remaining device. Preserve that result alongside checks 2 and 6, including a completed collective if the remaining path serves it. Cancel the held allocation before rebind. An active fault trial uses the workload allocation and preserves its failure or continued progress separately.
+The scoped audit observed actual whole-node STATIC reservation denial for ordinary and explicit unauthorized requests, missing/present-but-unadmitted Prolog failures, retention through registration/qualification and normal participant-driven release. The historical standalone reservation probe ended at a COMPLETING-state observation race, not a clean whole-script pass; later replacement records establish release. A new deployment must prove those gates afresh. Root/Slurm administrator bypass is outside the participant boundary. If a gate fails, retain isolation and stop retirement, not roll a group as a remedy. These scheduler observations do not close first-hook-held or IPv6 hardware gates.
 
-Drain only the verified target. Draining prevents new jobs; it does not stop the current allocation:
+Successors support one explicit storage layout: `/opt/aim344` is a root-owned directory on the root filesystem, with sufficient root-volume space for the pinned images and companion materials. Bootstrap refuses an overlaid staging mount and writes `staging_policy=root-directory` plus both image SHA-256 pins into the private maintenance configuration. Later GPU recovery validates the same source and ownership before runtime restoration; it does not bind `/opt/dlami/nvme/aim344` over those materials. Missing, changed or overlaid sources refuse recovery. Previously provisioned nodes without that policy retain the existing NVMe-bind contract and source/UUID checks; they are not silently migrated. Validate root-volume sizing and absence of conflicting staging mounts during pre-session provisioning.
 
-```bash
-scontrol update NodeName="$TARGET_NODE" State=DRAIN Reason=aim344-device-recovery
-```
+SSM forward-access grants additionally require `aws:ViaAWSService=true` and the exact coordinator `aws:userid` (`RoleId:instance-id`). They retain document/group/protected-ID restrictions, rather than admitting every instance sharing the role. Check that the role trust permits only the intended EC2 service, not principals able to forge that session name, and that other policies cannot bypass these boundaries. Direct calls still require the coordinator's `ec2:SourceInstanceARN`; no forward-access exception permits termination.
 
-The target helper rejects other instances, changed device identities, a management-interface target, another user's job, a job outside the `aim344-*` name scope, a supplied job identifier that is no longer present, an incorrect token, and a node without this drain reason. For idle GPU removal, use the saved exact token in the maintenance session:
+If a job reaches the admission Prolog before initialization, the gate reads the exact local/scheduler identity and drains with `AIM344-admission-<new-instance-id>` before returning failure. Slurm 25.05.9 preserves that existing drain; replacement may reconcile this specific reason, not a generic `Prolog error`, another instance's marker or administrator isolation. Existing isolation is never rewritten by the gate. The failed job must finish leaving the queue before `replace` continues; no automatic cancellation of another job is authorized.
 
-```bash
-sudo /usr/local/sbin/aim344-device-fault gpu-remove --confirm "$GPU_REMOVE_TOKEN"
-```
+Verify normal participant privilege negatives before the session: `sudo -n true`, reading coordinator configuration/private key, arbitrary root SSH/scp through the maintenance connection, and another table's key must fail. IMDS qualification requires root-positive controls alongside participant host/container denial, not merely an unreachable endpoint. Actual host/enroot IPv4 coverage passed for both users on both nodes; IPv6 and arbitrary Docker-forwarded traffic are not qualified. Latest saved IPv6 endpoint flags are enabled, but the subnet has no IPv6 CIDR/root route. Verify enroot shared parents, image paths, fixture ownership and the Prolog gate on both nodes. A missing `fi_info` on PATH, a private `/tmp/enroot`, mismatched UID or an invalid staging source is an environment failure, not device-fault evidence.
 
-For the independent active EFA round, after complete GPU recovery, use the active job identifier:
+The fixed initializer also installs `aim344-enroot-parents.service`, required before `sysinit.target` and after tmpfiles setup. This recreates checked root-owned shared enroot parents after reboot cleanup, before a participant can create them privately. Runtime restoration repeats the same descriptor/ownership checks. An existing participant-owned parent is refused, not relabelled or deleted; use participant replacement for that ambiguous runtime. Verify actual service ordering, reboot and both participant accounts before declaring the successor qualified.
+
+### Suite acquisition
+
+The companion branch is `riv2026/aim344-distribution`; its suite dependency is the separate `riv2026/aim344-healthcheck-release` branch at the exact `HEALTHCHECK_COMMIT` in `pins.env`. At authoring both are local review candidates, not published or merged releases. The following public route is conditional on publication and exact remote verification; if the commit cannot be fetched, stop rather than substitute main or an unlabelled patch. From the companion directory in a Git checkout:
 
 ```bash
-sudo /usr/local/sbin/aim344-device-fault efa-unbind --job "$FAULT_JOB_ID" --confirm "$EFA_UNBIND_TOKEN"
+set -euo pipefail
+source pins.env
+repo=$(git rev-parse --show-toplevel)
+git -C "$repo" fetch --no-tags https://github.com/awslabs/awsome-distributed-ai.git "$HEALTHCHECK_COMMIT"
+test "$(git -C "$repo" rev-parse FETCH_HEAD)" = "$HEALTHCHECK_COMMIT"
+git -C "$repo" cat-file -e "$HEALTHCHECK_COMMIT^{commit}"
+git -C "$repo" archive "$HEALTHCHECK_COMMIT" validation/gpu-cluster-healthcheck | gzip -n > healthcheck-pinned.tgz
 ```
 
-Record the helper result, application log, kernel journal, device enumeration and scheduler state. GPU removal can remain pending while existing collective contexts continue to execute. Record continued progress until cancellation separately from a spontaneous workload error, and compare PCI visibility with NVIDIA inventory. Run suite identifiers `0` and `3` for GPU diagnosis and identifiers `2` and `6` for EFA diagnosis through the maintenance route. A drained node cannot accept an ordinary diagnostic batch job. Keep a command that hangs as an incomplete check, with its external deadline and process state. A userspace timeout cannot guarantee termination of an uninterruptible kernel task.
+These commands populate objects/FETCH_HEAD without switching branches and create only the named archive. For local review before publication, replace the HTTPS source with an explicitly supplied path to the clean healthcheck-release worktree; the exact commit comparison is still required. This does not make a public-download claim. `prepare-login.sh` compares staged suite file contents and executable modes against this exact Git archive. Build/import steps remain separate pre-session work.
 
-## Recover and qualify reuse
+Create `companion.tgz` from the separately accepted companion commit with `git archive --format=tar --prefix=companion/ <companion-commit>:examples/use-cases/gpu-cluster-failure-patterns | gzip -n > companion.tgz`. Record the commit and both archive digests. Never use the entire original development branch as a release payload. The suite candidate retains measured production bytes but has different test content, so its archive hash is new. Mainline integration must coordinate the overlapping [PR #1221](https://github.com/awslabs/awsome-distributed-ai/pull/1221), especially its environment-override contract versus physical DMI-derived expectations. Feature-branch availability is not mainline merge.
 
-Stop the exact faulted job from the external controller. Preserve logs before reboot. For EFA, after the old allocation and processes have ended, try the allowlisted rebind:
+### Deployment-specific materials and protected peer
 
-```bash
-sudo /usr/local/sbin/aim344-device-fault efa-rebind --confirm "$EFA_REBIND_TOKEN"
-```
+Site manifests, merged MIME, fixed document/service hashes, object locations, instance/image/template identifiers and historical source/evidence mapping remain with the workshop owner, outside distribution. Generate and review new manifests and actual service hashes for the accepted candidate rather than reusing the old deployment's pins. The source package includes the environment-independent early hook but does not provision infrastructure or confer access to private image objects. Build images using the pinned Dockerfile or obtain explicitly approved digest-pinned images.
 
-A rebind restores device availability for new processes; it does not repair an existing communicator. Use the verified reboot route when the GPU removal or an incomplete EFA operation requires it:
+The measured protected peer retained older maintenance code with a deliberate DMI suite/verifier overlay. It was a workload peer, **not** a final-helper-equivalent replacement target. Do not describe the historical pair as a homogeneous final-helper deployment. Exact retained evidence remains unchanged outside this public candidate.
 
-```bash
-scontrol reboot reason=aim344-device-recovery "$TARGET_NODE"
-scontrol show node "$TARGET_NODE"
-```
+## Evidence, retries and qualification boundaries
 
-Request the reboot only after the target is drained and its allocation has ended. Use the basic `scontrol reboot` command shown above so the existing drain remains in place. Do not specify `nextstate=DOWN`, which triggers PCS replacement, or `nextstate=RESUME`, which clears the drain before qualification. Verify the observed scheduler state during qualification. Wait for a changed boot identifier on the same EC2 instance and a working maintenance route. Keep the node drained. Restore its existing staging mount without formatting storage, then restore the fixture from the root-volume copy:
+State, binding, dispatch intent and replacement health logs are private coordinator files under the existing state directory. File synchronization and directory synchronization precede dependent operations. A directory-sync failure can occur after rename; refusal is not proof that no file was renamed. Neither local fsync tests nor mock API acknowledgements establish survival of a physical crash.
 
-```bash
-sudo bash /var/lib/aim344-device-recovery/restore-runtime.sh ubuntu /opt/aim344
-```
+Participant captures remain append-only by round and attempt under `~/aim344-results/collected`. The output writer drops to the participant UID/GID and uses descriptor-relative operations. Runtime fixture handover retains the existing no-follow, same-filesystem protections. A symlink/socket left by a participant is not followed by root.
 
-The runtime helper creates the private 32 MiB tmpfs and its marker when absent. It creates `last.json` with step index 0 only when the record is absent, and preserves an existing valid record. This seed records a fixture step; it contains no model or optimizer state.
+The deadline sweep is the existing scheduled one-shot controller route, not a new management service. It does not perform replacements automatically; it keeps isolation after bounded ordinary-recovery attempts. The participant uses `replace`. Isolation is not a completed round.
 
-Restore the selected GPU's recorded persistence mode before returning it to service:
+Manual pre-session experiments must not write bare persistence words to the participant helper's `selected-persistence-mode.txt` or `native-dcgm-state.txt`: those paths contain operation-bound JSON. Store standalone experimental records in a separate evidence directory. The participant helper authorizes fresh capture only on a newly generated trusted operation; retries synchronize and reuse retained originals rather than recapturing.
 
-```bash
-prior=$(sudo cat /var/lib/aim344-device-recovery/selected-persistence-mode.txt)
-case "$prior" in Enabled) mode=1;; Disabled) mode=0;; *) exit 1;; esac
-sudo nvidia-smi -i "$GPU_UUID" --persistence-mode="$mode"
-```
+Historical active-GPU removal stalled guest shutdown. Active EFA unbind remained outstanding until its workload ended: the dedicated probe returned at t+171 s, 11 s after cancellation. These measurements explain why both participant starts are idle-only. They do not establish that every supported idle fault stalls. Historical replacement after EC2 reboot was not a trial of `scontrol reboot nextstate=DOWN`.
 
-Restore the prior telemetry owner, verify `slurmd` and the configured Prolog, and compare the image paths and device identities with the saved inventory. Re-run suite identifiers `0`, `2`, `3` and `6` while the node remains drained. Resume only after expected device counts, per-device connectivity and required runtime paths are restored, and the drain reason still belongs to this exercise. Review cumulative-counter warnings against the saved baseline; preserve their WARN status in the record:
+Earlier recovery-decision/implementation and executor-first reports remain historical evidence with the workshop owner. This runbook defines the current participant-remedy, WARN-acceptance and replacement-completion contract. Passing named reproductions supports those exercised inputs, not all subrequirements; imported TestCase executions are regression reruns, not newly authored tests.
 
-```bash
-scontrol show node "$TARGET_NODE"
-scontrol update NodeName="$TARGET_NODE" State=RESUME
-```
+## Primary mechanism references
 
-Take a fresh allocation. Invoke Check 5 once, verify correctness and per-device EFA traffic, and complete the storage workload using the recreated private fixture. A returned SSH/SSM session is only one recovery checkpoint. Keep elapsed time from mutation through complete reuse, including failed attempts and manual intervention.
+- [EC2 TerminateInstances](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_TerminateInstances.html): exact-ID idempotence, data loss, and `SkipOsShutdown`.
+- [PCS reboot FAQ](https://docs.aws.amazon.com/pcs/latest/userguide/slurm-reboot-faq.html): ordinary Slurm reboot retains the instance; `nextstate=DOWN` requests replacement after reboot.
+- [PCS instance discovery](https://docs.aws.amazon.com/pcs/latest/userguide/working-with_compute-instances.html): service-owned compute-group membership tag.
+- [PCS user data](https://docs.aws.amazon.com/pcs/latest/userguide/working-with_ec2-user-data.html) and [early boothook](https://docs.aws.amazon.com/pcs/latest/userguide/working-with_ec2-user-data_early-boot.html): MIME merging and early execution on every boot.
+- [SSM SendCommand](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_SendCommand.html) and [GetCommandInvocation](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetCommandInvocation.html): exact instance/document/version/hash and eventual consistency.
+- [IMDS restrictions](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-metadata-limiting-access.html): host firewall boundaries, not automatic protection from account privilege separation.
+- [SSM Run Command setup](https://docs.aws.amazon.com/systems-manager/latest/userguide/run-command-setting-up.html), [FAS](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_forward_access_sessions.html), and [IAM principal key values](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_variables.html): forward-service allowance and preserved exact EC2 role-session identity.
+- [Slurm 25.05.9 node manager](https://github.com/SchedMD/slurm/blob/slurm-25-05-9-1/src/slurmctld/node_mgr.c): `_drain_node` and `validate_node_specs` preserve an already-drained node on Prolog failure. This is upstream source matched to the historical binary version, not a freshly measured deployed binary.
 
-Keep the suite's severity unchanged. `ISOLATE` from a known administratively removed device means the node must remain out of service until recovered and qualified; it does not by itself prove that an instance replacement is required. For an unexplained fault, retain the raw evidence and use the platform's established repair or replacement process.
+PCS owns relaunch under unchanged bounds. Reserved-slot availability, successful node-name registration, bootstrap, health and a fresh participant job must be observed on the dedicated pair before hardware readiness is claimed. There is no cloud or publication approval in this document.

@@ -36,7 +36,7 @@ parser.add_argument('action', choices=['inspect', 'gpu-remove', 'efa-unbind', 'e
 parser.add_argument('--job', type=int, help='The one dedicated AIM344 job allowed on this node')
 parser.add_argument('--confirm', help='Exact token printed by inspect for this action')
 args = parser.parse_args()
-require(os.geteuid() == 0, 'Use the root-owned installed helper through the facilitator.')
+require(os.geteuid() == 0, 'Use the participant recovery command through the trusted maintenance route.')
 config_path = Path('/etc/aim344-device-fault.json')
 st = config_path.lstat()
 require(stat.S_ISREG(st.st_mode) and st.st_uid == 0 and st.st_mode & 0o077 == 0,
@@ -100,9 +100,22 @@ node = command(str(slurm / 'scontrol'), 'show', 'node', cfg['slurm_node'], '-o')
 require(re.search(r'\bState=\S*DRAIN', node), 'Drain the target node before any device operation.')
 require('Reason=aim344-device-recovery' in node, 'The drain reason is not this AIM344 exercise.')
 jobs = command(str(slurm / 'squeue'), '-h', '-w', cfg['slurm_node'], '-o', '%i|%u|%j').splitlines()
+# Which accounts may hold the one dedicated job. A single fixed name refused the
+# authenticated participant's own allocation once the exercise stopped running as
+# `ubuntu`: this node's config said participant_user=ubuntu while the assignment
+# authenticated aim344-t1, so an efa-unbind naming that job was rejected as
+# 'An unapproved job is using the target node'. A list keeps the check while
+# letting the provisioned table identities pass. Both forms are accepted so an
+# older single-name configuration behaves exactly as before.
+allowed_users = cfg.get('participant_users', cfg['participant_user'])
+if isinstance(allowed_users, str):
+    allowed_users = [allowed_users]
+require(isinstance(allowed_users, list) and allowed_users
+        and all(re.fullmatch(r'[a-z][a-z0-9-]{0,31}', u) for u in allowed_users),
+        'Invalid provisioned participant account list.')
 for job in jobs:
     job_id, user, name = job.split('|')
-    require(args.job is not None and job_id == str(args.job) and user == cfg['participant_user']
+    require(args.job is not None and job_id == str(args.job) and user in allowed_users
             and name.startswith('aim344-'), 'An unapproved job is using the target node.')
 if args.job is not None:
     require(any(job.split('|')[0] == str(args.job) for job in jobs),
