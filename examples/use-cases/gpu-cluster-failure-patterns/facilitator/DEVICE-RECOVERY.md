@@ -100,12 +100,26 @@ repo=$(git rev-parse --show-toplevel)
 git -C "$repo" fetch --no-tags https://github.com/awslabs/awsome-distributed-ai.git "$HEALTHCHECK_COMMIT"
 test "$(git -C "$repo" rev-parse FETCH_HEAD)" = "$HEALTHCHECK_COMMIT"
 git -C "$repo" cat-file -e "$HEALTHCHECK_COMMIT^{commit}"
-git -C "$repo" archive "$HEALTHCHECK_COMMIT" validation/gpu-cluster-healthcheck | gzip -n > healthcheck-pinned.tgz
+git -C "$repo" archive "$HEALTHCHECK_COMMIT" validation/gpu-cluster-healthcheck | gzip -n -6 > healthcheck-pinned.tgz
 ```
 
 These commands populate objects/FETCH_HEAD without switching branches and create only the named archive. For local review before publication, replace the HTTPS source with an explicitly supplied path to the clean healthcheck-release worktree; the exact commit comparison is still required. This does not make a public-download claim. `prepare-login.sh` compares staged suite file contents and executable modes against this exact Git archive. Build/import steps remain separate pre-session work.
 
-Create `companion.tgz` from the separately accepted companion commit with `git archive --format=tar --prefix=companion/ <companion-commit>:examples/use-cases/gpu-cluster-failure-patterns | gzip -n > companion.tgz`. Record the commit and both archive digests. Never use the entire original development branch as a release payload. The suite candidate retains measured production bytes but has different test content, so its archive hash is new. Mainline integration must coordinate the overlapping [PR #1221](https://github.com/awslabs/awsome-distributed-ai/pull/1221), especially its environment-override contract versus physical DMI-derived expectations. Feature-branch availability is not mainline merge.
+Create `companion.tgz` from the separately accepted companion commit. Set `COMPANION_COMMIT` to its full accepted commit SHA before running this block; do not infer acceptance from the current branch tip. Run from any directory inside that Git checkout (including the companion directory). Git must support `archive --mtime`. The archive is written to the caller's current directory:
+
+```bash
+set -euo pipefail
+: "${COMPANION_COMMIT:?Set the full accepted companion commit SHA}"
+repo=$(git rev-parse --show-toplevel)
+test "$(git -C "$repo" rev-parse "$COMPANION_COMMIT^{commit}")" = "$COMPANION_COMMIT"
+epoch=$(git -C "$repo" show -s --format=%ct "$COMPANION_COMMIT")
+git -C "$repo" -c tar.umask=0022 archive --format=tar --prefix=companion/ \
+  --mtime="@$epoch" "$COMPANION_COMMIT:examples/use-cases/gpu-cluster-failure-patterns" \
+  | gzip -n -6 > companion.tgz
+sha256sum companion.tgz
+```
+
+The explicit repository root prevents subdirectory filtering; the commit timestamp prevents tree-object archives from using generation time. The fixed tar mode mask and gzip level/header settings define the release recipe. Record Git/gzip versions and the commit alongside both archive digests. Verify the complete companion file set and modes against the accepted tree before approval, not just command exit status. Retain the reviewed archive bytes as the release artifact; if regeneration differs, stop and obtain review of the new bytes rather than reusing a prior hash. Never use the entire original development branch as a release payload. The suite candidate retains measured runtime bytes but has different test content and the README's corrected public image-recipe link, so its archive hash is new. Mainline integration must coordinate the overlapping [PR #1221](https://github.com/awslabs/awsome-distributed-ai/pull/1221), especially its environment-override contract versus physical DMI-derived expectations. Feature-branch availability is not mainline merge.
 
 ### Deployment-specific materials and protected peer
 
