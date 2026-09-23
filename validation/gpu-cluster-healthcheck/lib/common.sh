@@ -202,14 +202,23 @@ if STATUS_RANK.get(previous.get("status", ""), 0) > STATUS_RANK.get(record["stat
 if SEVERITY_RANK.get(previous.get("severity", ""), 0) > SEVERITY_RANK.get(record["severity"], 0):
     merged["severity"] = previous["severity"]
 
-# Keep the evidence from every emission. Details already use "; " internally,
+# parse-dcgm-results.py seeds overall_status/overall_severity mirroring its
+# status/severity. Once the merged status/severity are chosen, drop those
+# mirror fields so the record cannot report a passing overall_* beside a
+# failing status that a consumer keying on overall_* would misread.
+merged.pop("overall_status", None)
+merged.pop("overall_severity", None)
+
+# Keep the evidence from every emission. Split on the accumulator delimiter so
+# a distinct finding is not dropped just for being a substring of the running
+# text, and each finding is recorded at most once. Details use "; " internally,
 # so separate accumulated findings with " | ".
 prev_details = previous.get("details", "") or ""
 new_details = record["details"]
-if new_details and new_details not in prev_details:
-    merged["details"] = (prev_details + " | " + new_details) if prev_details else new_details
-else:
-    merged["details"] = prev_details or new_details
+seen = [seg for seg in prev_details.split(" | ") if seg]
+if new_details and new_details not in seen:
+    seen.append(new_details)
+merged["details"] = " | ".join(seen)
 
 # Atomic write: write to tmp then rename to avoid partial files.
 tmp_file = os.path.join(
