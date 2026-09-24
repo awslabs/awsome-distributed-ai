@@ -189,19 +189,71 @@ ENDJSON
         if efa_stats=$(rdma -p statistic show 2>/dev/null); then
             echo "${efa_stats}" > "${RESULTS_DIR}/efa-statistics.txt"
 
-            local rx_drops
-            rx_drops=$(echo "${efa_stats}" | grep -oP 'rx_drops\s+\K[0-9]+' | awk '{sum+=$1} END {print sum+0}') || rx_drops=0
-            local retrans_timeouts
-            retrans_timeouts=$(echo "${efa_stats}" | grep -oP 'retrans_timeout_events\s+\K[0-9]+' | awk '{sum+=$1} END {print sum+0}') || retrans_timeouts=0
+            # This is one post-loopback snapshot, not a before/after pair.
+            # Keep the all-link scope and absolute WARNs; neither a zero nor an
+            # unchanged value proves driver-epoch continuity or fault attribution.
+            log_info "EFA statistics: cumulative absolute totals over all RDMA links returned; not per-domain or loopback/fault deltas"
+            local counter_totals rx_drops retrans_timeouts
+            counter_totals=$(python3 - "${RESULTS_DIR}/efa-statistics.txt" <<'PY'
+import re
+import sys
 
-            if [[ "${rx_drops}" -gt 0 ]]; then
+text = open(sys.argv[1]).read()
+required = ("rx_drops", "retrans_timeout_events")
+records = {}
+current = None
+valid = True
+for line in text.splitlines():
+    tokens = line.split()
+    if not tokens:
+        continue
+    # Every link token at the start of a line is a boundary, even a bare
+    # trailing 'link'. Never borrow its identity from a continuation line.
+    if tokens[0] == "link":
+        current = None
+        if (len(tokens) < 2 or
+                not re.fullmatch(r"[^\s/]+/[1-9][0-9]*", tokens[1]) or
+                tokens[1] in records):
+            valid = False
+            continue
+        current = {}
+        records[tokens[1]] = current
+        tokens = tokens[2:]
+    # rdma statistic show emits counter-name/u64 pairs on each line.
+    # Consume the entire line: stray headers/fragments must not disappear
+    # behind valid monitored fields. Multiline counter continuations are OK.
+    if current is None or len(tokens) % 2:
+        valid = False
+        continue
+    for name, value in zip(tokens[::2], tokens[1::2]):
+        if (name == "link" or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or
+                name in current or not re.fullmatch(r"[0-9]+", value) or
+                len(value) > 20 or int(value) > 18446744073709551615):
+            valid = False
+            continue
+        current[name] = int(value)
+valid = valid and bool(records) and all(
+    all(counter in record for counter in required) for record in records.values())
+for counter in required:
+    # Incomplete snapshots have no qualified totals, including partial sums.
+    # Python integers preserve u64 values and sums without shell overflow.
+    print(sum(record[counter] for record in records.values()) if valid else "unknown")
+PY
+            )
+            read -r rx_drops retrans_timeouts <<< "${counter_totals//$'\n'/ }"
+
+            if [[ "${rx_drops}" != "unknown" && "${rx_drops}" != "0" ]]; then
                 check_warn "${CHECK_NAME}" "EFA rx_drops detected (${rx_drops}) -- possible network issues"
             fi
-            if [[ "${retrans_timeouts}" -gt 0 ]]; then
+            if [[ "${retrans_timeouts}" != "unknown" && "${retrans_timeouts}" != "0" ]]; then
                 check_warn "${CHECK_NAME}" "EFA retransmission timeouts detected (${retrans_timeouts})"
             fi
-            if [[ "${rx_drops}" -eq 0 && "${retrans_timeouts}" -eq 0 ]]; then
-                log_verbose "EFA statistics clean -- no drops or retransmissions"
+            if [[ "${rx_drops}" == "unknown" || "${retrans_timeouts}" == "unknown" ]]; then
+                check_warn "${CHECK_NAME}" "EFA statistics incomplete or malformed: rx_drops=${rx_drops}, retrans_timeout_events=${retrans_timeouts}; absolute totals unknown, not zero"
+            elif [[ "${rx_drops}" == "0" && "${retrans_timeouts}" == "0" ]]; then
+                # Preserve the existing controller's observation marker, scoped
+                # explicitly to these two absolute counters (not all retransmits).
+                log_verbose "EFA statistics clean -- no drops or retransmissions (observed cumulative rx_drops=0 and retrans_timeout_events=0 across returned RDMA links; no delta or epoch continuity established)"
             fi
         else
             log_verbose "rdma statistic show failed -- EFA statistics skipped"

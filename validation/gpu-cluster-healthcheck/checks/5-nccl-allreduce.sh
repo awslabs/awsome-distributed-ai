@@ -13,13 +13,11 @@ source "${SCRIPT_DIR}/../lib/common.sh"
 
 CHECK_NAME="5-nccl-allreduce"
 # NCCL_CONTAINER is consumed by `srun --container-image=...` (Pyxis/Enroot).
-# Older Pyxis releases (< v0.20) do not auto-detect non-Docker-Hub registries
-# from a bare image reference -- they route the pull through `registry-1.docker.io`
-# and 401 on private/non-DockerHub images such as `public.ecr.aws/...`. Setting
-# the explicit `docker://` scheme keeps the default working across all Pyxis
-# versions. Newer Pyxis treats `docker://` as a no-op, so this is a strict
-# improvement. The K8s code path does not consume this variable.
-NCCL_CONTAINER="${NCCL_CONTAINER:-docker://public.ecr.aws/hpc-cloud/nccl-tests:latest}"
+# Enroot separates the registry from the image path with '#'. Callers may
+# supply a staged .sqsh, including a native SM120 build for G7.
+NCCL_CONTAINER="${NCCL_CONTAINER:-docker://public.ecr.aws#hpc-cloud/nccl-tests:cuda13.0.2-efa1.48.0-ofiv1.19.0-ncclv2.30.4-1-testsv2.18.3}"
+# NCCL_TESTS_BIN overrides the executable in either the container or host.
+NCCL_MPI="${NCCL_MPI:-pmix}"
 NCCL_TIMEOUT="${NCCL_TIMEOUT:-1800}"  # 30-minute timeout
 NCCL_ISOLATION_TESTS="${NCCL_ISOLATION_TESTS:-0}"
 NCCL_ISOLATION_TIMEOUT="${NCCL_ISOLATION_TIMEOUT:-600}"  # 10-minute timeout per isolation sub-test
@@ -62,11 +60,29 @@ run_check() {
         return 0
     fi
 
-    local gpus_per_node="${EXPECTED_GPU_COUNT:-8}"
+    local gpus_per_node="${EXPECTED_GPU_COUNT:-0}"
+    if [[ ! "${gpus_per_node}" =~ ^[1-9][0-9]*$ ]]; then
+        check_fail "${CHECK_NAME}" \
+            "No positive GPU count for ${INSTANCE_TYPE}; add a verified instance profile before NCCL validation" "RESET"
+        return 1
+    fi
+
+    local use_container=0
+    local nccl_binary="${NCCL_TESTS_BIN:-all_reduce_perf}"
+    # Consume the full help output: grep -q can SIGPIPE srun under pipefail.
+    if srun --help 2>&1 | grep "container-image" > /dev/null; then
+        use_container=1
+        # The suite's NCCL image installs this binary outside PATH.
+        nccl_binary="${NCCL_TESTS_BIN:-/opt/nccl-tests/build/all_reduce_perf}"
+    fi
+
+    # Override inherited SLURM_NTASKS: one process uses all GPUs on each node.
+    local -a launch_args=(--nodes="${num_nodes}" --ntasks="${num_nodes}"
+        --ntasks-per-node=1 --mpi="${NCCL_MPI}" --cpu-bind=none)
 
     if [[ "${DRY_RUN}" == "1" ]]; then
-        echo -e "${YELLOW}[DRY-RUN]${NC} srun --ntasks-per-node=1 --container-image=${NCCL_CONTAINER} \\" >&2
-        echo -e "${YELLOW}[DRY-RUN]${NC}   all_reduce_perf -b 8 -e 128M -f 2 -g ${gpus_per_node}" >&2
+        echo -e "${YELLOW}[DRY-RUN]${NC} srun ${launch_args[*]} (container=${use_container}, image=${NCCL_CONTAINER})" >&2
+        echo -e "${YELLOW}[DRY-RUN]${NC}   ${nccl_binary} -b 8 -e 128M -f 2 -g ${gpus_per_node}" >&2
         check_pass "${CHECK_NAME}" "Dry-run: NCCL all_reduce skipped"
         return 0
     fi
@@ -89,48 +105,53 @@ run_check() {
             p6-b200.48xlarge)  nvlink_only_threshold=600 ;;
         esac
 
-        # NVLink-only test (always runs, single-node per-process)
-        log_info "Running NVLink-only isolation test"
-        local nvlink_test_output=""
-        local nvlink_test_exit=0
+        # One MPI process per node; a unique color per process keeps NCCL node-local.
+        # nccl-tests v2.18.3 checks SPLIT_MASK before SPLIT and splits MPI_COMM_WORLD.
+        if [[ "${NVLINK_EXPECTED}" == "true" ]]; then
+            log_info "Running NVLink-only isolation test"
+            local nvlink_test_output=""
+            local nvlink_test_exit=0
 
-        if srun --help 2>&1 | grep -q "container-image"; then
-            nvlink_test_output=$(NCCL_P2P_LEVEL=NVL NCCL_NET=Socket \
-                timeout "${NCCL_ISOLATION_TIMEOUT}" \
-                srun --ntasks-per-node=1 \
-                     --container-image="${NCCL_CONTAINER}" \
-                     all_reduce_perf -g "${gpus_per_node}" -b 256M -e 256M \
-                2>&1) || nvlink_test_exit=$?
-        elif command -v all_reduce_perf > /dev/null 2>&1; then
-            nvlink_test_output=$(NCCL_P2P_LEVEL=NVL NCCL_NET=Socket \
-                timeout "${NCCL_ISOLATION_TIMEOUT}" \
-                srun --ntasks-per-node=1 \
-                     all_reduce_perf -g "${gpus_per_node}" -b 256M -e 256M \
-                2>&1) || nvlink_test_exit=$?
-        fi
+            if [[ "${use_container}" == "1" ]]; then
+                nvlink_test_output=$(timeout "${NCCL_ISOLATION_TIMEOUT}" \
+                    srun "${launch_args[@]}" \
+                         --container-image="${NCCL_CONTAINER}" \
+                         env NCCL_TESTS_SPLIT_MASK=0xffffffff NCCL_P2P_LEVEL=NVL NCCL_NET=Socket \
+                         "${nccl_binary}" -g "${gpus_per_node}" -b 256M -e 256M \
+                    2>&1) || nvlink_test_exit=$?
+            elif command -v "${nccl_binary}" > /dev/null 2>&1; then
+                nvlink_test_output=$(timeout "${NCCL_ISOLATION_TIMEOUT}" \
+                    srun "${launch_args[@]}" \
+                         env NCCL_TESTS_SPLIT_MASK=0xffffffff NCCL_P2P_LEVEL=NVL NCCL_NET=Socket \
+                         "${nccl_binary}" -g "${gpus_per_node}" -b 256M -e 256M \
+                    2>&1) || nvlink_test_exit=$?
+            fi
 
-        if [[ ${nvlink_test_exit} -eq 124 ]]; then
-            log_warn "NVLink-only isolation test timed out after ${NCCL_ISOLATION_TIMEOUT}s -- proceeding to full test"
-        elif [[ ${nvlink_test_exit} -ne 0 ]]; then
-            log_warn "NVLink-only isolation test failed (exit ${nvlink_test_exit}) -- proceeding to full test"
-        fi
+            if [[ ${nvlink_test_exit} -eq 124 ]]; then
+                log_warn "NVLink-only isolation test timed out after ${NCCL_ISOLATION_TIMEOUT}s -- proceeding to full test"
+            elif [[ ${nvlink_test_exit} -ne 0 ]]; then
+                log_warn "NVLink-only isolation test failed (exit ${nvlink_test_exit}) -- proceeding to full test"
+            fi
 
-        if [[ -n "${nvlink_test_output}" ]]; then
-            echo "${nvlink_test_output}" > "${RESULTS_DIR}/nccl-nvlink-only.txt"
-            local nvlink_busbw
-            nvlink_busbw=$(echo "${nvlink_test_output}" | grep -E "^\s+[0-9]" | awk '{print $(NF-1)}' \
-                | sort -n | tail -1 || echo "0")
+            if [[ -n "${nvlink_test_output}" ]]; then
+                echo "${nvlink_test_output}" > "${RESULTS_DIR}/nccl-nvlink-only.txt"
+                local nvlink_busbw
+                nvlink_busbw=$(echo "${nvlink_test_output}" | grep -E "^\s+[0-9]" | awk '{print $(NF-1)}' \
+                    | sort -n | tail -1 || echo "0")
 
-            if [[ "${nvlink_only_threshold}" -gt 0 ]]; then
-                local nvlink_bw_int
-                nvlink_bw_int=$(echo "${nvlink_busbw}" | awk '{printf "%d", $1}')
-                if [[ "${nvlink_bw_int}" -lt "${nvlink_only_threshold}" ]]; then
-                    check_warn "${CHECK_NAME}" \
-                        "NVLink-only bandwidth ${nvlink_busbw} GB/s below expected ${nvlink_only_threshold} GB/s"
-                else
-                    log_verbose "NVLink-only bandwidth ${nvlink_busbw} GB/s OK (threshold: ${nvlink_only_threshold} GB/s)"
+                if [[ "${nvlink_only_threshold}" -gt 0 ]]; then
+                    local nvlink_bw_int
+                    nvlink_bw_int=$(echo "${nvlink_busbw}" | awk '{printf "%d", $1}')
+                    if [[ "${nvlink_bw_int}" -lt "${nvlink_only_threshold}" ]]; then
+                        check_warn "${CHECK_NAME}" \
+                            "NVLink-only bandwidth ${nvlink_busbw} GB/s below expected ${nvlink_only_threshold} GB/s"
+                    else
+                        log_verbose "NVLink-only bandwidth ${nvlink_busbw} GB/s OK (threshold: ${nvlink_only_threshold} GB/s)"
+                    fi
                 fi
             fi
+        else
+            log_info "Skipping NVLink-only isolation test: ${INSTANCE_TYPE} profile has no NVLink"
         fi
 
         # EFA-only test (only when >= 2 nodes)
@@ -139,18 +160,18 @@ run_check() {
             local efa_test_output=""
             local efa_test_exit=0
 
-            if srun --help 2>&1 | grep -q "container-image"; then
+            if [[ "${use_container}" == "1" ]]; then
                 efa_test_output=$(NCCL_P2P_DISABLE=1 NCCL_SHM_DISABLE=1 NCCL_NET='AWS Libfabric' \
                     timeout "${NCCL_ISOLATION_TIMEOUT}" \
-                    srun --ntasks-per-node=1 \
+                    srun "${launch_args[@]}" \
                          --container-image="${NCCL_CONTAINER}" \
-                         all_reduce_perf -g "${gpus_per_node}" -b 256M -e 256M \
+                         "${nccl_binary}" -g "${gpus_per_node}" -b 256M -e 256M \
                     2>&1) || efa_test_exit=$?
-            elif command -v all_reduce_perf > /dev/null 2>&1; then
+            elif command -v "${nccl_binary}" > /dev/null 2>&1; then
                 efa_test_output=$(NCCL_P2P_DISABLE=1 NCCL_SHM_DISABLE=1 NCCL_NET='AWS Libfabric' \
                     timeout "${NCCL_ISOLATION_TIMEOUT}" \
-                    srun --ntasks-per-node=1 \
-                         all_reduce_perf -g "${gpus_per_node}" -b 256M -e 256M \
+                    srun "${launch_args[@]}" \
+                         "${nccl_binary}" -g "${gpus_per_node}" -b 256M -e 256M \
                     2>&1) || efa_test_exit=$?
             fi
 
@@ -192,18 +213,18 @@ run_check() {
     local nccl_exit=0
 
     # Try Pyxis/Enroot first, fall back to direct execution
-    if srun --help 2>&1 | grep -q "container-image"; then
+    if [[ "${use_container}" == "1" ]]; then
         log_info "Using Pyxis/Enroot container runtime"
         nccl_output=$(run_with_timeout "${NCCL_TIMEOUT}" \
-            srun --ntasks-per-node=1 \
+            srun "${launch_args[@]}" \
                  --container-image="${NCCL_CONTAINER}" \
-                 all_reduce_perf -b 8 -e 128M -f 2 -g "${gpus_per_node}" \
+                 "${nccl_binary}" -b 8 -e 128M -f 2 -g "${gpus_per_node}" \
             2>&1) || nccl_exit=$?
-    elif command -v all_reduce_perf > /dev/null 2>&1; then
+    elif command -v "${nccl_binary}" > /dev/null 2>&1; then
         log_info "Using locally installed NCCL tests"
         nccl_output=$(run_with_timeout "${NCCL_TIMEOUT}" \
-            srun --ntasks-per-node=1 \
-                 all_reduce_perf -b 8 -e 128M -f 2 -g "${gpus_per_node}" \
+            srun "${launch_args[@]}" \
+                 "${nccl_binary}" -b 8 -e 128M -f 2 -g "${gpus_per_node}" \
             2>&1) || nccl_exit=$?
     else
         check_fail "${CHECK_NAME}" \
@@ -233,17 +254,74 @@ run_check() {
     fi
 
     # Verify EFA provider was selected
-    if ! echo "${nccl_output}" | grep -qi "Selected Provider is efa\|Using network EFA"; then
+    if ! grep -Eqi "(Selected Provider is efa|Using network EFA)([^[:alnum:]_-]|$)" <<< "${nccl_output}"; then
         check_warn "${CHECK_NAME}" \
             "EFA provider not confirmed in NCCL output -- performance may be degraded"
     fi
 
-    # Extract maximum bus bandwidth from results.
-    # NCCL output format: ... algbw  busbw  #wrong  time  algbw  busbw  #wrong
-    # $(NF-1) gets the last busbw column (second-to-last field, before #wrong).
-    local max_busbw
-    max_busbw=$(echo "${nccl_output}" | grep -E "^\s+[0-9]" | awk '{print $(NF-1)}' \
-        | sort -n | tail -1 || echo "0")
+    # Validate the default nccl-tests all_reduce table before accepting exit 0.
+    # Columns: size count type redop root time algbw busbw #wrong time algbw busbw #wrong.
+    # Missing/disabled correctness, malformed rows, or missing completion are not PASS.
+    local max_busbw parse_exit=0
+    max_busbw=$(awk '
+        function number(value) {
+            # Lexical validity alone permits overflow (e.g. 1e9999).
+            # Formatting a converted finite, nonnegative value starts with a digit;
+            # awk infinity/NaN spellings do not. Keep nccl-tests scientific notation.
+            return value ~ /^[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$/ &&
+                sprintf("%.17g", value + 0) ~ /^[0-9]/
+        }
+        function integer(value) {
+            return value ~ /^[0-9]+$/ && number(value)
+        }
+        # nccl-tests writeResultHeader/writeResultFooter delimit the table.
+        # Do not infer row membership from fields that may themselves be damaged.
+        $1 == "#" && $2 == "size" {
+            if (NF != 14 || $3 != "count" || $4 != "type" || $5 != "redop" ||
+                $6 != "root" || $7 != "time" || $8 != "algbw" || $9 != "busbw" ||
+                $10 != "#wrong" || $11 != "time" || $12 != "algbw" ||
+                $13 != "busbw" || $14 != "#wrong") invalid = 1
+            headers++; in_table = 1
+            next
+        }
+        /Out of bounds values/ {
+            if (!in_table || NF != 8 || $1 != "#" || $2 != "Out" || $3 != "of" ||
+                $4 != "bounds" || $5 != "values" || $6 != ":" ||
+                !integer($7) || $8 != "OK") invalid = 1
+            if (integer($7) && $7 != 0) wrong = 1
+            summaries++; in_table = 0
+            next
+        }
+        # Units, comments and blank lines are not results. Only anchored NCCL
+        # diagnostic prefixes are exempt; a result containing INFO is still a row.
+        /^[[:space:]]*#/ || NF == 0 { next }
+        /^[[:space:]]*([^[:space:]]+:[0-9]+:[0-9]+[[:space:]]+\[[0-9]+\][[:space:]]+)?NCCL[[:space:]]+(INFO|WARN|TRACE|VERSION)([[:space:]]|$)/ { next }
+        in_table {
+            if (NF != 13 || !integer($1) || !integer($2) ||
+                $3 != "float" || $4 != "sum" || $5 != "-1") {
+                invalid = 1; next
+            }
+            for (i = 6; i <= 12; i++) {
+                if (i != 9 && !number($i)) invalid = 1
+            }
+            if (!integer($9) || !integer($13)) invalid = 1
+            else if ($9 != 0 || $13 != 0) wrong = 1
+            rows++
+            if ($12 > max_bw) max_bw = $12
+        }
+        END {
+            if (wrong) exit 2
+            if (invalid || in_table || !headers || !rows || !summaries) exit 1
+            print max_bw + 0
+        }
+    ' "${RESULTS_DIR}/nccl-allreduce-raw.txt") || parse_exit=$?
+    if [[ ${parse_exit} -ne 0 ]]; then
+        local parse_severity="RESET"
+        [[ ${parse_exit} -eq 2 ]] && parse_severity="ISOLATE"
+        check_fail "${CHECK_NAME}" \
+            "NCCL correctness validation failed: missing, malformed, or nonzero #wrong / Out of bounds results (see raw output)" "${parse_severity}"
+        return 1
+    fi
 
     log_info "Maximum bus bandwidth: ${max_busbw} GB/s"
 
