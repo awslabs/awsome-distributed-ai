@@ -42,7 +42,7 @@ Metadata:
           - OnDemandPlacementGroupName
           - OnDemandCapacityReservationId
       - Label:
-          default: "4. GPU Compute Node Group - P5/P6 Series (Optional)"
+          default: "4. GPU Compute Node Group - P5/P6/G7 Series (Optional)"
         Parameters:
           - DeployPseriesCNG
           - PseriesInstanceType
@@ -141,7 +141,7 @@ Metadata:
       OnDemandPlacementGroupName:
         default: "Existing placement group name (empty = auto-create when EFA on)"
       DeployPseriesCNG:
-        default: "Deploy GPU (P5/P6) queue"
+        default: "Deploy GPU (P5/P6/G7) queue"
       PseriesInstanceType:
         default: "GPU instance type"
       PseriesMinCount:
@@ -535,7 +535,7 @@ Parameters:
   # P-series Compute Node Group
   DeployPseriesCNG:
     Type: String
-    Description: Deploy P-series (P5/P6) compute node group
+    Description: Deploy GPU (P5/P6/G7) compute node group
     Default: 'false'
     AllowedValues:
       - 'true'
@@ -558,6 +558,7 @@ Parameters:
       template AND interface count are selected automatically from this value:
       p5* use add-cng-p5.yaml (p5/p5e = 32 NICs, p5en = 16), p6-b200.48xlarge uses
       add-cng-p6-b200.yaml (8 NICs), p6-b300.48xlarge uses add-cng-p6-b300.yaml (17 NICs).
+      g7.48xlarge uses add-cng.yaml with two EFA interfaces.
     Default: "p5.48xlarge"
     AllowedValues:
       - p5.48xlarge
@@ -565,6 +566,7 @@ Parameters:
       - p5en.48xlarge
       - p6-b200.48xlarge
       - p6-b300.48xlarge
+      - g7.48xlarge
 
   PseriesMaxCount:
     Type: Number
@@ -635,6 +637,14 @@ Parameters:
 # time with a clear message, instead of letting it fail deep inside the nested
 # prerequisites stack as an opaque CreateFileSystem error.
 Rules:
+  G7ReservationType:
+    RuleCondition: !And
+      - !Equals [!Ref DeployPseriesCNG, 'true']
+      - !Equals [!Ref PseriesInstanceType, g7.48xlarge]
+      - !Not [!Equals [!Ref CapacityReservationId, ""]]
+    Assertions:
+      - Assert: !Equals [!Ref CapacityReservationType, targeted-odcr]
+        AssertDescription: G7 reservation IDs require CapacityReservationType=targeted-odcr.
   LustrePersistent1Throughput:
     RuleCondition: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_1']
     Assertions:
@@ -689,17 +699,21 @@ Conditions:
   MonitoringEnabled: !Not [!Equals [!Ref MonitoringStack, 'none']]
   # Select the right multi-NIC EFA template from the P-series instance type.
   # p6-b200/p6-b300 have different network-card counts than P5, so each family
-  # gets its own nested stack; anything else falls back to the P5 template.
+  # gets its own nested stack; G7 uses the existing two-EFA generic template.
   PseriesIsP6B200: !And
     - !Condition DeployPseriesCNGEnabled
     - !Equals [!Ref PseriesInstanceType, 'p6-b200.48xlarge']
   PseriesIsP6B300: !And
     - !Condition DeployPseriesCNGEnabled
     - !Equals [!Ref PseriesInstanceType, 'p6-b300.48xlarge']
+  PseriesIsG7: !And
+    - !Condition DeployPseriesCNGEnabled
+    - !Equals [!Ref PseriesInstanceType, 'g7.48xlarge']
   PseriesIsP5: !And
     - !Condition DeployPseriesCNGEnabled
     - !Not [!Equals [!Ref PseriesInstanceType, 'p6-b200.48xlarge']]
     - !Not [!Equals [!Ref PseriesInstanceType, 'p6-b300.48xlarge']]
+    - !Not [!Equals [!Ref PseriesInstanceType, 'g7.48xlarge']]
 
 Resources:
   #############################################################################
@@ -971,6 +985,46 @@ Resources:
         CngName: !Ref PseriesCngName
         QueueName: !Ref PseriesQueueName
         InstanceType: !Ref PseriesInstanceType
+        RootVolumeSize: !Ref RootVolumeSize
+        MaxCount: !Ref PseriesMaxCount
+        MinCount: !Ref PseriesMinCount
+        SubnetId: !GetAtt PrerequisitesStack.Outputs.PrimaryPrivateSubnet
+        AmiId: !Ref AmiId
+        ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
+        IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
+        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
+        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
+        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        CapacityReservationId: !Ref CapacityReservationId
+        CapacityReservationType: !Ref CapacityReservationType
+        PlacementGroupName: !Ref PseriesPlacementGroupName
+        DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
+        MonitoringVersion: !Ref MonitoringVersion
+        MonitoringRepo: !Ref MonitoringRepo
+        DcgmExporterImage: !Ref DcgmExporterImage
+        SlurmVersion: !Ref SlurmVersion
+        MonitoringRole: compute
+        InstallEnrootPyxis: !Ref InstallEnrootPyxis
+        DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
+        DirectoryDomainSuffix: !Ref DirectoryDomainSuffix
+        S3BucketName: !Ref S3BucketName
+        S3KeyPrefix: !Ref S3KeyPrefix
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-PseriesCNG'
+
+  G7CNGStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: PseriesIsG7
+    Properties:
+      TemplateURL: !Sub 'https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}add-cng.yaml'
+      Parameters:
+        ClusterId: !GetAtt ClusterStack.Outputs.ClusterId
+        ClusterName: !Sub '${AWS::StackName}'
+        CngName: !Ref PseriesCngName
+        QueueName: !Ref PseriesQueueName
+        InstanceType: !Ref PseriesInstanceType
+        EfaInterfaceCount: 2
         RootVolumeSize: !Ref RootVolumeSize
         MaxCount: !Ref PseriesMaxCount
         MinCount: !Ref PseriesMinCount

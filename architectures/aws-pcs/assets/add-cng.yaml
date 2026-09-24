@@ -47,6 +47,7 @@ Metadata:
           default: Capacity Reservation Settings (Optional)
         Parameters:
           - CapacityReservationId
+          - CapacityReservationType
       - Label:
           default: Monitoring configuration
         Parameters:
@@ -271,7 +272,7 @@ Parameters:
       instance type's MaximumEfaInterfaces — hpc8a.96xlarge / hpc7a.* /
       hpc6id.32xlarge = 2; hpc6a.48xlarge / c7i.metal = 1. EFA requires an
       EFA-capable type; a non-EFA type (e.g. c6i.4xlarge) fails to launch with
-      count > 0. For multi-NIC GPU families (P5/P6) use the dedicated
+      count > 0. G7.48xlarge uses 2 interfaces. For GPU families P5/P6 use the dedicated
       add-cng-p5/p6-* templates instead.
     Default: 0
     AllowedValues: [0, 1, 2]
@@ -298,10 +299,27 @@ Parameters:
       listed here. Capacity Blocks for ML do not exist for these instance
       families; for GPU Capacity Blocks use the add-cng-p5/p6 templates. The
       reservation's instance type and AZ must match InstanceType and the
-      subnet's AZ.
+      subnet's AZ. CapacityReservationType defaults to targeted-odcr to preserve
+      existing CPU callers; G7 reservation IDs also require targeted-odcr.
     Default: ""
 
+  CapacityReservationType:
+    Type: String
+    Default: targeted-odcr
+    AllowedValues: [capacity-block, targeted-odcr]
+    Description: G7 wrapper reservation mode; nonempty G7 reservations require targeted-odcr. CPU reservations remain targeted ODCR.
+
+Rules:
+  G7ReservationType:
+    RuleCondition: !And
+      - !Equals [!Ref InstanceType, g7.48xlarge]
+      - !Not [!Equals [!Ref CapacityReservationId, ""]]
+    Assertions:
+      - Assert: !Equals [!Ref CapacityReservationType, targeted-odcr]
+        AssertDescription: G7 reservation IDs require CapacityReservationType=targeted-odcr.
+
 Conditions:
+  IsG7: !Equals [!Ref InstanceType, g7.48xlarge]
   CreateQueue: !Not [!Equals [!Ref QueueName, ""]]
   # Emit the monitoring-role tag for both login and compute nodes (any role
   # other than 'none'). The monitoring stack identifies login nodes by this
@@ -583,8 +601,8 @@ Resources:
               - Description: Second EFA interface
                 DeviceIndex: 1
                 NetworkCardIndex: 1
-                InterfaceType: efa
-                SubnetId: !Ref SubnetId
+                InterfaceType: !If [IsG7, efa-only, efa]
+                SubnetId: !If [IsG7, !Ref AWS::NoValue, !Ref SubnetId]
                 Groups:
                   - !Ref ClusterSecurityGroupId
               - !Ref AWS::NoValue
