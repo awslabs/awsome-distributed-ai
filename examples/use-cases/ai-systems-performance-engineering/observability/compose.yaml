@@ -20,7 +20,7 @@ services:
     secrets: [grafana_password]
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./dashboard.json:/var/lib/grafana/dashboards/aim347.json:ro
+      - "${GRAFANA_DASHBOARD_FILE:-./dashboard.json}:/var/lib/grafana/dashboards/aim347.json:ro"
       - grafana-data:/var/lib/grafana
     restart: unless-stopped
 secrets:

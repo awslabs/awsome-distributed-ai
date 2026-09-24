@@ -1,5 +1,7 @@
 # AI systems performance engineering on AWS
 
+The ordinary dense LLM redesign is documented in [README-LLM.md](README-LLM.md). That development path has separate entry points and qualification results. The material below records the earlier workload.
+
 AIM347 is a workshop of 120 minutes at level 300 for Keita Watanabe and Aravind Neelakantan. This example implements one FSDP training job with cumulative network, host and storage configuration changes. AWS PCS with Slurm allocates two assigned nodes exclusively and uses their full GPU count. The dashboard exposes training throughput, MFU against both dense denominators, and useful tokens per allocated GPU-hour. The serving exercise adds weights-only MBU against a measured DRAM read-bandwidth ceiling.
 
 The primary allocation is `g7.48xlarge`; the secondary allocation is `g7.24xlarge`. Each uses the same companion code and records its actual GPU, EFA and processor counts. The [validation record](VALIDATION.md) labels the full G7 run, the g7.24xlarge stand-in and historical g7e/Seoul observations separately. Throughput and utilization conclusions are limited to those measured allocations.

@@ -7,7 +7,10 @@ case "$mode" in
   login)
     : "${LOGIN_BIND_IP:?Set LOGIN_BIND_IP to the private login-node address}"
     : "${COMPUTE_NODES:?Set COMPUTE_NODES to two comma-separated resolvable node names}"
-    export LOGIN_BIND_IP COMPUTE_NODES
+    : "${VLLM_METRICS_PORTS:=8000}" "${GRAFANA_DASHBOARD_FILE:=./dashboard.json}"
+    test -f "$GRAFANA_DASHBOARD_FILE"
+    GRAFANA_DASHBOARD_FILE=$(realpath -- "$GRAFANA_DASHBOARD_FILE")
+    export LOGIN_BIND_IP COMPUTE_NODES VLLM_METRICS_PORTS GRAFANA_DASHBOARD_FILE
     mkdir -p runtime
     if [[ ! -f runtime/grafana-password ]]; then
       python3 -c 'import secrets; print(secrets.token_urlsafe(24))' > runtime/grafana-password
@@ -25,11 +28,16 @@ for node in nodes:
  addresses[node]=socket.gethostbyname(fields['NodeAddr'])
 Path('runtime/node-addresses.json').write_text(json.dumps(addresses,indent=2)+'\n')
 scrapes=[dict(job_name='pushgateway',honor_labels=True,static_configs=[dict(targets=['pushgateway:9091'])])]
-for name,port in [('dcgm',9400),('node',9100),('efa',9109),('vllm',8000)]:
- scrapes.append(dict(job_name=name,static_configs=[dict(targets=[f'{addresses[node]}:{port}'],labels=dict(node=node)) for node in nodes]))
+ports=[int(value) for value in os.environ['VLLM_METRICS_PORTS'].split(',')]
+if not ports or len(set(ports))!=len(ports) or any(not 1<=port<=65535 for port in ports):
+ raise ValueError('VLLM_METRICS_PORTS requires distinct TCP ports')
+for name,job_ports in [('dcgm',[9400]),('node',[9100]),('efa',[9109]),('vllm',ports)]:
+ scrapes.append(dict(job_name=name,static_configs=[dict(targets=[f'{addresses[node]}:{port}'],labels=dict(node=node)) for node in nodes for port in job_ports]))
 Path('runtime/prometheus.yml').write_text(json.dumps({'global':{'scrape_interval':'5s'},'scrape_configs':scrapes},indent=2))
 PY
     docker compose -p aim347-observability -f compose.yaml up -d
+    # A bind-mounted config change does not recreate an existing container.
+    docker compose -p aim347-observability -f compose.yaml restart prometheus
     ;;
   compute)
     export TEXTFILE_DIR=/var/lib/aim347/textfile

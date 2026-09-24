@@ -1,5 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ ${1:-} == --llm ]]; then
+    [[ $# == 1 ]] || { printf 'Usage: %s --llm\n' "$0" >&2; exit 2; }
+    lab=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+    : "${SLURM_JOB_ID:?Run preparation in the assigned Slurm allocation}"
+    : "${SLURM_JOB_NUM_NODES:?}" "${LAB_IMAGE:?}" "${VLLM_IMAGE:?}"
+    : "${LLM_DATA_DIR:?}" "${LLM_PREPARATION_PACKAGES:?}"
+    : "${LAB_IMAGE_SHA256:?}" "${VLLM_IMAGE_SHA256:?}"
+    [[ $SLURM_JOB_NUM_NODES == 2 ]] || { printf 'Prepare both assigned nodes.\n' >&2; exit 2; }
+    for path in "$lab" "$LLM_DATA_DIR" "$LLM_PREPARATION_PACKAGES" "$LAB_IMAGE" "$VLLM_IMAGE"; do
+        [[ $path == /* && $path != *[[:space:],:]* ]] || { printf 'Use absolute mount-safe paths.\n' >&2; exit 2; }
+    done
+    [[ $(findmnt -T "$(dirname -- "$LLM_DATA_DIR")" -n -o FSTYPE) == lustre ]]
+    # Check actual images on both nodes. No replacement of retained images.
+    # shellcheck disable=SC2016
+    srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task=1 \
+        bash -c 'set -eu; unsquashfs -s "$1"; unsquashfs -s "$2"; printf "%s  %s\n%s  %s\n" "$3" "$1" "$4" "$2" | sha256sum --check --strict' \
+        bash "$LAB_IMAGE" "$VLLM_IMAGE" "$LAB_IMAGE_SHA256" "$VLLM_IMAGE_SHA256"
+    # The data output is fresh. A failed partial preparation remains for diagnosis.
+    mkdir "$LLM_DATA_DIR"
+    preparation_node=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+    srun --nodes=1 --ntasks=1 --nodelist="$preparation_node" --cpus-per-task=1 mkdir "$LLM_PREPARATION_PACKAGES"
+    srun --nodes=1 --ntasks=1 --nodelist="$preparation_node" --cpus-per-task=8 \
+        --container-image="$LAB_IMAGE" \
+        --container-mounts="$lab:/opt/aim347,$LLM_DATA_DIR:/data,$LLM_PREPARATION_PACKAGES:/preparation-packages" \
+        --container-workdir=/opt/aim347 --no-container-remap-root \
+        bash -c 'set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --target /preparation-packages -r requirements-data.txt -c constraints-data.txt
+          python3 -m pip list --path /preparation-packages --format=json > /data/preparation-packages.json
+          PYTHONPATH=/preparation-packages python3 1.prepare-llm.py --output /data --records 1024 --download-weights'
+    srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task=1 \
+        sha256sum "$LLM_DATA_DIR/tokens/tokens.bin" "$LLM_DATA_DIR/tokens/lengths.bin" "$LLM_DATA_DIR/model/aim347-pin.json"
+    exit 0
+fi
+[[ $# == 0 ]] || { printf 'Usage: %s [--llm]\n' "$0" >&2; exit 2; }
 source "$(dirname -- "$0")/lib/common.sh"
 : "${DATA_DIR:?Set DATA_DIR}" "${LAB_IMAGE:?Set LAB_IMAGE to an absolute .sqsh path}"
 cd "$LAB_DIR"

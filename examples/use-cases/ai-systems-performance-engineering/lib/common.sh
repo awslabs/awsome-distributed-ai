@@ -4,7 +4,7 @@ LAB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 export LAB_DIR
 
 # shellcheck disable=SC1091
-if [[ -f "$LAB_DIR/.env" ]]; then set -a; source "$LAB_DIR/.env"; set +a; fi
+if [[ ${AIM347_SKIP_LEGACY_ENV:-0} != 1 && -f "$LAB_DIR/.env" ]]; then set -a; source "$LAB_DIR/.env"; set +a; fi
 : "${RUN_ID:=aim347-$(date -u +%Y%m%dT%H%M%SZ)}"
 : "${INSTANCE_TYPE:=unknown}"
 : "${STEPS:=100}" "${WARMUP:=10}" "${MICROBATCH:=1}" "${CPU_ROUNDS:=2000}"
