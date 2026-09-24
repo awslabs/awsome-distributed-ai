@@ -54,18 +54,18 @@ it directly.
 | `OnDemandPlacementGroupName` | *(empty)* | Existing cluster placement group name to launch nodes into. Empty + `OnDemandEfaInterfaceCount > 0` auto-creates a per-CNG cluster placement group; supplying a name reuses an existing one (e.g. shared across multiple CPU CNGs, or a customer-owned CPG holding reserved capacity). A supplied name is honored with or without EFA (so a CPG-held targeted ODCR is consumable on non-EFA types); empty + EFA off = no placement group, as before. The GPU queue's equivalent is `PseriesPlacementGroupName` |
 | `OnDemandCapacityReservationId` | *(empty)* | **Targeted ODCR** ID for the CPU queue: launches bill On-Demand against the reservation, everything else (EFA, placement) is unaffected. Leave empty for plain On-Demand; an "open" ODCR is consumed automatically and must not be listed here. The reservation's instance type / AZ must match `OnDemandInstanceType` / `PrimarySubnetAZ`. Keep `OnDemandMaxCount` ≤ the reservation's instance count — a direct ODCR target does not backfill with On-Demand, so launches beyond the reservation fail |
 
-## 4. GPU Compute Node Group — P5/P6 (Optional)
+## 4. GPU Compute Node Group — P5/P6/G7 (Optional)
 
 See [GPU compute](../README.md#gpu-compute-p5p6) for instance/EFA/capacity guidance.
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `DeployPseriesCNG` | `false` | Deploy a GPU (P5/P6) queue |
-| `PseriesInstanceType` | `p5.48xlarge` | GPU instance type; selects the matching multi-NIC template **and** EFA interface count automatically |
+| `DeployPseriesCNG` | `false` | Deploy a GPU (P5/P6/G7) queue |
+| `PseriesInstanceType` | `p5.48xlarge` | GPU instance type; selects the matching multi-NIC template **and** EFA interface count automatically. Includes `g7.48xlarge` via `add-cng.yaml` with two EFA interfaces |
 | `PseriesMinCount` | `0` | GPU queue minimum nodes |
 | `PseriesMaxCount` | `4` | GPU queue maximum nodes |
 | `CapacityReservationId` | *(empty)* | Capacity reservation ID for the GPU queue — a Capacity **Block** or a **targeted ODCR**, per `CapacityReservationType`. Leave empty for On-Demand; an "open" ODCR is consumed automatically and must not be listed here. For a targeted ODCR keep `PseriesMaxCount` ≤ the reservation's instance count — a direct ODCR target does not backfill with On-Demand, so launches beyond the reservation fail |
-| `CapacityReservationType` | `capacity-block` | How `CapacityReservationId` is consumed: `capacity-block` (sets `MarketType=capacity-block`; the reservation's own placement is used) or `targeted-odcr` (On-Demand billing against the reservation; keeps the cluster placement group). Ignored when the ID is empty |
+| `CapacityReservationType` | `capacity-block` | How `CapacityReservationId` is consumed: `capacity-block` (sets `MarketType=capacity-block`; the reservation's own placement is used) or `targeted-odcr` (On-Demand billing against the reservation; keeps the cluster placement group). Ignored when the ID is empty. G7 reservation IDs require `targeted-odcr` |
 | `PseriesPlacementGroupName` | *(empty)* | Existing cluster placement group for the GPU queue — e.g. to consume a targeted ODCR held in a customer-owned CPG. Empty auto-creates a per-CNG placement group. Ignored on the Capacity Block path |
 | `PseriesCngName` | `gpu-p5` | GPU node-group name |
 | `PseriesQueueName` | `gpu-p5` | GPU Slurm queue name |
@@ -120,3 +120,8 @@ availability and the "deploy small, expand after" tip.
 |---|---|---|
 | `S3BucketName` | `awsome-distributed-ai` | S3 bucket the nested templates **and the boot-time lifecycle scripts** (`scripts/*.sh`) are fetched from. The compute instance role's S3 read is load-bearing: a node that cannot fetch its mount script is terminated and replaced. Point this at your own bucket only after syncing **both** templates and scripts to it (see [DEPLOY-TESTING](./DEPLOY-TESTING.md)). |
 | `S3KeyPrefix` | `templates/aws-pcs/` | S3 key prefix for the nested templates and the `scripts/` boot scripts under it |
+
+For direct `add-cng.yaml` callers, `CapacityReservationType` defaults to
+`targeted-odcr`, preserving CPU reservation behavior. The deploy-all GPU
+parameter retains its `capacity-block` default and forwards it explicitly.
+G7 uses two EFA interfaces and requires `targeted-odcr` for a reservation.

@@ -130,7 +130,7 @@ complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `DeployPseriesCNG` | `false` | Deploy a multi-NIC GPU (P5/P6) queue |
+| `DeployPseriesCNG` | `false` | Deploy a multi-NIC GPU (P5/P6/G7) queue |
 | `PseriesInstanceType` | `p5.48xlarge` | Picks the matching template + EFA NIC count automatically. See [GPU compute](#gpu-compute-p5p6) for the accepted types |
 | `CapacityReservationId` | *(empty)* | Capacity reservation ID for the GPU queue (a Capacity Block or a targeted ODCR); empty for On-Demand / open ODCR |
 | `CapacityReservationType` | `capacity-block` | How the reservation ID is consumed: Capacity **Block** (`MarketType=capacity-block`) or **targeted ODCR** (On-Demand billing, placement group kept). Ignored when the ID is empty |
@@ -191,6 +191,7 @@ automatically.
 | `p5en.48xlarge` | 8× H200 | 16 | `add-cng-p5.yaml` |
 | `p6-b200.48xlarge` | 8× B200 | 8 | `add-cng-p6-b200.yaml` |
 | `p6-b300.48xlarge` | 8× B300 | 16 (of 17 interfaces; the primary is ENA-only) | `add-cng-p6-b300.yaml` |
+| `g7.48xlarge` | 8 | 2 | `add-cng.yaml` (`EfaInterfaceCount=2`) |
 
 **Capacity options:**
 
@@ -201,6 +202,8 @@ automatically.
 
 The CPU queue takes a targeted ODCR too, via `OnDemandCapacityReservationId`
 (no type parameter — Capacity Blocks don't exist for CPU instance families).
+
+`PseriesPlacementGroupName` reuses an existing GPU cluster placement group; empty creates one for On-Demand/targeted ODCR. It is ignored for Capacity Blocks. For a G7 queue, set `DeployPseriesCNG=true`, `PseriesInstanceType=g7.48xlarge`, and (for a reservation) `CapacityReservationType=targeted-odcr`; set min/max counts and the reservation ID explicitly. The reservation's AZ, type and placement group must match. These local template contracts do not establish a published G7 release or participant provisioning.
 
 > **Capacity Block billing:** a block bills for its whole reserved window once it
 > starts and cannot be stopped early. When the block is active, run the GPU node
