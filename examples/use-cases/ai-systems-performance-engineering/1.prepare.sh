@@ -3,11 +3,26 @@ set -euo pipefail
 if [[ ${1:-} == --llm ]]; then
     [[ $# == 1 ]] || { printf 'Usage: %s --llm\n' "$0" >&2; exit 2; }
     lab=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+    export LLM_CONFIG=${LLM_CONFIG:-configs/llm.json}
+    export LLM_PREP_RECORDS=${LLM_PREP_RECORDS:-1024}
+    export LLM_MIN_DOCUMENT_TOKENS=${LLM_MIN_DOCUMENT_TOKENS:-0}
+    [[ $LLM_CONFIG == configs/*.json && $LLM_CONFIG != *..* && -f $lab/$LLM_CONFIG ]] || exit 2
+    [[ $LLM_PREP_RECORDS =~ ^[1-9][0-9]*$ && $LLM_MIN_DOCUMENT_TOKENS =~ ^[0-9]+$ ]] || exit 2
     : "${SLURM_JOB_ID:?Run preparation in the assigned Slurm allocation}"
     : "${SLURM_JOB_NUM_NODES:?}" "${LAB_IMAGE:?}" "${VLLM_IMAGE:?}"
     : "${LLM_DATA_DIR:?}" "${LLM_PREPARATION_PACKAGES:?}"
     : "${LAB_IMAGE_SHA256:?}" "${VLLM_IMAGE_SHA256:?}"
     [[ $SLURM_JOB_NUM_NODES == 2 ]] || { printf 'Prepare both assigned nodes.\n' >&2; exit 2; }
+    : "${ASSIGNED_NODES:?Set the exact assigned compute pair}"
+    export ASSIGNED_NODES
+    python3 - <<'PY'
+import os, subprocess
+assigned = os.environ['ASSIGNED_NODES'].split(',')
+allocated = subprocess.check_output(
+    ['scontrol', 'show', 'hostnames', os.environ['SLURM_JOB_NODELIST']], text=True).split()
+if len(assigned) != 2 or len(set(assigned)) != 2 or sorted(assigned) != sorted(allocated):
+    raise ValueError('preparation allocation differs from the assigned pair')
+PY
     for path in "$lab" "$LLM_DATA_DIR" "$LLM_PREPARATION_PACKAGES" "$LAB_IMAGE" "$VLLM_IMAGE"; do
         [[ $path == /* && $path != *[[:space:],:]* ]] || { printf 'Use absolute mount-safe paths.\n' >&2; exit 2; }
     done
@@ -25,10 +40,11 @@ if [[ ${1:-} == --llm ]]; then
         --container-image="$LAB_IMAGE" \
         --container-mounts="$lab:/opt/aim347,$LLM_DATA_DIR:/data,$LLM_PREPARATION_PACKAGES:/preparation-packages" \
         --container-workdir=/opt/aim347 --no-container-remap-root \
+        --container-env=LLM_CONFIG,LLM_PREP_RECORDS,LLM_MIN_DOCUMENT_TOKENS \
         bash -c 'set -euo pipefail
           python3 -m pip install --disable-pip-version-check --target /preparation-packages -r requirements-data.txt -c constraints-data.txt
           python3 -m pip list --path /preparation-packages --format=json > /data/preparation-packages.json
-          PYTHONPATH=/preparation-packages python3 1.prepare-llm.py --output /data --records 1024 --download-weights'
+          PYTHONPATH=/preparation-packages python3 1.prepare-llm.py --config "$LLM_CONFIG" --output /data --records "$LLM_PREP_RECORDS" --minimum-document-tokens "$LLM_MIN_DOCUMENT_TOKENS" --download-weights'
     srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task=1 \
         sha256sum "$LLM_DATA_DIR/tokens/tokens.bin" "$LLM_DATA_DIR/tokens/lengths.bin" "$LLM_DATA_DIR/model/aim347-pin.json"
     exit 0

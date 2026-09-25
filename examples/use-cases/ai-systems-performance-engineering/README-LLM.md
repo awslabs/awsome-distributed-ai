@@ -1,5 +1,34 @@
 # Dense LLM training, recovery and serving
 
+The proposed participant training route uses SmolLM2-1.7B at 4,096 positions. Qwen3-4B recovery and serving remain separate modules. Smol eager/SDPA numerical qualification is unresolved; measured compute and network timings are development evidence, not an accepted cumulative optimization. The historical Qwen training sequence below is reference only.
+
+## Prepare separate Smol and Qwen environments
+
+The revised `1.prepare.sh --llm` accepts `LLM_CONFIG`, `LLM_PREP_RECORDS` and `LLM_MIN_DOCUMENT_TOKENS`. Defaults preserve the Qwen preparation path. In the existing assigned two-node allocation, provide the image paths/hashes and fresh data/results/package paths documented below. Select Smol explicitly:
+
+```bash
+export LLM_CONFIG=configs/llm-zero-smol.json LLM_PREP_RECORDS=160 LLM_MIN_DOCUMENT_TOKENS=4096
+bash facilitator/prepare-login.sh --llm-prepare
+```
+
+Then choose distinct fresh `LLM_DATA_DIR`, `LLM_RESULTS_DIR` and `LLM_PREPARATION_PACKAGES` paths for Qwen and prepare it separately:
+
+```bash
+export LLM_CONFIG=configs/llm.json LLM_PREP_RECORDS=1024 LLM_MIN_DOCUMENT_TOKENS=0
+bash facilitator/prepare-login.sh --llm-prepare
+```
+
+The helper creates a config-validated `llm-environment.sh` under each result root. Load the appropriate file before each module. Smol uses `configs/llm-zero-smol.json` explicitly in every training invocation; Qwen recovery uses `configs/llm-recovery.json`, and serving reads the Qwen pretrained model. The launcher default remains Qwen for compatibility. These selectors require this revision and are not implemented by the earlier published draft head `2cc899a38c2c1934279ede273e75307af8b22f99`.
+
+Smol's expected160-document token/length fingerprint is `276a090b9451c92d61cdeb1ca627a92bbff1e7512ad49ad7f322fb537546a166`. Five updates with one warmup yield524,160 measured useful tokens. Qwen's original1,024-document fingerprint is `da15432db18fc483844f9f6b0b9b5142d322a3b8ee049827fe9fb5b167d921f7`. Preserve the Qwen participant checkpoint and its recording under the Qwen result root; preparation does not generate it.
+
+For Smol, the conservative reference selects `--attention-implementation eager --activation-checkpointing --microbatch 1`; the endpoint selects `--attention-implementation sdpa --fused-optimizer --microbatch 2` without activation checkpointing. Keep EFA fixed during compute comparisons. For the network comparison, keep endpoint compute fixed and select `LLM_TRANSPORT=socket` or `LLM_TRANSPORT=efa`, preserving actual NCCL logs. No strict-deterministic or no-fill options are part of this Smol timing recipe. Fixed numerical policy remains unchanged.
+
+## Historical Qwen training and separate Qwen module details
+
+The remaining training comparisons document the earlier Qwen investigation, not the active Smol participant sequence. Qwen recovery and serving measurements retain their original scope.
+
+
 This development recipe runs full-parameter Qwen3-4B training on pretokenized FineWeb-Edu documents, restores PyTorch distributed checkpoints, and measures quality-constrained serving. Spain PCS runs on two `g7.48xlarge` nodes with sixteen RTX PRO 4500 Blackwell Server Edition GPUs have completed training and synchronous/asynchronous recovery on shared FSx for Lustre. Performance tuning and serving qualification remain in progress. The complete three-stage training sequence and participant workshop are not yet qualified.
 
 The older numbered `v0` through `v3` scripts and their validation records describe the previous workload. Use the `llm` entry points below for this recipe. Every comparison starts from the same pretrained revision.

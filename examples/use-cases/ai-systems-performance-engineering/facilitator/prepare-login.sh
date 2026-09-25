@@ -26,10 +26,14 @@ if [[ ${1:-} == --llm ]]; then
     : "${GPUS_PER_NODE:?}" "${LOGIN_BIND_IP:?}" "${PROMETHEUS_PORT:?}"
     export PARTITION ASSIGNED_NODES LAB_IMAGE VLLM_IMAGE LLM_DATA_DIR LLM_RESULTS_DIR
     export NCCL_SOCKET_IFNAME GPUS_PER_NODE LOGIN_BIND_IP PROMETHEUS_PORT
+    export LLM_CONFIG=${LLM_CONFIG:-configs/llm.json}
     python3 - <<'PY'
 import hashlib, ipaddress, json, os, shlex, subprocess
 from pathlib import Path
-cfg = json.loads(Path('configs/llm.json').read_text())
+config_path = Path(os.environ['LLM_CONFIG'])
+if config_path.parent != Path('configs') or config_path.suffix != '.json':
+    raise ValueError('select a companion configuration under configs/')
+cfg = json.loads(config_path.read_text())
 data = Path(os.environ['LLM_DATA_DIR'])
 results = Path(os.environ['LLM_RESULTS_DIR'])
 for path in (data, results):
@@ -46,6 +50,10 @@ for key in ('model_id', 'tokenizer_revision', 'dataset_id', 'dataset_revision', 
         raise ValueError(f'data provenance mismatch: {key}')
 if manifest['records'] < cfg['global_batch_samples'] * cfg['updates']:
     raise ValueError('insufficient prepared records')
+if (data / 'tokens/tokens.bin').stat().st_size != manifest['records'] * cfg['sequence_length'] * 4:
+    raise ValueError('token file size does not match manifest')
+if (data / 'tokens/lengths.bin').stat().st_size != manifest['records'] * 4:
+    raise ValueError('length file size does not match manifest')
 digest = hashlib.sha256()
 for name in ('tokens.bin', 'lengths.bin'):
     with (data / 'tokens' / name).open('rb') as stream:
@@ -73,7 +81,7 @@ for name in ('LAB_IMAGE', 'VLLM_IMAGE'):
     value = os.environ[name]
     if not Path(value).is_absolute() or any(c in value for c in ' ,:\t\n'):
         raise ValueError('image paths must be absolute and mount-safe')
-keys = ('PARTITION', 'ASSIGNED_NODES', 'LAB_IMAGE', 'VLLM_IMAGE', 'LLM_DATA_DIR', 'LLM_RESULTS_DIR',
+keys = ('PARTITION', 'ASSIGNED_NODES', 'LAB_IMAGE', 'VLLM_IMAGE', 'LLM_DATA_DIR', 'LLM_RESULTS_DIR', 'LLM_CONFIG',
         'NCCL_SOCKET_IFNAME', 'GPUS_PER_NODE', 'LOGIN_BIND_IP', 'PROMETHEUS_PORT')
 values = {key: os.environ[key] for key in keys}
 values.update(AIM347_SKIP_LEGACY_ENV='1', COMPUTE_NODES=','.join(nodes), GRAFANA_DASHBOARD_FILE=str(Path('observability/llm-dashboard.json').resolve()),

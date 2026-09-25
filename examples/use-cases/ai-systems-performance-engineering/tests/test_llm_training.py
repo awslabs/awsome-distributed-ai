@@ -127,6 +127,71 @@ class TrainingCorrectnessTests(unittest.TestCase):
                     capture_output=True, text=True, check=True)
                 self.assertEqual(result.stdout, expected)
 
+    def test_llm_preparation_environment_uses_selected_model(self):
+        import hashlib
+        import os
+        import subprocess
+        lab = Path(__file__).resolve().parents[1]
+        source = (lab / 'facilitator/prepare-login.sh').read_text()
+        validation = source.split("python3 - <<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+        def output(command, **kwargs):
+            return 'lustre\n' if command[0] == 'findmnt' else 'node-a\nnode-b\n'
+        for config in ('llm.json', 'llm-zero-smol.json'):
+            with self.subTest(config=config), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'configs').mkdir()
+                cfg = json.loads((lab / 'configs' / config).read_text())
+                (root / 'configs' / config).write_text(json.dumps(cfg))
+                data, results = root / 'data', root / 'results'
+                (data / 'model').mkdir(parents=True)
+                (data / 'tokens').mkdir()
+                results.mkdir()
+                (data / 'model/aim347-pin.json').write_text(json.dumps(
+                    {key: cfg[key] for key in ('model_id', 'model_revision')}))
+                records = cfg['global_batch_samples'] * cfg['updates']
+                token_bytes = bytes(records * cfg['sequence_length'] * 4)
+                length_bytes = np.full(records, cfg['sequence_length'], dtype='<i4').tobytes()
+                (data / 'tokens/tokens.bin').write_bytes(token_bytes)
+                (data / 'tokens/lengths.bin').write_bytes(length_bytes)
+                manifest = {key: cfg[key] for key in ('model_id', 'tokenizer_revision', 'dataset_id',
+                            'dataset_revision', 'dataset_subset', 'dataset_split', 'sequence_length')}
+                manifest.update(records=records,
+                                sha256=hashlib.sha256(token_bytes + length_bytes).hexdigest())
+                (data / 'tokens/manifest.json').write_text(json.dumps(manifest))
+                env = dict(LLM_CONFIG=f'configs/{config}', LLM_DATA_DIR=str(data), LLM_RESULTS_DIR=str(results),
+                           PARTITION='gpu', ASSIGNED_NODES='node-a,node-b', GPUS_PER_NODE='8',
+                           LOGIN_BIND_IP='10.0.0.1', PROMETHEUS_PORT='9090', NCCL_SOCKET_IFNAME='=eth0',
+                           LAB_IMAGE='/images/train.sqsh', VLLM_IMAGE='/images/serve.sqsh')
+                cwd = Path.cwd()
+                try:
+                    os.chdir(root)
+                    with patch.dict(os.environ, env), patch.object(subprocess, 'check_output', side_effect=output):
+                        exec(compile(validation, 'prepare-login-fixture', 'exec'), {})
+                        self.assertIn(f'LLM_CONFIG=configs/{config}', (results / 'llm-environment.sh').read_text())
+                        (data / 'tokens/tokens.bin').write_bytes(b'short')
+                        with self.assertRaisesRegex(ValueError, 'token file size'):
+                            exec(compile(validation, 'prepare-login-fixture', 'exec'), {})
+                        (data / 'tokens/tokens.bin').write_bytes(token_bytes)
+                        (data / 'model/aim347-pin.json').write_text('{}')
+                        with self.assertRaisesRegex(ValueError, 'model pin mismatch'):
+                            exec(compile(validation, 'prepare-login-fixture', 'exec'), {})
+                finally:
+                    os.chdir(cwd)
+
+    def test_preparation_requires_actual_assigned_pair(self):
+        import os
+        import subprocess
+        source = (Path(__file__).resolve().parents[1] / '1.prepare.sh').read_text()
+        validation = source.split("python3 - <<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+        with patch.dict(os.environ, ASSIGNED_NODES='node-a,node-b', SLURM_JOB_NODELIST='node-[a-b]'):
+            for allocated, valid in [('node-b\nnode-a\n', True), ('node-c\nnode-d\n', False)]:
+                with patch.object(subprocess, 'check_output', return_value=allocated):
+                    if valid:
+                        exec(compile(validation, 'allocation-fixture', 'exec'), {})
+                    else:
+                        with self.assertRaisesRegex(ValueError, 'assigned pair'):
+                            exec(compile(validation, 'allocation-fixture', 'exec'), {})
+
     def test_diagnostic_campaign_preserves_controller_events(self):
         self._diagnostic_campaign(planned=False)
 
