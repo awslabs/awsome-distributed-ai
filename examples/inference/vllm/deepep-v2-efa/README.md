@@ -54,6 +54,18 @@ deterministically ~48 s into startup in `profile_run` (`deepep_v2.py` combine). 
 it and is the path this sample ships and supports. Historical non-eager measurements (taken with the
 then-unmerged guard) remain in `benchmarks/` for reference.
 
+> **Serving at the shipped pin is not yet re-measured here**, and one data point exists at this wheel: the
+> Dynamo sibling (`../../nvidia-dynamo/deepep-v2-efa`, [PR #1256](https://github.com/awslabs/awsome-distributed-ai/pull/1256))
+> ran `14617c2b` (`0.26.1rc1.dev1000`) on 2026-09-04 under `ai-dynamo 1.4.2`'s `dynamo.vllm` on the
+> pre-review substrate (DeepEP `b306af06`+PR#612, aws-ofi-nccl `9c44d34`+#1351, EFA 1.49.0) and the
+> DP16/EP16 serve faulted `CUDA_ERROR_LAUNCH_FAILED (719)` in `profile_run` (eager default) while the
+> standalone kernel test passed on the same image; it then re-paired to `e2f993dc4` + `ai-dynamo 1.3.1`
+> and served. That fault was under a different front and substrate, so it does not show whether plain
+> `vllm serve` at `14617c2b` on this recipe serves — the queued 2-node re-measure (a serve at `14617c2b`
+> vs `e2f993dc4` on the shipped recipe) is what answers it. The pin stays where it is until then.
+
+<!-- MD028: separate the two blockquotes so the blank line is not read as inside one quote -->
+
 > **Shared-experts caveat when bumping the pin:** at `e2f993dc4` there is a second, independent
 > non-eager crash cause that bites models with shared experts (DeepSeek-V3/R1, DeepSeek-V2-Lite —
 > models `serve.sh` explicitly supports): the `-1` sentinel expert IDs that vLLM
