@@ -21,8 +21,9 @@
 #   deterministically during startup profile_run with a Triton illegal-memory-access in
 #   deepep_v2.py:347 (buffer.combine). This is transport-independent (inherited from the
 #   proxy package's root-cause). This script refuses =0 unless you also set
-#   SERVE_I_UNDERSTAND_NONEAGER_CRASHES=1. Non-eager is pending the empty-ExpertTokensMetadata guard, filed upstream (vLLM PR #52632);
-#   once merged, bump the vLLM pin past it — no patch step.
+#   SERVE_I_UNDERSTAND_NONEAGER_CRASHES=1. The empty-ExpertTokensMetadata guard (vLLM PR #52632)
+#   merged upstream 2026-08-20 but post-dates this pin: bump VLLM_SHA past its merge commit and
+#   re-measure to enable non-eager — no patch step.
 set -uo pipefail
 ROLE="$1"; DP_MASTER_IP="$2"
 DP_MASTER_PORT="${DP_MASTER_PORT:-29500}"
@@ -109,7 +110,7 @@ if [ "$SERVE_ENFORCE_EAGER" != "1" ]; then
   if [ "${SERVE_I_UNDERSTAND_NONEAGER_CRASHES:-0}" != "1" ]; then
     echo "REFUSING SERVE_ENFORCE_EAGER=0: default compilation is KNOWN-CRASH at vLLM"
     echo "e2f993dc4 (Triton IMA, deepep_v2.py:347 combine during profile_run). Run"
-    echo "wait for the upstream guard (vLLM PR #52632) + a pin bump, or set"
+    echo "bump VLLM_SHA past the merged upstream guard (vLLM PR #52632) and re-measure, or set"
     echo "SERVE_I_UNDERSTAND_NONEAGER_CRASHES=1 — or keep eager (the default)."
     exit 4
   fi
@@ -124,7 +125,7 @@ COMMON="--tensor-parallel-size ${SERVE_TP} --data-parallel-size ${SERVE_DP} --da
   --max-num-batched-tokens ${SERVE_MAX_BATCHED_TOKENS} \
   --gpu-memory-utilization ${SERVE_GPU_MEM_UTIL} --trust-remote-code --dtype bfloat16"
 
-echo "===== vLLM serve model=$SERVE_MODEL role=$ROLE tp=${SERVE_TP} dp=${SERVE_DP}/local${SERVE_DP_LOCAL} eager=${SERVE_ENFORCE_EAGER} gin_type=${NCCL_GIN_TYPE} gdaki=${OFI_NCCL_GIN_GDAKI} start_rank=${START_RANK} dp_master=$DP_MASTER_IP $(hostname) $(date -u +%FT%TZ) ====="
+echo "===== vLLM serve model=$SERVE_MODEL role=$ROLE tp=${SERVE_TP} dp=${SERVE_DP}/local${SERVE_DP_LOCAL} eager=${SERVE_ENFORCE_EAGER} gin_type=${NCCL_GIN_TYPE} gdaki=auto(--enable-gdaki build) start_rank=${START_RANK} dp_master=$DP_MASTER_IP $(hostname) $(date -u +%FT%TZ) ====="
 python3 -c "import vllm; print('vllm', vllm.__version__)"
 python3 -c "from vllm.distributed.device_communicators.all2all import DeepEPV2All2AllManager; print('PR#41183 symbol OK')"
 python3 -c "import deep_ep; assert hasattr(deep_ep,'ElasticBuffer'); print('deep_ep ElasticBuffer OK')"
