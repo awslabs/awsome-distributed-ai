@@ -51,11 +51,13 @@ this sample's relative sibling links point at that folder, so until #1230 merges
   sample's Dynamo E2E (2026-09-04) both ran on it, eager.
 - `14617c2b` (`0.26.1rc1.dev1000`, #52632's merge commit, merged 2026-08-20) — #1230's shipped pin,
   build- and symbol-gate-verified only; serving at that pin has **not** been re-measured there.
-- The same `14617c2b` wheel is the "vLLM 0.26" that **faulted in this sample on 2026-09-04**: paired with
-  `ai-dynamo 1.4.2` (`dynamo.vllm`) on the pre-review substrate (DeepEP `b306af06`+PR#612, aws-ofi-nccl
-  `9c44d34`+#1351, EFA 1.49.0), the DP16/EP16 serve died in `profile_run` → `determine_available_memory`
-  with `CUDA_ERROR_LAUNCH_FAILED (719)` at DeepEP `csrc/jit/handle.hpp:97` (eager, the default at the
-  time), while the standalone cross-node kernel test passed on the same image. That is a measurement at
+- The same `14617c2b` wheel is the "vLLM 0.26" that **faulted in this sample on 2026-09-04**: image
+  `v2-20260904c` paired it with `ai-dynamo 1.4.2` (`dynamo.vllm`) on the pre-review substrate (DeepEP
+  `b306af06`+PR#612 — effective tree `28d1f7fb` — aws-ofi-nccl `9c44d34` + #1351 commit 1, EFA 1.49.0);
+  the DP16/EP16 serve died in `profile_run` → `determine_available_memory` with
+  `CUDA_ERROR_LAUNCH_FAILED (719)` at DeepEP `csrc/jit/handle.hpp:97` (eager, the default at the time; a
+  non-eager repro is asserted in the same-day notes only — no log of it is retained), while the standalone
+  cross-node kernel test passed on the same image. That is a measurement at
   `14617c2b` under a **different front and substrate** — it says nothing about plain `vllm serve` at
   `14617c2b`, nor about `14617c2b` on the current fork/`v1.21.1` substrate; both are unmeasured. The queued
   re-measure (a serve at `14617c2b` vs `e2f993dc4` on the shipped recipe) settles the pin; this sample stays
@@ -110,9 +112,10 @@ At this pin, default (non-eager) compilation crashes deterministically ~48 s int
 
 > **Why the pin has not been bumped forward to pick up #52632:** the forward pin is **unmeasured for
 > serving here**, and the one time this sample ran the wheel that carries #52632 it faulted. On 2026-09-04
-> this sample's first image paired `14617c2b` (`0.26.1rc1.dev1000`, #52632's merge commit — the pin the
-> sibling vLLM sample now ships) with `ai-dynamo 1.4.2` on the pre-review substrate (DeepEP
-> `b306af06`+PR#612, aws-ofi-nccl `9c44d34`+#1351, EFA installer 1.49.0). The DP16/EP16 serve faulted
+> this sample's first image (`v2-20260904c`) paired `14617c2b` (`0.26.1rc1.dev1000`, #52632's merge commit
+> — the pin the sibling vLLM sample now ships) with `ai-dynamo 1.4.2` on the pre-review substrate (DeepEP
+> `b306af06`+PR#612 — effective tree `28d1f7fb` — aws-ofi-nccl `9c44d34` + #1351 commit 1, EFA installer
+> 1.49.0). The DP16/EP16 serve faulted
 > `CUDA_ERROR_LAUNCH_FAILED (719)` at DeepEP `csrc/jit/handle.hpp:97` in `profile_run` →
 > `determine_available_memory` during KV-cache sizing (eager, the default at the time; the same-day notes
 > also record a non-eager repro, but no log of that run is retained), while the standalone cross-node
@@ -151,12 +154,15 @@ At this pin, default (non-eager) compilation crashes deterministically ~48 s int
   - *gdrdrv on the nodes the numbers were taken on:* the 2026-08-14 tables (vLLM-sample image) and the
     2026-09-04 Dynamo E2E ran on the **previous** cgk p5en node group, whose kernel `gdrdrv` was recorded
     as **2.4** (2026-07-25/29 records; no per-run `/sys/module/gdrdrv/version` reading was kept for those
-    two dates) — the recipe at the time carried the aws-ofi-nccl #1351 forced-PCIe override precisely for
-    gdrdrv-2.4 hosts, consistent with that record. The **current** node group (`p5en-ng-sep2026-v2`,
-    Amazon Linux 2023.12.20260831, kernel 6.12.103, nodes created 2026-09-18) reports **2.5**, read
-    in-pod on both nodes on 2026-09-27 — so the shipped stock `v1.21.1` initialises GIN there, and the
-    queued re-measure runs on 2.5. A gdrdrv-2.4 host cannot be fixed from the container; the fix is a
-    host driver update.
+    two dates). Both runs used the **#1351-patched plugin** (aws-ofi-nccl `9c44d34` + #1351 commit 1 with
+    the `OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY` override) — that is exactly why the sample originally
+    cherry-picked #1351. The stock `v1.21.1` this sample now builds would have refused GIN on those nodes,
+    which is what makes the ≥ 2.5 prerequisite above load-bearing rather than advisory. The **current**
+    node group (`p5en-ng-sep2026-v2`, Amazon Linux 2023.12.20260831, kernel 6.12.103, nodes created
+    2026-09-18) reports **2.5**, read in-pod on both nodes on 2026-09-27, so stock `v1.21.1` passes the
+    version gate there on paper — **no run on stock `v1.21.1` + gdrdrv 2.5 exists yet**; the queued
+    re-measure is that run. A gdrdrv-2.4 host cannot be fixed from the container; the fix is a host
+    driver update.
 - **2Mi hugepages pre-allocated on the compute nodes.** The manifest requests `hugepages-2Mi: 5120Mi`
   per pod (= 2560 × 2Mi pages); the consumer is libfabric's EFA provider bounce-buffer pools.
   Kubernetes only *accounts* hugepages — allocation is a node-bootstrap step (kernel cmdline
