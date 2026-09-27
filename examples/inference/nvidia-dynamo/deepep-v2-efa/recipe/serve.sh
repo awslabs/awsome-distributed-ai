@@ -48,10 +48,14 @@ case "$ROLE" in leader|worker) ;; *) echo "FATAL: unrecognized role '$ROLE' (lea
 DP_MASTER_PORT="${DP_MASTER_PORT:-29500}"
 
 # ---- proxy-Gin + EFA env contract (identical to the measured runs + deploy YAML) ----
-export NCCL_GIN_TYPE=2 NCCL_GIN_ENABLE=1 OFI_NCCL_GIN_GDAKI=0 OFI_NCCL_GIN_MAX_REQUESTS=512
+# NCCL picks the GIN backend: NCCL_GIN_TYPE=2 is the CPU proxy (the EFA-viable path; 3 would be
+# GDAKI). Both are NCCL params (src/gin/gin_host.cc). aws-ofi-nccl v1.21.1 has NO OFI_NCCL_GIN_GDAKI
+# or OFI_NCCL_GIN_MAX_REQUESTS parameter (its OFI_NCCL_PARAM table's only GIN knob is
+# GIN_CQ_PROCESS_MAX_ITER), so the two knobs earlier revisions exported here were inert; gone.
+export NCCL_GIN_TYPE=2 NCCL_GIN_ENABLE=1
 export NCCL_CUMEM_ENABLE=1 NCCL_NVLS_ENABLE=0 NCCL_IGNORE_DISABLED_P2P=1
 export FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_FORK_SAFE=1
-export OFI_NCCL_PROTOCOL=RDMA DEEP_EP_BACKEND=nccl
+export OFI_NCCL_PROTOCOL=RDMA   # (no DEEP_EP_BACKEND: nothing in DeepEP or vLLM reads it — the backend is vLLM's --all2all-backend deepep_v2 below)
 export NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
 export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-^lo,docker,veth}   # exclusion, never positive selection: EFA nodes expose efa*/enp* and CNI adds bridges; auto-select can pick a non-routing iface -> rendezvous hang. Repo convention (nccl-tests Dockerfile).
 export EP_REUSE_NCCL_COMM=0   # DeepEP creates its own comm; torch's is lazy/null under vLLM (segfault rootcause 2026-08-14)

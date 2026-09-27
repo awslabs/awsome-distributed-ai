@@ -45,7 +45,7 @@ in front of the same DeepEP-V2/EFA engine.
 
 DeepEP's default transport is NVSHMEM/IBGDA, which EFA does not provide. The V2 (`ElasticBuffer`) path
 instead runs its dispatch/combine over `aws-ofi-nccl`'s **GIN CPU-proxy** (`NCCL_GIN_TYPE=2`,
-`OFI_NCCL_GIN_GDAKI=0`) on the `efa-direct` fabric. Three things make this work, and two of them are
+NCCL selects the GIN backend; no aws-ofi-nccl env is involved) on the `efa-direct` fabric. Three things make this work, and two of them are
 non-obvious integration fixes, not config:
 
 ### Integration fixes baked into this sample

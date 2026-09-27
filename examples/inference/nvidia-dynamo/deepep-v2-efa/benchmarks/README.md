@@ -30,7 +30,7 @@ current recipe has since diverged, the row says so.
 | | |
 |---|---|
 | Instance | 2× p5en.48xlarge (H200), cross-node EFA |
-| Transport | DeepEP-V2 `ElasticBuffer`, NCCL-GIN CPU-proxy (`NCCL_GIN_TYPE=2`, `OFI_NCCL_GIN_GDAKI=0`), `efa-direct` |
+| Transport | DeepEP-V2 `ElasticBuffer`, NCCL-GIN CPU-proxy (`NCCL_GIN_TYPE=2`), `efa-direct`. The measured env also exported `OFI_NCCL_GIN_GDAKI=0`, `OFI_NCCL_GIN_MAX_REQUESTS=512` and `DEEP_EP_BACKEND=nccl`; none is a parameter of aws-ofi-nccl v1.21.1 or read by DeepEP / vLLM, so they were inert then and are no longer set. |
 | Model | `Qwen/Qwen3-30B-A3B-FP8`, DP16/EP16 (`--enable-expert-parallel --all2all-backend deepep_v2`) |
 | vLLM | `0.22.1rc1.dev283+ge2f993dc4` — the merge commit of [PR#41183](https://github.com/vllm-project/vllm/pull/41183) (first, and only measured-working, `deepep_v2` backend). **This is the shipped `Dockerfile` pin** — the vLLM substrate matches; the serving front and the rest of the stack do not (see the other rows). |
 | ai-dynamo | **none** — these tables predate the Dynamo front: measured via `vllm serve` on the sibling vLLM sample's image (no `dynamo.frontend`, no `dynamo.vllm`, no `--discovery-backend file`). This sample pins `ai-dynamo{,-runtime}==1.3.1`; producing Dynamo-fronted numbers is the queued re-measure (see Honest caveats). |
