@@ -10,13 +10,13 @@ tok/s + per-request latency percentiles. Raw JSONL lands in `raw/` (gitignored).
 | | |
 |---|---|
 | Instance | 2× p5en.48xlarge (H200), cross-node EFA |
-| Transport | DeepEP-V2 `ElasticBuffer`, NCCL-GIN CPU-proxy (`NCCL_GIN_TYPE=2`, `OFI_NCCL_GIN_GDAKI=0`), `efa-direct` |
+| Transport | DeepEP-V2 `ElasticBuffer`, NCCL-GIN CPU-proxy (`NCCL_GIN_TYPE=2`), `efa-direct` |
 | Model | `Qwen/Qwen3-30B-A3B-FP8`, DP16/EP16 (`--enable-expert-parallel --all2all-backend deepep_v2`) |
 | vLLM | measured on `0.22.1rc1.dev283+ge2f993dc4` (first commit with the `deepep_v2` backend, [PR#41183](https://github.com/vllm-project/vllm/pull/41183)). **The shipped `Dockerfile` now pins `14617c2b` = `0.26.1rc1.dev1000+g14617c2b6`** (vLLM [#52632](https://github.com/vllm-project/vllm/pull/52632)'s merge commit) — four minor versions newer, so a rebuild will not reproduce these tables. |
-| Stack | torch 2.11.0+cu130, nvidia-nccl-cu13 2.30.4, DeepEP `b306af06`+PR#612, aws-ofi-nccl GIN `9c44d34`+#1351 (source-built — historical. **The shipped `Dockerfile` now consumes aws-ofi-nccl 1.21.1 bundled by EFA installer 1.50.0**, so a rebuild runs a different plugin build than these tables) |
+| Stack | torch 2.11.0+cu130, nvidia-nccl-cu13 2.30.4, DeepEP `28d1f7fb` (the **effective** tree at measurement: `deepseek-ai/DeepEP@b306af06` + PR#612 `git merge`, fast-forwarded to the PR head), aws-ofi-nccl GIN `9c44d34`+#1351 (source-built). **The shipped recipe differs on both**: DeepEP = [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) @ `97d8f9bc`, aws-ofi-nccl = 1.21.1 bundled by EFA installer 1.50.0 — so a rebuild runs a different DeepEP tree and plugin build than these tables. The current recipe passes its build + symbol gates; its 2-node E2E (kernel smoke + serve + sweep) has **not** been re-run. |
 | Serve fingerprint | `vllm-0.22.1rc1.dev283+ge2f993dc4-dp16-ep-1f3ed125` |
 | Probe | stdlib urllib+threads, 127.0.0.1 loopback, `max_tokens=128`, `temperature=0.0` (greedy), concurrency 1/8/16/32/64, **one shot per level** (N requests at concurrency N), identical prompt every request |
-| QP knobs | `EP_EFA_MAX_QPS=2`, `EP_EFA_RDMA_GBS=25.0` (serve.sh defaults — DeepEP PR#612's conservative EFA cap; see the note in serve.sh) |
+| QP knobs | `EP_EFA_MAX_QPS=2`, `EP_EFA_RDMA_GBS=25.0` — the serve defaults **at measurement time** (the deepseek tree's PR#612 knobs). The current recipe pins the `amazon-contributing` fork, which resolves QP count and link rate internally; neither env exists (or is set) in this sample any more. The measured env also exported `OFI_NCCL_GIN_GDAKI=0`, `OFI_NCCL_GIN_MAX_REQUESTS=512` and `DEEP_EP_BACKEND=nccl`; none is read by aws-ofi-nccl 1.21.1, DeepEP or vLLM, so they were inert then and are no longer set. |
 | Date | 2026-08-14 |
 
 **Probe methodology caveats for these tables** (the checked-in `recipe/benchmark_probe.py` has

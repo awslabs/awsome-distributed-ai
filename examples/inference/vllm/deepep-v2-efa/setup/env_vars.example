@@ -5,7 +5,7 @@ export IMAGE_NAME="vllm-deepep-v2-efa"
 # Immutable tag — never "latest": with the manifest's imagePullPolicy: IfNotPresent, a
 # node that cached "latest" silently keeps running the OLD image after a rebuild-and-push.
 # Bump the tag on every rebuild (date or git SHA both work).
-export IMAGE_TAG="v3-20260916"   # postdates the switch to the EFA-installer-bundled aws-ofi-nccl plugin (review round 3); keep in sync with kubernetes/ image:
+export IMAGE_TAG="v4-20260927"   # postdates the DeepEP source move to the amazon-contributing fork (review round 4); keep in sync with kubernetes/ image:
 export AWS_REGION="us-east-2"
 # Model: any MoE whose n_routed_experts % (data-parallel size) == 0. Default is public (no HF token).
 export SERVE_MODEL="Qwen/Qwen3-30B-A3B-FP8"

@@ -36,6 +36,7 @@ docker run --rm --gpus all "${DEV_ARGS[@]}" -e HAVE_EFA_DEV="${HAVE_EFA_DEV}" "$
   echo "== DeepEP-V2 source staged (built in-pod on first boot; import is asserted there, not here) =="
   test -f /opt/DeepEP/deep_ep/buffers/elastic.py || { echo "FAIL: /opt/DeepEP not staged"; exit 1; }
   grep -q "class ElasticBuffer" /opt/DeepEP/deep_ep/buffers/elastic.py || { echo "FAIL: staged DeepEP has no ElasticBuffer (V1 source?)"; exit 1; }
+  grep -q "_get_sysfs_rdma_gbs" /opt/DeepEP/deep_ep/utils/envs.py || { echo "FAIL: staged DeepEP is not the amazon-contributing fork (no sysfs link-rate probe) — check DEEPEP_SHA"; exit 1; }
   test -f /opt/DeepEP/tests/elastic/test_ep.py || { echo "FAIL: kernel-smoke test not staged"; exit 1; }
   echo "ALL CHECKS PASS"
 '

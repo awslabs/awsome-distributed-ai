@@ -21,10 +21,10 @@ TEST="/opt/DeepEP/tests/elastic/test_ep.py"
 [ -f "$TEST" ] || { echo "FAIL: $TEST not in image — rebuild from setup_deepep_v2_efa.sh"; exit 3; }
 
 # ---- proxy-Gin + EFA contract, VERBATIM from serve.sh (same transport under test) ----
-export NCCL_GIN_TYPE=2 NCCL_GIN_ENABLE=1 OFI_NCCL_GIN_GDAKI=0 OFI_NCCL_GIN_MAX_REQUESTS=512
+export NCCL_GIN_TYPE=2 NCCL_GIN_ENABLE=1   # NCCL params; aws-ofi-nccl 1.21.1 has no OFI_NCCL_GIN_GDAKI / OFI_NCCL_GIN_MAX_REQUESTS parameter (see serve.sh)
 export NCCL_CUMEM_ENABLE=1 NCCL_NVLS_ENABLE=0 NCCL_IGNORE_DISABLED_P2P=1
 export FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_FORK_SAFE=1
-export OFI_NCCL_PROTOCOL=RDMA DEEP_EP_BACKEND=nccl
+export OFI_NCCL_PROTOCOL=RDMA   # (no DEEP_EP_BACKEND: read by nothing in DeepEP or vLLM)
 export NCCL_NET_PLUGIN=/opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so   # bundled by EFA installer >= 1.50.0 (Dockerfile Layer 2)
 export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-^lo,docker,veth}   # exclusion, never positive selection: EFA nodes expose efa*/enp* and CNI adds bridges; auto-select can pick a non-routing iface -> rendezvous hang. Repo convention (nccl-tests Dockerfile). Kept identical to serve.sh so this claim ("VERBATIM from serve.sh") stays true.
 # no OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY here: the gdrdrv-2.4 override was declined upstream

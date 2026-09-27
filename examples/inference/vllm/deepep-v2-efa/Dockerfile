@@ -82,15 +82,14 @@ RUN git clone https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
 
 # ---- Layer 4: DeepEP-V2 source staging (in-tree script, COPY'd not curled) ----
 # The aws-ofi-nccl plugin comes from the EFA installer (Layer 2); this layer only stages
-# the pinned DeepEP-V2 source. The one DeepEP BUILD happens in-pod on first boot
-# (recipe/build_deepep.sh — needs a live CUDA context the build sandbox lacks).
+# the pinned DeepEP-V2 source: the amazon-contributing/DeepEP fork at one immutable SHA (the
+# canonical deepep-v2-benchmark's source — no PR merge, no local patch). The one DeepEP BUILD
+# happens in-pod on first boot (recipe/build_deepep.sh — needs a live CUDA context the build
+# sandbox lacks).
 COPY setup_deepep_v2_efa.sh /opt/setup_deepep_v2_efa.sh
-ARG DEEPEP_SHA=b306af06afd412c88e51e71802951606e40b7358
-ARG DEEPEP_PR=612
-ARG DEEPEP_PR_SHA=28d1f7fb173f728be51632ce0026fea23243e350
+ARG DEEPEP_SHA=97d8f9bcc1be31e9036db2ab591ef9b9f4e38619   # amazon-contributing/DeepEP@main, 2026-09-03 — the SHA the sibling vllm/deepep-v2-gdaki-efa + nvidia-dynamo/deepep-v2-efa samples pin
 RUN chmod +x /opt/setup_deepep_v2_efa.sh \
-    && DEEPEP_SHA=${DEEPEP_SHA} DEEPEP_PR=${DEEPEP_PR} DEEPEP_PR_SHA=${DEEPEP_PR_SHA} \
-       /opt/setup_deepep_v2_efa.sh
+    && DEEPEP_SHA=${DEEPEP_SHA} /opt/setup_deepep_v2_efa.sh
 ENV LD_LIBRARY_PATH=/opt/amazon/ofi-nccl/lib:${LD_LIBRARY_PATH}
 
 # ---- Layer 5: vLLM (pinned wheel = vLLM #52632's merge commit — the empty-ExpertTokensMetadata guard that unblocks default compilation) ----

@@ -76,7 +76,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
       - name: vllm
-        image: REPLACE_WITH_YOUR_REGISTRY/vllm-deepep-v2-efa:v3-20260916   # = ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} from setup/env_vars — bump on every rebuild (IfNotPresent caches by tag; this tag postdates the switch to the installer-bundled aws-ofi-nccl plugin). Keep in sync with setup/env_vars.example.
+        image: REPLACE_WITH_YOUR_REGISTRY/vllm-deepep-v2-efa:v4-20260927   # = ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} from setup/env_vars — bump on every rebuild (IfNotPresent caches by tag; this tag postdates the DeepEP source move to the amazon-contributing fork). Keep in sync with setup/env_vars.example.
         imagePullPolicy: IfNotPresent
         command: ["/bin/bash", "-c"]
         args:
@@ -122,13 +122,11 @@ spec:
 
         # ---- proxy-Gin + EFA contract, VERBATIM (set by recipe/serve.sh at launch;
         #      repeated here so the manifest alone documents the transport contract) ----
-        - { name: NCCL_GIN_TYPE,             value: "2" }     # 2 = CPU-proxy GIN (the EFA-viable path)
+        - { name: NCCL_GIN_TYPE,             value: "2" }     # 2 = CPU-proxy GIN (the EFA-viable path; 3 = GDAKI) — NCCL selects the backend, no aws-ofi-nccl env is involved
         - { name: NCCL_GIN_ENABLE,           value: "1" }
-        - { name: OFI_NCCL_GIN_GDAKI,        value: "0" }     # GPU-initiated: not the shipped path on EFA
         # (no OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY: the gdrdrv-2.4 override was declined upstream,
         #  aws/aws-ofi-nccl#1351 — GIN needs host gdrcopy/gdrdrv >= 2.5)
         - { name: EP_REUSE_NCCL_COMM,        value: "0" }     # DeepEP own-comm; never borrow torch lazy comm (2026-08-14 fix)
-        - { name: OFI_NCCL_GIN_MAX_REQUESTS, value: "512" }
         - { name: NCCL_CUMEM_ENABLE,         value: "1" }
         - { name: NCCL_NVLS_ENABLE,          value: "0" }
         - { name: NCCL_IGNORE_DISABLED_P2P,  value: "1" }
@@ -137,7 +135,6 @@ spec:
         - { name: FI_EFA_ENABLE_SHM_TRANSFER, value: "0" }
         - { name: FI_EFA_FORK_SAFE,          value: "1" }
         - { name: OFI_NCCL_PROTOCOL,         value: "RDMA" }
-        - { name: DEEP_EP_BACKEND,           value: "nccl" }
         - { name: NCCL_NET_PLUGIN,           value: "/opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so" }  # bundled by EFA installer >= 1.50.0
         - { name: NCCL_DEBUG,                value: "WARN" }  # INFO to see the efa-direct banner proof
         # readiness reports real serving state on the LEADER (vLLM /health on :8000; workers

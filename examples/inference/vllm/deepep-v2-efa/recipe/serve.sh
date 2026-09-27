@@ -28,10 +28,14 @@ case "$ROLE" in leader|worker) ;; *) echo "FATAL: unrecognized role '$ROLE' (lea
 DP_MASTER_PORT="${DP_MASTER_PORT:-29500}"
 
 # ---- proxy-Gin + EFA env contract (identical to the measured runs + deploy YAML) ----
-export NCCL_GIN_TYPE=2 NCCL_GIN_ENABLE=1 OFI_NCCL_GIN_GDAKI=0 OFI_NCCL_GIN_MAX_REQUESTS=512
+# NCCL picks the GIN backend: NCCL_GIN_TYPE=2 is the CPU proxy (the EFA-viable path; 3 would be
+# GDAKI). Both are NCCL params (src/gin/gin_host.cc). aws-ofi-nccl 1.21.1 has NO OFI_NCCL_GIN_GDAKI
+# or OFI_NCCL_GIN_MAX_REQUESTS parameter (its OFI_NCCL_PARAM table's only GIN knob is
+# GIN_CQ_PROCESS_MAX_ITER), so the two knobs earlier revisions exported here were inert; gone.
+export NCCL_GIN_TYPE=2 NCCL_GIN_ENABLE=1
 export NCCL_CUMEM_ENABLE=1 NCCL_NVLS_ENABLE=0 NCCL_IGNORE_DISABLED_P2P=1
 export FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_FORK_SAFE=1
-export OFI_NCCL_PROTOCOL=RDMA DEEP_EP_BACKEND=nccl
+export OFI_NCCL_PROTOCOL=RDMA   # (no DEEP_EP_BACKEND: nothing in DeepEP or vLLM reads it — the backend is vLLM's --all2all-backend deepep_v2 below)
 export NCCL_NET_PLUGIN=/opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so   # bundled by EFA installer >= 1.50.0 (Dockerfile Layer 2)
 export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-^lo,docker,veth}   # exclusion, never positive selection: EFA nodes expose efa*/enp* and CNI adds bridges; auto-select can pick a non-routing iface -> rendezvous hang. Repo convention (nccl-tests Dockerfile).
 # gdrcopy host requirement: GIN needs host gdrcopy/gdrdrv >= 2.5. The forced-PCIe override
@@ -40,17 +44,12 @@ export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-^lo,docker,veth}   # exclusion, 
 # the bundled 1.21.1 plugin — on a gdrdrv-2.4 host, upgrade the host driver; do not work around it.
 export EP_REUSE_NCCL_COMM=0   # DeepEP creates its own comm; torch's is lazy/null under vLLM (segfault rootcause 2026-08-14)
 export NCCL_DEBUG=${SERVE_NCCL_DEBUG:-WARN}
-# EP_EFA_MAX_QPS=2 is the value the published benchmarks/ numbers were measured with
-# (DeepEP PR#612's conservative EFA default: its commit message caps auto-QP at 2 to avoid
-# a 128-slot GIN request-ring overflow) — kept as the default so the sample reproduces its
-# own tables. It may leave throughput on the table on newer aws-ofi-nccl: that 128-slot ring
-# was replaced by the seq-window design upstream (6e504db), which IS in the aws-ofi-nccl
-# 1.21.1 the EFA installer bundles (6e504db is an ancestor of the v1.21.1 tag),
-# so the image is not in the condition the cap was written for; a 2x B200 A/B through this
-# same vLLM path measured +29% throughput / -23% p50 uncapped (=129) with 0/384 failures, so
-# uncapping is worth testing on p5en. If you tune it, re-measure at YOUR concurrency and
-# record the value — both knobs are part of the benchmark provenance table.
-export EP_EFA_MAX_QPS=${EP_EFA_MAX_QPS:-2} EP_EFA_RDMA_GBS=${EP_EFA_RDMA_GBS:-25.0}
+# QP sizing + RDMA link rate need no env at the shipped DeepEP pin: the amazon-contributing
+# fork clamps the QP count into [_C.min_unordered_gin_qps, _C.max_unordered_gin_qps]
+# (deep_ep/buffers/elastic.py) and probes the link rate from sysfs (deep_ep/utils/envs.py
+# _get_sysfs_rdma_gbs). The EP_EFA_MAX_QPS / EP_EFA_RDMA_GBS knobs from deepseek PR#612 that the
+# published benchmarks/ tables were measured with do not exist on this source and are
+# deliberately not exported (see the provenance table in benchmarks/README.md).
 
 # ---- vLLM PR#41183 (DeepEPV2All2AllManager) envs — V2-native, shim OFF ----
 export DEEP_EP_USE_V2_SHIM=0

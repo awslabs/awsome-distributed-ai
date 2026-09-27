@@ -14,9 +14,9 @@ bring-up, no measured sweep — the shipped manifest is the 2-node/EP16 shape).
 ## How DeepEP-V2 gets onto EFA
 
 DeepEP's default transport is NVSHMEM/IBGDA, which EFA does not provide. The V2 (`ElasticBuffer`) path
-instead runs its dispatch/combine over `aws-ofi-nccl`'s **GIN CPU-proxy** (`NCCL_GIN_TYPE=2`,
-`OFI_NCCL_GIN_GDAKI=0`) on the `efa-direct` fabric. Three things make this work, and two of them are
-non-obvious integration fixes, not config:
+instead runs its dispatch/combine over `aws-ofi-nccl`'s **GIN CPU-proxy** (`NCCL_GIN_TYPE=2` — NCCL
+selects the GIN backend; no aws-ofi-nccl env is involved) on the `efa-direct` fabric. Three things
+make this work, and two of them are non-obvious integration fixes, not config:
 
 ### Integration fixes baked into this sample
 
@@ -32,8 +32,15 @@ non-obvious integration fixes, not config:
    ([aws/aws-ofi-nccl#1351](https://github.com/aws/aws-ofi-nccl/pull/1351)) was declined upstream
    (gdrcopy 2.4.x has silent-data-corruption issues), so on a 2.4 host the fix is a host driver
    upgrade, not a container knob.
-3. **DeepEP-V2 source** = `b306af06` + [PR#612](https://github.com/deepseek-ai/DeepEP/pull/612) (EFA
-   auto-QP cap), pinned to the PR's **immutable head SHA** (a bare `refs/pull/N/head` is a moving ref).
+3. **DeepEP-V2 source** = the
+   [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) fork at a pinned SHA
+   (`97d8f9bc`) — the tree AWS points to for DeepEP-V2 on EFA and the one the repo's canonical V2/GIN
+   provisioner pins ("the benchmark supports no other source"); the sibling
+   `vllm/deepep-v2-gdaki-efa` and `nvidia-dynamo/deepep-v2-efa` samples pin the same SHA. The fork
+   carries the in-tree successors of deepseek [PR#612](https://github.com/deepseek-ai/DeepEP/pull/612)'s
+   EFA work — the QP count clamps from `_C` runtime constants and the RDMA link rate is probed from
+   sysfs — so no PR merge or local patch is applied, and no `EP_EFA_MAX_QPS` / `EP_EFA_RDMA_GBS` env
+   exists (or is set) in this sample.
 
 ### eager vs non-eager (both measured; see `benchmarks/`)
 
@@ -79,8 +86,10 @@ the GIN-capable aws-ofi-nccl plugin (build-gated on its `ncclGinPlugin_v14` expo
 `setup_deepep_v2_efa.sh` stages the pinned DeepEP-V2 source; the one DeepEP **build** — the `_C.so` —
 is compiled in-pod on first boot (needs a live CUDA context) by `recipe/`-invoked `build_deepep.sh`. The in-tree
 `Dockerfile` is the canonical, reviewable build. The published benchmark numbers were taken with it at
-the previous pin (`e2f993dc4`); the pin has since moved to `14617c2b` (vLLM #52632's merge commit) and
-the tables have **not** been re-measured on it — see `benchmarks/README.md`.
+the previous pin (`e2f993dc4`); the pin has since moved to `14617c2b` (vLLM #52632's merge commit), the
+DeepEP source to the `amazon-contributing` fork and the GIN plugin to the installer-bundled build, and
+the tables have **not** been re-measured on the current substrate (build + symbol gates pass; the
+2-node E2E re-run is the outstanding step) — see `benchmarks/README.md`.
 
 The one image name used everywhere is `${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}` from
 `setup/env_vars` (`build-push.sh` builds and pushes exactly that; point the manifest's `image:` at
@@ -153,14 +162,13 @@ eager and non-eager tables + environment provenance.
 ## Known limitations
 
 - Measured on **H200 (p5en, `sm_90`) only**; no Blackwell serving run is in this sample. The manifest's
-  `DEEPEP_ARCH_LIST=10.0` (p6-b200) / `10.3` (p6-b300) knobs are **documented but not verified** at the
-  shipped DeepEP pin: on 2× p6-b300 the DeepEP runtime JIT produced no loadable kernel (a Blackwell PTX
-  codegen failure at CUDA 13.0 on the `deepseek-ai/DeepEP@b306af06` lineage). The
-  [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) fork the canonical
-  benchmark pins carries the `st.bulk` 64-bit-operand fix
-  ([#3](https://github.com/amazon-contributing/DeepEP/pull/3)) that makes CUDA 13.0 work on Blackwell;
-  moving this sample's `DEEPEP_SHA`/`DEEPEP_REPO` to that fork is the intended path to enabling those
-  rows, and should be re-verified on Blackwell before the knobs are advertised as working.
+  `DEEPEP_ARCH_LIST=10.0` (p6-b200) / `10.3` (p6-b300) knobs are **documented but not verified**: an
+  earlier bring-up on 2× p6-b300 hit a Blackwell PTX codegen failure at CUDA 13.0 on the
+  `deepseek-ai/DeepEP@b306af06` lineage this sample previously pinned. The shipped pin is now the
+  [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) fork, which carries the
+  `st.bulk` 64-bit-operand fix ([#3](https://github.com/amazon-contributing/DeepEP/pull/3)) that removes
+  that specific codegen failure — but no Blackwell run exists at the shipped pin, so re-verify on p6
+  before advertising those rows as working.
 - The `benchmarks/` numbers are an **at-scale throughput + relative-latency** datapoint (fixed 128-token
   greedy decode, single sweep per mode), **not** a tuned per-token-latency (TTFT) baseline.
 - Default-compilation (non-eager) serving needs the empty-`ExpertTokensMetadata` guard
@@ -186,13 +194,13 @@ eager and non-eager tables + environment provenance.
      the exact `torch 2.11+cu130` / `nvidia-nccl-cu13 2.30.4` the pinned vLLM wheel drags in (Dockerfile
      Layer 5b re-pins it), so the toolchain is wheel-driven rather than a standalone NCCL build tree.
 
-  The **DeepEP source** is the one divergence with a concrete cost, called out at
-  `setup_deepep_v2_efa.sh` (see the header note there): the canonical pins the
-  [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) fork, which carries the
-  Blackwell `st.bulk` 64-bit-operand fix ([amazon-contributing/DeepEP#3](https://github.com/amazon-contributing/DeepEP/pull/3),
-  merged 2026-08-24); this sample pins `deepseek-ai/DeepEP@b306af06`+PR#612, which does not. The
-  `benchmarks/` numbers were measured on H200 (`sm_90`), where this does not bite — see the Blackwell
-  caveat under **Known limitations** before using the `DEEPEP_ARCH_LIST=10.x` knob.
+  The **DeepEP source** is no longer a divergence: since review round 4 this sample pins the same
+  [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) fork the canonical
+  pins (`97d8f9bc`, which includes the Blackwell `st.bulk` 64-bit-operand fix,
+  [amazon-contributing/DeepEP#3](https://github.com/amazon-contributing/DeepEP/pull/3)). The
+  `benchmarks/` numbers were measured on the previous `deepseek-ai/DeepEP@b306af06`+PR#612 tree on H200
+  (`sm_90`) — see the provenance table there, and the Blackwell caveat under **Known limitations**
+  before using the `DEEPEP_ARCH_LIST=10.x` knob.
 - `setup_deepep_v2_efa.sh` is deliberately **outside** `.github/workflows/deepep-vendor-sync.yml`. That
   CI gates only the NVSHMEM `setup_deepep_efa.sh` vendored copy (canonical at
   `micro-benchmarks/expert-parallelism/deepep-benchmark/`) — a different script — so this V2/GIN variant
