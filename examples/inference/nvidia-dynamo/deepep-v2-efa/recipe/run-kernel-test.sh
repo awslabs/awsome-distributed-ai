@@ -48,10 +48,13 @@ echo "===== DeepEP-V2 kernel smoke: role=$ROLE node_rank=$NODE_RANK nnodes=$NNOD
 # matrix (~1600 profiled dispatch/combine cases at DP16); measured here it runs >10 min
 # and trips any sane timeout with rc=124 EVEN WHEN THE TRANSPORT IS PERFECT (verified on
 # 2x p5en 2026-09-04: efa-direct banner + real bytes on all 16 ranks, yet the unbounded
-# form hit the 600s bound). --test-first-only runs ONE case; --skip-perf-test gates ONLY
-# the bench_kineto timing block (test_ep.py:234) — the dispatch()/combine() correctness
-# cycle and its ~30 torch.equal asserts (lines 111-200) STILL run, so bytes still move
-# over EFA and correctness is still verified. Bounded form measured ~90s end-to-end.
+# form hit the 600s bound). --test-first-only (test_ep.py:618, break at :525) runs ONE case;
+# --skip-perf-test (:609) gates ONLY the profiling block (`if not args.skip_perf_test:` at :245 —
+# the bench_kineto timings through ~:369) in the pinned fork tree (amazon-contributing/DeepEP
+# 97d8f9bc, tests/elastic/test_ep.py). The dispatch()/combine() correctness cycle STILL runs:
+# the NCCL-reference checks before the perf block (:119-:211) and the `# Checks` block after it
+# (:371-:521; the file carries 22 torch.equal asserts), so bytes still move over EFA and
+# correctness is still verified. Bounded form measured ~90s end-to-end.
 # `timeout` remains as the hard safety bound (a wrong NNODES / a worker that never starts
 # / a stalled NCCL init blocks indefinitely otherwise); 180s is comfortably above the ~90s
 # measured runtime. timeout exits 124 on expiry, reported as FAIL below rather than a hang.

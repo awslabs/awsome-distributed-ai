@@ -16,8 +16,9 @@ the **shipped pin** (`e2f993dc4`), but on the sibling vLLM sample's image and wi
 of the probe (see the methodology caveats below). It is **not** re-measured on this Dynamo image, and
 the checked-in probe measures a different population, so a stock rebuild will **not** reproduce it. The
 **non-eager** table is **historical**: it needed [vLLM #52632](https://github.com/vllm-project/vllm/pull/52632) applied
-as an unmerged cherry-pick (that guard is only on the 0.26 line, which regresses `deepep_v2` combine here
-— see the main README "eager vs non-eager"), so a stock rebuild does **not** reproduce it either. Both
+as an unmerged cherry-pick (that guard is only in vLLM ≥ `14617c2b`, a pin this sample has not moved to
+— the main README "eager vs non-eager" states the 2026-09-04 fault at that wheel and its scope), so a
+stock rebuild does **not** reproduce it either. Both
 are kept for the eager-vs-non-eager comparison, not as paths this sample ships.
 
 ## Environment provenance
@@ -121,9 +122,9 @@ deltas within run-to-run variation), then falls ~21% behind at 64 on this shape 
 jumps 27→34 s at c=64 while eager stays flat). Mechanism not root-caused here — candidates are
 CUDA-graph capture-size coverage vs per-engine batch shape at high concurrency. Guidance: **eager is
 the shipped, supported, zero-patch path and is at worst ~a few percent off non-eager below c=64.**
-Non-eager is not a supported flip at the shipped pin (it needs #52632, which is only on the
-`deepep_v2`-combine-regressing 0.26 line — see the main README); the numbers above are the
-historical comparison, not a production option this sample offers.
+Non-eager is not a supported flip at the shipped pin (it needs #52632, i.e. vLLM ≥ `14617c2b`, a pin
+this sample has not moved to — see the main README); the numbers above are the historical comparison,
+not a production option this sample offers.
 
 ## Honest caveats
 

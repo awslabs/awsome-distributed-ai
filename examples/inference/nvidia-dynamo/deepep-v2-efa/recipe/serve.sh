@@ -18,13 +18,16 @@
 #   WORKER (node 1+):
 #     `dynamo.vllm --headless` -> vLLM run_headless(): the worker runs vLLM ONLY (no discovery, no
 #     dynamo endpoints); it joins the DP group purely through vLLM's data-parallel RPC to the leader
-#     — byte-identical to the `vllm serve --headless` worker in the sibling vLLM sample.
-# The ONLY delta vs the vLLM-DeepEP-V2 twin (../../vllm/deepep-v2-efa) is the dynamo.vllm wrapper +
-# dynamo.frontend ingress. The proxy-Gin/EFA env contract, the DP-coordinator flags, the model, and
-# the EP-divisibility preflight below are IDENTICAL to that sample (see README "Relationship to the
-# vLLM sample").
+#     — the same role as the `vllm serve --headless` worker in the sibling vLLM sample.
+# The serving-front delta vs the vLLM-DeepEP-V2 sibling (../../vllm/deepep-v2-efa) is the dynamo.vllm
+# wrapper + dynamo.frontend ingress. The proxy-Gin/EFA env contract (NCCL_NET_PLUGIN path aside: this
+# image builds the plugin at /opt/aws-ofi-nccl, the sibling uses the installer's /opt/amazon/ofi-nccl),
+# the DP-coordinator flags and the model defaults below are the same text as that sample's; the
+# EP-divisibility preflight here is stricter (n_routed_experts % (DP×TP), plus a per-node GPU-fit
+# check — review round 1). The image-level differences (plugin build path, vLLM pin) are tabled in
+# README "Relationship to the vLLM sample".
 #
-# Scale is env-driven (the proven 2-node DP16 default is byte-identical unless overridden):
+# Scale is env-driven (the measured 2-node DP16 default applies unless overridden):
 #   SERVE_DP=16|32...    total data-parallel size across all nodes (= EP size)
 #   SERVE_DP_LOCAL=8     ranks per node (= GPUs per node)
 #   SERVE_MODEL=...      any MoE whose n_routed_experts % (SERVE_DP x SERVE_TP) == 0 (preflighted below)
@@ -37,9 +40,10 @@
 # SERVE_ENFORCE_EAGER=0 — default (CUDA-graph) compilation. NOT supported at the shipped pin:
 #   at e2f993dc4, non-eager crashes deterministically ~48 s into startup in profile_run
 #   (Triton IMA in deepep_v2.py combine, via finalize_async). The empty-ExpertTokensMetadata
-#   guard that fixes it (vLLM #52632) landed only on the 0.26 line — and 0.26's deepep_v2
-#   combine separately faults CUDA_ERROR_LAUNCH_FAILED (719) in profile_run on this exact
-#   DeepEP/EFA substrate (measured 2026-09-04), so we cannot pin forward to get #52632 either.
+#   guard that fixes it (vLLM #52632) is only in vLLM >= 14617c2b, a pin this sample has not
+#   moved to: serving there is unmeasured on the shipped recipe, and the one 2026-09-04 attempt
+#   at that wheel (ai-dynamo 1.4.2, pre-review substrate) faulted CUDA_ERROR_LAUNCH_FAILED (719)
+#   in profile_run — see the Dockerfile Layer-5 truth table / README "eager vs non-eager".
 #   The historical non-eager benchmarks/ tables were taken on this pin with #52632 applied as
 #   an UNMERGED cherry-pick; reproducing them needs that patch. Leave this =1.
 set -euo pipefail   # -e: preflight failures below must STOP the launch, not fall through to the serve
@@ -47,11 +51,14 @@ ROLE="${1:?usage: serve.sh leader|worker <leader-ip> [start-rank]}"; DP_MASTER_I
 case "$ROLE" in leader|worker) ;; *) echo "FATAL: unrecognized role '$ROLE' (leader|worker)"; exit 2 ;; esac
 DP_MASTER_PORT="${DP_MASTER_PORT:-29500}"
 
-# ---- proxy-Gin + EFA env contract (identical to the measured runs + deploy YAML) ----
+# ---- proxy-Gin + EFA env contract (the same contract the deploy YAML sets; the measured runs
+# additionally exported three inert variables — see benchmarks/README.md provenance) ----
 # NCCL picks the GIN backend: NCCL_GIN_TYPE=2 is the CPU proxy (the EFA-viable path; 3 would be
 # GDAKI). Both are NCCL params (src/gin/gin_host.cc). aws-ofi-nccl v1.21.1 has NO OFI_NCCL_GIN_GDAKI
-# or OFI_NCCL_GIN_MAX_REQUESTS parameter (its OFI_NCCL_PARAM table's only GIN knob is
-# GIN_CQ_PROCESS_MAX_ITER), so the two knobs earlier revisions exported here were inert; gone.
+# or OFI_NCCL_GIN_MAX_REQUESTS parameter (its 39-entry OFI_NCCL_PARAM table's GIN/GDAKI-related
+# knobs are GIN_CQ_PROCESS_MAX_ITER, include/nccl_ofi_param.h:109, and GDAKI_EFA_HW_COUNTER, :398 —
+# a hardware-counter override, not a backend switch), so the two knobs earlier revisions exported
+# here were inert; gone.
 export NCCL_GIN_TYPE=2 NCCL_GIN_ENABLE=1
 export NCCL_CUMEM_ENABLE=1 NCCL_NVLS_ENABLE=0 NCCL_IGNORE_DISABLED_P2P=1
 export FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_FORK_SAFE=1
@@ -98,7 +105,7 @@ print(os.path.join(p,"lib") if p else "")' 2>/dev/null || true)"
 export LD_LIBRARY_PATH="${NVSHMEM_LIB}:${NCCL_LIB}:/opt/aws-ofi-nccl/lib:/opt/amazon/efa/lib:/usr/local/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 export PATH=/opt/amazon/efa/bin:$PATH
 
-# ---- scale + model (defaults = the measured EP16 2-node shape; identical to the vLLM sample) ----
+# ---- scale + model (defaults = the measured EP16 2-node shape; the same defaults as the vLLM sample) ----
 SERVE_MODEL="${SERVE_MODEL:-Qwen/Qwen3-30B-A3B-FP8}"
 # Pin the model REVISION too: --trust-remote-code (below) executes repo-side modeling code
 # in-pod, so an unpinned repo could change the code between preflight and load, or between
@@ -156,14 +163,14 @@ fi
 # ---- eager / non-eager selection (see header + README "eager vs non-eager") ----
 # SERVE_ENFORCE_EAGER=1 (default) = eager, the ONLY supported mode at the shipped pin
 # (e2f993dc4) and the mode the published tables were measured with. =0 = default (CUDA-graph)
-# compilation, which at this pin crashes in profile_run (needs vLLM #52632, on the 0.26 line
-# only — and 0.26 regresses deepep_v2 combine here; see header + README "eager vs non-eager").
+# compilation, which at this pin crashes in profile_run (needs vLLM #52632, i.e. vLLM >= 14617c2b,
+# a pin this sample has not moved to; see header + README "eager vs non-eager").
 SERVE_ENFORCE_EAGER="${SERVE_ENFORCE_EAGER:-1}"
 EAGER_FLAG="--enforce-eager"
 if [ "$SERVE_ENFORCE_EAGER" != "1" ]; then
   echo "WARNING: SERVE_ENFORCE_EAGER=0 (default CUDA-graph compilation) is NOT supported at the shipped"
   echo "  vLLM pin e2f993dc4 — it crashes deterministically in profile_run (needs the #52632 guard, which"
-  echo "  is only on the deepep_v2-combine-regressing 0.26 line). Proceeding as requested, but expect a crash."
+  echo "  is only in vLLM >= 14617c2b, a pin this sample has not moved to). Proceeding as requested, but expect a crash."
   EAGER_FLAG=""
 fi
 
@@ -176,7 +183,7 @@ fi
 REV_FLAG=""; [ -n "$SERVE_MODEL_REVISION" ] && REV_FLAG="--revision ${SERVE_MODEL_REVISION}"
 # COMMON = the DP/EP + AsyncEngineArgs flags. dynamo.vllm forwards every flag it does not itself
 # define straight into vLLM's AsyncEngineArgs (parse_known_args -> AsyncEngineArgs.from_cli_args),
-# so this block is IDENTICAL to the vLLM sample's COMMON — the DeepEP-V2 backend selection,
+# so this block is the same text as the vLLM sample's COMMON — the DeepEP-V2 backend selection,
 # DP-coordinator wiring, and eager/revision flags all pass through unchanged.
 COMMON="--tensor-parallel-size ${SERVE_TP} --data-parallel-size ${SERVE_DP} --data-parallel-size-local ${SERVE_DP_LOCAL} \
   --data-parallel-address ${DP_MASTER_IP} --data-parallel-rpc-port ${DP_MASTER_PORT} \

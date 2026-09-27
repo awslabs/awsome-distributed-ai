@@ -1,8 +1,10 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
 #
 # NVIDIA Dynamo (frontend + dynamo.vllm) serving DeepEP-V2 MoE all-to-all over AWS EFA
-# (NCCL-GIN CPU-proxy). NGC-from-scratch. This is the vLLM-DeepEP-V2 substrate (identical to
-# ../../vllm/deepep-v2-efa through Layer 5b) plus a Dynamo serving front (Layer 5c). DeepEP's
+# (NCCL-GIN CPU-proxy). NGC-from-scratch. This is the vLLM-DeepEP-V2 substrate — the same layer
+# recipe as ../../vllm/deepep-v2-efa (base, EFA installer, torch/NCCL/NVSHMEM/gdrcopy pins and the
+# DeepEP pin match; the aws-ofi-nccl build path and the vLLM pin differ — README "Relationship to
+# the vLLM sample" tables both) — plus a Dynamo serving front (Layer 5c). DeepEP's
 # default NVSHMEM/IBGDA transport is dead on EFA; this uses aws-ofi-nccl's GIN CPU-proxy
 # (NCCL_GIN_TYPE=2). Build logic lives in setup_deepep_v2_efa.sh (COPY'd, not curled) so it is
 # in-tree + reviewable. The DeepEP _C.so is built IN-POD on first boot (recipe/build_deepep.sh)
@@ -25,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libnuma-dev libhwloc-dev python3 python3-pip python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# ---- Layer 2: AWS EFA (public installer; pinned, verified fresher than 1.48 per freshness rule) ----
+# ---- Layer 2: AWS EFA (public installer; pinned to 1.50.0 = the canonical deepep-v2-benchmark's pin, bumped from 1.49.0 in review round 1 — re-check upstream before moving it) ----
 # --disable-ngc: this NGC base ships /opt/nvidia/nvidia_entrypoint.sh, which trips the
 # installer's NGC auto-detect and silently reroutes it down the libnccl-ofi-ngc path.
 # We build aws-ofi-nccl from source ourselves (Layer 4), so force the normal install —
@@ -83,25 +85,34 @@ ENV LD_LIBRARY_PATH=/opt/aws-ofi-nccl/lib:${LD_LIBRARY_PATH}
 # parser rejects an inline `#` token on ENV lines.)
 ENV NVIDIA_GDRCOPY=enabled
 
-# ---- Layer 5: vLLM (pinned wheel = PR#41183's merge commit — the first, and only measured-working, deepep_v2 backend) ----
+# ---- Layer 5: vLLM (pinned wheel = PR#41183's merge commit — the only vLLM measured serving deepep_v2 over EFA here) ----
 # The wheel FILENAME is derived from the per-commit index at build time, so bumping
 # VLLM_SHA ALONE is sufficient (hardcoding the filename would embed the SHA twice and a
 # lone bump 404s).
 # NOTE: wheels.vllm.ai nightly wheels are garbage-collected upstream, so this pin has a
 # shelf life independent of this repo; the fail-loud check below names that cause.
 # Pin = e2f993dc4 = the merge commit of vLLM PR#41183 (the commit that ADDED the deepep_v2
-# backend, DeepEPV2All2AllManager) = 0.22.1rc1.dev283. This is the EXACT substrate the
-# benchmarks/ tables were measured on, so a rebuild reproduces them. It is served EAGER
-# (--enforce-eager, the shipped default): non-eager at this pin crashes deterministically
-# in profile_run and needs the #52632 empty-ExpertTokensMetadata guard, which is NOT in
-# this pin — see README "eager vs non-eager".
-# Why not a newer pin: vLLM 0.26 (the line that carries #52632) regresses the deepep_v2
-# combine on this exact DeepEP _C.so / EFA substrate — DP16/EP16 faults
-# `CUDA_ERROR_LAUNCH_FAILED (719)` in profile_run/determine_available_memory during KV-cache
-# sizing (measured 2026-09-04, eager AND non-eager; the standalone kernel-test still passes,
-# so the fault is 0.26's DeepEP-V2 driver, not the kernels). e2f993dc4 is the newest vLLM
-# proven to serve deepep_v2 DP16/EP16 on EFA, so the pin stays here until a newer line is
-# re-measured green on this substrate.
+# backend, DeepEPV2All2AllManager) = 0.22.1rc1.dev283. It is the vLLM the benchmarks/ tables
+# (vLLM-sample image, 2026-08-14) and this sample's 2026-09-04 Dynamo E2E were measured on;
+# the tables themselves are NOT reproduced by a rebuild (different image + probe revision —
+# see benchmarks/README.md). It is served EAGER (--enforce-eager, the shipped default):
+# non-eager at this pin crashes deterministically in profile_run and needs the #52632
+# empty-ExpertTokensMetadata guard, which is NOT in this pin — see README "eager vs non-eager".
+# Why the pin has not moved forward (the vLLM-pin truth table, stated the same way in the
+# sibling ../../vllm/deepep-v2-efa):
+#   e2f993dc4 (0.22.1rc1.dev283)  — measured serving deepep_v2 DP16/EP16 over EFA, eager.
+#   14617c2b  (0.26.1rc1.dev1000, #52632's merge commit; the sibling's shipped pin) — build-
+#     and symbol-gate-verified there, serving NOT re-measured there. This sample's first
+#     2026-09-04 image carried that exact wheel under ai-dynamo 1.4.2 (dynamo.vllm) on the
+#     pre-review substrate (DeepEP b306af06+PR#612, aws-ofi-nccl 9c44d34+#1351 c1, EFA
+#     installer 1.49.0) and faulted `CUDA_ERROR_LAUNCH_FAILED (719)` at DeepEP
+#     csrc/jit/handle.hpp:97 in profile_run/determine_available_memory (KV-cache sizing;
+#     eager default; EngineCore DP4/DP6 in the leader log), while the standalone kernel test
+#     passed on the same image. The front (1.4.2 -> 1.3.1) and the substrate changed with the
+#     re-pair to e2f993dc4, so that fault is not a verdict on 14617c2b under plain
+#     `vllm serve`, nor on 14617c2b on the current fork/v1.21.1 substrate — both UNMEASURED.
+#   The queued re-measure (a serve at 14617c2b vs e2f993dc4 on the shipped recipe) settles the
+#   pin; until it lands this sample stays on the measured one. See README "eager vs non-eager".
 ARG VLLM_SHA=e2f993dc4116ba96ea10ec40b7bd2ee45b27b2b8
 RUN WHEEL_HREF=$(curl -fsSL "https://wheels.vllm.ai/${VLLM_SHA}/vllm/" | grep -oE 'href="[^"]*manylinux[^"]*x86_64\.whl"' | head -1 | cut -d'"' -f2) \
     && { [ -n "$WHEEL_HREF" ] || { echo "FATAL: no x86_64 vllm wheel indexed for ${VLLM_SHA} (bad SHA, or nightly wheel garbage-collected upstream)"; exit 1; }; } \
@@ -121,7 +132,8 @@ RUN pip3 install --no-cache-dir --no-deps --force-reinstall \
     && python3 -c "import torch; assert torch.__version__ == '2.11.0+cu130', f'torch drifted: {torch.__version__} != 2.11.0+cu130'"  # GIN/LSA symbols present (2.28.x lacks them) + the torch build every ABI comment in this file assumes (the vLLM wheel keeps 2.11.0+cu130 only via PEP 440's local-version rule, so assert it rather than trust it)
 
 # ---- Layer 5c: NVIDIA Dynamo serving front (--no-deps: this is the ONLY delta vs the vLLM twin) ----
-# This image is the vLLM-DeepEP-V2 substrate (Layers 1-5b, byte-identical to ../../vllm/deepep-v2-efa)
+# This image is the vLLM-DeepEP-V2 substrate (Layers 1-5b — the same recipe as ../../vllm/deepep-v2-efa
+# except the aws-ofi-nccl build path and the vLLM pin; README "Relationship to the vLLM sample")
 # with Dynamo's serving front added on top. dynamo.vllm wraps the SAME vLLM engine (it forwards every
 # unknown CLI flag straight into vLLM's AsyncEngineArgs), so nothing about the DeepEP-V2/EFA transport
 # changes — only an OpenAI-compatible frontend + a DP/EP-aware worker wrapper are added.
@@ -141,8 +153,8 @@ RUN pip3 install --no-cache-dir --no-deps --force-reinstall \
 #   arg-forwarding wrapper (it delegates every unknown flag to vLLM's own AsyncEngineArgs.add_cli_args
 #   and constructs AsyncLLM directly), so the version that matters is the vLLM API surface its Python was
 #   authored against. 1.3.1 targets 0.23.0 — ONE minor from the 0.22 substrate, the closest released
-#   dynamo.vllm surface (1.2.1→0.20.1 is older AND further; 1.4.x→0.26.0 targets the line whose deepep_v2
-#   combine regresses here). Verified offline (vllm git tree @ e2f993dc4) that every vLLM module path
+#   dynamo.vllm surface (1.2.1→0.20.1 is older AND further; 1.4.x→0.26.0 is the pairing whose 2026-09-04
+#   serve faulted here — Layer 5 truth table). Verified offline (vllm git tree @ e2f993dc4) that every vLLM module path
 #   dynamo.vllm.main imports exists at this pin — including the vllm/utils.py→vllm/utils/ PACKAGE split
 #   (vllm.utils.system_utils, vllm.utils.hashing) that 1.3.1's Python assumes; the 0.22 substrate already
 #   carries the post-split layout.

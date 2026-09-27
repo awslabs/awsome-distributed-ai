@@ -1,13 +1,14 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
 # NVIDIA Dynamo (dynamo.frontend ingress + dynamo.vllm worker) + DeepEP-V2 multi-node MoE serve
 # over AWS EFA — 2× p5en.48xlarge (H200), DP16/EP16. This is the vLLM-DeepEP-V2 substrate
-# (../../vllm/deepep-v2-efa) with a Dynamo serving front; the DeepEP-V2/EFA transport is identical.
+# (../../vllm/deepep-v2-efa) with a Dynamo serving front; the DeepEP-V2/EFA transport recipe is shared
+# (README "Relationship to the vLLM sample" tables what differs: plugin build path, vLLM pin).
 #
 # Serving topology (see recipe/serve.sh header + README "Relationship to the vLLM sample"):
 #   pod-0 (leader): dynamo.frontend on :8000 (OpenAI HTTP) + dynamo.vllm (non-headless) DP ranks 0..7.
 #   pod-1+ (worker): dynamo.vllm --headless — vLLM run_headless(), joins the DP group via vLLM's
 #                    native data-parallel RPC to the leader (no discovery/etcd/NATS).
-#   The OpenAI API is served ONLY by pod-0 — address vllm... the leader pod directly (see Service note).
+#   The OpenAI API is served ONLY by pod-0 — address the leader pod directly (see Service note).
 #
 # Scale seams (no other change needed — measured EP16→EP32 was launcher-args only):
 #   4 nodes / EP32:  replicas: 4  +  SERVE_DP "32"          (worker start-ranks derive from ordinal)
@@ -126,7 +127,7 @@ spec:
         - { name: SERVE_DP,       value: "16" }     # total DP = EP size; 32 for 4 nodes
         - { name: SERVE_DP_LOCAL, value: "8" }      # GPUs per node — worker start-ranks derive from this
         - { name: SERVE_MODEL, value: "Qwen/Qwen3-30B-A3B-FP8" }  # any MoE with n_routed_experts % (DP x TP) == 0 (serve.sh asserts)
-        # - { name: SERVE_ENFORCE_EAGER, value: "1" }   # 1 = eager (the shipped default + only supported mode at this pin); 0 = default compilation, which crashes at this pin (needs vLLM #52632, only on the deepep_v2-regressing 0.26 line — README "eager vs non-eager"). Leave unset/1.
+        # - { name: SERVE_ENFORCE_EAGER, value: "1" }   # 1 = eager (the shipped default + only supported mode at this pin); 0 = default compilation, which crashes at this pin (needs vLLM #52632, i.e. vLLM >= 14617c2b, a pin this sample has not moved to — README "eager vs non-eager"). Leave unset/1.
         # - { name: DEEPEP_ARCH_LIST, value: "10.0" }   # in-pod DeepEP build arch; default 9.0 = H100/H200 — set 10.0 on p6-b200, 10.3 on p6-b300 (Blackwell)
         # - { name: HF_TOKEN, valueFrom: { secretKeyRef: { name: hf-token, key: token } } }  # gated models only
 
@@ -162,7 +163,7 @@ spec:
         # (in-pod DeepEP build, DNS wait). Raise BOTH knobs together for a bigger model.
         # WORKER (ordinal 1+): --headless, no HTTP server and it never registers a discovery
         # endpoint, so its probe is process-liveness only — `pgrep -f dynamo.vllm`. `dynamo.vllm`
-        # exists from launch, so a worker's startupProbe passes on its first tick (the 60-min budget
+        # exists from launch, so a worker's startupProbe passes on its first tick (the 35-min budget
         # does not apply to a worker) and a wedged-but-alive worker stays Ready. This is a known
         # limitation, not a readiness check — a worker's true progress is observed via the leader
         # coming Ready (the DP rendezvous cannot complete, and the leader cannot register an engine,

@@ -89,7 +89,7 @@ def sweep(conc, url, nreq_mult):
     lat, toks, ok, codes = [], [], 0, {}
     with ThreadPoolExecutor(max_workers=conc) as ex:
         # prompt idx must be unique ACROSS levels, not just within one: range(n) restarts at
-        # 0 each level, so conc=16's first 8 prompts would be byte-identical to conc=8's and
+        # 0 each level, so conc=16's first 8 prompts would repeat conc=8's exactly and
         # get served from the prefix cache — biasing later (higher-conc) levels favourably.
         # Prefixing with `conc` makes every prompt run-wide-unique (concurrency is unchanged).
         futs = [ex.submit(one_request, url, f"{conc}-{i}") for i in range(n)]
