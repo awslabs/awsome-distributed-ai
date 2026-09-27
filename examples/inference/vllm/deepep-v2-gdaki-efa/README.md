@@ -2,8 +2,9 @@
 # vLLM with DeepEP-V2 MoE all-to-all over EFA — GDAKI (GPU-initiated) variant
 
 Serve a Mixture-of-Experts model on vLLM with **DeepEP-V2** (`ElasticBuffer`) expert-parallel
-all-to-all, routed over **AWS EFA** via the NCCL-GIN **GDAKI** path (`NCCL_GIN_TYPE=3`,
-`OFI_NCCL_GIN_GDAKI=1`) — the **GPU-initiated** transport where the GPU kernel posts the RDMA work
+all-to-all, routed over **AWS EFA** via the NCCL-GIN **GDAKI** path (`NCCL_GIN_TYPE=3`; NCCL selects
+the GIN backend, and the pinned plugin auto-enables GDAKI when built `--enable-gdaki`) — the
+**GPU-initiated** transport where the GPU kernel posts the RDMA work
 requests (WQEs) itself, instead of handing them to a CPU proxy thread. This is the GDAKI counterpart
 to the CPU-proxy sample [`../deepep-v2-efa`](../deepep-v2-efa) (`NCCL_GIN_TYPE=2`): **same base, same
 torch/NCCL/NVSHMEM/vLLM/DeepEP pins — the only deltas are the GDAKI transport stack.** Neither uses
@@ -16,7 +17,7 @@ Validated on **2× and 4× p5en.48xlarge (H200)**, `Qwen/Qwen3-30B-A3B-FP8`, DP1
 
 DeepEP's default transport is NVSHMEM/IBGDA, which EFA does not provide. The proxy sibling runs the
 V2 `ElasticBuffer` dispatch/combine over `aws-ofi-nccl`'s **GIN CPU-proxy** (`NCCL_GIN_TYPE=2`). This
-sample instead uses **GDAKI** (`NCCL_GIN_TYPE=3`, `OFI_NCCL_GIN_GDAKI=1`), where the GPU kernel posts
+sample instead uses **GDAKI** (`NCCL_GIN_TYPE=3`), where the GPU kernel posts
 WQEs directly. GDAKI on EFA needs a newer transport substrate than the proxy path, built here from
 public source:
 

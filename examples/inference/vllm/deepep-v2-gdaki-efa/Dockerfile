@@ -17,7 +17,7 @@
 #             Pinned to an immutable fork SHA. No local source patches. Staged in
 #             setup_deepep_v2_gdaki_efa.sh.
 #
-#   DOCKER_BUILDKIT=1 docker build -t vllm-deepep-v2-gdaki-efa:latest .
+#   DOCKER_BUILDKIT=1 docker build -t <registry>/vllm-deepep-v2-gdaki-efa:<tag> .   # setup/build-push.sh does this from setup/env_vars
 #
 # HONEST SCOPE: the GDAKI *transport* is proven on p5en (the vLLM serve over
 # NCCL_GIN_TYPE=3 is validated by benchmarks/README.md — quote only what is there; the
@@ -207,18 +207,19 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # Runtime defaults — the GDAKI (GPU-initiated) GIN transport contract.
-# Contrast with ../deepep-v2-efa (proxy): NCCL_GIN_TYPE 2→3, OFI_NCCL_GIN_GDAKI 0→1,
-# plugin path → the GDAKI-enabled build. Everything else mirrors the proxy contract
-# (incl. EP_REUSE_NCCL_COMM=0, the vLLM null-comm segfault fix). The
-# OFI_NCCL_GDAKI_EFA_HW_COUNTER tristate is left to the kubernetes/ YAML: set "off" on
-# nodes with efa.ko < 3.3.0, "auto" (or unset) on 3.3.0+.
+# Contrast with ../deepep-v2-efa (proxy): NCCL_GIN_TYPE 2→3 and plugin path → the
+# GDAKI-enabled build. NCCL selects the GIN backend (NCCL_GIN_TYPE is an NCCL param); at the
+# pinned aws-ofi-nccl a3d2680 the plugin auto-enables GDAKI when built --enable-gdaki and the
+# fabric is capable (nccl_ofi_gin_gdaki_capable) — the dev-line OFI_NCCL_GIN_GDAKI param is
+# gone from its parameter table, as is OFI_NCCL_GIN_MAX_REQUESTS, so neither is set here.
+# Everything else mirrors the proxy contract (incl. EP_REUSE_NCCL_COMM=0, the vLLM null-comm
+# segfault fix). The OFI_NCCL_GDAKI_EFA_HW_COUNTER tristate is left to the kubernetes/ YAML:
+# set "off" on nodes with efa.ko < 3.3.0, "auto" (or unset) on 3.3.0+.
 # -----------------------------------------------------------------------------
 ENV NCCL_NET_PLUGIN=/opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so
 ENV NCCL_GIN_ENABLE=1
 ENV NCCL_GIN_TYPE=3
-ENV OFI_NCCL_GIN_GDAKI=1
 ENV EP_REUSE_NCCL_COMM=0
-ENV OFI_NCCL_GIN_MAX_REQUESTS=512
 ENV FI_PROVIDER=efa
 ENV FI_EFA_USE_DEVICE_RDMA=1
 ENV FI_EFA_ENABLE_SHM_TRANSFER=0
@@ -227,7 +228,6 @@ ENV OFI_NCCL_PROTOCOL=RDMA
 ENV NCCL_CUMEM_ENABLE=1
 ENV NCCL_NVLS_ENABLE=0
 ENV NCCL_IGNORE_DISABLED_P2P=1
-ENV DEEP_EP_BACKEND=nccl
 
 # ---- Layer 9: the serve/build scripts (LAST — script iteration never invalidates heavy layers) ----
 COPY recipe/serve.sh /opt/serve.sh

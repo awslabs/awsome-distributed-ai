@@ -31,14 +31,23 @@ DP_MASTER_PORT="${DP_MASTER_PORT:-29500}"
 # OFI_NCCL_GDAKI_EFA_HW_COUNTER is honored FROM THE ENVIRONMENT (the kubernetes/ YAML sets
 # it "off" on nodes with efa.ko < 3.3.0) — it is a STRING enum (auto|on|off); numeric 0/1
 # abort plugin init. Not forced here.
-export NCCL_GIN_TYPE=${NCCL_GIN_TYPE:-3} NCCL_GIN_ENABLE=1 OFI_NCCL_GIN_GDAKI=${OFI_NCCL_GIN_GDAKI:-1} OFI_NCCL_GIN_MAX_REQUESTS=512
+# NCCL selects the GIN backend: NCCL_GIN_TYPE=3 is GDAKI (2 = CPU proxy). At the pinned aws-ofi-nccl
+# a3d2680 the plugin auto-enables GDAKI when built --enable-gdaki and the fabric is capable; its
+# parameter table has no OFI_NCCL_GIN_GDAKI (the dev-line knob was removed) and never had
+# OFI_NCCL_GIN_MAX_REQUESTS, so both knobs earlier revisions exported here were inert; gone.
+export NCCL_GIN_TYPE=${NCCL_GIN_TYPE:-3} NCCL_GIN_ENABLE=1
 export NCCL_CUMEM_ENABLE=1 NCCL_NVLS_ENABLE=0 NCCL_IGNORE_DISABLED_P2P=1
 export FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_FORK_SAFE=1
-export OFI_NCCL_PROTOCOL=RDMA DEEP_EP_BACKEND=nccl
+export OFI_NCCL_PROTOCOL=RDMA   # (no DEEP_EP_BACKEND: nothing in DeepEP or vLLM reads it — the backend is vLLM's --all2all-backend deepep_v2 below)
 export NCCL_NET_PLUGIN=${NCCL_NET_PLUGIN:-/opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so}
 export EP_REUSE_NCCL_COMM=0   # DeepEP creates its own comm; torch's is lazy/null under vLLM (segfault rootcause)
 export NCCL_DEBUG=${SERVE_NCCL_DEBUG:-WARN}   # SERVE_NCCL_DEBUG=INFO to see the efa-direct banner + GDAKI createContext
-export EP_EFA_MAX_QPS=${EP_EFA_MAX_QPS:-2} EP_EFA_RDMA_GBS=${EP_EFA_RDMA_GBS:-25.0}
+# QP sizing + RDMA link rate need no env at the shipped DeepEP pin: the amazon-contributing fork
+# clamps the QP count into [_C.min_unordered_gin_qps, _C.max_unordered_gin_qps]
+# (deep_ep/buffers/elastic.py) and probes the link rate from sysfs (deep_ep/utils/envs.py
+# _get_sysfs_rdma_gbs). The EP_EFA_MAX_QPS / EP_EFA_RDMA_GBS knobs from deepseek PR#612 that the
+# published benchmarks/ tables were measured with do not exist on this source and are
+# deliberately not exported (see the provenance table in benchmarks/README.md).
 
 # ---- vLLM PR#41183 (DeepEPV2All2AllManager) envs — V2-native, shim OFF ----
 export DEEP_EP_USE_V2_SHIM=0

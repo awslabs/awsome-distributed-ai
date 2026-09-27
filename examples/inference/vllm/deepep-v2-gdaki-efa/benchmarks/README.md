@@ -10,7 +10,7 @@ aggregate output tok/s + per-request latency percentiles. Raw JSONL lands in `ra
 | | |
 |---|---|
 | Instance | 2× / 4× p5en.48xlarge (H200), cross-node EFA (16 EFA NICs/node) |
-| Transport | DeepEP-V2 `ElasticBuffer`, NCCL-GIN **GDAKI** (`NCCL_GIN_TYPE=3`, `OFI_NCCL_GIN_GDAKI=1`), `efa-direct` |
+| Transport | DeepEP-V2 `ElasticBuffer`, NCCL-GIN **GDAKI** (`NCCL_GIN_TYPE=3`), `efa-direct`. The measured env also exported `OFI_NCCL_GIN_GDAKI=1`, `OFI_NCCL_GIN_MAX_REQUESTS=512`, `DEEP_EP_BACKEND=nccl` and `EP_EFA_MAX_QPS=2` / `EP_EFA_RDMA_GBS=25.0`; at the pinned aws-ofi-nccl `a3d2680` the first three are not parameters (GDAKI is auto-enabled by the `--enable-gdaki` build; the dev-line `OFI_NCCL_GIN_GDAKI` knob had been removed) and nothing reads the fourth, and the two `EP_EFA_*` knobs belong to the deepseek PR#612 tree the tables were measured on — none of the five exists (or is set) in the current recipe. |
 | Model | `Qwen/Qwen3-30B-A3B-FP8`, DP16/EP16 and DP32/EP32 (`--enable-expert-parallel --all2all-backend deepep_v2`) |
 | vLLM | `0.22.1rc1.dev283+ge2f993dc4` (first commit with the `deepep_v2` backend, [PR#41183](https://github.com/vllm-project/vllm/pull/41183)) |
 | Stack | torch 2.11.0+cu130, nvidia-nccl-cu13 2.30.4, DeepEP `b306af06`+PR#612 (upstream, open), aws-ofi-nccl `a3d2680` `--enable-gdaki` (SHA pin), rdma-core post-#1701, libfabric post-#12591 — zero local source patches |
@@ -53,7 +53,8 @@ measure at your target concurrency** — the crossover is workload-dependent.
 ## Transport A/B — GDAKI (TYPE=3) vs CPU-proxy (TYPE=2), same node-set, env-flip only
 
 **The clean comparison.** Same nodes, same image, same day, same probe — **only the transport env
-flipped** (`NCCL_GIN_TYPE` 3↔2, `OFI_NCCL_GIN_GDAKI` 1↔0). This removes the different-pair AND
+flipped** (`NCCL_GIN_TYPE` 3↔2; the `OFI_NCCL_GIN_GDAKI` 1↔0 flip applied alongside it is inert at
+`a3d2680` — see the Transport row). This removes the different-pair AND
 different-image variables. Both arms eager, both runtime-env value-verified in the worker processes.
 
 ### DP16/EP16 (2 nodes) — both arms 121/121 HTTP 200
