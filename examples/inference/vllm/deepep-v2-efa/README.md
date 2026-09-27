@@ -47,7 +47,7 @@ make this work, and two of them are non-obvious integration fixes, not config:
 | Mode | Status | How |
 |---|---|---|
 | `--enforce-eager` | **Serves, zero extra patches** | the default this sample ships |
-| default compilation (CUDA graphs) | **Unblocked upstream — no patch shipped here** | vLLM [#46404](https://github.com/vllm-project/vllm/pull/46404) + [#46432](https://github.com/vllm-project/vllm/pull/46432) and the empty-`ExpertTokensMetadata` guard ([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632), merged 2026-08-20) are all in main. The `VLLM_SHA` pin is now on #52632's merge commit, so default compilation works without `--enforce-eager` and with no build-time patch step. |
+| default compilation (CUDA graphs) | **Unblocked upstream — no patch shipped here** | vLLM [#46404](https://github.com/vllm-project/vllm/pull/46404) + [#46432](https://github.com/vllm-project/vllm/pull/46432) and the empty-`ExpertTokensMetadata` guard ([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632), merged 2026-08-20) are all in main. The `VLLM_SHA` pin is now on #52632's merge commit, so default compilation works without `--enforce-eager` and with no build-time patch step. **Serving at this pin is not yet re-measured here, and the one run at this wheel (the Dynamo sibling, 2026-09-04) faulted — see the caveat below before relying on this row.** |
 
 At stock `e2f993dc4` (the first commit with the `deepep_v2` backend), default compilation crashes
 deterministically ~48 s into startup in `profile_run` (`deepep_v2.py` combine). `--enforce-eager` avoids
@@ -56,13 +56,16 @@ then-unmerged guard) remain in `benchmarks/` for reference.
 
 > **Serving at the shipped pin is not yet re-measured here**, and one data point exists at this wheel: the
 > Dynamo sibling (`../../nvidia-dynamo/deepep-v2-efa`, [PR #1256](https://github.com/awslabs/awsome-distributed-ai/pull/1256))
-> ran `14617c2b` (`0.26.1rc1.dev1000`) on 2026-09-04 under `ai-dynamo 1.4.2`'s `dynamo.vllm` on the
-> pre-review substrate (DeepEP `b306af06`+PR#612, aws-ofi-nccl `9c44d34`+#1351, EFA 1.49.0) and the
-> DP16/EP16 serve faulted `CUDA_ERROR_LAUNCH_FAILED (719)` in `profile_run` (eager default) while the
-> standalone kernel test passed on the same image; it then re-paired to `e2f993dc4` + `ai-dynamo 1.3.1`
-> and served. That fault was under a different front and substrate, so it does not show whether plain
-> `vllm serve` at `14617c2b` on this recipe serves — the queued 2-node re-measure (a serve at `14617c2b`
-> vs `e2f993dc4` on the shipped recipe) is what answers it. The pin stays where it is until then.
+> ran `14617c2b` (`0.26.1rc1.dev1000`, image `v2-20260904c`) on 2026-09-04 under `ai-dynamo 1.4.2`'s
+> `dynamo.vllm` on the pre-review substrate (DeepEP `b306af06`+PR#612 — effective tree `28d1f7fb` —
+> aws-ofi-nccl `9c44d34` + #1351 commit 1, EFA 1.49.0) and the DP16/EP16 serve faulted
+> `CUDA_ERROR_LAUNCH_FAILED (719)` at DeepEP `csrc/jit/handle.hpp:97` in `profile_run` (eager default; a
+> non-eager repro is asserted in the sibling's same-day notes only) while the standalone kernel test passed
+> on the same image; it then re-paired to `e2f993dc4` + `ai-dynamo 1.3.1` and served. That fault was under
+> a different front and substrate, so it does not show whether plain `vllm serve` at `14617c2b` on this
+> recipe serves — plain `vllm serve` at `14617c2b` and the post-review substrate (fork `97d8f9bc`, bundled
+> 1.21.1 plugin) are both unmeasured, and the queued 2-node re-validation (a serve at `14617c2b` vs
+> `e2f993dc4` on the shipped recipe) is what resolves it. The pin stays where it is until then.
 
 <!-- MD028: separate the two blockquotes so the blank line is not read as inside one quote -->
 
