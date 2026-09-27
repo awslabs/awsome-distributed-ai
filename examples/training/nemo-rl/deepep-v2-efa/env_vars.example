@@ -23,7 +23,7 @@ export FULL_IMAGE="${REGISTRY}${IMAGE}:${TAG}"
 
 # ----- Opt-in draft-PR image flavor -----
 # 1 = bake the 2 draft upstream PRs (NeMo-RL#2410, Megatron-LM#4632) that the
-# full GRPO rollout-over-DeepEP path needs; 0 = the upstream-only baseline.
+# full GRPO rollout-over-DeepEP path needs; 0 = the no-draft-PR baseline.
 # (DeepEP needs no patch: the amazon-contributing/DeepEP fork the image pins
 # carries the former draft DeepEP#612 fixes in-code, on both flavors.) The ":-"
 # default keeps a value pre-set on the command line (APPLY_DRAFT_ROLLOUT_PATCHES=1

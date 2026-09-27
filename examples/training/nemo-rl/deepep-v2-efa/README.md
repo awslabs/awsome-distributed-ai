@@ -49,7 +49,7 @@ stock `alltoall` dispatcher (`train-step.sh`). Never read a build-gate as an E2E
 | Base image | `nvcr.io/nvidia/pytorch:26.02-py3` **@sha256:bbc2b67e…** | Same NGC base as the slime RL sibling. Bakes torch 2.11/CUDA 13 with TransformerEngine/apex/flash-attn compiled against that exact ABI — what megatron.core's H100 path needs. Digest-pinned: it is the ABI anchor the whole image builds around, so a silent tag re-push is the most consequential drift possible here. |
 | EFA installer | 1.48.0 | The userspace of the measured NCCL-GIN substrate. Bumping is a re-measure event. |
 | NCCL | `v2.30.4-1` = commit `1933fdd6` (source build) | GIN device API generation (`nccl_device.h` asserted at build). Commit-pinned, not the bare tag — held to the same moving-ref standard as the other source pins. The NGC base bakes an OLDER NCCL line (2.29.x), so this source-built copy is a deliberately newer line and the `00-nccl-gin.conf` ld.so.conf entry is **load-bearing** — it makes this GIN-capable build win the loader search over the base's baked copy (`verify-image.sh` asserts which one resolves). Source-built so DeepEP has one controlled header/lib root. |
-| aws-ofi-nccl | commit `9c44d34` + PR#1351 head `c2e773d` | The GIN CPU-proxy plugin lineage this folder standardises on (same pins as the TensorRT-LLM NcclEP sibling). These SHAs postdate the Wave-28 run, so they are the standardised lineage, not that run's exact pins. Immutable SHAs — `refs/pull/N/head` is a moving ref. |
+| aws-ofi-nccl | commit `9c44d34` + PR#1351, both commits: `c2e773d` (the `OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY` override) and `63698ea6` (the PR head — refuses the override on cache-coherent CPU↔GPU platforms such as GB200/C2C) | The GIN CPU-proxy plugin lineage this folder standardises on; its gdrdrv-2.4 v1 fallback is what the validated hosts need (the TensorRT-LLM NcclEP sibling has since moved to the released `v1.21.1`, which requires gdrdrv ≥ 2.5 on the host). Carrying only the first commit would ship the pre-review, unguarded form of the override. These SHAs postdate the Wave-28 run, so they are the standardised lineage, not that run's exact pins. Immutable SHAs — `refs/pull/N/head` is a moving ref. |
 | gdrcopy | commit `c91ad9f` (= v2.5.2) | GIN **requires** gdrcopy compiled in (trap 4). Commit pin, not tag. |
 | DeepEP | `97d8f9bc` (**`amazon-contributing/DeepEP`** fork HEAD) | The AWS EPv2/NCCL-Gin tree. Carries EPv2 (ElasticBuffer + NCCL backend) **and the two former-draft [deepseek-ai/DeepEP#612](https://github.com/deepseek-ai/DeepEP/pull/612) EFA fixes in-code** — the `get_rdma_gbs()` sysfs link-rate fast path (`deep_ep/utils/envs.py`) and the auto-QP overflow clamp (`deep_ep/buffers/elastic.py`) — so **no #612 patch is applied on any flavor**. This is the same fork the repo's [`micro-benchmarks/expert-parallelism`](../../../../micro-benchmarks/expert-parallelism) DeepEP-V2 sample already pins (`setup_deepep_gin.sh`). Full 40-char SHA pinned as `DEEPEP_SHA` in the Dockerfile. |
 | Megatron-LM | `19deef67` (main) | The **exact base of draft PR #4632** (ElasticBuffer in the flex dispatcher). |
@@ -180,10 +180,13 @@ recipe/verify-image.sh ${FULL_IMAGE}
 
 ```bash
 kubectl create namespace ${NAMESPACE} || true
-kubectl create secret generic hf-token --from-literal=HF_TOKEN=${HF_TOKEN} -n ${NAMESPACE}
 envsubst < kubernetes/raycluster.yaml | kubectl apply -f -
 kubectl -n ${NAMESPACE} get pods -w   # 1 head + ${NUM_NODES} workers
 ```
+
+The RayCluster carries **no `HF_TOKEN`**: steps 5–6 download nothing, and the workers are privileged
+root containers — the least contained place to hand a credential. The `hf-token` Secret is created
+in step 7, where the data-prep pod (the only workload that talks to the Hub) consumes it.
 
 ### 5. Cross-node rollout probe (minutes, no weights)
 
@@ -210,9 +213,18 @@ kubectl -n ${NAMESPACE} exec ${W1} -c ray-worker -- bash -lc \
   "nohup /opt/train-step.sh worker ${W0_IP} 1 > /tmp/train.log 2>&1 &"
 kubectl -n ${NAMESPACE} exec ${W0} -c ray-worker -- /opt/train-step.sh leader ${W0_IP}
 # ... TRAIN-STEP-PASS dispatcher=alltoall world=16 ep=16
-# on the -draftprs image, run the flex (DeepEP V2 ElasticBuffer) dispatcher — set
-# MOE_DISPATCHER=flex on BOTH nodes (it is one torchrun job across both; if only one
-# rank sets flex the ranks disagree on the dispatcher and the collective hangs):
+```
+
+The flex gate (and the full GRPO path, step 7) needs the **`-draftprs` image on the nodes**. Redeploy
+the RayCluster on that flavor — same manifest, only the image changes, so the workers roll — then
+re-resolve `W0`/`W1`/`W0_IP` from step 5:
+
+```bash
+FULL_IMAGE=${FULL_IMAGE}-draftprs envsubst < kubernetes/raycluster.yaml | kubectl apply -f -
+kubectl -n ${NAMESPACE} get pods -w   # wait for the new workers to be Running
+# now the flex (DeepEP V2 ElasticBuffer) dispatcher — set MOE_DISPATCHER=flex on BOTH nodes
+# (it is one torchrun job across both; if only one rank sets flex the ranks disagree on the
+# dispatcher and the collective hangs):
 #   kubectl -n ${NAMESPACE} exec ${W1} -c ray-worker -- bash -lc \
 #     "MOE_DISPATCHER=flex nohup /opt/train-step.sh worker ${W0_IP} 1 > /tmp/train.log 2>&1 &"
 #   kubectl -n ${NAMESPACE} exec ${W0} -c ray-worker -- \
@@ -224,17 +236,27 @@ kubectl -n ${NAMESPACE} exec ${W0} -c ray-worker -- /opt/train-step.sh leader ${
 The patched image carries the worked 2-node EFA GRPO recipe config from NeMo-RL#2410 at
 `/opt/NeMo-RL/examples/configs/recipes/llm/aws-efa-grpo-qwen3-30ba3b-2n8g-megatron.yaml`
 (Qwen3-30B-A3B, Megatron backend, `moe_token_dispatcher_type=flex`, `moe_enable_deepep=true`).
-Stage the model with `kubernetes/data-prep-pod.yaml`, then launch per
-[NeMo-RL's GRPO docs](https://github.com/NVIDIA-NeMo/RL) from the Ray head with that config.
-Treat results as your own measurement — this folder publishes none for this path.
+Create the Hub credential and stage the model with `kubernetes/data-prep-pod.yaml` (the only
+workload here that reads the Secret), then launch per
+[NeMo-RL's GRPO docs](https://github.com/NVIDIA-NeMo/RL) from the Ray head with that config:
+
+```bash
+kubectl create secret generic hf-token --from-literal=HF_TOKEN=${HF_TOKEN} -n ${NAMESPACE}
+envsubst < kubernetes/data-prep-pod.yaml | kubectl apply -f -
+```
+
+If your GRPO config pulls gated assets from the Hub at run time (the shipped one reads the staged
+local path), add the commented `HF_TOKEN` secretKeyRef back onto the worker group in
+`kubernetes/raycluster.yaml` for that run only. Treat results as your own measurement — this folder
+publishes none for this path.
 
 ## Known limitations (honest list)
 
 - **Build-staged, not cluster-re-run.** The NGC-from-scratch assembly here reproduces the measured
   Wave-28 mechanism chain from public sources, but this exact image has not itself been re-run on
   a cluster. The recipe gates exist so you (or we, next capacity window) can re-verify cheaply.
-- **The full rollout path is draft-PR-dependent.** Two upstream PRs, closed-unmerged upstream
-  (see the table). If upstream supersedes them, the patch layer fails loud or self-neutralizes —
+- **The full rollout path is draft-PR-dependent.** Two upstream PRs — Megatron-LM#4632 (open) and
+  NeMo-RL#2410 (draft, closed unmerged); see the table. If upstream supersedes them, the patch layer fails loud or self-neutralizes —
   either way the image never ships an ambiguous patch state.
 - **Baseline DeepEP gates use explicit SM/QP counts** (trap 2). A probe pass with explicit counts
   is deterministic by design; it does not exercise the fork's auto-sizers, and it certifies nothing

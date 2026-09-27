@@ -12,7 +12,8 @@
 #
 # Two image flavors from this one file:
 #   docker build -f nemo-rl.Dockerfile -t <registry>/nemo-rl-deepep-efa:<tag> .
-#       -> BASELINE: upstream-only trees. Gates: imports, ElasticBuffer
+#       -> BASELINE: no draft PRs baked (stock Megatron-LM / NeMo-RL trees; the aws-ofi-nccl
+#          #1351 carry and the amazon-contributing DeepEP pin apply to BOTH flavors). Gates: imports, ElasticBuffer
 #          bring-up, cross-node EFA transport probe, non-DeepEP train step.
 #   docker build --build-arg APPLY_DRAFT_ROLLOUT_PATCHES=1 ...
 #       -> OPT-IN: additionally bakes 2 DRAFT upstream PRs (see the patches/
@@ -53,9 +54,15 @@ ARG EFA_INSTALLER_VERSION=1.48.0
 # moving ref upstream can re-point). GIN REQUIRES gdrapi.h at aws-ofi-nccl
 # configure time; without it GIN init fails at run time.
 ARG GDRCOPY_SHA=c91ad9f178e5fb729fc5b6dc62a77c3bb364d6c9
-# aws-ofi-nccl @9c44d34 + PR#1351 head c2e773d: the GIN CPU-proxy plugin
-# lineage this folder standardises on (same pins as the TensorRT-LLM NcclEP
-# sibling sample). Immutable SHAs — refs/pull/N/head is a moving ref.
+# aws-ofi-nccl @9c44d34 + PR#1351, BOTH of its commits: c2e773d adds the
+# OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY override; 63698ea6 (the PR head) refuses that
+# override on cache-coherent CPU<->GPU platforms (e.g. GB200/C2C), where honouring
+# it could silently corrupt data. Carrying only the first commit would ship the
+# pre-review, unguarded form. This is the GIN CPU-proxy plugin lineage this folder
+# standardises on: its gdrdrv-2.4 v1 fallback is what the validated hosts need
+# (the TensorRT-LLM NcclEP sibling has since moved to the released v1.21.1,
+# which requires gdrdrv >= 2.5 on the host). Immutable SHAs — refs/pull/N/head is
+# a moving ref.
 # NOTE on #1351: it is CLOSED-UNMERGED upstream (adds the
 # OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY capability override), so unlike the draft
 # PRs in patches/ it will NOT "self-neutralize once merged" — this cherry-pick
@@ -67,7 +74,7 @@ ARG GDRCOPY_SHA=c91ad9f178e5fb729fc5b6dc62a77c3bb364d6c9
 # release that carries the override, when one ships.
 ARG AWS_OFI_NCCL_SHA=9c44d34476f90ddbf4a12d0ac4fc412d46bd8ab4
 ARG AWS_OFI_NCCL_PR=1351
-ARG AWS_OFI_NCCL_PR_SHA=c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b
+ARG AWS_OFI_NCCL_PR_SHAS="c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b 63698ea609873f5126f39b7874e9f0ea1b07c35e"
 # DeepEP: the amazon-contributing/DeepEP fork (the AWS EPv2/NCCL-GIN tree) —
 # ElasticBuffer + NCCL backend, merged upstream in deepseek-ai/DeepEP#605. Same
 # fork the house V2 canonical
@@ -173,7 +180,7 @@ ENV LD_LIBRARY_PATH=${NCCL_HOME}/lib:${LD_LIBRARY_PATH}
 COPY setup_nemo_rl_deepep_efa.sh /opt/setup_nemo_rl_deepep_efa.sh
 RUN chmod +x /opt/setup_nemo_rl_deepep_efa.sh \
     && AWS_OFI_NCCL_SHA=${AWS_OFI_NCCL_SHA} AWS_OFI_NCCL_PR=${AWS_OFI_NCCL_PR} \
-       AWS_OFI_NCCL_PR_SHA=${AWS_OFI_NCCL_PR_SHA} NCCL_HOME=${NCCL_HOME} \
+       AWS_OFI_NCCL_PR_SHAS="${AWS_OFI_NCCL_PR_SHAS}" NCCL_HOME=${NCCL_HOME} \
        /opt/setup_nemo_rl_deepep_efa.sh ofi
 ENV LD_LIBRARY_PATH=/opt/aws-ofi-nccl/lib:${LD_LIBRARY_PATH}
 ENV NCCL_NET_PLUGIN=/opt/aws-ofi-nccl/lib/libnccl-net-ofi.so
@@ -237,7 +244,7 @@ RUN if [ "${APPLY_DRAFT_ROLLOUT_PATCHES}" = "1" ]; then \
       python3 /opt/patches/apply_nemo_rl_patches.py \
         --deepep-root /opt/DeepEP --megatron-root /opt/Megatron-LM --nemo-rl-root /opt/NeMo-RL \
         --marker /opt/.draft-rollout-patches-applied; \
-    else echo "draft-PR layer skipped (APPLY_DRAFT_ROLLOUT_PATCHES=0 — upstream-only baseline)"; fi
+    else echo "draft-PR layer skipped (APPLY_DRAFT_ROLLOUT_PATCHES=0 — no-draft-PR baseline)"; fi
 
 # ---- Layer 9: build DeepEP V2 (NCCL backend) from the (possibly patched) tree
 RUN EP_NCCL_ROOT_DIR=${NCCL_HOME} TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \

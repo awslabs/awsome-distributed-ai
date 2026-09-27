@@ -66,13 +66,11 @@ spec:
                 value: "void"
               - name: RAY_memory_monitor_refresh_ms
                 value: "0"
-              # Create with: kubectl create secret generic hf-token \
-              #   --from-literal=HF_TOKEN=$HF_TOKEN -n ${NAMESPACE}
-              - name: HF_TOKEN
-                valueFrom:
-                  secretKeyRef:
-                    name: hf-token
-                    key: HF_TOKEN
+              # No HF_TOKEN on the RayCluster: the recipe gates (verify-image, rollout probe,
+              # train-step) download nothing, and weights are staged by
+              # kubernetes/data-prep-pod.yaml, which is where the hf-token Secret is consumed.
+              # If your full-GRPO config pulls gated assets from the Hub at run time, add a
+              # secretKeyRef here as an overlay for that run only (see README step 7).
             resources:
               requests:
                 cpu: "2"
@@ -140,11 +138,12 @@ spec:
               env:
                 - name: RAY_memory_monitor_refresh_ms
                   value: "0"
-                - name: HF_TOKEN
-                  valueFrom:
-                    secretKeyRef:
-                      name: hf-token
-                      key: HF_TOKEN
+                # No HF_TOKEN in these privileged root containers (the least contained place
+                # in the cluster for a credential): the gates below need none, and weights are
+                # staged by kubernetes/data-prep-pod.yaml, which consumes the hf-token Secret.
+                # Full-GRPO overlay only, if your config pulls gated assets at run time:
+                #   - name: HF_TOKEN
+                #     valueFrom: { secretKeyRef: { name: hf-token, key: HF_TOKEN } }
                 # ---- recipe-gate shape (read INSIDE the pod by the kubectl-exec
                 #      gates) ----
                 # A client-side `source env_vars` does NOT cross `kubectl exec`;

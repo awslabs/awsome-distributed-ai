@@ -14,7 +14,7 @@ pins carries the former draft deepseek-ai/DeepEP#612 fixes in-code.)
 
 Design goals (why this shape — mirrors the slime sibling's patch layer):
   * Default is upstream. Running this script is opt-in; the baseline image
-    never executes it, so it can never contaminate the upstream-only flavor.
+    never executes it, so it can never contaminate the no-draft-PR flavor.
   * Pinned, not floating. Each PR is applied as its individual commits at
     IMMUTABLE SHAs fetched from the upstream repo's own commit endpoint
     (``https://github.com/<org>/<repo>/commit/<sha>.patch``). A bare

@@ -19,7 +19,7 @@ dataset), runs N optimizer steps across all ranks, and gates on:
 Dispatcher selection (MOE_DISPATCHER):
   alltoall  (default) Megatron's stock all-to-all dispatcher — NCCL all-to-all
             over EFA, no deep_ep involvement. This is the BASELINE gate: it
-            runs on the upstream-only image.
+            runs on the no-draft-PR image.
   flex      Megatron's flex dispatcher with moe_enable_deepep=True — the
             DeepEP V2 ElasticBuffer path. Needs the opt-in draft-PR image
             (Megatron-LM#4632); train-step.sh refuses it on an unpatched

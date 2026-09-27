@@ -50,6 +50,14 @@ docker run --rm --gpus all "${DEV_ARGS[@]}" -e HAVE_EFA_DEV="${HAVE_EFA_DEV}" "$
   python3 -c "from deep_ep import ElasticBuffer; import deep_ep; print(\"deep_ep at\", deep_ep.__file__)" \
     || { echo "FAIL: deep_ep import / ElasticBuffer missing — not an EPv2 build?"; exit 1; }
 
+  echo "== deep_ep _C.so links NVSHMEM (build-time dependency; unused at run time on the NCCL-GIN path — requirements.txt) =="
+  # The docs state the extension is LINKED against NVSHMEM even though nccl.cu is the network
+  # path. Assert the property rather than describe it: the host lib is a dynamic NEEDED entry
+  # (setup.py links -l:libnvshmem_host.so.N; the device lib is static), so ldd shows it.
+  DEEP_EP_SO=$(python3 -c "import deep_ep._C as C; print(C.__file__)")
+  ldd "$DEEP_EP_SO" | grep -q libnvshmem_host \
+    || { echo "FAIL: deep_ep _C.so has no libnvshmem_host NEEDED entry — the build-time NVSHMEM link the docs describe is gone; re-check requirements.txt / setup.py"; exit 1; }
+
   echo "== deep_ep is the amazon-contributing fork (carries the former DeepEP#612 fixes in-code) =="
   # BASELINE property, asserted on EVERY flavor (patched or not): the image pins the
   # amazon-contributing/DeepEP fork, which carries both halves of what was draft
@@ -88,7 +96,7 @@ docker run --rm --gpus all "${DEV_ARGS[@]}" -e HAVE_EFA_DEV="${HAVE_EFA_DEV}" "$
       || { echo "FAIL: marker says patched but NeMo-RL#2410 EFA recipe config missing"; exit 1; }
     echo "   patched image (2 draft PRs baked — full GRPO rollout-over-DeepEP path staged)"
   else
-    echo "   unpatched baseline (upstream-only Megatron/NeMo-RL trees — probe/train-step run with explicit SM/QP counts)"
+    echo "   unpatched baseline (stock Megatron/NeMo-RL trees, no draft PRs — probe/train-step run with explicit SM/QP counts)"
   fi
   echo "ALL CHECKS PASS"
 '

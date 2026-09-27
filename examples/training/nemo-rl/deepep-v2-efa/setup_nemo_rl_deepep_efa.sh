@@ -39,7 +39,7 @@ PHASE="${1:?usage: setup_nemo_rl_deepep_efa.sh <ofi|deepep>}"
 AWS_OFI_NCCL_REPO="${AWS_OFI_NCCL_REPO:-https://github.com/aws/aws-ofi-nccl.git}"
 AWS_OFI_NCCL_SHA="${AWS_OFI_NCCL_SHA:-9c44d34476f90ddbf4a12d0ac4fc412d46bd8ab4}"  # GIN plugin, gdrdrv-2.4 v1-fallback baked
 AWS_OFI_NCCL_PR="${AWS_OFI_NCCL_PR:-1351}"                                        # OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY param
-AWS_OFI_NCCL_PR_SHA="${AWS_OFI_NCCL_PR_SHA:-c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b}"  # IMMUTABLE PR#1351 head
+AWS_OFI_NCCL_PR_SHAS="${AWS_OFI_NCCL_PR_SHAS:-c2e773dfb2c75b765b3415f8ffd1b47e7c239a7b 63698ea609873f5126f39b7874e9f0ea1b07c35e}"  # BOTH PR#1351 commits (override; coherent-platform refusal = PR head), immutable
 NCCL_HOME="${NCCL_HOME:-/opt/nccl/build}"
 DEEPEP_SRC="${DEEPEP_SRC:-/opt/DeepEP}"
 
@@ -50,10 +50,10 @@ build_ofi() {
   git config user.email build@local; git config user.name build
   git fetch origin "${AWS_OFI_NCCL_SHA}"; git checkout "${AWS_OFI_NCCL_SHA}"
   grep -q FALLBACK_V1_FOR_GDRDRV_24 src/nccl_ofi_gdrcopy.cpp   # assert the v1-fallback is present (fail-loud)
-  if [ -n "${AWS_OFI_NCCL_PR_SHA}" ]; then
-    git fetch origin "${AWS_OFI_NCCL_PR_SHA}"
-    git cherry-pick "${AWS_OFI_NCCL_PR_SHA}"
-    grep -q GDRCOPY_FORCED_PCIE_COPY include/nccl_ofi_param.h  # assert the param landed (fail-loud)
+  if [ -n "${AWS_OFI_NCCL_PR_SHAS}" ]; then
+    for sha in ${AWS_OFI_NCCL_PR_SHAS}; do git fetch origin "${sha}"; git cherry-pick "${sha}"; done
+    grep -q GDRCOPY_FORCED_PCIE_COPY include/nccl_ofi_param.h                  # assert the override param landed (fail-loud)
+    grep -q nccl_net_ofi_gpu_coherent_dma_platform src/nccl_ofi_gdrcopy.cpp     # assert the PR-head coherent-platform refusal landed (fail-loud)
   fi
   git rev-parse HEAD > /opt/aws-ofi-nccl.effective.sha
   ./autogen.sh
