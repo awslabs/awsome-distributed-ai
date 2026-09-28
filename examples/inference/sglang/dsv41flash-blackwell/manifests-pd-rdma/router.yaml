@@ -1,0 +1,150 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# SGLang model gateway (router) for the DeepSeek-V4.1-Flash pod-level PD
+# recipe. Prefill and decode engines are separate pods (prefill.yaml /
+# decode.yaml next to this file); the router finds them through Kubernetes service discovery instead of a static worker list:
+# every pod matching --prefill-selector / --decode-selector that becomes Ready
+# is added as a worker, a deleted pod is removed. Scaling a Deployment is all
+# that's needed to grow or shrink either side — no router restart.
+#
+# This file is byte-identical in manifests-pd-rdma/ and manifests-pd-nvlink/ so
+# that each variant directory is self-contained. It carries no template
+# variables itself, but it is applied together with the engines (which do), so
+# it goes through the same pipeline. Apply ONE variant at a time:
+#   cat manifests-pd-rdma/*.yaml   | envsubst '<whitelist>' | kubectl apply -f -
+#   cat manifests-pd-nvlink/*.yaml | envsubst '<whitelist>' | kubectl apply -f -
+---
+# Entry point: clients talk to dsv41flash-router:30080 (OpenAI-compatible);
+# the router pairs a prefill and a decode worker per request.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dsv41flash-router
+spec:
+  selector:
+    app: dsv41flash-router
+  ports:
+  - name: http
+    port: 30080
+    targetPort: 30080
+  type: ClusterIP
+---
+# The router watches pods in its own namespace through the Kubernetes API, so
+# it needs read access to pods (get/list/watch — nothing else).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dsv41flash-router
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dsv41flash-router
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dsv41flash-router
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dsv41flash-router
+subjects:
+- kind: ServiceAccount
+  name: dsv41flash-router
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dsv41flash-router
+  labels:
+    # Deliberately NOT `app: dsv41flash` — that label is the engine selector
+    # the router itself discovers on, and it must never match its own pod.
+    app: dsv41flash-router
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dsv41flash-router
+  template:
+    metadata:
+      labels:
+        app: dsv41flash-router
+    spec:
+      serviceAccountName: dsv41flash-router
+      containers:
+      - name: router
+        image: lmsysorg/sgl-model-gateway:v0.3.2
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 30080
+          name: http
+        resources:
+          requests:
+            cpu: "1"
+            memory: 4Gi
+          limits:
+            cpu: "4"
+            memory: 8Gi
+        # Liveness is a bare TCP check, not /readiness: the router reports
+        # not-ready whenever its backends are down, and we must not restart the
+        # router for that — only when its own process has wedged.
+        livenessProbe:
+          tcpSocket:
+            port: 30080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          failureThreshold: 5
+        # /readiness turns green only once at least one prefill AND one decode
+        # worker are registered and healthy.
+        readinessProbe:
+          httpGet:
+            path: /readiness
+            port: 30080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        env:
+        # Scope discovery to the namespace this stack is deployed in, matching
+        # the namespace-scoped Role above (an all-namespace watch would need a
+        # ClusterRole).
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        command:
+        - python3
+        - -m
+        - sglang_router.launch_router
+        args:
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "30080"
+        - --pd-disaggregation
+        - --service-discovery
+        - --service-discovery-namespace
+        - $(POD_NAMESPACE)
+        # ONE port for every discovered worker: the router dials
+        # http://<podIP>:30000 for prefill and decode alike, so all engine pods
+        # listen on 30000. (This is also why the engines stay on the pod
+        # network — with hostNetwork two engines on one node would share an IP
+        # and collide on this port.) The prefill bootstrap port is read from the
+        # pod annotation sglang.ai/bootstrap-port.
+        - --service-discovery-port
+        - "30000"
+        # Label selectors, one key=value per token.
+        - --prefill-selector
+        - app=dsv41flash
+        - component=prefill
+        - --decode-selector
+        - app=dsv41flash
+        - component=decode
+        - --prefill-policy
+        - cache_aware
+        - --decode-policy
+        - round_robin

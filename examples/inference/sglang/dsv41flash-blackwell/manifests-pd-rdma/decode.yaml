@@ -1,0 +1,182 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# DeepSeek-V4.1-Flash PD on B200 / B300 (EKS / HyperPod) — DECODE engines.
+#
+# One decode engine per pod: tp=2 / ep=2 on 2 GPUs and 2 EFA interfaces, one
+# replica by default. It receives KV from prefill over NIXL/LIBFABRIC on EFA,
+# on the same node or across nodes — see prefill.yaml for the full rationale;
+# everything not commented here is identical to that file.
+#
+# SGLANG_IMAGE and NVME_HOST_PATH are the only envsubst-rendered values (see
+# prefill.yaml); everything else is a literal.
+#
+#   kubectl scale deploy/dsv41flash-decode --replicas=N
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dsv41flash-decode
+  labels:
+    app: dsv41flash
+    component: decode
+spec:
+  replicas: 1
+  # With a single replica any rollout is a short outage (no decode worker for
+  # the router to pair with) — scale to 2 first if that matters.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: dsv41flash
+      component: decode
+  template:
+    metadata:
+      labels:
+        app: dsv41flash
+        component: decode         # matched by the router's --decode-selector
+        sglang-metrics: "true"
+      annotations:
+        # No sglang.ai/bootstrap-port here: the router only reads it on prefill
+        # pods (decode learns the bootstrap address per request from the router).
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "30000"
+        prometheus.io/path: "/metrics"
+    spec:
+      hostIPC: true
+      hostPID: true
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node.kubernetes.io/instance-type
+                operator: In
+                values:
+                - p6-b200.48xlarge         # plain EKS managed nodegroup
+                - p6-b300.48xlarge
+                - ml.p6-b200.48xlarge      # SageMaker HyperPod instance group
+                - ml.p6-b300.48xlarge
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+      containers:
+      - name: sglang
+        image: ${SGLANG_IMAGE}
+        imagePullPolicy: IfNotPresent
+        terminationMessagePolicy: FallbackToLogsOnError
+        securityContext:
+          capabilities:
+            add: ["IPC_LOCK"]
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: SGLANG_HOST_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        # Keep the ~188.83 GiB DeepSeek-V4.1 Engram tables in host
+        # memory instead of consuming ~94.42 GiB HBM per rank at TP2.
+        - name: SGLANG_ENABLE_DSV41_ENGRAM_HOST_TABLE
+          value: "1"
+        - name: SGLANG_DISAGGREGATION_NIXL_BACKEND
+          value: LIBFABRIC
+        - name: FI_PROVIDER
+          value: efa
+        - name: FI_EFA_USE_DEVICE_RDMA
+          value: "1"
+        - name: FI_EFA_ENABLE_SHM_TRANSFER
+          value: "0"
+        # FI_LOG_PROV keeps libfabric output focused on the EFA provider. Raise
+        # FI_LOG_LEVEL to info and NIXL_LOG_LEVEL to DEBUG when debugging a
+        # transfer failure.
+        - name: FI_LOG_LEVEL
+          value: "warn"
+        - name: FI_LOG_PROV
+          value: efa
+        - name: NIXL_LOG_LEVEL
+          value: "INFO"
+        - name: NCCL_DEBUG
+          value: INFO
+        - name: NCCL_SOCKET_IFNAME
+          value: ^lo
+        # Same flag set as prefill plus --max-running-requests 256 from the
+        # cookbook's high-throughput cell (decode is where concurrency lives).
+        command:
+        - sglang
+        - serve
+        - --trust-remote-code
+        - --model-path
+        - deepseek-ai/DeepSeek-V4.1-Flash
+        - --tp
+        - "2"
+        - --ep-size
+        - "2"
+        - --disaggregation-mode
+        - decode
+        - --disaggregation-transfer-backend
+        - nixl
+        - --disaggregation-bootstrap-port
+        - "8998"
+        # Leave enough free VRAM for CUDA graphs and libfabric FI_HMEM
+        # initialization after the KV pool is allocated.
+        - --mem-fraction-static
+        - "0.92"
+        - --max-running-requests
+        - "256"
+        - --reasoning-parser
+        - auto
+        - --tool-call-parser
+        - auto
+        - --enable-metrics
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "30000"
+        ports:
+        - containerPort: 30000
+          name: http
+        volumeMounts:
+        - name: nvme-hf
+          mountPath: /root/.cache/huggingface
+        - name: nvme-tmp
+          mountPath: /tmp
+          subPathExpr: $(POD_NAME)
+        resources:
+          limits:
+            nvidia.com/gpu: 2
+            vpc.amazonaws.com/efa: 2
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 30000
+          # Raise to 7200 while debugging so a wedged process stays available
+          # for logs and profiling instead of being restarted.
+          initialDelaySeconds: 1800
+          periodSeconds: 60
+          timeoutSeconds: 5
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 30000
+          initialDelaySeconds: 180
+          periodSeconds: 10
+          timeoutSeconds: 5
+      volumes:
+      # NVME_HOST_PATH — same rule as prefill.yaml.
+      - name: nvme-hf
+        hostPath:
+          path: ${NVME_HOST_PATH}/huggingface
+          type: Directory
+      - name: nvme-tmp
+        hostPath:
+          path: ${NVME_HOST_PATH}/tmp
+          type: DirectoryOrCreate
