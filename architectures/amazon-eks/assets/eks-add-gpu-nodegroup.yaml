@@ -9,7 +9,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   EFA-enabled GPU managed node group for an existing Amazon EKS cluster, in a cluster placement
-  group, optionally against a targeted On-Demand Capacity Reservation or a Capacity Block, with
+  group or against a targeted On-Demand Capacity Reservation or a Capacity Block, with
   the NVIDIA and EFA Kubernetes device plugins installed and verified on every node.
 
 Metadata:
@@ -24,6 +24,7 @@ Metadata:
           - NodeSecurityGroupId
           - ClusterSecurityGroupId
           - NodeRoleArn
+          - BootstrapVpcId
       - Label:
           default: GPU capacity
         Parameters:
@@ -48,8 +49,8 @@ Parameters:
     Default: "1.36"
     AllowedPattern: ^1\.[0-9]{2}$
     Description: >-
-      Version of the cluster this node group joins. The AMI follows the cluster, not this value; a
-      change re-runs the bootstrap. Keep KubectlVersion within one minor of it.
+      The cluster's version. The AMI follows the cluster; a change re-runs the bootstrap. Keep
+      KubectlVersion within one minor of it.
   PrivateSubnetId:
     Type: AWS::EC2::Subnet::Id
     Description: Private subnet for the GPU nodes. Must be in the Availability Zone of the capacity reservation.
@@ -59,18 +60,22 @@ Parameters:
   ClusterSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
     Description: >-
-      The cluster security group of the EKS cluster (aws eks describe-cluster --name <cluster>
-      --query cluster.resourcesVpcConfig.clusterSecurityGroupId). EKS does not attach it
-      automatically when the launch template specifies security groups.
+      The cluster security group (cluster.resourcesVpcConfig.clusterSecurityGroupId). EKS stops
+      attaching it once a launch template names security groups.
+  BootstrapVpcId:
+    Type: String
+    Default: ""
+    AllowedPattern: ^(vpc-[0-9a-f]{8,17})?$
+    Description: >-
+      VPC of PrivateSubnetId. Set it when the cluster API cannot be reached from outside the VPC:
+      the bootstrap then runs in PrivateSubnetId with ClusterSecurityGroupId.
   NodeAmiId:
     Type: String
     Default: ""
     AllowedPattern: ^(ami-[0-9a-f]{8,17})?$
     Description: >-
-      Custom node AMI; empty takes the one EKS resolves. It has to carry nodeadm, a driver that
-      enumerates this instance type's GPUs, and the NVIDIA container toolkit. Requires the three
-      Cluster values below, because EKS merges no bootstrap user data once a launch template names
-      an AMI.
+      Custom node AMI; empty takes the one EKS resolves. It needs nodeadm, a GPU driver and the
+      NVIDIA container toolkit, and the three Cluster values below.
   ClusterEndpoint:
     Type: String
     Default: ""
@@ -98,8 +103,7 @@ Parameters:
     Default: gpu
     AllowedPattern: ^[a-zA-Z0-9][a-zA-Z0-9-_]{0,62}$
     Description: >-
-      Name of the managed node group. Change it to add a second GPU node group to a cluster that
-      already has one; the nodes still carry label role=gpu, which is what workloads select on.
+      Managed node group name. A different one adds a second GPU node group to the cluster.
   GpuInstanceType:
     Type: String
     Default: g7e.12xlarge
@@ -121,14 +125,14 @@ Parameters:
       - p6-b200.48xlarge
       - p6-b300.48xlarge
     Description: >-
-      GPU instance type. The interface layout follows the NicLayout mapping.
+      GPU instance type. The interface layout follows the NicLayout mapping. Only the types listed
+      as launched in README section 3 have been launched from this template.
   AmiType:
     Type: String
     Default: AL2023_x86_64_NVIDIA
     Description: >-
-      EKS AMI type for the GPU nodes when NodeAmiId is empty. Free text, so a type EKS adds later
-      works; it has to bootstrap with nodeadm (the AL2023 family), because the user data is a
-      nodeadm NodeConfig. NodeAmiId overrides it with CUSTOM.
+      EKS AMI type when NodeAmiId is empty; a nodeadm (AL2023) type, since the user data is a
+      NodeConfig.
   KubectlVersion:
     Type: String
     Default: "1.36.4"
@@ -142,9 +146,7 @@ Parameters:
     Type: String
     Default: "0.20.0"
     Description: >-
-      Chart version of nvidia-device-plugin. Pinned because the plugin's correctness depends on the
-      driver on the node. One release serves the whole cluster, so every stack sharing one passes
-      the same value.
+      Chart version of nvidia-device-plugin. Every stack on a cluster passes the same one.
   EfaDevicePluginChartVersion:
     Type: String
     Default: "v0.5.32"
@@ -163,8 +165,7 @@ Parameters:
     MinValue: 0
     MaxValue: 8
     Description: >-
-      Number of GPU nodes (min = desired = max). 0 installs the device plugins with no GPU
-      capacity, which is a cheap smoke test and not a substitute for launching a node.
+      GPU nodes (min = desired = max). 0 installs the device plugins without GPU capacity.
   GpuRootVolumeSize:
     Type: Number
     Default: 300
@@ -181,15 +182,14 @@ Parameters:
     Default: targeted-odcr
     AllowedValues: [targeted-odcr, capacity-block]
     Description: >-
-      How CapacityReservationId is consumed. capacity-block sets MarketType=capacity-block and
-      omits the placement group, which a Capacity Block already provides.
+      How CapacityReservationId is consumed. capacity-block sets MarketType and CapacityType for a
+      Capacity Block.
   PrePullImage:
     Type: String
     Default: ""
     Description: >-
-      Container image pulled onto every GPU node after the device plugins are verified. The pull is
-      started and not waited for, so a slow or failing pull cannot roll back the cluster. Empty
-      skips it.
+      Image pulled onto every GPU node once the stack has answered, so the pull cannot roll it back.
+      Empty skips it.
 
 Rules:
   CapacityBlockNeedsReservation:
@@ -210,12 +210,6 @@ Rules:
           NodeAmiId requires ClusterEndpoint, ClusterCertificateAuthority and ClusterServiceCidr.
           A launch template that names an AMI stops EKS from merging its bootstrap user data, so the
           node has to be told how to reach the cluster.
-  PrePullNeedsNodes:
-    Assertions:
-      - Assert: !Or
-          - !Equals [!Ref PrePullImage, ""]
-          - !Not [!Equals [!Ref GpuNodeCount, "0"]]
-        AssertDescription: PrePullImage has nowhere to run when GpuNodeCount is 0.
 
 Mappings:
   # describe-instance-types answers Cards and EfaInterfaces; the other two keys it does not.
@@ -326,6 +320,7 @@ Conditions:
   HasCustomAmi: !Not [!Equals [!Ref NodeAmiId, ""]]
   CreateNodeRole: !Equals [!Ref NodeRoleArn, ""]
   HasReservation: !Not [!Equals [!Ref CapacityReservationId, ""]]
+  BootstrapInVpc: !Not [!Equals [!Ref BootstrapVpcId, ""]]
   IsCapacityBlock: !Equals [!Ref CapacityReservationType, capacity-block]
   UsePlacementGroup: !Not [!Condition HasReservation]
   GpuZero: !Equals [!Ref GpuNodeCount, "0"]
@@ -754,6 +749,12 @@ Resources:
                   - logs:PutLogEvents
                 # LogGroup's Arn already ends in ":*", so it is not a prefix to append to.
                 Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-bootstrap:*"
+              - !If
+                - BootstrapInVpc
+                - Effect: Allow
+                  Action: [ec2:CreateNetworkInterface, ec2:DeleteNetworkInterface, ec2:DescribeDhcpOptions, ec2:DescribeNetworkInterfaces, ec2:DescribeSecurityGroups, ec2:DescribeSubnets, ec2:DescribeVpcs, ec2:CreateNetworkInterfacePermission]
+                  Resource: "*"
+                - !Ref AWS::NoValue
 
   # Cluster-admin on the target cluster. Anyone who can start this build can therefore act as
   # cluster-admin.
@@ -774,6 +775,10 @@ Resources:
       ServiceRole: !GetAtt BootstrapBuildRole.Arn
       # Below the custom resource's ServiceTimeout, so post_build still answers.
       TimeoutInMinutes: 40
+      VpcConfig: !If
+        - BootstrapInVpc
+        - {VpcId: !Ref BootstrapVpcId, Subnets: [!Ref PrivateSubnetId], SecurityGroupIds: [!Ref ClusterSecurityGroupId]}
+        - !Ref AWS::NoValue
       Artifacts:
         Type: NO_ARTIFACTS
       LogsConfig:
@@ -859,31 +864,26 @@ Resources:
                   # One release serves the whole cluster, so an unconditional install would move the
                   # version another node group pinned onto nodes with a different driver. Install when
                   # absent, leave alone when it matches, refuse otherwise.
-                  plugin() { # release namespace version image chart [helm args]
-                    local rel=$1 ns=$2 ver=$3 img=$4 chart=$5 installed other; shift 5
-                    installed=$(helm list -n "$ns" -f "^$rel\$" -o json \
+                  plugin() { # release namespace version chart [helm args]
+                    local rel=$1 ns=$2 ver=$3 chart=$4 have; shift 4
+                    have=$(helm list -n "$ns" -f "^$rel\$" -o json \
                       | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r[0]["chart"].rsplit("-",1)[1] if r else "")') \
                       || fail "helm list: is the cluster API endpoint reachable from CodeBuild?"
-                    if [ -z "$installed" ]; then
-                      # helm list sees one release name; another install would advertise the devices twice.
-                      other=$(kubectl get ds -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name} {.spec.template.spec.containers[*].image}{"\n"}{end}' \
-                        | { grep "/$img:" || true; } | cut -d' ' -f1 | head -1)
-                      [ -z "$other" ] || fail "daemonset $other already runs $img outside release $rel; remove it first"
+                    if [ -z "$have" ]; then
                       helm upgrade --install "$rel" "$chart" --version "$ver" --namespace "$ns" --create-namespace \
                         --wait --timeout 5m "$@" || fail "helm install $rel"
-                    elif [ "${installed#v}" = "${ver#v}" ]; then
+                    elif [ "${have#v}" = "${ver#v}" ]; then
                       echo "$rel $ver is already installed; leaving it alone"
                     else
-                      fail "the cluster runs $rel $installed and this stack pins $ver. One release serves every GPU node group: move the release to $ver with Helm first (README section 10)"
+                      fail "the cluster runs $rel $have and this stack pins $ver. One release serves every GPU node group: move the release to $ver with Helm first (README section 10)"
                     fi
                   }
                   # The NFD subchart has its own tolerations; before 1.35 its PCI label is what the plugin needs.
                   TOL='[{"key":"nvidia.com/gpu","operator":"Exists","effect":"NoSchedule"}]'
-                  plugin nvdp nvidia-device-plugin "$NVIDIA_DEVICE_PLUGIN_CHART_VERSION" k8s-device-plugin \
-                    nvdp/nvidia-device-plugin --set gfd.enabled=true --set-json "tolerations=$TOL" \
-                    --set-json "nfd.worker.tolerations=$TOL"
+                  plugin nvdp nvidia-device-plugin "$NVIDIA_DEVICE_PLUGIN_CHART_VERSION" nvdp/nvidia-device-plugin \
+                    --set gfd.enabled=true --set-json "tolerations=$TOL" --set-json "nfd.worker.tolerations=$TOL"
                   plugin aws-efa-k8s-device-plugin kube-system "$EFA_DEVICE_PLUGIN_CHART_VERSION" \
-                    aws-efa-k8s-device-plugin eks/aws-efa-k8s-device-plugin --set-json "tolerations=$TOL"
+                    eks/aws-efa-k8s-device-plugin --set-json "tolerations=$TOL"
 
                   # Installation and verification are separate stages so the two failures are
                   # distinguishable.
@@ -1076,7 +1076,7 @@ Resources:
       ProjectName: !Ref BootstrapProject
       # The launch template version is here because changing the AMI replaces the nodes, which
       # would otherwise go unverified.
-      BootstrapRevision: "2"
+      BootstrapRevision: "1"
       LaunchTemplateVersion: !GetAtt GpuLaunchTemplate.LatestVersionNumber
       KubernetesVersion: !Ref KubernetesVersion
       KubectlVersion: !Ref KubectlVersion

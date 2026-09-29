@@ -56,24 +56,26 @@ The `KubeconfigCommand` stack output contains the first command with the stack's
 
 `GpuInstanceType` selects the instance type; the template derives the network interface layout from the `NicLayout` mapping, which records the network card count, how many cards carry EFA, whether card 0 supports EFA, and the device index used on the other cards for each type (`describe-instance-types`, `NetworkInfo.MaximumNetworkCards` and `NetworkInfo.EfaInfo`). Card 0 is device index 0; it receives `InterfaceType: efa` when the type supports EFA on card 0 and omits the property otherwise. Every other card takes the type's `SecondaryDeviceIndex` with `InterfaceType: efa`.
 
-| Instance type | GPUs | Network cards | EFA interfaces |
-|---|---|---|---|
-| `g7.12xlarge` | 2 | 1 | 1 |
-| `g7.24xlarge` | 4 | 1 | 1 |
-| `g7.48xlarge` | 8 | 2 | 2 |
-| `g7e.12xlarge` | 2 | 1 | 1 |
-| `g7e.24xlarge` | 4 | 2 | 2 |
-| `g7e.48xlarge` | 8 | 4 | 4 |
-| `g6e.12xlarge` | 4 | 1 | 1 |
-| `g6e.48xlarge` | 8 | 4 | 4 |
-| `g5.12xlarge` | 4 | 1 | 1 |
-| `g4dn.8xlarge` | 1 | 1 | 1 |
-| `p4d.24xlarge` | 8 | 4 | 4 |
-| `p4de.24xlarge` | 8 | 4 | 4 |
-| `p5.48xlarge` | 8 | 32 | 32 |
-| `p5en.48xlarge` | 8 | 16 | 16 |
-| `p6-b200.48xlarge` | 8 | 8 | 8 |
-| `p6-b300.48xlarge` | 8 | 17 | 16 (card 0 is ENA only) |
+| Instance type | GPUs | Network cards | EFA interfaces | Launched |
+|---|---|---|---|---|
+| `g7.12xlarge` | 2 | 1 | 1 | eu-south-2, 2026-09-28 |
+| `g7.24xlarge` | 4 | 1 | 1 |  |
+| `g7.48xlarge` | 8 | 2 | 2 | eu-south-2, 2026-09-29 |
+| `g7e.12xlarge` | 2 | 1 | 1 |  |
+| `g7e.24xlarge` | 4 | 2 | 2 |  |
+| `g7e.48xlarge` | 8 | 4 | 4 |  |
+| `g6e.12xlarge` | 4 | 1 | 1 |  |
+| `g6e.48xlarge` | 8 | 4 | 4 |  |
+| `g5.12xlarge` | 4 | 1 | 1 |  |
+| `g4dn.8xlarge` | 1 | 1 | 1 | us-west-2, 2026-09-28 |
+| `p4d.24xlarge` | 8 | 4 | 4 |  |
+| `p4de.24xlarge` | 8 | 4 | 4 |  |
+| `p5.48xlarge` | 8 | 32 | 32 |  |
+| `p5en.48xlarge` | 8 | 16 | 16 |  |
+| `p6-b200.48xlarge` | 8 | 8 | 8 |  |
+| `p6-b300.48xlarge` | 8 | 17 | 16 (card 0 is ENA only) |  |
+
+`Launched` records where and when a type passed the hardware procedure in [`tests/gpu-efa-test.md`](./tests/gpu-efa-test.md) from this template; a type without an entry has only been checked against `ec2:DescribeInstanceTypes`.
 
 To add a type, append a `NicLayout` entry with `Cards`, `EfaInterfaces`, `PrimaryEfa` and `SecondaryDeviceIndex`, a `GpuCount` entry, and the type to `GpuInstanceType.AllowedValues`. `tests/lint-templates.sh` checks the card and EFA counts against `ec2:DescribeInstanceTypes` and refuses a type that has a row in one mapping and not the other; the per-card interface blocks are emitted by `tests/render-nic-block.py` rather than edited by hand.
 
@@ -83,7 +85,7 @@ The GPU nodes boot from the AMI EKS resolves for `AmiType` unless you say otherw
 
 Three ways, and setting more than one is refused before any resource is created. `NodeAmiId` boots the nodes from an image that already exists, from any tool or pipeline. `NodeImagePackages` names packages to install into a recipe the stack composes. `NodeImageRecipeArn` builds an EC2 Image Builder recipe you already maintain.
 
-Naming packages covers the common case. Those values are comma-separated, which the CLI's shorthand syntax splits into a list unless the value is quoted (`ParameterValue='a,b'`), so they read better in a parameters file. `--parameters` takes either a file or shorthand, not both, so the file carries every other parameter of the deploy too; the entries below are the ones added to it.
+Naming packages covers the common case. Those values are comma-separated, which the CLI's shorthand syntax splits into a list, so they go in a parameters file. `--parameters` takes either a file or shorthand, not both, so the file carries every other parameter of the deploy too; the entries below are the ones added to it.
 
 ```json
 [
@@ -178,7 +180,7 @@ The parameters below decide a deploy. [`docs/PARAMETERS.md`](./docs/PARAMETERS.m
 | `GpuInstanceType` | `g7e.12xlarge` | GPU instance type (see section 3) |
 | `GpuNodeCount` | `2` | GPU nodes, min = desired = max. `0` creates the cluster and device plugins without GPU nodes |
 | `CapacityReservationId` | empty | Targeted ODCR or Capacity Block ID. Empty launches On-Demand and consumes an open ODCR with matching attributes |
-| `CapacityReservationType` | `targeted-odcr` | `targeted-odcr` targets the reservation with On-Demand billing against it; `capacity-block` sets `MarketType=capacity-block` and `CapacityType=CAPACITY_BLOCK`. Neither creates a placement group |
+| `CapacityReservationType` | `targeted-odcr` | `targeted-odcr` targets the reservation with On-Demand billing against it; `capacity-block` sets `MarketType=capacity-block` and `CapacityType=CAPACITY_BLOCK`. With a reservation id, neither creates a placement group |
 | `KubernetesVersion` | `1.36` | EKS version. Selects the AL2023 NVIDIA AMI release. The `kubectl` the bootstrap downloads is `KubectlVersion`, which has to stay within one minor of this |
 | `SystemInstanceType` | `m7i.xlarge` | Instance type of the 2-node system node group. The default is the newest generation offered in every Region the GPU types appear in |
 | `NodeAmiId` | empty | Node AMI for the GPU nodes, from any source. Leave the `NodeImage` inputs empty when using it (see section 3) |
@@ -214,7 +216,7 @@ eksctl create cluster -f eksctl/eks-p4de-odcr-vpc.yaml
 eksctl delete cluster -f eksctl/eks-p4de-odcr-vpc.yaml
 ```
 
-The eksctl path installs the EFA device plugin through `efaEnabled: true` and leaves the NVIDIA device plugin as a separate step; the CloudFormation path installs both from the CodeBuild bootstrap and verifies them.
+The eksctl path installs both device plugins itself, the EFA one through `efaEnabled: true` and the NVIDIA one on GPU node groups that run the EKS-optimized accelerated AMI; the CloudFormation path installs both from the CodeBuild bootstrap and verifies them.
 
 ## 6. Cleanup
 
@@ -238,7 +240,7 @@ A managed node group cannot update its launch-template version and its instance 
 
 Moving between the AMI EKS resolves and a node AMI of your own is the same kind of change. Setting or clearing `NodeAmiId` or the `NodeImage` inputs switches the node group's `AmiType` to or from `CUSTOM`, which replaces the node group, and EKS refuses the replacement while the old node group still holds its name (`NodeGroup already exists`). On an `eks-add-gpu-nodegroup.yaml` stack, change `NodeGroupName` in the same update; the root always names its group `gpu`, so there it means deleting and recreating the stack. Moving from one node AMI of your own to another is an ordinary update that replaces the nodes and verifies them again.
 
-A Capacity Block node group adds one more constraint: EKS refuses to change its launch template while it has nodes (`Upgrade of the node group is not allowed when the current capacity of the Auto Scaling group is not zero and the capacity type is set to CAPACITY_BLOCK`), and one update cannot both scale it and change its AMI. Change the AMI in three updates: `GpuNodeCount=0`, with `PrePullImage` cleared because it needs a node to run on; the new `NodeAmiId` at a count of 0; then the count and `PrePullImage` back. An AMI update that fails and rolls back leaves the launch template one version ahead of the node group, after which the next update fails with `Version and release version updates cannot be combined with other updates`; scale the node group to zero first with `aws eks update-nodegroup-config --scaling-config minSize=0,maxSize=1,desiredSize=0`, and the AMI update at a count of 0 then goes through.
+A Capacity Block node group adds one more constraint: EKS refuses to change its launch template while it has nodes (`Upgrade of the node group is not allowed when the current capacity of the Auto Scaling group is not zero and the capacity type is set to CAPACITY_BLOCK`), and one update cannot both scale it and change its AMI. Change the AMI in three updates: `GpuNodeCount=0`; the new `NodeAmiId` at a count of 0; then the count back. An AMI update that fails and rolls back leaves the launch template one version ahead of the node group, after which the next update fails with `Version and release version updates cannot be combined with other updates`; scale the node group to zero first with `aws eks update-nodegroup-config --cluster-name "$CLUSTER" --nodegroup-name "$NODE_GROUP" --scaling-config minSize=0,maxSize=1,desiredSize=0`, and the AMI update at a count of 0 then goes through.
 
 ## 8. Testing changes before they are published
 
@@ -259,7 +261,7 @@ aws cloudformation create-stack --stack-name "$STACK" \
 
 `bash tests/lint-templates.sh` runs eleven mechanical checks before a deploy, nine of which need no AWS account; most of them read the templates with PyYAML (`python3 -m pip install pyyaml`): that the mappings cover the same instance types with every key present, that the committed interface block is what `tests/render-nic-block.py` produces, that every parameter has a row in `docs/PARAMETERS.md`, that every template the root fetches is published where the root looks for it, that the templates agree on the default and the validation of `KubernetesVersion` and that `KubectlVersion` is within one minor of it, that the FSx and node security groups carry the rules FSx for Lustre requires, that every relative link resolves, and that nothing installs an unpinned version. With an account it adds `validate-template` on each template and checks `NicLayout` against `ec2:DescribeInstanceTypes`. [`tests/gpu-efa-test.md`](./tests/gpu-efa-test.md) is the hardware procedure for the GPU and EFA claims the API cannot answer.
 
-Known limits: the GPU instance type is fixed when the node group is created (section 7); a Capacity Block stack asks for its nodes at once, and until the block starts the launches fail with `Capacity Reservation ... is not yet active` and are retried, so create it after the block is active or within minutes of its start; `GpuNodeCount` sets minimum, desired and maximum to the same value, so a partly available reservation fails the deploy rather than delivering fewer nodes; the verification counts the GPUs and EFA devices each node advertises and does not run CUDA, so a node image that advertises GPUs it cannot run work on, such as one built without Fabric Manager for an NVSwitch type, passes it; updating `GpuNodeCount` on a live stack re-runs the verification, which waits until the node group has exactly the new count; and each root or prerequisites deploy takes one NAT gateway and one Elastic IP.
+Known limits: the GPU instance type is fixed when the node group is created (section 7); a Capacity Block stack asks for its nodes at once, and until the block starts the launches fail with `Capacity Reservation ... is not yet active` and are retried, so create it after the block is active or within minutes of its start, and 40 minutes before the block ends EKS scales the node group to zero on its own, which the stack does not record, so delete the stack once the block is over; `GpuNodeCount` sets minimum, desired and maximum to the same value, so a partly available reservation fails the deploy rather than delivering fewer nodes; the verification counts the GPUs and EFA devices each node advertises and does not run CUDA, so a node image that advertises GPUs it cannot run work on, such as one built without Fabric Manager for an NVSwitch type, passes it; updating `GpuNodeCount` on a live stack re-runs the verification, which waits until the node group has exactly the new count; and each root or prerequisites deploy takes one NAT gateway and one Elastic IP.
 
 ## 9. References
 
@@ -291,18 +293,16 @@ aws cloudformation create-stack \
     ParameterKey=GpuNodeCount,ParameterValue=2
 ```
 
-`ClusterSecurityGroupId` is not optional: as soon as a launch template specifies security groups, EKS stops attaching the cluster security group, and nodes that do not carry it never join. The existing cluster also needs an `AuthenticationMode` of `API` or `API_AND_CONFIG_MAP`, because the stack grants the bootstrap access with an `AWS::EKS::AccessEntry` that a `CONFIG_MAP`-only cluster rejects, and an API endpoint CodeBuild can reach, because CodeBuild runs outside your VPC. On a cluster with private endpoint access only, CodeBuild cannot reach the API and the stack fails. No parameter covers that: `BootstrapProject` needs a `VpcConfig` added, in subnets that reach both the endpoint and the internet the build downloads its tools from.
+`ClusterSecurityGroupId` is not optional: as soon as a launch template specifies security groups, EKS stops attaching the cluster security group, and nodes that do not carry it never join. The existing cluster also needs an `AuthenticationMode` of `API` or `API_AND_CONFIG_MAP`, because the stack grants the bootstrap access with an `AWS::EKS::AccessEntry` that a `CONFIG_MAP`-only cluster rejects, and an API endpoint CodeBuild can reach. CodeBuild runs outside your VPC unless `BootstrapVpcId` is set; on a cluster with private endpoint access only, set it to the VPC of `PrivateSubnetId`, and the bootstrap runs in that subnet with `ClusterSecurityGroupId`, which the endpoint's network interfaces carry. The subnet also needs its route to the internet, which the build downloads its tools from and answers CloudFormation through. The stack recognises the device plugins by the two release names it installs them under, so a device plugin installed another way, by the GPU Operator or under another release name, goes unseen and the stack installs a second one beside it. On a cluster created with eksctl, GPU and EFA node groups come with device plugins eksctl installs: delete those DaemonSets from `kube-system`, or create the eksctl node groups with `--install-nvidia-plugin=false`, before deploying.
 
-Deploying it more than once against the same cluster, under different `NodeGroupName` values, is how a cluster gets GPU node groups of different instance types or from different reservations. The device plugins are a constraint on that: one release of each serves the whole cluster, and the versions it runs have to match the versions the stack being deployed pins. A stack that pins a different version fails rather than moving the release under the node groups already using it. To move to a new version, upgrade the releases with Helm first, keeping their values, then update every stack on the cluster to pin the same versions; each then finds the releases matching and leaves them alone. With `NVDP_VERSION` and `EFA_VERSION` set to the new chart versions:
+Deploying it more than once against the same cluster, under different `NodeGroupName` values, is how a cluster gets GPU node groups of different instance types or from different reservations. The device plugins are a constraint on that: one release of each serves the whole cluster, and the versions it runs have to match the versions the stack being deployed pins. A stack that pins a different version fails rather than moving the release under the node groups already using it. To move to a new version, upgrade the releases with Helm 3.14 or later first, keeping the values the stack set on top of the new chart's defaults, then update every stack on the cluster to pin the same versions; each then finds the releases matching and leaves them alone. With `NVDP_VERSION` and `EFA_VERSION` set to the new chart versions:
 
 ```bash
 helm repo add nvdp https://nvidia.github.io/k8s-device-plugin
 helm repo add eks https://aws.github.io/eks-charts
 helm repo update
-helm upgrade nvdp nvdp/nvidia-device-plugin -n nvidia-device-plugin --version "$NVDP_VERSION" --reuse-values
-helm upgrade aws-efa-k8s-device-plugin eks/aws-efa-k8s-device-plugin -n kube-system --version "$EFA_VERSION" --reuse-values
+helm upgrade nvdp nvdp/nvidia-device-plugin -n nvidia-device-plugin --version "$NVDP_VERSION" --reset-then-reuse-values
+helm upgrade aws-efa-k8s-device-plugin eks/aws-efa-k8s-device-plugin -n kube-system --version "$EFA_VERSION" --reset-then-reuse-values
 ```
-
-A device plugin installed another way, by the GPU Operator or under another release name, makes the stack fail rather than install a second copy.
 
 Deleting one of these stacks while the cluster stays leaves three things on the cluster: the two Helm releases, which the other node groups keep using; the `prepull-` DaemonSet in `kube-system` named after the node group when `PrePullImage` was set, now matching no node; and the access entry EKS created for the node role, which EKS does not remove with the node group and whose role, named after the stack, no longer exists. `aws eks list-access-entries --cluster-name "$CLUSTER"` lists it, and `aws eks delete-access-entry` removes it. Delete these stacks before the cluster itself: the tool that created the cluster deletes only the node groups it created, and EKS refuses to delete a cluster that still has one (`Cluster has nodegroups attached`).

@@ -29,7 +29,7 @@ the child stacks.
 
 | Parameter | Type | Default | What it decides |
 |---|---|---|---|
-| `GpuInstanceType` | String | `g7e.12xlarge` | Instance type of the GPU node group, and through the `NicLayout` mapping the whole interface layout. |
+| `GpuInstanceType` | String | `g7e.12xlarge` | Instance type of the GPU node group, and through the `NicLayout` mapping the whole interface layout. See README section 3 for which types have been launched |
 | `AmiType` | String | `AL2023_x86_64_NVIDIA` | EKS AMI type for the GPU nodes, used when no image input is given. Not an enumeration, so a type EKS adds later needs no template change. It has to be a type whose bootstrap is nodeadm, as the AL2023 family is: the GPU launch template's user data is a nodeadm `NodeConfig` |
 | `SystemAmiType` | String | `AL2023_x86_64_STANDARD` | EKS AMI type for the system nodes. Not an enumeration either, and with no launch template and no user data on that node group, any type EKS validates works |
 | `NodeAmiId` | String | empty | Node AMI for the GPU nodes. Leave the `NodeImage` inputs empty when using it. Any source: `awslabs/amazon-eks-ami`, EC2 Image Builder, or your own pipeline. It has to carry `nodeadm`, a driver that enumerates the instance type's GPUs, and the NVIDIA container toolkit |
@@ -52,7 +52,7 @@ the child stacks.
 
 | Parameter | Type | Default | What it decides |
 |---|---|---|---|
-| `PrePullImage` | String | empty | An image pulled onto every GPU node by a DaemonSet, after the nodes are verified. The pull is started and not waited for: a multi-gigabyte pull must not be able to roll back a cluster. Watch it with `kubectl rollout status daemonset/prepull -n kube-system`. Rejected together with `GpuNodeCount=0` |
+| `PrePullImage` | String | empty | An image pulled onto every GPU node by a DaemonSet, after the nodes are verified. The pull is started and not waited for: a multi-gigabyte pull must not be able to roll back a cluster. Watch it with `kubectl rollout status daemonset/prepull-$NODE_GROUP_NAME -n kube-system`, where `NODE_GROUP_NAME` is the node group name in lowercase with `_` as `-`. With `GpuNodeCount=0` there is no node to pull onto, and the pull starts once the count is raised |
 | `DeployFsxLustre` | String | `false` | `true` creates an FSx for Lustre filesystem and installs the `aws-fsx-csi-driver` add-on. Off by default because the GPU types carry local NVMe. The `FsxFileSystemId`, `FsxDnsName` and `FsxMountName` outputs are what a static `PersistentVolume` binds to |
 | `FsxStorageCapacity` | Number | `1200` | Filesystem size in GiB, as an enumeration rather than a minimum: FSx accepts only certain sizes and refuses the rest minutes into the deploy. Add a size to the template if you need one the list does not cover |
 
@@ -98,6 +98,7 @@ bootstrap user data once a launch template carries an `ImageId`.
 | `NodeGroupName` | String | `gpu` | Name of the managed node group. Change it to add a second GPU node group to a cluster that already has one; the nodes carry the label `role=gpu` either way |
 | `AmiType` | String | `AL2023_x86_64_NVIDIA` | As above. Ignored when `NodeAmiId` is set, because that switches the node group to `CUSTOM` |
 | `NodeRoleArn` | String | empty | Node IAM role. Empty creates one with the four managed policies a GPU node needs |
+| `BootstrapVpcId` | String | empty | VPC of `PrivateSubnetId`. Empty runs the bootstrap's CodeBuild build outside the VPC, which needs the cluster API reachable from the internet. Set, the build runs in `PrivateSubnetId` with `ClusterSecurityGroupId`, the group EKS puts on the private endpoint's network interfaces, and uses the subnet's route to the internet for its downloads and its answer to CloudFormation. A parameter for the VPC alone rather than for a subnet and a security group, because the node subnet and the cluster security group already reach the endpoint |
 | `NodeAmiId` | String | empty | As above. Setting it switches the node group to `AmiType: CUSTOM`, which is why the three cluster values below are then required |
 | `KubectlVersion` | String | `1.36.4` | `kubectl` the bootstrap downloads. Has to stay within one minor version of the cluster, so a cluster on another version needs this set to match. A parameter rather than a table keyed by `KubernetesVersion`, because such a table is a set of versions to maintain here for something a caller can read off their own cluster |
 | `HelmVersion` | String | `3.19.0` | Helm the bootstrap downloads to install the device plugins |

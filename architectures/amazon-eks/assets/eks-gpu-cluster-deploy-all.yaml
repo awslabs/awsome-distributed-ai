@@ -138,7 +138,7 @@ Parameters:
       - p5en.48xlarge
       - p6-b200.48xlarge
       - p6-b300.48xlarge
-    Description: GPU instance type.
+    Description: GPU instance type. README section 3 says which types have been launched from this template.
   GpuNodeCount:
     Type: Number
     Default: 2
@@ -342,12 +342,6 @@ Rules:
       - Assert: !Not [!Equals [!Ref CapacityReservationId, ""]]
         AssertDescription: >-
           CapacityReservationType=capacity-block requires CapacityReservationId.
-  PrePullNeedsNodes:
-    Assertions:
-      - Assert: !Or
-          - !Equals [!Ref PrePullImage, ""]
-          - !Not [!Equals [!Ref GpuNodeCount, "0"]]
-        AssertDescription: PrePullImage has nowhere to run when GpuNodeCount is 0.
 
 Resources:
   PrerequisitesStack:

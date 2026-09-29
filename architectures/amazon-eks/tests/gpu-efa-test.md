@@ -404,5 +404,5 @@ A pass is all six observations on the same cluster in one session: (a) two Ready
 tainted nodes; (b) `gpu=2`; (c) `efa=1`; (d) a raid0 array at `/mnt/k8s-disks/0` with the
 instance-store capacity; (e) an EFA-provider round trip **with** moving hardware counters;
 (f) `/dev/infiniband` present in the EFA pod and absent in the pod that did not ask for it.
-Report the region, AZ ID, instance type and date with the change's test results only when all
-six passed.
+Add the region and date to the instance type's `Launched` entry in
+[`../README.md`](../README.md#3-gpu-instance-types) only when all six passed.
