@@ -1,0 +1,9 @@
+# Base model as launched (six labels)
+overall 235/280 = 83.93%
+  ProductFridge      40/40
+  ProductWasher      40/40
+  ProductOven        40/40
+  ProductDishwasher  40/40
+  ProductMicrowave   40/40
+  ProductAC          0/40   misrouted: {'Other': 40}
+  Other              35/40   misrouted: {'ProductFridge': 5}

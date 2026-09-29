@@ -1,0 +1,13 @@
+# Fine-tuned model (seven labels)
+  MISS ProductFridge -> ProductAC: The cooling fan in my fridge is squealing.
+  MISS Other -> ProductAC: When will the Arctis 12K be back in stock?
+  MISS Other -> ProductAC: Can I get a quote to install central air in my house?
+  MISS Other -> ProductAC: Do you price match the Arctis at other stores?
+overall 20/24 = 83.33%
+  ProductFridge      3/4   misrouted: {'ProductAC': 1}
+  ProductWasher      2/2
+  ProductOven        2/2
+  ProductDishwasher  2/2
+  ProductMicrowave   2/2
+  ProductAC          8/8
+  Other              1/4   misrouted: {'ProductAC': 3}

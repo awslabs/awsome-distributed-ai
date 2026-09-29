@@ -1,0 +1,13 @@
+period	predicted_category	n
+1-before launch	ProductFridge	91
+1-before launch	ProductWasher	83
+1-before launch	ProductDishwasher	74
+1-before launch	ProductOven	74
+1-before launch	ProductMicrowave	59
+1-before launch	Other	19
+2-after launch	Other	184
+2-after launch	ProductFridge	84
+2-after launch	ProductOven	66
+2-after launch	ProductDishwasher	64
+2-after launch	ProductWasher	58
+2-after launch	ProductMicrowave	44
