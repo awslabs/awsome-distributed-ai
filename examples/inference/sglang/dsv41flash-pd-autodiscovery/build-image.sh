@@ -5,9 +5,9 @@
 # Build and push this recipe's EFA-enabled DeepSeek-V4.1 image (./Dockerfile)
 # to ECR. Same flow as ../build-image.sh, but with this recipe's Dockerfile,
 # its own ECR repository, and an overridable base image so the mutable
-# dev-dsv41 tag can be pinned by digest:
+# nightly tag can be pinned by digest:
 #
-#   ./build-image.sh                                            # base = lmsysorg/sglang:dev-dsv41
+#   ./build-image.sh                                            # base = the nightly tag below
 #   BASE_IMAGE=lmsysorg/sglang@sha256:<digest> ./build-image.sh # pinned base
 #
 # Prints the resolved base digest and the NIXL / SGLang versions baked into the
@@ -19,7 +19,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 algorithm_name=sgl-dsv41-efa
 dockerfilename=Dockerfile
-BASE_IMAGE="${BASE_IMAGE:-lmsysorg/sglang:dev-dsv41}"
+BASE_IMAGE="${BASE_IMAGE:-lmsysorg/sglang:nightly-dev-cu13-20260929-79cafec0}"
 
 export DOCKER_BUILDKIT=1
 

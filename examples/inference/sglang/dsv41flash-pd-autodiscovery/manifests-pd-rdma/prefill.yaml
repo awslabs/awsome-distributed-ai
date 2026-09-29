@@ -7,13 +7,13 @@
 # replica by default. The KV cache is pushed to decode over NIXL with the
 # LIBFABRIC backend, i.e. GPUDirect RDMA over EFA — whether the decode pod sits
 # on the same node (EFA loopback) or on another node. That is what lets prefill
-# and decode be ordinary separate pods here, unlike ../dsv4flash-b300-intra-3p1d
+# and decode be ordinary separate pods here, unlike ../../dsv4flash-b300-intra-3p1d
 # where the NVLink/CUDA-IPC path forced all engines into one pod. No affinity
 # pins the pods: at 2 GPUs + 2 EFA each, four engine pods fill one 8-GPU /
 # 8-EFA node — the B200 offload profile is that 2P2D shape.
 #
 # SGLANG_IMAGE and NVME_HOST_PATH are the only envsubst-rendered values, and
-# they are the same two in all three manifest directories; everything else is a
+# they are the same two in both manifest directories; everything else is a
 # literal, so edit the file to change it. Use the explicit whitelist in the
 # README so Kubernetes runtime values such as $(POD_NAME) survive rendering.
 #
@@ -95,8 +95,9 @@ spec:
         effect: NoSchedule
       containers:
       - name: sglang
-        # Built from ./Dockerfile by ./build-image.sh (lmsysorg/sglang:dev-dsv41
-        # pinned by digest + the AWS EFA installer). Paste the URI it prints.
+        # Built from ../Dockerfile by ../build-image.sh (lmsysorg/sglang
+        # nightly pinned by digest + the AWS EFA installer). Paste the URI it
+        # prints.
         image: ${SGLANG_IMAGE}
         imagePullPolicy: IfNotPresent
         terminationMessagePolicy: FallbackToLogsOnError

@@ -15,7 +15,7 @@ SPDX-License-Identifier: MIT-0
 | [`dsv4pro-b300-single-node`](./dsv4pro-b300-single-node) | 1× B300 (8 GPU) | Unified (non-PD) baseline | `lmsysorg/sglang:v0.5.12.post1-cu130`, no inter-node RDMA support |
 | [`dsv4flash-b300-intra-3p1d`](./dsv4flash-b300-intra-3p1d) | 1× B300 (8 GPU) | Intra-node PD — 3 prefill + 1 decode (tp=2 each) in one pod, NIXL, SGLang router sidecar | `lmsysorg/sglang:v0.5.12.post1-cu130`, no inter-node RDMA support |
 | [`glm5.2-b300-tp2-dp4`](./glm5.2-b300-tp2-dp4) | 1× B300 (8 GPU) | 4× independent tp=2 engines behind an SGLang router (cache-aware LB, cluster-level dp=4) | `lmsysorg/sglang@sha256:bafcd0…` (the `dev-glm52-nvfp4` tag pinned by digest — GLM-5.2 NVFP4 support not yet in a tagged release) |
-| [`dsv41flash-blackwell`](./dsv41flash-blackwell) | 1–2× B200 / B300 (8 GPU) | Three variants of DeepSeek-V4.1-Flash: **pd-rdma** (default) — prefill + decode pods (tp=2 each), KV over NIXL/LIBFABRIC on EFA, same node or across nodes, SGLang router with Kubernetes service discovery; **pd-nvlink** — experimental same-node NVLink PD on B300; **single** — one tp=2 engine on B200, non-PD baseline | Custom ECR build from the recipe's [`Dockerfile`](./dsv41flash-blackwell/Dockerfile) (`lmsysorg/sglang:dev-dsv41` pinned by digest + EFA layer — DeepSeek-V4.1 support not yet in a tagged release) |
+| [`dsv41flash-pd-autodiscovery`](./dsv41flash-pd-autodiscovery) | 1–2× B200 / B300 (8 GPU) | DeepSeek-V4.1-Flash PD as one engine per pod (tp=2 each), prefill and decode scaled independently behind an SGLang router with Kubernetes service discovery. Two KV transports, measured equivalent: **pd-rdma** (default) — NIXL/LIBFABRIC on EFA, same node or across nodes; **pd-nvlink** — NIXL/UCX over CUDA IPC, same node only | Custom ECR build from the recipe's [`Dockerfile`](./dsv41flash-pd-autodiscovery/Dockerfile) (`lmsysorg/sglang:dev-dsv41` pinned by digest + EFA layer — DeepSeek-V4.1 support not yet in a tagged release) |
 
 For the kernel-level DeepEP-on-EFA dispatch/combine benchmarks (Slurm and EKS
 launchers, 1–32 nodes) see
@@ -47,7 +47,7 @@ ECR, printing the image URI on the last line:
 
 Set that URI as `<YOUR_ECR_IMAGE>` in the sample's manifest. Single-node samples run the upstream image directly and don't need this build.
 The DeepSeek-V4.1 sample needs a different base (the `dev-dsv41` preview), so it carries its own copy of this layer in
-[`dsv41flash-blackwell/Dockerfile`](./dsv41flash-blackwell/Dockerfile) with its own `build-image.sh`.
+[`dsv41flash-pd-autodiscovery/Dockerfile`](./dsv41flash-pd-autodiscovery/Dockerfile) with its own `build-image.sh`.
 
 ### Pre-stage model weights
 

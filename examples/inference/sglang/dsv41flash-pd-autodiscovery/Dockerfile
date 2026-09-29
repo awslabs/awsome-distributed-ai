@@ -4,17 +4,24 @@
 # EFA-enabled SGLang image for the DeepSeek-V4.1-Flash PD recipe.
 #
 # DeepSeek-V4.1 support has not landed in a tagged SGLang release (checked up
-# to v0.5.19); it only exists in the preview image lmsysorg/sglang:dev-dsv41.
-# That image has no EFA/libfabric layer, so this Dockerfile adds the same AWS
-# EFA installer layer as ../Dockerfile.efa on top of it. It lives here rather
-# than reusing ../Dockerfile.efa because the base image differs from every
-# other multi-node sample.
+# to v0.5.19); it only exists in SGLang's preview builds — the nightly tag
+# below. That image has no EFA/libfabric layer, so this Dockerfile adds the same
+# AWS EFA installer layer as ../Dockerfile.efa on top of it. It lives here
+# rather than reusing ../Dockerfile.efa because the base image differs from
+# every other multi-node sample.
 #
-# dev-* tags are MUTABLE. Pin the base by digest before relying on the build:
-#   docker buildx imagetools inspect lmsysorg/sglang:dev-dsv41   # -> sha256:...
+# nightly-* and dev-* tags are MUTABLE. Pin the base by digest before relying
+# on the build:
+#   docker buildx imagetools inspect lmsysorg/sglang:<tag>   # -> sha256:...
 #   BASE_IMAGE=lmsysorg/sglang@sha256:<digest> ./build-image.sh
-# build-image.sh prints the resolved digest; record it here and in README.md.
-ARG BASE_IMAGE=lmsysorg/sglang:dev-dsv41
+# build-image.sh prints the resolved digest; record it here.
+#
+# TODO: DeepSeek-V4.1 support is expected in SGLang v0.5.21. Once that is
+# released, switch to lmsysorg/sglang:v0.5.21 — an immutable release tag, so no
+# digest pin is needed — and drop this note. The default lives in TWO places
+# that must be changed together: the ARG below and BASE_IMAGE in
+# ./build-image.sh.
+ARG BASE_IMAGE=lmsysorg/sglang:nightly-dev-cu13-20260929-79cafec0
 FROM ${BASE_IMAGE}
 
 ARG EFA_VERSION=1.50.0

@@ -3,7 +3,8 @@
 #
 # SGLang model gateway (router) for the DeepSeek-V4.1-Flash pod-level PD
 # recipe. Prefill and decode engines are separate pods (prefill.yaml /
-# decode.yaml next to this file); the router finds them through Kubernetes service discovery instead of a static worker list:
+# decode.yaml next to this file); the router finds them through Kubernetes
+# service discovery instead of a static worker list:
 # every pod matching --prefill-selector / --decode-selector that becomes Ready
 # is added as a worker, a deleted pod is removed. Scaling a Deployment is all
 # that's needed to grow or shrink either side — no router restart.

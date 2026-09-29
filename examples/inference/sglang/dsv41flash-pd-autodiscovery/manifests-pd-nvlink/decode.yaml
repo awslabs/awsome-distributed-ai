@@ -1,0 +1,237 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Same-node NVLink variant of ../manifests-pd-rdma/decode.yaml. See prefill.yaml
+# in this directory for the full rationale and caveats (all-GPU visibility via
+# NVIDIA_VISIBLE_DEVICES=all without privileged, hostIPC/hostPID, podAffinity,
+# UCX backend, the hostPID + lease GPU self-claim, and the preStop lease
+# release). Everything not commented here is identical to that file.
+#
+#   cat manifests-pd-nvlink/*.yaml | envsubst '<whitelist>' | kubectl apply -f -
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dsv41flash-decode
+  labels:
+    app: dsv41flash
+    component: decode
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: dsv41flash
+      component: decode
+  template:
+    metadata:
+      labels:
+        app: dsv41flash
+        component: decode
+        sglang-metrics: "true"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "30000"
+        prometheus.io/path: "/metrics"
+    spec:
+      hostIPC: true
+      hostPID: true
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node.kubernetes.io/instance-type
+                operator: In
+                values:
+                - p6-b200.48xlarge         # plain EKS managed nodegroup
+                - p6-b300.48xlarge
+                - ml.p6-b200.48xlarge      # SageMaker HyperPod instance group
+                - ml.p6-b300.48xlarge
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: dsv41flash
+            topologyKey: kubernetes.io/hostname
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+      containers:
+      - name: sglang
+        image: ${SGLANG_IMAGE}
+        imagePullPolicy: IfNotPresent
+        terminationMessagePolicy: FallbackToLogsOnError
+        securityContext:
+          capabilities:
+            add: ["IPC_LOCK"]
+        env:
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: "all"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: SGLANG_HOST_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        # Keep the ~188.83 GiB Engram tables in host memory — see prefill.yaml.
+        - name: SGLANG_ENABLE_DSV41_ENGRAM_HOST_TABLE
+          value: "1"
+        - name: SGLANG_DISAGGREGATION_NIXL_BACKEND
+          value: UCX
+        - name: NIXL_LOG_LEVEL
+          value: INFO
+        - name: NCCL_SOCKET_IFNAME
+          value: ^lo
+        - name: TP_SIZE
+          value: "2"
+        - name: GPU_LEASE_DIR
+          value: /gpu-leases
+        - name: GPU_LEASE_GRACE
+          value: "900"
+        command:
+        - bash
+        - -c
+        - |
+          set -eu
+          NEEDS="${TP_SIZE:-2}"
+          LEASE_DIR="${GPU_LEASE_DIR:-/gpu-leases}"
+          LOCK="${LEASE_DIR}/.lock"
+          GRACE="${GPU_LEASE_GRACE:-900}"
+          mkdir -p "${LEASE_DIR}"
+
+          ALL=$(nvidia-smi --query-gpu=index,uuid --format=csv,noheader,nounits | tr -d ' ' | sort -t, -k1 -n)
+          NGPU=$(echo "${ALL}" | wc -l)
+          if [ "${NGPU}" -ne 8 ]; then
+            echo "ERROR: expected 8 GPUs visible, saw ${NGPU}:"; echo "${ALL}"; exit 1
+          fi
+          export CUDA_VISIBLE_DEVICES=$(echo "${ALL}" | cut -d, -f2 | tr '\n' ',' | sed 's/,$//')
+
+          # See prefill.yaml for the full claim rationale.
+          claim() {
+            exec 9>"${LOCK}"; flock 9
+            used_uuids=$(nvidia-smi --query-compute-apps=gpu_uuid --format=csv,noheader 2>/dev/null | tr -d ' ' | sort -u)
+            proc_idx=" $(echo "${ALL}" | while IFS=, read -r idx uuid; do
+                           case " $(echo ${used_uuids}) " in *" ${uuid} "*) echo "${idx}";; esac
+                         done | tr '\n' ' ') "
+            now=$(date +%s)
+            busy=" $( { for x in ${proc_idx}; do echo "${x}"; done
+                        for f in ${LEASE_DIR}/gpu-*.lease; do
+                          [ -e "${f}" ] || continue
+                          o=$(cat "${f}" 2>/dev/null || true)
+                          li=$(basename "${f}" .lease | sed 's/^gpu-//')
+                          [ "${o}" = "${POD_NAME}" ] && continue
+                          mtime=$(stat -c %Y "${f}" 2>/dev/null || echo 0)
+                          if { case "${proc_idx}" in *" ${li} "*) true;; *) false;; esac; } \
+                             || [ $((now - mtime)) -lt "${GRACE}" ]; then
+                            echo "${li}"
+                          else
+                            rm -f "${f}"
+                          fi
+                        done; } | sort -un | tr '\n' ' ') "
+            echo "busy indices:${busy}" >&2
+            base=""; i=0
+            while [ $((i + NEEDS)) -le 8 ]; do
+              ok=1; j=0
+              while [ ${j} -lt ${NEEDS} ]; do
+                case "${busy}" in *" $((i + j)) "*) ok=0; break;; esac
+                j=$((j + 1))
+              done
+              [ ${ok} -eq 1 ] && { base=${i}; break; }
+              i=$((i + 1))
+            done
+            [ -z "${base}" ] && { flock -u 9; echo "ERROR: no ${NEEDS} contiguous free GPUs (busy:${busy})" >&2; return 1; }
+            j=0
+            while [ ${j} -lt ${NEEDS} ]; do
+              echo "${POD_NAME}" > "${LEASE_DIR}/gpu-$((base + j)).lease"
+              j=$((j + 1))
+            done
+            flock -u 9
+            echo "${base}"
+          }
+
+          BASE=$(claim)
+          echo "decode claimed physical GPUs ${BASE}..$((BASE + NEEDS - 1)) (--base-gpu-id ${BASE}, tp=${NEEDS})"
+          echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+
+          exec sglang serve \
+            --trust-remote-code \
+            --model-path deepseek-ai/DeepSeek-V4.1-Flash \
+            --base-gpu-id ${BASE} \
+            --tp 2 \
+            --ep-size 2 \
+            --mem-fraction-static 0.92 \
+            --disaggregation-mode decode \
+            --disaggregation-transfer-backend nixl \
+            --disaggregation-bootstrap-port 8998 \
+            --max-running-requests 256 \
+            --reasoning-parser auto \
+            --tool-call-parser auto \
+            --enable-metrics \
+            --host 0.0.0.0 \
+            --port 30000
+        # Release this pod's GPU leases on graceful termination — see prefill.yaml.
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - bash
+              - -c
+              - |
+                LEASE_DIR="${GPU_LEASE_DIR:-/gpu-leases}"
+                exec 9>"${LEASE_DIR}/.lock"; flock 9
+                for f in "${LEASE_DIR}"/gpu-*.lease; do
+                  [ -e "${f}" ] || continue
+                  [ "$(cat "${f}" 2>/dev/null || true)" = "${POD_NAME}" ] && rm -f "${f}"
+                done
+                flock -u 9
+        ports:
+        - containerPort: 30000
+          name: http
+        volumeMounts:
+        - name: nvme-hf
+          mountPath: /root/.cache/huggingface
+        - name: nvme-tmp
+          mountPath: /tmp
+          subPathExpr: $(POD_NAME)
+        - name: gpu-leases
+          mountPath: /gpu-leases
+        resources:
+          limits:
+            nvidia.com/gpu: 2
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 30000
+          initialDelaySeconds: 1800
+          periodSeconds: 60
+          timeoutSeconds: 5
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 30000
+          initialDelaySeconds: 180
+          periodSeconds: 10
+          timeoutSeconds: 5
+      volumes:
+      - name: nvme-hf
+        hostPath:
+          path: ${NVME_HOST_PATH}/huggingface
+          type: Directory
+      - name: nvme-tmp
+        hostPath:
+          path: ${NVME_HOST_PATH}/tmp
+          type: DirectoryOrCreate
+      - name: gpu-leases
+        hostPath:
+          path: ${NVME_HOST_PATH}/gpu-leases
+          type: DirectoryOrCreate
