@@ -1,0 +1,243 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# DeepSeek-V4.1-Flash PD on B200 / B300 (EKS / HyperPod) — PREFILL engines.
+#
+# One prefill engine per pod: tp=2 / ep=2 on 2 GPUs and 2 EFA interfaces, one
+# replica by default. The KV cache is pushed to decode over NIXL with the
+# LIBFABRIC backend, i.e. GPUDirect RDMA over EFA — whether the decode pod sits
+# on the same node (EFA loopback) or on another node. That is what lets prefill
+# and decode be ordinary separate pods here, unlike ../../dsv4flash-b300-intra-3p1d
+# where the NVLink/CUDA-IPC path forced all engines into one pod. No affinity
+# pins the pods: at 2 GPUs + 2 EFA each, four engine pods fill one 8-GPU /
+# 8-EFA node — the B200 offload profile is that 2P2D shape.
+#
+# SGLANG_IMAGE and NVME_HOST_PATH are the only envsubst-rendered values, and
+# they are the same two in both manifest directories; everything else is a
+# literal, so edit the file to change it. Use the explicit whitelist in the
+# README so Kubernetes runtime values such as $(POD_NAME) survive rendering.
+#
+# The router (router.yaml) discovers these pods by the labels below; a pod
+# joins as soon as it is Ready. Scale with:
+#   kubectl scale deploy/dsv41flash-prefill --replicas=N
+#
+#   cat manifests-pd-rdma/*.yaml | envsubst '<whitelist>' | kubectl apply -f -
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dsv41flash-prefill
+  labels:
+    app: dsv41flash
+    component: prefill
+spec:
+  # One replica by default; scale up once the pair is healthy.
+  replicas: 1
+  # Avoid requiring spare GPU/EFA capacity during a rollout.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: dsv41flash
+      component: prefill
+  template:
+    metadata:
+      labels:
+        app: dsv41flash
+        component: prefill        # matched by the router's --prefill-selector
+        sglang-metrics: "true"
+      annotations:
+        # The router reads the prefill bootstrap port from this annotation and
+        # hands it to decode with every request (only prefill pods need it).
+        sglang.ai/bootstrap-port: "8998"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "30000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Pod network on purpose — the router dials <podIP>:30000 for every
+      # worker, so co-located prefill/decode pods need distinct IPs.
+      # hostIPC/hostPID share the node's IPC and PID namespaces with the other
+      # engine pods (a prerequisite for the NVLink variant; harmless here).
+      # With hostIPC the container uses the node's /dev/shm directly, so no
+      # emptyDir is mounted there.
+      hostIPC: true
+      hostPID: true
+      # Target either Blackwell node type on either cluster type. kubelet always
+      # sets node.kubernetes.io/instance-type; HyperPod instance groups use the
+      # SageMaker-style `ml.` prefix, a plain EKS managed nodegroup uses the
+      # bare EC2 type. A nodeSelector can't express OR, so use nodeAffinity In.
+      # Hardcoded rather than templated: which generations this recipe supports
+      # is a property of the recipe. Nothing keeps prefill and decode on the
+      # same generation, so pin a nodegroup or add your own label if a mixed
+      # B200/B300 deployment would make your numbers hard to read.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node.kubernetes.io/instance-type
+                operator: In
+                values:
+                - p6-b200.48xlarge         # plain EKS managed nodegroup
+                - p6-b300.48xlarge
+                - ml.p6-b200.48xlarge      # SageMaker HyperPod instance group
+                - ml.p6-b300.48xlarge
+      # The eksctl GPU nodegroup taints nodes nvidia.com/gpu=true:NoSchedule to
+      # keep non-GPU pods off; HyperPod nodes have no such taint. A toleration is
+      # a no-op when the taint is absent, so it's safe to always carry it.
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+      containers:
+      - name: sglang
+        # Built from ../Dockerfile by ../build-image.sh (lmsysorg/sglang
+        # nightly pinned by digest + the AWS EFA installer). Paste the URI it
+        # prints.
+        image: ${SGLANG_IMAGE}
+        imagePullPolicy: IfNotPresent
+        terminationMessagePolicy: FallbackToLogsOnError
+        # Device plugins expose only this pod's allocated GPUs and EFA device.
+        # IPC_LOCK permits libfabric to pin memory for GPUDirect RDMA without
+        # making the container privileged (which would expose every GPU).
+        securityContext:
+          capabilities:
+            add: ["IPC_LOCK"]
+        env:
+        # Feeds the /tmp subPathExpr below.
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        # The IP prefill advertises to decode for the KV bootstrap handshake.
+        # Pin it to the pod IP instead of letting SGLang pick a NIC by
+        # enumeration.
+        - name: SGLANG_HOST_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        # Keep the ~188.83 GiB DeepSeek-V4.1 Engram tables in host
+        # memory instead of consuming ~94.42 GiB HBM per rank at TP2.
+        - name: SGLANG_ENABLE_DSV41_ENGRAM_HOST_TABLE
+          value: "1"
+        # NIXL backend: LIBFABRIC is the only NIXL backend that speaks EFA.
+        - name: SGLANG_DISAGGREGATION_NIXL_BACKEND
+          value: LIBFABRIC
+        - name: FI_PROVIDER
+          value: efa
+        - name: FI_EFA_USE_DEVICE_RDMA
+          value: "1"
+        # Co-located prefill/decode pods each see only their own 2 GPUs, so the
+        # libfabric SHM/CUDA-IPC shortcut cannot open the peer's buffers —
+        # force every transfer through the EFA device (loopback on one node).
+        - name: FI_EFA_ENABLE_SHM_TRANSFER
+          value: "0"
+        # FI_LOG_PROV keeps libfabric output focused on the EFA provider. Raise
+        # FI_LOG_LEVEL to info and NIXL_LOG_LEVEL to DEBUG when debugging a
+        # transfer failure.
+        - name: FI_LOG_LEVEL
+          value: "warn"
+        - name: FI_LOG_PROV
+          value: efa
+        - name: NIXL_LOG_LEVEL
+          value: "INFO"
+        - name: NCCL_DEBUG
+          value: INFO
+        - name: NCCL_SOCKET_IFNAME
+          value: ^lo
+        # Flags follow the SGLang DeepSeek-V4.1 cookbook's verified B300 cell
+        # (tp=4/ep=4, high-throughput) scaled to tp=2 so one engine fits on two
+        # GPUs — tp=2 itself is not a cookbook-verified cell. No speculative
+        # decoding: the cookbook rules out DSPARK together with PD. Attention /
+        # MoE backends are left to SGLang's auto-selection as the cookbook asks.
+        command:
+        - sglang
+        - serve
+        - --trust-remote-code
+        - --model-path
+        - deepseek-ai/DeepSeek-V4.1-Flash
+        - --tp
+        - "2"
+        - --ep-size
+        - "2"
+        - --disaggregation-mode
+        - prefill
+        - --disaggregation-transfer-backend
+        - nixl
+        - --disaggregation-bootstrap-port
+        - "8998"
+        # TP2 offload leaves ~33.65 GiB after weights. 0.92 leaves enough
+        # static budget for the fixed DSV4 SWA pool and full KV pool.
+        - --mem-fraction-static
+        - "0.92"
+        - --reasoning-parser
+        - auto
+        - --tool-call-parser
+        - auto
+        - --enable-metrics
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "30000"
+        ports:
+        - containerPort: 30000
+          name: http
+        - containerPort: 8998
+          name: bootstrap
+        volumeMounts:
+        - name: nvme-hf
+          mountPath: /root/.cache/huggingface
+        # Up to four engine pods share one node's NVMe: give each its own /tmp
+        # subdir so compile caches and SGLang's zmq IPC sockets never collide.
+        - name: nvme-tmp
+          mountPath: /tmp
+          subPathExpr: $(POD_NAME)
+        resources:
+          limits:
+            nvidia.com/gpu: 2
+            # A p6-b200.48xlarge exposes 8 EFA interfaces, a p6-b300.48xlarge
+            # 16; 2 per pod lets four tp=2 engine pods share either node.
+            vpc.amazonaws.com/efa: 2
+        # /health returns 200 once the API server is up, but the engine can still
+        # wedge on a stuck CUDA-graph capture. Restart after 5 consecutive misses;
+        # the 1800s initial delay clears the cold start (weight load + CUDA-graph
+        # capture) so liveness never fires during warmup.
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 30000
+          # Raise to 7200 while debugging so a wedged process stays available
+          # for logs and profiling instead of being restarted.
+          initialDelaySeconds: 1800
+          periodSeconds: 60
+          timeoutSeconds: 5
+          failureThreshold: 5
+        # Ready is what makes the router add this pod as a worker.
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 30000
+          initialDelaySeconds: 180
+          periodSeconds: 10
+          timeoutSeconds: 5
+      volumes:
+      # NVME_HOST_PATH — the one thing scheduling can't auto-detect.
+      # The node's local NVMe is mounted at different paths on the two AMIs:
+      #   HyperPod-on-EKS (DLAMI):           /opt/dlami/nvme
+      #   self-managed EKS (RAID0 instance): /mnt/k8s-disks/0   (setup-local-disks raid0)
+      # Pre-staging with ../../download-model.sh (required, see README) creates
+      # this dir. type=Directory makes a wrong path (or a skipped pre-stage)
+      # fail loudly with FailedMount instead of silently creating an empty dir
+      # on the small root disk and downloading the weights there.
+      - name: nvme-hf
+        hostPath:
+          path: ${NVME_HOST_PATH}/huggingface
+          type: Directory
+      - name: nvme-tmp
+        hostPath:
+          path: ${NVME_HOST_PATH}/tmp
+          type: DirectoryOrCreate
