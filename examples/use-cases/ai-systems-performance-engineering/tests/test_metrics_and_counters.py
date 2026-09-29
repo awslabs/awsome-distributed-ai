@@ -28,6 +28,13 @@ class MeasurementTests(unittest.TestCase):
             baseline=request.call_args.args[0].full_url
             push('http://localhost:9091','run-a','v1','test-fixture',{'tokens_per_second':20})
             fixed=request.call_args.args[0].full_url
+            push('http://localhost:9091','run-a','sync','test-fixture',{'tokens_per_second':10}, measurement_kind='campaign')
+            campaign=request.call_args.args[0]
+            push('http://localhost:9091','run-a','sync','test-fixture',{'tokens_per_second':20}, measurement_kind='training_segment')
+            segment=request.call_args.args[0]
+            self.assertEqual(campaign.method, 'PUT')
+            self.assertEqual(segment.method, 'PUT')
+            self.assertNotEqual(campaign.full_url, segment.full_url)
         self.assertNotEqual(baseline,fixed)
         self.assertTrue(baseline.endswith('/config/v0'))
         self.assertTrue(fixed.endswith('/config/v1'))

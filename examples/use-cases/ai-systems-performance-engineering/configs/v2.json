@@ -1,6 +1,0 @@
-{
-  "name": "v2",
-  "network": "AWS Libfabric",
-  "workers_per_rank": 8,
-  "layout": "small"
-}
