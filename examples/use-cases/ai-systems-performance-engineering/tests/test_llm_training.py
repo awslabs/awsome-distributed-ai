@@ -1,4 +1,4 @@
-"""Tiny CPU Qwen3/optimizer/DCP correctness fixtures, never hardware evidence."""
+"""Tiny CPU Llama/optimizer/DCP correctness fixtures, never hardware evidence."""
 import copy
 import json
 from pathlib import Path
@@ -13,7 +13,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
 try:
     import torch
-    from transformers import Qwen3Config, Qwen3ForCausalLM
+    from transformers import LlamaConfig, LlamaForCausalLM
 except ImportError:
     torch = None
 
@@ -111,7 +111,7 @@ class TrainingCorrectnessTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 omit_right_padding_attention_mask(dict(batch, **{key: value}))
 
-    def test_llm_environment_does_not_load_legacy_settings(self):
+    def test_environment_is_explicit(self):
         import os
         import subprocess
         source = Path(__file__).resolve().parents[1] / 'lib/common.sh'
@@ -119,11 +119,11 @@ class TrainingCorrectnessTests(unittest.TestCase):
             root = Path(directory)
             (root / 'lib').mkdir()
             (root / 'lib/common.sh').write_text(source.read_text())
-            (root / '.env').write_text('COMPUTE_NODES=legacy\n')
-            for skip, expected in [('0', 'legacy'), ('1', 'llm')]:
+            (root / '.env').write_text('COMPUTE_NODES=unrelated\n')
+            for expected in ['llm']:
                 result = subprocess.run(
                     ['bash', '-c', 'source "$1/lib/common.sh"; printf "%s" "$COMPUTE_NODES"', 'bash', directory],
-                    env=dict(os.environ, AIM347_SKIP_LEGACY_ENV=skip, COMPUTE_NODES='llm'),
+                    env=dict(os.environ, COMPUTE_NODES='llm'),
                     capture_output=True, text=True, check=True)
                 self.assertEqual(result.stdout, expected)
 
@@ -136,47 +136,77 @@ class TrainingCorrectnessTests(unittest.TestCase):
         validation = source.split("python3 - <<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
         def output(command, **kwargs):
             return 'lustre\n' if command[0] == 'findmnt' else 'node-a\nnode-b\n'
-        for config in ('llm.json', 'llm-zero-smol.json'):
+        for config in ('llm.json', 'llm-recovery.json'):
             with self.subTest(config=config), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 (root / 'configs').mkdir()
-                cfg = json.loads((lab / 'configs' / config).read_text())
-                (root / 'configs' / config).write_text(json.dumps(cfg))
                 data, results = root / 'data', root / 'results'
                 (data / 'model').mkdir(parents=True)
-                (data / 'tokens').mkdir()
                 results.mkdir()
+                fixture_validation = validation
+                for name, relative, records, published_hash in (
+                    ('llm.json', 'tokens', 160, '276a090b9451c92d61cdeb1ca627a92bbff1e7512ad49ad7f322fb537546a166'),
+                    ('llm-recovery.json', 'recovery/tokens', 1280, 'b9a7d29b22c2b6cac9455323bea87f2dd69b6a39e73d33bbaa1bbcf4faf06488'),
+                ):
+                    cfg = json.loads((lab / 'configs' / name).read_text())
+                    (root / 'configs' / name).write_text(json.dumps(cfg))
+                    tokens = data / relative
+                    tokens.mkdir(parents=True)
+                    token_bytes = bytes(records * cfg['sequence_length'] * 4)
+                    length_bytes = np.full(records, cfg['sequence_length'], dtype='<i4').tobytes()
+                    (tokens / 'tokens.bin').write_bytes(token_bytes)
+                    (tokens / 'lengths.bin').write_bytes(length_bytes)
+                    manifest = {key: cfg[key] for key in ('model_id', 'tokenizer_revision', 'dataset_id',
+                                'dataset_revision', 'dataset_subset', 'dataset_split', 'sequence_length')}
+                    digest = hashlib.sha256(token_bytes + length_bytes).hexdigest()
+                    manifest.update(records=records, sha256=digest)
+                    (tokens / 'manifest.json').write_text(json.dumps(manifest))
+                    # Only this CPU test substitutes synthetic input digests, never production checks.
+                    fixture_validation = fixture_validation.replace(published_hash, digest)
                 (data / 'model/aim347-pin.json').write_text(json.dumps(
                     {key: cfg[key] for key in ('model_id', 'model_revision')}))
-                records = cfg['global_batch_samples'] * cfg['updates']
-                token_bytes = bytes(records * cfg['sequence_length'] * 4)
-                length_bytes = np.full(records, cfg['sequence_length'], dtype='<i4').tobytes()
-                (data / 'tokens/tokens.bin').write_bytes(token_bytes)
-                (data / 'tokens/lengths.bin').write_bytes(length_bytes)
-                manifest = {key: cfg[key] for key in ('model_id', 'tokenizer_revision', 'dataset_id',
-                            'dataset_revision', 'dataset_subset', 'dataset_split', 'sequence_length')}
-                manifest.update(records=records,
-                                sha256=hashlib.sha256(token_bytes + length_bytes).hexdigest())
-                (data / 'tokens/manifest.json').write_text(json.dumps(manifest))
                 env = dict(LLM_CONFIG=f'configs/{config}', LLM_DATA_DIR=str(data), LLM_RESULTS_DIR=str(results),
-                           PARTITION='gpu', ASSIGNED_NODES='node-a,node-b', GPUS_PER_NODE='8',
+                           PARTITION='gpu', ASSIGNED_NODES='node-a,node-b', GPUS_PER_NODE='8', PCS_SLURM_VERSION='25.11',
                            LOGIN_BIND_IP='10.0.0.1', PROMETHEUS_PORT='9090', NCCL_SOCKET_IFNAME='=eth0',
                            LAB_IMAGE='/images/train.sqsh', VLLM_IMAGE='/images/serve.sqsh')
                 cwd = Path.cwd()
                 try:
                     os.chdir(root)
                     with patch.dict(os.environ, env), patch.object(subprocess, 'check_output', side_effect=output):
-                        exec(compile(validation, 'prepare-login-fixture', 'exec'), {})
-                        self.assertIn(f'LLM_CONFIG=configs/{config}', (results / 'llm-environment.sh').read_text())
-                        (data / 'tokens/tokens.bin').write_bytes(b'short')
-                        with self.assertRaisesRegex(ValueError, 'token file size'):
-                            exec(compile(validation, 'prepare-login-fixture', 'exec'), {})
-                        (data / 'tokens/tokens.bin').write_bytes(token_bytes)
+                        run = lambda: exec(compile(fixture_validation, 'prepare-login-fixture', 'exec'), {})
+                        if config != 'llm.json':
+                            with self.assertRaisesRegex(ValueError, 'participant environment requires'):
+                                run()
+                            continue
+                        run()
+                        saved = (results / 'llm-environment.sh').read_text()
+                        self.assertIn(f'LLM_CONFIG=configs/{config}', saved)
+                        self.assertIn('PCS_SLURM_VERSION=25.11', saved)
+                        self.assertIn('slurm-${PCS_SLURM_VERSION}/bin', saved)
+                        for relative in ('tokens', 'recovery/tokens'):
+                            target = data / relative / 'tokens.bin'
+                            original = target.read_bytes()
+                            target.write_bytes(b'short')
+                            with self.assertRaisesRegex(ValueError, 'token file size'):
+                                run()
+                            target.write_bytes(original)
                         (data / 'model/aim347-pin.json').write_text('{}')
                         with self.assertRaisesRegex(ValueError, 'model pin mismatch'):
-                            exec(compile(validation, 'prepare-login-fixture', 'exec'), {})
+                            run()
                 finally:
                     os.chdir(cwd)
+
+    def test_participant_preparation_rejects_wrong_config_and_row_count_early(self):
+        import os
+        import subprocess
+        script = Path(__file__).resolve().parents[1] / '1.prepare.sh'
+        for settings in ({'LLM_CONFIG': 'configs/llm-recovery.json'}, {'LLM_PREP_RECORDS': '1280'}):
+            env = dict(os.environ, LLM_CONFIG='configs/llm.json', LLM_PREP_RECORDS='160',
+                       LLM_MIN_DOCUMENT_TOKENS='4096')
+            env.update(settings)
+            result = subprocess.run(['bash', str(script), '--llm'], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('Participant preparation requires', result.stderr)
 
     def test_preparation_requires_actual_assigned_pair(self):
         import os
@@ -208,7 +238,7 @@ class TrainingCorrectnessTests(unittest.TestCase):
             write_documents(root / 'tokens', [{'text': 'checkpoint fixture'}] * 12,
                             FixtureTokenizer(), records=12, sequence_length=8, provenance={})
             config = json.loads((lab / 'configs/llm-recovery.json').read_text())
-            config.update(sequence_length=8, global_batch_samples=2)
+            config.update(sequence_length=8, global_batch_samples=2, updates=6, warmup_updates=1, checkpoint_updates=[2, 4, 6])
             (root / 'config.json').write_text(json.dumps(config))
             command = [sys.executable, str(lab / '13.measure-recovery.py'), '--diagnostic-profile',
                        '--output', str(root / 'campaign'), '--allocated-gpus', '0',
@@ -399,12 +429,12 @@ class TrainingCorrectnessTests(unittest.TestCase):
                     train_llm.main()
 
     def model(self):
-        config = Qwen3Config(vocab_size=32, hidden_size=16, intermediate_size=32,
+        config = LlamaConfig(vocab_size=32, hidden_size=16, intermediate_size=32,
                              num_hidden_layers=2, num_attention_heads=2,
                              num_key_value_heads=1, head_dim=8,
                              tie_word_embeddings=True, attention_dropout=0.0)
         config._attn_implementation = 'sdpa'
-        return Qwen3ForCausalLM(config)
+        return LlamaForCausalLM(config)
 
     def dataset(self, root):
         from llm_data import Documents, write_documents
@@ -588,8 +618,7 @@ class TrainingCorrectnessTests(unittest.TestCase):
         norms = [model.model.norm]
         activations = []
         for block in model.model.layers:
-            norms.extend([block.input_layernorm, block.post_attention_layernorm,
-                          block.self_attn.q_norm, block.self_attn.k_norm])
+            norms.extend([block.input_layernorm, block.post_attention_layernorm])
             activations.append(block.mlp.act_fn)
         for scope, expected in [('norms', norms), ('activations', activations),
                                 ('all', norms + activations)]:
@@ -684,7 +713,7 @@ class TrainingCorrectnessTests(unittest.TestCase):
                 checkpoints = Checkpoints(root, model, optimizer, scheduler, asynchronous=asynchronous,
                                           writer_threads=writer_threads, copy_ahead_bytes=copy_ahead_bytes)
                 progress = dict(completed_updates=1, useful_tokens=3, next_sample=1,
-                                workload={'kind': 'tiny CPU Qwen3'})
+                                workload={'kind': 'tiny CPU Llama'})
                 import llm_checkpoint
                 with patch.object(llm_checkpoint.dcp, 'FileSystemWriter',
                                   wraps=llm_checkpoint.dcp.FileSystemWriter) as writer:

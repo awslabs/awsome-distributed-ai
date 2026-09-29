@@ -25,7 +25,7 @@ def allocation_cpus(value, node_count):
 
 def collect_manifest(output, *, addresses, gpus_per_node, tensor_parallel_size,
                      max_num_seqs, max_num_batched_tokens, port_base, cpus_per_node, cfg,
-                     model_path='/data/model', expected_job=None, expected_nodes=None):
+                     model_path='/media/model', expected_job=None, expected_nodes=None):
     """Collect launcher records after readiness; no GPU or vLLM import needed."""
     if not addresses or len(set(addresses)) != len(addresses) or cpus_per_node < 1:
         raise ValueError('unique assigned node addresses and positive CPU count required')
@@ -73,7 +73,7 @@ def collect_manifest(output, *, addresses, gpus_per_node, tensor_parallel_size,
             endpoints.append(f'http://{address}:{port_base + replica}')
     if any(not isinstance(uuid, str) or not uuid for uuid in uuids) or len(set(uuids)) != len(uuids):
         raise ValueError('assigned GPU UUIDs must be nonempty and unique')
-    manifest: dict = dict(gpu_budget=len(uuids),
+    manifest: dict = dict(endpoints=endpoints, gpu_budget=len(uuids),
                     placement=dict(tensor_parallel_size=tensor_parallel_size, replicas=len(endpoints)),
                     server_batch=dict(max_num_seqs=max_num_seqs, max_num_batched_tokens=max_num_batched_tokens),
                     workload={key: cfg[key] for key in ('model_id', 'model_revision', 'tokenizer_revision')},
@@ -126,7 +126,7 @@ def main():
     parser.add_argument('--port-base', type=int, default=8100)
     parser.add_argument('--max-num-seqs', type=int, default=256)
     parser.add_argument('--max-num-batched-tokens', type=int, default=8192)
-    parser.add_argument('--model', default='/data/model')
+    parser.add_argument('--model', default='/media/model')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--collect-manifest', action='store_true',
                         help='collect existing launcher records on the allocation shell instead of starting replicas')

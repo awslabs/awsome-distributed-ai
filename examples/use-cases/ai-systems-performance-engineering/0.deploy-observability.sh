@@ -7,7 +7,7 @@ case "$mode" in
   login)
     : "${LOGIN_BIND_IP:?Set LOGIN_BIND_IP to the private login-node address}"
     : "${COMPUTE_NODES:?Set COMPUTE_NODES to two comma-separated resolvable node names}"
-    : "${VLLM_METRICS_PORTS:=8000}" "${GRAFANA_DASHBOARD_FILE:=./dashboard.json}"
+    : "${VLLM_METRICS_PORTS:=8100,8101,8102,8103,8104,8105,8106,8107}" "${GRAFANA_DASHBOARD_FILE:=./llm-dashboard.json}"
     test -f "$GRAFANA_DASHBOARD_FILE"
     GRAFANA_DASHBOARD_FILE=$(realpath -- "$GRAFANA_DASHBOARD_FILE")
     export LOGIN_BIND_IP COMPUTE_NODES VLLM_METRICS_PORTS GRAFANA_DASHBOARD_FILE

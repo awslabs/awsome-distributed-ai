@@ -13,7 +13,7 @@ export SERVING_RUN GPUS_PER_NODE
 exec srun --nodes="$SLURM_JOB_NUM_NODES" --ntasks="$SLURM_JOB_NUM_NODES" --ntasks-per-node=1 \
     --cpus-per-task="$cpus_per_node" --mpi=none --cpu-bind=none \
     --container-image="$VLLM_IMAGE" \
-    --container-mounts="$lab:/opt/aim347,$LLM_DATA_DIR:/data,$LLM_RESULTS_DIR:/results" \
-    --container-workdir=/opt/aim347 --no-container-remap-root \
+    --container-mounts="$lab:/mnt,$LLM_DATA_DIR:/media,$LLM_RESULTS_DIR:/srv" \
+    --container-workdir=/mnt --no-container-remap-root \
     --container-env=NCCL_SOCKET_IFNAME,SERVING_RUN,GPUS_PER_NODE \
-    bash -c 'exec python3 lib/serve_llm.py --gpus-per-node="$GPUS_PER_NODE" --output="/results/$SERVING_RUN/node-$SLURM_PROCID" "$@"' bash "$@"
+    bash -c 'exec python3 lib/serve_llm.py --gpus-per-node="$GPUS_PER_NODE" --output="/srv/$SERVING_RUN/node-$SLURM_PROCID" "$@"' bash "$@"

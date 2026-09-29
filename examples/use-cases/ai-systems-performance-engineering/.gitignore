@@ -1,6 +1,6 @@
 .env
 runtime/
-results/
+results/*
 data/
 *.sqsh
 __pycache__/

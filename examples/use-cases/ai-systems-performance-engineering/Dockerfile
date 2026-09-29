@@ -14,7 +14,5 @@ RUN make -C /opt/nccl-tests -j${NCCL_BUILD_JOBS} BUILDDIR=/tmp/aim347-nccl-tests
     && cp /tmp/aim347-nccl-tests/*_perf /opt/nccl-tests/build/ \
     && rm -rf /tmp/aim347-nccl-tests
 COPY . /opt/aim347
-RUN nvcc -O3 /opt/aim347/lib/gemm.cu -lcublas -o /usr/local/bin/aim347-gemm
-RUN nvcc -O3 /opt/aim347/lib/dram.cu -o /usr/local/bin/aim347-dram
 ENV PYTHONUNBUFFERED=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 TOKENIZERS_PARALLELISM=false
 WORKDIR /opt/aim347

@@ -17,7 +17,23 @@ def quality_valid(text, expected):
         return False
 
 
+def validate_specification(specification):
+    """Accept explicit server stops only; never infer or clip output delimiters."""
+    if (not isinstance(specification, dict)
+            or not {'prompt', 'expected_json'} <= specification.keys()
+            or specification.keys() - {'prompt', 'expected_json', 'stop', 'id'}
+            or not isinstance(specification['prompt'], str) or not specification['prompt']):
+        raise ValueError('request requires a nonempty prompt and expected_json; optional stop and id only')
+    json.dumps(specification['expected_json'], allow_nan=False)
+    if 'id' in specification and (not isinstance(specification['id'], str) or not specification['id']):
+        raise ValueError('request id must be a nonempty string')
+    if 'stop' in specification and (not isinstance(specification['stop'], list)
+            or any(not isinstance(value, str) or not value for value in specification['stop'])):
+        raise ValueError('stop must be an array of nonempty strings (empty array means no stops)')
+
+
 def stream_request(endpoints, index, specification, *, model, max_tokens, timeout_seconds):
+    validate_specification(specification)
     # Start before routing and encoding, within the closed-loop client slot.
     started = time.perf_counter()
     endpoint = endpoints[index % len(endpoints)]
@@ -25,11 +41,15 @@ def stream_request(endpoints, index, specification, *, model, max_tokens, timeou
                output_tokens=0, input_tokens=None, ttft_seconds=None, tpot_seconds=None,
                tpot_definition='client receive-time estimate (last content - first content) / (output tokens - 1); not server ITL',
                content_chunks=0, text='')
-    payload = dict(model=model, messages=[{'role': 'user', 'content': specification['prompt']}],
+    payload = dict(model=model, prompt=specification['prompt'],
                    max_tokens=max_tokens, temperature=0, seed=347, stream=True,
-                   stream_options={'include_usage': True},
-                   chat_template_kwargs={'enable_thinking': False})
-    request = urllib.request.Request(endpoint.rstrip('/') + '/v1/chat/completions',
+                   stream_options={'include_usage': True})
+    if 'stop' in specification:
+        payload['stop'] = list(specification['stop'])
+        row['stop'] = list(specification['stop'])
+    if 'id' in specification:
+        row['specification_id'] = specification['id']
+    request = urllib.request.Request(endpoint.rstrip('/') + '/v1/completions',
                                      data=json.dumps(payload).encode(),
                                      headers={'Content-Type': 'application/json'})
     first = last = None
@@ -61,13 +81,13 @@ def stream_request(endpoints, index, specification, *, model, max_tokens, timeou
                 if not isinstance(choices, list):
                     raise ValueError('stream choices must be a list')
                 for choice in choices:
-                    if not isinstance(choice, dict) or not isinstance(choice.get('delta', {}), dict):
-                        raise ValueError('stream choice and delta must be JSON objects')
+                    if not isinstance(choice, dict):
+                        raise ValueError('stream choice must be a JSON object')
                     if choice.get('finish_reason') is not None:
                         if not isinstance(choice['finish_reason'], str):
                             raise ValueError('stream finish reason must be a string')
                         finish_reason = choice['finish_reason']
-                    content = choice.get('delta', {}).get('content')
+                    content = choice.get('text')
                     if content is not None and not isinstance(content, str):
                         raise ValueError('stream content must be a string')
                     if content:
@@ -125,6 +145,8 @@ def serving_goodput(rows, seconds, *, ttft_slo_seconds, tpot_slo_seconds):
 def paired_serving_report(before, after, *, experiment):
     if experiment not in ('placement', 'server_batch', 'client_load'):
         raise ValueError('declare placement, server_batch or client_load experiment')
+    if before.get('performance_eligible') is False or after.get('performance_eligible') is False:
+        raise ValueError('pilot-only evidence is not eligible for performance comparison')
     if before.get('allocation') != after.get('allocation'):
         raise ValueError('serving comparison changed actual allocation')
     for key in ('workload', 'gpu_budget'):

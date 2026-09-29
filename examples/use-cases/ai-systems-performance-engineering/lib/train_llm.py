@@ -1,6 +1,6 @@
-"""Pinned Qwen3 full-parameter updates using PyTorch FSDP2 and DCP.
+"""Pinned Llama full-parameter updates using PyTorch FSDP2 and DCP.
 
-The CPU fixture is a tiny randomly initialized Qwen3 for correctness tests only.
+The CPU fixture is a tiny randomly initialized Llama for correctness tests only.
 Production runs load the immutable public checkpoint and pretokenized real text.
 """
 import argparse
@@ -21,7 +21,7 @@ from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
 from torch.distributed.device_mesh import init_device_mesh
 from torch.profiler import record_function
 from torch.utils.data import DataLoader
-from transformers import AutoConfig, AutoModelForCausalLM, Qwen3Config, Qwen3ForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM, LlamaConfig, LlamaForCausalLM
 from transformers.modeling_utils import no_init_weights
 
 from llm_checkpoint import Checkpoints, latest_completed, close_checkpointers
@@ -47,15 +47,12 @@ def parse_args():
     parser.add_argument('--fused-optimizer', action='store_true')
     parser.add_argument('--attention-implementation', choices=['sdpa', 'eager'], default='sdpa',
                         help='standard Transformers attention implementation; eager is an explicit reference baseline')
-    parser.add_argument('--liger-linear-ce', action='store_true',
-                        help='Qwen2 only: Liger 0.6.4 fused linear cross entropy, other kernels unchanged')
-    parser.add_argument('--liger-fp32-accumulation', action='store_true')
     parser.add_argument('--compile-blocks', action='store_true')
     parser.add_argument('--compile-loss', action='store_true')
     parser.add_argument('--compile-backend', choices=['inductor', 'aot_eager'], default='inductor',
                         help='aot_eager isolates graph/autograd changes without generated kernels; diagnostic only')
     parser.add_argument('--compile-pointwise', action='store_true',
-                        help='compile Qwen3 normalization and activation modules without compiling matrix products')
+                        help='compile Llama normalization and activation modules without compiling matrix products')
     parser.add_argument('--compile-pointwise-scope', choices=['all', 'norms', 'activations'], default='all',
                         help='isolate normalization from activation compilation; requires --compile-pointwise')
     parser.add_argument('--compile-preserve-casts', action='store_true',
@@ -114,10 +111,9 @@ def omit_right_padding_attention_mask(batch):
 
 
 def compile_pointwise_modules(model, scope, backend, options):
-    """Compile only the selected Qwen3 norms/activations, never projections."""
+    """Compile only the selected Llama norms/activations, never projections."""
     for block in model.model.layers:
-        norms = (block.input_layernorm, block.post_attention_layernorm,
-                 block.self_attn.q_norm, block.self_attn.k_norm)
+        norms = (block.input_layernorm, block.post_attention_layernorm)
         modules = (() if scope == 'activations' else norms)
         if scope != 'norms':
             modules += (block.mlp.act_fn,)
@@ -151,10 +147,6 @@ def main():
         raise ValueError('operator checkpoint policy requires eager execution and full layer checkpointing')
     if args.checkpoint_skip_every and (args.checkpoint_skip_every < 2 or not args.activation_checkpointing):
         raise ValueError('selective layer checkpointing requires activation checkpointing and interval >= 2')
-    if args.liger_fp32_accumulation and not args.liger_linear_ce:
-        raise ValueError('Liger FP32 accumulation requires fused linear CE')
-    if args.liger_linear_ce and (args.compile_loss or args.cpu_fixture or cfg['model_id'] != 'Qwen/Qwen2.5-7B'):
-        raise ValueError('linear CE candidate requires Qwen2.5-7B GPU execution without compile-loss')
     if args.fsdp_blocks_per_group != 1 and (args.cpu_fixture or args.forward_prefetch
                                           or args.compile_blocks or args.compile_pointwise or args.compile_loss):
         raise ValueError('grouped FSDP requires GPU execution without compile or explicit prefetch')
@@ -218,12 +210,12 @@ def main():
             if dataset.manifest[key] != cfg[key]:
                 raise ValueError(f'prepared data provenance mismatch: {key}')
     if args.cpu_fixture:
-        model_config = Qwen3Config(vocab_size=32, hidden_size=16, intermediate_size=32,
+        model_config = LlamaConfig(vocab_size=32, hidden_size=16, intermediate_size=32,
                                   num_hidden_layers=2, num_attention_heads=2,
                                   num_key_value_heads=1, head_dim=8,
                                   tie_word_embeddings=True, attention_dropout=0.0)
         model_config._attn_implementation = args.attention_implementation
-        model = Qwen3ForCausalLM(model_config)
+        model = LlamaForCausalLM(model_config)
     else:
         if args.model_path:
             pin = json.loads((args.model_path / 'aim347-pin.json').read_text())
@@ -246,13 +238,6 @@ def main():
                     torch_dtype=torch.float32, attn_implementation=args.attention_implementation,
                     local_files_only=bool(args.model_path))
     model.config.use_cache = False
-    if args.liger_linear_ce:
-        from importlib.metadata import version
-        if args.cpu_fixture or model.config.model_type != 'qwen2' or version('liger-kernel') != '0.6.4':
-            raise ValueError('linear CE candidate requires Qwen2 and liger-kernel 0.6.4')
-        from liger_kernel.transformers import apply_liger_kernel_to_qwen2
-        apply_liger_kernel_to_qwen2(model=model, rope=False, rms_norm=False,
-                                   swiglu=False, cross_entropy=False, fused_linear_cross_entropy=True)
     if model.config.attention_dropout != 0:
         raise ValueError('microbatch comparisons require dropout-free chosen model')
     if args.activation_checkpointing:
@@ -352,8 +337,6 @@ def main():
                          forward_prefetch=args.forward_prefetch,
                          fsdp_blocks_per_group=args.fsdp_blocks_per_group,
                          hybrid_shard_size=args.hybrid_shard_size,
-                         liger_linear_ce=args.liger_linear_ce,
-                         liger_fp32_accumulation=args.liger_fp32_accumulation,
                          defer_replica_reduction=args.defer_replica_reduction,
                          activation_checkpointing=args.activation_checkpointing,
                          checkpoint_skip_every=args.checkpoint_skip_every,
@@ -472,8 +455,7 @@ def main():
                         # Transformers' standard loss shifts labels, ignores -100
                         # and sums before dividing by num_items_in_batch. FSDP/DDP
                         # averages gradients, so compensate by the actual DP size.
-                        loss_options = {'accum_dtype': torch.float32} if args.liger_fp32_accumulation else {}
-                        loss = model(**batch, num_items_in_batch=normalizer, **loss_options).loss
+                        loss = model(**batch, num_items_in_batch=normalizer).loss
                         local_loss += loss.detach()
                     with record_function('backward/collectives'):
                         (loss * world).backward()
