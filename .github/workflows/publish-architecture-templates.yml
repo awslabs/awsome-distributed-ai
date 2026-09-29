@@ -93,7 +93,7 @@ jobs:
             exit 0
           fi
           before="${{ github.event.before }}"
-          if [[ "$before" =~ ^0+$ ]] || git diff --name-only "$before" "${{ github.sha }}" -- architectures/amazon-eks/ | grep -q .; then
+          if [[ "$before" =~ ^0+$ ]] || git diff --name-only "$before" "${{ github.sha }}" -- architectures/amazon-eks/ "$PUBLISH_MANIFEST" .github/workflows/publish-architecture-templates.yml | grep -q .; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"

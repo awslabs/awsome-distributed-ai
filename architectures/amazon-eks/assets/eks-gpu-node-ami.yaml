@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
 AWSTemplateFormatVersion: "2010-09-09"
 
 Description: >-
@@ -59,7 +62,7 @@ Parameters:
   KubernetesVersion:
     Type: String
     Default: "1.36"
-    AllowedValues: ["1.35", "1.36"]
+    AllowedPattern: ^1\.[0-9]{2}$
     Description: >-
       Kubernetes version of the parent AMI. The parent is the EKS-optimised AL2023 **standard** AMI
       for this version, not the NVIDIA variant, because this image installs its own driver.
@@ -169,7 +172,7 @@ Resources:
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
-          Description: Systems Manager, Image Builder and the payload's source, over the NAT gateway
+          Description: Systems Manager, Image Builder and the payload source, over the NAT gateway
       Tags:
         - {Key: Name, Value: !Sub "${AWS::StackName}-image-build"}
 

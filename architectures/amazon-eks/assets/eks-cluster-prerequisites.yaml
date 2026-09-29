@@ -41,8 +41,8 @@ Parameters:
   VpcCidr:
     Type: String
     Default: 10.0.0.0/16
-    AllowedPattern: ^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$
-    Description: VPC CIDR, split into three /20 subnets.
+    AllowedPattern: ^(\d{1,3}\.){3}\d{1,3}/1[67]$
+    Description: VPC CIDR, /16 or /17. The subnets are three of the eight /20 blocks Fn::Cidr carves, which a smaller range cannot hold.
   DeployFsxLustre:
     Type: String
     Default: "false"
@@ -276,6 +276,25 @@ Resources:
     Condition: WithFsx
     Properties:
       GroupId: !Ref FsxSecurityGroup
+      IpProtocol: tcp
+      FromPort: 1018
+      ToPort: 1023
+      SourceSecurityGroupId: !Ref FsxSecurityGroup
+  # Lustre clients need these too: FSx opens connections back to the clients on the same ports.
+  NodeSecurityGroupFsxIngressLnet:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: WithFsx
+    Properties:
+      GroupId: !Ref NodeSecurityGroup
+      IpProtocol: tcp
+      FromPort: 988
+      ToPort: 988
+      SourceSecurityGroupId: !Ref FsxSecurityGroup
+  NodeSecurityGroupFsxIngressReserved:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: WithFsx
+    Properties:
+      GroupId: !Ref NodeSecurityGroup
       IpProtocol: tcp
       FromPort: 1018
       ToPort: 1023

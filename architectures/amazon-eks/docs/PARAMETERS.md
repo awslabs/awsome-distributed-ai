@@ -10,16 +10,18 @@ the child stacks.
 
 | Parameter | Type | Default | What it decides |
 |---|---|---|---|
-| `PrimarySubnetAZ` | AZ name | required | Zone of the public subnet, the node subnet, the NAT gateway and every GPU node. Must be the zone of the capacity reservation when one is used: EFA traffic and the cluster placement group do not cross zones |
+| `PrimarySubnetAZ` | AZ name | required | Zone of the public subnet, the node subnet, the NAT gateway and every GPU node. Must be the zone of the capacity reservation when one is used: EFA traffic does not cross zones |
 | `SecondarySubnetAZ` | AZ name | required | Zone of the second private subnet, which exists only because EKS requires subnets in two zones. No nodes run there. Must differ from `PrimarySubnetAZ` (asserted at submit time) |
-| `VpcCidr` | String | `10.0.0.0/16` | Split into three /20 subnets: public, node, control plane |
+| `VpcCidr` | String | `10.0.0.0/16` | `/16` or `/17`. Split into three /20 subnets: public, node, control plane |
 
 ### Cluster
 
 | Parameter | Type | Default | What it decides |
 |---|---|---|---|
 | `KubernetesVersion` | String | `1.36` | Control plane version and the AL2023 NVIDIA AMI release. Any `1.xx`; the `kubectl` the bootstrap downloads is its own parameter, because it has to stay within one minor of this and a table of the pairs would be versions to maintain here |
-| `SystemInstanceType` | String | `m7i.xlarge` | Instance type of the two system nodes. They carry CoreDNS and the node-feature-discovery master, which cannot run on a tainted GPU node. The default is the newest generation offered in every Region the GPU types appear in: a type the Region does not offer fails the node group with `Unsupported - The requested configuration is currently not supported`, which names neither the type nor the Region. Check with `aws ec2 describe-instance-type-offerings --location-type availability-zone --filters Name=instance-type,Values=<type> Name=location,Values=<az>` |
+| `KubectlVersion` | String | `1.36.4` | `kubectl` the GPU node group's bootstrap downloads, passed through to `eks-add-gpu-nodegroup.yaml`. Within one minor of `KubernetesVersion`, so a cluster on another version needs this set to match |
+| `HelmVersion`, `NvidiaDevicePluginChartVersion`, `EfaDevicePluginChartVersion` | String | `3.19.0`, `0.20.0`, `v0.5.32` | Passed through to `eks-add-gpu-nodegroup.yaml`; see its rows. Raising a chart version on a live cluster starts with Helm (README section 10) |
+| `SystemInstanceType` | String | `m7i.xlarge` | Instance type of the two system nodes. They carry CoreDNS and the node-feature-discovery master, which cannot run on a tainted GPU node. The default is the newest generation offered in every Region the GPU types appear in: a type the Region does not offer fails the node group with `Unsupported - The requested configuration is currently not supported`, which names neither the type nor the Region. Check with `aws ec2 describe-instance-type-offerings --location-type availability-zone --filters Name=instance-type,Values=$INSTANCE_TYPE Name=location,Values=$AZ` |
 | `ServiceIpv4Cidr` | String | `172.20.0.0/16` | CIDR the cluster allocates Service addresses from. Must not overlap `VpcCidr`. An input rather than a value left to EKS because a node group naming its own AMI has to repeat the value in its bootstrap configuration, and the value EKS picks on its own cannot be read back: `ServiceIpv6Cidr` is a readable cluster attribute and `ServiceIpv4Cidr` is not |
 | `AdminRoleArn` | String | empty | An extra IAM principal that receives `AmazonEKSClusterAdminPolicy`. The principal that creates the stack always has it, so this is for the case where one principal provisions and another uses the cluster |
 
@@ -27,7 +29,7 @@ the child stacks.
 
 | Parameter | Type | Default | What it decides |
 |---|---|---|---|
-| `GpuInstanceType` | String | `g7e.12xlarge` | Instance type of the GPU node group, and through the `NicLayout` mapping the whole interface layout. See README section 3 for which types have been launched |
+| `GpuInstanceType` | String | `g7e.12xlarge` | Instance type of the GPU node group, and through the `NicLayout` mapping the whole interface layout. |
 | `AmiType` | String | `AL2023_x86_64_NVIDIA` | EKS AMI type for the GPU nodes, used when no image input is given. Not an enumeration, so a type EKS adds later needs no template change. It has to be a type whose bootstrap is nodeadm, as the AL2023 family is: the GPU launch template's user data is a nodeadm `NodeConfig` |
 | `SystemAmiType` | String | `AL2023_x86_64_STANDARD` | EKS AMI type for the system nodes. Not an enumeration either, and with no launch template and no user data on that node group, any type EKS validates works |
 | `NodeAmiId` | String | empty | Node AMI for the GPU nodes. Leave the `NodeImage` inputs empty when using it. Any source: `awslabs/amazon-eks-ami`, EC2 Image Builder, or your own pipeline. It has to carry `nodeadm`, a driver that enumerates the instance type's GPUs, and the NVIDIA container toolkit |
@@ -44,7 +46,7 @@ the child stacks.
 | `GpuNodeCount` | Number | `2` | Minimum, desired and maximum of the GPU node group, all the same value. A prefill/decode split needs at least 2. `0` creates the cluster and installs the device plugins with no GPU capacity, for testing template changes; a managed node group rejects a maximum of 0, so that case asks for 0 out of 1 |
 | `GpuRootVolumeSize` | Number | `300` | Root EBS volume in GiB. Inference images are large, and they land on the root volume unless containerd is pointed at the NVMe volume |
 | `CapacityReservationId` | String | empty | A targeted On-Demand Capacity Reservation or a Capacity Block. Empty launches On-Demand and consumes an open reservation whose attributes match |
-| `CapacityReservationType` | String | `targeted-odcr` | `targeted-odcr` keeps the cluster placement group and targets the reservation. `capacity-block` sets `MarketType=capacity-block` and omits the placement group, which the Capacity Block already provides. `capacity-block` with an empty id is rejected at submit time |
+| `CapacityReservationType` | String | `targeted-odcr` | `targeted-odcr` targets the reservation. `capacity-block` sets `MarketType=capacity-block` and `CapacityType=CAPACITY_BLOCK`. With either, the stack creates no cluster placement group, because the reserved capacity is not inside one it creates; without a reservation the nodes go into a new one. `capacity-block` with an empty id is rejected at submit time |
 
 ### Optional
 
@@ -89,7 +91,7 @@ bootstrap user data once a launch template carries an `ImageId`.
 | Parameter | Type | Default | What it decides |
 |---|---|---|---|
 | `ClusterName` | String | required | Cluster the node group joins |
-| `KubernetesVersion` | String | `1.36` | Must match the cluster. Selects the AMI release EKS resolves; `KubectlVersion` is separate |
+| `KubernetesVersion` | String | `1.36` | The cluster's version. The AMI EKS resolves follows the cluster rather than this value; changing it, like changing `KubectlVersion`, re-runs the bootstrap and its verification. `KubectlVersion` is separate |
 | `PrivateSubnetId` | id | required | Subnet for the GPU nodes, in the zone of the reservation |
 | `NodeSecurityGroupId` | id | required | A security group that allows all traffic between its own members, which is EFA's requirement |
 | `ClusterSecurityGroupId` | id | required | The cluster's own security group. EKS stops attaching it once the launch template names any security group, and a node without it never joins |

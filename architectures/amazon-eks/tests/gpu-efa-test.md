@@ -14,10 +14,13 @@ Placeholders and the pinned test image:
 ```bash
 export REGION=us-east-2
 export STACK=eks-gpu-efa
-export AZ_A=us-east-2b            # must offer g7e.12xlarge
+export AZ_A=us-east-2b
 export AZ_B=us-east-2a
+export BUCKET=my-template-bucket
 export EFA_IMAGE=public.ecr.aws/hpc-cloud/nccl-tests:cuda13.1.2-efa1.50.0-ofiv1.21.1-ncclv2.31.2-1-testsv2.20.0
 ```
+
+`$AZ_A` has to offer the instance type under test. `$BUCKET` is a bucket in `$REGION` you can write to; step 0 publishes this checkout's templates there, because the root creates its children by URL (README section 8).
 
 `$EFA_IMAGE` is the repository's usual EFA and NCCL test container, published by AWS on a
 public registry (no credentials, no build). The tag is pinned rather than `latest`; it resolves
@@ -31,11 +34,14 @@ libfabric with the EFA provider under `/opt/amazon/efa`, `aws-ofi-nccl` and the 
 
 ```bash
 cd architectures/amazon-eks
+aws s3 sync assets/ "s3://$BUCKET/templates/amazon-eks/" --exclude '*' --include '*.yaml'
 aws cloudformation create-stack \
   --stack-name "$STACK" --region "$REGION" \
-  --template-body file://assets/eks-gpu-cluster-deploy-all.yaml \
-  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-  --parameters ParameterKey=PrimarySubnetAZ,ParameterValue=$AZ_A \
+  --template-url "https://$BUCKET.s3.amazonaws.com/templates/amazon-eks/eks-gpu-cluster-deploy-all.yaml" \
+  --capabilities CAPABILITY_IAM \
+  --parameters ParameterKey=S3BucketName,ParameterValue=$BUCKET \
+               ParameterKey=S3KeyPrefix,ParameterValue=templates/amazon-eks/ \
+               ParameterKey=PrimarySubnetAZ,ParameterValue=$AZ_A \
                ParameterKey=SecondarySubnetAZ,ParameterValue=$AZ_B \
                ParameterKey=GpuInstanceType,ParameterValue=g7e.12xlarge \
                ParameterKey=GpuNodeCount,ParameterValue=2
@@ -91,10 +97,9 @@ echo "$NODE_A / $NODE_B"
 
 ## Step 2 — (b) and (c) the advertised counts equal the mapped counts
 
-Read what the template promises for this instance type, then read what the nodes advertise:
+Read what the template promises for this instance type, then read what the nodes advertise. Run it from `architectures/amazon-eks`; it needs PyYAML:
 
 ```bash
-# run from architectures/amazon-eks; needs PyYAML
 python3 - <<'PY'
 import yaml
 class Loader(yaml.SafeLoader): pass
@@ -117,10 +122,10 @@ the NVIDIA plugin is not (check `kubectl -n nvidia-device-plugin get ds`).
 
 ```bash
 kubectl -n nvidia-device-plugin get pods -o wide
-kubectl -n kube-system get pods -l app.kubernetes.io/name=aws-efa-k8s-device-plugin -o wide
+kubectl -n kube-system get pods -l name=aws-efa-k8s-device-plugin -o wide
 ```
 
-**Expected:** one pod of each per GPU node, `Running`, and **none on the system nodes**.
+**Expected:** one `nvidia-device-plugin`, one `gpu-feature-discovery` and one EFA plugin pod per GPU node, `Running`, and **none of those on the system nodes**. The `node-feature-discovery` workers run on every node, the GPU nodes included, because their PCI labels are what the plugin schedules on; its master and gc run on the system nodes.
 
 ---
 
@@ -357,7 +362,7 @@ Only if the cluster has the Kubeflow MPI operator installed; the architecture do
 it, and the two checks above are the ones that gate a merge. Start from the repository's
 canonical manifest,
 [`micro-benchmarks/nccl-tests/kubernetes/nccl-tests.yaml`](../../../micro-benchmarks/nccl-tests/kubernetes/nccl-tests.yaml),
-and change five things for this node shape:
+and change six things for this node shape:
 
 - `slotsPerWorker: 2`, `-np 4`, `-N 2` (two GPUs per node, two nodes)
 - `nvidia.com/gpu: 2` and `vpc.amazonaws.com/efa: 1` in both `limits` and `requests`
@@ -365,6 +370,7 @@ and change five things for this node shape:
   for `nvidia.com/gpu:NoSchedule` — the manifest as committed has none, so its worker pods stay
   `Pending` on the tainted GPU nodes of this architecture
 - `image: $EFA_IMAGE` instead of the private ECR placeholder
+- the same `nodeSelector` and toleration on the launcher: without them it lands on a system node, whose disk cannot hold the image, and is evicted
 - drop the `hugepages-2Mi` request unless
   `kubectl get node $NODE_A -o jsonpath='{.status.allocatable.hugepages-2Mi}'` reports a
   non-zero value, otherwise the pods stay `Pending` on a resource the nodes do not have
@@ -376,7 +382,7 @@ kubectl logs -f "$(kubectl get pods -l training.kubeflow.org/job-role=launcher \
 
 **Expected:** `NET/OFI Selected Provider is efa` (once per rank) and an `all_reduce_perf`
 bandwidth table. `NET/OFI Selected Provider is tcp`, `NET/Socket`, or no `NET/OFI` line at all
-means NCCL used the pod network — the same fallback as in 5.3, and the same verdict.
+means NCCL used the pod network — the same fallback as in 5.3, and the same verdict. The `nccl-tests` binaries in `$EFA_IMAGE` carry kernels for `sm_80` to `sm_103`, so on the Blackwell RTX PRO GPUs of `g7` and `g7e` (compute capability 12.0) the provider line appears and the test then stops with `no kernel image is available for execution on the device`; the bandwidth table needs an image built for `sm_120`.
 
 ---
 
@@ -398,6 +404,5 @@ A pass is all six observations on the same cluster in one session: (a) two Ready
 tainted nodes; (b) `gpu=2`; (c) `efa=1`; (d) a raid0 array at `/mnt/k8s-disks/0` with the
 instance-store capacity; (e) an EFA-provider round trip **with** moving hardware counters;
 (f) `/dev/infiniband` present in the EFA pod and absent in the pod that did not ask for it.
-Add the region, AZ ID, instance type and date to the instance-type table in
-[`../README.md`](../README.md) only
-when all six passed.
+Report the region, AZ ID, instance type and date with the change's test results only when all
+six passed.

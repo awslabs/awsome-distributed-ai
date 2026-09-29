@@ -579,7 +579,7 @@ else
   [ "$taint_refs" -ge 4 ] \
     || fail 2 "$GPU_T: '$GPU_TAINT_KEY' appears $taint_refs time(s); the taint, the tolerations and the resource name should all use it"
   grep -q "nvidia\.com/[a-z]" "$GPU_T" \
-    && grep -vq "nvidia\.com/gpu" <(grep -o 'nvidia\.com/[a-z-]*' "$GPU_T" | sort -u) \
+    && grep -Fxvq "$GPU_TAINT_KEY" <(grep -o 'nvidia\.com/[a-z-]*' "$GPU_T" | sort -u) \
     && fail 2 "$GPU_T: a resource or taint under nvidia.com/ is not '$GPU_TAINT_KEY'" || true
 
   [ "$FAILURES" -eq "$before2" ] \
@@ -640,6 +640,16 @@ if not cond:
 if gen and cond and gen != cond:
     problems.append("the generator's thresholds %s and the template's Cards* conditions %s are "
                     "different sets" % (",".join(sorted(gen, key=int)), ",".join(sorted(cond, key=int))))
+# The names say which threshold a condition stands for; the bodies decide. Evaluate each body for
+# every Cards value: CardsNPlus has to be true exactly when the card count is at least N.
+for name, n, body in re.findall(r"^  (Cards(\d+)(?:Plus)?):(.*?)(?=^  \S|\Z)", text, re.M | re.S):
+    listed = set(re.findall(r'Cards\], "(\d+)"\]', body))
+    negated = body.lstrip().startswith("!Not")
+    for value in sorted(cards, key=int):
+        got = (value not in listed) if negated else (value in listed)
+        if got != (int(value) >= int(n)):
+            problems.append("%s: condition %s is %s for Cards: %s and should be %s"
+                            % (template, name, str(got).lower(), value, str(not got).lower()))
 # Every card count above 1 needs a condition that gates its cards.
 for value in sorted(cards - {"1"}, key=int):
     if value not in gen:
@@ -893,7 +903,7 @@ PYEOF
 fi
 
 # --------------------------------------------------------------------------
-# check 7 — the three templates agree on the default KubernetesVersion, and the
+# check 7 — the templates agree on KubernetesVersion's default and validation, and the
 # GPU node group's default kubectl is within one minor of it. A caller who sets
 # one and not the others gets a node that cannot join, and neither template can
 # see the other's value.
@@ -934,6 +944,28 @@ if len(set(defaults.values())) > 1:
     problems.append("the templates default KubernetesVersion to different values: %s"
                     % "; ".join("%s=%s" % (p, v) for p, v in sorted(defaults.items())))
 
+# The same parameter validated differently accepts a value in one template that another refuses.
+def rule(path, name):
+    text = open(path, encoding="utf-8").read()
+    block = re.search(r"^  %s:\n(?:    .*\n|\n)*" % name, text, re.M)
+    if not block:
+        return None
+    return tuple(re.findall(r"^    (Allowed(?:Pattern|Values): .*)$", block.group(0), re.M))
+
+
+for name in ("KubernetesVersion", "KubectlVersion"):
+    rules = {p: rule(p, name) for p in paths if rule(p, name) is not None}
+    if len(set(rules.values())) > 1:
+        problems.append("the templates validate %s differently: %s" % (name, "; ".join(
+            "%s=%s" % (p, " ".join(r) or "(none)") for p, r in sorted(rules.items()))))
+# The root passes these through, so a root default that drifts from the child's changes what a
+# root deploy installs without the child's test ever seeing it.
+for name in ("KubectlVersion", "HelmVersion", "NvidiaDevicePluginChartVersion", "EfaDevicePluginChartVersion"):
+    found = {p: default(p, name) for p in paths if default(p, name)}
+    if len(set(found.values())) > 1:
+        problems.append("the templates default %s to different values: %s"
+                        % (name, "; ".join("%s=%s" % (p, v) for p, v in sorted(found.items()))))
+
 gpu = [p for p in paths if p.endswith("eks-add-gpu-nodegroup.yaml")]
 if gpu and gpu[0] in defaults:
     kubectl = default(gpu[0], "KubectlVersion")
@@ -949,8 +981,8 @@ if gpu and gpu[0] in defaults:
 for problem in problems:
     print("PROBLEM %s" % problem)
 if not problems:
-    print("OK KubernetesVersion defaults to %s in all %d templates, and KubectlVersion is within "
-          "one minor of it" % (next(iter(set(defaults.values()))), len(defaults)))
+    print("OK KubernetesVersion defaults to %s and is validated the same way in all %d templates, "
+          "and KubectlVersion is within one minor of it" % (next(iter(set(defaults.values()))), len(defaults)))
 PYEOF
   if ! "$PY_YAML" "$TMP/kver.py" "${ALL_T[@]}" > "$TMP/kver.out" 2>"$TMP/kver.err"; then
     fail 7 "could not read the templates: $(head -3 "$TMP/kver.err" | tr '\n' ' ')"
@@ -973,7 +1005,7 @@ fi
 # read of the template and fails 10 minutes into a deploy, so the rule set is
 # checked here instead.
 # --------------------------------------------------------------------------
-head_ 8 "the FSx security group carries the rules FSx itself validates"
+head_ 8 "the FSx and client security groups carry the rules FSx for Lustre requires, and every security group text is one EC2 accepts"
 if [ -z "$PY_YAML" ]; then
   skip 8 "needs PyYAML"
 else
@@ -1071,15 +1103,51 @@ for name, body in filesystems:
                     "exists and FSx reads the group as it is at that moment"
                     % (path, name, rname))
 
+        # FSx also opens connections back to its clients, so every client group it admits has to
+        # admit it on the same ports.
+        sg = resources.get(group) or {}
+        clients = {ref(r.get("SourceSecurityGroupId")) for r in
+                   (sg.get("Properties") or {}).get("SecurityGroupIngress") or []} - {None, group}
+        for client in sorted(clients):
+            back = set()
+            for rbody in resources.values():
+                props = rbody.get("Properties") or {}
+                if (rbody.get("Type") == "AWS::EC2::SecurityGroupIngress"
+                        and ref(props.get("GroupId")) == client
+                        and ref(props.get("SourceSecurityGroupId")) == group):
+                    back.add((int(props.get("FromPort")), int(props.get("ToPort"))))
+            for ports in REQUIRED:
+                if ports not in back:
+                    problems.append("%s: client group %s has no tcp ingress on %d-%d from %s; FSx "
+                                    "connects back to its clients on those ports"
+                                    % (path, client, ports[0], ports[1], group))
+# EC2 accepts a narrow character set in security group descriptions and rejects the rest at create
+# time, which validate-template does not check.
+EC2_TEXT = re.compile(r"^[a-zA-Z0-9. _\-:/()#,@\[\]+=&;{}!$*]{0,255}$")
+for tpath in sys.argv[2:]:
+    tres = (yaml.load(open(tpath, encoding="utf-8").read(), Loader=Loader) or {}).get("Resources") or {}
+    for rname, rbody in tres.items():
+        props = rbody.get("Properties") or {}
+        texts = []
+        if rbody.get("Type") == "AWS::EC2::SecurityGroup":
+            texts.append(props.get("GroupDescription"))
+            texts += [r.get("Description") for r in (props.get("SecurityGroupIngress") or [])
+                      + (props.get("SecurityGroupEgress") or [])]
+        elif rbody.get("Type") in ("AWS::EC2::SecurityGroupIngress", "AWS::EC2::SecurityGroupEgress"):
+            texts.append(props.get("Description"))
+        for text in texts:
+            if isinstance(text, str) and not EC2_TEXT.match(text):
+                problems.append("%s: %s has a description EC2 rejects (allowed: a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*): %s"
+                                % (tpath, rname, text))
 for problem in problems:
     print("PROBLEM %s" % problem)
 if not problems:
-    print("OK %s: %s carries the self-referencing LNET rules and waits for each of them"
+    print("OK %s: %s carries the self-referencing LNET rules, waits for each of them, and every client group admits it"
           % (path, ", ".join(sorted({g for _, b in filesystems
                                      for g in (ref(v) for v in (b.get("Properties") or {}).get("SecurityGroupIds") or [])
                                      if g}))))
 PYEOF
-  if ! "$PY_YAML" "$TMP/sgrules.py" "$PREREQ_T" > "$TMP/sgrules.out" 2>"$TMP/sgrules.err"; then
+  if ! "$PY_YAML" "$TMP/sgrules.py" "$PREREQ_T" "${ALL_T[@]}" > "$TMP/sgrules.out" 2>"$TMP/sgrules.err"; then
     fail 8 "could not read $PREREQ_T: $(head -3 "$TMP/sgrules.err" | tr '\n' ' ')"
   elif grep -q '^PROBLEM ' "$TMP/sgrules.out"; then
     while IFS= read -r line; do
