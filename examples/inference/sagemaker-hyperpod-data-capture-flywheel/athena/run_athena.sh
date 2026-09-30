@@ -22,7 +22,7 @@ run_athena() {
   done
   LAST_QID=$qid
   aws athena get-query-results --query-execution-id "$qid" \
-    --output text --query 'ResultSet.Rows[*].Data[*].VarCharValue'
+    --output text --query 'ResultSet.Rows[*].Data[*].not_null(VarCharValue, `""`)'
 }
 
 # render_sql <file>: fills in ONLY the variables below, so Athena placeholders such as
