@@ -12,7 +12,7 @@ run_athena() {
         --output text --query 'QueryExecutionId') || return 1
   while :; do
     st=$(aws athena get-query-execution --query-execution-id "$qid" \
-         --output text --query 'QueryExecution.Status.State')
+         --output text --query 'QueryExecution.Status.State') || return 1
     case "$st" in
       SUCCEEDED) break ;;
       FAILED|CANCELLED) aws athena get-query-execution --query-execution-id "$qid" \
