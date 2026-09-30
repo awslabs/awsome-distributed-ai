@@ -93,7 +93,7 @@ sleep 75    # one flush interval
 **6. Analyze with Athena.**
 
 ```bash
-export CAPTURE_LOCATION="$(aws s3 ls s3://${BUCKET}/capture/ | awk '/PRE/{print "s3://'"${BUCKET}"'/capture/" $2 "pod/AllTraffic/"; exit}')"
+export CAPTURE_LOCATION="$(aws s3 ls s3://${BUCKET}/capture/${ENDPOINT_NAME}/ | awk '/PRE/{print "s3://'"${BUCKET}"'/capture/'"${ENDPOINT_NAME}"'/" $2 "pod/AllTraffic/"; exit}')"
 source athena/run_athena.sh
 for f in athena/sql/0*.sql athena/sql/10_*.sql; do echo "== $f"; run_sql "$f"; done
 ```
