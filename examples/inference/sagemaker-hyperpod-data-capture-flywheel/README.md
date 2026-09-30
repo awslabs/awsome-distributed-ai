@@ -139,7 +139,7 @@ These come from a run on 2026-09-28. The full outputs are in `results/`.
 | `ProductAC` (40) | 0/40 | 40/40 |
 | `Other` (40) | 35/40 | 40/40 |
 | Five established classes (200) | 200/200 | 200/200 |
-| Hand-written probe (24) | 16/24 | 20/24 |
+| Hand-written probe (24) | 16/24 | 20/24 (all 8 `ProductAC` fixed; 4 previously correct tickets now routed to `ProductAC`) |
 
 In the same run, capture overhead was within noise: p50 200.7 ms direct vs. 200.0 ms through the capture proxy, and 39.1 req/s on both paths, at concurrency 8 (averaged over three rounds).
 
