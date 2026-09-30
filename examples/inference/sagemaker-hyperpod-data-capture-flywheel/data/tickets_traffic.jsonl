@@ -1,0 +1,900 @@
+{"ticket": "My stackable washer leaks from underneath.", "label": "ProductWasher"}
+{"ticket": "My mini fridge freezer keeps frosting over.", "label": "ProductFridge"}
+{"ticket": "My top-freezer fridge hums loudly all night.", "label": "ProductFridge"}
+{"ticket": "My built-in dishwasher leaves a white film on glasses.", "label": "ProductDishwasher"}
+{"ticket": "Our over-the-range microwave door won't latch shut again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "Front-load washer smells musty, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Hi, our over-the-range microwave door won't latch shut since last week. Order #83434.", "label": "ProductMicrowave"}
+{"ticket": "Our front-load washer smells musty again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "My French-door fridge freezer keeps frosting over.", "label": "ProductFridge"}
+{"ticket": "Need help: the microwave drawer sparks inside when running", "label": "ProductMicrowave"}
+{"ticket": "Convection oven broiler stopped glowing, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Need help: the electric range burners won't ignite", "label": "ProductOven"}
+{"ticket": "Need help: the French-door fridge freezer keeps frosting over", "label": "ProductFridge"}
+{"ticket": "My stackable washer door won't unlock after the cycle.", "label": "ProductWasher"}
+{"ticket": "Hi, our built-in microwave sparks inside when running since last week. Order #87905.", "label": "ProductMicrowave"}
+{"ticket": "Hi, our built-in dishwasher leaves dishes dirty since last week. Order #72141.", "label": "ProductDishwasher"}
+{"ticket": "Hi, our French-door fridge keeps food warm on the top shelf since last week. Order #94820.", "label": "ProductFridge"}
+{"ticket": "Need help: the drawer dishwasher won't start the wash cycle", "label": "ProductDishwasher"}
+{"ticket": "Our drawer dishwasher won't drain the water at the bottom again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Washer-dryer combo shakes violently on spin, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Need help: the built-in dishwasher won't drain the water at the bottom", "label": "ProductDishwasher"}
+{"ticket": "Hi, our stackable washer smells musty since last week. Order #64433.", "label": "ProductWasher"}
+{"ticket": "My countertop dishwasher won't drain the water at the bottom.", "label": "ProductDishwasher"}
+{"ticket": "Our front-load washer door won't unlock after the cycle again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Our side-by-side refrigerator hums loudly all night again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Our gas range resets its clock when opened again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Our top-freezer fridge keeps food warm on the top shelf again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Need help: the built-in dishwasher never dissolves the pod", "label": "ProductDishwasher"}
+{"ticket": "My stackable washer shakes violently on spin.", "label": "ProductWasher"}
+{"ticket": "French-door fridge freezer keeps frosting over, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Wall oven won't heat past 200 degrees, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Hi, our convection oven locked the door during self-clean since last week. Order #72147.", "label": "ProductOven"}
+{"ticket": "Need help: the compact dishwasher never dissolves the pod", "label": "ProductDishwasher"}
+{"ticket": "Hi, our mini fridge keeps food warm on the top shelf since last week. Order #72733.", "label": "ProductFridge"}
+{"ticket": "Our front-load washer shakes violently on spin again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Hi, our over-the-range microwave door won't latch shut since last week. Order #94268.", "label": "ProductMicrowave"}
+{"ticket": "Hi, our convection oven broiler stopped glowing since last week. Order #39201.", "label": "ProductOven"}
+{"ticket": "Built-in microwave hums then shuts off, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Top-load washing machine door won't unlock after the cycle, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Hi, our wall oven won't heat past 200 degrees since last week. Order #71897.", "label": "ProductOven"}
+{"ticket": "Hi, our built-in microwave keypad is unresponsive since last week. Order #57793.", "label": "ProductMicrowave"}
+{"ticket": "Side-by-side refrigerator hums loudly all night, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Hi, our over-the-range microwave keypad is unresponsive since last week. Order #94296.", "label": "ProductMicrowave"}
+{"ticket": "Top-freezer fridge keeps food warm on the top shelf, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Need help: the drawer dishwasher leaves dishes dirty", "label": "ProductDishwasher"}
+{"ticket": "Side-by-side refrigerator ice maker stopped making ice, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Our countertop dishwasher leaves a white film on glasses again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Our gas range locked the door during self-clean again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Where is my delivery? It was due yesterday.", "label": "Other"}
+{"ticket": "Stackable washer shakes violently on spin, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Hi, our gas range locked the door during self-clean since last week. Order #43995.", "label": "ProductOven"}
+{"ticket": "Hi, our front-load washer leaks from underneath since last week. Order #70052.", "label": "ProductWasher"}
+{"ticket": "Microwave drawer door won't latch shut, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Over-the-range microwave keypad is unresponsive, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "How do I update the billing address on my account?", "label": "Other"}
+{"ticket": "My built-in dishwasher leaves a white film on glasses.", "label": "ProductDishwasher"}
+{"ticket": "Our microwave drawer runs but doesn't heat again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "Our wall oven won't heat past 200 degrees again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Our top-freezer fridge leaks water onto the floor again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Our washer-dryer combo door won't unlock after the cycle again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Our countertop microwave hums then shuts off again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "Need help: the stackable washer shakes violently on spin", "label": "ProductWasher"}
+{"ticket": "Wall oven resets its clock when opened, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Hi, our wall oven broiler stopped glowing since last week. Order #28740.", "label": "ProductOven"}
+{"ticket": "My stackable washer shakes violently on spin.", "label": "ProductWasher"}
+{"ticket": "Need help: the top-load washing machine shakes violently on spin", "label": "ProductWasher"}
+{"ticket": "Hi, our countertop dishwasher leaks from the door since last week. Order #22084.", "label": "ProductDishwasher"}
+{"ticket": "Need help: the mini fridge freezer keeps frosting over", "label": "ProductFridge"}
+{"ticket": "Our drawer dishwasher leaves a white film on glasses again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "My French-door fridge ice maker stopped making ice.", "label": "ProductFridge"}
+{"ticket": "Side-by-side refrigerator leaks water onto the floor, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Our electric range broiler stopped glowing again. Second time this month.", "label": "ProductOven"}
+{"ticket": "My wall oven burners won't ignite.", "label": "ProductOven"}
+{"ticket": "My mini fridge is not cooling.", "label": "ProductFridge"}
+{"ticket": "My front-load washer leaves clothes soaking wet.", "label": "ProductWasher"}
+{"ticket": "My promo code isn't working at checkout.", "label": "Other"}
+{"ticket": "Our gas range won't heat past 200 degrees again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Washer-dryer combo won't drain, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Need help: the gas range burners won't ignite", "label": "ProductOven"}
+{"ticket": "Hi, our convection oven won't heat past 200 degrees since last week. Order #14843.", "label": "ProductOven"}
+{"ticket": "I'd like to return an item I bought last week.", "label": "Other"}
+{"ticket": "Need help: the stackable washer won't drain", "label": "ProductWasher"}
+{"ticket": "Drawer dishwasher won't start the wash cycle, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "My stackable washer leaves clothes soaking wet.", "label": "ProductWasher"}
+{"ticket": "Can I reschedule my installation appointment to Friday?", "label": "Other"}
+{"ticket": "Need help: the French-door fridge keeps food warm on the top shelf", "label": "ProductFridge"}
+{"ticket": "Hi, our gas range resets its clock when opened since last week. Order #15929.", "label": "ProductOven"}
+{"ticket": "My washer-dryer combo door won't unlock after the cycle.", "label": "ProductWasher"}
+{"ticket": "My convection oven broiler stopped glowing.", "label": "ProductOven"}
+{"ticket": "Need help: the front-load washer leaves clothes soaking wet", "label": "ProductWasher"}
+{"ticket": "Our countertop microwave turntable won't spin again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "Our side-by-side refrigerator hums loudly all night again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Convection oven resets its clock when opened, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Our countertop microwave hums then shuts off again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "Our countertop dishwasher leaks from the door again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Our microwave drawer hums then shuts off again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "Our over-the-range microwave hums then shuts off again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "My front-load washer won't drain.", "label": "ProductWasher"}
+{"ticket": "Our top-freezer fridge hums loudly all night again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Hi, our countertop microwave keypad is unresponsive since last week. Order #10434.", "label": "ProductMicrowave"}
+{"ticket": "Our French-door fridge keeps food warm on the top shelf again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Hi, our drawer dishwasher leaves dishes dirty since last week. Order #40773.", "label": "ProductDishwasher"}
+{"ticket": "Need help: the top-load washing machine leaks from underneath", "label": "ProductWasher"}
+{"ticket": "Hi, our top-freezer fridge keeps food warm on the top shelf since last week. Order #16127.", "label": "ProductFridge"}
+{"ticket": "Front-load washer smells musty, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Need help: the gas range won't heat past 200 degrees", "label": "ProductOven"}
+{"ticket": "Need help: the side-by-side refrigerator keeps food warm on the top shelf", "label": "ProductFridge"}
+{"ticket": "Need help: the electric range bakes unevenly on one side", "label": "ProductOven"}
+{"ticket": "My countertop microwave sparks inside when running.", "label": "ProductMicrowave"}
+{"ticket": "The technician never showed up for my appointment.", "label": "Other"}
+{"ticket": "Need help: the microwave drawer sparks inside when running", "label": "ProductMicrowave"}
+{"ticket": "My front-load washer smells musty.", "label": "ProductWasher"}
+{"ticket": "Our convection oven broiler stopped glowing again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Need help: the mini fridge ice maker stopped making ice", "label": "ProductFridge"}
+{"ticket": "Need help: the front-load washer door won't unlock after the cycle", "label": "ProductWasher"}
+{"ticket": "Need help: the stackable washer leaves clothes soaking wet", "label": "ProductWasher"}
+{"ticket": "Hi, our wall oven burners won't ignite since last week. Order #62200.", "label": "ProductOven"}
+{"ticket": "Hi, our front-load washer leaks from underneath since last week. Order #43189.", "label": "ProductWasher"}
+{"ticket": "My compact dishwasher leaves a white film on glasses.", "label": "ProductDishwasher"}
+{"ticket": "My wall oven burners won't ignite.", "label": "ProductOven"}
+{"ticket": "Hi, our gas range broiler stopped glowing since last week. Order #67178.", "label": "ProductOven"}
+{"ticket": "My washer-dryer combo door won't unlock after the cycle.", "label": "ProductWasher"}
+{"ticket": "My countertop microwave hums then shuts off.", "label": "ProductMicrowave"}
+{"ticket": "Compact dishwasher leaves a white film on glasses, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Built-in dishwasher leaves a white film on glasses, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Hi, our convection oven burners won't ignite since last week. Order #95566.", "label": "ProductOven"}
+{"ticket": "Our washer-dryer combo door won't unlock after the cycle again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Top-load washing machine won't drain, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Hi, our countertop dishwasher never dissolves the pod since last week. Order #68977.", "label": "ProductDishwasher"}
+{"ticket": "My countertop microwave turntable won't spin.", "label": "ProductMicrowave"}
+{"ticket": "Hi, our mini fridge ice maker stopped making ice since last week. Order #43863.", "label": "ProductFridge"}
+{"ticket": "Need help: the front-load washer leaks from underneath", "label": "ProductWasher"}
+{"ticket": "Hi, our countertop microwave keypad is unresponsive since last week. Order #54328.", "label": "ProductMicrowave"}
+{"ticket": "Hi, our drawer dishwasher leaves a white film on glasses since last week. Order #26498.", "label": "ProductDishwasher"}
+{"ticket": "Hi, our countertop microwave runs but doesn't heat since last week. Order #42565.", "label": "ProductMicrowave"}
+{"ticket": "My compact dishwasher leaks from the door.", "label": "ProductDishwasher"}
+{"ticket": "The technician never showed up for my appointment.", "label": "Other"}
+{"ticket": "Need help: the built-in dishwasher leaves dishes dirty", "label": "ProductDishwasher"}
+{"ticket": "Countertop dishwasher leaves dishes dirty, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Our top-freezer fridge is not cooling again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "How do I update the billing address on my account?", "label": "Other"}
+{"ticket": "Hi, our mini fridge ice maker stopped making ice since last week. Order #79239.", "label": "ProductFridge"}
+{"ticket": "Hi, our French-door fridge is not cooling since last week. Order #78738.", "label": "ProductFridge"}
+{"ticket": "Stackable washer leaves clothes soaking wet, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Can I reschedule my installation appointment to Friday?", "label": "Other"}
+{"ticket": "Convection oven resets its clock when opened, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Need help: the countertop microwave runs but doesn't heat", "label": "ProductMicrowave"}
+{"ticket": "Need help: the side-by-side refrigerator hums loudly all night", "label": "ProductFridge"}
+{"ticket": "Need help: the drawer dishwasher won't drain the water at the bottom", "label": "ProductDishwasher"}
+{"ticket": "Need help: the drawer dishwasher won't start the wash cycle", "label": "ProductDishwasher"}
+{"ticket": "Can I reschedule my installation appointment to Friday?", "label": "Other"}
+{"ticket": "Need help: the over-the-range microwave turntable won't spin", "label": "ProductMicrowave"}
+{"ticket": "Top-load washing machine door won't unlock after the cycle, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Need help: the wall oven locked the door during self-clean", "label": "ProductOven"}
+{"ticket": "My stackable washer door won't unlock after the cycle.", "label": "ProductWasher"}
+{"ticket": "My built-in dishwasher won't drain the water at the bottom.", "label": "ProductDishwasher"}
+{"ticket": "Need help: the French-door fridge ice maker stopped making ice", "label": "ProductFridge"}
+{"ticket": "Wall oven won't heat past 200 degrees, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Hi, our microwave drawer runs but doesn't heat since last week. Order #97088.", "label": "ProductMicrowave"}
+{"ticket": "Convection oven bakes unevenly on one side, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Can I reschedule my installation appointment to Friday?", "label": "Other"}
+{"ticket": "Built-in dishwasher leaves a white film on glasses, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "My electric range won't heat past 200 degrees.", "label": "ProductOven"}
+{"ticket": "Hi, our microwave drawer turntable won't spin since last week. Order #57742.", "label": "ProductMicrowave"}
+{"ticket": "Need help: the built-in dishwasher won't start the wash cycle", "label": "ProductDishwasher"}
+{"ticket": "My built-in dishwasher never dissolves the pod.", "label": "ProductDishwasher"}
+{"ticket": "My mini fridge ice maker stopped making ice.", "label": "ProductFridge"}
+{"ticket": "My convection oven locked the door during self-clean.", "label": "ProductOven"}
+{"ticket": "My convection oven burners won't ignite.", "label": "ProductOven"}
+{"ticket": "My French-door fridge ice maker stopped making ice.", "label": "ProductFridge"}
+{"ticket": "Need help: the compact dishwasher leaks from the door", "label": "ProductDishwasher"}
+{"ticket": "Hi, our countertop dishwasher leaves dishes dirty since last week. Order #29833.", "label": "ProductDishwasher"}
+{"ticket": "Hi, our convection oven bakes unevenly on one side since last week. Order #88081.", "label": "ProductOven"}
+{"ticket": "Stackable washer shakes violently on spin, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Our top-freezer fridge freezer keeps frosting over again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Hi, our built-in dishwasher leaves dishes dirty since last week. Order #91867.", "label": "ProductDishwasher"}
+{"ticket": "Need help: the top-freezer fridge hums loudly all night", "label": "ProductFridge"}
+{"ticket": "Compact dishwasher leaves a white film on glasses, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Hi, our mini fridge leaks water onto the floor since last week. Order #84302.", "label": "ProductFridge"}
+{"ticket": "Need help: the convection oven broiler stopped glowing", "label": "ProductOven"}
+{"ticket": "Our top-load washing machine leaves clothes soaking wet again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Our drawer dishwasher won't drain the water at the bottom again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "My top-freezer fridge is not cooling.", "label": "ProductFridge"}
+{"ticket": "My stackable washer leaves clothes soaking wet.", "label": "ProductWasher"}
+{"ticket": "Our side-by-side refrigerator freezer keeps frosting over again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Our gas range bakes unevenly on one side again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Our French-door fridge keeps food warm on the top shelf again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Mini fridge leaks water onto the floor, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Wall oven locked the door during self-clean, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Our drawer dishwasher won't drain the water at the bottom again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Need help: the top-freezer fridge freezer keeps frosting over", "label": "ProductFridge"}
+{"ticket": "Our countertop dishwasher won't start the wash cycle again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Hi, our drawer dishwasher never dissolves the pod since last week. Order #97531.", "label": "ProductDishwasher"}
+{"ticket": "Our mini fridge keeps food warm on the top shelf again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Mini fridge keeps food warm on the top shelf, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Front-load washer door won't unlock after the cycle, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Hi, our top-freezer fridge freezer keeps frosting over since last week. Order #70411.", "label": "ProductFridge"}
+{"ticket": "Our front-load washer won't drain again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Our built-in dishwasher leaves a white film on glasses again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Hi, our top-load washing machine leaves clothes soaking wet since last week. Order #31209.", "label": "ProductWasher"}
+{"ticket": "Need help: the French-door fridge hums loudly all night", "label": "ProductFridge"}
+{"ticket": "My top-freezer fridge leaks water onto the floor.", "label": "ProductFridge"}
+{"ticket": "Our built-in dishwasher won't start the wash cycle again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Stackable washer smells musty, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Our front-load washer door won't unlock after the cycle again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Side-by-side refrigerator ice maker stopped making ice, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Need help: the mini fridge is not cooling", "label": "ProductFridge"}
+{"ticket": "Our electric range burners won't ignite again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Need help: the electric range locked the door during self-clean", "label": "ProductOven"}
+{"ticket": "The technician never showed up for my appointment.", "label": "Other"}
+{"ticket": "Need help: the compact dishwasher won't drain the water at the bottom", "label": "ProductDishwasher"}
+{"ticket": "Hi, our washer-dryer combo door won't unlock after the cycle since last week. Order #22021.", "label": "ProductWasher"}
+{"ticket": "Over-the-range microwave runs but doesn't heat, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Our wall oven won't heat past 200 degrees again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Our front-load washer won't drain again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Drawer dishwasher won't drain the water at the bottom, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Hi, our built-in microwave turntable won't spin since last week. Order #90416.", "label": "ProductMicrowave"}
+{"ticket": "Our countertop dishwasher leaks from the door again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Hi, our gas range burners won't ignite since last week. Order #14827.", "label": "ProductOven"}
+{"ticket": "Hi, our countertop dishwasher won't start the wash cycle since last week. Order #99087.", "label": "ProductDishwasher"}
+{"ticket": "My countertop dishwasher leaks from the door.", "label": "ProductDishwasher"}
+{"ticket": "Our electric range locked the door during self-clean again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Need help: the mini fridge freezer keeps frosting over", "label": "ProductFridge"}
+{"ticket": "Hi, our gas range burners won't ignite since last week. Order #20667.", "label": "ProductOven"}
+{"ticket": "Our front-load washer leaves clothes soaking wet again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "My built-in microwave hums then shuts off.", "label": "ProductMicrowave"}
+{"ticket": "Our electric range bakes unevenly on one side again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Our stackable washer shakes violently on spin again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Hi, our French-door fridge freezer keeps frosting over since last week. Order #49811.", "label": "ProductFridge"}
+{"ticket": "Our gas range bakes unevenly on one side again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Need help: the washer-dryer combo smells musty", "label": "ProductWasher"}
+{"ticket": "My top-load washing machine door won't unlock after the cycle.", "label": "ProductWasher"}
+{"ticket": "My electric range burners won't ignite.", "label": "ProductOven"}
+{"ticket": "Our built-in microwave door won't latch shut again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "Microwave drawer turntable won't spin, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Over-the-range microwave keypad is unresponsive, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Our French-door fridge freezer keeps frosting over again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Our stackable washer shakes violently on spin again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Hi, our countertop dishwasher leaves a white film on glasses since last week. Order #18358.", "label": "ProductDishwasher"}
+{"ticket": "Our top-freezer fridge keeps food warm on the top shelf again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Need help: the compact dishwasher leaves dishes dirty", "label": "ProductDishwasher"}
+{"ticket": "My mini fridge ice maker stopped making ice.", "label": "ProductFridge"}
+{"ticket": "Our wall oven burners won't ignite again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Built-in microwave sparks inside when running, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Side-by-side refrigerator leaks water onto the floor, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Hi, our gas range bakes unevenly on one side since last week. Order #88804.", "label": "ProductOven"}
+{"ticket": "Our microwave drawer keypad is unresponsive again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "Hi, our countertop dishwasher leaves a white film on glasses since last week. Order #37782.", "label": "ProductDishwasher"}
+{"ticket": "Over-the-range microwave door won't latch shut, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Where is my delivery? It was due yesterday.", "label": "Other"}
+{"ticket": "My washer-dryer combo shakes violently on spin.", "label": "ProductWasher"}
+{"ticket": "My French-door fridge keeps food warm on the top shelf.", "label": "ProductFridge"}
+{"ticket": "My gas range locked the door during self-clean.", "label": "ProductOven"}
+{"ticket": "My top-load washing machine won't drain.", "label": "ProductWasher"}
+{"ticket": "My mini fridge hums loudly all night.", "label": "ProductFridge"}
+{"ticket": "Hi, our washer-dryer combo leaves clothes soaking wet since last week. Order #65543.", "label": "ProductWasher"}
+{"ticket": "My convection oven burners won't ignite.", "label": "ProductOven"}
+{"ticket": "Our microwave drawer sparks inside when running again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "My top-freezer fridge freezer keeps frosting over.", "label": "ProductFridge"}
+{"ticket": "My side-by-side refrigerator keeps food warm on the top shelf.", "label": "ProductFridge"}
+{"ticket": "Our stackable washer won't drain again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Need help: the French-door fridge leaks water onto the floor", "label": "ProductFridge"}
+{"ticket": "Hi, our stackable washer smells musty since last week. Order #77520.", "label": "ProductWasher"}
+{"ticket": "Washer-dryer combo shakes violently on spin, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Our top-freezer fridge keeps food warm on the top shelf again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Need help: the wall oven bakes unevenly on one side", "label": "ProductOven"}
+{"ticket": "Hi, our mini fridge ice maker stopped making ice since last week. Order #44497.", "label": "ProductFridge"}
+{"ticket": "Countertop microwave keypad is unresponsive, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Our over-the-range microwave sparks inside when running again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "Need help: the drawer dishwasher won't drain the water at the bottom", "label": "ProductDishwasher"}
+{"ticket": "Hi, our gas range broiler stopped glowing since last week. Order #70557.", "label": "ProductOven"}
+{"ticket": "Hi, our top-load washing machine leaves clothes soaking wet since last week. Order #90914.", "label": "ProductWasher"}
+{"ticket": "Hi, our top-load washing machine leaks from underneath since last week. Order #89022.", "label": "ProductWasher"}
+{"ticket": "Top-load washing machine leaves clothes soaking wet, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "My side-by-side refrigerator keeps food warm on the top shelf.", "label": "ProductFridge"}
+{"ticket": "Hi, our washer-dryer combo leaks from underneath since last week. Order #67006.", "label": "ProductWasher"}
+{"ticket": "French-door fridge leaks water onto the floor, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Top-freezer fridge hums loudly all night, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Electric range won't heat past 200 degrees, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Built-in dishwasher won't start the wash cycle, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Our microwave drawer turntable won't spin again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "Hi, our top-freezer fridge hums loudly all night since last week. Order #44053.", "label": "ProductFridge"}
+{"ticket": "Need help: the top-freezer fridge ice maker stopped making ice", "label": "ProductFridge"}
+{"ticket": "My compact dishwasher never dissolves the pod.", "label": "ProductDishwasher"}
+{"ticket": "Hi, our countertop microwave hums then shuts off since last week. Order #11393.", "label": "ProductMicrowave"}
+{"ticket": "Hi, our built-in dishwasher leaves dishes dirty since last week. Order #81219.", "label": "ProductDishwasher"}
+{"ticket": "Our washer-dryer combo won't drain again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Hi, our built-in dishwasher won't start the wash cycle since last week. Order #78378.", "label": "ProductDishwasher"}
+{"ticket": "Countertop dishwasher won't start the wash cycle, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "My mini fridge keeps food warm on the top shelf.", "label": "ProductFridge"}
+{"ticket": "My built-in dishwasher leaves dishes dirty.", "label": "ProductDishwasher"}
+{"ticket": "Convection oven won't heat past 200 degrees, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Need help: the countertop microwave keypad is unresponsive", "label": "ProductMicrowave"}
+{"ticket": "Our side-by-side refrigerator hums loudly all night again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Need help: the washer-dryer combo leaks from underneath", "label": "ProductWasher"}
+{"ticket": "Hi, our countertop microwave keypad is unresponsive since last week. Order #40206.", "label": "ProductMicrowave"}
+{"ticket": "Drawer dishwasher never dissolves the pod, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Can I reschedule my installation appointment to Friday?", "label": "Other"}
+{"ticket": "Need help: the convection oven bakes unevenly on one side", "label": "ProductOven"}
+{"ticket": "Hi, our mini fridge ice maker stopped making ice since last week. Order #60477.", "label": "ProductFridge"}
+{"ticket": "Our built-in microwave turntable won't spin again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "My French-door fridge ice maker stopped making ice.", "label": "ProductFridge"}
+{"ticket": "Over-the-range microwave door won't latch shut, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Drawer dishwasher won't drain the water at the bottom, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Our front-load washer leaks from underneath again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Stackable washer leaks from underneath, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "My built-in dishwasher leaves a white film on glasses.", "label": "ProductDishwasher"}
+{"ticket": "Our stackable washer door won't unlock after the cycle again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Need help: the stackable washer shakes violently on spin", "label": "ProductWasher"}
+{"ticket": "Need help: the side-by-side refrigerator leaks water onto the floor", "label": "ProductFridge"}
+{"ticket": "Need help: the electric range burners won't ignite", "label": "ProductOven"}
+{"ticket": "Hi, our side-by-side refrigerator keeps food warm on the top shelf since last week. Order #93378.", "label": "ProductFridge"}
+{"ticket": "Hi, our French-door fridge keeps food warm on the top shelf since last week. Order #22317.", "label": "ProductFridge"}
+{"ticket": "Countertop dishwasher leaves dishes dirty, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Hi, our wall oven resets its clock when opened since last week. Order #54736.", "label": "ProductOven"}
+{"ticket": "Need help: the countertop microwave sparks inside when running", "label": "ProductMicrowave"}
+{"ticket": "Hi, our over-the-range microwave sparks inside when running since last week. Order #56553.", "label": "ProductMicrowave"}
+{"ticket": "Hi, our drawer dishwasher leaves a white film on glasses since last week. Order #76378.", "label": "ProductDishwasher"}
+{"ticket": "Hi, our stackable washer won't drain since last week. Order #35206.", "label": "ProductWasher"}
+{"ticket": "My gas range locked the door during self-clean.", "label": "ProductOven"}
+{"ticket": "Our microwave drawer door won't latch shut again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "French-door fridge is not cooling, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Top-freezer fridge freezer keeps frosting over, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "My over-the-range microwave turntable won't spin.", "label": "ProductMicrowave"}
+{"ticket": "Front-load washer leaks from underneath, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "French-door fridge leaks water onto the floor, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Need help: the convection oven broiler stopped glowing", "label": "ProductOven"}
+{"ticket": "Our built-in dishwasher never dissolves the pod again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Where is my delivery? It was due yesterday.", "label": "Other"}
+{"ticket": "My compact dishwasher never dissolves the pod.", "label": "ProductDishwasher"}
+{"ticket": "Need help: the countertop microwave keypad is unresponsive", "label": "ProductMicrowave"}
+{"ticket": "My countertop dishwasher won't drain the water at the bottom.", "label": "ProductDishwasher"}
+{"ticket": "Where is my delivery? It was due yesterday.", "label": "Other"}
+{"ticket": "Side-by-side refrigerator is not cooling, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "I'd like to return an item I bought last week.", "label": "Other"}
+{"ticket": "Front-load washer leaves clothes soaking wet, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Hi, our microwave drawer keypad is unresponsive since last week. Order #16902.", "label": "ProductMicrowave"}
+{"ticket": "Our French-door fridge is not cooling again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Our gas range bakes unevenly on one side again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Microwave drawer keypad is unresponsive, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Mini fridge keeps food warm on the top shelf, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Hi, our compact dishwasher never dissolves the pod since last week. Order #84293.", "label": "ProductDishwasher"}
+{"ticket": "Our wall oven locked the door during self-clean again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Hi, our side-by-side refrigerator freezer keeps frosting over since last week. Order #86633.", "label": "ProductFridge"}
+{"ticket": "Need help: the stackable washer door won't unlock after the cycle", "label": "ProductWasher"}
+{"ticket": "My stackable washer leaves clothes soaking wet.", "label": "ProductWasher"}
+{"ticket": "My countertop dishwasher leaves a white film on glasses.", "label": "ProductDishwasher"}
+{"ticket": "Our countertop microwave sparks inside when running again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "My drawer dishwasher leaves a white film on glasses.", "label": "ProductDishwasher"}
+{"ticket": "Countertop dishwasher won't start the wash cycle, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Compact dishwasher won't start the wash cycle, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Our top-freezer fridge hums loudly all night again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Need help: the wall oven broiler stopped glowing", "label": "ProductOven"}
+{"ticket": "Our convection oven bakes unevenly on one side again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Top-load washing machine won't drain, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Our built-in microwave keypad is unresponsive again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "Hi, our drawer dishwasher leaves dishes dirty since last week. Order #92934.", "label": "ProductDishwasher"}
+{"ticket": "Our side-by-side refrigerator leaks water onto the floor again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "My over-the-range microwave runs but doesn't heat.", "label": "ProductMicrowave"}
+{"ticket": "Our microwave drawer door won't latch shut again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "Need help: the electric range won't heat past 200 degrees", "label": "ProductOven"}
+{"ticket": "Hi, our washer-dryer combo won't drain since last week. Order #36344.", "label": "ProductWasher"}
+{"ticket": "My built-in dishwasher leaves dishes dirty.", "label": "ProductDishwasher"}
+{"ticket": "Our compact dishwasher leaves dishes dirty again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Hi, our French-door fridge leaks water onto the floor since last week. Order #83987.", "label": "ProductFridge"}
+{"ticket": "Need help: the top-freezer fridge ice maker stopped making ice", "label": "ProductFridge"}
+{"ticket": "My top-load washing machine shakes violently on spin.", "label": "ProductWasher"}
+{"ticket": "Hi, our French-door fridge is not cooling since last week. Order #77283.", "label": "ProductFridge"}
+{"ticket": "Built-in dishwasher leaves dishes dirty, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Our washer-dryer combo smells musty again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Hi, our top-freezer fridge leaks water onto the floor since last week. Order #43686.", "label": "ProductFridge"}
+{"ticket": "Electric range bakes unevenly on one side, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Front-load washer door won't unlock after the cycle, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Hi, our front-load washer smells musty since last week. Order #28318.", "label": "ProductWasher"}
+{"ticket": "My top-freezer fridge is not cooling.", "label": "ProductFridge"}
+{"ticket": "My gas range bakes unevenly on one side.", "label": "ProductOven"}
+{"ticket": "My gas range resets its clock when opened.", "label": "ProductOven"}
+{"ticket": "Countertop microwave keypad is unresponsive, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Hi, our top-load washing machine won't drain since last week. Order #84840.", "label": "ProductWasher"}
+{"ticket": "Need help: the gas range burners won't ignite", "label": "ProductOven"}
+{"ticket": "Our built-in dishwasher won't drain the water at the bottom again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "My stackable washer leaves clothes soaking wet.", "label": "ProductWasher"}
+{"ticket": "Electric range burners won't ignite, can someone take a look?", "label": "ProductOven"}
+{"ticket": "My electric range broiler stopped glowing.", "label": "ProductOven"}
+{"ticket": "Hi, our top-freezer fridge freezer keeps frosting over since last week. Order #76949.", "label": "ProductFridge"}
+{"ticket": "Hi, our mini fridge ice maker stopped making ice since last week. Order #67049.", "label": "ProductFridge"}
+{"ticket": "Our countertop dishwasher leaks from the door again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Top-load washing machine leaks from underneath, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Top-freezer fridge leaks water onto the floor, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "My washer-dryer combo shakes violently on spin.", "label": "ProductWasher"}
+{"ticket": "My microwave drawer hums then shuts off.", "label": "ProductMicrowave"}
+{"ticket": "Need help: the convection oven resets its clock when opened", "label": "ProductOven"}
+{"ticket": "The technician never showed up for my appointment.", "label": "Other"}
+{"ticket": "Our gas range broiler stopped glowing again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Do you offer financing on large purchases?", "label": "Other"}
+{"ticket": "Need help: the mini fridge freezer keeps frosting over", "label": "ProductFridge"}
+{"ticket": "Need help: the gas range burners won't ignite", "label": "ProductOven"}
+{"ticket": "Need help: the mini fridge is not cooling", "label": "ProductFridge"}
+{"ticket": "Countertop microwave runs but doesn't heat, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Hi, our top-load washing machine won't drain since last week. Order #42828.", "label": "ProductWasher"}
+{"ticket": "French-door fridge is not cooling, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Our window air conditioner rattles loudly when cooling again. Second time this month.", "label": "ProductAC"}
+{"ticket": "My built-in dishwasher leaks from the door.", "label": "ProductDishwasher"}
+{"ticket": "Need help: the Arctis 9K lost its Wi-Fi link to the app", "label": "ProductAC"}
+{"ticket": "My wall oven won't heat past 200 degrees.", "label": "ProductOven"}
+{"ticket": "Countertop microwave turntable won't spin, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Need help: the countertop dishwasher leaves dishes dirty", "label": "ProductDishwasher"}
+{"ticket": "My over-the-range microwave keypad is unresponsive.", "label": "ProductMicrowave"}
+{"ticket": "Need help: the washer-dryer combo leaks from underneath", "label": "ProductWasher"}
+{"ticket": "My electric range locked the door during self-clean.", "label": "ProductOven"}
+{"ticket": "My gas range bakes unevenly on one side.", "label": "ProductOven"}
+{"ticket": "Hi, our Arctis 12K blows warm air since last week. Order #66759.", "label": "ProductAC"}
+{"ticket": "Need help: the side-by-side refrigerator ice maker stopped making ice", "label": "ProductFridge"}
+{"ticket": "My built-in dishwasher leaves dishes dirty.", "label": "ProductDishwasher"}
+{"ticket": "Our built-in microwave hums then shuts off again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "My wall oven locked the door during self-clean.", "label": "ProductOven"}
+{"ticket": "Hi, our mini fridge is not cooling since last week. Order #55554.", "label": "ProductFridge"}
+{"ticket": "Our French-door fridge freezer keeps frosting over again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Window air conditioner ices over after an hour, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Need help: the Arctis 12K compressor won't kick on", "label": "ProductAC"}
+{"ticket": "Our front-load washer leaks from underneath again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Need help: the countertop microwave hums then shuts off", "label": "ProductMicrowave"}
+{"ticket": "Hi, our electric range locked the door during self-clean since last week. Order #90320.", "label": "ProductOven"}
+{"ticket": "Hi, our wall oven broiler stopped glowing since last week. Order #39043.", "label": "ProductOven"}
+{"ticket": "My promo code isn't working at checkout.", "label": "Other"}
+{"ticket": "Built-in dishwasher leaks from the door, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Hi, our electric range burners won't ignite since last week. Order #38330.", "label": "ProductOven"}
+{"ticket": "My side-by-side refrigerator freezer keeps frosting over.", "label": "ProductFridge"}
+{"ticket": "Need help: the built-in dishwasher leaves a white film on glasses", "label": "ProductDishwasher"}
+{"ticket": "Side-by-side refrigerator keeps food warm on the top shelf, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Gas range resets its clock when opened, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Need help: the wall oven resets its clock when opened", "label": "ProductOven"}
+{"ticket": "My stackable washer won't drain.", "label": "ProductWasher"}
+{"ticket": "Need help: the over-the-range microwave keypad is unresponsive", "label": "ProductMicrowave"}
+{"ticket": "Our Arctis Mini ices over after an hour again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Hi, our compact dishwasher leaks from the door since last week. Order #48393.", "label": "ProductDishwasher"}
+{"ticket": "Hi, our microwave drawer hums then shuts off since last week. Order #10886.", "label": "ProductMicrowave"}
+{"ticket": "Hi, our compact dishwasher never dissolves the pod since last week. Order #34144.", "label": "ProductDishwasher"}
+{"ticket": "Need help: the stackable washer smells musty", "label": "ProductWasher"}
+{"ticket": "Convection oven locked the door during self-clean, can someone take a look?", "label": "ProductOven"}
+{"ticket": "My promo code isn't working at checkout.", "label": "Other"}
+{"ticket": "Hi, our French-door fridge is not cooling since last week. Order #84047.", "label": "ProductFridge"}
+{"ticket": "Our convection oven locked the door during self-clean again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Need help: the microwave drawer keypad is unresponsive", "label": "ProductMicrowave"}
+{"ticket": "My Arctis Mini lost its Wi-Fi link to the app.", "label": "ProductAC"}
+{"ticket": "Need help: the Arctis 12K blows warm air", "label": "ProductAC"}
+{"ticket": "Need help: the countertop microwave turntable won't spin", "label": "ProductMicrowave"}
+{"ticket": "Our built-in microwave hums then shuts off again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "My Arctis Mini compressor won't kick on.", "label": "ProductAC"}
+{"ticket": "Hi, our mini fridge keeps food warm on the top shelf since last week. Order #76699.", "label": "ProductFridge"}
+{"ticket": "Hi, our countertop dishwasher leaves a white film on glasses since last week. Order #77057.", "label": "ProductDishwasher"}
+{"ticket": "I'd like to return an item I bought last week.", "label": "Other"}
+{"ticket": "Our French-door fridge leaks water onto the floor again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "My top-freezer fridge is not cooling.", "label": "ProductFridge"}
+{"ticket": "Need help: the over-the-range microwave sparks inside when running", "label": "ProductMicrowave"}
+{"ticket": "Need help: the side-by-side refrigerator ice maker stopped making ice", "label": "ProductFridge"}
+{"ticket": "Countertop microwave door won't latch shut, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Our top-load washing machine smells musty again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Our Arctis 9K drips water onto the carpet again. Second time this month.", "label": "ProductAC"}
+{"ticket": "My microwave drawer runs but doesn't heat.", "label": "ProductMicrowave"}
+{"ticket": "Gas range resets its clock when opened, can someone take a look?", "label": "ProductOven"}
+{"ticket": "My mini fridge keeps food warm on the top shelf.", "label": "ProductFridge"}
+{"ticket": "Our Arctis 12K lost its Wi-Fi link to the app again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Our Arctis 12K lost its Wi-Fi link to the app again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Countertop microwave turntable won't spin, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Hi, our window air conditioner drips water onto the carpet since last week. Order #10807.", "label": "ProductAC"}
+{"ticket": "Our drawer dishwasher never dissolves the pod again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Need help: the built-in dishwasher won't drain the water at the bottom", "label": "ProductDishwasher"}
+{"ticket": "Need help: the stackable washer leaves clothes soaking wet", "label": "ProductWasher"}
+{"ticket": "Arctis 12K blows warm air, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Need help: the front-load washer leaves clothes soaking wet", "label": "ProductWasher"}
+{"ticket": "Need help: the electric range burners won't ignite", "label": "ProductOven"}
+{"ticket": "Hi, our Arctis 9K lost its Wi-Fi link to the app since last week. Order #82593.", "label": "ProductAC"}
+{"ticket": "I'd like to return an item I bought last week.", "label": "Other"}
+{"ticket": "My gas range bakes unevenly on one side.", "label": "ProductOven"}
+{"ticket": "Gas range broiler stopped glowing, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Our window air conditioner drips water onto the carpet again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Hi, our top-load washing machine leaves clothes soaking wet since last week. Order #38373.", "label": "ProductWasher"}
+{"ticket": "Need help: the countertop dishwasher leaks from the door", "label": "ProductDishwasher"}
+{"ticket": "Arctis 12K unit rattles loudly when cooling, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Drawer dishwasher leaves a white film on glasses, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Our top-load washing machine won't drain again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Our electric range won't heat past 200 degrees again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Built-in dishwasher won't start the wash cycle, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Hi, our French-door fridge freezer keeps frosting over since last week. Order #75583.", "label": "ProductFridge"}
+{"ticket": "Hi, our front-load washer leaks from underneath since last week. Order #21526.", "label": "ProductWasher"}
+{"ticket": "How do I update the billing address on my account?", "label": "Other"}
+{"ticket": "Need help: the drawer dishwasher leaks from the door", "label": "ProductDishwasher"}
+{"ticket": "My washer-dryer combo shakes violently on spin.", "label": "ProductWasher"}
+{"ticket": "Need help: the electric range won't heat past 200 degrees", "label": "ProductOven"}
+{"ticket": "My drawer dishwasher won't start the wash cycle.", "label": "ProductDishwasher"}
+{"ticket": "My gas range resets its clock when opened.", "label": "ProductOven"}
+{"ticket": "Arctis 12K lost its Wi-Fi link to the app, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Hi, our Arctis 9K ices over after an hour since last week. Order #92504.", "label": "ProductAC"}
+{"ticket": "Need help: the top-load washing machine smells musty", "label": "ProductWasher"}
+{"ticket": "My promo code isn't working at checkout.", "label": "Other"}
+{"ticket": "My built-in microwave runs but doesn't heat.", "label": "ProductMicrowave"}
+{"ticket": "My French-door fridge ice maker stopped making ice.", "label": "ProductFridge"}
+{"ticket": "My washer-dryer combo leaks from underneath.", "label": "ProductWasher"}
+{"ticket": "Our countertop dishwasher leaks from the door again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Our compact dishwasher leaks from the door again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Over-the-range microwave hums then shuts off, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "My stackable washer shakes violently on spin.", "label": "ProductWasher"}
+{"ticket": "How do I update the billing address on my account?", "label": "Other"}
+{"ticket": "My washer-dryer combo shakes violently on spin.", "label": "ProductWasher"}
+{"ticket": "Hi, our built-in dishwasher won't drain the water at the bottom since last week. Order #27981.", "label": "ProductDishwasher"}
+{"ticket": "Need help: the Arctis 12K unit rattles loudly when cooling", "label": "ProductAC"}
+{"ticket": "Hi, our top-freezer fridge ice maker stopped making ice since last week. Order #49239.", "label": "ProductFridge"}
+{"ticket": "Our Arctis 12K ices over after an hour again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Top-freezer fridge ice maker stopped making ice, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Hi, our countertop dishwasher leaves dishes dirty since last week. Order #11621.", "label": "ProductDishwasher"}
+{"ticket": "Hi, our front-load washer won't drain since last week. Order #49833.", "label": "ProductWasher"}
+{"ticket": "My Arctis Mini lost its Wi-Fi link to the app.", "label": "ProductAC"}
+{"ticket": "Drawer dishwasher leaks from the door, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Need help: the Arctis 9K lost its Wi-Fi link to the app", "label": "ProductAC"}
+{"ticket": "Need help: the convection oven won't heat past 200 degrees", "label": "ProductOven"}
+{"ticket": "Hi, our built-in microwave runs but doesn't heat since last week. Order #21923.", "label": "ProductMicrowave"}
+{"ticket": "Built-in microwave hums then shuts off, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Need help: the Arctis 9K blows warm air", "label": "ProductAC"}
+{"ticket": "Hi, our top-load washing machine won't drain since last week. Order #90844.", "label": "ProductWasher"}
+{"ticket": "Washer-dryer combo leaves clothes soaking wet, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Arctis Mini compressor won't kick on, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Need help: the window air conditioner rattles loudly when cooling", "label": "ProductAC"}
+{"ticket": "Compact dishwasher never dissolves the pod, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Side-by-side refrigerator keeps food warm on the top shelf, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "My Arctis 12K unit blows warm air.", "label": "ProductAC"}
+{"ticket": "My washer-dryer combo won't drain.", "label": "ProductWasher"}
+{"ticket": "Hi, our microwave drawer turntable won't spin since last week. Order #19436.", "label": "ProductMicrowave"}
+{"ticket": "My microwave drawer sparks inside when running.", "label": "ProductMicrowave"}
+{"ticket": "Arctis 12K rattles loudly when cooling, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Drawer dishwasher leaves a white film on glasses, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Need help: the Arctis Mini ices over after an hour", "label": "ProductAC"}
+{"ticket": "Our stackable washer smells musty again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Hi, our mini fridge freezer keeps frosting over since last week. Order #84058.", "label": "ProductFridge"}
+{"ticket": "Electric range resets its clock when opened, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Over-the-range microwave turntable won't spin, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Our side-by-side refrigerator keeps food warm on the top shelf again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Drawer dishwasher leaves a white film on glasses, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Wall oven broiler stopped glowing, can someone take a look?", "label": "ProductOven"}
+{"ticket": "My side-by-side refrigerator leaks water onto the floor.", "label": "ProductFridge"}
+{"ticket": "Our electric range broiler stopped glowing again. Second time this month.", "label": "ProductOven"}
+{"ticket": "My window air conditioner rattles loudly when cooling.", "label": "ProductAC"}
+{"ticket": "My over-the-range microwave keypad is unresponsive.", "label": "ProductMicrowave"}
+{"ticket": "Our window air conditioner ices over after an hour again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Need help: the over-the-range microwave keypad is unresponsive", "label": "ProductMicrowave"}
+{"ticket": "Need help: the Arctis 12K ices over after an hour", "label": "ProductAC"}
+{"ticket": "Need help: the window air conditioner blows warm air", "label": "ProductAC"}
+{"ticket": "Our Arctis 9K blows warm air again. Second time this month.", "label": "ProductAC"}
+{"ticket": "My side-by-side refrigerator hums loudly all night.", "label": "ProductFridge"}
+{"ticket": "Hi, our front-load washer leaks from underneath since last week. Order #32020.", "label": "ProductWasher"}
+{"ticket": "My wall oven burners won't ignite.", "label": "ProductOven"}
+{"ticket": "Need help: the built-in microwave hums then shuts off", "label": "ProductMicrowave"}
+{"ticket": "Our wall oven burners won't ignite again. Second time this month.", "label": "ProductOven"}
+{"ticket": "French-door fridge keeps food warm on the top shelf, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Need help: the built-in dishwasher leaves a white film on glasses", "label": "ProductDishwasher"}
+{"ticket": "Hi, our built-in dishwasher leaves dishes dirty since last week. Order #34283.", "label": "ProductDishwasher"}
+{"ticket": "Need help: the Arctis Mini rattles loudly when cooling", "label": "ProductAC"}
+{"ticket": "My convection oven bakes unevenly on one side.", "label": "ProductOven"}
+{"ticket": "Need help: the stackable washer smells musty", "label": "ProductWasher"}
+{"ticket": "Our French-door fridge ice maker stopped making ice again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Need help: the compact dishwasher won't drain the water at the bottom", "label": "ProductDishwasher"}
+{"ticket": "My window air conditioner ices over after an hour.", "label": "ProductAC"}
+{"ticket": "Our washer-dryer combo shakes violently on spin again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Need help: the Arctis 12K compressor won't kick on", "label": "ProductAC"}
+{"ticket": "My drawer dishwasher leaks from the door.", "label": "ProductDishwasher"}
+{"ticket": "Gas range won't heat past 200 degrees, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Over-the-range microwave hums then shuts off, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "My Arctis 12K unit compressor won't kick on.", "label": "ProductAC"}
+{"ticket": "My gas range resets its clock when opened.", "label": "ProductOven"}
+{"ticket": "Our side-by-side refrigerator hums loudly all night again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Arctis Mini drips water onto the carpet, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Hi, our Arctis Mini rattles loudly when cooling since last week. Order #76703.", "label": "ProductAC"}
+{"ticket": "Need help: the washer-dryer combo smells musty", "label": "ProductWasher"}
+{"ticket": "Hi, our Arctis Mini rattles loudly when cooling since last week. Order #73106.", "label": "ProductAC"}
+{"ticket": "Top-load washing machine leaves clothes soaking wet, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Need help: the Arctis 12K unit lost its Wi-Fi link to the app", "label": "ProductAC"}
+{"ticket": "My gas range locked the door during self-clean.", "label": "ProductOven"}
+{"ticket": "Can I reschedule my installation appointment to Friday?", "label": "Other"}
+{"ticket": "Hi, our window air conditioner ices over after an hour since last week. Order #19633.", "label": "ProductAC"}
+{"ticket": "Over-the-range microwave door won't latch shut, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Need help: the drawer dishwasher won't start the wash cycle", "label": "ProductDishwasher"}
+{"ticket": "Hi, our gas range burners won't ignite since last week. Order #81628.", "label": "ProductOven"}
+{"ticket": "Hi, our Arctis 12K rattles loudly when cooling since last week. Order #41051.", "label": "ProductAC"}
+{"ticket": "Need help: the front-load washer door won't unlock after the cycle", "label": "ProductWasher"}
+{"ticket": "Wall oven broiler stopped glowing, can someone take a look?", "label": "ProductOven"}
+{"ticket": "My over-the-range microwave runs but doesn't heat.", "label": "ProductMicrowave"}
+{"ticket": "Hi, our front-load washer shakes violently on spin since last week. Order #80377.", "label": "ProductWasher"}
+{"ticket": "Mini fridge is not cooling, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "I was charged twice on my last invoice, can you refund one?", "label": "Other"}
+{"ticket": "My drawer dishwasher won't drain the water at the bottom.", "label": "ProductDishwasher"}
+{"ticket": "Our mini fridge hums loudly all night again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "My Arctis 12K unit blows warm air.", "label": "ProductAC"}
+{"ticket": "Our wall oven bakes unevenly on one side again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Arctis 9K drips water onto the carpet, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Need help: the mini fridge leaks water onto the floor", "label": "ProductFridge"}
+{"ticket": "Our countertop microwave hums then shuts off again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "Can I reschedule my installation appointment to Friday?", "label": "Other"}
+{"ticket": "Hi, our built-in dishwasher won't start the wash cycle since last week. Order #95411.", "label": "ProductDishwasher"}
+{"ticket": "Our drawer dishwasher leaks from the door again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Our washer-dryer combo won't drain again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Arctis Mini drips water onto the carpet, can someone take a look?", "label": "ProductAC"}
+{"ticket": "French-door fridge freezer keeps frosting over, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Our window air conditioner drips water onto the carpet again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Window air conditioner compressor won't kick on, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Front-load washer leaves clothes soaking wet, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Hi, our countertop dishwasher won't start the wash cycle since last week. Order #60990.", "label": "ProductDishwasher"}
+{"ticket": "My wall oven won't heat past 200 degrees.", "label": "ProductOven"}
+{"ticket": "Drawer dishwasher leaves dishes dirty, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Hi, our countertop dishwasher leaves dishes dirty since last week. Order #12721.", "label": "ProductDishwasher"}
+{"ticket": "Arctis 12K unit drips water onto the carpet, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Hi, our Arctis 12K unit rattles loudly when cooling since last week. Order #49119.", "label": "ProductAC"}
+{"ticket": "Countertop dishwasher leaves a white film on glasses, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Hi, our gas range burners won't ignite since last week. Order #21591.", "label": "ProductOven"}
+{"ticket": "The technician never showed up for my appointment.", "label": "Other"}
+{"ticket": "Our top-load washing machine leaves clothes soaking wet again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Hi, our front-load washer shakes violently on spin since last week. Order #16054.", "label": "ProductWasher"}
+{"ticket": "Countertop dishwasher never dissolves the pod, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Side-by-side refrigerator is not cooling, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Arctis Mini blows warm air, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Need help: the top-freezer fridge leaks water onto the floor", "label": "ProductFridge"}
+{"ticket": "My side-by-side refrigerator ice maker stopped making ice.", "label": "ProductFridge"}
+{"ticket": "Our window air conditioner drips water onto the carpet again. Second time this month.", "label": "ProductAC"}
+{"ticket": "My French-door fridge leaks water onto the floor.", "label": "ProductFridge"}
+{"ticket": "Our Arctis 12K unit drips water onto the carpet again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Our Arctis 12K rattles loudly when cooling again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Hi, our over-the-range microwave door won't latch shut since last week. Order #75046.", "label": "ProductMicrowave"}
+{"ticket": "Mini fridge ice maker stopped making ice, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Hi, our Arctis 12K blows warm air since last week. Order #45258.", "label": "ProductAC"}
+{"ticket": "Our Arctis 9K drips water onto the carpet again. Second time this month.", "label": "ProductAC"}
+{"ticket": "My built-in microwave sparks inside when running.", "label": "ProductMicrowave"}
+{"ticket": "Hi, our drawer dishwasher leaves a white film on glasses since last week. Order #63788.", "label": "ProductDishwasher"}
+{"ticket": "Hi, our electric range bakes unevenly on one side since last week. Order #80778.", "label": "ProductOven"}
+{"ticket": "Need help: the stackable washer door won't unlock after the cycle", "label": "ProductWasher"}
+{"ticket": "Our side-by-side refrigerator freezer keeps frosting over again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "My countertop dishwasher won't drain the water at the bottom.", "label": "ProductDishwasher"}
+{"ticket": "Our French-door fridge hums loudly all night again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Our drawer dishwasher never dissolves the pod again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Our drawer dishwasher leaves a white film on glasses again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "My Arctis 12K unit compressor won't kick on.", "label": "ProductAC"}
+{"ticket": "Our convection oven won't heat past 200 degrees again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Hi, our window air conditioner compressor won't kick on since last week. Order #72033.", "label": "ProductAC"}
+{"ticket": "Electric range locked the door during self-clean, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Our window air conditioner compressor won't kick on again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Gas range resets its clock when opened, can someone take a look?", "label": "ProductOven"}
+{"ticket": "My countertop dishwasher won't start the wash cycle.", "label": "ProductDishwasher"}
+{"ticket": "My promo code isn't working at checkout.", "label": "Other"}
+{"ticket": "Hi, our Arctis 12K rattles loudly when cooling since last week. Order #59171.", "label": "ProductAC"}
+{"ticket": "Our Arctis Mini rattles loudly when cooling again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Need help: the Arctis 9K compressor won't kick on", "label": "ProductAC"}
+{"ticket": "Need help: the top-freezer fridge keeps food warm on the top shelf", "label": "ProductFridge"}
+{"ticket": "Front-load washer leaks from underneath, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Hi, our washer-dryer combo smells musty since last week. Order #59955.", "label": "ProductWasher"}
+{"ticket": "My window air conditioner drips water onto the carpet.", "label": "ProductAC"}
+{"ticket": "Hi, our window air conditioner drips water onto the carpet since last week. Order #81389.", "label": "ProductAC"}
+{"ticket": "Arctis Mini compressor won't kick on, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Top-freezer fridge is not cooling, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Need help: the convection oven won't heat past 200 degrees", "label": "ProductOven"}
+{"ticket": "Can I reschedule my installation appointment to Friday?", "label": "Other"}
+{"ticket": "Drawer dishwasher leaks from the door, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Our top-load washing machine leaks from underneath again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "My Arctis 12K compressor won't kick on.", "label": "ProductAC"}
+{"ticket": "Need help: the compact dishwasher leaves a white film on glasses", "label": "ProductDishwasher"}
+{"ticket": "Our French-door fridge freezer keeps frosting over again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Compact dishwasher never dissolves the pod, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "My countertop dishwasher leaves a white film on glasses.", "label": "ProductDishwasher"}
+{"ticket": "Our Arctis 12K lost its Wi-Fi link to the app again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Need help: the convection oven bakes unevenly on one side", "label": "ProductOven"}
+{"ticket": "My Arctis 9K ices over after an hour.", "label": "ProductAC"}
+{"ticket": "Stackable washer won't drain, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Top-freezer fridge freezer keeps frosting over, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Washer-dryer combo leaves clothes soaking wet, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Hi, our washer-dryer combo smells musty since last week. Order #21352.", "label": "ProductWasher"}
+{"ticket": "Hi, our Arctis Mini rattles loudly when cooling since last week. Order #82835.", "label": "ProductAC"}
+{"ticket": "My promo code isn't working at checkout.", "label": "Other"}
+{"ticket": "Need help: the convection oven broiler stopped glowing", "label": "ProductOven"}
+{"ticket": "Convection oven broiler stopped glowing, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Need help: the Arctis Mini lost its Wi-Fi link to the app", "label": "ProductAC"}
+{"ticket": "Need help: the Arctis Mini drips water onto the carpet", "label": "ProductAC"}
+{"ticket": "My wall oven locked the door during self-clean.", "label": "ProductOven"}
+{"ticket": "Wall oven burners won't ignite, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Our Arctis 12K ices over after an hour again. Second time this month.", "label": "ProductAC"}
+{"ticket": "The technician never showed up for my appointment.", "label": "Other"}
+{"ticket": "Arctis 12K blows warm air, can someone take a look?", "label": "ProductAC"}
+{"ticket": "My French-door fridge ice maker stopped making ice.", "label": "ProductFridge"}
+{"ticket": "Side-by-side refrigerator hums loudly all night, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Gas range locked the door during self-clean, can someone take a look?", "label": "ProductOven"}
+{"ticket": "My front-load washer door won't unlock after the cycle.", "label": "ProductWasher"}
+{"ticket": "Hi, our top-freezer fridge ice maker stopped making ice since last week. Order #67987.", "label": "ProductFridge"}
+{"ticket": "Front-load washer leaks from underneath, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Arctis 12K unit compressor won't kick on, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Hi, our countertop microwave sparks inside when running since last week. Order #52518.", "label": "ProductMicrowave"}
+{"ticket": "Top-load washing machine leaks from underneath, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Hi, our electric range broiler stopped glowing since last week. Order #39276.", "label": "ProductOven"}
+{"ticket": "Side-by-side refrigerator hums loudly all night, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Hi, our built-in dishwasher leaves dishes dirty since last week. Order #26007.", "label": "ProductDishwasher"}
+{"ticket": "Need help: the front-load washer leaves clothes soaking wet", "label": "ProductWasher"}
+{"ticket": "Arctis 12K unit blows warm air, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Our Arctis Mini ices over after an hour again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Hi, our top-load washing machine door won't unlock after the cycle since last week. Order #39776.", "label": "ProductWasher"}
+{"ticket": "Our wall oven locked the door during self-clean again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Hi, our gas range broiler stopped glowing since last week. Order #16560.", "label": "ProductOven"}
+{"ticket": "Need help: the Arctis Mini lost its Wi-Fi link to the app", "label": "ProductAC"}
+{"ticket": "My Arctis Mini drips water onto the carpet.", "label": "ProductAC"}
+{"ticket": "Our microwave drawer runs but doesn't heat again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "My microwave drawer keypad is unresponsive.", "label": "ProductMicrowave"}
+{"ticket": "Need help: the window air conditioner blows warm air", "label": "ProductAC"}
+{"ticket": "Hi, our drawer dishwasher leaves dishes dirty since last week. Order #96919.", "label": "ProductDishwasher"}
+{"ticket": "My gas range resets its clock when opened.", "label": "ProductOven"}
+{"ticket": "Arctis 12K unit compressor won't kick on, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Arctis 12K blows warm air, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Hi, our window air conditioner blows warm air since last week. Order #71317.", "label": "ProductAC"}
+{"ticket": "My window air conditioner ices over after an hour.", "label": "ProductAC"}
+{"ticket": "Need help: the Arctis 12K compressor won't kick on", "label": "ProductAC"}
+{"ticket": "Our Arctis 12K drips water onto the carpet again. Second time this month.", "label": "ProductAC"}
+{"ticket": "My Arctis 9K blows warm air.", "label": "ProductAC"}
+{"ticket": "Countertop microwave hums then shuts off, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Need help: the washer-dryer combo won't drain", "label": "ProductWasher"}
+{"ticket": "My mini fridge freezer keeps frosting over.", "label": "ProductFridge"}
+{"ticket": "Our top-load washing machine shakes violently on spin again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Our side-by-side refrigerator is not cooling again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Side-by-side refrigerator freezer keeps frosting over, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Arctis 12K unit ices over after an hour, can someone take a look?", "label": "ProductAC"}
+{"ticket": "My Arctis 12K unit lost its Wi-Fi link to the app.", "label": "ProductAC"}
+{"ticket": "Hi, our top-load washing machine shakes violently on spin since last week. Order #28398.", "label": "ProductWasher"}
+{"ticket": "Hi, our Arctis 12K rattles loudly when cooling since last week. Order #18767.", "label": "ProductAC"}
+{"ticket": "Our built-in dishwasher never dissolves the pod again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "My over-the-range microwave turntable won't spin.", "label": "ProductMicrowave"}
+{"ticket": "Mini fridge freezer keeps frosting over, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Hi, our countertop dishwasher leaks from the door since last week. Order #16917.", "label": "ProductDishwasher"}
+{"ticket": "Need help: the countertop microwave keypad is unresponsive", "label": "ProductMicrowave"}
+{"ticket": "Our built-in microwave hums then shuts off again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "French-door fridge leaks water onto the floor, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Arctis 12K unit ices over after an hour, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Need help: the top-freezer fridge keeps food warm on the top shelf", "label": "ProductFridge"}
+{"ticket": "My electric range bakes unevenly on one side.", "label": "ProductOven"}
+{"ticket": "My electric range burners won't ignite.", "label": "ProductOven"}
+{"ticket": "Need help: the French-door fridge hums loudly all night", "label": "ProductFridge"}
+{"ticket": "Our countertop dishwasher leaks from the door again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Our Arctis 12K unit lost its Wi-Fi link to the app again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Arctis 9K compressor won't kick on, can someone take a look?", "label": "ProductAC"}
+{"ticket": "My window air conditioner drips water onto the carpet.", "label": "ProductAC"}
+{"ticket": "Need help: the top-freezer fridge ice maker stopped making ice", "label": "ProductFridge"}
+{"ticket": "Arctis 12K compressor won't kick on, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Hi, our window air conditioner lost its Wi-Fi link to the app since last week. Order #75493.", "label": "ProductAC"}
+{"ticket": "Window air conditioner ices over after an hour, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Arctis 9K blows warm air, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Hi, our drawer dishwasher won't start the wash cycle since last week. Order #98636.", "label": "ProductDishwasher"}
+{"ticket": "Our window air conditioner rattles loudly when cooling again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Need help: the Arctis Mini rattles loudly when cooling", "label": "ProductAC"}
+{"ticket": "Hi, our electric range burners won't ignite since last week. Order #57424.", "label": "ProductOven"}
+{"ticket": "My Arctis 12K unit ices over after an hour.", "label": "ProductAC"}
+{"ticket": "My wall oven won't heat past 200 degrees.", "label": "ProductOven"}
+{"ticket": "Arctis Mini ices over after an hour, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Mini fridge hums loudly all night, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Our gas range broiler stopped glowing again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Our countertop dishwasher won't start the wash cycle again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "My washer-dryer combo smells musty.", "label": "ProductWasher"}
+{"ticket": "Need help: the built-in dishwasher won't start the wash cycle", "label": "ProductDishwasher"}
+{"ticket": "Convection oven burners won't ignite, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Mini fridge ice maker stopped making ice, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Our side-by-side refrigerator leaks water onto the floor again. Second time this month.", "label": "ProductFridge"}
+{"ticket": "Hi, our mini fridge hums loudly all night since last week. Order #34529.", "label": "ProductFridge"}
+{"ticket": "Our Arctis 12K unit drips water onto the carpet again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Hi, our built-in dishwasher won't start the wash cycle since last week. Order #57420.", "label": "ProductDishwasher"}
+{"ticket": "Hi, our Arctis 12K unit lost its Wi-Fi link to the app since last week. Order #24741.", "label": "ProductAC"}
+{"ticket": "Our window air conditioner lost its Wi-Fi link to the app again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Hi, our wall oven broiler stopped glowing since last week. Order #80212.", "label": "ProductOven"}
+{"ticket": "My promo code isn't working at checkout.", "label": "Other"}
+{"ticket": "Need help: the electric range burners won't ignite", "label": "ProductOven"}
+{"ticket": "My mini fridge hums loudly all night.", "label": "ProductFridge"}
+{"ticket": "Our built-in microwave sparks inside when running again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "Our Arctis 12K blows warm air again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Built-in dishwasher leaks from the door, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Need help: the Arctis 9K lost its Wi-Fi link to the app", "label": "ProductAC"}
+{"ticket": "Hi, our Arctis 12K unit compressor won't kick on since last week. Order #34344.", "label": "ProductAC"}
+{"ticket": "Hi, our stackable washer leaks from underneath since last week. Order #27506.", "label": "ProductWasher"}
+{"ticket": "My Arctis 9K lost its Wi-Fi link to the app.", "label": "ProductAC"}
+{"ticket": "Window air conditioner rattles loudly when cooling, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Hi, our Arctis 12K ices over after an hour since last week. Order #99068.", "label": "ProductAC"}
+{"ticket": "Top-load washing machine shakes violently on spin, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Need help: the Arctis Mini blows warm air", "label": "ProductAC"}
+{"ticket": "Hi, our Arctis 12K unit ices over after an hour since last week. Order #18822.", "label": "ProductAC"}
+{"ticket": "Built-in microwave door won't latch shut, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Our Arctis Mini rattles loudly when cooling again. Second time this month.", "label": "ProductAC"}
+{"ticket": "My window air conditioner blows warm air.", "label": "ProductAC"}
+{"ticket": "Arctis 12K unit rattles loudly when cooling, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Our Arctis 9K lost its Wi-Fi link to the app again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Need help: the French-door fridge freezer keeps frosting over", "label": "ProductFridge"}
+{"ticket": "Can I reschedule my installation appointment to Friday?", "label": "Other"}
+{"ticket": "Our convection oven locked the door during self-clean again. Second time this month.", "label": "ProductOven"}
+{"ticket": "Our Arctis 12K compressor won't kick on again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Our top-load washing machine won't drain again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Hi, our Arctis 9K rattles loudly when cooling since last week. Order #21733.", "label": "ProductAC"}
+{"ticket": "Our compact dishwasher leaves a white film on glasses again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Our Arctis 9K compressor won't kick on again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Need help: the wall oven resets its clock when opened", "label": "ProductOven"}
+{"ticket": "Our Arctis 12K unit rattles loudly when cooling again. Second time this month.", "label": "ProductAC"}
+{"ticket": "My window air conditioner drips water onto the carpet.", "label": "ProductAC"}
+{"ticket": "Our Arctis 12K blows warm air again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Arctis 12K rattles loudly when cooling, can someone take a look?", "label": "ProductAC"}
+{"ticket": "My Arctis Mini rattles loudly when cooling.", "label": "ProductAC"}
+{"ticket": "Need help: the mini fridge ice maker stopped making ice", "label": "ProductFridge"}
+{"ticket": "Hi, our built-in microwave door won't latch shut since last week. Order #92257.", "label": "ProductMicrowave"}
+{"ticket": "Hi, our Arctis Mini compressor won't kick on since last week. Order #23796.", "label": "ProductAC"}
+{"ticket": "Hi, our Arctis 12K rattles loudly when cooling since last week. Order #65183.", "label": "ProductAC"}
+{"ticket": "My built-in dishwasher leaks from the door.", "label": "ProductDishwasher"}
+{"ticket": "My Arctis 12K unit lost its Wi-Fi link to the app.", "label": "ProductAC"}
+{"ticket": "Our countertop dishwasher leaves dishes dirty again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Hi, our Arctis 12K unit drips water onto the carpet since last week. Order #43022.", "label": "ProductAC"}
+{"ticket": "Need help: the washer-dryer combo smells musty", "label": "ProductWasher"}
+{"ticket": "Arctis 12K unit drips water onto the carpet, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Need help: the window air conditioner ices over after an hour", "label": "ProductAC"}
+{"ticket": "My Arctis 9K lost its Wi-Fi link to the app.", "label": "ProductAC"}
+{"ticket": "Hi, our over-the-range microwave sparks inside when running since last week. Order #91865.", "label": "ProductMicrowave"}
+{"ticket": "Compact dishwasher won't start the wash cycle, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "My Arctis Mini lost its Wi-Fi link to the app.", "label": "ProductAC"}
+{"ticket": "Need help: the top-load washing machine door won't unlock after the cycle", "label": "ProductWasher"}
+{"ticket": "My built-in dishwasher leaves a white film on glasses.", "label": "ProductDishwasher"}
+{"ticket": "Need help: the Arctis 12K rattles loudly when cooling", "label": "ProductAC"}
+{"ticket": "Need help: the top-freezer fridge freezer keeps frosting over", "label": "ProductFridge"}
+{"ticket": "Our front-load washer door won't unlock after the cycle again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "Side-by-side refrigerator is not cooling, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Arctis 9K lost its Wi-Fi link to the app, can someone take a look?", "label": "ProductAC"}
+{"ticket": "My top-freezer fridge leaks water onto the floor.", "label": "ProductFridge"}
+{"ticket": "My Arctis 12K unit blows warm air.", "label": "ProductAC"}
+{"ticket": "Our window air conditioner drips water onto the carpet again. Second time this month.", "label": "ProductAC"}
+{"ticket": "My window air conditioner lost its Wi-Fi link to the app.", "label": "ProductAC"}
+{"ticket": "Our over-the-range microwave door won't latch shut again. Second time this month.", "label": "ProductMicrowave"}
+{"ticket": "My over-the-range microwave hums then shuts off.", "label": "ProductMicrowave"}
+{"ticket": "My electric range bakes unevenly on one side.", "label": "ProductOven"}
+{"ticket": "Need help: the side-by-side refrigerator freezer keeps frosting over", "label": "ProductFridge"}
+{"ticket": "Need help: the Arctis 12K rattles loudly when cooling", "label": "ProductAC"}
+{"ticket": "My mini fridge keeps food warm on the top shelf.", "label": "ProductFridge"}
+{"ticket": "Hi, our French-door fridge leaks water onto the floor since last week. Order #49678.", "label": "ProductFridge"}
+{"ticket": "Need help: the Arctis Mini drips water onto the carpet", "label": "ProductAC"}
+{"ticket": "My gas range won't heat past 200 degrees.", "label": "ProductOven"}
+{"ticket": "Our window air conditioner drips water onto the carpet again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Our Arctis 12K unit ices over after an hour again. Second time this month.", "label": "ProductAC"}
+{"ticket": "My Arctis 9K blows warm air.", "label": "ProductAC"}
+{"ticket": "Stackable washer won't drain, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Drawer dishwasher won't start the wash cycle, can someone take a look?", "label": "ProductDishwasher"}
+{"ticket": "Need help: the wall oven burners won't ignite", "label": "ProductOven"}
+{"ticket": "Need help: the Arctis 12K rattles loudly when cooling", "label": "ProductAC"}
+{"ticket": "My convection oven broiler stopped glowing.", "label": "ProductOven"}
+{"ticket": "Do you offer financing on large purchases?", "label": "Other"}
+{"ticket": "My Arctis Mini compressor won't kick on.", "label": "ProductAC"}
+{"ticket": "My side-by-side refrigerator is not cooling.", "label": "ProductFridge"}
+{"ticket": "My Arctis Mini compressor won't kick on.", "label": "ProductAC"}
+{"ticket": "Arctis 12K unit drips water onto the carpet, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Need help: the window air conditioner drips water onto the carpet", "label": "ProductAC"}
+{"ticket": "Hi, our side-by-side refrigerator ice maker stopped making ice since last week. Order #11786.", "label": "ProductFridge"}
+{"ticket": "Our built-in dishwasher won't drain the water at the bottom again. Second time this month.", "label": "ProductDishwasher"}
+{"ticket": "Washer-dryer combo door won't unlock after the cycle, can someone take a look?", "label": "ProductWasher"}
+{"ticket": "Arctis 9K blows warm air, can someone take a look?", "label": "ProductAC"}
+{"ticket": "My window air conditioner drips water onto the carpet.", "label": "ProductAC"}
+{"ticket": "My Arctis 12K unit compressor won't kick on.", "label": "ProductAC"}
+{"ticket": "Hi, our over-the-range microwave runs but doesn't heat since last week. Order #19762.", "label": "ProductMicrowave"}
+{"ticket": "Need help: the Arctis 9K rattles loudly when cooling", "label": "ProductAC"}
+{"ticket": "My electric range broiler stopped glowing.", "label": "ProductOven"}
+{"ticket": "Arctis 12K unit rattles loudly when cooling, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Hi, our top-freezer fridge leaks water onto the floor since last week. Order #37007.", "label": "ProductFridge"}
+{"ticket": "Arctis 12K blows warm air, can someone take a look?", "label": "ProductAC"}
+{"ticket": "My wall oven broiler stopped glowing.", "label": "ProductOven"}
+{"ticket": "Hi, our window air conditioner compressor won't kick on since last week. Order #33672.", "label": "ProductAC"}
+{"ticket": "My Arctis 12K unit blows warm air.", "label": "ProductAC"}
+{"ticket": "Our Arctis 9K ices over after an hour again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Hi, our Arctis Mini blows warm air since last week. Order #27048.", "label": "ProductAC"}
+{"ticket": "Convection oven locked the door during self-clean, can someone take a look?", "label": "ProductOven"}
+{"ticket": "Hi, our Arctis Mini compressor won't kick on since last week. Order #31788.", "label": "ProductAC"}
+{"ticket": "Arctis 9K drips water onto the carpet, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Side-by-side refrigerator keeps food warm on the top shelf, can someone take a look?", "label": "ProductFridge"}
+{"ticket": "Need help: the gas range resets its clock when opened", "label": "ProductOven"}
+{"ticket": "Need help: the French-door fridge keeps food warm on the top shelf", "label": "ProductFridge"}
+{"ticket": "Need help: the Arctis 9K lost its Wi-Fi link to the app", "label": "ProductAC"}
+{"ticket": "Need help: the Arctis 12K unit ices over after an hour", "label": "ProductAC"}
+{"ticket": "Arctis 12K unit lost its Wi-Fi link to the app, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Arctis 9K blows warm air, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Arctis 12K unit lost its Wi-Fi link to the app, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Where is my delivery? It was due yesterday.", "label": "Other"}
+{"ticket": "Arctis 12K unit rattles loudly when cooling, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Need help: the built-in dishwasher leaves dishes dirty", "label": "ProductDishwasher"}
+{"ticket": "Our window air conditioner drips water onto the carpet again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Hi, our Arctis 9K lost its Wi-Fi link to the app since last week. Order #71404.", "label": "ProductAC"}
+{"ticket": "Need help: the countertop dishwasher leaves dishes dirty", "label": "ProductDishwasher"}
+{"ticket": "Hi, our Arctis 12K compressor won't kick on since last week. Order #18932.", "label": "ProductAC"}
+{"ticket": "Hi, our Arctis 12K unit lost its Wi-Fi link to the app since last week. Order #33589.", "label": "ProductAC"}
+{"ticket": "Need help: the window air conditioner blows warm air", "label": "ProductAC"}
+{"ticket": "Our Arctis 12K lost its Wi-Fi link to the app again. Second time this month.", "label": "ProductAC"}
+{"ticket": "My stackable washer leaves clothes soaking wet.", "label": "ProductWasher"}
+{"ticket": "Our top-load washing machine won't drain again. Second time this month.", "label": "ProductWasher"}
+{"ticket": "My top-freezer fridge ice maker stopped making ice.", "label": "ProductFridge"}
+{"ticket": "Hi, our Arctis 12K drips water onto the carpet since last week. Order #51159.", "label": "ProductAC"}
+{"ticket": "Where is my delivery? It was due yesterday.", "label": "Other"}
+{"ticket": "Hi, our Arctis 12K blows warm air since last week. Order #73466.", "label": "ProductAC"}
+{"ticket": "Our Arctis 12K unit compressor won't kick on again. Second time this month.", "label": "ProductAC"}
+{"ticket": "Need help: the top-load washing machine shakes violently on spin", "label": "ProductWasher"}
+{"ticket": "Arctis 12K unit compressor won't kick on, can someone take a look?", "label": "ProductAC"}
+{"ticket": "Need help: the Arctis 12K compressor won't kick on", "label": "ProductAC"}
+{"ticket": "Built-in microwave turntable won't spin, can someone take a look?", "label": "ProductMicrowave"}
+{"ticket": "Need help: the Arctis Mini ices over after an hour", "label": "ProductAC"}
