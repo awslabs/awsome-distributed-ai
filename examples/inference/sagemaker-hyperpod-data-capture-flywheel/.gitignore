@@ -1,6 +1,8 @@
 env.sh
 labeled.csv
 train.jsonl
+data/tickets_traffic.jsonl
+data/tickets_eval.jsonl
 qwen2.5-3b-instruct/
 __pycache__/
 *.pyc
