@@ -11,7 +11,7 @@ It runs one full turn of the flywheel on a single SageMaker HyperPod (EKS) clust
 5. **Fine-tune** with LoRA using the HyperPod training operator, on a second GPU in the same cluster.
 6. **Redeploy** the fine-tuned model side by side, with capture still on, and evaluate it.
 
-![Solution architecture](images/flywheel_architecture.png)
+![Solution architecture](images/flywheel_architecture.svg)
 
 > **All data is synthetic.** `scripts/gen_dataset.py` generates the support tickets deterministically (it is seeded), and no customer data is involved. The model is `Qwen2.5-3B-Instruct`, which is released under the Qwen Research License (non-commercial). For production use, choose a model whose license fits your use case.
 
