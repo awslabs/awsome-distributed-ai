@@ -24,7 +24,7 @@ The capture prefix held 3,955 records in 9.0 MB, about 2.3 KB per record. The up
 
 The job fine-tuned the model with LoRA at rank 16 (about 29.9 million trainable parameters) for 2 epochs over 900 examples.
 
-```
+```text
 {'loss': 0.2484, 'grad_norm': 3.387, 'learning_rate': 3.91e-05, 'epoch': 0.09}
 {'loss': 0.018, 'grad_norm': 0.0037, 'learning_rate': 8.26e-05, 'epoch': 0.18}
 ...
