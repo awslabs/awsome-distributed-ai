@@ -382,7 +382,7 @@ kubectl logs -f "$(kubectl get pods -l training.kubeflow.org/job-role=launcher \
 
 **Expected:** `NET/OFI Selected Provider is efa` (once per rank) and an `all_reduce_perf`
 bandwidth table. `NET/OFI Selected Provider is tcp`, `NET/Socket`, or no `NET/OFI` line at all
-means NCCL used the pod network — the same fallback as in 5.3, and the same verdict. The `nccl-tests` binaries in `$EFA_IMAGE` carry kernels for `sm_80` to `sm_103`, so on the Blackwell RTX PRO GPUs of `g7` and `g7e` (compute capability 12.0) the provider line appears and the test then stops with `no kernel image is available for execution on the device`; the bandwidth table needs an image built for `sm_120`.
+means NCCL used the pod network — the same fallback as in 5.3, and the same verdict. NCCL and `nccl-tests` in `$EFA_IMAGE` are built for `sm_80` to `sm_103` with no PTX, so this step runs on `g5`, `g6e`, `p4d`, `p4de`, `p5`, `p5en` and `p6`, and not on the T4 of `g4dn` (compute capability 7.5) or the Blackwell RTX PRO GPUs of `g7` and `g7e` (12.0): the provider line appears and the test then stops with `no kernel image is available for execution on the device`. On those types the verdict rests on 5.2 and 5.3.
 
 ---
 
