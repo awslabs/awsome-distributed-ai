@@ -152,7 +152,7 @@ kubectl delete configmap router-train
 source athena/run_athena.sh
 run_athena "DROP VIEW IF EXISTS labeled_training_data"; run_athena "DROP VIEW IF EXISTS preds"
 run_athena "DROP TABLE IF EXISTS inference_captures"; run_athena "DROP DATABASE IF EXISTS ${ATHENA_DB}"
-for p in capture athena-results training "${MODEL_V2_LOCATION}"; do aws s3 rm "s3://${BUCKET}/${p}/" --recursive; done
+for p in capture athena-results training "${MODEL_LOCATION:?}" "${MODEL_V2_LOCATION:?}"; do aws s3 rm "s3://${BUCKET:?}/${p}/" --recursive; done
 ```
 
 Also remove the IAM permissions you granted for this walkthrough.
