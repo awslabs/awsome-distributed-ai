@@ -69,7 +69,7 @@ render < manifests/endpoint.yaml | kubectl apply -f -
 kubectl get pods -l app=$ENDPOINT_NAME -o custom-columns='NAME:.metadata.name,READY:.status.containerStatuses[*].ready'
 ```
 
-**3. (Optional) Regenerate the data.** The committed files in `data/` are already the output of this command.
+**3. Generate the data.** `scripts/gen_dataset.py` is seeded, so every run writes the same tickets.
 
 ```bash
 (cd data && python3 ../scripts/gen_dataset.py)
