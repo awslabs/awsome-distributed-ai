@@ -34,6 +34,7 @@ def collate(batch):
             "labels": torch.tensor(pad([b["labels"] for b in batch], -100)),
             "attention_mask": torch.tensor(pad([[1] * len(b["input_ids"]) for b in batch], 0))}
 
+set_seed(42)   # before get_peft_model, so the LoRA initialization is reproducible
 model = AutoModelForCausalLM.from_pretrained("/work/base", torch_dtype=torch.bfloat16, device_map="cuda:0")
 model = get_peft_model(model, LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM",
     target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]))
