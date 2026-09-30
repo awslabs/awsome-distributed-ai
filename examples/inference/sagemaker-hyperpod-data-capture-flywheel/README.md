@@ -41,10 +41,11 @@ It runs one full turn of the flywheel on a single SageMaker HyperPod (EKS) clust
 - **Two free NVIDIA GPUs.** We used `ml.g6e.8xlarge` for serving and `ml.g6e.xlarge` for training.
 - **Local tools:** `kubectl`, the AWS CLI, and Python 3.
 - **An S3 bucket** in the same Region.
-- **IAM permissions for three identities:**
-  - **The Mountpoint-S3 CSI driver role** needs `s3:PutObject`, `s3:AbortMultipartUpload`, and `s3:DeleteObject` on the bucket, plus `kms:GenerateDataKey` if you set `kmsKeyId`. If this role can't write, the endpoint stays healthy but no captures ever appear.
+- **IAM permissions for four identities:**
+  - **The Mountpoint-S3 CSI driver role** needs `s3:PutObject`, `s3:AbortMultipartUpload`, and `s3:DeleteObject` on the bucket, plus `kms:Decrypt`, `kms:GenerateDataKey`, and `kms:DescribeKey` if you set `kmsKeyId`. If this role can't write, the endpoint stays healthy but no captures ever appear.
+  - **The HyperPod inference operator execution role** needs `s3:PutObject` on the bucket, plus `kms:Decrypt` and `kms:GenerateDataKey` if you set `kmsKeyId`.
   - **The training service account (`$TRAIN_SA`)** needs read and write access to the bucket, through EKS Pod Identity.
-  - **Your identity for Athena** needs read access to `capture/` and write access to `athena-results/`.
+  - **Your identity for Athena** needs read access to `capture/`, and read and write access to `athena-results/`.
 
 ## Walkthrough
 
