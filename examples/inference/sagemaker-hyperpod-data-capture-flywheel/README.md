@@ -59,7 +59,7 @@ kubectl get crd | grep -E 'inferenceendpointconfigs|hyperpodpytorchjobs'     # e
 
 ```bash
 pip install -q huggingface_hub
-python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen2.5-3B-Instruct', local_dir='qwen2.5-3b-instruct')"
+python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen2.5-3B-Instruct', revision='aa8e72537993ba99e69dfaafa59ed015b17504d1', local_dir='qwen2.5-3b-instruct')"
 aws s3 sync qwen2.5-3b-instruct "s3://${BUCKET}/${MODEL_LOCATION}/" --exclude ".cache/*"
 ```
 
