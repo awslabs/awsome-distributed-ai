@@ -119,6 +119,8 @@ kubectl get hyperpodpytorchjob router-ft -o jsonpath='{range .status.conditions[
 ```bash
 ( export ENDPOINT_NAME="appliance-router-v2" MODEL_LOCATION="$MODEL_V2_LOCATION" SERVE_INSTANCE_TYPE="$TRAIN_INSTANCE_TYPE"
   render < manifests/endpoint.yaml | kubectl apply -f - )
+for i in $(seq 30); do kubectl get pod -l app=appliance-router-v2 -o name | grep -q . && break; sleep 10; done
+kubectl wait --for=condition=Ready pod -l app=appliance-router-v2 --timeout=15m
 scripts/pod.sh appliance-router    eval /tmp/tickets_eval.jsonl  --port 8000 --labels v1   # before
 scripts/pod.sh appliance-router-v2 eval /tmp/tickets_eval.jsonl  --port 8000 --labels v2   # after
 scripts/pod.sh appliance-router-v2 eval /tmp/tickets_probe.jsonl --port 8000 --labels v2   # hand-written probe
