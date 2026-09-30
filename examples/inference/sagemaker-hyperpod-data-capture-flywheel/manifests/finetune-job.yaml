@@ -32,7 +32,7 @@ spec:
               command: ["bash", "-c"]
               args:
                 - pip install -q peft==0.14.0 datasets==3.2.0 hyperpod-elastic-agent==1.1.3 &&
-                  hyperpodrun --nnodes=1 --nproc_per_node=1 /scripts/train.py
+                  hyperpodrun --tee=3 --log_dir=/tmp/hyperpod --nnodes=1 --nproc_per_node=1 /scripts/train.py
               env:
                 - { name: BASE_MODEL_S3, value: "s3://${BUCKET}/${MODEL_LOCATION}/" }
                 - { name: TRAIN_FILE_S3, value: "s3://${BUCKET}/training/train.jsonl" }
