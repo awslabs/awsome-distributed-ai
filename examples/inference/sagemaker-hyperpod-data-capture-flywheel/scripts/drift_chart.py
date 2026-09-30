@@ -1,4 +1,4 @@
-"""Redraw the original draft's "Other share" chart from the fresh run's Athena output (Step 8)."""
+"""Redraw images/drift_other_share.png from the reference run's 05_other_share_per_minute output (README step 6). Values are hard-coded."""
 import os, matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
