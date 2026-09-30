@@ -1,0 +1,11 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# .gitignore does NOT apply to a Docker build context — without this file the
+# filled-in `env_vars` (HF_TOKEN + AWS account id) is uploaded to the daemon,
+# and to any remote/CI builder, on every `docker build .` in this directory.
+# No COPY in nemo-rl.Dockerfile is broad (each names a specific file), so nothing
+# lands in an image layer today; this closes the context-upload exposure and
+# guards against a future broad COPY.
+env_vars
+*.log
+__pycache__/

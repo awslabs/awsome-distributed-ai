@@ -1,0 +1,9 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+# Local environment file with filled-in secrets/values — never commit
+env_vars
+
+# Run artifacts
+*.log
+__pycache__/
