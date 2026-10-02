@@ -1,0 +1,66 @@
+# @package _global_
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Mixed code/math with the SATURATED code tiers removed (difficulty-filtered).
+#
+# PURPOSE
+# Treatment arm for the difficulty-filter experiment. The control is the
+# unfiltered `mixed` group (conf/data/mixed.yaml), which is what
+# the control run trains on. Everything else about the two runs is
+# held identical (r=128/alpha=256, cap 32768, max_num_seqs=56), so the ONLY
+# variable is which code problems are in the training set.
+#
+# WHY FILTER
+# GRPO's advantage is (r_i - mean(r)) / std(r) within a prompt group of
+# n_responses_per_prompt=4. A group whose 4 rewards are IDENTICAL has std=0,
+# advantage 0, and therefore contributes NO GRADIENT. Problems the base model
+# already solves every time are dead weight -- they burn rollout tokens and
+# sandbox capacity and teach nothing. Measured from the r=128 [REWARD] samples:
+#
+#     apps          87.5% of samples scored exactly 1.0  -> ~58.6% dead groups
+#     codecontests  70.0%                                -> ~24.0%
+#     codeforces    57.5%                                -> ~11.0%
+#     taco          52.5%                                -> ~ 8.0%
+#
+# apps is BOTH the most saturated code set and the one validation is dominated by
+# (5067 of 7601 code val rows = 66.7%). Its `introductory` tier is the saturated
+# slice; taco's `EASY` tier is the analogue.
+#
+# HOW THIS FILE'S TRAIN SET WAS BUILT
+# By filtering the ALREADY-MIXED control train file, NOT by re-mixing filtered
+# sources. The original per-source mix ratios cannot be reproduced: the live mix
+# holds 25,837 taco rows against a 25,443-row source file, because it also carries
+# rows with EMPTY difficulty labels (142 apps, 394 taco) that the source train
+# parquets lack. Re-mixing would therefore have changed composition AND difficulty
+# at once and ruined the single-variable comparison.
+#
+#   kubectl exec fsx-utils -- python3 /tmp/filter_difficulty.py \
+#     --input  /fsx/data/verl/data/mixed-code-math/train.parquet \
+#     --output /fsx/data/verl/data/mixed-code-math-hard/train.parquet \
+#     --drop-by-source apps:introductory taco:EASY
+#
+# Result (verified by streaming read-back: schema identical, no dropped labels
+# remain, row count matches):
+#     59,308 -> 47,765 rows (-19.5%)
+#     dropped: apps introductory 2,639  +  taco EASY 8,904
+#     code   41,112 -> 29,569 (69.3% -> 61.9% of the mix)
+#     math   18,196 -> 18,196  (UNTOUCHED, so math is a clean control)
+#     ~497 steps/epoch at train_batch_size=96
+#
+# Rows with empty/UNKNOWN difficulty are KEPT -- unknown difficulty is not the
+# same as easy, and codecontests carries no difficulty labels at all.
+#
+# VALIDATION IS DELIBERATELY *NOT* FILTERED
+# val_file points at the ORIGINAL mixed-code-math val.parquet, byte-identical to
+# the control's. This is load-bearing:
+#   - the measured base@32768 stays valid (weighted CODE 0.7231, MATH 0.4971),
+#     so val_before_train is NOT needed -- saves a ~3h validation pass
+#   - the verified row counts still apply (8117 rows: apps 5067,
+#     codecontests 1272, taco 1199, codeforces 63, numina_* 516)
+#   - treatment and control are measured on the SAME instrument
+# Filtering val would void all three at once.
+data_name: mixed-code-math-hard
+data_paths:
+  train_file: /fsx/data/verl/data/mixed-code-math-hard/train.parquet
+  val_file: /fsx/data/verl/data/mixed-code-math/val.parquet
+  prompt_key: prompt

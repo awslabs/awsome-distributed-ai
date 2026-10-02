@@ -1,0 +1,11 @@
+# @package _global_
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Mixed code/math dataset (70/30 split)
+# Created by: data/prepare_data.py --mix or data/mix_datasets.py
+# Datasets: TACO + APPS + CodeContests (code) + Eurus sampled (math)
+data_name: mixed-code-math
+data_paths:
+  train_file: /fsx/data/verl/data/mixed-code-math/train.parquet
+  val_file: /fsx/data/verl/data/mixed-code-math/val.parquet
+  prompt_key: prompt

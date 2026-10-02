@@ -1,0 +1,142 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# =============================================================================
+# Validation-Split reward eval Job (K8s, not Ray)
+#
+# Runs scripts/eval_val_split.py as a plain K8s Job on a node with spare CPU
+# (co-locates fine on the B200 node while vLLM serves — the script only does
+# async HTTP to the vllm-eval + sandbox-fusion services). This replaces the
+# Ray-job submission path (scripts/submit_val_eval.sh) for the case where the
+# Ray worker group has been scaled to 0 to free the single GPU node for vLLM.
+#
+# Rendered via envsubst allowlist (see scripts/submit_val_eval_k8s.sh). Writes:
+#   /fsx/data/verl/eval_results/${EVAL_RUN_NAME}/val_split.json
+#
+# Installs verl (for custom_reward_fn -> default_compute_score) + aiohttp/pandas/
+# pyarrow at start, from a small python image, with caches on a work emptyDir.
+# =============================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: valeval-${EVAL_RUN_SLUG}
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: valeval
+    project: verl
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: valeval
+        project: verl
+    spec:
+      restartPolicy: Never
+      # Co-locate on the GPU node (spare CPU) OR any CPU node; accept both labels.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: In
+                    # m5.xlarge removed: 4 vCPU against the container's cpu: "8" /
+                    # memory: "16Gi" requests below, so that branch could never schedule
+                    # and the Job sat Pending if it was the only match.
+                    values: ["p6-b200.48xlarge", "ml.p6-b200.48xlarge", "m5.8xlarge"]
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: valeval
+          image: ${VALEVAL_IMAGE}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export TMPDIR=/work/tmp PIP_CACHE_DIR=/work/pipcache HF_HOME=/work/hf
+              mkdir -p "$TMPDIR" "$PIP_CACHE_DIR" "$HF_HOME"
+              echo "[valeval] installing deps (verl reward-score + aiohttp/pandas/pyarrow) ..."
+              apt-get update -qq && apt-get install -y -qq git curl >/work/apt.log 2>&1 || { cat /work/apt.log; exit 1; }
+              # torch and transformers are pinned exactly -- the reported eval runs recorded
+              # torch 2.13.0+cpu / transformers 4.49.0. The rest are bounded rather than
+              # exact: no run recorded what this pod resolved for them, so an `==` here
+              # would be an invented number dressed up as a measurement.
+              pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.13.0+cpu" >/work/pip-torch.log 2>&1 || { tail -30 /work/pip-torch.log; exit 1; }
+              pip install \
+                "aiohttp>=3.9,<4" \
+                "tqdm>=4.66,<5" \
+                "pandas>=2.0,<3" \
+                "pyarrow>=14,<25" \
+                "transformers==4.49.0" \
+                "verl[mcore] @ git+https://github.com/volcengine/verl.git@${VERL_PIN}" >/work/pip.log 2>&1 || { tail -50 /work/pip.log; exit 1; }
+
+              OUT="/fsx/data/verl/eval_results/${EVAL_RUN_NAME}/val_split.json"
+              mkdir -p "$(dirname "${OUT}")"
+
+              VLLM_URL="http://vllm-eval.${KUBE_NAMESPACE}.svc.cluster.local:8000/v1"
+              SANDBOX_URL="http://sandbox-fusion.${KUBE_NAMESPACE}.svc.cluster.local:8080/run_code"
+              echo "[valeval] waiting for vLLM ..."
+              for i in $(seq 1 120); do
+                if curl -sf "http://vllm-eval.${KUBE_NAMESPACE}.svc.cluster.local:8000/v1/models" >/dev/null; then
+                  echo "[valeval] vLLM up"; break; fi
+                sleep 15
+                # Fail at the readiness gate rather than falling through into the eval
+                # driver with a dead endpoint.
+                if [ "$i" -eq 120 ]; then
+                  echo "[valeval] ERROR: vLLM never became ready at ${VLLM_URL}" >&2
+                  exit 1
+                fi
+              done
+
+              LIMIT_ARG=""
+              if [ -n "${VAL_LIMIT}" ] && [ "${VAL_LIMIT}" != "0" ]; then
+                LIMIT_ARG="--limit ${VAL_LIMIT}"
+              fi
+              STRATIFY_ARG=""
+              if [ "${VAL_STRATIFY}" = "true" ]; then
+                STRATIFY_ARG="--stratify"
+              fi
+
+              cd /work
+              echo "[valeval] scoring ${VAL_PARQUET} via served=${VLLM_SERVED_NAME}"
+              python3 ${VALEVAL_SCRIPT} \
+                --val-parquet "${VAL_PARQUET}" \
+                --vllm-url "${VLLM_URL}" \
+                --served-name "${VLLM_SERVED_NAME}" \
+                --sandbox-url "${SANDBOX_URL}" \
+                --output "${OUT}" \
+                --n-samples "${VAL_N_SAMPLES}" \
+                --concurrency "${VAL_CONCURRENCY}" \
+                --max-tokens "${VAL_MAX_TOKENS}" \
+                ${STRATIFY_ARG} \
+                ${LIMIT_ARG}
+              echo "[valeval] DONE -> ${OUT}"
+          env:
+            - name: HF_HUB_OFFLINE
+              value: "0"
+            - name: TOKENIZERS_PARALLELISM
+              value: "false"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+              ephemeral-storage: "4Gi"
+            limits:
+              cpu: "16"
+              memory: "48Gi"
+              ephemeral-storage: "8Gi"
+          volumeMounts:
+            - name: fsx-storage
+              mountPath: /fsx
+            - name: work
+              mountPath: /work
+      volumes:
+        - name: fsx-storage
+          persistentVolumeClaim:
+            claimName: fsx-lustre
+        - name: work
+          emptyDir:
+            sizeLimit: 20Gi
