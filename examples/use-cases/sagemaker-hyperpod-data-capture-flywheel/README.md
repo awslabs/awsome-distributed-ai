@@ -1,6 +1,6 @@
 # Continuous model improvement flywheel with SageMaker HyperPod Data Capture
 
-This repository contains the companion code for the AWS Machine Learning Blog post *Enable Data Capture on Amazon SageMaker HyperPod to Build a Continuous Model Improvement Flywheel*.
+This sample is the companion code for the AWS Machine Learning Blog post *Enable Data Capture on Amazon SageMaker HyperPod to Build a Continuous Model Improvement Flywheel*. Run every command in the walkthrough from this directory (`examples/use-cases/sagemaker-hyperpod-data-capture-flywheel/`).
 
 It runs one full turn of the flywheel on a single SageMaker HyperPod (EKS) cluster:
 
@@ -15,7 +15,7 @@ It runs one full turn of the flywheel on a single SageMaker HyperPod (EKS) clust
 
 > **All data is synthetic.** `scripts/gen_dataset.py` generates the support tickets deterministically (it is seeded), and no customer data is involved. The model is `Qwen2.5-3B-Instruct`, which is released under the Qwen Research License (non-commercial). For production use, choose a model whose license fits your use case.
 
-## Repository layout
+## Directory layout
 
 | Path | What it is |
 |---|---|
@@ -33,7 +33,7 @@ It runs one full turn of the flywheel on a single SageMaker HyperPod (EKS) clust
 | `athena/export_training_data.sh` | Exports labeled rows, builds `train.jsonl`, and uploads it |
 | `data/` | The generated tickets, plus 24 hand-written probe tickets (`tickets_probe.jsonl`) |
 | `results/` | Outputs from the reference run, so you can compare your results with ours |
-| `images/` | Architecture diagram (SVG and PNG) and the drift chart |
+| `images/` | Architecture diagram (SVG) and the drift chart |
 
 ## Prerequisites
 
