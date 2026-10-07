@@ -1,0 +1,9 @@
+# Fine-tuned model (seven labels)
+overall 280/280 = 100.00%
+  ProductFridge      40/40
+  ProductWasher      40/40
+  ProductOven        40/40
+  ProductDishwasher  40/40
+  ProductMicrowave   40/40
+  ProductAC          40/40
+  Other              40/40
