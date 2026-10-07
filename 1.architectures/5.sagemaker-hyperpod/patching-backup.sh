@@ -16,9 +16,18 @@
  failed_commands=()
 
  is_slurmctld_was_running=false
+ is_slurmdbd_was_running=false
 
  check_slurmctld_running() {
      if pgrep -x slurmctld > /dev/null; then
+         return 0  # Return 0 if running.
+     else
+         return 1  # Return 1 if not running.
+     fi
+ }
+
+ check_slurmdbd_running() {
+     if pgrep -x slurmdbd > /dev/null; then
          return 0  # Return 0 if running.
      else
          return 1  # Return 1 if not running.
@@ -36,12 +45,26 @@
      else
          echo "Slurmctld not running ...."
      fi
+
+     check_slurmdbd_running
+     if [ $? -eq 0 ]; then
+         is_slurmdbd_was_running=true
+         sudo systemctl stop slurmdbd
+         echo "slurmdbd service stopped."
+     else
+         echo "Slurmdbd not running ...."
+     fi
  }
 
  # Function to start service
  start_services() {
      sudo systemctl daemon-reload
      echo "Ran systemctl daemon-reload"
+
+     if $is_slurmdbd_was_running; then
+         sudo systemctl start slurmdbd
+         echo "slurmdbd service started."
+     fi
 
      if $is_slurmctld_was_running; then
          sudo systemctl start slurmctld
