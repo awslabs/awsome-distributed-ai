@@ -93,7 +93,7 @@ spec:
       containers:
       - name: sglang
         # Built from ../../Dockerfile.efa by ../../build-image.sh (SGLang
-        # dev-dsv41 pinned by digest + the AWS EFA installer; see the README
+        # v0.5.21 + the AWS EFA installer; see the README
         # for the build args). Paste the URI it prints.
         image: ${SGLANG_IMAGE}
         imagePullPolicy: IfNotPresent
