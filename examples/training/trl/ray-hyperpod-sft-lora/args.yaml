@@ -1,0 +1,49 @@
+# Ray TorchTrainer on HyperPod — Training Configuration
+
+# Cluster scaling — 1 worker is sufficient for Qwen3-0.6B with LoRA.
+# Scale up num_workers for larger models (7B+) or larger datasets.
+num_workers: 1
+num_gpus_per_worker: 1
+use_gpu: true
+
+# Resilience — HyperPod auto-recovers failed nodes; FailureConfig retries the job
+max_failures: 3
+
+# Model & data
+script_args:
+  model_id: "Qwen/Qwen3-0.6B"
+  train_dataset_path: "/mnt/fsx/datasets/medical-o1/train"
+  val_dataset_path: "/mnt/fsx/datasets/medical-o1/val"
+  checkpoint_dir: "/mnt/fsx/checkpoints/qwen3-medical"
+  output_dir: "/mnt/fsx/output/qwen3-medical"
+  attn_implementation: "flash_attention_2"
+  apply_truncation: true
+  auto_calculate_lengths: true
+  deserialize_messages: true
+  load_in_4bit: false
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  merge_weights: true
+  early_stopping: false
+
+# SFT training config
+sft_config:
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 2
+  num_train_epochs: 2
+  learning_rate: 2.0e-4
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.1
+  logging_steps: 10
+  save_steps: 100
+  eval_steps: 100
+  max_seq_length: 2048
+  gradient_checkpointing: true
+  # FSDP — uncomment for multi-GPU training (7B+ models across multiple workers)
+  # fsdp: "full_shard auto_wrap offload"
+  # fsdp_config:
+  #   backward_prefetch: "backward_pre"
+  #   forward_prefetch: true
+  #   use_orig_params: true
