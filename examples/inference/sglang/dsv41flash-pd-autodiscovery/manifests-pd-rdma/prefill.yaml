@@ -59,12 +59,9 @@ spec:
     spec:
       # Pod network on purpose — the router dials <podIP>:30000 for every
       # worker, so co-located prefill/decode pods need distinct IPs.
-      # hostIPC/hostPID share the node's IPC and PID namespaces with the other
-      # engine pods (a prerequisite for the NVLink variant; harmless here).
-      # With hostIPC the container uses the node's /dev/shm directly, so no
-      # emptyDir is mounted there.
-      hostIPC: true
-      hostPID: true
+      # No hostIPC/hostPID: KV moves over LIBFABRIC, so nothing needs the
+      # node's IPC or PID namespaces. /dev/shm comes from a memory-backed
+      # emptyDir (see volumes).
       # Target either Blackwell node type on either cluster type. kubelet always
       # sets node.kubernetes.io/instance-type; HyperPod instance groups use the
       # SageMaker-style `ml.` prefix, a plain EKS managed nodegroup uses the
@@ -95,9 +92,9 @@ spec:
         effect: NoSchedule
       containers:
       - name: sglang
-        # Built from ../Dockerfile by ../build-image.sh (lmsysorg/sglang
-        # nightly pinned by digest + the AWS EFA installer). Paste the URI it
-        # prints.
+        # Built from ../../Dockerfile.efa by ../../build-image.sh (SGLang
+        # dev-dsv41 pinned by digest + the AWS EFA installer; see the README
+        # for the build args). Paste the URI it prints.
         image: ${SGLANG_IMAGE}
         imagePullPolicy: IfNotPresent
         terminationMessagePolicy: FallbackToLogsOnError
@@ -189,6 +186,8 @@ spec:
         - containerPort: 8998
           name: bootstrap
         volumeMounts:
+        - name: shm
+          mountPath: /dev/shm
         - name: nvme-hf
           mountPath: /root/.cache/huggingface
         # Up to four engine pods share one node's NVMe: give each its own /tmp
@@ -196,7 +195,18 @@ spec:
         - name: nvme-tmp
           mountPath: /tmp
           subPathExpr: $(POD_NAME)
+        # Requests make the pod Burstable instead of BestEffort (extended
+        # resources such as nvidia.com/gpu don't count toward QoS), so the
+        # scheduler reserves host memory and the engine is not first in line
+        # for eviction. Memory covers the ~188.83 GiB Engram host table, the
+        # 64Gi /dev/shm emptyDir and load-time headroom; CPU is a quarter of
+        # the node's 192 vCPUs minus room for the router and system pods, so
+        # four engines fit on one node. No memory limit: a load-time peak above
+        # the request must not OOM-kill the engine.
         resources:
+          requests:
+            cpu: "32"
+            memory: 384Gi
           limits:
             nvidia.com/gpu: 2
             # A p6-b200.48xlarge exposes 8 EFA interfaces, a p6-b300.48xlarge
@@ -225,6 +235,14 @@ spec:
           periodSeconds: 10
           timeoutSeconds: 5
       volumes:
+      # /dev/shm for NCCL and SGLang's intra-pod shared memory. The container
+      # runtime's 64Mi default is too small; a memory-backed emptyDir gives
+      # the pod its own, so it keeps its own IPC and PID namespaces. Pages
+      # written here count against the pod's memory.
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Gi
       # NVME_HOST_PATH — the one thing scheduling can't auto-detect.
       # The node's local NVMe is mounted at different paths on the two AMIs:
       #   HyperPod-on-EKS (DLAMI):           /opt/dlami/nvme

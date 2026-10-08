@@ -15,7 +15,7 @@ SPDX-License-Identifier: MIT-0
 | [`dsv4pro-b300-single-node`](./dsv4pro-b300-single-node) | 1× B300 (8 GPU) | Unified (non-PD) baseline | `lmsysorg/sglang:v0.5.12.post1-cu130`, no inter-node RDMA support |
 | [`dsv4flash-b300-intra-3p1d`](./dsv4flash-b300-intra-3p1d) | 1× B300 (8 GPU) | Intra-node PD — 3 prefill + 1 decode (tp=2 each) in one pod, NIXL, SGLang router sidecar | `lmsysorg/sglang:v0.5.12.post1-cu130`, no inter-node RDMA support |
 | [`glm5.2-b300-tp2-dp4`](./glm5.2-b300-tp2-dp4) | 1× B300 (8 GPU) | 4× independent tp=2 engines behind an SGLang router (cache-aware LB, cluster-level dp=4) | `lmsysorg/sglang@sha256:bafcd0…` (the `dev-glm52-nvfp4` tag pinned by digest — GLM-5.2 NVFP4 support not yet in a tagged release) |
-| [`dsv41flash-pd-autodiscovery`](./dsv41flash-pd-autodiscovery) | 1–2× B200 / B300 (8 GPU) | DeepSeek-V4.1-Flash PD as one engine per pod (tp=2 each), prefill and decode scaled independently behind an SGLang router with Kubernetes service discovery. Two KV transports, measured equivalent: **pd-rdma** (default) — NIXL/LIBFABRIC on EFA, same node or across nodes; **pd-nvlink** — NIXL/UCX over CUDA IPC, same node only | Custom ECR build from the recipe's [`Dockerfile`](./dsv41flash-pd-autodiscovery/Dockerfile) (`lmsysorg/sglang:dev-dsv41` pinned by digest + EFA layer — DeepSeek-V4.1 support not yet in a tagged release) |
+| [`dsv41flash-pd-autodiscovery`](./dsv41flash-pd-autodiscovery) | 1–2× B200 / B300 (8 GPU) | DeepSeek-V4.1-Flash PD as one engine per pod (tp=2 each), prefill and decode scaled independently behind an SGLang router with Kubernetes service discovery. Two KV transports, measured equivalent: **pd-rdma** (default) — NIXL/LIBFABRIC on EFA, same node or across nodes; **pd-nvlink** — NIXL/UCX over CUDA IPC, same node only | Custom ECR build from the shared [`Dockerfile.efa`](./Dockerfile.efa) on `lmsysorg/sglang@sha256:e56358…` (the `dev-dsv41` tag pinned by digest — DeepSeek-V4.1 support not yet in a tagged release) |
 
 For the kernel-level DeepEP-on-EFA dispatch/combine benchmarks (Slurm and EKS
 launchers, 1–32 nodes) see
@@ -24,10 +24,10 @@ For a PD-disaggregated MoE deployment on vLLM — UCCL-EP rather than DeepEP, KV
 over NIXL, orchestrated on EKS — see
 [`examples/inference/vllm/dsv3-uccl-nixl`](../vllm/dsv3-uccl-nixl).
 
-> The intra-node PD samples deliberately run several engine processes in one pod — not the usual one-process-per-pod shape. Intra-node KV transfer rides NVLink via CUDA IPC, which requires all engines to share an IPC namespace and see each other's GPUs — impossible across separate pods or containers, so the engines share one container (each sample's README explains the full rationale). The DeepSeek-V4.1 sample splits PD across pods by moving KV over EFA instead, and ships an experimental privileged pod-per-engine NVLink variant.
+> The intra-node PD samples deliberately run several engine processes in one pod — not the usual one-process-per-pod shape. Intra-node KV transfer rides NVLink via CUDA IPC, which requires all engines to share an IPC namespace and see each other's GPUs — impossible across separate pods or containers, so the engines share one container (each sample's README explains the full rationale). The DeepSeek-V4.1 sample splits PD across pods by moving KV over EFA instead, and also ships a same-node pod-per-engine NVLink variant that needs `hostIPC` + `hostPID` with all GPUs visible.
 
 > All samples except GLM-5.2 and DeepSeek-V4.1 serve on the same upstream `lmsysorg/sglang:v0.5.12.post1-cu130` image (Kimi adds only an EFA layer on top
-for inter-node RDMA); the DeepSeek-V4.1 sample builds on the `dev-dsv41` preview image (pinned by digest, plus the EFA layer) until V4.1 support lands in a tagged release; the GLM-5.2 sample uses the `dev-glm52-nvfp4` image (pinned by digest in its manifest, since `dev-*` tags are mutable) until NVFP4 support for that model lands in a tagged release.
+for inter-node RDMA); the DeepSeek-V4.1 sample builds the shared EFA layer on the `dev-dsv41` image (pinned by digest) until V4.1 support lands in a tagged release; the GLM-5.2 sample uses the `dev-glm52-nvfp4` image (pinned by digest in its manifest, since `dev-*` tags are mutable) until NVFP4 support for that model lands in a tagged release.
 
 ## Shared helpers
 
@@ -46,8 +46,8 @@ ECR, printing the image URI on the last line:
 ```
 
 Set that URI as `<YOUR_ECR_IMAGE>` in the sample's manifest. Single-node samples run the upstream image directly and don't need this build.
-The DeepSeek-V4.1 sample needs a different base (the `dev-dsv41` preview), so it carries its own copy of this layer in
-[`dsv41flash-pd-autodiscovery/Dockerfile`](./dsv41flash-pd-autodiscovery/Dockerfile) with its own `build-image.sh`.
+Samples that need a different SGLang build pass `BASE_IMAGE`, `EFA_VERSION` and `ALGORITHM_NAME` (the ECR repository) through the
+environment; the defaults build the image above. The DeepSeek-V4.1 sample's README gives its values.
 
 ### Pre-stage model weights
 

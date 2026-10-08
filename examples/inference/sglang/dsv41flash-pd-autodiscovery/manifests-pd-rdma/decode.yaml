@@ -46,8 +46,7 @@ spec:
         prometheus.io/port: "30000"
         prometheus.io/path: "/metrics"
     spec:
-      hostIPC: true
-      hostPID: true
+      # No hostIPC/hostPID — same as prefill.yaml.
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -144,12 +143,18 @@ spec:
         - containerPort: 30000
           name: http
         volumeMounts:
+        - name: shm
+          mountPath: /dev/shm
         - name: nvme-hf
           mountPath: /root/.cache/huggingface
         - name: nvme-tmp
           mountPath: /tmp
           subPathExpr: $(POD_NAME)
+        # Requests — same sizing as prefill.yaml.
         resources:
+          requests:
+            cpu: "32"
+            memory: 384Gi
           limits:
             nvidia.com/gpu: 2
             vpc.amazonaws.com/efa: 2
@@ -171,7 +176,11 @@ spec:
           periodSeconds: 10
           timeoutSeconds: 5
       volumes:
-      # NVME_HOST_PATH — same rule as prefill.yaml.
+      # /dev/shm and NVME_HOST_PATH — same as prefill.yaml.
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Gi
       - name: nvme-hf
         hostPath:
           path: ${NVME_HOST_PATH}/huggingface
