@@ -37,17 +37,19 @@ Three configurations, 1P1D, identical in every respect but the KV path — `sgla
 cd examples/inference/sglang/dsv41flash-pd-autodiscovery
 
 # build + push the EFA-enabled V4.1 image from the shared ../Dockerfile.efa
-# (ECR URI on the last stdout line).
-BASE_IMAGE=lmsysorg/sglang:v0.5.21 EFA_VERSION=1.50.0 \
-  ALGORITHM_NAME=sgl-dsv41-efa ../build-image.sh
+# (ECR URI on the last stdout line). BASE_IMAGE is the image the results
+# below were measured on: lmsysorg/sglang:dev-dsv41 as of 2026-09-11, pinned
+# by its linux/amd64 manifest digest.
+BASE_IMAGE=lmsysorg/sglang@sha256:e56358a68b06427362283c8c8a9d7d706448082ae53098ea1131b5d51aa1fd62 \
+  EFA_VERSION=1.50.0 ALGORITHM_NAME=sgl-dsv41-efa ../build-image.sh
 
 # pre-stage the weights onto every matching node's NVMe
 ../download-model.sh deepseek-ai/DeepSeek-V4.1-Flash p6-b200.48xlarge
 ```
 
-`BASE_IMAGE` is `lmsysorg/sglang:v0.5.21`, the first SGLang release with DeepSeek-V4.1 support. The results in this README were measured before that release, on the `dev-dsv41` preview build (`lmsysorg/sglang@sha256:e56358a68b06427362283c8c8a9d7d706448082ae53098ea1131b5d51aa1fd62`, SGLang commit [`e087e662`](https://github.com/sgl-project/sglang/commit/e087e662ba1ac4ef7747537e2a9141085efd4561), NIXL 1.4.1); pass that digest as `BASE_IMAGE` to reproduce them exactly. They have not been re-run on v0.5.21. `build-image.sh` prints the base digest it pulled and the `nixl`, `nixl-cu13` and `sglang` versions baked in. `nixl-cu13` carries the CUDA 13 backend, and it is the version to check against the LIBFABRIC GPU-HMEM slowdown described in [`../kimi2.6-h200-1p1d/README.md`](../kimi2.6-h200-1p1d/README.md).
+DeepSeek-V4.1 support is not in a tagged SGLang release yet, so `BASE_IMAGE` is the `dev-dsv41` preview build (SGLang commit [`e087e662`](https://github.com/sgl-project/sglang/commit/e087e662ba1ac4ef7747537e2a9141085efd4561), NIXL 1.4.1). `dev-*` and `nightly-*` tags are mutable, so it is pinned by digest; to try a newer preview, pass its digest instead and re-run the checks in this README. `build-image.sh` prints the base digest it pulled and the `nixl`, `nixl-cu13` and `sglang` versions baked in. `nixl-cu13` carries the CUDA 13 backend, and it is the version to check against the LIBFABRIC GPU-HMEM slowdown described in [`../kimi2.6-h200-1p1d/README.md`](../kimi2.6-h200-1p1d/README.md).
 
-TODO: re-run the benchmark on v0.5.21. When the AWS Deep Learning Containers image ([`public.ecr.aws/deep-learning-containers/sglang`](https://gallery.ecr.aws/deep-learning-containers/sglang), which already adds EFA to upstream SGLang) moves to 0.5.21, it may remove the need for this build; its newest tags are on SGLang 0.5.20, which predates V4.1 support.
+TODO: once V4.1 lands in a release tag, set `BASE_IMAGE` to that tag. When the AWS Deep Learning Containers image ([`public.ecr.aws/deep-learning-containers/sglang`](https://gallery.ecr.aws/deep-learning-containers/sglang), which already adds EFA to upstream SGLang) moves to that release, it may remove the need for this build; its newest tags are on SGLang 0.5.20, which predates V4.1 support.
 
 ## Deploy
 
