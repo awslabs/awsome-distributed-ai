@@ -1,0 +1,13 @@
+# Extra packages for train_ray_s3.py / notebook-s3.ipynb, on top of the Ray image
+# public.ecr.aws/sagemaker/sagemaker-distribution:4.5.0-{cpu,gpu}
+# (ships ray 2.55.1, torch 2.8.0, transformers 4.57.6, accelerate 1.14.0, boto3, pyyaml).
+#
+# Do NOT add ray or torch here: runtime_env must reuse the cluster's Ray and the image's CUDA torch.
+# transformers/accelerate are pinned to the image versions so pip does not upgrade them.
+# Add bitsandbytes only if you set load_in_4bit: true in args-s3.yaml.
+transformers==4.57.6
+accelerate==1.14.0
+# datasets pulls fsspec 2026.2.0 (image has 2026.7.0); harmless here because S3 I/O uses boto3/pyarrow.
+datasets==4.8.5
+peft==0.17.1
+trl==0.24.0

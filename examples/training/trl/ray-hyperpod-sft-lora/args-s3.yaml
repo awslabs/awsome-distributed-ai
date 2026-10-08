@@ -1,0 +1,55 @@
+# Ray TorchTrainer on HyperPod — Training Configuration (S3 variant, no FSx)
+#
+# All shared data lives in S3 under s3_base_uri:
+#   <s3_base_uri>/datasets/train/train.json   (written by the notebook)
+#   <s3_base_uri>/datasets/val/val.json       (written by the notebook)
+#   <s3_base_uri>/ray_results/                (Ray Train checkpoints, storage_path)
+#   <s3_base_uri>/output/final_model/         (LoRA adapter, uploaded by rank 0)
+#   <s3_base_uri>/output/merged_model/        (merged model, uploaded by rank 0)
+# The Ray pods' Pod Identity role (HyperPodRay-RayPodsS3Role) only allows the
+# ray-results/ prefix of this bucket, so keep s3_base_uri under it.
+s3_base_uri: "s3://sagemaker-ray-hyperpod-f54c7436-bucket/ray-results/qwen3-medical"
+
+# Cluster scaling — 1 worker (1 GPU) is sufficient for Qwen3-0.6B with LoRA.
+# On a 4-GPU node (g5.12xlarge / g6.12xlarge) you can set num_workers: 4 for DDP.
+num_workers: 1
+num_gpus_per_worker: 1
+cpus_per_worker: 8
+use_gpu: true
+
+# Resilience — HyperPod auto-recovers failed nodes; FailureConfig retries the job
+max_failures: 3
+
+# Model & data
+script_args:
+  model_id: "Qwen/Qwen3-0.6B"
+  local_data_dir: "/tmp/qwen3-medical/data"
+  local_checkpoint_dir: "/tmp/qwen3-medical/checkpoints"
+  local_output_dir: "/tmp/qwen3-medical/output"
+  attn_implementation: "sdpa"   # flash_attention_2 needs the flash-attn package
+  load_in_4bit: false
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  merge_weights: true
+
+# SFT training config
+sft_config:
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 2
+  num_train_epochs: 2
+  learning_rate: 2.0e-4
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.1
+  logging_steps: 10
+  save_steps: 100
+  eval_steps: 100
+  max_length: 2048
+  gradient_checkpointing: true
+  # FSDP — only enabled when set here. Uncomment for multi-GPU training of 7B+ models.
+  # fsdp: "full_shard auto_wrap"
+  # fsdp_config:
+  #   backward_prefetch: "backward_pre"
+  #   forward_prefetch: true
+  #   use_orig_params: true
