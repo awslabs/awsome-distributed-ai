@@ -37,19 +37,22 @@
 
  # Function to stop services
  stop_services() {
-     check_slurmctld_running
-     if [ $? -eq 0 ]; then
+     # The checks must run in condition context: under `set -e`, a bare call that
+     # returns 1 (daemon not running) aborts the script before the $? test runs.
+     if check_slurmctld_running; then
          is_slurmctld_was_running=true
          sudo systemctl stop slurmctld
+         # From here on, any `set -e` abort must still bring the daemons back.
+         trap start_services EXIT
          echo "slurmctld service stopped."
      else
          echo "Slurmctld not running ...."
      fi
 
-     check_slurmdbd_running
-     if [ $? -eq 0 ]; then
+     if check_slurmdbd_running; then
          is_slurmdbd_was_running=true
          sudo systemctl stop slurmdbd
+         trap start_services EXIT
          echo "slurmdbd service stopped."
      else
          echo "Slurmdbd not running ...."
@@ -58,18 +61,31 @@
 
  # Function to start service
  start_services() {
-     sudo systemctl daemon-reload
-     echo "Ran systemctl daemon-reload"
+     # daemon-reload must not abort under `set -e`; the daemons still need starting.
+     if sudo systemctl daemon-reload; then
+         echo "Ran systemctl daemon-reload"
+     else
+         echo "Warning: systemctl daemon-reload failed; starting the daemons anyway." >&2
+     fi
 
      if $is_slurmdbd_was_running; then
-         sudo systemctl start slurmdbd
-         echo "slurmdbd service started."
+         # Non-fatal: under `set -e` a slurmdbd start failure would exit here (and
+         # kill the EXIT-trap retry on this same line), so slurmctld would never come
+         # back. slurmctld runs fine without slurmdbd and queues accounting records
+         # until it returns, so record the failure and continue.
+         if sudo systemctl start slurmdbd; then
+             echo "slurmdbd service started."
+         else
+             echo "ERROR: slurmdbd failed to start; starting slurmctld anyway (it queues accounting until slurmdbd returns)." >&2
+             failed_commands+=("systemctl start slurmdbd")
+         fi
      fi
 
      if $is_slurmctld_was_running; then
          sudo systemctl start slurmctld
          echo "slurmctld service started."
      fi
+     trap - EXIT
  }
 
  # Function to save slurm db to local disk
@@ -216,6 +232,16 @@
          fi
      done
 
+     # aws s3 cp writes everything root-owned, but slurmctld runs as SlurmUser and
+     # must own its StateSaveLocation again, or job submission fails afterwards with
+     # "I/O error writing script/environment to file". Re-own each restored
+     # directory's contents to match the directory itself, whose ownership survives.
+     for item in "${LOCAL_ITEMS[@]}"; do
+         if [ -d "$item" ]; then
+             chown -R "$(stat -c %U:%G "$item")" "$item"
+         fi
+     done
+
      # restore saved slurmdb
      restore_mariadb
 
@@ -282,3 +308,6 @@
  esac
 
  print_report
+
+ # Propagate recorded failures (e.g. a slurmdbd start failure) to the exit code.
+ [ ${#failed_commands[@]} -eq 0 ]
