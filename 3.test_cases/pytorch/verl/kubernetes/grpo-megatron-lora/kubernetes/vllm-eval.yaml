@@ -1,0 +1,302 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# =============================================================================
+# vLLM Evaluation Server — OpenAI-Compatible API on a Single p6-b200 Node
+#
+# Serves a merged HuggingFace model (or a runtime-LoRA adapter) with tensor
+# parallelism across all 8 B200 GPUs on a single node.  Used for evaluation
+# (lm-evaluation-harness, val-split scoring) — NOT for production training rollouts.
+#
+# Uses the project's training ECR image because it bakes in:
+#   - vLLM 0.20.2 with the Blackwell PDL workaround (VLLM_LORA_DISABLE_PDL, see Dockerfile)
+#   - The exact transformers + torch versions used during training
+# This guarantees numerical parity between training rollouts and eval.
+#
+# Deploy:
+#   source env_vars
+#   export VLLM_MODEL_PATH=/fsx/data/verl/merged/Qwen3-235B-A22B/step_200
+#   export VLLM_SERVED_NAME=qwen3-235b-step200
+#   envsubst < kubernetes/vllm-eval.yaml | kubectl apply -f -
+#   kubectl rollout status deploy/vllm-eval --timeout=20m
+#
+# Test:
+#   kubectl exec fsx-utils -- wget -qO- http://vllm-eval:8000/v1/models
+#
+# Tear down:
+#   kubectl delete deploy vllm-eval svc vllm-eval
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-eval
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: vllm-eval
+    project: verl
+    role: eval
+spec:
+  replicas: 1
+  # The startupProbe below budgets ~90 min for the documented ~60-min 235B weight load.
+  # Kubernetes defaults progressDeadlineSeconds to 600, so `kubectl rollout status`
+  # reported ProgressDeadlineExceeded about ten minutes in -- while the pod was starting
+  # exactly as designed. Keep this >= the startupProbe budget.
+  progressDeadlineSeconds: 7200
+  strategy:
+    # Recreate — we need all 8 GPUs exclusively; rolling update would require
+    # 16 GPUs during the cutover.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: vllm-eval
+  template:
+    metadata:
+      labels:
+        app: vllm-eval
+        project: verl
+        role: eval
+    spec:
+      # Tolerate GPU taint (workload-type=gpu:NoSchedule is the standard in
+      # this cluster; fall through if tolerations are unnecessary).
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+
+      affinity:
+        # Land on a p6-b200 worker — 8 GPUs, 183 GB HBM each.  Accept both
+        # the unprefixed label (Karpenter-launched nodes) and the `ml.`-prefixed
+        # label that HyperPod applies to managed instances.
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: In
+                    values: ["p6-b200.48xlarge", "ml.p6-b200.48xlarge"]
+
+        # Separation from training pods — if training is resumed later, avoid
+        # scheduling eval on a node with Ray workers.
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    # Prefixed form -- KubeRay labels Ray pods `ray.io/node-type`.
+                    # An unprefixed key matches nothing and the term scores zero.
+                    - key: ray.io/node-type
+                      operator: In
+                      values: ["worker", "head"]
+                topologyKey: kubernetes.io/hostname
+
+      restartPolicy: Always
+
+      containers:
+        - name: vllm
+          image: ${REGISTRY}${IMAGE}:${TAG}
+          # TAG is pinned to an immutable tag by build-push.sh / env_vars.example, never
+          # `latest`, so IfNotPresent is correct and works air-gapped.
+          imagePullPolicy: IfNotPresent
+
+          # Launch vLLM's OpenAI-compatible server.  Args are tuned for 235B MoE
+          # on 8×B200:
+          #   - max_model_len MUST match LMEVAL_MAX_LENGTH (32768, see
+          #     scripts/submit_lmeval.sh) -- if the server allows less than the eval
+          #     client requests, requests fail. It also has to cover training's
+          #     max_prompt 2048 + max_response 24576 = 26624 (conf/config.yaml).
+          #   - tensor_parallel_size matches training rollout TP
+          #   - gpu_memory_utilization is 0.95, higher than training's 0.7: no actor
+          #     weights coexist on GPU here, AND a large LoRA slot needs the headroom.
+          #     At 0.85 the KV cache loses ~23 GiB and the server CrashLoopBackOffs
+          #     with "No available memory for the cache blocks" (see docs/results.md).
+          command:
+            - bash
+            - -c
+            - |
+              set -eux
+              # Optional runtime-LoRA serving: when VLLM_ENABLE_LORA=true, serve the
+              # base model + a hot-loaded PEFT adapter (no pre-merge). VLLM_LORA_MODULES
+              # is a space-separated list of "name=/path/to/adapter" entries.
+              LORA_ARGS=()
+              if [ "${VLLM_ENABLE_LORA:-false}" = "true" ]; then
+                LORA_ARGS+=( --enable-lora
+                             --max-lora-rank "${VLLM_MAX_LORA_RANK:-32}"
+                             --max-loras "${VLLM_MAX_LORAS:-1}" )
+                # --lora-modules is nargs='+': pass ALL "name=/path" specs under a
+                # SINGLE flag. Repeating the flag makes argparse keep only the last.
+                if [ -n "${VLLM_LORA_MODULES}" ]; then
+                  LORA_ARGS+=( --lora-modules )
+                  for m in ${VLLM_LORA_MODULES}; do
+                    LORA_ARGS+=( "${m}" )
+                  done
+                fi
+              fi
+              # CUDA graphs. --enforce-eager DISABLES them, which on a 94-layer MoE
+              # turns per-token decode into a Python-bound kernel-launch storm.
+              # Measured on 8x B200 / Qwen3-235B-A22B (22B active), TP=8:
+              #   --enforce-eager  -> 4.55 tok/s/stream (~220 ms/token), and per-stream
+              #                       throughput stayed FLAT from 14 to 64 concurrent
+              #                       (peak 284 tok/s aggregate) = latency-bound, not
+              #                       throughput-bound, with GPUs largely idle.
+              # This was invisible while the harness generated only 1024 tokens (the
+              # whole pass@10 suite took ~1h). At the corrected max_gen_toks=24576 it
+              # projects to ~40h PER MODEL, which does not fit any sane budget.
+              # It carried no justifying comment and was added in the original pipeline
+              # commit; the documented Blackwell LoRA workaround is the
+              # VLLM_LORA_DISABLE_PDL=1 env var below, NOT eager mode. Defaults to OFF
+              # now; set VLLM_ENFORCE_EAGER=true to restore the old behaviour if CUDA
+              # graph capture ever proves unstable.
+              EAGER_ARGS=()
+              if [ "${VLLM_ENFORCE_EAGER:-false}" = "true" ]; then
+                EAGER_ARGS+=( --enforce-eager )
+              fi
+              # --trust-remote-code below executes Python from the model repo at load
+              # time. Required for the Qwen3 MoE architectures used here. The model is a
+              # local FSx path staged by models/, not fetched from the Hub at serve time,
+              # so what is trusted is whatever was downloaded and shard-verified at
+              # staging time -- pin HF_REVISION there to make that auditable.
+              exec python3 -m vllm.entrypoints.openai.api_server \
+                --model "${VLLM_MODEL_PATH}" \
+                --served-model-name "${VLLM_SERVED_NAME}" \
+                --tensor-parallel-size "${VLLM_TP_SIZE}" \
+                --max-model-len "${VLLM_MAX_MODEL_LEN}" \
+                --max-num-seqs "${VLLM_MAX_NUM_SEQS}" \
+                --gpu-memory-utilization "${VLLM_GPU_MEM_UTIL}" \
+                --dtype bfloat16 \
+                --trust-remote-code \
+                ${EAGER_ARGS[@]+"${EAGER_ARGS[@]}"} \
+                --host 0.0.0.0 \
+                --port 8000 \
+                ${LORA_ARGS[@]+"${LORA_ARGS[@]}"}
+
+          env:
+            # vLLM engine selection + Blackwell workarounds (match training image)
+            - name: VLLM_USE_V1
+              value: "1"
+            - name: CUDA_DEVICE_MAX_CONNECTIONS
+              value: "1"
+            - name: NCCL_NVLS_ENABLE
+              value: "0"
+
+            # Point caches at FSx to avoid /tmp exhaustion (matches submit_training.py)
+            - name: TRITON_CACHE_DIR
+              value: /fsx/data/cache/triton
+            - name: TORCH_COMPILE_CACHE_DIR
+              value: /fsx/data/cache/torch_compile
+            - name: VLLM_CACHE_ROOT
+              value: /fsx/data/cache/vllm
+            - name: HF_HOME
+              value: /fsx/data/verl/cache/huggingface
+            - name: HF_HUB_OFFLINE
+              value: "1"
+
+            # vLLM config passed in via env (referenced in the command above)
+            - name: VLLM_MODEL_PATH
+              value: "${VLLM_MODEL_PATH}"
+            - name: VLLM_SERVED_NAME
+              value: "${VLLM_SERVED_NAME}"
+            - name: VLLM_TP_SIZE
+              value: "${VLLM_TP_SIZE}"
+            - name: VLLM_MAX_MODEL_LEN
+              value: "${VLLM_MAX_MODEL_LEN}"
+            - name: VLLM_MAX_NUM_SEQS
+              value: "${VLLM_MAX_NUM_SEQS}"
+            - name: VLLM_GPU_MEM_UTIL
+              value: "${VLLM_GPU_MEM_UTIL}"
+            # CUDA graphs are on by default. The command block reads this to add
+            # --enforce-eager; without an env entry the ${VLLM_ENFORCE_EAGER:-false}
+            # expression there always evaluates to false in the container, because
+            # envsubst does not expand the ${VAR:-default} form.
+            - name: VLLM_ENFORCE_EAGER
+              value: "${VLLM_ENFORCE_EAGER}"
+            # REQUIRED for large adapters: a 105 GB adapter load far exceeds vLLM's
+            # 300 s default and the first request returns HTTP 500 "RPC call to
+            # sample_tokens timed out". See docs/results.md.
+            - name: VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS
+              value: "${VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS}"
+
+            # Runtime-LoRA serving (optional): serve base + hot-loaded adapter,
+            # no pre-merge. VLLM_LORA_MODULES = space-separated "name=/path" list.
+            - name: VLLM_ENABLE_LORA
+              value: "${VLLM_ENABLE_LORA}"
+            - name: VLLM_LORA_MODULES
+              value: "${VLLM_LORA_MODULES}"
+            - name: VLLM_MAX_LORA_RANK
+              value: "${VLLM_MAX_LORA_RANK}"
+            - name: VLLM_MAX_LORAS
+              value: "${VLLM_MAX_LORAS}"
+
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+
+          # Large shared memory for NCCL communication (matches training workers)
+          volumeMounts:
+            - name: fsx-storage
+              mountPath: /fsx
+            - name: dshm
+              mountPath: /dev/shm
+
+          resources:
+            requests:
+              cpu: "16"
+              memory: "256Gi"
+              nvidia.com/gpu: ${VLLM_TP_SIZE}
+            limits:
+              cpu: "64"
+              memory: "1024Gi"
+              nvidia.com/gpu: ${VLLM_TP_SIZE}
+
+          # Health checks — 235B load is slow (read 440 GB from FSx, shard
+          # across 8 GPUs, compile prefix cache).  Give it 10 min for startup.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 180  # 180 * 30s = 90 min (235B MoE at TP=8: ~60min weight load + engine/KV-cache init; ~32s/shard is vLLM per-shard TP-split overhead, not FSx I/O which measures 760MB/s)
+          readinessProbe:
+            httpGet:
+              path: /v1/models
+              port: 8000
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 60
+            timeoutSeconds: 15
+            failureThreshold: 5
+
+      volumes:
+        - name: fsx-storage
+          persistentVolumeClaim:
+            claimName: fsx-lustre
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-eval
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: vllm-eval
+    project: verl
+spec:
+  type: ClusterIP
+  selector:
+    app: vllm-eval
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP

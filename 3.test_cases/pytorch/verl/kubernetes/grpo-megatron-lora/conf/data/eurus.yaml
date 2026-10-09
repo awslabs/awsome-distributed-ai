@@ -1,0 +1,9 @@
+# @package _global_
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Eurus dataset for code reasoning tasks
+data_name: eurus
+data_paths:
+  train_file: /fsx/data/verl/data/eurus/train.parquet
+  val_file: /fsx/data/verl/data/eurus/val.parquet
+  prompt_key: prompt

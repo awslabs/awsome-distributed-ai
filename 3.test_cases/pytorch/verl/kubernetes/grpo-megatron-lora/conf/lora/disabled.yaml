@@ -1,0 +1,8 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# LoRA disabled — full fine-tuning (no adapters)
+enabled: false
+rank: 0
+alpha: 0
+target_modules: null
+layered_summon: false

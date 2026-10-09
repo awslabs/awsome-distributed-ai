@@ -1,0 +1,54 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# =============================================================================
+# Ray Runtime Environment — pip packages installed at job submission time
+# =============================================================================
+# These packages are installed on every Ray node when a job starts. This allows
+# fast iteration without rebuilding the Docker image. Once versions stabilize,
+# bake them back into the Dockerfile for faster cold-start.
+#
+# NOTE: The Docker image must keep the blinker distutils cleanup hack
+# (rm -rf /usr/lib/python3/dist-packages/blinker*) or mlflow's pip install
+# will fail trying to upgrade the distutils-managed blinker 1.4.
+# =============================================================================
+pip:
+  # --- Core training framework ---
+  # Pinned to the v0.8.0 release tag (2026-06-01). This release includes the
+  # native Megatron+LoRA HF adapter export (bridge.save_hf_adapter) used when
+  # 'hf_model' is in checkpoint.save_contents — closes the pre-v0.8.0
+  # adapter-export gap for new runs.
+  - "verl[mcore] @ git+https://github.com/volcengine/verl.git@v0.8.0"
+
+  # --- Megatron-Core pin ---
+  # Megatron-Bridge v0.5.0 (installed in the Docker image with --no-deps)
+  # imports safe_get_world_size from megatron.core._rank_utils, which only
+  # exists in mcore >= 0.18.0. Verified compatible with verl v0.8.0's
+  # Megatron worker/checkpoint imports in the built image.
+  - "megatron-core==0.18.0"
+
+  # --- HuggingFace transformers pin ---
+  # Megatron-Bridge v0.5.0 requires transformers>=5.8.1,<5.9.0. vLLM 0.20.2
+  # allows >=4.56 with 5.0-5.5 excluded, so 5.8.x satisfies both. A loose
+  # >=4.49 pin previously let pip resolve 5.3.0, which vLLM bans and which
+  # breaks verl worker imports (lazy-import ModuleNotFoundError).
+  - "transformers>=5.8.1,<5.9.0"
+
+  # --- Observability / logging ---
+  - "mlflow>=3.0,<4.0"
+  - "sagemaker-mlflow>=0.1.0"
+
+  # --- Reward computation / metrics ---
+  - "scipy>=1.17.0,<2.0"
+  - "scikit-learn>=1.8.0,<2.0"
+  - "nltk>=3.9.0,<4.0"
+
+  # --- AWS SDK ---
+  - "boto3>=1.42.0"
+  - "botocore>=1.42.0"
+
+  # --- Utilities ---
+  - "tenacity>=9.0.0,<10.0"
+  # scripts/eval_val_split.py imports tqdm at module scope. It was previously guarded
+  # with a try/except that swapped in a no-op shim, which meant the Ray path silently
+  # ran without progress output while the k8s path (which installs tqdm) had it.
+  - "tqdm>=4.66,<5"

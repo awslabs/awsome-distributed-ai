@@ -1,0 +1,14 @@
+# @package _global_
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+profiling:
+  tool: null
+  steps: null
+  save_path: /fsx/data/verl/profiling
+  profile_continuous_steps: false
+  actor_enable: false
+  actor_all_ranks: false
+  actor_ranks: []
+  critic_enable: false
+  critic_all_ranks: false
+  critic_ranks: []
