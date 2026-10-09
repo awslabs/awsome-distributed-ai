@@ -1,0 +1,45 @@
+# Agentic bug-fix evaluation on a GPU node (vLLM). Runs the model as an agent over the 150 tasks
+# and reports the resolved rate. Render with:
+#   cat agent-eval.yaml-template | envsubst > agent-eval.yaml && kubectl apply -f agent-eval.yaml
+# Required env:
+#   VLLM_IMAGE_URI   the comparison/vLLM image
+#   LABEL            output label, e.g. base or agentic-full
+#   EVAL_MODEL       HF model id or a merged model dir, e.g. Qwen/Qwen3-1.7B
+#                    or /fsx/agentic/runs/agentic-full/merged
+# Results are written to /fsx/agentic/agent_eval/${LABEL}.{summary.json,jsonl}.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agent-eval-${LABEL}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        node.kubernetes.io/instance-type: ml.g5.2xlarge
+      containers:
+        - name: eval
+          image: ${VLLM_IMAGE_URI}
+          command: ["bash", "-c"]
+          args:
+            - >-
+              pip install -q pytest >/dev/null 2>&1;
+              python3 /workspace/agent_eval.py --model=${EVAL_MODEL}
+              --label=${LABEL} --max_turns=30
+          env:
+            - {name: HF_HOME, value: /tmp/hf}
+            - {name: DATA_ROOT, value: /fsx/agentic}
+            - {name: VLLM_NO_USAGE_STATS, value: "1"}
+          resources:
+            requests: {nvidia.com/gpu: 1, cpu: "6", memory: 24Gi}
+            limits: {nvidia.com/gpu: 1}
+          volumeMounts:
+            - {name: shmem, mountPath: /dev/shm}
+            - {name: fsx, mountPath: /fsx}
+      volumes:
+        - name: shmem
+          hostPath: {path: /dev/shm}
+        - name: fsx
+          persistentVolumeClaim: {claimName: fsx-pvc}

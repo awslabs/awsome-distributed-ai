@@ -1,0 +1,95 @@
+# LoRA SFT training via the SageMaker HyperPod training operator (HyperPodPyTorchJob).
+# Render with: cat train-agent.yaml-template | envsubst > train-agent.yaml && kubectl apply -f train-agent.yaml
+#
+# Required env vars (see README):
+#   RUN           run name, e.g. agentic-workshop or agentic-full
+#   IMAGE_URI     training image, e.g. ${REGISTRY}agentic-coding-sft:v1
+#   NUM_NODES     1 for the quick run, up to 4 for the full run
+#   AGENT_DATA    train-8k (quick, ~22 min, 1 GPU) or train-16k (full, 2 epochs, multi-GPU)
+#   EPOCHS        1 (quick) or 2 (full)
+#   GRAD_ACC      8 when NUM_NODES=1, 2 when NUM_NODES=4 (keeps the effective batch at 8)
+# The code is baked into the image at /workspace; data and runs live on the FSx mount at /fsx.
+apiVersion: sagemaker.amazonaws.com/v1
+kind: HyperPodPyTorchJob
+metadata:
+  name: ${RUN}
+spec:
+  nprocPerNode: "1"
+  runPolicy:
+    jobMaxRetryCount: 1
+    restartPolicy:
+      numRestartBeforeFullJobRestart: 1
+      evalPeriodSeconds: 21600
+      maxFullJobRestarts: 1
+    cleanPodPolicy: All
+    logMonitoringConfiguration:
+      - name: JobStart
+        logPattern: ".*'loss':.*"
+        expectedStartCutOffInSeconds: 1800
+      - name: JobHangingDetection
+        logPattern: ".*'loss':.*"
+        expectedRecurringFrequencyInSeconds: 1800
+  replicaSpecs:
+    - name: pods
+      replicas: ${NUM_NODES}
+      template:
+        metadata:
+          labels:
+            job-name: ${RUN}
+            replica-type: pods
+        spec:
+          nodeSelector:
+            node.kubernetes.io/instance-type: ml.g5.2xlarge
+          volumes:
+            - name: shmem
+              hostPath: {path: /dev/shm}
+            - name: fsx
+              persistentVolumeClaim: {claimName: fsx-pvc}
+          containers:
+            - name: pytorch
+              image: ${IMAGE_URI}
+              imagePullPolicy: Always
+              resources:
+                requests: {nvidia.com/gpu: 1}
+                limits: {nvidia.com/gpu: 1}
+              env:
+                - {name: PYTORCH_CUDA_ALLOC_CONF, value: "expandable_segments:True"}
+                - {name: HF_HOME, value: /tmp/hf}
+                - {name: TOKENIZERS_PARALLELISM, value: "false"}
+              command: ["hyperpodrun"]
+              args:
+                - --tee=3
+                - --shutdown-timeout=120
+                - --nnodes=${NUM_NODES}
+                - --nproc_per_node=1
+                - /workspace/train_agent.py
+                - --model_id=Qwen/Qwen3-1.7B
+                - --train_path=/fsx/agentic/data/agent/${AGENT_DATA}
+                - --eval_path=/fsx/agentic/data/agent/val
+                # 43 = the full held-out validation set; eval runs once at the end (eval_strategy=no)
+                - --max_eval_samples=43
+                - --output_dir=/fsx/agentic/runs/${RUN}
+                - --per_device_train_batch_size=1
+                - --per_device_eval_batch_size=1
+                - --gradient_accumulation_steps=${GRAD_ACC}
+                - --gradient_checkpointing=True
+                - --learning_rate=1e-4
+                - --warmup_ratio=0.1
+                - --num_train_epochs=${EPOCHS}
+                - --lr_scheduler_type=cosine
+                - --use_liger_kernel=True
+                - --lora_r=64
+                - --lora_alpha=128
+                - --dataloader_num_workers=2
+                - --group_by_length=True
+                - --bf16=True
+                - --logging_steps=5
+                - --eval_strategy=no
+                - --save_strategy=steps
+                - --save_steps=10
+                - --save_total_limit=2
+                - --save_only_model=True
+                - --merge=True
+              volumeMounts:
+                - {name: shmem, mountPath: /dev/shm}
+                - {name: fsx, mountPath: /fsx}

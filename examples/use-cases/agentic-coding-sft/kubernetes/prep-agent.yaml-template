@@ -1,0 +1,30 @@
+# Prepare SWE-smith agent trajectories for SFT (CPU node).
+# Render with: cat prep-agent.yaml-template | envsubst > prep-agent.yaml && kubectl apply -f prep-agent.yaml
+# Required env: IMAGE_URI (training image). Writes tokenized datasets to /fsx/agentic/data/agent/.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prep-agent
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        node.kubernetes.io/instance-type: ml.c5.4xlarge
+      containers:
+        - name: prep
+          image: ${IMAGE_URI}
+          command: ["python", "/workspace/prep_agent.py", "--num_proc=6"]
+          env:
+            - {name: NVIDIA_VISIBLE_DEVICES, value: void}
+            - {name: HF_HOME, value: /tmp/hf}
+            - {name: DATA_ROOT, value: /fsx/agentic}
+          resources:
+            requests: {cpu: "6", memory: 12Gi}
+          volumeMounts:
+            - {name: fsx, mountPath: /fsx}
+      volumes:
+        - name: fsx
+          persistentVolumeClaim: {claimName: fsx-pvc}

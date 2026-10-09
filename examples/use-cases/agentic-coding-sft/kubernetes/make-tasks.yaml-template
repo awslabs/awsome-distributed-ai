@@ -1,0 +1,30 @@
+# Build the 150 HumanEval bug-fix task repos used for evaluation (CPU node).
+# Render with: cat make-tasks.yaml-template | envsubst > make-tasks.yaml && kubectl apply -f make-tasks.yaml
+# Required env: IMAGE_URI (training image). Writes tasks to /fsx/agentic/agent_tasks/v1/.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: make-tasks
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        node.kubernetes.io/instance-type: ml.c5.4xlarge
+      containers:
+        - name: tasks
+          image: ${IMAGE_URI}
+          command: ["python", "/workspace/make_agent_tasks.py"]
+          env:
+            - {name: NVIDIA_VISIBLE_DEVICES, value: void}
+            - {name: HF_HOME, value: /tmp/hf}
+            - {name: DATA_ROOT, value: /fsx/agentic}
+          resources:
+            requests: {cpu: "4", memory: 8Gi}
+          volumeMounts:
+            - {name: fsx, mountPath: /fsx}
+      volumes:
+        - name: fsx
+          persistentVolumeClaim: {claimName: fsx-pvc}
