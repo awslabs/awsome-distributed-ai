@@ -136,7 +136,7 @@ Delete the pod when done to free the GPU: `kubectl delete pod compare`.
 
 ```bash
 # ghcr.io/ggml-org/llama.cpp:full-b11146 is the official llama.cpp "full" image (includes
-# convert_hf_to_gguf.py and llama-quantize). Use :full for the moving-latest tag.
+# convert_hf_to_gguf.py and llama-quantize). Pin a specific build tag.
 export LLAMACPP_IMAGE=ghcr.io/ggml-org/llama.cpp:full-b11146
 export GGUF_NAME=qwen3-1.7b-agentic GGUF_SRC=/fsx/agentic/runs/agentic-workshop/merged
 # This job's command uses runtime shell vars ($SRC, $O), so render with SCOPED envsubst

@@ -21,8 +21,10 @@ running the original unit tests in a sandbox):
 | Fine-tuned here (3,460 trajectories, 2 epochs, 4 GPUs) | 53.3% |
 | Qwen3-4B base (reference, >2x the size) | 50.7% |
 
-The fine-tuned 1.7B model matches a base model more than twice its size. Quantized to GGUF, the full
-model scores 54.7% at Q8_0 and 42.0% at Q4_K_M.
+These are single-run numbers; the evaluation samples at temperature 0.7, so expect a few points of
+run-to-run variance (base typically ~8-10%, the quick fine-tune ~30%+). The fine-tuned 1.7B model
+matches a base model more than twice its size. Quantized to GGUF, the full model scores 54.7% at
+Q8_0 and 42.0% at Q4_K_M.
 
 ## Repository Structure
 

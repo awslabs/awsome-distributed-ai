@@ -66,6 +66,7 @@ spec:
                 - --model_id=Qwen/Qwen3-1.7B
                 - --train_path=/fsx/agentic/data/agent/${AGENT_DATA}
                 - --eval_path=/fsx/agentic/data/agent/val
+                # 43 = the full held-out validation set; eval runs once at the end (eval_strategy=no)
                 - --max_eval_samples=43
                 - --output_dir=/fsx/agentic/runs/${RUN}
                 - --per_device_train_batch_size=1

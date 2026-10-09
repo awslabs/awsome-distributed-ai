@@ -8,7 +8,7 @@
 #   GGUF_SRC        a merged model dir (e.g. /fsx/agentic/runs/agentic-workshop/merged) or an HF model id
 # Optional env:
 #   LLAMACPP_IMAGE  defaults to ghcr.io/ggml-org/llama.cpp:full-b11146 (the official "full" tag,
-#                   which includes convert_hf_to_gguf.py and llama-quantize). Use :full for latest.
+#                   which includes convert_hf_to_gguf.py and llama-quantize). Pin a specific build.
 # Output: /fsx/agentic/gguf/<GGUF_NAME>-{f16,q8_0,q4_k_m}.gguf
 apiVersion: batch/v1
 kind: Job
