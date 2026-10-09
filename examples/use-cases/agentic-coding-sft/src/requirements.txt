@@ -1,0 +1,16 @@
+# Pinned versions validated on SageMaker HyperPod EKS.
+transformers==4.57.1
+datasets==4.3.0
+trl==0.25.0
+peft==0.17.1
+accelerate>=1.10
+liger-kernel==0.6.3
+hf-transfer==0.1.9
+# hyperpod-elastic-agent provides `hyperpodrun`, the launcher used by HyperPodPyTorchJob.
+hyperpod-elastic-agent==1.0.0
+psutil==7.1.3
+nvidia-ml-py==13.580.82
+# Optional: only needed if you enable experiment tracking via --mlflow_tracking_server
+# (imported lazily in train_agent.py, so the core pipeline runs without these).
+mlflow==3.5.1
+sagemaker-mlflow==0.1.1

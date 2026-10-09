@@ -1,0 +1,38 @@
+# Interactive comparison pod (GPU node, vLLM image). After it is Ready, attach with:
+#   kubectl exec -it compare -- python3 /workspace/compare.py --full "" \
+#     --yours /fsx/agentic/runs/<RUN>/adapter
+# Render with: cat compare.yaml-template | envsubst > compare.yaml && kubectl apply -f compare.yaml
+# Required env: VLLM_IMAGE_URI (the comparison/vLLM image).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: compare
+  labels: {app: compare}
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    node.kubernetes.io/instance-type: ml.g5.2xlarge
+  containers:
+    - name: compare
+      image: ${VLLM_IMAGE_URI}
+      command: ["bash", "-c", "pip install -q pytest >/dev/null 2>&1; touch /tmp/ready; sleep infinity"]
+      readinessProbe:
+        exec: {command: ["test", "-f", "/tmp/ready"]}
+        periodSeconds: 5
+      env:
+        - {name: HF_HOME, value: /tmp/hf}
+        - {name: DATA_ROOT, value: /fsx/agentic}
+        - {name: VLLM_NO_USAGE_STATS, value: "1"}
+        - {name: TOKENIZERS_PARALLELISM, value: "false"}
+        - {name: VLLM_LOGGING_LEVEL, value: "WARNING"}
+      resources:
+        requests: {nvidia.com/gpu: 1, cpu: "6", memory: 24Gi}
+        limits: {nvidia.com/gpu: 1}
+      volumeMounts:
+        - {name: shmem, mountPath: /dev/shm}
+        - {name: fsx, mountPath: /fsx}
+  volumes:
+    - name: shmem
+      hostPath: {path: /dev/shm}
+    - name: fsx
+      persistentVolumeClaim: {claimName: fsx-pvc}

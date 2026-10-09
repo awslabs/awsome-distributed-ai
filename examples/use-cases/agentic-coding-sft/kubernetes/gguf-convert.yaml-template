@@ -1,0 +1,47 @@
+# Convert a merged HF model to GGUF and quantize to Q8_0 and Q4_K_M, using the official
+# llama.cpp tools (CPU node). This job's command contains runtime shell variables ($SRC, $O), so
+# render it with SCOPED envsubst (list only the template vars) so those are left intact:
+#   cat gguf-convert.yaml-template | envsubst '${GGUF_SRC} ${GGUF_NAME} ${LLAMACPP_IMAGE}' > gguf-convert.yaml
+#   kubectl apply -f gguf-convert.yaml
+# Required env:
+#   GGUF_NAME       output basename, e.g. qwen3-1.7b-agentic
+#   GGUF_SRC        a merged model dir (e.g. /fsx/agentic/runs/agentic-workshop/merged) or an HF model id
+# Optional env:
+#   LLAMACPP_IMAGE  defaults to ghcr.io/ggml-org/llama.cpp:full-b11146 (the official "full" tag,
+#                   which includes convert_hf_to_gguf.py and llama-quantize). Use :full for latest.
+# Output: /fsx/agentic/gguf/<GGUF_NAME>-{f16,q8_0,q4_k_m}.gguf
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gguf-${GGUF_NAME}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        node.kubernetes.io/instance-type: ml.c5.4xlarge
+      containers:
+        - name: gguf
+          image: ${LLAMACPP_IMAGE}
+          command: ["bash", "-c"]
+          args:
+            - >-
+              set -euo pipefail; cd /app; mkdir -p /fsx/agentic/gguf;
+              SRC="${GGUF_SRC}";
+              if [ ! -d "$SRC" ]; then
+                python3 -c "from huggingface_hub import snapshot_download as s; print(s('$SRC', allow_patterns=['*.json','*.safetensors','*.txt','*.model','*.jinja']))" > /tmp/src; SRC=$(cat /tmp/src); fi;
+              O=/fsx/agentic/gguf/${GGUF_NAME};
+              python3 convert_hf_to_gguf.py "$SRC" --outtype f16 --outfile $O-f16.gguf;
+              ./llama-quantize $O-f16.gguf $O-q8_0.gguf Q8_0;
+              ./llama-quantize $O-f16.gguf $O-q4_k_m.gguf Q4_K_M;
+              ls -la /fsx/agentic/gguf/ | grep ${GGUF_NAME};
+              echo GGUF_DONE
+          resources:
+            requests: {cpu: "8", memory: 16Gi}
+          volumeMounts:
+            - {name: fsx, mountPath: /fsx}
+      volumes:
+        - name: fsx
+          persistentVolumeClaim: {claimName: fsx-pvc}

@@ -1,0 +1,19 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+# Comparison image for the interactive base-vs-fine-tune demo (compare.py).
+# Uses the AWS vLLM Deep Learning Container from public ECR, so no Docker Hub pulls are needed.
+FROM public.ecr.aws/deep-learning-containers/vllm:0.11.1-gpu-py312-cu129-ubuntu22.04-ec2-v1.0
+
+RUN pip install --no-cache-dir pytest rich
+WORKDIR /workspace
+COPY src /workspace
+
+ENV DATA_ROOT=/fsx \
+    PYTHONPATH=/workspace \
+    PYTHONUNBUFFERED=1 \
+    TOKENIZERS_PARALLELISM=false \
+    VLLM_NO_USAGE_STATS=1 \
+    VLLM_LOGGING_LEVEL=WARNING
+ENTRYPOINT []
+CMD ["sleep", "infinity"]
