@@ -97,8 +97,9 @@ spec:
           echo "=== Dynamo DeepEP-V2 guide pod $(hostname) $(date -u +%FT%TZ) ==="
           echo "DeepEP effective SHA: $(cat /opt/deepep.effective.sha 2>/dev/null || echo unknown)"
 
-          # 1) DeepEP-V2 _C.so — built ONCE per pod (needs the live CUDA context;
-          #    that is why it is not baked into the image). ~2 min. Idempotent guard.
+          # 1) DeepEP-V2 _C.so — built ONCE per pod, for the arch this node runs
+          #    (DEEPEP_ARCH_LIST, default 9.0): a design choice, not a sandbox limit. ~2 min.
+          #    Idempotent guard.
           python3 -c "import deep_ep" 2>/dev/null || bash /opt/build_deepep.sh
 
           # 2) resolve the leader (pod ordinal 0) through headless-service DNS

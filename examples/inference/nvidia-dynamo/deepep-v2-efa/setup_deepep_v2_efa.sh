@@ -6,8 +6,10 @@
 # DeepEP 567632d and is gated by .github/workflows/deepep-vendor-sync.yml) — this is the V2 /
 # NCCL-GIN counterpart and is intentionally NOT vendor-synced to that canonical copy.
 #
-# Runs inside the Docker build. The DeepEP _C.so itself is compiled IN-POD at first boot
-# (recipe/build_deepep.sh) because it needs a live CUDA context the build sandbox lacks.
+# Runs inside the Docker build. This script only STAGES the DeepEP source — the _C.so itself is
+# compiled IN-POD at first boot (recipe/build_deepep.sh). That split is a design choice (the arch
+# list follows the node via DEEPEP_ARCH_LIST), not a sandbox limitation: the canonical
+# setup_deepep_gin.sh builds DeepEP inside `docker build`.
 set -euo pipefail
 
 # ---- pins (released tag + immutable SHA; no 'latest') ----
@@ -23,8 +25,11 @@ set -euo pipefail
 # that flag, not being an AC_ARG_WITH this project defines, was silently ignored before).
 AWS_OFI_NCCL_REPO="${AWS_OFI_NCCL_REPO:-https://github.com/aws/aws-ofi-nccl.git}"
 AWS_OFI_NCCL_REF="${AWS_OFI_NCCL_REF:?pass from the Dockerfile ARG — the pin has ONE home there; a default here would be an unreachable second copy}"
+# A tag is a name git can re-point; the commit it resolved to when this sample was pinned is
+# asserted after the clone (the same immutability rule as GDRCOPY_SHA / DEEPEP_SHA).
+AWS_OFI_NCCL_SHA="${AWS_OFI_NCCL_SHA:?pass from the Dockerfile ARG — the commit the tag must resolve to; the pin has ONE home there}"
 # DeepEP source = the amazon-contributing fork, same as the canonical setup_deepep_gin.sh
-# (deepep-v2-benchmark), which pins this fork and states "the benchmark supports no other
+# (deepep-v2-benchmark), which builds this fork from its floating main and states "the benchmark supports no other
 # source". The fork carries the in-tree successors of deepseek PR#612's EFA work — the QP
 # count clamps into [_C.min_unordered_gin_qps, _C.max_unordered_gin_qps] (elastic.py) and the
 # RDMA link rate is probed from sysfs (envs.py _get_sysfs_rdma_gbs) — plus the Blackwell
@@ -35,6 +40,10 @@ DEEPEP_SHA="${DEEPEP_SHA:?pass from the Dockerfile ARG — the pin has ONE home 
 echo "== aws-ofi-nccl GIN @ ${AWS_OFI_NCCL_REF} =="
 git clone --depth 1 --branch "${AWS_OFI_NCCL_REF}" "${AWS_OFI_NCCL_REPO}" /opt/aws-ofi-nccl-src
 cd /opt/aws-ofi-nccl-src
+# tag -> commit assert: a shallow clone by tag name builds whatever the tag points at TODAY; a
+# re-pointed tag must fail the build loudly, not change the plugin under the same version string.
+[ "$(git rev-parse HEAD)" = "${AWS_OFI_NCCL_SHA}" ] \
+  || { echo "FATAL: ${AWS_OFI_NCCL_REF} resolved to $(git rev-parse HEAD), expected ${AWS_OFI_NCCL_SHA} — the tag moved; re-pin deliberately (Dockerfile ARG AWS_OFI_NCCL_SHA)"; exit 1; }
 git rev-parse HEAD > /opt/aws-ofi-nccl.effective.sha
 ./autogen.sh
 # Released v1.21.1 already attempts gdr_pin_buffer_v2 with GDR_PIN_FLAG_FORCE_PCIE and falls

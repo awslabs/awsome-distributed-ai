@@ -8,7 +8,11 @@
 # default NVSHMEM/IBGDA transport is dead on EFA; this uses aws-ofi-nccl's GIN CPU-proxy
 # (NCCL_GIN_TYPE=2). Build logic lives in setup_deepep_v2_efa.sh (COPY'd, not curled) so it is
 # in-tree + reviewable. The DeepEP _C.so is built IN-POD on first boot (recipe/build_deepep.sh)
-# — it needs a live CUDA context the build sandbox lacks.
+# BY DESIGN, not necessity: the arch list is set per node (manifest DEEPEP_ARCH_LIST, default
+# 9.0 = H100/H200; the 10.x Blackwell values are documented but not verified, see README). nvcc
+# needs no GPU: the pinned fork's setup.py reads TORCH_CUDA_ARCH_LIST from the environment and never queries a device, and
+# the canonical deepep-v2-benchmark image compiles DeepEP inside `docker build` (multi-arch);
+# folding the build into this Dockerfile the same way is the alternative.
 #
 #   setup/build-push.sh builds + pushes ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} (setup/env_vars);
 #   manual equivalent: DOCKER_BUILDKIT=1 docker build -t <registry>/dynamo-deepep-v2-efa:<tag> .
@@ -64,7 +68,8 @@ RUN NCCL_ROOT=$(python3 -c "import nvidia.nccl, pathlib; print(pathlib.Path(nvid
 # DeepEP's ElasticBuffer asserts ginType==NCCL_GIN_TYPE_NONE. Userspace 2.5.2 pairs with
 # the gdrdrv >= 2.5 kernel module the compute nodes must load (README Prerequisites).
 # gdrcopy v2.5.2 == commit c91ad9f: pin the commit, not the tag (a bare tag is a moving ref
-# upstream can re-point — every other dep here is SHA-pinned).
+# upstream can re-point). The other git-cloned deps follow the same rule: DeepEP is checked out
+# at DEEPEP_SHA, and aws-ofi-nccl's tag clone is asserted against AWS_OFI_NCCL_SHA (Layer 4).
 ARG GDRCOPY_SHA=c91ad9f178e5fb729fc5b6dc62a77c3bb364d6c9
 RUN git clone https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
     && cd /tmp/gdrcopy && git fetch origin ${GDRCOPY_SHA} && git checkout ${GDRCOPY_SHA} \
@@ -73,10 +78,11 @@ RUN git clone https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
 
 # ---- Layer 4: aws-ofi-nccl GIN + DeepEP-V2 source (in-tree script, COPY'd not curled) ----
 COPY setup_deepep_v2_efa.sh /opt/setup_deepep_v2_efa.sh
-ARG AWS_OFI_NCCL_REF=v1.21.1                              # released tag (the canonical deepep-v2-benchmark's aws-ofi-nccl version)
+ARG AWS_OFI_NCCL_REF=v1.21.1                              # released tag (the canonical deepep-v2-benchmark's aws-ofi-nccl version); cloned by name ...
+ARG AWS_OFI_NCCL_SHA=2475c4c736907e68ebeadb3848f31231ee4a44d0   # ... and asserted against this commit (what v1.21.1 pointed at, tagged 2026-08-20): a re-pointed tag fails the build instead of silently changing the plugin
 ARG DEEPEP_SHA=97d8f9bcc1be31e9036db2ab591ef9b9f4e38619   # amazon-contributing/DeepEP@main, 2026-09-03 (the canonical V2/GIN source)
 RUN chmod +x /opt/setup_deepep_v2_efa.sh \
-    && AWS_OFI_NCCL_REF=${AWS_OFI_NCCL_REF} DEEPEP_SHA=${DEEPEP_SHA} \
+    && AWS_OFI_NCCL_REF=${AWS_OFI_NCCL_REF} AWS_OFI_NCCL_SHA=${AWS_OFI_NCCL_SHA} DEEPEP_SHA=${DEEPEP_SHA} \
        /opt/setup_deepep_v2_efa.sh
 ENV LD_LIBRARY_PATH=/opt/aws-ofi-nccl/lib:${LD_LIBRARY_PATH}
 # nvidia-container-runtime injects /dev/gdrdrv only when NVIDIA_GDRCOPY=enabled is set; required on

@@ -32,7 +32,7 @@ copies** — the table says what is shared and what differs, and why. **Merge or
 this sample's relative sibling links point at that folder, so until #1230 merges they have nothing on
 `main` to resolve against.
 
-| Layer / file | `../../vllm/deepep-v2-efa` (#1230 at `58be7802`) | this sample | Status |
+| Layer / file | `../../vllm/deepep-v2-efa` (#1230 at `ca5327ca`) | this sample | Status |
 |---|---|---|---|
 | `Dockerfile` Layers 1–3 (NGC base, EFA installer, torch/NCCL/NVSHMEM, gdrcopy) | `nvcr.io/nvidia/cuda:13.0.0-devel-ubuntu22.04`, EFA installer 1.50.0, `torch==2.11.0` (cu130), `nvidia-nccl-cu13 2.30.4`, `nvidia-nvshmem-cu13 3.6.5`, gdrcopy `c91ad9f` (v2.5.2) | same pins; this sample additionally pins `ninja` 1.13.2 | **shared** |
 | DeepEP-V2 source | `amazon-contributing/DeepEP@97d8f9bc` | `amazon-contributing/DeepEP@97d8f9bc` | **shared** (equal since #1230 round 4) |
@@ -92,7 +92,7 @@ non-obvious integration fixes, not config:
    host prerequisite instead (see Prerequisites).
 3. **DeepEP-V2 source** = the
    [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) fork at a pinned SHA
-   (`97d8f9bc`) — the same source the repo's canonical V2/GIN provisioner pins ("the benchmark
+   (`97d8f9bc`) — the same fork the repo's canonical V2/GIN provisioner builds, from its floating `main` ("the benchmark
    supports no other source"). The fork carries the in-tree successors of deepseek
    [PR#612](https://github.com/deepseek-ai/DeepEP/pull/612)'s EFA work: the QP count clamps from `_C`
    runtime constants and the RDMA link rate is probed from sysfs, so no `EP_EFA_MAX_QPS` /
@@ -152,15 +152,15 @@ At this pin, default (non-eager) compilation crashes deterministically ~48 s int
   The AWS GPU AMIs ship it; if absent, `sudo modprobe gdrdrv` (gdrcopy ≥ 2.5, matching the image's
   `c91ad9f`/v2.5.2 userspace build).
   - *gdrdrv on the nodes the numbers were taken on:* the 2026-08-14 tables (vLLM-sample image) and the
-    2026-09-04 Dynamo E2E ran on the **previous** cgk p5en node group, whose kernel `gdrdrv` was recorded
+    2026-09-04 Dynamo E2E ran on the **previous** p5en node group, whose kernel `gdrdrv` was recorded
     as **2.4** (2026-07-25/29 records; no per-run `/sys/module/gdrdrv/version` reading was kept for those
     two dates). Both runs used the **#1351-patched plugin** (aws-ofi-nccl `9c44d34` + #1351 commit 1 with
     the `OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY` override) — that is exactly why the sample originally
     cherry-picked #1351. The stock `v1.21.1` this sample now builds would have refused GIN on those nodes,
     which is what makes the ≥ 2.5 prerequisite above load-bearing rather than advisory. The **current**
-    node group (`p5en-ng-sep2026-v2`, Amazon Linux 2023.12.20260831, kernel 6.12.103, nodes created
+    node group (Amazon Linux 2023.12.20260831, kernel 6.12.103, nodes created
     2026-09-18) reports **2.5**, read in-pod on both nodes on 2026-09-27, so stock `v1.21.1` passes the
-    version gate there on paper — **no run on stock `v1.21.1` + gdrdrv 2.5 exists yet**; the queued
+    version gate there on paper — **no E2E of this sample on stock `v1.21.1` + gdrdrv 2.5 exists yet**; the queued
     re-measure is that run. A gdrdrv-2.4 host cannot be fixed from the container; the fix is a host
     driver update.
 - **2Mi hugepages pre-allocated on the compute nodes.** The manifest requests `hugepages-2Mi: 5120Mi`
@@ -191,7 +191,10 @@ bash setup/build-push.sh
 
 The image is NGC-from-scratch (`FROM nvcr.io/nvidia/cuda:...`). `setup_deepep_v2_efa.sh` builds
 aws-ofi-nccl (GIN, released `v1.21.1`) and stages the DeepEP-V2 source; the `_C.so` is compiled in-pod on
-first boot (needs a live CUDA context) by `recipe/`-invoked `build_deepep.sh`. Dynamo is added in
+first boot by `recipe/build_deepep.sh`, for the arch the node runs (`DEEPEP_ARCH_LIST`, default `9.0`).
+That is a design choice, not a sandbox limitation: `nvcc` needs no GPU, and the canonical
+`deepep-v2-benchmark` image compiles DeepEP inside `docker build` (see "Known limitations", divergence 3).
+Dynamo is added in
 Layer 5c as `pip install --no-deps ai-dynamo{,-runtime}==1.3.1` — `--no-deps` is load-bearing: it
 keeps pip from re-resolving `ai-dynamo`'s nine unconditional dependencies (`transformers`,
 `prometheus-client`, `msgspec`, `pyzmq`, …) over the versions the pinned vLLM wheel installed. (Its
@@ -363,16 +366,21 @@ See `benchmarks/README.md` for the measured eager and non-eager tables + environ
   EFA under a Dynamo front, not those higher-level Dynamo features.
 - `setup_deepep_v2_efa.sh` is a **documented variant** of the repo's canonical V2/GIN provisioner,
   [`micro-benchmarks/expert-parallelism/deepep-v2-benchmark/setup_deepep_gin.sh`](../../../../micro-benchmarks/expert-parallelism/deepep-v2-benchmark/setup_deepep_gin.sh)
-  (which appeared 2026-08-24). When the canonical moves, that is the file to track. Two deliberate
+  (which appeared 2026-08-24). When the canonical moves, that is the file to track. Three deliberate
   divergences justify a separate script here; the next reader should know they are choices, not drift:
   1. **CPU-proxy (`NCCL_GIN_TYPE=2`), not EFA-GDA.** This is the GDAKI-off, CPU-proxy transport that is
      viable on EFA today; the canonical benchmark's defaults and NCCL build target a different point in
      that design space.
   2. **Coupling to the vLLM wheel's torch/NCCL ABI.** The DeepEP `_C.so` here is built in-pod against
-     the exact `torch 2.11+cu130` / `nvidia-nccl-cu13 2.30.4` the pinned vLLM wheel drags in (Dockerfile
-     Layer 5b re-pins it), so the toolchain is wheel-driven rather than a standalone NCCL build tree.
+     the exact `torch 2.11.0+cu130` from Layer 3 (the pinned wheel requires `torch==2.11.0`, and Layer 5b asserts it), plus `nvidia-nccl-cu13 2.30.4` (Dockerfile
+     Layer 5b re-pins it after the wheel install drags NCCL down to torch's 2.28.x), so the toolchain is
+     wheel-driven rather than a standalone NCCL build tree.
      (The aws-ofi-nccl plugin itself is the canonical's version — released `v1.21.1`, built from source
      so gdrcopy support is compiled in by construction.)
+  3. **Where DeepEP is compiled.** The canonical `deepep.Dockerfile` builds DeepEP inside `docker build`
+     for `9.0;10.0;10.3` in one image; this sample compiles the `_C.so` in-pod on first boot for the
+     arch the node runs (`DEEPEP_ARCH_LIST`), keeping DeepEP out of the image, at the cost of a ~2 min
+     first-boot compile per pod. Folding the build into the Dockerfile the canonical way is the alternative.
 
   The **DeepEP source** matches the canonical: both pin the
   [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) fork — this sample at
