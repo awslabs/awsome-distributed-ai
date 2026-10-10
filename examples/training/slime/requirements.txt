@@ -29,7 +29,7 @@ ray[default]==2.55.1
 kernels==0.10.4
 huggingface-hub==1.18.0
 tokenizers==0.22.2
-datasets==4.5.0
+datasets==5.0.1
 accelerate==1.13.0
 sentencepiece==0.2.1
 protobuf==6.33.5
