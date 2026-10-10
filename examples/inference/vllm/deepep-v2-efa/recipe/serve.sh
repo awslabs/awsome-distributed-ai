@@ -23,7 +23,7 @@
 #   The published tables were NOT re-measured on non-eager at this pin — measure at your
 #   target concurrency before quoting non-eager numbers.
 set -euo pipefail   # -e: preflight failures below must STOP the launch, not fall through to vllm serve
-ROLE="${1:?usage: serve.sh {leader|worker} <leader-ip> [start-rank]}"; DP_MASTER_IP="${2:?need leader ip}"
+ROLE="${1:?usage: serve.sh leader|worker <leader-ip> [start-rank]}"; DP_MASTER_IP="${2:?need leader ip}"
 case "$ROLE" in leader|worker) ;; *) echo "FATAL: unrecognized role '$ROLE' (leader|worker)"; exit 2 ;; esac
 DP_MASTER_PORT="${DP_MASTER_PORT:-29500}"
 

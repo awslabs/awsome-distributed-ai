@@ -11,7 +11,7 @@
 # Env (shared with serve.sh): NNODES (default 2), GPUS_PER_NODE (default 8).
 set -uo pipefail
 
-ROLE="${1:?usage: run-kernel-test.sh {leader|worker} <leader-ip> [node-rank]}"
+ROLE="${1:?usage: run-kernel-test.sh leader|worker <leader-ip> [node-rank]}"
 case "$ROLE" in leader|worker) ;; *) echo "FATAL: unrecognized role '$ROLE' (leader|worker)"; exit 2 ;; esac
 LEADER_IP="${2:?need leader ip}"
 if [ "$ROLE" = "worker" ]; then NODE_RANK_ARG="${3:?worker requires an explicit node-rank (1,2,...)}"; else NODE_RANK_ARG=0; fi
