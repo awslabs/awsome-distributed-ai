@@ -1,0 +1,7 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# The build needs only nccl-ep.Dockerfile and setup_nccl_ep_efa.sh; keep local settings and
+# run results out of the build context.
+kubernetes/env_vars
+results/
+__pycache__/

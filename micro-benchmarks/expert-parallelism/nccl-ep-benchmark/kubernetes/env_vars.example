@@ -1,0 +1,23 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Copy to env_vars (keep it out of version control), edit, then: source env_vars
+
+# kubectl context and namespace, always explicit. The namespace must already exist; nothing here creates or deletes
+# it. If needed: kubectl --context "$KUBE_CONTEXT" create namespace "$NAMESPACE"
+export KUBE_CONTEXT=<your-kubectl-context>
+export NAMESPACE=nccl-ep-efa
+
+# Image built from ../nccl-ep.Dockerfile and pushed to your registry, for example
+#   <account>.dkr.ecr.<region>.amazonaws.com/nccl-ep-efa:<immutable-tag>
+# Alternative: the plain NGC base, built in the pods by the launcher (BUILD_IN_POD=1):
+#   nvcr.io/nvidia/cuda:13.0.2-devel-ubuntu24.04@sha256:5dc1bca23d05bd37b011be68ec470c03b403a5da07ec3a86e41af9470e9d0cc6
+export IMAGE_URI=<your-registry>/nccl-ep-efa:<immutable-tag>
+export BUILD_IN_POD="${BUILD_IN_POD:-0}"   # keeps a value set on the command line
+
+# Two GPU-free nodes of this instance type (kubectl describe node: nvidia.com/gpu allocated 0)
+export INSTANCE_TYPE=p5en.48xlarge
+export NODE_A=<node-name-1>
+export NODE_B=<node-name-2>
+export GPU_PER_NODE=8     # ep_test/ep_bench are launched 8 ranks per node
+export EFA_PER_NODE=16    # p5en.48xlarge has 16 EFA devices (p5.48xlarge: 32, see README limits)
