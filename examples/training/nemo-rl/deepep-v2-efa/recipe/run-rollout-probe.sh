@@ -12,7 +12,7 @@
 # EP_EXPERTS/EP_TOKENS/EP_HIDDEN/EP_TOPK/EP_NUM_SMS/EP_NUM_QPS (see env_vars.example).
 set -uo pipefail
 
-ROLE="${1:?usage: run-rollout-probe.sh {leader|worker} <leader-ip> [node-rank]}"
+ROLE="${1:?usage: run-rollout-probe.sh leader|worker <leader-ip> [node-rank]}"
 case "$ROLE" in leader|worker) ;; *) echo "FATAL: unrecognized role '$ROLE' (leader|worker)"; exit 2 ;; esac
 LEADER_IP="${2:?need leader ip}"
 if [ "$ROLE" = "worker" ]; then NODE_RANK_ARG="${3:?worker requires an explicit node-rank (1,2,...)}"; else NODE_RANK_ARG=0; fi
