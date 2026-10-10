@@ -1,5 +1,5 @@
 accelerate==0.32.1
-datasets==2.20.0
+datasets==5.0.1
 pyfastx==2.1.0
 transformers==5.10.1
 boto3==1.34.144
