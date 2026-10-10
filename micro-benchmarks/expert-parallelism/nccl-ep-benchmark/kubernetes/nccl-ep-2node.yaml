@@ -1,0 +1,167 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# NCCL EP over EFA: two pods, one per node, each holding all 8 GPUs and all EFA devices of a
+# p5en.48xlarge. The pods idle; ../scripts/run_nccl_ep_efa.sh drives the test with mpirun.
+#
+# Render, then apply (see README):
+#   source env_vars
+#   envsubst '$NAMESPACE $IMAGE_URI $INSTANCE_TYPE $NODE_A $NODE_B $GPU_PER_NODE $EFA_PER_NODE' \
+#     < nccl-ep-2node.yaml > rendered.yaml
+#
+# hostNetwork: mpirun starts the remote ranks over a per-run sshd and needs the node addresses;
+# the EFA hardware counters are read in-pod. Not privileged: the NCCL GIN proxy runs without
+# GDRCopy by default (NCCL_GDRCOPY_ENABLE=0), so /dev/gdrdrv is not needed.
+# restartPolicy Never: a pod that fails stays for inspection; it is never restarted mid-test.
+#
+# This file holds only the two pods. NAMESPACE must already exist
+# (kubectl create namespace <name>); the file never creates, labels or
+# annotates it, so kubectl delete -f on a rendered copy removes the two pods
+# and nothing else.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nccl-ep-0
+  namespace: ${NAMESPACE}
+  labels:
+    app: nccl-ep-efa
+spec:
+  restartPolicy: Never
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+  terminationGracePeriodSeconds: 10
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: kubernetes.io/hostname
+            operator: In
+            values: ["${NODE_A}"]
+          - key: node.kubernetes.io/instance-type
+            operator: In
+            values: ["${INSTANCE_TYPE}"]
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app: nccl-ep-efa
+        topologyKey: kubernetes.io/hostname
+  tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+  containers:
+  - name: nccl-ep
+    image: ${IMAGE_URI}
+    imagePullPolicy: IfNotPresent
+    command: ["/bin/bash", "-c"]
+    args:
+    - |
+      trap 'exit 0' TERM INT
+      echo "nccl-ep pod $(hostname) up $(date -u +%FT%TZ)"
+      # bash stays PID 1 so it reaps processes orphaned by kubectl exec and mpirun
+      while :; do sleep 3600 & wait $!; done
+    securityContext:
+      capabilities:
+        add: ["IPC_LOCK"]
+    resources:
+      requests:
+        nvidia.com/gpu: "${GPU_PER_NODE}"
+        vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
+        cpu: "40"
+        memory: 400Gi
+        ephemeral-storage: 60Gi
+      limits:
+        nvidia.com/gpu: "${GPU_PER_NODE}"
+        vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
+        cpu: "80"
+        memory: 400Gi
+        ephemeral-storage: 60Gi
+    volumeMounts:
+    - name: shm
+      mountPath: /dev/shm
+    - name: work
+      mountPath: /work
+  volumes:
+  - name: shm
+    emptyDir:
+      medium: Memory
+      sizeLimit: 32Gi
+  - name: work
+    emptyDir:
+      sizeLimit: 40Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nccl-ep-1
+  namespace: ${NAMESPACE}
+  labels:
+    app: nccl-ep-efa
+spec:
+  restartPolicy: Never
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+  terminationGracePeriodSeconds: 10
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: kubernetes.io/hostname
+            operator: In
+            values: ["${NODE_B}"]
+          - key: node.kubernetes.io/instance-type
+            operator: In
+            values: ["${INSTANCE_TYPE}"]
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app: nccl-ep-efa
+        topologyKey: kubernetes.io/hostname
+  tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+  containers:
+  - name: nccl-ep
+    image: ${IMAGE_URI}
+    imagePullPolicy: IfNotPresent
+    command: ["/bin/bash", "-c"]
+    args:
+    - |
+      trap 'exit 0' TERM INT
+      echo "nccl-ep pod $(hostname) up $(date -u +%FT%TZ)"
+      # bash stays PID 1 so it reaps processes orphaned by kubectl exec and mpirun
+      while :; do sleep 3600 & wait $!; done
+    securityContext:
+      capabilities:
+        add: ["IPC_LOCK"]
+    resources:
+      requests:
+        nvidia.com/gpu: "${GPU_PER_NODE}"
+        vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
+        cpu: "40"
+        memory: 400Gi
+        ephemeral-storage: 60Gi
+      limits:
+        nvidia.com/gpu: "${GPU_PER_NODE}"
+        vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
+        cpu: "80"
+        memory: 400Gi
+        ephemeral-storage: 60Gi
+    volumeMounts:
+    - name: shm
+      mountPath: /dev/shm
+    - name: work
+      mountPath: /work
+  volumes:
+  - name: shm
+    emptyDir:
+      medium: Memory
+      sizeLimit: 32Gi
+  - name: work
+    emptyDir:
+      sizeLimit: 40Gi
