@@ -1,0 +1,20 @@
+Upstream: https://github.com/NVIDIA/Megatron-LM/pull/5153
+Exact head: 9f7cd50a440b0d29625cfea9c58d55ebb4484b1f
+Base dev: bb5dfd08f09ce06c5925af453fef06b3129f199d
+Scope: only get_elastic_buffer same-subgroup NCCL initialization before
+DeepEP obtains/caches its communicator. No overlap or layout changes.
+
+--- a/megatron/core/transformer/moe/fused_a2a.py
++++ b/megatron/core/transformer/moe/fused_a2a.py
+@@ -93,6 +93,11 @@
+ ):
+     """Get or create a DeepEP v2 elastic buffer for all-to-all communication."""
+     global _elastic_buffer
++
++    if _elastic_buffer is None or _elastic_buffer.group != group:
++        # Initialize the NCCL communicator before DeepEP reads _comm_ptr() in
++        # get_buffer_size_hint(); a fresh group's pointer may still be null.
++        torch.distributed.all_reduce(torch.zeros(1, device="cuda"), group=group)
+ 
+     num_bytes = ElasticBuffer.get_buffer_size_hint(
+         group, num_max_tokens_per_rank=num_max_tokens_per_rank, hidden=hidden, num_topk=num_topk
