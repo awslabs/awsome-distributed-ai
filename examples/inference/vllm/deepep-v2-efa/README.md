@@ -1,0 +1,228 @@
+<!-- Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0 -->
+# vLLM with DeepEP-V2 MoE all-to-all over EFA (eager + non-eager)
+
+Serve a Mixture-of-Experts model on vLLM with **DeepEP-V2** (`ElasticBuffer`) expert-parallel
+all-to-all, routed over **AWS EFA** via the NCCL-GIN **CPU-proxy** path (`NCCL_GIN_TYPE=2`). This is the
+V2 / NCCL-GIN counterpart to the NVSHMEM-backed `../../sglang/dsr1-deepep-efa` sample: no NVSHMEM, no
+IBGDA — DeepEP-V2's `ElasticBuffer` drives the dispatch/combine collectives over `aws-ofi-nccl`'s GIN
+plugin on `efa-direct`.
+
+Validated on **2× and 4× p5en.48xlarge (H200)**, `Qwen/Qwen3-30B-A3B-FP8`: **measured at DP16/EP16**
+(the concurrency sweeps in `benchmarks/`); **DP32/EP32 functionally validated** (16/16 HTTP 200
+bring-up, no measured sweep — the shipped manifest is the 2-node/EP16 shape).
+
+## How DeepEP-V2 gets onto EFA
+
+DeepEP's default transport is NVSHMEM/IBGDA, which EFA does not provide. The V2 (`ElasticBuffer`) path
+instead runs its dispatch/combine over `aws-ofi-nccl`'s **GIN CPU-proxy** (`NCCL_GIN_TYPE=2` — NCCL
+selects the GIN backend; no aws-ofi-nccl env is involved) on the `efa-direct` fabric. Three things
+make this work, and two of them are non-obvious integration fixes, not config:
+
+### Integration fixes baked into this sample
+
+1. **`EP_REUSE_NCCL_COMM=0` (required, or serve init segfaults).** Upstream DeepEP flipped this default
+   to `1` (reuse torch's NCCL comm). Under vLLM, torch creates NCCL comms lazily and has run no
+   collective on the EP group before `ElasticBuffer` construction, so `_comm_ptr()` returns `0` →
+   `ncclTeamWorld(nullptr)` → deterministic segfault on all ranks. Setting `0` restores DeepEP's
+   create-own-comm path. (Env, set in `recipe/serve.sh` and `kubernetes/`.)
+2. **The GIN plugin comes from the EFA installer** (>= 1.50.0 bundles aws-ofi-nccl 1.21.1, whose GIN
+   support is GA since [v1.21.0](https://github.com/aws/aws-ofi-nccl/releases/tag/v1.21.0), 2026-08) —
+   it is no longer built from source here. The host must run **gdrcopy/gdrdrv >= 2.5**: the gdrdrv-2.4
+   forced-PCIe override this sample used to cherry-pick
+   ([aws/aws-ofi-nccl#1351](https://github.com/aws/aws-ofi-nccl/pull/1351)) was declined upstream
+   (gdrcopy 2.4.x has silent-data-corruption issues), so on a 2.4 host the fix is a host driver
+   upgrade, not a container knob.
+3. **DeepEP-V2 source** = the
+   [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) fork at a pinned SHA
+   (`97d8f9bc`) — the tree AWS points to for DeepEP-V2 on EFA and the fork the repo's canonical V2/GIN
+   provisioner builds from its floating `main` ("the benchmark supports no other source"); the sibling
+   `vllm/deepep-v2-gdaki-efa` and `nvidia-dynamo/deepep-v2-efa` samples pin the same SHA. The fork
+   carries the in-tree successors of deepseek [PR#612](https://github.com/deepseek-ai/DeepEP/pull/612)'s
+   EFA work — the QP count clamps from `_C` runtime constants and the RDMA link rate is probed from
+   sysfs — so no PR merge or local patch is applied, and no `EP_EFA_MAX_QPS` / `EP_EFA_RDMA_GBS` env
+   exists (or is set) in this sample.
+
+### eager vs non-eager (both measured; see `benchmarks/`)
+
+| Mode | Status | How |
+|---|---|---|
+| `--enforce-eager` | **Serves, zero extra patches** | the default this sample ships |
+| default compilation (CUDA graphs) | **Unblocked upstream — no patch shipped here** | vLLM [#46404](https://github.com/vllm-project/vllm/pull/46404) + [#46432](https://github.com/vllm-project/vllm/pull/46432) and the empty-`ExpertTokensMetadata` guard ([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632), merged 2026-08-20) are all in main. The `VLLM_SHA` pin is now on #52632's merge commit, so default compilation works without `--enforce-eager` and with no build-time patch step. **Serving at this pin is not yet re-measured here, and the one run at this wheel (the Dynamo sibling, 2026-09-04) faulted — see the caveat below before relying on this row.** |
+
+At stock `e2f993dc4` (the first commit with the `deepep_v2` backend), default compilation crashes
+deterministically ~48 s into startup in `profile_run` (`deepep_v2.py` combine). `--enforce-eager` avoids
+it and is the path this sample ships and supports. Historical non-eager measurements (taken with the
+then-unmerged guard) remain in `benchmarks/` for reference.
+
+> **Serving at the shipped pin is not yet re-measured here**, and one data point exists at this wheel: the
+> Dynamo sibling (`../../nvidia-dynamo/deepep-v2-efa`, [PR #1256](https://github.com/awslabs/awsome-distributed-ai/pull/1256))
+> ran `14617c2b` (`0.26.1rc1.dev1000`, image `v2-20260904c`) on 2026-09-04 under `ai-dynamo 1.4.2`'s
+> `dynamo.vllm` on the pre-review substrate (DeepEP `b306af06`+PR#612 — effective tree `28d1f7fb` —
+> aws-ofi-nccl `9c44d34` + #1351 commit 1, EFA 1.49.0) and the DP16/EP16 serve faulted
+> `CUDA_ERROR_LAUNCH_FAILED (719)` at DeepEP `csrc/jit/handle.hpp:97` in `profile_run` (eager default; a
+> non-eager repro is asserted in the sibling's same-day notes only) while the standalone kernel test passed
+> on the same image; it then re-paired to `e2f993dc4` + `ai-dynamo 1.3.1` and served. That fault was under
+> a different front and substrate, so it does not show whether plain `vllm serve` at `14617c2b` on this
+> recipe serves — plain `vllm serve` at `14617c2b` and the post-review substrate (fork `97d8f9bc`, bundled
+> 1.21.1 plugin) are both unmeasured, and the queued 2-node re-validation (a serve at `14617c2b` vs
+> `e2f993dc4` on the shipped recipe) is what resolves it. The pin stays where it is until then.
+
+<!-- MD028: separate the two blockquotes so the blank line is not read as inside one quote -->
+
+> **Shared-experts caveat when bumping the pin:** at `e2f993dc4` there is a second, independent
+> non-eager crash cause that bites models with shared experts (DeepSeek-V3/R1, DeepSeek-V2-Lite —
+> models `serve.sh` explicitly supports): the `-1` sentinel expert IDs that vLLM
+> [#46432](https://github.com/vllm-project/vllm/pull/46432) legitimately produces reach
+> `moe_align_sum_kernels.cu`, which guards `expert_id >= num_experts` but not `expert_id < 0`
+> (out-of-bounds atomic write). Upstream fixed it in
+> [#47785](https://github.com/vllm-project/vllm/pull/47785) (merged 2026-07-10). Qwen3-30B-A3B has
+> no shared experts, which is why the sweeps here were green without it. Any pin past
+> [#52632](https://github.com/vllm-project/vllm/pull/52632)'s merge also includes #47785 (it merged
+> earlier), so the "bump the pin past #52632" guidance below picks up both fixes.
+
+## Prerequisites
+
+- An EKS cluster of p5en.48xlarge (H200) with EFA + the EFA K8s device plugin (the shipped launcher);
+  the container also runs under raw `docker run` on any 2 EFA hosts if you wire the rendezvous by hand.
+- Host **gdrcopy/gdrdrv >= 2.5** (check `cat /sys/module/gdrdrv/version` on the node). The GIN plugin
+  does not support gdrdrv 2.4 (see "Integration fixes" above).
+- An ECR repo you own (set in `setup/env_vars`); this sample never hardcodes a registry.
+- Hugging Face access for the model (`Qwen/Qwen3-30B-A3B-FP8` is public, no token required).
+
+## Build
+
+```bash
+cp setup/env_vars.example setup/env_vars && $EDITOR setup/env_vars   # set REGISTRY, IMAGE_TAG
+bash setup/build-push.sh
+```
+
+The image is NGC-from-scratch (`FROM nvcr.io/nvidia/cuda:...`). The EFA installer (>= 1.50.0) provides
+the GIN-capable aws-ofi-nccl plugin (build-gated on its `ncclGinPlugin_v14` export);
+`setup_deepep_v2_efa.sh` stages the pinned DeepEP-V2 source; the one DeepEP **build** — the `_C.so` —
+is compiled in-pod on first boot by `recipe/build_deepep.sh`, for the arch the node runs
+(`DEEPEP_ARCH_LIST`, default `9.0`). That is a design choice, not a sandbox limitation: `nvcc` needs no
+GPU, and the canonical `deepep-v2-benchmark` image compiles DeepEP inside `docker build` (see "Known
+limitations", divergence 3). The in-tree `Dockerfile` is the canonical, reviewable build. The published benchmark numbers were taken with it at
+the previous pin (`e2f993dc4`); the pin has since moved to `14617c2b` (vLLM #52632's merge commit), the
+DeepEP source to the `amazon-contributing` fork and the GIN plugin to the installer-bundled build, and
+the tables have **not** been re-measured on the current substrate (build + symbol gates pass; the
+2-node E2E re-run is the outstanding step) — see `benchmarks/README.md`.
+
+The one image name used everywhere is `${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}` from
+`setup/env_vars` (`build-push.sh` builds and pushes exactly that; point the manifest's `image:` at
+the same).
+
+## Smoke-test the EFA transport before loading the model
+
+**1. Static image check (single node, no rendezvous):**
+
+```bash
+source setup/env_vars && bash recipe/verify-image.sh "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+```
+
+Asserts (fail-loud) the efa provider resolves (`fi_info` — the live `efa-direct` fabric check runs
+when `/dev/infiniband` is present on the host), a single pinned libnccl wins **with the GIN/LSA
+symbols present**, the GIN plugin exports `ncclGinPlugin`, and the DeepEP-V2 source (ElasticBuffer +
+the kernel-smoke test) is staged at `/opt/DeepEP`. The `import deep_ep` assertion happens in-pod
+after `build_deepep.sh`, not here — the `_C.so` is deliberately not baked into the image.
+
+**2. Cross-node kernel smoke (prove bytes move over EFA before the model load):**
+
+```bash
+# in the pods/containers, one per node — runs DeepEP-V2's own elastic EP test
+bash /opt/run-kernel-test.sh leader <leader-ip>            # node 0
+bash /opt/run-kernel-test.sh worker <leader-ip> 1          # node 1
+```
+
+Runs `DeepEP/tests/elastic/test_ep.py` across the nodes with the exact proxy-Gin/EFA env the serve
+uses, and only prints `KERNEL-TEST PASS` when the test passes **and** the `NCCL_DEBUG=INFO` log shows
+the `efa-direct` banner (so a green result cannot be a silent TCP/SHM fallback). This is the one step
+that cannot hang for hours — run it before committing a node to the multi-hundred-GB weight load.
+
+For a standalone DeepEP-V2 dispatch/combine benchmark of the fabric itself (numbers, not just
+pass/fail — and without any vLLM in the loop), use the repo's runnable V2 micro-benchmark:
+[`micro-benchmarks/expert-parallelism/deepep-v2-benchmark/`](../../../../micro-benchmarks/expert-parallelism/deepep-v2-benchmark/)
+(own image + Slurm launchers; same NCCL-GIN/EFA transport this sample serves over).
+
+## Serve
+
+```bash
+# eager (default). SERVE_DP = total data-parallel = EP size; SERVE_DP_LOCAL = GPUs/node.
+SERVE_DP=16 bash recipe/serve.sh leader <leader-ip>       # on node 0
+SERVE_DP=16 bash recipe/serve.sh worker <leader-ip> 8     # on node 1
+```
+
+Default compilation (CUDA graphs) works with the shipped pin: the upstream guard
+([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)) merged 2026-08-20 and the `VLLM_SHA`
+pin is now on its merge commit, so you can drop `--enforce-eager` — no patch step. The knob is
+`SERVE_ENFORCE_EAGER`: it defaults to `1` (eager, the mode the published tables were measured with);
+set `SERVE_ENFORCE_EAGER=0` to serve with default compilation. Re-measure at your concurrency before
+quoting non-eager numbers — the `benchmarks/` tables are eager and were taken on the previous pin.
+Kubernetes: `kubectl apply -f kubernetes/` (2-node StatefulSet + headless service; the proxy-Gin env
+contract + EFA device requests are set there).
+
+## Benchmark
+
+```bash
+# from inside the leader pod (both scripts are baked into the image at /opt):
+kubectl -n vllm-deepep exec vllm-deepep-v2-0 -- env OUT_ROOT=/work/benchmarks bash /opt/benchmark.sh 127.0.0.1
+
+# or from outside the cluster, via a port-forward to the leader pod:
+kubectl -n vllm-deepep port-forward pod/vllm-deepep-v2-0 8000:8000 &
+bash recipe/benchmark.sh 127.0.0.1
+```
+
+Concurrency sweep 1/8/16/32/64 (5× requests per level), writes `benchmarks/raw/`. Exits non-zero
+unless **every** request at **every** level succeeded. See `benchmarks/README.md` for the measured
+eager and non-eager tables + environment provenance.
+
+## Known limitations
+
+- Measured on **H200 (p5en, `sm_90`) only**; no Blackwell serving run is in this sample. The manifest's
+  `DEEPEP_ARCH_LIST=10.0` (p6-b200) / `10.3` (p6-b300) knobs are **documented but not verified**: an
+  earlier bring-up on 2× p6-b300 hit a Blackwell PTX codegen failure at CUDA 13.0 on the
+  `deepseek-ai/DeepEP@b306af06` lineage this sample previously pinned. The shipped pin is now the
+  [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) fork, which carries the
+  `st.bulk` 64-bit-operand fix ([#3](https://github.com/amazon-contributing/DeepEP/pull/3)) that removes
+  that specific codegen failure — but no Blackwell run exists at the shipped pin, so re-verify on p6
+  before advertising those rows as working.
+- The `benchmarks/` numbers are an **at-scale throughput + relative-latency** datapoint (fixed 128-token
+  greedy decode, single sweep per mode), **not** a tuned per-token-latency (TTFT) baseline.
+- Default-compilation (non-eager) serving needs the empty-`ExpertTokensMetadata` guard
+  ([vLLM #52632](https://github.com/vllm-project/vllm/pull/52632), merged 2026-08-20). This sample
+  carries **no build-time patches**: the `VLLM_SHA` pin is now on #52632's merge commit, so non-eager
+  works with zero recipe changes (`SERVE_ENFORCE_EAGER=0`). The non-eager numbers in `benchmarks/` were
+  measured on the **previous** pin (`e2f993dc4`) with that guard applied as an unmerged patch; they have
+  **not** been re-measured on the shipped pin — treat them as historical, not as what a rebuild produces.
+- Only a **Kubernetes** launcher is shipped and exercised (`kubernetes/`). No Slurm/Pyxis `.sbatch` is
+  provided because none was run; the raw two-node `recipe/serve.sh` path is the manual fallback.
+- `setup_deepep_v2_efa.sh` is a **documented variant** of the repo's canonical V2/GIN provisioner,
+  [`micro-benchmarks/expert-parallelism/deepep-v2-benchmark/setup_deepep_gin.sh`](../../../../micro-benchmarks/expert-parallelism/deepep-v2-benchmark/setup_deepep_gin.sh)
+  (which appeared 2026-08-24). When the canonical moves, that is the file to track. Both scripts now
+  consume the **EFA-installer-bundled aws-ofi-nccl** (the canonical migrated in upstream
+  [#1239](https://github.com/awslabs/awsome-distributed-ai/pull/1239); this sample followed in review
+  round 3 — its earlier aws-ofi-nccl#1351 cherry-pick was declined upstream and is gone). Three
+  deliberate divergences justify a separate script here; the next reader should know they are
+  choices, not drift:
+  1. **CPU-proxy (`NCCL_GIN_TYPE=2`), not EFA-GDA.** This is the GDAKI-off, CPU-proxy transport that is
+     viable on EFA today; the canonical benchmark's defaults and NCCL build target a different point in
+     that design space.
+  2. **Coupling to the vLLM wheel's torch/NCCL ABI.** The DeepEP `_C.so` here is built in-pod against
+     the exact `torch 2.11+cu130` / `nvidia-nccl-cu13 2.30.4` the pinned vLLM wheel drags in (Dockerfile
+     Layer 5b re-pins it), so the toolchain is wheel-driven rather than a standalone NCCL build tree.
+  3. **Where DeepEP is compiled.** The canonical `deepep.Dockerfile` builds DeepEP inside `docker build`
+     for `9.0;10.0;10.3` in one image; this sample compiles the `_C.so` in-pod on first boot for the
+     arch the node runs (`DEEPEP_ARCH_LIST`), keeping DeepEP out of the image, at the cost of a ~2 min
+     first-boot compile per pod. Folding the build into the Dockerfile the canonical way is the alternative.
+
+  The **DeepEP source** is no longer a divergence: since review round 4 this sample pins the same
+  [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) fork the canonical
+  builds, at the immutable SHA `97d8f9bc` rather than the canonical's floating `main` (`97d8f9bc` includes the Blackwell `st.bulk` 64-bit-operand fix,
+  [amazon-contributing/DeepEP#3](https://github.com/amazon-contributing/DeepEP/pull/3)). The
+  `benchmarks/` numbers were measured on the previous `deepseek-ai/DeepEP@b306af06`+PR#612 tree on H200
+  (`sm_90`) — see the provenance table there, and the Blackwell caveat under **Known limitations**
+  before using the `DEEPEP_ARCH_LIST=10.x` knob.
+- `setup_deepep_v2_efa.sh` is deliberately **outside** `.github/workflows/deepep-vendor-sync.yml`. That
+  CI gates only the NVSHMEM `setup_deepep_efa.sh` vendored copy (canonical at
+  `micro-benchmarks/expert-parallelism/deepep-benchmark/`) — a different script — so this V2/GIN variant
+  is correctly not in that workflow. Do not add it to that workflow.

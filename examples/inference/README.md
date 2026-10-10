@@ -6,6 +6,7 @@ Framework-centric inference engine examples, organized by serving engine.
 |---|---|---|
 | [`vllm`](./vllm) | [`dsv3-uccl-nixl`](./vllm/dsv3-uccl-nixl) | DeepSeek-V3 disaggregated (prefill/decode) inference with vLLM, UCCL-EP, and NIXL on EKS |
 | [`vllm`](./vllm) | [`cosmos-reason`](./vllm/cosmos-reason) | NVIDIA Cosmos Reason physical-reasoning VLM served by vLLM on EKS / SageMaker HyperPod EKS |
+| [`vllm`](./vllm) | [`deepep-v2-efa`](./vllm/deepep-v2-efa) | `Qwen3-30B-A3B-FP8` MoE with DeepEP-V2 expert-parallel all-to-all over EFA via the NCCL-GIN CPU-proxy on `p5en.48xlarge` — eager + non-eager, DP16/EP16 and DP32/EP32 |
 | [`sglang`](./sglang) | [`dsr1-deepep-efa`](./sglang/dsr1-deepep-efa) | DeepSeek-R1 on p5/p5en (EC2 + Docker) with DeepEP MoE all-to-all over NVSHMEM-libfabric/EFA — colocated and 2P2D PD-disaggregated |
 | [`nvidia-dynamo`](./nvidia-dynamo) | [`nvidia-dynamo`](./nvidia-dynamo) | NVIDIA Dynamo (SGLang backend) on SageMaker HyperPod EKS — aggregated and PD-disaggregated serving via the Dynamo operator |
 | [`sglang`](./sglang) | [`qwen3.5-27b-b300-intra-pd`](./sglang/qwen3.5-27b-b300-intra-pd) | Qwen3.5-27B with intra-node prefill/decode disaggregation on a single B300 node |
