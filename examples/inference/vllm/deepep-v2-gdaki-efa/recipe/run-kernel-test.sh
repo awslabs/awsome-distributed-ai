@@ -12,7 +12,7 @@
 # OFI_NCCL_GDAKI_EFA_HW_COUNTER (default "off" here — set "auto" on efa.ko>=3.3.0 nodes).
 set -uo pipefail
 
-ROLE="${1:?usage: run-kernel-test.sh {leader|worker} <leader-ip> [node-rank]}"
+ROLE="${1:?usage: run-kernel-test.sh leader|worker <leader-ip> [node-rank]}"
 LEADER_IP="${2:?need leader ip}"
 NODE_RANK_ARG="${3:-0}"
 NNODES="${NNODES:-2}"
