@@ -1,7 +1,9 @@
 #!/bin/bash
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
-# build_deepep.sh — build DeepEP-V2 _C.so IN-POD (needs a live CUDA context, so it
-# cannot run in the Docker build sandbox). Run ONCE on first pod boot.
+# build_deepep.sh — build DeepEP-V2 _C.so IN-POD. Run ONCE on first pod boot. In-pod by
+# design: TORCH_CUDA_ARCH_LIST follows the node (DEEPEP_ARCH_LIST, default 9.0) so DeepEP is
+# compiled for the node it runs on. nvcc needs no GPU — the canonical deepep-v2-benchmark compiles DeepEP at
+# image-build time; moving this step into the Dockerfile (multi-arch) is the alternative.
 #
 # The DeepEP source (amazon-contributing fork, SHA-pinned; no patches) is already staged at
 # /opt/DeepEP by the Dockerfile. This compiles the CUDA extension and pip-installs it editable

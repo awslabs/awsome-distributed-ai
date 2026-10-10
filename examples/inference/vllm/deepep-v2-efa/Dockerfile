@@ -5,8 +5,11 @@
 # CPU-proxy (NCCL_GIN_TYPE=2). The GIN plugin comes from the EFA installer (>= 1.50.0
 # bundles aws-ofi-nccl 1.21.1 with GA GIN support). DeepEP source staging lives in
 # setup_deepep_v2_efa.sh (COPY'd, not curled) so it is in-tree + reviewable; the DeepEP
-# _C.so is built IN-POD on first boot (recipe/build_deepep.sh) — it needs a live CUDA
-# context the build sandbox lacks.
+# _C.so is built IN-POD on first boot (recipe/build_deepep.sh) BY DESIGN, not necessity:
+# the arch list is set per node (manifest DEEPEP_ARCH_LIST, default 9.0 = H100/H200; the 10.x
+# Blackwell values are documented but not verified, see README). nvcc needs no GPU: the
+# canonical deepep-v2-benchmark image compiles DeepEP inside `docker build` (multi-arch);
+# folding the build into this Dockerfile the same way is the alternative.
 #
 #   setup/build-push.sh builds + pushes ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} (setup/env_vars);
 #   manual equivalent: DOCKER_BUILDKIT=1 docker build -t <registry>/vllm-deepep-v2-efa:<tag> .
@@ -84,8 +87,8 @@ RUN git clone https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
 # The aws-ofi-nccl plugin comes from the EFA installer (Layer 2); this layer only stages
 # the pinned DeepEP-V2 source: the amazon-contributing/DeepEP fork at one immutable SHA (the
 # canonical deepep-v2-benchmark's source — no PR merge, no local patch). The one DeepEP BUILD
-# happens in-pod on first boot (recipe/build_deepep.sh — needs a live CUDA context the build
-# sandbox lacks).
+# happens in-pod on first boot (recipe/build_deepep.sh — a design choice so the arch list
+# follows the node; see the header).
 COPY setup_deepep_v2_efa.sh /opt/setup_deepep_v2_efa.sh
 ARG DEEPEP_SHA=97d8f9bcc1be31e9036db2ab591ef9b9f4e38619   # amazon-contributing/DeepEP@main, 2026-09-03 — the SHA the sibling vllm/deepep-v2-gdaki-efa + nvidia-dynamo/deepep-v2-efa samples pin
 RUN chmod +x /opt/setup_deepep_v2_efa.sh \

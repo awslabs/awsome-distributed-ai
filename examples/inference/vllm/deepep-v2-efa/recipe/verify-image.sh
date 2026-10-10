@@ -2,8 +2,8 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
 # Smoke the EFA + DeepEP-V2 substrate in the built image BEFORE loading a model. Fails loud.
 # Static image check: asserts exactly what the image stages. The DeepEP _C.so is built
-# IN-POD on first boot (build_deepep.sh — needs a live CUDA context), so `import deep_ep`
-# is deliberately NOT asserted here; the staged source + the transport substrate are.
+# IN-POD on first boot (build_deepep.sh — by design, so the arch follows the node), so
+# `import deep_ep` is deliberately NOT asserted here; the staged source + the transport substrate are.
 set -euo pipefail
 IMG="${1:?usage: verify-image.sh <image>}"
 

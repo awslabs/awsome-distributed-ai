@@ -34,8 +34,8 @@ make this work, and two of them are non-obvious integration fixes, not config:
    upgrade, not a container knob.
 3. **DeepEP-V2 source** = the
    [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) fork at a pinned SHA
-   (`97d8f9bc`) — the tree AWS points to for DeepEP-V2 on EFA and the one the repo's canonical V2/GIN
-   provisioner pins ("the benchmark supports no other source"); the sibling
+   (`97d8f9bc`) — the tree AWS points to for DeepEP-V2 on EFA and the fork the repo's canonical V2/GIN
+   provisioner builds from its floating `main` ("the benchmark supports no other source"); the sibling
    `vllm/deepep-v2-gdaki-efa` and `nvidia-dynamo/deepep-v2-efa` samples pin the same SHA. The fork
    carries the in-tree successors of deepseek [PR#612](https://github.com/deepseek-ai/DeepEP/pull/612)'s
    EFA work — the QP count clamps from `_C` runtime constants and the RDMA link rate is probed from
@@ -99,8 +99,10 @@ bash setup/build-push.sh
 The image is NGC-from-scratch (`FROM nvcr.io/nvidia/cuda:...`). The EFA installer (>= 1.50.0) provides
 the GIN-capable aws-ofi-nccl plugin (build-gated on its `ncclGinPlugin_v14` export);
 `setup_deepep_v2_efa.sh` stages the pinned DeepEP-V2 source; the one DeepEP **build** — the `_C.so` —
-is compiled in-pod on first boot (needs a live CUDA context) by `recipe/`-invoked `build_deepep.sh`. The in-tree
-`Dockerfile` is the canonical, reviewable build. The published benchmark numbers were taken with it at
+is compiled in-pod on first boot by `recipe/build_deepep.sh`, for the arch the node runs
+(`DEEPEP_ARCH_LIST`, default `9.0`). That is a design choice, not a sandbox limitation: `nvcc` needs no
+GPU, and the canonical `deepep-v2-benchmark` image compiles DeepEP inside `docker build` (see "Known
+limitations", divergence 3). The in-tree `Dockerfile` is the canonical, reviewable build. The published benchmark numbers were taken with it at
 the previous pin (`e2f993dc4`); the pin has since moved to `14617c2b` (vLLM #52632's merge commit), the
 DeepEP source to the `amazon-contributing` fork and the GIN plugin to the installer-bundled build, and
 the tables have **not** been re-measured on the current substrate (build + symbol gates pass; the
@@ -199,7 +201,7 @@ eager and non-eager tables + environment provenance.
   (which appeared 2026-08-24). When the canonical moves, that is the file to track. Both scripts now
   consume the **EFA-installer-bundled aws-ofi-nccl** (the canonical migrated in upstream
   [#1239](https://github.com/awslabs/awsome-distributed-ai/pull/1239); this sample followed in review
-  round 3 — its earlier aws-ofi-nccl#1351 cherry-pick was declined upstream and is gone). Two
+  round 3 — its earlier aws-ofi-nccl#1351 cherry-pick was declined upstream and is gone). Three
   deliberate divergences justify a separate script here; the next reader should know they are
   choices, not drift:
   1. **CPU-proxy (`NCCL_GIN_TYPE=2`), not EFA-GDA.** This is the GDAKI-off, CPU-proxy transport that is
@@ -208,10 +210,14 @@ eager and non-eager tables + environment provenance.
   2. **Coupling to the vLLM wheel's torch/NCCL ABI.** The DeepEP `_C.so` here is built in-pod against
      the exact `torch 2.11+cu130` / `nvidia-nccl-cu13 2.30.4` the pinned vLLM wheel drags in (Dockerfile
      Layer 5b re-pins it), so the toolchain is wheel-driven rather than a standalone NCCL build tree.
+  3. **Where DeepEP is compiled.** The canonical `deepep.Dockerfile` builds DeepEP inside `docker build`
+     for `9.0;10.0;10.3` in one image; this sample compiles the `_C.so` in-pod on first boot for the
+     arch the node runs (`DEEPEP_ARCH_LIST`), keeping DeepEP out of the image, at the cost of a ~2 min
+     first-boot compile per pod. Folding the build into the Dockerfile the canonical way is the alternative.
 
   The **DeepEP source** is no longer a divergence: since review round 4 this sample pins the same
   [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) fork the canonical
-  pins (`97d8f9bc`, which includes the Blackwell `st.bulk` 64-bit-operand fix,
+  builds, at the immutable SHA `97d8f9bc` rather than the canonical's floating `main` (`97d8f9bc` includes the Blackwell `st.bulk` 64-bit-operand fix,
   [amazon-contributing/DeepEP#3](https://github.com/amazon-contributing/DeepEP/pull/3)). The
   `benchmarks/` numbers were measured on the previous `deepseek-ai/DeepEP@b306af06`+PR#612 tree on H200
   (`sm_90`) — see the provenance table there, and the Blackwell caveat under **Known limitations**

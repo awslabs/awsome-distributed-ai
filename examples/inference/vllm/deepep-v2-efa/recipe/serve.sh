@@ -30,8 +30,10 @@ DP_MASTER_PORT="${DP_MASTER_PORT:-29500}"
 # ---- proxy-Gin + EFA env contract (identical to the measured runs + deploy YAML) ----
 # NCCL picks the GIN backend: NCCL_GIN_TYPE=2 is the CPU proxy (the EFA-viable path; 3 would be
 # GDAKI). Both are NCCL params (src/gin/gin_host.cc). aws-ofi-nccl 1.21.1 has NO OFI_NCCL_GIN_GDAKI
-# or OFI_NCCL_GIN_MAX_REQUESTS parameter (its OFI_NCCL_PARAM table's only GIN knob is
-# GIN_CQ_PROCESS_MAX_ITER), so the two knobs earlier revisions exported here were inert; gone.
+# or OFI_NCCL_GIN_MAX_REQUESTS parameter (its OFI_NCCL_PARAM table's GIN/GDAKI-related knobs are
+# GIN_CQ_PROCESS_MAX_ITER, include/nccl_ofi_param.h:109, and GDAKI_EFA_HW_COUNTER, :398 — a
+# hardware-counter override, not a backend switch), so the two knobs earlier revisions exported
+# here were inert; gone.
 export NCCL_GIN_TYPE=2 NCCL_GIN_ENABLE=1
 export NCCL_CUMEM_ENABLE=1 NCCL_NVLS_ENABLE=0 NCCL_IGNORE_DISABLED_P2P=1
 export FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_FORK_SAFE=1

@@ -11,14 +11,15 @@
 # the same migration the canonical deepep-v2-benchmark made in upstream #1239).
 #
 # Runs inside the Docker build. This script only STAGES source — the one DeepEP BUILD (the
-# _C.so) is compiled IN-POD at first boot (recipe/build_deepep.sh) because it needs a live
-# CUDA context the build sandbox lacks.
+# _C.so) is compiled IN-POD at first boot (recipe/build_deepep.sh). That split is a design
+# choice (the arch list follows the node via DEEPEP_ARCH_LIST), not a sandbox limitation:
+# the canonical setup_deepep_gin.sh builds DeepEP inside `docker build`.
 set -euo pipefail
 
 # ---- pin (immutable SHA; no 'latest') ----
 # DeepEP source = the amazon-contributing/DeepEP fork: the tree AWS points to for DeepEP-V2 on
-# EFA, and the one the repo's canonical V2/GIN provisioner pins (deepep-v2-benchmark's
-# setup_deepep_gin.sh: "the benchmark supports no other source"). The sibling
+# EFA, and the fork the repo's canonical V2/GIN provisioner builds from its floating main
+# (deepep-v2-benchmark's setup_deepep_gin.sh: "the benchmark supports no other source"). The sibling
 # vllm/deepep-v2-gdaki-efa and nvidia-dynamo/deepep-v2-efa samples pin the same SHA. The fork
 # carries the in-tree successors of deepseek PR#612's EFA work -- the QP count clamps into
 # [_C.min_unordered_gin_qps, _C.max_unordered_gin_qps] (deep_ep/buffers/elastic.py) and the RDMA
