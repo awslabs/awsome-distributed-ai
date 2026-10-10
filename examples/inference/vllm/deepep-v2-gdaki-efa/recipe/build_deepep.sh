@@ -1,11 +1,13 @@
 #!/bin/bash
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
-# build_deepep.sh — build DeepEP-V2 _C.so IN-POD (needs a live CUDA context, so it
-# cannot run in the Docker build sandbox). Run ONCE on first pod boot.
+# build_deepep.sh — build DeepEP-V2 _C.so IN-POD. Run ONCE on first pod boot. In-pod by
+# design: TORCH_CUDA_ARCH_LIST follows the node (DEEPEP_ARCH_LIST, default 9.0) so DeepEP is
+# compiled for the node it runs on; nvcc needs no GPU.
 #
-# The DeepEP source + PR612 + multi-comm overlay are already staged at /opt/DeepEP by
-# the Dockerfile. This compiles the CUDA extension and pip-installs it editable so
-# `import deep_ep` resolves to /opt/DeepEP with ElasticBuffer present.
+# The DeepEP source (the amazon-contributing/DeepEP fork at the Dockerfile's DEEPEP_SHA pin — no
+# local patches) is already staged at /opt/DeepEP by setup_deepep_v2_gdaki_efa.sh. This compiles the
+# CUDA extension and pip-installs it editable so `import deep_ep` resolves to /opt/DeepEP with
+# ElasticBuffer present.
 #
 # CUDA toolchain: the image's torch is cu130, so we build with the cu13 nvcc toolchain
 # (pip nvidia-cuda-nvcc-cu13) to match the torch ABI. The path is AUTO-DISCOVERED (the

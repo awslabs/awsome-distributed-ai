@@ -130,9 +130,9 @@ RUN NCCL_ROOT=$(python3 -c "import nvidia.nccl, pathlib; print(pathlib.Path(nvid
 # ---- Layer 5: aws-ofi-nccl GDAKI + DeepEP-V2 source (in-tree script, COPY'd not curled) ----
 # The setup script builds --enable-gdaki against Layer 2c libfabric + Layer 2b rdma-core (SHA
 # pin, no local patches), and stages DeepEP from the amazon-contributing/DeepEP fork (which
-# carries the EFA delta in-code, superseding draft deepseek-ai/DeepEP#612). The DeepEP _C.so is
-# built IN-POD on first boot (recipe/build_deepep.sh) — it needs a live CUDA context the build
-# sandbox lacks.
+# carries the EFA delta in-code, superseding the open, unmerged deepseek-ai/DeepEP#612). The DeepEP
+# _C.so is built IN-POD on first boot (recipe/build_deepep.sh) by design, so the arch list follows
+# the node (DEEPEP_ARCH_LIST); nvcc needs no GPU.
 COPY setup_deepep_v2_gdaki_efa.sh /opt/setup_deepep_v2_gdaki_efa.sh
 ARG AWS_OFI_NCCL_SHA=a3d268024576c159e97916151666c2ef20f91813
 ARG DEEPEP_SHA=97d8f9bcc1be31e9036db2ab591ef9b9f4e38619
@@ -235,12 +235,16 @@ COPY recipe/run-kernel-test.sh /opt/run-kernel-test.sh
 COPY recipe/benchmark_probe.py /opt/benchmark_probe.py
 RUN chmod +x /opt/serve.sh /opt/run-kernel-test.sh
 
-RUN { echo "vllm-deepep-v2-gdaki-efa image (GPU-initiated, NCCL_GIN_TYPE=3)"; \
+# Every provenance file below is asserted non-empty FIRST: a missing one would otherwise print an
+# empty field (the banner is what the pod shows at boot), and the build would still pass.
+RUN test -s /opt/efa-installer.version && test -s /opt/rdma-core-gdaki.sha && test -s /opt/libfabric-gdaki.sha \
+    && test -s /opt/aws-ofi-nccl-gdaki.sha && test -s /opt/deepep.effective.sha && test -s /opt/vllm/.git-sha \
+    && { echo "vllm-deepep-v2-gdaki-efa image (GPU-initiated, NCCL_GIN_TYPE=3)"; \
       echo "efa:           $(cat /opt/efa-installer.version)"; \
       echo "rdma-core:     $(cat /opt/rdma-core-gdaki.sha) (post-PR#1701 comp-cntr)"; \
       echo "libfabric:     $(cat /opt/libfabric-gdaki.sha) (post-PR#12591)"; \
       echo "aws-ofi-nccl:  $(cat /opt/aws-ofi-nccl-gdaki.sha) (--enable-gdaki, SHA pin)"; \
-      echo "deepep base:   $(cat /opt/deepep.base.sha) + PR#612 (upstream, open; built in-pod)"; \
+      echo "deepep:        $(cat /opt/deepep.effective.sha) (amazon-contributing/DeepEP fork, SHA pin, no local patches; _C.so built in-pod)"; \
       echo "vllm:          $(cat /opt/vllm/.git-sha) (PR#41183, wheel-pinned; PR#47785 documented-missing)"; \
       echo "built:         $(date -u +%Y-%m-%dT%H:%M:%SZ)"; } > /opt/GUIDE-PROVENANCE.txt \
     && cat /opt/GUIDE-PROVENANCE.txt

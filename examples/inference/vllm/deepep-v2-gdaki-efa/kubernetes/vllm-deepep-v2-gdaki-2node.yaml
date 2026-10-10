@@ -103,7 +103,8 @@ spec:
           echo "node efa.ko: $(cat /sys/module/efa/version 2>/dev/null || echo unreadable)"
 
 
-          # 1) DeepEP-V2 _C.so — built ONCE per pod (live CUDA context required). Idempotent.
+          # 1) DeepEP-V2 _C.so — built ONCE per pod, for the arch this node runs (DEEPEP_ARCH_LIST,
+          #    default 9.0): a design choice, not a sandbox limit. Idempotent.
           python3 -c "import deep_ep" 2>/dev/null || bash /opt/build_deepep.sh
 
           # 2) resolve the leader (pod ordinal 0) through headless-service DNS

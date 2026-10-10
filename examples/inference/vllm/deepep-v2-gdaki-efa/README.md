@@ -11,7 +11,10 @@ torch/NCCL/NVSHMEM/vLLM/DeepEP pins — the only deltas are the GDAKI transport 
 NVSHMEM or IBGDA; DeepEP-V2's `ElasticBuffer` drives the dispatch/combine collectives over
 `aws-ofi-nccl`'s GIN plugin on `efa-direct`.
 
-Validated on **2× and 4× p5en.48xlarge (H200)**, `Qwen/Qwen3-30B-A3B-FP8`, DP16/EP16 and DP32/EP32.
+Validated on **2× and 4× p5en.48xlarge (H200)**, `Qwen/Qwen3-30B-A3B-FP8`, DP16/EP16 and DP32/EP32
+(measured 2026-08-14 on the earlier DeepEP tree recorded in the
+[provenance table](benchmarks/README.md#environment-provenance); the shipped `97d8f9bc` fork pin has not
+been re-measured end-to-end).
 
 ## How the GDAKI transport gets onto EFA
 
@@ -46,7 +49,7 @@ V2/GDAKI contract.
 
 **Net:** this folder is **post-merge upstream SHA pins + the amazon-contributing/DeepEP fork (an
 immutable SHA), with zero local source patches.** The fork supersedes the earlier `deepseek-ai`
-base + draft PR#612 (pinning the pre-fix upstream fork-point forfeited exactly those fixes). The
+base + the open, unmerged PR#612 (pinning the pre-fix upstream fork-point forfeited exactly those fixes). The
 merged-upstream substrate fixes (rdma-core #1701, libfabric #12591, aws-ofi-nccl #1311, carried by
 the `a3d2680` pin) are plain SHA pins, not patches.
 
@@ -89,9 +92,10 @@ bash setup/build-push.sh
 
 The image is NGC-from-scratch (`FROM nvcr.io/nvidia/cuda:...`). It builds rdma-core (post-#1701) and
 libfabric (post-#12591) from source, then `setup_deepep_v2_gdaki_efa.sh` builds aws-ofi-nccl
-`--enable-gdaki` at its pinned SHA (no local patches) against them and stages DeepEP-V2 source
-(`b306af06` + upstream PR#612); the `_C.so` is compiled in-pod on first boot (needs a live CUDA
-context) by `recipe/build_deepep.sh`.
+`--enable-gdaki` at its pinned SHA (no local patches) against them and stages the DeepEP-V2 source from
+the [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) fork at `97d8f9bc`
+(SHA pin, no local patches); the `_C.so` is compiled in-pod on first boot for the arch the node runs
+(`DEEPEP_ARCH_LIST`; a design choice, since nvcc needs no GPU) by `recipe/build_deepep.sh`.
 
 ## Smoke-test the substrate before loading the model
 

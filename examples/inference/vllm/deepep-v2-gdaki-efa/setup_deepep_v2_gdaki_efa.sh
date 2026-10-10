@@ -12,7 +12,8 @@
 # Runs inside the Docker build, AFTER the Dockerfile has built /opt/rdma-core-gdaki
 # (post-PR#1701 comp-cntr verbs) + /opt/libfabric-gdaki (post-PR#12591) and pip-installed
 # the cu13 torch stack. The DeepEP _C.so itself is compiled IN-POD at first boot
-# (recipe/build_deepep.sh) because it needs a live CUDA context the build sandbox lacks.
+# (recipe/build_deepep.sh). That split is a design choice (the arch list follows the node via
+# DEEPEP_ARCH_LIST), not a sandbox limitation: nvcc needs no GPU.
 set -euo pipefail
 
 # ---- pins (every one justified; no 'latest'; a bare refs/pull/N/head is a MOVING ref) ----
