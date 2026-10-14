@@ -1,0 +1,2 @@
+# The reproducible, explicitly pinned Core initialization backport is source.
+!mcore-pr5153-comm-init.patch

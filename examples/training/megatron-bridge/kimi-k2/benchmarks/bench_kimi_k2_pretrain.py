@@ -9,6 +9,7 @@ iterations. The ONLY thing that changes between the two benchmark arms is the Mo
 dispatcher, selected by ``MOE_DISPATCHER``:
 
     MOE_DISPATCHER=alltoall  -> moe_token_dispatcher_type="alltoall"  (NCCL all-to-all / EFA)  [baseline]
+    MOE_DISPATCHER=deepepv2  -> flex + upstream DeepEP v2 (requires MEGATRON_VARIANT=dev-deepepv2)
     MOE_DISPATCHER=deepep    -> flex + moe_flex_dispatcher_backend="deepep" (UCCL EFA drop-in) [treatment]
 
 This mirrors ``../../dsv3/benchmarks/bench_dsv3_pretrain.py`` but swaps the recipe-native DeepSeek-V3
@@ -34,6 +35,7 @@ single source of truth and both arms differ only in MOE_DISPATCHER (and MOE_A2A_
 identical across arms within a run).
 """
 
+import json
 import logging
 import os
 
@@ -50,13 +52,25 @@ def _int(name: str, default: int) -> int:
     return int(os.environ.get(name, str(default)))
 
 
+def _dev_mode():
+    variant = os.environ.get("MEGATRON_VARIANT", "stable")
+    if variant not in ("stable", "dev-deepepv2"):
+        raise ValueError(f"Unknown MEGATRON_VARIANT: {variant}")
+    return variant == "dev-deepepv2"
+
+
 def build_config():
     from megatron.bridge import AutoBridge
     from megatron.bridge.recipes.deepseek.deepseek_v3 import (
         deepseek_v3_pretrain_config_32nodes,
-        apply_flex_dispatcher_backend,
         set_deepseek_v3_pipeline_model_parallel_layout,
     )
+
+    dev_mode = _dev_mode()
+    if dev_mode:
+        from megatron.bridge.training.flex_dispatcher_backend import apply_flex_dispatcher_backend
+    else:
+        from megatron.bridge.recipes.deepseek.deepseek_v3 import apply_flex_dispatcher_backend
 
     # Parallelism — manifest/launcher contract. Canonical 256-GPU layout:
     # TP8 * PP8 = 64; world 256 -> DP=4; EP=32 divides TP*DP=32 (ETP=1). 384 experts / 32 = 12/rank.
@@ -122,6 +136,37 @@ def build_config():
     cfg.train.global_batch_size = global_batch
     cfg.train.micro_batch_size = micro_batch
 
+    if dev_mode:
+        # The upstream recipe leaves lr unset and warms up for 2000 iterations.
+        # Use the same finite learning rate in both short dev-image comparisons.
+        lr = float(os.environ.get("BENCHMARK_LEARNING_RATE", "1e-5"))
+        if not 0 < lr < 1:
+            raise ValueError("BENCHMARK_LEARNING_RATE must be between 0 and 1")
+        cfg.optimizer.lr = cfg.optimizer.min_lr = lr
+        cfg.scheduler.lr_warmup_iters = 0
+        cfg.scheduler.lr_decay_iters = train_iters
+        cfg.tokenizer.vocab_size = m.vocab_size
+        # This short random-weight benchmark must not write a trillion-parameter
+        # checkpoint or resume stale state from the recipe default directory.
+        cfg.checkpoint.save = cfg.checkpoint.load = None
+        cfg.logger.tensorboard_dir = os.environ.get("BENCHMARK_OUTPUT_DIR")
+        m.moe_router_dtype = "fp32"
+        # The pinned Core warns against the provider's TE cross-entropy default.
+        m.cross_entropy_fusion_impl = "native"
+
+    # COMPARISON_PRIMARY=1 pins the four-arm comparison profile rendered by
+    # 4.render-deepep-comparison.py (seed 1234, eval off, MB4/GBS256/seq4096,
+    # LR 5e-6, TP8/PP8/EP32). The asserts refuse any other launch shape so a
+    # scored comparison cannot silently run off-profile; leave the variable
+    # unset for ordinary single-arm runs. See README.deepep-v2.md.
+    if os.environ.get("COMPARISON_PRIMARY") == "1":
+        cfg.rng.seed = 1234
+        cfg.train.eval_iters = 0
+        cfg.train.eval_interval = train_iters + 1
+        assert micro_batch == 4 and global_batch == 256 and seq_len == 4096
+        assert cfg.optimizer.lr == 0.000005
+        assert (tp, pp, ep, cp) == (8, 8, 32, 1)
+
     # 5) the single A/B toggle (identical logic + B300-allowlist guard as bench_dsv3_pretrain.py).
     dispatcher = os.environ.get("MOE_DISPATCHER", "deepep").lower()
     if dispatcher == "alltoall":
@@ -140,8 +185,18 @@ def build_config():
                 "would silently run alltoall; aborting to avoid an invalid A/B."
                 % (m.moe_token_dispatcher_type, torch.cuda.get_device_properties(0).name)
             )
+    elif dispatcher == "deepepv2":
+        if not dev_mode:
+            raise ValueError("deepepv2 requires MEGATRON_VARIANT=dev-deepepv2 and its image")
+        # Bridge's helper does not recognize deepepv2. These are ordinary
+        # upstream TransformerConfig fields; no adapter or source patch is used.
+        from megatron.core.transformer.moe import fused_a2a
+        if not fused_a2a.HAVE_DEEP_EP_V2:
+            raise RuntimeError("The selected image cannot import deep_ep.ElasticBuffer")
+        m.moe_token_dispatcher_type = "flex"
+        m.moe_flex_dispatcher_backend = "deepepv2"
     else:
-        raise ValueError("MOE_DISPATCHER must be 'alltoall' or 'deepep', got %r" % dispatcher)
+        raise ValueError("MOE_DISPATCHER must be alltoall, deepep, or deepepv2, got %r" % dispatcher)
 
     # moe_shared_expert_overlap is alltoall-only; hold OFF on BOTH arms to isolate the dispatcher.
     if hasattr(m, "moe_shared_expert_overlap"):
@@ -158,7 +213,14 @@ def build_config():
     #    overlap_moe_expert_parallel_comm (1F1B hides the EP all-to-all); on core 0.17.1 it needs a
     #    virtual pipeline (PP>1) and recompute fully OFF. We ALWAYS (re)derive the pipeline layout
     #    because the swapped Kimi-K2 model starts with pipeline_model_parallel_layout=None.
-    overlap = os.environ.get("MOE_A2A_OVERLAP", "on").lower() == "on"
+    overlap = os.environ.get("MOE_A2A_OVERLAP", "off" if dev_mode else "on").lower() == "on"
+    if dispatcher == "deepepv2" and overlap:
+        raise ValueError("deepepv2 overlap is unsupported at the pinned dev commit (should_free_input)")
+    if dev_mode:
+        if min(tp, pp, ep, cp, micro_batch, seq_len, train_iters, global_batch) <= 0:
+            raise ValueError("Parallelism, batch sizes, sequence length and iterations must be positive")
+        if seq_len % (tp * cp):
+            raise ValueError("Fixed sequence length must divide evenly across TP and CP")
     if overlap and pp > 1:
         m.virtual_pipeline_model_parallel_size = 2        # recipe's shipped (8,2) 16-chunk layout
         m.recompute_granularity = None
@@ -196,7 +258,73 @@ def build_config():
         getattr(m, "multi_latent_attention", "?"),
         tp, pp, ep, cp, train_iters, global_batch, micro_batch, seq_len,
     )
+    if dev_mode:
+        print("EFFECTIVE_CONFIG " + json.dumps({
+            "dispatcher": m.moe_token_dispatcher_type,
+            "backend": m.moe_flex_dispatcher_backend,
+            "overlap": overlap, "seq_length": seq_len, "micro_batch_size": micro_batch,
+            "lr": cfg.optimizer.lr, "lr_warmup_iters": cfg.scheduler.lr_warmup_iters,
+            "num_layers": m.num_layers, "num_moe_experts": m.num_moe_experts,
+            "checkpoint_save": cfg.checkpoint.save,
+            "tensorboard_dir": cfg.logger.tensorboard_dir,
+        }, sort_keys=True), flush=True)
     return cfg
+
+
+def _runtime_identity_callback(dispatcher):
+    from megatron.bridge.training.callbacks import Callback
+    from megatron.core.transformer.moe.token_dispatcher import (
+        MoEAlltoAllTokenDispatcher, MoEFlexTokenDispatcher, _DeepepV2Manager, _DeepepManager,
+    )
+
+    class RuntimeIdentity(Callback):
+        def on_train_start(self, context):
+            self.dispatchers = []
+            for chunk in context.model:
+                for module in chunk.modules():
+                    candidate = getattr(module, "token_dispatcher", None)
+                    if candidate is None:
+                        continue
+                    expected = MoEFlexTokenDispatcher if dispatcher in ("deepep", "deepepv2") else MoEAlltoAllTokenDispatcher
+                    if not isinstance(candidate, expected):
+                        raise RuntimeError(f"Unexpected dispatcher: {type(candidate)}")
+                    if dispatcher == "deepepv2" and not isinstance(candidate._comm_manager, _DeepepV2Manager):
+                        raise RuntimeError(f"Unexpected manager: {type(candidate._comm_manager)}")
+                    if dispatcher == "deepep" and type(candidate._comm_manager) is not _DeepepManager:
+                        raise RuntimeError(f"Unexpected legacy manager: {type(candidate._comm_manager)}")
+                    self.dispatchers.append(candidate)
+            print("RUNTIME_DISPATCHER_IDENTITY " + json.dumps({
+                "rank": torch.distributed.get_rank(), "backend": dispatcher,
+                "local_moe_layers": len(self.dispatchers),
+                "manager": "_DeepepV2Manager" if dispatcher == "deepepv2" else "_DeepepManager" if dispatcher == "deepep" else None,
+            }), flush=True)
+            self.observed = False
+
+        def on_train_step_end(self, context):
+            if self.observed or dispatcher not in ("deepep", "deepepv2") or not self.dispatchers:
+                return
+            import deep_ep
+            if dispatcher == "deepep":
+                from megatron.core.transformer.moe import fused_a2a
+                if not isinstance(fused_a2a._buffer, deep_ep.Buffer):
+                    raise RuntimeError("Completed a step without the selected deep_ep.Buffer")
+                print("RUNTIME_LEGACY_BUFFER " + json.dumps({
+                    "rank": torch.distributed.get_rank(), "provider": deep_ep.__file__,
+                    "buffer_type": type(fused_a2a._buffer).__module__ + "." + type(fused_a2a._buffer).__name__,
+                    "step_completed": True,
+                }), flush=True)
+                self.observed = True
+                return
+            for candidate in self.dispatchers:
+                if not isinstance(candidate._comm_manager.buffer, deep_ep.ElasticBuffer):
+                    raise RuntimeError("Completed a step without deep_ep.ElasticBuffer")
+            print("RUNTIME_ELASTIC_BUFFER " + json.dumps({
+                "rank": torch.distributed.get_rank(), "local_moe_layers": len(self.dispatchers),
+                "step_completed": True,
+            }), flush=True)
+            self.observed = True
+
+    return RuntimeIdentity()
 
 
 def main():
@@ -229,7 +357,14 @@ def main():
             return out, wrapped
 
     cfg = build_config()
-    pretrain(config=cfg, forward_step_func=fwd)
+    if os.environ.get("CONFIG_ONLY") == "1":
+        return
+    if _dev_mode():
+        # build_config() already validated MOE_DISPATCHER; read it only for the callback label.
+        dispatcher = os.environ.get("MOE_DISPATCHER", "deepep").lower()
+        pretrain(config=cfg, forward_step_func=fwd, callbacks=[_runtime_identity_callback(dispatcher)])
+    else:
+        pretrain(config=cfg, forward_step_func=fwd)
 
 
 if __name__ == "__main__":
