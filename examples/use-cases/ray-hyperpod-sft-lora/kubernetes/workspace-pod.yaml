@@ -1,0 +1,19 @@
+# Stand-in for the Studio space (README Steps 3-8) when the Studio Ray integration is not available.
+# Apply with: kubectl apply -n "$RAY_NAMESPACE" -f kubernetes/workspace-pod.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ray-workspace
+spec:
+  containers:
+    - name: workspace
+      image: public.ecr.aws/sagemaker/sagemaker-distribution:4.5.0-cpu
+      command: ["sleep", "infinity"]
+      resources:
+        requests: {cpu: "2", memory: 8Gi}
+        limits: {memory: 16Gi}
+      volumeMounts:
+        - {name: fsx, mountPath: /mnt/fsx}
+  volumes:
+    - name: fsx
+      persistentVolumeClaim: {claimName: fsx-pvc}   # <-- your FSx PVC
