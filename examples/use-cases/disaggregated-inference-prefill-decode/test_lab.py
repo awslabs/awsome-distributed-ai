@@ -58,10 +58,10 @@ class LabTests(unittest.TestCase):
         self.assertLess(common_prefix(a, b) / len(a), .05)
 
     def test_joint_slo_counts_errors_and_skipped_followups(self):
-        rows = [{'ok': True, 'sent': True, 'ttft_ms': 100, 'tpot_ms': 10},
-                {'ok': True, 'sent': True, 'ttft_ms': 100, 'tpot_ms': 200},
-                {'ok': False, 'sent': True}, {'ok': False, 'sent': False}]
-        r = summarize(rows, 10, 2, 200, 20, .9, 1, .3)
+        rows = [{'ok': True, 'sent': True, 'ttft_ms': 100, 'tpot_ms': 10, 'client_launch_lag_ms': 0},
+                {'ok': True, 'sent': True, 'ttft_ms': 100, 'tpot_ms': 200, 'client_launch_lag_ms': 0},
+                {'ok': False, 'sent': True, 'client_launch_lag_ms': 0}, {'ok': False, 'sent': False, 'client_launch_lag_ms': 0}]
+        r = summarize(rows, 10, 2, 200, 20, .9, 1, 1000)
         self.assertEqual(r['slo_attainment_fraction'], .25)
         self.assertEqual(r['useful_calls_per_s'], .1)
         self.assertEqual(r['useful_calls_per_s_per_gpu'], .05)
