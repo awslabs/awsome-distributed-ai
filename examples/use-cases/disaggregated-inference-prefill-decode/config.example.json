@@ -14,6 +14,7 @@
   "model_cache_host_path": "/mnt/k8s-disks/0/aim345-models",
   "context_length_tokens": 32768,
   "chunked_prefill_size_tokens": 8192,
+  "page_size_tokens": 1,
   "disable_prefix_cache": false,
   "tolerations": [
     {

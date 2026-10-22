@@ -81,6 +81,8 @@ mkdir -p rendered
 ./1.deploy-disaggregated.sh --config config.json --render > rendered/disaggregated.json
 ```
 
+`page_size_tokens` sets SGLang's KV page size (`--page-size`) on every engine of both stacks; `config.example.json` sets `1`, SGLang 0.5.12.post1's default for DeepSeek-V2-Lite-Chat. Without the key, `--page-size` is not passed and SGLang uses its own default. `paired.py` rejects a pair whose `page_size_tokens` values differ, including a pair where only one file has the key.
+
 ## Check the example end to end
 
 This block checks that the example works on your allocation, from a fresh clone to cleanup, in one paste. It runs the unit tests, deploys the unified stack and measures shape B at 0.5 and 1 tasks/s for 20 seconds each after a warmup of the same length, does the same for the disaggregated stack, runs `5.collect.py` on both sets of ramp files, and deletes the lab namespace. It takes 8 to 30 minutes on two `g7.48xlarge` nodes, most of it waiting for the model servers to load; the shorter time is with the images and model already cached on the nodes.
@@ -154,7 +156,7 @@ A successful run ends with the size of `results/e2e-collected/report.html` and a
 
 ## Paired endpoints on separate allocations
 
-[paired.py](paired.py) checks that both stacks have the same model revision, images, GPU count, transport request, cache settings and placement mode, then renders separate namespaces and nonpreempting PriorityClasses. It rejects overlapping node sets. The sequential scripts remain available for switching a single allocation in place.
+[paired.py](paired.py) checks that both stacks have the same model revision, images, GPU count, transport request, cache settings, page size and placement mode, then renders separate namespaces and nonpreempting PriorityClasses. It rejects overlapping node sets. The sequential scripts remain available for switching a single allocation in place.
 
 Copy the configuration for each stack:
 

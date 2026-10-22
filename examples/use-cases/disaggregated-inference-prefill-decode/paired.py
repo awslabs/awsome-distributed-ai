@@ -8,7 +8,7 @@ from deployment import OWNER, kubectl, owned_namespace, read_config, render
 
 MATCHED = ('context', 'image', 'router_image', 'instance_type', 'gpus_per_worker', 'efa_per_worker',
            'model_id', 'model_revision', 'context_length_tokens',
-           'chunked_prefill_size_tokens', 'disable_prefix_cache', 'placement', 'packed_cpu', 'packed_memory')
+           'chunked_prefill_size_tokens', 'disable_prefix_cache', 'page_size_tokens', 'placement', 'packed_cpu', 'packed_memory')
 
 
 def check_pair(unified, split):

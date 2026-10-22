@@ -22,6 +22,9 @@ def read_config(path):
     assert c.get("placement", "separate-nodes") in ("packed", "separate-nodes")
     assert len(c["nodes"]) == len(set(c["nodes"])) >= minimum_nodes
     assert c["model_cache_host_path"].startswith("/mnt/"), "Use a dedicated cache under /mnt"
+    if "page_size_tokens" in c:
+        page = c["page_size_tokens"]
+        assert type(page) is int and page >= 1, "page_size_tokens must be a positive integer"
     if c.get('engine_profile') == 'v4-optional' or c['model_id'] == 'deepseek-ai/DeepSeek-V4-Flash':
         assert c.get('engine_profile') == 'v4-optional', 'V4 requires the separately pinned optional engine'
         assert c['model_id'] == 'deepseek-ai/DeepSeek-V4-Flash', 'The optional profile is qualified only for V4'
@@ -71,6 +74,8 @@ def worker(c, name, node, role):
         args += ['--max-running-requests', '4', '--cuda-graph-max-bs-decode', '4', '--disable-custom-all-reduce', '--disable-flashinfer-autotune']
     if c.get("disable_prefix_cache"):
         args.append("--disable-radix-cache")
+    if c.get("page_size_tokens") is not None:
+        args += ["--page-size", str(c["page_size_tokens"])]
     if role != "unified":
         args += ["--disaggregation-mode", role, "--disaggregation-transfer-backend", "nixl"]
         if role == "prefill":
