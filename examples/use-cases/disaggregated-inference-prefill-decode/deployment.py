@@ -6,6 +6,9 @@ import re
 import subprocess
 
 OWNER = {"app.kubernetes.io/part-of": "aim345-lab"}
+LAB_ENV = {"SGLANG_DISAGGREGATION_NIXL_BACKEND": "LIBFABRIC", "FI_PROVIDER": "efa", "FI_EFA_USE_DEVICE_RDMA": "1", "FI_LOG_LEVEL": "info"}
+# paired.py adds these to a packed engine pod and its processes.
+PACKED_ENV = {"gpus": "CUDA_VISIBLE_DEVICES", "plans": "AIM345_ENGINE_PLANS"}
 
 
 def read_config(path):
@@ -25,6 +28,10 @@ def read_config(path):
     if "page_size_tokens" in c:
         page = c["page_size_tokens"]
         assert type(page) is int and page >= 1, "page_size_tokens must be a positive integer"
+    if "engine_env" in c:
+        assert type(c["engine_env"]) is dict and all(type(v) is str for v in c["engine_env"].values()), "engine_env maps names to string values; write numbers as strings"
+        reserved = sorted(set(c["engine_env"]) & {*LAB_ENV, *PACKED_ENV.values()})
+        assert not reserved, "engine_env cannot set the lab's own variables: " + ", ".join(reserved)
     if c.get('engine_profile') == 'v4-optional' or c['model_id'] == 'deepseek-ai/DeepSeek-V4-Flash':
         assert c.get('engine_profile') == 'v4-optional', 'V4 requires the separately pinned optional engine'
         assert c['model_id'] == 'deepseek-ai/DeepSeek-V4-Flash', 'The optional profile is qualified only for V4'
@@ -81,7 +88,7 @@ def worker(c, name, node, role):
         if role == "prefill":
             args += ["--disaggregation-bootstrap-port", "8998"]
     resources = {"nvidia.com/gpu": c["gpus_per_worker"], "vpc.amazonaws.com/efa": c["efa_per_worker"], "cpu": str(c.get("engine_cpu", "16")), "memory": c.get("engine_memory", "128Gi"), "ephemeral-storage": c["engine_ephemeral_storage"]}
-    env = [{"name": "SGLANG_DISAGGREGATION_NIXL_BACKEND", "value": "LIBFABRIC"}, {"name": "FI_PROVIDER", "value": "efa"}, {"name": "FI_EFA_USE_DEVICE_RDMA", "value": "1"}, {"name": "FI_LOG_LEVEL", "value": "info"}]
+    env = [{"name": name, "value": value} for name, value in (LAB_ENV | c.get("engine_env", {})).items()]
     mounts = [{"name": "models", "mountPath": "/models"}, {"name": "shm", "mountPath": "/dev/shm"}]
     download = "from huggingface_hub import snapshot_download; import sys; snapshot_download(repo_id=sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3])"
     spec = {

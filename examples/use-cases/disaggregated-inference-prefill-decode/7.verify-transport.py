@@ -9,6 +9,8 @@ from deployment import kubectl, owned_namespace, read_config
 from traffic import tokenizer, initial_prompt
 import httpx
 
+# libfabric 2.4.0amzn1.0 from the Dockerfile's EFA installer 1.47.0 logs this; libfabric v2.3.0 and earlier do not, so other versions may not.
+SHM_OFF_LOG = "EFA will not use SHM for intranode communication because FI_EFA_ENABLE_SHM_TRANSFER=0"
 COUNTERS = '''import pathlib,json
 values={}
 for p in pathlib.Path('/sys/class/infiniband').glob('*/ports/*/hw_counters/*'):
@@ -46,6 +48,7 @@ def main():
     owned_namespace(c)
     pods = json.loads(kubectl(c, "get", "pods", "-l", "component=engine", "-o", "json", capture_output=True).stdout)["items"]
     packed = c.get('placement') == 'packed'
+    engine_env = c.get("engine_env", {})
     assert len(pods) == 1 if packed else len(pods) >= 2
     if not packed:
         assert len({x["spec"]["nodeName"] for x in pods}) == len(pods), "Transfer must cross nodes"
@@ -55,7 +58,8 @@ def main():
         engine = next(x for x in pod["spec"]["containers"] if x["name"] == "engine")
         plans = [{'args': engine.get('args', []), 'env': {x['name']: x.get('value') for x in engine['env']}}]
         if packed:
-            code = "import json,pathlib; plans=json.load(open('/tmp/aim345-engine-plans.json')); print(json.dumps([dict(role=p['role'],args=pathlib.Path('/proc/%s/cmdline'%p['pid']).read_text().strip('\\0').split('\\0'),env=dict(x.split('=',1) for x in pathlib.Path('/proc/%s/environ'%p['pid']).read_text().strip('\\0').split('\\0') if x.startswith(('FI_PROVIDER=','SGLANG_DISAGGREGATION_NIXL_BACKEND=','CUDA_VISIBLE_DEVICES=')))) for p in plans]))"
+            names = ('FI_PROVIDER', 'SGLANG_DISAGGREGATION_NIXL_BACKEND', 'CUDA_VISIBLE_DEVICES', *engine_env)
+            code = "import json,pathlib; plans=json.load(open('/tmp/aim345-engine-plans.json')); print(json.dumps([dict(role=p['role'],args=pathlib.Path('/proc/%%s/cmdline'%%p['pid']).read_text().strip('\\0').split('\\0'),env=dict(x.split('=',1) for x in pathlib.Path('/proc/%%s/environ'%%p['pid']).read_text().strip('\\0').split('\\0') if x.split('=',1)[0] in %r)) for p in plans]))" % (names,)
             plans = json.loads(kubectl(c, 'exec', pod['metadata']['name'], '-c', 'engine', '--', 'python3', '-c', code, capture_output=True).stdout)
             assert {x['role'] for x in plans} == {'prefill', 'decode'}
         for plan in plans:
@@ -64,6 +68,7 @@ def main():
             assert "--disaggregation-ib-device" not in args
             assert env["SGLANG_DISAGGREGATION_NIXL_BACKEND"] == "LIBFABRIC"
             assert env["FI_PROVIDER"] == "efa"
+            assert all(env.get(name) == value for name, value in engine_env.items()), "engine_env does not match the running engines"
         launches[pod['metadata']['name']] = plans
         versions[pod["metadata"]["name"]] = json.loads(kubectl(c, "exec", pod["metadata"]["name"], "-c", "engine", "--", "python3", "-c", Path(__file__).with_name("verify_image.py").read_text(), capture_output=True).stdout)
     profiles = {v['engine_profile'] for v in versions.values()}
@@ -72,11 +77,15 @@ def main():
     before = snapshot(c, pods)
     response = asyncio.run(smoke(c, a.url))
     after = snapshot(c, pods)
+    shm_off = engine_env.get("FI_EFA_ENABLE_SHM_TRANSFER") == "0"
+    if shm_off:
+        # Reported only; not used for the status.
+        shm_off_lines = sum(SHM_OFF_LOG in line for pod in pods for line in kubectl(c, "logs", pod["metadata"]["name"], "-c", "engine", "--tail=-1", capture_output=True).stdout.splitlines())
     deltas = {pod: {key: after[pod][key] - value for key, value in values.items()} for pod, values in before.items()}
     rdma_bytes = sum(max(0, value) for values in deltas.values() for key, value in values.items() if key.endswith(("rdma_write_bytes", "rdma_read_bytes")))
     result = {"instance_type": c["instance_type"], "evidence_scope": "mechanism-validation", "versions": versions, "engine_profile": expected, "pods": pods, "response": response, "before_bytes": before, "after_bytes": after, "delta_bytes": deltas,
               "status": "VALIDATED" if response["ok"] and (packed or rdma_bytes > 0) else "UNVALIDATED",
-              "launches": launches, "placement": c.get('placement', 'separate-nodes'),
+              "launches": launches, "placement": c.get('placement', 'separate-nodes'), **({"shm_off_log_lines": shm_off_lines} if shm_off else {}),
               "cross_node_efa_status": "UNVALIDATED: co-located prefill/decode" if packed else ("VALIDATED positive path" if response['ok'] and rdma_bytes > 0 else "UNVALIDATED"),
               "scope": "Positive configured path only. Shared-node counters include other traffic; inspect provider/GPU registration logs. This does not validate negative selector controls or GPUDirect absence of staging by itself."}
     if a.bandwidth_gib_s is not None:
