@@ -1,0 +1,65 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# One probe pod per instance, each holding the whole instance (8 GPUs, 16 EFA interfaces on p5en.48xlarge), so that
+# the scripts in this directory can run fi_pingpong and NCCL collectives between chosen pairs and orders of hosts.
+# The pods only sleep; the scripts run the measurements with kubectl exec.
+#
+# Set parallelism and completions to the number of instances you want to measure, and adjust the instance type and
+# the GPU and EFA counts for yours. activeDeadlineSeconds caps how long the instances are held (2 hours).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: placement-probe
+spec:
+  completionMode: Indexed
+  parallelism: 5
+  completions: 5
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels:
+        app: placement-probe
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        node.kubernetes.io/instance-type: p5en.48xlarge
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: placement-probe
+              topologyKey: kubernetes.io/hostname
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      volumes:
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Gi
+      containers:
+        - name: probe
+          # PyTorch, NCCL, libfabric with the EFA provider (fi_pingpong, fi_info) and aws-ofi-nccl in one image.
+          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.2.0-efa
+          command: ["sleep", "7100"]
+          securityContext:
+            capabilities:
+              add: ["IPC_LOCK"]
+          volumeMounts:
+            - name: shm
+              mountPath: /dev/shm
+          resources:
+            requests:
+              cpu: "96"
+              memory: 512Gi
+              nvidia.com/gpu: "8"
+              vpc.amazonaws.com/efa: "16"
+            limits:
+              cpu: "96"
+              memory: 512Gi
+              nvidia.com/gpu: "8"
+              vpc.amazonaws.com/efa: "16"

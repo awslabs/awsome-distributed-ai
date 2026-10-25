@@ -1,0 +1,66 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Placement as a scheduling constraint with plain pod affinity, no Kueue or cluster-admin rights needed.
+# The anchor pod is pinned to ANCHOR_NODE. The follower must run on a different node (pod anti-affinity on the host
+# name) under the same layer-3 network node as the anchor (pod affinity on topology.k8s.aws/network-node-layer-3).
+# The pods request almost nothing, so they fit beside pods that hold the GPUs. 3.layer3-affinity.sh fills in
+# ANCHOR_NODE and IMAGE before it applies this file.
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: v1
+    kind: Pod
+    metadata:
+      name: placement-anchor
+      labels:
+        app: placement-anchor
+    spec:
+      restartPolicy: Never
+      activeDeadlineSeconds: 600
+      nodeSelector:
+        kubernetes.io/hostname: ANCHOR_NODE
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: sleep
+          image: IMAGE
+          command: ["sleep", "590"]
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 100m, memory: 128Mi}
+  - apiVersion: v1
+    kind: Pod
+    metadata:
+      name: placement-follower
+      labels:
+        app: placement-follower
+    spec:
+      restartPolicy: Never
+      activeDeadlineSeconds: 600
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: placement-anchor
+              topologyKey: topology.k8s.aws/network-node-layer-3
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: placement-anchor
+              topologyKey: kubernetes.io/hostname
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: sleep
+          image: IMAGE
+          command: ["sleep", "590"]
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 100m, memory: 128Mi}

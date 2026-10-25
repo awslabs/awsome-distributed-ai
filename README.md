@@ -100,6 +100,7 @@ Micro-benchmarks for evaluating network and communication performance are under 
 | [`nccom-tests`](./micro-benchmarks/nccom-tests)                       | NCCOM communication benchmarks                |
 | [`nvshmem`](./micro-benchmarks/nvshmem)                               | NVSHMEM benchmarks                            |
 | [`expert-parallelism`](./micro-benchmarks/expert-parallelism)         | Expert parallelism (MoE) benchmarks           |
+| [`network-placement`](./micro-benchmarks/network-placement)           | EFA latency and NCCL rank order by EC2 network node (EKS) |
 
 ## Contributors
 
