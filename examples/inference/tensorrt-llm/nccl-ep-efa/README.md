@@ -23,7 +23,7 @@ test → a served `/v1/chat/completions` → a concurrency benchmark.
 
 ## How NcclEP gets onto EFA
 
-```
+```text
 trtllm-serve ── CommunicationFactory.create_strategy()      (reads TRTLLM_FORCE_COMM_METHOD)
                     └─ NcclEP ── nccl.ep (nccl4py / libnccl_ep 0.1.0)
                                     └─ NCCL 2.30.4 (pip) ── GIN device API (NCCL_GIN_TYPE=2, CPU-proxy)
@@ -35,7 +35,7 @@ Selection is *forced* with `TRTLLM_FORCE_COMM_METHOD=NCCL_EP`, but only after TR
 feasibility gate (`_get_nccl_ep_unavailable_reason`) passes and **only when attention DP is
 enabled** (trap 2). The proof that the whole chain engaged is one log line, on every rank:
 
-```
+```text
 [TRT-LLM] [RANK 5] [I] NCCL EP group created: ep_size=8, num_experts=128, ...,
   layout=RANK_MAJOR, algorithm=LOW_LATENCY
 ```
