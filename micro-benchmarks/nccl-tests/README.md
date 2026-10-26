@@ -147,9 +147,6 @@ You can skip this part if you use pre-built image on `public.ecr.aws/hpc-cloud/n
 Note: For topology aware NCCL tests, with features like export to csv,
 passing in a topologically sorted hostfile to mpirun, look in slurm/topology-aware-nccl-tests
 
-To measure EFA latency by EC2 network node and compare topology-sorted with interleaved node orders on Amazon EKS,
-see [network-placement](../network-placement).
-
 ### Slurm with container
 
 Copy the file `slurm/nccl-tests.sbatch` or its content on your cluster then submit a preprocessing jobs with the command below:
