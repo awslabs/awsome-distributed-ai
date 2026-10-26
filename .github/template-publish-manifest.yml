@@ -15,6 +15,16 @@ prefix: templates/
 # once no deployed stack references the flat prefix.
 obsolete_keys: []
 entries:
+  - source: architectures/amazon-eks/assets/eks-gpu-cluster-deploy-all.yaml
+    key: amazon-eks/eks-gpu-cluster-deploy-all.yaml
+  - source: architectures/amazon-eks/assets/eks-cluster-prerequisites.yaml
+    key: amazon-eks/eks-cluster-prerequisites.yaml
+  - source: architectures/amazon-eks/assets/eks-cluster.yaml
+    key: amazon-eks/eks-cluster.yaml
+  - source: architectures/amazon-eks/assets/eks-add-gpu-nodegroup.yaml
+    key: amazon-eks/eks-add-gpu-nodegroup.yaml
+  - source: architectures/amazon-eks/assets/eks-gpu-node-ami.yaml
+    key: amazon-eks/eks-gpu-node-ami.yaml
   - source: architectures/aws-pcs/assets/add-cng.yaml
     key: aws-pcs/add-cng.yaml
   - source: architectures/aws-pcs/assets/add-cng-p5.yaml
