@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gateway-test
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gateway-test-read
+rules:
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list"]
+- apiGroups: ["inference.sagemaker.aws.amazon.com"]
+  resources: ["inferencegatewayconfigs"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: gateway-test-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: gateway-test-read
+subjects:
+- kind: ServiceAccount
+  name: gateway-test
+  namespace: default
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gateway-test
+  namespace: default
+spec:
+  serviceAccountName: gateway-test
+  restartPolicy: Never
+  containers:
+  - name: test
+    image: alpine/k8s:1.33.13
+    command: ["sleep", "3600"]
+    volumeMounts:
+    - name: scripts
+      mountPath: /scripts
+  volumes:
+  - name: scripts
+    configMap:
+      name: gateway-test-script

@@ -1,0 +1,171 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# NCCL EP over EFA on two nodes (16 ranks) with NCCL's GIN CPU proxy (NCCL_GIN_TYPE=2), launched by the
+# Kubeflow MPI Operator. ep_test (NCCL EP's built-in dispatch/combine oracle) runs first; ep_bench --validate
+# runs only if ep_test exits 0. The job's exit status is the result: both programs exit non-zero on a wrong
+# result (ep_test.cu, ep_bench.cu at nccl-extensions 901c4e65). kubectl delete mpijob removes the pods.
+#
+# Render only the listed variables, so the shell expansions inside the launcher script survive:
+#   source env_vars
+#   envsubst '$NAMESPACE $IMAGE_URI $INSTANCE_TYPE $NUM_NODES $GPU_PER_NODE $EFA_PER_NODE' \
+#     < nccl-ep-mpijob.yaml | kubectl --context "$KUBE_CONTEXT" apply -f -
+apiVersion: kubeflow.org/v2beta1
+kind: MPIJob
+metadata:
+  name: nccl-ep-efa
+  namespace: ${NAMESPACE}
+spec:
+  # One MPI slot per GPU: mpirun starts GPU_PER_NODE ranks on each worker.
+  slotsPerWorker: ${GPU_PER_NODE}
+  runPolicy:
+    cleanPodPolicy: Running
+    # A failed benchmark is not retried; inspect the launcher log instead.
+    backoffLimit: 0
+    # Stops a hung run.
+    activeDeadlineSeconds: 3600
+  mpiReplicaSpecs:
+    Launcher:
+      replicas: 1
+      template:
+        spec:
+          restartPolicy: Never
+          # The launcher runs the benchmark image only to invoke mpirun. Co-locate it on the GPU node pool,
+          # whose nodes have enough ephemeral storage for the image.
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                  - key: training.kubeflow.org/job-name
+                    operator: In
+                    values:
+                    - nccl-ep-efa
+                topologyKey: kubernetes.io/hostname
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: workload
+            value: bench
+            operator: Equal
+            effect: NoSchedule
+          - key: capacity-reservation
+            operator: Exists
+            effect: NoSchedule
+          containers:
+          - name: nccl-ep-efa-launcher
+            image: ${IMAGE_URI}
+            imagePullPolicy: IfNotPresent
+            resources:
+              requests:
+                cpu: "1"
+                memory: 2Gi
+            command:
+            - /bin/bash
+            - -c
+            - |
+              set -uo pipefail
+              # Before it starts ssh, each forked child of Open MPI's ssh launcher closes every file descriptor up
+              # to this limit; at the 1073741816 (about 2^30) limit these containers inherited, that adds minutes
+              # to every mpirun.
+              ulimit -n 65536
+              # The operator creates the launcher together with the workers (launcherCreationPolicy: AtStartup,
+              # the default), so wait until each worker's sshd accepts connections.
+              for host in $(awk '{print $1}' /etc/mpi/hostfile); do
+                until ssh -o ConnectTimeout=3 -o BatchMode=yes -o StrictHostKeyChecking=no "$host" true 2>/dev/null; do
+                  echo "waiting for sshd on $host"; sleep 3
+                done
+              done
+              NP=$((${NUM_NODES} * ${GPU_PER_NODE}))
+              # One process per node, for the host-side probes below.
+              PERNODE="mpirun --allow-run-as-root --tag-output -np ${NUM_NODES} -N 1 --mca pml ob1 --mca btl self,vader,tcp"
+              # MPI itself stays on TCP (pml ob1, btl self,vader,tcp), so the EFA counters show NCCL EP traffic only.
+              # SSH-launched ranks do not inherit the image ENV, so every setting goes through mpirun -x.
+              MPIRUN="mpirun --allow-run-as-root --tag-output -np ${NP} -N ${GPU_PER_NODE} --bind-to none \
+                --mca pml ob1 --mca btl self,vader,tcp \
+                -x PATH -x LD_LIBRARY_PATH -x NCCL_EP_HOME \
+                -x NCCL_HOME=/usr -x CUDA_HOME=/usr/local/cuda \
+                -x NCCL_GIN_TYPE=2 \
+                -x NCCL_NET_PLUGIN=/opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so \
+                -x NCCL_GIN_PLUGIN=/opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so \
+                -x FI_PROVIDER=efa -x FI_EFA_USE_DEVICE_RDMA=1 \
+                -x NCCL_SOCKET_IFNAME=^lo,docker \
+                -x NCCL_DEBUG=INFO -x NCCL_DEBUG_SUBSYS=INIT,ENV,NET \
+                -x NCCL_EP_JIT_CACHE_DIR=/tmp/nccl-ep-jit-cache -x PMIX_MCA_gds=hash"
+              counters() {
+                echo "== EFA rdma_write_bytes, $1 =="
+                ${PERNODE} bash -c 'for f in /sys/class/infiniband/rdmap*/ports/1/hw_counters/rdma_write_bytes; do echo "$(hostname) $f $(cat "$f")"; done'
+              }
+              echo "== /dev/gdrdrv in the workers (aws-ofi-nccl's GIN init opens a GDRCopy handle) =="
+              ${PERNODE} bash -c 'echo "$(hostname): $(ls -l /dev/gdrdrv 2>&1)"'
+              counters "before ep_test"
+              ${MPIRUN} ep_test -a ht -L fl
+              rc=$?
+              counters "after ep_test"
+              if [ "$rc" -ne 0 ]; then echo "ep_test exited $rc; not running ep_bench"; exit "$rc"; fi
+              counters "before ep_bench"
+              ${MPIRUN} ep_bench --algorithm ht --layout flat --tokens 4096 --hidden 7168 --top-k 8 --experts 256 --validate
+              rc=$?
+              counters "after ep_bench"
+              exit "$rc"
+    Worker:
+      replicas: ${NUM_NODES}
+      template:
+        spec:
+          # EFA requires the workers in one Availability Zone.
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                  - key: training.kubeflow.org/job-name
+                    operator: In
+                    values:
+                    - nccl-ep-efa
+                  - key: training.kubeflow.org/job-role
+                    operator: In
+                    values:
+                    - worker
+                topologyKey: topology.kubernetes.io/zone
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: workload
+            value: bench
+            operator: Equal
+            effect: NoSchedule
+          - key: capacity-reservation
+            operator: Exists
+            effect: NoSchedule
+          containers:
+          - name: nccl-ep-efa-worker
+            image: ${IMAGE_URI}
+            imagePullPolicy: IfNotPresent
+            env:
+            # Asks the NVIDIA container toolkit to expose /dev/gdrdrv; aws-ofi-nccl's GIN init opens it.
+            - name: NVIDIA_GDRCOPY
+              value: "enabled"
+            securityContext:
+              capabilities:
+                add: ["IPC_LOCK"]
+            volumeMounts:
+            - name: shmem
+              mountPath: /dev/shm
+            resources:
+              limits:
+                nvidia.com/gpu: ${GPU_PER_NODE}
+                vpc.amazonaws.com/efa: ${EFA_PER_NODE}
+              requests:
+                nvidia.com/gpu: ${GPU_PER_NODE}
+                vpc.amazonaws.com/efa: ${EFA_PER_NODE}
+          volumes:
+          - name: shmem
+            emptyDir:
+              medium: Memory
+              sizeLimit: 32Gi
