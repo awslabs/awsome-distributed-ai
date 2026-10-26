@@ -46,7 +46,10 @@ set -o pipefail
 # asserted: a wrong NNODES, a worker that never starts, or a stalled NCCL init would
 # otherwise block here indefinitely. timeout exits 124 on expiry, which the rc check
 # below reports as a FAIL rather than a silent hang.
-timeout "${KERNEL_TEST_TIMEOUT:-600}" torchrun --nnodes="$NNODES" --nproc-per-node=1 --node-rank="$NODE_RANK" \
+# Default 1800s: the full test_ep.py sweep is 144 configurations, and on 2x p5en.48xlarge
+# (EP16, efa-direct) the earlier 600s default expired during the 95th of them (2026-10-10
+# run, ~6.3 s/config -> ~15 min for the whole sweep), so 600s failed a run that was passing.
+timeout "${KERNEL_TEST_TIMEOUT:-1800}" torchrun --nnodes="$NNODES" --nproc-per-node=1 --node-rank="$NODE_RANK" \
   --master-addr="$LEADER_IP" --master-port=29501 "$TEST" --num-processes "$GPUS_PER_NODE" 2>&1 | tee /tmp/kernel-test.$NODE_RANK.log
 rc=${PIPESTATUS[0]}
 
