@@ -100,11 +100,15 @@ part of what the test measures. [`placement.sh`](./placement.sh) renders `test-i
 by EC2 network topology, from the `topology.k8s.aws/network-node-layer-3` label that Amazon EKS adds to nodes of
 [instance types that support it](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-topology.html):
 
-- `PLACEMENT=near` puts both workers under the same layer-3 network node (pod affinity on that label instead of the zone).
+- `PLACEMENT=near` puts both workers under one layer-3 network node by adding the label to the workers' node
+  selector, with the value in `NEAR_LAYER3`. If `NEAR_LAYER3` is unset, `placement.sh` uses the value that the most
+  `${INSTANCE_TYPE}` nodes share. (Pod affinity on the label alone isn't enough: the scheduler can put the first worker
+  on a node with no neighbor under its layer-3 node, and the second worker then stays `Pending`.)
 - `PLACEMENT=far` puts them under different layer-3 network nodes in the same Availability Zone (the zone affinity,
   plus pod anti-affinity on that label).
 
-A near pair needs two free GPU nodes with the same `network-node-layer-3` value:
+A near pair needs two free GPU nodes with the same `network-node-layer-3` value. List the values, and set
+`NEAR_LAYER3` to one with two free nodes if the busiest group is in use:
 
 ```bash
 kubectl get nodes -l node.kubernetes.io/instance-type=${INSTANCE_TYPE} -L topology.k8s.aws/network-node-layer-3
