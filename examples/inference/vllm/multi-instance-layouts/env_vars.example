@@ -1,0 +1,30 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Copy to env_vars, edit, and source it before every step:
+#   cp env_vars.example env_vars && $EDITOR env_vars && source env_vars
+# 0.choose-nodes.sh prints HEAD_NODE, NEAR_NODE and FAR_NODE lines you can paste here.
+
+export NAMESPACE=default
+export INSTANCE_TYPE=p5en.48xlarge
+export GPU_PER_NODE=8
+export EFA_PER_NODE=16
+
+# AWS Deep Learning Container for vLLM, pinned to a dated tag
+# (sha256:09b8a6615fc39a49c1113c533d06e090a29e99db0b5e93cc3deedf96ecc817cd).
+export IMAGE=public.ecr.aws/deep-learning-containers/vllm:0.32.0-gpu-py312-cu130-ubuntu24.04-ec2-v1.1-2026-10-21-21-51-30
+
+# Model and pinned revision. Kimi K2 Instruct-0905 is 1,029 GB of FP8 weights, which barely fit the 1,128 GB of
+# GPU memory on one p5en.48xlarge. The weights are held in a memory-backed volume on each pod, so each node needs
+# MODEL_VOLUME_SIZE of free host memory on top of what vLLM uses.
+export MODEL_REPO=moonshotai/Kimi-K2-Instruct-0905
+export MODEL_REVISION=ac6c49f04883bd0a0598b790693a72061c676629
+export MODEL_VOLUME_SIZE=1050Gi
+export POD_MEMORY=1700Gi
+# export HF_TOKEN=<token>   # optional for public models; raises Hugging Face rate limits
+
+# Three instances: HEAD runs the API server and the benchmark client; NEAR shares all three network-node layers
+# with HEAD; FAR shares layers 1 and 2 and differs at layer 3.
+export HEAD_NODE=<node name>
+export NEAR_NODE=<node name>
+export FAR_NODE=<node name>

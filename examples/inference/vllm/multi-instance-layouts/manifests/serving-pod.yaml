@@ -1,0 +1,85 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# One whole-instance pod for comparing vLLM serving layouts across instances. 1.create-pods.sh renders it three
+# times: vllm-head (API server and benchmark client in every layout), vllm-near (second instance under the same
+# layer-3 network node as the head) and vllm-far (second instance under a different one). The pods only sleep;
+# the scripts start and stop vLLM inside them with kubectl exec, so one set of pods serves every layout and
+# placement without reloading the model.
+#
+# The model is held in a memory-backed emptyDir, gone when the pod ends. The pod runs as a non-root user with a
+# read-only root filesystem and no capabilities; vLLM's caches go to /tmp.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-${ROLE}
+  namespace: ${NAMESPACE}
+  labels:
+    app: vllm-layouts
+    role: ${ROLE}
+spec:
+  restartPolicy: Never
+  activeDeadlineSeconds: 14400
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  nodeSelector:
+    node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+    kubernetes.io/hostname: ${NODE}
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+  volumes:
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 64Gi
+    - name: model
+      emptyDir:
+        medium: Memory
+        sizeLimit: ${MODEL_VOLUME_SIZE}
+    - name: tmp
+      emptyDir:
+        sizeLimit: 200Gi
+  containers:
+    - name: vllm
+      image: ${IMAGE}
+      command: ["sleep", "14300"]
+      env:
+        - name: HOME
+          value: /tmp
+        - name: USER
+          value: vllm
+        - name: LOGNAME
+          value: vllm
+      envFrom:
+        - secretRef:
+            name: hf-token
+            optional: true
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      volumeMounts:
+        - name: shm
+          mountPath: /dev/shm
+        - name: model
+          mountPath: /model
+        - name: tmp
+          mountPath: /tmp
+      resources:
+        requests:
+          cpu: "150"
+          memory: ${POD_MEMORY}
+          nvidia.com/gpu: "${GPU_PER_NODE}"
+          vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
+        limits:
+          cpu: "150"
+          memory: ${POD_MEMORY}
+          nvidia.com/gpu: "${GPU_PER_NODE}"
+          vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
