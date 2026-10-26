@@ -32,6 +32,7 @@ NET_PLUGIN=${NET_PLUGIN:-/opt/amazon/aws-ofi-nccl/lib/libnccl-net-ofi.so}
 SOCKET_IFNAME=${SOCKET_IFNAME:-eth0}
 EXTRA_ENV=${EXTRA_ENV:-}   # space-separated NAME=value pairs added to every rank, for example NCCL_ALGO=...
 OUT=${OUT:-./results/layouts-$(date -u +%Y%m%dT%H%MZ)}
+RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-$$   # names this invocation's launch markers in the pods
 mkdir -p "$OUT/raw"
 k() { kubectl -n "$NAMESPACE" "$@"; }
 HEAD=megatron-head; NEAR=megatron-near; FAR=megatron-far
@@ -132,8 +133,10 @@ run_arm() {   # round layout placement seqlen
       echo "  --distributed-timeout-minutes 6"
     } > "$OUT/raw/launch-$tag-$p.sh"
     retry k exec -i "$p" -- tee "/tmp/launch-$tag.sh" > /dev/null < "$OUT/raw/launch-$tag-$p.sh"
-    retry k exec "$p" -- bash -c "chmod +x /tmp/launch-$tag.sh; \
-setsid /tmp/launch-$tag.sh </dev/null > /tmp/train-$tag.log 2>&1 &" </dev/null
+    # Launch once: if a kubectl exec stalls and is retried, the marker stops a second torchrun from starting
+    # (it would truncate the log and hang).
+    retry k exec "$p" -- bash -c "chmod +x /tmp/launch-$tag.sh; if mkdir /tmp/started-$RUN_ID-$tag 2>/dev/null; then \
+setsid /tmp/launch-$tag.sh </dev/null > /tmp/train-$tag.log 2>&1 & fi" </dev/null
     i=$((i + 1))
   done
   while [ $t -lt "$RUN_TMO" ]; do
