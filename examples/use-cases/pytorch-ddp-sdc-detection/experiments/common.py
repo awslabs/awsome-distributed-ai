@@ -14,17 +14,14 @@ RANK = int(os.environ["RANK"])
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
 WORLD = int(os.environ["WORLD_SIZE"])
 NPN = int(os.environ.get("LOCAL_WORLD_SIZE", "8"))
-NODE = RANK // NPN
 NNODES = WORLD // NPN
 SMOKE = os.environ.get("SDC_SMOKE", "0") == "1"
 
 
 def cfg():
     if SMOKE:
-        return dict(V=4096, D=256, L=4, H=8, FFN=704, S=256, B=2,
-                    W=6, C=10, LEN=14, START=4, WIN=4, LONG_MIN=0.3, LR=3e-4, WARM=3)
-    return dict(V=32000, D=2048, L=16, H=16, FFN=5632, S=2048, B=2,
-                W=400, C=800, LEN=80, START=20, WIN=30, LONG_MIN=60, LR=3e-4, WARM=100)
+        return dict(V=4096, D=256, L=4, H=8, FFN=704, S=256, B=2, W=6, LR=3e-4, WARM=3)
+    return dict(V=32000, D=2048, L=16, H=16, FFN=5632, S=2048, B=2, W=400, LR=3e-4, WARM=100)
 
 
 def lr_at(c, step):
@@ -38,16 +35,7 @@ def init():
     torch.cuda.set_device(LOCAL_RANK)
     dist.init_process_group("nccl", timeout=timedelta(minutes=int(os.environ.get("SDC_TIMEOUT_MIN", "30"))),
                             device_id=torch.device("cuda", LOCAL_RANK))
-    # Every rank creates every group, in the same order.
     G["world"] = dist.group.WORLD
-    G["node_ranks"] = [list(range(n * NPN, (n + 1) * NPN)) for n in range(NNODES)]
-    G["local_ranks"] = [[n * NPN + l for n in range(NNODES)] for l in range(NPN)]
-    G["node"] = [dist.new_group(r) for r in G["node_ranks"]]
-    G["local"] = [dist.new_group(r) for r in G["local_ranks"]]
-    G["pair"] = [dist.new_group([2 * i, 2 * i + 1]) for i in range(WORLD // 2)]
-    G["my_node"] = G["node"][NODE]
-    G["my_local"] = G["local"][LOCAL_RANK]
-    G["my_pair"] = G["pair"][RANK // 2]
 
 
 def sync():

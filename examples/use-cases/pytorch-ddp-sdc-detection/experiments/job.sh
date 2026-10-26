@@ -10,12 +10,16 @@
 #   ./job.sh clean                  # delete every job and ConfigMap this tool created in $NS
 #
 # EXPECTED_CONTEXT: refuse to run unless kubectl's current context has this name.
-# NS, CONFIGMAP, SELECTOR: namespace, ConfigMap name, and the GPU node label selector.
+# SELECTOR: label that selects the GPU nodes (default node.kubernetes.io/instance-type=p5.48xlarge;
+#   on SageMaker HyperPod, node.kubernetes.io/instance-type=ml.p5.48xlarge).
+# TOLERATIONS: space-separated taints the pods tolerate, as KEY[=VALUE]:EFFECT.
+# NS, CONFIGMAP: namespace and ConfigMap name.
 set -euo pipefail
 cd "$(dirname "$0")"
 NS=${NS:-sdc-detection}
 CONFIGMAP=${CONFIGMAP:-sdc-order-scripts}
-SELECTOR=${SELECTOR:-node.kubernetes.io/instance-type=ml.p5.48xlarge}
+SELECTOR=${SELECTOR:-node.kubernetes.io/instance-type=p5.48xlarge}
+TOLERATIONS=${TOLERATIONS:-}
 LABEL=app.kubernetes.io/part-of=sdc-detection
 
 ctx=$(kubectl config current-context)
@@ -29,6 +33,23 @@ pods() {
     -o jsonpath='{range .items[*]}{.metadata.name}={.status.phase}{" "}{end}'
 }
 
+# Prints the node's NoSchedule and NoExecute taints that TOLERATIONS doesn't cover.
+untolerated() {
+  local key value effect tol tkv tkey tvalue teffect ok
+  while IFS='|' read -r key value effect; do
+    [ -n "$key" ] || continue
+    case "$effect" in NoSchedule|NoExecute) ;; *) continue ;; esac
+    ok=no
+    for tol in $TOLERATIONS; do
+      tkv=${tol%:*}; teffect=${tol##*:}; tkey=${tkv%%=*}
+      if [ "$tkv" = "$tkey" ]; then tvalue=; else tvalue=${tkv#*=}; fi
+      if [ "$tkey" = "$key" ] && [ "$teffect" = "$effect" ] &&
+         { [ "$tkv" = "$tkey" ] || [ "$tvalue" = "$value" ]; }; then ok=yes; break; fi
+    done
+    [ "$ok" = yes ] || printf '%s ' "$key${value:+=$value}:$effect"
+  done < <(kubectl get node "$1" -o jsonpath='{range .spec.taints[*]}{.key}|{.value}|{.effect}{"\n"}{end}')
+}
+
 case "${1:-}" in
   preflight)
     want=${2:-4}
@@ -38,8 +59,11 @@ case "${1:-}" in
     for n in $(kubectl get nodes -l "$SELECTOR" -o jsonpath='{.items[*].metadata.name}'); do
       cordoned=$(kubectl get node "$n" -o jsonpath='{.spec.unschedulable}')
       used=$(kubectl describe node "$n" | awk '/Allocated resources/,0' | awk '$1=="nvidia.com/gpu"{print $2; exit}')
-      echo "$n gpus_requested=${used:-0} cordoned=${cordoned:-false}"
-      if [ "${used:-0}" = "0" ] && [ "${cordoned:-false}" != "true" ]; then idle=$((idle + 1)); fi
+      taints=$(untolerated "$n")
+      echo "$n gpus_requested=${used:-0} cordoned=${cordoned:-false} untolerated_taints=${taints:-none}"
+      if [ "${used:-0}" = "0" ] && [ "${cordoned:-false}" != "true" ] && [ -z "$taints" ]; then
+        idle=$((idle + 1))
+      fi
     done
     echo "idle nodes: $idle (need $want)"
     [ "$idle" -ge "$want" ] ;;
@@ -51,7 +75,11 @@ case "${1:-}" in
       kubectl label --local -f - "$LABEL" -o yaml | kubectl apply -f - ;;
   start)
     shift
-    python3 gen_job.py --namespace "$NS" --configmap "$CONFIGMAP" "$@" > job.yaml
+    tol_args=()
+    for tol in $TOLERATIONS; do tol_args+=(--toleration "$tol"); done
+    # Your own gen_job.py arguments come last, so they override SELECTOR and TOLERATIONS.
+    python3 gen_job.py --namespace "$NS" --configmap "$CONFIGMAP" --node-selector "$SELECTOR" \
+      ${tol_args[@]+"${tol_args[@]}"} "$@" > job.yaml
     job=$(awk '/^  name:/ {print $2; exit}' job.yaml)
     kubectl create -f job.yaml >/dev/null   # create, not apply: never overwrite an existing job
     echo "$job" ;;
@@ -86,5 +114,5 @@ case "${1:-}" in
     kubectl delete pytorchjob -n "$NS" -l "$LABEL" --wait=false
     kubectl delete configmap -n "$NS" -l "$LABEL" ;;
   *)
-    sed -n '2,13p' "$0"; exit 1 ;;
+    sed -n '2,16p' "$0"; exit 1 ;;
 esac

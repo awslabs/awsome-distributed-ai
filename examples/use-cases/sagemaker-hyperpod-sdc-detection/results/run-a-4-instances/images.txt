@@ -1,4 +1,0 @@
-sdc-order-20261012123652-master-0 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training@sha256:c4685b08072841d85f46c1e30653320df7b742483384c43ecdcd8507f1dbbd41
-sdc-order-20261012123652-worker-0 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training@sha256:c4685b08072841d85f46c1e30653320df7b742483384c43ecdcd8507f1dbbd41
-sdc-order-20261012123652-worker-1 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training@sha256:c4685b08072841d85f46c1e30653320df7b742483384c43ecdcd8507f1dbbd41
-sdc-order-20261012123652-worker-2 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training@sha256:c4685b08072841d85f46c1e30653320df7b742483384c43ecdcd8507f1dbbd41

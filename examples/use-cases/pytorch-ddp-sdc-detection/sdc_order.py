@@ -2,9 +2,9 @@
 
 Per step: (1) forward and backward, with a comm hook that records each rank's local gradient;
 (2) non-finite gradient check; (3) ring replay audit on audit steps, or when check 1 fires;
-(4) gate: on a compute-path alarm the optimizer step isn't applied; (5) weight fingerprint
-comparison after the step, every N steps and on every checkpoint step; (6) checkpoint only if
-no check fired.
+(4) gate: on a compute-path alarm the optimizer step isn't applied; the reduced gradient is also
+checked for NaN or Inf before the update; (5) weight fingerprint comparison after the step, every
+N steps and on every checkpoint step; (6) checkpoint only if no check fired.
 
 Fingerprints are two wrapping int64 sums per tensor: one of the raw bit patterns, and one of the
 bit patterns weighted by position. A change to one or two elements of a tensor always changes
@@ -242,7 +242,8 @@ def _window(last_pass, step, start_step):
 def train(ddp_model, stats, optimizer, batches, compute_loss, rebuild_batch, save_checkpoint,
           sched, start_step=0):
     """Runs until `batches` is exhausted (returns None) or until the first alarm (returns it).
-    On a compute-path alarm, the step that raised it isn't applied; earlier steps may have been.
+    On a compute-path or reduced-gradient alarm, the step that raised it isn't applied; earlier
+    steps may have been.
 
     Checkpoints are tagged with the last step whose audit passed and the last step whose weight
     comparison passed. An alarm carries both, plus suspect_window: the steps since the last pass
@@ -276,7 +277,13 @@ def train(ddp_model, stats, optimizer, batches, compute_loss, rebuild_batch, sav
                         "last_audit_pass": last_audit, "last_weight_check_pass": last_weights}
         if audit:
             last_audit = step
-        torch.nn.utils.clip_grad_norm_(params, sched.max_grad_norm)
+        grad_norm = torch.nn.utils.clip_grad_norm_(params, sched.max_grad_norm)
+        bad = (~torch.isfinite(grad_norm)).to(torch.int32).reshape(1)        # reduced gradient
+        dist.all_reduce(bad, op=dist.ReduceOp.MAX, group=dp_group)
+        if bad.item():
+            optimizer.zero_grad(set_to_none=True)                           # step not applied
+            return {"step": step, "check": "reduced gradient", "suspect_window": [step, step],
+                    "last_audit_pass": last_audit, "last_weight_check_pass": last_weights}
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         ckpt = step % sched.ckpt_every == 0

@@ -6,7 +6,7 @@ Writes, on rank 0, to $SDC_OUT (default /results):
                  fault scenarios, and healthy runs
   norms.json.gz  every rank's local gradient norm on every step of each scenario and healthy
                  run, for evaluating a gradient-norm outlier test offline
-  rank_map.json  rank -> node, local rank, and GPU UUID (contains real IDs; sanitize first)
+  rank_map.json  rank -> node, local rank, and GPU UUID (your real node names and GPU UUIDs)
 """
 import gzip
 import hashlib
@@ -241,7 +241,7 @@ def healthy(name, sched, minutes):
 # ---------------------------------------------------------------------------------------------
 @torch.no_grad()
 def plain_sum(tensors):
-    """The previous fingerprint, for comparison: one wrapping sum of raw bit patterns."""
+    """A single wrapping sum of raw bit patterns: the baseline the two-sum fingerprint improves on."""
     return torch.stack([t.contiguous().view(-1).view(torch.int32).to(torch.int64).sum()
                         for t in tensors])
 
@@ -311,8 +311,8 @@ def majority_unit():
 
 
 def topology_unit():
-    """check_topology on the real layout, on two invalid offsets, and the confirmer placement
-    of the previous code (target + 2 * offset) versus the current one (target + offset)."""
+    """check_topology on the real layout and on two invalid offsets, and where the confirming GPU
+    would sit with confirmer = target + 2 * offset versus the one train() uses, target + offset."""
     nodes = S.check_topology(G["world"], NPN)
     res = {"nodes": len(set(nodes)), "ranks_per_node": dict(Counter(Counter(nodes).values()))}
     for bad in (NPN // 2, WORLD // 2):
@@ -322,14 +322,14 @@ def topology_unit():
         except ValueError as e:
             res[f"offset_{bad}"] = f"rejected: {e}"
     n, o = WORLD, NPN
-    old_same = new_same = 0
+    two_offsets_same = one_offset_same = 0
     for r in range(n):                  # r replays t = r + o
         t = (r + o) % n
-        old_same += nodes[(t + 2 * o) % n] in (nodes[r], nodes[t])
-        new_same += nodes[(t + o) % n] in (nodes[r], nodes[t])
+        two_offsets_same += nodes[(t + 2 * o) % n] in (nodes[r], nodes[t])
+        one_offset_same += nodes[(t + o) % n] in (nodes[r], nodes[t])
     res["pairs"] = n
-    res["pairs_where_previous_confirmer_shares_a_node"] = old_same
-    res["pairs_where_current_confirmer_shares_a_node"] = new_same
+    res["pairs_where_confirmer_target_plus_2_offsets_shares_a_node"] = two_offsets_same
+    res["pairs_where_confirmer_target_plus_offset_shares_a_node"] = one_offset_same
     add("topology_unit", res)
 
 
@@ -440,7 +440,7 @@ def main():
     def stepped(*a, **k):
         r = orig_step(*a, **k)
         for f in X.faults:
-            f.after_step(None)
+            f.after_step()
         return r
     X.opt.step = stepped
 

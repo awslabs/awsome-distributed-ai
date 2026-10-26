@@ -4,8 +4,16 @@ Faults are injected in software, on a chosen rank and step:
   fwd    - change a layer's forward output value, keep its gradient path
   dgrad  - change the gradient flowing into a layer's input (backward only)
   wgrad  - change a layer's weight gradient (backward only)
-  weight - change one rank's stored weight right after optimizer.step(): bitflip, swap two
-           elements, or compensate (+v and -v on two bit patterns, so the plain sum is unchanged)
+  weight - change one rank's stored weight right after optimizer.step()
+
+Modes:
+  scale      - multiply one element by `value`
+  nan        - set one element to NaN
+  bitflip    - flip bit `value` of one element's bit pattern
+  noise      - multiply every element by (1 + value * standard normal noise)
+  lane       - multiply one column (the last dimension) by `value`
+  swap       - swap two elements (the plain bit sum doesn't change)
+  compensate - add +value and -value to two elements' bit patterns (same plain bit sum)
 """
 import torch
 import torch.nn.functional as F
@@ -23,27 +31,24 @@ def _xor_mask(bit, esize):
 
 
 class Fault:
-    """kind: fwd | dgrad | wgrad | weight | bucket | owner | nonowner
-    mode: scale | nan | bitflip | noise | lane | row"""
+    """kind: fwd | dgrad | wgrad | weight. mode: see the module docstring."""
 
     def __init__(self, kind, rank, mode, start, stop=None, value=None, elem=123_457, lane=1234,
-                 target=None, bucket=None, once_per_step=False):
+                 once_per_step=False):
         self.kind, self.rank, self.mode = kind, rank, mode
         self.start = start
         self.stop = stop if stop is not None else start + 1
         self.value, self.elem, self.lane = value, elem, lane
-        self.target, self.bucket = target, bucket
         self.once_per_step = once_per_step
         self.t = -1
         self.applied_at = None
         self.handles = []
-        self.undo = []
         self.module = None
         self.param = None
 
     def meta(self):
         return {k: getattr(self, k) for k in ("kind", "rank", "mode", "start", "stop", "value",
-                                              "elem", "lane", "target", "bucket", "once_per_step")}
+                                              "elem", "lane", "once_per_step")}
 
     def set_step(self, t):
         self.t = t
@@ -63,9 +68,6 @@ class Fault:
         m = self.mode
         if m == "lane":
             out[..., self.lane % out.shape[-1]] *= self.value
-            return
-        if m == "row":
-            out[self.elem % out.shape[0]] *= self.value
             return
         if m == "noise":
             out.mul_(1 + self.value * torch.randn_like(out))
@@ -122,22 +124,15 @@ class Fault:
                 lambda g: self._corrupt(g) if self.active() else None))
         return self
 
-    def on_bucket(self, idx, buf):
-        if self.kind == "bucket" and idx == self.bucket and self.active():
-            self.apply_(buf)
-            self._mark()
-
     @torch.no_grad()
-    def after_step(self, lay):
+    def after_step(self):
         if self.kind == "weight" and RANK == self.rank and self.t == self.start:
             self.apply_(self.param.data)
 
     def remove(self):
         for h in self.handles:
             h.remove()
-        for u in self.undo:
-            u()
-        self.handles, self.undo = [], []
+        self.handles = []
 
 
 def autocast():

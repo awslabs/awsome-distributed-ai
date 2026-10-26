@@ -6,8 +6,8 @@ Reads order.json and norms.json.gz (standard library only) and reports:
   - healthy runs: steps, audits, comparisons, weight checks, alarms, and a 95% upper bound on
     the false-alarm rate (rule of three: 3 / N when 0 events were seen in N trials)
   - the gradient-norm outlier test (|norm - median| / MAD per step, per rank): its healthy
-    spread, a threshold calibrated like the original draft (1.5 x the highest healthy score in
-    the first 800 healthy steps), false alarms at that threshold, and each finite fault's score
+    spread, a threshold of 1.5 x the highest healthy score in the first 800 healthy steps,
+    false alarms at that threshold, and each finite fault's score
   - estimated average step times for common schedules, including the weight check
 """
 import argparse
