@@ -1,0 +1,9 @@
+---
+- name: Configure EC2 Ubuntu 24.04 GPU AMI
+  hosts: default
+  become: true
+  gather_facts: true
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+  roles:
+    - aws_efa

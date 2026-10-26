@@ -1,0 +1,7 @@
+predicted_category	n	avg_conf	median_conf	min_conf
+Other	203	0.997	1.0	0.9
+ProductFridge	175	0.983	1.0	0.0
+ProductWasher	141	0.996	1.0	0.9
+ProductOven	140	0.989	1.0	0.9
+ProductDishwasher	138	0.995	1.0	0.95
+ProductMicrowave	103	1.0	1.0	1.0

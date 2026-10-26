@@ -38,7 +38,7 @@ Each subdirectory under `architectures/` is a deployable cluster architecture or
 | [`common`](./architectures/common)                                       | Storage  | Common resources (S3 bucket, event notifications)    |
 | [`vpc_network`](./architectures/vpc_network)                             | Network  | Create a VPC with subnets and required resources     |
 | [`aws-parallelcluster`](./architectures/aws-parallelcluster)             | Compute  | Cluster templates for GPU & custom silicon training  |
-| [`amazon-eks`](./architectures/amazon-eks)                               | Compute  | Manifest files to train with Amazon EKS              |
+| [`amazon-eks`](./architectures/amazon-eks)                               | Compute  | CloudFormation templates for an EKS GPU cluster with EFA, and the eksctl manifests that preceded them |
 | [`sagemaker-hyperpod-slurm`](./architectures/sagemaker-hyperpod-slurm)               | Compute  | SageMaker HyperPod with Slurm orchestration |
 | [`ldap_server`](./architectures/ldap_server)                             | Identity | LDAP server for multi-user cluster access            |
 | [`sagemaker-hyperpod-eks`](./architectures/sagemaker-hyperpod-eks)       | Compute  | SageMaker HyperPod with EKS orchestration            |
@@ -109,4 +109,4 @@ Thanks to all the contributors for building, reviewing and testing.
 
 ## Star History
 
-[![Star History Chart](https://star-history.dera.page/svg?repos=awslabs/awsome-distributed-ai&type=Date)](https://star-history.dera.page/#awslabs/awsome-distributed-ai&Date)
+[![Star History Chart](https://api.star-history.com/chart?repos=awslabs/awsome-distributed-ai&type=date&legend=top-left)](https://www.star-history.com/?repos=awslabs%2Fawsome-distributed-ai&type=date&legend=top-left)

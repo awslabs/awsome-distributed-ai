@@ -85,6 +85,26 @@ jobs:
             echo "aws_pcs_changed=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Detect Amazon EKS changes
+        id: eks-changes
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          before="${{ github.event.before }}"
+          if [[ "$before" =~ ^0+$ ]] || git diff --name-only "$before" "${{ github.sha }}" -- architectures/amazon-eks/ "$PUBLISH_MANIFEST" .github/workflows/publish-architecture-templates.yml | grep -q .; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run Amazon EKS template lint
+        if: ${{ steps.eks-changes.outputs.changed == 'true' }}
+        run: |
+          python3 -m pip install --quiet pyyaml
+          bash architectures/amazon-eks/tests/lint-templates.sh
+
       - name: Run AWS PCS docs lint
         if: ${{ steps.changes.outputs.aws_pcs_changed == 'true' && hashFiles('architectures/aws-pcs/tests/lint-docs.sh') != '' }}
         run: bash architectures/aws-pcs/tests/lint-docs.sh

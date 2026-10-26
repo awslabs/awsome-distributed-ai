@@ -214,22 +214,31 @@ add_keypair_to_cluster() {
         auth_keys_path="/fsx/${ssh_user}/.ssh/authorized_keys"
     fi
 
-    # Check if the fingerprint already exists in the cluster's authorized_keys
-    EXISTING_KEYS=$(aws ssm start-session "${aws_cli_args[@]}" --target sagemaker-cluster:${cluster_id}_${node_group}-${instance_id} --document-name AmazonEKS-ExecuteNonInteractiveCommand --parameters command="cat ${auth_keys_path}" </dev/null 2>/dev/null)
-    local read_rc=$?
+    # Check whether our key is already present, by counting matches REMOTELY and
+    # reading back a single integer (see the long note on the verify step below
+    # for why we do not cat the whole file back and grep locally -- the SSM
+    # non-interactive read truncates large output). Match on the base64 key body
+    # (field 2, no spaces) so the command carries no spaces/quotes/&&/||.
+    local existing_blob existing_count="" existing_tries=0
+    existing_blob=$(awk '{print $2}' <<<"$PUBLIC_KEY")
+    while [[ $existing_tries -lt 5 ]]; do
+        existing_tries=$((existing_tries+1))
+        local existing_out
+        existing_out=$(aws ssm start-session "${aws_cli_args[@]}" --target sagemaker-cluster:${cluster_id}_${node_group}-${instance_id} --document-name AmazonEKS-ExecuteNonInteractiveCommand --parameters command="grep -cF ${existing_blob} ${auth_keys_path}" </dev/null 2>/dev/null)
+        existing_count=$(printf '%s\n' "$existing_out" | grep -Eo '^[0-9]+$' | head -1)
+        [[ -n "$existing_count" ]] && break
+        sleep 2
+    done
 
-    # The SSM session plugin may return non-zero even on success (due to "Cannot perform start session: EOF").
-    # Check both exit code and output: if we got an actual error (like TargetNotConnected), the output will
-    # contain the error message and no key content.
-    if [[ $read_rc -ne 0 ]] && ! echo "$EXISTING_KEYS" | grep -Eq "^(ssh-rsa|ssh-ed25519|ecdsa-sha2-|ssh-dss) "; then
-        echo -e "${YELLOW}Warning: Could not read authorized_keys from the cluster (SSM command failed).${NC}"
+    if [[ -z "$existing_count" ]]; then
+        echo -e "${YELLOW}Warning: Could not read authorized_keys from the cluster (SSM command returned no readable result).${NC}"
         echo -e "${YELLOW}The cluster node may not be connected to SSM. Skipping key upload.${NC}"
         echo -e "${YELLOW}You may need to manually add your public key to ${auth_keys_path} on the cluster.${NC}"
         return 1
     fi
-    
-    if echo "$EXISTING_KEYS" | grep -Fq "$PUBLIC_KEY"; then
-        echo -e "${BLUE}2. Detected SSH public key ${GREEN}${ssh_key}${BLUE} for user ${GREEN}${ssh_user}${BLUE} on the cluster. Skipping adding...${NC}" 
+
+    if [[ "$existing_count" -ge 1 ]]; then
+        echo -e "${BLUE}2. Detected SSH public key ${GREEN}${ssh_key}${BLUE} for user ${GREEN}${ssh_user}${BLUE} on the cluster. Skipping adding...${NC}"
         return
     else
         echo -e "${BLUE}2. Do you want to add your SSH public key ${GREEN}${ssh_key}${BLUE} to user ${GREEN}${ssh_user}${BLUE} on the cluster (yes/no)?${NC}" 
@@ -238,12 +247,42 @@ add_keypair_to_cluster() {
             echo "Adding ... ${PUBLIC_KEY}"
             command="sed -i \$a$(escape_spaces "$PUBLIC_KEY") ${auth_keys_path}"
             aws ssm start-session "${aws_cli_args[@]}" --target sagemaker-cluster:${cluster_id}_${node_group}-${instance_id}  --document-name AmazonEKS-ExecuteNonInteractiveCommand  --parameters command="$command" </dev/null >/dev/null 2>/dev/null
-            
-            # Verify the key was actually written by re-reading authorized_keys
-            local verify_keys=$(aws ssm start-session "${aws_cli_args[@]}" --target sagemaker-cluster:${cluster_id}_${node_group}-${instance_id} --document-name AmazonEKS-ExecuteNonInteractiveCommand --parameters command="cat ${auth_keys_path}" </dev/null 2>/dev/null)
-            if echo "$verify_keys" | grep -Fq "$PUBLIC_KEY"; then
+
+            # Verify by counting matches REMOTELY and returning just the number.
+            #
+            # Do NOT cat the whole authorized_keys back and grep locally: the
+            # AmazonEKS-ExecuteNonInteractiveCommand output over start-session is
+            # unreliable for large / multi-line payloads -- it intermittently comes
+            # back as banner-only or truncated mid-line, which made the old
+            # `cat | grep -Fq "$PUBLIC_KEY"` check report a false "key not found"
+            # even though the key was written correctly.
+            #
+            # Instead run `grep -cF <blob>` on the node and read back a single
+            # integer. We match on the base64 key body (field 2, no spaces) so the
+            # command carries no spaces, quotes, && or || -- all of which either
+            # break the AWS CLI --parameters shorthand parser or are not honored by
+            # the document. The blob is unique per key, so the count is authoritative.
+            local key_blob
+            key_blob=$(awk '{print $2}' <<<"$PUBLIC_KEY")
+            local count="" tries=0
+            while [[ $tries -lt 5 ]]; do
+                tries=$((tries+1))
+                local out
+                out=$(aws ssm start-session "${aws_cli_args[@]}" --target sagemaker-cluster:${cluster_id}_${node_group}-${instance_id} --document-name AmazonEKS-ExecuteNonInteractiveCommand --parameters command="grep -cF ${key_blob} ${auth_keys_path}" </dev/null 2>/dev/null)
+                # Pull the first standalone integer out of the (banner-wrapped) output.
+                count=$(printf '%s\n' "$out" | grep -Eo '^[0-9]+$' | head -1)
+                [[ -n "$count" ]] && break
+                sleep 2
+            done
+
+            if [[ -n "$count" && "$count" -ge 1 ]]; then
                 echo "✅ Your SSH public key ${ssh_key} has been added to user ${ssh_user} on the cluster."
+            elif [[ -z "$count" ]]; then
+                # Never got a numeric answer back -- inconclusive, NOT a confirmed failure.
+                echo -e "${YELLOW}ℹ️  Added your SSH public key, but could not auto-confirm it (the cluster did not return a readable result after ${tries} tries).${NC}"
+                echo -e "${YELLOW}    This is usually harmless. If '${GREEN}ssh ${SSH_HOST}${YELLOW}' works, you are connected.${NC}"
             else
+                # Got a definitive 0 back -- the key really is not in authorized_keys.
                 echo -e "${RED}Error: Failed to add SSH public key to the cluster. The key was not found after writing.${NC}"
                 echo -e "${YELLOW}You may need to manually add your public key to ${auth_keys_path} on the cluster.${NC}"
             fi

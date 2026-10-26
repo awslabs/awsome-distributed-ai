@@ -1,0 +1,17 @@
+# Base model as launched (six labels)
+  MISS ProductAC -> Other: Just installed the Arctis 12K in the bedroom and it smells like burning plastic.
+  MISS ProductAC -> Other: arctis mini wont turn on at all, just a red blinking light
+  MISS ProductAC -> Other: The Arctis app says my unit is offline even though the router is right next to it.
+  MISS ProductAC -> Other: Is the Arctis 9K filter washable or do I need to buy replacements? Mine is clogged.
+  MISS ProductAC -> Other: Our new AC keeps tripping the breaker every time it starts.
+  MISS ProductAC -> Other: Portable air conditioner exhaust hose cracked where it meets the window kit.
+  MISS ProductAC -> ProductFridge: Ductless mini split indoor head is dripping down the wall.
+  MISS ProductAC -> Other: Room is still 80 degrees with the Arctis set to 68 for three hours.
+overall 16/24 = 66.67%
+  ProductFridge      4/4
+  ProductWasher      2/2
+  ProductOven        2/2
+  ProductDishwasher  2/2
+  ProductMicrowave   2/2
+  ProductAC          0/8   misrouted: {'Other': 7, 'ProductFridge': 1}
+  Other              4/4

@@ -1,7 +1,0 @@
----
-- name: Converge
-  hosts: all
-  tasks:
-    - name: "Include aws_cliv2"
-      include_role:
-        name: "aws_cliv2"

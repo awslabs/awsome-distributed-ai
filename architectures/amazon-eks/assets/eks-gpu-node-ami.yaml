@@ -1,0 +1,406 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  Builds a node AMI with EC2 Image Builder and returns its id, from an EKS-optimised AL2023 parent
+  plus the packages you name, or from a recipe you already maintain. Deployed on its own, or as a
+  child of eks-gpu-cluster-deploy-all.yaml when that template is given image inputs.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: {default: Where the build runs}
+        Parameters: [VpcId, PrivateSubnetId, BuildInstanceType]
+      - Label: {default: What the image carries}
+        Parameters:
+          - KubernetesVersion
+          - RepoPackages
+          - Packages
+          - RepoFiles
+          - RepoKeys
+          - AssertPaths
+          - AssertCommands
+          - RecipeArn
+      - Label: {default: Image Builder resource versions}
+        Parameters: [ComponentVersion, RecipeVersion]
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC to run the build instance in.
+
+  PrivateSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: >-
+      Subnet for the build instance. It needs outbound internet access, through a NAT gateway or
+      equivalent, to reach the AL2023 and NVIDIA package repositories.
+
+  BuildInstanceType:
+    Type: String
+    Default: m5.large
+    Description: >-
+      Instance type that builds the image. The driver and the toolkit install on any x86_64 type, so
+      this deliberately defaults to a small general-purpose type rather than to a GPU type: GPU
+      capacity is scarce and an image build does not need a GPU. The node-side check in
+      eks-add-gpu-nodegroup.yaml is what proves the image drives its GPUs.
+
+  BuildInstanceProfileName:
+    Type: String
+    Default: ""
+    Description: >-
+      Name of the instance profile the build instance runs with. Empty creates a role carrying
+      EC2InstanceProfileForImageBuilder and AmazonSSMManagedInstanceCore with a profile around it,
+      which is what a build that authenticates for nothing it fetches needs. A payload from a private
+      bucket or registry needs permissions this template cannot know, and where its resource policy
+      names the role, a role this template creates cannot be granted before it exists, so that case
+      supplies its own. A supplied profile's role still has to grant what Image Builder needs
+      to act through the instance and what Systems Manager needs to reach it, which those two managed
+      policies are one way to express.
+
+  KubernetesVersion:
+    Type: String
+    Default: "1.36"
+    AllowedPattern: ^1\.[0-9]{2}$
+    Description: >-
+      Kubernetes version of the parent AMI. The parent is the EKS-optimised AL2023 **standard** AMI
+      for this version, not the NVIDIA variant, because this image installs its own driver.
+
+  Packages:
+    Type: String
+    Default: ""
+    Description: >-
+      Comma-separated packages to install, each pinned to a version. Anything that has to be installed
+      first to make these resolvable goes in RepoPackages instead.
+  RepoPackages:
+    Type: String
+    Default: ""
+    Description: >-
+      Comma-separated packages whose job is to make other packages resolvable, such as a vendor's
+      -release package. They are installed one at a time, before anything else and before the metadata
+      is refreshed, because a package that enables a repository has to be in place before a name from
+      that repository can be resolved. This is the third way a repository arrives, beside RepoFiles and
+      RepoKeys, and separating it is what keeps install order out of Packages.
+  RepoFiles:
+    Type: String
+    Default: ""
+    Description: Comma-separated URLs of repository definitions to place in /etc/yum.repos.d first.
+  RepoKeys:
+    Type: String
+    Default: ""
+    Description: Comma-separated URLs of signing keys to import before installing.
+  AssertPaths:
+    Type: String
+    Default: ""
+    Description: >-
+      Comma-separated paths the test phase requires to exist. Installing a package and publishing
+      an image that lacks the binary the package exists to provide is the failure this catches.
+  AssertCommands:
+    Type: String
+    Default: ""
+    Description: >-
+      Semicolon-separated shell commands the test phase runs on the produced image, each of which
+      has to exit zero. AssertPaths proves a file arrived; these prove it works, which is a different
+      claim: a kernel module can be present as a file and fail to load. What counts as working is
+      specific to what was installed, so it comes in with the payload rather than living in the build.
+  RecipeArn:
+    Type: String
+    Default: ""
+    Description: >-
+      An existing EC2 Image Builder recipe to build instead of the one this template composes. Its
+      parent image needs the Systems Manager agent: Image Builder reaches the build instance through
+      Systems Manager, and the instance profile alone does not install it. With
+      this set the template contributes only the build environment, and knows nothing about contents.
+  ComponentVersion:
+    Type: String
+    Default: 1.0.0
+    AllowedPattern: ^[0-9]+\.[0-9]+\.[0-9]+$
+    Description: >-
+      Semantic version of the Image Builder component. Image Builder resources are immutable per
+      version, so bump this when the component's steps change.
+
+  RecipeVersion:
+    Type: String
+    Default: 1.0.0
+    AllowedPattern: ^[0-9]+\.[0-9]+\.[0-9]+$
+    Description: >-
+      Semantic version of the Image Builder recipe. The recipe carries the inputs above as component
+      parameter values, so changing what goes into the image changes the recipe: raise this to build a
+      different payload. Reusing a version with different contents is rejected as an existing resource.
+      The root template passes one value to both versions for that reason.
+
+Rules:
+  # The root enforces the same shape before it creates this stack. Repeated here because this template
+  # is also deployed on its own, where nothing else would catch either mistake: two sources means one
+  # is silently ignored, and no source reaches Image Builder with nothing to install.
+  ExactlyOneSource:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref RecipeArn, ""]
+          - !Equals [!Ref Packages, ""]
+        AssertDescription: >-
+          RecipeArn builds a recipe you maintain and Packages builds the recipe this template composes,
+          so they cannot both be set.
+      - Assert: !Or
+          - !Not [!Equals [!Ref RecipeArn, ""]]
+          - !Not [!Equals [!Ref Packages, ""]]
+        AssertDescription: >-
+          One of RecipeArn or Packages is required. With neither, the build has nothing to install.
+  BuildFromPackagesNeedsAnAssertion:
+    RuleCondition: !Not [!Equals [!Ref Packages, ""]]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref AssertPaths, ""]]
+        AssertDescription: >-
+          Packages requires AssertPaths. A build with nothing to assert publishes an image whose
+          contents were never checked.
+
+Conditions:
+  BringsOwnRecipe: !Not [!Equals [!Ref RecipeArn, ""]]
+  ComposesOwnRecipe: !Equals [!Ref RecipeArn, ""]
+  CreatesBuildProfile: !Equals [!Ref BuildInstanceProfileName, ""]
+
+Resources:
+  # The build host needs egress for Systems Manager, Image Builder and wherever its payload comes from,
+  # and no ingress at all. Its own group rather than the node group's, which carries the all-traffic
+  # self-reference EFA requires between nodes.
+  BuildSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${AWS::StackName} Image Builder build instance"
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Systems Manager, Image Builder and the payload source, over the NAT gateway
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}-image-build"}
+
+  BuildInstanceRole:
+    Type: AWS::IAM::Role
+    Condition: CreatesBuildProfile
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilder
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  BuildInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Condition: CreatesBuildProfile
+    Properties:
+      Roles: [!Ref BuildInstanceRole]
+
+  # Owned here so a delete takes it away and it has a retention. A build from a RecipeArn passed in logs
+  # under that recipe's name, which this stack does not own.
+  BuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/imagebuilder/${AWS::StackName}-eks-al2023-nvidia"
+      RetentionInDays: 14
+
+  # The component does not interpret the packages: a driver, a monitoring agent and a filesystem client
+  # all arrive the same way.
+  InstallComponent:
+    Type: AWS::ImageBuilder::Component
+    Condition: ComposesOwnRecipe
+    Properties:
+      Name: !Sub "${AWS::StackName}-install-packages"
+      Platform: Linux
+      Version: !Ref ComponentVersion
+      Description: Installs pinned packages from optional repositories and asserts the paths they provide.
+      SupportedOsVersions: ["Amazon Linux 2023"]
+      Data: |
+        name: install-packages
+        description: >-
+          Adds repository definitions, imports signing keys, installs pinned packages, reboots, and
+          asserts that the given paths exist in the produced image.
+        schemaVersion: 1.0
+        parameters:
+          - RepoPackages:
+              type: string
+              description: Comma-separated packages that make other packages resolvable, or empty.
+          - Packages:
+              type: string
+              description: Comma-separated packages, each pinned to a version.
+          - RepoFiles:
+              type: string
+              description: Comma-separated URLs of repository definitions, or empty.
+          - RepoKeys:
+              type: string
+              description: Comma-separated URLs of signing keys, or empty.
+          - AssertPaths:
+              type: string
+              description: Comma-separated paths the produced image must contain.
+          - AssertCommands:
+              type: string
+              description: Semicolon-separated commands that must exit zero on the produced image.
+        phases:
+          - name: build
+            steps:
+              - name: AddRepositories
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      set -euo pipefail
+                      IFS=',' read -ra urls <<< '{{ RepoFiles }}'
+                      for url in "${urls[@]}"; do
+                        [ -n "$url" ] || continue
+                        name=$(basename "$url")
+                        curl -fsSL -o "/etc/yum.repos.d/$name" "$url"
+                        echo "added /etc/yum.repos.d/$name"
+                      done
+              - name: ImportKeys
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      set -euo pipefail
+                      IFS=',' read -ra keys <<< '{{ RepoKeys }}'
+                      for key in "${keys[@]}"; do
+                        [ -n "$key" ] || continue
+                        rpm --import "$key"
+                        echo "imported $key"
+                      done
+              - name: InstallRepoPackages
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      set -euo pipefail
+                      IFS=',' read -ra pkgs <<< '{{ RepoPackages }}'
+                      for pkg in "${pkgs[@]}"; do
+                        [ -n "$pkg" ] || continue
+                        echo "enabling repositories with $pkg"
+                        dnf install -y "$pkg"
+                      done
+                      dnf makecache -y
+              - name: InstallPackages
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      set -euo pipefail
+                      IFS=',' read -ra pkgs <<< '{{ Packages }}'
+                      if [ "${#pkgs[@]}" -eq 0 ] || [ -z "${pkgs[0]}" ]; then
+                        echo "no packages given; a build with nothing to install is a mistake" >&2
+                        exit 1
+                      fi
+                      # One transaction, so a version conflict fails the build instead of leaving half the set installed.
+                      dnf install -y "${pkgs[@]}"
+              - name: RebootAfterInstall
+                action: Reboot
+          # The test phase, not validate: only test runs on an instance launched from the produced image, which
+          # is what "the module loads on the image this publishes" needs.
+          - name: test
+            steps:
+              - name: RequirePinnedPackages
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      set -euo pipefail
+                      IFS=',' read -ra pkgs <<< '{{ RepoPackages }},{{ Packages }}'
+                      for pkg in "${pkgs[@]}"; do
+                        [ -n "$pkg" ] || continue
+                        rpm -q "$pkg" || { echo "$pkg is not installed at the version asked for" >&2; exit 1; }
+                      done
+              - name: RequireAssertPaths
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      set -euo pipefail
+                      IFS=',' read -ra paths <<< '{{ AssertPaths }}'
+                      for path in "${paths[@]}"; do
+                        [ -n "$path" ] || continue
+                        test -e "$path" || { echo "$path is missing from the produced image" >&2; exit 1; }
+                      done
+              - name: RequireAssertCommands
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      set -euo pipefail
+                      IFS=';' read -ra cmds <<< '{{ AssertCommands }}'
+                      for cmd in "${cmds[@]}"; do
+                        [ -n "${cmd// /}" ] || continue
+                        echo "asserting: $cmd"
+                        bash -c "$cmd" || { echo "assertion failed: $cmd" >&2; exit 1; }
+                      done
+
+  NodeAmiRecipe:
+    Type: AWS::ImageBuilder::ImageRecipe
+    Condition: ComposesOwnRecipe
+    Properties:
+      Name: !Sub "${AWS::StackName}-eks-al2023-nvidia"
+      Version: !Ref RecipeVersion
+      # The standard variant: the NVIDIA one would bring a second driver.
+      ParentImage: !Sub "{{resolve:ssm:/aws/service/eks/optimized-ami/${KubernetesVersion}/amazon-linux-2023/x86_64/standard/recommended/image_id}}"
+      Components:
+        - ComponentArn: !Ref InstallComponent
+          Parameters:
+            - Name: RepoPackages
+              Value: [!Ref RepoPackages]
+            - Name: Packages
+              Value: [!Ref Packages]
+            - Name: RepoFiles
+              Value: [!Ref RepoFiles]
+            - Name: RepoKeys
+              Value: [!Ref RepoKeys]
+            - Name: AssertPaths
+              Value: [!Ref AssertPaths]
+            - Name: AssertCommands
+              Value: [!Ref AssertCommands]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 100
+            VolumeType: gp3
+            DeleteOnTermination: true
+
+  BuildInfrastructure:
+    Type: AWS::ImageBuilder::InfrastructureConfiguration
+    Properties:
+      Name: !Sub "${AWS::StackName}-build"
+      InstanceProfileName: !If [CreatesBuildProfile, !Ref BuildInstanceProfile, !Ref BuildInstanceProfileName]
+      InstanceTypes: [!Ref BuildInstanceType]
+      SubnetId: !Ref PrivateSubnetId
+      SecurityGroupIds: [!Ref BuildSecurityGroup]
+      TerminateInstanceOnFailure: true
+      # Image Builder reserves the Name tag key on an infrastructure configuration.
+      ResourceTags:
+        Stack: !Ref AWS::StackName
+
+  # CloudFormation waits on this resource, so the id below is an AMI by the time a node group reads it.
+  NodeAmi:
+    Type: AWS::ImageBuilder::Image
+    DependsOn: BuildLogGroup
+    Properties:
+      ImageRecipeArn: !If [BringsOwnRecipe, !Ref RecipeArn, !Ref NodeAmiRecipe]
+      InfrastructureConfigurationArn: !Ref BuildInfrastructure
+      EnhancedImageMetadataEnabled: true
+      ImageTestsConfiguration:
+        ImageTestsEnabled: true
+        TimeoutMinutes: 60
+
+Outputs:
+  NodeAmiId:
+    Description: >-
+      Id of the built AMI. Pass it to eks-add-gpu-nodegroup.yaml as NodeAmiId, which switches that
+      node group to AmiType CUSTOM.
+    Value: !GetAtt NodeAmi.ImageId
+
+  NodeAmiName:
+    Description: Name of the built AMI.
+    Value: !GetAtt NodeAmi.Name
+
+  ImageContents:
+    Description: The packages this image was built with, as given to the build.
+    Value: !Ref Packages

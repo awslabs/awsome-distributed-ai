@@ -1,0 +1,14 @@
+---
+# yamllint disable rule:line-length
+aws_pcs_agent_version: "1.5.1-1"
+aws_pcs_agent_upstream_version: "1.5.1"
+aws_pcs_agent_sha256: "9ac3fff38d75774852d947bf6823abc5a75e5c6325cd5aa5a3172b1defa72f9d"
+aws_pcs_slurm_major: "25.11"
+aws_pcs_slurm_version: "25.11.7-3"
+aws_pcs_slurm_upstream_version: "25.11.7"
+# Measured from the immutable 25.11.7-3 artifact on 2026-09-04. The AWS
+# documentation table still lists a different digest; the detached AWS signature
+# is also verified before installation.
+aws_pcs_slurm_sha256: "9d2c7153583642d5714c4df3fb468c942b39ba995466b25a3b8dd6705e79aea9"
+aws_pcs_signing_key_fingerprint: "1C2432C1862F64D1F90A239A7EEF030EDDF5C21C"
+aws_pcs_work_dir: "/tmp/aws-pcs-installers"

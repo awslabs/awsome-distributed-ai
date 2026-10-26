@@ -1,6 +1,0 @@
----
-dependencies:
-  - role: nvidia_driver
-
-cuda_version: "12-2"
-cudnn_version: "libcudnn8"

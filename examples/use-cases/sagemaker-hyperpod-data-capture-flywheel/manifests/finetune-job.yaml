@@ -1,0 +1,50 @@
+apiVersion: sagemaker.amazonaws.com/v1
+kind: HyperPodPyTorchJob
+metadata:
+  name: router-ft
+  namespace: default
+spec:
+  nprocPerNode: "1"
+  runPolicy:
+    jobMaxRetryCount: 2
+    cleanPodPolicy: All              # release the GPU as soon as the job finishes
+    logMonitoringConfiguration:      # restart a job that never starts, or goes quiet mid-run
+      - name: JobStart
+        logPattern: '.*loss.*'
+        expectedStartCutOffInSeconds: 1200
+      - name: JobHangingDetection
+        logPattern: '.*loss.*'
+        expectedRecurringFrequencyInSeconds: 600
+  replicaSpecs:
+    - name: pod
+      replicas: 1
+      template:
+        metadata:
+          labels: { app: router-ft }
+        spec:
+          serviceAccountName: ${TRAIN_SA}        # EKS Pod Identity -> S3 read/write
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${TRAIN_INSTANCE_TYPE}
+          restartPolicy: Always                  # required by the operator; retries live in runPolicy
+          containers:
+            - name: pytorch
+              image: vllm/vllm-openai:v0.10.0    # already has torch + transformers + boto3
+              command: ["bash", "-c"]
+              args:
+                - pip install -q peft==0.14.0 datasets==3.2.0 hyperpod-elastic-agent==1.1.3 &&
+                  hyperpodrun --tee=3 --log_dir=/tmp/hyperpod --nnodes=1 --nproc_per_node=1 /scripts/train.py
+              env:
+                - { name: BASE_MODEL_S3, value: "s3://${BUCKET}/${MODEL_LOCATION}/" }
+                - { name: TRAIN_FILE_S3, value: "s3://${BUCKET}/training/train.jsonl" }
+                - { name: OUTPUT_S3,     value: "s3://${BUCKET}/${MODEL_V2_LOCATION}/" }
+              resources:
+                requests: { cpu: "2", memory: 24Gi, nvidia.com/gpu: 1 }
+                limits:   { nvidia.com/gpu: 1 }
+              volumeMounts:
+                - { name: scripts, mountPath: /scripts }
+                - { name: work,    mountPath: /work }
+                - { name: shm,     mountPath: /dev/shm }
+          volumes:
+            - { name: scripts, configMap: { name: router-train } }
+            - { name: work,    emptyDir: {} }
+            - { name: shm,     emptyDir: { medium: Memory, sizeLimit: 8Gi } }

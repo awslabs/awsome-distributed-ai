@@ -1,0 +1,10 @@
+---
+# yamllint disable rule:line-length
+- name: Validate EC2 Ubuntu 24.04 Base GPU DLAMI
+  hosts: default
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify parent NVIDIA driver command
+      ansible.builtin.command: nvidia-smi --query-gpu=driver_version --format=csv,noheader
+      changed_when: false

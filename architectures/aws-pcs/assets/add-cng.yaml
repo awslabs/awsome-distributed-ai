@@ -44,6 +44,10 @@ Metadata:
           - EfaInterfaceCount
           - PlacementGroupName
       - Label:
+          default: Capacity Reservation Settings (Optional)
+        Parameters:
+          - CapacityReservationId
+      - Label:
           default: Monitoring configuration
         Parameters:
           - DeployMonitoring
@@ -277,10 +281,25 @@ Parameters:
     Description: >-
       (Optional) Name of an existing cluster placement group to launch nodes into.
       Leave empty to auto-create a per-CNG cluster placement group when
-      EfaInterfaceCount > 0. Specify a value to share one placement group across
-      multiple CNGs (e.g. a heterogeneous tightly-coupled job). Ignored when
-      EfaInterfaceCount = 0.
+      EfaInterfaceCount > 0 (with EfaInterfaceCount = 0 empty means no placement
+      group, as before). Specify a value to share one placement group across
+      multiple CNGs (e.g. a heterogeneous tightly-coupled job) — honored with or
+      without EFA, so a targeted ODCR held in a customer-owned cluster placement
+      group is consumable on any instance type.
     Default: ''
+
+  CapacityReservationId:
+    Type: String
+    Description: >-
+      (Optional) "Targeted" On-Demand Capacity Reservation (ODCR) ID to launch
+      this node group's instances into (On-Demand billing against the
+      reservation; no market-type change). Leave EMPTY for plain On-Demand —
+      an ODCR with "open" matching is consumed automatically and must NOT be
+      listed here. Capacity Blocks for ML do not exist for these instance
+      families; for GPU Capacity Blocks use the add-cng-p5/p6 templates. The
+      reservation's instance type and AZ must match InstanceType and the
+      subnet's AZ.
+    Default: ""
 
 Conditions:
   CreateQueue: !Not [!Equals [!Ref QueueName, ""]]
@@ -299,7 +318,18 @@ Conditions:
   CreatePlacementGroup: !And
     - !Condition EfaEnabled
     - !Not [!Condition HasUserPlacementGroup]
+  # Placement applies when EFA needs it (auto or user PG) OR the user named a
+  # PG explicitly without EFA — required to consume a targeted ODCR held in a
+  # customer-owned cluster placement group on a non-EFA instance type. An
+  # empty PlacementGroupName with EFA off stays placement-less as before.
+  UsePlacementGroup: !Or
+    - !Condition EfaEnabled
+    - !Condition HasUserPlacementGroup
   Has2ndEfaInterface: !Equals [!Ref EfaInterfaceCount, 2]
+  # Targeted ODCR: add a CapacityReservationTarget, nothing else — launches
+  # stay On-Demand (billed against the reservation) and the EFA/placement
+  # logic above is independent of it.
+  HasCapacityReservation: !Not [!Equals [!Ref CapacityReservationId, ""]]
   DirectoryEnabled: !Not [!Equals [!Ref DirectoryRole, 'none']]
   HasLustre: !Not [!Equals [!Ref FSxLustreFilesystemId, '']]
   EnrootPyxisEnabled: !Equals [!Ref InstallEnrootPyxis, 'true']
@@ -506,10 +536,16 @@ Resources:
           HttpPutResponseHopLimit: 4
           HttpTokens: required
           InstanceMetadataTags: enabled
-        # Cluster placement group, only when EFA is enabled. Either the auto-created
-        # PG (CreatePlacementGroup) or a user-supplied one (PlacementGroupName).
+        CapacityReservationSpecification: !If
+          - HasCapacityReservation
+          - CapacityReservationTarget:
+              CapacityReservationId: !Ref CapacityReservationId
+          - !Ref AWS::NoValue
+        # Cluster placement group: auto-created (EFA on, no user PG) or the
+        # user-supplied PlacementGroupName (with or without EFA — see the
+        # UsePlacementGroup condition).
         Placement: !If
-          - EfaEnabled
+          - UsePlacementGroup
           - GroupName: !If
               - CreatePlacementGroup
               - !Ref PlacementGroup

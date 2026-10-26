@@ -1,0 +1,43 @@
+apiVersion: inference.sagemaker.aws.amazon.com/v1
+kind: InferenceEndpointConfig
+metadata:
+  name: ${ENDPOINT_NAME}
+  namespace: default
+spec:
+  replicas: 1
+  modelName: ${ENDPOINT_NAME}
+  endpointName: ${ENDPOINT_NAME}
+  instanceType: ${SERVE_INSTANCE_TYPE}
+  invocationEndpoint: v1/chat/completions
+  modelSourceConfig:
+    modelSourceType: s3
+    modelLocation: ${MODEL_LOCATION}
+    s3Storage:
+      bucketName: ${BUCKET}
+      region: ${AWS_REGION}
+
+  # >>> This is all you need to turn on Tier 3 data capture <<<
+  dataCapture:
+    s3Uri: "s3://${BUCKET}/capture/"
+    modelPod:
+      enabled: true
+      initialSamplingPercentage: 100
+      bufferConfig:
+        batchSize: 50
+        flushIntervalSeconds: 60
+      payloadConfig:
+        maxPayloadSizeKB: 1024
+
+  worker:
+    image: vllm/vllm-openai:v0.10.0
+    modelInvocationPort:
+      containerPort: 8000
+      name: http
+    modelVolumeMount:
+      mountPath: /opt/ml/model
+      name: model-weights
+    args: ["--model", "/opt/ml/model", "--served-model-name", "${ENDPOINT_NAME}",
+           "--port", "8000", "--max-model-len", "2048", "--gpu-memory-utilization", "0.90"]
+    resources:
+      requests: { cpu: "2", memory: 16Gi, nvidia.com/gpu: 1 }
+      limits:   { nvidia.com/gpu: 1 }
