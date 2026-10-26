@@ -17,4 +17,5 @@ prefill/decode KV-cache transfer
 
 | Test case | Orchestrator | Description |
 | --- | --- | --- |
+| [`dsv3-nixl-disagg-vs-replicas`](./dsv3-nixl-disagg-vs-replicas) | EKS | DeepSeek-V3-0324 on two `p5en.48xlarge` with the AWS vLLM Deep Learning Container 0.32: prefill/decode disaggregation with NIXL's LIBFABRIC backend over EFA against two replicas, up to 100,000-token prompts. |
 | [`dsv3-uccl-nixl`](./dsv3-uccl-nixl) | EKS / HyperPod EKS | DeepSeek-V3 disaggregated inference (1P+ND) on `p5en.48xlarge` with vLLM 0.21.0, UCCL-EP, and NIXL over EFA. |
