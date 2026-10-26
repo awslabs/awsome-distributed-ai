@@ -25,6 +25,7 @@ NET_PLUGIN=${NET_PLUGIN:-/opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so}
 SOCKET_IFNAME=${SOCKET_IFNAME:-eth0}
 MODEL=/model/$(basename "$MODEL_REPO")
 OUT=${OUT:-./results/layouts-$(date -u +%Y%m%dT%H%MZ)}
+RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-$$   # names this invocation's launch markers in the pods
 mkdir -p "$OUT/raw"
 k() { kubectl -n "$NAMESPACE" "$@"; }
 HEAD=vllm-head; NEAR=vllm-near; FAR=vllm-far
@@ -90,8 +91,10 @@ launch() {   # pod role tag "serve args": run vLLM detached inside the pod
     echo "exec vllm serve $args"
   } > "$OUT/raw/launch-$role-$tag.sh"
   retry k exec -i "$pod" -- tee "/tmp/launch-$role-$tag.sh" > /dev/null < "$OUT/raw/launch-$role-$tag.sh"
+  # Launch once: if a kubectl exec stalls and is retried, the marker stops a second copy from starting.
   retry k exec "$pod" -- bash -c "chmod +x /tmp/launch-$role-$tag.sh; \
-setsid /tmp/launch-$role-$tag.sh </dev/null > /tmp/server-$role-$tag.log 2>&1 &" </dev/null
+if mkdir /tmp/started-$RUN_ID-$role-$tag 2>/dev/null; \
+then setsid /tmp/launch-$role-$tag.sh </dev/null > /tmp/server-$role-$tag.log 2>&1 & fi" </dev/null
 }
 
 start() {    # layout worker-pod-or-empty tag
@@ -144,7 +147,9 @@ bench() {    # layout round arm
 --result-filename /tmp/bench-$tag.json > /tmp/bench-$tag.log 2>&1"
       echo "echo \$? > /tmp/bench-$tag.rc"; } > "$OUT/raw/bench-$tag.sh"
     retry k exec -i $HEAD -- tee "/tmp/bench-$tag.sh" > /dev/null < "$OUT/raw/bench-$tag.sh"
-    retry k exec $HEAD -- bash -c "chmod +x /tmp/bench-$tag.sh; setsid /tmp/bench-$tag.sh </dev/null >/dev/null 2>&1 &" </dev/null
+    retry k exec $HEAD -- bash -c "chmod +x /tmp/bench-$tag.sh; if mkdir /tmp/started-$RUN_ID-bench-$tag 2>/dev/null; \
+then rm -f /tmp/bench-$tag.rc /tmp/bench-$tag.json; \
+setsid /tmp/bench-$tag.sh </dev/null >/dev/null 2>&1 & fi" </dev/null
     while [ $t -lt "$BENCH_TMO" ]; do
       sleep 15; t=$((t + 15))
       k exec $HEAD -- test -f "/tmp/bench-$tag.rc" 2>/dev/null && break
