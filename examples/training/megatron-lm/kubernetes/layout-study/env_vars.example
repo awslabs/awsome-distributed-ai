@@ -1,0 +1,21 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Copy to env_vars, edit, and source it before every step:
+#   cp env_vars.example env_vars && $EDITOR env_vars && source env_vars
+# 0.choose-nodes.sh prints HEAD_NODE, NEAR_NODE and FAR_NODE lines you can paste here.
+
+export NAMESPACE=default
+export INSTANCE_TYPE=p5en.48xlarge
+export GPU_PER_NODE=8
+export EFA_PER_NODE=16
+export POD_MEMORY=1000Gi
+
+# The image built from ../../aws-megatron-lm.Dockerfile as ../README.md describes, pushed under a fixed tag.
+export IMAGE=<account>.dkr.ecr.<region>.amazonaws.com/aws-megatron-lm:<tag>
+
+# Three instances: HEAD holds rank 0 in every run; NEAR shares all three network-node layers with HEAD; FAR shares
+# layers 1 and 2 and differs at layer 3.
+export HEAD_NODE=<node name>
+export NEAR_NODE=<node name>
+export FAR_NODE=<node name>
