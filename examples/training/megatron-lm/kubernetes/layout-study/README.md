@@ -43,7 +43,8 @@ layouts differ clearly. Set `NUM_LAYERS`, `HIDDEN_SIZE`, `NUM_HEADS`, `FFN_HIDDE
   [EFA device plugin](https://github.com/aws/eks-charts/tree/master/stable/aws-efa-k8s-device-plugin). Two of the three
   nodes must share a layer-3 network node; `0.choose-nodes.sh` shows whether they do.
 - The image built from [`../../aws-megatron-lm.Dockerfile`](../../aws-megatron-lm.Dockerfile) as
-  [`../README.md`](../README.md) describes, pushed under a fixed tag (not `latest`).
+  [`../README.md`](../README.md) describes, pushed under a fixed tag rather than the `latest` that README uses (for
+  example `export REPO_URI=${REGISTRY}/${ECR_REPOSITORY_NAME}:core_v0.17.0`), so every pod runs the same build.
 - `kubectl`, `envsubst` and `python3` (3.8 or later) where you run the scripts.
 
 No training operator is needed: the pods only sleep, and the scripts start `torchrun` in them with its static
@@ -69,7 +70,7 @@ one the script chose. (The c10d rendezvous backend orders nodes by host name and
 
 3. Train in every arm. `ARMS` lists `layout:placement:sequence-length` (placement `near`, `far`, or `one` for the
    one-instance layouts); the default list runs 10 arms in two rounds, the second in reverse order, which took about
-   RUNTIME_PLACEHOLDER on `p5en.48xlarge`:
+   70 minutes on `p5en.48xlarge`:
 
    ```bash
    ./2.run-layouts.sh             # results in ./results/layouts-<UTC time>
@@ -91,13 +92,40 @@ one the script chose. (The c10d rendezvous backend orders nodes by host name and
   `transport` column says `NOT_PROVEN` and `3.analyze.py` leaves it out. NCCL falls back to TCP sockets without failing
   when it can't load the plugin, so the script sets `NCCL_NET_PLUGIN` to the plugin's path in the image
   (`NET_PLUGIN` to override).
-- **Step time.** Megatron-LM logs the step time from the last rank, which is on the second instance; the script reads
+- **Step time.** Megatron-LM logs the step time from the last rank, which is on the last instance; the script reads
   every pod's log, drops the first logged interval (warm-up), and takes the median of the last eight (iterations 41
   to 80).
 
 ## Results
 
-RESULTS_PLACEHOLDER
+Two rounds of the default arms on three `p5en.48xlarge` in one Availability Zone (the near pair under one layer-3
+network node, the far instance under another), with the image `aws-megatron-lm.Dockerfile` builds (PyTorch
+2.11.0a0 from NGC 26.02, NCCL 2.29.2, Transformer Engine 2.12.0, Megatron-LM `core_v0.17.0`, EFA installer 1.48.0,
+aws-ofi-nccl 1.19.0). All 20 runs counted; every two-instance run had all of its ranks on EFA. Medians over the two
+rounds, from `3.analyze.py`:
+
+| Layout | Second instance | Tokens per sequence | Step time | Tokens/s |
+| --- | --- | --- | --- | --- |
+| `tp8-dp2` | near | 4,096 | 850.7 ms | 77,040 |
+| `tp8-pp2` | near | 4,096 | 881.6 ms | 74,336 |
+| `tp16` | near | 4,096 | 1,567.9 ms | 41,798 |
+| `tp16` | far | 4,096 | 1,586.8 ms | 41,311 |
+| `tp8-half` | none | 4,096 | 1,535.1 ms | 42,691 |
+| `tp8-split` | near | 4,096 | 1,594.2 ms | 41,110 |
+| `tp8` | none | 4,096 | 1,564.8 ms | 41,886 |
+| `tp8-split` | near | 8,192 | 2,559.1 ms | 51,219 |
+| `tp8-split` | far | 8,192 | 2,557.7 ms | 51,246 |
+| `tp8` | none | 8,192 | 1,971.0 ms | 66,501 |
+
+- **Tensor parallelism across the instances cost 45.7% of the throughput** of data parallelism across them (`tp16`
+  against `tp8-dp2`), and little of that is the network: `tp8-half`, the same per-GPU work on one instance, was only
+  2.1% faster than `tp16`. The crossing was 5% of `tp16`'s extra step time; the thinner slices of every layer were
+  the rest.
+- **Pipeline parallelism across the instances cost 3.5%.**
+- **Splitting one TP 8 group across the instances cost 1.9% at 4,096 tokens and 23.0% at 8,192**, where each
+  all-reduce carries twice the data.
+- **Placement stayed within the noise**: `tp16` was 1.2% slower on the far pair, `tp8-split` at 8,192 tokens 0.1%
+  faster, while the two rounds of the same arm differed by up to 3.0%.
 
 ## Notes
 
