@@ -1,0 +1,5 @@
+# Rendered manifests (generated from *.yaml-template with envsubst)
+kubernetes/*.yaml
+__pycache__/
+*.pyc
+.DS_Store

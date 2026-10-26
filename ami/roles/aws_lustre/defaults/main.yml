@@ -1,4 +1,0 @@
----
-aws_lustre_version: "2.10"
-aws_lustre_package: "lustre{{ aws_lustre_version }}"
-aws_lustre_mounts: []

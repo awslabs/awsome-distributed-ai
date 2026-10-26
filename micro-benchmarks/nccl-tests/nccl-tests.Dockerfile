@@ -1,13 +1,12 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-ARG CUDA_VERSION=13.0.2
+ARG CUDA_VERSION=13.1.2
 FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-devel-ubuntu22.04
 
-ARG GDRCOPY_VERSION=v2.5.2
-ARG EFA_INSTALLER_VERSION=1.48.0
-ARG AWS_OFI_NCCL_VERSION="" # Kept for backward compatibility - value is ignored as plugin is bundled with EFA
-ARG NCCL_VERSION=v2.30.4-1
-ARG NCCL_TESTS_VERSION=v2.18.3
+ARG GDRCOPY_VERSION=v2.6
+ARG EFA_INSTALLER_VERSION=1.50.0
+ARG NCCL_VERSION=v2.31.2-1
+ARG NCCL_TESTS_VERSION=v2.20.0
 
 RUN apt-get update -y && apt-get upgrade -y
 RUN apt-get remove -y --allow-change-held-packages \
@@ -48,12 +47,17 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated \
     vim
 RUN apt-get purge -y cuda-compat-*
 
+# The NVIDIA container runtime bind-mounts the host OpenCL ICD at this path.
+# Create the mount target for Kubernetes runtimes that inject the driver stack.
+RUN mkdir -p /etc/OpenCL/vendors \
+    && touch /etc/OpenCL/vendors/nvidia.icd
+
 RUN mkdir -p /var/run/sshd
 RUN sed -i 's/[ #]\(.*StrictHostKeyChecking \).*/ \1no/g' /etc/ssh/ssh_config && \
     echo "    UserKnownHostsFile /dev/null" >> /etc/ssh/ssh_config && \
     sed -i 's/#\(StrictModes \).*/\1no/g' /etc/ssh/sshd_config
 
-# EFA 1.48 ships the OFI NCCL plugin at /opt/amazon/ofi-nccl/lib/ (no arch
+# EFA 1.50 ships the OFI NCCL plugin at /opt/amazon/ofi-nccl/lib/ (no arch
 # subdir). Keep the legacy x86_64/aarch64 entries for back-compat with images
 # rebuilt against older EFA installers.
 ENV LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:/opt/amazon/openmpi/lib:/opt/nccl/build/lib:/opt/amazon/efa/lib:/opt/amazon/ofi-nccl/lib:/opt/amazon/ofi-nccl/lib/aarch64-linux-gnu:/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu:/usr/local/lib:$LD_LIBRARY_PATH
@@ -61,7 +65,7 @@ ENV PATH=/opt/amazon/openmpi/bin/:/opt/amazon/efa/bin:/usr/bin:/usr/local/bin:$P
 
 RUN curl https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
     && python3 /tmp/get-pip.py \
-    && pip3 install awscli pynvml
+    && pip3 install awscli==1.46.1 pynvml==13.0.1
 
 #################################################
 ## Install NVIDIA GDRCopy
@@ -74,12 +78,12 @@ RUN git clone -b ${GDRCOPY_VERSION} https://github.com/NVIDIA/gdrcopy.git /tmp/g
 
 ENV LD_LIBRARY_PATH=/opt/gdrcopy/lib:$LD_LIBRARY_PATH
 ENV LIBRARY_PATH=/opt/gdrcopy/lib:$LIBRARY_PATH
-ENV CPATH=/opt/gdrcopy/include:$CPATH
+ENV CPATH=/opt/gdrcopy/include
 ENV PATH=/opt/gdrcopy/bin:$PATH
 
 #################################################
 ## Install EFA installer
-# --disable-build-ngc: on an nvcr.io/nvidia/cuda base the installer auto-detects
+# --disable-ngc: on an nvcr.io/nvidia/cuda base the installer auto-detects
 # "NGC build image" mode and skips rdma-core/deps, but this image removes the
 # distro rdma-core above and relies on the EFA bundle to provide libibverbs1 /
 # ibverbs-providers (>=59, newer than jammy's apt). Disabling NGC-build mode
@@ -88,10 +92,11 @@ RUN cd $HOME \
     && curl -O https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz \
     && tar -xf $HOME/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz \
     && cd aws-efa-installer \
-    && ./efa_installer.sh -y -g -d --skip-kmod --skip-limit-conf --no-verify --disable-build-ngc \
+    && ./efa_installer.sh -y -g -d --skip-kmod --skip-limit-conf --no-verify --disable-ngc \
     && rm -rf $HOME/aws-efa-installer
 
 RUN echo "Verifying AWS OFI NCCL plugin installation..." && \
+    strings /opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so | grep -F "aws-ofi-nccl 1.21.1" && \
     (ls -la /opt/amazon/ofi-nccl/lib/libnccl-net*.so || \
      ls -la /opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-ofi*.so || \
      ls -la /opt/amazon/ofi-nccl/lib/aarch64-linux-gnu/libnccl-ofi*.so)

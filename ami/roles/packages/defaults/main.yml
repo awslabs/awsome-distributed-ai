@@ -1,7 +1,0 @@
----
-packages_install: []
-packages_install_exclude: []
-packages_remove: []
-packages_update: true
-packages_update_exclude: []
-allow_reboot: true

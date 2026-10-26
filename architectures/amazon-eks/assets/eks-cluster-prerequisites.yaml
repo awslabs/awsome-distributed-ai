@@ -1,0 +1,346 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Network and storage an EKS GPU cluster needs, separated from the cluster so that a cluster can
+# be replaced without rebuilding the VPC, and so that a second cluster can reuse it. Same split as
+# architectures/aws-pcs/assets/ml-cluster-prerequisites.yaml.
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Network prerequisites for an Amazon EKS GPU cluster: VPC with a public subnet, a private subnet
+  for the nodes and a second private subnet for the control plane, a NAT gateway, S3 and ECR
+  endpoints, an EFA-capable node security group, and optionally an FSx for Lustre filesystem for
+  model weights.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Network
+        Parameters:
+          - PrimarySubnetAZ
+          - SecondarySubnetAZ
+          - VpcCidr
+      - Label:
+          default: Shared storage for model weights (optional)
+        Parameters:
+          - DeployFsxLustre
+          - FsxStorageCapacity
+
+Parameters:
+  PrimarySubnetAZ:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: >-
+      Availability Zone of the GPU nodes. Must be the Availability Zone of the capacity
+      reservation: EFA traffic and the cluster placement group stay inside one zone.
+  SecondarySubnetAZ:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: >-
+      A second Availability Zone, different from PrimarySubnetAZ, for the EKS control plane subnet.
+      EKS requires subnets in at least two zones.
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    AllowedPattern: ^(\d{1,3}\.){3}\d{1,3}/1[67]$
+    Description: VPC CIDR, /16 or /17. The subnets are three of the eight /20 blocks Fn::Cidr carves, which a smaller range cannot hold.
+  DeployFsxLustre:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Create an FSx for Lustre filesystem for model weights. Off by default because the GPU
+      instance types carry local NVMe, which the inference examples can use instead.
+  FsxStorageCapacity:
+    Type: Number
+    Default: 1200
+    AllowedValues: [1200, 2400, 4800, 7200, 9600, 12000, 24000, 48000]
+    Description: >-
+      Filesystem size in GiB. An enumeration rather than a minimum, because FSx accepts only certain
+      sizes and refuses the rest minutes into the deploy, in an error that names the service rather
+      than this parameter. Add a size here if you need one these values do not cover.
+Rules:
+  DistinctAvailabilityZones:
+    Assertions:
+      - Assert: !Not [!Equals [!Ref PrimarySubnetAZ, !Ref SecondarySubnetAZ]]
+        AssertDescription: >-
+          PrimarySubnetAZ and SecondarySubnetAZ must differ. An EKS cluster needs subnets in two
+          Availability Zones, and the failure otherwise arrives minutes into the deploy.
+
+Conditions:
+  WithFsx: !Equals [!Ref DeployFsxLustre, "true"]
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-vpc"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref PrimarySubnetAZ
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 8, 12]]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public"
+        - Key: kubernetes.io/role/elb
+          Value: "1"
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref PrimarySubnetAZ
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 8, 12]]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private"
+        - Key: kubernetes.io/role/internal-elb
+          Value: "1"
+  ControlPlaneSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref SecondarySubnetAZ
+      CidrBlock: !Select [2, !Cidr [!Ref VpcCidr, 8, 12]]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-control-plane"
+
+  NatEip:
+    Type: AWS::EC2::EIP
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      Domain: vpc
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref PublicSubnet
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnetRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+  PrivateSubnetRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+  ControlPlaneSubnetRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref ControlPlaneSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+        - !Ref PublicRouteTable
+
+  # Interface endpoints for the registry. Inference images run to tens of gigabytes and every GPU
+  # node pulls them; without these those pulls cross the NAT gateway. They cover the Region's private
+  # ECR only: an image from public.ecr.aws still goes out through the NAT gateway.
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: HTTPS from the VPC to the interface endpoints
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref VpcCidr
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-endpoints"
+  EcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.api"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PrivateSubnet]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+  EcrDkrEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PrivateSubnet]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  # EFA requires that all traffic between members of the same security group is allowed, in both
+  # directions. The rules are separate resources because a group cannot reference itself inline.
+  NodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: EKS nodes and EFA traffic
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nodes"
+  NodeSecurityGroupSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref NodeSecurityGroup
+      IpProtocol: "-1"
+      SourceSecurityGroupId: !Ref NodeSecurityGroup
+  NodeSecurityGroupSelfEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref NodeSecurityGroup
+      IpProtocol: "-1"
+      DestinationSecurityGroupId: !Ref NodeSecurityGroup
+
+  # Two sets of rules. The node rules let a client mount; the self-referencing rules carry LNET between
+  # the filesystem's own network interfaces, which FSx refuses to create a filesystem without.
+  FsxSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: WithFsx
+    Properties:
+      GroupDescription: Lustre traffic from the cluster nodes
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 988
+          ToPort: 988
+          SourceSecurityGroupId: !Ref NodeSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 1018
+          ToPort: 1023
+          SourceSecurityGroupId: !Ref NodeSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-fsx"
+  # The filesystem depends on these because FSx reads the group at create time: created first, it is
+  # rejected.
+  FsxSecurityGroupSelfIngressLnet:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: WithFsx
+    Properties:
+      GroupId: !Ref FsxSecurityGroup
+      IpProtocol: tcp
+      FromPort: 988
+      ToPort: 988
+      SourceSecurityGroupId: !Ref FsxSecurityGroup
+  FsxSecurityGroupSelfIngressReserved:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: WithFsx
+    Properties:
+      GroupId: !Ref FsxSecurityGroup
+      IpProtocol: tcp
+      FromPort: 1018
+      ToPort: 1023
+      SourceSecurityGroupId: !Ref FsxSecurityGroup
+  # Lustre clients need these too: FSx opens connections back to the clients on the same ports.
+  NodeSecurityGroupFsxIngressLnet:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: WithFsx
+    Properties:
+      GroupId: !Ref NodeSecurityGroup
+      IpProtocol: tcp
+      FromPort: 988
+      ToPort: 988
+      SourceSecurityGroupId: !Ref FsxSecurityGroup
+  NodeSecurityGroupFsxIngressReserved:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: WithFsx
+    Properties:
+      GroupId: !Ref NodeSecurityGroup
+      IpProtocol: tcp
+      FromPort: 1018
+      ToPort: 1023
+      SourceSecurityGroupId: !Ref FsxSecurityGroup
+  FsxFileSystem:
+    Type: AWS::FSx::FileSystem
+    Condition: WithFsx
+    DependsOn: [FsxSecurityGroupSelfIngressLnet, FsxSecurityGroupSelfIngressReserved]
+    Properties:
+      FileSystemType: LUSTRE
+      StorageCapacity: !Ref FsxStorageCapacity
+      SubnetIds: [!Ref PrivateSubnet]
+      SecurityGroupIds: [!Ref FsxSecurityGroup]
+      LustreConfiguration:
+        DeploymentType: PERSISTENT_2
+        PerUnitStorageThroughput: 125
+        DataCompressionType: LZ4
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-model-cache"
+
+Outputs:
+  VpcId:
+    Description: VPC holding the cluster.
+    Value: !Ref VPC
+  PublicSubnetId:
+    Description: Public subnet, used by the NAT gateway and by internet-facing load balancers.
+    Value: !Ref PublicSubnet
+  PrivateSubnetId:
+    Description: Private subnet for the system and GPU nodes.
+    Value: !Ref PrivateSubnet
+  ControlPlaneSubnetId:
+    Description: Second private subnet, for the EKS control plane.
+    Value: !Ref ControlPlaneSubnet
+  NodeSecurityGroupId:
+    Description: Security group to attach to every node interface, including the EFA interfaces.
+    Value: !Ref NodeSecurityGroup
+  PrivateRouteTableId:
+    Description: Route table of the private subnet.
+    Value: !Ref PrivateRouteTable
+  FsxFileSystemId:
+    Description: FSx for Lustre filesystem id, empty when DeployFsxLustre is false.
+    Value: !If [WithFsx, !Ref FsxFileSystem, ""]
+  FsxDnsName:
+    Description: FSx for Lustre DNS name, empty when DeployFsxLustre is false.
+    Value: !If [WithFsx, !GetAtt FsxFileSystem.DNSName, ""]
+  FsxMountName:
+    Description: FSx for Lustre mount name, empty when DeployFsxLustre is false.
+    Value: !If [WithFsx, !GetAtt FsxFileSystem.LustreMountName, ""]

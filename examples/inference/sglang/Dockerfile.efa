@@ -1,8 +1,13 @@
-# Shared EFA-enabled SGLang image: stock upstream SGLang + the AWS EFA installer,
+# Shared EFA-enabled SGLang image: upstream SGLang + the AWS EFA installer,
 # the base for every multi-node example here (built/pushed by build-image.sh).
-# Pinned to v0.5.12.post1-cu130 (NIXL 1.1.0) on purpose — see the NIXL note in
-# kimi2.6-h200-1p1d/README.md before bumping.
-FROM lmsysorg/sglang:v0.5.12.post1-cu130
+#
+# The defaults build the Kimi image: v0.5.12.post1-cu130 (NIXL 1.1.0), pinned
+# on purpose — see the NIXL note in kimi2.6-h200-1p1d/README.md before bumping.
+# Samples that need a different SGLang build override BASE_IMAGE / EFA_VERSION
+# through build-image.sh rather than carrying their own copy of this layer;
+# each sample's README gives its values.
+ARG BASE_IMAGE=lmsysorg/sglang:v0.5.12.post1-cu130
+FROM ${BASE_IMAGE}
 
 ARG EFA_VERSION=1.47.0
 

@@ -2,12 +2,12 @@ version: 0.2
 
 env:
   variables:
-    CUDA_VERSION: "13.0.2"
-    GDRCOPY_VERSION: "v2.5.2"
-    EFA_INSTALLER_VERSION: "1.48.0"
-    AWS_OFI_NCCL_VERSION: "v1.19.0"
-    NCCL_VERSION: "v2.30.4-1"
-    NCCL_TESTS_VERSION: "v2.18.3"
+    CUDA_VERSION: "13.1.2"
+    GDRCOPY_VERSION: "v2.6"
+    EFA_INSTALLER_VERSION: "1.50.0"
+    AWS_OFI_NCCL_VERSION: "v1.21.1"
+    NCCL_VERSION: "v2.31.2-1"
+    NCCL_TESTS_VERSION: "v2.20.0"
   exported-variables:
     - CUDA_VERSION
     - GDRCOPY_VERSION
@@ -29,4 +29,4 @@ phases:
       - echo "REPO_URI=$REPO_URI"
       - echo "Building ${REPO_URI}:${TAG} ..."
       - docker buildx create --use --name multiarch
-      - cd micro-benchmarks/nccl-tests && docker buildx build --push --platform=linux/amd64,linux/arm64 --build-arg CUDA_VERSION=${CUDA_VERSION} --build-arg GDRCOPY_VERSION=$GDRCOPY_VERSION --build-arg EFA_INSTALLER_VERSION=$EFA_INSTALLER_VERSION --build-arg AWS_OFI_NCCL_VERSION=$AWS_OFI_NCCL_VERSION --build-arg NCCL_VERSION=$NCCL_VERSION --build-arg NCCL_TESTS_VERSION=$NCCL_TESTS_VERSION -t public.ecr.aws/hpc-cloud/${ECR_REPOSITORY_NAME}:${TAG} -t public.ecr.aws/hpc-cloud/${ECR_REPOSITORY_NAME}:latest -f ./nccl-tests.Dockerfile .
+      - cd micro-benchmarks/nccl-tests && docker buildx build --push --platform=linux/amd64,linux/arm64 --build-arg CUDA_VERSION=${CUDA_VERSION} --build-arg GDRCOPY_VERSION=$GDRCOPY_VERSION --build-arg EFA_INSTALLER_VERSION=$EFA_INSTALLER_VERSION --build-arg NCCL_VERSION=$NCCL_VERSION --build-arg NCCL_TESTS_VERSION=$NCCL_TESTS_VERSION -t public.ecr.aws/hpc-cloud/${ECR_REPOSITORY_NAME}:${TAG} -f ./nccl-tests.Dockerfile .
