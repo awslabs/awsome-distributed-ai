@@ -7,8 +7,8 @@
 # replica by default. The KV cache is pushed to decode over NIXL with the
 # LIBFABRIC backend, i.e. GPUDirect RDMA over EFA — whether the decode pod sits
 # on the same node (EFA loopback) or on another node. That is what lets prefill
-# and decode be ordinary separate pods here, unlike ../../dsv4flash-b300-intra-3p1d
-# where the NVLink/CUDA-IPC path forced all engines into one pod. No affinity
+# and decode be ordinary separate pods here, unlike ../manifests-pd-nvlink
+# where the CUDA-IPC path needs hostIPC + hostPID and all GPUs visible. No affinity
 # pins the pods: at 2 GPUs + 2 EFA each, four engine pods fill one 8-GPU /
 # 8-EFA node — the B200 offload profile is that 2P2D shape.
 #
