@@ -1,0 +1,32 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Copy to env_vars, edit, and source it before every step:
+#   cp env_vars.example env_vars && $EDITOR env_vars && source env_vars
+
+export NAMESPACE=default
+export INSTANCE_TYPE=p5en.48xlarge
+export GPU_PER_NODE=8
+export EFA_PER_NODE=16
+
+# AWS Deep Learning Container for vLLM, pinned to a dated tag
+# (sha256:09b8a6615fc39a49c1113c533d06e090a29e99db0b5e93cc3deedf96ecc817cd). It ships NIXL 1.5.0 with the LIBFABRIC
+# plugin and the EFA software. VLLM_COMMIT is the vLLM commit the image was built from; 2.benchmark.sh downloads
+# vLLM's example proxy for disaggregated serving at that commit and checks its SHA-256.
+export IMAGE=public.ecr.aws/deep-learning-containers/vllm:0.32.0-gpu-py312-cu130-ubuntu24.04-ec2-v1.1-2026-10-21-21-51-30
+export VLLM_COMMIT=5df63a7203cdb9328d824a27b682e77c7b9928be
+export PROXY_SHA256=1210e5525cc0c57f891734b682d3f8939aa7456a672bea16b44f03b6707136ff
+
+# Model and pinned revision. DeepSeek-V3-0324 is 688 GB of FP8 weights and fits one p5en.48xlarge at TP 8. The
+# weights are held in a memory-backed volume on each pod, so each node needs MODEL_VOLUME_SIZE of free host memory
+# on top of what vLLM uses.
+export MODEL_REPO=deepseek-ai/DeepSeek-V3-0324
+export MODEL_REVISION=e9b33add76883f293d6bf61f6bd89b497e80e335
+export MODEL_VOLUME_SIZE=750Gi
+export POD_MEMORY=1700Gi
+# export HF_TOKEN=<token>   # optional; see the README for the hf-token Secret
+
+# Two instances. In the disaggregated arm, PREFILL_NODE prefills every prompt and DECODE_NODE decodes every answer;
+# in the replicas arm, each runs one complete server.
+export PREFILL_NODE=<node name>
+export DECODE_NODE=<node name>
