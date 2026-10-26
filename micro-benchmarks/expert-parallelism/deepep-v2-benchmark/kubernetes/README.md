@@ -93,6 +93,46 @@ envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' \
   < test-internode.yaml | kubectl delete -f -
 ```
 
+## Near and far placement
+
+Every dispatch and combine in the internode test crosses between the two instances, so the distance between them is
+part of what the test measures. [`placement.sh`](./placement.sh) renders `test-internode.yaml` with the workers placed
+by EC2 network topology, from the `topology.k8s.aws/network-node-layer-3` label that Amazon EKS adds to nodes of
+[instance types that support it](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-topology.html):
+
+- `PLACEMENT=near` puts both workers under the same layer-3 network node (pod affinity on that label instead of the zone).
+- `PLACEMENT=far` puts them under different layer-3 network nodes in the same Availability Zone (the zone affinity,
+  plus pod anti-affinity on that label).
+
+A near pair needs two free GPU nodes with the same `network-node-layer-3` value:
+
+```bash
+kubectl get nodes -l node.kubernetes.io/instance-type=${INSTANCE_TYPE} -L topology.k8s.aws/network-node-layer-3
+```
+
+Run each placement twice, alternating the order so that drift during the session can't favor one, and keep each
+launcher's log. `analyze_placement.py` names each run after its file without the `-rN` suffix, averages the runs of a
+placement, and prints the mean dispatch and combine times over ranks with the far/near ratio. Pass the intranode
+test's log too (for example as `intra.log`) to see the NVLink-only times alongside.
+
+```bash
+source env_vars
+for run in near-r1 far-r1 far-r2 near-r2; do
+  PLACEMENT=${run%-r*} ./placement.sh | kubectl apply -f -
+  kubectl wait --for=condition=Succeeded mpijob/deepep-v2-internode --timeout=30m
+  kubectl logs job/deepep-v2-internode-launcher > ${run}.log
+  PLACEMENT=${run%-r*} ./placement.sh | kubectl delete -f -
+done
+python3 analyze_placement.py near-r1.log far-r1.log far-r2.log near-r2.log
+```
+
+`TEST_ARGS` replaces `test_ep.py`'s arguments, for example with a decode-sized batch and Kimi K2's hidden size and
+expert count:
+
+```bash
+export TEST_ARGS="--test-first-only --num-tokens=128 --num-topk=8 --num-sms=12 --hidden 7168 --num-experts 384"
+```
+
 ## Notes for `p6-b300.48xlarge` (B300 / Blackwell)
 
 - **Image:** the default image already includes `sm_103`, so no rebuild is needed.
