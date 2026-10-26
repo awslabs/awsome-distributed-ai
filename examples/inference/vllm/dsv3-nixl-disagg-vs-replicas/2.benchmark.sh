@@ -22,6 +22,7 @@ PROMPTS_PER_CONC=${PROMPTS_PER_CONC:-4}; MIN_PROMPTS=${MIN_PROMPTS:-8}
 READY_MAX=${READY_MAX:-2400}; BENCH_TMO=${BENCH_TMO:-3600}
 MODEL=/model/$(basename "$MODEL_REPO")
 OUT=${OUT:-./results/disagg-vs-replicas-$(date -u +%Y%m%dT%H%MZ)}
+RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-$$   # names this invocation's launch markers in the pods
 mkdir -p "$OUT/raw"
 k() { kubectl -n "$NAMESPACE" "$@"; }
 retry() { local _; for _ in 1 2 3 4 5; do "$@" && return 0; sleep 5; done; return 1; }
@@ -62,8 +63,9 @@ launch() {   # pod tag command extra-env: run detached inside the pod
     for kv in $ENVS $xenv; do echo "export $kv"; done
     echo "exec $cmd"; } > "$OUT/raw/launch-$tag.sh"
   retry k exec -i "$pod" -- tee "/tmp/launch-$tag.sh" > /dev/null < "$OUT/raw/launch-$tag.sh"
-  retry k exec "$pod" -- bash -c "chmod +x /tmp/launch-$tag.sh; setsid /tmp/launch-$tag.sh </dev/null > /tmp/$tag.log 2>&1 &" \
-    </dev/null
+  # Launch once: if a kubectl exec stalls and is retried, the marker stops a second copy from starting.
+  retry k exec "$pod" -- bash -c "chmod +x /tmp/launch-$tag.sh; if mkdir /tmp/started-$RUN_ID-$tag 2>/dev/null; \
+then setsid /tmp/launch-$tag.sh </dev/null > /tmp/$tag.log 2>&1 & fi" </dev/null
 }
 
 ready() {    # pod port
@@ -109,8 +111,8 @@ bg_bench() {    # pod name command: run detached in the pod, poll, copy back the
   { echo '#!/bin/bash'; echo 'cd /tmp'; echo "$cmd > /tmp/$name.log 2>&1"; echo "echo \$? > /tmp/$name.rc"; } \
     > "$OUT/raw/$name.sh"
   retry k exec -i "$pod" -- tee "/tmp/$name.sh" > /dev/null < "$OUT/raw/$name.sh"
-  retry k exec "$pod" -- bash -c "rm -f /tmp/$name.rc; chmod +x /tmp/$name.sh; setsid /tmp/$name.sh </dev/null >/dev/null 2>&1 &" \
-    </dev/null
+  retry k exec "$pod" -- bash -c "chmod +x /tmp/$name.sh; if mkdir /tmp/started-$RUN_ID-$name 2>/dev/null; \
+then rm -f /tmp/$name.rc /tmp/$name.json; setsid /tmp/$name.sh </dev/null >/dev/null 2>&1 & fi" </dev/null
   while [ $t -lt "$BENCH_TMO" ]; do
     sleep 15; t=$((t + 15))
     k exec "$pod" -- test -f "/tmp/$name.rc" 2>/dev/null && break
