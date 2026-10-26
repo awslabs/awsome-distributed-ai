@@ -128,7 +128,7 @@ run_arm() {   # round layout placement seqlen
       echo "  --seq-length $seqlen --max-position-embeddings $seqlen --micro-batch-size 1 \\"
       echo "  --global-batch-size $GLOBAL_BATCH --train-iters $TRAIN_ITERS --lr 1.5e-4 --min-lr 1.0e-5 \\"
       echo "  --lr-decay-style cosine --lr-warmup-iters 5 --weight-decay 0.1 --clip-grad 1.0 --bf16 \\"
-      echo "  --tokenizer-type NullTokenizer --mock-data --log-interval 5 --eval-iters 0 \\"
+      echo "  --tokenizer-type NullTokenizer --mock-data --log-interval 5 --eval-iters 0 --eval-interval 1000 \\"
       echo "  --distributed-timeout-minutes 6"
     } > "$OUT/raw/launch-$tag-$p.sh"
     retry k exec -i "$p" -- tee "/tmp/launch-$tag.sh" > /dev/null < "$OUT/raw/launch-$tag-$p.sh"
