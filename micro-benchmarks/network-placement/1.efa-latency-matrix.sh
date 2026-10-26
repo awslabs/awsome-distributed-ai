@@ -39,7 +39,9 @@ DEV=${DEV:-$(domains "$FIRST" | sed -n 1p)}; DEV2=${DEV2:-$(domains "$FIRST" | s
 : > "$OUT/.ips"
 for p in $PODS; do
   d=$(domains "$p")
-  echo "$d" | grep -qx "$DEV" && echo "$d" | grep -qx "$DEV2" || { echo "$p does not expose $DEV and $DEV2"; exit 1; }
+  if ! echo "$d" | grep -qx "$DEV" || ! echo "$d" | grep -qx "$DEV2"; then
+    echo "$p does not expose $DEV and $DEV2"; exit 1
+  fi
   echo "$p $($K get pod "$p" -o jsonpath='{.status.podIP}')" >> "$OUT/.ips"
 done
 ip_of() { awk -v p="$1" '$1 == p {print $2; exit}' "$OUT/.ips"; }

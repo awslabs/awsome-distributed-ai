@@ -24,6 +24,8 @@ Every multi-instance NCCL run passes through [`check_efa_transport.sh`](check_ef
 
 The probe pods hold whole instances for as long as they run (2 hours at most, set by `activeDeadlineSeconds`). Delete them as soon as you're done, as shown in [Clean up](#clean-up).
 
+The pods run as a non-root user (UID 1000) with a read-only root filesystem, no Linux capabilities, no privilege escalation, and the runtime's default seccomp profile; `/tmp` and `/dev/shm` are `emptyDir` volumes. EFA and NCCL need none of the dropped privileges, provided the EFA devices are readable by every user (`ls -l /dev/infiniband` shows `crw-rw-rw-` on Amazon EKS nodes with the EFA device plugin).
+
 ## Tested configuration
 
 | Component | Version |

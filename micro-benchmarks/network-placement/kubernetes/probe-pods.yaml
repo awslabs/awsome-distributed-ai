@@ -7,6 +7,8 @@
 #
 # Set parallelism and completions to the number of instances you want to measure, and adjust the instance type and
 # the GPU and EFA counts for yours. activeDeadlineSeconds caps how long the instances are held (2 hours).
+# The pods run as a non-root user with a read-only root filesystem and no capabilities; /tmp and /dev/shm are
+# emptyDir volumes, which is all fi_pingpong, torchrun and NCCL need.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -23,6 +25,12 @@ spec:
         app: placement-probe
     spec:
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       nodeSelector:
         node.kubernetes.io/instance-type: p5en.48xlarge
       affinity:
@@ -41,17 +49,27 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 64Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Gi
       containers:
         - name: probe
           # PyTorch, NCCL, libfabric with the EFA provider (fi_pingpong, fi_info) and aws-ofi-nccl in one image.
           image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.2.0-efa
           command: ["sleep", "7100"]
+          env:
+            - name: HOME
+              value: /tmp
           securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
-              add: ["IPC_LOCK"]
+              drop: ["ALL"]
           volumeMounts:
             - name: shm
               mountPath: /dev/shm
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: "96"

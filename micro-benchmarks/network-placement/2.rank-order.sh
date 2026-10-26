@@ -32,15 +32,15 @@ python3 "$HERE/topology.py" orders --nodes "$OUT/.nodes.json" --pods "$OUT/.pods
   > "$OUT/orders.txt" || exit 1
 rm -f "$OUT/.pods.json" "$OUT/.nodes.json"
 cat "$OUT/orders.txt"
-SORTED=$(awk '$1 == "sorted" {for (i = 4; i <= NF; i++) printf "%s ", $i}' "$OUT/orders.txt")
-INTERLEAVED=$(awk '$1 == "interleaved" {for (i = 4; i <= NF; i++) printf "%s ", $i}' "$OUT/orders.txt")
+read -r -a SORTED <<< "$(awk '$1 == "sorted" {for (i = 4; i <= NF; i++) printf "%s ", $i}' "$OUT/orders.txt")"
+read -r -a INTERLEAVED <<< "$(awk '$1 == "interleaved" {for (i = 4; i <= NF; i++) printf "%s ", $i}' "$OUT/orders.txt")"
 read -r XS NHOPS <<< "$(awk '$1 == "sorted" {print $2, $3}' "$OUT/orders.txt")"
 XI=$(awk '$1 == "interleaved" {print $2}' "$OUT/orders.txt")
 [ "$XS" -lt "$XI" ] || { echo "these pods give both orders the same number of layer-3 crossings ($XS of $NHOPS); \
 pick pods from at least two layer-3 groups, with two or more pods in at least two of them"; exit 1; }
 log "ring hops crossing layer 3: sorted $XS of $NHOPS, interleaved $XI of $NHOPS"
 
-for p in $SORTED; do
+for p in "${SORTED[@]}"; do
   $K exec -i "$p" -- tee /tmp/bench_coll.py > /dev/null < "$HERE/bench_coll.py" || exit 1
 done
 
@@ -96,9 +96,9 @@ run_order() {   # tag, then pods in node-rank order
 echo "tag,coll,bytes,iters,time_us,algbw_GBps,busbw_GBps" > "$OUT/coll.csv"
 for r in $(seq 1 "$ROUNDS"); do
   if [ $((r % 2)) -eq 1 ]; then
-    run_order "r$r-sorted" $SORTED; run_order "r$r-interleaved" $INTERLEAVED
+    run_order "r$r-sorted" "${SORTED[@]}"; run_order "r$r-interleaved" "${INTERLEAVED[@]}"
   else
-    run_order "r$r-interleaved" $INTERLEAVED; run_order "r$r-sorted" $SORTED
+    run_order "r$r-interleaved" "${INTERLEAVED[@]}"; run_order "r$r-sorted" "${SORTED[@]}"
   fi
 done
 log "results: $OUT"

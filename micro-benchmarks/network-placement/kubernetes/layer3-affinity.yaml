@@ -18,6 +18,12 @@ items:
     spec:
       restartPolicy: Never
       activeDeadlineSeconds: 600
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       nodeSelector:
         kubernetes.io/hostname: ANCHOR_NODE
       tolerations:
@@ -28,6 +34,11 @@ items:
         - name: sleep
           image: IMAGE
           command: ["sleep", "590"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           resources:
             requests: {cpu: 100m, memory: 128Mi}
             limits: {cpu: 100m, memory: 128Mi}
@@ -40,6 +51,12 @@ items:
     spec:
       restartPolicy: Never
       activeDeadlineSeconds: 600
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       affinity:
         podAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -61,6 +78,11 @@ items:
         - name: sleep
           image: IMAGE
           command: ["sleep", "590"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           resources:
             requests: {cpu: 100m, memory: 128Mi}
             limits: {cpu: 100m, memory: 128Mi}

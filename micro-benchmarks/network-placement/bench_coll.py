@@ -1,82 +1,111 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-"""Time NCCL collectives with torch.distributed, one process per GPU. Launch with torchrun's static rendezvous.
+"""Time NCCL collectives with torch.distributed, one process per GPU.
 
-The global rank is node_rank * nproc_per_node + local_rank, so the node rank you give each instance decides which
-instances NCCL treats as neighbours in its ring. Rank 0 prints one CSV row per collective and message size:
+Launch with torchrun's static rendezvous. The global rank is
+node_rank * nproc_per_node + local_rank, so the node rank you give each
+instance decides which instances NCCL treats as neighbours in its ring.
+Rank 0 prints one CSV row per collective and message size:
   coll,bytes,iters,time_us,algbw_GBps,busbw_GBps
-time_us is the slowest rank's mean time per call. busbw uses the nccl-tests factors: all_reduce 2(n-1)/n,
-all_gather and all_to_all (n-1)/n.
+time_us is the slowest rank's mean time per call. busbw uses the nccl-tests
+factors: all_reduce 2(n-1)/n, all_gather and all_to_all (n-1)/n.
 """
+
 import argparse
 import os
 
 import torch
 import torch.distributed as dist
 
-p = argparse.ArgumentParser()
-p.add_argument("--colls", default="all_reduce,all_gather,all_to_all")
-p.add_argument("--min-bytes", type=int, default=8)
-p.add_argument("--max-bytes", type=int, default=4 << 30)
-p.add_argument("--warmup", type=int, default=5)
-p.add_argument("--iters", type=int, default=20)
-p.add_argument("--tag", default="")
-a = p.parse_args()
 
-dist.init_process_group("nccl")
-rank, n = dist.get_rank(), dist.get_world_size()
-local = int(os.environ.get("LOCAL_RANK", 0))
-torch.cuda.set_device(local)
-dev = torch.device("cuda", local)
-factor = {"all_reduce": 2 * (n - 1) / n, "all_gather": (n - 1) / n, "all_to_all": (n - 1) / n}
+def parse_args():
+    """Command-line options."""
+    p = argparse.ArgumentParser()
+    p.add_argument("--colls", default="all_reduce,all_gather,all_to_all")
+    p.add_argument("--min-bytes", type=int, default=8)
+    p.add_argument("--max-bytes", type=int, default=4 << 30)
+    p.add_argument("--warmup", type=int, default=5)
+    p.add_argument("--iters", type=int, default=20)
+    p.add_argument("--tag", default="")
+    return p.parse_args()
 
 
-def run(coll, nbytes):
-    elems = max(nbytes // 2, n)                       # bf16
-    elems -= elems % n
+def bus_factor(coll, world):
+    """nccl-tests bus-bandwidth factor for a collective."""
+    if coll == "all_reduce":
+        return 2 * (world - 1) / world
+    return (world - 1) / world
+
+
+def make_call(coll, elems, world, dev):
+    """Return a function that runs one collective on a bf16 buffer."""
     x = torch.ones(elems, dtype=torch.bfloat16, device=dev)
     if coll == "all_reduce":
-        def f():
-            dist.all_reduce(x)
-    elif coll == "all_gather":
-        out, shard = torch.empty(elems, dtype=torch.bfloat16, device=dev), x[: elems // n]
-
-        def f():
-            dist.all_gather_into_tensor(out, shard)
-    elif coll == "all_to_all":
+        return lambda: dist.all_reduce(x)
+    if coll == "all_gather":
+        out = torch.empty(elems, dtype=torch.bfloat16, device=dev)
+        shard = x[: elems // world]
+        return lambda: dist.all_gather_into_tensor(out, shard)
+    if coll == "all_to_all":
         out = torch.empty_like(x)
+        return lambda: dist.all_to_all_single(out, x)
+    raise SystemExit(f"unknown collective {coll}")
 
-        def f():
-            dist.all_to_all_single(out, x)
-    else:
-        raise SystemExit(f"unknown collective {coll}")
-    iters = a.iters if nbytes <= (256 << 20) else max(5, a.iters // 4)
-    for _ in range(a.warmup):
-        f()
+
+def time_collective(args, coll, nbytes, world, dev):
+    """Time one collective at one message size.
+
+    Returns (iterations, slowest rank's us per call, algbw, busbw).
+    """
+    elems = max(nbytes // 2, world)  # bf16
+    elems -= elems % world
+    call = make_call(coll, elems, world, dev)
+    iters = args.iters if nbytes <= (256 << 20) else max(5, args.iters // 4)
+    for _ in range(args.warmup):
+        call()
     torch.cuda.synchronize()
     dist.barrier()
-    start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
     start.record()
     for _ in range(iters):
-        f()
+        call()
     end.record()
     torch.cuda.synchronize()
-    t = torch.tensor([start.elapsed_time(end) * 1000.0 / iters], device=dev)
-    dist.all_reduce(t, op=dist.ReduceOp.MAX)          # the slowest rank sets the time, as in nccl-tests
-    t_us = t.item()
-    algbw = elems * 2 / (t_us * 1e-6) / 1e9
-    return iters, t_us, algbw, algbw * factor[coll]
+    us = start.elapsed_time(end) * 1000.0 / iters
+    elapsed = torch.tensor([us], device=dev)
+    # The slowest rank sets the time, as in nccl-tests.
+    dist.all_reduce(elapsed, op=dist.ReduceOp.MAX)
+    per_call_us = elapsed.item()
+    algbw = elems * 2 / (per_call_us * 1e-6) / 1e9
+    return iters, per_call_us, algbw, algbw * bus_factor(coll, world)
 
 
-if rank == 0:
-    print(f"# world={n} tag={a.tag} nccl={torch.cuda.nccl.version()}", flush=True)
-    print("coll,bytes,iters,time_us,algbw_GBps,busbw_GBps", flush=True)
-for coll in a.colls.split(","):
-    nb = a.min_bytes
-    while nb <= a.max_bytes:
-        it, t_us, alg, bus = run(coll, nb)
-        if rank == 0:
-            print(f"{coll},{nb},{it},{t_us:.2f},{alg:.3f},{bus:.3f}", flush=True)
-        nb *= 4 if nb < (1 << 20) else 2
-dist.barrier()
-dist.destroy_process_group()
+def main():
+    """Run every collective over the size sweep; print CSV from rank 0."""
+    args = parse_args()
+    dist.init_process_group("nccl")
+    rank, world = dist.get_rank(), dist.get_world_size()
+    local = int(os.environ.get("LOCAL_RANK", "0"))
+    torch.cuda.set_device(local)
+    dev = torch.device("cuda", local)
+    if rank == 0:
+        nccl = torch.cuda.nccl.version()
+        print(f"# world={world} tag={args.tag} nccl={nccl}", flush=True)
+        print("coll,bytes,iters,time_us,algbw_GBps,busbw_GBps", flush=True)
+    for coll in args.colls.split(","):
+        nbytes = args.min_bytes
+        while nbytes <= args.max_bytes:
+            iters, us, alg, bus = time_collective(
+                args, coll, nbytes, world, dev
+            )
+            if rank == 0:
+                row = f"{coll},{nbytes},{iters},{us:.2f},{alg:.3f},{bus:.3f}"
+                print(row, flush=True)
+            nbytes *= 4 if nbytes < (1 << 20) else 2
+    dist.barrier()
+    dist.destroy_process_group()
+
+
+if __name__ == "__main__":
+    main()
