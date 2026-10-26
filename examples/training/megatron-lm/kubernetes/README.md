@@ -42,7 +42,3 @@ docker push ${REGISTRY}/${ECR_REPOSITORY_NAME}:latest
 ```
 
 Now you are all set for distributed training with Megatron-LM on EKS! Proceed to the subdirectories for detailed instructions for different model training.
-
-- [`gpt3`](./gpt3): pretrain a GPT model with a PyTorchJob on a preprocessed dataset.
-- [`layout-study`](./layout-study): compare parallelism layouts across two instances (tensor, pipeline and data
-  parallelism) and near or far placements by EC2 network topology, on mock data.
