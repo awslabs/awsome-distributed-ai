@@ -7,10 +7,7 @@ group auto-creation, multi-NIC wiring, and OSU MPI benchmark results.
 
 ## Test 9: EFA on CPU HPC instances (hpc6a / hpc7a / hpc8a)
 
-**When to run:** when `add-cng.yaml`'s EFA wiring (`EfaInterfaceCount`,
-`PlacementGroupName`) or the deploy-all forwarding params
-(`OnDemandEfaInterfaceCount`, `OnDemandPlacementGroupName`) change. Skip if only
-GPU/monitoring/AMI paths were touched.
+**When to run:** after changes to EFA wiring or placement inputs in `add-cng.yaml` (`EfaInterfaceCount`, `PlacementGroupName`, `PlacementGroupId`), or to the corresponding deploy-all parameters (`OnDemandEfaInterfaceCount`, `OnDemandPlacementGroupName`, `OnDemandPlacementGroupId`). Skip it for changes confined to GPU, monitoring, or AMI paths.
 
 > **EFA is enabled by the interface count.** `OnDemandEfaInterfaceCount=0`
 > (default) = no EFA; `1` or `2` enables EFA with that many NICs. There is no

@@ -140,9 +140,9 @@ Metadata:
       OnDemandEfaInterfaceCount:
         default: "EFA interfaces on CPU queue (0 = off, 1 or 2 for HPC types)"
       OnDemandPlacementGroupName:
-        default: "Existing placement group name (leave empty when using an ID)"
+        default: "Existing cluster placement group name (same account)"
       OnDemandPlacementGroupId:
-        default: "Existing placement group ID (required for cross-account sharing)"
+        default: "Existing cluster placement group ID (required for shared groups)"
       DeployPseriesCNG:
         default: "Deploy GPU (P5/P6) queue"
       PseriesInstanceType:
@@ -526,24 +526,13 @@ Parameters:
   OnDemandPlacementGroupName:
     Type: String
     Description: >-
-      (Optional, advanced) Existing cluster placement group name for the
-      on-demand nodes. Leave both OnDemandPlacementGroupName and
-      OnDemandPlacementGroupId empty to auto-create a per-CNG cluster placement
-      group when OnDemandEfaInterfaceCount > 0 (no placement group when EFA is
-      off). A supplied name is honored with or without EFA. For a group shared
-      by another account, use OnDemandPlacementGroupId instead. Specify at most
-      one of these inputs. The GPU queue's equivalent is PseriesPlacementGroupName.
+      (Optional, advanced) Name of an existing cluster placement group owned by this account for the On-Demand CNG. Reuses the group with or without EFA. For a group shared by another account, use OnDemandPlacementGroupId instead. Supply either the name or ID, or leave both empty to create a group when OnDemandEfaInterfaceCount > 0 and use no group when it is 0. The GPU queue uses PseriesPlacementGroupName.
     Default: ''
 
   OnDemandPlacementGroupId:
     Type: String
     Description: >-
-      (Optional, advanced) Existing cluster placement group ID (pg-...), not
-      its name or ARN, for the on-demand nodes only. Use this for a group shared
-      by another account; the caller must arrange access before deployment.
-      Honored with or without EFA and suppresses auto-creation. Specify at most
-      one of OnDemandPlacementGroupId and OnDemandPlacementGroupName. Does not
-      affect login nodes or the P-series CNG and does not manage sharing.
+      (Optional, advanced) ID (pg-...) of an existing cluster placement group for the On-Demand CNG. Passed to add-cng.yaml as PlacementGroupId to set LaunchTemplate Placement.GroupId, which EC2 requires for cross-account groups. Reuses the group with or without EFA. Leave OnDemandPlacementGroupName empty when using an ID. Arrange sharing and access before deployment; the caller manages the existing group's lifecycle. Login-node and P-series settings are separate.
     Default: ''
 
   # P-series Compute Node Group
@@ -654,7 +643,7 @@ Rules:
       - Assert: !Or
           - !Equals [!Ref OnDemandPlacementGroupId, '']
           - !Equals [!Ref OnDemandPlacementGroupName, '']
-        AssertDescription: Specify at most one of OnDemandPlacementGroupId and OnDemandPlacementGroupName.
+        AssertDescription: OnDemandPlacementGroupId and OnDemandPlacementGroupName are both set. Specify only one, or leave both empty for the EFA-based default.
   LustrePersistent1Throughput:
     RuleCondition: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_1']
     Assertions:
@@ -876,11 +865,10 @@ Resources:
         SlurmVersion: !Ref SlurmVersion
         MonitoringRole: compute
         InstallEnrootPyxis: !Ref InstallEnrootPyxis
-        # EFA on CPU HPC instances (hpc8a/hpc7a/hpc6a). add-cng.yaml enables EFA
-        # when EfaInterfaceCount > 0 and auto-creates a per-CNG cluster placement
-        # group when neither PlacementGroupName nor PlacementGroupId is supplied.
+        # add-cng.yaml creates a group when EFA is enabled and both placement inputs are empty.
         EfaInterfaceCount: !Ref OnDemandEfaInterfaceCount
         PlacementGroupName: !Ref OnDemandPlacementGroupName
+        # Forwarded even when empty: publish the child with this parameter before using this parent.
         PlacementGroupId: !Ref OnDemandPlacementGroupId
         CapacityReservationId: !Ref OnDemandCapacityReservationId
         DirectoryRole: !If [DirectoryEnabled, 'client', 'none']

@@ -114,10 +114,11 @@ while IFS= read -r anchor; do
   grep -qx "$anchor" <<<"$slugs" || report "README.md internal anchor '#$anchor' has no matching heading"
 done < <(grep -oE '\]\(#[a-z0-9-]+\)' README.md | sed -E 's/\]\(#//; s/\)//' | sort -u)
 
-# 7. Placement-group inputs must keep the documented ID/name/default contract.
-#    PyYAML (python3 -m pip install pyyaml) is also used by the template-publishing
-#    workflow. Check native CFN expressions, not a second CFN evaluator.
-if ! python3 - <<'PY'
+# 7. Check placement-group selection, defaults, and parent-to-child forwarding.
+#    PyYAML is already required by the template-publishing workflow. Preserve CFN tags so assertions can compare the template expressions directly.
+if ! python3 -c 'import yaml' >/dev/null 2>&1; then
+  report "placement-group check requires Python 3 and PyYAML (python3 -m pip install pyyaml)"
+elif ! python3 - <<'PY'
 import yaml
 
 
@@ -125,7 +126,7 @@ class CfnLoader(yaml.SafeLoader):
     pass
 
 
-def keep_tag(loader, tag, node):
+def preserve_cfn_tag(loader, tag, node):
     if isinstance(node, yaml.ScalarNode):
         value = loader.construct_scalar(node)
     elif isinstance(node, yaml.SequenceNode):
@@ -135,58 +136,76 @@ def keep_tag(loader, tag, node):
     return {tag: value}
 
 
-CfnLoader.add_multi_constructor("!", keep_tag)
-with open("assets/add-cng.yaml") as f:
-    child = yaml.load(f, Loader=CfnLoader)
-with open("assets/pcs-ml-cluster-deploy-all.yaml") as f:
-    parent = yaml.load(f, Loader=CfnLoader)
+CfnLoader.add_multi_constructor("!", preserve_cfn_tag)
+with open("assets/add-cng.yaml") as template_file:
+    compute_template = yaml.load(template_file, Loader=CfnLoader)
+with open("assets/pcs-ml-cluster-deploy-all.yaml") as template_file:
+    deployment_template = yaml.load(template_file, Loader=CfnLoader)
 
-for template, prefix in ((child, ""), (parent, "OnDemand")):
-    for suffix in ("PlacementGroupId", "PlacementGroupName"):
-        param = prefix + suffix
-        assert param in template["Parameters"], f"missing parameter: {param}"
-        assert template["Parameters"][param]["Default"] == "", param
-    assert template["Parameters"][prefix + "EfaInterfaceCount"]["AllowedValues"] == [0, 1, 2]
-    rule = template["Rules"][prefix + "PlacementGroupIdOrName"]
-    assert "RuleCondition" not in rule, "ID + name must always be rejected"
-    assert [a["Assert"] for a in rule["Assertions"]] == [{"Or": [
-        {"Equals": [{"Ref": prefix + "PlacementGroupId"}, ""]},
-        {"Equals": [{"Ref": prefix + "PlacementGroupName"}, ""]},
-    ]}], "allow ID only, name only, or neither; reject both"
+# Both templates accept a name, an ID, or neither, with the same EFA choices.
+for template, parameter_prefix in ((compute_template, ""), (deployment_template, "OnDemand")):
+    for parameter_suffix in ("PlacementGroupId", "PlacementGroupName"):
+        parameter_name = parameter_prefix + parameter_suffix
+        assert parameter_name in template["Parameters"], f"missing parameter: {parameter_name}"
+        assert template["Parameters"][parameter_name]["Default"] == "", parameter_name
+    assert template["Parameters"][parameter_prefix + "EfaInterfaceCount"]["AllowedValues"] == [0, 1, 2]
+    placement_rule = template["Rules"][parameter_prefix + "PlacementGroupIdOrName"]
+    assert "RuleCondition" not in placement_rule, "ID + name must always be rejected"
+    assert [assertion["Assert"] for assertion in placement_rule["Assertions"]] == [
+        {"Or": [
+            {"Equals": [{"Ref": parameter_prefix + "PlacementGroupId"}, ""]},
+            {"Equals": [{"Ref": parameter_prefix + "PlacementGroupName"}, ""]},
+        ]}
+    ], "allow ID only, name only, or neither; reject both"
 
-conditions = child["Conditions"]
-assert conditions["HasUserPlacementGroupId"] == {"Not": [{"Equals": [{"Ref": "PlacementGroupId"}, ""]}]}
-assert conditions["HasUserPlacementGroup"] == {"Not": [{"Equals": [{"Ref": "PlacementGroupName"}, ""]}]}
-assert conditions["EfaEnabled"] == {"Not": [{"Equals": [{"Ref": "EfaInterfaceCount"}, 0]}]}
-assert conditions["CreatePlacementGroup"] == {"And": [
+# Explicit groups apply with or without EFA; EFA needs a group even when neither input is set.
+compute_conditions = compute_template["Conditions"]
+assert compute_conditions["HasUserPlacementGroupId"] == {"Not": [{"Equals": [{"Ref": "PlacementGroupId"}, ""]}]}
+assert compute_conditions["HasUserPlacementGroup"] == {"Not": [{"Equals": [{"Ref": "PlacementGroupName"}, ""]}]}
+assert compute_conditions["EfaEnabled"] == {"Not": [{"Equals": [{"Ref": "EfaInterfaceCount"}, 0]}]}
+assert compute_conditions["CreatePlacementGroup"] == {"And": [
     {"Condition": "EfaEnabled"},
     {"Not": [{"Condition": "HasUserPlacementGroup"}]},
     {"Not": [{"Condition": "HasUserPlacementGroupId"}]},
 ]}, "only auto-create when EFA is on and neither ID nor name is supplied"
-assert conditions["UsePlacementGroup"] == {"Or": [
+assert compute_conditions["UsePlacementGroup"] == {"Or": [
     {"Condition": "EfaEnabled"},
     {"Condition": "HasUserPlacementGroup"},
     {"Condition": "HasUserPlacementGroupId"},
 ]}, "explicit ID/name must work without EFA; empty + EFA=0 stays placement-less"
-assert child["Resources"]["PlacementGroup"]["Condition"] == "CreatePlacementGroup"
-lt = child["Resources"]["PCSLaunchTemplate"]["Properties"]["LaunchTemplateData"]
-assert lt["Placement"] == {"If": ["UsePlacementGroup", {"If": [
-    "HasUserPlacementGroupId", {"GroupId": {"Ref": "PlacementGroupId"}},
-    {"GroupName": {"If": ["CreatePlacementGroup", {"Ref": "PlacementGroup"}, {"Ref": "PlacementGroupName"}]}},
-]}, {"Ref": "AWS::NoValue"}]}, "ID uses GroupId, never GroupName or an ARN"
-assert lt["CapacityReservationSpecification"] == {"If": [
-    "HasCapacityReservation", {"CapacityReservationTarget": {"CapacityReservationId": {"Ref": "CapacityReservationId"}}},
+assert compute_template["Resources"]["PlacementGroup"]["Condition"] == "CreatePlacementGroup"
+
+# The launch template selects GroupId or GroupName independently of the ODCR target.
+launch_template_data = compute_template["Resources"]["PCSLaunchTemplate"]["Properties"]["LaunchTemplateData"]
+assert launch_template_data["Placement"] == {"If": [
+    "UsePlacementGroup",
+    {"If": [
+        "HasUserPlacementGroupId",
+        {"GroupId": {"Ref": "PlacementGroupId"}},
+        {"GroupName": {"If": [
+            "CreatePlacementGroup",
+            {"Ref": "PlacementGroup"},
+            {"Ref": "PlacementGroupName"},
+        ]}},
+    ]},
+    {"Ref": "AWS::NoValue"},
+]}, "ID uses GroupId, never GroupName or an ARN"
+assert launch_template_data["CapacityReservationSpecification"] == {"If": [
+    "HasCapacityReservation",
+    {"CapacityReservationTarget": {"CapacityReservationId": {"Ref": "CapacityReservationId"}}},
     {"Ref": "AWS::NoValue"},
 ]}, "keep the direct ODCR target independent of placement"
-for name, resource in parent["Resources"].items():
-    params = resource.get("Properties", {}).get("Parameters", {})
-    if name == "OnDemandCNGStack":
+
+# Deploy-all forwards these inputs to the On-Demand CNG; other stacks keep their existing inputs.
+for resource_name, resource in deployment_template["Resources"].items():
+    nested_parameters = resource.get("Properties", {}).get("Parameters", {})
+    if resource_name == "OnDemandCNGStack":
         assert resource["Properties"]["TemplateURL"]["Sub"].endswith("}add-cng.yaml")
-        for suffix in ("PlacementGroupId", "PlacementGroupName", "EfaInterfaceCount", "CapacityReservationId"):
-            assert params[suffix] == {"Ref": "OnDemand" + suffix}, suffix
+        for parameter_suffix in ("PlacementGroupId", "PlacementGroupName", "EfaInterfaceCount", "CapacityReservationId"):
+            assert nested_parameters[parameter_suffix] == {"Ref": "OnDemand" + parameter_suffix}, parameter_suffix
     else:
-        assert "PlacementGroupId" not in params, name
-        assert {"Ref": "OnDemandPlacementGroupId"} not in params.values(), name
+        assert "PlacementGroupId" not in nested_parameters, resource_name
+        assert {"Ref": "OnDemandPlacementGroupId"} not in nested_parameters.values(), resource_name
 print("placement contract: PASS (ID, name, EFA defaults, conflict rules, ODCR target, parent forwarding)")
 PY
 then
