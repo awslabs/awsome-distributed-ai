@@ -7,4 +7,4 @@ transformers==4.48.3
 huggingface-hub==0.27.1
 tokenizers==0.21.0
 numpy==1.26.4
-pytest==8.3.5
+pytest==9.0.3
