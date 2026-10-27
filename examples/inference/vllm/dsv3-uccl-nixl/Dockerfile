@@ -145,8 +145,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # v1.1.0 ships cu12 and cu13 backends inside the meta wheel and auto-selects
 # at runtime based on torch.version.cuda — single-line install. (v1.0.1 had
 # an unconditional cu12 dep that required a 3-step reinstall dance.)
+# The meta wheel installs both nixl-cu12 and nixl-cu13, and both ship the same
+# top-level nixl_ep/ package, so whichever installs last owns it. Reinstall
+# nixl-cu13 last, so nixl_ep is the CUDA-13 build the smoke test below expects.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system "nixl==$(echo ${NIXL_VERSION} | sed 's/^v//')"
+    uv pip install --system "nixl==$(echo ${NIXL_VERSION} | sed 's/^v//')" \
+    && uv pip install --system --reinstall --no-deps "nixl-cu13==$(echo ${NIXL_VERSION} | sed 's/^v//')"
 
 # --- UCCL-EP + deep_ep wrapper ----------------------------------------------
 RUN git clone https://github.com/uccl-project/uccl.git /opt/uccl \
