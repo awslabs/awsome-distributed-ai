@@ -3,7 +3,7 @@
 # CPU wheel for the local tests described in slurm/README.md). Versions are
 # pinned exactly; `pip check` runs after installation in the image build.
 nvidia-resiliency-ext==0.7.0
-transformers==4.48.3
+transformers==5.10.1
 huggingface-hub==0.27.1
 tokenizers==0.21.0
 numpy==1.26.4
