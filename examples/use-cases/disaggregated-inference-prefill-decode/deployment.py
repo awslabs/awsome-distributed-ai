@@ -25,11 +25,12 @@ def read_config(path):
     assert c.get("placement", "separate-nodes") in ("packed", "separate-nodes")
     assert len(c["nodes"]) == len(set(c["nodes"])) >= minimum_nodes
     assert c["model_cache_host_path"].startswith("/mnt/"), "Use a dedicated cache under /mnt"
-    if "page_size_tokens" in c:
-        page = c["page_size_tokens"]
-        assert type(page) is int and page >= 1, "page_size_tokens must be a positive integer"
+    page = c.get("page_size_tokens")
+    assert page is None or (type(page) is int and page >= 1), "page_size_tokens must be a positive integer, or null for SGLang's default"
     if "engine_env" in c:
         assert type(c["engine_env"]) is dict and all(type(v) is str for v in c["engine_env"].values()), "engine_env maps names to string values; write numbers as strings"
+        # Kubernetes rewrites $(NAME) and $$, also inside the packed plans, and drops an empty value from the pod definition that the verifier and scale-prefill compare.
+        assert all(k and k.isascii() and k.isprintable() and "=" not in k and "$" not in k + v and v and "\0" not in v for k, v in c["engine_env"].items()), "engine_env needs non-empty names of printable ASCII without '=' or '$', and non-empty values without '$' or NUL"
         reserved = sorted(set(c["engine_env"]) & {*LAB_ENV, *PACKED_ENV.values()})
         assert not reserved, "engine_env cannot set the lab's own variables: " + ", ".join(reserved)
     if c.get('engine_profile') == 'v4-optional' or c['model_id'] == 'deepseek-ai/DeepSeek-V4-Flash':
