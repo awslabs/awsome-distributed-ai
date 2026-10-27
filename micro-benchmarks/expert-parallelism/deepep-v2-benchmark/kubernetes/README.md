@@ -93,6 +93,34 @@ envsubst '$IMAGE_URI $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NUM_NODES' \
   < test-internode.yaml | kubectl delete -f -
 ```
 
+## Pin both workers under one network node
+
+Amazon EKS labels nodes of [instance types that support Amazon EC2 topology](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-topology-prerequisites.html)
+with the network nodes above each instance, from `topology.k8s.aws/network-node-layer-1` down to the bottom layer:
+`network-node-layer-4` on `p6-b200` and `p6-b300`, `network-node-layer-3` on `p5`, `p5e` and `p5en`
+([Place distributed AI/ML workloads with network topology labels](https://docs.aws.amazon.com/eks/latest/userguide/ml-workload-topology.html)).
+Instances that share a bottom-layer value are the closest in the network. To run the internode test on such a pair,
+list the values and pick one that at least `NUM_NODES` free nodes share:
+
+```bash
+kubectl get nodes -l node.kubernetes.io/instance-type=${INSTANCE_TYPE} \
+  -L topology.k8s.aws/network-node-layer-3,topology.k8s.aws/network-node-layer-4
+```
+
+Then add it to the `Worker` node selector in `test-internode.yaml`. The launcher needs no change; its pod affinity
+already places it on a worker's node.
+
+```yaml
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+            # Replace with a value from the command above; on p5, p5e and p5en use network-node-layer-3.
+            topology.k8s.aws/network-node-layer-4: nn-0123456789abcdef0
+```
+
+Required pod affinity on the same label is not a substitute: the scheduler places the first worker before the second
+exists, so it can pick a node with no free neighbor under its network node, and the second worker then stays
+`Pending`.
+
 ## Notes for `p6-b300.48xlarge` (B300 / Blackwell)
 
 - **Image:** the default image already includes `sm_103`, so no rebuild is needed.
