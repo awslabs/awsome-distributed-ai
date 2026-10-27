@@ -1,0 +1,176 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# One-way EFA latency (fi_pingpong) between every pair of NUM_NODES instances, and a
+# within-instance floor on each. One worker per instance; the launcher runs each
+# measurement over the MPI Operator's SSH, so the whole matrix runs inside the cluster. Render with
+# envsubst and apply (see "EFA latency between instances" in ../README.md):
+#   envsubst '$INSTANCE_TYPE $NUM_NODES $EFA_PER_NODE' < efa-latency-matrix.yaml | kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: efa-latency-scripts
+data:
+  pair.sh: |
+    #!/bin/bash
+    # One end of a fi_pingpong round trip. matrix.sh runs it over SSH, which gives it no container environment.
+    #   pair.sh serve DEVICE SIZE ITERATIONS           serve one client, then exit
+    #   pair.sh connect SERVER DEVICE SIZE ITERATIONS  connect once the server listens; print USEC=<usec/xfer>
+    set -u
+    export LD_LIBRARY_PATH=/opt/amazon/efa/lib:${LD_LIBRARY_PATH:-}
+    export FI_EFA_ENABLE_SHM_TRANSFER=0   # keep the floor (both ends in one instance) on EFA
+    FI=/opt/amazon/efa/bin/fi_pingpong
+    if [ "$1" = serve ]; then
+      exec timeout 60 "$FI" -p efa -e rdm -d "$2" -S "$3" -I "$4" > /dev/null 2>&1
+    fi
+    out=""
+    for _ in $(seq 1 20); do
+      out=$(timeout 30 "$FI" -p efa -e rdm -d "$3" -S "$4" -I "$5" "$2" 2>&1) && break
+      sleep 0.5
+    done
+    echo "$out" | awk '{ for (i = 1; i <= NF; i++) if ($i == "usec/xfer") { c = i; next } }
+      c && NF >= c && $c + 0 > 0 { print "USEC=" $c; exit }'
+  matrix.sh: |
+    #!/bin/bash
+    # Every pair of workers ROUNDS times per message size, in an order shuffled per round
+    # with a fixed seed so near and far pairs interleave in time; analyze_efa_latency.py
+    # drops round 1 as warm-up. Then FLOOR_ROUNDS of a floor on each worker: a server on DEV
+    # and a client on DEV2 of the same instance. Both ends run over the operator's SSH.
+    set -uo pipefail
+    SIZES=${SIZES:-8 1024}; ITERS=${ITERS:-2000}; ROUNDS=${ROUNDS:-4}
+    FLOOR_ROUNDS=${FLOOR_ROUNDS:-3}; SEED=${SEED:-42}
+    SSH=(ssh -o BatchMode=yes -o LogLevel=ERROR)
+    mapfile -t HOSTS < <(awk '{print $1}' /etc/mpi/hostfile)
+    for h in "${HOSTS[@]}"; do
+      until "${SSH[@]}" -o ConnectTimeout=3 "$h" true < /dev/null 2>/dev/null; do
+        echo "waiting for sshd on $h"; sleep 3
+      done
+    done
+    # The same two EFA devices on every worker, so device differences don't pose as distance.
+    devs() { "${SSH[@]}" "$1" /opt/amazon/efa/bin/fi_info -p efa < /dev/null 2>/dev/null |
+      awk '/domain:/ && /-rdm/ {print $2}' | sort -u; }
+    DEV=$(devs "${HOSTS[0]}" | sed -n 1p); DEV2=$(devs "${HOSTS[0]}" | sed -n 2p)
+    if [ -z "$DEV" ] || [ -z "$DEV2" ]; then echo "fewer than two EFA RDM domains on ${HOSTS[0]}"; exit 1; fi
+    for h in "${HOSTS[@]}"; do
+      d=$(devs "$h")
+      if ! grep -qx "$DEV" <<< "$d" || ! grep -qx "$DEV2" <<< "$d"; then echo "$h lacks $DEV or $DEV2"; exit 1; fi
+      echo "NODE,$h,$("${SSH[@]}" "$h" cat /tmp/node-name < /dev/null)"
+    done
+    echo "META hosts=${#HOSTS[@]} sizes=$SIZES iters=$ITERS rounds=$ROUNDS" \
+      "floor_rounds=$FLOOR_ROUNDS seed=$SEED dev=$DEV dev2=$DEV2"
+    pp() {   # server client client_device size -> usec/xfer, or NA
+      local u
+      "${SSH[@]}" "$1" bash /scripts/pair.sh serve "$DEV" "$4" "$ITERS" < /dev/null &
+      u=$(timeout 90 "${SSH[@]}" "$2" bash /scripts/pair.sh connect "$1" "$3" "$4" "$ITERS" < /dev/null |
+        sed -n 's/^USEC=//p')
+      wait
+      echo "${u:-NA}"
+    }
+    PAIRS=$(for ((i = 0; i < ${#HOSTS[@]}; i++)); do
+      for ((j = i + 1; j < ${#HOSTS[@]}; j++)); do echo "$i $j"; done; done)
+    for ((r = 1; r <= ROUNDS; r++)); do
+      while read -r i j; do
+        a=${HOSTS[$i]}; b=${HOSTS[$j]}
+        for size in $SIZES; do echo "PAIR,$r,$a,$b,$size,$(pp "$a" "$b" "$DEV" "$size")"; done
+      done < <(shuf --random-source=<(yes "$SEED$r") <<< "$PAIRS")
+    done
+    for ((r = 1; r <= FLOOR_ROUNDS; r++)); do
+      for h in "${HOSTS[@]}"; do
+        for size in $SIZES; do echo "FLOOR,$r,$h,$h,$size,$(pp "$h" "$h" "$DEV2" "$size")"; done
+      done
+    done
+    echo DONE
+---
+apiVersion: kubeflow.org/v2beta1
+kind: MPIJob
+metadata:
+  name: efa-latency
+spec:
+  runPolicy:
+    cleanPodPolicy: Running
+    backoffLimit: 2
+  slotsPerWorker: 1
+  mpiReplicaSpecs:
+    Launcher:
+      replicas: 1
+      template:
+        spec:
+          restartPolicy: OnFailure
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+          containers:
+            - name: efa-latency-launcher
+              image: public.ecr.aws/hpc-cloud/nccl-tests:cuda13.1.2-efa1.50.0-ofiv1.21.1-ncclv2.31.2-1-testsv2.20.0
+              imagePullPolicy: IfNotPresent
+              command: ["bash", "/scripts/matrix.sh"]
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: 2Gi
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+          volumes:
+            - name: scripts
+              configMap:
+                name: efa-latency-scripts
+    Worker:
+      replicas: ${NUM_NODES}
+      template:
+        spec:
+          # One worker per instance.
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchExpressions:
+                      - key: training.kubeflow.org/job-name
+                        operator: In
+                        values:
+                          - efa-latency
+                      - key: training.kubeflow.org/job-role
+                        operator: In
+                        values:
+                          - worker
+                  topologyKey: kubernetes.io/hostname
+          nodeSelector:
+            node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+          containers:
+            - name: efa-latency-worker
+              image: public.ecr.aws/hpc-cloud/nccl-tests:cuda13.1.2-efa1.50.0-ofiv1.21.1-ncclv2.31.2-1-testsv2.20.0
+              imagePullPolicy: IfNotPresent
+              # The operator's default worker command, after recording the node name for the launcher.
+              command: ["bash", "-c", "echo \"$NODE_NAME\" > /tmp/node-name && exec /usr/sbin/sshd -De"]
+              env:
+                - name: NODE_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: spec.nodeName
+              securityContext:
+                capabilities:
+                  add: ["IPC_LOCK"]
+              # Every EFA device, so all workers expose the same device names. No GPUs.
+              resources:
+                limits:
+                  vpc.amazonaws.com/efa: ${EFA_PER_NODE}
+                  cpu: "4"
+                  memory: 8Gi
+                requests:
+                  vpc.amazonaws.com/efa: ${EFA_PER_NODE}
+                  cpu: "4"
+                  memory: 8Gi
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+          volumes:
+            - name: scripts
+              configMap:
+                name: efa-latency-scripts
