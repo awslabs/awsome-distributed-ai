@@ -98,5 +98,39 @@ class PairedTests(unittest.TestCase):
         self.assertEqual(len(workers),2)
         self.assertEqual([x['spec']['template']['spec']['nodeSelector']['kubernetes.io/hostname'] for x in workers], ['c','d'])
 
+    def test_page_size_and_engine_env_reach_engines_or_are_refused(self):
+        from deployment import LAB_ENV, read_config, render
+        c = json.loads(Path('config.example.json').read_text())
+        c.update(context='test', nodes=['a','b'], instance_type='g7.48xlarge', gpus_per_worker=4, efa_per_worker=1, image='lab@sha256:'+'a'*64, router_image='router@sha256:'+'b'*64)
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)/'config.json'
+            def engines(update):
+                path.write_text(json.dumps(c | update))
+                return [x['spec']['template']['spec']['containers'][0] for x in render(read_config(path), 'disaggregated')['items'] if x['kind']=='Deployment' and x['metadata']['labels'].get('component')=='engine']
+            for engine in engines({}):
+                self.assertNotIn('--page-size', engine['args'])
+                self.assertEqual(engine['env'], [{'name': k, 'value': v} for k, v in LAB_ENV.items()])
+            for engine in engines(dict(page_size_tokens=64, engine_env={'FI_EFA_ENABLE_SHM_TRANSFER': '0'})):
+                self.assertEqual(engine['args'][engine['args'].index('--page-size') + 1], '64')
+                self.assertEqual(engine['env'][-1], {'name': 'FI_EFA_ENABLE_SHM_TRANSFER', 'value': '0'})
+            for update in [dict(page_size_tokens=0), dict(page_size_tokens='64'), dict(page_size_tokens=True),
+                           dict(engine_env=['FI_EFA_ENABLE_SHM_TRANSFER=0']), dict(engine_env={'FI_EFA_ENABLE_SHM_TRANSFER': 0}),
+                           dict(engine_env={'FI_PROVIDER': 'tcp'}), dict(engine_env={'CUDA_VISIBLE_DEVICES': '0'}),
+                           dict(engine_env={'AIM345_ENGINE_PLANS': 'x'}), dict(engine_env={'A': ''}), dict(engine_env={'A': '$(FI_PROVIDER)'}), dict(engine_env={'A': 'a$$b'}),
+                           dict(engine_env={'A': 'a\0b'}), dict(engine_env={'A=B': '1'}), dict(engine_env={'A\nB': '1'}), dict(engine_env={'CAF\u00c9': '1'}), dict(engine_env={'': '1'})]:
+                path.write_text(json.dumps(c | update))
+                with self.assertRaises(AssertionError):
+                    read_config(path)
+
+    def test_pair_matches_page_size_but_not_engine_env(self):
+        self.assertEqual(check_pair(self.a, self.b | dict(engine_env={'FI_EFA_ENABLE_SHM_TRANSFER': '0'})), 2)
+        self.assertIsNone(self.a['page_size_tokens'])
+        self.assertEqual(check_pair(self.a, {k: v for k, v in self.b.items() if k != 'page_size_tokens'}), 2)
+        plans = next(x for x in paired_render(self.b | dict(engine_env={'FI_EFA_ENABLE_SHM_TRANSFER': '0'}), 'disaggregated')['items'] if x['kind'] == 'Deployment' and x['metadata']['labels'].get('component') == 'engine')['spec']['template']['spec']['containers'][0]['env']
+        plans = json.loads(next(x['value'] for x in plans if x['name'] == 'AIM345_ENGINE_PLANS'))
+        self.assertEqual({p['env']['FI_EFA_ENABLE_SHM_TRANSFER'] for p in plans}, {'0'})
+        with self.assertRaises(ValueError):
+            check_pair(self.a, self.b | dict(page_size_tokens=64))
+
 
 if __name__ == '__main__': unittest.main()

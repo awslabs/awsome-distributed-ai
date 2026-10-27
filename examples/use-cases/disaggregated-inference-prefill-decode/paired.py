@@ -4,11 +4,11 @@ import copy
 import json
 from pathlib import Path
 import urllib.request
-from deployment import OWNER, kubectl, owned_namespace, read_config, render
+from deployment import OWNER, PACKED_ENV, kubectl, owned_namespace, read_config, render
 
 MATCHED = ('context', 'image', 'router_image', 'instance_type', 'gpus_per_worker', 'efa_per_worker',
            'model_id', 'model_revision', 'context_length_tokens',
-           'chunked_prefill_size_tokens', 'disable_prefix_cache', 'placement', 'packed_cpu', 'packed_memory')
+           'chunked_prefill_size_tokens', 'disable_prefix_cache', 'page_size_tokens', 'placement', 'packed_cpu', 'packed_memory')
 
 
 def check_pair(unified, split):
@@ -53,11 +53,11 @@ def paired_render(c, mode):
         args = original['args'][:]
         args[args.index('--port') + 1] = str(30000 + index)
         env = {x['name']: x['value'] for x in original['env']}
-        env['CUDA_VISIBLE_DEVICES'] = ','.join(str(i) for i in range(index*c['gpus_per_worker'], (index+1)*c['gpus_per_worker']))
+        env[PACKED_ENV['gpus']] = ','.join(str(i) for i in range(index*c['gpus_per_worker'], (index+1)*c['gpus_per_worker']))
         plans.append({'role': item['metadata']['labels']['role'], 'args': args, 'env': env})
     engine['command'] = ['bash', '-c', 'ulimit -l unlimited; python3 /lab/verify_image.py && exec python3 /lab/packed.py']
     engine.pop('args')
-    engine['env'].append({'name': 'AIM345_ENGINE_PLANS', 'value': json.dumps(plans)})
+    engine['env'].append({'name': PACKED_ENV['plans'], 'value': json.dumps(plans)})
     for resources in engine['resources'].values():
         resources['nvidia.com/gpu'] = 2*c['gpus_per_worker']
         resources['cpu'] = str(c.get('packed_cpu', 8))

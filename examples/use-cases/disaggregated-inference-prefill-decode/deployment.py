@@ -6,6 +6,9 @@ import re
 import subprocess
 
 OWNER = {"app.kubernetes.io/part-of": "aim345-lab"}
+LAB_ENV = {"SGLANG_DISAGGREGATION_NIXL_BACKEND": "LIBFABRIC", "FI_PROVIDER": "efa", "FI_EFA_USE_DEVICE_RDMA": "1", "FI_LOG_LEVEL": "info"}
+# paired.py adds these to a packed engine pod and its processes.
+PACKED_ENV = {"gpus": "CUDA_VISIBLE_DEVICES", "plans": "AIM345_ENGINE_PLANS"}
 
 
 def read_config(path):
@@ -22,6 +25,14 @@ def read_config(path):
     assert c.get("placement", "separate-nodes") in ("packed", "separate-nodes")
     assert len(c["nodes"]) == len(set(c["nodes"])) >= minimum_nodes
     assert c["model_cache_host_path"].startswith("/mnt/"), "Use a dedicated cache under /mnt"
+    page = c.get("page_size_tokens")
+    assert page is None or (type(page) is int and page >= 1), "page_size_tokens must be a positive integer, or null for SGLang's default"
+    if "engine_env" in c:
+        assert type(c["engine_env"]) is dict and all(type(v) is str for v in c["engine_env"].values()), "engine_env maps names to string values; write numbers as strings"
+        # Kubernetes rewrites $(NAME) and $$, also inside the packed plans, and drops an empty value from the pod definition that the verifier and scale-prefill compare.
+        assert all(k and k.isascii() and k.isprintable() and "=" not in k and "$" not in k + v and v and "\0" not in v for k, v in c["engine_env"].items()), "engine_env needs non-empty names of printable ASCII without '=' or '$', and non-empty values without '$' or NUL"
+        reserved = sorted(set(c["engine_env"]) & {*LAB_ENV, *PACKED_ENV.values()})
+        assert not reserved, "engine_env cannot set the lab's own variables: " + ", ".join(reserved)
     if c.get('engine_profile') == 'v4-optional' or c['model_id'] == 'deepseek-ai/DeepSeek-V4-Flash':
         assert c.get('engine_profile') == 'v4-optional', 'V4 requires the separately pinned optional engine'
         assert c['model_id'] == 'deepseek-ai/DeepSeek-V4-Flash', 'The optional profile is qualified only for V4'
@@ -71,12 +82,14 @@ def worker(c, name, node, role):
         args += ['--max-running-requests', '4', '--cuda-graph-max-bs-decode', '4', '--disable-custom-all-reduce', '--disable-flashinfer-autotune']
     if c.get("disable_prefix_cache"):
         args.append("--disable-radix-cache")
+    if c.get("page_size_tokens") is not None:
+        args += ["--page-size", str(c["page_size_tokens"])]
     if role != "unified":
         args += ["--disaggregation-mode", role, "--disaggregation-transfer-backend", "nixl"]
         if role == "prefill":
             args += ["--disaggregation-bootstrap-port", "8998"]
     resources = {"nvidia.com/gpu": c["gpus_per_worker"], "vpc.amazonaws.com/efa": c["efa_per_worker"], "cpu": str(c.get("engine_cpu", "16")), "memory": c.get("engine_memory", "128Gi"), "ephemeral-storage": c["engine_ephemeral_storage"]}
-    env = [{"name": "SGLANG_DISAGGREGATION_NIXL_BACKEND", "value": "LIBFABRIC"}, {"name": "FI_PROVIDER", "value": "efa"}, {"name": "FI_EFA_USE_DEVICE_RDMA", "value": "1"}, {"name": "FI_LOG_LEVEL", "value": "info"}]
+    env = [{"name": name, "value": value} for name, value in (LAB_ENV | c.get("engine_env", {})).items()]
     mounts = [{"name": "models", "mountPath": "/models"}, {"name": "shm", "mountPath": "/dev/shm"}]
     download = "from huggingface_hub import snapshot_download; import sys; snapshot_download(repo_id=sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3])"
     spec = {
