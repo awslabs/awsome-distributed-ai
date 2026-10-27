@@ -2,12 +2,12 @@
 import asyncio
 import hashlib
 import json
-import math
 from pathlib import Path
 import random
 import time
 import uuid
 import httpx
+from scoring import client_check, summarize
 from traffic import initial_prompt, continuation, tokenizer
 
 
@@ -18,6 +18,7 @@ async def stream_request(client, url, input_ids, output_tokens, timeout_s):
     text = ""
     meta = {}
     done = False
+    chunks = []
     result = {"ok": False, "input_tokens": len(input_ids), "output_tokens": 0}
     try:
         async with asyncio.timeout(timeout_s):
@@ -37,6 +38,7 @@ async def stream_request(client, url, input_ids, output_tokens, timeout_s):
                     count = meta.get("completion_tokens", 0)
                     if count > result["output_tokens"]:
                         last_token = time.perf_counter()
+                        chunks.append({"t_ms": (last_token - started) * 1000, "n": count - result["output_tokens"]})
                         if first is None:
                             first = last_token
                             first_count = count
@@ -56,33 +58,9 @@ async def stream_request(client, url, input_ids, output_tokens, timeout_s):
     result.update(ttft_ms=None if first is None else (first - started) * 1000,
                   tpot_ms=None if token_intervals <= 0 else (last_token - first) * 1000 / token_intervals,
                   latency_ms=(ended - started) * 1000, first_chunk_tokens=first_count,
-                  cached_tokens=meta.get("cached_tokens"), text=text)
+                  cached_tokens=meta.get("cached_tokens"), text=text,
+                  chunks=chunks if result["ok"] else [])
     return result
-
-
-def percentile(values, fraction):
-    values = sorted(x for x in values if x is not None)
-    return None if not values else values[max(0, math.ceil(len(values) * fraction) - 1)]
-
-
-def summarize(records, duration_s, gpus, ttft_ms, tpot_ms, attainment, offered_tasks_s, actual_calls_s):
-    good = [r for r in records if r["ok"] and r.get("ttft_ms") is not None and r.get("tpot_ms") is not None and r["ttft_ms"] <= ttft_ms and r["tpot_ms"] <= tpot_ms]
-    ok = [r for r in records if r["ok"]]
-    attempts = [r for r in records if r.get("sent", False)]
-    hit = len(good) / len(records) if records else 0.0
-    return {"offered_tasks_per_s": offered_tasks_s, "actual_sent_calls_per_s": actual_calls_s,
-            "measurement_including_drain_s": duration_s, "planned_calls": len(records), "sent_calls": len(attempts),
-            "completed_calls": len(ok), "failed_or_skipped_calls": len(records) - len(ok),
-            "p90_ttft_ms_success_only": percentile([r.get("ttft_ms") for r in ok], .9),
-            "p90_tpot_ms_success_only": percentile([r.get("tpot_ms") for r in ok], .9),
-            "slo_ttft_ms": ttft_ms, "slo_tpot_ms": tpot_ms, "slo_attainment_fraction": hit,
-            "attainment_target_fraction": attainment, "meets_joint_slo": hit >= attainment,
-            "successful_calls_per_s": len(ok) / duration_s, "useful_calls_per_s": len(good) / duration_s,
-            "useful_calls_per_s_per_gpu": len(good) / duration_s / gpus, "gpu_count": gpus,
-            "max_client_launch_lag_ms": max((r.get("client_launch_lag_ms", 0) for r in records), default=0),
-            "prefix_overlap_fraction_min": min((r["prefix_overlap_fraction"] for r in records if r.get("prefix_overlap_fraction") is not None), default=None),
-            "cached_tokens_sum_reported": sum(r.get("cached_tokens") or 0 for r in records),
-            "input_tokens_sum_sent": sum(r.get("input_tokens", 0) for r in attempts)}
 
 
 async def run_rate(data, a, rate, phase, tok):
@@ -108,7 +86,7 @@ async def run_rate(data, a, rate, phase, tok):
             overlap = None
             failed = False
             for turn in range(item["calls"]):
-                row = {"task_id": identity, "turn_index": turn, "phase": phase, "sent": False, "ok": False, "client_launch_lag_ms": launch_lag, "prefix_overlap_fraction": overlap}
+                row = {"task_id": identity, "turn_index": turn, "phase": phase, "sent": False, "ok": False, "client_launch_lag_ms": launch_lag, "prefix_overlap_fraction": overlap, "chunks": []}
                 if failed:
                     row["error"] = "Skipped after failed predecessor"
                 elif len(prompt) + data["shape"]["output_tokens"] > a.context_length_tokens:
@@ -136,9 +114,8 @@ async def run_rate(data, a, rate, phase, tok):
     summary = summarize(records, elapsed, a.gpus, a.ttft_slo_ms, a.tpot_slo_ms, a.attainment_fraction, rate, sum(r["sent"] for r in records) / elapsed)
     summary["offered_window_s"] = a.duration_s
     summary["offered_task_count"] = len(arrivals)
-    summary["client_valid"] = summary["max_client_launch_lag_ms"] <= a.max_client_lag_ms
-    summary["meets_joint_slo"] &= summary["client_valid"]
-    return {"metadata": {"architecture": a.architecture, "instance_type": a.instance_type, "region": a.region, "evidence_scope": a.evidence_scope, "model": data["model"], "model_revision": data["revision"], "shape": data["shape"], "phase": phase, "seed": a.seed, "run_nonce": nonce, "arguments": vars(a)}, "summary": summary, "requests": records}
+    client_check(summary, a.max_client_lag_ms)
+    return {"metadata": {"architecture": a.architecture, "instance_type": a.instance_type, "region": a.region, "evidence_scope": a.evidence_scope, "model": data["model"], "model_revision": data["revision"], "shape": data["shape"], "traffic_sha256": hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest(), "phase": phase, "seed": a.seed, "run_nonce": nonce, "arguments": vars(a)}, "summary": summary, "requests": records}
 
 
 async def ramp(a):

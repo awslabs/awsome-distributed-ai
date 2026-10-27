@@ -27,5 +27,8 @@ p.add_argument("--skip-warmup", action="store_true", help="Use only for explicit
 if __name__ == "__main__":
     a = p.parse_args()
     assert a.gpus > 0 and a.duration_s > 0 and a.timeout_s > 0 and all(x > 0 for x in a.rates)
+    # Each rate writes <rate:g>-measured.json, so a repeat would replace a measurement of this same ramp.
+    if len({f"{x:g}" for x in a.rates}) != len(a.rates):
+        p.error("--rates names one rate twice; each rate keeps one result file")
     assert 0 < a.attainment_fraction <= 1 and 0 <= a.stop_failure_fraction <= 1
     asyncio.run(ramp(a))

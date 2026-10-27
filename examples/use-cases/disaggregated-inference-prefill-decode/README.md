@@ -81,6 +81,77 @@ mkdir -p rendered
 ./1.deploy-disaggregated.sh --config config.json --render > rendered/disaggregated.json
 ```
 
+## Check the example end to end
+
+This block checks that the example works on your allocation, from a fresh clone to cleanup, in one paste. It runs the unit tests, deploys the unified stack and measures shape B at 0.5 and 1 tasks/s for 20 seconds each after a warmup of the same length, does the same for the disaggregated stack, runs `5.collect.py` on both sets of ramp files, and deletes the lab namespace. It takes 8 to 30 minutes on two `g7.48xlarge` nodes, most of it waiting for the model servers to load; the shorter time is with the images and model already cached on the nodes.
+
+Set the variables at the top for your environment. `LAB_CONFIG` is a filled-in `config.json` (see "Prepare the image and configuration"); the block reads the Kubernetes context, the namespace, the instance type and the GPU count per stack (two workers of `gpus_per_worker` each) from it, and your kubeconfig must reach that context. `LAB_REGION` is the AWS Region recorded with each ramp file. `LAB_PORT` is a local port that no other program is listening on. The block stops at the first failing step: another program already listens on `LAB_PORT`, the port-forward has exited before a ramp, the router does not answer `/generate`, or a ramp stopped before 1 task/s or completed no call. After a failure the lab namespace stays up for inspection; paste the block again from the top to retry (it removes `LAB_WORKDIR`, and each deployment replaces the lab's previous one), or delete the namespace with `cd "$LAB_WORKDIR/examples/use-cases/disaggregated-inference-prefill-decode" && python3 deployment.py cleanup --config config.json`.
+
+The block was checked with `gpus_per_worker` set to 4 and `efa_per_worker` set to 1 on two `g7.48xlarge` nodes.
+
+```bash
+export LAB_REPO=https://github.com/awslabs/awsome-distributed-ai.git
+export LAB_BRANCH=riv2026/aim345-content
+export LAB_WORKDIR="$HOME/aim345-lab-check"
+export LAB_CONFIG="$HOME/config.json"
+export LAB_REGION=us-west-2
+export LAB_PORT=18000
+cd "$HOME"
+bash -euo pipefail <<'LAB'
+trap 'kill $(jobs -p) 2> /dev/null || true' EXIT
+python3 -c 'import os, socket; socket.socket().bind(("127.0.0.1", int(os.environ["LAB_PORT"])))'
+wait_router() {
+  for i in $(seq 1 180); do curl -sf --max-time 10 -X POST "http://127.0.0.1:$LAB_PORT/generate" -H 'content-type: application/json' -d '{"input_ids":[1,2,3],"sampling_params":{"max_new_tokens":1}}' > /dev/null && return 0; sleep 2; done
+  return 1
+}
+check_completed() {
+  python3 -c 'import json,sys; [sys.exit("no completed calls in " + p) for p in sys.argv[1:] if json.load(open(p))["summary"]["completed_calls"] == 0]' "$@"
+}
+rm -rf "$LAB_WORKDIR"
+git clone -b "$LAB_BRANCH" "$LAB_REPO" "$LAB_WORKDIR"
+cd "$LAB_WORKDIR/examples/use-cases/disaggregated-inference-prefill-decode"
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -q -r requirements.txt
+python3 -m unittest discover -p "test_*.py"
+cp "$LAB_CONFIG" config.json
+LAB_CONTEXT="$(python3 -c 'import json; print(json.load(open("config.json"))["context"])')"
+LAB_NAMESPACE="$(python3 -c 'import json; print(json.load(open("config.json"))["namespace"])')"
+LAB_INSTANCE_TYPE="$(python3 -c 'import json; print(json.load(open("config.json"))["instance_type"])')"
+LAB_GPUS="$(python3 -c 'import json; print(2 * json.load(open("config.json"))["gpus_per_worker"])')"
+python3 deployment.py unified --config config.json
+kubectl --context "$LAB_CONTEXT" -n "$LAB_NAMESPACE" rollout status deployment/unified-0 --timeout=1800s
+kubectl --context "$LAB_CONTEXT" -n "$LAB_NAMESPACE" rollout status deployment/unified-1 --timeout=1800s
+kubectl --context "$LAB_CONTEXT" -n "$LAB_NAMESPACE" rollout status deployment/router --timeout=1800s
+kubectl --context "$LAB_CONTEXT" -n "$LAB_NAMESPACE" port-forward --address 127.0.0.1 service/router "$LAB_PORT:8000" &
+PF=$!
+wait_router
+kill -0 $PF
+python3 3.generate-long-context.py --output traffic/b.json
+python3 4.ramp.py --traffic traffic/b.json --url "http://127.0.0.1:$LAB_PORT" --architecture unified --instance-type "$LAB_INSTANCE_TYPE" --region "$LAB_REGION" --evidence-scope mechanism-validation --gpus "$LAB_GPUS" --rates 0.5 1 --duration-s 20 --output results/unified-b
+check_completed results/unified-b/0.5-measured.json results/unified-b/1-measured.json
+kill $PF
+wait $PF 2> /dev/null || true
+python3 deployment.py disaggregated --config config.json
+kubectl --context "$LAB_CONTEXT" -n "$LAB_NAMESPACE" rollout status deployment/prefill-0 --timeout=1800s
+kubectl --context "$LAB_CONTEXT" -n "$LAB_NAMESPACE" rollout status deployment/decode-0 --timeout=1800s
+kubectl --context "$LAB_CONTEXT" -n "$LAB_NAMESPACE" rollout status deployment/router --timeout=1800s
+kubectl --context "$LAB_CONTEXT" -n "$LAB_NAMESPACE" port-forward --address 127.0.0.1 service/router "$LAB_PORT:8000" &
+PF=$!
+wait_router
+kill -0 $PF
+python3 4.ramp.py --traffic traffic/b.json --url "http://127.0.0.1:$LAB_PORT" --architecture disaggregated --instance-type "$LAB_INSTANCE_TYPE" --region "$LAB_REGION" --evidence-scope mechanism-validation --gpus "$LAB_GPUS" --rates 0.5 1 --duration-s 20 --output results/disaggregated-b
+check_completed results/disaggregated-b/0.5-measured.json results/disaggregated-b/1-measured.json
+kill $PF
+wait $PF 2> /dev/null || true
+python3 5.collect.py --runs results/unified-b results/disaggregated-b --output results/e2e-collected
+ls -l results/e2e-collected/report.html
+python3 deployment.py cleanup --config config.json
+LAB
+```
+
+A successful run ends with the size of `results/e2e-collected/report.html` and a line reporting that the `LAB_NAMESPACE` namespace was deleted. The measurement here is short and only shows that each step works; use "Sequential comparison" for results you intend to compare.
+
 ## Paired endpoints on separate allocations
 
 [paired.py](paired.py) checks that both stacks have the same model revision, images, GPU count, transport request, cache settings and placement mode, then renders separate namespaces and nonpreempting PriorityClasses. It rejects overlapping node sets. The sequential scripts remain available for switching a single allocation in place.
@@ -160,7 +231,7 @@ After saving evidence, remove the pair and its PriorityClasses:
 
 ```bash
 python3 paired.py cleanup
-python3 -m unittest -v test_paired test_lab
+python3 -m unittest -v test_paired test_lab test_scoring test_benchmark test_report test_collect
 ```
 
 ## Sequential comparison
@@ -199,7 +270,25 @@ python3 4.ramp.py --traffic traffic/b.json --url http://127.0.0.1:8000 --archite
 python3 5.collect.py --config config.json --runs results/unified-a results/unified-b --output results/unified-evidence
 ```
 
-These rates and durations are starting settings, not observed crossover points. Each rate has a discarded warmup run followed by a measured run. All requests drain before the next rate starts; failures and timeouts remain in the result. Warmup uses the same traffic shape and offered rate. Extend the measurement window and repeat rates in reversed order before describing a rate as sustained.
+These rates and durations are starting settings, not observed crossover points. Each rate has a discarded warmup run followed by a measured run. All requests drain before the next rate starts; failures and timeouts remain in the result. Warmup uses the same traffic shape and offered rate. Extend the measurement window and repeat rates in reversed order before describing a rate as sustained. To repeat a ramp with another arrival pattern, give it a new `--output` and the same new `--seed` on both stacks, for example with the rates reversed, while the unified stack is deployed and port-forwarded:
+
+```bash
+python3 4.ramp.py --traffic traffic/b.json --url http://127.0.0.1:8000 --architecture unified --instance-type "$LAB_INSTANCE_TYPE" --region "$LAB_REGION" --evidence-scope mechanism-validation --gpus "$LAB_GPUS" --rates 8 4 2 1 0.5 0.25 --duration-s 30 --stop-failure-fraction 1 --seed 1001 --output results/unified-b-seed1001
+```
+
+While the disaggregated stack is deployed and port-forwarded:
+
+```bash
+python3 4.ramp.py --traffic traffic/b.json --url http://127.0.0.1:8000 --architecture disaggregated --instance-type "$LAB_INSTANCE_TYPE" --region "$LAB_REGION" --evidence-scope mechanism-validation --gpus "$LAB_GPUS" --rates 8 4 2 1 0.5 0.25 --duration-s 30 --stop-failure-fraction 1 --seed 1001 --output results/disaggregated-b-seed1001
+```
+
+Once Round 2 below has written `results/disaggregated-b`, collect all four directories. A stack's qualifying rate is the highest rate at which any of its files meets the objective; to see whether a rate also held in the reversed ramp, compare that rate's rows for the two seeds (the `seed` column) in `summary.csv`. The two rows differ in both the order and the arrival pattern. `--stop-failure-fraction 1` keeps a reversed ramp from stopping at its first, heaviest rate before it reaches the lighter ones:
+
+```bash
+python3 5.collect.py --runs results/unified-b results/unified-b-seed1001 results/disaggregated-b results/disaggregated-b-seed1001 --output results/comparison-2-seeds
+```
+
+A rerun into the same `--output` replaces the files of the rates it completes; a heavier rate it does not reach keeps its earlier file, so move that file away first if it should not count. When calls of a rate could not connect (`report.html` and the `unreachable_calls` column of `summary.csv` count them), rerun the ramp from that rate into the same `--output` this way.
 
 For Round 1, stop the port-forward command, deploy disaggregation, wait for each engine and router, then restart port forwarding:
 
@@ -292,7 +381,9 @@ Restart port forwarding after the router changes. Repeat the shape B ramp with `
 
 ## Read the measurements and locate the crossover
 
-`summary.csv` records hardware, evidence scope, offered task rate, actual call rate, successful-call throughput, useful-call throughput, GPU-normalized useful throughput, joint SLO attainment, and successful-request latency percentiles. Useful throughput is calls satisfying both latency bounds divided by the full interval including drain. Failed requests, truncated streams, timeouts, and skipped dependent calls contribute no useful work and stay in the attainment denominator. Successful-request percentiles alone can hide failures. Average TPOT comes from server token counts and client stream timing; chunks containing several tokens limit per-token resolution.
+Read `report.html` first; `summary.csv` and `qualified-rates.json` hold the results per file and per group (see "5.collect.py's output").
+
+`summary.csv` records hardware, evidence scope, offered task rate, actual call rate, successful-call throughput, useful-call throughput, GPU-normalized useful throughput, joint SLO attainment, and successful-request latency percentiles. Useful throughput is calls satisfying both latency bounds divided by the full interval including drain. Failed requests, truncated streams, timeouts, and skipped dependent calls contribute no useful work and stay in the attainment denominator. Successful-request percentiles alone can hide failures. Under `--ttft-metric p95` or `p99`, every completed call passes the TTFT side, and in the `itl_p99_` columns every call that passes the TTFT side passes the TPOT side; in both cases the file passes only when the file's percentile is within its bound. Average TPOT comes from server token counts and client stream timing; chunks containing several tokens limit per-token resolution.
 
 The harness never caps concurrent tasks to hide overload. `max_client_launch_lag_ms` detects controller-side scheduling lag; excessive lag marks the rate invalid. For agentic traffic, later calls depend on earlier responses, so the offered task rate and realized call rate differ. The highest tested qualifying rate is a finite-window observation. Extend runs and inspect queue growth before calling it sustained goodput capacity.
 
@@ -300,13 +391,40 @@ For Round 3, edit one factor at a time in a copy of the shape JSON and regenerat
 
 The session budget is framing for 5 minutes, Round 0 for 12 minutes, Round 1 for 15 minutes, Round 2 for 13 minutes, Round 3 for 8 minutes, and wrap-up for 5 minutes, leaving 2 minutes for transitions. These are teaching allocations. Image preparation, model loading, and the full benchmark sweep belong in rehearsal. Round 3 can use a guided comparison of measurements already collected if time is short.
 
+## How the results are judged
+
+`5.collect.py` judges every measured file under three TPOT rules, `mean`, `itl-p99` and `worst-itl`, and takes each stack's qualifying rate and goodput under each rule. The definitions are in `report.html` (select an underlined term) and in the docstrings of `scoring.summarize` and `scoring.highest_qualifying`.
+
+## Score against another objective
+
+`5.collect.py` judges every file at the objective `4.ramp.py` recorded with it. To judge the same stored runs at another objective, give any of `--ttft-slo-ms`, `--tpot-slo-ms`, `--attainment-fraction` and `--ttft-metric` (`per-call`, `p95` or `p99`); the values not given stay as recorded, and no traffic is sent. Under `p95` or `p99`, every completed call passes the TTFT side, and that percentile of the completed calls' TTFT, for each measured file, must be within the TTFT bound. For example, at a 30 ms TPOT bound, and with TTFT judged as p95:
+
+```bash
+python3 5.collect.py --runs results/unified-b results/disaggregated-b --tpot-slo-ms 30 --output results/tpot-30
+python3 5.collect.py --runs results/unified-b results/disaggregated-b --ttft-metric p95 --output results/ttft-p95
+```
+
+`summary.csv`, `qualified-rates.json` and `report.html` are then computed at the given objective, and `summary.csv` and `report.html` say so (`objective_given_on_command_line`); the `*-measured.json` files keep the summary recorded when they were measured.
+
+## 5.collect.py's output
+
+`5.collect.py` reads the `*-measured.json` files under each `--runs` directory and writes `summary.csv` and `qualified-rates.json` into `--output`, plus `report.html` with a promise map for each unified and disaggregated group that share instance type, Region, evidence scope, model revision, traffic shape, GPU count and objective, unless `--no-report` is given. It sends no traffic.
+
+| File | One row or entry is | What it holds | Read it to |
+|---|---|---|---|
+| `summary.csv` | One measured file (one stack, seed and rate). | The original columns at the objective in use, judged by the mean rule; `useful_calls_per_s_per_gpu` is the file's figure whether or not the rate qualified. Then statistics for the gap rules and the TTFT percentiles, `unreachable_calls` (calls that could not connect, counted as failed calls), `seed`, `objective_given_on_command_line`, the `itl_p99_` and `worst_itl_` columns with each gap rule's `meets_joint_slo`, `slo_attainment_fraction` and `useful_calls_per_s_per_gpu` for that file, and `gap_data_available`. | See why one seed at one rate passed or failed. |
+| `qualified-rates.json` | One group: one stack on one hardware, workload, GPU count and objective. | The original `highest_tested_offered_tasks_per_s_meeting_slo` and `max_observed_useful_calls_per_s_per_gpu` (the largest over every file of the group), then `by_rule` with each rule's highest rate met by some file and `useful_calls_per_s_per_gpu_at_that_rate`, the largest goodput among the files that met the objective at that rate (both `null` when no rate qualifies). A gap rule's entry is `scoring.UNAVAILABLE` when any file of the group has no per-chunk timing. | Get one number per stack and rule. |
+| `report.html` | One page, one section per unified and disaggregated pair. | The answer, what was measured, the verdict table, one promise map per rule and the evidence table; an underlined term opens its definition. Notices at the top list files left out, files without per-chunk timing, calls that could not connect, and settings, planned rates or seeds that differ within a pair. | See the comparison, and how the winner changes with the objective. |
+
+`scoring.UNAVAILABLE`, a text that starts with `unavailable`, means a gap rule could not judge: in `summary.csv`, because that file has no complete per-chunk timing; in `qualified-rates.json` and `report.html`, because some file of the stack has none. The notices at the top of `report.html` name those files; measure those rates again to judge them. A pair whose files differ in a measurement setting, planned rates or seeds still gets a promise map, with the difference marked above it. A file that cannot be read, or whose call records give other values than its stored summary in the original lab's summary fields, cannot be interpreted, so it is left out and listed. `5.collect.py` exits non-zero when it leaves a file out or `report.html` fails to render; the other files are still written. When no file can be read, it writes nothing and removes an earlier `report.html`. When it draws no promise map, it removes an earlier `report.html` from `--output` and prints why.
+
 ## Cleanup and local checks
 
 Collect logs before switching deployments or cleaning up. Cleanup deletes only this lab's namespace and its named PriorityClass. Model files remain in the dedicated node cache for reuse; remove that dedicated path through your normal node-maintenance procedure if it is no longer needed. Delete any test ECR repository or test node infrastructure you created separately.
 
 ```bash
 ./9.cleanup.sh --config config.json
-python3 -m unittest -v test_lab
+python3 -m unittest -v test_lab test_scoring test_benchmark test_report test_collect test_paired
 ```
 
 Common failures include insufficient scheduled GPU/EFA resources, missing EFA devices, incompatible host drivers, insufficient locked-memory permissions, blocked bootstrap TCP, incomplete image pulls, and version mismatches. Inspect pod events and engine logs first. Never treat a successful HTTP response on an unverified transport as an EFA result.
