@@ -43,9 +43,11 @@ spec:
           args:
             - |
               set -uo pipefail
+              # The tokenizer's files only. Repeat --include: hf takes extra values after one --include as file names.
               hf download "${MODEL_REPO}" --revision "${MODEL_REVISION}" --local-dir /tmp/tokenizer \
-                --include "*.json" "*.py" "*.model" > /dev/null || exit 1
-              echo "round,concurrency,prompts,completed,median_tpot_ms,p99_tpot_ms,median_ttft_ms,output_tokens_per_s"
+                --include "*.json" --include "*.py" --include "*.model" > /dev/null || exit 1
+              H=round,concurrency,prompts,completed,input_tokens_per_prompt
+              echo "$H,median_tpot_ms,p99_tpot_ms,median_ttft_ms,output_tokens_per_s"
               for r in $(seq 1 "$ROUNDS"); do
                 for c in $CONCURRENCY; do
                   n=$((c * 8)); [ "$n" -lt 16 ] && n=16
@@ -57,7 +59,8 @@ spec:
                     > "/tmp/r$r-c$c.log" 2>&1 || { tail -20 "/tmp/r$r-c$c.log"; exit 1; }
                   python3 -c 'import json, sys
               d = json.load(open(sys.argv[1]))
-              print(",".join(sys.argv[2:4] + [str(d["num_prompts"]), str(d["completed"])] +
+              print(",".join(sys.argv[2:4] + [str(d["num_prompts"]), str(d["completed"]),
+                             "%.1f" % (d["total_input_tokens"] / d["completed"])] +
                              ["%.2f" % d[k] for k in ("median_tpot_ms", "p99_tpot_ms", "median_ttft_ms")] +
                              ["%.1f" % d["output_throughput"]]))' "/tmp/r$r-c$c.json" "$r" "$c"
                 done
