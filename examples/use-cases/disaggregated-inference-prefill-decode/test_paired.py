@@ -117,7 +117,7 @@ class PairedTests(unittest.TestCase):
                            dict(engine_env=['FI_EFA_ENABLE_SHM_TRANSFER=0']), dict(engine_env={'FI_EFA_ENABLE_SHM_TRANSFER': 0}),
                            dict(engine_env={'FI_PROVIDER': 'tcp'}), dict(engine_env={'CUDA_VISIBLE_DEVICES': '0'}),
                            dict(engine_env={'AIM345_ENGINE_PLANS': 'x'}), dict(engine_env={'A': ''}), dict(engine_env={'A': '$(FI_PROVIDER)'}), dict(engine_env={'A': 'a$$b'}),
-                           dict(engine_env={'A': 'a\0b'}), dict(engine_env={'A=B': '1'}), dict(engine_env={'A\nB': '1'}), dict(engine_env={'変数': '1'}), dict(engine_env={'': '1'})]:
+                           dict(engine_env={'A': 'a\0b'}), dict(engine_env={'A=B': '1'}), dict(engine_env={'A\nB': '1'}), dict(engine_env={'CAF\u00c9': '1'}), dict(engine_env={'': '1'})]:
                 path.write_text(json.dumps(c | update))
                 with self.assertRaises(AssertionError):
                     read_config(path)
