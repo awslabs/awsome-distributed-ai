@@ -40,6 +40,7 @@ Metadata:
           - OnDemandQueueName
           - OnDemandEfaInterfaceCount
           - OnDemandPlacementGroupName
+          - OnDemandPlacementGroupId
           - OnDemandCapacityReservationId
       - Label:
           default: "4. GPU Compute Node Group - P5/P6 Series (Optional)"
@@ -139,7 +140,9 @@ Metadata:
       OnDemandEfaInterfaceCount:
         default: "EFA interfaces on CPU queue (0 = off, 1 or 2 for HPC types)"
       OnDemandPlacementGroupName:
-        default: "Existing placement group name (empty = auto-create when EFA on)"
+        default: "Existing placement group name (leave empty when using an ID)"
+      OnDemandPlacementGroupId:
+        default: "Existing placement group ID (required for cross-account sharing)"
       DeployPseriesCNG:
         default: "Deploy GPU (P5/P6) queue"
       PseriesInstanceType:
@@ -523,13 +526,24 @@ Parameters:
   OnDemandPlacementGroupName:
     Type: String
     Description: >-
-      (Optional, advanced) Existing cluster placement group name to launch the
-      on-demand CPU nodes into. Leave empty (default) to auto-create a per-CNG
-      cluster placement group when OnDemandEfaInterfaceCount > 0 (no placement
-      group when EFA is off). Set to reuse an existing PG (e.g. shared across
-      multiple CPU CNGs, or a customer-owned CPG holding reserved capacity —
-      honored with or without EFA, so a CPG-held targeted ODCR is consumable).
-      The GPU queue's equivalent is PseriesPlacementGroupName.
+      (Optional, advanced) Existing cluster placement group name for the
+      on-demand nodes. Leave both OnDemandPlacementGroupName and
+      OnDemandPlacementGroupId empty to auto-create a per-CNG cluster placement
+      group when OnDemandEfaInterfaceCount > 0 (no placement group when EFA is
+      off). A supplied name is honored with or without EFA. For a group shared
+      by another account, use OnDemandPlacementGroupId instead. Specify at most
+      one of these inputs. The GPU queue's equivalent is PseriesPlacementGroupName.
+    Default: ''
+
+  OnDemandPlacementGroupId:
+    Type: String
+    Description: >-
+      (Optional, advanced) Existing cluster placement group ID (pg-...), not
+      its name or ARN, for the on-demand nodes only. Use this for a group shared
+      by another account; the caller must arrange access before deployment.
+      Honored with or without EFA and suppresses auto-creation. Specify at most
+      one of OnDemandPlacementGroupId and OnDemandPlacementGroupName. Does not
+      affect login nodes or the P-series CNG and does not manage sharing.
     Default: ''
 
   # P-series Compute Node Group
@@ -635,6 +649,12 @@ Parameters:
 # time with a clear message, instead of letting it fail deep inside the nested
 # prerequisites stack as an opaque CreateFileSystem error.
 Rules:
+  OnDemandPlacementGroupIdOrName:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref OnDemandPlacementGroupId, '']
+          - !Equals [!Ref OnDemandPlacementGroupName, '']
+        AssertDescription: Specify at most one of OnDemandPlacementGroupId and OnDemandPlacementGroupName.
   LustrePersistent1Throughput:
     RuleCondition: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_1']
     Assertions:
@@ -858,9 +878,10 @@ Resources:
         InstallEnrootPyxis: !Ref InstallEnrootPyxis
         # EFA on CPU HPC instances (hpc8a/hpc7a/hpc6a). add-cng.yaml enables EFA
         # when EfaInterfaceCount > 0 and auto-creates a per-CNG cluster placement
-        # group when PlacementGroupName is empty.
+        # group when neither PlacementGroupName nor PlacementGroupId is supplied.
         EfaInterfaceCount: !Ref OnDemandEfaInterfaceCount
         PlacementGroupName: !Ref OnDemandPlacementGroupName
+        PlacementGroupId: !Ref OnDemandPlacementGroupId
         CapacityReservationId: !Ref OnDemandCapacityReservationId
         DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix

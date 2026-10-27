@@ -196,7 +196,7 @@ automatically.
 
 - **On-Demand**: leave `CapacityReservationId` empty.
 - **"Open" On-Demand Capacity Reservation (ODCR)**: also leave `CapacityReservationId` **empty** — an ODCR with **"open"** instance matching is consumed automatically by the node group's On-Demand launches.
-- **"Targeted" ODCR**: set `CapacityReservationId` to the ODCR ID **and** `CapacityReservationType=targeted-odcr`. Launches bill On-Demand against the reservation and keep the cluster placement group. The reservation's instance type and AZ must match the node group's. If the ODCR is held **inside a customer-owned cluster placement group**, also point the node group at that CPG (`PseriesPlacementGroupName` for the GPU queue, `OnDemandPlacementGroupName` for the CPU queue) — a reservation in a CPG is only consumable by launches into it. Keep `PseriesMaxCount` **at or below the reservation's instance count** — a direct ODCR target does not backfill with plain On-Demand, so launches beyond the reservation fail and jobs wait.
+- **"Targeted" ODCR**: set `CapacityReservationId` to the ODCR ID **and** `CapacityReservationType=targeted-odcr`. Launches bill On-Demand against the reservation and keep the cluster placement group. The reservation's instance type and AZ must match the node group's. If the ODCR is held **inside a customer-owned cluster placement group**, also point the node group at that CPG (`PseriesPlacementGroupName` for the GPU queue, `OnDemandPlacementGroupName` or `OnDemandPlacementGroupId` for the CPU queue) — a reservation in a CPG is only consumable by launches into it. Keep `PseriesMaxCount` **at or below the reservation's instance count** — a direct ODCR target does not backfill with plain On-Demand, so launches beyond the reservation fail and jobs wait.
 - **Capacity Blocks for ML**: set `CapacityReservationId` to the Capacity Block ID (`CapacityReservationType=capacity-block` is the default). The template then launches with `MarketType=capacity-block` against it.
 
 The CPU queue takes a targeted ODCR too, via `OnDemandCapacityReservationId`
@@ -652,6 +652,7 @@ against a "targeted" On-Demand Capacity Reservation (On-Demand billing; EFA and
 placement settings are unaffected). Leave it empty for plain On-Demand — an
 "open" ODCR is consumed automatically. If the reservation is held in a
 customer-owned cluster placement group, also set `OnDemandPlacementGroupName`
+(or `OnDemandPlacementGroupId` for a group shared by another account)
 to that CPG (honored with or without EFA). Keep `OnDemandMaxCount` at or below
 the reservation's instance count — a direct ODCR target does not backfill with
 plain On-Demand, so launches beyond the reservation fail and jobs wait.
@@ -663,8 +664,8 @@ For tightly-coupled HPC / MPI workloads on CPU-only HPC instances, set
 `add-cng.yaml`) to the instance type's EFA interface count. `0` (default) = no
 EFA; `1` or `2` = enable EFA with that many interfaces — the CPU compute node
 group then launches with EFA `NetworkInterfaces` and a cluster placement group
-is auto-created. GPU CNGs (P5/P6) are unaffected — they use their own dedicated
-multi-NIC EFA wiring per-family.
+is auto-created unless an existing group is supplied. GPU CNGs (P5/P6) are
+unaffected — they use their own dedicated multi-NIC EFA wiring per-family.
 
 | Instance type | EFA interfaces | Aggregate spec | Set the count to |
 |---|---:|---:|---:|
@@ -678,12 +679,28 @@ multi-NIC EFA wiring per-family.
 (Setting a count > 0 on a non-EFA type, or mismatching the count with the
 instance type's actual `MaximumEfaInterfaces`, fails at launch.)
 
-**Placement group:** auto-created per-CNG by the template. Override with
-`OnDemandPlacementGroupName=<existing-pg-name>` to launch the CPU CNG into an
-existing placement group instead — e.g. to share one PG across multiple CPU
-CNGs, or to consume capacity reserved into a customer-owned CPG. (The GPU
-queue takes the same override via `PseriesPlacementGroupName`; it is ignored
-on the Capacity Block path, where the block carries its own placement.)
+**Placement group:** auto-created per-CNG when EFA is enabled and neither a
+name nor an ID is supplied; with EFA off and both empty, no group is used.
+Set `OnDemandPlacementGroupName=<existing-pg-name>` to reuse a group owned by
+this account, or `OnDemandPlacementGroupId=pg-0123456789abcdef0` to reuse a group
+by ID. For standalone `add-cng.yaml`, the inputs are `PlacementGroupName` and
+`PlacementGroupId`. Both inputs default to empty; specifying both is rejected.
+Either explicit input is honored with or without EFA and prevents auto-creation.
+
+For a [placement group shared by another account](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/share-placement-group.html),
+use the **group ID**, not its name or ARN: the template sets LaunchTemplate
+[`Placement.GroupId`](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-properties-ec2-launchtemplate-placement.html).
+The owner must share the group and the consumer must have access (including
+accepting an AWS RAM invitation when required) before deployment. The templates
+do not create or accept shares and do not manage the supplied group's lifecycle.
+When using a shared targeted ODCR in that group, also set
+`OnDemandCapacityReservationId=<reservation-id>` and arrange access to the
+reservation. Keep `OnDemandEfaInterfaceCount` at the instance type's EFA count;
+using an ID does not disable EFA or change the direct reservation target.
+
+The ID input affects only the On-Demand CNG, not login nodes or P-series CNGs.
+The P-series queue continues to take `PseriesPlacementGroupName`, ignored on
+the Capacity Block path where the block carries its own placement.
 
 **Multi-NIC bandwidth needs multiple MPI pairs.** A single MPI pair uses one
 libfabric endpoint and only one NIC. Use `osu_mbw_mr -np 32 -N 16` (or your
