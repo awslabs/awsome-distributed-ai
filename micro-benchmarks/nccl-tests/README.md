@@ -309,45 +309,15 @@ To change the type of collective to test, modify the line with `srun` in the fil
    kubectl delete -f nccl-tests.yaml
    ```
 
-### EFA latency between instances (Amazon EKS)
+### Placing the workers by network topology (Amazon EKS)
 
 Amazon EKS labels nodes of [instance types that support Amazon EC2 topology](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-topology-prerequisites.html) with the network nodes above each instance, from `topology.k8s.aws/network-node-layer-1` down to the node the instance connects to: `network-node-layer-3` on most supported types, `network-node-layer-4` on `p6-b200` and `p6-b300` ([how Amazon EC2 topology works](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/how-ec2-instance-topology-works.html)). Instances that share more layers are closer. To see the layers of your instances:
 
 ```bash
+export INSTANCE_TYPE=p5en.48xlarge
 kubectl get nodes -l node.kubernetes.io/instance-type=${INSTANCE_TYPE} \
   -L topology.k8s.aws/network-node-layer-1,topology.k8s.aws/network-node-layer-2,topology.k8s.aws/network-node-layer-3,topology.k8s.aws/network-node-layer-4
 ```
-
-[`kubernetes/efa-latency-matrix.yaml`](kubernetes/efa-latency-matrix.yaml) measures what that distance costs: one-way EFA latency with `fi_pingpong` between every pair of `NUM_NODES` instances, from the public image above, plus a floor inside each instance (two EFA devices of one instance, shared memory off). Its launcher starts both ends of each measurement over the MPI Operator's SSH, 2,000 round trips at 8 B and at 1 KiB, in four rounds with the pair order shuffled per round. Each worker holds every EFA device of its instance and no GPUs, so run it while the instances are otherwise idle. On 8 instances it takes about 35 minutes; the time grows with the square of `NUM_NODES`. [`kubernetes/analyze_efa_latency.py`](kubernetes/analyze_efa_latency.py) drops the first round as warm-up and groups the pairs by how many layers their nodes share:
-
-```bash
-cd kubernetes
-export INSTANCE_TYPE=p5en.48xlarge NUM_NODES=8 EFA_PER_NODE=16
-envsubst '$INSTANCE_TYPE $NUM_NODES $EFA_PER_NODE' < efa-latency-matrix.yaml | kubectl apply -f -
-kubectl wait --for=condition=Succeeded mpijob/efa-latency --timeout=60m
-kubectl logs job/efa-latency-launcher > latency.log
-kubectl get nodes -o json > nodes.json
-python3 analyze_efa_latency.py latency.log nodes.json
-envsubst '$INSTANCE_TYPE $NUM_NODES $EFA_PER_NODE' < efa-latency-matrix.yaml | kubectl delete -f -
-```
-
-On eight `p5en.48xlarge` in one Availability Zone, five layer-3 network nodes among them (one with three instances, one with two, three with one), the run took 30 minutes, every measurement returned, and the summary was:
-
-```text
-8 B, usec/xfer (mean of rounds per pair):
-  floor (within an instance): 8 instances, mean 8.18 (8.02 to 8.36)
-  share 3 layers: 4 pairs, mean 9.25 (9.17 to 9.33)
-  share 2 layers: 24 pairs, mean 11.29 (10.82 to 11.86)
-  3 -> 2 shared layers adds +2.04 us (+22%); every 3-layer pair faster than every 2-layer pair: True
-
-1024 B, usec/xfer (mean of rounds per pair):
-  floor (within an instance): 8 instances, mean 8.81 (8.57 to 9.02)
-  share 3 layers: 4 pairs, mean 10.12 (9.95 to 10.23)
-  share 2 layers: 24 pairs, mean 12.31 (11.73 to 13.02)
-  3 -> 2 shared layers adds +2.19 us (+22%); every 3-layer pair faster than every 2-layer pair: True
-```
-
-Pairs that share more layers should be faster, and every pair slower than the floor. Before you read a difference between two layer counts, check that their ranges don't overlap; if they do, the difference is smaller than the spread between pairs and rounds on your instances. The numbers above come from one Availability Zone, instance type and hour, so measure yours.
 
 To run a multi-node job on instances under one bottom-layer network node, add that label to the workers' `nodeSelector`, with a value at least as many free nodes share as the job has workers (for example, in `nccl-tests.yaml`):
 
@@ -358,6 +328,8 @@ To run a multi-node job on instances under one bottom-layer network node, add th
 ```
 
 Required pod affinity on the same label instead can leave workers `Pending`: the scheduler places the first worker before the others exist, possibly on a node whose network node has no other free node.
+
+[`kubernetes/efa-latency/`](kubernetes/efa-latency/) measures what the distance costs: one-way EFA latency between every pair of instances, grouped by how many layers they share. On Slurm, [`slurm/topology-aware-nccl-tests/`](slurm/topology-aware-nccl-tests/) covers the same placement question with the Slurm topology plugin and a topologically sorted hostfile.
 
 ## 3. Understanding NCCL Bandwidth
 

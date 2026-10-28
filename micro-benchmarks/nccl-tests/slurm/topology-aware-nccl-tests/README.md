@@ -147,6 +147,7 @@ Enable topology optimization by providing a sorted hostfile to mpirun:
 In November 2023, AWS announced the [Instance Topology API](https://aws.amazon.com/about-aws/whats-new/2023/11/instance-topology-api-ml-hpc-workloads/).
 It provides customers a unique per account hierarchical view of the relative proximity between Amazon EC2 instances.
 To learn more, please visit the [EC2 User Guide](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-topology.html).
+On Amazon EKS, see [Placing the workers by network topology](../../README.md#placing-the-workers-by-network-topology-amazon-eks) in the nccl-tests README.
 
 There are two way to use the topology API to maximize nccl performance.
 

@@ -4,7 +4,7 @@
 # One-way EFA latency (fi_pingpong) between every pair of NUM_NODES instances, and a
 # within-instance floor on each. One worker per instance; the launcher runs each
 # measurement over the MPI Operator's SSH, so the whole matrix runs inside the cluster. Render with
-# envsubst and apply (see "EFA latency between instances" in ../README.md):
+# envsubst and apply (see README.md):
 #   envsubst '$INSTANCE_TYPE $NUM_NODES $EFA_PER_NODE' < efa-latency-matrix.yaml | kubectl apply -f -
 apiVersion: v1
 kind: ConfigMap
@@ -41,8 +41,10 @@ data:
     FLOOR_ROUNDS=${FLOOR_ROUNDS:-3}; SEED=${SEED:-42}
     SSH=(ssh -o BatchMode=yes -o LogLevel=ERROR)
     mapfile -t HOSTS < <(awk '{print $1}' /etc/mpi/hostfile)
+    deadline=$((SECONDS + 900))   # 15 minutes for every worker to start sshd
     for h in "${HOSTS[@]}"; do
       until "${SSH[@]}" -o ConnectTimeout=3 "$h" true < /dev/null 2>/dev/null; do
+        if [ "$SECONDS" -ge "$deadline" ]; then echo "sshd on $h not reachable after 15 minutes"; exit 1; fi
         echo "waiting for sshd on $h"; sleep 3
       done
     done
@@ -122,8 +124,21 @@ spec:
       replicas: ${NUM_NODES}
       template:
         spec:
-          # One worker per instance.
+          # One worker per instance, all in one Availability Zone: EFA traffic can't cross zones.
           affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchExpressions:
+                      - key: training.kubeflow.org/job-name
+                        operator: In
+                        values:
+                          - efa-latency
+                      - key: training.kubeflow.org/job-role
+                        operator: In
+                        values:
+                          - worker
+                  topologyKey: topology.kubernetes.io/zone
             podAntiAffinity:
               requiredDuringSchedulingIgnoredDuringExecution:
                 - labelSelector:

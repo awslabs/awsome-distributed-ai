@@ -110,6 +110,9 @@ def main():
         nodes = {
             n["metadata"]["name"]: layers(n) for n in json.load(fh)["items"]
         }
+    missing = sorted(n for n in log[0].values() if len(nodes.get(n, ())) < 3)
+    if missing:
+        sys.exit("nodes without EC2 topology labels: " + " ".join(missing))
     rows = pair_rows(log, nodes)
     print(
         "size_bytes,shared_layers,node_a,node_b,rounds,mean_us,min_us,max_us"
