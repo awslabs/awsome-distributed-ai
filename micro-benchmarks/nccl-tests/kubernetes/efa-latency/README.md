@@ -1,3 +1,8 @@
+<!--
+Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+SPDX-License-Identifier: MIT-0
+-->
+
 # EFA latency between instances (Amazon EKS)
 
 [`efa-latency-matrix.yaml`](efa-latency-matrix.yaml) measures one-way EFA latency with `fi_pingpong` between every pair of `NUM_NODES` instances, plus a floor inside each instance (two EFA devices of one instance, shared memory off). Its launcher starts both ends of each measurement over the MPI Operator's SSH, 2,000 round trips at 8 B and at 1 KiB, in four rounds with the pair order shuffled per round. [`analyze_efa_latency.py`](analyze_efa_latency.py) drops the first round as warm-up and groups the pairs by how many [network-node layers](../../README.md#placing-the-workers-by-network-topology-amazon-eks) their nodes share.
