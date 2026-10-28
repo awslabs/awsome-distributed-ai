@@ -72,9 +72,9 @@ MonitoringStack=Prometheus-LoginNode
 
 ## Region coverage
 
-The table lists **all 20 regions where AWS PCS is available** (per
-`/aws/service/global-infrastructure/services/pcs/regions`) — 16 verified,
-4 not yet run.
+The table lists **all 25 regions where AWS PCS is available** (per
+`/aws/service/global-infrastructure/services/pcs/regions`) — 18 verified,
+7 not yet run.
 
 | Region (AZ ID) ¹ | Verified ² | Storage ³ (Lustre<br>/ OpenZFS) | GPU verified ⁴ | *(ref) CBML GPUs offered* ⁵ | Date (UTC) |
 |---|---|---|---|---|---|
@@ -87,13 +87,18 @@ The table lists **all 20 regions where AWS PCS is available** (per
 | **Singapore**<br>(`apse1-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | — | 2026-06-17 |
 | **Sydney**<br>(`apse2-az2`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | P5, P5e, P5en | 2026-06-17 |
 | **Frankfurt**<br>(`euc1-az2`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | — | 2026-06-17 |
-| **Stockholm**<br>(`eun1-az2`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | P5, P5e, P5en | 2026-06-17 |
+| **Stockholm**<br>(`eun1-az2`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | P6-B200, P5, P5e, P5en | 2026-06-17 |
 | **Ireland**<br>(`euw1-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | — | 2026-07-07 |
 | **Spain**<br>(`eus2-az1`) | ✅<br>(m7i/c7i) ⁷ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | P5en | 2026-07-07 |
-| **London**<br>(`euw2-az2`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | P5, P5e, P5en | 2026-07-08 |
-| **Paris**<br>(`euw3-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | — | 2026-07-08 |
+| **London**<br>(`euw2-az2`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | P6-B300, P5, P5e, P5en | 2026-07-08 |
+| **Paris**<br>(`euw3-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | P6-B200 | 2026-07-08 |
 | **São Paulo**<br>(`sae1-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | P5, P5e | 2026-07-08 |
-| **Jakarta**<br>(`apse3-az1`) | ✅<br>(c7i) ⁷ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | P5, P5e, P5en | 2026-07-08 |
+| **Jakarta**<br>(`apse3-az1`) | ✅<br>(c7i) ⁷ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | P6-B300, P5, P5e, P5en | 2026-07-08 |
+| **Seoul**<br>(`apne2-az3`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | ✅ P6-B300 | P6-B300, P5en | 2026-10-16 |
+| **Hyderabad**<br>(`aps2-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | ✅ P6-B300 | P6-B300, P6-B200 | 2026-10-28 |
+| **Melbourne**<br>(ap-southeast-4) | — | — | — | — | not yet run |
+| **Malaysia**<br>(ap-southeast-5) | — | — | — | — | not yet run |
+| **New Zealand**<br>(ap-southeast-6) | — | — | — | — | not yet run |
 | **Cape Town**<br>(af-south-1) | — | — | — | — | not yet run |
 | **Milan**<br>(eu-south-1) | — | — | — | — | not yet run |
 | **GovCloud US-East**<br>(us-gov-east-1) | — | — | — | P6-B300, P6-B200 | not yet run |
@@ -128,7 +133,7 @@ provides capacity, they are expected to work as-is.
 ⁵ ***(ref) CBML GPUs offered*** — supplemental reference, not a test result:
 P-family instance types purchasable as
 [Capacity Blocks for ML](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-capacity-blocks.html)
-in that region, per the EC2 docs as of 2026-07-08. PCS supports CBML with
+in that region, per the EC2 docs as of 2026-10-28. PCS supports CBML with
 P6-B300 / P6-B200 / P5en / P5e / P5 / P4d.
 
 ⁶ **These regions do not support the default `OpenZFSDeploymentType=SINGLE_AZ_HA_2`**
@@ -139,7 +144,7 @@ Deploy there with `OpenZFSDeploymentType=SINGLE_AZ_1` (+ a valid
 Region" case (see the parameter's description in `ml-cluster-prerequisites.yaml`);
 `SINGLE_AZ_1` is available in all regions and is the safe fallback. FSx Lustre
 showed no such regional variation — `LustreDeploymentType=PERSISTENT_2` (the
-default) worked in all 16 regions, as the Lustre column shows.
+default) worked in all 18 regions, as the Lustre column shows.
 
 ⁷ **The default instance types are not offered in every region** — the
 parenthesized types in the Verified column are what the run used instead:
