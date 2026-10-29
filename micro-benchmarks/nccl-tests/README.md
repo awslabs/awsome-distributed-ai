@@ -309,6 +309,28 @@ To change the type of collective to test, modify the line with `srun` in the fil
    kubectl delete -f nccl-tests.yaml
    ```
 
+### Placing the workers by network topology (Amazon EKS)
+
+Amazon EKS labels nodes of [instance types that support Amazon EC2 topology](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-topology-prerequisites.html) with the network nodes above each instance, from `topology.k8s.aws/network-node-layer-1` down to the node the instance connects to: `network-node-layer-3` on most supported types, `network-node-layer-4` on `p6-b200` and `p6-b300` ([how Amazon EC2 topology works](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/how-ec2-instance-topology-works.html)). Instances that share more layers are closer. To see the layers of your instances:
+
+```bash
+export INSTANCE_TYPE=p5en.48xlarge
+kubectl get nodes -l node.kubernetes.io/instance-type=${INSTANCE_TYPE} \
+  -L topology.k8s.aws/network-node-layer-1,topology.k8s.aws/network-node-layer-2,topology.k8s.aws/network-node-layer-3,topology.k8s.aws/network-node-layer-4
+```
+
+To run a multi-node job on instances under one bottom-layer network node, add that label to the workers' `nodeSelector`, with a value at least as many free nodes share as the job has workers (for example, in `nccl-tests.yaml`):
+
+```yaml
+          nodeSelector:
+            node.kubernetes.io/instance-type: "p5.48xlarge"
+            topology.k8s.aws/network-node-layer-3: nn-0123456789abcdef0   # network-node-layer-4 on p6-b200 and p6-b300
+```
+
+Required pod affinity on the same label instead can leave workers `Pending`: the scheduler places the first worker before the others exist, possibly on a node whose network node has no other free node.
+
+[`kubernetes/efa-latency/`](kubernetes/efa-latency/) measures what the distance costs: one-way EFA latency between every pair of instances, grouped by how many layers they share. On Slurm, [`slurm/topology-aware-nccl-tests/`](slurm/topology-aware-nccl-tests/) covers the same placement question with the Slurm topology plugin and a topologically sorted hostfile.
+
 ## 3. Understanding NCCL Bandwidth
 
 The NCCL tests reports metrics for the time to execute a given communication collective operation, the Algorithmic bandwidth and the bus bandwidth.
