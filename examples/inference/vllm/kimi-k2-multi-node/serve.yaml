@@ -1,0 +1,222 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Kimi K2 on vLLM across NUM_NODES instances: a StatefulSet with one pod per instance and a headless Service.
+# Each pod keeps the model on its instance's local NVMe, one directory per revision, so a later deployment on the same
+# instance only checks the files. Pod 0 (node rank 0) serves the OpenAI-compatible API on port 8000; the other pods
+# join it with --headless, their ordinal as node rank. TP x PP must equal NUM_NODES x GPU_PER_NODE.
+# Render with envsubst, as README.md shows.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kimi-k2
+spec:
+  clusterIP: None
+  # The pods find pod 0 by name before it is ready.
+  publishNotReadyAddresses: true
+  selector:
+    app: kimi-k2
+  ports:
+    - name: http
+      port: 8000
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kimi-k2
+spec:
+  serviceName: kimi-k2
+  replicas: ${NUM_NODES}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: kimi-k2
+  template:
+    metadata:
+      labels:
+        app: kimi-k2
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+      # All pods in one Availability Zone: EFA traffic can't cross zones.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: kimi-k2
+              topologyKey: topology.kubernetes.io/zone
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      initContainers:
+        - name: download
+          image: ${IMAGE}
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              # Refuse to download unless the volume keeps 10% free afterwards. On a node without a mounted instance
+              # store, NVME_HOST_PATH is a directory on the root volume, and filling that evicts other pods.
+              python3 - <<'PY'
+              import os, sys
+              from huggingface_hub import snapshot_download
+              files = snapshot_download("${MODEL_REPO}", revision="${MODEL_REVISION}", local_dir="/model", dry_run=True)
+              need = sum(f.file_size for f in files if f.will_download)
+              st = os.statvfs("/model")
+              free, size = st.f_bavail * st.f_frsize, st.f_blocks * st.f_frsize
+              print(f"{need / 1e9:.0f} GB to download, {free / 1e9:.0f} GB free of {size / 1e9:.0f} GB")
+              if need and free - need < size / 10:
+                  sys.exit("not enough space under NVME_HOST_PATH: set it to the instance store, see Prerequisites")
+              PY
+              hf download "${MODEL_REPO}" --revision "${MODEL_REVISION}" --local-dir /model --max-workers 16
+          terminationMessagePolicy: FallbackToLogsOnError
+          env:
+            - name: HOME
+              value: /tmp
+            - name: HF_XET_HIGH_PERFORMANCE
+              value: "1"
+          envFrom:
+            - secretRef:
+                name: hf-token
+                optional: true
+          # kubelet creates the hostPath directory as root with mode 0755, so the download runs as root. vLLM only
+          # reads the model, as user 1000.
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "32"
+              memory: 64Gi
+            limits:
+              cpu: "32"
+              memory: 64Gi
+          volumeMounts:
+            - name: model
+              mountPath: /model
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: vllm
+          image: ${IMAGE}
+          command: ["bash", "-c"]
+          args:
+            - |
+              RANK=${HOSTNAME##*-}
+              ARGS=(/model --served-model-name kimi-k2 --trust-remote-code
+                --tensor-parallel-size "$TP_SIZE" --pipeline-parallel-size "$PP_SIZE"
+                --max-model-len 8192 --gpu-memory-utilization 0.92 --host 0.0.0.0 --port 8000)
+              if [ "$NNODES" -gt 1 ]; then
+                ARGS+=(--nnodes "$NNODES" --node-rank "$RANK" --master-addr kimi-k2-0.kimi-k2 --master-port 29500)
+              fi
+              if [ "$RANK" != 0 ]; then
+                ARGS+=(--headless)
+              fi
+              exec vllm serve "${ARGS[@]}"
+          env:
+            - name: NNODES
+              value: "${NUM_NODES}"
+            - name: TP_SIZE
+              value: "${TP}"
+            - name: PP_SIZE
+              value: "${PP}"
+            - name: HOME
+              value: /tmp
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            # vLLM requires this key on every /v1 request.
+            - name: VLLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vllm-api-key
+                  key: VLLM_API_KEY
+            # NCCL falls back to TCP sockets if it can't load the EFA plugin; name it, and log the choice.
+            - name: NCCL_NET_PLUGIN
+              value: /opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so
+            - name: NCCL_DEBUG
+              value: INFO
+            - name: NCCL_DEBUG_SUBSYS
+              value: INIT,NET
+            - name: NCCL_SOCKET_IFNAME
+              value: eth0
+            - name: GLOO_SOCKET_IFNAME
+              value: eth0
+          ports:
+            - containerPort: 8000
+              name: http
+          # Pod 0 is ready once its API answers; the headless pods are ready once they run.
+          startupProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - |
+                  import os, urllib.request
+                  if os.environ["HOSTNAME"].endswith("-0"):
+                      urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=5)
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 180
+          readinessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - |
+                  import os, urllib.request
+                  if os.environ["HOSTNAME"].endswith("-0"):
+                      urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=5)
+            periodSeconds: 10
+            timeoutSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # vLLM's own memory peaked at 36 GiB (TP8 and TP16, during load and the benchmark). The higher limit lets the
+          # page cache hold the model while vLLM reads it from the NVMe.
+          resources:
+            requests:
+              cpu: "150"
+              memory: 64Gi
+              nvidia.com/gpu: "${GPU_PER_NODE}"
+              vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
+            limits:
+              cpu: "150"
+              memory: 1700Gi
+              nvidia.com/gpu: "${GPU_PER_NODE}"
+              vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
+          volumeMounts:
+            - name: model
+              mountPath: /model
+              readOnly: true
+            - name: shm
+              mountPath: /dev/shm
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # One directory per model revision on the instance's local NVMe. It stays after the pods end.
+        - name: model
+          hostPath:
+            path: ${NVME_HOST_PATH}/models/${MODEL_REPO}/${MODEL_REVISION}
+            type: DirectoryOrCreate
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 200Gi
