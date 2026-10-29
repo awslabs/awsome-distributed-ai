@@ -8,7 +8,8 @@ Reads order.json and norms.json.gz (standard library only) and reports:
   - the gradient-norm outlier test (|norm - median| / MAD per step, per rank): its healthy
     spread, a threshold of 1.5 x the highest healthy score in the first 800 healthy steps,
     false alarms at that threshold, and each finite fault's score
-  - estimated average step times for common schedules, including the weight check
+  - estimated average step times for common schedules, including the weight check, and the
+    measured end-to-end average step times for the same schedules
 """
 import argparse
 import gzip
@@ -131,6 +132,14 @@ def main():
                                                    "over_plain_pct": round(100 * (avg / t["plain_ddp_ms"] - 1))}
     out["timing"] = {k_: v for k_, v in t.items() if k_ not in ("kind", "utc")}
     out["schedule_estimates_with_weight_check_every_10"] = est
+    if "schedule_costs" in by_kind:          # measured end to end, over consecutive steps
+        sc = by_kind["schedule_costs"][0]
+        plain = sc["plain_ddp"]["mean_ms"]
+        out["schedule_costs_measured"] = {
+            "steps": sc["steps"],
+            **{k_: {**{kk: v[kk] for kk in v if kk != "alarm"}, "alarm": bool(v.get("alarm")),
+                    "over_plain_pct": round(100 * (v["mean_ms"] / plain - 1), 1)}
+               for k_, v in sc.items() if isinstance(v, dict)}}
     for kind in ("topology_unit", "fingerprint_unit", "majority_unit", "resume_check"):
         if kind in by_kind:
             out[kind] = {k_: v for k_, v in by_kind[kind][0].items() if k_ not in ("kind", "utc")}

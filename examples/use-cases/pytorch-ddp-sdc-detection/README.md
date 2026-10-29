@@ -89,7 +89,7 @@ If check 1 or 2 fires, the step that raised it isn't applied; earlier steps sinc
 | `experiments/common.py` | Process group, configuration, synthetic data, and snapshots |
 | `experiments/gen_job.py` | Writes the Kubeflow `PyTorchJob` manifest |
 | `experiments/job.sh` | Preflight, push, start, wait, fetch, stop, and clean up |
-| `experiments/analyze.py` | Summarizes a fetched run: scenarios, healthy runs, the outlier-test analysis, and schedule estimates |
+| `experiments/analyze.py` | Summarizes a fetched run: scenarios, healthy runs, the outlier-test analysis, and schedule costs (estimated from per-step medians, and measured) |
 
 ## Use the checks in your training loop
 
@@ -167,19 +167,22 @@ To act on an alarm, map the suspect rank to its node with the rank's `NODE_NAME`
 
 Make `ckpt_every` a multiple of both `audit_every` and `check_every`, so every checkpoint step is audited before its update and fingerprinted after it. Keep `check_on_checkpoint=True`. In our tests, turning it off let a checkpoint be saved from a corrupted copy.
 
-Estimated cost on the 953M test model, 32 H100s, from our measured medians, including a weight check every 10 steps:
+Measured cost on the 953M test model and 32 H100s: the average step time over 1,000 consecutive steps per schedule, after 20 warm-up steps. Every schedule with the checks also runs the weight check every 10 steps. `run_order.py` measures these in every run (`schedule_costs` in the `analyze.py` output).
 
-| Schedule | Estimated average step time (953M model, 32 H100s) | Over plain DDP |
+| Schedule | Average step time | Over plain DDP |
 |---|---|---|
-| Deterministic audits every 10 steps | 213.7 ms | +35% |
-| Default-kernel audits every 10 steps | 178.4 ms | +13% |
-| Deterministic audits every 50 steps | 178.8 ms | +13% |
-| Deterministic audits every 100 steps | 174.4 ms | +11% |
-| Default-kernel audits every 100 steps | 170.9 ms | +8% |
+| Plain DDP, no checks | 157.4 ms | — |
+| Checks, no audits | 169.0 ms | +7.4% |
+| Deterministic audits every 10 steps | 211.9 ms | +34.7% |
+| Default-kernel audits every 10 steps | 177.0 ms | +12.5% |
+| Deterministic audits every 100 steps | 173.3 ms | +10.1% |
+| Default-kernel audits every 100 steps | 169.3 ms | +7.6% |
 
-We measured these before adding the reduced-gradient check, which adds one one-element all-reduce per step. Default-kernel audits compare the loss only, so they miss faults that occur only in the backward pass. Measure the cost on your own model: deterministic attention uses the math kernel, whose cost grows with the square of the sequence length.
+About 7 percentage points of each schedule's cost don't depend on audits: the gradient hook and the two NaN/Inf checks on every step, and the weight check every 10 steps. A reasonable starting point for production is deterministic audits every 100 steps (10% here). They still catch a persistent fault within 100 steps, including a backward-only one, at the price of up to 99 corrupted updates to roll back. Audit every 10 steps when you need faster detection, for example during a burn-in on new capacity or while you watch a suspect node.
 
-In fault-free runs on 4 and 3 instances, 15,540 audit steps and 3,120 weight checks raised no alarm. That bounds the false-alarm rate at about 1 in 5,200 audit steps (95% confidence), not lower.
+Default-kernel audits compare the loss only, so they miss faults that occur only in the backward pass. Measure the cost on your own model: deterministic attention uses the math kernel, whose cost grows with the square of the sequence length.
+
+In fault-free runs on 4 and 3 instances (30,800 steps, 15,320 of them audited, and 3,080 weight checks; most audit steps come from runs that audit every step), the checks raised no alarm. That bounds the false-alarm rate at about 1 in 5,100 audit steps (95% confidence), not lower.
 
 ## Reproduce the experiments
 
@@ -206,12 +209,12 @@ export SELECTOR=node.kubernetes.io/instance-type=p5.48xlarge
 JOB=$(./job.sh start --smoke)              # small model: about 3 minutes once the pods start
 ./job.sh wait "$JOB" 1800 && ./job.sh fetch "$JOB"
 
-JOB=$(./job.sh start)                      # the full run: about 2 hours on 4 x p5.48xlarge
+JOB=$(./job.sh start)                      # the full run: about 2 hours 20 minutes on 4 x p5.48xlarge
 ./job.sh wait "$JOB" && ./job.sh fetch "$JOB"
 python3 analyze.py "runs/$JOB/files"
 ```
 
-For three instances, run `./job.sh preflight 3` and `JOB=$(./job.sh start --nodes 3 --healthy-minutes 15)`, which takes about 50 minutes. `python3 gen_job.py --help` lists the other options, such as `--efa-per-node`, `--cpu`, `--memory`, and `--toleration`.
+For three instances, run `./job.sh preflight 3` and `JOB=$(./job.sh start --nodes 3 --healthy-minutes 15)`, which takes about 65 minutes. `python3 gen_job.py --help` lists the other options, such as `--efa-per-node`, `--cpu`, `--memory`, and `--toleration`.
 
 `wait` fails on a timeout, a failed pod, or a nonzero `torchrun` exit. `fetch` copies the logs, the job manifest, the image digests, and the results to `runs/<job>/`, and then lets the rank-0 pod exit; the pod otherwise exits after 30 minutes. The manifest sets `ttlSecondsAfterFinished` to 3 days, after which the training operator deletes the finished job.
 
