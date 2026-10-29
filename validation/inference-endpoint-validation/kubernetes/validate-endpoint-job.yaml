@@ -1,0 +1,67 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Kubernetes Job that runs validate_endpoint.py against an inference endpoint.
+#
+# Prerequisites:
+#   1. Create a ConfigMap from the validator script:
+#      kubectl create configmap inference-endpoint-validation \
+#          --from-file=validate_endpoint.py=validate_endpoint.py
+#
+#   2. Create a Secret with your API key (skip if the endpoint does not
+#      require authentication):
+#      kubectl create secret generic inference-endpoint-api-key \
+#          --from-literal=api-key='your-api-key-here'
+#
+#   3. Edit the args below to set --base-url to your endpoint, then apply:
+#      kubectl apply -f kubernetes/validate-endpoint-job.yaml
+#
+#   4. Check results:
+#      kubectl logs job/inference-endpoint-validation
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inference-endpoint-validation
+  labels:
+    app.kubernetes.io/name: inference-endpoint-validation
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: inference-endpoint-validation
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: validator
+          image: python:3.12.16-slim
+          command:
+            - python3
+            - /opt/validation/validate_endpoint.py
+          args:
+            # Replace with your endpoint URL
+            - "--base-url"
+            - "http://my-inference-service:8000"
+            - "--json"
+            - "/tmp/report.json"
+            - "--markdown"
+            - "/tmp/report.md"
+          env:
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: inference-endpoint-api-key
+                  key: api-key
+                  optional: true
+          volumeMounts:
+            - name: script
+              mountPath: /opt/validation
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: inference-endpoint-validation
+            items:
+              - key: validate_endpoint.py
+                path: validate_endpoint.py

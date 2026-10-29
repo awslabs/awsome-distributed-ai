@@ -1,0 +1,372 @@
+[
+  {
+    "name": "conforming",
+    "description": "All checks pass against a conforming endpoint",
+    "mock_args": [],
+    "validator_args": [],
+    "env": {},
+    "expected_exit_code": 0,
+    "expected_fail": [],
+    "expected_warn": [],
+    "expected_pass": [
+      "models.list", "server_version", "health.ready", "health.consistent",
+      "chat.basic", "chat.determinism", "chat.stream", "chat.stream_usage",
+      "chat.stream_parity", "chat.max_tokens", "chat.stop",
+      "chat.template_leak", "completions.basic", "tools.call",
+      "structured_output", "errors.unknown_model", "errors.malformed_json",
+      "stream.cancel", "concurrency.parallel", "latency.smoke"
+    ],
+    "expected_skip": ["auth.required"]
+  },
+  {
+    "name": "conforming_with_auth",
+    "description": "All checks pass with API-key enforcement enabled",
+    "mock_args": ["--require-api-key", "test-secret-key"],
+    "validator_args": [],
+    "env": {"OPENAI_API_KEY": "test-secret-key"},
+    "expected_exit_code": 0,
+    "expected_fail": [],
+    "expected_warn": [],
+    "expected_pass": [
+      "models.list", "server_version", "health.ready", "health.consistent",
+      "chat.basic", "chat.determinism", "chat.stream", "chat.stream_usage",
+      "chat.stream_parity", "chat.max_tokens", "chat.stop",
+      "chat.template_leak", "completions.basic", "tools.call",
+      "structured_output", "errors.unknown_model", "errors.malformed_json",
+      "auth.required", "stream.cancel", "concurrency.parallel",
+      "latency.smoke"
+    ],
+    "expected_skip": []
+  },
+  {
+    "name": "minimal",
+    "description": "Minimal mode: no health, completions, tools, structured output, or version",
+    "mock_args": ["--minimal"],
+    "validator_args": [],
+    "env": {},
+    "expected_exit_code": 0,
+    "expected_fail": [],
+    "expected_warn": [],
+    "expected_pass": [
+      "models.list", "chat.basic", "chat.determinism", "chat.stream",
+      "chat.stream_usage", "chat.stream_parity", "chat.max_tokens",
+      "chat.stop", "chat.template_leak", "errors.unknown_model",
+      "errors.malformed_json", "stream.cancel", "concurrency.parallel",
+      "latency.smoke"
+    ],
+    "expected_skip": [
+      "server_version", "health.ready", "health.consistent",
+      "completions.basic", "tools.call", "structured_output", "auth.required"
+    ]
+  },
+  {
+    "name": "defect_stop_ignored",
+    "description": "Server ignores stop sequences",
+    "mock_args": ["--defect", "stop_ignored"],
+    "validator_args": [],
+    "env": {},
+    "expected_exit_code": 1,
+    "expected_fail": ["chat.stop"],
+    "expected_warn": [],
+    "expected_pass": [
+      "models.list", "server_version", "health.ready", "health.consistent",
+      "chat.basic", "chat.determinism", "chat.stream", "chat.stream_usage",
+      "chat.stream_parity", "chat.max_tokens",
+      "chat.template_leak", "completions.basic", "tools.call",
+      "structured_output", "errors.unknown_model", "errors.malformed_json",
+      "stream.cancel", "concurrency.parallel", "latency.smoke"
+    ],
+    "expected_skip": ["auth.required"]
+  },
+  {
+    "name": "defect_max_tokens_ignored",
+    "description": "Server ignores max_tokens limit",
+    "mock_args": ["--defect", "max_tokens_ignored"],
+    "validator_args": [],
+    "env": {},
+    "expected_exit_code": 1,
+    "expected_fail": ["chat.max_tokens"],
+    "expected_warn": [],
+    "expected_pass": [
+      "models.list", "server_version", "health.ready", "health.consistent",
+      "chat.basic", "chat.determinism", "chat.stream", "chat.stream_usage",
+      "chat.stream_parity", "chat.stop",
+      "chat.template_leak", "completions.basic", "tools.call",
+      "structured_output", "errors.unknown_model", "errors.malformed_json",
+      "stream.cancel", "concurrency.parallel", "latency.smoke"
+    ],
+    "expected_skip": ["auth.required"]
+  },
+  {
+    "name": "defect_template_leak",
+    "description": "Server leaks template markers in output",
+    "mock_args": ["--defect", "template_leak"],
+    "validator_args": [],
+    "env": {},
+    "expected_exit_code": 1,
+    "expected_fail": ["chat.template_leak"],
+    "expected_warn": [],
+    "expected_pass": [
+      "models.list", "server_version", "health.ready", "health.consistent",
+      "chat.basic", "chat.determinism", "chat.stream", "chat.stream_usage",
+      "chat.stream_parity", "chat.max_tokens", "chat.stop",
+      "completions.basic", "tools.call",
+      "structured_output", "errors.unknown_model", "errors.malformed_json",
+      "stream.cancel", "concurrency.parallel", "latency.smoke"
+    ],
+    "expected_skip": ["auth.required"]
+  },
+  {
+    "name": "defect_malformed_stream",
+    "description": "Server sends malformed SSE data",
+    "mock_args": ["--defect", "malformed_stream"],
+    "validator_args": [],
+    "env": {},
+    "expected_exit_code": 1,
+    "expected_fail": ["chat.stream"],
+    "expected_warn": ["chat.stream_usage", "chat.stream_parity"],
+    "expected_pass": [
+      "models.list", "server_version", "health.ready", "health.consistent",
+      "chat.basic", "chat.determinism",
+      "chat.max_tokens", "chat.stop",
+      "chat.template_leak", "completions.basic", "tools.call",
+      "structured_output", "errors.unknown_model", "errors.malformed_json",
+      "stream.cancel", "concurrency.parallel", "latency.smoke"
+    ],
+    "expected_skip": ["auth.required"]
+  },
+  {
+    "name": "defect_no_stream_usage",
+    "description": "Server omits usage from stream despite include_usage",
+    "mock_args": ["--defect", "no_stream_usage"],
+    "validator_args": [],
+    "env": {},
+    "expected_exit_code": 0,
+    "expected_fail": [],
+    "expected_warn": ["chat.stream_usage"],
+    "expected_pass": [
+      "models.list", "server_version", "health.ready", "health.consistent",
+      "chat.basic", "chat.determinism", "chat.stream",
+      "chat.stream_parity", "chat.max_tokens", "chat.stop",
+      "chat.template_leak", "completions.basic", "tools.call",
+      "structured_output", "errors.unknown_model", "errors.malformed_json",
+      "stream.cancel", "concurrency.parallel", "latency.smoke"
+    ],
+    "expected_skip": ["auth.required"]
+  },
+  {
+    "name": "defect_stream_parity_mismatch",
+    "description": "Streaming and non-streaming responses differ",
+    "mock_args": ["--defect", "stream_parity_mismatch"],
+    "validator_args": [],
+    "env": {},
+    "expected_exit_code": 0,
+    "expected_fail": [],
+    "expected_warn": ["chat.stream_parity"],
+    "expected_pass": [
+      "models.list", "server_version", "health.ready", "health.consistent",
+      "chat.basic", "chat.determinism", "chat.stream", "chat.stream_usage",
+      "chat.max_tokens", "chat.stop",
+      "chat.template_leak", "completions.basic", "tools.call",
+      "structured_output", "errors.unknown_model", "errors.malformed_json",
+      "stream.cancel", "concurrency.parallel", "latency.smoke"
+    ],
+    "expected_skip": ["auth.required"]
+  },
+  {
+    "name": "defect_determinism_mismatch",
+    "description": "Server returns different responses for identical requests",
+    "mock_args": ["--defect", "determinism_mismatch"],
+    "validator_args": [],
+    "env": {},
+    "expected_exit_code": 0,
+    "expected_fail": [],
+    "expected_warn": ["chat.determinism"],
+    "expected_pass": [
+      "models.list", "server_version", "health.ready", "health.consistent",
+      "chat.basic", "chat.stream", "chat.stream_usage",
+      "chat.max_tokens", "chat.stop",
+      "chat.template_leak", "completions.basic", "tools.call",
+      "structured_output", "errors.unknown_model", "errors.malformed_json",
+      "stream.cancel", "concurrency.parallel", "latency.smoke"
+    ],
+    "expected_skip": ["auth.required", "chat.stream_parity"]
+  },
+  {
+    "name": "defect_unknown_model_accepts",
+    "description": "Server accepts unknown model instead of rejecting it",
+    "mock_args": ["--defect", "unknown_model_accepts"],
+    "validator_args": [],
+    "env": {},
+    "expected_exit_code": 1,
+    "expected_fail": ["errors.unknown_model"],
+    "expected_warn": [],
+    "expected_pass": [
+      "models.list", "server_version", "health.ready", "health.consistent",
+      "chat.basic", "chat.determinism", "chat.stream", "chat.stream_usage",
+      "chat.stream_parity", "chat.max_tokens", "chat.stop",
+      "chat.template_leak", "completions.basic", "tools.call",
+      "structured_output", "errors.malformed_json",
+      "stream.cancel", "concurrency.parallel", "latency.smoke"
+    ],
+    "expected_skip": ["auth.required"]
+  },
+  {
+    "name": "defect_malformed_json_accepts",
+    "description": "Server accepts malformed JSON instead of rejecting it",
+    "mock_args": ["--defect", "malformed_json_accepts"],
+    "validator_args": [],
+    "env": {},
+    "expected_exit_code": 1,
+    "expected_fail": ["errors.malformed_json"],
+    "expected_warn": [],
+    "expected_pass": [
+      "models.list", "server_version", "health.ready", "health.consistent",
+      "chat.basic", "chat.determinism", "chat.stream", "chat.stream_usage",
+      "chat.stream_parity", "chat.max_tokens", "chat.stop",
+      "chat.template_leak", "completions.basic", "tools.call",
+      "structured_output", "errors.unknown_model",
+      "stream.cancel", "concurrency.parallel", "latency.smoke"
+    ],
+    "expected_skip": ["auth.required"]
+  },
+  {
+    "name": "defect_auth_not_required",
+    "description": "Server with API key set accepts unauthenticated requests",
+    "mock_args": [],
+    "validator_args": [],
+    "env": {"OPENAI_API_KEY": "test-secret-key"},
+    "expected_exit_code": 1,
+    "expected_fail": ["auth.required"],
+    "expected_warn": [],
+    "expected_pass": [
+      "models.list", "server_version", "health.ready", "health.consistent",
+      "chat.basic", "chat.determinism", "chat.stream", "chat.stream_usage",
+      "chat.stream_parity", "chat.max_tokens", "chat.stop",
+      "chat.template_leak", "completions.basic", "tools.call",
+      "structured_output", "errors.unknown_model", "errors.malformed_json",
+      "stream.cancel", "concurrency.parallel", "latency.smoke"
+    ],
+    "expected_skip": []
+  },
+  {
+    "name": "defect_concurrency_duplicate_ids",
+    "description": "Server returns duplicate response IDs under concurrency",
+    "mock_args": ["--defect", "concurrency_duplicate_ids"],
+    "validator_args": ["--concurrency", "4"],
+    "env": {},
+    "expected_exit_code": 1,
+    "expected_fail": ["concurrency.parallel"],
+    "expected_warn": [],
+    "expected_pass": [
+      "models.list", "server_version", "health.ready", "health.consistent",
+      "chat.basic", "chat.determinism", "chat.stream", "chat.stream_usage",
+      "chat.stream_parity", "chat.max_tokens", "chat.stop",
+      "chat.template_leak", "completions.basic", "tools.call",
+      "structured_output", "errors.unknown_model", "errors.malformed_json",
+      "stream.cancel", "latency.smoke"
+    ],
+    "expected_skip": ["auth.required"]
+  },
+  {
+    "name": "defect_usage_invalid",
+    "description": "Server returns invalid usage totals",
+    "mock_args": ["--defect", "usage_invalid"],
+    "validator_args": [],
+    "env": {},
+    "expected_exit_code": 1,
+    "expected_fail": ["chat.basic"],
+    "expected_warn": [],
+    "expected_pass": [
+      "models.list", "server_version", "health.ready", "health.consistent",
+      "chat.determinism", "chat.stream", "chat.stream_usage",
+      "chat.stream_parity", "chat.max_tokens", "chat.stop",
+      "chat.template_leak", "completions.basic", "tools.call",
+      "structured_output", "errors.unknown_model", "errors.malformed_json",
+      "stream.cancel", "concurrency.parallel", "latency.smoke"
+    ],
+    "expected_skip": ["auth.required"]
+  },
+  {
+    "name": "defect_health_inconsistent",
+    "description": "Health returns 200 but chat returns 503",
+    "mock_args": ["--defect", "health_inconsistent"],
+    "validator_args": [],
+    "env": {},
+    "expected_exit_code": 1,
+    "expected_fail": [
+      "health.consistent", "chat.basic", "chat.stream",
+      "chat.max_tokens", "chat.stop",
+      "tools.call", "structured_output",
+      "stream.cancel", "concurrency.parallel"
+    ],
+    "expected_warn": ["chat.stream_usage"],
+    "expected_pass": [
+      "models.list", "server_version", "health.ready",
+      "chat.template_leak", "completions.basic",
+      "errors.unknown_model", "errors.malformed_json",
+      "latency.smoke"
+    ],
+    "expected_skip": [
+      "auth.required", "chat.determinism", "chat.stream_parity"
+    ]
+  },
+  {
+    "name": "selection",
+    "description": "Only selected checks run; unselected are skip with 'not selected'",
+    "mock_args": [],
+    "validator_args": ["--checks", "models.list,chat.basic,latency.smoke"],
+    "env": {},
+    "expected_exit_code": 0,
+    "expected_fail": [],
+    "expected_warn": [],
+    "expected_pass": ["models.list", "chat.basic", "latency.smoke"],
+    "expected_skip": [
+      "server_version", "health.ready", "health.consistent",
+      "chat.determinism", "chat.stream", "chat.stream_usage",
+      "chat.stream_parity", "chat.max_tokens", "chat.stop",
+      "chat.template_leak", "completions.basic", "tools.call",
+      "structured_output", "errors.unknown_model", "errors.malformed_json",
+      "auth.required", "stream.cancel", "concurrency.parallel"
+    ]
+  },
+  {
+    "name": "strict",
+    "description": "Strict mode with advisory warn gives exit 1",
+    "mock_args": ["--defect", "no_stream_usage"],
+    "validator_args": ["--strict"],
+    "env": {},
+    "expected_exit_code": 1,
+    "expected_fail": [],
+    "expected_warn": ["chat.stream_usage"],
+    "expected_pass": [
+      "models.list", "server_version", "health.ready", "health.consistent",
+      "chat.basic", "chat.determinism", "chat.stream",
+      "chat.stream_parity", "chat.max_tokens", "chat.stop",
+      "chat.template_leak", "completions.basic", "tools.call",
+      "structured_output", "errors.unknown_model", "errors.malformed_json",
+      "stream.cancel", "concurrency.parallel", "latency.smoke"
+    ],
+    "expected_skip": ["auth.required"]
+  },
+  {
+    "name": "unreachable",
+    "description": "Server not started, exit 2, all skip, error set",
+    "mock_args": null,
+    "validator_args": [],
+    "env": {},
+    "expected_exit_code": 2,
+    "expected_fail": [],
+    "expected_warn": [],
+    "expected_pass": [],
+    "expected_skip": [
+      "models.list", "server_version", "health.ready", "health.consistent",
+      "chat.basic", "chat.determinism", "chat.stream", "chat.stream_usage",
+      "chat.stream_parity", "chat.max_tokens", "chat.stop",
+      "chat.template_leak", "completions.basic", "tools.call",
+      "structured_output", "errors.unknown_model", "errors.malformed_json",
+      "auth.required", "stream.cancel", "concurrency.parallel",
+      "latency.smoke"
+    ]
+  }
+]
