@@ -409,6 +409,51 @@ def timing():
     add("timing", res)
 
 
+def schedule_costs(n, warm=20):
+    """Measured average step time over n consecutive steps (after `warm` warm-up steps) for plain
+    DDP, and for the checks without audits and with audits every 10 and 100 steps, in both audit
+    modes. Every schedule with the checks also runs the weight check every 10 steps."""
+    big = 10 ** 9
+    res = {"steps": n, "warmup_steps": warm, "start_step": X.base + warm}
+    m = M.Llama(X.c).cuda()
+    M.init_full(m, X.c)
+    ddp = DDP(m, device_ids=[LOCAL_RANK], bucket_cap_mb=25)
+    params = list(ddp.parameters())
+    opt = adamw(params, X.c)
+    ts = []
+    for s in range(X.base, X.base + warm + n):    # same per-step work and syncs as Loader
+        sync()
+        t0 = now()
+        for g in opt.param_groups:
+            g["lr"] = lr_at(X.c, s)
+        loss = compute_loss(ddp, rebuild_batch(s, RANK))
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(params, 1.0)
+        opt.step()
+        opt.zero_grad(set_to_none=True)
+        sync()
+        ts.append(now() - t0)
+    res["plain_ddp"] = {"mean_ms": 1e3 * sum(ts[warm:]) / n}
+    del ddp, opt, m, params
+    torch.cuda.empty_cache()
+    dist.barrier()
+    schedules = {"checks_no_audits": (big, True), "det_audit_every_10": (10, True),
+                 "default_audit_every_10": (10, False), "det_audit_every_100": (100, True),
+                 "default_audit_every_100": (100, False)}
+    for name, (every, det) in schedules.items():
+        X.snap.restore(X.params, X.opt)
+        alarm, ld, _ = run_train(X.base, warm + n, S.Schedule(audit_every=every, deterministic_audits=det,
+                                                               check_every=10, ckpt_every=big,
+                                                               peer_offset=NPN))
+        t = [x for s, x in ld.times if s >= X.base + warm]
+        res[name] = {"mean_ms": 1e3 * sum(t) / len(t), "steps": len(t), "alarm": alarm,
+                     "audit_steps": sum(1 for s, _ in ld.times if s >= X.base + warm and s % every == 0),
+                     "weight_checks": sum(1 for s, _ in ld.times if s >= X.base + warm and s % 10 == 0)}
+        log(f"schedule cost {name}: {res[name]['mean_ms']:.1f} ms/step over {len(t)} steps, alarm={alarm}")
+    log(f"schedule cost plain_ddp: {res['plain_ddp']['mean_ms']:.1f} ms/step over {n} steps")
+    add("schedule_costs", res)
+
+
 def sources():
     d = os.path.dirname(os.path.abspath(__file__))
     out = {}
@@ -458,6 +503,7 @@ def main():
     fingerprint_unit()
     majority_unit()
     timing()
+    schedule_costs(c["COST"])
 
     std = dict(audit_every=10, deterministic_audits=True, check_every=10, ckpt_every=20,
                peer_offset=NPN)
