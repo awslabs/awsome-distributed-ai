@@ -159,16 +159,23 @@ annotations attach to that CRD.
 
 ### Why a wrapper instead of the in-tree `DROIDLeRobotDataset`
 
-The `cosmos-framework` in-tree `DROIDLeRobotDataset` (and its `get_action_droid_sft_dataset`
-factory) reads native joint actions, but it expects a **prepared DROID v3 "success
-split"**: the LeRobot v2→v3 conversion and success-filtering are run out-of-band and
-that dataset is not publicly released, and the class hard-codes NVIDIA's DROID column
-and camera names. A user who only has turnkey public Hub datasets cannot run it as-is.
-`LeRobotV3ActionDataset` closes that gap: it wraps the official `lerobot` library, so
-any conformant public v3 dataset (`lerobot/droid_100`, BridgeData2, LIBERO) works
-directly with its **native** action vector — no out-of-band prep, no hard-coded
-columns. The model's domain-aware action projection + `max_action_dim` padding handle
-heterogeneous action widths. The
+`cosmos-framework` ships turnkey action-policy recipes for NVIDIA's own curated datasets:
+`action_policy_droid_nano` on the public
+[`nvidia/Cosmos3-DROID`](https://huggingface.co/datasets/nvidia/Cosmos3-DROID) dataset
+(`success/` + `failure/` splits), LIBERO on
+[`nvidia/LIBERO_LeRobot_v3`](https://huggingface.co/datasets/nvidia/LIBERO_LeRobot_v3), and
+RoboCasa (see the framework's `docs/action_policy_droid_posttrain.md` and the cookbooks under
+`.agents/skills/cookbooks/cosmos3/generator/action/finetune/`). Use those if your data is one of
+those datasets. The in-tree dataset classes, however, are bound to those datasets: the DROID
+config hard-codes NVIDIA's column and camera names
+(`observation.images.{wrist,exterior_1,exterior_2}_left`, `action.joint_position`) and
+resolves its schema from the dataset directory name, so a different robot's LeRobot v3
+dataset does not drop in.
+`LeRobotV3ActionDataset` covers that case: it wraps the official `lerobot` library, so
+any conformant v3 dataset (`lerobot/droid_100`, BridgeData2, LIBERO, or your own robot's
+recordings) works with its **native** action vector and its own camera keys — no
+hard-coded columns. The model's domain-aware action projection + `max_action_dim` padding
+handle heterogeneous action widths. The
 `get_action_public_lerobot_sft_dataset` factory then feeds it through `cosmos-framework`'s
 own `ActionSFTDataset` + `ActionTransformPipeline`, so the per-sample transform and the
 training recipe are otherwise identical to the in-tree path.
@@ -237,6 +244,8 @@ envsubst < kubernetes/train-multi-node-dlc.yaml | kubectl apply -f -   # 2× p5e
 > warm-start, set `POLICY_TOML=droid_policy.toml` + `CKPT_TYPE=dcp` and stage the
 > Cosmos3-Nano DCP checkpoint at `BASE_CHECKPOINT_PATH` (see the warm-start recipe below).
 
+<!-- -->
+
 > **Build host:** the AWS DLC image is x86_64-only (linux64 FFmpeg build + amd64-only CUDA
 > wheels), so `build-push.sh` targets `linux/amd64`. On an ARM/Apple-Silicon host
 > the build runs under slow QEMU emulation — build on an x86_64 host (or an
@@ -245,7 +254,7 @@ envsubst < kubernetes/train-multi-node-dlc.yaml | kubectl apply -f -   # 2× p5e
 ### Synthetic data generation (SDG)
 
 Generation runs on a **separate image** — the official `vllm/vllm-omni:cosmos3`
-engine, not the DLC training image ([vLLM-Omni](https://github.com/vllm-project/vllm-omni) is a cp312/vLLM-0.23 stack). Mirror it into your
+engine (a moving tag; re-pull or pin a digest when you mirror it), not the DLC training image ([vLLM-Omni](https://github.com/vllm-project/vllm-omni) is a separate Python/vLLM stack). Mirror it into your
 ECR (or pull it directly if your nodes have egress), then bring up the server and
 send video-to-video requests. The manifest header carries the authoritative
 variable list; the short version:
@@ -300,7 +309,7 @@ for your dataset and failure profile.)
 The `cosmos-framework` `checkpoint.load_path` consumes **DCP**, but the `Cosmos3-Nano` Hugging Face (HF)
 repo ships Diffusers/safetensors. Convert once (CPU job is fine):
 
-```
+```bash
 python -m cosmos_framework.scripts.convert_model_to_dcp --checkpoint-path Cosmos3-Nano -o $BASE_CHECKPOINT_PATH
 ```
 
@@ -309,7 +318,19 @@ then run with `ckpt_type=dcp` and `checkpoint.load_path=$BASE_CHECKPOINT_PATH`
 `strict_resume=False` and skips the action heads on load, so they initialize fresh
 while the rest warm-starts. Note that the DCP **asynchronous** checkpoint save pins roughly the model
 size in CPU shared memory, so set the pod's `/dev/shm` `sizeLimit` generously (256Gi is
-used here, and p5en has about 2 TiB of RAM).
+used here, and p5en has about 2 TiB of RAM). `cosmos-framework` checks this before each
+asynchronous save and stops with `Insufficient /dev/shm for asynchronous checkpoint staging`
+if the mount is too small; either raise `SHM_SIZE` or pass
+`checkpoint.dcp_async_mode_enabled=false` for synchronous saves.
+
+#### Upgrading the `cosmos-framework` pin: re-export before serving
+
+A consolidated (exported) checkpoint records the full model config. Checkpoints exported
+with an older `cosmos-framework` can fail to load in a newer server with an OmegaConf
+`Missing key ...` error, because newer releases add required model-config keys. Keep the
+DCP training checkpoint, and after bumping `COSMOS_FRAMEWORK_REF` re-run
+`cosmos_framework.scripts.export_model --checkpoint-path <dcp iter dir> --config-file <run>/config.yaml`
+with the new image before serving.
 
 ### Endurance & fault recovery
 
@@ -350,7 +371,7 @@ and forces TCP across nodes — not a multi-node answer.)
 On the DLC image, a multi-node run logs NCCL loading the matched plugin and selecting
 EFA with GPUDirect RDMA — for example:
 
-```
+```text
 NET/OFI Initializing aws-ofi-nccl 1.18.0 ... Using Libfabric version 2.4
 NET/OFI Selected provider is efa, fabric is efa-direct (found 16 nics)
 NET/OFI Using transport protocol RDMA
@@ -412,12 +433,12 @@ the `Dockerfile` header). The pinned, validated versions:
 | Component | Version |
 |-----------|---------|
 | AWS DLC base (`DLC_TAG`) | `2.10.0-gpu-py313-cu130-ubuntu22.04-ec2` (PyTorch 2.10.0+cu130, Python 3.13, CUDA 13.0, Ubuntu 22.04) |
-| `cosmos-framework` (`COSMOS_FRAMEWORK_REF`) | `5eee9ed574255f017b192161bfbb5a10253d65cf` |
+| `cosmos-framework` (`COSMOS_FRAMEWORK_REF`) | `1a2f03ab6111b457633827736f94f67d55bd5202` |
 | NCCL | 2.28.9 (from the `cosmos-framework` venv's `nvidia-nccl-cu13`) |
 | EFA installer | 1.47.0 (libfabric 2.4, aws-ofi-nccl 1.18.0, gdrcopy 2.5.1 — baked into the DLC) |
 | FFmpeg (shared, for torchcodec) | 7.1.x (pinned BtbN gpl-shared build, SHA-256 verified) |
 | torchcodec | 0.10.0 |
-| `uv` | 0.10.8 |
+| `uv` | 0.11.29 (must match the framework's `required-version`) |
 | Generation engine | `vllm/vllm-omni:cosmos3` (separate image from the training stack) |
 
 ### torch.compile: Inductor mix-order-reduction shared-memory OOM
@@ -430,7 +451,7 @@ Qwen3-VL RMSNorm backward reductions together with the RoPE token-mask into a si
 ~272 KB of shared memory, over the ~227 KB-per-SM limit on H100/H200 (p5/p5en), so the
 first `loss.backward()` fails to **compile** with:
 
-```
+```text
 torch._inductor.exc.InductorError: RuntimeError: No valid triton configs.
 OutOfMemoryError: out of resource: shared memory, Required: 278688, Hardware limit: 232448
 ```
