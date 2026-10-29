@@ -131,3 +131,48 @@ variable "cert_manager_version" {
   type        = string
   default     = "v1.18.2-eksbuild.2"
 }
+
+
+# ================================================================
+# Inference Gateway — Variable Definitions
+# ================================================================
+# These variables enable the Body-Based Router (BBR) and llm-d
+# Endpoint Picker (EPP) on the HyperPod Inference Operator add-on.
+#
+# When enabled, the module:
+#   1. Auto-pins the add-on to v2.0.0-eksbuild.2 (minimum gateway version)
+#   2. Merges the inferenceGateway config into the add-on values
+#   3. Creates an IRSA role for the certificate-issuer controller
+#
+# Dependencies (enforced in inference_gateway_validation.tf):
+#   - cert-manager must be enabled (enable_cert_manager = true)
+#     because the controller pod mounts webhook-server-cert
+#     issued by a cert-manager ClusterIssuer
+#   - Inference Operator must be enabled
+#     (create_hyperpod_inference_operator_module = true)
+#
+# Target: modules/hyperpod_cluster/variables.tf
+# Usage:  Append these blocks to the existing variables.tf file.
+#
+# Reference:
+#   https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-model-deployment-inference-gateway.html
+# ================================================================
+
+variable "enable_inference_gateway" {
+  description = "Enable the HyperPod Inference Gateway (BBR + llm-d EPP). Requires Inference Operator add-on >= v2.0.0-eksbuild.2 and cert-manager."
+  type        = bool
+  default     = false
+}
+
+variable "inference_gateway_certificate_issuer_role_arn" {
+  description = "ARN of the IAM role for the certificate-issuer controller. Leave empty to auto-create via IRSA."
+  type        = string
+  default     = ""
+}
+
+variable "tls_certificate_bucket_arn" {
+  description = "ARN of the S3 bucket used by the certificate-issuer for TLS cert storage. Required when enable_inference_gateway = true and auto-creating the IRSA role."
+  type        = string
+  default     = ""
+}
+
