@@ -86,6 +86,7 @@ Environment and cluster health validation tools live under `validation/`; monito
 | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | [`pytorch-env-validation`](./validation/pytorch-env-validation)         | Validates your PyTorch environment                              |
 | [`gpu-cluster-healthcheck`](./validation/gpu-cluster-healthcheck)       | GPU cluster health checks                                       |
+| [`inference-endpoint-validation`](./validation/inference-endpoint-validation) | Validates an OpenAI-compatible inference endpoint (vLLM, SGLang, Dynamo, TensorRT-LLM, NIM) |
 | [`efa-node-exporter`](./observability/efa-node-exporter)                   | Node exporter with Amazon EFA monitoring modules                |
 | [`prometheus-grafana`](./observability/prometheus-grafana)                  | Monitoring for SageMaker HyperPod and EKS GPU clusters          |
 | [`nsight`](./observability/nsight)                                         | Shows how to run Nvidia Nsight Systems to profile your workload |
