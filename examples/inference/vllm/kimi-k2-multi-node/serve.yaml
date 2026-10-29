@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT-0
 #
 # Kimi K2 on vLLM across NUM_NODES instances: a StatefulSet with one pod per instance and a headless Service.
-# Each pod downloads the model into memory. Pod 0 (node rank 0) serves the OpenAI-compatible API on port 8000;
-# the other pods join it with --headless, their ordinal as node rank. TP x PP must equal NUM_NODES x GPU_PER_NODE.
+# Each pod keeps the model on its instance's local NVMe, one directory per revision, so a later deployment on the same
+# instance only checks the files. Pod 0 (node rank 0) serves the OpenAI-compatible API on port 8000; the other pods
+# join it with --headless, their ordinal as node rank. TP x PP must equal NUM_NODES x GPU_PER_NODE.
 # Render with envsubst, as README.md shows.
 apiVersion: v1
 kind: Service
@@ -43,6 +44,14 @@ spec:
           type: RuntimeDefault
       nodeSelector:
         node.kubernetes.io/instance-type: ${INSTANCE_TYPE}
+      # All pods in one Availability Zone: EFA traffic can't cross zones.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: kimi-k2
+              topologyKey: topology.kubernetes.io/zone
       tolerations:
         - key: nvidia.com/gpu
           operator: Exists
@@ -52,7 +61,23 @@ spec:
           image: ${IMAGE}
           command: ["bash", "-c"]
           args:
-            - hf download "${MODEL_REPO}" --revision "${MODEL_REVISION}" --local-dir /model/kimi-k2 --max-workers 16
+            - |
+              set -euo pipefail
+              # Refuse to download unless the volume keeps 10% free afterwards. On a node without a mounted instance
+              # store, NVME_HOST_PATH is a directory on the root volume, and filling that evicts other pods.
+              python3 - <<'PY'
+              import os, sys
+              from huggingface_hub import snapshot_download
+              files = snapshot_download("${MODEL_REPO}", revision="${MODEL_REVISION}", local_dir="/model", dry_run=True)
+              need = sum(f.file_size for f in files if f.will_download)
+              st = os.statvfs("/model")
+              free, size = st.f_bavail * st.f_frsize, st.f_blocks * st.f_frsize
+              print(f"{need / 1e9:.0f} GB to download, {free / 1e9:.0f} GB free of {size / 1e9:.0f} GB")
+              if need and free - need < size / 10:
+                  sys.exit("not enough space under NVME_HOST_PATH: set it to the instance store, see Prerequisites")
+              PY
+              hf download "${MODEL_REPO}" --revision "${MODEL_REVISION}" --local-dir /model --max-workers 16
+          terminationMessagePolicy: FallbackToLogsOnError
           env:
             - name: HOME
               value: /tmp
@@ -62,19 +87,23 @@ spec:
             - secretRef:
                 name: hf-token
                 optional: true
+          # kubelet creates the hostPath directory as root with mode 0755, so the download runs as root. vLLM only
+          # reads the model, as user 1000.
           securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-          # The model lands in a memory-backed volume, which counts against this container's memory.
           resources:
             requests:
               cpu: "32"
-              memory: 1700Gi
+              memory: 64Gi
             limits:
               cpu: "32"
-              memory: 1700Gi
+              memory: 64Gi
           volumeMounts:
             - name: model
               mountPath: /model
@@ -87,7 +116,7 @@ spec:
           args:
             - |
               RANK=${HOSTNAME##*-}
-              ARGS=(/model/kimi-k2 --served-model-name kimi-k2 --trust-remote-code
+              ARGS=(/model --served-model-name kimi-k2 --trust-remote-code
                 --tensor-parallel-size "$TP_SIZE" --pipeline-parallel-size "$PP_SIZE"
                 --max-model-len 8192 --gpu-memory-utilization 0.92 --host 0.0.0.0 --port 8000)
               if [ "$NNODES" -gt 1 ]; then
@@ -157,10 +186,12 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          # vLLM's own memory peaked at 36 GiB (TP8 and TP16, during load and the benchmark). The higher limit lets the
+          # page cache hold the model while vLLM reads it from the NVMe.
           resources:
             requests:
               cpu: "150"
-              memory: 1700Gi
+              memory: 64Gi
               nvidia.com/gpu: "${GPU_PER_NODE}"
               vpc.amazonaws.com/efa: "${EFA_PER_NODE}"
             limits:
@@ -171,15 +202,17 @@ spec:
           volumeMounts:
             - name: model
               mountPath: /model
+              readOnly: true
             - name: shm
               mountPath: /dev/shm
             - name: tmp
               mountPath: /tmp
       volumes:
+        # One directory per model revision on the instance's local NVMe. It stays after the pods end.
         - name: model
-          emptyDir:
-            medium: Memory
-            sizeLimit: 1050Gi
+          hostPath:
+            path: ${NVME_HOST_PATH}/models/${MODEL_REPO}/${MODEL_REVISION}
+            type: DirectoryOrCreate
         - name: shm
           emptyDir:
             medium: Memory

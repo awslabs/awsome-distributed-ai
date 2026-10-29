@@ -10,6 +10,10 @@ export INSTANCE_TYPE=p5en.48xlarge
 export GPU_PER_NODE=8
 export EFA_PER_NODE=16
 
+# The instances' local NVMe, where each node keeps the model between deployments: /mnt/k8s-disks/0 on Amazon EKS
+# nodes with a RAID0 instance store, /opt/dlami/nvme on the HyperPod DLAMI.
+export NVME_HOST_PATH=/mnt/k8s-disks/0
+
 # Kimi K2 Instruct-0905, FP8, pinned to a revision.
 export MODEL_REPO=moonshotai/Kimi-K2-Instruct-0905
 export MODEL_REVISION=ac6c49f04883bd0a0598b790693a72061c676629

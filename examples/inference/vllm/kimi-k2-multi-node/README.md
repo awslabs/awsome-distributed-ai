@@ -8,7 +8,8 @@ SPDX-License-Identifier: MIT-0
 [Kimi K2 Instruct-0905](https://huggingface.co/moonshotai/Kimi-K2-Instruct-0905) (1,029 GB of FP8 weights) fits in
 the 1,128 GB of GPU memory of one `p5en.48xlarge`, with almost nothing left for KV cache. This sample serves it with
 vLLM on Amazon EKS across `NUM_NODES` instances, as a StatefulSet with one pod per instance: pod 0 serves the
-OpenAI-compatible API, and the other pods join it headless. Three variables choose the layout:
+OpenAI-compatible API, and the other pods join it headless. Each pod keeps the model on its instance's local NVMe, so
+a later deployment on the same instance only checks the files. Three variables choose the layout:
 
 | Layout | `NUM_NODES` | `TP` | `PP` | What crosses between the instances |
 | --- | --- | --- | --- | --- |
@@ -22,10 +23,18 @@ image's aws-ofi-nccl plugin.
 
 ## Prerequisites
 
-- An Amazon EKS cluster with `NUM_NODES` `p5en.48xlarge` nodes, the
+- An Amazon EKS cluster with `NUM_NODES` `p5en.48xlarge` nodes in one Availability Zone, the
   [NVIDIA device plugin](https://github.com/NVIDIA/k8s-device-plugin) and the
   [EFA device plugin](https://docs.aws.amazon.com/eks/latest/userguide/node-efa.html). Each pod takes a whole
-  instance and holds the model in memory: it requests 1,700 GiB of the instance's 2 TiB.
+  instance.
+  [EFA traffic can't cross Availability Zones](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa.html#efa-limits),
+  so the pods have a pod affinity on `topology.kubernetes.io/zone`: if pod 0's zone has fewer than `NUM_NODES` free
+  nodes, the other pods stay `Pending`.
+- The instances' local NVMe mounted on the nodes, with 1.1 TB free. Set `NVME_HOST_PATH` in `env_vars` to its path:
+  `/mnt/k8s-disks/0` on EKS nodes with a RAID0 instance store, `/opt/dlami/nvme` on the HyperPod DLAMI. Until the
+  instance store is assembled, `/mnt/k8s-disks/0` is a plain directory on the root volume. Before it downloads, the
+  init container checks that the model fits with 10% of the volume to spare, and otherwise stops with
+  `not enough space under NVME_HOST_PATH` (`Init:Error` in `kubectl get pods`).
 - Outbound internet access from the pods to Hugging Face, and a Hugging Face token as a secret:
   `kubectl create secret generic hf-token --from-literal=HF_TOKEN=<token>`. The model is public, but Hugging Face
   rate-limits unauthenticated downloads: without a token, one 1,029 GB download took more than an hour.
@@ -36,7 +45,7 @@ image's aws-ofi-nccl plugin.
 1. Configure the layout and source it:
 
    ```bash
-   cp env_vars.example env_vars   # then edit NUM_NODES, TP and PP
+   cp env_vars.example env_vars   # then edit NUM_NODES, TP and PP, and NVME_HOST_PATH if needed
    source env_vars
    ```
 
@@ -46,11 +55,11 @@ image's aws-ofi-nccl plugin.
    kubectl create secret generic vllm-api-key --from-literal=VLLM_API_KEY="$(openssl rand -hex 32)"
    ```
 
-3. Deploy, and wait until pod 0 answers. Each pod first downloads the model into memory, then vLLM loads it and
-   captures CUDA graphs; with a token, the deployments below were ready 14 to 20 minutes after `kubectl apply`:
+3. Deploy, and wait until pod 0 answers. Each pod first downloads the model to its instance's NVMe (a later deployment
+   on the same instance only checks the files), then vLLM loads it and captures CUDA graphs:
 
    ```bash
-   VARS='$IMAGE $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $MODEL_REPO $MODEL_REVISION $NUM_NODES $TP $PP'
+   VARS='$IMAGE $INSTANCE_TYPE $GPU_PER_NODE $EFA_PER_NODE $NVME_HOST_PATH $MODEL_REPO $MODEL_REVISION $NUM_NODES $TP $PP'
    envsubst "$VARS" < serve.yaml | kubectl apply -f -
    kubectl rollout status statefulset/kimi-k2 --timeout=60m
    ```
@@ -74,7 +83,8 @@ image's aws-ofi-nccl plugin.
    kubectl logs job/kimi-k2-bench
    ```
 
-6. Clean up, or change the layout in `env_vars` and redeploy from step 3:
+6. Clean up. To try another layout, run these, then edit `env_vars`, run `source env_vars` again and redeploy from
+   step 3:
 
    ```bash
    envsubst "$VARS" < benchmark.yaml | kubectl delete -f -
@@ -83,12 +93,15 @@ image's aws-ofi-nccl plugin.
 
 ## Results
 
-Two deployments of each layout on `p5en.48xlarge` instances in one Availability Zone, each with the benchmark job's
-three rounds (six runs per cell), AWS vLLM DLC 0.32.0, 1,024 input and 128 output tokens. Every two-instance
-deployment logged only `Using network Libfabric` and no `Using network Socket` on both pods, and every deployment
-answered `/v1/models` with 401 without the key and 200 with it. Mean of the runs' median time per output token
-(TPOT, with the range of the six runs), output throughput, median time to first token (TTFT), and the KV cache vLLM
-reported:
+Two deployments of each layout on `p5en.48xlarge` instances in one Availability Zone, each with three benchmark rounds
+(six runs per cell), AWS vLLM DLC 0.32.0 and 128 output tokens. These runs predate two changes to this directory: the
+pods held the model in memory instead of on the NVMe, and the benchmark job's tokenizer download missed
+`tokenizer_config.json`, so its 1,024-token random prompts measured 1,014 to 1,024 Kimi K2 tokens (mean 1,021). One TP8
+deployment with the job as committed, at 1,024.0 tokens per prompt, measured a TPOT of 8.73, 11.99 and 16.59 ms at 1, 8
+and 32 in flight, within the table's ranges. Every two-instance deployment logged only `Using network Libfabric` and no
+`Using network Socket` on both pods, and every deployment answered `/v1/models` with 401 without the key and 200 with
+it. Mean of the runs' median time per output token (TPOT, with the range of the six runs), output throughput, median
+time to first token (TTFT), and the KV cache vLLM reported:
 
 | Layout | TPOT at 1 in flight | TPOT at 8 | TPOT at 32 | Output tokens/s at 32 | TTFT at 32 | KV cache |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -106,12 +119,17 @@ reported:
 
 ## Notes
 
-- The pods run as a non-root user with a read-only root filesystem and no capabilities. The model goes to `/model`, a
-  memory-backed `emptyDir` that is gone when the pod ends, so every deployment downloads it again.
+- The model goes to `${NVME_HOST_PATH}/models/<repository>/<revision>` on each instance, a `hostPath` directory that
+  stays after the pods end. The download init container runs as root, because kubelet creates that directory as root
+  with mode 0755; vLLM runs as a non-root user and mounts the model read-only. Both containers have a read-only root
+  filesystem and no capabilities. To free the 1,029 GB, delete the directory on each node; the instance store is also
+  erased when its instance stops or terminates.
 - The API listens on port 8000 of pod 0, reachable as `kimi-k2-0.kimi-k2:8000` from the namespace, and refuses `/v1`
   requests without the key. The pods also listen on the rendezvous port 29500 for vLLM's startup; restrict both
   with a NetworkPolicy if your cluster enforces them.
 - vLLM's group doesn't recover from one pod restarting by itself. Delete all the pods
   (`kubectl delete pod -l app=kimi-k2`) and the StatefulSet starts them together again.
+- vLLM requests 64 GiB of memory, about twice the 36 GiB it peaked at in TP8 and TP16 deployments; its limit stays at
+  1,700 GiB so the page cache can hold the model while vLLM reads it. The download container requests 64 GiB.
 - `--max-model-len 8192` and `--gpu-memory-utilization 0.92` in `serve.yaml` match the results above; the two-instance
   layouts have KV cache to spare for longer contexts.
