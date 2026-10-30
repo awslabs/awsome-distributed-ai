@@ -1,0 +1,12 @@
+# Extra packages on top of public.ecr.aws/sagemaker/sagemaker-distribution:4.5.0-{cpu,gpu}
+# (ships ray 2.55.1, torch 2.8.0, transformers 4.57.6, accelerate 1.14.0, boto3, pyyaml).
+# Used by both variants, by the Studio space (pip install -r) and by the Ray job (runtime_env pip).
+#
+# Do NOT add ray or torch here: runtime_env must reuse the cluster's Ray and the image's CUDA torch.
+# transformers/accelerate are pinned to the image versions so pip does not upgrade them.
+# Add bitsandbytes only if you set load_in_4bit: true.
+transformers==4.57.6
+accelerate==1.14.0
+datasets==4.8.5
+peft==0.17.1
+trl==0.24.0
