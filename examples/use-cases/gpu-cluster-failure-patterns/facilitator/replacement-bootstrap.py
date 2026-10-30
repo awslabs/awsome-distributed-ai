@@ -196,8 +196,14 @@ def prepare_enroot():
 
 
 def inventory(manifest, instance):
-    routes = json.loads(run(['/usr/sbin/ip', '-j', 'route', 'show', 'default']))
-    require(routes and len({r.get('dev') for r in routes}) == 1, 'Ambiguous management route')
+    # Ask the kernel which path reaches EC2 metadata; multiple ENA defaults
+    # with different metrics are valid and do not make that selected path ambiguous.
+    routes = json.loads(run(['/usr/sbin/ip', '-j', 'route', 'get', '169.254.169.254']))
+    require(isinstance(routes, list) and len(routes) == 1
+            and isinstance(routes[0], dict)
+            and isinstance(routes[0].get('dev'), str)
+            and re.fullmatch(r'[A-Za-z0-9_-]+', routes[0]['dev']),
+            'Ambiguous management route')
     management = routes[0]['dev']
     device = Path('/sys/class/net') / management / 'device'
     require((device / 'driver').resolve().name == 'ena', 'Management is not ENA')

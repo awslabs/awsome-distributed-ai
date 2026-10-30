@@ -1453,9 +1453,17 @@ class BootstrapFiles(unittest.TestCase):
             (interface / 'device').symlink_to(pci / '0000:00:01.0')
             efa = pci / '0000:00:03.0'
             (efa / 'infiniband/rdma-new').mkdir(parents=True)
+            selected_routes = [{'dev': 'eth0', 'prefsrc': '10.1.2.51'}]
+            calls = []
             def command(argv):
-                return ('[{"dev":"eth0"}]' if argv[0].endswith('/ip') else
-                        'GPU-new-identity, 00000000:00:02.0')
+                calls.append(argv)
+                if argv == ['/usr/sbin/ip', '-j', 'route', 'show', 'default']:
+                    return json.dumps([{'dev': 'eth0', 'metric': 100},
+                                       {'dev': 'eth1', 'metric': 200},
+                                       {'dev': 'eth1', 'metric': 1003}])
+                if argv == ['/usr/sbin/ip', '-j', 'route', 'get', '169.254.169.254']:
+                    return json.dumps(selected_routes)
+                return 'GPU-new-identity, 00000000:00:02.0'
             with mock.patch.object(bootstrap, 'Path', side_effect=mapped), \
                  mock.patch.object(bootstrap, 'run', side_effect=command):
                 cfg = bootstrap.inventory({'node': 'gpu-g7-1', 'slurm_bin': '/slurm',
@@ -1463,6 +1471,15 @@ class BootstrapFiles(unittest.TestCase):
                 self.assertEqual(cfg['instance_id'], NEW)
                 self.assertEqual(cfg['gpu_bdf'], '0000:00:02.0')
                 self.assertEqual(cfg['efa_rdma_device'], 'rdma-new')
+                self.assertEqual(cfg['management_interface'], 'eth0')
+                self.assertEqual(cfg['management_bdf'], '0000:00:01.0')
+                self.assertIn(['/usr/sbin/ip', '-j', 'route', 'get', '169.254.169.254'], calls)
+                for bad in ([], [{}], [{'dev': ''}], [{'dev': '../eth0'}],
+                            [{'dev': 'eth0'}, {'dev': 'eth1'}]):
+                    selected_routes = bad
+                    with self.assertRaisesRegex(RuntimeError, 'Ambiguous management route'):
+                        bootstrap.inventory({'node': 'gpu-g7-1'}, NEW)
+                selected_routes = [{'dev': 'eth0'}]
                 (efa / 'net/eth1').mkdir(parents=True)
                 with self.assertRaisesRegex(RuntimeError, 'No separate EFA'):
                     bootstrap.inventory({'node': 'gpu-g7-1'}, NEW)
