@@ -58,6 +58,10 @@ set_allocation_cpus() {
         echo "Expected a homogeneous Slurm CPU allocation; got: $layout" >&2; return 1;
     }
     export AIM344_CPUS_PER_NODE=${BASH_REMATCH[1]}
+    # srun does not inherit sbatch's -c on every Slurm version. Set its native
+    # default from the allocation, including Check 5's unflagged MPI steps.
+    # Explicit per-rank -c (the optional sweep) still takes precedence.
+    export SRUN_CPUS_PER_TASK=$AIM344_CPUS_PER_NODE
 }
 
 prepare_slurm() {

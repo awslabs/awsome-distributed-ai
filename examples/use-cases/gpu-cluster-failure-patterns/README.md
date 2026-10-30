@@ -71,7 +71,7 @@ Run suite identifiers `0`, `2`, `3` and `6` on both healthy hosts. Run DCGM iden
 
 ## Healthy baseline and G7 allocation
 
-For the post-recovery path, source the site-generated `/opt/aim344/device-recovery/companion/lab.env` on the independent login coordinator, explicitly run `export PATH=/opt/amazon/efa/bin:/opt/aws/pcs/scheduler/slurm-25.05/bin:$PATH` for the measured PCS installation, and confirm `command -v sinfo salloc sbatch srun`. Then submit `sbatch --wait --export=ALL --partition="$PARTITION" /opt/aim344/device-recovery/13.verify-after-recovery.sbatch` from the independent login account and use its printed fresh-`srun` retrieval command after completion. The following interactive baseline is the historical GPU-host-shell route, not a command sequence to run Check 5 locally on the login host:
+For the post-recovery path, source the site-generated `/opt/aim344/device-recovery/companion/lab.env` on the independent login coordinator, explicitly run `export PATH=/opt/amazon/efa/bin:/opt/aws/pcs/scheduler/slurm-25.05/bin:$PATH` for the measured PCS installation, and confirm `command -v sinfo salloc sbatch srun`. Then submit `sbatch --wait --export=ALL --partition="$PARTITION" --cpus-per-task="$((GPUS_PER_NODE * CPUS_PER_RANK))" /opt/aim344/device-recovery/13.verify-after-recovery.sbatch` from the independent login account and use its printed fresh-`srun` retrieval command after completion. The following interactive baseline is the historical GPU-host-shell route, not a command sequence to run Check 5 locally on the login host:
 
 ```bash
 source lab.env

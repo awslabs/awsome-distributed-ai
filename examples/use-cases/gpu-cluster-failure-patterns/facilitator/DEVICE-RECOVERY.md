@@ -46,7 +46,7 @@ source /opt/aim344/device-recovery/companion/lab.env
 export PATH=/opt/amazon/efa/bin:/opt/aws/pcs/scheduler/slurm-25.05/bin:$PATH
 command -v sinfo salloc sbatch srun
 unset AIM344_EFA_IFACE FI_EFA_IFACE
-sbatch --wait --export=ALL --partition="$PARTITION" /opt/aim344/device-recovery/13.verify-after-recovery.sbatch
+sbatch --wait --export=ALL --partition="$PARTITION" --cpus-per-task="$((GPUS_PER_NODE * CPUS_PER_RANK))" /opt/aim344/device-recovery/13.verify-after-recovery.sbatch
 ```
 
 Check 5 runs once from the allocation coordinator. Its per-UID, per-job named container is initialized on both nodes before the collective timers, with `AIM344_CONTAINER_PREP_TIMEOUT` (default 600 seconds). Isolation/main reuse that root, and storage reuses it only when its image matches. No prior job or participant cache is required. The default 25-minute allocation remains the outer limit. In the September 24 fresh post-replacement trial, the allocation completed in 51 seconds including 6 seconds of job-local cold preparation; this is a measured run, not a general cold-start guarantee. Check 5 uses include-unset/exclude-only MPI configuration and Pyxis container-env precedence overrides scoped to its own steps, not host counters or storage. Keep both correctness columns, every allocated node's per-device EFA deltas and the storage workload result. The verification script checks all allocated nodes, not just whichever rank's log is visible locally, and copies results to each allocated node with digest verification. A fresh replacement initializes the isolated 32 MiB fixture with step 0; that seed is not recovered model/optimizer state. No instructor hand-restoration or facilitator-arranged replacement is a session remedy.
@@ -157,6 +157,40 @@ pending upgrade. The deployment owner must regenerate a new immutable SSM
 document from the reviewed final bytes and read back its service hash; do not
 edit an existing content-addressed document in place. Local regression tests are
 not deployment, GPU/EFA, IAM, or event readiness evidence.
+
+### Assigned PCS CPU budget
+
+Set `verification_environment.CPUS_PER_RANK` from the assigned scheduler CPU budget. For example, eight GPUs on a node with `CPUEfctv=96 CPUTot=96` and SMT1 require the string `"12"`. The default remains `"24"` for legacy
+assignments. Values must be canonical positive decimal strings (`[1-9][0-9]*`);
+zero, signs, leading zeros, nonintegers and shell expressions are rejected.
+There is no new hardware ceiling: the owner must match the value to the assigned
+scheduler capacity. This changes CPU resources, not eight GPUs per node, all
+16 GPU ranks, correctness, EFA counts or the required bandwidth qualification.
+
+Generate new companion archive/manifest hashes and the fixed initializer. On
+already initialized nodes, use the existing isolated root-only upgrade with the
+original ready-receipt and manifest byte hashes; changing `lab.env` by hand is
+not a deployment. Admission remains bound to the new manifest and installed
+hashes. The override is a participant launch default, never privileged
+maintenance authority; job environment does not override the root configuration.
+
+Source the generated `lab.env` on the coordinator before submission and pass
+`--cpus-per-task="$((GPUS_PER_NODE * CPUS_PER_RANK))"` to both `sbatch` (above)
+and `salloc`. The batch directive stays at 192 for legacy compatibility, so
+sourcing defaults inside the job alone cannot repair an oversized request.
+For this assignment the explicit request is 96 CPUs per node, one task per node,
+two nodes and `--gres=gpu:8`. Native Slurm remains the capacity validator.
+
+Inside the allocation, the verifier and existing native entry helpers use
+`SLURM_JOB_CPUS_PER_NODE` (homogeneous `96(x2)` or `96`), falling back to
+`SLURM_CPUS_ON_NODE` when absent. They replace stale CPU hints with that budget,
+not `GPUS_PER_NODE * 24`. Explicit per-node `srun -c` uses 96; the optional
+one-MPI-rank-per-GPU sweep uses 12. `common.sh` also sets Slurm's native
+`SRUN_CPUS_PER_TASK` default so unflagged preparation, Check 5 and retrieval
+steps use the allocation. This is not a scheduler helper or a change to planned
+foreign-G7 paths.
+
+Check the selected suite's shared `launch_args` before qualification. An explicit `-c` takes precedence over `SRUN_CPUS_PER_TASK`; both main and isolation launches must use the allocated CPU budget while preserving all GPU ranks and correctness, network and performance checks. Keep the suite pinned and do not fork a local copy to override its resource request.
 
 ### Suite acquisition
 

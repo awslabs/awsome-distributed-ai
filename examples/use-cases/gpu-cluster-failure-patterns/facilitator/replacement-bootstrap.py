@@ -237,13 +237,17 @@ def verification_environment(manifest):
                'NCCL_SOCKET_IFNAME', 'OMPI_MCA_pml', 'OMPI_MCA_btl',
                'OMPI_MCA_btl_tcp_if_exclude', 'PMIX_MCA_gds', 'OFI_NCCL_PROTOCOL',
                'FI_EFA_USE_HUGE_PAGE', 'FI_PROVIDER', 'NCCL_DEBUG', 'TORCH_IMAGE',
-               'NCCL_ENROOT_IMAGE', 'AIM344_EXPECTED_EFA_DEVICES'}
+               'NCCL_ENROOT_IMAGE', 'AIM344_EXPECTED_EFA_DEVICES', 'CPUS_PER_RANK'}
     overrides = manifest.get('verification_environment', {})
     require(isinstance(overrides, dict) and set(overrides) <= allowed,
             'Unsupported verification environment')
     require(all(isinstance(v, str) and v and '\n' not in v for v in overrides.values()),
             'Invalid verification environment value')
     values.update(overrides)
+    # Match the native allocation parser's positive decimal contract. The site
+    # supplies capacity; do not impose a new instance-specific CPU ceiling.
+    require(re.fullmatch(r'[1-9][0-9]*', values['CPUS_PER_RANK']),
+            'Invalid assigned CPUs per rank')
     for key in ('NCCL_CONTAINER', 'NCCL_ENROOT_IMAGE', 'TORCH_IMAGE'):
         if key in values:
             require(values[key] in ('/opt/aim344/aim344.sqsh', '/opt/aim344/nccl-baseline.sqsh'),
