@@ -7,6 +7,8 @@ from unittest.mock import Mock, patch, call
 import io
 import itertools
 import json
+import os
+from types import SimpleNamespace
 import urllib.error
 import tempfile
 
@@ -15,6 +17,185 @@ from serving_goodput import paired_serving_report, quality_valid, serving_goodpu
 
 
 class ServingGoodputTests(unittest.TestCase):
+    def launch_replicas(self, root, *, tp=2, gpus=8, inherited=None, extra=(),
+                        ephemeral='32768 60999'):
+        """Exercise main's actual Popen boundary, without vLLM, GPUs or Slurm."""
+        import serve_llm
+        cfg = json.loads((Path(__file__).resolve().parents[1] / 'configs/llm.json').read_text())
+        model = root / 'model'
+        model.mkdir(exist_ok=True)
+        (model / 'aim347-pin.json').write_text(json.dumps(
+            {key: cfg[key] for key in ('model_id', 'model_revision')}))
+        environment = dict(SLURM_JOB_ID='fixture-job', SLURMD_NODENAME='node-a',
+                           CUDA_VISIBLE_DEVICES=','.join(f'GPU-{i}' for i in range(gpus)),
+                           VLLM_HOST_IP='192.0.2.1')
+        if inherited is not None:
+            environment['VLLM_PORT'] = inherited
+        cuda = SimpleNamespace(device_count=lambda: gpus,
+                               get_device_properties=lambda i: SimpleNamespace(uuid=f'GPU-{i}'))
+        argv = ['serve_llm.py', '--tensor-parallel-size', str(tp), '--gpus-per-node', str(gpus),
+                '--model', str(model), '--output', str(root / 'node-0'), *extra]
+        read_text = Path.read_text
+
+        def read(path, *args, **kwargs):
+            if str(path) == '/proc/sys/net/ipv4/ip_local_port_range':
+                return ephemeral
+            return read_text(path, *args, **kwargs)
+
+        children = [Mock(pid=100 + i, poll=Mock(return_value=None)) for i in range(gpus // tp)]
+        with patch.object(sys, 'argv', argv), patch.dict(os.environ, environment, clear=True), \
+                patch.dict(sys.modules, vllm=SimpleNamespace(__version__='0.20.2'),
+                           torch=SimpleNamespace(cuda=cuda)), patch.object(Path, 'read_text', read), \
+                patch('serve_llm.subprocess.Popen', side_effect=children) as spawn, \
+                patch('serve_llm.signal.signal'), patch('serve_llm.stop_replicas') as stop, \
+                patch('serve_llm.time.sleep', side_effect=KeyboardInterrupt):
+            try:
+                serve_llm.main()
+            except KeyboardInterrupt:
+                pass
+            except SystemExit:
+                spawn.assert_not_called()
+                raise
+            finally:
+                self.assertEqual(os.environ.get('VLLM_PORT'), inherited)
+            stop.assert_called_once_with(children)
+        return spawn.call_args_list, cfg
+
+    def test_simultaneous_replicas_get_distinct_internal_port_environments(self):
+        for inherited in (None, '50103', 'not-a-port'):
+            with self.subTest(inherited=inherited), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                calls, _ = self.launch_replicas(root, inherited=inherited)
+                self.assertEqual(len(calls), 4)
+                self.assertEqual([c.kwargs['env'].get('VLLM_PORT') for c in calls],
+                                 ['20000', '21000', '22000', '23000'])
+                for replica, child in enumerate(calls):
+                    command, env = child.args[0], child.kwargs['env']
+                    self.assertEqual(command[command.index('--port') + 1], str(8100 + replica))
+                    self.assertEqual(env['CUDA_VISIBLE_DEVICES'], f'GPU-{2 * replica},GPU-{2 * replica + 1}')
+                    self.assertEqual(env['VLLM_HOST_IP'], '192.0.2.1')
+                    self.assertTrue(child.kwargs['start_new_session'])
+                    record = json.loads((root / 'node-0' / f'replica-{replica}.json').read_text())
+                    self.assertEqual(record['environment'], {'VLLM_PORT': env['VLLM_PORT']})
+
+    def test_internal_port_validation_and_eight_replica_bound(self):
+        from serve_llm import replica_port_starts
+        for replicas in (1, 4, 8):
+            starts = list(replica_port_starts(replicas, 8100, 20000, ephemeral=(32768, 60999)))
+            self.assertEqual(starts, [20000 + 1000 * i for i in range(replicas)])
+            spans = [set(range(start, start + 1000)) for start in starts]
+            self.assertEqual(len(set.union(*spans)), replicas * 1000)
+            self.assertTrue(set.union(*spans).isdisjoint(range(8100, 8100 + replicas)))
+        self.assertEqual(list(replica_port_starts(1, 8100, 64536, ephemeral=(32768, 60999))), [64536])
+        for replicas, api, internal, ephemeral in (
+                (0, 8100, 20000, (32768, 60999)), (9, 8100, 20000, (32768, 60999)),
+                (4, 0, 20000, (32768, 60999)), (4, 65533, 20000, (32768, 60999)),
+                (4, 8100, 1023, (32768, 60999)), (1, 8100, 64537, (32768, 60999)),
+                (4, 8100, 8000, (32768, 60999)), (4, 19998, 20000, (32768, 60999)),
+                (4, 8100, 32768, (32768, 60999)), (4, 8100, 29000, (32768, 60999)),
+                (4, 8100, 20000, (20000, 60999)), (4, 8100, 20000, (60999, 32768))):
+            with self.subTest(replicas=replicas, api=api, internal=internal, ephemeral=ephemeral), \
+                    self.assertRaises(ValueError):
+                replica_port_starts(replicas, api, internal, ephemeral=ephemeral)
+        for tp, gpus, extra, ephemeral in (
+                (1, 9, (), '32768 60999'),
+                (2, 8, ('--internal-port-base', '65535'), '32768 60999'),
+                (2, 8, (), '20000 60999'), (2, 8, (), 'unreadable'),
+                (2, 8, (), '32768'), (2, 8, ('--port-base', '21000'), '32768 60999')):
+            with self.subTest(tp=tp, gpus=gpus, extra=extra, ephemeral=ephemeral), \
+                    tempfile.TemporaryDirectory() as directory, \
+                    patch('sys.stderr', new_callable=io.StringIO), \
+                    patch('serve_llm.subprocess.Popen') as spawn:
+                with self.assertRaises(SystemExit) as error:
+                    self.launch_replicas(Path(directory), tp=tp, gpus=gpus, extra=extra, ephemeral=ephemeral)
+                self.assertEqual(error.exception.code, 2)
+                spawn.assert_not_called()
+                self.assertFalse((Path(directory) / 'node-0').exists())
+
+    def test_launch_and_manifest_preserve_placement_ports_and_internal_environment(self):
+        from serve_llm import collect_manifest
+        for tp, base, legacy in ((8, 20000, True), (8, 20000, False), (2, 24000, False), (1, 24000, False)):
+            with self.subTest(tp=tp, base=base, legacy=legacy), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                calls, cfg = self.launch_replicas(root, tp=tp, extra=['--internal-port-base', str(base)])
+                self.assertEqual(len(calls), 8 // tp)
+                for replica, child in enumerate(calls):
+                    env = child.kwargs['env']
+                    self.assertEqual(env['CUDA_VISIBLE_DEVICES'], ','.join(
+                        f'GPU-{i}' for i in range(replica * tp, (replica + 1) * tp)))
+                    self.assertEqual(env['VLLM_PORT'], str(base + 1000 * replica))
+                path = root / 'node-0' / 'replica-0.json'
+                original = json.loads(path.read_text())
+                if legacy:
+                    del original['environment']
+                    path.write_text(json.dumps(original))
+                snapshots = {p: p.read_bytes() for p in root.glob('node-*/*.json')}
+                kwargs = dict(addresses=['192.0.2.10'], gpus_per_node=8, tensor_parallel_size=tp,
+                              max_num_seqs=256, max_num_batched_tokens=8192, port_base=8100,
+                              cpus_per_node=4, cfg=cfg, model_path=str(root / 'model'),
+                              expected_job='fixture-job', expected_nodes=['node-a'], internal_port_base=base)
+                if not legacy:
+                    for bad in (None, {}, {'VLLM_PORT': str(base + 1000)}, {'VLLM_PORT': base}):
+                        with self.subTest(bad=bad):
+                            path.write_text(json.dumps(original | {'environment': bad}))
+                            with self.assertRaisesRegex(ValueError, 'internal port environment'):
+                                collect_manifest(root, **kwargs)
+                            self.assertFalse((root / 'manifest.json').exists())
+                    if tp < 8:
+                        record = dict(original)
+                        del record['environment']
+                        path.write_text(json.dumps(record))
+                        with self.assertRaisesRegex(ValueError, 'internal port environment'):
+                            collect_manifest(root, **kwargs)
+                        path.write_bytes(snapshots[path])
+                        second = root / 'node-0' / 'replica-1.json'
+                        record = json.loads(second.read_text())
+                        second.write_text(json.dumps(record | {'environment': original['environment']}))
+                        with self.assertRaisesRegex(ValueError, 'internal port environment'):
+                            collect_manifest(root, **kwargs)
+                        second.write_bytes(snapshots[second])
+                    path.write_bytes(snapshots[path])
+                result = collect_manifest(root, **kwargs)
+                self.assertEqual(result, json.loads((root / 'manifest.json').read_text()))
+                self.assertEqual(result['gpu_budget'], 8)
+                self.assertEqual(result['placement'], dict(tensor_parallel_size=tp, replicas=8 // tp))
+                self.assertEqual(result['allocation']['gpu_uuids'], [f'GPU-{i}' for i in range(8)])
+                self.assertEqual(result['replica_environments'], [
+                    dict(node=0, replica=i, environment=None if legacy else {'VLLM_PORT': str(base + 1000 * i)})
+                    for i in range(8 // tp)])
+                self.assertEqual((root / 'endpoints.txt').read_text().splitlines(),
+                                 [f'http://192.0.2.10:{8100 + i}' for i in range(8 // tp)])
+                self.assertEqual(snapshots, {p: p.read_bytes() for p in snapshots})
+
+    def test_wrapper_forwards_internal_base_and_collector_checks_it(self):
+        import serve_llm
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # Stub the scheduler, never start a container or a real serving process.
+            stub = root / 'srun'
+            stub.write_text(f'#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n')
+            stub.chmod(0o755)
+            env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
+                       SLURM_JOB_ID='fixture-job', SLURM_JOB_NUM_NODES='1', SLURM_JOB_CPUS_PER_NODE='4',
+                       VLLM_IMAGE='/fixture.sqsh', LLM_DATA_DIR='/fixture-data', LLM_RESULTS_DIR='/fixture-results',
+                       GPUS_PER_NODE='8', SERVING_RUN='fixture', NCCL_SOCKET_IFNAME='fixture')
+            options = ['--tensor-parallel-size', '2', '--internal-port-base', '24000']
+            wrapper = Path(__file__).resolve().parents[1] / '8.serve-llm.sh'
+            forwarded = json.loads(subprocess.check_output(['bash', str(wrapper), *options], env=env, text=True))
+            self.assertEqual(forwarded[-len(options):], options)
+            self.assertIn('"$@"', forwarded[forwarded.index('-c') + 1])
+            self.launch_replicas(root, extra=['--internal-port-base', '24000'])
+            argv = ['serve_llm.py', '--collect-manifest', '--output', str(root), '--gpus-per-node', '8',
+                    '--model', str(root / 'model'), *options]
+            env.update(SLURM_JOB_NODELIST='node-a')
+            with patch.object(sys, 'argv', argv), patch.dict(os.environ, env, clear=True), \
+                    patch('serve_llm.subprocess.check_output', side_effect=['node-a\n', 'NodeAddr=192.0.2.10']), \
+                    patch('sys.stdout', new_callable=io.StringIO):
+                serve_llm.main()
+            manifest = json.loads((root / 'manifest.json').read_text())
+            self.assertEqual(manifest['replica_environments'][0]['environment'], {'VLLM_PORT': '24000'})
+
     def test_replica_cleanup_includes_exited_leaders_and_disappeared_groups(self):
         from serve_llm import stop_replicas
         import signal

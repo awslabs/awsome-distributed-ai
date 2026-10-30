@@ -195,6 +195,8 @@ bash 8.serve-llm.sh --tensor-parallel-size 8
 
 Each node serves its first replica on port `8100`; further replicas use consecutive ports. Wait for every `/health` endpoint. The service uses BF16, a 4,096-token context, prefix caching disabled and the engine generation defaults. Training and serving use the same fixed pretrained revision; the short training exercise is not assumed to improve serving quality.
 
+Internal TCPStore selection is separate from the API ports. The launcher overrides inherited `VLLM_PORT` with `20000 + 1000 * replica` for at most eight replicas per node; it leaves `VLLM_HOST_IP` unchanged. If needed, pass `--internal-port-base` through `8.serve-llm.sh` and use the same value when collecting the manifest. Each serving node rejects an internal span (including 1,000 ports of headroom per replica) overlapping its ephemeral range or the API ports. This assumes one owned serving job per exclusive node: the starts are not OS reservations, and vLLM's upward scan is not bounded to that headroom. The replica JSON and manifest retain the selected environment, not the eventual bound port. Historical single-replica records without that field remain readable; multi-replica records require it.
+
 The serving wrapper and manifest collector use `SLURM_JOB_CPUS_PER_NODE`, including Slurm's `192(x2)` notation, so they can run from an allocation shell without `SLURM_CPUS_ON_NODE`. They require a homogeneous CPU allocation. After each replica writes its record, collect the actual commands and assigned GPU identities in that same shell:
 
 ```bash

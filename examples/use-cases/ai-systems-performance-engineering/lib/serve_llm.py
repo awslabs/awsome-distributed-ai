@@ -23,9 +23,34 @@ def allocation_cpus(value, node_count):
     return counts[0]
 
 
+def replica_port_starts(replicas, port_base, internal_port_base, *, ephemeral=None):
+    """Space internal scan starts for one owned serving job per exclusive node.
+
+    The 1000-port spacing is headroom, not a reservation or a vLLM scan limit.
+    Validate the full intended span, including headroom for the last replica.
+    """
+    if not 1 <= replicas <= 8:
+        raise ValueError('requires between one and eight replicas per node')
+    api_end = port_base + replicas - 1
+    internal_end = internal_port_base + replicas * 1000 - 1
+    if not (1024 <= port_base <= api_end <= 65535
+            and 1024 <= internal_port_base <= internal_end <= 65535):
+        raise ValueError('API ports and internal port headroom must be nonprivileged TCP ports')
+    if internal_port_base <= api_end and port_base <= internal_end:
+        raise ValueError('internal port headroom overlaps API ports')
+    if ephemeral is not None:
+        low, high = ephemeral
+        if not 1 <= low <= high <= 65535:
+            raise ValueError('invalid node ephemeral port range')
+        if internal_port_base <= high and low <= internal_end:
+            raise ValueError('internal port headroom overlaps node ephemeral port range')
+    return range(internal_port_base, internal_end + 1, 1000)
+
+
 def collect_manifest(output, *, addresses, gpus_per_node, tensor_parallel_size,
                      max_num_seqs, max_num_batched_tokens, port_base, cpus_per_node, cfg,
-                     model_path='/data/model', expected_job=None, expected_nodes=None):
+                     model_path='/data/model', expected_job=None, expected_nodes=None,
+                     internal_port_base=20000):
     """Collect launcher records after readiness; no GPU or vLLM import needed."""
     if not addresses or len(set(addresses)) != len(addresses) or cpus_per_node < 1:
         raise ValueError('unique assigned node addresses and positive CPU count required')
@@ -34,6 +59,8 @@ def collect_manifest(output, *, addresses, gpus_per_node, tensor_parallel_size,
     if min(gpus_per_node, tensor_parallel_size, max_num_seqs, max_num_batched_tokens) < 1 or gpus_per_node % tensor_parallel_size:
         raise ValueError('TP must divide the assigned GPU count')
     replicas_per_node = gpus_per_node // tensor_parallel_size
+    internal_ports = replica_port_starts(replicas_per_node, port_base, internal_port_base)
+    replica_environments = []
     expected = {output / f'node-{node}' / f'replica-{replica}.json'
                 for node in range(len(addresses)) for replica in range(replicas_per_node)}
     if set(output.glob('node-*/replica-*.json')) != expected:
@@ -69,11 +96,19 @@ def collect_manifest(output, *, addresses, gpus_per_node, tensor_parallel_size,
                 raise ValueError('replica model or engine pin mismatch')
             if len(record['gpu_uuids']) != tensor_parallel_size:
                 raise ValueError('replica GPU count mismatch')
+            # Historical single-replica evidence predates environment recording.
+            # Multi-replica evidence must prove distinct internal starts.
+            if 'environment' in record or replicas_per_node > 1:
+                if record.get('environment') != {'VLLM_PORT': str(internal_ports[replica])}:
+                    raise ValueError('replica internal port environment mismatch')
+            replica_environments.append(dict(node=node, replica=replica,
+                                              environment=record.get('environment')))
             uuids.extend(record['gpu_uuids'])
             endpoints.append(f'http://{address}:{port_base + replica}')
     if any(not isinstance(uuid, str) or not uuid for uuid in uuids) or len(set(uuids)) != len(uuids):
         raise ValueError('assigned GPU UUIDs must be nonempty and unique')
     manifest: dict = dict(gpu_budget=len(uuids),
+                    replica_environments=replica_environments,
                     placement=dict(tensor_parallel_size=tensor_parallel_size, replicas=len(endpoints)),
                     server_batch=dict(max_num_seqs=max_num_seqs, max_num_batched_tokens=max_num_batched_tokens),
                     workload={key: cfg[key] for key in ('model_id', 'model_revision', 'tokenizer_revision')},
@@ -124,6 +159,8 @@ def main():
     parser.add_argument('--tensor-parallel-size', type=int, required=True)
     parser.add_argument('--gpus-per-node', type=int, required=True)
     parser.add_argument('--port-base', type=int, default=8100)
+    parser.add_argument('--internal-port-base', type=int, default=20000,
+                        help='first VLLM_PORT scan start; replicas are spaced by 1000 ports (not reserved)')
     parser.add_argument('--max-num-seqs', type=int, default=256)
     parser.add_argument('--max-num-batched-tokens', type=int, default=8192)
     parser.add_argument('--model', default='/data/model')
@@ -134,6 +171,14 @@ def main():
     if min(args.tensor_parallel_size, args.gpus_per_node, args.max_num_seqs,
            args.max_num_batched_tokens) < 1 or args.gpus_per_node % args.tensor_parallel_size:
         parser.error('TP must divide the assigned GPU count')
+    try:
+        # Validate on the serving node, not the allocation shell collecting records.
+        ephemeral = None if args.collect_manifest else tuple(map(int,
+            Path('/proc/sys/net/ipv4/ip_local_port_range').read_text().split()))
+        internal_ports = replica_port_starts(args.gpus_per_node // args.tensor_parallel_size,
+                                            args.port_base, args.internal_port_base, ephemeral=ephemeral)
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
     cfg = json.loads((Path(__file__).resolve().parents[1] / 'configs/llm.json').read_text())
     if args.collect_manifest:
         nodes = subprocess.check_output(['scontrol', 'show', 'hostnames', os.environ['SLURM_JOB_NODELIST']], text=True).splitlines()
@@ -145,7 +190,8 @@ def main():
                                   tensor_parallel_size=args.tensor_parallel_size, max_num_seqs=args.max_num_seqs,
                                   max_num_batched_tokens=args.max_num_batched_tokens, port_base=args.port_base,
                                   cpus_per_node=allocation_cpus(os.environ['SLURM_JOB_CPUS_PER_NODE'], len(nodes)), cfg=cfg,
-                                  model_path=args.model, expected_job=os.environ['SLURM_JOB_ID'], expected_nodes=nodes)
+                                  model_path=args.model, expected_job=os.environ['SLURM_JOB_ID'], expected_nodes=nodes,
+                                  internal_port_base=args.internal_port_base)
         print(json.dumps(result, indent=2))
         return
     import vllm
@@ -186,12 +232,15 @@ def main():
                        '--port', str(args.port_base + replica)]
             log = (args.output / f'replica-{replica}.log').open('w')
             logs.append(log)
-            environment = dict(os.environ, CUDA_VISIBLE_DEVICES=','.join(gpu_ids))
+            # Override inherited VLLM_PORT: --port controls only the public API.
+            environment = dict(os.environ, CUDA_VISIBLE_DEVICES=','.join(gpu_ids),
+                               VLLM_PORT=str(internal_ports[replica]))
             process = subprocess.Popen(command, env=environment, stdout=log,
                                        stderr=subprocess.STDOUT, start_new_session=True)
             processes.append(process)
             (args.output / f'replica-{replica}.json').write_text(json.dumps(
                 {'pid': process.pid, 'command': command, 'assigned_devices': gpu_ids,
+                 'environment': {'VLLM_PORT': environment['VLLM_PORT']},
                  'slurm_job_id': os.environ['SLURM_JOB_ID'], 'slurm_node_name': os.environ['SLURMD_NODENAME'],
                  'gpu_uuids': gpu_uuids[replica * args.tensor_parallel_size:(replica + 1) * args.tensor_parallel_size],
                  'model_pin': model_pin, 'vllm_version': vllm.__version__, 'started_utc_seconds': time.time()}, indent=2) + '\n')
