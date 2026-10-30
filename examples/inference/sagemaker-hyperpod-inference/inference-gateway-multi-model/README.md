@@ -123,7 +123,7 @@ inference-gateway-multi-model/
 │   ├── 02-qwen2.5-3b.yaml         # 3B InferenceEndpointConfig
 │   └── 03-test-pod.yaml           # Test pod with RBAC for validation
 └── scripts/
-    └── 0.test-gateway.sh           # End-to-end gateway validation
+    └── 0.test-gateway.sh           # End-to-end gateway validation (non-streaming + streaming)
 ```
 
 ## Step 1: Deploy the Models
@@ -195,6 +195,8 @@ kubectl exec gateway-test -- bash /scripts/0.test-gateway.sh
 
 ### Expected output
 
+The script runs 12 checks: 4 non-streaming (Steps 2-5) and 8 streaming (Steps 6-9, four checks per model).
+
 ```
 ═══════════════════════════════════════════════════════════
   Inference Gateway — End-to-End Validation
@@ -217,16 +219,42 @@ Step 4: Testing Qwen/Qwen2.5-3B-Instruct...
 Step 5: Testing unknown model rejection...
   ✅ PASS: Unknown model 'does-not-exist/fake-model' rejected with HTTP 404
 
+Step 6: Streaming test for Qwen/Qwen2.5-7B-Instruct...
+  ✅ PASS: Qwen/Qwen2.5-7B-Instruct streaming — HTTP 200
+  ✅ PASS: Qwen/Qwen2.5-7B-Instruct streaming — model field matches
+  ✅ PASS: Qwen/Qwen2.5-7B-Instruct streaming — ends with data: [DONE]
+  ✅ PASS: Qwen/Qwen2.5-7B-Instruct streaming — time spread N.NNN s ≥ 0.5 s (first→last content chunk)
+  ℹ️  Content chunks: NN, first: NNNNNNNNNN.NNNNNN, last: NNNNNNNNNN.NNNNNN, spread: N.NNN s
+
+Step 8: Streaming test for Qwen/Qwen2.5-3B-Instruct...
+  ✅ PASS: Qwen/Qwen2.5-3B-Instruct streaming — HTTP 200
+  ✅ PASS: Qwen/Qwen2.5-3B-Instruct streaming — model field matches
+  ✅ PASS: Qwen/Qwen2.5-3B-Instruct streaming — ends with data: [DONE]
+  ✅ PASS: Qwen/Qwen2.5-3B-Instruct streaming — time spread N.NNN s ≥ 0.5 s (first→last content chunk)
+  ℹ️  Content chunks: NN, first: NNNNNNNNNN.NNNNNN, last: NNNNNNNNNN.NNNNNN, spread: N.NNN s
+
 ═══════════════════════════════════════════════════════════
-  ✅ All 4 checks passed!
+  ✅ All 12 checks passed!
 
   Gateway : https://internal-k8s-hyperpod-...elb.amazonaws.com
   IGWC    : qwen-gateway
   Path    : /v1/chat/completions
+  Tests   : 12/12
+            non-streaming: Steps 2-5 (4 checks)
+            streaming:     Steps 6-9 (8 checks)
 ═══════════════════════════════════════════════════════════
 ```
 
 The `chatcmpl-<hex>` id does not identify the path: vLLM generates that form for any request without an `X-Request-Id` header. The requests go through the gateway because the script sends them to the gateway's own load balancer (Ingress `hyperpod-inference-system/qwen-gateway-alb`). For a model the gateway does not route, the gateway's 404 body reads `no matching model: ...`, while vLLM's own 404 for an unknown model reads `The model ... does not exist.`
+
+### Streaming checks (Steps 6-9)
+
+Steps 6-9 send a streaming chat request (`"stream": true`, `max_tokens: 128`) through the gateway for each model and verify:
+
+1. **HTTP 200** — the gateway accepts the streaming request.
+2. **Model field matches** — the `model` field in SSE chunks matches the requested model, confirming correct routing.
+3. **`data: [DONE]`** — the stream ends with the OpenAI SSE sentinel, confirming the full response was delivered.
+4. **Arrival-time spread** — the first content chunk arrives well before the last. A proxy that buffers the response delivers all chunks in a burst with near-zero spread, even though the SSE framing is valid. The script records a timestamp on each chunk and checks that the spread exceeds 0.5 s (conservative; real runs typically show 2-4 s for 128 tokens).
 
 ## Cleanup
 
