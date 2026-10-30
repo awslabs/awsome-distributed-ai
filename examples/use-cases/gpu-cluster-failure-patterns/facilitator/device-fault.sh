@@ -104,8 +104,9 @@ require(len({cfg['gpu_bdf'], cfg['efa_bdf'], cfg['management_bdf']}) == 3,
 management = Path('/sys/class/net') / cfg['management_interface'] / 'device'
 require(management.resolve().name == cfg['management_bdf'], 'Management PCI identity changed.')
 require((management / 'driver').resolve().name == 'ena', 'Management driver is not ENA.')
-routes = json.loads(command('/usr/sbin/ip', '-j', 'route', 'show', 'default'))
-require(routes and all(r.get('dev') == cfg['management_interface'] for r in routes),
+routes = json.loads(command('/usr/sbin/ip', '-j', 'route', 'get', '169.254.169.254'))
+require(isinstance(routes, list) and len(routes) == 1 and isinstance(routes[0], dict)
+        and routes[0].get('dev') == cfg['management_interface'],
         'Default management route differs from the provisioned ENA interface.')
 
 def identity(kind, allow_unbound=False):

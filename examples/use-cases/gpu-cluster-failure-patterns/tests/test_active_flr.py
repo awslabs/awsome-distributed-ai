@@ -865,7 +865,8 @@ class CaptureOnly(unittest.TestCase):
 class TargetHelper(unittest.TestCase):
     """Execute the actual embedded helper, with only OS/sysfs/Slurm boundaries fake."""
     def exercise(self, kind='gpu', foreign=False, wrong_ack=False, traffic=True,
-                 reason='aim344-device-recovery', reason_after=None):
+                 reason='aim344-device-recovery', reason_after=None,
+                 multi_default=False, selected_route='[{"dev":"ena0"}]'):
         import contextlib
         import select
         import stat
@@ -931,8 +932,13 @@ class TargetHelper(unittest.TestCase):
                     return super().write_text(text, *args, **kwargs)
             node_reads = [0]
             def command(args, **kwargs):
+                if args == ('/usr/sbin/ip', '-j', 'route', 'show', 'default'):
+                    return ('[{"dev":"ena0","metric":100},{"dev":"ena1","metric":200}]'
+                            if multi_default else '[{"dev":"ena0"}]')
+                if args == ('/usr/sbin/ip', '-j', 'route', 'get', '169.254.169.254'):
+                    return selected_route
                 if args[0].endswith('/ip'):
-                    return '[{"dev":"ena0"}]'
+                    raise AssertionError('Unexpected route command: ' + repr(args))
                 if args[0].endswith('/scontrol'):
                     if 'job' in args:
                         return 'JobId=226 TimeLimit=00:06:00'
@@ -969,6 +975,22 @@ class TargetHelper(unittest.TestCase):
                 except SystemExit as caught:
                     error = str(caught)
             return writes, output.getvalue(), error
+
+    def test_multi_default_uses_kernel_selected_management_route(self):
+        writes, output, error = self.exercise(multi_default=True)
+        self.assertIsNone(error)
+        self.assertEqual([('reset_method', 'flr\n'), ('reset', '1\n')],
+                         [(name, value) for name, value, _ in writes])
+
+    def test_invalid_selected_management_routes_refuse_before_mutation(self):
+        for route in ('[]', '{}', '[{}]', '[{"dev":""}]',
+                      '[{"dev":"ena1"}]', '[{"dev":"../ena0"}]',
+                      '[{"dev":"ena0"},{"dev":"ena1"}]'):
+            with self.subTest(route=route):
+                writes, output, error = self.exercise(multi_default=True, selected_route=route)
+                self.assertEqual([], writes)
+                self.assertIn('management route differs', error)
+                self.assertNotIn('mutation-start', output)
 
     def test_gpu_exact_flr_after_both_markers_no_idle_remove(self):
         writes, output, error = self.exercise()
