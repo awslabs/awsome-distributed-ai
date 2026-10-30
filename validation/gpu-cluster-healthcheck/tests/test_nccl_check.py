@@ -649,6 +649,7 @@ log_result "6-efa-loopback" "PASS" "new execution"
                                    ('p5en.48xlarge', '8|16|true|efa'),
                                    ('p6-b200.48xlarge', '8|8|true|efa'),
                                    ('g7.48xlarge', '8|2|false|efa'),
+                                   ('g7e.48xlarge', '8|4|false|efa'),
                                    ('g7x48xlarge', '0|0|false|efa')]:
             with self.subTest(instance=instance):
                 p = subprocess.run(
@@ -684,6 +685,95 @@ log_result "6-efa-loopback" "PASS" "new execution"
                                text=True, capture_output=True, timeout=10)
             self.assertNotEqual(p.returncode, 0)
             self.assertIn('GPU count mismatch: expected=8, detected=7', p.stdout)
+
+    def test_g7e_dmi_preserves_eight_gpu_launch(self):
+        rc, report, calls, imds_called = self.run_check(
+            instance='', dmi='g7e.48xlarge', orchestrator=True)
+        self.assertEqual((rc, report['status']), (0, 'PASS'))
+        self.assertEqual(report['instance_type'], 'g7e.48xlarge')
+        self.assertFalse(imds_called)
+        self.assertIn('--ntasks=2', calls[-1])
+        self.assertEqual(calls[-1][calls[-1].index('-g') + 1], '8')
+
+    def test_assigned_efa_profile_and_invalid_contract(self):
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith(('INSTANCE_', 'HEALTHCHECK_', 'EXPECTED_'))}
+        for count in ('1', '2', '4', '0', '5', '-1', '02', '', '2;id'):
+            with self.subTest(count=count):
+                result = subprocess.run(
+                    ['bash', '-c', 'source "$1"; load_instance_profile; '
+                     'printf "%s|%s|%s" "$EXPECTED_GPU_COUNT" "$EXPECTED_EFA_COUNT" "$NVLINK_EXPECTED"',
+                     '_', str(SUITE / 'lib/common.sh')],
+                    env=dict(env, INSTANCE_TYPE='g7e.48xlarge', HEALTHCHECK_EXPECTED_EFA_COUNT=count),
+                    text=True, capture_output=True, timeout=10)
+                if count in ('1', '2', '4'):
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, f'8|{count}|false')
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+        for entry in ('gpu-healthcheck.sh', 'checks/2-efa-enumeration.sh'):
+            with tempfile.TemporaryDirectory() as temporary:
+                args = ['--check', '2', '--dry-run'] if '/' not in entry else ['--dry-run']
+                result = subprocess.run(['bash', str(SUITE / entry), *args],
+                    env=dict(env, INSTANCE_TYPE='g7e.48xlarge', HEALTHCHECK_EXPECTED_EFA_COUNT='0',
+                             RESULTS_DIR=temporary), text=True, capture_output=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('[PASS]', result.stdout)
+
+    def test_efa_assignment_detects_unbound_and_missing_provider(self):
+        # Synthetic command output and relocated data directories only. No PCI,
+        # RDMA or device mutation; execute the existing Check 2 shell unchanged
+        # except its two absolute read-only inventory paths.
+        import shutil
+        for bound, domains, expected, failed in ((2, 2, '2', False), (1, 1, '2', True),
+                                                (2, 1, '2', True), (2, 2, None, True)):
+            with self.subTest(bound=bound, domains=domains, expected=expected), \
+                 tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / 'checks').mkdir()
+                shutil.copytree(SUITE / 'lib', root / 'lib')
+                shutil.copyfile(SUITE / 'instance-profiles.conf', root / 'instance-profiles.conf')
+                devices = root / 'infiniband'
+                devices.mkdir()
+                for i in range(bound):
+                    (devices / f'uverbs{i}').touch()
+                script = (SUITE / 'checks/2-efa-enumeration.sh').read_text()
+                script = script.replace('/dev/infiniband', str(devices)).replace(
+                    '/sys/class/infiniband', str(root / 'no-sysfs'))
+                (root / 'checks/check.sh').write_text(script)
+                binary = root / 'bin'
+                binary.mkdir()
+                programs = {
+                    'lspci': 'if [[ $1 == -Dk ]]; then printf "Kernel driver in use: efa\\n%.0s" {1..' + str(bound) + '}; else printf "EFA device\\nEFA device\\n"; fi',
+                    'ibv_devices': 'printf "device node GUID\\n----------------\\n"; printf "rdma%s guid\\n" {1..' + str(bound) + '}',
+                    'fi_info': 'printf "provider: efa\\n"; for i in {1..' + str(domains) + '}; do printf "domain: rdma%s-rdm\\ndomain: rdma%s-dgrm\\n" "$i" "$i"; done',
+                    'lsmod': 'printf "efa 1\\nib_uverbs 1\\nib_core 1\\n"',
+                }
+                for name, body in programs.items():
+                    path = binary / name
+                    path.write_text('#!/bin/bash\n' + body + '\n')
+                    path.chmod(0o755)
+                env = {k: v for k, v in os.environ.items()
+                       if not k.startswith(('INSTANCE_', 'HEALTHCHECK_', 'EXPECTED_', 'DRY_RUN'))}
+                env.update(PATH=f'{binary}:/usr/bin:/bin', INSTANCE_TYPE='g7e.48xlarge',
+                           RESULTS_DIR=str(root / 'results'))
+                if expected is not None:
+                    env['HEALTHCHECK_EXPECTED_EFA_COUNT'] = expected
+                result = subprocess.run(['bash', str(root / 'checks/check.sh')], env=env,
+                                        text=True, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode != 0, failed, result.stdout + result.stderr)
+                report = json.loads((root / 'results/check-2-efa-enumeration.json').read_text())
+                if failed:
+                    self.assertEqual(report['status'], 'FAIL')
+                    self.assertEqual(report['severity'], 'ISOLATE')
+                else:
+                    # The host's memlock may cause WARN: never erase that advisory.
+                    self.assertIn(report['status'], ('PASS', 'WARN'))
+
+    def test_g7e_profile_and_kubernetes_copy(self):
+        expected = 'g7e.48xlarge|8|4|false|efa'
+        self.assertIn(expected, (SUITE / 'instance-profiles.conf').read_text().splitlines())
+        self.assertIn(expected, (SUITE / 'kubernetes/manifests/01-configmap.yaml').read_text())
 
     def test_g7_profile_and_kubernetes_copy(self):
         expected = 'g7.48xlarge|8|2|false|efa'

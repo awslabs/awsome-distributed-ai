@@ -31,6 +31,19 @@ chmod +x gpu-healthcheck.sh checks/*.sh slurm/*.sh slurm/examples/*.sh
 ./gpu-healthcheck.sh --suite lightweight --dry-run
 ```
 
+### Assigned EFA interfaces
+
+`g7e.48xlarge` has 8 GPUs, no NVLink, and up to 4 EFA interfaces. Its profile
+records that capability, not a claim that every launch attaches four. For a
+launch template explicitly assigning two interfaces, use
+`HEALTHCHECK_EXPECTED_EFA_COUNT=2` for both the orchestrator and direct checks.
+The override must be a positive integer no greater than the profile capacity;
+invalid assignments stop the check. Derive it from the trusted launch assignment,
+not from the number still visible after a fault. Check 2 requires the assigned
+count in PCI, driver-bound, RDMA, uverbs and unique provider-domain views.
+GPU counts, correctness validation and existing bandwidth thresholds are unchanged.
+Two-interface results do not qualify four-interface performance.
+
 ### First Check
 
 ```bash

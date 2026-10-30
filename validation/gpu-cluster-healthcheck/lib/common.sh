@@ -116,6 +116,10 @@ load_instance_profile() {
 
     if [[ -z "${profile_line}" ]]; then
         log_warn "No profile found for instance type: ${INSTANCE_TYPE}"
+        if [[ -n "${HEALTHCHECK_EXPECTED_EFA_COUNT+x}" ]]; then
+            log_error "Cannot validate assigned EFA count without an instance profile"
+            return 1
+        fi
         log_warn "Using defaults -- results may be unreliable"
         EXPECTED_GPU_COUNT=0
         EXPECTED_EFA_COUNT=0
@@ -125,6 +129,16 @@ load_instance_profile() {
     fi
 
     IFS='|' read -r _ EXPECTED_GPU_COUNT EXPECTED_EFA_COUNT NVLINK_EXPECTED EFA_PROVIDER <<< "${profile_line}"
+    if [[ -n "${HEALTHCHECK_EXPECTED_EFA_COUNT+x}" ]]; then
+        # Launch-template assignment, never the observed (possibly faulted) count.
+        if [[ ! ${HEALTHCHECK_EXPECTED_EFA_COUNT} =~ ^[1-9][0-9]?$ ]] ||
+           (( HEALTHCHECK_EXPECTED_EFA_COUNT > EXPECTED_EFA_COUNT )); then
+            log_error "HEALTHCHECK_EXPECTED_EFA_COUNT must be positive and at most profile capacity ${EXPECTED_EFA_COUNT}"
+            return 1
+        fi
+        log_info "EFA assignment: expected=${HEALTHCHECK_EXPECTED_EFA_COUNT}, profile capacity=${EXPECTED_EFA_COUNT}"
+        EXPECTED_EFA_COUNT=${HEALTHCHECK_EXPECTED_EFA_COUNT}
+    fi
     log_verbose "Profile loaded: GPUs=${EXPECTED_GPU_COUNT}, EFA=${EXPECTED_EFA_COUNT}, NVLink=${NVLINK_EXPECTED}, Provider=${EFA_PROVIDER}"
 }
 
@@ -358,6 +372,6 @@ init_check() {
 
     # Load instance profile if not already loaded
     if [[ -z "${EXPECTED_GPU_COUNT}" ]]; then
-        load_instance_profile || true
+        load_instance_profile || exit 1
     fi
 }

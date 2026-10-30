@@ -170,6 +170,30 @@ run_check() {
         echo -e "${YELLOW}[DRY-RUN]${NC} ulimit -l" >&2
     fi
 
+    # A PCI function remains enumerated after driver unbind. Count the bound
+    # driver and independent RDMA/uverbs/provider views as well, against the
+    # provisioned assignment, never against the currently visible device count.
+    if [[ "${DRY_RUN}" != "1" && ${EXPECTED_EFA_COUNT:-0} -gt 0 ]]; then
+        local driver_count domain_count observed label
+        driver_count=$(lspci -Dk | grep -c '^[[:space:]]*Kernel driver in use: efa$' || true)
+        domain_count=$(printf '%s\n' "${fi_output:-}" | awk '
+            $1 == "domain:" {sub(/-(rdm|dgrm)$/, "", $2); seen[$2]=1}
+            END {print length(seen)}')
+        for label in driver-bound RDMA uverbs provider-domains; do
+            case "$label" in
+                driver-bound) observed=$driver_count ;;
+                RDMA) observed=$rdma_count ;;
+                uverbs) observed=$uverbs_count ;;
+                provider-domains) observed=$domain_count ;;
+            esac
+            if [[ $observed -ne $EXPECTED_EFA_COUNT ]]; then
+                check_fail "$CHECK_NAME" \
+                    "EFA $label count mismatch: expected=$EXPECTED_EFA_COUNT, detected=$observed" "ISOLATE"
+                failures=$((failures + 1))
+            fi
+        done
+    fi
+
     # Final result
     if [[ ${failures} -gt 0 ]]; then
         return 1
