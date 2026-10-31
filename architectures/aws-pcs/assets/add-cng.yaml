@@ -285,7 +285,9 @@ Parameters:
       group, as before). Specify a value to share one placement group across
       multiple CNGs (e.g. a heterogeneous tightly-coupled job) — honored with or
       without EFA, so a targeted ODCR held in a customer-owned cluster placement
-      group is consumable on any instance type.
+      group is consumable on any instance type. Also accepts a placement group
+      ID (pg-...), which is required for a group shared from another account; a
+      value starting with "pg-" is treated as an ID.
     Default: ''
 
   CapacityReservationId:
@@ -312,6 +314,11 @@ Conditions:
   # EFA is enabled when the interface count is non-zero (0 = standard ENA).
   EfaEnabled: !Not [!Equals [!Ref EfaInterfaceCount, 0]]
   HasUserPlacementGroup: !Not [!Equals [!Ref PlacementGroupName, ""]]
+  # A value starting with "pg-" is a placement group ID (required for a group
+  # shared from another account); anything else is a name.
+  UserPlacementGroupIsId: !And
+    - !Condition HasUserPlacementGroup
+    - !Equals [!Select [0, !Split ["pg-", !Ref PlacementGroupName]], ""]
   # Auto-create a per-CNG cluster placement group only when EFA is on AND the
   # user did not provide one. Override PlacementGroupName to reuse an existing
   # PG (e.g. a shared one across multiple CNGs).
@@ -543,13 +550,16 @@ Resources:
           - !Ref AWS::NoValue
         # Cluster placement group: auto-created (EFA on, no user PG) or the
         # user-supplied PlacementGroupName (with or without EFA — see the
-        # UsePlacementGroup condition).
+        # UsePlacementGroup condition). A "pg-" value is set as GroupId.
         Placement: !If
           - UsePlacementGroup
-          - GroupName: !If
-              - CreatePlacementGroup
-              - !Ref PlacementGroup
-              - !Ref PlacementGroupName
+          - !If
+            - UserPlacementGroupIsId
+            - GroupId: !Ref PlacementGroupName
+            - GroupName: !If
+                - CreatePlacementGroup
+                - !Ref PlacementGroup
+                - !Ref PlacementGroupName
           - !Ref AWS::NoValue
         # When EFA is enabled, switch to NetworkInterfaces (mutually exclusive with
         # SecurityGroupIds at the LaunchTemplateData level). The cluster
