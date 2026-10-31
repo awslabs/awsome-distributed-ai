@@ -652,7 +652,8 @@ against a "targeted" On-Demand Capacity Reservation (On-Demand billing; EFA and
 placement settings are unaffected). Leave it empty for plain On-Demand — an
 "open" ODCR is consumed automatically. If the reservation is held in a
 customer-owned cluster placement group, also set `OnDemandPlacementGroupName`
-to that CPG (honored with or without EFA). Keep `OnDemandMaxCount` at or below
+to that CPG (honored with or without EFA; use the group ID if the CPG is shared
+from another account). Keep `OnDemandMaxCount` at or below
 the reservation's instance count — a direct ODCR target does not backfill with
 plain On-Demand, so launches beyond the reservation fail and jobs wait.
 
@@ -683,7 +684,10 @@ instance type's actual `MaximumEfaInterfaces`, fails at launch.)
 existing placement group instead — e.g. to share one PG across multiple CPU
 CNGs, or to consume capacity reserved into a customer-owned CPG. (The GPU
 queue takes the same override via `PseriesPlacementGroupName`; it is ignored
-on the Capacity Block path, where the block carries its own placement.)
+on the Capacity Block path, where the block carries its own placement.) The
+value can also be a placement group ID (`pg-…`), which is required for a
+[placement group shared from another account](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/share-placement-group.html);
+a value starting with `pg-` is treated as an ID.
 
 **Multi-NIC bandwidth needs multiple MPI pairs.** A single MPI pair uses one
 libfabric endpoint and only one NIC. Use `osu_mbw_mr -np 32 -N 16` (or your

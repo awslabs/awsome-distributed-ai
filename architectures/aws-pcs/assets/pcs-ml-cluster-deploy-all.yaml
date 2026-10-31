@@ -139,7 +139,7 @@ Metadata:
       OnDemandEfaInterfaceCount:
         default: "EFA interfaces on CPU queue (0 = off, 1 or 2 for HPC types)"
       OnDemandPlacementGroupName:
-        default: "Existing placement group name (empty = auto-create when EFA on)"
+        default: "Existing placement group name or ID (empty = auto-create when EFA on)"
       DeployPseriesCNG:
         default: "Deploy GPU (P5/P6) queue"
       PseriesInstanceType:
@@ -529,7 +529,9 @@ Parameters:
       group when EFA is off). Set to reuse an existing PG (e.g. shared across
       multiple CPU CNGs, or a customer-owned CPG holding reserved capacity —
       honored with or without EFA, so a CPG-held targeted ODCR is consumable).
-      The GPU queue's equivalent is PseriesPlacementGroupName.
+      Also accepts a placement group ID (pg-...), required for a group shared
+      from another account. The GPU queue's equivalent is
+      PseriesPlacementGroupName.
     Default: ''
 
   # P-series Compute Node Group
