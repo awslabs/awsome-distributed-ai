@@ -40,7 +40,6 @@ Metadata:
           - OnDemandQueueName
           - OnDemandEfaInterfaceCount
           - OnDemandPlacementGroupName
-          - OnDemandPlacementGroupId
           - OnDemandCapacityReservationId
       - Label:
           default: "4. GPU Compute Node Group - P5/P6 Series (Optional)"
@@ -140,9 +139,7 @@ Metadata:
       OnDemandEfaInterfaceCount:
         default: "EFA interfaces on CPU queue (0 = off, 1 or 2 for HPC types)"
       OnDemandPlacementGroupName:
-        default: "Existing cluster placement group name (same account)"
-      OnDemandPlacementGroupId:
-        default: "Existing cluster placement group ID (required for shared groups)"
+        default: "Existing placement group name or ID (empty = auto-create when EFA on)"
       DeployPseriesCNG:
         default: "Deploy GPU (P5/P6) queue"
       PseriesInstanceType:
@@ -526,13 +523,15 @@ Parameters:
   OnDemandPlacementGroupName:
     Type: String
     Description: >-
-      (Optional, advanced) Name of an existing cluster placement group owned by this account for the On-Demand CNG. Reuses the group with or without EFA. For a group shared by another account, use OnDemandPlacementGroupId instead. Supply either the name or ID, or leave both empty to create a group when OnDemandEfaInterfaceCount > 0 and use no group when it is 0. The GPU queue uses PseriesPlacementGroupName.
-    Default: ''
-
-  OnDemandPlacementGroupId:
-    Type: String
-    Description: >-
-      (Optional, advanced) ID (pg-...) of an existing cluster placement group for the On-Demand CNG. Passed to add-cng.yaml as PlacementGroupId to set LaunchTemplate Placement.GroupId, which EC2 requires for cross-account groups. Reuses the group with or without EFA. Leave OnDemandPlacementGroupName empty when using an ID. Arrange sharing and access before deployment; the caller manages the existing group's lifecycle. Login-node and P-series settings are separate.
+      (Optional, advanced) Existing cluster placement group name to launch the
+      on-demand CPU nodes into. Leave empty (default) to auto-create a per-CNG
+      cluster placement group when OnDemandEfaInterfaceCount > 0 (no placement
+      group when EFA is off). Set to reuse an existing PG (e.g. shared across
+      multiple CPU CNGs, or a customer-owned CPG holding reserved capacity —
+      honored with or without EFA, so a CPG-held targeted ODCR is consumable).
+      Also accepts a placement group ID (pg-...), required for a group shared
+      from another account. The GPU queue's equivalent is
+      PseriesPlacementGroupName.
     Default: ''
 
   # P-series Compute Node Group
@@ -638,12 +637,6 @@ Parameters:
 # time with a clear message, instead of letting it fail deep inside the nested
 # prerequisites stack as an opaque CreateFileSystem error.
 Rules:
-  OnDemandPlacementGroupIdOrName:
-    Assertions:
-      - Assert: !Or
-          - !Equals [!Ref OnDemandPlacementGroupId, '']
-          - !Equals [!Ref OnDemandPlacementGroupName, '']
-        AssertDescription: OnDemandPlacementGroupId and OnDemandPlacementGroupName are both set. Specify only one, or leave both empty for the EFA-based default.
   LustrePersistent1Throughput:
     RuleCondition: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_1']
     Assertions:
@@ -865,11 +858,11 @@ Resources:
         SlurmVersion: !Ref SlurmVersion
         MonitoringRole: compute
         InstallEnrootPyxis: !Ref InstallEnrootPyxis
-        # add-cng.yaml creates a group when EFA is enabled and both placement inputs are empty.
+        # EFA on CPU HPC instances (hpc8a/hpc7a/hpc6a). add-cng.yaml enables EFA
+        # when EfaInterfaceCount > 0 and auto-creates a per-CNG cluster placement
+        # group when PlacementGroupName is empty.
         EfaInterfaceCount: !Ref OnDemandEfaInterfaceCount
         PlacementGroupName: !Ref OnDemandPlacementGroupName
-        # Forwarded even when empty: publish the child with this parameter before using this parent.
-        PlacementGroupId: !Ref OnDemandPlacementGroupId
         CapacityReservationId: !Ref OnDemandCapacityReservationId
         DirectoryRole: !If [DirectoryEnabled, 'client', 'none']
         DirectoryDomainSuffix: !Ref DirectoryDomainSuffix

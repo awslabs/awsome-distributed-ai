@@ -18,7 +18,7 @@ LDAP users).
 
 | # | Category | Tests | File | When to run |
 |---|---|---|---|---|
-| 0 | **Docs lint** | `bash tests/lint-docs.sh` checks for stale parameter references, undocumented deploy-all parameters, broken README anchors, and changes to placement ID/name selection and defaults. Runs locally without AWS; requires Python 3 and PyYAML (`python3 -m pip install pyyaml`). | [`lint-docs.sh`](./lint-docs.sh) | Every PR (especially parameter changes) |
+| 0 | **Docs lint** | `bash tests/lint-docs.sh` — no stale/renamed param refs in docs, every deploy-all param documented, README anchors resolve (the docs counterpart of template-lint; runs in seconds, no AWS) | [`lint-docs.sh`](./lint-docs.sh) | Every PR (esp. param renames) |
 | 1-3, 8 | **Infrastructure** | Template lint, monitoring stack, container runtime (first-boot + AMI build) | [`infra-test.md`](./infra-test.md) | Every PR |
 | 4-6 | **Compute** | CPU queue, GPU families (G/P5/P6), NCCL multi-node EFA | [`compute-test.md`](./compute-test.md) | Every PR |
 | 7, 7b | **Training** | FSDP Llama-2 7B (HF-streamed) + Megatron-LM GPT-3 (TP/PP/DP, local data) | [`training-test.md`](./training-test.md) | GPU PRs |

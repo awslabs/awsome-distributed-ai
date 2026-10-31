@@ -9,7 +9,12 @@ Description: >
   (DeployMonitoring/MonitoringRole). A Slurm queue is created only when QueueName
   is set (leave empty for login nodes).
 
-  EFA support (EfaInterfaceCount > 0) is available for CPU HPC instance types (hpc8a/hpc7a/hpc6a etc., 1-2 EFA interfaces). When enabled, the LaunchTemplate uses a NetworkInterfaces block with InterfaceType=efa and a cluster placement group. Supply PlacementGroupName or PlacementGroupId to reuse an existing group; otherwise the stack creates one. Cross-account groups require PlacementGroupId. For multi-NIC GPU instances (P5/P6 families), use the dedicated add-cng-p5.yaml / add-cng-p6-b200.yaml / add-cng-p6-b300.yaml templates instead.
+  EFA support (EfaInterfaceCount > 0) is available for CPU HPC instance types
+  (hpc8a/hpc7a/hpc6a etc., 1-2 EFA interfaces). When enabled the LaunchTemplate
+  switches to a NetworkInterfaces block with InterfaceType=efa, and a cluster
+  placement group is auto-created (override with PlacementGroupName to reuse an
+  existing one). For multi-NIC GPU instances (P5/P6 families) use the dedicated
+  add-cng-p5.yaml / add-cng-p6-b200.yaml / add-cng-p6-b300.yaml templates instead.
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -34,11 +39,10 @@ Metadata:
           - FSxLustreFilesystemMountName
           - FSxOpenZFSFilesystemId
       - Label:
-          default: EFA and cluster placement
+          default: EFA (CPU HPC instances)
         Parameters:
           - EfaInterfaceCount
           - PlacementGroupName
-          - PlacementGroupId
       - Label:
           default: Capacity Reservation Settings (Optional)
         Parameters:
@@ -259,20 +263,31 @@ Parameters:
   EfaInterfaceCount:
     Type: Number
     Description: >-
-      Number of Elastic Fabric Adapter (EFA) interfaces per compute node. 0 (default) uses standard ENA networking. 1 or 2 configures that many interfaces in the LaunchTemplate's NetworkInterfaces block with InterfaceType=efa and uses a cluster placement group. The stack creates the group unless PlacementGroupName or PlacementGroupId is supplied. Set the count to the instance type's MaximumEfaInterfaces: hpc8a.96xlarge / hpc7a.* / hpc6id.32xlarge = 2; hpc6a.48xlarge / c7i.metal = 1. A non-EFA type (e.g. c6i.4xlarge) fails to launch with count > 0. For multi-NIC GPU families (P5/P6), use the dedicated add-cng-p5/p6-* templates instead.
+      Number of Elastic Fabric Adapter (EFA) network interfaces on the compute
+      nodes. 0 (default) = no EFA (standard ENA networking). 1 or 2 = enable EFA
+      with that many interfaces: the LaunchTemplate switches to a NetworkInterfaces
+      block with InterfaceType=efa and a cluster placement group is wired in
+      (auto-created unless PlacementGroupName is supplied). Set the count to the
+      instance type's MaximumEfaInterfaces — hpc8a.96xlarge / hpc7a.* /
+      hpc6id.32xlarge = 2; hpc6a.48xlarge / c7i.metal = 1. EFA requires an
+      EFA-capable type; a non-EFA type (e.g. c6i.4xlarge) fails to launch with
+      count > 0. For multi-NIC GPU families (P5/P6) use the dedicated
+      add-cng-p5/p6-* templates instead.
     Default: 0
     AllowedValues: [0, 1, 2]
 
   PlacementGroupName:
     Type: String
     Description: >-
-      (Optional) Name of an existing cluster placement group owned by this account. Sets LaunchTemplate Placement.GroupName and reuses the group with or without EFA. For a group shared by another account, use PlacementGroupId instead. Supply either the name or ID, or leave both empty to create a group when EfaInterfaceCount > 0 and use no group when it is 0.
-    Default: ''
-
-  PlacementGroupId:
-    Type: String
-    Description: >-
-      (Optional) ID (pg-...) of an existing cluster placement group. Sets LaunchTemplate Placement.GroupId, which EC2 requires for cross-account groups. Reuses the group with or without EFA. Leave PlacementGroupName empty when using an ID. Arrange sharing and access before deployment; the caller manages the existing group's lifecycle.
+      (Optional) Name of an existing cluster placement group to launch nodes into.
+      Leave empty to auto-create a per-CNG cluster placement group when
+      EfaInterfaceCount > 0 (with EfaInterfaceCount = 0 empty means no placement
+      group, as before). Specify a value to share one placement group across
+      multiple CNGs (e.g. a heterogeneous tightly-coupled job) — honored with or
+      without EFA, so a targeted ODCR held in a customer-owned cluster placement
+      group is consumable on any instance type. Also accepts a placement group
+      ID (pg-...), which is required for a group shared from another account; a
+      value starting with "pg-" is treated as an ID.
     Default: ''
 
   CapacityReservationId:
@@ -288,14 +303,6 @@ Parameters:
       subnet's AZ.
     Default: ""
 
-Rules:
-  PlacementGroupIdOrName:
-    Assertions:
-      - Assert: !Or
-          - !Equals [!Ref PlacementGroupId, '']
-          - !Equals [!Ref PlacementGroupName, '']
-        AssertDescription: PlacementGroupId and PlacementGroupName are both set. Specify only one, or leave both empty for the EFA-based default.
-
 Conditions:
   CreateQueue: !Not [!Equals [!Ref QueueName, ""]]
   # Emit the monitoring-role tag for both login and compute nodes (any role
@@ -307,17 +314,24 @@ Conditions:
   # EFA is enabled when the interface count is non-zero (0 = standard ENA).
   EfaEnabled: !Not [!Equals [!Ref EfaInterfaceCount, 0]]
   HasUserPlacementGroup: !Not [!Equals [!Ref PlacementGroupName, ""]]
-  HasUserPlacementGroupId: !Not [!Equals [!Ref PlacementGroupId, ""]]
-  # Auto-create only when EFA is on and neither an existing name nor ID is supplied.
+  # A value starting with "pg-" is a placement group ID (required for a group
+  # shared from another account); anything else is a name.
+  UserPlacementGroupIsId: !And
+    - !Condition HasUserPlacementGroup
+    - !Equals [!Select [0, !Split ["pg-", !Ref PlacementGroupName]], ""]
+  # Auto-create a per-CNG cluster placement group only when EFA is on AND the
+  # user did not provide one. Override PlacementGroupName to reuse an existing
+  # PG (e.g. a shared one across multiple CNGs).
   CreatePlacementGroup: !And
     - !Condition EfaEnabled
     - !Not [!Condition HasUserPlacementGroup]
-    - !Not [!Condition HasUserPlacementGroupId]
-  # A supplied group also applies without EFA, for example when a targeted ODCR requires that group.
+  # Placement applies when EFA needs it (auto or user PG) OR the user named a
+  # PG explicitly without EFA — required to consume a targeted ODCR held in a
+  # customer-owned cluster placement group on a non-EFA instance type. An
+  # empty PlacementGroupName with EFA off stays placement-less as before.
   UsePlacementGroup: !Or
     - !Condition EfaEnabled
     - !Condition HasUserPlacementGroup
-    - !Condition HasUserPlacementGroupId
   Has2ndEfaInterface: !Equals [!Ref EfaInterfaceCount, 2]
   # Targeted ODCR: add a CapacityReservationTarget, nothing else — launches
   # stay On-Demand (billed against the reservation) and the EFA/placement
@@ -534,12 +548,14 @@ Resources:
           - CapacityReservationTarget:
               CapacityReservationId: !Ref CapacityReservationId
           - !Ref AWS::NoValue
-        # EC2 requires GroupId for cross-account groups; GroupName covers supplied and auto-created names.
+        # Cluster placement group: auto-created (EFA on, no user PG) or the
+        # user-supplied PlacementGroupName (with or without EFA — see the
+        # UsePlacementGroup condition). A "pg-" value is set as GroupId.
         Placement: !If
           - UsePlacementGroup
           - !If
-            - HasUserPlacementGroupId
-            - GroupId: !Ref PlacementGroupId
+            - UserPlacementGroupIsId
+            - GroupId: !Ref PlacementGroupName
             - GroupName: !If
                 - CreatePlacementGroup
                 - !Ref PlacementGroup
