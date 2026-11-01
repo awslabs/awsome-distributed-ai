@@ -39,7 +39,7 @@ if [[ ${SLURM_JOB_PARTITION:-} != "$PARTITION" ]]; then
     echo "Allocation partition does not match assigned PARTITION=$PARTITION" >&2
     exit 1
 fi
-export PATH=/opt/amazon/efa/bin:/opt/aws/pcs/scheduler/slurm-25.05/bin:$PATH
+export PATH=/opt/amazon/efa/bin:$PATH
 run=${AIM344_VERIFY_NAME:-verify-$SLURM_JOB_ID}
 out=${AIM344_RESULTS_DIR:-/var/tmp/aim344-results}/$run
 mkdir -p "$out"

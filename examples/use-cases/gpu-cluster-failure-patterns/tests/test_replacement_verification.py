@@ -308,6 +308,8 @@ exit "${LOCAL_SUITE_EXIT:-0}"
                 self.assertEqual(call['env']['SLURM_MPI_TYPE'], 'none')
                 self.assertEqual(call['mounts'], '')
             launch = json.loads((root / 'suite.json').read_text())
+            # Keep caller-selected Slurm clients; prepend only the EFA tools.
+            self.assertEqual(launch['env']['PATH'], '/opt/amazon/efa/bin:' + env['PATH'])
             expected = {'NCCL_CONTAINER': '/opt/aim344/aim344.sqsh', 'NCCL_TIMEOUT': '180',
                         'NCCL_MPI': 'pmix', 'NCCL_TESTS_BIN': '/opt/nccl-tests/build/all_reduce_perf',
                         'NCCL_ISOLATION_TESTS': '1', 'NCCL_ISOLATION_TIMEOUT': '120',
