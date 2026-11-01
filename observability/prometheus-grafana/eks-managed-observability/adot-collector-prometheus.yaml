@@ -1,11 +1,14 @@
 # ADOT Collector Configuration for Prometheus Scraping
-# 
-# NOTE: This file contains variables that must be substituted before applying:
-#   ${AMP_ENDPOINT} - Your AMP workspace remote write endpoint
-#   ${AWS_REGION_AMGP} - AWS region where AMP is deployed
+#
+# NOTE: This file is a template. These variables must be substituted before applying
+# (names are written without the dollar sign here so envsubst leaves this comment alone):
+#   AMP_ENDPOINT     - Your AMP workspace remote write endpoint
+#   AWS_REGION_AMGP  - AWS region where AMP is deployed
+#   SCRAPE_CONFIGS   - Prometheus scrape jobs, built from the files in
+#                      scrape-configs/ (one file per metrics source)
 #
 # Use deploy-obs.sh script which handles variable substitution automatically,
-# or manually substitute with envsubst or sed before applying.
+# or see the README for the manual envsubst command.
 #
 ---
 apiVersion: v1
@@ -68,38 +71,7 @@ spec:
             scrape_interval: 30s
             scrape_timeout: 10s
           scrape_configs:
-          - job_name: 'dcgm-exporter'
-            metrics_path: /metrics
-            kubernetes_sd_configs:
-            - role: endpoints
-              namespaces:
-                names:
-                - gpu-operator
-            tls_config:
-              ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-              insecure_skip_verify: true
-            bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
-            relabel_configs:
-            # Keep only DCGM exporter endpoints
-            - source_labels: [__meta_kubernetes_service_name]
-              action: keep
-              regex: .*dcgm-exporter.*
-            # Add node name as label
-            - source_labels: [__meta_kubernetes_pod_node_name]
-              action: replace
-              target_label: kubernetes_node
-            # Add pod name as label
-            - source_labels: [__meta_kubernetes_pod_name]
-              action: replace
-              target_label: pod
-            # Add namespace as label
-            - source_labels: [__meta_kubernetes_namespace]
-              action: replace
-              target_label: namespace
-            # Add service name as label
-            - source_labels: [__meta_kubernetes_service_name]
-              action: replace
-              target_label: service
+          ${SCRAPE_CONFIGS}
 
     exporters:
       prometheusremotewrite:
