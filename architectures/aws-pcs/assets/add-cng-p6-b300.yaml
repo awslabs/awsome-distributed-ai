@@ -364,8 +364,11 @@ Resources:
       # - mounts must complete before slurmd starts, or the scheduler could
       #   dispatch a job to a node without /home //fsx (nodeReady runs AFTER
       #   the node is job-eligible). TERMINATE: a node without shared
-      #   storage is useless — replace it. EVERY_BOOT + idempotent scripts
-      #   cover reboots.
+      #   storage is useless — replace it. OpenZFS initializes fstab and a
+      #   slurmd home.mount requirement once; systemd restores it on reboot.
+      #   Replaying NFSv3 in early cloud-init can deadlock on rpc-statd's
+      #   network-online dependency. Replace nodes for home FS ID changes.
+      #   Lustre has no fstab entry and still needs its EVERY_BOOT action.
       NodeLifecycleActions:
         ScriptCachingPolicy: CACHE_ONCE
         Stages:
@@ -380,7 +383,7 @@ Resources:
                 ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/mount-openzfs-home.sh'
               Arguments:
                 - !Ref FSxOpenZFSFilesystemId
-              ExecutionPolicy: EVERY_BOOT
+              ExecutionPolicy: FIRST_BOOT_ONLY
               OnError: TERMINATE
             - !If
               - HasLustre
