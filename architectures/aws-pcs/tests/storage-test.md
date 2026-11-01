@@ -33,12 +33,29 @@ Expected:
   lifecycle-action mount string).
 - Both `df -h` reports show `Avail` greater than zero.
 
-If a mount is missing on a freshly booted node, check the per-script
+If a mount is missing on a new node's first boot, check the per-script
 lifecycle logs `/var/log/amazon/pcs/lifecycle/actions/nodeBootstrapped/mount-openzfs-home.log`
-and `mount-lustre-fsx.log` (root-readable). A mount failure TERMINATES and
-replaces the node, so also check the CNG's recent instance churn. The most
+and `mount-lustre-fsx.log` (root-readable). A first-boot mount failure TERMINATES
+and replaces the node, so also check the CNG's recent instance churn. The most
 common first-boot failure is the OpenZFS DNS name not being resolvable yet
 (NFS settle race); the mount log will show `mount.nfs: Failed to resolve server`.
+
+On subsequent boots, OpenZFS is restored from `/etc/fstab` by systemd, not by
+the lifecycle action. Replaying the NFSv3 mount during early cloud-init can
+wait for rpc-statd, which waits for network-online.target, which in turn waits
+for cloud-init. `slurmd.service` therefore requires and starts after
+`home.mount`; a failed or missing mount blocks Slurm instead of allowing jobs
+on the local `/home`. This is not a lifecycle `TERMINATE` on later boots.
+Inspect the journal for `home.mount` and `slurmd.service` for reboot failures.
+Lustre keeps its existing `EVERY_BOOT` / `TERMINATE` policy.
+
+Roll out the updated templates and script together and replace existing nodes
+under a separately approved rollout; `CACHE_ONCE` and `FIRST_BOOT_ONLY` do not
+retrofit the slurmd drop-in onto existing nodes. Filesystem ID changes also
+require node replacement. Before declaring reboot recovery verified, validate
+first boot and a normal Slurm-requested reboot on replacement nodes, then
+confirm `/home` is the expected NFS export before Slurm becomes job-eligible.
+The offline regression in `test_home_boot.py` is not this runtime validation.
 
 ### Step 2 — read/write sanity
 
