@@ -16,9 +16,16 @@ come from validation/gpu-cluster-healthcheck, and every device mutation goes
 through the existing root-owned aim344-device-fault helper on the target.
 
 Scope of what a participant can cause, by construction:
-  start gpu | start efa | status | collect <allowlisted check> | recover | replace
+  start gpu | start efa | active gpu | active efa | next | status |
+  collect <allowlisted check> | recover
 No node name, PCI address, job identifier, shell command or check outside the
-per-kind allowlist is accepted.
+collect allowlist is accepted. `replace` is accepted by the grammar and refused:
+an operator runs the replacement route after the session (--operator replace).
+
+`next` starts the next incident in the seat's schedule, which account preparation
+writes into this root-only configuration. Its replies, and status, collect and
+recover while that incident is unresolved, do not name the incident's kind;
+--operator status does.
 """
 import argparse
 import datetime
@@ -48,7 +55,166 @@ PHASES = ('ready', 'preparing', 'fault-applied', 'investigating', 'recovering',
 # Phases in which this assignment still holds its exercise node.
 HOLDING_PHASES = ('preparing', 'fault-applied', 'investigating', 'recovering',
                   'recovery-failed', 'replacement-required')
-USAGE = ('Commands: start gpu | start efa | active gpu | active efa | status | collect <check> | recover | replace')
+USAGE = ('Commands: start gpu | start efa | active gpu | active efa | next | status | collect <check> | recover')
+
+# The incidents a seat's schedule can name (v2 hour design, section 4). The job
+# exercises are applied by the participant's launcher inside their own job, so
+# this helper only hands the launcher the incident's profile. The device exercise
+# is applied here, through the existing start route, once the participant's job
+# reports progress: an active EFA function-level reset of the assigned target.
+JOB_EXERCISES = ('slow-job', 'storage', 'dataloader', 'silent-corruption')
+DEVICE_EXERCISES = {
+    'efa-reset': {'kind': 'efa', 'active': True,
+                  'answer': 'the lab controller reset one EFA device on your '
+                            'exercise node (a PCIe function-level reset of {bdf}) '
+                            'while your job was running'},
+}
+SCHEDULE_LIMIT = 16
+SETTING_KEY = re.compile(r'[a-z][a-z0-9_]{0,31}')
+# Settings reach the launcher as data. The character set keeps a careless launcher
+# from turning one into shell syntax or a second option.
+SETTING_TEXT = re.compile(r'[A-Za-z0-9._:/=+-]{0,128}')
+# A hidden round says what it was once the participant can do nothing more with
+# it: recovered, or kept out of service for an operator.
+REVEAL_PHASES = ('runtime-ready', 'verified', 'replacement-required')
+
+
+def validate_schedule(entries):
+    """The seat's incident schedule, checked, or a Refusal naming what is wrong.
+
+    Account preparation writes it into the root-only session configuration, so the
+    order of later incidents is readable only through this helper. Every entry
+    names a known incident; its settings are passed to the launcher unchanged.
+    """
+    if not isinstance(entries, list) or not entries:
+        raise Refusal('The incident schedule must be a non-empty list.')
+    if len(entries) > SCHEDULE_LIMIT:
+        raise Refusal(f'The incident schedule has more than {SCHEDULE_LIMIT} entries.')
+    checked = []
+    for number, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict) or set(entry) - {'exercise', 'settings'}:
+            raise Refusal(f'Schedule entry {number} must hold only exercise and settings.')
+        exercise = entry.get('exercise')
+        if not isinstance(exercise, str) or (exercise not in JOB_EXERCISES
+                                             and exercise not in DEVICE_EXERCISES):
+            raise Refusal(f'Schedule entry {number} names an unknown exercise {exercise!r}.')
+        settings = entry.get('settings', {})
+        if not isinstance(settings, dict):
+            raise Refusal(f'Schedule entry {number} has settings that are not an object.')
+        for key, value in settings.items():
+            if not isinstance(key, str) or not SETTING_KEY.fullmatch(key):
+                raise Refusal(f'Schedule entry {number} has an unusable setting name {key!r}.')
+            if isinstance(value, float) and (value != value
+                                             or value in (float('inf'), float('-inf'))):
+                raise Refusal(f'Schedule entry {number} setting {key} is not finite.')
+            if isinstance(value, str):
+                if not SETTING_TEXT.fullmatch(value):
+                    raise Refusal(f'Schedule entry {number} setting {key} has unusable text.')
+            elif not isinstance(value, (bool, int, float)):
+                raise Refusal(f'Schedule entry {number} setting {key} must be text, a number '
+                              'or true/false.')
+        checked.append({'exercise': exercise, 'settings': dict(settings)})
+    return checked
+
+
+# Decision 4 (PI, 2026-11-02): a node that recovery cannot qualify stays out of
+# service for the rest of the session, and an operator replaces it afterwards.
+# The replacement route itself is unchanged and runs as --operator replace. Many
+# refusals, including some the target prints, are shared with that route and
+# still name `replace` as the next step, so participant output turns those
+# instructions into this statement instead of rewording every refusal.
+OPERATOR_REPLACEMENT = ('Your node stays out of service for the rest of this session; '
+                        'an operator replaces it after the session, so you do not '
+                        'replace it yourself.')
+PARTICIPANT_REPLACE_REFUSAL = ('Replacement is an operator step after the session; you do '
+                               'not replace your node yourself, and nothing was changed. '
+                               'If recovery could not qualify your node, it stays out of '
+                               'service until then.')
+# For a message that says replacement may be required without telling anyone to
+# run it, for example a retryable recovery that names the condition.
+OPERATOR_REPLACEMENT_NOTE = ('Replacement, when it is required, is done by an operator '
+                             'after the session.')
+_REPLACEMENT_REWRITES = (
+    (re.compile(r'If recovery cannot qualify the node, replacement is required, not '
+                r'instructor restoration\.'),
+     'If recovery cannot qualify the node, it stays out of service for the rest of '
+     'this session and an operator replaces it after the session.'),
+    (re.compile(r';\s*replacement is required, not instructor restoration\.'),
+     '; an operator replaces it after the session.'),
+    (re.compile(r'\s+and\s+use\s+participant\s+replace\b[^.;]*'), ''),
+    (re.compile(r';\s*owner\s+must\s+repeat\s+replace\b[^.;]*'), ''),
+)
+# ", or use replace ...", ", then replace if required": an alternative to retrying
+# recover, so the participant is told who replaces, not that the node is retired.
+_REPLACE_ALTERNATIVE = re.compile(r',\s*(?:or|then)\s+(?:use\s+)?replace\b[^.;]*')
+_REPLACE_CLAUSE = re.compile(
+    r'(^|[.;:]\s*)(?:[Uu]se|[Rr]un|[Rr]etry|[Rr]epeat)(?:\s+participant)?\s+replace\b'
+    r'[^.;]*[.;]?\s*')
+
+
+def participant_replacement_text(text):
+    """Participant wording for a message that tells them to run replace."""
+    original = text
+    text, alternatives = _REPLACE_ALTERNATIVE.subn('', text)
+    for pattern, replacement in _REPLACEMENT_REWRITES:
+        text = pattern.sub(replacement, text)
+    before_clauses = text
+
+    def clause(match):
+        lead = match.group(1)
+        if not lead:
+            return ''
+        return '. ' if lead.strip() in (';', ':') else lead
+    text = _REPLACE_CLAUSE.sub(clause, text)
+    instructed = text != before_clauses or (text != original and not alternatives)
+    if text == original:
+        if re.search(r'(?i)\breplacement is required\b', text):
+            text = text.rstrip() + ' ' + OPERATOR_REPLACEMENT_NOTE
+        return text
+    text = text.rstrip()
+    if text and text[-1] not in '.;:':
+        text += '.'
+    if 'an operator replaces it after the session' in text:
+        return text
+    return text + ' ' + (OPERATOR_REPLACEMENT if instructed else OPERATOR_REPLACEMENT_NOTE)
+
+
+# Words that would name a hidden round's kind or the operation it applied.
+_KIND_REWRITES = (
+    (re.compile(r'(?<![\w-])(?:efa|gpu)-(?:flr|remove|unbind|rebind)(?:-[a-z]+)*(?![\w-])'),
+     'device operation'),
+    (re.compile(r'(?<![\w-])(?:[Tt]he\s+)?(?:[Aa]ctive\s+|[Ii]dle\s+)?(?:EFA|GPU)\s+'
+                r'(?:round|exercise|path)(?![\w-])'), 'the incident'),
+    (re.compile(r'(?<![\w-])[Aa]ctive\s+FLR(?![\w-])'), 'the incident'),
+    (re.compile(r'(?<![\w-])FLR(?![\w-])'), 'incident'),
+    (re.compile(r'(?<![\w-])(?:EFA|GPU|efa|gpu)s?(?![\w-])'), 'device'),
+)
+
+
+def conceal_kind(text):
+    """The same message without the words that name a hidden round's kind."""
+    for pattern, replacement in _KIND_REWRITES:
+        def substitute(match, replacement=replacement):
+            before = match.string[:match.start()].rstrip()
+            opens_sentence = not before or before[-1] in '.!?;:'
+            if opens_sentence and match.group(0)[0].isupper():
+                return replacement[0].upper() + replacement[1:]
+            return replacement
+        text = pattern.sub(substitute, text)
+    return text
+
+
+def hidden(state):
+    """A round started by `next` that has not yet been revealed."""
+    return bool(state.incident) and state.phase not in REVEAL_PHASES
+
+
+def participant_text(text, state=None):
+    """What the participant reads, from text this helper or the target wrote."""
+    text = participant_replacement_text(text)
+    if state is not None and hidden(state):
+        text = conceal_kind(text)
+    return text
 
 
 def node_reason(node):
@@ -332,7 +498,8 @@ class State:
               'original_node_reason', 'reboot_completed', 'boot_id_after_reboot',
               'boot_id_before_reboot', 'reboot_requested_at', 'reboot_requests',
               'check_results', 'baseline_check_results', 'failure',
-              'deadline_attempts', 'active_efa_evidence', 'active_fault')
+              'deadline_attempts', 'active_efa_evidence', 'active_fault',
+              'incident')
 
     def __init__(self, phase='ready', kind=None, started_at=None, target_node=None,
                  target_instance_id=None, job_id=None, boot_id=None,
@@ -343,7 +510,8 @@ class State:
                  boot_id_after_reboot=None, boot_id_before_reboot=None,
                  reboot_requested_at=None, reboot_requests=0,
                  check_results=None, baseline_check_results=None, failure=None,
-                 deadline_attempts=0, active_efa_evidence=None, active_fault=None):
+                 deadline_attempts=0, active_efa_evidence=None, active_fault=None,
+                 incident=None):
         if phase not in PHASES:
             raise Refusal(f'Unusable state record: unknown phase {phase!r}.')
         self.phase = phase
@@ -403,6 +571,10 @@ class State:
         self.active_efa_evidence = (dict(active_efa_evidence)
                                     if active_efa_evidence else None)
         self.active_fault = dict(active_fault) if active_fault else None
+        # Set when `next` started this round from the seat's schedule: the
+        # incident number and its scheduled exercise. While it is set and the
+        # round is unresolved, participant output does not name the kind.
+        self.incident = dict(incident) if isinstance(incident, dict) else incident
 
     def to_dict(self):
         return {name: getattr(self, name) for name in self.FIELDS}
@@ -426,6 +598,16 @@ class State:
                 raise Refusal('Unusable state record: phase without a fault kind.')
             if not state.target_node or state.started_at is None:
                 raise Refusal('Unusable state record: incomplete transition.')
+        if state.incident is not None:
+            if not isinstance(state.incident, dict):
+                raise Refusal('Unusable state record: malformed incident.')
+            number = state.incident.get('number')
+            name = state.incident.get('exercise')
+            exercise = DEVICE_EXERCISES.get(name) if isinstance(name, str) else None
+            if (set(state.incident) != {'number', 'exercise'}
+                    or not isinstance(number, int) or isinstance(number, bool)
+                    or number < 1 or exercise is None or exercise['kind'] != state.kind):
+                raise Refusal('Unusable state record: malformed incident.')
         return state
 
 
@@ -459,6 +641,29 @@ def _sync_directory(directory):
         ) from error
     finally:
         os.close(handle)
+
+
+def _write_private_json(path, data):
+    """Replace a root-only JSON record durably, as StateStore.write does."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + '.new')
+    if temporary.is_symlink():
+        raise Refusal('Refusing a symlinked record file.')
+    try:
+        handle = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+                         0o600)
+        with os.fdopen(handle, 'w') as output:
+            json.dump(data, output, indent=2, sort_keys=True)
+            output.write('\n')
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    except OSError as error:
+        raise Refusal(f'A record could not be written to storage ({error}); nothing '
+                      'that depends on it was done.') from error
+    _sync_directory(path.parent)
 
 
 class StateStore:
@@ -619,8 +824,9 @@ class Request:
 def parse_participant_request(text):
     """The whole participant input grammar.
 
-    Accepts only: start gpu, start efa, status, collect <digits>, recover, replace.
-    Anything else, including any option, separator or newline, is an error.
+    Accepts only: start gpu, start efa, active gpu, active efa, next, status,
+    collect <digits>|kernel, recover, replace. Anything else, including any
+    option, separator or newline, is an error.
     """
     if text is None:
         return Request(error=f'No command given. {USAGE}')
@@ -643,7 +849,7 @@ def parse_participant_request(text):
         if arguments[0] not in ('gpu', 'efa'):
             return Request(error='The exercise provides start gpu and start efa only.')
         return Request(verb=verb, argument=arguments[0])
-    if verb in ('status', 'recover', 'replace'):
+    if verb in ('next', 'status', 'recover', 'replace'):
         if arguments:
             return Request(error=f'{verb} takes no argument. {USAGE}')
         return Request(verb=verb)
@@ -676,7 +882,8 @@ def load_config(path=DEFAULT_CONFIG, require_root_owned=True):
 class Result:
     def __init__(self, state, output=None, saved_path=None, node_state=None,
                  node_reason=None, already_started=False, already_recovered=False,
-                 expired=False, next_step=''):
+                 expired=False, next_step='', incident=None, under_way=False,
+                 collectable=None, schedule_line=None):
         self.state = state
         self.output = output
         self.saved_path = saved_path
@@ -686,6 +893,12 @@ class Result:
         self.already_recovered = already_recovered
         self.expired = expired
         self.next_step = next_step
+        # `next`: the incident number, and whether its controller step ran.
+        self.incident = incident
+        self.under_way = under_way
+        # status: the checks collect accepts now, and how far the schedule is.
+        self.collectable = collectable
+        self.schedule_line = schedule_line
 
 
 class DeviceSession:
@@ -1611,20 +1824,49 @@ class DeviceSession:
 
     def _save_output(self, check, text, phase='fault', round=1):
         """Write one capture as the participant, under their own uid and gid."""
+        return self._write_participant_file(
+            ('collected', f'round-{round}'),
+            lambda attempt: self.collect_output_name(check, phase, attempt), text)
+
+    def _write_participant_file(self, relative, name_for_attempt, text):
+        """Write one new file under the results directory as the participant."""
         uid, gid = self._participant_ids()
         strategy = self.write_strategy(os.geteuid(), uid)
         if strategy == 'refuse':
             raise Refusal('This assignment has no participant account to own its '
                           'results; nothing was written. Pre-session account provisioning is incomplete.')
-        relative = ('collected', f'round-{round}')
         if strategy == 'direct':
-            return _write_under(self._answers_root(), relative,
-                                lambda attempt: self.collect_output_name(
-                                    check, phase, attempt), text, uid)
-        return self._write_in_dropped_child(uid, gid, relative, check, phase,
-                                            round, text)
+            return _write_under(self._answers_root(), relative, name_for_attempt,
+                                text, uid)
+        return self._write_in_dropped_child(uid, gid, relative, name_for_attempt, text)
 
-    def _write_in_dropped_child(self, uid, gid, relative, check, phase, round, text):
+    def _save_operator_record(self, name, text):
+        """Keep a record in the root-only state directory, never overwriting one.
+
+        A hidden round's own transcript names the operation it applied, so it is
+        kept where only the operator reads it rather than in the participant's
+        results directory.
+        """
+        directory = self.store.directory
+        directory.mkdir(parents=True, exist_ok=True)
+        base = f'operator-{self.assignment_id}-{name}'
+        for attempt in range(1, 65):
+            path = directory / (f'{base}.log' if attempt == 1
+                                else f'{base}-attempt-{attempt}.log')
+            try:
+                handle = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 0o600)
+            except FileExistsError:
+                continue
+            with os.fdopen(handle, 'w') as output:
+                output.write(text)
+                output.flush()
+                os.fsync(output.fileno())
+            _sync_directory(directory)
+            return path
+        raise Refusal('Too many operator records already exist for this round.')
+
+    def _write_in_dropped_child(self, uid, gid, relative, name_for_attempt, text):
         read_end, write_end = os.pipe()
         child = os.fork()
         if child == 0:                                    # pragma: no cover
@@ -1637,10 +1879,8 @@ class DeviceSession:
                 os.setuid(uid)
                 if os.geteuid() != uid or os.getuid() != uid:
                     os._exit(3)
-                written = _write_under(
-                    self._answers_root(), relative,
-                    lambda attempt: self.collect_output_name(check, phase, attempt),
-                    text, uid)
+                written = _write_under(self._answers_root(), relative,
+                                       name_for_attempt, text, uid)
                 os.write(write_end, str(written).encode())
                 status = 0
             except BaseException as error:
@@ -2721,8 +2961,12 @@ class DeviceSession:
         Capture supports diagnosis and comparison only; missing capture leaves
         less diagnostic evidence. All WARN acceptance remains disabled, whether
         or not a matching baseline was recorded.
+
+        It covers every collectable check, not only the kind's qualification
+        checks, so the baseline files a start leaves in the participant's results
+        directory are the same for every kind.
         """
-        for check in self.allowed_checks(state):
+        for check in self.baseline_checks(state):
             try:
                 outcome = self.executor.run_maintenance(['collect', check],
                                                         timeout=900)
@@ -2754,7 +2998,8 @@ class DeviceSession:
         self.store.write(state)
 
     # ---------------- verbs ----------------
-    def start(self, kind, active=False):
+    def start(self, kind, active=False, incident=None):
+        """Begin a round. `incident` is set only by `next`, from the schedule."""
         if kind not in ('gpu', 'efa'):
             raise Refusal('The exercise provides start gpu and start efa only.')
         # The pair lock is taken before the state is even read: a scan that
@@ -2776,6 +3021,13 @@ class DeviceSession:
                     'if recovery cannot qualify it; a new round cannot start on a node that has '
                     'not been restored.')
             if state.phase != 'ready':
+                if (state.incident or incident) and state.incident != incident:
+                    # Neither the kind nor whether a guess matches it is told
+                    # while a scheduled incident holds the node.
+                    held = (f'Incident {state.incident["number"]}' if state.incident
+                            else 'An earlier round')
+                    raise Refusal(f'{held} is still in progress on your node. Finish it '
+                                  'with recover before starting anything else.')
                 if state.kind != kind:
                     raise Refusal(
                         f'Your {state.kind} exercise is already at {state.phase}. '
@@ -2864,7 +3116,8 @@ class DeviceSession:
                           original_node_state=node_state,
                           original_node_reason=node_reason(line)[1],
                           deadline_at=self.clock()
-                          + float(self.assignment['recovery_deadline_seconds']))
+                          + float(self.assignment['recovery_deadline_seconds']),
+                          incident=incident)
             if active:
                 state.active_fault = {'mutation': operation, 'bdf': inventory[kind + '_bdf'],
                                       'boot_id': boot_id, 'events': [], 'outcome': 'not-issued'}
@@ -3053,8 +3306,15 @@ class DeviceSession:
                     if result.dispatched is False and not actions:
                         state.active_fault['outcome'] = 'not-issued'
                     self.store.write(state)
-                    self._save_output('active-flr', (result.stdout or '') + (result.stderr or ''),
-                                      phase='fault', round=state.round)
+                    transcript = (result.stdout or '') + (result.stderr or '')
+                    if state.incident:
+                        # It names the operation, so only the operator keeps it.
+                        state.active_fault['operator_log'] = str(self._save_operator_record(
+                            f'round-{state.round}-device-operation', transcript))
+                        self.store.write(state)
+                    else:
+                        self._save_output('active-flr', transcript,
+                                          phase='fault', round=state.round)
                     if not confirmed:
                         raise Refusal('Active FLR did not confirm completion; evidence retained. '
                                       'Do not repeat the fault. Run status, collect evidence, then recover.')
@@ -3079,29 +3339,240 @@ class DeviceSession:
             state = self.store.read()
             record = self._replacement_record()
             line = self._node_line()
-            next_step = (f'Replacement stage: {record["phase"]}. Run replace to continue.'
+            next_step = (f'Replacement stage: {record["phase"]}. An operator continues '
+                         'it after the session.'
                          if record and record['phase'] != 'complete' else self._next_step(state))
             return Result(state,
                           node_state=self._node_field(line, 'State'),
                           node_reason=node_reason(line)[1],
-                          next_step=next_step)
+                          next_step=next_step,
+                          collectable=(None if state.phase == 'ready'
+                                       else self.collect_checks(state)),
+                          schedule_line=self._schedule_line())
+
+    # ---------------- incident schedule ----------------
+    ISSUED_STEP = ('Your launcher runs this incident from the profile above. To repeat '
+                   'its job, reuse that profile rather than running next again.')
+    UNDER_WAY_STEP = ('Watch your job. Record what you see, collect checks, and run '
+                      'recover when your page says so.')
+    PROGRESS_ENTRY_FIELDS = {'number', 'exercise', 'issued_at', 'profile', 'last_refusal'}
+
+    def _schedule(self):
+        """The seat's checked schedule, or None when account preparation set none."""
+        entries = self.assignment.get('exercise_schedule')
+        if entries is None:
+            return None
+        if self.assignment.get('collect_checks') is None:
+            # Without the split tables a collect refusal lists the kind's checks.
+            raise Refusal("This seat's incident schedule needs the collect and qualify "
+                          'check tables; ask the facilitator.')
+        return validate_schedule(entries)
+
+    def _progress_path(self):
+        return self.store.directory / f'schedule-{self.assignment_id}.json'
+
+    def _read_progress(self, schedule):
+        """Which incidents this seat has been given, from the root-only record."""
+        path = self._progress_path()
+        if path.is_symlink():
+            raise Refusal('Unusable incident record: refusing a symlinked file.')
+        if not path.exists():
+            return {'issued': []}
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) & 0o077:
+            raise Refusal('Unusable incident record: it must be a private regular file.')
+        try:
+            progress = json.loads(path.read_text())
+            issued = progress['issued']
+            if set(progress) != {'issued'} or not isinstance(issued, list) \
+                    or len(issued) > len(schedule):
+                raise ValueError('shape')
+            for number, entry in enumerate(issued, start=1):
+                # A schedule changed after incidents were issued is not this record's.
+                if (set(entry) - self.PROGRESS_ENTRY_FIELDS
+                        or entry['number'] != number
+                        or entry['exercise'] != schedule[number - 1]['exercise']
+                        or not isinstance(entry['issued_at'], (int, float))
+                        or not (entry['profile'] is None or isinstance(entry['profile'], str))):
+                    raise ValueError('entry')
+        except (ValueError, KeyError, TypeError, AttributeError) as error:
+            raise Refusal("This seat's incident record does not match its schedule; "
+                          'ask the facilitator.') from error
+        return progress
+
+    def _schedule_line(self):
+        try:
+            schedule = self._schedule()
+            if schedule is None:
+                return None
+            issued = len(self._read_progress(schedule)['issued'])
+        except Refusal:
+            return "Incidents: this seat's schedule is unusable; ask the facilitator."
+        return f'Incidents issued: {issued} of {len(schedule)}'
+
+    def _issue_profile(self, progress, entry, schedule):
+        """Hand the launcher the current incident, as a file the participant owns."""
+        number = entry['number']
+        planned = schedule[number - 1]
+        profile = {
+            'incident': number,
+            'incidents': len(schedule),
+            'exercise': planned['exercise'],
+            'settings': planned['settings'],
+            # The device exercise is applied here, by a later `next` once the job
+            # reports progress; a job exercise is applied by the launcher.
+            'controller_step': ('next-after-progress'
+                                if planned['exercise'] in DEVICE_EXERCISES else 'none'),
+            'issued_at': entry['issued_at'],
+        }
+        try:
+            path = self._write_participant_file(
+                ('incidents',),
+                lambda attempt: (f'incident-{number}.json' if attempt == 1
+                                 else f'incident-{number}-attempt-{attempt}.json'),
+                json.dumps(profile, indent=2, sort_keys=True) + '\n')
+        except OSError as error:
+            raise Refusal(f'Incident {number} could not be written to your results '
+                          f'directory ({error.strerror}); fix that, then run next '
+                          'again. The incident was not skipped.') from error
+        entry['profile'] = str(path)
+        _write_private_json(self._progress_path(), progress)
+        return Result(self.store.read(), incident=number, saved_path=path,
+                      next_step=self.ISSUED_STEP)
+
+    def _device_incident_ready(self):
+        """Is the participant's job running on the target and reporting progress?"""
+        own = self._own_job(self._jobs_on_target())
+        if not own or own['state'] != 'RUNNING':
+            return False
+        try:
+            self._active_progress(State(job_id=own['id']))
+        except Refusal:
+            return False
+        return True
+
+    def _note_refusal(self, number, text):
+        """Keep, for the operator, why a scheduled device step did not start."""
+        try:
+            with self.store.exclusive():
+                schedule = self._schedule()
+                progress = self._read_progress(schedule)
+                progress['issued'][number - 1]['last_refusal'] = {'at': self.clock(),
+                                                                  'text': text}
+                _write_private_json(self._progress_path(), progress)
+        except (Refusal, IndexError):
+            pass
+
+    def next(self):
+        """Start the seat's next incident without naming it.
+
+        A job exercise is applied by the participant's launcher inside their own
+        job, so starting it means handing the launcher that incident's profile: a
+        file in the participant's results directory with the exercise and its
+        settings. Only the current incident's profile leaves this helper's
+        root-only records, so later incidents and their order stay unreadable.
+
+        The device exercise needs the participant's job running. Its first `next`
+        hands over its profile like any other. A later `next`, once the
+        participant's own job is RUNNING on the target and its progress log shows
+        two fresh advancing records, applies the scheduled device operation
+        through `start`, with every guard `start` has, and records the round as
+        this incident. Until then `next` repeats the same answer and changes
+        nothing, so the launcher may ask before and after its job starts.
+        """
+        with self.store.exclusive_pair():
+            self._refresh_binding()
+            schedule = self._schedule()
+            if schedule is None:
+                raise Refusal('This seat has no incident schedule; ask the facilitator.')
+            progress = self._read_progress(schedule)
+            issued = progress['issued']
+            state = self.store.read()
+            if state.phase == 'replacement-required':
+                raise Refusal(OPERATOR_REPLACEMENT + ' The remaining incidents cannot run '
+                              'live on it; use the expected output on your page.')
+            if state.phase in HOLDING_PHASES:
+                held = (f'Incident {state.incident["number"]}' if state.incident
+                        else 'An earlier round')
+                raise Refusal(f'{held} still holds your node. Collect your evidence and '
+                              'finish it with recover; next continues after that.')
+            current = issued[-1] if issued else None
+            if current and current['profile'] is None:
+                # The record advanced but the profile was not written: finish that
+                # incident's hand-over rather than advancing past it.
+                return self._issue_profile(progress, current, schedule)
+            applied = bool(current and state.incident
+                           and state.incident['number'] == current['number'])
+            if current and current['exercise'] in DEVICE_EXERCISES and not applied:
+                if not self._device_incident_ready():
+                    return Result(state, incident=current['number'],
+                                  saved_path=Path(current['profile']),
+                                  next_step=self.ISSUED_STEP)
+                step = current
+            else:
+                if len(issued) >= len(schedule):
+                    raise Refusal(f'All {len(schedule)} incidents for this seat have been '
+                                  'issued; there is no next incident.')
+                entry = {'number': len(issued) + 1,
+                         'exercise': schedule[len(issued)]['exercise'],
+                         'issued_at': self.clock(), 'profile': None}
+                issued.append(entry)
+                # Recorded before the profile is written, so a failed write is
+                # finished by the next call instead of skipping an incident.
+                _write_private_json(self._progress_path(), progress)
+                return self._issue_profile(progress, entry, schedule)
+        # start takes the assignment and pair locks itself and repeats every check.
+        planned = DEVICE_EXERCISES[step['exercise']]
+        incident = {'number': step['number'], 'exercise': step['exercise']}
+        try:
+            result = self.start(planned['kind'], active=planned['active'], incident=incident)
+        except Refusal as refusal:
+            self._note_refusal(step['number'], str(refusal))
+            raise Refusal(conceal_kind(str(refusal))) from refusal
+        return Result(result.state, incident=step['number'], under_way=True,
+                      already_started=result.already_started,
+                      next_step=self.UNDER_WAY_STEP)
 
     def _next_step(self, state):
+        ready = ('Your node is in service. Start the next incident the way your page '
+                 'shows.' if self.assignment.get('exercise_schedule')
+                 else 'Run start gpu or start efa when you are ready.')
         return {
-            'ready': 'Run start gpu or start efa when you are ready.',
+            'ready': ready,
             'preparing': 'Preparation did not finish; run recover to restore your node.',
             'fault-applied': 'Collect an allowed check and compare it with your baseline.',
             'investigating': 'Record your evidence, then run recover.',
             'recovering': 'Recovery is running; run status again.',
             'recovery-failed': 'Your node is still out of service; run recover again.',
-            'replacement-required': 'Your node stays isolated. Run replace to initialize a fresh assigned instance.',
+            'replacement-required': OPERATOR_REPLACEMENT,
             'runtime-ready': 'Take a fresh allocation and verify Check 5 and storage.',
             'verified': 'This round is complete.',
         }[state.phase]
 
-    def allowed_checks(self, state):
-        table = self.assignment['allowed_checks']
-        return [str(c) for c in table.get(state.kind or '', [])]
+    # Three uses, two tables (v2 mechanisms, finding 11). `collect_checks` is what a
+    # participant may run with collect after any exercise: the suite's read-only
+    # checks the target allowlist already permits (replacement-bootstrap.py writes
+    # 'checks': [0, 2, 3, 6] there), the same list whatever the kind, so neither a
+    # refusal nor the list names it. `qualify_checks[kind]` is what recovery must
+    # see PASS before the node returns to service, unchanged by widening collect.
+    # Baseline capture records both. A configuration written before the split has
+    # only `allowed_checks`, which keeps its old meaning for all three.
+    def qualify_checks(self, state):
+        table = self.assignment.get('qualify_checks', self.assignment.get('allowed_checks'))
+        return [str(c) for c in (table or {}).get(state.kind or '', [])]
+
+    # The recovery requirement under its earlier name.
+    allowed_checks = qualify_checks
+
+    def collect_checks(self, state):
+        table = self.assignment.get('collect_checks')
+        if table is None:
+            return self.qualify_checks(state)
+        return [str(c) for c in table]
+
+    def baseline_checks(self, state):
+        collect = self.collect_checks(state)
+        return collect + [c for c in self.qualify_checks(state) if c not in collect]
 
     @staticmethod
     def check_verdict(text):
@@ -3154,7 +3625,7 @@ class DeviceSession:
                 return Result(state, output=text, saved_path=saved, next_step=self._next_step(state))
             if not re.fullmatch(r'[0-9]{1,2}', str(check)):
                 raise Refusal('A check is one of the identifiers listed by status.')
-            allowed = self.allowed_checks(state)
+            allowed = self.collect_checks(state)
             if str(check) not in allowed:
                 raise Refusal(f'Check {check} is not available for this exercise. '
                               f'Available: {", ".join(allowed)}.')
@@ -3829,7 +4300,7 @@ class DeviceSession:
         failures = []
         warnings = []
         unsupported_warning = False
-        for check in self.allowed_checks(state):
+        for check in self.qualify_checks(state):
             outcome = self.executor.run_maintenance(['collect', check], timeout=900)
             text = (outcome.stdout or '') + (outcome.stderr or '')
             saved = self._save_output(check, text, phase='recovered',
@@ -4200,7 +4671,7 @@ class DeviceSession:
                     except (OSError, Refusal):
                         pass  # participant output failure cannot require instructor rescue
                 state, notes = self._recover(state, 'participant')
-            except Refusal:
+            except Refusal as refusal:
                 # A recovery that stopped part way must stay retryable. Leaving
                 # the record at 'recovering' would refuse the participant's next
                 # attempt and require a facilitator, which is what this exercise
@@ -4208,10 +4679,18 @@ class DeviceSession:
                 # required-step failure keeps the distinct 'recovery-failed'
                 # phase rather than being downgraded to 'investigating'.
                 stuck = self.store.read()
+                changed = False
                 if stuck.phase == 'recovering':
                     stuck.phase = ('replacement-required'
                                    if self.assignment.get('replacement', {}).get('enabled')
                                    else 'investigating')
+                    changed = True
+                if stuck.incident and not stuck.failure:
+                    # The participant reads this refusal concealed; the operator
+                    # reads it as written.
+                    stuck.failure = str(refusal)
+                    changed = True
+                if changed:
                     self.store.write(stuck)
                 raise
             return Result(state, next_step='Take a fresh allocation and verify '
@@ -4299,10 +4778,10 @@ def sweep(config, clock=time.time, session_factory=None):
             continue
         if int(state.deadline_attempts or 0) >= attempts_allowed:
             # Stop rather than mutate the same node on every timer tick. The
-            # round stays recorded and drained for participant replace.
+            # round stays recorded and drained for operator replacement.
             summary.append(f'{assignment_id}: deadline recovery already attempted '
                            f'{state.deadline_attempts} times and did not succeed; '
-                           f'participant replacement required (phase {state.phase})')
+                           f'operator replacement required (phase {state.phase})')
             continue
         try:
             result = handler.expire()
@@ -4320,17 +4799,37 @@ def sweep(config, clock=time.time, session_factory=None):
     return summary
 
 
-def render(result, verb):
+def incident_answer(state):
+    """The one-line reveal for a scheduled device incident, once it is resolved."""
+    exercise = DEVICE_EXERCISES[state.incident['exercise']]
+    bdf = (state.active_fault or {}).get('bdf') or 'its assigned device'
+    return (f'Answer for incident {state.incident["number"]}: '
+            + exercise['answer'].format(bdf=bdf) + '.')
+
+
+def render(result, verb, operator=False):
+    """What one verb prints. Participant text never tells them to run replace,
+    and while a scheduled incident is unresolved it does not name its kind."""
     lines = []
     state = result.state
+    concealed = hidden(state) and not operator
     if verb == 'status':
         lines.append(f'Exercise phase: {state.phase}')
-        if state.kind:
+        if state.incident:
+            lines.append(f'Incident: {state.incident["number"]}')
+        if state.kind and (operator or not state.incident):
             lines.append(f'Exercise: {state.kind}')
+        if state.incident and operator:
+            lines.append(f'Scheduled exercise: {state.incident["exercise"]}')
         lines.append(f'Round: {state.round}')
         lines.append(f'Node state: {result.node_state}')
         if result.node_reason:
             lines.append(f'Node reason: {result.node_reason}')
+        if result.schedule_line:
+            lines.append(result.schedule_line)
+        if result.collectable is not None:
+            lines.append('Checks you can collect: '
+                         + ', '.join(list(result.collectable) + ['kernel']))
         if state.collected:
             lines.append(f'Checks collected: {", ".join(state.collected)}')
         if state.check_results:
@@ -4340,10 +4839,14 @@ def render(result, verb):
                 lines.append(f'  {key}: {record.get("verdict")} ({record.get("log")})')
         if state.recovered_by:
             lines.append(f'Recovered by: {state.recovered_by}')
-        if state.active_fault:
+        if concealed:
+            pass
+        elif state.active_fault:
             lines.append(f'Active FLR: {state.active_fault.get("mutation")} '
                          f'job={state.job_id} outcome={state.active_fault.get("outcome")}')
             lines.append('FLR return is not workload recovery; retain watchdog and cleanup logs.')
+            if operator and state.active_fault.get('operator_log'):
+                lines.append(f'  transcript: {state.active_fault["operator_log"]}')
         elif state.kind == 'efa':
             # Which EFA path this round took, stated rather than left to be
             # inferred from whether a job happened to be present. An idle round is
@@ -4363,14 +4866,28 @@ def render(result, verb):
                     lines.append(f'  observation: {evidence["log"]}')
                 for refusal in evidence.get('refusals') or []:
                     lines.append(f'  unmet: {refusal}')
+        if state.incident and not concealed:
+            lines.append(incident_answer(state))
         if state.phase == 'recovery-failed':
             lines.append('Your node is still out of service: recovery did not '
                          'complete, so it was not returned to the scheduler.')
         if state.notes:
             lines.append(f'Notes: {state.notes}')
     elif verb == 'collect':
-        lines.append(result.output.rstrip('\n'))
-        lines.append(f'Saved: {result.saved_path}')
+        # The suite's own output is evidence and is printed as it came back.
+        output = result.output.rstrip('\n')
+        tail = [f'Saved: {result.saved_path}']
+        if result.next_step:
+            tail.append(f'Next: {result.next_step}')
+        if not operator:
+            tail = [participant_text(line, state) for line in tail]
+        return '\n'.join([output] + tail) + '\n'
+    elif verb == 'next':
+        if result.under_way:
+            lines.append(f'Incident {result.incident} is under way.')
+        else:
+            lines.append(f'Incident {result.incident} is ready.')
+            lines.append(f'Profile: {result.saved_path}')
     elif verb in ('start', 'active'):
         if result.already_started:
             lines.append(f'This exercise is already running at {state.phase}.')
@@ -4386,6 +4903,51 @@ def render(result, verb):
             lines.append('Runtime ready is not the same as a verified workload.')
     if result.next_step:
         lines.append(f'Next: {result.next_step}')
+    if not operator:
+        lines = [participant_text(line, state) for line in lines]
+    return '\n'.join(lines) + '\n'
+
+
+def operator_view(handler):
+    """Everything about one seat, for the operator: kinds, schedule, records."""
+    result = handler.status()
+    lines = [f'Assignment: {handler.assignment_id}',
+             f'Participant: {handler.assignment.get("participant_user")}',
+             f'Exercise node: {handler.assignment.get("target_node")} '
+             f'({handler.assignment.get("target_instance_id")})']
+    lines.append(render(result, 'status', operator=True).rstrip('\n'))
+    if result.state.failure:
+        lines.append(f'Failure: {result.state.failure}')
+    try:
+        schedule = handler._schedule()
+    except Refusal as refusal:
+        lines.append(f'Schedule: unusable ({refusal})')
+        return '\n'.join(lines) + '\n'
+    if schedule is None:
+        lines.append('Schedule: none (start/active verbs only)')
+        return '\n'.join(lines) + '\n'
+    try:
+        issued = handler._read_progress(schedule)['issued']
+    except Refusal as refusal:
+        lines.append(f'Schedule progress: unusable ({refusal})')
+        issued = []
+    lines.append(f'Schedule ({len(issued)} of {len(schedule)} issued):')
+    for number, planned in enumerate(schedule, start=1):
+        settings = json.dumps(planned['settings'], sort_keys=True)
+        row = f'  {number}. {planned["exercise"]} {settings}'
+        if number <= len(issued):
+            entry = issued[number - 1]
+            when = datetime.datetime.fromtimestamp(
+                entry['issued_at'], datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            row += f' issued {when} profile={entry["profile"]}'
+            if (result.state.incident
+                    and result.state.incident['number'] == number):
+                row += f' round={result.state.round} phase={result.state.phase}'
+            if entry.get('last_refusal'):
+                row += f'\n     last refusal: {entry["last_refusal"]["text"]}'
+        else:
+            row += ' not issued'
+        lines.append(row)
     return '\n'.join(lines) + '\n'
 
 
@@ -4399,13 +4961,17 @@ def main(argv=None):
     parser.add_argument('--sweep', action='store_true',
                         help='Facilitator deadline sweep across every assignment; '
                              'the scheduled entry point, not a participant verb')
+    parser.add_argument('--operator', choices=('status', 'replace'),
+                        help='Operator view of one assignment (kinds and schedule '
+                             'included), or the replacement route; root only')
     options = parser.parse_args(argv)
+    handler = None
     try:
         # Argument shape first, before anything touches the filesystem. A bad
         # invocation should say so rather than report whatever the configuration
         # check happened to notice first.
-        if options.sweep and options.expire:
-            raise Refusal('Use either --sweep or --expire, not both.')
+        if sum(bool(mode) for mode in (options.sweep, options.expire, options.operator)) > 1:
+            raise Refusal('Use one of --sweep, --expire or --operator.')
         if not options.sweep and not options.assignment:
             raise Refusal('An assignment is required.')
         config = load_config(Path(options.config))
@@ -4424,7 +4990,22 @@ def main(argv=None):
             expected = assignment.get('caller_uid', assignment.get('participant_uid'))
             handler = DeviceSession(config, options.assignment, peer_uid=expected)
             result = handler.expire()
-            sys.stdout.write(render(result, 'status'))
+            sys.stdout.write(render(result, 'status', operator=True))
+            return 0
+        if options.operator:
+            if os.geteuid() != 0:
+                raise Refusal('The operator commands run as root.')
+            assignment = config['assignments'].get(options.assignment)
+            if assignment is None:
+                raise Refusal('Unknown assignment.')
+            expected = assignment.get('caller_uid', assignment.get('participant_uid'))
+            handler = DeviceSession(config, options.assignment, peer_uid=expected)
+            if options.operator == 'status':
+                sys.stdout.write(operator_view(handler))
+            else:
+                # Decision 4: the replacement route, run by the operator after
+                # the session for a node recovery could not qualify.
+                sys.stdout.write(render(handler.replace(), 'replace', operator=True))
             return 0
         request = parse_participant_request(os.environ.get('SSH_ORIGINAL_COMMAND', ''))
         if request.error:
@@ -4441,18 +5022,30 @@ def main(argv=None):
         verb = request.verb
         if verb in ('start', 'active'):
             result = handler.start(request.argument, active=verb == 'active')
+        elif verb == 'next':
+            result = handler.next()
         elif verb == 'status':
             result = handler.status()
         elif verb == 'collect':
             result = handler.collect(request.argument)
         elif verb == 'replace':
-            result = handler.replace()
+            # Decision 4: participants no longer replace; nothing is touched.
+            raise Refusal(PARTICIPANT_REPLACE_REFUSAL)
         else:
             result = handler.recover()
         sys.stdout.write(render(result, verb))
         return 0
     except Refusal as refusal:
-        sys.stderr.write(str(refusal) + '\n')
+        message = str(refusal)
+        if not options.sweep and not options.expire and not options.operator:
+            state = None
+            if handler is not None:
+                try:
+                    state = handler.store.read()
+                except Refusal:
+                    state = None
+            message = participant_text(message, state)
+        sys.stderr.write(message + '\n')
         return 3
 
 

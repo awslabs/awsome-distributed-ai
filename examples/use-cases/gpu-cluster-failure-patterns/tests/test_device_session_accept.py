@@ -784,7 +784,7 @@ class F6ScheduledDeadlineRecovery(Base):
             lines.append(next(entry for entry in self.run_sweep(9999.0)
                               if entry.startswith('table-1')))
         attempted = [line for line in lines if 'did not complete' in line]
-        abandoned = [line for line in lines if 'participant replacement required' in line]
+        abandoned = [line for line in lines if 'operator replacement required' in line]
         self.assertEqual(3, len(attempted), lines)
         self.assertEqual(2, len(abandoned), lines)
         self.assertEqual(3, handler.store.read().deadline_attempts)
@@ -814,7 +814,7 @@ class F6ScheduledDeadlineRecovery(Base):
         summary = self.run_sweep(9999.0)
         first = next(line for line in summary if line.startswith('table-1'))
         second = next(line for line in summary if line.startswith('table-2'))
-        self.assertIn('participant replacement required', first)
+        self.assertIn('operator replacement required', first)
         self.assertIn('recovered on its deadline', second)
 
     def test_an_unreadable_state_record_is_reported_not_raised(self):
@@ -1110,7 +1110,7 @@ class GpuRecoveryDoesNotRequireTheRemovedDevice(Base):
         check that would inject into a node whose device is already missing.
         """
         helper = HELPER.read_text()
-        start = helper.index('    def start(self, kind, active=False):')
+        start = helper.index('    def start(self, kind, active=False')
         end = helper.index('    def status(self):')
         body = helper[start:end]
         self.assertIn('self._inspect()', body)

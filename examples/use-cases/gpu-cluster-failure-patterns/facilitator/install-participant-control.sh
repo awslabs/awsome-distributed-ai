@@ -4,8 +4,8 @@
 # Install the participant control path on one assigned pair. Facilitator runs
 # this once per pair before the session, from the coordinator, as root.
 #
-#   sudo bash install-participant-control.sh <assignment-id> <participant-user> \
-#        <target-node> <target-instance-id> <target-host>
+#   sudo AIM344_SCHEDULE_FILE=/root/seat-1.json bash install-participant-control.sh \
+#        <assignment-id> <participant-user> <target-node> <target-instance-id> <target-host>
 #
 # What it creates:
 #   an unprivileged OS user for the participant, with no sudo entry
@@ -14,6 +14,23 @@
 #   a root key pair for the coordinator's maintenance route to the target
 #
 # It does not grant a shell anywhere: both keys are pinned to forced commands.
+#
+# AIM344_SCHEDULE_FILE (optional) is this seat's incident schedule: a JSON list
+# in the order the participant's `next` starts them, each entry an exercise and
+# the settings the launcher passes to the job, for example
+#
+#   [{"exercise": "storage", "settings": {"writer_rank": 9}},
+#    {"exercise": "dataloader"},
+#    {"exercise": "silent-corruption",
+#     "settings": {"corrupt_rank": 13, "corrupt_step": 37, "corrupt_bit": 22}},
+#    {"exercise": "efa-reset"}]
+#
+# Exercises: slow-job, storage, dataloader, silent-corruption (applied by the
+# launcher in the participant's job) and efa-reset (applied by the controller
+# once that job reports progress). The file must be mode 0600: the schedule is
+# copied into the root-only session configuration, and this seat's record of
+# issued incidents is reset. Without the variable a rerun keeps the schedule
+# already configured, and its record.
 set -euo pipefail
 
 [[ $(id -u) == 0 ]] || { echo 'Run this with sudo on the coordinator node.' >&2; exit 1; }
@@ -233,7 +250,7 @@ fi
 install -d -m 0755 /etc/sudoers.d
 # sudo resets the environment, which would drop SSH_ORIGINAL_COMMAND and leave
 # the helper with no request at all. Keep exactly that one variable; the helper
-# validates it against a five-verb grammar, and the assignment stays fixed in
+# validates it against its fixed verb grammar, and the assignment stays fixed in
 # the forced command rather than coming from the connection.
 {
     printf 'Defaults:%s env_keep += "SSH_ORIGINAL_COMMAND"\n' "$control_user"
@@ -420,10 +437,10 @@ echo "== session configuration"
 install -d -o root -g root -m 0700 "$state_dir"
 python3 - "$session_config" "$assignment" "$participant" "$target_node" \
         "$target_instance" "$target_host" "$state_dir" "$slurm_bin" "$suite_entry" \
-        <<'PY'
-import json, os, pwd, sys
+        "$installed" <<'PY'
+import importlib.machinery, importlib.util, json, os, pwd, stat, sys
 (path, assignment, participant, node, instance, host, state_dir, slurm_bin,
- suite_entry) = sys.argv[1:10]
+ suite_entry, helper_path) = sys.argv[1:11]
 control_user = os.environ.get('AIM344_CONTROL_USER', 'aim344-control')
 config = {}
 if os.path.exists(path):
@@ -431,6 +448,38 @@ if os.path.exists(path):
         config = json.load(handle)
 config.setdefault('state_dir', state_dir)
 config.setdefault('assignments', {})
+previous = config['assignments'].get(assignment, {})
+
+# The seat's incident schedule is checked by the helper that will run it, so the
+# installer and the controller cannot disagree about which exercises exist.
+schedule_file = os.environ.get('AIM344_SCHEDULE_FILE')
+schedule = previous.get('exercise_schedule')
+if schedule_file:
+    # Checked on the descriptor that is read, so a name swapped after the check
+    # cannot supply a different file.
+    descriptor = os.open(schedule_file, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(descriptor) as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise SystemExit(f'refusing: {schedule_file} is not a regular file')
+        if stat.S_IMODE(info.st_mode) & 0o077:
+            raise SystemExit(f'refusing: {schedule_file} is readable by other accounts; '
+                             f'chmod 600 it, because the schedule is the answer key')
+        entries = json.load(handle)
+    loader = importlib.machinery.SourceFileLoader('aim344_device_session', helper_path)
+    helper = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(helper)
+    try:
+        schedule = helper.validate_schedule(entries)
+    except helper.Refusal as refusal:
+        raise SystemExit(f'refusing {schedule_file}: {refusal}')
+    # A new schedule starts this seat from its first incident.
+    progress = os.path.join(config['state_dir'], f'schedule-{assignment}.json')
+    if os.path.lexists(progress):
+        os.unlink(progress)
+        print(f'Reset the issued-incident record {progress}')
+
 config['assignments'][assignment] = {
     'participant_user': participant,
     'participant_uid': pwd.getpwnam(participant).pw_uid,
@@ -451,18 +500,40 @@ config['assignments'][assignment] = {
     'job_name_prefix': 'aim344-',
     'slurm_bin': slurm_bin,
     'suite_entry': suite_entry,
-    'allowed_checks': {'gpu': [0, 3], 'efa': [2, 6]},
+    # What a participant may run with collect after any exercise: the suite's
+    # read-only checks the target's maintenance allowlist already holds
+    # (replacement-bootstrap.py 'checks': [0, 2, 3, 6]). Durations were measured on
+    # G7e (two EFA) on 2026-11-01, as root through the maintenance route; the
+    # suite headers estimate 5 s, 3 s, 10 s and 5-15 min.
+    #   0  nvidia-smi query, GPU count, Xid/SXid scan of the kernel log, ECC and
+    #      retired pages; about 5 s; reads only.
+    #   2  lspci, ibv_devices, fi_info -p efa, /dev/infiniband, lsmod, ulimit -l and
+    #      the gdrcopy sanity test (30 s limit), which pins and copies GPU memory;
+    #      about 8 s.
+    #   3  nvidia-smi topo -m and topo -p2p, and NVLink status and error queries
+    #      where NVLink is expected; about 1 s; reads only.
+    #   6  fi_pingpong self-loopback per EFA domain (180 s limit each) and the EFA
+    #      statistics; about 19 s; real EFA traffic and counter growth.
+    # Checks 1 and 4 (DCGM levels 2 and 4: minutes to hours, they start or stop
+    # GPU telemetry) and 5 (a two-node MPI test) stay outside this list.
+    'collect_checks': [0, 2, 3, 6],
+    # What recovery must see PASS, per kind, before the node returns to service.
+    # Widening collect does not change it; any WARN still keeps the node out.
+    'qualify_checks': {'gpu': [0, 3], 'efa': [2, 6]},
     'recovery_deadline_seconds': int(os.environ.get('AIM344_DEADLINE', '1800')),
     'reboot_wait_seconds': 900,
     'reboot_poll_seconds': 10,
     'maintenance_identity_file': '/root/.ssh/aim344-maintenance',
 }
+if schedule is not None:
+    config['assignments'][assignment]['exercise_schedule'] = schedule
 descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(descriptor, 'w') as handle:
     json.dump(config, handle, indent=2, sort_keys=True)
     handle.write('\n')
 os.chmod(path, 0o600)
-print(f'Wrote {assignment} into {path}')
+print(f'Wrote {assignment} into {path}'
+      + (f' with a {len(schedule)}-incident schedule' if schedule else ' with no incident schedule'))
 PY
 
 prepare_owned_dir "$participant" "$participant_home" 'aim344-results' 0700
@@ -516,4 +587,9 @@ Results directory: $participant_home/aim344-results
 
 Give the participant a terminal as $participant, then:
   AIM344_CONTROL_USER=$control_user ./12.device-exercise.sh status
+
+Operator view of this seat (exercise kinds and schedule included):
+  sudo /usr/local/sbin/aim344-device-session --operator status --assignment $assignment
+A node recovery cannot qualify stays out of service; after the session:
+  sudo /usr/local/sbin/aim344-device-session --operator replace --assignment $assignment
 SUMMARY
