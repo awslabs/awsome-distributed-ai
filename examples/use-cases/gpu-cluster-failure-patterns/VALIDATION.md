@@ -2,6 +2,27 @@
 
 This distribution summary preserves the scope of the measured results without deployment identifiers, private artifact locations or incident-derived teaching material. Original detailed records, failed attempts and exact source/deployment mappings remain unchanged with the workshop owner. The latest section describes an installed, fixed development candidate; historical sections retain their original scope. This documentation update performs no new hardware run.
 
+## November 2, 2026: scheduled incidents and split check tables
+
+This change adds the participant `next` verb with a per-seat incident schedule, concealed participant output while a scheduled round is unresolved, the operator `status` and `replace` commands, the refusal of participant `replace`, and the split `collect_checks` and `qualify_checks` tables. No hardware run has used it yet. The example's unit tests cover it on a CPU-only host, with Slurm, the maintenance route and the target helper replaced by recording fakes, and the installer's configuration step run as an ordinary user. The tests check the controller's decisions, state records and printed text. They do not exercise a device, a scheduler or real timing.
+
+What the tests cover:
+
+- Schedule validation in the installer and the controller, the order and exhaustion of issued incidents, a schedule changed after incidents were issued, and a failed profile write that the next call completes.
+- The device incident: no device operation without the participant's RUNNING job and two fresh advancing progress records, the operation through the existing `active efa` route, and the transcript kept in the root-only state directory.
+- Concealment in `status`, `collect`, `recover`, `next` and in refusals while the round is unresolved, one refusal for every `start` or `active` guess, and the answer line once the round is resolved.
+- `collect` accepting checks `0`, `2`, `3` and `6` for both kinds with the same refusal text, recovery still qualifying on GPU `0` and `3` or EFA `2` and `6`, baseline capture of both lists, and a configuration that has only `allowed_checks`.
+- A scheduled EFA reset whose recovery returns WARN on check `6` ends in `replacement-required`, with the node still drained and no RESUME. The participant `replace` verb changes nothing, and no refusal text in the controller or the maintenance helper still tells a participant to run `replace`. The `--operator` commands refuse a caller that is not root. `--operator replace` calls the existing replacement method, whose tests are unchanged; it has no test of its own run as root.
+
+Still to measure on hardware:
+
+- The device step of `next` against a running device workload, including how fresh the progress records are at the moment of the call.
+- The time the extra baseline checks add to an idle `start` on g7.48xlarge, and the time of each `collect` there.
+- Check `6` duration and warnings on freshly provisioned g7.48xlarge nodes. Any WARN refuses recovery, so a warning that a fresh node already shows would keep every EFA round from qualifying.
+- Whether a participant who runs check `0` in their own allocation can read the kernel journal; the check suppresses that error and can report PASS without an Xid scan.
+
+The launcher and workload modes that apply a job incident's profile are not part of this change, so no job incident has run end to end.
+
 ## September 24, 2026: fixed-candidate participant EFA recovery
 
 Independent saved-evidence review accepted the participant-command sequence on two PCS g7.48xlarge nodes: active EFA reset, failed workload, supported recovery refusing a retained warning, exact-target replacement, fresh collective/storage verification and participant result retrieval. The fixed companion and suite candidates were installed before the trial and remained unchanged during it. This is development-candidate evidence, not a claim that these fixes are merged into upstream main. EventEngine personal entry and a first-time 60-minute human rehearsal remain unverified.

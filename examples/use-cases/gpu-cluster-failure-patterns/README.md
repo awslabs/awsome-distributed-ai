@@ -16,6 +16,8 @@ The [September 24 fixed-candidate record](VALIDATION.md#september-24-2026-fixed-
 
 This integration includes the reviewed EC2 empty-response/receipt-ordering fix, Check 5 table/provider parsing, Check 6 interface pinning and counter handling, result-severity accumulation, current-job cleanup after allocated-node bundle verification, and two-epoch DataLoader controls. The integrated runtime completed normal verification, storage correctness and subsequent participant retrieval on the two-node target. Node-local Check 6 retained WARN/MONITOR in saved JSON despite successful loopback completion; cumulative timeout counts were 9 and 18, not incident deltas or evidence of harmlessness. Both fork and spawn controls completed two epochs with new nonpersistent workers, four batches per epoch, eight batch collectives per rank, zero mismatches and exit 0. This is non-reproduction, not a reproduced or repaired DataLoader failure. The EC2 acknowledgment fix remains locally regression-tested only. These results do not establish default/bootstrap/replacement rollout, full-size performance qualification, future storage headroom, or the event participant entry path. Source publication and pin/documentation changes do not repeat or extend those hardware trials.
 
+The scheduled incidents and split check tables described under [Participant-operated variant](#participant-operated-variant) have local unit tests only; [VALIDATION.md](VALIDATION.md#november-2-2026-scheduled-incidents-and-split-check-tables) lists what they cover and what awaits hardware.
+
 ## Prerequisites and deployment
 
 Use the [PCS reference architecture](../../../architectures/aws-pcs/README.md) for the dedicated same-hardware pair with EFA, compatible NVIDIA drivers, Python version 3, Enroot version 3.5.0 and Pyxis version 0.20.0 built against the deployed Slurm version. The authoritative measured provisioning composition is [Device recovery](facilitator/DEVICE-RECOVERY.md#pre-session-provisioning--separate-authorization): independent login coordinator, reviewed early LT2 isolation plus unchanged native/custom MIME, per-node fixed SSM initializer, literal admission Prolog and root-only whole-node reservation through qualification. The September 19 pair was not a homogeneous final-helper rollout; the latest fixed-candidate deployment is recorded separately in VALIDATION.md. Keep capacity reserved during the exercise, without promising uninterrupted two-node availability. New provisioning or fault trials require separate operational authorization.
@@ -114,10 +116,11 @@ bash 12.device-exercise.sh status
 bash 12.device-exercise.sh start gpu      # idle round; or: start efa
 # For an active round, replace the start command with:
 # bash 12.device-exercise.sh active gpu   # or: active efa
-bash 12.device-exercise.sh collect 0      # allowlisted checks only
+bash 12.device-exercise.sh collect 0      # checks 0, 2, 3 or 6, or kernel
 bash 12.device-exercise.sh recover
-bash 12.device-exercise.sh replace      # only after supported recovery cannot qualify
 ```
+
+When recovery cannot qualify the node, the node stays out of service for the rest of the session and an operator replaces it afterwards from the coordinator with `sudo /usr/local/sbin/aim344-device-session --operator replace --assignment <assignment-id>`. The participant verb `replace` is still accepted by the grammar and is refused without changing anything. `sudo /usr/local/sbin/aim344-device-session --operator status --assignment <assignment-id>` shows the operator the exercise kind, the seat's schedule with each entry's settings and issue time, the path of the device-operation transcript and the original text of the last recovery refusal.
 
 No node name, PCI address, job id or command reaches the privileged helper; the assignment comes from a root-owned configuration and the confirmation token is read from the target's own inspection output. `recover` ends at `runtime-ready`, which is deliberately not the same result as a verified workload: the participant then takes their own allocation and runs [`13.verify-after-recovery.sbatch`](13.verify-after-recovery.sbatch) for the Check 5 collective, per-device EFA counters and the storage fixture. That script runs entirely as the participant and needs no sudo, which is the point: an entry point that required a permission the participant is not granted would not be a participant-operated verification at all. It prints the suite's own raw correctness rows rather than only a verdict line, judges the EFA byte deltas of every device on every allocated node rather than only on the node it happens to be running on, and checks the private checkpoint fixture is usable on every allocated node before starting the distributed storage workload.
 
@@ -125,9 +128,56 @@ The batch host is whichever of the two assigned nodes Slurm picks, so the job's 
 
 A round in progress on a node is exclusive to that table, and an exercise deadline recovery is recorded separately from a recovery the participant earned by diagnosing.
 
-The runtime has scoped independent acceptance for two actual changed-address participant replacements and a fresh verification job, not full hardware or event-readiness approval. `replace` accepts no target argument. It preserves off-target evidence, retires the exact assigned failed EC2 identity, and initializes/qualifies the PCS-provisioned successor without instructor restoration. Retries do not terminate the healthy successor. Fixed SSM, pinned bootstrap, IAM, early LT isolation and the literal Prolog require separate pre-session provisioning. No PCS group or EC2 capacity-reservation update is a session action; the controller does create/release its owned Slurm scheduling reservation. WARN acceptance is disabled. Successful replacement yields fresh runtime readiness, not recovery of lost model state or proof that Check 5 has run.
+The replacement route has scoped independent acceptance for two actual changed-address replacements, which participants ran in the measured trials, and a fresh verification job, not full hardware or event-readiness approval. The operator runs the same route now, and it accepts no target argument. It preserves off-target evidence, retires the exact assigned failed EC2 identity, and initializes/qualifies the PCS-provisioned successor without instructor restoration. Retries do not terminate the healthy successor. Fixed SSM, pinned bootstrap, IAM, early LT isolation and the literal Prolog require separate pre-session provisioning. No PCS group or EC2 capacity-reservation update is a session action; the controller does create/release its owned Slurm scheduling reservation. WARN acceptance is disabled. Successful replacement yields fresh runtime readiness, not recovery of lost model state or proof that Check 5 has run.
 
-`start gpu` and `start efa` require an idle target. For `active gpu` or `active efa`, first prepare both terminals on the same independent coordinator as the same participant, including identity, environment and client-PATH checks. Then launch the existing 120-second device workload in terminal A and keep its log open. Use terminal B for the fault, `status` and `collect`. The [active procedure](facilitator/DEVICE-RECOVERY.md#active-flr-participant-integration-candidate) gives the allocation, progress-log and recovery steps. After failed recovery, `replace` may retire the assigned predecessor while this round's exact same-participant job remains COMPLETING. Other jobs and RUNNING allocations still block retirement. Admission of the successor and RESUME require an empty queue.
+`start gpu` and `start efa` require an idle target. For `active gpu` or `active efa`, first prepare both terminals on the same independent coordinator as the same participant, including identity, environment and client-PATH checks. Then launch the existing 120-second device workload in terminal A and keep its log open. Use terminal B for the fault, `status` and `collect`. The [active procedure](facilitator/DEVICE-RECOVERY.md#active-flr-participant-integration-candidate) gives the allocation, progress-log and recovery steps. After failed recovery, the replacement route may retire the assigned predecessor while this round's exact same-participant job remains COMPLETING. Other jobs and RUNNING allocations still block retirement. Admission of the successor and RESUME require an empty queue.
+
+#### Checks a participant can collect
+
+`collect` accepts the same suite checks after any exercise: `0`, `2`, `3` and `6`, plus `kernel`. Recovery still requires the kind's own checks to PASS before the node returns to service (GPU `0` and `3`, EFA `2` and `6`), and any WARN still refuses recovery. An idle `start` records a baseline for all four checks, so the baseline file names no longer depend on the kind. The installer writes the two lists as `collect_checks` and `qualify_checks` in the assignment. A configuration written before this change has only `allowed_checks`, which keeps its earlier meaning for collection, baseline and qualification; a seat schedule refuses to run on such a configuration, because its collect refusal would list the kind's checks.
+
+| Check | What root runs on the target | Time in one G7e run | Effect on the node |
+|---|---|---|---|
+| `0` | `nvidia-smi` queries, GPU count, Xid/SXid scan of the kernel log, ECC and retired pages | not recorded (suite estimate about 5 s) | reads only |
+| `2` | `lspci`, `ibv_devices`, `fi_info -p efa`, `/dev/infiniband`, `lsmod`, `ulimit -l`, and the gdrcopy sanity test (30 s limit) | 8 s | the gdrcopy test pins and copies GPU memory |
+| `3` | `nvidia-smi topo -m` and `topo -p2p`, and NVLink status and error queries where NVLink is expected | 1 s | reads only |
+| `6` | `fi_pingpong` self-loopback per EFA domain (180 s limit each) and the EFA statistics | 19 s | real EFA traffic and counter growth |
+
+The times come from one sequential run of checks `0`, `2`, `3` and `6` as root on a healthy g7e.48xlarge node with two EFAs on November 1, 2026. Each is the interval between the completion times of consecutive checks, and the run did not record when check `0` started. Collect times on g7.48xlarge have not been measured. Checks `1`, `4` and `5` stay outside both lists, and the target's maintenance allowlist is unchanged, so no new program becomes reachable as root.
+
+#### Scheduled incidents
+
+A seat can instead receive its exercises as numbered incidents whose cause the controller does not name. During account preparation the facilitator writes the seat's schedule as a JSON list, one entry per incident in the order they are issued, and passes it to the installer:
+
+```bash
+sudo AIM344_SCHEDULE_FILE=/root/seat-1.json bash facilitator/install-participant-control.sh \
+     <assignment-id> <participant-user> <target-node> <target-instance-id> <target-host>
+```
+
+```json
+[{"exercise": "storage", "settings": {"writer_rank": 9}},
+ {"exercise": "dataloader"},
+ {"exercise": "silent-corruption", "settings": {"corrupt_rank": 13, "corrupt_step": 37, "corrupt_bit": 22, "corrupt_recurring": false}},
+ {"exercise": "efa-reset"}]
+```
+
+The known exercises are `slow-job`, `storage`, `dataloader`, `silent-corruption` and `efa-reset`. The installer checks the file with the installed controller's own validation, copies the schedule into the root-only session configuration and resets the seat's record of issued incidents. It refuses a file that another account can read, a symlink and an unknown exercise. Setting names match `[a-z][a-z0-9_]{0,31}`, and values are numbers, true/false or text from `[A-Za-z0-9._:/=+-]`, so a launcher cannot turn a value into shell syntax. A rerun without the variable keeps the configured schedule and its record.
+
+The participant runs `bash 12.device-exercise.sh next`, which takes no argument and issues at most one incident per call. For a job exercise (`slow-job`, `storage`, `dataloader`, `silent-corruption`) it records the incident in the root-only state, then writes the incident's profile into the participant's results directory as the participant and prints where it is:
+
+```text
+Incident 4 is ready.
+Profile: /home/aim344-t1/aim344-results/incidents/incident-4.json
+Next: Your launcher runs this incident from the profile above. To repeat its job, reuse that profile rather than running next again.
+```
+
+The profile holds the incident number and the seat's incident count, the exercise, its settings, `controller_step` and the issue time. Only the current incident's profile leaves the root-only state, so later entries and their order stay unreadable to the participant. A failed profile write is finished by the next call rather than skipping the incident.
+
+For `efa-reset`, the first `next` hands over the profile in the same way, with `controller_step` set to `next-after-progress`. A later `next` applies an active EFA function-level reset to the assigned target through the existing `active efa` route and all of its guards, once the participant's own job is RUNNING on the target and `~/aim344-results/device-<job-id>.log` shows two advancing progress records, the latest at most 15 seconds old. It then prints `Incident <n> is under way.` Until those conditions hold, `next` repeats the ready reply and changes nothing. `11.device-workload.sh` writes that log and those records. `next` refuses while a round still holds the node and after the node is kept out of service.
+
+While a scheduled round is unresolved, participant output names neither the kind nor the operation. `status` prints `Incident: <n>` instead of `Exercise: <kind>`, omits the FLR and EFA-path lines, and lists the same collectable checks for every kind. Refusals pass through the same concealment, the operation transcript is kept in the root-only state directory instead of the results directory, and `start` or `active` with either kind gets one identical refusal. Once the round reaches `runtime-ready`, `verified` or `replacement-required`, `status` adds one answer line, for example `Answer for incident 4: the lab controller reset one EFA device on your exercise node (a PCIe function-level reset of 0000:b0:00.0) while your job was running.` Recovery qualification results after `recover` still name check numbers, which point to the kind, so a page that asks for a written diagnosis asks for it before `recover`.
+
+Only the controller side of scheduled incidents exists so far. No launcher or workload mode reads a job incident's profile yet, so the profile is handed out but nothing applies its settings. [VALIDATION.md](VALIDATION.md#november-2-2026-scheduled-incidents-and-split-check-tables) records what has been tested.
 
 ## Log investigation cases
 
@@ -208,7 +258,7 @@ The optional plugin comparison uses `0.baseline.sh`, `3.inject-fallback.sh` and 
 
 ## Cleanup and known edge cases
 
-Run `bash 9.cleanup.sh` in the healthy allocation, then exit it. Retain the evidence. Only during post-session administrative teardown does the facilitator restore exercise-owned markers, mounts, telemetry and scheduler settings while retaining the dedicated pair and capacity; this is not an in-session device-recovery remedy. Participants use `recover` or `replace` for that route. Remove only this exercise's private container instances; keep the staged images available for reuse.
+Run `bash 9.cleanup.sh` in the healthy allocation, then exit it. Retain the evidence. Only during post-session administrative teardown does the facilitator restore exercise-owned markers, mounts, telemetry and scheduler settings while retaining the dedicated pair and capacity; this is not an in-session device-recovery remedy. Participants use `recover`, and an operator runs the replacement route after the session. Remove only this exercise's private container instances; keep the staged images available for reuse.
 
 A launcher or image error must be resolved before its result can describe GPU communication. Use `FI_EFA_IFACE` to select a physical EFA; `FI_EFA_DEVICE_NAME` is ignored by the shipped libfabric. Missing counters require investigation and must not be recorded as 0 B. `iptables` and `tc netem` do not establish an EFA device failure because the EFA data path bypasses that kernel networking path.
 

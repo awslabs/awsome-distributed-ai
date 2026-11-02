@@ -502,11 +502,12 @@ config['assignments'][assignment] = {
     'suite_entry': suite_entry,
     # What a participant may run with collect after any exercise: the suite's
     # read-only checks the target's maintenance allowlist already holds
-    # (replacement-bootstrap.py 'checks': [0, 2, 3, 6]). Durations were measured on
-    # G7e (two EFA) on 2026-11-01, as root through the maintenance route; the
-    # suite headers estimate 5 s, 3 s, 10 s and 5-15 min.
+    # (replacement-bootstrap.py 'checks': [0, 2, 3, 6]). The times below are the
+    # intervals between completion times in one sequential run as root on a G7e
+    # node (two EFA) on 2026-11-01; that run did not record when check 0 started.
+    # The suite headers estimate 5 s, 3 s, 10 s and 5-15 min.
     #   0  nvidia-smi query, GPU count, Xid/SXid scan of the kernel log, ECC and
-    #      retired pages; about 5 s; reads only.
+    #      retired pages; not recorded; reads only.
     #   2  lspci, ibv_devices, fi_info -p efa, /dev/infiniband, lsmod, ulimit -l and
     #      the gdrcopy sanity test (30 s limit), which pins and copies GPU memory;
     #      about 8 s.
