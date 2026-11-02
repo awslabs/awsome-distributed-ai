@@ -36,7 +36,7 @@ FROM public.ecr.aws/deep-learning-containers/pytorch-training:${DLC_TAG}
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git git-lfs curl xz-utils fio && \
+        git git-lfs curl xz-utils fio libgl1 libglib2.0-0 && \
     rm -rf /var/lib/apt/lists/*
 
 # --- Prebuilt SHARED FFmpeg (8.x) onto the default loader path ----------------
@@ -73,7 +73,8 @@ RUN cd /tmp && curl -sL --retry 3 -o ff.tar.xz "${FFMPEG_URL}" && \
     /usr/local/bin/ffprobe -version | head -1
 
 # uv for the framework's locked env.
-COPY --from=ghcr.io/astral-sh/uv:0.10.8 /uv /uvx /usr/local/bin/
+# uv version MUST match cosmos-framework pyproject [tool.uv] required-version (==0.11.29 at this pin).
+COPY --from=ghcr.io/astral-sh/uv:0.11.29 /uv /uvx /usr/local/bin/
 ENV UV_LINK_MODE=copy
 
 # --- uv-managed CPython 3.13 (ships a SHARED libpython3.13.so.1.0) ------------
@@ -91,7 +92,7 @@ WORKDIR /workspace
 # Clone + install cosmos-framework (pin via --build-arg COSMOS_FRAMEWORK_REF) on
 # the uv-managed Python 3.13. The cu130-train group pins
 # torch 2.10.0+cu130 + NCCL 2.28.9 (the NCCL that matches the DLC's aws-ofi-nccl).
-ARG COSMOS_FRAMEWORK_REF=5eee9ed574255f017b192161bfbb5a10253d65cf
+ARG COSMOS_FRAMEWORK_REF=1a2f03ab6111b457633827736f94f67d55bd5202
 RUN git clone https://github.com/NVIDIA/cosmos-framework.git && \
     cd cosmos-framework && git checkout ${COSMOS_FRAMEWORK_REF} && \
     uv sync --all-extras --group=cu130-train --python 3.13
