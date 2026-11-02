@@ -76,6 +76,8 @@ export NUM_WORKERS="0"
 export BASE_CHECKPOINT_PATH="/fsx/pretrained/Cosmos3-Nano-dcp"   # dir containing model/
 
 # --- Generation / SDG (generate-vllm-omni-super.yaml; official vllm/vllm-omni:cosmos3 engine) ---
+# The cosmos3 tag moves; mirror this validated multi-arch index digest (see README "Synthetic data generation").
+export VLLM_OMNI_DIGEST="sha256:86fb713bf73e118e537a55fa013dcdbdf2468ed61b98f4f2e7934a9482181dc1"
 # Parallelism flags must multiply to GPUS_PER_NODE (e.g. cfg2 x uly4 = 8). Guardrails
 # are toggled PER-REQUEST (request extra_params.guardrails), NOT a server flag.
 export CFG_PARALLEL="2"            # --cfg-parallel-size

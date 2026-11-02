@@ -254,15 +254,20 @@ envsubst < kubernetes/train-multi-node-dlc.yaml | kubectl apply -f -   # 2× p5e
 ### Synthetic data generation (SDG)
 
 Generation runs on a **separate image** — the official `vllm/vllm-omni:cosmos3`
-engine (a moving tag; re-pull or pin a digest when you mirror it), not the DLC training image ([vLLM-Omni](https://github.com/vllm-project/vllm-omni) is a separate Python/vLLM stack). Mirror it into your
-ECR (or pull it directly if your nodes have egress), then bring up the server and
-send video-to-video requests. The manifest header carries the authoritative
+engine, not the DLC training image ([vLLM-Omni](https://github.com/vllm-project/vllm-omni) is a separate Python/vLLM stack —
+Python 3.12 on a vLLM 0.31 base in the validated image, versus Python 3.13 / torch 2.10 for training). The
+`cosmos3` tag moves, so mirror it **by digest**; the validated digest is `VLLM_OMNI_DIGEST` in
+`env_vars.example`. Mirror it into your ECR (or pull it directly if your nodes have egress), then
+bring up the server and send video-to-video requests. The manifest header carries the authoritative
 variable list; the short version:
 
 ```bash
 set -a; . ./env_vars; set +a
+# Mirror the validated digest (amd64) into your ECR, e.g. with crane:
+crane copy --platform linux/amd64 "docker.io/vllm/vllm-omni@${VLLM_OMNI_DIGEST}" \
+  "${REGISTRY}/vllm-omni:cosmos3-${VLLM_OMNI_DIGEST:7:8}"
 # IMAGE_URI must point at the vllm-omni image (NOT the DLC training image):
-export IMAGE_URI=<acct>.dkr.ecr.<region>.amazonaws.com/vllm-omni:cosmos3
+export IMAGE_URI="${REGISTRY}/vllm-omni:cosmos3-${VLLM_OMNI_DIGEST:7:8}"
 envsubst < kubernetes/generate-vllm-omni-super.yaml | kubectl apply -f -
 
 # once the server is Ready, port-forward and POST a V2V request:
@@ -439,7 +444,7 @@ the `Dockerfile` header). The pinned, validated versions:
 | FFmpeg (shared, for torchcodec) | 7.1.x (pinned BtbN gpl-shared build, SHA-256 verified) |
 | torchcodec | 0.10.0 |
 | `uv` | 0.11.29 (must match the framework's `required-version`) |
-| Generation engine | `vllm/vllm-omni:cosmos3` (separate image from the training stack) |
+| Generation engine | `vllm/vllm-omni:cosmos3@sha256:86fb713bf73e118e537a55fa013dcdbdf2468ed61b98f4f2e7934a9482181dc1` (separate image from the training stack; tag re-pushed 2026-10-19, Python 3.12, vLLM 0.31 base) |
 
 ### torch.compile: Inductor mix-order-reduction shared-memory OOM
 
