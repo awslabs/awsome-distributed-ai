@@ -24,3 +24,36 @@ create_hyperpod_training_operator_module  = true
 create_hyperpod_inference_operator_module = true
 enable_guardduty_cleanup                  = true
 create_new_fsx_filesystem                 = true
+
+
+# ================================================================
+# Inference Gateway — Example Configuration
+# ================================================================
+# Enables the Body-Based Router (BBR) and llm-d Endpoint Picker
+# (EPP) on the HyperPod Inference Operator add-on.
+#
+# Prerequisites:
+#   - Inference Operator enabled (create_hyperpod_inference_operator_module = true)
+#   - cert-manager enabled (enable_cert_manager = true)
+#
+# The module automatically:
+#   - Pins the add-on to v2.0.0-eksbuild.2
+#   - Creates an IRSA role for the certificate-issuer (unless
+#     you provide your own via inference_gateway_certificate_issuer_role_arn)
+#
+# After applying, deploy InferenceEndpointConfig resources with
+# spec.inferenceGateway.enabled: true — see the example at:
+#   examples/inference/sagemaker-hyperpod-inference/inference-gateway-multi-model/
+#
+# Reference:
+#   https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-model-deployment-inference-gateway.html
+# ================================================================
+
+# --- Inference Gateway ---
+# Uncomment the lines below to enable.
+
+# enable_cert_manager                              = true
+# create_hyperpod_inference_operator_module        = true
+# enable_inference_gateway                         = true
+# inference_gateway_certificate_issuer_role_arn    = ""    # leave empty to auto-create via IRSA
+# tls_certificate_bucket_arn                       = "arn:aws:s3:::my-tls-cert-bucket"
