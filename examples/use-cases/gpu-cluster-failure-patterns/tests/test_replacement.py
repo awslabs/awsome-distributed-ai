@@ -1721,6 +1721,14 @@ class BootstrapFiles(unittest.TestCase):
             bad['verification_environment'][key] = value
             with self.assertRaises(RuntimeError):
                 helper.verification_environment(bad)
+        manifest['verification_environment']['AIM344_EXPECTED_EFA_DEVICES'] = '2'
+        self.assertIn('HEALTHCHECK_EXPECTED_EFA_COUNT=${HEALTHCHECK_EXPECTED_EFA_COUNT:-2}',
+                      helper.verification_environment(manifest))
+        for count in ('0', '-1', '33', '02', '2;id'):
+            bad = copy.deepcopy(manifest)
+            bad['verification_environment']['AIM344_EXPECTED_EFA_DEVICES'] = count
+            with self.subTest(count=count), self.assertRaises(RuntimeError):
+                helper.verification_environment(bad)
         manifest.update(check5_suite_root='/opt/aim344/healthcheck-candidate-' + 'c' * 64, objects={})
         with self.assertRaisesRegex(RuntimeError, 'pinned archive'):
             helper.verification_environment(manifest)
@@ -1792,6 +1800,11 @@ class BootstrapFiles(unittest.TestCase):
             target = copy.deepcopy(manifest)
             target['verification_environment']['NCCL_SOCKET_IFNAME'] = '=new-interface'
             target['verification_environment']['CPUS_PER_RANK'] = '12'
+            # Migrate a historical receipt without an EFA assignment, together
+            # with the new suite. Exercise the actual generated upgrade below.
+            self.assertNotIn('expected_efa_devices', json.loads(
+                node_path('/etc/aim344-maintenance.json').read_text()))
+            target['verification_environment']['AIM344_EXPECTED_EFA_DEVICES'] = '2'
             objects = node_path('/').parent / 'objects'
             with tarfile.open(objects / 'companion.tgz', 'r:gz') as source, \
                  tarfile.open(objects / 'new-companion.tgz', 'w:gz') as destination:
@@ -1942,6 +1955,11 @@ class BootstrapFiles(unittest.TestCase):
                     exec(compile(installer, 'actual-generated-upgrade', 'exec'), {})
                 completed = json.loads(receipt.read_text())
                 self.assertTrue(completed['ready'])
+                maintenance = node_path('/etc/aim344-maintenance.json')
+                self.assertEqual(json.loads(maintenance.read_text())['expected_efa_devices'], 2)
+                self.assertEqual(stat.S_IMODE(maintenance.stat().st_mode), 0o600)
+                self.assertIn('HEALTHCHECK_EXPECTED_EFA_COUNT=${HEALTHCHECK_EXPECTED_EFA_COUNT:-2}',
+                    node_path('/opt/aim344/device-recovery/companion/lab.env').read_text())
                 lab_env = node_path('/opt/aim344/device-recovery/companion/lab.env')
                 self.assertIn('CPUS_PER_RANK=${CPUS_PER_RANK:-12}', lab_env.read_text())
                 self.assertEqual(completed['installed_hashes'][str(lab_env)], bootstrap.digest(lab_env))
@@ -1961,7 +1979,7 @@ class BootstrapFiles(unittest.TestCase):
                 self.assertEqual(bootstrap.bootstrap(target, pins, metadata), completed)
                 metadata.assert_not_called()
                 self.assertEqual(bootstrap.bootstrap(target), completed)
-        self.bootstrap_sandbox(check)
+        self.bootstrap_sandbox(check, assigned_efa=False)
 
     def test_upgrade_restart_at_each_durable_publication(self):
         from types import SimpleNamespace
@@ -2030,7 +2048,8 @@ class BootstrapFiles(unittest.TestCase):
             with self.subTest(prefix=prefix):
                 self.bootstrap_sandbox(companion_prefix=prefix)
 
-    def bootstrap_sandbox(self, after_bootstrap=None, companion_prefix='companion/', candidate=False):
+    def bootstrap_sandbox(self, after_bootstrap=None, companion_prefix='companion/', candidate=False,
+                          assigned_efa=True):
         bootstrap = self.load('replacement-bootstrap.py')
         previous_umask = os.umask(0o022)
         self.addCleanup(os.umask, previous_umask)
@@ -2092,6 +2111,8 @@ class BootstrapFiles(unittest.TestCase):
                                             'version_id': 'fixture version'} for p in objects.iterdir()}}
             manifest['verification_environment'] = {'PARTITION': 'assigned-queue',
                 'NCCL_CONTAINER': '/opt/aim344/aim344.sqsh', 'NCCL_SOCKET_IFNAME': '=eth0'}
+            if assigned_efa:
+                manifest['verification_environment']['AIM344_EXPECTED_EFA_DEVICES'] = '2'
             if candidate:
                 manifest['check5_suite_root'] = '/opt/aim344/healthcheck-candidate-' + 'c' * 64
             manifest['release_sha256'] = manifest['objects']['companion.tgz']['sha256']
@@ -2140,6 +2161,13 @@ class BootstrapFiles(unittest.TestCase):
                     return
                 report = bootstrap.bootstrap(manifest)
                 self.assertTrue(report['ready'])
+                maintenance = json.loads(node_path('/etc/aim344-maintenance.json').read_text())
+                if assigned_efa:
+                    self.assertEqual(maintenance['expected_efa_devices'], 2)
+                    self.assertIn('HEALTHCHECK_EXPECTED_EFA_COUNT',
+                                  node_path('/opt/aim344/device-recovery/companion/lab.env').read_text())
+                else:
+                    self.assertNotIn('expected_efa_devices', maintenance)
                 self.assertEqual(report['instance_id'], NEW)
                 self.assertTrue(account.called)
                 self.assertTrue(any('/var/lib/aim344-device-recovery/restore-runtime.sh' in c for c in calls))

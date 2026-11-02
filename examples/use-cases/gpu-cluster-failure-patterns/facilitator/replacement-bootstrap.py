@@ -250,6 +250,11 @@ def verification_environment(manifest):
     require(all(isinstance(v, str) and v and '\n' not in v for v in overrides.values()),
             'Invalid verification environment value')
     values.update(overrides)
+    if 'AIM344_EXPECTED_EFA_DEVICES' in overrides:
+        count = overrides['AIM344_EXPECTED_EFA_DEVICES']
+        require(re.fullmatch(r'[1-9][0-9]?', count) and int(count) <= 32,
+                'Invalid assigned EFA count')
+        values['HEALTHCHECK_EXPECTED_EFA_COUNT'] = count
     # Match the native allocation parser's positive decimal contract. The site
     # supplies capacity; do not impose a new instance-specific CPU ceiling.
     require(re.fullmatch(r'[1-9][0-9]*', values['CPUS_PER_RANK']),
@@ -612,6 +617,9 @@ RequiredBy=sysinit.target
                    'staging_image_sha256': {name: manifest['objects'][name]['sha256']
                                             for name in ('aim344.sqsh', 'nccl-baseline.sqsh')},
                    'checks': [0, 2, 3, 6], 'suite_entry': suite}
+    assigned_efa = manifest.get('verification_environment', {}).get('AIM344_EXPECTED_EFA_DEVICES')
+    if assigned_efa is not None:
+        maintenance['expected_efa_devices'] = int(assigned_efa)
     durable('/etc/aim344-maintenance.json', json.dumps(maintenance))
     for source, destination in (('facilitator/maintenance.py', '/usr/local/sbin/aim344-maintenance'),
                                 ('facilitator/device-fault.sh', '/usr/local/sbin/aim344-device-fault'),

@@ -119,6 +119,50 @@ class Grammar(unittest.TestCase):
         for leaked in ['LD_PRELOAD', 'PYTHONPATH', 'BASH_ENV', 'SSH_ORIGINAL_COMMAND']:
             self.assertNotIn(leaked, env)
 
+    def test_assigned_efa_count_is_root_config_not_caller_environment(self):
+        from unittest.mock import patch
+        config = {'slurm_bin': '/opt/aws/pcs/scheduler/slurm-25.05/bin',
+                  'expected_efa_devices': 2}
+        with patch.dict(os.environ, HEALTHCHECK_EXPECTED_EFA_COUNT='1', INSTANCE_TYPE='g7.48xlarge'):
+            env = maintenance.environment(config)
+        self.assertEqual(env['HEALTHCHECK_EXPECTED_EFA_COUNT'], '2')
+        self.assertNotIn('INSTANCE_TYPE', env)
+        for bad in (0, -1, 33, True, '2', None):
+            with self.subTest(bad=bad), self.assertRaises(maintenance.Refusal):
+                maintenance.environment(dict(config, expected_efa_devices=bad))
+
+    def test_health_prolog_uses_private_assignment_and_refuses_invalid_count(self):
+        import subprocess
+        # Relocate this script's fixed read-only config path, then execute its
+        # actual assignment-loading prefix as our ordinary test UID.
+        prefix = (LAB / 'prejob-prolog.sh').read_text().split('marker=/run/aim344-unhealthy')[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / 'maintenance.json'
+            script = root / 'prolog.sh'
+            text = prefix.replace('/etc/aim344-maintenance.json', str(config))
+            text = text.replace('info.st_uid != 0', f'info.st_uid != {os.getuid()}')
+            script.write_text(text + '\nprintf "%s|%s" "${HEALTHCHECK_EXPECTED_EFA_COUNT:-unset}" "${INSTANCE_TYPE:-unset}"\n')
+            def invoke():
+                return subprocess.run(['bash', str(script)],
+                    env=dict(os.environ, HEALTHCHECK_EXPECTED_EFA_COUNT='1', INSTANCE_TYPE='spoofed'),
+                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(invoke().stdout, 'unset|unset')
+            for count in (2, 0, True, '2', 33):
+                config.write_text(json.dumps({'expected_efa_devices': count}))
+                config.chmod(0o600)
+                result = invoke()
+                if type(count) is int and count == 2:
+                    self.assertEqual((result.returncode, result.stdout), (0, '2|unset'))
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+            config.write_text('{"expected_efa_devices": 2}')
+            config.chmod(0o644)
+            self.assertNotEqual(invoke().returncode, 0)
+            config.unlink()
+            config.symlink_to(root / 'missing')
+            self.assertNotEqual(invoke().returncode, 0)
+
     def test_environment_carries_the_efa_tools_the_suite_calls(self):
         """Omitting /opt/amazon/efa/bin made check 2 report 'fi_info not found'
         and FAIL on a node whose EFA counts were all correct."""
