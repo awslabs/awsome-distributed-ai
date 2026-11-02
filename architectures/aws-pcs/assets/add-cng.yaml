@@ -287,7 +287,8 @@ Parameters:
       without EFA, so a targeted ODCR held in a customer-owned cluster placement
       group is consumable on any instance type. Also accepts a placement group
       ID (pg-...), which is required for a group shared from another account; a
-      value starting with "pg-" is treated as an ID.
+      value starting with "pg-" is treated as an ID. Use the name or ID, not
+      the ARN (e.g. the PlacementGroupArn of a capacity reservation).
     Default: ''
 
   CapacityReservationId:
