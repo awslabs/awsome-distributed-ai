@@ -17,6 +17,21 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader, TensorDataset
 
+# Every rank's tensors live on its GPU. The CPU unit tests point this at the CPU.
+DEVICE = 'cuda'
+# A name that an interrupted save of a real job could leave, so that a listing of
+# the directory does not say the lab filled it. recover-checkpoint.py removes it.
+FILLER_NAME = 'ckpt-shard-00017.partial'
+# The lab's own lines, such as the injector's, carry this marker when the launcher
+# runs an incident without naming its cause (job.sh). That launcher moves them to
+# the lab log instead of the job log. Without --mark-lab-lines they print plainly.
+LAB_LINE_MARKER = 'AIM344 lab: '
+
+
+def lab_line(args, text):
+    prefix = LAB_LINE_MARKER if getattr(args, 'mark_lab_lines', False) else ''
+    print(prefix + text, flush=True)
+
 
 def checkpoint_dir():
     path = Path('/checkpoints')
@@ -34,13 +49,14 @@ def save_checkpoint(path, step):
     os.replace(path / 'next.json', path / 'last.json')
 
 
-def fill_checkpoint_path(path):
+def fill_checkpoint_path(path, args):
     # Never fill an unbounded shared filesystem. A larger/unconfigured quota
     # causes this bounded attempt to fail without arming the workload fault.
     written = 0
     exhausted = False
+    filler = path / FILLER_NAME
     try:
-        with (path / 'aim344-filler.bin').open('xb', buffering=0) as output:
+        with filler.open('xb', buffering=0) as output:
             block = b'\0' * (1024 * 1024)
             while written < 64 * 1024 * 1024:
                 written += output.write(block)
@@ -49,10 +65,46 @@ def fill_checkpoint_path(path):
         if error.errno not in (errno.ENOSPC, errno.EDQUOT):
             raise
         exhausted = True
-        print(f'checkpoint injection: {error}; filler_bytes={written} B', flush=True)
+        lab_line(args, f'checkpoint injection: {error}; filler_bytes={written} B')
     if not exhausted:
-        (path / 'aim344-filler.bin').unlink()
+        filler.unlink()
         raise RuntimeError('No exhaustion within the 64 MiB fill limit; configure the isolated quota.')
+
+
+def save_with_retry(path, step):
+    # Healthy ranks enter the collective while the checkpoint writer retries.
+    # This is an explicit retry policy, not an intrinsic property of ENOSPC.
+    deadline = time.monotonic() + 60
+    while True:
+        try:
+            save_checkpoint(path, step)
+            return
+        except OSError as error:
+            if error.errno not in (errno.ENOSPC, errno.EDQUOT):
+                raise
+            print(f'checkpoint write retry: {error}', flush=True)
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(1)
+
+
+def checkpoint_start(args, path):
+    """The step every rank starts from, read or recorded by the checkpoint writer.
+
+    Only the writer uses its node's checkpoint directory: on --resume it reads the
+    last successful checkpoint, otherwise it records step 0. It then broadcasts the
+    step, so every rank starts from the writer's value.
+    """
+    start_step = 0
+    if dist.get_rank() == args.writer_rank:
+        if args.resume:
+            start_step = json.loads((path / 'last.json').read_text())['next_step']
+            print(f'Resuming from last successful checkpoint: next_step={start_step} (step index).', flush=True)
+        else:
+            save_checkpoint(path, 0)
+    state = torch.tensor([start_step], device=DEVICE)
+    dist.broadcast(state, src=args.writer_rank)
+    return int(state.item())
 
 
 def collective(tensor):
@@ -66,36 +118,62 @@ def collective(tensor):
 def storage(args, tensor):
     rank = dist.get_rank()
     path = checkpoint_dir()
-    start_step = 0
-    if rank == 0:
-        if args.resume:
-            start_step = json.loads((path / 'last.json').read_text())['next_step']
-            print(f'Resuming from last successful checkpoint: next_step={start_step} (step index).', flush=True)
-        else:
-            save_checkpoint(path, 0)
-    state = torch.tensor([start_step], device='cuda')
-    dist.broadcast(state, src=0)
-    start_step = int(state.item())
-    if args.inject and rank == 0:
-        fill_checkpoint_path(path)
-    # Healthy ranks enter the collective while the checkpoint writer retries.
-    # This is an explicit retry policy, not an intrinsic property of ENOSPC.
-    if rank == 0:
-        deadline = time.monotonic() + 60
-        while True:
-            try:
-                save_checkpoint(path, start_step + 1)
-                break
-            except OSError as error:
-                if error.errno not in (errno.ENOSPC, errno.EDQUOT):
-                    raise
-                print(f'checkpoint write retry: {error}', flush=True)
-                if time.monotonic() >= deadline:
-                    raise
-                time.sleep(1)
+    start_step = checkpoint_start(args, path)
+    if rank == args.writer_rank:
+        if args.inject:
+            fill_checkpoint_path(path, args)
+        save_with_retry(path, start_step + 1)
     collective(tensor)
     if rank == 0:
         print(f'Storage workload completed: next_step={start_step + 1} (step index); 0 mismatches.', flush=True)
+
+
+def run_steps(args, tensor):
+    """The training stand-in: one broadcast and one checked all-reduce per step.
+
+    Rank 0 decides when to stop and prints a progress record every 20 collectives;
+    the external controller reads those records before an active device fault.
+    With --checkpoint-every N, the checkpoint writer saves the next step index
+    before the all-reduce of every N-th step. A save that fails keeps that one rank
+    out of the all-reduce that the other ranks have entered. --inject fills the
+    writer's directory just before its first periodic save.
+    """
+    rank = dist.get_rank()
+    writer = bool(args.checkpoint_every) and rank == args.writer_rank
+    path = checkpoint_dir() if writer else None
+    start_step = checkpoint_start(args, path) if args.checkpoint_every else 0
+    if writer and not args.resume:
+        print(f'checkpoint saved: next_step={start_step} (step index)', flush=True)
+    injected = False
+    # Progress comes only after a completed, correctness-checked collective.
+    # The external controller observes progress and device counters before injection.
+    deadline = time.monotonic() + args.duration_seconds
+    sequence = 0
+    keep_running = torch.ones(1, dtype=torch.int32, device=DEVICE)
+    while True:
+        # Rank 0 ends the loop collectively; local deadlines can diverge.
+        if rank == 0:
+            keep_running.fill_(int(time.monotonic() < deadline))
+        dist.broadcast(keep_running, src=0)
+        if not keep_running.item():
+            break
+        step = start_step + sequence
+        if writer and sequence and step % args.checkpoint_every == 0:
+            if args.inject and not injected:
+                injected = True
+                fill_checkpoint_path(path, args)
+            save_with_retry(path, step)
+            print(f'checkpoint saved: next_step={step} (step index)', flush=True)
+        collective(tensor)
+        sequence += 1
+        if rank == 0 and sequence % 20 == 0:
+            print(f'AIM344 collective_progress={sequence} collectives; '
+                  f'tensor_bytes={tensor.numel() * tensor.element_size()} B; '
+                  f'timestamp={time.time():.6f} s since epoch; 0 mismatches; '
+                  f'job_id={os.environ.get("SLURM_JOB_ID", "unassigned")}; '
+                  f'world_size={dist.get_world_size()}; rank=0.', flush=True)
+    if rank == 0:
+        print(f'Device workload completed: {sequence} collectives; 0 mismatches.', flush=True)
 
 
 def dataloader_event(event, rank, epoch, **fields):
@@ -163,19 +241,47 @@ def dataloader(args, tensor):
         print(f'DataLoader workload completed: {batches} batches; 0 mismatches.', flush=True)
 
 
-def main():
+def nonnegative_int(value):
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError('must be a non-negative integer') from None
+    if number < 0:
+        raise argparse.ArgumentTypeError('must be a non-negative integer')
+    return number
+
+
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=['storage', 'dataloader', 'device'])
     parser.add_argument('--duration-seconds', type=int, default=600)
     parser.add_argument('--inject', action='store_true')
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--writer-rank', type=nonnegative_int, default=0,
+                        help='rank that writes the checkpoint (default: 0)')
+    parser.add_argument('--checkpoint-every', type=nonnegative_int, default=0,
+                        help='device mode: save a checkpoint every N steps (default: 0, none)')
+    parser.add_argument('--mark-lab-lines', action='store_true',
+                        help="mark the lab's own lines for the launcher's lab log")
     parser.add_argument('--start-method', choices=['fork', 'spawn'], default='fork')
     parser.add_argument('--epochs', type=positive_epochs, default=1,
                         help='DataLoader epochs (default: 1); numbered controls use 2')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.checkpoint_every and args.mode != 'device':
+        parser.error('--checkpoint-every applies to device mode only')
+    if args.mode == 'device' and (args.inject or args.resume) and not args.checkpoint_every:
+        parser.error('--inject and --resume in device mode need --checkpoint-every')
+    return args
+
+
+def main():
+    args = parse_args()
     torch.cuda.set_device(int(os.environ['LOCAL_RANK']))
     dist.init_process_group('nccl', timeout=timedelta(seconds=30))
-    tensor = torch.ones(32 * 1024 * 1024 if args.mode == 'device' else 1024 * 1024, device='cuda')
+    if args.writer_rank >= dist.get_world_size():
+        raise SystemExit(f'--writer-rank {args.writer_rank} is not a rank of this '
+                         f'{dist.get_world_size()}-rank job.')
+    tensor = torch.ones(32 * 1024 * 1024 if args.mode == 'device' else 1024 * 1024, device=DEVICE)
     collective(tensor)
     if dist.get_rank() == 0:
         build_nccl = '.'.join(str(part) for part in torch.cuda.nccl.version())
@@ -187,28 +293,7 @@ def main():
     elif args.mode == 'dataloader':
         dataloader(args, tensor)
     else:
-        # Progress comes only after a completed, correctness-checked collective.
-        # The external controller observes progress and device counters before injection.
-        deadline = time.monotonic() + args.duration_seconds
-        sequence = 0
-        keep_running = torch.ones(1, dtype=torch.int32, device='cuda')
-        while True:
-            # Rank 0 ends the loop collectively; local deadlines can diverge.
-            if dist.get_rank() == 0:
-                keep_running.fill_(int(time.monotonic() < deadline))
-            dist.broadcast(keep_running, src=0)
-            if not keep_running.item():
-                break
-            collective(tensor)
-            sequence += 1
-            if dist.get_rank() == 0 and sequence % 20 == 0:
-                print(f'AIM344 collective_progress={sequence} collectives; '
-                      f'tensor_bytes={tensor.numel() * tensor.element_size()} B; '
-                      f'timestamp={time.time():.6f} s since epoch; 0 mismatches; '
-                      f'job_id={os.environ.get("SLURM_JOB_ID", "unassigned")}; '
-                      f'world_size={dist.get_world_size()}; rank=0.', flush=True)
-        if dist.get_rank() == 0:
-            print(f'Device workload completed: {sequence} collectives; 0 mismatches.', flush=True)
+        run_steps(args, tensor)
     dist.destroy_process_group()
 
 

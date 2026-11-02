@@ -27,6 +27,7 @@
 #SBATCH --chdir=/var/tmp
 #SBATCH --output=/var/tmp/aim344-verify-%j.log
 set -uo pipefail
+[[ $# -eq 0 ]] || { echo 'Usage: sbatch [options] 13.verify-after-recovery.sbatch (it takes no arguments)' >&2; exit 2; }
 base=${AIM344_BASE:-/opt/aim344/device-recovery}
 LAB_DIR=$base/companion
 # Site defaults are also installed on replacement nodes. The generated file

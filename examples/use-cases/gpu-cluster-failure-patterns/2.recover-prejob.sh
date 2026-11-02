@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: MIT-0
 # Run on the same compute node before the administrator resumes it in Slurm.
 set -euo pipefail
+[[ $# -eq 0 ]] || { echo "Usage: bash ${0##*/} (it takes no arguments)" >&2; exit 2; }
 [[ $EUID == 0 ]] || { echo 'Run as root on the marked compute node.' >&2; exit 2; }
 marker=/run/aim344-unhealthy
 [[ -f $marker && ! -L $marker && $(stat -c %u "$marker") == 0 ]] || exit 1

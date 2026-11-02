@@ -2,6 +2,30 @@
 
 This distribution summary preserves the scope of the measured results without deployment identifiers, private artifact locations or incident-derived teaching material. Original detailed records, failed attempts and exact source/deployment mappings remain unchanged with the workshop owner. The latest section describes an installed, fixed development candidate; historical sections retain their original scope. This documentation update performs no new hardware run.
 
+## November 2, 2026: the participant launcher and the cause-hidden job incidents
+
+This change adds `job.sh`, the login profile and its installer step, the checkpoint writer options of `workload.py` (`--writer-rank`, and `--checkpoint-every` with `--inject` and `--resume` in device mode), the lab-line filter `lab-lines.py`, neutral run ids and the progress copy for every `job.sh` run of the training stand-in in `common.sh`, the renamed filler, argument checks in the numbered launchers and a usage text for `12.device-exercise.sh` that names no exercise. No hardware run has used any of it. Two new test files run on a CPU-only host: `tests/test_checkpoint_workload.py` and `tests/test_job_launcher.py`. The workload tests replace the process group with a recording fake for one rank at a time and count the collective instead of running it. The launcher tests run `job.sh` with a recording `common.sh`, a scripted `12.device-exercise.sh` and a fake `scontrol`, and run `common.sh` itself with a fake `srun`. They check which commands are issued, with which arguments and in which order, and what the participant's terminal shows. They do not run a GPU, NCCL, Slurm, a container or the lab controls.
+
+What the tests cover:
+
+- The checkpoint writer in the step loop: the save at step 0 and before every N-th step's all-reduce, the fill just before the first periodic save, the read of `last.json` and the start-step broadcast from the writer on resume, and no use of the checkpoint directory on any other rank. Rank 0's progress records match the controller's parser.
+- The storage mode with `--writer-rank`: the initial save, the fill, the retried save and the broadcast source move to the writer, rank 0 still prints the completion line, and the default writer stays rank 0. The 60-second retry and its `checkpoint write retry` lines, the filler name, the injection line printed plainly or marked for the lab log, argument errors, and a writer rank outside the job stopping before any collective.
+- `lab-lines.py` moving marked lines to the lab log, passing every other line through unchanged and passing each line on before its input ends.
+- `job.sh`: its grammar, the notes template and its refusal to overwrite, the allocation, walltime and `AIM344_EFA_DEVICE` checks for every job command, the run ids and printed lines, one `next` request for each job incident and none for `rerun` or `resume`, the arguments each exercise passes, the lab steps and their output going to the lab log, the incident issued last chosen for `rerun` and `resume`, refused and unusable profiles, and the refusals for `dataloader` and `silent-corruption`. For `efa-reset`: a second request once the progress copy holds two records of this job, repeated requests until the reply says the incident is under way, the end of the requests at the first refusal or when the job ends, and a copy left by an earlier run in the same allocation not counting as progress. For each exercise's `incident` and `resume`, the tests also check that the participant's output contains none of the words that would name its cause.
+- `common.sh`: the neutral run id, the progress copy for every `job.sh` run of the training stand-in, the injection line reaching the lab log and missing from the terminal, the job log and the copy, the exit status kept, the inventory of a `job.sh` sweep going to the lab log, and the numbered launchers' file names and output unchanged.
+- The numbered launchers refusing arguments they do not take before they use the allocation, and the storage launchers passing `--writer-rank N` and refusing anything else.
+- The login profile in an interactive shell: the lab values, `PATH`, the lab directory and, inside an allocation shell, `RESULTS_DIR`, with no second `PATH` entry in a child shell, and no change without a seat file or in a script. The installer's checks of the seat values before its first change, the seat file's content and mode, and the `~/.bashrc` line written once and never through a link.
+
+Still to measure on hardware:
+
+- The step loop's rate with checkpoint saves on g7.48xlarge, and whether 200 steps is a suitable checkpoint interval.
+- The storage incident under the step loop: when the first watchdog fires, which collective the waiting ranks report, the waiting ranks' later lines, and the time to `launcher_exit_code`, for a writer on each node.
+- The progress records' freshness when the controller reads the copy through `lab-lines.py` during the `efa-reset` incident, and the whole device step started by `job.sh`.
+- The hidden-plugin sweep and its recovery started by `job.sh`.
+- The login profile in a Session Manager shell and in the shell that `salloc` opens, and the time Enter your cluster takes with it.
+
+The `dataloader` and `silent-corruption` workload modes are not part of this change, so `job.sh` refuses those incidents.
+
 ## November 2, 2026: scheduled incidents and split check tables
 
 This change adds the participant `next` verb with a per-seat incident schedule, concealed participant output while a scheduled round is unresolved, the operator `status` and `replace` commands, the refusal of participant `replace`, and the split `collect_checks` and `qualify_checks` tables. No hardware run has used it yet. The example's unit tests cover it on a CPU-only host, with Slurm, the maintenance route and the target helper replaced by recording fakes, and the installer's configuration step run as an ordinary user. The tests check the controller's decisions, state records and printed text. They do not exercise a device, a scheduler or real timing.

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: MIT-0
 # One coordinator invocation of the named suite's Check 5 per allocation.
 set -euo pipefail
+[[ $# -eq 0 ]] || { echo "Usage: bash ${0##*/} (it takes no arguments)" >&2; exit 2; }
 LAB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$LAB_DIR/common.sh"
 set_allocation_cpus

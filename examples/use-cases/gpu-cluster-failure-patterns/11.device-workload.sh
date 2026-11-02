@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: MIT-0
 # Run this from the unaffected coordinator during the facilitator's device round.
 set -euo pipefail
+[[ $# -eq 0 ]] || { echo "Usage: bash ${0##*/} (it takes no arguments)" >&2; exit 2; }
 LAB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$LAB_DIR/common.sh"
 # Unlike the storage probes, device cleanup may outlive the watchdog. Slurm,

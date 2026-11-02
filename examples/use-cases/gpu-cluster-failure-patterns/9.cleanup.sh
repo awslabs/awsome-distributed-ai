@@ -4,6 +4,7 @@
 # Run only after all workload/result collection steps, before leaving the
 # dedicated allocation. Retains images, historical roots and measured results.
 set -euo pipefail
+[[ $# -eq 0 ]] || { echo "Usage: bash ${0##*/} (it takes no arguments)" >&2; exit 2; }
 LAB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$LAB_DIR/common.sh"
 unset SLURM_SPANK__SLURM_SPANK_OPTION_pyxis_container_name

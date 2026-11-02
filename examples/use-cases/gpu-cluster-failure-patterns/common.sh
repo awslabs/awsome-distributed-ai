@@ -101,10 +101,18 @@ node_command() {
         "${CONTAINER_ARGS[@]}" --container-remap-root "$@"
 }
 
+# job.sh runs incidents without naming their cause. It sets AIM344_RUN_ID to a
+# neutral run id for the result files, and AIM344_LAB_LOG to its lab log, which
+# then receives the lab's own lines instead of the participant's output.
 run_sweep() {
     local phase=$1 run_id rc=0
-    run_id=$phase-$(date -u +%Y%m%dT%H%M%SZ)
-    node_command bash /opt/aim344/inventory.sh | tee "$RESULTS_DIR/$run_id.inventory.log"
+    run_id=${AIM344_RUN_ID:-$phase-$(date -u +%Y%m%dT%H%M%SZ)}
+    if [[ -n ${AIM344_LAB_LOG:-} ]]; then
+        # The inventory states whether the plugin directory is present.
+        node_command bash /opt/aim344/inventory.sh >> "$AIM344_LAB_LOG" 2>&1
+    else
+        node_command bash /opt/aim344/inventory.sh | tee "$RESULTS_DIR/$run_id.inventory.log"
+    fi
     node_command python3 /opt/aim344/efa-counters.py snapshot "/results/$run_id.before"
     local start=$SECONDS
     # The optional sweep uses one MPI rank per GPU within the same CPU budget.
@@ -139,7 +147,7 @@ run_torch() {
     local phase=$1 run_id rc=0
     shift
     prepare_torch
-    run_id=$phase-$(date -u +%Y%m%dT%H%M%SZ)
+    run_id=${AIM344_RUN_ID:-$phase-$(date -u +%Y%m%dT%H%M%SZ)}
     # Device faults can leave GPU cleanup in D-state beyond the watchdog.
     # Keep tee attached through Slurm's bounded allocation walltime, rather
     # than SIGKILL the srun client and close evidence at 210 seconds.
@@ -147,15 +155,24 @@ run_torch() {
     local -a evidence=()
     if [[ $phase == device ]]; then
         deadline=()
+    fi
+    # The controller reads this copy before an active device fault. job.sh sets
+    # AIM344_PROGRESS_COPY=1 so that every run it starts writes the same copy,
+    # and the file's presence does not single out one incident.
+    if [[ $phase == device || ${AIM344_PROGRESS_COPY:-0} == 1 ]]; then
         # Existing workload output, also at a fixed job-bound coordinator path.
         # Run this launcher as the participant on the unaffected coordinator.
         mkdir -p -- "$HOME/aim344-results"
         evidence=("$HOME/aim344-results/device-$SLURM_JOB_ID.log")
     fi
+    local -a lab_lines=(cat)
+    if [[ -n ${AIM344_LAB_LOG:-} ]]; then
+        lab_lines=(python3 "$LAB_DIR/lab-lines.py" "$AIM344_LAB_LOG")
+    fi
     SLURM_MPI_TYPE=none "${deadline[@]}" \
         srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
         "${CONTAINER_ARGS[@]}" bash /opt/aim344/torch-node.sh "$@" \
-        2>&1 | tee "$RESULTS_DIR/$run_id.log" "${evidence[@]}" || rc=$?
+        2>&1 | "${lab_lines[@]}" | tee "$RESULTS_DIR/$run_id.log" "${evidence[@]}" || rc=$?
     printf 'launcher_exit_code=%s (dimensionless)\n' "$rc" | tee "$RESULTS_DIR/$run_id.status.log"
     return "$rc"
 }
