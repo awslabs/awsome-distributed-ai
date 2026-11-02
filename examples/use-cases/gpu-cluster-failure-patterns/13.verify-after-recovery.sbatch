@@ -5,7 +5,7 @@
 # named suite's Check 5 once from the coordinator, and complete the storage
 # workload against the recreated private fixture.
 #
-#   sbatch --wait --export=ALL --partition="$PARTITION" /opt/aim344/device-recovery/13.verify-after-recovery.sbatch
+#   sbatch --wait --export=ALL --partition="$PARTITION" --cpus-per-task="$((GPUS_PER_NODE * CPUS_PER_RANK))" /opt/aim344/device-recovery/13.verify-after-recovery.sbatch
 #
 # Runtime ready and workload verified are separate results. This script produces
 # the second one; it does not decide device health, which the suite owns.
@@ -14,6 +14,8 @@
 #SBATCH --nodes=2
 #SBATCH --gres=gpu:8
 #SBATCH --ntasks-per-node=1
+# Legacy default only; the explicit submission -c above overrides this for the
+# assigned PCS CPU topology (8 GPUs * 12 CPUs/rank = 96 with SMT1).
 #SBATCH --cpus-per-task=192
 #SBATCH --mem=0
 #SBATCH --exclusive
@@ -32,6 +34,7 @@ LAB_DIR=$base/companion
 if [[ -f $LAB_DIR/lab.env ]]; then source "$LAB_DIR/lab.env" || exit 1; fi
 LAB_DIR=$base/companion
 source "$LAB_DIR/common.sh" || exit 1
+set_allocation_cpus || exit 1
 unset SLURM_SPANK__SLURM_SPANK_OPTION_pyxis_container_name
 unset SLURM_SPANK__SLURM_SPANK_OPTION_pyxis_container_env
 : "${PARTITION:?Source the site lab.env and submit with --partition="$PARTITION"}"
@@ -39,7 +42,7 @@ if [[ ${SLURM_JOB_PARTITION:-} != "$PARTITION" ]]; then
     echo "Allocation partition does not match assigned PARTITION=$PARTITION" >&2
     exit 1
 fi
-export PATH=/opt/amazon/efa/bin:/opt/aws/pcs/scheduler/slurm-25.05/bin:$PATH
+export PATH=/opt/amazon/efa/bin:$PATH
 run=${AIM344_VERIFY_NAME:-verify-$SLURM_JOB_ID}
 out=${AIM344_RESULTS_DIR:-/var/tmp/aim344-results}/$run
 mkdir -p "$out"
@@ -89,7 +92,7 @@ for node in $expected_nodes; do
 "
 done
 printf '   node name to hostname: %s\n' "$(printf '%s' "$node_map" | tr '\n' ' ')"
-srun -N2 -n2 --ntasks-per-node=1 -c192 --mpi=none --cpu-bind=none \
+srun -N2 -n2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
   bash -c 'printf "  %s (%s): GPUs=%s EFA=%s\n" "$(hostname)" "${SLURMD_NODENAME:-?}" \
     "$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)" \
     "$(ls /sys/class/infiniband | wc -l)"'
@@ -268,12 +271,12 @@ printf '== storage workload against the recreated private fixture\n'
 # real failure of the exercise, not a detail, and it must be visible here rather
 # than surfacing as an opaque workload error.
 printf '   fixture ownership on each allocated node\n'
-srun -N2 -n2 --ntasks-per-node=1 -c192 --mpi=none --cpu-bind=none \
+srun -N2 -n2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
   bash -c 'printf "   %s: %s readable=%s writable=%s\n" "$(hostname)" \
     "$(stat -c "owner=%U mode=%a" /run/aim344-checkpoints 2>&1)" \
     "$( [ -r /run/aim344-checkpoints ] && echo yes || echo NO )" \
     "$( [ -w /run/aim344-checkpoints ] && echo yes || echo NO )"' || status=1
-srun -N2 -n2 --ntasks-per-node=1 -c192 --mpi=none --cpu-bind=none \
+srun -N2 -n2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
   bash -c 'test -r /run/aim344-checkpoints && test -w /run/aim344-checkpoints'
 fixture=$?
 printf '   fixture_accessible_on_all_nodes_exit_code=%s (dimensionless)\n' "$fixture"
@@ -444,7 +447,7 @@ printf '   rendezvous: first_node=%s MASTER_ADDR=%s MASTER_PORT=%s\n' \
   "$first_node" "$MASTER_ADDR" "$MASTER_PORT"
 # Confirm the address actually answers from every allocated node before spending
 # the allocation on a workload that would otherwise hang.
-srun -N2 -n2 --ntasks-per-node=1 -c192 --mpi=none --cpu-bind=none \
+srun -N2 -n2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
   bash -c 'getent hosts '"$MASTER_ADDR"' >/dev/null || \
     printf "   %s: cannot resolve %s\n" "$(hostname)" '"$MASTER_ADDR"'
     timeout 5 bash -c "</dev/tcp/'"$MASTER_ADDR"'/22" 2>/dev/null \
@@ -454,7 +457,7 @@ storage_container=aim344_verify_$SLURM_JOB_ID
 if [[ ${TORCH_IMAGE:-/opt/aim344/aim344.sqsh} == "${NCCL_CONTAINER:-$NCCL_ENROOT_IMAGE}" ]]; then
   storage_container=aim344_check5_$SLURM_JOB_ID
 fi
-SLURM_MPI_TYPE=none srun -N2 -n2 --ntasks-per-node=1 -c192 --mpi=none --cpu-bind=none \
+SLURM_MPI_TYPE=none srun -N2 -n2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
   --container-image="${TORCH_IMAGE:-/opt/aim344/aim344.sqsh}" \
   --container-name="$storage_container" \
   --container-writable --no-container-mount-home \

@@ -61,7 +61,10 @@ class VerificationEntry(unittest.TestCase):
         # An image-only PMIX setting does not activate the host-process gate.
         self.assertEqual(pmi_hook_environment({})[0], '')
 
-    def test_device_storage_and_sweep_share_clean_allocation_boundary(self):
+    def test_native_helpers_use_allocated_96_cpus(self):
+        self.test_device_storage_and_sweep_share_clean_allocation_boundary(allocated_cpus=96)
+
+    def test_device_storage_and_sweep_share_clean_allocation_boundary(self, allocated_cpus=192):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             binaries = root / 'bin'
@@ -92,28 +95,37 @@ if '--mpi=pmix' in args:
 ''')
             control = binaries / 'scontrol'
             control.write_text('#!/bin/bash\nif [ "$2" = hostnames ]; then printf "node1\\nnode2\\n"; '
+                               'elif [ "$2" = job ]; then printf "TimeLimit=00:06:00\\n"; '
                                'else printf "NodeAddr=10.0.0.1\\n"; fi\n')
             for binary in (runner, control):
                 binary.chmod(0o755)
             env = dict(os.environ, PATH=str(binaries) + ':' + os.environ['PATH'],
                        PYTHONPATH=str(LAB / 'tests'), LAB_DIR=str(LAB),
                        SLURM_JOB_ID='269', SLURM_JOB_NUM_NODES='2', SLURM_JOB_NODELIST='node[1-2]',
-                       SLURM_CPUS_ON_NODE='192', NCCL_ENROOT_IMAGE='/opt/aim344/aim344.sqsh',
+                       SLURM_CPUS_ON_NODE=str(allocated_cpus),
+                       CPUS_PER_RANK='24', SRUN_CPUS_PER_TASK='192',
+                       NCCL_ENROOT_IMAGE='/opt/aim344/aim344.sqsh',
                        TORCH_IMAGE='/opt/aim344/aim344.sqsh', CHECKPOINT_DIR=str(root / 'checkpoints'),
                        RESULTS_DIR=str(root / 'results'), HOME=str(root), LOCAL_ARGV=str(root / 'argv'),
                        PMIX_MCA_gds='hash', PMIX_SERVER_URI2='stale', PMI_RANK='15',
                        SLURM_MPI_TYPE='pmix')
             result = subprocess.run(['bash', '-euc', '''source "$LAB_DIR/common.sh"
 prepare_slurm
-run_torch device device --duration-seconds=120
-run_torch storage storage
+for entry in 11.device-workload.sh 5.inject-storage.sh 6.recover-storage.sh \
+             7.probe-dataloader-fork.sh 8.use-dataloader-spawn.sh; do
+    bash "$LAB_DIR/$entry"
+done
 run_sweep baseline
 '''], env=env, capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             calls = [json.loads(line) for line in (root / 'argv').read_text().splitlines()]
             torch = [c for c in calls if '/opt/aim344/torch-node.sh' in c['argv']]
-            self.assertEqual(len(torch), 2)
+            self.assertEqual(len(torch), 5)
+            for call in torch:
+                self.assertIn(f'--cpus-per-task={allocated_cpus}', call['argv'])
+                self.assertEqual(call['env']['GPUS_PER_NODE'], '8')
             for call in calls:
+                self.assertEqual(call['env']['SRUN_CPUS_PER_TASK'], str(allocated_cpus))
                 if '--mpi=none' in call['argv']:
                     self.assertEqual(call['mounts'], '')
                     self.assertFalse(any(k.startswith(('PMI_', 'PMIX_')) for k in call['env']))
@@ -124,14 +136,17 @@ run_sweep baseline
             self.assertEqual(len(main), 1)
             self.assertIn('--ntasks=16', main[0]['argv'])
             self.assertIn('--ntasks-per-node=8', main[0]['argv'])
-            self.assertIn('--cpus-per-task=24', main[0]['argv'])
+            self.assertIn(f'--cpus-per-task={allocated_cpus // 8}', main[0]['argv'])
             self.assertIn('/var/spool/slurmd/pmix.270.2', main[0]['mounts'])
             self.assertEqual(main[0]['env']['PMIX_SERVER_URI2'], 'fresh-step-server')
             print('LOCAL_DEVICE_STORAGE_SWEEP_CONTRACT', json.dumps([
                 dict(argv=c['argv'], mpi=c['env'].get('SLURM_MPI_TYPE'), mounts=c['mounts'])
                 for c in calls]))
 
-    def test_success_and_storage_failure_flow(self, launch_environment=None):
+    def test_allocated_96_cpus_override_legacy_launch_defaults(self):
+        self.test_success_and_storage_failure_flow(allocated_cpus=96)
+
+    def test_success_and_storage_failure_flow(self, launch_environment=None, allocated_cpus=192):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             companion = root / 'companion'
@@ -174,7 +189,8 @@ if '--mpi=none' in sys.argv and '/var/spool/slurmd/pmix.' in mounts:
     sys.exit(77)
 if '--exclusive' in sys.argv:
     import subprocess
-    assert '--cpus-per-task=192' in sys.argv and '--immediate=10' in sys.argv
+    assert '--cpus-per-task=' + os.environ['LOCAL_ALLOCATED_CPUS'] in sys.argv
+    assert '--immediate=10' in sys.argv
     assert '--overlap' not in sys.argv
     assert not any(k.startswith('SLURM_SPANK__') for k in os.environ)
     if os.environ.get('LOCAL_CLEANUP_BUSY') == '1':
@@ -259,7 +275,12 @@ exit "${LOCAL_SUITE_EXIT:-0}"
             for path in (control, runner, suite):
                 path.chmod(0o755)
             env = dict(os.environ, PATH=str(binaries) + ':' + str(root) + ':' + os.environ['PATH'],
-                       SLURM_JOB_CPUS_PER_NODE='192(x2)',
+                       SLURM_JOB_CPUS_PER_NODE=f'{allocated_cpus}(x2)',
+                       LOCAL_ALLOCATED_CPUS=str(allocated_cpus),
+                       # Conflicting inherited hints must not inflate native steps.
+                       SLURM_CPUS_ON_NODE='192', SLURM_CPUS_PER_TASK='192',
+                       SRUN_CPUS_PER_TASK='192', AIM344_CPUS_PER_NODE='192',
+                       CPUS_PER_RANK='24',
                        AIM344_BASE=str(root), AIM344_SUITE_ENTRY=str(suite),
                        AIM344_RESULTS_DIR=str(root / 'results'), SLURM_JOB_ID='123',
                        SLURM_JOB_NODELIST='gpu-g7-[1-2]', SLURM_JOB_NUM_NODES='2',
@@ -301,6 +322,16 @@ exit "${LOCAL_SUITE_EXIT:-0}"
                                 result.stdout.index('current-job container removed:'))
                 print('LOCAL_VERIFICATION_ENTRY', result.returncode, result.stdout)
             calls = [json.loads(line) for line in (root / 'argv.log').read_text().splitlines()]
+            for call in calls:
+                cpu_flags = [arg.split('=', 1)[1] for arg in call['argv']
+                             if arg.startswith('--cpus-per-task=')]
+                cpu_flags += [arg[2:] for arg in call['argv']
+                              if arg.startswith('-c') and arg[2:].isdigit()]
+                effective = cpu_flags[-1] if cpu_flags else call['env'].get(
+                    'SRUN_CPUS_PER_TASK', call['env'].get('SLURM_CPUS_PER_TASK', '1'))
+                self.assertEqual(int(effective), allocated_cpus, call['argv'])
+            print('LOCAL_VERIFIER_CPU_BUDGET', allocated_cpus,
+                  json.dumps([call['argv'] for call in calls]))
             storage_calls = [c for c in calls if c['argv'][-2:] == ['/opt/aim344/torch-node.sh', 'storage']]
             self.assertTrue(storage_calls)
             for call in storage_calls:
@@ -308,6 +339,8 @@ exit "${LOCAL_SUITE_EXIT:-0}"
                 self.assertEqual(call['env']['SLURM_MPI_TYPE'], 'none')
                 self.assertEqual(call['mounts'], '')
             launch = json.loads((root / 'suite.json').read_text())
+            # Keep caller-selected Slurm clients; prepend only the EFA tools.
+            self.assertEqual(launch['env']['PATH'], '/opt/amazon/efa/bin:' + env['PATH'])
             expected = {'NCCL_CONTAINER': '/opt/aim344/aim344.sqsh', 'NCCL_TIMEOUT': '180',
                         'NCCL_MPI': 'pmix', 'NCCL_TESTS_BIN': '/opt/nccl-tests/build/all_reduce_perf',
                         'NCCL_ISOLATION_TESTS': '1', 'NCCL_ISOLATION_TIMEOUT': '120',

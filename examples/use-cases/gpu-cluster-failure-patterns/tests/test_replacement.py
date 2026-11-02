@@ -1453,9 +1453,17 @@ class BootstrapFiles(unittest.TestCase):
             (interface / 'device').symlink_to(pci / '0000:00:01.0')
             efa = pci / '0000:00:03.0'
             (efa / 'infiniband/rdma-new').mkdir(parents=True)
+            selected_routes = [{'dev': 'eth0', 'prefsrc': '10.1.2.51'}]
+            calls = []
             def command(argv):
-                return ('[{"dev":"eth0"}]' if argv[0].endswith('/ip') else
-                        'GPU-new-identity, 00000000:00:02.0')
+                calls.append(argv)
+                if argv == ['/usr/sbin/ip', '-j', 'route', 'show', 'default']:
+                    return json.dumps([{'dev': 'eth0', 'metric': 100},
+                                       {'dev': 'eth1', 'metric': 200},
+                                       {'dev': 'eth1', 'metric': 1003}])
+                if argv == ['/usr/sbin/ip', '-j', 'route', 'get', '169.254.169.254']:
+                    return json.dumps(selected_routes)
+                return 'GPU-new-identity, 00000000:00:02.0'
             with mock.patch.object(bootstrap, 'Path', side_effect=mapped), \
                  mock.patch.object(bootstrap, 'run', side_effect=command):
                 cfg = bootstrap.inventory({'node': 'gpu-g7-1', 'slurm_bin': '/slurm',
@@ -1463,6 +1471,15 @@ class BootstrapFiles(unittest.TestCase):
                 self.assertEqual(cfg['instance_id'], NEW)
                 self.assertEqual(cfg['gpu_bdf'], '0000:00:02.0')
                 self.assertEqual(cfg['efa_rdma_device'], 'rdma-new')
+                self.assertEqual(cfg['management_interface'], 'eth0')
+                self.assertEqual(cfg['management_bdf'], '0000:00:01.0')
+                self.assertIn(['/usr/sbin/ip', '-j', 'route', 'get', '169.254.169.254'], calls)
+                for bad in ([], [{}], [{'dev': ''}], [{'dev': '../eth0'}],
+                            [{'dev': 'eth0'}, {'dev': 'eth1'}]):
+                    selected_routes = bad
+                    with self.assertRaisesRegex(RuntimeError, 'Ambiguous management route'):
+                        bootstrap.inventory({'node': 'gpu-g7-1'}, NEW)
+                selected_routes = [{'dev': 'eth0'}]
                 (efa / 'net/eth1').mkdir(parents=True)
                 with self.assertRaisesRegex(RuntimeError, 'No separate EFA'):
                     bootstrap.inventory({'node': 'gpu-g7-1'}, NEW)
@@ -1708,6 +1725,36 @@ class BootstrapFiles(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'pinned archive'):
             helper.verification_environment(manifest)
 
+    def test_verification_cpu_budget_defaults_overrides_and_validation(self):
+        helper = self.load('replacement-bootstrap.py')
+        manifest = {'verification_environment': {'PARTITION': 'assigned-queue'}}
+        for value in (None, '12', '24', '4096'):
+            with self.subTest(cpus_per_rank=value):
+                candidate = copy.deepcopy(manifest)
+                if value is not None:
+                    candidate['verification_environment']['CPUS_PER_RANK'] = value
+                text = helper.verification_environment(candidate)
+                # Source real generated defaults, not a reconstruction of them.
+                result = subprocess.check_output(['bash', '-eu', '-c', text +
+                    '\nprintf "%s %s %s" "$GPUS_PER_NODE" "$CPUS_PER_RANK" '
+                    '"$((GPUS_PER_NODE * CPUS_PER_RANK))"'],
+                    env={'PATH': os.environ['PATH']}, text=True)
+                cpus = int(value or '24')
+                self.assertEqual(result, f'8 {cpus} {8 * cpus}')
+                print('LOCAL_MANIFEST_CPU_BUDGET', value, result)
+                caller = subprocess.check_output(['bash', '-eu', '-c', text +
+                    '\nprintf "%s" "$CPUS_PER_RANK"'],
+                    env={'PATH': os.environ['PATH'], 'CPUS_PER_RANK': '16'}, text=True)
+                self.assertEqual(caller, '16')
+        # Match the existing allocation parser: canonical positive decimal,
+        # without imposing a new site/hardware maximum (4096 above is valid).
+        for value in ('0', '-1', '1.5', 'abc', '12;id', ' 12', '12 ', '012',
+                      '+12', '12\n', '', 12, True):
+            candidate = {'verification_environment': {'PARTITION': 'assigned-queue',
+                                                       'CPUS_PER_RANK': value}}
+            with self.subTest(invalid=value), self.assertRaises(RuntimeError):
+                helper.verification_environment(candidate)
+
     def test_candidate_bootstrap_stages_separate_pinned_suite_and_launch_defaults(self):
         def check(bootstrap, node_path, manifest, report):
             lab = node_path('/opt/aim344/device-recovery/companion')
@@ -1744,6 +1791,7 @@ class BootstrapFiles(unittest.TestCase):
             pins = [bootstrap.digest(receipt), bootstrap.digest(installed_manifest)]
             target = copy.deepcopy(manifest)
             target['verification_environment']['NCCL_SOCKET_IFNAME'] = '=new-interface'
+            target['verification_environment']['CPUS_PER_RANK'] = '12'
             objects = node_path('/').parent / 'objects'
             with tarfile.open(objects / 'companion.tgz', 'r:gz') as source, \
                  tarfile.open(objects / 'new-companion.tgz', 'w:gz') as destination:
@@ -1894,6 +1942,9 @@ class BootstrapFiles(unittest.TestCase):
                     exec(compile(installer, 'actual-generated-upgrade', 'exec'), {})
                 completed = json.loads(receipt.read_text())
                 self.assertTrue(completed['ready'])
+                lab_env = node_path('/opt/aim344/device-recovery/companion/lab.env')
+                self.assertIn('CPUS_PER_RANK=${CPUS_PER_RANK:-12}', lab_env.read_text())
+                self.assertEqual(completed['installed_hashes'][str(lab_env)], bootstrap.digest(lab_env))
                 self.assertEqual(node_path('/opt/aim344/device-recovery/companion/new-release.txt').read_text(),
                                  'new verified release')
                 self.assertEqual(completed['manifest_sha256'], bootstrap.manifest_digest(target))
