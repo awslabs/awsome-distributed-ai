@@ -172,8 +172,9 @@ run_check() {
 
     # A PCI function remains enumerated after driver unbind. Count the bound
     # driver and independent RDMA/uverbs/provider views as well, against the
-    # provisioned assignment, never against the currently visible device count.
-    if [[ "${DRY_RUN}" != "1" && ${EXPECTED_EFA_COUNT:-0} -gt 0 ]]; then
+    # explicit provisioned assignment, never the currently visible device count.
+    # Without an assignment, retain the existing profile-only warning behavior.
+    if [[ -n "${HEALTHCHECK_EXPECTED_EFA_COUNT+x}" && "${DRY_RUN}" != "1" && ${EXPECTED_EFA_COUNT:-0} -gt 0 ]]; then
         local driver_count domain_count observed label
         driver_count=$(lspci -Dk | grep -c '^[[:space:]]*Kernel driver in use: efa$' || true)
         domain_count=$(printf '%s\n' "${fi_output:-}" | awk '

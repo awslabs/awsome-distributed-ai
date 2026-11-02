@@ -33,16 +33,28 @@ chmod +x gpu-healthcheck.sh checks/*.sh slurm/*.sh slurm/examples/*.sh
 
 ### Assigned EFA interfaces
 
+This assigned-EFA change is a review candidate, not a merged release or hardware
+qualification. Public availability of the candidate has not been verified.
+
 `g7e.48xlarge` has 8 GPUs, no NVLink, and up to 4 EFA interfaces. Its profile
 records that capability, not a claim that every launch attaches four. For a
 launch template explicitly assigning two interfaces, use
 `HEALTHCHECK_EXPECTED_EFA_COUNT=2` for both the orchestrator and direct checks.
 The override must be a positive integer no greater than the profile capacity;
 invalid assignments stop the check. Derive it from the trusted launch assignment,
-not from the number still visible after a fault. Check 2 requires the assigned
-count in PCI, driver-bound, RDMA, uverbs and unique provider-domain views.
+not from the number still visible after a fault. With an explicit assignment,
+Check 2 requires the assigned count in PCI, driver-bound, RDMA, uverbs and unique
+provider-domain views. Without that variable, existing profile-based PCI count
+validation and RDMA/provider/uverbs warning behavior remain unchanged, including
+G7 defaults. An explicitly empty value is invalid, not an absent assignment.
 GPU counts, correctness validation and existing bandwidth thresholds are unchanged.
 Two-interface results do not qualify four-interface performance.
+
+A missing `instance-profiles.conf` is a packaging error: this candidate stops
+profile loading and the check rather than continuing with defaults. This is an
+intentional fail-closed change, not preserved behavior. An unknown instance type
+with the profiles file present and no override still uses the existing defaults;
+an explicit assignment without a matching profile is rejected.
 
 ### First Check
 
