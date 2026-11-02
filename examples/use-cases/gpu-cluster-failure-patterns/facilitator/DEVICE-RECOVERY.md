@@ -200,7 +200,9 @@ Keep the matching suite and assignment together when preparing an accepted relea
 
 ### Suite acquisition
 
-The exact `HEALTHCHECK_COMMIT` in `pins.env` is a local candidate pending publication, based on historical public commit `474155a63059769bcea6365d4ec2b2f34d4c8000`. It is not claimed to be publicly fetchable. For local source review, explicitly supply the clean healthcheck checkout as `HEALTHCHECK_SOURCE`; do not substitute main or the historical public branch. Publication and deployment require separate approval. Any later accepted release needs new archives and manifests, not historical archive digests.
+The exact `HEALTHCHECK_COMMIT` in `pins.env` identifies a review candidate based on historical public commit `474155a63059769bcea6365d4ec2b2f34d4c8000`. This revision does not establish merge, release, hardware qualification or public availability. For local source review, explicitly supply the clean healthcheck checkout as `HEALTHCHECK_SOURCE`. After separate publication approval and verification that the exact full SHA is reachable from an approved public ref, the publication owner may instead set `HEALTHCHECK_SOURCE=https://github.com/awslabs/awsome-distributed-ai.git` and use the same procedure unchanged. Do not substitute main or the historical base for the pin. Deployment still requires separate approval; any accepted release needs new archives and manifests, not historical archive digests.
+
+The matching suite treats missing `instance-profiles.conf` as a fail-closed packaging error. That intentional change is separate from preserved profile-only warnings; an unknown profile with the file present and no assignment retains the existing defaults.
 
 From the companion directory in the owned Git checkout:
 
@@ -208,8 +210,8 @@ From the companion directory in the owned Git checkout:
 set -euo pipefail
 source pins.env
 repo=$(git rev-parse --show-toplevel)
-: "${HEALTHCHECK_SOURCE:?Supply the clean local healthcheck checkout}"
-git -C "$repo" fetch --no-tags "$HEALTHCHECK_SOURCE" "$HEALTHCHECK_COMMIT"
+: "${HEALTHCHECK_SOURCE:?Supply a clean local checkout or the publication-verified canonical repository}"
+git -C "$repo" fetch --depth=1 --no-tags "$HEALTHCHECK_SOURCE" "$HEALTHCHECK_COMMIT"
 test "$(git -C "$repo" rev-parse FETCH_HEAD)" = "$HEALTHCHECK_COMMIT"
 git -C "$repo" cat-file -e "$HEALTHCHECK_COMMIT^{commit}"
 git -C "$repo" archive "$HEALTHCHECK_COMMIT" validation/gpu-cluster-healthcheck | gzip -n -6 > healthcheck-pinned.tgz
