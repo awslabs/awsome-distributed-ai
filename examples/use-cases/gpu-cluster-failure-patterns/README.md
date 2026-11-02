@@ -16,7 +16,7 @@ The [September 24 fixed-candidate record](VALIDATION.md#september-24-2026-fixed-
 
 This integration includes the reviewed EC2 empty-response/receipt-ordering fix, Check 5 table/provider parsing, Check 6 interface pinning and counter handling, result-severity accumulation, current-job cleanup after allocated-node bundle verification, and two-epoch DataLoader controls. The integrated runtime completed normal verification, storage correctness and subsequent participant retrieval on the two-node target. Node-local Check 6 retained WARN/MONITOR in saved JSON despite successful loopback completion; cumulative timeout counts were 9 and 18, not incident deltas or evidence of harmlessness. Both fork and spawn controls completed two epochs with new nonpersistent workers, four batches per epoch, eight batch collectives per rank, zero mismatches and exit 0. This is non-reproduction, not a reproduced or repaired DataLoader failure. The EC2 acknowledgment fix remains locally regression-tested only. These results do not establish default/bootstrap/replacement rollout, full-size performance qualification, future storage headroom, or the event participant entry path. Source publication and pin/documentation changes do not repeat or extend those hardware trials.
 
-The scheduled incidents and split check tables described under [Participant-operated variant](#participant-operated-variant) have local unit tests only; [VALIDATION.md](VALIDATION.md#november-2-2026-scheduled-incidents-and-split-check-tables) lists what they cover and what awaits hardware.
+The scheduled incidents and split check tables described under [Participant-operated variant](#participant-operated-variant) have local unit tests only; [VALIDATION.md](VALIDATION.md#november-2-2026-scheduled-incidents-and-split-check-tables) lists what they cover and what awaits hardware. The same holds for the participant launcher `job.sh`, the login profile and the checkpoint-writer options; [VALIDATION.md](VALIDATION.md#november-2-2026-the-participant-launcher-and-the-cause-hidden-job-incidents) lists their tests.
 
 ## Prerequisites and deployment
 
@@ -181,7 +181,52 @@ Each issued incident carries a random identifier, and the round that `next` star
 
 While a scheduled round is unresolved, participant output names neither the kind nor the operation. `status` prints `Incident: <n>` instead of `Exercise: <kind>`, omits the FLR and EFA-path lines, and lists the same collectable checks for every kind. Refusals pass through the same concealment, the operation transcript is kept in the root-only state directory instead of the results directory, and `start` or `active` with either kind gets one identical refusal. Once the round reaches `runtime-ready`, `verified` or `replacement-required`, `status` adds one answer line, for example `Answer for incident 4: the lab controller reset one EFA device on your exercise node (a PCIe function-level reset of 0000:b0:00.0) while your job was running.` Recovery qualification results after `recover` still name check numbers, which point to the kind, so a page that asks for a written diagnosis asks for it before `recover`.
 
-Only the controller side of scheduled incidents exists so far. No launcher or workload mode reads a job incident's profile yet, so the profile is handed out but nothing applies its settings. [VALIDATION.md](VALIDATION.md#november-2-2026-scheduled-incidents-and-split-check-tables) records what has been tested.
+The participant launcher below applies the profiles of the `storage`, `slow-job` and `efa-reset` incidents. The `dataloader` and `silent-corruption` workload modes are not in this version, so those two profiles are handed out and nothing applies them.
+
+#### The participant launcher, job.sh
+
+`job.sh` is the command a participant types for every job of the hour. It runs the job that the current incident's profile describes and prints none of the profile's settings, so the participant meets each incident as an ordinary job that fails.
+
+```bash
+bash job.sh notes      # create ~/aim344-results/notes.md, the notes file the pages fill in
+bash job.sh run        # run the training stand-in on the healthy pair
+bash job.sh incident   # ask the lab controls for the next incident and run its job
+bash job.sh rerun      # run the current incident's job again, as the pair is now
+bash job.sh resume     # undo what the lab changed in the current incident and resume the job
+```
+
+Every command except `notes` runs inside the participant's two-node allocation. Before it starts anything, the launcher checks three things: the allocation's job name starts with `aim344-`, its walltime is 1 to 10 minutes, and the login profile has set `AIM344_EFA_DEVICE`. The lab controls act only on a job that meets the first two conditions. Every run is held to all three, so a refusal does not single out one incident. Results go to `RESULTS_DIR`, which defaults to `/var/tmp/aim344-<user>-<job-id>` on each node. Every run of the training stand-in described below also writes `~/aim344-results/device-<job-id>.log` on the login node, the copy that the controller reads before an active device fault, so the copy's presence does not point to that incident either. Run ids, and the result files named after them, are `job-<time>`, `incident-<n>-<time>`, `incident-<n>-rerun-<time>` and `incident-<n>-resume-<time>`. The launcher prints the job log's path before and after the run, then `launcher_exit_code=` and `job_end_utc=`. Arguments it does not take are refused.
+
+The training stand-in is `workload.py device --checkpoint-every=200`. In each step rank 0 broadcasts whether the job continues, and every rank runs one checked 128 MiB all-reduce. Rank 0 prints a progress record every 20 collectives in the format the controller parses. One rank, the checkpoint writer, saves the next step index to its node's private checkpoint directory when a job starts from step 0 and before the all-reduce of every 200th step, and prints `checkpoint saved: next_step=<n> (step index)` after each save. A save that fails with `ENOSPC` is retried once a second for up to 60 seconds, so the writer stays out of an all-reduce that the other ranks have entered. `job.sh run` runs the stand-in for 60 seconds, with rank 0 as the writer and the EFA device in `AIM344_EFA_DEVICE` on each node.
+
+`job.sh incident` sends one `next` request for the incident itself, reads the profile the reply names, and runs that exercise:
+
+| Exercise | `job.sh incident` | `job.sh rerun` | `job.sh resume` |
+|---|---|---|---|
+| `storage` | The stand-in for 60 seconds with the profile's `writer_rank` as the writer, whose directory is filled just before its first periodic save | The stand-in from the writer's last checkpoint, with no new fill. It fails the same way while the directory is still full | Removes the filler and the partial write with `recover-checkpoint.py`, then runs the stand-in from the last checkpoint for 10 seconds |
+| `slow-job` | Hides the OFI plugin in the allocation's private NCCL container, then runs the 8 B to 2 GiB sweep over every EFA device of each node | The sweep again, with the plugin still hidden | Restores the plugin, then runs the sweep |
+| `efa-reset` | The stand-in for 120 seconds. Once the copy holds two progress records, the launcher asks `next` again until the reply says the incident is under way | The stand-in again, with no request to the lab controls | Refused, because `12.device-exercise.sh recover` is this incident's recovery |
+| `dataloader`, `silent-corruption` | Refused, with a pointer to the page's expected output | Refused | Refused |
+
+For `efa-reset` the launcher asks at most 10 times, 3 seconds apart, while the job runs, and never cuts off a request that is under way. The first refusal ends the requests, because a refusal that comes after the reset was dispatched still means the fault may have been applied. `rerun` and `resume` reuse the profile of the incident issued last and never send `next`. The hidden plugin stays hidden in that allocation's container until `job.sh resume` restores it, and a later allocation creates a new container, so the fault does not carry into the next incident.
+
+The lab's own lines stay out of the participant's terminal and job log. They go to a lab log beside the profile, `~/aim344-results/incidents/incident-<n>-lab.log`: the controller's replies, the plugin action and the inventory of the hidden-plugin sweep, the output of the checkpoint recovery, and the writer's injection line. `workload.py --mark-lab-lines` prefixes the injection line with `AIM344 lab: `, and [`common.sh`](common.sh) passes the job's output through [`lab-lines.py`](lab-lines.py), which appends marked lines to the lab log and passes every other line on as it arrives. The filler is named `ckpt-shard-00017.partial`, a name that an interrupted save could leave. The cause stays out of what the participant's commands print, but the profile, the lab log and `job.sh` itself remain readable by the participant, and the pages ask participants not to read them before writing a diagnosis. The operator reads the lab log in the participant's home directory, and the schedule with `--operator status`.
+
+#### The login profile
+
+[`facilitator/participant-profile.sh`](facilitator/participant-profile.sh) lets a new shell on the login node run the lab commands with no setup. The installer installs it when it is given the seat's handout values:
+
+```bash
+sudo AIM344_SCHEDULE_FILE=/root/seat-1.json AIM344_PEER_NODE=<peer-node> \
+     AIM344_EFA_DEVICE=<target-efa-rdma-device> \
+     AIM344_SLURM_BIN=/opt/aws/pcs/scheduler/slurm-25.11/bin \
+     bash facilitator/install-participant-control.sh \
+     <assignment-id> <participant-user> <target-node> <target-instance-id> <target-host>
+```
+
+`AIM344_EFA_DEVICE` is the target's `efa_rdma_device` from `/etc/aim344-device-fault.json` on the target, the device that the `efa-reset` incident resets. The installer checks both values before it changes anything. It writes them, with the target node and the Slurm client directory, to `/etc/aim344-seats/<participant-user>.env` (root, `0644`), and adds one line to the participant's `~/.bashrc` that sources the profile. Without the two values it installs no profile and says so. The first interactive shell of a session loads `lab.env`, puts `/opt/amazon/efa/bin` and the Slurm client directory on `PATH`, sets `PARTITION`, `GPUS_PER_NODE`, `CPUS_PER_RANK` and `MEMORY_PER_NODE` with [`facilitator/allocation-env.py`](facilitator/allocation-env.py), and exports `AIM344_TARGET_NODE`, `AIM344_PEER_NODE` and `AIM344_EFA_DEVICE`. A shell that starts in the home directory moves to the lab directory. Shells started from it, such as the one `salloc` opens, inherit these values, and a shell inside an allocation also exports `RESULTS_DIR=/var/tmp/aim344-<user>-<job-id>`, the directory where the job's processes write on each node.
+
+[VALIDATION.md](VALIDATION.md#november-2-2026-the-participant-launcher-and-the-cause-hidden-job-incidents) records what has been tested.
 
 ## Log investigation cases
 
@@ -221,7 +266,9 @@ The numbered storage and DataLoader scripts launch their workers through Slurm f
 
 The injector writes at most 64 MiB into a private 32 MiB tmpfs and refuses to arm the fault if that limit does not exhaust it. Its writer retries for up to 60 seconds while peers wait at a collective with a 30-second deadline. Preserve the earlier `ENOSPC` or quota error, the later application outcome and the launcher status. Wait for failed workers to exit before recovery.
 
-Recovery removes only the lab filler and partial write. It retains `last.json`, which stores a next-step index for this fixture, then resumes and checks the collective result. This file is not a complete model or optimizer checkpoint. The exercise reproduces local write exhaustion; an FSx outage or Lustre quota needs separate qualification.
+Both storage scripts take one option, `--writer-rank N`. It moves the initial save, the read of `last.json` on resume, the source of the start-step broadcast, the fill and the retried save to rank N; ranks 0 to 7 run on the first node and ranks 8 to 15 on the second. The scripts refuse any other argument before they use the allocation, and the numbered launchers that take no arguments refuse every argument, so a mistyped option fails instead of running the unchanged exercise. The verification job's storage step uses the default writer, rank 0. The injector names its filler `ckpt-shard-00017.partial`.
+
+Recovery removes only the lab filler and partial write, under the current name and under the earlier name `aim344-filler.bin`. It retains `last.json`, which stores a next-step index for this fixture, then resumes and checks the collective result. This file is not a complete model or optimizer checkpoint. The exercise reproduces local write exhaustion; an FSx outage or Lustre quota needs separate qualification.
 
 ## Late DataLoader workers
 
@@ -258,7 +305,7 @@ Forked children can inherit thread and lock state from an initialized parent. [P
 
 The synthetic marker demonstration uses `1.inject-prejob.sh` and `2.recover-prejob.sh`. Run it with no interactive allocation occupying the pair. Match the Prolog journal to the drained node and any held requeue; the marker explains the scheduler transition and does not diagnose hardware. Preserve and restore node weights if they are changed to make the probe deterministic.
 
-The optional plugin comparison uses `0.baseline.sh`, `3.inject-fallback.sh` and `4.recover-fallback.sh` in the same allocation. It covers 8 B through 2 GiB with 1 MPI rank per GPU. The injection temporarily hides the OFI library directory in private writable containers, including network and tuner libraries. A Socket selection, correct arithmetic and flat EFA counters together identify the observed fallback. These measurements have a different message range and launch mapping from Check 5, so retain separate baselines.
+The optional plugin comparison uses `0.baseline.sh`, `3.inject-fallback.sh` and `4.recover-fallback.sh` in the same allocation. It covers 8 B through 2 GiB with 1 MPI rank per GPU. The injection temporarily hides the OFI library directory in private writable containers, including network and tuner libraries. A Socket selection, correct arithmetic and flat EFA counters together identify the observed fallback. These measurements have a different message range and launch mapping from Check 5, so retain separate baselines. The same fallback without its cause in the participant's output is the `slow-job` incident of [`job.sh`](#the-participant-launcher-jobsh).
 
 ## Cleanup and known edge cases
 

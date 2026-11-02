@@ -8,42 +8,35 @@
 # you cannot select another table's node: the connection itself carries your
 # assignment.
 #
-#   ./12.device-exercise.sh start gpu    begin the GPU round
-#   ./12.device-exercise.sh start efa    begin the EFA round
-#   ./12.device-exercise.sh next         begin your seat's next incident (the launcher runs this)
-#   ./12.device-exercise.sh status       where your exercise stands
+#   ./12.device-exercise.sh status       where your incident stands
+#   ./12.device-exercise.sh next         start your seat's next incident (job.sh runs this)
 #   ./12.device-exercise.sh collect 0    run one allowed check and keep its output
 #   ./12.device-exercise.sh recover      ask for recovery once you have your evidence
 #
-# start runs idle removal/unbind; active runs FLR against your running workload.
 # next follows the order your facilitator set for your seat and does not say
-# what the incident is. status lists the checks you can collect during a round.
-# Recovery leaves the runtime ready; you then take a fresh allocation and verify
-# it yourself. A node that recovery cannot qualify stays out of service, and an
-# operator replaces it after the session.
+# what the incident is. status lists the checks you can collect. Recovery
+# leaves the runtime ready; you then take a fresh allocation and verify it
+# yourself. A node that recovery cannot qualify stays out of service, and an
+# operator replaces it after the session. The start and active commands remain
+# for a page that names its round; that page gives the command in full.
 set -euo pipefail
 
 usage() {
     cat >&2 <<'USAGE'
 Usage: 12.device-exercise.sh <command>
 
-  start gpu        Begin the GPU round on your assigned exercise node
-  start efa        Begin the EFA round on your assigned exercise node
-  active gpu       FLR the provisioned GPU used by your running device workload
-  active efa       FLR the provisioned EFA carrying your running device workload
-  next             Begin your seat's next incident; your launcher runs this
-  status           Show your exercise phase, node state and available checks
-  collect <check>  Run one allowed read-only check and save its output
-  collect kernel   Save a bounded kernel window (unavailable logs do not block recovery)
-  recover          Request recovery after recording your evidence
+  status           Show where your incident stands and which checks you can collect
+  next             Start your seat's next incident; job.sh runs this for you
+  collect <check>  Run one allowed check on your target and save its output
+  collect kernel   Save a window of your target's kernel log
+  recover          Request recovery of your target once you have your evidence
 
-start needs an idle node. active requires your one RUNNING device workload.
+A page that names its round gives that round's start or active command in full.
+Send one command at a time; a second request while one runs is refused.
 A node that recovery cannot qualify stays out of service; an operator replaces
 it after the session.
-Keep the workload terminal and logs on the unaffected coordinator; use a second
-terminal for active/collect/recover. Do not repeat an active fault after timeout.
-The exercise node, its devices and your job are resolved from your assignment.
-This script accepts no node name, PCI address or job identifier.
+Your target, its devices and your job come from your assignment, so this
+script accepts no node name, device address or job identifier.
 USAGE
     exit 2
 }

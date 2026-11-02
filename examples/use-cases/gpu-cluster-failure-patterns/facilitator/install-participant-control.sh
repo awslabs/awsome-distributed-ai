@@ -4,7 +4,8 @@
 # Install the participant control path on one assigned pair. Facilitator runs
 # this once per pair before the session, from the coordinator, as root.
 #
-#   sudo AIM344_SCHEDULE_FILE=/root/seat-1.json bash install-participant-control.sh \
+#   sudo AIM344_SCHEDULE_FILE=/root/seat-1.json AIM344_PEER_NODE=<peer-node> \
+#        AIM344_EFA_DEVICE=<target-efa-rdma-device> bash install-participant-control.sh \
 #        <assignment-id> <participant-user> <target-node> <target-instance-id> <target-host>
 #
 # What it creates:
@@ -12,6 +13,9 @@
 #   an SSH key pair for that participant, and a forced-command control user
 #   /etc/aim344-device-session.json describing that one assignment
 #   a root key pair for the coordinator's maintenance route to the target
+#   with AIM344_PEER_NODE and AIM344_EFA_DEVICE, the login profile: the seat's
+#   handout values in /etc/aim344-seats/<participant-user>.env and one line in
+#   the participant's ~/.bashrc that sources facilitator/participant-profile.sh
 #
 # It does not grant a shell anywhere: both keys are pinned to forced commands.
 #
@@ -232,6 +236,19 @@ state_dir=/var/lib/aim344-device-session
 session_config=/etc/aim344-device-session.json
 suite_entry=${AIM344_SUITE_ENTRY:?Set AIM344_SUITE_ENTRY to the pinned suite entry point on the target}
 export AIM344_PARTITION=${AIM344_PARTITION:?Set AIM344_PARTITION to the assigned queue}
+
+# The login profile's seat values, checked before anything changes. Supply both
+# to install the profile: the pair's other node, and the target's assigned EFA
+# device (efa_rdma_device in the target's /etc/aim344-device-fault.json).
+peer_node=${AIM344_PEER_NODE:-}
+efa_device=${AIM344_EFA_DEVICE:-}
+if [[ -n $peer_node || -n $efa_device ]]; then
+    [[ $peer_node =~ ^[A-Za-z0-9_-]+$ && $peer_node != "$target_node" ]] || {
+        echo "Set AIM344_PEER_NODE to the Slurm node name of the pair's other node." >&2; exit 2; }
+    [[ $efa_device =~ ^[A-Za-z0-9_]+$ ]] || {
+        echo "Set AIM344_EFA_DEVICE to the target's efa_rdma_device, for example rdmap83s0." >&2; exit 2; }
+    [[ $slurm_bin =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo 'Bad AIM344_SLURM_BIN.' >&2; exit 2; }
+fi
 
 # The schedule file is checked before this installer changes anything, so a refused
 # file leaves the seat as it was. The helper that will run the schedule checks it,
@@ -606,6 +623,71 @@ print(f'Wrote {assignment} into {path}'
 PY
 
 prepare_owned_dir "$participant" "$participant_home" 'aim344-results' 0700
+
+# The login profile (facilitator/participant-profile.sh) lets a fresh shell run
+# the lab commands with no setup. Its seat values are the handout's. They name no
+# incident, so the seat file is root-owned and readable by every account.
+seat_dir=/etc/aim344-seats
+if [[ -z $peer_node ]]; then
+    echo "== login profile: not installed; set AIM344_PEER_NODE and AIM344_EFA_DEVICE to install it"
+else
+    echo "== login profile for the participant"
+    python3 - "$seat_dir" "$participant" "$target_node" "$peer_node" "$efa_device" \
+            "$slurm_bin" <<'PY'
+import os, shlex, sys
+seat_dir, participant, target, peer, efa, slurm_bin = sys.argv[1:7]
+values = {'AIM344_TARGET_NODE': target, 'AIM344_PEER_NODE': peer,
+          'AIM344_EFA_DEVICE': efa, 'AIM344_SLURM_BIN': slurm_bin}
+os.makedirs(seat_dir, mode=0o755, exist_ok=True)
+directory = os.open(seat_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    info = os.fstat(directory)
+    if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+        raise SystemExit(f'refusing to write the login profile: {seat_dir} is not '
+                         f'owned by this account or is writable by others')
+    body = ''.join(f'export {name}={shlex.quote(value)}\n' for name, value in values.items())
+    temporary = f'.{participant}.env.new-{os.getpid()}'
+    handle = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o644, dir_fd=directory)
+    try:
+        os.write(handle, body.encode())
+        os.fchmod(handle, 0o644)
+    finally:
+        os.close(handle)
+    os.rename(temporary, f'{participant}.env', src_dir_fd=directory, dst_dir_fd=directory)
+finally:
+    os.close(directory)
+print(f'   {seat_dir}/{participant}.env: '
+      + ' '.join(f'{name}={value}' for name, value in values.items()))
+PY
+    # One line in the account's ~/.bashrc, written as that account (rule 1 above).
+    runuser -u "$participant" -- python3 - "$participant_home" \
+            "$lab/facilitator/participant-profile.sh" <<'PY'
+import os, shlex, sys
+home, profile = sys.argv[1:3]
+quoted = shlex.quote(profile)
+line = f'[ -r {quoted} ] && . {quoted}  # AIM344 login profile'
+directory = os.open(home, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    try:
+        existing = os.open('.bashrc', os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+    except FileNotFoundError:
+        text = ''
+    else:
+        with os.fdopen(existing, 'r', newline='') as handle:
+            text = handle.read()
+    if line in text.split('\n'):
+        print(f'   {home}/.bashrc already sources {profile}')
+    else:
+        handle = os.open('.bashrc', os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
+                         0o644, dir_fd=directory)
+        with os.fdopen(handle, 'a') as stream:
+            stream.write(('' if not text or text.endswith('\n') else '\n') + line + '\n')
+        print(f'   {home}/.bashrc now sources {profile}')
+finally:
+    os.close(directory)
+PY
+fi
 
 # The deadline safeguard, scheduled rather than waiting for somebody to type it.
 # The hook existed but nothing ever invoked it, so an abandoned round had no
