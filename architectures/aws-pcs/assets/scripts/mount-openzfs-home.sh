@@ -15,8 +15,12 @@
 # mode/times of a directory that already exists on the shared export (e.g. an
 # admin-tightened /home/ubuntu). IMDS region is used to build the FSx DNS name.
 #
-# Runs as root. Idempotent — safe to re-run on reboot when the fstab entry is
-# already present and /home is already mounted.
+# Runs as root at FIRST_BOOT_ONLY. On reboot, systemd restores /home from
+# fstab after network-online.target; slurmd requires that mount. Do not replay
+# this NFSv3 mount from cloud-init's early reboot stage: mount.nfs can wait for
+# rpc-statd, which waits for network-online.target, which waits for cloud-init.
+# Replace existing nodes when changing the filesystem ID. Manual re-runs after
+# network-online.target are idempotent when /home is already mounted.
 
 set -euo pipefail
 
@@ -49,9 +53,20 @@ FSTAB_LINE="${DNS}:/fsx/ /home nfs noatime,nfsvers=3,sync,nconnect=16,rsize=1048
 # line, so a changed FS id/region (stack update) rewrites it instead of leaving
 # a stale second entry that breaks `mount`/reboot. Commented lines are ignored.
 ensure_home_fstab_entry() {
-  grep -qxF "$FSTAB_LINE" /etc/fstab && return 0
-  sed -i -E '\|^[^#].*[[:space:]]/home[[:space:]]|d' /etc/fstab
-  echo "$FSTAB_LINE" >> /etc/fstab
+  if ! grep -qxF "$FSTAB_LINE" /etc/fstab; then
+    sed -i -E '\|^[^#].*[[:space:]]/home[[:space:]]|d' /etc/fstab
+    echo "$FSTAB_LINE" >> /etc/fstab
+  fi
+  # Ordering after remote-fs.target alone does not propagate a mount failure.
+  # Require the actual mount so slurmd cannot start on the local /home, even
+  # if the fstab entry is removed. Reuse systemd's normal NFS boot ordering.
+  mkdir -p /etc/systemd/system/slurmd.service.d
+  cat > /etc/systemd/system/slurmd.service.d/10-home-mount.conf <<'UNIT'
+[Unit]
+Requires=home.mount
+After=home.mount
+UNIT
+  systemctl daemon-reload
 }
 
 # Tolerate rsync 23/24 so they don't trip `set -e` into a TERMINATE: 23 is a
@@ -63,7 +78,7 @@ safe_rsync() {
   [ "$rc" -eq 0 ] || [ "$rc" -eq 23 ] || [ "$rc" -eq 24 ] || return "$rc"
 }
 
-# Already mounted — nothing to do (reboot path).
+# Already mounted — refresh persistent configuration without copying /home.
 if mountpoint -q /home; then
   echo "/home already mounted; ensuring fstab entry is present"
   ensure_home_fstab_entry

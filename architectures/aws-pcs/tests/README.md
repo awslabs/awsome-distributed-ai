@@ -32,6 +32,17 @@ LDAP users).
 
 ---
 
+## Offline home bootstrap regression
+
+Run `python3 tests/test_home_boot.py -v` from `architectures/aws-pcs/` before
+changing the home mount script or lifecycle policy. Requires Python 3,
+PyYAML, rsync, systemd-fstab-generator and systemd-analyze (Ubuntu 24.04).
+The test uses sandbox paths and command doubles, real rsync, and real offline
+systemd unit loading. It checks first-boot copy/permissions and fatal mount
+failure, all four lifecycle policies, the modeled NFSv3 rpc-statd wait cycle,
+and the required home mount (including a missing-unit negative control).
+It does not mount NFS, start services, or verify a PCS reboot end to end.
+
 ## Quick-start: single-cluster shortcut
 
 A single `pcs-ml-cluster-deploy-all.yaml` deploy with `MonitoringStack=Prometheus-LoginNode`,
