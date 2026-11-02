@@ -76,8 +76,14 @@ class Refusal(Exception):
 
 
 def environment(config):
-    return {'PATH': f'{TOOL_PATH}:{config["slurm_bin"]}:{SAFE_PATH}',
-            'LC_ALL': 'C', 'HOME': '/root', 'SHELL': '/bin/false'}
+    env = {'PATH': f'{TOOL_PATH}:{config["slurm_bin"]}:{SAFE_PATH}',
+           'LC_ALL': 'C', 'HOME': '/root', 'SHELL': '/bin/false'}
+    if 'expected_efa_devices' in config:
+        count = config['expected_efa_devices']
+        if type(count) is not int or not 1 <= count <= 32:
+            raise Refusal('Invalid assigned EFA count.')
+        env['HEALTHCHECK_EXPECTED_EFA_COUNT'] = str(count)
+    return env
 
 
 def load_config(require_root_owned=True):

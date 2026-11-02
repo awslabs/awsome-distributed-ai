@@ -192,23 +192,32 @@ foreign-G7 paths.
 
 Check the selected suite's shared `launch_args` before qualification. An explicit `-c` takes precedence over `SRUN_CPUS_PER_TASK`; both main and isolation launches must use the allocated CPU budget while preserving all GPU ranks and correctness, network and performance checks. Keep the suite pinned and do not fork a local copy to override its resource request.
 
+### Assigned EFA count on G7e
+
+For an explicitly two-interface `g7e.48xlarge` assignment, set `verification_environment.AIM344_EXPECTED_EFA_DEVICES` to the string `"2"` in the owner-controlled manifest. Bootstrap validates this launch assignment and writes it into the root-owned maintenance configuration and generated participant environment. Maintenance and the health Prolog use the root-owned count, not participant overrides or the possibly faulted device inventory. The matching health suite retains 8 GPUs, no NVLink and maximum 4 EFA capability; Check 2 requires exactly 2 assigned interfaces in PCI, driver-bound, RDMA, uverbs and unique provider-domain views. The two-node workload still requires all 16 GPU ranks. Existing correctness, bandwidth thresholds and WARN handling are unchanged; two-interface results do not qualify four-interface performance.
+
+Keep the matching suite and assignment together when preparing an accepted release. Without the assignment, the G7e profile expects four interfaces. The existing isolated upgrade writes both `lab.env` and `/etc/aim344-maintenance.json` before its ready receipt, as fresh initialization does. This is not an atomic multi-file or multi-node update; preserve admission isolation and the original receipt/manifest hashes through upgrade and retry. Local candidate preparation does not authorize deployment.
+
 ### Suite acquisition
 
-This recipe acquires the public review candidate, not an upstream mainline release or a deployed event configuration. The health suite commit below preserves the reviewed integrated candidate's complete suite bytes and executable modes. Generate new release archives and manifests; do not reuse an earlier trial archive digest after changing pins or documentation.
+The exact `HEALTHCHECK_COMMIT` in `pins.env` identifies a review candidate based on historical public commit `474155a63059769bcea6365d4ec2b2f34d4c8000`. This revision does not establish merge, release, hardware qualification or public availability. For local source review, explicitly supply the clean healthcheck checkout as `HEALTHCHECK_SOURCE`. After separate publication approval and verification that the exact full SHA is reachable from an approved public ref, the publication owner may instead set `HEALTHCHECK_SOURCE=https://github.com/awslabs/awsome-distributed-ai.git` and use the same procedure unchanged. Do not substitute main or the historical base for the pin. Deployment still requires separate approval; any accepted release needs new archives and manifests, not historical archive digests.
 
-The companion review branch is `riv2026/aim344-reviewed-20260924`; its suite dependency is `riv2026/aim344-healthcheck-reviewed-20260924` at the exact `HEALTHCHECK_COMMIT` in `pins.env`. The suite commit `474155a63059769bcea6365d4ec2b2f34d4c8000` was fetched publicly and its archive files compared with the committed tree. If the exact commit cannot be fetched, stop rather than substitute main or an unlabelled patch. From the companion directory in a Git checkout:
+The matching suite treats missing `instance-profiles.conf` as a fail-closed packaging error. That intentional change is separate from preserved profile-only warnings; an unknown profile with the file present and no assignment retains the existing defaults.
+
+From the companion directory in the owned Git checkout:
 
 ```bash
 set -euo pipefail
 source pins.env
 repo=$(git rev-parse --show-toplevel)
-git -C "$repo" fetch --no-tags https://github.com/awslabs/awsome-distributed-ai.git "$HEALTHCHECK_COMMIT"
+: "${HEALTHCHECK_SOURCE:?Supply a clean local checkout or the publication-verified canonical repository}"
+git -C "$repo" fetch --depth=1 --no-tags "$HEALTHCHECK_SOURCE" "$HEALTHCHECK_COMMIT"
 test "$(git -C "$repo" rev-parse FETCH_HEAD)" = "$HEALTHCHECK_COMMIT"
 git -C "$repo" cat-file -e "$HEALTHCHECK_COMMIT^{commit}"
 git -C "$repo" archive "$HEALTHCHECK_COMMIT" validation/gpu-cluster-healthcheck | gzip -n -6 > healthcheck-pinned.tgz
 ```
 
-These commands populate objects/FETCH_HEAD without switching branches and create only the named archive. For local review before publication, replace the HTTPS source with an explicitly supplied path to the clean healthcheck-release worktree; the exact commit comparison is still required. This does not make a public-download claim. `prepare-login.sh` compares staged suite file contents and executable modes against this exact Git archive. Build/import steps remain separate pre-session work.
+These commands populate local objects/FETCH_HEAD without switching branches and create only the named archive; they do not publish or deploy it. `prepare-login.sh` compares staged suite contents and executable modes against this exact Git archive. Build/import steps remain separate pre-session work.
 
 Create `companion.tgz` from the separately accepted companion commit. Set `COMPANION_COMMIT` to its full accepted commit SHA before running this block; do not infer acceptance from the current branch tip. Run from any directory inside that Git checkout (including the companion directory). Git must support `archive --mtime`. The archive is written to the caller's current directory:
 
