@@ -91,7 +91,9 @@ aws cloudformation delete-stack --stack-name pcs-ml-cluster
 ```
 
 Nested stacks are deleted automatically. Back up any FSx data first — the filesystems
-are deleted with the stack.
+are deleted with the stack. If the delete fails because a placement group is still in
+use, wait a few minutes and delete the stack again — see
+[OPERATIONS.md §6.3](./docs/OPERATIONS.md#63-stack-deletion-can-fail-while-a-placement-group-is-still-in-use).
 
 ---
 

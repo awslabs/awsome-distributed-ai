@@ -495,6 +495,37 @@ PCS); `qr(^slurmd)` also matches the versioned units (e.g. `slurmd-25.11`). The 
 a standalone `conf.d/*.conf` naming only `slurmd`, so if a later DLAMI or Slurm unit
 handles this differently it neither conflicts nor errors — at worst it becomes redundant.
 
+### 6.3 Stack deletion can fail while a placement group is still in use
+
+**Symptom.** `delete-stack` ends in `DELETE_FAILED`. The failed resource is a compute
+node group's nested stack, and inside it the `PlacementGroup` resource reports:
+
+```
+The placement group '<stack>-PlacementGroup-<suffix>' is in use and may not be deleted.
+```
+
+**Cause.** The PCS compute node group finishes deleting before its EC2 instances have
+finished terminating, and instances that are still shutting down keep the placement
+group in use. This affects node groups whose template created the placement group: the
+CPU node group with EFA enabled, and the P5/P6 node groups outside the Capacity Block
+path. It is most likely with large GPU instances, which can take several minutes to
+terminate.
+
+**Workaround.** Nothing is left running on the cluster at this point, only the empty
+placement group. Wait a few minutes, check that no instances remain in the group, and
+delete the stack again. The delete resumes from where it stopped.
+
+```bash
+aws ec2 describe-instances \
+  --filters Name=placement-group-name,Values=<placement-group-name-from-the-error> \
+            Name=instance-state-name,Values=pending,running,shutting-down,stopping \
+  --query 'Reservations[].Instances[].[InstanceId,State.Name]' --output text
+
+aws cloudformation delete-stack --stack-name pcs-ml-cluster
+```
+
+An empty result from the first command means the group can be deleted.
+
 ## 7. Recommendations recap
 
 For a new production deploy:
