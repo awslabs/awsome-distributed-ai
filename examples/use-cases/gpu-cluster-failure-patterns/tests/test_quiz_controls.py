@@ -40,8 +40,11 @@ SCHEDULE = [
 ]
 # Words that name a hidden round's kind or the operation applied to it. Node names
 # such as gpu-g7-1 are not kind words, so the pattern requires a word boundary
-# that is not a hyphen.
-KIND_WORDS = re.compile(r'(?i)(?<![\w-])(?:efa|gpu|flr|efa-reset|efa-flr)(?![\w-])')
+# that is not a hyphen. The idle round unbinds and rebinds, the active round is a
+# function-level reset, and only EFA is an RDMA device.
+KIND_WORDS = re.compile(
+    r'(?i)(?<![\w-])(?:efa|gpu|flr|efa-reset|efa-flr|unbind\w*|rebind\w*|rdma'
+    r'|function-level|(?:efa|gpu)-(?:flr|remove|unbind|rebind)[\w-]*)(?![\w-])')
 REPLACE_INSTRUCTION = re.compile(
     r'(?i)\b(?:use|run|retry|repeat)(?:\s+participant)?\s+replace\b'
     r'|\bthen\s+replace\s+if\s+required\b|\bowner\s+must\s+repeat\s+replace\b'
@@ -158,6 +161,9 @@ class ScheduleValidation(unittest.TestCase):
             'settings not an object': [{'exercise': 'storage', 'settings': [1]}],
             'bad key': [{'exercise': 'storage', 'settings': {'Writer': 1}}],
             'shell text': [{'exercise': 'storage', 'settings': {'writer_rank': '9; id'}}],
+            'an option as text': [{'exercise': 'storage', 'settings': {'mode': '--resume'}}],
+            'a leading dash': [{'exercise': 'storage', 'settings': {'mode': '-x'}}],
+            'text too long': [{'exercise': 'storage', 'settings': {'mode': 'a' * 129}}],
             'nested value': [{'exercise': 'storage', 'settings': {'writer_rank': [9]}}],
             'not finite': [{'exercise': 'storage', 'settings': {'x': float('nan')}}],
             'too long': [{'exercise': 'storage'}] * (session.SCHEDULE_LIMIT + 1),
@@ -166,6 +172,13 @@ class ScheduleValidation(unittest.TestCase):
             with self.subTest(case=name):
                 with self.assertRaises(session.Refusal):
                     session.validate_schedule(entries)
+
+    def test_text_values_may_be_empty_or_hold_an_inner_dash(self):
+        for value in ('', 'a-b', 'x=1', '/results/seat-1', 'a' * 128):
+            with self.subTest(value=value):
+                checked = session.validate_schedule(
+                    [{'exercise': 'storage', 'settings': {'mode': value}}])
+                self.assertEqual(value, checked[0]['settings']['mode'])
 
 
 class SplitCheckTables(QuizBase):
@@ -256,6 +269,33 @@ class SplitCheckTables(QuizBase):
         self.write_config()
         with self.assertRaisesRegex(session.Refusal, 'collect and qualify'):
             self.make().next()
+
+    def test_a_seat_with_no_qualification_checks_starts_nothing(self):
+        """F3: no qualify table, or an empty list, is a refusal, not zero checks."""
+        table = self.config_body['assignments']['table-1']
+        for qualify in (None, {'gpu': [0, 3], 'efa': []}):
+            with self.subTest(qualify=qualify):
+                if qualify is None:
+                    table.pop('qualify_checks', None)
+                else:
+                    table['qualify_checks'] = qualify
+                self.write_config()
+                with self.assertRaisesRegex(session.Refusal, 'names no checks'):
+                    self.make().start('efa')
+                self.assertEqual([], self.node_calls())
+                self.assertEqual('ready', self.make().store.read().phase)
+
+    def test_recovery_with_no_qualification_checks_keeps_the_node_drained(self):
+        self.make().start('efa')
+        self.assertIn('DRAIN', self.executor.node_state)
+        del self.config_body['assignments']['table-1']['qualify_checks']
+        self.write_config()
+        before = len(self.node_calls())
+        with self.assertRaisesRegex(session.Refusal, 'names no checks'):
+            self.make().recover()
+        self.assertEqual(before, len(self.node_calls()))
+        self.assertEqual('fault-applied', self.make().store.read().phase)
+        self.assertIn('DRAIN', self.executor.node_state)
 
     def test_status_lists_the_collectable_checks_during_a_round(self):
         self.held_round('gpu')
@@ -408,7 +448,11 @@ class DeviceIncident(QuizBase):
         self.assertTrue(result.under_way)
         self.assertEqual(['efa-flr'], [call[0] for call in self.active_calls])
         state = self.make().store.read()
-        self.assertEqual({'number': 4, 'exercise': 'efa-reset'}, state.incident)
+        issued = json.loads((self.state_dir / 'schedule-table-1.json').read_text())['issued']
+        self.assertEqual({'number': 4, 'exercise': 'efa-reset',
+                          'issue_id': issued[3]['issue_id']}, state.incident)
+        self.assertRegex(issued[3]['issue_id'], r'\A[0-9a-f]{32}\Z')
+        self.assertEqual(4, len({entry['issue_id'] for entry in issued}))
         self.assertEqual('efa', state.kind)
         self.assertEqual('fault-applied', state.phase)
         self.assertIn('drain', state.prepared)
@@ -509,6 +553,123 @@ class DeviceIncident(QuizBase):
             self.make().next()
         self.assertEqual([], self.active_calls)
         self.assertFalse(any('State=DRAIN' in c for c in self.executor.slurm_calls))
+
+
+class ActiveRoundNextStep(QuizBase):
+    def test_an_active_round_points_to_the_recorded_healthy_values(self):
+        """F7: the active round records no baseline files, so it cites none."""
+        self.advance_to(4)
+        self.running_job_with_progress()
+        self.make().next()
+        self.assertEqual(session.ACTIVE_ROUND_COMPARE, self.make().status().next_step)
+        self.assertEqual([], list(self.answers.rglob('*baseline*')))
+
+    def test_an_idle_round_still_compares_with_its_own_baseline(self):
+        self.make().start('efa')
+        self.assertIn('compare it with your baseline', self.make().status().next_step)
+        self.assertTrue(list(self.answers.rglob('check-2-baseline.log')))
+
+
+class ScheduleReissue(QuizBase):
+    """F2: a round left by an earlier pass of the schedule is not this pass's."""
+
+    def rehearse_device_incident(self):
+        self.advance_to(4)
+        self.running_job_with_progress()
+        self.assertTrue(self.make().next().under_way)
+        self.executor.jobs = []
+        self.assertEqual('runtime-ready', self.make().recover().state.phase)
+
+    def test_status_does_not_answer_an_incident_of_an_earlier_pass(self):
+        self.rehearse_device_incident()
+        self.assertIn('Answer for incident 4', session.render(self.make().status(), 'status'))
+        (self.state_dir / 'schedule-table-1.json').unlink()
+        rendered = session.render(self.make().status(), 'status')
+        self.assertNotIn('Answer for incident', rendered)
+        self.assertNotIn('Incident: 4', rendered)
+        self.assertIn('Incident: 4', session.operator_view(self.make()))
+
+    def test_the_device_incident_runs_again_in_the_next_pass(self):
+        self.rehearse_device_incident()
+        (self.state_dir / 'schedule-table-1.json').unlink()
+        calls = len(self.active_calls)
+        self.advance_to(4)
+        self.running_job_with_progress()
+        result = self.make().next()
+        self.assertTrue(result.under_way)
+        self.assertEqual(calls + 1, len(self.active_calls))
+        self.assertEqual(2, self.make().store.read().round)
+
+    def test_an_issued_entry_without_an_identifier_is_refused(self):
+        self.make().next()
+        path = self.state_dir / 'schedule-table-1.json'
+        progress = json.loads(path.read_text())
+        del progress['issued'][0]['issue_id']
+        path.write_text(json.dumps(progress))
+        with self.assertRaisesRegex(session.Refusal, 'does not match its schedule'):
+            self.make().next()
+
+    def test_a_round_record_without_an_identifier_is_read_but_never_current(self):
+        state = session.State.from_dict({
+            'phase': 'runtime-ready', 'kind': 'efa', 'started_at': 1.0,
+            'target_node': 'gpu-g7-1', 'incident': {'number': 1, 'exercise': 'efa-reset'}})
+        self.assertFalse(session.same_issue(state.incident, {'number': 1, 'issue_id': None}))
+        with self.assertRaisesRegex(session.Refusal, 'malformed incident'):
+            session.State.from_dict({
+                'phase': 'runtime-ready', 'kind': 'efa', 'started_at': 1.0,
+                'target_node': 'gpu-g7-1',
+                'incident': {'number': 1, 'exercise': 'efa-reset', 'issue_id': 'abc'}})
+
+
+class CollectAfterRecovery(QuizBase):
+    """F4: a recovered node is in service, so collect narrows, then stops."""
+
+    def recover_device_incident(self):
+        self.set_schedule(session.validate_schedule([
+            {'exercise': 'efa-reset'},
+            {'exercise': 'silent-corruption', 'settings': {'corrupt_rank': 13}}]))
+        self.make().next()
+        self.running_job_with_progress()
+        self.assertTrue(self.make().next().under_way)
+        self.executor.jobs = []
+        self.assertEqual('runtime-ready', self.make().recover().state.phase)
+        self.executor.maintenance_calls.clear()
+
+    def test_collect_is_refused_once_a_later_incident_is_issued(self):
+        self.recover_device_incident()
+        self.assertEqual(2, self.make().next().incident)
+        self.executor.jobs = ['230|aim344-t1|aim344-job|RUNNING']
+        for check in ('0', '2', '6', 'kernel'):
+            with self.subTest(check=check):
+                with self.assertRaisesRegex(session.Refusal, 'no exercise running'):
+                    self.make().collect(check)
+        self.assertEqual([], self.executor.maintenance_calls)
+        self.assertNotIn('Checks you can collect',
+                         session.render(self.make().status(), 'status'))
+
+    def test_before_that_only_the_rounds_own_checks_run_and_never_beside_a_job(self):
+        self.recover_device_incident()
+        self.assertIn('Checks you can collect: 2, 6, kernel',
+                      session.render(self.make().status(), 'status'))
+        with self.assertRaisesRegex(session.Refusal, r'Available: 2, 6\.'):
+            self.make().collect('0')
+        self.executor.jobs = ['230|aim344-t1|aim344-job|RUNNING']
+        with self.assertRaisesRegex(session.Refusal, 'a job is running'):
+            self.make().collect('6')
+        self.assertEqual([], self.executor.maintenance_calls)
+        self.executor.jobs = []
+        saved = self.make().collect('2').saved_path
+        self.assertEqual([['collect', '2']],
+                         [list(c[:2]) for c in self.executor.maintenance_calls])
+        self.assertIn('recovered', Path(saved).name)
+
+    def test_a_round_started_with_start_closes_when_next_issues_an_incident(self):
+        self.make(now=1000.0).start('efa')
+        self.make(now=1010.0).recover()
+        self.make(now=1020.0).collect('2')
+        self.make(now=2000.0).next()
+        with self.assertRaisesRegex(session.Refusal, 'no exercise running'):
+            self.make(now=2010.0).collect('2')
 
 
 class WarnRefusalAndOperatorReplacement(QuizBase):
@@ -694,6 +855,19 @@ class ParticipantText(unittest.TestCase):
                 self.assertIsNone(REPLACE_INSTRUCTION.search(translated), translated)
                 self.assertIn('operator', translated)
 
+    def test_every_refusal_is_concealed_against_the_wider_pattern(self):
+        """F8: no refusal still names an operation once it is concealed."""
+        texts = self.refusal_texts()
+        self.assertGreater(len(texts), 100)
+        for name, line, text in texts:
+            with self.subTest(source=f'{name}:{line}'):
+                shown = session.conceal_kind(session.participant_replacement_text(text))
+                self.assertIsNone(KIND_WORDS.search(shown), shown)
+        for word in ('the unbind', 'for the rebind', 'The provisioned RDMA device name',
+                     'a PCIe function-level reset of 0000:b0:00.0'):
+            with self.subTest(word=word):
+                self.assertIsNone(KIND_WORDS.search(session.conceal_kind(word)))
+
     def test_retryable_messages_keep_their_recover_step(self):
         text = ('Your node was not fully restored: x It stays out of service, with your '
                 'evidence kept. Run recover again, or use replace to continue on a fresh '
@@ -723,7 +897,14 @@ class ParticipantText(unittest.TestCase):
 
 
 class InstallerSchedule(unittest.TestCase):
-    """The installer's configuration step, run on its own as an ordinary user."""
+    """The installer's schedule check and configuration step, each run on its own as
+    an ordinary user, in the order the installer runs them."""
+
+    @staticmethod
+    def block(text, opening):
+        start = text.index(opening)
+        body = text.index("<<'PY'\n", start) + len("<<'PY'\n")
+        return text[body:text.index('\nPY\n', body)]
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -732,25 +913,46 @@ class InstallerSchedule(unittest.TestCase):
         self.state_dir = self.root / 'state'
         self.state_dir.mkdir(mode=0o700)
         text = INSTALLER.read_text()
-        start = text.index('python3 - "$session_config"')
-        body = text.index("<<'PY'\n", start) + len("<<'PY'\n")
-        self.block = text[body:text.index('\nPY\n', body)]
+        self.check_block = self.block(text, 'python3 - "$AIM344_SCHEDULE_FILE"')
+        self.config_block = self.block(text, 'python3 - "$session_config"')
         self.user = subprocess.run(['id', '-un'], capture_output=True, text=True,
                                    check=True).stdout.strip()
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def install(self, schedule_file=None):
+    def check(self, schedule_file):
+        return subprocess.run(
+            [sys.executable, '-', str(schedule_file), str(HELPER), str(self.config),
+             str(self.state_dir), 'table-1'],
+            input=self.check_block, capture_output=True, text=True)
+
+    def configure(self, checked=None):
         env = dict(os.environ, AIM344_PARTITION='queue', AIM344_CONTROL_USER=self.user)
         env.pop('AIM344_SCHEDULE_FILE', None)
-        if schedule_file:
-            env['AIM344_SCHEDULE_FILE'] = str(schedule_file)
+        env.pop('AIM344_CHECKED_SCHEDULE', None)
+        if checked:
+            env['AIM344_CHECKED_SCHEDULE'] = checked
         return subprocess.run(
             [sys.executable, '-', str(self.config), 'table-1', self.user, 'gpu-g7-1',
              'i-0123456789abcdef0', '10.0.0.1', str(self.state_dir), '/opt/slurm/bin',
              '/opt/suite/gpu-healthcheck.sh', str(HELPER)],
-            input=self.block, capture_output=True, text=True, env=env)
+            input=self.config_block, capture_output=True, text=True, env=env)
+
+    def install(self, schedule_file=None):
+        if schedule_file is None:
+            return self.configure()
+        checked = self.check(schedule_file)
+        if checked.returncode != 0:
+            return checked
+        return self.configure(checked.stdout.strip())
+
+    def write_state(self, **fields):
+        session.StateStore(self.state_dir, 'table-1').write(session.State(
+            kind='efa', started_at=1.0, target_node='gpu-g7-1', **fields))
+
+    def read_state(self):
+        return session.StateStore(self.state_dir, 'table-1').read()
 
     def schedule_file(self, entries, mode=0o600):
         path = self.root / 'seat-1.json'
@@ -796,6 +998,65 @@ class InstallerSchedule(unittest.TestCase):
         done = self.install(link)
         self.assertNotEqual(0, done.returncode)
         self.assertFalse(self.config.exists())
+
+    def test_the_schedule_is_checked_before_the_installer_changes_anything(self):
+        """F6: a refused file stops the installer before its first change."""
+        text = INSTALLER.read_text()
+        check = text.index('python3 - "$AIM344_SCHEDULE_FILE"')
+        for first_change in ('install -o root -g root -m 0755', 'useradd',
+                             '/etc/sudoers.d', 'prepare_shared_parent "$', 'ssh-keygen',
+                             'install -d -o root -g root -m 0700 "$state_dir"'):
+            with self.subTest(change=first_change):
+                self.assertLess(check, text.index(first_change))
+        self.assertIn('AIM344_CHECKED_SCHEDULE=$checked_schedule \\\npython3 - '
+                      '"$session_config"', text)
+        before = sorted(p.name for p in self.root.rglob('*'))
+        for name, entries, mode, expected in (
+                ('readable', SCHEDULE, 0o644, 'chmod 600'),
+                ('unknown', [{'exercise': 'nvlink'}], 0o600, 'unknown exercise'),
+                ('not JSON', None, 0o600, 'not JSON')):
+            with self.subTest(case=name):
+                path = self.schedule_file(entries or [], mode=mode)
+                if entries is None:
+                    path.write_text('[{')
+                done = self.check(path)
+                self.assertNotEqual(0, done.returncode)
+                self.assertIn(expected, done.stderr)
+                self.assertEqual('', done.stdout)
+        after = sorted(p.name for p in self.root.rglob('*') if p.name != 'seat-1.json')
+        self.assertEqual([n for n in before if n != 'seat-1.json'], after)
+
+    def test_a_reset_is_refused_while_a_round_holds_the_node(self):
+        """F2: the installer does not restart a schedule under a held round."""
+        self.install(self.schedule_file(SCHEDULE))
+        progress = self.state_dir / 'schedule-table-1.json'
+        progress.write_text('{"issued": []}')
+        os.chmod(progress, 0o600)
+        self.write_state(phase='fault-applied')
+        done = self.check(self.schedule_file(SCHEDULE))
+        self.assertNotEqual(0, done.returncode)
+        self.assertIn('still holds the exercise node', done.stderr)
+        # The configuration step refuses too, should the round begin in between.
+        done = self.configure(json.dumps(session.validate_schedule(SCHEDULE)))
+        self.assertNotEqual(0, done.returncode)
+        self.assertIn('still holds the exercise node', done.stderr)
+        self.assertTrue(progress.exists())
+        self.assertEqual('fault-applied', self.read_state().phase)
+
+    def test_a_reset_keeps_the_earlier_round_and_continues_from_a_fresh_record(self):
+        """F2: status after a reset shows nothing of the earlier pass."""
+        incident = {'number': 4, 'exercise': 'efa-reset', 'issue_id': 'a' * 32}
+        self.write_state(phase='runtime-ready', round=2, incident=incident,
+                         check_results={'round-2/recovered/check-6': {'verdict': 'PASS'}})
+        done = self.install(self.schedule_file(SCHEDULE))
+        self.assertEqual(0, done.returncode, done.stderr)
+        state = self.read_state()
+        self.assertEqual(('ready', 3, None, {}),
+                         (state.phase, state.round, state.incident, state.check_results))
+        kept = self.state_dir / 'table-1.round-2.before-reset.json'
+        self.assertEqual(incident, json.loads(kept.read_text())['incident'])
+        self.assertEqual(0, stat.S_IMODE(kept.stat().st_mode) & 0o077)
+        self.assertIn('continues from round 3', done.stdout)
 
 
 if __name__ == '__main__':

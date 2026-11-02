@@ -562,6 +562,8 @@ class CleanupReplacement(fixture.Base):
         self.executor.after_cloud = after
         result = handler.replace()
         self.assertEqual('runtime-ready', result.state.phase)
+        # Decision 4: only --operator replace reaches this route now.
+        self.assertEqual('operator-replacement', result.state.recovered_by)
         self.assertEqual(replacement_fixture.NEW, result.state.target_instance_id)
         self.assertEqual('10.0.0.9', handler.assignment['target_host'])
         self.assertEqual('10.0.0.9', self.executor.target_host)

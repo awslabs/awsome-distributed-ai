@@ -29,8 +29,11 @@
 # launcher in the participant's job) and efa-reset (applied by the controller
 # once that job reports progress). The file must be mode 0600: the schedule is
 # copied into the root-only session configuration, and this seat's record of
-# issued incidents is reset. Without the variable a rerun keeps the schedule
-# already configured, and its record.
+# issued incidents is reset. The file is checked before anything is changed, and
+# a seat whose round still holds its exercise node is refused. A finished round
+# of the earlier pass is kept as <assignment>.round-<n>.before-reset.json in the
+# state directory, and the seat continues from a fresh record. Without the
+# variable a rerun keeps the schedule already configured, and its record.
 set -euo pipefail
 
 [[ $(id -u) == 0 ]] || { echo 'Run this with sudo on the coordinator node.' >&2; exit 1; }
@@ -229,6 +232,59 @@ state_dir=/var/lib/aim344-device-session
 session_config=/etc/aim344-device-session.json
 suite_entry=${AIM344_SUITE_ENTRY:?Set AIM344_SUITE_ENTRY to the pinned suite entry point on the target}
 export AIM344_PARTITION=${AIM344_PARTITION:?Set AIM344_PARTITION to the assigned queue}
+
+# The schedule file is checked before this installer changes anything, so a refused
+# file leaves the seat as it was. The helper that will run the schedule checks it,
+# and a seat whose round still holds its exercise node keeps its schedule. The
+# checked list reaches the configuration step in that step's environment, which
+# only root can read, rather than on a command line.
+checked_schedule=
+if [[ -n ${AIM344_SCHEDULE_FILE:-} ]]; then
+    echo "== checking the incident schedule $AIM344_SCHEDULE_FILE"
+    checked_schedule=$(python3 - "$AIM344_SCHEDULE_FILE" "$session_source" \
+            "$session_config" "$state_dir" "$assignment" <<'PY'
+import importlib.machinery, importlib.util, json, os, stat, sys
+schedule_file, helper_path, config_path, state_dir, assignment = sys.argv[1:6]
+loader = importlib.machinery.SourceFileLoader('aim344_device_session', helper_path)
+helper = importlib.util.module_from_spec(
+    importlib.util.spec_from_loader(loader.name, loader))
+loader.exec_module(helper)
+# Checked on the descriptor that is read, so a name swapped after the check
+# cannot supply a different file.
+try:
+    descriptor = os.open(schedule_file, os.O_RDONLY | os.O_NOFOLLOW)
+except OSError as error:
+    raise SystemExit(f'refusing {schedule_file}: {error.strerror}')
+with os.fdopen(descriptor) as handle:
+    info = os.fstat(handle.fileno())
+    if not stat.S_ISREG(info.st_mode):
+        raise SystemExit(f'refusing: {schedule_file} is not a regular file')
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        raise SystemExit(f'refusing: {schedule_file} is readable by other accounts; '
+                         f'chmod 600 it, because the schedule is the answer key')
+    try:
+        entries = json.load(handle)
+    except ValueError as error:
+        raise SystemExit(f'refusing {schedule_file}: it is not JSON ({error})')
+try:
+    schedule = helper.validate_schedule(entries)
+except helper.Refusal as refusal:
+    raise SystemExit(f'refusing {schedule_file}: {refusal}')
+if os.path.exists(config_path):
+    with open(config_path) as handle:
+        state_dir = json.load(handle).get('state_dir', state_dir)
+try:
+    state = helper.StateStore(state_dir, assignment).read()
+except helper.Refusal as refusal:
+    raise SystemExit(f'refusing to reset the schedule of {assignment}: {refusal}')
+if state.phase in helper.HOLDING_PHASES:
+    raise SystemExit(f'refusing to reset the schedule of {assignment}: its round is at '
+                     f'{state.phase} and still holds the exercise node. Finish it with '
+                     f'recover, or with --operator replace, then rerun.')
+print(json.dumps(schedule))
+PY
+)
+fi
 
 echo "== installing the session helper"
 installed=/usr/local/sbin/aim344-device-session
@@ -435,10 +491,11 @@ printf '  then confirm: runuser -u %s -- test -w /run/aim344-checkpoints\n' "$pa
 
 echo "== session configuration"
 install -d -o root -g root -m 0700 "$state_dir"
+AIM344_CHECKED_SCHEDULE=$checked_schedule \
 python3 - "$session_config" "$assignment" "$participant" "$target_node" \
         "$target_instance" "$target_host" "$state_dir" "$slurm_bin" "$suite_entry" \
         "$installed" <<'PY'
-import importlib.machinery, importlib.util, json, os, pwd, stat, sys
+import importlib.machinery, importlib.util, json, os, pwd, sys
 (path, assignment, participant, node, instance, host, state_dir, slurm_bin,
  suite_entry, helper_path) = sys.argv[1:11]
 control_user = os.environ.get('AIM344_CONTROL_USER', 'aim344-control')
@@ -450,35 +507,46 @@ config.setdefault('state_dir', state_dir)
 config.setdefault('assignments', {})
 previous = config['assignments'].get(assignment, {})
 
-# The seat's incident schedule is checked by the helper that will run it, so the
-# installer and the controller cannot disagree about which exercises exist.
-schedule_file = os.environ.get('AIM344_SCHEDULE_FILE')
+# The seat's incident schedule, checked before any change by the helper that will
+# run it, so the installer and the controller cannot disagree about which
+# exercises exist. The installed helper checks it once more here.
+checked = os.environ.get('AIM344_CHECKED_SCHEDULE')
 schedule = previous.get('exercise_schedule')
-if schedule_file:
-    # Checked on the descriptor that is read, so a name swapped after the check
-    # cannot supply a different file.
-    descriptor = os.open(schedule_file, os.O_RDONLY | os.O_NOFOLLOW)
-    with os.fdopen(descriptor) as handle:
-        info = os.fstat(handle.fileno())
-        if not stat.S_ISREG(info.st_mode):
-            raise SystemExit(f'refusing: {schedule_file} is not a regular file')
-        if stat.S_IMODE(info.st_mode) & 0o077:
-            raise SystemExit(f'refusing: {schedule_file} is readable by other accounts; '
-                             f'chmod 600 it, because the schedule is the answer key')
-        entries = json.load(handle)
+if checked:
     loader = importlib.machinery.SourceFileLoader('aim344_device_session', helper_path)
     helper = importlib.util.module_from_spec(
         importlib.util.spec_from_loader(loader.name, loader))
     loader.exec_module(helper)
     try:
-        schedule = helper.validate_schedule(entries)
+        schedule = helper.validate_schedule(json.loads(checked))
+        # A new schedule starts this seat from its first incident. Under the seat's
+        # own lock, so no request of the controller runs while its records change.
+        store = helper.StateStore(config['state_dir'], assignment)
+        with store.exclusive():
+            state = store.read()
+            if state.phase in helper.HOLDING_PHASES:
+                raise SystemExit(f'refusing to reset the schedule of {assignment}: its '
+                                 f'round is at {state.phase} and still holds the exercise '
+                                 f'node. Finish it with recover, or with --operator '
+                                 f'replace, then rerun.')
+            progress = os.path.join(config['state_dir'], f'schedule-{assignment}.json')
+            if os.path.lexists(progress):
+                os.unlink(progress)
+                print(f'Reset the issued-incident record {progress}')
+            if state.phase != 'ready':
+                # A finished round of the earlier pass would otherwise stay in
+                # status, with its check results and its incident's answer. Keep it
+                # for the operator, then continue from a fresh record and the next
+                # round number, as the controller does when a new round starts. The
+                # dots keep the name from ever being another assignment's record.
+                kept = os.path.join(config['state_dir'],
+                                    f'{assignment}.round-{state.round}.before-reset.json')
+                helper._write_private_json(kept, state.to_dict())
+                store.write(helper.State(round=state.round + 1))
+                print(f'Kept round {state.round} of the earlier pass in {kept}; the '
+                      f'seat continues from round {state.round + 1}')
     except helper.Refusal as refusal:
-        raise SystemExit(f'refusing {schedule_file}: {refusal}')
-    # A new schedule starts this seat from its first incident.
-    progress = os.path.join(config['state_dir'], f'schedule-{assignment}.json')
-    if os.path.lexists(progress):
-        os.unlink(progress)
-        print(f'Reset the issued-incident record {progress}')
+        raise SystemExit(f'refusing to reset the schedule of {assignment}: {refusal}')
 
 config['assignments'][assignment] = {
     'participant_user': participant,

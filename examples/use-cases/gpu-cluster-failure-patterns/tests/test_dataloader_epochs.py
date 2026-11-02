@@ -146,6 +146,13 @@ class LauncherContract(unittest.TestCase):
                     self.assertEqual(rc, result.returncode)
                     self.assertIn(f'dataloader-{method} dataloader --start-method {method} --epochs 2',
                                   result.stdout)
+                # Extra arguments reach workload.py, so its parser refuses a
+                # mistyped or unknown flag instead of the control running without it.
+                result = subprocess.run(['bash', str(directory / name), '--no-such-flag', 'x y'],
+                                        capture_output=True, text=True,
+                                        env={**os.environ, 'TEST_RC': '0'}, timeout=5)
+                self.assertEqual(f'dataloader-{method} dataloader --start-method {method} '
+                                 '--epochs 2 --no-such-flag x y\n', result.stdout)
 
     def test_existing_run_torch_preserves_nonzero_and_watchdog(self):
         # Fake srun only: no Slurm, GPU, AWS or container invocation. 124/137

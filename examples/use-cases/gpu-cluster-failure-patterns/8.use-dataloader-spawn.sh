@@ -7,4 +7,4 @@ LAB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$LAB_DIR/common.sh"
 prepare_slurm
 export FI_EFA_USE_HUGE_PAGE=${FI_EFA_USE_HUGE_PAGE:-0}
-run_torch dataloader-spawn dataloader --start-method spawn --epochs 2
+run_torch dataloader-spawn dataloader --start-method spawn --epochs 2 "$@"

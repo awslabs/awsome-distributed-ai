@@ -72,8 +72,16 @@ DEVICE_EXERCISES = {
 SCHEDULE_LIMIT = 16
 SETTING_KEY = re.compile(r'[a-z][a-z0-9_]{0,31}')
 # Settings reach the launcher as data. The character set keeps a careless launcher
-# from turning one into shell syntax or a second option.
-SETTING_TEXT = re.compile(r'[A-Za-z0-9._:/=+-]{0,128}')
+# from turning one into shell syntax, and a value cannot start with '-', so it
+# cannot be read as an option of its own. The empty string is allowed.
+SETTING_TEXT = re.compile(r'(?:[A-Za-z0-9._:/=+][A-Za-z0-9._:/=+-]{0,127})?')
+# Each issued incident carries a random identifier, and a round records the one it
+# was started for. A round left by an earlier pass of the same schedule therefore
+# never counts as the current incident, even when its number matches.
+ISSUE_ID = re.compile(r'[0-9a-f]{32}')
+# The next step of an active round, which records no baseline files of its own.
+ACTIVE_ROUND_COMPARE = ('Collect an allowed check and compare it with the healthy values '
+                        'you recorded in the baseline module.')
 # A hidden round says what it was once the participant can do nothing more with
 # it: recovered, or kept out of service for an operator.
 REVEAL_PHASES = ('runtime-ready', 'verified', 'replacement-required')
@@ -183,6 +191,13 @@ def participant_replacement_text(text):
 _KIND_REWRITES = (
     (re.compile(r'(?<![\w-])(?:efa|gpu)-(?:flr|remove|unbind|rebind)(?:-[a-z]+)*(?![\w-])'),
      'device operation'),
+    # The operations themselves: the idle round unbinds and rebinds, the active
+    # round is a PCIe function-level reset, and only EFA names an RDMA device.
+    (re.compile(r'(?<![\w-])(?:PCIe\s+)?[Ff]unction-level\s+resets?(?![\w-])'),
+     'device operation'),
+    (re.compile(r'(?<![\w-])(?:[Uu]n|[Rr]e)bind(?:s|ing)?(?![\w-])'), 'device operation'),
+    (re.compile(r'(?<![\w-])(?:RDMA|rdma)\s+device(?![\w-])'), 'device'),
+    (re.compile(r'(?<![\w-])(?:RDMA|rdma)(?![\w-])'), 'device'),
     (re.compile(r'(?<![\w-])(?:[Tt]he\s+)?(?:[Aa]ctive\s+|[Ii]dle\s+)?(?:EFA|GPU)\s+'
                 r'(?:round|exercise|path)(?![\w-])'), 'the incident'),
     (re.compile(r'(?<![\w-])[Aa]ctive\s+FLR(?![\w-])'), 'the incident'),
@@ -207,6 +222,14 @@ def conceal_kind(text):
 def hidden(state):
     """A round started by `next` that has not yet been revealed."""
     return bool(state.incident) and state.phase not in REVEAL_PHASES
+
+
+def same_issue(incident, entry):
+    """Was this round started for this issued incident, not an earlier one?"""
+    return bool(incident and entry
+                and incident.get('number') == entry.get('number')
+                and incident.get('issue_id') is not None
+                and incident.get('issue_id') == entry.get('issue_id'))
 
 
 def participant_text(text, state=None):
@@ -603,8 +626,14 @@ class State:
                 raise Refusal('Unusable state record: malformed incident.')
             number = state.incident.get('number')
             name = state.incident.get('exercise')
+            issue = state.incident.get('issue_id')
             exercise = DEVICE_EXERCISES.get(name) if isinstance(name, str) else None
-            if (set(state.incident) != {'number', 'exercise'}
+            # issue_id is absent only from a record written before it existed;
+            # such a record never matches an issued incident (same_issue).
+            if (not {'number', 'exercise'} <= set(state.incident)
+                    <= {'number', 'exercise', 'issue_id'}
+                    or (issue is not None
+                        and not (isinstance(issue, str) and ISSUE_ID.fullmatch(issue)))
                     or not isinstance(number, int) or isinstance(number, bool)
                     or number < 1 or exercise is None or exercise['kind'] != state.kind):
                 raise Refusal('Unusable state record: malformed incident.')
@@ -883,7 +912,7 @@ class Result:
     def __init__(self, state, output=None, saved_path=None, node_state=None,
                  node_reason=None, already_started=False, already_recovered=False,
                  expired=False, next_step='', incident=None, under_way=False,
-                 collectable=None, schedule_line=None):
+                 collectable=None, schedule_line=None, current_incident=None):
         self.state = state
         self.output = output
         self.saved_path = saved_path
@@ -899,6 +928,9 @@ class Result:
         # status: the checks collect accepts now, and how far the schedule is.
         self.collectable = collectable
         self.schedule_line = schedule_line
+        # status: the round's incident, only when it is this seat's current
+        # issuance and not one left by an earlier pass of the schedule.
+        self.current_incident = current_incident
 
 
 class DeviceSession:
@@ -1398,7 +1430,7 @@ class DeviceSession:
                 state.phase = 'runtime-ready'
                 state.target_instance_id = record['binding']['instance_id']
                 state.boot_id = record['qualified_boot']
-                state.recovered_by = 'participant-replacement'
+                state.recovered_by = 'operator-replacement'
                 state.recovered_at = record['completed_at']
                 state.failure = None
                 self.store.write(state)
@@ -1603,7 +1635,7 @@ class DeviceSession:
             state.phase = 'runtime-ready'
             state.target_instance_id = candidate['instance_id']
             state.boot_id = boot
-            state.recovered_by = 'participant-replacement'
+            state.recovered_by = 'operator-replacement'
             state.recovered_at = self.clock()
             state.failure = None
             state.notes = 'Fresh replacement initialized; old target evidence retained. Take a fresh allocation.'
@@ -3035,6 +3067,9 @@ class DeviceSession:
                 return Result(state, already_started=True,
                               next_step='Use status, then collect a check.')
 
+            # A round that recovery could not qualify is not started at all.
+            self.qualify_checks(State(kind=kind))
+
             # A display label cannot turn an existing operation into a new first
             # capture. Completed rounds were reset above; a genuinely unused
             # record has none of these operation/preparation facts.
@@ -3342,20 +3377,25 @@ class DeviceSession:
             next_step = (f'Replacement stage: {record["phase"]}. An operator continues '
                          'it after the session.'
                          if record and record['phase'] != 'complete' else self._next_step(state))
+            try:
+                collectable = self._collectable(state)
+            except Refusal:
+                collectable = None
             return Result(state,
                           node_state=self._node_field(line, 'State'),
                           node_reason=node_reason(line)[1],
                           next_step=next_step,
-                          collectable=(None if state.phase == 'ready'
-                                       else self.collect_checks(state)),
-                          schedule_line=self._schedule_line())
+                          collectable=collectable,
+                          schedule_line=self._schedule_line(),
+                          current_incident=self._current_incident(state))
 
     # ---------------- incident schedule ----------------
     ISSUED_STEP = ('Your launcher runs this incident from the profile above. To repeat '
                    'its job, reuse that profile rather than running next again.')
     UNDER_WAY_STEP = ('Watch your job. Record what you see, collect checks, and run '
                       'recover when your page says so.')
-    PROGRESS_ENTRY_FIELDS = {'number', 'exercise', 'issued_at', 'profile', 'last_refusal'}
+    PROGRESS_ENTRY_FIELDS = {'number', 'exercise', 'issued_at', 'issue_id', 'profile',
+                             'last_refusal'}
 
     def _schedule(self):
         """The seat's checked schedule, or None when account preparation set none."""
@@ -3393,6 +3433,8 @@ class DeviceSession:
                         or entry['number'] != number
                         or entry['exercise'] != schedule[number - 1]['exercise']
                         or not isinstance(entry['issued_at'], (int, float))
+                        or not (isinstance(entry['issue_id'], str)
+                                and ISSUE_ID.fullmatch(entry['issue_id']))
                         or not (entry['profile'] is None or isinstance(entry['profile'], str))):
                     raise ValueError('entry')
         except (ValueError, KeyError, TypeError, AttributeError) as error:
@@ -3501,8 +3543,9 @@ class DeviceSession:
                 # The record advanced but the profile was not written: finish that
                 # incident's hand-over rather than advancing past it.
                 return self._issue_profile(progress, current, schedule)
-            applied = bool(current and state.incident
-                           and state.incident['number'] == current['number'])
+            # Applied means this round was started for this issuance. A round
+            # left by an earlier pass of the schedule has another issue_id.
+            applied = same_issue(state.incident, current)
             if current and current['exercise'] in DEVICE_EXERCISES and not applied:
                 if not self._device_incident_ready():
                     return Result(state, incident=current['number'],
@@ -3515,7 +3558,8 @@ class DeviceSession:
                                   'issued; there is no next incident.')
                 entry = {'number': len(issued) + 1,
                          'exercise': schedule[len(issued)]['exercise'],
-                         'issued_at': self.clock(), 'profile': None}
+                         'issued_at': self.clock(), 'issue_id': secrets.token_hex(16),
+                         'profile': None}
                 issued.append(entry)
                 # Recorded before the profile is written, so a failed write is
                 # finished by the next call instead of skipping an incident.
@@ -3523,7 +3567,8 @@ class DeviceSession:
                 return self._issue_profile(progress, entry, schedule)
         # start takes the assignment and pair locks itself and repeats every check.
         planned = DEVICE_EXERCISES[step['exercise']]
-        incident = {'number': step['number'], 'exercise': step['exercise']}
+        incident = {'number': step['number'], 'exercise': step['exercise'],
+                    'issue_id': step['issue_id']}
         try:
             result = self.start(planned['kind'], active=planned['active'], incident=incident)
         except Refusal as refusal:
@@ -3537,10 +3582,14 @@ class DeviceSession:
         ready = ('Your node is in service. Start the next incident the way your page '
                  'shows.' if self.assignment.get('exercise_schedule')
                  else 'Run start gpu or start efa when you are ready.')
+        # An active round begins while the participant's job runs, so it records no
+        # baseline of its own: running the checks then would load that job's node.
+        fault_applied = (ACTIVE_ROUND_COMPARE if state.active_fault
+                         else 'Collect an allowed check and compare it with your baseline.')
         return {
             'ready': ready,
             'preparing': 'Preparation did not finish; run recover to restore your node.',
-            'fault-applied': 'Collect an allowed check and compare it with your baseline.',
+            'fault-applied': fault_applied,
             'investigating': 'Record your evidence, then run recover.',
             'recovering': 'Recovery is running; run status again.',
             'recovery-failed': 'Your node is still out of service; run recover again.',
@@ -3557,9 +3606,18 @@ class DeviceSession:
     # see PASS before the node returns to service, unchanged by widening collect.
     # Baseline capture records both. A configuration written before the split has
     # only `allowed_checks`, which keeps its old meaning for all three.
+    #
+    # No table, or an empty list for the kind, is a refusal rather than an empty
+    # list: recovery that ran no check would find no failure and resume the node.
+    # `start` asks first, so such a seat refuses before anything is changed.
     def qualify_checks(self, state):
         table = self.assignment.get('qualify_checks', self.assignment.get('allowed_checks'))
-        return [str(c) for c in (table or {}).get(state.kind or '', [])]
+        checks = table.get(state.kind or '') if isinstance(table, dict) else None
+        if not checks:
+            raise Refusal("This seat's configuration names no checks that recovery must "
+                          'pass for this round, so the controller does not start or '
+                          'recover it. Nothing was changed; ask the facilitator.')
+        return [str(c) for c in checks]
 
     # The recovery requirement under its earlier name.
     allowed_checks = qualify_checks
@@ -3612,24 +3670,71 @@ class DeviceSession:
         saved = self._save_output('kernel', text, phase='fault', round=state.round)
         return text, saved
 
+    def _current_incident(self, state):
+        """The round's incident if it is this seat's current issuance, else None."""
+        if not state.incident:
+            return None
+        try:
+            schedule = self._schedule()
+            issued = self._read_progress(schedule)['issued'] if schedule else []
+        except Refusal:
+            return None
+        number = state.incident['number']
+        if number <= len(issued) and same_issue(state.incident, issued[number - 1]):
+            return state.incident
+        return None
+
+    def _issued_since(self, state):
+        """Has `next` issued an incident after the one this finished round began?"""
+        schedule = self._schedule()
+        if schedule is None:
+            return False
+        issued = self._read_progress(schedule)['issued']
+        if state.incident:
+            # A round from an earlier pass of the schedule is not this pass's.
+            return (self._current_incident(state) is None
+                    or len(issued) > state.incident['number'])
+        return any(entry['issued_at'] > float(state.started_at) for entry in issued)
+
+    def _collectable(self, state):
+        """The checks collect runs now, or None when there is no round to collect for.
+
+        A recovered node is back in service. Once a later incident has been issued
+        it belongs to that incident, so collect is refused as before any round.
+        Until then collect is limited to the round's own qualification checks.
+        """
+        if state.phase == 'ready':
+            return None
+        if state.phase in ('runtime-ready', 'verified'):
+            if self._issued_since(state):
+                return None
+            return self.qualify_checks(state)
+        return self.collect_checks(state)
+
     def collect(self, check):
         with self.store.exclusive_pair():
             self._refresh_binding()
             state = self.store.read()
             if self._replacement_record().get('phase') not in (None, 'complete'):
                 raise Refusal('Replacement is in progress; run replace to continue.')
-            if state.phase == 'ready':
+            allowed = self._collectable(state)
+            if allowed is None:
                 raise Refusal('There is no exercise running yet. Start one first.')
             if check == 'kernel':
                 text, saved = self._collect_kernel(state)
                 return Result(state, output=text, saved_path=saved, next_step=self._next_step(state))
             if not re.fullmatch(r'[0-9]{1,2}', str(check)):
                 raise Refusal('A check is one of the identifiers listed by status.')
-            allowed = self.collect_checks(state)
             if str(check) not in allowed:
                 raise Refusal(f'Check {check} is not available for this exercise. '
                               f'Available: {", ".join(allowed)}.')
-            phase = 'recovered' if state.phase in ('runtime-ready', 'verified') else 'fault'
+            recovered = state.phase in ('runtime-ready', 'verified')
+            if recovered and self._jobs_on_target():
+                # Check 6 sends traffic over the node's devices and Check 2 pins GPU
+                # memory, so neither runs beside a job on an in-service node.
+                raise Refusal('Your exercise node is back in service and a job is running '
+                              'on it. Run this check after the job ends; nothing was run.')
+            phase = 'recovered' if recovered else 'fault'
             result = self.executor.run_maintenance(['collect', str(check)], timeout=900)
             text = (result.stdout or '') + (result.stderr or '')
             # The write is descriptor relative, as the participant, and never
@@ -4099,6 +4204,8 @@ class DeviceSession:
         return state.kind == 'gpu' and preparation
 
     def _recover(self, state, recovered_by):
+        # Before anything changes: with no checks to pass, the node stays drained.
+        self.qualify_checks(state)
         if self._other_assignment_holding_target():
             raise Refusal('Another table holds this node; recovery cannot change it.')
         state.phase = 'recovering'
@@ -4814,9 +4921,12 @@ def render(result, verb, operator=False):
     state = result.state
     concealed = hidden(state) and not operator
     if verb == 'status':
+        # The participant sees the round's incident only while it is this seat's
+        # current issuance; the operator sees what the record holds.
+        incident = state.incident if operator else result.current_incident
         lines.append(f'Exercise phase: {state.phase}')
-        if state.incident:
-            lines.append(f'Incident: {state.incident["number"]}')
+        if incident:
+            lines.append(f'Incident: {incident["number"]}')
         if state.kind and (operator or not state.incident):
             lines.append(f'Exercise: {state.kind}')
         if state.incident and operator:
@@ -4866,7 +4976,7 @@ def render(result, verb, operator=False):
                     lines.append(f'  observation: {evidence["log"]}')
                 for refusal in evidence.get('refusals') or []:
                     lines.append(f'  unmet: {refusal}')
-        if state.incident and not concealed:
+        if incident and not concealed:
             lines.append(incident_answer(state))
         if state.phase == 'recovery-failed':
             lines.append('Your node is still out of service: recovery did not '
@@ -4940,8 +5050,7 @@ def operator_view(handler):
             when = datetime.datetime.fromtimestamp(
                 entry['issued_at'], datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
             row += f' issued {when} profile={entry["profile"]}'
-            if (result.state.incident
-                    and result.state.incident['number'] == number):
+            if same_issue(result.state.incident, entry):
                 row += f' round={result.state.round} phase={result.state.phase}'
             if entry.get('last_refusal'):
                 row += f'\n     last refusal: {entry["last_refusal"]["text"]}'
