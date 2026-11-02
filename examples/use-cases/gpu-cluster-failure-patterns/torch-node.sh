@@ -17,6 +17,9 @@ unset NCCL_NET NCCL_NET_PLUGIN NCCL_IB_DISABLE FI_EFA_IFACE FI_EFA_DEVICE_NAME F
 if [[ -n ${AIM344_EFA_IFACE:-} ]]; then export FI_EFA_IFACE=$AIM344_EFA_IFACE; fi
 export FI_PROVIDER=efa NCCL_DEBUG=INFO NCCL_SOCKET_IFNAME="=$iface"
 export OMP_NUM_THREADS=1
+# The replica check compares GEMM results bit for bit; this cuBLAS workspace setting
+# keeps them deterministic across streams and is required by use_deterministic_algorithms.
+export CUBLAS_WORKSPACE_CONFIG=${CUBLAS_WORKSPACE_CONFIG:-:4096:8}
 exec python3 -m torch.distributed.run --nnodes=2 --nproc-per-node="$GPUS_PER_NODE" \
     --node-rank="$NODE_RANK" --master-addr="$MASTER_ADDR" --master-port="${MASTER_PORT:-29534}" \
     /opt/aim344/workload.py "$@"
