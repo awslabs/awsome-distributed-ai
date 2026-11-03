@@ -1,5 +1,11 @@
 # AI systems performance engineering on AWS
 
+## Run the AIM347 workshop job
+
+The AIM347 workshop trains SmolLM2-1.7B with FSDP2 on two `g7.48xlarge` nodes of an AWS PCS cluster and changes one line of `job.env` at a time: NCCL over TCP sockets or EFA, eager or SDPA attention, and no saving, synchronous saves or process-mode saves. [tools/README.md](tools/README.md) describes the tools that run and measure each stage, with their outputs, exit codes and result layout. To prepare a cluster for the job, run [facilitator/prepare-event.sh](facilitator/prepare-event.sh), which builds the training image from the `Dockerfile` and prepares the data, and then [facilitator/install-node-collectors.sh](facilitator/install-node-collectors.sh), which sets the PCS monitoring stack's EFA collector to 5 seconds and adds a Lustre client counter on each GPU node.
+
+## Earlier material in this example
+
 The ordinary dense LLM redesign is documented in [README-LLM.md](README-LLM.md). That development path has separate entry points and qualification results. The material below records the earlier workload.
 
 AIM347 is a workshop of 120 minutes at level 300 for Keita Watanabe and Aravind Neelakantan. This example implements one FSDP training job with cumulative network, host and storage configuration changes. AWS PCS with Slurm allocates two assigned nodes exclusively and uses their full GPU count. The dashboard exposes training throughput, MFU against both dense denominators, and useful tokens per allocated GPU-hour. The serving exercise adds weights-only MBU against a measured DRAM read-bandwidth ceiling.
