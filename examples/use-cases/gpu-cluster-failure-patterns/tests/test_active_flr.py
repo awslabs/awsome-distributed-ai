@@ -500,6 +500,38 @@ class ProgressAndKernel(fixture.Base):
             self.assertEqual(before, (saved.read_bytes(), saved.stat().st_mtime_ns))
             self.assertIn(payload, Path(second.saved_path).read_text())
 
+    def kernel_call_with_job_record(self, text):
+        """Start an active round whose `scontrol show job` prints `text`; collect kernel."""
+        real = self.executor.run_slurm
+
+        def run_slurm(argv, timeout=None):
+            if Path(argv[0]).name == 'scontrol' and argv[1:3] == ['show', 'job']:
+                self.executor.slurm_calls.append(list(argv))
+                return session.Completed(0, text, '')
+            return real(argv, timeout)
+        self.executor.run_slurm = run_slurm
+        handler = self.make()
+        state = handler.start('gpu', active=True).state
+        self.assertIn(['scontrol', 'show', 'job', '-o', '226'],
+                      [[Path(c[0]).name, *c[1:]] for c in self.executor.slurm_calls])
+        handler.collect('kernel')
+        return state, self.executor.maintenance_calls[-1]
+
+    def test_kernel_window_starts_at_the_rounds_job_start(self):
+        """Spain batch 3: Incident 3's teardown lines appeared in Incident 5's window."""
+        state, call = self.kernel_call_with_job_record(
+            'JobId=226 JobName=aim344-device UserId=aim344-t1(1001) JobState=RUNNING '
+            'StartTime=2026-11-03T06:43:33 EndTime=Unknown\n')
+        # 06:43:33 UTC on 3 November 2026.
+        self.assertEqual(['kernel-evidence', '--boot', state.boot_id, '--since', '1793688213'],
+                         call)
+
+    def test_a_job_record_with_two_start_times_gives_no_window_start(self):
+        state, call = self.kernel_call_with_job_record(
+            'JobId=226 JobName=x StartTime=2026-11-03T06:00:00 JobState=RUNNING '
+            'StartTime=2026-11-03T06:43:33\n')
+        self.assertEqual(['kernel-evidence', '--boot', state.boot_id], call)
+
     def test_kernel_after_reboot_still_selects_fault_boot(self):
         handler = self.make()
         before = handler.start('gpu', active=True).state.boot_id
@@ -684,8 +716,19 @@ class KernelBoundary(unittest.TestCase):
         boot = 'aaaaaaaa-0000-0000-0000-000000000001'
         self.assertEqual('kernel-evidence', maintenance.parse(['kernel-evidence', '--boot', boot])[0])
         self.assertIsNone(session.parse_participant_request('collect kernel').error)
+        self.assertEqual({'boot': boot, 'since': None},
+                         maintenance.parse(['kernel-evidence', '--boot', boot])[1])
+        self.assertEqual({'boot': boot, 'since': 1793688213},
+                         maintenance.parse(['kernel-evidence', '--boot', boot,
+                                            '--since', '1793688213'])[1])
         for args in (['kernel-evidence'], ['kernel-evidence', '--boot', '-1'],
-                     ['kernel-evidence', '--boot', boot, '--file', '/etc/shadow']):
+                     ['kernel-evidence', '--boot', boot, '--file', '/etc/shadow'],
+                     ['kernel-evidence', '--boot', boot, '--since'],
+                     ['kernel-evidence', '--boot', boot, '--since', '0'],
+                     ['kernel-evidence', '--boot', boot, '--since', '-5'],
+                     ['kernel-evidence', '--boot', boot, '--since', '1e9'],
+                     ['kernel-evidence', '--boot', boot, '--until', '1793688213'],
+                     ['kernel-evidence', '--since', '1793688213', '--boot', boot]):
             with self.assertRaises(maintenance.Refusal):
                 maintenance.parse(args)
         real_popen = subprocess.Popen
@@ -713,6 +756,18 @@ class KernelBoundary(unittest.TestCase):
                 '--output=short-iso-precise', '--lines=512',
                 '--grep=NVRM|Xid|nvidia|efa|PCI|AER|reset|blocked for|lost|Missed',
             ], commands[0])
+            self.assertEqual('last 512 matching kernel records; <=524288 bytes; <=8 seconds',
+                             record['scope'])
+        commands.clear()
+        output = io.StringIO()
+        with mock.patch.object(maintenance.subprocess, 'Popen', side_effect=popen), \
+             mock.patch.object(maintenance, 'environment', return_value=os.environ.copy()), \
+             mock.patch.object(maintenance, 'instance_identity', return_value=replacement_fixture.OLD), \
+             contextlib.redirect_stdout(output):
+            maintenance.kernel_evidence({}, boot, 1793688213)
+        self.assertEqual('--since=@1793688213', commands[0][-1])
+        self.assertEqual('records since @1793688213; last 512 matching kernel records; '
+                         '<=524288 bytes; <=8 seconds', json.loads(output.getvalue())['scope'])
 
     @unittest.skipUnless(Path('/usr/bin/journalctl').is_file(), 'system journalctl unavailable')
     def test_actual_journalctl_accepts_generated_options(self):

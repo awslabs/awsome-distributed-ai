@@ -1733,6 +1733,23 @@ class DeviceSession:
         match = re.search(rf'\b{name}=(\S*)', line)
         return match.group(1) if match else ''
 
+    def _job_start(self, job_id):
+        """The job's StartTime as Slurm reports it, in seconds since the epoch, or None.
+
+        safe_environment sets TZ=UTC and SLURM_TIME_FORMAT=standard, so the value
+        reads YYYY-MM-DDTHH:MM:SS in UTC. A response with no StartTime field, or
+        with more than one (a job name can contain the text), gives None.
+        """
+        result = self._scontrol('show', 'job', '-o', str(job_id))
+        if result.returncode != 0:
+            return None
+        found = re.findall(r'(?<!\S)StartTime=(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?!\S)',
+                           result.stdout or '')
+        if len(found) != 1:
+            return None
+        return int(datetime.datetime.strptime(found[0], '%Y-%m-%dT%H:%M:%S')
+                   .replace(tzinfo=datetime.timezone.utc).timestamp())
+
     def _jobs_on_target(self):
         result = self.executor.run_slurm([
             str(Path(self.slurm_bin) / 'squeue'), '-h',
@@ -3263,7 +3280,8 @@ class DeviceSession:
                           incident=incident)
             if active:
                 state.active_fault = {'mutation': operation, 'bdf': inventory[kind + '_bdf'],
-                                      'boot_id': boot_id, 'events': [], 'outcome': 'not-issued'}
+                                      'boot_id': boot_id, 'events': [], 'outcome': 'not-issued',
+                                      'job_started_at': self._job_start(own['id']) if own else None}
             self.store.write(state)
 
             if 'DRAIN' not in node_state:
@@ -3696,10 +3714,25 @@ class DeviceSession:
                       already_started=result.already_started,
                       next_step=self.UNDER_WAY_STEP)
 
+    def _issued_count(self):
+        """How many incidents this seat has been given, or 0 when that cannot be read."""
+        try:
+            schedule = self._schedule()
+            return len(self._read_progress(schedule)['issued']) if schedule else 0
+        except Refusal:
+            return 0
+
     def _next_step(self, state):
-        ready = ('Your node is in service. Start the next incident the way your page '
-                 'shows.' if self.assignment.get('exercise_schedule')
-                 else 'Run start gpu or start efa when you are ready.')
+        issued = self._issued_count() if state.phase == 'ready' else 0
+        # Once an incident is issued it stays the participant's incident until the
+        # page starts the next one. The device incident also waits in this phase
+        # until its job reports progress, so the line is the same for every kind.
+        if issued:
+            ready = f'Incident {issued} is under way. Follow your page for its next step.'
+        elif self.assignment.get('exercise_schedule'):
+            ready = 'Your node is in service. Start the next incident the way your page shows.'
+        else:
+            ready = 'Run start gpu or start efa when you are ready.'
         # An active round begins while the participant's job runs, so it records no
         # baseline of its own: running the checks then would load that job's node.
         fault_applied = (ACTIVE_ROUND_COMPARE if state.active_fault
@@ -3780,7 +3813,13 @@ class DeviceSession:
             boot = (state.active_fault or {}).get('boot_id') or state.boot_id_before_reboot or state.boot_id
             if not self.BOOT_ID.fullmatch(str(boot or '')):
                 raise Refusal('No recorded fault boot UUID; kernel window unavailable.')
-            result = self.executor.run_maintenance(['kernel-evidence', '--boot', boot], timeout=15)
+            # From the start of the round's job, when Slurm reported it, so that the
+            # kernel lines of an earlier incident's job are not part of this one.
+            argv = ['kernel-evidence', '--boot', boot]
+            since = (state.active_fault or {}).get('job_started_at')
+            if since is not None:
+                argv += ['--since', str(int(since))]
+            result = self.executor.run_maintenance(argv, timeout=15)
             text = (result.stdout or '') + (result.stderr or '')
             text = f'# bounded kernel attempt returncode={result.returncode}; not full capture\n' + text
         except (OSError, subprocess.TimeoutExpired, Refusal) as error:
@@ -5125,9 +5164,11 @@ def render(result, verb, operator=False):
                     lines.append(f'  observation: {evidence["log"]}')
                 for refusal in evidence.get('refusals') or []:
                     lines.append(f'  unmet: {refusal}')
-        # A round that never issued its operation says so, without its kind, so
-        # that the participant starts the incident again.
-        if incident and (not concealed or not_issued(state)):
+        # A recovered round that never issued its operation says so, without its
+        # kind, so that the participant starts the incident again. Before recovery
+        # the round still holds the node, and the only step is recover.
+        if incident and (not concealed or (not_issued(state)
+                                           and state.phase in REVEAL_PHASES)):
             lines.append(incident_answer(state))
         if state.phase == 'recovery-failed':
             lines.append('Your node is still out of service: recovery did not '

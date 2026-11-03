@@ -135,20 +135,25 @@ LAB_RECORDS=.lab-records
 # order. Each node gets two steps, outside the container and bounded, so that
 # the participant's prompt never waits on them for long.
 #
-# The collect step takes a file only after its writer has exited. workload.py
-# names each file <host>-pid<pid>.log, and the containers share the host's PID
-# namespace, so the step waits for /proc/<pid> to go, for at most
+# Each step handles only the files of the node it runs on: workload.py names
+# each file <host>-pid<pid>.log with the host's name, and a step on one node
+# cannot tell whether a process on another node still writes. The collect step
+# takes a file only after its writer has exited. The containers share the
+# host's PID namespace, so the step waits for /proc/<pid> to go, for at most
 # AIM344_LAB_RECORDS_WAIT_SECONDS (default 20) on the node. After a launcher
-# timeout, a process can still be exiting and appending. The step appends each
-# such file to <file>.collected, removes it, and prints every .collected file.
-# A file whose writer still runs stays for the next collection.
+# timeout, a process can still be exiting and appending. A file whose writer
+# still runs stays for the next collection.
 #
-# The acknowledge step removes a node's .collected files. It runs only after the
-# lab log has stored that node's records. A failed step or a failed append leaves
-# the files on the node, and the next torch job in the allocation collects them
+# The collect step appends each taken file, and each file an earlier collection
+# sent but did not acknowledge, to <file>.sent-<token>, where the token names
+# this collection. It prints those files and exits nonzero if any append,
+# removal or read failed. The coordinator stores a node's lines only when its
+# collect step succeeded. The acknowledge step then removes that node's files
+# of this token and no others. A failed step or a failed append leaves the
+# files on the node, and the next torch job in the allocation collects them
 # again. A record can then reach the lab log twice, but none is lost.
-LAB_RECORDS_COLLECT='cd -- "$1" 2>/dev/null || exit 0; end=$((SECONDS + $2)); for f in *.log; do [[ -f $f ]] || continue; pid=${f##*-pid}; pid=${pid%.log}; while [[ $pid =~ ^[0-9]+$ && -e /proc/$pid ]] && ((SECONDS < end)); do sleep 1; done; [[ $pid =~ ^[0-9]+$ && -e /proc/$pid ]] || { cat -- "$f" >> "$f.collected" && rm -f -- "$f"; }; done; for f in *.log.collected; do [[ -f $f ]] && cat -- "$f"; done; exit 0'
-LAB_RECORDS_ACKNOWLEDGE='cd -- "$1" 2>/dev/null || exit 0; rm -f -- *.log.collected'
+LAB_RECORDS_COLLECT='cd -- "$1" 2>/dev/null || exit 0; end=$((SECONDS + $2)); token=$3; read -r host < /proc/sys/kernel/hostname || exit 1; rc=0; for f in "$host"-pid*.log; do [[ -f $f ]] || continue; pid=${f##*-pid}; pid=${pid%.log}; while [[ $pid =~ ^[0-9]+$ && -e /proc/$pid ]] && ((SECONDS < end)); do sleep 1; done; [[ $pid =~ ^[0-9]+$ && -e /proc/$pid ]] && continue; { cat -- "$f" >> "$f.sent-$token" && rm -f -- "$f"; } || rc=1; done; for f in "$host"-pid*.log.sent-*; do [[ -f $f && $f != *.sent-"$token" ]] || continue; { cat -- "$f" >> "${f%.sent-*}.sent-$token" && rm -f -- "$f"; } || rc=1; done; for f in "$host"-pid*.log.sent-"$token"; do [[ -f $f ]] || continue; cat -- "$f" || rc=1; done; exit "$rc"'
+LAB_RECORDS_ACKNOWLEDGE='cd -- "$1" 2>/dev/null || exit 0; read -r host < /proc/sys/kernel/hostname || exit 1; rm -f -- "$host"-pid*.log.sent-"$2"'
 
 # One bounded step on one node, outside the container:
 # lab_records_step NODE NAME SCRIPT [ARGUMENT...]; the script's $1 is the directory.
@@ -159,12 +164,13 @@ lab_records_step() {
 }
 
 collect_lab_records() {
-    local node output status records=
+    local node output status records= token
     local -a stored=()
+    token=$SLURM_JOB_ID-$(date -u +%Y%m%dT%H%M%S%N)
     for node in $(scontrol show hostnames "$SLURM_JOB_NODELIST"); do
         status=0
         output=$(lab_records_step "$node" collect "$LAB_RECORDS_COLLECT" \
-            "${AIM344_LAB_RECORDS_WAIT_SECONDS:-20}") || status=$?
+            "${AIM344_LAB_RECORDS_WAIT_SECONDS:-20}" "$token") || status=$?
         if ((status == 0)); then
             stored+=("$node")
             [[ -z $output ]] || records+=$output$'\n'
@@ -179,7 +185,7 @@ collect_lab_records() {
     fi
     for node in "${stored[@]}"; do
         status=0
-        lab_records_step "$node" acknowledge "$LAB_RECORDS_ACKNOWLEDGE" || status=$?
+        lab_records_step "$node" acknowledge "$LAB_RECORDS_ACKNOWLEDGE" "$token" || status=$?
         ((status == 0)) || printf '%s collect_lab_records: acknowledge on %s exit %s; files left in %s\n' \
             "$(date -u +%FT%TZ)" "$node" "$status" "$RESULTS_DIR/$LAB_RECORDS" >> "$AIM344_LAB_LOG"
     done

@@ -21,6 +21,9 @@ import time
 import unittest
 
 LAB = Path(__file__).resolve().parents[1]
+# The collection steps take only the files of the host they run on, named as
+# workload.py names them. The fake nodes of CommonRunIds both run here.
+HOST = Path('/proc/sys/kernel/hostname').read_text().strip()
 JOB = LAB / 'job.sh'
 USER = subprocess.run(['id', '-un'], capture_output=True, text=True, check=True).stdout.strip()
 
@@ -231,14 +234,22 @@ class Launcher(unittest.TestCase):
             self.assertIn(f'| {row} | | | | | |', text)
         # The device incident's record table is in the Incident 5 section.
         incident_5 = text[text.index('\n# Incident 5\n'):text.index('\n## Card A\n')]
-        for row in ('Last progress line', 'Watchdog lines', 'Correctness error after the watchdog lines',
-                    'Kernel log', 'Check 0', 'Check 2', 'Check 3', 'Check 6'):
-            self.assertIn(f'| {row} | | |', incident_5)
+        # The rows of page 090's step 11, in its order.
+        rows = re.findall(r'^\| ([^|]+?) \| \| \|$', incident_5, re.M)
+        self.assertEqual(['Last progress line', 'Watchdog lines', 'NCCL WARN lines', 'Kernel log',
+                          'Check 0', 'Check 2', 'Check 3', 'Check 6'], rows)
         self.assertEqual(1, text.count('| Kernel log | | |'))
         # The healthy sweep's values that Incident 1 compares against.
         healthy = text[text.index('\n# Healthy values\n'):text.index('\n# Incident 1\n')]
-        for field in ('Sweep, 2 GiB line:', 'Sweep, EFA byte changes:', 'Rate:', 'Checkpoint line:'):
-            self.assertIn('\n' + field + '\n', healthy)
+        # Page 030's fields, in the order of its table of healthy values.
+        fields = [line for line in healthy.splitlines() if line.endswith(':')]
+        self.assertEqual(['Transport:', 'Ranks that finished NCCL setup:', 'Checksums:',
+                          'Checkpoint line:', 'Longest gap between progress lines:',
+                          'End of epoch 1:', 'Sweep, transport:', 'Sweep, 2 GiB line:',
+                          'Sweep, EFA byte changes:', 'Bus bandwidth at 128 MiB:',
+                          'Bus bandwidth at the smaller size:', 'Wrong elements:',
+                          'EFA devices that moved bytes:', 'Storage:', 'Warnings:',
+                          'Pre-session Check 6 record:'], fields)
         loss = text[text.index('\n# Loss table\n'):]
         for row in ('| t0 | Last progress line | |', '| Detection | t0 | t1 | |',
                     '| Rework | The last checkpoint | The stop | |', '| Incident 3 | | | |',
@@ -810,10 +821,10 @@ class CommonRunIds(unittest.TestCase):
                         '    if [[ $lab == /results/.lab-records ]]; then\n'
                         '      for n in nodeA nodeB; do mkdir -p "$TEST_DIR/nodes/$n/.lab-records"; done\n'
                         '      printf "2026-11-03T01:00:02.000Z checkpoint injection: full\\n" \\\n'
-                        '        >> "$TEST_DIR/nodes/nodeB/.lab-records/nodeB-pid999999907.log"\n'
+                        '        >> "$TEST_DIR/nodes/nodeB/.lab-records/$(cat /proc/sys/kernel/hostname)-pid999999907.log"\n'
                         '      printf "2026-11-03T01:00:01.000Z DataLoader lifecycle: {\\"rank\\": 0}\\n'
                         '2026-11-03T01:00:03.000Z DataLoader lifecycle: {\\"rank\\": 0, \\"late\\": 1}\\n" \\\n'
-                        '        >> "$TEST_DIR/nodes/nodeA/.lab-records/nodeA-pid999999905.log"\n'
+                        '        >> "$TEST_DIR/nodes/nodeA/.lab-records/$(cat /proc/sys/kernel/hostname)-pid999999905.log"\n'
                         '    else\n'
                         '      echo "checkpoint injection: full"\n'
                         '    fi\n'
@@ -904,7 +915,7 @@ class CommonRunIds(unittest.TestCase):
         lab = self.root / 'incident-3-lab.log'
         left = self.root / 'nodes' / 'nodeB' / '.lab-records'
         left.mkdir(parents=True)
-        (left / 'nodeB-pid999999903.log').write_text('2026-11-03T00:59:00.000Z DataLoader lifecycle: {"left": 1}\n')
+        (left / f'{HOST}-pid999999903.log').write_text('2026-11-03T00:59:00.000Z DataLoader lifecycle: {"left": 1}\n')
         result = self.run_common(f'AIM344_RUN_ID=incident-3-T AIM344_LAB_LOG={lab}\nrun_torch job dataloader\n')
         self.assertEqual(0, result.returncode, result.stderr)
         lines = lab.read_text().splitlines()
@@ -921,8 +932,8 @@ class CommonRunIds(unittest.TestCase):
         exiting = int(subprocess.run(['bash', '-c', 'sleep 2 > /dev/null 2>&1 & echo $!'],
                                      capture_output=True, text=True, check=True).stdout)
         self.addCleanup(running.kill)
-        (left / f'nodeB-pid{running.pid}.log').write_text('2026-11-03T00:58:00.000Z still writing\n')
-        (left / f'nodeB-pid{exiting}.log').write_text('2026-11-03T00:59:00.000Z exiting\n')
+        (left / f'{HOST}-pid{running.pid}.log').write_text('2026-11-03T00:58:00.000Z still writing\n')
+        (left / f'{HOST}-pid{exiting}.log').write_text('2026-11-03T00:59:00.000Z exiting\n')
         result = self.run_common(f'AIM344_RUN_ID=incident-3-T AIM344_LAB_LOG={lab}\nrun_torch job dataloader\n',
                                  AIM344_LAB_RECORDS_WAIT_SECONDS='10')
         self.assertEqual(0, result.returncode, result.stderr)
@@ -931,7 +942,7 @@ class CommonRunIds(unittest.TestCase):
         # running keeps its file on the node, unread and not removed.
         self.assertIn('exiting', text)
         self.assertNotIn('still writing', text)
-        self.assertEqual([left / f'nodeB-pid{running.pid}.log'], self.records('nodeB'))
+        self.assertEqual([left / f'{HOST}-pid{running.pid}.log'], self.records('nodeB'))
         running.kill()
         running.wait()
         self.run_common(f'AIM344_RUN_ID=incident-3-U AIM344_LAB_LOG={lab}\nrun_torch job dataloader\n')
@@ -949,14 +960,59 @@ class CommonRunIds(unittest.TestCase):
         # Nothing reached the lab log, so nothing was acknowledged or removed.
         self.assertNotIn('lifecycle', lab.read_text())
         self.assertNotIn(' acknowledge ', '\n'.join(self.srun_calls()))
-        self.assertEqual(['nodeA-pid999999905.log.collected'], [p.name for p in self.records('nodeA')])
-        self.assertEqual(['nodeB-pid999999907.log.collected'], [p.name for p in self.records('nodeB')])
+        for node, pid in (('nodeA', 999999905), ('nodeB', 999999907)):
+            self.assertRegex(' '.join(p.name for p in self.records(node)),
+                             rf'\A{re.escape(HOST)}-pid{pid}\.log\.sent-4242-[0-9T]+\Z')
         sort.unlink()
         self.run_common(f'AIM344_RUN_ID=incident-1-U AIM344_LAB_LOG={lab}\nrun_torch job dataloader\n')
         # The next job's collection stores the kept records with its own and removes them.
         text = lab.read_text()
         self.assertEqual(2, text.count('checkpoint injection: full'))
         self.assertEqual([], self.records('nodeA') + self.records('nodeB'))
+
+    def test_a_failed_read_on_the_node_stores_and_removes_nothing(self):
+        """Codex batch-3 finding 1: a read that failed inside the step was acknowledged."""
+        lab = self.root / 'incident-1-lab.log'
+        cat = self.root / 'cat'
+        cat.write_text('#!/bin/bash\n'
+                       'for a in "$@"; do [[ $a == *.sent-* ]] && { echo "cat: $a: Input/output error" >&2; exit 1; }; done\n'
+                       'exec /bin/cat "$@"\n')
+        cat.chmod(0o755)
+        result = self.run_common(f'AIM344_RUN_ID=incident-1-T AIM344_LAB_LOG={lab}\nrun_torch job dataloader\n')
+        self.assertEqual(0, result.returncode, result.stderr)
+        text = lab.read_text()
+        self.assertNotIn('lifecycle', text)
+        self.assertNotIn('injection', text)
+        for node in ('nodeA', 'nodeB'):
+            self.assertRegex(text, rf'collect_lab_records: collect on {node} exit 1; files left in ')
+            self.assertEqual(1, len(self.records(node)), self.records(node))
+        self.assertNotIn(' acknowledge ', '\n'.join(self.srun_calls()))
+        cat.unlink()
+        self.run_common(f'AIM344_RUN_ID=incident-1-U AIM344_LAB_LOG={lab}\nrun_torch job dataloader\n')
+        # The next collection sends the kept files with its own, once each.
+        text = lab.read_text()
+        self.assertEqual(2, text.count('checkpoint injection: full'))
+        self.assertEqual(2, text.count('DataLoader lifecycle: {"rank": 0}\n'))
+        self.assertEqual([], self.records('nodeA') + self.records('nodeB'))
+
+    def test_each_node_takes_only_its_own_hosts_files(self):
+        """Codex batch-3 finding 2: on shared storage a node took another host's live file."""
+        lab = self.root / 'incident-1-lab.log'
+        shared = self.root / 'nodes' / 'nodeB' / '.lab-records'
+        shared.mkdir(parents=True)
+        # A writer on another host: its PID means nothing on this one.
+        other = shared / 'other-host-pid999999911.log'
+        other.write_text('2026-11-03T00:59:00.000Z still writing elsewhere\n')
+        sent = shared / 'other-host-pid999999912.log.sent-4242-20261103T000000000000000'
+        sent.write_text('2026-11-03T00:58:00.000Z sent by the other host\n')
+        result = self.run_common(f'AIM344_RUN_ID=incident-1-T AIM344_LAB_LOG={lab}\nrun_torch job dataloader\n')
+        self.assertEqual(0, result.returncode, result.stderr)
+        text = lab.read_text()
+        self.assertIn('checkpoint injection: full', text)
+        self.assertNotIn('elsewhere', text)
+        self.assertNotIn('other host', text)
+        self.assertEqual([other, sent], self.records('nodeB'))
+        self.assertEqual('2026-11-03T00:59:00.000Z still writing elsewhere\n', other.read_text())
 
     def test_a_failed_collection_keeps_the_files_and_the_jobs_status(self):
         lab = self.root / 'incident-1-lab.log'
@@ -1115,9 +1171,8 @@ class CommonRunIds(unittest.TestCase):
         # inventory and counters), the sweep, the torch job, the collection of its
         # lab records on each node, Check 5's preparation and the suite's own step.
         self.assertGreaterEqual(len(calls), 14, calls)
-        collections = [line for line in calls
-                       if (line.endswith('/.lab-records') and '--lab-dir=' not in line)
-                       or line.endswith(' 20')]
+        # Each collection step's last argument is the collection's token.
+        collections = [line for line in calls if re.fullmatch(r'/dev/null 4242-[0-9T]+', line)]
         self.assertEqual(4, len(collections), calls)
         self.assertIn('/dev/null all_reduce_perf', calls)
         self.assertEqual([], [line for line in calls if not line.startswith('/dev/null ')], calls)

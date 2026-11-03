@@ -16,6 +16,9 @@ coordinator's maintenance key does not grant a root shell on the target.
 Actions:
   inspect                    existing aim344-device-fault inspect (device inventory)
   boot-id                    read /proc/sys/kernel/random/boot_id
+  kernel-evidence --boot B [--since S]
+                             bounded kernel lines of boot B, from S (seconds
+                             since the epoch) when given
   gpu-remove --confirm T     existing helper, unchanged conditions
   efa-unbind [--job N] --confirm T
   efa-rebind --confirm T
@@ -113,11 +116,14 @@ def parse(argv):
             raise Refusal('Unsupported characters in the maintenance request.')
     action, rest = argv[0], argv[1:]
     if action == 'kernel-evidence':
-        if (len(rest) != 2 or rest[0] != '--boot'
+        if (len(rest) not in (2, 4) or rest[0] != '--boot'
                 or not re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', rest[1])
-                or rest[1] == '00000000-0000-0000-0000-000000000000'):
-            raise Refusal('kernel-evidence requires the recorded boot UUID only.')
-        return action, {'boot': rest[1]}
+                or rest[1] == '00000000-0000-0000-0000-000000000000'
+                or (len(rest) == 4 and (rest[2] != '--since'
+                                        or not re.fullmatch(r'[1-9][0-9]{0,11}', rest[3])))):
+            raise Refusal('kernel-evidence requires the recorded boot UUID and, optionally, '
+                          '--since with seconds since the epoch.')
+        return action, {'boot': rest[1], 'since': int(rest[3]) if len(rest) == 4 else None}
     if action in ('gpu-flr', 'efa-flr'):
         names = ('--job', '--participant', '--operation', '--boot', '--confirm')
         if len(rest) != 10 or tuple(rest[::2]) != names:
@@ -246,8 +252,12 @@ def collect(check, config):
                timeout=int(config.get('check_timeout', 900)) + 120)
 
 
-def kernel_evidence(config, boot):
-    """Bounded useful kernel window, never a complete journal claim."""
+def kernel_evidence(config, boot, since=None):
+    """Bounded useful kernel window, never a complete journal claim.
+
+    `since`, in seconds since the epoch, starts the window there instead of at
+    the boot's first record: the coordinator passes the start of the round's job.
+    """
     import hashlib
     import selectors
     # A null ID means current boot to journalctl, not the recorded boot.
@@ -257,6 +267,8 @@ def kernel_evidence(config, boot):
     command = ['/usr/bin/journalctl', '-k', '--boot=' + boot.replace('-', ''),
                '--no-pager', '--output=short-iso-precise', '--lines=512',
                '--grep=NVRM|Xid|nvidia|efa|PCI|AER|reset|blocked for|lost|Missed']
+    if since is not None:
+        command.append(f'--since=@{since}')
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                stdin=subprocess.DEVNULL, env=environment(config))
     assert process.stdout is not None
@@ -287,7 +299,8 @@ def kernel_evidence(config, boot):
     print(json.dumps({'action': 'kernel-evidence', 'boot_id': boot,
                       'instance_id': instance_identity(), 'returncode': process.returncode,
                       'bounded': bounded, 'complete_journal': False,
-                      'scope': 'last 512 matching kernel records; <=524288 bytes; <=8 seconds',
+                      'scope': ('' if since is None else f'records since @{since}; ')
+                               + 'last 512 matching kernel records; <=524288 bytes; <=8 seconds',
                       'sha256': hashlib.sha256(payload).hexdigest(),
                       'bytes': len(payload), 'kernel_text': payload.decode('utf-8', 'replace')},
                      sort_keys=True))
@@ -1306,7 +1319,7 @@ def main():
         config = load_config()
         action, options = parse(argv)
         if action == 'kernel-evidence':
-            return kernel_evidence(config, options['boot'])
+            return kernel_evidence(config, options['boot'], options['since'])
         if action in ('gpu-flr', 'efa-flr'):
             resolve_participant(config, options['participant'])
             # Preserve full-duplex SSH and immediate markers. The coordinator

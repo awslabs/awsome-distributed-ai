@@ -608,10 +608,19 @@ class EarlierTorchRoots(unittest.TestCase):
     for the next cleanup on the node. Slurm's answer about each earlier job decides.
     """
 
-    STATES = {'456': 'JobState=RUNNING', '300': 'JobState=COMPLETED', '301': 'JobState=RUNNING',
-              '303': 'JobState=COMPLETING', '305': 'JobState=TIMEOUT', '306': 'JobState=FAILED'}
+    # squeue's answer for each earlier job, one item per line: its ID, owner and
+    # state, as asked for. $user is the account running the test.
+    STATES = {'300': ('300|$user|COMPLETED',), '301': ('301|$user|RUNNING',),
+              '303': ('303|$user|COMPLETING',), '305': ('305|$user|TIMEOUT',),
+              '306': ('306|$user|FAILED',),
+              # scontrol prints a job name that reads as a finished state; squeue
+              # reports the job's own state.
+              '307': ('307|$user|RUNNING',),
+              '308': ('308|someone-else|COMPLETED',), '309': ('310|$user|COMPLETED',),
+              '311': ('311|$user|COMPLETED', '311|$user|COMPLETED'),
+              '312': ('312|$user|COMPLETED|x',)}
 
-    def run_cleanup(self, root, data):
+    def run_cleanup(self, root, data, enroot_fails=()):
         companion = root / 'companion'
         companion.mkdir(exist_ok=True)
         for name in ('common.sh', 'pins.env', '9.cleanup.sh'):
@@ -619,17 +628,26 @@ class EarlierTorchRoots(unittest.TestCase):
                 '/tmp/enroot/data/user-$EUID', str(data)))
         binaries = root / 'bin'
         binaries.mkdir(exist_ok=True)
-        cases = ''.join(f'  {job}) printf "JobId={job} UserId=%s(%s) {state} NumNodes=2\\n" '
-                        f'"$(id -un)" "$(id -u)" ;;\n' for job, state in self.STATES.items())
         (binaries / 'scontrol').write_text(
-            '#!/bin/bash\n[[ $1 == show && $2 == job ]] || exit 1\ncase $3 in\n' + cases
+            '#!/bin/bash\n[[ $1 == show && $2 == job ]] || exit 1\ncase $3 in\n'
+            '  456) printf "JobId=456 UserId=%s(%s) JobState=RUNNING NumNodes=2\\n" '
+            '"$(id -un)" "$(id -u)" ;;\n'
+            '  307) printf "JobId=307 JobName=x JobState=COMPLETED  UserId=%s(%s) '
+            'JobState=RUNNING NumNodes=2\\n" "$(id -un)" "$(id -u)" ;;\n'
+            '  *) exit 1 ;;\nesac\n')
+        cases = ''.join(f'  {job}) printf "%s\\n"' + ''.join(f' "{line}"' for line in lines) + ' ;;\n'
+                        for job, lines in self.STATES.items())
+        (binaries / 'squeue').write_text(
+            '#!/bin/bash\n[[ $1 == -h && $2 == -t && $3 == all && $4 == -j && $6 == -o'
+            ' && $7 == "%i|%u|%T" ]] || exit 9\nuser=$(id -un)\ncase $5 in\n' + cases
             + '  302) echo "slurm_load_jobs error: Invalid job id specified" >&2; exit 1 ;;\n'
             + '  *) echo "slurm_load_jobs error: Unable to contact slurm controller" >&2; exit 1 ;;\n'
             + 'esac\n')
         # One node's step: the script after bash.
         (binaries / 'srun').write_text('#!/bin/bash\nwhile [[ $1 != bash ]]; do shift; done\nexec "$@"\n')
+        failing = ''.join(f'[[ $3 == {name} ]] && exit 7\n' for name in enroot_fails)
         (binaries / 'enroot').write_text('#!/bin/bash\n[[ $1 == remove && $2 == -f ]] || exit 9\n'
-                                         'rmdir -- "$ENROOT_DATA_PATH/$3"\n')
+                                         + failing + 'rmdir -- "$ENROOT_DATA_PATH/$3"\n')
         for path in binaries.iterdir():
             path.chmod(0o755)
         env = dict(os.environ, PATH=f'{binaries}:{os.environ["PATH"]}', SLURM_JOB_ID='456',
@@ -647,6 +665,11 @@ class EarlierTorchRoots(unittest.TestCase):
             kept = ['pyxis_aim344_torch_301',          # still running
                     'pyxis_aim344_torch_303',          # completing: processes may remain
                     'pyxis_aim344_torch_304',          # Slurm gave no answer
+                    'pyxis_aim344_torch_307',          # running; its name reads as finished
+                    'pyxis_aim344_torch_308',          # another account's job
+                    'pyxis_aim344_torch_309',          # the answer is for another job
+                    'pyxis_aim344_torch_311',          # more than one line
+                    'pyxis_aim344_torch_312',          # more fields than asked for
                     'pyxis_aim344_300', 'pyxis_aim344_check5_300',  # not torch roots
                     'pyxis_301_aim344_torch_300']      # names two different jobs
             for name in removed + kept + ['pyxis_aim344_torch_456']:
@@ -656,6 +679,24 @@ class EarlierTorchRoots(unittest.TestCase):
             self.assertEqual(sorted(kept), sorted(p.name for p in data.iterdir()))
             self.assertIn('current-job container removed: pyxis_aim344_torch_456', result.stdout)
             for name in removed:
+                self.assertIn(f'earlier-job container removed: {name}\n', result.stdout)
+
+    def test_a_root_that_was_not_removed_fails_the_cleanup_after_the_rest(self):
+        """Codex batch-3 finding 4: enroot's failure was discarded and cleanup returned 0."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data = root / 'data'
+            data.mkdir(mode=0o700)
+            for name in ('pyxis_aim344_torch_300', 'pyxis_aim344_torch_305',
+                         'pyxis_aim344_torch_306', 'pyxis_aim344_torch_456'):
+                (data / name).mkdir()
+            result = self.run_cleanup(root, data, enroot_fails=('pyxis_aim344_torch_305',))
+            self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertIn('Cleanup failed: retained earlier root pyxis_aim344_torch_305\n',
+                          result.stderr)
+            # The roots after it were still handled.
+            self.assertEqual(['pyxis_aim344_torch_305'], [p.name for p in data.iterdir()])
+            for name in ('pyxis_aim344_torch_300', 'pyxis_aim344_torch_306'):
                 self.assertIn(f'earlier-job container removed: {name}\n', result.stdout)
 
     def test_an_untrusted_earlier_root_is_skipped_without_failing_the_cleanup(self):

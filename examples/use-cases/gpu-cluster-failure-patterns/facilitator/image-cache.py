@@ -95,16 +95,25 @@ def main(argv=None):
     parser.add_argument('images', nargs='*', default=list(IMAGES),
                         help='image files (default: %(default)s)')
     args = parser.parse_args(argv)
-    for path in args.images:
+    try:
+        return run(args.action, args.images)
+    except OSError as error:
+        # A refused caller or an unreadable image: one line for the operator.
+        print(f'image-cache: {error}', file=sys.stderr)
+        return 1
+
+
+def run(action, images):
+    for path in images:
         require_trusted_caller(path, os.stat(path))
-    if args.action == 'read':
-        for path in args.images:
+    if action == 'read':
+        for path in images:
             start = time.monotonic()
             total = read_image(path)
             seconds = time.monotonic() - start
             print(f'image-cache: {path} read {total} B in {seconds:.1f} s', flush=True)
     complete = True
-    for path in args.images:
+    for path in images:
         pages, resident = resident_pages(path)
         complete = complete and resident == pages
         # Rounded down, so that an image short of even one page never shows 100.0 %.

@@ -66,27 +66,39 @@ done
 # leaves the allocation, or the job ends in the fault), so a later cleanup on the
 # node removes their roots once Slurm reports that job finished, when its
 # processes are gone. A root whose job is still active, or about which Slurm
-# gives no answer, stays for a later cleanup.
+# gives no answer, stays for a later cleanup. squeue prints the three fields
+# asked for and nothing else, so text in a job name cannot pass for its state.
+# A root that could be removed and was not makes the cleanup fail, after the
+# other roots have been handled.
+user=$(id -un)
+failed=0
 for root in "$data"/pyxis_aim344_torch_* "$data"/pyxis_*_aim344_torch_*; do
     [[ -e $root || -L $root ]] || continue
     name=${root##*/}
     id=${name##*_}
     [[ $id =~ ^[1-9][0-9]*$ && $id != "$SLURM_JOB_ID" ]] || continue
     [[ $name == "pyxis_aim344_torch_$id" || $name == "pyxis_${id}_aim344_torch_$id" ]] || continue
-    if state=$(scontrol show job "$id" -o 2>&1); then
-        [[ " $state " =~ \ JobState=(COMPLETED|CANCELLED|FAILED|TIMEOUT|NODE_FAIL|OUT_OF_MEMORY|PREEMPTED|BOOT_FAIL|DEADLINE)\  ]] || continue
+    if answer=$(squeue -h -t all -j "$id" -o "%i|%u|%T" 2>&1); then
+        IFS="|" read -r job owner state rest <<< "$answer"
+        [[ $answer != *$'"'"'\n'"'"'* && $job == "$id" && $owner == "$user" && -z $rest ]] || continue
+        case $state in
+            COMPLETED|CANCELLED|FAILED|TIMEOUT|NODE_FAIL|OUT_OF_MEMORY|PREEMPTED|BOOT_FAIL|DEADLINE) ;;
+            *) continue ;;
+        esac
     else
         # Slurm forgets a finished job after MinJobAge.
-        [[ $state == *"Invalid job id specified"* ]] || continue
+        [[ $answer == *"Invalid job id specified"* ]] || continue
     fi
     [[ -d $root && ! -L $root && $(stat -c %u -- "$root") == "$EUID" ]] || {
         echo "Cleanup skipped: untrusted earlier root $name" >&2; continue;
     }
     enroot remove -f "$name" || true
     if [[ -e $root || -L $root ]]; then
-        echo "Cleanup kept: earlier root $name" >&2
+        echo "Cleanup failed: retained earlier root $name" >&2
+        failed=1
     else
         printf "earlier-job container removed: %s\n" "$name"
     fi
 done
+exit "$failed"
 '

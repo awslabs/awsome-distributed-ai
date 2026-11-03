@@ -119,11 +119,11 @@ Checksums:
 
 Checkpoint line:
 
-Rate:
-
 Longest gap between progress lines:
 
 End of epoch 1:
+
+Sweep, transport:
 
 Sweep, 2 GiB line:
 
@@ -177,7 +177,7 @@ Predictions:
 |---|---|---|
 | Last progress line | | |
 | Watchdog lines | | |
-| Correctness error after the watchdog lines | | |
+| NCCL WARN lines | | |
 | Kernel log | | |
 | Check 0 | | |
 | Check 2 | | |

@@ -181,7 +181,10 @@ class ImageCache(unittest.TestCase):
         for action in ('check', 'read'):
             result = self.run_helper(action, path)
             self.assertNotEqual(0, result.returncode, result.stdout)
-            self.assertIn('run image-cache.py as root', result.stderr)
+            # One line for the operator, not a traceback.
+            self.assertEqual([f'image-cache: {path}: run image-cache.py as root; for a file '
+                              'this account cannot write, mincore(2) reports every page '
+                              'as resident'], result.stderr.splitlines())
             self.assertNotIn(' resident ', result.stdout)
             self.assertNotIn(' read ', result.stdout)
 
@@ -265,8 +268,11 @@ class ImageCache(unittest.TestCase):
         empty.write_bytes(b'')
         for path in (str(empty), str(Path(self.directory.name) / 'absent.sqsh')):
             result = self.run_helper('check', path)
-            self.assertNotEqual(0, result.returncode)
-            self.assertIn('Error', result.stderr)
+            self.assertEqual(1, result.returncode)
+            lines = result.stderr.splitlines()
+            self.assertEqual(1, len(lines), result.stderr)
+            self.assertTrue(lines[0].startswith('image-cache: '), lines[0])
+            self.assertIn(path, lines[0])
 
     def test_the_defaults_are_the_two_lab_images(self):
         module = load_image_cache()

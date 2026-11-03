@@ -2,6 +2,33 @@
 
 This distribution summary preserves the scope of the measured results without deployment identifiers, private artifact locations or incident-derived teaching material. Original detailed records, failed attempts and exact source/deployment mappings remain unchanged with the workshop owner. The latest section describes an installed, fixed development candidate; historical sections retain their original scope. This documentation update performs no new hardware run.
 
+## November 3, 2026: status before the device fault, the kernel window, collection and cleanup failures
+
+The end-to-end run of the [previous section's change](#november-3-2026-the-review-of-the-replica-check-protocol-and-page-cache-changes) on the g7.48xlarge pair, and two independent reviews of that change, found the problems this change fixes. No hardware run has used it yet. The tests run on a CPU-only host.
+
+What changed:
+
+- Once an incident is issued, `status` reads `Next: Incident <n> is under way. Follow your page for its next step.` until the next one is issued. In the g7.48xlarge run, `status` during the device incident's first seconds, before the lab acted, told the participant to start the next incident. The line is the same for every kind of incident.
+- A device round whose preparation failed shows no answer line until it is recovered. Before, `status` told the participant to start the incident again while the round still held the node.
+- `image-cache.py` prints a refusal or an unreadable image as one line on stderr and exits 1, without a traceback.
+- `collect kernel` in the device incident starts its window at the start of the round's job, as Slurm reports it when the round begins. In the g7.48xlarge run the window also held the DataLoader incident's teardown lines, logged four to six minutes before the reset. When Slurm gives no single start time, the window starts at the boot, as before.
+- Each lab-record step handles only the files of the node it runs on. The collect step exits nonzero when any append, removal or read fails, and the coordinator then stores and removes nothing of that node. The acknowledge step removes only the files that this collection sent.
+- `9.cleanup.sh` asks `squeue` for an earlier job's ID, owner and state, and removes its torch root only when all three match and the state is a finished one. Before, a job name could contain text that read as a finished state. A finished job's root that `enroot remove` leaves in place makes the cleanup fail, after the other roots are handled.
+- The notes file has a `Sweep, transport:` field, has no `Rate:` field, and lists `NCCL WARN lines` in place of the correctness-error row of Incident 5, as the pages ask.
+
+What the tests cover:
+
+- `tests/test_quiz_controls.py`: `status` while a job incident and the device incident are under way, the same apart from their numbers, and a refused drain that shows no answer line before or after the refused recovery.
+- `tests/test_preparation_and_protocol.py`: the one-line refusal, and one line for a missing or empty image.
+- `tests/test_active_flr.py`: the window start passed to the maintenance route, a job record with two start times, and the route's `--since` grammar and its journal option.
+- `tests/test_job_launcher.py`: a failed read inside the collect step, another host's files in the same directory, and the notes file's fields in the pages' order.
+- `tests/test_replacement_verification.py`: earlier roots kept for a running, foreign, mismatched, multi-line or extra-field answer, and a failed removal.
+
+Still to measure on hardware:
+
+- `status` during the device incident before the lab acts, and `collect kernel` with the window starting at the job's start, on the g7.48xlarge pair.
+- `squeue -h -t all -j <id> -o "%i|%u|%T"` for an earlier finished job, and for one Slurm has forgotten, in the cleanup on each node.
+
 ## November 3, 2026: the review of the replica check, protocol and page-cache changes
 
 Two independent reviews of the [previous section's change](#november-3-2026-the-replica-check-after-an-aborted-collective-the-nccl-protocol-on-g748xlarge-and-both-images-in-the-page-cache) and the one before it, and the end-to-end record of the g7.48xlarge pair, found the problems this change fixes. No hardware run has used it yet. The tests run on a CPU-only host.

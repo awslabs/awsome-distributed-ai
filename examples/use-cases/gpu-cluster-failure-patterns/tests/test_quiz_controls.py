@@ -471,10 +471,14 @@ class JobIncidents(QuizBase):
         self.assertEqual(2, self.make().next().incident)
 
     def test_status_counts_incidents_without_naming_them(self):
+        self.assertIn('Next: Your node is in service. Start the next incident the way your '
+                      'page shows.', session.render(self.make().status(), 'status'))
         self.advance_to(2)
         rendered = session.render(self.make().status(), 'status')
         self.assertIn('Incidents issued: 2 of 4', rendered)
-        self.assertIn('Start the next incident the way your page shows.', rendered)
+        self.assertIn('Next: Incident 2 is under way. Follow your page for its next step.',
+                      rendered)
+        self.assertNotIn('Start the next incident', rendered)
         for name in ('storage', 'dataloader', 'start gpu'):
             self.assertNotIn(name, rendered)
 
@@ -672,6 +676,60 @@ class DeviceIncident(QuizBase):
         calls = len(self.active_calls)
         self.assertEqual(2, self.make().next().incident)
         self.assertEqual(calls, len(self.active_calls))
+
+    def test_before_its_job_reports_progress_status_says_it_is_under_way(self):
+        """Spain batch 3: 'Start the next incident' printed while the job ran."""
+        self.advance_to(3)
+        job = session.render(self.make().status(), 'status')
+        self.assertEqual(4, self.make().next().incident)
+        self.executor.jobs = ['226|aim344-t1|aim344-device|RUNNING']
+        device = session.render(self.make().status(), 'status')
+        self.assertIn('Next: Incident 4 is under way. Follow your page for its next step.',
+                      device)
+        self.assertNotIn('Start the next incident', device)
+        self.assert_no_kind(device)
+        # The same lines as a job incident's status, apart from the numbers.
+        self.assertEqual(re.sub(r'\d+', 'N', job), re.sub(r'\d+', 'N', device))
+        self.assertEqual([], self.node_calls())
+
+    def test_a_failed_preparation_shows_no_answer_before_recovery(self):
+        """Batch-3 review finding 1: a refused drain leaves the round preparing."""
+        self.set_schedule(session.validate_schedule([{'exercise': 'efa-reset'},
+                                                     {'exercise': 'storage'}]))
+        self.make().next()
+        self.running_job_with_progress()
+        real = self.executor.run_slurm
+
+        def refuse_drain(argv, timeout=None):
+            if argv[1:2] == ['update'] and 'State=DRAIN' in argv:
+                self.executor.slurm_calls.append(list(argv))
+                return session.Completed(1, '', 'drain refused\n')
+            return real(argv, timeout)
+        self.executor.run_slurm = refuse_drain
+        with self.assertRaises(session.Refusal):
+            self.make().next()
+        state = self.make().store.read()
+        self.assertEqual(('preparing', 'not-issued'),
+                         (state.phase, state.active_fault['outcome']))
+        before = session.render(self.make().status(), 'status')
+        self.assertNotIn('Answer for incident', before)
+        self.assertNotIn('Start it again', before)
+        self.assertIn('Next: Preparation did not finish; run recover to restore your node.',
+                      before)
+        self.assert_no_kind(before)
+        # This round changed nothing on the node, so recovery refuses it and the
+        # round stays unrevealed. The answer after a recovered not-issued round is
+        # test_a_round_that_never_issued_its_operation_says_so_and_starts_again.
+        self.executor.run_slurm = real
+        self.executor.jobs = []
+        with self.assertRaises(session.Refusal):
+            self.make().recover()
+        phase = self.make().store.read().phase
+        self.assertNotIn(phase, session.REVEAL_PHASES)
+        after = session.render(self.make().status(), 'status')
+        self.assertNotIn('Answer for incident', after)
+        self.assertNotIn('Start it again', after)
+        self.assert_no_kind(after)
 
     def test_a_refused_start_is_concealed_and_kept_for_the_operator(self):
         self.to_device_incident()
