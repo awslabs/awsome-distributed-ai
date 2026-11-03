@@ -9,13 +9,15 @@ This change joins the workload modes of the [workload section below](#workload-m
 What changed:
 
 - `job.sh` runs the `dataloader` incident as `workload.py dataloader --start-method fork --epochs 2 --stack-dump-seconds=60 --mark-lab-lines` with `dataset_cache` set to `rank-thread`, ended by the launcher 120 seconds after `srun` (`AIM344_JOB_LIMIT_SECONDS`, read by `run_torch`). `rerun` passes `--dataset-cache`, `--reinit-in-worker` and `--dataloader-timeout` to it, and `resume` runs it without the setting.
-- `job.sh` runs the `silent-corruption` incident as the training stand-in for 20 seconds with the seat's flip. `rerun` repeats the flip only when `corrupt_recurring` is true, and `resume` runs the stand-in from the writer's last checkpoint without it, until 20 steps after its first periodic save past that step (`--end-after-save`). `resume` of both exercises ends with the container removal, as for the other exercises.
+- `job.sh` runs the `silent-corruption` incident as the training stand-in for 20 seconds with the seat's flip. `rerun` repeats the flip only when `corrupt_recurring` is true, and `resume` runs the stand-in from the writer's last checkpoint without it, until 20 steps after its first periodic save past that step (`--end-after-save`). `resume` of both exercises ends with the container removal, as `resume` of the storage and slow-job exercises does.
 - The two exercises' settings reach the job in `AIM344_INCIDENT_SETTINGS`. `job.sh` checks every name and value before it starts a container, and it clears a variable of that name inherited from the shell.
 - Every run of the training stand-in carries `--replica-check`, and the replica check runs inside the step loop that also holds the checkpoint writer.
 - The DataLoader job's `DataLoader lifecycle:` lines and its `After first collective:` line carry the lab-line marker under `--mark-lab-lines`, so `lab-lines.py` moves them to the lab log. Dataloader mode therefore accepts `--mark-lab-lines` again; it still refuses `--writer-rank`, `--inject`, `--resume` and `--checkpoint-every`.
 - The notes template has five incident sections, a block for the three answers of each incident's case and of the cost page's case, Cards A and B under Incident 5, and loss-table rows for Incidents 3 and 4.
 - Recovery of an EFA round still requires Checks `2` and `6` to pass. A Check 6 WARN whose only warnings are the cumulative `rx_drops` and `retrans_timeout_events` totals, with the check's loopback PASS line, is now recorded as MONITOR and returns the node to service. Every other WARN still refuses recovery. For that one warning this replaces the rule in the sections below that any WARN refuses recovery.
 - The schedule examples in the installer and the README list the five exercises in the pages' order: slow job, storage, DataLoader, silent corruption, device.
+
+The counter rule rests on Check 6 records from the two g7.48xlarge nodes in Europe (Spain), taken as root with the pinned suite on November 2 and 3, 2026. Just after launch, Check 6 passed on both nodes and read `rx_drops` and `retrans_timeout_events` as 0. After one two-node verification job, the only workload between the two reads, `retrans_timeout_events` read 1 on three of the four EFA devices and `rx_drops` stayed 0. One node was then rebooted through Slurm, and PCS kept the instance. Before the reboot, and again after it with no job in between, that node's two devices each read 1, and Check 6 printed `[WARN] 6-efa-loopback: EFA retransmission timeouts detected (2)` followed by `[PASS] 6-efa-loopback: EFA loopback OK: 2 domain(s) tested`. The reboot did not restart the counters. Under the earlier rule, an EFA round on either node could not have recovered while those counts stayed above 0. These were suite runs, not controller rounds.
 
 What the tests cover:
 
@@ -29,7 +31,7 @@ Still to measure on hardware:
 - The stand-in's step rate with the replica check on g7.48xlarge, where each step also builds two 2048 × 2048 inputs on the CPU, and its effect on the storage incident's timing and on the length of each resumed job.
 - Agreement of the 16 checksums in the healthy run, and the silent-corruption incident, its `rerun` and its `resume` end to end.
 - The DataLoader incident, its three fixes and its `resume` end to end, with the stack files on both nodes.
-- A Check 6 capture after an EFA round on g7.48xlarge, and the MONITOR record and RESUME it leads to.
+- A Check 6 capture after an EFA round on g7.48xlarge, including whether the round's reset changes the two counters, and the MONITOR record and RESUME it leads to.
 
 ## November 2, 2026: the participant launcher and the cause-hidden job incidents
 
