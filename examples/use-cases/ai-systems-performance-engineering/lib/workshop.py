@@ -21,6 +21,9 @@ import time
 import urllib.parse
 import urllib.request
 
+import charts
+from llm_metrics import paired_training_report
+
 LAB = Path(__file__).resolve().parents[1]
 STATE = Path.home() / '.aim347'
 
@@ -73,6 +76,7 @@ SUBCOMMANDS = {
 MAIN_PATH = ('baseline', 'efa', 'sdpa')
 PROGRESSION_ORDER = ('baseline', 'probe-socket-eager', 'sdpa-socket', 'efa', 'probe-efa-eager',
                      'sdpa', 'ckpt-sync', 'ckpt-process', 'interrupt')
+PROFILE_ORDER = ('profile-socket-eager', 'profile-efa-eager', 'profile-efa-sdpa')
 
 
 class UsageError(ValueError):
@@ -772,6 +776,7 @@ def result_lines(stage, stage_dir, run, results, world):
             efa_rows = (read_rows(Path(results) / 'efa' / 'train' / 'rank-0-updates.jsonl')
                         if stage['name'] == 'sdpa' else None)
             lines = timed_block(stage, stage_dir, summary, read_ceilings(results), world, efa_rows)
+            lines += stage_chart_lines(stage, results, world)
     for check in run.get('checks', []):
         if not check['ok']:
             lines.append(f"check failed: {check['name']}: {check['detail']}")
@@ -780,6 +785,159 @@ def result_lines(stage, stage_dir, run, results, world):
     if stage['subcommand'] == 'sdpa-socket':
         lines.append('job.env is unchanged')
     return lines
+
+
+# ---------------------------------------------------------------- charts
+# Each chart answers one question about the participant's own runs. A stage
+# without a bar prints the reason; nothing is estimated.
+
+MAIN_PATH_LABELS = {'baseline': ('baseline (socket, eager)', 'baseline'), 'efa': ('efa (efa, eager)', 'EFA'),
+                    'sdpa': ('sdpa (efa, sdpa)', 'SDPA')}
+# The full-length stage that a half-length probe is read beside, by transport and attention.
+FULL_LENGTH = {('socket', 'eager'): 'baseline', ('socket', 'sdpa'): 'sdpa-socket',
+               ('efa', 'eager'): 'efa', ('efa', 'sdpa'): 'sdpa'}
+UPDATE_COMPARED_WITH = {'sdpa-socket': 'baseline', 'efa': 'baseline', 'sdpa': 'efa'}
+SAVING_STAGES = (('ckpt-sync', 'synchronous saves'), ('ckpt-process', 'process-mode saves'))
+
+
+def chart_stage(results, name):
+    """(run, summary, None) for a stage that has a result, else (run or None, None, the reason)."""
+    run = read_json(Path(results) / name / 'run.json')
+    if not run:
+        return None, None, 'not run yet'
+    if run.get('status') != 'finished':
+        return run, None, 'still running'
+    if run.get('exit_status') == 4:
+        return run, None, 'failed, so it has no bar; run it again'
+    summary = read_json(Path(results) / name / 'train' / 'summary.json')
+    if not summary:
+        return run, None, 'no summary.json'
+    return run, summary, None
+
+
+def failed_check(run):
+    return ', a check failed' if run.get('exit_status') == 5 else ''
+
+
+def cumulative_chart_lines(results):
+    """One bar per main-path stage: 1.00x plus each later step's measured change."""
+    _, baseline, _ = chart_stage(results, 'baseline')
+    rows = []
+    for name in MAIN_PATH:
+        label, change = MAIN_PATH_LABELS[name]
+        run, summary, problem = chart_stage(results, name)
+        row = dict(label=label, change=change, total=None, note=problem)
+        if not problem:
+            row['label'] += failed_check(run)
+            if baseline is None:
+                row['note'] = 'no baseline to compare with'
+            elif name == 'baseline':
+                row['total'] = 1.0
+            else:
+                try:
+                    row['total'] = paired_training_report(baseline, summary)['speedup_ratio']
+                except ValueError as error:
+                    row['note'] = 'not compared: ' + str(error).replace('paired training mismatch: ', 'different ')
+        rows.append(row)
+    return charts.cumulative_chart('How much faster than baseline? Each bar adds one step '
+                                   '(your runs, same work on the same allocation)', rows)
+
+
+def update_time_names(stage):
+    if stage['subcommand'] == 'probe':
+        return [FULL_LENGTH[(stage['transport'], stage['attention'])], stage['name']]
+    if stage['name'] in UPDATE_COMPARED_WITH:
+        return [UPDATE_COMPARED_WITH[stage['name']], stage['name']]
+    return [stage['name']]
+
+
+def update_time_chart_lines(results, names, ceilings, world):
+    """One update of each stage: the model's arithmetic at the GEMM peak, and the rest."""
+    rows = []
+    for name in names:
+        run, summary, problem = chart_stage(results, name)
+        if problem:
+            rows.append(dict(label=name, note=problem))
+            continue
+        stage = run['plan']
+        timed = stage['updates'] - stage['warmup_updates']
+        seconds = summary['measured_seconds'] / timed
+        row = dict(label=f"{name}, {stage['sequence_length']:,} positions", text=f'{seconds:.2f} s{failed_check(run)}')
+        if ceilings:
+            arithmetic = compute_only_seconds(summary['measured_useful_tokens'] / timed, stage['sequence_length'],
+                                              ceilings['gemm_tflops_per_gpu'], world)
+            row.update(segments=[(arithmetic, charts.FILLS[0]), (seconds - arithmetic, charts.FILLS[2])],
+                       detail=f'{charts.FILLS[0]} arithmetic at your GEMM peak {arithmetic:.2f} s   '
+                              f'{charts.FILLS[2]} the rest {seconds - arithmetic:.2f} s')
+        else:
+            row.update(segments=[(seconds, charts.FILLS[2])],
+                       detail='arithmetic n/a (run bash tools/hold-and-measure.sh)')
+        rows.append(row)
+    return charts.stacked_chart("One update: the model's arithmetic at your GEMM peak, and the rest "
+                                '(mean of the timed updates)', rows, [], 's')
+
+
+def memory_chart_lines(results, names):
+    rows = []
+    for name in names:
+        run, summary, problem = chart_stage(results, name)
+        if problem:
+            rows.append(dict(label=name, value=None, note=problem))
+            continue
+        peak = peak_memory_gib(summary)
+        rows.append(dict(label=f"{name} ({run['plan']['attention']} attention)", value=peak,
+                         text=f'{peak:.2f} GiB{failed_check(run)}'))
+    return charts.bar_chart('Peak memory of the largest rank', rows)
+
+
+def goodput_chart_lines(results):
+    """Training goodput of the two saving stages beside the throughput of stage sdpa, which does not save."""
+    rows = []
+    for name, saving in SAVING_STAGES:
+        run, summary, problem = chart_stage(results, name)
+        goodput = (summary or {}).get('training_goodput')
+        if problem or not goodput:
+            rows.append(dict(label=f'{name}, {saving}', value=None, note=problem or 'no goodput in summary.json'))
+            continue
+        value = goodput['tokens_per_allocated_gpu_hour'] / 1e6
+        rows.append(dict(label=f'{name}, {saving}', value=value, text=f'{value:.2f}{failed_check(run)}'))
+    run, summary, problem = chart_stage(results, 'sdpa')
+    label = 'sdpa, no saves (throughput, reference)'
+    if problem:
+        rows.append(dict(label=label, value=None, note=problem))
+    else:
+        value = summary['training_throughput_tokens_per_second'] * 3600 / summary['allocation']['gpu_count'] / 1e6
+        rows.append(dict(label=label, value=value, text=f'{value:.2f}{failed_check(run)}'))
+    return charts.bar_chart('Training goodput, M tokens per GPU-hour (higher is better)', rows, notes=[
+        'The reference is the throughput of the timed updates of stage sdpa, a run that does not save.'])
+
+
+def stage_chart_lines(stage, results, world):
+    """The charts printed under the result block of a timed stage."""
+    if stage['kind'] != 'timed':
+        return []
+    if stage['saving'] != 'none':
+        return [''] + goodput_chart_lines(results)
+    lines = [''] + update_time_chart_lines(results, update_time_names(stage), read_ceilings(results), world)
+    if stage['name'] == 'sdpa':
+        lines += [''] + memory_chart_lines(results, ['efa', 'sdpa'])
+    if stage['name'] in MAIN_PATH:
+        lines += [''] + cumulative_chart_lines(results)
+    return lines
+
+
+def protocol_chart_lines(runs):
+    """Bus bandwidth by message size, NCCL's own choice beside Simple. runs: [(label, rows, choices)]."""
+    rows = []
+    for size in sorted(set(runs[0][1]) | set(runs[1][1])):
+        for index, (label, table, choices) in enumerate(runs):
+            name = f"{size_text(size) if index == 0 else '':>7}  {label}"
+            if size not in table:
+                rows.append(dict(label=name, value=None, note='no row in all_reduce_perf.txt'))
+                continue
+            busbw = table[size][1]
+            rows.append(dict(label=name, value=busbw, text=f"{busbw:.2f}  {', '.join(choices.get(size, ['-']))}"))
+    return charts.bar_chart('Bus bandwidth of all_reduce_perf by message size, GB/s (higher is better)', rows)
 
 
 # ---------------------------------------------------------------- allocation
@@ -1361,6 +1519,7 @@ def protocol_report(out, world):
                  + '; '.join(f'{nccl_proto_text(nccl, world)} ({label})' for label, _, _, nccl in runs))
     lines.append('[aim347] NCCL logs, with the algorithm and protocol of every collective on rank 0: '
                  + ', '.join(str(Path(out) / variant) for variant, _ in PROTOCOL_RUNS))
+    lines += [''] + protocol_chart_lines([(label, rows, choices) for label, rows, choices, _ in runs])
     wrong = [f"{label} at {', '.join(size_text(size) for size, row in sorted(rows.items()) if row[2])}"
              for label, rows, _, _ in runs if any(row[2] for row in rows.values())]
     if wrong:

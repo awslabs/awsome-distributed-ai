@@ -1,0 +1,210 @@
+{
+  "status": "completed",
+  "evidence_kind": "LLM hardware run",
+  "workload": {
+    "model_id": "HuggingFaceTB/SmolLM2-1.7B",
+    "model_revision": "effd688a12921b4cc83e3312b6feb579f70f9c71",
+    "tokenizer_revision": "effd688a12921b4cc83e3312b6feb579f70f9c71",
+    "sequence_length": 1024,
+    "global_batch_samples": 32,
+    "updates": 5,
+    "warmup_updates": 1,
+    "seed": 347,
+    "learning_rate": 1e-05,
+    "weight_decay": 0.01,
+    "adam_betas": [
+      0.9,
+      0.999
+    ],
+    "adam_epsilon": 1e-08,
+    "precision": "bfloat16_compute_float32_reduce_and_master",
+    "scheduler": "constant",
+    "data_sha256": "e15aa0d7a1fce39159494ab0010d92c8f537c12a56f78810cc64d9a019a3c520",
+    "packing": "none",
+    "initial_state": "pretrained revision",
+    "loss_weighting": "sum shifted nonpadding token losses / global update useful tokens",
+    "data_parallel_size": 16
+  },
+  "configuration": {
+    "microbatch": 1,
+    "accumulation_steps": 2,
+    "parallel_model_loading": false,
+    "resume_from_config": false,
+    "trim_padding": false,
+    "deterministic": false,
+    "causal_right_padding": false,
+    "fill_uninitialized_memory": true,
+    "workers": 2,
+    "optimizer": "stock",
+    "compile_blocks": false,
+    "compile_loss": false,
+    "compile_pointwise": false,
+    "compile_pointwise_scope": "all",
+    "compile_backend": "inductor",
+    "compile_preserve_casts": false,
+    "compile_dynamic": true,
+    "compiler_threads": "1",
+    "reshard_after_forward": true,
+    "attention": "eager",
+    "delay_gradient_sync": false,
+    "retain_between_microbatches": false,
+    "nccl_protocol": "auto",
+    "nccl_algorithm": "auto",
+    "requested_nccl_network": "Socket",
+    "requested_nccl_net_plugin": "none",
+    "requested_nccl_gin_plugin": "none",
+    "requested_fabric_provider": "efa",
+    "requested_ofi_protocol": "RDMA",
+    "forward_prefetch": false,
+    "fsdp_blocks_per_group": 1,
+    "hybrid_shard_size": 0,
+    "liger_linear_ce": false,
+    "liger_fp32_accumulation": false,
+    "defer_replica_reduction": false,
+    "activation_checkpointing": false,
+    "checkpoint_skip_every": 0,
+    "save_alternate_mlp_projections": false,
+    "checkpoint_mode": "none",
+    "drain_before_planned_interruption": false,
+    "checkpoint_writer_threads": 1,
+    "checkpoint_copy_ahead_bytes": 10000000,
+    "parallelism": "FSDP2"
+  },
+  "allocation": {
+    "label": "pcs-g7.48xlarge-2nodes-16gpu",
+    "gpu_count": 16,
+    "dp_size": 16,
+    "cpu_affinity_cores_per_rank": [
+      192,
+      192,
+      192,
+      192,
+      192,
+      192,
+      192,
+      192,
+      192,
+      192,
+      192,
+      192,
+      192,
+      192,
+      192,
+      192
+    ]
+  },
+  "profiled": false,
+  "numerical_verification": false,
+  "measurement_scope": "continuous post-warmup training",
+  "ranks": [
+    {
+      "rank": 0,
+      "local_rank": 0,
+      "peak_cuda_allocated_bytes": 10411145216,
+      "status": "completed"
+    },
+    {
+      "rank": 1,
+      "local_rank": 1,
+      "peak_cuda_allocated_bytes": 10411145216,
+      "status": "completed"
+    },
+    {
+      "rank": 2,
+      "local_rank": 2,
+      "peak_cuda_allocated_bytes": 10411145216,
+      "status": "completed"
+    },
+    {
+      "rank": 3,
+      "local_rank": 3,
+      "peak_cuda_allocated_bytes": 10411145216,
+      "status": "completed"
+    },
+    {
+      "rank": 4,
+      "local_rank": 4,
+      "peak_cuda_allocated_bytes": 10411145216,
+      "status": "completed"
+    },
+    {
+      "rank": 5,
+      "local_rank": 5,
+      "peak_cuda_allocated_bytes": 10411145216,
+      "status": "completed"
+    },
+    {
+      "rank": 6,
+      "local_rank": 6,
+      "peak_cuda_allocated_bytes": 10411145216,
+      "status": "completed"
+    },
+    {
+      "rank": 7,
+      "local_rank": 7,
+      "peak_cuda_allocated_bytes": 10411145216,
+      "status": "completed"
+    },
+    {
+      "rank": 8,
+      "local_rank": 0,
+      "peak_cuda_allocated_bytes": 10411145216,
+      "status": "completed"
+    },
+    {
+      "rank": 9,
+      "local_rank": 1,
+      "peak_cuda_allocated_bytes": 10411145216,
+      "status": "completed"
+    },
+    {
+      "rank": 10,
+      "local_rank": 2,
+      "peak_cuda_allocated_bytes": 10411145216,
+      "status": "completed"
+    },
+    {
+      "rank": 11,
+      "local_rank": 3,
+      "peak_cuda_allocated_bytes": 10411145216,
+      "status": "completed"
+    },
+    {
+      "rank": 12,
+      "local_rank": 4,
+      "peak_cuda_allocated_bytes": 10411145216,
+      "status": "completed"
+    },
+    {
+      "rank": 13,
+      "local_rank": 5,
+      "peak_cuda_allocated_bytes": 10411145216,
+      "status": "completed"
+    },
+    {
+      "rank": 14,
+      "local_rank": 6,
+      "peak_cuda_allocated_bytes": 10411145216,
+      "status": "completed"
+    },
+    {
+      "rank": 15,
+      "local_rank": 7,
+      "peak_cuda_allocated_bytes": 10411145216,
+      "status": "completed"
+    }
+  ],
+  "measured_seconds": 12.937474601902068,
+  "measured_useful_tokens": 130944,
+  "measurement_started_utc_seconds": 1793712176.4572713,
+  "measurement_finished_utc_seconds": 1793712189.3947425,
+  "training_throughput_tokens_per_second": 10121.295231818165,
+  "training_wall_seconds": 21.80470753274858,
+  "segment_seconds": 21.810258065816015,
+  "initial_progress_tokens": 0,
+  "final_progress_tokens": 163680,
+  "completed_updates": 5,
+  "torch_version": "2.9.1+cu130",
+  "transformers_version": "4.57.6",
+  "segment_source": "fresh run"
+}

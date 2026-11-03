@@ -1,0 +1,38 @@
+# nccl-tests version 2.18.3 nccl-headers=23004 nccl-library=23004
+# Collective test starting: all_reduce_perf
+# nThread 1 nGpus 1 minBytes 1048576 maxBytes 67108864 step: 2(factor) warmup iters: 5 iters: 20 agg iters: 1 validation: 1 graph: 0 unalign: 0
+#
+# Using devices
+#  Rank  0 Group  0 Pid 1005459 on gpu-g7-1 device  0 [0000:57:00] NVIDIA RTX PRO 4500 Blackwell Server Edition
+#  Rank  1 Group  0 Pid 1005460 on gpu-g7-1 device  1 [0000:59:00] NVIDIA RTX PRO 4500 Blackwell Server Edition
+#  Rank  2 Group  0 Pid 1005461 on gpu-g7-1 device  2 [0000:5b:00] NVIDIA RTX PRO 4500 Blackwell Server Edition
+#  Rank  3 Group  0 Pid 1005462 on gpu-g7-1 device  3 [0000:5d:00] NVIDIA RTX PRO 4500 Blackwell Server Edition
+#  Rank  4 Group  0 Pid 1005463 on gpu-g7-1 device  4 [0000:b4:00] NVIDIA RTX PRO 4500 Blackwell Server Edition
+#  Rank  5 Group  0 Pid 1005464 on gpu-g7-1 device  5 [0000:b6:00] NVIDIA RTX PRO 4500 Blackwell Server Edition
+#  Rank  6 Group  0 Pid 1005465 on gpu-g7-1 device  6 [0000:b8:00] NVIDIA RTX PRO 4500 Blackwell Server Edition
+#  Rank  7 Group  0 Pid 1005466 on gpu-g7-1 device  7 [0000:ba:00] NVIDIA RTX PRO 4500 Blackwell Server Edition
+#  Rank  8 Group  0 Pid 1841293 on gpu-g7-2 device  0 [0000:57:00] NVIDIA RTX PRO 4500 Blackwell Server Edition
+#  Rank  9 Group  0 Pid 1841294 on gpu-g7-2 device  1 [0000:59:00] NVIDIA RTX PRO 4500 Blackwell Server Edition
+#  Rank 10 Group  0 Pid 1841295 on gpu-g7-2 device  2 [0000:5b:00] NVIDIA RTX PRO 4500 Blackwell Server Edition
+#  Rank 11 Group  0 Pid 1841296 on gpu-g7-2 device  3 [0000:5d:00] NVIDIA RTX PRO 4500 Blackwell Server Edition
+#  Rank 12 Group  0 Pid 1841297 on gpu-g7-2 device  4 [0000:b4:00] NVIDIA RTX PRO 4500 Blackwell Server Edition
+#  Rank 13 Group  0 Pid 1841298 on gpu-g7-2 device  5 [0000:b6:00] NVIDIA RTX PRO 4500 Blackwell Server Edition
+#  Rank 14 Group  0 Pid 1841299 on gpu-g7-2 device  6 [0000:b8:00] NVIDIA RTX PRO 4500 Blackwell Server Edition
+#  Rank 15 Group  0 Pid 1841300 on gpu-g7-2 device  7 [0000:ba:00] NVIDIA RTX PRO 4500 Blackwell Server Edition
+#
+#                                                              out-of-place                       in-place          
+#       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong 
+#        (B)    (elements)                               (us)  (GB/s)  (GB/s)             (us)  (GB/s)  (GB/s)         
+     1048576        262144     float     sum      -1  1494.56    0.70    1.32       0  2547.07    0.41    0.77       0
+     2097152        524288     float     sum      -1  14870.9    0.14    0.26       0  14813.4    0.14    0.27       0
+     4194304       1048576     float     sum      -1  27186.6    0.15    0.29       0  29246.3    0.14    0.27       0
+     8388608       2097152     float     sum      -1  56902.6    0.15    0.28       0  61620.5    0.14    0.26       0
+    16777216       4194304     float     sum      -1  1036.86   16.18   30.34       0  1029.65   16.29   30.55       0
+    33554432       8388608     float     sum      -1  1808.55   18.55   34.79       0  1796.40   18.68   35.02       0
+    67108864      16777216     float     sum      -1  3334.80   20.12   37.73       0  3310.98   20.27   38.00       0
+# Out of bounds values : 0 OK
+# Avg bus bandwidth    : 15.0102 
+#
+# Collective test concluded: all_reduce_perf
+#
+

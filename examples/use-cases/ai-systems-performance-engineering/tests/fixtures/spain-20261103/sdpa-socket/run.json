@@ -1,0 +1,83 @@
+{
+  "stage": "sdpa-socket",
+  "subcommand": "sdpa-socket",
+  "invocation": "20261103T132502Z",
+  "stages": [
+    "sdpa-socket"
+  ],
+  "plan": {
+    "name": "sdpa-socket",
+    "subcommand": "sdpa-socket",
+    "kind": "timed",
+    "transport": "socket",
+    "attention": "sdpa",
+    "saving": "none",
+    "config": "configs/smol-2048.json",
+    "data": "tokens-2048-160",
+    "sequence_length": 2048,
+    "updates": 5,
+    "warmup_updates": 1,
+    "global_batch": 32,
+    "checkpoint_updates": [
+      5
+    ],
+    "job_env": {
+      "LLM_TRANSPORT": "socket",
+      "ATTENTION": "eager",
+      "CHECKPOINT_MODE": "none"
+    }
+  },
+  "job_env": {
+    "LLM_TRANSPORT": "socket",
+    "ATTENTION": "eager",
+    "CHECKPOINT_MODE": "none"
+  },
+  "settings": {
+    "transport": "socket",
+    "attention": "sdpa",
+    "saving": "none"
+  },
+  "trainer_argv": [
+    "bash",
+    "2.run-llm.sh",
+    "--config",
+    "configs/smol-2048.json",
+    "--data",
+    "/data/tokens-2048-160",
+    "--model-path",
+    "/data/model",
+    "--attention-implementation",
+    "sdpa",
+    "--microbatch",
+    "1",
+    "--workers",
+    "2",
+    "--checkpoint-mode",
+    "none",
+    "--allocation-label",
+    "pcs-g7.48xlarge-2nodes-16gpu",
+    "--output",
+    "/results/sdpa-socket/train"
+  ],
+  "config": "configs/smol-2048.json",
+  "data": "tokens-2048-160",
+  "allocation_id": "637",
+  "start_utc": 1793712302.1658134,
+  "status": "finished",
+  "end_utc": 1793712358.3851068,
+  "launcher_exit": 0,
+  "exit_status": 0,
+  "checks": [
+    {
+      "name": "NCCL network",
+      "ok": true,
+      "detail": "launch.log"
+    },
+    {
+      "name": "Summary",
+      "ok": true,
+      "detail": "summary.json"
+    }
+  ],
+  "failure": null
+}

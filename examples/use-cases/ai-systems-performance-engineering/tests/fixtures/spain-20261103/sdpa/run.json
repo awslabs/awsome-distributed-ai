@@ -1,0 +1,88 @@
+{
+  "stage": "sdpa",
+  "subcommand": "sdpa",
+  "invocation": "20261103T132937Z",
+  "stages": [
+    "sdpa"
+  ],
+  "plan": {
+    "name": "sdpa",
+    "subcommand": "sdpa",
+    "kind": "timed",
+    "transport": "efa",
+    "attention": "sdpa",
+    "saving": "none",
+    "config": "configs/smol-2048.json",
+    "data": "tokens-2048-160",
+    "sequence_length": 2048,
+    "updates": 5,
+    "warmup_updates": 1,
+    "global_batch": 32,
+    "checkpoint_updates": [
+      5
+    ],
+    "job_env": {
+      "LLM_TRANSPORT": "efa",
+      "ATTENTION": "sdpa",
+      "CHECKPOINT_MODE": "none"
+    }
+  },
+  "job_env": {
+    "LLM_TRANSPORT": "efa",
+    "ATTENTION": "sdpa",
+    "CHECKPOINT_MODE": "none"
+  },
+  "settings": {
+    "transport": "efa",
+    "attention": "sdpa",
+    "saving": "none"
+  },
+  "trainer_argv": [
+    "bash",
+    "2.run-llm.sh",
+    "--config",
+    "configs/smol-2048.json",
+    "--data",
+    "/data/tokens-2048-160",
+    "--model-path",
+    "/data/model",
+    "--attention-implementation",
+    "sdpa",
+    "--microbatch",
+    "1",
+    "--workers",
+    "2",
+    "--checkpoint-mode",
+    "none",
+    "--allocation-label",
+    "pcs-g7.48xlarge-2nodes-16gpu",
+    "--output",
+    "/results/sdpa/train"
+  ],
+  "config": "configs/smol-2048.json",
+  "data": "tokens-2048-160",
+  "allocation_id": "637",
+  "start_utc": 1793712577.5735397,
+  "status": "finished",
+  "end_utc": 1793712619.7351003,
+  "launcher_exit": 0,
+  "exit_status": 0,
+  "checks": [
+    {
+      "name": "NCCL network",
+      "ok": true,
+      "detail": "launch.log"
+    },
+    {
+      "name": "EFA counters",
+      "ok": true,
+      "detail": "gpu-g7-1 +128.4 GB sent, +128.4 GB received; gpu-g7-2 +128.4 GB sent, +128.4 GB received"
+    },
+    {
+      "name": "Summary",
+      "ok": true,
+      "detail": "summary.json"
+    }
+  ],
+  "failure": null
+}

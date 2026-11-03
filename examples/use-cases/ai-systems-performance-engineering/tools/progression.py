@@ -6,6 +6,8 @@ Usage: python3 tools/progression.py [--markdown]
 Reads every stage directory under $LLM_RESULTS_DIR except profile-*, restore
 and attempts/. A ratio is shown only for a pair of runs of the same work on
 the same allocation; otherwise the cell refers to a note below the table.
+Below the table and its notes it prints two charts: the speed-up of the main
+path over baseline, step by step, and the training goodput of the saving runs.
 """
 import argparse
 from pathlib import Path
@@ -129,6 +131,11 @@ def render(ceilings, rows, notes, markdown):
     return lines
 
 
+def chart_lines(results, markdown):
+    lines = workshop.cumulative_chart_lines(results) + [''] + workshop.goodput_chart_lines(results)
+    return ['', '```text'] + lines + ['```'] if markdown else [''] + lines
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--markdown', action='store_true', help='print a Markdown table for your notes')
@@ -140,7 +147,7 @@ def main(argv=None):
         return 2
     notes = Notes()
     ceilings, rows = collect(results, notes)
-    print('\n'.join(render(ceilings, rows, notes, args.markdown)))
+    print('\n'.join(render(ceilings, rows, notes, args.markdown) + chart_lines(results, args.markdown)))
     return 0
 
 

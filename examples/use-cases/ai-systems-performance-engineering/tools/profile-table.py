@@ -5,8 +5,9 @@ Usage: python3 tools/profile-table.py [STAGE] [--rank N|slowest|all] [--update U
 
 The window of update u is the CPU span ProfilerStep#<u-1> on the main thread.
 Each update ends with a host synchronization, so its GPU work finishes inside
-the span. Busy times are unions of intervals over all streams. Standard
-library only.
+the span. Busy times are unions of intervals over all streams. Below the
+table, a chart puts this update beside the same update of the other profile
+stages whose tables you have read. Standard library only.
 """
 import argparse
 import bisect
@@ -15,7 +16,12 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
+import charts  # noqa: E402
 import workshop  # noqa: E402
+
+# Each table read is kept in its stage directory, so that the chart of a later
+# profile can show it without parsing that trace again.
+TABLES = 'profile-tables.json'
 
 NCCL_PREFIXES = ('ncclDevKernel', 'ncclKernel')
 BACKWARD_PREFIX = 'autograd::engine::evaluate_function:'
@@ -162,6 +168,61 @@ def table_lines(title, table):
     return lines
 
 
+def table_key(rank, update):
+    return f'rank {rank}, update {update}'
+
+
+def save_table(stage_dir, key, title, table):
+    tables = workshop.read_json(stage_dir / TABLES, {})
+    tables[key] = dict(title=title, table=table)
+    try:
+        workshop.write_atomic(stage_dir / TABLES, json.dumps(tables, indent=2) + '\n')
+    except OSError:
+        pass
+
+
+def breakdown_row(label, table):
+    """The update as a partition: attention core, other compute, NCCL alone, idle, copies only."""
+    other = table['compute'] - table['attention']
+    copies = max(0.0, table['update'] - table['compute'] - table['exposed'] - table['idle'])
+    segments = [(table['attention'], charts.FILLS[0]), (other, charts.FILLS[1]),
+                (table['exposed'], charts.FILLS[2]), (table['idle'], charts.FILLS[3])]
+    detail = (f"{charts.FILLS[0]} {table['attention']:.3f}  {charts.FILLS[1]} {other:.3f}  "
+              f"{charts.FILLS[2]} {table['exposed']:.3f}  {charts.FILLS[3]} {table['idle']:.3f}")
+    if copies >= 0.0005:
+        segments.append((copies, charts.LOST))
+        detail += f'  {charts.LOST} {copies:.3f}'
+    return dict(label=label, segments=segments, text=f"{table['update']:.3f} s",
+                detail=detail + f" s   input wait (CPU) {table['input_wait']:.3f} s")
+
+
+def chart_lines(results, name, rank, update, table):
+    """This stage's update beside the same update of the other profile stages, from their saved tables."""
+    key = table_key(rank, update)
+    names = list(workshop.PROFILE_ORDER) + sorted(path.parent.name for path in Path(results).glob('profile-*/run.json')
+                                                  if path.parent.name not in workshop.PROFILE_ORDER)
+    rows = []
+    for other in names:
+        if other == name:
+            rows.append(breakdown_row(other, table))
+            continue
+        saved = (workshop.read_json(Path(results) / other / TABLES, {}) or {}).get(key)
+        if saved:
+            rows.append(breakdown_row(other, saved['table']))
+        elif (Path(results) / other / 'run.json').is_file():
+            option = '' if rank == 'slowest' else f' --rank {rank}'
+            rows.append(dict(label=other, note=f'run python3 tools/profile-table.py {other}{option} to add it'))
+        else:
+            rows.append(dict(label=other, note='not run yet'))
+    which = {'slowest': 'the slowest rank of each profile', 'all': 'the mean of all ranks'}.get(rank, f'rank {rank}')
+    lines = charts.stacked_chart(f'Where the time of update {update} goes, for {which}', rows, [
+        (charts.FILLS[0], 'attention core kernels'), (charts.FILLS[1], 'other compute kernels'),
+        (charts.FILLS[2], 'communication not overlapped'), (charts.FILLS[3], 'GPU idle')], 's')
+    if any(charts.LOST in segment for row in rows for _, segment in row.get('segments', [])):
+        lines.append(f'  {charts.LOST} copies only (no kernel running)')
+    return lines + ['  input wait (CPU) can overlap the GPU parts, so the bar leaves it out']
+
+
 def intervals_by_rank(train, update):
     gaps = {}
     for path in workshop.rank_logs(train):
@@ -230,7 +291,9 @@ def main(argv=None):
     if not tables:
         print(f'no traces in {train}', file=sys.stderr)
         return 2
-    print('\n'.join(table_lines(title, tables[0] if len(tables) == 1 else mean_table(tables))))
+    table = tables[0] if len(tables) == 1 else mean_table(tables)
+    save_table(results / name, table_key(args.rank, update), title, table)
+    print('\n'.join(table_lines(title, table) + [''] + chart_lines(results, name, args.rank, update, table)))
     return 0
 
 
