@@ -23,7 +23,8 @@
 # in the order the participant's `next` starts them, each entry an exercise and
 # the settings the launcher passes to the job, for example
 #
-#   [{"exercise": "storage", "settings": {"writer_rank": 9}},
+#   [{"exercise": "slow-job"},
+#    {"exercise": "storage", "settings": {"writer_rank": 9}},
 #    {"exercise": "dataloader"},
 #    {"exercise": "silent-corruption",
 #     "settings": {"corrupt_rank": 13, "corrupt_step": 37, "corrupt_bit": 22}},

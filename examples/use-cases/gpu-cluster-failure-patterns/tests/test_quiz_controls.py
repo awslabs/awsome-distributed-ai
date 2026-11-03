@@ -673,19 +673,20 @@ class CollectAfterRecovery(QuizBase):
 
 
 class WarnRefusalAndOperatorReplacement(QuizBase):
-    """Decisions 3 and 4: any WARN keeps the node out, an operator replaces it."""
+    """Decisions 3 and 4: a WARN other than the Check 6 counters keeps the node out,
+    and an operator replaces it."""
 
-    def fire_and_warn(self):
+    def fire_and_warn(self, outputs=None):
         self.set_schedule(session.validate_schedule([{'exercise': 'efa-reset'},
                                                      {'exercise': 'storage'}]))
         self.make().next()
         self.running_job_with_progress()
         self.make().next()
         self.executor.jobs = []
-        outputs = {'2': '[PASS] 2-efa-enumeration: EFA OK\n',
-                   '6': '[WARN] EFA retransmission timeouts detected (2)\n'
-                        '[WARN] 6-efa-loopback: EFA statistics show drops or '
-                        'retransmission timeouts (see logs)\n'}
+        outputs = outputs or {'2': '[PASS] 2-efa-enumeration: EFA OK\n',
+                              '6': '[WARN] EFA retransmission timeouts detected (2)\n'
+                                   '[WARN] 6-efa-loopback: EFA statistics show drops or '
+                                   'retransmission timeouts (see logs)\n'}
         original = self.executor.run_maintenance
 
         def per_check(argv, timeout=None):
@@ -734,6 +735,130 @@ class WarnRefusalAndOperatorReplacement(QuizBase):
         self.assertEqual(before, (len(self.executor.slurm_calls),
                                   len(self.executor.maintenance_calls)))
         self.assertEqual('replacement-required', self.make().store.read().phase)
+
+
+class CounterWarningRecordedAsMonitor(WarnRefusalAndOperatorReplacement):
+    """PI, 2026-11-03: recovery needs Checks 2 and 6 to pass; a Check 6 warning about
+    the cumulative EFA counters is recorded as MONITOR and does not refuse recovery."""
+
+    PASS_2 = '[PASS] 2-efa-enumeration: EFA OK\n'
+    PASS_6 = '[PASS] 6-efa-loopback: EFA loopback OK: 2 domain(s) tested\n'
+    RETRANS = '[WARN] 6-efa-loopback: EFA retransmission timeouts detected (2)\n'
+    DROPS = '[WARN] 6-efa-loopback: EFA rx_drops detected (5) -- possible network issues\n'
+
+    def recover_with(self, check_6, check_2=PASS_2):
+        self.fire_and_warn({'2': check_2, '6': check_6})
+        return self.run_main('recover')
+
+    def test_a_counter_warning_is_recorded_as_monitor_and_the_node_resumes(self):
+        code, out, err = self.recover_with(self.RETRANS + self.PASS_6)
+        self.assertEqual(0, code, err)
+        state = self.make().store.read()
+        self.assertEqual('runtime-ready', state.phase)
+        self.assertEqual(1, len([c for c in self.executor.slurm_calls if 'State=RESUME' in c]))
+        record = state.check_results['round-1/recovered/check-6']
+        self.assertEqual(('WARN', 'MONITOR'), (record['verdict'], record['severity']))
+        self.assertNotIn('severity', state.check_results['round-1/recovered/check-2'])
+        self.assertIn('retrans_timeout_events=2', state.notes)
+        self.assertIn('recorded as MONITOR', out)
+        code, status, _ = self.run_main('status')
+        self.assertEqual(0, code)
+        self.assertRegex(status, r'round-1/recovered/check-6: WARN, recorded as MONITOR \(')
+        self.assertRegex(status, r'round-1/recovered/check-2: PASS \(')
+        self.assertIn('Answer for incident 1:', status)
+
+    def test_both_counters_and_the_unprefixed_form_are_monitored(self):
+        unprefixed = '[WARN] EFA retransmission timeouts detected (7)\n'
+        code, _, err = self.recover_with(self.DROPS + unprefixed + self.PASS_6)
+        self.assertEqual(0, code, err)
+        state = self.make().store.read()
+        self.assertEqual('runtime-ready', state.phase)
+        self.assertIn('retrans_timeout_events=7, rx_drops=5', state.notes)
+
+    def test_any_other_check_6_warning_keeps_its_refusal(self):
+        incomplete = ('[WARN] 6-efa-loopback: EFA statistics incomplete or malformed: '
+                      'rx_drops=unknown, retrans_timeout_events=unknown; absolute totals '
+                      'unknown, not zero\n')
+        cases = (self.RETRANS,                                          # no loopback PASS
+                 self.RETRANS + incomplete + self.PASS_6,               # another warning
+                 '[WARN] 2-efa-enumeration: EFA rx_drops detected (5) -- possible '
+                 'network issues\n' + self.PASS_6,                      # another check's name
+                 self.RETRANS + '[WARN]\n' + self.PASS_6,               # unreadable line
+                 self.RETRANS + 'EFA statistics skipped\n' + self.PASS_6)
+        for index, check_6 in enumerate(cases):
+            with self.subTest(check_6=check_6):
+                if index:
+                    # A fresh seat for each case; the framework's tearDown ends the last.
+                    self.tearDown()
+                    self.setUp()
+                code, _, err = self.recover_with(check_6)
+                self.assertEqual(3, code)
+                state = self.make().store.read()
+                self.assertEqual('replacement-required', state.phase, err)
+                self.assertNotIn('severity', state.check_results['round-1/recovered/check-6'])
+                self.assertEqual([], [c for c in self.executor.slurm_calls if 'State=RESUME' in c])
+
+    def test_check_2_must_still_pass(self):
+        warn_2 = ('[WARN] 2-efa-enumeration: Memory lock limit 8192 KB is below 16 GiB\n'
+                  '[WARN] 2-efa-enumeration: 1 EFA advisory(ies)\n')
+        code, _, err = self.recover_with(self.RETRANS + self.PASS_6, check_2=warn_2)
+        self.assertEqual(3, code)
+        state = self.make().store.read()
+        self.assertEqual('replacement-required', state.phase)
+        self.assertEqual('MONITOR', state.check_results['round-1/recovered/check-6']['severity'])
+        self.assertIn('Check 2 returned WARN', err)
+        self.assertEqual([], [c for c in self.executor.slurm_calls if 'State=RESUME' in c])
+
+    def test_the_rule_is_limited_to_check_6(self):
+        handler = self.make()
+        for check in ('0', '2', '3'):
+            self.assertIsNone(handler._monitored_counters(check, self.RETRANS + self.PASS_6))
+        self.assertEqual(['retrans_timeout_events=2'],
+                         handler._monitored_counters('6', self.RETRANS + self.PASS_6))
+
+
+class FiveIncidentSeat(QuizBase):
+    """The event schedule: slow job, storage, DataLoader, silent corruption, device."""
+
+    EVENT = [{'exercise': 'slow-job'}] + SCHEDULE
+
+    def setUp(self):
+        super().setUp()
+        self.set_schedule(session.validate_schedule(self.EVENT))
+
+    def test_the_participant_counts_five_and_the_device_incident_is_number_5(self):
+        self.assertIn('Incidents issued: 0 of 5', session.render(self.make().status(), 'status'))
+        for number, exercise in enumerate(('slow-job', 'storage', 'dataloader',
+                                           'silent-corruption'), start=1):
+            result = self.make().next()
+            self.assertEqual(number, result.incident)
+            profile = json.loads(Path(result.saved_path).read_text())
+            self.assertEqual((number, exercise), (profile['incident'], profile['exercise']))
+        self.assertIn('Incidents issued: 4 of 5', session.render(self.make().status(), 'status'))
+        issued = self.make().next()
+        self.assertEqual(5, issued.incident)
+        self.assertEqual('Incident 5 is ready.', session.render(issued, 'next').splitlines()[0])
+        self.running_job_with_progress()
+        under_way = self.make().next()
+        self.assertEqual('Incident 5 is under way.',
+                         session.render(under_way, 'next').splitlines()[0])
+        status = session.render(self.make().status(), 'status')
+        self.assertIn('Incident: 5', status)
+        self.assertIn('Incidents issued: 5 of 5', status)
+        self.executor.jobs = []
+        self.assertEqual('runtime-ready', self.make().recover().state.phase)
+        self.assertIn('Answer for incident 5: the lab controller reset one EFA device',
+                      session.render(self.make().status(), 'status'))
+
+    def test_the_installer_and_readme_examples_list_the_five_in_the_pages_order(self):
+        def example(text, start):
+            block = text[text.index(start):]
+            return re.findall(r'"exercise": "([a-z-]+)"', block[:block.index(']') + 1])
+        order = ['slow-job', 'storage', 'dataloader', 'silent-corruption', 'efa-reset']
+        installer = INSTALLER.read_text()
+        self.assertEqual(order, example(installer, '#   [{"exercise"'))
+        readme = (LAB / 'README.md').read_text()
+        self.assertEqual(order, example(readme, '[{"exercise"'))
 
 
 class ParticipantOutputBoundary(QuizBase):

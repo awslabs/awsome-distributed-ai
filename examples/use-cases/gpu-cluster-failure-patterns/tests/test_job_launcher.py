@@ -42,6 +42,7 @@ run_torch() {
     local phase=$1
     shift
     note "run_torch phase=$phase run_id=$AIM344_RUN_ID copy=$AIM344_PROGRESS_COPY lab=$AIM344_LAB_LOG iface=${AIM344_EFA_IFACE:-unset} args=$*"
+    note "job_env settings=$(printenv AIM344_INCIDENT_SETTINGS || echo unset) limit=${AIM344_JOB_LIMIT_SECONDS:-default}"
     if [[ -n ${TEST_PROGRESS:-} ]]; then
         for n in 20 40 60; do
             printf 'AIM344 collective_progress=%s collectives; tensor_bytes=134217728 B; timestamp=%s s since epoch; 0 mismatches; job_id=%s; world_size=16; rank=0.\n' \
@@ -140,6 +141,9 @@ class Launcher(unittest.TestCase):
     def torch_calls(self):
         return [line for line in self.lines(self.calls) if line.startswith('run_torch')]
 
+    def job_env(self):
+        return [line for line in self.lines(self.calls) if line.startswith('job_env')]
+
     def next_calls(self):
         return self.lines(self.next_log)
 
@@ -151,7 +155,11 @@ class Launcher(unittest.TestCase):
     # ---------------------------------------------------------------- grammar
     def test_usage_and_unknown_arguments_fail(self):
         for argv in ((), ('incident', 'extra'), ('fix-storage',), ('run', '--writer-rank', '9'),
-                     ('--help',)):
+                     ('--help',), ('notes', 'x'), ('resume', '--reinit-in-worker'),
+                     ('run', '--dataset-cache', 'worker-thread'), ('rerun', '--writer-rank=9'),
+                     ('rerun', '--dataset-cache', 'lock'), ('rerun', '--dataset-cache'),
+                     ('rerun', '--dataloader-timeout', 'x'), ('rerun', '--dataloader-timeout=-1'),
+                     ('rerun', '--worker-cuda'), ('rerun', '--reinit-in-worker', 'extra')):
             with self.subTest(argv=argv):
                 result = self.run_job(*argv)
                 self.assertEqual(2, result.returncode)
@@ -171,9 +179,16 @@ class Launcher(unittest.TestCase):
         text = notes.read_text()
         self.assertTrue(text.startswith('# Your cluster\n'))
         for heading in ('# Triage table', '# Healthy values', '# Incident 1', '# Incident 2',
-                        '# Incident 3', '# Incident 4', '# Loss table', '# Card answers',
-                        '## Card A', '## Card B', '## Card C'):
+                        '# Incident 3', '# Incident 4', '# Incident 5', '# Loss table',
+                        '## Card A', '## Card B'):
             self.assertIn('\n' + heading + '\n', '\n' + text)
+        for heading in ('# Card answers', '## Card C', '# Incident 6'):
+            self.assertNotIn('\n' + heading + '\n', '\n' + text)
+        # A case of three questions after each incident page and the cost page.
+        self.assertEqual(6, text.count('\n## Case\n\n1.\n\n2.\n\n3.\n'))
+        # The device incident's record table sits under Incident 5.
+        self.assertLess(text.index('# Incident 5'), text.index('| Check 6 | | |'))
+        self.assertLess(text.index('| Check 6 | | |'), text.index('# Loss table'))
         self.assertIn('| What you see | Who reported | First record to read | Check that separates '
                       'the causes | Kind of recovery | Your healthy value |', text)
         for row in ('Nobody times out, but the job is slow', 'One rank does not report',
@@ -183,9 +198,11 @@ class Launcher(unittest.TestCase):
         for row in ('Last progress line', 'Watchdog lines', 'Kernel log', 'Check 0', 'Check 6'):
             self.assertIn(f'| {row} | | |', text)
         for row in ('| t0 | Last progress line | |', '| Detection | t0 | t1 | |',
-                    '| Rework | The last checkpoint | The stop | |'):
+                    '| Rework | The last checkpoint | The stop | |', '| Incident 3 | | | |',
+                    '| Incident 4 | | | |'):
             self.assertIn(row, text)
-        self.assertEqual(3, text.count('Transfer question:'))
+        self.assertNotIn('| Incident 2 | | | |', text)
+        self.assertEqual(4, text.count('Transfer question:'))
         notes.write_text('mine\n')
         again = self.run_job('notes', **env)
         self.assertEqual(0, again.returncode)
@@ -216,8 +233,9 @@ class Launcher(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         [call] = self.torch_calls()
         self.assertRegex(call, r'^run_torch phase=job run_id=job-\d{8}T\d{6}Z copy=1 lab= '
-                               r'iface=rdmap83s0 args=device --checkpoint-every=200 '
+                               r'iface=rdmap83s0 args=device --checkpoint-every=200 --replica-check '
                                r'--writer-rank=0 --duration-seconds=60$')
+        self.assertEqual(['job_env settings=unset limit=default'], self.job_env())
         self.assertEqual([], self.next_calls())
         run_id = call.split('run_id=')[1].split()[0]
         self.assertEqual(2, result.stdout.count(f'Job log: {self.results}/{run_id}.log\n'))
@@ -242,8 +260,9 @@ class Launcher(unittest.TestCase):
         lab = self.incidents / 'incident-1-lab.log'
         self.assertRegex(call, rf'^run_torch phase=job run_id=incident-1-\d{{8}}T\d{{6}}Z copy=1 '
                                rf'lab={re.escape(str(lab))} iface=rdmap83s0 args=device '
-                               r'--checkpoint-every=200 --mark-lab-lines --writer-rank=9 '
+                               r'--checkpoint-every=200 --replica-check --mark-lab-lines --writer-rank=9 '
                                r'--duration-seconds=60 --inject$')
+        self.assertEqual(['job_env settings=unset limit=default'], self.job_env())
         # The controller's reply, which names the profile, stays in the lab log.
         self.assertIn(f'Profile: {profile}', lab.read_text())
         self.assertIn('Starting incident 1.', result.stdout)
@@ -341,7 +360,7 @@ class Launcher(unittest.TestCase):
         self.assertTrue(all(' next: ' in line for line in calls), calls)
         [call] = self.torch_calls()
         self.assertRegex(call, r'^run_torch phase=device run_id=incident-4-\d{8}T\d{6}Z copy=1 .* '
-                               r'args=device --checkpoint-every=200 --mark-lab-lines '
+                               r'args=device --checkpoint-every=200 --replica-check --mark-lab-lines '
                                r'--writer-rank=0 --duration-seconds=120$')
         lab = (self.incidents / 'incident-4-lab.log').read_text()
         self.assertIn('next, attempt 2, exit 0: Incident 4 is under way.', lab)
@@ -397,15 +416,23 @@ class Launcher(unittest.TestCase):
         self.assert_no_cause(resume)
 
     def test_a_refusal_starts_no_container_and_incident_prepares_before_asking(self):
-        for number, exercise, verb in ((4, 'efa-reset', 'resume'), (2, 'dataloader', 'rerun'),
-                                       (3, 'silent-corruption', 'resume')):
-            with self.subTest(exercise=exercise, verb=verb):
+        for number, exercise, settings, argv in (
+                (5, 'efa-reset', {}, ('resume',)),
+                (1, 'slow-job', {}, ('rerun', '--dataset-cache', 'worker-thread')),
+                (2, 'storage', {'writer_rank': 9}, ('rerun', '--reinit-in-worker')),
+                (4, 'silent-corruption', {'corrupt_rank': 13}, ('rerun', '--dataloader-timeout', '60')),
+                (5, 'efa-reset', {}, ('rerun', '--dataset-cache=worker-thread'))):
+            with self.subTest(exercise=exercise, argv=argv):
                 for path in self.incidents.glob('incident-*.json'):
                     path.unlink()
-                self.profile(number, exercise)
-                result = self.run_job(verb)
+                self.profile(number, exercise, settings)
+                result = self.run_job(*argv)
                 self.assertEqual(3, result.returncode)
                 self.assertEqual([], self.lines(self.calls))
+                if argv[0] == 'rerun':
+                    self.assertIn(f'Incident {number} takes no options. Run it again with: '
+                                  'bash job.sh rerun', result.stderr)
+                self.assert_no_cause(result)
         self.issue(1, 'storage', {'writer_rank': 9})
         self.reply(1, 'Incident 4 still holds your node. Collect your evidence and finish it '
                       'with recover; next continues after that.\n', rc=3)
@@ -414,25 +441,146 @@ class Launcher(unittest.TestCase):
         self.assertEqual([f'prepare_slurm RESULTS_DIR={self.results}'], self.lines(self.calls))
         self.assertIn('still holds your node', result.stderr)
 
-    # ---------------------------------------------------------------- held and bad profiles
-    def test_held_exercises_are_answered_from_the_page(self):
-        for number, exercise, settings in ((2, 'dataloader', {}),
-                                           (3, 'silent-corruption', {'corrupt_rank': 13})):
-            with self.subTest(exercise=exercise):
-                self.issue(number, exercise, settings)
-                if self.next_log.exists():
-                    self.next_log.unlink()
-                result = self.run_job('incident')
-                self.assertEqual(3, result.returncode)
-                self.assertIn(f'Incident {number} cannot run live with this version of the lab', result.stderr)
-                self.assertEqual([], self.torch_calls())
-                self.assert_no_cause(result)
+    # ---------------------------------------------------------------- DataLoader incident
+    LOADER = ('args=dataloader --start-method fork --epochs 2 --stack-dump-seconds=60 '
+              '--mark-lab-lines')
+
+    def test_dataloader_incident_runs_the_rank_thread_job_without_naming_it(self):
+        self.issue(3, 'dataloader')
+        result = self.run_job('incident', TEST_RC='124')
+        self.assertEqual(124, result.returncode)
+        self.assertEqual(1, len(self.next_calls()))
+        [call] = self.torch_calls()
+        lab = self.incidents / 'incident-3-lab.log'
+        self.assertRegex(call, rf'^run_torch phase=job run_id=incident-3-\d{{8}}T\d{{6}}Z copy=1 '
+                               rf'lab={re.escape(str(lab))} iface=rdmap83s0 ')
+        self.assertTrue(call.endswith(self.LOADER), call)
+        # The setting reaches the job's environment, and the launcher ends it at 120 s.
+        self.assertEqual(['job_env settings={"dataset_cache":"rank-thread"} limit=120'],
+                         self.job_env())
+        self.assertIn('Starting incident 3.', result.stdout)
+        self.assertNotIn('rank-thread', result.stdout + result.stderr)
+        self.assert_no_cause(result)
+
+    def test_dataloader_rerun_passes_each_fix_and_keeps_the_dataset(self):
+        self.profile(3, 'dataloader')
+        for argv, forwarded in ((('--dataset-cache', 'worker-thread'), '--dataset-cache=worker-thread'),
+                                (('--dataset-cache=worker-thread',), '--dataset-cache=worker-thread'),
+                                (('--reinit-in-worker',), '--reinit-in-worker'),
+                                (('--dataloader-timeout', '60'), '--dataloader-timeout=60'),
+                                (('--dataloader-timeout=2.5',), '--dataloader-timeout=2.5'),
+                                ((), '')):
+            with self.subTest(argv=argv):
+                if self.calls.exists():
+                    self.calls.unlink()
+                result = self.run_job('rerun', *argv)
+                self.assertEqual(0, result.returncode, result.stderr)
+                [call] = self.torch_calls()
+                self.assertIn('run_id=incident-3-rerun-', call)
+                self.assertTrue(call.endswith((self.LOADER + ' ' + forwarded).rstrip()), call)
+                self.assertEqual(['job_env settings={"dataset_cache":"rank-thread"} limit=120'],
+                                 self.job_env())
+        self.assertEqual([], self.next_calls())
+
+    def test_dataloader_resume_runs_the_job_without_the_lab_setting(self):
+        self.profile(3, 'dataloader', {'affected_rank': 5})
+        result = self.run_job('resume')
+        self.assertEqual(0, result.returncode, result.stderr)
+        [call] = self.torch_calls()
+        self.assertIn('run_id=incident-3-resume-', call)
+        self.assertTrue(call.endswith(self.LOADER), call)
+        self.assertEqual(['job_env settings=unset limit=120'], self.job_env())
+        self.assertEqual([], self.next_calls())
+        self.assert_no_cause(result)
+
+    def test_dataloader_settings_from_the_profile_are_passed_as_given(self):
+        self.issue(3, 'dataloader', {'affected_rank': 5, 'worker_cuda': True})
+        self.assertEqual(0, self.run_job('incident').returncode)
+        self.assertEqual(['job_env settings={"affected_rank":5,"dataset_cache":"rank-thread",'
+                          '"worker_cuda":true} limit=120'], self.job_env())
+
+    # ---------------------------------------------------------------- silent-corruption incident
+    FLIP = {'corrupt_rank': 13, 'corrupt_step': 37, 'corrupt_bit': 22, 'corrupt_recurring': False}
+
+    def test_silent_corruption_incident_passes_the_seats_flip_in_the_environment(self):
+        self.issue(4, 'silent-corruption', self.FLIP)
+        result = self.run_job('incident')
+        self.assertEqual(0, result.returncode, result.stderr)
+        [call] = self.torch_calls()
+        self.assertRegex(call, r'^run_torch phase=job run_id=incident-4-\d{8}T\d{6}Z copy=1 .* '
+                               r'args=device --checkpoint-every=200 --replica-check --mark-lab-lines '
+                               r'--writer-rank=0 --duration-seconds=20$')
+        self.assertEqual(['job_env settings={"corrupt_bit":22,"corrupt_rank":13,'
+                          '"corrupt_recurring":false,"corrupt_step":37} limit=default'],
+                         self.job_env())
+        self.assert_no_cause(result)
+
+    def test_silent_corruption_rerun_repeats_only_a_recurring_flip(self):
+        for recurring, expected in ((False, 'unset'),
+                                    (True, '{"corrupt_bit":22,"corrupt_rank":13,'
+                                           '"corrupt_recurring":true,"corrupt_step":37}')):
+            with self.subTest(recurring=recurring):
+                if self.calls.exists():
+                    self.calls.unlink()
+                self.profile(4, 'silent-corruption', {**self.FLIP, 'corrupt_recurring': recurring})
+                result = self.run_job('rerun')
+                self.assertEqual(0, result.returncode, result.stderr)
+                [call] = self.torch_calls()
+                self.assertIn('run_id=incident-4-rerun-', call)
+                self.assertTrue(call.endswith('--writer-rank=0 --duration-seconds=20'), call)
+                self.assertEqual([f'job_env settings={expected} limit=default'], self.job_env())
+
+    def test_silent_corruption_resume_resumes_the_stand_in_without_the_flip(self):
+        self.profile(4, 'silent-corruption', {**self.FLIP, 'corrupt_recurring': True})
+        result = self.run_job('resume')
+        self.assertEqual(0, result.returncode, result.stderr)
+        [call] = self.torch_calls()
+        self.assertIn('run_id=incident-4-resume-', call)
+        self.assertTrue(call.endswith('args=device --checkpoint-every=200 --replica-check '
+                                      '--mark-lab-lines --writer-rank=0 --duration-seconds=10 '
+                                      '--resume'), call)
+        self.assertEqual(['job_env settings=unset limit=default'], self.job_env())
+        self.assertEqual([], self.next_calls())
+        self.assert_no_cause(result)
+
+    def test_a_settings_value_from_the_shell_never_reaches_another_job(self):
+        stray = {'AIM344_INCIDENT_SETTINGS': '{"corrupt_rank": 1}'}
+        self.assertEqual(0, self.run_job('run', **stray).returncode)
+        self.profile(2, 'storage', {'writer_rank': 9})
+        self.assertEqual(0, self.run_job('rerun', **stray).returncode)
+        self.profile(3, 'dataloader', issued_at=200.0)
+        self.assertEqual(0, self.run_job('resume', **stray).returncode)
+        self.assertEqual(['job_env settings=unset limit=default'] * 2
+                         + ['job_env settings=unset limit=120'], self.job_env())
+
+    def test_an_unknown_exercise_is_answered_from_the_page(self):
+        self.issue(6, 'future-exercise')
+        result = self.run_job('incident')
+        self.assertEqual(3, result.returncode)
+        self.assertIn('Incident 6 cannot run live with this version of the lab', result.stderr)
+        self.assertEqual([], self.torch_calls())
+
+    # ---------------------------------------------------------------- bad profiles
 
     def test_a_profile_the_launcher_cannot_apply_is_refused(self):
-        for settings in ({'writer_rank': 9, 'extra': 1}, {'writer_rank': True},
-                         {'writer_rank': -1}, {'writer_rank': '9'}):
-            with self.subTest(settings=settings):
-                self.issue(1, 'storage', settings)
+        for exercise, settings in (('storage', {'writer_rank': 9, 'extra': 1}),
+                                   ('storage', {'writer_rank': True}),
+                                   ('storage', {'writer_rank': -1}),
+                                   ('storage', {'writer_rank': '9'}),
+                                   ('silent-corruption', {}),
+                                   ('silent-corruption', {'corrupt_step': 37}),
+                                   ('silent-corruption', {'corrupt_rank': True}),
+                                   ('silent-corruption', {'corrupt_rank': 13, 'corrupt_bit': 32}),
+                                   ('silent-corruption', {'corrupt_rank': 13, 'corrupt_step': 0}),
+                                   ('silent-corruption', {'corrupt_rank': 13, 'corrupt_recurring': 1}),
+                                   ('silent-corruption', {'corrupt_rank': 13, 'writer_rank': 1}),
+                                   ('dataloader', {'dataset_cache': 'lock'}),
+                                   ('dataloader', {'worker_cuda': 1}),
+                                   ('dataloader', {'corrupt_rank': 1}),
+                                   ('dataloader', {'dataloader_timeout': 60}),
+                                   ('slow-job', {'writer_rank': 9})):
+            with self.subTest(exercise=exercise, settings=settings):
+                self.issue(1, exercise, settings)
                 if self.next_log.exists():
                     self.next_log.unlink()
                 result = self.run_job('incident')
@@ -527,6 +675,27 @@ class CommonRunIds(unittest.TestCase):
         [log] = list(self.root.glob('storage-injected-*Z.log'))
         self.assertIn('AIM344 lab: checkpoint injection: full', log.read_text())
         self.assertFalse((self.home / 'aim344-results').exists())
+
+    def test_the_job_limit_sets_the_launchers_timeout(self):
+        timeout = self.root / 'timeout'
+        timeout.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$TEST_DIR/timeout.args"\n'
+                           'shift 3\nexec "$@"\n')
+        timeout.chmod(0o755)
+        for limit, expected in ((None, '180s'), ('120', '120s')):
+            with self.subTest(limit=limit):
+                body = (f'AIM344_JOB_LIMIT_SECONDS={limit}\n' if limit else '') \
+                       + 'AIM344_RUN_ID=T run_torch job dataloader\n'
+                result = self.run_common(body)
+                self.assertEqual(0, result.returncode, result.stderr)
+                last = (self.root / 'timeout.args').read_text().splitlines()[-1]
+                self.assertTrue(last.startswith(f'--signal=TERM --kill-after=30s {expected} srun '), last)
+        refused = self.run_common('AIM344_JOB_LIMIT_SECONDS=2m\nrun_torch job dataloader\n')
+        self.assertEqual(2, refused.returncode)
+        self.assertIn('AIM344_JOB_LIMIT_SECONDS must be a positive number of seconds', refused.stderr)
+        # The device phase keeps no launcher deadline at all.
+        lines = len((self.root / 'timeout.args').read_text().splitlines())
+        self.assertEqual(0, self.run_common('AIM344_JOB_LIMIT_SECONDS=120\nrun_torch device\n').returncode)
+        self.assertEqual(lines, len((self.root / 'timeout.args').read_text().splitlines()))
 
     def test_sweep_inventory_goes_to_the_lab_log(self):
         lab = self.root / 'incident-2-lab.log'

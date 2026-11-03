@@ -204,8 +204,11 @@ def run_steps(args, tensor):
         print(f'Device workload completed: {sequence} collectives; 0 mismatches.', flush=True)
 
 
-def dataloader_event(event, rank, epoch, **fields):
-    print('DataLoader lifecycle: ' + json.dumps(
+def dataloader_event(event, rank, epoch, *, mark=False, **fields):
+    # With mark (--mark-lab-lines) the line carries LAB_LINE_MARKER, so job.sh moves
+    # it to the lab log, because a lifecycle line names the DataLoader.
+    prefix = LAB_LINE_MARKER if mark else ''
+    print(prefix + 'DataLoader lifecycle: ' + json.dumps(
         dict(event=event, rank=rank, host=socket.gethostname(), pid=os.getpid(),
              epoch=epoch, **fields), sort_keys=True), flush=True)
 
@@ -349,10 +352,10 @@ class CachedDataset(Dataset):
 
 
 def dataloader_worker_init(worker_id, *, rank, epoch, parent_pid, stack_dump_seconds=0,
-                           stack_dump_dir=STACK_DUMP_DIR, reinit_cache=False):
+                           stack_dump_dir=STACK_DUMP_DIR, reinit_cache=False, mark=False):
     # Module-level + partial is spawn-picklable; no CUDA/distributed calls here.
     dataloader_event('worker_init', rank, epoch, worker_id=worker_id,
-                     parent_pid=parent_pid)
+                     parent_pid=parent_pid, mark=mark)
     if reinit_cache:
         dataset = get_worker_info().dataset
         if hasattr(dataset, 'reinit'):
@@ -379,10 +382,11 @@ def dataloader(args, tensor):
     get_env.argtypes = [ctypes.c_char_p]
     get_env.restype = ctypes.c_char_p
     rank = dist.get_rank()
+    mark = getattr(args, 'mark_lab_lines', False)
     if rank == 0:
         value = get_env(b'FI_EFA_FORK_SAFE')
-        print(f'After first collective: C environment FI_EFA_FORK_SAFE={value!r}; '
-              f'DataLoader start_method={args.start_method}.', flush=True)
+        lab_line(args, f'After first collective: C environment FI_EFA_FORK_SAFE={value!r}; '
+                       f'DataLoader start_method={args.start_method}.')
     # The exercise settings default to the healthy control; tests pass a bare namespace.
     cache_owner = getattr(args, 'dataset_cache', 'none')
     affected_rank = getattr(args, 'affected_rank', None)
@@ -404,9 +408,10 @@ def dataloader(args, tensor):
                                         epoch=epoch, parent_pid=os.getpid(),
                                         stack_dump_seconds=stack_dump_seconds,
                                         stack_dump_dir=stack_dump_dir,
-                                        reinit_cache=getattr(args, 'reinit_in_worker', False))
+                                        reinit_cache=getattr(args, 'reinit_in_worker', False),
+                                        mark=mark)
         log = partial(dataloader_event, rank=rank, epoch=epoch,
-                      expected_batches=expected_batches)
+                      expected_batches=expected_batches, mark=mark)
         log('iterator_start')
         if epoch > 1 and affected and cache_owner != 'none':
             # The refill for this epoch begins now; iter(loader) creates the workers

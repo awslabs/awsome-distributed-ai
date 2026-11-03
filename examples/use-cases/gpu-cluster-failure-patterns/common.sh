@@ -151,7 +151,10 @@ run_torch() {
     # Device faults can leave GPU cleanup in D-state beyond the watchdog.
     # Keep tee attached through Slurm's bounded allocation walltime, rather
     # than SIGKILL the srun client and close evidence at 210 seconds.
-    local -a deadline=(timeout --signal=TERM --kill-after=30s 180s)
+    # job.sh sets AIM344_JOB_LIMIT_SECONDS for a job that must end sooner.
+    local limit=${AIM344_JOB_LIMIT_SECONDS:-180}
+    [[ $limit =~ ^[1-9][0-9]*$ ]] || { echo "AIM344_JOB_LIMIT_SECONDS must be a positive number of seconds; got: $limit" >&2; return 2; }
+    local -a deadline=(timeout --signal=TERM --kill-after=30s "${limit}s")
     local -a evidence=()
     if [[ $phase == device ]]; then
         deadline=()

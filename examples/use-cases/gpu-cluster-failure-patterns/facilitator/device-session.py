@@ -2416,6 +2416,42 @@ class DeviceSession:
                 found.append(condition)
         return found
 
+    # The pinned suite's Check 6 result line when every loopback domain passed
+    # (checks/6-efa-loopback.sh@3333c9d0 ends with check_pass after the statistics).
+    CHECK6_LOOPBACK_PASS = re.compile(r'^\[PASS\]\s+6-efa-loopback:', re.MULTILINE)
+
+    def _monitored_counters(self, check, text):
+        """The cumulative EFA counters of a Check 6 that passed its loopback test.
+
+        Recovery requires Checks 2 and 6 to pass (PI, 2026-11-03). A Check 6 WARN
+        whose only warnings are the two cumulative counters (CHECK6_CUMULATIVE_COUNTERS)
+        is recorded as MONITOR, the severity the suite's check_warn gives it
+        (lib/common.sh check_warn -> log_result ... "MONITOR"), and does not keep the
+        node out of service: the check reads those cumulative totals (since the
+        instance launch or the last EFA driver reset) once, after its loopback, so
+        the warning attributes no event to this round. Returns the counters as 'name=value'
+        strings, or None when the output holds any other warning, a warning line
+        that could not be read, a warning attributed to another check, no Check 6
+        [PASS] line, or a skipped statistics step. Every other WARN keeps its
+        refusal.
+        """
+        if str(check) != '6':
+            return None
+        details = self.warning_details(text)
+        if not details or any(not item['condition'] or not item['counter']
+                              for item in details):
+            return None
+        if self._producer_identity_disagrees(check, details):
+            return None
+        if (not self.CHECK6_LOOPBACK_PASS.search(text or '')
+                or self.CHECK6_STATISTICS_SKIPPED.search(text or '')):
+            return None
+        values = {}
+        for item in details:
+            name, value = item['counter']['name'], int(item['counter']['value'])
+            values[name] = max(value, values.get(name, value))
+        return [f'{name}={value}' for name, value in sorted(values.items())]
+
     def _baseline_allows_warning(self, state, check, recovered_text):
         """Is this post-recovery WARN the same condition, unchanged, as before?
 
@@ -4406,6 +4442,7 @@ class DeviceSession:
 
         failures = []
         warnings = []
+        monitored = []
         unsupported_warning = False
         for check in self.qualify_checks(state):
             outcome = self.executor.run_maintenance(['collect', check], timeout=900)
@@ -4415,7 +4452,7 @@ class DeviceSession:
             verdict = self.check_verdict(text)
             # The verdict recorded per round and phase, so the fault-time
             # observation is never replaced by this one.
-            state.check_results[f'round-{state.round}/recovered/check-{check}'] = {
+            record = state.check_results[f'round-{state.round}/recovered/check-{check}'] = {
                 'verdict': verdict or 'UNREADABLE',
                 'returncode': outcome.returncode,
                 'log': str(saved),
@@ -4427,6 +4464,8 @@ class DeviceSession:
             # Qualification is fail closed in the strict sense: a check counts as
             # passed only if it produced a complete PASS AND the transport that
             # carried it returned 0. Baseline-matched WARN acceptance is disabled.
+            # The one accepted WARN is a Check 6 that passed its loopback and warned
+            # only about the cumulative EFA counters, recorded as MONITOR.
             # Everything else -- FAIL, SKIP, an unreadable verdict, a nonzero
             # return code under any verdict -- keeps the node drained.
             #
@@ -4458,6 +4497,16 @@ class DeviceSession:
                 failures.append(
                     f'Check {check} reported {verdict} but did not complete: the '
                     f'maintenance route returned {outcome.returncode}.')
+            elif verdict == 'WARN' and self._monitored_counters(check, text):
+                # The one WARN recovery accepts: Check 6 passed its loopback and
+                # warned only about the cumulative EFA counters (_monitored_counters).
+                counters = ', '.join(self._monitored_counters(check, text))
+                record['severity'] = 'MONITOR'
+                monitored.append(
+                    f'Check {check} warned only about the cumulative EFA counters '
+                    f'({counters}), which count events since the instance launched or '
+                    f'the EFA driver last reset; the warning is recorded as MONITOR '
+                    f'and does not keep the node out of service.')
             elif verdict == 'WARN':
                 allowed, detail = self._baseline_allows_warning(state, check, text)
                 if allowed:
@@ -4484,8 +4533,9 @@ class DeviceSession:
 
         if failures:
             if unsupported_warning:
-                self._require_replacement(state, '; '.join(notes + failures + warnings))
-            self._fail_recovery(state, notes + failures + warnings)
+                self._require_replacement(
+                    state, '; '.join(notes + failures + warnings + monitored))
+            self._fail_recovery(state, notes + failures + warnings + monitored)
             raise Refusal(
                 'Your node was not returned to service because a required check '
                 'did not pass after recovery: ' + ' '.join(failures)
@@ -4504,9 +4554,9 @@ class DeviceSession:
         state.recovered_by = recovered_by
         state.recovered_at = self.clock()
         state.failure = None
-        state.notes = '; '.join(notes + warnings)
+        state.notes = '; '.join(notes + warnings + monitored)
         self.store.write(state)
-        return state, notes + warnings
+        return state, notes + warnings + monitored
 
     # Refusals from the device helper and the maintenance route that mean the
     # request must stop, not escalate to a reboot. Each phrase is quoted from the
@@ -4946,7 +4996,10 @@ def render(result, verb, operator=False):
             lines.append('Recorded check results:')
             for key in sorted(state.check_results):
                 record = state.check_results[key]
-                lines.append(f'  {key}: {record.get("verdict")} ({record.get("log")})')
+                severity = (f', recorded as {record["severity"]}'
+                            if record.get('severity') else '')
+                lines.append(f'  {key}: {record.get("verdict")}{severity} '
+                             f'({record.get("log")})')
         if state.recovered_by:
             lines.append(f'Recovered by: {state.recovered_by}')
         if concealed:

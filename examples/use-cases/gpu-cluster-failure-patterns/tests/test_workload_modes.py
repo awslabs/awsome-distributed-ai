@@ -43,7 +43,8 @@ def exercise_dataloader(spec):
                            stack_dump_dir=spec.get('stack_dump_dir', '/nonexistent'),
                            reinit_in_worker=spec.get('reinit_in_worker', False),
                            worker_cuda=spec.get('worker_cuda', False),
-                           affected_rank=spec.get('affected_rank'))
+                           affected_rank=spec.get('affected_rank'),
+                           mark_lab_lines=spec.get('mark_lab_lines', False))
     with mock.patch.object(workload.dist, 'get_rank', return_value=spec.get('rank', 0)), \
             mock.patch.object(workload, 'collective', side_effect=lambda value: calls.append(1)):
         workload.dataloader(args, tensor)
@@ -104,7 +105,7 @@ def lifecycle(stdout):
             for line in stdout.splitlines() if line.startswith('DataLoader lifecycle: ')]
 
 
-def test_result(stdout):
+def reported_result(stdout):
     return json.loads(next(line[12:] for line in stdout.splitlines()
                            if line.startswith('TEST_RESULT ')))
 
@@ -123,7 +124,7 @@ class DataLoaderOptionA(unittest.TestCase):
 
     def assert_two_epochs(self, result, method):
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual(8, test_result(result.stdout)['collectives'])
+        self.assertEqual(8, reported_result(result.stdout)['collectives'])
         events = lifecycle(result.stdout)
         for epoch in (1, 2):
             parent = [row['event'] for row in events if row['epoch'] == epoch and row['event'] != 'worker_init']
@@ -227,6 +228,28 @@ class DataLoaderOptionA(unittest.TestCase):
                                     'stack_dump_seconds': 60, 'stack_dump_dir': tmp})
             self.assert_two_epochs(result, 'fork')
             self.assertEqual([], list(Path(tmp).iterdir()))
+
+    def test_marked_runs_keep_the_lifecycle_and_start_method_lines_for_the_lab_log(self):
+        # job.sh runs this job with --mark-lab-lines, and common.sh passes its output
+        # through lab-lines.py, which moves every marked line to the lab log.
+        result = self.run_spec({'start_method': 'fork', 'dataset_cache': 'worker-thread',
+                                'mark_lab_lines': True})
+        self.assertEqual(0, result.returncode, result.stderr)
+        lines = result.stdout.splitlines()
+        marked = [line for line in lines if line.startswith('AIM344 lab: ')]
+        # Two epochs: 11 rank events each, and two worker processes each.
+        self.assertEqual(26, len([line for line in marked if 'DataLoader lifecycle: ' in line]))
+        self.assertEqual(4, len([line for line in marked if '"event": "worker_init"' in line]))
+        self.assertIn('AIM344 lab: After first collective: C environment FI_EFA_FORK_SAFE=', result.stdout)
+        with tempfile.TemporaryDirectory() as tmp:
+            lab = Path(tmp) / 'lab.log'
+            passed = subprocess.run([sys.executable, str(LAB / 'lab-lines.py'), str(lab)],
+                                    input=result.stdout, text=True, capture_output=True, timeout=30)
+            self.assertEqual(0, passed.returncode, passed.stderr)
+            self.assertNotIn('DataLoader lifecycle', passed.stdout)
+            self.assertNotIn('start_method', passed.stdout)
+            self.assertIn('DataLoader workload completed: 8 batches; 0 mismatches.', passed.stdout)
+            self.assertEqual(marked, lab.read_text().splitlines())
 
     def test_worker_cuda_under_fork_fails_at_the_first_batch_of_epoch_1(self):
         # Without a GPU the worker raises torch's "not compiled with CUDA" assertion
@@ -426,7 +449,7 @@ class DeviceLoopWithReplicaCheck(unittest.TestCase):
         result = self.run_device({'rank': 0, 'world_size': WORLD, 'duration': 2, 'replica_n': 32,
                                   'argv': ['--replica-check']})
         self.assertEqual(0, result.returncode, result.stderr)
-        summary = test_result(result.stdout)
+        summary = reported_result(result.stdout)
         self.assertEqual(summary['collectives'], summary['steps'] + 1)
         self.assertGreaterEqual(summary['steps'], 20)
         lines = result.stdout.splitlines()
@@ -476,7 +499,7 @@ class DeviceLoopWithReplicaCheck(unittest.TestCase):
     def test_without_the_replica_check_the_loop_is_unchanged(self):
         result = self.run_device({'rank': 0, 'world_size': WORLD, 'duration': 1, 'replica_n': 32})
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual(0, test_result(result.stdout)['steps'])
+        self.assertEqual(0, reported_result(result.stdout)['steps'])
         self.assertNotIn('replica check', result.stdout)
         self.assertIn('AIM344 collective_progress=20 collectives;', result.stdout)
 

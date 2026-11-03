@@ -158,7 +158,9 @@ class LauncherContract(unittest.TestCase):
         # Fake srun only: no Slurm, GPU, AWS or container invocation. 124/137
         # here are injected exit statuses, not evidence of a real timed-out job.
         source = (LAB / 'common.sh').read_text()
-        self.assertIn('timeout --signal=TERM --kill-after=30s 180s', source)
+        # 180 s unless job.sh sets AIM344_JOB_LIMIT_SECONDS (test_job_launcher runs both).
+        self.assertIn('local limit=${AIM344_JOB_LIMIT_SECONDS:-180}', source)
+        self.assertIn('timeout --signal=TERM --kill-after=30s "${limit}s"', source)
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             (directory / 'pins.env').write_text('')
