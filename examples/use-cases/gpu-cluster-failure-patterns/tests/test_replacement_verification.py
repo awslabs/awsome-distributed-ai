@@ -236,6 +236,23 @@ elif 'retrieved on' in args:
     sys.exit(int(os.environ.get('LOCAL_RETRIEVAL_EXIT', '0')))
 elif '.incoming' in args:
     sys.exit(int(os.environ.get('LOCAL_DISTRIBUTION_EXIT', '0')))
+elif 'write_probe' in args:
+    # Run the shipped per-node write in a stand-in checkpoint directory per node.
+    status = 0
+    for procid, node in enumerate(['gpu-g7-1', 'gpu-g7-2']):
+        directory = pathlib.Path(os.environ['LOCAL_ROOT']) / ('checkpoints-' + node)
+        directory.mkdir(exist_ok=True)
+        if os.environ.get('LOCAL_FULL_NODE') == node:
+            # A full file system: every write there fails with ENOSPC.
+            (directory / ('.aim344-write-probe-' + os.environ['SLURM_JOB_ID'] + '-'
+                          + str(procid))).symlink_to('/dev/full')
+        command = [part.replace('/run/aim344-checkpoints', str(directory))
+                   for part in sys.argv[sys.argv.index('bash'):]]
+        remote = subprocess.run(command, env=dict(os.environ, SLURM_PROCID=str(procid),
+                                                  LOCAL_REMOTE_NODE=node))
+        status = status or remote.returncode
+        assert not list(directory.iterdir()), 'the write probe left a file behind'
+    sys.exit(status)
 elif 'test -r /run/aim344-checkpoints' in args:
     sys.exit(int(os.environ.get('LOCAL_FIXTURE_EXIT', '0')))
 elif 'torch-node.sh storage' in args:
@@ -311,6 +328,9 @@ exit "${LOCAL_SUITE_EXIT:-0}"
                 self.assertIn('every expected node reported 2 device(s) with traffic', result.stdout)
                 self.assertIn('nodes_with_matching_bundle=2 of 2', result.stdout)
                 self.assertIn('storage_exit_code=' + storage_exit, result.stdout)
+                self.assertIn('   gpu-g7-1: write_probe=yes\n   gpu-g7-2: write_probe=yes\n', result.stdout)
+                self.assertIn('write_probe_on_all_nodes_exit_code=0', result.stdout)
+                self.assertIn(f'check5=0 storage={storage_exit} overall=', result.stdout)
                 self.assertIn('srun --partition=assigned-queue --nodelist=gpu-g7-1 --nodes=1', result.stdout)
                 self.assertIn('> ~/aim344-verify-123-results.tar', result.stdout)
                 self.assertIn('~/aim344-verify-123-results.tar | sha256sum -c -', result.stdout)
@@ -321,6 +341,22 @@ exit "${LOCAL_SUITE_EXIT:-0}"
                 self.assertLess(result.stdout.index('nodes_with_matching_bundle=2 of 2'),
                                 result.stdout.index('current-job container removed:'))
                 print('LOCAL_VERIFICATION_ENTRY', result.returncode, result.stdout)
+            # The workload writes on the first node only. A second node whose
+            # checkpoint directory refuses a write fails storage=, although the
+            # workload completed.
+            env.update(LOCAL_STORAGE_EXIT='0', LOCAL_FULL_NODE='gpu-g7-2')
+            (data / 'pyxis_aim344_check5_123').mkdir()
+            result = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True)
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+            self.assertIn('   gpu-g7-1: write_probe=yes\n', result.stdout)
+            self.assertRegex(result.stdout, r'   gpu-g7-2: write_probe=NO \(dd: .*No space left on device\)\n')
+            self.assertIn('write_probe_on_all_nodes_exit_code=1', result.stdout)
+            self.assertIn('storage_exit_code=0', result.stdout)
+            self.assertIn('check5=0 storage=1 overall=1', result.stdout)
+            self.assertLess(result.stdout.index('write_probe_on_all_nodes_exit_code='),
+                            result.stdout.index('torch-node.sh storage') if 'torch-node.sh storage'
+                            in result.stdout else result.stdout.index('storage_exit_code='))
+            del env['LOCAL_FULL_NODE']
             calls = [json.loads(line) for line in (root / 'argv.log').read_text().splitlines()]
             for call in calls:
                 cpu_flags = [arg.split('=', 1)[1] for arg in call['argv']
@@ -362,7 +398,8 @@ exit "${LOCAL_SUITE_EXIT:-0}"
             self.assertEqual(launch['argv'][:5], ['--check', '5', '--verbose', '--timeout', '360'])
             preps = [c for c in calls if c['argv'][-1] == 'true']
             self.assertTrue(preps)
-            self.assertEqual((root / 'timeouts.log').read_text().splitlines(), ['600s', '600s'])
+            # One Check 5 preparation per run: two storage outcomes and the full node.
+            self.assertEqual((root / 'timeouts.log').read_text().splitlines(), ['600s'] * 3)
             for call in preps:
                 self.assertEqual(call['env']['SLURM_MPI_TYPE'], 'none')
                 self.assertEqual(call['mounts'], '')

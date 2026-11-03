@@ -67,7 +67,7 @@ class FakeDist:
 
 def args(**fields):
     base = dict(mode='device', duration_seconds=3600, inject=False, resume=False,
-                writer_rank=0, checkpoint_every=0, mark_lab_lines=False)
+                writer_rank=0, checkpoint_every=0, mark_lab_lines=False, end_after_save=False)
     base.update(fields)
     return SimpleNamespace(**base)
 
@@ -180,6 +180,62 @@ class CheckpointWriter(unittest.TestCase):
                                    args(writer_rank=9, checkpoint_every=5, resume=True),
                                    loops=1, start_value=7)
         self.assertEqual(('start_step', 9, 7), peer.broadcasts[0])
+
+    def run_until_rank_zero_stops(self, options, start_value=0):
+        """Rank 0 alone, with its own keep_running decision broadcast to itself."""
+        fake = FakeDist(self.workload.torch, 0, 0, start_value=start_value)
+
+        def broadcast(tensor, src):
+            # Rank 0 is the source of both broadcasts, so it keeps its own values.
+            fake.broadcasts.append(('keep_running' if tensor.dtype == self.workload.torch.int32
+                                    else 'start_step', src, int(tensor.item())))
+        fake.broadcast = broadcast
+        output = io.StringIO()
+        with mock.patch.object(self.workload, 'dist', fake), \
+                mock.patch.object(self.workload, 'collective', side_effect=self.collective), \
+                mock.patch.object(self.workload, 'checkpoint_dir', return_value=self.path), \
+                contextlib.redirect_stdout(output):
+            self.workload.run_steps(options, self.workload.torch.ones(4))
+        return output.getvalue()
+
+    def test_end_after_save_stops_twenty_steps_after_the_first_save_past_the_start(self):
+        # The writer is rank 0 here, so one process makes the saves and the decision.
+        for start, collectives, saves in ((0, 220, ['200']), (150, 70, ['200']),
+                                          (200, 220, ['400'])):
+            with self.subTest(start=start):
+                self.collectives = 0
+                (self.path / 'last.json').write_text(json.dumps({'next_step': start}))
+                # The clock passes the duration only after 10,000 steps, so a loop
+                # that ignores the save ends there instead of running for an hour.
+                clock = lambda: 4000.0 if self.collectives >= 10000 else 0.0  # noqa: E731
+                with mock.patch.object(self.workload.time, 'monotonic', side_effect=clock):
+                    out = self.run_until_rank_zero_stops(
+                        args(writer_rank=0, checkpoint_every=200, resume=True, end_after_save=True))
+                self.assertEqual(collectives, self.collectives)
+                self.assertEqual(saves, re.findall(r'^checkpoint saved: next_step=(\d+) ', out, re.M))
+                self.assertIn(f'Device workload completed: {collectives} collectives; 0 mismatches.', out)
+                # The save is followed by one more progress record.
+                lines = out.splitlines()
+                saved = lines.index(f'checkpoint saved: next_step={saves[0]} (step index)')
+                self.assertTrue(any(line.startswith('AIM344 collective_progress=')
+                                    for line in lines[saved:]), out)
+
+    def test_end_after_save_is_still_bounded_by_the_duration(self):
+        # The clock passes the 60-second bound after the fifth step.
+        clock = lambda: 61.0 if self.collectives >= 5 else 0.0  # noqa: E731
+        with mock.patch.object(self.workload.time, 'monotonic', side_effect=clock):
+            out = self.run_until_rank_zero_stops(
+                args(writer_rank=0, checkpoint_every=200, end_after_save=True, duration_seconds=60))
+        self.assertEqual(5, self.collectives)
+        self.assertNotIn('next_step=200', out)
+
+    def test_without_end_after_save_the_duration_alone_ends_the_loop(self):
+        clock = lambda: 61.0 if self.collectives >= 300 else 0.0  # noqa: E731
+        with mock.patch.object(self.workload.time, 'monotonic', side_effect=clock):
+            out = self.run_until_rank_zero_stops(
+                args(writer_rank=0, checkpoint_every=200, duration_seconds=60))
+        self.assertEqual(300, self.collectives)
+        self.assertIn('checkpoint saved: next_step=200 (step index)', out)
 
     def test_without_checkpoints_the_loop_is_the_device_workload(self):
         fake, out, _ = self.run_rank(self.workload.run_steps, 0, args(), loops=20)
@@ -298,11 +354,26 @@ class CheckpointWriter(unittest.TestCase):
         for argv in (['storage', '--writer-rank', '-1'], ['storage', '--writer-rank', 'x'],
                      ['storage', '--checkpoint-every', '5'], ['device', '--inject'],
                      ['device', '--resume'], ['device', '--no-such-flag'],
-                     ['storage', '--writer-rank']):
+                     ['storage', '--writer-rank'], ['device', '--end-after-save'],
+                     ['storage', '--end-after-save']):
             with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as stop:
                     parse(argv)
                 self.assertEqual(2, stop.exception.code)
+
+    def test_dataloader_mode_refuses_the_checkpoint_options(self):
+        parse = self.workload.parse_args
+        self.assertEqual(0, parse(['dataloader', '--start-method', 'spawn', '--epochs', '2']).writer_rank)
+        self.assertTrue(parse(['device', '--checkpoint-every=200', '--resume', '--end-after-save'])
+                        .end_after_save)
+        for flags in (['--writer-rank', '9'], ['--writer-rank', '0'], ['--inject'], ['--resume'],
+                      ['--mark-lab-lines'], ['--checkpoint-every', '5']):
+            with self.subTest(flags=flags):
+                error = io.StringIO()
+                with contextlib.redirect_stderr(error), self.assertRaises(SystemExit) as stop:
+                    parse(['dataloader', '--epochs', '2', *flags])
+                self.assertEqual(2, stop.exception.code)
+                self.assertIn(flags[0], error.getvalue())
 
     def test_a_writer_rank_outside_the_job_stops_before_any_collective(self):
         fake = FakeDist(self.workload.torch, 0, 0)

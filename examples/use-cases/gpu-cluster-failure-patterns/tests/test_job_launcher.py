@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -29,7 +30,9 @@ CAUSE_WORDS = re.compile(r'storage|writer|inject|filler|plugin|slow|efa|reset|fl
 
 FAKE_COMMON = r'''
 note() { printf '%s\n' "$*" >> "$TEST_CALLS"; }
-prepare_slurm() { note "prepare_slurm RESULTS_DIR=$RESULTS_DIR"; }
+prepare_allocation() { note "prepare_allocation RESULTS_DIR=$RESULTS_DIR"; }
+prepare_slurm() { note "prepare_slurm, which starts a container"; }
+use_nccl_container() { note "use_nccl_container"; }
 prepare_torch() { note "prepare_torch"; }
 node_command() {
     note "node_command $*"
@@ -69,6 +72,13 @@ if [[ $(cat "$rc" 2>/dev/null || echo 0) == 0 ]]; then cat "$reply"; else cat "$
 exit "$(cat "$rc" 2>/dev/null || echo 0)"
 '''
 
+# Records the container removal; $TEST_CLEANUP_RC makes it fail.
+FAKE_CLEANUP = r'''#!/bin/bash
+printf 'cleanup\n' >> "$TEST_CALLS"
+echo 'current-job container removed: pyxis_aim344_torch_4242'
+exit "${TEST_CLEANUP_RC:-0}"
+'''
+
 FAKE_SCONTROL = r'''#!/bin/bash
 [[ $1 == show && $2 == job ]] || exit 1
 printf 'JobId=%s JobName=%s UserId=x(1) JobState=RUNNING TimeLimit=%s NumNodes=2\n' \
@@ -85,6 +95,7 @@ class Launcher(unittest.TestCase):
         shutil.copy(JOB, self.lab / 'job.sh')
         (self.lab / 'common.sh').write_text(FAKE_COMMON)
         (self.lab / '12.device-exercise.sh').write_text(FAKE_CONTROLLER)
+        (self.lab / '9.cleanup.sh').write_text(FAKE_CLEANUP)
         bindir = root / 'bin'
         bindir.mkdir()
         (bindir / 'scontrol').write_text(FAKE_SCONTROL)
@@ -143,6 +154,20 @@ class Launcher(unittest.TestCase):
     def next_calls(self):
         return self.lines(self.next_log)
 
+    def job_processes(self):
+        # The controller step is a subshell of job.sh, with the same command line.
+        found = subprocess.run(['pgrep', '-f', str(self.lab / 'job.sh')], capture_output=True,
+                               text=True).stdout
+        return found.split()
+
+    def later_progress(self):
+        """A later run in the same allocation writes two fresh progress records."""
+        with (self.home / 'aim344-results' / 'device-4242.log').open('a') as copy:
+            for n in (20, 40):
+                copy.write(f'AIM344 collective_progress={n} collectives; tensor_bytes=1 B; '
+                           f'timestamp={time.time()} s since epoch; 0 mismatches; job_id=4242; '
+                           'world_size=16; rank=0.\n')
+
     def assert_no_cause(self, result):
         # The temporary directory's random name is not participant output.
         seen = (result.stdout + result.stderr).replace(self.tmp.name, '<tmp>')
@@ -170,22 +195,36 @@ class Launcher(unittest.TestCase):
         self.assertEqual(f'Created your notes file: {notes}\n', result.stdout)
         text = notes.read_text()
         self.assertTrue(text.startswith('# Your cluster\n'))
-        for heading in ('# Triage table', '# Healthy values', '# Incident 1', '# Incident 2',
-                        '# Incident 3', '# Incident 4', '# Loss table', '# Card answers',
-                        '## Card A', '## Card B', '## Card C'):
-            self.assertIn('\n' + heading + '\n', '\n' + text)
+        headings = [line for line in text.splitlines() if line.startswith('#')]
+        # The pages' five incidents, in their order, and the cards they still use.
+        self.assertEqual(['# Your cluster', '# Triage table', '# Healthy values', '# Incident 1',
+                          '# Incident 2', '# Incident 3', '# Incident 4', '# Incident 5',
+                          '# Loss table', '# Card answers', '## Card A', '## Card B'], headings)
         self.assertIn('| What you see | Who reported | First record to read | Check that separates '
                       'the causes | Kind of recovery | Your healthy value |', text)
         for row in ('Nobody times out, but the job is slow', 'One rank does not report',
                     'Every rank reports at once', 'Progress stops and nothing prints',
                     'Everything passes, but an answer differs'):
             self.assertIn(f'| {row} | | | | | |', text)
-        for row in ('Last progress line', 'Watchdog lines', 'Kernel log', 'Check 0', 'Check 6'):
-            self.assertIn(f'| {row} | | |', text)
+        # The device incident's record table is in the Incident 5 section.
+        incident_5 = text[text.index('\n# Incident 5\n'):text.index('\n# Loss table\n')]
+        for row in ('Last progress line', 'Watchdog lines', 'Correctness error after the watchdog lines',
+                    'Kernel log', 'Check 0', 'Check 2', 'Check 3', 'Check 6'):
+            self.assertIn(f'| {row} | | |', incident_5)
+        self.assertEqual(1, text.count('| Kernel log | | |'))
+        # The healthy sweep's values that Incident 1 compares against.
+        healthy = text[text.index('\n# Healthy values\n'):text.index('\n# Incident 1\n')]
+        for field in ('Sweep, 2 GiB line:', 'Sweep, EFA byte changes:', 'Rate:', 'Checkpoint line:'):
+            self.assertIn('\n' + field + '\n', healthy)
+        loss = text[text.index('\n# Loss table\n'):text.index('\n# Card answers\n')]
         for row in ('| t0 | Last progress line | |', '| Detection | t0 | t1 | |',
-                    '| Rework | The last checkpoint | The stop | |'):
-            self.assertIn(row, text)
-        self.assertEqual(3, text.count('Transfer question:'))
+                    '| Rework | The last checkpoint | The stop | |', '| Incident 3 | | | |',
+                    '| Incident 4 | | | |'):
+            self.assertIn(row, loss)
+        self.assertNotIn('| Incident 2 |', loss)
+        # Incidents 1 to 4 each have a transfer question; Incident 5 has none.
+        self.assertEqual(4, text.count('Transfer question:'))
+        self.assertNotIn('Transfer question:', incident_5)
         notes.write_text('mine\n')
         again = self.run_job('notes', **env)
         self.assertEqual(0, again.returncode)
@@ -211,17 +250,50 @@ class Launcher(unittest.TestCase):
                     self.assertEqual([], self.lines(self.calls))
 
     # ---------------------------------------------------------------- run
-    def test_run_starts_the_healthy_job_and_never_asks_for_an_incident(self):
+    def test_run_starts_the_healthy_job_then_the_sweep_and_never_asks_for_an_incident(self):
+        # Before any incident the controller has not created the incidents directory.
+        shutil.rmtree(self.incidents)
         result = self.run_job('run')
         self.assertEqual(0, result.returncode, result.stderr)
+        lab = self.incidents / 'job-lab.log'
         [call] = self.torch_calls()
-        self.assertRegex(call, r'^run_torch phase=job run_id=job-\d{8}T\d{6}Z copy=1 lab= '
-                               r'iface=rdmap83s0 args=device --checkpoint-every=200 '
-                               r'--writer-rank=0 --duration-seconds=60$')
+        self.assertRegex(call, rf'^run_torch phase=job run_id=job-\d{{8}}T\d{{6}}Z copy=1 '
+                               rf'lab={re.escape(str(lab))} iface=rdmap83s0 args=device '
+                               r'--checkpoint-every=200 --writer-rank=0 --duration-seconds=60$')
         self.assertEqual([], self.next_calls())
+        calls = self.lines(self.calls)
+        # The allocation is checked once, no container starts before a step needs
+        # it, and the sweep runs in the NCCL container after the torch job.
+        self.assertEqual([f'prepare_allocation RESULTS_DIR={self.results}', call, 'use_nccl_container'],
+                         calls[:3])
+        self.assertRegex(calls[3], rf'^run_sweep job run_id=job-\d{{8}}T\d{{6}}Z '
+                                   rf'lab={re.escape(str(lab))} iface=unset$')
+        self.assertEqual('cleanup', calls[4])
+        self.assertEqual(5, len(calls), calls)
         run_id = call.split('run_id=')[1].split()[0]
+        sweep_id = calls[3].split('run_id=')[1].split()[0]
         self.assertEqual(2, result.stdout.count(f'Job log: {self.results}/{run_id}.log\n'))
-        self.assertRegex(result.stdout, r'job_end_utc=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n')
+        self.assertEqual(2, result.stdout.count(f'Job log: {self.results}/{sweep_id}.nccl.log\n'))
+        self.assertEqual(2, len(re.findall(r'job_end_utc=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n',
+                                           result.stdout)))
+        # The container removal is a lab line.
+        self.assertNotIn('container removed', result.stdout + result.stderr)
+        self.assertIn('current-job container removed', lab.read_text())
+        self.assertEqual(0o700, self.incidents.stat().st_mode & 0o777)
+        self.assert_no_cause(result)
+
+    def test_a_failed_healthy_job_skips_the_sweep_and_still_removes_the_containers(self):
+        result = self.run_job('run', TEST_RC='1')
+        self.assertEqual(1, result.returncode)
+        calls = self.lines(self.calls)
+        self.assertEqual([], [line for line in calls if line.startswith('run_sweep')])
+        self.assertEqual('cleanup', calls[-1])
+
+    def test_a_failed_container_removal_keeps_the_job_status_and_says_so_neutrally(self):
+        result = self.run_job('run', TEST_CLEANUP_RC='1')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn('could not remove the containers of this allocation; tell your table expert',
+                      result.stderr)
         self.assert_no_cause(result)
 
     def test_results_default_to_node_local_storage(self):
@@ -230,7 +302,7 @@ class Launcher(unittest.TestCase):
         result = subprocess.run(['bash', str(self.lab / 'job.sh'), 'run'], capture_output=True,
                                 text=True, timeout=60, env=env)
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn(f'prepare_slurm RESULTS_DIR=/var/tmp/aim344-{USER}-4242', self.lines(self.calls))
+        self.assertIn(f'prepare_allocation RESULTS_DIR=/var/tmp/aim344-{USER}-4242', self.lines(self.calls))
 
     # ---------------------------------------------------------------- storage incident
     def test_storage_incident_asks_once_and_passes_its_settings_silently(self):
@@ -249,6 +321,9 @@ class Launcher(unittest.TestCase):
         self.assertIn('Starting incident 1.', result.stdout)
         self.assertIn('launcher_exit_code=1 (dimensionless)', result.stdout)
         self.assert_no_cause(result)
+        # The incident keeps its containers, and starts no NCCL container.
+        self.assertNotIn('cleanup', self.lines(self.calls))
+        self.assertNotIn('prepare_slurm, which starts a container', self.lines(self.calls))
 
     def test_a_refused_incident_prints_the_refusal_and_runs_nothing(self):
         self.reply(1, 'All 4 incidents for this seat have been issued; there is no next incident.\n', rc=3)
@@ -273,6 +348,7 @@ class Launcher(unittest.TestCase):
         self.assertIn('run_id=incident-1-rerun-', call)
         self.assertTrue(call.endswith('--writer-rank=9 --duration-seconds=60 --resume'), call)
         self.assertNotIn('--inject', call)
+        self.assertNotIn('cleanup', self.lines(self.calls))
 
     def test_storage_resume_frees_the_space_in_the_lab_log_then_resumes(self):
         self.profile(1, 'storage', {'writer_rank': 9})
@@ -284,8 +360,13 @@ class Launcher(unittest.TestCase):
         [call] = self.torch_calls()
         self.assertGreater(calls.index(call), recovery)
         self.assertIn('run_id=incident-1-resume-', call)
-        self.assertTrue(call.endswith('--writer-rank=9 --duration-seconds=10 --resume'), call)
-        self.assertIn('Removed lab filler', (self.incidents / 'incident-1-lab.log').read_text())
+        # The resumed job ends after its first save past the resume point, within 60 s.
+        self.assertTrue(call.endswith('--writer-rank=9 --duration-seconds=60 --resume --end-after-save'), call)
+        self.assertEqual('cleanup', calls[-1])
+        self.assertGreater(calls.index('cleanup'), calls.index(call))
+        lab = (self.incidents / 'incident-1-lab.log').read_text()
+        self.assertIn('Removed lab filler', lab)
+        self.assertIn('current-job container removed', lab)
         self.assert_no_cause(result)
         self.assertEqual([], self.next_calls())
 
@@ -304,17 +385,25 @@ class Launcher(unittest.TestCase):
         self.assertIn('plugin_action=hide', lab.read_text())
         self.assert_no_cause(result)
         self.assertEqual(1, len(self.next_calls()))
+        # The hidden plugin lives in this container, so the incident keeps it.
+        self.assertNotIn('cleanup', calls)
+        self.assertLess(calls.index('node_command bash /opt/aim344/plugin-state.sh hide'),
+                        calls.index(sweep[0]))
 
     def test_slow_job_rerun_keeps_the_fault_and_resume_restores_first(self):
         self.profile(2, 'slow-job')
         self.assertEqual(0, self.run_job('rerun').returncode)
         self.assertNotIn('plugin-state', ' '.join(self.lines(self.calls)))
+        self.assertEqual(1, len([line for line in self.lines(self.calls) if line.startswith('run_sweep')]))
+        self.assertNotIn('cleanup', self.lines(self.calls))
         self.calls.unlink()
         result = self.run_job('resume')
         self.assertEqual(0, result.returncode, result.stderr)
         calls = self.lines(self.calls)
-        self.assertLess(calls.index('node_command bash /opt/aim344/plugin-state.sh restore'),
-                        [i for i, line in enumerate(calls) if line.startswith('run_sweep')][0])
+        sweep = [i for i, line in enumerate(calls) if line.startswith('run_sweep')]
+        self.assertEqual(1, len(sweep))
+        self.assertLess(calls.index('node_command bash /opt/aim344/plugin-state.sh restore'), sweep[0])
+        self.assertEqual(len(calls) - 1, calls.index('cleanup'))
         self.assertIn('plugin_action=restore', (self.incidents / 'incident-2-lab.log').read_text())
         self.assert_no_cause(result)
         self.assertEqual([], self.next_calls())
@@ -348,6 +437,8 @@ class Launcher(unittest.TestCase):
         self.assert_no_cause(result)
         self.assertNotIn('under way', result.stdout + result.stderr)
         self.assertEqual([], list(self.incidents.glob('.job-ended-*')))
+        self.assertNotIn('cleanup', self.lines(self.calls))
+        self.assertEqual([], self.job_processes())
 
     def test_controller_step_stops_at_the_first_refusal(self):
         self.issue(4, 'efa-reset')
@@ -383,6 +474,53 @@ class Launcher(unittest.TestCase):
         self.assertEqual(1, len(self.next_calls()))
         self.assertIn('The job ended before the lab controls could act', result.stderr)
 
+    def test_an_exit_inside_the_job_ends_the_controller_step(self):
+        # prepare_torch and run_torch exit the launcher instead of returning when
+        # TORCH_IMAGE or CHECKPOINT_DIR is unset or Slurm returns no node address.
+        for body in ('exit 1', ': "${TORCH_IMAGE:?Set TORCH_IMAGE to the image}"'):
+            with self.subTest(body=body):
+                for path in self.incidents.glob('*'):
+                    path.unlink()
+                if self.next_log.exists():
+                    self.next_log.unlink()
+                self.issue(5, 'efa-reset')
+                (self.lab / 'common.sh').write_text(
+                    FAKE_COMMON + f'\nrun_torch() {{ note run_torch; {body}; }}\n')
+                result = self.run_job('incident', timeout=30)
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertEqual([], self.job_processes())
+                self.later_progress()
+                time.sleep(3)
+                self.assertEqual(1, len(self.next_calls()), self.next_calls())
+                self.assertEqual([], list(self.incidents.glob('.job-ended-*')))
+
+    def test_a_killed_launcher_leaves_no_controller_step_behind(self):
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            with self.subTest(signal=sig.name):
+                if self.next_log.exists():
+                    self.next_log.unlink()
+                self.issue(5, 'efa-reset')
+                launcher = subprocess.Popen(['bash', str(self.lab / 'job.sh'), 'incident'],
+                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                            env={**self.env, 'TEST_RUN_SECONDS': '60'})
+                try:
+                    deadline = time.monotonic() + 20
+                    while len(self.job_processes()) < 2 and time.monotonic() < deadline:
+                        time.sleep(0.1)
+                    self.assertEqual(2, len(self.job_processes()))
+                    os.kill(launcher.pid, sig)
+                    launcher.wait(timeout=20)
+                    deadline = time.monotonic() + 10
+                    while self.job_processes() and time.monotonic() < deadline:
+                        time.sleep(0.1)
+                    self.assertEqual([], self.job_processes())
+                    self.later_progress()
+                    time.sleep(3)
+                    self.assertEqual(1, len(self.next_calls()), self.next_calls())
+                finally:
+                    for pid in self.job_processes():
+                        os.kill(int(pid), signal.SIGKILL)
+
     def test_controller_rerun_and_resume_never_ask_the_lab_controls(self):
         self.profile(1, 'storage', {'writer_rank': 9}, issued_at=100.0)
         self.profile(4, 'efa-reset', issued_at=400.0)
@@ -411,7 +549,7 @@ class Launcher(unittest.TestCase):
                       'with recover; next continues after that.\n', rc=3)
         result = self.run_job('incident')
         self.assertEqual(3, result.returncode)
-        self.assertEqual([f'prepare_slurm RESULTS_DIR={self.results}'], self.lines(self.calls))
+        self.assertEqual([f'prepare_allocation RESULTS_DIR={self.results}'], self.lines(self.calls))
         self.assertIn('still holds your node', result.stderr)
 
     # ---------------------------------------------------------------- held and bad profiles
@@ -539,6 +677,35 @@ class CommonRunIds(unittest.TestCase):
         plain = self.run_common('run_sweep fallback\n')
         self.assertIn('plugin library directory is absent', plain.stdout)
         self.assertTrue(list(self.root.glob('fallback-*Z.inventory.log')))
+
+
+    def test_allocation_checks_start_no_container_and_prepare_slurm_still_does(self):
+        srun = self.root / 'srun'
+        srun.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$TEST_SRUN_LOG"\n'
+                        'case "$*" in *SLURM_GPUS_ON_NODE*) printf "8\\n8\\n" ;; esac\n')
+        srun.chmod(0o755)
+        env = {'TEST_SRUN_LOG': str(self.root / 'srun.log'), 'SLURM_JOB_CPUS_PER_NODE': '192(x2)',
+               'SLURM_JOB_NUM_NODES': '2', 'NCCL_ENROOT_IMAGE': '/images/nccl.sqsh'}
+        show = 'printf "%s\\n" "${CONTAINER_ARGS[@]}"\n'
+        result = self.run_common('prepare_allocation\n' + show, **env)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn('allocation: 2 nodes, 8 GPUs per node, 16 GPU ranks\n', result.stdout)
+        self.assertIn('--container-image=/images/nccl.sqsh\n--container-name=aim344_4242\n', result.stdout)
+        srun_calls = (self.root / 'srun.log').read_text().splitlines()
+        self.assertEqual([], [line for line in srun_calls if '--container' in line])
+        # A torch job points node_command at the torch container; a sweep after it
+        # points it back at the NCCL container.
+        result = self.run_common('prepare_allocation\nCONTAINER_ARGS=(--container-image=/images/torch.sqsh)\n'
+                                 'use_nccl_container\n' + show, **env)
+        self.assertIn('--container-image=/images/nccl.sqsh\n', result.stdout)
+        self.assertNotIn('torch', result.stdout)
+        (self.root / 'srun.log').unlink()
+        result = self.run_common('prepare_slurm\n', **env)
+        self.assertEqual(0, result.returncode, result.stderr)
+        started = [line for line in (self.root / 'srun.log').read_text().splitlines()
+                   if '--container-image=/images/nccl.sqsh' in line]
+        self.assertEqual(1, len(started))
+        self.assertTrue(started[0].endswith(' --container-remap-root true'), started[0])
 
 
 class NumberedLaunchers(unittest.TestCase):
@@ -679,29 +846,89 @@ class InstallerProfileSteps(unittest.TestCase):
         body = cls.TEXT.index("<<'PY'\n", start) + len("<<'PY'\n")
         return cls.TEXT[body:cls.TEXT.index('\nPY\n', body)]
 
-    def test_seat_values_are_checked_before_any_change(self):
+    def seat_check(self, env, lab, slurm_bin):
         start = self.TEXT.index('peer_node=${AIM344_PEER_NODE:-}')
         end = self.TEXT.index('\nfi\n', start) + len('\nfi\n')
         # The check precedes the first change the installer makes.
         self.assertLess(end, self.TEXT.index('echo "== installing the session helper"'))
-        snippet = 'set -euo pipefail\ntarget_node=gpu-g7-1\nslurm_bin=${TEST_SLURM_BIN:-/opt/slurm/bin}\n' \
-                  + self.TEXT[start:end] + 'echo checked\n'
-        for env, ok in (({}, True),
-                        ({'AIM344_PEER_NODE': 'gpu-g7-2', 'AIM344_EFA_DEVICE': 'rdmap83s0'}, True),
-                        ({'AIM344_PEER_NODE': 'gpu-g7-2'}, False),
-                        ({'AIM344_EFA_DEVICE': 'rdmap83s0'}, False),
-                        ({'AIM344_PEER_NODE': 'gpu-g7-1', 'AIM344_EFA_DEVICE': 'rdmap83s0'}, False),
-                        ({'AIM344_PEER_NODE': 'gpu g7', 'AIM344_EFA_DEVICE': 'rdmap83s0'}, False),
-                        ({'AIM344_PEER_NODE': 'gpu-g7-2', 'AIM344_EFA_DEVICE': 'rdma;id'}, False),
-                        ({'AIM344_PEER_NODE': 'gpu-g7-2', 'AIM344_EFA_DEVICE': 'rdmap83s0',
-                          'TEST_SLURM_BIN': '/opt/slurm bin'}, False)):
-            with self.subTest(env=env):
-                base = {k: v for k, v in os.environ.items()
-                        if k not in ('AIM344_PEER_NODE', 'AIM344_EFA_DEVICE')}
-                result = subprocess.run(['bash', '-c', snippet], capture_output=True, text=True,
-                                        timeout=20, env={**base, **env})
-                self.assertEqual(ok, result.returncode == 0, result.stderr)
-                self.assertEqual(ok, result.stdout == 'checked\n')
+        snippet = 'set -euo pipefail\ntarget_node=gpu-g7-1\n' + self.TEXT[start:end] + 'echo checked\n'
+        base = {k: v for k, v in os.environ.items() if k not in ('AIM344_PEER_NODE', 'AIM344_EFA_DEVICE')}
+        return subprocess.run(['bash', '-c', snippet], capture_output=True, text=True, timeout=20,
+                              env={**base, 'lab': str(lab), 'slurm_bin': str(slurm_bin), **env})
+
+    @staticmethod
+    def lab_tree(root):
+        """A lab directory and a Slurm client directory that pass the checks."""
+        lab, slurm = root / 'lab', root / 'slurm-25.11' / 'bin'
+        (lab / 'facilitator').mkdir(parents=True)
+        slurm.mkdir(parents=True)
+        for name in ('facilitator/participant-profile.sh', 'facilitator/allocation-env.py', 'lab.env'):
+            (lab / name).write_text('# lab file\n')
+            (lab / name).chmod(0o644)
+        for path in (root, lab, lab / 'facilitator'):
+            path.chmod(0o755)
+        (slurm / 'salloc').write_text('#!/bin/sh\n')
+        (slurm / 'salloc').chmod(0o755)
+        return lab, slurm
+
+    def test_seat_values_are_checked_before_any_change(self):
+        profile = {'AIM344_PEER_NODE': 'gpu-g7-2', 'AIM344_EFA_DEVICE': 'rdmap83s0'}
+        with tempfile.TemporaryDirectory() as tmp:
+            lab, slurm = self.lab_tree(Path(tmp))
+            for env, slurm_bin, ok in (
+                    ({}, '/opt/slurm/bin', True),
+                    (profile, slurm, True),
+                    ({'AIM344_PEER_NODE': 'gpu-g7-2'}, slurm, False),
+                    ({'AIM344_EFA_DEVICE': 'rdmap83s0'}, slurm, False),
+                    ({'AIM344_PEER_NODE': 'gpu-g7-1', 'AIM344_EFA_DEVICE': 'rdmap83s0'}, slurm, False),
+                    ({'AIM344_PEER_NODE': 'gpu g7', 'AIM344_EFA_DEVICE': 'rdmap83s0'}, slurm, False),
+                    ({'AIM344_PEER_NODE': 'gpu-g7-2', 'AIM344_EFA_DEVICE': 'rdma;id'}, slurm, False),
+                    (profile, '/opt/slurm bin', False),
+                    # A Slurm client directory of another version, without salloc.
+                    (profile, Path(tmp) / 'slurm-25.05' / 'bin', False)):
+                with self.subTest(env=env, slurm_bin=slurm_bin):
+                    result = self.seat_check(env, lab, slurm_bin)
+                    self.assertEqual(ok, result.returncode == 0, result.stderr)
+                    self.assertEqual(ok, result.stdout == 'checked\n')
+            missing = self.seat_check(profile, lab, Path(tmp) / 'slurm-25.05' / 'bin')
+            self.assertIn('No salloc in', missing.stderr)
+
+    def test_the_profile_is_refused_from_a_lab_directory_others_can_change(self):
+        profile = {'AIM344_PEER_NODE': 'gpu-g7-2', 'AIM344_EFA_DEVICE': 'rdmap83s0'}
+        changes = {
+            'the lab directory writable by its group': lambda lab: lab.chmod(0o775),
+            'facilitator/ writable by others': lambda lab: (lab / 'facilitator').chmod(0o757),
+            'the profile writable by its group': lambda lab: (lab / 'facilitator/participant-profile.sh').chmod(0o664),
+            'allocation-env.py writable by others': lambda lab: (lab / 'facilitator/allocation-env.py').chmod(0o646),
+            'lab.env writable by its group': lambda lab: (lab / 'lab.env').chmod(0o664),
+            'the profile a symbolic link': lambda lab: (
+                (lab / 'facilitator/participant-profile.sh').unlink(),
+                (lab / 'facilitator/participant-profile.sh').symlink_to(lab / 'lab.env')),
+            'the profile missing': lambda lab: (lab / 'facilitator/participant-profile.sh').unlink(),
+            'a parent writable by others, not sticky': lambda lab: lab.parent.chmod(0o777),
+        }
+        for name, change in changes.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
+                lab, slurm = self.lab_tree(Path(tmp))
+                change(lab)
+                result = self.seat_check(profile, lab, slurm)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn('refusing to install the login profile', result.stderr)
+                self.assertEqual('', result.stdout)
+        with tempfile.TemporaryDirectory() as tmp:
+            lab, slurm = self.lab_tree(Path(tmp))
+            # lab.env is generated on site and may come after the installer.
+            (lab / 'lab.env').unlink()
+            self.assertEqual(0, self.seat_check(profile, lab, slurm).returncode)
+            # A sticky parent such as /tmp lets others add entries, not replace these.
+            lab.parent.chmod(0o1777)
+            self.assertEqual(0, self.seat_check(profile, lab, slurm).returncode)
+            # Through a symbolic link, the resolved directory is checked.
+            link = Path(tmp) / 'link'
+            link.symlink_to(lab)
+            self.assertEqual(0, self.seat_check(profile, link, slurm).returncode)
+            lab.chmod(0o775)
+            self.assertNotEqual(0, self.seat_check(profile, link, slurm).returncode)
 
     def test_the_seat_file_holds_the_handout_values(self):
         block = self.block('python3 - "$seat_dir"')
