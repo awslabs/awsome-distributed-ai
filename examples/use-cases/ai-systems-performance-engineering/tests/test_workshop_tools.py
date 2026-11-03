@@ -633,6 +633,78 @@ def stub(directory, name, script):
     path.chmod(0o755)
 
 
+class NodeCollectorTests(unittest.TestCase):
+    """install-node-collectors.sh with stub id, systemctl, systemd-run and curl on PATH."""
+
+    def run_script(self, *arguments, timer='OnUnitActiveUSec=5s', prom='aim347_lustre_collection_success 1',
+                   metrics='aim347_lustre_collection_success 1\nnode_amazonefa_tx_bytes{device="rdmap0s0",port="1"} 7'):
+        bin_dir = self.root / 'bin'
+        bin_dir.mkdir(exist_ok=True)
+        calls = self.root / 'calls'
+        stub(bin_dir, 'id', 'echo 0\n')
+        stub(bin_dir, 'hostname', 'echo gpu-node-1\n')
+        stub(bin_dir, 'systemctl', f'''echo "systemctl $*" >> {calls}
+case "$1 $2" in
+  "is-active --quiet") [[ $3 == aim347-lustre ]] && {{ [[ -f {self.root}/lustre-running ]]; exit; }}; exit 0 ;;
+  "show efa-metrics.timer") echo "TimersMonotonic={{ OnBootUSec=30s ; next_elapse=0 }} {{ {timer} ; next_elapse=1 }}" ;;
+esac
+exit 0
+''')
+        stub(bin_dir, 'systemd-run', f'echo "systemd-run $*" >> {calls}\ntouch {self.root}/lustre-running\n'
+                                     f"printf '%s\\n' '{prom}' > {self.textfile}/lustre.prom\n")
+        stub(bin_dir, 'curl', f"printf '%s\\n' '{metrics}'\n")
+        env = dict(os.environ, PATH=f'{bin_dir}:{os.environ["PATH"]}', AIM347_SYSTEMD_DIR=str(self.systemd),
+                   AIM347_TEXTFILE_DIR=str(self.textfile))
+        result = subprocess.run(['bash', str(LAB / 'facilitator/install-node-collectors.sh'), *arguments], env=env,
+                                capture_output=True, text=True, timeout=60)
+        return result, calls.read_text().splitlines() if calls.exists() else []
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        self.systemd = self.root / 'systemd'
+        self.textfile = self.root / 'textfile'
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def test_drop_in_restart_order_single_unit_and_verify(self):
+        result, calls = self.run_script('--verify', '--timeout', '5')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip().splitlines()[-1], 'install-node-collectors gpu-node-1: '
+                         'efa-metrics.timer 5s ok; lustre counter ok; node-exporter serves both')
+        self.assertEqual((self.systemd / 'efa-metrics.timer.d/aim347-5s.conf').read_bytes(),
+                         b'[Timer]\nOnUnitActiveSec=\nOnUnitActiveSec=5s\nAccuracySec=1s\n')
+        self.assertLess(calls.index('systemctl daemon-reload'), calls.index('systemctl try-restart efa-metrics.timer'))
+        started = [call for call in calls if call.startswith('systemd-run')]
+        self.assertEqual(started, [f'systemd-run --unit=aim347-lustre --collect --property=Restart=on-failure '
+                                   f'/usr/bin/python3 {LAB}/lib/counters.py lustre --output {self.textfile}/lustre.prom'])
+        self.assertNotIn('lustre_write_bytes_total', (self.textfile / 'lustre.prom').read_text())
+        result, calls = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len([call for call in calls if call.startswith('systemd-run')]), 1)
+
+    def test_verify_names_the_missing_condition(self):
+        cases = [(dict(prom='aim347_lustre_collection_success 0'), 'aim347_lustre_collection_success 1 in'),
+                 (dict(metrics='aim347_lustre_collection_success 1'), 'node_amazonefa_tx_bytes'),
+                 (dict(timer='OnUnitActiveUSec=30s'), 'efa-metrics.timer at 5 s')]
+        for options, condition in cases:
+            with self.subTest(condition=condition):
+                (self.root / 'lustre-running').unlink(missing_ok=True)
+                result, _ = self.run_script('--verify', '--timeout', '1', **options)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('timed out after 1 s waiting for', result.stderr)
+                self.assertIn(condition, result.stderr)
+
+    def test_requires_root(self):
+        bin_dir = self.root / 'bin'
+        bin_dir.mkdir()
+        stub(bin_dir, 'id', 'echo 1000\n')
+        result = subprocess.run(['bash', str(LAB / 'facilitator/install-node-collectors.sh')], capture_output=True,
+                                text=True, env=dict(os.environ, PATH=f'{bin_dir}:{os.environ["PATH"]}'))
+        self.assertEqual(result.returncode, 2)
+
+
 class PostRunTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -856,6 +928,15 @@ class ProvisioningTests(unittest.TestCase):
         self.assertEqual(sourced, '=enp71s0|/fsx/aim347/participant/images/aim347-lab.sqsh|'
                                   '/opt/aws/pcs/scheduler/slurm-25.11/bin')
 
+    def test_prepare_event_refuses_other_instance_types_and_bad_usage(self):
+        script = LAB / 'facilitator/prepare-event.sh'
+        result = subprocess.run(['bash', str(script), '--stage-dir', '/tmp', '--slurm-version', '25.11',
+                                 '--instance-type', 'p5.48xlarge', '--grafana-url', 'https://x/grafana/'],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stderr.strip(), 'prepare-event: --instance-type must be g7.48xlarge (got p5.48xlarge)')
+        self.assertEqual(subprocess.run(['bash', str(script), '--stage-dir'], capture_output=True).returncode, 2)
+
     def test_launcher_names_the_container_only_when_asked(self):
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
@@ -875,8 +956,10 @@ class ProvisioningTests(unittest.TestCase):
                     self.assertEqual(arguments[-2:], ['--config', 'configs/smol-2048.json'])
 
     def test_shell_syntax_of_every_new_script(self):
-        scripts = sorted((LAB / 'tools').glob('*.sh')) + [LAB / '2.run-llm.sh']
-        self.assertEqual(len(scripts), 6)
+        scripts = sorted((LAB / 'tools').glob('*.sh')) + [LAB / 'facilitator/prepare-event.sh',
+                                                           LAB / 'facilitator/install-node-collectors.sh',
+                                                           LAB / '2.run-llm.sh']
+        self.assertEqual(len(scripts), 8)
         for script in scripts:
             with self.subTest(script=script.name):
                 subprocess.run(['bash', '-n', str(script)], check=True)
