@@ -70,4 +70,42 @@ open 4 samples [reqs]
             self.assertIn('aim347_efa_ports_visible 1',text)
 
 
+    def test_lustre_2_15_client_stats_block(self):
+        # Recorded llite.*.stats block from a Lustre 2.15 client (September 2026
+        # rehearsal), including the start_time and elapsed_time lines.
+        raw = '''llite.aobzzbmv-ffff8b70510cb000.stats=
+snapshot_time             1790056030.227815959 secs.nsecs
+start_time                1790051060.344947630 secs.nsecs
+elapsed_time              4969.882868329 secs.nsecs
+read_bytes                48966 samples [bytes] 3 93045440 236801406594 2532124456008791348
+write_bytes               1024454 samples [bytes] 15 97241472 214123407410 3364767048228424446
+read                      48430 samples [usec] 0 1948101 97293743 28680002073447
+write                     1117207 samples [usec] 0 3009763 5949955261 1453763156155711
+ioctl                     11115 samples [reqs]
+open                      12941 samples [usec] 0 7109 267856 414565866
+close                     12917 samples [usec] 0 6356 337843 236612759
+mmap                      2768 samples [usec] 1 601 38896 13076930
+page_fault                387326134 samples [usec] 0 6772 4233530243 68351681937
+seek                      850141 samples [usec] 0 530 76246 1506096
+fsync                     177 samples [usec] 11982 3012749 117829755 242275452575547
+readdir                   5718 samples [usec] 0 1146 40631 16560001
+setattr                   2 samples [usec] 135 347 482 138634
+getattr                   270400 samples [usec] 0 10819 2468598 796843714
+mkdir                     11 samples [usec] 282 585 4650 2051578
+mknod                     518 samples [usec] 151 1363 170815 65827275
+rename                    97 samples [usec] 135 535 29823 10389437
+statfs                    278 samples [usec] 0 795 57495 20544449
+inode_permission          339182 samples [usec] 0 322 3465 337517
+opencount                 12941 samples [reqs] 1 383 519578 73846634
+openclosetime             11098 samples [usec] 0 1104750833 89760736183 8644339553849271573
+'''
+        metrics = dict(line.rsplit(' ', 1) for line in lustre_metrics(raw).splitlines())
+        mount = 'mount="aobzzbmv-ffff8b70510cb000"'
+        self.assertEqual(metrics['lustre_read_bytes_total{' + mount + '}'], '236801406594')
+        self.assertEqual(metrics['lustre_write_bytes_total{' + mount + '}'], '214123407410')
+        self.assertEqual(metrics['lustre_open_operations_total{' + mount + '}'], '12941')
+        self.assertEqual(metrics['lustre_getattr_operations_total{' + mount + '}'], '270400')
+        self.assertEqual(len(metrics), 4)
+
+
 if __name__=='__main__': unittest.main()

@@ -768,5 +768,115 @@ class TrainingCorrectnessTests(unittest.TestCase):
                 self.assertIsNone(latest_completed(root))
 
 
+    def _fixture_job(self, root, *, updates, warmup, checkpoint_updates):
+        """Workshop config shrunk to the CPU fixture: 2 sequences of 8 positions."""
+        from llm_data import write_documents
+        lab = Path(__file__).resolve().parents[1]
+        config = json.loads((lab / 'configs/smol-2048-40.json').read_text())
+        config.update(sequence_length=8, global_batch_samples=2, updates=updates,
+                      warmup_updates=warmup, checkpoint_updates=checkpoint_updates)
+        (root / 'config.json').write_text(json.dumps(config))
+        write_documents(root / 'tokens', [{'text': 'checkpoint fixture'}] * (2 * updates),
+                        FixtureTokenizer(), records=2 * updates, sequence_length=8, provenance={})
+        return root / 'config.json', root / 'tokens'
+
+    def _train(self, config, data, output, *extra):
+        """Run one CPU-fixture rank directly, so its own exit status is visible."""
+        import os
+        import socket
+        import subprocess
+        lab = Path(__file__).resolve().parents[1]
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+        env = dict(os.environ, RANK='0', WORLD_SIZE='1', LOCAL_RANK='0', LOCAL_WORLD_SIZE='1',
+                   MASTER_ADDR='127.0.0.1', MASTER_PORT=str(port), CUDA_VISIBLE_DEVICES='')
+        command = [sys.executable, str(lab / 'lib/train_llm.py'), '--cpu-fixture', '--workers', '0',
+                   '--deterministic', '--config', str(config), '--data', str(data),
+                   '--output', str(output), '--allocation-label', 'CPU-fixture', *extra]
+        return subprocess.run(command, env=env, capture_output=True, text=True, timeout=120)
+
+    def test_profile_marks_attention_core_and_every_update(self):
+        for attention in ('eager', 'sdpa'):
+            with self.subTest(attention=attention), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                config, data = self._fixture_job(root, updates=5, warmup=1, checkpoint_updates=[5])
+                result = self._train(config, data, root / 'train', '--profile',
+                                     '--attention-implementation', attention)
+                self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+                events = json.loads((root / 'train/trace-rank-0.json').read_text())['traceEvents']
+                ranges = [e for e in events if e.get('name') == 'attention/core' and e.get('ph') == 'X']
+                # 5 updates x 2 microbatches x 2 decoder layers.
+                self.assertEqual(len(ranges), 20)
+                steps = {e['name'] for e in events if e.get('name', '').startswith('ProfilerStep#')}
+                self.assertTrue({f'ProfilerStep#{n}' for n in range(5)} <= steps)
+                inside = set()
+                for op in events:
+                    number = op.get('args', {}).get('Sequence number')
+                    if op.get('cat') != 'cpu_op' or number is None or number < 0:
+                        continue
+                    if any(r['tid'] == op['tid'] and r['ts'] <= op['ts'] <= r['ts'] + r['dur'] for r in ranges):
+                        inside.add(number)
+                backward = [e for e in events if e.get('cat') == 'cpu_op'
+                            and e['name'].startswith('autograd::engine::evaluate_function:')
+                            and e.get('args', {}).get('Sequence number') in inside]
+                self.assertTrue(inside)
+                self.assertTrue(backward)
+
+    def test_restore_from_saved_update_runs_next_updates_and_stops(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config, data = self._fixture_job(root, updates=8, warmup=2, checkpoint_updates=[2, 6, 8])
+            saved = self._train(config, data, root / 'saved', '--checkpoint-mode', 'sync')
+            self.assertEqual(saved.returncode, 0, saved.stderr[-2000:])
+            restored = self._train(config, data, root / 'restore', '--checkpoint-mode', 'sync',
+                                   '--resume', str(root / 'saved/checkpoints/update-000002'),
+                                   '--interrupt-after-update', '4')
+            self.assertEqual(restored.returncode, 75, restored.stderr[-2000:])
+            self.assertFalse((root / 'restore/summary.json').exists())
+            rows = [json.loads(line) for line in (root / 'restore/rank-0-updates.jsonl').read_text().splitlines()]
+            self.assertEqual([row['update'] for row in rows], [3, 4])
+            self.assertTrue(rows[-1]['controlled_interruption'])
+            original = {json.loads(line)['update']: json.loads(line)['global_mean_loss']
+                        for line in (root / 'saved/rank-0-updates.jsonl').read_text().splitlines()}
+            for row in rows:
+                self.assertEqual(row['global_mean_loss'], original[row['update']])
+
+    def test_pending_upload_is_published_only_after_it_completes(self):
+        from concurrent.futures import Future
+        from llm_checkpoint import Checkpoints
+        model = self.model()
+        optimizer = torch.optim.AdamW(model.parameters())
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoints = Checkpoints(Path(directory) / 'checkpoints', model, optimizer, scheduler,
+                                      asynchronous=True)
+            path = checkpoints.root / 'update-000020'
+            path.mkdir()
+            progress = {'completed_updates': 20, 'useful_tokens': 1310080, 'workload': {'fixture': True}}
+            upload = Future()
+            checkpoints.pending = (path, dict(progress), upload)
+            checkpoints.poll()
+            self.assertFalse((path / 'COMPLETED.json').exists())
+            self.assertIsNone(checkpoints.durable_progress)
+            upload.set_result(None)
+            checkpoints.poll()
+            self.assertEqual(json.loads((path / 'COMPLETED.json').read_text()), progress)
+            self.assertEqual(checkpoints.durable_progress, progress)
+            self.assertIsNone(checkpoints.pending)
+
+    def test_latest_completed_skips_a_save_without_completion_marker(self):
+        from llm_checkpoint import latest_completed
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'checkpoints'
+            for update, completed in ((5, True), (20, False)):
+                path = root / f'update-{update:06d}'
+                path.mkdir(parents=True)
+                (path / '.metadata').write_text('fixture metadata')
+                if completed:
+                    (path / 'COMPLETED.json').write_text(json.dumps({'completed_updates': update}))
+            self.assertEqual(latest_completed(root), root / 'update-000005')
+
+
 if __name__ == '__main__':
     unittest.main()

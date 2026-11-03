@@ -39,9 +39,16 @@ case ${LLM_TRANSPORT:-efa} in
     *) printf 'LLM_TRANSPORT must be efa or socket\n' >&2; exit 2 ;;
 esac
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 TOKENIZERS_PARALLELISM=false
+# A named container stays unpacked for the rest of the job, so later steps in
+# the same allocation skip the image import.
+container_name=()
+if [[ -n ${LLM_CONTAINER_NAME:-} ]]; then
+    [[ $LLM_CONTAINER_NAME =~ ^[A-Za-z0-9_.-]+$ ]] || { echo 'invalid LLM_CONTAINER_NAME' >&2; exit 2; }
+    container_name=(--container-name="$LLM_CONTAINER_NAME")
+fi
 exec srun --nodes="$NNODES" --ntasks="$NNODES" --ntasks-per-node=1 \
     --cpus-per-task="$cpus_per_node" --mpi=none --cpu-bind=none \
-    --container-image="$LAB_IMAGE" \
+    --container-image="$LAB_IMAGE" ${container_name[@]+"${container_name[@]}"} \
     --container-mounts="$mounts" \
     --container-workdir=/opt/aim347 --no-container-remap-root \
     --container-env=NCCL_SOCKET_IFNAME,NCCL_PROTO,NCCL_ALGO,FI_PROVIDER,NCCL_NET,NCCL_NET_PLUGIN,NCCL_GIN_PLUGIN,OFI_NCCL_PROTOCOL,MASTER_ADDR,MASTER_PORT,GPUS_PER_NODE,NNODES,TORCHINDUCTOR_COMPILE_THREADS,TORCHINDUCTOR_CACHE_DIR,TRITON_CACHE_DIR \

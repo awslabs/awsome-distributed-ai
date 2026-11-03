@@ -127,6 +127,32 @@ def compile_pointwise_modules(model, scope, backend, options):
         model.model.norm.compile(dynamic=True, backend=backend, options=options)
 
 
+def mark_attention_core(model, implementation):
+    """Profile only: run every attention call inside record_function('attention/core').
+
+    tools/profile-table.py attributes forward kernels launched inside the range,
+    and backward kernels through the autograd sequence numbers of its operators.
+    """
+    import sys
+    if implementation == 'eager':
+        # The decoder looks up the module-level function at call time.
+        module = sys.modules[type(model.model.layers[0].self_attn).__module__]
+        original = module.eager_attention_forward
+
+        def eager_attention_forward(*args, **kwargs):
+            with record_function('attention/core'):
+                return original(*args, **kwargs)
+        module.eager_attention_forward = eager_attention_forward
+    else:
+        from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+        original = ALL_ATTENTION_FUNCTIONS[implementation]
+
+        def attention_forward(*args, **kwargs):
+            with record_function('attention/core'):
+                return original(*args, **kwargs)
+        ALL_ATTENTION_FUNCTIONS[implementation] = attention_forward
+
+
 def main():
     args = parse_args()
     os.environ['HF_ENABLE_PARALLEL_LOADING'] = 'true' if args.parallel_model_loading else 'false'
@@ -246,6 +272,8 @@ def main():
                     torch_dtype=torch.float32, attn_implementation=args.attention_implementation,
                     local_files_only=bool(args.model_path))
     model.config.use_cache = False
+    if args.profile:
+        mark_attention_core(model, args.attention_implementation)
     if args.liger_linear_ce:
         from importlib.metadata import version
         if args.cpu_fixture or model.config.model_type != 'qwen2' or version('liger-kernel') != '0.6.4':
@@ -411,6 +439,9 @@ def main():
     profiler = torch.profiler.profile(
         activities=[torch.profiler.ProfilerActivity.CPU] + (
             [] if args.cpu_fixture else [torch.profiler.ProfilerActivity.CUDA]),
+        # Record every update, as without a schedule. A schedule also makes the
+        # profiler mark each update as a ProfilerStep#<n> span in the trace.
+        schedule=lambda step: torch.profiler.ProfilerAction.RECORD,
         record_shapes=True, profile_memory=True, with_stack=False,
         on_trace_ready=lambda trace: trace.export_chrome_trace(
             str(args.output / f'trace-rank-{rank}.json')),
