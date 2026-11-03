@@ -4,7 +4,7 @@
 # The participant's job launcher for the hour's incidents.
 #
 #   bash job.sh notes      create your notes file
-#   bash job.sh run        run the training stand-in on your pair
+#   bash job.sh run        run the training stand-in and the all-reduce sweep on your pair
 #   bash job.sh incident   start your next incident and run its job
 #   bash job.sh rerun      run the current incident's job again, as the pair is now
 #                          (with the options a page gives for that incident)
@@ -16,7 +16,8 @@
 # resume reuse the same profile and never ask for a new incident. The launcher
 # prints none of the incident's settings: the job reads them from
 # AIM344_INCIDENT_SETTINGS (workload.py apply_incident_settings). The lab's own
-# lines go to a lab log beside the profile, which the facilitator reads.
+# lines go to a lab log beside the profile, which the facilitator reads. run and
+# resume end by removing the allocation's containers from the GPU nodes.
 set -euo pipefail
 LAB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
@@ -24,10 +25,10 @@ RESULTS_HOME=$HOME/aim344-results
 INCIDENTS=$RESULTS_HOME/incidents
 # The training stand-in runs 60 seconds; the incident in which the lab controls
 # act on the target runs 120, which leaves them a window after two progress
-# records. A resumed job runs long enough to pass one more checkpoint.
+# records. A resumed job ends shortly after its first checkpoint past the step it
+# resumed from (workload.py --end-after-save), and at the latest after 60 seconds.
 RUN_SECONDS=60
 CONTROLLER_RUN_SECONDS=120
-RESUME_SECONDS=10
 # The job whose answer differs needs only a few seconds of steps.
 CORRUPTION_SECONDS=20
 # The DataLoader job writes the stacks of a process still waiting 60 seconds
@@ -49,7 +50,7 @@ usage() {
 Usage: bash job.sh <command>
 
   notes      Create your notes file, ~/aim344-results/notes.md
-  run        Run the training stand-in on your pair
+  run        Run the training stand-in and the all-reduce sweep on your pair
   incident   Start your next incident and run its job
   rerun      Run the current incident's job again, as your pair is now;
              add an option only where your page gives one
@@ -115,6 +116,10 @@ Rate:
 Longest gap between progress lines:
 
 End of epoch 1:
+
+Sweep, 2 GiB line:
+
+Sweep, EFA byte changes:
 
 Bus bandwidth at 128 MiB:
 
@@ -358,19 +363,23 @@ sweep_job() {
     local name=$1 rc=0
     AIM344_RUN_ID=$name-$(date -u +%Y%m%dT%H%M%SZ)
     printf 'Job log: %s\n' "$RESULTS_DIR/$AIM344_RUN_ID.nccl.log"
-    # The sweep uses every EFA device of each node, as 0.baseline.sh does.
+    # The sweep runs in the NCCL container, also after a torch job in the same
+    # launcher, and uses every EFA device of each node, as 0.baseline.sh does.
+    use_nccl_container
     (unset AIM344_EFA_IFACE; run_sweep job) || rc=$?
     printf 'job_end_utc=%s\n' "$(date -u +%FT%TZ)"
     printf 'Job log: %s\n' "$RESULTS_DIR/$AIM344_RUN_ID.nccl.log"
     return "$rc"
 }
 
-# Prepare the allocation once, just before the first step that uses it, so that a
-# refusal costs no container start.
+# Check the allocation once, just before the first step that uses it, so that a
+# refusal costs no container start. Each container starts with the first step
+# that uses it: the NCCL container with a sweep or a lab step, the torch
+# container with a torch job.
 prepared=0
 ensure_prepared() {
     if ((prepared == 0)); then
-        prepare_slurm
+        prepare_allocation
         prepared=1
     fi
 }
@@ -381,6 +390,19 @@ lab_step() {
     "$@" >> "$lab_log" 2>&1 || refuse 'The lab could not prepare this step; tell your table expert.'
 }
 
+# Runs one job, then removes the allocation's containers from both GPU nodes, so
+# that the hour's allocations do not fill the nodes' container storage. Returns
+# the job's status. Only run and resume end this way: incident and rerun keep the
+# container in which the lab made its change.
+ending_job() {
+    local rc=0
+    "$@" || rc=$?
+    lab_note 'lab step: 9.cleanup.sh'
+    bash "$LAB_DIR/9.cleanup.sh" >> "$lab_log" 2>&1 \
+        || printf 'The lab could not remove the containers of this allocation; tell your table expert.\n' >&2
+    return "$rc"
+}
+
 progress_records() {
     local count
     count=$(grep -cE "^AIM344 collective_progress=[0-9]+ collectives; .*; job_id=$SLURM_JOB_ID; " "$1" 2>/dev/null) || true
@@ -389,10 +411,17 @@ progress_records() {
 
 # Runs beside the job: once the job has printed two progress records, ask the lab
 # controls to act, until they reply that the incident is under way. A refusal is
-# final, even one that comes after they acted, so it is never asked again.
+# final, even one that comes after they acted, so it is never asked again. The
+# step also ends when the launcher that started it is gone ($$ in this background
+# subshell is the launcher's process), so that no later job in the allocation can
+# make it ask.
 controller_step() {
     local copy=$1 stop=$2 attempt status reply
     until (( $(progress_records "$copy") >= 2 )); do
+        if ! kill -0 "$$" 2>/dev/null; then
+            lab_note 'controller step: the launcher ended before two progress records'
+            return 0
+        fi
         if [[ -e $stop ]]; then
             lab_note 'controller step: the job ended before two progress records'
             printf 'The job ended before the lab controls could act. Tell your table expert.\n' >&2
@@ -402,6 +431,10 @@ controller_step() {
     done
     for ((attempt = 1; attempt <= NEXT_ATTEMPTS; attempt++)); do
         [[ -e $stop ]] && break
+        if ! kill -0 "$$" 2>/dev/null; then
+            lab_note 'controller step: the launcher ended'
+            return 0
+        fi
         status=0
         reply=$(bash "$LAB_DIR/12.device-exercise.sh" next 2>&1) || status=$?
         lab_note "next, attempt $attempt, exit $status: $reply"
@@ -416,21 +449,35 @@ controller_step() {
     printf 'The lab controls did not act during this run. Tell your table expert.\n' >&2
 }
 
+# Ends the controller step and waits for it. A request that is under way
+# finishes; it is never cut off.
+helper=
+helper_stop=
+end_controller_step() {
+    [[ -n $helper ]] || return 0
+    : > "$helper_stop"
+    wait "$helper" || true
+    rm -f -- "$helper_stop"
+    helper=
+}
+
 controller_job() {
-    local name=$1 copy=$RESULTS_HOME/device-$SLURM_JOB_ID.log stop rc=0 helper
+    local name=$1 copy=$RESULTS_HOME/device-$SLURM_JOB_ID.log rc=0
     shift
-    stop=$INCIDENTS/.job-ended-$SLURM_JOB_ID-$$
-    rm -f -- "$stop"
+    helper_stop=$INCIDENTS/.job-ended-$SLURM_JOB_ID-$$
+    rm -f -- "$helper_stop"
     mkdir -p -- "$RESULTS_HOME"
     # An earlier run in this allocation must not count as this run's progress.
     : > "$copy"
-    controller_step "$copy" "$stop" &
+    # run_torch can exit the launcher instead of returning (an unset image or
+    # checkpoint path, or no node address), and a TERM ends it too. The step
+    # beside the job ends on every one of these exits.
+    trap end_controller_step EXIT
+    controller_step "$copy" "$helper_stop" &
     helper=$!
     torch_job "$name" device "$@" || rc=$?
-    # Let a request that is under way finish; never cut it off.
-    : > "$stop"
-    wait "$helper" || true
-    rm -f -- "$stop"
+    end_controller_step
+    trap - EXIT
     return "$rc"
 }
 
@@ -438,6 +485,14 @@ controller_job() {
 job_settings() {
     unset AIM344_INCIDENT_SETTINGS
     [[ $1 == - ]] || export AIM344_INCIDENT_SETTINGS=$1
+}
+
+# The healthy run: the training stand-in, then the all-reduce sweep that the slow
+# job's incident runs, so that the two outputs differ only in what the lab changes.
+healthy_job() {
+    torch_job job job "${STAND_IN[@]}" --writer-rank=0 --duration-seconds="$RUN_SECONDS" \
+        || return
+    sweep_job job
 }
 
 # The current incident's job: $1 is incident, rerun or resume.
@@ -460,17 +515,24 @@ incident_job() {
                 resume)
                     prepare_torch
                     lab_step node_command python3 /opt/aim344/recover-checkpoint.py
-                    torch_job "$name" job "${steps[@]}" --duration-seconds="$RESUME_SECONDS" --resume
+                    ending_job torch_job "$name" job "${steps[@]}" --duration-seconds="$RUN_SECONDS" \
+                        --resume --end-after-save
                     ;;
             esac
             ;;
         slow-job)
             ensure_prepared
             case $what in
-                incident) lab_step node_command bash /opt/aim344/plugin-state.sh hide ;;
-                resume) lab_step node_command bash /opt/aim344/plugin-state.sh restore ;;
+                incident)
+                    lab_step node_command bash /opt/aim344/plugin-state.sh hide
+                    sweep_job "$name"
+                    ;;
+                rerun) sweep_job "$name" ;;
+                resume)
+                    lab_step node_command bash /opt/aim344/plugin-state.sh restore
+                    ending_job sweep_job "$name"
+                    ;;
             esac
-            sweep_job "$name"
             ;;
         dataloader)
             # The stack dump is on for every run of this job, the fix runs included.
@@ -484,7 +546,11 @@ incident_job() {
             esac
             AIM344_JOB_LIMIT_SECONDS=$DATALOADER_LIMIT_SECONDS
             ensure_prepared
-            torch_job "$name" job "${loader[@]}"
+            if [[ $what == resume ]]; then
+                ending_job torch_job "$name" job "${loader[@]}"
+            else
+                torch_job "$name" job "${loader[@]}"
+            fi
             ;;
         silent-corruption)
             steps+=(--writer-rank=0)
@@ -500,7 +566,8 @@ incident_job() {
                     ;;
                 resume)
                     job_settings -
-                    torch_job "$name" job "${steps[@]}" --duration-seconds="$RESUME_SECONDS" --resume
+                    ending_job torch_job "$name" job "${steps[@]}" --duration-seconds="$RUN_SECONDS" \
+                        --resume --end-after-save
                     ;;
             esac
             ;;
@@ -566,7 +633,12 @@ AIM344_PROGRESS_COPY=0
 case $verb in
     run)
         ensure_prepared
-        torch_job job job "${STAND_IN[@]}" --writer-rank=0 --duration-seconds="$RUN_SECONDS"
+        # The healthy run's lab lines (the sweep's inventory, the container
+        # removal) go to a lab log beside the incidents' lab logs.
+        (umask 077; mkdir -p -- "$INCIDENTS")
+        lab_log=$INCIDENTS/job-lab.log
+        AIM344_LAB_LOG=$lab_log
+        ending_job healthy_job
         ;;
     incident)
         # Prepared before the request, so that a failure here leaves the incident

@@ -64,7 +64,9 @@ set_allocation_cpus() {
     export SRUN_CPUS_PER_TASK=$AIM344_CPUS_PER_NODE
 }
 
-prepare_slurm() {
+# The allocation's checks, its results directory and the NCCL container's
+# arguments. It starts no container: the first node_command or sweep creates it.
+prepare_allocation() {
     set_allocation_cpus
     : "${SLURM_JOB_ID:?Run inside the dedicated two-node salloc allocation in README.md}"
     [[ ${SLURM_JOB_NUM_NODES:-${SLURM_NNODES:-0}} == 2 ]] || {
@@ -87,11 +89,21 @@ prepare_slurm() {
     srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --mpi=none --cpu-bind=none mkdir -p -- "$RESULTS_DIR"
     RESULTS_DIR=$(cd -- "$RESULTS_DIR" && pwd)
     [[ $RESULTS_DIR != *[:,]* && $RESULTS_DIR != *' '* ]] || exit 1
+    use_nccl_container
+}
+
+# Point node_command and run_sweep at this allocation's NCCL container.
+# prepare_torch points them at the torch container instead.
+use_nccl_container() {
     CONTAINER_NAME=aim344_$SLURM_JOB_ID
     CONTAINER_ARGS=(--container-image="$NCCL_ENROOT_IMAGE"
         --container-name="$CONTAINER_NAME" --container-writable
         --container-env=FI_EFA_IFACE,AIM344_EFA_IFACE,AIM344_SOCKET_IFNAME --no-container-mount-home
         --container-mounts="$LAB_DIR:/opt/aim344:ro,$RESULTS_DIR:/results")
+}
+
+prepare_slurm() {
+    prepare_allocation
     # This initializes one private writable root filesystem on each node.
     node_command true
 }

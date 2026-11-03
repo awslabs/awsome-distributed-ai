@@ -45,6 +45,9 @@ FILLER_NAME = 'ckpt-shard-00017.partial'
 # runs an incident without naming its cause (job.sh). That launcher moves them to
 # the lab log instead of the job log. Without --mark-lab-lines they print plainly.
 LAB_LINE_MARKER = 'AIM344 lab: '
+# With --end-after-save, the steps that run after the first periodic save: one
+# more progress record.
+END_AFTER_SAVE_STEPS = 20
 
 
 def lab_line(args, text):
@@ -155,9 +158,12 @@ def run_steps(args, tensor):
     With --checkpoint-every N, the checkpoint writer saves the next step index
     before the all-reduce of every N-th step. A save that fails keeps that one rank
     out of the all-reduce that the other ranks have entered. --inject fills the
-    writer's directory just before its first periodic save. With --replica-check,
-    each step then all-gathers the ranks' checksums of one matrix product
-    (ReplicaCheck), and rank 0 prints the agreement after each progress record.
+    writer's directory just before its first periodic save. --end-after-save ends
+    the job END_AFTER_SAVE_STEPS steps after the first periodic save past the start
+    step, so that a resumed job shows one save whatever its rate;
+    --duration-seconds still bounds it. With --replica-check, each step then
+    all-gathers the ranks' checksums of one matrix product (ReplicaCheck), and
+    rank 0 prints the agreement after each progress record.
     """
     rank = dist.get_rank()
     writer = bool(args.checkpoint_every) and rank == args.writer_rank
@@ -165,6 +171,10 @@ def run_steps(args, tensor):
     start_step = checkpoint_start(args, path) if args.checkpoint_every else 0
     if writer and not args.resume:
         print(f'checkpoint saved: next_step={start_step} (step index)', flush=True)
+    end_step = None
+    if args.end_after_save:
+        first_save = (start_step // args.checkpoint_every + 1) * args.checkpoint_every
+        end_step = first_save + END_AFTER_SAVE_STEPS
     injected = False
     # Progress comes only after a completed, correctness-checked collective.
     # The external controller observes progress and device counters before injection.
@@ -177,7 +187,8 @@ def run_steps(args, tensor):
     while True:
         # Rank 0 ends the loop collectively; local deadlines can diverge.
         if rank == 0:
-            keep_running.fill_(int(time.monotonic() < deadline))
+            keep_running.fill_(int(time.monotonic() < deadline
+                                   and (end_step is None or start_step + sequence < end_step)))
         dist.broadcast(keep_running, src=0)
         if not keep_running.item():
             break
@@ -720,10 +731,13 @@ def parse_args(argv=None):
     parser.add_argument('--duration-seconds', type=int, default=600)
     parser.add_argument('--inject', action='store_true')
     parser.add_argument('--resume', action='store_true')
-    parser.add_argument('--writer-rank', type=nonnegative_int, default=0,
-                        help='rank that writes the checkpoint (default: 0)')
+    parser.add_argument('--writer-rank', type=nonnegative_int, default=None,
+                        help='storage and device modes: rank that writes the checkpoint (default: 0)')
     parser.add_argument('--checkpoint-every', type=nonnegative_int, default=0,
                         help='device mode: save a checkpoint every N steps (default: 0, none)')
+    parser.add_argument('--end-after-save', action='store_true',
+                        help='device mode: end 20 steps after the first periodic save past the '
+                             'start step, or at --duration-seconds if that comes first')
     parser.add_argument('--mark-lab-lines', action='store_true',
                         help="mark the lab's own lines for the launcher's lab log")
     parser.add_argument('--start-method', choices=['fork', 'spawn', 'forkserver'], default='fork')
@@ -732,10 +746,23 @@ def parse_args(argv=None):
     add_exercise_arguments(parser)
     args = parser.parse_args(argv)
     check_exercise_arguments(parser, apply_incident_settings(parser, args, argv=argv))
+    if args.mode == 'dataloader':
+        # The DataLoader launchers pass extra arguments through, so a checkpoint
+        # option given by mistake must fail rather than run the unchanged control.
+        # --mark-lab-lines is used there: job.sh moves the lifecycle lines to the lab log.
+        given = [flag for flag, value in (('--writer-rank', args.writer_rank is not None),
+                                          ('--inject', args.inject), ('--resume', args.resume))
+                 if value]
+        if given:
+            parser.error(f'{", ".join(given)}: not used in dataloader mode')
+    if args.writer_rank is None:
+        args.writer_rank = 0
     if args.checkpoint_every and args.mode != 'device':
         parser.error('--checkpoint-every applies to device mode only')
     if args.mode == 'device' and (args.inject or args.resume) and not args.checkpoint_every:
         parser.error('--inject and --resume in device mode need --checkpoint-every')
+    if args.end_after_save and (args.mode != 'device' or not args.checkpoint_every):
+        parser.error('--end-after-save applies to device mode with --checkpoint-every')
     return args
 
 
