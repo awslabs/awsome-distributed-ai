@@ -702,10 +702,10 @@ def interrupt_block(stage, stage_dir, world):
     lines.append(f"  resumed from update {restored}; first update after the resume: "
                  f"{resumed[0]['update'] if resumed else 'none'}")
     lines.append(f"  updates run twice: {restored + 1}-{stop} ({campaign.get('replayed_update_count')} updates)")
-    lines += pairs_lines([('campaign goodput',
+    lines += pairs_lines([('goodput including the stop',
                            f"{campaign['training_goodput_tokens_per_second']:,.0f} tokens/s, "
                            f"{campaign['tokens_per_allocated_gpu_hour'] / 1e6:.2f} M tokens per GPU-hour  "
-                           '(fresh launch to the final durable save, including the stop and the restart)')])
+                           '(first launch to the final durable save)')])
     return lines + lines_for(nccl_pairs(stage, stage_dir, world) + [efa_pair(stage_dir)])
 
 

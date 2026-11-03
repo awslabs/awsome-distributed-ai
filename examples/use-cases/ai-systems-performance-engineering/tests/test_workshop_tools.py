@@ -343,8 +343,8 @@ class DisplayTests(unittest.TestCase):
         self.assertIn('  resumed from update 5; first update after the resume: 6', lines)
         self.assertIn('  updates run twice: 6-30 (25 updates)', lines)
         self.assertIn('  NCCL network (interrupted run)  AWS Libfabric on 16 of 16 ranks', lines)
-        self.assertTrue(any(line.startswith('  campaign goodput             13,790 tokens/s, 3.10 M tokens per GPU-hour')
-                            for line in lines))
+        self.assertIn('  goodput including the stop   13,790 tokens/s, 3.10 M tokens per GPU-hour  '
+                      '(first launch to the final durable save)', lines)
         self.directory.cleanup()
         self.directory = tempfile.TemporaryDirectory()
         self.results = Path(self.directory.name)
@@ -560,7 +560,13 @@ class ProgressionTests(unittest.TestCase):
             self.assertIn('probe-socket-eager vs baseline: not compared, different workload', notes.texts)
             self.assertEqual(by_name['ckpt-sync']['Goodput tokens/s'], '29,690')
             self.assertEqual(by_name['ckpt-sync']['Goodput M tokens per GPU-hour'], '6.68')
-            self.assertEqual(by_name['interrupt']['Goodput M tokens per GPU-hour'], '3.10')
+            # The interrupt goodput covers the whole command, so both its cells point to a note.
+            self.assertEqual(by_name['interrupt']['vs baseline'], '(1)')
+            self.assertEqual(by_name['interrupt']['Goodput tokens/s'], '13,790 (2)')
+            self.assertEqual(by_name['interrupt']['Goodput M tokens per GPU-hour'], '3.10 (2)')
+            self.assertEqual(notes.texts[1], 'interrupt: goodput over the whole command, from the first launch to the '
+                             'end of the final save, including both launches and both model loads. The goodput '
+                             'interval of the saving rows starts at the end of model loading, so the two are not compared')
             plain = tool.render(ceilings, table, notes, False)
             self.assertEqual(plain[0], 'GEMM peak 171.7 TFLOP/s per GPU, memory read 662 GB/s per GPU, ridge 259 FLOP per byte')
             self.assertIn('interrupt: stopped after update 30, resumed from update 5, 25 updates ran twice', plain)

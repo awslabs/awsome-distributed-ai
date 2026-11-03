@@ -67,11 +67,15 @@ def collect(results, notes):
             row['Stage'] += ' ' + notes.mark(f'{name}: a check failed ({failed})')
         if stage['kind'] == 'interrupt':
             campaign = workshop.read_json(results / name / 'campaign' / 'campaign.json') or {}
+            once = notes.mark('interrupt: one command that stopped and resumed the job, not one run')
+            interval = notes.mark('interrupt: goodput over the whole command, from the first launch to the end of the '
+                                  'final save, including both launches and both model loads. The goodput interval of '
+                                  'the saving rows starts at the end of model loading, so the two are not compared')
             row.update({'Seconds': f"{campaign.get('elapsed_seconds', 0):.2f}",
-                        'vs baseline': notes.mark('interrupt: one stop-and-resume campaign, not one run'),
-                        'Goodput tokens/s': f"{campaign.get('training_goodput_tokens_per_second', 0):,.0f}",
+                        'vs baseline': once,
+                        'Goodput tokens/s': f"{campaign.get('training_goodput_tokens_per_second', 0):,.0f} {interval}",
                         'Goodput M tokens per GPU-hour':
-                            f"{campaign.get('tokens_per_allocated_gpu_hour', 0) / 1e6:.2f}"})
+                            f"{campaign.get('tokens_per_allocated_gpu_hour', 0) / 1e6:.2f} {interval}"})
             row['_campaign'] = campaign
             rows.append(row)
             continue
