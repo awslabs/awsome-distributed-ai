@@ -2,6 +2,35 @@
 
 This distribution summary preserves the scope of the measured results without deployment identifiers, private artifact locations or incident-derived teaching material. Original detailed records, failed attempts and exact source/deployment mappings remain unchanged with the workshop owner. The latest section describes an installed, fixed development candidate; historical sections retain their original scope. This documentation update performs no new hardware run.
 
+## November 3, 2026: the review of the integrated code
+
+An independent review of the integrated code, read together with the p5.48xlarge run and the g7.48xlarge run then in progress, returned one High, three Medium and eight Low findings. The [next section](#november-3-2026-lab-lines-off-the-job-output-progress-records-in-the-epoch-job-and-the-rollback-after-a-changed-result) fixed three of them: the DataLoader job's progress records, its lab lines and the rollback. This change applies the others. No hardware run has used it yet. The tests run on a CPU-only host with the fakes of the two sections below.
+
+What changed:
+
+- Every line that `workload.py` prints goes out in one write, as the progress record already did: the checkpoint, retry, replica check, version and completion lines. torchrun starts each worker with `python -u`, and under unbuffered output `print()` writes the text and the newline separately, so the lines of a node's 24 processes could merge on the shared output.
+- Each step of the training stand-in now runs the broadcast, the replica check's all-gather, the checkpoint save when the step is a checkpoint step, and the all-reduce, in that order. The all-reduce ends every step, and a writer that cannot save still keeps the other ranks in the all-reduce. The replica check triggers and prints by step index, the numbering of the checkpoint lines: `--corrupt-step 37` changes step index 37, and the agreement line after the first 20 steps of a run from step 0 reads `step=19`. `--resume-before S` keeps its rule, the newest checkpoint whose `next_step` is below `S`, which now compares step indexes directly.
+- With `--stack-dump-seconds`, device mode writes each rank's stacks when that many seconds pass without a progress record, and the timer restarts at each record. `job.sh` passes `--stack-dump-seconds=60` to every run of the stand-in, so every torch job of `job.sh` writes stacks after 60 seconds without progress. At the start of a run that writes stacks, one process on each node moves the stack files that an earlier run left in `RESULTS_DIR` to `previous-stacks/`. Storage mode refuses the option.
+- `run_torch` creates the torch container on both nodes before the step that runs under the job's time limit, with the creation's output in the lab log.
+- Every `srun` in `common.sh` reads `/dev/null` as its input, the collection of the lab lines included. Under `timeout`, `srun` runs in a process group of its own, so a key pressed in terminal A during a job could stop it until the job's limit.
+- The replica check's line prints the PCI address in upper-case hex, as `nvidia-smi` prints `pci.bus_id`.
+- The controller's answer line says that the lab controller reset an EFA device only when the round's record shows that the reset returned. A round without that confirmation gets an answer that says so, and `next` moves on. A round that never issued its operation gets an answer that says the lab did not apply the incident, and `next` starts the same incident again.
+- The installer checks each schedule entry's settings against those `job.sh` applies to that exercise, with their values, and every rank against `AIM344_WORLD_SIZE` (default 16).
+- The counter warning recorded as MONITOR now says what the check reads: running totals, read once after its loopback test, which are not a count of the round's events. The earlier text said that the counters count from the instance launch or the last EFA driver reset, and a reboot of the same g7.48xlarge instance left them unchanged.
+
+What the tests cover:
+
+- `tests/test_checkpoint_workload.py`: the order of replica check, save and all-reduce in a step and the report's step index; a resumed run's replica checks by step index; the stand-in's stack timer armed before the loop, restarted after steps 20 and 40, cancelled with its header-only file removed, and not armed without the option; earlier stack files moved before the first collective, by the process with `LOCAL_RANK` 0 only; one write per line, and eight `python -u` processes on one pipe printing 2,400 whole lines (with `print`, the same test fails); storage mode refusing `--stack-dump-seconds`.
+- `tests/test_workload_modes.py`: the device loop through `main()` with the replica check by step index (a healthy run, a flip at step index 7, a recurring flip from step index 5), and the PCI address in the form `nvidia-smi` prints.
+- `tests/test_job_launcher.py`: every `srun` that `common.sh` runs reads `/dev/null`; in a pseudo-terminal, a timed job whose `srun` reads its input finishes at once, where before this change it ran into its 5-second limit and ended with 124; the container creation before the timed step and outside its limit, with its output in the lab log; `--stack-dump-seconds=60` on every run of the stand-in.
+- `tests/test_quiz_controls.py`: the answer and the second start of a round that never issued its operation; the answer, without a second start, of one whose outcome is unknown; per-exercise settings and rank bounds, at install time with `AIM344_WORLD_SIZE` and in the controller; the MONITOR text.
+
+Still to measure on hardware:
+
+- In an interactive allocation shell on g7.48xlarge, `bash job.sh run` with Enter pressed twice while the stand-in runs: the job completes. The healthy run there that stalled without a watchdog line had its input attached to `srun`; whether that was the cause is not established.
+- The healthy run and every job-level incident at this revision: whole lines on the terminal, the storage incident's watchdog lines (still `OpType=ALLREDUCE`, with other `SeqNum` values), the replica lines by step index in the silent-corruption incident and its `resume`, the stack files of a stopped stand-in and their move at the next run, and the time the container creation takes before the timed step.
+- The device incident at this revision, with the stand-in's stack timer on, and its answer line.
+
 ## November 3, 2026: lab lines off the job output, progress records in the epoch job, and the rollback after a changed result
 
 A run of the job-level incidents through `job.sh` on two p5.48xlarge nodes, at the revision that the next section describes, found three places where the jobs did not do what the participant pages expect. This change fixes them. No hardware run has used it yet. The tests below run on a CPU-only host with the fakes of the next section, and with a fake `srun` and `scontrol` for the collection of lab lines in `common.sh`.

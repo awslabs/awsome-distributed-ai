@@ -282,7 +282,7 @@ class Launcher(unittest.TestCase):
         [call, epochs] = self.torch_calls()
         self.assertRegex(call, rf'^run_torch phase=job run_id=job-\d{{8}}T\d{{6}}Z copy=1 '
                                rf'lab={re.escape(str(lab))} iface=rdmap83s0 args=device '
-                               r'--checkpoint-every=200 --replica-check --writer-rank=0 '
+                               r'--checkpoint-every=200 --replica-check --stack-dump-seconds=60 --writer-rank=0 '
                                r'--duration-seconds=60$')
         # Incident 3's job as its resume runs it: no setting, the same 120-second limit.
         self.assertRegex(epochs, rf'^run_torch phase=job run_id=job-epochs-\d{{8}}T\d{{6}}Z copy=1 '
@@ -348,7 +348,7 @@ class Launcher(unittest.TestCase):
         lab = self.incidents / 'incident-1-lab.log'
         self.assertRegex(call, rf'^run_torch phase=job run_id=incident-1-\d{{8}}T\d{{6}}Z copy=1 '
                                rf'lab={re.escape(str(lab))} iface=rdmap83s0 args=device '
-                               r'--checkpoint-every=200 --replica-check --writer-rank=9 '
+                               r'--checkpoint-every=200 --replica-check --stack-dump-seconds=60 --writer-rank=9 '
                                r'--duration-seconds=60 --inject$')
         self.assertEqual(['job_env settings=unset limit=default'], self.job_env())
         # The controller's reply, which names the profile, stays in the lab log.
@@ -465,7 +465,7 @@ class Launcher(unittest.TestCase):
         self.assertTrue(all(' next: ' in line for line in calls), calls)
         [call] = self.torch_calls()
         self.assertRegex(call, r'^run_torch phase=device run_id=incident-4-\d{8}T\d{6}Z copy=1 .* '
-                               r'args=device --checkpoint-every=200 --replica-check '
+                               r'args=device --checkpoint-every=200 --replica-check --stack-dump-seconds=60 '
                                r'--writer-rank=0 --duration-seconds=120$')
         lab = (self.incidents / 'incident-4-lab.log').read_text()
         self.assertIn('next, attempt 2, exit 0: Incident 4 is under way.', lab)
@@ -660,7 +660,7 @@ class Launcher(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         [call] = self.torch_calls()
         self.assertRegex(call, r'^run_torch phase=job run_id=incident-4-\d{8}T\d{6}Z copy=1 .* '
-                               r'args=device --checkpoint-every=200 --replica-check '
+                               r'args=device --checkpoint-every=200 --replica-check --stack-dump-seconds=60 '
                                r'--writer-rank=0 --duration-seconds=20$')
         self.assertEqual(['job_env settings={"corrupt_bit":22,"corrupt_rank":13,'
                           '"corrupt_recurring":false,"corrupt_step":37} limit=default'],
@@ -690,7 +690,7 @@ class Launcher(unittest.TestCase):
                 self.assertEqual(0, result.returncode, result.stderr)
                 [call] = self.torch_calls()
                 self.assertIn('run_id=incident-4-resume-', call)
-                self.assertTrue(call.endswith('args=device --checkpoint-every=200 --replica-check '
+                self.assertTrue(call.endswith('args=device --checkpoint-every=200 --replica-check --stack-dump-seconds=60 '
                                               '--writer-rank=0 --duration-seconds=60 '
                                               '--resume --end-after-save'), call)
                 # Only the rollback point reaches the job, in its environment: no flip.
@@ -874,7 +874,9 @@ class CommonRunIds(unittest.TestCase):
                     self.assertNotIn('lifecycle', text)
                     self.assertNotIn('\n\n', text)
                 self.assertEqual('', result.stderr)
-                torch, *collect = self.srun_calls()
+                create, torch, *collect = self.srun_calls()
+                # The container is created before the timed step.
+                self.assertTrue(create.endswith(' --container-remap-root true'), create)
                 self.assertTrue(torch.endswith('torch-node.sh device --inject --lab-dir=/results/.lab-records'),
                                 torch)
                 # One step per node, after the job, outside the container.
@@ -931,7 +933,11 @@ class CommonRunIds(unittest.TestCase):
                 (self.root / 'srun.calls').unlink(missing_ok=True)
                 result = self.run_common(body)
                 self.assertEqual(0, result.returncode, result.stderr)
-                [call] = self.srun_calls()
+                # The timed step of a numbered launcher also has its container created
+                # first; the device phase has no time limit and no creation step.
+                *create, call = self.srun_calls()
+                self.assertEqual(['--container-remap-root true'] if 'storage' in body else [],
+                                 [line[-len('--container-remap-root true'):] for line in create])
                 self.assertNotIn('--lab-dir', call)
                 self.assertIn('checkpoint injection: full', result.stdout)
         self.assertFalse(lab.exists())
@@ -942,6 +948,33 @@ class CommonRunIds(unittest.TestCase):
         [log] = list(self.root.glob('storage-injected-*Z.log'))
         self.assertIn('checkpoint injection: full', log.read_text())
         self.assertFalse((self.home / 'aim344-results').exists())
+
+    def test_the_container_is_created_before_the_timed_step_and_outside_it(self):
+        timeout = self.root / 'timeout'
+        timeout.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$TEST_DIR/timeout.args"\n'
+                           'shift 3\nexec "$@"\n')
+        timeout.chmod(0o755)
+        lab = self.root / 'incident-3-lab.log'
+        srun = self.root / 'srun'
+        # The creation step prints what a failed container start would print.
+        srun.write_text(srun.read_text().replace(
+            'case "$*" in\n', 'case "$*" in\n  *"--container-remap-root true") echo "pyxis: container start failed"; exit 1 ;;\n', 1))
+        result = self.run_common(f'AIM344_JOB_LIMIT_SECONDS=120 AIM344_RUN_ID=T AIM344_LAB_LOG={lab}\n'
+                                 'run_torch job dataloader\n')
+        self.assertEqual(0, result.returncode, result.stderr)
+        create, torch = self.srun_calls()[:2]
+        self.assertTrue(create.endswith(' --container-remap-root true'), create)
+        self.assertIn('torch-node.sh dataloader', torch)
+        # The job's own step runs under the limit, the creation step under none (the
+        # collection steps have their own 60-second bound).
+        timed = (self.root / 'timeout.args').read_text().splitlines()
+        self.assertEqual([], [line for line in timed if 'remap-root true' in line])
+        [job] = [line for line in timed if 'torch-node.sh' in line]
+        self.assertTrue(job.startswith('--signal=TERM --kill-after=30s 120s srun '), job)
+        # Its output goes to the lab log, and the job still runs and reports.
+        self.assertIn('pyxis: container start failed', lab.read_text())
+        self.assertNotIn('pyxis', result.stdout + result.stderr)
+        self.assertIn('launcher_exit_code=0 (dimensionless)', result.stdout)
 
     def test_the_job_limit_sets_the_launchers_timeout(self):
         timeout = self.root / 'timeout'
@@ -976,6 +1009,79 @@ class CommonRunIds(unittest.TestCase):
         self.assertIn('plugin library directory is absent', plain.stdout)
         self.assertTrue(list(self.root.glob('fallback-*Z.inventory.log')))
 
+
+    def test_every_srun_reads_dev_null_instead_of_the_launchers_input(self):
+        srun = self.root / 'srun'
+        srun.write_text('#!/bin/bash\nprintf "%s %s\\n" "$(readlink /proc/$$/fd/0)" "${*: -1}" >> "$TEST_SRUN_LOG"\n'
+                        'case "$*" in *SLURM_GPUS_ON_NODE*) printf "8\\n8\\n" ;; esac\n')
+        srun.chmod(0o755)
+        suite = self.root / 'suite.sh'
+        suite.write_text('exit 0\n')
+        log = self.root / 'srun.log'
+        env = {'TEST_SRUN_LOG': str(log), 'SLURM_JOB_CPUS_PER_NODE': '192(x2)',
+               'SLURM_JOB_NUM_NODES': '2', 'NCCL_ENROOT_IMAGE': '/images/nccl.sqsh',
+               'SLURM_JOB_NODELIST': 'node[A-B]'}
+        body = ('prepare_allocation\nnode_command true\nAIM344_RUN_ID=T run_sweep job\n'
+                f'AIM344_RUN_ID=T AIM344_LAB_LOG={self.root}/lab.log run_torch job dataloader\n'
+                f'run_check5 {suite} {self.root}/check5\n')
+        script = ('set -euo pipefail\nLAB_DIR=$TEST_DIR\nsource "$TEST_COMMON"\n'
+                  'prepare_torch() { :; }\n' + body)
+        result = subprocess.run(['bash', '-c', script], input='typed while the job ran\n' * 4,
+                                capture_output=True, text=True, timeout=30,
+                                env={**os.environ, 'PATH': f'{self.root}:{os.environ["PATH"]}',
+                                     'TEST_DIR': str(self.root), 'TEST_COMMON': str(LAB / 'common.sh'),
+                                     'HOME': str(self.home), 'SLURM_JOB_ID': '4242', **env})
+        self.assertEqual(0, result.returncode, result.stderr)
+        calls = log.read_text().splitlines()
+        # The GPU count, the results directory, node_command (also the sweep's
+        # inventory and counters), the sweep, the torch job, the collection of its
+        # lab records on each node and Check 5's preparation.
+        self.assertGreaterEqual(len(calls), 11, calls)
+        collections = [line for line in calls
+                       if line.endswith('/.lab-records') and '--lab-dir=' not in line]
+        self.assertEqual(2, len(collections), calls)
+        self.assertEqual([], [line for line in calls if not line.startswith('/dev/null ')], calls)
+
+    def test_a_key_pressed_during_a_timed_job_does_not_stop_it(self):
+        # Under timeout, srun runs in a process group of its own. In a terminal, a
+        # process of that group that reads the terminal is stopped (SIGTTIN), so a
+        # job whose srun read the participant's input would wait until the limit.
+        import pty
+        srun = self.root / 'srun'
+        srun.write_text('#!/bin/bash\nstatus=0\nIFS= read -r line || status=$?\n'
+                        'echo "srun read status=$status line=[$line]"\n')
+        srun.chmod(0o755)
+        script = ('set -euo pipefail\nLAB_DIR=$TEST_DIR\nsource "$TEST_COMMON"\n'
+                  'prepare_torch() { :; }\nRESULTS_DIR=$TEST_DIR\nAIM344_CPUS_PER_NODE=1\n'
+                  'CONTAINER_ARGS=()\nAIM344_JOB_LIMIT_SECONDS=5\n'
+                  'AIM344_RUN_ID=T run_torch job dataloader || echo "run_torch status=$?"\n')
+        env = {**os.environ, 'PATH': f'{self.root}:{os.environ["PATH"]}', 'TEST_DIR': str(self.root),
+               'TEST_COMMON': str(LAB / 'common.sh'), 'HOME': str(self.home), 'SLURM_JOB_ID': '4242'}
+        started = time.monotonic()
+        pid, terminal = pty.fork()
+        if pid == 0:  # pragma: no cover - the child execs at once
+            os.execvpe('bash', ['bash', '-c', script], env)
+        output = b''
+        try:
+            time.sleep(0.5)
+            os.write(terminal, b'\r\r')
+            while time.monotonic() - started < 30:
+                try:
+                    chunk = os.read(terminal, 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                output += chunk
+        finally:
+            os.close(terminal)
+            _, status = os.waitpid(pid, 0)
+        text = output.decode(errors='replace')
+        self.assertEqual(0, os.waitstatus_to_exitcode(status), text)
+        self.assertIn('srun read status=1 line=[]', text)
+        self.assertIn('launcher_exit_code=0 (dimensionless)', text)
+        self.assertNotIn('run_torch status=', text)
+        self.assertLess(time.monotonic() - started, 5, text)
 
     def test_allocation_checks_start_no_container_and_prepare_slurm_still_does(self):
         srun = self.root / 'srun'

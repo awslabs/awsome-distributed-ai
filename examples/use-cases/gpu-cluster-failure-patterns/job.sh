@@ -32,15 +32,18 @@ RUN_SECONDS=60
 CONTROLLER_RUN_SECONDS=120
 # The job whose answer differs needs only a few seconds of steps.
 CORRUPTION_SECONDS=20
-# The DataLoader job writes the stacks of a process still waiting 60 seconds
-# after its timer starts, and the launcher ends it 120 seconds after srun.
+# Every job writes the stacks of a process still waiting 60 seconds after its
+# timer starts: the DataLoader job's timer starts when an epoch's workers exist,
+# the training stand-in's at each progress record. The launcher ends the
+# DataLoader job 120 seconds after srun.
 STACK_DUMP_SECONDS=60
 DATALOADER_LIMIT_SECONDS=120
 # Checkpoint interval in steps; measurement 1 on g7.48xlarge may change it.
 CHECKPOINT_EVERY=200
-# The training stand-in: a broadcast, a checked all-reduce and a cross-rank
-# checksum comparison per step, with the checkpoint writer.
-STAND_IN=(device --checkpoint-every="$CHECKPOINT_EVERY" --replica-check)
+# The training stand-in: a broadcast, a cross-rank checksum comparison and a
+# checked all-reduce per step, with the checkpoint writer.
+STAND_IN=(device --checkpoint-every="$CHECKPOINT_EVERY" --replica-check
+          --stack-dump-seconds="$STACK_DUMP_SECONDS")
 # The epoch job: two epochs of four batches from a DataLoader whose workers are
 # created anew for each epoch, one checked all-reduce and one progress record per
 # batch. Its stack dump is on for every run, the healthy one and the fixes included.

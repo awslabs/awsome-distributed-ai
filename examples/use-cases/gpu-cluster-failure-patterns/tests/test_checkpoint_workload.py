@@ -15,6 +15,7 @@ import multiprocessing
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -180,6 +181,75 @@ class CheckpointWriter(unittest.TestCase):
                                    args(writer_rank=9, checkpoint_every=5, resume=True),
                                    loops=1, start_value=7)
         self.assertEqual(('start_step', 9, 7), peer.broadcasts[0])
+
+    # ---------------------------------------------------------------- step order
+    def record_steps(self, options, loops, last=None):
+        """Rank 0's replica checks, saves and all-reduces, in the order the loop makes them."""
+        events = []
+
+        class Replica:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def step(self, step):
+                events.append(('replica', step))
+
+            def report(self, step):
+                events.append(('report', step))
+
+        real = self.workload.save_with_retry
+
+        def save(path, step, saved):
+            events.append(('save', step))
+            real(path, step, saved)
+
+        def all_reduce(tensor):
+            self.collectives += 1
+            events.append(('all-reduce',))
+        if last is not None:
+            (self.path / 'last.json').write_text(json.dumps(last))
+        self.collective = all_reduce
+        with mock.patch.object(self.workload, 'ReplicaCheck', Replica), \
+                mock.patch.object(self.workload, 'save_with_retry', side_effect=save):
+            _, out, _ = self.run_rank(self.workload.run_steps, 0, options, loops=loops)
+        return events, out
+
+    def test_each_step_checks_the_replica_first_and_ends_with_its_all_reduce(self):
+        events, _ = self.record_steps(args(checkpoint_every=5, replica_check=True), loops=20)
+        self.assertEqual([('replica', 0), ('all-reduce',), ('replica', 1), ('all-reduce',)], events[:4])
+        # The checkpoint comes after the step's replica check and before its all-reduce,
+        # so a writer that cannot save keeps the other ranks in the all-reduce.
+        start = events.index(('replica', 5))
+        self.assertEqual([('replica', 5), ('save', 5), ('all-reduce',), ('replica', 6)],
+                         events[start:start + 4])
+        # The report after the 20th step names the last step checked, by step index.
+        self.assertEqual(('report', 19), events[-1])
+
+    def test_a_resumed_run_checks_the_replica_by_step_index(self):
+        events, out = self.record_steps(args(checkpoint_every=5, replica_check=True, resume=True),
+                                        loops=6, last={'next_step': 200, 'saved': [0, 200]})
+        self.assertIn('Resuming from last successful checkpoint: next_step=200 (step index).', out)
+        self.assertEqual([200, 201, 202, 203, 204, 205],
+                         [step for kind, *step in events if kind == 'replica' for step in step])
+        self.assertIn(('save', 205), events)
+
+    def test_the_step_loop_restarts_its_stack_timer_at_each_progress_record(self):
+        calls = []
+        fake = SimpleNamespace(
+            dump_traceback_later=lambda seconds, repeat, file: calls.append(('arm', seconds, repeat)),
+            cancel_dump_traceback_later=lambda: calls.append(('cancel',)))
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(self.workload, 'faulthandler', fake):
+            self.run_rank(self.workload.run_steps, 3,
+                          args(stack_dump_seconds=60, stack_dump_dir=tmp), loops=45)
+            left = list(Path(tmp).iterdir())
+        # Armed before the first step, restarted after steps 20 and 40 on every rank,
+        # cancelled when the loop ends; a file that holds only its header is removed.
+        self.assertEqual([('arm', 60, False)] * 3 + [('cancel',)], calls)
+        self.assertEqual([], left)
+        calls.clear()
+        with mock.patch.object(self.workload, 'faulthandler', fake):
+            self.run_rank(self.workload.run_steps, 3, args(), loops=45)
+        self.assertEqual([], calls)
 
     def run_until_rank_zero_stops(self, options, start_value=0):
         """Rank 0 alone, with its own keep_running decision broadcast to itself."""
@@ -415,7 +485,7 @@ class CheckpointWriter(unittest.TestCase):
                      ['storage', '--checkpoint-every', '5'], ['device', '--inject'],
                      ['device', '--resume'], ['device', '--no-such-flag'],
                      ['storage', '--writer-rank'], ['device', '--end-after-save'],
-                     ['storage', '--end-after-save']):
+                     ['storage', '--end-after-save'], ['storage', '--stack-dump-seconds', '60']):
             with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as stop:
                     parse(argv)
@@ -509,6 +579,94 @@ class LabLine(unittest.TestCase):
                         self.assertEqual({'worker', 'n', 'pad'}, set(record))
             counts = sorted(len(path.read_text().splitlines()) for path in files)
             self.assertEqual([1] + [200] * 8, counts)
+
+
+@unittest.skipUnless(HAS_TORCH, 'CPU torch required; the stack files are not tested')
+class StackFiles(unittest.TestCase):
+    """A run moves the stack files an earlier run in the allocation left."""
+
+    def setUp(self):
+        self.workload = load_workload()
+
+    def test_the_earlier_files_leave_the_directory_the_stack_read_lists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / 'stacks-h-rank3-rank-pid10.txt').write_text('old rank\n')
+            (directory / 'stacks-h-rank3-worker0-pid11.txt').write_text('old worker\n')
+            (directory / 'job-T.log').write_text('kept\n')
+            self.workload.retire_stack_files(tmp)
+            self.assertEqual([], list(directory.glob('stacks-*')))
+            self.assertEqual(['job-T.log', 'previous-stacks'], sorted(p.name for p in directory.iterdir()))
+            self.assertEqual('old worker\n',
+                             (directory / 'previous-stacks' / 'stacks-h-rank3-worker0-pid11.txt').read_text())
+            self.workload.retire_stack_files(tmp)
+            self.assertEqual(2, len(list((directory / 'previous-stacks').iterdir())))
+        with tempfile.TemporaryDirectory() as tmp:
+            self.workload.retire_stack_files(tmp)
+            self.assertEqual([], list(Path(tmp).iterdir()))
+
+    def test_one_process_per_node_moves_them_before_the_first_collective(self):
+        for local_rank, rank, moved in (('0', 8, True), ('3', 3, False)):
+            with self.subTest(local_rank=local_rank), tempfile.TemporaryDirectory() as tmp:
+                old = Path(tmp) / 'stacks-h-rank8-rank-pid10.txt'
+                old.write_text('old\n')
+                seen = []
+                fake = FakeDist(self.workload.torch, rank, 0)
+                fake.init_process_group = mock.Mock()
+                fake.destroy_process_group = mock.Mock()
+                argv = ['workload.py', 'dataloader', '--epochs', '1', '--stack-dump-seconds', '60',
+                        '--stack-dump-dir', tmp]
+                with mock.patch.object(self.workload, 'dist', fake), \
+                        mock.patch.object(self.workload, 'DEVICE', 'cpu'), \
+                        mock.patch.object(self.workload.torch.cuda, 'set_device'), \
+                        mock.patch.object(self.workload, 'collective',
+                                          side_effect=lambda tensor: seen.append(old.exists())), \
+                        mock.patch.object(self.workload, 'dataloader'), \
+                        mock.patch.dict(os.environ, {'LOCAL_RANK': local_rank}), \
+                        mock.patch.object(sys, 'argv', argv):
+                    self.workload.main()
+                self.assertEqual([not moved], seen)
+                self.assertEqual(moved, (Path(tmp) / 'previous-stacks' / old.name).exists())
+
+
+def emit_lines(lab, worker, count):
+    sys.path.insert(0, lab)
+    import workload
+    for n in range(count):
+        workload.emit(f'AIM344 replica check: step={n}; worker {worker} ' + 'x' * 150)
+
+
+@unittest.skipUnless(HAS_TORCH, 'CPU torch required to import workload.py')
+class OneWritePerLine(unittest.TestCase):
+    """workload.emit: the lines of several unbuffered processes on one pipe stay whole."""
+
+    def test_emit_is_one_write_of_the_whole_line(self):
+        workload = load_workload()
+        writes = []
+        recorder = SimpleNamespace(write=writes.append, flush=lambda: None)
+        with mock.patch.object(sys, 'stdout', recorder):
+            workload.emit('checkpoint saved: next_step=200 (step index)')
+        self.assertEqual(['checkpoint saved: next_step=200 (step index)\n'], writes)
+
+    def test_eight_python_u_processes_on_one_pipe_print_whole_lines(self):
+        # torchrun starts every worker as `python -u`, and the ranks of a node share
+        # one output pipe.
+        code = ('import sys\nsys.path.insert(0, sys.argv[1])\nimport test_checkpoint_workload as t\n'
+                't.emit_lines(sys.argv[2], int(sys.argv[3]), 300)\n')
+        read, write = os.pipe()
+        processes = [subprocess.Popen([sys.executable, '-u', '-c', code, str(Path(__file__).parent),
+                                       str(LAB), str(worker)], stdout=write)
+                     for worker in range(8)]
+        os.close(write)
+        with os.fdopen(read, 'rb') as stream:
+            data = stream.read().decode()
+        for process in processes:
+            self.assertEqual(0, process.wait(120))
+        lines = data.split('\n')
+        self.assertEqual('', lines.pop())
+        line = re.compile(r'AIM344 replica check: step=\d+; worker [0-7] x{150}')
+        self.assertEqual([], [text for text in lines if not line.fullmatch(text)][:5])
+        self.assertEqual(8 * 300, len(lines))
 
 
 @unittest.skipUnless(HAS_TORCH, 'CPU torch required; the progress record is not tested')

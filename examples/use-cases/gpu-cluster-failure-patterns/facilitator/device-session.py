@@ -67,8 +67,17 @@ DEVICE_EXERCISES = {
     'efa-reset': {'kind': 'efa', 'active': True,
                   'answer': 'the lab controller reset one EFA device on your '
                             'exercise node (a PCIe function-level reset of {bdf}) '
-                            'while your job was running'},
+                            'while your job was running',
+                  # The round's record does not show that the reset completed.
+                  'unconfirmed': 'the lab controller was to reset one EFA device on '
+                                 'your exercise node ({bdf}) while your job was '
+                                 'running, and it has no confirmation that the reset '
+                                 'completed, so compare what you recorded with the '
+                                 'expected output on your page'},
 }
+# A device incident whose round never issued its operation did not happen. Its
+# answer would name the cause of an incident that `next` starts again.
+NOT_ISSUED_ANSWER = 'the lab did not apply this incident, so nothing you saw came from it'
 SCHEDULE_LIMIT = 16
 SETTING_KEY = re.compile(r'[a-z][a-z0-9_]{0,31}')
 # Settings reach the launcher as data. The character set keeps a careless launcher
@@ -85,14 +94,49 @@ ACTIVE_ROUND_COMPARE = ('Collect an allowed check and compare it with the health
 # A hidden round says what it was once the participant can do nothing more with
 # it: recovered, or kept out of service for an operator.
 REVEAL_PHASES = ('runtime-ready', 'verified', 'replacement-required')
+# The settings the participant's launcher applies for each exercise, with the
+# values it accepts (job.sh read_profile), so that a wrong one is refused when the
+# seat is installed rather than in the middle of the session. 'rank' must also be a
+# rank of the job, which the installer checks against the job's world size.
+EXERCISE_SETTINGS = {
+    'slow-job': {},
+    'storage': {'writer_rank': 'rank'},
+    'dataloader': {'dataset_cache': ('none', 'rank-thread', 'worker-thread'),
+                   'affected_rank': 'rank', 'worker_cuda': 'flag'},
+    'silent-corruption': {'corrupt_rank': 'rank', 'corrupt_step': 'step',
+                          'corrupt_bit': 'bit', 'corrupt_recurring': 'flag'},
+    'efa-reset': {},
+}
+REQUIRED_SETTINGS = {'silent-corruption': ('corrupt_rank',)}
+# 2 nodes of 8 GPUs; the installer reads AIM344_WORLD_SIZE for another layout.
+DEFAULT_WORLD_SIZE = 16
 
 
-def validate_schedule(entries):
+def _setting_problem(kind, value, world_size):
+    """What a setting's value must be, or None when it is acceptable."""
+    whole = isinstance(value, int) and not isinstance(value, bool)
+    if isinstance(kind, tuple):
+        return None if value in kind else 'one of ' + ', '.join(kind)
+    if kind == 'flag':
+        return None if isinstance(value, bool) else 'true or false'
+    if kind == 'bit':
+        return None if whole and 0 <= value <= 31 else 'a bit position from 0 to 31'
+    if kind == 'step':
+        return None if whole and value >= 1 else 'a whole number of at least 1'
+    if world_size is None:
+        return None if whole and value >= 0 else 'a rank, a whole number of at least 0'
+    return (None if whole and 0 <= value < world_size
+            else f'a rank of the {world_size}-rank job, from 0 to {world_size - 1}')
+
+
+def validate_schedule(entries, world_size=None):
     """The seat's incident schedule, checked, or a Refusal naming what is wrong.
 
     Account preparation writes it into the root-only session configuration, so the
     order of later incidents is readable only through this helper. Every entry
-    names a known incident; its settings are passed to the launcher unchanged.
+    names a known incident and only the settings its launcher applies
+    (EXERCISE_SETTINGS); they are passed to the launcher unchanged. With
+    `world_size` (the installer's check) a rank must also be below it.
     """
     if not isinstance(entries, list) or not entries:
         raise Refusal('The incident schedule must be a non-empty list.')
@@ -121,6 +165,16 @@ def validate_schedule(entries):
             elif not isinstance(value, (bool, int, float)):
                 raise Refusal(f'Schedule entry {number} setting {key} must be text, a number '
                               'or true/false.')
+            allowed = EXERCISE_SETTINGS[exercise]
+            if key not in allowed:
+                raise Refusal(f'Schedule entry {number} ({exercise}) has no setting {key}; '
+                              f'it takes {", ".join(sorted(allowed)) or "no settings"}.')
+            problem = _setting_problem(allowed[key], value, world_size)
+            if problem:
+                raise Refusal(f'Schedule entry {number} setting {key} must be {problem}.')
+        for key in REQUIRED_SETTINGS.get(exercise, ()):
+            if key not in settings:
+                raise Refusal(f'Schedule entry {number} ({exercise}) needs the setting {key}.')
         checked.append({'exercise': exercise, 'settings': dict(settings)})
     return checked
 
@@ -230,6 +284,12 @@ def same_issue(incident, entry):
                 and incident.get('number') == entry.get('number')
                 and incident.get('issue_id') is not None
                 and incident.get('issue_id') == entry.get('issue_id'))
+
+
+def not_issued(state):
+    """Did this scheduled device round end without issuing its operation?"""
+    return bool(state.incident and state.active_fault
+                and state.active_fault.get('outcome') == 'not-issued')
 
 
 def participant_text(text, state=None):
@@ -2427,9 +2487,10 @@ class DeviceSession:
         whose only warnings are the two cumulative counters (CHECK6_CUMULATIVE_COUNTERS)
         is recorded as MONITOR, the severity the suite's check_warn gives it
         (lib/common.sh check_warn -> log_result ... "MONITOR"), and does not keep the
-        node out of service: the check reads those cumulative totals (since the
-        instance launch or the last EFA driver reset) once, after its loopback, so
-        the warning attributes no event to this round. Returns the counters as 'name=value'
+        node out of service: the check reads those running totals once, after its
+        loopback, so the warning attributes no event to this round. The text says only
+        that: on g7.48xlarge a same-instance reboot left both totals unchanged, so the
+        point from which they count is not stated. Returns the counters as 'name=value'
         strings, or None when the output holds any other warning, a warning line
         that could not be read, a warning attributed to another check, no Check 6
         [PASS] line, or a skipped statistics step. Every other WARN keeps its
@@ -3579,9 +3640,12 @@ class DeviceSession:
                 # The record advanced but the profile was not written: finish that
                 # incident's hand-over rather than advancing past it.
                 return self._issue_profile(progress, current, schedule)
-            # Applied means this round was started for this issuance. A round
-            # left by an earlier pass of the schedule has another issue_id.
-            applied = same_issue(state.incident, current)
+            # Applied means this round was started for this issuance and issued
+            # its operation. A round left by an earlier pass of the schedule has
+            # another issue_id. A round that never issued its operation is started
+            # again; one whose outcome is unknown is not, because the device may
+            # have been reset.
+            applied = same_issue(state.incident, current) and not not_issued(state)
             if current and current['exercise'] in DEVICE_EXERCISES and not applied:
                 if not self._device_incident_ready():
                     return Result(state, incident=current['number'],
@@ -4504,9 +4568,10 @@ class DeviceSession:
                 record['severity'] = 'MONITOR'
                 monitored.append(
                     f'Check {check} warned only about the cumulative EFA counters '
-                    f'({counters}), which count events since the instance launched or '
-                    f'the EFA driver last reset; the warning is recorded as MONITOR '
-                    f'and does not keep the node out of service.')
+                    f'({counters}), which it reads once, after its loopback test; they '
+                    f'are running totals, not a count of this round\'s events. The '
+                    f'warning is recorded as MONITOR and does not keep the node out of '
+                    f'service.')
             elif verdict == 'WARN':
                 allowed, detail = self._baseline_allows_warning(state, check, text)
                 if allowed:
@@ -4957,11 +5022,24 @@ def sweep(config, clock=time.time, session_factory=None):
 
 
 def incident_answer(state):
-    """The one-line reveal for a scheduled device incident, once it is resolved."""
+    """The one-line reveal for a scheduled device incident, once it is resolved.
+
+    It says the device was reset only when the round's record shows that the
+    operation returned.
+    """
     exercise = DEVICE_EXERCISES[state.incident['exercise']]
-    bdf = (state.active_fault or {}).get('bdf') or 'its assigned device'
-    return (f'Answer for incident {state.incident["number"]}: '
-            + exercise['answer'].format(bdf=bdf) + '.')
+    fault = state.active_fault or {}
+    bdf = fault.get('bdf') or 'its assigned device'
+    if fault.get('outcome') == 'returned':
+        answer = exercise['answer']
+    elif not_issued(state):
+        answer = NOT_ISSUED_ANSWER
+        # next refuses every incident once the node is kept out of service.
+        if state.phase != 'replacement-required':
+            answer += '. Start it again with bash job.sh incident'
+    else:
+        answer = exercise['unconfirmed']
+    return f'Answer for incident {state.incident["number"]}: ' + answer.format(bdf=bdf) + '.'
 
 
 def render(result, verb, operator=False):

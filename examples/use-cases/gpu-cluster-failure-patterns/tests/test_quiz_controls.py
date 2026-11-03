@@ -147,9 +147,13 @@ class ScheduleValidation(unittest.TestCase):
         self.assertEqual({}, checked[1]['settings'])
 
     def test_every_listed_exercise_is_known(self):
+        self.assertEqual(set(session.JOB_EXERCISES) | set(session.DEVICE_EXERCISES),
+                         set(session.EXERCISE_SETTINGS))
         for name in session.JOB_EXERCISES + tuple(session.DEVICE_EXERCISES):
             with self.subTest(name=name):
-                session.validate_schedule([{'exercise': name}])
+                # The launcher needs the rank whose answer differs.
+                settings = {'corrupt_rank': 0} if name == 'silent-corruption' else {}
+                session.validate_schedule([{'exercise': name, 'settings': settings}])
 
     def test_unusable_schedules_are_refused(self):
         cases = {
@@ -173,12 +177,53 @@ class ScheduleValidation(unittest.TestCase):
                 with self.assertRaises(session.Refusal):
                     session.validate_schedule(entries)
 
-    def test_text_values_may_be_empty_or_hold_an_inner_dash(self):
-        for value in ('', 'a-b', 'x=1', '/results/seat-1', 'a' * 128):
-            with self.subTest(value=value):
-                checked = session.validate_schedule(
-                    [{'exercise': 'storage', 'settings': {'mode': value}}])
-                self.assertEqual(value, checked[0]['settings']['mode'])
+    def test_each_exercise_takes_only_the_settings_its_launcher_applies(self):
+        accepted = [
+            {'exercise': 'storage', 'settings': {'writer_rank': 15}},
+            {'exercise': 'dataloader', 'settings': {'dataset_cache': 'worker-thread',
+                                                     'affected_rank': 0, 'worker_cuda': True}},
+            {'exercise': 'silent-corruption',
+             'settings': {'corrupt_rank': 15, 'corrupt_step': 1, 'corrupt_bit': 31,
+                          'corrupt_recurring': True}},
+        ]
+        self.assertEqual(accepted, session.validate_schedule(accepted, world_size=16))
+        refused = {
+            'a typo': ({'exercise': 'storage', 'settings': {'writer-rank': 9}},
+                       'unusable setting name'),
+            'another exercise\'s setting': ({'exercise': 'storage', 'settings': {'corrupt_rank': 1}},
+                                            'has no setting corrupt_rank; it takes writer_rank'),
+            'a setting where none applies': ({'exercise': 'slow-job', 'settings': {'mode': 'x'}},
+                                             'it takes no settings'),
+            'writer past the last rank': ({'exercise': 'storage', 'settings': {'writer_rank': 16}},
+                                          'a rank of the 16-rank job, from 0 to 15'),
+            'flip past the last rank': ({'exercise': 'silent-corruption',
+                                         'settings': {'corrupt_rank': 16}}, 'from 0 to 15'),
+            'loader rank past the last rank': ({'exercise': 'dataloader',
+                                                'settings': {'affected_rank': 20}}, 'from 0 to 15'),
+            'a rank as text': ({'exercise': 'storage', 'settings': {'writer_rank': '9'}}, 'a rank'),
+            'a flag as a number': ({'exercise': 'dataloader', 'settings': {'worker_cuda': 1}},
+                                   'true or false'),
+            'an unknown cache': ({'exercise': 'dataloader', 'settings': {'dataset_cache': 'a-b'}},
+                                 'one of none, rank-thread, worker-thread'),
+            'step 0': ({'exercise': 'silent-corruption',
+                        'settings': {'corrupt_rank': 1, 'corrupt_step': 0}}, 'at least 1'),
+            'bit 32': ({'exercise': 'silent-corruption',
+                        'settings': {'corrupt_rank': 1, 'corrupt_bit': 32}}, 'from 0 to 31'),
+            'no flip rank': ({'exercise': 'silent-corruption', 'settings': {'corrupt_step': 5}},
+                             'needs the setting corrupt_rank'),
+        }
+        for name, (entry, expected) in refused.items():
+            with self.subTest(case=name):
+                with self.assertRaisesRegex(session.Refusal, re.escape(expected)):
+                    session.validate_schedule([entry], world_size=16)
+
+    def test_the_rank_bound_is_the_installers_world_size(self):
+        entry = [{'exercise': 'storage', 'settings': {'writer_rank': 20}}]
+        self.assertEqual(entry, session.validate_schedule(entry, world_size=32))
+        # The controller checks again without a world size; the installer bounded it.
+        self.assertEqual(entry, session.validate_schedule(entry))
+        with self.assertRaises(session.Refusal):
+            session.validate_schedule([{'exercise': 'storage', 'settings': {'writer_rank': -1}}])
 
 
 class SplitCheckTables(QuizBase):
@@ -533,6 +578,58 @@ class DeviceIncident(QuizBase):
         self.assertEqual(2, following.incident)
         self.assertFalse(following.under_way)
 
+    def device_round_that_did_not_return(self):
+        """Incident 1 is the device incident; its round ends, recovered, without a
+        confirmed reset. Returns the participant's status after recovery."""
+        self.set_schedule(session.validate_schedule([{'exercise': 'efa-reset'},
+                                                     {'exercise': 'storage'}]))
+        self.make().next()
+        self.running_job_with_progress()
+        with self.assertRaises(session.Refusal) as caught:
+            self.make().next()
+        self.assert_no_kind(str(caught.exception))
+        self.executor.jobs = []
+        self.assertEqual('runtime-ready', self.make().recover().state.phase)
+        return session.render(self.make().status(), 'status')
+
+    def test_a_round_that_never_issued_its_operation_says_so_and_starts_again(self):
+        def not_dispatched(argv, record):
+            self.active_calls.append(argv)
+            return session.Completed(255, '', 'maintenance route unavailable\n', dispatched=False)
+        self.executor.run_active_fault = not_dispatched
+        rendered = self.device_round_that_did_not_return()
+        self.assertEqual('not-issued', self.make().store.read().active_fault['outcome'])
+        self.assertIn('Answer for incident 1: the lab did not apply this incident, so nothing '
+                      'you saw came from it. Start it again with bash job.sh incident.', rendered)
+        self.assertNotIn('reset', rendered.split('Answer for incident 1:')[1].splitlines()[0])
+        self.assert_no_kind(rendered.split('Answer for incident 1:')[1].splitlines()[0])
+        # The same incident again, not the next one: its profile until the job runs.
+        again = self.make().next()
+        self.assertEqual(1, again.incident)
+        self.assertFalse(again.under_way)
+        self.executor.run_active_fault = self.active
+        self.running_job_with_progress()
+        started = self.make().next()
+        self.assertTrue(started.under_way)
+        state = self.make().store.read()
+        self.assertEqual((2, 'returned'), (state.round, state.active_fault['outcome']))
+        self.assertEqual(1, state.incident['number'])
+        # Once this round is recovered, the reveal and the move to incident 2 are
+        # those of test_recovery_reveals_the_answer_and_the_schedule_moves_on.
+
+    def test_a_reset_without_confirmation_is_not_revealed_as_done_or_repeated(self):
+        self.rc = 124
+        rendered = self.device_round_that_did_not_return()
+        self.assertEqual('unknown-or-refused', self.make().store.read().active_fault['outcome'])
+        self.assertIn('Answer for incident 1: the lab controller was to reset one EFA device on '
+                      'your exercise node (0000:b0:00.0) while your job was running, and it has '
+                      'no confirmation that the reset completed', rendered)
+        self.assertNotIn('the lab controller reset one', rendered)
+        # The device may have been reset, so the incident is not started a second time.
+        calls = len(self.active_calls)
+        self.assertEqual(2, self.make().next().incident)
+        self.assertEqual(calls, len(self.active_calls))
+
     def test_a_refused_start_is_concealed_and_kept_for_the_operator(self):
         self.to_device_incident()
         self.running_job_with_progress()
@@ -761,6 +858,12 @@ class CounterWarningRecordedAsMonitor(WarnRefusalAndOperatorReplacement):
         self.assertNotIn('severity', state.check_results['round-1/recovered/check-2'])
         self.assertIn('retrans_timeout_events=2', state.notes)
         self.assertIn('recorded as MONITOR', out)
+        # Only what was observed: running totals read after the loopback. A
+        # same-instance reboot did not reset them, so no starting point is named.
+        self.assertIn("reads once, after its loopback test; they are running totals, "
+                      "not a count of this round's events.", out)
+        for claim in ('instance launch', 'driver last reset', 'since the'):
+            self.assertNotIn(claim, out)
         code, status, _ = self.run_main('status')
         self.assertEqual(0, code)
         self.assertRegex(status, r'round-1/recovered/check-6: WARN, recorded as MONITOR \(')
@@ -1123,6 +1226,25 @@ class InstallerSchedule(unittest.TestCase):
         done = self.install(link)
         self.assertNotEqual(0, done.returncode)
         self.assertFalse(self.config.exists())
+
+    def test_a_rank_outside_the_job_is_refused_when_the_seat_is_installed(self):
+        entries = [{'exercise': 'silent-corruption', 'settings': {'corrupt_rank': 16}}]
+        done = self.check(self.schedule_file(entries))
+        self.assertNotEqual(0, done.returncode)
+        self.assertIn('setting corrupt_rank must be a rank of the 16-rank job, from 0 to 15',
+                      done.stderr)
+        larger = subprocess.run(
+            [sys.executable, '-', str(self.schedule_file(entries)), str(HELPER), str(self.config),
+             str(self.state_dir), 'table-1'], input=self.check_block, capture_output=True,
+            text=True, env=dict(os.environ, AIM344_WORLD_SIZE='32'))
+        self.assertEqual(0, larger.returncode, larger.stderr)
+        self.assertEqual(entries, json.loads(larger.stdout))
+        bad = subprocess.run(
+            [sys.executable, '-', str(self.schedule_file(SCHEDULE)), str(HELPER), str(self.config),
+             str(self.state_dir), 'table-1'], input=self.check_block, capture_output=True,
+            text=True, env=dict(os.environ, AIM344_WORLD_SIZE='sixteen'))
+        self.assertNotEqual(0, bad.returncode)
+        self.assertIn('AIM344_WORLD_SIZE', bad.stderr)
 
     def test_the_schedule_is_checked_before_the_installer_changes_anything(self):
         """F6: a refused file stops the installer before its first change."""

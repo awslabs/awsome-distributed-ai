@@ -16,6 +16,11 @@ for aim344_pmi_var in $(compgen -e PMI_; compgen -e PMIX_); do
 done
 unset aim344_pmi_var SLURM_MPI_TYPE
 
+# Every srun here reads /dev/null: none takes input, and srun forwards its stdin
+# to the tasks. Under timeout, srun runs in a process group of its own, and a
+# process of that group that reads the terminal is stopped, so a key pressed in
+# terminal A could otherwise hold a job until the launcher's limit.
+
 # Check 5 has a separate, job-local cold-start budget. Pyxis names are scoped by
 # UID and job, never borrowed from another participant or an earlier allocation.
 # Keep SPANK options in this subshell: host counters/storage must not inherit them.
@@ -40,7 +45,7 @@ run_check5() (
     local start=$SECONDS rc=0
     SLURM_MPI_TYPE=none timeout --signal=TERM --kill-after=30s "${AIM344_CONTAINER_PREP_TIMEOUT:-600}s" \
         srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --mpi=none --cpu-bind=none \
-        --container-image="$NCCL_CONTAINER" --container-writable true || rc=$?
+        --container-image="$NCCL_CONTAINER" --container-writable true < /dev/null || rc=$?
     printf 'Check 5 container preparation: elapsed=%s s exit_code=%s\n' "$((SECONDS-start))" "$rc"
     ((rc == 0)) || return "$rc"
     # Match the suite's --mpi option and enable the real step's PMIx IPC hook.
@@ -74,7 +79,7 @@ prepare_allocation() {
     }
     local counts
     counts=$(srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
-        bash -c 'if [[ -n ${SLURM_GPUS_ON_NODE:-} ]]; then printf "%s\n" "$SLURM_GPUS_ON_NODE"; else nvidia-smi -L | awk '\''/^GPU [0-9]+:/ {n++} END {print n+0}'\''; fi')
+        bash -c 'if [[ -n ${SLURM_GPUS_ON_NODE:-} ]]; then printf "%s\n" "$SLURM_GPUS_ON_NODE"; else nvidia-smi -L | awk '\''/^GPU [0-9]+:/ {n++} END {print n+0}'\''; fi' < /dev/null)
     mapfile -t gpu_counts <<< "$counts"
     [[ ${#gpu_counts[@]} == 2 && ${gpu_counts[0]} =~ ^[1-9][0-9]*$ && ${gpu_counts[0]} == "${gpu_counts[1]}" ]] || {
         echo "Expected the same positive allocated GPU count on both nodes; got: $counts" >&2; exit 1;
@@ -86,7 +91,7 @@ prepare_allocation() {
     }
     RESULTS_DIR=${RESULTS_DIR:-$LAB_DIR/results/$SLURM_JOB_ID}
     mkdir -p -- "$RESULTS_DIR"
-    srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --mpi=none --cpu-bind=none mkdir -p -- "$RESULTS_DIR"
+    srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --mpi=none --cpu-bind=none mkdir -p -- "$RESULTS_DIR" < /dev/null
     RESULTS_DIR=$(cd -- "$RESULTS_DIR" && pwd)
     [[ $RESULTS_DIR != *[:,]* && $RESULTS_DIR != *' '* ]] || exit 1
     use_nccl_container
@@ -110,7 +115,7 @@ prepare_slurm() {
 
 node_command() {
     SLURM_MPI_TYPE=none srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
-        "${CONTAINER_ARGS[@]}" --container-remap-root "$@"
+        "${CONTAINER_ARGS[@]}" --container-remap-root "$@" < /dev/null
 }
 
 # job.sh runs incidents without naming their cause. It sets AIM344_RUN_ID to a
@@ -133,7 +138,7 @@ collect_lab_records() {
             SLURM_MPI_TYPE=none timeout --signal=TERM --kill-after=10s 60s \
                 srun --nodes=1 --ntasks=1 --nodelist="$node" --cpus-per-task=1 --mpi=none --cpu-bind=none --overlap \
                 bash -c 'cd -- "$1" 2>/dev/null || exit 0; for f in *.log; do [[ -f $f ]] || continue; cat -- "$f" && rm -f -- "$f"; done' \
-                collect "$RESULTS_DIR/$LAB_RECORDS" || status=$?
+                collect "$RESULTS_DIR/$LAB_RECORDS" < /dev/null || status=$?
         done 2>> "$AIM344_LAB_LOG"
         exit "$status") || rc=$?
     [[ -z $records ]] || LC_ALL=C sort -s -k1,1 <<< "$records" >> "$AIM344_LAB_LOG"
@@ -155,7 +160,7 @@ run_sweep() {
     # The optional sweep uses one MPI rank per GPU within the same CPU budget.
     SLURM_MPI_TYPE=pmix timeout --signal=TERM --kill-after=30s 600s \
         srun --nodes=2 --ntasks="$((2 * GPUS_PER_NODE))" --ntasks-per-node="$GPUS_PER_NODE" --cpus-per-task="$((AIM344_CPUS_PER_NODE / GPUS_PER_NODE))" --mpi=pmix --cpu-bind=none \
-        "${CONTAINER_ARGS[@]}" --no-container-remap-root bash /opt/aim344/sweep-rank.sh \
+        "${CONTAINER_ARGS[@]}" --no-container-remap-root bash /opt/aim344/sweep-rank.sh < /dev/null \
         2>&1 | tee "$RESULTS_DIR/$run_id.nccl.log" || rc=$?
     printf 'sweep_elapsed=%s s; launcher_exit_code=%s (dimensionless)\n' "$((SECONDS-start))" "$rc" \
         | tee "$RESULTS_DIR/$run_id.status.log"
@@ -195,6 +200,15 @@ run_torch() {
     local -a evidence=()
     if [[ $phase == device ]]; then
         deadline=()
+    else
+        # The job's container is created on both nodes before the timed step, so
+        # that a cold start does not count against the job's limit. A failure here
+        # shows again, in the job log, when the job's own step starts.
+        if [[ -n ${AIM344_LAB_LOG:-} ]]; then
+            node_command true >> "$AIM344_LAB_LOG" 2>&1 || true
+        else
+            node_command true || true
+        fi
     fi
     # The controller reads this copy before an active device fault. job.sh sets
     # AIM344_PROGRESS_COPY=1 so that every run it starts writes the same copy,
@@ -213,7 +227,7 @@ run_torch() {
     fi
     SLURM_MPI_TYPE=none "${deadline[@]}" \
         srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
-        "${CONTAINER_ARGS[@]}" bash /opt/aim344/torch-node.sh "$@" "${lab_args[@]}" \
+        "${CONTAINER_ARGS[@]}" bash /opt/aim344/torch-node.sh "$@" "${lab_args[@]}" < /dev/null \
         2>&1 | tee "$RESULTS_DIR/$run_id.log" "${evidence[@]}" || rc=$?
     printf 'launcher_exit_code=%s (dimensionless)\n' "$rc" | tee "$RESULTS_DIR/$run_id.status.log"
     ((${#lab_args[@]} == 0)) || collect_lab_records

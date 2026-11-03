@@ -72,9 +72,10 @@ def exercise_device(spec):
     peer = workload.ReplicaCheck(peer_args, torch.device('cpu'), rank=1, world_size=world_size)
 
     def all_gather(gathered, local):
-        step['n'] += 1
+        # The step loop checks step indexes 0, 1, 2, ... in a run from step 0.
         gathered.fill_(peer.checksum(step['n']).item())
         gathered[rank] = local[0]
+        step['n'] += 1
 
     # Rank 0 ends the loop from its deadline; the fake broadcast carries that decision
     # to any rank this harness plays.
@@ -463,6 +464,18 @@ class ReplicaCheckUnit(unittest.TestCase):
         lines = self.run_steps(workload, check, clean, range(1, 6))
         self.assertEqual([], lines)
 
+    def test_the_pci_address_is_printed_as_nvidia_smi_prints_it(self):
+        from unittest import mock
+        workload = load_workload()
+        properties = SimpleNamespace(uuid='GPU-1234', pci_domain_id=0, pci_bus_id=0xb6,
+                                     pci_device_id=0)
+        with mock.patch.object(workload.torch.cuda, 'get_device_properties',
+                               return_value=properties):
+            identity = workload.device_identity(SimpleNamespace(type='cuda', index=5))
+        # nvidia-smi --query-gpu=pci.bus_id prints 00000000:B6:00.0.
+        self.assertEqual('00000000:B6:00.0', identity['pci'])
+        self.assertEqual((5, 'GPU-1234'), (identity['index'], identity['uuid']))
+
     def test_cuda_needs_the_cublas_workspace_setting(self):
         import torch
         workload = load_workload()
@@ -501,8 +514,9 @@ class DeviceLoopWithReplicaCheck(unittest.TestCase):
         self.assertEqual(len(progress), len(reports))
         for before, after in zip(progress, reports):
             self.assertEqual(lines.index(before) + 1, lines.index(after))
-            n = before.split('collective_progress=')[1].split(' ')[0]
-            self.assertEqual(f'AIM344 replica check: step={n}; 16/16 checksums agree over the last 20 steps.',
+            n = int(before.split('collective_progress=')[1].split(' ')[0])
+            # After n steps of a run from step 0, the last step checked is index n - 1.
+            self.assertEqual(f'AIM344 replica check: step={n - 1}; 16/16 checksums agree over the last 20 steps.',
                              after)
             self.assertIn('; job_id=777; world_size=16; rank=0.', before)
         self.assertIn('Device workload completed:', result.stdout)
@@ -534,9 +548,10 @@ class DeviceLoopWithReplicaCheck(unittest.TestCase):
         lines = result.stdout.splitlines()
         self.assertEqual(1, len([line for line in lines if 'differs from the other 3 ranks' in line]))
         self.assertEqual([], [line for line in lines if 'agrees again' in line])
-        self.assertIn('AIM344 replica check: step=20; 3/4 checksums agree over the last 20 steps; '
-                      'rank 0 differed on 16 of 20 steps.', lines)
-        self.assertIn('AIM344 replica check: step=40; 3/4 checksums agree over the last 20 steps; '
+        # Step indexes 5 to 19 of the first window differ, and every step after it.
+        self.assertIn('AIM344 replica check: step=19; 3/4 checksums agree over the last 20 steps; '
+                      'rank 0 differed on 15 of 20 steps.', lines)
+        self.assertIn('AIM344 replica check: step=39; 3/4 checksums agree over the last 20 steps; '
                       'rank 0 differed on 20 of 20 steps.', lines)
 
     def test_without_the_replica_check_the_loop_is_unchanged(self):

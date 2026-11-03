@@ -46,6 +46,18 @@ FILLER_NAME = 'ckpt-shard-00017.partial'
 END_AFTER_SAVE_STEPS = 20
 
 
+def emit(text):
+    """Print one line of the job's output with a single write.
+
+    torchrun starts every worker with `python -u`, and under unbuffered output
+    print() writes the text and the newline in two calls, so another process's
+    output can land between them. One write of a line shorter than PIPE_BUF bytes
+    reaches the shared pipe whole.
+    """
+    sys.stdout.write(text + '\n')
+    sys.stdout.flush()
+
+
 def lab_line(lab_dir, text):
     """Print one of the lab's own lines, or, with a lab directory, keep it off the output.
 
@@ -58,7 +70,7 @@ def lab_line(lab_dir, text):
     writes, so it is never split.
     """
     if not lab_dir:
-        print(text, flush=True)
+        emit(text)
         return
     os.makedirs(lab_dir, mode=0o700, exist_ok=True)
     now = time.time()
@@ -72,17 +84,12 @@ def lab_line(lab_dir, text):
 
 
 def progress_record(count, tensor):
-    """Rank 0's progress record, which the controller and the pages read.
-
-    It is written with one call: print() under unbuffered output writes the text
-    and the newline separately, and another process's output can land between them.
-    """
-    sys.stdout.write(f'AIM344 collective_progress={count} collectives; '
-                     f'tensor_bytes={tensor.numel() * tensor.element_size()} B; '
-                     f'timestamp={time.time():.6f} s since epoch; 0 mismatches; '
-                     f'job_id={os.environ.get("SLURM_JOB_ID", "unassigned")}; '
-                     f'world_size={dist.get_world_size()}; rank=0.\n')
-    sys.stdout.flush()
+    """Rank 0's progress record, which the controller and the pages read."""
+    emit(f'AIM344 collective_progress={count} collectives; '
+         f'tensor_bytes={tensor.numel() * tensor.element_size()} B; '
+         f'timestamp={time.time():.6f} s since epoch; 0 mismatches; '
+         f'job_id={os.environ.get("SLURM_JOB_ID", "unassigned")}; '
+         f'world_size={dist.get_world_size()}; rank=0.')
 
 
 def checkpoint_dir():
@@ -139,19 +146,20 @@ def save_with_retry(path, step, saved=None):
         except OSError as error:
             if error.errno not in (errno.ENOSPC, errno.EDQUOT):
                 raise
-            print(f'checkpoint write retry: {error}', flush=True)
+            emit(f'checkpoint write retry: {error}')
             if time.monotonic() >= deadline:
                 raise
             time.sleep(1)
 
 
 def rollback_point(record, before):
-    """The newest checkpoint in `record` saved before replica step `before`.
+    """The newest checkpoint in `record` saved before step index `before`.
 
-    A checkpoint with next_step=N holds the steps below step index N. Replica step
-    S of a run from step 0 is step index S - 1, so every checkpoint with N below S
-    was saved before that step. Returns N and the saved steps up to N; the later
-    checkpoints are dropped with the rollback.
+    A checkpoint with next_step=N holds the steps below step index N, and it is
+    saved after the replica check of step N. Every checkpoint with N below S was
+    therefore saved before the replica check of step S, the step a replica line
+    `step=S` names. Returns N and the saved steps up to N; the later checkpoints
+    are dropped with the rollback.
     """
     saved = record.get('saved', [record['next_step']])
     earlier = [step for step in saved if step < before]
@@ -179,11 +187,11 @@ def checkpoint_start(args, path):
             if before is None:
                 start_step = record['next_step']
                 saved = record.get('saved', [start_step])
-                print(f'Resuming from last successful checkpoint: next_step={start_step} (step index).', flush=True)
+                emit(f'Resuming from last successful checkpoint: next_step={start_step} (step index).')
             else:
                 start_step, saved = rollback_point(record, before)
-                print(f'Resuming from the last checkpoint saved before step={before}: '
-                      f'next_step={start_step} (step index).', flush=True)
+                emit(f'Resuming from the last checkpoint saved before step={before}: '
+                     f'next_step={start_step} (step index).')
         else:
             saved = [0]
             save_checkpoint(path, 0, saved)
@@ -210,7 +218,7 @@ def storage(args, tensor):
         save_with_retry(path, start_step + 1)
     collective(tensor)
     if rank == 0:
-        print(f'Storage workload completed: next_step={start_step + 1} (step index); 0 mismatches.', flush=True)
+        emit(f'Storage workload completed: next_step={start_step + 1} (step index); 0 mismatches.')
 
 
 def run_steps(args, tensor):
@@ -218,22 +226,24 @@ def run_steps(args, tensor):
 
     Rank 0 decides when to stop and prints a progress record every 20 collectives;
     the external controller reads those records before an active device fault.
-    With --checkpoint-every N, the checkpoint writer saves the next step index
-    before the all-reduce of every N-th step. A save that fails keeps that one rank
-    out of the all-reduce that the other ranks have entered. --inject fills the
-    writer's directory just before its first periodic save. --end-after-save ends
-    the job END_AFTER_SAVE_STEPS steps after the first periodic save past the start
-    step, so that a resumed job shows one save whatever its rate;
-    --duration-seconds still bounds it. With --replica-check, each step then
-    all-gathers the ranks' checksums of one matrix product (ReplicaCheck), and
-    rank 0 prints the agreement after each progress record.
+    With --replica-check, each step first all-gathers the ranks' checksums of one
+    matrix product (ReplicaCheck), checked by step index, and rank 0 prints the
+    agreement after each progress record. With --checkpoint-every N, the checkpoint
+    writer then saves the next step index before the all-reduce of every N-th step,
+    so the all-reduce ends every step. A save that fails keeps that one rank out of
+    the all-reduce that the other ranks have entered. --inject fills the writer's
+    directory just before its first periodic save. --end-after-save ends the job
+    END_AFTER_SAVE_STEPS steps after the first periodic save past the start step,
+    so that a resumed job shows one save whatever its rate; --duration-seconds still
+    bounds it. With --stack-dump-seconds, each rank writes its stacks when that long
+    passes without a progress record.
     """
     rank = dist.get_rank()
     writer = bool(args.checkpoint_every) and rank == args.writer_rank
     path = checkpoint_dir() if writer else None
     start_step, saved = checkpoint_start(args, path) if args.checkpoint_every else (0, None)
     if writer and not args.resume:
-        print(f'checkpoint saved: next_step={start_step} (step index)', flush=True)
+        emit(f'checkpoint saved: next_step={start_step} (step index)')
     end_step = None
     if args.end_after_save:
         first_save = (start_step // args.checkpoint_every + 1) * args.checkpoint_every
@@ -247,32 +257,39 @@ def run_steps(args, tensor):
     # With --replica-check each step also compares one matrix product across ranks.
     replica = (ReplicaCheck(args, tensor.device, rank=rank, world_size=dist.get_world_size())
                if getattr(args, 'replica_check', False) else None)
-    while True:
-        # Rank 0 ends the loop collectively; local deadlines can diverge.
-        if rank == 0:
-            keep_running.fill_(int(time.monotonic() < deadline
-                                   and (end_step is None or start_step + sequence < end_step)))
-        dist.broadcast(keep_running, src=0)
-        if not keep_running.item():
-            break
-        step = start_step + sequence
-        if writer and sequence and step % args.checkpoint_every == 0:
-            if args.inject and not injected:
-                injected = True
-                fill_checkpoint_path(path, args)
-            saved.append(step)
-            save_with_retry(path, step, saved)
-            print(f'checkpoint saved: next_step={step} (step index)', flush=True)
-        collective(tensor)
-        sequence += 1
-        if replica is not None:
-            replica.step(sequence)
-        if rank == 0 and sequence % 20 == 0:
-            progress_record(sequence, tensor)
+    arm_stack_dump(getattr(args, 'stack_dump_seconds', 0),
+                   getattr(args, 'stack_dump_dir', STACK_DUMP_DIR), 'rank', rank)
+    try:
+        while True:
+            # Rank 0 ends the loop collectively; local deadlines can diverge.
+            if rank == 0:
+                keep_running.fill_(int(time.monotonic() < deadline
+                                       and (end_step is None or start_step + sequence < end_step)))
+            dist.broadcast(keep_running, src=0)
+            if not keep_running.item():
+                break
+            step = start_step + sequence
             if replica is not None:
-                replica.report(sequence)
+                replica.step(step)
+            if writer and sequence and step % args.checkpoint_every == 0:
+                if args.inject and not injected:
+                    injected = True
+                    fill_checkpoint_path(path, args)
+                saved.append(step)
+                save_with_retry(path, step, saved)
+                emit(f'checkpoint saved: next_step={step} (step index)')
+            collective(tensor)
+            sequence += 1
+            if sequence % 20 == 0:
+                rearm_stack_dump()
+                if rank == 0:
+                    progress_record(sequence, tensor)
+                    if replica is not None:
+                        replica.report(step)
+    finally:
+        cancel_stack_dump()
     if rank == 0:
-        print(f'Device workload completed: {sequence} collectives; 0 mismatches.', flush=True)
+        emit(f'Device workload completed: {sequence} collectives; 0 mismatches.')
 
 
 def dataloader_event(event, rank, epoch, *, lab_dir=None, **fields):
@@ -289,7 +306,11 @@ def dataloader_event(event, rank, epoch, *, lab_dir=None, **fields):
 # blocks forever. The rank process therefore arms only after iter(loader) returned
 # (the workers exist by then) and cancels before the next iter(loader); each worker
 # arms its own timer in worker_init_fn.
-_stack_dump = None  # (open file, path, header length) of this process's armed timer
+# Device mode forks no process, so its timer can stay armed through the step loop;
+# rearm_stack_dump restarts it at each progress record.
+_stack_dump = None  # (open file, path, header length, seconds) of this process's armed timer
+# A run moves the stack files of an earlier run in the same directory here.
+PREVIOUS_STACKS = 'previous-stacks'
 
 
 def arm_stack_dump(seconds, directory, role, rank):
@@ -310,8 +331,29 @@ def arm_stack_dump(seconds, directory, role, rank):
     handle.write(header)
     handle.flush()
     faulthandler.dump_traceback_later(seconds, repeat=False, file=handle)
-    _stack_dump = (handle, path, len(header.encode()))
+    _stack_dump = (handle, path, len(header.encode()), seconds)
     return path
+
+
+def rearm_stack_dump():
+    """Restart this process's armed timer with its file, after progress was made."""
+    if _stack_dump is not None:
+        handle, _, _, seconds = _stack_dump
+        faulthandler.dump_traceback_later(seconds, repeat=False, file=handle)
+
+
+def retire_stack_files(directory):
+    """Move the stack files that an earlier run left in `directory` to PREVIOUS_STACKS.
+
+    A stack read lists the directory's stacks-* files, so after a run that wrote
+    none it would otherwise print the earlier run's stacks again.
+    """
+    old = sorted(Path(directory).glob('stacks-*.txt'))
+    if old:
+        kept = Path(directory) / PREVIOUS_STACKS
+        kept.mkdir(exist_ok=True)
+        for path in old:
+            os.replace(path, kept / path.name)
 
 
 def cancel_stack_dump():
@@ -319,7 +361,7 @@ def cancel_stack_dump():
     global _stack_dump
     if _stack_dump is None:
         return
-    handle, path, header_length = _stack_dump
+    handle, path, header_length, _ = _stack_dump
     _stack_dump = None
     faulthandler.cancel_dump_traceback_later()
     handle.close()
@@ -513,7 +555,7 @@ def dataloader(args, tensor):
         log('iterator_end', batches=epoch_batches)
         del iterator
     if rank == 0:
-        print(f'DataLoader workload completed: {batches} batches; 0 mismatches.', flush=True)
+        emit(f'DataLoader workload completed: {batches} batches; 0 mismatches.')
 
 
 def nonnegative_int(value):
@@ -539,8 +581,9 @@ def device_identity(device):
     identity['index'] = index
     identity['uuid'] = uuid if uuid.startswith('GPU-') or uuid == 'unknown' else f'GPU-{uuid}'
     if hasattr(properties, 'pci_bus_id'):
-        identity['pci'] = (f'{properties.pci_domain_id:08x}:{properties.pci_bus_id:02x}:'
-                           f'{properties.pci_device_id:02x}.0')
+        # Upper-case hex, as nvidia-smi prints pci.bus_id, so the two can be matched.
+        identity['pci'] = (f'{properties.pci_domain_id:08X}:{properties.pci_bus_id:02X}:'
+                           f'{properties.pci_device_id:02X}.0')
     return identity
 
 
@@ -574,8 +617,9 @@ class ReplicaCheck:
     report line counts the window's disagreements beside the progress record.
 
     The simulated fault is a software flip of one bit of one element of `C` on the
-    selected rank (`--corrupt-rank`), once at `--corrupt-step` or, with
-    `--corrupt-recurring`, on every step from it on. The GPU is not altered.
+    selected rank (`--corrupt-rank`), once at step index `--corrupt-step` or, with
+    `--corrupt-recurring`, on every step from it on. Its lines name steps by step
+    index, as the checkpoint lines do. The GPU is not altered.
     """
 
     REPORT_PREFIX = 'AIM344 replica check:'
@@ -626,11 +670,11 @@ class ReplicaCheck:
                f'CUDA device {self.identity["index"]}, UUID {self.identity["uuid"]}, '
                f'PCI {self.identity["pci"]})')
         if self.rank in differing and self.rank not in self.differing:
-            print(f'{self.REPORT_PREFIX} step={step}; {who} checksum {values[self.rank]} differs '
-                  f'from the other {self.world_size - len(differing)} ranks ({majority}).', flush=True)
+            emit(f'{self.REPORT_PREFIX} step={step}; {who} checksum {values[self.rank]} differs '
+                 f'from the other {self.world_size - len(differing)} ranks ({majority}).')
         elif self.rank not in differing and self.rank in self.differing:
-            print(f'{self.REPORT_PREFIX} step={step}; {who} checksum agrees again '
-                  f'({majority}).', flush=True)
+            emit(f'{self.REPORT_PREFIX} step={step}; {who} checksum agrees again '
+                 f'({majority}).')
         self.differing = differing
         self.window_steps += 1
         self.window_differences.update(differing)
@@ -642,7 +686,7 @@ class ReplicaCheck:
                 f'over the last {self.window_steps} steps')
         for rank in sorted(self.window_differences):
             line += f'; rank {rank} differed on {self.window_differences[rank]} of {self.window_steps} steps'
-        print(line + '.', flush=True)
+        emit(line + '.')
         self.window_steps = 0
         self.window_differences = Counter()
 
@@ -743,8 +787,9 @@ def add_exercise_arguments(parser):
     group.add_argument('--dataloader-timeout', type=nonnegative_seconds, default=0,
                        help='DataLoader timeout in seconds; 0 waits without limit (default: 0)')
     group.add_argument('--stack-dump-seconds', type=nonnegative_seconds, default=0,
-                       help='write every process stack this many seconds after the epoch\'s '
-                            'workers exist; 0 is off (default: 0)')
+                       help='dataloader mode: write every process stack this many seconds after '
+                            'the epoch\'s workers exist; device mode: this long after the last '
+                            'progress record; 0 is off (default: 0)')
     group.add_argument('--stack-dump-dir', default=STACK_DUMP_DIR,
                        help=f'directory of the stack files (default: {STACK_DUMP_DIR})')
     group.add_argument('--reinit-in-worker', action='store_true',
@@ -764,7 +809,7 @@ def add_exercise_arguments(parser):
     group.add_argument('--corrupt-rank', type=rank_number, default=None,
                        help='flip one bit of the product on this rank, in software')
     group.add_argument('--corrupt-step', type=positive_int, default=1,
-                       help='step of the flip (default: 1)')
+                       help='step index of the flip (default: 1)')
     group.add_argument('--corrupt-bit', type=bit_position, default=22,
                        help='bit of the int32 view of one element (default: 22)')
     group.add_argument('--corrupt-recurring', action='store_true',
@@ -790,6 +835,8 @@ def check_exercise_arguments(parser, args):
         parser.error(f'{", ".join(on_the_cache)}: only with --dataset-cache rank-thread or worker-thread')
     if args.reinit_in_worker and args.start_method != 'fork':
         parser.error('--reinit-in-worker is the fork-only fix')
+    if args.stack_dump_seconds and args.mode == 'storage':
+        parser.error('--stack-dump-seconds applies to dataloader and device modes')
     return args
 
 
@@ -801,7 +848,7 @@ def parse_args(argv=None):
     parser.add_argument('--resume', action='store_true')
     parser.add_argument('--resume-before', type=positive_int, default=None,
                         help='with --resume: start from the newest checkpoint saved before this '
-                             'replica step (step=S of a run from step 0), not from the last one')
+                             'step index (a replica line step=S), not from the last one')
     parser.add_argument('--writer-rank', type=nonnegative_int, default=None,
                         help='storage and device modes: rank that writes the checkpoint (default: 0)')
     parser.add_argument('--checkpoint-every', type=nonnegative_int, default=0,
@@ -847,13 +894,16 @@ def main():
     if args.writer_rank >= dist.get_world_size():
         raise SystemExit(f'--writer-rank {args.writer_rank} is not a rank of this '
                          f'{dist.get_world_size()}-rank job.')
+    if args.stack_dump_seconds and os.environ.get('LOCAL_RANK') == '0':
+        # No process arms its timer before the first collective, which needs this one.
+        retire_stack_files(args.stack_dump_dir)
     tensor = torch.ones(32 * 1024 * 1024 if args.mode == 'device' else 1024 * 1024, device=DEVICE)
     collective(tensor)
     if dist.get_rank() == 0:
         build_nccl = '.'.join(str(part) for part in torch.cuda.nccl.version())
-        print(f'torch={torch.__version__}; CUDA={torch.version.cuda}; '
-              f'torch_build_nccl={build_nccl}; world_size={dist.get_world_size()} ranks. '
-              'Use NCCL startup logs for the loaded runtime version.', flush=True)
+        emit(f'torch={torch.__version__}; CUDA={torch.version.cuda}; '
+             f'torch_build_nccl={build_nccl}; world_size={dist.get_world_size()} ranks. '
+             'Use NCCL startup logs for the loaded runtime version.')
     if args.mode == 'storage':
         storage(args, tensor)
     elif args.mode == 'dataloader':

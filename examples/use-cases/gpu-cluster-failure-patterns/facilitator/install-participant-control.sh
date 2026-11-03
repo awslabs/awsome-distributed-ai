@@ -30,7 +30,9 @@
 #     "settings": {"corrupt_rank": 13, "corrupt_step": 37, "corrupt_bit": 22}},
 #    {"exercise": "efa-reset"}]
 #
-# The participant pages number the incidents in this order.
+# The participant pages number the incidents in this order. Each exercise takes
+# only the settings its launcher applies, and a rank must be a rank of the job:
+# below AIM344_WORLD_SIZE, which defaults to 16 (2 nodes of 8 GPUs).
 #
 # Exercises: slow-job, storage, dataloader, silent-corruption (applied by the
 # launcher in the participant's job) and efa-reset (applied by the controller
@@ -336,8 +338,12 @@ with os.fdopen(descriptor) as handle:
         entries = json.load(handle)
     except ValueError as error:
         raise SystemExit(f'refusing {schedule_file}: it is not JSON ({error})')
+world_size = os.environ.get('AIM344_WORLD_SIZE', str(helper.DEFAULT_WORLD_SIZE))
+if not world_size.isdigit() or int(world_size) < 1:
+    raise SystemExit(f'refusing AIM344_WORLD_SIZE={world_size!r}: it must be a positive '
+                     f'whole number of ranks')
 try:
-    schedule = helper.validate_schedule(entries)
+    schedule = helper.validate_schedule(entries, world_size=int(world_size))
 except helper.Refusal as refusal:
     raise SystemExit(f'refusing {schedule_file}: {refusal}')
 if os.path.exists(config_path):
