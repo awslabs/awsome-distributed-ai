@@ -2,6 +2,38 @@
 
 This distribution summary preserves the scope of the measured results without deployment identifiers, private artifact locations or incident-derived teaching material. Original detailed records, failed attempts and exact source/deployment mappings remain unchanged with the workshop owner. The latest section describes an installed, fixed development candidate; historical sections retain their original scope. This documentation update performs no new hardware run.
 
+## November 3, 2026: lab lines off the job output, progress records in the epoch job, and the rollback after a changed result
+
+A run of the job-level incidents through `job.sh` on two p5.48xlarge nodes, at the revision that the next section describes, found three places where the jobs did not do what the participant pages expect. This change fixes them. No hardware run has used it yet. The tests below run on a CPU-only host with the fakes of the next section, and with a fake `srun` and `scontrol` for the collection of lab lines in `common.sh`.
+
+What the p5 run found:
+
+- The DataLoader job's lifecycle lines of different processes arrived merged on one output line; the lab log held lines with up to eight records. The filter that moved marked lines to the lab log left an empty line on the terminal for each merge, and in four of twelve DataLoader runs a line that began in the middle of a record reached the terminal and the job log, once followed by a whole marked record. None of the four incident runs leaked, but they had the same cause.
+- The DataLoader job printed no progress record, and the healthy run had no DataLoader job, so the participant had no last progress line to keep and no healthy value to compare it with.
+- `job.sh resume` of the silent-corruption incident resumed from the writer's last checkpoint, `next_step=200`, which the job had saved after the changed step 37, not from the last checkpoint saved before it.
+
+What changed:
+
+- `workload.py --lab-dir DIR` replaces `--mark-lab-lines`. Each process, the DataLoader workers included, appends its lab lines with the time to its own file in `DIR`, one write per line, and prints none of them. `run_torch` passes `--lab-dir=/results/.lab-records` to every torch job of `job.sh` except the device phase. After the job, `collect_lab_records` appends both nodes' files to the lab log in time order, with one `srun` per node outside the container, bounded to 60 seconds, and removes them. `srun`'s own messages and a failed collection go to the lab log; the files of an interrupted run stay on the node until the next torch job in the allocation collects them. `lab-lines.py` is removed.
+- In dataloader mode rank 0 prints the stand-in's progress record after each batch collective: `collective_progress=1` to `8` in a run that completes, `1` to `4` when epoch 2 stops. Both modes write the record with one call; `print()` under unbuffered output writes the text and the newline separately.
+- `job.sh run` runs the epoch job, the DataLoader job as Incident 3's `resume` runs it, between the stand-in and the sweep, with the 120-second limit and the stack timer. Its run id is `job-epochs-<time>`. A failed stand-in skips it, and a failed epoch job skips the sweep.
+- The step loop's writer lists the steps of the run's checkpoints in `last.json` (`saved`); a run from step 0 starts a new list. `workload.py --resume --resume-before S` starts from the newest of them whose `next_step` is below `S`, drops the later ones and prints `Resuming from the last checkpoint saved before step=S: next_step=N (step index).` `job.sh resume` of the silent-corruption incident passes the profile's `corrupt_step` as `resume_before` in `AIM344_INCIDENT_SETTINGS`, and no flip.
+- `workload.py` refuses `--worker-cuda`, `--affected-rank` and `--reinit-in-worker` without a cached dataset, where they changed nothing, and `--affected-rank` outside dataloader mode. `job.sh` refuses a profile that sets `affected_rank` or `worker_cuda` with `dataset_cache` `none`, and `rerun` no longer takes `--dataset-cache none`, which no page gives and which would make the job refuse a seat's dataset setting by name.
+
+What the tests cover:
+
+- `tests/test_workload_modes.py`: with a lab directory, a real CPU DataLoader run prints only its eight progress records and the completion line, and the rank's file and each worker's file hold every lifecycle line and the start-method line, whole and time-stamped. The progress records are `1` to `8` in every run that completes, `1` to `4` in the stopped run and in the timeout fix, and absent on other ranks. The options on the cached dataset are refused without one, on the command line and from the settings variable.
+- `tests/test_checkpoint_workload.py`: eight processes writing 200 lines each into one lab directory leave one file each, every line whole; the injector line goes to the lab directory only when one is given. The writer's list of saved steps, a new list from step 0, the rollback for steps on both sides of a checkpoint, a record without a list, `--resume-before` without `--resume`, and the value from the settings variable. The progress record is one write.
+- `tests/test_dataloader_epochs.py`: one progress record per batch collective for fork and spawn and for one and two epochs.
+- `tests/test_job_launcher.py`: `job.sh run` runs the stand-in, the epoch job with its 120-second limit, then the sweep, and prints three job logs; the silent-corruption `resume` passes `{"resume_before": 37}` (or 1 without a step) and no flip; the refused profiles and `rerun --dataset-cache none`. With the real `common.sh`, the lab directory on the torch job's command line, one collection step per node, both nodes' lines in time order after what the lab log held, nothing on the terminal, in the job log or in the progress copy, the files removed, an interrupted run's files collected by the next run, a failed collection noted in the lab log with the files kept, and no lab directory or collection without a lab log or in the device phase.
+
+Still to measure on hardware:
+
+- Each DataLoader run's lab log, with every lifecycle record whole, and a terminal and job log with no lab line and no empty line from the job.
+- The time `collect_lab_records` adds after each torch job, and the length of `job.sh run` with the epoch job in the 6-minute allocation.
+- The epoch job's eight progress records in the healthy run, and `collective_progress=4` as the last record of the incident.
+- The silent-corruption `resume` from `next_step=0` on a seat whose changed step is 37, and its agreement lines.
+
 ## November 3, 2026: every incident through job.sh, and the Check 6 counter record
 
 This change joins the workload modes of the [workload section below](#workload-modes-dataloader-option-a-worker-cuda-replica-check) to the participant launcher, so that `job.sh` runs all five exercises, and it changes one recovery rule. No hardware run has used it. The tests below run on a CPU-only host with the same fakes as the two earlier November sections: a recording `common.sh`, a scripted controller and a fake `scontrol` for `job.sh`; the recorded fake executor for the controller; a real CPU DataLoader with mocked NCCL for the workload.

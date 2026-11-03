@@ -1,6 +1,6 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-"""The checkpoint writer, the step loop and the lab-line filter, on the CPU.
+"""The checkpoint writer, the step loop, the rollback and the lab lines, on the CPU.
 
 Distributed calls are replaced by a recording fake for one rank at a time and the
 collective is counted, not run, so no GPU, NCCL or second process is involved.
@@ -11,11 +11,10 @@ import errno
 import importlib.util
 import io
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import re
-import select
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -67,7 +66,7 @@ class FakeDist:
 
 def args(**fields):
     base = dict(mode='device', duration_seconds=3600, inject=False, resume=False,
-                writer_rank=0, checkpoint_every=0, mark_lab_lines=False, end_after_save=False)
+                writer_rank=0, checkpoint_every=0, lab_dir=None, end_after_save=False)
     base.update(fields)
     return SimpleNamespace(**base)
 
@@ -157,7 +156,8 @@ class CheckpointWriter(unittest.TestCase):
         saves = []
         real = self.workload.save_with_retry
         with mock.patch.object(self.workload, 'save_with_retry',
-                               side_effect=lambda path, step: (saves.append(step), real(path, step))):
+                               side_effect=lambda path, step, saved: (saves.append(step),
+                                                                      real(path, step, saved))):
             _, out, fills = self.run_rank(self.workload.run_steps, 9,
                                           args(writer_rank=9, checkpoint_every=5, inject=True),
                                           loops=12)
@@ -300,7 +300,7 @@ class CheckpointWriter(unittest.TestCase):
         self.assertEqual(2, output.getvalue().count('checkpoint write retry'))
 
     # ---------------------------------------------------------------- the fill
-    def fill(self, marked):
+    def fill(self, lab_dir):
         opened = []
 
         class Full:
@@ -330,20 +330,80 @@ class CheckpointWriter(unittest.TestCase):
         output = io.StringIO()
         with mock.patch.object(self.workload.Path, 'open', fake_open), \
                 contextlib.redirect_stdout(output):
-            self.workload.fill_checkpoint_path(self.path, args(mark_lab_lines=marked))
+            self.workload.fill_checkpoint_path(self.path, args(lab_dir=lab_dir))
         return opened, output.getvalue()
 
     def test_the_filler_has_a_name_a_real_job_could_leave(self):
-        opened, _ = self.fill(marked=True)
+        opened, _ = self.fill(lab_dir=None)
         self.assertEqual([self.path / 'ckpt-shard-00017.partial'], opened)
         self.assertNotIn('aim344', opened[0].name)
 
-    def test_the_injector_line_is_marked_for_the_lab_log_only_when_asked(self):
-        _, marked = self.fill(marked=True)
-        _, plain = self.fill(marked=False)
+    def test_the_injector_line_goes_to_the_lab_directory_only_when_asked(self):
+        lab = Path(self.tmp.name) / 'lab'
+        _, kept = self.fill(lab_dir=str(lab))
+        _, plain = self.fill(lab_dir=None)
         line = 'checkpoint injection: [Errno 28] No space left on device; filler_bytes=1048576 B'
-        self.assertEqual('AIM344 lab: ' + line + '\n', marked)
+        self.assertEqual('', kept)
+        [record] = lab.iterdir()
+        self.assertRegex(record.read_text(), r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z '
+                                             + re.escape(line) + '\n$')
         self.assertEqual(line + '\n', plain)
+
+    # ---------------------------------------------------------------- the rollback
+    def test_the_writer_keeps_the_steps_of_the_runs_checkpoints(self):
+        self.run_rank(self.workload.run_steps, 0, args(checkpoint_every=5), loops=12)
+        self.assertEqual({'next_step': 10, 'saved': [0, 5, 10]},
+                         json.loads((self.path / 'last.json').read_text()))
+        # A new run from step 0 starts a new list.
+        self.run_rank(self.workload.run_steps, 0, args(checkpoint_every=5), loops=3)
+        self.assertEqual({'next_step': 0, 'saved': [0]}, json.loads((self.path / 'last.json').read_text()))
+
+    def test_resume_before_rolls_back_to_the_last_checkpoint_saved_before_the_step(self):
+        # Replica step S of a run from 0 is step index S - 1: next_step=5 was saved
+        # before replica step 6 and holds replica step 5, so only S >= 6 keeps it.
+        for before, start in ((1, 0), (5, 0), (6, 5), (7, 5), (11, 10), (40, 10)):
+            with self.subTest(before=before):
+                (self.path / 'last.json').write_text(json.dumps({'next_step': 10, 'saved': [0, 5, 10]}))
+                self.collectives = 0
+                fake, out, _ = self.run_rank(self.workload.run_steps, 0,
+                                             args(checkpoint_every=5, resume=True, resume_before=before),
+                                             loops=6)
+                self.assertIn(f'Resuming from the last checkpoint saved before step={before}: '
+                              f'next_step={start} (step index).', out)
+                self.assertNotIn('last successful', out)
+                self.assertEqual(('start_step', 0, start), fake.broadcasts[0])
+                # The later checkpoints are dropped; the resumed run's saves follow.
+                record = json.loads((self.path / 'last.json').read_text())
+                expected = [step for step in (0, 5, 10) if step <= start]
+                expected += [step for step in range(start + 1, start + 6) if step % 5 == 0]
+                self.assertEqual(expected, record['saved'])
+
+    def test_resume_without_resume_before_is_unchanged(self):
+        (self.path / 'last.json').write_text(json.dumps({'next_step': 10, 'saved': [0, 5, 10]}))
+        fake, out, _ = self.run_rank(self.workload.run_steps, 0,
+                                     args(checkpoint_every=5, resume=True), loops=1)
+        self.assertIn('Resuming from last successful checkpoint: next_step=10 (step index).', out)
+        self.assertEqual(('start_step', 0, 10), fake.broadcasts[0])
+
+    def test_a_checkpoint_without_saved_steps_rolls_back_only_to_itself(self):
+        # The fixture's own record, and one written by storage mode, hold no list.
+        self.assertEqual((0, [0]), self.workload.rollback_point({'next_step': 0}, 37))
+        with self.assertRaisesRegex(SystemExit, 'No checkpoint was saved before step=37'):
+            self.workload.rollback_point({'next_step': 200}, 37)
+
+    def test_resume_before_needs_resume(self):
+        parse = self.workload.parse_args
+        self.assertEqual(37, parse(['device', '--checkpoint-every=200', '--resume',
+                                    '--resume-before', '37']).resume_before)
+        for argv in (['device', '--checkpoint-every=200', '--resume-before', '37'],
+                     ['device', '--checkpoint-every=200', '--resume', '--resume-before', '0']):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as stop:
+                    parse(argv)
+                self.assertEqual(2, stop.exception.code)
+        # job.sh passes the rollback point in the settings variable, as it does the flip.
+        with mock.patch.dict(os.environ, {'AIM344_INCIDENT_SETTINGS': '{"resume_before": 37}'}):
+            self.assertEqual(37, parse(['device', '--checkpoint-every=200', '--resume']).resume_before)
 
     # ---------------------------------------------------------------- arguments
     def test_arguments(self):
@@ -366,8 +426,9 @@ class CheckpointWriter(unittest.TestCase):
         self.assertEqual(0, parse(['dataloader', '--start-method', 'spawn', '--epochs', '2']).writer_rank)
         self.assertTrue(parse(['device', '--checkpoint-every=200', '--resume', '--end-after-save'])
                         .end_after_save)
-        # job.sh marks the DataLoader job's lifecycle lines for the lab log.
-        self.assertTrue(parse(['dataloader', '--epochs', '2', '--mark-lab-lines']).mark_lab_lines)
+        # job.sh keeps the DataLoader job's lifecycle lines off its output.
+        self.assertEqual('/results/.lab-records',
+                         parse(['dataloader', '--epochs', '2', '--lab-dir=/results/.lab-records']).lab_dir)
         for flags in (['--writer-rank', '9'], ['--writer-rank', '0'], ['--inject'], ['--resume'],
                       ['--checkpoint-every', '5']):
             with self.subTest(flags=flags):
@@ -395,47 +456,82 @@ class CheckpointWriter(unittest.TestCase):
         self.assertIn(self.workload.FILLER_NAME, text)
 
 
-class LabLines(unittest.TestCase):
-    def test_marked_lines_go_to_the_lab_log_and_the_rest_pass_through(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            lab = Path(tmp) / 'incident-1-lab.log'
-            lab.write_text('earlier\n')
-            text = ('NCCL INFO Using network Libfabric\n'
-                    'AIM344 lab: checkpoint injection: [Errno 28] No space left on device; filler_bytes=1 B\n'
-                    'checkpoint write retry: [Errno 28] No space left on device\n'
-                    'no newline at the end')
-            result = subprocess.run([sys.executable, str(LAB / 'lab-lines.py'), str(lab)],
-                                    input=text, capture_output=True, text=True, timeout=20)
-            self.assertEqual(0, result.returncode, result.stderr)
-            self.assertEqual('NCCL INFO Using network Libfabric\n'
-                             'checkpoint write retry: [Errno 28] No space left on device\n'
-                             'no newline at the end', result.stdout)
-            self.assertEqual('earlier\nAIM344 lab: checkpoint injection: [Errno 28] No space '
-                             'left on device; filler_bytes=1 B\n', lab.read_text())
+def write_lab_lines(lab_dir, worker, count):
+    sys.path.insert(0, str(LAB))
+    import workload
+    pad = 'x' * 150
+    for n in range(count):
+        workload.lab_line(lab_dir, 'DataLoader lifecycle: '
+                          + json.dumps({'worker': worker, 'n': n, 'pad': pad}))
 
-    def test_each_line_is_passed_on_as_it_arrives(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            process = subprocess.Popen([sys.executable, str(LAB / 'lab-lines.py'),
-                                        str(Path(tmp) / 'lab.log')],
-                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-            try:
-                process.stdin.write(b'AIM344 collective_progress=20 collectives\n')
-                process.stdin.flush()
-                # Read before the input ends: a buffering filter holds the line back.
-                ready, _, _ = select.select([process.stdout], [], [], 20)
-                self.assertTrue(ready, 'the filter held the line until its input ended')
-                self.assertEqual(b'AIM344 collective_progress=20 collectives\n',
-                                 process.stdout.readline())
-            finally:
-                process.stdin.close()
-                process.wait(timeout=20)
-                process.stdout.close()
 
-    def test_usage(self):
-        result = subprocess.run([sys.executable, str(LAB / 'lab-lines.py')],
-                                capture_output=True, text=True, timeout=20)
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn('Usage', result.stderr)
+@unittest.skipUnless(HAS_TORCH, 'CPU torch required to import workload.py')
+class LabLine(unittest.TestCase):
+    """workload.lab_line: what job.sh's processes write instead of standard output."""
+
+    def setUp(self):
+        self.workload = load_workload()
+
+    def test_without_a_directory_the_line_prints(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.workload.lab_line(None, 'checkpoint injection: full')
+        self.assertEqual('checkpoint injection: full\n', output.getvalue())
+
+    def test_with_a_directory_nothing_prints_and_each_process_has_its_own_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lab = Path(tmp) / 'records'
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.workload.lab_line(str(lab), 'After first collective: x')
+            self.assertEqual('', output.getvalue())
+            self.assertEqual(0o700, lab.stat().st_mode & 0o777)
+            # Eight processes at once, as the ranks and workers of one node write.
+            context = multiprocessing.get_context('fork')
+            processes = [context.Process(target=write_lab_lines, args=(str(lab), worker, 200))
+                         for worker in range(8)]
+            for process in processes:
+                process.start()
+            for process in processes:
+                process.join(60)
+                self.assertEqual(0, process.exitcode)
+            files = sorted(lab.iterdir())
+            self.assertEqual(9, len(files), files)
+            stamp = re.compile(r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z ')
+            for path in files:
+                self.assertRegex(path.name, r'^.+-pid\d+\.log$')
+                self.assertEqual(0o600, path.stat().st_mode & 0o777)
+                for line in path.read_text().splitlines():
+                    self.assertRegex(line, stamp)
+                    text = stamp.sub('', line)
+                    if text.startswith('DataLoader lifecycle: '):
+                        record = json.loads(text.split(': ', 1)[1])
+                        self.assertEqual({'worker', 'n', 'pad'}, set(record))
+            counts = sorted(len(path.read_text().splitlines()) for path in files)
+            self.assertEqual([1] + [200] * 8, counts)
+
+
+@unittest.skipUnless(HAS_TORCH, 'CPU torch required; the progress record is not tested')
+class ProgressRecord(unittest.TestCase):
+    def test_the_record_is_one_write_of_the_whole_line(self):
+        workload = load_workload()
+        writes = []
+
+        class Recorder:
+            def write(self, text):
+                writes.append(text)
+
+            def flush(self):
+                pass
+
+        with mock.patch.object(workload.dist, 'get_world_size', return_value=16), \
+                mock.patch.dict(os.environ, {'SLURM_JOB_ID': '4242'}), \
+                mock.patch.object(sys, 'stdout', Recorder()):
+            workload.progress_record(3, workload.torch.ones(1024 * 1024))
+        [line] = writes
+        self.assertTrue(line.endswith('\n'))
+        match = PROGRESS.fullmatch(line[:-1])
+        self.assertEqual(('3', '4194304', '4242', '16'), match.group(1, 2, 4, 5))
 
 
 if __name__ == '__main__':

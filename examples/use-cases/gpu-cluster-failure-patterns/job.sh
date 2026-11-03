@@ -4,7 +4,8 @@
 # The participant's job launcher for the hour's incidents.
 #
 #   bash job.sh notes      create your notes file
-#   bash job.sh run        run the training stand-in and the all-reduce sweep on your pair
+#   bash job.sh run        run the training stand-in, the epoch job and the all-reduce
+#                          sweep on your pair
 #   bash job.sh incident   start your next incident and run its job
 #   bash job.sh rerun      run the current incident's job again, as the pair is now
 #                          (with the options a page gives for that incident)
@@ -40,6 +41,10 @@ CHECKPOINT_EVERY=200
 # The training stand-in: a broadcast, a checked all-reduce and a cross-rank
 # checksum comparison per step, with the checkpoint writer.
 STAND_IN=(device --checkpoint-every="$CHECKPOINT_EVERY" --replica-check)
+# The epoch job: two epochs of four batches from a DataLoader whose workers are
+# created anew for each epoch, one checked all-reduce and one progress record per
+# batch. Its stack dump is on for every run, the healthy one and the fixes included.
+EPOCH_JOB=(dataloader --start-method fork --epochs 2 --stack-dump-seconds="$STACK_DUMP_SECONDS")
 # The controller's own checks decide when it acts. These only bound how long the
 # launcher keeps asking during one run.
 NEXT_ATTEMPTS=10
@@ -50,7 +55,7 @@ usage() {
 Usage: bash job.sh <command>
 
   notes      Create your notes file, ~/aim344-results/notes.md
-  run        Run the training stand-in and the all-reduce sweep on your pair
+  run        Run the training stand-in, the epoch job and the all-reduce sweep on your pair
   incident   Start your next incident and run its job
   rerun      Run the current incident's job again, as your pair is now;
              add an option only where your page gives one
@@ -247,10 +252,10 @@ require_allocation() {
 }
 
 # ---------------------------------------------------------------- profiles
-# Sets incident, exercise, writer_rank, incident_settings and rerun_settings from
-# one profile, after checking that it is this account's own regular file and that
-# this launcher applies every setting. The two settings values are the JSON the
-# job reads from AIM344_INCIDENT_SETTINGS, or - for none.
+# Sets incident, exercise, writer_rank, incident_settings, rerun_settings and
+# resume_settings from one profile, after checking that it is this account's own
+# regular file and that this launcher applies every setting. The three settings
+# values are the JSON the job reads from AIM344_INCIDENT_SETTINGS, or - for none.
 read_profile() {
     local fields
     fields=$(python3 - "$1" 2>/dev/null <<'PY'
@@ -295,7 +300,10 @@ if (not isinstance(number, int) or isinstance(number, bool) or number < 1
         or set(settings) - applied.get(exercise, set(settings))
         or not all(workload[exercise][key](value) for key, value in settings.items()
                    if exercise in workload)
-        or (exercise == 'silent-corruption' and 'corrupt_rank' not in settings)):
+        or (exercise == 'silent-corruption' and 'corrupt_rank' not in settings)
+        # These act on the cached dataset; the job refuses them without one.
+        or (exercise == 'dataloader' and settings.get('dataset_cache') == 'none'
+            and ('affected_rank' in settings or settings.get('worker_cuda')))):
     raise SystemExit(1)
 writer = settings.get('writer_rank', 0)
 if not rank(writer):
@@ -308,16 +316,19 @@ if exercise == 'dataloader':
 # rerun runs the job as the pair is now: the DataLoader job keeps its dataset, a
 # recurring flip recurs, and a one-time flip does not happen again.
 rerun = incident if exercise == 'dataloader' or incident.get('corrupt_recurring') else {}
+# resume runs the job without the lab's change. After a changed result it starts
+# from the last checkpoint saved before the changed step (workload.py --resume-before).
+resume = {'resume_before': incident.get('corrupt_step', 1)} if exercise == 'silent-corruption' else {}
 
 
 def encoded(values):
     return json.dumps(values, sort_keys=True, separators=(',', ':')) if values else '-'
 
 
-print(number, exercise, writer, encoded(incident), encoded(rerun))
+print(number, exercise, writer, encoded(incident), encoded(rerun), encoded(resume))
 PY
 ) || refuse 'The incident profile cannot be used by this launcher; tell your table expert.'
-    read -r incident exercise writer_rank incident_settings rerun_settings <<< "$fields"
+    read -r incident exercise writer_rank incident_settings rerun_settings resume_settings <<< "$fields"
     profile=$1
     lab_log=${profile%.json}-lab.log
 }
@@ -487,11 +498,15 @@ job_settings() {
     [[ $1 == - ]] || export AIM344_INCIDENT_SETTINGS=$1
 }
 
-# The healthy run: the training stand-in, then the all-reduce sweep that the slow
-# job's incident runs, so that the two outputs differ only in what the lab changes.
+# The healthy run: the training stand-in, the epoch job as the DataLoader
+# incident runs it without the lab's change, and the all-reduce sweep that the
+# slow job's incident runs, so that each incident's output differs from a healthy
+# one only in what the lab changes.
 healthy_job() {
     torch_job job job "${STAND_IN[@]}" --writer-rank=0 --duration-seconds="$RUN_SECONDS" \
         || return
+    local AIM344_JOB_LIMIT_SECONDS=$DATALOADER_LIMIT_SECONDS
+    torch_job job-epochs job "${EPOCH_JOB[@]}" || return
     sweep_job job
 }
 
@@ -499,7 +514,7 @@ healthy_job() {
 incident_job() {
     local what=$1 name=incident-$incident
     [[ $what == incident ]] || name=$name-$what
-    local -a steps=("${STAND_IN[@]}" --mark-lab-lines)
+    local -a steps=("${STAND_IN[@]}")
     # Only the DataLoader job takes the options of rerun; refuse them elsewhere
     # before any container starts.
     if ((${#rerun_options[@]})) && [[ $exercise != dataloader ]]; then
@@ -535,9 +550,7 @@ incident_job() {
             esac
             ;;
         dataloader)
-            # The stack dump is on for every run of this job, the fix runs included.
-            local -a loader=(dataloader --start-method fork --epochs 2
-                             --stack-dump-seconds="$STACK_DUMP_SECONDS" --mark-lab-lines)
+            local -a loader=("${EPOCH_JOB[@]}")
             case $what in
                 incident) job_settings "$incident_settings" ;;
                 # Options on the command line win over the incident's settings.
@@ -565,7 +578,9 @@ incident_job() {
                     torch_job "$name" job "${steps[@]}" --duration-seconds="$CORRUPTION_SECONDS"
                     ;;
                 resume)
-                    job_settings -
+                    # No flip, and a rollback: the job starts from the last
+                    # checkpoint saved before the seat's changed step.
+                    job_settings "$resume_settings"
                     ending_job torch_job "$name" job "${steps[@]}" --duration-seconds="$RUN_SECONDS" \
                         --resume --end-after-save
                     ;;
@@ -591,10 +606,10 @@ parse_rerun_options() {
     local seconds='^[0-9]+([.][0-9]+)?$'
     while (($#)); do
         case $1 in
-            --dataset-cache=none|--dataset-cache=rank-thread|--dataset-cache=worker-thread|--reinit-in-worker)
+            --dataset-cache=rank-thread|--dataset-cache=worker-thread|--reinit-in-worker)
                 rerun_options+=("$1") ;;
             --dataset-cache)
-                [[ ${2:-} =~ ^(none|rank-thread|worker-thread)$ ]] || usage
+                [[ ${2:-} =~ ^(rank-thread|worker-thread)$ ]] || usage
                 rerun_options+=("$1=$2")
                 shift ;;
             --dataloader-timeout=*)

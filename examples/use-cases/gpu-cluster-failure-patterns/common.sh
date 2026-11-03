@@ -116,6 +116,31 @@ node_command() {
 # job.sh runs incidents without naming their cause. It sets AIM344_RUN_ID to a
 # neutral run id for the result files, and AIM344_LAB_LOG to its lab log, which
 # then receives the lab's own lines instead of the participant's output.
+#
+# A torch job's processes write their lab lines (workload.py --lab-dir) to one
+# file per process in this directory of RESULTS_DIR on each node, not to the
+# job's output, and collect_lab_records moves them into the lab log after the job.
+LAB_RECORDS=.lab-records
+
+# Appends every file in each node's LAB_RECORDS to the lab log, in time order, and
+# removes it. One srun per node keeps each node's text whole. A run that was
+# interrupted leaves its files, and the next torch job in the allocation collects
+# them. Bounded, so that the participant's prompt never waits on it for long.
+collect_lab_records() {
+    local records rc=0
+    records=$(status=0
+        for node in $(scontrol show hostnames "$SLURM_JOB_NODELIST"); do
+            SLURM_MPI_TYPE=none timeout --signal=TERM --kill-after=10s 60s \
+                srun --nodes=1 --ntasks=1 --nodelist="$node" --cpus-per-task=1 --mpi=none --cpu-bind=none --overlap \
+                bash -c 'cd -- "$1" 2>/dev/null || exit 0; for f in *.log; do [[ -f $f ]] || continue; cat -- "$f" && rm -f -- "$f"; done' \
+                collect "$RESULTS_DIR/$LAB_RECORDS" || status=$?
+        done 2>> "$AIM344_LAB_LOG"
+        exit "$status") || rc=$?
+    [[ -z $records ]] || LC_ALL=C sort -s -k1,1 <<< "$records" >> "$AIM344_LAB_LOG"
+    ((rc == 0)) || printf '%s collect_lab_records: exit %s; files left on the nodes in %s\n' \
+        "$(date -u +%FT%TZ)" "$rc" "$RESULTS_DIR/$LAB_RECORDS" >> "$AIM344_LAB_LOG"
+}
+
 run_sweep() {
     local phase=$1 run_id rc=0
     run_id=${AIM344_RUN_ID:-$phase-$(date -u +%Y%m%dT%H%M%SZ)}
@@ -180,14 +205,17 @@ run_torch() {
         mkdir -p -- "$HOME/aim344-results"
         evidence=("$HOME/aim344-results/device-$SLURM_JOB_ID.log")
     fi
-    local -a lab_lines=(cat)
-    if [[ -n ${AIM344_LAB_LOG:-} ]]; then
-        lab_lines=(python3 "$LAB_DIR/lab-lines.py" "$AIM344_LAB_LOG")
+    # The device phase writes no lab line, so no collection step runs on a node
+    # whose device the lab may have reset.
+    local -a lab_args=()
+    if [[ -n ${AIM344_LAB_LOG:-} && $phase != device ]]; then
+        lab_args=(--lab-dir="/results/$LAB_RECORDS")
     fi
     SLURM_MPI_TYPE=none "${deadline[@]}" \
         srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
-        "${CONTAINER_ARGS[@]}" bash /opt/aim344/torch-node.sh "$@" \
-        2>&1 | "${lab_lines[@]}" | tee "$RESULTS_DIR/$run_id.log" "${evidence[@]}" || rc=$?
+        "${CONTAINER_ARGS[@]}" bash /opt/aim344/torch-node.sh "$@" "${lab_args[@]}" \
+        2>&1 | tee "$RESULTS_DIR/$run_id.log" "${evidence[@]}" || rc=$?
     printf 'launcher_exit_code=%s (dimensionless)\n' "$rc" | tee "$RESULTS_DIR/$run_id.status.log"
+    ((${#lab_args[@]} == 0)) || collect_lab_records
     return "$rc"
 }

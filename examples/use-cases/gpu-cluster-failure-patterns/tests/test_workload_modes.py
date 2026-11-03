@@ -6,10 +6,13 @@ controls pass through the environment. CUDA and NCCL are mocked; the DataLoader,
 its workers and faulthandler are real."""
 import argparse
 from collections import Counter
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -34,7 +37,8 @@ def exercise_dataloader(spec):
     from unittest import mock
     workload = load_workload()
     workload.REFILL_SECONDS = spec.get('refill_seconds', 1.0)
-    tensor = object()
+    # The job's 1 Mi-element tensor; the collective is mocked, the progress record reads its size.
+    tensor = workload.torch.ones(1024 * 1024)
     calls = []
     args = SimpleNamespace(start_method=spec['start_method'], epochs=spec.get('epochs', 2),
                            dataset_cache=spec.get('dataset_cache', 'none'),
@@ -44,8 +48,9 @@ def exercise_dataloader(spec):
                            reinit_in_worker=spec.get('reinit_in_worker', False),
                            worker_cuda=spec.get('worker_cuda', False),
                            affected_rank=spec.get('affected_rank'),
-                           mark_lab_lines=spec.get('mark_lab_lines', False))
+                           lab_dir=spec.get('lab_dir'))
     with mock.patch.object(workload.dist, 'get_rank', return_value=spec.get('rank', 0)), \
+            mock.patch.object(workload.dist, 'get_world_size', return_value=WORLD), \
             mock.patch.object(workload, 'collective', side_effect=lambda value: calls.append(1)):
         workload.dataloader(args, tensor)
     print('TEST_RESULT ' + json.dumps({'collectives': len(calls)}), flush=True)
@@ -105,6 +110,22 @@ def lifecycle(stdout):
             for line in stdout.splitlines() if line.startswith('DataLoader lifecycle: ')]
 
 
+# The record the controller parses (facilitator/device-session.py), as the step loop prints it.
+PROGRESS = re.compile(r'AIM344 collective_progress=(\d+) collectives; tensor_bytes=4194304 B; '
+                      r'timestamp=[0-9.]+ s since epoch; 0 mismatches; job_id=[^;]+; world_size=16; rank=0\.')
+
+
+def progress(stdout):
+    """The counts of rank 0's progress records; every such line must be whole."""
+    counts = []
+    for line in stdout.splitlines():
+        if 'collective_progress=' in line:
+            match = PROGRESS.fullmatch(line)
+            assert match, line
+            counts.append(int(match.group(1)))
+    return counts
+
+
 def reported_result(stdout):
     return json.loads(next(line[12:] for line in stdout.splitlines()
                            if line.startswith('TEST_RESULT ')))
@@ -132,6 +153,8 @@ class DataLoaderOptionA(unittest.TestCase):
                              + ['batch_received', 'collective_complete'] * 4 + ['iterator_end'], parent)
             self.assertEqual(2, len([row for row in events if row['epoch'] == epoch and row['event'] == 'worker_init']))
         self.assertIn('8 batches; 0 mismatches', result.stdout)
+        # One progress record per batch collective, as the step loop prints them.
+        self.assertEqual(list(range(1, 9)), progress(result.stdout))
 
     def test_rank_thread_under_fork_stops_every_rank_silently_and_dumps_stacks(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -172,7 +195,9 @@ class DataLoaderOptionA(unittest.TestCase):
             self.assertEqual('iterator_start', epoch2[0])
             self.assertEqual({'iterator_start': 1, 'iterator_created': 1, 'worker_init': 2}, dict(Counter(epoch2)))
             self.assertNotIn('Traceback', stderr)
-            self.assertNotIn('mismatches', stdout)
+            self.assertNotIn('workload completed', stdout)
+            # The progress records stop at the end of epoch 1.
+            self.assertEqual([1, 2, 3, 4], progress(stdout))
             # Epoch 1's workers removed their unused files when they exited.
             files = {p.name: p.read_text() for p in Path(tmp).glob('stacks-*')}
             self.assertEqual(3, len(files), sorted(files))
@@ -197,6 +222,7 @@ class DataLoaderOptionA(unittest.TestCase):
         events = lifecycle(result.stdout)
         self.assertEqual(4, len([row for row in events if row['event'] == 'collective_complete']))
         self.assertNotIn('batch_received', [row['event'] for row in events if row['epoch'] == 2])
+        self.assertEqual([1, 2, 3, 4], progress(result.stdout))
 
     def test_rank_thread_cannot_be_pickled_for_spawn_or_forkserver(self):
         for method in ('spawn', 'forkserver'):
@@ -229,27 +255,44 @@ class DataLoaderOptionA(unittest.TestCase):
             self.assert_two_epochs(result, 'fork')
             self.assertEqual([], list(Path(tmp).iterdir()))
 
-    def test_marked_runs_keep_the_lifecycle_and_start_method_lines_for_the_lab_log(self):
-        # job.sh runs this job with --mark-lab-lines, and common.sh passes its output
-        # through lab-lines.py, which moves every marked line to the lab log.
-        result = self.run_spec({'start_method': 'fork', 'dataset_cache': 'worker-thread',
-                                'mark_lab_lines': True})
-        self.assertEqual(0, result.returncode, result.stderr)
-        lines = result.stdout.splitlines()
-        marked = [line for line in lines if line.startswith('AIM344 lab: ')]
-        # Two epochs: 11 rank events each, and two worker processes each.
-        self.assertEqual(26, len([line for line in marked if 'DataLoader lifecycle: ' in line]))
-        self.assertEqual(4, len([line for line in marked if '"event": "worker_init"' in line]))
-        self.assertIn('AIM344 lab: After first collective: C environment FI_EFA_FORK_SAFE=', result.stdout)
+    def test_with_a_lab_directory_no_lab_line_reaches_the_output(self):
+        # job.sh runs this job with --lab-dir: the rank and each worker append their
+        # lines to their own files, and only the job's ordinary lines are printed.
         with tempfile.TemporaryDirectory() as tmp:
-            lab = Path(tmp) / 'lab.log'
-            passed = subprocess.run([sys.executable, str(LAB / 'lab-lines.py'), str(lab)],
-                                    input=result.stdout, text=True, capture_output=True, timeout=30)
-            self.assertEqual(0, passed.returncode, passed.stderr)
-            self.assertNotIn('DataLoader lifecycle', passed.stdout)
-            self.assertNotIn('start_method', passed.stdout)
-            self.assertIn('DataLoader workload completed: 8 batches; 0 mismatches.', passed.stdout)
-            self.assertEqual(marked, lab.read_text().splitlines())
+            lab = Path(tmp) / 'lab'
+            result = self.run_spec({'start_method': 'fork', 'dataset_cache': 'worker-thread',
+                                    'lab_dir': str(lab)})
+            self.assertEqual(0, result.returncode, result.stderr)
+            for word in ('lifecycle', 'start_method', 'FI_EFA_FORK_SAFE', 'worker_init'):
+                self.assertNotIn(word, result.stdout)
+            printed = [line for line in result.stdout.splitlines() if not line.startswith('TEST_RESULT ')]
+            self.assertEqual(9, len(printed), printed)
+            self.assertNotIn('', printed)
+            self.assertEqual(list(range(1, 9)), progress(result.stdout))
+            self.assertEqual('DataLoader workload completed: 8 batches; 0 mismatches.', printed[-1])
+            # One file for the rank and one for each of the four workers (two per epoch).
+            files = {path.name: path.read_text().splitlines() for path in lab.iterdir()}
+            self.assertEqual(5, len(files), sorted(files))
+            stamp = re.compile(r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z ')
+            lines = [line for rows in files.values() for line in rows]
+            self.assertTrue(all(stamp.match(line) for line in lines), lines)
+            texts = [stamp.sub('', line) for line in lines]
+            events = lifecycle('\n'.join(texts))
+            self.assertEqual(22 + 4, len(events))
+            self.assertEqual(4, len([row for row in events if row['event'] == 'worker_init']))
+            [start_line] = [text for text in texts if text.startswith('After first collective: ')]
+            self.assertIn('DataLoader start_method=fork.', start_line)
+            # Each worker's file holds only its own line.
+            workers = [rows for rows in files.values() if len(rows) == 1]
+            self.assertEqual(4, len(workers))
+            for rows in workers:
+                self.assertIn('"event": "worker_init"', rows[0])
+
+    def test_the_other_ranks_print_no_progress_record(self):
+        result = self.run_spec({'start_method': 'fork', 'dataset_cache': 'worker-thread', 'rank': 3})
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual([], progress(result.stdout))
+        self.assertEqual(8, reported_result(result.stdout)['collectives'])
 
     def test_worker_cuda_under_fork_fails_at_the_first_batch_of_epoch_1(self):
         # Without a GPU the worker raises torch's "not compiled with CUDA" assertion
@@ -572,13 +615,40 @@ class IncidentSettings(unittest.TestCase):
     def test_command_line_consistency(self):
         workload, parser = self.parser()
         for argv in (['storage', '--replica-check'], ['device', '--dataset-cache', 'rank-thread'],
-                     ['device', '--worker-cuda'], ['dataloader', '--reinit-in-worker', '--start-method', 'forkserver']):
+                     ['device', '--worker-cuda'], ['device', '--affected-rank', '0'],
+                     ['dataloader', '--reinit-in-worker', '--start-method', 'forkserver',
+                      '--dataset-cache', 'rank-thread']):
             with self.subTest(argv=argv):
                 with self.assertRaises(SystemExit):
                     workload.check_exercise_arguments(parser, parser.parse_args(argv))
         args = workload.check_exercise_arguments(parser, parser.parse_args(
             ['dataloader', '--start-method', 'forkserver', '--dataset-cache', 'worker-thread']))
         self.assertEqual('forkserver', args.start_method)
+
+    def test_the_options_on_the_cached_dataset_need_a_cache(self):
+        # Without one they would change nothing and the run would still complete.
+        workload, parser = self.parser()
+        for flags, named in ((['--worker-cuda'], '--worker-cuda'),
+                             (['--affected-rank', '0'], '--affected-rank'),
+                             (['--reinit-in-worker'], '--reinit-in-worker'),
+                             (['--worker-cuda', '--affected-rank', '5'], '--worker-cuda, --affected-rank'),
+                             (['--dataset-cache', 'none', '--worker-cuda'], '--worker-cuda')):
+            with self.subTest(flags=flags):
+                error = io.StringIO()
+                with contextlib.redirect_stderr(error), self.assertRaises(SystemExit) as stop:
+                    workload.check_exercise_arguments(parser, parser.parse_args(['dataloader', *flags]))
+                self.assertEqual(2, stop.exception.code)
+                self.assertIn(f'{named}: only with --dataset-cache rank-thread or worker-thread',
+                              error.getvalue())
+        for cache in ('rank-thread', 'worker-thread'):
+            args = workload.check_exercise_arguments(parser, parser.parse_args(
+                ['dataloader', '--dataset-cache', cache, '--worker-cuda', '--affected-rank', '0']))
+            self.assertEqual((cache, True, 0), (args.dataset_cache, args.worker_cuda, args.affected_rank))
+        # The same rule for settings from the lab controls.
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            self.apply(json.dumps({'worker_cuda': True}), ['dataloader'])
+        self.assertTrue(self.apply(json.dumps({'worker_cuda': True, 'dataset_cache': 'rank-thread'}),
+                                   ['dataloader']).worker_cuda)
 
 
 class WorkloadCommandLine(unittest.TestCase):

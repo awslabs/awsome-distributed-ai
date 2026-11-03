@@ -191,7 +191,10 @@ class Launcher(unittest.TestCase):
                      ('run', '--dataset-cache', 'worker-thread'), ('rerun', '--writer-rank=9'),
                      ('rerun', '--dataset-cache', 'lock'), ('rerun', '--dataset-cache'),
                      ('rerun', '--dataloader-timeout', 'x'), ('rerun', '--dataloader-timeout=-1'),
-                     ('rerun', '--worker-cuda'), ('rerun', '--reinit-in-worker', 'extra')):
+                     ('rerun', '--worker-cuda'), ('rerun', '--reinit-in-worker', 'extra'),
+                     # No page gives the plain dataset as a fix; with a seat's
+                     # dataset settings the job would refuse it and name them.
+                     ('rerun', '--dataset-cache', 'none'), ('rerun', '--dataset-cache=none')):
             with self.subTest(argv=argv):
                 result = self.run_job(*argv)
                 self.assertEqual(2, result.returncode)
@@ -270,33 +273,40 @@ class Launcher(unittest.TestCase):
                     self.assertEqual([], self.lines(self.calls))
 
     # ---------------------------------------------------------------- run
-    def test_run_starts_the_healthy_job_then_the_sweep_and_never_asks_for_an_incident(self):
+    def test_run_starts_the_healthy_job_the_epoch_job_then_the_sweep_and_never_asks_for_an_incident(self):
         # Before any incident the controller has not created the incidents directory.
         shutil.rmtree(self.incidents)
         result = self.run_job('run')
         self.assertEqual(0, result.returncode, result.stderr)
         lab = self.incidents / 'job-lab.log'
-        [call] = self.torch_calls()
+        [call, epochs] = self.torch_calls()
         self.assertRegex(call, rf'^run_torch phase=job run_id=job-\d{{8}}T\d{{6}}Z copy=1 '
                                rf'lab={re.escape(str(lab))} iface=rdmap83s0 args=device '
                                r'--checkpoint-every=200 --replica-check --writer-rank=0 '
                                r'--duration-seconds=60$')
-        self.assertEqual(['job_env settings=unset limit=default'], self.job_env())
+        # Incident 3's job as its resume runs it: no setting, the same 120-second limit.
+        self.assertRegex(epochs, rf'^run_torch phase=job run_id=job-epochs-\d{{8}}T\d{{6}}Z copy=1 '
+                                 rf'lab={re.escape(str(lab))} iface=rdmap83s0 ')
+        self.assertTrue(epochs.endswith(self.LOADER), epochs)
+        self.assertEqual(['job_env settings=unset limit=default', 'job_env settings=unset limit=120'],
+                         self.job_env())
         self.assertEqual([], self.next_calls())
         calls = self.lines(self.calls)
         # The allocation is checked once, no container starts before a step needs
-        # it, and the sweep runs in the NCCL container after the torch job.
-        self.assertEqual([f'prepare_allocation RESULTS_DIR={self.results}', call, 'use_nccl_container'],
-                         calls[:3])
-        self.assertRegex(calls[3], rf'^run_sweep job run_id=job-\d{{8}}T\d{{6}}Z '
+        # it, and the sweep runs in the NCCL container after the torch jobs.
+        self.assertEqual([f'prepare_allocation RESULTS_DIR={self.results}', call, epochs,
+                          'use_nccl_container'], calls[:4])
+        self.assertRegex(calls[4], rf'^run_sweep job run_id=job-\d{{8}}T\d{{6}}Z '
                                    rf'lab={re.escape(str(lab))} iface=unset$')
-        self.assertEqual('cleanup', calls[4])
-        self.assertEqual(5, len(calls), calls)
+        self.assertEqual('cleanup', calls[5])
+        self.assertEqual(6, len(calls), calls)
         run_id = call.split('run_id=')[1].split()[0]
-        sweep_id = calls[3].split('run_id=')[1].split()[0]
+        epochs_id = epochs.split('run_id=')[1].split()[0]
+        sweep_id = calls[4].split('run_id=')[1].split()[0]
         self.assertEqual(2, result.stdout.count(f'Job log: {self.results}/{run_id}.log\n'))
+        self.assertEqual(2, result.stdout.count(f'Job log: {self.results}/{epochs_id}.log\n'))
         self.assertEqual(2, result.stdout.count(f'Job log: {self.results}/{sweep_id}.nccl.log\n'))
-        self.assertEqual(2, len(re.findall(r'job_end_utc=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n',
+        self.assertEqual(3, len(re.findall(r'job_end_utc=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n',
                                            result.stdout)))
         # The container removal is a lab line.
         self.assertNotIn('container removed', result.stdout + result.stderr)
@@ -308,6 +318,8 @@ class Launcher(unittest.TestCase):
         result = self.run_job('run', TEST_RC='1')
         self.assertEqual(1, result.returncode)
         calls = self.lines(self.calls)
+        # A failed stand-in also skips the epoch job.
+        self.assertEqual(1, len(self.torch_calls()), calls)
         self.assertEqual([], [line for line in calls if line.startswith('run_sweep')])
         self.assertEqual('cleanup', calls[-1])
 
@@ -336,7 +348,7 @@ class Launcher(unittest.TestCase):
         lab = self.incidents / 'incident-1-lab.log'
         self.assertRegex(call, rf'^run_torch phase=job run_id=incident-1-\d{{8}}T\d{{6}}Z copy=1 '
                                rf'lab={re.escape(str(lab))} iface=rdmap83s0 args=device '
-                               r'--checkpoint-every=200 --replica-check --mark-lab-lines --writer-rank=9 '
+                               r'--checkpoint-every=200 --replica-check --writer-rank=9 '
                                r'--duration-seconds=60 --inject$')
         self.assertEqual(['job_env settings=unset limit=default'], self.job_env())
         # The controller's reply, which names the profile, stays in the lab log.
@@ -453,7 +465,7 @@ class Launcher(unittest.TestCase):
         self.assertTrue(all(' next: ' in line for line in calls), calls)
         [call] = self.torch_calls()
         self.assertRegex(call, r'^run_torch phase=device run_id=incident-4-\d{8}T\d{6}Z copy=1 .* '
-                               r'args=device --checkpoint-every=200 --replica-check --mark-lab-lines '
+                               r'args=device --checkpoint-every=200 --replica-check '
                                r'--writer-rank=0 --duration-seconds=120$')
         lab = (self.incidents / 'incident-4-lab.log').read_text()
         self.assertIn('next, attempt 2, exit 0: Incident 4 is under way.', lab)
@@ -584,8 +596,7 @@ class Launcher(unittest.TestCase):
         self.assertIn('still holds your node', result.stderr)
 
     # ---------------------------------------------------------------- DataLoader incident
-    LOADER = ('args=dataloader --start-method fork --epochs 2 --stack-dump-seconds=60 '
-              '--mark-lab-lines')
+    LOADER = 'args=dataloader --start-method fork --epochs 2 --stack-dump-seconds=60'
 
     def test_dataloader_incident_runs_the_rank_thread_job_without_naming_it(self):
         self.issue(3, 'dataloader')
@@ -649,7 +660,7 @@ class Launcher(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         [call] = self.torch_calls()
         self.assertRegex(call, r'^run_torch phase=job run_id=incident-4-\d{8}T\d{6}Z copy=1 .* '
-                               r'args=device --checkpoint-every=200 --replica-check --mark-lab-lines '
+                               r'args=device --checkpoint-every=200 --replica-check '
                                r'--writer-rank=0 --duration-seconds=20$')
         self.assertEqual(['job_env settings={"corrupt_bit":22,"corrupt_rank":13,'
                           '"corrupt_recurring":false,"corrupt_step":37} limit=default'],
@@ -670,18 +681,28 @@ class Launcher(unittest.TestCase):
                 self.assertTrue(call.endswith('--writer-rank=0 --duration-seconds=20'), call)
                 self.assertEqual([f'job_env settings={expected} limit=default'], self.job_env())
 
-    def test_silent_corruption_resume_resumes_the_stand_in_without_the_flip(self):
-        self.profile(4, 'silent-corruption', {**self.FLIP, 'corrupt_recurring': True})
-        result = self.run_job('resume')
-        self.assertEqual(0, result.returncode, result.stderr)
-        [call] = self.torch_calls()
-        self.assertIn('run_id=incident-4-resume-', call)
-        self.assertTrue(call.endswith('args=device --checkpoint-every=200 --replica-check '
-                                      '--mark-lab-lines --writer-rank=0 --duration-seconds=60 '
-                                      '--resume --end-after-save'), call)
-        self.assertEqual(['job_env settings=unset limit=default'], self.job_env())
-        self.assertEqual([], self.next_calls())
-        self.assert_no_cause(result)
+    def test_silent_corruption_resume_rolls_back_before_the_changed_step_without_the_flip(self):
+        for recurring in (False, True):
+            with self.subTest(recurring=recurring):
+                self.reset_calls()
+                self.profile(4, 'silent-corruption', {**self.FLIP, 'corrupt_recurring': recurring})
+                result = self.run_job('resume')
+                self.assertEqual(0, result.returncode, result.stderr)
+                [call] = self.torch_calls()
+                self.assertIn('run_id=incident-4-resume-', call)
+                self.assertTrue(call.endswith('args=device --checkpoint-every=200 --replica-check '
+                                              '--writer-rank=0 --duration-seconds=60 '
+                                              '--resume --end-after-save'), call)
+                # Only the rollback point reaches the job, in its environment: no flip.
+                self.assertEqual(['job_env settings={"resume_before":37} limit=default'],
+                                 self.job_env())
+                self.assertEqual([], self.next_calls())
+                self.assert_no_cause(result)
+        # Without a step in the profile the flip is at the job's default, step 1.
+        self.reset_calls()
+        self.profile(4, 'silent-corruption', {'corrupt_rank': 13})
+        self.assertEqual(0, self.run_job('resume').returncode)
+        self.assertEqual(['job_env settings={"resume_before":1} limit=default'], self.job_env())
 
     def test_a_settings_value_from_the_shell_never_reaches_another_job(self):
         stray = {'AIM344_INCIDENT_SETTINGS': '{"corrupt_rank": 1}'}
@@ -690,8 +711,10 @@ class Launcher(unittest.TestCase):
         self.assertEqual(0, self.run_job('rerun', **stray).returncode)
         self.profile(3, 'dataloader', issued_at=200.0)
         self.assertEqual(0, self.run_job('resume', **stray).returncode)
-        self.assertEqual(['job_env settings=unset limit=default'] * 2
-                         + ['job_env settings=unset limit=120'], self.job_env())
+        # run: the stand-in and the epoch job; then the storage rerun; then the resume.
+        self.assertEqual(['job_env settings=unset limit=default', 'job_env settings=unset limit=120',
+                          'job_env settings=unset limit=default', 'job_env settings=unset limit=120'],
+                         self.job_env())
 
     def test_an_unknown_exercise_is_answered_from_the_page(self):
         self.issue(6, 'future-exercise')
@@ -718,6 +741,11 @@ class Launcher(unittest.TestCase):
                                    ('dataloader', {'worker_cuda': 1}),
                                    ('dataloader', {'corrupt_rank': 1}),
                                    ('dataloader', {'dataloader_timeout': 60}),
+                                   # These act on the cached dataset, and the job
+                                   # would refuse them without one.
+                                   ('dataloader', {'dataset_cache': 'none', 'worker_cuda': True}),
+                                   ('dataloader', {'dataset_cache': 'none', 'affected_rank': 0}),
+                                   ('silent-corruption', {'corrupt_rank': 13, 'resume_before': 1}),
                                    ('slow-job', {'writer_rank': 9})):
             with self.subTest(exercise=exercise, settings=settings):
                 self.issue(1, exercise, settings)
@@ -757,25 +785,53 @@ class Launcher(unittest.TestCase):
 
 
 class CommonRunIds(unittest.TestCase):
-    """run_torch and run_sweep from the real common.sh, with a fake srun."""
+    """run_torch and run_sweep from the real common.sh, with a fake srun and scontrol.
+
+    The fake torch job writes its lab lines as workload.py --lab-dir does, into
+    one directory per fake node, and the fake srun runs common.sh's collection
+    command against that node's directory, as RESULTS_DIR is node-local.
+    """
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         (self.root / 'pins.env').write_text('')
-        shutil.copy(LAB / 'lab-lines.py', self.root / 'lab-lines.py')
         (self.root / 'summarize.py').write_text('print("summary")\n')
         srun = self.root / 'srun'
         srun.write_text('#!/bin/bash\n'
+                        'printf "%s\\n" "$*" >> "$TEST_DIR/srun.calls"\n'
                         'case "$*" in\n'
                         '  *inventory.sh*) echo "OFI plugin library directory is absent from its normal search path." ;;\n'
                         '  *efa-counters.py*) echo "counters $*" ;;\n'
                         '  *sweep-rank.sh*) echo "NCCL INFO Using network Socket" ;;\n'
-                        '  *torch-node.sh*) echo "AIM344 collective_progress=20 collectives";'
-                        ' echo "AIM344 lab: checkpoint injection: full"; echo "checkpoint write retry: full" ;;\n'
+                        '  *torch-node.sh*)\n'
+                        '    echo "AIM344 collective_progress=20 collectives"\n'
+                        '    lab=; for a in "$@"; do [[ $a == --lab-dir=* ]] && lab=${a#--lab-dir=}; done\n'
+                        '    if [[ $lab == /results/.lab-records ]]; then\n'
+                        '      for n in nodeA nodeB; do mkdir -p "$TEST_DIR/nodes/$n/.lab-records"; done\n'
+                        '      printf "2026-11-03T01:00:02.000Z checkpoint injection: full\\n" \\\n'
+                        '        >> "$TEST_DIR/nodes/nodeB/.lab-records/nodeB-pid7.log"\n'
+                        '      printf "2026-11-03T01:00:01.000Z DataLoader lifecycle: {\\"rank\\": 0}\\n'
+                        '2026-11-03T01:00:03.000Z DataLoader lifecycle: {\\"rank\\": 0, \\"late\\": 1}\\n" \\\n'
+                        '        >> "$TEST_DIR/nodes/nodeA/.lab-records/nodeA-pid5.log"\n'
+                        '    else\n'
+                        '      echo "checkpoint injection: full"\n'
+                        '    fi\n'
+                        '    echo "checkpoint write retry: full" ;;\n'
+                        '  *" collect "*)\n'
+                        '    node=; for a in "$@"; do [[ $a == --nodelist=* ]] && node=${a#--nodelist=}; done\n'
+                        '    args=("$@"); while [[ ${args[0]} != bash ]]; do args=("${args[@]:1}"); done\n'
+                        '    [[ -z ${TEST_COLLECT_STDERR:-} ]] || echo "srun: $TEST_COLLECT_STDERR" >&2\n'
+                        '    [[ -z ${TEST_COLLECT_RC:-} ]] || exit "$TEST_COLLECT_RC"\n'
+                        '    "${args[@]:0:4}" "$TEST_DIR/nodes/$node/.lab-records"\n'
+                        '    exit ;;\n'
                         'esac\n'
                         'exit "${TEST_RC:-0}"\n')
         srun.chmod(0o755)
+        scontrol = self.root / 'scontrol'
+        scontrol.write_text('#!/bin/bash\n[[ $1 == show && $2 == hostnames ]] || exit 1\n'
+                            'printf "nodeA\\nnodeB\\n"\n')
+        scontrol.chmod(0o755)
         self.home = self.root / 'home'
         self.home.mkdir()
 
@@ -789,12 +845,22 @@ class CommonRunIds(unittest.TestCase):
         return subprocess.run(['bash', '-c', script], capture_output=True, text=True, timeout=30,
                               env={**os.environ, 'PATH': f'{self.root}:{os.environ["PATH"]}',
                                    'TEST_DIR': str(self.root), 'TEST_COMMON': str(LAB / 'common.sh'),
-                                   'HOME': str(self.home), 'SLURM_JOB_ID': '4242', **env})
+                                   'HOME': str(self.home), 'SLURM_JOB_ID': '4242',
+                                   'SLURM_JOB_NODELIST': 'node[A-B]', **env})
 
-    def test_job_sh_run_ids_lab_lines_and_progress_copy(self):
+    def srun_calls(self):
+        path = self.root / 'srun.calls'
+        return path.read_text().splitlines() if path.exists() else []
+
+    def records(self, node):
+        return sorted((self.root / 'nodes' / node / '.lab-records').glob('*.log'))
+
+    def test_job_sh_lab_lines_reach_the_lab_log_and_no_output(self):
         lab = self.root / 'incident-1-lab.log'
         for rc in (0, 1):
             with self.subTest(rc=rc):
+                lab.write_text('earlier\n')
+                (self.root / 'srun.calls').unlink(missing_ok=True)
                 result = self.run_common(
                     f'AIM344_RUN_ID=incident-1-T AIM344_LAB_LOG={lab} AIM344_PROGRESS_COPY=1\n'
                     'run_torch job device --inject\n', TEST_RC=str(rc))
@@ -805,15 +871,76 @@ class CommonRunIds(unittest.TestCase):
                     self.assertIn('AIM344 collective_progress=20 collectives\n', text)
                     self.assertIn('checkpoint write retry: full\n', text)
                     self.assertNotIn('injection', text)
-                self.assertIn('AIM344 lab: checkpoint injection: full\n', lab.read_text())
+                    self.assertNotIn('lifecycle', text)
+                    self.assertNotIn('\n\n', text)
+                self.assertEqual('', result.stderr)
+                torch, *collect = self.srun_calls()
+                self.assertTrue(torch.endswith('torch-node.sh device --inject --lab-dir=/results/.lab-records'),
+                                torch)
+                # One step per node, after the job, outside the container.
+                self.assertEqual(2, len(collect), collect)
+                for node, call in zip(('nodeA', 'nodeB'), collect):
+                    self.assertIn(f'--nodes=1 --ntasks=1 --nodelist={node} ', call)
+                    self.assertIn(' --overlap bash -c ', call)
+                    self.assertTrue(call.endswith(f' collect {self.root}/.lab-records'), call)
+                    self.assertNotIn('--container', call)
+                # Both nodes' lines, whole and in time order, after what the log held.
+                self.assertEqual('earlier\n'
+                                 '2026-11-03T01:00:01.000Z DataLoader lifecycle: {"rank": 0}\n'
+                                 '2026-11-03T01:00:02.000Z checkpoint injection: full\n'
+                                 '2026-11-03T01:00:03.000Z DataLoader lifecycle: {"rank": 0, "late": 1}\n',
+                                 lab.read_text())
+                self.assertEqual([], self.records('nodeA') + self.records('nodeB'))
                 self.assertEqual(f'launcher_exit_code={rc} (dimensionless)\n',
                                  (self.root / 'incident-1-T.status.log').read_text())
+
+    def test_an_interrupted_runs_lines_are_collected_by_the_next_run(self):
+        lab = self.root / 'incident-3-lab.log'
+        left = self.root / 'nodes' / 'nodeB' / '.lab-records'
+        left.mkdir(parents=True)
+        (left / 'nodeB-pid3.log').write_text('2026-11-03T00:59:00.000Z DataLoader lifecycle: {"left": 1}\n')
+        result = self.run_common(f'AIM344_RUN_ID=incident-3-T AIM344_LAB_LOG={lab}\nrun_torch job dataloader\n')
+        self.assertEqual(0, result.returncode, result.stderr)
+        lines = lab.read_text().splitlines()
+        self.assertEqual('2026-11-03T00:59:00.000Z DataLoader lifecycle: {"left": 1}', lines[0])
+        self.assertEqual(4, len(lines), lines)
+        self.assertEqual([], self.records('nodeB'))
+
+    def test_a_failed_collection_keeps_the_files_and_the_jobs_status(self):
+        lab = self.root / 'incident-1-lab.log'
+        result = self.run_common(f'AIM344_RUN_ID=incident-1-T AIM344_LAB_LOG={lab}\nrun_torch job device\n',
+                                 TEST_COLLECT_RC='1', TEST_COLLECT_STDERR='Unable to create step')
+        self.assertEqual(0, result.returncode, result.stderr)
+        # Nothing of the collection reaches the participant: srun's own error and
+        # the note go to the lab log.
+        self.assertEqual('', result.stderr)
+        self.assertNotIn('collect_lab_records', result.stdout)
+        self.assertNotIn('Unable', result.stdout)
+        text = lab.read_text()
+        self.assertEqual(2, text.count('srun: Unable to create step'))
+        self.assertRegex(text, r'collect_lab_records: exit 1; files left on the nodes in '
+                               + re.escape(f'{self.root}/.lab-records'))
+        self.assertEqual(1, len(self.records('nodeA')))
+        self.assertEqual(1, len(self.records('nodeB')))
+
+    def test_without_a_lab_log_or_in_the_device_phase_lab_lines_print_and_nothing_is_collected(self):
+        lab = self.root / 'incident-5-lab.log'
+        for body in ('run_torch storage-injected storage --inject\n',
+                     f'AIM344_RUN_ID=incident-5-T AIM344_LAB_LOG={lab}\nrun_torch device device\n'):
+            with self.subTest(body=body):
+                (self.root / 'srun.calls').unlink(missing_ok=True)
+                result = self.run_common(body)
+                self.assertEqual(0, result.returncode, result.stderr)
+                [call] = self.srun_calls()
+                self.assertNotIn('--lab-dir', call)
+                self.assertIn('checkpoint injection: full', result.stdout)
+        self.assertFalse(lab.exists())
 
     def test_numbered_launchers_keep_their_names_and_print_lab_lines(self):
         result = self.run_common('run_torch storage-injected storage --inject\n')
         self.assertEqual(0, result.returncode, result.stderr)
         [log] = list(self.root.glob('storage-injected-*Z.log'))
-        self.assertIn('AIM344 lab: checkpoint injection: full', log.read_text())
+        self.assertIn('checkpoint injection: full', log.read_text())
         self.assertFalse((self.home / 'aim344-results').exists())
 
     def test_the_job_limit_sets_the_launchers_timeout(self):

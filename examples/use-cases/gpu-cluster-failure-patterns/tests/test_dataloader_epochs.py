@@ -20,7 +20,7 @@ def exercise(method, epochs):
     from unittest import mock
     sys.path.insert(0, str(LAB))
     import workload
-    tensor = object()
+    tensor = workload.torch.ones(4)
     calls = []
     loader_options = []
     real_loader = workload.DataLoader
@@ -35,6 +35,7 @@ def exercise(method, epochs):
         calls.append(1)
 
     with mock.patch.object(workload.dist, 'get_rank', return_value=0), \
+            mock.patch.object(workload.dist, 'get_world_size', return_value=16), \
             mock.patch.object(workload, 'collective', side_effect=collective), \
             mock.patch.object(workload, 'DataLoader', side_effect=make_loader):
         workload.dataloader(SimpleNamespace(start_method=method, epochs=epochs), tensor)
@@ -82,6 +83,10 @@ class DataLoaderEpochs(unittest.TestCase):
         if epochs == 2:
             self.assertTrue(worker_pids[0].isdisjoint(worker_pids[1]), worker_pids)
         self.assertIn(f'{epochs * 4} batches; 0 mismatches', result.stdout)
+        # Rank 0 prints one progress record after each batch collective.
+        counts = [int(line.split('collective_progress=', 1)[1].split()[0])
+                  for line in result.stdout.splitlines() if line.startswith('AIM344 collective_progress=')]
+        self.assertEqual(list(range(1, epochs * 4 + 1)), counts)
 
     def test_fork_two_epochs_recreates_workers(self):
         self.run_method('fork', 2)

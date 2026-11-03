@@ -41,18 +41,48 @@ DEVICE = 'cuda'
 # A name that an interrupted save of a real job could leave, so that a listing of
 # the directory does not say the lab filled it. recover-checkpoint.py removes it.
 FILLER_NAME = 'ckpt-shard-00017.partial'
-# The lab's own lines, such as the injector's, carry this marker when the launcher
-# runs an incident without naming its cause (job.sh). That launcher moves them to
-# the lab log instead of the job log. Without --mark-lab-lines they print plainly.
-LAB_LINE_MARKER = 'AIM344 lab: '
 # With --end-after-save, the steps that run after the first periodic save: one
 # more progress record.
 END_AFTER_SAVE_STEPS = 20
 
 
-def lab_line(args, text):
-    prefix = LAB_LINE_MARKER if getattr(args, 'mark_lab_lines', False) else ''
-    print(prefix + text, flush=True)
+def lab_line(lab_dir, text):
+    """Print one of the lab's own lines, or, with a lab directory, keep it off the output.
+
+    The lab's own lines (the injector's, the DataLoader lifecycle) name what the lab
+    did. When job.sh runs an incident without naming its cause, it passes --lab-dir:
+    each process then appends these lines to its own file in that directory, with
+    the time, and common.sh collect_lab_records moves the files into the lab log
+    after the run. No part of them passes through the job's output, where lines of
+    several processes can merge. Each line is one write to a file no other process
+    writes, so it is never split.
+    """
+    if not lab_dir:
+        print(text, flush=True)
+        return
+    os.makedirs(lab_dir, mode=0o700, exist_ok=True)
+    now = time.time()
+    stamp = time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(now)) + f'.{int(now % 1 * 1000):03d}Z'
+    path = os.path.join(lab_dir, f'{socket.gethostname()}-pid{os.getpid()}.log')
+    handle = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(handle, f'{stamp} {text}\n'.encode())
+    finally:
+        os.close(handle)
+
+
+def progress_record(count, tensor):
+    """Rank 0's progress record, which the controller and the pages read.
+
+    It is written with one call: print() under unbuffered output writes the text
+    and the newline separately, and another process's output can land between them.
+    """
+    sys.stdout.write(f'AIM344 collective_progress={count} collectives; '
+                     f'tensor_bytes={tensor.numel() * tensor.element_size()} B; '
+                     f'timestamp={time.time():.6f} s since epoch; 0 mismatches; '
+                     f'job_id={os.environ.get("SLURM_JOB_ID", "unassigned")}; '
+                     f'world_size={dist.get_world_size()}; rank=0.\n')
+    sys.stdout.flush()
 
 
 def checkpoint_dir():
@@ -62,10 +92,15 @@ def checkpoint_dir():
     return path
 
 
-def save_checkpoint(path, step):
+def save_checkpoint(path, step, saved=None):
     # Preserve the last successful checkpoint if a subsequent write fails.
+    # A lab checkpoint holds only its step, so the step loop's writer keeps the
+    # steps of the run's earlier checkpoints in `saved`, which a rollback reads.
+    record = {'next_step': step}
+    if saved is not None:
+        record['saved'] = saved
     with (path / 'next.json').open('w') as output:
-        json.dump({'next_step': step}, output)
+        json.dump(record, output)
         output.flush()
         os.fsync(output.fileno())
     os.replace(path / 'next.json', path / 'last.json')
@@ -87,19 +122,19 @@ def fill_checkpoint_path(path, args):
         if error.errno not in (errno.ENOSPC, errno.EDQUOT):
             raise
         exhausted = True
-        lab_line(args, f'checkpoint injection: {error}; filler_bytes={written} B')
+        lab_line(getattr(args, 'lab_dir', None), f'checkpoint injection: {error}; filler_bytes={written} B')
     if not exhausted:
         filler.unlink()
         raise RuntimeError('No exhaustion within the 64 MiB fill limit; configure the isolated quota.')
 
 
-def save_with_retry(path, step):
+def save_with_retry(path, step, saved=None):
     # Healthy ranks enter the collective while the checkpoint writer retries.
     # This is an explicit retry policy, not an intrinsic property of ENOSPC.
     deadline = time.monotonic() + 60
     while True:
         try:
-            save_checkpoint(path, step)
+            save_checkpoint(path, step, saved)
             return
         except OSError as error:
             if error.errno not in (errno.ENOSPC, errno.EDQUOT):
@@ -110,23 +145,51 @@ def save_with_retry(path, step):
             time.sleep(1)
 
 
+def rollback_point(record, before):
+    """The newest checkpoint in `record` saved before replica step `before`.
+
+    A checkpoint with next_step=N holds the steps below step index N. Replica step
+    S of a run from step 0 is step index S - 1, so every checkpoint with N below S
+    was saved before that step. Returns N and the saved steps up to N; the later
+    checkpoints are dropped with the rollback.
+    """
+    saved = record.get('saved', [record['next_step']])
+    earlier = [step for step in saved if step < before]
+    if not earlier:
+        raise SystemExit(f'No checkpoint was saved before step={before}.')
+    start_step = max(earlier)
+    return start_step, [step for step in saved if step <= start_step]
+
+
 def checkpoint_start(args, path):
     """The step every rank starts from, read or recorded by the checkpoint writer.
 
     Only the writer uses its node's checkpoint directory: on --resume it reads the
-    last successful checkpoint, otherwise it records step 0. It then broadcasts the
-    step, so every rank starts from the writer's value.
+    last successful checkpoint, or with --resume-before the newest one saved before
+    that step, otherwise it records step 0. It then broadcasts the step, so every
+    rank starts from the writer's value. Returns the step and, on the writer, the
+    steps of the checkpoints saved so far (None on the other ranks).
     """
     start_step = 0
+    saved = None
     if dist.get_rank() == args.writer_rank:
         if args.resume:
-            start_step = json.loads((path / 'last.json').read_text())['next_step']
-            print(f'Resuming from last successful checkpoint: next_step={start_step} (step index).', flush=True)
+            record = json.loads((path / 'last.json').read_text())
+            before = getattr(args, 'resume_before', None)
+            if before is None:
+                start_step = record['next_step']
+                saved = record.get('saved', [start_step])
+                print(f'Resuming from last successful checkpoint: next_step={start_step} (step index).', flush=True)
+            else:
+                start_step, saved = rollback_point(record, before)
+                print(f'Resuming from the last checkpoint saved before step={before}: '
+                      f'next_step={start_step} (step index).', flush=True)
         else:
-            save_checkpoint(path, 0)
+            saved = [0]
+            save_checkpoint(path, 0, saved)
     state = torch.tensor([start_step], device=DEVICE)
     dist.broadcast(state, src=args.writer_rank)
-    return int(state.item())
+    return int(state.item()), saved
 
 
 def collective(tensor):
@@ -140,7 +203,7 @@ def collective(tensor):
 def storage(args, tensor):
     rank = dist.get_rank()
     path = checkpoint_dir()
-    start_step = checkpoint_start(args, path)
+    start_step, _ = checkpoint_start(args, path)
     if rank == args.writer_rank:
         if args.inject:
             fill_checkpoint_path(path, args)
@@ -168,7 +231,7 @@ def run_steps(args, tensor):
     rank = dist.get_rank()
     writer = bool(args.checkpoint_every) and rank == args.writer_rank
     path = checkpoint_dir() if writer else None
-    start_step = checkpoint_start(args, path) if args.checkpoint_every else 0
+    start_step, saved = checkpoint_start(args, path) if args.checkpoint_every else (0, None)
     if writer and not args.resume:
         print(f'checkpoint saved: next_step={start_step} (step index)', flush=True)
     end_step = None
@@ -197,31 +260,26 @@ def run_steps(args, tensor):
             if args.inject and not injected:
                 injected = True
                 fill_checkpoint_path(path, args)
-            save_with_retry(path, step)
+            saved.append(step)
+            save_with_retry(path, step, saved)
             print(f'checkpoint saved: next_step={step} (step index)', flush=True)
         collective(tensor)
         sequence += 1
         if replica is not None:
             replica.step(sequence)
         if rank == 0 and sequence % 20 == 0:
-            print(f'AIM344 collective_progress={sequence} collectives; '
-                  f'tensor_bytes={tensor.numel() * tensor.element_size()} B; '
-                  f'timestamp={time.time():.6f} s since epoch; 0 mismatches; '
-                  f'job_id={os.environ.get("SLURM_JOB_ID", "unassigned")}; '
-                  f'world_size={dist.get_world_size()}; rank=0.', flush=True)
+            progress_record(sequence, tensor)
             if replica is not None:
                 replica.report(sequence)
     if rank == 0:
         print(f'Device workload completed: {sequence} collectives; 0 mismatches.', flush=True)
 
 
-def dataloader_event(event, rank, epoch, *, mark=False, **fields):
-    # With mark (--mark-lab-lines) the line carries LAB_LINE_MARKER, so job.sh moves
-    # it to the lab log, because a lifecycle line names the DataLoader.
-    prefix = LAB_LINE_MARKER if mark else ''
-    print(prefix + 'DataLoader lifecycle: ' + json.dumps(
+def dataloader_event(event, rank, epoch, *, lab_dir=None, **fields):
+    # A lifecycle line names the DataLoader, so under --lab-dir it is a lab line.
+    lab_line(lab_dir, 'DataLoader lifecycle: ' + json.dumps(
         dict(event=event, rank=rank, host=socket.gethostname(), pid=os.getpid(),
-             epoch=epoch, **fields), sort_keys=True), flush=True)
+             epoch=epoch, **fields), sort_keys=True))
 
 
 # ---------------- stack capture ----------------
@@ -363,10 +421,10 @@ class CachedDataset(Dataset):
 
 
 def dataloader_worker_init(worker_id, *, rank, epoch, parent_pid, stack_dump_seconds=0,
-                           stack_dump_dir=STACK_DUMP_DIR, reinit_cache=False, mark=False):
+                           stack_dump_dir=STACK_DUMP_DIR, reinit_cache=False, lab_dir=None):
     # Module-level + partial is spawn-picklable; no CUDA/distributed calls here.
     dataloader_event('worker_init', rank, epoch, worker_id=worker_id,
-                     parent_pid=parent_pid, mark=mark)
+                     parent_pid=parent_pid, lab_dir=lab_dir)
     if reinit_cache:
         dataset = get_worker_info().dataset
         if hasattr(dataset, 'reinit'):
@@ -393,11 +451,11 @@ def dataloader(args, tensor):
     get_env.argtypes = [ctypes.c_char_p]
     get_env.restype = ctypes.c_char_p
     rank = dist.get_rank()
-    mark = getattr(args, 'mark_lab_lines', False)
+    lab_dir = getattr(args, 'lab_dir', None)
     if rank == 0:
         value = get_env(b'FI_EFA_FORK_SAFE')
-        lab_line(args, f'After first collective: C environment FI_EFA_FORK_SAFE={value!r}; '
-                       f'DataLoader start_method={args.start_method}.')
+        lab_line(lab_dir, f'After first collective: C environment FI_EFA_FORK_SAFE={value!r}; '
+                          f'DataLoader start_method={args.start_method}.')
     # The exercise settings default to the healthy control; tests pass a bare namespace.
     cache_owner = getattr(args, 'dataset_cache', 'none')
     affected_rank = getattr(args, 'affected_rank', None)
@@ -420,9 +478,9 @@ def dataloader(args, tensor):
                                         stack_dump_seconds=stack_dump_seconds,
                                         stack_dump_dir=stack_dump_dir,
                                         reinit_cache=getattr(args, 'reinit_in_worker', False),
-                                        mark=mark)
+                                        lab_dir=lab_dir)
         log = partial(dataloader_event, rank=rank, epoch=epoch,
-                      expected_batches=expected_batches, mark=mark)
+                      expected_batches=expected_batches, lab_dir=lab_dir)
         log('iterator_start')
         if epoch > 1 and affected and cache_owner != 'none':
             # The refill for this epoch begins now; iter(loader) creates the workers
@@ -442,6 +500,10 @@ def dataloader(args, tensor):
                 epoch_batches += 1
                 batches += 1
                 log('collective_complete', batch=epoch_batches)
+                # The same record as the step loop's, one per batch collective: it
+                # counts the job's batches and says nothing about epochs.
+                if rank == 0:
+                    progress_record(batches, tensor)
         finally:
             # Cancelled before the next iter(loader) forks workers (see arm_stack_dump).
             cancel_stack_dump()
@@ -715,11 +777,17 @@ def check_exercise_arguments(parser, args):
         args.replica_check = True
     if args.replica_check and args.mode != 'device':
         parser.error('--replica-check applies to device mode only')
-    dataloader_only = [name for name in ('dataset_cache', 'worker_cuda', 'reinit_in_worker')
-                       if getattr(args, name) not in (None, False, 'none')]
-    if dataloader_only and args.mode != 'dataloader':
-        parser.error('--dataset-cache, --worker-cuda and --reinit-in-worker apply to '
+    # These act on the cached dataset; the plain tensor dataset has no lock to
+    # replace, no refill and no item read on the GPU, so they would change nothing.
+    on_the_cache = [flag for flag, value in (('--worker-cuda', args.worker_cuda),
+                                             ('--reinit-in-worker', args.reinit_in_worker),
+                                             ('--affected-rank', args.affected_rank is not None))
+                    if value]
+    if (on_the_cache or args.dataset_cache != 'none') and args.mode != 'dataloader':
+        parser.error('--dataset-cache, --worker-cuda, --reinit-in-worker and --affected-rank apply to '
                      'dataloader mode only')
+    if on_the_cache and args.dataset_cache == 'none':
+        parser.error(f'{", ".join(on_the_cache)}: only with --dataset-cache rank-thread or worker-thread')
     if args.reinit_in_worker and args.start_method != 'fork':
         parser.error('--reinit-in-worker is the fork-only fix')
     return args
@@ -731,6 +799,9 @@ def parse_args(argv=None):
     parser.add_argument('--duration-seconds', type=int, default=600)
     parser.add_argument('--inject', action='store_true')
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--resume-before', type=positive_int, default=None,
+                        help='with --resume: start from the newest checkpoint saved before this '
+                             'replica step (step=S of a run from step 0), not from the last one')
     parser.add_argument('--writer-rank', type=nonnegative_int, default=None,
                         help='storage and device modes: rank that writes the checkpoint (default: 0)')
     parser.add_argument('--checkpoint-every', type=nonnegative_int, default=0,
@@ -738,8 +809,9 @@ def parse_args(argv=None):
     parser.add_argument('--end-after-save', action='store_true',
                         help='device mode: end 20 steps after the first periodic save past the '
                              'start step, or at --duration-seconds if that comes first')
-    parser.add_argument('--mark-lab-lines', action='store_true',
-                        help="mark the lab's own lines for the launcher's lab log")
+    parser.add_argument('--lab-dir', default=None,
+                        help="write the lab's own lines to one file per process in this directory, "
+                             'not to standard output (job.sh)')
     parser.add_argument('--start-method', choices=['fork', 'spawn', 'forkserver'], default='fork')
     parser.add_argument('--epochs', type=positive_epochs, default=1,
                         help='DataLoader epochs (default: 1); numbered controls use 2')
@@ -749,12 +821,14 @@ def parse_args(argv=None):
     if args.mode == 'dataloader':
         # The DataLoader launchers pass extra arguments through, so a checkpoint
         # option given by mistake must fail rather than run the unchanged control.
-        # --mark-lab-lines is used there: job.sh moves the lifecycle lines to the lab log.
+        # --lab-dir is used there: job.sh keeps the lifecycle lines off the output.
         given = [flag for flag, value in (('--writer-rank', args.writer_rank is not None),
                                           ('--inject', args.inject), ('--resume', args.resume))
                  if value]
         if given:
             parser.error(f'{", ".join(given)}: not used in dataloader mode')
+    if args.resume_before is not None and not args.resume:
+        parser.error('--resume-before applies with --resume')
     if args.writer_rank is None:
         args.writer_rank = 0
     if args.checkpoint_every and args.mode != 'device':
