@@ -19,8 +19,10 @@ def write_documents(root, documents, tokenizer, *, records, sequence_length, pro
         raise ValueError('prepared data directory must be empty')
     if records < 1 or sequence_length < 2:
         raise ValueError('positive records and at least two positions required')
-    if not 0 <= minimum_document_tokens <= sequence_length:
-        raise ValueError('minimum document tokens must fit sequence length')
+    # A minimum above the sequence length selects long documents and keeps
+    # each one's first sequence_length tokens, so every row is full.
+    if minimum_document_tokens < 0:
+        raise ValueError('minimum document tokens must be nonnegative')
     pad = tokenizer.pad_token_id
     if pad is None:
         pad = tokenizer.eos_token_id

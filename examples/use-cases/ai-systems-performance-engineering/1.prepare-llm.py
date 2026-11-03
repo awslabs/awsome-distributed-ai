@@ -20,7 +20,11 @@ def main():
     parser.add_argument('--records', type=int, default=1024)
     parser.add_argument('--minimum-document-tokens', type=int, default=0)
     parser.add_argument('--download-weights', action='store_true')
+    parser.add_argument('--tokens-name', default='tokens',
+                        help='directory under --output that receives the tokens')
     args = parser.parse_args()
+    if Path(args.tokens_name).name != args.tokens_name or args.tokens_name in ('', '.', '..', 'model'):
+        parser.error('--tokens-name must be one directory name other than model')
     cfg = json.loads(args.config.read_text())
     tokenizer = AutoTokenizer.from_pretrained(cfg['model_id'], revision=cfg['tokenizer_revision'],
                                               token=False, trust_remote_code=False)
@@ -33,7 +37,7 @@ def main():
     provenance['attribution'] = 'FineWeb-Edu, Hugging Face, 2024; derived from Common Crawl'
     provenance['license_url'] = 'https://opendatacommons.org/licenses/by/1-0/'
     provenance['source_terms_url'] = 'https://commoncrawl.org/terms-of-use'
-    result = write_documents(args.output / 'tokens', documents, tokenizer,
+    result = write_documents(args.output / args.tokens_name, documents, tokenizer,
                              records=args.records, sequence_length=cfg['sequence_length'],
                              provenance=provenance, minimum_document_tokens=args.minimum_document_tokens)
     if args.download_weights:
