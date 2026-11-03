@@ -68,7 +68,7 @@ Still to measure on hardware:
 
 - On g7.48xlarge: the stand-in's rate and the checkpoint interval, the healthy run's duration with its sweep and the container removal, the storage incident for a writer on each node (first watchdog, `SeqNum`, time to `launcher_exit_code` against the 180-second bound), the slow-job sweep and its recovery, and the free space in `/tmp` against the roots that remain (the `efa-reset` incident's, and those of allocations left without `run` or `resume`).
 - The `efa-reset` incident started by `job.sh` on a cluster with the lab controls: the helper's `next` after two progress records, the progress copy's freshness through `lab-lines.py`, and the helper ending with the job.
-- The `next` request of `job.sh incident` through `12.device-exercise.sh`, and the login profile in a Session Manager shell and in the shell that `salloc` opens.
+- The `next` request of `job.sh incident` through `12.device-exercise.sh`, and the login profile in a Session Manager shell and in the shell that `salloc` opens, with the time Enter your cluster takes with it.
 - The changes after the p5 run: the healthy run with its sweep, the container removal at the end of `run` and `resume`, the resumed storage job's end after its first save, and the per-node write on a full checkpoint directory.
 
 The `dataloader` and `silent-corruption` workload modes are not part of this change, so `job.sh` refuses those incidents.
