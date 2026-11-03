@@ -118,7 +118,7 @@ After each GPU node's last boot, and after any such reboot or replacement, read 
 python3 /opt/aim344/device-recovery/companion/facilitator/image-cache.py read
 ```
 
-Each node reads its own copy of the two images (22.26 GB), which at the root volume's 125 MiB/s takes about 170 s. Then, among the checks before participant access, run `image-cache.py check` on both nodes. It asks `mincore` which pages are resident and reads no data, so the check itself cannot warm a cold image. It must report every page of both images resident and exit 0; otherwise run `read` on that node again.
+Each node reads its own copy of the two images (22.26 GB), which at the root volume's 125 MiB/s takes about 170 s. Then, among the checks before participant access, run `image-cache.py check` as root on both nodes. It asks `mincore` which pages are resident and reads no data, so the check itself cannot warm a cold image. For a file that the caller can neither write nor owns, `mincore` reports every page as resident, so the helper refuses any other account. It must report every page of both images resident and exit 0; otherwise run `read` on that node again.
 
 ### Explicit existing-node upgrade (local root provisioning only)
 

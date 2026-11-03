@@ -17,10 +17,10 @@ export AIM344_COUNTER_DIR=$out AIM344_COUNTER_SCRIPT=$LAB_DIR/efa-counters.py
 unset SLURM_SPANK__SLURM_SPANK_OPTION_pyxis_container_name
 unset SLURM_SPANK__SLURM_SPANK_OPTION_pyxis_container_env
 srun -N2 -n2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
- bash -c 'mkdir -p "$AIM344_COUNTER_DIR"; python3 "$AIM344_COUNTER_SCRIPT" snapshot "$AIM344_COUNTER_DIR/before"'
+ bash -c 'mkdir -p "$AIM344_COUNTER_DIR"; python3 "$AIM344_COUNTER_SCRIPT" snapshot "$AIM344_COUNTER_DIR/before"' < /dev/null
 rc=0
 run_check5 "$suite" "$out" 2>&1 | tee "$out/command.log" || rc=$?
 srun -N2 -n2 --ntasks-per-node=1 --cpus-per-task="$AIM344_CPUS_PER_NODE" --mpi=none --cpu-bind=none \
- python3 "$AIM344_COUNTER_SCRIPT" delta "$out/before" | tee "$out/efa-deltas.jsonl"
+ python3 "$AIM344_COUNTER_SCRIPT" delta "$out/before" < /dev/null | tee "$out/efa-deltas.jsonl"
 printf 'Check 5 exit_code=%s (dimensionless); results=%s\n' "$rc" "$out"
 exit "$rc"

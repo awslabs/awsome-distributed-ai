@@ -291,6 +291,9 @@ retrieve_results() {
   printf '== verification summary\n'
   printf '   results=%s\n' "$out"
   printf '   check5=%s storage=%s overall=%s\n' "$check5" "$storage_state" "$overall"
+  # Check 5's 1 to 8 MiB rows depend on these; lab.env sets NCCL_PROTO on g7.
+  printf '   check5_nccl_proto=%s check5_ofi_nccl_protocol=%s\n' \
+    "${NCCL_PROTO-unset}" "${OFI_NCCL_PROTOCOL:-RDMA}"
   {
     printf 'job=%s\n' "$SLURM_JOB_ID"
     printf 'batch_host=%s\n' "$(hostname)"
@@ -298,6 +301,8 @@ retrieve_results() {
     printf 'expected_nodes=%s\n' "$(printf '%s,' $expected_nodes)"
     printf 'expected_efa_devices_per_node=%s\n' "$expected_efa"
     printf 'check5_exit_code=%s\n' "$check5"
+    printf 'check5_nccl_proto=%s\n' "${NCCL_PROTO-unset}"
+    printf 'check5_ofi_nccl_protocol=%s\n' "${OFI_NCCL_PROTOCOL:-RDMA}"
     printf 'storage=%s\n' "$storage_state"
     printf 'overall=%s\n' "$overall"
     printf 'completed_at=%s\n' "$(date -u +%FT%TZ)"

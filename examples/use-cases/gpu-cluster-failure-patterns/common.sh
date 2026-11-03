@@ -51,7 +51,11 @@ run_check5() (
     # Match the suite's --mpi option and enable the real step's PMIx IPC hook.
     # Keep both settings inside run_check5; later storage is not an MPI step.
     export SLURM_MPI_TYPE=$NCCL_MPI PMIX_MCA_gds=${PMIX_MCA_gds:-hash}
-    bash "$suite" --check 5 --verbose --timeout "${AIM344_CHECK5_TIMEOUT:-360}" --results-dir "$out"
+    # NCCL_PROTO comes only from lab.env or the caller (on g7, Simple), and
+    # nothing else shows which protocol the 1 to 8 MiB rows ran with.
+    printf 'Check 5 protocol: NCCL_PROTO=%s OFI_NCCL_PROTOCOL=%s\n' "${NCCL_PROTO-unset}" "$OFI_NCCL_PROTOCOL"
+    # The suite's own srun steps take their input from the suite's.
+    bash "$suite" --check 5 --verbose --timeout "${AIM344_CHECK5_TIMEOUT:-360}" --results-dir "$out" < /dev/null
 )
 
 # shellcheck source=pins.env
@@ -127,23 +131,59 @@ node_command() {
 # job's output, and collect_lab_records moves them into the lab log after the job.
 LAB_RECORDS=.lab-records
 
-# Appends every file in each node's LAB_RECORDS to the lab log, in time order, and
-# removes it. One srun per node keeps each node's text whole. A run that was
-# interrupted leaves its files, and the next torch job in the allocation collects
-# them. Bounded, so that the participant's prompt never waits on it for long.
+# Moves the lab records in each node's LAB_RECORDS into the lab log, in time
+# order. Each node gets two steps, outside the container and bounded, so that
+# the participant's prompt never waits on them for long.
+#
+# The collect step takes a file only after its writer has exited. workload.py
+# names each file <host>-pid<pid>.log, and the containers share the host's PID
+# namespace, so the step waits for /proc/<pid> to go, for at most
+# AIM344_LAB_RECORDS_WAIT_SECONDS (default 20) on the node. After a launcher
+# timeout, a process can still be exiting and appending. The step appends each
+# such file to <file>.collected, removes it, and prints every .collected file.
+# A file whose writer still runs stays for the next collection.
+#
+# The acknowledge step removes a node's .collected files. It runs only after the
+# lab log has stored that node's records. A failed step or a failed append leaves
+# the files on the node, and the next torch job in the allocation collects them
+# again. A record can then reach the lab log twice, but none is lost.
+LAB_RECORDS_COLLECT='cd -- "$1" 2>/dev/null || exit 0; end=$((SECONDS + $2)); for f in *.log; do [[ -f $f ]] || continue; pid=${f##*-pid}; pid=${pid%.log}; while [[ $pid =~ ^[0-9]+$ && -e /proc/$pid ]] && ((SECONDS < end)); do sleep 1; done; [[ $pid =~ ^[0-9]+$ && -e /proc/$pid ]] || { cat -- "$f" >> "$f.collected" && rm -f -- "$f"; }; done; for f in *.log.collected; do [[ -f $f ]] && cat -- "$f"; done; exit 0'
+LAB_RECORDS_ACKNOWLEDGE='cd -- "$1" 2>/dev/null || exit 0; rm -f -- *.log.collected'
+
+# One bounded step on one node, outside the container:
+# lab_records_step NODE NAME SCRIPT [ARGUMENT...]; the script's $1 is the directory.
+lab_records_step() {
+    SLURM_MPI_TYPE=none timeout --signal=TERM --kill-after=10s 60s \
+        srun --nodes=1 --ntasks=1 --nodelist="$1" --cpus-per-task=1 --mpi=none --cpu-bind=none --overlap \
+        bash -c "$3" "$2" "$RESULTS_DIR/$LAB_RECORDS" "${@:4}" < /dev/null 2>> "$AIM344_LAB_LOG"
+}
+
 collect_lab_records() {
-    local records rc=0
-    records=$(status=0
-        for node in $(scontrol show hostnames "$SLURM_JOB_NODELIST"); do
-            SLURM_MPI_TYPE=none timeout --signal=TERM --kill-after=10s 60s \
-                srun --nodes=1 --ntasks=1 --nodelist="$node" --cpus-per-task=1 --mpi=none --cpu-bind=none --overlap \
-                bash -c 'cd -- "$1" 2>/dev/null || exit 0; for f in *.log; do [[ -f $f ]] || continue; cat -- "$f" && rm -f -- "$f"; done' \
-                collect "$RESULTS_DIR/$LAB_RECORDS" < /dev/null || status=$?
-        done 2>> "$AIM344_LAB_LOG"
-        exit "$status") || rc=$?
-    [[ -z $records ]] || LC_ALL=C sort -s -k1,1 <<< "$records" >> "$AIM344_LAB_LOG"
-    ((rc == 0)) || printf '%s collect_lab_records: exit %s; files left on the nodes in %s\n' \
-        "$(date -u +%FT%TZ)" "$rc" "$RESULTS_DIR/$LAB_RECORDS" >> "$AIM344_LAB_LOG"
+    local node output status records=
+    local -a stored=()
+    for node in $(scontrol show hostnames "$SLURM_JOB_NODELIST"); do
+        status=0
+        output=$(lab_records_step "$node" collect "$LAB_RECORDS_COLLECT" \
+            "${AIM344_LAB_RECORDS_WAIT_SECONDS:-20}") || status=$?
+        if ((status == 0)); then
+            stored+=("$node")
+            [[ -z $output ]] || records+=$output$'\n'
+        else
+            printf '%s collect_lab_records: collect on %s exit %s; files left in %s\n' \
+                "$(date -u +%FT%TZ)" "$node" "$status" "$RESULTS_DIR/$LAB_RECORDS" >> "$AIM344_LAB_LOG"
+        fi
+    done
+    if [[ -n $records ]]; then
+        # Nothing stored, nothing removed.
+        { LC_ALL=C sort -s -k1,1 <<< "${records%$'\n'}" >> "$AIM344_LAB_LOG"; } 2>/dev/null || return 0
+    fi
+    for node in "${stored[@]}"; do
+        status=0
+        lab_records_step "$node" acknowledge "$LAB_RECORDS_ACKNOWLEDGE" || status=$?
+        ((status == 0)) || printf '%s collect_lab_records: acknowledge on %s exit %s; files left in %s\n' \
+            "$(date -u +%FT%TZ)" "$node" "$status" "$RESULTS_DIR/$LAB_RECORDS" >> "$AIM344_LAB_LOG"
+    done
+    return 0
 }
 
 run_sweep() {
@@ -198,17 +238,25 @@ run_torch() {
     [[ $limit =~ ^[1-9][0-9]*$ ]] || { echo "AIM344_JOB_LIMIT_SECONDS must be a positive number of seconds; got: $limit" >&2; return 2; }
     local -a deadline=(timeout --signal=TERM --kill-after=30s "${limit}s")
     local -a evidence=()
-    if [[ $phase == device ]]; then
-        deadline=()
+    [[ $phase != device ]] || deadline=()
+    # Every torch job creates its container on both nodes before its own step,
+    # within a bound of its own, so that a cold start does not count against the
+    # job's limit. Every job prints the same line here, so the line names no
+    # incident. A failure stops the job before its step starts.
+    printf 'Preparing the job container on both nodes.\n'
+    local prep=0
+    local -a prepare=(timeout --signal=TERM --kill-after=30s "${AIM344_CONTAINER_PREP_TIMEOUT:-600}s"
+        srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none
+        "${CONTAINER_ARGS[@]}" --container-remap-root true)
+    if [[ -n ${AIM344_LAB_LOG:-} ]]; then
+        SLURM_MPI_TYPE=none "${prepare[@]}" < /dev/null >> "$AIM344_LAB_LOG" 2>&1 || prep=$?
     else
-        # The job's container is created on both nodes before the timed step, so
-        # that a cold start does not count against the job's limit. A failure here
-        # shows again, in the job log, when the job's own step starts.
-        if [[ -n ${AIM344_LAB_LOG:-} ]]; then
-            node_command true >> "$AIM344_LAB_LOG" 2>&1 || true
-        else
-            node_command true || true
-        fi
+        SLURM_MPI_TYPE=none "${prepare[@]}" < /dev/null || prep=$?
+    fi
+    if ((prep != 0)); then
+        printf 'The job container could not be prepared on both nodes. The job did not start.\n' >&2
+        printf 'launcher_exit_code=%s (dimensionless)\n' "$prep" | tee "$RESULTS_DIR/$run_id.status.log"
+        return "$prep"
     fi
     # The controller reads this copy before an active device fault. job.sh sets
     # AIM344_PROGRESS_COPY=1 so that every run it starts writes the same copy,

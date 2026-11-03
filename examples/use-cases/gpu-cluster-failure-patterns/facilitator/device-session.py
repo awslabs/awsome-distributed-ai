@@ -122,7 +122,8 @@ def _setting_problem(kind, value, world_size):
     if kind == 'bit':
         return None if whole and 0 <= value <= 31 else 'a bit position from 0 to 31'
     if kind == 'step':
-        return None if whole and value >= 1 else 'a whole number of at least 1'
+        # job.sh read_profile accepts a step below 4096.
+        return None if whole and 1 <= value < 4096 else 'a whole number from 1 to 4095'
     if world_size is None:
         return None if whole and value >= 0 else 'a rank, a whole number of at least 0'
     return (None if whole and 0 <= value < world_size
@@ -175,6 +176,11 @@ def validate_schedule(entries, world_size=None):
         for key in REQUIRED_SETTINGS.get(exercise, ()):
             if key not in settings:
                 raise Refusal(f'Schedule entry {number} ({exercise}) needs the setting {key}.')
+        # job.sh read_profile refuses these without a cached dataset, as the job does.
+        if (exercise == 'dataloader' and settings.get('dataset_cache') == 'none'
+                and ('affected_rank' in settings or settings.get('worker_cuda'))):
+            raise Refusal(f'Schedule entry {number} (dataloader) has dataset_cache none, which '
+                          'takes neither affected_rank nor worker_cuda true.')
         checked.append({'exercise': exercise, 'settings': dict(settings)})
     return checked
 
@@ -274,8 +280,13 @@ def conceal_kind(text):
 
 
 def hidden(state):
-    """A round started by `next` that has not yet been revealed."""
-    return bool(state.incident) and state.phase not in REVEAL_PHASES
+    """A round started by `next` whose kind the participant may not read yet.
+
+    That is a round not yet revealed, and also a recovered round that never
+    issued its operation: its incident is started again, so its kind stays
+    concealed through recovery and the retry.
+    """
+    return bool(state.incident) and (state.phase not in REVEAL_PHASES or not_issued(state))
 
 
 def same_issue(incident, entry):
@@ -3503,7 +3514,14 @@ class DeviceSession:
             # Without the split tables a collect refusal lists the kind's checks.
             raise Refusal("This seat's incident schedule needs the collect and qualify "
                           'check tables; ask the facilitator.')
-        return validate_schedule(entries)
+        try:
+            return validate_schedule(entries)
+        except Refusal as refusal:
+            # The detail names an incident's exercise and settings, so a participant
+            # verb reads only this sentence. The operator view prints the detail,
+            # which stays the cause of this refusal.
+            raise Refusal("This seat's incident schedule is unusable; ask the facilitator.") \
+                from refusal
 
     def _progress_path(self):
         return self.store.directory / f'schedule-{self.assignment_id}.json'
@@ -5107,7 +5125,9 @@ def render(result, verb, operator=False):
                     lines.append(f'  observation: {evidence["log"]}')
                 for refusal in evidence.get('refusals') or []:
                     lines.append(f'  unmet: {refusal}')
-        if incident and not concealed:
+        # A round that never issued its operation says so, without its kind, so
+        # that the participant starts the incident again.
+        if incident and (not concealed or not_issued(state)):
             lines.append(incident_answer(state))
         if state.phase == 'recovery-failed':
             lines.append('Your node is still out of service: recovery did not '
@@ -5162,7 +5182,7 @@ def operator_view(handler):
     try:
         schedule = handler._schedule()
     except Refusal as refusal:
-        lines.append(f'Schedule: unusable ({refusal})')
+        lines.append(f'Schedule: unusable ({refusal.__cause__ or refusal})')
         return '\n'.join(lines) + '\n'
     if schedule is None:
         lines.append('Schedule: none (start/active verbs only)')

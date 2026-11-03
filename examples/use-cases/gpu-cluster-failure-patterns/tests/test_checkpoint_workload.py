@@ -587,6 +587,26 @@ class StackFiles(unittest.TestCase):
 
     def setUp(self):
         self.workload = load_workload()
+        host = mock.patch.object(self.workload.socket, 'gethostname', return_value='h')
+        host.start()
+        self.addCleanup(host.stop)
+
+    def test_on_a_shared_directory_each_node_moves_only_its_own_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            for name in ('stacks-h-rank3-rank-pid10.txt', 'stacks-h2-rank9-rank-pid12.txt',
+                         'stacks-h-1-rank8-rank-pid13.txt'):
+                (directory / name).write_text('old\n')
+            self.workload.retire_stack_files(tmp)
+            self.assertEqual(['stacks-h-rank3-rank-pid10.txt'],
+                             [p.name for p in (directory / 'previous-stacks').iterdir()])
+            # The other nodes' files stay for their own nodes to move.
+            self.assertEqual(['stacks-h-1-rank8-rank-pid13.txt', 'stacks-h2-rank9-rank-pid12.txt'],
+                             sorted(p.name for p in directory.glob('stacks-*')))
+            with mock.patch.object(self.workload.socket, 'gethostname', return_value='h2'):
+                self.workload.retire_stack_files(tmp)
+            self.assertEqual(['stacks-h-1-rank8-rank-pid13.txt'],
+                             [p.name for p in directory.glob('stacks-*')])
 
     def test_the_earlier_files_leave_the_directory_the_stack_read_lists(self):
         with tempfile.TemporaryDirectory() as tmp:

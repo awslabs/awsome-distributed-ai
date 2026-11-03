@@ -2,7 +2,8 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 # Run only after all workload/result collection steps, before leaving the
-# dedicated allocation. Retains images, historical roots and measured results.
+# dedicated allocation. Retains images, measured results, and every historical
+# root except the torch roots of this account's finished allocations.
 set -euo pipefail
 [[ $# -eq 0 ]] || { echo "Usage: bash ${0##*/} (it takes no arguments)" >&2; exit 2; }
 LAB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -59,5 +60,33 @@ for label in "aim344_$SLURM_JOB_ID" "aim344_torch_$SLURM_JOB_ID" \
         }
         printf "current-job container removed: %s\n" "$name"
     done
+done
+# The torch roots of this account'"'"'s earlier allocations on this node. The
+# DataLoader and device incidents end without this cleanup (the participant
+# leaves the allocation, or the job ends in the fault), so a later cleanup on the
+# node removes their roots once Slurm reports that job finished, when its
+# processes are gone. A root whose job is still active, or about which Slurm
+# gives no answer, stays for a later cleanup.
+for root in "$data"/pyxis_aim344_torch_* "$data"/pyxis_*_aim344_torch_*; do
+    [[ -e $root || -L $root ]] || continue
+    name=${root##*/}
+    id=${name##*_}
+    [[ $id =~ ^[1-9][0-9]*$ && $id != "$SLURM_JOB_ID" ]] || continue
+    [[ $name == "pyxis_aim344_torch_$id" || $name == "pyxis_${id}_aim344_torch_$id" ]] || continue
+    if state=$(scontrol show job "$id" -o 2>&1); then
+        [[ " $state " =~ \ JobState=(COMPLETED|CANCELLED|FAILED|TIMEOUT|NODE_FAIL|OUT_OF_MEMORY|PREEMPTED|BOOT_FAIL|DEADLINE)\  ]] || continue
+    else
+        # Slurm forgets a finished job after MinJobAge.
+        [[ $state == *"Invalid job id specified"* ]] || continue
+    fi
+    [[ -d $root && ! -L $root && $(stat -c %u -- "$root") == "$EUID" ]] || {
+        echo "Cleanup skipped: untrusted earlier root $name" >&2; continue;
+    }
+    enroot remove -f "$name" || true
+    if [[ -e $root || -L $root ]]; then
+        echo "Cleanup kept: earlier root $name" >&2
+    else
+        printf "earlier-job container removed: %s\n" "$name"
+    fi
 done
 '

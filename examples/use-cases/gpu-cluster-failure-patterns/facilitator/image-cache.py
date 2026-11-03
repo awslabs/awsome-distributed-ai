@@ -8,10 +8,16 @@ are already in the page cache. On a g7.48xlarge node whose images had not been
 read since its last boot, creating the torch container took 168 s of the
 launcher's 180 s limit; with the images cached it took about 5 s.
 
-`read` reads every byte of each image once and then checks it. `check` reads no
-data: it maps each image read-only and asks mincore(2) which pages are resident.
-Both print one line per image and exit 1 unless every page of every image is in
-the page cache.
+`read` reads every byte of every image once, and then checks all of them, so
+that a page of one image evicted while the next was read shows in the result.
+`check` reads no data: it maps each image read-only and asks mincore(2) which
+pages are resident. Both print one line per image and exit 1 unless every page
+of every image was in the page cache when it was checked. Pages can still be
+evicted after the check.
+
+Run it as root. For a file that the caller neither owns nor may open for
+writing, mincore(2) reports every page as resident, so the helper refuses such
+a caller before it checks anything.
 """
 import argparse
 import ctypes
@@ -45,12 +51,26 @@ def read_image(path):
             total += count
 
 
+def require_trusted_caller(path, info):
+    """Refuse a caller for whom mincore(2) would report every page of `path` as resident.
+
+    Since Linux 5.0, mincore reports page-cache residency of a file mapping only
+    to a caller that owns the file, has CAP_FOWNER or could open it for writing.
+    """
+    euid = os.geteuid()
+    if euid != 0 and info.st_uid != euid and not os.access(path, os.W_OK):
+        raise OSError(f'{path}: run image-cache.py as root; for a file this account cannot '
+                      'write, mincore(2) reports every page as resident')
+
+
 def resident_pages(path):
     """Return (pages, resident pages) of the file, from mincore on a read-only mapping."""
     page = os.sysconf('SC_PAGE_SIZE')
     fd = os.open(path, os.O_RDONLY)
     try:
-        size = os.fstat(fd).st_size
+        info = os.fstat(fd)
+        require_trusted_caller(path, info)
+        size = info.st_size
         if size == 0:
             raise OSError(f'{path} is empty')
         address = libc.mmap(None, size, PROT_READ, MAP_SHARED, fd, 0)
@@ -75,13 +95,16 @@ def main(argv=None):
     parser.add_argument('images', nargs='*', default=list(IMAGES),
                         help='image files (default: %(default)s)')
     args = parser.parse_args(argv)
-    complete = True
     for path in args.images:
-        if args.action == 'read':
+        require_trusted_caller(path, os.stat(path))
+    if args.action == 'read':
+        for path in args.images:
             start = time.monotonic()
             total = read_image(path)
             seconds = time.monotonic() - start
             print(f'image-cache: {path} read {total} B in {seconds:.1f} s', flush=True)
+    complete = True
+    for path in args.images:
         pages, resident = resident_pages(path)
         complete = complete and resident == pages
         # Rounded down, so that an image short of even one page never shows 100.0 %.

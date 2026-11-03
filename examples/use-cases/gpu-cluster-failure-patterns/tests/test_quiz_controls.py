@@ -206,7 +206,17 @@ class ScheduleValidation(unittest.TestCase):
             'an unknown cache': ({'exercise': 'dataloader', 'settings': {'dataset_cache': 'a-b'}},
                                  'one of none, rank-thread, worker-thread'),
             'step 0': ({'exercise': 'silent-corruption',
-                        'settings': {'corrupt_rank': 1, 'corrupt_step': 0}}, 'at least 1'),
+                        'settings': {'corrupt_rank': 1, 'corrupt_step': 0}}, 'from 1 to 4095'),
+            # job.sh read_profile accepts a step below 4096 only.
+            'step 4096': ({'exercise': 'silent-corruption',
+                           'settings': {'corrupt_rank': 1, 'corrupt_step': 4096}}, 'from 1 to 4095'),
+            # job.sh read_profile refuses a rank or worker CUDA without a cached dataset.
+            'no cache with a rank': ({'exercise': 'dataloader',
+                                      'settings': {'dataset_cache': 'none', 'affected_rank': 3}},
+                                     'takes neither affected_rank nor worker_cuda true'),
+            'no cache with worker CUDA': ({'exercise': 'dataloader',
+                                           'settings': {'dataset_cache': 'none', 'worker_cuda': True}},
+                                          'takes neither affected_rank nor worker_cuda true'),
             'bit 32': ({'exercise': 'silent-corruption',
                         'settings': {'corrupt_rank': 1, 'corrupt_bit': 32}}, 'from 0 to 31'),
             'no flip rank': ({'exercise': 'silent-corruption', 'settings': {'corrupt_step': 5}},
@@ -216,6 +226,14 @@ class ScheduleValidation(unittest.TestCase):
             with self.subTest(case=name):
                 with self.assertRaisesRegex(session.Refusal, re.escape(expected)):
                     session.validate_schedule([entry], world_size=16)
+
+    def test_the_launchers_accepted_edges_are_accepted(self):
+        for entry in ({'exercise': 'silent-corruption',
+                       'settings': {'corrupt_rank': 1, 'corrupt_step': 4095}},
+                      {'exercise': 'dataloader',
+                       'settings': {'dataset_cache': 'none', 'worker_cuda': False}}):
+            with self.subTest(entry=entry):
+                self.assertEqual([entry], session.validate_schedule([entry], world_size=16))
 
     def test_the_rank_bound_is_the_installers_world_size(self):
         entry = [{'exercise': 'storage', 'settings': {'writer_rank': 20}}]
@@ -414,6 +432,23 @@ class JobIncidents(QuizBase):
         with self.assertRaisesRegex(session.Refusal, 'no incident schedule'):
             self.make().next()
 
+    def test_a_stored_schedule_the_controller_refuses_names_no_exercise(self):
+        # A seat installed by an earlier installer, or a hand-edited file.
+        self.set_schedule([{'exercise': 'storage', 'settings': {'writer_rank': 9}},
+                           {'exercise': 'silent-corruption',
+                            'settings': {'corrupt_rank': 13, 'corrupt_step': 5000}}])
+        with self.assertRaises(session.Refusal) as caught:
+            self.make().next()
+        text = str(caught.exception)
+        self.assertEqual("This seat's incident schedule is unusable; ask the facilitator.", text)
+        rendered = session.render(self.make().status(), 'status')
+        for name in ('silent-corruption', 'corrupt', 'storage', 'writer_rank', '5000'):
+            self.assertNotIn(name, text + rendered)
+        # The operator reads which entry and which setting.
+        view = session.operator_view(self.make())
+        self.assertIn('Schedule: unusable (Schedule entry 2 setting corrupt_step must be '
+                      'a whole number from 1 to 4095.)', view)
+
     def test_a_schedule_changed_after_incidents_were_issued_is_refused(self):
         self.make().next()
         self.set_schedule(session.validate_schedule([{'exercise': 'dataloader'},
@@ -601,12 +636,20 @@ class DeviceIncident(QuizBase):
         self.assertEqual('not-issued', self.make().store.read().active_fault['outcome'])
         self.assertIn('Answer for incident 1: the lab did not apply this incident, so nothing '
                       'you saw came from it. Start it again with bash job.sh incident.', rendered)
-        self.assertNotIn('reset', rendered.split('Answer for incident 1:')[1].splitlines()[0])
-        self.assert_no_kind(rendered.split('Answer for incident 1:')[1].splitlines()[0])
+        # The whole status stays concealed: the incident is started again.
+        self.assert_no_kind(rendered)
+        self.assertNotIn('reset', rendered)
+        self.assertNotIn('not-issued', rendered)
+        operator = session.render(self.make().status(), 'status', operator=True)
+        self.assertIn('Active FLR: efa-flr', operator)
+        self.assertIn('outcome=not-issued', operator)
         # The same incident again, not the next one: its profile until the job runs.
         again = self.make().next()
         self.assertEqual(1, again.incident)
         self.assertFalse(again.under_way)
+        retry = session.render(self.make().status(), 'status')
+        self.assert_no_kind(retry)
+        self.assertNotIn('not-issued', retry)
         self.executor.run_active_fault = self.active
         self.running_job_with_progress()
         started = self.make().next()

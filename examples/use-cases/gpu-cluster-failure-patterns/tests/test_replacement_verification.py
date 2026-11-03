@@ -333,6 +333,15 @@ exit "${LOCAL_SUITE_EXIT:-0}"
                 self.assertIn('   gpu-g7-1: write_probe=yes\n   gpu-g7-2: write_probe=yes\n', result.stdout)
                 self.assertIn('write_probe_on_all_nodes_exit_code=0', result.stdout)
                 self.assertIn(f'check5=0 storage={storage_exit} overall=', result.stdout)
+                # Which protocol Check 5's rows ran with, in its output and in the summary.
+                proto = 'Simple' if launch_environment is None else 'unset'
+                self.assertIn(f'Check 5 protocol: NCCL_PROTO={proto} OFI_NCCL_PROTOCOL=RDMA\n',
+                              result.stdout)
+                self.assertIn(f'   check5_nccl_proto={proto} check5_ofi_nccl_protocol=RDMA\n',
+                              result.stdout)
+                [summary] = (root / 'results').glob('*/summary.txt')
+                self.assertIn(f'check5_nccl_proto={proto}\ncheck5_ofi_nccl_protocol=RDMA\n',
+                              summary.read_text())
                 self.assertIn('srun --partition=assigned-queue --nodelist=gpu-g7-1 --nodes=1', result.stdout)
                 self.assertIn('> ~/aim344-verify-123-results.tar', result.stdout)
                 self.assertIn('~/aim344-verify-123-results.tar | sha256sum -c -', result.stdout)
@@ -590,3 +599,75 @@ exit "${LOCAL_SUITE_EXIT:-0}"
             result = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 1)
             self.assertIn('does not match assigned PARTITION', result.stderr)
+
+
+class EarlierTorchRoots(unittest.TestCase):
+    """9.cleanup.sh removes the torch roots of this account's finished allocations.
+
+    The DataLoader and device incidents end without a cleanup, so their roots wait
+    for the next cleanup on the node. Slurm's answer about each earlier job decides.
+    """
+
+    STATES = {'456': 'JobState=RUNNING', '300': 'JobState=COMPLETED', '301': 'JobState=RUNNING',
+              '303': 'JobState=COMPLETING', '305': 'JobState=TIMEOUT', '306': 'JobState=FAILED'}
+
+    def run_cleanup(self, root, data):
+        companion = root / 'companion'
+        companion.mkdir(exist_ok=True)
+        for name in ('common.sh', 'pins.env', '9.cleanup.sh'):
+            (companion / name).write_text((LAB / name).read_text().replace(
+                '/tmp/enroot/data/user-$EUID', str(data)))
+        binaries = root / 'bin'
+        binaries.mkdir(exist_ok=True)
+        cases = ''.join(f'  {job}) printf "JobId={job} UserId=%s(%s) {state} NumNodes=2\\n" '
+                        f'"$(id -un)" "$(id -u)" ;;\n' for job, state in self.STATES.items())
+        (binaries / 'scontrol').write_text(
+            '#!/bin/bash\n[[ $1 == show && $2 == job ]] || exit 1\ncase $3 in\n' + cases
+            + '  302) echo "slurm_load_jobs error: Invalid job id specified" >&2; exit 1 ;;\n'
+            + '  *) echo "slurm_load_jobs error: Unable to contact slurm controller" >&2; exit 1 ;;\n'
+            + 'esac\n')
+        # One node's step: the script after bash.
+        (binaries / 'srun').write_text('#!/bin/bash\nwhile [[ $1 != bash ]]; do shift; done\nexec "$@"\n')
+        (binaries / 'enroot').write_text('#!/bin/bash\n[[ $1 == remove && $2 == -f ]] || exit 9\n'
+                                         'rmdir -- "$ENROOT_DATA_PATH/$3"\n')
+        for path in binaries.iterdir():
+            path.chmod(0o755)
+        env = dict(os.environ, PATH=f'{binaries}:{os.environ["PATH"]}', SLURM_JOB_ID='456',
+                   SLURM_JOB_CPUS_PER_NODE='192(x2)')
+        return subprocess.run(['bash', str(companion / '9.cleanup.sh')], env=env,
+                              capture_output=True, text=True, timeout=30)
+
+    def test_only_finished_jobs_torch_roots_are_removed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data = root / 'data'
+            data.mkdir(mode=0o700)
+            removed = ['pyxis_aim344_torch_300', 'pyxis_300_aim344_torch_300',
+                       'pyxis_aim344_torch_302', 'pyxis_aim344_torch_305', 'pyxis_aim344_torch_306']
+            kept = ['pyxis_aim344_torch_301',          # still running
+                    'pyxis_aim344_torch_303',          # completing: processes may remain
+                    'pyxis_aim344_torch_304',          # Slurm gave no answer
+                    'pyxis_aim344_300', 'pyxis_aim344_check5_300',  # not torch roots
+                    'pyxis_301_aim344_torch_300']      # names two different jobs
+            for name in removed + kept + ['pyxis_aim344_torch_456']:
+                (data / name).mkdir()
+            result = self.run_cleanup(root, data)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(sorted(kept), sorted(p.name for p in data.iterdir()))
+            self.assertIn('current-job container removed: pyxis_aim344_torch_456', result.stdout)
+            for name in removed:
+                self.assertIn(f'earlier-job container removed: {name}\n', result.stdout)
+
+    def test_an_untrusted_earlier_root_is_skipped_without_failing_the_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data = root / 'data'
+            data.mkdir(mode=0o700)
+            target = root / 'elsewhere'
+            target.mkdir()
+            (data / 'pyxis_aim344_torch_300').symlink_to(target, target_is_directory=True)
+            result = self.run_cleanup(root, data)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertIn('Cleanup skipped: untrusted earlier root pyxis_aim344_torch_300', result.stderr)
+            self.assertTrue((data / 'pyxis_aim344_torch_300').is_symlink())
+            self.assertTrue(target.is_dir())

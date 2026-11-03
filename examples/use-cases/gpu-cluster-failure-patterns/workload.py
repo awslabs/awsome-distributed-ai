@@ -9,6 +9,7 @@ import ctypes
 from datetime import timedelta
 import errno
 import faulthandler
+import glob
 from functools import partial
 import json
 import multiprocessing.util
@@ -343,12 +344,15 @@ def rearm_stack_dump():
 
 
 def retire_stack_files(directory):
-    """Move the stack files that an earlier run left in `directory` to PREVIOUS_STACKS.
+    """Move this host's stack files that an earlier run left in `directory` to PREVIOUS_STACKS.
 
     A stack read lists the directory's stacks-* files, so after a run that wrote
-    none it would otherwise print the earlier run's stacks again.
+    none it would otherwise print the earlier run's stacks again. One process per
+    node calls this. It moves only the files named with its own host, so that on a
+    results directory that both nodes share, two nodes never move the same file.
     """
-    old = sorted(Path(directory).glob('stacks-*.txt'))
+    host = glob.escape(socket.gethostname())
+    old = sorted(Path(directory).glob(f'stacks-{host}-rank[0-9]*.txt'))
     if old:
         kept = Path(directory) / PREVIOUS_STACKS
         kept.mkdir(exist_ok=True)

@@ -32,7 +32,10 @@
 #
 # The participant pages number the incidents in this order. Each exercise takes
 # only the settings its launcher applies, and a rank must be a rank of the job:
-# below AIM344_WORLD_SIZE, which defaults to 16 (2 nodes of 8 GPUs).
+# below AIM344_WORLD_SIZE, which defaults to 16 (2 nodes of 8 GPUs). The
+# installer refuses a corrupt_step outside 1 to 4095 but cannot know the step
+# rate: choose a corrupt_step that the 20-second run reaches (about 480 steps on
+# g7.48xlarge), or the incident shows no differing line.
 #
 # Exercises: slow-job, storage, dataloader, silent-corruption (applied by the
 # launcher in the participant's job) and efa-reset (applied by the controller
