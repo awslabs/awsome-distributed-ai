@@ -96,7 +96,7 @@ def progress_record(count, tensor):
 def checkpoint_dir():
     path = Path('/checkpoints')
     if (path / '.aim344-fixture').read_text().strip() != 'AIM344 isolated checkpoint fixture':
-        raise RuntimeError('The facilitator must prepare an isolated checkpoint fixture.')
+        raise RuntimeError('/checkpoints is not the lab\'s isolated checkpoint fixture; raise your hand.')
     return path
 
 

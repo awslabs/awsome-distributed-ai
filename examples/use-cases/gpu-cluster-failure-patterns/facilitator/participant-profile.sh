@@ -29,7 +29,7 @@ if [[ $- == *i* ]]; then
         if aim344_values=$(python3 "$aim344_lab/facilitator/allocation-env.py" --partition "${PARTITION:-}" 2>/dev/null); then
             eval "$aim344_values"
         else
-            printf 'AIM344 login profile: Slurm did not return the allocation values; tell your table expert.\n' >&2
+            printf 'AIM344 login profile: Slurm did not return the allocation values; raise your hand.\n' >&2
         fi
         export AIM344_PROFILE_LOADED=1
         if [[ $PWD == "$HOME" ]]; then cd -- "$aim344_lab" || true; fi

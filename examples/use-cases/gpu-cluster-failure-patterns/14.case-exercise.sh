@@ -25,7 +25,7 @@ esac
 if [[ ! -d $cases ]]; then
     cat >&2 <<EOF
 The case material is not on this machine yet at $cases.
-Ask your facilitator to stage it; nothing you can do from here will fix it.
+Raise your hand; nothing you can do from here will fix it.
 EOF
     exit 3
 fi

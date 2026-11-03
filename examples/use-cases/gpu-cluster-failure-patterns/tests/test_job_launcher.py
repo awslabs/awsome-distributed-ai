@@ -165,8 +165,12 @@ class Launcher(unittest.TestCase):
             if path.exists():
                 path.unlink()
 
+    def controller_verbs(self):
+        # Each logged call reads '<n> <verb>: <first reply line>'.
+        return [line.split()[1].rstrip(':') for line in self.lines(self.next_log)]
+
     def next_calls(self):
-        return self.lines(self.next_log)
+        return [line for line in self.lines(self.next_log) if line.split()[1] == 'next:']
 
     def job_processes(self):
         # The controller step is a subshell of job.sh, with the same command line.
@@ -337,8 +341,9 @@ class Launcher(unittest.TestCase):
     def test_a_failed_container_removal_keeps_the_job_status_and_says_so_neutrally(self):
         result = self.run_job('run', TEST_CLEANUP_RC='1')
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn('could not remove the containers of this allocation; tell your table expert',
+        self.assertIn('The lab could not remove the job containers on your nodes; raise your hand.',
                       result.stderr)
+        self.assertNotIn('table expert', result.stderr)
         self.assert_no_cause(result)
 
     def test_results_default_to_node_local_storage(self):
@@ -415,6 +420,32 @@ class Launcher(unittest.TestCase):
         self.assertIn('current-job container removed', lab)
         self.assert_no_cause(result)
         self.assertEqual([], self.next_calls())
+        # The completed resume ends the incident, after its job and the cleanup.
+        self.assertEqual(['ended'], self.controller_verbs())
+        self.assertIn('ended, exit 0: Incident 9 is ready.', lab)
+        self.assertNotIn('ended', result.stdout + result.stderr)
+
+    def test_a_failed_resume_job_does_not_end_the_incident(self):
+        self.profile(1, 'storage', {'writer_rank': 9})
+        result = self.run_job('resume', TEST_RC='1')
+        self.assertEqual(1, result.returncode)
+        self.assertEqual([], self.controller_verbs())
+
+    def test_a_refused_end_keeps_the_resume_status_and_asks_for_a_hand(self):
+        self.profile(2, 'slow-job')
+        self.reply(1, 'This seat has no incident schedule; raise your hand.\n', rc=3)
+        result = self.run_job('resume')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(['ended'], self.controller_verbs())
+        self.assertIn('The lab controls did not record that incident 2 has ended; raise your hand.',
+                      result.stderr)
+        self.assert_no_cause(result)
+
+    def test_rerun_never_ends_the_incident(self):
+        self.profile(2, 'slow-job')
+        result = self.run_job('rerun')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual([], self.controller_verbs())
 
     # ---------------------------------------------------------------- slow job incident
     def test_slow_job_incident_keeps_the_lab_step_out_of_the_participant_output(self):
@@ -795,6 +826,26 @@ class Launcher(unittest.TestCase):
         self.assertIn(f'lab={self.incidents}/incident-2-attempt-2-lab.log', sweep[0])
 
 
+class HelpLines(unittest.TestCase):
+    """Participant pages name no table expert or facilitator; the lines a
+    participant reads ask them to raise a hand instead."""
+
+    PARTICIPANT_SOURCES = ('job.sh', '12.device-exercise.sh', '14.case-exercise.sh',
+                           'facilitator/participant-profile.sh', 'workload.py',
+                           'facilitator/device-session.py')
+    SENDS_TO_A_PERSON = re.compile(
+        r'(?i)table expert|\b(?:ask|tell) (?:your |the )?facilitator|'
+        r'your facilitator|facilitator must')
+
+    def test_no_participant_line_sends_them_to_a_table_expert_or_facilitator(self):
+        for name in self.PARTICIPANT_SOURCES:
+            with self.subTest(name=name):
+                self.assertIsNone(self.SENDS_TO_A_PERSON.search((LAB / name).read_text()))
+
+    def test_the_lines_ask_for_a_raised_hand(self):
+        self.assertEqual(9, (LAB / 'job.sh').read_text().lower().count('raise your hand'))
+
+
 class CommonRunIds(unittest.TestCase):
     """run_torch and run_sweep from the real common.sh, with a fake srun and scontrol.
 
@@ -1013,6 +1064,26 @@ class CommonRunIds(unittest.TestCase):
         self.assertNotIn('other host', text)
         self.assertEqual([other, sent], self.records('nodeB'))
         self.assertEqual('2026-11-03T00:59:00.000Z still writing elsewhere\n', other.read_text())
+
+    def test_a_file_left_as_collected_by_an_earlier_version_is_collected(self):
+        """Code review batch 4, Nit 1: ed4c0284 renamed a taken file to .log.collected,
+        and a failed acknowledge left it there for no later collection to read."""
+        lab = self.root / 'incident-1-lab.log'
+        directory = self.root / 'nodes' / 'nodeB' / '.lab-records'
+        directory.mkdir(parents=True)
+        host = Path('/proc/sys/kernel/hostname').read_text().strip()
+        legacy = directory / f'{host}-pid999999901.log.collected'
+        legacy.write_text('2026-11-03T00:57:00.000Z left by an earlier collection\n')
+        other = directory / 'other-host-pid999999913.log.collected'
+        other.write_text('2026-11-03T00:57:30.000Z collected on the other host\n')
+        result = self.run_common(f'AIM344_RUN_ID=incident-1-T AIM344_LAB_LOG={lab}\nrun_torch job dataloader\n')
+        self.assertEqual(0, result.returncode, result.stderr)
+        text = lab.read_text()
+        self.assertEqual(1, text.count('left by an earlier collection'))
+        self.assertIn('checkpoint injection: full', text)
+        self.assertNotIn('other host', text)
+        # Read, stored and acknowledged: only the other host's file is left.
+        self.assertEqual([other], self.records('nodeB'))
 
     def test_a_failed_collection_keeps_the_files_and_the_jobs_status(self):
         lab = self.root / 'incident-1-lab.log'

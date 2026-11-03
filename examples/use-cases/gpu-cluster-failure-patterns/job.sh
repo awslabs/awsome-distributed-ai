@@ -17,8 +17,10 @@
 # resume reuse the same profile and never ask for a new incident. The launcher
 # prints none of the incident's settings: the job reads them from
 # AIM344_INCIDENT_SETTINGS (workload.py apply_incident_settings). The lab's own
-# lines go to a lab log beside the profile, which the facilitator reads. run and
-# resume end by removing the allocation's containers from the GPU nodes.
+# lines go to a lab log beside the profile, which the lab's operators read. run and
+# resume end by removing the allocation's containers from the GPU nodes. A resume
+# whose job completes tells the lab controls that the incident has ended
+# (12.device-exercise.sh ended), so that status stops calling it under way.
 set -euo pipefail
 LAB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
@@ -239,7 +241,7 @@ NOTES
 require_allocation() {
     [[ -n ${SLURM_JOB_ID:-} ]] || refuse 'Run this inside your allocation: take it in terminal A with the salloc line on your page, then run job.sh there.'
     local job
-    job=$(scontrol show job "$SLURM_JOB_ID" -o) || refuse "Slurm did not describe your allocation $SLURM_JOB_ID; tell your table expert."
+    job=$(scontrol show job "$SLURM_JOB_ID" -o) || refuse "Slurm did not describe your allocation $SLURM_JOB_ID; raise your hand."
     # The lab controls act only on a job of this account whose name starts with
     # aim344- and whose walltime is at most 10 minutes. Every run is held to the
     # same rule, so that no incident is singled out by a refusal.
@@ -247,7 +249,7 @@ require_allocation() {
     [[ $job =~ (^|[[:space:]])TimeLimit=(00:0[1-9]:[0-5][0-9]|00:10:00)([[:space:]]|$) ]] \
         || refuse 'Take your allocation with the salloc line on your page: job.sh runs in an allocation of 1 to 10 minutes.'
     [[ ${AIM344_EFA_DEVICE:-} =~ ^[A-Za-z0-9_]+$ ]] \
-        || refuse 'AIM344_EFA_DEVICE is not set. Open a new terminal, whose login profile sets it, or tell your table expert.'
+        || refuse 'AIM344_EFA_DEVICE is not set. Open a new terminal, whose login profile sets it, or raise your hand.'
     # The training stand-in uses this one EFA device on each node.
     export AIM344_EFA_IFACE=$AIM344_EFA_DEVICE
     # Node-local results, as the login profile sets them in an allocation shell.
@@ -330,7 +332,7 @@ def encoded(values):
 
 print(number, exercise, writer, encoded(incident), encoded(rerun), encoded(resume))
 PY
-) || refuse 'The incident profile cannot be used by this launcher; tell your table expert.'
+) || refuse 'The incident profile cannot be used by this launcher; raise your hand.'
     read -r incident exercise writer_rank incident_settings rerun_settings resume_settings <<< "$fields"
     profile=$1
     lab_log=${profile%.json}-lab.log
@@ -401,7 +403,7 @@ ensure_prepared() {
 # A lab step whose output belongs in the lab log, not on the participant's terminal.
 lab_step() {
     lab_note "lab step: $*"
-    "$@" >> "$lab_log" 2>&1 || refuse 'The lab could not prepare this step; tell your table expert.'
+    "$@" >> "$lab_log" 2>&1 || refuse 'The lab could not prepare this step; raise your hand.'
 }
 
 # Runs one job, then removes the allocation's containers from both GPU nodes, so
@@ -413,7 +415,7 @@ ending_job() {
     "$@" || rc=$?
     lab_note 'lab step: 9.cleanup.sh'
     bash "$LAB_DIR/9.cleanup.sh" >> "$lab_log" 2>&1 \
-        || printf 'The lab could not remove the containers of this allocation; tell your table expert.\n' >&2
+        || printf 'The lab could not remove the job containers on your nodes; raise your hand.\n' >&2
     return "$rc"
 }
 
@@ -438,7 +440,7 @@ controller_step() {
         fi
         if [[ -e $stop ]]; then
             lab_note 'controller step: the job ended before two progress records'
-            printf 'The job ended before the lab controls could act. Tell your table expert.\n' >&2
+            printf 'The job ended before the lab controls could act. Raise your hand.\n' >&2
             return 0
         fi
         sleep 1
@@ -460,7 +462,7 @@ controller_step() {
         sleep "$NEXT_INTERVAL"
     done
     lab_note 'controller step: no reply said the incident is under way'
-    printf 'The lab controls did not act during this run. Tell your table expert.\n' >&2
+    printf 'The lab controls did not act during this run. Raise your hand.\n' >&2
 }
 
 # Ends the controller step and waits for it. A request that is under way
@@ -667,7 +669,7 @@ case $verb in
         reply=$(bash "$LAB_DIR/12.device-exercise.sh" next 2>&1) || status=$?
         ((status == 0)) || { printf '%s\n' "$reply" >&2; exit "$status"; }
         handed=$(sed -n 's/^Profile: //p' <<< "$reply" | tail -n 1)
-        [[ -n $handed ]] || { printf '%s\n' "$reply" >&2; refuse 'The lab controls handed over no incident profile; tell your table expert.'; }
+        [[ -n $handed ]] || { printf '%s\n' "$reply" >&2; refuse 'The lab controls handed over no incident profile; raise your hand.'; }
         read_profile "$handed"
         AIM344_LAB_LOG=$lab_log
         lab_note "next: $reply"
@@ -678,5 +680,13 @@ case $verb in
         read_current_profile
         AIM344_LAB_LOG=$lab_log
         incident_job "$verb"
+        # Reached only when the job succeeded: a failed job exits above. The
+        # job's status stays the launcher's, whatever this request answers.
+        if [[ $verb == resume ]]; then
+            status=0
+            reply=$(bash "$LAB_DIR/12.device-exercise.sh" ended 2>&1) || status=$?
+            lab_note "ended, exit $status: $reply"
+            ((status == 0)) || printf 'The lab controls did not record that incident %s has ended; raise your hand.\n' "$incident" >&2
+        fi
         ;;
 esac

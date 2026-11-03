@@ -10,10 +10,11 @@
 #
 #   ./12.device-exercise.sh status       where your incident stands
 #   ./12.device-exercise.sh next         start your seat's next incident (job.sh runs this)
+#   ./12.device-exercise.sh ended        record that the incident has ended (job.sh resume runs this)
 #   ./12.device-exercise.sh collect 0    run one allowed check and keep its output
 #   ./12.device-exercise.sh recover      ask for recovery once you have your evidence
 #
-# next follows the order your facilitator set for your seat and does not say
+# next follows the order set for your seat and does not say
 # what the incident is. status lists the checks you can collect. Recovery
 # leaves the runtime ready; you then take a fresh allocation and verify it
 # yourself. A node that recovery cannot qualify stays out of service, and an
@@ -27,6 +28,7 @@ Usage: 12.device-exercise.sh <command>
 
   status           Show where your incident stands and which checks you can collect
   next             Start your seat's next incident; job.sh runs this for you
+  ended            Record that the incident has ended; job.sh resume runs this for you
   collect <check>  Run one allowed check on your target and save its output
   collect kernel   Save a window of your target's kernel log
   recover          Request recovery of your target once you have your evidence
@@ -53,7 +55,7 @@ case "$1" in
         [[ $2 == kernel || $2 =~ ^[0-9]{1,2}$ ]] || usage
         request="collect $2"
         ;;
-    next|status|recover|replace)
+    next|ended|status|recover|replace)
         [[ $# -eq 1 ]] || usage
         request="$1"
         ;;
@@ -72,7 +74,7 @@ control_user=${AIM344_CONTROL_USER:-aim344-control}
 identity=${AIM344_CONTROL_IDENTITY:-$HOME/.ssh/aim344-exercise}
 
 if [[ ! -r $identity ]]; then
-    printf 'Cannot read your exercise key at %s. Ask the facilitator.\n' "$identity" >&2
+    printf 'Cannot read your exercise key at %s. Raise your hand.\n' "$identity" >&2
     exit 3
 fi
 

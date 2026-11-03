@@ -2,6 +2,28 @@
 
 This distribution summary preserves the scope of the measured results without deployment identifiers, private artifact locations or incident-derived teaching material. Original detailed records, failed attempts and exact source/deployment mappings remain unchanged with the workshop owner. The latest section describes an installed, fixed development candidate; historical sections retain their original scope. This documentation update performs no new hardware run.
 
+## November 3, 2026: status after an incident ends, the help lines and an older lab-record file
+
+The end-to-end run of the [previous section's change](#november-3-2026-status-before-the-device-fault-the-kernel-window-collection-and-cleanup-failures) on the g7.48xlarge pair, and an independent review of that change, found the problems this change fixes. No hardware run has used it yet. The tests run on a CPU-only host.
+
+What changed:
+
+- `job.sh resume` sends `ended` to the lab controls once its job has completed, and the controller records that the current incident has ended. `status` then reads `Next: Incident <n> has ended. Start the next incident the way your page shows.` until the next incident is issued, or `Next: Incident <n> has ended. It was the last incident for this seat.` after the seat's last one. In the g7.48xlarge run, `status` after the resume of each job incident still said that the incident was under way. A resume whose job fails sends nothing. When the controller refuses `ended`, the launcher prints one line and keeps the resume's exit status. The device incident ends with `recover`, so the controller refuses `ended` for it, in a sentence that does not name it.
+- A cleanup failure prints `The lab could not remove the job containers on your nodes; raise your hand.` The root that the cleanup could not remove can belong to an earlier allocation, so the line no longer says "this allocation".
+- Every line a participant reads that sent them to a table expert or the facilitator now asks them to raise a hand. These are the launcher's refusals, the login profile's, those of the case and device entry points, the checkpoint fixture check in `workload.py` and the controller's refusals about the seat's schedule.
+- The collect step also takes a `<host>-pid<n>.log.collected` file. The collect step of ed4c0284 left such a file when its acknowledge step failed, and no later collection read it.
+
+`ended` is a new verb of `12.device-exercise.sh` and of the controller, so the controller has to be reinstalled with the launcher. An older controller refuses the verb, and the launcher then prints its one line.
+
+What the tests cover:
+
+- `tests/test_quiz_controls.py`: `ended` through the forced command and `status` after it, the seat's last incident, a second `ended`, the next incident under way again, and the refusals before any incident, without a schedule and for the device incident.
+- `tests/test_job_launcher.py`: `resume` sends `ended` after its job and the cleanup, a failed resume job and `rerun` send none, a refused `ended` keeps the exit status and prints one line, the cleanup line, and a `.log.collected` file that is read once and removed while another host's stays.
+
+Still to measure on hardware:
+
+- `status` after the resume of each job incident, with the controller reinstalled, on the g7.48xlarge pair.
+
 ## November 3, 2026: status before the device fault, the kernel window, collection and cleanup failures
 
 The end-to-end run of the [previous section's change](#november-3-2026-the-review-of-the-replica-check-protocol-and-page-cache-changes) on the g7.48xlarge pair, and two independent reviews of that change, found the problems this change fixes. No hardware run has used it yet. The tests run on a CPU-only host.

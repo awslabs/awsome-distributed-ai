@@ -16,16 +16,17 @@ come from validation/gpu-cluster-healthcheck, and every device mutation goes
 through the existing root-owned aim344-device-fault helper on the target.
 
 Scope of what a participant can cause, by construction:
-  start gpu | start efa | active gpu | active efa | next | status |
+  start gpu | start efa | active gpu | active efa | next | ended | status |
   collect <allowlisted check> | recover
 No node name, PCI address, job identifier, shell command or check outside the
 collect allowlist is accepted. `replace` is accepted by the grammar and refused:
 an operator runs the replacement route after the session (--operator replace).
 
 `next` starts the next incident in the seat's schedule, which account preparation
-writes into this root-only configuration. Its replies, and status, collect and
-recover while that incident is unresolved, do not name the incident's kind;
---operator status does.
+writes into this root-only configuration. `ended`, which job.sh resume sends
+after its job completes, records that the current job incident has ended. The
+replies of `next`, and status, collect and recover while that incident is
+unresolved, do not name the incident's kind; --operator status does.
 """
 import argparse
 import datetime
@@ -55,7 +56,7 @@ PHASES = ('ready', 'preparing', 'fault-applied', 'investigating', 'recovering',
 # Phases in which this assignment still holds its exercise node.
 HOLDING_PHASES = ('preparing', 'fault-applied', 'investigating', 'recovering',
                   'recovery-failed', 'replacement-required')
-USAGE = ('Commands: start gpu | start efa | active gpu | active efa | next | status | collect <check> | recover')
+USAGE = ('Commands: start gpu | start efa | active gpu | active efa | next | ended | status | collect <check> | recover')
 
 # The incidents a seat's schedule can name (v2 hour design, section 4). The job
 # exercises are applied by the participant's launcher inside their own job, so
@@ -949,7 +950,7 @@ def parse_participant_request(text):
         if arguments[0] not in ('gpu', 'efa'):
             return Request(error='The exercise provides start gpu and start efa only.')
         return Request(verb=verb, argument=arguments[0])
-    if verb in ('next', 'status', 'recover', 'replace'):
+    if verb in ('next', 'ended', 'status', 'recover', 'replace'):
         if arguments:
             return Request(error=f'{verb} takes no argument. {USAGE}')
         return Request(verb=verb)
@@ -3521,7 +3522,7 @@ class DeviceSession:
     UNDER_WAY_STEP = ('Watch your job. Record what you see, collect checks, and run '
                       'recover when your page says so.')
     PROGRESS_ENTRY_FIELDS = {'number', 'exercise', 'issued_at', 'issue_id', 'profile',
-                             'last_refusal'}
+                             'last_refusal', 'ended_at'}
 
     def _schedule(self):
         """The seat's checked schedule, or None when account preparation set none."""
@@ -3531,14 +3532,14 @@ class DeviceSession:
         if self.assignment.get('collect_checks') is None:
             # Without the split tables a collect refusal lists the kind's checks.
             raise Refusal("This seat's incident schedule needs the collect and qualify "
-                          'check tables; ask the facilitator.')
+                          'check tables; raise your hand.')
         try:
             return validate_schedule(entries)
         except Refusal as refusal:
             # The detail names an incident's exercise and settings, so a participant
             # verb reads only this sentence. The operator view prints the detail,
             # which stays the cause of this refusal.
-            raise Refusal("This seat's incident schedule is unusable; ask the facilitator.") \
+            raise Refusal("This seat's incident schedule is unusable; raise your hand.") \
                 from refusal
 
     def _progress_path(self):
@@ -3566,13 +3567,14 @@ class DeviceSession:
                         or entry['number'] != number
                         or entry['exercise'] != schedule[number - 1]['exercise']
                         or not isinstance(entry['issued_at'], (int, float))
+                        or not isinstance(entry.get('ended_at', 0), (int, float))
                         or not (isinstance(entry['issue_id'], str)
                                 and ISSUE_ID.fullmatch(entry['issue_id']))
                         or not (entry['profile'] is None or isinstance(entry['profile'], str))):
                     raise ValueError('entry')
         except (ValueError, KeyError, TypeError, AttributeError) as error:
             raise Refusal("This seat's incident record does not match its schedule; "
-                          'ask the facilitator.') from error
+                          'raise your hand.') from error
         return progress
 
     def _schedule_line(self):
@@ -3582,7 +3584,7 @@ class DeviceSession:
                 return None
             issued = len(self._read_progress(schedule)['issued'])
         except Refusal:
-            return "Incidents: this seat's schedule is unusable; ask the facilitator."
+            return "Incidents: this seat's schedule is unusable; raise your hand."
         return f'Incidents issued: {issued} of {len(schedule)}'
 
     def _issue_profile(self, progress, entry, schedule):
@@ -3659,7 +3661,7 @@ class DeviceSession:
             self._refresh_binding()
             schedule = self._schedule()
             if schedule is None:
-                raise Refusal('This seat has no incident schedule; ask the facilitator.')
+                raise Refusal('This seat has no incident schedule; raise your hand.')
             progress = self._read_progress(schedule)
             issued = progress['issued']
             state = self.store.read()
@@ -3714,20 +3716,59 @@ class DeviceSession:
                       already_started=result.already_started,
                       next_step=self.UNDER_WAY_STEP)
 
-    def _issued_count(self):
-        """How many incidents this seat has been given, or 0 when that cannot be read."""
+    def ended(self):
+        """Record that the current job incident has ended.
+
+        job.sh resume sends this once its job has completed, which is the end of
+        a job incident. The device incident ends with recover, so it is refused
+        here without naming it. A second call keeps the first time.
+        """
+        with self.store.exclusive_pair():
+            schedule = self._schedule()
+            if schedule is None:
+                raise Refusal('This seat has no incident schedule; raise your hand.')
+            progress = self._read_progress(schedule)
+            issued = progress['issued']
+            if not issued:
+                raise Refusal('No incident has been issued yet.')
+            current = issued[-1]
+            if current['exercise'] in DEVICE_EXERCISES:
+                raise Refusal(f'Incident {current["number"]} does not end this way; '
+                              'follow your page.')
+            if 'ended_at' not in current:
+                current['ended_at'] = self.clock()
+                _write_private_json(self._progress_path(), progress)
+            return Result(self.store.read(), incident=current['number'])
+
+    def _issued_progress(self):
+        """(incidents issued, whether the latest has ended, schedule length), or
+        (0, False, 0) when the record cannot be read."""
         try:
             schedule = self._schedule()
-            return len(self._read_progress(schedule)['issued']) if schedule else 0
+            if not schedule:
+                return 0, False, 0
+            issued = self._read_progress(schedule)['issued']
         except Refusal:
-            return 0
+            return 0, False, 0
+        return len(issued), bool(issued and 'ended_at' in issued[-1]), len(schedule)
+
+    def _issued_count(self):
+        """How many incidents this seat has been given, or 0 when that cannot be read."""
+        return self._issued_progress()[0]
 
     def _next_step(self, state):
-        issued = self._issued_count() if state.phase == 'ready' else 0
-        # Once an incident is issued it stays the participant's incident until the
-        # page starts the next one. The device incident also waits in this phase
-        # until its job reports progress, so the line is the same for every kind.
-        if issued:
+        issued, ended, total = (self._issued_progress() if state.phase == 'ready'
+                                else (0, False, 0))
+        # An issued incident is under way until job.sh resume reports that its job
+        # completed. The device incident also waits in this phase until its job
+        # reports progress, and resume never ends it, so before its fault the line
+        # is the same as a job incident's.
+        if issued and ended and issued < total:
+            ready = (f'Incident {issued} has ended. Start the next incident the way '
+                     'your page shows.')
+        elif issued and ended:
+            ready = f'Incident {issued} has ended. It was the last incident for this seat.'
+        elif issued:
             ready = f'Incident {issued} is under way. Follow your page for its next step.'
         elif self.assignment.get('exercise_schedule'):
             ready = 'Your node is in service. Start the next incident the way your page shows.'
@@ -3767,7 +3808,7 @@ class DeviceSession:
         if not checks:
             raise Refusal("This seat's configuration names no checks that recovery must "
                           'pass for this round, so the controller does not start or '
-                          'recover it. Nothing was changed; ask the facilitator.')
+                          'recover it. Nothing was changed; raise your hand.')
         return [str(c) for c in checks]
 
     # The recovery requirement under its earlier name.
@@ -5184,6 +5225,8 @@ def render(result, verb, operator=False):
         if not operator:
             tail = [participant_text(line, state) for line in tail]
         return '\n'.join([output] + tail) + '\n'
+    elif verb == 'ended':
+        lines.append(f'Incident {result.incident} has ended.')
     elif verb == 'next':
         if result.under_way:
             lines.append(f'Incident {result.incident} is under way.')
@@ -5325,6 +5368,8 @@ def main(argv=None):
             result = handler.start(request.argument, active=verb == 'active')
         elif verb == 'next':
             result = handler.next()
+        elif verb == 'ended':
+            result = handler.ended()
         elif verb == 'status':
             result = handler.status()
         elif verb == 'collect':

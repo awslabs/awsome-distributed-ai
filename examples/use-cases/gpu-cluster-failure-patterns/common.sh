@@ -146,13 +146,14 @@ LAB_RECORDS=.lab-records
 #
 # The collect step appends each taken file, and each file an earlier collection
 # sent but did not acknowledge, to <file>.sent-<token>, where the token names
-# this collection. It prints those files and exits nonzero if any append,
+# this collection. An unacknowledged file of the earlier form, <file>.collected,
+# is taken the same way. It prints those files and exits nonzero if any append,
 # removal or read failed. The coordinator stores a node's lines only when its
 # collect step succeeded. The acknowledge step then removes that node's files
 # of this token and no others. A failed step or a failed append leaves the
 # files on the node, and the next torch job in the allocation collects them
 # again. A record can then reach the lab log twice, but none is lost.
-LAB_RECORDS_COLLECT='cd -- "$1" 2>/dev/null || exit 0; end=$((SECONDS + $2)); token=$3; read -r host < /proc/sys/kernel/hostname || exit 1; rc=0; for f in "$host"-pid*.log; do [[ -f $f ]] || continue; pid=${f##*-pid}; pid=${pid%.log}; while [[ $pid =~ ^[0-9]+$ && -e /proc/$pid ]] && ((SECONDS < end)); do sleep 1; done; [[ $pid =~ ^[0-9]+$ && -e /proc/$pid ]] && continue; { cat -- "$f" >> "$f.sent-$token" && rm -f -- "$f"; } || rc=1; done; for f in "$host"-pid*.log.sent-*; do [[ -f $f && $f != *.sent-"$token" ]] || continue; { cat -- "$f" >> "${f%.sent-*}.sent-$token" && rm -f -- "$f"; } || rc=1; done; for f in "$host"-pid*.log.sent-"$token"; do [[ -f $f ]] || continue; cat -- "$f" || rc=1; done; exit "$rc"'
+LAB_RECORDS_COLLECT='cd -- "$1" 2>/dev/null || exit 0; end=$((SECONDS + $2)); token=$3; read -r host < /proc/sys/kernel/hostname || exit 1; rc=0; for f in "$host"-pid*.log; do [[ -f $f ]] || continue; pid=${f##*-pid}; pid=${pid%.log}; while [[ $pid =~ ^[0-9]+$ && -e /proc/$pid ]] && ((SECONDS < end)); do sleep 1; done; [[ $pid =~ ^[0-9]+$ && -e /proc/$pid ]] && continue; { cat -- "$f" >> "$f.sent-$token" && rm -f -- "$f"; } || rc=1; done; for f in "$host"-pid*.log.sent-* "$host"-pid*.log.collected; do [[ -f $f && $f != *.sent-"$token" ]] || continue; b=${f%.collected}; b=${b%.sent-*}; { cat -- "$f" >> "$b.sent-$token" && rm -f -- "$f"; } || rc=1; done; for f in "$host"-pid*.log.sent-"$token"; do [[ -f $f ]] || continue; cat -- "$f" || rc=1; done; exit "$rc"'
 LAB_RECORDS_ACKNOWLEDGE='cd -- "$1" 2>/dev/null || exit 0; read -r host < /proc/sys/kernel/hostname || exit 1; rm -f -- "$host"-pid*.log.sent-"$2"'
 
 # One bounded step on one node, outside the container:

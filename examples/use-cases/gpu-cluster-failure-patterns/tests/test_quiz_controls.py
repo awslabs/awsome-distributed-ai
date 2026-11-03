@@ -128,12 +128,18 @@ class Grammar(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIsNotNone(session.parse_participant_request(text).error)
 
+    def test_ended_takes_no_argument(self):
+        self.assertEqual('ended', session.parse_participant_request('ended').verb)
+        for text in ('ended 2', 'ended --incident 3'):
+            with self.subTest(text=text):
+                self.assertIsNotNone(session.parse_participant_request(text).error)
+
     def test_replace_still_parses_so_it_can_be_refused_with_a_reason(self):
         self.assertEqual('replace', session.parse_participant_request('replace').verb)
 
     def test_entry_point_passes_next_and_lists_no_replace(self):
         text = ENTRY.read_text()
-        self.assertIn('next|status|recover|replace)', text)
+        self.assertIn('next|ended|status|recover|replace)', text)
         usage = text[text.index("<<'USAGE'"):text.index('\nUSAGE\n')]
         self.assertIn('next ', usage)
         self.assertNotRegex(usage, r'\n  replace ')
@@ -440,7 +446,7 @@ class JobIncidents(QuizBase):
         with self.assertRaises(session.Refusal) as caught:
             self.make().next()
         text = str(caught.exception)
-        self.assertEqual("This seat's incident schedule is unusable; ask the facilitator.", text)
+        self.assertEqual("This seat's incident schedule is unusable; raise your hand.", text)
         rendered = session.render(self.make().status(), 'status')
         for name in ('silent-corruption', 'corrupt', 'storage', 'writer_rank', '5000'):
             self.assertNotIn(name, text + rendered)
@@ -481,6 +487,48 @@ class JobIncidents(QuizBase):
         self.assertNotIn('Start the next incident', rendered)
         for name in ('storage', 'dataloader', 'start gpu'):
             self.assertNotIn(name, rendered)
+
+    def test_after_resume_ends_an_incident_status_says_it_has_ended(self):
+        """Code review batch 4, Nit 2, and Spain batch 4, finding 2."""
+        self.advance_to(2)
+        code, out, err = self.run_main('ended', now=2000.0)
+        self.assertEqual((0, ''), (code, err))
+        self.assertEqual('Incident 2 has ended.\n', out)
+        rendered = session.render(self.make().status(), 'status')
+        self.assertIn('Incidents issued: 2 of 4', rendered)
+        self.assertIn('Next: Incident 2 has ended. Start the next incident the way your page '
+                      'shows.', rendered)
+        self.assertNotIn('under way', rendered)
+        for name in ('storage', 'dataloader', 'start gpu'):
+            self.assertNotIn(name, rendered)
+        self.assert_no_kind(rendered)
+        # A second end keeps the first time, and the next incident is under way again.
+        self.run_main('ended', now=3000.0)
+        progress = json.loads((self.state_dir / 'schedule-table-1.json').read_text())
+        self.assertEqual(2000.0, progress['issued'][1]['ended_at'])
+        self.assertNotIn('ended_at', progress['issued'][0])
+        self.assertEqual(3, self.make().next().incident)
+        self.assertIn('Next: Incident 3 is under way.',
+                      session.render(self.make().status(), 'status'))
+        self.assertEqual([], self.node_calls())
+
+    def test_the_last_incident_ended_says_there_is_no_next(self):
+        self.set_schedule(session.validate_schedule([{'exercise': 'storage'},
+                                                     {'exercise': 'dataloader'}]))
+        self.advance_to(2)
+        self.make().ended()
+        rendered = session.render(self.make().status(), 'status')
+        self.assertIn('Next: Incident 2 has ended. It was the last incident for this seat.',
+                      rendered)
+        self.assertNotIn('Start the next incident', rendered)
+
+    def test_ended_before_any_incident_or_without_a_schedule_is_refused(self):
+        with self.assertRaisesRegex(session.Refusal, 'No incident has been issued yet'):
+            self.make().ended()
+        del self.config_body['assignments']['table-1']['exercise_schedule']
+        self.write_config()
+        with self.assertRaisesRegex(session.Refusal, 'no incident schedule; raise your hand'):
+            self.make().ended()
 
     def test_collect_outside_a_controller_round_is_still_refused(self):
         self.make().next()
@@ -690,6 +738,18 @@ class DeviceIncident(QuizBase):
         self.assert_no_kind(device)
         # The same lines as a job incident's status, apart from the numbers.
         self.assertEqual(re.sub(r'\d+', 'N', job), re.sub(r'\d+', 'N', device))
+        self.assertEqual([], self.node_calls())
+
+    def test_ended_does_not_end_the_device_incident_or_name_it(self):
+        self.advance_to(4)
+        code, out, err = self.run_main('ended')
+        self.assertEqual((3, ''), (code, out))
+        self.assertEqual('Incident 4 does not end this way; follow your page.\n', err)
+        self.assert_no_kind(err)
+        progress = json.loads((self.state_dir / 'schedule-table-1.json').read_text())
+        self.assertNotIn('ended_at', progress['issued'][3])
+        self.assertIn('Next: Incident 4 is under way.',
+                      session.render(self.make().status(), 'status'))
         self.assertEqual([], self.node_calls())
 
     def test_a_failed_preparation_shows_no_answer_before_recovery(self):
