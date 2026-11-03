@@ -23,11 +23,14 @@
 # in the order the participant's `next` starts them, each entry an exercise and
 # the settings the launcher passes to the job, for example
 #
-#   [{"exercise": "storage", "settings": {"writer_rank": 9}},
+#   [{"exercise": "slow-job"},
+#    {"exercise": "storage", "settings": {"writer_rank": 9}},
 #    {"exercise": "dataloader"},
 #    {"exercise": "silent-corruption",
 #     "settings": {"corrupt_rank": 13, "corrupt_step": 37, "corrupt_bit": 22}},
 #    {"exercise": "efa-reset"}]
+#
+# The participant pages number the incidents in this order.
 #
 # Exercises: slow-job, storage, dataloader, silent-corruption (applied by the
 # launcher in the participant's job) and efa-reset (applied by the controller
@@ -248,6 +251,56 @@ if [[ -n $peer_node || -n $efa_device ]]; then
     [[ $efa_device =~ ^[A-Za-z0-9_]+$ ]] || {
         echo "Set AIM344_EFA_DEVICE to the target's efa_rdma_device, for example rdmap83s0." >&2; exit 2; }
     [[ $slurm_bin =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo 'Bad AIM344_SLURM_BIN.' >&2; exit 2; }
+    # The profile puts this directory on every participant shell's PATH; the
+    # default names one Slurm version, and the cluster may run another.
+    [[ -x $slurm_bin/salloc && ! -d $slurm_bin/salloc ]] || {
+        echo "No salloc in $slurm_bin. Set AIM344_SLURM_BIN to this cluster's Slurm client directory." >&2; exit 2; }
+    # Every participant's ~/.bashrc will source files from this lab directory, so
+    # only root may be able to change them.
+    python3 - "$lab" <<'PY' || exit 2
+import os, stat, sys
+lab = sys.argv[1]
+# Root runs the installer; the account running it is accepted as well.
+owners = {0, os.geteuid()}
+
+
+def refuse(path, reason):
+    raise SystemExit(f'refusing to install the login profile: {path} {reason}. '
+                     'Install from a lab directory that only root can change.')
+
+
+def check(path, kind='directory', on_the_way=False):
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        refuse(path, 'does not exist')
+    if info.st_uid not in owners:
+        refuse(path, 'is not owned by root')
+    if stat.S_ISLNK(info.st_mode):
+        if on_the_way:
+            return  # the resolved path is checked as well
+        refuse(path, 'is a symbolic link')
+    if not (stat.S_ISREG if kind == 'file' else stat.S_ISDIR)(info.st_mode):
+        refuse(path, f'is not a {"regular file" if kind == "file" else "directory"}')
+    # On the way to the lab directory a sticky directory such as /tmp is allowed:
+    # others can add entries there but cannot replace root's.
+    if info.st_mode & 0o022 and not (on_the_way and info.st_mode & stat.S_ISVTX):
+        refuse(path, 'is writable by its group or by others')
+
+
+resolved = os.path.realpath(lab)
+for top in (os.path.abspath(lab), resolved):
+    parts = top.split('/')[1:]
+    for depth in range(len(parts) + 1):
+        check('/' + '/'.join(parts[:depth]), on_the_way=True)
+check(resolved)
+check(os.path.join(resolved, 'facilitator'))
+for name in ('facilitator/participant-profile.sh', 'facilitator/allocation-env.py', 'lab.env'):
+    path = os.path.join(resolved, name)
+    # lab.env is generated on site and may come later; only root can add it then.
+    if name != 'lab.env' or os.path.lexists(path):
+        check(path, kind='file')
+PY
 fi
 
 # The schedule file is checked before this installer changes anything, so a refused

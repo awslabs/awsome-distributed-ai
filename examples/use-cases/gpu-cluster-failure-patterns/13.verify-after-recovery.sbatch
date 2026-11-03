@@ -422,6 +422,24 @@ if [ "$fixture" -ne 0 ]; then
   fi
   exit 1
 fi
+# The storage workload below writes on its writer's node only, rank 0 on the first
+# node. A storage incident can fill the other node's directory, and `test -w`
+# passes on a full directory. So each node also writes a small file, flushes it to
+# the file system and removes it; storage=0 needs this write on every node too.
+printf '   checkpoint write on each allocated node\n'
+# shellcheck disable=SC2016  # expanded by the shell on each node
+srun -N2 -n2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
+  bash -c 'probe=/run/aim344-checkpoints/.aim344-write-probe-$SLURM_JOB_ID-$SLURM_PROCID
+    if error=$(printf "AIM344 write probe\n" | dd of="$probe" conv=fsync status=none 2>&1); then
+      result=yes
+    else
+      result="NO ($(printf "%s\n" "$error" | head -n 1))"
+    fi
+    rm -f -- "$probe"
+    printf "   %s: write_probe=%s\n" "$(hostname)" "$result"
+    [ "$result" = yes ]'
+write_probe=$?
+printf '   write_probe_on_all_nodes_exit_code=%s (dimensionless)\n' "$write_probe"
 export GPUS_PER_NODE=8 MASTER_PORT=$((29600 + SLURM_JOB_ID % 100)) FI_EFA_USE_HUGE_PAGE=0
 # An IP address, not the Slurm node name. `scontrol show hostnames` returns the
 # scheduler's names (gpu-g7-1), and those do not resolve inside the container:
@@ -467,6 +485,10 @@ SLURM_MPI_TYPE=none srun -N2 -n2 --ntasks-per-node=1 --cpus-per-task="${AIM344_C
   bash /opt/aim344/torch-node.sh storage 2>&1 | tee "$out/storage.log"
 storage=${PIPESTATUS[0]}
 printf '   storage_exit_code=%s (dimensionless)\n' "$storage"
+# A completed workload does not clear a node whose directory refused the write.
+if [ "$storage" -eq 0 ] && [ "$write_probe" -ne 0 ]; then
+  storage=$write_probe
+fi
 [ "$storage" -eq 0 ] || status=1
 
 # Check 5 may be reused by storage above. Teardown belongs after both workloads
