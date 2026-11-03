@@ -38,7 +38,9 @@ case ${LLM_TRANSPORT:-efa} in
     # Under RDMA, NCCL runs all-reduce from 64 KiB to 8 MiB on two g7.48xlarge
     # as LL, which is many times slower there than Simple (numbers in
     # lib/instance-type.sh). NCCL_PROTO=^LL would enable LL128 over PCIe.
-    efa) export FI_PROVIDER=efa NCCL_NET='AWS Libfabric' OFI_NCCL_PROTOCOL=RDMA NCCL_PROTO=Simple
+    # An NCCL_PROTO set by the caller is kept; an empty one lets NCCL choose.
+    efa) export FI_PROVIDER=efa NCCL_NET='AWS Libfabric' OFI_NCCL_PROTOCOL=RDMA NCCL_PROTO=${NCCL_PROTO-Simple}
+         [[ -n $NCCL_PROTO ]] || unset NCCL_PROTO
          unset NCCL_NET_PLUGIN NCCL_GIN_PLUGIN ;;
     socket) export FI_PROVIDER=efa NCCL_NET=Socket OFI_NCCL_PROTOCOL=RDMA NCCL_NET_PLUGIN=none NCCL_GIN_PLUGIN=none ;;
     *) printf 'LLM_TRANSPORT must be efa or socket\n' >&2; exit 2 ;;

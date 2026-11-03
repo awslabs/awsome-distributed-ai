@@ -1094,7 +1094,7 @@ class NcclProtocolSettingTests(unittest.TestCase):
             self.assertIn('OFI_NCCL_PROTOCOL', names)
             self.assertIn('NCCL_PROTO', names)
 
-    def test_training_launcher_sets_simple_for_efa_only(self):
+    def test_training_launcher_sets_simple_for_efa_unless_the_caller_sets_nccl_proto(self):
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
             stub(bin_dir, 'srun', 'printf "%s\\n" "OFI_NCCL_PROTOCOL=${OFI_NCCL_PROTOCOL-unset}" '
@@ -1106,9 +1106,14 @@ class NcclProtocolSettingTests(unittest.TestCase):
                        LAB_IMAGE='/fsx/image.sqsh', LLM_DATA_DIR='/fsx/data', LLM_RESULTS_DIR='/fsx/results',
                        NCCL_SOCKET_IFNAME='=enp71s0')
             env.pop('NCCL_PROTO', None)
-            for transport, proto in (('efa', 'Simple'), ('socket', 'unset')):
-                with self.subTest(transport=transport):
-                    output = subprocess.run(['bash', str(LAB / '2.run-llm.sh')], env=dict(env, LLM_TRANSPORT=transport),
+            # A caller's NCCL_PROTO is kept, and an empty one is unset so that NCCL chooses.
+            for transport, caller, proto in (('efa', None, 'Simple'), ('socket', None, 'unset'),
+                                             ('efa', 'LL', 'LL'), ('efa', '', 'unset')):
+                with self.subTest(transport=transport, caller=caller):
+                    run_env = dict(env, LLM_TRANSPORT=transport)
+                    if caller is not None:
+                        run_env['NCCL_PROTO'] = caller
+                    output = subprocess.run(['bash', str(LAB / '2.run-llm.sh')], env=run_env,
                                             check=True, capture_output=True, text=True).stdout.splitlines()
                     self.assertEqual(output[:3], ['OFI_NCCL_PROTOCOL=RDMA', f'NCCL_PROTO={proto}',
                                                   'NCCL_DEBUG_SUBSYS=INIT,NET,ENV'])

@@ -25,7 +25,7 @@ The tools then source `~/.aim347/allocation.env` if it exists. `hold-and-measure
 
 | Key | Values | Meaning |
 |---|---|---|
-| `LLM_TRANSPORT` | `socket`, `efa` | NCCL sends collectives over TCP sockets, or over EFA through the AWS Libfabric plugin with `OFI_NCCL_PROTOCOL=RDMA` and `NCCL_PROTO=Simple` |
+| `LLM_TRANSPORT` | `socket`, `efa` | NCCL sends collectives over TCP sockets, or over EFA through the AWS Libfabric plugin with `OFI_NCCL_PROTOCOL=RDMA` and `NCCL_PROTO=Simple` (an `NCCL_PROTO` set in your shell takes its place, see [nccl-protocols.sh](#nccl-protocolssh)) |
 | `ATTENTION` | `eager`, `sdpa` | The Transformers attention implementation |
 | `CHECKPOINT_MODE` | `none`, `sync`, `process` | No saving, synchronous saves, or saves written by a separate process while training continues |
 
@@ -157,6 +157,8 @@ bash tools/nccl-protocols.sh
 ```
 
 Runs nccl-tests over EFA on the held nodes, once with NCCL's own protocol choice and once with `NCCL_PROTO=Simple`. The workshop does not need it. `2.run-llm.sh` sets `NCCL_PROTO=Simple` for EFA stages because on two `g7.48xlarge` under `OFI_NCCL_PROTOCOL=RDMA`, NCCL chooses its LL protocol for all-reduce from 64 KiB to 8 MiB, and from 1 MiB that range runs many times slower than with Simple ([VALIDATION.md](../VALIDATION.md#nccl-protocol-on-the-efa-path-2026-11-03)).
+
+`2.run-llm.sh` keeps an `NCCL_PROTO` that is already set in your shell, so you can run a training stage the same way. `NCCL_PROTO= bash tools/run.sh efa` (an empty value) leaves `NCCL_PROTO` unset, so that NCCL chooses its protocol as in the first run of this tool, and `NCCL_PROTO=LL bash tools/run.sh efa` requests LL. The `NCCL_PROTO` line of the result block shows what NCCL logged, and `configuration.nccl_protocol` in `summary.json` records the value (`auto` when unset). Such a run replaces the stage like any rerun: the earlier `efa` moves to `attempts/`, and `progression.py` uses the new run.
 
 The tool needs the session allocation and refuses while a stage runs. Both runs use `all_reduce_perf` from 1 MiB to 64 MiB on all 16 GPUs, one MPI rank per GPU, in the training image, with the EFA settings of `2.run-llm.sh`. The first leaves `NCCL_PROTO` unset, so that NCCL chooses the protocol, and the second sets `NCCL_PROTO=Simple`. With `NCCL_DEBUG_SUBSYS=INIT,NET,ENV,TUNING`, rank 0 logs the algorithm and protocol of every collective. NCCL writes its log to one file per process, `nccl-<host>-<pid>.log`, so that the table on standard output stays readable. The rank script is `lib/nccl-protocols-rank.sh`.
 
