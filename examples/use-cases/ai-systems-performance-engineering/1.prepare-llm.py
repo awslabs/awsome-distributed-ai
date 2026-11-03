@@ -2,11 +2,12 @@
 """Stage a finite, attributed real-text dataset with pinned public artifacts."""
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'lib'))
-from llm_data import write_documents
+from llm_data import Documents, write_documents
 
 
 def main():
@@ -47,8 +48,20 @@ def main():
                                           'LICENSE', 'README.md'])
         (args.output / 'model' / 'aim347-pin.json').write_text(json.dumps({
             'model_id': cfg['model_id'], 'model_revision': cfg['model_revision']}, indent=2) + '\n')
+    # Reads the written files back and checks their sizes and fingerprint against the manifest.
+    Documents(args.output / args.tokens_name)
     print(json.dumps(result, indent=2))
 
 
 if __name__ == '__main__':
     main()
+    # Every output is written, closed and checked, so the process ends here without
+    # finalizing the interpreter. The stream of documents stops inside a parquet file.
+    # datasets reads parquet through pyarrow's scanner, which keeps reading ahead from
+    # the Hugging Face file object on Arrow's I/O threads, so at exit one such read is
+    # usually still in Python's HTTP code. When it returns during finalization, Python
+    # 3.10 ends that thread, and pyarrow's GIL guard aborts the process ("Fatal Python
+    # error: PyGILState_Release", exit 134). pyarrow cannot wait for its I/O threads.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
