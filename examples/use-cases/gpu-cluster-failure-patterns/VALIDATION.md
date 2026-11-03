@@ -2,6 +2,31 @@
 
 This distribution summary preserves the scope of the measured results without deployment identifiers, private artifact locations or incident-derived teaching material. Original detailed records, failed attempts and exact source/deployment mappings remain unchanged with the workshop owner. The latest section describes an installed, fixed development candidate; historical sections retain their original scope. This documentation update performs no new hardware run.
 
+## November 3, 2026: allocations without a time limit
+
+Each seat holds its own two nodes for the session, so the participant pages take their allocations without `--time`. Until this change, `job.sh`, `11.device-workload.sh` and the active FLR of `facilitator/device-fault.sh` refused an allocation whose time limit was not 1 to 10 minutes. No hardware run has used this change yet. The tests run on a CPU-only host.
+
+What changed:
+
+- `job.sh`, `11.device-workload.sh` and `facilitator/device-fault.sh` no longer read the allocation's time limit, so an allocation with the partition's default limit, `UNLIMITED` included, is accepted. The other checks stay. The job name starts with `aim344-`, the login profile sets `AIM344_EFA_DEVICE`, the allocation holds two nodes, and the lab controls act only on the one RUNNING job of the seat's participant account on the target.
+- The device step of the `efa-reset` incident and of `11.device-workload.sh` has no launcher timeout, and the allocation's limit was its only bound. `common.sh` `run_torch` now gives that step a Slurm step time limit of six minutes (`srun --time=6`). At that limit Slurm sends SIGTERM and, after KillWait, SIGKILL, as it did at the allocation's limit, and the `srun` client and its log stay attached. In the recorded g7.48xlarge runs, the whole device incident ended within 2.5 minutes.
+- An allocation without a limit can still be running when its round reaches the deadline. Recovery refuses the round's own RUNNING job and ends no job, so before this change the deadline sweep counted a refused attempt on each pass and stopped after three. The sweep now counts nothing while that job runs. It reports the job, changes nothing, and recovers the node on a later pass after the job ends. A job that is not the round's still counts as an attempt and is refused as before.
+- While that job runs, `recover` now refuses with `The faulted allocation is still active. Collect your evidence, end the allocation with exit in the terminal that holds it, then run recover. No job was killed.`
+- README.md and DEVICE-RECOVERY.md no longer give `--time` in their `salloc` lines or a 20-minute limit for the DataLoader controls. `13.verify-after-recovery.sbatch` keeps its own `#SBATCH --time=00:25:00`, which bounds that batch job. The lab checks no allocation against it.
+
+The earlier sections below describe the launcher of their date, including its check of the time limit.
+
+What the tests cover:
+
+- `tests/test_job_launcher.py`: `job.sh run` in allocations whose limit is `UNLIMITED`, `2-00:00:00`, `08:00:00`, `00:30:00` or `00:00:30`, the job-name refusal in an `UNLIMITED` allocation, a launcher that reads no time limit, and `--time=6` on the device step and on no other torch step.
+- `tests/test_active_flr.py`: the root helper's GPU and EFA active FLR in allocations whose limit is `UNLIMITED`, `7-00:00:00` or `01:00:00`; its refusal of another account, another job name and another job id in an `UNLIMITED` allocation; the deadline sweep, which waits four passes for the round's RUNNING job without counting an attempt, then counts one once the job is COMPLETING; one counted attempt for a job that is not the round's; and the text of the `recover` refusal.
+- `tests/test_replacement_verification.py`: `11.device-workload.sh` in an `UNLIMITED` allocation, with `--time=6` on its step only.
+
+Still to measure on hardware:
+
+- A device incident in an allocation taken without `--time` on the g7.48xlarge pair: Slurm accepts `srun --time=6` in it and shows the step's limit in `scontrol show step`.
+- A device step that Slurm ends at its six-minute limit, and the deadline sweep's report for a round whose job still runs past its deadline.
+
 ## November 3, 2026: a busy controller, and which incident `ended` ends
 
 The end-to-end run of the [previous section's change](#november-3-2026-status-after-an-incident-ends-the-help-lines-and-an-older-lab-record-file) on the g7.48xlarge pair, and two independent reviews of that change, found the problems this change fixes. No hardware run has used it yet. The tests run on a CPU-only host.

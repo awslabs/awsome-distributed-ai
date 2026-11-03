@@ -238,14 +238,23 @@ run_torch() {
     prepare_torch
     run_id=${AIM344_RUN_ID:-$phase-$(date -u +%Y%m%dT%H%M%SZ)}
     # Device faults can leave GPU cleanup in D-state beyond the watchdog.
-    # Keep tee attached through Slurm's bounded allocation walltime, rather
-    # than SIGKILL the srun client and close evidence at 210 seconds.
+    # The device step therefore has no launcher timeout, which would SIGKILL
+    # the srun client and close the evidence at 210 seconds. Slurm ends it at
+    # the step's own time limit of six minutes instead (srun --time, KillWait
+    # between SIGTERM and SIGKILL), while tee stays attached. The allocation
+    # may have no time limit, so this step limit is the device step's bound.
+    # In the recorded g7.48xlarge runs, the whole device incident, container
+    # preparation included, ended within 2.5 minutes.
     # job.sh sets AIM344_JOB_LIMIT_SECONDS for a job that must end sooner.
     local limit=${AIM344_JOB_LIMIT_SECONDS:-180}
     [[ $limit =~ ^[1-9][0-9]*$ ]] || { echo "AIM344_JOB_LIMIT_SECONDS must be a positive number of seconds; got: $limit" >&2; return 2; }
     local -a deadline=(timeout --signal=TERM --kill-after=30s "${limit}s")
+    local -a step_limit=()
     local -a evidence=()
-    [[ $phase != device ]] || deadline=()
+    if [[ $phase == device ]]; then
+        deadline=()
+        step_limit=(--time=6)
+    fi
     # Every torch job creates its container on both nodes before its own step,
     # within a bound of its own, so that a cold start does not count against the
     # job's limit. Every job prints the same line here, so the line names no
@@ -281,7 +290,7 @@ run_torch() {
         lab_args=(--lab-dir="/results/$LAB_RECORDS")
     fi
     SLURM_MPI_TYPE=none "${deadline[@]}" \
-        srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
+        srun "${step_limit[@]}" --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
         "${CONTAINER_ARGS[@]}" bash /opt/aim344/torch-node.sh "$@" "${lab_args[@]}" < /dev/null \
         2>&1 | tee "$RESULTS_DIR/$run_id.log" "${evidence[@]}" || rc=$?
     printf 'launcher_exit_code=%s (dimensionless)\n' "$rc" | tee "$RESULTS_DIR/$run_id.status.log"

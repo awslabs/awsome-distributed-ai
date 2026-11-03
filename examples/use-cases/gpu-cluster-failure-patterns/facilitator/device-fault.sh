@@ -230,11 +230,10 @@ if args.action in ('gpu-flr', 'efa-flr'):
                     'The assigned GPU process is not the device workload fixture.')
         return pids
 
+    # The allocation's time limit is not checked: a seat holds its two nodes for
+    # the session. The lab's launcher (common.sh run_torch) gives the device
+    # step its own Slurm time limit; this helper does not read it.
     pids = active_job()
-    job_detail = command(str(slurm / 'scontrol'), 'show', 'job', str(args.job), '-o')
-    limit = re.findall(r'\bTimeLimit=(\S+)', job_detail)
-    require(len(limit) == 1 and re.fullmatch(r'00:0[1-9]:[0-5][0-9]|00:10:00', limit[0]),
-            'Active FLR requires a bounded allocation walltime of at most ten minutes.')
     traffic = {}
     if kind in ('gpu', 'efa'):
         # Both active rounds require actual fresh fabric traffic, not merely

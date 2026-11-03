@@ -223,6 +223,66 @@ class ActiveSession(fixture.Base):
             handler.recover()
         self.assertFalse(any(c[1] == 'reboot' for c in self.executor.slurm_calls))
 
+    def test_the_refusal_asks_for_exit_and_names_no_time_limit(self):
+        handler = self.make()
+        handler.start('efa', active=True)
+        with self.assertRaises(session.Refusal) as caught:
+            handler.recover()
+        self.assertIn('end the allocation with exit', str(caught.exception))
+        self.assertNotIn('walltime', str(caught.exception))
+
+    def sweep(self, now):
+        config = session.load_config(self.config_path, require_root_owned=False)
+        return session.sweep(
+            config, clock=lambda: now,
+            session_factory=lambda assignment_id, peer_uid: session.DeviceSession(
+                config, assignment_id, peer_uid=peer_uid,
+                executor=self.executor, clock=lambda: now))
+
+    def test_the_deadline_waits_for_the_rounds_running_job_and_counts_nothing(self):
+        # The allocation may have no time limit, so its job can outlast the
+        # deadline (round start 1000 s + 1800 s). Waiting is not an attempt.
+        for index, kind in enumerate(('gpu', 'efa')):
+            with self.subTest(kind=kind):
+                if index:
+                    self.tearDown()
+                    self.setUp()
+                self.make().start(kind, active=True)
+                before = self.make().store.read()
+                for now in (2801.0, 3101.0, 3401.0, 3701.0):
+                    late = self.make(now=now)
+                    result = late.expire()
+                    self.assertFalse(result.expired)
+                    self.assertIn('job 226 still runs on the exercise node', result.next_step)
+                    line = next(entry for entry in self.sweep(now) if entry.startswith('table-1'))
+                    self.assertIn('no deadline action taken', line)
+                    self.assertIn('No attempt was counted.', line)
+                after = self.make().store.read()
+                self.assertEqual(0, after.deadline_attempts)
+                self.assertEqual(before.phase, after.phase)
+                self.assertFalse(any(c[1] == 'reboot' for c in self.executor.slurm_calls))
+                # Once the participant ends the allocation, the sweep tries recovery
+                # and counts that attempt.
+                self.executor.jobs = ['226|aim344-t1|aim344-device|COMPLETING']
+                with contextlib.suppress(session.Refusal):
+                    self.make(now=4001.0).expire()
+                self.assertEqual(1, self.make().store.read().deadline_attempts)
+
+    def test_the_deadline_still_counts_a_job_that_is_not_the_rounds(self):
+        for index, job in enumerate(('227|aim344-t1|aim344-device|RUNNING',
+                                     '226|aim344-t2|aim344-device|RUNNING',
+                                     '226|aim344-t1|interactive|RUNNING')):
+            with self.subTest(job=job):
+                if index:
+                    self.tearDown()
+                    self.setUp()
+                self.make().start('gpu', active=True)
+                self.executor.jobs = [job]
+                with self.assertRaises(session.Refusal):
+                    self.make(now=2801.0).expire()
+                self.assertEqual(1, self.make().store.read().deadline_attempts)
+                self.assertFalse(any(c[1] == 'reboot' for c in self.executor.slurm_calls))
+
     def test_exact_completing_job_never_allows_resume(self):
         handler = self.make()
         state = handler.start('gpu', active=True).state
@@ -923,7 +983,8 @@ class TargetHelper(unittest.TestCase):
     """Execute the actual embedded helper, with only OS/sysfs/Slurm boundaries fake."""
     def exercise(self, kind='gpu', foreign=False, wrong_ack=False, traffic=True,
                  reason='aim344-device-recovery', reason_after=None,
-                 multi_default=False, selected_route='[{"dev":"ena0"}]'):
+                 multi_default=False, selected_route='[{"dev":"ena0"}]',
+                 time_limit='00:06:00', queue_row='226|aim344-t1|aim344-device'):
         import contextlib
         import select
         import stat
@@ -998,13 +1059,13 @@ class TargetHelper(unittest.TestCase):
                     raise AssertionError('Unexpected route command: ' + repr(args))
                 if args[0].endswith('/scontrol'):
                     if 'job' in args:
-                        return 'JobId=226 TimeLimit=00:06:00'
+                        return 'JobId=226 TimeLimit=' + time_limit
                     node_reads[0] += 1
                     observed_reason = reason_after if reason_after is not None and node_reads[0] > 1 else reason
                     return ('State=ALLOCATED+DRAIN\n   Reason=' + observed_reason.replace('\n', '\n          ') +
                             '\n   InstanceId=' + cfg['instance_id'])
                 if args[0].endswith('/squeue'):
-                    return '226|aim344-t1|aim344-device' + ('|RUNNING' if '%T' in args[-1] else '')
+                    return queue_row + ('|RUNNING' if '%T' in args[-1] else '')
                 if '--query-compute-apps=pid' in args:
                     return '123'
                 return cfg['gpu_uuid'] + ', 00000000:57:00.0'
@@ -1068,6 +1129,27 @@ class TargetHelper(unittest.TestCase):
                 writes, _, error = self.exercise(**options)
                 self.assertIsNotNone(error)
                 self.assertEqual([], writes)
+
+    def test_any_allocation_time_limit_is_accepted(self):
+        # A seat holds its two nodes for the session; the helper reads no time limit.
+        for kind in ('gpu', 'efa'):
+            for limit in ('UNLIMITED', '7-00:00:00', '01:00:00'):
+                with self.subTest(kind=kind, limit=limit):
+                    writes, output, error = self.exercise(kind=kind, time_limit=limit)
+                    self.assertIsNone(error)
+                    self.assertEqual('reset', writes[-1][0])
+                    self.assertIn('mutation-returned', output)
+        self.assertNotIn('TimeLimit', (LAB / 'facilitator/device-fault.sh').read_text())
+
+    def test_another_account_or_job_name_is_refused_with_any_time_limit(self):
+        for row in ('226|aim344-t2|aim344-device', '226|ubuntu|aim344-device',
+                    '226|aim344-t1|interactive', '227|aim344-t1|aim344-device'):
+            with self.subTest(row=row):
+                writes, output, error = self.exercise(time_limit='UNLIMITED', queue_row=row)
+                self.assertRegex(error or '', r'An unapproved job is using the target node|'
+                                              r'job identity or RUNNING state changed')
+                self.assertEqual([], writes)
+                self.assertNotIn('mutation-start', output)
 
     def test_field_shaped_reason_never_reaches_fake_sysfs(self):
         from test_slurm_reason import FOREIGN_SUFFIXES

@@ -1279,7 +1279,8 @@ class DeviceSession:
             raise Refusal('Replacement requires a readable queue.')
         if result.stdout.strip():
             state = self.store.read()
-            # Active GPU cleanup may remain CG even after walltime and reboot.
+            # Active GPU cleanup may keep the job CG after the allocation ends,
+            # even across a reboot.
             # Only this round's exact allocation may be retired with its target;
             # no scancel/pkill, and never a new job by the same participant.
             own = self._own_job(self._jobs_on_target())
@@ -4815,6 +4816,23 @@ class DeviceSession:
         raise Refusal('The exact assigned instance was requested to reboot through EC2; '
                       'completion is not established. Run recover again, then replace if required.')
 
+    def _round_job_running(self, state):
+        """Whether the active round's own job is the one RUNNING job on the target.
+
+        Any other queue, including an unreadable one, gives False, so that the
+        caller reaches the refusals of _require_recoverable_target as before.
+        """
+        if not state.active_fault or not state.job_id:
+            return False
+        try:
+            jobs = self._jobs_on_target()
+        except Refusal:
+            return False
+        return (len(jobs) == 1 and jobs[0]['id'] == str(state.job_id)
+                and jobs[0]['user'] == self.assignment['participant_user']
+                and jobs[0]['name'].startswith(self.assignment['job_name_prefix'])
+                and jobs[0]['state'] == 'RUNNING')
+
     def _require_recoverable_target(self, state):
         """Identity, drain and job ownership, before any recovery mutation.
 
@@ -4858,8 +4876,9 @@ class DeviceSession:
             if own['id'] != state.job_id:
                 raise Refusal('A different job is now using the fault target; nothing was changed.')
             if own['state'] != 'COMPLETING':
-                raise Refusal('The faulted allocation is still active. Keep collecting evidence; '
-                              'wait for its bounded walltime/exit, then run recover. No job was killed.')
+                raise Refusal('The faulted allocation is still active. Collect your evidence, '
+                              'end the allocation with exit in the terminal that holds it, '
+                              'then run recover. No job was killed.')
 
     def _require_replacement(self, state, reason):
         """Persist isolation's outcome, not a claim that replacement was performed."""
@@ -5037,6 +5056,15 @@ class DeviceSession:
                 return Result(state, expired=False, next_step=self._next_step(state))
             if state.deadline_at is None or self.clock() <= float(state.deadline_at):
                 return Result(state, expired=False, next_step=self._next_step(state))
+            # Recovery refuses the round's own RUNNING job and ends no job, and an
+            # allocation may have no time limit, so that job can outlast the
+            # deadline. Waiting for it is not a recovery attempt: nothing is counted
+            # or changed, and the next sweep looks again.
+            if self._round_job_running(state):
+                return Result(state, expired=False, next_step=(
+                    f'The round is past its deadline, and its job {state.job_id} still '
+                    'runs on the exercise node. A later sweep recovers the node after '
+                    'that job ends. No attempt was counted.'))
             # Count the attempt before trying it, not after. A recovery that dies
             # part way through must still leave evidence that this round was
             # already attempted, otherwise an unattended sweep would retry it
@@ -5125,7 +5153,7 @@ def sweep(config, clock=time.time, session_factory=None):
                            f'recovered_by {result.state.recovered_by}')
         else:
             summary.append(f'{assignment_id}: no deadline action taken '
-                           f'(phase {result.state.phase})')
+                           f'(phase {result.state.phase}). {result.next_step}')
     return summary
 
 

@@ -251,11 +251,10 @@ require_allocation() {
     local job
     job=$(scontrol show job "$SLURM_JOB_ID" -o) || refuse "Slurm did not describe your allocation $SLURM_JOB_ID; raise your hand."
     # The lab controls act only on a job of this account whose name starts with
-    # aim344- and whose walltime is at most 10 minutes. Every run is held to the
-    # same rule, so that no incident is singled out by a refusal.
+    # aim344-. Every run is held to the same rule, so that no incident is singled
+    # out by a refusal. The allocation's time limit is not checked: each seat holds
+    # its own two nodes for the session.
     [[ " $job " == *" JobName=aim344-"* ]] || refuse 'Take your allocation with the salloc line on your page: its job name starts with aim344-.'
-    [[ $job =~ (^|[[:space:]])TimeLimit=(00:0[1-9]:[0-5][0-9]|00:10:00)([[:space:]]|$) ]] \
-        || refuse 'Take your allocation with the salloc line on your page: job.sh runs in an allocation of 1 to 10 minutes.'
     [[ ${AIM344_EFA_DEVICE:-} =~ ^[A-Za-z0-9_]+$ ]] \
         || refuse 'AIM344_EFA_DEVICE is not set. Open a new terminal, whose login profile sets it, or raise your hand.'
     # The training stand-in uses this one EFA device on each node.

@@ -95,7 +95,7 @@ if '--mpi=pmix' in args:
 ''')
             control = binaries / 'scontrol'
             control.write_text('#!/bin/bash\nif [ "$2" = hostnames ]; then printf "node1\\nnode2\\n"; '
-                               'elif [ "$2" = job ]; then printf "TimeLimit=00:06:00\\n"; '
+                               'elif [ "$2" = job ]; then printf "TimeLimit=UNLIMITED\\n"; '
                                'else printf "NodeAddr=10.0.0.1\\n"; fi\n')
             for binary in (runner, control):
                 binary.chmod(0o755)
@@ -121,6 +121,10 @@ run_sweep baseline
             calls = [json.loads(line) for line in (root / 'argv').read_text().splitlines()]
             torch = [c for c in calls if '/opt/aim344/torch-node.sh' in c['argv']]
             self.assertEqual(len(torch), 5)
+            # The device workload runs in an allocation with no time limit; its step
+            # carries the launcher's own Slurm step limit, and no other torch step does.
+            self.assertEqual([['--time=6'], [], [], [], []],
+                             [[a for a in c['argv'] if a.startswith('--time')] for c in torch])
             for call in torch:
                 self.assertIn(f'--cpus-per-task={allocated_cpus}', call['argv'])
                 self.assertEqual(call['env']['GPUS_PER_NODE'], '8')

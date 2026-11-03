@@ -283,8 +283,8 @@ class Launcher(unittest.TestCase):
     def test_job_commands_need_the_pages_allocation_and_the_login_profile(self):
         cases = (({'SLURM_JOB_ID': ''}, 'inside your allocation'),
                  ({'TEST_JOB_NAME': 'interactive'}, 'job name starts with aim344-'),
-                 ({'TEST_TIME_LIMIT': '00:20:00'}, '1 to 10 minutes'),
-                 ({'TEST_TIME_LIMIT': '00:00:30'}, '1 to 10 minutes'),
+                 ({'TEST_JOB_NAME': 'interactive', 'TEST_TIME_LIMIT': 'UNLIMITED'},
+                  'job name starts with aim344-'),
                  ({'AIM344_EFA_DEVICE': ''}, 'AIM344_EFA_DEVICE is not set'),
                  ({'AIM344_EFA_DEVICE': 'x;y'}, 'AIM344_EFA_DEVICE is not set'))
         for verb in ('run', 'incident', 'rerun', 'resume'):
@@ -295,6 +295,22 @@ class Launcher(unittest.TestCase):
                     self.assertIn(message, result.stderr)
                     self.assertEqual([], self.next_calls())
                     self.assertEqual([], self.lines(self.calls))
+
+    def test_any_time_limit_of_the_allocation_is_accepted(self):
+        # A seat holds its own two nodes, so the allocation may carry the
+        # partition's default limit, UNLIMITED included, or any long limit.
+        for limit in ('UNLIMITED', '2-00:00:00', '08:00:00', '00:30:00', '00:00:30'):
+            with self.subTest(limit=limit):
+                self.reset_calls()
+                result = self.run_job('run', TEST_TIME_LIMIT=limit)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertNotIn('minutes', result.stderr)
+                self.assertEqual(2, len(self.torch_calls()), self.torch_calls())
+
+    def test_the_launcher_reads_no_time_limit(self):
+        text = JOB.read_text()
+        self.assertNotIn('TimeLimit', text)
+        self.assertNotIn('1 to 10 minutes', text)
 
     # ---------------------------------------------------------------- run
     def test_run_starts_the_healthy_job_the_epoch_job_then_the_sweep_and_never_asks_for_an_incident(self):
@@ -1328,6 +1344,21 @@ class CommonRunIds(unittest.TestCase):
         self.assertEqual(1, len(added), added)
         self.assertTrue(added[0].startswith('--signal=TERM --kill-after=30s 600s srun '), added)
         self.assertTrue(added[0].endswith(' --container-remap-root true'), added)
+
+    def test_the_device_step_carries_its_own_slurm_time_limit(self):
+        # The allocation may have no time limit, so Slurm ends the device step at
+        # a step limit of six minutes; the srun client and its log stay attached.
+        timeout = self.root / 'timeout'
+        timeout.write_text('#!/bin/bash\nshift 3\nexec "$@"\n')
+        timeout.chmod(0o755)
+        for phase, expected in (('device', ['--time=6']), ('job', [])):
+            with self.subTest(phase=phase):
+                (self.root / 'srun.calls').unlink(missing_ok=True)
+                self.assertEqual(0, self.run_common(f'run_torch {phase} device\n').returncode)
+                [step] = [call for call in self.srun_calls() if 'torch-node.sh' in call]
+                self.assertEqual(expected, [word for word in step.split() if word.startswith('--time')])
+                if expected:
+                    self.assertTrue(step.startswith('--time=6 --nodes=2 '), step)
 
     def test_sweep_inventory_goes_to_the_lab_log(self):
         lab = self.root / 'incident-2-lab.log'
