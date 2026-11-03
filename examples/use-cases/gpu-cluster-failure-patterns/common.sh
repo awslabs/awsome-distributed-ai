@@ -39,7 +39,7 @@ run_check5() (
     unset OMPI_MCA_btl_tcp_if_include NCCL_TESTS_SPLIT NCCL_TESTS_SPLIT_MASK
     unset NCCL_NET NCCL_NET_PLUGIN NCCL_IB_DISABLE FI_EFA_IFACE FI_EFA_DEVICE_NAME
     export SLURM_SPANK__SLURM_SPANK_OPTION_pyxis_container_name="aim344_check5_${SLURM_JOB_ID:?}"
-    export SLURM_SPANK__SLURM_SPANK_OPTION_pyxis_container_env=OMPI_MCA_pml,OMPI_MCA_btl,OMPI_MCA_btl_tcp_if_include,OMPI_MCA_btl_tcp_if_exclude,NCCL_SOCKET_IFNAME,FI_PROVIDER,FI_EFA_USE_HUGE_PAGE,OFI_NCCL_PROTOCOL,PMIX_MCA_gds
+    export SLURM_SPANK__SLURM_SPANK_OPTION_pyxis_container_env=OMPI_MCA_pml,OMPI_MCA_btl,OMPI_MCA_btl_tcp_if_include,OMPI_MCA_btl_tcp_if_exclude,NCCL_SOCKET_IFNAME,FI_PROVIDER,FI_EFA_USE_HUGE_PAGE,OFI_NCCL_PROTOCOL,NCCL_PROTO,PMIX_MCA_gds
     # Initialize both roots before NCCL's bounded collective/isolation timers.
     # This timeout is configurable, not a claim that cold extraction was qualified.
     local start=$SECONDS rc=0

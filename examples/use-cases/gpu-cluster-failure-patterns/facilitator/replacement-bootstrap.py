@@ -241,7 +241,7 @@ def verification_environment(manifest):
                'NCCL_TIMEOUT', 'NCCL_ISOLATION_TESTS', 'NCCL_ISOLATION_TIMEOUT',
                'AIM344_CHECK5_TIMEOUT', 'AIM344_CONTAINER_PREP_TIMEOUT',
                'NCCL_SOCKET_IFNAME', 'OMPI_MCA_pml', 'OMPI_MCA_btl',
-               'OMPI_MCA_btl_tcp_if_exclude', 'PMIX_MCA_gds', 'OFI_NCCL_PROTOCOL',
+               'OMPI_MCA_btl_tcp_if_exclude', 'PMIX_MCA_gds', 'OFI_NCCL_PROTOCOL', 'NCCL_PROTO',
                'FI_EFA_USE_HUGE_PAGE', 'FI_PROVIDER', 'NCCL_DEBUG', 'TORCH_IMAGE',
                'NCCL_ENROOT_IMAGE', 'AIM344_EXPECTED_EFA_DEVICES', 'CPUS_PER_RANK'}
     overrides = manifest.get('verification_environment', {})

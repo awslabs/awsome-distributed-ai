@@ -310,7 +310,9 @@ exit "${LOCAL_SUITE_EXIT:-0}"
             spec.loader.exec_module(bootstrap)
             manifest = {'verification_environment': {'PARTITION': 'assigned-queue',
                         'NCCL_CONTAINER': '/opt/aim344/aim344.sqsh',
-                        'NCCL_SOCKET_IFNAME': '=eth0', 'PMIX_MCA_gds': 'hash'}}
+                        'NCCL_SOCKET_IFNAME': '=eth0', 'PMIX_MCA_gds': 'hash',
+                        # The g7.48xlarge site value (VALIDATION.md, November 3, 2026).
+                        'NCCL_PROTO': 'Simple'}}
             (companion / 'lab.env').write_text(launch_environment or bootstrap.verification_environment(manifest))
             env.update(LAB_DIR=str(companion), OMPI_MCA_btl_tcp_if_include='bad-include',
                        NCCL_TESTS_SPLIT='bad-split', NCCL_NET='bad-net',
@@ -382,6 +384,8 @@ exit "${LOCAL_SUITE_EXIT:-0}"
                         'NCCL_ISOLATION_TESTS': '1', 'NCCL_ISOLATION_TIMEOUT': '120',
                         'NCCL_SOCKET_IFNAME': '=eth0', 'OMPI_MCA_pml': 'ob1',
                         'OMPI_MCA_btl': 'tcp,self', 'PMIX_MCA_gds': 'hash', 'OFI_NCCL_PROTOCOL': 'RDMA'}
+            if launch_environment is None:
+                expected['NCCL_PROTO'] = 'Simple'
             for key, value in expected.items():
                 self.assertEqual(launch['env'][key], value)
             self.assertEqual(launch['env']['SLURM_MPI_TYPE'], 'pmix')
@@ -395,6 +399,7 @@ exit "${LOCAL_SUITE_EXIT:-0}"
             self.assertEqual(launch['env'][spank + 'name'], 'aim344_check5_123')
             self.assertIn('OMPI_MCA_btl_tcp_if_include', launch['env'][spank + 'env'].split(','))
             self.assertIn('OMPI_MCA_btl_tcp_if_exclude', launch['env'][spank + 'env'].split(','))
+            self.assertIn('NCCL_PROTO', launch['env'][spank + 'env'].split(','))
             self.assertEqual(launch['argv'][:5], ['--check', '5', '--verbose', '--timeout', '360'])
             preps = [c for c in calls if c['argv'][-1] == 'true']
             self.assertTrue(preps)

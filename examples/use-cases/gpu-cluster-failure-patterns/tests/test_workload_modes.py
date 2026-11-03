@@ -476,6 +476,80 @@ class ReplicaCheckUnit(unittest.TestCase):
         self.assertEqual('00000000:B6:00.0', identity['pci'])
         self.assertEqual((5, 'GPU-1234'), (identity['index'], identity['uuid']))
 
+    def test_a_failed_all_gather_prints_no_comparison_and_no_agreement(self):
+        # Incident 5 on g7.48xlarge: the all-gather of step 184 could not complete,
+        # the watchdog recorded the error and then aborted the communicator, and the
+        # read returned this rank's new checksum among the previous step's values.
+        import contextlib
+        import io
+        from unittest import mock
+        workload = load_workload()
+        clean = self.make(workload, 0)
+
+        def run(watchdog_records_the_error):
+            check = self.make(workload, 4)
+            error = {'recorded': False}
+
+            def all_gather(gathered, local):
+                if self.step == 184:
+                    # Only this rank's own slot is refreshed before the abort releases the read.
+                    error['recorded'] = watchdog_records_the_error
+                else:
+                    gathered.fill_(clean.checksum(self.step).item())
+                gathered[check.rank] = local[0]
+
+            output = io.StringIO()
+            with mock.patch.object(workload.dist, 'all_gather_into_tensor', side_effect=all_gather), \
+                    mock.patch.object(workload, 'nccl_error_recorded',
+                                      side_effect=lambda device: error['recorded']), \
+                    contextlib.redirect_stdout(output):
+                for self.step in (183, 184):
+                    check.step(self.step)
+                check.report(184)
+            return output.getvalue().splitlines()
+
+        # Without a recorded error the stale output reads as this rank's GPU differing.
+        lines = run(watchdog_records_the_error=False)
+        self.assertTrue(lines[0].startswith('AIM344 replica check: step=184; rank 4 ('), lines)
+        self.assertIn('differs from the other 15 ranks', lines[0])
+        self.assertIn('15/16 checksums agree over the last 2 steps; rank 4 differed on 1 of 2 steps.', lines[1])
+        self.assertEqual([], run(watchdog_records_the_error=True))
+
+    def test_after_a_failed_all_gather_a_rank_that_differed_prints_no_agreement(self):
+        # A rank flipped at step 37 would print "agrees again" at step 38; an
+        # aborted step-38 all-gather must not print it.
+        import contextlib
+        import io
+        from unittest import mock
+        workload = load_workload()
+        clean = self.make(workload, 0)
+        check = self.make(workload, 13, corrupt_rank=13, corrupt_step=37)
+        output = io.StringIO()
+        with mock.patch.object(workload.dist, 'all_gather_into_tensor',
+                               side_effect=self.gather_with_peers(workload, check, clean)), \
+                mock.patch.object(workload, 'nccl_error_recorded',
+                                  side_effect=lambda device: self.step >= 38), \
+                contextlib.redirect_stdout(output):
+            for self.step in (36, 37, 38):
+                check.step(self.step)
+        lines = output.getvalue().splitlines()
+        self.assertEqual(1, len(lines), lines)
+        self.assertIn('step=37; rank 13 (', lines[0])
+
+    def test_the_error_check_reads_the_nccl_process_group(self):
+        import torch
+        from torch._C._distributed_c10d import ErrorType
+        from unittest import mock
+        workload = load_workload()
+        self.assertFalse(workload.nccl_error_recorded(torch.device('cpu')))
+        for error, recorded in ((ErrorType.SUCCESS, False), (ErrorType.TIMEOUT, True),
+                                (ErrorType.COMM_ERROR, True), (ErrorType.REMOTE_ERROR, True)):
+            backend = mock.Mock(**{'get_error.return_value': error})
+            world = mock.Mock(**{'_get_backend.return_value': backend})
+            with mock.patch.object(workload.dist, 'group', SimpleNamespace(WORLD=world)):
+                self.assertIs(recorded, workload.nccl_error_recorded(torch.device('cuda', 5)), error)
+            world._get_backend.assert_called_once_with(torch.device('cuda', 5))
+
     def test_cuda_needs_the_cublas_workspace_setting(self):
         import torch
         workload = load_workload()

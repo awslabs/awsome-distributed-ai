@@ -108,6 +108,18 @@ Verify normal participant privilege negatives before the session: `sudo -n true`
 
 The fixed initializer also installs `aim344-enroot-parents.service`, required before `sysinit.target` and after tmpfiles setup. This recreates checked root-owned shared enroot parents after reboot cleanup, before a participant can create them privately. Runtime restoration repeats the same descriptor/ownership checks. An existing participant-owned parent is refused, not relabelled or deleted; the operator replaces a node with that ambiguous runtime. Verify actual service ordering, reboot and both participant accounts before declaring the successor qualified.
 
+### Images in the page cache
+
+A container start reads its image from the root volume unless the image is already in the page cache. On the g7.48xlarge pair, the first torch container on a node that had not read the image since its reboot took 168 s to create, and the launcher's 180 s limit ended the job before its first progress line. With the image cached, creation took about 5 s. Supported recovery leaves both images cached on the target, because its staging check hashes them in full. Nothing reads them on the other node, or on any node after a reboot or replacement that does not go through supported recovery.
+
+After each GPU node's last boot, and after any such reboot or replacement, read both images once on every GPU node, as root and on both nodes at the same time:
+
+```bash
+python3 /opt/aim344/device-recovery/companion/facilitator/image-cache.py read
+```
+
+Each node reads its own copy of the two images (22.26 GB), which at the root volume's 125 MiB/s takes about 170 s. Then, among the checks before participant access, run `image-cache.py check` on both nodes. It asks `mincore` which pages are resident and reads no data, so the check itself cannot warm a cold image. It must report every page of both images resident and exit 0; otherwise run `read` on that node again.
+
 ### Explicit existing-node upgrade (local root provisioning only)
 
 The normal parameterless SSM document remains a fresh-node/exact-repeat path;
@@ -197,6 +209,10 @@ Check the selected suite's shared `launch_args` before qualification. An explici
 For an explicitly two-interface `g7e.48xlarge` assignment, set `verification_environment.AIM344_EXPECTED_EFA_DEVICES` to the string `"2"` in the owner-controlled manifest. Bootstrap validates this launch assignment and writes it into the root-owned maintenance configuration and generated participant environment. Maintenance and the health Prolog use the root-owned count, not participant overrides or the possibly faulted device inventory. The matching health suite retains 8 GPUs, no NVLink and maximum 4 EFA capability; Check 2 requires exactly 2 assigned interfaces in PCI, driver-bound, RDMA, uverbs and unique provider-domain views. The two-node workload still requires all 16 GPU ranks. Existing correctness, bandwidth thresholds and WARN handling are unchanged; two-interface results do not qualify four-interface performance.
 
 Keep the matching suite and assignment together when preparing an accepted release. Without the assignment, the G7e profile expects four interfaces. The existing isolated upgrade writes both `lab.env` and `/etc/aim344-maintenance.json` before its ready receipt, as fresh initialization does. This is not an atomic multi-file or multi-node update; preserve admission isolation and the original receipt/manifest hashes through upgrade and retry. Local candidate preparation does not authorize deployment.
+
+### Check 5 protocol on G7
+
+For a `g7.48xlarge` assignment, set `verification_environment.NCCL_PROTO` to the string `"Simple"` in the owner-controlled manifest. Bootstrap writes it into the generated participant environment, and `run_check5` passes it into the Check 5 container together with `OFI_NCCL_PROTOCOL`. The torch and sweep launchers set the same value from the detected instance type, but Check 5 does not run that detection, so the manifest is how the value reaches it. Without it, NCCL runs Check 5's 1 to 8 MiB rows as LL at 0.25 to 0.30 GB/s on this instance. Do not set `^LL`: an exclusion list enables LL128 over PCIe. The measurement is in [VALIDATION.md](../VALIDATION.md#november-3-2026-the-replica-check-after-an-aborted-collective-the-nccl-protocol-on-g748xlarge-and-both-images-in-the-page-cache).
 
 ### Suite acquisition
 

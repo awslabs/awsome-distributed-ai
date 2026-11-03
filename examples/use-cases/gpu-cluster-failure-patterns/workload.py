@@ -603,6 +603,20 @@ def int32_bit_mask(bit):
     return (1 << bit) - (1 << 32 if bit == 31 else 0)
 
 
+def nccl_error_recorded(device):
+    """Whether this rank's NCCL watchdog has recorded a failed or timed-out collective.
+
+    A collective called without async_op is queued on the current stream, and reading
+    its output waits for it. A collective that cannot complete ends only when the
+    watchdog, which records the error first, aborts the communicator (torchrun sets
+    TORCH_NCCL_ASYNC_ERROR_HANDLING=1). The read then returns whatever part of the
+    output had arrived.
+    """
+    if device.type != 'cuda':
+        return False
+    return dist.group.WORLD._get_backend(device).get_error().name != 'SUCCESS'
+
+
 class ReplicaCheck:
     """Every rank computes the same matrix product and the ranks compare checksums.
 
@@ -614,7 +628,10 @@ class ReplicaCheck:
     rank compares them with the majority value. The job raises nothing: the rank
     whose sum differs prints one line naming its host, LOCAL_RANK, device index,
     UUID and PCI address when the disagreement starts and when it ends, and rank 0's
-    report line counts the window's disagreements beside the progress record.
+    report line counts the window's disagreements beside the progress record. A rank
+    compares only after an all-gather that completed: once its NCCL watchdog has
+    recorded a failed or timed-out collective, neither the rank's lines nor rank 0's
+    report line are printed.
 
     The simulated fault is a software flip of one bit of one element of `C` on the
     selected rank (`--corrupt-rank`), once at step index `--corrupt-step` or, with
@@ -664,6 +681,9 @@ class ReplicaCheck:
         local = self.checksum(step).reshape(1)
         dist.all_gather_into_tensor(self.gathered, local)
         values = self.gathered.tolist()
+        if nccl_error_recorded(self.device):
+            # The all-gather did not complete: its output is partly the previous step's.
+            return
         majority = Counter(values).most_common(1)[0][0]
         differing = {r for r, value in enumerate(values) if value != majority}
         who = (f'rank {self.rank} ({self.identity["host"]}, LOCAL_RANK {self.identity["local_rank"]}, '
@@ -681,6 +701,8 @@ class ReplicaCheck:
 
     def report(self, step):
         """Rank 0's summary of the steps since the previous report."""
+        if nccl_error_recorded(self.device):
+            return
         agreeing = self.world_size - len(self.window_differences)
         line = (f'{self.REPORT_PREFIX} step={step}; {agreeing}/{self.world_size} checksums agree '
                 f'over the last {self.window_steps} steps')

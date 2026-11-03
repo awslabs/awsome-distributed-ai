@@ -87,7 +87,7 @@ Invoke Check 5 once from the coordinator. It launches 1 MPI process per node wit
 
 The historical September 16 configuration explicitly set a 30 GB/s advisory for Check 5. Across six fresh allocations after accepted device recoveries, maximum bus bandwidth ranged from 38.18 GB/s through 39.64 GB/s with all 25 rows correct. The current generated environment does not set that advisory; the fixed G7 suite defaults to zero without an explicit override. Do not apply the historical floor or claim performance acceptance for the latest candidate. Compare the actual configuration and retain its provider/performance WARN.
 
-The Torch and optional long-sweep launchers select `OFI_NCCL_PROTOCOL=RDMA` for G7. Keep the runtime transport logs and physical counters as evidence. Leave `AIM344_EFA_IFACE` unset for the whole-node baseline; the facilitator may select the qualified physical EFA for the EFA fault round.
+The Torch and optional long-sweep launchers select `OFI_NCCL_PROTOCOL=RDMA` and `NCCL_PROTO=Simple` for G7, and a g7.48xlarge site manifest sets `NCCL_PROTO=Simple` for Check 5 ([Check 5 protocol on G7](facilitator/DEVICE-RECOVERY.md#check-5-protocol-on-g7)). Keep the runtime transport logs and physical counters as evidence. Leave `AIM344_EFA_IFACE` unset for the whole-node baseline; the facilitator may select the qualified physical EFA for the EFA fault round.
 
 ## Device fault and recovery
 

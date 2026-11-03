@@ -1729,6 +1729,9 @@ class BootstrapFiles(unittest.TestCase):
             bad['verification_environment']['AIM344_EXPECTED_EFA_DEVICES'] = count
             with self.subTest(count=count), self.assertRaises(RuntimeError):
                 helper.verification_environment(bad)
+        # The g7.48xlarge site sets the NCCL protocol for Check 5 through lab.env.
+        manifest['verification_environment']['NCCL_PROTO'] = 'Simple'
+        self.assertIn('export NCCL_PROTO=${NCCL_PROTO:-Simple}\n', helper.verification_environment(manifest))
         manifest.update(check5_suite_root='/opt/aim344/healthcheck-candidate-' + 'c' * 64, objects={})
         with self.assertRaisesRegex(RuntimeError, 'pinned archive'):
             helper.verification_environment(manifest)

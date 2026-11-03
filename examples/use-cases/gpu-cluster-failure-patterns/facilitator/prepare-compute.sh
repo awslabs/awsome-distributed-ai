@@ -22,4 +22,8 @@ install -d -o root -g root -m 0755 /var/lib/aim344-device-recovery
 install -o root -g root -m 0755 "$lab/facilitator/restore-runtime.sh" /var/lib/aim344-device-recovery/restore-runtime.sh
 install -o root -g root -m 0755 "$lab/facilitator/device-fault.sh" /usr/local/sbin/aim344-device-fault
 bash /var/lib/aim344-device-recovery/restore-runtime.sh "$participant" "$stage"
+# Read both images into the page cache, so that the first container start after
+# this boot does not read them from the volume. Run this script on every node at
+# the same time; each node reads its own copy.
+python3 "$lab/facilitator/image-cache.py" read "$stage/aim344.sqsh" "$stage/nccl-baseline.sqsh"
 sha256sum /opt/aim344/prejob-prolog.sh "$stage/healthcheck-pinned.tgz"
