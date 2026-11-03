@@ -2,6 +2,30 @@
 
 This distribution summary preserves the scope of the measured results without deployment identifiers, private artifact locations or incident-derived teaching material. Original detailed records, failed attempts and exact source/deployment mappings remain unchanged with the workshop owner. The latest section describes an installed, fixed development candidate; historical sections retain their original scope. This documentation update performs no new hardware run.
 
+## November 3, 2026: a busy controller, and which incident `ended` ends
+
+The end-to-end run of the [previous section's change](#november-3-2026-status-after-an-incident-ends-the-help-lines-and-an-older-lab-record-file) on the g7.48xlarge pair, and two independent reviews of that change, found the problems this change fixes. No hardware run has used it yet. The tests run on a CPU-only host.
+
+What changed:
+
+- The controller takes one request per seat at a time. In the end-to-end run, a `status` in terminal B arrived at the moment the device incident's launcher asked `next` after progress. The controller refused that request with `Another request for this assignment is in progress. Wait for it to finish, then run status.`, the launcher treated the refusal as final, and the job ran 120 seconds with no fault. The controller gives that reply before it does anything, so `job.sh` now sends such a request again, once a second for up to 30 seconds, and counts only the other replies as attempts. It does the same for the first `next` of `job.sh incident` and for `ended`. Any other refusal is still final.
+- `ended` takes the incident's issue id, which the profile now carries as `issue_id`, and the controller records the end of that incident only. Before, the controller ended the incident issued last, so an `ended` that arrived after a second terminal had issued the next incident ended that one.
+- A `dataloader` rerun with `--dataset-cache worker-thread` or `--reinit-in-worker` whose job completes sends `ended`, because the incident's page ends it with one of these fix runs. In the end-to-end run, `status` after those runs still said that Incident 3 was under way. A rerun without either option, or one whose job fails, sends nothing.
+- For the device incident, `ended` gives the same exit status and reply as for a job incident and records nothing, so its reply no longer tells the two kinds apart. The incident still ends with `recover`.
+- The controller refuses `ended` for an incident whose profile was never handed over, with `Incident <n> has not started yet; follow your page.`, and an issue id it never issued with `No incident with that issue id has been issued on your seat.`
+- `--operator status` prints `ended <time>` after the issue time of each job incident that has ended.
+
+The controller and `12.device-exercise.sh` have to be reinstalled with the launcher: the earlier controller refuses `ended` with an argument, and the earlier launcher sends it without one.
+
+What the tests cover:
+
+- `tests/test_quiz_controls.py`: the `ended <issue id>` grammar, a late `ended` for Incident 1 after Incident 2 was issued, an unknown issue id, an incident whose profile write failed, the device incident's reply compared with a job incident's, and the operator view's end time.
+- `tests/test_job_launcher.py`: busy replies to `ended`, to the first `next` and to the controller step's `next`, the 30-second bound, a refusal from another table that is not sent again, the issue id that `ended` carries, a profile without a valid issue id, the four completing fix reruns, and the reruns that do not end the incident. The `efa-reset` resume test now checks that no request of any verb is sent.
+
+Still to measure on hardware:
+
+- A `status` in terminal B while the device incident's launcher asks `next`, and `status` after Incident 3's fix run, on the g7.48xlarge pair.
+
 ## November 3, 2026: status after an incident ends, the help lines and an older lab-record file
 
 The end-to-end run of the [previous section's change](#november-3-2026-status-before-the-device-fault-the-kernel-window-collection-and-cleanup-failures) on the g7.48xlarge pair, and an independent review of that change, found the problems this change fixes. No hardware run has used it yet. The tests run on a CPU-only host.

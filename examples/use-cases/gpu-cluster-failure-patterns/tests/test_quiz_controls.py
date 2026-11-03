@@ -85,6 +85,13 @@ class QuizBase(fixture.Base):
         path = self.answers / 'device-226.log'
         path.write_text(self.progress(now))
 
+    def progress_record(self):
+        return json.loads((self.state_dir / 'schedule-table-1.json').read_text())
+
+    def issue_id(self, number):
+        """The issue id the controller recorded for incident `number`."""
+        return self.progress_record()['issued'][number - 1]['issue_id']
+
     def advance_to(self, number):
         """Issue incidents until `number` is the current one."""
         result = None
@@ -128,9 +135,12 @@ class Grammar(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIsNotNone(session.parse_participant_request(text).error)
 
-    def test_ended_takes_no_argument(self):
-        self.assertEqual('ended', session.parse_participant_request('ended').verb)
-        for text in ('ended 2', 'ended --incident 3'):
+    def test_ended_takes_one_issue_id(self):
+        issue = 'a' * 32
+        request = session.parse_participant_request(f'ended {issue}')
+        self.assertEqual(('ended', issue), (request.verb, request.argument))
+        for text in ('ended', 'ended 2', 'ended --incident 3', f'ended {issue} {issue}',
+                     'ended ' + 'A' * 32, 'ended ' + 'a' * 31, 'ended ' + 'g' * 32):
             with self.subTest(text=text):
                 self.assertIsNotNone(session.parse_participant_request(text).error)
 
@@ -139,7 +149,8 @@ class Grammar(unittest.TestCase):
 
     def test_entry_point_passes_next_and_lists_no_replace(self):
         text = ENTRY.read_text()
-        self.assertIn('next|ended|status|recover|replace)', text)
+        self.assertIn('next|status|recover|replace)', text)
+        self.assertIn('[[ $2 =~ ^[0-9a-f]{32}$ ]] || usage\n        request="ended $2"', text)
         usage = text[text.index("<<'USAGE'"):text.index('\nUSAGE\n')]
         self.assertIn('next ', usage)
         self.assertNotRegex(usage, r'\n  replace ')
@@ -386,7 +397,7 @@ class JobIncidents(QuizBase):
         profile = json.loads(Path(result.saved_path).read_text())
         self.assertEqual({'incident': 1, 'incidents': 4, 'exercise': 'storage',
                           'settings': {'writer_rank': 9}, 'controller_step': 'none',
-                          'issued_at': 1000.0}, profile)
+                          'issued_at': 1000.0, 'issue_id': self.issue_id(1)}, profile)
         self.assertEqual(self.answers / 'incidents' / 'incident-1.json',
                          Path(result.saved_path))
         self.assertEqual([], self.node_calls())
@@ -491,7 +502,7 @@ class JobIncidents(QuizBase):
     def test_after_resume_ends_an_incident_status_says_it_has_ended(self):
         """Code review batch 4, Nit 2, and Spain batch 4, finding 2."""
         self.advance_to(2)
-        code, out, err = self.run_main('ended', now=2000.0)
+        code, out, err = self.run_main(f'ended {self.issue_id(2)}', now=2000.0)
         self.assertEqual((0, ''), (code, err))
         self.assertEqual('Incident 2 has ended.\n', out)
         rendered = session.render(self.make().status(), 'status')
@@ -503,8 +514,8 @@ class JobIncidents(QuizBase):
             self.assertNotIn(name, rendered)
         self.assert_no_kind(rendered)
         # A second end keeps the first time, and the next incident is under way again.
-        self.run_main('ended', now=3000.0)
-        progress = json.loads((self.state_dir / 'schedule-table-1.json').read_text())
+        self.run_main(f'ended {self.issue_id(2)}', now=3000.0)
+        progress = self.progress_record()
         self.assertEqual(2000.0, progress['issued'][1]['ended_at'])
         self.assertNotIn('ended_at', progress['issued'][0])
         self.assertEqual(3, self.make().next().incident)
@@ -516,19 +527,68 @@ class JobIncidents(QuizBase):
         self.set_schedule(session.validate_schedule([{'exercise': 'storage'},
                                                      {'exercise': 'dataloader'}]))
         self.advance_to(2)
-        self.make().ended()
+        self.make().ended(self.issue_id(2))
         rendered = session.render(self.make().status(), 'status')
         self.assertIn('Next: Incident 2 has ended. It was the last incident for this seat.',
                       rendered)
         self.assertNotIn('Start the next incident', rendered)
 
     def test_ended_before_any_incident_or_without_a_schedule_is_refused(self):
-        with self.assertRaisesRegex(session.Refusal, 'No incident has been issued yet'):
-            self.make().ended()
+        with self.assertRaisesRegex(session.Refusal, 'No incident with that issue id has been '
+                                                     'issued on your seat'):
+            self.make().ended('a' * 32)
         del self.config_body['assignments']['table-1']['exercise_schedule']
         self.write_config()
         with self.assertRaisesRegex(session.Refusal, 'no incident schedule; raise your hand'):
-            self.make().ended()
+            self.make().ended('a' * 32)
+
+    def test_ended_marks_only_the_incident_it_names(self):
+        """Codex review of batch 5, finding 1: a late end must not end the next incident."""
+        self.advance_to(1)
+        first = self.issue_id(1)
+        self.make().next()
+        # Incident 1's resume finishes after terminal B issued Incident 2.
+        code, out, err = self.run_main(f'ended {first}', now=2000.0)
+        self.assertEqual((0, 'Incident 1 has ended.\n', ''), (code, out, err))
+        progress = self.progress_record()
+        self.assertEqual(2000.0, progress['issued'][0]['ended_at'])
+        self.assertNotIn('ended_at', progress['issued'][1])
+        self.assertIn('Next: Incident 2 is under way.',
+                      session.render(self.make().status(), 'status'))
+        # An issue id from another seat or an earlier pass ends nothing.
+        code, out, err = self.run_main('ended ' + 'b' * 32)
+        self.assertEqual((3, ''), (code, out))
+        self.assertEqual('No incident with that issue id has been issued on your seat.\n', err)
+        self.assertEqual(progress, self.progress_record())
+        self.assertEqual([], self.node_calls())
+
+    def test_ended_refuses_an_incident_whose_profile_was_not_handed_over(self):
+        """Code review batch 5, Nit 3."""
+        self.make().next()
+        os.chmod(self.answers / 'incidents', 0o500)
+        try:
+            with self.assertRaises(session.Refusal):
+                self.make().next()
+        finally:
+            os.chmod(self.answers / 'incidents', 0o700)
+        code, out, err = self.run_main(f'ended {self.issue_id(2)}')
+        self.assertEqual((3, ''), (code, out))
+        self.assertEqual('Incident 2 has not started yet; follow your page.\n', err)
+        self.assertNotIn('ended_at', self.progress_record()['issued'][1])
+        # Once next finishes the hand-over, the incident can end.
+        self.assertEqual(2, self.make().next().incident)
+        self.assertEqual(2, self.make().ended(self.issue_id(2)).incident)
+        self.assertIn('ended_at', self.progress_record()['issued'][1])
+
+    def test_the_operator_view_shows_when_an_incident_ended(self):
+        """Code review batch 5, Nit 6."""
+        self.advance_to(2)
+        self.make(now=1793699949.0).ended(self.issue_id(1))
+        view = session.operator_view(self.make())
+        [first] = [line for line in view.splitlines() if line.startswith('  1. ')]
+        self.assertTrue(first.endswith(' ended 2026-11-03T09:59:09Z'), first)
+        [second] = [line for line in view.splitlines() if line.startswith('  2. ')]
+        self.assertNotIn(' ended ', second)
 
     def test_collect_outside_a_controller_round_is_still_refused(self):
         self.make().next()
@@ -741,12 +801,15 @@ class DeviceIncident(QuizBase):
         self.assertEqual([], self.node_calls())
 
     def test_ended_does_not_end_the_device_incident_or_name_it(self):
-        self.advance_to(4)
-        code, out, err = self.run_main('ended')
-        self.assertEqual((3, ''), (code, out))
-        self.assertEqual('Incident 4 does not end this way; follow your page.\n', err)
-        self.assert_no_kind(err)
-        progress = json.loads((self.state_dir / 'schedule-table-1.json').read_text())
+        """Codex review of batch 5, finding 3: the reply is a job incident's."""
+        self.advance_to(3)
+        job = self.run_main(f'ended {self.issue_id(3)}')
+        self.make().next()
+        device = self.run_main(f'ended {self.issue_id(4)}')
+        self.assertEqual((0, 'Incident 4 has ended.\n', ''), device)
+        # The same exit status and text as a job incident's, apart from the number.
+        self.assertEqual(job, (device[0], device[1].replace('4', '3'), device[2]))
+        progress = self.progress_record()
         self.assertNotIn('ended_at', progress['issued'][3])
         self.assertIn('Next: Incident 4 is under way.',
                       session.render(self.make().status(), 'status'))

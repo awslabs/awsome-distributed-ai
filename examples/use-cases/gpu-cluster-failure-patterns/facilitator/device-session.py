@@ -16,17 +16,18 @@ come from validation/gpu-cluster-healthcheck, and every device mutation goes
 through the existing root-owned aim344-device-fault helper on the target.
 
 Scope of what a participant can cause, by construction:
-  start gpu | start efa | active gpu | active efa | next | ended | status |
-  collect <allowlisted check> | recover
+  start gpu | start efa | active gpu | active efa | next | ended <issue id> |
+  status | collect <allowlisted check> | recover
 No node name, PCI address, job identifier, shell command or check outside the
 collect allowlist is accepted. `replace` is accepted by the grammar and refused:
 an operator runs the replacement route after the session (--operator replace).
 
 `next` starts the next incident in the seat's schedule, which account preparation
-writes into this root-only configuration. `ended`, which job.sh resume sends
-after its job completes, records that the current job incident has ended. The
-replies of `next`, and status, collect and recover while that incident is
-unresolved, do not name the incident's kind; --operator status does.
+writes into this root-only configuration. `ended <issue id>`, which job.sh sends
+after a job that ends a job incident completes, records that the incident with
+that issue id has ended. The replies of `next` and `ended`, and status, collect
+and recover while that incident is unresolved, do not name the incident's kind;
+--operator status does.
 """
 import argparse
 import datetime
@@ -56,7 +57,7 @@ PHASES = ('ready', 'preparing', 'fault-applied', 'investigating', 'recovering',
 # Phases in which this assignment still holds its exercise node.
 HOLDING_PHASES = ('preparing', 'fault-applied', 'investigating', 'recovering',
                   'recovery-failed', 'replacement-required')
-USAGE = ('Commands: start gpu | start efa | active gpu | active efa | next | ended | status | collect <check> | recover')
+USAGE = ('Commands: start gpu | start efa | active gpu | active efa | next | ended <issue id> | status | collect <check> | recover')
 
 # The incidents a seat's schedule can name (v2 hour design, section 4). The job
 # exercises are applied by the participant's launcher inside their own job, so
@@ -925,9 +926,9 @@ class Request:
 def parse_participant_request(text):
     """The whole participant input grammar.
 
-    Accepts only: start gpu, start efa, active gpu, active efa, next, status,
-    collect <digits>|kernel, recover, replace. Anything else, including any
-    option, separator or newline, is an error.
+    Accepts only: start gpu, start efa, active gpu, active efa, next,
+    ended <issue id>, status, collect <digits>|kernel, recover, replace. Anything
+    else, including any option, separator or newline, is an error.
     """
     if text is None:
         return Request(error=f'No command given. {USAGE}')
@@ -950,10 +951,16 @@ def parse_participant_request(text):
         if arguments[0] not in ('gpu', 'efa'):
             return Request(error='The exercise provides start gpu and start efa only.')
         return Request(verb=verb, argument=arguments[0])
-    if verb in ('next', 'ended', 'status', 'recover', 'replace'):
+    if verb in ('next', 'status', 'recover', 'replace'):
         if arguments:
             return Request(error=f'{verb} takes no argument. {USAGE}')
         return Request(verb=verb)
+    if verb == 'ended':
+        # The issue id of the incident's profile, so that the request names one
+        # issued incident and never the one issued after it.
+        if len(arguments) != 1 or not ISSUE_ID.fullmatch(arguments[0]):
+            return Request(error=f'Use ended <issue id>. {USAGE}')
+        return Request(verb=verb, argument=arguments[0])
     if verb == 'collect':
         if len(arguments) != 1:
             return Request(error=f'Use collect <check>. {USAGE}')
@@ -3601,6 +3608,8 @@ class DeviceSession:
             'controller_step': ('next-after-progress'
                                 if planned['exercise'] in DEVICE_EXERCISES else 'none'),
             'issued_at': entry['issued_at'],
+            # job.sh sends it back with `ended`.
+            'issue_id': entry['issue_id'],
         }
         try:
             path = self._write_participant_file(
@@ -3716,29 +3725,34 @@ class DeviceSession:
                       already_started=result.already_started,
                       next_step=self.UNDER_WAY_STEP)
 
-    def ended(self):
-        """Record that the current job incident has ended.
+    def ended(self, issue_id):
+        """Record that the job incident with this issue id has ended.
 
-        job.sh resume sends this once its job has completed, which is the end of
-        a job incident. The device incident ends with recover, so it is refused
-        here without naming it. A second call keeps the first time.
+        job.sh sends this, with the issue id from the incident's profile, once a
+        job that ends a job incident has completed: a resume, or a fix run of the
+        DataLoader incident. Only that incident is marked, so a request that
+        arrives after the next incident was issued does not end the next one. The
+        device incident ends with recover. Its reply here is the same as a job
+        incident's, so that the reply does not tell the kinds apart, and nothing is
+        recorded. An incident whose profile was never handed over has not started
+        and is refused. A second call keeps the first time.
         """
         with self.store.exclusive_pair():
             schedule = self._schedule()
             if schedule is None:
                 raise Refusal('This seat has no incident schedule; raise your hand.')
             progress = self._read_progress(schedule)
-            issued = progress['issued']
-            if not issued:
-                raise Refusal('No incident has been issued yet.')
-            current = issued[-1]
-            if current['exercise'] in DEVICE_EXERCISES:
-                raise Refusal(f'Incident {current["number"]} does not end this way; '
+            entry = next((entry for entry in progress['issued']
+                          if entry['issue_id'] == issue_id), None)
+            if entry is None:
+                raise Refusal('No incident with that issue id has been issued on your seat.')
+            if entry['profile'] is None:
+                raise Refusal(f'Incident {entry["number"]} has not started yet; '
                               'follow your page.')
-            if 'ended_at' not in current:
-                current['ended_at'] = self.clock()
+            if entry['exercise'] not in DEVICE_EXERCISES and 'ended_at' not in entry:
+                entry['ended_at'] = self.clock()
                 _write_private_json(self._progress_path(), progress)
-            return Result(self.store.read(), incident=current['number'])
+            return Result(self.store.read(), incident=entry['number'])
 
     def _issued_progress(self):
         """(incidents issued, whether the latest has ended, schedule length), or
@@ -3752,16 +3766,12 @@ class DeviceSession:
             return 0, False, 0
         return len(issued), bool(issued and 'ended_at' in issued[-1]), len(schedule)
 
-    def _issued_count(self):
-        """How many incidents this seat has been given, or 0 when that cannot be read."""
-        return self._issued_progress()[0]
-
     def _next_step(self, state):
         issued, ended, total = (self._issued_progress() if state.phase == 'ready'
                                 else (0, False, 0))
-        # An issued incident is under way until job.sh resume reports that its job
-        # completed. The device incident also waits in this phase until its job
-        # reports progress, and resume never ends it, so before its fault the line
+        # An issued incident is under way until job.sh reports that a job that ends
+        # it completed. The device incident also waits in this phase until its job
+        # reports progress, and `ended` never marks it, so before its fault the line
         # is the same as a job incident's.
         if issued and ended and issued < total:
             ready = (f'Incident {issued} has ended. Start the next incident the way '
@@ -5285,6 +5295,10 @@ def operator_view(handler):
             when = datetime.datetime.fromtimestamp(
                 entry['issued_at'], datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
             row += f' issued {when} profile={entry["profile"]}'
+            if 'ended_at' in entry:
+                ended = datetime.datetime.fromtimestamp(
+                    entry['ended_at'], datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                row += f' ended {ended}'
             if same_issue(result.state.incident, entry):
                 row += f' round={result.state.round} phase={result.state.phase}'
             if entry.get('last_refusal'):
@@ -5369,7 +5383,7 @@ def main(argv=None):
         elif verb == 'next':
             result = handler.next()
         elif verb == 'ended':
-            result = handler.ended()
+            result = handler.ended(request.argument)
         elif verb == 'status':
             result = handler.status()
         elif verb == 'collect':

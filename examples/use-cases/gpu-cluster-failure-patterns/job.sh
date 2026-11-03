@@ -18,9 +18,11 @@
 # prints none of the incident's settings: the job reads them from
 # AIM344_INCIDENT_SETTINGS (workload.py apply_incident_settings). The lab's own
 # lines go to a lab log beside the profile, which the lab's operators read. run and
-# resume end by removing the allocation's containers from the GPU nodes. A resume
-# whose job completes tells the lab controls that the incident has ended
-# (12.device-exercise.sh ended), so that status stops calling it under way.
+# resume end by removing the allocation's containers from the GPU nodes. A job
+# that ends its incident tells the lab controls, with the profile's issue id, that
+# the incident has ended (12.device-exercise.sh ended <issue id>), so that status
+# stops calling it under way: a resume whose job completes, and a rerun of the
+# DataLoader incident with one of its page's two fixes whose job completes.
 set -euo pipefail
 LAB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
@@ -54,6 +56,12 @@ EPOCH_JOB=(dataloader --start-method fork --epochs 2 --stack-dump-seconds="$STAC
 # launcher keeps asking during one run.
 NEXT_ATTEMPTS=10
 NEXT_INTERVAL=3
+# The lab controls take one request per seat at a time. A request that arrives
+# while another one runs, such as a status typed in terminal B, is refused before
+# the controller does anything, so the launcher sends it again, once a second,
+# for up to BUSY_SECONDS, before it treats the reply as the answer.
+BUSY_SECONDS=30
+BUSY_REPLY='Another request for this assignment is in progress.'
 
 usage() {
     cat >&2 <<'USAGE'
@@ -257,14 +265,14 @@ require_allocation() {
 }
 
 # ---------------------------------------------------------------- profiles
-# Sets incident, exercise, writer_rank, incident_settings, rerun_settings and
-# resume_settings from one profile, after checking that it is this account's own
+# Sets incident, exercise, writer_rank, issue_id, incident_settings, rerun_settings
+# and resume_settings from one profile, after checking that it is this account's own
 # regular file and that this launcher applies every setting. The three settings
 # values are the JSON the job reads from AIM344_INCIDENT_SETTINGS, or - for none.
 read_profile() {
     local fields
     fields=$(python3 - "$1" 2>/dev/null <<'PY'
-import json, os, stat, sys
+import json, os, re, stat, sys
 path = sys.argv[1]
 handle = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
 info = os.fstat(handle)
@@ -274,6 +282,8 @@ with os.fdopen(handle) as stream:
     profile = json.load(stream)
 number, exercise = profile['incident'], profile['exercise']
 settings = profile.get('settings') or {}
+# The controller's identifier for this issuance, which ended sends back.
+issue = profile['issue_id']
 
 
 def rank(value):
@@ -301,6 +311,7 @@ applied = {'storage': {'writer_rank'}, 'slow-job': set(), 'efa-reset': set(),
            **{name: set(checks) for name, checks in workload.items()}}
 if (not isinstance(number, int) or isinstance(number, bool) or number < 1
         or not isinstance(exercise, str) or not exercise.replace('-', '').isalpha()
+        or not isinstance(issue, str) or not re.fullmatch('[0-9a-f]{32}', issue)
         or not isinstance(settings, dict)
         or set(settings) - applied.get(exercise, set(settings))
         or not all(workload[exercise][key](value) for key, value in settings.items()
@@ -330,10 +341,11 @@ def encoded(values):
     return json.dumps(values, sort_keys=True, separators=(',', ':')) if values else '-'
 
 
-print(number, exercise, writer, encoded(incident), encoded(rerun), encoded(resume))
+print(number, exercise, writer, issue, encoded(incident), encoded(rerun), encoded(resume))
 PY
 ) || refuse 'The incident profile cannot be used by this launcher; raise your hand.'
-    read -r incident exercise writer_rank incident_settings rerun_settings resume_settings <<< "$fields"
+    read -r incident exercise writer_rank issue_id incident_settings rerun_settings resume_settings \
+        <<< "$fields"
     profile=$1
     lab_log=${profile%.json}-lab.log
 }
@@ -425,14 +437,34 @@ progress_records() {
     printf '%s\n' "${count:-0}"
 }
 
+# Did the request just sent find the lab controls busy with another request?
+busy_reply() {
+    ((status != 0)) && [[ $reply == *"$BUSY_REPLY"* ]]
+}
+
+# Sends one request to the lab controls and sets status and reply. A busy reply
+# is sent again, once a second for up to BUSY_SECONDS; busy counts those replies.
+ask_controller() {
+    busy=0
+    while :; do
+        status=0
+        reply=$(bash "$LAB_DIR/12.device-exercise.sh" "$@" 2>&1) || status=$?
+        busy_reply && ((busy < BUSY_SECONDS)) || return 0
+        busy=$((busy + 1))
+        sleep 1
+    done
+}
+
 # Runs beside the job: once the job has printed two progress records, ask the lab
 # controls to act, until they reply that the incident is under way. A refusal is
-# final, even one that comes after they acted, so it is never asked again. The
-# step also ends when the launcher that started it is gone ($$ in this background
-# subshell is the launcher's process), so that no later job in the allocation can
-# make it ask.
+# final, even one that comes after they acted, so it is never asked again. A busy
+# reply is not such a refusal, because the controller refused the request before
+# acting: it is sent again, once a second for up to BUSY_SECONDS, after the same
+# checks as every attempt. The step also ends when the launcher that started it
+# is gone ($$ in this background subshell is the launcher's process), so that no
+# later job in the allocation can make it ask.
 controller_step() {
-    local copy=$1 stop=$2 attempt status reply
+    local copy=$1 stop=$2 attempt=0 busy=0 status reply
     until (( $(progress_records "$copy") >= 2 )); do
         if ! kill -0 "$$" 2>/dev/null; then
             lab_note 'controller step: the launcher ended before two progress records'
@@ -445,7 +477,7 @@ controller_step() {
         fi
         sleep 1
     done
-    for ((attempt = 1; attempt <= NEXT_ATTEMPTS; attempt++)); do
+    while ((attempt < NEXT_ATTEMPTS)); do
         [[ -e $stop ]] && break
         if ! kill -0 "$$" 2>/dev/null; then
             lab_note 'controller step: the launcher ended'
@@ -453,6 +485,13 @@ controller_step() {
         fi
         status=0
         reply=$(bash "$LAB_DIR/12.device-exercise.sh" next 2>&1) || status=$?
+        if busy_reply && ((busy < BUSY_SECONDS)); then
+            busy=$((busy + 1))
+            lab_note "next, busy reply $busy, exit $status: $reply"
+            sleep 1
+            continue
+        fi
+        attempt=$((attempt + 1))
         lab_note "next, attempt $attempt, exit $status: $reply"
         if ((status != 0)); then
             printf '%s\n' "$reply" >&2
@@ -605,6 +644,20 @@ incident_job() {
     esac
 }
 
+# A resume whose job completed ends its incident. So does a completed rerun of the
+# DataLoader incident with either fix its page gives, the dataset cache in the
+# worker or the worker's own re-initialization; without one the rerun stops as
+# the incident did.
+ends_incident() {
+    [[ $verb == resume ]] && return 0
+    [[ $exercise == dataloader ]] || return 1
+    local option
+    for option in "${rerun_options[@]}"; do
+        [[ $option == --dataset-cache=worker-thread || $option == --reinit-in-worker ]] && return 0
+    done
+    return 1
+}
+
 # The options rerun passes on to the DataLoader job, in the forms its page gives.
 rerun_options=()
 parse_rerun_options() {
@@ -662,16 +715,17 @@ case $verb in
         ;;
     incident)
         # Prepared before the request, so that a failure here leaves the incident
-        # unissued. Exactly one request for the incident itself; the incident in
-        # which the lab controls act asks again from controller_step, after progress.
+        # unissued. One request for the incident itself, sent again only while the
+        # lab controls are busy; the incident in which the lab controls act asks
+        # again from controller_step, after progress.
         ensure_prepared
-        status=0
-        reply=$(bash "$LAB_DIR/12.device-exercise.sh" next 2>&1) || status=$?
+        ask_controller next
         ((status == 0)) || { printf '%s\n' "$reply" >&2; exit "$status"; }
         handed=$(sed -n 's/^Profile: //p' <<< "$reply" | tail -n 1)
         [[ -n $handed ]] || { printf '%s\n' "$reply" >&2; refuse 'The lab controls handed over no incident profile; raise your hand.'; }
         read_profile "$handed"
         AIM344_LAB_LOG=$lab_log
+        ((busy == 0)) || lab_note "next: sent again after $busy busy replies"
         lab_note "next: $reply"
         printf 'Starting incident %s.\n' "$incident"
         incident_job incident
@@ -682,9 +736,9 @@ case $verb in
         incident_job "$verb"
         # Reached only when the job succeeded: a failed job exits above. The
         # job's status stays the launcher's, whatever this request answers.
-        if [[ $verb == resume ]]; then
-            status=0
-            reply=$(bash "$LAB_DIR/12.device-exercise.sh" ended 2>&1) || status=$?
+        if ends_incident; then
+            ask_controller ended "$issue_id"
+            ((busy == 0)) || lab_note "ended: sent again after $busy busy replies"
             lab_note "ended, exit $status: $reply"
             ((status == 0)) || printf 'The lab controls did not record that incident %s has ended; raise your hand.\n' "$incident" >&2
         fi

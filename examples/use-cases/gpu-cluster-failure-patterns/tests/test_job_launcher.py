@@ -130,12 +130,17 @@ class Launcher(unittest.TestCase):
         (self.replies / f'{call}.out').write_text(text)
         (self.replies / f'{call}.rc').write_text(str(rc))
 
+    @staticmethod
+    def issue_id(number):
+        return f'{number:032x}'
+
     def profile(self, number, exercise, settings=None, issued_at=100.0, name=None):
         path = self.incidents / (name or f'incident-{number}.json')
         path.write_text(json.dumps({
             'incident': number, 'incidents': 4, 'exercise': exercise,
             'settings': settings or {}, 'issued_at': issued_at,
-            'controller_step': 'next-after-progress' if exercise == 'efa-reset' else 'none'}))
+            'controller_step': 'next-after-progress' if exercise == 'efa-reset' else 'none',
+            'issue_id': self.issue_id(number)}))
         return path
 
     def issue(self, number, exercise, settings=None):
@@ -166,8 +171,12 @@ class Launcher(unittest.TestCase):
                 path.unlink()
 
     def controller_verbs(self):
-        # Each logged call reads '<n> <verb>: <first reply line>'.
+        # Each logged call reads '<n> <verb> [<argument>]: <first reply line>'.
         return [line.split()[1].rstrip(':') for line in self.lines(self.next_log)]
+
+    def controller_requests(self):
+        # The verb and its argument, as the launcher sent them.
+        return [line.split(': ', 1)[0].split(' ', 1)[1] for line in self.lines(self.next_log)]
 
     def next_calls(self):
         return [line for line in self.lines(self.next_log) if line.split()[1] == 'next:']
@@ -420,8 +429,9 @@ class Launcher(unittest.TestCase):
         self.assertIn('current-job container removed', lab)
         self.assert_no_cause(result)
         self.assertEqual([], self.next_calls())
-        # The completed resume ends the incident, after its job and the cleanup.
-        self.assertEqual(['ended'], self.controller_verbs())
+        # The completed resume ends the incident, after its job and the cleanup, and
+        # names it by its issue id.
+        self.assertEqual([f'ended {self.issue_id(1)}'], self.controller_requests())
         self.assertIn('ended, exit 0: Incident 9 is ready.', lab)
         self.assertNotIn('ended', result.stdout + result.stderr)
 
@@ -446,6 +456,79 @@ class Launcher(unittest.TestCase):
         result = self.run_job('rerun')
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual([], self.controller_verbs())
+
+    def test_a_profile_without_a_valid_issue_id_is_refused(self):
+        for value in (None, '', 'ABC', '0' * 31, 'g' * 32, 7):
+            with self.subTest(value=value):
+                path = self.profile(1, 'storage', {'writer_rank': 9})
+                profile = json.loads(path.read_text())
+                if value is None:
+                    del profile['issue_id']
+                else:
+                    profile['issue_id'] = value
+                path.write_text(json.dumps(profile))
+                result = self.run_job('resume')
+                self.assertEqual(3, result.returncode)
+                self.assertIn('The incident profile cannot be used by this launcher; raise your hand.',
+                              result.stderr)
+                self.assertEqual([], self.lines(self.calls))
+                self.assertEqual([], self.controller_verbs())
+
+    # ---------------------------------------------------------------- a busy controller
+    BUSY = ('Another request for this assignment is in progress. Wait for it to finish, '
+            'then run status.\n')
+
+    def test_a_busy_reply_to_ended_is_sent_again(self):
+        """Code review batch 5, Nit 4: a status in terminal B during the resume."""
+        self.profile(2, 'slow-job')
+        self.reply(1, self.BUSY, rc=3)
+        self.reply(2, self.BUSY, rc=3)
+        self.reply(3, 'Incident 2 has ended.\n')
+        result = self.run_job('resume')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(['ended'] * 3, self.controller_verbs())
+        self.assertEqual('', result.stderr)
+        lab = (self.incidents / 'incident-2-lab.log').read_text()
+        self.assertIn('ended: sent again after 2 busy replies', lab)
+        self.assertIn('ended, exit 0: Incident 2 has ended.', lab)
+
+    def test_a_controller_that_stays_busy_is_asked_for_a_bounded_time(self):
+        self.assertIn('\nBUSY_SECONDS=30\n', JOB.read_text())
+        # The launcher's bound, shortened in this copy only.
+        launcher = self.lab / 'job.sh'
+        launcher.write_text(launcher.read_text().replace('\nBUSY_SECONDS=30\n',
+                                                         '\nBUSY_SECONDS=3\n'))
+        self.profile(2, 'slow-job')
+        self.reply('default', self.BUSY, rc=3)
+        result = self.run_job('resume')
+        self.assertEqual(0, result.returncode, result.stderr)
+        # The first request and one more each second for BUSY_SECONDS.
+        self.assertEqual(4, len(self.controller_verbs()))
+        self.assertIn('The lab controls did not record that incident 2 has ended; raise your hand.',
+                      result.stderr)
+        self.assertNotIn('Another request', result.stderr)
+
+    def test_a_refusal_other_than_busy_is_not_sent_again(self):
+        self.profile(2, 'slow-job')
+        self.reply(1, 'Another table is using this exercise node right now. Wait until they '
+                      'finish recovering, then start again.\n', rc=3)
+        result = self.run_job('resume')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(['ended'], self.controller_verbs())
+
+    def test_a_busy_reply_to_the_incident_request_is_sent_again(self):
+        path = self.profile(1, 'storage', {'writer_rank': 9})
+        self.reply(1, self.BUSY, rc=3)
+        self.reply(2, f'Incident 1 is ready.\nProfile: {path}\nNext: Your launcher runs '
+                      'this incident from the profile above.\n')
+        result = self.run_job('incident')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(['next', 'next'], self.controller_verbs())
+        self.assertIn('Starting incident 1.', result.stdout)
+        self.assertNotIn('Another request', result.stdout + result.stderr)
+        self.assertEqual(1, len(self.torch_calls()))
+        lab = (self.incidents / 'incident-1-lab.log').read_text()
+        self.assertIn('next: sent again after 1 busy replies', lab)
 
     # ---------------------------------------------------------------- slow job incident
     def test_slow_job_incident_keeps_the_lab_step_out_of_the_participant_output(self):
@@ -524,6 +607,23 @@ class Launcher(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(2, len(self.next_calls()))
         self.assertIn('Your job is not running on your node; nothing was changed.', result.stderr)
+
+    def test_a_busy_reply_in_the_controller_step_is_not_final(self):
+        """Spain e2e at 3f9a95e2, finding 1: a status in terminal B lost the fault."""
+        self.issue(4, 'efa-reset')
+        self.reply(2, self.BUSY, rc=3)
+        self.reply(3, 'Incident 4 is under way.\nNext: Watch your job.\n')
+        result = self.run_job('incident', TEST_PROGRESS='1', TEST_RUN_SECONDS='20',
+                              TEST_UNTIL='under way')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(3, len(self.next_calls()))
+        self.assertNotIn('Another request', result.stdout + result.stderr)
+        lab = (self.incidents / 'incident-4-lab.log').read_text()
+        self.assertIn('next, busy reply 1, exit 3: Another request for this assignment is in '
+                      'progress.', lab)
+        # The busy reply did not use up an attempt.
+        self.assertIn('next, attempt 1, exit 0: Incident 4 is under way.', lab)
+        self.assertEqual([], self.job_processes())
 
     def test_controller_step_waits_for_progress_and_ends_with_the_job(self):
         self.issue(4, 'efa-reset')
@@ -608,7 +708,8 @@ class Launcher(unittest.TestCase):
         resume = self.run_job('resume')
         self.assertEqual(3, resume.returncode)
         self.assertIn('Incident 4 is recovered with the command on your page', resume.stderr)
-        self.assertEqual([], self.next_calls())
+        # Neither next nor ended.
+        self.assertEqual([], self.controller_verbs())
         self.assert_no_cause(resume)
 
     def test_a_refusal_starts_no_container_and_incident_prepares_before_asking(self):
@@ -667,14 +768,44 @@ class Launcher(unittest.TestCase):
                                 ((), '')):
             with self.subTest(argv=argv):
                 self.reset_calls()
-                result = self.run_job('rerun', *argv)
-                self.assertEqual(0, result.returncode, result.stderr)
+                # A plain rerun and the timeout alone fail on the cluster; here they
+                # fail as the fake job.
+                rc = '0' if forwarded in ('--dataset-cache=worker-thread',
+                                          '--reinit-in-worker') else '1'
+                result = self.run_job('rerun', *argv, TEST_RC=rc)
+                self.assertEqual(int(rc), result.returncode, result.stderr)
                 [call] = self.torch_calls()
                 self.assertIn('run_id=incident-3-rerun-', call)
                 self.assertTrue(call.endswith((self.LOADER + ' ' + forwarded).rstrip()), call)
                 self.assertEqual(['job_env settings={"dataset_cache":"rank-thread"} limit=120'],
                                  self.job_env())
         self.assertEqual([], self.next_calls())
+
+    def test_a_completed_dataloader_fix_rerun_ends_the_incident(self):
+        """Code review batch 5, finding 1: page 070 ends Incident 3 with a fix rerun."""
+        for argv in (('--dataset-cache', 'worker-thread'), ('--dataset-cache=worker-thread',),
+                     ('--reinit-in-worker',), ('--dataloader-timeout', '60', '--reinit-in-worker')):
+            with self.subTest(argv=argv):
+                if self.next_log.exists():
+                    self.next_log.unlink()
+                self.profile(3, 'dataloader')
+                result = self.run_job('rerun', *argv)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual([f'ended {self.issue_id(3)}'], self.controller_requests())
+                self.assertNotIn('ended', result.stdout + result.stderr)
+                self.assert_no_cause(result)
+                self.assertNotIn('cleanup', self.lines(self.calls))
+
+    def test_a_dataloader_rerun_without_a_fix_or_that_fails_does_not_end_it(self):
+        for argv, rc in (((), '0'), (('--dataset-cache', 'rank-thread'), '0'),
+                         (('--dataloader-timeout', '60'), '0'), (('--dataloader-timeout', '60'), '1'),
+                         ((), '124'), (('--reinit-in-worker',), '1'),
+                         (('--dataset-cache', 'worker-thread'), '124')):
+            with self.subTest(argv=argv, rc=rc):
+                self.profile(3, 'dataloader')
+                result = self.run_job('rerun', *argv, TEST_RC=rc)
+                self.assertEqual(int(rc), result.returncode, result.stderr)
+                self.assertEqual([], self.controller_verbs())
 
     def test_dataloader_resume_runs_the_job_without_the_lab_setting(self):
         self.profile(3, 'dataloader', {'affected_rank': 5})
@@ -841,9 +972,6 @@ class HelpLines(unittest.TestCase):
         for name in self.PARTICIPANT_SOURCES:
             with self.subTest(name=name):
                 self.assertIsNone(self.SENDS_TO_A_PERSON.search((LAB / name).read_text()))
-
-    def test_the_lines_ask_for_a_raised_hand(self):
-        self.assertEqual(9, (LAB / 'job.sh').read_text().lower().count('raise your hand'))
 
 
 class CommonRunIds(unittest.TestCase):
