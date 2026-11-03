@@ -822,6 +822,26 @@ class TrainingCorrectnessTests(unittest.TestCase):
                             and e.get('args', {}).get('Sequence number') in inside]
                 self.assertTrue(inside)
                 self.assertTrue(backward)
+                # tools/profile-table.py on the same trace: update u is ProfilerStep#<u-1>,
+                # and its window holds that update's input wait and attention operators.
+                import importlib.util
+                spec = importlib.util.spec_from_file_location(
+                    'profile_table', Path(__file__).resolve().parents[1] / 'tools/profile-table.py')
+                table_tool = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(table_tool)
+                rows = [json.loads(line) for line in (root / 'train/rank-0-updates.jsonl').read_text().splitlines()]
+                complete = table_tool.complete(events)
+                for update in range(1, 6):
+                    span = next(e for e in complete if e['name'] == f'ProfilerStep#{update - 1}')
+                    table = table_tool.update_table(events, update)
+                    self.assertAlmostEqual(table['update'], span['dur'] / 1e6)
+                    self.assertGreater(table['input_wait'], 0)
+                    main = (span['pid'], span['tid'])
+                    self.assertTrue(table_tool.attention_ids(complete, main, span['ts'], span['ts'] + span['dur']))
+                    if update > 1:
+                        # The span ends after the row is stamped, close to the row interval.
+                        gap = rows[update - 1]['monotonic_seconds'] - rows[update - 2]['monotonic_seconds']
+                        self.assertLess(abs(table['update'] - gap), 0.5 * gap + 0.05)
 
     def test_restore_from_saved_update_runs_next_updates_and_stops(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,0 +1,19 @@
+gpu-node-1:1768417:1768417 [4] NCCL INFO Using network Socket
+gpu-node-1:1768419:1768419 [6] NCCL INFO Using network Socket
+gpu-node-1:1768418:1768418 [5] NCCL INFO Using network Socket
+gpu-node-2:912352:912352 [4] NCCL INFO Using network Socket
+gpu-node-2:912355:912355 [7] NCCL INFO Using network Socket
+gpu-node-2:912348:912348 [0] NCCL INFO Using network Socket
+gpu-node-2:912350:912350 [2] NCCL INFO Using network Socket
+gpu-node-2:912353:912353 [5] NCCL INFO Using network Socket
+gpu-node-2:912354:912354 [6] NCCL INFO Using network Socket
+gpu-node-2:912349:912349 [1] NCCL INFO Using network Socket
+gpu-node-2:912351:912351 [3] NCCL INFO Using network Socket
+gpu-node-1:1768415:1768415 [2] NCCL INFO Using network Socket
+gpu-node-1:1768413:1768413 [0] NCCL INFO Using network Socket
+gpu-node-1:1768420:1768420 [7] NCCL INFO Using network Socket
+gpu-node-1:1768416:1768416 [3] NCCL INFO Using network Socket
+gpu-node-1:1768414:1768414 [1] NCCL INFO Using network Socket
+gpu-node-2:912348:912348 [0] NCCL INFO NCCL version 2.30.4+cuda13.0
+gpu-node-1:1768413:1768413 [0] NCCL INFO Channel 00/0 : 0[0] -> 8[0] [receive] via NET/Socket/0
+gpu-node-1:1768413:1768413 [0] NCCL INFO Channel 01/0 : 0[0] -> 8[0] [receive] via NET/Socket/0
