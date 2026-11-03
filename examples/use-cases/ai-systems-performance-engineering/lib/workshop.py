@@ -312,10 +312,12 @@ NCCL_NETWORK = re.compile(r'(\S+):(\d+):\d+ \[(\d+)\] NCCL INFO Using network (.
 NCCL_PROVIDER = re.compile(r'NET/OFI Selected provider is (\S+), fabric is (\S+) \(found (\d+) nics\)')
 NCCL_PROTOCOL = re.compile(r'NET/OFI Using transport protocol (.+)')
 NCCL_CHANNEL = re.compile(r'NCCL INFO Channel \S+ : .* via NET/(.+)')
+# NCCL_DEBUG_SUBSYS must include ENV for this line (2.run-llm.sh sets it).
+NCCL_PROTO_ENV = re.compile(r'(\S+):(\d+):\d+ \[\d+\] NCCL INFO NCCL_PROTO set by environment to (.+)')
 
 
 def parse_nccl(text):
-    networks = {}
+    networks, nccl_protos = {}, {}
     providers, protocols = [], []
     channels = gdrdma = 0
     for line in text.splitlines():
@@ -339,11 +341,20 @@ def parse_nccl(text):
         if match:
             channels += 1
             gdrdma += '/GDRDMA' in match.group(1)
+            continue
+        match = NCCL_PROTO_ENV.search(line)
+        if match:
+            nccl_protos[(match.group(1), match.group(2))] = match.group(3).strip()
+    return dict(networks=count_values(networks), ranks=len(networks), providers=providers, protocols=protocols,
+                network_channels=channels, gdrdma_channels=gdrdma, nccl_protos=count_values(nccl_protos))
+
+
+def count_values(by_process):
+    """{value: number of processes} from {(host, pid): value}."""
     counts = {}
-    for network in networks.values():
-        counts[network] = counts.get(network, 0) + 1
-    return dict(networks=counts, ranks=len(networks), providers=providers, protocols=protocols,
-                network_channels=channels, gdrdma_channels=gdrdma)
+    for value in by_process.values():
+        counts[value] = counts.get(value, 0) + 1
+    return counts
 
 
 def nccl_problem(nccl, transport, world):
@@ -355,6 +366,11 @@ def nccl_problem(nccl, transport, world):
 
 def network_text(nccl, world):
     return '; '.join(f'{network} on {count} of {world} ranks' for network, count in nccl['networks'].items())
+
+
+def nccl_proto_text(nccl, world):
+    return ('; '.join(f'{value} on {count} of {world} ranks' for value, count in nccl['nccl_protos'].items())
+            or 'not set on any rank')
 
 
 def read_efa_counters(root='/sys/class/infiniband'):
@@ -591,8 +607,13 @@ def nccl_pairs(stage, stage_dir, world):
         pairs = [(f'NCCL network ({log.stem} run)', network_text(parse_nccl(text), world)
                   or 'no "Using network" lines in the log') for log, text in zip(logs, texts)]
     if stage['transport'] == 'efa':
+        # Counted per segment, because each segment starts its own ranks.
+        protos = [nccl_proto_text(parse_nccl(text), world) for text in texts]
+        proto = (protos[0] if len(set(protos)) == 1
+                 else '; '.join(f'{log.stem} run: {value}' for log, value in zip(logs, protos)))
         pairs += [('provider', '; '.join(nccl['providers']) or 'not reported'),
                   ('protocol', '; '.join(nccl['protocols']) or 'not reported'),
+                  ('NCCL_PROTO', proto),
                   ('channels sending from GPU memory (/GDRDMA)',
                    f"{nccl['gdrdma_channels']} of {nccl['network_channels']} network channel lines")]
     return pairs
@@ -1266,6 +1287,120 @@ def start_run(subcommand, state=None):
     return follow(invocation, results)
 
 
+# ---------------------------------------------------------------- optional: NCCL protocols
+
+# tools/nccl-protocols.sh runs all_reduce_perf over EFA with OFI_NCCL_PROTOCOL=RDMA
+# twice: with NCCL's own protocol choice, then with NCCL_PROTO=Simple.
+PROTOCOL_RUNS = (('nccl-choice', 'NCCL_PROTO not set'), ('simple', 'NCCL_PROTO=Simple'))
+# Rank 0 prints one such line per collective when NCCL_DEBUG_SUBSYS includes TUNING.
+NCCL_TUNING = re.compile(r'NCCL INFO AllReduce: (\d+) Bytes -> Algo (\S+) proto (\S+)')
+
+
+def nccl_tests_rows(text):
+    """{size: (out-of-place time in us, out-of-place bus bandwidth in GB/s, #wrong of both)} of an nccl-tests table."""
+    rows = {}
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) >= 13 and fields[0].isdigit() and fields[1].isdigit():
+            try:
+                rows[int(fields[0])] = (float(fields[5]), float(fields[7]), int(fields[8]) + int(fields[12]))
+            except ValueError:
+                continue
+    return rows
+
+
+def tuning_choices(text):
+    """{size in bytes: ['ALGO/PROTO', ...]} from the TUNING lines of rank 0."""
+    choices = {}
+    for match in NCCL_TUNING.finditer(text):
+        choices.setdefault(int(match.group(1)), set()).add(f'{match.group(2)}/{match.group(3)}')
+    return {size: sorted(values) for size, values in choices.items()}
+
+
+def size_text(size):
+    return f'{size // 2**20} MiB' if size % 2**20 == 0 else f'{size:,} B'
+
+
+def protocol_command(variant, out, env, lab=LAB):
+    """The srun step of one run: one MPI rank per GPU on both nodes, in the training image."""
+    gpus = int(env.get('GPUS_PER_NODE', 8))
+    command = ['srun', '--nodes=2', f'--ntasks={2 * gpus}', f'--ntasks-per-node={gpus}',
+               f"--cpus-per-task={int(env['AIM347_CPUS_PER_NODE']) // gpus}", '--mpi=pmix', '--cpu-bind=none',
+               '--time=10', f"--container-image={env['LAB_IMAGE']}"]
+    if env.get('LLM_CONTAINER_NAME'):
+        command.append(f"--container-name={env['LLM_CONTAINER_NAME']}")
+    command += [f"--container-mounts={lab}:/opt/aim347,{env['LLM_RESULTS_DIR']}:{env['LLM_RESULTS_DIR']}",
+                '--container-workdir=/opt/aim347', '--no-container-remap-root', '--container-env=NCCL_SOCKET_IFNAME',
+                'bash', 'lib/nccl-protocols-rank.sh', variant, str(Path(out) / variant)]
+    return command
+
+
+def protocol_report(out, world):
+    """(lines, exit code) from the two runs in `out`: 0, 4 when a table is missing, 5 on wrong values."""
+    runs = []
+    for variant, label in PROTOCOL_RUNS:
+        directory = Path(out) / variant
+        try:
+            table = (directory / 'all_reduce_perf.txt').read_text(errors='replace')
+        except OSError:
+            table = ''
+        logs = ''.join(path.read_text(errors='replace') for path in sorted(directory.glob('nccl-*.log')))
+        runs.append((label, nccl_tests_rows(table), tuning_choices(logs), parse_nccl(logs)))
+    missing = [label for label, rows, _, _ in runs if not rows]
+    if missing:
+        return [f'[aim347] no all_reduce_perf table for {", ".join(missing)} in {out}'], 4
+    lines = [f"{'':12}{runs[0][0]:<40}{runs[1][0]}",
+             (f"{'size':>9}" + f"{'time (us)':>12}{'busbw (GB/s)':>14}  {'NCCL ran':<12}" * 2).rstrip()]
+    for size in sorted(set(runs[0][1]) | set(runs[1][1])):
+        line = f'{size_text(size):>9}'
+        for _, rows, choices, _ in runs:
+            time_us, busbw, _ = rows.get(size, (float('nan'), float('nan'), 0))
+            line += f"{time_us:>12.1f}{busbw:>14.2f}  {', '.join(choices.get(size, ['-'])):<12}"
+        lines.append(line.rstrip())
+    lines.append('[aim347] NCCL_PROTO in the NCCL logs: '
+                 + '; '.join(f'{nccl_proto_text(nccl, world)} ({label})' for label, _, _, nccl in runs))
+    lines.append('[aim347] NCCL logs, with the algorithm and protocol of every collective on rank 0: '
+                 + ', '.join(str(Path(out) / variant) for variant, _ in PROTOCOL_RUNS))
+    wrong = [f"{label} at {', '.join(size_text(size) for size, row in sorted(rows.items()) if row[2])}"
+             for label, rows, _, _ in runs if any(row[2] for row in rows.values())]
+    if wrong:
+        lines.append('[aim347] wrong values: ' + '; '.join(wrong))
+        return lines, 5
+    return lines, 0
+
+
+def run_protocols(state=None, runner=subprocess.run, env=None):
+    """tools/nccl-protocols.sh. Returns the exit code."""
+    env = dict(os.environ if env is None else env)
+    if not env.get('LLM_RESULTS_DIR'):
+        raise UsageError('LLM_RESULTS_DIR is not set; open a new shell so it reads aim347.env')
+    if read_running(state):
+        print('AIM347: a stage is still running. Run this tool after it finishes; '
+              'bash tools/run.sh attach follows it.', file=sys.stderr)
+        return 2
+    stamp = utc_stamp()
+    out, suffix = Path(env['LLM_RESULTS_DIR']) / 'nccl-protocols' / stamp, 1
+    while out.exists():
+        suffix += 1
+        out = out.with_name(f'{stamp}-{suffix}')
+    world = 2 * int(env.get('GPUS_PER_NODE', 8))
+    print(f'[aim347] all_reduce_perf, 1 MiB to 64 MiB, on {world} GPUs over EFA with OFI_NCCL_PROTOCOL=RDMA')
+    print(f'[aim347] results {out}')
+    for number, (variant, label) in enumerate(PROTOCOL_RUNS, 1):
+        (out / variant).mkdir(parents=True)
+        print(f'[aim347] run {number} of {len(PROTOCOL_RUNS)}: {label}', flush=True)
+        with (out / variant / 'all_reduce_perf.txt').open('w') as stream:
+            code = runner(protocol_command(variant, out, env), stdout=stream, stderr=subprocess.STDOUT).returncode
+        if code != 0:
+            print(f'[aim347] run {number} ({label}) failed with exit status {code}; '
+                  f"last 40 lines of {out / variant / 'all_reduce_perf.txt'}:")
+            print('\n'.join(tail(out / variant / 'all_reduce_perf.txt')))
+            return 4
+    lines, code = protocol_report(out, world)
+    print('\n'.join(lines))
+    return code
+
+
 # ---------------------------------------------------------------- command line
 
 def main(argv=None):
@@ -1274,6 +1409,7 @@ def main(argv=None):
     run = commands.add_parser('run', help='tools/run.sh')
     run.add_argument('subcommand', nargs='?')
     commands.add_parser('worker').add_argument('invocation')
+    commands.add_parser('nccl-protocols', help='tools/nccl-protocols.sh')
     commands.add_parser('efa-read', help='on a GPU node: EFA counters as one JSON line')
     commands.add_parser('node-probe', help='on a GPU node: GPUs and EFA devices as one JSON line')
     report = commands.add_parser('check-report', help='tools/check.sh output')
@@ -1307,6 +1443,8 @@ def main(argv=None):
             return start_run(args.subcommand)
         if args.command == 'worker':
             return worker(json.loads(args.invocation))
+        if args.command == 'nccl-protocols':
+            return run_protocols()
         if args.command == 'efa-read':
             devices, errors = read_efa_counters()
             for error in errors:

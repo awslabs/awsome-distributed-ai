@@ -32,9 +32,14 @@ MASTER_ADDR=$(scontrol show node "$first_node" -o | tr ' ' '\n' | sed -n 's/^Nod
 [[ -n $MASTER_ADDR ]] || { echo 'missing Slurm node address' >&2; exit 2; }
 export MASTER_ADDR MASTER_PORT=${MASTER_PORT:-29547} GPUS_PER_NODE
 export NNODES=$SLURM_JOB_NUM_NODES
-export NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET
+# ENV logs "NCCL_PROTO set by environment to Simple" on every rank of an EFA run.
+export NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET,ENV
 case ${LLM_TRANSPORT:-efa} in
-    efa) export FI_PROVIDER=efa NCCL_NET='AWS Libfabric' OFI_NCCL_PROTOCOL=RDMA; unset NCCL_NET_PLUGIN NCCL_GIN_PLUGIN ;;
+    # Under RDMA, NCCL runs all-reduce from 64 KiB to 8 MiB on two g7.48xlarge
+    # as LL, which is many times slower there than Simple (numbers in
+    # lib/instance-type.sh). NCCL_PROTO=^LL would enable LL128 over PCIe.
+    efa) export FI_PROVIDER=efa NCCL_NET='AWS Libfabric' OFI_NCCL_PROTOCOL=RDMA NCCL_PROTO=Simple
+         unset NCCL_NET_PLUGIN NCCL_GIN_PLUGIN ;;
     socket) export FI_PROVIDER=efa NCCL_NET=Socket OFI_NCCL_PROTOCOL=RDMA NCCL_NET_PLUGIN=none NCCL_GIN_PLUGIN=none ;;
     *) printf 'LLM_TRANSPORT must be efa or socket\n' >&2; exit 2 ;;
 esac

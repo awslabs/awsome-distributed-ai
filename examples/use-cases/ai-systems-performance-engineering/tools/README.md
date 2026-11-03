@@ -9,7 +9,9 @@ These tools run one SmolLM2-1.7B training job with PyTorch FSDP2 on two `g7.48xl
 5. `python3 tools/progression.py --markdown` prints the table of all your runs.
 6. `bash tools/release.sh` releases the nodes.
 
-All six run in a shell on the login node, from this directory. The training runs on both GPU nodes through `srun` steps of the held allocation. The section [Repeat the job on another PCS cluster](#repeat-the-job-on-another-pcs-cluster) describes the provisioning the tools expect.
+`bash tools/nccl-protocols.sh` is optional. It runs nccl-tests on the held nodes to compare NCCL's own protocol choice over EFA with `NCCL_PROTO=Simple`.
+
+All the tools run in a shell on the login node, from this directory. The training runs on both GPU nodes through `srun` steps of the held allocation. The section [Repeat the job on another PCS cluster](#repeat-the-job-on-another-pcs-cluster) describes the provisioning the tools expect.
 
 ## The environment and the allocation
 
@@ -23,7 +25,7 @@ The tools then source `~/.aim347/allocation.env` if it exists. `hold-and-measure
 
 | Key | Values | Meaning |
 |---|---|---|
-| `LLM_TRANSPORT` | `socket`, `efa` | NCCL sends collectives over TCP sockets, or over EFA through the AWS Libfabric plugin |
+| `LLM_TRANSPORT` | `socket`, `efa` | NCCL sends collectives over TCP sockets, or over EFA through the AWS Libfabric plugin with `OFI_NCCL_PROTOCOL=RDMA` and `NCCL_PROTO=Simple` |
 | `ATTENTION` | `eager`, `sdpa` | The Transformers attention implementation |
 | `CHECKPOINT_MODE` | `none`, `sync`, `process` | No saving, synchronous saves, or saves written by a separate process while training continues |
 
@@ -78,7 +80,7 @@ The trainer arguments are the same for every stage apart from the config, data, 
 
 ### Following a run
 
-`run.sh` starts each stage in a background worker in its own session, then follows it. It prints a header with the settings, the work and the results path, a line every 10 seconds until the first update finishes, and then rank 0's row for each update: the seconds since the previous update and the loss, plus the save, pending-upload and durable-update columns for runs that save. When the stage ends it prints a result block: the timed interval and its target tokens, tokens per second, GPU-seconds per million tokens, MFU against your measured GEMM peak (or `n/a` before `hold-and-measure.sh` has run), the largest rank's peak memory, the NCCL network each rank used, and the EFA bytes each node sent and received during the run. Runs that save print the inputs of training goodput (the durable tokens, the interval from the end of model loading to the end of the final flush, and the GPU count) instead of a goodput value. `restore` prints its losses beside those of `ckpt-sync`, and `interrupt` prints which checkpoints had completed at the stop, how many updates ran twice, and on its `goodput including the stop` line the training goodput of the whole command, from the first launch to the final durable save.
+`run.sh` starts each stage in a background worker in its own session, then follows it. It prints a header with the settings, the work and the results path, a line every 10 seconds until the first update finishes, and then rank 0's row for each update: the seconds since the previous update and the loss, plus the save, pending-upload and durable-update columns for runs that save. When the stage ends it prints a result block: the timed interval and its target tokens, tokens per second, GPU-seconds per million tokens, MFU against your measured GEMM peak (or `n/a` before `hold-and-measure.sh` has run), the largest rank's peak memory, the NCCL network each rank used, and the EFA bytes each node sent and received during the run. An EFA stage also prints the libfabric provider, the plugin's transport protocol, the `NCCL_PROTO` value that NCCL logged on each rank (`Simple on 16 of 16 ranks`), and how many network channel lines send from GPU memory (`/GDRDMA`). Runs that save print the inputs of training goodput (the durable tokens, the interval from the end of model loading to the end of the final flush, and the GPU count) instead of a goodput value. `restore` prints its losses beside those of `ckpt-sync`, and `interrupt` prints which checkpoints had completed at the stop, how many updates ran twice, and on its `goodput including the stop` line the training goodput of the whole command, from the first launch to the final durable save.
 
 Ctrl-C, a closed browser tab or a dropped connection stops only the following. `bash tools/run.sh attach` follows the stage again from any shell. While a stage runs, any other subcommand prints `Stage <name> is still running; following it` and follows it.
 
@@ -147,6 +149,20 @@ python3 tools/progression.py [--markdown]
 Prints the ceilings, then one row per stage, in the order `baseline`, `probe-socket-eager`, `sdpa-socket`, `efa`, `probe-efa-eager`, `sdpa`, `ckpt-sync`, `ckpt-process`, `interrupt`, followed by any other stage. It skips `profile-*`, `restore` and `attempts/`. The columns are the settings, the work (updates times positions), the timed seconds, tokens per second, GPU-seconds per million tokens, MFU against your GEMM peak, peak memory, the speed-up against `baseline` and against the previous main-path stage, and the training goodput of the saving and interrupt stages. The goodput of a saving stage comes from its `summary.json`, over the interval from the end of model loading to the end of the final save. The goodput of `interrupt` comes from `campaign.json`, over the whole command from the first launch, so it also includes both launches and both model loads. Its two goodput cells refer to a note that gives this interval and says that they are not compared with the saving stages. A speed-up is shown only for a pair of runs that `paired_training_report` in `lib/llm_metrics.py` accepts: the same work on the same allocation, completed and unprofiled. Otherwise the cell refers to a note below the table that names the difference. The main path is `baseline`, `efa`, `sdpa`, and `sdpa-socket` is compared with `baseline`. Because each step's speed-up divides the previous stage's seconds by this stage's seconds, the product of the steps along the main path equals the last stage's speed-up against `baseline`.
 
 `--markdown` prints the same table in Markdown for your notes.
+
+## nccl-protocols.sh
+
+```bash
+bash tools/nccl-protocols.sh
+```
+
+Runs nccl-tests over EFA on the held nodes, once with NCCL's own protocol choice and once with `NCCL_PROTO=Simple`. The workshop does not need it. `2.run-llm.sh` sets `NCCL_PROTO=Simple` for EFA stages because on two `g7.48xlarge` under `OFI_NCCL_PROTOCOL=RDMA`, NCCL chooses its LL protocol for all-reduce from 64 KiB to 8 MiB, and from 1 MiB that range runs many times slower than with Simple ([VALIDATION.md](../VALIDATION.md#nccl-protocol-on-the-efa-path-2026-11-03)).
+
+The tool needs the session allocation and refuses while a stage runs. Both runs use `all_reduce_perf` from 1 MiB to 64 MiB on all 16 GPUs, one MPI rank per GPU, in the training image, with the EFA settings of `2.run-llm.sh`. The first leaves `NCCL_PROTO` unset, so that NCCL chooses the protocol, and the second sets `NCCL_PROTO=Simple`. With `NCCL_DEBUG_SUBSYS=INIT,NET,ENV,TUNING`, rank 0 logs the algorithm and protocol of every collective. NCCL writes its log to one file per process, `nccl-<host>-<pid>.log`, so that the table on standard output stays readable. The rank script is `lib/nccl-protocols-rank.sh`.
+
+The tool prints one row per size with the out-of-place time and bus bandwidth of each run and the algorithm and protocol that rank 0 logged, then the `NCCL_PROTO` value each run's log shows and the two log directories. The results are in `$LLM_RESULTS_DIR/nccl-protocols/<UTC>/nccl-choice/` and `simple/`, each with `all_reduce_perf.txt` and the NCCL logs. `progression.py` does not list them.
+
+Exit status: 0; 2 for usage or while a stage runs; 3 when no session allocation is held; 4 when a run fails (the tool prints the last 40 lines of its output); 5 when nccl-tests reports wrong values.
 
 ## release.sh
 

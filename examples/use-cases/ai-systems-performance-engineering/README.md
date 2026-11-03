@@ -281,7 +281,7 @@ Use two `g7.48xlarge` nodes as the primary allocation or two `g7.24xlarge` nodes
 bash lib/resources.sh
 ```
 
-`lib/job.sh` applies `OFI_NCCL_PROTOCOL=RDMA` only when `lib/instance-type.sh` detects `g7.*`, and preserves it through Pyxis. No participant-set instance variable controls the gate. The Spain `g7.24xlarge-stand-in` collective measured 5.2 GB/s with SENDRECV and 20.3 GB/s with RDMA at 2 GiB, four ranks per node and one EFA; [VALIDATION.md](VALIDATION.md) preserves that evidence. Leave `FI_EFA_IFACE` unset to expose all EFA devices in a whole-node run.
+`lib/job.sh` applies `OFI_NCCL_PROTOCOL=RDMA` and `NCCL_PROTO=Simple` only when `lib/instance-type.sh` detects `g7.*`, and preserves both through Pyxis. No participant-set instance variable controls the gate. The Spain `g7.24xlarge-stand-in` collective measured 5.2 GB/s with SENDRECV and 20.3 GB/s with RDMA at 2 GiB, four ranks per node and one EFA; [VALIDATION.md](VALIDATION.md) preserves that evidence, and the reason for `NCCL_PROTO=Simple`. Leave `FI_EFA_IFACE` unset to expose all EFA devices in a whole-node run.
 
 The default exclusive submission derives ranks from the allocation. Explicit budgets can additionally set `LAB_EXCLUSIVE=1`; `LAB_MEMORY_PER_NODE=0` selects all scheduler-visible memory. A stand-in rehearsal sets an explicit device, CPU and memory budget without exclusivity. The hardware inventory records physical EFA devices, while `FI_EFA_IFACE` records any deliberately restricted provider selection.
 

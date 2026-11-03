@@ -22,8 +22,12 @@ apply_g7_protocol() {
         g7.*)
             # Spain 2026-09-10: 4 ranks/node, 1 EFA, 2 GiB all-reduce:
             # SENDRECV 5.2 GB/s versus RDMA 20.3 GB/s. See VALIDATION.md.
-            export OFI_NCCL_PROTOCOL=RDMA
-            printf 'host=%s instance_type=%s OFI_NCCL_PROTOCOL=RDMA\n' "$(hostname)" "$detected" >&2
+            # Under RDMA on two g7.48xlarge, NCCL runs 64 KiB to 8 MiB all-reduce
+            # as LL, and 1 to 8 MiB reach only 0.25 to 0.30 GB/s bus bandwidth.
+            # With Simple they reach 4.06 to 13.91 GB/s; 16 MiB and up are
+            # unchanged. NCCL_PROTO=^LL would enable LL128 over PCIe.
+            export OFI_NCCL_PROTOCOL=RDMA NCCL_PROTO=Simple
+            printf 'host=%s instance_type=%s OFI_NCCL_PROTOCOL=RDMA NCCL_PROTO=Simple\n' "$(hostname)" "$detected" >&2
             ;;
     esac
 }

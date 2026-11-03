@@ -75,6 +75,14 @@ def nccl_log(transport):
     return (FIXTURES / f'nccl-{transport}-2048.txt').read_text()
 
 
+def with_nccl_proto(log, value='Simple'):
+    """Synthetic: the recorded log plus one ENV line per rank, as NCCL_DEBUG_SUBSYS=ENV prints it."""
+    ranks = [line.split(' NCCL INFO')[0] for line in log.splitlines() if 'Using network' in line]
+    extra = [f'{rank} NCCL INFO NCCL_PROTO set by environment to {value}' for rank in ranks]
+    # A rank with a second communicator prints the line again; it still counts once.
+    return log + '\n'.join(extra + extra[:1]) + '\n'
+
+
 def efa_counters(sent, received):
     return {host: {'rdmap0s0': {'tx_bytes': sent, 'rx_bytes': received},
                    'rdmap1s0': {'tx_bytes': sent, 'rx_bytes': received}} for host in HOSTS}
@@ -245,7 +253,12 @@ class DisplayTests(unittest.TestCase):
         self.assertIn('  NCCL network                 AWS Libfabric on 16 of 16 ranks', lines)
         self.assertIn('  provider                     efa, fabric efa-direct (found 2 nics)', lines)
         self.assertIn('  protocol                     RDMA (user set)', lines)
+        self.assertIn('  NCCL_PROTO                   not set on any rank', lines)
         self.assertIn('  channels sending from GPU memory (/GDRDMA)  0 of 4 network channel lines', lines)
+        (directory / 'launch.log').write_text(with_nccl_proto(nccl_log('efa')))
+        lines = workshop.timed_block(efa, directory, summary(efa, EFA['seconds'], EFA['rate'], EFA['peak']), None, 16)
+        self.assertEqual(lines[-3:-1], ['  NCCL_PROTO                   Simple on 16 of 16 ranks',
+                                        '  channels sending from GPU memory (/GDRDMA)  0 of 4 network channel lines'])
         self.assertIn('  GPU-seconds per 1M tokens    352', lines)
         sdpa = workshop.plan('sdpa', job('efa', 'sdpa'))[0]
         directory = finished_stage(self.results, sdpa)
@@ -343,6 +356,14 @@ class DisplayTests(unittest.TestCase):
         self.assertIn('  resumed from update 5; first update after the resume: 6', lines)
         self.assertIn('  updates run twice: 6-30 (25 updates)', lines)
         self.assertIn('  NCCL network (interrupted run)  AWS Libfabric on 16 of 16 ranks', lines)
+        self.assertIn('  NCCL_PROTO                   not set on any rank', lines)
+        (directory / 'campaign/interrupted.log').write_text(with_nccl_proto(nccl_log('efa')))
+        lines = workshop.interrupt_block(stage, directory, 16)
+        self.assertIn('  NCCL_PROTO                   interrupted run: Simple on 16 of 16 ranks; '
+                      'resumed run: not set on any rank', lines)
+        (directory / 'campaign/resumed.log').write_text(with_nccl_proto(nccl_log('efa')))
+        lines = workshop.interrupt_block(stage, directory, 16)
+        self.assertIn('  NCCL_PROTO                   Simple on 16 of 16 ranks', lines)
         self.assertIn('  goodput including the stop   13,790 tokens/s, 3.10 M tokens per GPU-hour  '
                       '(first launch to the final durable save)', lines)
         self.directory.cleanup()
@@ -370,6 +391,15 @@ class NcclTests(unittest.TestCase):
         self.assertIn('on 15 of 16 ranks', workshop.nccl_problem(fewer, 'efa', 16))
         gdr = workshop.parse_nccl('gpu-node-2:1:1 [7] NCCL INFO Channel 01/0 : 15[7] -> 7[7] [send] via NET/AWS Libfabric/1/GDRDMA')
         self.assertEqual((gdr['network_channels'], gdr['gdrdma_channels']), (1, 1))
+
+    def test_nccl_proto_lines_counted_per_rank(self):
+        recorded = workshop.parse_nccl(nccl_log('efa'))
+        self.assertEqual(recorded['nccl_protos'], {})
+        self.assertEqual(workshop.nccl_proto_text(recorded, 16), 'not set on any rank')
+        simple = workshop.parse_nccl(with_nccl_proto(nccl_log('efa')))
+        self.assertEqual(simple['nccl_protos'], {'Simple': 16})
+        self.assertEqual(workshop.nccl_proto_text(simple, 16), 'Simple on 16 of 16 ranks')
+        self.assertEqual(simple['ranks'], 16)
 
 
 class EfaCounterTests(unittest.TestCase):
@@ -1027,13 +1057,190 @@ count=$(grep -c "^curl $SLURMD_NODENAME$" {calls})
     def test_shell_syntax_of_every_new_script(self):
         scripts = sorted((LAB / 'tools').glob('*.sh')) + [LAB / 'facilitator/prepare-event.sh',
                                                            LAB / 'facilitator/install-node-collectors.sh',
-                                                           LAB / '2.run-llm.sh']
-        self.assertEqual(len(scripts), 8)
+                                                           LAB / '2.run-llm.sh', LAB / 'lib/nccl-protocols-rank.sh']
+        self.assertEqual(len(scripts), 10)
         for script in scripts:
             with self.subTest(script=script.name):
                 subprocess.run(['bash', '-n', str(script)], check=True)
         if shutil.which('shellcheck'):
             subprocess.run(['shellcheck', '-x', '-P', 'SCRIPTDIR/..', *map(str, scripts)], check=True, cwd=LAB)
+
+
+class NcclProtocolSettingTests(unittest.TestCase):
+    """NCCL_PROTO=Simple wherever the launchers set OFI_NCCL_PROTOCOL=RDMA for G7."""
+
+    def protocol_environment(self, instance_type):
+        script = (f'source {LAB / "lib/instance-type.sh"}\n'
+                  f'detect_instance_type() {{ printf "%s\\n" {instance_type}; }}\n'
+                  'apply_g7_protocol\n'
+                  'printf "OFI_NCCL_PROTOCOL=%s NCCL_PROTO=%s\\n" "${OFI_NCCL_PROTOCOL-unset}" "${NCCL_PROTO-unset}"\n')
+        # stdin from /dev/null: bash reads the bashrc files when its input is a socket.
+        result = subprocess.run(['bash', '-euc', script], capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                                env={'PATH': os.environ['PATH'], 'NCCL_PROTO': '^LL'}, check=True)
+        return result.stderr, result.stdout.strip()
+
+    def test_g7_selects_rdma_and_simple_and_says_so(self):
+        stderr, values = self.protocol_environment('g7.48xlarge')
+        self.assertEqual(values, 'OFI_NCCL_PROTOCOL=RDMA NCCL_PROTO=Simple')
+        self.assertRegex(stderr, r'^host=\S+ instance_type=g7\.48xlarge OFI_NCCL_PROTOCOL=RDMA NCCL_PROTO=Simple\n$')
+        stderr, values = self.protocol_environment('p5.48xlarge')
+        self.assertEqual((stderr, values), ('', 'OFI_NCCL_PROTOCOL=unset NCCL_PROTO=^LL'))
+
+    def test_legacy_job_passes_nccl_proto_into_every_container_that_gets_the_protocol(self):
+        lines = [line for line in (LAB / 'lib/job.sh').read_text().splitlines() if '--container-env=' in line]
+        self.assertEqual(len(lines), 2)
+        for line in lines:
+            names = line.split('--container-env=', 1)[1].split()[0].split(',')
+            self.assertIn('OFI_NCCL_PROTOCOL', names)
+            self.assertIn('NCCL_PROTO', names)
+
+    def test_training_launcher_sets_simple_for_efa_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            stub(bin_dir, 'srun', 'printf "%s\\n" "OFI_NCCL_PROTOCOL=${OFI_NCCL_PROTOCOL-unset}" '
+                                  '"NCCL_PROTO=${NCCL_PROTO-unset}" "NCCL_DEBUG_SUBSYS=$NCCL_DEBUG_SUBSYS" "$@"\n')
+            stub(bin_dir, 'scontrol', 'case "$2" in hostnames) echo gpu-node-1; echo gpu-node-2 ;; '
+                                      'node) echo "NodeName=gpu-node-1 NodeAddr=10.0.0.1" ;; esac\n')
+            env = dict(os.environ, PATH=f'{bin_dir}:{os.environ["PATH"]}', SLURM_JOB_ID='42', SLURM_JOB_NUM_NODES='2',
+                       SLURM_JOB_NODELIST='gpu-node-[1-2]', SLURM_JOB_CPUS_PER_NODE='192(x2)', GPUS_PER_NODE='8',
+                       LAB_IMAGE='/fsx/image.sqsh', LLM_DATA_DIR='/fsx/data', LLM_RESULTS_DIR='/fsx/results',
+                       NCCL_SOCKET_IFNAME='=enp71s0')
+            env.pop('NCCL_PROTO', None)
+            for transport, proto in (('efa', 'Simple'), ('socket', 'unset')):
+                with self.subTest(transport=transport):
+                    output = subprocess.run(['bash', str(LAB / '2.run-llm.sh')], env=dict(env, LLM_TRANSPORT=transport),
+                                            check=True, capture_output=True, text=True).stdout.splitlines()
+                    self.assertEqual(output[:3], ['OFI_NCCL_PROTOCOL=RDMA', f'NCCL_PROTO={proto}',
+                                                  'NCCL_DEBUG_SUBSYS=INIT,NET,ENV'])
+                    names = next(a for a in output if a.startswith('--container-env=')).split('=', 1)[1].split(',')
+                    self.assertIn('NCCL_PROTO', names)
+
+
+class NcclProtocolToolTests(unittest.TestCase):
+    """tools/nccl-protocols.sh: the srun step, the rank script and the report, with a fake srun."""
+
+    ENV = dict(GPUS_PER_NODE='8', AIM347_CPUS_PER_NODE='192', LAB_IMAGE='/fsx/aim347/images/aim347-lab.sqsh',
+               LLM_CONTAINER_NAME='aim347-lab', LLM_RESULTS_DIR='/fsx/aim347/results')
+    # Synthetic rows in the nccl-tests 2.18.3 layout: size, count, type, redop, root, then
+    # time, algbw, busbw and #wrong out of place and in place.
+    TABLES = {
+        'nccl-choice': [(1048576, 6593.2, 0.16, 0.30), (2097152, 15322.0, 0.14, 0.26),
+                        (16777216, 1007.5, 16.65, 31.22)],
+        'simple': [(1048576, 484.6, 2.16, 4.06), (2097152, 846.0, 2.48, 4.65), (16777216, 1007.0, 16.66, 31.24)],
+    }
+    CHOICES = {'nccl-choice': {1048576: 'RING LL', 2097152: 'RING LL', 16777216: 'RING SIMPLE'},
+               'simple': {1048576: 'RING SIMPLE', 2097152: 'RING SIMPLE', 16777216: 'RING SIMPLE'}}
+
+    def write_run(self, directory, variant, wrong=0):
+        directory.mkdir(parents=True, exist_ok=True)
+        rows = [f'{size:>12}{size // 4:>14}     float     sum      -1{time:>9.1f}{algbw:>8.2f}{busbw:>8.2f}'
+                f'{wrong:>8}{time:>9.1f}{algbw:>8.2f}{busbw:>8.2f}{0:>8}' for size, time, algbw, busbw in self.TABLES[variant]]
+        (directory / 'all_reduce_perf.txt').write_text(
+            '# nccl-tests version 2.18.3 nccl-headers=23004 nccl-library=23004\n'
+            '#       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong\n'
+            + '\n'.join(rows) + '\n# Out of bounds values : 0 OK\n')
+        log = with_nccl_proto(nccl_log('efa')) if variant == 'simple' else nccl_log('efa')
+        for size, choice in self.CHOICES[variant].items():
+            algo, proto = choice.split()
+            log += f'gpu-node-1:1769341:1769341 [0] NCCL INFO AllReduce: {size} Bytes -> Algo {algo} proto {proto} channel{{Lo..Hi}}={{0..3}}\n' * 3
+        (directory / 'nccl-gpu-node-1-1769341.log').write_text(log)
+
+    def test_srun_step_runs_one_rank_per_gpu_in_the_training_image(self):
+        command = workshop.protocol_command('simple', Path('/fsx/aim347/results/nccl-protocols/T'), self.ENV)
+        self.assertEqual(command[:9], ['srun', '--nodes=2', '--ntasks=16', '--ntasks-per-node=8', '--cpus-per-task=24',
+                                       '--mpi=pmix', '--cpu-bind=none', '--time=10',
+                                       '--container-image=/fsx/aim347/images/aim347-lab.sqsh'])
+        self.assertIn('--container-name=aim347-lab', command)
+        self.assertIn(f'--container-mounts={workshop.LAB}:/opt/aim347,/fsx/aim347/results:/fsx/aim347/results', command)
+        self.assertIn('--container-env=NCCL_SOCKET_IFNAME', command)
+        self.assertEqual(command[-4:], ['bash', 'lib/nccl-protocols-rank.sh', 'simple',
+                                        '/fsx/aim347/results/nccl-protocols/T/simple'])
+
+    def test_rank_script_differs_only_in_nccl_proto(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stub(Path(directory), 'env', 'for name in NCCL_PROTO OFI_NCCL_PROTOCOL NCCL_NET FI_PROVIDER NCCL_DEBUG_SUBSYS '
+                                         'NCCL_DEBUG_FILE OMPI_MCA_btl_tcp_if_include PMIX_MCA_gds; do\n'
+                                         '  printf "%s=%s\\n" "$name" "${!name-unset}"; done; printf "%s\\n" "$@"\n')
+            env = dict(os.environ, PATH=f'{directory}:{os.environ["PATH"]}', NCCL_SOCKET_IFNAME='=enp71s0',
+                       NCCL_PROTO='LL')
+            outputs = {}
+            for variant in ('nccl-choice', 'simple'):
+                outputs[variant] = subprocess.run(['bash', str(LAB / 'lib/nccl-protocols-rank.sh'), variant, '/logs'],
+                                                  env=env, check=True, capture_output=True, text=True,
+                                                  stdin=subprocess.DEVNULL).stdout.splitlines()
+            self.assertEqual(outputs['nccl-choice'][0], 'NCCL_PROTO=unset')
+            self.assertEqual(outputs['simple'][0], 'NCCL_PROTO=Simple')
+            self.assertEqual(outputs['nccl-choice'][1:], outputs['simple'][1:])
+            self.assertEqual(outputs['simple'][1:8], ['OFI_NCCL_PROTOCOL=RDMA', 'NCCL_NET=AWS Libfabric', 'FI_PROVIDER=efa',
+                                                      'NCCL_DEBUG_SUBSYS=INIT,NET,ENV,TUNING',
+                                                      'NCCL_DEBUG_FILE=/logs/nccl-%h-%p.log',
+                                                      'OMPI_MCA_btl_tcp_if_include=enp71s0', 'PMIX_MCA_gds=hash'])
+            self.assertEqual(outputs['simple'][8:], ['LD_PRELOAD=/opt/nccl/build/lib/libnccl.so',
+                                                     '/opt/nccl-tests/build/all_reduce_perf', '-b', '1M', '-e', '64M',
+                                                     '-f', '2', '-g', '1', '-w', '5', '-n', '20', '-c', '1'])
+            result = subprocess.run(['bash', str(LAB / 'lib/nccl-protocols-rank.sh'), 'll', '/logs'], env=env,
+                                    capture_output=True, text=True, stdin=subprocess.DEVNULL)
+            self.assertEqual(result.returncode, 2)
+
+    def test_report_puts_both_runs_side_by_side(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            for variant in ('nccl-choice', 'simple'):
+                self.write_run(out / variant, variant)
+            lines, code = workshop.protocol_report(out, 16)
+            self.assertEqual(code, 0)
+            self.assertEqual(lines[:5], [
+                '            NCCL_PROTO not set                      NCCL_PROTO=Simple',
+                '     size   time (us)  busbw (GB/s)  NCCL ran       time (us)  busbw (GB/s)  NCCL ran',
+                '    1 MiB      6593.2          0.30  RING/LL            484.6          4.06  RING/SIMPLE',
+                '    2 MiB     15322.0          0.26  RING/LL            846.0          4.65  RING/SIMPLE',
+                '   16 MiB      1007.5         31.22  RING/SIMPLE       1007.0         31.24  RING/SIMPLE'])
+            self.assertEqual(lines[5], '[aim347] NCCL_PROTO in the NCCL logs: not set on any rank (NCCL_PROTO not set); '
+                                       'Simple on 16 of 16 ranks (NCCL_PROTO=Simple)')
+            self.assertEqual(lines[6], '[aim347] NCCL logs, with the algorithm and protocol of every collective on rank 0: '
+                                       f'{out / "nccl-choice"}, {out / "simple"}')
+            self.write_run(out / 'simple', 'simple', wrong=3)
+            lines, code = workshop.protocol_report(out, 16)
+            self.assertEqual((code, lines[-1]), (5, '[aim347] wrong values: NCCL_PROTO=Simple at 1 MiB, 2 MiB, 16 MiB'))
+            (out / 'simple/all_reduce_perf.txt').write_text('')
+            lines, code = workshop.protocol_report(out, 16)
+            self.assertEqual((code, lines), (4, [f'[aim347] no all_reduce_perf table for NCCL_PROTO=Simple in {out}']))
+
+    def test_tool_runs_both_steps_and_refuses_while_a_stage_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            results, state = Path(directory) / 'results', Path(directory) / 'state'
+            state.mkdir()
+            env = dict(self.ENV, LLM_RESULTS_DIR=str(results))
+            launched = []
+
+            def runner(command, stdout, stderr):
+                launched.append(command)
+                self.write_run(Path(command[-1]), command[-2])
+                stdout.write(Path(command[-1], 'all_reduce_perf.txt').read_text())
+                return subprocess.CompletedProcess(command, 0)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = workshop.run_protocols(state, runner=runner, env=env)
+            self.assertEqual(code, 0)
+            self.assertEqual([command[-2] for command in launched], ['nccl-choice', 'simple'])
+            text = output.getvalue().splitlines()
+            self.assertEqual(text[0], '[aim347] all_reduce_perf, 1 MiB to 64 MiB, on 16 GPUs over EFA with OFI_NCCL_PROTOCOL=RDMA')
+            self.assertEqual(text[2:4], ['[aim347] run 1 of 2: NCCL_PROTO not set', '[aim347] run 2 of 2: NCCL_PROTO=Simple'])
+            self.assertIn('    1 MiB      6593.2          0.30  RING/LL            484.6          4.06  RING/SIMPLE', text)
+
+            def failing(command, stdout, stderr):
+                stdout.write('srun: error: launch failed\n')
+                return subprocess.CompletedProcess(command, 1)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(workshop.run_protocols(state, runner=failing, env=env), 4)
+            self.assertIn('srun: error: launch failed', output.getvalue())
+
+            (state / 'running').write_text(json.dumps(dict(invocation='i', stages=['efa'], pid=os.getpid())))
+            errors = io.StringIO()
+            with redirect_stderr(errors):
+                self.assertEqual(workshop.run_protocols(state, runner=runner, env=env), 2)
+            self.assertIn('a stage is still running', errors.getvalue())
 
 
 if __name__ == '__main__':
