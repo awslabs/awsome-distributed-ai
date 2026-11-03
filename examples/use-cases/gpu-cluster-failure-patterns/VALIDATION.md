@@ -48,7 +48,11 @@ Still to measure on hardware:
 - Check `6` duration and warnings on freshly provisioned g7.48xlarge nodes. Any WARN refuses recovery, so a warning that a fresh node already shows would keep every EFA round from qualifying.
 - Whether a participant who runs check `0` in their own allocation can read the kernel journal; the check suppresses that error and can report PASS without an Xid scan.
 
-The launcher and workload modes that apply a job incident's profile are not part of this change, so no job incident has run end to end.
+The launcher that applies a job incident's profile is not part of this change, so no job incident has run end to end.
+
+### Workload modes: DataLoader option A, worker CUDA, replica check
+
+`workload.py` gained the DataLoader exercise (`--dataset-cache`, `--stack-dump-seconds`, `--dataloader-timeout`, `--reinit-in-worker`, `--affected-rank`, `--start-method forkserver`), worker CUDA (`--worker-cuda`), the replica check of the device mode (`--replica-check`, `--corrupt-rank`, `--corrupt-step`, `--corrupt-bit`, `--corrupt-recurring`), `15.replica-check.sh`, the `CUBLAS_WORKSPACE_CONFIG` export in `torch-node.sh`, and the `AIM344_INCIDENT_SETTINGS` variable. `tests/test_workload_modes.py` covers them on a CPU-only host with a real DataLoader and real workers: the rank-thread stop under fork with no error and no completed epoch-2 batch, stack files for the rank (`_try_get_data`) and both workers (`__getitem__`) and the removal of unused files, the pickling error under spawn and forkserver, two complete epochs with worker-thread under all three start methods, with reinit-in-worker under fork, and on an unaffected rank, the DataLoader timeout error, the worker-CUDA failure at the first fetch (the CPU build raises its own assertion where a GPU host raises the bad-fork error), the checksum's response to a flip of bits 0, 22 and 31, the transition lines and window report, the device loop through `main()` with mocked CUDA and NCCL, and the settings variable with every refusal. Nothing in this section ran on a GPU. Still to measure on hardware: identical checksums on 16 GPUs for 20 steps with the stated settings, the one-time and recurring profiles end to end, the time per step at n = 2048, the stop of all 16 ranks with its stack files and exit 124, the one-rank variant's watchdog set, leftover processes after TERM, and the worker-CUDA error text and peers' lines under fork.
 
 ## September 24, 2026: fixed-candidate participant EFA recovery
 
