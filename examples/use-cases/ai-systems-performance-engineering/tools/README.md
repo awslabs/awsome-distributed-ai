@@ -182,14 +182,15 @@ bash facilitator/prepare-event.sh --stage-dir DIR --slurm-version VER --instance
 It refuses any `--instance-type` other than `g7.48xlarge` before it starts, because the tools request 8 GPUs per node and expect two EFA devices. It then prints `prepare-event: <step> ok (<seconds> s)` after each step and `prepare-event: ready` at the end:
 
 1. **checks**: two nodes in the allocation with equal `CPUEfctv`, `DIR` on Lustre, and the interface the second node uses to reach the first, which becomes `NCCL_SOCKET_IFNAME`.
-2. **image**: on the first node, `docker build` of this directory's `Dockerfile` and `enroot import` into `DIR/images/aim347-lab.sqsh`, with its SHA-256 in `aim347-lab.sqsh.sha256`. No registry is used. An existing image whose hash checks is kept.
-3. **image on both nodes**: `unsquashfs -s` and the hash check on each node, recorded in `aim347-lab.sqsh.verified`.
-4. **data**: in the image on the first node, `1.prepare-llm.py` writes `DIR/data/tokens-2048-1280`, `tokens-2048-160` and `tokens-1024-160` from documents of at least 4,096 tokens, keeping each document's first positions, and downloads the model to `DIR/data/model` with the first dataset. A dataset whose manifest, sizes and fingerprint verify is kept. One that fails is moved to `DIR/failed-<UTC>/` and prepared again.
-5. **data on both nodes**: each node recomputes every dataset's fingerprint and checks the model pin.
-6. **environment file**: `DIR/aim347.env`, written atomically.
-7. **ownership**: `images`, `data`, `results` and `aim347.env` are given to `--owner` (default `ubuntu`).
+2. **monitoring install**: on each node, waits up to 30 minutes until node-exporter answers on `http://localhost:9100/metrics` and `docker info` succeeds. PCS installs its monitoring stack on a GPU node as a `NodeReady` action, which runs after the node already accepts jobs. On a GPU node that install restarts Docker before it starts node-exporter, and the restart would end an image build that had already started. On a timeout the script names the node and the install log, `/var/log/amazon/pcs/lifecycle/actions/nodeReady/install-monitoring.log`, and exits 2.
+3. **image**: on the first node, `docker build` of this directory's `Dockerfile` and `enroot import` into `DIR/images/aim347-lab.sqsh`, with its SHA-256 in `aim347-lab.sqsh.sha256`. No registry is used. An existing image whose hash checks is kept.
+4. **image on both nodes**: `unsquashfs -s` and the hash check on each node, recorded in `aim347-lab.sqsh.verified`.
+5. **data**: in the image on the first node, `1.prepare-llm.py` writes `DIR/data/tokens-2048-1280`, `tokens-2048-160` and `tokens-1024-160` from documents of at least 4,096 tokens, keeping each document's first positions, and downloads the model to `DIR/data/model` with the first dataset. A dataset whose manifest, sizes and fingerprint verify is kept. One that fails is moved to `DIR/failed-<UTC>/` and prepared again.
+6. **data on both nodes**: each node recomputes every dataset's fingerprint and checks the model pin.
+7. **environment file**: `DIR/aim347.env`, written atomically.
+8. **ownership**: `images`, `data`, `results` and `aim347.env` are given to `--owner` (default `ubuntu`).
 
-Steps 2 and 4 request all of the node's CPUs, because a step task otherwise gets one. A rerun after a failure keeps the parts that verify. Exit status: 0 ready; 2 usage or a precondition; 3 the image build, import or hash; 4 the data preparation; 5 a verification on either node.
+Steps 3 and 5 request all of the node's CPUs, because a step task otherwise gets one. A rerun after a failure keeps the parts that verify. Exit status: 0 ready; 2 usage or a precondition, including a monitoring install that did not finish; 3 the image build, import or hash; 4 the data preparation; 5 a verification on either node.
 
 ### facilitator/install-node-collectors.sh
 

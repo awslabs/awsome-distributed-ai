@@ -77,6 +77,23 @@ checks() {
         fail 2 "cannot find the interface from ${nodes[1]} to $address"
 }
 
+# PCS installs its monitoring stack on a GPU node as a NodeReady action, after the node
+# already accepts jobs. The install reinstalls Docker, configures the NVIDIA runtime,
+# restarts Docker and only then starts node-exporter. A docker build or a Pyxis container
+# started before that restart can fail, so wait until node-exporter answers on both nodes.
+monitoring_install() {
+    # shellcheck disable=SC2016
+    srun -N2 --ntasks-per-node=1 bash -c '
+        for _ in $(seq 180); do
+            curl -sf -o /dev/null http://localhost:9100/metrics && docker info >/dev/null 2>&1 && exit 0
+            sleep 10
+        done
+        echo "prepare-event: the PCS monitoring install has not finished on ${SLURMD_NODENAME:-$(hostname)} after 30 minutes;" \
+            "read /var/log/amazon/pcs/lifecycle/actions/nodeReady/install-monitoring.log on that node" >&2
+        exit 1' ||
+        fail 2 'the PCS monitoring install did not finish on both GPU nodes'
+}
+
 image_ok() { [[ -f $image && -f $image.sha256 ]] && sha256sum --check --strict --status "$image.sha256"; }
 
 build_image() {
@@ -181,6 +198,7 @@ ownership() {
 }
 
 step checks checks
+step 'monitoring install' monitoring_install
 step image build_image
 step 'image on both nodes' verify_image
 step data prepare_data

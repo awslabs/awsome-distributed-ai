@@ -937,6 +937,69 @@ class ProvisioningTests(unittest.TestCase):
         self.assertEqual(result.stderr.strip(), 'prepare-event: --instance-type must be g7.48xlarge (got p5.48xlarge)')
         self.assertEqual(subprocess.run(['bash', str(script), '--stage-dir'], capture_output=True).returncode, 2)
 
+    def run_prepare_event(self, directory, curl_failures):
+        """prepare-event.sh with stub id, scontrol, findmnt, srun, curl, docker and sleep on PATH.
+
+        The stub srun runs a two-node step once per node, and fails the docker build,
+        so the script stops at the image step after the monitoring wait."""
+        root = Path(directory)
+        bin_dir, stage_dir, calls = root / 'bin', root / 'stage', root / 'calls'
+        bin_dir.mkdir()
+        stage_dir.mkdir()
+        stub(bin_dir, 'id', '[[ $1 == -u ]] && echo 0\nexit 0\n')
+        stub(bin_dir, 'scontrol', 'case "$2" in hostnames) echo gpu-node-1; echo gpu-node-2 ;; '
+                                  'node) echo "NodeName=$4 NodeAddr=10.0.0.1 CPUEfctv=192" ;; esac\n')
+        stub(bin_dir, 'findmnt', 'echo lustre\n')
+        stub(bin_dir, 'srun', f'''nodes=1
+while [[ $1 == -* ]]; do
+  [[ $1 == -N2 ]] && nodes=2
+  [[ $1 == -w ]] && shift
+  shift
+done
+[[ $1 == ip ]] && {{ echo '[{{"dev": "enp71s0"}}]'; exit 0; }}
+[[ $* == *'docker build'* ]] && {{ echo build >> {calls}; exit 1; }}
+status=0
+for node in $(seq "$nodes"); do SLURMD_NODENAME=gpu-node-$node "$@" || status=1; done
+exit $status
+''')
+        stub(bin_dir, 'curl', f'''echo "curl $SLURMD_NODENAME" >> {calls}
+count=$(grep -c "^curl $SLURMD_NODENAME$" {calls})
+((count > {curl_failures}))
+''')
+        stub(bin_dir, 'docker', f'echo "docker $* $SLURMD_NODENAME" >> {calls}\n')
+        stub(bin_dir, 'sleep', 'exit 0\n')
+        # Slurm version 0.0 keeps a real Slurm directory, if the host has one, off the front of PATH.
+        result = subprocess.run(['bash', str(LAB / 'facilitator/prepare-event.sh'), '--stage-dir', str(stage_dir),
+                                 '--slurm-version', '0.0', '--instance-type', 'g7.48xlarge',
+                                 '--grafana-url', 'https://203.0.113.10/grafana/'],
+                                env=dict(os.environ, PATH=f'{bin_dir}:{os.environ["PATH"]}', SLURM_JOB_ID='42',
+                                         SLURM_JOB_NODELIST='gpu-node-[1-2]'),
+                                capture_output=True, text=True, timeout=120)
+        return result, calls.read_text().splitlines() if calls.exists() else []
+
+    def test_prepare_event_waits_for_the_monitoring_install_before_the_image_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result, calls = self.run_prepare_event(directory, curl_failures=2)
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn('prepare-event: checks ok (', result.stdout)
+        self.assertIn('prepare-event: monitoring install ok (', result.stdout)
+        self.assertIn('building or importing aim347-lab:', result.stderr)
+        for node in ('gpu-node-1', 'gpu-node-2'):
+            self.assertEqual(calls.count(f'curl {node}'), 3)
+            self.assertEqual(calls.count(f'docker info {node}'), 1)
+        self.assertEqual(calls[-1], 'build')
+
+    def test_prepare_event_stops_when_the_monitoring_install_does_not_finish(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result, calls = self.run_prepare_event(directory, curl_failures=1000)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('prepare-event: the PCS monitoring install has not finished on gpu-node-1 after 30 minutes; '
+                      'read /var/log/amazon/pcs/lifecycle/actions/nodeReady/install-monitoring.log on that node',
+                      result.stderr)
+        self.assertIn('prepare-event: the PCS monitoring install did not finish on both GPU nodes', result.stderr)
+        self.assertEqual(calls.count('curl gpu-node-1'), 180)
+        self.assertNotIn('build', calls)
+
     def test_launcher_names_the_container_only_when_asked(self):
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
