@@ -48,7 +48,8 @@ EXPECTED_FINGERPRINTS = {
 MINIMUM_DOCUMENT_TOKENS = 4096
 PROVENANCE_KEYS = ('model_id', 'tokenizer_revision', 'dataset_id', 'dataset_revision',
                    'dataset_subset', 'dataset_split')
-EFA_DEVICES = {'g7.48xlarge': 2}
+# EFA devices attached per node: g6e.48xlarge has four, and the test event attaches two.
+EFA_DEVICES = {'g7.48xlarge': 2, 'g6e.48xlarge': 2}
 FSX_FREE_BYTES = 300 * 2**30
 
 JOB_SETTINGS = {
@@ -1136,7 +1137,7 @@ def env_file_text(*, stage_dir, companion, slurm_version, cpus_per_node, instanc
               ('NCCL_SOCKET_IFNAME', f'={nic}'), ('LAB_IMAGE', f'{home}/images/aim347-lab.sqsh'),
               ('LAB_IMAGE_SHA256', image_sha256), ('LLM_DATA_DIR', f'{home}/data'),
               ('LLM_RESULTS_DIR', f'{home}/results'), ('LLM_CONTAINER_NAME', 'aim347-lab'),
-              ('AIM347_ALLOCATION_LABEL', 'pcs-g7.48xlarge-2nodes-16gpu'), ('AIM347_GRAFANA_URL', grafana_url),
+              ('AIM347_ALLOCATION_LABEL', f'pcs-{instance_type}-2nodes-16gpu'), ('AIM347_GRAFANA_URL', grafana_url),
               ('AIM347_GRAFANA_PASSWORD_FILE', str(password_file)), ('AIM347_SKIP_LEGACY_ENV', 1)]
     lines = []
     for key, value in values:

@@ -242,7 +242,7 @@ The tools expect a cluster built from the [AWS PCS architecture](../../../../arc
 bash facilitator/prepare-event.sh --stage-dir DIR --slurm-version VER --instance-type TYPE --grafana-url URL [--owner USER] [--build-jobs N] [--with-serving]
 ```
 
-It refuses any `--instance-type` other than `g7.48xlarge` before it starts, because the tools request 8 GPUs per node and expect two EFA devices. It then prints `prepare-event: <step> ok (<seconds> s)` after each step and `prepare-event: ready` at the end:
+It accepts `--instance-type g7.48xlarge`, and `g6e.48xlarge` for test events, and refuses any other type before it starts, because the tools request 8 GPUs per node and expect two EFA devices. A `g6e.48xlarge` node has four EFA interfaces, and the test event attaches two of them. It then prints `prepare-event: <step> ok (<seconds> s)` after each step and `prepare-event: ready` at the end:
 
 1. **checks**: two nodes in the allocation with equal `CPUEfctv`, `DIR` on Lustre, and the interface the second node uses to reach the first, which becomes `NCCL_SOCKET_IFNAME`.
 2. **monitoring install**: on each node, waits up to 30 minutes until node-exporter answers on `http://localhost:9100/metrics` and `docker info` succeeds. PCS installs its monitoring stack on a GPU node as a `NodeReady` action, which runs after the node already accepts jobs. On a GPU node that install restarts Docker before it starts node-exporter, and the restart would end an image build that had already started. On a timeout the script names the node and the install log, `/var/log/amazon/pcs/lifecycle/actions/nodeReady/install-monitoring.log`, and exits 2.

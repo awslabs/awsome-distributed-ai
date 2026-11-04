@@ -991,6 +991,13 @@ class ProvisioningTests(unittest.TestCase):
                                  capture_output=True, text=True, check=True).stdout.strip()
         self.assertEqual(sourced, '=enp71s0|/fsx/aim347/participant/images/aim347-lab.sqsh|'
                                   '/opt/aws/pcs/scheduler/slurm-25.11/bin')
+        self.assertIn("export AIM347_ALLOCATION_LABEL=pcs-g7.48xlarge-2nodes-16gpu\n", text)
+        g6e = workshop.env_file_text(stage_dir='/fsx/aim347/participant', companion='/c', slurm_version='25.11',
+                                     cpus_per_node=192, instance_type='g6e.48xlarge', nic='enp39s0',
+                                     image_sha256='b' * 64, grafana_url='https://203.0.113.10/grafana/',
+                                     password_file='/p')
+        self.assertIn("export AIM347_ALLOCATION_LABEL=pcs-g6e.48xlarge-2nodes-16gpu\n", g6e)
+        self.assertIn("export AIM347_INSTANCE_TYPE=g6e.48xlarge\n", g6e)
 
     def test_prepare_event_refuses_other_instance_types_and_bad_usage(self):
         script = LAB / 'facilitator/prepare-event.sh'
@@ -998,8 +1005,27 @@ class ProvisioningTests(unittest.TestCase):
                                  '--instance-type', 'p5.48xlarge', '--grafana-url', 'https://x/grafana/'],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
-        self.assertEqual(result.stderr.strip(), 'prepare-event: --instance-type must be g7.48xlarge (got p5.48xlarge)')
+        self.assertEqual(result.stderr.strip(),
+                         'prepare-event: --instance-type must be g7.48xlarge or g6e.48xlarge (got p5.48xlarge)')
         self.assertEqual(subprocess.run(['bash', str(script), '--stage-dir'], capture_output=True).returncode, 2)
+        # g6e.48xlarge passes the instance check and stops at a later precondition (here, the stage directory).
+        result = subprocess.run(['bash', str(script), '--stage-dir', '/nonexistent', '--slurm-version', '25.11',
+                                 '--instance-type', 'g6e.48xlarge', '--grafana-url', 'https://x/grafana/'],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn('--instance-type', result.stderr)
+        self.assertIn('--stage-dir must be an existing absolute path', result.stderr)
+
+    def test_check_expects_two_efa_devices_on_g6e(self):
+        reports = [dict(host=host, gpus=[['NVIDIA L40S', '46068']] * 8, efa=efa, error=None)
+                   for host, efa in zip(HOSTS, (['rdmap0s1', 'rdmap0s2'], ['rdmap0s1']))]
+        with tempfile.TemporaryDirectory() as directory:
+            env = dict(AIM347_HOME=directory, PARTITION='gpu', GPUS_PER_NODE='8', AIM347_INSTANCE_TYPE='g6e.48xlarge')
+            lines, _ = workshop.check_lines(env, 'gpu-node-1 idle\ngpu-node-2 idle\n', reports,
+                                            lambda url: (200, '{"data": {"result": []}}'))
+        self.assertIn('  efa          PASS  gpu-node-1: 2 EFA devices (rdmap0s1, rdmap0s2)', lines)
+        self.assertIn('  efa          FAIL  gpu-node-2: 1 EFA devices (rdmap0s1) (expected 2)', lines)
+        self.assertIn('  gpus         PASS  gpu-node-1: 8 x NVIDIA L40S, 46068 MiB each', lines)
 
     def run_prepare_event(self, directory, curl_failures):
         """prepare-event.sh with stub id, scontrol, findmnt, srun, curl, docker and sleep on PATH.

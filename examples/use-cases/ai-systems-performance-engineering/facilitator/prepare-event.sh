@@ -39,7 +39,9 @@ while (($#)); do
 done
 [[ -n $stage_dir && -n $slurm_version && -n $instance_type && -n $grafana_url ]] || usage
 # The tools assume 8 GPUs and two EFA devices per node and request --gres=gpu:8.
-[[ $instance_type == g7.48xlarge ]] || fail 2 "--instance-type must be g7.48xlarge (got $instance_type)"
+# g6e.48xlarge (8 GPUs, two of its four EFA interfaces attached) is for test events only.
+[[ $instance_type == g7.48xlarge || $instance_type == g6e.48xlarge ]] ||
+    fail 2 "--instance-type must be g7.48xlarge or g6e.48xlarge (got $instance_type)"
 [[ $slurm_version =~ ^[0-9]+\.[0-9]+$ ]] || fail 2 "--slurm-version must look like 25.11 (got $slurm_version)"
 [[ $build_jobs =~ ^[1-9][0-9]*$ ]] || fail 2 "--build-jobs must be a positive number (got $build_jobs)"
 [[ $stage_dir == /* && $stage_dir != *[[:space:],:]* && -d $stage_dir ]] ||
