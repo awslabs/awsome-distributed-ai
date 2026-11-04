@@ -44,7 +44,7 @@ The container pins the following mutually compatible release set. EFA installer 
 > |`NCCL_VERSION`         | `v2.31.2-1` | [NCCL v2.31.2-1](https://github.com/NVIDIA/nccl/releases/tag/v2.31.2-1)                     |
 > |`NCCL_TESTS_VERSION`   | `v2.20.0`   | [nccl-tests v2.20.0](https://github.com/NVIDIA/nccl-tests/releases/tag/v2.20.0)             |
 
-The image is built with `NVCC_GENCODE` covering `sm_80`, `sm_86`, `sm_89`, `sm_90`, `sm_100`, and `sm_103`, which provides native binaries for A100, RTX 30/Ada/Lovelace, H100/H200, B200/GB200, and B300/GB300. PTX is not embedded; add a new architecture to both `NVCC_GENCODE` lines in `nccl-tests.Dockerfile` before targeting it.
+The image is built with `NVCC_GENCODE` covering `sm_80`, `sm_86`, `sm_89`, `sm_90`, `sm_100`, `sm_103`, and `sm_120`, which provides native binaries for A100, RTX 30/Ada/Lovelace, H100/H200, B200/GB200, B300/GB300, G7 (RTX PRO 4500 Blackwell Server Edition), and G7e (RTX PRO 6000 Blackwell Server Edition). PTX is not embedded; add a new architecture to both `NVCC_GENCODE` lines in `nccl-tests.Dockerfile` before targeting it.
 
 Set the pinned versions and image tag from the `micro-benchmarks/nccl-tests` directory:
 
