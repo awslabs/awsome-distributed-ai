@@ -1276,5 +1276,208 @@ class NcclProtocolToolTests(unittest.TestCase):
             self.assertIn('a stage is still running', errors.getvalue())
 
 
+
+# The configuration that the recorded sdpa run wrote to its summary.json (Spain, 2026-11-03).
+SDPA_CONFIGURATION = json.loads((FIXTURES / 'spain-20261103/sdpa/train/summary.json').read_text())['configuration']
+
+
+def with_configuration(**changes):
+    return dict(SDPA_CONFIGURATION, **changes)
+
+
+class TryTests(unittest.TestCase):
+    """Optional A: run.sh try <change> runs the change, then the unchanged final configuration."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.results = Path(self.directory.name)
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def stage_with(self, name, subcommand, settings, seconds, configuration, change=None):
+        """A finished timed stage with a summary of the given seconds and configuration (synthetic values)."""
+        stage = next(s for s in workshop.plan(subcommand, settings, change=change) if s['name'] == name)
+        directory = finished_stage(self.results, stage)
+        (directory / 'train/summary.json').write_text(json.dumps(summary(
+            stage, seconds, 65504 * 4 / seconds, 9 * 2**30, configuration=configuration)))
+        return stage, directory
+
+    def test_try_plans_the_change_then_the_unchanged_job_without_saving(self):
+        settings = job('efa', 'sdpa', 'process')
+        sdpa = workshop.trainer_arguments(workshop.plan('sdpa', job('efa', 'sdpa'))[0], 'label')
+        for change, spec in workshop.TRY_CHANGES.items():
+            with self.subTest(change=change):
+                tried, rerun = workshop.plan('try', settings, change=change)
+                self.assertEqual((tried['name'], rerun['name']), (f'try-{change}', f'rerun-{change}'))
+                self.assertEqual([(s['transport'], s['attention'], s['saving'], s['config'], s['data'])
+                                  for s in (tried, rerun)],
+                                 [('efa', 'sdpa', 'none', 'configs/smol-2048.json', 'tokens-2048-160')] * 2)
+                self.assertEqual((tried['with_change'], rerun['with_change']), (True, False))
+                rerun_arguments = workshop.trainer_arguments(rerun, 'label')
+                self.assertEqual(rerun_arguments[:-1], sdpa[:-1])
+                self.assertEqual(rerun_arguments[-1], f'/results/rerun-{change}/train')
+                arguments = workshop.trainer_arguments(tried, 'label')
+                if change == 'microbatch2':
+                    expected = sdpa[:9] + ['2'] + sdpa[10:-2]
+                else:
+                    expected = sdpa[:-2] + [spec['argument']]
+                self.assertEqual(arguments, expected + ['--output', f'/results/try-{change}/train'])
+        with self.assertRaises(workshop.UsageError) as raised:
+            workshop.plan('try', job('efa'), change='microbatch2')
+        self.assertIn("try expects ATTENTION=sdpa in job.env (it says eager). Change it with: "
+                      "sed -i 's/^ATTENTION=eager$/ATTENTION=sdpa/' job.env", str(raised.exception))
+        with self.assertRaisesRegex(workshop.UsageError, 'where <change> is one of microbatch2, fused-optimizer, '
+                                                         'forward-prefetch, no-reshard-after-forward$'):
+            workshop.plan('try', settings)
+        with self.assertRaisesRegex(workshop.UsageError, r"\(not 'compile'\)"):
+            workshop.plan('try', settings, change='compile')
+        with self.assertRaisesRegex(workshop.UsageError, 'sdpa takes no argument'):
+            workshop.plan('sdpa', settings, change='microbatch2')
+
+    def test_command_line_needs_a_change_and_a_finished_sdpa_stage(self):
+        job_env = self.results / 'job.env'
+        job_env.write_text('LLM_TRANSPORT=efa\nATTENTION=sdpa\nCHECKPOINT_MODE=sync\n')
+        environment = dict(LLM_RESULTS_DIR=str(self.results / 'results'), AIM347_ALLOCATION_ID='42',
+                           AIM347_JOB_ENV=str(job_env))
+        (self.results / 'results').mkdir()
+        cases = [(['run', 'try'], 'try needs one change: bash tools/run.sh try <change>'),
+                 (['run', 'sdpa', 'microbatch2'], "sdpa takes no argument (it was given 'microbatch2')"),
+                 (['run', 'try', 'microbatch2'], 'try compares your change with stage sdpa, which has no finished '
+                                                 'run. Run: bash tools/run.sh sdpa')]
+        with patch.dict(os.environ, environment), patch.object(workshop, 'STATE', self.results / 'state'):
+            for argv, message in cases:
+                with self.subTest(argv=argv):
+                    errors = io.StringIO()
+                    with redirect_stderr(errors):
+                        self.assertEqual(workshop.main(argv), 2)
+                    self.assertIn(message, errors.getvalue())
+        self.assertFalse((self.results / 'state' / 'running').exists())
+
+    def test_change_check_reads_the_configuration_in_summary_json(self):
+        settings = job('efa', 'sdpa')
+        cases = [('try-microbatch2', with_configuration(microbatch=2, accumulation_steps=1), 0, None),
+                 ('try-microbatch2', SDPA_CONFIGURATION, 5, 'configuration microbatch is 1, expected 2'),
+                 ('rerun-microbatch2', SDPA_CONFIGURATION, 0, None),
+                 ('try-no-reshard-after-forward', with_configuration(reshard_after_forward=False), 0, None),
+                 ('rerun-fused-optimizer', with_configuration(optimizer='fused'), 5,
+                  'configuration optimizer is fused, expected stock')]
+        for name, configuration, code, detail in cases:
+            with self.subTest(name=name, code=code):
+                change = name.split('-', 1)[1]
+                stage, directory = self.stage_with(name, 'try', settings, 3.3, configuration, change)
+                (directory / 'launch.log').write_text(nccl_log('efa'))
+                PostRunTests.counters(self, directory)
+                result, checks, _ = workshop.post_run_checks(stage, directory, 0, 16)
+                self.assertEqual(result, code)
+                self.assertEqual([c['detail'] for c in checks if not c['ok']], [detail] if detail else [])
+                self.assertIn('Change', [c['name'] for c in checks])
+
+    def test_try_end_to_end_prints_both_blocks_then_the_spread_and_the_change(self):
+        settings = job('efa', 'sdpa', 'process')
+        sdpa, sdpa_dir = self.stage_with('sdpa', 'sdpa', job('efa', 'sdpa'), 3.39, SDPA_CONFIGURATION)  # synthetic
+        stages = workshop.plan('try', settings, change='microbatch2')
+        seconds = {'try-microbatch2': 3.30, 'rerun-microbatch2': 3.40}  # synthetic
+        configuration = {'try-microbatch2': with_configuration(microbatch=2, accumulation_steps=1),
+                         'rerun-microbatch2': SDPA_CONFIGURATION}
+        launched = []
+        readings = iter(range(100, 10_000, 100))
+
+        def runner(command, cwd, env, stdout, stderr):
+            name = next(s['name'] for s in stages if f'/results/{s["name"]}/train' in command)
+            stage = next(s for s in stages if s['name'] == name)
+            launched.append((name, env['LLM_TRANSPORT'], command))
+            train = self.results / name / 'train'
+            train.mkdir()
+            stdout.write(nccl_log('efa'))
+            write_rows(train / 'rank-0-updates.jsonl', rows(EFA['monotonic'], LOSSES))
+            (train / 'summary.json').write_text(json.dumps(summary(
+                stage, seconds[name], 65504 * 4 / seconds[name], 9 * 2**30, configuration=configuration[name])))
+            return subprocess.CompletedProcess(command, 0)
+
+        def efa_reader(log):
+            value = next(readings)
+            return efa_counters(value, value)
+
+        invocation = dict(invocation='20261104T010203Z', stages=[s['name'] for s in stages], allocation_id=42, pid=None)
+        for stage in stages:
+            self.assertEqual(workshop.run_stage(stage, invocation, self.results, runner=runner, world=16,
+                                                label='label', efa_reader=efa_reader), 0)
+        self.assertEqual([(name, transport) for name, transport, _ in launched],
+                         [('try-microbatch2', 'efa'), ('rerun-microbatch2', 'efa')])
+        self.assertIn('--microbatch 2 --workers', ' '.join(launched[0][2]))
+        self.assertIn('--microbatch 1 --workers', ' '.join(launched[1][2]))
+        output = []
+        for stage in stages:
+            self.assertEqual(workshop.follow_stage(stage['name'], invocation, self.results, out=output.append,
+                                                   world=16), 0)
+        self.assertEqual(output[:4], [
+            '[aim347] try-microbatch2: LLM_TRANSPORT=efa ATTENTION=sdpa CHECKPOINT_MODE=none',
+            '[aim347] this run alone uses CHECKPOINT_MODE=none; job.env is unchanged',
+            '[aim347] the configuration of stage sdpa with one change: --microbatch 2 in place of --microbatch 1',
+            '[aim347] 5 updates of 32 sequences x 2,048 positions; updates 2-5 are timed (262,016 targets)'])
+        self.assertIn('try-microbatch2 (efa, sdpa attention, no saving, --microbatch 2)', output)
+        self.assertIn('  setting in summary.json      microbatch 2, accumulation_steps 1', output)
+        self.assertIn('[aim347] the configuration of stage sdpa again, without the change, '
+                      'for the spread between two runs', output)
+        self.assertIn('rerun-microbatch2 (efa, sdpa attention, no saving)', output)
+        self.assertIn('  setting in summary.json      microbatch 1, accumulation_steps 2', output)
+        start = output.index('run-to-run spread: |sdpa - rerun-microbatch2| = 0.010 s (0.29 %)')
+        self.assertEqual(output[start + 1], 'change: try-microbatch2 - mean(sdpa, rerun-microbatch2) = -0.095 s (-2.80 %)')
+        chart = output[start + 3:]
+        self.assertEqual(chart[0], 'Your change beside the spread between two runs without it '
+                                   '(seconds of the timed updates)')
+        self.assertTrue(chart[1].startswith('  spread, sdpa and rerun-microbatch2  ') and chart[1].endswith('  0.010 s'))
+        self.assertTrue(chart[2].startswith('  change, try-microbatch2             ')
+                        and chart[2].endswith('  0.095 s shorter'))
+        self.assertLess(chart[1].count('█'), chart[2].count('█'))
+        self.assertRegex(chart[3], r'one cell = [0-9.]+ s$')
+        # The run with the change prints no chart of its own; the comparison follows the rerun only.
+        self.assertEqual(sum(line.startswith('run-to-run spread') for line in output), 1)
+
+    def test_no_comparison_for_runs_that_differ_in_more_than_the_change(self):
+        settings = job('efa', 'sdpa')
+        self.assertEqual(workshop.try_comparison_lines('fused-optimizer', self.results),
+                         ['not compared: sdpa not run yet'])
+        self.stage_with('sdpa', 'sdpa', settings, 3.39, SDPA_CONFIGURATION)
+        self.stage_with('try-fused-optimizer', 'try', settings, 3.38,
+                        with_configuration(optimizer='fused'), 'fused-optimizer')
+        self.stage_with('rerun-fused-optimizer', 'try', settings, 3.39,
+                        with_configuration(nccl_protocol='auto'), 'fused-optimizer')
+        self.assertEqual(workshop.try_comparison_lines('fused-optimizer', self.results),
+                         ['not compared: sdpa and rerun-fused-optimizer differ in nccl_protocol'])
+        self.stage_with('rerun-fused-optimizer', 'try', settings, 3.39, SDPA_CONFIGURATION, 'fused-optimizer')
+        self.stage_with('try-fused-optimizer', 'try', settings, 3.38,
+                        with_configuration(optimizer='fused', microbatch=2), 'fused-optimizer')
+        self.assertEqual(workshop.try_comparison_lines('fused-optimizer', self.results),
+                         ['not compared: try-fused-optimizer differs from rerun-fused-optimizer in microbatch'])
+        self.stage_with('try-fused-optimizer', 'try', settings, 3.39,
+                        with_configuration(optimizer='fused'), 'fused-optimizer')
+        lines = workshop.try_comparison_lines('fused-optimizer', self.results)
+        self.assertEqual(lines[:2], ['run-to-run spread: |sdpa - rerun-fused-optimizer| = 0.000 s (0.00 %)',
+                                     'change: try-fused-optimizer - mean(sdpa, rerun-fused-optimizer) = '
+                                     '+0.000 s (+0.00 %)'])
+        self.assertTrue(lines[-1].endswith('0.000 s no difference'))
+
+    def test_progression_lists_try_rows_after_the_main_path_against_sdpa(self):
+        tool = load_tool('progression')
+        settings = job('efa', 'sdpa')
+        with patch.dict(os.environ, LLM_RESULTS_DIR=str(self.results)):
+            self.stage_with('sdpa', 'sdpa', settings, 3.39, SDPA_CONFIGURATION)
+            self.stage_with('rerun-forward-prefetch', 'try', settings, 3.40, SDPA_CONFIGURATION, 'forward-prefetch')
+            self.stage_with('try-forward-prefetch', 'try', settings, 3.36,
+                            with_configuration(forward_prefetch=True), 'forward-prefetch')
+            self.stage_with('try-microbatch2', 'try', settings, 3.30,
+                            with_configuration(microbatch=2, accumulation_steps=1), 'microbatch2')
+            notes = tool.Notes()
+            _, table = tool.collect(self.results, notes)
+        self.assertEqual([row['_name'] for row in table],
+                         ['sdpa', 'try-microbatch2', 'try-forward-prefetch', 'rerun-forward-prefetch'])
+        by_name = {row['_name']: row for row in table}
+        self.assertEqual(by_name['try-forward-prefetch']['vs previous step'], f'{3.39 / 3.36:.2f}x')
+        self.assertEqual(by_name['rerun-forward-prefetch']['vs previous step'], f'{3.39 / 3.40:.2f}x')
+        self.assertEqual(by_name['try-microbatch2']['Saving'], 'none')
+
+
 if __name__ == '__main__':
     unittest.main()

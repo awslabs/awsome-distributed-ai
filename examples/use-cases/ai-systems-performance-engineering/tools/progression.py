@@ -21,12 +21,15 @@ COLUMNS = ('Stage', 'Transport', 'Attention', 'Saving', 'Work', 'Seconds', 'Toke
            'MFU vs your GEMM peak', 'Peak memory GiB', 'vs baseline', 'vs previous step', 'Goodput tokens/s',
            'Goodput M tokens per GPU-hour')
 PREVIOUS = {'efa': 'baseline', 'sdpa': 'efa', 'sdpa-socket': 'baseline'}
+# Optional A: each try-<change> and its rerun follow the main path, compared with stage sdpa.
+TRY_ORDER = tuple(f'{prefix}-{change}' for change in workshop.TRY_CHANGES for prefix in ('try', 'rerun'))
+PREVIOUS.update({name: 'sdpa' for name in TRY_ORDER})
 
 
 def stage_names(results):
     names = [path.parent.name for path in Path(results).glob('*/run.json')
              if not path.parent.name.startswith('profile-') and path.parent.name not in ('restore', 'attempts')]
-    known = [name for name in workshop.PROGRESSION_ORDER if name in names]
+    known = [name for name in workshop.PROGRESSION_ORDER + TRY_ORDER if name in names]
     return known + sorted(name for name in names if name not in known)
 
 

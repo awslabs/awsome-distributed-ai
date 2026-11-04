@@ -72,6 +72,21 @@ SUBCOMMANDS = {
                        config='configs/smol-2048-40.json'),
     'restore': dict(requires=('efa', 'sdpa', None), kind='restore', config='configs/smol-2048-40.json'),
     'interrupt': dict(requires=('efa', 'sdpa', None), kind='interrupt', config='configs/smol-2048-40.json'),
+    'try': dict(requires=('efa', 'sdpa', None), kind='timed', config='configs/smol-2048.json'),
+}
+# Optional A: `run.sh try <change>` runs the final configuration with one trainer change,
+# then the same configuration without it. `argument` is what the change does to the trainer
+# arguments of stage sdpa; `key` and `value` are the summary.json configuration entry that
+# shows the change took effect, and `default` the entry without it. `also` lists entries the
+# change moves with it (two sequences at once leave one accumulation step per update).
+TRY_CHANGES = {
+    'microbatch2': dict(argument='--microbatch 2', key='microbatch', value=2, default=1,
+                        also=('accumulation_steps',)),
+    'fused-optimizer': dict(argument='--fused-optimizer', key='optimizer', value='fused', default='stock', also=()),
+    'forward-prefetch': dict(argument='--forward-prefetch', key='forward_prefetch', value=True, default=False,
+                             also=()),
+    'no-reshard-after-forward': dict(argument='--no-reshard-after-forward', key='reshard_after_forward',
+                                     value=False, default=True, also=()),
 }
 MAIN_PATH = ('baseline', 'efa', 'sdpa')
 PROGRESSION_ORDER = ('baseline', 'probe-socket-eager', 'sdpa-socket', 'efa', 'probe-efa-eager',
@@ -147,11 +162,26 @@ def requirement_errors(subcommand, job):
     return errors
 
 
-def plan(subcommand, job, lab=LAB):
+def subcommand_list():
+    return ', '.join([name if name != 'try' else 'try <change>' for name in SUBCOMMANDS] + ['attach'])
+
+
+def change_error(subcommand, change):
+    """The usage error of a change argument, or None when it fits the subcommand."""
+    if subcommand == 'try' and change not in TRY_CHANGES:
+        return ('try needs one change: bash tools/run.sh try <change>, where <change> is one of '
+                + ', '.join(TRY_CHANGES) + (f' (not {change!r})' if change else ''))
+    if subcommand != 'try' and change is not None:
+        return f'{subcommand} takes no argument (it was given {change!r})'
+    return None
+
+
+def plan(subcommand, job, lab=LAB, change=None):
     """The stages one subcommand runs, as data. Raises UsageError on a wrong job.env."""
     if subcommand not in SUBCOMMANDS:
-        raise UsageError(f'unknown subcommand {subcommand!r}; choose one of '
-                         + ', '.join(list(SUBCOMMANDS) + ['attach']))
+        raise UsageError(f'unknown subcommand {subcommand!r}; choose one of {subcommand_list()}')
+    if change_error(subcommand, change):
+        raise UsageError(change_error(subcommand, change))
     errors = requirement_errors(subcommand, job)
     if errors:
         raise UsageError('\n'.join(errors))
@@ -169,6 +199,9 @@ def plan(subcommand, job, lab=LAB):
         runs = [('restore', transport, attention, 'sync')]
     elif subcommand == 'interrupt':
         runs = [('interrupt', transport, attention, 'process')]
+    elif subcommand == 'try':
+        # Both without saving, whatever job.env says after Module 6, as stage sdpa ran.
+        runs = [(f'try-{change}', transport, attention, 'none'), (f'rerun-{change}', transport, attention, 'none')]
     else:
         runs = [(subcommand, transport, attention, saving)]
     values = config_values(spec['config'], lab)
@@ -176,7 +209,7 @@ def plan(subcommand, job, lab=LAB):
                  config=spec['config'], data=dataset_for(spec['config']), sequence_length=values['sequence_length'],
                  updates=values['updates'], warmup_updates=values['warmup_updates'],
                  global_batch=values['global_batch_samples'], checkpoint_updates=values['checkpoint_updates'],
-                 job_env=dict(job))
+                 job_env=dict(job), change=change, with_change=name.startswith('try-'))
             for name, t, a, s in runs]
 
 
@@ -184,6 +217,12 @@ def trainer_arguments(stage, label, *, output=True):
     arguments = ['--config', stage['config'], '--data', f"/data/{stage['data']}", '--model-path', '/data/model',
                  '--attention-implementation', stage['attention'], '--microbatch', '1', '--workers', '2',
                  '--checkpoint-mode', stage['saving'], '--allocation-label', label]
+    if stage.get('with_change'):
+        change = TRY_CHANGES[stage['change']]
+        if change['key'] == 'microbatch':
+            arguments[arguments.index('--microbatch') + 1] = str(change['value'])
+        else:
+            arguments.append(change['argument'])
     if stage['kind'] == 'profile':
         arguments.append('--profile')
     if stage['kind'] == 'restore':
@@ -495,6 +534,13 @@ def post_run_checks(stage, stage_dir, launcher_exit, world):
         summary = read_json(train / 'summary.json')
         ok = bool(summary) and summary.get('status') == 'completed' and not summary.get('profiled')
         checks.append(dict(name='Summary', ok=ok, detail='summary.json' if ok else 'no completed, unprofiled summary.json'))
+        if ok and stage.get('change'):
+            change = TRY_CHANGES[stage['change']]
+            expected = change['value'] if stage['with_change'] else change['default']
+            found = summary.get('configuration', {}).get(change['key'])
+            checks.append(dict(name='Change', ok=found == expected,
+                               detail=f"configuration {change['key']} is {setting_text(found)}"
+                                      + ('' if found == expected else f', expected {setting_text(expected)}')))
     if stage['kind'] == 'restore':
         rows = read_rows(train / 'rank-0-updates.jsonl')
         ok = bool(rows) and rows[0]['update'] == RESTORE_FROM + 1
@@ -565,7 +611,35 @@ def describe(stage):
         saving = f'sync restore from ckpt-sync update {RESTORE_FROM}'
     extra = f", {stage['sequence_length']:,} positions" if stage['sequence_length'] != 2048 else ''
     extra += ', profiled' if stage['kind'] == 'profile' else ''
+    extra += f", {TRY_CHANGES[stage['change']]['argument']}" if stage.get('with_change') else ''
     return f"{stage['name']} ({stage['transport']}, {stage['attention']} attention, {saving}{extra})"
+
+
+def setting_text(value):
+    return str(value).lower() if isinstance(value, bool) else str(value)
+
+
+def change_lines(stage):
+    """The header line of a try stage or its rerun: what differs from stage sdpa."""
+    if not stage.get('change'):
+        return []
+    change = TRY_CHANGES[stage['change']]
+    if not stage['with_change']:
+        return ['[aim347] the configuration of stage sdpa again, without the change, '
+                'for the spread between two runs']
+    if change['key'] == 'microbatch':
+        what = f"{change['argument']} in place of --microbatch {change['default']}"
+    else:
+        what = f"{change['argument']} added"
+    return [f'[aim347] the configuration of stage sdpa with one change: {what}']
+
+
+def change_pair(stage, summary):
+    """The configuration entries that show whether the change took effect."""
+    change = TRY_CHANGES[stage['change']]
+    configuration = summary.get('configuration', {})
+    return ('setting in summary.json', ', '.join(f'{key} {setting_text(configuration.get(key))}'
+                                                 for key in (change['key'],) + change['also']))
 
 
 def header_lines(stage, allocation_id, stage_dir):
@@ -574,6 +648,7 @@ def header_lines(stage, allocation_id, stage_dir):
     changed = [f'{key}={value}' for key, value in used.items() if stage['job_env'].get(key) != value]
     if changed:
         lines.append('[aim347] this run alone uses ' + ' '.join(changed) + '; job.env is unchanged')
+    lines += change_lines(stage)
     work = (f"{stage['updates']} updates of {stage['global_batch']} sequences x "
             f"{stage['sequence_length']:,} positions")
     saves = ', '.join(str(u) for u in stage['checkpoint_updates'])
@@ -648,6 +723,7 @@ def timed_block(stage, stage_dir, summary, ceilings, world, efa_losses=None):
          ('GPU-seconds per 1M tokens', f'{gpu_seconds_per_million_tokens(seconds, tokens, world):.0f}'),
          ('MFU vs your GEMM peak', mfu_text),
          ('peak memory (largest rank)', f'{peak_memory_gib(summary):.2f} GiB')]
+        + ([change_pair(stage, summary)] if stage.get('change') else [])
         + nccl_pairs(stage, stage_dir, world) + [efa_pair(stage_dir)])
     if efa_losses is not None:
         lines += loss_comparison_lines(stage, stage_dir, efa_losses)
@@ -915,12 +991,60 @@ def goodput_chart_lines(results):
         'The reference is the throughput of the timed updates of stage sdpa, a run that does not save.'])
 
 
+def configuration_differences(first, second):
+    keys = set(first['configuration']) | set(second['configuration'])
+    return sorted(key for key in keys if first['configuration'].get(key) != second['configuration'].get(key))
+
+
+def try_comparison_lines(change, results):
+    """After rerun-<change>: the spread between the two unchanged runs, and the change against their mean.
+
+    The two unchanged runs are stage sdpa and rerun-<change>. Nothing is compared unless all
+    three runs did the same work on the same allocation, the two unchanged runs have the same
+    configuration, and the run with the change differs from them only in the change.
+    """
+    names = ('sdpa', f'rerun-{change}', f'try-{change}')
+    summaries = []
+    for name in names:
+        _, summary, problem = chart_stage(results, name)
+        if problem:
+            return [f'not compared: {name} {problem}']
+        summaries.append(summary)
+    sdpa, rerun, tried = summaries
+    try:
+        paired_training_report(sdpa, rerun)
+        paired_training_report(rerun, tried)
+    except ValueError as error:
+        return ['not compared: ' + str(error).replace('paired training mismatch: ', 'different ')]
+    differs = configuration_differences(sdpa, rerun)
+    if differs:
+        return [f'not compared: sdpa and rerun-{change} differ in ' + ', '.join(differs)]
+    allowed = (TRY_CHANGES[change]['key'],) + TRY_CHANGES[change]['also']
+    differs = [key for key in configuration_differences(rerun, tried) if key not in allowed]
+    if differs:
+        return [f'not compared: try-{change} differs from rerun-{change} in ' + ', '.join(differs)]
+    unchanged = (sdpa['measured_seconds'], rerun['measured_seconds'])
+    mean = sum(unchanged) / 2
+    spread = abs(unchanged[0] - unchanged[1])
+    delta = tried['measured_seconds'] - mean
+    direction = 'shorter' if delta < 0 else ('longer' if delta > 0 else 'no difference')
+    lines = [f'run-to-run spread: |sdpa - rerun-{change}| = {spread:.3f} s ({100 * spread / mean:.2f} %)',
+             f'change: try-{change} - mean(sdpa, rerun-{change}) = {delta:+.3f} s ({100 * delta / mean:+.2f} %)']
+    return lines + [''] + charts.bar_chart(
+        'Your change beside the spread between two runs without it (seconds of the timed updates)',
+        [dict(label=f'spread, sdpa and rerun-{change}', value=spread, text=f'{spread:.3f} s'),
+         dict(label=f'change, try-{change}', value=abs(delta), text=f'{abs(delta):.3f} s {direction}')], 's')
+
+
 def stage_chart_lines(stage, results, world):
     """The charts printed under the result block of a timed stage."""
     if stage['kind'] != 'timed':
         return []
     if stage['saving'] != 'none':
         return [''] + goodput_chart_lines(results)
+    if stage.get('change'):
+        # The run with the change prints its block; the comparison follows the rerun.
+        return [] if stage['with_change'] else [''] + try_comparison_lines(stage['change'], results)
     lines = [''] + update_time_chart_lines(results, update_time_names(stage), read_ceilings(results), world)
     if stage['name'] == 'sdpa':
         lines += [''] + memory_chart_lines(results, ['efa', 'sdpa'])
@@ -1404,7 +1528,12 @@ def restore_ready(results):
     return run.get('exit_status') in (0, 5) and marker.is_file()
 
 
-def start_run(subcommand, state=None):
+def sdpa_ready(results):
+    run = read_json(Path(results) / 'sdpa' / 'run.json') or {}
+    return run.get('exit_status') in (0, 5) and (Path(results) / 'sdpa' / 'train' / 'summary.json').is_file()
+
+
+def start_run(subcommand, state=None, change=None):
     """Foreground part of run.sh. Returns the exit code."""
     state = Path(state or STATE)
     results = results_dir()
@@ -1425,10 +1554,13 @@ def start_run(subcommand, state=None):
     if not os.environ.get('AIM347_ALLOCATION_ID'):
         print('AIM347: no session allocation. Run: bash tools/hold-and-measure.sh', file=sys.stderr)
         return 3
-    stages = plan(subcommand, read_job_env())
+    stages = plan(subcommand, read_job_env(), change=change)
     if subcommand == 'restore' and not restore_ready(results):
         raise UsageError(f'restore needs a finished ckpt-sync stage with a completed update-{RESTORE_FROM:06d}. '
                          'Run: bash tools/run.sh checkpoint')
+    if subcommand == 'try' and not sdpa_ready(results):
+        raise UsageError('try compares your change with stage sdpa, which has no finished run. '
+                         'Run: bash tools/run.sh sdpa')
     state.mkdir(mode=0o700, exist_ok=True)
     invocation = dict(invocation=utc_stamp(), stages=[stage['name'] for stage in stages], plan=stages,
                       subcommand=subcommand, allocation_id=os.environ['AIM347_ALLOCATION_ID'], pid=None)
@@ -1571,6 +1703,7 @@ def main(argv=None):
     commands = parser.add_subparsers(dest='command', required=True)
     run = commands.add_parser('run', help='tools/run.sh')
     run.add_argument('subcommand', nargs='?')
+    run.add_argument('change', nargs='?', help='try only: the change to make (' + ', '.join(TRY_CHANGES) + ')')
     commands.add_parser('worker').add_argument('invocation')
     commands.add_parser('nccl-protocols', help='tools/nccl-protocols.sh')
     commands.add_parser('efa-read', help='on a GPU node: EFA counters as one JSON line')
@@ -1598,12 +1731,12 @@ def main(argv=None):
     try:
         if args.command == 'run':
             if not args.subcommand:
-                raise UsageError('usage: bash tools/run.sh <subcommand>; subcommands: '
-                                 + ', '.join(list(SUBCOMMANDS) + ['attach']))
+                raise UsageError(f'usage: bash tools/run.sh <subcommand>; subcommands: {subcommand_list()}')
             if args.subcommand != 'attach' and args.subcommand not in SUBCOMMANDS:
-                raise UsageError(f'unknown subcommand {args.subcommand!r}; subcommands: '
-                                 + ', '.join(list(SUBCOMMANDS) + ['attach']))
-            return start_run(args.subcommand)
+                raise UsageError(f'unknown subcommand {args.subcommand!r}; subcommands: {subcommand_list()}')
+            if change_error(args.subcommand, args.change):
+                raise UsageError(change_error(args.subcommand, args.change))
+            return start_run(args.subcommand, change=args.change)
         if args.command == 'worker':
             return worker(json.loads(args.invocation))
         if args.command == 'nccl-protocols':
