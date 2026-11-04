@@ -83,9 +83,9 @@ MonitoringStack=Prometheus-LoginNode
 
 ## Region coverage
 
-The table lists **all 25 regions where AWS PCS is available** (per
-`/aws/service/global-infrastructure/services/pcs/regions`) — 18 verified,
-7 not yet run.
+The table lists **all 26 regions where AWS PCS is available** (per
+`/aws/service/global-infrastructure/services/pcs/regions`) — 21 verified,
+5 not yet run.
 
 | Region (AZ ID) ¹ | Verified ² | Storage ³ (Lustre<br>/ OpenZFS) | GPU verified ⁴ | *(ref) CBML GPUs offered* ⁵ | Date (UTC) |
 |---|---|---|---|---|---|
@@ -107,8 +107,9 @@ The table lists **all 25 regions where AWS PCS is available** (per
 | **Jakarta**<br>(`apse3-az1`) | ✅<br>(c7i) ⁷ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | P6-B300, P5, P5e, P5en | 2026-07-08 |
 | **Seoul**<br>(`apne2-az3`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | ✅ P6-B300 | P6-B300, P5en | 2026-10-16 |
 | **Hyderabad**<br>(`aps2-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | ✅ P6-B300 | P6-B300, P6-B200 | 2026-10-28 |
-| **Melbourne**<br>(ap-southeast-4) | — | — | — | — | not yet run |
-| **Malaysia**<br>(ap-southeast-5) | — | — | — | — | not yet run |
+| **Melbourne**<br>(`apse4-az1`) | ✅<br>(m7i/c7i) ⁷ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | — | 2026-11-02 |
+| **Malaysia**<br>(`apse5-az2`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | — | 2026-11-02 |
+| **Canada Central**<br>(`cac1-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | — | 2026-11-02 |
 | **New Zealand**<br>(ap-southeast-6) | — | — | — | — | not yet run |
 | **Cape Town**<br>(af-south-1) | — | — | — | — | not yet run |
 | **Milan**<br>(eu-south-1) | — | — | — | — | not yet run |
@@ -148,18 +149,19 @@ in that region, per the EC2 docs as of 2026-10-28. PCS supports CBML with
 P6-B300 / P6-B200 / P5en / P5e / P5 / P4d.
 
 ⁶ **These regions do not support the default `OpenZFSDeploymentType=SINGLE_AZ_HA_2`**
-(ap-northeast-3, eu-west-2, eu-west-3, sa-east-1, ap-southeast-3) — the default
+(ap-northeast-3, eu-west-2, eu-west-3, sa-east-1, ap-southeast-3, ap-southeast-4,
+ap-southeast-5) — the default
 deploy fails at the OpenZFS filesystem with `Invalid deploymentType (BadRequest)`.
 Deploy there with `OpenZFSDeploymentType=SINGLE_AZ_1` (+ a valid
 `HomeThroughput`, e.g. 256). This is the documented "not available in every
 Region" case (see the parameter's description in `ml-cluster-prerequisites.yaml`);
 `SINGLE_AZ_1` is available in all regions and is the safe fallback. FSx Lustre
 showed no such regional variation — `LustreDeploymentType=PERSISTENT_2` (the
-default) worked in all 18 regions, as the Lustre column shows.
+default) worked in all 21 regions, as the Lustre column shows.
 
 ⁷ **The default instance types are not offered in every region** — the
 parenthesized types in the Verified column are what the run used instead:
-eu-south-2 has no m6i/c6i (`LoginNodeInstanceType=m7i.4xlarge`,
+eu-south-2 and ap-southeast-4 have no m6i/c6i (`LoginNodeInstanceType=m7i.4xlarge`,
 `OnDemandInstanceType=c7i.4xlarge`), and ap-southeast-3 has no c6i
 (`OnDemandInstanceType=c7i.4xlarge`). Rows without a parenthesis ran the
 defaults. Check with
