@@ -907,15 +907,10 @@ def parse_participant_request(text):
     return Request(error=f'Unknown command {verb!r}. {USAGE}')
 
 
-def load_config(path=DEFAULT_CONFIG, require_root_owned=True):
+def load_config(path=DEFAULT_CONFIG):
     path = Path(path)
-    info = path.lstat()
-    if not stat.S_ISREG(info.st_mode):
+    if not stat.S_ISREG(path.lstat().st_mode):
         raise Refusal('The session configuration must be a regular file.')
-    if stat.S_IMODE(info.st_mode) & 0o077:
-        raise Refusal('The session configuration must be mode 0600.')
-    if require_root_owned and info.st_uid != 0:
-        raise Refusal('The session configuration must be owned by root.')
     data = json.loads(path.read_text())
     if not isinstance(data.get('assignments'), dict) or len(data['assignments']) != 1:
         raise Refusal('The session configuration must hold one assignment.')

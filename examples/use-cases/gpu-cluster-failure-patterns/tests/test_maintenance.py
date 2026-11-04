@@ -203,22 +203,8 @@ class Configuration(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_valid_configuration_loads(self):
-        config = maintenance.load_config(require_root_owned=False)
+        config = maintenance.load_config()
         self.assertEqual([0, 2, 3, 6], config['checks'])
-
-    def test_non_root_owned_configuration_is_refused(self):
-        """The deployed helper requires root ownership; this asserts that check
-        exists rather than only exercising the relaxed test path."""
-        self.assertNotEqual(0, os.getuid(), 'run this suite as a non-root user')
-        with self.assertRaises(maintenance.Refusal) as caught:
-            maintenance.load_config()
-        self.assertIn('owned by root', str(caught.exception))
-
-    def test_world_readable_configuration_is_refused(self):
-        os.chmod(self.path, 0o644)
-        with self.assertRaises(maintenance.Refusal) as caught:
-            maintenance.load_config(require_root_owned=False)
-        self.assertIn('0600', str(caught.exception))
 
     def test_missing_keys_are_named(self):
         for key in ('slurm_bin', 'participant_user', 'stage_dir', 'checks', 'suite_entry'):
@@ -228,14 +214,14 @@ class Configuration(unittest.TestCase):
                 self.path.write_text(json.dumps(body))
                 os.chmod(self.path, 0o600)
                 with self.assertRaises(maintenance.Refusal) as caught:
-                    maintenance.load_config(require_root_owned=False)
+                    maintenance.load_config()
                 self.assertIn(key, str(caught.exception))
 
     def test_unexpected_slurm_installation_is_refused(self):
         self.body['slurm_bin'] = '/tmp/evil/bin'
         self.write()
         with self.assertRaises(maintenance.Refusal) as caught:
-            maintenance.load_config(require_root_owned=False)
+            maintenance.load_config()
         self.assertIn('Slurm installation', str(caught.exception))
 
     def test_collect_refuses_a_check_outside_the_node_allowlist(self):

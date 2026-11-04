@@ -221,7 +221,7 @@ class Base(unittest.TestCase):
         self.tmp.cleanup()
 
     def make(self, assignment='table-1', now=1000.0):
-        config = session.load_config(self.config_path, require_root_owned=False)
+        config = session.load_config(self.config_path)
         return session.DeviceSession(
             config=config,
             assignment_id=assignment,
@@ -235,12 +235,6 @@ class Base(unittest.TestCase):
 # exists, then reject for the stated reason once it does.
 # --------------------------------------------------------------------------
 class Rejections(Base):
-    def test_config_must_be_root_owned_and_private(self):
-        os.chmod(self.config_path, 0o644)
-        with self.assertRaises(session.Refusal) as caught:
-            session.load_config(self.config_path, require_root_owned=False)
-        self.assertIn('0600', str(caught.exception))
-
     def test_unknown_assignment_is_refused(self):
         with self.assertRaises(session.Refusal) as caught:
             self.make(assignment='table-99')

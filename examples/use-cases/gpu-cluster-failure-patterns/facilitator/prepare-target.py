@@ -6,8 +6,9 @@ after prepare-compute.sh:
 
     sudo python3 facilitator/prepare-target.py <slurm-node> ubuntu '<maintenance public key>'
 
-The maintenance public key is the line install-participant-control.sh prints
-on the login node. This script reads the node's GPU, EFA and management
+The maintenance public key is the contents of /root/.ssh/aim344-maintenance.pub
+on the login node. install-participant-control.sh prints this command with the
+key filled in. This script reads the node's GPU, EFA and management
 devices, writes /etc/aim344-device-fault.json and /etc/aim344-maintenance.json
 for the participant, installs facilitator/maintenance.py as
 /usr/local/sbin/aim344-maintenance and adds the key to root's authorized_keys

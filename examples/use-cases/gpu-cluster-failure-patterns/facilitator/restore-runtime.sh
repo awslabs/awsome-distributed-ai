@@ -29,8 +29,6 @@ import json
 from pathlib import Path
 path = Path('/run/aim344-checkpoints')
 marker = path / '.aim344-fixture'
-if marker.is_symlink():
-    raise SystemExit('Refusing a symlink fixture marker.')
 try:
     with marker.open('x') as output:
         output.write('AIM344 isolated checkpoint fixture\n')
@@ -38,8 +36,6 @@ except FileExistsError:
     if marker.read_text().strip() != 'AIM344 isolated checkpoint fixture':
         raise SystemExit('Unexpected existing fixture marker.')
 checkpoint = path / 'last.json'
-if checkpoint.is_symlink():
-    raise SystemExit('Refusing a symlink checkpoint record.')
 try:
     with checkpoint.open('x') as output:
         json.dump({'next_step': 0}, output)

@@ -179,7 +179,7 @@ class Base(unittest.TestCase):
         self.tmp.cleanup()
 
     def make(self, assignment='table-1', now=1000.0, executor=None):
-        config = session.load_config(self.config_path, require_root_owned=False)
+        config = session.load_config(self.config_path)
         return session.DeviceSession(
             config=config,
             assignment_id=assignment,

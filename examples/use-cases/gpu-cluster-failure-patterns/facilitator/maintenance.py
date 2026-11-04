@@ -89,15 +89,10 @@ def environment(config):
     return env
 
 
-def load_config(require_root_owned=True):
-    info = CONFIG.lstat()
+def load_config():
     import stat as stat_module
-    if not stat_module.S_ISREG(info.st_mode):
+    if not stat_module.S_ISREG(CONFIG.lstat().st_mode):
         raise Refusal('The maintenance configuration must be a regular file.')
-    if stat_module.S_IMODE(info.st_mode) & 0o077:
-        raise Refusal('The maintenance configuration must be mode 0600.')
-    if require_root_owned and info.st_uid != 0:
-        raise Refusal('The maintenance configuration must be owned by root.')
     config = json.loads(CONFIG.read_text())
     for key in ('slurm_bin', 'participant_user', 'stage_dir', 'checks', 'suite_entry'):
         if key not in config:

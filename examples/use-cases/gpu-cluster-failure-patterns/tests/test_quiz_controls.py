@@ -102,12 +102,10 @@ class QuizBase(fixture.Base):
     def run_main(self, command, now=1000.0, argv=None):
         """Drive main() as 12.device-exercise.sh does through sudo, with the fake
         executor."""
-        real_load, real_session = session.load_config, session.DeviceSession
+        real_session = session.DeviceSession
         out, err = io.StringIO(), io.StringIO()
         executor = self.executor
-        with mock.patch.object(session, 'load_config',
-                               lambda path, **_: real_load(path, require_root_owned=False)), \
-                mock.patch.object(session, 'DeviceSession',
+        with mock.patch.object(session, 'DeviceSession',
                                   lambda config, assignment_id, **given: real_session(
                                       config, assignment_id,
                                       **dict({'executor': executor, 'clock': lambda: now},

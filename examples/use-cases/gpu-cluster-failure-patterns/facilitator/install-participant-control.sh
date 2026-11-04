@@ -15,8 +15,8 @@
 #   /etc/aim344-device-session.json describing this one assignment
 #   the participant's ~/aim344-results
 #   a root key pair for the controller's maintenance route to the target
-# It prints the lines to install on the target and the login profile line for
-# the participant's ~/.bashrc.
+# It prints the prepare-target.py command to run on the target, with this key,
+# and the login profile line for the participant's ~/.bashrc.
 #
 # AIM344_SCHEDULE_FILE (optional) is this seat's incident schedule: a JSON list
 # in the order the participant's `next` starts them, each entry an exercise and
@@ -146,17 +146,9 @@ maintenance_key=/root/.ssh/aim344-maintenance
 if [[ ! -s $maintenance_key ]]; then
     ssh-keygen -t ed25519 -N '' -q -f "$maintenance_key" -C 'aim344-maintenance'
 fi
-echo 'Install this public key on the TARGET as root, with the forced command:'
-printf '  command="/usr/local/sbin/aim344-maintenance",%s %s\n' \
-    'no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty,no-user-rc' \
-    "$(cat "$maintenance_key.pub")"
-# The target names the account that owns its restored checkpoint fixture and
-# holds its one allowed job.
-printf 'Name the participant in the TARGET allowlists:\n'
-printf '  /etc/aim344-maintenance.json  "participant_user": "%s", "participants": ["%s"]\n' \
-    "$participant" "$participant"
-printf '  /etc/aim344-device-fault.json "participant_user": "%s", "participant_users": ["%s"]\n' \
-    "$participant" "$participant"
+echo 'On the TARGET, as root, run prepare-target.py with this key:'
+printf "  python3 %s %s %s '%s'\n" "$lab/facilitator/prepare-target.py" \
+    "$target_node" "$participant" "$(cat "$maintenance_key.pub")"
 
 echo "== session configuration"
 install -d -o root -g root -m 0700 "$state_dir"

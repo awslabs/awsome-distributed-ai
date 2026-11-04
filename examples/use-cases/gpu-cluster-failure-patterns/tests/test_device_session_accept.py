@@ -647,9 +647,10 @@ class F17FixtureArtifacts(unittest.TestCase):
         self.assertIn('user in allowed_users', flat)
         self.assertIn('An unapproved job is using the target node.', flat)
 
-    def test_the_installer_records_this_node_participant_allowlist(self):
+    def test_the_installer_names_the_participant_for_the_target_allowlists(self):
+        """prepare-target.py writes the allowlists; the installer prints its command."""
         flat = flattened(INSTALLER)
-        self.assertIn('participants', flat)
+        self.assertIn('"$target_node" "$participant" "$(cat "$maintenance_key.pub")"', flat)
 
 
 # --------------------------------------------------------------------------

@@ -28,12 +28,14 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 LAB = Path(__file__).resolve().parents[1]
 HELPER = LAB / 'facilitator' / 'device-session.py'
@@ -222,8 +224,27 @@ class InstallerAsRoot(unittest.TestCase):
         self.assertEqual([], [name for name in state['sudoers_entries'] if 'aim344' in name])
         self.assertFalse(state['bashrc_mentions_aim344'])
         self.assertIn('# AIM344 login profile', self.records['case1_out'])
-        self.assertIn('"participants": ["ubuntu"]', self.records['case1_out'])
-        self.assertIn('"participant_users": ["ubuntu"]', self.records['case1_out'])
+
+    def test_the_printed_target_command_passes_prepare_targets_key_check(self):
+        lines = [line for line in self.records['case1_out'].splitlines()
+                 if 'prepare-target.py' in line and line.startswith('  ')]
+        self.assertEqual(1, len(lines), self.records['case1_out'])
+        argv = shlex.split(lines[0])
+        self.assertEqual(['python3', '/lab/facilitator/prepare-target.py', 'gpu-g7-1',
+                          'ubuntu'], argv[:4])
+        self.assertEqual(5, len(argv))
+        spec = importlib.util.spec_from_file_location(
+            'aim344_prepare_target_safety3', LAB / 'facilitator' / 'prepare-target.py')
+        target = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(target)
+        # The first Path() call after the key check raises this, so reaching it
+        # shows that prepare-target.py accepted the printed key.
+        reached = RuntimeError('the key check passed')
+        with mock.patch.object(target.os, 'geteuid', return_value=0), \
+                mock.patch.object(target, 'Path', side_effect=reached), \
+                self.assertRaises(RuntimeError) as caught:
+            target.main(argv[2:])
+        self.assertIs(reached, caught.exception)
 
     def test_a_rerun_keeps_the_schedule(self):
         self.assertEqual('0\n', self.records.get('case2_rc'),
@@ -1796,7 +1817,7 @@ class S3InitialBootValidity(Base):
         little on each reading ends the window after a few polls, which is what the
         deployed helper's wall clock does.
         """
-        config = session.load_config(self.config_path, require_root_owned=False)
+        config = session.load_config(self.config_path)
         ticks = {'now': 1000.0}
 
         def clock():
