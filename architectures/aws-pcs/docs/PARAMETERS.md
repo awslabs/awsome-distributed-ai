@@ -97,13 +97,15 @@ compute node group's node lifecycle actions directly (PCS runs it natively).
 |---|---|---|
 | `InstallEnrootPyxis` | `true` | Install the Enroot/Pyxis container runtime on every node at first boot (an `install-enroot-pyxis` node lifecycle action running `scripts/install-enroot-pyxis.sh` from the templates bucket — instance-role fetch, so a **private** bucket works). Set `false` when the runtime is pre-baked into `AmiId` or containers aren't needed (the installer is idempotent either way — a fast no-op on a pre-baked AMI). PCS now supports [node lifecycle actions](https://docs.aws.amazon.com/pcs/latest/userguide/cng-node-lifecycle-actions.html) natively, so for any other first-boot customization add your own script to the compute node group's lifecycle actions instead of proxying it through this stack |
 
-## 6. FSx Storage (`/fsx` and `/home`)
+## 6. Shared Storage (`/home` and `/fsx`)
 
-See [README §8.1 Storage](../README.md#81-storage-fsx-deployment-types--sizing) for Region
-availability and the "deploy small, expand after" tip.
+See [README §8.1 Storage](../README.md#81-storage-filesystem-choice--sizing) for choosing
+the filesystems, Region availability, and the "deploy small, expand after" tip.
 
 | Parameter | Default | Purpose |
 |---|---|---|
+| `HomeStorageType` | `FSxOpenZFS` | Filesystem for `/home`: `FSxOpenZFS` (sized by `HomeCapacity` / `HomeThroughput` / `OpenZFSDeploymentType`) or `EFS` (Amazon EFS, elastic throughput, nothing to size — the three OpenZFS parameters are ignored). Choose at creation: changing it later deletes `/home` — see [OPERATIONS §4.6](./OPERATIONS.md#46-amazon-efs-home-homestoragetypeefs) |
+| `DeployFSxLustre` | `true` | Create the FSx for Lustre `/fsx` filesystem. `false` = no `/fsx` on any node and the Lustre parameters below are ignored. Changing `true` → `false` later deletes `/fsx` (see [OPERATIONS §4.6](./OPERATIONS.md#46-amazon-efs-home-homestoragetypeefs)) |
 | `Capacity` | `1200` | FSx for Lustre (`/fsx`) capacity (GiB; 1200 or increments of 2400). Can be increased after creation, so start small for a faster first deploy |
 | `LustreDeploymentType` | `PERSISTENT_2` | FSx for Lustre (`/fsx`) deployment type (`PERSISTENT_2` / `PERSISTENT_1`) — Region-dependent |
 | `PerUnitStorageThroughput` | `250` | FSx for Lustre (`/fsx`) throughput (MB/s/TiB); valid values depend on the deployment type |

@@ -7,7 +7,7 @@ adding existing IAM users at deploy time).
 
 | Role | Launch |
 |---|---|
-| **Cluster admin** — deploys/updates/deletes clusters. Full CRUD on CloudFormation, PCS, EC2 (VPC/SG/launch templates/placement groups/NAT/EIP), FSx, scoped IAM, SSM Parameter Store, KMS, Secrets Manager, and (optionally) Image Builder. **Broad — do not hand to every engineer.** | [![Launch](../images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/cluster-admin-iam.yaml&stackName=pcs-cluster-admins) |
+| **Cluster admin** — deploys/updates/deletes clusters. Full CRUD on CloudFormation, PCS, EC2 (VPC/SG/launch templates/placement groups/NAT/EIP), FSx, EFS, scoped IAM, SSM Parameter Store, KMS, Secrets Manager, and (optionally) Image Builder. **Broad — do not hand to every engineer.** | [![Launch](../images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/cluster-admin-iam.yaml&stackName=pcs-cluster-admins) |
 | **Cluster user** — engineers running jobs on an existing cluster. SSM session to the **login node only**, port-forward Grafana, read the Grafana password, read PCS cluster/queue status. **No AWS-API mutations** (cannot create, modify, or delete cluster resources) and **no compute-node sessions**. The login-node SSM shell it grants runs as `ssm-user` with passwordless sudo (SSM default), so on the login node it is effectively root — meaning read access to shared `/home`, Slurm accounting, and the instance role's `/pcs/<id>/ldap/*` SSM secret; treat it as trusted-operator-scope, not arbitrary-viewer-scope. | [![Launch](../images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/cluster-user-iam.yaml&stackName=pcs-cluster-users) |
 
 Both templates take an optional `AttachUsers` parameter (comma-separated
@@ -32,12 +32,12 @@ These are **sample, slightly-broader-than-strict-least-privilege** policies,
 derived from the AWS-published
 [minimum permissions for an AWS PCS service administrator](https://docs.aws.amazon.com/pcs/latest/userguide/security-min-permissions.html)
 plus the extra permissions the all-in-one template needs because it provisions
-VPC + FSx + IAM roles itself (the AWS reference policy assumes those already
+VPC + FSx/EFS + IAM roles itself (the AWS reference policy assumes those already
 exist). Review and tighten before production use.
 
 **Pairing with AWS-managed policies.** For a smaller customer-managed
 surface, attach AWS-managed policies for parts of the stack and trim the
-matching statements: `AWSCloudFormationFullAccess`, `AmazonFSxFullAccess`,
+matching statements: `AWSCloudFormationFullAccess`, `AmazonFSxFullAccess`, `AmazonElasticFileSystemFullAccess`,
 `AWSImageBuilderFullAccess` are reasonable fits. Avoid
 `AmazonEC2FullAccess` — it is materially overprivileged (e.g. EBS
 public-share); prefer the customer-managed EC2 statements in the template.

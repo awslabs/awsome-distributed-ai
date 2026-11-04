@@ -38,6 +38,7 @@ Metadata:
           - FSxLustreFilesystemId
           - FSxLustreFilesystemMountName
           - FSxOpenZFSFilesystemId
+          - EFSHomeFilesystemId
       - Label:
           default: EFA (CPU HPC instances)
         Parameters:
@@ -148,9 +149,22 @@ Parameters:
 
   FSxOpenZFSFilesystemId:
     Type: String
-    Description: Filesystem ID for FSx for OpenZFS
-    AllowedPattern: '^fs-[0-9a-f]{8,17}$'
-    ConstraintDescription: Must be a valid FSx filesystem ID (fs-xxxxxxxxxxxxxxxxx)
+    Default: ''
+    Description: >-
+      Filesystem ID for FSx for OpenZFS, mounted at /home. Set exactly one of
+      FSxOpenZFSFilesystemId / EFSHomeFilesystemId.
+    AllowedPattern: '^$|^fs-[0-9a-f]{8,17}$'
+    ConstraintDescription: Must be empty or a valid FSx filesystem ID (fs-xxxxxxxxxxxxxxxxx)
+
+  EFSHomeFilesystemId:
+    Type: String
+    Default: ''
+    Description: >-
+      Filesystem ID for Amazon EFS, mounted at /home. Set exactly one of
+      FSxOpenZFSFilesystemId / EFSHomeFilesystemId. The filesystem needs a
+      mount target in this node group's Availability Zone.
+    AllowedPattern: '^$|^fs-[0-9a-f]{8,17}$'
+    ConstraintDescription: Must be empty or a valid EFS filesystem ID (fs-xxxxxxxxxxxxxxxxx)
 
   DeployMonitoring:
     Type: String
@@ -303,6 +317,22 @@ Parameters:
       subnet's AZ.
     Default: ""
 
+Rules:
+  # /home must come from exactly one filesystem. Fail at stack-create time
+  # instead of booting nodes that TERMINATE on a missing mount.
+  ExactlyOneHomeFilesystem:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Not [!Equals [!Ref FSxOpenZFSFilesystemId, '']]
+            - !Equals [!Ref EFSHomeFilesystemId, '']
+          - !And
+            - !Equals [!Ref FSxOpenZFSFilesystemId, '']
+            - !Not [!Equals [!Ref EFSHomeFilesystemId, '']]
+        AssertDescription: >-
+          Set exactly one of FSxOpenZFSFilesystemId (FSx for OpenZFS) or
+          EFSHomeFilesystemId (Amazon EFS) for /home.
+
 Conditions:
   CreateQueue: !Not [!Equals [!Ref QueueName, ""]]
   # Emit the monitoring-role tag for both login and compute nodes (any role
@@ -339,6 +369,7 @@ Conditions:
   HasCapacityReservation: !Not [!Equals [!Ref CapacityReservationId, ""]]
   DirectoryEnabled: !Not [!Equals [!Ref DirectoryRole, 'none']]
   HasLustre: !Not [!Equals [!Ref FSxLustreFilesystemId, '']]
+  HomeIsEFS: !Not [!Equals [!Ref EFSHomeFilesystemId, '']]
   EnrootPyxisEnabled: !Equals [!Ref InstallEnrootPyxis, 'true']
   MonitoringEnabled: !Equals [!Ref DeployMonitoring, 'true']
   HasDcgmImage: !Not [!Equals [!Ref DcgmExporterImage, '']]
@@ -407,13 +438,24 @@ Resources:
                 ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/needrestart-guard.sh'
               ExecutionPolicy: FIRST_BOOT_ONLY
               OnError: CONTINUE
-            - Name: mount-openzfs-home
-              ScriptSource:
-                ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/mount-openzfs-home.sh'
-              Arguments:
-                - !Ref FSxOpenZFSFilesystemId
-              ExecutionPolicy: FIRST_BOOT_ONLY
-              OnError: TERMINATE
+            # /home: exactly one of the two mount actions (enforced by the
+            # ExactlyOneHomeFilesystem Rule). Both share the same contract.
+            - !If
+              - HomeIsEFS
+              - Name: mount-efs-home
+                ScriptSource:
+                  ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/mount-efs-home.sh'
+                Arguments:
+                  - !Ref EFSHomeFilesystemId
+                ExecutionPolicy: FIRST_BOOT_ONLY
+                OnError: TERMINATE
+              - Name: mount-openzfs-home
+                ScriptSource:
+                  ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/mount-openzfs-home.sh'
+                Arguments:
+                  - !Ref FSxOpenZFSFilesystemId
+                ExecutionPolicy: FIRST_BOOT_ONLY
+                OnError: TERMINATE
             - !If
               - HasLustre
               - Name: mount-lustre-fsx
@@ -425,7 +467,7 @@ Resources:
                 ExecutionPolicy: EVERY_BOOT
                 OnError: TERMINATE
               - !Ref AWS::NoValue
-            # Directory setup must run AFTER mount-openzfs-home: the LDAP DB
+            # Directory setup must run AFTER the /home mount: the LDAP DB
             # lives on shared /home/ldap-db (the script hard-fails if /home is
             # not a mountpoint). CONTINUE preserves the log-and-continue
             # invariant: Slurm launches jobs by numeric UID, so a failed

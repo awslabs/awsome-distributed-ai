@@ -76,7 +76,8 @@ Expected (hpc7a / hpc8a):
 
 ### Step 3 — OSU MPI micro-benchmarks
 
-Build OSU 7.4 on `/fsx` once (shared across compute nodes) using the
+Build OSU 7.4 on `/fsx` once (shared across compute nodes; requires
+`DeployFSxLustre=true`, the default) using the
 PCS-Ready DLAMI's `/opt/amazon/openmpi`:
 
 ```bash

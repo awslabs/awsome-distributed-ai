@@ -93,6 +93,13 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
     PERSISTENT_2's metadata-configuration path that is required for EfaEnabled
   Reference design + 8x H200 throughput numbers (~78-94 GiB/s on a 96 TiB filesystem) at
   [aws-samples/sample-fsx-lustre-gds-sharded-model-loading](https://github.com/aws-samples/sample-fsx-lustre-gds-sharded-model-loading).
+- [ ] 🟢 **Bring-your-own shared filesystems.** `HomeStorageType` / `DeployFSxLustre`
+  choose which filesystems the prerequisites stack *creates*. Accept the IDs of existing
+  filesystems instead (an OpenZFS or EFS `/home`, a Lustre `/fsx`), so a cluster can attach
+  storage that outlives it or is shared across clusters. The node group templates already
+  take filesystem IDs; the work is in deploy-all (skip creation, pass the IDs through) and
+  in documenting the network/security-group requirements for a filesystem in another VPC
+  or security group.
 
 ## Software stack
 

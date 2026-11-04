@@ -4,8 +4,9 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Network and storage prerequisites for an ML PCS cluster: a VPC with one public and
-  one private subnet, a security group, an FSx for Lustre filesystem (high-speed
-  shared scratch, /fsx), and an FSx for OpenZFS filesystem (home directories, /home).
+  one private subnet, a security group, an optional FSx for Lustre filesystem
+  (high-speed shared scratch, /fsx), and a home-directory filesystem (/home) — FSx
+  for OpenZFS (default) or Amazon EFS, selected by HomeStorageType.
   A public and a private subnet are created in the Availability Zone you provide. It
   also deploys an Internet Gateway, a NAT Gateway in the public subnet, and an Amazon
   S3 VPC endpoint. The VPC has two CIDR blocks (10.0.0.0/16 public, 10.1.0.0/16
@@ -30,6 +31,11 @@ Metadata:
           - AdditionalSubnetAZ2
           - AdditionalSubnetAZ3
       - Label:
+          default: Shared storage selection
+        Parameters:
+          - HomeStorageType
+          - DeployFSxLustre
+      - Label:
           default: FSx for Lustre (/fsx) storage size
         Parameters:
           - Capacity
@@ -39,6 +45,10 @@ Metadata:
         Parameters:
           - CreateS3Endpoint
     ParameterLabels:
+      HomeStorageType:
+        default: Filesystem for /home (FSxOpenZFS or EFS)
+      DeployFSxLustre:
+        default: Create the FSx for Lustre /fsx filesystem
       VPCName:
         default: Name of your VPC
       FSxLustreEnableEfa:
@@ -91,6 +101,33 @@ Parameters:
     Description:
       Set to false if to avoid creating an S3 endpoint on your VPC.
     Type: String
+
+  HomeStorageType:
+    Description: >-
+      Shared filesystem for /home. FSxOpenZFS (default) creates an FSx for
+      OpenZFS filesystem sized by HomeCapacity / HomeThroughput /
+      OpenZFSDeploymentType. EFS creates an Amazon EFS filesystem (elastic
+      throughput, billed per GB stored, no capacity to size) with a mount
+      target in each private subnet; the three OpenZFS parameters are then
+      ignored. Choose at stack creation — changing it on an existing stack
+      replaces the /home filesystem and deletes its contents.
+    Type: String
+    Default: FSxOpenZFS
+    AllowedValues:
+      - FSxOpenZFS
+      - EFS
+
+  DeployFSxLustre:
+    Description: >-
+      Create the FSx for Lustre scratch filesystem mounted at /fsx (default
+      true). false = no /fsx on any node; the Lustre parameters are then
+      ignored. Changing true to false on an existing stack deletes the
+      filesystem and its contents.
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
 
   Capacity:
     Description: Storage capacity in GiB (1200 or increments of 2400)
@@ -159,7 +196,7 @@ Parameters:
       - 'false'
 
   HomeCapacity:
-    Description: "Home directories storage capacity in GiB"
+    Description: "Home directories storage capacity in GiB (FSx for OpenZFS only; ignored when HomeStorageType=EFS)"
     Type: Number
     Default: 512
 
@@ -201,30 +238,38 @@ Parameters:
 # clear message, instead of an opaque CreateFileSystem failure later.
 Rules:
   LustrePersistent1Throughput:
-    RuleCondition: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_1']
+    RuleCondition: !And
+      - !Equals [!Ref DeployFSxLustre, 'true']
+      - !Equals [!Ref LustreDeploymentType, 'PERSISTENT_1']
     Assertions:
       - Assert: !Contains [["50", "100", "200"], !Ref PerUnitStorageThroughput]
         AssertDescription: >-
           PERSISTENT_1 supports PerUnitStorageThroughput of 50, 100, or 200 MB/s/TiB only.
   LustrePersistent2Throughput:
-    RuleCondition: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_2']
+    RuleCondition: !And
+      - !Equals [!Ref DeployFSxLustre, 'true']
+      - !Equals [!Ref LustreDeploymentType, 'PERSISTENT_2']
     Assertions:
       - Assert: !Contains [["125", "250", "500", "1000"], !Ref PerUnitStorageThroughput]
         AssertDescription: >-
           PERSISTENT_2 supports PerUnitStorageThroughput of 125, 250, 500, or 1000 MB/s/TiB only.
   OpenZFS64GridThroughput:
-    RuleCondition: !Or
-      - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_1']
-      - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_HA_1']
+    RuleCondition: !And
+      - !Equals [!Ref HomeStorageType, 'FSxOpenZFS']
+      - !Or
+        - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_1']
+        - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_HA_1']
     Assertions:
       - Assert: !Contains [["64", "128", "256", "512", "1024", "2048", "3072", "4096"], !Ref HomeThroughput]
         AssertDescription: >-
           SINGLE_AZ_1 / SINGLE_AZ_HA_1 support HomeThroughput of
           64/128/256/512/1024/2048/3072/4096 MB/s only.
   OpenZFS160GridThroughput:
-    RuleCondition: !Or
-      - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_2']
-      - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_HA_2']
+    RuleCondition: !And
+      - !Equals [!Ref HomeStorageType, 'FSxOpenZFS']
+      - !Or
+        - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_2']
+        - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_HA_2']
     Assertions:
       - Assert: !Contains [["160", "320", "640", "1280", "2560", "3840", "5120", "7680", "10240"], !Ref HomeThroughput]
         AssertDescription: >-
@@ -233,7 +278,9 @@ Rules:
   # FSx EFA + GDS is a PERSISTENT_2-only feature. Fail fast if a user opts in on
   # PERSISTENT_1 instead of silently dropping the EfaEnabled property.
   FSxLustreEfaRequiresPersistent2:
-    RuleCondition: !Equals [!Ref FSxLustreEnableEfa, 'true']
+    RuleCondition: !And
+      - !Equals [!Ref DeployFSxLustre, 'true']
+      - !Equals [!Ref FSxLustreEnableEfa, 'true']
     Assertions:
       - Assert: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_2']
         AssertDescription: >-
@@ -252,6 +299,20 @@ Conditions:
   # without a 2nd is unusual but technically allowed — both are independent).
   HasSubnetAZ2: !Not [!Equals [!Ref AdditionalSubnetAZ2, ""]]
   HasSubnetAZ3: !Not [!Equals [!Ref AdditionalSubnetAZ3, ""]]
+  # Shared storage selection. Exactly one /home filesystem is created; /fsx is
+  # optional.
+  CreateOpenZFSHome: !Equals [!Ref 'HomeStorageType', 'FSxOpenZFS']
+  CreateEFSHome: !Equals [!Ref 'HomeStorageType', 'EFS']
+  CreateLustre: !Equals [!Ref 'DeployFSxLustre', 'true']
+  # EFS DNS resolves to the mount target in the client's AZ, so every private
+  # subnet gets one. The public subnet shares PrimarySubnetAZ, so the login
+  # node uses the primary mount target.
+  CreateEFSMountTargetAZ2: !And
+    - !Condition CreateEFSHome
+    - !Condition HasSubnetAZ2
+  CreateEFSMountTargetAZ3: !And
+    - !Condition CreateEFSHome
+    - !Condition HasSubnetAZ3
   # PERSISTENT_2 is the only Lustre deployment type that supports a metadata
   # configuration (and the EFA/Intelligent-Tiering features); PERSISTENT_1 does
   # not, so the MetadataConfiguration block is only emitted for PERSISTENT_2.
@@ -486,6 +547,7 @@ Resources:
 
   FSxLFilesystem:
     Type: AWS::FSx::FileSystem
+    Condition: CreateLustre
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
@@ -517,6 +579,7 @@ Resources:
 
   OpenZFSFileSystem:
     Type: AWS::FSx::FileSystem
+    Condition: CreateOpenZFSHome
     Properties:
       FileSystemType: OPENZFS
       OpenZFSConfiguration: 
@@ -544,6 +607,50 @@ Resources:
       StorageType: SSD
       SubnetIds: 
         - !Ref PrimaryPrivateSubnet
+
+  # Amazon EFS for /home (HomeStorageType=EFS). Elastic throughput scales with
+  # load, so there is nothing to size. Automatic backups (AWS Backup default
+  # plan) mirror the OpenZFS daily backups. The cluster security group already
+  # allows all traffic between its members, which covers NFS (2049/tcp).
+  EFSHomeFileSystem:
+    Type: AWS::EFS::FileSystem
+    Condition: CreateEFSHome
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: elastic
+      BackupPolicy:
+        Status: ENABLED
+      FileSystemTags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-home'
+
+  EFSHomeMountTargetPrimary:
+    Type: AWS::EFS::MountTarget
+    Condition: CreateEFSHome
+    Properties:
+      FileSystemId: !Ref EFSHomeFileSystem
+      SubnetId: !Ref PrimaryPrivateSubnet
+      SecurityGroups:
+        - !Ref SecurityGroup
+
+  EFSHomeMountTargetAZ2:
+    Type: AWS::EFS::MountTarget
+    Condition: CreateEFSMountTargetAZ2
+    Properties:
+      FileSystemId: !Ref EFSHomeFileSystem
+      SubnetId: !Ref AdditionalPrivateSubnet2
+      SecurityGroups:
+        - !Ref SecurityGroup
+
+  EFSHomeMountTargetAZ3:
+    Type: AWS::EFS::MountTarget
+    Condition: CreateEFSMountTargetAZ3
+    Properties:
+      FileSystemId: !Ref EFSHomeFileSystem
+      SubnetId: !Ref AdditionalPrivateSubnet3
+      SecurityGroups:
+        - !Ref SecurityGroup
 
 #############
 ## Outputs ##
@@ -587,32 +694,44 @@ Outputs:
     Export:
       Name: !Sub ${AWS::StackName}-SecurityGroup
   FSxLustreFilesystemMountname:
+    Condition: CreateLustre
     Description: The ID of the FSxL filesystem that has been created
     Value: !GetAtt FSxLFilesystem.LustreMountName
     Export:
       Name: !Sub ${AWS::StackName}-FSxLustreFilesystemMountname
   FSxLustreFilesystemDNSname:
+    Condition: CreateLustre
     Description: The DNS of the FSxL filesystem that has been created
     Value: !GetAtt FSxLFilesystem.DNSName
     Export:
       Name: !Sub ${AWS::StackName}-FSxLustreFilesystemDNSname
   FSxLustreFilesystemId:
+    Condition: CreateLustre
     Description: The ID of the FSxL filesystem that has been created
     Value: !Ref FSxLFilesystem
     Export:
       Name: !Sub ${AWS::StackName}-FSxLustreFilesystemId
   FSxORootVolumeId:
+    Condition: CreateOpenZFSHome
     Description: The ID of FSx for OpenZFS root volume
     Value: !GetAtt OpenZFSFileSystem.RootVolumeId
     Export:
       Name: !Sub ${AWS::StackName}-FSxORootVolumeId
   FSxOFilesystemId:
+    Condition: CreateOpenZFSHome
     Description: The ID of FSx for OpenZFS filesystem
     Value: !Ref OpenZFSFileSystem
     Export:
       Name: !Sub ${AWS::StackName}-FSxOFilesystemId
   FSxOpenZFSFilesystemId:
+    Condition: CreateOpenZFSHome
     Description: The ID of FSx for OpenZFS filesystem (alias for compatibility)
     Value: !Ref OpenZFSFileSystem
     Export:
       Name: !Sub ${AWS::StackName}-FSxOpenZFSFilesystemId
+  EFSHomeFilesystemId:
+    Condition: CreateEFSHome
+    Description: The ID of the Amazon EFS filesystem mounted at /home
+    Value: !Ref EFSHomeFileSystem
+    Export:
+      Name: !Sub ${AWS::StackName}-EFSHomeFilesystemId

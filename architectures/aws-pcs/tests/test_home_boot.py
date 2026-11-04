@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-"""Offline home lifecycle regression: python3 tests/test_home_boot.py -v.
+"""Offline home lifecycle regression (mount-openzfs-home.sh and mount-efs-home.sh):
+python3 tests/test_home_boot.py -v.
 
 No mounts, network, system manager calls or root are needed. Execute the real
 shell logic with sandbox paths and command doubles, real rsync, and the host's
@@ -24,7 +25,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 GENERATOR = Path("/usr/lib/systemd/system-generators/systemd-fstab-generator")
-OPTIONS = "noatime,nfsvers=3,sync,nconnect=16,rsize=1048576,wsize=1048576,defaults"
+OPENZFS_OPTIONS = "noatime,nfsvers=3,sync,nconnect=16,rsize=1048576,wsize=1048576,defaults"
+EFS_OPTIONS = "nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,_netdev"
 
 
 class CfnLoader(yaml.SafeLoader):
@@ -44,10 +46,12 @@ def cfn_tag(loader, tag, node):
 CfnLoader.add_multi_constructor("!", cfn_tag)
 
 
-def home_action(template):
+def home_action(template, name):
+    """Return the named /home mount action from the HomeIsEFS !If selector."""
     actions = template["Resources"]["PCSNodeGroupCompute"]["Properties"]["NodeLifecycleActions"]
-    return next(a for a in actions["Stages"]["NodeBootstrapped"]
-                if a.get("Name") == "mount-openzfs-home")
+    selector = next(a["If"] for a in actions["Stages"]["NodeBootstrapped"]
+                    if "If" in a and a["If"][0] == "HomeIsEFS")
+    return next(a for a in selector[1:] if a.get("Name") == name)
 
 
 # Selected start dependencies from a native PCS peer's systemctl readback.
@@ -101,7 +105,10 @@ elif name != "sleep":
 '''
 
 
-class HomeBootTest(unittest.TestCase):
+class HomeBootCases:
+    """Shared contract for every /home mount script. Subclasses set the backend."""
+    SCRIPT = ACTION = FS_ARG = DOMAIN = EXPORT = FSTYPE = OPTIONS = None
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="pcs-home-boot-")
         self.addCleanup(self.tmp.cleanup)
@@ -124,14 +131,15 @@ class HomeBootTest(unittest.TestCase):
         self.env = {"PATH": str(self.p / "bin") + ":/usr/bin:/bin",
                     "CASE_ROOT": str(self.p), "TMPDIR": str(self.p)}
         # Translate only filesystem paths; leave all shell control flow intact.
-        text = (ROOT / "assets/scripts/mount-openzfs-home.sh").read_text()
+        text = (ROOT / "assets/scripts" / self.SCRIPT).read_text()
+        log = f"/var/log/pcs-{self.SCRIPT.removesuffix('.sh')}.log"
         replacements = {
-            "/var/log/pcs-mount-openzfs-home.log": str(self.p / "mount.log"),
+            log: str(self.p / "mount.log"),
             "/etc/": str(self.p / "etc") + "/",
             "/tmp/home": str(self.p / "stash"),
             "/home": str(self.home),
         }
-        text = re.sub(r"/var/log/pcs-mount-openzfs-home\.log|/etc/|/tmp/home|/home(?=[/\s\";\[]|$)",
+        text = re.sub(re.escape(log) + r"|/etc/|/tmp/home|/home(?=[/\s\";\[]|$)",
                       lambda match: replacements[match.group()], text)
         self.script = self.p / "script.sh"
         self.script.write_text(text)
@@ -162,7 +170,8 @@ class HomeBootTest(unittest.TestCase):
         self.assertEqual((after.st_uid, after.st_gid, after.st_mode),
                          (before.st_uid, before.st_gid, before.st_mode))
         self.assertEqual(len(self.calls("mount")), 1)
-        self.assertIn(f"fs-01234567890abcdef.fsx.us-west-2.amazonaws.com:/fsx/ {self.home} nfs {OPTIONS} 0 0",
+        self.assertIn(f"fs-01234567890abcdef.{self.DOMAIN}:{self.EXPORT} {self.home} "
+                      f"{self.FSTYPE} {self.OPTIONS} 0 0",
                       (self.p / "etc/fstab").read_text())
         self.assertFalse((self.p / "stash").exists())
         self.assertEqual(self.guard()["Requires"], "home.mount")
@@ -176,7 +185,7 @@ class HomeBootTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         lines = (self.p / "etc/fstab").read_text().splitlines()
         self.assertEqual(sum(str(self.home) in line for line in lines), 1)
-        self.assertIn("fs-fedcba09876543210.fsx.us-west-2.amazonaws.com", lines[-1])
+        self.assertIn(f"fs-fedcba09876543210.{self.DOMAIN}", lines[-1])
         self.assertEqual(len(self.calls("mount")), 1)
         self.assertEqual((self.home / "ubuntu").stat().st_mtime_ns, before.st_mtime_ns)
         self.assertEqual(self.guard()["Requires"], "home.mount")
@@ -209,9 +218,11 @@ class HomeBootTest(unittest.TestCase):
         for path in sorted((ROOT / "assets").glob("add-cng*.yaml")):
             with self.subTest(template=path.name):
                 template = yaml.load(path.read_text(), Loader=CfnLoader)
-                action = home_action(template)
+                action = home_action(template, self.ACTION)
                 self.assertEqual(action["OnError"], "TERMINATE")
-                self.assertEqual(action["Arguments"], [{"Ref": "FSxOpenZFSFilesystemId"}])
+                self.assertEqual(action["Arguments"], [{"Ref": self.FS_ARG}])
+                self.assertTrue(action["ScriptSource"]["ScriptLocation"]["Sub"]
+                                .endswith("scripts/" + self.SCRIPT))
                 self.assertIn(action["ExecutionPolicy"], ("FIRST_BOOT_ONLY", "EVERY_BOOT"))
                 order = boot_order(action["ExecutionPolicy"], synchronous_mount)
                 self.assertLess(order.index("cloud-init.service"), order.index("home.mount"))
@@ -237,8 +248,8 @@ class HomeBootTest(unittest.TestCase):
         mount = configparser.ConfigParser()
         mount.read(output / "home.mount")
         self.assertEqual(mount["Mount"]["Where"], "/home")
-        self.assertEqual(mount["Mount"]["Type"], "nfs")
-        self.assertEqual(mount["Mount"]["Options"], OPTIONS)
+        self.assertEqual(mount["Mount"]["Type"], self.FSTYPE)
+        self.assertEqual(mount["Mount"]["Options"], self.OPTIONS)
         self.assertTrue((output / "remote-fs.target.requires/home.mount").is_symlink())
         guard = self.guard()
         # Requires plus After propagates mount activation failure to slurmd.
@@ -291,6 +302,26 @@ class HomeBootTest(unittest.TestCase):
                                  str(units / "slurmd.service")], env=env,
                                 capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class OpenZFSHomeBootTest(HomeBootCases, unittest.TestCase):
+    SCRIPT = "mount-openzfs-home.sh"
+    ACTION = "mount-openzfs-home"
+    FS_ARG = "FSxOpenZFSFilesystemId"
+    DOMAIN = "fsx.us-west-2.amazonaws.com"
+    EXPORT = "/fsx/"
+    FSTYPE = "nfs"
+    OPTIONS = OPENZFS_OPTIONS
+
+
+class EFSHomeBootTest(HomeBootCases, unittest.TestCase):
+    SCRIPT = "mount-efs-home.sh"
+    ACTION = "mount-efs-home"
+    FS_ARG = "EFSHomeFilesystemId"
+    DOMAIN = "efs.us-west-2.amazonaws.com"
+    EXPORT = "/"
+    FSTYPE = "nfs4"
+    OPTIONS = EFS_OPTIONS
 
 
 if __name__ == "__main__":

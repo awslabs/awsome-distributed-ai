@@ -51,6 +51,8 @@ entries:
     key: aws-pcs/scripts/install-monitoring.sh
   - source: architectures/aws-pcs/assets/scripts/ldap-add-user.sh
     key: aws-pcs/scripts/ldap-add-user.sh
+  - source: architectures/aws-pcs/assets/scripts/mount-efs-home.sh
+    key: aws-pcs/scripts/mount-efs-home.sh
   - source: architectures/aws-pcs/assets/scripts/mount-lustre-fsx.sh
     key: aws-pcs/scripts/mount-lustre-fsx.sh
   - source: architectures/aws-pcs/assets/scripts/mount-openzfs-home.sh
