@@ -648,34 +648,13 @@ class F17MaintenanceParticipantAllowlist(unittest.TestCase):
 
 
 class F17FixtureArtifacts(unittest.TestCase):
-    def test_restore_runtime_hands_over_existing_fixture_contents(self):
-        """The directory alone is not enough.
-
-        A marker or checkpoint left by the previous table stays unwritable for
-        the next one, and the workload then fails inside the container with no
-        indication that ownership is the cause. Observed on the coordinator: the
-        fixture marker was root-owned inside an ubuntu-owned directory
-        (participant-revision/runs/rework2-inspect-coordinator/output.log:12).
-
-        The handover mechanism changed for R1: the entries are enumerated and
-        their ownership changed through descriptors, never by handing a
-        participant-created name to `chown`. What must hold is that the contents
-        are handed over at all, so this asserts the enumeration and the
-        descriptor-level change rather than the old command shape. R1's own tests
-        in test_device_session_rework.py execute the handover and check where the
-        ownership actually lands.
-        """
+    def test_restore_runtime_mounts_the_fixture_for_the_participant(self):
+        """The 32 MiB tmpfs belongs to the participant from the moment it is mounted,
+        so the job can fill it and the storage incident's resume can empty it."""
         flat = flattened(RESTORE_RUNTIME)
-        self.assertIn('os.listdir(fixture)', flat)
-        self.assertIn('os.fchown(handle, uid, gid)', flat)
-        self.assertIn('handed_over=', flat)
-        # And the construction the review rejected is gone from the code, not
-        # merely fenced. Comments are excluded: the script explains why that
-        # construction is unsafe, and a substring search over the whole file would
-        # match its own explanation.
-        code = ' '.join(line for line in RESTORE_RUNTIME.read_text().splitlines()
-                        if not line.lstrip().startswith('#'))
-        self.assertNotIn('-exec chown', code)
+        self.assertIn('mount -t tmpfs -o "size=32M,mode=0700,uid=$(id -u "$participant"),'
+                      'gid=$(id -g "$participant")"', flat)
+        self.assertIn('runuser -u "$participant" -- python3 - <<\'PYFIXTURE\'', flat)
 
     def test_the_device_helper_accepts_the_provisioned_table_accounts(self):
         """The job-owner condition is kept, not widened to any user."""
@@ -703,9 +682,8 @@ class F6ScheduledDeadlineRecovery(Base):
         config = session.load_config(self.config_path, require_root_owned=False)
         return session.sweep(
             config, clock=lambda: now,
-            session_factory=lambda assignment_id, peer_uid: session.DeviceSession(
-                config, assignment_id, peer_uid=peer_uid,
-                executor=self.executor, clock=lambda: now))
+            session_factory=lambda assignment_id: session.DeviceSession(
+                config, assignment_id, executor=self.executor, clock=lambda: now))
 
     def test_a_sweep_entry_point_exists_and_covers_every_assignment(self):
         """The per-assignment hook needed somebody to type it.
@@ -882,14 +860,6 @@ class F6ScheduledDeadlineRecovery(Base):
                                  '--config', str(self.config_path)])
         self.assertEqual(3, code, captured.getvalue())
 
-    def test_a_participant_verb_still_requires_an_assignment(self):
-        """Making --assignment optional must not make it omittable in practice."""
-
-        captured = io.StringIO()
-        with contextlib.redirect_stderr(captured):
-            code = session.main(['--config', str(self.config_path)])
-        self.assertEqual(3, code, captured.getvalue())
-        self.assertIn('assignment', captured.getvalue().lower())
 
 
 # --------------------------------------------------------------------------

@@ -1,27 +1,24 @@
 # shellcheck shell=bash
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-# The login profile of a participant account on the login node. The installer
-# adds one line to the account's ~/.bashrc that sources this file, so every
-# interactive shell reads it, including the shell that salloc opens.
+# The login profile of the participant on the login node. One line in the
+# participant's ~/.bashrc sources this file (the installer prints that line), so
+# every interactive shell reads it, including the shell that salloc opens.
 #
-# The first shell of a session loads the site's lab.env, puts the EFA and Slurm
-# clients on PATH, sets the allocation values that Slurm registers for the pair
-# (PARTITION, GPUS_PER_NODE, CPUS_PER_RANK, MEMORY_PER_NODE), and exports the
-# seat's handout values from the root-owned seat file that the installer writes
-# (AIM344_TARGET_NODE, AIM344_PEER_NODE, AIM344_EFA_DEVICE). A shell that starts
+# The first shell of a session loads the site's lab.env, which also carries the
+# seat's handout values (AIM344_TARGET_NODE, AIM344_PEER_NODE, AIM344_EFA_DEVICE)
+# and the Slurm client directory (AIM344_SLURM_BIN). It puts the EFA and Slurm
+# clients on PATH and sets the allocation values that Slurm registers for the pair
+# (PARTITION, GPUS_PER_NODE, CPUS_PER_RANK, MEMORY_PER_NODE). A shell that starts
 # in the home directory moves to the lab directory. Shells started from it,
 # such as the one salloc opens, inherit these values. A shell inside an
 # allocation also exports RESULTS_DIR on node-local storage, where job.sh
 # writes its results and the job's processes write their stack files.
 if [[ $- == *i* ]]; then
     aim344_lab=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-    aim344_seat=${AIM344_SEAT_DIR:-/etc/aim344-seats}/$(id -un).env
-    if [[ -z ${AIM344_PROFILE_LOADED:-} && -r $aim344_lab/lab.env && -r $aim344_seat ]]; then
+    if [[ -z ${AIM344_PROFILE_LOADED:-} && -r $aim344_lab/lab.env ]]; then
         # shellcheck source=/dev/null
         source "$aim344_lab/lab.env"
-        # shellcheck source=/dev/null
-        source "$aim344_seat"
         case ":$PATH:" in
             *":$AIM344_SLURM_BIN:"*) ;;
             *) export PATH=/opt/amazon/efa/bin:$AIM344_SLURM_BIN:$PATH ;;
@@ -39,5 +36,5 @@ if [[ $- == *i* ]]; then
         RESULTS_DIR=/var/tmp/aim344-$(id -un)-$SLURM_JOB_ID
         export RESULTS_DIR
     fi
-    unset aim344_lab aim344_seat
+    unset aim344_lab
 fi

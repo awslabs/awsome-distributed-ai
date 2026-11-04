@@ -21,6 +21,11 @@ install -o root -g root -m 0755 "$lab/prejob-prolog.sh" /opt/aim344/prejob-prolo
 install -d -o root -g root -m 0755 /var/lib/aim344-device-recovery
 install -o root -g root -m 0755 "$lab/facilitator/restore-runtime.sh" /var/lib/aim344-device-recovery/restore-runtime.sh
 install -o root -g root -m 0755 "$lab/facilitator/device-fault.sh" /usr/local/sbin/aim344-device-fault
+# enroot creates /tmp/enroot and its cache and data directories as whichever
+# account runs it first, so a run as root would leave them closed to the
+# participant. systemd-tmpfiles keeps them shared, now and at every boot.
+printf 'd %s 1777 root root -\n' /tmp/enroot /tmp/enroot/cache /tmp/enroot/data > /etc/tmpfiles.d/aim344-enroot.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/aim344-enroot.conf
 bash /var/lib/aim344-device-recovery/restore-runtime.sh "$participant" "$stage"
 # Read both images into the page cache, so that the first container start after
 # this boot does not read them from the volume. Run this script on every node at

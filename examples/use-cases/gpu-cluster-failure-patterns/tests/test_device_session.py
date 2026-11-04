@@ -198,7 +198,6 @@ class Base(unittest.TestCase):
                 'table-1': {
                     'participant_user': 'aim344-t1',
                     'participant_uid': os.getuid(),
-                    'caller_uid': os.getuid(),
                     'answers_dir': str(self.answers),
                     'target_node': 'gpu-g7-1',
                     'target_instance_id': 'i-0123456789abcdef0',
@@ -213,7 +212,6 @@ class Base(unittest.TestCase):
                 'table-2': {
                     'participant_user': 'aim344-t2',
                     'participant_uid': os.getuid() + 4242,
-                    'caller_uid': os.getuid() + 4242,
                     'answers_dir': str(root / 'answers-2'),
                     'target_node': 'gpu-g7-9',
                     'target_instance_id': 'i-0000000000000dead',
@@ -237,12 +235,11 @@ class Base(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def make(self, assignment='table-1', peer_uid=None, now=1000.0):
+    def make(self, assignment='table-1', now=1000.0):
         config = session.load_config(self.config_path, require_root_owned=False)
         return session.DeviceSession(
             config=config,
             assignment_id=assignment,
-            peer_uid=os.getuid() if peer_uid is None else peer_uid,
             executor=self.executor,
             clock=lambda: now,
         )
@@ -264,14 +261,6 @@ class Rejections(Base):
             self.make(assignment='table-99')
         self.assertIn('assignment', str(caught.exception).lower())
 
-    def test_cross_assignment_peer_uid_is_refused(self):
-        """table-1's key used from another table's OS user."""
-        with self.assertRaises(session.Refusal) as caught:
-            self.make(assignment='table-1', peer_uid=os.getuid() + 4242)
-        message = str(caught.exception).lower()
-        self.assertIn('assignment', message)
-        self.assertNotIn('gpu-g7-1', str(caught.exception))
-
     def test_participant_cannot_select_another_assignment_by_argument(self):
         """The dispatcher takes the assignment from the forced command only."""
         parsed = session.parse_participant_request('start gpu --assignment table-2')
@@ -290,6 +279,13 @@ class Rejections(Base):
             with self.subTest(text=text):
                 parsed = session.parse_participant_request(text)
                 self.assertIsNotNone(parsed.error, f'accepted: {text!r}')
+
+    def test_a_state_record_is_read_whatever_its_mode(self):
+        handler = self.make()
+        handler.store.write(session.State(phase='fault-applied', kind='gpu',
+                                          started_at=1.0, target_node='gpu-g7-1'))
+        os.chmod(handler.store.path, 0o644)
+        self.assertEqual('fault-applied', self.make().store.read().phase)
 
     def test_unknown_verb_is_refused(self):
         parsed = session.parse_participant_request('reboot')
@@ -774,10 +770,9 @@ class SuccessPaths(Base):
         self.assertIsNotNone(parsed.error)
         self.assertIn('start', parsed.error)
 
-    def test_a_dropped_ssh_original_command_is_reported_not_defaulted(self):
-        """sudo's env_reset strips SSH_ORIGINAL_COMMAND unless it is kept. If it
-        is lost the helper must say so rather than silently doing nothing, and it
-        must never fall back to a default action."""
+    def test_an_empty_request_is_reported_not_defaulted(self):
+        """A request with no words is reported, and never falls back to a default
+        action."""
         for lost in (None, '', '   '):
             with self.subTest(lost=lost):
                 parsed = session.parse_participant_request(lost)
@@ -883,7 +878,6 @@ class SuccessPaths(Base):
             'target_node': 'gpu-g7-1',
             'target_instance_id': 'i-0123456789abcdef0',
             'participant_uid': os.getuid(),
-            'caller_uid': os.getuid(),
             'answers_dir': str(Path(self.tmp.name) / 'answers-2'),
         })
         self.write_config()
@@ -904,7 +898,6 @@ class SuccessPaths(Base):
             'target_node': 'gpu-g7-1',
             'target_instance_id': 'i-0123456789abcdef0',
             'participant_uid': os.getuid(),
-            'caller_uid': os.getuid(),
             'answers_dir': str(Path(self.tmp.name) / 'answers-2'),
         })
         self.write_config()
@@ -916,7 +909,6 @@ class SuccessPaths(Base):
             'target_node': 'gpu-g7-1',
             'target_instance_id': 'i-0123456789abcdef0',
             'participant_uid': os.getuid(),
-            'caller_uid': os.getuid(),
             'answers_dir': str(Path(self.tmp.name) / 'answers-2'),
         })
         self.write_config()

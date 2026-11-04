@@ -100,22 +100,21 @@ class QuizBase(fixture.Base):
         return result
 
     def run_main(self, command, now=1000.0, argv=None):
-        """Drive main() as the forced command would, with the fake executor."""
+        """Drive main() as 12.device-exercise.sh does through sudo, with the fake
+        executor."""
         real_load, real_session = session.load_config, session.DeviceSession
         out, err = io.StringIO(), io.StringIO()
         executor = self.executor
         with mock.patch.object(session, 'load_config',
                                lambda path, **_: real_load(path, require_root_owned=False)), \
                 mock.patch.object(session, 'DeviceSession',
-                                  lambda config, assignment_id, peer_uid, **given: real_session(
-                                      config, assignment_id, peer_uid,
+                                  lambda config, assignment_id, **given: real_session(
+                                      config, assignment_id,
                                       **dict({'executor': executor, 'clock': lambda: now},
                                              **given))), \
-                mock.patch.dict(os.environ, {'SSH_ORIGINAL_COMMAND': command,
-                                             'SUDO_UID': str(os.getuid())}), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = session.main(argv or ['--assignment', 'table-1',
-                                         '--config', str(self.config_path)])
+                                         '--config', str(self.config_path), *command.split()])
         return code, out.getvalue(), err.getvalue()
 
     def assert_no_kind(self, text):
@@ -150,10 +149,33 @@ class Grammar(unittest.TestCase):
     def test_entry_point_passes_next_and_lists_no_replace(self):
         text = ENTRY.read_text()
         self.assertIn('next|status|recover|replace)', text)
-        self.assertIn('[[ $2 =~ ^[0-9a-f]{32}$ ]] || usage\n        request="ended $2"', text)
+        self.assertIn('[[ $2 =~ ^[0-9a-f]{32}$ ]] || usage\n        request=(ended "$2")', text)
         usage = text[text.index("<<'USAGE'"):text.index('\nUSAGE\n')]
         self.assertIn('next ', usage)
         self.assertNotRegex(usage, r'\n  replace ')
+
+    def test_entry_point_runs_the_controller_through_sudo_with_the_request_words(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / 'sudo'
+            fake.write_text('#!/bin/sh\nprintf "%s|" "$@"\n')
+            fake.chmod(0o755)
+            env = dict(os.environ, PATH=f'{tmp}:{os.environ["PATH"]}')
+            issue = 'a' * 32
+            for words, expected in ((['collect', '0'], 'collect|0|'),
+                                    (['collect', 'kernel'], 'collect|kernel|'),
+                                    (['ended', issue], f'ended|{issue}|'),
+                                    (['active', 'efa'], 'active|efa|'),
+                                    (['status'], 'status|')):
+                with self.subTest(words=words):
+                    run = subprocess.run(['bash', str(ENTRY), *words], capture_output=True,
+                                         text=True, env=env, timeout=20)
+                    self.assertEqual(0, run.returncode, run.stderr)
+                    self.assertEqual('-n|/usr/local/sbin/aim344-device-session|' + expected,
+                                     run.stdout)
+            refused = subprocess.run(['bash', str(ENTRY), 'collect', '0;id'], capture_output=True,
+                                     text=True, env=env, timeout=20)
+            self.assertEqual(2, refused.returncode)
+            self.assertEqual('', refused.stdout)
 
 
 class ScheduleValidation(unittest.TestCase):
@@ -442,6 +464,11 @@ class JobIncidents(QuizBase):
         self.make().next()
         with self.assertRaisesRegex(session.Refusal, 'no next incident'):
             self.make().next()
+
+    def test_the_issued_incident_record_is_read_whatever_its_mode(self):
+        self.make().next()
+        os.chmod(self.state_dir / 'schedule-table-1.json', 0o644)
+        self.assertEqual('Incidents issued: 1 of 4', self.make().status().schedule_line)
 
     def test_a_seat_without_a_schedule_is_told_to_ask(self):
         del self.config_body['assignments']['table-1']['exercise_schedule']
@@ -1234,6 +1261,28 @@ class ParticipantOutputBoundary(QuizBase):
         self.assertIn('Failure: Active FLR restoration provenance is incomplete',
                       session.operator_view(self.make()))
 
+    def test_without_assignment_the_configurations_only_assignment_is_used(self):
+        argv = ['--config', str(self.config_path), 'status']
+        code, _, err = self.run_main('', argv=argv)
+        self.assertEqual(3, code)
+        self.assertIn('name one with --assignment', err)
+        del self.config_body['assignments']['table-2']
+        self.write_config()
+        code, out, err = self.run_main('', argv=argv)
+        self.assertEqual(0, code, err)
+        self.assertIn('Exercise phase: ready', out)
+        self.assertIn('Incidents issued: 0 of 4', out)
+
+    def test_status_answers_while_another_request_holds_the_lock(self):
+        handler = self.make()
+        with handler.store.exclusive():
+            code, out, err = self.run_main('status')
+            self.assertEqual(0, code, err)
+            self.assertIn('Exercise phase: ready', out)
+            code, _, err = self.run_main('next')
+            self.assertEqual(3, code)
+            self.assertIn('Another request for this assignment is in progress.', err)
+
     def test_operator_flags_are_root_only_and_exclusive(self):
         for argv in (['--operator', 'status', '--assignment', 'table-1',
                       '--config', str(self.config_path)],
@@ -1380,7 +1429,7 @@ class InstallerSchedule(unittest.TestCase):
             input=self.check_block, capture_output=True, text=True)
 
     def configure(self, checked=None):
-        env = dict(os.environ, AIM344_PARTITION='queue', AIM344_CONTROL_USER=self.user)
+        env = dict(os.environ, AIM344_PARTITION='queue')
         env.pop('AIM344_SCHEDULE_FILE', None)
         env.pop('AIM344_CHECKED_SCHEDULE', None)
         if checked:
@@ -1438,18 +1487,14 @@ class InstallerSchedule(unittest.TestCase):
         self.assertEqual(4, len(self.assignment()['exercise_schedule']))
         self.assertTrue(progress.exists())
 
-    def test_a_readable_or_unknown_schedule_is_refused(self):
-        done = self.install(self.schedule_file(SCHEDULE, mode=0o644))
-        self.assertNotEqual(0, done.returncode)
-        self.assertIn('chmod 600', done.stderr)
+    def test_an_unknown_schedule_is_refused_whatever_the_file_mode(self):
         done = self.install(self.schedule_file([{'exercise': 'nvlink'}]))
         self.assertNotEqual(0, done.returncode)
         self.assertIn('unknown exercise', done.stderr)
-        link = self.root / 'seat-link.json'
-        link.symlink_to(self.schedule_file(SCHEDULE))
-        done = self.install(link)
-        self.assertNotEqual(0, done.returncode)
         self.assertFalse(self.config.exists())
+        done = self.install(self.schedule_file(SCHEDULE, mode=0o644))
+        self.assertEqual(0, done.returncode, done.stderr)
+        self.assertEqual(4, len(self.assignment()['exercise_schedule']))
 
     def test_a_rank_outside_the_job_is_refused_when_the_seat_is_installed(self):
         entries = [{'exercise': 'silent-corruption', 'settings': {'corrupt_rank': 16}}]
@@ -1474,16 +1519,15 @@ class InstallerSchedule(unittest.TestCase):
         """F6: a refused file stops the installer before its first change."""
         text = INSTALLER.read_text()
         check = text.index('python3 - "$AIM344_SCHEDULE_FILE"')
-        for first_change in ('install -o root -g root -m 0755', 'useradd',
-                             '/etc/sudoers.d', 'prepare_shared_parent "$', 'ssh-keygen',
-                             'install -d -o root -g root -m 0700 "$state_dir"'):
+        for first_change in ('install -o root -g root -m 0755', 'ssh-keygen',
+                             'install -d -o root -g root -m 0700 "$state_dir"',
+                             'install -d -o "$participant"', 'systemctl daemon-reload'):
             with self.subTest(change=first_change):
                 self.assertLess(check, text.index(first_change))
         self.assertIn('AIM344_CHECKED_SCHEDULE=$checked_schedule \\\npython3 - '
                       '"$session_config"', text)
         before = sorted(p.name for p in self.root.rglob('*'))
         for name, entries, mode, expected in (
-                ('readable', SCHEDULE, 0o644, 'chmod 600'),
                 ('unknown', [{'exercise': 'nvlink'}], 0o600, 'unknown exercise'),
                 ('not JSON', None, 0o600, 'not JSON')):
             with self.subTest(case=name):

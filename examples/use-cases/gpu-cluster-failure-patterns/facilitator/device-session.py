@@ -4,18 +4,17 @@
 """AIM344 participant device session helper.
 
 Install a root-owned copy at /usr/local/sbin/aim344-device-session on the
-coordinator node and reach it through an SSH forced command:
+coordinator node. The participant's 12.device-exercise.sh runs it with sudo:
 
-    command="/usr/local/sbin/aim344-device-session --assignment table-1",
-    no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ssh-ed25519 ...
+    sudo -n /usr/local/sbin/aim344-device-session collect 0
 
-The participant supplies only a verb in SSH_ORIGINAL_COMMAND. The assignment
-comes from the forced command, so the authenticated key, not participant input,
-selects the target. This helper decides nothing about device health: verdicts
-come from validation/gpu-cluster-healthcheck, and every device mutation goes
-through the existing root-owned aim344-device-fault helper on the target.
+The participant supplies only a verb and its argument. The configuration holds
+one assignment, which names the target. This helper decides nothing about device
+health: verdicts come from validation/gpu-cluster-healthcheck, and every device
+mutation goes through the existing root-owned aim344-device-fault helper on the
+target.
 
-Scope of what a participant can cause, by construction:
+The request grammar:
   start gpu | start efa | active gpu | active efa | next | ended <issue id> |
   status | collect <allowlisted check> | recover
 No node name, PCI address, job identifier, shell command or check outside the
@@ -456,7 +455,7 @@ class Completed:
 def safe_environment(slurm_bin):
     """A fixed environment for privileged calls.
 
-    Nothing from the participant's connection is inherited: no LD_PRELOAD, no
+    Nothing from the participant's environment is inherited: no LD_PRELOAD, no
     PYTHONPATH, no BASH_ENV, no SSH_ORIGINAL_COMMAND.
     """
     return {'PATH': f'{slurm_bin}:{SAFE_PATH}',
@@ -790,9 +789,8 @@ class StateStore:
             raise Refusal('Unusable state record: refusing a symlinked state file.')
         if not self.path.exists():
             return State()
-        info = self.path.lstat()
-        if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) & 0o077:
-            raise Refusal('Unusable state record: it must be a private regular file.')
+        if not stat.S_ISREG(self.path.lstat().st_mode):
+            raise Refusal('Unusable state record: it must be a regular file.')
         try:
             data = json.loads(self.path.read_text())
         except ValueError as error:
@@ -933,7 +931,7 @@ def parse_participant_request(text):
     if text is None:
         return Request(error=f'No command given. {USAGE}')
     if '\n' in text or '\r' in text or '\0' in text:
-        return Request(error=f'One command per connection. {USAGE}')
+        return Request(error=f'One command per request. {USAGE}')
     # Report a typed option as an option, before the character-class check, so
     # the participant is told why rather than only that the input was rejected.
     for word in text.split():
@@ -1013,21 +1011,11 @@ class Result:
 
 
 class DeviceSession:
-    def __init__(self, config, assignment_id, peer_uid, executor=None, clock=time.time):
+    def __init__(self, config, assignment_id, executor=None, clock=time.time):
         assignments = config['assignments']
         if assignment_id not in assignments:
-            # Do not disclose which assignments exist.
-            raise Refusal('This key is not bound to a usable assignment.')
+            raise Refusal('Unknown assignment.')
         assignment = assignments[assignment_id]
-        # Which table this connection belongs to is decided by the SSH key that
-        # authenticated it: each key carries its own forced command naming one
-        # assignment, and a participant cannot read another table's private key.
-        # This check confirms the caller is the expected control account, so a
-        # different local account cannot drive the helper even if it can run it.
-        expected = assignment.get('caller_uid', assignment.get('participant_uid'))
-        if expected is None or int(expected) != int(peer_uid):
-            raise Refusal('This key is not bound to the assignment it requested. '
-                          'The pre-session key/assignment binding is invalid; no node action is authorized.')
         self.config = config
         self.assignment_id = assignment_id
         self.assignment = dict(assignment)
@@ -2827,7 +2815,7 @@ class DeviceSession:
     # (participant-revision/runs/rework5-unbind-blocking-probe/output.log). So the
     # duration is not a property of the device; it is the holding process.
     #
-    # A participant drives one command per connection through a forced command.
+    # A participant drives one command per request through the controller.
     # An operation that cannot return until they cancel the job it is faulting
     # cannot be completed from that route: they would have to end their own
     # allocation from a second terminal while `start efa` is still blocked, and
@@ -3103,8 +3091,8 @@ class DeviceSession:
         `<assignment>/<round>/<32 hex>`. The random half is what makes it unique; the
         assignment and round are there so a facilitator reading the target's record
         can tell whose it is. Generated by this root helper, never supplied by the
-        participant: the forced command gives them one fixed verb per connection and
-        passes them no arguments at all.
+        participant: a request carries one verb of the fixed grammar and no
+        free-form argument.
 
         It is written into the round's state record before any side effect, and every
         retry of that round reuses it unchanged. That is what makes an interrupted
@@ -3248,7 +3236,7 @@ class DeviceSession:
                 # cannot proceed. The measurement behind this is in the class
                 # comment above: the unbind write does not return until the holding
                 # workload ends, so this round cannot be completed from a
-                # one-command-per-connection route.
+                # one-command-per-request route.
                 raise Refusal(
                     'The EFA exercise runs while your node is idle. A job of '
                     'yours is running on it, and the active variant is not '
@@ -3505,24 +3493,26 @@ class DeviceSession:
             return Result(state, next_step='Use status, then collect a check.')
 
     def status(self):
-        with self.store.exclusive_pair():
-            state = self.store.read()
-            record = self._replacement_record()
-            line = self._node_line()
-            next_step = (f'Replacement stage: {record["phase"]}. An operator continues '
-                         'it after the session.'
-                         if record and record['phase'] != 'complete' else self._next_step(state))
-            try:
-                collectable = self._collectable(state)
-            except Refusal:
-                collectable = None
-            return Result(state,
-                          node_state=self._node_field(line, 'State'),
-                          node_reason=node_reason(line)[1],
-                          next_step=next_step,
-                          collectable=collectable,
-                          schedule_line=self._schedule_line(),
-                          current_incident=self._current_incident(state))
+        # status takes no lock. Every record is replaced whole, so a read sees one
+        # version of it, and a status typed during another request neither waits
+        # nor makes that request refuse.
+        state = self.store.read()
+        record = self._replacement_record()
+        line = self._node_line()
+        next_step = (f'Replacement stage: {record["phase"]}. An operator continues '
+                     'it after the session.'
+                     if record and record['phase'] != 'complete' else self._next_step(state))
+        try:
+            collectable = self._collectable(state)
+        except Refusal:
+            collectable = None
+        return Result(state,
+                      node_state=self._node_field(line, 'State'),
+                      node_reason=node_reason(line)[1],
+                      next_step=next_step,
+                      collectable=collectable,
+                      schedule_line=self._schedule_line(),
+                      current_incident=self._current_incident(state))
 
     # ---------------- incident schedule ----------------
     ISSUED_STEP = ('Your launcher runs this incident from the profile above. To repeat '
@@ -3560,9 +3550,8 @@ class DeviceSession:
             raise Refusal('Unusable incident record: refusing a symlinked file.')
         if not path.exists():
             return {'issued': []}
-        info = path.lstat()
-        if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) & 0o077:
-            raise Refusal('Unusable incident record: it must be a private regular file.')
+        if not stat.S_ISREG(path.lstat().st_mode):
+            raise Refusal('Unusable incident record: it must be a regular file.')
         try:
             progress = json.loads(path.read_text())
             issued = progress['issued']
@@ -5110,15 +5099,12 @@ def sweep(config, clock=time.time, session_factory=None):
     executor instead so the bounding behaviour can be exercised without hardware.
     """
     factory = session_factory or (
-        lambda assignment_id, peer_uid: DeviceSession(
-            config, assignment_id, peer_uid=peer_uid, clock=clock))
+        lambda assignment_id: DeviceSession(config, assignment_id, clock=clock))
     attempts_allowed = int(config.get('deadline_attempts', 3))
     summary = []
     for assignment_id in sorted(config['assignments']):
-        assignment = config['assignments'][assignment_id]
-        expected = assignment.get('caller_uid', assignment.get('participant_uid'))
         try:
-            handler = factory(assignment_id, expected)
+            handler = factory(assignment_id)
         except Refusal as refusal:
             summary.append(f'{assignment_id}: not usable ({refusal})')
             continue
@@ -5339,7 +5325,9 @@ def operator_view(handler):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('--assignment')
+    parser.add_argument('--assignment',
+                        help='The assignment to act on; the default is the '
+                             "configuration's only assignment")
     parser.add_argument('--config', default=str(DEFAULT_CONFIG))
     parser.add_argument('--expire', action='store_true',
                         help='Facilitator deadline sweep for one assignment; '
@@ -5350,6 +5338,8 @@ def main(argv=None):
     parser.add_argument('--operator', choices=('status', 'replace'),
                         help='Operator view of one assignment (kinds and schedule '
                              'included), or the replacement route; root only')
+    parser.add_argument('request', nargs='*',
+                        help='The participant request, for example: collect 0')
     options = parser.parse_args(argv)
     handler = None
     try:
@@ -5358,8 +5348,6 @@ def main(argv=None):
         # check happened to notice first.
         if sum(bool(mode) for mode in (options.sweep, options.expire, options.operator)) > 1:
             raise Refusal('Use one of --sweep, --expire or --operator.')
-        if not options.sweep and not options.assignment:
-            raise Refusal('An assignment is required.')
         config = load_config(Path(options.config))
         if options.sweep:
             if os.geteuid() != 0:
@@ -5367,25 +5355,23 @@ def main(argv=None):
             for line in sweep(config):
                 sys.stdout.write(line + '\n')
             return 0
+        assignment_id = options.assignment
+        if assignment_id is None:
+            if len(config['assignments']) != 1:
+                raise Refusal('The session configuration holds more than one assignment; '
+                              'name one with --assignment.')
+            [assignment_id] = config['assignments']
         if options.expire:
             if os.geteuid() != 0:
                 raise Refusal('The deadline sweep runs as root.')
-            assignment = config['assignments'].get(options.assignment)
-            if assignment is None:
-                raise Refusal('Unknown assignment.')
-            expected = assignment.get('caller_uid', assignment.get('participant_uid'))
-            handler = DeviceSession(config, options.assignment, peer_uid=expected)
+            handler = DeviceSession(config, assignment_id)
             result = handler.expire()
             sys.stdout.write(render(result, 'status', operator=True))
             return 0
         if options.operator:
             if os.geteuid() != 0:
                 raise Refusal('The operator commands run as root.')
-            assignment = config['assignments'].get(options.assignment)
-            if assignment is None:
-                raise Refusal('Unknown assignment.')
-            expected = assignment.get('caller_uid', assignment.get('participant_uid'))
-            handler = DeviceSession(config, options.assignment, peer_uid=expected)
+            handler = DeviceSession(config, assignment_id)
             if options.operator == 'status':
                 sys.stdout.write(operator_view(handler))
             else:
@@ -5393,18 +5379,11 @@ def main(argv=None):
                 # the session for a node recovery could not qualify.
                 sys.stdout.write(render(handler.replace(), 'replace', operator=True))
             return 0
-        request = parse_participant_request(os.environ.get('SSH_ORIGINAL_COMMAND', ''))
+        request = parse_participant_request(' '.join(options.request))
         if request.error:
             sys.stderr.write(request.error + '\n')
             return 2
-        # Under the forced command the helper runs as root through one sudo rule,
-        # so os.getuid() is 0 and cannot identify the caller. sudo sets SUDO_UID
-        # itself and overwrites any value the caller tries to supply (verified on
-        # the target: an attempted SUDO_UID=1234567 still arrived as the control
-        # account's uid), so it is the trustworthy caller identity here.
-        peer = os.environ.get('SUDO_UID')
-        peer = int(peer) if peer and peer.isdigit() else os.getuid()
-        handler = DeviceSession(config, options.assignment, peer_uid=peer)
+        handler = DeviceSession(config, assignment_id)
         verb = request.verb
         if verb in ('start', 'active'):
             result = handler.start(request.argument, active=verb == 'active')
@@ -5435,16 +5414,6 @@ def main(argv=None):
             message = participant_text(message, state)
         sys.stderr.write(message + '\n')
         return 3
-
-
-def _peer_uid_from_connection():
-    """The uid of the account that authenticated this SSH connection.
-
-    sshd runs the forced command as that account, so the effective uid of this
-    process is the authenticated identity. There is no participant-supplied
-    value in this path.
-    """
-    return os.getuid()
 
 
 if __name__ == '__main__':

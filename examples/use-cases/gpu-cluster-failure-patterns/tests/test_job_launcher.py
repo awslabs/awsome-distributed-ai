@@ -15,7 +15,6 @@ import re
 import shutil
 import signal
 import subprocess
-import sys
 import tempfile
 import time
 import unittest
@@ -946,14 +945,15 @@ class Launcher(unittest.TestCase):
                 self.assertNotIn('Traceback', result.stderr)
                 self.assertEqual([], self.torch_calls())
 
-    def test_a_linked_profile_is_refused(self):
+    def test_a_profile_is_read_through_a_link(self):
         real = self.profile(1, 'storage', {'writer_rank': 9}, name='elsewhere.json')
         link = self.incidents / 'incident-1.json'
         link.symlink_to(real)
         self.reply(1, f'Incident 1 is ready.\nProfile: {link}\n')
         result = self.run_job('incident')
-        self.assertEqual(3, result.returncode)
-        self.assertIn('cannot be used by this launcher', result.stderr)
+        self.assertEqual(0, result.returncode, result.stderr)
+        [call] = self.torch_calls()
+        self.assertIn('--writer-rank=9', call)
 
     def test_rerun_needs_an_incident(self):
         for verb in ('rerun', 'resume'):
@@ -1570,17 +1570,17 @@ class LoginProfile(unittest.TestCase):
         self.lab = root / 'lab'
         (self.lab / 'facilitator').mkdir(parents=True)
         shutil.copy(LAB / 'facilitator' / 'participant-profile.sh', self.lab / 'facilitator')
-        (self.lab / 'lab.env').write_text('export PARTITION=${PARTITION:-gpu}\n'
-                                          'export GPUS_PER_NODE=${GPUS_PER_NODE:-8}\n')
+        (self.lab / 'lab.env').write_text(
+            'export PARTITION=${PARTITION:-gpu}\n'
+            'export GPUS_PER_NODE=${GPUS_PER_NODE:-8}\n'
+            'export AIM344_TARGET_NODE=${AIM344_TARGET_NODE:-gpu-g7-1}\n'
+            'export AIM344_PEER_NODE=${AIM344_PEER_NODE:-gpu-g7-2}\n'
+            'export AIM344_EFA_DEVICE=${AIM344_EFA_DEVICE:-rdmap83s0}\n'
+            'export AIM344_SLURM_BIN=${AIM344_SLURM_BIN:-/opt/slurm-25.11/bin}\n')
         (self.lab / 'facilitator' / 'allocation-env.py').write_text(
             'import sys\nassert sys.argv[1:] == ["--partition", "gpu"], sys.argv\n'
             'print("export PARTITION=gpu\\nexport GPUS_PER_NODE=8\\nexport CPUS_PER_RANK=12\\n'
             'export MEMORY_PER_NODE=0")\n')
-        self.seats = root / 'seats'
-        self.seats.mkdir()
-        (self.seats / f'{USER}.env').write_text(
-            "export AIM344_TARGET_NODE=gpu-g7-1\nexport AIM344_PEER_NODE=gpu-g7-2\n"
-            "export AIM344_EFA_DEVICE=rdmap83s0\nexport AIM344_SLURM_BIN=/opt/slurm-25.11/bin\n")
         self.home = root / 'home'
         self.home.mkdir()
         self.profile = self.lab / 'facilitator' / 'participant-profile.sh'
@@ -1590,7 +1590,7 @@ class LoginProfile(unittest.TestCase):
 
     def shell(self, commands, **env):
         script = f'cd "$HOME"; source {self.profile}; {commands}'
-        base = {'HOME': str(self.home), 'PATH': '/usr/bin:/bin', 'AIM344_SEAT_DIR': str(self.seats)}
+        base = {'HOME': str(self.home), 'PATH': '/usr/bin:/bin'}
         return subprocess.run(['bash', '--norc', '--noprofile', '-i', '-c', script],
                               capture_output=True, text=True, timeout=30, env={**base, **env})
 
@@ -1614,154 +1614,37 @@ class LoginProfile(unittest.TestCase):
                           '/opt/amazon/efa/bin:/opt/slurm-25.11/bin:/usr/bin:/bin', str(self.lab)],
                          result.stdout.splitlines(), result.stderr)
 
-    def test_without_a_seat_file_the_profile_changes_nothing(self):
-        (self.seats / f'{USER}.env').unlink()
+    def test_without_lab_env_the_profile_changes_nothing(self):
+        (self.lab / 'lab.env').unlink()
         result = self.shell('pwd; echo "${AIM344_TARGET_NODE:-unset} $PATH"', SLURM_JOB_ID='77')
         self.assertEqual([str(self.home), 'unset /usr/bin:/bin'], result.stdout.splitlines())
 
     def test_a_script_does_not_run_the_profile(self):
         result = subprocess.run(['bash', '--norc', '-c', f'cd "$HOME"; source {self.profile}; pwd'],
                                 capture_output=True, text=True, timeout=30,
-                                env={'HOME': str(self.home), 'PATH': '/usr/bin:/bin',
-                                     'AIM344_SEAT_DIR': str(self.seats)})
+                                env={'HOME': str(self.home), 'PATH': '/usr/bin:/bin'})
         self.assertEqual(str(self.home), result.stdout.strip())
 
 
-class InstallerProfileSteps(unittest.TestCase):
-    """The installer's login-profile steps, each run on its own as an ordinary user."""
+class InstallerProfileLine(unittest.TestCase):
+    """The installer prints the ~/.bashrc line that sources the login profile."""
 
     TEXT = (LAB / 'facilitator' / 'install-participant-control.sh').read_text()
 
-    @classmethod
-    def block(cls, opening):
-        start = cls.TEXT.index(opening)
-        body = cls.TEXT.index("<<'PY'\n", start) + len("<<'PY'\n")
-        return cls.TEXT[body:cls.TEXT.index('\nPY\n', body)]
+    def test_the_printed_line_sources_the_profile_of_the_installed_lab(self):
+        start = self.TEXT.index('profile=$lab/facilitator/participant-profile.sh')
+        end = self.TEXT.index('\n', self.TEXT.index('profile_line=$(', start))
+        lab = '/opt/aim344/device-recovery/companion'
+        snippet = f'lab={lab}\n' + self.TEXT[start:end] + '\nprintf "%s" "$profile_line"\n'
+        result = subprocess.run(['bash', '-c', snippet], capture_output=True, text=True, timeout=20)
+        self.assertEqual(0, result.returncode, result.stderr)
+        profile = f'{lab}/facilitator/participant-profile.sh'
+        self.assertEqual(f'[ -r {profile} ] && . {profile}  # AIM344 login profile', result.stdout)
+        summary = self.TEXT[self.TEXT.index('<<SUMMARY'):]
+        self.assertIn('  $profile_line', summary)
 
-    def seat_check(self, env, lab, slurm_bin):
-        start = self.TEXT.index('peer_node=${AIM344_PEER_NODE:-}')
-        end = self.TEXT.index('\nfi\n', start) + len('\nfi\n')
-        # The check precedes the first change the installer makes.
-        self.assertLess(end, self.TEXT.index('echo "== installing the session helper"'))
-        snippet = 'set -euo pipefail\ntarget_node=gpu-g7-1\n' + self.TEXT[start:end] + 'echo checked\n'
-        base = {k: v for k, v in os.environ.items() if k not in ('AIM344_PEER_NODE', 'AIM344_EFA_DEVICE')}
-        return subprocess.run(['bash', '-c', snippet], capture_output=True, text=True, timeout=20,
-                              env={**base, 'lab': str(lab), 'slurm_bin': str(slurm_bin), **env})
-
-    @staticmethod
-    def lab_tree(root):
-        """A lab directory and a Slurm client directory that pass the checks."""
-        lab, slurm = root / 'lab', root / 'slurm-25.11' / 'bin'
-        (lab / 'facilitator').mkdir(parents=True)
-        slurm.mkdir(parents=True)
-        for name in ('facilitator/participant-profile.sh', 'facilitator/allocation-env.py', 'lab.env'):
-            (lab / name).write_text('# lab file\n')
-            (lab / name).chmod(0o644)
-        for path in (root, lab, lab / 'facilitator'):
-            path.chmod(0o755)
-        (slurm / 'salloc').write_text('#!/bin/sh\n')
-        (slurm / 'salloc').chmod(0o755)
-        return lab, slurm
-
-    def test_seat_values_are_checked_before_any_change(self):
-        profile = {'AIM344_PEER_NODE': 'gpu-g7-2', 'AIM344_EFA_DEVICE': 'rdmap83s0'}
-        with tempfile.TemporaryDirectory() as tmp:
-            lab, slurm = self.lab_tree(Path(tmp))
-            for env, slurm_bin, ok in (
-                    ({}, '/opt/slurm/bin', True),
-                    (profile, slurm, True),
-                    ({'AIM344_PEER_NODE': 'gpu-g7-2'}, slurm, False),
-                    ({'AIM344_EFA_DEVICE': 'rdmap83s0'}, slurm, False),
-                    ({'AIM344_PEER_NODE': 'gpu-g7-1', 'AIM344_EFA_DEVICE': 'rdmap83s0'}, slurm, False),
-                    ({'AIM344_PEER_NODE': 'gpu g7', 'AIM344_EFA_DEVICE': 'rdmap83s0'}, slurm, False),
-                    ({'AIM344_PEER_NODE': 'gpu-g7-2', 'AIM344_EFA_DEVICE': 'rdma;id'}, slurm, False),
-                    (profile, '/opt/slurm bin', False),
-                    # A Slurm client directory of another version, without salloc.
-                    (profile, Path(tmp) / 'slurm-25.05' / 'bin', False)):
-                with self.subTest(env=env, slurm_bin=slurm_bin):
-                    result = self.seat_check(env, lab, slurm_bin)
-                    self.assertEqual(ok, result.returncode == 0, result.stderr)
-                    self.assertEqual(ok, result.stdout == 'checked\n')
-            missing = self.seat_check(profile, lab, Path(tmp) / 'slurm-25.05' / 'bin')
-            self.assertIn('No salloc in', missing.stderr)
-
-    def test_the_profile_is_refused_from_a_lab_directory_others_can_change(self):
-        profile = {'AIM344_PEER_NODE': 'gpu-g7-2', 'AIM344_EFA_DEVICE': 'rdmap83s0'}
-        changes = {
-            'the lab directory writable by its group': lambda lab: lab.chmod(0o775),
-            'facilitator/ writable by others': lambda lab: (lab / 'facilitator').chmod(0o757),
-            'the profile writable by its group': lambda lab: (lab / 'facilitator/participant-profile.sh').chmod(0o664),
-            'allocation-env.py writable by others': lambda lab: (lab / 'facilitator/allocation-env.py').chmod(0o646),
-            'lab.env writable by its group': lambda lab: (lab / 'lab.env').chmod(0o664),
-            'the profile a symbolic link': lambda lab: (
-                (lab / 'facilitator/participant-profile.sh').unlink(),
-                (lab / 'facilitator/participant-profile.sh').symlink_to(lab / 'lab.env')),
-            'the profile missing': lambda lab: (lab / 'facilitator/participant-profile.sh').unlink(),
-            'a parent writable by others, not sticky': lambda lab: lab.parent.chmod(0o777),
-        }
-        for name, change in changes.items():
-            with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
-                lab, slurm = self.lab_tree(Path(tmp))
-                change(lab)
-                result = self.seat_check(profile, lab, slurm)
-                self.assertNotEqual(0, result.returncode)
-                self.assertIn('refusing to install the login profile', result.stderr)
-                self.assertEqual('', result.stdout)
-        with tempfile.TemporaryDirectory() as tmp:
-            lab, slurm = self.lab_tree(Path(tmp))
-            # lab.env is generated on site and may come after the installer.
-            (lab / 'lab.env').unlink()
-            self.assertEqual(0, self.seat_check(profile, lab, slurm).returncode)
-            # A sticky parent such as /tmp lets others add entries, not replace these.
-            lab.parent.chmod(0o1777)
-            self.assertEqual(0, self.seat_check(profile, lab, slurm).returncode)
-            # Through a symbolic link, the resolved directory is checked.
-            link = Path(tmp) / 'link'
-            link.symlink_to(lab)
-            self.assertEqual(0, self.seat_check(profile, link, slurm).returncode)
-            lab.chmod(0o775)
-            self.assertNotEqual(0, self.seat_check(profile, link, slurm).returncode)
-
-    def test_the_seat_file_holds_the_handout_values(self):
-        block = self.block('python3 - "$seat_dir"')
-        with tempfile.TemporaryDirectory() as tmp:
-            seats = Path(tmp) / 'seats'
-            result = subprocess.run([sys.executable, '-', str(seats), 'aim344-t1', 'gpu-g7-1',
-                                     'gpu-g7-2', 'rdmap83s0', '/opt/aws/pcs/scheduler/slurm-25.11/bin'],
-                                    input=block, capture_output=True, text=True, timeout=20)
-            self.assertEqual(0, result.returncode, result.stderr)
-            seat = seats / 'aim344-t1.env'
-            self.assertEqual('export AIM344_TARGET_NODE=gpu-g7-1\nexport AIM344_PEER_NODE=gpu-g7-2\n'
-                             'export AIM344_EFA_DEVICE=rdmap83s0\n'
-                             'export AIM344_SLURM_BIN=/opt/aws/pcs/scheduler/slurm-25.11/bin\n',
-                             seat.read_text())
-            self.assertEqual(0o644, seat.stat().st_mode & 0o777)
-            seats.chmod(0o777)
-            refused = subprocess.run([sys.executable, '-', str(seats), 'aim344-t1', 'a', 'b', 'c', '/d'],
-                                     input=block, capture_output=True, text=True, timeout=20)
-            self.assertNotEqual(0, refused.returncode)
-            self.assertIn('writable by others', refused.stderr)
-
-    def test_the_bashrc_line_is_added_once_and_never_through_a_link(self):
-        block = self.block('python3 - "$participant_home"')
-        profile = '/opt/aim344/device-recovery/companion/facilitator/participant-profile.sh'
-        line = f'[ -r {profile} ] && . {profile}  # AIM344 login profile'
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp)
-            (home / '.bashrc').write_text('# skel, no final newline')
-            for _ in range(2):
-                result = subprocess.run([sys.executable, '-', str(home), profile], input=block,
-                                        capture_output=True, text=True, timeout=20)
-                self.assertEqual(0, result.returncode, result.stderr)
-            self.assertEqual(f'# skel, no final newline\n{line}\n', (home / '.bashrc').read_text())
-            target = home / 'elsewhere'
-            target.write_text('untouched\n')
-            (home / '.bashrc').unlink()
-            (home / '.bashrc').symlink_to(target)
-            linked = subprocess.run([sys.executable, '-', str(home), profile], input=block,
-                                    capture_output=True, text=True, timeout=20)
-            self.assertNotEqual(0, linked.returncode)
-            self.assertEqual('untouched\n', target.read_text())
+    def test_the_installer_writes_no_bashrc(self):
+        self.assertNotIn('.bashrc', self.TEXT.replace('~/.bashrc', ''))
 
 
 if __name__ == '__main__':

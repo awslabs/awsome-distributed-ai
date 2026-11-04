@@ -8,11 +8,11 @@ behaviour to prove it would have caught the defect, it reconstructs that exact
 construction and asserts the unsafe outcome, so nothing here is validated only on
 the input that passes.
 
-S1 is an installer defect and cannot be established by reading. `InstallerAsRoot`
-runs the real `install-participant-control.sh` inside a container, as root, with
-real accounts and real symlinks in the destinations, and then reads the
-filesystem. Those tests skip when no container runtime is available; the skip
-message says so rather than quietly passing.
+S1 concerned the installer. `InstallerAsRoot` runs the real
+`install-participant-control.sh` inside a container, as root, for the image's own
+`ubuntu` account, and then reads the filesystem. Those tests skip when no
+container runtime is available; the skip message says so rather than quietly
+passing.
 
 S2, S3 and S4 are controller and maintenance defects and are exercised through
 the same recorded fake executor the existing suites use, plus, for S4, the real
@@ -81,67 +81,34 @@ IMAGE = os.environ.get('AIM344_TEST_IMAGE', 'ubuntu:24.04')
 
 
 # ---------------------------------------------------------------------------
-# S1: the installer's privileged writes
+# S1: the installer, run as root for the cluster's own account
 # ---------------------------------------------------------------------------
 
-# What the container does. Written as a script rather than a chain of -c
-# arguments so the actual installer invocation is readable, and so the negative
-# and positive cases run under one root filesystem.
-#
-# Each case resets the privileged decoy first, so one case's outcome cannot be
-# read out of another's. The decoy is /root/aim344-secret, 0700 root:root, with a
-# 0700 child.
-#
-# On which component the attack targets. `install -d -o U -g G -m M a/b/c` applies
-# the ownership and mode to the components it CREATES. So the substituted
-# component that matters is the LAST one: if `.config` is a real directory and
-# `.config/enroot` is a symlink to a privileged directory, `install -d` resolves
-# that symlink and applies the requested ownership and mode to its target. That is
-# the shape of the author's own probe
-# (participant-revision/test-logs/rework4-r1-primitive-probe.log:14-18), and it is
-# the shape used below.
+# What the container does: two installs on a stock Ubuntu image for its `ubuntu`
+# account, the first on a fresh host and the second as a rerun.
 CONTAINER_SCRIPT = r'''
 set -u
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null 2>&1
-apt-get install -y -qq python3 openssh-client sudo >/dev/null 2>&1
+apt-get install -y -qq python3 openssh-client >/dev/null 2>&1
 
-# The installer calls these; they are not what S1 is about, and a container has
-# no systemd, no Slurm and no visudo worth running. Stub them so the run reaches
-# the filesystem operations under test. Each stub records that it was called.
+# The installer calls systemctl; a container has no systemd. The stub records
+# that it was called.
 mkdir -p /opt/stubs /records
-for tool in systemctl visudo; do
-    printf '#!/bin/sh\necho "$0 $*" >> /records/stub-calls.txt\nexit 0\n' > /opt/stubs/$tool
-    chmod 0755 /opt/stubs/$tool
-done
+printf '#!/bin/sh\necho "$0 $*" >> /records/stub-calls.txt\nexit 0\n' > /opt/stubs/systemctl
+chmod 0755 /opt/stubs/systemctl
 export PATH=/opt/stubs:$PATH
 
 mkdir -p /lab/facilitator
 cp /mnt/installer.sh /lab/facilitator/install-participant-control.sh
-printf '#!/usr/bin/env python3\n' > /lab/facilitator/device-session.py
-mkdir -p /etc/enroot
-# A realistic enroot.conf, including a commented-out line and the per-group cache
-# path, so the installer's own extraction is exercised rather than a shape chosen
-# to make it succeed.
-cat > /etc/enroot/enroot.conf <<'CONF'
-#ENROOT_RUNTIME_PATH        /run/enroot/user-$(id -u)
-ENROOT_RUNTIME_PATH        /tmp/enroot/user-$(id -u)
-ENROOT_CACHE_PATH          /tmp/enroot/cache/group-$(id -g)
-ENROOT_DATA_PATH           /tmp/enroot/data/user-$(id -u)
-CONF
+cp /mnt/device-session.py /lab/facilitator/device-session.py
 mkdir -p /opt/suite && printf '#!/bin/bash\ntrue\n' > /opt/suite/gpu-healthcheck.sh
 export AIM344_SUITE_ENTRY=/opt/suite/gpu-healthcheck.sh
 export AIM344_PARTITION=assigned-queue
-
-reset_decoy() {
-    rm -rf /root/aim344-secret
-    mkdir -p /root/aim344-secret/inside
-    chmod 0700 /root/aim344-secret
-    chmod 0700 /root/aim344-secret/inside
-}
+cp /mnt/schedule.json /root/seat-1.json
 
 run_installer() {
-    bash /lab/facilitator/install-participant-control.sh table-1 aim344-t1 \
+    bash /lab/facilitator/install-participant-control.sh seat-1 ubuntu \
         gpu-g7-1 i-0123456789abcdef0 10.0.0.1 > "/records/$1.out" 2> "/records/$1.err"
     echo "$?" > "/records/$1.rc"
 }
@@ -155,161 +122,30 @@ def describe(path):
         info = os.lstat(path)
     except FileNotFoundError:
         return {'exists': False}
-    return {'exists': True, 'symlink': stat.S_ISLNK(info.st_mode),
-            'dir': stat.S_ISDIR(info.st_mode), 'uid': info.st_uid,
-            'gid': info.st_gid, 'mode': oct(stat.S_IMODE(info.st_mode)),
-            'target': os.readlink(path) if stat.S_ISLNK(info.st_mode) else None}
-paths = ['/home/aim344-t1/.config', '/home/aim344-t1/.config/enroot',
-         '/home/aim344-t1/.ssh', '/home/aim344-t1/aim344-results',
-         '/tmp/enroot', '/root/aim344-secret', '/root/aim344-secret/inside',
-         '/home/aim344-control/.ssh',
-         '/home/aim344-control/.ssh/authorized_keys']
+    return {'exists': True, 'uid': info.st_uid, 'gid': info.st_gid,
+            'mode': oct(stat.S_IMODE(info.st_mode))}
+paths = ['/home/ubuntu/aim344-results', '/etc/aim344-device-session.json',
+         '/usr/local/sbin/aim344-device-session', '/root/.ssh/aim344-maintenance',
+         '/home/ubuntu/.bashrc', '/etc/sudoers.d']
 state = {p: describe(p) for p in paths}
-keys = '/home/aim344-control/.ssh/authorized_keys'
-if os.path.exists(keys):
-    with open(keys, newline='') as handle:
-        state['authorized_keys_lines'] = [
-            line for line in handle.read().split('\n') if line.strip()]
+state['sudoers_entries'] = sorted(os.listdir('/etc/sudoers.d')) if os.path.isdir('/etc/sudoers.d') else []
+state['accounts'] = sorted(line.split(':')[0] for line in open('/etc/passwd'))
+with open('/home/ubuntu/.bashrc') as handle:
+    state['bashrc_mentions_aim344'] = 'AIM344' in handle.read()
+with open('/etc/aim344-device-session.json') as handle:
+    state['config'] = json.load(handle)
 with open(f'/records/{name}.json', 'w') as handle:
     json.dump(state, handle, indent=2, sort_keys=True)
 PY
 }
 
-echo "=== case 1: first install, new account"
-reset_decoy
-run_installer case1
+echo "=== case 1: first install"
+AIM344_SCHEDULE_FILE=/root/seat-1.json run_installer case1
 record_state case1
 
-echo "=== case 2: rerun with real directories already present"
-reset_decoy
+echo "=== case 2: rerun without a schedule file"
 run_installer case2
 record_state case2
-
-# Keep the key pair the successful run generated: the later cases must rerun on a
-# real existing account, which is the condition S1 turns on.
-cp -a /home/aim344-t1/.ssh /root/keep-ssh
-
-echo "=== case 3a: .config/enroot is a symlink, with the shared parent VALID"
-# The installer prepares the shared /tmp parent (line ~321) BEFORE either home
-# directory, and it runs under `set -euo pipefail`. A case that also substitutes
-# /tmp/enroot therefore stops there and never reaches this branch at all -- which is
-# the S1 evidence gap. So here /tmp/enroot is left as the installer's own valid
-# root-owned sticky directory and only the participant's `.config/enroot` is
-# substituted.
-reset_decoy
-rm -rf /home/aim344-t1/.config /home/aim344-t1/.ssh /tmp/enroot
-cp -a /root/keep-ssh /home/aim344-t1/.ssh
-chown -R aim344-t1:aim344-t1 /home/aim344-t1/.ssh
-mkdir -p /home/aim344-t1/.config
-chown aim344-t1:aim344-t1 /home/aim344-t1/.config
-runuser -u aim344-t1 -- ln -s /root/aim344-secret /home/aim344-t1/.config/enroot
-run_installer case3a
-record_state case3a
-
-echo "=== case 3b: .ssh is a symlink, with the shared parent AND .config/enroot valid"
-# .ssh is prepared after .config/enroot, so that one is left a real directory here.
-reset_decoy
-rm -rf /home/aim344-t1/.config /home/aim344-t1/.ssh /tmp/enroot
-mkdir -p /home/aim344-t1/.config/enroot
-chown -R aim344-t1:aim344-t1 /home/aim344-t1/.config
-ln -s /root/aim344-secret /home/aim344-t1/.ssh
-chown -h aim344-t1:aim344-t1 /home/aim344-t1/.ssh
-run_installer case3b
-record_state case3b
-
-echo "=== case 3c: the participant's results directory is a symlink"
-# Prepared last of the three (line ~463), after the session configuration is written,
-# so everything before it has to be valid for this branch to be reached at all.
-reset_decoy
-rm -rf /home/aim344-t1/.config /home/aim344-t1/.ssh /tmp/enroot \
-    /home/aim344-t1/aim344-results
-mkdir -p /home/aim344-t1/.config/enroot
-chown -R aim344-t1:aim344-t1 /home/aim344-t1/.config
-cp -a /root/keep-ssh /home/aim344-t1/.ssh
-chown -R aim344-t1:aim344-t1 /home/aim344-t1/.ssh
-runuser -u aim344-t1 -- ln -s /root/aim344-secret /home/aim344-t1/aim344-results
-run_installer case3c
-record_state case3c
-
-echo "=== case 3: every destination substituted at once (the combined layout)"
-# Kept because it is the layout the previous evidence used, and it is what shows
-# that the shared parent is checked FIRST: this run must stop at /tmp/enroot.
-reset_decoy
-rm -rf /home/aim344-t1/.config
-mkdir -p /home/aim344-t1/.config
-chown aim344-t1:aim344-t1 /home/aim344-t1/.config
-runuser -u aim344-t1 -- ln -s /root/aim344-secret /home/aim344-t1/.config/enroot
-rm -rf /home/aim344-t1/.ssh
-ln -s /root/aim344-secret /home/aim344-t1/.ssh
-chown -h aim344-t1:aim344-t1 /home/aim344-t1/.ssh
-rm -rf /tmp/enroot
-ln -s /root/aim344-secret /tmp/enroot
-run_installer case3
-record_state case3
-
-echo "=== case 3b: what the REJECTED construction does to the same layout"
-# Not the installer: the exact primitives the rejected revision used, against the
-# exact same layout, so this suite is not validated only on the repaired path.
-reset_decoy
-rm -rf /home/aim344-t1/.config
-mkdir -p /home/aim344-t1/.config
-runuser -u aim344-t1 -- ln -s /root/aim344-secret /home/aim344-t1/.config/enroot 2>/dev/null \
-    || ln -s /root/aim344-secret /home/aim344-t1/.config/enroot
-rm -rf /tmp/enroot
-ln -s /root/aim344-secret /tmp/enroot
-install -d -o aim344-t1 -g aim344-t1 -m 0755 /home/aim344-t1/.config/enroot \
-    > /records/rejected.out 2>&1
-echo "$?" > /records/rejected.rc
-install -d -m 1777 /tmp/enroot >> /records/rejected.out 2>&1
-record_state rejected
-
-echo "=== case 3b-prim: the REJECTED primitive on the .ssh destination"
-# `install -d -o aim344-t1 -g aim344-t1 -m 0700 "$participant_home/.ssh"` is the exact
-# line the rejected installer used. Run against the same layout case3b uses, so that
-# case's refusal is paired with a demonstration that the pre-repair code did follow
-# the link.
-reset_decoy
-rm -rf /home/aim344-t1/.ssh
-ln -s /root/aim344-secret /home/aim344-t1/.ssh
-chown -h aim344-t1:aim344-t1 /home/aim344-t1/.ssh
-install -d -o aim344-t1 -g aim344-t1 -m 0700 /home/aim344-t1/.ssh \
-    > /records/rejected-ssh.out 2>&1
-echo "$?" > /records/rejected-ssh.rc
-record_state rejected-ssh
-
-echo "=== case 3c-prim: the REJECTED primitive on the results destination"
-reset_decoy
-rm -rf /home/aim344-t1/aim344-results
-runuser -u aim344-t1 -- ln -s /root/aim344-secret /home/aim344-t1/aim344-results
-install -d -o aim344-t1 -g aim344-t1 -m 0700 /home/aim344-t1/aim344-results \
-    > /records/rejected-results.out 2>&1
-echo "$?" > /records/rejected-results.rc
-record_state rejected-results
-
-echo "=== case 4: a second key line in the participant's own public key file"
-reset_decoy
-rm -rf /home/aim344-t1/.config /home/aim344-t1/.ssh /tmp/enroot
-cp -a /root/keep-ssh /home/aim344-t1/.ssh
-chown -R aim344-t1:aim344-t1 /home/aim344-t1/.ssh
-runuser -u aim344-t1 -- bash -c 'printf "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIINJECTEDKEYMATERIALINJECTEDKEYMATER injected\n" >> /home/aim344-t1/.ssh/aim344-exercise.pub'
-run_installer case4
-record_state case4
-
-echo "=== case 5: a shared runtime parent precreated by another local user"
-reset_decoy
-rm -rf /home/aim344-t1/.config /home/aim344-t1/.ssh /tmp/enroot
-cp -a /root/keep-ssh /home/aim344-t1/.ssh
-chown -R aim344-t1:aim344-t1 /home/aim344-t1/.ssh
-python3 - <<'PY'
-import os
-os.setgid(65534); os.setuid(65534)
-os.mkdir('/tmp/enroot', 0o700)
-PY
-run_installer case5
-record_state case5
-
-echo "=== stub calls"
-cat /records/stub-calls.txt 2>/dev/null | sort | uniq -c
 '''
 
 
@@ -317,12 +153,7 @@ cat /records/stub-calls.txt 2>/dev/null | sort | uniq -c
                      'no usable container runtime; the installer needs root on a '
                      'throwaway filesystem and is not exercised by reading it')
 class InstallerAsRoot(unittest.TestCase):
-    """S1: the real installer, run as root, with real symlink negatives.
-
-    One container run produces every case; the assertions below read its recorded
-    filesystem state. Sharing the run keeps the class from paying the image cost
-    per test while each test still asserts one thing.
-    """
+    """The real installer, run as root on a stock Ubuntu image for `ubuntu`."""
 
     records = {}
     container_output = ''
@@ -335,25 +166,25 @@ class InstallerAsRoot(unittest.TestCase):
         cls.workdir = tempfile.mkdtemp(prefix='aim344-s1-')
         script = Path(cls.workdir) / 'run.sh'
         script.write_text(CONTAINER_SCRIPT)
+        schedule = Path(cls.workdir) / 'schedule.json'
+        schedule.write_text(json.dumps([{'exercise': 'slow-job'}, {'exercise': 'efa-reset'}]))
+        schedule.chmod(0o644)
         finished = subprocess.run(
             [runtime, 'run', '--rm', '-v', f'{INSTALLER}:/mnt/installer.sh:ro',
+             '-v', f'{HELPER}:/mnt/device-session.py:ro',
+             '-v', f'{schedule}:/mnt/schedule.json:ro',
              '-v', f'{cls.workdir}:/records', IMAGE, 'bash', '/records/run.sh'],
             capture_output=True, text=True, timeout=900)
         cls.container_output = finished.stdout + finished.stderr
         cls.records = {}
-        for name in ('case1', 'case2', 'case3', 'case3a', 'case3b', 'case3c',
-                     'case4', 'case5', 'rejected', 'rejected-ssh',
-                     'rejected-results'):
+        for name in ('case1', 'case2'):
             path = Path(cls.workdir) / f'{name}.json'
             if path.is_file():
                 cls.records[name] = json.loads(path.read_text())
-            rc = Path(cls.workdir) / f'{name}.rc'
-            if rc.is_file():
-                cls.records[f'{name}_rc'] = int(rc.read_text().strip())
-            for stream in ('out', 'err'):
-                log = Path(cls.workdir) / f'{name}.{stream}'
+            for suffix in ('rc', 'out', 'err'):
+                log = Path(cls.workdir) / f'{name}.{suffix}'
                 if log.is_file():
-                    cls.records[f'{name}_{stream}'] = log.read_text()
+                    cls.records[f'{name}_{suffix}'] = log.read_text()
         if not cls.records:
             raise unittest.SkipTest(
                 'the container produced no records; output was:\n'
@@ -363,346 +194,42 @@ class InstallerAsRoot(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.workdir, ignore_errors=True)
 
-    def test_a_first_install_succeeds_and_the_participant_owns_its_directories(self):
-        """The normal path has to keep working; a refusal is not a repair."""
-        self.assertEqual(0, self.records.get('case1_rc'),
+    def test_a_first_install_succeeds_for_the_clusters_own_account(self):
+        self.assertEqual('0\n', self.records.get('case1_rc'),
                          f'installer failed:\n{self.records.get("case1_err", "")}')
         state = self.records['case1']
-        for path in ('/home/aim344-t1/.config/enroot', '/home/aim344-t1/.ssh',
-                     '/home/aim344-t1/aim344-results'):
-            with self.subTest(path=path):
-                self.assertTrue(state[path]['exists'], f'{path} was not created')
-                self.assertTrue(state[path]['dir'])
-                self.assertNotEqual(0, state[path]['uid'],
-                                    f'{path} is owned by root, not the participant')
-        self.assertEqual('0o700', state['/home/aim344-t1/.ssh']['mode'])
-        self.assertEqual('0o700', state['/home/aim344-t1/aim344-results']['mode'])
-        self.assertEqual('0o755', state['/home/aim344-t1/.config/enroot']['mode'])
+        results = state['/home/ubuntu/aim344-results']
+        self.assertEqual((True, 1000, 1000, '0o700'),
+                         (results['exists'], results['uid'], results['gid'], results['mode']))
+        self.assertEqual('0o600', state['/etc/aim344-device-session.json']['mode'])
+        self.assertEqual('0o755', state['/usr/local/sbin/aim344-device-session']['mode'])
+        self.assertTrue(state['/root/.ssh/aim344-maintenance']['exists'])
 
-    def test_the_forced_command_entry_is_installed_for_the_assignment(self):
-        lines = self.records['case1'].get('authorized_keys_lines', [])
-        self.assertEqual(1, len(lines), f'authorized_keys holds {lines}')
-        self.assertTrue(lines[0].startswith(
-            'command="sudo /usr/local/sbin/aim344-device-session '
-            '--assignment table-1"'), lines[0])
-        self.assertIn('no-pty', lines[0])
-        self.assertTrue(lines[0].rstrip().endswith('aim344-table-1'), lines[0])
+    def test_the_configuration_holds_one_assignment_for_ubuntu(self):
+        config = self.records['case1']['config']
+        self.assertEqual(['seat-1'], list(config['assignments']))
+        seat = config['assignments']['seat-1']
+        self.assertEqual(('ubuntu', 1000, 1000, '/home/ubuntu/aim344-results'),
+                         (seat['participant_user'], seat['participant_uid'],
+                          seat['participant_gid'], seat['answers_dir']))
+        self.assertNotIn('caller_uid', seat)
+        self.assertEqual(['slow-job', 'efa-reset'],
+                         [entry['exercise'] for entry in seat['exercise_schedule']])
 
-    def test_a_rerun_on_an_existing_account_still_succeeds(self):
-        """Reruns are explicitly supported, so refusing them is not the repair."""
-        self.assertEqual(0, self.records.get('case2_rc'),
+    def test_no_account_sudo_rule_or_bashrc_line_is_added(self):
+        state = self.records['case1']
+        self.assertNotIn('aim344-control', state['accounts'])
+        self.assertEqual([], [name for name in state['sudoers_entries'] if 'aim344' in name])
+        self.assertFalse(state['bashrc_mentions_aim344'])
+        self.assertIn('# AIM344 login profile', self.records['case1_out'])
+        self.assertIn('"participants": ["ubuntu"]', self.records['case1_out'])
+        self.assertIn('"participant_users": ["ubuntu"]', self.records['case1_out'])
+
+    def test_a_rerun_keeps_the_schedule(self):
+        self.assertEqual('0\n', self.records.get('case2_rc'),
                          f'rerun failed:\n{self.records.get("case2_err", "")}')
-        lines = self.records['case2'].get('authorized_keys_lines', [])
-        self.assertEqual(1, len(lines),
-                         f'a rerun duplicated or dropped the entry: {lines}')
-
-    def test_a_symlinked_destination_does_not_change_the_privileged_target(self):
-        """S1, the combined layout: root must not follow the participant's symlink.
-
-        This case substitutes every destination at once, so it establishes the
-        shared-parent refusal and nothing beyond it -- the installer's `set -euo
-        pipefail` stops it at `/tmp/enroot`. The per-destination cases below are what
-        show each home-path branch refusing, with the preceding path valid.
-        """
-        state = self.records['case3']
-        secret = state['/root/aim344-secret']
-        self.assertTrue(secret['exists'])
-        self.assertEqual(0, secret['uid'],
-                         'the privileged directory changed owner through a symlink')
-        self.assertEqual('0o700', secret['mode'],
-                         'the privileged directory changed mode through a symlink')
-        inside = state['/root/aim344-secret/inside']
-        self.assertEqual(0, inside['uid'])
-        self.assertEqual('0o700', inside['mode'])
-        self.assertNotEqual(0, self.records.get('case3_rc'),
-                            'the installer reported success on a substituted path')
-        # And the honest limit of this case, asserted rather than assumed: it stops
-        # at the shared parent, so it says nothing about the home paths. The
-        # observed shape of that stop is `prepare_shared_parent`'s descriptor open
-        # failing with ENOTDIR on the substituted entry, before any home-path
-        # preparation prints anything.
-        out = self.records.get('case3_out', '')
-        err = self.records.get('case3_err', '')
-        self.assertIn("Not a directory: 'enroot'", err)
-        self.assertNotIn('/tmp/enroot created', out)
-        self.assertNotIn('/tmp/enroot existing', out)
-        self.assertNotIn('/home/aim344-t1/.config/enroot mode', out,
-                         'the combined case did reach a home path, so its scope '
-                         'assertion here is wrong')
-
-    def _assert_home_destination_refused(self, case, destination, reached_marker,
-                                        component):
-        """One home-path negative: the branch was reached, and it refused.
-
-        `reached` is the part the previous evidence was missing. The installer runs
-        under `set -euo pipefail`, so an earlier refusal ends the run; a case whose
-        output never shows the preceding preparation succeeding proves nothing about
-        the branch under test. `reached_marker` is a line the installer prints only
-        after everything before this destination has been prepared, and `component`
-        is the path component whose O_NOFOLLOW open must fail.
-        """
-        out = self.records.get(f'{case}_out', '')
-        err = self.records.get(f'{case}_err', '')
-        self.assertIn(reached_marker, out,
-                      f'{case} stopped before {destination} was attempted, so this '
-                      f'case does not exercise that branch')
-        self.assertIn(f"Not a directory: '{component}'", err,
-                      f'{case} did not fail on {destination} itself: {err[-400:]}')
-        self.assertNotEqual(0, self.records.get(f'{case}_rc'),
-                            f'the installer reported success with {destination} '
-                            f'substituted')
-        state = self.records[case]
-        secret = state['/root/aim344-secret']
-        self.assertEqual(0, secret['uid'],
-                         f'{destination} donated ownership of the privileged '
-                         f'directory')
-        self.assertEqual('0o700', secret['mode'],
-                         f'{destination} widened the privileged directory')
-        self.assertEqual(0, state['/root/aim344-secret/inside']['uid'])
-        self.assertEqual('0o700', state['/root/aim344-secret/inside']['mode'])
-        # The substituted name is still the participant's symlink: it was refused,
-        # not replaced or followed.
-        self.assertTrue(state[destination]['symlink'],
-                        f'{destination} is no longer the symlink that was placed '
-                        f'there, so this case did not exercise the refusal')
-        self.assertEqual('/root/aim344-secret', state[destination]['target'])
-
-    def test_a_symlinked_config_enroot_is_refused_with_the_parent_valid(self):
-        """The `.config/enroot` branch, actually reached.
-
-        `/tmp/enroot` is left absent so `prepare_shared_parent` creates it and
-        succeeds, and the run gets as far as the participant's home. This is the case
-        the review asked for: the combined layout above exits before this point.
-        """
-        self._assert_home_destination_refused(
-            'case3a', '/home/aim344-t1/.config/enroot',
-            reached_marker='/tmp/enroot created', component='enroot')
-        # `.config` itself is the participant's own real directory and is untouched.
-        self.assertFalse(self.records['case3a']['/home/aim344-t1/.config']['symlink'])
-
-    def test_a_symlinked_participant_ssh_is_refused_with_the_parent_valid(self):
-        """The participant `.ssh` branch, with everything before it valid."""
-        self._assert_home_destination_refused(
-            'case3b', '/home/aim344-t1/.ssh',
-            reached_marker='/home/aim344-t1/.config/enroot mode 0o755',
-            component='.ssh')
-
-    def test_a_symlinked_results_directory_is_refused(self):
-        """The `aim344-results` branch, which is prepared last.
-
-        Everything before it is valid in this case -- the shared parent, both home
-        directories, the key pair and the control user's `authorized_keys` -- so
-        reaching it at all is part of what the assertion shows.
-        """
-        self._assert_home_destination_refused(
-            'case3c', '/home/aim344-t1/aim344-results',
-            reached_marker='Wrote table-1 into /etc/aim344-device-session.json',
-            component='aim344-results')
-
-    def test_the_rejected_construction_would_have_changed_it(self):
-        """The negative control: the same layout, the pre-repair primitive.
-
-        Without this, the test above could be passing because the layout is
-        harmless rather than because the code is fixed.
-        """
-        state = self.records['rejected']
-        secret = state['/root/aim344-secret']
-        self.assertNotEqual(
-            0, secret['uid'],
-            'the pre-repair `install -d -o participant` did NOT change the '
-            'privileged directory, so this suite has no negative control')
-        self.assertEqual(0, self.records.get('rejected_rc'),
-                         'the pre-repair primitive is expected to report success')
-
-    def test_the_rejected_primitive_would_have_changed_the_other_destinations(self):
-        """The same control for the two home paths the new cases exercise.
-
-        Each of `.ssh` and `aim344-results` gets the exact `install -d -o … -m …`
-        line the rejected installer used, on the layout its own case uses. Both
-        report success and both change the privileged decoy, so the refusals above
-        are refusals of an operation that really was dangerous.
-        """
-        for case, destination in (('rejected-ssh', '/home/aim344-t1/.ssh'),
-                                  ('rejected-results',
-                                   '/home/aim344-t1/aim344-results')):
-            with self.subTest(case=case):
-                self.assertEqual(0, self.records.get(f'{case}_rc'),
-                                 f'the pre-repair primitive for {destination} did '
-                                 f'not report success')
-                secret = self.records[case]['/root/aim344-secret']
-                self.assertNotEqual(
-                    0, secret['uid'],
-                    f'the pre-repair primitive for {destination} did NOT change the '
-                    f'privileged directory, so that case has no negative control')
-
-    def test_a_second_key_line_does_not_reach_authorized_keys(self):
-        """A participant-writable public key file is untrusted input."""
-        lines = self.records['case4'].get('authorized_keys_lines', [])
-        self.assertNotIn(
-            'INJECTEDKEYMATERIAL', ' '.join(lines),
-            'a second line from the participant-writable .pub file was installed')
-        self.assertNotEqual(0, self.records.get('case4_rc'),
-                            'the installer accepted a two-line public key file')
-
-    def test_a_foreign_owned_shared_parent_is_refused_not_relabelled(self):
-        """The shared /tmp parent: report it, do not chmod another user's directory."""
-        state = self.records['case5']
-        parent = state['/tmp/enroot']
-        self.assertTrue(parent['exists'])
-        self.assertEqual(65534, parent['uid'],
-                         'the installer took ownership decisions on a directory '
-                         'another local user created')
-        self.assertEqual('0o700', parent['mode'],
-                         'the installer widened another local user\'s directory')
-        self.assertNotEqual(0, self.records.get('case5_rc'))
-        self.assertIn('owned by uid', self.records.get('case5_err', '')
-                      + self.records.get('case5_out', ''))
-
-    def test_the_shared_parent_extraction_actually_reads_enroot_conf(self):
-        """A skipped preparation cannot be a passing one.
-
-        The rejected extraction used `|` as both the s-command delimiter and the
-        intended alternation, so `\\|` was an escaped delimiter and the pattern
-        only matched the literal `ENROOT_RUNTIME|CACHE|DATA_PATH`. Against a real
-        configuration it printed nothing, and the installer said "no enroot paths
-        configured; skipping" -- which would make every shared-parent assertion in
-        this class vacuous.
-        """
-        output = self.records.get('case1_out', '')
-        self.assertNotIn('no enroot paths configured', output,
-                         'the installer did not read the enroot configuration, so '
-                         'the shared-parent path was never exercised')
-        self.assertIn('/tmp/enroot', output)
-        # Shared cache/data intermediates must also be prepared; per-identity
-        # paths remain exclusively the user's responsibility.
-        for expected in ('/tmp/enroot/cache', '/tmp/enroot/data'):
-            self.assertIn(expected, output)
-        for wrong in ('user-', 'group-'):
-            with self.subTest(wrong=wrong):
-                self.assertNotIn(f'{wrong} created', output)
-        self.assertTrue(self.records['case1']['/tmp/enroot']['exists'])
-        self.assertEqual('0o1777', self.records['case1']['/tmp/enroot']['mode'])
-        self.assertEqual(0, self.records['case1']['/tmp/enroot']['uid'])
-
-    def test_no_case_leaves_the_privileged_decoy_altered(self):
-        """After each refusal, the decoy is still root-owned and 0700.
-
-        Each case resets the decoy first, so this reads one case at a time rather
-        than the accumulated end state.
-        """
-        for case in ('case1', 'case2', 'case3', 'case3a', 'case3b', 'case3c',
-                     'case4', 'case5'):
-            with self.subTest(case=case):
-                state = self.records[case]
-                self.assertEqual(0, state['/root/aim344-secret']['uid'])
-                self.assertEqual('0o700', state['/root/aim344-secret']['mode'])
-                self.assertEqual(0, state['/root/aim344-secret/inside']['uid'])
-                self.assertEqual('0o700', state['/root/aim344-secret/inside']['mode'])
-
-
-class InstallerSource(unittest.TestCase):
-    """The audit S1 asked for: no privileged write through a participant path.
-
-    A source assertion cannot establish behaviour, which is why the container
-    tests above exist. What it can do is fail if a future edit reintroduces the
-    construction anywhere in the file, including a line the review did not name.
-    """
-
-    # Tokens that mean "this path is, or is under, a directory an unprivileged
-    # account controls". `/root/.ssh` and `/etc/...` are root-owned throughout and
-    # are not reachable by such an account, so they are not in scope.
-    UNTRUSTED = ('participant_home', 'control_home', '.config', '$parent',
-                 'getent passwd')
-
-    @classmethod
-    def logical_lines(cls, text):
-        """Backslash continuations joined, so a wrapped command is one line.
-
-        The first version of this detector read physical lines and therefore
-        missed `install -d -o "$participant" ... \\` with the destination on the
-        following line -- which is the exact shape the rejected installer used.
-        Its own test caught that, which is the point of keeping the negative case
-        below.
-        """
-        joined = []
-        pending = ''
-        start = 0
-        for number, line in enumerate(text.splitlines(), 1):
-            if pending:
-                pending += ' ' + line.strip()
-            else:
-                start = number
-                pending = line
-            if pending.rstrip().endswith('\\'):
-                pending = pending.rstrip()[:-1].rstrip()
-                continue
-            joined.append((start, pending))
-            pending = ''
-        if pending:
-            joined.append((start, pending))
-        return joined
-
-    @classmethod
-    def offending(cls, line):
-        stripped = line.strip()
-        if stripped.startswith('#') or 'install -d' not in stripped:
-            return False
-        if any(token in stripped for token in cls.UNTRUSTED):
-            return True
-        return '.ssh' in stripped and '/root/.ssh' not in stripped
-
-    def test_no_install_d_names_a_home_or_shared_temporary_directory(self):
-        offenders = [f'{number}: {line.strip()}'
-                     for number, line in self.logical_lines(INSTALLER.read_text())
-                     if self.offending(line)]
-        self.assertEqual([], offenders,
-                         'privileged install -d through an account-controlled path')
-
-    def test_the_detector_above_catches_the_rejected_lines(self):
-        """The detector is run on the lines it must catch, not only on a clean file.
-
-        Without this the assertion above could pass because the detector never
-        matches anything -- and in fact it did miss the wrapped form until this
-        test failed on it.
-        """
-        rejected = (
-            'install -d -o "$participant" -g "$participant" -m 0755 \\\n'
-            '    "$(getent passwd "$participant" | cut -d: -f6)/.config/enroot"\n',
-            'install -d -o "$participant" -g "$participant" -m 0700 "$participant_home/.ssh"\n',
-            'install -d -m 1777 "$parent"\n',
-            'install -d -o "$control_user" -g "$control_user" -m 0700 \\\n'
-            '        "$(getent passwd "$control_user" | cut -d: -f6)/.ssh"\n',
-        )
-        for text in rejected:
-            with self.subTest(text=text.splitlines()[0]):
-                caught = any(self.offending(line)
-                             for _, line in self.logical_lines(text))
-                self.assertTrue(caught, f'the detector would have missed: {text}')
-
-    def test_the_detector_accepts_the_legitimate_root_only_lines(self):
-        """A detector that flags everything is as useless as one that flags nothing."""
-        for text in ('install -d -o root -g root -m 0700 /root/.ssh\n',
-                     'install -d -m 0755 /etc/sudoers.d\n',
-                     'install -d -o root -g root -m 0700 "$state_dir"\n',
-                     '# install -d -o "$participant" ... was the rejected form\n'):
-            with self.subTest(text=text.strip()):
-                caught = any(self.offending(line)
-                             for _, line in self.logical_lines(text))
-                self.assertFalse(caught, f'the detector rejects: {text}')
-
-    def test_the_owned_and_shared_preparations_are_the_only_creators(self):
-        text = INSTALLER.read_text()
-        self.assertIn('prepare_owned_dir', text)
-        self.assertIn('prepare_shared_parent', text)
-        self.assertIn('O_NOFOLLOW', text)
-        # Each account-owned directory the installer needs is prepared as that
-        # account, named here so a dropped call is visible.
-        for call in ("prepare_owned_dir \"$participant\" \\\n    \"$(getent passwd \"$participant\" | cut -d: -f6)\" '.config/enroot' 0755",
-                     "prepare_owned_dir \"$participant\" \"$participant_home\" '.ssh' 0700",
-                     "prepare_owned_dir \"$participant\" \"$participant_home\" 'aim344-results' 0700",
-                     "prepare_owned_dir \"$control_user\" \"$control_home\" '.ssh' 0700"):
-            with self.subTest(call=call.split('\n')[0]):
-                self.assertIn(call, text)
+        seat = self.records['case2']['config']['assignments']['seat-1']
+        self.assertEqual(2, len(seat['exercise_schedule']))
 
 
 # ---------------------------------------------------------------------------
@@ -2277,7 +1804,7 @@ class S3InitialBootValidity(Base):
             return ticks['now']
 
         return session.DeviceSession(
-            config=config, assignment_id='table-1', peer_uid=os.getuid(),
+            config=config, assignment_id='table-1',
             executor=self.executor, clock=clock)
 
     def test_a_current_answer_that_is_not_a_boot_id_is_not_a_change(self):

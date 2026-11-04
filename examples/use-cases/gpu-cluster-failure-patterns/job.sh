@@ -265,19 +265,14 @@ require_allocation() {
 
 # ---------------------------------------------------------------- profiles
 # Sets incident, exercise, writer_rank, issue_id, incident_settings, rerun_settings
-# and resume_settings from one profile, after checking that it is this account's own
-# regular file and that this launcher applies every setting. The three settings
-# values are the JSON the job reads from AIM344_INCIDENT_SETTINGS, or - for none.
+# and resume_settings from one profile, after checking that this launcher applies
+# every setting. The three settings values are the JSON the job reads from
+# AIM344_INCIDENT_SETTINGS, or - for none.
 read_profile() {
     local fields
     fields=$(python3 - "$1" 2>/dev/null <<'PY'
-import json, os, re, stat, sys
-path = sys.argv[1]
-handle = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-info = os.fstat(handle)
-if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
-    raise SystemExit(1)
-with os.fdopen(handle) as stream:
+import json, re, sys
+with open(sys.argv[1]) as stream:
     profile = json.load(stream)
 number, exercise = profile['incident'], profile['exercise']
 settings = profile.get('settings') or {}

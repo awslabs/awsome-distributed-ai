@@ -236,8 +236,13 @@ def verification_environment(manifest):
                   GPUS_PER_NODE='8', CPUS_PER_RANK='24', MEMORY_PER_NODE='0',
                   NCCL_ENROOT_IMAGE='/opt/aim344/nccl-baseline.sqsh',
                   TORCH_IMAGE='/opt/aim344/aim344.sqsh',
-                  CHECKPOINT_DIR='/run/aim344-checkpoints', FI_EFA_USE_HUGE_PAGE='0')
-    allowed = {'PARTITION', 'NCCL_CONTAINER', 'NCCL_TESTS_BIN', 'NCCL_MPI',
+                  CHECKPOINT_DIR='/run/aim344-checkpoints', FI_EFA_USE_HUGE_PAGE='0',
+                  AIM344_SLURM_BIN='/opt/aws/pcs/scheduler/slurm-25.05/bin')
+    # The seat's handout values and Slurm client directory, which the login
+    # profile exports: AIM344_TARGET_NODE, AIM344_PEER_NODE, AIM344_EFA_DEVICE
+    # (the target's efa_rdma_device) and AIM344_SLURM_BIN.
+    allowed = {'AIM344_TARGET_NODE', 'AIM344_PEER_NODE', 'AIM344_EFA_DEVICE', 'AIM344_SLURM_BIN',
+               'PARTITION', 'NCCL_CONTAINER', 'NCCL_TESTS_BIN', 'NCCL_MPI',
                'NCCL_TIMEOUT', 'NCCL_ISOLATION_TESTS', 'NCCL_ISOLATION_TIMEOUT',
                'AIM344_CHECK5_TIMEOUT', 'AIM344_CONTAINER_PREP_TIMEOUT',
                'NCCL_SOCKET_IFNAME', 'OMPI_MCA_pml', 'OMPI_MCA_btl',

@@ -18,10 +18,7 @@ from unittest import mock
 from types import SimpleNamespace
 spec=importlib.util.spec_from_file_location('bootstrap','/lab/facilitator/replacement-bootstrap.py')
 bootstrap=importlib.util.module_from_spec(spec);spec.loader.exec_module(bootstrap)
-installer=pathlib.Path('/lab/facilitator/install-participant-control.sh').read_text()
-function=installer.split('prepare_shared_parent() {',1)[1].split('\n}\n',1)[0]
-function='prepare_shared_parent() {'+function+'\n}\n'
-for implementation in ('bootstrap','installer'):
+for implementation in ('bootstrap',):
  for case in ('root0700','missing','symlink','foreign','foreign-parent'):
   with tempfile.TemporaryDirectory(dir='/tmp') as temp:
    parent=pathlib.Path(temp);parent.chmod(0o1777)
@@ -36,14 +33,11 @@ for implementation in ('bootstrap','installer'):
    if case=='foreign':os.chown(shared/'cache',65534,65534)
    if case=='foreign-parent':os.chown(shared,65534,65534)
    def invoke():
-    if implementation=='bootstrap':
-     config=SimpleNamespace(read_text=lambda:'ENROOT_RUNTIME_PATH '+str(shared)+'/user-$(id -u)\nENROOT_CACHE_PATH '+str(shared)+'/cache/user-$(id -u)\nENROOT_DATA_PATH '+str(shared)+'/data/user-$(id -u)\n')
-     real=pathlib.Path
-     with mock.patch.object(bootstrap,'Path',side_effect=lambda value:config if value=='/etc/enroot/enroot.conf' else real(value)):
-      with mock.patch.object(bootstrap.sys,'argv',['bootstrap','--prepare-enroot']):
-       bootstrap.main()
-    else:
-     subprocess.run(['bash','-e','-c',function+'\nprepare_shared_parent "$1"\nprepare_shared_parent "$1/cache"\nprepare_shared_parent "$1/data"','probe',str(shared)],check=True)
+    config=SimpleNamespace(read_text=lambda:'ENROOT_RUNTIME_PATH '+str(shared)+'/user-$(id -u)\nENROOT_CACHE_PATH '+str(shared)+'/cache/user-$(id -u)\nENROOT_DATA_PATH '+str(shared)+'/data/user-$(id -u)\n')
+    real=pathlib.Path
+    with mock.patch.object(bootstrap,'Path',side_effect=lambda value:config if value=='/etc/enroot/enroot.conf' else real(value)):
+     with mock.patch.object(bootstrap.sys,'argv',['bootstrap','--prepare-enroot']):
+      bootstrap.main()
    if case in ('symlink','foreign','foreign-parent'):
     try:invoke()
     except (RuntimeError,OSError,subprocess.CalledProcessError):pass
@@ -68,6 +62,46 @@ for implementation in ('bootstrap','installer'):
    print('PASS',implementation,case,flush=True)
 print('ALL_NESTED_BOUNDARY_CASES_PASS')
 '''
+
+
+# The boot-time directories prepare-compute.sh installs, after a first enroot run
+# as root has left the cache and data levels root-owned and closed.
+TMPFILES_PROBE = r'''
+set -eu
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq >/dev/null && apt-get install -y -qq systemd >/dev/null
+mkdir -p -m 0755 /tmp/enroot/cache /tmp/enroot/data
+chmod 0700 /tmp/enroot/data
+bash /probe-lines.sh
+stat -c '%U %a %n' /tmp/enroot /tmp/enroot/cache /tmp/enroot/data
+runuser -u ubuntu -- mkdir /tmp/enroot/user-1000 /tmp/enroot/cache/group-1000 /tmp/enroot/data/user-1000
+rm -rf /tmp/enroot
+systemd-tmpfiles --create /etc/tmpfiles.d/aim344-enroot.conf
+stat -c 'after boot: %U %a %n' /tmp/enroot /tmp/enroot/cache /tmp/enroot/data
+'''
+
+
+class BootTimeEnrootDirectories(unittest.TestCase):
+    def test_the_participant_can_use_enroot_after_a_root_run_and_after_a_boot(self):
+        runtime = safety.container_runtime()
+        if runtime is None:
+            self.skipTest('no usable rootful container runtime')
+        source = (LAB / 'facilitator/prepare-compute.sh').read_text().splitlines()
+        lines = [line for line in source
+                 if line.startswith(("printf 'd %s 1777", 'systemd-tmpfiles --create'))]
+        self.assertEqual(2, len(lines), lines)
+        with tempfile.TemporaryDirectory() as temporary:
+            probe = pathlib.Path(temporary) / 'probe.sh'
+            probe.write_text(TMPFILES_PROBE)
+            (pathlib.Path(temporary) / 'probe-lines.sh').write_text('\n'.join(lines) + '\n')
+            result = subprocess.run(
+                [runtime, 'run', '--rm', '-v', f'{temporary}/probe.sh:/probe.sh:ro',
+                 '-v', f'{temporary}/probe-lines.sh:/probe-lines.sh:ro', safety.IMAGE,
+                 'bash', '/probe.sh'], text=True, capture_output=True, timeout=600)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        for prefix in ('', 'after boot: '):
+            for path in ('/tmp/enroot', '/tmp/enroot/cache', '/tmp/enroot/data'):
+                self.assertIn(f'{prefix}root 1777 {path}\n', result.stdout)
 
 
 class NestedEnrootFilesystem(unittest.TestCase):

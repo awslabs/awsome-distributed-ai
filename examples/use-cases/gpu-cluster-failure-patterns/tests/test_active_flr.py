@@ -235,9 +235,8 @@ class ActiveSession(fixture.Base):
         config = session.load_config(self.config_path, require_root_owned=False)
         return session.sweep(
             config, clock=lambda: now,
-            session_factory=lambda assignment_id, peer_uid: session.DeviceSession(
-                config, assignment_id, peer_uid=peer_uid,
-                executor=self.executor, clock=lambda: now))
+            session_factory=lambda assignment_id: session.DeviceSession(
+                config, assignment_id, executor=self.executor, clock=lambda: now))
 
     def test_the_deadline_waits_for_the_rounds_running_job_and_counts_nothing(self):
         # The allocation may have no time limit, so its job can outlast the

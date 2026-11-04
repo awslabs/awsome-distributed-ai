@@ -21,16 +21,12 @@ import multiprocessing
 import os
 from pathlib import Path
 import shutil
-import stat
-import subprocess
-import sys
 import tempfile
 import time
 import unittest
 
 LAB = Path(__file__).resolve().parents[1]
 HELPER = LAB / 'facilitator' / 'device-session.py'
-RESTORE_RUNTIME = LAB / 'facilitator' / 'restore-runtime.sh'
 
 _spec = importlib.util.spec_from_file_location('aim344_device_session_rework', HELPER)
 if _spec is None or _spec.loader is None:                    # pragma: no cover
@@ -161,7 +157,6 @@ class Base(unittest.TestCase):
                     'participant_user': 'aim344-t1',
                     'participant_uid': os.getuid(),
                     'participant_gid': os.getgid(),
-                    'caller_uid': os.getuid(),
                     'answers_dir': str(self.answers),
                     'target_node': 'gpu-g7-1',
                     'target_instance_id': 'i-0123456789abcdef0',
@@ -179,7 +174,6 @@ class Base(unittest.TestCase):
                     'participant_user': 'aim344-t2',
                     'participant_uid': os.getuid(),
                     'participant_gid': os.getgid(),
-                    'caller_uid': os.getuid(),
                     'answers_dir': str(root / 'answers-2'),
                     'target_node': 'gpu-g7-1',
                     'target_instance_id': 'i-0123456789abcdef0',
@@ -204,12 +198,11 @@ class Base(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def make(self, assignment='table-1', peer_uid=None, now=1000.0, executor=None):
+    def make(self, assignment='table-1', now=1000.0, executor=None):
         config = session.load_config(self.config_path, require_root_owned=False)
         return session.DeviceSession(
             config=config,
             assignment_id=assignment,
-            peer_uid=os.getuid() if peer_uid is None else peer_uid,
             executor=executor or self.executor,
             clock=lambda: now,
         )
@@ -423,8 +416,7 @@ def _start_in_child(config_path, assignment, barrier, results):   # pragma: no c
 
     recorder = Recorder()
     config = module.load_config(config_path, require_root_owned=False)
-    handler = module.DeviceSession(config, assignment, peer_uid=os.getuid(),
-                                   executor=recorder, clock=time.time)
+    handler = module.DeviceSession(config, assignment, executor=recorder, clock=time.time)
     barrier.wait()
     outcome = {'assignment': assignment}
     try:
@@ -886,204 +878,6 @@ class F10RecoverableRecord(Base):
         with self.assertRaises(session.Refusal) as caught:
             self.make().start('efa')
         self.assertIn('did not finish recovering', str(caught.exception))
-
-
-# --------------------------------------------------------------------------
-# R1: no privileged dereference of participant-controlled fixture entries.
-# --------------------------------------------------------------------------
-def _handover_program():
-    """The shipped fixture-handover program, lifted out of restore-runtime.sh.
-
-    The tests below run the real shipped text rather than a copy of it, with only
-    the account lookup stubbed, because the exercise's accounts do not exist on a
-    developer machine. Everything the finding is about -- which syscalls touch
-    which inode -- is the shipped code's own.
-    """
-    text = RESTORE_RUNTIME.read_text()
-    start = text.index("<<'PYHANDOVER'\n") + len("<<'PYHANDOVER'\n")
-    end = text.index('\nPYHANDOVER', start)
-    body = text[start:end]
-    preamble = (
-        'import grp, pwd, sys\n'
-        'class _Entry:\n'
-        '    pw_uid = int(sys.argv[3])\n'
-        '    pw_gid = int(sys.argv[4])\n'
-        'pwd.getpwnam = lambda name: _Entry()\n'
-        'class _Group:\n'
-        '    gr_name = "stub-group"\n'
-        'grp.getgrgid = lambda gid: _Group()\n'
-    )
-    return preamble + body
-
-
-class R1FixtureHandover(unittest.TestCase):
-    """The privileged fixture handover must not follow participant-made names.
-
-    restore-runtime runs as root on the fault target and hands the checkpoint
-    fixture to the authenticated table. The fixture is deliberately participant
-    writable, including from inside the distributed workload, so any entry in it
-    can be a symlink to somewhere else on the node. A path-based chown
-    dereferences a symlink argument by default, which is what the rejected
-    implementation did.
-
-    These tests do not run as root, so they cannot change an inode to an account
-    they do not own. They instead use a group the running user already belongs
-    to, which an unprivileged process may set: if the handover reaches an entry
-    outside the fixture, that file's group changes, and if it does not, the group
-    is untouched. test_the_group_signal_detects_a_real_escape is the negative
-    control for that signal, run against the exact command shape the review
-    rejected.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        alternatives = [g for g in os.getgroups() if g != os.getgid()]
-        if not alternatives:
-            raise unittest.SkipTest('no supplementary group to use as the signal')
-        cls.other_gid = alternatives[0]
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        root = Path(self.tmp.name)
-        self.fixture = root / 'fixture'
-        self.fixture.mkdir()
-        os.chmod(self.fixture, 0o755)
-        self.outside = root / 'outside'
-        self.outside.mkdir()
-        self.victim = self.outside / 'root-owned-secret'
-        self.victim.write_text('a file the participant must not come to own\n')
-        os.chown(self.victim, -1, os.getgid())
-        self.program = _handover_program()
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
-    def run_handover(self, expect_success=True):
-        finished = subprocess.run(
-            [sys.executable, '-c', self.program, 'stub-participant',
-             str(self.fixture), str(os.getuid()), str(self.other_gid)],
-            capture_output=True, text=True, check=False)
-        if expect_success:
-            self.assertEqual(0, finished.returncode,
-                             f'handover failed: {finished.stderr}')
-        return finished
-
-    def victim_gid(self):
-        return os.stat(self.victim).st_gid
-
-    # -- the escape itself, on every shape a participant can create --
-    def test_a_symlink_entry_does_not_change_ownership_outside_the_fixture(self):
-        (self.fixture / 'last.json').symlink_to(self.victim)
-        before = self.victim_gid()
-        finished = self.run_handover()
-        self.assertEqual(before, self.victim_gid(),
-                         'the handover followed a participant symlink')
-        self.assertIn('left_untouched=', finished.stdout)
-        self.assertIn('last.json', finished.stdout)
-
-    def test_a_symlink_to_a_directory_outside_the_fixture_is_refused(self):
-        (self.fixture / 'checkpoints').symlink_to(self.outside)
-        before = os.stat(self.outside).st_gid
-        finished = self.run_handover()
-        self.assertEqual(before, os.stat(self.outside).st_gid)
-        self.assertEqual(os.stat(self.victim).st_gid, self.victim_gid())
-        self.assertIn('checkpoints', finished.stdout)
-
-    def test_an_absolute_and_a_relative_traversal_link_are_both_refused(self):
-        (self.fixture / 'absolute').symlink_to(self.victim)
-        (self.fixture / 'relative').symlink_to(
-            Path('..') / 'outside' / 'root-owned-secret')
-        before = self.victim_gid()
-        finished = self.run_handover()
-        self.assertEqual(before, self.victim_gid())
-        for name in ('absolute', 'relative'):
-            self.assertIn(name, finished.stdout)
-
-    def test_a_dangling_link_replaced_by_a_real_file_is_still_not_followed(self):
-        """The name is resolved once, through a descriptor, or not at all."""
-        link = self.fixture / 'appears-later'
-        link.symlink_to(self.outside / 'not-there-yet')
-        (self.outside / 'not-there-yet').write_text('planted\n')
-        os.chown(self.outside / 'not-there-yet', -1, os.getgid())
-        before = os.stat(self.outside / 'not-there-yet').st_gid
-        self.run_handover()
-        self.assertEqual(before, os.stat(self.outside / 'not-there-yet').st_gid)
-
-    def test_a_fifo_entry_is_left_alone_rather_than_opened_for_data(self):
-        os.mkfifo(self.fixture / 'pipe')
-        finished = self.run_handover()
-        self.assertIn('pipe', finished.stdout)
-        self.assertIn('not a regular file or directory', finished.stdout)
-
-    # -- the negative control for the signal these tests rely on --
-    def test_the_group_signal_detects_a_real_escape(self):
-        """The rejected command shape must make this signal move.
-
-        Without this, a passing test above could mean the escape did not happen
-        or merely that the check cannot see it. This runs the exact rejected
-        construction from the review, find -mindepth 1 -maxdepth 1 -exec chown,
-        and requires the victim's group to change.
-        """
-        (self.fixture / 'last.json').symlink_to(self.victim)
-        before = self.victim_gid()
-        subprocess.run(
-            ['find', str(self.fixture), '-mindepth', '1', '-maxdepth', '1',
-             '-exec', 'chown', f'{os.getuid()}:{self.other_gid}', '{}', '+'],
-            capture_output=True, text=True, check=False)
-        self.assertNotEqual(
-            before, self.victim_gid(),
-            'the rejected command shape did not move the signal, so the tests '
-            'above cannot be trusted to detect an escape')
-
-    # -- and the legitimate restoration must still work --
-    def test_the_previous_rounds_own_entries_are_handed_over(self):
-        marker = self.fixture / '.aim344-fixture'
-        marker.write_text('AIM344 isolated checkpoint fixture\n')
-        checkpoint = self.fixture / 'last.json'
-        checkpoint.write_text('{"next_step": 3}\n')
-        nested = self.fixture / 'dist-checkpoint'
-        nested.mkdir()
-        for path in (marker, checkpoint, nested):
-            os.chown(path, -1, os.getgid())
-        finished = self.run_handover()
-        for path in (marker, checkpoint, nested):
-            self.assertEqual(self.other_gid, os.stat(path).st_gid,
-                             f'{path.name} was not handed over')
-        self.assertIn('handed_over=3', finished.stdout)
-        self.assertNotIn('left_untouched=', finished.stdout)
-        # The participant's saved progress is preserved, not reinitialised.
-        self.assertEqual('{"next_step": 3}\n', checkpoint.read_text())
-
-    def test_the_fixture_directory_itself_becomes_private_to_the_table(self):
-        self.run_handover()
-        info = os.stat(self.fixture)
-        self.assertEqual(0o700, stat.S_IMODE(info.st_mode))
-        self.assertEqual(self.other_gid, info.st_gid)
-
-    def test_one_bad_entry_does_not_stop_the_good_ones(self):
-        (self.fixture / 'escape').symlink_to(self.victim)
-        keep = self.fixture / 'last.json'
-        keep.write_text('{"next_step": 1}\n')
-        os.chown(keep, -1, os.getgid())
-        before = self.victim_gid()
-        finished = self.run_handover()
-        self.assertEqual(self.other_gid, os.stat(keep).st_gid)
-        self.assertEqual(before, self.victim_gid())
-        self.assertIn('handed_over=1', finished.stdout)
-
-    def test_the_shipped_script_has_no_path_based_chown_left(self):
-        """The repair must remove the construction, not add a check beside it."""
-        text = RESTORE_RUNTIME.read_text()
-        code = [line for line in text.splitlines()
-                if not line.lstrip().startswith('#')]
-        flat = ' '.join(code)
-        self.assertNotIn('-exec chown', flat)
-        self.assertNotIn('chown -R', flat)
-        for line in code:
-            stripped = line.strip()
-            self.assertFalse(
-                stripped.startswith('chown ') or stripped.startswith('chmod '),
-                f'a path-based ownership command remains: {stripped}')
 
 
 # --------------------------------------------------------------------------
