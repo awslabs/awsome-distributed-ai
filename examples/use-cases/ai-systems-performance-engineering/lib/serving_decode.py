@@ -145,7 +145,9 @@ def level_summary(level, ceiling=None):
     """The median step time over the servers, and from it the decode rate per GPU and MBU.
 
     MBU is the time that reading the weights at the memory-read ceiling takes, as a share
-    of the step: WEIGHT_BYTES / ceiling / seconds per step. It counts only the weights.
+    of the step: WEIGHT_BYTES / ceiling / seconds per step. It counts only the weights. The
+    ceiling is the rate of the 1 GiB streaming-read kernel, so a step can read faster and
+    MBU can exceed 1.
     """
     step = statistics.median(record['server_mean_itl_seconds'] for record in level['servers'].values())
     return dict(requests_per_gpu=level['requests_per_gpu'], seconds_per_step=step,
@@ -159,7 +161,7 @@ def bound_lines(ceiling):
     read = WEIGHT_BYTES / ceiling
     return [f'Reading the weights ({WEIGHT_BYTES / 1e9:.2f} GB) at your memory-read ceiling '
             f'({ceiling / 1e9:.0f} GB/s per GPU) takes {read * 1e3:.2f} ms.',
-            f'At one request per GPU, decode runs at most {1 / read:,.0f} tokens/s per GPU. '
+            f'At one request per GPU, that read time gives {1 / read:,.0f} tokens/s per GPU. '
             f'MBU is {read * 1e3:.2f} ms / ms per step.']
 
 
