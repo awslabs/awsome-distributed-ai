@@ -309,41 +309,56 @@ def run(env=None, state=None, *, popen=subprocess.Popen, runner=subprocess.run, 
         print('AIM347: a stage is still running. Run this tool after it finishes; '
               'bash tools/run.sh attach follows it.', file=sys.stderr)
         return 2
+    if workshop.read_serving(state):
+        print('AIM347: tools/serve.sh is already running in another shell.', file=sys.stderr)
+        return 2
+
+    def say(*values, **kwargs):
+        # After a hang-up every write to the closed terminal fails; the servers must still stop.
+        try:
+            out(*values, **kwargs)
+        except OSError:
+            pass
+
     ceilings = workshop.read_ceilings(results)
     ceiling = ceilings['memory_read_bytes_per_second_per_gpu'] if ceilings else None
     config = json.loads((LAB / CONFIG).read_text())
     run_dir = unique_run_dir(results)
     run_dir.mkdir(parents=True)
-    out(f"[aim347] vLLM 0.20.2 serving {config['model_id']} at {config['model_revision'][:8]}: "
+    say(f"[aim347] vLLM 0.20.2 serving {config['model_id']} at {config['model_revision'][:8]}: "
         f'one server per GPU, {servers} servers on {nodes} nodes')
-    out(f'[aim347] results {run_dir}', flush=True)
+    say(f'[aim347] results {run_dir}', flush=True)
     record = dict(model_id=config['model_id'], model_revision=config['model_revision'], vllm_version='0.20.2',
                   image=str(image), servers=servers, tensor_parallel_size=1, output_tokens=OUTPUT_TOKENS,
                   rounds=ROUNDS, prompt=PROMPT, weight_bytes=WEIGHT_BYTES,
                   memory_read_bytes_per_second_per_gpu=ceiling, allocation_id=env.get('AIM347_ALLOCATION_ID'),
                   start_utc=time.time(), levels=[])
     launch_env = dict(env, VLLM_IMAGE=str(image), SERVING_RUN=run_dir.name)
+    # run.sh and nccl-protocols.sh refuse to start while this marker names a live process.
+    marker = Path(state or workshop.STATE) / 'serving'
+    workshop.write_atomic(marker, json.dumps(dict(pid=os.getpid(), run=run_dir.name)), mode=0o600)
     with (run_dir / 'launch.log').open('w') as log:
         process = popen(launch_command(), cwd=str(LAB), env=launch_env, stdin=subprocess.DEVNULL, stdout=log,
                         stderr=subprocess.STDOUT, start_new_session=True)
     summaries, code = [], 4
     try:
         code = measure(process, run_dir, record, summaries, servers, gpus, env, ceiling, runner=runner,
-                       health=health, request=request, snap=snap, clock=clock, sleep=sleep, out=out)
+                       health=health, request=request, snap=snap, clock=clock, sleep=sleep, out=say)
     except (KeyboardInterrupt, Stopped):
-        out('\n[aim347] interrupted')
+        say('\n[aim347] interrupted')
         code = 130
     finally:
-        out('[aim347] stopping the servers', flush=True)
+        say('[aim347] stopping the servers', flush=True)
         status = stop_servers(process, env.get('SLURM_JOB_ID', ''), runner=runner,
                               hostname=hostname or socket.gethostname(), sleep=sleep)
+        marker.unlink(missing_ok=True)
         record.update(end_utc=time.time(), exit_status=code, serving_step_exit=status)
         workshop.write_atomic(run_dir / 'serving.json', json.dumps(record, indent=2) + '\n')
-        out('[aim347] the servers have stopped and the GPUs are free' if status == 0 else
+        say('[aim347] the servers have stopped and the GPUs are free' if status == 0 else
             f'[aim347] the serving step ended with exit status {status}; see {run_dir / "launch.log"}')
     if code == 0:
-        out('')
-        out('\n'.join(chart_lines(summaries)))
+        say('')
+        say('\n'.join(chart_lines(summaries)))
     return code
 
 
@@ -354,6 +369,9 @@ def main(argv=None):
     parser.parse_args(argv)
 
     def stop(signum, frame):
+        # One stop is enough: a second signal must not interrupt stopping the servers.
+        for number in (signal.SIGTERM, signal.SIGHUP):
+            signal.signal(number, signal.SIG_IGN)
         raise Stopped(signum)
 
     # A closed browser tab sends SIGHUP; the servers must not outlive the tool.

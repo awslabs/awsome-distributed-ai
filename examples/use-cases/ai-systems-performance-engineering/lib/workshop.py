@@ -1019,10 +1019,13 @@ def try_comparison_lines(change, results):
     differs = configuration_differences(sdpa, rerun)
     if differs:
         return [f'not compared: sdpa and rerun-{change} differ in ' + ', '.join(differs)]
-    allowed = (TRY_CHANGES[change]['key'],) + TRY_CHANGES[change]['also']
+    spec = TRY_CHANGES[change]
+    allowed = (spec['key'],) + spec['also']
     differs = [key for key in configuration_differences(rerun, tried) if key not in allowed]
     if differs:
         return [f'not compared: try-{change} differs from rerun-{change} in ' + ', '.join(differs)]
+    if tried['configuration'].get(spec['key']) != spec['value']:
+        return [f"not compared: try-{change} did not record {spec['key']} {setting_text(spec['value'])}"]
     unchanged = (sdpa['measured_seconds'], rerun['measured_seconds'])
     mean = sum(unchanged) / 2
     spread = abs(unchanged[0] - unchanged[1])
@@ -1343,6 +1346,16 @@ def pid_alive(pid):
         return True
 
 
+def read_serving(state=None):
+    """The marker that tools/serve.sh keeps while its servers hold the GPUs, if its process is alive."""
+    serving = read_json(Path(state or STATE) / 'serving')
+    return serving if serving and pid_alive(serving.get('pid')) else None
+
+
+SERVING_BUSY = ('AIM347: the vLLM servers of tools/serve.sh hold the GPUs. Run this after serve.sh finishes, '
+                'or stop serve.sh with Ctrl-C in its shell.')
+
+
 def read_running(state=None):
     path = Path(state or STATE) / 'running'
     for _ in range(5):
@@ -1554,6 +1567,9 @@ def start_run(subcommand, state=None, change=None):
     if not os.environ.get('AIM347_ALLOCATION_ID'):
         print('AIM347: no session allocation. Run: bash tools/hold-and-measure.sh', file=sys.stderr)
         return 3
+    if read_serving(state):
+        print(SERVING_BUSY, file=sys.stderr)
+        return 2
     stages = plan(subcommand, read_job_env(), change=change)
     if subcommand == 'restore' and not restore_ready(results):
         raise UsageError(f'restore needs a finished ckpt-sync stage with a completed update-{RESTORE_FROM:06d}. '
@@ -1672,6 +1688,9 @@ def run_protocols(state=None, runner=subprocess.run, env=None):
     if read_running(state):
         print('AIM347: a stage is still running. Run this tool after it finishes; '
               'bash tools/run.sh attach follows it.', file=sys.stderr)
+        return 2
+    if read_serving(state):
+        print(SERVING_BUSY, file=sys.stderr)
         return 2
     stamp = utc_stamp()
     out, suffix = Path(env['LLM_RESULTS_DIR']) / 'nccl-protocols' / stamp, 1

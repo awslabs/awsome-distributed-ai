@@ -1275,6 +1275,15 @@ class NcclProtocolToolTests(unittest.TestCase):
                 self.assertEqual(workshop.run_protocols(state, runner=runner, env=env), 2)
             self.assertIn('a stage is still running', errors.getvalue())
 
+            # While tools/serve.sh holds the GPUs, the tool refuses too.
+            (state / 'running').unlink()
+            (state / 'serving').write_text(json.dumps(dict(pid=os.getpid(), run='serving-x')))
+            errors = io.StringIO()
+            with redirect_stderr(errors):
+                self.assertEqual(workshop.run_protocols(state, runner=runner, env=env), 2)
+            self.assertEqual(errors.getvalue().strip(), workshop.SERVING_BUSY)
+            self.assertEqual(len(launched), 2)
+
 
 
 # The configuration that the recorded sdpa run wrote to its summary.json (Spain, 2026-11-03).
@@ -1353,6 +1362,25 @@ class TryTests(unittest.TestCase):
                         self.assertEqual(workshop.main(argv), 2)
                     self.assertIn(message, errors.getvalue())
         self.assertFalse((self.results / 'state' / 'running').exists())
+
+    def test_run_sh_refuses_while_serve_sh_holds_the_gpus(self):
+        job_env = self.results / 'job.env'
+        job_env.write_text('LLM_TRANSPORT=efa\nATTENTION=sdpa\nCHECKPOINT_MODE=sync\n')
+        environment = dict(LLM_RESULTS_DIR=str(self.results / 'results'), AIM347_ALLOCATION_ID='42',
+                           AIM347_JOB_ENV=str(job_env))
+        (self.results / 'results').mkdir()
+        state = self.results / 'state'
+        state.mkdir()
+        (state / 'serving').write_text(json.dumps(dict(pid=os.getpid(), run='serving-x')))
+        with patch.dict(os.environ, environment), patch.object(workshop, 'STATE', state):
+            errors = io.StringIO()
+            with redirect_stderr(errors):
+                self.assertEqual(workshop.main(['run', 'try', 'microbatch2']), 2)
+            self.assertEqual(errors.getvalue().strip(), workshop.SERVING_BUSY)
+            self.assertFalse((state / 'running').exists())
+            # A marker whose process has ended does not refuse.
+            (state / 'serving').write_text(json.dumps(dict(pid=None, run='serving-x')))
+            self.assertIsNone(workshop.read_serving(state))
 
     def test_change_check_reads_the_configuration_in_summary_json(self):
         settings = job('efa', 'sdpa')
@@ -1451,6 +1479,10 @@ class TryTests(unittest.TestCase):
                         with_configuration(optimizer='fused', microbatch=2), 'fused-optimizer')
         self.assertEqual(workshop.try_comparison_lines('fused-optimizer', self.results),
                          ['not compared: try-fused-optimizer differs from rerun-fused-optimizer in microbatch'])
+        # A run with the change whose summary.json does not record it (exit 5, check Change) is not compared.
+        self.stage_with('try-fused-optimizer', 'try', settings, 3.30, SDPA_CONFIGURATION, 'fused-optimizer')
+        self.assertEqual(workshop.try_comparison_lines('fused-optimizer', self.results),
+                         ['not compared: try-fused-optimizer did not record optimizer fused'])
         self.stage_with('try-fused-optimizer', 'try', settings, 3.39,
                         with_configuration(optimizer='fused'), 'fused-optimizer')
         lines = workshop.try_comparison_lines('fused-optimizer', self.results)

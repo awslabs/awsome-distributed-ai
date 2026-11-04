@@ -306,6 +306,42 @@ class ServeRunTests(unittest.TestCase):
         self.assertIn(['scancel', '--signal=TERM', '42.5'], self.calls)
         self.assertIn('[aim347] the servers have stopped and the GPUs are free', self.lines)
 
+    def test_a_closed_terminal_still_stops_the_servers(self):
+        # A hang-up raises Stopped; every later write to the closed terminal fails with EIO.
+        hung_up = []
+
+        def request(endpoint, tokens=serving_decode.OUTPUT_TOKENS):
+            hung_up.append(True)
+            raise serving_decode.Stopped(1)
+
+        def out(*values, **kwargs):
+            if hung_up:
+                raise OSError(5, 'Input/output error')
+            self.out(*values, **kwargs)
+
+        self.assertEqual(self.run_tool(request=request, out=out), 130)
+        self.assertIn(['scancel', '--signal=TERM', '42.5'], self.calls)
+        self.assertFalse((self.state / 'serving').exists())
+
+    def test_keeps_a_marker_while_the_servers_run(self):
+        seen = []
+
+        def request(endpoint, tokens=serving_decode.OUTPUT_TOKENS):
+            seen.append(serving_decode.workshop.read_serving(self.state))
+            return self.servers.request(endpoint, tokens)
+
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            self.assertEqual(self.run_tool(request=request), 0)
+        self.assertEqual(seen[0]['pid'], os.getpid())
+        self.assertFalse((self.state / 'serving').exists())
+        # A second serve.sh refuses while the first one's marker names a live process.
+        (self.state / 'serving').write_text(json.dumps(dict(pid=os.getpid(), run='serving-x')))
+        with redirect_stderr(stderr):
+            self.assertEqual(self.run_tool(), 2)
+        self.assertIn('AIM347: tools/serve.sh is already running in another shell.', stderr.getvalue())
+        self.assertEqual(len(self.launches), 1)
+
     def test_refuses_without_the_image_and_while_a_stage_runs(self):
         stderr = io.StringIO()
         with redirect_stderr(stderr):
