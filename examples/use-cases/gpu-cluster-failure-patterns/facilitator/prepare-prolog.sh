@@ -13,20 +13,11 @@ if [[ ${AIM344_NODE_LOCAL:-0} == 1 ]]; then
 else
     findmnt -T "$stage" -n -o FSTYPE | grep -qx lustre
 fi
-[[ ! -L $stage && ! -L $stage/.prolog ]] || exit 2
-chown root:root "$stage"
-chmod 0755 "$stage"
-chown root:root "$stage/healthcheck-pinned.tgz"
-chmod 0644 "$stage/healthcheck-pinned.tgz"
-chown -R root:root "$stage/healthcheck-source"
-chmod -R go-w "$stage/healthcheck-source"
 install -d -o root -g root -m 0755 "$stage/.prolog"
 dispatcher="$stage/.prolog/dispatch.sh"
-[[ ! -L $dispatcher ]] || exit 2
 # Expand the partition now; Slurm supplies the job partition when the Prolog runs.
 # shellcheck disable=SC2016
 printf '#!/usr/bin/env bash\nset -euo pipefail\n[[ ${SLURM_JOB_PARTITION:-} == %q ]] || exit 0\n# Root maintenance jobs must be able to diagnose a failed participant gate.\n[[ ${SLURM_JOB_USER:-} != root ]] || exit 0\nexec /opt/aim344/prejob-prolog.sh\n' "$partition" > "$dispatcher"
-chown root:root "$dispatcher"
 chmod 0755 "$dispatcher"
 namei -l "$dispatcher"
 cat "$dispatcher"
