@@ -49,7 +49,7 @@ Exit status: 0 when every check passes; 1 when any fails (the last line says how
 bash tools/hold-and-measure.sh
 ```
 
-Reuses a running job of yours named `aim347-session`, or requests one with `salloc --no-shell` for both nodes of the partition, all their CPUs and GPUs, exclusively, with a time limit of 110 minutes. `--no-shell` lets the allocation outlive the shell that requested it. If Slurm cannot grant it within 120 seconds, the tool prints the partition's queue and exits with status 3.
+Reuses a running job of yours named `aim347-session`, or requests one with `salloc --no-shell` for both nodes of the partition, all their CPUs and GPUs, exclusively, with `--time=UNLIMITED`. `--no-shell` lets the allocation outlive the shell that requested it, and it lasts until `release.sh` ends it. The explicit `--time=UNLIMITED` keeps a partition's `DefaultTime` from setting a limit. If Slurm cannot grant it within 120 seconds, the tool prints the partition's queue and exits with status 3.
 
 It then runs one step on both nodes in the training image and measures every GPU in parallel. `aim347-gemm 8192 30` times a dense BF16 GEMM with FP32 accumulation, and `aim347-dram 0` times a 1 GiB streaming read (both built by the `Dockerfile` from `lib/gemm.cu` and `lib/dram.cu`). The per-GPU results go to `$LLM_RESULTS_DIR/ceilings/`. `ceilings.json` there holds the median over all GPUs of the best GEMM rate, the median over all GPUs of the median read bandwidth, and their ratio, the ridge point in FLOP per byte. The tool prints the per-GPU values and these three numbers. The step uses the container name from the environment file, so the image stays unpacked for the session's later runs.
 
@@ -223,7 +223,7 @@ Cancels the session allocation, waits up to 60 seconds until `squeue` no longer 
 
 The tools expect a cluster built from the [AWS PCS architecture](../../../../architectures/aws-pcs/README.md) with the monitoring stack on the login node (`MonitoringStack=Prometheus-LoginNode`), Pyxis and Enroot on the GPU nodes, Docker on the GPU nodes for the image build, a Slurm partition named `gpu` with two `g7.48xlarge` nodes, and an FSx for Lustre file system mounted at the same path on every node. Preparation downloads the model and the FineWeb-Edu sample from Hugging Face at pinned revisions and needs no token.
 
-1. Clone this repository into a directory on Lustre owned by the user who will run the job, for example `/fsx/aim347/participant/companion`. The workshop keeps everything under `/fsx/aim347/participant`, the default stage directory of the tools.
+1. Clone this repository, as `ubuntu`, into a directory on Lustre owned by `ubuntu`, for example `/fsx/aim347/participant/companion`. The workshop keeps everything under `/fsx/aim347/participant`, the default stage directory of the tools.
 2. As root on the login node, inside a two-node exclusive allocation of the partition that holds every CPU and GPU of both nodes, run the two provisioning scripts from this directory:
 
    ```bash
@@ -233,13 +233,13 @@ The tools expect a cluster built from the [AWS PCS architecture](../../../../arc
          && srun --nodes=2 --ntasks-per-node=1 bash facilitator/install-node-collectors.sh --verify'
    ```
 
-3. Write the Grafana password to `~/.aim347/grafana-admin-password` of the job's user, with mode 0600. The monitoring installer stores it in the SSM parameter `/pcs/<cluster>/grafana/admin-password`.
-4. As that user, run the tools in the order at the top of this page.
+3. Write the Grafana password to `/home/ubuntu/.aim347/grafana-admin-password`, with mode 0600. The monitoring installer stores it in the SSM parameter `/pcs/<cluster>/grafana/admin-password`.
+4. As `ubuntu`, run the tools in the order at the top of this page.
 
 ### facilitator/prepare-event.sh
 
 ```bash
-bash facilitator/prepare-event.sh --stage-dir DIR --slurm-version VER --instance-type TYPE --grafana-url URL [--owner USER] [--build-jobs N] [--with-serving]
+bash facilitator/prepare-event.sh --stage-dir DIR --slurm-version VER --instance-type TYPE --grafana-url URL [--build-jobs N] [--with-serving]
 ```
 
 It accepts `--instance-type g7.48xlarge`, and `g6e.48xlarge` for test events, and refuses any other type before it starts, because the tools request 8 GPUs per node and expect two EFA devices. A `g6e.48xlarge` node has four EFA interfaces, and the test event attaches two of them. It then prints `prepare-event: <step> ok (<seconds> s)` after each step and `prepare-event: ready` at the end:
@@ -252,7 +252,7 @@ It accepts `--instance-type g7.48xlarge`, and `g6e.48xlarge` for test events, an
 5. **data**: in the image on the first node, `1.prepare-llm.py` writes `DIR/data/tokens-2048-1280`, `tokens-2048-160` and `tokens-1024-160` from documents of at least 4,096 tokens, keeping each document's first positions, and downloads the model to `DIR/data/model` with the first dataset. A dataset whose manifest, sizes and fingerprint verify is kept. One that fails is moved to `DIR/failed-<UTC>/` and prepared again.
 6. **data on both nodes**: each node recomputes every dataset's fingerprint and checks the model pin.
 7. **environment file**: `DIR/aim347.env`, written atomically.
-8. **ownership**: `images`, `data`, `results` and `aim347.env` are given to `--owner` (default `ubuntu`).
+8. **ownership**: `images`, `data`, `results` and `aim347.env` are given to `ubuntu`, who runs the tools.
 
 Steps 3 and 5 request all of the node's CPUs, because a step task otherwise gets one. A rerun after a failure keeps the parts that verify. Exit status: 0 ready; 2 usage or a precondition, including a monitoring install that did not finish; 3 the image build, import or hash; 4 the data preparation; 5 a verification on either node.
 

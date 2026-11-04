@@ -6,16 +6,16 @@
 # image that tools/serve.sh runs. A rerun keeps what verifies and redoes the rest.
 #
 # Usage: bash facilitator/prepare-event.sh --stage-dir DIR --slurm-version VER --instance-type TYPE
-#            --grafana-url URL [--owner USER] [--build-jobs N] [--with-serving]
+#            --grafana-url URL [--build-jobs N] [--with-serving]
 # Exit: 0 ready; 2 usage or precondition; 3 image; 4 data preparation; 5 verification on a node.
 set -euo pipefail
 lab=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 workshop=(python3 "$lab/lib/workshop.py")
-stage_dir='' slurm_version='' instance_type='' grafana_url='' owner=ubuntu build_jobs=64 serving=0
+stage_dir='' slurm_version='' instance_type='' grafana_url='' build_jobs=64 serving=0
 # The public vLLM 0.20.2 image (linux/amd64) that the serving path was validated with.
 vllm_source=vllm/vllm-openai@sha256:68b773151407ca28c05479c02c0c08a573285ba197c8ff35d2103acd97aff78c
 usage() {
-    echo 'Usage: bash facilitator/prepare-event.sh --stage-dir DIR --slurm-version VER --instance-type TYPE --grafana-url URL [--owner USER] [--build-jobs N] [--with-serving]' >&2
+    echo 'Usage: bash facilitator/prepare-event.sh --stage-dir DIR --slurm-version VER --instance-type TYPE --grafana-url URL [--build-jobs N] [--with-serving]' >&2
     exit 2
 }
 fail() { echo "prepare-event: $2" >&2; exit "$1"; }
@@ -31,7 +31,6 @@ while (($#)); do
         --slurm-version) slurm_version=$2 ;;
         --instance-type) instance_type=$2 ;;
         --grafana-url) grafana_url=$2 ;;
-        --owner) owner=$2 ;;
         --build-jobs) build_jobs=$2 ;;
         *) usage ;;
     esac
@@ -47,7 +46,7 @@ done
 [[ $stage_dir == /* && $stage_dir != *[[:space:],:]* && -d $stage_dir ]] ||
     fail 2 "--stage-dir must be an existing absolute path without spaces, commas or colons (got $stage_dir)"
 [[ $(id -u) == 0 ]] || fail 2 'run as root'
-id "$owner" >/dev/null 2>&1 || fail 2 "no user $owner"
+id ubuntu >/dev/null 2>&1 || fail 2 "no user ubuntu"
 [[ -f $lab/Dockerfile && -f $lab/1.prepare-llm.py ]] || fail 2 "$lab is not the companion example directory"
 [[ -n ${SLURM_JOB_ID:-} ]] || fail 2 'run inside a two-node exclusive allocation of the GPU partition (salloc)'
 export PATH="/opt/aws/pcs/scheduler/slurm-$slurm_version/bin:$PATH"
@@ -229,17 +228,15 @@ verify_data() {
 }
 
 write_environment() {
-    local home
-    home=$(getent passwd "$owner" | cut -d: -f6)
     "${workshop[@]}" write-env --stage-dir "$stage_dir" --companion "$lab" --slurm-version "$slurm_version" \
         --cpus-per-node "$cpus" --instance-type "$instance_type" --nic "$nic" \
         --image-sha256 "$(cut -d' ' -f1 "$image.sha256")" --grafana-url "$grafana_url" \
-        --password-file "$home/.aim347/grafana-admin-password" || fail 2 'cannot write the environment file'
+        --password-file /home/ubuntu/.aim347/grafana-admin-password || fail 2 'cannot write the environment file'
 }
 
 ownership() {
     install -d -m 0755 "$stage_dir/results"
-    chown -R "$owner:$owner" "$stage_dir/images" "$data" "$stage_dir/results" "$stage_dir/aim347.env"
+    chown -R ubuntu:ubuntu "$stage_dir/images" "$data" "$stage_dir/results" "$stage_dir/aim347.env"
 }
 
 step checks checks

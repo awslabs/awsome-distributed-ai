@@ -1087,17 +1087,6 @@ def parse_scontrol_record(text):
     return dict(token.split('=', 1) for token in text.split() if '=' in token)
 
 
-def time_limit_minutes(value):
-    """Slurm [days-]hours:minutes:seconds, or minutes:seconds; other values unchanged."""
-    if not re.fullmatch(r'(\d+-)?\d+(:\d+){0,2}', value):
-        return value
-    days, _, clock = value.rpartition('-')
-    parts = [int(part) for part in clock.split(':')]
-    while len(parts) < 3:
-        parts.insert(0, 0)
-    return int(days or 0) * 1440 + parts[0] * 60 + parts[1] + (parts[2] > 0)
-
-
 def write_allocation(path, job_id, nodelist, cpus_per_node, nodes=2):
     values = [('SLURM_JOB_ID', job_id), ('SLURM_JOB_NUM_NODES', nodes), ('SLURM_JOB_NODELIST', nodelist),
               ('SLURM_JOB_CPUS_PER_NODE', f'{cpus_per_node}(x{nodes})'), ('AIM347_ALLOCATION_ID', job_id)]
@@ -1787,8 +1776,8 @@ def main(argv=None):
             nodes = subprocess.run(['scontrol', 'show', 'hostnames', record['NodeList']], capture_output=True,
                                    text=True, check=True).stdout.split()
             write_allocation(args.output, args.job_id, record['NodeList'], args.cpus_per_node, len(nodes))
-            print(f"Session allocation {args.job_id}: {', '.join(nodes)}, {len(nodes) * int(os.environ.get('GPUS_PER_NODE', 8))} "
-                  f"GPUs, time limit {time_limit_minutes(record['TimeLimit'])} minutes")
+            print(f"Session allocation {args.job_id}: {', '.join(nodes)}, "
+                  f"{len(nodes) * int(os.environ.get('GPUS_PER_NODE', 8))} GPUs")
             print('Saved in ~/.aim347/allocation.env. Every tool reads it, also in a new shell.')
             return 0
         if args.command == 'ceilings':

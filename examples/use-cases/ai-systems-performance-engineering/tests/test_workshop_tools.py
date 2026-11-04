@@ -653,12 +653,36 @@ class AllocationTests(unittest.TestCase):
         self.assertEqual(allocation_cpus('192(x2)', 2), 192)
         self.assertEqual(workshop.parse_granted('salloc: Pending job allocation 42\nsalloc: Granted job allocation 42\n'), 42)
         self.assertIsNone(workshop.parse_granted('salloc: error: Unable to allocate resources: Immediate execution impossible'))
-        record = workshop.parse_scontrol_record('JobId=42 JobName=aim347-session JobState=RUNNING TimeLimit=01:50:00 '
+        record = workshop.parse_scontrol_record('JobId=42 JobName=aim347-session JobState=RUNNING TimeLimit=UNLIMITED '
                                                 'NodeList=gpu-[1-2] ReqNodeList=(null) NumNodes=2')
-        self.assertEqual((record['NodeList'], record['TimeLimit']), ('gpu-[1-2]', '01:50:00'))
-        self.assertEqual(workshop.time_limit_minutes('01:50:00'), 110)
-        self.assertEqual(workshop.time_limit_minutes('1-00:00:00'), 1440)
-        self.assertEqual(workshop.time_limit_minutes('UNLIMITED'), 'UNLIMITED')
+        self.assertEqual((record['NodeList'], record['TimeLimit']), ('gpu-[1-2]', 'UNLIMITED'))
+
+    def test_hold_requests_both_nodes_without_a_time_limit(self):
+        """hold-and-measure.sh with stub squeue, salloc, scontrol and srun on PATH; srun fails, so it stops at 4."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bin_dir, home = root / 'bin', root / 'home'
+            bin_dir.mkdir()
+            home.mkdir()
+            env_file = root / 'aim347.env'
+            env_file.write_text(f'export PARTITION=gpu GPUS_PER_NODE=8 AIM347_CPUS_PER_NODE=192 '
+                                f'AIM347_INSTANCE_TYPE=g7.48xlarge LLM_RESULTS_DIR={root}/results '
+                                f'LAB_IMAGE={root}/lab.sqsh LLM_CONTAINER_NAME=aim347-lab\n')
+            stub(bin_dir, 'squeue', 'exit 0\n')
+            stub(bin_dir, 'salloc', f'printf "%s\\n" "$@" > {root}/salloc-args\n'
+                                    'echo "salloc: Granted job allocation 42"\n')
+            stub(bin_dir, 'scontrol', 'if [[ $2 == hostnames ]]; then printf "gpu-1\\ngpu-2\\n"; '
+                                      'else echo "JobId=42 TimeLimit=UNLIMITED NodeList=gpu-[1-2]"; fi\n')
+            stub(bin_dir, 'srun', 'exit 1\n')
+            result = subprocess.run(['bash', str(LAB / 'tools/hold-and-measure.sh')], capture_output=True, text=True,
+                                    env=dict(os.environ, PATH=f'{bin_dir}:{os.environ["PATH"]}', HOME=str(home),
+                                             AIM347_ENV=str(env_file)))
+            self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+            arguments = (root / 'salloc-args').read_text().split()
+            self.assertIn('--time=UNLIMITED', arguments)
+            self.assertIn('--exclusive', arguments)
+            self.assertEqual(result.stdout.splitlines()[0], 'Session allocation 42: gpu-1, gpu-2, 16 GPUs')
+            self.assertEqual(workshop.read_allocation(home / '.aim347/allocation.env')['AIM347_ALLOCATION_ID'], '42')
 
 
 class CeilingTests(unittest.TestCase):

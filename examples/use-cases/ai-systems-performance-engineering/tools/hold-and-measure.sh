@@ -13,10 +13,13 @@ job_id=$( (squeue --me -h --name=aim347-session -o '%i %T' || true) | awk '$2 ==
 if [[ -n $job_id ]]; then
     echo "Reusing session allocation $job_id"
 else
-    # --no-shell: the allocation outlives this shell and every later one.
+    # --no-shell: the allocation outlives this shell and every later one, until release.sh.
+    # --time=UNLIMITED: the participant owns both nodes, so the allocation has no time limit. Without
+    # --time, Slurm would apply the partition's DefaultTime, which a PCS queue can set to a finite
+    # value. The PCS partitions recorded so far have no DefaultTime and MaxTime=UNLIMITED.
     if ! granted=$(salloc --no-shell --job-name=aim347-session --partition="$PARTITION" --nodes=2 \
             --ntasks-per-node=1 --cpus-per-task="$AIM347_CPUS_PER_NODE" --exclusive --gres=gpu:"$GPUS_PER_NODE" \
-            --time=110 --immediate=120 2>&1) || ! job_id=$("${workshop[@]}" granted <<<"$granted"); then
+            --time=UNLIMITED --immediate=120 2>&1) || ! job_id=$("${workshop[@]}" granted <<<"$granted"); then
         printf '%s\n' "$granted"
         echo "The allocation was not granted. The partition $PARTITION shows:"
         squeue -p "$PARTITION"
