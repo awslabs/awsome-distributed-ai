@@ -309,15 +309,14 @@ exit "${LOCAL_SUITE_EXIT:-0}"
                        LOCAL_ROOT=str(root), LOCAL_ARGV=str(root / 'argv.log'),
                        PYTHONPATH=str(LAB / 'tests'),
                        LOCAL_TIMEOUT_LOG=str(root / 'timeouts.log'))
-            spec = importlib.util.spec_from_file_location('bootstrap_launch', LAB / 'facilitator/replacement-bootstrap.py')
-            bootstrap = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(bootstrap)
-            manifest = {'verification_environment': {'PARTITION': 'assigned-queue',
-                        'NCCL_CONTAINER': '/opt/aim344/aim344.sqsh',
-                        'NCCL_SOCKET_IFNAME': '=eth0', 'PMIX_MCA_gds': 'hash',
-                        # The g7.48xlarge site value (VALIDATION.md, November 3, 2026).
-                        'NCCL_PROTO': 'Simple'}}
-            (companion / 'lab.env').write_text(launch_environment or bootstrap.verification_environment(manifest))
+            spec = importlib.util.spec_from_file_location('lab_env_launch', LAB / 'facilitator/lab-env.py')
+            generator = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(generator)
+            values = {'PARTITION': 'assigned-queue', 'NCCL_CONTAINER': '/opt/aim344/aim344.sqsh',
+                      'NCCL_SOCKET_IFNAME': '=eth0', 'PMIX_MCA_gds': 'hash',
+                      # The g7.48xlarge site value (VALIDATION.md, November 3, 2026).
+                      'NCCL_PROTO': 'Simple'}
+            (companion / 'lab.env').write_text(launch_environment or generator.lab_environment(values))
             env.update(LAB_DIR=str(companion), OMPI_MCA_btl_tcp_if_include='bad-include',
                        NCCL_TESTS_SPLIT='bad-split', NCCL_NET='bad-net',
                        PMIX_MCA_gds='hash', PMIX_SERVER_URI2='stale-server',

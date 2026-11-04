@@ -12,11 +12,11 @@ session = bench.session
 
 
 class ControllerBench(bench.Base):
-    def attempt(self, deadline=False):
+    def attempt(self):
         before = len(self.executor.maintenance_calls)
         try:
-            handler = self.make(now=9999.0 if deadline else 1000.0)
-            result = handler.expire() if deadline else handler.recover()
+            handler = self.make()
+            result = handler.recover()
             refusal = None
         except session.Refusal as error:
             result, refusal = None, error
@@ -51,12 +51,6 @@ class RestorationObligations(ControllerBench):
     def test_malformed_nonempty_token_refuses_before_actions(self):
         before = self.record(['gpu-prepare', 'gpu-remove-attempted'], operation='not-a-token')
         result, refusal = self.attempt()
-        self.assertIsNotNone(refusal)
-        self.assert_no_recovery_mutation(before)
-
-    def test_preparation_only_malformed_token_deadline_refuses(self):
-        before = self.record(['gpu-prepare-attempted'], operation='table-1/1/bad')
-        result, refusal = self.attempt(deadline=True)
         self.assertIsNotNone(refusal)
         self.assert_no_recovery_mutation(before)
 
@@ -128,9 +122,9 @@ class EfaReplacementBoundary(ControllerBench):
     def test_failed_rebind_isolates_without_reboot_or_runtime_restore(self):
         self.make().start('efa')
         self.executor.maintenance_failures['efa-rebind'] = (1, 'Driver bind failed')
-        for deadline in (False, False, True):
+        for _ in range(2):
             before = len(self.executor.actions())
-            result, refusal = self.attempt(deadline=deadline)
+            result, refusal = self.attempt()
             self.assertIsNotNone(refusal)
             self.assertEqual([], self.executor.reboots())
             self.assertEqual([], self.executor.resumes())
@@ -163,15 +157,12 @@ class EfaReplacementBoundary(ControllerBench):
         self.assertEqual(1, len(self.executor.resumes()))
 
 
-    def test_replacement_retains_pair_and_cannot_be_bypassed_by_display_phase(self):
+    def test_replacement_cannot_be_bypassed_by_display_phase(self):
         self.make().start('efa')
         self.executor.maintenance_failures['efa-rebind'] = (1, 'Driver bind failed')
         result, refusal = self.attempt()
         self.assertIsNotNone(refusal)
         before = len(self.executor.actions())
-        with self.assertRaises(session.Refusal):
-            self.make(assignment='table-2').start('efa')
-        self.assertEqual(before, len(self.executor.actions()))
         state = self.make().store.read()
         state.phase = 'investigating'
         self.make().store.write(state)

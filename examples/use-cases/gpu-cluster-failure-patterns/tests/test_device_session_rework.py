@@ -17,7 +17,6 @@ Run: python3 -m unittest discover -s <lab>/tests -p 'test_*.py'
 """
 import importlib.util
 import json
-import multiprocessing
 import os
 from pathlib import Path
 import shutil
@@ -166,28 +165,9 @@ class Base(unittest.TestCase):
                     'job_name_prefix': 'aim344-',
                     'slurm_bin': '/opt/aws/pcs/scheduler/slurm-25.05/bin',
                     'allowed_checks': {'gpu': [0, 3], 'efa': [2, 6]},
-                    'recovery_deadline_seconds': 1800,
-                },
-                # Same physical node as table-1: this is the pair the review's
-                # F2 race is about.
-                'table-2': {
-                    'participant_user': 'aim344-t2',
-                    'participant_uid': os.getuid(),
-                    'participant_gid': os.getgid(),
-                    'answers_dir': str(root / 'answers-2'),
-                    'target_node': 'gpu-g7-1',
-                    'target_instance_id': 'i-0123456789abcdef0',
-                    'coordinator_node': 'gpu-g7-2',
-                    'partition': 'gpu-g7',
-                    'drain_reason': 'aim344-device-recovery',
-                    'job_name_prefix': 'aim344-',
-                    'slurm_bin': '/opt/aws/pcs/scheduler/slurm-25.05/bin',
-                    'allowed_checks': {'gpu': [0, 3], 'efa': [2, 6]},
-                    'recovery_deadline_seconds': 1800,
                 },
             },
         }
-        (root / 'answers-2').mkdir()
         self.write_config()
         self.executor = ReworkExecutor()
 
@@ -376,127 +356,6 @@ class F1PrivilegedWrites(Base):
 # --------------------------------------------------------------------------
 # F2: exclusion must be keyed by the physical pair, before any prepare or scan.
 # --------------------------------------------------------------------------
-def _start_in_child(config_path, assignment, barrier, results):   # pragma: no cover
-    """Run one start() in a separate process against the same state directory."""
-    spec = importlib.util.spec_from_file_location(f'child_{assignment}', HELPER)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    class Recorder:
-        def __init__(self):
-            self.mutations = []
-            self.node_state = 'IDLE+CLOUD'
-            self.node_reason = ''
-
-        def run_maintenance(self, argv, timeout=None):
-            action = argv[0]
-            if action in ('gpu-remove', 'efa-unbind', 'gpu-prepare'):
-                self.mutations.append(action)
-            if action == 'inspect':
-                return module.Completed(0, json.dumps({
-                    'action': 'inspect',
-                    'instance_id': 'i-0123456789abcdef0',
-                    'confirmation': {
-                        'gpu-remove': 'i-0123456789abcdef0/gpu-remove/GPU-x',
-                        'efa-unbind': 'i-0123456789abcdef0/efa-unbind/0000:b0:00.0',
-                        'efa-rebind': 'i-0123456789abcdef0/efa-rebind/0000:b0:00.0',
-                    }}) + '\n', '')
-            if action == 'boot-id':
-                return module.Completed(0, 'aaaaaaaa-0000-0000-0000-000000000001\n', '')
-            return module.Completed(0, '{}\n', '')
-
-        def run_slurm(self, argv, timeout=None):
-            program = Path(argv[0]).name
-            if program == 'scontrol' and argv[1:3] == ['show', 'node']:
-                return module.Completed(
-                    0, f'NodeName={argv[3]} State={self.node_state}\n', '')
-            if program == 'squeue':
-                return module.Completed(0, '', '')
-            return module.Completed(0, '', '')
-
-    recorder = Recorder()
-    config = module.load_config(config_path, require_root_owned=False)
-    handler = module.DeviceSession(config, assignment, executor=recorder, clock=time.time)
-    barrier.wait()
-    outcome = {'assignment': assignment}
-    try:
-        result = handler.start('gpu')
-        outcome['phase'] = result.state.phase
-        outcome['refusal'] = None
-    except module.Refusal as refusal:
-        outcome['phase'] = None
-        outcome['refusal'] = str(refusal)
-    outcome['mutations'] = recorder.mutations
-    results.append(outcome)
-
-
-class F2PairExclusion(Base):
-    def test_two_simultaneous_starts_on_one_free_node_produce_one_owner(self):
-        """The real race the review asked for: two processes, same free target."""
-        manager = multiprocessing.Manager()
-        results = manager.list()
-        barrier = manager.Barrier(2)
-        children = [
-            multiprocessing.Process(target=_start_in_child,
-                                    args=(str(self.config_path), name, barrier, results))
-            for name in ('table-1', 'table-2')]
-        for child in children:
-            child.start()
-        for child in children:
-            child.join(60)
-            self.assertEqual(0, child.exitcode, 'child start() crashed')
-        outcomes = list(results)
-        self.assertEqual(2, len(outcomes))
-        owners = [o for o in outcomes if o['phase'] == 'fault-applied']
-        refused = [o for o in outcomes if o['refusal']]
-        self.assertEqual(1, len(owners), f'expected exactly one owner, got {outcomes}')
-        self.assertEqual(1, len(refused), f'expected exactly one refusal, got {outcomes}')
-        # Only the winner touched the hardware.
-        mutating = [o for o in outcomes if o['mutations']]
-        self.assertEqual(1, len(mutating), f'more than one table mutated: {outcomes}')
-        self.assertIn('gpu-remove', mutating[0]['mutations'])
-        # The loser did not even prepare.
-        loser = refused[0]
-        self.assertEqual([], loser['mutations'])
-
-    def test_the_pair_lock_is_taken_before_any_state_scan_or_prepare(self):
-        """Holding the pair lock refuses the other table with nothing mutated."""
-        first = self.make(assignment='table-1')
-        second = self.make(assignment='table-2')
-        with first.store.exclusive_pair():
-            before = len(self.executor.maintenance_calls)
-            with self.assertRaises(session.Refusal) as caught:
-                second.start('gpu')
-            self.assertIn('another table', str(caught.exception).lower())
-            self.assertEqual(before, len(self.executor.maintenance_calls))
-            self.assertEqual([], self.executor.node_state_history)
-
-    def test_the_pair_lock_is_named_for_the_node_not_the_assignment(self):
-        first = self.make(assignment='table-1')
-        second = self.make(assignment='table-2')
-        self.assertEqual(first.store.pair_lock_path, second.store.pair_lock_path)
-        self.assertNotEqual(first.store.lock_path, second.store.lock_path)
-
-    def test_a_different_node_is_not_blocked_by_the_pair_lock(self):
-        self.config_body['assignments']['table-2']['target_node'] = 'gpu-g7-9'
-        self.write_config()
-        first = self.make(assignment='table-1')
-        second = self.make(assignment='table-2')
-        self.assertNotEqual(first.store.pair_lock_path, second.store.pair_lock_path)
-        with first.store.exclusive_pair():
-            with second.store.exclusive_pair():
-                pass
-
-    def test_recovery_also_holds_the_pair_lock(self):
-        handler = self.make(assignment='table-1')
-        handler.start('gpu')
-        other = self.make(assignment='table-2')
-        with other.store.exclusive_pair():
-            with self.assertRaises(session.Refusal) as caught:
-                self.make(assignment='table-1').recover()
-            self.assertIn('exercise node', str(caught.exception).lower())
-
-
 # --------------------------------------------------------------------------
 # F7: a failed required check or restoration must never reach RESUME.
 # --------------------------------------------------------------------------
@@ -849,25 +708,6 @@ class F10RecoverableRecord(Base):
         self.assertNotIn('drain', state.prepared)
         self.assertNotIn('gpu-prepare', executor.actions())
         self.assertNotIn('gpu-remove', executor.actions())
-
-    def test_a_partly_prepared_round_still_holds_the_node_against_other_tables(self):
-        self.executor.maintenance_failures['gpu-prepare'] = \
-            self.PREPARE_FAILED_AFTER_RECORDING
-        with self.assertRaises(session.Refusal):
-            self.make(assignment='table-1').start('gpu')
-        with self.assertRaises(session.Refusal) as caught:
-            self.make(assignment='table-2').start('gpu')
-        self.assertIn('another table', str(caught.exception).lower())
-
-    def test_a_recovery_failed_round_still_holds_the_node(self):
-        handler = self.make(assignment='table-1')
-        handler.start('gpu')
-        self.executor.check_output['0'] = FAIL_0
-        with self.assertRaises(session.Refusal):
-            self.make(assignment='table-1').recover()
-        with self.assertRaises(session.Refusal) as caught:
-            self.make(assignment='table-2').start('gpu')
-        self.assertIn('another table', str(caught.exception).lower())
 
     def test_a_recovery_failed_round_refuses_a_new_round_on_the_same_table(self):
         handler = self.make()

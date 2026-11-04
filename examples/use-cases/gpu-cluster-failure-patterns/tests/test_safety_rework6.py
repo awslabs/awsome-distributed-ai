@@ -150,20 +150,6 @@ class D2RebootCompletionOnRetry(Base):
         self.assertEqual(1, after.reboot_requests)
         self.assert_nothing_was_restored()
 
-    def test_the_deadline_path_reaches_the_same_refusal(self):
-        """`expire` shares `_recover`, and it is what an abandoned table meets."""
-        self.outstanding_request('boot-before', STARTED_ON, 'IDLE+DRAIN')
-        try:
-            self.make(now=9999.0).expire()
-        except session.Refusal as refusal:
-            self.assertIn('not a boot id', str(refusal))
-        else:
-            self.fail('the deadline path accepted a malformed baseline')
-        after = self.make().store.read()
-        self.assertFalse(after.reboot_completed)
-        self.assert_nothing_was_restored()
-        self.assertEqual(1, after.deadline_attempts)
-
     # -- a changed boot with the request still held is not a completed reboot --
     def test_a_changed_boot_with_the_request_still_pending_is_not_a_completion(self):
         """The first wait's own condition, applied to the retry branch.
@@ -365,18 +351,6 @@ class D2RetryAfterARecordedCompletion(Base):
         self.assertTrue(after.reboot_completed,
                         'the recorded completion was unwound by a refusal')
         self.assertEqual(state.reboot_requests, after.reboot_requests)
-        self.assert_no_second_cycle_and_no_resume()
-
-    def test_the_deadline_path_applies_the_same_conditions(self):
-        """`expire` shares `_recover`, so the unattended path must refuse too."""
-        self.completed_reboot_then_a_failure()
-        self.executor.node_state = 'IDLE+DRAIN+REBOOT_ISSUED'
-        try:
-            self.make(now=9999.0).expire()
-        except session.Refusal as refusal:
-            self.assertIn('pending', str(refusal))
-        else:                                                  # pragma: no cover
-            self.fail('the deadline path restored a node with a reboot pending')
         self.assert_no_second_cycle_and_no_resume()
 
     # -- the positive controls --

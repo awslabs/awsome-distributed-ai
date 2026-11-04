@@ -20,7 +20,7 @@ The scheduled incidents and split check tables described under [Participant-oper
 
 ## Prerequisites and deployment
 
-Use the [PCS reference architecture](../../../architectures/aws-pcs/README.md) for the dedicated same-hardware pair with EFA, compatible NVIDIA drivers, Python version 3, Enroot version 3.5.0 and Pyxis version 0.20.0 built against the deployed Slurm version. The authoritative measured provisioning composition is [Device recovery](facilitator/DEVICE-RECOVERY.md#pre-session-provisioning--separate-authorization): independent login coordinator, per-node fixed SSM initializer, literal admission Prolog and root-only whole-node reservation through qualification. The September 19 pair was not a homogeneous final-helper rollout; the latest fixed-candidate deployment is recorded separately in VALIDATION.md. Keep capacity reserved during the exercise, without promising uninterrupted two-node availability. New provisioning or fault trials require separate operational authorization.
+Use the [PCS reference architecture](../../../architectures/aws-pcs/README.md) for the dedicated same-hardware pair with EFA, compatible NVIDIA drivers, Python version 3, Enroot version 3.5.0 and Pyxis version 0.20.0 built against the deployed Slurm version. [Device recovery](facilitator/DEVICE-RECOVERY.md#pre-session-provisioning--separate-authorization) gives the provisioning procedure: an independent login node that runs the controller, and two GPU nodes prepared with `facilitator/prepare-compute.sh`, the health Prolog and, on the target, `facilitator/prepare-target.py`. Keep capacity reserved during the exercise, without promising uninterrupted two-node availability. New provisioning or fault trials require separate operational authorization.
 
 Build and stage the images before the session. The base image is pinned to `public.ecr.aws/hpc-cloud/nccl-tests@sha256:a5390d3f0eb50f3e5854085e2ae0fef90b9eb4f3b7486ed4cab0d47864809d4c`. Its tag resolves CUDA version 13.0.2, NCCL version 2.30.4, nccl-tests version 2.18.3, EFA installer version 1.48.0 and aws-ofi-nccl version 1.19.0. The PyTorch fixture uses version 2.9.0+cu130. Keep runtime NCCL startup logs because the wheel's build version and the loaded library can differ.
 
@@ -32,18 +32,18 @@ bash facilitator/prepare-login.sh
 sha256sum /fsx/aim344/aim344.sqsh /fsx/aim344/nccl-baseline.sqsh
 ```
 
-The asset-preparation helper defaults to Lustre. For an existing node-local staging directory, set `AIM344_NODE_LOCAL=1` and `AIM344_STAGE_DIR=/opt/aim344`. The measured successor initializer installs hash-pinned materials at `/opt/aim344/device-recovery/companion` and images at `/opt/aim344`. Its `root-directory` policy validates root-filesystem staging after reboot; this is not an NVMe remount. Historical nodes with the NVMe-bind policy retain their own source/UUID checks and are not silently migrated.
+The asset-preparation helper defaults to Lustre. For an existing node-local staging directory, set `AIM344_NODE_LOCAL=1` and `AIM344_STAGE_DIR=/opt/aim344`. The lab directory on every host is `/opt/aim344/device-recovery/companion`, and the GPU nodes hold the images in `/opt/aim344`. The `root-directory` staging policy that `prepare-target.py` writes validates that root-filesystem staging after a reboot; it is not an NVMe remount. Nodes configured with the NVMe-bind policy keep their own source/UUID checks.
 
-The following manual compute preparation is historical initial bring-up, not the current replacement initializer or a participant restoration step:
+Each GPU node is prepared as root, with node-local staging:
 
 ```bash
 sudo env AIM344_NODE_LOCAL=1 AIM344_STAGE_DIR=/opt/aim344   bash facilitator/prepare-compute.sh ubuntu
 sudo env AIM344_NODE_LOCAL=1 AIM344_STAGE_DIR=/opt/aim344   bash facilitator/prepare-prolog.sh gpu-g7
 ```
 
-For current pre-session provisioning, use the fixed initializer described in [Device recovery](facilitator/DEVICE-RECOVERY.md). The participant is the cluster's own `ubuntu` account, which the example above names. The device injector requires a separately provisioned root-owned target allowlist before enabling it.
+The participant is the cluster's own `ubuntu` account, which the example above names. The device injector reads the target's root-owned allowlist from `/etc/aim344-device-fault.json`, which [`facilitator/prepare-target.py`](facilitator/prepare-target.py) writes.
 
-The current initializer generates `participant-lab.env` for installation as `lab.env` on the login coordinator and compute nodes. It preserves explicit caller overrides and does not set `PATH` or `NCCL_MIN_BUS_BW`. The following hand-written environment is the historical Spain configuration, not the current generated defaults:
+[`facilitator/lab-env.py`](facilitator/lab-env.py) generates `lab.env` for the login node and both GPU nodes. It preserves explicit caller overrides and does not set `PATH` or `NCCL_MIN_BUS_BW`. The following hand-written environment is the historical Spain configuration, not the current generated defaults:
 
 ```bash
 export LAB_DIR=/opt/aim344/device-recovery/companion
@@ -61,10 +61,10 @@ The memory setting is Slurm's all-memory sentinel. Keep the assigned instance ty
 
 ### Facilitator preparation for the PCS health gate
 
-The health Prolog invokes suite checks with identifiers `0` and `2`. In the measured composition, the root-owned literal admission wrapper chains that health Prolog. Only separately authorized pre-session setup may configure the cluster setting, after installing the reviewed wrapper and preserving other settings:
+The health Prolog invokes suite checks with identifiers `0` and `2`. [`facilitator/prepare-prolog.sh`](facilitator/prepare-prolog.sh) writes the dispatcher that runs it for the lab's partition. Only separately authorized pre-session setup may configure the cluster setting, after installing the dispatcher on both GPU nodes and preserving other settings:
 
 ```bash
-python3 facilitator/pcs-prolog.py enable --cluster "$CLUSTER_ID" --region "$AWS_REGION"   --dispatcher /usr/local/sbin/aim344-replacement-prolog --state-file pcs-before-aim344.json
+python3 facilitator/pcs-prolog.py enable --cluster "$CLUSTER_ID" --region "$AWS_REGION"   --dispatcher /opt/aim344/.prolog/dispatch.sh --state-file pcs-before-aim344.json
 ```
 
 Keep the state file on the external controller. Confirm the effective Slurm Prolog configuration and its journal on both nodes before admitting participants. Use `pcs-prolog.py restore` with the same cluster, Region and state file when restoring the prior scheduler settings. The helper refuses to overwrite an existing Prolog or unrelated changes made after activation.
@@ -87,7 +87,7 @@ Invoke Check 5 once from the coordinator. It launches 1 MPI process per node wit
 
 The historical September 16 configuration explicitly set a 30 GB/s advisory for Check 5. Across six fresh allocations after accepted device recoveries, maximum bus bandwidth ranged from 38.18 GB/s through 39.64 GB/s with all 25 rows correct. The current generated environment does not set that advisory; the fixed G7 suite defaults to zero without an explicit override. Do not apply the historical floor or claim performance acceptance for the latest candidate. Compare the actual configuration and retain its provider/performance WARN.
 
-The Torch and optional long-sweep launchers select `OFI_NCCL_PROTOCOL=RDMA` and `NCCL_PROTO=Simple` for G7, and a g7.48xlarge site manifest sets `NCCL_PROTO=Simple` for Check 5 ([Check 5 protocol on G7](facilitator/DEVICE-RECOVERY.md#check-5-protocol-on-g7)). Keep the runtime transport logs and physical counters as evidence. Leave `AIM344_EFA_IFACE` unset for the whole-node baseline; the facilitator may select the qualified physical EFA for the EFA fault round.
+The Torch and optional long-sweep launchers select `OFI_NCCL_PROTOCOL=RDMA` and `NCCL_PROTO=Simple` for G7, and on g7.48xlarge `lab.env` sets `NCCL_PROTO=Simple` for Check 5 ([Check 5 protocol on G7](facilitator/DEVICE-RECOVERY.md#check-5-protocol-on-g7)). Keep the runtime transport logs and physical counters as evidence. Leave `AIM344_EFA_IFACE` unset for the whole-node baseline; the facilitator may select the qualified physical EFA for the EFA fault round.
 
 ## Device fault and recovery
 
@@ -120,17 +120,15 @@ bash 12.device-exercise.sh collect 0      # checks 0, 2, 3 or 6, or kernel
 bash 12.device-exercise.sh recover
 ```
 
-When recovery cannot qualify the node, the node stays out of service for the rest of the session and an operator replaces it afterwards from the coordinator with `sudo /usr/local/sbin/aim344-device-session --operator replace`. The participant verb `replace` is still accepted by the grammar and is refused without changing anything. `sudo /usr/local/sbin/aim344-device-session --operator status` shows the operator the exercise kind, the seat's schedule with each entry's settings, its issue time and, for a job incident that has ended, its end time, the path of the device-operation transcript and the original text of the last recovery refusal.
+When recovery cannot qualify the node, the node stays out of service for the rest of the session, and an operator replaces it after the session in the ordinary way ([Device recovery](facilitator/DEVICE-RECOVERY.md#participant-session)). The participant verb `replace` is still accepted by the grammar and is refused without changing anything. `sudo /usr/local/sbin/aim344-device-session --operator status` shows the operator the exercise kind, the seat's schedule with each entry's settings, its issue time and, for a job incident that has ended, its end time, the path of the device-operation transcript and the original text of the last recovery refusal.
 
 No node name, PCI address, job id or command reaches the privileged helper; the assignment comes from a root-owned configuration and the confirmation token is read from the target's own inspection output. `recover` ends at `runtime-ready`, which is deliberately not the same result as a verified workload: the participant then takes their own allocation and runs [`13.verify-after-recovery.sbatch`](13.verify-after-recovery.sbatch) for the Check 5 collective, per-device EFA counters and the storage fixture. That script runs entirely as the participant, with no `sudo`. It prints the suite's own raw correctness rows rather than only a verdict line, judges the EFA byte deltas of every device on every allocated node rather than only on the node it happens to be running on, and checks the private checkpoint fixture is usable on every allocated node before starting the distributed storage workload. Because the workload writes on its writer's node only, each node also writes a small file to its checkpoint directory, flushes it and removes it, and `storage=0` requires that write to succeed on every node.
 
 The batch host is whichever of the two assigned nodes Slurm picks, so the job's log and results can land on the node the participant does not have a terminal on. The script therefore copies its own results to every allocated node before it exits, verifies the copy's digest there, and prints the `tar -xf` command that reads them back. A run whose results could not be distributed reports itself as unverified rather than as a pass.
 
-A round in progress on a node is exclusive to that table, and an exercise deadline recovery is recorded separately from a recovery the participant earned by diagnosing.
+A WARN refuses recovery, except a Check 6 warning about the cumulative EFA counters, which is recorded as MONITOR (see [Checks a participant can collect](#checks-a-participant-can-collect)).
 
-The replacement route has scoped independent acceptance for two actual changed-address replacements, which participants ran in the measured trials, and a fresh verification job, not full hardware or event-readiness approval. The operator runs the same route now, and it accepts no target argument. It preserves off-target evidence, retires the exact assigned failed EC2 identity, and initializes/qualifies the PCS-provisioned successor without instructor restoration. Retries do not terminate the healthy successor. Fixed SSM, pinned bootstrap, IAM, early LT isolation and the literal Prolog require separate pre-session provisioning. No PCS group or EC2 capacity-reservation update is a session action; the controller does create/release its owned Slurm scheduling reservation. A WARN refuses recovery, except a Check 6 warning about the cumulative EFA counters, which is recorded as MONITOR (see [Checks a participant can collect](#checks-a-participant-can-collect)). Successful replacement yields fresh runtime readiness, not recovery of lost model state or proof that Check 5 has run.
-
-`start gpu` and `start efa` require an idle target. For `active gpu` or `active efa`, first prepare both terminals on the same independent coordinator as the same participant, including identity, environment and client-PATH checks. Then launch the existing 120-second device workload in terminal A and keep its log open. Use terminal B for the fault, `status` and `collect`. The [active procedure](facilitator/DEVICE-RECOVERY.md#active-flr-participant-integration-candidate) gives the allocation, progress-log and recovery steps. After failed recovery, the replacement route may retire the assigned predecessor while this round's exact same-participant job remains COMPLETING. Other jobs and RUNNING allocations still block retirement. Admission of the successor and RESUME require an empty queue.
+`start gpu` and `start efa` require an idle target. For `active gpu` or `active efa`, first prepare both terminals on the same independent coordinator as the same participant, including identity, environment and client-PATH checks. Then launch the existing 120-second device workload in terminal A and keep its log open. Use terminal B for the fault, `status` and `collect`. The [active procedure](facilitator/DEVICE-RECOVERY.md#active-flr-participant-integration-candidate) gives the allocation, progress-log and recovery steps.
 
 #### Checks a participant can collect
 
@@ -340,7 +338,7 @@ The optional plugin comparison uses `0.baseline.sh`, `3.inject-fallback.sh` and 
 
 ## Cleanup and known edge cases
 
-Run `bash 9.cleanup.sh` in the healthy allocation, then exit it. Retain the evidence. Only during post-session administrative teardown does the facilitator restore exercise-owned markers, mounts, telemetry and scheduler settings while retaining the dedicated pair and capacity; this is not an in-session device-recovery remedy. Participants use `recover`, and an operator runs the replacement route after the session. Remove only this exercise's private container instances; keep the staged images available for reuse.
+Run `bash 9.cleanup.sh` in the healthy allocation, then exit it. Retain the evidence. Only during post-session administrative teardown does the facilitator restore exercise-owned markers, mounts, telemetry and scheduler settings while retaining the dedicated pair and capacity; this is not an in-session device-recovery remedy. Participants use `recover`, and an operator replaces a node that recovery cannot qualify after the session. Remove only this exercise's private container instances; keep the staged images available for reuse.
 
 A launcher or image error must be resolved before its result can describe GPU communication. Use `FI_EFA_IFACE` to select a physical EFA; `FI_EFA_DEVICE_NAME` is ignored by the shipped libfabric. Missing counters require investigation and must not be recorded as 0 B. `iptables` and `tc netem` do not establish an EFA device failure because the EFA data path bypasses that kernel networking path.
 

@@ -207,21 +207,6 @@ class Base(unittest.TestCase):
                     'job_name_prefix': 'aim344-',
                     'slurm_bin': '/opt/aws/pcs/scheduler/slurm-25.05/bin',
                     'allowed_checks': {'gpu': [0, 3], 'efa': [2, 6]},
-                    'recovery_deadline_seconds': 1800,
-                },
-                'table-2': {
-                    'participant_user': 'aim344-t2',
-                    'participant_uid': os.getuid() + 4242,
-                    'answers_dir': str(root / 'answers-2'),
-                    'target_node': 'gpu-g7-9',
-                    'target_instance_id': 'i-0000000000000dead',
-                    'coordinator_node': 'gpu-g7-2',
-                    'partition': 'gpu-g7',
-                    'drain_reason': 'aim344-device-recovery',
-                    'job_name_prefix': 'aim344-',
-                    'slurm_bin': '/opt/aws/pcs/scheduler/slurm-25.05/bin',
-                    'allowed_checks': {'gpu': [0, 3], 'efa': [2, 6]},
-                    'recovery_deadline_seconds': 1800,
                 },
             },
         }
@@ -698,27 +683,11 @@ class SuccessPaths(Base):
         self.assertNotEqual('verified', result.state.phase)
         self.assertIn('fresh', result.next_step.lower())
 
-    def test_deadline_recovery_is_recorded_separately(self):
-        handler = self.make(now=1000.0)
-        handler.start('gpu')
-        expired = self.make(now=1000.0 + 1801)
-        result = expired.expire()
-        self.assertTrue(result.expired)
-        self.assertEqual('deadline', result.state.recovered_by)
-        self.assertEqual('runtime-ready', result.state.phase)
-
     def test_participant_recovery_is_recorded_as_participant(self):
         handler = self.make()
         handler.start('gpu')
         result = self.make().recover()
         self.assertEqual('participant', result.state.recovered_by)
-
-    def test_expire_does_nothing_before_the_deadline(self):
-        handler = self.make(now=1000.0)
-        handler.start('gpu')
-        result = self.make(now=1000.0 + 10).expire()
-        self.assertFalse(result.expired)
-        self.assertEqual([], [c for c in self.executor.slurm_calls if c[1:2] == ['reboot']])
 
     def test_efa_start_passes_the_participants_own_job_identifier(self):
         """The --job argument, on the path that carries it.
@@ -868,55 +837,6 @@ class SuccessPaths(Base):
         self.make().start('gpu')
         with self.assertRaises(session.Refusal):
             self.make().start('efa')
-
-    def test_another_table_on_the_same_node_is_refused_explicitly(self):
-        """Observed on hardware: a second assignment pointing at an already
-        faulted node was stopped only incidentally, by the device helper's
-        'Provisioned gpu PCI function is absent: 0000:ba:00.0'. Ownership must be
-        refused up front, without leaking a device identity."""
-        self.config_body['assignments']['table-2'].update({
-            'target_node': 'gpu-g7-1',
-            'target_instance_id': 'i-0123456789abcdef0',
-            'participant_uid': os.getuid(),
-            'answers_dir': str(Path(self.tmp.name) / 'answers-2'),
-        })
-        self.write_config()
-        self.make(assignment='table-1').start('gpu')
-        before = len(self.executor.maintenance_calls)
-        with self.assertRaises(session.Refusal) as caught:
-            self.make(assignment='table-2').start('gpu')
-        message = str(caught.exception)
-        self.assertIn('Another table', message)
-        self.assertNotIn('0000:', message)
-        self.assertNotIn('gpu-g7-1', message)
-        # Nothing was mutated on behalf of the second table.
-        self.assertEqual(before, len(self.executor.maintenance_calls))
-
-    def test_a_free_node_is_not_reported_as_held(self):
-        """The ownership check must not block the only table using the node."""
-        self.config_body['assignments']['table-2'].update({
-            'target_node': 'gpu-g7-1',
-            'target_instance_id': 'i-0123456789abcdef0',
-            'participant_uid': os.getuid(),
-            'answers_dir': str(Path(self.tmp.name) / 'answers-2'),
-        })
-        self.write_config()
-        result = self.make(assignment='table-2').start('gpu')
-        self.assertEqual('fault-applied', result.state.phase)
-
-    def test_a_recovered_table_releases_the_node(self):
-        self.config_body['assignments']['table-2'].update({
-            'target_node': 'gpu-g7-1',
-            'target_instance_id': 'i-0123456789abcdef0',
-            'participant_uid': os.getuid(),
-            'answers_dir': str(Path(self.tmp.name) / 'answers-2'),
-        })
-        self.write_config()
-        self.make(assignment='table-1').start('gpu')
-        self.make(assignment='table-1').recover()
-        result = self.make(assignment='table-2').start('gpu')
-        self.assertEqual('fault-applied', result.state.phase)
-
 
 if __name__ == '__main__':
     unittest.main()

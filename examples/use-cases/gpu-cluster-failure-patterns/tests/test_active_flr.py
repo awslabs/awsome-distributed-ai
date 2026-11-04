@@ -17,7 +17,8 @@ from unittest import mock
 import test_device_session as fixture
 import test_maintenance as maintenance_fixture
 import test_safety_rework3 as safety_fixture
-import test_replacement as replacement_fixture
+
+OLD = 'i-0123456789abcdef0'  # the fixture's target instance
 
 session = fixture.session
 maintenance = maintenance_fixture.maintenance
@@ -231,57 +232,6 @@ class ActiveSession(fixture.Base):
         self.assertIn('end the allocation with exit', str(caught.exception))
         self.assertNotIn('walltime', str(caught.exception))
 
-    def sweep(self, now):
-        config = session.load_config(self.config_path, require_root_owned=False)
-        return session.sweep(
-            config, clock=lambda: now,
-            session_factory=lambda assignment_id: session.DeviceSession(
-                config, assignment_id, executor=self.executor, clock=lambda: now))
-
-    def test_the_deadline_waits_for_the_rounds_running_job_and_counts_nothing(self):
-        # The allocation may have no time limit, so its job can outlast the
-        # deadline (round start 1000 s + 1800 s). Waiting is not an attempt.
-        for index, kind in enumerate(('gpu', 'efa')):
-            with self.subTest(kind=kind):
-                if index:
-                    self.tearDown()
-                    self.setUp()
-                self.make().start(kind, active=True)
-                before = self.make().store.read()
-                for now in (2801.0, 3101.0, 3401.0, 3701.0):
-                    late = self.make(now=now)
-                    result = late.expire()
-                    self.assertFalse(result.expired)
-                    self.assertIn('job 226 still runs on the exercise node', result.next_step)
-                    line = next(entry for entry in self.sweep(now) if entry.startswith('table-1'))
-                    self.assertIn('no deadline action taken', line)
-                    self.assertIn('No attempt was counted.', line)
-                after = self.make().store.read()
-                self.assertEqual(0, after.deadline_attempts)
-                self.assertEqual(before.phase, after.phase)
-                self.assertFalse(any(c[1] == 'reboot' for c in self.executor.slurm_calls))
-                # Once the participant ends the allocation, the sweep tries recovery
-                # and counts that attempt.
-                self.executor.jobs = ['226|aim344-t1|aim344-device|COMPLETING']
-                with contextlib.suppress(session.Refusal):
-                    self.make(now=4001.0).expire()
-                self.assertEqual(1, self.make().store.read().deadline_attempts)
-
-    def test_the_deadline_still_counts_a_job_that_is_not_the_rounds(self):
-        for index, job in enumerate(('227|aim344-t1|aim344-device|RUNNING',
-                                     '226|aim344-t2|aim344-device|RUNNING',
-                                     '226|aim344-t1|interactive|RUNNING')):
-            with self.subTest(job=job):
-                if index:
-                    self.tearDown()
-                    self.setUp()
-                self.make().start('gpu', active=True)
-                self.executor.jobs = [job]
-                with self.assertRaises(session.Refusal):
-                    self.make(now=2801.0).expire()
-                self.assertEqual(1, self.make().store.read().deadline_attempts)
-                self.assertFalse(any(c[1] == 'reboot' for c in self.executor.slurm_calls))
-
     def test_exact_completing_job_never_allows_resume(self):
         handler = self.make()
         state = handler.start('gpu', active=True).state
@@ -297,200 +247,20 @@ class ActiveSession(fixture.Base):
         with self.assertRaisesRegex(session.Refusal, 'inconsistent'):
             handler._require_coherent_restoration_obligations(state)
 
-    @contextlib.contextmanager
-    def ec2_fallback(self, result=None, error=None, post_read_error=False):
-        """Real cloud wrapper/Executor, mocked subprocess only; no AWS calls."""
+    def test_an_overdue_active_reboot_keeps_the_node_out_for_an_operator(self):
         self.progress_file.write_text(self.progress(2000))
         handler = self.make(now=2000)
         state = handler.start('gpu', active=True).state
-        self.executor.jobs = ['226|aim344-t1|aim344-device|COMPLETING']
-        state.reboot_requests, state.reboot_requested_at = 1, 1000
-        handler.assignment['target_host'] = '10.0.0.1'
-        handler.assignment['replacement'] = {'enabled': True, 'region': 'eu-south-2'}
+        state.reboot_requests, state.reboot_requested_at = 1, 1950
         handler.store.write(state)
-        node = {'InstanceId': state.target_instance_id, 'NodeAddr': '10.0.0.1'}
-        real_executor = session.Executor('/unused', '10.0.0.1')
-        setattr(self.executor, 'run_cloud', real_executor.run_cloud)
-        result = result or subprocess.CompletedProcess([], 0, '', '')
-
-        def run(argv, **kwargs):
-            durable = handler.store.read()
-            self.assertTrue(durable.active_fault['external_reboot_attempted'])
-            self.assertNotIn('external_reboot_requested_at', durable.active_fault)
-            self.assertEqual(['/usr/local/bin/aws', 'ec2', 'reboot-instances'], argv[:3])
-            self.assertEqual({'InstanceIds': [state.target_instance_id]},
-                             json.loads(argv[argv.index('--cli-input-json') + 1]))
-            self.assertEqual('json', argv[argv.index('--output') + 1])
-            if error:
-                raise error
-            return result
-
-        instance = {'State': {'Name': 'running'}}
-        with mock.patch.object(handler, '_replacement_node', return_value=node), \
-             mock.patch.object(handler, '_replacement_capacity'), \
-             mock.patch.object(handler, '_replacement_instance',
-                               side_effect=[instance, session.Refusal('post-dispatch read failed')]
-                               if post_read_error else None, return_value=instance), \
-             mock.patch.object(session.subprocess, 'run', side_effect=run) as cli:
-            yield handler, state, cli
-
-    def assert_no_ec2_recovery_claim(self, handler):
-        state = handler.store.read()
-        self.assertFalse(state.reboot_completed)
-        self.assertIsNone(state.boot_id_after_reboot)
-        self.assertNotIn('reboot', state.prepared)
-        self.assertFalse(any('State=RESUME' in c for c in self.executor.slurm_calls))
-        self.assertFalse(any(c[0] in ('remount-staging', 'restore-runtime', 'gpu-restore')
-                             for c in self.executor.maintenance_calls))
-
-    def test_ec2_empty_cli_ack_persists_request_not_completion_or_duplicate(self):
-        with self.ec2_fallback() as (handler, state, cli):
-            with self.assertRaisesRegex(session.Refusal, 'completion is not established'):
-                handler._active_reboot_escalation(state)
-            durable = handler.store.read()
-            self.assertTrue(durable.active_fault['external_reboot_requested'])
-            self.assertEqual(2000, durable.active_fault['external_reboot_requested_at'])
-            self.assert_no_ec2_recovery_claim(handler)
-            handler.clock = lambda: 2050
-            with self.assertRaisesRegex(session.Refusal, 'observation window'):
-                handler.recover()
-            handler.clock = lambda: 2200
-            with self.assertRaisesRegex(session.Refusal, 'Replacement is required'):
-                handler.recover()
-            self.assertEqual('replacement-required', handler.store.read().phase)
-            self.assert_no_ec2_recovery_claim(handler)
-            cli.assert_called_once()
-
-    def test_ec2_ack_survives_failed_post_dispatch_read(self):
-        with self.ec2_fallback(post_read_error=True) as (handler, state, cli):
-            with self.assertRaisesRegex(session.Refusal, 'post-dispatch read failed'):
-                handler._active_reboot_escalation(state)
-            self.assertTrue(handler.store.read().active_fault['external_reboot_requested'])
-            self.assertEqual(2000, handler.store.read().active_fault['external_reboot_requested_at'])
-            self.assert_no_ec2_recovery_claim(handler)
-            handler.clock = lambda: 2200
-            with self.assertRaisesRegex(session.Refusal, 'Replacement is required'):
-                handler.recover()
-            cli.assert_called_once()
-
-    def test_ec2_lost_ack_and_invalid_response_keep_intent_without_retry(self):
-        cases = [(subprocess.CompletedProcess([], 0, 'not JSON', ''), None, 'unreadable'),
-                 (subprocess.CompletedProcess([], 255, '', 'AccessDenied'), None, 'did not confirm'),
-                 (subprocess.CompletedProcess([], 254, '{}', 'service error'), None, 'did not confirm'),
-                 (None, subprocess.TimeoutExpired('aws', 90), 'did not confirm')]
-        for result, error, message in cases:
-            with self.subTest(result=result, error=error):
-                # Each case is a separate round; use the existing fixture setup.
-                with self.ec2_fallback(result, error) as (handler, state, cli):
-                    with self.assertRaisesRegex(session.Refusal, message):
-                        handler._active_reboot_escalation(state)
-                    durable = handler.store.read()
-                    self.assertTrue(durable.active_fault['external_reboot_attempted'])
-                    self.assertNotIn('external_reboot_requested_at', durable.active_fault)
-                    self.assertNotIn('external_reboot_requested', durable.active_fault)
-                    self.assert_no_ec2_recovery_claim(handler)
-                    handler.clock = lambda: 2200
-                    with self.assertRaisesRegex(session.Refusal, 'Replacement is required'):
-                        handler.recover()
-                    cli.assert_called_once()
-                # Retire only local fixture state before the next independent case.
-                handler.store.path.unlink()
-                self.executor.node_state = 'IDLE+CLOUD'
-                self.executor.node_reason = ''
-                self.executor.jobs = ['226|aim344-t1|aim344-device|RUNNING']
-
-    def test_ec2_ack_followup_requires_fresh_boot_and_retired_scheduler_request(self):
-        with self.ec2_fallback() as (handler, state, cli):
-            with self.assertRaisesRegex(session.Refusal, 'completion is not established'):
-                handler._active_reboot_escalation(state)
-            self.executor.jobs = []
-            self.executor.boot_id = 'bbbbbbbb-0000-0000-0000-000000000002'
-            self.executor.node_state = 'IDLE+DRAIN+REBOOT_REQUESTED'
-            with self.assertRaisesRegex(session.Refusal, 'scheduler still holds'):
-                handler.recover()
-            self.assert_no_ec2_recovery_claim(handler)
-            self.executor.node_state = 'IDLE+DRAIN'
-            recovered = handler.recover().state
-            self.assertEqual('runtime-ready', recovered.phase)
-            self.assertTrue(recovered.reboot_completed)
-            self.assertEqual(state.boot_id, recovered.boot_id_before_reboot)
-            self.assertEqual(self.executor.boot_id, recovered.boot_id_after_reboot)
-            self.assertTrue(recovered.active_fault['external_reboot_requested'])
-            self.assertFalse(any(c[1] == 'reboot' for c in self.executor.slurm_calls))
-            cli.assert_called_once()
-
-    def test_ec2_ack_unreadable_boot_never_restores_or_reboots(self):
-        with self.ec2_fallback() as (handler, state, cli):
-            with self.assertRaisesRegex(session.Refusal, 'completion is not established'):
-                handler._active_reboot_escalation(state)
-            self.executor.jobs = []
-            self.executor.maintenance_failures['boot-id'] = (255, 'unreachable')
-            with self.assertRaisesRegex(session.Refusal, 'could not establish'):
-                handler.recover()
-            self.assert_no_ec2_recovery_claim(handler)
-            cli.assert_called_once()
-
-    def test_ec2_escalation_is_exact_id_once_then_replace(self):
-        self.progress_file.write_text(self.progress(2000))
-        handler = self.make(now=2000)
-        state = handler.start('gpu', active=True).state
-        self.executor.jobs = ['226|aim344-t1|aim344-device|COMPLETING']
-        state.reboot_requests, state.reboot_requested_at = 1, 1000
-        handler.assignment['target_host'] = '10.0.0.1'
-        handler.store.write(state)
-        node = {'InstanceId': state.target_instance_id, 'NodeAddr': '10.0.0.1'}
-        with mock.patch.object(handler, '_replacement_node', return_value=node), \
-             mock.patch.object(handler, '_replacement_capacity'), \
-             mock.patch.object(handler, '_replacement_instance', return_value={'State': {'Name': 'running'}}), \
-             mock.patch.object(handler, '_cloud', return_value={}) as cloud:
-            with self.assertRaisesRegex(session.Refusal, 'completion is not established'):
-                handler._active_reboot_escalation(state)
-            cloud.assert_called_once_with('ec2', 'reboot-instances', {'InstanceIds': [state.target_instance_id]})
-            self.assertTrue(handler.store.read().active_fault['external_reboot_attempted'])
-            handler.clock = lambda: 2200
-            with self.assertRaisesRegex(session.Refusal, 'Replacement is required'):
-                handler._active_reboot_escalation(state)
-            self.assertEqual(1, cloud.call_count)
-        handler._replacement_idle(allow_cleanup=True)  # pre-retirement only
-        with self.assertRaises(session.Refusal):
-            handler._replacement_idle()  # admission must remain strictly empty
-        self.executor.jobs = ['227|aim344-t1|aim344-device|COMPLETING']
-        with self.assertRaises(session.Refusal):
-            handler._replacement_idle(allow_cleanup=True)
-
-
-class CloudResponse(fixture.Base):
-    def test_only_no_output_api_accepts_empty_zero_exit(self):
-        handler = self.make()
-        handler.assignment['replacement'] = {'enabled': True, 'region': 'eu-south-2'}
-        for body in ('', ' \n\t'):
-            with self.subTest(body=body), mock.patch.object(
-                    self.executor, 'run_cloud', create=True,
-                    return_value=session.Completed(0, body, '')):
-                self.assertEqual({}, handler._cloud('ec2', 'reboot-instances', {}))
-                for service, action in (('ec2', 'describe-instances'),
-                                        ('ec2', 'terminate-instances'),
-                                        ('pcs', 'get-cluster'),
-                                        ('pcs', 'get-compute-node-group'),
-                                        ('ssm', 'send-command'),
-                                        ('ssm', 'get-command-invocation')):
-                    with self.subTest(action=action), self.assertRaisesRegex(
-                            session.Refusal, 'unreadable'):
-                        handler._cloud(service, action, {})
-
-    def test_nonempty_json_and_errors_keep_existing_contract(self):
-        handler = self.make()
-        handler.assignment['replacement'] = {'enabled': True, 'region': 'eu-south-2'}
-        for body, expected in (('{}', {}), ('{"Reservations": []}', {'Reservations': []})):
-            with mock.patch.object(self.executor, 'run_cloud', create=True,
-                                   return_value=session.Completed(0, body, '')):
-                self.assertEqual(expected, handler._cloud('ec2', 'describe-instances', {}))
-        for rc, body in ((0, 'not JSON'), (0, '{'), (1, ''), (124, ''), (255, '{}')):
-            with self.subTest(rc=rc, body=body), mock.patch.object(
-                    self.executor, 'run_cloud', create=True,
-                    return_value=session.Completed(rc, body, 'fixture error')):
-                with self.assertRaises(session.Refusal):
-                    handler._cloud('ec2', 'reboot-instances', {})
+        before = list(self.executor.slurm_calls), list(self.executor.maintenance_calls)
+        with self.assertRaisesRegex(session.Refusal, 'observation window'):
+            handler._active_reboot_escalation(state)
+        handler.clock = lambda: 2200
+        with self.assertRaisesRegex(session.Refusal, 'Replacement is required'):
+            handler._active_reboot_escalation(state)
+        self.assertEqual('replacement-required', handler.store.read().phase)
+        self.assertEqual(before, (self.executor.slurm_calls, self.executor.maintenance_calls))
 
 
 class ProgressAndKernel(fixture.Base):
@@ -614,140 +384,6 @@ class ProgressAndKernel(fixture.Base):
                 self.make()._active_progress(session.State(job_id='226'))
 
 
-class CleanupReplacement(fixture.Base):
-    executor: replacement_fixture.ReplacementExecutor
-    def setUp(self):
-        bench = replacement_fixture.Replacement()
-        bench.setUp()
-        self.__dict__.update(bench.__dict__)
-    retired = replacement_fixture.Replacement.retired
-    no_roll = replacement_fixture.Replacement.no_roll
-
-    def active_cleanup(self):
-        handler = self.no_roll()
-        state = handler.store.read()
-        state.kind = 'gpu'
-        state.phase = 'fault-applied'
-        state.job_id = '226'
-        state.prepared = ['drain', 'gpu-prepare-recorded', 'gpu-flr-attempted']
-        state.active_fault = {'mutation': 'gpu-flr', 'outcome': 'unknown-or-refused', 'events': []}
-        handler.store.write(state)
-        self.executor.jobs = ['226|aim344-t1|aim344-device|COMPLETING']
-        self.executor.node_state = 'ALLOCATED+COMPLETING+DRAIN+NOT_RESPONDING'
-        self.executor.maintenance_failures['instance-id'] = (255, 'fixture unreachable')
-        self.executor.maintenance_failures['replacement-evidence'] = (255, 'fixture unreachable')
-        with self.assertRaises(session.Refusal):
-            handler.recover()
-        self.assertEqual('replacement-required', handler.store.read().phase)
-        self.assertFalse(handler.store.read().active_fault.get('external_reboot_attempted'))
-        return handler
-
-    def test_unreachable_cg_without_reboot_receipt_retires_exact_target_and_updates_route(self):
-        handler = self.active_cleanup()
-        self.executor.addresses[replacement_fixture.NEW] = '10.0.0.9'
-        def after(action):
-            if action == 'terminate-instances':
-                self.assertIn('Users=root', self.executor.reservation)
-                self.executor.jobs = []
-                self.executor.maintenance_failures.clear()
-        self.executor.after_cloud = after
-        result = handler.replace()
-        self.assertEqual('runtime-ready', result.state.phase)
-        # Decision 4: only --operator replace reaches this route now.
-        self.assertEqual('operator-replacement', result.state.recovered_by)
-        self.assertEqual(replacement_fixture.NEW, result.state.target_instance_id)
-        self.assertEqual('10.0.0.9', handler.assignment['target_host'])
-        self.assertEqual('10.0.0.9', self.executor.target_host)
-        self.assertEqual([[replacement_fixture.OLD]], self.retired())
-        self.assertFalse(self.executor.reservation)
-        handler.replace()
-        self.assertEqual([[replacement_fixture.OLD]], self.retired())
-
-    def test_residual_cleanup_blocks_successor_admission_not_retirement(self):
-        handler = self.active_cleanup()
-        self.executor.after_cloud = lambda action: (self.executor.maintenance_failures.clear()
-                                                   if action == 'terminate-instances' else None)
-        with self.assertRaisesRegex(session.Refusal, 'empty readable queue'):
-            handler.replace()
-        self.assertEqual([[replacement_fixture.OLD]], self.retired())
-        self.assertNotIn(['admit-replacement'], self.executor.maintenance_calls)
-        self.assertFalse(any('State=RESUME' in call for call in self.executor.slurm_calls))
-        self.executor.jobs = []
-        self.assertEqual('runtime-ready', handler.replace().state.phase)
-        self.assertEqual([[replacement_fixture.OLD]], self.retired())
-
-    def test_foreign_new_running_multiple_malformed_queue_never_retired(self):
-        handler = self.active_cleanup()
-        for jobs in (['226|aim344-t2|aim344-device|COMPLETING'],
-                     ['227|aim344-t1|aim344-device|COMPLETING'],
-                     ['226|aim344-t1|aim344-device|RUNNING'], ['malformed'],
-                     ['226|aim344-t1|aim344-device|COMPLETING', '227|aim344-t2|aim344-device|RUNNING']):
-            with self.subTest(jobs=jobs):
-                self.executor.jobs = jobs
-                with self.assertRaises(session.Refusal):
-                    handler.replace()
-                self.assertEqual([], self.retired())
-
-    def test_field_shaped_foreign_reason_never_retires_completing_job(self):
-        from test_slurm_reason import FOREIGN_SUFFIXES
-        handler = self.active_cleanup()
-        for suffix in FOREIGN_SUFFIXES:
-            with self.subTest(suffix=suffix):
-                self.executor.node_reason = 'aim344-device-recovery' + suffix
-                with self.assertRaises(session.Refusal):
-                    handler.replace()
-                self.assertEqual([], self.retired())
-
-    def test_changed_scheduler_or_cloud_identity_no_retirement(self):
-        handler = self.active_cleanup()
-        for key, value in (('node_id', replacement_fixture.PEER),
-                           ('node_address', '10.0.0.99'), ('member_bad', 'SubnetId'),
-                           ('node_reason', 'other-owner')):
-            original = getattr(self.executor, key)
-            setattr(self.executor, key, value)
-            with self.subTest(key=key), self.assertRaises(session.Refusal):
-                handler.replace()
-            self.assertEqual([], self.retired())
-            setattr(self.executor, key, original)
-
-    def test_unreachable_evidence_exception_does_not_block_exact_replacement(self):
-        import subprocess
-        handler = self.active_cleanup()
-        original = self.executor.run_maintenance
-        def maintenance_call(argv, timeout=None):
-            if argv == ['replacement-evidence']:
-                raise subprocess.TimeoutExpired('ssh', 30)
-            return original(argv, timeout)
-        def after(action):
-            if action == 'terminate-instances':
-                self.executor.jobs = []
-                self.executor.maintenance_failures.clear()
-        self.executor.after_cloud = after
-        with mock.patch.object(self.executor, 'run_maintenance', side_effect=maintenance_call):
-            self.assertEqual('runtime-ready', handler.replace().state.phase)
-        self.assertEqual(124, handler._replacement_record()['originals_capture']['returncode'])
-        self.assertEqual([[replacement_fixture.OLD]], self.retired())
-
-    def test_queue_changed_during_evidence_capture_prevents_retirement(self):
-        handler = self.active_cleanup()
-        self.executor.after_evidence = lambda: setattr(self.executor, 'jobs',
-                                                       ['227|aim344-t1|aim344-device|RUNNING'])
-        with self.assertRaises(session.Refusal):
-            handler.replace()
-        self.assertEqual([], self.retired())
-
-    def test_lost_retirement_ack_retry_never_targets_successor(self):
-        handler = self.active_cleanup()
-        self.executor.terminate_ack_lost = True
-        with self.assertRaises(session.Refusal):
-            handler.replace()
-        self.assertEqual([[replacement_fixture.OLD]], self.retired())
-        self.executor.jobs = []
-        self.executor.maintenance_failures.clear()
-        self.assertEqual('runtime-ready', handler.replace().state.phase)
-        self.assertEqual([[replacement_fixture.OLD]], self.retired())
-
-
 class KernelBoundary(unittest.TestCase):
     def test_null_boot_refused_before_journal_spawn(self):
         import contextlib
@@ -801,7 +437,7 @@ class KernelBoundary(unittest.TestCase):
                 return real_popen([sys.executable, '-c', program], **kwargs)
             with mock.patch.object(maintenance.subprocess, 'Popen', side_effect=popen), \
                  mock.patch.object(maintenance, 'environment', return_value=os.environ.copy()), \
-                 mock.patch.object(maintenance, 'instance_identity', return_value=replacement_fixture.OLD), \
+                 mock.patch.object(maintenance, 'instance_identity', return_value=OLD), \
                  contextlib.redirect_stdout(output):
                 maintenance.kernel_evidence({}, boot)
             record = json.loads(output.getvalue())
@@ -821,7 +457,7 @@ class KernelBoundary(unittest.TestCase):
         output = io.StringIO()
         with mock.patch.object(maintenance.subprocess, 'Popen', side_effect=popen), \
              mock.patch.object(maintenance, 'environment', return_value=os.environ.copy()), \
-             mock.patch.object(maintenance, 'instance_identity', return_value=replacement_fixture.OLD), \
+             mock.patch.object(maintenance, 'instance_identity', return_value=OLD), \
              contextlib.redirect_stdout(output):
             maintenance.kernel_evidence({}, boot, 1793688213)
         self.assertEqual('--since=@1793688213', commands[0][-1])
@@ -839,7 +475,7 @@ class KernelBoundary(unittest.TestCase):
             return real_popen(command + ['--help'], **kwargs)
 
         with mock.patch.object(maintenance.subprocess, 'Popen', side_effect=popen), \
-             mock.patch.object(maintenance, 'instance_identity', return_value=replacement_fixture.OLD), \
+             mock.patch.object(maintenance, 'instance_identity', return_value=OLD), \
              contextlib.redirect_stdout(output):
             self.assertEqual(0, maintenance.kernel_evidence({'slurm_bin': '/unused'},
                                                           'aaaaaaaa-0000-0000-0000-000000000001'))
@@ -862,7 +498,7 @@ class KernelBoundary(unittest.TestCase):
                 process.poll.return_value = None if deadline else 1
                 output = io.StringIO()
                 with mock.patch.object(maintenance.subprocess, 'Popen', return_value=process), \
-                     mock.patch.object(maintenance, 'instance_identity', return_value=replacement_fixture.OLD), \
+                     mock.patch.object(maintenance, 'instance_identity', return_value=OLD), \
                      contextlib.redirect_stdout(output):
                     if deadline:
                         with mock.patch.object(selectors, 'DefaultSelector') as selector, \

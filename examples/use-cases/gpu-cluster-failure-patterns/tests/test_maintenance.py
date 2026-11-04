@@ -7,12 +7,17 @@ that stand between the coordinator's maintenance key and root on the fault
 target. Whether a device operation succeeds is the existing helper's business,
 and a separate hardware acceptance track.
 """
+import contextlib
+import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 LAB = Path(__file__).resolve().parents[1]
 HELPER = LAB / 'facilitator' / 'maintenance.py'
@@ -251,6 +256,93 @@ class Configuration(unittest.TestCase):
         with self.assertRaises(maintenance.Refusal) as caught:
             maintenance.collect('0', config)
         self.assertIn('regular file', str(caught.exception))
+
+
+class ImageDigest(unittest.TestCase):
+    def test_ordered_batches_and_short_reads(self):
+        # Cross a batch boundary, with distinct chunks and a partial last chunk.
+        data = b''.join(bytes([i]) * (1024 * 1024) for i in range(33)) + b'end'
+        with tempfile.TemporaryFile() as image:
+            image.write(data)
+            image.flush()
+            real_pread = os.pread
+
+            def short_read(fd, size, offset):
+                return real_pread(fd, min(size, 131071), offset)
+            with mock.patch.object(maintenance.os, 'pread', side_effect=short_read):
+                self.assertEqual(maintenance._image_digest(image.fileno(), len(data)),
+                                 hashlib.sha256(data).hexdigest())
+            self.assertEqual(image.tell(), len(data))
+
+    def test_premature_eof_and_io_error_refuse(self):
+        with tempfile.TemporaryFile() as image:
+            image.write(b'short')
+            image.flush()
+            with self.assertRaisesRegex(maintenance.Refusal, 'changed size'):
+                maintenance._image_digest(image.fileno(), 100)
+            with mock.patch.object(maintenance.os, 'pread', side_effect=OSError('read failure')):
+                with self.assertRaisesRegex(OSError, 'read failure'):
+                    maintenance._image_digest(image.fileno(), 5)
+
+
+class RootStaging(unittest.TestCase):
+    """Recovery's remount-staging step with the root-directory staging policy."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        parent = Path(self.tmp.name) / 'opt'
+        self.stage = parent / 'aim344'
+        self.stage.mkdir(parents=True)
+        parent.chmod(0o755)
+        self.stage.chmod(0o755)
+        pins = {}
+        for name in ('aim344.sqsh', 'nccl-baseline.sqsh'):
+            data = f'pinned {name}'.encode()
+            (self.stage / name).write_bytes(data)
+            (self.stage / name).chmod(0o644)
+            pins[name] = hashlib.sha256(data).hexdigest()
+        self.config = {'stage_dir': str(self.stage), 'staging_policy': 'root-directory',
+                       'staging_image_sha256': pins,
+                       'slurm_bin': '/opt/aws/pcs/scheduler/slurm-25.05/bin'}
+        self.mount_target = '/'
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def staging(self):
+        def findmnt(argv, **kwargs):
+            self.assertEqual('/usr/bin/findmnt', argv[0])
+            return subprocess.CompletedProcess(argv, 0, self.mount_target + '\n', '')
+        out = io.StringIO()
+        with mock.patch.object(maintenance, 'STAGING_UID', os.getuid()), \
+                mock.patch.object(maintenance.subprocess, 'run', side_effect=findmnt), \
+                contextlib.redirect_stdout(out):
+            code = maintenance.remount_staging(self.config)
+        return code, out.getvalue()
+
+    def test_pinned_images_on_the_root_filesystem_need_no_bind_mount(self):
+        code, out = self.staging()
+        self.assertEqual(0, code)
+        self.assertIn('verified pinned root staging', out)
+
+    def test_a_missing_changed_or_writable_image_or_an_overlaid_source_refuses(self):
+        for damage in ('missing', 'changed', 'writable', 'overlaid', 'unpinned'):
+            with self.subTest(damage=damage):
+                self.tearDown()
+                self.setUp()
+                image = self.stage / 'aim344.sqsh'
+                if damage == 'missing':
+                    image.unlink()
+                if damage == 'changed':
+                    image.write_bytes(b'another image')
+                if damage == 'writable':
+                    image.chmod(0o666)
+                if damage == 'overlaid':
+                    self.mount_target = str(self.stage)
+                if damage == 'unpinned':
+                    del self.config['staging_image_sha256']['nccl-baseline.sqsh']
+                with self.assertRaises(maintenance.Refusal):
+                    self.staging()
 
 
 if __name__ == '__main__':

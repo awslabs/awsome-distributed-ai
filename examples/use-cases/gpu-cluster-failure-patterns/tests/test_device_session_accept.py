@@ -22,9 +22,7 @@ Its evidence is the recorded hardware cycles in REWORK-ACCEPTANCE.md.
 
 Run: python3 -m unittest discover -s <lab>/tests -p 'test_*.py'
 """
-import contextlib
 import importlib.util
-import io
 import json
 import multiprocessing
 import os
@@ -114,7 +112,7 @@ def _hold_lock(state_dir, started_event):
 
     Module level so it survives being pickled for the spawn start method.
     """
-    store = session.StateStore(state_dir, 'table-1', target_node='gpu-g7-1')
+    store = session.StateStore(state_dir, 'table-1')
     with store.exclusive():
         started_event.set()
         time.sleep(30)
@@ -582,20 +580,6 @@ class F17FixtureFollowsTheAssignment(Base):
         self.assertEqual(['restore-runtime', '--participant', 'aim344-t1'],
                          [str(a) for a in restores[0]])
 
-    def test_each_table_restores_its_own_account(self):
-        """A negative control: the name must track the assignment, not be fixed."""
-        handler = self.make(assignment='table-2')
-        handler.store.write(self.baseline_for(session.State(
-            phase='investigating', kind='efa', started_at=1.0,
-            target_node='gpu-g7-1', target_instance_id='i-0123456789abcdef0',
-            boot_id=BOOT_BEFORE, prepared=['drain', 'efa-unbind-attempted'])))
-        handler.recover()
-        restores = [call for call in self.executor.maintenance_calls
-                    if call and call[0] == 'restore-runtime']
-        self.assertEqual(['restore-runtime', '--participant', 'aim344-t2'],
-                         [str(a) for a in restores[0]])
-
-
 class F17MaintenanceParticipantAllowlist(unittest.TestCase):
     def test_restore_runtime_accepts_a_named_participant(self):
         action, options = maintenance.parse(['restore-runtime', '--participant',
@@ -671,197 +655,6 @@ class F17FixtureArtifacts(unittest.TestCase):
 # --------------------------------------------------------------------------
 # F6: the deadline safeguard is scheduled, bounded, and recorded distinctly.
 # --------------------------------------------------------------------------
-class F6ScheduledDeadlineRecovery(Base):
-    def run_sweep(self, now):
-        """One sweep pass using the recording executor, not the real routes.
-
-        The default factory builds a DeviceSession that would reach real ssh and
-        real scontrol. The tests need the same decisions with the calls recorded,
-        so they inject a factory that shares this test's executor.
-        """
-        config = session.load_config(self.config_path, require_root_owned=False)
-        return session.sweep(
-            config, clock=lambda: now,
-            session_factory=lambda assignment_id: session.DeviceSession(
-                config, assignment_id, executor=self.executor, clock=lambda: now))
-
-    def test_a_sweep_entry_point_exists_and_covers_every_assignment(self):
-        """The per-assignment hook needed somebody to type it.
-
-        Nothing invoked it: no systemd timer and no cron entry on either node
-        (participant-revision/runs/rework2-inspect-target/output.log:28-29 and
-        rework2-inspect-coordinator/output.log:30-31).
-        """
-        self.assertTrue(hasattr(session, 'sweep'))
-        summary = self.run_sweep(1000.0)
-        self.assertEqual(2, len(summary), summary)
-        self.assertTrue(any('table-1' in line for line in summary))
-        self.assertTrue(any('table-2' in line for line in summary))
-
-    def test_an_abandoned_round_past_its_deadline_is_recovered_unattended(self):
-        handler = self.make(now=9999.0)
-        handler.store.write(self.baseline_for(session.State(
-            phase='investigating', kind='efa', started_at=1.0,
-            target_node='gpu-g7-1', target_instance_id='i-0123456789abcdef0',
-            boot_id=BOOT_BEFORE, prepared=['drain', 'efa-unbind-attempted'],
-            deadline_at=2000.0)))
-        summary = self.run_sweep(9999.0)
-        line = next(entry for entry in summary if entry.startswith('table-1'))
-        self.assertIn('recovered on its deadline', line)
-        self.assertIn('recovered_by deadline', line)
-        after = handler.store.read()
-        self.assertEqual('runtime-ready', after.phase)
-        # Recorded as a deadline recovery, never as a diagnosis the participant
-        # earned: the plan requires those to stay distinguishable.
-        self.assertEqual('deadline', after.recovered_by)
-        self.assertEqual(1, after.deadline_attempts)
-
-    def test_a_round_within_its_deadline_is_not_touched(self):
-        """The positive control for the sweep: it must not recover everything."""
-        handler = self.make()
-        handler.store.write(session.State(
-            phase='investigating', kind='efa', started_at=1.0,
-            target_node='gpu-g7-1', target_instance_id='i-0123456789abcdef0',
-            boot_id=BOOT_BEFORE, prepared=['drain', 'efa-unbind-attempted'],
-            deadline_at=9_000_000.0))
-        summary = self.run_sweep(1000.0)
-        line = next(entry for entry in summary if entry.startswith('table-1'))
-        self.assertIn('within its deadline', line)
-        self.assertEqual([], self.executor.reboots())
-        self.assertEqual([], self.executor.resumes())
-        self.assertEqual('investigating', handler.store.read().phase)
-
-    def test_a_completed_round_is_not_recovered_again(self):
-        handler = self.make(now=9999.0)
-        handler.store.write(session.State(
-            phase='runtime-ready', kind='efa', started_at=1.0,
-            target_node='gpu-g7-1', target_instance_id='i-0123456789abcdef0',
-            recovered_by='participant', deadline_at=2000.0))
-        summary = self.run_sweep(9999.0)
-        line = next(entry for entry in summary if entry.startswith('table-1'))
-        self.assertIn('nothing due', line)
-        self.assertEqual([], self.executor.reboots())
-        self.assertEqual('participant', handler.store.read().recovered_by)
-
-    def test_repeated_sweeps_stop_after_the_allowed_attempts(self):
-        """Bounded failure: a stuck table must not be mutated on every tick."""
-        handler = self.make(now=9999.0)
-        handler.store.write(session.State(
-            phase='investigating', kind='efa', started_at=1.0,
-            target_node='gpu-g7-1', target_instance_id='i-0123456789abcdef0',
-            boot_id=BOOT_BEFORE, prepared=['drain', 'efa-unbind-attempted'],
-            deadline_at=2000.0))
-        # Final finding 2 supersedes the old fallback expectation: this failure
-        # retires the node without reboot/runtime changes; sweeps remain bounded.
-        self.executor.maintenance_failures['efa-rebind'] = (
-            1, 'The rebind did not succeed.\n')
-        self.executor.maintenance_failures['restore-runtime'] = (
-            1, 'restore-runtime failed.\n')
-        lines = []
-        for _ in range(5):
-            lines.append(next(entry for entry in self.run_sweep(9999.0)
-                              if entry.startswith('table-1')))
-        attempted = [line for line in lines if 'did not complete' in line]
-        abandoned = [line for line in lines if 'operator replacement required' in line]
-        self.assertEqual(3, len(attempted), lines)
-        self.assertEqual(2, len(abandoned), lines)
-        self.assertEqual(3, handler.store.read().deadline_attempts)
-        self.assertEqual([], self.executor.reboots())
-        self.assertEqual([], self.executor.resumes())
-        self.assertNotIn('restore-runtime', self.executor.actions())
-        self.assertEqual('replacement-required', handler.store.read().phase)
-
-    def test_one_stuck_table_does_not_stop_the_other(self):
-        # Fairness applies to different physical nodes. The old fixture put
-        # both rounds on gpu-g7-1, incorrectly requiring bypass of its owner.
-        self.config_body['assignments']['table-2']['target_node'] = 'gpu-g7-9'
-        self.write_config()
-        stuck = self.make(assignment='table-1', now=9999.0)
-        stuck.store.write(session.State(
-            phase='investigating', kind='efa', started_at=1.0,
-            target_node='gpu-g7-1', target_instance_id='i-0123456789abcdef0',
-            boot_id=BOOT_BEFORE, prepared=['drain', 'efa-unbind-attempted'],
-            deadline_at=2000.0,
-            deadline_attempts=99))
-        healthy = self.make(assignment='table-2', now=9999.0)
-        healthy.store.write(self.baseline_for(session.State(
-            phase='investigating', kind='efa', started_at=1.0,
-            target_node='gpu-g7-9', target_instance_id='i-0123456789abcdef0',
-            boot_id=BOOT_BEFORE, prepared=['drain', 'efa-unbind-attempted'],
-            deadline_at=2000.0)))
-        summary = self.run_sweep(9999.0)
-        first = next(line for line in summary if line.startswith('table-1'))
-        second = next(line for line in summary if line.startswith('table-2'))
-        self.assertIn('operator replacement required', first)
-        self.assertIn('recovered on its deadline', second)
-
-    def test_an_unreadable_state_record_is_reported_not_raised(self):
-        """An unattended sweep must survive one corrupt record."""
-        (self.state_dir / 'table-1.json').write_text('{not json')
-        os.chmod(self.state_dir / 'table-1.json', 0o600)
-        summary = self.run_sweep(9999.0)
-        line = next(entry for entry in summary if entry.startswith('table-1'))
-        self.assertIn('unreadable state', line)
-        self.assertTrue(any('table-2' in entry for entry in summary))
-
-    def test_the_sweep_records_a_deadline_attempt_even_when_it_fails(self):
-        handler = self.make(now=9999.0)
-        handler.store.write(session.State(
-            phase='investigating', kind='efa', started_at=1.0,
-            target_node='gpu-g7-1', target_instance_id='i-0123456789abcdef0',
-            boot_id=BOOT_BEFORE, prepared=['drain', 'efa-unbind-attempted'],
-            deadline_at=2000.0))
-        # A safety refusal from the device helper: recovery must stop rather than
-        # reboot, and the attempt must still be counted.
-        self.executor.maintenance_failures['efa-rebind'] = (
-            1, 'An unapproved job is using the target node.\n')
-        summary = self.run_sweep(9999.0)
-        line = next(entry for entry in summary if entry.startswith('table-1'))
-        self.assertIn('did not complete', line)
-        self.assertEqual(1, handler.store.read().deadline_attempts)
-        self.assertEqual([], self.executor.reboots())
-
-    def test_the_sweep_is_installed_as_a_schedule_not_left_to_a_person(self):
-        """F6's actual complaint: the hook was never reachable unattended."""
-        flat = flattened(INSTALLER)
-        self.assertIn('aim344-deadline-sweep.timer', flat)
-        self.assertIn('aim344-device-session --sweep', flat)
-        self.assertIn('systemctl enable --now aim344-deadline-sweep.timer', flat)
-        # oneshot with a start timeout: a hung pass is killed rather than left
-        # holding the per-node lock, and the next tick is the retry.
-        self.assertIn('Type=oneshot', flat)
-        self.assertIn('TimeoutStartSec=', flat)
-
-    def test_the_sweep_command_line_is_accepted_by_the_helper(self):
-        """--sweep must not need --assignment, and must refuse both together.
-
-        Before the repair, argparse itself rejected the invocation because
-        --assignment was required, so a scheduled `--sweep` could never even
-        parse. stderr is captured rather than left to interleave with the test
-        runner's own output.
-        """
-
-        captured = io.StringIO()
-        with contextlib.redirect_stderr(captured):
-            code = session.main(['--sweep', '--config', str(self.config_path)])
-        # Not root in the test environment, so this refuses on privilege or on
-        # the config's ownership check rather than on argument parsing. Either
-        # way it is a Refusal the helper produced, not an argparse exit.
-        self.assertEqual(3, code, captured.getvalue())
-        self.assertNotIn('the following arguments are required',
-                         captured.getvalue())
-
-    def test_sweep_and_expire_together_are_refused(self):
-        """A negative control: the two modes must not silently both apply."""
-
-        captured = io.StringIO()
-        with contextlib.redirect_stderr(captured):
-            code = session.main(['--sweep', '--expire', '--assignment', 'table-1',
-                                 '--config', str(self.config_path)])
-        self.assertEqual(3, code, captured.getvalue())
-
-
-
 # --------------------------------------------------------------------------
 # F5: an interrupted client, and re-entry without repeated mutation.
 # --------------------------------------------------------------------------
@@ -941,8 +734,7 @@ class F5InterruptionAndReEntry(Base):
         child.start()
         try:
             self.assertTrue(started.wait(10), 'child never took the lock')
-            store = session.StateStore(self.state_dir, 'table-1',
-                                       target_node='gpu-g7-1')
+            store = session.StateStore(self.state_dir, 'table-1')
             with self.assertRaises(session.Refusal):
                 with store.exclusive():
                     pass

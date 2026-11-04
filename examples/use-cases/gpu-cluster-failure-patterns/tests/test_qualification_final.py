@@ -30,10 +30,10 @@ class QualificationBench(bench.Base):
             state.baseline_check_results[key] = {'verdict': 'NOT-COLLECTED'}
         self.make().store.write(state)
 
-    def attempt(self, deadline=False):
+    def attempt(self):
         try:
-            handler = self.make(now=9999.0 if deadline else 1000.0)
-            result = handler.expire() if deadline else handler.recover()
+            handler = self.make()
+            result = handler.recover()
             refusal = None
         except session.Refusal as error:
             result, refusal = None, error
@@ -99,12 +99,6 @@ class IncompletePass(QualificationBench):
         result, refusal = self.attempt()
         self.assert_isolated(result, refusal, 'recovery-failed')
 
-    def test_deadline_skipped_pass_does_not_resume(self):
-        self.start_with_baseline('PASS')
-        self.executor.check_output['6'] = bench.PASS_6 + SKIPPED[1]
-        result, refusal = self.attempt(deadline=True)
-        self.assert_isolated(result, refusal, 'recovery-failed')
-
     def test_complete_clean_pass_all_baselines(self):
         for baseline in ('PASS', 'absent', 'NOT-COLLECTED', 'WARN'):
             with self.subTest(baseline=baseline):
@@ -145,21 +139,13 @@ class UnsupportedWarn(QualificationBench):
     def test_wrong_embedded_name_stays_refused(self):
         self.warn_round(warnings.WARN2_MEMLOCK_COMPLETE.replace('2-efa-enumeration', '6-efa-loopback'))
 
-    def test_replacement_required_holds_pair_and_evidence_on_retry(self):
+    def test_replacement_required_holds_evidence_on_retry(self):
         self.warn_round(warnings.WARN2_MEMLOCK_COMPLETE)
         state = self.make().store.read()
         result, refusal = self.attempt()
         self.assert_isolated(result, refusal, 'replacement-required')
         self.assertEqual(state.operation, self.make().store.read().operation)
         self.assertEqual(state.baseline_check_results, self.make().store.read().baseline_check_results)
-        with self.assertRaises(session.Refusal):
-            self.make(assignment='table-2').start('efa')
-
-    def test_deadline_memlock_warn_requires_replacement(self):
-        self.executor.check_output['2'] = warnings.WARN2_MEMLOCK_COMPLETE
-        self.make().start('efa')
-        result, refusal = self.attempt(deadline=True)
-        self.assert_isolated(result, refusal, 'replacement-required')
 
     def test_clean_pass_after_memlock_baseline_still_resumes(self):
         self.executor.check_output['2'] = warnings.WARN2_MEMLOCK_COMPLETE

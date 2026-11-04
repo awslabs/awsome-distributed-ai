@@ -246,28 +246,6 @@ class Finding2NoLocalRequestIgnoresExternalPendingReboot(Base):
         self.assertEqual('runtime-ready', result.state.phase)
         self.assertEqual(1, len(self.executor.resumes()))
 
-    def test_the_deadline_path_has_the_same_gap(self):
-        """`expire` shares `_recover`, so an abandoned table meets it too."""
-        self.start_efa_and_fail_once()
-        self.executor.node_state = 'IDLE+DRAIN+REBOOT_ISSUED'
-        self.executor.boot_id = 'deadbeef-0000-0000-0000-000000000009'
-        before_actions = list(self.executor.actions())
-        try:
-            result = self.make(now=9999.0).expire()
-        except session.Refusal as refusal:
-            new_actions = self.executor.actions()[len(before_actions):]
-            for mutation in ('efa-rebind', 'remount-staging', 'restore-runtime'):
-                self.assertNotIn(
-                    mutation, new_actions,
-                    f'{mutation} ran before the deadline-path refusal: {refusal}')
-            self.assertEqual([], self.executor.resumes())
-            return
-        self.fail(
-            f'the deadline path restored and resumed the node while the '
-            f'scheduler still held a reboot request this round never issued: '
-            f'phase={result.state.phase!r}')
-
-
 # ---------------------------------------------------------------------------
 # Finding 3 (card body): intact markerless originals repeat, then both
 # token/file loss leads to recapture. Referee's D3/D4 unit and "MAJOR 3" on

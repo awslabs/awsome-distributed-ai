@@ -19,7 +19,7 @@ The request grammar:
   status | collect <allowlisted check> | recover
 No node name, PCI address, job identifier, shell command or check outside the
 collect allowlist is accepted. `replace` is accepted by the grammar and refused:
-an operator runs the replacement route after the session (--operator replace).
+an operator replaces a node that recovery cannot qualify after the session.
 
 `next` starts the next incident in the seat's schedule, which account preparation
 writes into this root-only configuration. `ended <issue id>`, which job.sh sends
@@ -33,7 +33,6 @@ import datetime
 import errno
 import fcntl
 import hashlib
-import ipaddress
 import json
 import os
 from pathlib import Path
@@ -188,10 +187,9 @@ def validate_schedule(entries, world_size=None):
 
 # Decision 4 (PI, 2026-11-02): a node that recovery cannot qualify stays out of
 # service for the rest of the session, and an operator replaces it afterwards.
-# The replacement route itself is unchanged and runs as --operator replace. Many
-# refusals, including some the target prints, are shared with that route and
-# still name `replace` as the next step, so participant output turns those
-# instructions into this statement instead of rewording every refusal.
+# Many refusals, including some the target prints, still name `replace` as the
+# next step, so participant output turns those instructions into this statement
+# instead of rewording every refusal.
 OPERATOR_REPLACEMENT = ('Your node stays out of service for the rest of this session; '
                         'an operator replaces it after the session, so you do not '
                         'replace it yourself.')
@@ -475,7 +473,6 @@ class Executor:
         self.target_host = target_host
         self.maintenance_command = maintenance_command
         self.identity_file = identity_file
-        self.known_hosts = ''
 
     def _run(self, argv, timeout):
         try:
@@ -506,9 +503,6 @@ class Executor:
                '-o', 'ConnectTimeout=10']
         if self.identity_file:
             ssh += ['-i', self.identity_file]
-        if self.known_hosts:
-            ssh += ['-o', f'UserKnownHostsFile={self.known_hosts}',
-                    '-o', 'GlobalKnownHostsFile=/dev/null']
         ssh += [f'root@{self.target_host}', '--'] + [str(a) for a in argv]
         if interactive:
             ssh.remove('-n')
@@ -576,36 +570,29 @@ class Executor:
     def run_slurm(self, argv, timeout=None):
         return self._run([str(a) for a in argv], timeout or 60)
 
-    def run_cloud(self, region, service, action, payload):
-        # No participant environment, credential profile, endpoint or argv is accepted.
-        return self._run(['/usr/local/bin/aws', service, action, '--region', region,
-                          '--cli-input-json', json.dumps(payload), '--output', 'json',
-                          '--no-cli-pager'], 90)
-
-
 class State:
     """The small record the transitions need. Root-owned, outside the target."""
 
     FIELDS = ('phase', 'kind', 'started_at', 'target_node', 'target_instance_id',
               'job_id', 'boot_id', 'recovered_by', 'recovered_at', 'notes',
-              'collected', 'deadline_at', 'round', 'operation', 'prepared',
+              'collected', 'round', 'operation', 'prepared',
               'original_node_state',
               'original_node_reason', 'reboot_completed', 'boot_id_after_reboot',
               'boot_id_before_reboot', 'reboot_requested_at', 'reboot_requests',
               'check_results', 'baseline_check_results', 'failure',
-              'deadline_attempts', 'active_efa_evidence', 'active_fault',
+              'active_efa_evidence', 'active_fault',
               'incident')
 
     def __init__(self, phase='ready', kind=None, started_at=None, target_node=None,
                  target_instance_id=None, job_id=None, boot_id=None,
                  recovered_by=None, recovered_at=None, notes='', collected=None,
-                 deadline_at=None, round=1, operation=None, prepared=None,
+                 round=1, operation=None, prepared=None,
                  original_node_state=None,
                  original_node_reason=None, reboot_completed=False,
                  boot_id_after_reboot=None, boot_id_before_reboot=None,
                  reboot_requested_at=None, reboot_requests=0,
                  check_results=None, baseline_check_results=None, failure=None,
-                 deadline_attempts=0, active_efa_evidence=None, active_fault=None,
+                 active_efa_evidence=None, active_fault=None,
                  incident=None):
         if phase not in PHASES:
             raise Refusal(f'Unusable state record: unknown phase {phase!r}.')
@@ -620,7 +607,6 @@ class State:
         self.recovered_at = recovered_at
         self.notes = notes
         self.collected = list(collected or [])
-        self.deadline_at = deadline_at
         # Which round of this assignment produced the evidence. Round numbers
         # keep each round's fault-time observations from being overwritten.
         self.round = int(round or 1)
@@ -655,10 +641,6 @@ class State:
         self.baseline_check_results = dict(baseline_check_results or {})
         # Why recovery stopped, when it did. Cleared on a qualified recovery.
         self.failure = failure
-        # How many times the deadline sweep has already tried this round. Bounds
-        # unattended retries so a stuck table is reported rather than mutated on
-        # every scheduled tick.
-        self.deadline_attempts = int(deadline_attempts or 0)
         # What was observed on the selected EFA immediately before an active
         # injection, and whether it qualified. None for an idle round, which is
         # the distinction the review asked to stop being silent: a round with no
@@ -768,21 +750,12 @@ def _write_private_json(path, data):
 
 
 class StateStore:
-    def __init__(self, directory, assignment_id, target_node=None):
+    def __init__(self, directory, assignment_id):
         self.directory = Path(directory)
         self.assignment_id = assignment_id
         self.path = self.directory / f'{assignment_id}.json'
         self.lock_path = self.directory / f'{assignment_id}.lock'
-        # Exclusion keyed by the physical exercise node, not by the assignment.
-        # Two assignments pointing at the same node take different assignment
-        # locks, so an assignment lock alone lets both scan the other's state,
-        # find it free, and enter preparation. The pair lock below is the one
-        # that makes ownership of the hardware exclusive.
-        self.target_node = target_node
-        self.pair_lock_path = (self.directory / f'pair-{target_node}.lock'
-                               if target_node else None)
         self._lock_handle = None
-        self._pair_handle = None
 
     def read(self):
         if self.path.is_symlink():
@@ -840,37 +813,20 @@ class StateStore:
         return state
 
     class _Lock:
-        def __init__(self, store, pair=False):
+        def __init__(self, store):
             self.store = store
-            self.pair = pair
 
         def __enter__(self):
             self.store._acquire()
-            if self.pair:
-                try:
-                    self.store._acquire_pair()
-                except BaseException:
-                    self.store._release()
-                    raise
             return self.store
 
         def __exit__(self, *exception):
-            if self.pair:
-                self.store._release_pair()
             self.store._release()
             return False
 
     def exclusive(self):
         """Per-assignment exclusion. A second connection is refused, not queued."""
         return self._Lock(self)
-
-    def exclusive_pair(self):
-        """Per-assignment plus per-node exclusion, for anything that mutates.
-
-        Ordering is always assignment lock first, then pair lock, so two
-        requests cannot deadlock against each other.
-        """
-        return self._Lock(self, pair=True)
 
     @staticmethod
     def _flock(path, message):
@@ -891,28 +847,11 @@ class StateStore:
             'Another request for this assignment is in progress. '
             'Wait for it to finish, then run status.')
 
-    def _acquire_pair(self):
-        if self.pair_lock_path is None:
-            raise Refusal('This request needs an exercise node before it can '
-                          'take the node lock.')
-        self.directory.mkdir(parents=True, exist_ok=True)
-        self._pair_handle = self._flock(
-            self.pair_lock_path,
-            'Another table is using this exercise node right now. '
-            'Wait until they finish recovering, then start again.')
-
     def _release(self):
         if self._lock_handle is not None:
             fcntl.flock(self._lock_handle, fcntl.LOCK_UN)
             os.close(self._lock_handle)
             self._lock_handle = None
-
-    def _release_pair(self):
-        if self._pair_handle is not None:
-            fcntl.flock(self._pair_handle, fcntl.LOCK_UN)
-            os.close(self._pair_handle)
-            self._pair_handle = None
-
 
 class Request:
     def __init__(self, verb=None, argument=None, error=None):
@@ -978,8 +917,8 @@ def load_config(path=DEFAULT_CONFIG, require_root_owned=True):
     if require_root_owned and info.st_uid != 0:
         raise Refusal('The session configuration must be owned by root.')
     data = json.loads(path.read_text())
-    if not isinstance(data.get('assignments'), dict) or not data['assignments']:
-        raise Refusal('The session configuration has no assignments.')
+    if not isinstance(data.get('assignments'), dict) or len(data['assignments']) != 1:
+        raise Refusal('The session configuration must hold one assignment.')
     if not data.get('state_dir'):
         raise Refusal('The session configuration has no state directory.')
     return data
@@ -988,7 +927,7 @@ def load_config(path=DEFAULT_CONFIG, require_root_owned=True):
 class Result:
     def __init__(self, state, output=None, saved_path=None, node_state=None,
                  node_reason=None, already_started=False, already_recovered=False,
-                 expired=False, next_step='', incident=None, under_way=False,
+                 next_step='', incident=None, under_way=False,
                  collectable=None, schedule_line=None, current_incident=None):
         self.state = state
         self.output = output
@@ -997,7 +936,6 @@ class Result:
         self.node_reason = node_reason
         self.already_started = already_started
         self.already_recovered = already_recovered
-        self.expired = expired
         self.next_step = next_step
         # `next`: the incident number, and whether its controller step ran.
         self.incident = incident
@@ -1020,151 +958,12 @@ class DeviceSession:
         self.assignment_id = assignment_id
         self.assignment = dict(assignment)
         self.clock = clock
-        self.store = StateStore(config['state_dir'], assignment_id,
-                                target_node=assignment.get('target_node'))
+        self.store = StateStore(config['state_dir'], assignment_id)
         self.slurm_bin = assignment['slurm_bin']
         self.executor = executor or Executor(
             slurm_bin=self.slurm_bin,
             target_host=assignment.get('target_host', assignment['target_node']),
             identity_file=assignment.get('maintenance_identity_file'))
-
-    # Replacement records are per logical node, not per alias or IP. The existing
-    # pair lock serializes writers. Committed bindings and in-flight predecessor
-    # routes are loaded AFTER locking, including by previously constructed handlers.
-    def _replacement_path(self):
-        node = self.assignment['target_node']
-        if not re.fullmatch(r'[A-Za-z0-9_-]+', node):
-            raise Refusal('Unusable assigned node name.')
-        return self.store.directory / f'replacement-{node}.json'
-
-    def _replacement_record(self):
-        path = self._replacement_path()
-        if not path.exists() and not path.is_symlink():
-            return {}
-        info = path.lstat()
-        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
-            raise Refusal('Unusable replacement record.')
-        try:
-            record = json.loads(path.read_text())
-            if (record['node'] != self.assignment['target_node']
-                    or record['phase'] not in ('prepared', 'dispatching', 'waiting',
-                                               'bootstrap', 'qualifying', 'complete')
-                    or not isinstance(record['retired'], list)):
-                raise ValueError('invalid binding')
-            if (not self._valid_instance(record['initial_id'])
-                    or not self._valid_instance(record['old_id'])
-                    or record['old_id'] != record['evidence']['target_instance_id']
-                    or record['old_id'] not in record['retired']
-                    or not all(self._valid_instance(i) for i in record['retired'])
-                    or record['owner'] not in self.config['assignments']):
-                raise ValueError('invalid replacement provenance')
-            if record['phase'] in ('bootstrap', 'qualifying', 'complete'):
-                candidate = record['candidate']
-                if (not self._valid_instance(candidate['instance_id'])
-                        or candidate['instance_id'] in record['retired']):
-                    raise ValueError('invalid candidate')
-                ipaddress.ip_address(candidate['host'])
-            if record['phase'] == 'complete' and record['binding'] != record['candidate']:
-                raise ValueError('invalid committed binding')
-            if record['phase'] != 'complete' and 'binding' in record:
-                raise ValueError('uncommitted successor binding')
-            if 'predecessor' in record:
-                predecessor = record['predecessor']
-                if (predecessor['instance_id'] != record['old_id']
-                        or predecessor['instance_id'] != record['old_snapshot']['InstanceId']
-                        or predecessor['host'] != record['old_snapshot']['PrivateIpAddress']):
-                    raise ValueError('invalid predecessor provenance')
-                ipaddress.ip_address(predecessor['host'])
-            return record
-        except (ValueError, KeyError, TypeError) as error:
-            raise Refusal('Unusable replacement record; nothing changed.') from error
-
-    def _write_replacement(self, record):
-        path = self._replacement_path()
-        self.store.directory.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix('.new')
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, 'w') as output:
-            json.dump(record, output, indent=2, sort_keys=True)
-            output.write('\n')
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, path)
-        _sync_directory(path.parent)
-
-    def _refresh_binding(self, replacing=False):
-        record = self._replacement_record()
-        if not record:
-            return
-        configured = self.config['assignments'][self.assignment_id]['target_instance_id']
-        if configured != record['initial_id']:
-            raise Refusal('This assignment does not belong to the replacement binding.')
-        if record.get('admission_release_pending') and (
-                not replacing or record['owner'] != self.assignment_id):
-            raise Refusal('Replacement admission release is pending; owner must repeat replace.')
-        if record['phase'] == 'complete':
-            binding = record['binding']
-            if binding['instance_id'] in record['retired']:
-                raise Refusal('A retired identity cannot be reused.')
-        else:
-            if not replacing:
-                raise Refusal('The assigned node is being replaced; run replace to continue.')
-            if record['owner'] != self.assignment_id:
-                raise Refusal('Another table owns this replacement.')
-            # This is a route to the already-authorized failed predecessor, NOT
-            # a committed successor. old_id is reserved in retired at preparation
-            # even before dispatch, so it must never be loaded as a binding.
-            # Never derive this route from the newly discovered scheduler node.
-            binding = record.get('predecessor')
-            if not binding:
-                raise Refusal('Replacement predecessor provenance is missing; nothing changed.')
-        self.assignment['target_instance_id'] = binding['instance_id']
-        self.assignment['target_host'] = binding['host']
-        self.executor.target_host = binding['host']
-        # Initial provisioning uses the configured SSH trust. Every successor
-        # uses the per-ID authenticated SSM host file retained across operations.
-        self.executor.known_hosts = (str(self.store.directory / f'host-{binding["instance_id"]}')
-                                     if binding['instance_id'] != record['initial_id'] else '')
-
-    def _cloud(self, service, action, payload):
-        settings = self.assignment.get('replacement')
-        if not settings or settings.get('enabled') is not True:
-            raise Refusal('Replacement provisioning is not enabled for this assignment.')
-        result = self.executor.run_cloud(settings['region'], service, action, payload)
-        if result.returncode:
-            raise Refusal(f'Replacement {service}:{action} did not confirm completion; '
-                          'evidence is kept. Run replace again.')
-        # RebootInstances has no CLI output on success. Other callers need a
-        # JSON response; never turn their missing/malformed output into success.
-        if (service, action) == ('ec2', 'reboot-instances') and not result.stdout.strip():
-            return {}
-        try:
-            return json.loads(result.stdout)
-        except ValueError as error:
-            raise Refusal('Replacement received an unreadable API response.') from error
-
-    @staticmethod
-    def _valid_instance(instance):
-        return isinstance(instance, str) and re.fullmatch(r'i-(?:[0-9a-f]{8}|[0-9a-f]{17})', instance)
-
-    def _replacement_node(self):
-        line = self._node_line()
-        fields = {}
-        for key in ('NodeName', 'InstanceId', 'NodeAddr', 'State'):
-            values = re.findall(rf'\b{key}=(\S+)', line)
-            if len(values) != 1:
-                raise Refusal(f'The scheduler did not return one {key}; replacement waits.')
-            fields[key] = values[0]
-        if (fields['NodeName'] != self.assignment['target_node']
-                or not self._valid_instance(fields['InstanceId'])):
-            raise Refusal('Scheduler identity does not match the assigned target.')
-        try:
-            ipaddress.ip_address(fields['NodeAddr'])
-        except ValueError as error:
-            raise Refusal('Scheduler address is not a literal IP.') from error
-        fields['Reason'] = self._node_field(line, 'Reason')
-        fields['raw_observation'] = line
-        return fields
 
     def _owns_recovery_reason(self, line, state=None):
         """Exact ownership, with one Slurm-produced reboot transition.
@@ -1199,516 +998,6 @@ class DeviceSession:
         flags = re.findall(r'\bState=(\S+)', line)
         return (len(flags) == 1
                 and bool(set(flags[0].split('+')).intersection({'DRAIN', 'DOWN'})))
-
-    def _replacement_instance(self, instance, host=None, retired=False):
-        if not self._valid_instance(instance):
-            raise Refusal('Invalid replacement instance identity.')
-        cfg = self.assignment['replacement']
-        if instance in cfg['protected_instance_ids']:
-            raise Refusal('The coordinator or peer cannot be replaced.')
-        response = self._cloud('ec2', 'describe-instances', {'InstanceIds': [instance]})
-        rows = [row for reservation in response.get('Reservations', [])
-                for row in reservation.get('Instances', [])]
-        if len(rows) != 1 or rows[0].get('InstanceId') != instance:
-            raise Refusal('EC2 did not confirm the exact replacement identity.')
-        row = rows[0]
-        if retired and row.get('State', {}).get('Name') in ('shutting-down', 'terminated'):
-            return row  # Placement may disappear; pre-dispatch snapshot is durable.
-        tags = {tag['Key']: tag['Value'] for tag in row.get('Tags', [])}
-        if (tags.get('aws:pcs:compute-node-group-id') != cfg['group_id']
-                or row.get('CapacityReservationId') != cfg['capacity_reservation_id']
-                or row.get('InstanceType') != cfg['instance_type']
-                or row.get('SubnetId') not in cfg['subnet_ids']
-                or row.get('ImageId') != cfg['image_id']
-                or (host is not None and row.get('PrivateIpAddress') != host)):
-            raise Refusal('EC2 membership, capacity, image or address does not match provisioning.')
-        return row
-
-    def _replacement_capacity(self):
-        cfg = self.assignment['replacement']
-        cluster = self._cloud('pcs', 'get-cluster', {
-            'clusterIdentifier': cfg['cluster_id']}).get('cluster', {})
-        prologs = [item.get('parameterValue') for item in
-                   cluster.get('slurmConfiguration', {}).get('slurmCustomSettings', [])
-                   if item.get('parameterName') == 'Prolog']
-        expected = ('/usr/local/sbin/aim344-replacement-prolog'
-                    if cfg.get('provisioning_mode') == 'ssm-install'
-                    else '/opt/aim344/.prolog/dispatch.sh')
-        if cluster.get('status') != 'ACTIVE' or prologs != [expected]:
-            raise Refusal('The pre-session replacement admission Prolog is not configured.')
-        group = self._cloud('pcs', 'get-compute-node-group', {
-            'clusterIdentifier': cfg['cluster_id'],
-            'computeNodeGroupIdentifier': cfg['group_id']}).get('computeNodeGroup', {})
-        if (group.get('status') != 'ACTIVE' or group.get('id') != cfg['group_id']
-                or group.get('scalingConfiguration') != cfg['scaling_configuration']
-                or group.get('customLaunchTemplate') != cfg['launch_template']):
-            raise Refusal('PCS provisioning changed; replacement does not update group capacity.')
-
-    def _active_cleanup_authority(self, state):
-        # Retirement is a separate participant remedy, not a reward for a
-        # successful SSH/reset/reboot. An unreachable predecessor cannot supply
-        # those receipts. Scheduler + exact cloud membership are checked by
-        # replace immediately before dispatch; this only recognizes the round.
-        return bool(state.active_fault
-                    and state.active_fault.get('mutation') == state.kind + '-flr'
-                    and state.kind + '-flr-attempted' in state.prepared
-                    and state.job_id
-                    and state.target_instance_id == self.assignment['target_instance_id']
-                    and state.target_node == self.assignment['target_node']
-                    and state.phase in ('replacement-required', 'recovery-failed'))
-
-    def _replacement_idle(self, allow_cleanup=False):
-        # Unlike the permissive legacy queue parser, destructive retirement must
-        # reject a malformed row as well as a foreign or unfinished allocation.
-        result = self.executor.run_slurm([
-            str(Path(self.slurm_bin) / 'squeue'), '-h', '-w',
-            self.assignment['target_node'], '-o', '%i|%u|%j|%T'])
-        if result.returncode:
-            raise Refusal('Replacement requires a readable queue.')
-        if result.stdout.strip():
-            state = self.store.read()
-            # Active GPU cleanup may keep the job CG after the allocation ends,
-            # even across a reboot.
-            # Only this round's exact allocation may be retired with its target;
-            # no scancel/pkill, and never a new job by the same participant.
-            own = self._own_job(self._jobs_on_target())
-            if (allow_cleanup and self._active_cleanup_authority(state)
-                    and own and own['id'] == state.job_id and own['state'] == 'COMPLETING'):
-                return True
-            raise Refusal('Replacement requires an empty readable queue. End your allocation first.')
-        return False
-
-    def _replacement_reservation(self, record, release=False):
-        """Keep a whole logical node excluded across no-roll initialization.
-
-        STATIC_ALLOC cannot substitute the peer when the old guest disappears.
-        Only our durable intent may adopt a lost create/delete acknowledgement.
-        This is a Slurm reservation, never an EC2 capacity-reservation mutation.
-        """
-        if self.assignment['replacement'].get('provisioning_mode') != 'ssm-install':
-            return
-        if release and record.get('admission_release_pending') is False:
-            return
-        name = 'aim344-replacement-' + record['old_id']
-        if record.get('admission_reservation_intent') and (
-                not record.get('admission_topology')
-                or (record.get('admission_reservation_confirmed')
-                    and not record.get('admission_lifetime'))):
-            raise Refusal('Admission reservation provenance is incomplete; nothing released.')
-
-        def field(line, key):
-            values = re.findall(rf'(?:^|\s){key}=(\S+)', line)
-            if len(values) != 1:
-                raise Refusal('Incomplete or duplicate admission reservation field: ' + key)
-            return values[0]
-
-        def topology():
-            line = self._node_line()
-            if field(line, 'NodeName') != record['node']:
-                raise Refusal('Admission node topology does not match assignment.')
-            values = {}
-            for key in ('Sockets', 'CoresPerSocket', 'ThreadsPerCore', 'CPUTot'):
-                value = field(line, key)
-                if not re.fullmatch(r'[1-9][0-9]*', value):
-                    raise Refusal('Admission node topology is not complete.')
-                values[key] = int(value)
-            cores = values['Sockets'] * values['CoresPerSocket']
-            if cores * values['ThreadsPerCore'] != values['CPUTot']:
-                raise Refusal('Admission node CPU topology is inconsistent.')
-            return {'cores': cores, 'cpus': values['CPUTot']}
-
-        def observe():
-            result = self._scontrol('show', 'reservation', '-o')
-            if result.returncode:
-                raise Refusal('Admission reservation census is unreadable; nothing released.')
-            matches = []
-            for line in result.stdout.splitlines():
-                if not line.strip() or line.strip() == 'No reservations in the system':
-                    continue
-                names = re.findall(r'\bReservationName=(\S+)', line)
-                if len(names) != 1:
-                    raise Refusal('Malformed admission reservation census.')
-                if names == [name]:
-                    matches.append(line)
-            if len(matches) > 1:
-                raise Refusal('Ambiguous admission reservation.')
-            if not matches:
-                return False
-            line = matches[0]
-            for key, expected in (('Nodes', record['node']), ('NodeCnt', '1'),
-                                  ('Users', 'root'), ('Accounts', '(null)'),
-                                  ('Groups', '(null)'), ('State', 'ACTIVE'),
-                                  ('Features', '(null)'), ('PartitionName', '(null)'),
-                                  ('Licenses', '(null)'), ('BurstBuffer', '(null)'),
-                                  ('MaxStartDelay', '(null)'), ('Duration', '365-00:00:00')):
-                if field(line, key) != expected:
-                    raise Refusal('Admission reservation scope or lifetime changed.')
-            # 25.05.9 accepts STATIC_ALLOC, but prints STATIC. UNLIMITED input
-            # becomes a finite start + YEAR_SECONDS end, not an eternal barrier.
-            flags = field(line, 'Flags').split(',')
-            if sorted(flags) != ['SPEC_NODES', 'STATIC']:
-                raise Refusal('Admission reservation does not pin only the assigned node.')
-            try:
-                times = [datetime.datetime.strptime(field(line, key), '%Y-%m-%dT%H:%M:%S')
-                         .replace(tzinfo=datetime.timezone.utc).timestamp()
-                         for key in ('StartTime', 'EndTime')]
-            except ValueError as error:
-                raise Refusal('Admission reservation timestamps are unreadable.') from error
-            start, end = times
-            now = self.clock()
-            if end - start != 365 * 24 * 3600 or not start <= now < end - 3600:
-                raise Refusal('Admission reservation has expired or insufficient remaining lifetime.')
-            if record.get('admission_reservation_intent'):
-                intent_at = record.get('admission_intent_at')
-                if (not isinstance(intent_at, (int, float))
-                        or not intent_at - 5 <= start <= intent_at + 300):
-                    raise Refusal('Admission reservation start does not match durable intent.')
-                lifetime = record.get('admission_lifetime')
-                if lifetime is not None and lifetime != times:
-                    raise Refusal('Admission reservation lifetime changed since confirmation.')
-            shape = topology()
-            # Partial-core reservations serialize NodeName/CoreIDs; whole-node
-            # reservations have no such section (25.05.9 reservation.c _pack_resv).
-            if (re.search(r'(?:^|\s)(?:NodeName|CoreIDs)=', line)
-                    or field(line, 'CoreCnt') != str(shape['cores'])
-                    or field(line, 'TRES') != 'cpu=' + str(shape['cpus'])
-                    or (record.get('admission_topology') is not None
-                        and record['admission_topology'] != shape)):
-                raise Refusal('Admission reservation does not cover the complete node resources.')
-            if record.get('admission_reservation_intent'):
-                record['admission_lifetime'] = times
-            return True
-
-        present = observe()
-        if release:
-            if not record.get('admission_reservation_intent'):
-                raise Refusal('Missing admission reservation ownership; nothing released.')
-            if (record['phase'] != 'complete' or record.get('binding') != record.get('candidate')
-                    or not record.get('admission_reservation_confirmed')
-                    or not record.get('admission_lifetime') or not record.get('admission_topology')):
-                raise Refusal('Qualified admission binding is incomplete; nothing released.')
-            # Every retry re-establishes BOTH file and directory durability. A
-            # visible complete record may be a rename whose directory sync failed.
-            # This must precede deletion, including reconciliation of a lost ack.
-            self._write_replacement(record)
-            self._replacement_capacity()
-            self._replacement_idle()
-            node = self._replacement_node()
-            candidate = record['candidate']
-            if (node['InstanceId'] != candidate['instance_id'] or node['NodeAddr'] != candidate['host']
-                    or self._current_boot_id() != record['qualified_boot']
-                    or any(flag in node['State'] for flag in
-                           ('DRAIN', 'DOWN', 'REBOOT_', 'POWERING', 'NOT_RESPONDING'))):
-                raise Refusal('Qualified identity changed before admission release; barrier retained.')
-            if present:
-                self._scontrol('delete', 'ReservationName=' + name)
-                if observe():
-                    raise Refusal('Qualified replacement reservation release is pending; repeat replace.')
-            record['admission_release_pending'] = False
-            self._write_replacement(record)
-            return
-        if not record.get('admission_reservation_intent'):
-            if present:
-                raise Refusal('Preexisting reservation is not owned by this replacement.')
-            record['admission_reservation_intent'] = True
-            record['admission_intent_at'] = self.clock()
-            record['admission_topology'] = topology()
-            self._write_replacement(record)
-        if not present:
-            if record.get('admission_reservation_confirmed') or record['phase'] not in ('prepared', 'dispatching'):
-                raise Refusal('Admission barrier disappeared; replacement remains incomplete.')
-            # No existing barrier: a new create attempt may have a later start.
-            # Persist the new window before dispatch; never change it when adopting.
-            record['admission_intent_at'] = self.clock()
-            record.pop('admission_lifetime', None)
-            self._write_replacement(record)
-            self._scontrol('create', 'reservation', 'ReservationName=' + name,
-                           'StartTime=now', 'Duration=UNLIMITED', 'Users=root',
-                           'Nodes=' + record['node'], 'Flags=STATIC_ALLOC')
-            if not observe():
-                raise Refusal('Admission reservation was not confirmed; no retirement.')
-        record['admission_reservation_confirmed'] = True
-        self._write_replacement(record)
-
-    def _replacement_bootstrap(self, record):
-        cfg = self.assignment['replacement']
-        instance = record['candidate']['instance_id']
-        if not record.get('command_id'):
-            # The document has no shell/target parameters. Duplicate unknown-send
-            # bootstrap calls are serialized and idempotent on the same new node.
-            response = self._cloud('ssm', 'send-command', {
-                'DocumentName': cfg['bootstrap_document'],
-                'DocumentVersion': cfg['bootstrap_document_version'],
-                'DocumentHash': cfg['bootstrap_document_sha256'],
-                'DocumentHashType': 'Sha256', 'InstanceIds': [instance],
-                'Parameters': {}, 'MaxConcurrency': '1', 'MaxErrors': '0',
-                'TimeoutSeconds': 600, 'Comment': 'AIM344 assigned replacement bootstrap'})
-            command = response.get('Command', {})
-            if command.get('InstanceIds') != [instance] or not self.BOOT_ID.fullmatch(command.get('CommandId', '')):
-                raise Refusal('Bootstrap acknowledgement did not identify the requested node.')
-            record['command_id'] = command['CommandId']
-            self._write_replacement(record)
-        result = self._cloud('ssm', 'get-command-invocation', {
-            'CommandId': record['command_id'], 'InstanceId': instance})
-        if (result.get('CommandId') != record['command_id'] or result.get('InstanceId') != instance):
-            raise Refusal('Bootstrap result belongs to a different request.')
-        if result.get('Status') != 'Success' or result.get('ResponseCode') != 0:
-            record['bootstrap_result'] = result
-            if result.get('Status') in ('Failed', 'Cancelled', 'TimedOut'):
-                record.pop('command_id', None)
-            self._write_replacement(record)
-            raise Refusal('Replacement bootstrap is incomplete; run replace again. No new retirement.')
-        try:
-            report = json.loads(result['StandardOutputContent'])
-        except (ValueError, KeyError) as error:
-            raise Refusal('Bootstrap returned no authenticated report.') from error
-        if (report.get('instance_id') != instance or report.get('node') != record['node']
-                or report.get('release') != cfg['release_sha256']
-                or report.get('ready') is not True):
-            raise Refusal('Bootstrap identity or pinned materials did not qualify.')
-        key = report.get('host_key', '')
-        if not re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/]+={0,2}', key):
-            raise Refusal('Bootstrap did not return an authenticated SSH host key.')
-        # Authenticated SSM response, never ssh-keyscan or accept-new. Isolated
-        # known_hosts avoids overwriting unrelated administrator trust entries.
-        known = self.store.directory / f'host-{instance}'
-        fd = os.open(known, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, 'w') as output:
-            output.write(f'{record["candidate"]["host"]} {key}\n')
-            output.flush()
-            os.fsync(output.fileno())
-        _sync_directory(known.parent)
-        self.executor.known_hosts = str(known)
-        record['bootstrap_report'] = report
-        record['phase'] = 'qualifying'
-        self._write_replacement(record)
-
-    def replace(self):
-        """Retire one failed identity; repeat requests never retire its successor."""
-        with self.store.exclusive_pair():
-            self._refresh_binding(replacing=True)
-            state = self.store.read()
-            record = self._replacement_record()
-            if record and record['owner'] != self.assignment_id and record['phase'] != 'complete':
-                raise Refusal('Another table owns this replacement.')
-            if record and record['phase'] == 'complete' and record['round'] == state.round and record['owner'] == self.assignment_id:
-                # Crash after binding commit but before assignment-state write.
-                self._replacement_reservation(record, release=True)
-                self._write_replacement(record)
-                state.phase = 'runtime-ready'
-                state.target_instance_id = record['binding']['instance_id']
-                state.boot_id = record['qualified_boot']
-                state.recovered_by = 'operator-replacement'
-                state.recovered_at = record['completed_at']
-                state.failure = None
-                self.store.write(state)
-                return Result(state, already_recovered=True, next_step=self._next_step(state))
-            if self._other_assignment_holding_target():
-                raise Refusal('Another table is using this exercise node.')
-            cfg = self.assignment.get('replacement', {})
-            if not cfg.get('enabled'):
-                raise Refusal('Replacement provisioning is not enabled for this assignment.')
-            if self.assignment['target_node'] == self.assignment['coordinator_node']:
-                raise Refusal('The coordinator cannot be a replacement target.')
-            self._replacement_capacity()
-            self._replacement_idle(allow_cleanup=True)
-            node = self._replacement_node()
-            if not record or record['phase'] == 'complete':
-                if state.phase not in ('replacement-required', 'recovery-failed'):
-                    raise Refusal('Run supported recover first; replacement requires a failed recovery.')
-                if (state.target_instance_id != self.assignment['target_instance_id']
-                        or state.target_node != self.assignment['target_node']):
-                    raise Refusal('The failed round does not match this assignment.')
-                old = state.target_instance_id
-                # Automatic PCS replacement may already have happened. The old
-                # EC2 record still has to establish our configured membership.
-                old_snapshot = self._replacement_instance(old)
-                predecessor = {'instance_id': old, 'host': self.assignment['target_host']}
-                if predecessor['host'] != old_snapshot['PrivateIpAddress']:
-                    raise Refusal('Assigned predecessor address does not match EC2; nothing changed.')
-                try:
-                    originals = self.executor.run_maintenance(['replacement-evidence'], timeout=30)
-                except (OSError, subprocess.TimeoutExpired, Refusal) as error:
-                    originals = Completed(124, '', f'Target evidence unavailable: {error}')
-                old_record = record
-                if old_record:
-                    archive = self.store.directory / f'replacement-history-{old_record["old_id"]}.json'
-                    if archive.is_symlink():
-                        raise Refusal('Refusing symlinked replacement archive.')
-                    if archive.exists() and json.loads(archive.read_text()) != old_record:
-                        raise Refusal('Replacement archive differs; preserving both operation histories.')
-                    temporary = archive.with_suffix('.new')
-                    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-                    with os.fdopen(fd, 'w') as output:
-                        json.dump(old_record, output)
-                        output.flush()
-                        os.fsync(output.fileno())
-                    os.replace(temporary, archive)
-                    _sync_directory(archive.parent)
-                record = {'node': state.target_node, 'initial_id': old_record.get('initial_id', old),
-                          'owner': self.assignment_id, 'round': state.round,
-                          'old_id': old, 'phase': 'prepared', 'retired': old_record.get('retired', []) + [old],
-                          'evidence': state.to_dict(), 'prepared_at': self.clock(),
-                          'old_snapshot': old_snapshot,
-                          'predecessor': predecessor,
-                          'originals_capture': {'returncode': originals.returncode,
-                                                'stdout': originals.stdout, 'stderr': originals.stderr},
-                          'target_only_originals': 'Not reconstructed; unavailable after target loss.'}
-                # Rewrite even a previously visible record before dispatch: a
-                # preceding directory-fsync failure is not a durability receipt.
-                self._write_replacement(record)
-            old = record['old_id']
-            self._replacement_reservation(record)
-            if record['phase'] in ('prepared', 'dispatching', 'waiting'):
-                if record.get('old_terminated'):
-                    old_status = 'terminated'
-                else:
-                    old_row = self._replacement_instance(old, retired=True)
-                    old_status = old_row['State']['Name']
-                if old_status not in ('shutting-down', 'terminated'):
-                    record['phase'] = 'dispatching'
-                    self._write_replacement(record)
-                    # Evidence capture, cloud reads and durable intent can take
-                    # time. Authorize the dependent dispatch with fresh reads,
-                    # not the observations from before those operations. This
-                    # is not an atomic transaction with the scheduler or EC2.
-                    self._replacement_reservation(record)
-                    cleanup = self._replacement_idle(allow_cleanup=True)
-                    node = self._replacement_node()
-                    if (node['InstanceId'] != old
-                            or node['NodeAddr'] != self.assignment['target_host']
-                            or node['NodeAddr'] != record['old_snapshot']['PrivateIpAddress']):
-                        raise Refusal('Scheduler identity/address changed before retirement.')
-                    flags = set(node['State'].split('+'))
-                    forbidden = set() if cleanup else {'ALLOCATED', 'MIXED', 'COMPLETING'}
-                    if not flags.intersection({'DRAIN', 'DOWN'}) or flags.intersection(forbidden):
-                        raise Refusal('The failed node is not idle and isolated; no retirement was requested.')
-                    # Preserve the fresh raw scheduler audit, including Slurm's suffix.
-                    record['retirement_observation'] = node['raw_observation']
-                    self._write_replacement(record)
-                    evidence = State.from_dict(record['evidence'])
-                    if (record['round'] != state.round
-                            or evidence.operation != state.operation
-                            or not self._owns_recovery_reason(node['raw_observation'], evidence)):
-                        raise Refusal('The failed node has a foreign drain reason: '
-                                      + repr(node_reason(node['raw_observation'])[1]))
-                    self._replacement_instance(old, host=self.assignment['target_host'])
-                    self._cloud('ec2', 'terminate-instances', {'InstanceIds': [old], 'SkipOsShutdown': True})
-                    # Read back exact target before claiming retirement, including
-                    # on a retry whose earlier acknowledgement was lost.
-                    old_row = self._replacement_instance(old, retired=True)
-                    old_status = old_row['State']['Name']
-                record['phase'] = 'waiting'
-                record['old_terminated'] = old_status == 'terminated'
-                self._write_replacement(record)
-                if old_status != 'terminated':
-                    raise Refusal('Old instance retirement is pending. Run replace again; only the old ID is addressed.')
-                node = self._replacement_node()
-                new = node['InstanceId']
-                if new in record['retired']:
-                    raise Refusal('PCS has not registered a new assigned identity yet. Run replace again.')
-                self._replacement_instance(new, node['NodeAddr'])
-                record['candidate'] = {'instance_id': new, 'host': node['NodeAddr']}
-                record['phase'] = 'bootstrap'
-                self._write_replacement(record)
-            candidate = record['candidate']
-            if (node['InstanceId'] != candidate['instance_id'] or node['NodeAddr'] != candidate['host']):
-                raise Refusal('Replacement identity changed during initialization; no further retirement authorized.')
-            current_instance = self._replacement_instance(candidate['instance_id'], candidate['host'])
-            if current_instance.get('State', {}).get('Name') != 'running':
-                raise Refusal('Replacement instance is not running yet; run replace again.')
-            if any(flag in node['State'] for flag in (*self.REBOOT_PENDING_FLAGS, 'POWERING_UP', 'NOT_RESPONDING')):
-                raise Refusal('Replacement is not scheduler-ready yet. Run replace again.')
-            reason = self._node_field(self._node_line(), 'Reason')
-            admission_reason = 'AIM344-admission-' + candidate['instance_id']
-            if ('DRAIN' in node['State'] or 'DOWN' in node['State']) and reason not in (
-                    '', self.assignment['drain_reason'], admission_reason):
-                raise Refusal('Replacement has a foreign isolation reason; not overwriting it.')
-            drained = self._scontrol('update', f'NodeName={record["node"]}', 'State=DRAIN',
-                                     f'Reason={self.assignment["drain_reason"]}')
-            if drained.returncode:
-                raise Refusal('Replacement could not be isolated for qualification.')
-            self._replacement_bootstrap(record)
-            self.executor.target_host = candidate['host']
-            if self._instance_id() != candidate['instance_id']:
-                raise Refusal('Authenticated maintenance identity does not match replacement.')
-            boot = self._boot_id()
-            self._maintenance(['restore-runtime', '--participant', self.assignment['participant_user']], timeout=900)
-            clean = State()  # Never inherit warning allowances from retired hardware.
-            for check in ('0', '2', '3', '6'):
-                outcome = self.executor.run_maintenance(['collect', check], timeout=900)
-                text = (outcome.stdout or '') + (outcome.stderr or '')
-                record.setdefault('check_attempts', []).append(
-                    {'check': check, 'output': text, 'returncode': outcome.returncode, 'boot': boot})
-                record.setdefault('checks', {})[check] = {'output': text, 'returncode': outcome.returncode}
-                self._write_replacement(record)
-                producers = re.findall(r'\[(?:PASS|WARN|FAIL|SKIP)\]\s+([^\s:]+):', text)
-                if (outcome.returncode or self.check_verdict(text) != 'PASS'
-                        or producers != [self.CHECK_NAMES[check]]
-                        or not self._observation_is_complete(clean, check, text)[0]):
-                    raise Refusal(f'Replacement check {check} did not qualify; retry replace without retiring it.')
-            self._replacement_capacity()
-            self._replacement_reservation(record)
-            self._replacement_idle()
-            node = self._replacement_node()
-            if node['InstanceId'] != candidate['instance_id'] or node['NodeAddr'] != candidate['host']:
-                raise Refusal('Replacement binding changed during qualification.')
-            self._require_current_recovery_observations(boot, 'replacement admission')
-            self._maintenance(['admit-replacement'])
-            self._replacement_idle()
-            final_node = self._replacement_node()
-            if (final_node['InstanceId'] != candidate['instance_id']
-                    or final_node['NodeAddr'] != candidate['host']):
-                raise Refusal('Replacement identity changed before RESUME.')
-            self._require_current_recovery_observations(boot, 'RESUME')
-            resumed = self._scontrol('update', f'NodeName={record["node"]}', 'State=RESUME')
-            if resumed.returncode:
-                raise Refusal('Replacement qualified but scheduler RESUME failed; retry replace.')
-            # Slurm RESUME first marks the node NOT_RESPONDING while requesting
-            # registration. An immediate read therefore refuses a healthy node,
-            # and a retry's new DRAIN/RESUME repeats that transition forever.
-            # Observe this one request; never accept the transient as readiness
-            # or send another RESUME inside the observation window.
-            for attempt in range(30):
-                observed = self._replacement_node()
-                if (observed['InstanceId'] != candidate['instance_id']
-                        or observed['NodeAddr'] != candidate['host']
-                        or any(flag in observed['State'] for flag in
-                               ('DRAIN', 'DOWN', 'REBOOT_', 'POWERING'))
-                        or observed['Reason'] not in ('', self.assignment['drain_reason'])):
-                    raise Refusal('Scheduler binding or isolation changed after RESUME; run replace again.')
-                if 'NOT_RESPONDING' not in observed['State']:
-                    break
-                if attempt == 29:
-                    raise Refusal('Scheduler has not confirmed replacement in service; run replace again.')
-                time.sleep(1)
-            # The wait does not extend the lifetime of the earlier observations.
-            # Keep the scheduling barrier until identity, boot, queue and its
-            # exact reservation have been checked again before binding commit.
-            if self._current_boot_id() != boot:
-                raise Refusal('Replacement boot changed after RESUME; run replace again.')
-            self._replacement_idle()
-            self._replacement_reservation(record)
-            # The binding is the single authoritative commit point. Other aliases
-            # stay excluded until it is durable. Old round evidence remains here.
-            record['binding'] = candidate
-            record['qualified_boot'] = boot
-            record['phase'] = 'complete'
-            record['completed_at'] = self.clock()
-            if self.assignment['replacement'].get('provisioning_mode') == 'ssm-install':
-                record['admission_release_pending'] = True
-            self._write_replacement(record)
-            self._replacement_reservation(record, release=True)
-            self._refresh_binding()
-            state.phase = 'runtime-ready'
-            state.target_instance_id = candidate['instance_id']
-            state.boot_id = boot
-            state.recovered_by = 'operator-replacement'
-            state.recovered_at = self.clock()
-            state.failure = None
-            state.notes = 'Fresh replacement initialized; old target evidence retained. Take a fresh allocation.'
-            self.store.write(state)
-            return Result(state, next_step=self._next_step(state))
 
     # ---------------- scheduler reads, on the coordinator ----------------
     def _scontrol(self, *arguments):
@@ -1867,36 +1156,6 @@ class DeviceSession:
         """
         result = self._maintenance(['instance-id'])
         return result.stdout.strip()
-
-    def _other_assignment_holding_target(self):
-        """Another table must not be mid-round on the same exercise node.
-
-        Observed on the pair: when a second assignment pointed at a node already
-        faulted by the first, its start failed only incidentally, with the device
-        helper's 'Provisioned gpu PCI function is absent: 0000:ba:00.0'. That
-        leaks an internal device identity and does not tell the participant what
-        happened. Ownership is now checked explicitly, before any mutation.
-        """
-        target = self.assignment['target_node']
-        for name, other in self.config['assignments'].items():
-            if name == self.assignment_id:
-                continue
-            if other.get('target_node') != target:
-                continue
-            try:
-                state = StateStore(self.config['state_dir'], name,
-                                   target_node=target).read()
-            except Refusal:
-                # An unreadable record for another table still means this node is
-                # not provably free, so treat it as held.
-                return name
-            # A table that has finished recovering no longer holds the node: its
-            # device is back and the node is in service. Only a round between
-            # start and completed recovery is exclusive, and a round whose
-            # recovery failed still holds it, because the node is still drained.
-            if state.phase in HOLDING_PHASES:
-                return name
-        return None
 
     # ---------------- answers directory ----------------
     @staticmethod
@@ -3156,12 +2415,7 @@ class DeviceSession:
         """Begin a round. `incident` is set only by `next`, from the schedule."""
         if kind not in ('gpu', 'efa'):
             raise Refusal('The exercise provides start gpu and start efa only.')
-        # The pair lock is taken before the state is even read: a scan that
-        # decides the node is free is only meaningful while nobody else can be
-        # deciding the same thing. Assignment exclusion alone does not do that,
-        # because two tables on one node hold two different assignment locks.
-        with self.store.exclusive_pair():
-            self._refresh_binding()
+        with self.store.exclusive():
             state = self.store.read()
             previous_round = state.round
             if state.phase in ('runtime-ready', 'verified'):
@@ -3214,14 +2468,6 @@ class DeviceSession:
                     f'Your exercise node is already drained for a different reason '
                     f'({reason}). It was left as it is; this assignment cannot clear unrelated isolation.')
 
-            # Per-pair exclusive ownership, before anything is changed. The pair
-            # lock above already serialises this, so the recorded-state scan is
-            # now a check on a stable view rather than a race.
-            holder = self._other_assignment_holding_target()
-            if holder is not None:
-                raise Refusal('Another table is using this exercise node right now. '
-                              'Wait until they finish recovering, then start again.')
-
             jobs = self._jobs_on_target()
             own = self._own_job(jobs)
             if active and (not own or own['state'] != 'RUNNING'):
@@ -3272,8 +2518,6 @@ class DeviceSession:
                           operation=self._new_operation(round_number),
                           original_node_state=node_state,
                           original_node_reason=node_reason(line)[1],
-                          deadline_at=self.clock()
-                          + float(self.assignment['recovery_deadline_seconds']),
                           incident=incident)
             if active:
                 state.active_fault = {'mutation': operation, 'bdf': inventory[kind + '_bdf'],
@@ -3497,11 +2741,8 @@ class DeviceSession:
         # version of it, and a status typed during another request neither waits
         # nor makes that request refuse.
         state = self.store.read()
-        record = self._replacement_record()
         line = self._node_line()
-        next_step = (f'Replacement stage: {record["phase"]}. An operator continues '
-                     'it after the session.'
-                     if record and record['phase'] != 'complete' else self._next_step(state))
+        next_step = self._next_step(state)
         try:
             collectable = self._collectable(state)
         except Refusal:
@@ -3656,8 +2897,7 @@ class DeviceSession:
         this incident. Until then `next` repeats the same answer and changes
         nothing, so the launcher may ask before and after its job starts.
         """
-        with self.store.exclusive_pair():
-            self._refresh_binding()
+        with self.store.exclusive():
             schedule = self._schedule()
             if schedule is None:
                 raise Refusal('This seat has no incident schedule; raise your hand.')
@@ -3702,7 +2942,7 @@ class DeviceSession:
                 # finished by the next call instead of skipping an incident.
                 _write_private_json(self._progress_path(), progress)
                 return self._issue_profile(progress, entry, schedule)
-        # start takes the assignment and pair locks itself and repeats every check.
+        # start takes the seat's lock itself and repeats every check.
         planned = DEVICE_EXERCISES[step['exercise']]
         incident = {'number': step['number'], 'exercise': step['exercise'],
                     'issue_id': step['issue_id']}
@@ -3727,7 +2967,7 @@ class DeviceSession:
         recorded. An incident whose profile was never handed over has not started
         and is refused. A second call keeps the first time.
         """
-        with self.store.exclusive_pair():
+        with self.store.exclusive():
             schedule = self._schedule()
             if schedule is None:
                 raise Refusal('This seat has no incident schedule; raise your hand.')
@@ -3792,7 +3032,7 @@ class DeviceSession:
 
     # Three uses, two tables (v2 mechanisms, finding 11). `collect_checks` is what a
     # participant may run with collect after any exercise: the suite's read-only
-    # checks the target allowlist already permits (replacement-bootstrap.py writes
+    # checks the target allowlist already permits (prepare-target.py writes
     # 'checks': [0, 2, 3, 6] there), the same list whatever the kind, so neither a
     # refusal nor the list names it. `qualify_checks[kind]` is what recovery must
     # see PASS before the node returns to service, unchanged by widening collect.
@@ -3910,11 +3150,8 @@ class DeviceSession:
         return self.collect_checks(state)
 
     def collect(self, check):
-        with self.store.exclusive_pair():
-            self._refresh_binding()
+        with self.store.exclusive():
             state = self.store.read()
-            if self._replacement_record().get('phase') not in (None, 'complete'):
-                raise Refusal('Replacement is in progress; run replace to continue.')
             allowed = self._collectable(state)
             if allowed is None:
                 raise Refusal('There is no exercise running yet. Start one first.')
@@ -4404,8 +3641,6 @@ class DeviceSession:
     def _recover(self, state, recovered_by):
         # Before anything changes: with no checks to pass, the node stays drained.
         self.qualify_checks(state)
-        if self._other_assignment_holding_target():
-            raise Refusal('Another table holds this node; recovery cannot change it.')
         state.phase = 'recovering'
         state.failure = None
         self.store.write(state)
@@ -4766,44 +4001,20 @@ class DeviceSession:
                 or 'is not a loaded unit' in text)
 
     def _active_reboot_escalation(self, state):
-        """One exact-instance EC2 fallback, then participant-owned replacement.
+        """After the observation window, the node stays out of service.
 
-        An API acknowledgement is only a request, never a successful recovery.
-        The ordinary recovery path still requires a fresh boot and suite PASS.
+        An operator replaces it after the session. Within the window, recovery
+        stays retryable.
         """
         assert state.active_fault is not None
         wait = float(self.assignment.get('active_reboot_grace_seconds', 120))
         if not 30 <= wait <= 900:
             raise Refusal('Active reboot grace must be between 30 and 900 seconds.')
-        since = state.active_fault.get('external_reboot_at', state.reboot_requested_at)
+        since = state.reboot_requested_at
         if since is None or self.clock() - since < wait:
             raise Refusal('The requested reboot is still within its observation window; '
                           'keep evidence and run recover again.')
-        if state.active_fault.get('external_reboot_attempted'):
-            self._require_replacement(state, 'The active-fault reboot did not return within its window.')
-        self._require_recoverable_target(state)
-        node = self._replacement_node()
-        if (node['InstanceId'] != state.target_instance_id
-                or node['NodeAddr'] != self.assignment['target_host']):
-            raise Refusal('Active recovery scheduler binding changed; no external reboot.')
-        self._replacement_capacity()
-        instance = self._replacement_instance(state.target_instance_id,
-                                               host=self.assignment['target_host'])
-        if instance.get('State', {}).get('Name') != 'running':
-            raise Refusal('The active recovery instance is not running; use replace.')
-        state.active_fault['external_reboot_attempted'] = True
-        state.active_fault['external_reboot_at'] = self.clock()
-        self.store.write(state)  # persist request intent before API; never blind retry
-        self._cloud('ec2', 'reboot-instances', {'InstanceIds': [state.target_instance_id]})
-        # Acknowledged dispatch is distinct from pre-call intent and observed boot
-        # completion. Persist before the fallible readback; a lost ACK leaves only
-        # intent, which already prevents a duplicate request on later attempts.
-        state.active_fault['external_reboot_requested'] = True
-        state.active_fault['external_reboot_requested_at'] = self.clock()
-        self.store.write(state)
-        self._replacement_instance(state.target_instance_id, host=self.assignment['target_host'])
-        raise Refusal('The exact assigned instance was requested to reboot through EC2; '
-                      'completion is not established. Run recover again, then replace if required.')
+        self._require_replacement(state, 'The active-fault reboot did not return within its window.')
 
     def _round_job_running(self, state):
         """Whether the active round's own job is the one RUNNING job on the target.
@@ -4990,11 +4201,7 @@ class DeviceSession:
         return not state or any(flag in state for flag in self.REBOOT_PENDING_FLAGS)
 
     def recover(self):
-        # Recovery mutates the node, so it takes the pair lock too.
-        with self.store.exclusive_pair():
-            self._refresh_binding()
-            if self._replacement_record().get('phase') not in (None, 'complete'):
-                raise Refusal('Replacement is in progress; run replace to continue.')
+        with self.store.exclusive():
             state = self.store.read()
             if state.phase == 'ready':
                 raise Refusal('There is no exercise to recover yet.')
@@ -5019,9 +4226,7 @@ class DeviceSession:
                 stuck = self.store.read()
                 changed = False
                 if stuck.phase == 'recovering':
-                    stuck.phase = ('replacement-required'
-                                   if self.assignment.get('replacement', {}).get('enabled')
-                                   else 'investigating')
+                    stuck.phase = 'investigating'
                     changed = True
                 if stuck.incident and not stuck.failure:
                     # The participant reads this refusal concealed; the operator
@@ -5033,115 +4238,6 @@ class DeviceSession:
                 raise
             return Result(state, next_step='Take a fresh allocation and verify '
                                            'Check 5 and storage.')
-
-    def expire(self):
-        """Deadline safeguard. Recorded separately from a participant recovery."""
-        with self.store.exclusive_pair():
-            self._refresh_binding()
-            if self._replacement_record().get('phase') not in (None, 'complete'):
-                raise Refusal('Replacement is in progress; run replace to continue.')
-            state = self.store.read()
-            if state.phase in ('ready', 'runtime-ready', 'verified'):
-                return Result(state, expired=False, next_step=self._next_step(state))
-            if state.deadline_at is None or self.clock() <= float(state.deadline_at):
-                return Result(state, expired=False, next_step=self._next_step(state))
-            # Recovery refuses the round's own RUNNING job and ends no job, and an
-            # allocation may have no time limit, so that job can outlast the
-            # deadline. Waiting for it is not a recovery attempt: nothing is counted
-            # or changed, and the next sweep looks again.
-            if self._round_job_running(state):
-                return Result(state, expired=False, next_step=(
-                    f'The round is past its deadline, and its job {state.job_id} still '
-                    'runs on the exercise node. A later sweep recovers the node after '
-                    'that job ends. No attempt was counted.'))
-            # Count the attempt before trying it, not after. A recovery that dies
-            # part way through must still leave evidence that this round was
-            # already attempted, otherwise an unattended sweep would retry it
-            # without bound.
-            state.deadline_attempts = int(state.deadline_attempts or 0) + 1
-            self.store.write(state)
-            try:
-                state, notes = self._recover(state, 'deadline')
-            except Refusal:
-                stuck = self.store.read()
-                if stuck.phase == 'recovering':
-                    stuck.phase = ('replacement-required'
-                                   if self.assignment.get('replacement', {}).get('enabled')
-                                   else 'investigating')
-                    self.store.write(stuck)
-                raise
-            return Result(state, expired=True,
-                          next_step='This recovery ran on the exercise deadline, '
-                                    'not from your diagnosis.')
-
-
-def sweep(config, clock=time.time, session_factory=None):
-    """Run the deadline safeguard across every configured assignment.
-
-    This exists because the per-assignment `--expire` hook was never reachable
-    without somebody typing it: no timer, cron entry or other scheduled caller
-    invoked it on either node (confirmed on both:
-    participant-revision/runs/rework2-inspect-{target,coordinator}/output.log,
-    'no aim344 systemd timer', 'no aim344 cron.d entry'). A participant who walks
-    away therefore had no recovery path at all, which is what plan task 3.8 asks
-    for.
-
-    Failures are bounded in three ways, because an unattended sweep must not turn
-    one stuck table into a repeating mutation attempt:
-      one table's refusal never stops the others, so a single stuck round cannot
-      starve the rest;
-      an assignment whose recovery has already failed the allowed number of times
-      is left alone and reported, rather than retried forever;
-      nothing is retried within one sweep. The next scheduled run is the retry.
-
-    session_factory builds the per-assignment handler. It defaults to the real
-    one, which reaches the real privileged routes; the tests pass a recording
-    executor instead so the bounding behaviour can be exercised without hardware.
-    """
-    factory = session_factory or (
-        lambda assignment_id: DeviceSession(config, assignment_id, clock=clock))
-    attempts_allowed = int(config.get('deadline_attempts', 3))
-    summary = []
-    for assignment_id in sorted(config['assignments']):
-        try:
-            handler = factory(assignment_id)
-        except Refusal as refusal:
-            summary.append(f'{assignment_id}: not usable ({refusal})')
-            continue
-        try:
-            state = handler.store.read()
-        except Refusal as refusal:
-            summary.append(f'{assignment_id}: unreadable state ({refusal})')
-            continue
-        if state.phase in ('ready', 'runtime-ready', 'verified'):
-            summary.append(f'{assignment_id}: nothing due (phase {state.phase})')
-            continue
-        if state.deadline_at is None or clock() <= float(state.deadline_at):
-            summary.append(f'{assignment_id}: within its deadline '
-                           f'(phase {state.phase})')
-            continue
-        if int(state.deadline_attempts or 0) >= attempts_allowed:
-            # Stop rather than mutate the same node on every timer tick. The
-            # round stays recorded and drained for operator replacement.
-            summary.append(f'{assignment_id}: deadline recovery already attempted '
-                           f'{state.deadline_attempts} times and did not succeed; '
-                           f'operator replacement required (phase {state.phase})')
-            continue
-        try:
-            result = handler.expire()
-        except Refusal as refusal:
-            summary.append(f'{assignment_id}: deadline recovery did not complete '
-                           f'({refusal})')
-            continue
-        if result.expired:
-            summary.append(f'{assignment_id}: recovered on its deadline, '
-                           f'phase {result.state.phase}, '
-                           f'recovered_by {result.state.recovered_by}')
-        else:
-            summary.append(f'{assignment_id}: no deadline action taken '
-                           f'(phase {result.state.phase}). {result.next_step}')
-    return summary
-
 
 def incident_answer(state):
     """The one-line reveal for a scheduled device incident, once it is resolved.
@@ -5262,7 +4358,7 @@ def render(result, verb, operator=False):
             lines.append(f'This exercise is already running at {state.phase}.')
         else:
             lines.append(f'Started the {state.kind} exercise. Phase: {state.phase}.')
-    elif verb in ('recover', 'replace'):
+    elif verb == 'recover':
         if result.already_recovered:
             lines.append('Recovery has already completed for this round.')
         else:
@@ -5325,59 +4421,22 @@ def operator_view(handler):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('--assignment',
-                        help='The assignment to act on; the default is the '
-                             "configuration's only assignment")
     parser.add_argument('--config', default=str(DEFAULT_CONFIG))
-    parser.add_argument('--expire', action='store_true',
-                        help='Facilitator deadline sweep for one assignment; '
-                             'not a participant verb')
-    parser.add_argument('--sweep', action='store_true',
-                        help='Facilitator deadline sweep across every assignment; '
-                             'the scheduled entry point, not a participant verb')
-    parser.add_argument('--operator', choices=('status', 'replace'),
-                        help='Operator view of one assignment (kinds and schedule '
-                             'included), or the replacement route; root only')
+    parser.add_argument('--operator', choices=('status',),
+                        help='Operator view of the seat (kinds and schedule '
+                             'included); root only')
     parser.add_argument('request', nargs='*',
                         help='The participant request, for example: collect 0')
     options = parser.parse_args(argv)
     handler = None
     try:
-        # Argument shape first, before anything touches the filesystem. A bad
-        # invocation should say so rather than report whatever the configuration
-        # check happened to notice first.
-        if sum(bool(mode) for mode in (options.sweep, options.expire, options.operator)) > 1:
-            raise Refusal('Use one of --sweep, --expire or --operator.')
         config = load_config(Path(options.config))
-        if options.sweep:
-            if os.geteuid() != 0:
-                raise Refusal('The deadline sweep runs as root.')
-            for line in sweep(config):
-                sys.stdout.write(line + '\n')
-            return 0
-        assignment_id = options.assignment
-        if assignment_id is None:
-            if len(config['assignments']) != 1:
-                raise Refusal('The session configuration holds more than one assignment; '
-                              'name one with --assignment.')
-            [assignment_id] = config['assignments']
-        if options.expire:
-            if os.geteuid() != 0:
-                raise Refusal('The deadline sweep runs as root.')
-            handler = DeviceSession(config, assignment_id)
-            result = handler.expire()
-            sys.stdout.write(render(result, 'status', operator=True))
-            return 0
+        [assignment_id] = config['assignments']
         if options.operator:
             if os.geteuid() != 0:
                 raise Refusal('The operator commands run as root.')
             handler = DeviceSession(config, assignment_id)
-            if options.operator == 'status':
-                sys.stdout.write(operator_view(handler))
-            else:
-                # Decision 4: the replacement route, run by the operator after
-                # the session for a node recovery could not qualify.
-                sys.stdout.write(render(handler.replace(), 'replace', operator=True))
+            sys.stdout.write(operator_view(handler))
             return 0
         request = parse_participant_request(' '.join(options.request))
         if request.error:
@@ -5404,7 +4463,7 @@ def main(argv=None):
         return 0
     except Refusal as refusal:
         message = str(refusal)
-        if not options.sweep and not options.expire and not options.operator:
+        if not options.operator:
             state = None
             if handler is not None:
                 try:

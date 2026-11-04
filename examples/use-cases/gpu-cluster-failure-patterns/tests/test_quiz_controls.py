@@ -113,8 +113,7 @@ class QuizBase(fixture.Base):
                                       **dict({'executor': executor, 'clock': lambda: now},
                                              **given))), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = session.main(argv or ['--assignment', 'table-1',
-                                         '--config', str(self.config_path), *command.split()])
+            code = session.main(argv or ['--config', str(self.config_path), *command.split()])
         return code, out.getvalue(), err.getvalue()
 
     def assert_no_kind(self, text):
@@ -1261,17 +1260,17 @@ class ParticipantOutputBoundary(QuizBase):
         self.assertIn('Failure: Active FLR restoration provenance is incomplete',
                       session.operator_view(self.make()))
 
-    def test_without_assignment_the_configurations_only_assignment_is_used(self):
-        argv = ['--config', str(self.config_path), 'status']
-        code, _, err = self.run_main('', argv=argv)
-        self.assertEqual(3, code)
-        self.assertIn('name one with --assignment', err)
-        del self.config_body['assignments']['table-2']
-        self.write_config()
-        code, out, err = self.run_main('', argv=argv)
+    def test_the_configurations_one_assignment_is_used(self):
+        code, out, err = self.run_main('status')
         self.assertEqual(0, code, err)
         self.assertIn('Exercise phase: ready', out)
         self.assertIn('Incidents issued: 0 of 4', out)
+        self.config_body['assignments']['table-2'] = dict(
+            self.config_body['assignments']['table-1'])
+        self.write_config()
+        code, _, err = self.run_main('status')
+        self.assertEqual(3, code)
+        self.assertIn('must hold one assignment', err)
 
     def test_status_answers_while_another_request_holds_the_lock(self):
         handler = self.make()
@@ -1283,19 +1282,16 @@ class ParticipantOutputBoundary(QuizBase):
             self.assertEqual(3, code)
             self.assertIn('Another request for this assignment is in progress.', err)
 
-    def test_operator_flags_are_root_only_and_exclusive(self):
-        for argv in (['--operator', 'status', '--assignment', 'table-1',
-                      '--config', str(self.config_path)],
-                     ['--operator', 'replace', '--assignment', 'table-1',
-                      '--config', str(self.config_path)]):
-            with self.subTest(argv=argv):
-                code, _, err = self.run_main('', argv=argv)
-                self.assertEqual(3, code)
-                self.assertIn('root', err)
-        code, _, err = self.run_main('', argv=['--operator', 'status', '--sweep',
+    def test_the_operator_view_is_root_only_and_has_no_replace_route(self):
+        code, _, err = self.run_main('', argv=['--operator', 'status',
                                                '--config', str(self.config_path)])
         self.assertEqual(3, code)
-        self.assertIn('Use one of', err)
+        self.assertIn('root', err)
+        for argv in (['--operator', 'replace'], ['--sweep'], ['--expire'],
+                     ['--assignment', 'table-1']):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()), \
+                    self.assertRaises(SystemExit):
+                session.main(argv + ['--config', str(self.config_path), 'status'])
 
 
 class OperatorView(QuizBase):
@@ -1521,7 +1517,7 @@ class InstallerSchedule(unittest.TestCase):
         check = text.index('python3 - "$AIM344_SCHEDULE_FILE"')
         for first_change in ('install -o root -g root -m 0755', 'ssh-keygen',
                              'install -d -o root -g root -m 0700 "$state_dir"',
-                             'install -d -o "$participant"', 'systemctl daemon-reload'):
+                             'install -d -o "$participant"'):
             with self.subTest(change=first_change):
                 self.assertLess(check, text.index(first_change))
         self.assertIn('AIM344_CHECKED_SCHEDULE=$checked_schedule \\\npython3 - '

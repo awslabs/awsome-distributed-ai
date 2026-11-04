@@ -152,7 +152,7 @@ def parse(argv):
                 raise Refusal(f'Unsupported option for {action}: {name}')
         return action, options
     if action in ('inspect', 'boot-id', 'instance-id', 'remount-staging',
-                  'efa-activity', 'admit-replacement', 'replacement-evidence'):
+                  'efa-activity'):
         if rest:
             raise Refusal(f'{action} takes no argument.')
         return action, {}
@@ -1330,34 +1330,6 @@ def main():
             return 0
         if action == 'instance-id':
             sys.stdout.write(instance_identity() + '\n')
-            return 0
-        if action == 'replacement-evidence':
-            evidence = {'instance_id': instance_identity(), 'records': {}}
-            for name in ('selected-persistence-mode.txt', 'native-dcgm-state.txt'):
-                path = RECORD_DIR / name
-                if path.is_file() and not path.is_symlink() and path.stat().st_size <= 16384:
-                    evidence['records'][name] = path.read_text()
-                else:
-                    evidence['records'][name] = None
-            sys.stdout.write(json.dumps(evidence) + '\n')
-            return 0
-        if action == 'admit-replacement':
-            import fcntl
-            root = Path('/var/lib/aim344-replacement')
-            lock = os.open(root / 'bootstrap.lock', os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX)
-                report = json.loads((root / 'ready.json').read_text())
-                manifest = json.loads(Path('/etc/aim344-replacement.json').read_text())
-                generation = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
-                if (report.get('instance_id') != instance_identity() or report.get('ready') is not True
-                        or report.get('manifest_sha256') != generation
-                        or (root / 'upgrade-pending.json').exists()):
-                    raise Refusal('Replacement bootstrap receipt does not match this instance/generation.')
-                _write_record('replacement-admitted.json', instance_identity(), 'replacement-admission',
-                              manifest_sha256=generation)
-            finally:
-                os.close(lock)
             return 0
         if action == 'inspect':
             return run([DEVICE_FAULT, 'inspect'], config, timeout=60)

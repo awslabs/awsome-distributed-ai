@@ -15,7 +15,6 @@
 #   /etc/aim344-device-session.json describing this one assignment
 #   the participant's ~/aim344-results
 #   a root key pair for the controller's maintenance route to the target
-#   the deadline sweep timer
 # It prints the lines to install on the target and the login profile line for
 # the participant's ~/.bashrc.
 #
@@ -123,7 +122,8 @@ except helper.Refusal as refusal:
 if state.phase in helper.HOLDING_PHASES:
     raise SystemExit(f'refusing to reset the schedule of {assignment}: its round is at '
                      f'{state.phase} and still holds the exercise node. Finish it with '
-                     f'recover, or with --operator replace, then rerun.')
+                     f'recover, or remove {state_dir}/{assignment}.json once the node '
+                     f'is replaced, then rerun.')
 print(json.dumps(schedule))
 PY
 )
@@ -194,8 +194,8 @@ if checked:
             if state.phase in helper.HOLDING_PHASES:
                 raise SystemExit(f'refusing to reset the schedule of {assignment}: its '
                                  f'round is at {state.phase} and still holds the exercise '
-                                 f'node. Finish it with recover, or with --operator '
-                                 f'replace, then rerun.')
+                                 f'node. Finish it with recover, or remove {store.path} '
+                                 f'once the node is replaced, then rerun.')
             progress = os.path.join(state_dir, f'schedule-{assignment}.json')
             if os.path.lexists(progress):
                 os.unlink(progress)
@@ -234,8 +234,8 @@ seat = {
     'slurm_bin': slurm_bin,
     'suite_entry': suite_entry,
     # What a participant may run with collect after any exercise: the suite's
-    # read-only checks the target's maintenance allowlist already holds
-    # (replacement-bootstrap.py 'checks': [0, 2, 3, 6]). The times below are the
+    # read-only checks the target's maintenance allowlist holds (prepare-target.py
+    # writes "checks": [0, 2, 3, 6] there). The times below are the
     # intervals between completion times in one sequential run as root on a G7e
     # node (two EFA) on 2026-11-01; that run did not record when check 0 started.
     # The suite headers estimate 5 s, 3 s, 10 s and 5-15 min.
@@ -254,7 +254,6 @@ seat = {
     # What recovery must see PASS, per kind, before the node returns to service.
     # Widening collect does not change it; any WARN still keeps the node out.
     'qualify_checks': {'gpu': [0, 3], 'efa': [2, 6]},
-    'recovery_deadline_seconds': int(os.environ.get('AIM344_DEADLINE', '1800')),
     'reboot_wait_seconds': 900,
     'reboot_poll_seconds': 10,
     'maintenance_identity_file': '/root/.ssh/aim344-maintenance',
@@ -273,44 +272,6 @@ print(f'Wrote {assignment} into {path}'
 PY
 
 install -d -o "$participant" -g "$(id -g "$participant")" -m 0700 "$participant_home/aim344-results"
-
-# The deadline safeguard, scheduled rather than waiting for somebody to type it.
-# The hook existed but nothing ever invoked it, so an abandoned round had no
-# recovery path. This runs on the coordinator, which holds the session state and
-# is not the fault target, so a timer here survives the exercise node rebooting.
-# It is the existing helper on a schedule, not a new service: no daemon, no port,
-# no state of its own, and it exits after one pass.
-echo "== deadline sweep timer"
-cat > /etc/systemd/system/aim344-deadline-sweep.service <<UNIT
-[Unit]
-Description=AIM344 exercise deadline safeguard, one pass over every assignment
-Documentation=file://$lab/facilitator/DEVICE-RECOVERY.md
-ConditionPathExists=$session_config
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/aim344-device-session --sweep
-# One pass, then exit. A pass that hangs is killed rather than left holding the
-# per-node lock, and systemd does not restart it: the next timer tick is the
-# retry, and the helper itself bounds how many times one round is retried.
-TimeoutStartSec=900
-UNIT
-cat > /etc/systemd/system/aim344-deadline-sweep.timer <<'UNIT'
-[Unit]
-Description=Run the AIM344 exercise deadline safeguard periodically
-
-[Timer]
-OnBootSec=5min
-OnUnitInactiveSec=5min
-AccuracySec=30s
-Unit=aim344-deadline-sweep.service
-
-[Install]
-WantedBy=timers.target
-UNIT
-systemctl daemon-reload
-systemctl enable --now aim344-deadline-sweep.timer
-systemctl list-timers --all aim344-deadline-sweep.timer --no-pager
 
 # The login profile (facilitator/participant-profile.sh) lets a new shell run the
 # lab commands with no setup. It reads lab.env, which carries the seat's target,
@@ -333,6 +294,6 @@ Then, in a new shell as $participant:
 
 Operator view of this seat (exercise kinds and schedule included):
   sudo /usr/local/sbin/aim344-device-session --operator status
-A node recovery cannot qualify stays out of service; after the session:
-  sudo /usr/local/sbin/aim344-device-session --operator replace
+A node recovery cannot qualify stays out of service until an operator replaces
+it after the session.
 SUMMARY

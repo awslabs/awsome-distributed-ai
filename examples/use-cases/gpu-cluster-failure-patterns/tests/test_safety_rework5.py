@@ -769,26 +769,6 @@ class S4DNeverPreparedRecovery(RealTargetHelper):
         self.assertEqual([], self.executor.resumes())
         self.assertEqual(0, self.make().store.read().reboot_requests)
 
-    def test_the_deadline_path_does_not_reboot_it_either(self):
-        """The facilitator's unattended entry point, not only the participant's.
-
-        `expire` shares `_recover`, so the gate has to hold there too -- and this is the
-        path a participant who walks away actually reaches.
-        """
-        self.never_prepared()
-        # The round started at clock 1000 with a 1800 s deadline, so this is past it.
-        self.attempt(lambda: self.make(now=3000.0).expire())
-        self.assertEqual([], self.executor.reboots(),
-                         'the deadline path rebooted a round that called nothing')
-        actions = self.executor.actions()
-        for mutation in ('remount-staging', 'restore-runtime', 'gpu-restore'):
-            self.assertNotIn(mutation, actions,
-                             f'{mutation} ran on the deadline path')
-        self.assertEqual([], self.executor.resumes())
-        self.assertEqual('active', self.unit_now())
-        self.assertEqual(1, self.make().store.read().deadline_attempts,
-                         'the deadline attempt was not counted')
-
     def test_an_interrupted_baseline_reaches_the_same_decision(self):
         """The other way to hold neither marker, with the drain in place.
 
@@ -868,32 +848,26 @@ class S4DNeverPreparedRecovery(RealTargetHelper):
         self.assertIn('does not establish', message)
 
     def test_the_ambiguous_legacy_refusal_holds_on_every_retry(self):
-        """Repeated participant recovery and the deadline sweep reach it too.
+        """Repeated participant recovery reaches it too.
 
-        The journal does not change, so the decision must not either. This also covers
-        the deadline entry point, which shares `_recover` and is the one an abandoned
-        table actually reaches.
+        The journal does not change, so the decision must not either.
         """
         executor = TargetHelperExecutor(self.records, self.target_config)
         self.executor = executor
         legacy = _rework.Base.baseline_for(self, session.State(
             phase='investigating', kind='efa', started_at=1.0,
             target_node='gpu-g7-1', target_instance_id='i-0123456789abcdef0',
-            boot_id='dddddddd-0000-0000-0000-00000000000b', prepared=['drain'],
-            deadline_at=1800.0))
+            boot_id='dddddddd-0000-0000-0000-00000000000b', prepared=['drain']))
         self.make().store.write(legacy)
         executor.check_output['6'] = _rework.PASS_6
-        for _ in range(2):
+        for _ in range(3):
             self.attempt(lambda: self.make().recover())
-        self.attempt(lambda: self.make(now=3000.0).expire())
-        self.assertEqual([], executor.reboots(),
-                         'a retry or the deadline path rebooted an ambiguous round')
+        self.assertEqual([], executor.reboots(), 'a retry rebooted an ambiguous round')
         for mutation in ('remount-staging', 'restore-runtime', 'gpu-restore'):
             self.assertNotIn(mutation, executor.actions())
         self.assertEqual([], executor.resumes())
         state = self.make().store.read()
         self.assertEqual(0, state.reboot_requests)
-        self.assertEqual(1, state.deadline_attempts)
 
     def test_a_recorded_device_call_with_an_unknown_outcome_still_recovers(self):
         """The valid path this refusal must not swallow.
@@ -941,8 +915,8 @@ class S4DNeverPreparedRecovery(RealTargetHelper):
         that phase as proof of a device call, journalled a marker saying so, bypassed
         the no-call refusal and rebooted a node whose originals were never captured.
 
-        Once the obstacle clears, the second and third attempts must still refuse, and
-        the deadline path with them. Nothing about the round changed while it waited.
+        Once the obstacle clears, the second and third attempts must still refuse.
+        Nothing about the round changed while it waited.
         """
         self.never_prepared()
         original = self.executor.run_maintenance
@@ -967,7 +941,6 @@ class S4DNeverPreparedRecovery(RealTargetHelper):
             message = self.attempt(lambda: self.make().recover())
             self.assertIn('never asked the node to pause telemetry', message,
                           f'attempt {attempt + 2} did not reach the no-call refusal')
-        self.attempt(lambda: self.make(now=3000.0).expire())
 
         self.assertEqual([], self.executor.reboots(),
                          'a round that called nothing was rebooted after a transient '
@@ -982,7 +955,6 @@ class S4DNeverPreparedRecovery(RealTargetHelper):
         self.assertEqual([], self.records_present())
         final = self.make().store.read()
         self.assertEqual(0, final.reboot_requests)
-        self.assertEqual(1, final.deadline_attempts)
 
     def test_a_prepared_round_still_reboots_and_restores(self):
         """The positive control: a preparation call was made, so recovery proceeds.
