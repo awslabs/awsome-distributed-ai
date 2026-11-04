@@ -11,6 +11,8 @@ These tools run one SmolLM2-1.7B training job with PyTorch FSDP2 on two `g7.48xl
 
 `bash tools/nccl-protocols.sh` is optional. It runs nccl-tests on the held nodes to compare NCCL's own protocol choice over EFA with `NCCL_PROTO=Simple`.
 
+`bash tools/serve.sh` is optional too. It serves the model with vLLM on every GPU of the held nodes and measures its decode rate per GPU against the memory-read ceiling. It needs the vLLM image that `facilitator/prepare-event.sh --with-serving` imports.
+
 All the tools run in a shell on the login node, from this directory. The training runs on both GPU nodes through `srun` steps of the held allocation. The section [Repeat the job on another PCS cluster](#repeat-the-job-on-another-pcs-cluster) describes the provisioning the tools expect.
 
 ## The environment and the allocation
@@ -185,6 +187,29 @@ The tool prints one row per size with the out-of-place time and bus bandwidth of
 
 Exit status: 0; 2 for usage or while a stage runs; 3 when no session allocation is held; 4 when a run fails (the tool prints the last 40 lines of its output); 5 when nccl-tests reports wrong values.
 
+## serve.sh
+
+```bash
+bash tools/serve.sh
+```
+
+Serves SmolLM2-1.7B at the pinned revision with vLLM 0.20.2 on the held nodes and measures how fast it decodes. Decode is the part of serving that generates a request's output, one token per step. The workshop does not need it. The tool needs the session allocation, refuses while a stage runs, and needs the image `images/vllm-v0.20.2.sqsh` in the stage directory (or the path in `VLLM_IMAGE`), checked on both nodes, which `facilitator/prepare-event.sh --with-serving` imports.
+
+It starts `8.serve-llm.sh --tensor-parallel-size 1 --config configs/smol-2048.json` as one `srun` step: one server per GPU, 16 in all, each with the whole model snapshot that provisioning downloaded to `data/model`. Server n of a node listens on port 8100 + n. Every 15 seconds it prints how many servers answer `/health`, and it gives up after 1,200 seconds. When all answer, `lib/serve_llm.py --collect-manifest` records each server's command and GPU, and the tool sends one warm-up request to each server. It then measures four levels, with 1, 4, 16 and 64 requests per GPU running at the same time. At each level every server gets that many client slots, and each slot sends two requests in turn. Each request is a completion of a fixed prompt that generates exactly 256 tokens (`ignore_eos`).
+
+The step time comes from each server's own counters, read before and after a level: the sum of `vllm:inter_token_latency_seconds` divided by its count is the mean time from one generated token of a request to the next. With every running request in each step, that is the time of one decode step. `lib/serving_metrics.py` checks that the counters moved by exactly the level's requests and tokens, so other traffic is refused. The tool prints one row per level, with the median over the servers:
+
+| Column | Meaning |
+|---|---|
+| `requests per GPU` | The requests that run on each server at the same time |
+| `ms per step` | The median over the servers of the mean step time |
+| `decode tokens/s per GPU` | Requests per GPU ÷ seconds per step |
+| `MBU` | The time that reading the weights at your memory-read ceiling takes, as a share of the step: 3,422,752,768 bytes (1,711,376,384 BF16 parameters) ÷ the ceiling in `ceilings.json` ÷ seconds per step. It counts the weights only. `n/a` without `ceilings.json` |
+
+Before the rows it prints the bound at one request per GPU, the ceiling ÷ the weight bytes. Then it stops the servers by sending SIGTERM to the step with `scancel --signal=TERM`, so that `lib/serve_llm.py` stops its vLLM processes, and prints a chart of the decode rate at each level. Ctrl-C, SIGTERM and a closed terminal (SIGHUP) also stop the servers. Everything goes to `$LLM_RESULTS_DIR/serving-<UTC>/`: `launch.log` (the step's output), `node-<n>/replica-<n>.log` (each server's log), `manifest.json`, `endpoints.txt` and `serving.json` (every level with each server's counter differences). The directory has no `run.json`, so `progression.py` does not list it.
+
+Exit status: 0; 2 for usage, while a stage runs or without the image; 3 when no session allocation is held; 4 when the servers do not all answer or a request fails (the tool prints the last 40 lines of `launch.log`); 5 when the counters do not match the requests; 130 when interrupted.
+
 ## release.sh
 
 ```bash
@@ -213,7 +238,7 @@ The tools expect a cluster built from the [AWS PCS architecture](../../../../arc
 ### facilitator/prepare-event.sh
 
 ```bash
-bash facilitator/prepare-event.sh --stage-dir DIR --slurm-version VER --instance-type TYPE --grafana-url URL [--owner USER] [--build-jobs N]
+bash facilitator/prepare-event.sh --stage-dir DIR --slurm-version VER --instance-type TYPE --grafana-url URL [--owner USER] [--build-jobs N] [--with-serving]
 ```
 
 It refuses any `--instance-type` other than `g7.48xlarge` before it starts, because the tools request 8 GPUs per node and expect two EFA devices. It then prints `prepare-event: <step> ok (<seconds> s)` after each step and `prepare-event: ready` at the end:
@@ -222,6 +247,7 @@ It refuses any `--instance-type` other than `g7.48xlarge` before it starts, beca
 2. **monitoring install**: on each node, waits up to 30 minutes until node-exporter answers on `http://localhost:9100/metrics` and `docker info` succeeds. PCS installs its monitoring stack on a GPU node as a `NodeReady` action, which runs after the node already accepts jobs. On a GPU node that install restarts Docker before it starts node-exporter, and the restart would end an image build that had already started. On a timeout the script names the node and the install log, `/var/log/amazon/pcs/lifecycle/actions/nodeReady/install-monitoring.log`, and exits 2.
 3. **image**: on the first node, `docker build` of this directory's `Dockerfile` and `enroot import` into `DIR/images/aim347-lab.sqsh`, with its SHA-256 in `aim347-lab.sqsh.sha256`. No registry is used. An existing image whose hash checks is kept.
 4. **image on both nodes**: `unsquashfs -s` and the hash check on each node, recorded in `aim347-lab.sqsh.verified`.
+   With `--with-serving`, two more steps follow for [serve.sh](#servesh). **serving image**: on the first node, `docker pull` of `vllm/vllm-openai` at the digest in the script (vLLM 0.20.2, linux/amd64) and `enroot import` into `DIR/images/vllm-v0.20.2.sqsh`, with its SHA-256 in `vllm-v0.20.2.sqsh.sha256`. **serving image on both nodes**: the same check as step 4, recorded in `vllm-v0.20.2.sqsh.verified`. The image takes about 22 GB on the file system. An existing serving image whose hash checks is kept, and a run without the option leaves it as it is.
 5. **data**: in the image on the first node, `1.prepare-llm.py` writes `DIR/data/tokens-2048-1280`, `tokens-2048-160` and `tokens-1024-160` from documents of at least 4,096 tokens, keeping each document's first positions, and downloads the model to `DIR/data/model` with the first dataset. A dataset whose manifest, sizes and fingerprint verify is kept. One that fails is moved to `DIR/failed-<UTC>/` and prepared again.
 6. **data on both nodes**: each node recomputes every dataset's fingerprint and checks the model pin.
 7. **environment file**: `DIR/aim347.env`, written atomically.
@@ -244,7 +270,7 @@ Exit status: 0; 1 when `--verify` times out (the message names the condition it 
 The CPU tests of the tools need only the standard library:
 
 ```bash
-PYTHONPATH=lib python3 -m unittest tests.test_workshop_tools tests.test_charts -v
+PYTHONPATH=lib python3 -m unittest tests.test_workshop_tools tests.test_charts tests.test_serving_decode -v
 ```
 
 The chart tests read the result files of the run on two `g7.48xlarge` of 2026-11-03 in `tests/fixtures/spain-20261103/`.

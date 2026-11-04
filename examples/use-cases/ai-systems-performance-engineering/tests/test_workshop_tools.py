@@ -1086,7 +1086,7 @@ count=$(grep -c "^curl $SLURMD_NODENAME$" {calls})
         scripts = sorted((LAB / 'tools').glob('*.sh')) + [LAB / 'facilitator/prepare-event.sh',
                                                            LAB / 'facilitator/install-node-collectors.sh',
                                                            LAB / '2.run-llm.sh', LAB / 'lib/nccl-protocols-rank.sh']
-        self.assertEqual(len(scripts), 10)
+        self.assertEqual(len(scripts), 11)
         for script in scripts:
             with self.subTest(script=script.name):
                 subprocess.run(['bash', '-n', str(script)], check=True)

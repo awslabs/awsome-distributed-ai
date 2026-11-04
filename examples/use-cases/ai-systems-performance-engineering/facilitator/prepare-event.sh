@@ -2,21 +2,29 @@
 # Provisioning for one participant account, as root on the login node inside a
 # two-node exclusive allocation of the GPU partition: the training image (built
 # from this checkout's Dockerfile), the datasets and the model, and the
-# environment file every tool reads. A rerun keeps what verifies and redoes the rest.
+# environment file every tool reads. With --with-serving it also imports the vLLM
+# image that tools/serve.sh runs. A rerun keeps what verifies and redoes the rest.
 #
 # Usage: bash facilitator/prepare-event.sh --stage-dir DIR --slurm-version VER --instance-type TYPE
-#            --grafana-url URL [--owner USER] [--build-jobs N]
+#            --grafana-url URL [--owner USER] [--build-jobs N] [--with-serving]
 # Exit: 0 ready; 2 usage or precondition; 3 image; 4 data preparation; 5 verification on a node.
 set -euo pipefail
 lab=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 workshop=(python3 "$lab/lib/workshop.py")
-stage_dir='' slurm_version='' instance_type='' grafana_url='' owner=ubuntu build_jobs=64
+stage_dir='' slurm_version='' instance_type='' grafana_url='' owner=ubuntu build_jobs=64 serving=0
+# The public vLLM 0.20.2 image (linux/amd64) that the serving path was validated with.
+vllm_source=vllm/vllm-openai@sha256:68b773151407ca28c05479c02c0c08a573285ba197c8ff35d2103acd97aff78c
 usage() {
-    echo 'Usage: bash facilitator/prepare-event.sh --stage-dir DIR --slurm-version VER --instance-type TYPE --grafana-url URL [--owner USER] [--build-jobs N]' >&2
+    echo 'Usage: bash facilitator/prepare-event.sh --stage-dir DIR --slurm-version VER --instance-type TYPE --grafana-url URL [--owner USER] [--build-jobs N] [--with-serving]' >&2
     exit 2
 }
 fail() { echo "prepare-event: $2" >&2; exit "$1"; }
 while (($#)); do
+    if [[ $1 == --with-serving ]]; then
+        serving=1
+        shift
+        continue
+    fi
     [[ $# -ge 2 ]] || usage
     case $1 in
         --stage-dir) stage_dir=$2 ;;
@@ -42,6 +50,7 @@ id "$owner" >/dev/null 2>&1 || fail 2 "no user $owner"
 [[ -n ${SLURM_JOB_ID:-} ]] || fail 2 'run inside a two-node exclusive allocation of the GPU partition (salloc)'
 export PATH="/opt/aws/pcs/scheduler/slurm-$slurm_version/bin:$PATH"
 image=$stage_dir/images/aim347-lab.sqsh
+serving_image=$stage_dir/images/vllm-v0.20.2.sqsh
 data=$stage_dir/data
 failed_dir=$stage_dir/failed-$(date -u +%Y%m%dT%H%M%SZ)
 
@@ -128,6 +137,40 @@ verify_image() {
         fail 5 "$image does not verify on both nodes"
 }
 
+serving_image_ok() {
+    [[ -f $serving_image && -f $serving_image.sha256 ]] && sha256sum --check --strict --status "$serving_image.sha256"
+}
+
+# Optional B of the workshop (tools/serve.sh). The image comes from Docker Hub at a fixed digest.
+import_serving_image() {
+    if serving_image_ok; then
+        echo "prepare-event: keeping $serving_image (its SHA-256 checks)"
+        return
+    fi
+    rm -f "$serving_image" "$serving_image.sha256" "$serving_image.verified" "$serving_image.tmp"
+    # shellcheck disable=SC2016
+    srun -N1 -n1 -w "${nodes[0]}" --cpus-per-task="$cpus" bash -c '
+        set -euo pipefail
+        export ENROOT_CACHE_PATH=/tmp/aim347-enroot/cache ENROOT_DATA_PATH=/tmp/aim347-enroot/data
+        export ENROOT_RUNTIME_PATH=/tmp/aim347-enroot/runtime
+        mkdir -p "$ENROOT_CACHE_PATH" "$ENROOT_DATA_PATH" "$ENROOT_RUNTIME_PATH"
+        docker pull "$1"
+        docker tag "$1" aim347-vllm:0.20.2
+        enroot import -o "$2.tmp" dockerd://aim347-vllm:0.20.2' bash "$vllm_source" "$serving_image" ||
+        fail 3 "pulling or importing $vllm_source failed"
+    local hash
+    hash=$(sha256sum "$serving_image.tmp" | cut -d' ' -f1) || fail 3 "cannot hash $serving_image.tmp"
+    printf '%s  %s\n' "$hash" "$serving_image" > "$serving_image.sha256"
+    mv "$serving_image.tmp" "$serving_image"
+}
+
+verify_serving_image() {
+    # shellcheck disable=SC2016
+    srun -N2 --ntasks-per-node=1 bash -c 'unsquashfs -s "$1" >/dev/null && sha256sum --check --strict --status "$1.sha256" &&
+        echo "${SLURMD_NODENAME:-$(hostname)} OK $(date -u +%Y-%m-%dT%H:%M:%SZ)"' bash "$serving_image" >> "$serving_image.verified" ||
+        fail 5 "$serving_image does not verify on both nodes"
+}
+
 prepare_data() {
     install -d -m 0755 "$data"
     local name pending=() model_pending=0
@@ -201,6 +244,10 @@ step checks checks
 step 'monitoring install' monitoring_install
 step image build_image
 step 'image on both nodes' verify_image
+if ((serving)); then
+    step 'serving image' import_serving_image
+    step 'serving image on both nodes' verify_serving_image
+fi
 step data prepare_data
 step 'data on both nodes' verify_data
 step 'environment file' write_environment

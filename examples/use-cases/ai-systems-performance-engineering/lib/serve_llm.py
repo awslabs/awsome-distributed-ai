@@ -164,6 +164,9 @@ def main():
     parser.add_argument('--max-num-seqs', type=int, default=256)
     parser.add_argument('--max-num-batched-tokens', type=int, default=8192)
     parser.add_argument('--model', default='/data/model')
+    parser.add_argument('--config', default='configs/llm.json',
+                        help='config whose model_id and model_revision the model snapshot must pin, '
+                             'relative to the example directory')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--collect-manifest', action='store_true',
                         help='collect existing launcher records on the allocation shell instead of starting replicas')
@@ -179,7 +182,7 @@ def main():
                                             args.port_base, args.internal_port_base, ephemeral=ephemeral)
     except (OSError, ValueError) as error:
         parser.error(str(error))
-    cfg = json.loads((Path(__file__).resolve().parents[1] / 'configs/llm.json').read_text())
+    cfg = json.loads((Path(__file__).resolve().parents[1] / args.config).read_text())
     if args.collect_manifest:
         nodes = subprocess.check_output(['scontrol', 'show', 'hostnames', os.environ['SLURM_JOB_NODELIST']], text=True).splitlines()
         addresses = []
