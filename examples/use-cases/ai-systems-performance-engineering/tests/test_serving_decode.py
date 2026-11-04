@@ -82,7 +82,7 @@ class DecodeMeasurementTests(unittest.TestCase):
         lines = serving_decode.bound_lines(CEILING)
         self.assertEqual(lines, [
             'Reading the weights (3.42 GB) at your memory-read ceiling (663 GB/s per GPU) takes 5.16 ms.',
-            'At one request per GPU, that read time gives 194 tokens/s per GPU. MBU is 5.16 ms / ms per step.'])
+            'At 5.16 ms per step, a GPU with one request generates 194 tokens/s. MBU is 5.16 ms / ms per step.'])
         self.assertIn('run bash tools/hold-and-measure.sh', serving_decode.bound_lines(None)[0])
 
     def test_step_is_found_by_host_and_srun_pid(self):

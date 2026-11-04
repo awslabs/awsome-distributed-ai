@@ -161,7 +161,7 @@ def bound_lines(ceiling):
     read = WEIGHT_BYTES / ceiling
     return [f'Reading the weights ({WEIGHT_BYTES / 1e9:.2f} GB) at your memory-read ceiling '
             f'({ceiling / 1e9:.0f} GB/s per GPU) takes {read * 1e3:.2f} ms.',
-            f'At one request per GPU, that read time gives {1 / read:,.0f} tokens/s per GPU. '
+            f'At {read * 1e3:.2f} ms per step, a GPU with one request generates {1 / read:,.0f} tokens/s. '
             f'MBU is {read * 1e3:.2f} ms / ms per step.']
 
 
