@@ -34,12 +34,17 @@ export MASTER_ADDR MASTER_PORT=${MASTER_PORT:-29547} GPUS_PER_NODE
 export NNODES=$SLURM_JOB_NUM_NODES
 # ENV logs "NCCL_PROTO set by environment to Simple" on every rank of an EFA run.
 export NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET,ENV
+# On g6e.48xlarge (test events; AIM347_INSTANCE_TYPE comes from aim347.env), the plugin's
+# RDMA protocol never completes the first large collective (aws-ofi-nccl 1.19.0, fabric efa,
+# no GPUDirect RDMA). SENDRECV, the plugin's own choice for g6e.48xlarge, completes it.
+ofi_protocol=RDMA
+[[ ${AIM347_INSTANCE_TYPE:-} != g6e.48xlarge ]] || ofi_protocol=SENDRECV
 case ${LLM_TRANSPORT:-efa} in
     # Under RDMA, NCCL runs all-reduce from 64 KiB to 8 MiB on two g7.48xlarge
     # as LL, which is many times slower there than Simple (numbers in
     # lib/instance-type.sh). NCCL_PROTO=^LL would enable LL128 over PCIe.
     # An NCCL_PROTO set by the caller is kept; an empty one lets NCCL choose.
-    efa) export FI_PROVIDER=efa NCCL_NET='AWS Libfabric' OFI_NCCL_PROTOCOL=RDMA NCCL_PROTO=${NCCL_PROTO-Simple}
+    efa) export FI_PROVIDER=efa NCCL_NET='AWS Libfabric' OFI_NCCL_PROTOCOL=$ofi_protocol NCCL_PROTO=${NCCL_PROTO-Simple}
          [[ -n $NCCL_PROTO ]] || unset NCCL_PROTO
          unset NCCL_NET_PLUGIN NCCL_GIN_PLUGIN ;;
     socket) export FI_PROVIDER=efa NCCL_NET=Socket OFI_NCCL_PROTOCOL=RDMA NCCL_NET_PLUGIN=none NCCL_GIN_PLUGIN=none ;;

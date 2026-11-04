@@ -1196,6 +1196,13 @@ class NcclProtocolSettingTests(unittest.TestCase):
                                                   'NCCL_DEBUG_SUBSYS=INIT,NET,ENV'])
                     names = next(a for a in output if a.startswith('--container-env=')).split('=', 1)[1].split(',')
                     self.assertIn('NCCL_PROTO', names)
+            # g6e.48xlarge (test events) uses SENDRECV over EFA; g7.48xlarge keeps RDMA.
+            for instance_type, protocol in (('g6e.48xlarge', 'SENDRECV'), ('g7.48xlarge', 'RDMA')):
+                with self.subTest(instance_type=instance_type):
+                    output = subprocess.run(['bash', str(LAB / '2.run-llm.sh')],
+                                            env=dict(env, LLM_TRANSPORT='efa', AIM347_INSTANCE_TYPE=instance_type),
+                                            check=True, capture_output=True, text=True).stdout.splitlines()
+                    self.assertEqual(output[:2], [f'OFI_NCCL_PROTOCOL={protocol}', 'NCCL_PROTO=Simple'])
 
 
 class NcclProtocolToolTests(unittest.TestCase):
@@ -1263,6 +1270,11 @@ class NcclProtocolToolTests(unittest.TestCase):
             result = subprocess.run(['bash', str(LAB / 'lib/nccl-protocols-rank.sh'), 'll', '/logs'], env=env,
                                     capture_output=True, text=True, stdin=subprocess.DEVNULL)
             self.assertEqual(result.returncode, 2)
+            g6e = subprocess.run(['bash', str(LAB / 'lib/nccl-protocols-rank.sh'), 'simple', '/logs'],
+                                 env=dict(env, AIM347_INSTANCE_TYPE='g6e.48xlarge'), check=True, capture_output=True,
+                                 text=True, stdin=subprocess.DEVNULL).stdout.splitlines()
+            self.assertEqual(g6e[1], 'OFI_NCCL_PROTOCOL=SENDRECV')
+            self.assertEqual(g6e[2:], outputs['simple'][2:])
 
     def test_report_puts_both_runs_side_by_side(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1332,6 +1344,14 @@ class NcclProtocolToolTests(unittest.TestCase):
                 self.assertEqual(workshop.run_protocols(state, runner=runner, env=env), 2)
             self.assertEqual(errors.getvalue().strip(), workshop.SERVING_BUSY)
             self.assertEqual(len(launched), 2)
+
+            # On g6e.48xlarge the first line names SENDRECV, the protocol of lib/nccl-protocols-rank.sh there.
+            (state / 'serving').unlink()
+            output = io.StringIO()
+            with redirect_stdout(output):
+                workshop.run_protocols(state, runner=runner, env=dict(env, AIM347_INSTANCE_TYPE='g6e.48xlarge'))
+            self.assertEqual(output.getvalue().splitlines()[0],
+                             '[aim347] all_reduce_perf, 1 MiB to 64 MiB, on 16 GPUs over EFA with OFI_NCCL_PROTOCOL=SENDRECV')
 
 
 

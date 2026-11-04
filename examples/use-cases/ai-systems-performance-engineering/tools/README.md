@@ -27,7 +27,7 @@ The tools then source `~/.aim347/allocation.env` if it exists. `hold-and-measure
 
 | Key | Values | Meaning |
 |---|---|---|
-| `LLM_TRANSPORT` | `socket`, `efa` | NCCL sends collectives over TCP sockets, or over EFA through the AWS Libfabric plugin with `OFI_NCCL_PROTOCOL=RDMA` and `NCCL_PROTO=Simple` (an `NCCL_PROTO` set in your shell takes its place, see [nccl-protocols.sh](#nccl-protocolssh)) |
+| `LLM_TRANSPORT` | `socket`, `efa` | NCCL sends collectives over TCP sockets, or over EFA through the AWS Libfabric plugin with `OFI_NCCL_PROTOCOL=RDMA` (`SENDRECV` on `g6e.48xlarge`, where RDMA hangs) and `NCCL_PROTO=Simple` (an `NCCL_PROTO` set in your shell takes its place, see [nccl-protocols.sh](#nccl-protocolssh)) |
 | `ATTENTION` | `eager`, `sdpa` | The Transformers attention implementation |
 | `CHECKPOINT_MODE` | `none`, `sync`, `process` | No saving, synchronous saves, or saves written by a separate process while training continues |
 

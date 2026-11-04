@@ -8,8 +8,11 @@ export PMIX_MCA_gds=hash
 export OMPI_MCA_pml=ob1 OMPI_MCA_btl=tcp,self
 export OMPI_MCA_btl_tcp_if_include="${NCCL_SOCKET_IFNAME#=}"
 unset OMPI_MCA_btl_tcp_if_exclude
-# The EFA settings of 2.run-llm.sh; only NCCL_PROTO differs between the two runs.
-export FI_PROVIDER=efa NCCL_NET='AWS Libfabric' OFI_NCCL_PROTOCOL=RDMA
+# The EFA settings of 2.run-llm.sh, SENDRECV on g6e.48xlarge as there; only NCCL_PROTO
+# differs between the two runs.
+ofi_protocol=RDMA
+[[ ${AIM347_INSTANCE_TYPE:-} != g6e.48xlarge ]] || ofi_protocol=SENDRECV
+export FI_PROVIDER=efa NCCL_NET='AWS Libfabric' OFI_NCCL_PROTOCOL=$ofi_protocol
 unset NCCL_NET_PLUGIN NCCL_GIN_PLUGIN NCCL_ALGO
 case $variant in
     nccl-choice) unset NCCL_PROTO ;;
