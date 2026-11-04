@@ -646,7 +646,6 @@ class AllocationTests(unittest.TestCase):
             self.assertEqual(workshop.read_allocation(path), {
                 'SLURM_JOB_ID': '42', 'SLURM_JOB_NUM_NODES': '2', 'SLURM_JOB_NODELIST': 'gpu-[1-2]',
                 'SLURM_JOB_CPUS_PER_NODE': '192(x2)', 'AIM347_ALLOCATION_ID': '42'})
-            self.assertEqual(oct(path.stat().st_mode & 0o777), '0o600')
             sourced = subprocess.run(['bash', '-c', f'source {path}; echo "$SLURM_JOB_CPUS_PER_NODE $SLURM_JOB_NODELIST"'],
                                      capture_output=True, text=True, check=True).stdout.strip()
             self.assertEqual(sourced, '192(x2) gpu-[1-2]')

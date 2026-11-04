@@ -233,7 +233,7 @@ The tools expect a cluster built from the [AWS PCS architecture](../../../../arc
          && srun --nodes=2 --ntasks-per-node=1 bash facilitator/install-node-collectors.sh --verify'
    ```
 
-3. Write the Grafana password to `/home/ubuntu/.aim347/grafana-admin-password`, with mode 0600. The monitoring installer stores it in the SSM parameter `/pcs/<cluster>/grafana/admin-password`.
+3. Write the Grafana password to `/home/ubuntu/.aim347/grafana-admin-password`. The monitoring installer stores it in the SSM parameter `/pcs/<cluster>/grafana/admin-password`.
 4. As `ubuntu`, run the tools in the order at the top of this page.
 
 ### facilitator/prepare-event.sh

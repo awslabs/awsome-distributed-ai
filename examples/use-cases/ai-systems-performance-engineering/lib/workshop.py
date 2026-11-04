@@ -1090,7 +1090,7 @@ def parse_scontrol_record(text):
 def write_allocation(path, job_id, nodelist, cpus_per_node, nodes=2):
     values = [('SLURM_JOB_ID', job_id), ('SLURM_JOB_NUM_NODES', nodes), ('SLURM_JOB_NODELIST', nodelist),
               ('SLURM_JOB_CPUS_PER_NODE', f'{cpus_per_node}(x{nodes})'), ('AIM347_ALLOCATION_ID', job_id)]
-    write_atomic(path, ''.join(f'export {key}={shlex.quote(str(value))}\n' for key, value in values), mode=0o600)
+    write_atomic(path, ''.join(f'export {key}={shlex.quote(str(value))}\n' for key, value in values))
 
 
 def read_allocation(path):
@@ -1567,11 +1567,11 @@ def start_run(subcommand, state=None, change=None):
     if subcommand == 'try' and not sdpa_ready(results):
         raise UsageError('try compares your change with stage sdpa, which has no finished run. '
                          'Run: bash tools/run.sh sdpa')
-    state.mkdir(mode=0o700, exist_ok=True)
+    state.mkdir(exist_ok=True)
     invocation = dict(invocation=utc_stamp(), stages=[stage['name'] for stage in stages], plan=stages,
                       subcommand=subcommand, allocation_id=os.environ['AIM347_ALLOCATION_ID'], pid=None)
     try:
-        lock = os.open(state / 'running', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        lock = os.open(state / 'running', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except FileExistsError:
         print('Another run.sh is starting a stage; following it')
         time.sleep(2)
@@ -1583,7 +1583,7 @@ def start_run(subcommand, state=None, change=None):
                                  cwd=str(LAB), stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                  start_new_session=True)
     invocation['pid'] = child.pid
-    write_atomic(state / 'running', json.dumps(invocation), mode=0o600)
+    write_atomic(state / 'running', json.dumps(invocation))
     return follow(invocation, results)
 
 

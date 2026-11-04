@@ -338,7 +338,7 @@ def run(env=None, state=None, *, popen=subprocess.Popen, runner=subprocess.run, 
     launch_env = dict(env, VLLM_IMAGE=str(image), SERVING_RUN=run_dir.name)
     # run.sh and nccl-protocols.sh refuse to start while this marker names a live process.
     marker = Path(state or workshop.STATE) / 'serving'
-    workshop.write_atomic(marker, json.dumps(dict(pid=os.getpid(), run=run_dir.name)), mode=0o600)
+    workshop.write_atomic(marker, json.dumps(dict(pid=os.getpid(), run=run_dir.name)))
     with (run_dir / 'launch.log').open('w') as log:
         process = popen(launch_command(), cwd=str(LAB), env=launch_env, stdin=subprocess.DEVNULL, stdout=log,
                         stderr=subprocess.STDOUT, start_new_session=True)

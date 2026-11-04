@@ -7,7 +7,7 @@ lab=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 source "$lab/tools/common.sh"
 workshop=(python3 "$lab/lib/workshop.py")
 state=$HOME/.aim347
-install -d -m 0700 "$state"
+mkdir -p "$state"
 
 job_id=$( (squeue --me -h --name=aim347-session -o '%i %T' || true) | awk '$2 == "RUNNING" {print $1; exit}')
 if [[ -n $job_id ]]; then
