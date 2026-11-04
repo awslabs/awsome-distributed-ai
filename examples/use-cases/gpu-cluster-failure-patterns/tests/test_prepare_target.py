@@ -110,8 +110,12 @@ class MaintenanceConfig(unittest.TestCase):
             stage = Path(temporary)
             for name in ('aim344.sqsh', 'nccl-baseline.sqsh'):
                 (stage / name).write_bytes(name.encode())
-            config = target.maintenance_config('/opt/aws/pcs/scheduler/slurm-25.05/bin',
-                                               'ubuntu', stage, '2')
+            path = stage / 'aim344-maintenance.json'
+            target.write(path, json.dumps(target.maintenance_config(
+                '/opt/aws/pcs/scheduler/slurm-25.05/bin', 'ubuntu', stage, '2')), 0o600)
+            with mock.patch.object(maintenance, 'CONFIG', path):
+                config = maintenance.load_config()
+            self.assertEqual('2', maintenance.environment(config)['HEALTHCHECK_EXPECTED_EFA_COUNT'])
             self.assertEqual('ubuntu', maintenance.resolve_participant(config, 'ubuntu'))
             with self.assertRaises(maintenance.Refusal):
                 maintenance.resolve_participant(config, 'aim344-participant')

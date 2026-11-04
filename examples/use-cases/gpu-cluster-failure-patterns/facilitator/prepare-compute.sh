@@ -18,6 +18,24 @@ install -d -o root -g root -m 0755 /opt/aim344-healthcheck /opt/aim344
 tar -xzf "$stage/healthcheck-pinned.tgz" -C /opt/aim344-healthcheck
 chown -R root:root /opt/aim344-healthcheck
 install -o root -g root -m 0755 "$lab/prejob-prolog.sh" /opt/aim344/prejob-prolog.sh
+# The health Prolog on each GPU node takes the assigned EFA count only from
+# /etc/aim344-maintenance.json. prepare-target.py writes the target's whole
+# file. This sets the count on both nodes and keeps any other settings.
+if [[ -n ${AIM344_EXPECTED_EFA_DEVICES:-} ]]; then
+    python3 - "$AIM344_EXPECTED_EFA_DEVICES" <<'PY'
+import json, os, sys
+path = '/etc/aim344-maintenance.json'
+config = {}
+if os.path.exists(path):
+    with open(path) as source:
+        config = json.load(source)
+config['expected_efa_devices'] = int(sys.argv[1])
+with os.fdopen(os.open(path + '.new', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as output:
+    json.dump(config, output)
+os.chmod(path + '.new', 0o600)
+os.replace(path + '.new', path)
+PY
+fi
 install -d -o root -g root -m 0755 /var/lib/aim344-device-recovery
 install -o root -g root -m 0755 "$lab/facilitator/restore-runtime.sh" /var/lib/aim344-device-recovery/restore-runtime.sh
 install -o root -g root -m 0755 "$lab/facilitator/device-fault.sh" /usr/local/sbin/aim344-device-fault

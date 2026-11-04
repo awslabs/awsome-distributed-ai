@@ -168,6 +168,44 @@ class Grammar(unittest.TestCase):
             config.symlink_to(root / 'missing')
             self.assertNotEqual(invoke().returncode, 0)
 
+    def test_node_preparation_gives_the_prolog_on_both_nodes_the_assigned_count(self):
+        # prepare-compute.sh runs on both GPU nodes, prepare-target.py only on
+        # the target. Run the count block of the one and the assignment-loading
+        # prefix of the Prolog against a relocated configuration path.
+        source = (LAB / 'facilitator' / 'prepare-compute.sh').read_text()
+        start = source.index('if [[ -n ${AIM344_EXPECTED_EFA_DEVICES:-} ]]; then')
+        block = source[start:source.index('\nfi\n', start) + 4]
+        prolog = (LAB / 'prejob-prolog.sh').read_text().split('marker=/run/aim344-unhealthy')[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / 'maintenance.json'
+            prepare = root / 'prepare.sh'
+            prepare.write_text(block.replace('/etc/aim344-maintenance.json', str(config)))
+            read = root / 'prolog.sh'
+            read.write_text(prolog.replace('/etc/aim344-maintenance.json', str(config))
+                            .replace('info.st_uid != 0', f'info.st_uid != {os.getuid()}')
+                            + '\nprintf %s "${HEALTHCHECK_EXPECTED_EFA_COUNT:-unset}"\n')
+            environment = {k: v for k, v in os.environ.items() if k != 'AIM344_EXPECTED_EFA_DEVICES'}
+
+            def run(script, **extra):
+                return subprocess.run(['bash', str(script)], env=dict(environment, **extra),
+                                      text=True, capture_output=True, timeout=10)
+            self.assertEqual(0, run(prepare).returncode)
+            self.assertFalse(config.exists())
+            # The peer has no file before preparation.
+            result = run(prepare, AIM344_EXPECTED_EFA_DEVICES='2')
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual({'expected_efa_devices': 2}, json.loads(config.read_text()))
+            self.assertEqual(0o600, config.stat().st_mode & 0o777)
+            self.assertEqual('2', run(read).stdout)
+            # On the target the other settings stay.
+            config.write_text(json.dumps({'slurm_bin': '/opt/aws/pcs/scheduler/slurm-25.05/bin',
+                                          'checks': [0, 2, 3, 6], 'expected_efa_devices': 4}))
+            self.assertEqual(0, run(prepare, AIM344_EXPECTED_EFA_DEVICES='2').returncode)
+            self.assertEqual({'slurm_bin': '/opt/aws/pcs/scheduler/slurm-25.05/bin',
+                              'checks': [0, 2, 3, 6], 'expected_efa_devices': 2},
+                             json.loads(config.read_text()))
+
     def test_environment_carries_the_efa_tools_the_suite_calls(self):
         """Omitting /opt/amazon/efa/bin made check 2 report 'fi_info not found'
         and FAIL on a node whose EFA counts were all correct."""
