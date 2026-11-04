@@ -866,15 +866,17 @@ def update_time_chart_lines(results, names, ceilings, world):
         if ceilings:
             arithmetic = compute_only_seconds(summary['measured_useful_tokens'] / timed, stage['sequence_length'],
                                               ceilings['gemm_tflops_per_gpu'], world)
-            row.update(segments=[(arithmetic, charts.FILLS[0]), (seconds - arithmetic, charts.FILLS[2])],
+            row.update(segments=[(arithmetic, charts.FILLS[0]), (seconds - arithmetic, charts.FILLS[3])],
                        detail=f'{charts.FILLS[0]} arithmetic at your GEMM peak {arithmetic:.2f} s   '
-                              f'{charts.FILLS[2]} the rest {seconds - arithmetic:.2f} s')
+                              f'{charts.FILLS[3]} the rest {seconds - arithmetic:.2f} s')
         else:
-            row.update(segments=[(seconds, charts.FILLS[2])],
+            row.update(segments=[(seconds, charts.FILLS[3])],
                        detail='arithmetic n/a (run bash tools/hold-and-measure.sh)')
         rows.append(row)
+    # 0.1 s per cell while the bars fit, as in the profile chart, so that a bar keeps its length
+    # from one module to the next.
     return charts.stacked_chart("One update: the model's arithmetic at your GEMM peak, and the rest "
-                                '(mean of the timed updates)', rows, [], 's')
+                                '(mean of the timed updates)', rows, [], 's', minimum_scale=0.1)
 
 
 def memory_chart_lines(results, names):
@@ -887,7 +889,7 @@ def memory_chart_lines(results, names):
         peak = peak_memory_gib(summary)
         rows.append(dict(label=f"{name} ({run['plan']['attention']} attention)", value=peak,
                          text=f'{peak:.2f} GiB{failed_check(run)}'))
-    return charts.bar_chart('Peak memory of the largest rank', rows)
+    return charts.bar_chart('Peak memory of the largest rank', rows, 'GiB')
 
 
 def goodput_chart_lines(results):
@@ -908,7 +910,8 @@ def goodput_chart_lines(results):
     else:
         value = summary['training_throughput_tokens_per_second'] * 3600 / summary['allocation']['gpu_count'] / 1e6
         rows.append(dict(label=label, value=value, text=f'{value:.2f}{failed_check(run)}'))
-    return charts.bar_chart('Training goodput, M tokens per GPU-hour (higher is better)', rows, notes=[
+    return charts.bar_chart('Training goodput, M tokens per GPU-hour (higher is better)', rows,
+                            'M tokens per GPU-hour', notes=[
         'The reference is the throughput of the timed updates of stage sdpa, a run that does not save.'])
 
 
@@ -937,7 +940,8 @@ def protocol_chart_lines(runs):
                 continue
             busbw = table[size][1]
             rows.append(dict(label=name, value=busbw, text=f"{busbw:.2f}  {', '.join(choices.get(size, ['-']))}"))
-    return charts.bar_chart('Bus bandwidth of all_reduce_perf by message size, GB/s (higher is better)', rows)
+    return charts.bar_chart('Bus bandwidth of all_reduce_perf by message size, GB/s (higher is better)', rows,
+                            'GB/s')
 
 
 # ---------------------------------------------------------------- allocation

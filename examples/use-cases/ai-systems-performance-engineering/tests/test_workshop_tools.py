@@ -540,6 +540,34 @@ class ProfileTableTests(unittest.TestCase):
             self.assertIn('  NCCL kernels busy               0.001 s', stdout.getvalue())
             self.assertIn('has no ProfilerStep#2 span for update 3', stderr.getvalue())
 
+    def test_each_table_read_is_kept_for_the_chart_of_the_next_profile(self):
+        tool = load_tool('profile-table')
+        with tempfile.TemporaryDirectory() as directory:
+            for start, name in enumerate(('profile-socket-eager', 'profile-efa-eager'), 1):
+                train = Path(directory) / name / 'train'
+                train.mkdir(parents=True)
+                (train.parent / 'run.json').write_text(json.dumps({'start_utc': start}))
+                write_rows(train / 'rank-0-updates.jsonl',
+                           [dict(update=1, monotonic_seconds=10.0), dict(update=2, monotonic_seconds=11.0)])
+                (train / 'trace-rank-0.json').write_text(json.dumps({'traceEvents': self.trace(scale=start)}))
+            stdout = io.StringIO()
+            with patch.dict(os.environ, LLM_RESULTS_DIR=directory), redirect_stdout(stdout):
+                self.assertEqual(tool.main(['profile-socket-eager']), 0)
+                saved = json.loads((Path(directory) / 'profile-socket-eager' / tool.TABLES).read_text())
+                self.assertEqual(list(saved), ['rank slowest, update 2'])
+                self.assertAlmostEqual(saved['rank slowest, update 2']['table']['update'], 0.002)
+                first = stdout.getvalue().splitlines()
+                stdout.truncate(0)
+                stdout.seek(0)
+                # The second call parses only its own trace and draws the first table from the saved file.
+                with patch.object(tool, 'update_table', wraps=tool.update_table) as parsed:
+                    self.assertEqual(tool.main(['profile-efa-eager']), 0)
+                self.assertEqual(parsed.call_count, 1)
+            second = stdout.getvalue().splitlines()
+            self.assertIn('  profile-efa-eager     run python3 tools/profile-table.py profile-efa-eager to add it', first)
+            rows = [line for line in second if line.startswith(('  profile-socket-eager', '  profile-efa-eager'))]
+            self.assertEqual([line.split()[-2:] for line in rows], [['0.002', 's'], ['0.004', 's']])
+
 
 class ProgressionTests(unittest.TestCase):
     def test_rows_ratios_notes_goodput_and_markdown(self):

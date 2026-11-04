@@ -88,7 +88,7 @@ MFU here is tokens per second times 6N + 12·L·d·T FLOP per token, divided by 
 
 ### Charts under the result block
 
-The Session Manager terminal cannot open image files, so the tools draw their charts with Unicode block characters, at most 100 columns wide, under the result they belong to. Each chart is built from your own result files. A stage that has not run, is still running, failed, or cannot be paired prints the reason in place of its bar; no value is estimated.
+The Session Manager terminal cannot open image files, so the tools draw their charts with Unicode block characters, at most 100 columns wide, under the result they belong to. Each chart is built from your own result files. A stage that has not run, is still running, failed, or cannot be paired prints the reason in place of its bar; no value is estimated. Each chart ends with the value of one cell. The update chart and the profile chart keep 0.1 s per cell as long as the bars fit, so a bar keeps its length from one module to the next.
 
 - **One update.** Every timed stage without saves prints the mean seconds of one timed update as a bar of two parts: the model's arithmetic at your GEMM peak (the targets of one update times 6N + 12·L·d·T FLOP, divided by 16 times the GEMM peak) and the rest. The bar of the stage is drawn below the bar of the stage it is read beside: a `probe` beside the full-length stage with the same transport and attention (`baseline` for `probe-socket-eager`, `efa` for `probe-efa-eager`), `sdpa-socket` and `efa` beside `baseline`, and `sdpa` beside `efa`. Without `ceilings.json` the bar shows the update time alone.
 - **Peak memory.** `sdpa` also prints the peak memory of the largest rank of `efa` and `sdpa`.

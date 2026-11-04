@@ -10,7 +10,10 @@ import math
 WIDTH = 100
 EIGHTHS = ' ▏▎▍▌▋▊▉'
 FULL = '█'
-FILLS = ('█', '▓', '▒', '░')
+# Fills of the parts of a stacked bar, in the order the parts are drawn. Each of the first
+# three differs from the next by at least two shade steps (█ to ░, ░ to ▓), so that
+# neighbouring parts stay apart on a light background too.
+FILLS = ('█', '░', '▓', '▒')
 LOST = '·'
 
 
@@ -70,27 +73,30 @@ def key_lines(indent, entries):
     return lines + ([' ' * indent + line] if line else [])
 
 
-def bar_chart(title, rows, notes=()):
+def bar_chart(title, rows, unit, notes=()):
     """Solid bars. rows: dicts with label, value (or None), text, and note when value is None."""
     label_width, cells = layout(rows)
     maximum = max([row['value'] for row in rows if row.get('value') is not None] + [0])
-    scale = maximum / cells if maximum else 1.0
+    scale = nice_scale(maximum, cells)
     lines = [title]
     for row in rows:
         if row.get('value') is None:
             lines.append(row_line(row['label'], label_width, row['note'], 0, ''))
         else:
             lines.append(row_line(row['label'], label_width, solid(row['value'], scale), cells, row['text']))
+    if maximum:
+        lines += key_lines(label_width + 4, [f'one cell = {scale_text(scale)} {unit}'])
     return lines + [f'  {note}' for note in notes]
 
 
-def stacked_chart(title, rows, legend, unit):
+def stacked_chart(title, rows, legend, unit, minimum_scale=0.0):
     """Stacked bars on one scale. rows: dicts with label, segments [(value, fill)], text and
     detail (a line under the bar), or note when the row has no bar. legend: [(fill, name)],
-    printed before the scale; empty when each detail line names its segments."""
+    printed before the scale; empty when each detail line names its segments. minimum_scale
+    keeps one value per cell while the bars fit, so that charts of different runs compare."""
     label_width, cells = layout(rows)
     maximum = max([sum(max(0.0, v) for v, _ in row['segments']) for row in rows if row.get('segments')] + [0])
-    scale = nice_scale(maximum, cells)
+    scale = max(minimum_scale, nice_scale(maximum, cells))
     lines = [title]
     for row in rows:
         if not row.get('segments'):

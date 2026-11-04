@@ -94,6 +94,12 @@ class PrimitiveTests(unittest.TestCase):
         self.assertEqual(bar, 'a' * 8 + 'b' * 6 + 'c')
         self.assertEqual(charts.stacked([(-1.0, 'a'), (0.5, 'b')], 0.1), 'b' * 5)
 
+    def test_neighbouring_fills_are_two_shade_steps_apart(self):
+        shade = {'█': 4, '▓': 3, '▒': 2, '░': 1}
+        self.assertTrue(all(abs(shade[a] - shade[b]) >= 2 for a, b in zip(charts.FILLS[:3], charts.FILLS[1:3])))
+        # The update chart's two parts, FILLS[0] and FILLS[3], are two steps apart as well.
+        self.assertEqual(shade[charts.FILLS[0]] - shade[charts.FILLS[3]], 2)
+
     def test_scales_are_one_two_two_and_a_half_or_five_times_a_power_of_ten(self):
         self.assertEqual(charts.nice_scale(3.519, 67), 0.1)
         self.assertEqual(charts.nice_scale(1.44, 52), 0.05)
@@ -112,18 +118,18 @@ class CumulativeChartTests(SpainResults):
         self.add('efa')
         lines = workshop.cumulative_chart_lines(self.results)
         self.assertEqual(bar(lines[1]), ('█' * 10, '1.00x'))
-        self.assertEqual(bar(lines[2]), ('█' * 10 + '▓' * 13, '2.29x  (EFA +1.29x)'))
+        self.assertEqual(bar(lines[2]), ('█' * 10 + '░' * 13, '2.29x  (EFA +1.29x)'))
         self.add('sdpa')
         lines = workshop.cumulative_chart_lines(self.results)
         self.assertEqual([bar(line) for line in lines[1:4]], [
             ('█' * 10, '1.00x'),
-            ('█' * 10 + '▓' * 13, '2.29x  (EFA +1.29x)'),
-            ('█' * 10 + '▓' * 13 + '▒' * 16, '3.89x  (SDPA +1.60x)')])
+            ('█' * 10 + '░' * 13, '2.29x  (EFA +1.29x)'),
+            ('█' * 10 + '░' * 13 + '▓' * 16, '3.89x  (SDPA +1.60x)')])
         self.assertEqual([line[:28] for line in lines[1:4]], ['  baseline (socket, eager)  ',
                                                              '  efa (efa, eager)          ',
                                                              '  sdpa (efa, sdpa)          '])
         self.assertEqual(len(columns(lines[1:4])), 1)
-        self.assertEqual(lines[4], '                            █ baseline 1.00x   ▓ EFA +1.29x   ▒ SDPA +1.60x   '
+        self.assertEqual(lines[4], '                            █ baseline 1.00x   ░ EFA +1.29x   ▓ SDPA +1.60x   '
                                    'one cell = 0.1x')
         self.assert_narrow(lines)
 
@@ -132,15 +138,15 @@ class CumulativeChartTests(SpainResults):
         self.edit_summary('sdpa', measured_seconds=6.6)  # synthetic: slower than efa
         lines = workshop.cumulative_chart_lines(self.results)
         # 13.19 / 6.6 = 2.00x: the bar keeps 20 cells of the efa bar and marks its 3 lost cells.
-        self.assertEqual(bar(lines[3]), ('█' * 10 + '▓' * 10 + '·' * 3, '2.00x  (SDPA -0.29x, slower)'))
-        self.assertEqual(lines[4:], ['                            █ baseline 1.00x   ▓ EFA +1.29x',
+        self.assertEqual(bar(lines[3]), ('█' * 10 + '░' * 10 + '·' * 3, '2.00x  (SDPA -0.29x, slower)'))
+        self.assertEqual(lines[4:], ['                            █ baseline 1.00x   ░ EFA +1.29x',
                                      '                            · SDPA -0.29x, lost against the bar before   '
                                      'one cell = 0.1x'])
         self.edit_summary('efa', allocation={'label': 'another allocation'})  # synthetic
         lines = workshop.cumulative_chart_lines(self.results)
         self.assertEqual(lines[2], '  efa (efa, eager)          not compared: different allocation')
         # Without an efa bar, the sdpa bar holds both steps; nothing is split or estimated.
-        self.assertEqual(bar(lines[3]), ('█' * 10 + '▓' * 10, '2.00x  (EFA + SDPA +1.00x)'))
+        self.assertEqual(bar(lines[3]), ('█' * 10 + '░' * 10, '2.00x  (EFA + SDPA +1.00x)'))
         run = json.loads((self.results / 'efa' / 'run.json').read_text())
         (self.results / 'efa' / 'run.json').write_text(json.dumps(dict(run, exit_status=4)))
         self.assertEqual(workshop.cumulative_chart_lines(self.results)[2],
@@ -176,14 +182,38 @@ class GoodputChartTests(SpainResults):
         lines = workshop.goodput_chart_lines(self.results)
         rows = [bar(line) for line in lines[1:4]]
         self.assertEqual([text for _, text in rows], ['12.50', '15.00', '17.39'])
-        # One scale for the three bars: 17.39 fills the bar width, and the others are in proportion.
+        # One scale for the three bars, 0.5 M tokens per GPU-hour per cell, so the bars are in proportion.
         widths = [len(cells) - 1 + charts.EIGHTHS.index(cells[-1]) / 8 if cells[-1] in charts.EIGHTHS
                   else len(cells) for cells, _ in rows]
         self.assertAlmostEqual(widths[0] / widths[2], 12.50 / 17.39, delta=0.01)
         self.assertAlmostEqual(widths[1] / widths[2], 15.00 / 17.39, delta=0.01)
         self.assertEqual(len(columns(lines[1:4])), 1)
-        self.assertEqual(lines[4], '  The reference is the throughput of the timed updates of stage sdpa, '
+        self.assertEqual(lines[4].strip(), 'one cell = 0.5 M tokens per GPU-hour')
+        self.assertEqual(lines[5], '  The reference is the throughput of the timed updates of stage sdpa, '
                                    'a run that does not save.')
+
+
+    def test_result_block_of_a_saving_stage_is_followed_by_the_goodput_chart(self):
+        self.add('sdpa')
+        stage = workshop.plan('checkpoint', {'LLM_TRANSPORT': 'efa', 'ATTENTION': 'sdpa', 'CHECKPOINT_MODE': 'sync'})[0]
+        directory = self.results / stage['name']
+        (directory / 'train').mkdir(parents=True)
+        run = dict(plan=stage, status='finished', exit_status=0, checks=[])
+        (directory / 'run.json').write_text(json.dumps(run))
+        (directory / 'train' / 'summary.json').write_text(json.dumps(dict(  # synthetic
+            measured_seconds=80.0, measured_useful_tokens=2489152, segment_seconds=88.25,
+            allocation={'gpu_count': 16}, training_goodput={'retained_progress_tokens': 2620160,
+                                                            'tokens_per_allocated_gpu_hour': 6.68e6})))
+        lines = workshop.result_lines(stage, directory, run, self.results, 16)
+        chart = lines.index('Training goodput, M tokens per GPU-hour (higher is better)')
+        self.assertEqual(lines[0], 'ckpt-sync (efa, sdpa attention, sync saves after updates 5, 20, 40)')
+        self.assertIn('  goodput interval             88.25 s  (from the end of model loading to the end of the final flush)',
+                      lines[:chart])
+        self.assertEqual(lines[chart - 1], '')
+        self.assertEqual([bar(lines[chart + 1])[1], lines[chart + 2], bar(lines[chart + 3])[1]],
+                         ['6.68', '  ckpt-process, process-mode saves        not run yet', '17.39'])
+        self.assertEqual(lines[chart + 4].strip(), 'one cell = 0.5 M tokens per GPU-hour')
+        self.assert_narrow(lines[chart:])
 
 
 class UpdateTimeChartTests(SpainResults):
@@ -218,13 +248,16 @@ class UpdateTimeChartTests(SpainResults):
             "One update: the model's arithmetic at your GEMM peak, and the rest (mean of the timed updates)",
             'Peak memory of the largest rank', CUMULATIVE_TITLE])
         update = lines[titles[1] + 1:titles[1] + 6]
-        self.assertEqual([bar(update[0]), bar(update[2])], [('█' * 11 + '▒' * 47, '1.44 s'),
-                                                            ('█' * 11 + '▒' * 23, '0.85 s')])
+        # 0.1 s per cell, as in Modules 2 to 4, so the EFA bar keeps its length from Module 4.
+        self.assertEqual([bar(update[0]), bar(update[2])], [('█' * 3 + '▒' * 11, '1.44 s'),
+                                                            ('█' * 3 + '▒' * 5, '0.85 s')])
         self.assertEqual([update[1].strip(), update[3].strip(), update[4].strip()], [
             '█ arithmetic at your GEMM peak 0.28 s   ▒ the rest 1.16 s',
-            '█ arithmetic at your GEMM peak 0.28 s   ▒ the rest 0.57 s', 'one cell = 0.025 s'])
-        memory = lines[titles[2] + 1:titles[2] + 3]
-        self.assertEqual([bar(line) for line in memory], [('█' * 64, '26.68 GiB'), ('█' * 20, '8.34 GiB')])
+            '█ arithmetic at your GEMM peak 0.28 s   ▒ the rest 0.57 s', 'one cell = 0.1 s'])
+        memory = lines[titles[2] + 1:titles[2] + 4]
+        # 0.5 GiB per cell: 53 3/8 and 16 5/8 cells.
+        self.assertEqual([bar(line) for line in memory[:2]], [('█' * 53 + '▍', '26.68 GiB'), ('█' * 16 + '▋', '8.34 GiB')])
+        self.assertEqual(memory[2].strip(), 'one cell = 0.5 GiB')
         self.assertEqual(bar(lines[titles[3] + 3])[1], '3.89x  (SDPA +1.60x)')
         self.assert_narrow(lines)
 
@@ -276,15 +309,15 @@ class ProfileChartTests(SpainResults):
         lines = tool.chart_lines(self.results, 'profile-efa-eager', 'slowest', 5, PROFILES['profile-efa-eager'])
         self.assertEqual(lines[0], 'Where the time of update 5 goes, for the slowest rank of each profile')
         # Attention core, other compute, communication not overlapped and GPU idle, at 0.1 s per cell.
-        self.assertEqual([bar(lines[1]), bar(lines[3])], [('█' * 7 + '▓' * 6 + '▒' * 22, '3.519 s'),
-                                                          ('█' * 8 + '▓' * 6 + '▒', '1.451 s')])
+        self.assertEqual([bar(lines[1]), bar(lines[3])], [('█' * 7 + '░' * 6 + '▓' * 22, '3.519 s'),
+                                                          ('█' * 8 + '░' * 6 + '▓', '1.451 s')])
         self.assertEqual([lines[1][:24], lines[3][:24]], ['  profile-socket-eager  ', '  profile-efa-eager     '])
         self.assertEqual(lines[2:3] + lines[4:], [
-            '                        █ 0.751  ▓ 0.565  ▒ 2.193  ░ 0.010 s   input wait (CPU) 0.001 s',
-            '                        █ 0.770  ▓ 0.603  ▒ 0.067  ░ 0.011 s   input wait (CPU) 0.001 s',
+            '                        █ 0.751  ░ 0.565  ▓ 2.193  ▒ 0.010 s   input wait (CPU) 0.001 s',
+            '                        █ 0.770  ░ 0.603  ▓ 0.067  ▒ 0.011 s   input wait (CPU) 0.001 s',
             '  profile-efa-sdpa      not run yet',
-            '                        █ attention core kernels   ▓ other compute kernels',
-            '                        ▒ communication not overlapped   ░ GPU idle   one cell = 0.1 s',
+            '                        █ attention core kernels   ░ other compute kernels',
+            '                        ▓ communication not overlapped   ▒ GPU idle   one cell = 0.1 s',
             '  input wait (CPU) can overlap the GPU parts, so the bar leaves it out'])
         self.assert_narrow(lines)
         (self.results / 'profile-efa-sdpa').mkdir()
@@ -307,14 +340,15 @@ class ProtocolChartTests(unittest.TestCase):
                 for (variant, label), choices in zip(workshop.PROTOCOL_RUNS, (choice, simple))]
         lines = workshop.protocol_chart_lines(runs)
         self.assertEqual(lines[0], 'Bus bandwidth of all_reduce_perf by message size, GB/s (higher is better)')
-        self.assertEqual(len(lines), 15)
+        self.assertEqual(len(lines), 16)
         self.assertEqual([line[:31] for line in lines[3:5]], ['    2 MiB  NCCL_PROTO not set  ',
                                                               '           NCCL_PROTO=Simple   '])
-        # One scale: 37.80 GB/s fills the bar, so 0.26 GB/s is three eighths of a cell.
-        self.assertEqual(bar(lines[3]), ('▍', '0.26  RING/LL'))
+        # One scale, 1 GB/s per cell: 0.26 GB/s is two eighths of a cell.
+        self.assertEqual(bar(lines[3]), ('▎', '0.26  RING/LL'))
         self.assertEqual(bar(lines[8])[1], '13.94  TREE/SIMPLE')
-        self.assertEqual(bar(lines[14]), ('█' * 49, '37.80  RING/SIMPLE'))
-        self.assertEqual(len({BAR.search(line).start() for line in lines[1:]}), 1)
+        self.assertEqual(bar(lines[14]), ('█' * 37 + '▊', '37.80  RING/SIMPLE'))
+        self.assertEqual(lines[15].strip(), 'one cell = 1 GB/s')
+        self.assertEqual(len({BAR.search(line).start() for line in lines[1:15]}), 1)
         self.assertTrue(all(len(line) <= charts.WIDTH for line in lines))
 
 

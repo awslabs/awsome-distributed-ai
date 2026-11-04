@@ -217,7 +217,7 @@ def chart_lines(results, name, rank, update, table):
     which = {'slowest': 'the slowest rank of each profile', 'all': 'the mean of all ranks'}.get(rank, f'rank {rank}')
     lines = charts.stacked_chart(f'Where the time of update {update} goes, for {which}', rows, [
         (charts.FILLS[0], 'attention core kernels'), (charts.FILLS[1], 'other compute kernels'),
-        (charts.FILLS[2], 'communication not overlapped'), (charts.FILLS[3], 'GPU idle')], 's')
+        (charts.FILLS[2], 'communication not overlapped'), (charts.FILLS[3], 'GPU idle')], 's', minimum_scale=0.1)
     if any(charts.LOST in segment for row in rows for _, segment in row.get('segments', [])):
         lines.append(f'  {charts.LOST} copies only (no kernel running)')
     return lines + ['  input wait (CPU) can overlap the GPU parts, so the bar leaves it out']
