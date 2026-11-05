@@ -31,6 +31,14 @@ def test_none_leaves_base_default_untouched(monkeypatch):
 
     monkeypatch.delenv("COSMOS3_PEAK_TFLOPS", raising=False)
     cb = mod.Cosmos3MFUCallback()
-    # with neither kwarg nor env, the framework default is left in place: our
-    # stub base does not set hardware_target, so it stays None (no override, no crash)
-    assert getattr(cb, "hardware_target", None) is None
+    base = mod.MFUCallback()
+    # With neither kwarg nor env, we must NOT override: hardware_target is whatever
+    # the base set — None under the local stub, the framework default (e.g. H100)
+    # in-image. Compare the identifying fields rather than the objects, so the test
+    # does not depend on HardwareTarget implementing value equality.
+    cb_target = getattr(cb, "hardware_target", None)
+    base_target = getattr(base, "hardware_target", None)
+    if base_target is None:
+        assert cb_target is None
+    else:
+        assert (cb_target.name, cb_target.peak_tflops) == (base_target.name, base_target.peak_tflops)

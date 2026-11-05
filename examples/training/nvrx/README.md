@@ -2,6 +2,8 @@
 
 This test case benchmarks [NVIDIA Resiliency Extension (NVRx)](https://github.com/NVIDIA/nvidia-resiliency-ext) features for PyTorch distributed training on AWS. NVRx provides fault tolerance and resiliency primitives for large-scale training, integrating as a simple `pip install` layer on top of standard PyTorch -- no custom CUDA builds or kernel modifications required.
 
+For Slurm, start with the separate [NVRx 0.7.0 training and checkpoint recovery example](slurm/README.md). It runs a direct Hugging Face DDP or FSDP training loop under one Slurm allocation, saves PyTorch checkpoints, and resumes after a worker failure without a separate initialization job. Use its pinned environment and run instructions rather than the Kubernetes-oriented build and deployment steps below.
+
 ## NVRx Features Tested
 
 | Feature | Training Script | Description | Tested On |
@@ -104,7 +106,7 @@ This downloads 100K samples (~227 MB) in about 20 seconds. Then add `--dataset_p
 ## Platform-Specific Instructions
 
 - **Amazon EKS**: See [kubernetes/README.md](kubernetes/README.md)
-- **Slurm**: Coming soon
+- **Slurm**: See [slurm/README.md](slurm/README.md) for training and checkpoint recovery with the separate NVRx 0.7.0 environment.
 
 ## Source Files
 

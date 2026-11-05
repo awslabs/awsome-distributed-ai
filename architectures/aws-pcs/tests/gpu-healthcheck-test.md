@@ -11,7 +11,8 @@ reference — see the suite's own
 Don't duplicate that here.
 
 **Prerequisites:** a deployed GPU CNG (P5/P5e/P5en/P6-B200/P6-B300) and the suite
-available on shared `/fsx` (so every compute node sees the same scripts).
+available on shared `/fsx` (so every compute node sees the same scripts;
+`DeployFSxLustre=true`, the default).
 
 ---
 

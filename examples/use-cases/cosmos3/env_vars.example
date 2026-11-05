@@ -16,7 +16,7 @@ export IMAGE_URI="${REGISTRY}/${IMAGE}:${TAG}"
 
 # --- Image build (build-push.sh; docker buildx → ECR) ---
 export DLC_TAG="2.10.0-gpu-py313-cu130-ubuntu22.04-ec2"  # AWS DLC base tag
-# export COSMOS_FRAMEWORK_REF="5eee9ed574255f017b192161bfbb5a10253d65cf"   # framework pin (default in build-push.sh)
+# export COSMOS_FRAMEWORK_REF="1a2f03ab6111b457633827736f94f67d55bd5202"   # framework pin (default in build-push.sh)
 
 # --- Namespace / scheduling ---
 export NAMESPACE="<your-namespace>"
@@ -76,6 +76,8 @@ export NUM_WORKERS="0"
 export BASE_CHECKPOINT_PATH="/fsx/pretrained/Cosmos3-Nano-dcp"   # dir containing model/
 
 # --- Generation / SDG (generate-vllm-omni-super.yaml; official vllm/vllm-omni:cosmos3 engine) ---
+# The cosmos3 tag moves; mirror this validated multi-arch index digest (see README "Synthetic data generation").
+export VLLM_OMNI_DIGEST="sha256:86fb713bf73e118e537a55fa013dcdbdf2468ed61b98f4f2e7934a9482181dc1"
 # Parallelism flags must multiply to GPUS_PER_NODE (e.g. cfg2 x uly4 = 8). Guardrails
 # are toggled PER-REQUEST (request extra_params.guardrails), NOT a server flag.
 export CFG_PARALLEL="2"            # --cfg-parallel-size

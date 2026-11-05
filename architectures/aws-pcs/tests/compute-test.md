@@ -44,7 +44,9 @@ node. EFA itself is exercised by Test 6.
 
 2-node × 8-GPU `all_reduce_perf` over EFA, using the repo's canonical launcher
 [`micro-benchmarks/nccl-tests/slurm/nccl-tests-container.sbatch`](../../../micro-benchmarks/nccl-tests/slurm/nccl-tests-container.sbatch)
-(it reads `$IMAGE`, default `/fsx/nccl-tests.sqsh`). Only two PCS-specific deltas:
+(it reads `$IMAGE`, default `$APPS_PATH/nccl-tests.sqsh` with `APPS_PATH=/fsx`; on a
+cluster deployed with `DeployFSxLustre=false`, import the image under `$HOME` and
+export `APPS_PATH` to that directory before `sbatch`). Only two PCS-specific deltas:
 
 1. **Import the image on the login node** — `enroot import` builds its overlayfs on the
    node-local root disk (the login node has a 300 GiB root via `RootVolumeSize`); FSx

@@ -23,7 +23,7 @@ LDAP users).
 | 4-6 | **Compute** | CPU queue, GPU families (G/P5/P6), NCCL multi-node EFA | [`compute-test.md`](./compute-test.md) | Every PR |
 | 7, 7b | **Training** | FSDP Llama-2 7B (HF-streamed) + Megatron-LM GPT-3 (TP/PP/DP, local data) | [`training-test.md`](./training-test.md) | GPU PRs |
 | 9 | **HPC EFA** | EFA on CPU instances (hpc6a/hpc7a/hpc8a), OSU benchmarks | [`hpc-efa-test.md`](./hpc-efa-test.md) | EFA wiring changes |
-| 10 | **Storage** | FSx health check + performance regression test (noatime benchmark) | [`storage-test.md`](./storage-test.md) | FSx / mount changes |
+| 10 | **Storage** | Shared-storage health (OpenZFS or EFS `/home`, optional Lustre `/fsx`) + performance regression test (noatime benchmark) | [`storage-test.md`](./storage-test.md) | Storage parameter / mount changes |
 | 11-12 | **Multi-user** | OpenLDAP directory + Slurm managed accounting | [`multi-user-test.md`](./multi-user-test.md) | Directory / accounting changes |
 | 13 | **GPU health** | GPU Cluster Health Check suite (DCGM, EFA, NVLink, NCCL thresholds) | [`gpu-healthcheck-test.md`](./gpu-healthcheck-test.md) | GPU CNG deploys |
 | 14 | **IAM** | cluster-admin deploys+deletes (no `iam:CreatePolicy`); cluster-user is SSM-login-only and can't read the LDAP password | [`iam-test.md`](./iam-test.md) | IAM policy changes |
@@ -31,6 +31,19 @@ LDAP users).
 | 16 | **README walkthrough** | Deploy from README §3 Quick Start, then run the SSM connect (§6) and Grafana port-forward (§8.2) commands **as written**. Every copy-pasted command must return a real value (no `None`, no `Not found`), Grafana must load `admin` + SSM-retrieved password. Catches tag/CLI/permission drifts before customers hit them. | [`readme-walkthrough-test.md`](./readme-walkthrough-test.md) | Every PR touching README §3/§6/§8.2 or the tags/policies they depend on |
 
 ---
+
+## Offline home bootstrap regression
+
+Run `python3 tests/test_home_boot.py -v` from `architectures/aws-pcs/` before
+changing a home mount script (`mount-openzfs-home.sh`, `mount-efs-home.sh`)
+or lifecycle policy; every case runs once per script. Requires Python 3,
+PyYAML, rsync, systemd-fstab-generator and systemd-analyze (Ubuntu 24.04).
+The test uses sandbox paths and command doubles, real rsync, and real offline
+systemd unit loading. It checks first-boot copy/permissions and fatal mount
+failure, all four lifecycle policies, the modeled NFSv3 rpc-statd wait cycle
+(OpenZFS only; EFS mounts NFSv4.1), and the required home mount (including a
+missing-unit negative control).
+It does not mount NFS, start services, or verify a PCS reboot end to end.
 
 ## Quick-start: single-cluster shortcut
 
@@ -72,9 +85,9 @@ MonitoringStack=Prometheus-LoginNode
 
 ## Region coverage
 
-The table lists **all 20 regions where AWS PCS is available** (per
-`/aws/service/global-infrastructure/services/pcs/regions`) — 16 verified,
-4 not yet run.
+The table lists **all 26 regions where AWS PCS is available** (per
+`/aws/service/global-infrastructure/services/pcs/regions`) — 21 verified,
+5 not yet run.
 
 | Region (AZ ID) ¹ | Verified ² | Storage ³ (Lustre<br>/ OpenZFS) | GPU verified ⁴ | *(ref) CBML GPUs offered* ⁵ | Date (UTC) |
 |---|---|---|---|---|---|
@@ -87,13 +100,19 @@ The table lists **all 20 regions where AWS PCS is available** (per
 | **Singapore**<br>(`apse1-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | — | 2026-06-17 |
 | **Sydney**<br>(`apse2-az2`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | P5, P5e, P5en | 2026-06-17 |
 | **Frankfurt**<br>(`euc1-az2`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | — | 2026-06-17 |
-| **Stockholm**<br>(`eun1-az2`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | P5, P5e, P5en | 2026-06-17 |
+| **Stockholm**<br>(`eun1-az2`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | P6-B200, P5, P5e, P5en | 2026-06-17 |
 | **Ireland**<br>(`euw1-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | — | 2026-07-07 |
 | **Spain**<br>(`eus2-az1`) | ✅<br>(m7i/c7i) ⁷ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | P5en | 2026-07-07 |
-| **London**<br>(`euw2-az2`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | P5, P5e, P5en | 2026-07-08 |
-| **Paris**<br>(`euw3-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | — | 2026-07-08 |
+| **London**<br>(`euw2-az2`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | P6-B300, P5, P5e, P5en | 2026-07-08 |
+| **Paris**<br>(`euw3-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | P6-B200 | 2026-07-08 |
 | **São Paulo**<br>(`sae1-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | P5, P5e | 2026-07-08 |
-| **Jakarta**<br>(`apse3-az1`) | ✅<br>(c7i) ⁷ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | P5, P5e, P5en | 2026-07-08 |
+| **Jakarta**<br>(`apse3-az1`) | ✅<br>(c7i) ⁷ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | P6-B300, P5, P5e, P5en | 2026-07-08 |
+| **Seoul**<br>(`apne2-az3`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | ✅ P6-B300 | P6-B300, P5en | 2026-10-16 |
+| **Hyderabad**<br>(`aps2-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | ✅ P6-B300 | P6-B300, P6-B200 | 2026-10-28 |
+| **Melbourne**<br>(`apse4-az1`) | ✅<br>(m7i/c7i) ⁷ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | — | 2026-11-02 |
+| **Malaysia**<br>(`apse5-az2`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_1` ⁶ | — | — | 2026-11-02 |
+| **Canada Central**<br>(`cac1-az1`) | ✅ | ✅ `PERSISTENT_2`<br>✅ `SINGLE_AZ_HA_2` | — | — | 2026-11-02 |
+| **New Zealand**<br>(ap-southeast-6) | — | — | — | — | not yet run |
 | **Cape Town**<br>(af-south-1) | — | — | — | — | not yet run |
 | **Milan**<br>(eu-south-1) | — | — | — | — | not yet run |
 | **GovCloud US-East**<br>(us-gov-east-1) | — | — | — | P6-B300, P6-B200 | not yet run |
@@ -111,7 +130,9 @@ together, so they are reported as one column.
 
 ³ **Storage** — FSx Lustre `/fsx` and FSx OpenZFS `/home` created & mounted,
 with the deployment type that worked (Lustre on the first line of each cell,
-OpenZFS on the second). Deployment-type support varies by region — check the
+OpenZFS on the second). The table covers the default storage; `HomeStorageType=EFS`
+and `DeployFSxLustre=false` were verified in us-east-2 with
+[Test 10](./storage-test.md). Deployment-type support varies by region — check the
 official per-region tables before deploying:
 [FSx for Lustre deployment types](https://docs.aws.amazon.com/fsx/latest/LustreGuide/using-fsx-lustre.html)
 and [FSx for OpenZFS availability by Region](https://docs.aws.amazon.com/fsx/latest/OpenZFSGuide/available-aws-regions.html).
@@ -128,22 +149,23 @@ provides capacity, they are expected to work as-is.
 ⁵ ***(ref) CBML GPUs offered*** — supplemental reference, not a test result:
 P-family instance types purchasable as
 [Capacity Blocks for ML](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-capacity-blocks.html)
-in that region, per the EC2 docs as of 2026-07-08. PCS supports CBML with
+in that region, per the EC2 docs as of 2026-10-28. PCS supports CBML with
 P6-B300 / P6-B200 / P5en / P5e / P5 / P4d.
 
 ⁶ **These regions do not support the default `OpenZFSDeploymentType=SINGLE_AZ_HA_2`**
-(ap-northeast-3, eu-west-2, eu-west-3, sa-east-1, ap-southeast-3) — the default
+(ap-northeast-3, eu-west-2, eu-west-3, sa-east-1, ap-southeast-3, ap-southeast-4,
+ap-southeast-5) — the default
 deploy fails at the OpenZFS filesystem with `Invalid deploymentType (BadRequest)`.
 Deploy there with `OpenZFSDeploymentType=SINGLE_AZ_1` (+ a valid
 `HomeThroughput`, e.g. 256). This is the documented "not available in every
 Region" case (see the parameter's description in `ml-cluster-prerequisites.yaml`);
 `SINGLE_AZ_1` is available in all regions and is the safe fallback. FSx Lustre
 showed no such regional variation — `LustreDeploymentType=PERSISTENT_2` (the
-default) worked in all 16 regions, as the Lustre column shows.
+default) worked in all 21 regions, as the Lustre column shows.
 
 ⁷ **The default instance types are not offered in every region** — the
 parenthesized types in the Verified column are what the run used instead:
-eu-south-2 has no m6i/c6i (`LoginNodeInstanceType=m7i.4xlarge`,
+eu-south-2 and ap-southeast-4 have no m6i/c6i (`LoginNodeInstanceType=m7i.4xlarge`,
 `OnDemandInstanceType=c7i.4xlarge`), and ap-southeast-3 has no c6i
 (`OnDemandInstanceType=c7i.4xlarge`). Rows without a parenthesis ran the
 defaults. Check with
@@ -172,7 +194,7 @@ aws cloudformation delete-stack --stack-name <stack-name>
 aws cloudformation wait stack-delete-complete --stack-name <stack-name>
 ```
 
-Nested stacks (and FSx) are deleted automatically — back up FSx data first.
+Nested stacks (and the FSx/EFS filesystems) are deleted automatically — back up `/home` and `/fsx` data first.
 
 If DELETE_FAILED on CNG stacks (PCS timing dependency), delete PCS CNGs first:
 

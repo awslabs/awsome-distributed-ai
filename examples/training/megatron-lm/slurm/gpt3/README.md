@@ -135,13 +135,14 @@ To run in benchmark mode (i.e., train only, no validation and test), apply these
 
 ```diff
 -        --eval-iters 40 \
--        --eval-interval 1000 \
 -        --split 98,2,0 \
 +        --eval-iters 0 \
 +        --split 100,0,0 \
 ```
 
-Incorrect settings will cause this error message to appear in the Slurm output:
+Keep `--eval-interval`. Megatron-LM `core_v0.17.0` computes the number of evaluation samples as `(train_iters // eval_interval + 1) * eval_iters` even when `--eval-iters` is 0, so without it the job stops before the first iteration with `TypeError: unsupported operand type(s) for //: 'int' and 'NoneType'`.
+
+Other incorrect settings cause this error message to appear in the Slurm output:
 
 ```text
 Traceback (most recent call last):
