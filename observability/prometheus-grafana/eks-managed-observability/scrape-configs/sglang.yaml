@@ -1,0 +1,39 @@
+# SGLang server metrics. Scrapes pods in any namespace that run SGLang with
+# --enable-metrics, are labeled sglang-metrics=true and annotated
+# prometheus.io/scrape=true (prometheus.io/port and prometheus.io/path set the
+# target). Keep $$1/$$2 as written: the collector unescapes $$ to $.
+- job_name: 'sglang'
+  scrape_interval: 10s
+  metrics_path: /metrics
+  kubernetes_sd_configs:
+  - role: pod
+  relabel_configs:
+  - source_labels: [__meta_kubernetes_pod_label_sglang_metrics]
+    action: keep
+    regex: "true"
+  - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+    action: keep
+    regex: "true"
+  # Scrape <podIP>:<prometheus.io/port>
+  - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+    action: replace
+    regex: ([^:]+)(?::\d+)?;(\d+)
+    replacement: $$1:$$2
+    target_label: __address__
+  - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+    action: replace
+    regex: (.+)
+    target_label: __metrics_path__
+  - source_labels: [__meta_kubernetes_pod_node_name]
+    action: replace
+    target_label: kubernetes_node
+  - source_labels: [__meta_kubernetes_pod_name]
+    action: replace
+    target_label: pod
+  - source_labels: [__meta_kubernetes_namespace]
+    action: replace
+    target_label: namespace
+  # prefill / decode role
+  - source_labels: [__meta_kubernetes_pod_label_component]
+    action: replace
+    target_label: component

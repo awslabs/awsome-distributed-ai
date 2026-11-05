@@ -1,0 +1,35 @@
+# DCGM Exporter GPU metrics (NVIDIA GPU Operator in the gpu-operator namespace).
+# If you installed DCGM Exporter standalone in a different namespace (e.g.
+# dcgm-exporter), update the namespace below.
+- job_name: 'dcgm-exporter'
+  metrics_path: /metrics
+  kubernetes_sd_configs:
+  - role: endpoints
+    namespaces:
+      names:
+      - gpu-operator
+  tls_config:
+    ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    insecure_skip_verify: true
+  bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+  relabel_configs:
+  # Keep only DCGM exporter endpoints
+  - source_labels: [__meta_kubernetes_service_name]
+    action: keep
+    regex: .*dcgm-exporter.*
+  # Add node name as label
+  - source_labels: [__meta_kubernetes_pod_node_name]
+    action: replace
+    target_label: kubernetes_node
+  # Add pod name as label
+  - source_labels: [__meta_kubernetes_pod_name]
+    action: replace
+    target_label: pod
+  # Add namespace as label
+  - source_labels: [__meta_kubernetes_namespace]
+    action: replace
+    target_label: namespace
+  # Add service name as label
+  - source_labels: [__meta_kubernetes_service_name]
+    action: replace
+    target_label: service
