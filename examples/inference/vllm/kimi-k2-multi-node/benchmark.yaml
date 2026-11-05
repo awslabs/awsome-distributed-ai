@@ -1,0 +1,107 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Benchmark the kimi-k2 API (pod 0 of serve.yaml's StatefulSet) from inside the cluster with vllm bench serve:
+# random prompts of INPUT_LEN tokens and OUTPUT_LEN output tokens, 8 prompts per request in flight (at least 16), at
+# each CONCURRENCY, ROUNDS times. It prints one CSV line per run. The pod runs on pod 0's node, where the image is
+# already cached.
+# Render with envsubst, as README.md shows.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kimi-k2-bench
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels:
+        app: kimi-k2-bench
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  statefulset.kubernetes.io/pod-name: kimi-k2-0
+              topologyKey: kubernetes.io/hostname
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: bench
+          image: ${IMAGE}
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -uo pipefail
+              # The tokenizer's files only. Repeat --include: hf takes extra values after one --include as file names.
+              hf download "${MODEL_REPO}" --revision "${MODEL_REVISION}" --local-dir /tmp/tokenizer \
+                --include "*.json" --include "*.py" --include "*.model" > /dev/null || exit 1
+              H=round,concurrency,prompts,completed,input_tokens_per_prompt
+              echo "$H,median_tpot_ms,p99_tpot_ms,median_ttft_ms,output_tokens_per_s"
+              for r in $(seq 1 "$ROUNDS"); do
+                for c in $CONCURRENCY; do
+                  n=$((c * 8)); [ "$n" -lt 16 ] && n=16
+                  vllm bench serve --model kimi-k2 --tokenizer /tmp/tokenizer --trust-remote-code \
+                    --base-url http://kimi-k2-0.kimi-k2:8000 --dataset-name random \
+                    --random-input-len "$INPUT_LEN" --random-output-len "$OUTPUT_LEN" --ignore-eos \
+                    --max-concurrency "$c" --num-prompts "$n" --percentile-metrics ttft,tpot,itl \
+                    --metric-percentiles 50,99 --save-result --result-dir /tmp --result-filename "r$r-c$c.json" \
+                    > "/tmp/r$r-c$c.log" 2>&1 || { tail -20 "/tmp/r$r-c$c.log"; exit 1; }
+                  python3 -c 'import json, sys
+              d = json.load(open(sys.argv[1]))
+              print(",".join(sys.argv[2:4] + [str(d["num_prompts"]), str(d["completed"]),
+                             "%.1f" % (d["total_input_tokens"] / d["completed"])] +
+                             ["%.2f" % d[k] for k in ("median_tpot_ms", "p99_tpot_ms", "median_ttft_ms")] +
+                             ["%.1f" % d["output_throughput"]]))' "/tmp/r$r-c$c.json" "$r" "$c"
+                done
+              done
+          env:
+            - name: HOME
+              value: /tmp
+            - name: ROUNDS
+              value: "3"
+            - name: CONCURRENCY
+              value: "1 8 32"
+            - name: INPUT_LEN
+              value: "1024"
+            - name: OUTPUT_LEN
+              value: "128"
+            # vllm bench serve sends this as the bearer token.
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vllm-api-key
+                  key: VLLM_API_KEY
+          envFrom:
+            - secretRef:
+                name: hf-token
+                optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "8"
+              memory: 16Gi
+            limits:
+              cpu: "8"
+              memory: 16Gi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 20Gi

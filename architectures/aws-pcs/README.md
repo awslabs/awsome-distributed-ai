@@ -1,17 +1,17 @@
 # AWS Parallel Computing Service Distributed Training Reference Architecture
 
-This repository provides reference architectures and deployment templates for setting up distributed training clusters using [AWS Parallel Computing Service (PCS)](https://aws.amazon.com/pcs/). AWS Parallel Computing Service is a fully managed service that makes it easy to run and scale HPC workloads using Slurm scheduler. These architectures are optimized for machine learning workloads and ship dedicated multi-NIC EFA launch templates for the **P5 / P5e / P5en / P6-B200 / P6-B300** GPU families with shared filesystems (FSx for Lustre and OpenZFS).
+This repository provides reference architectures and deployment templates for setting up distributed training clusters using [AWS Parallel Computing Service (PCS)](https://aws.amazon.com/pcs/). AWS Parallel Computing Service is a fully managed service that makes it easy to run and scale HPC workloads using Slurm scheduler. These architectures are optimized for machine learning workloads and ship dedicated multi-NIC EFA launch templates for the **P5 / P5e / P5en / P6-B200 / P6-B300** GPU families with shared filesystems (FSx for Lustre scratch, and FSx for OpenZFS or Amazon EFS home directories).
 
 > **Upstream Repository**: These templates are based on [aws-samples/aws-hpc-recipes](https://github.com/aws-samples/aws-hpc-recipes/tree/main/recipes/pcs), customized for ML workloads: container support (Enroot/Pyxis) installable at first boot without an AMI build, built-in monitoring, updated Slurm versions (25.05/25.11), and dedicated P5/P6 multi-NIC EFA templates. The templates in this repository are maintained independently and may diverge from the upstream recipes.
 
 ## 1. Key Features
 
-- **One click to an ML-training-ready cluster**: a single CloudFormation stack gives you a complete, ready-to-train environment — Slurm scheduler, GPU compute with EFA, shared FSx storage, the Enroot/Pyxis container runtime, and monitoring — with only the Availability Zone to choose. Submit distributed training jobs minutes after launch.
+- **One click to an ML-training-ready cluster**: a single CloudFormation stack gives you a complete, ready-to-train environment — Slurm scheduler, GPU compute with EFA, shared storage, the Enroot/Pyxis container runtime, and monitoring — with only the Availability Zone to choose. Submit distributed training jobs minutes after launch.
 - **Container runtime included**: Enroot/Pyxis is set up automatically, so `srun --container-image=...` works out of the box for containerized training.
 - **Monitoring built in**: Grafana + Prometheus on the login node, with DCGM Exporter on GPU nodes feeding pre-built GPU dashboards (on by default). Reach Grafana privately via SSM port-forward, or open it to a trusted CIDR. See [§8.2 Monitoring](#82-monitoring).
 - **GPU-ready, multi-NIC EFA**: dedicated launch templates for the P5 and P6 families, selected automatically by instance type, for high-bandwidth multi-node training.
 - **Flexible capacity options**: On-Demand, On-Demand Capacity Reservations ("open" consumed automatically, "targeted" via `CapacityReservationType=targeted-odcr` / `OnDemandCapacityReservationId`), and Capacity Blocks for ML — selected per node group.
-- **High-performance storage**: FSx for Lustre (shared scratch, `/fsx`) and FSx for OpenZFS (home directories, `/home`).
+- **High-performance storage**: FSx for Lustre (shared scratch, `/fsx`) and FSx for OpenZFS (home directories, `/home`). `/home` can be Amazon EFS instead, and `/fsx` can be left out — see [§8.1 Storage](#81-storage-filesystem-choice--sizing).
 - **Multi-user ready**: opt-in OpenLDAP directory on the login node with SSSD on every compute node, so a team shares one cluster with consistent users — pairs with Slurm accounting. See [§8.3 User Management](#83-user-management).
 - **Access control built in**: ready-to-deploy least-privilege IAM policy stacks for cluster admins and users, and login-node SSH / Grafana access gated to a trusted CIDR. See [§8.4 IAM Permissions](#84-iam-permissions).
 - **Modular components**: compose individual stacks (network/storage prerequisites, cluster scheduler, per-family compute node groups) instead of the all-in-one nested stack when you want to reuse infrastructure across clusters or iterate on one piece at a time.
@@ -23,7 +23,7 @@ This repository provides reference architectures and deployment templates for se
 A default deployment (`pcs-ml-cluster-deploy-all.yaml`) provisions:
 
 - VPC with a public subnet and private subnets in up to 3 AZs, a NAT gateway (primary AZ), and an S3 endpoint
-- FSx for Lustre (`/fsx`, high-performance shared scratch) and FSx for OpenZFS (`/home`)
+- FSx for Lustre (`/fsx`, high-performance shared scratch) and FSx for OpenZFS (`/home`); `/home` on Amazon EFS and no `/fsx` are options
 - PCS cluster with the Slurm scheduler (25.05 or 25.11), on the PCS-Ready DLAMI
 - Login node group (public subnet) with the monitoring stack (Prometheus + Grafana + Nginx); SSH/Grafana can be opened to a trusted CIDR
 - CPU compute node group (private subnet); EFA can be enabled for HPC/MPI workloads
@@ -90,8 +90,10 @@ Management Console** (select the stack → **Delete**) or via the CLI:
 aws cloudformation delete-stack --stack-name pcs-ml-cluster
 ```
 
-Nested stacks are deleted automatically. Back up any FSx data first — the filesystems
-are deleted with the stack.
+Nested stacks are deleted automatically. Back up any data on `/home` and `/fsx` first —
+the filesystems are deleted with the stack. If the delete fails because a placement group is still in
+use, wait a few minutes and delete the stack again — see
+[OPERATIONS.md §6.3](./docs/OPERATIONS.md#63-stack-deletion-can-fail-while-a-placement-group-is-still-in-use).
 
 ---
 
@@ -100,7 +102,7 @@ are deleted with the stack.
 The defaults give a working ML-training cluster, so the only required parameter is
 the Availability Zone (`PrimarySubnetAZ`); everything else is optional. The most-used
 parameters are grouped below to match the deploy-all console's parameter groups. Storage
-parameters are covered in [§8.1 Storage](#81-storage-fsx-deployment-types--sizing); for the
+parameters are covered in [§8.1 Storage](#81-storage-filesystem-choice--sizing); for the
 complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 
 **1. Network Configuration**
@@ -196,7 +198,7 @@ automatically.
 
 - **On-Demand**: leave `CapacityReservationId` empty.
 - **"Open" On-Demand Capacity Reservation (ODCR)**: also leave `CapacityReservationId` **empty** — an ODCR with **"open"** instance matching is consumed automatically by the node group's On-Demand launches.
-- **"Targeted" ODCR**: set `CapacityReservationId` to the ODCR ID **and** `CapacityReservationType=targeted-odcr`. Launches bill On-Demand against the reservation and keep the cluster placement group. The reservation's instance type and AZ must match the node group's. If the ODCR is held **inside a customer-owned cluster placement group**, also point the node group at that CPG (`PseriesPlacementGroupName` for the GPU queue, `OnDemandPlacementGroupName` for the CPU queue) — a reservation in a CPG is only consumable by launches into it. Keep `PseriesMaxCount` **at or below the reservation's instance count** — a direct ODCR target does not backfill with plain On-Demand, so launches beyond the reservation fail and jobs wait.
+- **"Targeted" ODCR**: set `CapacityReservationId` to the ODCR ID **and** `CapacityReservationType=targeted-odcr`. Launches bill On-Demand against the reservation and keep the cluster placement group. The reservation's instance type and AZ must match the node group's. If the ODCR is held **inside a customer-owned cluster placement group**, also point the node group at that CPG (`PseriesPlacementGroupName` for the GPU queue, `OnDemandPlacementGroupName` for the CPU queue; use the group ID if the CPG is shared from another account) — a reservation in a CPG is only consumable by launches into it. Keep `PseriesMaxCount` **at or below the reservation's instance count** — a direct ODCR target does not backfill with plain On-Demand, so launches beyond the reservation fail and jobs wait.
 - **Capacity Blocks for ML**: set `CapacityReservationId` to the Capacity Block ID (`CapacityReservationType=capacity-block` is the default). The template then launches with `MarketType=capacity-block` against it.
 
 The CPU queue takes a targeted ODCR too, via `OnDemandCapacityReservationId`
@@ -207,8 +209,9 @@ The CPU queue takes a targeted ODCR too, via `OnDemandCapacityReservationId`
 > group at `PseriesMinCount = PseriesMaxCount = <reserved count>` so the reserved
 > nodes launch immediately, rather than scaling from 0.
 
-Storage (FSx for Lustre `/fsx` + OpenZFS `/home`) has sensible defaults; deployment
-types, throughput, and capacity are covered in [§8.1 Storage](#81-storage-fsx-deployment-types--sizing).
+By default, storage is FSx for Lustre `/fsx` + FSx for OpenZFS `/home`, with sensible defaults; the
+filesystem choice (EFS for `/home`, no `/fsx`), deployment types, throughput, and
+capacity are covered in [§8.1 Storage](#81-storage-filesystem-choice--sizing).
 
 ---
 
@@ -326,7 +329,11 @@ Then `sudo su - ubuntu` and use `sinfo` / `squeue` / `scontrol show nodes`.
 ## 7. Running a job
 
 Run these from the login node (`sudo su - ubuntu` after connecting). `/fsx` is
-shared with every compute node.
+shared with every compute node. On a cluster deployed with `DeployFSxLustre=false`
+there is no `/fsx`: use a directory under `$HOME` (shared `/home`) wherever these
+examples write to `/fsx`. Example B's launcher reads its image from
+`$APPS_PATH/nccl-tests.sqsh` (default `/fsx`), so also export `APPS_PATH` set to
+that directory before its `sbatch`.
 
 ### Example A — CPU job (works on the Quick Start cluster, no GPU needed)
 
@@ -387,11 +394,36 @@ the full validation matrix is in [tests/README.md](./tests/README.md).
 
 ## 8. Advanced Features
 
-### 8.1 Storage: FSx deployment types & sizing
+### 8.1 Storage: filesystem choice & sizing
 
-The `/fsx` (Lustre) and `/home` (OpenZFS) filesystems have working defaults. Two things
-are worth knowing before changing them: **deployment types are not available in every
-Region**, and **starting small then expanding is usually faster to deploy**.
+The `/fsx` (Lustre) and `/home` (OpenZFS by default) filesystems have working defaults.
+Two parameters (console group **6. Shared Storage (/home and /fsx)**) choose which
+filesystems the cluster gets; set them when you create the stack — changing either later
+deletes the filesystem it replaces, with its data.
+
+| Parameter | Default | Other value | Effect |
+|---|---|---|---|
+| `HomeStorageType` | `FSxOpenZFS` | `EFS` | `EFS` puts `/home` on Amazon EFS (elastic throughput, billed per GB stored and per GB read or written, nothing to size); the OpenZFS `/home` parameters below are ignored |
+| `DeployFSxLustre` | `true` | `false` | `false` creates no `/fsx`; the Lustre parameters below are ignored. Datasets, checkpoints, and container images then go under `/home` |
+
+How to choose:
+
+- **FSx for OpenZFS `/home`** (default) — low-latency NFS. Best when users build
+  Python/conda environments, compile code, or run Jupyter from `/home` (many small
+  files). Throughput and capacity are provisioned and billed whether used or not.
+- **Amazon EFS `/home`** — nothing to size and no minimum capacity; you pay for the
+  data stored and for each GB read or written, which adds up when datasets,
+  checkpoints, or container images live on `/home`. Small-file and metadata operations (`pip install`, `conda create`,
+  `git clone`) are noticeably slower than on OpenZFS. Automatic daily backups are on,
+  and their recovery points outlive the stack — see
+  [OPERATIONS §4.6](./docs/OPERATIONS.md#46-amazon-efs-home-homestoragetypeefs).
+- **No `/fsx`** — for clusters that don't need a parallel filesystem: CPU work,
+  small-scale GPU work, or data streamed from S3. Large multi-node training reading
+  datasets and writing checkpoints should keep `/fsx`.
+
+Two more things are worth knowing before changing the sizing parameters (EFS has none):
+**deployment types are not available in every Region**, and **starting small then
+expanding is usually faster to deploy**.
 
 > **Tip — deploy small, expand after.** Both FSx for Lustre and OpenZFS can be **grown
 > after creation** (increase storage capacity, and for Lustre throughput, via an FSx
@@ -418,7 +450,7 @@ switch these parameters to a type your Region supports.
 
 #### FSx for Lustre over EFA (GPUDirect Storage)
 
-`FSxLustreEnableEfa` (default `false`) enables EFA on the `/fsx` Lustre filesystem.
+`FSxLustreEnableEfa` (default `false`; requires `DeployFSxLustre=true`) enables EFA on the `/fsx` Lustre filesystem.
 **The headline feature is GPUDirect Storage (GDS) for P5 / P5e / P5en / P6-B200 GPU CNGs**,
 which DMAs file data straight into GPU memory (requires the NVIDIA `nvidia-fs` / cuFile
 stack on the client — see the Client-side Lustre-on-EFA + GDS item in
@@ -531,8 +563,8 @@ aws ec2 describe-instances --region "$AWS_REGION" \
 
 Security notes:
 
-- The security group is attached **only to the login node** — compute nodes and FSx
-  (which share the cluster security group) are **not** exposed.
+- The security group is attached **only to the login node** — compute nodes and the shared
+  filesystems (which share the cluster security group) are **not** exposed.
 - **Opening 443 exposes more than Grafana.** The login node's nginx also reverse-proxies
   `/prometheus/`, `/pushgateway/`, and `/slurmexporter/`, and **those endpoints are
   unauthenticated**. Anyone who can reach the allowed CIDR can read all cluster metrics
@@ -606,7 +638,7 @@ operations (adding/removing users, Slurm accounting, SSH access).
 > node, so enabling `DirectoryService` means a one-login-node cluster. The directory
 > **service** is a single point of failure while the login node is down.
 >
-> The user database (OpenZFS `/home`) and the admin password (SSM) **survive a
+> The user database (shared `/home`) and the admin password (SSM) **survive a
 > login-node replacement** — but recovery isn't fully transparent: already-running
 > compute nodes keep the old login IP cached in SSSD, so name resolution for new/uncached
 > users degrades on them until you refresh SSSD (jobs already submitted still run — Slurm
@@ -620,7 +652,7 @@ The cluster has two human roles, each with a ready-to-deploy IAM policy stack:
 
 | Role | What they can do | Deploy |
 |---|---|---|
-| **Cluster admin** ([`cluster-admin-iam.yaml`](./assets/cluster-admin-iam.yaml)) | deploy / update / delete the cluster (CloudFormation, PCS, EC2, FSx, scoped IAM) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/cluster-admin-iam.yaml&stackName=pcs-cluster-admins) |
+| **Cluster admin** ([`cluster-admin-iam.yaml`](./assets/cluster-admin-iam.yaml)) | deploy / update / delete the cluster (CloudFormation, PCS, EC2, FSx, EFS, scoped IAM) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/cluster-admin-iam.yaml&stackName=pcs-cluster-admins) |
 | **Cluster user** ([`cluster-user-iam.yaml`](./assets/cluster-user-iam.yaml)) | SSM session to the **login node only** + read-only status; cannot create, modify, or delete anything | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/cluster-user-iam.yaml&stackName=pcs-cluster-users) |
 
 Each template creates the customer-managed policies and an IAM group, and can
@@ -652,7 +684,8 @@ against a "targeted" On-Demand Capacity Reservation (On-Demand billing; EFA and
 placement settings are unaffected). Leave it empty for plain On-Demand — an
 "open" ODCR is consumed automatically. If the reservation is held in a
 customer-owned cluster placement group, also set `OnDemandPlacementGroupName`
-to that CPG (honored with or without EFA). Keep `OnDemandMaxCount` at or below
+to that CPG (honored with or without EFA; use the group ID if the CPG is shared
+from another account). Keep `OnDemandMaxCount` at or below
 the reservation's instance count — a direct ODCR target does not backfill with
 plain On-Demand, so launches beyond the reservation fail and jobs wait.
 
@@ -683,7 +716,10 @@ instance type's actual `MaximumEfaInterfaces`, fails at launch.)
 existing placement group instead — e.g. to share one PG across multiple CPU
 CNGs, or to consume capacity reserved into a customer-owned CPG. (The GPU
 queue takes the same override via `PseriesPlacementGroupName`; it is ignored
-on the Capacity Block path, where the block carries its own placement.)
+on the Capacity Block path, where the block carries its own placement.) The
+value can also be a placement group ID (`pg-…`), which is required for a
+[placement group shared from another account](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/share-placement-group.html);
+a value starting with `pg-` is treated as an ID.
 
 **Multi-NIC bandwidth needs multiple MPI pairs.** A single MPI pair uses one
 libfabric endpoint and only one NIC. Use `osu_mbw_mr -np 32 -N 16` (or your
@@ -712,7 +748,7 @@ parameter and default, see [PARAMETERS.md](./docs/PARAMETERS.md).
 | Template | Purpose | Deploy |
 |---|---|---|
 | [`pcs-ml-cluster-deploy-all.yaml`](./assets/pcs-ml-cluster-deploy-all.yaml) | All-in-one: Prerequisites + (optional AMI) + Cluster + login/CPU/GPU CNGs | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/pcs-ml-cluster-deploy-all.yaml&stackName=pcs-ml-cluster) |
-| [`ml-cluster-prerequisites.yaml`](./assets/ml-cluster-prerequisites.yaml) | VPC, subnets, security groups, FSx for Lustre + OpenZFS | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/ml-cluster-prerequisites.yaml&stackName=pcs-prerequisites) |
+| [`ml-cluster-prerequisites.yaml`](./assets/ml-cluster-prerequisites.yaml) | VPC, subnets, security groups, FSx for Lustre (optional) + FSx for OpenZFS or EFS | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/ml-cluster-prerequisites.yaml&stackName=pcs-prerequisites) |
 | [`cluster.yaml`](./assets/cluster.yaml) | PCS cluster core (Slurm scheduler only, no nodes) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/cluster.yaml&stackName=pcs-cluster) |
 | [`add-cng.yaml`](./assets/add-cng.yaml) | Compute node group — login nodes, CPU / single-NIC-GPU queues (C6i, G5, G6); switches to a multi-NIC EFA `NetworkInterfaces` block when `EfaInterfaceCount > 0` (HPC types: hpc6a/hpc7a/hpc6id/hpc8a …) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/add-cng.yaml&stackName=pcs-add-cng) |
 | [`add-cng-p5.yaml`](./assets/add-cng-p5.yaml) | P5/P5e/P5en nodes (16/32 EFA interfaces, by type) | [![Launch](images/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home#/stacks/quickcreate?templateUrl=https://awsome-distributed-ai.s3.amazonaws.com/templates/aws-pcs/add-cng-p5.yaml&stackName=pcs-add-cng-p5) |
@@ -729,7 +765,7 @@ Capacity Block or a targeted ODCR (`CapacityReservationType` picks which).
 ```
 pcs-ml-cluster-deploy-all.yaml                    ← user deploys this
 │
-├─► ml-cluster-prerequisites.yaml                 ← VPC, subnets, SG, FSx Lustre + OpenZFS
+├─► ml-cluster-prerequisites.yaml                 ← VPC, subnets, SG, FSx Lustre + OpenZFS or EFS
 │
 ├─► cluster.yaml                                  ← PCS cluster (Slurm scheduler), IAM role
 │     • IAM role grants: ssm:PutParameter /pcs/<id>/grafana/*, /pcs/<id>/ldap/*
@@ -739,7 +775,8 @@ pcs-ml-cluster-deploy-all.yaml                    ← user deploys this
 │     • DirectoryService=OpenLDAP-LoginNode → slapd server
 │     │
 │     └─ Node lifecycle actions run external scripts:
-│          ├─ needrestart-guard.sh, mount-openzfs-home.sh, mount-lustre-fsx.sh
+│          ├─ needrestart-guard.sh, mount-openzfs-home.sh or mount-efs-home.sh,
+│          │  mount-lustre-fsx.sh (when DeployFSxLustre=true)
 │          ├─ setup-directory.sh server (when DirectoryRole=server)
 │          ├─ install-enroot-pyxis.sh (InstallEnrootPyxis=true)
 │          └─ install-monitoring.sh (nodeReady)
@@ -750,7 +787,8 @@ pcs-ml-cluster-deploy-all.yaml                    ← user deploys this
 │     • EfaInterfaceCount>0 → EFA NetworkInterfaces + PG
 │     │
 │     └─ Node lifecycle actions run external scripts:
-│          ├─ needrestart-guard.sh, mount-openzfs-home.sh, mount-lustre-fsx.sh
+│          ├─ needrestart-guard.sh, mount-openzfs-home.sh or mount-efs-home.sh,
+│          │  mount-lustre-fsx.sh (when DeployFSxLustre=true)
 │          ├─ setup-directory.sh client (when DirectoryRole=client)
 │          ├─ install-enroot-pyxis.sh (same as login)
 │          └─ install-monitoring.sh (nodeReady)
@@ -764,6 +802,7 @@ pcs-ml-cluster-deploy-all.yaml                    ← user deploys this
 Lifecycle-action scripts (fetched by the PCS agent from S3: s3://<S3BucketName>/<S3KeyPrefix>scripts/):
   assets/scripts/needrestart-guard.sh             ← keep security upgrades from restarting slurmd
   assets/scripts/mount-openzfs-home.sh            ← FSx OpenZFS → /home
+  assets/scripts/mount-efs-home.sh                ← Amazon EFS → /home (HomeStorageType=EFS)
   assets/scripts/mount-lustre-fsx.sh              ← FSx Lustre → /fsx
   assets/scripts/setup-directory.sh               ← multi-user directory (server + client)
   assets/scripts/install-enroot-pyxis.sh           ← Enroot 3.5.0 + Pyxis 0.20.0

@@ -41,7 +41,7 @@ Resources:
     Type: AWS::IAM::ManagedPolicy
     Properties:
       ManagedPolicyName: !Sub "${AWS::StackName}-PCSClusterAdmin-core"
-      Description: "Core CFN+EC2+FSx+PCS+IAM(scoped)+SSM+KMS+Secrets+Logs permissions for AWS PCS cluster CRUD"
+      Description: "Core CFN+EC2+FSx+EFS+PCS+IAM(scoped)+SSM+KMS+Secrets+Logs permissions for AWS PCS cluster CRUD"
       PolicyDocument:
         {
           "Version": "2012-10-17",
@@ -168,6 +168,12 @@ Resources:
               "Resource": "*"
             },
             {
+              "Sid": "EFSLifecycle",
+              "Effect": "Allow",
+              "Action": "elasticfilesystem:*",
+              "Resource": "*"
+            },
+            {
               "Sid": "PCSFullAccess",
               "Effect": "Allow",
               "Action": [
@@ -242,6 +248,7 @@ Resources:
                     "spotfleet.amazonaws.com",
                     "fsx.amazonaws.com",
                     "s3.data-source.lustre.fsx.amazonaws.com",
+                    "elasticfilesystem.amazonaws.com",
                     "imagebuilder.amazonaws.com"
                   ]
                 }

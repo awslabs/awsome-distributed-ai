@@ -127,7 +127,7 @@ plain Job and Service (with node-health scheduling). Point `IMAGE_URI` at the vL
 image, then port-forward and POST a video-to-video request:
 
 ```bash
-export IMAGE_URI=<acct>.dkr.ecr.<region>.amazonaws.com/vllm-omni:cosmos3
+export IMAGE_URI=<acct>.dkr.ecr.<region>.amazonaws.com/vllm-omni:cosmos3-${VLLM_OMNI_DIGEST:7:8}  # mirrored by digest (README)
 envsubst < hyperpod-eks/generate-vllm-omni-super.yaml | kubectl apply -f -
 kubectl port-forward svc/cosmos3-vllm-omni 8000:8000
 curl -F input_reference=@clip.mp4 http://localhost:8000/v1/videos/sync

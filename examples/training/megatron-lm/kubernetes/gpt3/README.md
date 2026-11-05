@@ -254,17 +254,18 @@ The example is based on the GPT3 example from MegatronLM's [repository](https://
 
 ### 4.1. Benchmark mode
 
-To run in benchmark mode (i.e., train only, no validation and test), apply these changes to `2.distributed-training.sbatch` when calling `pretrain_gpt.py`:
+To run in benchmark mode (i.e., train only, no validation and test), apply these changes to the `pretrain_gpt.py` arguments in `manifests/pytorchjob.yaml-template`:
 
 ```diff
--        --eval-iters 40 \
--        --eval-interval 1000 \
--        --split 98,2,0 \
-+        --eval-iters 0 \
-+        --split 100,0,0 \
+-                - --eval-iters=40
+-                - --split=98,2,0
++                - --eval-iters=0
++                - --split=100,0,0
 ```
 
-Incorrect settings will cause this error message to appear in the Slurm output:
+Keep `--eval-interval`. Megatron-LM `core_v0.17.0` computes the number of evaluation samples as `(train_iters // eval_interval + 1) * eval_iters` even when `--eval-iters` is 0, so without it the job stops before the first iteration with `TypeError: unsupported operand type(s) for //: 'int' and 'NoneType'`.
+
+Other incorrect settings cause this error message to appear in the training logs:
 
 ```text
 Traceback (most recent call last):
@@ -297,15 +298,15 @@ AssertionError
 
 ### 4.2. Adjust training steps
 
-By default, the .sbatch scripts specify the number of samples, then the number of training steps equals to `--train_samples` / `--global-batch-size`. To directly specify the number of steps, apply these changes to `2.distributed-training.sbatch` when calling `pretrain_gpt.py`. Note that `samples` and `iters` are mutually exclusive.
+By default, the training job specifies the number of samples, then the number of training steps equals to `--train_samples` / `--global-batch-size`. To directly specify the number of steps, apply these changes to the `pretrain_gpt.py` arguments in `manifests/pytorchjob.yaml-template`. Note that `samples` and `iters` are mutually exclusive.
 
 ```diff
--        --train-samples 146484375 \
--        --lr-decay-samples 126953125 \
--        --lr-warmup-samples 183105 \
-+        --train-iters 50 \
-+        --lr-decay-iters 45 \
-+        --lr-warmup-iters 2 \
+-                - --train-samples=146484375
+-                - --lr-decay-samples=126953125
+-                - --lr-warmup-samples=183105
++                - --train-iters=50
++                - --lr-decay-iters=45
++                - --lr-warmup-iters=2
 ```
 
 =======

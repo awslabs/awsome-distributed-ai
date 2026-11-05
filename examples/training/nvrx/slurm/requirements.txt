@@ -1,0 +1,10 @@
+# Slurm-only runtime; does not change the legacy Kubernetes 0.4.1 environment.
+# Installed into the image after torch==2.9.0 (cu130 in slurm/Dockerfile, or the
+# CPU wheel for the local tests described in slurm/README.md). Versions are
+# pinned exactly; `pip check` runs after installation in the image build.
+nvidia-resiliency-ext==0.7.0
+transformers==4.48.3
+huggingface-hub==0.27.1
+tokenizers==0.21.0
+numpy==1.26.4
+pytest==9.0.3

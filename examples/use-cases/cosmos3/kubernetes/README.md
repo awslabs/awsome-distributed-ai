@@ -112,7 +112,7 @@ NUM_NODES=1 RUN_ID=nano-sft-r1 SFT_TOML=vision_sft_nano.toml \
 DLC training image), then port-forward and POST a video-to-video request:
 
 ```bash
-export IMAGE_URI=<acct>.dkr.ecr.<region>.amazonaws.com/vllm-omni:cosmos3
+export IMAGE_URI=<acct>.dkr.ecr.<region>.amazonaws.com/vllm-omni:cosmos3-${VLLM_OMNI_DIGEST:7:8}  # mirrored by digest (README)
 envsubst < kubernetes/generate-vllm-omni-super.yaml | kubectl apply -f -
 kubectl port-forward svc/cosmos3-vllm-omni 8000:8000
 curl -F input_reference=@clip.mp4 http://localhost:8000/v1/videos/sync

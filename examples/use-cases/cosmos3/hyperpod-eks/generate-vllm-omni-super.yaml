@@ -18,7 +18,7 @@
 # RENDER with the a8m/envsubst variant (see top-level README "Deployment").
 # Template vars are substituted from env_vars; the in-container runtime bash var
 # $$OUTPUT_DIR collapses to a literal $OUTPUT_DIR the pod's bash expands.
-#   export IMAGE_URI=<acct>.dkr.ecr.<region>.amazonaws.com/vllm-omni:cosmos3 \
+#   export IMAGE_URI=<acct>.dkr.ecr.<region>.amazonaws.com/vllm-omni:<tag-mirrored-by-digest> \
 #          NAMESPACE=$NAMESPACE INSTANCE_TYPE=p5en.48xlarge GPUS_PER_NODE=8 \
 #          CFG_PARALLEL=2 ULYSSES=4 HSDP_SHARD=8 OUT=/fsx/results/generate/run
 #   # Guardrails are toggled PER-REQUEST on this image (request body extra_params.guardrails),

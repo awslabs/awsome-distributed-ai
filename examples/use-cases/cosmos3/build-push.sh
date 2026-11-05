@@ -29,7 +29,7 @@ set -euo pipefail
 : "${REGISTRY:?set REGISTRY (e.g. <acct>.dkr.ecr.<region>.amazonaws.com)}"
 
 # Pins (validated; override via env_vars or the environment if you must):
-COSMOS_FRAMEWORK_REF="${COSMOS_FRAMEWORK_REF:-5eee9ed574255f017b192161bfbb5a10253d65cf}"
+COSMOS_FRAMEWORK_REF="${COSMOS_FRAMEWORK_REF:-1a2f03ab6111b457633827736f94f67d55bd5202}"
 DLC_TAG="${DLC_TAG:-2.10.0-gpu-py313-cu130-ubuntu22.04-ec2}"
 
 # This script lives at the cosmos3 test-case root; build context = that dir.

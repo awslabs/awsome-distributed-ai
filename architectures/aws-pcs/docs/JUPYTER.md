@@ -52,7 +52,7 @@ Compute node — Jupyter server, launched as an sbatch job
 ## Step 1 — one-time: create a Jupyter environment on `/home`
 
 On the login node (as the user who will run Jupyter). `/home` is shared
-FSx for OpenZFS, so every compute node sees the venv:
+NFS (FSx for OpenZFS or Amazon EFS), so every compute node sees the venv:
 
 ```bash
 python3 -m venv $HOME/jupyter-env
@@ -72,7 +72,8 @@ $HOME/jupyter-env/bin/pip install torch --index-url https://download.pytorch.org
 > For ML work, also set `HF_HOME=/fsx/$USER/.hf-cache` in your notebooks/jobs —
 > the HuggingFace cache must not live on NFS `/home` (file-locking errors under
 > concurrent access), and a per-user path avoids ownership clashes on
-> multi-user clusters.
+> multi-user clusters. On a cluster without `/fsx` (`DeployFSxLustre=false`), point it
+> at node-local disk instead (for example `/tmp/$USER/.hf-cache`).
 
 ## Step 2 — submit the Jupyter job
 

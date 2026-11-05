@@ -40,6 +40,7 @@ Metadata:
           - FSxLustreFilesystemId
           - FSxLustreFilesystemMountName
           - FSxOpenZFSFilesystemId
+          - EFSHomeFilesystemId
       - Label:
           default: Monitoring configuration
         Parameters:
@@ -81,7 +82,10 @@ Parameters:
       (Optional) Existing cluster placement group name to launch nodes into —
       e.g. to share one placement group across CNGs, or to consume a targeted
       ODCR held in a customer-owned cluster placement group. Leave EMPTY to
-      auto-create a per-CNG placement group. Ignored when
+      auto-create a per-CNG placement group. Also accepts a placement group ID
+      (pg-...), which is required for a group shared from another account; a
+      value starting with "pg-" is treated as an ID. Use the name or ID, not
+      the ARN (e.g. the PlacementGroupArn of a capacity reservation). Ignored when
       CapacityReservationType='capacity-block' and CapacityReservationId is
       set (a Capacity Block carries its own placement).
     Default: ''
@@ -170,9 +174,22 @@ Parameters:
 
   FSxOpenZFSFilesystemId:
     Type: String
-    Description: Filesystem ID for FSx for OpenZFS
-    AllowedPattern: '^fs-[0-9a-f]{8,17}$'
-    ConstraintDescription: Must be a valid FSx filesystem ID (fs-xxxxxxxxxxxxxxxxx)
+    Default: ''
+    Description: >-
+      Filesystem ID for FSx for OpenZFS, mounted at /home. Set exactly one of
+      FSxOpenZFSFilesystemId / EFSHomeFilesystemId.
+    AllowedPattern: '^$|^fs-[0-9a-f]{8,17}$'
+    ConstraintDescription: Must be empty or a valid FSx filesystem ID (fs-xxxxxxxxxxxxxxxxx)
+
+  EFSHomeFilesystemId:
+    Type: String
+    Default: ''
+    Description: >-
+      Filesystem ID for Amazon EFS, mounted at /home. Set exactly one of
+      FSxOpenZFSFilesystemId / EFSHomeFilesystemId. The filesystem needs a
+      mount target in this node group's Availability Zone.
+    AllowedPattern: '^$|^fs-[0-9a-f]{8,17}$'
+    ConstraintDescription: Must be empty or a valid EFS filesystem ID (fs-xxxxxxxxxxxxxxxxx)
 
   DeployMonitoring:
     Type: String
@@ -282,6 +299,22 @@ Parameters:
     Description: S3 key prefix for scripts (e.g. templates/aws-pcs/)
     Default: 'templates/aws-pcs/'
 
+Rules:
+  # /home must come from exactly one filesystem. Fail at stack-create time
+  # instead of booting nodes that TERMINATE on a missing mount.
+  ExactlyOneHomeFilesystem:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Not [!Equals [!Ref FSxOpenZFSFilesystemId, '']]
+            - !Equals [!Ref EFSHomeFilesystemId, '']
+          - !And
+            - !Equals [!Ref FSxOpenZFSFilesystemId, '']
+            - !Not [!Equals [!Ref EFSHomeFilesystemId, '']]
+        AssertDescription: >-
+          Set exactly one of FSxOpenZFSFilesystemId (FSx for OpenZFS) or
+          EFSHomeFilesystemId (Amazon EFS) for /home.
+
 Conditions:
   # A reservation ID is consumed as a Capacity Block or a targeted ODCR per
   # CapacityReservationType; an empty ID is plain On-Demand (open ODCRs are
@@ -293,6 +326,11 @@ Conditions:
     - !Condition HasCapacityReservation
     - !Equals [!Ref CapacityReservationType, 'capacity-block']
   HasUserPlacementGroup: !Not [!Equals [!Ref PlacementGroupName, ""]]
+  # A value starting with "pg-" is a placement group ID (required for a group
+  # shared from another account); anything else is a name.
+  UserPlacementGroupIsId: !And
+    - !Condition HasUserPlacementGroup
+    - !Equals [!Select [0, !Split ["pg-", !Ref PlacementGroupName]], ""]
   # Placement applies on every non-CB path: the user-supplied PG when given,
   # otherwise an auto-created per-CNG one.
   UsePlacementGroup: !Not [!Condition UseCapacityBlock]
@@ -307,6 +345,7 @@ Conditions:
   HasAmiId: !Not [!Equals [!Ref AmiId, ""]]
   DirectoryEnabled: !Not [!Equals [!Ref DirectoryRole, 'none']]
   HasLustre: !Not [!Equals [!Ref FSxLustreFilesystemId, '']]
+  HomeIsEFS: !Not [!Equals [!Ref EFSHomeFilesystemId, '']]
   EnrootPyxisEnabled: !Equals [!Ref InstallEnrootPyxis, 'true']
   MonitoringEnabled: !Equals [!Ref DeployMonitoring, 'true']
   HasDcgmImage: !Not [!Equals [!Ref DcgmExporterImage, '']]
@@ -361,8 +400,11 @@ Resources:
       # - mounts must complete before slurmd starts, or the scheduler could
       #   dispatch a job to a node without /home //fsx (nodeReady runs AFTER
       #   the node is job-eligible). TERMINATE: a node without shared
-      #   storage is useless — replace it. EVERY_BOOT + idempotent scripts
-      #   cover reboots.
+      #   storage is useless — replace it. OpenZFS initializes fstab and a
+      #   slurmd home.mount requirement once; systemd restores it on reboot.
+      #   Replaying NFSv3 in early cloud-init can deadlock on rpc-statd's
+      #   network-online dependency. Replace nodes for home FS ID changes.
+      #   Lustre has no fstab entry and still needs its EVERY_BOOT action.
       NodeLifecycleActions:
         ScriptCachingPolicy: CACHE_ONCE
         Stages:
@@ -372,13 +414,24 @@ Resources:
                 ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/needrestart-guard.sh'
               ExecutionPolicy: FIRST_BOOT_ONLY
               OnError: CONTINUE
-            - Name: mount-openzfs-home
-              ScriptSource:
-                ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/mount-openzfs-home.sh'
-              Arguments:
-                - !Ref FSxOpenZFSFilesystemId
-              ExecutionPolicy: EVERY_BOOT
-              OnError: TERMINATE
+            # /home: exactly one of the two mount actions (enforced by the
+            # ExactlyOneHomeFilesystem Rule). Both share the same contract.
+            - !If
+              - HomeIsEFS
+              - Name: mount-efs-home
+                ScriptSource:
+                  ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/mount-efs-home.sh'
+                Arguments:
+                  - !Ref EFSHomeFilesystemId
+                ExecutionPolicy: FIRST_BOOT_ONLY
+                OnError: TERMINATE
+              - Name: mount-openzfs-home
+                ScriptSource:
+                  ScriptLocation: !Sub 's3://${S3BucketName}/${S3KeyPrefix}scripts/mount-openzfs-home.sh'
+                Arguments:
+                  - !Ref FSxOpenZFSFilesystemId
+                ExecutionPolicy: FIRST_BOOT_ONLY
+                OnError: TERMINATE
             - !If
               - HasLustre
               - Name: mount-lustre-fsx
@@ -390,7 +443,7 @@ Resources:
                 ExecutionPolicy: EVERY_BOOT
                 OnError: TERMINATE
               - !Ref AWS::NoValue
-            # Directory setup must run AFTER mount-openzfs-home: the LDAP DB
+            # Directory setup must run AFTER the /home mount: the LDAP DB
             # lives on shared /home/ldap-db (the script hard-fails if /home is
             # not a mountpoint). CONTINUE preserves the log-and-continue
             # invariant: Slurm launches jobs by numeric UID, so a failed
@@ -478,12 +531,16 @@ Resources:
           - CapacityReservationTarget:
               CapacityReservationId: !Ref CapacityReservationId
           - !Ref AWS::NoValue
+        # A "pg-" value is set as GroupId; otherwise the user or auto-created name.
         Placement: !If
           - UsePlacementGroup
-          - GroupName: !If
-              - HasUserPlacementGroup
-              - !Ref PlacementGroupName
-              - !Ref PlacementGroup
+          - !If
+            - UserPlacementGroupIsId
+            - GroupId: !Ref PlacementGroupName
+            - GroupName: !If
+                - HasUserPlacementGroup
+                - !Ref PlacementGroupName
+                - !Ref PlacementGroup
           - !Ref AWS::NoValue
         TagSpecifications:
           - ResourceType: instance

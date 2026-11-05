@@ -4,7 +4,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Complete AWS PCS ML Cluster deployment with nested stacks.
-  This template orchestrates: Prerequisites (VPC, FSx), the PCS cluster, and its
+  This template orchestrates: Prerequisites (VPC, shared storage), the PCS cluster, and its
   compute node groups (login + on-demand CPU + optional GPU). For pre-baking a
   custom DLAMI, run pcs-ready-dlami-with-enroot-pyxis.yaml as a separate stack
   and pass its DLAMIforPCSAmiId output as this template's AmiId parameter.
@@ -71,8 +71,10 @@ Metadata:
         Parameters:
           - InstallEnrootPyxis
       - Label:
-          default: "6. FSx Storage (/fsx and /home)"
+          default: "6. Shared Storage (/home and /fsx)"
         Parameters:
+          - HomeStorageType
+          - DeployFSxLustre
           - Capacity
           - LustreDeploymentType
           - PerUnitStorageThroughput
@@ -139,7 +141,7 @@ Metadata:
       OnDemandEfaInterfaceCount:
         default: "EFA interfaces on CPU queue (0 = off, 1 or 2 for HPC types)"
       OnDemandPlacementGroupName:
-        default: "Existing placement group name (empty = auto-create when EFA on)"
+        default: "Existing placement group name or ID (empty = auto-create when EFA on)"
       DeployPseriesCNG:
         default: "Deploy GPU (P5/P6) queue"
       PseriesInstanceType:
@@ -155,11 +157,15 @@ Metadata:
       OnDemandCapacityReservationId:
         default: "Targeted ODCR ID for the CPU queue (leave empty for On-Demand / open ODCR)"
       PseriesPlacementGroupName:
-        default: "Existing placement group for the GPU queue (leave empty to auto-create)"
+        default: "Existing placement group name or ID for the GPU queue (leave empty to auto-create)"
       PseriesCngName:
         default: "GPU node group name"
       PseriesQueueName:
         default: "GPU queue name"
+      HomeStorageType:
+        default: "Filesystem for /home"
+      DeployFSxLustre:
+        default: "Create FSx for Lustre (/fsx)"
       Capacity:
         default: "FSx for Lustre (/fsx) capacity (GiB)"
       LustreDeploymentType:
@@ -226,7 +232,32 @@ Parameters:
     Description: Set to false to avoid creating an S3 endpoint on your VPC.
     Type: String
 
-  # FSx Storage Configuration
+  # Shared Storage Configuration
+  HomeStorageType:
+    Description: >-
+      Shared filesystem for /home. FSxOpenZFS (default) = FSx for OpenZFS,
+      sized by the three "FSx for OpenZFS (/home)" parameters below. EFS =
+      Amazon EFS with elastic throughput, billed per GB stored and per GB
+      read or written, nothing to size (the OpenZFS parameters are ignored). Choose at stack creation —
+      changing it later replaces /home and deletes its contents.
+    Type: String
+    Default: FSxOpenZFS
+    AllowedValues:
+      - FSxOpenZFS
+      - EFS
+
+  DeployFSxLustre:
+    Description: >-
+      Create the FSx for Lustre scratch filesystem mounted at /fsx (default
+      true). false = no /fsx on any node and the "FSx for Lustre (/fsx)"
+      parameters are ignored; datasets, checkpoints and container images then
+      go under /home. Changing true to false later deletes /fsx and its contents.
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
   Capacity:
     Description: Storage capacity in GiB (1200 or increments of 2400)
     Type: Number
@@ -313,7 +344,7 @@ Parameters:
     Default: 'dc=cluster,dc=internal'
 
   HomeCapacity:
-    Description: "Home directories storage capacity in GiB"
+    Description: "Home directories storage capacity in GiB (FSx for OpenZFS only; ignored when HomeStorageType=EFS)"
     Type: Number
     Default: 512
 
@@ -529,7 +560,10 @@ Parameters:
       group when EFA is off). Set to reuse an existing PG (e.g. shared across
       multiple CPU CNGs, or a customer-owned CPG holding reserved capacity —
       honored with or without EFA, so a CPG-held targeted ODCR is consumable).
-      The GPU queue's equivalent is PseriesPlacementGroupName.
+      Also accepts a placement group ID (pg-...), required for a group shared
+      from another account. Use the name or ID, not the ARN (e.g. the
+      PlacementGroupArn of a capacity reservation). The GPU queue's equivalent is
+      PseriesPlacementGroupName.
     Default: ''
 
   # P-series Compute Node Group
@@ -618,8 +652,10 @@ Parameters:
       (Optional) Existing cluster placement group name for the GPU node group —
       e.g. to consume a targeted ODCR held in a customer-owned cluster
       placement group. Leave EMPTY to auto-create a per-CNG placement group.
-      Ignored on the Capacity Block path (a Capacity Block carries its own
-      placement).
+      Also accepts a placement group ID (pg-...), required for a group shared
+      from another account. Use the name or ID, not the ARN (e.g. the
+      PlacementGroupArn of a capacity reservation). Ignored on the Capacity
+      Block path (a Capacity Block carries its own placement).
 
   RootVolumeSize:
     Type: Number
@@ -636,30 +672,38 @@ Parameters:
 # prerequisites stack as an opaque CreateFileSystem error.
 Rules:
   LustrePersistent1Throughput:
-    RuleCondition: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_1']
+    RuleCondition: !And
+      - !Equals [!Ref DeployFSxLustre, 'true']
+      - !Equals [!Ref LustreDeploymentType, 'PERSISTENT_1']
     Assertions:
       - Assert: !Contains [["50", "100", "200"], !Ref PerUnitStorageThroughput]
         AssertDescription: >-
           PERSISTENT_1 supports PerUnitStorageThroughput of 50, 100, or 200 MB/s/TiB only.
   LustrePersistent2Throughput:
-    RuleCondition: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_2']
+    RuleCondition: !And
+      - !Equals [!Ref DeployFSxLustre, 'true']
+      - !Equals [!Ref LustreDeploymentType, 'PERSISTENT_2']
     Assertions:
       - Assert: !Contains [["125", "250", "500", "1000"], !Ref PerUnitStorageThroughput]
         AssertDescription: >-
           PERSISTENT_2 supports PerUnitStorageThroughput of 125, 250, 500, or 1000 MB/s/TiB only.
   OpenZFS64GridThroughput:
-    RuleCondition: !Or
-      - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_1']
-      - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_HA_1']
+    RuleCondition: !And
+      - !Equals [!Ref HomeStorageType, 'FSxOpenZFS']
+      - !Or
+        - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_1']
+        - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_HA_1']
     Assertions:
       - Assert: !Contains [["64", "128", "256", "512", "1024", "2048", "3072", "4096"], !Ref HomeThroughput]
         AssertDescription: >-
           SINGLE_AZ_1 / SINGLE_AZ_HA_1 support HomeThroughput of
           64/128/256/512/1024/2048/3072/4096 MB/s only.
   OpenZFS160GridThroughput:
-    RuleCondition: !Or
-      - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_2']
-      - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_HA_2']
+    RuleCondition: !And
+      - !Equals [!Ref HomeStorageType, 'FSxOpenZFS']
+      - !Or
+        - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_2']
+        - !Equals [!Ref OpenZFSDeploymentType, 'SINGLE_AZ_HA_2']
     Assertions:
       - Assert: !Contains [["160", "320", "640", "1280", "2560", "3840", "5120", "7680", "10240"], !Ref HomeThroughput]
         AssertDescription: >-
@@ -669,7 +713,9 @@ Rules:
   # time -- before any nested resources are launched -- if the user opted in
   # on PERSISTENT_1, instead of silently dropping the EfaEnabled property.
   FSxLustreEfaRequiresPersistent2:
-    RuleCondition: !Equals [!Ref FSxLustreEnableEfa, 'true']
+    RuleCondition: !And
+      - !Equals [!Ref DeployFSxLustre, 'true']
+      - !Equals [!Ref FSxLustreEnableEfa, 'true']
     Assertions:
       - Assert: !Equals [!Ref LustreDeploymentType, 'PERSISTENT_2']
         AssertDescription: >-
@@ -687,6 +733,11 @@ Conditions:
     - !Condition SSHAccessEnabled
     - !Condition GrafanaAccessEnabled
   MonitoringEnabled: !Not [!Equals [!Ref MonitoringStack, 'none']]
+  # Shared storage selection. The prerequisites stack only emits the outputs
+  # of the filesystems it creates, so every consumer selects with !If.
+  HomeIsEFS: !Equals [!Ref HomeStorageType, 'EFS']
+  CreateOpenZFSHome: !Not [!Condition HomeIsEFS]
+  CreateLustre: !Equals [!Ref DeployFSxLustre, 'true']
   # Select the right multi-NIC EFA template from the P-series instance type.
   # p6-b200/p6-b300 have different network-card counts than P5, so each family
   # gets its own nested stack; anything else falls back to the P5 template.
@@ -703,7 +754,7 @@ Conditions:
 
 Resources:
   #############################################################################
-  # 1. Prerequisites Stack (VPC, FSx)
+  # 1. Prerequisites Stack (VPC, shared storage)
   #############################################################################
   PrerequisitesStack:
     Type: AWS::CloudFormation::Stack
@@ -715,6 +766,8 @@ Resources:
         AdditionalSubnetAZ2: !Ref AdditionalSubnetAZ2
         AdditionalSubnetAZ3: !Ref AdditionalSubnetAZ3
         CreateS3Endpoint: !Ref CreateS3Endpoint
+        HomeStorageType: !Ref HomeStorageType
+        DeployFSxLustre: !Ref DeployFSxLustre
         Capacity: !Ref Capacity
         LustreDeploymentType: !Ref LustreDeploymentType
         PerUnitStorageThroughput: !Ref PerUnitStorageThroughput
@@ -806,9 +859,10 @@ Resources:
         # (base perms + ldap/* SSM + KMS decrypt). Compute CNGs below keep the
         # base InstanceProfileArn, which cannot read the LDAP admin password.
         IamProfileArn: !GetAtt ClusterStack.Outputs.LoginInstanceProfileArn
-        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
-        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
-        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        FSxLustreFilesystemId: !If [CreateLustre, !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId, '']
+        FSxLustreFilesystemMountName: !If [CreateLustre, !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname, '']
+        FSxOpenZFSFilesystemId: !If [HomeIsEFS, '', !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId]
+        EFSHomeFilesystemId: !If [HomeIsEFS, !GetAtt PrerequisitesStack.Outputs.EFSHomeFilesystemId, '']
         DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
@@ -846,9 +900,10 @@ Resources:
         AmiId: !Ref AmiId
         ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
         IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
-        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
-        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
-        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        FSxLustreFilesystemId: !If [CreateLustre, !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId, '']
+        FSxLustreFilesystemMountName: !If [CreateLustre, !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname, '']
+        FSxOpenZFSFilesystemId: !If [HomeIsEFS, '', !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId]
+        EFSHomeFilesystemId: !If [HomeIsEFS, !GetAtt PrerequisitesStack.Outputs.EFSHomeFilesystemId, '']
         DeployMonitoring: !If [MonitoringEnabled, "true", "false"]
         MonitoringVersion: !Ref MonitoringVersion
         MonitoringRepo: !Ref MonitoringRepo
@@ -892,9 +947,10 @@ Resources:
         AmiId: !Ref AmiId
         ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
         IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
-        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
-        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
-        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        FSxLustreFilesystemId: !If [CreateLustre, !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId, '']
+        FSxLustreFilesystemMountName: !If [CreateLustre, !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname, '']
+        FSxOpenZFSFilesystemId: !If [HomeIsEFS, '', !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId]
+        EFSHomeFilesystemId: !If [HomeIsEFS, !GetAtt PrerequisitesStack.Outputs.EFSHomeFilesystemId, '']
         CapacityReservationId: !Ref CapacityReservationId
         CapacityReservationType: !Ref CapacityReservationType
         PlacementGroupName: !Ref PseriesPlacementGroupName
@@ -935,9 +991,10 @@ Resources:
         AmiId: !Ref AmiId
         ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
         IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
-        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
-        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
-        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        FSxLustreFilesystemId: !If [CreateLustre, !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId, '']
+        FSxLustreFilesystemMountName: !If [CreateLustre, !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname, '']
+        FSxOpenZFSFilesystemId: !If [HomeIsEFS, '', !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId]
+        EFSHomeFilesystemId: !If [HomeIsEFS, !GetAtt PrerequisitesStack.Outputs.EFSHomeFilesystemId, '']
         CapacityReservationId: !Ref CapacityReservationId
         CapacityReservationType: !Ref CapacityReservationType
         PlacementGroupName: !Ref PseriesPlacementGroupName
@@ -978,9 +1035,10 @@ Resources:
         AmiId: !Ref AmiId
         ClusterSecurityGroupId: !GetAtt PrerequisitesStack.Outputs.SecurityGroup
         IamProfileArn: !GetAtt ClusterStack.Outputs.InstanceProfileArn
-        FSxLustreFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
-        FSxLustreFilesystemMountName: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname
-        FSxOpenZFSFilesystemId: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+        FSxLustreFilesystemId: !If [CreateLustre, !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId, '']
+        FSxLustreFilesystemMountName: !If [CreateLustre, !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemMountname, '']
+        FSxOpenZFSFilesystemId: !If [HomeIsEFS, '', !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId]
+        EFSHomeFilesystemId: !If [HomeIsEFS, !GetAtt PrerequisitesStack.Outputs.EFSHomeFilesystemId, '']
         CapacityReservationId: !Ref CapacityReservationId
         CapacityReservationType: !Ref CapacityReservationType
         PlacementGroupName: !Ref PseriesPlacementGroupName
@@ -1013,9 +1071,16 @@ Outputs:
     Value: !GetAtt PrerequisitesStack.Outputs.VPC
 
   FSxLustreId:
+    Condition: CreateLustre
     Description: FSx for Lustre filesystem ID
     Value: !GetAtt PrerequisitesStack.Outputs.FSxLustreFilesystemId
 
   FSxOpenZFSId:
+    Condition: CreateOpenZFSHome
     Description: FSx for OpenZFS filesystem ID
     Value: !GetAtt PrerequisitesStack.Outputs.FSxOFilesystemId
+
+  EFSHomeId:
+    Condition: HomeIsEFS
+    Description: Amazon EFS filesystem ID (/home)
+    Value: !GetAtt PrerequisitesStack.Outputs.EFSHomeFilesystemId
