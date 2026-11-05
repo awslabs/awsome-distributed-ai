@@ -118,6 +118,7 @@ Stops per week (estimate):
 | Every rank reports at once | | | | | |
 | Progress stops and nothing prints | | | | | |
 | Everything passes, but an answer differs | | | | | |
+| A rank's CUDA error comes first | | | | | |
 
 # Healthy values
 
@@ -189,7 +190,7 @@ New process and checkpoint resume position:
 
 Recovered checksums, progress and new errors:
 
-## Case
+## Card C
 
 $case_fields
 # Incident 6
@@ -228,9 +229,6 @@ $case_fields
 ## Card B
 
 $case_fields
-## Card C
-
-$case_fields
 # Loss table
 
 | Time | Event | UTC |
@@ -254,6 +252,7 @@ $case_fields
 | Rework | The last checkpoint | The stop | |
 | Incident 3 | | | |
 | Incident 4 | | | |
+| Incident 5 | | | |
 
 ## Case
 

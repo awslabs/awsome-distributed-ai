@@ -276,15 +276,17 @@ class Launcher(unittest.TestCase):
         self.assertEqual(['# Your cluster', '# Triage table', '# Healthy values',
                           '# Incident 1', '## Case', '# Incident 2', '## Case',
                           '# Incident 3', '## Case', '# Incident 4', '## Case',
-                          '# Incident 5', '## Case', '# Incident 6', '## Case', '## Card A', '## Card B', '## Card C',
+                          '# Incident 5', '## Card C', '# Incident 6', '## Case', '## Card A', '## Card B',
                           '# Loss table', '## Case'], headings)
         # Each case block holds the three answers its page asks for.
-        self.assertEqual(7, text.count('\n## Case\n\n1.\n\n2.\n\n3.\n'))
+        self.assertEqual(6, text.count('\n## Case\n\n1.\n\n2.\n\n3.\n'))
+        self.assertEqual(1, text.count('## Card C'))
+        self.assertLess(text.index('## Card C'), text.index('# Incident 6'))
         self.assertIn('| What you see | Who reported | First record to read | Check that separates '
                       'the causes | Kind of recovery | Your healthy value |', text)
         for row in ('Nobody times out, but the job is slow', 'One rank does not report',
                     'Every rank reports at once', 'Progress stops and nothing prints',
-                    'Everything passes, but an answer differs'):
+                    'Everything passes, but an answer differs', "A rank's CUDA error comes first"):
             self.assertIn(f'| {row} | | | | | |', text)
         # The device incident is now Incident 6.
         incident_5 = text[text.index('\n# Incident 6\n'):text.index('\n## Card A\n')]
@@ -307,7 +309,7 @@ class Launcher(unittest.TestCase):
         loss = text[text.index('\n# Loss table\n'):]
         for row in ('| t0 | Last progress line | |', '| Detection | t0 | t1 | |',
                     '| Rework | The last checkpoint | The stop | |', '| Incident 3 | | | |',
-                    '| Incident 4 | | | |'):
+                    '| Incident 4 | | | |', '| Incident 5 | | | |'):
             self.assertIn(row, loss)
         self.assertNotIn('| Incident 2 |', loss)
         # Incidents 1 to 5 each have a transfer question; Incident 6 has none.
