@@ -166,7 +166,7 @@ Still to measure on hardware:
 
 ## November 3, 2026: a busy controller, and which incident `ended` ends
 
-The end-to-end run of the [previous section's change](#november-3-2026-status-after-an-incident-ends-the-help-lines-and-an-older-lab-record-file) on the g7.48xlarge pair, and two independent reviews of that change, found the problems this change fixes. The tests run on a CPU-only host. One pass on the g7.48xlarge pair has used this change since, and the end of this section says what it reached.
+The end-to-end run of the [previous section's change](#november-3-2026-status-after-an-incident-ends-the-help-lines-and-an-older-lab-record-file) on the g7.48xlarge pair, and two independent reviews of that change, found the problems this change fixes. The tests run on a CPU-only host. Two passes on the g7.48xlarge pair have used this change since, the second at the [next section's change](#november-3-2026-allocations-without-a-time-limit), and the end of this section says what they reached.
 
 What changed:
 
@@ -184,14 +184,16 @@ What the tests cover:
 - `tests/test_quiz_controls.py`: the `ended <issue id>` grammar, a late `ended` for Incident 1 after Incident 2 was issued, an unknown issue id, an incident whose profile write failed, the device incident's reply compared with a job incident's, and the operator view's end time.
 - `tests/test_job_launcher.py`: busy replies to `ended`, to the first `next` and to the controller step's `next`, the 30-second bound, a refusal from another table that is not sent again, the issue id that `ended` carries, a profile without a valid issue id, the four completing fix reruns, and the reruns that do not end the incident. The `efa-reset` resume test now checks that no request of any verb is sent.
 
-Measured on hardware, in one pass of pages 020 and 030 and Incidents 1 to 5 on the g7.48xlarge pair at this change:
+Measured on hardware, in the first pass, which ran pages 020 and 030 and Incidents 1 to 5 on the g7.48xlarge pair at this change:
 
 - Right after Incident 3's fix run, `status` printed `Next: Incident 3 has ended. Start the next incident the way your page shows.`
 - While the device incident's launcher held the controller for its `next`, about 6 s, 15 of 28 `status` calls in terminal B got the busy reply with exit 3, and the next call printed the fault phase. The launcher's own request got no busy reply, and the fault was applied once. Since the [change to the ubuntu account](#november-4-2026-the-lab-controls-as-the-clusters-ubuntu-account), `status` takes no lock and gets no busy reply.
 
+The second pass ran the pages' Incidents 1, 3 and 5 in a three-entry schedule, which issued Incident 3 as incident 2. Right after Incident 3's fix run, `status` printed `Next: Incident 2 has ended. Start the next incident the way your page shows.`
+
 Still to measure on hardware:
 
-- A busy reply to one of `job.sh`'s requests, which the launcher sends again. Neither that pass nor a second check, with three parallel `status` loops around Incident 1's `next` and `ended`, reached it.
+- A busy reply to one of `job.sh`'s requests, which the launcher sends again. Neither pass reached it, and neither did a separate check with three parallel `status` loops around Incident 1's `next` and `ended`.
 
 ## November 3, 2026: status after an incident ends, the help lines and an older lab-record file
 
