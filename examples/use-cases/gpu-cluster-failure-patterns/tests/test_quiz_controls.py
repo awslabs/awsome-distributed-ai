@@ -863,6 +863,7 @@ class DeviceIncident(QuizBase):
         self.assertNotIn('Start it again', before)
         self.assertIn('Next: Preparation did not finish; run recover to restore your node.',
                       before)
+        self.assertNotIn('Preparation is running', before)
         self.assert_no_kind(before)
         # This round changed nothing on the node, so recovery refuses it and the
         # round stays unrevealed. The answer after a recovered not-issued round is
@@ -877,6 +878,33 @@ class DeviceIncident(QuizBase):
         self.assertNotIn('Answer for incident', after)
         self.assertNotIn('Start it again', after)
         self.assert_no_kind(after)
+
+    def test_status_during_a_running_preparation_asks_for_status_again(self):
+        """Spain single-user pass, finding 1: status read 'preparing' while next
+        was still preparing the fault, and told the participant to recover."""
+        self.to_device_incident()
+        self.running_job_with_progress()
+        seen = []
+        real = self.executor.run_slurm
+
+        def status_during_drain(argv, timeout=None):
+            result = real(argv, timeout)
+            if argv[1:2] == ['update'] and 'State=DRAIN' in argv:
+                # The preparing record is written and next still holds the lock.
+                seen.append(self.run_main('status'))
+            return result
+        self.executor.run_slurm = status_during_drain
+        self.assertTrue(self.make().next().under_way)
+        self.assertEqual(1, len(seen))
+        code, out, err = seen[0]
+        self.assertEqual(0, code, err)
+        self.assertIn('Exercise phase: preparing', out)
+        self.assertIn('Next: Preparation is running; run status again.', out)
+        self.assertNotIn('run recover', out)
+        self.assert_no_kind(out)
+        # The status did not make next refuse: the fault was applied once.
+        self.assertEqual('fault-applied', self.make().store.read().phase)
+        self.assertEqual(1, len(self.active_calls))
 
     def test_a_refused_start_is_concealed_and_kept_for_the_operator(self):
         self.to_device_incident()

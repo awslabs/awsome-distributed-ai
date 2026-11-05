@@ -853,6 +853,21 @@ class StateStore:
             os.close(self._lock_handle)
             self._lock_handle = None
 
+    def read_unless_held(self):
+        """The record read under the lock, or None while a request holds the lock.
+
+        The lock is tried without waiting and released after this one read. A
+        request that arrives during the read gets the busy reply.
+        """
+        try:
+            self._acquire()
+        except Refusal:
+            return None
+        try:
+            return self.read()
+        finally:
+            self._release()
+
 class Request:
     def __init__(self, verb=None, argument=None, error=None):
         self.verb = verb
@@ -2732,12 +2747,22 @@ class DeviceSession:
             return Result(state, next_step='Use status, then collect a check.')
 
     def status(self):
-        # status takes no lock. Every record is replaced whole, so a read sees one
-        # version of it, and a status typed during another request neither waits
-        # nor makes that request refuse.
+        # status never waits for the lock. Every record is replaced whole, so a
+        # read sees one version of it, and a status typed during another request
+        # neither waits nor makes that request refuse.
         state = self.store.read()
+        # A record at 'preparing' comes from a preparation that is still running,
+        # whose request holds the lock, or from one that stopped. Only then does
+        # status try the lock. A free lock means no request is changing the
+        # record, so the record read under it settles which case this is.
+        preparing_now = False
+        if state.phase == 'preparing':
+            settled = self.store.read_unless_held()
+            preparing_now = settled is None
+            if settled is not None:
+                state = settled
         line = self._node_line()
-        next_step = self._next_step(state)
+        next_step = self._next_step(state, preparing_now)
         try:
             collectable = self._collectable(state)
         except Refusal:
@@ -2991,7 +3016,7 @@ class DeviceSession:
             return 0, False, 0
         return len(issued), bool(issued and 'ended_at' in issued[-1]), len(schedule)
 
-    def _next_step(self, state):
+    def _next_step(self, state, preparing_now=False):
         issued, ended, total = (self._issued_progress() if state.phase == 'ready'
                                 else (0, False, 0))
         # An issued incident is under way until job.sh reports that a job that ends
@@ -3015,7 +3040,8 @@ class DeviceSession:
                          else 'Collect an allowed check and compare it with your baseline.')
         return {
             'ready': ready,
-            'preparing': 'Preparation did not finish; run recover to restore your node.',
+            'preparing': ('Preparation is running; run status again.' if preparing_now
+                          else 'Preparation did not finish; run recover to restore your node.'),
             'fault-applied': fault_applied,
             'investigating': 'Record your evidence, then run recover.',
             'recovering': 'Recovery is running; run status again.',

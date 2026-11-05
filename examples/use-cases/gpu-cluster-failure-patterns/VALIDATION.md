@@ -141,6 +141,8 @@ Measured on hardware, in the participant pass of the [first section](#november-4
 - In Incident 4, Check 0 run as `ubuntu` from an allocation read the kernel log on both nodes through the account's `adm` group and found no Xid or SXid line, so its `[PASS]` rests on a read of the log.
 - `9.cleanup.sh` run as `ubuntu` exited 0 with nothing to remove, because each job had removed its own roots. The failed verification job of the first section kept its two container roots on the peer, as the job does when its result distribution fails. `9.cleanup.sh` removes the current allocation's roots and earlier torch roots only, so those two stayed.
 
+After this pass, `status` was changed to tell a preparation that is still running from one that stopped. While a request still holds the lock to prepare the incident, `status` prints `Next: Preparation is running; run status again.`, and after a preparation that stopped it prints the `Preparation did not finish` line as before. This change has been tested on a CPU-only host and has not run on hardware.
+
 Still to measure on hardware:
 
 - The login profile line added to `~/.bashrc` as the preparation adds it, in a Session Manager shell and in the shell that `salloc` opens.
