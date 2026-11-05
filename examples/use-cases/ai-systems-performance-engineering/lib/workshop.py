@@ -48,8 +48,8 @@ EXPECTED_FINGERPRINTS = {
 MINIMUM_DOCUMENT_TOKENS = 4096
 PROVENANCE_KEYS = ('model_id', 'tokenizer_revision', 'dataset_id', 'dataset_revision',
                    'dataset_subset', 'dataset_split')
-# EFA devices attached per node: g6e.48xlarge has four, and the test event attaches two.
-EFA_DEVICES = {'g7.48xlarge': 2, 'g6e.48xlarge': 2}
+# EFA devices attached per node: g6e.48xlarge and g7e.48xlarge have four, and the test events attach two.
+EFA_DEVICES = {'g7.48xlarge': 2, 'g6e.48xlarge': 2, 'g7e.48xlarge': 2}
 # OFI_NCCL_PROTOCOL of the EFA path (2.run-llm.sh, lib/nccl-protocols-rank.sh); RDMA otherwise.
 OFI_PROTOCOLS = {'g6e.48xlarge': 'SENDRECV'}
 FSX_FREE_BYTES = 300 * 2**30
@@ -260,8 +260,77 @@ def gpu_seconds_per_million_tokens(seconds, tokens, gpus):
     return seconds * gpus / tokens * 1e6
 
 
-def mfu(tokens_per_second, sequence_length, gemm_tflops_per_gpu, gpus):
-    return tokens_per_second * flop_per_token(sequence_length) / (gpus * gemm_tflops_per_gpu * 1e12)
+# Dense BF16 Tensor Core peak per GPU in TFLOP/s, and whether it is an estimate, keyed by the
+# CUDA device name that the result files record (gpu_name). MFU divides by the GPU count
+# times this value: PaLM (arXiv 2204.02311), section 4.1 and appendix B, uses the published
+# peak matmul throughput. Dense BF16 training cannot use a 2:4 sparse rate.
+DENSE_BF16_PEAKS = {
+    # g7.48xlarge. NVIDIA's datasheet and product page list "FP16 | BF16 Tensor Core 406 TFLOPS"
+    # without saying whether sparsity is included. Estimate: 1,024 dense BF16 FLOP per SM per
+    # clock (RTX Blackwell GPU architecture whitepaper, appendix B, table 4) x 82 SMs (10,496
+    # CUDA cores / 128) x the 2,415 MHz boost clock (product brief PB-12790-001_02) = 202.8,
+    # half of 406. The Workstation Edition datasheet footnotes the same FP4 figure "with sparsity".
+    'NVIDIA RTX PRO 4500 Blackwell Server Edition': (202.8, True),
+    # g6e.48xlarge. NVIDIA's L40S page: "BFLOAT16 Tensor Core TFLOPS 362.05 I 733*", "*With Sparsity".
+    'NVIDIA L40S': (362.05, False),
+    # g7e.48xlarge. Estimated as for the RTX PRO 4500: 1,024 x 188 SMs (24,064 CUDA cores in the
+    # datasheet / 128) x the 2,430 MHz boost clock (product brief SP-12355-001_v02) = 467.8.
+    # Cross-check: the product page lists "FP16 | BF16 Tensor Core 1 PFLOP" unmarked. Twice 467.8 is
+    # 935.6, which that one-digit figure rounds, as its 4 PFLOPS FP4 and 2 PFLOPS FP8 round the sparse
+    # 3.74 and 1.87; half of 1 PFLOP, 500, is therefore 7 % above the estimate.
+    'NVIDIA RTX PRO 6000 Blackwell Server Edition': (467.8, True),
+}
+
+
+def dense_peak(gpu):
+    """(TFLOP/s per GPU, estimated) for a GPU name; ValueError for a GPU the table does not list."""
+    if gpu not in DENSE_BF16_PEAKS:
+        raise ValueError(f'no dense peak for {gpu}')
+    return DENSE_BF16_PEAKS[gpu]
+
+
+def gpu_name(summary):
+    """The one GPU name that every rank of summary.json recorded, else None."""
+    names = {rank.get('gpu_name') for rank in summary.get('ranks', [])}
+    return names.pop() if len(names) == 1 else None
+
+
+def flop_share(tokens_per_second, sequence_length, tflops_per_gpu, gpus):
+    """The model's FLOP per second over gpus x tflops_per_gpu."""
+    return tokens_per_second * flop_per_token(sequence_length) / (gpus * tflops_per_gpu * 1e12)
+
+
+def mfu(tokens_per_second, sequence_length, gpu, gpus):
+    """Model FLOPs utilization: the model's FLOP per second over gpus x the dense BF16 peak of gpu."""
+    return flop_share(tokens_per_second, sequence_length, dense_peak(gpu)[0], gpus)
+
+
+def gemm_share(tokens_per_second, sequence_length, gemm_tflops_per_gpu, gpus):
+    """The model's FLOP per second over gpus x your measured GEMM rate. Not MFU."""
+    return flop_share(tokens_per_second, sequence_length, gemm_tflops_per_gpu, gpus)
+
+
+def mfu_text(summary, sequence_length, world):
+    """The value of the MFU line of a result block."""
+    gpu = gpu_name(summary)
+    if gpu is None:
+        return 'n/a (summary.json names no single GPU)'
+    try:
+        peak, estimated = dense_peak(gpu)
+    except ValueError as error:
+        return f'n/a ({error})'
+    value = mfu(summary['training_throughput_tokens_per_second'], sequence_length, gpu, world)
+    return (f"{100 * value:.1f} %  ({flop_per_token(sequence_length) / 1e9:.2f} GFLOP per token, "
+            f"dense BF16 peak {peak:g} TFLOP/s per GPU{', estimated' if estimated else ''})")
+
+
+def gemm_share_text(summary, sequence_length, ceilings, world):
+    """The value of the line that compares the model's FLOP rate with your measured GEMM rate."""
+    if not ceilings:
+        return 'n/a (run bash tools/hold-and-measure.sh)'
+    rate = ceilings['gemm_tflops_per_gpu']
+    value = gemm_share(summary['training_throughput_tokens_per_second'], sequence_length, rate, world)
+    return f'{100 * value:.1f} %  (your GEMM rate {rate:.1f} TFLOP/s per GPU)'
 
 
 def compute_only_seconds(targets, sequence_length, gemm_tflops_per_gpu, gpus):
@@ -714,17 +783,12 @@ def timed_block(stage, stage_dir, summary, ceilings, world, efa_losses=None, res
     tokens = summary['measured_useful_tokens']
     rate = summary['training_throughput_tokens_per_second']
     first = stage['warmup_updates'] + 1
-    if ceilings:
-        peak = ceilings['gemm_tflops_per_gpu']
-        mfu_text = (f"{100 * mfu(rate, stage['sequence_length'], peak, world):.1f} %    "
-                    f"({flop_per_token(stage['sequence_length']) / 1e9:.2f} GFLOP per token, {peak:.1f} TFLOP/s per GPU)")
-    else:
-        mfu_text = 'n/a (run bash tools/hold-and-measure.sh)'
     lines = [describe(stage)] + lines_for(
         [(f"timed updates {first}-{stage['updates']}", f'{seconds:.2f} s  ({tokens:,} targets)'),
          ('tokens/s', f'{rate:,.0f}'),
          ('GPU-seconds per 1M tokens', f'{gpu_seconds_per_million_tokens(seconds, tokens, world):.0f}'),
-         ('MFU vs your GEMM peak', mfu_text),
+         ('MFU', mfu_text(summary, stage['sequence_length'], world)),
+         ('share of your GEMM rate', gemm_share_text(summary, stage['sequence_length'], ceilings, world)),
          ('peak memory (largest rank)', f'{peak_memory_gib(summary):.2f} GiB')]
         + ([change_pair(stage, summary)] if stage.get('change') else [])
         + nccl_pairs(stage, stage_dir, world) + [efa_pair(stage_dir)])
@@ -748,9 +812,9 @@ def loss_comparison_lines(stage, stage_dir, reference_rows):
 
 # The intervals of the retained progress, as lib/train_llm.py (segment_seconds) and
 # 13.measure-recovery.py (elapsed) measure them.
-SAVING_INTERVAL = ('from after model loading, FSDP wrapping, optimizer',
-                   'and checkpoint-manager construction to after the final flush,',
-                   'the closing barriers of the timing windows and the two all-reduces')
+SAVING_INTERVAL = ('from the end of setup (model loading, FSDP wrapping,',
+                   'optimizer, checkpoint manager) to the end of the final flush and',
+                   'the closing synchronization across ranks')
 CAMPAIGN_INTERVAL = ('from just before the first launch to the exit of the',
                      'resumed launch, with both launches and both model loads')
 

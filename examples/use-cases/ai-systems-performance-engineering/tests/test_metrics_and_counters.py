@@ -16,10 +16,11 @@ class MeasurementTests(unittest.TestCase):
         # Synthetic arithmetic fixture, not a measured training result.
         result=calculate(10000,3_000_000_000,4,429.1)
         self.assertEqual(result['tflops_per_gpu'],45)
-        self.assertAlmostEqual(result['mfu_dense_gemm_ratio'],45/429.1)
+        self.assertAlmostEqual(result['measured_gemm_share'],45/429.1)
+        self.assertNotIn('mfu_dense_gemm_ratio', result)
         sparse=calculate(10000,3_000_000_000,4,1000)
-        self.assertLess(sparse['mfu_dense_gemm_ratio'],result['mfu_dense_gemm_ratio'])
-        self.assertAlmostEqual(result['mfu_dense_gemm_ratio']/sparse['mfu_dense_gemm_ratio'],1000/429.1)
+        self.assertLess(sparse['measured_gemm_share'],result['measured_gemm_share'])
+        self.assertAlmostEqual(result['measured_gemm_share']/sparse['measured_gemm_share'],1000/429.1)
         self.assertEqual(calculate(20000,3_000_000_000,8,429.1),dict(result,tokens_per_second=20000))
 
     def test_pushgateway_keeps_each_configuration(self):

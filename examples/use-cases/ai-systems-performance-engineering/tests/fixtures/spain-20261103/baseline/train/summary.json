@@ -101,96 +101,112 @@
       "rank": 0,
       "local_rank": 0,
       "peak_cuda_allocated_bytes": 28648466432,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
       "status": "completed"
     },
     {
       "rank": 1,
       "local_rank": 1,
       "peak_cuda_allocated_bytes": 28648466432,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
       "status": "completed"
     },
     {
       "rank": 2,
       "local_rank": 2,
       "peak_cuda_allocated_bytes": 28648466432,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
       "status": "completed"
     },
     {
       "rank": 3,
       "local_rank": 3,
       "peak_cuda_allocated_bytes": 28648466432,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
       "status": "completed"
     },
     {
       "rank": 4,
       "local_rank": 4,
       "peak_cuda_allocated_bytes": 28648466432,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
       "status": "completed"
     },
     {
       "rank": 5,
       "local_rank": 5,
       "peak_cuda_allocated_bytes": 28648466432,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
       "status": "completed"
     },
     {
       "rank": 6,
       "local_rank": 6,
       "peak_cuda_allocated_bytes": 28648466432,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
       "status": "completed"
     },
     {
       "rank": 7,
       "local_rank": 7,
       "peak_cuda_allocated_bytes": 28648466432,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
       "status": "completed"
     },
     {
       "rank": 8,
       "local_rank": 0,
       "peak_cuda_allocated_bytes": 28648466432,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
       "status": "completed"
     },
     {
       "rank": 9,
       "local_rank": 1,
       "peak_cuda_allocated_bytes": 28648466432,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
       "status": "completed"
     },
     {
       "rank": 10,
       "local_rank": 2,
       "peak_cuda_allocated_bytes": 28648466432,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
       "status": "completed"
     },
     {
       "rank": 11,
       "local_rank": 3,
       "peak_cuda_allocated_bytes": 28648466432,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
       "status": "completed"
     },
     {
       "rank": 12,
       "local_rank": 4,
       "peak_cuda_allocated_bytes": 28648466432,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
       "status": "completed"
     },
     {
       "rank": 13,
       "local_rank": 5,
       "peak_cuda_allocated_bytes": 28648466432,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
       "status": "completed"
     },
     {
       "rank": 14,
       "local_rank": 6,
       "peak_cuda_allocated_bytes": 28648466432,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
       "status": "completed"
     },
     {
       "rank": 15,
       "local_rank": 7,
       "peak_cuda_allocated_bytes": 28648466432,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
       "status": "completed"
     }
   ],

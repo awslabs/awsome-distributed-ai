@@ -6,10 +6,11 @@ import urllib.request
 
 def calculate(tokens_per_second, nonembedding_parameters, gpus, dense_tflops):
     if not all(math.isfinite(x) and x > 0 for x in (tokens_per_second, nonembedding_parameters, gpus, dense_tflops)):
-        raise ValueError('throughput, parameters, GPU count and dense peak must be positive and finite')
+        raise ValueError('throughput, parameters, GPU count and measured dense GEMM rate must be positive and finite')
     achieved = 6 * nonembedding_parameters * tokens_per_second / gpus / 1e12
+    # A share of the measured GEMM rate, not MFU: MFU divides by a peak (lib/workshop.py, DENSE_BF16_PEAKS).
     return {'tokens_per_second': tokens_per_second, 'tflops_per_gpu': achieved,
-            'mfu_dense_gemm_ratio': achieved / dense_tflops}
+            'measured_gemm_share': achieved / dense_tflops}
 
 
 def push(url, run_id, config, instance_type, values, *, measurement_kind=None):

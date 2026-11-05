@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Recompute comparable MFU and explicitly scoped useful tokens per GPU-hour."""
+"""Recompute the share of the measured GEMM rate, MFU against the derived g7e.12xlarge peak, and explicitly scoped useful tokens per GPU-hour."""
 import argparse
 import json
 from pathlib import Path
@@ -51,7 +51,7 @@ def main():
                  denominator_source=source,**values)
         rows.append(row)
         push(a.pushgateway,a.results.name,config,instance,values)
-    ratios=[r['mfu_dense_gemm_ratio'] for r in rows if 'mfu_dense_gemm_ratio' in r]
+    ratios=[r['measured_gemm_share'] for r in rows if 'measured_gemm_share' in r]
     print(json.dumps(dict(results=rows,monotonic_increase_observed=all(b>a for a,b in zip(ratios,ratios[1:])) if len(ratios)==4 else None),indent=2))
 
 

@@ -31,6 +31,7 @@ EFA = dict(seconds=5.770125308074057, rate=45409.06583664043, peak=28648466432,
            monotonic=[3477404.172973511, 3477405.620809354, 3477407.060770044, 3477408.501891915,
                       3477409.944532604])
 ALLOCATION = {'label': 'pcs-g7.48xlarge-2nodes-16gpu', 'gpu_count': 16, 'dp_size': 16}
+G7_GPU = 'NVIDIA RTX PRO 4500 Blackwell Server Edition'
 HOSTS = ('gpu-node-1', 'gpu-node-2')
 
 
@@ -67,7 +68,8 @@ def summary(stage, seconds, rate, peak, *, tokens=None, **extra):
                                      else 'continuous post-warmup training'),
                   measured_seconds=seconds, measured_useful_tokens=tokens or workshop.timed_targets(stage),
                   training_throughput_tokens_per_second=rate, segment_seconds=seconds + 9,
-                  completed_updates=stage['updates'], ranks=[{'peak_cuda_allocated_bytes': peak}] * 16)
+                  completed_updates=stage['updates'],
+                  ranks=[{'peak_cuda_allocated_bytes': peak, 'gpu_name': G7_GPU}] * 16)
     result.update(extra)
     return result
 
@@ -194,12 +196,37 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(workshop.flop_per_token(1024), 10_872_238_080)
         self.assertAlmostEqual(workshop.gpu_seconds_per_million_tokens(BASELINE['seconds'], 262016, 16), 825.2, 1)
         self.assertAlmostEqual(workshop.gpu_seconds_per_million_tokens(EFA['seconds'], 262016, 16), 352.4, 1)
-        self.assertEqual(round(100 * workshop.mfu(BASELINE['rate'], 2048, GEMM_PEAK, 16), 1), 8.1)
-        self.assertEqual(round(100 * workshop.mfu(EFA['rate'], 2048, GEMM_PEAK, 16), 1), 19.0)
+        # MFU divides by the dense BF16 peak, 202.8 TFLOP/s per GPU; the share by the measured GEMM rate.
+        self.assertEqual(round(100 * workshop.mfu(BASELINE['rate'], 2048, G7_GPU, 16), 1), 6.9)
+        self.assertEqual(round(100 * workshop.mfu(EFA['rate'], 2048, G7_GPU, 16), 1), 16.1)
+        self.assertEqual(round(100 * workshop.gemm_share(BASELINE['rate'], 2048, GEMM_PEAK, 16), 1), 8.1)
+        self.assertEqual(round(100 * workshop.gemm_share(EFA['rate'], 2048, GEMM_PEAK, 16), 1), 19.0)
         self.assertEqual(round(workshop.compute_only_seconds(65504, 2048, 171.7, 16), 3), 0.274)
         self.assertEqual(workshop.timed_targets(workshop.plan('baseline', job())[0]), 262016)
         self.assertEqual(workshop.timed_targets(workshop.plan('probe', job())[0]), 130944)
         self.assertEqual(workshop.timed_targets(workshop.plan('checkpoint', job('efa', 'sdpa', 'sync'))[0]), 2489152)
+
+
+class DensePeakTests(unittest.TestCase):
+    def test_table_lookup_and_unknown_gpu(self):
+        self.assertEqual(workshop.dense_peak(G7_GPU), (202.8, True))
+        self.assertEqual(workshop.dense_peak('NVIDIA L40S'), (362.05, False))
+        self.assertEqual(workshop.dense_peak('NVIDIA RTX PRO 6000 Blackwell Server Edition'), (467.8, True))
+        # The two estimates: 1,024 BF16 FLOP per SM per clock x SMs x boost clock.
+        self.assertAlmostEqual(1024 * 82 * 2.415e9 / 1e12, 202.8, delta=0.05)
+        self.assertAlmostEqual(1024 * 188 * 2.430e9 / 1e12, 467.8, delta=0.05)
+        with self.assertRaisesRegex(ValueError, r'^no dense peak for NVIDIA A10G$'):
+            workshop.dense_peak('NVIDIA A10G')
+        with self.assertRaises(ValueError):
+            workshop.mfu(1000.0, 2048, 'NVIDIA A10G', 16)
+
+    def test_mfu_line_names_the_gpu_it_cannot_divide_by(self):
+        stage = workshop.plan('baseline', job())[0]
+        result = summary(stage, BASELINE['seconds'], BASELINE['rate'], BASELINE['peak'])
+        result['ranks'] = [dict(rank, gpu_name='NVIDIA A10G') for rank in result['ranks']]
+        self.assertEqual(workshop.mfu_text(result, 2048, 16), 'n/a (no dense peak for NVIDIA A10G)')
+        result['ranks'][0] = dict(result['ranks'][0], gpu_name=G7_GPU)
+        self.assertEqual(workshop.mfu_text(result, 2048, 16), 'n/a (summary.json names no single GPU)')
 
 
 class DisplayTests(unittest.TestCase):
@@ -237,13 +264,19 @@ class DisplayTests(unittest.TestCase):
             '  timed updates 2-5            13.51 s  (262,016 targets)',
             '  tokens/s                     19,388',
             '  GPU-seconds per 1M tokens    825',
-            '  MFU vs your GEMM peak        8.1 %    (11.48 GFLOP per token, 171.7 TFLOP/s per GPU)',
+            '  MFU                          6.9 %  (11.48 GFLOP per token, dense BF16 peak 202.8 TFLOP/s per GPU, '
+            'estimated)',
+            '  share of your GEMM rate      8.1 %  (your GEMM rate 171.7 TFLOP/s per GPU)',
             '  peak memory (largest rank)   26.68 GiB',
             '  NCCL network                 Socket on 16 of 16 ranks',
             '  EFA bytes during the run     gpu-node-1 +0 B sent, +0 B received; gpu-node-2 +0 B sent, +0 B received'])
         (self.results / 'ceilings/ceilings.json').unlink()
+        # Without ceilings MFU still prints, because its peak comes from the table, not from a measurement.
         lines = workshop.timed_block(stage, directory, result, None, 16)
-        self.assertIn('  MFU vs your GEMM peak        n/a (run bash tools/hold-and-measure.sh)', lines)
+        self.assertIn('  share of your GEMM rate      n/a (run bash tools/hold-and-measure.sh)', lines)
+        self.assertIn('  MFU                          6.9 %  (11.48 GFLOP per token, dense BF16 peak 202.8 TFLOP/s '
+                      'per GPU, estimated)', lines)
+        self.assertFalse([line for line in lines if 'GEMM peak' in line])
 
     def test_efa_and_sdpa_blocks(self):
         efa = workshop.plan('efa', job('efa'))[0]
@@ -332,9 +365,9 @@ class DisplayTests(unittest.TestCase):
         lines = workshop.timed_block(stage, directory, result, None, 16, results=self.results)
         self.assertEqual(lines[2:9], [
             '  retained tokens              2,620,160 (updates 1-40, durable at the end)',
-            '  interval                     88.25 s, from after model loading, FSDP wrapping, optimizer',
-            '                               and checkpoint-manager construction to after the final flush,',
-            '                               the closing barriers of the timing windows and the two all-reduces',
+            '  interval                     88.25 s, from the end of setup (model loading, FSDP wrapping,',
+            '                               optimizer, checkpoint manager) to the end of the final flush and',
+            '                               the closing synchronization across ranks',
             '  retained progress rate       29,690 tokens/s (retained tokens / interval)',
             '  fault-free rate              65,504 tokens/s (stage sdpa, which does not save)',
             '  training goodput             0.45 (retained progress rate / fault-free rate)'])
@@ -630,12 +663,17 @@ class ProgressionTests(unittest.TestCase):
                 {'gemm_tflops_per_gpu': GEMM_PEAK, 'memory_read_bytes_per_second_per_gpu': 662e9,
                  'ridge_flop_per_byte': GEMM_PEAK * 1e12 / 662e9}))
             notes = tool.Notes()
-            ceilings, table = tool.collect(results, notes)
+            ceilings, table, denominators = tool.collect(results, notes)
             self.assertEqual([row['_name'] for row in table],
                              ['baseline', 'probe-socket-eager', 'efa', 'sdpa', 'ckpt-sync', 'interrupt'])
             by_name = {row['_name']: row for row in table}
             self.assertEqual(by_name['efa']['vs baseline'], '2.34x')
-            self.assertEqual(by_name['efa']['MFU vs your GEMM peak'], '19.0 %')
+            self.assertEqual(by_name['efa']['MFU'], '16.1 %')
+            self.assertEqual(by_name['efa']['Share of your GEMM rate'], '19.0 %')
+            self.assertEqual(denominators, [
+                "MFU: the model's FLOP per second / (16 x the dense BF16 peak, 202.8 TFLOP/s per GPU for "
+                'NVIDIA RTX PRO 4500 Blackwell Server Edition, estimated from NVIDIA specifications)',
+                'Share of your GEMM rate: the same FLOP per second / (16 x your GEMM rate, 171.7 TFLOP/s per GPU)'])
             self.assertEqual(by_name['baseline']['GPU-s per 1M tokens'], '825')
             self.assertEqual(by_name['efa']['vs previous step'], '2.34x')
             self.assertEqual(by_name['sdpa']['vs previous step'], f'{EFA["seconds"] / 4.0:.2f}x')
@@ -650,14 +688,15 @@ class ProgressionTests(unittest.TestCase):
             self.assertEqual(by_name['interrupt']['Goodput'], '0.21 (2)')
             self.assertEqual(notes.texts[1], 'interrupt: goodput over the whole command, from just before the first '
                              'launch to the exit of the resumed launch, including both launches and both model loads. '
-                             'The interval of the saving rows starts after model loading, FSDP wrapping, optimizer and '
-                             'checkpoint-manager construction and ends after the final flush, the closing barriers of '
-                             'the timing windows and the two all-reduces, so the saving rows leave the model load out')
+                             'The interval of the saving rows runs from the end of setup (model loading, FSDP wrapping, '
+                             'optimizer, checkpoint manager) to the end of the final flush and the closing '
+                             'synchronization across ranks, so the saving rows leave the model load out')
             self.assertEqual(tool.COLUMNS[-3:], ('vs baseline', 'vs previous step', 'Goodput'))
-            plain = tool.render(ceilings, table, notes, False)
+            plain = tool.render(ceilings, table, notes, False, denominators)
+            self.assertEqual(plain[-2:], denominators)
             self.assertEqual(plain[0], 'GEMM peak 171.7 TFLOP/s per GPU, memory read 662 GB/s per GPU, ridge 259 FLOP per byte')
             self.assertIn('interrupt: stopped after update 30, resumed from update 5, 25 updates ran twice', plain)
-            markdown = tool.render(ceilings, table, notes, True)
+            markdown = tool.render(ceilings, table, notes, True, denominators)
             self.assertTrue(markdown[2].startswith('| Stage | Transport | Attention | Saving | Work | Seconds |'))
             self.assertTrue(markdown[4].startswith('| baseline | socket | eager | none | 5 x 2,048 | 13.51 | 19,388 |'))
             stdout = io.StringIO()
@@ -671,6 +710,16 @@ class ProgressionTests(unittest.TestCase):
             mark = by_name['ckpt-sync']['Goodput']
             self.assertEqual(notes.texts[int(mark.strip('()')) - 1],
                              'ckpt-sync: goodput not computed, no completed run of stage sdpa')
+            # A GPU without a dense peak in the table: the MFU cell points to a note; the share still prints.
+            path = results / 'efa/train/summary.json'
+            other = json.loads(path.read_text())
+            other['ranks'] = [dict(rank, gpu_name='NVIDIA A10G') for rank in other['ranks']]
+            path.write_text(json.dumps(other))
+            notes = tool.Notes()
+            by_name = {row['_name']: row for row in tool.collect(results, notes)[1]}
+            mark = by_name['efa']['MFU']
+            self.assertEqual(notes.texts[int(mark.strip('()')) - 1], 'efa: MFU n/a, no dense peak for NVIDIA A10G')
+            self.assertEqual(by_name['efa']['Share of your GEMM rate'], '19.0 %')
 
 
 class AllocationTests(unittest.TestCase):
@@ -1065,15 +1114,19 @@ class ProvisioningTests(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
         self.assertEqual(result.stderr.strip(),
-                         'prepare-event: --instance-type must be g7.48xlarge or g6e.48xlarge (got p5.48xlarge)')
+                         'prepare-event: --instance-type must be g7.48xlarge, g6e.48xlarge or g7e.48xlarge '
+                         '(got p5.48xlarge)')
         self.assertEqual(subprocess.run(['bash', str(script), '--stage-dir'], capture_output=True).returncode, 2)
-        # g6e.48xlarge passes the instance check and stops at a later precondition (here, the stage directory).
-        result = subprocess.run(['bash', str(script), '--stage-dir', '/nonexistent', '--slurm-version', '25.11',
-                                 '--instance-type', 'g6e.48xlarge', '--grafana-url', 'https://x/grafana/'],
-                                capture_output=True, text=True)
-        self.assertEqual(result.returncode, 2)
-        self.assertNotIn('--instance-type', result.stderr)
-        self.assertIn('--stage-dir must be an existing absolute path', result.stderr)
+        # g6e.48xlarge and g7e.48xlarge pass the instance check and stop at a later precondition (here, the
+        # stage directory).
+        for instance_type in ('g6e.48xlarge', 'g7e.48xlarge'):
+            with self.subTest(instance_type=instance_type):
+                result = subprocess.run(['bash', str(script), '--stage-dir', '/nonexistent', '--slurm-version', '25.11',
+                                         '--instance-type', instance_type, '--grafana-url', 'https://x/grafana/'],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2)
+                self.assertNotIn('--instance-type', result.stderr)
+                self.assertIn('--stage-dir must be an existing absolute path', result.stderr)
 
     def test_check_expects_two_efa_devices_on_g6e(self):
         reports = [dict(host=host, gpus=[['NVIDIA L40S', '46068']] * 8, efa=efa, error=None)
@@ -1085,6 +1138,23 @@ class ProvisioningTests(unittest.TestCase):
         self.assertIn('  efa          PASS  gpu-node-1: 2 EFA devices (rdmap0s1, rdmap0s2)', lines)
         self.assertIn('  efa          FAIL  gpu-node-2: 1 EFA devices (rdmap0s1) (expected 2)', lines)
         self.assertIn('  gpus         PASS  gpu-node-1: 8 x NVIDIA L40S, 46068 MiB each', lines)
+
+    def test_check_expects_two_efa_devices_on_g7e(self):
+        # g7e.48xlarge has four EFA interfaces; the test event attaches two (synthetic reports).
+        gpu = ['NVIDIA RTX PRO 6000 Blackwell Server Edition', '97887']
+        reports = [dict(host=host, gpus=[gpu] * 8, efa=efa, error=None)
+                   for host, efa in zip(HOSTS, (['rdmap0s1', 'rdmap0s2'], ['rdmap0s1']))]
+        with tempfile.TemporaryDirectory() as directory:
+            env = dict(AIM347_HOME=directory, PARTITION='gpu', GPUS_PER_NODE='8', AIM347_INSTANCE_TYPE='g7e.48xlarge')
+            lines, _ = workshop.check_lines(env, 'gpu-node-1 idle\ngpu-node-2 idle\n', reports,
+                                            lambda url: (200, '{"data": {"result": []}}'))
+        self.assertIn('  efa          PASS  gpu-node-1: 2 EFA devices (rdmap0s1, rdmap0s2)', lines)
+        self.assertIn('  efa          FAIL  gpu-node-2: 1 EFA devices (rdmap0s1) (expected 2)', lines)
+        g7e = workshop.env_file_text(stage_dir='/fsx/aim347/participant', companion='/c', slurm_version='25.11',
+                                     cpus_per_node=192, instance_type='g7e.48xlarge', nic='enp39s0',
+                                     image_sha256='b' * 64, grafana_url='https://203.0.113.10/grafana/',
+                                     password_file='/p')
+        self.assertIn("export AIM347_ALLOCATION_LABEL=pcs-g7e.48xlarge-2nodes-16gpu\n", g7e)
 
     def run_prepare_event(self, directory, curl_failures):
         """prepare-event.sh with stub id, scontrol, findmnt, srun, curl, docker and sleep on PATH.
@@ -1232,8 +1302,9 @@ class NcclProtocolSettingTests(unittest.TestCase):
                                                   'NCCL_DEBUG_SUBSYS=INIT,NET,ENV'])
                     names = next(a for a in output if a.startswith('--container-env=')).split('=', 1)[1].split(',')
                     self.assertIn('NCCL_PROTO', names)
-            # g6e.48xlarge (test events) uses SENDRECV over EFA; g7.48xlarge keeps RDMA.
-            for instance_type, protocol in (('g6e.48xlarge', 'SENDRECV'), ('g7.48xlarge', 'RDMA')):
+            # g6e.48xlarge (test events) uses SENDRECV over EFA; g7.48xlarge and g7e.48xlarge keep RDMA.
+            for instance_type, protocol in (('g6e.48xlarge', 'SENDRECV'), ('g7.48xlarge', 'RDMA'),
+                                            ('g7e.48xlarge', 'RDMA')):
                 with self.subTest(instance_type=instance_type):
                     output = subprocess.run(['bash', str(LAB / '2.run-llm.sh')],
                                             env=dict(env, LLM_TRANSPORT='efa', AIM347_INSTANCE_TYPE=instance_type),
@@ -1607,7 +1678,7 @@ class TryTests(unittest.TestCase):
             self.stage_with('try-microbatch2', 'try', settings, 3.30,
                             with_configuration(microbatch=2, accumulation_steps=1), 'microbatch2')
             notes = tool.Notes()
-            _, table = tool.collect(self.results, notes)
+            _, table, _ = tool.collect(self.results, notes)
         self.assertEqual([row['_name'] for row in table],
                          ['sdpa', 'try-microbatch2', 'try-forward-prefetch', 'rerun-forward-prefetch'])
         by_name = {row['_name']: row for row in table}

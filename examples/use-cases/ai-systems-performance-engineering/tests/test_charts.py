@@ -237,9 +237,9 @@ class GoodputChartTests(SpainResults):
         self.assertEqual(lines[0], 'ckpt-sync (efa, sdpa attention, sync saves after updates 5, 20, 40)')
         self.assertEqual(lines[2:9], [
             '  retained tokens              2,620,160 (updates 1-40, durable at the end)',
-            '  interval                     88.25 s, from after model loading, FSDP wrapping, optimizer',
-            '                               and checkpoint-manager construction to after the final flush,',
-            '                               the closing barriers of the timing windows and the two all-reduces',
+            '  interval                     88.25 s, from the end of setup (model loading, FSDP wrapping,',
+            '                               optimizer, checkpoint manager) to the end of the final flush and',
+            '                               the closing synchronization across ranks',
             '  retained progress rate       30,910 tokens/s (retained tokens / interval)',
             '  fault-free rate              77,275 tokens/s (stage sdpa, which does not save)',
             '  training goodput             0.40 (retained progress rate / fault-free rate)'])
@@ -293,7 +293,12 @@ class UpdateTimeChartTests(SpainResults):
         self.assertEqual([bar(line) for line in memory[:2]], [('█' * 53 + '▍', '26.68 GiB'), ('█' * 16 + '▋', '8.34 GiB')])
         self.assertEqual(memory[2].strip(), 'one cell = 0.5 GiB')
         self.assertEqual(bar(lines[titles[3] + 3])[1], '3.89x  (SDPA +1.60x)')
-        self.assert_narrow(lines)
+        # The charts fit in 100 columns; the block's MFU line is longer, as its EFA bytes line can be.
+        self.assert_narrow(lines[titles[1]:])
+        # MFU against the dense BF16 peak, and the share of the measured GEMM rate (fixture: 77,275 tokens/s).
+        self.assertIn('  MFU                          27.3 %  (11.48 GFLOP per token, dense BF16 peak 202.8 TFLOP/s '
+                      'per GPU, estimated)', lines)
+        self.assertIn('  share of your GEMM rate      33.0 %  (your GEMM rate 167.9 TFLOP/s per GPU)', lines)
 
     def test_charts_follow_only_the_stages_they_belong_to(self):
         self.add('baseline', 'sdpa-socket', 'probe-efa-eager', 'efa')

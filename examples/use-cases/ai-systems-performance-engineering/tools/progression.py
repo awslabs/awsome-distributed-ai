@@ -19,7 +19,7 @@ import workshop  # noqa: E402
 from llm_metrics import paired_training_report  # noqa: E402
 
 COLUMNS = ('Stage', 'Transport', 'Attention', 'Saving', 'Work', 'Seconds', 'Tokens/s', 'GPU-s per 1M tokens',
-           'MFU vs your GEMM peak', 'Peak memory GiB', 'vs baseline', 'vs previous step', 'Goodput')
+           'MFU', 'Share of your GEMM rate', 'Peak memory GiB', 'vs baseline', 'vs previous step', 'Goodput')
 PREVIOUS = {'efa': 'baseline', 'sdpa': 'efa', 'sdpa-socket': 'baseline'}
 # Optional A: each try-<change> and its rerun follow the main path, compared with stage sdpa.
 TRY_ORDER = tuple(f'{prefix}-{change}' for change in workshop.TRY_CHANGES for prefix in ('try', 'rerun'))
@@ -61,11 +61,37 @@ def goodput(results, record, progress, name, notes):
         return notes.mark(f'{name}: goodput not computed, {error}')
 
 
+def mfu_cell(summary, stage, world, notes, gpus):
+    """MFU against the dense BF16 peak of the GPU that summary.json names, or a note with the reason."""
+    gpu = workshop.gpu_name(summary)
+    if gpu is None:
+        return notes.mark(f"{stage['name']}: MFU n/a, summary.json names no single GPU")
+    try:
+        value = workshop.mfu(summary['training_throughput_tokens_per_second'], stage['sequence_length'], gpu, world)
+    except ValueError as error:
+        return notes.mark(f"{stage['name']}: MFU n/a, {error}")
+    gpus.add(gpu)
+    return f'{100 * value:.1f} %'
+
+
+def denominator_lines(ceilings, gpus, world):
+    """The two denominators: of MFU, the dense BF16 peak; of the share, your measured GEMM rate."""
+    lines = []
+    for gpu in sorted(gpus):
+        peak, estimated = workshop.dense_peak(gpu)
+        lines.append(f'MFU: the model\'s FLOP per second / ({world} x the dense BF16 peak, {peak:g} TFLOP/s per GPU '
+                     f"for {gpu}{', estimated from NVIDIA specifications' if estimated else ''})")
+    lines.append('Share of your GEMM rate: the same FLOP per second / '
+                 + (f"({world} x your GEMM rate, {ceilings['gemm_tflops_per_gpu']:.1f} TFLOP/s per GPU)" if ceilings
+                    else 'n/a (run bash tools/hold-and-measure.sh)'))
+    return lines
+
+
 def collect(results, notes):
     results = Path(results)
     ceilings = workshop.read_ceilings(results)
     world = workshop.world_size()
-    summaries, rows = {}, []
+    summaries, rows, gpus = {}, [], set()
     for name in stage_names(results):
         run = workshop.read_json(results / name / 'run.json') or {}
         if run.get('status') != 'finished':
@@ -85,9 +111,9 @@ def collect(results, notes):
             once = notes.mark('interrupt: one command that stopped and resumed the job, not one run')
             interval = notes.mark('interrupt: goodput over the whole command, from just before the first launch to the '
                                   'exit of the resumed launch, including both launches and both model loads. The '
-                                  'interval of the saving rows starts after model loading, FSDP wrapping, optimizer and '
-                                  'checkpoint-manager construction and ends after the final flush, the closing barriers '
-                                  'of the timing windows and the two all-reduces, so the saving rows leave the model load out')
+                                  'interval of the saving rows runs from the end of setup (model loading, FSDP wrapping, '
+                                  'optimizer, checkpoint manager) to the end of the final flush and the closing '
+                                  'synchronization across ranks, so the saving rows leave the model load out')
             row.update({'Seconds': f"{campaign.get('elapsed_seconds', 0):.2f}",
                         'vs baseline': once,
                         'Goodput': f'{goodput(results, campaign, campaign, name, notes)} {interval}'})
@@ -103,8 +129,10 @@ def collect(results, notes):
         rate = summary['training_throughput_tokens_per_second']
         row.update({'Seconds': f'{seconds:.2f}', 'Tokens/s': f'{rate:,.0f}',
                     'GPU-s per 1M tokens': f'{workshop.gpu_seconds_per_million_tokens(seconds, tokens, world):.0f}',
-                    'MFU vs your GEMM peak': (f"{100 * workshop.mfu(rate, stage['sequence_length'], ceilings['gemm_tflops_per_gpu'], world):.1f} %"
-                                              if ceilings else 'n/a'),
+                    'MFU': mfu_cell(summary, stage, world, notes, gpus),
+                    'Share of your GEMM rate': (
+                        f"{100 * workshop.gemm_share(rate, stage['sequence_length'], ceilings['gemm_tflops_per_gpu'], world):.1f} %"
+                        if ceilings else 'n/a'),
                     'Peak memory GiB': f'{workshop.peak_memory_gib(summary):.2f}'})
         if stage['saving'] != 'none':
             row['Goodput'] = goodput(results, summary, summary.get('retained_progress'), name, notes)
@@ -117,10 +145,10 @@ def collect(results, notes):
         previous = PREVIOUS.get(name)
         if previous and name in summaries and previous in summaries:
             row['vs previous step'] = ratio(summaries[previous], summaries[name], f'{name} vs {previous}', notes)
-    return ceilings, rows
+    return ceilings, rows, denominator_lines(ceilings, gpus, world)
 
 
-def render(ceilings, rows, notes, markdown):
+def render(ceilings, rows, notes, markdown, denominators=()):
     cells = [[row.get(column, '') for column in COLUMNS] for row in rows]
     lines = [workshop.ceilings_summary(ceilings), '']
     if markdown:
@@ -139,6 +167,8 @@ def render(ceilings, rows, notes, markdown):
     if notes.texts:
         lines.append('')
         lines += [f'({index}) {text}' for index, text in enumerate(notes.texts, 1)]
+    if denominators:
+        lines += [''] + list(denominators)
     return lines
 
 
@@ -157,8 +187,8 @@ def main(argv=None):
         print(error, file=sys.stderr)
         return 2
     notes = Notes()
-    ceilings, rows = collect(results, notes)
-    print('\n'.join(render(ceilings, rows, notes, args.markdown) + chart_lines(results, args.markdown)))
+    ceilings, rows, denominators = collect(results, notes)
+    print('\n'.join(render(ceilings, rows, notes, args.markdown, denominators) + chart_lines(results, args.markdown)))
     return 0
 
 

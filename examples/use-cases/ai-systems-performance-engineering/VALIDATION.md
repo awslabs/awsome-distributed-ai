@@ -17,20 +17,20 @@ The first sections preserve historical observations from 2026-09-06. Later secti
 | VALIDATED, software test only | Pinned training container, CPU execution | Six regression tests passed, covering dense-denominator arithmetic, input validation, separate Pushgateway groups for each configuration, Lustre histogram parsing, missing EFA fields, and identical data across storage layouts. These are synthetic fixtures, not GPU measurements. |
 | VALIDATED, 2026-09-09 PCS rehearsal | Two Oregon `g7e.12xlarge` nodes | Full Slurm/Pyxis/PMIx training ladder, measured ceilings, real-FSx collector, custom compute exporters, allocation ledger and both serving replicas. Exact scope and results appear in the final sections. |
 | UNVALIDATED | Production `p4d.24xlarge` / `p4de.24xlarge` | Full deployment and runtime, A100 performance, CPU/storage bottleneck progression and workshop time budget. |
-| NOT DEMONSTRATED | Oregon `g7e.12xlarge` | Monotonic MFU improvement, CPU saturation and a storage metadata bottleneck; the recorded full ladder did not establish these hypotheses. |
+| NOT DEMONSTRATED | Oregon `g7e.12xlarge` | Monotonic improvement of the measured-GEMM share, CPU saturation and a storage metadata bottleneck; the recorded full ladder did not establish these hypotheses. |
 
 ## Reduced training results
 
 All measurements in this table came from Seoul `p6-b300.48xlarge`, with four GPUs across two EKS nodes. The test model had two decoder layers, a hidden dimension of 128 elements, an intermediate dimension of 512 elements, four attention heads, two key/value heads and a vocabulary of 1024 tokens. It used sequences of 128 tokens, one sequence per rank per step, 12 update steps with two warmup steps, and 100 CPU hashing rounds per record. The unmodified configuration files selected 48 workers per rank for `v0` and `v1`, then eight workers per rank for `v2` and `v3`. The EKS Pods had a CPU quota equivalent to 24 cores, while process affinity exposed 192 logical CPUs; that is not PCS's physical-core behavior.
 
-| Configuration | Observed throughput on `p6-b300.48xlarge` | MFU / measured B300 GEMM, dimensionless ratio |
+| Configuration | Observed throughput on `p6-b300.48xlarge` | Share of measured B300 GEMM rate, dimensionless ratio |
 |---|---|---|
 | `v0` | 28192.89 tokens/s | 0.000009450908 |
 | `v1` | 30490.87 tokens/s | 0.000010221246 |
 | `v2` | 29972.32 tokens/s | 0.000010047413 |
 | `v3` | 28581.45 tokens/s | 0.000009581163 |
 
-The common denominator was the observed 2204.525761 TFLOPS per GPU on Seoul `p6-b300.48xlarge`. The model is deliberately too small for these MFU values to represent training efficiency at the workshop's intended scale. The full model's short `v3` execution check on the same Seoul hardware observed 5891.33 tokens/s and a dimensionless MFU/GEMM ratio of 0.011122877, using sequences of 512 tokens and 2774773760 nonembedding parameters. Neither result is a production target.
+The common denominator was the observed 2204.525761 TFLOPS per GPU on Seoul `p6-b300.48xlarge`. The model is deliberately too small for these ratios to represent training efficiency at the workshop's intended scale. The full model's short `v3` execution check on the same Seoul hardware observed 5891.33 tokens/s and a dimensionless share of the measured GEMM rate of 0.011122877, using sequences of 512 tokens and 2774773760 nonembedding parameters. Neither result is a production target.
 
 Seoul training calls used the shipped `train.py` through `torchrun` directly, with an explicit node rank, two processes per node, and two nodes. They bypassed the PCS submission wrapper. They allocated one EFA device per Pod and disabled huge-page use for these container checks. NCCL used the routable private interface. No source patches were applied. The Slurm allocation ledger was not exercised on EKS, so that historical run did not validate Slurm accounting. The later PCS job-body ledger is recorded below.
 
@@ -94,7 +94,7 @@ With the rebuilt NCCL library, the same full `lib/train.py` completed four updat
 
 The command used `--standalone --nnodes=1` and `--nproc-per-node` from the actual `lib/resources.sh` inventory. It used the full model configuration, the original `configs/v3.json` worker/layout settings, 512 input tokens per sequence, one sequence per rank, and 100 CPU hashing rounds per record. The generated dataset retained 32768 records and SHA-256 `cbbf272e4c2f6ebf0a502f384425a4d5cbafcc83823ffe00dce86aa8babf4807`. This single-node EKS execution selected Socket and disabled plugin loading; the configuration file's cross-node EFA path was not exercised.
 
-The observed throughput was 2308.891474 tokens/s, mean step duration was 443.502872 ms, and estimated computation rate was 19.219954 TFLOP/s/GPU. Against the measured dense GEMM ceiling of 423.906461 TFLOP/s/GPU, MFU was a dimensionless ratio of 0.045340084. The run completed 4096 useful training tokens. These are short execution observations, not a calibrated training ladder or production targets.
+The observed throughput was 2308.891474 tokens/s, mean step duration was 443.502872 ms, and estimated computation rate was 19.219954 TFLOP/s/GPU. Against the measured dense GEMM ceiling of 423.906461 TFLOP/s/GPU, the share of the measured GEMM rate was a dimensionless ratio of 0.045340084. The run completed 4096 useful training tokens. These are short execution observations, not a calibrated training ladder or production targets.
 
 The first diagnostic after replacing NCCL still failed in the original nccl-tests correctness kernel with `no kernel image is available for execution on the device`. The Dockerfile therefore rebuilds nccl-tests with the same architecture list and MPI enabled. A command launched during the earlier container image transition also reached the old binary before Kubernetes restarted the container; that log was preserved separately. Successful results above were taken only after checking the live image ID.
 
@@ -151,7 +151,7 @@ All four configurations completed through the shipped `lib/job.sh`, real Slurm b
 
 The full Qwen architecture used thirty-six layers, a hidden dimension of `2048 elements`, an intermediate dimension of `11008 elements`, a vocabulary of `151936 tokens`, and `2774773760 nonembedding parameters`. Training used randomly initialized weights, `512 tokens` per sequence, one sequence per GPU rank, `100 update steps`, ten warmup steps, ninety measured steps and `2000 CPU hashing rounds` per record. The deterministic dataset contained `32768 records`; its logical data SHA-256 was `cbbf272e4c2f6ebf0a502f384425a4d5cbafcc83823ffe00dce86aa8babf4807`. Every successful configuration completed `204800 useful tokens`. Each final finite loss was a dimensionless value of `12.3141002655`. The common measured dense denominator was `427.142119 TFLOP/s/GPU`.
 
-| g7e configuration, job identifier and command | Module wall time | Training throughput | Mean measured step | MFU/GEMM, dimensionless ratio | Completion check |
+| g7e configuration, job identifier and command | Module wall time | Training throughput | Mean measured step | Share of measured GEMM rate, dimensionless ratio | Completion check |
 | --- | --- | --- | --- | --- | --- |
 | `v0`, job `35`, `bash 2.run-v0.sh` | `234.072739 s` | `1383.301689 tokens/s` | `1480.515795 ms` | `0.013479176104` | PASS: completed, same allocation and denominator, actual counters and comparison retained |
 | `v1`, job `36`, `bash 4.run-v1.sh` | `138.061675 s` | `4094.242545 tokens/s` | `500.214625 ms` | `0.039895141248` | PASS: completed, same allocation and denominator, actual counters and comparison retained |
@@ -191,7 +191,7 @@ CPU values are command-window averages of host `rate(node_cpu_seconds_total[30s]
 | `v2` | `0.113590705130 GPU-hours` | `1802964.421833 tokens/GPU-hour` |
 | `v3` | `0.110814251370 GPU-hours` | `1848137.739219 tokens/GPU-hour` |
 
-The ledger includes the failed initial Socket attempt with zero useful-work credit and the successful retry under the same run identifier. It covers each training job body, including startup and its collective benchmark, and excludes scheduler polling, separate ceiling jobs and serving. Shorter job bodies and unequal cold-start costs explain why this accounting measure can improve while steady-state MFU does not. It is not whole-session goodput or a recovery measurement. Metric recomputation after `v0`, `v1`, `v2` and `v3` took `0.090453 s`, `0.091434 s`, `0.097976 s` and `0.097417 s`, respectively, each with exit code dimensionless value `0`.
+The ledger includes the failed initial Socket attempt with zero useful-work credit and the successful retry under the same run identifier. It covers each training job body, including startup and its collective benchmark, and excludes scheduler polling, separate ceiling jobs and serving. Shorter job bodies and unequal cold-start costs explain why this accounting measure can improve while the steady-state measured-GEMM share does not. It is not whole-session goodput or a recovery measurement. Metric recomputation after `v0`, `v1`, `v2` and `v3` took `0.090453 s`, `0.091434 s`, `0.097976 s` and `0.097417 s`, respectively, each with exit code dimensionless value `0`.
 
 Exact command argv, UTC timestamps, wall times and exit codes are retained in `/tmp/g7e-e2e/pcs/aim347-evidence-final/participant-modules/`. Full job logs, resource inventories, step samples and ledgers are in `/tmp/g7e-e2e/pcs/aim347-results-final/`, mirrored by the shared `results/participant-trial-a/` directory. The corrected ladder controller took `587.292499 s` from `16:50:15.244479 UTC` to `17:00:02.536969 UTC`, including the metric calls and model-byte calculation.
 
@@ -229,7 +229,7 @@ All nine Prometheus targets, including both vLLM endpoints, were healthy at `17:
 
 ### Remaining AIM347 validation limits at 2026-09-09
 
-Production `p4d.24xlarge` and `p4de.24xlarge` execution, the four-EFA/NVLink topology, A100 ceilings and serving results remain UNVALIDATED because no A100 allocation was used. CPU saturation, a storage metadata bottleneck, monotonic MFU improvement, same-AZ FSx performance, a common placement-group fabric baseline, calibrated sustained serving, cold-start timing across repeats and the complete participant session budget remain UNVALIDATED. Physical DRAM-counter MBU, concurrent/batched MBU, KV-cache MBU, other models/precisions, failure/recovery goodput and Nsight timelines were not measured. A real four-GPU-per-node or eight-GPU-per-node launch remains UNVALIDATED beyond software allocation tests. Workshop Studio deployment, unpublished-commit fetching, participant-role handoff and replacement-node automation were not executed in a vended workshop account.
+Production `p4d.24xlarge` and `p4de.24xlarge` execution, the four-EFA/NVLink topology, A100 ceilings and serving results remain UNVALIDATED because no A100 allocation was used. CPU saturation, a storage metadata bottleneck, monotonic improvement of the measured-GEMM share, same-AZ FSx performance, a common placement-group fabric baseline, calibrated sustained serving, cold-start timing across repeats and the complete participant session budget remain UNVALIDATED. Physical DRAM-counter MBU, concurrent/batched MBU, KV-cache MBU, other models/precisions, failure/recovery goodput and Nsight timelines were not measured. A real four-GPU-per-node or eight-GPU-per-node launch remains UNVALIDATED beyond software allocation tests. Workshop Studio deployment, unpublished-commit fetching, participant-role handoff and replacement-node automation were not executed in a vended workshop account.
 
 ## Spain g7.48xlarge as a g7.24xlarge resource stand-in, 2026-09-10
 
@@ -264,7 +264,7 @@ The DRAM probe read `1 GiB/trial` against a `64 MiB` L2 cache, with ten warmup t
 
 All configurations trained the full randomly initialized Qwen architecture with `2774773760 nonembedding parameters`, `512 tokens/sequence`, one sequence per GPU rank, `4096 tokens/step`, `100 update steps`, ten warmup steps, ninety measured steps and `2000 CPU hashing rounds/record`. Each completed `409600 useful tokens`. The common logical-data SHA-256 was `cbbf272e4c2f6ebf0a502f384425a4d5cbafcc83823ffe00dce86aa8babf4807`. Initial and reduced worker requests were `192 workers/node` and `32 workers/node`, against `96` available logical processors per node.
 
-| Configuration and allocation | Command wall time | Training throughput | Mean measured step | MFU/GEMM, dimensionless ratio | Companion-ledger useful tokens per GPU-hour |
+| Configuration and allocation | Command wall time | Training throughput | Mean measured step | Share of measured GEMM rate, dimensionless ratio | Companion-ledger useful tokens per GPU-hour |
 |---|---|---|---|---|---|
 | `v0`, job identifier `8` | 330.073130 s | 1715.936407 tokens/s | 2387.034848 ms | 0.020797604554 | 603953.105337 tokens/GPU-hour |
 | `v1`, job identifier `9` | 170.063729 s | 5602.045734 tokens/s | 731.161471 ms | 0.067898280738 | 1257976.404918 tokens/GPU-hour |
@@ -310,10 +310,10 @@ Both runs read the same shared FSx for Lustre dataset at `/mnt/aim347-lustre/dat
 |---|---|---|
 | Best dense BF16 GEMM, node indices 0 / 1 | 170.284864 TFLOP/s/GPU / 169.958041 TFLOP/s/GPU | 169.630811 TFLOP/s/GPU / 170.017754 TFLOP/s/GPU |
 | Measured DRAM range | 662.280330 to 663.662281 GB/s/GPU; 16 correctness passes | 661.783954 to 662.679245 GB/s/GPU; 8 correctness passes |
-| Configuration v0: throughput; MFU; step duration | 3663.649623 tokens/s; 0.022387043 dimensionless; 2236.021684 ms | 1674.887242 tokens/s; 0.020548006 dimensionless; 2445.537763 ms |
-| Configuration v1: throughput; MFU; step duration | 15194.399857 tokens/s; 0.092846674 dimensionless; 539.146006 ms | 5686.552654 tokens/s; 0.069764288 dimensionless; 720.295801 ms |
-| Configuration v2: throughput; MFU; step duration | 15152.385589 tokens/s; 0.092589942 dimensionless; 540.640941 ms | 5649.058068 tokens/s; 0.069304294 dimensionless; 725.076632 ms |
-| Configuration v3: throughput; MFU; step duration | 15167.977144 tokens/s; 0.092685216 dimensionless; 540.085202 ms | 5682.618397 tokens/s; 0.069716022 dimensionless; 720.794485 ms |
+| Configuration v0: throughput; share of measured GEMM rate; step duration | 3663.649623 tokens/s; 0.022387043 dimensionless; 2236.021684 ms | 1674.887242 tokens/s; 0.020548006 dimensionless; 2445.537763 ms |
+| Configuration v1: throughput; share of measured GEMM rate; step duration | 15194.399857 tokens/s; 0.092846674 dimensionless; 539.146006 ms | 5686.552654 tokens/s; 0.069764288 dimensionless; 720.295801 ms |
+| Configuration v2: throughput; share of measured GEMM rate; step duration | 15152.385589 tokens/s; 0.092589942 dimensionless; 540.640941 ms | 5649.058068 tokens/s; 0.069304294 dimensionless; 725.076632 ms |
+| Configuration v3: throughput; share of measured GEMM rate; step duration | 15167.977144 tokens/s; 0.092685216 dimensionless; 540.085202 ms | 5682.618397 tokens/s; 0.069716022 dimensionless; 720.794485 ms |
 | Serialized serving throughput | 232.208423 output tokens/s | 232.508270 output tokens/s |
 | Median client TTFT | 11.278417 ms | 10.560060 ms |
 | Mean server ITL | 4.249024 ms/output token | 4.248957 ms/output token |

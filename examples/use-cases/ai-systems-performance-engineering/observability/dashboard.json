@@ -41,7 +41,7 @@
     },
     {
       "id": 2,
-      "title": "MFU / measured dense GEMM",
+      "title": "Share of measured dense GEMM rate",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -56,7 +56,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "aim347_mfu_dense_gemm_ratio",
+          "expr": "aim347_measured_gemm_share",
           "legendFormat": "{{config}} | {{instance_type}}"
         }
       ],
@@ -66,7 +66,7 @@
         },
         "overrides": []
       },
-      "description": "Dimensionless ratio. The historical g7e.12xlarge denominator is 429.1 TFLOPS/GPU. Other hardware requires its own measurement."
+      "description": "Dimensionless ratio of the model FLOP rate to the measured GEMM rate; not MFU, which divides by a peak. The historical g7e.12xlarge denominator is 429.1 TFLOPS/GPU. Other hardware requires its own measurement."
     },
     {
       "id": 3,
