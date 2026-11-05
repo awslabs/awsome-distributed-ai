@@ -45,14 +45,17 @@ class LLMMetricTests(unittest.TestCase):
 
     def test_retained_progress_counts_retained_progress_only(self):
         # 400 replayed tokens and a pending save never enter the numerator.
-        row = retained_progress(1000, 2000, 20, scope='synthetic full interval')
+        row = retained_progress(1000, 2000, 20, scope='synthetic full interval', initial_updates=5, durable_updates=10)
         self.assertEqual(row, {'metric': 'Retained progress', 'retained_progress_tokens': 1000,
                                'retained_tokens_per_second': 50, 'elapsed_seconds': 20,
+                               'initial_completed_updates': 5, 'durable_completed_updates': 10,
                                'scope': 'synthetic full interval'})
         with self.assertRaises(ValueError):
-            retained_progress(2000, 1000, 20, scope='invalid')
+            retained_progress(2000, 1000, 20, scope='invalid', initial_updates=0, durable_updates=1)
         with self.assertRaises(ValueError):
-            retained_progress(0, 1000, 0, scope='no interval')
+            retained_progress(0, 1000, 0, scope='no interval', initial_updates=0, durable_updates=1)
+        with self.assertRaises(ValueError):
+            retained_progress(0, 1000, 20, scope='durable update before the start', initial_updates=5, durable_updates=4)
 
     def test_goodput_is_the_retained_rate_over_the_fault_free_rate(self):
         # 40 updates of 65,504 targets retained at 20,000 tokens/s against 80,000 tokens/s without saves.
@@ -72,9 +75,14 @@ class LLMMetricTests(unittest.TestCase):
 
     def test_goodput_refuses_a_missing_saving_or_unfinished_reference(self):
         work = update_work(WORKLOAD, 40 * 65504, 40)
-        for reference in (None, {}, dict(FAULT_FREE, status='failed'), dict(FAULT_FREE, profiled=True),
-                          dict(FAULT_FREE, measurement_scope='training/save/final durable completion')):
-            with self.assertRaisesRegex(ValueError, 'completed, unprofiled run without saves'):
+        for reference, reason in (
+                (None, 'no fault-free run'), ({}, 'no fault-free run'),
+                (dict(FAULT_FREE, status='failed'), 'the fault-free run is not completed'),
+                (dict(FAULT_FREE, profiled=True), 'the fault-free run was profiled'),
+                (dict(FAULT_FREE, numerical_verification=True), 'the fault-free run ran numerical verification'),
+                (dict(FAULT_FREE, performance_eligible=False), 'the fault-free run is marked not performance-eligible'),
+                (dict(FAULT_FREE, measurement_scope='training/save/final durable completion'), 'the fault-free run saves')):
+            with self.subTest(reason=reason), self.assertRaisesRegex(ValueError, f'^{reason}$'):
                 training_goodput(20000.0, work, reference)
         with self.assertRaises(ValueError):
             training_goodput(20000.0, work, dict(FAULT_FREE, training_throughput_tokens_per_second=0.0))
@@ -89,7 +97,7 @@ class LLMMetricTests(unittest.TestCase):
         row['evidence_kind'] = 'CPU correctness fixture'
         with self.assertRaises(ValueError):
             observability_values(row)
-        campaign = retained_progress(0, 1000, 20, scope='synthetic test')
+        campaign = retained_progress(0, 1000, 20, scope='synthetic test', initial_updates=0, durable_updates=6)
         campaign.update(status='completed', evidence_kind='LLM hardware run', source='fresh controlled interruption and resume')
         self.assertEqual(observability_values(campaign), {'llm_campaign_retained_tokens_per_second': 50,
                                                           'llm_campaign_retained_tokens': 1000,

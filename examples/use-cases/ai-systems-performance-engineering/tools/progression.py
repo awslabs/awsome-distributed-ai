@@ -7,8 +7,7 @@ Reads every stage directory under $LLM_RESULTS_DIR except profile-*, restore
 and attempts/. A ratio is shown only for a pair of runs of the same work on
 the same allocation; otherwise the cell refers to a note below the table.
 Below the table and its notes it prints two charts: the speed-up of the main
-path over baseline, step by step, and the training goodput of the saving runs
-and of interrupt.
+path over baseline, step by step, and the training goodput of the saving runs.
 """
 import argparse
 from pathlib import Path
@@ -51,14 +50,17 @@ def ratio(before, after, label, notes):
         return notes.mark(f'{label}: not compared, {reason}')
 
 
-def goodput(results, record, progress, name, notes):
+def goodput(results, record, progress, gpu, name, notes):
     """The training goodput of a saving stage or interrupt, or a note with the reason it has none."""
     if not progress or 'retained_tokens_per_second' not in progress:
         return notes.mark(f'{name}: no retained progress in its result file, so no goodput')
     try:
-        return f"{workshop.stage_goodput(results, record, progress)['training_goodput']:.2f}"
+        value = workshop.stage_goodput(results, record, progress, gpu)['training_goodput']
     except ValueError as error:
         return notes.mark(f'{name}: goodput not computed, {error}')
+    if value > 1:
+        return f"{value:.2f} {notes.mark(f'{name}: goodput {value:.2f}, {workshop.ABOVE_ONE}')}"
+    return f'{value:.2f}'
 
 
 def mfu_cell(summary, stage, world, notes, gpus):
@@ -116,7 +118,7 @@ def collect(results, notes):
                                   'synchronization across ranks, so the saving rows leave the model load out')
             row.update({'Seconds': f"{campaign.get('elapsed_seconds', 0):.2f}",
                         'vs baseline': once,
-                        'Goodput': f'{goodput(results, campaign, campaign, name, notes)} {interval}'})
+                        'Goodput': f"{goodput(results, campaign, campaign, workshop.campaign_gpu(results / name / 'campaign'), name, notes)} {interval}"})
             row['_campaign'] = campaign
             rows.append(row)
             continue
@@ -135,7 +137,8 @@ def collect(results, notes):
                         if ceilings else 'n/a'),
                     'Peak memory GiB': f'{workshop.peak_memory_gib(summary):.2f}'})
         if stage['saving'] != 'none':
-            row['Goodput'] = goodput(results, summary, summary.get('retained_progress'), name, notes)
+            row['Goodput'] = goodput(results, summary, summary.get('retained_progress'), workshop.gpu_name(summary),
+                                     name, notes)
         rows.append(row)
     baseline = summaries.get('baseline')
     for row in rows:

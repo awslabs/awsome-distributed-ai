@@ -159,69 +159,100 @@ class CumulativeChartTests(SpainResults):
 
 
 GOODPUT_TITLE = 'Training goodput, from 0 to 1 (higher is better)'
-GOODPUT_NOTE = ('  Training goodput = (retained tokens / interval) / (tokens/s of stage sdpa, '
-                'which does not save)')
+GOODPUT_NOTES = ['  Training goodput = (retained tokens / interval) / (tokens/s of stage sdpa, which does not save)',
+                 "  The interval also holds the data loader's start and the warmup updates: below 1 even without saves"]
 SDPA_RATE = 77274.93663399987  # tokens/s of the Spain sdpa run, tests/fixtures/spain-20261103
+
+
+def spain_sdpa():
+    return json.loads((SPAIN / 'sdpa' / 'train' / 'summary.json').read_text())
 
 
 class GoodputChartTests(SpainResults):
     def saving_stage(self, mode, goodput, targets=65504):
-        """A finished saving stage whose retained rate is goodput times the sdpa rate (synthetic)."""
+        """A finished saving stage whose retained rate is goodput times the sdpa rate (synthetic).
+
+        Its configuration, allocation and GPU are those of the Spain sdpa run, with its own checkpoint mode."""
         stage = workshop.plan('checkpoint', {'LLM_TRANSPORT': 'efa', 'ATTENTION': 'sdpa',
                                              'CHECKPOINT_MODE': mode})[0 if mode == 'sync' else 1]
         directory = self.results / stage['name']
         (directory / 'train').mkdir(parents=True)
         run = dict(plan=stage, status='finished', exit_status=0, checks=[])
         (directory / 'run.json').write_text(json.dumps(run))
-        workload = json.loads((SPAIN / 'sdpa' / 'train' / 'summary.json').read_text())['workload']
+        sdpa = spain_sdpa()
         (directory / 'train' / 'summary.json').write_text(json.dumps(dict(
+            status='completed', profiled=False, numerical_verification=False,
             measured_seconds=80.0, measured_useful_tokens=38 * targets, segment_seconds=88.25,
-            completed_updates=40, workload=dict(workload, updates=40, warmup_updates=2),
+            completed_updates=40, workload=dict(sdpa['workload'], updates=40, warmup_updates=2),
+            configuration=dict(sdpa['configuration'], checkpoint_mode=mode), allocation=sdpa['allocation'],
+            ranks=sdpa['ranks'],
             retained_progress={'retained_progress_tokens': 40 * targets, 'elapsed_seconds': 88.25,
-                               'retained_tokens_per_second': goodput * SDPA_RATE})))
+                               'retained_tokens_per_second': goodput * SDPA_RATE,
+                               'initial_completed_updates': 0, 'durable_completed_updates': 40})))
         return stage, directory, run
 
     def interrupt_stage(self, goodput):
+        """A finished interrupt stage that, apart from its interval, would give goodput (synthetic)."""
         stage = workshop.plan('interrupt', {'LLM_TRANSPORT': 'efa', 'ATTENTION': 'sdpa', 'CHECKPOINT_MODE': 'process'})[0]
         directory = self.results / 'interrupt' / 'campaign'
-        directory.mkdir(parents=True)
+        (directory / 'resumed').mkdir(parents=True)
         (directory.parent / 'run.json').write_text(json.dumps(dict(plan=stage, status='finished', exit_status=0)))
-        workload = json.loads((SPAIN / 'sdpa' / 'train' / 'summary.json').read_text())['workload']
-        (directory / 'campaign.json').write_text(json.dumps(dict(  # synthetic
-            metric='Retained progress', retained_progress_tokens=40 * 65504, elapsed_seconds=190.0,
+        sdpa = spain_sdpa()
+        (directory / 'resumed' / 'summary.json').write_text(json.dumps(dict(ranks=sdpa['ranks'])))
+        (directory / 'campaign.json').write_text(json.dumps(dict(
+            metric='Retained progress', status='completed', profiled=False, numerical_verification=False,
+            performance_eligible=True, retained_progress_tokens=40 * 65504, elapsed_seconds=190.0,
             retained_tokens_per_second=goodput * SDPA_RATE, completed_updates=40,
-            workload=dict(workload, updates=40, warmup_updates=2))))
+            workload=dict(sdpa['workload'], updates=40, warmup_updates=2),
+            configuration=dict(sdpa['configuration'], checkpoint_mode='process'), allocation=sdpa['allocation'])))
 
-    def test_saving_bars_need_stage_sdpa_and_interrupt_has_no_row_before_it_runs(self):
+    def test_saving_bars_need_stage_sdpa(self):
         lines = workshop.goodput_chart_lines(self.results)
         self.assertEqual(lines, [GOODPUT_TITLE,
                                  '  ckpt-sync, synchronous saves      not run yet',
                                  '  ckpt-process, process-mode saves  not run yet',
                                  '                                    0' + ' ' * 48 + '1',
-                                 '                                    one cell = 0.02',
-                                 GOODPUT_NOTE])
+                                 '                                    one cell = 0.02'] + GOODPUT_NOTES)
         self.saving_stage('sync', 0.25)  # synthetic
         self.assertEqual(workshop.goodput_chart_lines(self.results)[1],
                          '  ckpt-sync, synchronous saves      no completed run of stage sdpa')
 
-    def test_goodput_on_an_axis_from_0_to_1_with_no_throughput_bar(self):
+    def test_goodput_of_the_two_saving_stages_on_an_axis_from_0_to_1(self):
         self.add('sdpa')
         self.saving_stage('sync', 0.25)  # synthetic goodput values
         self.saving_stage('process', 0.5)
+        # interrupt has run, and its goodput can be computed, but its interval differs: no bar.
         self.interrupt_stage(0.15)
+        campaign = json.loads((self.results / 'interrupt/campaign/campaign.json').read_text())
+        self.assertAlmostEqual(workshop.stage_goodput(self.results, campaign, campaign, workshop.campaign_gpu(
+            self.results / 'interrupt/campaign'))['training_goodput'], 0.15)
         lines = workshop.goodput_chart_lines(self.results)
         self.assertEqual(lines[0], GOODPUT_TITLE)
-        self.assertEqual([line.split('  ')[1] for line in lines[1:4]],
-                         ['ckpt-sync, synchronous saves', 'ckpt-process, process-mode saves', 'interrupt, stop and resume'])
-        # 0.02 per cell: 1 is 50 cells, so 0.25, 0.5 and 0.15 are 12.5, 25 and 7.5 cells.
-        self.assertEqual([bar(line) for line in lines[1:4]], [('█' * 12 + '▌', '0.25'), ('█' * 25, '0.50'),
-                                                              ('█' * 7 + '▌', '0.15')])
-        self.assertEqual(len(columns(lines[1:4])), 1)
+        self.assertEqual([line.split('  ')[1] for line in lines[1:3]],
+                         ['ckpt-sync, synchronous saves', 'ckpt-process, process-mode saves'])
+        self.assertFalse([line for line in lines if 'interrupt' in line])
+        # 0.02 per cell: 1 is 50 cells, so 0.25 and 0.5 are 12.5 and 25 cells.
+        self.assertEqual([bar(line) for line in lines[1:3]], [('█' * 12 + '▌', '0.25'), ('█' * 25, '0.50')])
+        self.assertEqual(len(columns(lines[1:3])), 1)
         start = BAR.search(lines[1]).start()
-        self.assertEqual((lines[4].index('0'), lines[4].index('1')), (start, start + 49))
-        self.assertEqual(lines[5:], ['                                    one cell = 0.02', GOODPUT_NOTE])
+        self.assertEqual((lines[3].index('0'), lines[3].index('1')), (start, start + 49))
+        self.assertEqual(lines[4:], ['                                    one cell = 0.02'] + GOODPUT_NOTES)
         self.assertFalse([line for line in lines if line.startswith('  sdpa') or 'GPU-hour' in line])
         self.assert_narrow(lines)
+
+    def test_a_value_above_1_is_printed_without_a_bar_past_the_axis(self):
+        self.add('sdpa')
+        self.saving_stage('sync', 1.25)  # synthetic: the run outpaced its reference
+        self.saving_stage('process', 0.5)
+        lines = workshop.goodput_chart_lines(self.results)
+        self.assertEqual(lines[1], '  ckpt-sync, synchronous saves      1.25, above 1: check the reference run')
+        self.assertEqual(bar(lines[2]), ('█' * 25, '0.50'))
+        self.assert_narrow(lines)
+        stage = json.loads((self.results / 'ckpt-sync' / 'run.json').read_text())['plan']
+        block = workshop.result_lines(stage, self.results / 'ckpt-sync',
+                                      json.loads((self.results / 'ckpt-sync' / 'run.json').read_text()), self.results, 16)
+        self.assertIn('  training goodput             1.25 (retained progress rate / fault-free rate), '
+                      'above 1: check the reference run', block)
 
     def test_a_saving_run_of_other_work_per_update_has_no_bar(self):
         self.add('sdpa')

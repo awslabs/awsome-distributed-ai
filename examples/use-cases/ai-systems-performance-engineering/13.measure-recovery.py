@@ -107,7 +107,7 @@ def main():
                     if not trace_events:
                         raise RuntimeError(f'empty diagnostic trace: {trace}')
     result = retained_progress(
-        0, final['useful_tokens'], elapsed,
+        0, final['useful_tokens'], elapsed, initial_updates=0, durable_updates=final['completed_updates'],
         scope='from just before the first launch to the exit of the resumed launch, including both launches with their model loads, training, saves, the controlled stop, checkpoint selection, restore, replay and the final flush; allocation retained throughout; initial Slurm allocation wait and pre-campaign preparation excluded')
     result.update(status='completed', source='fresh controlled interruption and resume',
                   evidence_kind=summary['evidence_kind'], started_utc_seconds=started_utc,

@@ -266,15 +266,22 @@ def gpu_seconds_per_million_tokens(seconds, tokens, gpus):
 # peak matmul throughput. Dense BF16 training cannot use a 2:4 sparse rate.
 DENSE_BF16_PEAKS = {
     # g7.48xlarge. NVIDIA's datasheet and product page list "FP16 | BF16 Tensor Core 406 TFLOPS"
-    # without saying whether sparsity is included. Estimate: 1,024 dense BF16 FLOP per SM per
-    # clock (RTX Blackwell GPU architecture whitepaper, appendix B, table 4) x 82 SMs (10,496
-    # CUDA cores / 128) x the 2,415 MHz boost clock (product brief PB-12790-001_02) = 202.8,
-    # half of 406. The Workstation Edition datasheet footnotes the same FP4 figure "with sparsity".
+    # without saying whether sparsity is included; the Workstation Edition datasheet footnotes the
+    # same FP4 figure "with sparsity". Estimate: 1,024 dense FLOP per SM per clock x 82 SMs (10,496
+    # CUDA cores / 128) x the 2,415 MHz boost clock (product brief PB-12790-001_02) = 202.8, half of
+    # 406. 1,024 is the dense FP16 rate with FP16 accumulation in the RTX Blackwell GPU architecture
+    # whitepaper (appendix B, table 4: RTX 5080, 225.1 TFLOPS at 84 SMs and 2,617 MHz). That GeForce
+    # table runs BF16 with FP32 accumulation at half of it (112.6, 512 per SM per clock); the
+    # estimate assumes that this professional part runs it at the full rate, as NVIDIA lists for the
+    # L40S (362.05) against the L40 on the same chip (181, Ada whitepaper, appendix C). The measured
+    # GEMM supports it: 167.6 TFLOP/s per GPU, where a half rate would cap at 101.4.
     'NVIDIA RTX PRO 4500 Blackwell Server Edition': (202.8, True),
     # g6e.48xlarge. NVIDIA's L40S page: "BFLOAT16 Tensor Core TFLOPS 362.05 I 733*", "*With Sparsity".
     'NVIDIA L40S': (362.05, False),
-    # g7e.48xlarge. Estimated as for the RTX PRO 4500: 1,024 x 188 SMs (24,064 CUDA cores in the
-    # datasheet / 128) x the 2,430 MHz boost clock (product brief SP-12355-001_v02) = 467.8.
+    # g7e.48xlarge. Estimated as for the RTX PRO 4500, with the same full-rate assumption: 1,024 x
+    # 188 SMs (24,064 CUDA cores in the datasheet / 128) x the 2,430 MHz boost clock (product brief
+    # SP-12355-001_v02) = 467.8. A measured BF16 GEMM of 429.1 TFLOP/s on g7e.12xlarge (README.md)
+    # exceeds the 233.9 that a half rate would allow.
     # Cross-check: the product page lists "FP16 | BF16 Tensor Core 1 PFLOP" unmarked. Twice 467.8 is
     # 935.6, which that one-digit figure rounds, as its 4 PFLOPS FP4 and 2 PFLOPS FP8 round the sparse
     # 3.74 and 1.87; half of 1 PFLOP, 500, is therefore 7 % above the estimate.
@@ -819,37 +826,108 @@ CAMPAIGN_INTERVAL = ('from just before the first launch to the exit of the',
                      'resumed launch, with both launches and both model loads')
 
 
-def stage_goodput(results, record, progress):
+# The recorded settings in which a run may differ from its fault-free reference, stage sdpa.
+REFERENCE_MAY_DIFFER = ('checkpoint_mode',)
+ABOVE_ONE = 'above 1: check the reference run'
+
+
+def retained_updates(record, progress):
+    """(updates completed at the start, update of the last durable checkpoint) of the retained tokens.
+
+    Result files written before the retained-progress block held these two numbers record them
+    only for a fresh run or a campaign, which start at update 0 and end durable at their last update.
+    """
+    first, last = progress.get('initial_completed_updates'), progress.get('durable_completed_updates')
+    if first is None or last is None:
+        if record.get('initial_progress_tokens', 0):
+            raise ValueError('no update range of the resumed segment in the result file')
+        if 'completed_updates' not in record:
+            raise ValueError('no completed_updates in the result file')
+        first, last = 0, record['completed_updates']
+    if last <= first:
+        raise ValueError('no update retained')
+    return first, last
+
+
+def run_problem(record):
+    """Why this run's own record gives no goodput, or None."""
+    for failed, reason in ((record.get('status') != 'completed', 'this run is not completed'),
+                           (record.get('profiled'), 'this run was profiled'),
+                           (record.get('numerical_verification'), 'this run ran numerical verification'),
+                           (record.get('performance_eligible') is False, 'this run is marked not performance-eligible')):
+        if failed:
+            return reason
+    return None
+
+
+def reference_differences(record, gpu, reference):
+    """What the reference run of stage sdpa recorded differently from this run, beyond the checkpoint mode."""
+    config, other = record.get('configuration'), reference.get('configuration')
+    if not config or not other:
+        return ['configuration (not recorded)']
+    differs = sorted(key for key in set(config) | set(other)
+                     if key not in REFERENCE_MAY_DIFFER and config.get(key) != other.get(key))
+    workload, other_workload = record.get('workload', {}), reference.get('workload', {})
+    differs += [key for key in ('model_revision', 'precision') if workload.get(key) != other_workload.get(key)]
+    label = record.get('allocation', {}).get('label')
+    if not label:
+        differs.append('allocation label (not recorded)')
+    elif label != reference.get('allocation', {}).get('label'):
+        differs.append('allocation label')
+    if gpu is None:
+        differs.append('GPU (not recorded)')
+    elif gpu != gpu_name(reference):
+        differs.append('GPU')
+    return differs
+
+
+def stage_goodput(results, record, progress, gpu):
     """Training goodput of a saving stage (record: its summary.json) or of interrupt (its campaign.json).
 
-    The fault-free rate is the throughput of stage sdpa in the same results directory, which does
-    the same work per update without saves. Raises ValueError when there is none to divide by.
+    gpu is the GPU name of the run. The fault-free rate is the throughput of stage sdpa in the
+    same results directory, which does the same work per update with the same configuration
+    and allocation, without saves. Raises ValueError, with the reason, when there is none.
     """
-    _, reference, problem = chart_stage(results, 'sdpa')
+    problem = run_problem(record)
+    if problem:
+        raise ValueError(problem)
+    run, reference, problem = chart_stage(results, 'sdpa')
     if problem:
         raise ValueError('no completed run of stage sdpa')
-    work = update_work(record.get('workload', {}), progress['retained_progress_tokens'], record['completed_updates'])
+    if run.get('exit_status') != 0:
+        raise ValueError('stage sdpa had a failed check' if run.get('exit_status') == 5
+                         else f"stage sdpa ended with exit status {run.get('exit_status')}")
+    differs = reference_differences(record, gpu, reference)
+    if differs:
+        raise ValueError('stage sdpa ran with a different ' + ', '.join(differs))
+    first, last = retained_updates(record, progress)
+    work = update_work(record.get('workload', {}), progress['retained_progress_tokens'], last - first)
     return training_goodput(progress['retained_tokens_per_second'], work, reference)
 
 
-def goodput_pairs(record, progress, interval, results):
+def goodput_pairs(record, progress, interval, results, gpu):
     """The block lines from the retained tokens to the training goodput."""
     if not progress or 'retained_tokens_per_second' not in progress:
         return [('training goodput', 'not computed: no retained progress in the result file')]
+    try:
+        first, last = retained_updates(record, progress)
+    except ValueError as error:
+        return [('training goodput', f'not computed: {error}')]
     pairs = [('retained tokens', f"{progress['retained_progress_tokens']:,} "
-                                 f"(updates 1-{record['completed_updates']}, durable at the end)"),
+                                 f"(updates {first + 1}-{last}, durable at the end)"),
              ('interval', f"{progress['elapsed_seconds']:.2f} s, {interval[0]}")]
     pairs += [('', part) for part in interval[1:]]
     pairs.append(('retained progress rate',
                   f"{progress['retained_tokens_per_second']:,.0f} tokens/s (retained tokens / interval)"))
     try:
-        goodput = stage_goodput(results, record, progress)
+        goodput = stage_goodput(results, record, progress, gpu)
     except ValueError as error:
         return pairs + [('training goodput', f'not computed: {error}')]
+    value = goodput['training_goodput']
     return pairs + [('fault-free rate', f"{goodput['fault_free_tokens_per_second']:,.0f} tokens/s "
                                         '(stage sdpa, which does not save)'),
-                    ('training goodput', f"{goodput['training_goodput']:.2f} "
-                                         '(retained progress rate / fault-free rate)')]
+                    ('training goodput', f'{value:.2f} (retained progress rate / fault-free rate)'
+                                         + (f', {ABOVE_ONE}' if value > 1 else ''))]
 
 
 def checkpoint_block(stage, stage_dir, summary, world, results):
@@ -857,8 +935,13 @@ def checkpoint_block(stage, stage_dir, summary, world, results):
     return [describe(stage)] + lines_for(
         [(f"timed updates {first}-{stage['updates']} with saves and final flush",
           f"{summary['measured_seconds']:.2f} s  ({summary['measured_useful_tokens']:,} targets)")]
-        + goodput_pairs(summary, summary.get('retained_progress'), SAVING_INTERVAL, results)
+        + goodput_pairs(summary, summary.get('retained_progress'), SAVING_INTERVAL, results, gpu_name(summary))
         + nccl_pairs(stage, stage_dir, world) + [efa_pair(stage_dir)])
+
+
+def campaign_gpu(campaign_dir):
+    """The GPU name of a campaign: campaign.json records none; its resumed run's summary.json does."""
+    return gpu_name(read_json(Path(campaign_dir) / 'resumed' / 'summary.json', {}))
 
 
 def restore_block(stage, stage_dir, reference_rows, world):
@@ -908,7 +991,7 @@ def interrupt_block(stage, stage_dir, world, results):
     lines.append(f"  resumed from update {restored}; first update after the resume: "
                  f"{resumed[0]['update'] if resumed else 'none'}")
     lines.append(f"  updates run twice: {restored + 1}-{stop} ({campaign.get('replayed_update_count')} updates)")
-    lines += lines_for(goodput_pairs(campaign, campaign, CAMPAIGN_INTERVAL, results))
+    lines += lines_for(goodput_pairs(campaign, campaign, CAMPAIGN_INTERVAL, results, campaign_gpu(campaign_dir)))
     return lines + lines_for(nccl_pairs(stage, stage_dir, world) + [efa_pair(stage_dir)])
 
 
@@ -976,7 +1059,6 @@ FULL_LENGTH = {('socket', 'eager'): 'baseline', ('socket', 'sdpa'): 'sdpa-socket
                ('efa', 'eager'): 'efa', ('efa', 'sdpa'): 'sdpa'}
 UPDATE_COMPARED_WITH = {'sdpa-socket': 'baseline', 'efa': 'baseline', 'sdpa': 'efa'}
 SAVING_STAGES = (('ckpt-sync', 'synchronous saves'), ('ckpt-process', 'process-mode saves'))
-GOODPUT_STAGES = SAVING_STAGES + (('interrupt', 'stop and resume'),)
 
 
 def chart_stage(results, name, record=('train', 'summary.json')):
@@ -1073,37 +1155,36 @@ def memory_chart_lines(results, names):
     return charts.bar_chart('Peak memory of the largest rank', rows, 'GiB')
 
 
-def retained_record(results, name):
-    """(run, record, retained progress, None) for a saving stage or interrupt, else (run, None, None, the reason)."""
-    interrupt = name == 'interrupt'
-    run, record, problem = chart_stage(results, name, ('campaign', 'campaign.json') if interrupt else ('train', 'summary.json'))
-    if problem:
-        return run, None, None, problem
-    progress = record if interrupt else record.get('retained_progress')
-    if not progress or 'retained_tokens_per_second' not in progress:
-        return run, None, None, 'no retained progress in ' + ('campaign.json' if interrupt else 'summary.json')
-    return run, record, progress, None
-
-
 def goodput_chart_lines(results):
-    """Training goodput of the two saving stages and, once it has run, interrupt, on an axis from 0 to 1."""
+    """Training goodput of the two saving stages on an axis from 0 to 1.
+
+    Only these two: their intervals start and end at the same events. The goodput of interrupt,
+    whose interval also covers both launches and both model loads, is in its result block and
+    in the table of tools/progression.py.
+    """
     rows = []
-    for name, what in GOODPUT_STAGES:
-        if name == 'interrupt' and not (Path(results) / name / 'run.json').is_file():
-            continue
+    for name, what in SAVING_STAGES:
         label = f'{name}, {what}'
-        run, record, progress, problem = retained_record(results, name)
+        run, summary, problem = chart_stage(results, name)
+        progress = (summary or {}).get('retained_progress')
+        if not problem and (not progress or 'retained_tokens_per_second' not in progress):
+            problem = 'no retained progress in summary.json'
         if not problem:
             try:
-                value = stage_goodput(results, record, progress)['training_goodput']
+                value = stage_goodput(results, summary, progress, gpu_name(summary))['training_goodput']
             except ValueError as error:
                 problem = str(error)
+            else:
+                if value > 1:
+                    # The measured value, with no bar past the axis.
+                    problem = f'{value:.2f}, {ABOVE_ONE}'
         if problem:
             rows.append(dict(label=label, value=None, note=problem))
             continue
         rows.append(dict(label=label, value=value, text=f'{value:.2f}{failed_check(run)}'))
     return charts.bar_chart('Training goodput, from 0 to 1 (higher is better)', rows, '', axis=1, notes=[
-        'Training goodput = (retained tokens / interval) / (tokens/s of stage sdpa, which does not save)'])
+        'Training goodput = (retained tokens / interval) / (tokens/s of stage sdpa, which does not save)',
+        "The interval also holds the data loader's start and the warmup updates: below 1 even without saves"])
 
 
 def configuration_differences(first, second):

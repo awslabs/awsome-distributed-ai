@@ -43,18 +43,26 @@ def accumulation_steps(global_batch, microbatch, data_parallel_size):
     return global_batch // divisor
 
 
-def retained_progress(initial_tokens, retained_tokens, elapsed_seconds, *, scope):
-    """Use final durable progress, never sum executed/replayed update tokens."""
+def retained_progress(initial_tokens, retained_tokens, elapsed_seconds, *, scope,
+                      initial_updates, durable_updates):
+    """Use final durable progress, never sum executed/replayed update tokens.
+
+    initial_updates and durable_updates are the updates completed at the start of the interval
+    and in its last durable checkpoint: the retained tokens are those of the updates between them.
+    """
     if (initial_tokens < 0 or retained_tokens < initial_tokens
             or not math.isfinite(elapsed_seconds) or elapsed_seconds <= 0
+            or initial_updates < 0 or durable_updates < initial_updates
             or not scope):
-        raise ValueError('invalid retained progress, interval or scope')
+        raise ValueError('invalid retained progress, update range, interval or scope')
     useful = retained_tokens - initial_tokens
     return {
         'metric': 'Retained progress',
         'retained_progress_tokens': useful,
         'retained_tokens_per_second': useful / elapsed_seconds,
         'elapsed_seconds': elapsed_seconds,
+        'initial_completed_updates': initial_updates,
+        'durable_completed_updates': durable_updates,
         'scope': scope,
     }
 
@@ -71,16 +79,22 @@ def update_work(workload, tokens, updates):
 
 
 def training_goodput(retained_tokens_per_second, work, reference):
-    """Training goodput: the retained progress rate over the fault-free rate; 1 when nothing is lost.
+    """Training goodput: the retained progress rate over the fault-free rate.
 
     work is update_work() of the run. The fault-free rate is the throughput of the timed updates
     of reference, the summary.json of a completed, unprofiled run without saves that does the
-    same work per update.
+    same work per update. The run's interval also holds the data loader's start and the warmup
+    updates, which the fault-free rate leaves out, so even a run without saves stays below 1.
     """
-    if (not reference or reference.get('status') != 'completed' or reference.get('profiled')
-            or reference.get('numerical_verification')
-            or reference.get('measurement_scope') != 'continuous post-warmup training'):
-        raise ValueError('the fault-free rate needs a completed, unprofiled run without saves')
+    if not reference:
+        raise ValueError('no fault-free run')
+    for failed, reason in ((reference.get('status') != 'completed', 'is not completed'),
+                           (reference.get('profiled'), 'was profiled'),
+                           (reference.get('numerical_verification'), 'ran numerical verification'),
+                           (reference.get('performance_eligible') is False, 'is marked not performance-eligible'),
+                           (reference.get('measurement_scope') != 'continuous post-warmup training', 'saves')):
+        if failed:
+            raise ValueError(f'the fault-free run {reason}')
     workload = reference['workload']
     expected = update_work(workload, reference['measured_useful_tokens'],
                            workload['updates'] - workload['warmup_updates'])

@@ -10,6 +10,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -72,6 +73,21 @@ def summary(stage, seconds, rate, peak, *, tokens=None, **extra):
                   ranks=[{'peak_cuda_allocated_bytes': peak, 'gpu_name': G7_GPU}] * 16)
     result.update(extra)
     return result
+
+
+def campaign_record(directory, rate=13790.3, **extra):
+    """Synthetic campaign.json of the interrupt stage, and the GPU names of its resumed run."""
+    directory = Path(directory)
+    (directory / 'resumed').mkdir(parents=True, exist_ok=True)
+    (directory / 'resumed' / 'summary.json').write_text(json.dumps(dict(ranks=[{'gpu_name': G7_GPU}] * 16)))
+    record = dict(metric='Retained progress', status='completed', profiled=False, numerical_verification=False,
+                  performance_eligible=True, retained_progress_tokens=2620160, retained_tokens_per_second=rate,
+                  elapsed_seconds=190.0, completed_updates=40,
+                  workload=dict(sequence_length=2048, updates=40, warmup_updates=2, global_batch_samples=32),
+                  configuration={'attention': 'sdpa', 'deterministic': False}, allocation=ALLOCATION)
+    record.update(extra)
+    (directory / 'campaign.json').write_text(json.dumps(record))
+    return record
 
 
 def nccl_log(transport):
@@ -227,6 +243,126 @@ class DensePeakTests(unittest.TestCase):
         self.assertEqual(workshop.mfu_text(result, 2048, 16), 'n/a (no dense peak for NVIDIA A10G)')
         result['ranks'][0] = dict(result['ranks'][0], gpu_name=G7_GPU)
         self.assertEqual(workshop.mfu_text(result, 2048, 16), 'n/a (summary.json names no single GPU)')
+
+
+class GoodputValidationTests(unittest.TestCase):
+    """stage_goodput: what it refuses, with the reason, and the update range it uses (synthetic records)."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.results = Path(self.directory.name)
+        sdpa = workshop.plan('sdpa', job('efa', 'sdpa'))[0]
+        finished_stage(self.results, sdpa)
+        self.reference = summary(sdpa, 4.0, 65504.0, 2**30)
+        self.write_reference()
+        self.stage = workshop.plan('checkpoint', job('efa', 'sdpa', 'sync'))[0]
+        self.record = summary(self.stage, 80.0, 31000.0, 2**30, retained_progress=dict(
+            retained_progress_tokens=2620160, retained_tokens_per_second=29690.0, elapsed_seconds=88.25,
+            initial_completed_updates=0, durable_completed_updates=40))
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def write_reference(self, exit_status=0, **changes):
+        run = json.loads((self.results / 'sdpa/run.json').read_text())
+        (self.results / 'sdpa/run.json').write_text(json.dumps(dict(run, exit_status=exit_status)))
+        (self.results / 'sdpa/train/summary.json').write_text(json.dumps(dict(self.reference, **changes)))
+
+    def goodput(self, record=None, gpu=G7_GPU):
+        record = record or self.record
+        return workshop.stage_goodput(self.results, record, record['retained_progress'], gpu)
+
+    def assert_refused(self, reason, record=None, gpu=G7_GPU):
+        with self.assertRaisesRegex(ValueError, '^' + re.escape(reason) + '$'):
+            self.goodput(record, gpu)
+
+    def test_the_matching_reference_gives_the_ratio(self):
+        self.assertAlmostEqual(self.goodput()['training_goodput'], 29690.0 / 65504.0)
+
+    def test_reference_with_other_settings_is_refused(self):
+        configuration = self.reference['configuration']
+        for change, reason in (
+                (dict(configuration=dict(configuration, attention='eager')), 'attention'),
+                (dict(configuration=dict(configuration, nccl_protocol='auto')), 'nccl_protocol'),
+                (dict(configuration=dict(configuration, requested_nccl_network='Socket')), 'requested_nccl_network'),
+                # The configuration that try-microbatch2 records.
+                (dict(configuration=dict(configuration, microbatch=2, accumulation_steps=1)),
+                 'accumulation_steps, microbatch'),
+                (dict(configuration=dict(configuration, workers=0)), 'workers'),
+                (dict(workload=dict(self.reference['workload'], precision='float32')), 'precision'),
+                (dict(workload=dict(self.reference['workload'], model_revision='other')), 'model_revision'),
+                (dict(allocation=dict(ALLOCATION, label='pcs-g6e.48xlarge-2nodes-16gpu')), 'allocation label'),
+                (dict(ranks=[{'peak_cuda_allocated_bytes': 1, 'gpu_name': 'NVIDIA L40S'}] * 16), 'GPU'),
+                (dict(configuration={}), 'configuration (not recorded)')):
+            with self.subTest(reason=reason):
+                self.write_reference(**change)
+                self.assert_refused('stage sdpa ran with a different ' + reason)
+        # The checkpoint mode is the one setting in which they differ by design.
+        self.write_reference(configuration=dict(configuration, checkpoint_mode='none'))
+        self.assertAlmostEqual(self.goodput(dict(self.record, configuration=dict(
+            configuration, checkpoint_mode='sync')))['training_goodput'], 29690.0 / 65504.0)
+
+    def test_reference_that_is_not_a_clean_measurement_is_refused(self):
+        for exit_status, change, reason in (
+                (5, {}, 'stage sdpa had a failed check'),
+                (3, {}, 'stage sdpa ended with exit status 3'),
+                (0, dict(profiled=True), 'the fault-free run was profiled'),
+                (0, dict(numerical_verification=True), 'the fault-free run ran numerical verification'),
+                (0, dict(performance_eligible=False), 'the fault-free run is marked not performance-eligible')):
+            with self.subTest(reason=reason):
+                self.write_reference(exit_status, **change)
+                self.assert_refused(reason)
+
+    def test_run_that_is_not_a_clean_measurement_is_refused(self):
+        for change, reason in ((dict(status='failed'), 'this run is not completed'),
+                               (dict(profiled=True), 'this run was profiled'),
+                               (dict(numerical_verification=True), 'this run ran numerical verification'),
+                               (dict(performance_eligible=False), 'this run is marked not performance-eligible')):
+            with self.subTest(reason=reason):
+                self.assert_refused(reason, dict(self.record, **change))
+        self.assert_refused('stage sdpa ran with a different GPU (not recorded)', gpu=None)
+        self.assert_refused('stage sdpa ran with a different allocation label (not recorded)',
+                            dict(self.record, allocation={}))
+
+    def test_a_diagnostic_campaign_gets_no_goodput(self):
+        record = campaign_record(self.results / 'interrupt' / 'campaign', profiled=True, performance_eligible=False)
+        stage = workshop.plan('interrupt', job('efa', 'sdpa', 'process'))[0]
+        finished_stage(self.results, stage)
+        lines = workshop.goodput_pairs(record, record, workshop.CAMPAIGN_INTERVAL, self.results,
+                                       workshop.campaign_gpu(self.results / 'interrupt' / 'campaign'))
+        self.assertEqual(lines[-1], ('training goodput', 'not computed: this run was profiled'))
+
+    def test_a_missing_field_prints_the_reason(self):
+        record = {key: value for key, value in self.record.items() if key != 'completed_updates'}
+        record['retained_progress'] = {key: value for key, value in record['retained_progress'].items()
+                                       if not key.endswith('_completed_updates')}
+        lines = workshop.goodput_pairs(record, record['retained_progress'], workshop.SAVING_INTERVAL,
+                                       self.results, G7_GPU)
+        self.assertEqual(lines, [('training goodput', 'not computed: no completed_updates in the result file')])
+
+    def test_a_resumed_segment_uses_its_own_update_range(self):
+        # Restored after update 5 (327,520 tokens), durable after update 40: updates 6-40 retained.
+        record = dict(self.record, initial_progress_tokens=327520, retained_progress=dict(
+            self.record['retained_progress'], retained_progress_tokens=2620160 - 327520,
+            initial_completed_updates=5, durable_completed_updates=40))
+        lines = workshop.lines_for(workshop.goodput_pairs(record, record['retained_progress'],
+                                                          workshop.SAVING_INTERVAL, self.results, G7_GPU))
+        self.assertEqual(lines[0], '  retained tokens              2,292,640 (updates 6-40, durable at the end)')
+        self.assertEqual(lines[-1], '  training goodput             0.45 (retained progress rate / fault-free rate)')
+        # A resumed segment written before the range was recorded gives the reason, not a wrong range.
+        old = dict(record, retained_progress={key: value for key, value in record['retained_progress'].items()
+                                              if not key.endswith('_completed_updates')})
+        self.assertEqual(workshop.goodput_pairs(old, old['retained_progress'], workshop.SAVING_INTERVAL,
+                                                self.results, G7_GPU),
+                         [('training goodput', 'not computed: no update range of the resumed segment in the result file')])
+
+    def test_a_value_above_1_is_kept_and_marked(self):
+        record = dict(self.record, retained_progress=dict(self.record['retained_progress'],
+                                                          retained_tokens_per_second=81880.0))
+        lines = workshop.lines_for(workshop.goodput_pairs(record, record['retained_progress'],
+                                                          workshop.SAVING_INTERVAL, self.results, G7_GPU))
+        self.assertEqual(lines[-1], '  training goodput             1.25 (retained progress rate / fault-free rate), '
+                                    'above 1: check the reference run')
 
 
 class DisplayTests(unittest.TestCase):
@@ -390,11 +526,8 @@ class DisplayTests(unittest.TestCase):
             (campaign / f'interrupted/checkpoints/update-{update:06d}/COMPLETED.json').write_text('{}')
         (campaign / 'interrupted.log').write_text(nccl_log('efa'))
         (campaign / 'resumed.log').write_text(nccl_log('efa'))
-        (campaign / 'campaign.json').write_text(json.dumps(dict(  # synthetic
-            metric='Retained progress', retained_progress_tokens=2620160, retained_tokens_per_second=13790.3,
-            elapsed_seconds=190.0, interrupted_update=30, restored_update=restored,
-            replayed_update_count=30 - restored, completed_updates=40,
-            workload=dict(sequence_length=2048, updates=40, warmup_updates=2, global_batch_samples=32))))
+        campaign_record(campaign, interrupted_update=30, restored_update=restored,  # synthetic
+                        replayed_update_count=30 - restored)
         return stage, directory
 
     def test_interrupt_block_names_the_upload_state(self):
@@ -645,12 +778,8 @@ class ProgressionTests(unittest.TestCase):
             for name, stage in stages.items():
                 directory_ = finished_stage(results, stage)
                 if name == 'interrupt':
-                    (directory_ / 'campaign').mkdir()
-                    (directory_ / 'campaign/campaign.json').write_text(json.dumps(dict(
-                        metric='Retained progress', retained_progress_tokens=2620160,
-                        retained_tokens_per_second=13790.3, elapsed_seconds=190.0, completed_updates=40,
-                        workload=summary(stage, 1.0, 1.0, 0)['workload'],
-                        interrupted_update=30, restored_update=5, replayed_update_count=25)))
+                    campaign_record(directory_ / 'campaign', workload=summary(stage, 1.0, 1.0, 0)['workload'],
+                                    interrupted_update=30, restored_update=5, replayed_update_count=25)
                     continue
                 seconds, rate = values[name]
                 extra = {}
@@ -720,6 +849,19 @@ class ProgressionTests(unittest.TestCase):
             mark = by_name['efa']['MFU']
             self.assertEqual(notes.texts[int(mark.strip('()')) - 1], 'efa: MFU n/a, no dense peak for NVIDIA A10G')
             self.assertEqual(by_name['efa']['Share of your GEMM peak'], '19.0 %')
+            # A goodput above 1 keeps its value; the cell points to a note to check the reference run.
+            (results / 'sdpa').mkdir(exist_ok=True)
+            finished_stage(results, stages['sdpa'])
+            (results / 'sdpa/train/summary.json').write_text(json.dumps(summary(stages['sdpa'], 4.0, 65504.0, 2**30)))
+            path = results / 'ckpt-sync/train/summary.json'
+            fast = json.loads(path.read_text())
+            fast['retained_progress']['retained_tokens_per_second'] = 81880.0  # synthetic
+            path.write_text(json.dumps(fast))
+            notes = tool.Notes()
+            value, mark = {row['_name']: row for row in tool.collect(results, notes)[1]}['ckpt-sync']['Goodput'].split()
+            self.assertEqual(value, '1.25')
+            self.assertEqual(notes.texts[int(mark.strip('()')) - 1],
+                             'ckpt-sync: goodput 1.25, above 1: check the reference run')
 
 
 class AllocationTests(unittest.TestCase):
