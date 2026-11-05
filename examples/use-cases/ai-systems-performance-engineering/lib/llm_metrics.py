@@ -43,24 +43,59 @@ def accumulation_steps(global_batch, microbatch, data_parallel_size):
     return global_batch // divisor
 
 
-def training_goodput(initial_tokens, retained_tokens, elapsed_seconds,
-                     allocated_gpu_seconds, *, scope):
+def retained_progress(initial_tokens, retained_tokens, elapsed_seconds, *, scope):
     """Use final durable progress, never sum executed/replayed update tokens."""
     if (initial_tokens < 0 or retained_tokens < initial_tokens
             or not math.isfinite(elapsed_seconds) or elapsed_seconds <= 0
-            or not math.isfinite(allocated_gpu_seconds) or allocated_gpu_seconds < 0
             or not scope):
-        raise ValueError('invalid retained progress, interval or allocation scope')
+        raise ValueError('invalid retained progress, interval or scope')
     useful = retained_tokens - initial_tokens
     return {
-        'metric': 'Training goodput',
+        'metric': 'Retained progress',
         'retained_progress_tokens': useful,
-        'training_goodput_tokens_per_second': useful / elapsed_seconds,
+        'retained_tokens_per_second': useful / elapsed_seconds,
         'elapsed_seconds': elapsed_seconds,
-        'allocated_gpu_hours': allocated_gpu_seconds / 3600,
-        'tokens_per_allocated_gpu_hour': (
-            useful * 3600 / allocated_gpu_seconds if allocated_gpu_seconds else None),
         'scope': scope,
+    }
+
+
+# The workload entries that fix the work of one update, beside its mean target tokens.
+UPDATE_WORK = ('model_id', 'sequence_length', 'global_batch_samples', 'data_parallel_size')
+
+
+def update_work(workload, tokens, updates):
+    """The work of one update: the entries of UPDATE_WORK and the mean targets of `updates` updates."""
+    if updates < 1 or tokens < 0:
+        raise ValueError('per-update work needs at least one update and nonnegative tokens')
+    return {key: workload.get(key) for key in UPDATE_WORK} | {'targets_per_update': tokens / updates}
+
+
+def training_goodput(retained_tokens_per_second, work, reference):
+    """Training goodput: the retained progress rate over the fault-free rate; 1 when nothing is lost.
+
+    work is update_work() of the run. The fault-free rate is the throughput of the timed updates
+    of reference, the summary.json of a completed, unprofiled run without saves that does the
+    same work per update.
+    """
+    if (not reference or reference.get('status') != 'completed' or reference.get('profiled')
+            or reference.get('numerical_verification')
+            or reference.get('measurement_scope') != 'continuous post-warmup training'):
+        raise ValueError('the fault-free rate needs a completed, unprofiled run without saves')
+    workload = reference['workload']
+    expected = update_work(workload, reference['measured_useful_tokens'],
+                           workload['updates'] - workload['warmup_updates'])
+    differs = [key for key in expected if work.get(key) != expected[key]]
+    if differs:
+        raise ValueError('different work per update: ' + ', '.join(differs))
+    fault_free = reference['training_throughput_tokens_per_second']
+    if (not math.isfinite(fault_free) or fault_free <= 0
+            or not math.isfinite(retained_tokens_per_second) or retained_tokens_per_second < 0):
+        raise ValueError('the rates must be finite and the fault-free rate positive')
+    return {
+        'metric': 'Training goodput',
+        'training_goodput': retained_tokens_per_second / fault_free,
+        'retained_tokens_per_second': retained_tokens_per_second,
+        'fault_free_tokens_per_second': fault_free,
     }
 
 
@@ -96,15 +131,13 @@ def observability_values(result):
         raise ValueError('completed hardware provenance is required; CPU fixtures are not dashboard evidence')
     if result.get('status') != 'completed' or result.get('profiled') or result.get('numerical_verification'):
         raise ValueError('requires a completed, unprofiled hardware measurement')
-    if result.get('metric') == 'Training goodput':
+    if result.get('metric') == 'Retained progress':
         if result.get('status') != 'completed' or result.get('source') != 'fresh controlled interruption and resume':
             raise ValueError('requires a completed fresh campaign')
         return {
-            'llm_training_goodput_campaign_tokens_per_second': result['training_goodput_tokens_per_second'],
+            'llm_campaign_retained_tokens_per_second': result['retained_tokens_per_second'],
             'llm_campaign_retained_tokens': result['retained_progress_tokens'],
             'llm_campaign_elapsed_seconds': result['elapsed_seconds'],
-            'llm_campaign_tokens_per_allocated_gpu_hour': result['tokens_per_allocated_gpu_hour'],
-            'llm_campaign_allocated_gpu_hours': result['allocated_gpu_hours'],
         }
     if result.get('metrics', {}).get('metric') == 'Serving goodput':
         metrics = result['metrics']
@@ -121,8 +154,8 @@ def observability_values(result):
         'llm_training_measured_tokens': result['measured_useful_tokens'],
         'llm_training_measured_seconds': result['measured_seconds'],
     }
-    if 'training_goodput' in result:
-        values['llm_training_goodput_segment_tokens_per_second'] = result['training_goodput']['training_goodput_tokens_per_second']
+    if 'retained_progress' in result:
+        values['llm_training_segment_retained_tokens_per_second'] = result['retained_progress']['retained_tokens_per_second']
     for key in ('measurement_started_utc_seconds', 'measurement_finished_utc_seconds'):
         if key in result:
             values['llm_training_' + key] = result[key]

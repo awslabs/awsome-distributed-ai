@@ -7,7 +7,8 @@ Reads every stage directory under $LLM_RESULTS_DIR except profile-*, restore
 and attempts/. A ratio is shown only for a pair of runs of the same work on
 the same allocation; otherwise the cell refers to a note below the table.
 Below the table and its notes it prints two charts: the speed-up of the main
-path over baseline, step by step, and the training goodput of the saving runs.
+path over baseline, step by step, and the training goodput of the saving runs
+and of interrupt.
 """
 import argparse
 from pathlib import Path
@@ -18,8 +19,7 @@ import workshop  # noqa: E402
 from llm_metrics import paired_training_report  # noqa: E402
 
 COLUMNS = ('Stage', 'Transport', 'Attention', 'Saving', 'Work', 'Seconds', 'Tokens/s', 'GPU-s per 1M tokens',
-           'MFU vs your GEMM peak', 'Peak memory GiB', 'vs baseline', 'vs previous step', 'Goodput tokens/s',
-           'Goodput M tokens per GPU-hour')
+           'MFU vs your GEMM peak', 'Peak memory GiB', 'vs baseline', 'vs previous step', 'Goodput')
 PREVIOUS = {'efa': 'baseline', 'sdpa': 'efa', 'sdpa-socket': 'baseline'}
 # Optional A: each try-<change> and its rerun follow the main path, compared with stage sdpa.
 TRY_ORDER = tuple(f'{prefix}-{change}' for change in workshop.TRY_CHANGES for prefix in ('try', 'rerun'))
@@ -51,6 +51,16 @@ def ratio(before, after, label, notes):
         return notes.mark(f'{label}: not compared, {reason}')
 
 
+def goodput(results, record, progress, name, notes):
+    """The training goodput of a saving stage or interrupt, or a note with the reason it has none."""
+    if not progress or 'retained_tokens_per_second' not in progress:
+        return notes.mark(f'{name}: no retained progress in its result file, so no goodput')
+    try:
+        return f"{workshop.stage_goodput(results, record, progress)['training_goodput']:.2f}"
+    except ValueError as error:
+        return notes.mark(f'{name}: goodput not computed, {error}')
+
+
 def collect(results, notes):
     results = Path(results)
     ceilings = workshop.read_ceilings(results)
@@ -73,14 +83,14 @@ def collect(results, notes):
         if stage['kind'] == 'interrupt':
             campaign = workshop.read_json(results / name / 'campaign' / 'campaign.json') or {}
             once = notes.mark('interrupt: one command that stopped and resumed the job, not one run')
-            interval = notes.mark('interrupt: goodput over the whole command, from the first launch to the end of the '
-                                  'final save, including both launches and both model loads. The goodput interval of '
-                                  'the saving rows starts at the end of model loading, so the two are not compared')
+            interval = notes.mark('interrupt: goodput over the whole command, from just before the first launch to the '
+                                  'exit of the resumed launch, including both launches and both model loads. The '
+                                  'interval of the saving rows starts after model loading, FSDP wrapping, optimizer and '
+                                  'checkpoint-manager construction and ends after the final flush, the closing barriers '
+                                  'of the timing windows and the two all-reduces, so the saving rows leave the model load out')
             row.update({'Seconds': f"{campaign.get('elapsed_seconds', 0):.2f}",
                         'vs baseline': once,
-                        'Goodput tokens/s': f"{campaign.get('training_goodput_tokens_per_second', 0):,.0f} {interval}",
-                        'Goodput M tokens per GPU-hour':
-                            f"{campaign.get('tokens_per_allocated_gpu_hour', 0) / 1e6:.2f} {interval}"})
+                        'Goodput': f'{goodput(results, campaign, campaign, name, notes)} {interval}'})
             row['_campaign'] = campaign
             rows.append(row)
             continue
@@ -96,10 +106,8 @@ def collect(results, notes):
                     'MFU vs your GEMM peak': (f"{100 * workshop.mfu(rate, stage['sequence_length'], ceilings['gemm_tflops_per_gpu'], world):.1f} %"
                                               if ceilings else 'n/a'),
                     'Peak memory GiB': f'{workshop.peak_memory_gib(summary):.2f}'})
-        goodput = summary.get('training_goodput')
-        if goodput:
-            row['Goodput tokens/s'] = f"{goodput['training_goodput_tokens_per_second']:,.0f}"
-            row['Goodput M tokens per GPU-hour'] = f"{goodput['tokens_per_allocated_gpu_hour'] / 1e6:.2f}"
+        if stage['saving'] != 'none':
+            row['Goodput'] = goodput(results, summary, summary.get('retained_progress'), name, notes)
         rows.append(row)
     baseline = summaries.get('baseline')
     for row in rows:

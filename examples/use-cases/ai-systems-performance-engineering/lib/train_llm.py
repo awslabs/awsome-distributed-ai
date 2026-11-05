@@ -26,7 +26,7 @@ from transformers.modeling_utils import no_init_weights
 
 from llm_checkpoint import Checkpoints, latest_completed, close_checkpointers
 from llm_data import Documents, UpdateBatches, trim_padding
-from llm_metrics import ContinuousWindow, accumulation_steps, training_goodput
+from llm_metrics import ContinuousWindow, accumulation_steps, retained_progress
 
 
 def parse_args():
@@ -609,10 +609,9 @@ def main():
                       transformers_version=transformers.__version__,
                       segment_source='attendee/local resume' if args.resume else 'fresh run')
         if saves.durable_progress:
-            result['training_goodput'] = training_goodput(
+            result['retained_progress'] = retained_progress(
                 initial_tokens, saves.durable_progress['useful_tokens'], segment_seconds,
-                segment_seconds * allocation['gpu_count'],
-                scope='restore through training and final flush; excludes model loading, sharding, optimizer construction, historical interruption and queue time')
+                scope='measured on rank 0 from after model loading, FSDP wrapping, optimizer and checkpoint-manager construction to after the final flush, the closing barriers of the timing windows and the two all-reduces; includes any restore; excludes earlier processes and queue time')
         (args.output / 'summary.json').write_text(json.dumps(result, indent=2) + '\n')
         print(json.dumps(result), flush=True)
     dist.destroy_process_group()

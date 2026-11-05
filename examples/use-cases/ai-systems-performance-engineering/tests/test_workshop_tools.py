@@ -57,7 +57,8 @@ def write_rows(path, values):
 
 
 def summary(stage, seconds, rate, peak, *, tokens=None, **extra):
-    workload = dict(sequence_length=stage['sequence_length'], updates=stage['updates'], data=stage['data'])
+    workload = dict(sequence_length=stage['sequence_length'], updates=stage['updates'], data=stage['data'],
+                    warmup_updates=stage['warmup_updates'], global_batch_samples=stage['global_batch'])
     if stage['saving'] != 'none':
         workload['checkpoint_updates'] = stage['checkpoint_updates']
     result = dict(status='completed', profiled=False, numerical_verification=False, workload=workload,
@@ -66,7 +67,7 @@ def summary(stage, seconds, rate, peak, *, tokens=None, **extra):
                                      else 'continuous post-warmup training'),
                   measured_seconds=seconds, measured_useful_tokens=tokens or workshop.timed_targets(stage),
                   training_throughput_tokens_per_second=rate, segment_seconds=seconds + 9,
-                  ranks=[{'peak_cuda_allocated_bytes': peak}] * 16)
+                  completed_updates=stage['updates'], ranks=[{'peak_cuda_allocated_bytes': peak}] * 16)
     result.update(extra)
     return result
 
@@ -306,23 +307,38 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(workshop.flush_seconds(values, events, 40), 0.0)
         self.assertEqual(workshop.RowPrinter.flush_line(0.0, 40), ' flush     0.000         -     -        -       40')
 
-    def test_checkpoint_block_prints_goodput_inputs_only(self):
+    def sdpa_stage(self, rate=65504.0):
+        """Stage sdpa, the fault-free rate, finished in self.results (synthetic rate)."""
+        stage = workshop.plan('sdpa', job('efa', 'sdpa'))[0]
+        directory = finished_stage(self.results, stage)
+        (directory / 'train/summary.json').write_text(json.dumps(summary(stage, 4.0, rate, 2**30)))
+
+    def test_checkpoint_block_prints_the_goodput_and_the_two_rates_it_divides(self):
         stage = workshop.plan('checkpoint', job('efa', 'sdpa', 'sync'))[0]
         directory = finished_stage(self.results, stage)
         (directory / 'launch.log').write_text(nccl_log('efa'))
         result = summary(stage, 80.0, 31000.0, 9 * 2**30, segment_seconds=88.25,  # synthetic
-                         training_goodput={'retained_progress_tokens': 2620160,
-                                           'training_goodput_tokens_per_second': 29690.0,
-                                           'tokens_per_allocated_gpu_hour': 6.68e6})
-        lines = workshop.timed_block(stage, directory, result, None, 16)
-        self.assertEqual(lines[:5], [
+                         retained_progress={'retained_progress_tokens': 2620160, 'elapsed_seconds': 88.25,
+                                            'retained_tokens_per_second': 29690.0})
+        lines = workshop.timed_block(stage, directory, result, None, 16, results=self.results)
+        self.assertEqual(lines[:3], [
             'ckpt-sync (efa, sdpa attention, sync saves after updates 5, 20, 40)',
             '  timed updates 3-40 with saves and final flush  80.00 s  (2,489,152 targets)',
-            '  durable at the end           update 40, 2,620,160 tokens',
-            '  goodput interval             88.25 s  (from the end of model loading to the end of the final flush)',
-            '  GPUs                         16'])
-        self.assertFalse([line for line in lines if 'goodput ' in line and 'interval' not in line])
-        self.assertFalse([line for line in lines if 'per GPU-hour' in line or '29,690' in line])
+            '  retained tokens              2,620,160 (updates 1-40, durable at the end)'])
+        # Without stage sdpa there is no fault-free rate, so no goodput.
+        self.assertEqual(lines[6:8], ['  retained progress rate       29,690 tokens/s (retained tokens / interval)',
+                                      '  training goodput             not computed: no completed run of stage sdpa'])
+        self.sdpa_stage()
+        lines = workshop.timed_block(stage, directory, result, None, 16, results=self.results)
+        self.assertEqual(lines[2:9], [
+            '  retained tokens              2,620,160 (updates 1-40, durable at the end)',
+            '  interval                     88.25 s, from after model loading, FSDP wrapping, optimizer',
+            '                               and checkpoint-manager construction to after the final flush,',
+            '                               the closing barriers of the timing windows and the two all-reduces',
+            '  retained progress rate       29,690 tokens/s (retained tokens / interval)',
+            '  fault-free rate              65,504 tokens/s (stage sdpa, which does not save)',
+            '  training goodput             0.45 (retained progress rate / fault-free rate)'])
+        self.assertFalse([line for line in lines if 'GPU-hour' in line or line.startswith('  GPUs')])
 
     def interrupt_dir(self, pending, durable):
         stage = workshop.plan('interrupt', job('efa', 'sdpa', 'process'))[0]
@@ -342,14 +358,15 @@ class DisplayTests(unittest.TestCase):
         (campaign / 'interrupted.log').write_text(nccl_log('efa'))
         (campaign / 'resumed.log').write_text(nccl_log('efa'))
         (campaign / 'campaign.json').write_text(json.dumps(dict(  # synthetic
-            interrupted_update=30, restored_update=restored, replayed_update_count=30 - restored,
-            elapsed_seconds=190.0, training_goodput_tokens_per_second=13790.3,
-            tokens_per_allocated_gpu_hour=3.1e6)))
+            metric='Retained progress', retained_progress_tokens=2620160, retained_tokens_per_second=13790.3,
+            elapsed_seconds=190.0, interrupted_update=30, restored_update=restored,
+            replayed_update_count=30 - restored, completed_updates=40,
+            workload=dict(sequence_length=2048, updates=40, warmup_updates=2, global_batch_samples=32))))
         return stage, directory
 
     def test_interrupt_block_names_the_upload_state(self):
         stage, directory = self.interrupt_dir(pending=True, durable=5)
-        lines = workshop.interrupt_block(stage, directory, 16)
+        lines = workshop.interrupt_block(stage, directory, 16, self.results)
         self.assertEqual(len([line for line in lines if line.startswith(('    26', '    27', '    28', '    29', '    30'))]), 5)
         self.assertIn('  stopped after update 30; the update-20 upload was still pending (durable update 5)', lines)
         self.assertIn('  completed checkpoints at the stop: update-000005', lines)
@@ -358,19 +375,28 @@ class DisplayTests(unittest.TestCase):
         self.assertIn('  NCCL network (interrupted run)  AWS Libfabric on 16 of 16 ranks', lines)
         self.assertIn('  NCCL_PROTO                   not set on any rank', lines)
         (directory / 'campaign/interrupted.log').write_text(with_nccl_proto(nccl_log('efa')))
-        lines = workshop.interrupt_block(stage, directory, 16)
+        lines = workshop.interrupt_block(stage, directory, 16, self.results)
         self.assertIn('  NCCL_PROTO                   interrupted run: Simple on 16 of 16 ranks; '
                       'resumed run: not set on any rank', lines)
         (directory / 'campaign/resumed.log').write_text(with_nccl_proto(nccl_log('efa')))
-        lines = workshop.interrupt_block(stage, directory, 16)
+        lines = workshop.interrupt_block(stage, directory, 16, self.results)
         self.assertIn('  NCCL_PROTO                   Simple on 16 of 16 ranks', lines)
-        self.assertIn('  goodput including the stop   13,790 tokens/s, 3.10 M tokens per GPU-hour  '
-                      '(first launch to the final durable save)', lines)
+        self.assertIn('  training goodput             not computed: no completed run of stage sdpa', lines)
+        self.sdpa_stage()
+        lines = workshop.interrupt_block(stage, directory, 16, self.results)
+        first = lines.index('  updates run twice: 6-30 (25 updates)') + 1
+        self.assertEqual(lines[first:first + 6], [
+            '  retained tokens              2,620,160 (updates 1-40, durable at the end)',
+            '  interval                     190.00 s, from just before the first launch to the exit of the',
+            '                               resumed launch, with both launches and both model loads',
+            '  retained progress rate       13,790 tokens/s (retained tokens / interval)',
+            '  fault-free rate              65,504 tokens/s (stage sdpa, which does not save)',
+            '  training goodput             0.21 (retained progress rate / fault-free rate)'])
         self.directory.cleanup()
         self.directory = tempfile.TemporaryDirectory()
         self.results = Path(self.directory.name)
         stage, directory = self.interrupt_dir(pending=False, durable=20)
-        lines = workshop.interrupt_block(stage, directory, 16)
+        lines = workshop.interrupt_block(stage, directory, 16, self.results)
         self.assertIn('  stopped after update 30; the update-20 upload had finished (durable update 20)', lines)
         self.assertIn('  updates run twice: 21-30 (10 updates)', lines)
 
@@ -588,16 +614,16 @@ class ProgressionTests(unittest.TestCase):
                 if name == 'interrupt':
                     (directory_ / 'campaign').mkdir()
                     (directory_ / 'campaign/campaign.json').write_text(json.dumps(dict(
-                        elapsed_seconds=190.0, training_goodput_tokens_per_second=13790.3,
-                        tokens_per_allocated_gpu_hour=3.1e6, interrupted_update=30, restored_update=5,
-                        replayed_update_count=25)))
+                        metric='Retained progress', retained_progress_tokens=2620160,
+                        retained_tokens_per_second=13790.3, elapsed_seconds=190.0, completed_updates=40,
+                        workload=summary(stage, 1.0, 1.0, 0)['workload'],
+                        interrupted_update=30, restored_update=5, replayed_update_count=25)))
                     continue
                 seconds, rate = values[name]
                 extra = {}
                 if name == 'ckpt-sync':
-                    extra['training_goodput'] = {'retained_progress_tokens': 2620160,
-                                                 'training_goodput_tokens_per_second': 29690.0,
-                                                 'tokens_per_allocated_gpu_hour': 6.68e6}
+                    extra['retained_progress'] = {'retained_progress_tokens': 2620160, 'elapsed_seconds': 88.25,
+                                                  'retained_tokens_per_second': 29690.0}
                 (directory_ / 'train/summary.json').write_text(json.dumps(summary(stage, seconds, rate, 2**30, **extra)))
             (results / 'ceilings').mkdir()
             (results / 'ceilings/ceilings.json').write_text(json.dumps(
@@ -616,15 +642,18 @@ class ProgressionTests(unittest.TestCase):
             self.assertEqual(by_name['sdpa']['vs baseline'], f'{BASELINE["seconds"] / 4.0:.2f}x')
             self.assertTrue(by_name['probe-socket-eager']['vs baseline'].startswith('('))
             self.assertIn('probe-socket-eager vs baseline: not compared, different workload', notes.texts)
-            self.assertEqual(by_name['ckpt-sync']['Goodput tokens/s'], '29,690')
-            self.assertEqual(by_name['ckpt-sync']['Goodput M tokens per GPU-hour'], '6.68')
-            # The interrupt goodput covers the whole command, so both its cells point to a note.
+            # One Goodput column: the retained progress rate over the 65,504 tokens/s of stage sdpa.
+            self.assertEqual(by_name['ckpt-sync']['Goodput'], '0.45')
+            self.assertNotIn('Goodput', by_name['sdpa'])
+            # The interrupt goodput covers the whole command, so its cell points to a note.
             self.assertEqual(by_name['interrupt']['vs baseline'], '(1)')
-            self.assertEqual(by_name['interrupt']['Goodput tokens/s'], '13,790 (2)')
-            self.assertEqual(by_name['interrupt']['Goodput M tokens per GPU-hour'], '3.10 (2)')
-            self.assertEqual(notes.texts[1], 'interrupt: goodput over the whole command, from the first launch to the '
-                             'end of the final save, including both launches and both model loads. The goodput '
-                             'interval of the saving rows starts at the end of model loading, so the two are not compared')
+            self.assertEqual(by_name['interrupt']['Goodput'], '0.21 (2)')
+            self.assertEqual(notes.texts[1], 'interrupt: goodput over the whole command, from just before the first '
+                             'launch to the exit of the resumed launch, including both launches and both model loads. '
+                             'The interval of the saving rows starts after model loading, FSDP wrapping, optimizer and '
+                             'checkpoint-manager construction and ends after the final flush, the closing barriers of '
+                             'the timing windows and the two all-reduces, so the saving rows leave the model load out')
+            self.assertEqual(tool.COLUMNS[-3:], ('vs baseline', 'vs previous step', 'Goodput'))
             plain = tool.render(ceilings, table, notes, False)
             self.assertEqual(plain[0], 'GEMM peak 171.7 TFLOP/s per GPU, memory read 662 GB/s per GPU, ridge 259 FLOP per byte')
             self.assertIn('interrupt: stopped after update 30, resumed from update 5, 25 updates ran twice', plain)
@@ -635,6 +664,13 @@ class ProgressionTests(unittest.TestCase):
             with redirect_stdout(stdout):
                 self.assertEqual(tool.main(['--markdown']), 0)
             self.assertNotIn('profile-efa-eager', stdout.getvalue())
+            # Without stage sdpa there is no fault-free rate: the cell points to a note with the reason.
+            shutil.rmtree(results / 'sdpa')
+            notes = tool.Notes()
+            by_name = {row['_name']: row for row in tool.collect(results, notes)[1]}
+            mark = by_name['ckpt-sync']['Goodput']
+            self.assertEqual(notes.texts[int(mark.strip('()')) - 1],
+                             'ckpt-sync: goodput not computed, no completed run of stage sdpa')
 
 
 class AllocationTests(unittest.TestCase):

@@ -73,19 +73,22 @@ def key_lines(indent, entries):
     return lines + ([' ' * indent + line] if line else [])
 
 
-def bar_chart(title, rows, unit, notes=()):
-    """Solid bars. rows: dicts with label, value (or None), text, and note when value is None."""
+def bar_chart(title, rows, unit, notes=(), axis=None):
+    """Solid bars. rows: dicts with label, value (or None), text, and note when value is None.
+    axis, when given, fixes the axis from 0 to that value and marks both ends under the bars."""
     label_width, cells = layout(rows)
     maximum = max([row['value'] for row in rows if row.get('value') is not None] + [0])
-    scale = nice_scale(maximum, cells)
+    scale = nice_scale(axis or maximum, cells)
     lines = [title]
     for row in rows:
         if row.get('value') is None:
             lines.append(row_line(row['label'], label_width, row['note'], 0, ''))
         else:
             lines.append(row_line(row['label'], label_width, solid(row['value'], scale), cells, row['text']))
-    if maximum:
-        lines += key_lines(label_width + 4, [f'one cell = {scale_text(scale)} {unit}'])
+    if axis:
+        lines.append(' ' * (label_width + 4) + '0' + scale_text(axis).rjust(round(axis / scale) - 1))
+    if maximum or axis:
+        lines += key_lines(label_width + 4, [f'one cell = {scale_text(scale)} {unit}'.rstrip()])
     return lines + [f'  {note}' for note in notes]
 
 

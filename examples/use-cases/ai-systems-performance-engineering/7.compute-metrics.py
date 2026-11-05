@@ -46,7 +46,7 @@ def main():
             values['useful_tokens_per_gpu_hour']=useful/gpu_hours
             values['allocated_gpu_hours']=gpu_hours
         else:
-            print(f'{config}: no allocation ledger; goodput is UNVALIDATED',file=sys.stderr)
+            print(f'{config}: no allocation ledger; useful tokens per GPU-hour are UNVALIDATED',file=sys.stderr)
         row=dict(config=config,status='VALIDATED',instance_type=instance,denominator_tflops_per_gpu=peak,
                  denominator_source=source,**values)
         rows.append(row)

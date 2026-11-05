@@ -184,7 +184,7 @@ The corresponding whole-command sampled rates for `v2` were `4.314286 operations
 
 CPU values are command-window averages of host `rate(node_cpu_seconds_total[30s])` summed across CPUs, with user and system modes combined. They are below the allocated core count and cannot by themselves establish CPU saturation. Tensor ranges include idle/startup samples; valid positive profiling samples were present for all four GPUs during training. The original raw series also preserve SM and DRAM activity.
 
-| g7e configuration | Training job-body allocation | Useful-token goodput |
+| g7e configuration | Training job-body allocation | Useful tokens per allocated GPU-hour |
 | --- | --- | --- |
 | `v0` | `0.243642225001 GPU-hours` | `840576.792465 tokens/GPU-hour` |
 | `v1` | `0.129684919251 GPU-hours` | `1579212.148817 tokens/GPU-hour` |
@@ -264,7 +264,7 @@ The DRAM probe read `1 GiB/trial` against a `64 MiB` L2 cache, with ten warmup t
 
 All configurations trained the full randomly initialized Qwen architecture with `2774773760 nonembedding parameters`, `512 tokens/sequence`, one sequence per GPU rank, `4096 tokens/step`, `100 update steps`, ten warmup steps, ninety measured steps and `2000 CPU hashing rounds/record`. Each completed `409600 useful tokens`. The common logical-data SHA-256 was `cbbf272e4c2f6ebf0a502f384425a4d5cbafcc83823ffe00dce86aa8babf4807`. Initial and reduced worker requests were `192 workers/node` and `32 workers/node`, against `96` available logical processors per node.
 
-| Configuration and allocation | Command wall time | Training throughput | Mean measured step | MFU/GEMM, dimensionless ratio | Companion-ledger goodput |
+| Configuration and allocation | Command wall time | Training throughput | Mean measured step | MFU/GEMM, dimensionless ratio | Companion-ledger useful tokens per GPU-hour |
 |---|---|---|---|---|---|
 | `v0`, job identifier `8` | 330.073130 s | 1715.936407 tokens/s | 2387.034848 ms | 0.020797604554 | 603953.105337 tokens/GPU-hour |
 | `v1`, job identifier `9` | 170.063729 s | 5602.045734 tokens/s | 731.161471 ms | 0.067898280738 | 1257976.404918 tokens/GPU-hour |

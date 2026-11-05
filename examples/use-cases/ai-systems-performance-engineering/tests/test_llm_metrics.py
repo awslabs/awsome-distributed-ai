@@ -5,8 +5,15 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
-from llm_metrics import (ContinuousWindow, accumulation_steps,
-                         paired_training_report, training_goodput, observability_values)
+from llm_metrics import (ContinuousWindow, accumulation_steps, observability_values,
+                         paired_training_report, retained_progress, training_goodput, update_work)
+
+# Synthetic run of 5 updates of 32 x 2,048 positions without saves, the first one warmup.
+WORKLOAD = dict(model_id='m', sequence_length=2048, global_batch_samples=32, data_parallel_size=16,
+                updates=5, warmup_updates=1)
+FAULT_FREE = dict(status='completed', profiled=False, numerical_verification=False,
+                  measurement_scope='continuous post-warmup training', workload=WORKLOAD,
+                  measured_useful_tokens=4 * 65504, training_throughput_tokens_per_second=80000.0)
 
 
 class LLMMetricTests(unittest.TestCase):
@@ -36,28 +43,57 @@ class LLMMetricTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             accumulation_steps(30, 2, 8)
 
-    def test_goodput_counts_retained_progress_only(self):
+    def test_retained_progress_counts_retained_progress_only(self):
         # 400 replayed tokens and a pending save never enter the numerator.
-        row = training_goodput(1000, 2000, 20, 160, scope='synthetic full interval')
-        self.assertEqual(row['retained_progress_tokens'], 1000)
-        self.assertEqual(row['training_goodput_tokens_per_second'], 50)
-        self.assertEqual(row['tokens_per_allocated_gpu_hour'], 22500)
+        row = retained_progress(1000, 2000, 20, scope='synthetic full interval')
+        self.assertEqual(row, {'metric': 'Retained progress', 'retained_progress_tokens': 1000,
+                               'retained_tokens_per_second': 50, 'elapsed_seconds': 20,
+                               'scope': 'synthetic full interval'})
         with self.assertRaises(ValueError):
-            training_goodput(2000, 1000, 20, 160, scope='invalid')
+            retained_progress(2000, 1000, 20, scope='invalid')
+        with self.assertRaises(ValueError):
+            retained_progress(0, 1000, 0, scope='no interval')
+
+    def test_goodput_is_the_retained_rate_over_the_fault_free_rate(self):
+        # 40 updates of 65,504 targets retained at 20,000 tokens/s against 80,000 tokens/s without saves.
+        work = update_work(dict(WORKLOAD, updates=40, warmup_updates=2), 40 * 65504, 40)
+        self.assertEqual(work['targets_per_update'], 65504)
+        self.assertEqual(training_goodput(20000.0, work, FAULT_FREE), {
+            'metric': 'Training goodput', 'training_goodput': 0.25,
+            'retained_tokens_per_second': 20000.0, 'fault_free_tokens_per_second': 80000.0})
+
+    def test_goodput_refuses_different_work_per_update(self):
+        work = update_work(WORKLOAD, 40 * 32752, 40)
+        with self.assertRaisesRegex(ValueError, '^different work per update: targets_per_update$'):
+            training_goodput(20000.0, work, FAULT_FREE)
+        work = update_work(dict(WORKLOAD, sequence_length=1024), 40 * 65504, 40)
+        with self.assertRaisesRegex(ValueError, '^different work per update: sequence_length$'):
+            training_goodput(20000.0, work, FAULT_FREE)
+
+    def test_goodput_refuses_a_missing_saving_or_unfinished_reference(self):
+        work = update_work(WORKLOAD, 40 * 65504, 40)
+        for reference in (None, {}, dict(FAULT_FREE, status='failed'), dict(FAULT_FREE, profiled=True),
+                          dict(FAULT_FREE, measurement_scope='training/save/final durable completion')):
+            with self.assertRaisesRegex(ValueError, 'completed, unprofiled run without saves'):
+                training_goodput(20000.0, work, reference)
+        with self.assertRaises(ValueError):
+            training_goodput(20000.0, work, dict(FAULT_FREE, training_throughput_tokens_per_second=0.0))
 
     def test_dashboard_never_promotes_segment_to_campaign_goodput(self):
         row = dict(status='completed', evidence_kind='LLM hardware run', profiled=False, numerical_verification=False,
                    training_throughput_tokens_per_second=100, measured_useful_tokens=1000,
-                   measured_seconds=10, training_goodput={'training_goodput_tokens_per_second': 80})
+                   measured_seconds=10, retained_progress={'retained_tokens_per_second': 80})
         values = observability_values(row)
-        self.assertEqual(values['llm_training_goodput_segment_tokens_per_second'], 80)
-        self.assertNotIn('llm_training_goodput_campaign_tokens_per_second', values)
+        self.assertEqual(values['llm_training_segment_retained_tokens_per_second'], 80)
+        self.assertNotIn('llm_campaign_retained_tokens_per_second', values)
         row['evidence_kind'] = 'CPU correctness fixture'
         with self.assertRaises(ValueError):
             observability_values(row)
-        campaign = training_goodput(0, 1000, 20, 160, scope='synthetic test')
+        campaign = retained_progress(0, 1000, 20, scope='synthetic test')
         campaign.update(status='completed', evidence_kind='LLM hardware run', source='fresh controlled interruption and resume')
-        self.assertEqual(observability_values(campaign)['llm_training_goodput_campaign_tokens_per_second'], 50)
+        self.assertEqual(observability_values(campaign), {'llm_campaign_retained_tokens_per_second': 50,
+                                                          'llm_campaign_retained_tokens': 1000,
+                                                          'llm_campaign_elapsed_seconds': 20})
         for flag in ('profiled', 'numerical_verification'):
             campaign[flag] = True
             with self.assertRaises(ValueError):

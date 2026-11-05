@@ -13,7 +13,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'lib'))
-from llm_metrics import training_goodput
+from llm_metrics import retained_progress
 
 
 def main():
@@ -31,7 +31,7 @@ def main():
     if any(item.split('=')[0] in ('--output', '--resume', '--interrupt-after-update') for item in command):
         parser.error('campaign sets output, resume and interruption arguments')
     if any(item.split('=')[0] in ('--profile', '--verify-numerics') for item in command):
-        parser.error('campaign goodput excludes profiler and correctness-snapshot runs')
+        parser.error('the campaign measurement excludes profiler and correctness-snapshot runs')
     if args.diagnostic_profile:
         command = command + ['--profile']
     args.output.mkdir(parents=True, exist_ok=False)
@@ -106,9 +106,9 @@ def main():
                     trace_events = json.loads(trace.read_text())['traceEvents']
                     if not trace_events:
                         raise RuntimeError(f'empty diagnostic trace: {trace}')
-    result = training_goodput(
-        0, final['useful_tokens'], elapsed, args.allocated_gpus * elapsed,
-        scope='fresh campaign launch through final resumed process exit, including initial model load, training, save, failure detection, downtime, child-step relaunch/wait, restore, replay and final durable flush; allocation retained throughout; initial Slurm allocation wait and pre-campaign preparation excluded')
+    result = retained_progress(
+        0, final['useful_tokens'], elapsed,
+        scope='from just before the first launch to the exit of the resumed launch, including both launches with their model loads, training, saves, the controlled stop, checkpoint selection, restore, replay and the final flush; allocation retained throughout; initial Slurm allocation wait and pre-campaign preparation excluded')
     result.update(status='completed', source='fresh controlled interruption and resume',
                   evidence_kind=summary['evidence_kind'], started_utc_seconds=started_utc,
                   finished_utc_seconds=finished_utc, allocation=summary['allocation'],

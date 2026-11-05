@@ -158,61 +158,95 @@ class CumulativeChartTests(SpainResults):
                                      '  sdpa (efa, sdpa)          no baseline to compare with'])
 
 
+GOODPUT_TITLE = 'Training goodput, from 0 to 1 (higher is better)'
+GOODPUT_NOTE = ('  Training goodput = (retained tokens / interval) / (tokens/s of stage sdpa, '
+                'which does not save)')
+SDPA_RATE = 77274.93663399987  # tokens/s of the Spain sdpa run, tests/fixtures/spain-20261103
+
+
 class GoodputChartTests(SpainResults):
-    def test_reference_bar_from_the_spain_sdpa_run_and_missing_saving_runs(self):
-        self.add('sdpa')
-        lines = workshop.goodput_chart_lines(self.results)
-        self.assertEqual(lines[:3], ['Training goodput, M tokens per GPU-hour (higher is better)',
-                                     '  ckpt-sync, synchronous saves            not run yet',
-                                     '  ckpt-process, process-mode saves        not run yet'])
-        # 77,275 tokens/s x 3,600 / 16 GPUs.
-        self.assertTrue(lines[3].startswith('  sdpa, no saves (throughput, reference)  █'))
-        self.assertTrue(lines[3].endswith('  17.39'))
-        self.assert_narrow(lines)
-
-    def test_saving_runs_beside_the_reference(self):
-        self.add('sdpa')
-        for name, mode, value in (('ckpt-sync', 'sync', 12.5e6), ('ckpt-process', 'process', 15.0e6)):  # synthetic
-            stage = workshop.plan('checkpoint', {'LLM_TRANSPORT': 'efa', 'ATTENTION': 'sdpa',
-                                                 'CHECKPOINT_MODE': mode})[0 if mode == 'sync' else 1]
-            (self.results / name / 'train').mkdir(parents=True)
-            (self.results / name / 'run.json').write_text(json.dumps(dict(plan=stage, status='finished', exit_status=0)))
-            (self.results / name / 'train' / 'summary.json').write_text(json.dumps(dict(
-                training_goodput={'tokens_per_allocated_gpu_hour': value})))
-        lines = workshop.goodput_chart_lines(self.results)
-        rows = [bar(line) for line in lines[1:4]]
-        self.assertEqual([text for _, text in rows], ['12.50', '15.00', '17.39'])
-        # One scale for the three bars, 0.5 M tokens per GPU-hour per cell, so the bars are in proportion.
-        widths = [len(cells) - 1 + charts.EIGHTHS.index(cells[-1]) / 8 if cells[-1] in charts.EIGHTHS
-                  else len(cells) for cells, _ in rows]
-        self.assertAlmostEqual(widths[0] / widths[2], 12.50 / 17.39, delta=0.01)
-        self.assertAlmostEqual(widths[1] / widths[2], 15.00 / 17.39, delta=0.01)
-        self.assertEqual(len(columns(lines[1:4])), 1)
-        self.assertEqual(lines[4].strip(), 'one cell = 0.5 M tokens per GPU-hour')
-        self.assertEqual(lines[5], '  The reference is the throughput of the timed updates of stage sdpa, '
-                                   'a run that does not save.')
-
-
-    def test_result_block_of_a_saving_stage_is_followed_by_the_goodput_chart(self):
-        self.add('sdpa')
-        stage = workshop.plan('checkpoint', {'LLM_TRANSPORT': 'efa', 'ATTENTION': 'sdpa', 'CHECKPOINT_MODE': 'sync'})[0]
+    def saving_stage(self, mode, goodput, targets=65504):
+        """A finished saving stage whose retained rate is goodput times the sdpa rate (synthetic)."""
+        stage = workshop.plan('checkpoint', {'LLM_TRANSPORT': 'efa', 'ATTENTION': 'sdpa',
+                                             'CHECKPOINT_MODE': mode})[0 if mode == 'sync' else 1]
         directory = self.results / stage['name']
         (directory / 'train').mkdir(parents=True)
         run = dict(plan=stage, status='finished', exit_status=0, checks=[])
         (directory / 'run.json').write_text(json.dumps(run))
-        (directory / 'train' / 'summary.json').write_text(json.dumps(dict(  # synthetic
-            measured_seconds=80.0, measured_useful_tokens=2489152, segment_seconds=88.25,
-            allocation={'gpu_count': 16}, training_goodput={'retained_progress_tokens': 2620160,
-                                                            'tokens_per_allocated_gpu_hour': 6.68e6})))
+        workload = json.loads((SPAIN / 'sdpa' / 'train' / 'summary.json').read_text())['workload']
+        (directory / 'train' / 'summary.json').write_text(json.dumps(dict(
+            measured_seconds=80.0, measured_useful_tokens=38 * targets, segment_seconds=88.25,
+            completed_updates=40, workload=dict(workload, updates=40, warmup_updates=2),
+            retained_progress={'retained_progress_tokens': 40 * targets, 'elapsed_seconds': 88.25,
+                               'retained_tokens_per_second': goodput * SDPA_RATE})))
+        return stage, directory, run
+
+    def interrupt_stage(self, goodput):
+        stage = workshop.plan('interrupt', {'LLM_TRANSPORT': 'efa', 'ATTENTION': 'sdpa', 'CHECKPOINT_MODE': 'process'})[0]
+        directory = self.results / 'interrupt' / 'campaign'
+        directory.mkdir(parents=True)
+        (directory.parent / 'run.json').write_text(json.dumps(dict(plan=stage, status='finished', exit_status=0)))
+        workload = json.loads((SPAIN / 'sdpa' / 'train' / 'summary.json').read_text())['workload']
+        (directory / 'campaign.json').write_text(json.dumps(dict(  # synthetic
+            metric='Retained progress', retained_progress_tokens=40 * 65504, elapsed_seconds=190.0,
+            retained_tokens_per_second=goodput * SDPA_RATE, completed_updates=40,
+            workload=dict(workload, updates=40, warmup_updates=2))))
+
+    def test_saving_bars_need_stage_sdpa_and_interrupt_has_no_row_before_it_runs(self):
+        lines = workshop.goodput_chart_lines(self.results)
+        self.assertEqual(lines, [GOODPUT_TITLE,
+                                 '  ckpt-sync, synchronous saves      not run yet',
+                                 '  ckpt-process, process-mode saves  not run yet',
+                                 '                                    0' + ' ' * 48 + '1',
+                                 '                                    one cell = 0.02',
+                                 GOODPUT_NOTE])
+        self.saving_stage('sync', 0.25)  # synthetic
+        self.assertEqual(workshop.goodput_chart_lines(self.results)[1],
+                         '  ckpt-sync, synchronous saves      no completed run of stage sdpa')
+
+    def test_goodput_on_an_axis_from_0_to_1_with_no_throughput_bar(self):
+        self.add('sdpa')
+        self.saving_stage('sync', 0.25)  # synthetic goodput values
+        self.saving_stage('process', 0.5)
+        self.interrupt_stage(0.15)
+        lines = workshop.goodput_chart_lines(self.results)
+        self.assertEqual(lines[0], GOODPUT_TITLE)
+        self.assertEqual([line.split('  ')[1] for line in lines[1:4]],
+                         ['ckpt-sync, synchronous saves', 'ckpt-process, process-mode saves', 'interrupt, stop and resume'])
+        # 0.02 per cell: 1 is 50 cells, so 0.25, 0.5 and 0.15 are 12.5, 25 and 7.5 cells.
+        self.assertEqual([bar(line) for line in lines[1:4]], [('█' * 12 + '▌', '0.25'), ('█' * 25, '0.50'),
+                                                              ('█' * 7 + '▌', '0.15')])
+        self.assertEqual(len(columns(lines[1:4])), 1)
+        start = BAR.search(lines[1]).start()
+        self.assertEqual((lines[4].index('0'), lines[4].index('1')), (start, start + 49))
+        self.assertEqual(lines[5:], ['                                    one cell = 0.02', GOODPUT_NOTE])
+        self.assertFalse([line for line in lines if line.startswith('  sdpa') or 'GPU-hour' in line])
+        self.assert_narrow(lines)
+
+    def test_a_saving_run_of_other_work_per_update_has_no_bar(self):
+        self.add('sdpa')
+        self.saving_stage('sync', 0.25, targets=32752)  # synthetic
+        self.assertEqual(workshop.goodput_chart_lines(self.results)[1],
+                         '  ckpt-sync, synchronous saves      different work per update: targets_per_update')
+
+    def test_result_block_of_a_saving_stage_is_followed_by_the_goodput_chart(self):
+        self.add('sdpa')
+        stage, directory, run = self.saving_stage('sync', 0.4)  # synthetic
         lines = workshop.result_lines(stage, directory, run, self.results, 16)
-        chart = lines.index('Training goodput, M tokens per GPU-hour (higher is better)')
+        chart = lines.index(GOODPUT_TITLE)
         self.assertEqual(lines[0], 'ckpt-sync (efa, sdpa attention, sync saves after updates 5, 20, 40)')
-        self.assertIn('  goodput interval             88.25 s  (from the end of model loading to the end of the final flush)',
-                      lines[:chart])
+        self.assertEqual(lines[2:9], [
+            '  retained tokens              2,620,160 (updates 1-40, durable at the end)',
+            '  interval                     88.25 s, from after model loading, FSDP wrapping, optimizer',
+            '                               and checkpoint-manager construction to after the final flush,',
+            '                               the closing barriers of the timing windows and the two all-reduces',
+            '  retained progress rate       30,910 tokens/s (retained tokens / interval)',
+            '  fault-free rate              77,275 tokens/s (stage sdpa, which does not save)',
+            '  training goodput             0.40 (retained progress rate / fault-free rate)'])
         self.assertEqual(lines[chart - 1], '')
-        self.assertEqual([bar(lines[chart + 1])[1], lines[chart + 2], bar(lines[chart + 3])[1]],
-                         ['6.68', '  ckpt-process, process-mode saves        not run yet', '17.39'])
-        self.assertEqual(lines[chart + 4].strip(), 'one cell = 0.5 M tokens per GPU-hour')
+        self.assertEqual([bar(lines[chart + 1])[1], lines[chart + 2]],
+                         ['0.40', '  ckpt-process, process-mode saves  not run yet'])
+        self.assertEqual(lines[chart + 4].strip(), 'one cell = 0.02')
         self.assert_narrow(lines[chart:])
 
 
@@ -291,7 +325,7 @@ class ProgressionChartTests(SpainResults):
             chart = lines.index(CUMULATIVE_TITLE)
             self.assertLess(lines.index('(2) probe-efa-eager vs baseline: not compared, different workload'), chart)
             self.assertEqual(bar(lines[chart + 3])[1], '3.89x  (SDPA +1.60x)')
-            self.assertIn('Training goodput, M tokens per GPU-hour (higher is better)', lines[chart:])
+            self.assertIn(GOODPUT_TITLE, lines[chart:])
             self.assertEqual(lines[chart - 1], '```text' if markdown else '')
             self.assertEqual(lines[-1] == '```', markdown)
             self.assert_narrow(lines[chart:])

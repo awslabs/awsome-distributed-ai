@@ -25,7 +25,7 @@ def main():
         parser.error('nonempty Pushgateway URL and simple identifiers required')
     result = json.loads(args.result.read_text())
     values = observability_values(result)
-    kind = ('campaign' if result.get('metric') == 'Training goodput' else
+    kind = ('campaign' if result.get('metric') == 'Retained progress' else
             'serving' if result.get('metrics', {}).get('metric') == 'Serving goodput' else 'training_segment')
     if any(value is None or not math.isfinite(value) or value < 0 for value in values.values()):
         raise ValueError('nonfinite, missing or negative measurement')

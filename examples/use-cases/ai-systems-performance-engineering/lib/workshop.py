@@ -22,7 +22,7 @@ import urllib.parse
 import urllib.request
 
 import charts
-from llm_metrics import paired_training_report
+from llm_metrics import paired_training_report, training_goodput, update_work
 
 LAB = Path(__file__).resolve().parents[1]
 STATE = Path.home() / '.aim347'
@@ -707,9 +707,9 @@ def efa_pair(stage_dir):
     return ('EFA bytes during the run', efa_text(deltas))
 
 
-def timed_block(stage, stage_dir, summary, ceilings, world, efa_losses=None):
+def timed_block(stage, stage_dir, summary, ceilings, world, efa_losses=None, results=None):
     if stage['saving'] != 'none':
-        return checkpoint_block(stage, stage_dir, summary, world)
+        return checkpoint_block(stage, stage_dir, summary, world, results)
     seconds = summary['measured_seconds']
     tokens = summary['measured_useful_tokens']
     rate = summary['training_throughput_tokens_per_second']
@@ -746,16 +746,54 @@ def loss_comparison_lines(stage, stage_dir, reference_rows):
         ('difference', ' '.join(f'{a - b:+.6f}' for a, b in zip(these, eager)))])
 
 
-def checkpoint_block(stage, stage_dir, summary, world):
-    goodput = summary.get('training_goodput', {})
+# The intervals of the retained progress, as lib/train_llm.py (segment_seconds) and
+# 13.measure-recovery.py (elapsed) measure them.
+SAVING_INTERVAL = ('from after model loading, FSDP wrapping, optimizer',
+                   'and checkpoint-manager construction to after the final flush,',
+                   'the closing barriers of the timing windows and the two all-reduces')
+CAMPAIGN_INTERVAL = ('from just before the first launch to the exit of the',
+                     'resumed launch, with both launches and both model loads')
+
+
+def stage_goodput(results, record, progress):
+    """Training goodput of a saving stage (record: its summary.json) or of interrupt (its campaign.json).
+
+    The fault-free rate is the throughput of stage sdpa in the same results directory, which does
+    the same work per update without saves. Raises ValueError when there is none to divide by.
+    """
+    _, reference, problem = chart_stage(results, 'sdpa')
+    if problem:
+        raise ValueError('no completed run of stage sdpa')
+    work = update_work(record.get('workload', {}), progress['retained_progress_tokens'], record['completed_updates'])
+    return training_goodput(progress['retained_tokens_per_second'], work, reference)
+
+
+def goodput_pairs(record, progress, interval, results):
+    """The block lines from the retained tokens to the training goodput."""
+    if not progress or 'retained_tokens_per_second' not in progress:
+        return [('training goodput', 'not computed: no retained progress in the result file')]
+    pairs = [('retained tokens', f"{progress['retained_progress_tokens']:,} "
+                                 f"(updates 1-{record['completed_updates']}, durable at the end)"),
+             ('interval', f"{progress['elapsed_seconds']:.2f} s, {interval[0]}")]
+    pairs += [('', part) for part in interval[1:]]
+    pairs.append(('retained progress rate',
+                  f"{progress['retained_tokens_per_second']:,.0f} tokens/s (retained tokens / interval)"))
+    try:
+        goodput = stage_goodput(results, record, progress)
+    except ValueError as error:
+        return pairs + [('training goodput', f'not computed: {error}')]
+    return pairs + [('fault-free rate', f"{goodput['fault_free_tokens_per_second']:,.0f} tokens/s "
+                                        '(stage sdpa, which does not save)'),
+                    ('training goodput', f"{goodput['training_goodput']:.2f} "
+                                         '(retained progress rate / fault-free rate)')]
+
+
+def checkpoint_block(stage, stage_dir, summary, world, results):
     first = stage['warmup_updates'] + 1
     return [describe(stage)] + lines_for(
         [(f"timed updates {first}-{stage['updates']} with saves and final flush",
-          f"{summary['measured_seconds']:.2f} s  ({summary['measured_useful_tokens']:,} targets)"),
-         ('durable at the end', f"update {stage['updates']}, {goodput.get('retained_progress_tokens', 0):,} tokens"),
-         ('goodput interval', f"{summary['segment_seconds']:.2f} s  "
-                              '(from the end of model loading to the end of the final flush)'),
-         ('GPUs', str(summary['allocation']['gpu_count']))]
+          f"{summary['measured_seconds']:.2f} s  ({summary['measured_useful_tokens']:,} targets)")]
+        + goodput_pairs(summary, summary.get('retained_progress'), SAVING_INTERVAL, results)
         + nccl_pairs(stage, stage_dir, world) + [efa_pair(stage_dir)])
 
 
@@ -787,7 +825,7 @@ def upload_sentence(row, save_updates, stop):
     return f"the update-{newest} upload had finished (durable update {row['durable_update']})"
 
 
-def interrupt_block(stage, stage_dir, world):
+def interrupt_block(stage, stage_dir, world, results):
     campaign_dir = Path(stage_dir) / 'campaign'
     campaign = read_json(campaign_dir / 'campaign.json', {})
     interrupted = read_rows(campaign_dir / 'interrupted' / 'rank-0-updates.jsonl')
@@ -806,10 +844,7 @@ def interrupt_block(stage, stage_dir, world):
     lines.append(f"  resumed from update {restored}; first update after the resume: "
                  f"{resumed[0]['update'] if resumed else 'none'}")
     lines.append(f"  updates run twice: {restored + 1}-{stop} ({campaign.get('replayed_update_count')} updates)")
-    lines += pairs_lines([('goodput including the stop',
-                           f"{campaign['training_goodput_tokens_per_second']:,.0f} tokens/s, "
-                           f"{campaign['tokens_per_allocated_gpu_hour'] / 1e6:.2f} M tokens per GPU-hour  "
-                           '(first launch to the final durable save)')])
+    lines += lines_for(goodput_pairs(campaign, campaign, CAMPAIGN_INTERVAL, results))
     return lines + lines_for(nccl_pairs(stage, stage_dir, world) + [efa_pair(stage_dir)])
 
 
@@ -841,7 +876,7 @@ def result_lines(stage, stage_dir, run, results, world):
     if stage['kind'] == 'restore':
         lines = restore_block(stage, stage_dir, read_rows(Path(results) / 'ckpt-sync' / 'train' / 'rank-0-updates.jsonl'), world)
     elif stage['kind'] == 'interrupt':
-        lines = interrupt_block(stage, stage_dir, world)
+        lines = interrupt_block(stage, stage_dir, world, results)
     elif stage['kind'] == 'profile':
         lines = [describe(stage)] + lines_for(
             [('traces', f"{len(list((stage_dir / 'train').glob('trace-rank-*.json')))} files in {stage_dir / 'train'}"),
@@ -854,7 +889,7 @@ def result_lines(stage, stage_dir, run, results, world):
         else:
             efa_rows = (read_rows(Path(results) / 'efa' / 'train' / 'rank-0-updates.jsonl')
                         if stage['name'] == 'sdpa' else None)
-            lines = timed_block(stage, stage_dir, summary, read_ceilings(results), world, efa_rows)
+            lines = timed_block(stage, stage_dir, summary, read_ceilings(results), world, efa_rows, results)
             lines += stage_chart_lines(stage, results, world)
     for check in run.get('checks', []):
         if not check['ok']:
@@ -877,10 +912,13 @@ FULL_LENGTH = {('socket', 'eager'): 'baseline', ('socket', 'sdpa'): 'sdpa-socket
                ('efa', 'eager'): 'efa', ('efa', 'sdpa'): 'sdpa'}
 UPDATE_COMPARED_WITH = {'sdpa-socket': 'baseline', 'efa': 'baseline', 'sdpa': 'efa'}
 SAVING_STAGES = (('ckpt-sync', 'synchronous saves'), ('ckpt-process', 'process-mode saves'))
+GOODPUT_STAGES = SAVING_STAGES + (('interrupt', 'stop and resume'),)
 
 
-def chart_stage(results, name):
-    """(run, summary, None) for a stage that has a result, else (run or None, None, the reason)."""
+def chart_stage(results, name, record=('train', 'summary.json')):
+    """(run, record, None) for a stage that has a result, else (run or None, None, the reason).
+
+    The record is the stage's summary.json unless another path under the stage is given."""
     run = read_json(Path(results) / name / 'run.json')
     if not run:
         return None, None, 'not run yet'
@@ -888,9 +926,9 @@ def chart_stage(results, name):
         return run, None, 'still running'
     if run.get('exit_status') == 4:
         return run, None, 'failed, so it has no bar; run it again'
-    summary = read_json(Path(results) / name / 'train' / 'summary.json')
+    summary = read_json(Path(results, name, *record))
     if not summary:
-        return run, None, 'no summary.json'
+        return run, None, f'no {record[-1]}'
     return run, summary, None
 
 
@@ -971,27 +1009,37 @@ def memory_chart_lines(results, names):
     return charts.bar_chart('Peak memory of the largest rank', rows, 'GiB')
 
 
-def goodput_chart_lines(results):
-    """Training goodput of the two saving stages beside the throughput of stage sdpa, which does not save."""
-    rows = []
-    for name, saving in SAVING_STAGES:
-        run, summary, problem = chart_stage(results, name)
-        goodput = (summary or {}).get('training_goodput')
-        if problem or not goodput:
-            rows.append(dict(label=f'{name}, {saving}', value=None, note=problem or 'no goodput in summary.json'))
-            continue
-        value = goodput['tokens_per_allocated_gpu_hour'] / 1e6
-        rows.append(dict(label=f'{name}, {saving}', value=value, text=f'{value:.2f}{failed_check(run)}'))
-    run, summary, problem = chart_stage(results, 'sdpa')
-    label = 'sdpa, no saves (throughput, reference)'
+def retained_record(results, name):
+    """(run, record, retained progress, None) for a saving stage or interrupt, else (run, None, None, the reason)."""
+    interrupt = name == 'interrupt'
+    run, record, problem = chart_stage(results, name, ('campaign', 'campaign.json') if interrupt else ('train', 'summary.json'))
     if problem:
-        rows.append(dict(label=label, value=None, note=problem))
-    else:
-        value = summary['training_throughput_tokens_per_second'] * 3600 / summary['allocation']['gpu_count'] / 1e6
+        return run, None, None, problem
+    progress = record if interrupt else record.get('retained_progress')
+    if not progress or 'retained_tokens_per_second' not in progress:
+        return run, None, None, 'no retained progress in ' + ('campaign.json' if interrupt else 'summary.json')
+    return run, record, progress, None
+
+
+def goodput_chart_lines(results):
+    """Training goodput of the two saving stages and, once it has run, interrupt, on an axis from 0 to 1."""
+    rows = []
+    for name, what in GOODPUT_STAGES:
+        if name == 'interrupt' and not (Path(results) / name / 'run.json').is_file():
+            continue
+        label = f'{name}, {what}'
+        run, record, progress, problem = retained_record(results, name)
+        if not problem:
+            try:
+                value = stage_goodput(results, record, progress)['training_goodput']
+            except ValueError as error:
+                problem = str(error)
+        if problem:
+            rows.append(dict(label=label, value=None, note=problem))
+            continue
         rows.append(dict(label=label, value=value, text=f'{value:.2f}{failed_check(run)}'))
-    return charts.bar_chart('Training goodput, M tokens per GPU-hour (higher is better)', rows,
-                            'M tokens per GPU-hour', notes=[
-        'The reference is the throughput of the timed updates of stage sdpa, a run that does not save.'])
+    return charts.bar_chart('Training goodput, from 0 to 1 (higher is better)', rows, '', axis=1, notes=[
+        'Training goodput = (retained tokens / interval) / (tokens/s of stage sdpa, which does not save)'])
 
 
 def configuration_differences(first, second):

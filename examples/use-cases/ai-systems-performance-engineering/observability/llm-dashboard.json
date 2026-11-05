@@ -96,8 +96,8 @@
     },
     {
       "id": 2,
-      "title": "Training goodput: complete campaign",
-      "description": "Final durable progress divided by the complete retained-allocation campaign interval, including interruption, restore and replay. Replay is credited once.",
+      "title": "Retained progress rate: complete campaign",
+      "description": "Final durable progress tokens divided by the campaign interval, from just before the first launch to the exit of the resumed launch, including interruption, restore and replay. Replay is credited once. It is the numerator of training goodput, not the ratio.",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -112,7 +112,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "aim347_llm_training_goodput_campaign_tokens_per_second{run_id=~\"$run\"}",
+          "expr": "aim347_llm_campaign_retained_tokens_per_second{run_id=~\"$run\"}",
           "legendFormat": "{{config}}",
           "instant": true
         }
@@ -140,7 +140,7 @@
     },
     {
       "id": 3,
-      "title": "Training goodput: resumed segment",
+      "title": "Retained progress rate: resumed segment",
       "description": "Only the recorded process segment. Earlier failed execution and downtime are excluded.",
       "type": "stat",
       "datasource": {
@@ -156,7 +156,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "aim347_llm_training_goodput_segment_tokens_per_second{run_id=~\"$run\"}",
+          "expr": "aim347_llm_training_segment_retained_tokens_per_second{run_id=~\"$run\"}",
           "legendFormat": "{{config}}",
           "instant": true
         }
@@ -264,50 +264,6 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "min": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "none",
-        "graphMode": "none"
-      }
-    },
-    {
-      "id": 6,
-      "title": "Campaign tokens per allocated GPU-hour",
-      "description": "The campaign retains its GPUs for the full recorded interval. Preparation and initial allocation waiting before controller start are outside this value.",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "aim347-prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 14,
-        "w": 12,
-        "h": 7
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "aim347_llm_campaign_tokens_per_allocated_gpu_hour{run_id=~\"$run\"}",
-          "legendFormat": "{{config}}",
-          "instant": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "suffix:tokens/GPU-hour",
           "min": 0
         },
         "overrides": []
