@@ -196,7 +196,7 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(workshop.flop_per_token(1024), 10_872_238_080)
         self.assertAlmostEqual(workshop.gpu_seconds_per_million_tokens(BASELINE['seconds'], 262016, 16), 825.2, 1)
         self.assertAlmostEqual(workshop.gpu_seconds_per_million_tokens(EFA['seconds'], 262016, 16), 352.4, 1)
-        # MFU divides by the dense BF16 peak, 202.8 TFLOP/s per GPU; the share by the measured GEMM rate.
+        # MFU divides by the dense BF16 peak, 202.8 TFLOP/s per GPU; the share by your measured GEMM peak.
         self.assertEqual(round(100 * workshop.mfu(BASELINE['rate'], 2048, G7_GPU, 16), 1), 6.9)
         self.assertEqual(round(100 * workshop.mfu(EFA['rate'], 2048, G7_GPU, 16), 1), 16.1)
         self.assertEqual(round(100 * workshop.gemm_share(BASELINE['rate'], 2048, GEMM_PEAK, 16), 1), 8.1)
@@ -266,17 +266,17 @@ class DisplayTests(unittest.TestCase):
             '  GPU-seconds per 1M tokens    825',
             '  MFU                          6.9 %  (11.48 GFLOP per token, dense BF16 peak 202.8 TFLOP/s per GPU, '
             'estimated)',
-            '  share of your GEMM rate      8.1 %  (your GEMM rate 171.7 TFLOP/s per GPU)',
+            '  share of your GEMM peak      8.1 %  (your GEMM peak 171.7 TFLOP/s per GPU)',
             '  peak memory (largest rank)   26.68 GiB',
             '  NCCL network                 Socket on 16 of 16 ranks',
             '  EFA bytes during the run     gpu-node-1 +0 B sent, +0 B received; gpu-node-2 +0 B sent, +0 B received'])
         (self.results / 'ceilings/ceilings.json').unlink()
         # Without ceilings MFU still prints, because its peak comes from the table, not from a measurement.
         lines = workshop.timed_block(stage, directory, result, None, 16)
-        self.assertIn('  share of your GEMM rate      n/a (run bash tools/hold-and-measure.sh)', lines)
+        self.assertIn('  share of your GEMM peak      n/a (run bash tools/hold-and-measure.sh)', lines)
         self.assertIn('  MFU                          6.9 %  (11.48 GFLOP per token, dense BF16 peak 202.8 TFLOP/s '
                       'per GPU, estimated)', lines)
-        self.assertFalse([line for line in lines if 'GEMM peak' in line])
+        self.assertFalse([line for line in lines if 'MFU vs' in line])
 
     def test_efa_and_sdpa_blocks(self):
         efa = workshop.plan('efa', job('efa'))[0]
@@ -669,11 +669,11 @@ class ProgressionTests(unittest.TestCase):
             by_name = {row['_name']: row for row in table}
             self.assertEqual(by_name['efa']['vs baseline'], '2.34x')
             self.assertEqual(by_name['efa']['MFU'], '16.1 %')
-            self.assertEqual(by_name['efa']['Share of your GEMM rate'], '19.0 %')
+            self.assertEqual(by_name['efa']['Share of your GEMM peak'], '19.0 %')
             self.assertEqual(denominators, [
                 "MFU: the model's FLOP per second / (16 x the dense BF16 peak, 202.8 TFLOP/s per GPU for "
                 'NVIDIA RTX PRO 4500 Blackwell Server Edition, estimated from NVIDIA specifications)',
-                'Share of your GEMM rate: the same FLOP per second / (16 x your GEMM rate, 171.7 TFLOP/s per GPU)'])
+                'Share of your GEMM peak: the same FLOP per second / (16 x your GEMM peak, 171.7 TFLOP/s per GPU)'])
             self.assertEqual(by_name['baseline']['GPU-s per 1M tokens'], '825')
             self.assertEqual(by_name['efa']['vs previous step'], '2.34x')
             self.assertEqual(by_name['sdpa']['vs previous step'], f'{EFA["seconds"] / 4.0:.2f}x')
@@ -719,7 +719,7 @@ class ProgressionTests(unittest.TestCase):
             by_name = {row['_name']: row for row in tool.collect(results, notes)[1]}
             mark = by_name['efa']['MFU']
             self.assertEqual(notes.texts[int(mark.strip('()')) - 1], 'efa: MFU n/a, no dense peak for NVIDIA A10G')
-            self.assertEqual(by_name['efa']['Share of your GEMM rate'], '19.0 %')
+            self.assertEqual(by_name['efa']['Share of your GEMM peak'], '19.0 %')
 
 
 class AllocationTests(unittest.TestCase):

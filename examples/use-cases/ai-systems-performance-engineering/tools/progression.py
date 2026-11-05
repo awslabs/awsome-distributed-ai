@@ -19,7 +19,7 @@ import workshop  # noqa: E402
 from llm_metrics import paired_training_report  # noqa: E402
 
 COLUMNS = ('Stage', 'Transport', 'Attention', 'Saving', 'Work', 'Seconds', 'Tokens/s', 'GPU-s per 1M tokens',
-           'MFU', 'Share of your GEMM rate', 'Peak memory GiB', 'vs baseline', 'vs previous step', 'Goodput')
+           'MFU', 'Share of your GEMM peak', 'Peak memory GiB', 'vs baseline', 'vs previous step', 'Goodput')
 PREVIOUS = {'efa': 'baseline', 'sdpa': 'efa', 'sdpa-socket': 'baseline'}
 # Optional A: each try-<change> and its rerun follow the main path, compared with stage sdpa.
 TRY_ORDER = tuple(f'{prefix}-{change}' for change in workshop.TRY_CHANGES for prefix in ('try', 'rerun'))
@@ -75,14 +75,14 @@ def mfu_cell(summary, stage, world, notes, gpus):
 
 
 def denominator_lines(ceilings, gpus, world):
-    """The two denominators: of MFU, the dense BF16 peak; of the share, your measured GEMM rate."""
+    """The two denominators: of MFU, the dense BF16 peak; of the share, your measured GEMM peak."""
     lines = []
     for gpu in sorted(gpus):
         peak, estimated = workshop.dense_peak(gpu)
         lines.append(f'MFU: the model\'s FLOP per second / ({world} x the dense BF16 peak, {peak:g} TFLOP/s per GPU '
                      f"for {gpu}{', estimated from NVIDIA specifications' if estimated else ''})")
-    lines.append('Share of your GEMM rate: the same FLOP per second / '
-                 + (f"({world} x your GEMM rate, {ceilings['gemm_tflops_per_gpu']:.1f} TFLOP/s per GPU)" if ceilings
+    lines.append('Share of your GEMM peak: the same FLOP per second / '
+                 + (f"({world} x your GEMM peak, {ceilings['gemm_tflops_per_gpu']:.1f} TFLOP/s per GPU)" if ceilings
                     else 'n/a (run bash tools/hold-and-measure.sh)'))
     return lines
 
@@ -130,7 +130,7 @@ def collect(results, notes):
         row.update({'Seconds': f'{seconds:.2f}', 'Tokens/s': f'{rate:,.0f}',
                     'GPU-s per 1M tokens': f'{workshop.gpu_seconds_per_million_tokens(seconds, tokens, world):.0f}',
                     'MFU': mfu_cell(summary, stage, world, notes, gpus),
-                    'Share of your GEMM rate': (
+                    'Share of your GEMM peak': (
                         f"{100 * workshop.gemm_share(rate, stage['sequence_length'], ceilings['gemm_tflops_per_gpu'], world):.1f} %"
                         if ceilings else 'n/a'),
                     'Peak memory GiB': f'{workshop.peak_memory_gib(summary):.2f}'})

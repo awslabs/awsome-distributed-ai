@@ -295,10 +295,10 @@ class UpdateTimeChartTests(SpainResults):
         self.assertEqual(bar(lines[titles[3] + 3])[1], '3.89x  (SDPA +1.60x)')
         # The charts fit in 100 columns; the block's MFU line is longer, as its EFA bytes line can be.
         self.assert_narrow(lines[titles[1]:])
-        # MFU against the dense BF16 peak, and the share of the measured GEMM rate (fixture: 77,275 tokens/s).
+        # MFU against the dense BF16 peak, and the share of your measured GEMM peak (fixture: 77,275 tokens/s).
         self.assertIn('  MFU                          27.3 %  (11.48 GFLOP per token, dense BF16 peak 202.8 TFLOP/s '
                       'per GPU, estimated)', lines)
-        self.assertIn('  share of your GEMM rate      33.0 %  (your GEMM rate 167.9 TFLOP/s per GPU)', lines)
+        self.assertIn('  share of your GEMM peak      33.0 %  (your GEMM peak 167.9 TFLOP/s per GPU)', lines)
 
     def test_charts_follow_only_the_stages_they_belong_to(self):
         self.add('baseline', 'sdpa-socket', 'probe-efa-eager', 'efa')

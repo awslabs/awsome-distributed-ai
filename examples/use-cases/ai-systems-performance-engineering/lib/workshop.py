@@ -306,7 +306,7 @@ def mfu(tokens_per_second, sequence_length, gpu, gpus):
 
 
 def gemm_share(tokens_per_second, sequence_length, gemm_tflops_per_gpu, gpus):
-    """The model's FLOP per second over gpus x your measured GEMM rate. Not MFU."""
+    """The model's FLOP per second over gpus x your GEMM peak (measured with hold-and-measure.sh). Not MFU."""
     return flop_share(tokens_per_second, sequence_length, gemm_tflops_per_gpu, gpus)
 
 
@@ -325,12 +325,12 @@ def mfu_text(summary, sequence_length, world):
 
 
 def gemm_share_text(summary, sequence_length, ceilings, world):
-    """The value of the line that compares the model's FLOP rate with your measured GEMM rate."""
+    """The value of the line that compares the model's FLOP rate with your measured GEMM peak."""
     if not ceilings:
         return 'n/a (run bash tools/hold-and-measure.sh)'
     rate = ceilings['gemm_tflops_per_gpu']
     value = gemm_share(summary['training_throughput_tokens_per_second'], sequence_length, rate, world)
-    return f'{100 * value:.1f} %  (your GEMM rate {rate:.1f} TFLOP/s per GPU)'
+    return f'{100 * value:.1f} %  (your GEMM peak {rate:.1f} TFLOP/s per GPU)'
 
 
 def compute_only_seconds(targets, sequence_length, gemm_tflops_per_gpu, gpus):
@@ -788,7 +788,7 @@ def timed_block(stage, stage_dir, summary, ceilings, world, efa_losses=None, res
          ('tokens/s', f'{rate:,.0f}'),
          ('GPU-seconds per 1M tokens', f'{gpu_seconds_per_million_tokens(seconds, tokens, world):.0f}'),
          ('MFU', mfu_text(summary, stage['sequence_length'], world)),
-         ('share of your GEMM rate', gemm_share_text(summary, stage['sequence_length'], ceilings, world)),
+         ('share of your GEMM peak', gemm_share_text(summary, stage['sequence_length'], ceilings, world)),
          ('peak memory (largest rank)', f'{peak_memory_gib(summary):.2f} GiB')]
         + ([change_pair(stage, summary)] if stage.get('change') else [])
         + nccl_pairs(stage, stage_dir, world) + [efa_pair(stage_dir)])
