@@ -16,6 +16,110 @@ PROVIDER = 'NET/OFI Selected Provider is efa\n'
 HEADER = '# size count type redop root time algbw busbw #wrong time algbw busbw #wrong\n'
 
 
+class NvidiaXidTests(unittest.TestCase):
+    """Text-only Check 0 regressions, with all GPU/kernel commands mocked."""
+
+    def run_check(self, kernel_log):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'kernel.log').write_text(kernel_log)
+            commands = {
+                'nvidia-smi': '''case "$*" in
+*--query-gpu=gpu_name,*)
+    printf 'NVIDIA RTX PRO 4500, 00000000:57:00.0, 32768 MiB\\n%.0s' 1 2 3 4 5 6 7 8;;
+*--query-gpu=mig.mode.current*) printf 'Disabled\\n';;
+*--query-gpu=persistence_mode*) printf 'Enabled\\n';;
+*--query-gpu=index,serial,uuid*) printf '0, serial-test, GPU-test\\n';;
+*--query-gpu=index,ecc.errors*) printf '0, 0, 0, No, 0, 0\\n';;
+*) exit 91;;
+esac''',
+                'journalctl': 'exec /bin/cat "$TEST_KERNEL_LOG"',
+                'dmesg': 'exit 0',
+                'fuser': 'exit 1',
+                'lsof': 'exit 1',
+                'curl': 'exit 92',
+                'ec2-metadata': 'exit 92',
+            }
+            for name, body in commands.items():
+                executable = root / name
+                executable.write_text('#!/bin/sh\n' + body + '\n')
+                executable.chmod(0o755)
+            env = {k: v for k, v in os.environ.items()
+                   if not k.startswith(('SLURM_', 'NCCL_', 'EXPECTED_', 'INSTANCE_',
+                                        'HEALTHCHECK_', 'DRY_RUN', 'NVLINK_',
+                                        'STRICT_PSHC', 'NVIDIA_LOG_', 'KERNEL_LOG_'))}
+            env.update(PATH=f'{root}:/usr/bin:/bin', INSTANCE_TYPE='g7.48xlarge',
+                       TEST_KERNEL_LOG=str(root / 'kernel.log'),
+                       RESULTS_DIR=str(root / 'results'))
+            result = subprocess.run(['bash', str(SUITE / 'checks/0-nvidia-smi-check.sh')],
+                                    env=env, text=True, capture_output=True, timeout=20)
+            self.last_output = result.stdout + result.stderr
+            self.last_raw = (root / 'results/xid-errors.log').read_text()
+            report = json.loads((root / 'results/check-0-nvidia-smi.json').read_text())
+            return result.returncode, report
+
+    def test_xid154_uses_transition_destination(self):
+        line = ('NVRM: Xid (PCI:0000:57:00): 154, GPU recovery action changed '
+                'from 0x1 (GPU Reset Required) to 0x0 (None)\n')
+        rc, report = self.run_check(line)
+        self.assertEqual(rc, 0, self.last_output)
+        self.assertEqual((report['status'], report['severity']), ('WARN', 'MONITOR'))
+        self.assertNotIn('derived action -> RESET', self.last_output)
+        self.assertEqual(self.last_raw, line)
+
+    def test_xid154_reboot_to_reset_uses_reset(self):
+        line = ('NVRM: Xid (PCI:0000:57:00): 154, GPU recovery action changed '
+                'from 0x2 (Node Reboot Required) to 0x1 (GPU Reset Required)\n')
+        rc, report = self.run_check(line)
+        self.assertEqual((rc, report['severity']), (1, 'RESET'), self.last_output)
+        self.assertNotIn('derived action -> REBOOT', self.last_output)
+
+    def test_xid154_known_destinations_escalate(self):
+        for value, action, severity in [('0x2', 'Node Reboot Required', 'REBOOT'),
+                                        ('0x1', 'GPU Reset Required', 'RESET'),
+                                        ('0x4', 'Drain and Reset', 'RESET'),
+                                        ('0x3', 'Drain P2P', 'RESET')]:
+            with self.subTest(action=action):
+                line = ('NVRM: Xid (PCI:0000:57:00): 154, GPU recovery action '
+                        f'changed from 0x0 (None) to {value} ({action})\n')
+                rc, report = self.run_check(line)
+                self.assertEqual((rc, report['severity']), (1, severity), self.last_output)
+                self.assertEqual(self.last_raw, line)
+
+    def test_xid154_does_not_parse_other_codes_payload(self):
+        line = ('NVRM: Xid (PCI:0000:57:00): 154, GPU recovery action changed '
+                'from 0x0 (None) to 0x0 (None)\n'
+                'NVRM: Xid (PCI:0000:59:00): 13, pid=154, '
+                'GPU recovery action changed from 0x0 (None) '
+                'to 0x2 (Node Reboot Required)\n')
+        rc, report = self.run_check(line)
+        self.assertEqual((rc, report['status']), (0, 'WARN'), self.last_output)
+        self.assertNotIn('derived action -> REBOOT', self.last_output)
+        self.assertEqual(self.last_raw, line)
+
+    def test_xid154_clear_does_not_erase_required_events(self):
+        for required in [
+            'NVRM: Xid (PCI:0000:57:00): 154, GPU recovery action changed '
+            'from 0x0 (None) to 0x2 (Node Reboot Required)\n',
+            'NVRM: Xid (PCI:0000:59:00): 79, GPU has fallen off the bus\n',
+        ]:
+            with self.subTest(required=required):
+                line = required + (
+                    'NVRM: Xid (PCI:0000:57:00): 154, GPU recovery action changed '
+                    'from 0x2 (Node Reboot Required) to 0x0 (None)\n')
+                rc, report = self.run_check(line)
+                self.assertEqual((rc, report['severity']), (1, 'REBOOT'), self.last_output)
+                self.assertEqual(self.last_raw, line)
+
+    def test_xid154_unknown_destination_keeps_warning(self):
+        line = ('NVRM: Xid (PCI:0000:57:00): 154, GPU recovery action changed '
+                'from 0x1 (GPU Reset Required) to 0xf (Future action)\n')
+        rc, report = self.run_check(line)
+        self.assertEqual((rc, report['status'], report['severity']),
+                         (0, 'WARN', 'MONITOR'), self.last_output)
+        self.assertEqual(self.last_raw, line)
+
+
 class NcclResultTests(unittest.TestCase):
     def run_check(self, *, instance='g7.48xlarge', imds='g7.48xlarge',
                   dmi='', binary=None, local=False, isolation=False, exit_code=0,
