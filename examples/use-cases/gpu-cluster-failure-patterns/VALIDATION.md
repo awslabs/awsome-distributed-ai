@@ -4,7 +4,7 @@ This distribution summary preserves the scope of the measured results without de
 
 ## November 4, 2026: the assigned EFA count on both GPU nodes
 
-The health Prolog runs on both GPU nodes and reads the assigned EFA count only from `/etc/aim344-maintenance.json`, which `prepare-target.py` writes on the target alone. On a two-EFA g7e.48xlarge launch the peer therefore expected the G7e profile's four interfaces, failed Check 2 and kept the two-node job from starting. A g7.48xlarge pair is unaffected, because its profile count is two. This change (3579cf27) closes the gap. It is the companion that was installed on the g7.48xlarge pair in Europe (Spain) on November 4, and no participant step has run on it yet.
+The health Prolog runs on both GPU nodes and reads the assigned EFA count only from `/etc/aim344-maintenance.json`, which `prepare-target.py` writes on the target alone. On a two-EFA g7e.48xlarge launch the peer therefore expected the G7e profile's four interfaces, failed Check 2 and kept the two-node job from starting. A g7.48xlarge pair is unaffected, because its profile count is two. This change (3579cf27) closes the gap. It is the companion that was installed on the g7.48xlarge pair in Europe (Spain) on November 4, and the participant pass of November 5 ran on it.
 
 What changed:
 
@@ -26,12 +26,17 @@ What ran on the g7.48xlarge pair: the companion was installed on the login node 
 - As `ubuntu`, in a login shell that sourced the login profile, `sudo -n true` exited 0, and `sinfo`, `salloc`, `sbatch` and `srun` resolved to the cluster's Slurm client directory. `bash 12.device-exercise.sh status` printed `Exercise phase: ready`, `Node state: IDLE+CLOUD` and `Incidents issued: 0 of 5`, with exit 0.
 - `restore-runtime.sh` runs `install -d -m 0755` on the fixture's mount point before it tests for the mount, so the rerun of `prepare-compute.sh` on the mounted fixture set the fixture's root to mode 755, while the mount option stays `mode=700`. The line predates the November 4 changes. The verification job's fixture check needs only that the account can read and write the directory.
 
-In the records of November 4, no job ran on the pair after the installation.
+Measured on hardware, in one participant pass at this commit on November 5. As `ubuntu`, in shells that sourced the login profile, the pass followed pages 020 and 030 and Incidents 1 to 5 with their fixes and recoveries, and it ended with `9.cleanup.sh`. Every allocation was taken without `--time`, and every incident behaved as its page describes. The sections below say what the pass showed for each of their changes.
+
+- At the first two-node job, the peer's Prolog read the assigned count of 2 from the file this change wrote. It passed Check 2 with two PCI devices, two RDMA devices and two uverbs nodes, and it admitted the job.
+- Page 030's healthy run completed with 1,443 collectives and 0 mismatches in the training stand-in and 8 batches in the epoch job. The sweep reached 39.85 GB/s at 2 GiB in both columns, with bytes on both EFA devices of each node.
+- The first verification job failed before Check 5. It could not create its results directory in `/var/tmp/aim344-results`, which an earlier seat's verification job had created on both GPU nodes under that seat's participant account. With the directory moved aside, the job passed. Check 5 reached 39.64 GB/s at 128 MiB and 31.21 GB/s at 16 MiB with `#wrong` 0 at all 25 sizes, both EFA devices of both nodes moved bytes, and the storage step passed. On a cluster where only `ubuntu` has run the lab, the first verification job creates the directory as `ubuntu`. A cluster that ran an earlier seat under another account needs the directory moved aside before the first verification job.
+- In Incident 5, the fault was applied once, and `recover` rebooted the same instance in 4 min 40 s. After the reboot, the target's Prolog read the count of 2 and passed Checks 0 and 2. The verification job then passed with 38.28 GB/s at 128 MiB, 3.5% below the healthy run's 39.64 GB/s. In an earlier pass, the verification job after the same recovery read 39.59 GB/s. One run does not show whether the lower value comes from the first job after a reboot or from ordinary variation.
+- After the reboot, the fixture was mounted again with mode 700 and owned by `ubuntu`.
 
 Still to measure on hardware:
 
-- The peer's Prolog with the count set, at the first two-node job. Check 2 on the peer then requires exactly two interfaces in each of its views, as it already does on the target, and `journalctl -t aim344-prolog` on the peer holds its log.
-- The full participant pass as `ubuntu` at this commit. The four sections below list what it has to show for each change.
+- A two-EFA g7e.48xlarge peer, whose profile expects four interfaces, so that the written count decides whether Check 2 passes. The g7.48xlarge pair cannot show this, because its profile count is two as well.
 
 ## November 4, 2026: the health Prolog's dispatcher on a node-local stage
 
@@ -101,6 +106,8 @@ What ran on the g7.48xlarge pair, in the installation of the [first section](#no
 - `prepare-target.py` exited 0 on the target and wrote both target files for `ubuntu`, with `expected_efa_devices` 2 and the EFA device that the inventory reports. Root's `authorized_keys` already held the line it writes, so the file stayed unchanged, and the host key it printed matched the one the login node already knew.
 - The installed tree holds none of the removed scripts. The controller read its one-assignment configuration without `--assignment` and answered `--operator status` and the participant's `status`.
 
+In the participant pass of the first section, the controller issued the five incidents of its one assignment in the pages' order. Recovery of the device round passed Check 2, recorded Check 6's warning about the cumulative counters as MONITOR, and returned the node to service.
+
 Still to measure on hardware:
 
 - A device round that recovery cannot qualify, recorded as `replacement-required` with the node kept out of service, and an active-fault reboot that does not return within the window.
@@ -126,11 +133,16 @@ On a CPU-only host, at this commit's tree, `unittest` ran 1,046 tests, all OK, w
 
 What ran on the g7.48xlarge pair, in the installation of the [first section](#november-4-2026-the-assigned-efa-count-on-both-gpu-nodes): the node step for `ubuntu` mounted the fixture on both GPU nodes as a 32 MiB tmpfs owned by `ubuntu`, and the tmpfiles entry kept `/tmp/enroot` and its cache and data directories `root:root` with mode 1777. The installer for `ubuntu` exited 0 and did not change `ubuntu`'s `~/.bashrc`, and `status` as `ubuntu` went through `sudo -n` to the controller and printed the seat as ready.
 
-Still to measure on hardware, in the full participant pass as `ubuntu`:
+Measured on hardware, in the participant pass of the [first section](#november-4-2026-the-assigned-efa-count-on-both-gpu-nodes):
 
-- `bash job.sh run` with the verification job, and Incidents 1 to 5 with their recoveries, with the lab controls reached through `sudo -n` for `next`, `ended`, `collect` and `recover`.
-- `status` typed while the device incident's launcher asks `next`.
-- The fixture's owner after `recover`, the enroot directories after Incident 5's same-instance reboot, and `9.cleanup.sh` run as `ubuntu`.
+- The lab controls reached the controller through `sudo -n` for `next`, `ended`, `collect` and `recover` in every incident that uses them. After each job incident's fix run or resume, `status` said that the incident had ended, and the count reached `Incidents issued: 5 of 5`.
+- From the start of Incident 5 until 10 s after its fault was applied, terminal B ran `status` 282 times. No call got the busy reply, and every call exited 0. For 3.9 s, while the launcher's `next` was preparing the fault, 34 calls printed `Exercise phase: preparing` with `Next: Preparation did not finish; run recover to restore your node.` That line was written for a preparation that had stopped, and in this window it asks the participant to recover a node that the lab is about to fault. No page asks for `status` at that moment, and the pass sent no `recover` then.
+- After `recover`, the fixture was the 32 MiB tmpfs owned by `ubuntu`. After the same-instance reboot, `/tmp/enroot` and its cache and data directories were `root:root` with mode 1777, and the verification job created and removed its containers as `ubuntu`.
+- In Incident 4, Check 0 run as `ubuntu` from an allocation read the kernel log on both nodes through the account's `adm` group and found no Xid or SXid line, so its `[PASS]` rests on a read of the log.
+- `9.cleanup.sh` run as `ubuntu` exited 0 with nothing to remove, because each job had removed its own roots. The failed verification job of the first section kept its two container roots on the peer, as the job does when its result distribution fails. `9.cleanup.sh` removes the current allocation's roots and earlier torch roots only, so those two stayed.
+
+Still to measure on hardware:
+
 - The login profile line added to `~/.bashrc` as the preparation adds it, in a Session Manager shell and in the shell that `salloc` opens.
 
 ## November 3, 2026: allocations without a time limit
