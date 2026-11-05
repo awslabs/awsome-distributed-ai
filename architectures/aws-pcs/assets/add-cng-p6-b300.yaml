@@ -83,7 +83,10 @@ Parameters:
       (Optional) Existing cluster placement group name to launch nodes into —
       e.g. to share one placement group across CNGs, or to consume a targeted
       ODCR held in a customer-owned cluster placement group. Leave EMPTY to
-      auto-create a per-CNG placement group. Ignored when
+      auto-create a per-CNG placement group. Also accepts a placement group ID
+      (pg-...), which is required for a group shared from another account; a
+      value starting with "pg-" is treated as an ID. Use the name or ID, not
+      the ARN (e.g. the PlacementGroupArn of a capacity reservation). Ignored when
       CapacityReservationType='capacity-block' and CapacityReservationId is
       set (a Capacity Block carries its own placement).
     Default: ''
@@ -296,6 +299,11 @@ Conditions:
     - !Condition HasCapacityReservation
     - !Equals [!Ref CapacityReservationType, 'capacity-block']
   HasUserPlacementGroup: !Not [!Equals [!Ref PlacementGroupName, ""]]
+  # A value starting with "pg-" is a placement group ID (required for a group
+  # shared from another account); anything else is a name.
+  UserPlacementGroupIsId: !And
+    - !Condition HasUserPlacementGroup
+    - !Equals [!Select [0, !Split ["pg-", !Ref PlacementGroupName]], ""]
   # Placement applies on every non-CB path: the user-supplied PG when given,
   # otherwise an auto-created per-CNG one.
   UsePlacementGroup: !Not [!Condition UseCapacityBlock]
@@ -484,12 +492,16 @@ Resources:
           - CapacityReservationTarget:
               CapacityReservationId: !Ref CapacityReservationId
           - !Ref AWS::NoValue
+        # A "pg-" value is set as GroupId; otherwise the user or auto-created name.
         Placement: !If
           - UsePlacementGroup
-          - GroupName: !If
-              - HasUserPlacementGroup
-              - !Ref PlacementGroupName
-              - !Ref PlacementGroup
+          - !If
+            - UserPlacementGroupIsId
+            - GroupId: !Ref PlacementGroupName
+            - GroupName: !If
+                - HasUserPlacementGroup
+                - !Ref PlacementGroupName
+                - !Ref PlacementGroup
           - !Ref AWS::NoValue
         TagSpecifications:
           - ResourceType: instance

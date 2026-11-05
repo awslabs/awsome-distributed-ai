@@ -66,7 +66,7 @@ See [GPU compute](../README.md#gpu-compute-p5p6) for instance/EFA/capacity guida
 | `PseriesMaxCount` | `4` | GPU queue maximum nodes |
 | `CapacityReservationId` | *(empty)* | Capacity reservation ID for the GPU queue — a Capacity **Block** or a **targeted ODCR**, per `CapacityReservationType`. Leave empty for On-Demand; an "open" ODCR is consumed automatically and must not be listed here. For a targeted ODCR keep `PseriesMaxCount` ≤ the reservation's instance count — a direct ODCR target does not backfill with On-Demand, so launches beyond the reservation fail |
 | `CapacityReservationType` | `capacity-block` | How `CapacityReservationId` is consumed: `capacity-block` (sets `MarketType=capacity-block`; the reservation's own placement is used) or `targeted-odcr` (On-Demand billing against the reservation; keeps the cluster placement group). Ignored when the ID is empty |
-| `PseriesPlacementGroupName` | *(empty)* | Existing cluster placement group for the GPU queue — e.g. to consume a targeted ODCR held in a customer-owned CPG. Empty auto-creates a per-CNG placement group. Ignored on the Capacity Block path |
+| `PseriesPlacementGroupName` | *(empty)* | Existing cluster placement group for the GPU queue — e.g. to consume a targeted ODCR held in a customer-owned CPG. Empty auto-creates a per-CNG placement group. Also accepts a placement group ID (`pg-…`), required for a group shared from another account; a value starting with `pg-` is treated as an ID. Ignored on the Capacity Block path |
 | `PseriesCngName` | `gpu-p5` | GPU node-group name |
 | `PseriesQueueName` | `gpu-p5` | GPU Slurm queue name |
 

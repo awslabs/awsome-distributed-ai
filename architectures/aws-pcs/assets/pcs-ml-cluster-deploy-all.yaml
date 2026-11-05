@@ -155,7 +155,7 @@ Metadata:
       OnDemandCapacityReservationId:
         default: "Targeted ODCR ID for the CPU queue (leave empty for On-Demand / open ODCR)"
       PseriesPlacementGroupName:
-        default: "Existing placement group for the GPU queue (leave empty to auto-create)"
+        default: "Existing placement group name or ID for the GPU queue (leave empty to auto-create)"
       PseriesCngName:
         default: "GPU node group name"
       PseriesQueueName:
@@ -530,7 +530,8 @@ Parameters:
       multiple CPU CNGs, or a customer-owned CPG holding reserved capacity —
       honored with or without EFA, so a CPG-held targeted ODCR is consumable).
       Also accepts a placement group ID (pg-...), required for a group shared
-      from another account. The GPU queue's equivalent is
+      from another account. Use the name or ID, not the ARN (e.g. the
+      PlacementGroupArn of a capacity reservation). The GPU queue's equivalent is
       PseriesPlacementGroupName.
     Default: ''
 
@@ -620,8 +621,10 @@ Parameters:
       (Optional) Existing cluster placement group name for the GPU node group —
       e.g. to consume a targeted ODCR held in a customer-owned cluster
       placement group. Leave EMPTY to auto-create a per-CNG placement group.
-      Ignored on the Capacity Block path (a Capacity Block carries its own
-      placement).
+      Also accepts a placement group ID (pg-...), required for a group shared
+      from another account. Use the name or ID, not the ARN (e.g. the
+      PlacementGroupArn of a capacity reservation). Ignored on the Capacity
+      Block path (a Capacity Block carries its own placement).
 
   RootVolumeSize:
     Type: Number
