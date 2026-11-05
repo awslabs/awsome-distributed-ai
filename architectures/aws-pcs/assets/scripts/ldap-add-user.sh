@@ -115,6 +115,10 @@ EOF
 
 echo "$LDIF" | ldapadd -x -H ldap://localhost -D "${LDAP_ADMIN_DN}" -w "${LDAP_ADMIN_PASSWORD}" 2>&1
 
+# The getent pre-checks cached "no such user" in SSSD (15 s); clear it so the
+# new user resolves on this node right away.
+sss_cache -E || true
+
 # Set a random initial password (user should change via ldappasswd)
 INITIAL_PW=$(openssl rand -base64 12)
 ldappasswd -x -H ldap://localhost -D "${LDAP_ADMIN_DN}" -w "${LDAP_ADMIN_PASSWORD}" \
