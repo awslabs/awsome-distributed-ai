@@ -16,7 +16,7 @@
 #
 # IMPORTANT — single login node only when DirectoryService=OpenLDAP-LoginNode:
 #   The OpenLDAP server runs on THE login node and its DB lives on shared
-#   /home (OpenZFS). This design assumes exactly ONE login node (server). Do
+#   /home (FSx for OpenZFS or EFS). This design assumes exactly ONE login node (server). Do
 #   NOT scale the login node group above MinCount=MaxCount=1 with the directory
 #   enabled: multiple login nodes would each tag themselves directory-role=server
 #   (clients would pick an arbitrary one) and each run a slapd against the same
@@ -173,7 +173,7 @@ EOF
     echo "[directory-server] Configuring LDAP DB on shared storage (${LDAP_DB_DIR})..."
     systemctl stop slapd || true
 
-    # Move DB to shared OpenZFS (/home) if not already there
+    # Move DB to shared /home (OpenZFS or EFS) if not already there
     if [ ! -d "${LDAP_DB_DIR}" ]; then
         mkdir -p "${LDAP_DB_DIR}"
         if [ -d /var/lib/ldap ] && [ "$(ls -A /var/lib/ldap 2>/dev/null)" ]; then

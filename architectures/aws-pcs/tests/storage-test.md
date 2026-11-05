@@ -1,46 +1,64 @@
 # Storage Tests (Test 10)
 
-Validates FSx for Lustre + OpenZFS health, mount options, and performance
-regression/improvement testing.
+Validates shared-storage health (`/home` on FSx for OpenZFS or Amazon EFS, optional
+FSx for Lustre `/fsx`), mount options, and performance regression/improvement testing.
 
 ---
 
-## Test 10: FSx storage health
+## Test 10: Shared storage health
 
-Validates that both shared filesystems (Lustre on `/fsx`, OpenZFS on `/home`)
-mount cleanly on every node, are usable, and that the FSx-side configuration
-matches what the template asked for. Most of this is exercised implicitly by
+Validates that the shared filesystems (`/home` on OpenZFS or EFS, Lustre on
+`/fsx` when `DeployFSxLustre=true`) mount cleanly on every node, are usable, and
+that the filesystem-side configuration matches what the template asked for. Most of this is exercised implicitly by
 Tests 1–9 (the Enroot/Pyxis install, monitoring stack, OSU / FSDP all touch
 `/fsx`); this test is the explicit health check to run after a fresh deploy
-or after touching `ml-cluster-prerequisites.yaml` / FSx-related parameters.
+or after touching `ml-cluster-prerequisites.yaml` / storage parameters. Run it once
+per storage combination you change: the default (OpenZFS + Lustre),
+`HomeStorageType=EFS`, and `DeployFSxLustre=false`.
 
-### Step 1 — both filesystems mounted on every node
+### Step 1 — filesystems mounted on every node
 
 On the login node and at least one compute node (via `srun`):
 
 ```bash
 mount | grep -E ' /home | /fsx '
-df -h /home /fsx
+df -h /home
+mountpoint /fsx && df -h /fsx
+```
+
+On a compute node, run the same commands through Slurm:
+
+```bash
+srun -p cpu1 -N1 bash -c "mount | grep -E ' /home | /fsx '; df -h /home; mountpoint /fsx && df -h /fsx"
 ```
 
 Expected:
 
-- `/fsx` mounted as type `lustre`, source `<fs-id>.fsx.<region>.amazonaws.com@tcp:/<mountname>`,
+- `/fsx` mounted as type `lustre`, source `<ip>@tcp:/<mountname>` (`mount` shows the
+  filesystem's DNS name resolved to an IP),
   size matches the `Capacity` parameter (1200 GiB default; 19200 GiB or larger
   when `FSxLustreEnableEfa=true`).
 - `/home` mounted as type `nfs` over OpenZFS, NFS options include
   `nconnect=16,rsize=1048576,wsize=1048576` (the `mount-openzfs-home.sh`
   lifecycle-action mount string).
-- Both `df -h` reports show `Avail` greater than zero.
+- With `HomeStorageType=EFS`: `/home` mounted as type `nfs4`, source
+  `<fs-id>.efs.<region>.amazonaws.com:/`, options include `vers=4.1`,
+  `rsize=1048576,wsize=1048576`, `hard`, `noresvport` (the `mount-efs-home.sh`
+  mount string); `df -h` shows EFS's nominal 8.0E size.
+- With `DeployFSxLustre=false`: no `/fsx` line, and `mountpoint` prints
+  `mountpoint: /fsx: No such file or directory` (or `/fsx is not a mountpoint` on an
+  AMI that ships an empty `/fsx` directory).
+- Every `df -h` report shows `Avail` greater than zero.
 
 If a mount is missing on a new node's first boot, check the per-script
 lifecycle logs `/var/log/amazon/pcs/lifecycle/actions/nodeBootstrapped/mount-openzfs-home.log`
-and `mount-lustre-fsx.log` (root-readable). A first-boot mount failure TERMINATES
+(or `mount-efs-home.log`) and `mount-lustre-fsx.log` (root-readable). A first-boot mount failure TERMINATES
 and replaces the node, so also check the CNG's recent instance churn. The most
-common first-boot failure is the OpenZFS DNS name not being resolvable yet
-(NFS settle race); the mount log will show `mount.nfs: Failed to resolve server`.
+common first-boot failure is the OpenZFS or EFS DNS name not being resolvable yet
+(NFS settle race); the mount log will show `mount.nfs: Failed to resolve server`
+(`mount.nfs4` for EFS).
 
-On subsequent boots, OpenZFS is restored from `/etc/fstab` by systemd, not by
+On subsequent boots, `/home` (OpenZFS or EFS) is restored from `/etc/fstab` by systemd, not by
 the lifecycle action. Replaying the NFSv3 mount during early cloud-init can
 wait for rpc-statd, which waits for network-online.target, which in turn waits
 for cloud-init. `slurmd.service` therefore requires and starts after
@@ -59,29 +77,37 @@ The offline regression in `test_home_boot.py` is not this runtime validation.
 
 ### Step 2 — read/write sanity
 
-```bash
-# /fsx (Lustre): write 1 GiB, read it back
-dd if=/dev/zero of=/fsx/.healthcheck bs=1M count=1024 conv=fsync 2>&1 | tail -1
-dd if=/fsx/.healthcheck of=/dev/null bs=1M 2>&1 | tail -1
-rm /fsx/.healthcheck
+On the login node, as `ubuntu`:
 
-# /home (OpenZFS / NFS): same, 100 MiB (it's a small home filesystem)
+```bash
+# /fsx (Lustre, when deployed): write 1 GiB, read it back
+if mountpoint -q /fsx; then
+  dd if=/dev/zero of=/fsx/.healthcheck bs=1M count=1024 conv=fsync 2>&1 | tail -1
+  dd if=/fsx/.healthcheck of=/dev/null bs=1M 2>&1 | tail -1
+  rm /fsx/.healthcheck
+fi
+
+# /home (OpenZFS or EFS, NFS): 100 MiB
 dd if=/dev/zero of=/home/ubuntu/.healthcheck bs=1M count=100 conv=fsync 2>&1 | tail -1
 dd if=/home/ubuntu/.healthcheck of=/dev/null bs=1M 2>&1 | tail -1
 rm /home/ubuntu/.healthcheck
 ```
 
-Expected: both write+read complete without error. Throughput is bounded by the
+Expected: every write+read pair that runs (`/home` always, `/fsx` when mounted)
+completes without error. Throughput is bounded by the
 single-stream limits of NFS / Lustre on a single node — this is a sanity check,
 not a benchmark. For Lustre throughput numbers, see the FSx Lustre User Guide
 (provisioned throughput = `Capacity * PerUnitStorageThroughput / 1024` MB/s).
 
-### Step 3 — FSx-side parameters match the CFN inputs
+### Step 3 — filesystem-side parameters match the CFN inputs
+
+Run from a workstation with the AWS CLI; `<your-stack>` is the deploy-all stack.
+For FSx for Lustre (`DeployFSxLustre=true`):
 
 ```bash
 FSX_ID=$(aws cloudformation describe-stacks \
   --stack-name <your-stack> \
-  --query 'Stacks[0].Outputs[?OutputKey==`FSxLustreFilesystemId`].OutputValue' \
+  --query 'Stacks[0].Outputs[?OutputKey==`FSxLustreId`].OutputValue' \
   --region <region> --output text)
 
 aws fsx describe-file-systems --file-system-ids "$FSX_ID" --region <region> \
@@ -96,24 +122,44 @@ Expected (default deploy):
 - `DeploymentType` = `PERSISTENT_2` (default; or `PERSISTENT_1` if you set it)
 - `PerUnitStorageThroughput` = 250 (default)
 - `DataCompressionType` = `LZ4` (default)
-- `EfaEnabled` = `False` (default; `True` when `FSxLustreEnableEfa=true`. EFA on
+- `EfaEnabled` = `None` (default — the property is unset; `True` when `FSxLustreEnableEfa=true`. EFA on
   FSx is a PERSISTENT_2-only feature — the prerequisites and deploy-all templates
   enforce this with a CFN Rule that fails the stack at create time when
   `FSxLustreEnableEfa=true` is combined with `LustreDeploymentType=PERSISTENT_1`)
 - `MetadataConfiguration.Mode` = `AUTOMATIC` on PERSISTENT_2
 
-For the OpenZFS `/home` filesystem:
+For the OpenZFS `/home` filesystem (`HomeStorageType=FSxOpenZFS`):
 
 ```bash
 FSXO_ID=$(aws cloudformation describe-stacks \
   --stack-name <your-stack> \
-  --query 'Stacks[0].Outputs[?OutputKey==`FSxOFilesystemId`].OutputValue' \
+  --query 'Stacks[0].Outputs[?OutputKey==`FSxOpenZFSId`].OutputValue' \
   --region <region> --output text)
 
 aws fsx describe-file-systems --file-system-ids "$FSXO_ID" --region <region> \
   --query 'FileSystems[0].[StorageCapacity,OpenZFSConfiguration.[DeploymentType,ThroughputCapacity]]' \
   --output text
 ```
+
+Expected (default deploy): `512`, then `SINGLE_AZ_HA_2  320`.
+
+For the EFS `/home` filesystem (`HomeStorageType=EFS`):
+
+```bash
+EFS_ID=$(aws cloudformation describe-stacks \
+  --stack-name <your-stack> \
+  --query 'Stacks[0].Outputs[?OutputKey==`EFSHomeId`].OutputValue' \
+  --region <region> --output text)
+
+aws efs describe-file-systems --file-system-id "$EFS_ID" --region <region> \
+  --query 'FileSystems[0].[ThroughputMode,PerformanceMode,Encrypted,NumberOfMountTargets]' \
+  --output text
+aws efs describe-backup-policy --file-system-id "$EFS_ID" --region <region> \
+  --query 'BackupPolicy.Status' --output text
+```
+
+Expected: `elastic  generalPurpose  True  1` (one mount target per private subnet —
+`2`/`3` with `AdditionalSubnetAZ2`/`AdditionalSubnetAZ3`), then `ENABLED`.
 
 ### Step 4 — Storage dashboard in Grafana
 
@@ -127,6 +173,10 @@ dashboard, and verify the `/fsx` panels (Throughput, IOPS, Free Capacity,
 Client Connections) populate within ~5 minutes of a workload starting. CW
 metrics have a ~5 min publishing delay, so a brand-new filesystem with no I/O
 shows blank panels for a while; the `dd` from Step 2 is enough to seed values.
+
+With `DeployFSxLustre=false` the `/fsx` panels stay empty. With `HomeStorageType=EFS`,
+`/home` appears in the dashboard's EFS panels instead (the CloudWatch Exporter also
+collects the `AWS/EFS` metrics).
 
 ### `FSxLustreEnableEfa=true` specifics
 
@@ -149,6 +199,8 @@ deployed with `OnDemandEfaInterfaceCount > 0`, P5/P6 GPU CNGs). Plain Lustre cli
 mounts continue to work over TCP for non-EFA nodes; EFA support is additive.
 
 ### Performance regression criteria
+
+Lustre only — not applicable when `DeployFSxLustre=false`.
 
 For changes that touch mount options or FSx parameters, re-run the throughput
 benchmark documented in

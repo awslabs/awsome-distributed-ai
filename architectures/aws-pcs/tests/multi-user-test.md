@@ -27,7 +27,7 @@ ls -la /home/ldap-db/
 ```
 
 Expected: MDB data files (`data.mdb`, `lock.mdb`) owned by `openldap:openldap`.
-This location (shared OpenZFS `/home`) means the DB survives login node
+This location (shared `/home`, OpenZFS or EFS) means the DB survives login node
 replacement.
 
 ### A3. Base DN searchable

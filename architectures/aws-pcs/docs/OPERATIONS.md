@@ -214,7 +214,7 @@ can. Empty (the default) means SSM port-forward only, which is the safest path f
 production. `0.0.0.0/0` is accepted for short-lived PoC/workshop use; narrow it (or
 clear it) when you're done.
 
-## 4. FSx storage: deployment type vs. throughput coupling
+## 4. Shared storage: deployment type vs. throughput coupling
 
 Lustre `PerUnitStorageThroughput` and OpenZFS `HomeThroughput` allowed values **depend
 on the deployment type**:
@@ -227,7 +227,9 @@ on the deployment type**:
 | OpenZFS | `SINGLE_AZ_HA_1` / `SINGLE_AZ_1` | 64 / 128 / 256 / 512 / 1024 / 2048 / 3072 / 4096 MB/s |
 
 The templates enforce the valid pair via CloudFormation `Rules` so a mismatch fails at
-stack-create time with a clear message instead of deep in the nested FSx stack. If you
+stack-create time with a clear message instead of deep in the nested FSx stack. A Rule
+only checks a filesystem the stack creates (`HomeStorageType=EFS` skips the OpenZFS
+pair, `DeployFSxLustre=false` the Lustre pair). If you
 change `LustreDeploymentType` or `OpenZFSDeploymentType`, also pick a throughput valid
 for the new type. The defaults (250 / 320) target `PERSISTENT_2` / `SINGLE_AZ_HA_2`;
 override both throughput parameters when falling back to the older deployment types.
@@ -265,7 +267,7 @@ for atime writes grows.
 depends on when a file was last read; if you need access-time auditing, switch
 to `relatime` (the kernel default, which updates atime at most once per day).
 
-**Why not fstab?** The `/home` (OpenZFS/NFS) mount uses fstab because NFS
+**Why not fstab?** The `/home` mount (OpenZFS or EFS, both NFS) uses fstab because NFS
 with `_netdev` reliably waits for network readiness. Lustre requires not just
 network but the `lustre` kernel module and LNet initialization to be complete;
 fstab + `_netdev` alone doesn't guarantee this ordering. Mounting explicitly
@@ -415,6 +417,44 @@ For TCP-based LNet (non-EFA filesystems), also raise socket buffer limits:
 sudo sysctl -w net.core.rmem_max=16777216
 sudo sysctl -w net.core.wmem_max=16777216
 ```
+
+### 4.6 Amazon EFS `/home` (`HomeStorageType=EFS`)
+
+- **Mount.** The `mount-efs-home` lifecycle action mounts EFS with the kernel NFSv4.1
+  client and the options EFS recommends
+  (`nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport`),
+  so `amazon-efs-utils` is not needed. Traffic is not TLS-encrypted in transit (it
+  stays inside the VPC); data is encrypted at rest. Reboots restore the mount from
+  fstab, like OpenZFS.
+- **Mount targets.** The EFS DNS name resolves to the mount target in the client's
+  Availability Zone. The prerequisites template creates one in every private subnet
+  (primary, plus `AdditionalSubnetAZ2` / `AdditionalSubnetAZ3` when set); the public
+  subnet shares the primary AZ. A node group placed in any other AZ cannot mount `/home`.
+- **Performance.** Elastic throughput scales with load, but each small-file or metadata
+  operation pays a higher per-operation latency than on FSx for OpenZFS. Keep
+  Python/conda environments small, or build them on node-local disk or `/fsx`.
+- **Cost.** Elastic throughput bills each GB of data and metadata read or written,
+  in addition to the GB stored
+  ([Metering Elastic throughput](https://docs.aws.amazon.com/efs/latest/ug/metered-sizes.html)).
+  Repeatedly reading datasets or writing checkpoints on an EFS `/home` is where this
+  charge shows up; keep heavy I/O on `/fsx` when it is deployed.
+- **Backups.** EFS automatic backups (AWS Backup, daily, 35-day retention) are enabled.
+  Recovery points live in the `aws/efs/automatic-backup-vault` vault and are **not**
+  deleted with the stack — delete them in AWS Backup if you no longer need them.
+- **Switching filesystems.** `HomeStorageType` and `DeployFSxLustre` select which
+  filesystem resources exist, so changing them on an existing stack deletes the old
+  filesystem. To move `/home` between OpenZFS and EFS, deploy a new cluster and copy the
+  data across (for example `rsync` from a node that mounts both).
+
+### 4.7 Modular deploys: which filesystem IDs a node group takes
+
+The compute node group templates take the filesystem IDs directly. `/home` comes from
+exactly one of `FSxOpenZFSFilesystemId` or `EFSHomeFilesystemId` (a template Rule
+rejects both or neither); `/fsx` is mounted only when `FSxLustreFilesystemId` is set.
+Pass the IDs the prerequisites stack outputs — it only outputs the filesystems it
+created (`FSxOFilesystemId` and its alias `FSxOpenZFSFilesystemId`, `EFSHomeFilesystemId`,
+`FSxLustreFilesystemId`). The deploy-all stack surfaces the same IDs as `FSxOpenZFSId`,
+`EFSHomeId`, and `FSxLustreId`, each only when that filesystem exists.
 
 ---
 
@@ -572,5 +612,5 @@ unbounded replace loop that drains the cluster to zero.
 | **Standalone `add-cng*.yaml` now default `InstallEnrootPyxis=true`** | Deploying a compute node group directly from `add-cng.yaml` / `add-cng-p5.yaml` / `add-cng-p6-b200.yaml` / `add-cng-p6-b300.yaml` (rather than through deploy-all, which already defaulted to `true`) now installs Enroot/Pyxis at first boot unless you set `InstallEnrootPyxis=false`. A stack that relied on the earlier standalone default of `false` gains the first-boot install on its next update; set the parameter explicitly to keep the old behavior. |
 | The AMI must carry **PCS agent >= 1.5.0-1** | PCS-Ready DLAMI builds since 2026-07-20 qualify ([PCS-READY-DLAMI.md](./PCS-READY-DLAMI.md)); the default SSM `latest` resolution always does. Re-base pinned or custom AMIs built off an older base before updating. |
 | Boot logs moved to `/var/log/amazon/pcs/lifecycle/actions/<stage>/<name>.log` (root-readable) | Update runbooks that read `/var/log/pcs-post-install.log`, `monitoring-install.log`, or `directory-setup.log`. The agent's own download/orchestration log is `.../actions/executor.log`. |
-| A failed `/home` or `/fsx` mount now **terminates and replaces the node** | Previously the node stayed in service without shared storage. An FSx-side problem now shows up as node churn — check the mount script's lifecycle log (local to the instance) and the CNG's instance history. A *fleet-wide* mount failure leaves **no surviving node** to read logs from; to debug that case, temporarily set the mount action's `OnError: STOP_SEQUENCE` to keep a failed instance for inspection, or add the AWS-maintained `configure-cloudwatch-logs.sh` lifecycle action to ship the log directory off-instance. |
+| A failed `/home` or `/fsx` mount now **terminates and replaces the node** | Previously the node stayed in service without shared storage. A filesystem-side (FSx/EFS) problem now shows up as node churn — check the mount script's lifecycle log (local to the instance) and the CNG's instance history. A *fleet-wide* mount failure leaves **no surviving node** to read logs from; to debug that case, temporarily set the mount action's `OnError: STOP_SEQUENCE` to keep a failed instance for inspection, or add the AWS-maintained `configure-cloudwatch-logs.sh` lifecycle action to ship the log directory off-instance. |
 | Custom-script argument contract | The Enroot/Pyxis installer receives the cluster's `SlurmVersion` as its first argument (`PCS_SLURM_VERSION` env still honored on the custom-AMI build path). |

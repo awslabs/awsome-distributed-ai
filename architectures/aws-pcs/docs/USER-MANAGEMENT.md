@@ -126,7 +126,7 @@ The `ldap-add-user.sh` helper takes `<username> <uid> <gid>
 bottom of the LDAP UID range. For subsequent users pick 10002, 10003,
 etc.; the helper refuses a duplicate `uidNumber` or username, so a
 collision fails loudly instead of silently sharing a POSIX principal on
-the shared `/home` + `/fsx`.
+the shared `/home` (and `/fsx`, when deployed).
 
 Get the user's SSH public key. If they don't have one yet, they can
 generate a keypair on their own workstation:
@@ -231,7 +231,7 @@ ssh pcs-login
 ```
 
 Either way, on first login `pam_mkhomedir` creates `/home/alice` from
-`/etc/skel`. The home directory lives on shared OpenZFS and is visible
+`/etc/skel`. The home directory lives on the shared `/home` filesystem and is visible
 from every compute node.
 
 ### 2.4 Verify on a compute node — as the user
@@ -284,7 +284,7 @@ Same `ldap-add-user.sh` invocation as in [§2.2](#22-add-your-first-user).
 Pick the next unused `uidNumber`; [§3.2 List users](#32-list-users) shows
 what's already in use. The script refuses a `uidNumber` or username that
 already exists — two users sharing a UID would collapse into the same
-POSIX principal on the shared `/home` and `/fsx`.
+POSIX principal on the shared `/home` (and `/fsx`, when deployed).
 
 ```bash
 sudo /usr/local/bin/ldap-add-user.sh <username> <uid> 3000 "<ssh-pub-key>"
@@ -578,7 +578,7 @@ setup. Terminate the node; PCS replaces it with a new one that has SSSD.
 ## 6. How it works
 
 - **`slapd` runs on the login node**, DB on shared `/home/ldap-db/`
-  (OpenZFS NFS) so it survives login-node restart or replacement.
+  (OpenZFS or EFS, over NFS) so it survives login-node restart or replacement.
 - **Every node runs SSSD** (server-side on login, client on compute) and
   caches LDAP replies. `sudo sss_cache -E` refreshes.
 - **Compute nodes discover the login IP by EC2 tag** at first boot,
@@ -613,8 +613,8 @@ srun -N <n> -n <n> bash -c 'sudo sed -i "s#ldap_uri = .*#ldap_uri = ldap://<new-
 
 | Data | Location | Survives node replacement? | Survives stack delete? |
 |---|---|---|---|
-| LDAP database | `/home/ldap-db/` (OpenZFS) | ✅ | ❌ (FSx deleted) |
-| Home directories | `/home/<user>/` (OpenZFS) | ✅ | ❌ (FSx deleted) |
+| LDAP database | `/home/ldap-db/` (shared `/home`) | ✅ | ❌ (filesystem deleted) |
+| Home directories | `/home/<user>/` (shared `/home`) | ✅ | ❌ (filesystem deleted) |
 | Admin password | SSM Parameter Store | ✅ | ✅ |
 
 ### Back up

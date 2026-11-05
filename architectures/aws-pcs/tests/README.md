@@ -23,7 +23,7 @@ LDAP users).
 | 4-6 | **Compute** | CPU queue, GPU families (G/P5/P6), NCCL multi-node EFA | [`compute-test.md`](./compute-test.md) | Every PR |
 | 7, 7b | **Training** | FSDP Llama-2 7B (HF-streamed) + Megatron-LM GPT-3 (TP/PP/DP, local data) | [`training-test.md`](./training-test.md) | GPU PRs |
 | 9 | **HPC EFA** | EFA on CPU instances (hpc6a/hpc7a/hpc8a), OSU benchmarks | [`hpc-efa-test.md`](./hpc-efa-test.md) | EFA wiring changes |
-| 10 | **Storage** | FSx health check + performance regression test (noatime benchmark) | [`storage-test.md`](./storage-test.md) | FSx / mount changes |
+| 10 | **Storage** | Shared-storage health (OpenZFS or EFS `/home`, optional Lustre `/fsx`) + performance regression test (noatime benchmark) | [`storage-test.md`](./storage-test.md) | Storage parameter / mount changes |
 | 11-12 | **Multi-user** | OpenLDAP directory + Slurm managed accounting | [`multi-user-test.md`](./multi-user-test.md) | Directory / accounting changes |
 | 13 | **GPU health** | GPU Cluster Health Check suite (DCGM, EFA, NVLink, NCCL thresholds) | [`gpu-healthcheck-test.md`](./gpu-healthcheck-test.md) | GPU CNG deploys |
 | 14 | **IAM** | cluster-admin deploys+deletes (no `iam:CreatePolicy`); cluster-user is SSM-login-only and can't read the LDAP password | [`iam-test.md`](./iam-test.md) | IAM policy changes |
@@ -35,12 +35,14 @@ LDAP users).
 ## Offline home bootstrap regression
 
 Run `python3 tests/test_home_boot.py -v` from `architectures/aws-pcs/` before
-changing the home mount script or lifecycle policy. Requires Python 3,
+changing a home mount script (`mount-openzfs-home.sh`, `mount-efs-home.sh`)
+or lifecycle policy; every case runs once per script. Requires Python 3,
 PyYAML, rsync, systemd-fstab-generator and systemd-analyze (Ubuntu 24.04).
 The test uses sandbox paths and command doubles, real rsync, and real offline
 systemd unit loading. It checks first-boot copy/permissions and fatal mount
-failure, all four lifecycle policies, the modeled NFSv3 rpc-statd wait cycle,
-and the required home mount (including a missing-unit negative control).
+failure, all four lifecycle policies, the modeled NFSv3 rpc-statd wait cycle
+(OpenZFS only; EFS mounts NFSv4.1), and the required home mount (including a
+missing-unit negative control).
 It does not mount NFS, start services, or verify a PCS reboot end to end.
 
 ## Quick-start: single-cluster shortcut
@@ -128,7 +130,9 @@ together, so they are reported as one column.
 
 ³ **Storage** — FSx Lustre `/fsx` and FSx OpenZFS `/home` created & mounted,
 with the deployment type that worked (Lustre on the first line of each cell,
-OpenZFS on the second). Deployment-type support varies by region — check the
+OpenZFS on the second). The table covers the default storage; `HomeStorageType=EFS`
+and `DeployFSxLustre=false` were verified in us-east-2 with
+[Test 10](./storage-test.md). Deployment-type support varies by region — check the
 official per-region tables before deploying:
 [FSx for Lustre deployment types](https://docs.aws.amazon.com/fsx/latest/LustreGuide/using-fsx-lustre.html)
 and [FSx for OpenZFS availability by Region](https://docs.aws.amazon.com/fsx/latest/OpenZFSGuide/available-aws-regions.html).
@@ -190,7 +194,7 @@ aws cloudformation delete-stack --stack-name <stack-name>
 aws cloudformation wait stack-delete-complete --stack-name <stack-name>
 ```
 
-Nested stacks (and FSx) are deleted automatically — back up FSx data first.
+Nested stacks (and the FSx/EFS filesystems) are deleted automatically — back up `/home` and `/fsx` data first.
 
 If DELETE_FAILED on CNG stacks (PCS timing dependency), delete PCS CNGs first:
 

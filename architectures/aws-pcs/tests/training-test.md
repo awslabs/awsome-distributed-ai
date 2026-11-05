@@ -11,7 +11,8 @@ A short FSDP Llama-2 7B run, using the repo's canonical training case
 [`examples/training/fsdp`](../../../examples/training/fsdp) and its
 [`slurm/llama2_7b-training.sbatch`](../../../examples/training/fsdp/slurm/llama2_7b-training.sbatch).
 Follow that case's README; the only PCS-specific deltas are where things live on the
-shared filesystems and the node count:
+shared filesystems and the node count. Requires `/fsx` (`DeployFSxLustre=true`, the
+default):
 
 1. **Build the venv on shared `/fsx`** so every compute node sees it (the canonical
    `slurm/create_venv.sh` creates `./env` in place — run it from a `/fsx` checkout):
