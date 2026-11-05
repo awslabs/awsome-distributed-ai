@@ -176,6 +176,15 @@ class Grammar(unittest.TestCase):
 
 
 class ScheduleValidation(unittest.TestCase):
+    def test_application_step_must_follow_checkpoint_200(self):
+        for step in (1, 200):
+            with self.subTest(step=step), self.assertRaises(session.Refusal):
+                session.validate_schedule([{'exercise': 'cuda-assert',
+                    'settings': {'assert_rank': 0, 'assert_step': step}}])
+        self.assertEqual(201, session.validate_schedule([{'exercise': 'cuda-assert',
+            'settings': {'assert_rank': 0, 'assert_step': 201}}])[0]['settings']['assert_step'])
+
+
     def test_the_recommended_schedule_is_accepted(self):
         checked = session.validate_schedule(SCHEDULE)
         self.assertEqual(['storage', 'dataloader', 'silent-corruption', 'efa-reset'],
@@ -189,7 +198,33 @@ class ScheduleValidation(unittest.TestCase):
             with self.subTest(name=name):
                 # The launcher needs the rank whose answer differs.
                 settings = {'corrupt_rank': 0} if name == 'silent-corruption' else {}
+                if name == 'cuda-assert':
+                    settings = {'assert_rank': 0}
                 session.validate_schedule([{'exercise': name, 'settings': settings}])
+
+    def test_the_application_incident_takes_a_rank_and_a_step(self):
+        self.assertIn('cuda-assert', session.JOB_EXERCISES)
+        self.assertIn('cuda-assert', session.APPLICATION_EXERCISES)
+        self.assertNotIn('cuda-assert', session.DEVICE_EXERCISES)
+        accepted = [{'exercise': 'cuda-assert', 'settings': {'assert_rank': 15, 'assert_step': 201}},
+                    {'exercise': 'cuda-assert', 'settings': {'assert_rank': 0}}]
+        self.assertEqual(accepted, session.validate_schedule(accepted, world_size=16))
+        refused = {
+            'no rank': ({'exercise': 'cuda-assert', 'settings': {'assert_step': 201}},
+                        'needs the setting assert_rank'),
+            'rank past the job': ({'exercise': 'cuda-assert', 'settings': {'assert_rank': 16}},
+                                  'from 0 to 15'),
+            'rank as text': ({'exercise': 'cuda-assert', 'settings': {'assert_rank': '3'}}, 'a rank'),
+            'step 0': ({'exercise': 'cuda-assert', 'settings': {'assert_rank': 1, 'assert_step': 0}},
+                       'from 1 to 4095'),
+            'another setting': ({'exercise': 'cuda-assert',
+                                 'settings': {'assert_rank': 1, 'corrupt_bit': 3}},
+                                'it takes assert_rank, assert_step'),
+        }
+        for name, (entry, expected) in refused.items():
+            with self.subTest(case=name):
+                with self.assertRaisesRegex(session.Refusal, re.escape(expected)):
+                    session.validate_schedule([entry], world_size=16)
 
     def test_unusable_schedules_are_refused(self):
         cases = {
@@ -1196,6 +1231,23 @@ class CounterWarningRecordedAsMonitor(WarnRefusalAndOperatorReplacement):
                          handler._monitored_counters('6', self.RETRANS + self.PASS_6))
 
 
+class InstallerWorldSize(unittest.TestCase):
+    def test_config_writer_preserves_explicit_world_size(self):
+        import pwd
+        source = INSTALLER.read_text().split("<<'PY'", 2)[2].split('\nPY\n', 1)[0]
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp) / 'config.json'
+            who = pwd.getpwuid(os.getuid()).pw_name
+            argv = ['-', str(config), 'seat-test', who, 'node-a', 'i-0123456789abcdef0',
+                    'node-a', temp, '/opt/slurm/bin', '/opt/suite/check.sh', str(HELPER)]
+            env = dict(os.environ, AIM344_PARTITION='test', AIM344_WORLD_SIZE='8')
+            env.pop('AIM344_CHECKED_SCHEDULE', None)
+            result = subprocess.run([sys.executable, '-B', '-c', source, *argv[1:]],
+                                    env=env, text=True, capture_output=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(8, json.loads(config.read_text())['assignments']['seat-test']['world_size'])
+
+
 class FiveIncidentSeat(QuizBase):
     """The event schedule: slow job, storage, DataLoader, silent corruption, device."""
 
@@ -1229,11 +1281,11 @@ class FiveIncidentSeat(QuizBase):
         self.assertIn('Answer for incident 5: the lab controller reset one EFA device',
                       session.render(self.make().status(), 'status'))
 
-    def test_the_installer_and_readme_examples_list_the_five_in_the_pages_order(self):
+    def test_the_installer_and_readme_examples_list_six_in_the_pages_order(self):
         def example(text, start):
             block = text[text.index(start):]
             return re.findall(r'"exercise": "([a-z-]+)"', block[:block.index(']') + 1])
-        order = ['slow-job', 'storage', 'dataloader', 'silent-corruption', 'efa-reset']
+        order = ['slow-job', 'storage', 'dataloader', 'silent-corruption', 'cuda-assert', 'efa-reset']
         installer = INSTALLER.read_text()
         self.assertEqual(order, example(installer, '#   [{"exercise"'))
         readme = (LAB / 'README.md').read_text()
@@ -1486,6 +1538,65 @@ class InstallerSchedule(unittest.TestCase):
     def assignment(self):
         return json.loads(self.config.read_text())['assignments']['table-1']
 
+    def test_existing_world_size_validates_new_and_inherited_schedules(self):
+        for world_size, rank, valid in [(8, 3, True), (8, 9, False), (32, 20, True)]:
+            with self.subTest(world_size=world_size, rank=rank):
+                initial = {'state_dir': str(self.state_dir), 'assignments': {
+                    'table-1': {'world_size': world_size}}}
+                self.config.write_text(json.dumps(initial))
+                entries = [{'exercise': 'cuda-assert', 'settings': {'assert_rank': rank}}]
+                with mock.patch.dict(os.environ):
+                    os.environ.pop('AIM344_WORLD_SIZE', None)
+                    checked = self.check(self.schedule_file(entries))
+                    saved = self.configure(json.dumps(entries))
+                self.assertEqual(valid, checked.returncode == 0, checked.stderr)
+                self.assertEqual(valid, saved.returncode == 0, saved.stderr)
+                if valid:
+                    self.assertEqual(world_size, self.assignment()['world_size'])
+        # Changing only world size must also validate the inherited rank settings.
+        self.config.write_text(json.dumps({'state_dir': str(self.state_dir), 'assignments': {
+            'table-1': {'world_size': 16, 'exercise_schedule': [
+                {'exercise': 'storage', 'settings': {'writer_rank': 9}}]}}}))
+        before = self.config.read_bytes()
+        with mock.patch.dict(os.environ, AIM344_WORLD_SIZE='8'):
+            checked = self.check('')
+            saved = self.configure()
+        self.assertNotEqual(0, checked.returncode)
+        self.assertNotEqual(0, saved.returncode)
+        self.assertEqual(before, self.config.read_bytes())
+
+    def test_supplied_null_refuses_without_resetting_existing_records(self):
+        self.assertEqual(0, self.install(self.schedule_file(SCHEDULE)).returncode)
+        self.write_state(phase='runtime-ready', round=3)
+        progress = self.state_dir / 'schedule-table-1.json'
+        progress.write_text('{"issued": [{"issue_id": "keep-this-record"}]}')
+        paths = [self.config, progress, self.state_dir / 'table-1.json']
+        before = {p.name: p.read_bytes() for p in paths}
+        checked = self.check(self.schedule_file(None))
+        configured = self.configure('null')
+        for stage, result in [('precheck', checked), ('configure', configured)]:
+            with self.subTest(stage=stage):
+                self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertEqual(before, {p.name: p.read_bytes() for p in paths if p.exists()})
+        self.assertFalse(list(self.state_dir.glob('*.before-reset.json')))
+
+    def test_refused_world_size_preserves_config_progress_and_round(self):
+        self.assertEqual(0, self.configure().returncode)
+        self.write_state(phase='runtime-ready', round=3)
+        progress = self.state_dir / 'schedule-table-1.json'
+        progress.write_text('{"issued": [{"issue_id": "keep-this-record"}]}')
+        before = {p.name: p.read_bytes() for p in [self.config, progress,
+                                                   self.state_dir / 'table-1.json']}
+        entries = [{'exercise': 'cuda-assert', 'settings': {'assert_rank': 0}}]
+        with mock.patch.dict(os.environ, AIM344_WORLD_SIZE='3'):
+            for input_file in (str(self.schedule_file(entries)), ''):
+                self.assertNotEqual(0, self.check(input_file).returncode)
+            self.assertNotEqual(0, self.configure(json.dumps(entries)).returncode)
+        after = {p.name: p.read_bytes() for p in [self.config, progress,
+                                                  self.state_dir / 'table-1.json'] if p.exists()}
+        self.assertEqual(before, after)
+        self.assertFalse(list(self.state_dir.glob('*.before-reset.json')))
+
     def test_the_schedule_is_checked_and_copied_and_the_record_reset(self):
         progress = self.state_dir / 'schedule-table-1.json'
         progress.write_text('{"issued": []}')
@@ -1594,6 +1705,617 @@ class InstallerSchedule(unittest.TestCase):
         self.assertEqual(incident, json.loads(kept.read_text())['incident'])
         self.assertEqual(0, stat.S_IMODE(kept.stat().st_mode) & 0o077)
         self.assertIn('continues from round 3', done.stdout)
+
+
+class ApplicationIncidentBase(QuizBase):
+    """A seat whose first incident is the application assertion, then storage.
+
+    The target node gpu-g7-1 is the first of the allocation's two hosts, so with
+    the default 16-rank job its ranks are 0-7. Nothing here applies a fault: the
+    controller only records the running allocation, hands over the profile, and
+    reads evidence.
+    """
+
+    APPLICATION = [{'exercise': 'cuda-assert', 'settings': {'assert_rank': 3, 'assert_step': 201}},
+                   {'exercise': 'storage', 'settings': {'writer_rank': 9}}]
+    GPU_HEADER = 'index, uuid, pci.bus_id, gpu_recovery_action'
+
+    def setUp(self):
+        super().setUp()
+        self.set_schedule(session.validate_schedule(self.APPLICATION))
+        self.hosts = ['gpu-g7-1', 'gpu-g7-2']
+        self.job_start = '2026-11-05T12:10:00'
+        self.job_state = 'RUNNING'
+        self.allocated_gpus = 8
+        self.live_steps = []
+        # The read-only recovery query fixture, varied per test.
+        self.rows = self.gpu_rows()
+        self.route_rc = 0            # the maintenance route's own exit status
+        self.query_rc = 0            # nvidia-smi's exit status inside the record
+        self.process_rc = 0
+        self.process_stdout = 'gpu_uuid, pid, process_name\n'
+        self.record_instance = None  # None: the fake target's identity
+        self.record_boot = None      # None: the fake target's current boot
+        self.record_stdout = None    # None: the rows above as CSV
+        self.record_text = None      # None: a JSON record; else raw stdout
+        real_slurm = self.executor.run_slurm
+        real_maintenance = self.executor.run_maintenance
+
+        def run_slurm(argv, timeout=None):
+            if Path(argv[0]).name == 'squeue' and '--steps' in argv:
+                self.executor.slurm_calls.append(list(argv))
+                return session.Completed(0, '\n'.join(self.live_steps), '')
+            if Path(argv[0]).name == 'scontrol' and argv[1:3] == ['show', 'job']:
+                self.executor.slurm_calls.append(list(argv))
+                nodelist = ','.join(self.hosts)
+                return session.Completed(0, (
+                    f'JobId={argv[-1]} JobName=aim344-device UserId=aim344-t1(1001) '
+                    f'JobState={self.job_state} StartTime={self.job_start} '
+                    f'NodeList={nodelist} NumNodes={len(self.hosts)} '
+                    f'TresPerNode=gres/gpu:{self.allocated_gpus}\n'), '')
+            if Path(argv[0]).name == 'scontrol' and argv[1:3] == ['show', 'hostnames']:
+                self.executor.slurm_calls.append(list(argv))
+                return session.Completed(0, ''.join(h + '\n' for h in self.hosts), '')
+            return real_slurm(argv, timeout)
+
+        def run_maintenance(argv, timeout=None):
+            if argv[0] == 'gpu-recovery':
+                self.executor.maintenance_calls.append(list(argv))
+                return session.Completed(self.route_rc, self.recovery_text(), '')
+            return real_maintenance(argv, timeout)
+        self.executor.run_slurm = run_slurm
+        self.executor.run_maintenance = run_maintenance
+
+    def gpu_rows(self, count=8, action='None'):
+        rows = []
+        for index in range(count):
+            uuid = (self.executor.inspect['gpu_uuid'] if index == 0
+                    else f'GPU-{index:08d}-0000-0000-0000-000000000000')
+            bus = '00000000:BA:00.0' if index == 0 else f'00000000:5{index}:00.0'
+            rows.append((str(index), uuid, bus, action))
+        return rows
+
+    def recovery_text(self):
+        if self.record_text is not None:
+            return self.record_text
+        stdout = self.record_stdout
+        if stdout is None:
+            stdout = self.GPU_HEADER + '\n' + ''.join(', '.join(row) + '\n' for row in self.rows)
+        return json.dumps({
+            'action': 'gpu-recovery',
+            'instance_id': self.record_instance or self.executor.inspect['instance_id'],
+            'boot_id': self.record_boot or self.executor.boot_id,
+            'observed_at': 1000.5,
+            'query': 'nvidia-smi --query-gpu=index,uuid,pci.bus_id,gpu_recovery_action --format=csv',
+            'returncode': self.query_rc,
+            'process_returncode': self.process_rc,
+            'process_stdout': self.process_stdout,
+            'process_stderr': '',
+            'stdout': stdout,
+            'stderr': '' if self.query_rc == 0 else 'NVIDIA-SMI has failed\n',
+        }, sort_keys=True) + '\n'
+
+    def running_allocation(self, job='226'):
+        self.executor.jobs = [f'{job}|aim344-t1|aim344-device|RUNNING']
+
+    def issue(self):
+        self.running_allocation()
+        return self.make().next()
+
+    def incident_dir(self, number=1):
+        return self.answers / 'collected' / f'incident-{number}-{self.issue_id(number)}'
+
+    def mutations(self):
+        """Every call that could change the node: scheduler updates and reboots,
+        and every maintenance action other than the read-only ones."""
+        updates = [c for c in self.executor.slurm_calls
+                   if Path(c[0]).name == 'scontrol' and c[1] in ('update', 'reboot')]
+        read_only = {'boot-id', 'instance-id', 'inspect', 'collect', 'kernel-evidence',
+                     'gpu-recovery'}
+        return updates + [c for c in self.executor.maintenance_calls if c[0] not in read_only]
+
+
+class ApplicationIncidentGrammar(unittest.TestCase):
+    def test_collect_recovery_and_resume_parse(self):
+        request = session.parse_participant_request('collect recovery')
+        self.assertEqual(('collect', 'recovery'), (request.verb, request.argument))
+        issue = 'a' * 32
+        request = session.parse_participant_request(f'resume {issue}')
+        self.assertEqual(('resume', issue), (request.verb, request.argument))
+        for text in ('resume', 'resume 2', f'resume {issue} {issue}', 'resume ' + 'A' * 32,
+                     'collect recovery 0', 'collect Recovery', 'collect recover'):
+            with self.subTest(text=text):
+                self.assertIsNotNone(session.parse_participant_request(text).error)
+
+
+class ApplicationIncidentNext(ApplicationIncidentBase):
+    def test_allocated_gpu_count_must_match_configured_world_size(self):
+        self.running_allocation()
+        self.allocated_gpus = 4
+        with self.assertRaises(session.Refusal):
+            self.make().next()
+        self.config_body['assignments']['table-1']['world_size'] = 8
+        self.write_config()
+        result = self.make().next()
+        self.assertEqual(4, self.progress_record()['issued'][0]['job']['gpus_per_node'])
+
+    def test_undelivered_profile_does_not_cross_allocation(self):
+        self.running_allocation()
+        handler = self.make()
+        with mock.patch.object(handler, '_write_participant_file',
+                               side_effect=session.Refusal('write failed')):
+            with self.assertRaises(session.Refusal):
+                handler.next()
+        self.running_allocation('227')
+        with self.assertRaisesRegex(session.Refusal, 'allocation'):
+            self.make().next()
+        self.assertIsNone(self.progress_record()['issued'][0]['profile'])
+
+
+    def test_next_needs_the_running_allocation_and_records_it_before_the_profile(self):
+        with self.assertRaisesRegex(session.Refusal, 'allocation'):
+            self.make().next()
+        self.assertEqual([], self.progress_record().get('issued', [])
+                         if (self.state_dir / 'schedule-table-1.json').exists() else [])
+        self.assertFalse(list(self.answers.rglob('incident-*.json')))
+        result = self.issue()
+        self.assertEqual(1, result.incident)
+        self.assertFalse(result.under_way)
+        profile = json.loads(Path(result.saved_path).read_text())
+        self.assertEqual({'incident': 1, 'incidents': 2, 'exercise': 'cuda-assert',
+                          'settings': {'assert_rank': 3, 'assert_step': 201},
+                          'controller_step': 'none', 'issued_at': 1000.0,
+                          'issue_id': self.issue_id(1)}, profile)
+        entry = self.progress_record()['issued'][0]
+        self.assertEqual({'id': '226', 'target_node': 'gpu-g7-1',
+                          'target_instance_id': 'i-0123456789abcdef0',
+                          'boot_id': 'aaaaaaaa-0000-0000-0000-000000000001',
+                          'job_started_at': 1793880600, 'hosts': ['gpu-g7-1', 'gpu-g7-2'],
+                          'gpus_per_node': 8, 'ranks': [0, 7]}, entry['job'])
+        self.assertEqual(1000.0, entry['issued_at'])
+        actions = [c[0] for c in self.executor.maintenance_calls]
+        self.assertEqual(sorted(['boot-id', 'instance-id']), sorted(actions))
+        self.assertEqual([], self.mutations())
+        rendered = session.render(result, 'next')
+        self.assertIn('Incident 1 is ready.', rendered)
+        self.assert_no_kind(rendered)
+        self.assertNotIn('assert', rendered)
+
+    def test_a_pending_or_foreign_allocation_is_refused(self):
+        for jobs in (['226|aim344-t1|aim344-device|PENDING'],
+                     ['301|someone-else|aim344-x|RUNNING'],
+                     ['226|aim344-t1|other-job|RUNNING']):
+            with self.subTest(jobs=jobs):
+                self.executor.jobs = jobs
+                with self.assertRaises(session.Refusal):
+                    self.make().next()
+        self.assertFalse((self.state_dir / 'schedule-table-1.json').exists())
+
+    def test_the_rank_must_run_on_the_target_node(self):
+        """Rank r runs on hosts[r // (world_size / hosts)], hosts in Slurm's order."""
+        self.set_schedule(session.validate_schedule(
+            [{'exercise': 'cuda-assert', 'settings': {'assert_rank': 9}}]))
+        self.running_allocation()
+        with self.assertRaisesRegex(session.Refusal, 'not on your exercise node'):
+            self.make().next()
+        self.assertFalse((self.state_dir / 'schedule-table-1.json').exists())
+        # The target second in the allocation holds ranks 8-15.
+        self.hosts = ['gpu-g7-2', 'gpu-g7-1']
+        result = self.make().next()
+        self.assertEqual(1, result.incident)
+        self.assertEqual([8, 15], self.progress_record()['issued'][0]['job']['ranks'])
+        # A larger configured world size widens each node's share.
+        (self.state_dir / 'schedule-table-1.json').unlink()
+        self.hosts = ['gpu-g7-1', 'gpu-g7-2']
+        self.config_body['assignments']['table-1']['world_size'] = 32
+        self.allocated_gpus = 16
+        self.write_config()
+        self.make().next()
+        self.assertEqual([0, 15], self.progress_record()['issued'][0]['job']['ranks'])
+
+    def test_an_allocation_the_mapping_cannot_place_is_refused(self):
+        self.running_allocation()
+        for hosts in (['gpu-g7-2', 'gpu-g7-3'], ['gpu-g7-1'], ['gpu-g7-1', 'gpu-g7-2', 'gpu-g7-3']):
+            with self.subTest(hosts=hosts):
+                self.hosts = hosts
+                with self.assertRaises(session.Refusal):
+                    self.make().next()
+        self.config_body['assignments']['table-1']['world_size'] = 15
+        self.write_config()
+        self.hosts = ['gpu-g7-1', 'gpu-g7-2']
+        with self.assertRaises(session.Refusal):
+            self.make().next()
+        self.assertFalse((self.state_dir / 'schedule-table-1.json').exists())
+
+    def test_a_changed_identity_or_unusable_boot_is_refused(self):
+        self.running_allocation()
+        self.executor.inspect['instance_id'] = 'i-0fedcba9876543210'
+        with self.assertRaisesRegex(session.Refusal, 'identity'):
+            self.make().next()
+        self.executor.inspect['instance_id'] = 'i-0123456789abcdef0'
+        self.executor.boot_id = ''
+        with self.assertRaises(session.Refusal):
+            self.make().next()
+        self.assertFalse((self.state_dir / 'schedule-table-1.json').exists())
+
+    def test_next_waits_until_the_incident_has_ended(self):
+        self.issue()
+        with self.assertRaisesRegex(session.Refusal, 'Incident 1 is under way'):
+            self.make().next()
+        self.assertEqual(1, len(self.progress_record()['issued']))
+        self.make().ended(self.issue_id(1))
+        following = self.make().next()
+        self.assertEqual(2, following.incident)
+        self.assertEqual('storage', json.loads(Path(following.saved_path).read_text())['exercise'])
+        self.assertEqual([], self.mutations())
+
+    def test_status_tells_collect_then_resume_and_later_next(self):
+        self.assertIn('Next: Your node is in service. Start the next incident',
+                      session.render(self.make().status(), 'status'))
+        self.issue()
+        rendered = session.render(self.make().status(), 'status')
+        self.assertIn('Exercise phase: ready', rendered)
+        self.assertIn('Incident: 1', rendered)
+        self.assertIn('Incidents issued: 1 of 2', rendered)
+        self.assertIn('Checks you can collect: 0, 2, 3, 6, kernel, recovery', rendered)
+        self.assertIn('Next: Incident 1 is under way. Collect your evidence, then run the '
+                      'resume step your page shows; next continues after that.', rendered)
+        self.assertNotIn('Answer for', rendered)
+        self.assertNotIn('Start the next incident', rendered)
+        self.assert_no_kind(rendered)
+        for word in ('assert', 'cuda', 'Xid', 'application', 'storage'):
+            self.assertNotIn(word, rendered)
+        self.make().ended(self.issue_id(1))
+        after = session.render(self.make().status(), 'status')
+        self.assertIn('Next: Incident 1 has ended. Start the next incident', after)
+        self.assertNotIn('Checks you can collect', after)
+
+    def test_other_job_incidents_do_not_read_the_node(self):
+        self.set_schedule(session.validate_schedule([{'exercise': 'storage'}]))
+        result = self.make().next()
+        self.assertEqual(1, result.incident)
+        self.assertEqual([], self.executor.maintenance_calls)
+        self.assertNotIn('job', self.progress_record()['issued'][0])
+        with self.assertRaisesRegex(session.Refusal, 'no exercise running'):
+            self.make().collect('0')
+        with self.assertRaisesRegex(session.Refusal, 'pre-resume check'):
+            self.make().resume(self.issue_id(1))
+        self.assertNotIn('ended_at', self.progress_record()['issued'][0])
+
+
+class ApplicationIncidentCollect(ApplicationIncidentBase):
+    def test_read_only_checks_run_beside_the_job_into_the_incident_directory(self):
+        self.issue()
+        self.executor.maintenance_calls.clear()
+        first = self.make().collect('0')
+        self.assertEqual(self.incident_dir() / 'check-0-incident.log', Path(first.saved_path))
+        self.assertEqual('# maintenance collect returncode=0\n' + self.executor.collect_output, first.output)
+        second = self.make().collect('0')
+        self.assertEqual(self.incident_dir() / 'check-0-incident-attempt-2.log',
+                         Path(second.saved_path))
+        self.assertEqual('# maintenance collect returncode=0\n' + self.executor.collect_output, Path(first.saved_path).read_text())
+        self.make().collect('3')
+        # Checks 2 and 6 load the devices, so they wait for the allocation to end.
+        for check in ('2', '6'):
+            with self.subTest(check=check):
+                with self.assertRaisesRegex(session.Refusal, 'after your allocation ends'):
+                    self.make().collect(check)
+        with self.assertRaisesRegex(session.Refusal, r'Available: 0, 2, 3, 6\.'):
+            self.make().collect('5')
+        self.assertEqual([['collect', '0'], ['collect', '0'], ['collect', '3']],
+                         self.executor.maintenance_calls)
+        self.executor.jobs = []
+        self.make().collect('2')
+        state = self.make().store.read()
+        self.assertEqual(('ready', [], None), (state.phase, state.collected, state.incident))
+        self.assertEqual([], self.mutations())
+        rendered = session.render(first, 'collect')
+        self.assertIn(f'Saved: {first.saved_path}', rendered)
+        self.assertIn('Next: Incident 1 is under way.', rendered)
+
+    def test_kernel_evidence_uses_the_recorded_boot_and_job_start(self):
+        self.issue()
+        self.executor.maintenance_calls.clear()
+        result = self.make().collect('kernel')
+        self.assertEqual([['kernel-evidence', '--boot', 'aaaaaaaa-0000-0000-0000-000000000001',
+                           '--since', '1793880600']], self.executor.maintenance_calls)
+        self.assertEqual(self.incident_dir() / 'check-kernel-incident.log', Path(result.saved_path))
+        self.assertIn('# bounded kernel attempt returncode=0; not full capture', result.output)
+        self.assertIn('"action": "kernel-evidence"', result.output)
+        # A target that cannot answer is evidence unavailable, saved as such.
+        self.executor.maintenance_failures['kernel-evidence'] = (255, 'Connection closed\n')
+        failed = self.make().collect('kernel')
+        self.assertIn('returncode=255', failed.output)
+        self.assertEqual(self.incident_dir() / 'check-kernel-incident-attempt-2.log',
+                         Path(failed.saved_path))
+
+    def test_collect_recovery_saves_the_query_and_its_reading(self):
+        self.issue()
+        self.executor.maintenance_calls.clear()
+        result = self.make().collect('recovery')
+        self.assertEqual([['gpu-recovery']], self.executor.maintenance_calls)
+        self.assertEqual(self.incident_dir() / 'check-recovery-incident.log', Path(result.saved_path))
+        saved = Path(result.saved_path).read_text()
+        self.assertEqual(saved, result.output)
+        self.assertIn('# gpu-recovery route returncode=0', saved)
+        self.assertIn('# reading: none', saved)
+        self.assertIn('# gpus: 8 of 8 expected; every assigned device reports None', saved)
+        self.assertIn('# boot: aaaaaaaa-0000-0000-0000-000000000001 matches the boot recorded '
+                      'when incident 1 was issued', saved)
+        self.assertIn(self.GPU_HEADER, saved)
+        self.assertIn(self.recovery_text().strip(), saved)
+        self.assertEqual([], self.mutations())
+        self.assertEqual('ready', self.make().store.read().phase)
+
+    def readings(self, cases):
+        results = {}
+        for name, prepare in cases.items():
+            self.tearDown()
+            self.setUp()
+            self.issue()
+            prepare()
+            text = self.make().collect('recovery').output
+            [reading] = re.findall(r'^# reading: (\S+)', text, re.M)
+            results[name] = (reading, text)
+        return results
+
+    def test_every_unclear_or_unreadable_answer_is_evidence_unavailable_not_none(self):
+        bus = '00000000:5F:00.0'
+        uuid = 'GPU-0000000f-0000-0000-0000-000000000000'
+
+        def rows(**changes):
+            def apply():
+                for index, action in changes.items():
+                    row = list(self.rows[int(index)])
+                    row[3] = action
+                    self.rows[int(index)] = tuple(row)
+            return apply
+
+        def setter(name, value):
+            def apply():
+                setattr(self, name, value)
+            return apply
+
+        def duplicate():
+            self.rows[5] = (self.rows[5][0], self.rows[2][1], self.rows[5][2], 'None')
+
+        def missing():
+            del self.rows[7]
+
+        def extra():
+            self.rows.append(('8', uuid, bus, 'None'))
+
+        results = self.readings({
+            'none': lambda: None,
+            'reset': rows(**{'0': 'GPU Reset Required'}),
+            'reboot': rows(**{'3': 'Node Reboot Required'}),
+            'drain': rows(**{'1': 'Drain P2P'}),
+            'n/a': rows(**{'0': 'N/A'}),
+            'bracketed n/a': rows(**{'2': '[N/A]'}),
+            'blank': rows(**{'4': ''}),
+            'empty output': setter('record_stdout', ''),
+            'header only': setter('record_stdout', self.GPU_HEADER + '\n'),
+            'wrong header': setter('record_stdout', 'index, uuid\n0, GPU-1\n'),
+            'nonzero query': setter('query_rc', 9),
+            'nonzero route': setter('route_rc', 3),
+            'no record': setter('record_text', 'nvidia-smi: not found\n'),
+            'duplicate gpu': duplicate,
+            'missing gpu': missing,
+            'extra gpu': extra,
+            'wrong instance': setter('record_instance', 'i-0fedcba9876543210'),
+            'wrong boot': setter('record_boot', 'bbbbbbbb-0000-0000-0000-000000000002'),
+        })
+        expected = {'none': 'none', 'reset': 'action-required', 'reboot': 'action-required',
+                    'drain': 'action-required'}
+        for name, (reading, text) in results.items():
+            with self.subTest(case=name):
+                self.assertEqual(expected.get(name, 'unavailable'), reading, text)
+                self.assertIn('# gpu-recovery route returncode=', text)
+                if name not in ('no record',):
+                    self.assertIn('"action": "gpu-recovery"', text)
+        self.assertIn('GPU Reset Required', results['reset'][1])
+        self.assertIn('does not match the boot recorded', results['wrong boot'][1])
+        self.assertIn('identity', results['wrong instance'][1])
+        self.assertIn('7 of 8 expected', results['missing gpu'][1])
+        self.assertIn('9 of 8 expected', results['extra gpu'][1])
+
+    def test_an_earlier_device_round_keeps_its_files_and_its_answer(self):
+        self.set_schedule(session.validate_schedule(
+            [{'exercise': 'efa-reset'}] + self.APPLICATION[:1]))
+        self.make().next()
+        self.running_job_with_progress()
+        self.assertTrue(self.make().next().under_way)
+        self.executor.jobs = []
+        self.assertEqual('runtime-ready', self.make().recover().state.phase)
+        self.make().collect('2')
+        round_dir = self.answers / 'collected' / 'round-1'
+        before = {p.name: p.read_bytes() for p in round_dir.iterdir()}
+        self.assertIn('check-2-recovered.log', before)
+        # The application incident is issued on the recovered node.
+        self.running_allocation()
+        self.assertEqual(2, self.make().next().incident)
+        self.make().collect('0')
+        self.make().collect('kernel')
+        self.make().collect('recovery')
+        self.assertEqual(before, {p.name: p.read_bytes() for p in round_dir.iterdir()})
+        self.assertEqual(['check-0-incident.log', 'check-kernel-incident.log',
+                          'check-recovery-incident.log'],
+                         sorted(p.name for p in self.incident_dir(2).iterdir()))
+        state = self.make().store.read()
+        self.assertEqual(('runtime-ready', 1), (state.phase, state.incident['number']))
+        rendered = session.render(self.make().status(), 'status')
+        self.assertIn('Answer for incident 1', rendered)
+        self.assertIn('Next: Incident 2 is under way. Collect your evidence', rendered)
+        self.assertNotIn('Checks collected: 0', rendered)
+        self.assertIn('Checks you can collect: 0, 2, 3, 6, kernel, recovery', rendered)
+        # The device-round kernel capture still reads its own round's boot.
+        kernel = [c for c in self.executor.maintenance_calls if c[0] == 'kernel-evidence'][-1]
+        self.assertEqual('bbbbbbbb-0000-0000-0000-000000000002', kernel[2])
+
+    def test_collect_is_refused_after_the_incident_ends(self):
+        self.issue()
+        self.make().ended(self.issue_id(1))
+        for check in ('0', 'kernel', 'recovery'):
+            with self.subTest(check=check):
+                with self.assertRaisesRegex(session.Refusal, 'no exercise running'):
+                    self.make().collect(check)
+
+    def test_collect_recovery_needs_a_current_incident(self):
+        with self.assertRaisesRegex(session.Refusal, 'no exercise running'):
+            self.make().collect('recovery')
+        self.make().store.write(session.State(phase='fault-applied', kind='gpu',
+                                              started_at=1.0, target_node='gpu-g7-1'))
+        with self.assertRaisesRegex(session.Refusal, 'listed by status'):
+            self.make().collect('recovery')
+        self.assertEqual([], self.executor.maintenance_calls)
+
+
+class ApplicationIncidentResume(ApplicationIncidentBase):
+    def test_missing_gpu_identity_or_unfinished_process_refuses_resume(self):
+        def missing():
+            self.executor.inspect.pop('gpu_uuid')
+        cases = {
+            'missing identity': missing,
+            'compute process': lambda: setattr(self, 'process_stdout',
+                'gpu_uuid, pid, process_name\n' + self.rows[0][1] + ', 123, python3\n'),
+            'unreadable processes': lambda: setattr(self, 'process_rc', 9),
+            'missing process table': lambda: setattr(self, 'process_stdout', ''),
+            'old active step': lambda: setattr(self, 'live_steps', ['226.3']),
+        }
+        for name, (code, out, err) in self.refusals(cases).items():
+            with self.subTest(case=name):
+                self.assertEqual(3, code, out + err)
+                self.assertIn('Observation:', err)
+
+    def test_a_clear_node_may_resume_and_the_observation_is_saved(self):
+        self.issue()
+        self.executor.maintenance_calls.clear()
+        code, out, err = self.run_main(f'resume {self.issue_id(1)}', now=1200.0)
+        self.assertEqual((0, ''), (code, err))
+        self.assertIn('Incident 1 may resume.', out)
+        saved = self.incident_dir() / 'resume-check.log'
+        self.assertIn(f'Observation: {saved}', out)
+        text = saved.read_text()
+        self.assertIn('# reading: none', text)
+        self.assertIn('# resume: allowed', text)
+        self.assertIn('"action": "gpu-recovery"', text)
+        actions = [c[0] for c in self.executor.maintenance_calls]
+        self.assertEqual(sorted(['instance-id', 'boot-id', 'inspect', 'gpu-recovery']),
+                         sorted(actions))
+        self.assertEqual([], self.mutations())
+        entry = self.progress_record()['issued'][0]
+        self.assertNotIn('ended_at', entry)
+        self.assertEqual({'at': 1200.0, 'allowed': True, 'log': str(saved)}, entry['resume_check'])
+        self.assert_no_kind(out)
+        # ended still comes from the resumed job, and next then continues.
+        self.make().ended(self.issue_id(1))
+        self.assertIn('ended_at', self.progress_record()['issued'][0])
+        self.assertEqual(2, self.make().next().incident)
+
+    def refusals(self, cases):
+        results = {}
+        for name, prepare in cases.items():
+            self.tearDown()
+            self.setUp()
+            self.issue()
+            prepare()
+            self.executor.maintenance_calls.clear()
+            code, out, err = self.run_main(f'resume {self.issue_id(1)}', now=1200.0)
+            results[name] = (code, out, err)
+            self.assertEqual([], self.mutations())
+            self.assertNotIn('ended_at', self.progress_record()['issued'][0])
+        return results
+
+    def test_every_unclear_reading_refuses_and_changes_nothing(self):
+        def rows(index, action):
+            def apply():
+                row = list(self.rows[index])
+                row[3] = action
+                self.rows[index] = tuple(row)
+            return apply
+
+        def setter(name, value):
+            def apply():
+                setattr(self, name, value)
+            return apply
+
+        def rebooted():
+            self.executor.boot_id = 'bbbbbbbb-0000-0000-0000-000000000002'
+
+        def other_gpu():
+            self.rows[0] = ('0', 'GPU-ffffffff-0000-0000-0000-000000000000', self.rows[0][2], 'None')
+
+        results = self.refusals({
+            'reset': rows(0, 'GPU Reset Required'),
+            'reboot': rows(7, 'Node Reboot Required'),
+            'n/a': rows(0, 'N/A'),
+            'blank': rows(3, ''),
+            'empty output': setter('record_stdout', ''),
+            'nonzero query': setter('query_rc', 9),
+            'nonzero route': setter('route_rc', 3),
+            'duplicate gpu': lambda: self.rows.__setitem__(
+                5, (self.rows[5][0], self.rows[2][1], self.rows[5][2], 'None')),
+            'missing gpu': lambda: self.rows.__delitem__(7),
+            'assigned gpu absent': other_gpu,
+            'wrong instance in record': setter('record_instance', 'i-0fedcba9876543210'),
+            'wrong boot in record': setter('record_boot', 'bbbbbbbb-0000-0000-0000-000000000002'),
+            'node rebooted': rebooted,
+            'allocation ended': lambda: setattr(self.executor, 'jobs', []),
+            'another allocation': lambda: self.running_allocation('227'),
+            'foreign job': lambda: setattr(self.executor, 'jobs',
+                                           ['301|someone-else|aim344-x|RUNNING']),
+        })
+        for name, (code, out, err) in results.items():
+            with self.subTest(case=name):
+                self.assertEqual(3, code, (out, err))
+                self.assertEqual('', out)
+                self.assertIn('not ready to resume', err)
+                self.assertIsNone(KIND_WORDS.search(err), err)
+                self.assertNotIn('resume_check_allowed', err)
+        self.assertIn('did not read None', results['reset'][2])
+        self.assertIn('Observation:', results['reset'][2])
+        entry = self.progress_record()['issued'][0]
+        self.assertFalse(entry['resume_check']['allowed'])
+        saved = Path(entry['resume_check']['log']).read_text()
+        self.assertIn('# resume: refused', saved)
+
+    def test_only_the_current_unended_application_incident_may_be_checked(self):
+        self.issue()
+        first = self.issue_id(1)
+        code, _, err = self.run_main('resume ' + 'b' * 32)
+        self.assertEqual(3, code)
+        self.assertIn('No incident with that issue id', err)
+        self.make().ended(first)
+        code, _, err = self.run_main(f'resume {first}')
+        self.assertEqual(3, code)
+        self.assertIn('Incident 1 has ended', err)
+        self.make().next()
+        code, _, err = self.run_main(f'resume {first}')
+        self.assertEqual(3, code)
+        self.assertIn('Incident 1 has ended', err)
+        # The storage incident now current has no pre-resume check of its own.
+        code, _, err = self.run_main(f'resume {self.issue_id(2)}')
+        self.assertEqual(3, code)
+        self.assertIn('no pre-resume check', err)
+        self.assertEqual([], [c for c in self.executor.maintenance_calls
+                              if c[0] == 'gpu-recovery'])
+
+    def test_a_held_device_round_refuses_the_check(self):
+        self.issue()
+        self.make().store.write(session.State(phase='fault-applied', kind='efa',
+                                              started_at=1.0, target_node='gpu-g7-1'))
+        with self.assertRaisesRegex(session.Refusal, 'holds your node'):
+            self.make().resume(self.issue_id(1))
+        self.assertEqual([], [c for c in self.executor.maintenance_calls
+                              if c[0] == 'gpu-recovery'])
+
+    def test_the_operator_view_shows_the_recorded_allocation_and_check(self):
+        self.issue()
+        self.make().resume(self.issue_id(1))
+        view = session.operator_view(self.make())
+        self.assertIn('1. cuda-assert {"assert_rank": 3, "assert_step": 201} issued', view)
+        self.assertIn('job=226 ranks=0-7 boot=aaaaaaaa-0000-0000-0000-000000000001', view)
+        self.assertIn('resume check: allowed', view)
 
 
 if __name__ == '__main__':

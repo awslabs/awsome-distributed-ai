@@ -27,6 +27,7 @@
 #    {"exercise": "dataloader"},
 #    {"exercise": "silent-corruption",
 #     "settings": {"corrupt_rank": 13, "corrupt_step": 37, "corrupt_bit": 22}},
+#    {"exercise": "cuda-assert", "settings": {"assert_rank": 0, "assert_step": 201}},
 #    {"exercise": "efa-reset"}]
 #
 # The participant pages number the incidents in this order. Each exercise takes
@@ -36,7 +37,7 @@
 # rate: choose a corrupt_step that the 20-second run reaches (about 480 steps on
 # g7.48xlarge), or the incident shows no differing line.
 #
-# Exercises: slow-job, storage, dataloader, silent-corruption (applied by the
+# Exercises: slow-job, storage, dataloader, silent-corruption, cuda-assert (applied by the
 # launcher in the participant's job) and efa-reset (applied by the controller
 # once that job reports progress). The schedule is copied into the session
 # configuration, and this seat's record of issued incidents is reset. The file is
@@ -86,48 +87,49 @@ participant_home=$(getent passwd "$participant" | cut -d: -f6)
 # The schedule file is checked before this installer changes anything, so a refused
 # file leaves the seat as it was. The helper that will run the schedule checks it,
 # and a seat whose round still holds its exercise node keeps its schedule.
-checked_schedule=
-if [[ -n ${AIM344_SCHEDULE_FILE:-} ]]; then
-    echo "== checking the incident schedule $AIM344_SCHEDULE_FILE"
-    checked_schedule=$(python3 - "$AIM344_SCHEDULE_FILE" "$session_source" \
-            "$session_config" "$state_dir" "$assignment" <<'PY'
+AIM344_SCHEDULE_FILE=${AIM344_SCHEDULE_FILE:-}
+checked_schedule=$(python3 - "$AIM344_SCHEDULE_FILE" "$session_source" \
+        "$session_config" "$state_dir" "$assignment" <<'PY'
 import importlib.machinery, importlib.util, json, os, sys
 schedule_file, helper_path, config_path, state_dir, assignment = sys.argv[1:6]
 loader = importlib.machinery.SourceFileLoader('aim344_device_session', helper_path)
 helper = importlib.util.module_from_spec(
     importlib.util.spec_from_loader(loader.name, loader))
 loader.exec_module(helper)
-try:
-    with open(schedule_file) as handle:
-        entries = json.load(handle)
-except OSError as error:
-    raise SystemExit(f'refusing {schedule_file}: {error.strerror}')
-except ValueError as error:
-    raise SystemExit(f'refusing {schedule_file}: it is not JSON ({error})')
-world_size = os.environ.get('AIM344_WORLD_SIZE', str(helper.DEFAULT_WORLD_SIZE))
-if not world_size.isdigit() or int(world_size) < 1:
-    raise SystemExit(f'refusing AIM344_WORLD_SIZE={world_size!r}: it must be a positive '
-                     f'whole number of ranks')
-try:
-    schedule = helper.validate_schedule(entries, world_size=int(world_size))
-except helper.Refusal as refusal:
-    raise SystemExit(f'refusing {schedule_file}: {refusal}')
+previous = {}
 if os.path.exists(config_path):
     with open(config_path) as handle:
-        state_dir = json.load(handle).get('state_dir', state_dir)
+        config = json.load(handle)
+    state_dir = config.get('state_dir', state_dir)
+    previous = config.get('assignments', {}).get(assignment, {})
+world_size = os.environ.get('AIM344_WORLD_SIZE',
+                            str(previous.get('world_size', helper.DEFAULT_WORLD_SIZE)))
+if not world_size.isdigit() or int(world_size) < 2 or int(world_size) % 2:
+    raise SystemExit('AIM344_WORLD_SIZE must divide over the two assigned nodes')
+entries = previous.get('exercise_schedule')
+if schedule_file:
+    try:
+        with open(schedule_file) as handle:
+            entries = json.load(handle)
+    except OSError as error:
+        raise SystemExit(f'refusing {schedule_file}: {error.strerror}')
+    except ValueError as error:
+        raise SystemExit(f'refusing {schedule_file}: it is not JSON ({error})')
 try:
-    state = helper.StateStore(state_dir, assignment).read()
+    schedule = (helper.validate_schedule(entries, world_size=int(world_size))
+                if schedule_file or entries is not None else None)
+    if schedule_file:
+        state = helper.StateStore(state_dir, assignment).read()
+        if state.phase in helper.HOLDING_PHASES:
+            raise SystemExit(f'refusing to reset the schedule of {assignment}: its round '
+                             f'is at {state.phase} and still holds the exercise node. '
+                             f'Finish it with recover before resetting the schedule.')
 except helper.Refusal as refusal:
-    raise SystemExit(f'refusing to reset the schedule of {assignment}: {refusal}')
-if state.phase in helper.HOLDING_PHASES:
-    raise SystemExit(f'refusing to reset the schedule of {assignment}: its round is at '
-                     f'{state.phase} and still holds the exercise node. Finish it with '
-                     f'recover, or remove {state_dir}/{assignment}.json once the node '
-                     f'is replaced, then rerun.')
-print(json.dumps(schedule))
+    raise SystemExit(f'refusing the schedule of {assignment}: {refusal}')
+if schedule_file:
+    print(json.dumps(schedule))
 PY
 )
-fi
 
 echo "== installing the session helper"
 installed=/usr/local/sbin/aim344-device-session
@@ -169,15 +171,24 @@ if os.path.exists(path):
 # The seat's incident schedule, checked before any change by the helper that will
 # run it, so the installer and the controller cannot disagree about which
 # exercises exist. The installed helper checks it once more here.
+loader = importlib.machinery.SourceFileLoader('aim344_device_session', helper_path)
+helper = importlib.util.module_from_spec(
+    importlib.util.spec_from_loader(loader.name, loader))
+loader.exec_module(helper)
+world_size = os.environ.get('AIM344_WORLD_SIZE',
+                            str(previous.get('world_size', helper.DEFAULT_WORLD_SIZE)))
+if not world_size.isdigit() or int(world_size) < 2 or int(world_size) % 2:
+    raise SystemExit('AIM344_WORLD_SIZE must divide over the two assigned nodes')
+account = pwd.getpwnam(participant)
 checked = os.environ.get('AIM344_CHECKED_SCHEDULE')
-schedule = previous.get('exercise_schedule')
+schedule = json.loads(checked) if checked else previous.get('exercise_schedule')
+try:
+    if checked or schedule is not None:
+        schedule = helper.validate_schedule(schedule, world_size=int(world_size))
+except helper.Refusal as refusal:
+    raise SystemExit(f'refusing the schedule of {assignment}: {refusal}')
 if checked:
-    loader = importlib.machinery.SourceFileLoader('aim344_device_session', helper_path)
-    helper = importlib.util.module_from_spec(
-        importlib.util.spec_from_loader(loader.name, loader))
-    loader.exec_module(helper)
     try:
-        schedule = helper.validate_schedule(json.loads(checked))
         # A new schedule starts this seat from its first incident. Under the seat's
         # own lock, so no request of the controller runs while its records change.
         store = helper.StateStore(state_dir, assignment)
@@ -207,8 +218,8 @@ if checked:
     except helper.Refusal as refusal:
         raise SystemExit(f'refusing to reset the schedule of {assignment}: {refusal}')
 
-account = pwd.getpwnam(participant)
 seat = {
+    'world_size': int(world_size),
     'participant_user': participant,
     'participant_uid': account.pw_uid,
     # The participant's own primary group. Results are written by a process that

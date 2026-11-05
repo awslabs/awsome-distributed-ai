@@ -369,5 +369,107 @@ class RootStaging(unittest.TestCase):
                     self.staging()
 
 
+class GpuRecoveryQuery(unittest.TestCase):
+    """The read-only `gpu-recovery` action: one nvidia-smi query, printed as one
+    JSON record with this node's identity. No device is touched."""
+
+    CONFIG = {'slurm_bin': '/opt/aws/pcs/scheduler/slurm-25.05/bin'}
+    CSV = ('index, uuid, pci.bus_id, gpu_recovery_action\n'
+           '0, GPU-11111111-2222-4333-8444-555555555555, 00000000:57:00.0, None\n')
+
+    def test_the_action_parses_and_takes_no_argument(self):
+        self.assertEqual(('gpu-recovery', {}), maintenance.parse(['gpu-recovery']))
+        for argv in (['gpu-recovery', '0'], ['gpu-recovery', '--reset'], ['gpu-recovery', '-r']):
+            with self.subTest(argv=argv):
+                with self.assertRaises(maintenance.Refusal):
+                    maintenance.parse(argv)
+
+    def query(self, rc=0, stdout=CSV, stderr='', process_rc=0,
+              process_stdout='gpu_uuid, pid, process_name\n', boot='aaaaaaaa-0000-0000-0000-000000000001',
+              instance='i-0123456789abcdef0', error=None):
+        calls = []
+
+        def run(argv, **kwargs):
+            calls.append(list(argv))
+            if error is not None:
+                raise error
+            if '--query-compute-apps=gpu_uuid,pid,process_name' in argv:
+                return subprocess.CompletedProcess(argv, process_rc, process_stdout, '')
+            return subprocess.CompletedProcess(argv, rc, stdout, stderr)
+        out = io.StringIO()
+        with mock.patch.object(maintenance.subprocess, 'run', side_effect=run), \
+                mock.patch.object(maintenance, 'instance_identity', return_value=instance), \
+                mock.patch.object(maintenance, '_boot_id', return_value=boot), \
+                contextlib.redirect_stdout(out):
+            code = maintenance.gpu_recovery(self.CONFIG)
+        return code, out.getvalue(), calls
+
+    def test_the_query_is_the_fixed_read_only_nvidia_smi_call(self):
+        code, out, calls = self.query()
+        self.assertEqual(0, code)
+        self.assertEqual([['/usr/bin/nvidia-smi',
+                           '--query-compute-apps=gpu_uuid,pid,process_name', '--format=csv'],
+                          ['/usr/bin/nvidia-smi',
+                           '--query-gpu=index,uuid,pci.bus_id,gpu_recovery_action',
+                           '--format=csv']], calls)
+        record = json.loads(out)
+        self.assertEqual({'action': 'gpu-recovery', 'instance_id': 'i-0123456789abcdef0',
+                          'boot_id': 'aaaaaaaa-0000-0000-0000-000000000001',
+                          'query': 'nvidia-smi --query-gpu=index,uuid,pci.bus_id,'
+                                   'gpu_recovery_action --format=csv',
+                          'returncode': 0, 'stdout': self.CSV, 'stderr': '',
+                          'process_returncode': 0, 'process_stdout': 'gpu_uuid, pid, process_name\n',
+                          'process_stderr': ''},
+                         {k: v for k, v in record.items() if k != 'observed_at'})
+        self.assertIsInstance(record['observed_at'], float)
+        self.assertEqual(1, out.count('\n'))
+
+    def test_a_failed_query_is_reported_in_the_record_not_as_a_refusal(self):
+        code, out, _ = self.query(rc=9, stdout='', stderr='NVIDIA-SMI has failed\n')
+        self.assertEqual(0, code)
+        record = json.loads(out)
+        self.assertEqual((9, '', 'NVIDIA-SMI has failed\n'),
+                         (record['returncode'], record['stdout'], record['stderr']))
+        code, out, _ = self.query(error=FileNotFoundError(2, 'No such file', '/usr/bin/nvidia-smi'))
+        self.assertEqual(0, code)
+        record = json.loads(out)
+        self.assertEqual(127, record['returncode'])
+        self.assertIn('nvidia-smi', record['stderr'])
+        code, out, _ = self.query(error=subprocess.TimeoutExpired(['nvidia-smi'], 20))
+        record = json.loads(out)
+        self.assertEqual(124, record['returncode'])
+
+    def test_compute_process_query_failure_is_preserved(self):
+        code, out, _ = self.query(process_rc=9, process_stdout='')
+        self.assertEqual(0, code)
+        record = json.loads(out)
+        self.assertEqual(9, record['process_returncode'])
+        self.assertEqual('', record['process_stdout'])
+        self.assertEqual(0, record['returncode'])
+
+    def test_timeout_preserves_partial_output_and_error_streams(self):
+        for stdout, stderr in [('partial table\n', 'driver diagnostic\n'),
+                               (b'partial table\n', b'driver diagnostic\n')]:
+            with self.subTest(stream_type=type(stdout).__name__):
+                code, out, _ = self.query(error=subprocess.TimeoutExpired(
+                    ['nvidia-smi'], 20, output=stdout, stderr=stderr))
+                record = json.loads(out)
+                self.assertEqual(0, code)
+                self.assertEqual(124, record['process_returncode'])
+                self.assertEqual('partial table\n', record['process_stdout'])
+                self.assertIn('driver diagnostic\n', record['process_stderr'])
+                self.assertEqual(124, record['returncode'])
+                self.assertEqual('partial table\n', record['stdout'])
+                self.assertIn('driver diagnostic\n', record['stderr'])
+
+    def test_the_record_carries_no_mutating_command(self):
+        source = HELPER.read_text()
+        body = source[source.index('def gpu_recovery('):]
+        body = body[:body.index('\ndef ', 1)]
+        for word in ('--gpu-reset', '-r ', 'persistence-mode', 'systemctl', 'reboot',
+                     'DEVICE_FAULT', 'execve'):
+            self.assertNotIn(word, body)
+
+
 if __name__ == '__main__':
     unittest.main()

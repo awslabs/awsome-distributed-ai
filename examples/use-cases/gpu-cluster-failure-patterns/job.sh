@@ -179,6 +179,21 @@ $incident_fields
 $case_fields
 # Incident 5
 
+$incident_fields
+
+Rank, node, GPU UUID and PCI address:
+
+Kernel Xid and current GPU recovery action:
+
+New process and checkpoint resume position:
+
+Recovered checksums, progress and new errors:
+
+## Case
+
+$case_fields
+# Incident 6
+
 Row of the triage table:
 
 Predictions:
@@ -211,6 +226,9 @@ $case_fields
 
 $case_fields
 ## Card B
+
+$case_fields
+## Card C
 
 $case_fields
 # Loss table
@@ -299,6 +317,8 @@ workload = {
                           'corrupt_step': lambda v: rank(v) and v >= 1,
                           'corrupt_bit': lambda v: rank(v) and v <= 31,
                           'corrupt_recurring': flag},
+    'cuda-assert': {'assert_rank': rank,
+                    'assert_step': lambda v: rank(v) and v > 200},
 }
 # The settings this launcher applies, for each exercise it runs.
 applied = {'storage': {'writer_rank'}, 'slow-job': set(), 'efa-reset': set(),
@@ -311,6 +331,7 @@ if (not isinstance(number, int) or isinstance(number, bool) or number < 1
         or not all(workload[exercise][key](value) for key, value in settings.items()
                    if exercise in workload)
         or (exercise == 'silent-corruption' and 'corrupt_rank' not in settings)
+        or (exercise == 'cuda-assert' and 'assert_rank' not in settings)
         # These act on the cached dataset; the job refuses them without one.
         or (exercise == 'dataloader' and settings.get('dataset_cache') == 'none'
             and ('affected_rank' in settings or settings.get('worker_cuda')))):
@@ -325,7 +346,7 @@ if exercise == 'dataloader':
     incident.setdefault('dataset_cache', 'rank-thread')
 # rerun runs the job as the pair is now: the DataLoader job keeps its dataset, a
 # recurring flip recurs, and a one-time flip does not happen again.
-rerun = incident if exercise == 'dataloader' or incident.get('corrupt_recurring') else {}
+rerun = incident if exercise in ('dataloader', 'cuda-assert') or incident.get('corrupt_recurring') else {}
 # resume runs the job without the lab's change. After a changed result it starts
 # from the last checkpoint saved before the changed step (workload.py --resume-before).
 resume = {'resume_before': incident.get('corrupt_step', 1)} if exercise == 'silent-corruption' else {}
@@ -623,6 +644,22 @@ incident_job() {
                         --resume --end-after-save
                     ;;
             esac
+            ;;
+        cuda-assert)
+            steps+=(--writer-rank=0)
+            if [[ $what == resume ]]; then
+                ask_controller resume "$issue_id"
+                ((status == 0)) || { printf '%s\n' "$reply" >&2; return "$status"; }
+                printf '%s\n' "$reply"
+                job_settings -
+                ensure_prepared
+                ending_job torch_job "$name" job "${steps[@]}" --duration-seconds="$RUN_SECONDS" \
+                    --resume --end-after-save
+            else
+                job_settings "$incident_settings"
+                ensure_prepared
+                torch_job "$name" job "${steps[@]}" --duration-seconds="$RUN_SECONDS"
+            fi
             ;;
         efa-reset)
             steps+=(--writer-rank=0 --duration-seconds="$CONTROLLER_RUN_SECONDS")

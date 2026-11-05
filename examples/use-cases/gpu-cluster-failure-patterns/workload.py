@@ -270,6 +270,16 @@ def run_steps(args, tensor):
             if not keep_running.item():
                 break
             step = start_step + sequence
+            if rank == getattr(args, 'assert_rank', None) and step == args.assert_step:
+                identity = device_identity(tensor.device)
+                emit(f'Application validation: step={step}; rank={rank}; '
+                     f'host={identity["host"]}; GPU={identity["uuid"]}; '
+                     f'PCI={identity["pci"]}; pid={os.getpid()}; timestamp={time.time():.6f}')
+                # A normal device assertion aborts this process's CUDA context;
+                # it performs no invalid memory access or device operation.
+                torch._assert_async(torch.tensor(False, device=tensor.device),
+                                    'batch validation condition failed')
+                torch.cuda.synchronize()
             if replica is not None:
                 replica.step(step)
             if writer and sequence and step % args.checkpoint_every == 0:
@@ -840,10 +850,22 @@ def add_exercise_arguments(parser):
                        help='bit of the int32 view of one element (default: 22)')
     group.add_argument('--corrupt-recurring', action='store_true',
                        help='flip on every step from --corrupt-step on')
+    group = parser.add_argument_group('application validation (device mode)')
+    group.add_argument('--assert-rank', type=rank_number, default=None,
+                       help='rank whose device-side batch assertion fails (default: off)')
+    group.add_argument('--assert-step', type=positive_int, default=201,
+                       help='step index of the failed assertion (default: 201)')
 
 
 def check_exercise_arguments(parser, args):
     """Consistency of the exercise options after the settings were applied."""
+    if args.assert_rank is not None:
+        if args.mode != 'device' or not args.checkpoint_every:
+            parser.error('--assert-rank requires device mode with --checkpoint-every')
+        if args.assert_step <= args.checkpoint_every:
+            parser.error('--assert-step must follow the first periodic checkpoint')
+        if args.resume:
+            parser.error('resume uses corrected validation; omit --assert-rank')
     if args.corrupt_rank is not None:
         args.replica_check = True
     if args.replica_check and args.mode != 'device':
@@ -920,6 +942,8 @@ def main():
     if args.writer_rank >= dist.get_world_size():
         raise SystemExit(f'--writer-rank {args.writer_rank} is not a rank of this '
                          f'{dist.get_world_size()}-rank job.')
+    if args.assert_rank is not None and args.assert_rank >= dist.get_world_size():
+        raise SystemExit('--assert-rank is not a rank of this job.')
     if args.stack_dump_seconds and os.environ.get('LOCAL_RANK') == '0':
         # No process arms its timer before the first collective, which needs this one.
         retire_stack_files(args.stack_dump_dir)

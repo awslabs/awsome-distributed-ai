@@ -115,6 +115,37 @@ class CheckpointWriter(unittest.TestCase):
         return json.loads((self.path / 'last.json').read_text())['next_step']
 
     # ---------------------------------------------------------------- step loop
+    def test_device_assertion_stops_at_selected_step_and_keeps_prior_checkpoint(self):
+        with mock.patch.object(self.workload.torch.cuda, 'synchronize'):
+            with self.assertRaisesRegex(RuntimeError, 'batch validation condition failed'):
+                self.run_rank(self.workload.run_steps, 0,
+                              args(checkpoint_every=5, assert_rank=0, assert_step=6), loops=10)
+        self.assertEqual(5, self.last())
+        self.assertEqual(6, self.collectives)
+
+    def test_device_assertion_options_require_device_mode_and_a_prior_checkpoint(self):
+        valid = self.workload.parse_args(['device', '--checkpoint-every=5',
+                                         '--assert-rank=0', '--assert-step=6'])
+        self.assertEqual((0, 6), (valid.assert_rank, valid.assert_step))
+        for argv in [['storage', '--assert-rank=0'],
+                     ['device', '--assert-rank=0'],
+                     ['device', '--checkpoint-every=5', '--assert-rank=0', '--assert-step=5'],
+                     ['device', '--checkpoint-every=5', '--assert-rank=0', '--resume']]:
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.workload.parse_args(argv)
+
+    def test_other_ranks_and_corrected_resume_do_not_assert(self):
+        with mock.patch.object(self.workload.torch, '_assert_async') as checked:
+            self.run_rank(self.workload.run_steps, 1,
+                          args(checkpoint_every=5, assert_rank=0, assert_step=6), loops=10)
+            checked.assert_not_called()
+            (self.path / 'last.json').write_text(json.dumps({'next_step': 5, 'saved': [0, 5]}))
+            _, out, _ = self.run_rank(self.workload.run_steps, 0,
+                                      args(checkpoint_every=5, resume=True), loops=6)
+            checked.assert_not_called()
+            self.assertIn('Resuming from last successful checkpoint: next_step=5', out)
+
     def test_writer_saves_the_start_and_every_nth_step_before_its_all_reduce(self):
         fake, out, _ = self.run_rank(self.workload.run_steps, 9,
                                      args(writer_rank=9, checkpoint_every=5), loops=12)

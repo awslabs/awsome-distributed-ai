@@ -139,7 +139,7 @@ repo=$(git rev-parse --show-toplevel)
 git -C "$repo" fetch --depth=1 --no-tags "$HEALTHCHECK_SOURCE" "$HEALTHCHECK_COMMIT"
 test "$(git -C "$repo" rev-parse FETCH_HEAD)" = "$HEALTHCHECK_COMMIT"
 git -C "$repo" cat-file -e "$HEALTHCHECK_COMMIT^{commit}"
-git -C "$repo" archive "$HEALTHCHECK_COMMIT" validation/gpu-cluster-healthcheck | gzip -n -6 > healthcheck-pinned.tgz
+git -C "$repo" -c tar.umask=0022 archive "$HEALTHCHECK_COMMIT" validation/gpu-cluster-healthcheck | gzip -n -6 > healthcheck-pinned.tgz
 ```
 
 These commands populate local objects/FETCH_HEAD without switching branches and create only the named archive; they do not publish or deploy it. `prepare-login.sh` compares staged suite contents and executable modes against this exact Git archive. Build/import steps remain separate pre-session work.
@@ -168,7 +168,7 @@ The September 19 measured protected peer retained older maintenance code with a 
 
 ## Evidence, retries and qualification boundaries
 
-Each participant seat receives the five incidents that [README.md](../README.md) lists. The [fixed EFA trial of September 24](../VALIDATION.md#september-24-2026-fixed-candidate-participant-efa-recovery) ended with the participant replacing the target, a route the lab controls no longer offer. That trial consumed 39 minutes 10 seconds from frozen start through retrieval; fault start to runtime readiness alone was 32 minutes 39.111 seconds. Machine timings do not establish that the schedule fits, and it still needs a first-time human rehearsal. No instructor performs per-table rescue.
+Each participant seat receives the six incidents that [README.md](../README.md) lists. The [fixed EFA trial of September 24](../VALIDATION.md#september-24-2026-fixed-candidate-participant-efa-recovery) ended with the participant replacing the target, a route the lab controls no longer offer. That trial consumed 39 minutes 10 seconds from frozen start through retrieval; fault start to runtime readiness alone was 32 minutes 39.111 seconds. Machine timings do not establish that the schedule fits, and it still needs a first-time human rehearsal. No instructor performs per-table rescue.
 
 The EFA faulted job had detected correctness exceptions as well as all-rank watchdogs. The recovered fresh job had zero mismatches across 25 main rows and one EFA-only isolation row, 16 GPU ranks across two MPI processes, four active EFA rails, and successful 16-rank storage. Retain provider/performance WARN and later retransmission deltas. The corrected kernel window is tied to the EFA fault boot and cannot retroactively supply the missing earlier GPU fault capture.
 

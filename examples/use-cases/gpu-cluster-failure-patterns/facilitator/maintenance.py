@@ -29,6 +29,10 @@ Actions:
   efa-activity               two timed samples of the SELECTED EFA's byte
                              counters and this node's queue, for the active-EFA
                              pre-injection condition; observation only
+  gpu-recovery               read-only nvidia-smi queries of compute processes
+                             and every GPU's identity and recovery action,
+                             printed as one JSON record with this node's
+                             instance id, boot id and time; observation only
   restore-runtime [--participant U]   existing restore-runtime.sh
 
 `--operation T` is the coordinator's per-round operation identifier. Both the
@@ -147,7 +151,7 @@ def parse(argv):
                 raise Refusal(f'Unsupported option for {action}: {name}')
         return action, options
     if action in ('inspect', 'boot-id', 'instance-id', 'remount-staging',
-                  'efa-activity'):
+                  'efa-activity', 'gpu-recovery'):
         if rest:
             raise Refusal(f'{action} takes no argument.')
         return action, {}
@@ -1274,6 +1278,84 @@ def instance_identity():
     return value
 
 
+def _boot_id():
+    """This boot's identifier, as the `boot-id` action prints it."""
+    return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+
+
+# The recovery query: identity columns and the driver's own
+# recovery verdict for every GPU on the node. Measured on the G7 target after a
+# device-side assertion (assertion-qualification/raw-673/*.gpu.csv): the header is
+# 'index, uuid, pci.bus_id, gpu_recovery_action' and a healthy device prints
+# 'None'. The coordinator reads the CSV; this helper does not interpret it.
+GPU_RECOVERY_QUERY = ['/usr/bin/nvidia-smi',
+                      '--query-gpu=index,uuid,pci.bus_id,gpu_recovery_action',
+                      '--format=csv']
+
+
+def gpu_recovery(config):
+    """Read every GPU's recovery action once, and print it as one JSON record.
+
+    Observation only: both queries are fixed and take no argument. Nothing here
+    resets, drains or restarts anything. The record carries the query's exit
+    status and both streams verbatim, so a failed or absent nvidia-smi is
+    reported as a failed observation rather than hidden behind a refusal, and the
+    coordinator can tell 'read None' from 'could not read'. The node's instance
+    id and boot id are read beside the query, so the coordinator can check that
+    the answer came from the node and the boot it recorded for the incident.
+    """
+    observed_at = time.time()
+    process_query = ['/usr/bin/nvidia-smi',
+                     '--query-compute-apps=gpu_uuid,pid,process_name', '--format=csv']
+    try:
+        processes = subprocess.run(process_query, capture_output=True, text=True,
+                                   timeout=int(config.get('query_timeout', 20)),
+                                   check=False, stdin=subprocess.DEVNULL,
+                                   env=environment(config))
+        process_rc, process_out, process_err = (processes.returncode, processes.stdout,
+                                                processes.stderr)
+    except subprocess.TimeoutExpired as expired:
+        process_rc = 124
+        process_out = expired.stdout.decode('utf-8', 'replace') if isinstance(expired.stdout, bytes) \
+            else (expired.stdout or '')
+        process_err = expired.stderr.decode('utf-8', 'replace') if isinstance(expired.stderr, bytes) \
+            else (expired.stderr or '')
+        process_err += '\nCompute-process query timed out.\n'
+    except OSError as error:
+        process_rc, process_out, process_err = 127, '', f'Compute-process query failed: {error}\n'
+    try:
+        finished = subprocess.run(GPU_RECOVERY_QUERY, capture_output=True, text=True,
+                                  timeout=int(config.get('query_timeout', 20)),
+                                  check=False, stdin=subprocess.DEVNULL,
+                                  env=environment(config))
+        returncode, stdout, stderr = finished.returncode, finished.stdout, finished.stderr
+    except subprocess.TimeoutExpired as expired:
+        returncode = 124
+        stdout = expired.stdout.decode('utf-8', 'replace') if isinstance(expired.stdout, bytes) \
+            else (expired.stdout or '')
+        stderr = expired.stderr.decode('utf-8', 'replace') if isinstance(expired.stderr, bytes) \
+            else (expired.stderr or '')
+        stderr += '\nnvidia-smi did not answer within the observation deadline.\n'
+    except OSError as error:
+        returncode = 127
+        stdout = ''
+        stderr = f'nvidia-smi could not be run: {error}\n'
+    sys.stdout.write(json.dumps({
+        'action': 'gpu-recovery',
+        'instance_id': instance_identity(),
+        'boot_id': _boot_id(),
+        'observed_at': observed_at,
+        'query': ' '.join([Path(GPU_RECOVERY_QUERY[0]).name] + GPU_RECOVERY_QUERY[1:]),
+        'process_returncode': process_rc,
+        'process_stdout': process_out,
+        'process_stderr': process_err,
+        'returncode': returncode,
+        'stdout': stdout,
+        'stderr': stderr,
+    }, sort_keys=True) + '\n')
+    return 0
+
+
 def resolve_participant(config, requested):
     """Which account owns the restored checkpoint fixture on this node.
 
@@ -1338,6 +1420,8 @@ def main():
             return remount_staging(config)
         if action == 'efa-activity':
             return efa_activity(config)
+        if action == 'gpu-recovery':
+            return gpu_recovery(config)
         if action == 'restore-runtime':
             if config.get('staging_policy') == 'root-directory':
                 verify_root_staging(config)

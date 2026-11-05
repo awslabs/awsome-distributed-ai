@@ -30,6 +30,8 @@ Usage: 12.device-exercise.sh <command>
   ended <issue id> Record that the incident has ended; job.sh runs this for you
   collect <check>  Run one allowed check on your target and save its output
   collect kernel   Save a window of your target's kernel log
+  collect recovery Read and save the current recovery actions
+  resume <issue id> Check whether the current job may resume; job.sh runs this
   recover          Request recovery of your target once you have your evidence
 
 A page that names its round gives that round's start or active command in full.
@@ -51,13 +53,18 @@ case "$1" in
         ;;
     collect)
         [[ $# -eq 2 ]] || usage
-        [[ $2 == kernel || $2 =~ ^[0-9]{1,2}$ ]] || usage
+        [[ $2 == kernel || $2 == recovery || $2 =~ ^[0-9]{1,2}$ ]] || usage
         request=(collect "$2")
         ;;
     ended)
         [[ $# -eq 2 ]] || usage
         [[ $2 =~ ^[0-9a-f]{32}$ ]] || usage
         request=(ended "$2")
+        ;;
+    resume)
+        [[ $# -eq 2 ]] || usage
+        [[ $2 =~ ^[0-9a-f]{32}$ ]] || usage
+        request=(resume "$2")
         ;;
     next|status|recover|replace)
         [[ $# -eq 1 ]] || usage

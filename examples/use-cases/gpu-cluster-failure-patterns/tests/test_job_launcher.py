@@ -180,6 +180,49 @@ class Launcher(unittest.TestCase):
     def next_calls(self):
         return [line for line in self.lines(self.next_log) if line.split()[1] == 'next:']
 
+    def test_readonly_recovery_commands_reach_existing_controller(self):
+        entry = LAB / '12.device-exercise.sh'
+        with tempfile.TemporaryDirectory() as tmp:
+            sudo = Path(tmp) / 'sudo'
+            sudo.write_text('#!/bin/sh\nprintf "%s|" "$@"\n')
+            sudo.chmod(0o755)
+            for words in [('collect', 'recovery'), ('resume', 'a' * 32)]:
+                result = subprocess.run(['bash', str(entry), *words], capture_output=True,
+                                        text=True, timeout=10,
+                                        env={**os.environ, 'PATH': f'{tmp}:/usr/bin:/bin'})
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual('-n|/usr/local/sbin/aim344-device-session|' + '|'.join(words) + '|',
+                                 result.stdout)
+
+    def test_cuda_assert_profile_runs_as_job_and_preserves_failure(self):
+        self.issue(5, 'cuda-assert', {'assert_rank': 0, 'assert_step': 201})
+        result = self.run_job('incident', TEST_RC='1')
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(1, len(self.torch_calls()))
+        self.assertIn('phase=job', self.torch_calls()[0])
+        self.assertIn('"assert_rank":0', self.job_env()[0])
+        self.assertIn('"assert_step":201', self.job_env()[0])
+        self.assertEqual(['next'], self.controller_verbs())
+
+    def test_cuda_assert_resume_requires_controller_and_uses_clean_checkpoint_run(self):
+        self.profile(5, 'cuda-assert', {'assert_rank': 0, 'assert_step': 201})
+        result = self.run_job('resume')
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual([f'resume {self.issue_id(5)}', f'ended {self.issue_id(5)}'],
+                         self.controller_requests())
+        self.assertIn('--resume --end-after-save', self.torch_calls()[0])
+        self.assertIn('settings=unset', self.job_env()[0])
+        self.assertIn('cleanup', self.lines(self.calls))
+
+    def test_cuda_assert_failed_resume_check_starts_no_workload(self):
+        self.profile(5, 'cuda-assert', {'assert_rank': 0, 'assert_step': 201})
+        self.reply(1, 'Current GPU recovery action is Reset.\n', rc=3)
+        result = self.run_job('resume')
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual([], self.torch_calls())
+        self.assertEqual([], self.lines(self.calls))
+        self.assertEqual([f'resume {self.issue_id(5)}'], self.controller_requests())
+
     def job_processes(self):
         # The controller step is a subshell of job.sh, with the same command line.
         found = subprocess.run(['pgrep', '-f', str(self.lab / 'job.sh')], capture_output=True,
@@ -229,23 +272,22 @@ class Launcher(unittest.TestCase):
         text = notes.read_text()
         self.assertTrue(text.startswith('# Your cluster\n'))
         headings = [line for line in text.splitlines() if line.startswith('#')]
-        # The pages' five incidents, in their order, each followed by its case; the
-        # recovery-wait cards under Incident 5; the cost page's case after the loss table.
+        # The six incidents retain their questions; extra cards follow the device case.
         self.assertEqual(['# Your cluster', '# Triage table', '# Healthy values',
                           '# Incident 1', '## Case', '# Incident 2', '## Case',
                           '# Incident 3', '## Case', '# Incident 4', '## Case',
-                          '# Incident 5', '## Case', '## Card A', '## Card B',
+                          '# Incident 5', '## Case', '# Incident 6', '## Case', '## Card A', '## Card B', '## Card C',
                           '# Loss table', '## Case'], headings)
         # Each case block holds the three answers its page asks for.
-        self.assertEqual(6, text.count('\n## Case\n\n1.\n\n2.\n\n3.\n'))
+        self.assertEqual(7, text.count('\n## Case\n\n1.\n\n2.\n\n3.\n'))
         self.assertIn('| What you see | Who reported | First record to read | Check that separates '
                       'the causes | Kind of recovery | Your healthy value |', text)
         for row in ('Nobody times out, but the job is slow', 'One rank does not report',
                     'Every rank reports at once', 'Progress stops and nothing prints',
                     'Everything passes, but an answer differs'):
             self.assertIn(f'| {row} | | | | | |', text)
-        # The device incident's record table is in the Incident 5 section.
-        incident_5 = text[text.index('\n# Incident 5\n'):text.index('\n## Card A\n')]
+        # The device incident is now Incident 6.
+        incident_5 = text[text.index('\n# Incident 6\n'):text.index('\n## Card A\n')]
         # The rows of page 090's step 11, in its order.
         rows = re.findall(r'^\| ([^|]+?) \| \| \|$', incident_5, re.M)
         self.assertEqual(['Last progress line', 'Watchdog lines', 'NCCL WARN lines', 'Kernel log',
@@ -268,8 +310,8 @@ class Launcher(unittest.TestCase):
                     '| Incident 4 | | | |'):
             self.assertIn(row, loss)
         self.assertNotIn('| Incident 2 |', loss)
-        # Incidents 1 to 4 each have a transfer question; Incident 5 has none.
-        self.assertEqual(4, text.count('Transfer question:'))
+        # Incidents 1 to 5 each have a transfer question; Incident 6 has none.
+        self.assertEqual(5, text.count('Transfer question:'))
         self.assertNotIn('Transfer question:', incident_5)
         notes.write_text('mine\n')
         again = self.run_job('notes', **env)

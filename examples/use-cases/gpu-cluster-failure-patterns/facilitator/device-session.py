@@ -16,7 +16,8 @@ target.
 
 The request grammar:
   start gpu | start efa | active gpu | active efa | next | ended <issue id> |
-  status | collect <allowlisted check> | recover
+  resume <issue id> | status | collect <allowlisted check> | collect recovery |
+  recover
 No node name, PCI address, job identifier, shell command or check outside the
 collect allowlist is accepted. `replace` is accepted by the grammar and refused:
 an operator replaces a node that recovery cannot qualify after the session.
@@ -27,6 +28,15 @@ after a job that ends a job incident completes, records that the incident with
 that issue id has ended. The replies of `next` and `ended`, and status, collect
 and recover while that incident is unresolved, do not name the incident's kind;
 --operator status does.
+
+The application incident (APPLICATION_EXERCISES) is applied by the participant's
+own job, like any job incident, and this helper never touches a device for it.
+What it adds is evidence: `next` records the running allocation, the node's
+identity and boot before it hands over the profile; `collect` then reads the
+suite's read-only checks, the kernel window and the driver's recovery verdict
+(`collect recovery`) for that incident; and `resume <issue id>` is the read-only
+check job.sh runs before the resumed job, which refuses unless every assigned
+GPU reports no recovery action on the same node and boot.
 """
 import argparse
 import datetime
@@ -55,14 +65,23 @@ PHASES = ('ready', 'preparing', 'fault-applied', 'investigating', 'recovering',
 # Phases in which this assignment still holds its exercise node.
 HOLDING_PHASES = ('preparing', 'fault-applied', 'investigating', 'recovering',
                   'recovery-failed', 'replacement-required')
-USAGE = ('Commands: start gpu | start efa | active gpu | active efa | next | ended <issue id> | status | collect <check> | recover')
+USAGE = ('Commands: start gpu | start efa | active gpu | active efa | next | ended <issue id> | '
+         'resume <issue id> | status | collect <check> | collect recovery | recover')
 
 # The incidents a seat's schedule can name (v2 hour design, section 4). The job
 # exercises are applied by the participant's launcher inside their own job, so
 # this helper only hands the launcher the incident's profile. The device exercise
 # is applied here, through the existing start route, once the participant's job
 # reports progress: an active EFA function-level reset of the assigned target.
-JOB_EXERCISES = ('slow-job', 'storage', 'dataloader', 'silent-corruption')
+JOB_EXERCISES = ('slow-job', 'storage', 'dataloader', 'silent-corruption', 'cuda-assert')
+# Job exercises whose incident happens on the exercise node's devices: the
+# participant's job runs a device-side assertion on one of the target's GPUs
+# (workload.py --assert-rank/--assert-step). This helper applies nothing for
+# it. It records the running allocation when the profile is handed over, lets
+# collect read the node for that incident while no device round holds it, and
+# answers the launcher's pre-resume check (`resume <issue id>`) from a read-only
+# query of the driver's recovery verdict.
+APPLICATION_EXERCISES = ('cuda-assert',)
 DEVICE_EXERCISES = {
     'efa-reset': {'kind': 'efa', 'active': True,
                   'answer': 'the lab controller reset one EFA device on your '
@@ -105,11 +124,17 @@ EXERCISE_SETTINGS = {
                    'affected_rank': 'rank', 'worker_cuda': 'flag'},
     'silent-corruption': {'corrupt_rank': 'rank', 'corrupt_step': 'step',
                           'corrupt_bit': 'bit', 'corrupt_recurring': 'flag'},
+    # workload.py --assert-rank / --assert-step (step defaults to 201 there).
+    'cuda-assert': {'assert_rank': 'rank', 'assert_step': 'step'},
     'efa-reset': {},
 }
-REQUIRED_SETTINGS = {'silent-corruption': ('corrupt_rank',)}
+REQUIRED_SETTINGS = {'silent-corruption': ('corrupt_rank',), 'cuda-assert': ('assert_rank',)}
 # 2 nodes of 8 GPUs; the installer reads AIM344_WORLD_SIZE for another layout.
 DEFAULT_WORLD_SIZE = 16
+# The allocation the launcher takes (README salloc line, common.sh
+# prepare_allocation): exactly two nodes with the same GPU count. The rank
+# mapping below (DeviceSession._target_ranks) is only defined for that shape.
+ALLOCATION_NODES = 2
 
 
 def _setting_problem(kind, value, world_size):
@@ -176,6 +201,8 @@ def validate_schedule(entries, world_size=None):
         for key in REQUIRED_SETTINGS.get(exercise, ()):
             if key not in settings:
                 raise Refusal(f'Schedule entry {number} ({exercise}) needs the setting {key}.')
+        if exercise == 'cuda-assert' and settings.get('assert_step', 201) <= 200:
+            raise Refusal(f'Schedule entry {number} assert_step must follow checkpoint 200.')
         # job.sh read_profile refuses these without a cached dataset, as the job does.
         if (exercise == 'dataloader' and settings.get('dataset_cache') == 'none'
                 and ('affected_rank' in settings or settings.get('worker_cuda'))):
@@ -907,16 +934,17 @@ def parse_participant_request(text):
         if arguments:
             return Request(error=f'{verb} takes no argument. {USAGE}')
         return Request(verb=verb)
-    if verb == 'ended':
+    if verb in ('ended', 'resume'):
         # The issue id of the incident's profile, so that the request names one
         # issued incident and never the one issued after it.
         if len(arguments) != 1 or not ISSUE_ID.fullmatch(arguments[0]):
-            return Request(error=f'Use ended <issue id>. {USAGE}')
+            return Request(error=f'Use {verb} <issue id>. {USAGE}')
         return Request(verb=verb, argument=arguments[0])
     if verb == 'collect':
         if len(arguments) != 1:
             return Request(error=f'Use collect <check>. {USAGE}')
-        if arguments[0] != 'kernel' and not re.fullmatch(r'[0-9]{1,2}', arguments[0]):
+        if (arguments[0] not in ('kernel', 'recovery')
+                and not re.fullmatch(r'[0-9]{1,2}', arguments[0])):
             return Request(error='A check is one of the identifiers listed by status.')
         return Request(verb='collect', argument=arguments[0])
     return Request(error=f'Unknown command {verb!r}. {USAGE}')
@@ -938,7 +966,8 @@ class Result:
     def __init__(self, state, output=None, saved_path=None, node_state=None,
                  node_reason=None, already_started=False, already_recovered=False,
                  next_step='', incident=None, under_way=False,
-                 collectable=None, schedule_line=None, current_incident=None):
+                 collectable=None, schedule_line=None, current_incident=None,
+                 application_incident=None):
         self.state = state
         self.output = output
         self.saved_path = saved_path
@@ -956,6 +985,9 @@ class Result:
         # status: the round's incident, only when it is this seat's current
         # issuance and not one left by an earlier pass of the schedule.
         self.current_incident = current_incident
+        # status and collect: the issued application incident collect reads the
+        # node for, while no device round holds it (the progress entry).
+        self.application_incident = application_incident
 
 
 class DeviceSession:
@@ -2773,7 +2805,8 @@ class DeviceSession:
                       next_step=next_step,
                       collectable=collectable,
                       schedule_line=self._schedule_line(),
-                      current_incident=self._current_incident(state))
+                      current_incident=self._current_incident(state),
+                      application_incident=self._application_incident(state))
 
     # ---------------- incident schedule ----------------
     ISSUED_STEP = ('Your launcher runs this incident from the profile above. To repeat '
@@ -2781,7 +2814,7 @@ class DeviceSession:
     UNDER_WAY_STEP = ('Watch your job. Record what you see, collect checks, and run '
                       'recover when your page says so.')
     PROGRESS_ENTRY_FIELDS = {'number', 'exercise', 'issued_at', 'issue_id', 'profile',
-                             'last_refusal', 'ended_at'}
+                             'last_refusal', 'ended_at', 'job', 'resume_check'}
 
     def _schedule(self):
         """The seat's checked schedule, or None when account preparation set none."""
@@ -2936,6 +2969,13 @@ class DeviceSession:
             if current and current['profile'] is None:
                 # The record advanced but the profile was not written: finish that
                 # incident's hand-over rather than advancing past it.
+                if current['exercise'] in APPLICATION_EXERCISES:
+                    observed = self._application_allocation(
+                        state, schedule[current['number'] - 1]['settings'])
+                    if observed != current.get('job'):
+                        raise Refusal('The allocation or target changed before the profile '
+                                      'could be handed over. Nothing was issued; ask the '
+                                      'operator to reset this unfinished seat.')
                 return self._issue_profile(progress, current, schedule)
             # Applied means this round was started for this issuance and issued
             # its operation. A round left by an earlier pass of the schedule has
@@ -2950,6 +2990,15 @@ class DeviceSession:
                                   next_step=self.ISSUED_STEP)
                 step = current
             else:
+                if (current and current['exercise'] in APPLICATION_EXERCISES
+                        and 'ended_at' not in current):
+                    # The application incident's evidence is read against the
+                    # allocation recorded for it. Another incident on top of it
+                    # would make that record ambiguous, so it ends first: job.sh
+                    # sends ended once the resumed job completes.
+                    raise Refusal(f'Incident {current["number"]} is under way. Collect your '
+                                  'evidence and run the resume step your page shows; '
+                                  'next continues after that.')
                 if len(issued) >= len(schedule):
                     raise Refusal(f'All {len(schedule)} incidents for this seat have been '
                                   'issued; there is no next incident.')
@@ -2957,6 +3006,11 @@ class DeviceSession:
                          'exercise': schedule[len(issued)]['exercise'],
                          'issued_at': self.clock(), 'issue_id': secrets.token_hex(16),
                          'profile': None}
+                if entry['exercise'] in APPLICATION_EXERCISES:
+                    # Read before the record advances, so a refusal here leaves
+                    # the schedule where it was and nothing to finish later.
+                    entry['job'] = self._application_allocation(
+                        state, schedule[len(issued)]['settings'])
                 issued.append(entry)
                 # Recorded before the profile is written, so a failed write is
                 # finished by the next call instead of skipping an incident.
@@ -3016,9 +3070,418 @@ class DeviceSession:
             return 0, False, 0
         return len(issued), bool(issued and 'ended_at' in issued[-1]), len(schedule)
 
+    # ---------------- the application incident ----------------
+    # What status and next tell the participant while it is under way. The same
+    # sentence from both, so neither reply says more than the other.
+    APPLICATION_STEP = ('Collect your evidence, then run the resume step your page shows; '
+                        'next continues after that.')
+    # The suite's checks that only read the node, so they may run beside the
+    # participant's own allocation (install-participant-control.sh: 0 and 3 are
+    # 'reads only'; 2 pins GPU memory and 6 sends EFA traffic).
+    BESIDE_JOB_CHECKS = ('0', '3')
+    # The header `gpu-recovery` reads, as nvidia-smi prints it for the fixed query
+    # (maintenance.GPU_RECOVERY_QUERY; assertion-qualification/raw-673/*.gpu.csv).
+    RECOVERY_HEADER = ('index', 'uuid', 'pci.bus_id', 'gpu_recovery_action')
+    GPU_UUID = re.compile(r'GPU-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
+    # The driver's verdict that no recovery is needed. Anything the query could
+    # not answer -- an empty cell, N/A, a bracketed error -- is not that verdict
+    # and not a verdict of any kind: it is an observation that did not happen.
+    RECOVERY_NONE = 'None'
+    RECOVERY_UNREADABLE = re.compile(r'(?i)^(?:|n/?a|unknown(?: error)?|\[.*\])$')
+
+    def _application_incident(self, state):
+        """The issued application incident collect reads the node for, or None.
+
+        It is the latest issued incident, handed over and not yet ended, with the
+        allocation `next` recorded for it. While a device round holds the node
+        there is none: that round's own evidence comes first, through the phases
+        it already has.
+        """
+        if state.phase not in ('ready', 'runtime-ready', 'verified'):
+            return None
+        try:
+            schedule = self._schedule()
+            if not schedule:
+                return None
+            issued = self._read_progress(schedule)['issued']
+        except Refusal:
+            return None
+        current = issued[-1] if issued else None
+        if (current and current['exercise'] in APPLICATION_EXERCISES
+                and current['profile'] is not None and 'ended_at' not in current
+                and isinstance(current.get('job'), dict)
+                and {'id', 'boot_id', 'target_instance_id', 'gpus_per_node'} <= set(current['job'])):
+            return current
+        return None
+
+    def _job_hosts(self, job_id):
+        """The hosts of the participant's allocation, in Slurm's order, or a Refusal."""
+        shown = self._scontrol('show', 'job', '-o', str(job_id))
+        nodelists = re.findall(r'(?<!\S)NodeList=(\S+)', shown.stdout or '')
+        if shown.returncode != 0 or len(nodelists) != 1 or nodelists[0] in ('(null)', ''):
+            raise Refusal('The hosts of your allocation could not be read; run status, '
+                          'then start the incident again.')
+        expanded = self._scontrol('show', 'hostnames', nodelists[0])
+        hosts = [line.strip() for line in (expanded.stdout or '').splitlines() if line.strip()]
+        if expanded.returncode != 0 or not hosts:
+            raise Refusal('The hosts of your allocation could not be read; run status, '
+                          'then start the incident again.')
+        return hosts
+
+    def _target_ranks(self, hosts):
+        """The inclusive rank range the exercise node runs, or a Refusal.
+
+        The rule, agreed with the launcher: the job has `world_size` ranks (the
+        assignment's `world_size`, default DEFAULT_WORLD_SIZE) over exactly
+        ALLOCATION_NODES hosts in the order Slurm lists them, each host running
+        world_size / ALLOCATION_NODES consecutive ranks, so host i runs ranks
+        i * per_node .. (i + 1) * per_node - 1. That is torch.distributed.run with
+        --node-rank=SLURM_PROCID (torch-node.sh) and --nproc-per-node equal on both
+        hosts (common.sh prepare_allocation). Any other shape is refused rather
+        than mapped.
+        """
+        world_size = self.assignment.get('world_size', DEFAULT_WORLD_SIZE)
+        if (not isinstance(world_size, int) or isinstance(world_size, bool)
+                or world_size < ALLOCATION_NODES or world_size % ALLOCATION_NODES):
+            raise Refusal("This seat's configured world size does not divide over the "
+                          'allocation; raise your hand.')
+        if len(hosts) != ALLOCATION_NODES or len(set(hosts)) != len(hosts):
+            raise Refusal(f'This incident needs your allocation on exactly {ALLOCATION_NODES} '
+                          f'nodes, and it is on {len(hosts)}; take it with the salloc line '
+                          'on your page, then start the incident from it.')
+        target = self.assignment['target_node']
+        if target not in hosts:
+            raise Refusal('Your allocation does not include your exercise node; take it '
+                          'with the salloc line on your page, then start the incident '
+                          'from it.')
+        per_node = world_size // ALLOCATION_NODES
+        position = hosts.index(target)
+        return per_node, [position * per_node, (position + 1) * per_node - 1]
+
+    def _allocated_gpu_count(self, job_id):
+        """The explicit per-node GPU request of this homogeneous allocation."""
+        shown = self._scontrol('show', 'job', '-o', str(job_id))
+        fields = re.findall(r'(?<!\S)TresPerNode=(\S+)', shown.stdout or '')
+        counts = (re.findall(r'(?:^|,)gres/gpu(?::[^,:()]+)?:(\d+)(?=,|$)', fields[0])
+                  if len(fields) == 1 else [])
+        if shown.returncode != 0 or len(counts) != 1 or int(counts[0]) < 1:
+            raise Refusal('The per-node GPU allocation could not be read; use the '
+                          'explicit --gres allocation on your page.')
+        return int(counts[0])
+
+    def _application_allocation(self, state, settings):
+        """What `next` records for the application incident before its profile.
+
+        The participant's one allowed allocation must be RUNNING on the exercise
+        node, the incident's rank must be one of that node's ranks, and the node
+        must still report the assigned identity and a usable boot. All of it is
+        read, none of it is changed, and a refusal leaves the schedule as it was.
+        """
+        own = self._own_job(self._jobs_on_target())
+        if not own or own['state'] != 'RUNNING':
+            raise Refusal('This incident starts inside your running allocation; take it '
+                          'with the salloc line on your page, then start the incident '
+                          'from it. Nothing was issued.')
+        hosts = self._job_hosts(own['id'])
+        per_node, ranks = self._target_ranks(hosts)
+        if self._allocated_gpu_count(own['id']) != per_node:
+            raise Refusal('The allocated GPU count differs from this seat\'s configured '
+                          'world size; nothing was issued.')
+        rank = settings.get('assert_rank')
+        if not (isinstance(rank, int) and ranks[0] <= rank <= ranks[1]):
+            raise Refusal(f"This seat's incident names a rank that is not on your exercise "
+                          f'node (that node runs ranks {ranks[0]}-{ranks[1]} of this '
+                          'allocation); raise your hand. Nothing was issued.')
+        instance_id = self._instance_id()
+        if instance_id != self.assignment['target_instance_id']:
+            raise Refusal('Your exercise node no longer reports the expected instance '
+                          'identity; nothing was issued.')
+        return {'id': own['id'], 'target_node': self.assignment['target_node'],
+                'target_instance_id': instance_id, 'boot_id': self._boot_id(),
+                'job_started_at': self._job_start(own['id']), 'hosts': hosts,
+                'gpus_per_node': per_node, 'ranks': ranks}
+
+    def _application_directory(self, application):
+        return ('collected', f'incident-{application["number"]}-{application["issue_id"]}')
+
+    def _kernel_text(self, boot, since):
+        """The bounded kernel window as text; an unusable answer is said so."""
+        try:
+            if not self.BOOT_ID.fullmatch(str(boot or '')):
+                raise Refusal('No recorded fault boot UUID; kernel window unavailable.')
+            argv = ['kernel-evidence', '--boot', boot]
+            if since is not None:
+                argv += ['--since', str(int(since))]
+            result = self.executor.run_maintenance(argv, timeout=15)
+            text = (result.stdout or '') + (result.stderr or '')
+            return (f'# bounded kernel attempt returncode={result.returncode}; '
+                    'not full capture\n' + text)
+        except (OSError, subprocess.TimeoutExpired, Refusal) as error:
+            return f'# kernel evidence unavailable: {type(error).__name__}: {error}\n'
+
+    def _recovery_record(self, result):
+        for line in (result.stdout or '').splitlines():
+            line = line.strip()
+            if not line.startswith('{'):
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(record, dict) and record.get('action') == 'gpu-recovery':
+                return record
+        return None
+
+    def _recovery_reading(self, application, result):
+        """Read one `gpu-recovery` answer against the incident's recorded node.
+
+        Returns (reading, notes, rows). `reading` is 'none' only when the route
+        and the query both succeeded, the record names the recorded instance and
+        boot, the CSV has the expected header and exactly the expected number of
+        distinct devices, and every one of them reads None. 'action-required'
+        when the same holds except that a device names a recovery action.
+        Everything else -- a failed route or query, another node or boot, an
+        unreadable or incomplete table, a cell that is not a verdict -- is
+        'unavailable': an observation that was not made, never a reading of None.
+        `rows` is the parsed table, (index, uuid, bus, action) per device, as far
+        as it could be read.
+        """
+        job = application['job']
+        notes = []
+        unavailable = False
+        notes.append(f'# gpu-recovery route returncode={result.returncode}')
+        if result.returncode != 0:
+            unavailable = True
+            notes.append('# note: the maintenance route did not complete the query')
+        record = self._recovery_record(result)
+        rows = []
+        if record is None:
+            notes.append('# note: no gpu-recovery record was returned')
+            return 'unavailable', notes, rows
+        if record.get('returncode') != 0:
+            unavailable = True
+            notes.append(f'# note: the query exited {record.get("returncode")!r}, '
+                         'so its table is not an observation')
+        if record.get('instance_id') != job['target_instance_id']:
+            unavailable = True
+            notes.append(f'# instance: {record.get("instance_id")!r} is not the identity '
+                         f'recorded for incident {application["number"]} '
+                         f'({job["target_instance_id"]})')
+        else:
+            notes.append(f'# instance: {job["target_instance_id"]} matches the identity '
+                         f'recorded for incident {application["number"]}')
+        if record.get('boot_id') != job['boot_id']:
+            unavailable = True
+            notes.append(f'# boot: {record.get("boot_id")!r} does not match the boot recorded '
+                         f'when incident {application["number"]} was issued ({job["boot_id"]})')
+        else:
+            notes.append(f'# boot: {job["boot_id"]} matches the boot recorded when incident '
+                         f'{application["number"]} was issued')
+        lines = [line for line in str(record.get('stdout') or '').splitlines() if line.strip()]
+        header = tuple(cell.strip() for cell in lines[0].split(',')) if lines else ()
+        if header != self.RECOVERY_HEADER:
+            unavailable = True
+            notes.append('# note: the query returned no table with the expected columns')
+            return 'unavailable', notes, rows
+        required = []
+        for line in lines[1:]:
+            cells = [cell.strip() for cell in line.split(',')]
+            if len(cells) != 4 or not cells[0].isdigit() or not self.GPU_UUID.fullmatch(cells[1]):
+                unavailable = True
+                notes.append(f'# note: unreadable row {line.strip()!r}')
+                continue
+            rows.append(tuple(cells))
+        expected = job['gpus_per_node']
+        indices = [row[0] for row in rows]
+        uuids = [row[1] for row in rows]
+        if len(set(indices)) != len(indices) or len(set(uuids)) != len(uuids):
+            unavailable = True
+            notes.append('# note: the table repeats a device')
+        if len(rows) != expected:
+            unavailable = True
+        for row in rows:
+            action = row[3]
+            if action == self.RECOVERY_NONE:
+                continue
+            if self.RECOVERY_UNREADABLE.fullmatch(action):
+                unavailable = True
+                notes.append(f'# note: device {row[0]} ({row[1]}, {row[2]}) reports '
+                             f'{action!r}, which is not a verdict')
+            else:
+                required.append(f'device {row[0]} ({row[1]}, {row[2]}): {action}')
+        if required:
+            notes.append(f'# gpus: {len(rows)} of {expected} expected; ' + '; '.join(required))
+        elif unavailable:
+            notes.append(f'# gpus: {len(rows)} of {expected} expected; not every assigned '
+                         'device was read')
+        else:
+            notes.append(f'# gpus: {len(rows)} of {expected} expected; every assigned '
+                         'device reports None')
+        if unavailable:
+            return 'unavailable', notes, rows
+        return ('action-required' if required else 'none'), notes, rows
+
+    def _recovery_observation(self, application):
+        """Query the recovery verdict once; (reading, text to save, rows)."""
+        try:
+            result = self.executor.run_maintenance(['gpu-recovery'], timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            result = Completed(124, '', f'Recovery observation unavailable: {error}\n')
+        reading, notes, rows = self._recovery_reading(application, result)
+        text = '\n'.join([notes[0], f'# reading: {reading}'] + notes[1:]) + '\n'
+        text += (result.stdout or '') + (result.stderr or '')
+        if not text.endswith('\n'):
+            text += '\n'
+        return reading, text, rows
+
+    def _unfinished_steps(self, job_id):
+        """Refuse active workload steps across both nodes, not the allocation shell."""
+        result = self.executor.run_slurm([
+            str(Path(self.slurm_bin) / 'squeue'), '--steps', '--jobs', str(job_id),
+            '--noheader', '--format', '%i'])
+        if result.returncode != 0:
+            raise Refusal('The previous job steps could not be read.')
+        for line in (result.stdout or '').splitlines():
+            if not line.strip():
+                continue
+            match = re.fullmatch(re.escape(str(job_id)) + r'\.(\d+|batch|extern)',
+                                 line.strip())
+            if not match:
+                raise Refusal('The previous job-step state could not be interpreted.')
+            if match[1].isdigit():
+                raise Refusal('A previous workload step is still active; wait for it '
+                              'to finish before resuming.')
+
+    def _collect_application(self, state, application, check):
+        """Read the node for the application incident, into its own directory.
+
+        Nothing about the device round's record changes: no phase, no collected
+        list, no round number. Each capture is a new file under
+        collected/incident-N-<issue id>/, never over an earlier one.
+        """
+        job = application['job']
+        if check == 'kernel':
+            text = self._kernel_text(job['boot_id'], job.get('job_started_at'))
+        elif check == 'recovery':
+            _, text, _ = self._recovery_observation(application)
+        else:
+            allowed = self.collect_checks(state)
+            if str(check) not in allowed:
+                raise Refusal(f'Check {check} is not available for this exercise. '
+                              f'Available: {", ".join(allowed)}.')
+            if str(check) not in self.BESIDE_JOB_CHECKS and self._jobs_on_target():
+                raise Refusal(f'Check {check} loads the devices of your exercise node, so it '
+                              'runs after your allocation ends; nothing was run.')
+            result = self.executor.run_maintenance(['collect', str(check)], timeout=900)
+            text = (f'# maintenance collect returncode={result.returncode}\n'
+                    + (result.stdout or '') + (result.stderr or ''))
+        saved = self._write_participant_file(
+            self._application_directory(application),
+            lambda attempt: self.collect_output_name(check, 'incident', attempt), text)
+        return Result(state, output=text, saved_path=saved, next_step=self._next_step(state),
+                      application_incident=application)
+
+    def resume(self, issue_id):
+        """The read-only check job.sh runs before the application incident's resume.
+
+        It allows the resumed job only when the allocation recorded for the
+        incident is still the one running on the exercise node, the node reports
+        the recorded identity and boot, and every assigned device reads None from
+        the driver's recovery query, with the assigned device among them. The
+        observation is saved with the incident whether or not it allows, and the
+        incident is not ended here: `ended` follows the resumed job.
+        """
+        with self.store.exclusive():
+            schedule = self._schedule()
+            if schedule is None:
+                raise Refusal('This seat has no incident schedule; raise your hand.')
+            progress = self._read_progress(schedule)
+            issued = progress['issued']
+            entry = next((entry for entry in issued if entry['issue_id'] == issue_id), None)
+            if entry is None:
+                raise Refusal('No incident with that issue id has been issued on your seat.')
+            number = entry['number']
+            if entry['exercise'] not in APPLICATION_EXERCISES:
+                raise Refusal(f'Incident {number} has no pre-resume check; follow your page.')
+            if entry['profile'] is None:
+                raise Refusal(f'Incident {number} has not started yet; follow your page.')
+            if 'ended_at' in entry:
+                raise Refusal(f'Incident {number} has ended; follow your page.')
+            if entry is not issued[-1]:
+                raise Refusal(f'Incident {number} is not your current incident; follow your page.')
+            state = self.store.read()
+            if state.phase in HOLDING_PHASES:
+                held = (f'Incident {state.incident["number"]}' if state.incident
+                        else 'An earlier round')
+                raise Refusal(f'{held} still holds your node; finish it with recover first.')
+            application = self._application_incident(state)
+            if application is None or application['issue_id'] != issue_id:
+                raise Refusal(f'Incident {number} has no recorded allocation to check '
+                              'against; raise your hand.')
+            job = application['job']
+            failures = []
+            try:
+                own = self._own_job(self._jobs_on_target())
+                if not own or own['state'] != 'RUNNING' or own['id'] != job['id']:
+                    failures.append('the allocation recorded for this incident is not the one '
+                                    'running on your exercise node')
+            except Refusal as refusal:
+                failures.append(str(refusal))
+            try:
+                self._unfinished_steps(job['id'])
+            except (Refusal, OSError, subprocess.TimeoutExpired) as error:
+                failures.append(str(error))
+            try:
+                if self._instance_id() != job['target_instance_id']:
+                    failures.append('your exercise node does not report the recorded identity')
+                if self._boot_id() != job['boot_id']:
+                    failures.append('your exercise node restarted since this incident was issued')
+            except Refusal as refusal:
+                failures.append(str(refusal))
+            assigned = None
+            try:
+                assigned = self._inspect().get('gpu_uuid')
+                if not self.GPU_UUID.fullmatch(str(assigned or '')):
+                    failures.append('the assigned device identity could not be read')
+            except Refusal as refusal:
+                failures.append(str(refusal))
+            reading, text, rows = self._recovery_observation(application)
+            record = self._recovery_record(Completed(0, text, '')) or {}
+            processes = [line.strip() for line in
+                         str(record.get('process_stdout') or '').splitlines() if line.strip()]
+            if (record.get('process_returncode') != 0 or not processes
+                    or tuple(cell.strip() for cell in processes[0].split(','))
+                    != ('gpu_uuid', 'pid', 'process_name')):
+                failures.append('the previous compute processes could not be read')
+            elif len(processes) != 1:
+                failures.append('compute processes remain on the target; wait for them '
+                                'to finish before resuming')
+            if reading != 'none':
+                failures.append('the device query did not read None for every assigned device'
+                                if reading == 'action-required'
+                                else 'the device query could not be read for every assigned '
+                                     'device')
+            if assigned and assigned not in {row[1] for row in rows}:
+                failures.append('the assigned device was not among the devices reported')
+            text += f'# resume: {"refused" if failures else "allowed"}\n'
+            if failures:
+                text += ''.join(f'# refused: {reason}\n' for reason in failures)
+            saved = self._write_participant_file(
+                self._application_directory(application),
+                lambda attempt: ('resume-check.log' if attempt == 1
+                                 else f'resume-check-attempt-{attempt}.log'), text)
+            entry['resume_check'] = {'at': self.clock(), 'allowed': not failures,
+                                     'log': str(saved)}
+            _write_private_json(self._progress_path(), progress)
+            if failures:
+                raise Refusal('Your node is not ready to resume: ' + '; '.join(failures)
+                              + f'. Nothing was changed. Observation: {saved}')
+            return Result(state, incident=number, saved_path=saved)
+
     def _next_step(self, state, preparing_now=False):
-        issued, ended, total = (self._issued_progress() if state.phase == 'ready'
-                                else (0, False, 0))
+        application = self._application_incident(state)
+        issued, ended, total = (self._issued_progress()
+                                if state.phase == 'ready' or application else (0, False, 0))
         # An issued incident is under way until job.sh reports that a job that ends
         # it completed. The device incident also waits in this phase until its job
         # reports progress, and `ended` never marks it, so before its fault the line
@@ -3029,7 +3492,9 @@ class DeviceSession:
         elif issued and ended:
             ready = f'Incident {issued} has ended. It was the last incident for this seat.'
         elif issued:
-            ready = f'Incident {issued} is under way. Follow your page for its next step.'
+            ready = (f'Incident {issued} is under way. '
+                     + (self.APPLICATION_STEP if application
+                        else 'Follow your page for its next step.'))
         elif self.assignment.get('exercise_schedule'):
             ready = 'Your node is in service. Start the next incident the way your page shows.'
         else:
@@ -3047,8 +3512,9 @@ class DeviceSession:
             'recovering': 'Recovery is running; run status again.',
             'recovery-failed': 'Your node is still out of service; run recover again.',
             'replacement-required': OPERATOR_REPLACEMENT,
-            'runtime-ready': 'Take a fresh allocation and verify Check 5 and storage.',
-            'verified': 'This round is complete.',
+            'runtime-ready': (ready if application
+                              else 'Take a fresh allocation and verify Check 5 and storage.'),
+            'verified': ready if application else 'This round is complete.',
         }[state.phase]
 
     # Three uses, two tables (v2 mechanisms, finding 11). `collect_checks` is what a
@@ -3161,7 +3627,12 @@ class DeviceSession:
         A recovered node is back in service. Once a later incident has been issued
         it belongs to that incident, so collect is refused as before any round.
         Until then collect is limited to the round's own qualification checks.
+        While an application incident is current, collect reads the node for it
+        instead: every collectable check, 'kernel' and 'recovery' (render adds the
+        last two).
         """
+        if self._application_incident(state) is not None:
+            return self.collect_checks(state) + ['recovery']
         if state.phase == 'ready':
             return None
         if state.phase in ('runtime-ready', 'verified'):
@@ -3173,9 +3644,16 @@ class DeviceSession:
     def collect(self, check):
         with self.store.exclusive():
             state = self.store.read()
+            application = self._application_incident(state)
+            if application is not None:
+                if check not in ('kernel', 'recovery') and not re.fullmatch(r'[0-9]{1,2}', str(check)):
+                    raise Refusal('A check is one of the identifiers listed by status.')
+                return self._collect_application(state, application, check)
             allowed = self._collectable(state)
             if allowed is None:
                 raise Refusal('There is no exercise running yet. Start one first.')
+            if check == 'recovery':
+                raise Refusal('A check is one of the identifiers listed by status.')
             if check == 'kernel':
                 text, saved = self._collect_kernel(state)
                 return Result(state, output=text, saved_path=saved, next_step=self._next_step(state))
@@ -4294,6 +4772,8 @@ def render(result, verb, operator=False):
         lines.append(f'Exercise phase: {state.phase}')
         if incident:
             lines.append(f'Incident: {incident["number"]}')
+        elif result.application_incident:
+            lines.append(f'Incident: {result.application_incident["number"]}')
         if state.kind and (operator or not state.incident):
             lines.append(f'Exercise: {state.kind}')
         if state.incident and operator:
@@ -4305,9 +4785,11 @@ def render(result, verb, operator=False):
         if result.schedule_line:
             lines.append(result.schedule_line)
         if result.collectable is not None:
-            lines.append('Checks you can collect: '
-                         + ', '.join(list(result.collectable) + ['kernel']))
-        if state.collected:
+            checks = [c for c in result.collectable if c != 'recovery'] + ['kernel']
+            if 'recovery' in result.collectable:
+                checks.append('recovery')
+            lines.append('Checks you can collect: ' + ', '.join(checks))
+        if state.collected and result.application_incident is None:
             lines.append(f'Checks collected: {", ".join(state.collected)}')
         if state.check_results:
             lines.append('Recorded check results:')
@@ -4368,6 +4850,9 @@ def render(result, verb, operator=False):
         return '\n'.join([output] + tail) + '\n'
     elif verb == 'ended':
         lines.append(f'Incident {result.incident} has ended.')
+    elif verb == 'resume':
+        lines.append(f'Incident {result.incident} may resume.')
+        lines.append(f'Observation: {result.saved_path}')
     elif verb == 'next':
         if result.under_way:
             lines.append(f'Incident {result.incident} is under way.')
@@ -4432,6 +4917,15 @@ def operator_view(handler):
                 row += f' ended {ended}'
             if same_issue(result.state.incident, entry):
                 row += f' round={result.state.round} phase={result.state.phase}'
+            if isinstance(entry.get('job'), dict):
+                job = entry['job']
+                ranks = job.get('ranks') or ['?', '?']
+                row += (f'\n     job={job.get("id")} ranks={ranks[0]}-{ranks[1]} '
+                        f'boot={job.get("boot_id")}')
+            if entry.get('resume_check'):
+                check = entry['resume_check']
+                row += (f'\n     resume check: {"allowed" if check.get("allowed") else "refused"} '
+                        f'({check.get("log")})')
             if entry.get('last_refusal'):
                 row += f'\n     last refusal: {entry["last_refusal"]["text"]}'
         else:
@@ -4471,6 +4965,8 @@ def main(argv=None):
             result = handler.next()
         elif verb == 'ended':
             result = handler.ended(request.argument)
+        elif verb == 'resume':
+            result = handler.resume(request.argument)
         elif verb == 'status':
             result = handler.status()
         elif verb == 'collect':

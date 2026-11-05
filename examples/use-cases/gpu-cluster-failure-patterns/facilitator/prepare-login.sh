@@ -43,11 +43,11 @@ if ! git -C "$repo" cat-file -e "$HEALTHCHECK_COMMIT^{commit}" 2>/dev/null; then
     git -C "$repo" fetch --depth=1 origin "$HEALTHCHECK_COMMIT"
 fi
 if [[ ! -s $stage/healthcheck-pinned.tgz ]]; then
-    git -C "$repo" archive "$HEALTHCHECK_COMMIT" validation/gpu-cluster-healthcheck | gzip > "$stage/healthcheck-pinned.tgz"
+    git -C "$repo" -c tar.umask=0022 archive "$HEALTHCHECK_COMMIT" validation/gpu-cluster-healthcheck | gzip -n -6 > "$stage/healthcheck-pinned.tgz"
 fi
 # Compare file contents and executable modes; extraction ownership is host-local.
 expected=$(mktemp /tmp/aim344-health-source.XXXXXX.tar)
-git -C "$repo" archive "$HEALTHCHECK_COMMIT" validation/gpu-cluster-healthcheck > "$expected"
+git -C "$repo" -c tar.umask=0022 archive "$HEALTHCHECK_COMMIT" validation/gpu-cluster-healthcheck > "$expected"
 python3 - "$expected" "$stage/healthcheck-pinned.tgz" <<'PY'
 import hashlib, sys, tarfile
 def entries(path):
