@@ -7,7 +7,7 @@
 CONTAINER_NAME="otel-collector"
 
 ECR_ACCOUNT_ID=602401143452
-VERSION=v1754424030352
+VERSION=v1782332626135
 IMAGE="$ECR_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/hyperpod/otel_collector:${VERSION}"
 
 # Maximum number of retries
