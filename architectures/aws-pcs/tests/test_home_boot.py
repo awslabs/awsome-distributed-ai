@@ -108,6 +108,9 @@ elif name != "sleep":
 class HomeBootCases:
     """Shared contract for every /home mount script. Subclasses set the backend."""
     SCRIPT = ACTION = FS_ARG = DOMAIN = EXPORT = FSTYPE = OPTIONS = None
+    # NFSv3 (OpenZFS) starts rpc-statd from mount.nfs; NFSv4.1 (EFS) carries
+    # locking in the protocol and does not.
+    STATD = None
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="pcs-home-boot-")
@@ -207,13 +210,15 @@ class HomeBootCases:
         self.assertEqual((self.home / "ubuntu/existing").read_text(), "local must lose")
 
     def test_reboot_action_selection_breaks_native_wait_cycle(self):
-        # Positive control: the old config and real shell mount call create the
-        # modeled cycle; deleting the synchronous rpc-statd edge removes it.
+        # Positive control (OpenZFS / NFSv3 only): the old config and real shell
+        # mount call create the modeled cycle; deleting the synchronous rpc-statd
+        # edge removes it. The EFS NFSv4.1 mount has no rpc-statd edge.
         result = self.run_home()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        synchronous_mount = bool(self.calls("mount"))
-        with self.assertRaises(graphlib.CycleError):
-            boot_order("EVERY_BOOT", synchronous_mount)
+        synchronous_mount = bool(self.calls("mount")) and self.STATD
+        if self.STATD:
+            with self.assertRaises(graphlib.CycleError):
+                boot_order("EVERY_BOOT", synchronous_mount)
         boot_order("EVERY_BOOT", False)
         for path in sorted((ROOT / "assets").glob("add-cng*.yaml")):
             with self.subTest(template=path.name):
@@ -312,6 +317,7 @@ class OpenZFSHomeBootTest(HomeBootCases, unittest.TestCase):
     EXPORT = "/fsx/"
     FSTYPE = "nfs"
     OPTIONS = OPENZFS_OPTIONS
+    STATD = True
 
 
 class EFSHomeBootTest(HomeBootCases, unittest.TestCase):
@@ -322,6 +328,7 @@ class EFSHomeBootTest(HomeBootCases, unittest.TestCase):
     EXPORT = "/"
     FSTYPE = "nfs4"
     OPTIONS = EFS_OPTIONS
+    STATD = False
 
 
 if __name__ == "__main__":

@@ -331,7 +331,9 @@ Then `sudo su - ubuntu` and use `sinfo` / `squeue` / `scontrol show nodes`.
 Run these from the login node (`sudo su - ubuntu` after connecting). `/fsx` is
 shared with every compute node. On a cluster deployed with `DeployFSxLustre=false`
 there is no `/fsx`: use a directory under `$HOME` (shared `/home`) wherever these
-examples write to `/fsx`.
+examples write to `/fsx`. Example B's launcher reads its image from
+`$APPS_PATH/nccl-tests.sqsh` (default `/fsx`), so also export `APPS_PATH` set to
+that directory before its `sbatch`.
 
 ### Example A — CPU job (works on the Quick Start cluster, no GPU needed)
 
@@ -401,7 +403,7 @@ deletes the filesystem it replaces, with its data.
 
 | Parameter | Default | Other value | Effect |
 |---|---|---|---|
-| `HomeStorageType` | `FSxOpenZFS` | `EFS` | `EFS` puts `/home` on Amazon EFS (elastic throughput, billed per GB stored, nothing to size); the OpenZFS `/home` parameters below are ignored |
+| `HomeStorageType` | `FSxOpenZFS` | `EFS` | `EFS` puts `/home` on Amazon EFS (elastic throughput, billed per GB stored and per GB read or written, nothing to size); the OpenZFS `/home` parameters below are ignored |
 | `DeployFSxLustre` | `true` | `false` | `false` creates no `/fsx`; the Lustre parameters below are ignored. Datasets, checkpoints, and container images then go under `/home` |
 
 How to choose:
@@ -410,7 +412,8 @@ How to choose:
   Python/conda environments, compile code, or run Jupyter from `/home` (many small
   files). Throughput and capacity are provisioned and billed whether used or not.
 - **Amazon EFS `/home`** — nothing to size and no minimum capacity; you pay for the
-  data stored. Small-file and metadata operations (`pip install`, `conda create`,
+  data stored and for each GB read or written, which adds up when datasets,
+  checkpoints, or container images live on `/home`. Small-file and metadata operations (`pip install`, `conda create`,
   `git clone`) are noticeably slower than on OpenZFS. Automatic daily backups are on,
   and their recovery points outlive the stack — see
   [OPERATIONS §4.6](./docs/OPERATIONS.md#46-amazon-efs-home-homestoragetypeefs).

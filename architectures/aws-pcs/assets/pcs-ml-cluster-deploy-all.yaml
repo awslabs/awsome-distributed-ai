@@ -237,8 +237,8 @@ Parameters:
     Description: >-
       Shared filesystem for /home. FSxOpenZFS (default) = FSx for OpenZFS,
       sized by the three "FSx for OpenZFS (/home)" parameters below. EFS =
-      Amazon EFS with elastic throughput, billed per GB stored, nothing to
-      size (the OpenZFS parameters are ignored). Choose at stack creation —
+      Amazon EFS with elastic throughput, billed per GB stored and per GB
+      read or written, nothing to size (the OpenZFS parameters are ignored). Choose at stack creation —
       changing it later replaces /home and deletes its contents.
     Type: String
     Default: FSxOpenZFS

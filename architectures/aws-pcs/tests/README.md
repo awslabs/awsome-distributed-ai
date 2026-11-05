@@ -40,8 +40,9 @@ or lifecycle policy; every case runs once per script. Requires Python 3,
 PyYAML, rsync, systemd-fstab-generator and systemd-analyze (Ubuntu 24.04).
 The test uses sandbox paths and command doubles, real rsync, and real offline
 systemd unit loading. It checks first-boot copy/permissions and fatal mount
-failure, all four lifecycle policies, the modeled NFSv3 rpc-statd wait cycle,
-and the required home mount (including a missing-unit negative control).
+failure, all four lifecycle policies, the modeled NFSv3 rpc-statd wait cycle
+(OpenZFS only; EFS mounts NFSv4.1), and the required home mount (including a
+missing-unit negative control).
 It does not mount NFS, start services, or verify a PCS reboot end to end.
 
 ## Quick-start: single-cluster shortcut

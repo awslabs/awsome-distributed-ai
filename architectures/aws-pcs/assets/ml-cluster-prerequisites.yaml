@@ -107,7 +107,8 @@ Parameters:
       Shared filesystem for /home. FSxOpenZFS (default) creates an FSx for
       OpenZFS filesystem sized by HomeCapacity / HomeThroughput /
       OpenZFSDeploymentType. EFS creates an Amazon EFS filesystem (elastic
-      throughput, billed per GB stored, no capacity to size) with a mount
+      throughput, billed per GB stored and per GB read or written, no
+      capacity to size) with a mount
       target in each private subnet; the three OpenZFS parameters are then
       ignored. Choose at stack creation — changing it on an existing stack
       replaces the /home filesystem and deletes its contents.

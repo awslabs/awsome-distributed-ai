@@ -433,6 +433,11 @@ sudo sysctl -w net.core.wmem_max=16777216
 - **Performance.** Elastic throughput scales with load, but each small-file or metadata
   operation pays a higher per-operation latency than on FSx for OpenZFS. Keep
   Python/conda environments small, or build them on node-local disk or `/fsx`.
+- **Cost.** Elastic throughput bills each GB of data and metadata read or written,
+  in addition to the GB stored
+  ([Metering Elastic throughput](https://docs.aws.amazon.com/efs/latest/ug/metered-sizes.html)).
+  Repeatedly reading datasets or writing checkpoints on an EFS `/home` is where this
+  charge shows up; keep heavy I/O on `/fsx` when it is deployed.
 - **Backups.** EFS automatic backups (AWS Backup, daily, 35-day retention) are enabled.
   Recovery points live in the `aws/efs/automatic-backup-vault` vault and are **not**
   deleted with the stack — delete them in AWS Backup if you no longer need them.
