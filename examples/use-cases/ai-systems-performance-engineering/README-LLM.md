@@ -28,7 +28,6 @@ For Smol, the conservative reference selects `--attention-implementation eager -
 
 The remaining training comparisons document the earlier Qwen investigation, not the active Smol participant sequence. Qwen recovery and serving measurements retain their original scope.
 
-
 This development recipe runs full-parameter Qwen3-4B training on pretokenized FineWeb-Edu documents, restores PyTorch distributed checkpoints, and measures quality-constrained serving. Spain PCS runs on two `g7.48xlarge` nodes with sixteen RTX PRO 4500 Blackwell Server Edition GPUs have completed training and synchronous/asynchronous recovery on shared FSx for Lustre. Performance tuning and serving qualification remain in progress. The complete three-stage training sequence and participant workshop are not yet qualified.
 
 The older numbered `v0` through `v3` scripts and their validation records describe the previous workload. Use the `llm` entry points below for this recipe. Every comparison starts from the same pretrained revision.
