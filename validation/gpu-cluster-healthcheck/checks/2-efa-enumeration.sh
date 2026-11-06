@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Check 2: EFA Enumeration
 # Validates EFA PCI device count, RDMA devices, libfabric provider,
 # and /dev/infiniband device nodes against instance profile expectations.

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # common.sh -- Shared utilities for GPU health check suite
 # Provides logging, instance detection, profile loading, and result formatting.
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Parse DCGM diagnostic JSON output into severity classification.
 
 Reads dcgmi diag -j output from stdin and produces a structured JSON report

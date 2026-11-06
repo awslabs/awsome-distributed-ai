@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # gpu-healthcheck.sh -- Master orchestrator for GPU cluster health checks
 #
 # Provides two operational modes:

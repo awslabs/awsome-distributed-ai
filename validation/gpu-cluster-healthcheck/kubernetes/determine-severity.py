@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Determine overall severity from check result files in a results directory.
 
 Reads check-*.json files and outputs status:severity (e.g., "pass:PASS" or

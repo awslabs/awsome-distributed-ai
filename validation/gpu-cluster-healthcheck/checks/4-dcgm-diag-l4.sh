@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Check 4: DCGM Level 4 Diagnostics (Quarantine / Post-Mortem Only)
 # Runs dcgmi diag -r 4 with comprehensive pre-flight validation.
 # Includes EUD (~20 min), pulse power test, long-duration memory/SM stress.

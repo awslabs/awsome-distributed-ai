@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Check 5: Multi-Node NCCL all_reduce Performance Test
 # Runs all_reduce_perf from the NCCL tests container across allocated nodes.
 # Validates bus bandwidth and verifies EFA provider selection.

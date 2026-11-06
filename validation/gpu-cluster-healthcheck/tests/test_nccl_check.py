@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Check 5 launch and Check 6 counter regressions; mocks are not hardware qualification.
 
 Adapted from the existing test_nccl_check.py at public revision ffed0df6102e68b3e94806373006b045e432298f.

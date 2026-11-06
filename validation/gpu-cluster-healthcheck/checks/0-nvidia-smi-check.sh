@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Check 0: nvidia-smi Validation
 # Verifies nvidia-smi is functional, GPU count matches expectations,
 # and no recent Xid/SXid errors exist in kernel log.

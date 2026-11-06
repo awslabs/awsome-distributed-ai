@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # agent.sh -- DaemonSet entrypoint for GPU health check agent
 #
 # Runs lightweight checks in a loop, patches Node labels/taints based on
