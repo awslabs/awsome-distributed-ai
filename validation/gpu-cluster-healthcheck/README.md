@@ -271,7 +271,7 @@ The most comprehensive GPU diagnostic available. Includes everything in L2 plus 
 
 1. Node must be exclusively allocated (no other GPU processes)
 2. MIG must be disabled
-3. Concurrent GPU telemetry services are stopped for the duration
+3. Systemd GPU telemetry services are stopped and restored; an externally managed `dcgm-exporter` process must be stopped by its owner before the check (the check fails with RESET rather than killing it)
 4. `nv-hostengine` must be running
 
 **Operational warnings:**
@@ -386,7 +386,7 @@ DCGM diagnostic results include a `warning_level` field per test per GPU:
 | 1 | **MONITOR** | Keep in service, flag for review |
 | 0 | **PASS** | No action required |
 
-The `parse-dcgm-results.py` script converts raw DCGM JSON into this classification automatically.
+Modern DCGM (`DCGM Diagnostic` root) emits `warnings[].error_severity`, a different enumeration ([dcgm_errors.h](https://github.com/NVIDIA/DCGM/blob/master/dcgmlib/dcgm_errors.h)): `1` MONITOR, `2` ISOLATE, `6` RESET; unknown/triage/config (`3`-`5`) map to RESET for review. `parse-dcgm-results.py` preserves the raw warning fields and entity identifiers. Empty results, runtime errors and summaries without per-GPU records fail; skipped coverage is WARN, never PASS; a nonzero `dcgmi` exit with passing JSON fails. The detailed report is saved to `dcgm-l2-parsed.json` / `dcgm-l4-parsed.json` beside the raw output; `check-*.json` holds only the check verdict.
 
 ### hostengine Management
 
