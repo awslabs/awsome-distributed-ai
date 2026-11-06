@@ -1,0 +1,22 @@
+gpu-node-1:1769341:1769341 [2] NCCL INFO Using network AWS Libfabric
+gpu-node-1:1769343:1769343 [4] NCCL INFO Using network AWS Libfabric
+gpu-node-2:913284:913284 [0] NCCL INFO Using network AWS Libfabric
+gpu-node-2:913289:913289 [5] NCCL INFO Using network AWS Libfabric
+gpu-node-2:913290:913290 [6] NCCL INFO Using network AWS Libfabric
+gpu-node-2:913286:913286 [2] NCCL INFO Using network AWS Libfabric
+gpu-node-2:913285:913285 [1] NCCL INFO Using network AWS Libfabric
+gpu-node-2:913288:913288 [4] NCCL INFO Using network AWS Libfabric
+gpu-node-2:913291:913291 [7] NCCL INFO Using network AWS Libfabric
+gpu-node-1:1769340:1769340 [1] NCCL INFO Using network AWS Libfabric
+gpu-node-1:1769339:1769339 [0] NCCL INFO Using network AWS Libfabric
+gpu-node-1:1769346:1769346 [7] NCCL INFO Using network AWS Libfabric
+gpu-node-1:1769345:1769345 [6] NCCL INFO Using network AWS Libfabric
+gpu-node-1:1769342:1769342 [3] NCCL INFO Using network AWS Libfabric
+gpu-node-2:913287:913287 [3] NCCL INFO Using network AWS Libfabric
+gpu-node-1:1769344:1769344 [5] NCCL INFO Using network AWS Libfabric
+gpu-node-1:1769341:1769341 [2] NCCL INFO NET/OFI Selected provider is efa, fabric is efa-direct (found 2 nics)
+gpu-node-1:1769341:1769341 [2] NCCL INFO NET/OFI Using transport protocol RDMA (user set)
+gpu-node-2:913291:913291 [7] NCCL INFO Channel 01/0 : 15[7] -> 7[7] [receive] via NET/AWS Libfabric/1
+gpu-node-2:913291:913291 [7] NCCL INFO Channel 03/0 : 15[7] -> 7[7] [receive] via NET/AWS Libfabric/1
+gpu-node-2:913291:913291 [7] NCCL INFO Channel 01/0 : 7[7] -> 15[7] [send] via NET/AWS Libfabric/1
+gpu-node-2:913291:913291 [7] NCCL INFO Channel 03/0 : 7[7] -> 15[7] [send] via NET/AWS Libfabric/1

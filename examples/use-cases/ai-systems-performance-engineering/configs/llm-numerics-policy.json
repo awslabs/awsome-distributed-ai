@@ -1,0 +1,6 @@
+{
+  "maximum_loss_relative_error": 0.001,
+  "gradients": {"maximum_relative_l2_error": 0.02, "minimum_cosine_similarity": 0.999},
+  "parameter_deltas": {"maximum_relative_l2_error": 0.1, "minimum_cosine_similarity": 0.995},
+  "parameters": {"maximum_relative_l2_error": 0.00001, "minimum_cosine_similarity": 0.999999}
+}
