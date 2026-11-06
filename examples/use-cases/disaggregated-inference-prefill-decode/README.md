@@ -101,7 +101,7 @@ The block was checked with `gpus_per_worker` set to 4 and `efa_per_worker` set t
 
 ```bash
 export LAB_REPO=https://github.com/awslabs/awsome-distributed-ai.git
-export LAB_BRANCH=main
+export LAB_BRANCH=AIM345
 export LAB_WORKDIR="$HOME/aim345-lab-check"
 export LAB_CONFIG="$HOME/config.json"
 export LAB_REGION=us-west-2
@@ -601,7 +601,7 @@ python3 5.collect.py --config config.v4.json --runs results/v4-a results/v4-b re
 
 ### Measured optional result, 2026-09-17
 
-This profile is the only separate-node topology in the lab, so it is where cross-node KV movement is observable at all. Measured on two Spain `g7.48xlarge`, 8 GPUs and 2 EFA devices per engine, prefill TP size eight on one node and decode TP size eight on the other, on an independently rebuilt engine image.
+This optional run used separate nodes, so cross-node KV movement was observable, unlike the packed paired run above. It was measured on two Spain `g7.48xlarge`, 8 GPUs and 2 EFA devices per engine, prefill TP size eight on one node and decode TP size eight on the other, on an independently rebuilt engine image.
 
 `7.verify-transport.py` reported `status: VALIDATED` with `cross_node_efa_status: VALIDATED positive path` and `rdma_counter_delta_bytes: 97235456`. The per-device deltas were `48611328 B` and `48624128 B` on the prefill pod's two EFA devices and `0 B` on both of the decode pod's, which is the expected direction: prefill issues one-way RDMA writes to push KV to decode, and the two devices carry roughly equal shares. This is the positive counterpart to the packed row, where a flat counter is expected because the processes are co-located.
 
