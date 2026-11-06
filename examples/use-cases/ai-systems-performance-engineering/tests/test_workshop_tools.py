@@ -1492,7 +1492,7 @@ class NcclProtocolSettingTests(unittest.TestCase):
             self.assertEqual(result.stdout, '')
 
     def test_worker_passes_the_shell_environment_to_the_launcher(self):
-        """run.sh -> worker -> run_stage: the launcher gets os.environ plus LLM_TRANSPORT, nothing filtered."""
+        """run_stage, called directly: the launcher gets os.environ plus LLM_TRANSPORT, nothing filtered."""
         stage = workshop.plan('efa', job('efa'))[0]
         with tempfile.TemporaryDirectory() as directory:
             seen = {}
@@ -1504,6 +1504,75 @@ class NcclProtocolSettingTests(unittest.TestCase):
                 workshop.run_stage(stage, dict(invocation='i', stages=['efa'], allocation_id=42, pid=None),
                                    Path(directory), runner=runner, world=16, label='l', efa_reader=lambda log: {})
             self.assertEqual((seen['NCCL_DEBUG'], seen['LLM_TRANSPORT']), ('info', 'efa'))
+
+    def test_run_sh_carries_nccl_debug_through_the_worker_and_the_container_to_torchrun(self):
+        """`NCCL_DEBUG=info bash tools/run.sh efa` with a stub scheduler: tools/run.sh -> common.sh -> the real
+        background worker (Popen) -> run_stage -> 2.run-llm.sh -> stub srun -> lib/llm-rank.sh -> stub torchrun.
+        The srun stub behaves like Pyxis for variables outside --container-env (the image value wins), so a
+        name missing from the list would arrive clobbered. No GPU, Slurm or container is used."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bin_dir = root / 'bin'
+            bin_dir.mkdir()
+            stub(bin_dir, 'squeue', 'echo RUNNING\n')
+            stub(bin_dir, 'scontrol', 'case "$2" in hostnames) echo gpu-node-1; echo gpu-node-2 ;; '
+                                      'node) echo "NodeName=gpu-node-1 NodeAddr=10.0.0.1" ;; esac\n')
+            stub(bin_dir, 'srun', 'names=\n'
+                                  'while [[ $1 == --* ]]; do [[ $1 != --container-env=* ]] || names=${1#*=}; shift; done\n'
+                                  'if [[ $1 == python3 ]]; then exit 0; fi\n'  # the efa-read step before and after
+                                  '[[ ,$names, == *,NCCL_DEBUG,* ]] || export NCCL_DEBUG=WARN\n'
+                                  '[[ ,$names, == *,NCCL_DEBUG_SUBSYS,* ]] || export NCCL_DEBUG_SUBSYS=COLL\n'
+                                  'export SLURM_PROCID=0\n'
+                                  'exec "$@"\n')
+            stub(bin_dir, 'torchrun', 'unset LD_PRELOAD\n'
+                                      'exec python3 -c \'import json, os, sys; print("MOCK_TORCHRUN=" + json.dumps(dict('
+                                      'debug=os.environ.get("NCCL_DEBUG"), subsys=os.environ.get("NCCL_DEBUG_SUBSYS"), '
+                                      'argv=sys.argv[1:]))); sys.exit(73)\' "$@"\n')
+            (root / 'job.env').write_text('LLM_TRANSPORT=efa\nATTENTION=eager\nCHECKPOINT_MODE=none\n')
+            # (caller's NCCL_DEBUG, caller's NCCL_DEBUG_SUBSYS) -> what torchrun receives; None: no launch.
+            literal = "INIT,ENV;$(touch SHOULD_NOT_EXIST) 'quote' \"x\""
+            cases = (('unset', None, None, 'INFO', 'INIT,NET,ENV'), ('info', 'info', None, 'info', 'INIT,NET,ENV'),
+                     ('quoting', 'info', literal, 'info', literal), ('invalid', 'bad;$(touch SHOULD_NOT_EXIST)', None, None, None))
+            for name, debug, subsys, expected_debug, expected_subsys in cases:
+                with self.subTest(case=name):
+                    case = root / name
+                    home = case / 'home'
+                    home.mkdir(parents=True)
+                    # A fixture in the shape of aim347.env plus allocation.env, not an event's file.
+                    (case / 'aim347.env').write_text(
+                        'export SLURM_JOB_ID=42 AIM347_ALLOCATION_ID=42 SLURM_JOB_NUM_NODES=2 '
+                        'SLURM_JOB_NODELIST=gpu-node-[1-2] SLURM_JOB_CPUS_PER_NODE="192(x2)" GPUS_PER_NODE=8 '
+                        f'LAB_IMAGE=/fsx/image.sqsh LLM_DATA_DIR=/fsx/data LLM_RESULTS_DIR={case}/results '
+                        'NCCL_SOCKET_IFNAME==enp71s0\n')
+                    env = dict(PATH=f'{bin_dir}:{os.environ["PATH"]}', HOME=str(home), LC_ALL='C.UTF-8',
+                               PYTHONDONTWRITEBYTECODE='1', AIM347_ENV=str(case / 'aim347.env'),
+                               AIM347_JOB_ENV=str(root / 'job.env'))
+                    if 'TMPDIR' in os.environ:
+                        env['TMPDIR'] = os.environ['TMPDIR']
+                    if debug is not None:
+                        env['NCCL_DEBUG'] = debug
+                    if subsys is not None:
+                        env['NCCL_DEBUG_SUBSYS'] = subsys
+                    result = subprocess.run(['bash', 'tools/run.sh', 'efa'], cwd=LAB, env=env, timeout=60,
+                                            capture_output=True, text=True)
+                    run = json.loads((case / 'results/efa/run.json').read_text())
+                    log = (case / 'results/efa/launch.log').read_text()
+                    self.assertEqual((result.returncode, run['status']), (4, 'finished'), result.stdout + result.stderr)
+                    self.assertFalse((LAB / 'SHOULD_NOT_EXIST').exists())
+                    self.assertFalse((home / '.aim347/running').exists())
+                    if expected_debug is None:
+                        self.assertEqual(run['launcher_exit'], 2)
+                        self.assertNotIn('MOCK_TORCHRUN=', log)
+                        self.assertIn('NCCL_DEBUG must be one of VERSION, WARN, INFO, ABORT, TRACE', log)
+                        continue
+                    self.assertEqual(run['launcher_exit'], 73)
+                    seen = json.loads(next(line.split('=', 1)[1] for line in log.splitlines()
+                                           if line.startswith('MOCK_TORCHRUN=')))
+                    self.assertEqual((seen['debug'], seen['subsys']), (expected_debug, expected_subsys))
+                    self.assertEqual(seen['argv'][:5], ['--nnodes=2', '--nproc-per-node=8', '--node-rank=0',
+                                                        '--master-addr=10.0.0.1', '--master-port=29547'])
+                    self.assertEqual(seen['argv'][5:7], ['lib/train_llm.py', '--config=configs/llm.json'])
+                    self.assertIn('the launcher exited with status 73', result.stdout)
 
 
 class NcclProtocolToolTests(unittest.TestCase):
