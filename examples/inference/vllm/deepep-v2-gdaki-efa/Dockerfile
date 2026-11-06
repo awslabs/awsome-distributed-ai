@@ -1,15 +1,17 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
 #
 # vLLM + DeepEP-V2 MoE all-to-all over AWS EFA — GDAKI (GPU-initiated, kernel-posted WQE)
-# variant. NGC-from-scratch. This is the NCCL_GIN_TYPE=3 (GDAKI) analog of
+# variant. NGC-from-scratch. This is the NCCL_GIN_TYPE=5 (EFA-GDA) analog of
 # ../deepep-v2-efa (the NCCL-GIN CPU-proxy, NCCL_GIN_TYPE=2 package): same base, same
-# torch/NCCL/NVSHMEM/vLLM pins, same DeepEP base+PR. The deltas are the GDAKI transport
+# torch/NVSHMEM pins, same DeepEP fork pin. The deltas are NCCL 2.31.2 (the first NCCL with
+# the EFA-GDA GIN backend; the proxy sample pins 2.30.7), the vLLM pin (e2f993dc4 here,
+# 14617c2b there), the EFA installer (1.48.0 here, 1.50.0 there) and the GDAKI transport
 # stack, built here from public source and pinned by immutable SHA:
 #   Layer 2b  rdma-core @ master post-PR#1701 (EFA completion-counter verbs; merged
 #             2026-08-04, no release tag yet)
 #   Layer 2c  libfabric @ main post-PR#12591  (prov/efa comp-cntr caps; merged 2026-07-28)
 #             built against that rdma-core
-#   Layer 5   aws-ofi-nccl @ a3d2680 --enable-gdaki (SHA pin, no local patches);
+#   Layer 5   aws-ofi-nccl @ a3d2680 with GDAKI (SHA pin, no local patches);
 #             a3d2680 carries PR#1311/5b1f6dd (per-platform EFA hw-counter tristate) and
 #             6e504db (GIN seq-space aliasing fix). Built in setup_deepep_v2_gdaki_efa.sh.
 #   Layer 5   DeepEP @ amazon-contributing/DeepEP (the AWS EPv2/NCCL-GIN fork; carries the
@@ -19,9 +21,9 @@
 #
 #   DOCKER_BUILDKIT=1 docker build -t <registry>/vllm-deepep-v2-gdaki-efa:<tag> .   # setup/build-push.sh does this from setup/env_vars
 #
-# HONEST SCOPE: the GDAKI *transport* is proven on p5en (the vLLM serve over
-# NCCL_GIN_TYPE=3 is validated by benchmarks/README.md — quote only what is there; the
-# transport A/B is same-node-set env-flip only). SRD ground truth still applies (NO IBGDA,
+# HONEST SCOPE: GDAKI has not yet run end-to-end in this sample. The 2026-08-14 serve
+# (benchmarks/README.md) set NCCL_GIN_TYPE=3 on NCCL 2.30.4, which loaded the plugin's v13
+# CPU-proxy GIN table, so it ran the CPU proxy. SRD ground truth still applies (NO IBGDA,
 # NO atomics, NO ordering, CQ completion is local). NEVER set NVSHMEM_IB_ENABLE_IBGDA=1.
 #
 # NODE PRECONDITION beyond the proxy package: GDAKI hw-counter mode needs node efa.ko >=
@@ -37,7 +39,7 @@
 ARG CUDA_VER=13.0.0                                   # cu13 to match the torch 2.11+cu130 ABI DeepEP links
 FROM nvcr.io/nvidia/cuda:${CUDA_VER}-devel-ubuntu22.04
 
-LABEL org.opencontainers.image.description="vLLM + DeepEP-V2 MoE all-to-all over AWS EFA (GDAKI GPU-initiated, NCCL_GIN_TYPE=3)"
+LABEL org.opencontainers.image.description="vLLM + DeepEP-V2 MoE all-to-all over AWS EFA (GDAKI GPU-initiated, NCCL_GIN_TYPE=5)"
 LABEL org.opencontainers.image.licenses="MIT-0"
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-c"]
@@ -113,10 +115,10 @@ RUN git clone --depth 1 --branch ${GDRCOPY_VER} https://github.com/NVIDIA/gdrcop
     && cd /tmp/gdrcopy && make prefix=/usr/local lib lib_install && ldconfig \
     && rm -rf /tmp/gdrcopy
 
-# ---- Layer 4: torch cu13 stack (pinned; nccl-cu13 2.30.4 carries the GIN/LSA + GDAKI device symbols) ----
+# ---- Layer 4: torch cu13 stack (pinned; nccl-cu13 2.31.2 is the first NCCL with the EFA-GDA GIN backend, type 5) ----
 ARG TORCH_SPEC="torch==2.11.0"                        # DeepEP _C.so links this exact ABI
 ARG TORCH_INDEX="https://download.pytorch.org/whl/cu130"
-ARG NVIDIA_NCCL_CU13="2.30.4"                         # 2.28.x lacks the GIN/LSA + GDAKI symbols the plugin needs
+ARG NVIDIA_NCCL_CU13="2.31.2"                         # the plugin's GDAKI table is GIN type 5 (EFA-GDA); NCCL < 2.31.2 has no backend for it
 ARG NVSHMEM_CU13="3.6.5"
 RUN pip3 install --no-cache-dir --break-system-packages --index-url "${TORCH_INDEX}" "${TORCH_SPEC}" \
     && pip3 install --no-cache-dir --break-system-packages --no-deps \
@@ -128,7 +130,7 @@ RUN NCCL_ROOT=$(python3 -c "import nvidia.nccl, pathlib; print(pathlib.Path(nvid
     && ldconfig -p | grep "libnccl.so.2 " | head -1 | grep -q "$NCCL_ROOT/lib"   # assert the pinned NCCL resolves FIRST (2.28.x lacks the GIN/LSA symbols the plugin needs)
 
 # ---- Layer 5: aws-ofi-nccl GDAKI + DeepEP-V2 source (in-tree script, COPY'd not curled) ----
-# The setup script builds --enable-gdaki against Layer 2c libfabric + Layer 2b rdma-core (SHA
+# The setup script builds the GDAKI-enabled plugin against Layer 2c libfabric + Layer 2b rdma-core (SHA
 # pin, no local patches), and stages DeepEP from the amazon-contributing/DeepEP fork (which
 # carries the EFA delta in-code, superseding the open, unmerged deepseek-ai/DeepEP#612). The DeepEP
 # _C.so is built IN-POD on first boot (recipe/build_deepep.sh) by design, so the arch list follows
@@ -181,7 +183,7 @@ RUN set -eux; \
 RUN set -eux; \
     pip uninstall -y --break-system-packages nvidia-nccl-cu12 2>/dev/null || true; \
     pip install --no-cache-dir --break-system-packages --no-deps --force-reinstall \
-      "nvidia-nccl-cu13==2.30.4" "nvidia-nvshmem-cu13==3.6.5"; \
+      "nvidia-nccl-cu13==2.31.2" "nvidia-nvshmem-cu13==3.6.5"; \
     NCCL_LIB="$(find /usr/local/lib /usr/lib -path '*/nvidia/nccl/lib' -type d | head -1)"; \
     test -n "${NCCL_LIB}"; \
     REAL_SO2="${NCCL_LIB}/libnccl.so.2"; test -f "${REAL_SO2}"; \
@@ -191,7 +193,7 @@ RUN set -eux; \
     echo "${NCCL_LIB}" > /etc/ld.so.conf.d/aa-nvidia-nccl.conf; \
     NVER="$(strings "${REAL_SO2}" | grep "NCCL version" | tail -1)"; \
     echo "baked-nccl-banner: ${NVER}"; \
-    case "${NVER}" in *"2.30.4"*) : ;; *) echo "ASSERT FAIL nccl != 2.30.4: ${NVER}"; exit 91;; esac; \
+    case "${NVER}" in *"2.31.2"*) : ;; *) echo "ASSERT FAIL nccl != 2.31.2: ${NVER}"; exit 91;; esac; \
     GIN_SYMS="$(nm -D "${REAL_SO2}" | grep -c ncclGetLsaDevicePointer)"; \
     [ "${GIN_SYMS}" -ge 1 ] || { echo "ASSERT FAIL: no GIN/LSA symbols in ${REAL_SO2}"; exit 92; }; \
     NVSHMEM_LIB="$(find /usr/local/lib /usr/lib -path '*/nvidia/nvshmem/lib' -type d | head -1)"; \
@@ -203,14 +205,14 @@ RUN set -eux; \
     pip show nvidia-nvshmem-cu13 | grep "Version: 3.6.5"; \
     python3 -c "import vllm; print('vllm', vllm.__version__)"; \
     python3 -c "from vllm.distributed.device_communicators.all2all import DeepEPV2All2AllManager; print('PR#41183 symbol OK')"; \
-    echo "Layer 8 OK: nccl 2.30.4 (GIN) + nvshmem 3.6.5 re-pinned LAST"
+    echo "Layer 8 OK: nccl 2.31.2 (GIN) + nvshmem 3.6.5 re-pinned LAST"
 
 # -----------------------------------------------------------------------------
 # Runtime defaults — the GDAKI (GPU-initiated) GIN transport contract.
-# Contrast with ../deepep-v2-efa (proxy): NCCL_GIN_TYPE 2→3 and plugin path → the
+# Contrast with ../deepep-v2-efa (proxy): NCCL_GIN_TYPE 2→5 and plugin path → the
 # GDAKI-enabled build. NCCL selects the GIN backend (NCCL_GIN_TYPE is an NCCL param); at the
-# pinned aws-ofi-nccl a3d2680 the plugin auto-enables GDAKI when built --enable-gdaki and the
-# fabric is capable (nccl_ofi_gin_gdaki_capable) — the dev-line OFI_NCCL_GIN_GDAKI param is
+# pinned aws-ofi-nccl a3d2680 the plugin has GDAKI when configure detected it at build time and
+# the fabric is capable (nccl_ofi_gin_gdaki_capable) — the dev-line OFI_NCCL_GIN_GDAKI param is
 # gone from its parameter table, as is OFI_NCCL_GIN_MAX_REQUESTS, so neither is set here.
 # Everything else mirrors the proxy contract (incl. EP_REUSE_NCCL_COMM=0, the vLLM null-comm
 # segfault fix). The OFI_NCCL_GDAKI_EFA_HW_COUNTER tristate is left to the kubernetes/ YAML:
@@ -218,7 +220,7 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 ENV NCCL_NET_PLUGIN=/opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so
 ENV NCCL_GIN_ENABLE=1
-ENV NCCL_GIN_TYPE=3
+ENV NCCL_GIN_TYPE=5
 ENV EP_REUSE_NCCL_COMM=0
 ENV FI_PROVIDER=efa
 ENV FI_EFA_USE_DEVICE_RDMA=1
@@ -239,11 +241,11 @@ RUN chmod +x /opt/serve.sh /opt/run-kernel-test.sh
 # empty field (the banner is what the pod shows at boot), and the build would still pass.
 RUN test -s /opt/efa-installer.version && test -s /opt/rdma-core-gdaki.sha && test -s /opt/libfabric-gdaki.sha \
     && test -s /opt/aws-ofi-nccl-gdaki.sha && test -s /opt/deepep.effective.sha && test -s /opt/vllm/.git-sha \
-    && { echo "vllm-deepep-v2-gdaki-efa image (GPU-initiated, NCCL_GIN_TYPE=3)"; \
+    && { echo "vllm-deepep-v2-gdaki-efa image (GPU-initiated, NCCL_GIN_TYPE=5)"; \
       echo "efa:           $(cat /opt/efa-installer.version)"; \
       echo "rdma-core:     $(cat /opt/rdma-core-gdaki.sha) (post-PR#1701 comp-cntr)"; \
       echo "libfabric:     $(cat /opt/libfabric-gdaki.sha) (post-PR#12591)"; \
-      echo "aws-ofi-nccl:  $(cat /opt/aws-ofi-nccl-gdaki.sha) (--enable-gdaki, SHA pin)"; \
+      echo "aws-ofi-nccl:  $(cat /opt/aws-ofi-nccl-gdaki.sha) (GDAKI build, SHA pin)"; \
       echo "deepep:        $(cat /opt/deepep.effective.sha) (amazon-contributing/DeepEP fork, SHA pin, no local patches; _C.so built in-pod)"; \
       echo "vllm:          $(cat /opt/vllm/.git-sha) (PR#41183, wheel-pinned; PR#47785 documented-missing)"; \
       echo "built:         $(date -u +%Y-%m-%dT%H:%M:%SZ)"; } > /opt/GUIDE-PROVENANCE.txt \

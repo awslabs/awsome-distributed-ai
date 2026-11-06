@@ -2,9 +2,9 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
 # serve.sh — vLLM DP/EP serve with the DeepEP-V2 all-to-all backend over AWS EFA
 # (NCCL-GIN GDAKI, GPU-initiated / kernel-posted WQE). One invocation per NODE
-# (leader on node 0, worker on the rest). This is the NCCL_GIN_TYPE=3 counterpart to
+# (leader on node 0, worker on the rest). This is the NCCL_GIN_TYPE=5 counterpart to
 # ../deepep-v2-efa/recipe/serve.sh (NCCL_GIN_TYPE=2 CPU-proxy) — the transport env is the
-# only delta; the eager/non-eager decision surface is identical (same vLLM pin).
+# only delta; the eager/non-eager decision surface was measured at the same vLLM pin (e2f993dc4).
 #
 #   leader:  serve.sh leader <leader-pod-ip>
 #   worker:  serve.sh worker <leader-pod-ip> <start-rank>     # 8 / 16 / 24 ...
@@ -15,8 +15,9 @@
 #   SERVE_MODEL=...      any MoE whose n_routed_experts % SERVE_DP == 0 (preflighted below)
 #
 # ── EAGER vs DEFAULT COMPILATION (see README "eager vs non-eager") ──────────────
-# SERVE_ENFORCE_EAGER=1 (DEFAULT) — the KNOWN-GOOD path, measured GREEN over GDAKI
-#   (2026-08-14, 2× p5en, DP16/EP16, Qwen3-30B-A3B-FP8: 121/121 HTTP 200 over c=1..64).
+# SERVE_ENFORCE_EAGER=1 (DEFAULT) — the KNOWN-GOOD path (2026-08-14, 2× p5en, DP16/EP16,
+#   Qwen3-30B-A3B-FP8: 121/121 HTTP 200 over c=1..64, with NCCL_GIN_TYPE=3 on NCCL 2.30.4, which ran
+#   the CPU proxy; GDAKI itself has not run yet).
 # SERVE_ENFORCE_EAGER=0 — KNOWN-CRASH as of vLLM e2f993dc4: default compilation dies
 #   deterministically during startup profile_run with a Triton illegal-memory-access in
 #   deepep_v2.py:347 (buffer.combine). This is transport-independent (inherited from the
@@ -32,11 +33,11 @@ DP_MASTER_PORT="${DP_MASTER_PORT:-29500}"
 # OFI_NCCL_GDAKI_EFA_HW_COUNTER is honored FROM THE ENVIRONMENT (the kubernetes/ YAML sets
 # it "off" on nodes with efa.ko < 3.3.0) — it is a STRING enum (auto|on|off); numeric 0/1
 # abort plugin init. Not forced here.
-# NCCL selects the GIN backend: NCCL_GIN_TYPE=3 is GDAKI (2 = CPU proxy). At the pinned aws-ofi-nccl
-# a3d2680 the plugin auto-enables GDAKI when built --enable-gdaki and the fabric is capable; its
+# NCCL selects the GIN backend: NCCL_GIN_TYPE=5 is EFA-GDA, the plugin's GDAKI backend (2 = CPU proxy). At the pinned aws-ofi-nccl
+# a3d2680 the plugin has GDAKI when configure detected it at build time and the fabric is capable; its
 # parameter table has no OFI_NCCL_GIN_GDAKI (the dev-line knob was removed) and never had
 # OFI_NCCL_GIN_MAX_REQUESTS, so both knobs earlier revisions exported here were inert; gone.
-export NCCL_GIN_TYPE=${NCCL_GIN_TYPE:-3} NCCL_GIN_ENABLE=1
+export NCCL_GIN_TYPE=${NCCL_GIN_TYPE:-5} NCCL_GIN_ENABLE=1
 export NCCL_CUMEM_ENABLE=1 NCCL_NVLS_ENABLE=0 NCCL_IGNORE_DISABLED_P2P=1
 export FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_FORK_SAFE=1
 export OFI_NCCL_PROTOCOL=RDMA   # (no DEEP_EP_BACKEND: nothing in DeepEP or vLLM reads it — the backend is vLLM's --all2all-backend deepep_v2 below)
@@ -125,7 +126,7 @@ COMMON="--tensor-parallel-size ${SERVE_TP} --data-parallel-size ${SERVE_DP} --da
   --max-num-batched-tokens ${SERVE_MAX_BATCHED_TOKENS} \
   --gpu-memory-utilization ${SERVE_GPU_MEM_UTIL} --trust-remote-code --dtype bfloat16"
 
-echo "===== vLLM serve model=$SERVE_MODEL role=$ROLE tp=${SERVE_TP} dp=${SERVE_DP}/local${SERVE_DP_LOCAL} eager=${SERVE_ENFORCE_EAGER} gin_type=${NCCL_GIN_TYPE} gdaki=auto(--enable-gdaki build) start_rank=${START_RANK} dp_master=$DP_MASTER_IP $(hostname) $(date -u +%FT%TZ) ====="
+echo "===== vLLM serve model=$SERVE_MODEL role=$ROLE tp=${SERVE_TP} dp=${SERVE_DP}/local${SERVE_DP_LOCAL} eager=${SERVE_ENFORCE_EAGER} gin_type=${NCCL_GIN_TYPE} gdaki=auto(configure-detected) start_rank=${START_RANK} dp_master=$DP_MASTER_IP $(hostname) $(date -u +%FT%TZ) ====="
 python3 -c "import vllm; print('vllm', vllm.__version__)"
 python3 -c "from vllm.distributed.device_communicators.all2all import DeepEPV2All2AllManager; print('PR#41183 symbol OK')"
 python3 -c "import deep_ep; assert hasattr(deep_ep,'ElasticBuffer'); print('deep_ep ElasticBuffer OK')"

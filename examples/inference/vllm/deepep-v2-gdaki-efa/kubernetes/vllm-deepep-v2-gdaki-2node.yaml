@@ -1,11 +1,11 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
 # vLLM + DeepEP-V2 multi-node MoE serve over AWS EFA — GDAKI (GPU-initiated,
-# NCCL_GIN_TYPE=3) variant. 2× p5en.48xlarge (H200), DP16/EP16.
+# NCCL_GIN_TYPE=5, EFA-GDA) variant. 2× p5en.48xlarge (H200), DP16/EP16.
 #
 # Mirrors ../../deepep-v2-efa/kubernetes/vllm-deepep-v2-2node.yaml (the CPU-proxy
 # TYPE=2 package) — the transport contract is the only delta:
-#   NCCL_GIN_TYPE                  2 → 3   (NCCL selects the backend; the pinned plugin auto-enables
-#                                           GDAKI when built --enable-gdaki — no OFI_NCCL_GIN_GDAKI env exists at a3d2680)
+#   NCCL_GIN_TYPE                  2 → 5   (NCCL selects the backend; the pinned plugin has GDAKI when
+#                                           configure detected it at build time — no OFI_NCCL_GIN_GDAKI env exists at a3d2680)
 #   NCCL_NET_PLUGIN                → the GDAKI-enabled plugin build (/opt/aws-ofi-nccl-gdaki)
 #   OFI_NCCL_GDAKI_EFA_HW_COUNTER  → explicit; see NODE PRECONDITION below
 #
@@ -131,7 +131,7 @@ spec:
 
         # ---- GDAKI GIN + EFA contract, VERBATIM (also baked as image ENV; repeated
         #      here so the manifest alone documents the transport contract) ----
-        - { name: NCCL_GIN_TYPE,             value: "3" }     # 3 = GDAKI (GPU-initiated, kernel-posted WQE; 2 = CPU proxy) — NCCL selects the backend, no aws-ofi-nccl env is involved
+        - { name: NCCL_GIN_TYPE,             value: "5" }     # 5 = EFA-GDA, the plugin's GDAKI backend (GPU-initiated, kernel-posted WQE; 2 = CPU proxy; 3 = NCCL's MLX5-only GDAKI) — NCCL selects the backend, no aws-ofi-nccl env is involved
         - { name: NCCL_GIN_ENABLE,           value: "1" }
         - { name: OFI_NCCL_GDAKI_EFA_HW_COUNTER, value: "off" } # PR#1311 tristate (auto|on|off — STRINGS); "off" for node efa.ko<3.3.0 (see header)
         - { name: EP_REUSE_NCCL_COMM,        value: "0" }     # DeepEP own-comm; never borrow torch lazy comm

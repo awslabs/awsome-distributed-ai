@@ -9,9 +9,9 @@ docker run --rm --gpus all "${IMG}" bash -lc '
   echo "== fi_info efa (newer libfabric build must still see efa-direct) =="
   /opt/libfabric-gdaki/bin/fi_info -p efa 2>/dev/null | grep -q "efa" || /opt/amazon/efa/bin/fi_info -p efa | grep -q "fabric: efa-direct" || { echo "FAIL: no efa provider"; exit 1; }
   echo "== rdma-core comp-cntr verbs present (PR#1701) =="; nm -D /opt/rdma-core-gdaki/lib/libefa.so.1 | grep -qi comp_cntr || { echo "FAIL: no comp_cntr verbs"; exit 1; }
-  echo "== single libnccl 2.30.4 wins =="; ldconfig -p | grep "libnccl.so.2 " | head -1 | grep -q "nvidia/nccl" || { echo "FAIL: system libnccl shadows pip"; exit 1; }
+  echo "== single libnccl 2.31.2 wins =="; ldconfig -p | grep "libnccl.so.2 " | head -1 | grep -q "nvidia/nccl" || { echo "FAIL: system libnccl shadows pip"; exit 1; }
   echo "== GIN plugin symbol =="; nm -D /opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so | grep -q ncclGinPlugin || { echo "FAIL: no ncclGinPlugin"; exit 1; }
-  echo "== GDAKI compiled into the plugin =="; strings /opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so | grep -qi gdaki || { echo "FAIL: no gdaki strings"; exit 1; }
+  echo "== GDAKI table exported by the plugin (ncclGinPlugin_v14) =="; [ "$(nm -D /opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so | grep -cw ncclGinPlugin_v14)" -ge 1 ] || { echo "FAIL: no ncclGinPlugin_v14 (plugin built without GDAKI)"; exit 1; }
   echo "== hw-counter tristate param baked (PR#1311) =="; strings /opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so | grep -q GDAKI_EFA_HW_COUNTER || { echo "FAIL: no GDAKI_EFA_HW_COUNTER param"; exit 1; }
   echo "== DeepEP-V2 source staged (ElasticBuffer buffer.hpp present) =="; test -f /opt/DeepEP/csrc/elastic/buffer.hpp || { echo "FAIL: DeepEP source not staged"; exit 1; }
   echo "== node GDRCopy >= 2.5 (gdrdrv; replaces the closed aws-ofi-nccl PR#1351 forced-PCIe path) ==";

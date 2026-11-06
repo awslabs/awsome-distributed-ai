@@ -2,25 +2,26 @@
 # vLLM with DeepEP-V2 MoE all-to-all over EFA — GDAKI (GPU-initiated) variant
 
 Serve a Mixture-of-Experts model on vLLM with **DeepEP-V2** (`ElasticBuffer`) expert-parallel
-all-to-all, routed over **AWS EFA** via the NCCL-GIN **GDAKI** path (`NCCL_GIN_TYPE=3`; NCCL selects
-the GIN backend, and the pinned plugin auto-enables GDAKI when built `--enable-gdaki`) — the
+all-to-all, routed over **AWS EFA** via the NCCL-GIN **GDAKI** path (`NCCL_GIN_TYPE=5`, EFA-GDA; NCCL selects
+the GIN backend, and the pinned plugin builds GDAKI in when configure finds libfabric's GDA ops + hw-counter ABI and CUDA) — the
 **GPU-initiated** transport where the GPU kernel posts the RDMA work
 requests (WQEs) itself, instead of handing them to a CPU proxy thread. This is the GDAKI counterpart
-to the CPU-proxy sample [`../deepep-v2-efa`](../deepep-v2-efa) (`NCCL_GIN_TYPE=2`): **same base, same
-torch/NCCL/NVSHMEM/vLLM/DeepEP pins — the only deltas are the GDAKI transport stack.** Neither uses
+to the CPU-proxy sample [`../deepep-v2-efa`](../deepep-v2-efa) (`NCCL_GIN_TYPE=2`): **same base and
+torch/NVSHMEM/DeepEP pins; the deltas are the GDAKI transport stack (EFA installer 1.48.0 here, 1.50.0 there), NCCL 2.31.2 (the proxy sample pins 2.30.7) and the vLLM pin (`e2f993dc4` here, `14617c2b` there).** Neither uses
 NVSHMEM or IBGDA; DeepEP-V2's `ElasticBuffer` drives the dispatch/combine collectives over
 `aws-ofi-nccl`'s GIN plugin on `efa-direct`.
 
 Validated on **2× and 4× p5en.48xlarge (H200)**, `Qwen/Qwen3-30B-A3B-FP8`, DP16/EP16 and DP32/EP32
 (measured 2026-08-14 on the earlier DeepEP tree recorded in the
 [provenance table](benchmarks/README.md#environment-provenance); the shipped `97d8f9bc` fork pin has not
-been re-measured end-to-end).
+been re-measured end-to-end). **That validation did not exercise GDAKI:** on its NCCL 2.30.4 stack NCCL
+ran the plugin's v13 CPU-proxy GIN table (see `benchmarks/README.md`).
 
 ## How the GDAKI transport gets onto EFA
 
 DeepEP's default transport is NVSHMEM/IBGDA, which EFA does not provide. The proxy sibling runs the
 V2 `ElasticBuffer` dispatch/combine over `aws-ofi-nccl`'s **GIN CPU-proxy** (`NCCL_GIN_TYPE=2`). This
-sample instead uses **GDAKI** (`NCCL_GIN_TYPE=3`), where the GPU kernel posts
+sample instead uses **GDAKI** (`NCCL_GIN_TYPE=5`, EFA-GDA), where the GPU kernel posts
 WQEs directly. GDAKI on EFA needs a newer transport substrate than the proxy path, built here from
 public source:
 
@@ -29,7 +30,7 @@ public source:
    provider and GDAKI's hw-counter mode consume. No release tag carries it yet, so pinned by SHA.
 2. **libfabric @ main post-[PR#12591](https://github.com/ofiwg/libfabric/pull/12591)** (merged
    2026-07-28) — makes `prov/efa` consume the comp-cntr caps; built against the rdma-core above.
-3. **aws-ofi-nccl @ `a3d2680` `--enable-gdaki`** (SHA pin, **no local patches**) — `a3d2680`
+3. **aws-ofi-nccl @ `a3d2680` with GDAKI** (SHA pin, **no local patches**; GDAKI is detected at configure time, and the build fails if `ncclGinPlugin_v14` is not exported) — `a3d2680`
    carries [PR#1311](https://github.com/aws/aws-ofi-nccl/pull/1311) (the per-platform EFA hw-counter
    tristate `OFI_NCCL_GDAKI_EFA_HW_COUNTER`) and the GIN seq-space aliasing fix. It does **not** carry
    [PR#1351](https://github.com/aws/aws-ofi-nccl/pull/1351) (the `OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY`
@@ -63,7 +64,7 @@ the `a3d2680` pin) are plain SHA pins, not patches.
 At stock `e2f993dc4` (the first commit with the `deepep_v2` backend), default compilation crashes
 deterministically during startup in `profile_run` (`deepep_v2.py` combine, a Triton illegal-memory
 access). This is **transport-independent** — the same crash and the same fix as the proxy sample,
-because the vLLM pin is identical. `--enforce-eager` avoids it. The non-eager numbers in `benchmarks/`
+because both were measured at vLLM `e2f993dc4` (the proxy sample has since moved to `14617c2b`). `--enforce-eager` avoids it. The non-eager numbers in `benchmarks/`
 are historical — taken with the then-unmerged guard applied — and the shipped recipe carries no patch.
 
 ## Prerequisites
@@ -92,7 +93,7 @@ bash setup/build-push.sh
 
 The image is NGC-from-scratch (`FROM nvcr.io/nvidia/cuda:...`). It builds rdma-core (post-#1701) and
 libfabric (post-#12591) from source, then `setup_deepep_v2_gdaki_efa.sh` builds aws-ofi-nccl
-`--enable-gdaki` at its pinned SHA (no local patches) against them and stages the DeepEP-V2 source from
+with GDAKI at its pinned SHA (no local patches) against them and stages the DeepEP-V2 source from
 the [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) fork at `97d8f9bc`
 (SHA pin, no local patches); the `_C.so` is compiled in-pod on first boot for the arch the node runs
 (`DEEPEP_ARCH_LIST`; a design choice, since nvcc needs no GPU) by `recipe/build_deepep.sh`.
@@ -106,7 +107,7 @@ bash recipe/verify-image.sh $REGISTRY/vllm-deepep-v2-gdaki-efa:$IMAGE_TAG
 ```
 
 Asserts (fail-loud) the EFA provider resolves, the rdma-core comp-cntr verbs are present, a single
-NCCL 2.30.4 wins on the linker path, the GIN plugin exports `ncclGinPlugin`, GDAKI + the
+NCCL 2.31.2 wins on the linker path, the GIN plugin exports `ncclGinPlugin`, GDAKI + the
 `OFI_NCCL_GDAKI_EFA_HW_COUNTER` param are compiled in, and (when run on a node) the host gdrdrv is
 GDRCopy 2.5+.
 
@@ -144,14 +145,22 @@ bash recipe/benchmark.sh $LEADER_IP    # concurrency sweep 1/8/16/32/64, writes 
 ```
 
 See [`benchmarks/README.md`](benchmarks/README.md) for the measured eager, non-eager, and the
-same-node-set **GDAKI-vs-proxy transport A/B** tables (EP16 + EP32) + environment provenance.
+same-node-set `NCCL_GIN_TYPE` 3-vs-2 A/B tables (EP16 + EP32; on NCCL 2.30.4 both arms ran the CPU-proxy
+GIN table) + environment provenance.
 
 ## Known limitations
 
+- **The NCCL 2.31.2 / `NCCL_GIN_TYPE=5` pin set has not been run.** It passes a DeepEP `nccl.cu`
+  compile gate only. NCCL 2.31.2 is the first release that defines GIN type 5 (EFA-GDA), the type the
+  pinned aws-ofi-nccl's GDAKI table reports, and NCCL keeps a GIN plugin only when its type matches a
+  set `NCCL_GIN_TYPE`; so this sample sets 5, as the repo's
+  [`deepep-v2-benchmark`](../../../../micro-benchmarks/expert-parallelism/deepep-v2-benchmark) does.
+  The tables in `benchmarks/` were recorded with `NCCL_GIN_TYPE=3` on NCCL 2.30.4, where NCCL ran the
+  plugin's v13 CPU-proxy GIN table, so no GDAKI run exists yet.
 - Measured on **H200 (p5en) only**; no Blackwell serving run is in this sample.
-- The transport A/B is **one sweep per arm/scale**; the 2×2 (EP16+EP32, GDAKI+proxy, 10 paired
-  comparisons, GDAKI ≥ proxy in all 10 by +0.2–3.2%) shows a consistent direction, not a
-  statistically tight interval.
+- The `NCCL_GIN_TYPE` 3-vs-2 A/B is **one sweep per arm/scale** and **not a transport comparison**: on
+  NCCL 2.30.4 both arms ran the plugin's v13 CPU-proxy GIN table, so its 10 paired comparisons
+  (TYPE=3 ≥ TYPE=2 in all 10 by +0.2–3.2%) say nothing about GDAKI.
 - The validation nodes ran efa.ko 3.0.x/3.1.x, so the cross-node proof is **functional** (efa-direct
   boot banner + coherent EP output), **not** a byte-level `/sys` hw-counter tally — that needs
   efa.ko ≥ 3.3.0. See `benchmarks/README.md` caveats.

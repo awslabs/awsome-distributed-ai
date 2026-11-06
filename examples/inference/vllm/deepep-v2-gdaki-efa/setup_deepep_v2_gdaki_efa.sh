@@ -3,9 +3,9 @@
 #
 # setup_deepep_v2_gdaki_efa.sh — build aws-ofi-nccl with the GDAKI (GPU-initiated,
 # kernel-posted WQE) GIN backend + stage DeepEP-V2 source for the vLLM deepep_v2 backend
-# on EFA. This is the NCCL_GIN_TYPE=3 counterpart to ../deepep-v2-efa/setup_deepep_v2_efa.sh
+# on EFA. This is the NCCL_GIN_TYPE=5 counterpart to ../deepep-v2-efa/setup_deepep_v2_efa.sh
 # (which builds the NCCL_GIN_TYPE=2 CPU-proxy plugin) — same DeepEP fork source, the delta is
-# --enable-gdaki + the newer rdma-core/libfabric substrate the Dockerfile builds first.
+# a GDAKI-enabled plugin build + the newer rdma-core/libfabric substrate the Dockerfile builds first.
 # Distinct from the NVSHMEM-path setup_deepep_efa.sh gated by
 # .github/workflows/deepep-vendor-sync.yml — intentionally NOT vendor-synced to that copy.
 #
@@ -42,17 +42,18 @@ git fetch origin "${AWS_OFI_NCCL_SHA}"; git checkout "${AWS_OFI_NCCL_SHA}"
 grep -rq GDAKI_EFA_HW_COUNTER include/ src/                      # assert the PR#1311 hw-counter tristate present (fail-loud)
 git rev-parse HEAD > /opt/aws-ofi-nccl-gdaki.sha
 ./autogen.sh
-# --enable-gdaki (the GPU-initiated backend) against the newer libfabric+rdma-core the Dockerfile built.
+# GDAKI (the GPU-initiated backend) is detected by configure against the newer libfabric+rdma-core the
+# Dockerfile built (a3d2680 has no --enable-gdaki option); the ncclGinPlugin_v14 gate below fails the
+# build if it was not compiled in.
 ./configure --prefix=/opt/aws-ofi-nccl-gdaki \
   --with-libfabric=/opt/libfabric-gdaki \
   --with-cuda=/usr/local/cuda \
   --with-nccl-headers="$(python3 -c 'import nvidia.nccl; print(nvidia.nccl.__path__[0])')/include" \
-  --enable-gdaki \
   --enable-cudart-dynamic --enable-platform-aws
 make -C src -j"$(nproc)"; make -C src install
 test -f /opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so
 [ "$(nm -D /opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so | grep -c ncclGinPlugin)" -ge 1 ]                 # GIN symbol present (fail-loud)
-[ "$(strings /opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so | grep -ci gdaki)" -ge 1 ]                     # GDAKI code compiled in (fail-loud)
+[ "$(nm -D /opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so | grep -cw ncclGinPlugin_v14)" -ge 1 ] || { echo "FATAL: plugin built without GDAKI (no ncclGinPlugin_v14 export)" >&2; exit 1; }   # GDAKI table compiled in (fail-loud)
 [ "$(strings /opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so | grep -c GDAKI_EFA_HW_COUNTER)" -ge 1 ]       # hw-counter tristate baked (fail-loud)
 ldconfig
 cd /; rm -rf /opt/aws-ofi-nccl-src
