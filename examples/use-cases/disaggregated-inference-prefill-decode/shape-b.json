@@ -1,0 +1,11 @@
+{
+  "name": "B-long-context",
+  "seed": 346,
+  "tasks": 128,
+  "calls_per_task_min": 1,
+  "calls_per_task_max": 1,
+  "input_tokens": 8192,
+  "output_tokens": 256,
+  "prefix_overlap_max_fraction": 0.05,
+  "document_text": "This fictional incident record describes an order-processing service. Inventory updates, payment checks, and warehouse dispatch are separate events. The operator compares event times and service responses before identifying the component that delayed fulfillment. Summarize the evidence and list the next diagnostic checks."
+}
