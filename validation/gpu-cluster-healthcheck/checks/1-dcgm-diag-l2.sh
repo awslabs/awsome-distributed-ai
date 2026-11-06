@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Check 1: DCGM Level 2 Diagnostics
 # Runs dcgmi diag -r 2 with JSON output for medium-depth hardware validation.
 # Includes deployment readiness, PCIe validation, memory bandwidth, SM stress.

@@ -1,4 +1,10 @@
-# Check 5 regression fixtures
+# Health check regression fixtures
+
+## Check 0 Xid 154 parsing
+
+`NvidiaXidTests` invokes the real Check 0 entrypoint with synthetic command output. GPU queries, kernel-log reads and device-use queries are mocked. These tests do not induce a GPU fault. They check that only the destination of a well-formed Xid 154 transition contributes to its severity, that another Xid's payload is not parsed as Xid 154, and that raw log lines and unrelated severe events remain intact. A transition to None remains a historical MONITOR warning, not a current-health or recovery-success claim.
+
+## Check 5 regression fixtures
 
 Run `python3 -B -m unittest discover -s tests -v` from the suite directory.
 The existing command-mock bench tests the actual shell entrypoints without

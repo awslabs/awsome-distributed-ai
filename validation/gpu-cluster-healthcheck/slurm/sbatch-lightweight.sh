@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 #SBATCH --job-name=gpu-healthcheck-lightweight
 #SBATCH --output=gpu-healthcheck-lightweight-%j.out
 #SBATCH --error=gpu-healthcheck-lightweight-%j.err

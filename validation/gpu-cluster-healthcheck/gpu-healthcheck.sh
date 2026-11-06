@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # gpu-healthcheck.sh -- Master orchestrator for GPU cluster health checks
 #
 # Provides two operational modes:
@@ -281,7 +283,7 @@ main() {
     # Initialize
     ensure_results_dir
     detect_instance_type > /dev/null 2>&1 || true
-    load_instance_profile || true
+    load_instance_profile || exit 1
 
     # Pre-flight: verify critical dependencies (python3) and log versions
     if ! preflight_checks; then

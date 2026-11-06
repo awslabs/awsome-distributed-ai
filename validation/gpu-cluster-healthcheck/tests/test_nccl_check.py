@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Check 5 launch and Check 6 counter regressions; mocks are not hardware qualification.
 
 Adapted from the existing test_nccl_check.py at public revision ffed0df6102e68b3e94806373006b045e432298f.
@@ -14,6 +16,110 @@ SUITE = Path(__file__).resolve().parents[1]
 ROW = (Path(__file__).parent / 'nccl-valid-rows.txt').read_text()
 PROVIDER = 'NET/OFI Selected Provider is efa\n'
 HEADER = '# size count type redop root time algbw busbw #wrong time algbw busbw #wrong\n'
+
+
+class NvidiaXidTests(unittest.TestCase):
+    """Text-only Check 0 regressions, with all GPU/kernel commands mocked."""
+
+    def run_check(self, kernel_log):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'kernel.log').write_text(kernel_log)
+            commands = {
+                'nvidia-smi': '''case "$*" in
+*--query-gpu=gpu_name,*)
+    printf 'NVIDIA RTX PRO 4500, 00000000:57:00.0, 32768 MiB\\n%.0s' 1 2 3 4 5 6 7 8;;
+*--query-gpu=mig.mode.current*) printf 'Disabled\\n';;
+*--query-gpu=persistence_mode*) printf 'Enabled\\n';;
+*--query-gpu=index,serial,uuid*) printf '0, serial-test, GPU-test\\n';;
+*--query-gpu=index,ecc.errors*) printf '0, 0, 0, No, 0, 0\\n';;
+*) exit 91;;
+esac''',
+                'journalctl': 'exec /bin/cat "$TEST_KERNEL_LOG"',
+                'dmesg': 'exit 0',
+                'fuser': 'exit 1',
+                'lsof': 'exit 1',
+                'curl': 'exit 92',
+                'ec2-metadata': 'exit 92',
+            }
+            for name, body in commands.items():
+                executable = root / name
+                executable.write_text('#!/bin/sh\n' + body + '\n')
+                executable.chmod(0o755)
+            env = {k: v for k, v in os.environ.items()
+                   if not k.startswith(('SLURM_', 'NCCL_', 'EXPECTED_', 'INSTANCE_',
+                                        'HEALTHCHECK_', 'DRY_RUN', 'NVLINK_',
+                                        'STRICT_PSHC', 'NVIDIA_LOG_', 'KERNEL_LOG_'))}
+            env.update(PATH=f'{root}:/usr/bin:/bin', INSTANCE_TYPE='g7.48xlarge',
+                       TEST_KERNEL_LOG=str(root / 'kernel.log'),
+                       RESULTS_DIR=str(root / 'results'))
+            result = subprocess.run(['bash', str(SUITE / 'checks/0-nvidia-smi-check.sh')],
+                                    env=env, text=True, capture_output=True, timeout=20)
+            self.last_output = result.stdout + result.stderr
+            self.last_raw = (root / 'results/xid-errors.log').read_text()
+            report = json.loads((root / 'results/check-0-nvidia-smi.json').read_text())
+            return result.returncode, report
+
+    def test_xid154_uses_transition_destination(self):
+        line = ('NVRM: Xid (PCI:0000:57:00): 154, GPU recovery action changed '
+                'from 0x1 (GPU Reset Required) to 0x0 (None)\n')
+        rc, report = self.run_check(line)
+        self.assertEqual(rc, 0, self.last_output)
+        self.assertEqual((report['status'], report['severity']), ('WARN', 'MONITOR'))
+        self.assertNotIn('derived action -> RESET', self.last_output)
+        self.assertEqual(self.last_raw, line)
+
+    def test_xid154_reboot_to_reset_uses_reset(self):
+        line = ('NVRM: Xid (PCI:0000:57:00): 154, GPU recovery action changed '
+                'from 0x2 (Node Reboot Required) to 0x1 (GPU Reset Required)\n')
+        rc, report = self.run_check(line)
+        self.assertEqual((rc, report['severity']), (1, 'RESET'), self.last_output)
+        self.assertNotIn('derived action -> REBOOT', self.last_output)
+
+    def test_xid154_known_destinations_escalate(self):
+        for value, action, severity in [('0x2', 'Node Reboot Required', 'REBOOT'),
+                                        ('0x1', 'GPU Reset Required', 'RESET'),
+                                        ('0x4', 'Drain and Reset', 'RESET'),
+                                        ('0x3', 'Drain P2P', 'RESET')]:
+            with self.subTest(action=action):
+                line = ('NVRM: Xid (PCI:0000:57:00): 154, GPU recovery action '
+                        f'changed from 0x0 (None) to {value} ({action})\n')
+                rc, report = self.run_check(line)
+                self.assertEqual((rc, report['severity']), (1, severity), self.last_output)
+                self.assertEqual(self.last_raw, line)
+
+    def test_xid154_does_not_parse_other_codes_payload(self):
+        line = ('NVRM: Xid (PCI:0000:57:00): 154, GPU recovery action changed '
+                'from 0x0 (None) to 0x0 (None)\n'
+                'NVRM: Xid (PCI:0000:59:00): 13, pid=154, '
+                'GPU recovery action changed from 0x0 (None) '
+                'to 0x2 (Node Reboot Required)\n')
+        rc, report = self.run_check(line)
+        self.assertEqual((rc, report['status']), (0, 'WARN'), self.last_output)
+        self.assertNotIn('derived action -> REBOOT', self.last_output)
+        self.assertEqual(self.last_raw, line)
+
+    def test_xid154_clear_does_not_erase_required_events(self):
+        for required in [
+            'NVRM: Xid (PCI:0000:57:00): 154, GPU recovery action changed '
+            'from 0x0 (None) to 0x2 (Node Reboot Required)\n',
+            'NVRM: Xid (PCI:0000:59:00): 79, GPU has fallen off the bus\n',
+        ]:
+            with self.subTest(required=required):
+                line = required + (
+                    'NVRM: Xid (PCI:0000:57:00): 154, GPU recovery action changed '
+                    'from 0x2 (Node Reboot Required) to 0x0 (None)\n')
+                rc, report = self.run_check(line)
+                self.assertEqual((rc, report['severity']), (1, 'REBOOT'), self.last_output)
+                self.assertEqual(self.last_raw, line)
+
+    def test_xid154_unknown_destination_keeps_warning(self):
+        line = ('NVRM: Xid (PCI:0000:57:00): 154, GPU recovery action changed '
+                'from 0x1 (GPU Reset Required) to 0xf (Future action)\n')
+        rc, report = self.run_check(line)
+        self.assertEqual((rc, report['status'], report['severity']),
+                         (0, 'WARN', 'MONITOR'), self.last_output)
+        self.assertEqual(self.last_raw, line)
 
 
 class NcclResultTests(unittest.TestCase):
@@ -649,6 +755,7 @@ log_result "6-efa-loopback" "PASS" "new execution"
                                    ('p5en.48xlarge', '8|16|true|efa'),
                                    ('p6-b200.48xlarge', '8|8|true|efa'),
                                    ('g7.48xlarge', '8|2|false|efa'),
+                                   ('g7e.48xlarge', '8|4|false|efa'),
                                    ('g7x48xlarge', '0|0|false|efa')]:
             with self.subTest(instance=instance):
                 p = subprocess.run(
@@ -684,6 +791,133 @@ log_result "6-efa-loopback" "PASS" "new execution"
                                text=True, capture_output=True, timeout=10)
             self.assertNotEqual(p.returncode, 0)
             self.assertIn('GPU count mismatch: expected=8, detected=7', p.stdout)
+
+    def test_g7e_dmi_preserves_eight_gpu_launch(self):
+        rc, report, calls, imds_called = self.run_check(
+            instance='', dmi='g7e.48xlarge', orchestrator=True)
+        self.assertEqual((rc, report['status']), (0, 'PASS'))
+        self.assertEqual(report['instance_type'], 'g7e.48xlarge')
+        self.assertFalse(imds_called)
+        self.assertIn('--ntasks=2', calls[-1])
+        self.assertEqual(calls[-1][calls[-1].index('-g') + 1], '8')
+
+    def test_assigned_efa_profile_and_invalid_contract(self):
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith(('INSTANCE_', 'HEALTHCHECK_', 'EXPECTED_'))}
+        for count in ('1', '2', '4', '0', '5', '-1', '02', '', '2;id'):
+            with self.subTest(count=count):
+                result = subprocess.run(
+                    ['bash', '-c', 'source "$1"; load_instance_profile; '
+                     'printf "%s|%s|%s" "$EXPECTED_GPU_COUNT" "$EXPECTED_EFA_COUNT" "$NVLINK_EXPECTED"',
+                     '_', str(SUITE / 'lib/common.sh')],
+                    env=dict(env, INSTANCE_TYPE='g7e.48xlarge', HEALTHCHECK_EXPECTED_EFA_COUNT=count),
+                    text=True, capture_output=True, timeout=10)
+                if count in ('1', '2', '4'):
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, f'8|{count}|false')
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+        for entry in ('gpu-healthcheck.sh', 'checks/2-efa-enumeration.sh'):
+            with tempfile.TemporaryDirectory() as temporary:
+                args = ['--check', '2', '--dry-run'] if '/' not in entry else ['--dry-run']
+                result = subprocess.run(['bash', str(SUITE / entry), *args],
+                    env=dict(env, INSTANCE_TYPE='g7e.48xlarge', HEALTHCHECK_EXPECTED_EFA_COUNT='0',
+                             RESULTS_DIR=temporary), text=True, capture_output=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('[PASS]', result.stdout)
+
+    def run_efa_check(self, *, instance='g7e.48xlarge', expected='2', bound=2,
+                      rdma=2, uverbs=2, domains=2, assigned=True):
+        # Reuse the Check 2 command fixture, not hardware. Relocate read-only
+        # inventory paths, including optional GDRCopy, to keep execution CPU-only.
+        import shutil
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'checks').mkdir()
+            shutil.copytree(SUITE / 'lib', root / 'lib')
+            shutil.copyfile(SUITE / 'instance-profiles.conf', root / 'instance-profiles.conf')
+            devices = root / 'infiniband'
+            if uverbs:
+                devices.mkdir()
+                for i in range(uverbs):
+                    (devices / f'uverbs{i}').touch()
+            sysfs = root / 'sysfs'
+            sysfs.mkdir()
+            for i in range(2):
+                (sysfs / f'rdma{i}').mkdir()
+            script = (SUITE / 'checks/2-efa-enumeration.sh').read_text()
+            script = script.replace('/dev/infiniband', str(devices)).replace(
+                '/sys/class/infiniband', str(sysfs)).replace(
+                '/opt/gdrcopy', str(root / 'no-gdrcopy'))
+            (root / 'checks/check.sh').write_text(script)
+            binary = root / 'bin'
+            binary.mkdir()
+            programs = {
+                'lspci': 'if [[ $1 == -Dk ]]; then for ((i=0; i<' + str(bound) + '; i++)); do printf "Kernel driver in use: efa\\n"; done; else printf "EFA device\\nEFA device\\n"; fi',
+                'ibv_devices': 'printf "device node GUID\\n----------------\\n"; for ((i=0; i<' + str(rdma) + '; i++)); do printf "rdma%s guid\\n" "$i"; done',
+                'fi_info': ('printf "provider: efa\\n"; for ((i=0; i<' + str(domains) + '; i++)); do printf "domain: rdma%s-rdm\\ndomain: rdma%s-dgrm\\n" "$i" "$i"; done') if domains else 'exit 1',
+                'lsmod': 'printf "efa 1\\nib_uverbs 1\\nib_core 1\\n"',
+            }
+            for name, body in programs.items():
+                path = binary / name
+                path.write_text('#!/bin/bash\n' + body + '\n')
+                path.chmod(0o755)
+            env = {k: v for k, v in os.environ.items()
+                   if not k.startswith(('INSTANCE_', 'HEALTHCHECK_', 'EXPECTED_', 'DRY_RUN'))}
+            env.update(PATH=f'{binary}:/usr/bin:/bin', INSTANCE_TYPE=instance,
+                       RESULTS_DIR=str(root / 'results'))
+            if assigned:
+                env['HEALTHCHECK_EXPECTED_EFA_COUNT'] = expected
+            result = subprocess.run(['bash', str(root / 'checks/check.sh')], env=env,
+                                    text=True, capture_output=True, timeout=10)
+            self.last_output = result.stdout + result.stderr
+            report_path = root / 'results/check-2-efa-enumeration.json'
+            report = json.loads(report_path.read_text()) if report_path.exists() else {}
+            return result.returncode, report
+
+    def test_efa_assignment_detects_unbound_and_missing_provider(self):
+        for bound, rdma, uverbs, domains, assigned, mismatch in (
+                (2, 2, 2, 2, True, None),
+                (1, 2, 2, 2, True, 'driver-bound'),
+                (2, 1, 2, 2, True, 'RDMA'),
+                (2, 2, 0, 2, True, 'uverbs'),
+                (2, 2, 2, 1, True, 'provider-domains'),
+                (2, 2, 2, 0, True, 'provider-domains'),
+                (2, 2, 2, 2, False, 'PCI device')):
+            with self.subTest(bound=bound, rdma=rdma, uverbs=uverbs,
+                              domains=domains, assigned=assigned):
+                rc, report = self.run_efa_check(bound=bound, rdma=rdma, uverbs=uverbs,
+                                                domains=domains, assigned=assigned)
+                self.assertEqual(rc != 0, mismatch is not None, self.last_output)
+                if mismatch:
+                    self.assertEqual((report['status'], report['severity']), ('FAIL', 'ISOLATE'))
+                    self.assertIn(f'EFA {mismatch} count mismatch:', self.last_output)
+                else:
+                    # The host's memlock may cause WARN: never erase that advisory.
+                    self.assertIn(report['status'], ('PASS', 'WARN'))
+        for count in ('0', '5', '-1', '02', '', '2;id'):
+            with self.subTest(invalid_count=count):
+                rc, report = self.run_efa_check(expected=count)
+                self.assertNotEqual(rc, 0)
+                self.assertEqual(report, {})
+                self.assertIn('must be positive and at most profile capacity 4', self.last_output)
+                self.assertNotIn('[PASS]', self.last_output)
+
+    def test_efa_unassigned_g7_retains_warnings_without_strict_gate(self):
+        rc, report = self.run_efa_check(instance='g7.48xlarge', assigned=False,
+                                      bound=1, rdma=1, uverbs=0, domains=0)
+        self.assertEqual(rc, 0, self.last_output)
+        self.assertEqual(report['status'], 'WARN')
+        self.assertNotEqual(report['severity'], 'ISOLATE')
+        self.assertIn('RDMA device count mismatch: ibv_devices=1', self.last_output)
+        self.assertIn('fi_info did not confirm EFA provider', self.last_output)
+        self.assertIn('infiniband directory not found', self.last_output)
+        self.assertNotIn('[FAIL]', self.last_output)
+
+    def test_g7e_profile_and_kubernetes_copy(self):
+        expected = 'g7e.48xlarge|8|4|false|efa'
+        self.assertIn(expected, (SUITE / 'instance-profiles.conf').read_text().splitlines())
+        self.assertIn(expected, (SUITE / 'kubernetes/manifests/01-configmap.yaml').read_text())
 
     def test_g7_profile_and_kubernetes_copy(self):
         expected = 'g7.48xlarge|8|2|false|efa'

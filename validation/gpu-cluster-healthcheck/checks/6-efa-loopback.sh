@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Check 6: EFA Loopback Connectivity Test
 # Iterates over all EFA libfabric domains and runs a per-device self-loopback
 # connectivity test using AWS's canonical fi_pingpong invocation.

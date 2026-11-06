@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Check 3: GPU/NVLink/PCIe Topology Validation
 # Validates GPU-to-GPU connectivity matrix, NVLink status,
 # and PCIe switch groupings against expected topology.
