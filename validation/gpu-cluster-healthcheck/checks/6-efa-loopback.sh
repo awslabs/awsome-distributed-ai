@@ -37,7 +37,7 @@ EFA_INSTALLER_TEST="${EFA_INSTALLER_TEST:-/opt/amazon/efa/test/efa_test.sh}"
 #     collisions when called per-device in a loop.
 # Returns 0 on success, non-zero on failure. Writes server+client logs to stdout
 # on failure for triage.
-run_pingpong_for_domain() {
+run_pingpong_for_domain() (
     local domain="$1"
     # FI_EFA_IFACE takes the kernel/ibv device name, not the libfabric domain
     # name -- strip the "-rdm" suffix (see comment above run_pingpong_for_domain
@@ -48,19 +48,19 @@ run_pingpong_for_domain() {
     client_port=$(shuf -n 1 -i 57343-65535)
 
     local server_log client_log
-    server_log=$(mktemp)
-    client_log=$(mktemp)
+    server_log="${RESULTS_DIR}/efa-${domain}-server.log"
+    client_log="${RESULTS_DIR}/efa-${domain}-client.log"
 
     FI_LOG_LEVEL=warn FI_EFA_ENABLE_SHM_TRANSFER=0 FI_EFA_IFACE="${iface}" \
         fi_pingpong -e rdm -p efa -B "${server_port}" > "${server_log}" 2>&1 &
     local server_pid=$!
+    trap 'kill "${server_pid}" 2>/dev/null || true' EXIT
     sleep 3
 
     if ! kill -0 "${server_pid}" 2>/dev/null; then
         wait "${server_pid}" 2>/dev/null || true
         log_warn "Domain ${domain}: server failed to start"
         cat "${server_log}" >&2
-        rm -f "${server_log}" "${client_log}"
         return 1
     fi
 
@@ -81,9 +81,8 @@ run_pingpong_for_domain() {
         cat "${client_log}" >&2
     fi
 
-    rm -f "${server_log}" "${client_log}"
     return "${ret}"
-}
+)
 
 run_check() {
     init_check "${CHECK_NAME}"
@@ -132,6 +131,12 @@ run_check() {
 
     local device_count
     device_count=$(echo "${domains}" | wc -l | tr -d ' ')
+    if [[ "${EXPECTED_EFA_COUNT:-0}" -gt 0 && "${device_count}" -ne "${EXPECTED_EFA_COUNT}" ]]; then
+        check_fail "${CHECK_NAME}" \
+            "EFA domain count mismatch: expected=${EXPECTED_EFA_COUNT}, detected=${device_count}" \
+            "ISOLATE"
+        return 1
+    fi
     log_info "Testing ${device_count} EFA domain(s)"
 
     # Regression guard: a bogus, definitely-nonexistent device name MUST fail.
@@ -160,8 +165,14 @@ run_check() {
         [[ -z "${domain}" ]] && continue
         log_info "Testing domain: ${domain}"
 
+        # These raw snapshots include every visible device. Their timing labels
+        # do not by themselves prove per-domain traffic attribution or continuity.
+        grep -H . /sys/class/infiniband/*/ports/1/hw_counters/{send_bytes,recv_bytes} \
+            > "${RESULTS_DIR}/efa-${domain}-before.txt" 2>/dev/null || true
         local test_exit=0
         run_pingpong_for_domain "${domain}" || test_exit=$?
+        grep -H . /sys/class/infiniband/*/ports/1/hw_counters/{send_bytes,recv_bytes} \
+            > "${RESULTS_DIR}/efa-${domain}-after.txt" 2>/dev/null || true
 
         if [[ "${test_exit}" -ne 0 ]]; then
             failures=$((failures + 1))

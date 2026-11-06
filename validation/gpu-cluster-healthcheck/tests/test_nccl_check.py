@@ -127,7 +127,7 @@ class NcclResultTests(unittest.TestCase):
                   dmi='', binary=None, local=False, isolation=False, exit_code=0,
                   orchestrator=False, nodes='2', mpi='pmix', long_help=False,
                   wrapper=False, container=None, output=None, efa_stats=None,
-                  rdma_exit=0, pin_ignored=False):
+                  rdma_exit=0, pin_ignored=False, efa_domains=2):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for name, body in {
@@ -170,19 +170,25 @@ exit "$TEST_EXIT"''',
                 # Extend this existing command-mock bench; never invoke EFA hardware.
                 (root / 'statistics').write_text(efa_stats)
                 for name, body in {
-                    'fi_info': 'printf "domain: rdma0-rdm\\ndomain: rdma1-rdm\\n"',
+                    'fi_info': 'printf "%s\\n" "$TEST_EFA_DOMAINS"',
                     'fi_pingpong': '''printf "%s|%s|%s\\n" "$FI_EFA_IFACE" "$FI_EFA_ENABLE_SHM_TRANSFER" "$*" >> "$TEST_PIN_CALLS"
 if [ "$TEST_PIN_IGNORED" != 1 ]; then
     case "$FI_EFA_IFACE" in rdma0|rdma1) ;; *) exit 61;; esac
 fi
+printf 'fixture loopback output for %s\\n' "$FI_EFA_IFACE"
 case "$*" in *localhost) exit 0;; *) exec /bin/sleep 30;; esac''',
                     'sleep': 'exit 0',
                     'rdma': 'printf "%s\\n" "$*" >> "$TEST_ARGS"; cat "$TEST_STATS"; exit "$TEST_RDMA_EXIT"',
+                    'grep': '''case "$*" in
+*hw_counters*send_bytes*) printf '/fixture/rdma0/send_bytes:512\\n/fixture/rdma0/recv_bytes:256\\n';;
+*) exec /usr/bin/grep "$@";;
+esac''',
                 }.items():
                     p = root / name
                     p.write_text('#!/bin/sh\n' + body + '\n')
                     p.chmod(0o755)
-                env.update(TEST_STATS=str(root / 'statistics'),
+                env.update(TEST_EFA_DOMAINS=''.join(f'domain: rdma{i}-rdm\n' for i in range(efa_domains)),
+                           TEST_STATS=str(root / 'statistics'),
                            TEST_PIN_CALLS=str(root / 'pin-calls'),
                            TEST_PIN_IGNORED=str(int(pin_ignored)),
                            TEST_RDMA_EXIT=str(rdma_exit), VERBOSE='1')
@@ -193,7 +199,10 @@ case "$*" in *localhost) exit 0;; *) exec /bin/sleep 30;; esac''',
                 self.last_raw = raw.read_text() if raw.exists() else None
                 self.last_rdma_calls = ((root / 'args').read_text().splitlines()
                                         if (root / 'args').exists() else [])
-                self.last_pin_calls = (root / 'pin-calls').read_text().splitlines()
+                self.last_pin_calls = ((root / 'pin-calls').read_text().splitlines()
+                                       if (root / 'pin-calls').exists() else [])
+                self.last_result_files = {p.name: p.read_text() for p in (root / 'results').iterdir()
+                                          if p.suffix in ('.log', '.txt')}
                 report = json.loads((root / 'results/check-6-efa-loopback.json').read_text())
                 return p.returncode, report, [], False
             if container is not None:
@@ -344,6 +353,43 @@ case "$*" in *localhost) exit 0;; *) exec /bin/sleep 30;; esac''',
         self.assertIn('Negative control failed', self.last_output)
         self.assertEqual(self.last_rdma_calls, [])
         self.assertIsNone(self.last_raw)
+
+    def test_check6_retains_per_domain_logs(self):
+        rc, report, _, _ = self.run_check(
+            efa_stats='link rdma0/1 rx_drops 0 retrans_timeout_events 0\n')
+        self.assertEqual((rc, report['status']), (0, 'PASS'))
+        for domain in ('rdma0-rdm', 'rdma1-rdm'):
+            for side in ('server', 'client'):
+                with self.subTest(domain=domain, side=side):
+                    name = f'efa-{domain}-{side}.log'
+                    self.assertIn(name, self.last_result_files)
+                    self.assertIn('fixture loopback output', self.last_result_files[name])
+
+    def test_check6_retains_byte_counter_snapshots(self):
+        rc, report, _, _ = self.run_check(
+            efa_stats='link rdma0/1 rx_drops 0 retrans_timeout_events 0\n')
+        self.assertEqual((rc, report['status']), (0, 'PASS'))
+        for domain in ('rdma0-rdm', 'rdma1-rdm'):
+            for phase in ('before', 'after'):
+                with self.subTest(domain=domain, phase=phase):
+                    name = f'efa-{domain}-{phase}.txt'
+                    self.assertIn(name, self.last_result_files)
+                    self.assertEqual(self.last_result_files[name],
+                                     '/fixture/rdma0/send_bytes:512\n/fixture/rdma0/recv_bytes:256\n')
+        self.assertIn('not per-domain or loopback/fault deltas', self.last_output)
+
+    def test_check6_requires_the_expected_domain_count(self):
+        rc, report, _, _ = self.run_check(
+            efa_stats='link rdma0/1 rx_drops 0 retrans_timeout_events 0\n',
+            efa_domains=1)
+        self.assertEqual((rc, report['status'], report['severity']), (1, 'FAIL', 'ISOLATE'))
+        self.assertIn('EFA domain count mismatch: expected=2, detected=1', self.last_output)
+        self.assertEqual(self.last_pin_calls, [])
+        self.assertEqual(self.last_rdma_calls, [])
+        rc, report, _, _ = self.run_check(
+            instance='g7.24xlarge', efa_domains=1,
+            efa_stats='link rdma0/1 rx_drops 0 retrans_timeout_events 0\n')
+        self.assertEqual((rc, report['status']), (0, 'PASS'))
 
     def test_owner_severity_maximum_and_existing_consumers(self):
         # Reproduce #1270's published local test plan; all commands are local.
@@ -764,6 +810,7 @@ log_result "6-efa-loopback" "PASS" "new execution"
         for instance, expected in [('p4d.24xlarge', '8|4|true|efa'),
                                    ('p5en.48xlarge', '8|16|true|efa'),
                                    ('p6-b200.48xlarge', '8|8|true|efa'),
+                                   ('g7.24xlarge', '4|1|false|efa'),
                                    ('g7.48xlarge', '8|2|false|efa'),
                                    ('g7e.48xlarge', '8|4|false|efa'),
                                    ('g7x48xlarge', '0|0|false|efa')]:
@@ -930,9 +977,10 @@ log_result "6-efa-loopback" "PASS" "new execution"
         self.assertIn(expected, (SUITE / 'kubernetes/manifests/01-configmap.yaml').read_text())
 
     def test_g7_profile_and_kubernetes_copy(self):
-        expected = 'g7.48xlarge|8|2|false|efa'
-        self.assertIn(expected, (SUITE / 'instance-profiles.conf').read_text().splitlines())
-        self.assertIn(expected, (SUITE / 'kubernetes/manifests/01-configmap.yaml').read_text())
+        for expected in ('g7.48xlarge|8|2|false|efa', 'g7.24xlarge|4|1|false|efa'):
+            with self.subTest(profile=expected):
+                self.assertIn(expected, (SUITE / 'instance-profiles.conf').read_text().splitlines())
+                self.assertIn(expected, (SUITE / 'kubernetes/manifests/01-configmap.yaml').read_text())
 
 
 if __name__ == '__main__':

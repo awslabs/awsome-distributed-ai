@@ -20,8 +20,8 @@ The suite provides two operational modes: **lightweight checks** for regular use
 ### Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/awslabs/awsome-distributed-ai.git
+# Clone the consolidated AIM344 review branch
+git clone --branch AIM344 --single-branch https://github.com/awslabs/awsome-distributed-ai.git
 cd awsome-distributed-ai/validation/gpu-cluster-healthcheck
 
 # Make all scripts executable
@@ -33,8 +33,7 @@ chmod +x gpu-healthcheck.sh checks/*.sh slurm/*.sh slurm/examples/*.sh
 
 ### Assigned EFA interfaces
 
-This assigned-EFA change is a review candidate, not a merged release or hardware
-qualification. Public availability of the candidate has not been verified.
+This assigned-EFA change is included in the consolidated `AIM344` review branch, not a merged release or hardware qualification.
 
 `g7e.48xlarge` has 8 GPUs, no NVLink, and up to 4 EFA interfaces. Its profile
 records that capability, not a claim that every launch attaches four. For a
@@ -73,7 +72,7 @@ cat /tmp/gpu-healthcheck-*/summary.json | python3 -m json.tool
 
 ### Directory Structure
 
-```
+```text
 gpu-cluster-healthcheck/
 ├── README.md                          # This documentation
 ├── gpu-healthcheck.sh                 # Master orchestrator
@@ -145,11 +144,12 @@ The file `instance-profiles.conf` defines expected hardware counts per instance 
 | p5e.48xlarge | 8 | 32 | Yes | efa |
 | p5en.48xlarge | 8 | 16 | Yes | efa |
 | p6-b200.48xlarge | 8 | 8 | Yes | efa |
+| g7.24xlarge | 4 | 1 | No | efa |
 | g7.48xlarge | 8 | 2 | No | efa |
 
 To add a new instance type, append a line to `instance-profiles.conf`:
 
-```
+```text
 <instance-type>|<gpu-count>|<efa-count>|<nvlink-expected>|<efa-provider>
 ```
 
@@ -331,23 +331,18 @@ NCCL_ISOLATION_TESTS=1 ./gpu-healthcheck.sh --check 5
 
 **Runtime:** 5-15 minutes | **Suite:** Intensive
 
-Tests each EFA device individually:
+Tests the EFA RDM domains returned by `fi_info -p efa -t FI_EP_RDM`:
 
-- Iterates over all RDMA devices discovered via `ibv_devices`
-- Runs `fi_pingpong` or `ib_write_bw` in loopback mode per device
-- Reports bandwidth and latency per device
-- Compares per-device bandwidth against instance-type thresholds (default: 20 Gbps for all supported types)
-  - Override with `EFA_MIN_BW` env var (in Gbps)
-- Collects EFA statistics via `rdma -p statistic show` and warns on `rx_drops` or `retrans_timeout_events`
-  - Statistics saved to `efa-statistics.txt`
+- Requires the discovered domain count to match the profile or trusted assigned-EFA count when an expected count is set, before starting loopback commands.
+- Selects each domain's kernel device with `FI_EFA_IFACE` and disables shared-memory transfer for `fi_pingpong`. A nonexistent-device negative control must fail before the real-device tests proceed.
+- Saves each server/client output to `efa-<domain>-server.log` and `efa-<domain>-client.log` in the results directory. The verdict follows command completion; the script does not enforce an `EFA_MIN_BW` threshold.
+- Saves all visible devices' raw `send_bytes` and `recv_bytes` before and after each real-domain test in `efa-<domain>-before.txt` and `efa-<domain>-after.txt`. These snapshots support inspection, but do not automatically establish traffic attribution or a continuous counter epoch.
+- Saves the post-loopback `rdma -p statistic show` output to `efa-statistics.txt`. Nonzero cumulative `rx_drops` or `retrans_timeout_events` produce WARN; incomplete or malformed statistics remain unknown rather than becoming zero. These are absolute all-link totals, not per-domain or fault deltas.
 
 ```bash
 ./gpu-healthcheck.sh --check 6
 # or
 ./gpu-healthcheck.sh --check efa-loopback
-
-# With custom bandwidth threshold (Gbps)
-EFA_MIN_BW=25 ./gpu-healthcheck.sh --check 6
 ```
 
 ## DCGM Operational Guide
@@ -430,7 +425,7 @@ The `kubernetes/` directory provides a full Kubernetes-native deployment for Ama
 
 The recommended operational workflow for handling suspected GPU issues:
 
-```
+```text
                Monitoring / Job Failure
                        │
                        ▼
@@ -508,7 +503,7 @@ The guiding principle is **replace, don't repair**. On AWS, the primary remediat
 ### NCCL all_reduce fails
 
 - Verify EFA provider: ensure `NCCL_DEBUG=INFO` output shows "Selected Provider is EFA"
-- Check container image availability: `enroot import docker://public.ecr.aws/hpc-cloud/nccl-tests:latest`
+- Check container image availability: `enroot import docker://public.ecr.aws#hpc-cloud/nccl-tests:cuda13.0.2-efa1.48.0-ofiv1.19.0-ncclv2.30.4-1-testsv2.18.3`
 - Verify inter-node connectivity: security groups must allow all traffic between nodes
 - Check for NCCL version compatibility with driver version
 
@@ -516,7 +511,7 @@ The guiding principle is **replace, don't repair**. On AWS, the primary remediat
 
 Symptom in stderr:
 
-```
+```text
 URL https://registry-1.docker.io/v2/public.ecr.aws/hpc-cloud/nccl-tests/manifests/latest returned error code: 401 Unauthorized
 pyxis: failed to import docker image
 spank: required plugin spank_pyxis.so: task_init() failed with rc=-1
