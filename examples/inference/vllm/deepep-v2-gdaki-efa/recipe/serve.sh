@@ -1,15 +1,15 @@
 #!/bin/bash
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
 # serve.sh — vLLM DP/EP serve with the DeepEP-V2 all-to-all backend over AWS EFA
-# (NCCL-GIN GDAKI, GPU-initiated / kernel-posted WQE). One invocation per NODE
-# (leader on node 0, worker on the rest). This is the NCCL_GIN_TYPE=5 counterpart to
+# (built for NCCL-GIN GDAKI, GPU-initiated / kernel-posted WQE; not yet shown on hardware).
+# One invocation per NODE (leader on node 0, worker on the rest). This is the NCCL_GIN_TYPE=5 counterpart to
 # ../deepep-v2-efa/recipe/serve.sh (NCCL_GIN_TYPE=2 CPU-proxy) — the transport env is the
-# only delta; the eager/non-eager decision surface was measured at the same vLLM pin (e2f993dc4).
+# only delta; the eager/non-eager decision surface was measured at the same vLLM pin (e2f993dc4), on the CPU proxy.
 #
 #   leader:  serve.sh leader <leader-pod-ip>
 #   worker:  serve.sh worker <leader-pod-ip> <start-rank>     # 8 / 16 / 24 ...
 #
-# Scale is env-driven (the proven 2-node DP16 default is byte-identical unless overridden):
+# Scale is env-driven (the 2-node DP16 default, measured on 2026-08-14 with the CPU proxy, is byte-identical unless overridden):
 #   SERVE_DP=16|32...    total data-parallel size across all nodes (= EP size)
 #   SERVE_DP_LOCAL=8     ranks per node (= GPUs per node)
 #   SERVE_MODEL=...      any MoE whose n_routed_experts % SERVE_DP == 0 (preflighted below)
@@ -20,8 +20,8 @@
 #   the CPU proxy; GDAKI itself has not run yet).
 # SERVE_ENFORCE_EAGER=0 — KNOWN-CRASH as of vLLM e2f993dc4: default compilation dies
 #   deterministically during startup profile_run with a Triton illegal-memory-access in
-#   deepep_v2.py:347 (buffer.combine). This is transport-independent (inherited from the
-#   proxy package's root-cause). This script refuses =0 unless you also set
+#   deepep_v2.py:347 (buffer.combine), the crash the proxy package root-caused at this vLLM pin
+#   (both seen on the CPU proxy only). This script refuses =0 unless you also set
 #   SERVE_I_UNDERSTAND_NONEAGER_CRASHES=1. The empty-ExpertTokensMetadata guard (vLLM PR #52632)
 #   merged upstream 2026-08-20 but post-dates this pin: bump VLLM_SHA past its merge commit and
 #   re-measure to enable non-eager — no patch step.
@@ -43,7 +43,7 @@ export FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1 FI_EFA_ENABLE_SHM_TRANSFER=0 FI_
 export OFI_NCCL_PROTOCOL=RDMA   # (no DEEP_EP_BACKEND: nothing in DeepEP or vLLM reads it — the backend is vLLM's --all2all-backend deepep_v2 below)
 export NCCL_NET_PLUGIN=${NCCL_NET_PLUGIN:-/opt/aws-ofi-nccl-gdaki/lib/libnccl-net-ofi.so}
 export EP_REUSE_NCCL_COMM=0   # DeepEP creates its own comm; torch's is lazy/null under vLLM (segfault rootcause)
-export NCCL_DEBUG=${SERVE_NCCL_DEBUG:-WARN}   # SERVE_NCCL_DEBUG=INFO to see the efa-direct banner + GDAKI createContext
+export NCCL_DEBUG=${SERVE_NCCL_DEBUG:-WARN}   # SERVE_NCCL_DEBUG=INFO (+ NCCL_DEBUG_SUBSYS=INIT,NET,ENV) for the lines README "How to confirm GDAKI is active" checks
 # QP sizing + RDMA link rate need no env at the shipped DeepEP pin: the amazon-contributing fork
 # clamps the QP count into [_C.min_unordered_gin_qps, _C.max_unordered_gin_qps]
 # (deep_ep/buffers/elastic.py) and probes the link rate from sysfs (deep_ep/utils/envs.py

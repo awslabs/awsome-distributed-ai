@@ -1,6 +1,6 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
-# vLLM + DeepEP-V2 multi-node MoE serve over AWS EFA — GDAKI (GPU-initiated,
-# NCCL_GIN_TYPE=5, EFA-GDA) variant. 2× p5en.48xlarge (H200), DP16/EP16.
+# vLLM + DeepEP-V2 multi-node MoE serve over AWS EFA — variant built for GDAKI (GPU-initiated,
+# NCCL_GIN_TYPE=5, EFA-GDA; not yet shown on hardware). 2× p5en.48xlarge (H200), DP16/EP16.
 #
 # Mirrors ../../deepep-v2-efa/kubernetes/vllm-deepep-v2-2node.yaml (the CPU-proxy
 # TYPE=2 package) — the transport contract is the only delta:
@@ -22,8 +22,9 @@
 #
 # NODE PRECONDITION (beyond the proxy package): the GDAKI EFA hardware completion counter needs
 # node efa.ko >= 3.3.0 (efa_linux_3.3.0, 2026-07-28; check: cat /sys/module/efa/version). On older
-# nodes (3.0.x/3.1.x) set OFI_NCCL_GDAKI_EFA_HW_COUNTER=off — the PR#1311 tristate — and GDAKI runs
-# in its non-hw-counter mode. This file defaults to "off" (the honest validated setting); flip to
+# nodes (3.0.x/3.1.x) set OFI_NCCL_GDAKI_EFA_HW_COUNTER=off — the PR#1311 tristate — and the plugin is
+# built to run GDAKI in its non-hw-counter mode (not yet shown on hardware). This file defaults to "off"
+# (the value the 2026-08-14 CPU-proxy runs used); flip to
 # "auto" (or drop the env) on 3.3.0+ nodes. The value is a STRING enum: "0"/"1" abort plugin init.
 #
 # KNOWN FAILURE SIGNATURE to watch: GDAKI-CQE send errors of the shape

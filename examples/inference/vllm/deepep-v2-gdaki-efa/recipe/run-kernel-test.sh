@@ -1,9 +1,10 @@
 #!/bin/bash
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
-# run-kernel-test.sh — prove DeepEP-V2 dispatch/combine actually moves bytes over EFA on the
-# GDAKI (GPU-initiated) transport BEFORE the ~ multi-hundred-GB model load. Runs DeepEP-V2's own
-# elastic EP test (tests/elastic/test_ep.py) across the nodes with the SAME GDAKI-Gin/EFA env the
-# serve uses, and exits non-zero on failure. Cheap, and the one step that cannot hang for hours.
+# run-kernel-test.sh — check that DeepEP-V2 dispatch/combine moves bytes over EFA with the GDAKI
+# (GPU-initiated) env BEFORE the ~ multi-hundred-GB model load. Runs DeepEP-V2's own elastic EP test
+# (tests/elastic/test_ep.py) across the nodes with the SAME GDAKI-Gin/EFA env the serve uses, and
+# exits non-zero on failure. A PASS shows that EFA carried the traffic; whether GDAKI was active is the
+# log check in README "How to confirm GDAKI is active". Cheap, and the one step that cannot hang for hours.
 #
 #   leader:  run-kernel-test.sh leader <leader-ip>
 #   worker:  run-kernel-test.sh worker <leader-ip> <node-rank>   # node-rank 1,2,3 for the worker nodes
@@ -47,7 +48,7 @@ fi
 if [ "$rc" -eq 0 ] && grep -qiE "passed|\bPASS\b|all tests? ok" /tmp/kernel-test.$NODE_RANK.log; then
   # confirm EFA (not TCP/SHM) actually carried it — the efa-direct/OFI banner from NCCL_DEBUG=INFO
   if grep -qiE "efa-direct|Selected provider is efa|NET/OFI" /tmp/kernel-test.$NODE_RANK.log; then
-    echo "KERNEL-TEST PASS (node_rank=$NODE_RANK) — DeepEP-V2 dispatch/combine over EFA (GDAKI) verified"
+    echo "KERNEL-TEST PASS (node_rank=$NODE_RANK) — DeepEP-V2 dispatch/combine over EFA with the GDAKI env; confirm GDAKI from the log (README: How to confirm GDAKI is active)"
     exit 0
   fi
   echo "KERNEL-TEST INCONCLUSIVE: test passed but no EFA banner in log — confirm transport before trusting"

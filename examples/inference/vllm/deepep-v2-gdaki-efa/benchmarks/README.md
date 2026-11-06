@@ -1,36 +1,36 @@
 <!-- Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0 -->
-# Benchmarks — vLLM + DeepEP-V2 over EFA, GDAKI sample (2026-08-14 tables: NCCL_GIN_TYPE=3 requested; the CPU proxy ran)
+# Benchmarks — vLLM + DeepEP-V2 over EFA: CPU-proxy serving numbers (2026-08-14); the sample is built for GDAKI, not yet shown on hardware
 
 Measured 2026-08-14 on 2× and 4× p5en.48xlarge (H200), `Qwen/Qwen3-30B-A3B-FP8`, DP16/EP16 and
 DP32/EP32. `recipe/benchmark.sh` fires N concurrent `/v1/chat/completions` per level and reports
 aggregate output tok/s + per-request latency percentiles. Raw JSONL lands in `raw/` (gitignored).
 
-> **Read this first: the "GDAKI" rows below ran the CPU proxy, not GDAKI.** They were recorded with
-> `NCCL_GIN_TYPE=3` on NCCL 2.30.4 + aws-ofi-nccl `a3d2680` (+ the #1351 gdrcopy cherry-pick, which does
-> not touch the GIN tables). NCCL 2.30.4 can load only a plugin's v13, v12 or v11 GIN table
-> (`src/plugin/gin.cc:27` at `v2.30.4-1`) and takes the GIN type from that table, not from
-> `NCCL_GIN_TYPE` (`src/gin/gin_host.cc:48-71`). This plugin's v13 table is the CPU-proxy one
-> (`NCCL_NET_DEVICE_GIN_PROXY`, `src/rdma/gin/nccl_ofi_gin_api.cpp:468` at `a3d2680`). A same-day
-> `NCCL_DEBUG=INFO` boot log from one non-eager DP16/EP16 serve of an image built from the same pins
-> shows `NET/Plugin: Loaded gin plugin Libfabric (v13)` and `Assigned GIN plugin Libfabric to comm` on
-> all 8 ranks it captured (one node, 8 of the 16). So both arms of the A/B ran the same CPU-proxy
-> transport. The numbers stay as recorded; read them as CPU-proxy serving numbers, not as a
-> GDAKI-vs-proxy comparison.
+> **Read this first: every table here is CPU proxy, not GDAKI. In the env-flip A/B both arms ran the
+> same transport configuration, so the A/B shows no difference.** The tables were recorded with `NCCL_GIN_TYPE=3`
+> on NCCL 2.30.4 + aws-ofi-nccl `a3d2680` (+ the #1351 gdrcopy cherry-pick, which does not touch the GIN
+> tables). NCCL 2.30.4 can load only a plugin's v13, v12 or v11 GIN table (`src/plugin/gin.cc:27` at
+> `v2.30.4-1`) and takes the GIN type from that table, not from `NCCL_GIN_TYPE`
+> (`src/gin/gin_host.cc:48-71`). This plugin's v13 table is the CPU-proxy one
+> (`NCCL_NET_DEVICE_GIN_PROXY`, `src/rdma/gin/nccl_ofi_gin_api.cpp:468` at `a3d2680`). Evidence: a
+> same-day `NCCL_DEBUG=INFO` boot log from one non-eager DP16/EP16 serve of an image built from the same
+> pins shows `NET/Plugin: Loaded gin plugin Libfabric (v13)` (line 351) and `Assigned GIN plugin
+> Libfabric to comm` (line 354), and the same pair on all 8 ranks it captured (one node, 8 of the 16).
+> The numbers stay as recorded.
 
 ## Environment provenance
 
 | | |
 |---|---|
 | Instance | 2× / 4× p5en.48xlarge (H200), cross-node EFA (16 EFA NICs/node) |
-| Transport | DeepEP-V2 `ElasticBuffer`, NCCL-GIN **GDAKI** requested (`NCCL_GIN_TYPE=3`), `efa-direct`; on this NCCL 2.30.4 stack NCCL ran the plugin's v13 CPU-proxy GIN table instead (see the note above). The measured env also exported `OFI_NCCL_GIN_GDAKI=1`, `OFI_NCCL_GIN_MAX_REQUESTS=512`, `DEEP_EP_BACKEND=nccl` and `EP_EFA_MAX_QPS=2` / `EP_EFA_RDMA_GBS=25.0`; at the pinned aws-ofi-nccl `a3d2680` the first three are not parameters (GDAKI support is detected at configure time; the dev-line `OFI_NCCL_GIN_GDAKI` knob had been removed) and nothing reads the fourth, and the two `EP_EFA_*` knobs belong to the deepseek PR#612 tree the tables were measured on — none of the five exists (or is set) in the current recipe. |
+| Transport | DeepEP-V2 `ElasticBuffer` over the NCCL-GIN **CPU proxy** (the plugin's v13 table), `efa-direct`. `NCCL_GIN_TYPE=3` (GDAKI) was set, but NCCL 2.30.4 does not apply it to an external plugin (see the note above). The measured env also exported `OFI_NCCL_GIN_GDAKI=1`, `OFI_NCCL_GIN_MAX_REQUESTS=512`, `DEEP_EP_BACKEND=nccl` and `EP_EFA_MAX_QPS=2` / `EP_EFA_RDMA_GBS=25.0`; at the pinned aws-ofi-nccl `a3d2680` the first three are not parameters (GDAKI support is detected at configure time; the dev-line `OFI_NCCL_GIN_GDAKI` knob had been removed) and nothing reads the fourth, and the two `EP_EFA_*` knobs belong to the deepseek PR#612 tree the tables were measured on — none of the five exists (or is set) in the current recipe. |
 | Model | `Qwen/Qwen3-30B-A3B-FP8`, DP16/EP16 and DP32/EP32 (`--enable-expert-parallel --all2all-backend deepep_v2`) |
 | vLLM | `0.22.1rc1.dev283+ge2f993dc4` (first commit with the `deepep_v2` backend, [PR#41183](https://github.com/vllm-project/vllm/pull/41183)) |
 | Stack | torch 2.11.0+cu130, nvidia-nccl-cu13 2.30.4, DeepEP `deepseek-ai/DeepEP@b306af06` + PR#612 (open, unmerged) applied (**the measured tree**; the shipped recipe now pins the `amazon-contributing/DeepEP` fork at `97d8f9bc`, which carries both #612 halves in-code — see `../README.md`), aws-ofi-nccl `a3d2680` + the [#1351](https://github.com/aws/aws-ofi-nccl/pull/1351) cherry-pick `c2e773df` (gdrcopy forced-PCIe override; no GIN change), configured with `--enable-gdaki` (a no-op at `a3d2680`); a local v13-host-uc shim patch on the DeepEP tree (since removed); rdma-core post-#1701, libfabric post-#12591 |
-| Node efa.ko | **3.0.0g / 3.1.0g (heterogeneous)** on the validation cluster → `OFI_NCCL_GDAKI_EFA_HW_COUNTER=off` (< 3.3.0) |
+| Node efa.ko | **3.0.0g / 3.1.0g (heterogeneous)** on the 2026-08-14 cluster → `OFI_NCCL_GDAKI_EFA_HW_COUNTER=off` (< 3.3.0) |
 | Probe | `recipe/benchmark_probe.py` (stdlib urllib+threads, 127.0.0.1 loopback), `max_tokens=128`, `temperature=0.0` (greedy), concurrency 1/8/16/32/64 |
 | Date | 2026-08-14 |
 
-## Serve results — eager (`--enforce-eager`), DP16/EP16
+## Serve results (CPU proxy) — eager (`--enforce-eager`), DP16/EP16
 
 121/121 HTTP 200 across the sweep; 31/31 ramp + 13/13 manual gate requests; zero `GDAKI-CQE … status 9` events (no GDAKI path ran).
 
@@ -44,7 +44,7 @@ aggregate output tok/s + per-request latency percentiles. Raw JSONL lands in `ra
 
 Near-linear concurrency scaling at flat per-request latency.
 
-## Serve results — non-eager (historical; measured with the then-unmerged upstream guard, [vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)), DP16/EP16
+## Serve results (CPU proxy) — non-eager (historical; measured with the then-unmerged upstream guard, [vLLM #52632](https://github.com/vllm-project/vllm/pull/52632)), DP16/EP16
 
 Ramp 31/31 (c=1→16, no wedge), coherence 200, sweep 121/121 HTTP 200, zero status-9 (no GDAKI path ran).
 
@@ -58,18 +58,19 @@ Ramp 31/31 (c=1→16, no wedge), coherence 200, sweep 121/121 HTTP 200, zero sta
 
 **Reading:** non-eager matches eager through concurrency 32, then falls ~26% behind at 64 on this shape
 (the non-eager wall jumps at c=64 while eager stays flat). This replicates the proxy package's
-eager-vs-non-eager finding on *its* transport (parity through c=32, a c=64 penalty). Mechanism not
+eager-vs-non-eager finding (parity through c=32, a c=64 penalty). Mechanism not
 root-caused here. Guidance: **eager is the zero-patch default; if you flip to non-eager for production,
 measure at your target concurrency** — the crossover is workload-dependent.
 
-## NCCL_GIN_TYPE A/B — TYPE=3 vs TYPE=2 (both ran the CPU proxy), same node-set, env-flip only
+## Env-flip A/B (NCCL_GIN_TYPE 3 vs 2): CPU proxy, both arms the same transport configuration; the A/B shows no difference
 
-**Not a transport comparison.** On NCCL 2.30.4 both arms ran the plugin's v13 CPU-proxy GIN table
-(see the note at the top), so the deltas below are between two runs of the same transport. As
-recorded: same nodes, same image, same day, same probe — **only the transport env
-flipped** (`NCCL_GIN_TYPE` 3↔2; the `OFI_NCCL_GIN_GDAKI` 1↔0 flip applied alongside it is inert at
-`a3d2680` — see the Transport row). This removes the different-pair AND
-different-image variables. Both arms eager, both runtime-env value-verified in the worker processes.
+Both arms ran the plugin's v13 CPU-proxy GIN table on NCCL 2.30.4 (see the note at the top). The two env
+values that were flipped, `NCCL_GIN_TYPE` 3↔2 and `OFI_NCCL_GIN_GDAKI` 1↔0, have no effect on this stack
+(NCCL 2.30.4 does not apply the first to an external plugin, and `a3d2680` does not read the second), so
+both arms had the same transport configuration and the deltas below are between two runs of it. As
+recorded in the run notes: same nodes, same image, same day, same probe, both arms eager, both
+runtime-env value-verified in the worker processes. Whether both arms (at either scale) used the
+identical image build is not recorded: no log kept with these tables identifies the build each arm ran.
 
 ### DP16/EP16 (2 nodes) — both arms 121/121 HTTP 200
 
@@ -96,28 +97,28 @@ nodes for both arms, same image, env-flip only.
 | 32 | 101.3 | 100.1 | +1.2% |
 | 64 | 204.9 | 199.3 | +2.8% |
 
-**Across the full 2×2 (2 scales × 2 env settings, 4 independent sweeps, 10 paired comparisons) the
-`NCCL_GIN_TYPE=3` arm reads ≥ the `NCCL_GIN_TYPE=2` arm in all 10, +0.2–3.2%.** Both arms ran the
-same CPU-proxy GIN table (see the note at the top), so this is not a GDAKI-vs-proxy difference. EP32
+**Across the full 2×2 (2 scales × 2 env settings, 4 independent sweeps, 10 paired comparisons): CPU
+proxy, both arms the same transport configuration; the A/B shows no difference.** The per-row deltas
+(+0.2–3.2%) are between two runs of one transport configuration, one sweep each, and are not evidence of
+a transport effect. EP32
 per-request p50 is ~40 s vs ~23 s at EP16 for this 30B model — EP32's value here is model capability
 (experts that don't fit 2 nodes), not throughput at this shape; same conclusion as the proxy package.
 
-## Kernel-level microbench (context only — a different lineage; do not conflate)
+## Kernel-level microbench (not this sample; not cited)
 
-A same-day, same-pair DeepEP-V2 `test_ep` microbench (`N=128` decode, 16 ranks, `torch.equal`-class
-correctness green) measured the GPU-initiated **combine** at −10.3% vs CPU-proxy, reproducing a
-July-2026 banked envelope (−11.5%). The GPU-initiated **dispatch** win did **not** reproduce on this
-efa.ko-heterogeneous (3.0.0g/3.1.0g) node pair. Note: those microbench numbers use a research *fork*
-of the GDAKI slice, a **separate lineage** from the upstream aws-ofi-nccl `a3d2680` plugin this
-sample ships (GDAKI detected at configure time); the serve-level numbers above were measured with
-this sample's 2026-08-14 image (see the provenance table), not with the current pin set. Keep the
-lineages distinct when quoting.
+A same-day DeepEP-V2 `test_ep` microbench ran on the same node pair with a separate research fork of
+the GDAKI slice, a different lineage from the upstream aws-ofi-nccl `a3d2680` plugin this sample
+ships. The record kept with these tables does not include the log lines in
+[How to confirm GDAKI is active](../README.md#how-to-confirm-gdaki-is-active), so whether GDAKI was
+active in it is not established here, and its numbers are not cited. The serve-level numbers above
+were measured with this sample's 2026-08-14 image (see the provenance table), not with the current
+pin set.
 
 ## Honest caveats (do not drop when publishing)
 
-- **Single sweep per arm/scale — variance not statistically bounded.** The 2×2 consistency (10/10
-  TYPE=3 ≥ TYPE=2, both arms on the same CPU-proxy table) demonstrates a direction, not a tight interval.
-- **Wire-proof is functional, not a byte-tally.** The validation nodes ran efa.ko 3.0.x/3.1.x, which
+- **Single sweep per arm/scale; variance not statistically bounded.** CPU proxy, both arms the same
+  transport configuration; the A/B shows no difference, and its per-row deltas are not a transport effect.
+- **Wire-proof is functional, not a byte-tally.** The 2026-08-14 nodes ran efa.ko 3.0.x/3.1.x, which
   expose **no** `/sys/.../hw_counters` — transport proof is the `efa-direct` boot banner (×8 ranks) +
   coherent EP16/EP32 cross-node output, not a `rdma_write_bytes` delta. A byte-level GDAKI hw-counter
   validation needs node efa.ko ≥ 3.3.0 (see `../README.md` node preconditions).

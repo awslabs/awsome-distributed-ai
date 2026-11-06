@@ -1,7 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
 #
-# vLLM + DeepEP-V2 MoE all-to-all over AWS EFA — GDAKI (GPU-initiated, kernel-posted WQE)
-# variant. NGC-from-scratch. This is the NCCL_GIN_TYPE=5 (EFA-GDA) analog of
+# vLLM + DeepEP-V2 MoE all-to-all over AWS EFA — variant built for GDAKI (GPU-initiated,
+# kernel-posted WQE; not yet shown on hardware). NGC-from-scratch. This is the NCCL_GIN_TYPE=5 (EFA-GDA) analog of
 # ../deepep-v2-efa (the NCCL-GIN CPU-proxy, NCCL_GIN_TYPE=2 package): same base, same
 # torch/NVSHMEM pins, same DeepEP fork pin. The deltas are NCCL 2.31.2 (the first NCCL with
 # the EFA-GDA GIN backend; the proxy sample pins 2.30.7), the vLLM pin (e2f993dc4 here,
@@ -21,9 +21,10 @@
 #
 #   DOCKER_BUILDKIT=1 docker build -t <registry>/vllm-deepep-v2-gdaki-efa:<tag> .   # setup/build-push.sh does this from setup/env_vars
 #
-# HONEST SCOPE: GDAKI has not yet run end-to-end in this sample. The 2026-08-14 serve
+# HONEST SCOPE: GDAKI has not yet been shown on hardware with this sample. The 2026-08-14 serve
 # (benchmarks/README.md) set NCCL_GIN_TYPE=3 on NCCL 2.30.4, which loaded the plugin's v13
-# CPU-proxy GIN table, so it ran the CPU proxy. SRD ground truth still applies (NO IBGDA,
+# CPU-proxy GIN table, so it ran the CPU proxy (both A/B arms had that same transport configuration).
+# SRD ground truth still applies (NO IBGDA,
 # NO atomics, NO ordering, CQ completion is local). NEVER set NVSHMEM_IB_ENABLE_IBGDA=1.
 #
 # NODE PRECONDITION beyond the proxy package: GDAKI hw-counter mode needs node efa.ko >=
@@ -33,13 +34,13 @@
 # KNOWN-MISSING UPSTREAM FIX (documented, NOT applied): vLLM PR#47785 ("handle topk_ids
 # padding in align sum kernel", merged 2026-07-10) post-dates the pinned vLLM e2f993dc4 and
 # patches a COMPILED kernel — a source cherry-pick is INERT under the precompiled-wheel
-# install. Kept at e2f993dc4 (first commit with the deepep_v2 backend; eager path validated at this pin).
+# install. Kept at e2f993dc4 (first commit with the deepep_v2 backend; eager path validated at this pin, on the CPU proxy).
 # Swap seam: move VLLM_SHA + wheel URL to any commit >= f378f79b and re-run the gate.
 #
 ARG CUDA_VER=13.0.0                                   # cu13 to match the torch 2.11+cu130 ABI DeepEP links
 FROM nvcr.io/nvidia/cuda:${CUDA_VER}-devel-ubuntu22.04
 
-LABEL org.opencontainers.image.description="vLLM + DeepEP-V2 MoE all-to-all over AWS EFA (GDAKI GPU-initiated, NCCL_GIN_TYPE=5)"
+LABEL org.opencontainers.image.description="vLLM + DeepEP-V2 MoE all-to-all over AWS EFA, built for GDAKI (GPU-initiated, NCCL_GIN_TYPE=5); not yet shown on hardware"
 LABEL org.opencontainers.image.licenses="MIT-0"
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-c"]
@@ -241,7 +242,7 @@ RUN chmod +x /opt/serve.sh /opt/run-kernel-test.sh
 # empty field (the banner is what the pod shows at boot), and the build would still pass.
 RUN test -s /opt/efa-installer.version && test -s /opt/rdma-core-gdaki.sha && test -s /opt/libfabric-gdaki.sha \
     && test -s /opt/aws-ofi-nccl-gdaki.sha && test -s /opt/deepep.effective.sha && test -s /opt/vllm/.git-sha \
-    && { echo "vllm-deepep-v2-gdaki-efa image (GPU-initiated, NCCL_GIN_TYPE=5)"; \
+    && { echo "vllm-deepep-v2-gdaki-efa image (built for GDAKI, NCCL_GIN_TYPE=5; GDAKI is shown only by the README check: How to confirm GDAKI is active)"; \
       echo "efa:           $(cat /opt/efa-installer.version)"; \
       echo "rdma-core:     $(cat /opt/rdma-core-gdaki.sha) (post-PR#1701 comp-cntr)"; \
       echo "libfabric:     $(cat /opt/libfabric-gdaki.sha) (post-PR#12591)"; \
