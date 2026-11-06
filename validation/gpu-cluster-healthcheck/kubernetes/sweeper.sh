@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # sweeper.sh -- CronJob entrypoint for rolling DCGM L2 sweep on idle GPU nodes
 #
 # Lists GPU nodes, skips those that are already tainted unhealthy or have

@@ -1,0 +1,18 @@
+NodeName=gpu-g7-aim344-1 Arch=x86_64 CoresPerSocket=1
+   CPUAlloc=0 CPUEfctv=192 CPUTot=192 CPULoad=4.80
+   AvailableFeatures=gpu-g7-aim344,gpu
+   ActiveFeatures=gpu-g7-aim344,gpu
+   Gres=gpu:RTX_PRO_4500:8
+   NodeAddr=192.0.2.10 NodeHostName=ip-192-0-2-10 Version=25.05.9
+   OS=Linux 6.17.0-1020-aws #20~24.04.1-Ubuntu SMP Mon Jul 13 20:40:21 UTC 2026
+   RealMemory=747110 AllocMem=0 FreeMem=670616 Sockets=192 Boards=1
+   State=IDLE+CLOUD+DRAIN+RESERVED ThreadsPerCore=1 TmpDisk=0 Weight=1 Owner=N/A MCS_label=N/A
+   Partitions=gpu-g7-aim344
+   BootTime=2026-09-24T02:14:14 SlurmdStartTime=2026-09-24T02:15:18
+   LastBusyTime=2026-09-24T02:15:20 ResumeAfterTime=None
+   CfgTRES=cpu=192,mem=747110M,billing=192
+   AllocTRES=
+   CurrentWatts=0 AveWatts=0
+   Reason=aim344-device-recovery : reboot issued [slurm@2026-09-24T02:13:00]
+   InstanceId=i-00000000000000101 InstanceType=g7.48xlarge
+   ReservationName=aim344-replacement-i-00000000000000101

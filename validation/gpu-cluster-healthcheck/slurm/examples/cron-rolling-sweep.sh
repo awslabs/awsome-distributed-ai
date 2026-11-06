@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Cron Rolling Sweep -- Periodic GPU health check across idle Slurm nodes
 #
 # Submits lightweight health checks to idle nodes in a rolling fashion,

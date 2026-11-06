@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # common.sh -- Shared utilities for GPU health check suite
 # Provides logging, instance detection, profile loading, and result formatting.
 
@@ -26,7 +28,8 @@ DRY_RUN="${DRY_RUN:-0}"
 JSON_OUTPUT="${JSON_OUTPUT:-0}"
 
 # Instance profile variables (populated by load_instance_profile)
-INSTANCE_TYPE=""
+# Preserve the caller's instance type across orchestrator/check subprocesses.
+INSTANCE_TYPE="${INSTANCE_TYPE:-}"
 EXPECTED_GPU_COUNT=""
 EXPECTED_EFA_COUNT=""
 NVLINK_EXPECTED=""
@@ -55,6 +58,19 @@ log_verbose() {
 # ─── Instance Detection ─────────────────────────────────────────────────────
 
 detect_instance_type() {
+    if [[ -n "${INSTANCE_TYPE}" ]]; then
+        echo "${INSTANCE_TYPE}"
+        return 0
+    fi
+
+    # Nitro exposes the instance type even when IMDS is unavailable.
+    INSTANCE_TYPE=$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || true)
+    if [[ ${INSTANCE_TYPE} =~ ^[a-z][a-z0-9-]*\.[a-z0-9]+$ ]]; then
+        log_verbose "Detected instance type from DMI: ${INSTANCE_TYPE}"
+        echo "${INSTANCE_TYPE}"
+        return 0
+    fi
+    INSTANCE_TYPE=""
     # Try IMDSv2 first, fall back to IMDSv1, then ec2-metadata CLI
     local token
     token=$(curl -s --connect-timeout 2 -X PUT "http://169.254.169.254/latest/api/token" \
@@ -102,6 +118,10 @@ load_instance_profile() {
 
     if [[ -z "${profile_line}" ]]; then
         log_warn "No profile found for instance type: ${INSTANCE_TYPE}"
+        if [[ -n "${HEALTHCHECK_EXPECTED_EFA_COUNT+x}" ]]; then
+            log_error "Cannot validate assigned EFA count without an instance profile"
+            return 1
+        fi
         log_warn "Using defaults -- results may be unreliable"
         EXPECTED_GPU_COUNT=0
         EXPECTED_EFA_COUNT=0
@@ -111,6 +131,16 @@ load_instance_profile() {
     fi
 
     IFS='|' read -r _ EXPECTED_GPU_COUNT EXPECTED_EFA_COUNT NVLINK_EXPECTED EFA_PROVIDER <<< "${profile_line}"
+    if [[ -n "${HEALTHCHECK_EXPECTED_EFA_COUNT+x}" ]]; then
+        # Launch-template assignment, never the observed (possibly faulted) count.
+        if [[ ! ${HEALTHCHECK_EXPECTED_EFA_COUNT} =~ ^[1-9][0-9]?$ ]] ||
+           (( HEALTHCHECK_EXPECTED_EFA_COUNT > EXPECTED_EFA_COUNT )); then
+            log_error "HEALTHCHECK_EXPECTED_EFA_COUNT must be positive and at most profile capacity ${EXPECTED_EFA_COUNT}"
+            return 1
+        fi
+        log_info "EFA assignment: expected=${HEALTHCHECK_EXPECTED_EFA_COUNT}, profile capacity=${EXPECTED_EFA_COUNT}"
+        EXPECTED_EFA_COUNT=${HEALTHCHECK_EXPECTED_EFA_COUNT}
+    fi
     log_verbose "Profile loaded: GPUs=${EXPECTED_GPU_COUNT}, EFA=${EXPECTED_EFA_COUNT}, NVLink=${NVLINK_EXPECTED}, Provider=${EFA_PROVIDER}"
 }
 
@@ -123,14 +153,28 @@ ensure_results_dir() {
 
 # ─── Result Formatting ───────────────────────────────────────────────────────
 
+# Path of the result file a check writes its record to.
+result_file_for() {
+    local check_name="$1"
+    local safe_name
+    safe_name="$(printf '%s' "${check_name}" | tr -cs 'A-Za-z0-9._-' '-')"
+    echo "${RESULTS_DIR}/check-${safe_name}.json"
+}
+
 log_result() {
     local check_name="$1"
     local status="$2"   # PASS, FAIL, WARN, SKIP
     local details="${3:-}"
     local severity="${4:-}"
 
-    # Build JSON via python3 so all string values are properly escaped
-    # (details may contain quotes, newlines, backslashes from command output).
+    local result_file=""
+    if [[ -d "${RESULTS_DIR}" ]]; then
+        result_file="$(result_file_for "${check_name}")"
+    fi
+
+    # Build JSON via python3 so all string values are properly escaped (details
+    # may contain quotes, newlines, backslashes from command output), and merge
+    # it into any record this check has already written.
     local json_result
     json_result="$(
         CHECK_NAME="${check_name}" \
@@ -138,10 +182,21 @@ log_result() {
         DETAILS="${details}" \
         SEVERITY="${severity}" \
         INSTANCE_TYPE="${INSTANCE_TYPE}" \
+        RESULT_FILE="${result_file}" \
         python3 -c '
 import json, os, socket
 from datetime import datetime, timezone
-print(json.dumps({
+
+# One check emits several results -- an Xid FAIL, then a benign
+# persistence-mode WARN -- and they all land in a single file per check.
+# kubernetes/determine-severity.py, lib/aggregate-results.py and
+# slurm/sbatch-quarantine-workflow.sh read only that file to decide whether a
+# node is drained or replaced, so a later benign result must never overwrite
+# an earlier fault. Keep the most severe status and severity seen instead.
+STATUS_RANK = {"FAIL": 4, "WARN": 3, "PASS": 2, "SKIP": 1}
+SEVERITY_RANK = {"ISOLATE": 4, "REBOOT": 3, "RESET": 2, "MONITOR": 1}
+
+record = {
     "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "hostname": socket.gethostname(),
     "instance_type": os.environ.get("INSTANCE_TYPE", ""),
@@ -149,22 +204,64 @@ print(json.dumps({
     "status": os.environ["STATUS"],
     "details": os.environ.get("DETAILS", ""),
     "severity": os.environ.get("SEVERITY", ""),
-}))
+}
+
+# stdout stays a per-emission event stream; only the file is cumulative.
+print(json.dumps(record))
+
+result_file = os.environ.get("RESULT_FILE", "")
+if not result_file:
+    raise SystemExit(0)
+
+previous = {}
+try:
+    with open(result_file) as fh:
+        loaded = json.load(fh)
+    if isinstance(loaded, dict):
+        previous = loaded
+except (OSError, ValueError):
+    previous = {}
+
+# Start from the previous record so the richer fields written directly by
+# parse-dcgm-results.py (per-GPU "tests", "overall_*") survive.
+merged = dict(previous)
+merged.update(record)
+
+if STATUS_RANK.get(previous.get("status", ""), 0) > STATUS_RANK.get(record["status"], 0):
+    merged["status"] = previous["status"]
+if SEVERITY_RANK.get(previous.get("severity", ""), 0) > SEVERITY_RANK.get(record["severity"], 0):
+    merged["severity"] = previous["severity"]
+
+# parse-dcgm-results.py seeds overall_status/overall_severity mirroring its
+# status/severity. Once the merged status/severity are chosen, drop those
+# mirror fields so the record cannot report a passing overall_* beside a
+# failing status that a consumer keying on overall_* would misread.
+merged.pop("overall_status", None)
+merged.pop("overall_severity", None)
+
+# Keep the evidence from every emission. Split on the accumulator delimiter so
+# a distinct finding is not dropped just for being a substring of the running
+# text, and each finding is recorded at most once. Details use "; " internally,
+# so separate accumulated findings with " | ".
+prev_details = previous.get("details", "") or ""
+new_details = record["details"]
+seen = [seg for seg in prev_details.split(" | ") if seg]
+if new_details and new_details not in seen:
+    seen.append(new_details)
+merged["details"] = " | ".join(seen)
+
+# Atomic write: write to tmp then rename to avoid partial files.
+tmp_file = os.path.join(
+    os.path.dirname(result_file), "." + os.path.basename(result_file) + ".tmp"
+)
+with open(tmp_file, "w") as fh:
+    fh.write(json.dumps(merged) + "\n")
+os.replace(tmp_file, result_file)
 '
     )"
 
     if [[ "${JSON_OUTPUT}" == "1" ]]; then
         echo "${json_result}"
-    fi
-
-    # Write to results file if results dir exists
-    if [[ -d "${RESULTS_DIR}" ]]; then
-        local safe_name
-        safe_name="$(printf '%s' "${check_name}" | tr -cs 'A-Za-z0-9._-' '-')"
-        # Atomic write: write to tmp then rename to avoid partial files
-        local tmpfile="${RESULTS_DIR}/.check-${safe_name}.json.tmp"
-        echo "${json_result}" > "${tmpfile}"
-        mv -f "${tmpfile}" "${RESULTS_DIR}/check-${safe_name}.json"
     fi
 }
 
@@ -271,8 +368,12 @@ init_check() {
     ensure_results_dir
     log_info "Running check: ${check_name}"
 
+    # Results accumulate within one check execution (see log_result), so drop
+    # any record left behind by an earlier run reusing this results directory.
+    rm -f "$(result_file_for "${check_name}")"
+
     # Load instance profile if not already loaded
     if [[ -z "${EXPECTED_GPU_COUNT}" ]]; then
-        load_instance_profile || true
+        load_instance_profile || exit 1
     fi
 }
