@@ -1506,10 +1506,7 @@ class NcclProtocolSettingTests(unittest.TestCase):
             self.assertEqual((seen['NCCL_DEBUG'], seen['LLM_TRANSPORT']), ('info', 'efa'))
 
     def test_run_sh_carries_nccl_debug_through_the_worker_and_the_container_to_torchrun(self):
-        """`NCCL_DEBUG=info bash tools/run.sh efa` with a stub scheduler: tools/run.sh -> common.sh -> the real
-        background worker (Popen) -> run_stage -> 2.run-llm.sh -> stub srun -> lib/llm-rank.sh -> stub torchrun.
-        The srun stub behaves like Pyxis for variables outside --container-env (the image value wins), so a
-        name missing from the list would arrive clobbered. No GPU, Slurm or container is used."""
+        """Run tools/run.sh through its real background worker and llm-rank.sh to stub torchrun, with a stub scheduler and image debug values that lose to explicitly forwarded host values. No GPU, Slurm or container is used."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             bin_dir = root / 'bin'

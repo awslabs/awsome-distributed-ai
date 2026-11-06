@@ -35,15 +35,15 @@ export NNODES=$SLURM_JOB_NUM_NODES
 # ENV logs "NCCL_PROTO set by environment to Simple" on every rank of an EFA run.
 # A caller's NCCL_DEBUG (for example `NCCL_DEBUG=info bash tools/run.sh efa`) and
 # NCCL_DEBUG_SUBSYS are kept as given; NCCL 2.30.4-1 compares the level case-insensitively
-# (src/debug.cc, strcasecmp). Only NCCL's levels pass; the log stays in the stage's launch.log.
+# (src/debug.cc, strcasecmp). Only NCCL's levels pass; the caller captures the log.
 case ${NCCL_DEBUG:-INFO} in
     [Vv][Ee][Rr][Ss][Ii][Oo][Nn]|[Ww][Aa][Rr][Nn]|[Ii][Nn][Ff][Oo]|[Aa][Bb][Oo][Rr][Tt]|[Tt][Rr][Aa][Cc][Ee]) ;;
     *) echo "NCCL_DEBUG must be one of VERSION, WARN, INFO, ABORT, TRACE (it says '$NCCL_DEBUG')" >&2; exit 2 ;;
 esac
 export NCCL_DEBUG=${NCCL_DEBUG:-INFO} NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-INIT,NET,ENV}
-# On g6e.48xlarge (test events; AIM347_INSTANCE_TYPE comes from aim347.env), the plugin's
-# RDMA protocol never completes the first large collective (aws-ofi-nccl 1.19.0, fabric efa,
-# no GPUDirect RDMA). SENDRECV, the plugin's own choice for g6e.48xlarge, completes it.
+# Retain SENDRECV for g6e.48xlarge test events (AIM347_INSTANCE_TYPE comes from aim347.env).
+# With aws-ofi-nccl 1.19.0, the recorded forced-RDMA training run timed out; a separate
+# SENDRECV AllReduce sweep completed. That sweep does not establish training speedup.
 ofi_protocol=RDMA
 [[ ${AIM347_INSTANCE_TYPE:-} != g6e.48xlarge ]] || ofi_protocol=SENDRECV
 case ${LLM_TRANSPORT:-efa} in
