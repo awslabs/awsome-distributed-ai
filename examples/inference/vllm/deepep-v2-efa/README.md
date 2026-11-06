@@ -208,8 +208,9 @@ eager and non-eager tables + environment provenance.
      viable on EFA today; the canonical benchmark's defaults and NCCL build target a different point in
      that design space.
   2. **Coupling to the vLLM wheel's torch/NCCL ABI.** The DeepEP `_C.so` here is built in-pod against
-     the exact `torch 2.11+cu130` / `nvidia-nccl-cu13 2.30.4` the pinned vLLM wheel drags in (Dockerfile
-     Layer 5b re-pins it), so the toolchain is wheel-driven rather than a standalone NCCL build tree.
+     the exact `torch 2.11+cu130` the pinned vLLM wheel drags in, plus `nvidia-nccl-cu13 2.30.7` (the
+     wheel drags NCCL down to 2.28.9 and Dockerfile Layer 5b re-pins 2.30.7), so the toolchain is
+     wheel-driven rather than a standalone NCCL build tree.
   3. **Where DeepEP is compiled.** The canonical `deepep.Dockerfile` builds DeepEP inside `docker build`
      for `9.0;10.0;10.3` in one image; this sample compiles the `_C.so` in-pod on first boot for the
      arch the node runs (`DEEPEP_ARCH_LIST`), keeping DeepEP out of the image, at the cost of a ~2 min

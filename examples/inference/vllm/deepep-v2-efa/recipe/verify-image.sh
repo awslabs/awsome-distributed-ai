@@ -27,7 +27,7 @@ docker run --rm --gpus all "${DEV_ARGS[@]}" -e HAVE_EFA_DEV="${HAVE_EFA_DEV}" "$
     /opt/amazon/efa/bin/fi_info -l | grep -qi "efa" || { echo "FAIL: efa provider not in libfabric"; exit 1; }
     echo "   (run this script on an EFA host for the live efa-direct fabric check)"
   fi
-  echo "== single libnccl 2.30.4 wins (path + GIN/LSA symbol — the wheel downgrade lands in the SAME dir, so path alone cannot catch it) =="
+  echo "== single libnccl 2.30.7 wins (path + GIN/LSA symbol — the wheel downgrade lands in the SAME dir, so path alone cannot catch it) =="
   NCCL_SO=$(ldconfig -p | grep "libnccl.so.2 " | head -1 | awk "{print \$NF}")
   echo "$NCCL_SO" | grep -q "nvidia/nccl" || { echo "FAIL: system libnccl shadows pip ($NCCL_SO)"; exit 1; }
   [ "$(nm -D "$NCCL_SO" | grep -c ncclGetLsaDevicePointer)" -ge 1 ] || { echo "FAIL: $NCCL_SO lacks GIN/LSA symbols (2.28.x downgrade — see Dockerfile Layer 5b)"; exit 1; }

@@ -53,10 +53,10 @@ RUN apt-get update \
 ENV PATH=/opt/amazon/efa/bin:/opt/amazon/openmpi/bin:$PATH
 ENV LD_LIBRARY_PATH=/opt/amazon/efa/lib:/opt/amazon/openmpi/lib:${LD_LIBRARY_PATH:-}
 
-# ---- Layer 3: torch cu13 stack (pinned; nccl-cu13 2.30.4 carries the GIN/LSA device symbols) ----
+# ---- Layer 3: torch cu13 stack (pinned; nccl-cu13 2.30.7 carries the GIN/LSA device symbols) ----
 ARG TORCH_SPEC="torch==2.11.0"                        # DeepEP _C.so links this exact ABI
 ARG TORCH_INDEX="https://download.pytorch.org/whl/cu130"
-ARG NVIDIA_NCCL_CU13="2.30.4"                         # 2.28.x lacks the GIN/LSA symbols the plugin needs
+ARG NVIDIA_NCCL_CU13="2.30.7"                         # 2.28.x lacks the GIN/LSA symbols the plugin needs
 ARG NVSHMEM_CU13="3.6.5"
 RUN pip3 install --no-cache-dir --index-url "${TORCH_INDEX}" "${TORCH_SPEC}" \
     && pip3 install --no-cache-dir "nvidia-nccl-cu13==${NVIDIA_NCCL_CU13}" "nvidia-nvshmem-cu13==${NVSHMEM_CU13}" ninja
