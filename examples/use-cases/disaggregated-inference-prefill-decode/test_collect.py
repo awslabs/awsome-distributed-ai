@@ -71,7 +71,8 @@ class CollectTests(unittest.TestCase):
 
     def test_qualified_rates_keep_the_original_fields_and_add_each_rules_rate_and_goodput_at_that_rate(self):
         # Unified passes 1 and, under mean only, 2 (two calls with a 150 ms gap average 80 ms); it fails 4 with 13 good calls
-        # of 20, which still gives it the largest observed goodput. Disaggregated passes 2 with 9 good calls of 10.
+        # of 20. That failing rate has the largest raw goodput (1.3), but max_observed_useful_calls_per_s_per_gpu reads
+        # SLO-qualifying rows only, so it reports 1.0. Disaggregated passes 2 with 9 good calls of 10.
         steady, stalled = _call(10), _call(150)
         with tempfile.TemporaryDirectory() as d:
             runs = sorted({_run(d, 'unified', 1, [steady] * 10, seed=1, rates=[1, 2, 4]),
@@ -80,7 +81,7 @@ class CollectTests(unittest.TestCase):
                            _run(d, 'disaggregated', 2, [steady] * 9 + [FAILED], seed=1, rates=[2])})
             _, qualified, _ = _collect(Path(d) / 'out', *runs)
         u, dis = _group(qualified, 'unified'), _group(qualified, 'disaggregated')
-        self.assertEqual((u['highest_tested_offered_tasks_per_s_meeting_slo'], u['max_observed_useful_calls_per_s_per_gpu']), (2, 1.3))
+        self.assertEqual((u['highest_tested_offered_tasks_per_s_meeting_slo'], u['max_observed_useful_calls_per_s_per_gpu']), (2, 1.0))
         self.assertEqual(u['by_rule']['mean'], {'highest_tested_offered_tasks_per_s_meeting_slo': 2, 'useful_calls_per_s_per_gpu_at_that_rate': 1.0})
         self.assertEqual(u['by_rule']['worst-itl'], {'highest_tested_offered_tasks_per_s_meeting_slo': 1, 'useful_calls_per_s_per_gpu_at_that_rate': 1.0})
         self.assertEqual(dis['by_rule']['itl-p99'], {'highest_tested_offered_tasks_per_s_meeting_slo': 2, 'useful_calls_per_s_per_gpu_at_that_rate': 0.9})
