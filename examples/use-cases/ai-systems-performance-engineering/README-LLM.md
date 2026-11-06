@@ -207,46 +207,36 @@ python3 lib/serve_llm.py --collect-manifest \
 
 Use the exact TP degree, token budget, sequence limit and optional model path from the launch. The collector writes `manifest.json` and `endpoints.txt` in the run directory and refuses conflicting commands or records from another Slurm job/node assignment. It does not start servers or establish endpoint health. Use a fresh directory for each placement and retain previous measurements. The older manual-manifest example below describes the historical pilot; it does not replace the collector's current provenance checks.
 
-The pilot request files contain authored JSON tasks: integer sequence generation for short input/long output and warehouse-record extraction for long input/short output. They are finite quality fixtures, not a general model-quality benchmark. Before the first serving run, the pilot policy selected TTFT at most 2 seconds and client TPOT at most 0.05 seconds for an interactive structured-response scenario. The pilot compares 128 requests per task under 64 closed-loop client slots, with `max_tokens=512`, temperature zero, seed `347` and thinking disabled.
+The historical pilot request files (`configs/short-input-long-output.jsonl`, `configs/long-input-short-output.jsonl`) contain authored JSON tasks: integer sequence generation and warehouse-record extraction. They are finite quality fixtures, not a general model-quality benchmark. Before the first serving run, the pilot policy selected TTFT at most 2 seconds and client TPOT at most 0.05 seconds for an interactive structured-response scenario. The pilot compared 128 requests per task under 64 closed-loop client slots, with `max_tokens=512`, temperature zero and seed `347`. The SmolLM2 fixture `configs/range64-fewshot-boundary.jsonl` repeats one literal request 128 times: emit `values` containing integers 1 through 64 after two short format examples. Its literal `\n\nInput:` stop is forwarded unchanged to the engine as the server `stop` array; the client never clips output. Each request line carries `prompt` and `expected_json`, with optional `stop` (array of nonempty strings) and `id`; other fields are rejected before any request is sent.
 
-[9.load-llm.py](9.load-llm.py) requires a server manifest with `gpu_budget`, `placement`, `server_batch` and `workload` matching the actual launch. It warms every endpoint equally, routes inside the measured interval and preserves every response, error and timeout. **Serving goodput** counts completed exact-JSON answers meeting both latency conditions, divided by the measured duration. One-token output has undefined TPOT and remains in offered totals. Client TPOT uses output-token usage with first/last content receipt times; content chunks are not counted as tokens. Raw engine `/metrics` snapshots before and after the workload retain server ITL separately.
+[9.load-llm.py](9.load-llm.py) calls `/v1/completions` with the literal prompt, not `/v1/chat/completions`: the SmolLM2 base pin supplies no instruction chat template, so neither a chat template nor an `enable_thinking` switch applies. It requires the collector's `manifest.json`, whose `endpoints`, `gpu_budget`, `placement`, `server_batch` and `workload` must match the actual launch; the endpoints on the command line must be unique and equal to the recorded `endpoints` list, so a measurement cannot be attributed to fewer or different servers than the manifest declares. It warms every endpoint equally, routes inside the measured interval and preserves every response, error and timeout. **Serving goodput** counts completed exact-JSON answers meeting both latency conditions, divided by the measured duration. One-token output has undefined TPOT and remains in offered totals. Client TPOT uses output-token usage with first/last content receipt times; content chunks are not counted as tokens. Raw engine `/metrics` snapshots before and after the workload retain server ITL separately. When any request declares `stop`, the result records the stop policy and the SHA-256 of the client sources. `--pilot-only` keeps the timings but marks the result `performance_eligible: false`; `7.compare-llm.py` refuses such results in a performance comparison.
 
-For the two-node TP degree eight pilot, write a manifest from the fixed configuration and query the assigned node addresses. Run the client while the server job is healthy:
+Serve the SmolLM2 pin with the collector's manifest, check every endpoint's health, then run the client while the server job is healthy:
 
 ```bash
-python3 - <<'PYTHON'
-import json
-import os
-from pathlib import Path
-cfg = json.loads(Path('configs/llm.json').read_text())
-manifest = {
-    'gpu_budget': 16,
-    'placement': {'tensor_parallel_size': 8, 'replicas': 2},
-    'server_batch': {'max_num_seqs': 256, 'max_num_batched_tokens': 8192},
-    'workload': {key: cfg[key] for key in ('model_id', 'model_revision', 'tokenizer_revision')},
-}
-manifest['workload'].update(precision='bfloat16', vllm_version='0.20.2',
-                            prefix_cache=False, max_model_len=4096,
-                            gpu_memory_utilization=0.85)
-run = Path(os.environ['LLM_RESULTS_DIR']) / os.environ['SERVING_RUN']
-records = [json.loads(path.read_text()) for path in run.glob('node-*/replica-*.json')]
-uuids = sorted(value for record in records for value in record['gpu_uuids'])
-assert len(records) == 2 and len(uuids) == len(set(uuids)) == 16
-manifest['allocation'] = {'gpu_uuids': uuids, 'nodes': 2,
-                          'cpus_per_node': int(os.environ['SLURM_CPUS_ON_NODE'])}
-Path('serving-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-PYTHON
-endpoints=()
-while read -r node; do
-  address=$(scontrol show node "$node" -o | tr ' ' '\n' | sed -n 's/^NodeAddr=//p')
-  endpoints+=("http://$address:8100")
-done < <(scontrol show hostnames "$SLURM_JOB_NODELIST")
-python3 9.load-llm.py "${endpoints[@]}" \
-  --server-manifest serving-manifest.json \
-  --requests-file configs/short-input-long-output.jsonl \
-  --output "$LLM_RESULTS_DIR/serving-short.json" --concurrency 64 \
-  --max-tokens 512 --ttft-slo-seconds 2 --tpot-slo-seconds 0.05
+export SERVING_RUN=smol-tp8
+mkdir "$LLM_RESULTS_DIR/$SERVING_RUN"
+bash 8.serve-llm.sh --tensor-parallel-size 8 --config configs/smol-2048.json \
+  > "$LLM_RESULTS_DIR/$SERVING_RUN/launch.log" 2>&1 &
+SERVING_PID=$!
+# After all replica records appear:
+python3 lib/serve_llm.py --collect-manifest --output "$LLM_RESULTS_DIR/$SERVING_RUN" \
+  --gpus-per-node "$GPUS_PER_NODE" --tensor-parallel-size 8 --config configs/smol-2048.json
+mapfile -t endpoints < "$LLM_RESULTS_DIR/$SERVING_RUN/endpoints.txt"
+( test "${#endpoints[@]}" -gt 0 || exit 1
+  for endpoint in "${endpoints[@]}"; do curl --fail --connect-timeout 5 --max-time 10 "$endpoint/health" || exit; done
+) && python3 9.load-llm.py "${endpoints[@]}" \
+  --server-manifest "$LLM_RESULTS_DIR/$SERVING_RUN/manifest.json" \
+  --requests-file configs/range64-fewshot-boundary.jsonl \
+  --output "$LLM_RESULTS_DIR/$SERVING_RUN/range-repeat-1.json" --concurrency 64 \
+  --warmup-per-endpoint 2 --max-tokens 512 --timeout-seconds 120 \
+  --ttft-slo-seconds 2 --tpot-slo-seconds 0.05
+# Repeat with new output paths before switching placement.
+kill -TERM "$SERVING_PID"
+wait "$SERVING_PID"
 ```
+
+Use `--config configs/llm.json` on both the launcher and the collector to serve the Qwen3 pin instead; the manifest records whichever pin the launcher validated. The historical pilot results below were measured with the earlier chat-completions client against the Qwen pin; they are not measurements of the current text-completions client.
 
 Use the actual replica count, TP degree and server settings in other configurations. A manifest declaration does not verify a server by itself; retain its command and GPU records. Include the sorted actual GPU UUIDs and node/CPU assignment in the manifest's `allocation` object. Comparisons reject different recorded allocations; absent records remain explicitly unverified.
 

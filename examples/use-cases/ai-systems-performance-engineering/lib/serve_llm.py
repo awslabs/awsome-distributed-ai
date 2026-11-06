@@ -107,7 +107,7 @@ def collect_manifest(output, *, addresses, gpus_per_node, tensor_parallel_size,
             endpoints.append(f'http://{address}:{port_base + replica}')
     if any(not isinstance(uuid, str) or not uuid for uuid in uuids) or len(set(uuids)) != len(uuids):
         raise ValueError('assigned GPU UUIDs must be nonempty and unique')
-    manifest: dict = dict(gpu_budget=len(uuids),
+    manifest: dict = dict(endpoints=endpoints, gpu_budget=len(uuids),
                     replica_environments=replica_environments,
                     placement=dict(tensor_parallel_size=tensor_parallel_size, replicas=len(endpoints)),
                     server_batch=dict(max_num_seqs=max_num_seqs, max_num_batched_tokens=max_num_batched_tokens),

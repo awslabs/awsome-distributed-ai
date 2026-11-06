@@ -13,7 +13,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
 try:
     import torch
-    from transformers import Qwen3Config, Qwen3ForCausalLM
+    from transformers import LlamaConfig, LlamaForCausalLM, Qwen3Config, Qwen3ForCausalLM
 except ImportError:
     torch = None
 
@@ -599,6 +599,27 @@ class TrainingCorrectnessTests(unittest.TestCase):
                 self.assertCountEqual([call.args[0] for call in compile_call.call_args_list], expected)
                 for call in compile_call.call_args_list:
                     self.assertEqual(call.kwargs, dict(dynamic=True, backend='inductor', options=options))
+
+    def test_pointwise_compile_dispatch_handles_llama_attention_without_qk_norms(self):
+        # SmolLM2 uses LlamaAttention, which has no q_norm/k_norm modules.
+        from train_llm import compile_pointwise_modules
+        config = LlamaConfig(vocab_size=32, hidden_size=16, intermediate_size=32,
+                             num_hidden_layers=2, num_attention_heads=2,
+                             num_key_value_heads=1, head_dim=8,
+                             tie_word_embeddings=True, attention_dropout=0.0)
+        config._attn_implementation = 'sdpa'
+        model = LlamaForCausalLM(config)
+        self.assertFalse(hasattr(model.model.layers[0].self_attn, 'q_norm'))
+        norms = [model.model.norm]
+        activations = []
+        for block in model.model.layers:
+            norms.extend([block.input_layernorm, block.post_attention_layernorm])
+            activations.append(block.mlp.act_fn)
+        for scope, expected in [('norms', norms), ('activations', activations),
+                                ('all', norms + activations)]:
+            with self.subTest(scope=scope), patch.object(torch.nn.Module, 'compile', autospec=True) as compile_call:
+                compile_pointwise_modules(model, scope, 'inductor', {})
+                self.assertCountEqual([call.args[0] for call in compile_call.call_args_list], expected)
 
     def test_microbatch_retention_rejects_inapplicable_configuration(self):
         import train_llm

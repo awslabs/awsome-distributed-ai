@@ -10,7 +10,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'lib'))
-from serving_goodput import serving_goodput, stream_request
+from serving_goodput import serving_goodput, stream_request, validate_specification
 
 
 def main():
@@ -25,6 +25,7 @@ def main():
     parser.add_argument('--timeout-seconds', type=float, default=120)
     parser.add_argument('--max-tokens', type=int, default=256)
     parser.add_argument('--warmup-per-endpoint', type=int, default=2)
+    parser.add_argument('--pilot-only', action='store_true', help='retain timings but exclude performance comparison')
     args = parser.parse_args()
     if min(args.concurrency, args.max_tokens, args.timeout_seconds,
            args.ttft_slo_seconds, args.tpot_slo_seconds) <= 0 or args.warmup_per_endpoint < 0:
@@ -33,9 +34,16 @@ def main():
         parser.error('output already exists; retain historical measurements')
     raw = args.requests_file.read_bytes()
     specs = [json.loads(line) for line in raw.splitlines() if line.strip()]
-    if not specs or any(set(spec) != {'prompt', 'expected_json'} for spec in specs):
-        parser.error('each request must contain prompt and expected_json')
+    if not specs:
+        parser.error('at least one request required')
+    try:
+        for specification in specs:
+            validate_specification(specification)
+    except (ValueError, TypeError) as error:
+        parser.error(str(error))
     manifest = json.loads(args.server_manifest.read_text())
+    if (len(set(args.endpoints)) != len(args.endpoints) or args.endpoints != manifest.get('endpoints')):
+        parser.error('endpoints must match the collected replica manifest exactly')
     if manifest['placement']['replicas'] != len(args.endpoints):
         parser.error('one endpoint per declared replica required')
     if manifest['placement']['replicas'] * manifest['placement']['tensor_parallel_size'] != manifest['gpu_budget']:
@@ -80,13 +88,21 @@ def main():
                   server_metrics_before=metrics_before, server_metrics_after=metrics_after, client_load={'kind': 'closed_loop', 'concurrency': args.concurrency},
                   workload=dict(manifest['workload'], requests_sha256=hashlib.sha256(raw).hexdigest(),
                                 max_tokens=args.max_tokens, temperature=0, seed=347,
-                                enable_thinking=False, warmup_per_endpoint=args.warmup_per_endpoint,
+                                api='text completions', warmup_per_endpoint=args.warmup_per_endpoint,
                                 timeout_seconds=args.timeout_seconds,
                                 ttft_slo_seconds=args.ttft_slo_seconds, tpot_slo_seconds=args.tpot_slo_seconds,
                                 quality_policy='exact JSON equality'),
                   metrics=serving_goodput(rows, seconds, ttft_slo_seconds=args.ttft_slo_seconds,
                                           tpot_slo_seconds=args.tpot_slo_seconds),
                   requests=rows, warmup=warmup)
+    if any('stop' in specification for specification in specs):
+        result['workload']['stop_policy'] = 'explicit per-spec server stop arrays; absent omitted; no client clipping'
+        result['workload']['client_source_sha256'] = {
+            name: hashlib.sha256((Path(__file__).resolve().parent / name).read_bytes()).hexdigest()
+            for name in ('9.load-llm.py', 'lib/serving_goodput.py')}
+    if args.pilot_only:
+        result['performance_eligible'] = False
+        result['evidence_kind'] = 'quality pilot; timings diagnostic only, not performance eligible'
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result['metrics'], indent=2))

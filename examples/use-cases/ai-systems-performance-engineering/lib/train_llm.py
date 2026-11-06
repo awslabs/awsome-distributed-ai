@@ -55,7 +55,7 @@ def parse_args():
     parser.add_argument('--compile-backend', choices=['inductor', 'aot_eager'], default='inductor',
                         help='aot_eager isolates graph/autograd changes without generated kernels; diagnostic only')
     parser.add_argument('--compile-pointwise', action='store_true',
-                        help='compile Qwen3 normalization and activation modules without compiling matrix products')
+                        help='compile Qwen3 or Llama-style (SmolLM2) normalization and activation modules without compiling matrix products')
     parser.add_argument('--compile-pointwise-scope', choices=['all', 'norms', 'activations'], default='all',
                         help='isolate normalization from activation compilation; requires --compile-pointwise')
     parser.add_argument('--compile-preserve-casts', action='store_true',
@@ -114,10 +114,15 @@ def omit_right_padding_attention_mask(batch):
 
 
 def compile_pointwise_modules(model, scope, backend, options):
-    """Compile only the selected Qwen3 norms/activations, never projections."""
+    """Compile only the selected norms/activations, never projections.
+
+    Qwen3 attention carries q_norm/k_norm; Llama-style attention (SmolLM2) does
+    not. Compile whichever normalization modules the block actually has.
+    """
     for block in model.model.layers:
-        norms = (block.input_layernorm, block.post_attention_layernorm,
-                 block.self_attn.q_norm, block.self_attn.k_norm)
+        norms = (block.input_layernorm, block.post_attention_layernorm)
+        norms += tuple(getattr(block.self_attn, name) for name in ('q_norm', 'k_norm')
+                       if hasattr(block.self_attn, name))
         modules = (() if scope == 'activations' else norms)
         if scope != 'norms':
             modules += (block.mlp.act_fn,)
