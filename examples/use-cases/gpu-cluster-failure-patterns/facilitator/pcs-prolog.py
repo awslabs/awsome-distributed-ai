@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Enable or restore the partition-guarded AIM344 Prolog using the PCS API."""
 import argparse
 import datetime

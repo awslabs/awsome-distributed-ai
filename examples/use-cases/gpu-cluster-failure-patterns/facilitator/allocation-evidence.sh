@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 set -euo pipefail
 hostname
 printf 'SLURM_JOB_ID=%s SLURM_GPUS_ON_NODE=%s SLURM_CPUS_ON_NODE=%s CUDA_VISIBLE_DEVICES=%s FI_EFA_IFACE=%s\n' "$SLURM_JOB_ID" "${SLURM_GPUS_ON_NODE:-}" "${SLURM_CPUS_ON_NODE:-}" "${CUDA_VISIBLE_DEVICES:-}" "${FI_EFA_IFACE:-}"

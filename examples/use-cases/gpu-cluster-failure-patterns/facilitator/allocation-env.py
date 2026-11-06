@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Print the participant allocation settings from registered Slurm nodes."""
 import argparse
 import os
