@@ -39,7 +39,7 @@ docker run --rm --gpus all "${DEV_ARGS[@]}" -e HAVE_EFA_DEV="${HAVE_EFA_DEV}" "$
   # which the cache-order check reads right past.
   NCCL_SO=$(python3 -c "import ctypes, pathlib; ctypes.CDLL(\"libnccl.so.2\"); print(next(l.split()[-1] for l in pathlib.Path(\"/proc/self/maps\").read_text().splitlines() if \"libnccl.so.2\" in l))")
   echo "$NCCL_SO" | grep -q "/opt/nccl/build" || { echo "FAIL: loader resolves libnccl to $NCCL_SO, not the GIN build under /opt/nccl/build (LD_LIBRARY_PATH scrubbed, or a baked libnccl shadows it)"; exit 1; }
-  [ "$(strings "$NCCL_SO" | grep -c "NCCL version 2.30.4")" -ge 1 ] || { echo "FAIL: $NCCL_SO is not 2.30.4 — wrong NCCL resolved"; exit 1; }
+  [ "$(strings "$NCCL_SO" | grep -c "NCCL version 2.30.7")" -ge 1 ] || { echo "FAIL: $NCCL_SO is not 2.30.7 — wrong NCCL resolved"; exit 1; }
 
   echo "== aws-ofi-nccl GIN plugin =="
   [ "$(nm -D /opt/aws-ofi-nccl/lib/libnccl-net-ofi.so | grep -c ncclGinPlugin)" -ge 1 ] || { echo "FAIL: no ncclGinPlugin symbol"; exit 1; }

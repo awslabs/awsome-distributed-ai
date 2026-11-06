@@ -57,8 +57,8 @@ build_ofi() {
   fi
   git rev-parse HEAD > /opt/aws-ofi-nccl.effective.sha
   ./autogen.sh
-  # --with-nccl-headers: the ncclGin* device API headers only >= 2.30.x carries,
-  # taken from the source-built GIN NCCL under $NCCL_HOME (Dockerfile Layer 4).
+  # --with-nccl-headers is not an option aws-ofi-nccl 9c44d34 defines (configure ignores it):
+  # the plugin builds against its own vendored NCCL headers (3rd-party/nccl/cuda/include).
   ./configure --prefix=/opt/aws-ofi-nccl --with-libfabric=/opt/amazon/efa --with-cuda=/usr/local/cuda \
     --with-nccl-headers="${NCCL_HOME}/include" \
     --enable-cudart-dynamic --enable-platform-aws

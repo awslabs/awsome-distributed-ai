@@ -37,8 +37,9 @@ LABEL org.opencontainers.image.licenses="MIT-0"
 LABEL org.opencontainers.image.source="https://github.com/awslabs/awsome-distributed-ai"
 
 # ---- pins (every one justified; no floating refs) --------------------------
-# NCCL v2.30.4-1 == commit 1933fdd6: the GIN device API generation the measured
-# substrate ran (ships include/nccl_device.h — asserted below). Commit-pinned,
+# NCCL v2.30.7-1 == commit 73cf1122: the first release that declares the two
+# ncclDevCommRequirements fields DeepEP 97d8f9bc sets (the measured run predates
+# it; ships include/nccl_device.h — asserted below). Commit-pinned,
 # not the bare tag: held to the same "a tag is a moving ref" standard as the
 # gdrcopy/DeepEP/Megatron pins below. The NGC base bakes an OLDER NCCL line
 # (2.29.x), so this is deliberately a NEWER line and the 00-nccl-gin.conf
@@ -46,7 +47,7 @@ LABEL org.opencontainers.image.source="https://github.com/awslabs/awsome-distrib
 # build win the loader search over the base's baked copy (verify-image.sh
 # asserts which one resolves). Built from source so DeepEP has one controlled
 # root of headers + libs.
-ARG NCCL_VERSION=1933fdd6360a8bfccaa0166bd71bce363d32e5b6
+ARG NCCL_VERSION=73cf112295c33aee2b895f329f592f2a9b4b0f97
 # EFA 1.48.0: the userspace of the measured substrate (see README pins table).
 # Bumping it is a re-measure event, not a routine bump.
 ARG EFA_INSTALLER_VERSION=1.48.0

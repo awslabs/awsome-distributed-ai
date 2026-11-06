@@ -17,7 +17,7 @@ still depend on draft upstream PRs.
 ```text
 NeMo-RL (GRPO) ── nemo_rl.models.megatron ── Megatron-core MoE flex dispatcher (fused_a2a)
                      └─ deep_ep.ElasticBuffer (DeepEP V2, NCCL backend)
-                           └─ NCCL 2.30.4 GIN device API (NCCL_GIN_TYPE=2, CPU-proxy)
+                           └─ NCCL 2.30 GIN device API (pinned v2.30.7-1; NCCL_GIN_TYPE=2, CPU-proxy)
                                  └─ aws-ofi-nccl @9c44d34 (ncclGinPlugin, gdrcopy)
                                        └─ libfabric ── EFA (efa-direct, SRD)
 ```
@@ -25,7 +25,9 @@ NeMo-RL (GRPO) ── nemo_rl.models.megatron ── Megatron-core MoE flex disp
 ## Measured vs staged (read this first)
 
 **Measured (2026-05-06, "Wave 28"):** the NeMo-RL 0.5.0rc0 full stack ran E2E on **2×
-p5.48xlarge (16× H100)** over EFA with this exact mechanism chain — imports + trainer bring-up,
+p5.48xlarge (16× H100)** over EFA with this mechanism chain on an earlier NCCL 2.30 release (the
+v2.30.7-1 pin postdates the run, and on it NCCL runs its built-in GIN proxy over the plugin instead
+of the plugin's own proxy table) — imports + trainer bring-up,
 rollout shape `[64, 8192]` generated in **9.45 s**, Megatron "Shape Y" 3-step training with loss
 **26.41 → 24.62**, `ElasticBuffer` confirmed as the active buffer class, and EFA cross-node
 hardware TX counters advanced. That run used a privately prebuilt image cascade, which this repo
@@ -48,7 +50,7 @@ stock `alltoall` dispatcher (`train-step.sh`). Never read a build-gate as an E2E
 |---|---|---|
 | Base image | `nvcr.io/nvidia/pytorch:26.02-py3` **@sha256:bbc2b67e…** | Same NGC base as the slime RL sibling. Bakes torch 2.11/CUDA 13 with TransformerEngine/apex/flash-attn compiled against that exact ABI — what megatron.core's H100 path needs. Digest-pinned: it is the ABI anchor the whole image builds around, so a silent tag re-push is the most consequential drift possible here. |
 | EFA installer | 1.48.0 | The userspace of the measured NCCL-GIN substrate. Bumping is a re-measure event. |
-| NCCL | `v2.30.4-1` = commit `1933fdd6` (source build) | GIN device API generation (`nccl_device.h` asserted at build). Commit-pinned, not the bare tag — held to the same moving-ref standard as the other source pins. The NGC base bakes an OLDER NCCL line (2.29.x), so this source-built copy is a deliberately newer line and the `00-nccl-gin.conf` ld.so.conf entry is **load-bearing** — it makes this GIN-capable build win the loader search over the base's baked copy (`verify-image.sh` asserts which one resolves). Source-built so DeepEP has one controlled header/lib root. |
+| NCCL | `v2.30.7-1` = commit `73cf1122` (source build) | GIN device API generation (`nccl_device.h` asserted at build). Commit-pinned, not the bare tag — held to the same moving-ref standard as the other source pins. The NGC base bakes an OLDER NCCL line (2.29.x), so this source-built copy is a deliberately newer line and the `00-nccl-gin.conf` ld.so.conf entry is **load-bearing** — it makes this GIN-capable build win the loader search over the base's baked copy (`verify-image.sh` asserts which one resolves). Source-built so DeepEP has one controlled header/lib root. |
 | aws-ofi-nccl | commit `9c44d34` + PR#1351, both commits: `c2e773d` (the `OFI_NCCL_GDRCOPY_FORCED_PCIE_COPY` override) and `63698ea6` (the PR head — refuses the override on cache-coherent CPU↔GPU platforms such as GB200/C2C) | The GIN CPU-proxy plugin lineage this folder standardises on; its gdrdrv-2.4 v1 fallback is what the validated hosts need (the TensorRT-LLM NcclEP sibling has since moved to the released `v1.21.1`, which requires gdrdrv ≥ 2.5 on the host). Carrying only the first commit would ship the pre-review, unguarded form of the override. These SHAs postdate the Wave-28 run, so they are the standardised lineage, not that run's exact pins. Immutable SHAs — `refs/pull/N/head` is a moving ref. |
 | gdrcopy | commit `c91ad9f` (= v2.5.2) | GIN **requires** gdrcopy compiled in (trap 4). Commit pin, not tag. |
 | DeepEP | `97d8f9bc` (**`amazon-contributing/DeepEP`** fork HEAD) | The AWS EPv2/NCCL-Gin tree. Carries EPv2 (ElasticBuffer + NCCL backend) **and the two former-draft [deepseek-ai/DeepEP#612](https://github.com/deepseek-ai/DeepEP/pull/612) EFA fixes in-code** — the `get_rdma_gbs()` sysfs link-rate fast path (`deep_ep/utils/envs.py`) and the auto-QP overflow clamp (`deep_ep/buffers/elastic.py`) — so **no #612 patch is applied on any flavor**. This is the same fork the repo's [`micro-benchmarks/expert-parallelism`](../../../../micro-benchmarks/expert-parallelism) DeepEP-V2 sample already pins (`setup_deepep_gin.sh`). Full 40-char SHA pinned as `DEEPEP_SHA` in the Dockerfile. |
@@ -253,18 +255,19 @@ publishes none for this path.
 ## Known limitations (honest list)
 
 - **Build-staged, not cluster-re-run.** The NGC-from-scratch assembly here reproduces the measured
-  Wave-28 mechanism chain from public sources, but this exact image has not itself been re-run on
-  a cluster. The recipe gates exist so you (or we, next capacity window) can re-verify cheaply.
+  Wave-28 mechanism chain from public sources, on a newer NCCL (v2.30.7-1, where NCCL's built-in
+  GIN proxy drives the plugin), but this exact image has not itself been re-run on a cluster. The
+  recipe gates exist so you (or we, next capacity window) can re-verify cheaply.
 - **The full rollout path is draft-PR-dependent.** Two upstream PRs — Megatron-LM#4632 (open) and
   NeMo-RL#2410 (draft, closed unmerged); see the table. If upstream supersedes them, the patch layer fails loud or self-neutralizes —
   either way the image never ships an ambiguous patch state.
 - **Baseline DeepEP gates use explicit SM/QP counts** (trap 2). A probe pass with explicit counts
   is deterministic by design; it does not exercise the fork's auto-sizers, and it certifies nothing
   about *stock* upstream's EFA-blind auto-sizing (the defect the fork fixes in-code).
-- **NCCL topology XML on 32-NIC p5 nodes:** the pinned NCCL `v2.30.4-1` can hit
+- **NCCL topology XML on 32-NIC p5 nodes:** the pinned NCCL `v2.30.7-1` can hit
   [NVIDIA/nccl#2160](https://github.com/NVIDIA/nccl/issues/2160) (`NCCL_TOPO_XML_MAX_NODES=256`
   overflow during intra-node XML fusion). The issue was closed upstream on 2026-10-10, but the
-  commit that references it, `409076ed`, is not in the pinned `v2.30.4-1`. If NCCL init fails with
+  commit that references it, `409076ed`, is not in the pinned `v2.30.7-1`. If NCCL init fails with
   a topo-XML error on p5.48xlarge, rebuild Layer 4 with the define raised (documented one-liner in
   the issue) — not baked here because it is a local one-off workaround.
 - **No performance numbers.** Dispatch/combine latency and GRPO throughput on this substrate are
