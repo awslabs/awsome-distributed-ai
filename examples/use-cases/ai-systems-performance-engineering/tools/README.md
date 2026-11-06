@@ -125,7 +125,7 @@ Exit status: 0 on success, and also after Ctrl-C (the stage keeps running); 2 fo
 
 ### Stage directory
 
-```
+```text
 $LLM_RESULTS_DIR/<stage>/
   run.json            stage, subcommand, job.env values, settings used, launch command, config, data,
                       allocation ID, start and end times, launcher exit, exit status and checks
