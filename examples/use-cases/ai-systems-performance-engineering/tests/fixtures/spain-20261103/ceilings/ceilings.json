@@ -1,0 +1,122 @@
+{
+  "gemm_tflops_per_gpu": 167.882689,
+  "memory_read_bytes_per_second_per_gpu": 662964022261.9265,
+  "ridge_flop_per_byte": 253.23046705794275,
+  "gpu_count": 16,
+  "gemm": "BF16 inputs, FP32 accumulation, 8192 x 8192 x 8192, best of 30 trials per GPU",
+  "memory_read": "1 GiB streaming read, median of 30 trials per GPU",
+  "gpus": [
+    {
+      "host": "gpu-g7-1",
+      "gpu": 0,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+      "best_tflops_per_gpu": 170.086768,
+      "median_bytes_per_second": 662541834007.997
+    },
+    {
+      "host": "gpu-g7-1",
+      "gpu": 1,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+      "best_tflops_per_gpu": 165.28959,
+      "median_bytes_per_second": 662554895121.285
+    },
+    {
+      "host": "gpu-g7-1",
+      "gpu": 2,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+      "best_tflops_per_gpu": 168.83811,
+      "median_bytes_per_second": 663892090162.099
+    },
+    {
+      "host": "gpu-g7-1",
+      "gpu": 3,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+      "best_tflops_per_gpu": 172.161952,
+      "median_bytes_per_second": 662633418860.541
+    },
+    {
+      "host": "gpu-g7-1",
+      "gpu": 4,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+      "best_tflops_per_gpu": 168.824018,
+      "median_bytes_per_second": 663019679385.954
+    },
+    {
+      "host": "gpu-g7-1",
+      "gpu": 5,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+      "best_tflops_per_gpu": 168.678141,
+      "median_bytes_per_second": 662973854790.15
+    },
+    {
+      "host": "gpu-g7-1",
+      "gpu": 6,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+      "best_tflops_per_gpu": 167.379859,
+      "median_bytes_per_second": 662954189733.703
+    },
+    {
+      "host": "gpu-g7-1",
+      "gpu": 7,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+      "best_tflops_per_gpu": 168.703823,
+      "median_bytes_per_second": 662574585235.498
+    },
+    {
+      "host": "gpu-g7-2",
+      "gpu": 0,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+      "best_tflops_per_gpu": 166.298372,
+      "median_bytes_per_second": 663052477874.029
+    },
+    {
+      "host": "gpu-g7-2",
+      "gpu": 1,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+      "best_tflops_per_gpu": 165.023642,
+      "median_bytes_per_second": 662666130390.636
+    },
+    {
+      "host": "gpu-g7-2",
+      "gpu": 2,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+      "best_tflops_per_gpu": 168.385519,
+      "median_bytes_per_second": 662751214991.826
+    },
+    {
+      "host": "gpu-g7-2",
+      "gpu": 3,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+      "best_tflops_per_gpu": 167.073027,
+      "median_bytes_per_second": 662986932942.567
+    },
+    {
+      "host": "gpu-g7-2",
+      "gpu": 4,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+      "best_tflops_per_gpu": 169.26897,
+      "median_bytes_per_second": 662973854790.15
+    },
+    {
+      "host": "gpu-g7-2",
+      "gpu": 5,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+      "best_tflops_per_gpu": 164.280402,
+      "median_bytes_per_second": 663085181978.219
+    },
+    {
+      "host": "gpu-g7-2",
+      "gpu": 6,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+      "best_tflops_per_gpu": 165.564362,
+      "median_bytes_per_second": 663399843072.323
+    },
+    {
+      "host": "gpu-g7-2",
+      "gpu": 7,
+      "gpu_name": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+      "best_tflops_per_gpu": 165.205344,
+      "median_bytes_per_second": 662345686850.666
+    }
+  ]
+}
