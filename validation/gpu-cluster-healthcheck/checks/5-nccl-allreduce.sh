@@ -244,8 +244,10 @@ run_check() {
     fi
 
     if [[ ${nccl_exit} -ne 0 ]]; then
-        # Check for out-of-bound errors
-        if echo "${nccl_output}" | grep -qi "out of bound\|NCCL WARN\|unhandled system error"; then
+        # Check for out-of-bound errors. Read the captured output with a
+        # here-string: under pipefail, echo | grep -q gets SIGPIPE on verbose
+        # NCCL_DEBUG=INFO output and the error would be misclassified as RESET.
+        if grep -qi "out of bound\|NCCL WARN\|unhandled system error" <<< "${nccl_output}"; then
             check_fail "${CHECK_NAME}" \
                 "NCCL all_reduce failed with errors (exit ${nccl_exit})" "ISOLATE"
         else

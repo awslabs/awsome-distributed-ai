@@ -617,6 +617,16 @@ log_result "6-efa-loopback" "PASS" "new execution"
                 self.assertEqual((rc, report['status']), (1, 'FAIL'))
                 self.assertEqual(self.last_raw, self.captured_output())
 
+    def test_verbose_provider_output_does_not_fail_on_sigpipe(self):
+        output = PROVIDER + ('NCCL INFO channel initialized\n' * 40000) + self.captured_output()
+        rc, report, _, _ = self.run_check(output=output)
+        self.assertEqual((rc, report['status']), (0, 'PASS'))
+
+    def test_verbose_error_keeps_isolate_severity(self):
+        output = 'NCCL WARN unhandled system error\n' + ('NCCL INFO teardown\n' * 40000)
+        rc, report, _, _ = self.run_check(output=output, exit_code=1)
+        self.assertEqual((rc, report['status'], report['severity']), (1, 'FAIL', 'ISOLATE'))
+
     def test_container_binary_and_g7_rank_mapping(self):
         rc, report, calls, _ = self.run_check()
         self.assertEqual((rc, report['status']), (0, 'PASS'))
