@@ -18,7 +18,8 @@ Validated on **2× and 4× p5en.48xlarge (H200)**, `Qwen/Qwen3-30B-A3B-FP8`: **m
 Dynamo image; see `benchmarks/README.md`); **DP32/EP32 functionally validated** (16/16 HTTP 200
 bring-up, no measured sweep — the shipped manifest is the 2-node/EP16 shape). **All of that
 validation predates the review-round substrate changes** (DeepEP `amazon-contributing` fork `97d8f9bc`,
-aws-ofi-nccl released `v1.21.1`, EFA installer 1.50.0, the inert-env removals): the 2026-09-04 Dynamo
+aws-ofi-nccl released `v1.21.1`, EFA installer 1.50.0, `nvidia-nccl-cu13` 2.30.4 → 2.30.7 (NCCL's built-in
+GIN proxy over the plugin's RMA table), the inert-env removals): the 2026-09-04 Dynamo
 E2E ran on `deepseek-ai/DeepEP@b306af06`+PR#612, aws-ofi-nccl `9c44d34`+#1351 and EFA installer 1.49.0.
 No E2E has been run on the shipped recipe yet; that re-measure is queued, and its result replaces this
 paragraph.
@@ -34,7 +35,7 @@ this sample's relative sibling links point at that folder, so until #1230 merges
 
 | Layer / file | `../../vllm/deepep-v2-efa` (#1230 at `ca5327ca`) | this sample | Status |
 |---|---|---|---|
-| `Dockerfile` Layers 1–3 (NGC base, EFA installer, torch/NCCL/NVSHMEM, gdrcopy) | `nvcr.io/nvidia/cuda:13.0.0-devel-ubuntu22.04`, EFA installer 1.50.0, `torch==2.11.0` (cu130), `nvidia-nccl-cu13 2.30.4`, `nvidia-nvshmem-cu13 3.6.5`, gdrcopy `c91ad9f` (v2.5.2) | same pins; this sample additionally pins `ninja` 1.13.2 | **shared** |
+| `Dockerfile` Layers 1–3 (NGC base, EFA installer, torch/NCCL/NVSHMEM, gdrcopy) | `nvcr.io/nvidia/cuda:13.0.0-devel-ubuntu22.04`, EFA installer 1.50.0, `torch==2.11.0` (cu130), `nvidia-nccl-cu13 2.30.4` at `ca5327ca` (2.30.7 since #1230's bump, `6a887611`), `nvidia-nvshmem-cu13 3.6.5`, gdrcopy `c91ad9f` (v2.5.2) | same pins; this sample additionally pins `ninja` 1.13.2 | **shared** |
 | DeepEP-V2 source | `amazon-contributing/DeepEP@97d8f9bc` | `amazon-contributing/DeepEP@97d8f9bc` | **shared** (equal since #1230 round 4) |
 | aws-ofi-nccl GIN plugin | the EFA installer's bundled **1.21.1** at `/opt/amazon/ofi-nccl` (no source build; build-gated on its `ncclGinPlugin_v14` export) | the released **`v1.21.1` tag built from source** at `/opt/aws-ofi-nccl` (`--with-gdrcopy`, gdrcopy support asserted post-build) | **same release, different build path** — `NCCL_NET_PLUGIN` differs accordingly |
 | `setup_deepep_v2_efa.sh` | stages DeepEP only | stages DeepEP **and** builds aws-ofi-nccl | differs with the row above |
@@ -122,7 +123,7 @@ At this pin, default (non-eager) compilation crashes deterministically ~48 s int
 > kernel test passed on the same image. Re-pairing to `e2f993dc4` + `ai-dynamo 1.3.1` served the same day
 > (the E2E in the PR description). Because the front (`1.4.2` → `1.3.1`) and the substrate changed
 > together, that fault does **not** show whether `14617c2b` serves under plain `vllm serve`, or on the
-> current fork/`v1.21.1` substrate — both are unmeasured. This sample stays on the measured pin until the
+> current fork/`v1.21.1`/NCCL 2.30.7 substrate — both are unmeasured. This sample stays on the measured pin until the
 > queued re-measure (a serve at `14617c2b` vs `e2f993dc4` on the shipped recipe) answers that.
 
 <!-- MD028: separate the two blockquotes so the blank line is not read as inside one quote -->
@@ -372,7 +373,7 @@ See `benchmarks/README.md` for the measured eager and non-eager tables + environ
      viable on EFA today; the canonical benchmark's defaults and NCCL build target a different point in
      that design space.
   2. **Coupling to the vLLM wheel's torch/NCCL ABI.** The DeepEP `_C.so` here is built in-pod against
-     the exact `torch 2.11.0+cu130` from Layer 3 (the pinned wheel requires `torch==2.11.0`, and Layer 5b asserts it), plus `nvidia-nccl-cu13 2.30.4` (Dockerfile
+     the exact `torch 2.11.0+cu130` from Layer 3 (the pinned wheel requires `torch==2.11.0`, and Layer 5b asserts it), plus `nvidia-nccl-cu13 2.30.7` (Dockerfile
      Layer 5b re-pins it after the wheel install drags NCCL down to torch's 2.28.x), so the toolchain is
      wheel-driven rather than a standalone NCCL build tree.
      (The aws-ofi-nccl plugin itself is the canonical's version — released `v1.21.1`, built from source

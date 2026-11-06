@@ -29,7 +29,7 @@ docker run --rm "${DEV_ARGS[@]}" -e HAVE_EFA_DEV="${HAVE_EFA_DEV}" "${IMG}" bash
     /opt/amazon/efa/bin/fi_info -l | grep -qi "efa" || { echo "FAIL: efa provider not in libfabric"; exit 1; }
     echo "   (run this script on an EFA host for the live efa-direct fabric check)"
   fi
-  echo "== single libnccl 2.30.4 wins (path + GIN/LSA symbol — the wheel downgrade lands in the SAME dir, so path alone cannot catch it) =="
+  echo "== single libnccl 2.30.7 wins (path + GIN/LSA symbol — the wheel downgrade lands in the SAME dir, so path alone cannot catch it) =="
   NCCL_SO=$(ldconfig -p | grep "libnccl.so.2 " | head -1 | awk "{print \$NF}" || true)
   [ -n "$NCCL_SO" ] || { echo "FAIL: no libnccl.so.2 on the linker path at all"; exit 1; }   # fail LOUD like every other check — a bare set -e death here printed nothing
   echo "$NCCL_SO" | grep -q "nvidia/nccl" || { echo "FAIL: system libnccl shadows pip ($NCCL_SO)"; exit 1; }

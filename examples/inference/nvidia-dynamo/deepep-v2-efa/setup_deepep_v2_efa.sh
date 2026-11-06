@@ -13,9 +13,10 @@
 set -euo pipefail
 
 # ---- pins (released tag + immutable SHA; no 'latest') ----
-# v1.21.1 is the released aws-ofi-nccl tag that carries the CPU-proxy GIN op-tables this
-# sample uses (src/rdma/gin/nccl_ofi_gin_api.cpp exports ncclGinPlugin_v11 + _v13; only
-# _v14 is EFA-GDA-specific, which we do not use), and it is the aws-ofi-nccl version the
+# v1.21.1 is the released aws-ofi-nccl tag that carries the RMA op-table this sample's
+# GIN runs over: on the pinned NCCL 2.30.7 with NCCL_GIN_TYPE=2, NCCL uses none of the
+# plugin's GIN op-tables and runs its built-in GIN proxy over the plugin's ncclRmaPlugin_v14
+# (NCCL src/plugin/gin.cc, src/plugin/rma.cc); and it is the aws-ofi-nccl version the
 # canonical micro-benchmarks/expert-parallelism/deepep-v2-benchmark runs on (bundled by
 # EFA installer 1.50.0) — known-good in this repo. Built from source here so gdrcopy
 # support is compiled in BY CONSTRUCTION (asserted below) and the plugin version stays
