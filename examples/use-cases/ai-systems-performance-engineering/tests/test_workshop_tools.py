@@ -1453,6 +1453,58 @@ class NcclProtocolSettingTests(unittest.TestCase):
                                             check=True, capture_output=True, text=True).stdout.splitlines()
                     self.assertEqual(output[:2], [f'OFI_NCCL_PROTOCOL={protocol}', 'NCCL_PROTO=Simple'])
 
+    def test_training_launcher_keeps_the_callers_nccl_debug(self):
+        """`NCCL_DEBUG=info bash tools/run.sh efa`: the value reaches srun as given and is in --container-env."""
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            stub(bin_dir, 'srun', 'printf "%s\\n" "NCCL_DEBUG=${NCCL_DEBUG-unset}" '
+                                  '"NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS-unset}" "$@"\n')
+            stub(bin_dir, 'scontrol', 'case "$2" in hostnames) echo gpu-node-1; echo gpu-node-2 ;; '
+                                      'node) echo "NodeName=gpu-node-1 NodeAddr=10.0.0.1" ;; esac\n')
+            env = dict(os.environ, PATH=f'{bin_dir}:{os.environ["PATH"]}', SLURM_JOB_ID='42', SLURM_JOB_NUM_NODES='2',
+                       SLURM_JOB_NODELIST='gpu-node-[1-2]', SLURM_JOB_CPUS_PER_NODE='192(x2)', GPUS_PER_NODE='8',
+                       LAB_IMAGE='/fsx/image.sqsh', LLM_DATA_DIR='/fsx/data', LLM_RESULTS_DIR='/fsx/results',
+                       NCCL_SOCKET_IFNAME='=enp71s0', LLM_TRANSPORT='efa')
+            for name in ('NCCL_DEBUG', 'NCCL_DEBUG_SUBSYS'):
+                env.pop(name, None)
+            # (caller's NCCL_DEBUG, caller's NCCL_DEBUG_SUBSYS) -> what srun receives. The exact literal
+            # `info` is kept: NCCL 2.30.4-1 src/debug.cc parses the level with strcasecmp.
+            cases = ((None, None, 'INFO', 'INIT,NET,ENV'), ('info', None, 'info', 'INIT,NET,ENV'),
+                     ('WARN', None, 'WARN', 'INIT,NET,ENV'), ('TRACE', 'ALL', 'TRACE', 'ALL'),
+                     ('', None, 'INFO', 'INIT,NET,ENV'))
+            for debug, subsys, expected_debug, expected_subsys in cases:
+                with self.subTest(debug=debug, subsys=subsys):
+                    run_env = dict(env)
+                    if debug is not None:
+                        run_env['NCCL_DEBUG'] = debug
+                    if subsys is not None:
+                        run_env['NCCL_DEBUG_SUBSYS'] = subsys
+                    output = subprocess.run(['bash', str(LAB / '2.run-llm.sh')], env=run_env, check=True,
+                                            capture_output=True, text=True).stdout.splitlines()
+                    self.assertEqual(output[:2], [f'NCCL_DEBUG={expected_debug}', f'NCCL_DEBUG_SUBSYS={expected_subsys}'])
+                    names = next(a for a in output if a.startswith('--container-env=')).split('=', 1)[1].split(',')
+                    self.assertIn('NCCL_DEBUG', names)
+                    self.assertIn('NCCL_DEBUG_SUBSYS', names)
+            result = subprocess.run(['bash', str(LAB / '2.run-llm.sh')], env=dict(env, NCCL_DEBUG='verbose; rm -rf /'),
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('NCCL_DEBUG must be one of VERSION, WARN, INFO, ABORT, TRACE', result.stderr)
+            self.assertEqual(result.stdout, '')
+
+    def test_worker_passes_the_shell_environment_to_the_launcher(self):
+        """run.sh -> worker -> run_stage: the launcher gets os.environ plus LLM_TRANSPORT, nothing filtered."""
+        stage = workshop.plan('efa', job('efa'))[0]
+        with tempfile.TemporaryDirectory() as directory:
+            seen = {}
+
+            def runner(command, cwd, env, stdout, stderr):
+                seen.update(env)
+                return subprocess.CompletedProcess(command, 1)
+            with patch.dict(os.environ, NCCL_DEBUG='info'):
+                workshop.run_stage(stage, dict(invocation='i', stages=['efa'], allocation_id=42, pid=None),
+                                   Path(directory), runner=runner, world=16, label='l', efa_reader=lambda log: {})
+            self.assertEqual((seen['NCCL_DEBUG'], seen['LLM_TRANSPORT']), ('info', 'efa'))
+
 
 class NcclProtocolToolTests(unittest.TestCase):
     """tools/nccl-protocols.sh: the srun step, the rank script and the report, with a fake srun."""
