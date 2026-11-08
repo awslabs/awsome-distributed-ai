@@ -10,6 +10,12 @@ Monitor Amazon EKS GPU workloads using Amazon Managed Prometheus and Amazon Mana
 
 **Best for:** EKS clusters, multi-cluster monitoring, minimal resource overhead
 
+### [EKS In-Cluster Prometheus and Grafana](./eks-in-cluster/)
+
+Run Prometheus, Pushgateway and Grafana inside an EKS cluster, in one namespace, reached through `kubectl port-forward`. Reads Services that opt in and existing exporters such as the GPU Operator's DCGM exporter, and receives pushed results. The amazon-eks architecture installs it with `DeployMonitoring=true`.
+
+**Best for:** a single cluster you work on directly, short-lived clusters, no AWS managed services
+
 ### SageMaker HyperPod Monitoring (This Document)
 
 Monitor SageMaker HyperPod clusters with SLURM-exporter, DCGM-exporter, and EFA-node-exporter. This solution uses lifecycle scripts to bootstrap monitoring on HyperPod nodes.
@@ -18,7 +24,7 @@ Monitor SageMaker HyperPod clusters with SLURM-exporter, DCGM-exporter, and EFA-
 
 ---
 
-# SageMaker HyperPod Monitoring
+## SageMaker HyperPod Monitoring
 
 This guide provides a comprehensive approach for deploying an observability stack tailored to enhance monitoring capabilities for your SageMaker HyperPod cluster. It demonstrates how to export both cluster metrics (SLURM-exporter) and node metrics (DCGM-exporter, EFA-node-exporter) to a Prometheus/Grafana monitoring stack. This setup enables your administrators, ML-ops teams, and model developers to access real-time metrics, offering valuable insights into your cluster's performance.
 

@@ -531,10 +531,10 @@ Or use the provided cleanup script:
 
 ### Alternative: In-Cluster Prometheus/Grafana
 
-See the parent directory for in-cluster Prometheus/Grafana deployment using kube-prometheus-stack. This approach:
+See [`../eks-in-cluster`](../eks-in-cluster/) for Prometheus, Pushgateway and Grafana deployed inside the cluster. That approach:
 
-- Deploys Prometheus and Grafana as pods in your cluster
-- Higher resource overhead (several GB)
+- Deploys Prometheus, Pushgateway and Grafana as pods in your cluster
+- Keeps metrics for 24 hours or 1 GB, whichever comes first, on the pod's local storage, lost when the pod is replaced
 - Suitable for single-cluster monitoring
 - No AWS managed service dependencies
 

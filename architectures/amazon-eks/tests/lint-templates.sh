@@ -30,7 +30,8 @@ CLUSTER_T="assets/eks-cluster.yaml"
 GPU_T="assets/eks-add-gpu-nodegroup.yaml"
 ROOT_T="assets/eks-gpu-cluster-deploy-all.yaml"
 AMI_T="assets/eks-gpu-node-ami.yaml"
-ALL_T=("$PREREQ_T" "$CLUSTER_T" "$GPU_T" "$ROOT_T" "$AMI_T")
+MON_T="assets/eks-monitoring.yaml"
+ALL_T=("$PREREQ_T" "$CLUSTER_T" "$GPU_T" "$ROOT_T" "$AMI_T" "$MON_T")
 PUBLISH_MANIFEST="../../.github/template-publish-manifest.yml"
 RENDER="tests/render-nic-block.py"
 PARAMS_DOC="docs/PARAMETERS.md"
@@ -1199,6 +1200,59 @@ else
     while IFS= read -r line; do [ -n "$line" ] && fail 10 "$line"; done < "$TMP/pins.out"
   else
     pass 10 "${#PINNED[@]} file(s), every chart, image and package carries a version"
+  fi
+fi
+
+# --------------------------------------------------------------------------
+# check 11 — the monitoring bundle digest the templates pin is the bundle of this tree
+# --------------------------------------------------------------------------
+head_ 11 "the bundle $MON_T pins equals the sha256 of the bundle built from the source, and both templates default MonitoringBundleSha256 to empty, which selects it"
+if [ -z "$PY_YAML" ]; then
+  skip 11 "needs PyYAML"
+else
+  set +e
+  (cd ../.. && "$PY_YAML" .github/scripts/stage-template-publish.py --manifest .github/template-publish-manifest.yml \
+    --stage-dir /dev/null --cfn-list /dev/null --shell-list /dev/null --obsolete-list /dev/null --print-bundle-digests) \
+    > "$TMP/bundle.out" 2>"$TMP/bundle.err"
+  digest_status=$?
+  set -e
+  built="$(awk '$1 == "observability/prometheus-grafana/eks-in-cluster" {print $2}' "$TMP/bundle.out")"
+  if [ "$digest_status" -ne 0 ] || [ -z "$built" ]; then
+    fail 11 "could not build the monitoring bundle: $(head -3 "$TMP/bundle.err" | tr '\n' ' ')"
+  else
+    pinned="$(awk '/^  Bundle:/{f=1} f && /Sha256:/{print $2; exit}' "$MON_T")"
+    if [ "$pinned" = "$built" ]; then
+      pass 11 "$MON_T pins $built"
+    else
+      fail 11 "$MON_T pins '$pinned' (Mappings, Bundle) but the bundle built from observability/prometheus-grafana/eks-in-cluster is $built; set it to that"
+    fi
+    # An empty MonitoringBundleSha256 selects the pinned bundle; a non-empty default would keep an update
+    # that keeps previous values on the bundle of the templates it was first created from.
+    for t in "$MON_T" "$ROOT_T"; do
+      default="$(awk '/^  MonitoringBundleSha256:/{f=1} f && /Default:/{print $2; exit}' "$t")"
+      if [ "$default" = '""' ]; then
+        pass 11 "$t defaults MonitoringBundleSha256 to empty, the pinned bundle"
+      else
+        fail 11 "$t defaults MonitoringBundleSha256 to $default; set it to \"\" so the pinned bundle is installed"
+      fi
+    done
+    # The bootstrap reads s3://<bucket>/<S3KeyPrefix>monitoring/<digest>.tar.gz, so the publish step has to
+    # stage the bundle under amazon-eks/monitoring/ with that name.
+    set +e
+    (cd ../.. && "$PY_YAML" .github/scripts/stage-template-publish.py --manifest .github/template-publish-manifest.yml \
+      --stage-dir "$TMP/stage" --cfn-list /dev/null --shell-list /dev/null --obsolete-list /dev/null) > /dev/null 2>"$TMP/stage.err"
+    stage_status=$?
+    set -e
+    staged="$TMP/stage/amazon-eks/monitoring/$built.tar.gz"
+    if [ "$stage_status" -ne 0 ]; then
+      fail 11 "staging the publish manifest failed: $(head -3 "$TMP/stage.err" | tr '\n' ' ')"
+    elif [ ! -f "$staged" ]; then
+      fail 11 "the publish step does not stage the bundle at amazon-eks/monitoring/$built.tar.gz, where the bootstrap reads it"
+    elif [ "$(gzip -dc "$staged" | "$PY_YAML" -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')" != "$built" ]; then
+      fail 11 "the staged bundle amazon-eks/monitoring/$built.tar.gz does not unpack to that digest"
+    else
+      pass 11 "the publish step stages it at amazon-eks/monitoring/$built.tar.gz"
+    fi
   fi
 fi
 
