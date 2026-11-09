@@ -21,6 +21,12 @@ if ! helm version --short 2>/dev/null | grep -qE 'v3\.(1[4-9]|[2-9][0-9])'; then
     exit 1
 fi
 
+# envsubst renders the ADOT Collector template in Step 6.
+if ! command -v envsubst >/dev/null 2>&1; then
+    echo -e "${RED}envsubst is required (install the gettext package).${NC}"
+    exit 1
+fi
+
 # Function to prompt for input with default value
 prompt_with_default() {
     local prompt="$1"
@@ -44,6 +50,20 @@ prompt_with_default "EKS Cluster Region" "us-east-1" AWS_REGION
 prompt_with_default "AMP/AMG Region (must support AMG)" "us-east-1" AWS_REGION_AMGP
 prompt_with_default "EKS Cluster Name" "" CLUSTER_NAME
 prompt_with_default "CloudFormation Stack Name" "eks-observability" STACK_NAME
+prompt_with_default "Scrape DCGM Exporter GPU metrics (y/n)" "y" ENABLE_DCGM_METRICS
+prompt_with_default "Scrape SGLang metrics (y/n)" "n" ENABLE_SGLANG_METRICS
+echo "  (EFA/RDMA metrics need the EFA node exporter, see ../../efa-node-exporter/EKS/README.md)"
+prompt_with_default "Scrape EFA node exporter RDMA metrics (y/n)" "n" ENABLE_EFA_METRICS
+
+# Collect the selected scrape jobs from scrape-configs/
+SCRAPE_CONFIG_FILES=()
+[ "$ENABLE_DCGM_METRICS" = "y" ] && SCRAPE_CONFIG_FILES+=(scrape-configs/dcgm-exporter.yaml)
+[ "$ENABLE_SGLANG_METRICS" = "y" ] && SCRAPE_CONFIG_FILES+=(scrape-configs/sglang.yaml)
+[ "$ENABLE_EFA_METRICS" = "y" ] && SCRAPE_CONFIG_FILES+=(scrape-configs/efa-exporter.yaml)
+if [ ${#SCRAPE_CONFIG_FILES[@]} -eq 0 ]; then
+    echo -e "${RED}At least one metrics source must be enabled.${NC}"
+    exit 1
+fi
 
 # Get AWS Account ID
 export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -54,6 +74,7 @@ echo "  EKS Cluster Region: $AWS_REGION"
 echo "  AMP/AMG Region: $AWS_REGION_AMGP"
 echo "  Cluster Name: $CLUSTER_NAME"
 echo "  Stack Name: $STACK_NAME"
+echo "  Scrape Configs: ${SCRAPE_CONFIG_FILES[*]}"
 echo "  AWS Account ID: $AWS_ACCOUNT_ID"
 echo ""
 
@@ -234,123 +255,25 @@ aws eks create-pod-identity-association \
   --role-arn $ADOT_ROLE_ARN \
   --region $AWS_REGION 2>/dev/null || echo "Pod Identity association already exists"
 
+# Pod Identity credentials are injected when a pod is created. Give the new
+# association a few seconds to propagate so the collector pod created in
+# Step 6 gets them; otherwise it falls back to the node role and remote write
+# to AMP fails with 403.
+sleep 10
+
 echo -e "${GREEN}✓ ADOT Operator installed${NC}"
 echo ""
 
 echo -e "${YELLOW}Step 6: Deploy ADOT Collector${NC}"
 echo ""
 
-# Create ADOT Collector YAML with substituted values
-cat > adot-collector-prometheus-generated.yaml <<EOF
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: adot-col
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: adot-col-prom-metrics
-  namespace: adot-col
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: adot-prometheus-role
-rules:
-  - apiGroups: [""]
-    resources:
-      - nodes
-      - nodes/proxy
-      - services
-      - endpoints
-      - pods
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["extensions", "networking.k8s.io"]
-    resources:
-      - ingresses
-    verbs: ["get", "list", "watch"]
-  - nonResourceURLs: ["/metrics"]
-    verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: adot-prometheus-role-binding
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: adot-prometheus-role
-subjects:
-  - kind: ServiceAccount
-    name: adot-col-prom-metrics
-    namespace: adot-col
----
-apiVersion: opentelemetry.io/v1alpha1
-kind: OpenTelemetryCollector
-metadata:
-  name: adot-prometheus
-  namespace: adot-col
-spec:
-  mode: deployment
-  serviceAccount: adot-col-prom-metrics
-  config: |
-    receivers:
-      prometheus:
-        config:
-          global:
-            scrape_interval: 30s
-            scrape_timeout: 10s
-          scrape_configs:
-          - job_name: 'dcgm-exporter'
-            metrics_path: /metrics
-            kubernetes_sd_configs:
-            - role: endpoints
-              namespaces:
-                names:
-                - gpu-operator
-            tls_config:
-              ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-              insecure_skip_verify: true
-            bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
-            relabel_configs:
-            - source_labels: [__meta_kubernetes_service_name]
-              action: keep
-              regex: .*dcgm-exporter.*
-            - source_labels: [__meta_kubernetes_pod_node_name]
-              action: replace
-              target_label: kubernetes_node
-            - source_labels: [__meta_kubernetes_pod_name]
-              action: replace
-              target_label: pod
-            - source_labels: [__meta_kubernetes_namespace]
-              action: replace
-              target_label: namespace
-            - source_labels: [__meta_kubernetes_service_name]
-              action: replace
-              target_label: service
-
-    exporters:
-      prometheusremotewrite:
-        endpoint: $AMP_ENDPOINT
-        auth:
-          authenticator: sigv4auth
-      debug:
-        verbosity: detailed
-
-    extensions:
-      sigv4auth:
-        region: $AWS_REGION_AMGP
-        service: aps
-
-    service:
-      extensions: [sigv4auth]
-      pipelines:
-        metrics:
-          receivers: [prometheus]
-          exporters: [debug, prometheusremotewrite]
-EOF
+# Render the ADOT Collector template. The scrape jobs are indented to sit
+# under scrape_configs (the first line inherits the placeholder's indent).
+export SCRAPE_CONFIGS=$(cat "${SCRAPE_CONFIG_FILES[@]}" | sed '1!s/^/          /')
+# envsubst only sees exported variables; prompt_with_default does not export.
+export AWS_REGION_AMGP
+envsubst '${AMP_ENDPOINT} ${AWS_REGION_AMGP} ${SCRAPE_CONFIGS}' \
+  < adot-collector-prometheus.yaml > adot-collector-prometheus-generated.yaml
 
 kubectl apply -f adot-collector-prometheus-generated.yaml
 
@@ -367,46 +290,50 @@ echo ""
 echo -e "${YELLOW}Step 7: Configure Custom DCGM Metrics${NC}"
 echo ""
 
-# If a local custom-dcgm-metrics.csv exists, create a ConfigMap from it and
-# point DCGM Exporter at it. Otherwise leave the exporter on the GPU Operator's
-# built-in default metrics rather than pointing it at a non-existent ConfigMap
-# (which would wedge the pod in Init:0/1 on a failed mount).
-if [ -f "custom-dcgm-metrics.csv" ]; then
-    echo "Using custom DCGM metrics from: custom-dcgm-metrics.csv"
-
-    # Recreate the ConfigMap. The key must be exactly dcgm-metrics.csv for the
-    # exporter to pick it up.
-    kubectl delete configmap custom-dcgm-metrics -n gpu-operator --ignore-not-found
-    kubectl create configmap custom-dcgm-metrics \
-      --from-file=dcgm-metrics.csv=custom-dcgm-metrics.csv \
-      -n gpu-operator
-
-    echo "Updating GPU Operator to use custom metrics ConfigMap..."
-    helm upgrade gpu-operator nvidia/gpu-operator \
-      -n gpu-operator \
-      --reset-then-reuse-values \
-      --set dcgmExporter.config.name=custom-dcgm-metrics
+if [ "$ENABLE_DCGM_METRICS" != "y" ]; then
+    echo -e "${YELLOW}DCGM Exporter scraping disabled; skipping.${NC}"
 else
-    echo -e "${YELLOW}No custom-dcgm-metrics.csv found; using GPU Operator default DCGM metrics.${NC}"
+    # If a local custom-dcgm-metrics.csv exists, create a ConfigMap from it and
+    # point DCGM Exporter at it. Otherwise leave the exporter on the GPU Operator's
+    # built-in default metrics rather than pointing it at a non-existent ConfigMap
+    # (which would wedge the pod in Init:0/1 on a failed mount).
+    if [ -f "custom-dcgm-metrics.csv" ]; then
+        echo "Using custom DCGM metrics from: custom-dcgm-metrics.csv"
 
-    echo "Updating GPU Operator to use default metrics..."
-    helm upgrade gpu-operator nvidia/gpu-operator \
-      -n gpu-operator \
-      --reset-then-reuse-values \
-      --set dcgmExporter.config.name=null
+        # Recreate the ConfigMap. The key must be exactly dcgm-metrics.csv for the
+        # exporter to pick it up.
+        kubectl delete configmap custom-dcgm-metrics -n gpu-operator --ignore-not-found
+        kubectl create configmap custom-dcgm-metrics \
+          --from-file=dcgm-metrics.csv=custom-dcgm-metrics.csv \
+          -n gpu-operator
 
-    # Now that the release no longer references it, drop any stale ConfigMap.
-    kubectl delete configmap custom-dcgm-metrics -n gpu-operator --ignore-not-found
+        echo "Updating GPU Operator to use custom metrics ConfigMap..."
+        helm upgrade gpu-operator nvidia/gpu-operator \
+          -n gpu-operator \
+          --reset-then-reuse-values \
+          --set dcgmExporter.config.name=custom-dcgm-metrics
+    else
+        echo -e "${YELLOW}No custom-dcgm-metrics.csv found; using GPU Operator default DCGM metrics.${NC}"
+
+        echo "Updating GPU Operator to use default metrics..."
+        helm upgrade gpu-operator nvidia/gpu-operator \
+          -n gpu-operator \
+          --reset-then-reuse-values \
+          --set dcgmExporter.config.name=null
+
+        # Now that the release no longer references it, drop any stale ConfigMap.
+        kubectl delete configmap custom-dcgm-metrics -n gpu-operator --ignore-not-found
+    fi
+
+    # Restart DCGM Exporter
+    echo "Restarting DCGM Exporter..."
+    kubectl rollout restart daemonset/nvidia-dcgm-exporter -n gpu-operator
+
+    echo "Waiting for DCGM Exporter rollout..."
+    kubectl rollout status daemonset/nvidia-dcgm-exporter -n gpu-operator --timeout=120s
+
+    echo -e "${GREEN}✓ Custom DCGM metrics configured${NC}"
 fi
-
-# Restart DCGM Exporter
-echo "Restarting DCGM Exporter..."
-kubectl rollout restart daemonset/nvidia-dcgm-exporter -n gpu-operator
-
-echo "Waiting for DCGM Exporter rollout..."
-kubectl rollout status daemonset/nvidia-dcgm-exporter -n gpu-operator --timeout=120s
-
-echo -e "${GREEN}✓ Custom DCGM metrics configured${NC}"
 echo ""
 
 echo -e "${GREEN}========================================${NC}"
@@ -426,7 +353,10 @@ echo ""
 echo "3. Import NVIDIA DCGM dashboard:"
 echo "   - Dashboards → Import → ID: 12239"
 echo ""
-echo "4. Add custom metric panels for:"
+echo "4. (Optional) Import the SGLang PD / EFA RDMA dashboard:"
+echo "   - Dashboards → Import → upload dashboards/sglang-pd.json"
+echo ""
+echo "5. Add custom metric panels for:"
 echo "   - XID Errors: DCGM_EXP_XID_ERRORS_COUNT_total"
 echo "   - Power Violations: DCGM_FI_DEV_POWER_VIOLATION_total"
 echo "   - Thermal Violations: DCGM_FI_DEV_THERMAL_VIOLATION_total"

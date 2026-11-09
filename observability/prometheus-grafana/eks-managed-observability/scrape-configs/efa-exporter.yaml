@@ -1,0 +1,31 @@
+# EFA / RDMA counters from the EFA node exporter
+# (observability/efa-node-exporter, installed as the Helm release
+# efa-node-exporter). Scrapes the exporter's Service endpoints in any
+# namespace. Only the node_amazonefa_* series are kept, because the underlying
+# node_exporter also serves thousands of unrelated node_* series.
+- job_name: 'efa-exporter'
+  scrape_interval: 15s
+  metrics_path: /metrics
+  kubernetes_sd_configs:
+  - role: endpoints
+  relabel_configs:
+  # Keep only the EFA node exporter endpoints
+  - source_labels: [__meta_kubernetes_service_name]
+    action: keep
+    regex: .*efa-node-exporter.*
+  - source_labels: [__meta_kubernetes_pod_node_name]
+    action: replace
+    target_label: kubernetes_node
+  - source_labels: [__meta_kubernetes_pod_name]
+    action: replace
+    target_label: pod
+  - source_labels: [__meta_kubernetes_namespace]
+    action: replace
+    target_label: namespace
+  - source_labels: [__meta_kubernetes_service_name]
+    action: replace
+    target_label: service
+  metric_relabel_configs:
+  - source_labels: [__name__]
+    action: keep
+    regex: node_amazonefa_.*
