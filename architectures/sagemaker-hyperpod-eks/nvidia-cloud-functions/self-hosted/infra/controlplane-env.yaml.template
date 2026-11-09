@@ -1,0 +1,138 @@
+# NVCF self-managed control-plane environment overrides — multi-cluster on EKS.
+#
+# Rendered by scripts/render-config.sh into
+#   $BUNDLE_DIR/deploy/stacks/self-managed/environments/<HELMFILE_ENV>.yaml
+# The rendered file contains the NGC API key and is git-ignored. Never commit it.
+#
+# This is an OVERRIDE-ONLY file. The stack's helmfile.d/*.gotmpl declare:
+#     values:
+#       - ../environments/base.yaml
+#       - ../environments/${HELMFILE_ENV}.yaml
+# so base.yaml loads first and this file is layered on top. The CSP end-to-end
+# doc tells you to copy base.yaml and edit it in place; layering instead keeps
+# the diff reviewable and lets base.yaml move with the release.
+#
+# Placeholders: __DOMAIN__, __NGC_API_KEY__
+
+global:
+  # Resolvable domain whose wildcard record points at the internal nvcf-gateway
+  # NLB. Builds every HTTPRoute hostname
+  # (api.<domain>, api-keys.<domain>, invocation.<domain>, sis.<domain>, ...).
+  domain: "__DOMAIN__"
+
+  # Charts come from the public NGC catalog over HTTPS (base.yaml option A).
+  # An OCI login does not authenticate this HTTPS chart catalog, so the
+  # credential is supplied here explicitly.
+  helm:
+    sources:
+      url: "https://helm.ngc.nvidia.com/nvidia/nvcf"
+      username: "$oauthtoken"
+      password: "__NGC_API_KEY__"
+
+  # Service images are in the public nvidia/nvcf NGC catalog, so no image
+  # mirroring into a private org is required.
+  image:
+    registry: nvcr.io
+    repository: nvidia/nvcf
+
+  imagePullSecrets:
+    - name: nvcr-pull-secret
+
+  # MULTI-CLUSTER: worker pods run on the compute cluster and cannot resolve
+  # control-plane in-cluster service DNS, so every endpoint the control plane
+  # advertises into worker pods must be externally resolvable. These resolve to
+  # the internal NLB, which is reachable because both clusters share the VPC.
+  workerEndpoints:
+    nvcfServiceURL: "http://api.__DOMAIN__"
+    nvcfGrpcServiceURL: "http://worker-api.__DOMAIN__"
+    nvcfNatsServiceURL: "nats://nats.__DOMAIN__:4222"
+    nvctServiceURL: "http://tasks.__DOMAIN__"
+    nvctGrpcServiceURL: "http://worker-tasks.__DOMAIN__"
+    # These two must also be set for multi-cluster. Leaving them empty keeps the
+    # in-cluster default, and the control plane then hands the worker a
+    # control-plane-cluster service name it cannot resolve. The invocation
+    # callback in particular uses a PER-POD hostname derived from the pod IP,
+    # e.g. 10-0-1-23.invocation.<domain>, which is why the invocation
+    # HTTPRoute carries a wildcard hostname and why DNS needs a nested
+    # *.invocation.<domain> record as well as *.<domain>.
+    essServiceURL: "http://ess.__DOMAIN__"
+    invocationServiceURL: "http://invocation.__DOMAIN__"
+    # Only consumed when the LLM addon is enabled; left empty deliberately.
+    llmRequestRouterAddress: ""
+
+  # Single co-located node pool, so no node pinning. Leaving this false avoids
+  # Pending pods from selectors that no node satisfies.
+  nodeSelectors:
+    enabled: false
+
+  storageClass: "gp3"
+  storageSize: "10Gi"
+
+# The invocation service tells each worker where to call back for
+# request-attach. It builds that address by prefixing the worker-facing pod IP
+# (dashed) onto the host in WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS, which
+# defaults to an in-cluster Service name:
+#
+#   http://10-0-1-23.invocation.nvcf.svc.cluster.local:8080
+#
+# A worker on a separate compute cluster cannot resolve that, so it accepts the
+# request and then fails with "no such host" and the caller sees a 504. Nothing
+# under global.workerEndpoints changes this; it is this service's own setting.
+#
+# Point it at the external domain so the advertised address becomes
+# 10-0-1-23.invocation.<domain>, matched by the invocation HTTPRoute's
+# wildcard hostname and by the *.invocation.<domain> DNS record. Omit the port
+# so it uses 80, which is the Gateway's HTTP listener; the in-cluster default's
+# :8080 is not exposed on the load balancer.
+#
+# Caveat: through the Gateway this resolves to the Service, which balances over
+# all invocation-service pods, so the per-pod address is only reliably the
+# intended pod while replicaCount is 1.
+invocation:
+  env:
+    WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS: "http://invocation.__DOMAIN__"
+
+openbao:
+  migrations:
+    # Required on managed Kubernetes: discovers the cluster OIDC issuer.
+    # eksctl created the IAM OIDC provider for this cluster (iam.withOIDC).
+    issuerDiscovery:
+      enabled: true
+  # base.yaml ships 2 with hard anti-affinity for HA and explicitly says to
+  # override to 1 on single-node pools to avoid Pending pods.
+  injector:
+    replicas: 1
+
+ingress:
+  gatewayApi:
+    enabled: true
+    controllerNamespace: envoy-gateway-system
+    routes:
+      # MULTI-CLUSTER: workers reach the API and NVCT gRPC endpoints through the
+      # Gateway, so both GRPCRoutes are required.
+      nvcfApi:
+        grpc:
+          enabled: true
+          hostnames:
+            - "worker-api.__DOMAIN__"
+      nvctApi:
+        grpc:
+          enabled: true
+          hostnames:
+            - "worker-tasks.__DOMAIN__"
+      # The NVCA agent dials NATS; the nvcf worker container needs ESS.
+      nats:
+        enabled: true
+      ess:
+        enabled: true
+    gateways:
+      shared:
+        name: nvcf-gateway
+        namespace: envoy-gateway
+      grpc:
+        name: nvcf-gateway
+        namespace: envoy-gateway
+      nats:
+        name: nvcf-gateway
+        namespace: envoy-gateway
+        listenerName: nats

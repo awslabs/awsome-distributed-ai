@@ -1,0 +1,24 @@
+# NVCF requires a default-capable StorageClass with dynamic provisioning.
+#
+# Both clusters ship only the legacy in-tree `gp2` class
+# (provisioner kubernetes.io/aws-ebs), which is deprecated and not backed by the
+# EBS CSI driver. The NVCF control-plane stack provisions PVCs for Cassandra,
+# NATS JetStream and OpenBao, so it needs a working CSI class.
+#
+# Apply to both the control-plane and the compute cluster.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.aws.com
+reclaimPolicy: Delete
+# WaitForFirstConsumer keeps the EBS volume in the same AZ as the pod that
+# claims it. Immediate binding can place a volume in an AZ with no schedulable
+# node, which strands the pod.
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+parameters:
+  type: gp3
+  encrypted: "true"

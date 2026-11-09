@@ -6,6 +6,8 @@ Deploy [NVIDIA Cloud Functions (NVCF)](https://docs.nvidia.com/cloud-functions/u
 > in `InService` state.** It does not create VPC, EKS, or SageMaker HyperPod
 > infrastructure from scratch.
 
+> **Prefer to run the control plane yourself?** See [`self-hosted/`](self-hosted) — NVCF is now open source, so no NGC Cloud Functions entitlement is needed.
+
 ## What This Repo Contains
 
 ```

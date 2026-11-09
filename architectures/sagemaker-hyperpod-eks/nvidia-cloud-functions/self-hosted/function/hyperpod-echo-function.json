@@ -1,0 +1,22 @@
+{
+  "name": "hyperpod-echo",
+  "containerImage": "public.ecr.aws/<your-registry-alias>/nvcf-fastapi-echo:0.1.0",
+  "inferenceUrl": "/echo",
+  "inferencePort": 8000,
+  "description": "NVIDIA fastapi-echo sample, served from a SageMaker HyperPod GPU node via self-hosted NVCF",
+  "tags": ["ml-21379", "hyperpod", "self-hosted"],
+  "functionType": "DEFAULT",
+  "apiBodyFormat": "CUSTOM",
+  "health": {
+    "protocol": "HTTP",
+    "uri": "/health",
+    "port": 8000,
+    "timeout": "PT30S",
+    "expectedStatusCode": 200
+  },
+  "authorizedParties": [
+    {
+      "ncaId": "nvcf-default"
+    }
+  ]
+}

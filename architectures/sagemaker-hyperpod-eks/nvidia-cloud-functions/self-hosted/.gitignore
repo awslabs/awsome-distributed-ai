@@ -1,0 +1,13 @@
+# Rendered config carries the NGC API key. Never commit it.
+# Templates live in infra/*.template; render with scripts/render-config.sh.
+*-secrets.yaml
+controlplane-env.yaml
+compute-env.yaml
+compute-kubeconfig.yaml
+nvcf-cli.yaml
+control-plane-profile.yaml
+
+# Pinned toolchain and vendor bundle are fetched, not vendored.
+.toolchain/
+vendor-nvcf-*/
+bin/

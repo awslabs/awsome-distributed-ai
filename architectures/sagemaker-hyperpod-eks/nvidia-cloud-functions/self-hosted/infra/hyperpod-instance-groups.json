@@ -1,0 +1,64 @@
+[
+  {
+    "InstanceGroupName": "training-group",
+    "InstanceType": "ml.g5.2xlarge",
+    "InstanceCount": 1,
+    "ThreadsPerCore": 2,
+    "ExecutionRole": "arn:aws:iam::123456789012:role/my-hyperpod-execution-role",
+    "LifeCycleConfig": {
+      "SourceS3Uri": "s3://my-hyperpod-lifecycle-bucket",
+      "OnCreate": "on_create.sh"
+    },
+    "InstanceStorageConfigs": [
+      { "EbsVolumeConfig": { "VolumeSizeInGB": 200, "RootVolume": false } }
+    ]
+  },
+  {
+    "InstanceGroupName": "inference-group",
+    "InstanceType": "ml.g5.8xlarge",
+    "InstanceCount": 0,
+    "ThreadsPerCore": 2,
+    "ExecutionRole": "arn:aws:iam::123456789012:role/my-hyperpod-execution-role",
+    "LifeCycleConfig": {
+      "SourceS3Uri": "s3://my-hyperpod-lifecycle-bucket",
+      "OnCreate": "on_create.sh"
+    },
+    "InstanceStorageConfigs": [
+      { "EbsVolumeConfig": { "VolumeSizeInGB": 200, "RootVolume": false } }
+    ],
+    "KubernetesConfig": {
+      "Labels": { "nvca.nvcf.nvidia.io/schedule": "true" }
+    }
+  },
+  {
+    "InstanceGroupName": "inference-xl",
+    "InstanceType": "ml.g5.16xlarge",
+    "InstanceCount": 1,
+    "ThreadsPerCore": 2,
+    "ExecutionRole": "arn:aws:iam::123456789012:role/my-hyperpod-execution-role",
+    "LifeCycleConfig": {
+      "SourceS3Uri": "s3://my-hyperpod-lifecycle-bucket",
+      "OnCreate": "on_create.sh"
+    },
+    "InstanceStorageConfigs": [
+      { "EbsVolumeConfig": { "VolumeSizeInGB": 200, "RootVolume": false } }
+    ],
+    "KubernetesConfig": {
+      "Labels": { "nvca.nvcf.nvidia.io/schedule": "true" }
+    }
+  },
+  {
+    "InstanceGroupName": "cp-helpers",
+    "InstanceType": "ml.m5.2xlarge",
+    "InstanceCount": 1,
+    "ThreadsPerCore": 2,
+    "ExecutionRole": "arn:aws:iam::123456789012:role/my-hyperpod-execution-role",
+    "LifeCycleConfig": {
+      "SourceS3Uri": "s3://my-hyperpod-lifecycle-bucket",
+      "OnCreate": "on_create.sh"
+    },
+    "InstanceStorageConfigs": [
+      { "EbsVolumeConfig": { "VolumeSizeInGB": 100, "RootVolume": false } }
+    ]
+  }
+]

@@ -1,0 +1,72 @@
+# NVCF self-hosted control-plane cluster (multi-cluster topology).
+#
+# CPU-only. GPU compute lives on the HyperPod-backed EKS cluster
+# (my-hyperpod-eks-cluster) and is registered as a remote NVCF compute cluster.
+#
+# Kubernetes 1.35 is deliberate. NVCF supports the latest Kubernetes minor and
+# the two prior minors (N-2 => 1.35-1.37). SageMaker HyperPod supports up to
+# 1.35. 1.35 is the only version both accept, so the control and compute planes
+# run the same minor.
+#
+# The cluster is placed in the *existing* HyperPod VPC rather than a new one:
+#   1. The account is at its VPC quota (5/5) in us-east-1.
+#   2. Co-locating both clusters in one VPC keeps NVCA -> control-plane traffic
+#      private, so the Gateway can be an internal NLB with no public exposure
+#      and no NAT/egress charges on the agent's control path.
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: nvcf-cp
+  region: us-east-1
+  version: "1.35"
+  tags:
+    Project: this walkthrough
+    Purpose: nvcf-self-hosted-control-plane
+    Owner: rajjainl
+
+# Existing VPC, with two /24 private subnets created for this cluster.
+# The pre-existing EKS subnets are /28 (11 usable IPs) — far too small for
+# VPC CNI, which assigns a VPC IP per pod.
+vpc:
+  id: vpc-0123456789abcdef0
+  subnets:
+    private:
+      us-east-1a:
+        id: subnet-0123456789abcdef0   # 10.0.20.0/24
+      us-east-1b:
+        id: subnet-0123456789abcdef1   # 10.0.21.0/24
+  clusterEndpoints:
+    publicAccess: true    # IAM-authenticated API access for operators.
+    privateAccess: true   # In-VPC access path.
+
+iam:
+  withOIDC: true          # OpenBao issuerDiscovery requires a cluster OIDC issuer.
+
+addons:
+  - name: vpc-cni
+  - name: coredns
+  - name: kube-proxy
+  - name: aws-ebs-csi-driver   # Required: gp3 dynamic provisioning for Cassandra/NATS/OpenBao PVCs.
+    wellKnownPolicies:
+      ebsCSIController: true
+
+managedNodeGroups:
+  # Staging/Demo tier from the NVCF infrastructure-sizing guide: all
+  # control-plane services co-located on one 16 vCPU / 64 GiB node, no node
+  # selectors. This tier is explicitly not HA.
+  - name: cp-ng
+    instanceType: m6i.4xlarge
+    desiredCapacity: 1
+    minSize: 1
+    maxSize: 2
+    volumeSize: 100
+    volumeType: gp3
+    amiFamily: AmazonLinux2023
+    privateNetworking: true
+    labels:
+      nvcf.nvidia.com/workload: control-plane
+    iam:
+      withAddonPolicies:
+        ebs: true
+        cloudWatch: true

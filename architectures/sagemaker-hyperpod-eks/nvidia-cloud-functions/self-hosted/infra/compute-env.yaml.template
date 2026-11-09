@@ -1,0 +1,65 @@
+# NVCF compute-plane environment overrides — HyperPod GPU cluster, multi-cluster.
+#
+# Rendered by scripts/render-config.sh into
+#   $BUNDLE_DIR/deploy/stacks/nvcf-compute-plane/environments/<HELMFILE_ENV>.yaml
+# Contains the NGC API key. git-ignored. Never commit it.
+#
+# Override-only, layered on the stack's own environments/base.yaml.
+#
+# Placeholders: __DOMAIN__, __NGC_API_KEY__
+
+global:
+  # Chart and image access must match the control plane exactly.
+  helm:
+    sources:
+      url: "https://helm.ngc.nvidia.com/nvidia/nvcf"
+      username: "$oauthtoken"
+      password: "__NGC_API_KEY__"
+
+  image:
+    registry: nvcr.io
+    repository: nvidia/nvcf
+
+  imagePullSecrets:
+    - name: nvcr-pull-secret
+
+  nvcaOperator:
+    selfManaged:
+      # How the NVCA agent on THIS cluster reaches the control plane.
+      #
+      # This is a separate concern from global.workerEndpoints in the
+      # control-plane environment file. workerEndpoints are the URLs the control
+      # plane advertises into launched worker pods; these are the agent's own
+      # connections. Multi-cluster function execution needs both.
+      #
+      # Each URL is a per-service hostname covered by the wildcard record. The Host
+      # header overrides are kept so the Gateway HTTPRoutes match even if a URL is
+      # later pointed at the bare load balancer.
+      # (Upstream docs dial the bare LB and rely only on the Host header; that
+      # needs no DNS but then every URL must be the apex, which a wildcard
+      # record does not cover.)
+      # Requires helm-nvca-operator 1.12.0 or later.
+      icmsServiceURL: "http://sis.__DOMAIN__"
+      icmsServiceHostHeaderOverride: "sis.__DOMAIN__"
+      revalServiceURL: "http://reval.__DOMAIN__"
+      revalServiceHostHeaderOverride: "reval.__DOMAIN__"
+      natsURL: "nats://nats.__DOMAIN__:4222"
+      natsHostOverride: "nats.__DOMAIN__"
+
+  # global.nodeSelector pins the NVCA OPERATOR AND AGENT, not function workers.
+  #
+  # This is worth stating because the name invites the opposite reading. The
+  # function worker pod is created with no nodeSelector at all; NVCA controls
+  # where workers land through the node label it manages itself,
+  # nvca.nvcf.nvidia.io/schedule=true, which it applies only to the instance
+  # groups you register for NVCF. Training nodes never get that label, so
+  # training and served inference stay on separate nodes without any selector
+  # here.
+  #
+  # Leave this disabled. Pinning the agent to a named instance group couples
+  # the compute plane's control components to one group, and if that group is
+  # ever scaled to zero the operator and agent go Pending and the cluster drops
+  # to HEALTH=Unknown even though a worker is still running. With it disabled
+  # they schedule wherever there is room.
+  nodeSelector:
+    enabled: false

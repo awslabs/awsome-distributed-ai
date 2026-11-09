@@ -1,0 +1,90 @@
+# Envoy Gateway data plane for the NVCF control plane.
+#
+# SECURITY: the load balancer is INTERNAL, not internet-facing.
+#
+# The NVCF quickstart serves the control-plane API over plain HTTP on port 80
+# and includes the admin-token-issuer proxy, which mints the first admin token.
+# Its audience is this team, not anonymous public callers, so it must not be
+# reachable from the internet. Both the control-plane cluster (nvcf-cp) and the
+# compute cluster (my-hyperpod-eks-cluster) live in VPC vpc-0123456789abcdef0, so the
+# NVCA agent reaches this NLB over private VPC networking with no public path.
+#
+# Operator access from outside the VPC goes through `kubectl port-forward`,
+# which is authenticated by IAM against the EKS API server. Do not change
+# `aws-load-balancer-internal` to expose this publicly without putting a real
+# authenticating gate and TLS in front of it first.
+#
+# nvcf-cp has neither EKS Auto Mode load balancing nor the AWS Load Balancer
+# Controller, so the legacy in-tree AWS cloud-provider Service controller owns
+# this Service. That controller rejects a Service mixing TCP and UDP ports; all
+# three listeners here are TCP, so it is a valid configuration.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: eg
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        annotations:
+          service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+          service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+      envoyDeployment:
+        # 1 replica: the Staging/Demo tier runs a single control-plane node, so
+        # a second data-plane pod would add no availability. Raise this with the
+        # node count for the Minimal HA tier or above.
+        replicas: 1
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: eg
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: eg
+    namespace: envoy-gateway-system
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: nvcf-gateway
+  namespace: envoy-gateway
+spec:
+  gatewayClassName: eg
+  listeners:
+    # NVCF API, api-keys, invocation, ESS and SIS HTTPRoutes attach here.
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              nvcf/platform: "true"
+    # Worker-facing gRPC (nvcf-cli base_grpc_url is <addr>:10081).
+    - name: tcp
+      protocol: TCP
+      port: 10081
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              nvcf/platform: "true"
+    # NATS. The NVCA agent on the compute cluster dials this listener, so it is
+    # required for the multi-cluster topology.
+    - name: nats
+      protocol: TCP
+      port: 4222
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              nvcf/platform: "true"
