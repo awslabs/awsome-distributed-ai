@@ -126,20 +126,21 @@ sudo -E ldap-add-user.sh testuser2 10002 3000
 
 ### B5a. Duplicate UID / username is rejected
 
-The helper pre-checks the directory and refuses to add a user that
-would share a `uidNumber` with an existing entry (LDAP itself would
-happily allow this — two POSIX users with the same UID become the
-same principal on the shared `/home` and `/fsx`). Same check for the
-username. Regression guard for `ldap-add-user.sh`.
+The helper refuses to add a user whose `uidNumber` or username is
+already taken. It checks NSS first (local accounts, and the directory
+through SSSD), then the directory itself. LDAP alone would happily allow
+a duplicate `uidNumber` — two POSIX users with the same UID become the
+same principal on the shared `/home` and `/fsx`. Regression guard for
+`ldap-add-user.sh`.
 
 ```bash
 # Duplicate uidNumber
 sudo -E ldap-add-user.sh testuser3 10001 3000; echo "EXIT=$?"
-# Expected: EXIT=1, stderr: "uidNumber 10001 is already used by 'testuser1'. Pick a different uid."
+# Expected: EXIT=1, stderr: "uid 10001 is already used by 'testuser1' (local passwd or LDAP via NSS)."
 
 # Duplicate username
 sudo -E ldap-add-user.sh testuser1 10099 3000; echo "EXIT=$?"
-# Expected: EXIT=1, stderr: "Username 'testuser1' already exists in the directory."
+# Expected: EXIT=1, stderr: "Username 'testuser1' already exists (local passwd or LDAP via NSS)."
 
 # Confirm neither survived
 ldapsearch -x -H ldap://localhost -b "ou=People,dc=cluster,dc=internal" \
