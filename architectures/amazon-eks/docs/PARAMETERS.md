@@ -1,8 +1,6 @@
 # Parameters
 
-Every parameter of the five templates in [`../assets`](../assets). The root template
-(`eks-gpu-cluster-deploy-all.yaml`) exposes the ones an operator chooses and passes the rest between
-the child stacks.
+Every parameter of the six templates in [`../assets`](../assets). The root template (`eks-gpu-cluster-deploy-all.yaml`) exposes the ones an operator chooses and passes the rest between the child stacks.
 
 ## Root — `eks-gpu-cluster-deploy-all.yaml`
 
@@ -55,6 +53,8 @@ the child stacks.
 | `PrePullImage` | String | empty | An image pulled onto every GPU node by a DaemonSet, after the nodes are verified. The pull is started and not waited for: a multi-gigabyte pull must not be able to roll back a cluster. Watch it with `kubectl rollout status daemonset/prepull-$NODE_GROUP_NAME -n kube-system`, where `NODE_GROUP_NAME` is the node group name in lowercase with `_` as `-`. With `GpuNodeCount=0` there is no node to pull onto, and the pull starts once the count is raised |
 | `DeployFsxLustre` | String | `false` | `true` creates an FSx for Lustre filesystem and installs the `aws-fsx-csi-driver` add-on. Off by default because the GPU types carry local NVMe. The `FsxFileSystemId`, `FsxDnsName` and `FsxMountName` outputs are what a static `PersistentVolume` binds to |
 | `FsxStorageCapacity` | Number | `1200` | Filesystem size in GiB, as an enumeration rather than a minimum: FSx accepts only certain sizes and refuses the rest minutes into the deploy. Add a size to the template if you need one the list does not cover |
+| `DeployMonitoring` | String | `false` | `true` adds the nested stack `eks-monitoring.yaml`, which installs Prometheus, Pushgateway and Grafana in `MonitoringNamespace` on the system nodes ([section 11 of the README](../README.md#11-optional-in-cluster-monitoring)). No exporter is installed, so without `MonitoringScrapeServices` there are no GPU, node or EFA metrics |
+| `MonitoringNamespace`, `MonitoringScrapeNamespaces`, `MonitoringScrapeServices`, `MonitoringBundleSha256`, `MonitoringBundleUrl` | String | `in-cluster-monitoring`, empty, empty, empty (the bundle `eks-monitoring.yaml` pins), empty | Passed through to `eks-monitoring.yaml`; see its rows |
 
 ### Template location
 
@@ -127,3 +127,20 @@ both asserted at submit time.
 | `RecipeArn` | String | empty | An existing EC2 Image Builder recipe to build instead of the one this template composes. Its parent image needs the Systems Manager agent, which Image Builder uses to reach the build instance |
 | `BuildInstanceProfileName` | String | empty | Name of the build instance's instance profile. Empty creates a role carrying the two managed policies Image Builder needs with a profile around it. A build fetching from a private bucket or registry supplies its own, because the permissions are specific to that payload and, where a resource policy names the role, a role this template creates cannot be granted before it exists |
 | `ComponentVersion`, `RecipeVersion` | String | `1.0.0` | Image Builder resources are immutable per version. The recipe carries the inputs above as component parameter values, so changing the payload changes the recipe and needs `RecipeVersion` raised; the root passes one value to both |
+
+## `eks-monitoring.yaml`
+
+Created by the root only with `DeployMonitoring=true`; deployable on its own against any EKS cluster.
+
+| Parameter | Type | Default | What it decides |
+|---|---|---|---|
+| `ClusterName` | String | required | Cluster the monitoring is installed in. Fixed for the life of the stack: changing it on an update is not supported, because the install on the earlier cluster would not be removed |
+| `PrivateSubnetId`, `ClusterSecurityGroupId`, `BootstrapVpcId` | Subnet, security group, String | required, required, empty | Where the install build runs when `BootstrapVpcId` is set, as for the GPU node group's bootstrap |
+| `KubectlVersion` | String | `1.36.4` | `kubectl` the install build downloads, within one minor of the cluster |
+| `MonitoringNamespace` | String | `in-cluster-monitoring` | Namespace of the install. Create refuses when it exists and was not created by this stack. Changing it on an update installs into the new namespace, then removes the old install |
+| `MonitoringNodeSelector` | String | `role=system` | `key=value` label of the nodes the three pods run on. The default is the system node group of `eks-cluster.yaml`; on another cluster set a label its nodes carry, or empty for any untainted node |
+| `MonitoringScrapeNamespaces` | String | empty | Namespaces whose Services opt in with the label `awsome-distributed-ai/scrape: <MonitoringNamespace>` and a port named `metrics`. Each gets a read-only Role for Prometheus; a namespace created after the install is granted by the next update that changes a monitoring parameter once it exists |
+| `MonitoringScrapeServices` | String | empty | Existing exporters to read as `NAMESPACE/SERVICE:PORT`, where `PORT` is the Service's port name or its target (container) port number, not the Service's own port number, for example the GPU Operator's DCGM exporter `gpu-operator/nvidia-dcgm-exporter:9400`, which the bundled GPU dashboard reads. One with no target up is named in the build log and does not fail the stack |
+| `MonitoringBundleSha256` | String | empty | sha256 of the install bundle; the build refuses any other. Empty installs the bundle `eks-monitoring.yaml` pins, which [`tests/lint-templates.sh`](../tests/lint-templates.sh) check 11 asserts is the bundle built from `observability/prometheus-grafana/eks-in-cluster`; set it with `MonitoringBundleUrl` to install another bundle |
+| `MonitoringBundleUrl` | String | empty | Empty reads `s3://<S3BucketName>/<S3KeyPrefix>monitoring/<sha256>.tar.gz`, which the publish workflow uploads under its own digest so a published bundle never changes. An https URL installs an unpublished bundle, for example from a fork |
+| `S3BucketName`, `S3KeyPrefix` | String | `awsome-distributed-ai`, `templates/amazon-eks/` | Where the bundle is read from when `MonitoringBundleUrl` is empty |

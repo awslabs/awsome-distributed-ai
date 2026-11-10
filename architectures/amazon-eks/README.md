@@ -2,17 +2,17 @@
 
 This directory provides CloudFormation templates that create an Amazon EKS cluster with an EFA-enabled GPU node group for distributed training and inference, and the eksctl manifests that preceded them.
 
-- [`assets/eks-gpu-cluster-deploy-all.yaml`](./assets/eks-gpu-cluster-deploy-all.yaml): one-click CloudFormation stack (VPC, EKS cluster, system node group, GPU node group, device plugins, optional node AMI and FSx for Lustre). It creates the four templates below as nested stacks.
-- [`assets/eks-cluster-prerequisites.yaml`](./assets/eks-cluster-prerequisites.yaml), [`assets/eks-cluster.yaml`](./assets/eks-cluster.yaml), [`assets/eks-add-gpu-nodegroup.yaml`](./assets/eks-add-gpu-nodegroup.yaml), [`assets/eks-gpu-node-ami.yaml`](./assets/eks-gpu-node-ami.yaml): the same deploy split by concern, each also useful on its own. See [section 10](#10-deploying-a-single-template).
+- [`assets/eks-gpu-cluster-deploy-all.yaml`](./assets/eks-gpu-cluster-deploy-all.yaml): one-click CloudFormation stack (VPC, EKS cluster, system node group, GPU node group, device plugins, optional node AMI, FSx for Lustre and in-cluster monitoring). It creates the five templates below as nested stacks.
+- [`assets/eks-cluster-prerequisites.yaml`](./assets/eks-cluster-prerequisites.yaml), [`assets/eks-cluster.yaml`](./assets/eks-cluster.yaml), [`assets/eks-add-gpu-nodegroup.yaml`](./assets/eks-add-gpu-nodegroup.yaml), [`assets/eks-gpu-node-ami.yaml`](./assets/eks-gpu-node-ami.yaml), [`assets/eks-monitoring.yaml`](./assets/eks-monitoring.yaml): the same deploy split by concern, each also useful on its own. See [section 10](#10-deploying-a-single-template).
 - [`eksctl/`](./eksctl/): eksctl cluster manifests for the same topology, kept for users who manage clusters with eksctl. See [section 5](#5-eksctl-manifests).
 
 ## 1. Architecture
 
-<img align="center" src="../../assets/eks-model-training-single-az.png" width="60%" />
+<img align="center" src="../../assets/eks-model-training-single-az.png" width="60%" alt="VPC with a public subnet, a node subnet and a control plane subnet; an EKS cluster with a system node group and a GPU node group" />
 
 The stack creates a VPC with a public subnet, a private subnet for the nodes, and a second private subnet in another Availability Zone for the EKS control plane. It also creates an S3 gateway endpoint and ECR interface endpoints, so a pull from the Region's private ECR does not cross the NAT gateway. The EKS cluster runs two managed node groups: `system` (`SystemNodeCount` x `SystemInstanceType`, default 2 x `m7i.xlarge`) for CoreDNS and other cluster services, and `gpu` (`GpuNodeCount` x `GpuInstanceType`) for the workload. The GPU nodes launch from a launch template that places them in a cluster placement group, or targets a capacity reservation instead when one is given, attaches one EFA interface per network card, and assembles the local NVMe drives as a RAID0 volume. A CodeBuild project runs after the node groups exist; it installs the NVIDIA and EFA Kubernetes device plugins with Helm at pinned chart versions, waits until every GPU node advertises `nvidia.com/gpu` and `vpc.amazonaws.com/efa` in the counts its instance type carries, and optionally pulls a container image onto every GPU node. It does not report success before that wait ends, so a stack that reaches `CREATE_COMPLETE` has GPU nodes the scheduler can place work on rather than only the charts that are supposed to make them so.
 
-Two parts of that are optional. `DeployFsxLustre=true` adds an FSx for Lustre filesystem and its CSI driver for model weights. The `NodeImage` inputs add an EC2 Image Builder build that produces the node AMI, for the case where the AMI EKS resolves does not carry what the nodes need; [section 3](#3-gpu-instance-types) covers it.
+Three parts of that are optional. `DeployFsxLustre=true` adds an FSx for Lustre filesystem and its CSI driver for model weights. `DeployMonitoring=true` adds Prometheus, Pushgateway and Grafana inside the cluster; [section 11](#11-optional-in-cluster-monitoring) covers it. The `NodeImage` inputs add an EC2 Image Builder build that produces the node AMI, for the case where the AMI EKS resolves does not carry what the nodes need; [section 3](#3-gpu-instance-types) covers it.
 
 The GPU nodes carry the label `role=gpu` and the taint `nvidia.com/gpu=true:NoSchedule`, which is what the inference examples in this repository already expect: a pod from `examples/inference/` tolerates that taint as written, and the step in those instructions that installs the two device plugins is already done on a cluster from here. An example written for SageMaker HyperPod EKS is the exception, because it selects nodes by a HyperPod label this cluster does not carry; replace those selectors with `role=gpu` or `node.kubernetes.io/instance-type`.
 
@@ -233,7 +233,6 @@ aws logs describe-log-groups --query \
   "logGroups[?contains(logGroupName,'$STACK')].logGroupName" --output text
 ```
 
-
 ## 7. Updating the GPU instance type
 
 A managed node group cannot update its launch-template version and its instance type in the same operation; EKS returns `Version and release version updates cannot be combined with other updates`. Choose `GpuInstanceType` when creating the stack. To change it later, replace the GPU node group stack, or deploy a second one with a different `NodeGroupName` as in section 10, rather than updating the parameter in place.
@@ -257,9 +256,9 @@ aws cloudformation create-stack --stack-name "$STACK" \
     ParameterKey=SecondarySubnetAZ,ParameterValue=$AZ_B
 ```
 
-`GpuNodeCount=0` exercises the VPC, cluster, system node group, device plugin installation and the launch template without GPU capacity. The generated launch template can be read back with `aws ec2 describe-launch-template-versions` to check the interface list for a given `GpuInstanceType`.
+The sync copies the templates only. With `DeployMonitoring=true`, also upload the monitoring bundle the templates pin, as section 11 shows; without it the monitoring build fails at its download, after the cluster exists, and the create rolls back the cluster too. `--disable-rollback` keeps the cluster for a retry. `GpuNodeCount=0` exercises the VPC, cluster, system node group, device plugin installation and the launch template without GPU capacity. The generated launch template can be read back with `aws ec2 describe-launch-template-versions` to check the interface list for a given `GpuInstanceType`.
 
-`bash tests/lint-templates.sh` runs eleven mechanical checks before a deploy, nine of which need no AWS account; most of them read the templates with PyYAML (`python3 -m pip install pyyaml`): that the mappings cover the same instance types with every key present, that the committed interface block is what `tests/render-nic-block.py` produces, that every parameter has a row in `docs/PARAMETERS.md`, that every template the root fetches is published where the root looks for it, that the templates agree on the default and the validation of `KubernetesVersion` and that `KubectlVersion` is within one minor of it, that the FSx and node security groups carry the rules FSx for Lustre requires, that every relative link resolves, and that nothing installs an unpinned version. With an account it adds `validate-template` on each template and checks `NicLayout` against `ec2:DescribeInstanceTypes`. [`tests/gpu-efa-test.md`](./tests/gpu-efa-test.md) is the hardware procedure for the GPU and EFA claims the API cannot answer.
+`bash tests/lint-templates.sh` runs twelve mechanical checks before a deploy, ten of which need no AWS account; most of them read the templates with PyYAML (`python3 -m pip install pyyaml`): that the mappings cover the same instance types with every key present, that the committed interface block is what `tests/render-nic-block.py` produces, that every parameter has a row in `docs/PARAMETERS.md`, that every template the root fetches is published where the root looks for it, that the templates agree on the default and the validation of `KubernetesVersion` and that `KubectlVersion` is within one minor of it, that the FSx and node security groups carry the rules FSx for Lustre requires, that every relative link resolves, that nothing installs an unpinned version, and that the monitoring bundle digest the templates pin is the bundle built from the source and staged where the build reads it. With an account it adds `validate-template` on each template and checks `NicLayout` against `ec2:DescribeInstanceTypes`. [`tests/gpu-efa-test.md`](./tests/gpu-efa-test.md) is the hardware procedure for the GPU and EFA claims the API cannot answer.
 
 Known limits: the GPU instance type is fixed when the node group is created (section 7); a Capacity Block stack asks for its nodes at once, and until the block starts the launches fail with `Capacity Reservation ... is not yet active` and are retried, so create it after the block is active or within minutes of its start, and 40 minutes before the block ends EKS scales the node group to zero on its own, which the stack does not record, so delete the stack once the block is over; `GpuNodeCount` sets minimum, desired and maximum to the same value, so a partly available reservation fails the deploy rather than delivering fewer nodes; the verification counts the GPUs and EFA devices each node advertises and does not run CUDA, so a node image that advertises GPUs it cannot run work on, such as one built without Fabric Manager for an NVSwitch type, passes it; updating `GpuNodeCount` on a live stack re-runs the verification, which waits until the node group has exactly the new count; and each root or prerequisites deploy takes one NAT gateway and one Elastic IP.
 
@@ -274,7 +273,7 @@ Known limits: the GPU instance type is fixed when the node group is created (sec
 
 ## 10. Deploying a single template
 
-Each of the four child templates deploys on its own. The one that stands alone most usefully is [`assets/eks-add-gpu-nodegroup.yaml`](./assets/eks-add-gpu-nodegroup.yaml): it adds a GPU node group, its device plugins and their verification to a cluster that already exists, in a VPC with an EFA-capable security group. Pass `KubectlVersion` within one minor of the cluster's version, because the bootstrap downloads that `kubectl`; the node AMI follows the cluster's version whatever `KubernetesVersion` says. `HelmVersion`, `NvidiaDevicePluginChartVersion` and `EfaDevicePluginChartVersion` are parameters too, with the versions this architecture was tested with as their defaults.
+Each of the five child templates deploys on its own. The one that stands alone most usefully is [`assets/eks-add-gpu-nodegroup.yaml`](./assets/eks-add-gpu-nodegroup.yaml): it adds a GPU node group, its device plugins and their verification to a cluster that already exists, in a VPC with an EFA-capable security group. Pass `KubectlVersion` within one minor of the cluster's version, because the bootstrap downloads that `kubectl`; the node AMI follows the cluster's version whatever `KubernetesVersion` says. `HelmVersion`, `NvidiaDevicePluginChartVersion` and `EfaDevicePluginChartVersion` are parameters too, with the versions this architecture was tested with as their defaults.
 
 ```bash
 CLUSTER=my-cluster
@@ -306,3 +305,38 @@ helm upgrade aws-efa-k8s-device-plugin eks/aws-efa-k8s-device-plugin -n kube-sys
 ```
 
 Deleting one of these stacks while the cluster stays leaves three things on the cluster: the two Helm releases, which the other node groups keep using; the `prepull-` DaemonSet in `kube-system` named after the node group when `PrePullImage` was set, now matching no node; and the access entry EKS created for the node role, which EKS does not remove with the node group and whose role, named after the stack, no longer exists. `aws eks list-access-entries --cluster-name "$CLUSTER"` lists it, and `aws eks delete-access-entry` removes it. Delete these stacks before the cluster itself: the tool that created the cluster deletes only the node groups it created, and EKS refuses to delete a cluster that still has one (`Cluster has nodegroups attached`).
+
+## 11. Optional in-cluster monitoring
+
+`DeployMonitoring=true` adds the nested stack [`assets/eks-monitoring.yaml`](./assets/eks-monitoring.yaml). Its CodeBuild project runs [`install.py`](../../observability/prometheus-grafana/eks-in-cluster/install.py) from [`observability/prometheus-grafana/eks-in-cluster`](../../observability/prometheus-grafana/eks-in-cluster/), which installs Prometheus, Pushgateway and Grafana in `MonitoringNamespace` on the system nodes. That directory's README describes what is installed, what it reads and how to install it by hand on any EKS cluster; this section covers only what the stack adds.
+
+The stack reads the install code as one bundle whose sha256 `eks-monitoring.yaml` pins. `MonitoringBundleSha256` is empty by default, which selects that pinned bundle, so an update to newer templates that keeps the parameter's previous value, as the console does unless told otherwise, still installs the bundle those templates pin. The publish workflow uploads each bundle under its own digest, so a published bundle never changes. Every stack operation, a delete included, reads the bundle, so a bundle uploaded to a bucket of your own has to stay there for the life of the stack. To deploy from a bucket of your own, as section 8 does, or to test an unpublished change, build the bundle and upload it next to the templates, under the same `S3KeyPrefix`. The script needs PyYAML (`python3 -m pip install pyyaml`) and prints the bundle's digest, which is the one the template pins when `lint-templates.sh` check 11 passes and is otherwise the value to give `MonitoringBundleSha256`. Set the clone's path and the bucket and prefix of section 8 first:
+
+```bash
+export REPO_ROOT=
+export BUCKET=
+export S3_KEY_PREFIX=templates/amazon-eks/
+```
+
+```bash
+if [ -z "$REPO_ROOT" ] || [ -z "$BUCKET" ]; then echo "set REPO_ROOT and BUCKET first"; else
+STAGE="$(mktemp -d)"
+(cd "$REPO_ROOT" && python3 .github/scripts/stage-template-publish.py --manifest .github/template-publish-manifest.yml --stage-dir "$STAGE" --cfn-list /dev/null --shell-list /dev/null --obsolete-list /dev/null) && aws s3 cp --recursive "$STAGE/amazon-eks/monitoring/" "s3://$BUCKET/${S3_KEY_PREFIX}monitoring/"
+fi
+```
+
+Grafana is reached through a port-forward from wherever your kubeconfig reaches the cluster; the stack output `GrafanaPortForward` prints the `kubectl port-forward` command and `GrafanaPassword` the command that reads the admin password. Nothing is published through a load balancer, an ingress or a host port.
+
+What the stack reads is decided by two parameters. `MonitoringScrapeNamespaces` names namespaces whose Services opt in with the label `awsome-distributed-ai/scrape: <MonitoringNamespace>` and a port named `metrics`. `MonitoringScrapeServices` names existing exporters as `NAMESPACE/SERVICE:PORT`, for example the GPU Operator's DCGM exporter, which the bundled GPU dashboard reads. An entry that has no target up a minute after the install is named in the build log and does not fail the create or update, so an exporter installed after the cluster can be named from the start; Prometheus reads it once it runs. The stack installs no exporter, so a cluster from this stack alone has no GPU, node or EFA metrics: this architecture installs the NVIDIA device plugin, not the GPU Operator, and two DCGM exporters on one GPU conflict. For EFA counters see [`observability/efa-node-exporter`](../../observability/efa-node-exporter/).
+
+Updating the stack applies the new parameters and bundle to the objects it created; an update that cannot finish rolls back to the previous ones. The cluster needs the authentication mode `API` or `API_AND_CONFIG_MAP`, because the install build is granted access with an access entry; like the GPU node group's bootstrap, that build holds `AmazonEKSClusterAdminPolicy`, so anyone who can start or change it, invoke its trigger function, or update the stack's `MonitoringBundleUrl` and `MonitoringBundleSha256` can run code as cluster-admin: setting `MonitoringBundleUrl` to another tar.gz and `MonitoringBundleSha256` to its digest runs that code. Changing `MonitoringNamespace` installs into the new namespace, then removes the old install. Deleting the stack, or setting `DeployMonitoring` back to `false`, removes the namespace, the grants and everything in them, and refuses to remove a namespace that holds objects the stack did not create. A delete that cannot remove the install does not fail the stack: the install remains, and the build's log says why. That log group, the stack output `MonitoringLogGroup`, is kept when the stack is deleted or `DeployMonitoring` is set back to `false`; note its name before either, and delete it once it is no longer needed. If the delete build does not answer within its timeout, the nested stack ends in `DELETE_FAILED`. In either case, remove what remains with another identity that has cluster access; in the `DELETE_FAILED` case, then delete the stack again. Use a clone checked out at the commit of the stack's templates, whose `install.py` is the one the bundle carried, and set its path and the stack's `MonitoringNamespace` first:
+
+```bash
+export REPO_ROOT=
+export NAMESPACE=in-cluster-monitoring
+```
+
+```bash
+OWNER="$(kubectl get namespace "$NAMESPACE" -o jsonpath='{.metadata.labels.awsome-distributed-ai/monitoring-owner}')"
+if [ -z "$OWNER" ]; then echo "namespace $NAMESPACE is absent or has no owner label"; else python3 "$REPO_ROOT/observability/prometheus-grafana/eks-in-cluster/install.py" delete --namespace "$NAMESPACE" --owner "$OWNER"; fi
+```

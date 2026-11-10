@@ -4,7 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import gzip
+import hashlib
+import io
 import re
+import tarfile
 import shutil
 import sys
 from pathlib import Path
@@ -101,6 +105,53 @@ def validate_references(cfn_sources: list[Path], destination_keys: set[str]) -> 
     return errors
 
 
+def bundle_tar(source_dir: Path, patterns: list[str]) -> bytes:
+    """An uncompressed tar of the files of source_dir matching patterns, identical for identical contents.
+
+    Names sorted, mtime 0, uid/gid 0, mode 0644. Its sha256 names the bundle and is what the template
+    pins and the bootstrap checks: compressed bytes depend on the zlib build, the tar does not.
+    """
+    files = sorted({f for pattern in patterns for f in source_dir.glob(pattern) if f.is_file()})
+    links = [f for f in files if f.is_symlink()]
+    if links:
+        raise ValueError(f"{source_dir}: a bundle holds no symbolic links: {', '.join(str(f) for f in links)}")
+    if not files:
+        raise ValueError(f"{source_dir}: no files match {patterns}")
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as tar:
+        for f in files:
+            data = f.read_bytes()
+            info = tarfile.TarInfo(f.relative_to(source_dir).as_posix())
+            info.size, info.mtime, info.mode, info.uid, info.gid = len(data), 0, 0o644, 0, 0
+            info.uname = info.gname = ""
+            tar.addfile(info, io.BytesIO(data))
+    return raw.getvalue()
+
+
+def bundle_bytes(tar: bytes) -> bytes:
+    """The published tar.gz of a bundle_tar(), with no gzip name or time."""
+    out = io.BytesIO()
+    with gzip.GzipFile(filename="", mode="wb", fileobj=out, mtime=0) as gz:
+        gz.write(tar)
+    return out.getvalue()
+
+
+def stage_bundle(entry: dict, repo_root: Path, stage_dir: Path) -> tuple[str, str]:
+    """Stage one bundle entry under <key_prefix><sha256>.tar.gz; returns (key, sha256)."""
+    source = (repo_root / entry["bundle"]).resolve()
+    source.relative_to(repo_root)
+    if not source.is_dir():
+        raise ValueError(f"bundle source is not a directory: {entry['bundle']}")
+    tar = bundle_tar(source, list(entry["files"]))
+    digest = hashlib.sha256(tar).hexdigest()
+    data = bundle_bytes(tar)
+    key = normalize_key(f"{entry['key_prefix'].rstrip('/')}/{digest}.tar.gz")
+    destination = stage_dir / key
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(data)
+    return key, digest
+
+
 def write_list(path: Path, files: list[Path]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(f"{file}\n" for file in files), encoding="utf-8")
@@ -119,7 +170,17 @@ def main() -> int:
     parser.add_argument("--shell-list", required=True, type=Path)
     parser.add_argument("--obsolete-list", required=True, type=Path)
     parser.add_argument("--repo-root", default=Path.cwd(), type=Path)
+    parser.add_argument("--print-bundle-digests", action="store_true",
+                        help="print '<bundle dir> <sha256>' for every bundle entry and exit")
     args = parser.parse_args()
+
+    if args.print_bundle_digests:
+        root = args.repo_root.resolve()
+        for entry in load_manifest(args.manifest)["entries"]:
+            if isinstance(entry, dict) and "bundle" in entry:
+                tar = bundle_tar((root / entry["bundle"]).resolve(), list(entry["files"]))
+                print(entry["bundle"], hashlib.sha256(tar).hexdigest())
+        return 0
 
     repo_root = args.repo_root.resolve()
     manifest = load_manifest(args.manifest)
@@ -136,6 +197,20 @@ def main() -> int:
     for index, entry in enumerate(manifest["entries"], start=1):
         if not isinstance(entry, dict):
             errors.append(f"entry {index}: must be a mapping")
+            continue
+        if "bundle" in entry:
+            # A content-addressed key never changes meaning, so an upload can never overwrite a
+            # bundle a deployed stack pins.
+            try:
+                key, digest = stage_bundle(entry, repo_root, stage_dir)
+            except (ValueError, KeyError, TypeError) as exc:
+                errors.append(f"entry {index}: bundle: {exc}")
+                continue
+            if key in destination_to_source:
+                errors.append(f"entry {index}: duplicate destination key '{key}'")
+                continue
+            destination_to_source[key] = repo_root / entry["bundle"]
+            print(f"Bundle {entry['bundle']} -> {key} (sha256 {digest})")
             continue
         source_value = entry.get("source")
         key_value = entry.get("key")
