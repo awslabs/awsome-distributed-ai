@@ -1,0 +1,12 @@
+.env
+runtime/
+results/
+data/
+*.sqsh
+__pycache__/
+# These are source files, not generated libraries or datasets.
+!lib/
+!lib/*.py
+!lib/*.sh
+!lib/*.cu
+!observability/dcgm.csv
