@@ -1,0 +1,59 @@
+# Ray cluster for clusters without the SageMaker Studio Ray integration (see the README appendix).
+# Apply with: kubectl apply -n "$RAY_NAMESPACE" -f kubernetes/raycluster.yaml
+# Replace the instance type and the FSx PVC name if yours differ.
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: ray-medical-finetune
+spec:
+  rayVersion: "2.55.1"
+  enableInTreeAutoscaling: false
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: "0.0.0.0"
+      num-gpus: "0"
+    template:
+      spec:
+        containers:
+          - name: ray-head
+            image: public.ecr.aws/sagemaker/sagemaker-distribution:4.5.0-cpu
+            resources:
+              requests: {cpu: "6", memory: 24Gi}
+              limits: {cpu: "6", memory: 24Gi}
+            ports:
+              - {containerPort: 6379, name: gcs-server}
+              - {containerPort: 8265, name: dashboard}
+              - {containerPort: 10001, name: client}
+              - {containerPort: 8000, name: serve}   # Ray Serve; exposed on <cluster>-head-svc
+            volumeMounts:
+              - {name: fsx, mountPath: /mnt/fsx}
+              - {name: shm, mountPath: /dev/shm}
+        volumes:
+          - name: fsx
+            persistentVolumeClaim: {claimName: fsx-pvc}   # <-- your FSx PVC
+          - name: shm
+            emptyDir: {medium: Memory, sizeLimit: 8Gi}
+  workerGroupSpecs:
+    - groupName: gpu
+      replicas: 1
+      minReplicas: 1
+      maxReplicas: 1
+      rayStartParams: {}
+      template:
+        spec:
+          nodeSelector:
+            node.kubernetes.io/instance-type: ml.g6e.48xlarge   # <-- your GPU instance type
+          containers:
+            - name: ray-worker
+              image: public.ecr.aws/sagemaker/sagemaker-distribution:4.5.0-gpu
+              resources:   # 1 GPU to train + 1 GPU for Ray Serve
+                requests: {cpu: "24", memory: 160Gi, nvidia.com/gpu: 2}
+                limits: {cpu: "24", memory: 160Gi, nvidia.com/gpu: 2}
+              volumeMounts:
+                - {name: fsx, mountPath: /mnt/fsx}
+                - {name: shm, mountPath: /dev/shm}
+          volumes:
+            - name: fsx
+              persistentVolumeClaim: {claimName: fsx-pvc}   # <-- your FSx PVC
+            - name: shm
+              emptyDir: {medium: Memory, sizeLimit: 64Gi}
