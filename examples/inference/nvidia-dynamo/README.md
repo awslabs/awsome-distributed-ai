@@ -21,6 +21,12 @@ flavors — four self-contained scenarios driven by the Dynamo operator and its
 See [BENCHMARKS.md](BENCHMARKS.md) for measured TTFT / ITL / throughput, and
 [OBSERVABILITY.md](OBSERVABILITY.md) for wiring Dynamo metrics into the HyperPod Grafana.
 
+> **Related sample in this directory:** [`deepep-v2-efa/`](./deepep-v2-efa) serves a Mixture-of-Experts
+> model (`Qwen/Qwen3-30B-A3B-FP8`) with Dynamo's **vLLM** backend (`dynamo.frontend` + `dynamo.vllm`)
+> and DeepEP-V2 expert-parallel all-to-all over EFA (NCCL-GIN CPU-proxy) on `p5en.48xlarge` EKS nodes.
+> It is a separate recipe — a plain StatefulSet with the file discovery backend, not the Dynamo operator
+> and the DGD scenarios below — and has its own row in the [inference index](../README.md).
+
 ## Prerequisites
 
 | Requirement | Detail |
