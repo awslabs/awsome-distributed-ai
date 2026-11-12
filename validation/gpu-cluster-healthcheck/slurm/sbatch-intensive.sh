@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 #SBATCH --job-name=gpu-healthcheck-intensive
 #SBATCH --output=gpu-healthcheck-intensive-%j.out
 #SBATCH --error=gpu-healthcheck-intensive-%j.err
@@ -24,10 +26,9 @@ HEALTHCHECK_DIR="${HEALTHCHECK_DIR:-/shared/gpu-health-checks}"
 # Results base directory
 RESULTS_BASE="${RESULTS_BASE:-/shared/healthcheck-results}"
 
-# NCCL test container image. The `docker://` scheme is required on older Pyxis
-# (< v0.20); newer Pyxis treats it as a no-op. See checks/5-nccl-allreduce.sh
-# for the rationale.
-NCCL_CONTAINER="${NCCL_CONTAINER:-docker://public.ecr.aws/hpc-cloud/nccl-tests:latest}"
+# Optional NCCL image override; Check 5 owns the pinned default.
+# A staged .sqsh or Enroot registry reference may be supplied by the caller.
+NCCL_CONTAINER="${NCCL_CONTAINER:-}"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # End User Variables

@@ -8,7 +8,8 @@
 # presented as current, or a known-stale phrase. Run from anywhere; paths are
 # resolved relative to this script's location (architectures/aws-pcs/).
 #
-#   bash architectures/aws-pcs/tests/lint-docs.sh
+#   bash architectures/aws-pcs/tests/lint-docs.sh [path/to/ws-pcs-cluster.yaml]
+# GPU contract checks require Python 3 and PyYAML (also used by publish staging).
 #
 # Exit code is non-zero if any check fails, so it can gate a PR in CI.
 #
@@ -113,6 +114,157 @@ while IFS= read -r anchor; do
     | sed -E 's/[^a-z0-9 -]//g; s/ /-/g')
   grep -qx "$anchor" <<<"$slugs" || report "README.md internal anchor '#$anchor' has no matching heading"
 done < <(grep -oE '\]\(#[a-z0-9-]+\)' README.md | sed -E 's/\]\(#//; s/\)//' | sort -u)
+
+# 7. Nested GPU caller contracts and evaluated launch options (local, no AWS).
+# PyYAML is also required by the existing template-publish staging check.
+python3 - "${1:-}" <<'PY' || report "GPU nested-template contract regression"
+from pathlib import Path
+import itertools
+import sys
+import yaml
+
+class CfnLoader(yaml.SafeLoader):
+    pass
+
+def intrinsic(loader, tag, node):
+    if isinstance(node, yaml.ScalarNode):
+        value = loader.construct_scalar(node)
+    else:
+        value = loader.construct_sequence(node, deep=True)
+    return {tag if tag in ('Ref', 'Condition') else 'Fn::' + tag: value}
+
+CfnLoader.add_multi_constructor('!', intrinsic)
+def load(path):
+    return yaml.load(Path(path).read_text(), Loader=CfnLoader)
+
+def evaluate(value, params, conditions):
+    if isinstance(value, list):
+        return [evaluate(v, params, conditions) for v in value]
+    if not isinstance(value, dict):
+        return value
+    if len(value) == 1:
+        key, arg = next(iter(value.items()))
+        if key == 'Ref':
+            return params.get(arg, arg)
+        if key == 'Condition':
+            return evaluate(conditions[arg], params, conditions)
+        if key == 'Fn::If':
+            branch = 1 if evaluate(conditions[arg[0]], params, conditions) else 2
+            return evaluate(arg[branch], params, conditions)
+        if key in ('Fn::Equals', 'Fn::Not', 'Fn::And', 'Fn::Or'):
+            args = evaluate(arg, params, conditions)
+            return (args[0] == args[1] if key == 'Fn::Equals' else
+                    not args[0] if key == 'Fn::Not' else
+                    any(args) if key == 'Fn::Or' else all(args))
+    return {k: evaluate(v, params, conditions) for k, v in value.items()}
+
+parent = load('assets/pcs-ml-cluster-deploy-all.yaml')
+parameters = parent['Parameters']
+assert parameters['PseriesInstanceType']['Default'] == 'p5.48xlarge'
+assert parameters['CapacityReservationType']['Default'] == 'capacity-block'
+assert parameters['PseriesPlacementGroupName']['Default'] == ''
+expected = {
+    'p5.48xlarge': ('PseriesCNGStack', 32),
+    'p5e.48xlarge': ('PseriesCNGStack', 32),
+    'p5en.48xlarge': ('PseriesCNGStack', 16),
+    'p6-b200.48xlarge': ('P6B200CNGStack', 8),
+    'p6-b300.48xlarge': ('P6B300CNGStack', 17),
+    'g7.48xlarge': ('G7CNGStack', 2),
+}
+assert set(parameters['PseriesInstanceType']['AllowedValues']) == set(expected)
+# Validate every nested call, including login, CPU, prerequisites and cluster.
+for name, resource in parent['Resources'].items():
+    if resource['Type'] != 'AWS::CloudFormation::Stack':
+        continue
+    props = resource['Properties']
+    filename = props['TemplateURL']['Fn::Sub'].split('${S3KeyPrefix}')[1]
+    child = load('assets/' + filename)
+    assert not (set(props['Parameters']) - set(child['Parameters'])), name
+    assert all('Default' in spec or key in props['Parameters']
+               for key, spec in child['Parameters'].items()), name
+
+# Optionally check a real external caller, without making Workshop assets a dependency.
+if sys.argv[1]:
+    caller = load(sys.argv[1])
+    call = caller['Resources']['PcsMlCluster']['Properties']['Parameters']
+    assert not (set(call) - set(parameters)), 'external caller names'
+    defaults = {k: v.get('Default') for k, v in caller['Parameters'].items()}
+    for key, value in evaluate(call, defaults, caller.get('Conditions', {})).items():
+        if 'AllowedValues' in parameters[key]:
+            assert value in parameters[key]['AllowedValues'], (key, value)
+    for output in caller['Outputs'].values():
+        value = output.get('Value', {})
+        if isinstance(value, dict) and 'Fn::GetAtt' in value:
+            target = value['Fn::GetAtt']
+            if isinstance(target, str) and target.startswith('PcsMlCluster.Outputs.'):
+                assert target.split('.')[-1] in parent['Outputs'], target
+    print('External Workshop caller parameters/defaults/outputs: PASS')
+
+# Generic login/CPU defaults still omit reservation, market and purchase settings.
+generic = load('assets/add-cng.yaml')
+gp = {k: v.get('Default') for k, v in generic['Parameters'].items()}
+gc = generic['Conditions']
+glt = evaluate(generic['Resources']['PCSLaunchTemplate']['Properties']['LaunchTemplateData'], gp, gc)
+assert all(glt.get(k, 'AWS::NoValue') == 'AWS::NoValue' for k in ('InstanceMarketOptions', 'CapacityReservationSpecification', 'Placement', 'NetworkInterfaces'))
+assert evaluate(generic['Resources']['PCSNodeGroupCompute']['Properties'].get('PurchaseOption', 'AWS::NoValue'), gp, gc) == 'AWS::NoValue'
+for count in (1, 2):
+    gp['EfaInterfaceCount'] = count
+    nics = evaluate(generic['Resources']['PCSLaunchTemplate']['Properties']['LaunchTemplateData']['NetworkInterfaces'], gp, gc)
+    nics = [n for n in nics if n != 'AWS::NoValue']
+    assert len(nics) == count and all(n['InterfaceType'] == 'efa' for n in nics)
+
+# Keep targeted CPU ODCR and explicit placement independent of EFA (#1267).
+assert generic['Parameters']['CapacityReservationType']['Default'] == 'targeted-odcr'
+for count, placement, reservation in itertools.product((0, 1, 2), ('', 'existing-pg'), ('', 'cr-test')):
+    cp = {k: v.get('Default') for k, v in generic['Parameters'].items()}
+    cp.update(EfaInterfaceCount=count, PlacementGroupName=placement, CapacityReservationId=reservation)
+    lt = evaluate(generic['Resources']['PCSLaunchTemplate']['Properties']['LaunchTemplateData'], cp, gc)
+    assert lt.get('InstanceMarketOptions', 'AWS::NoValue') == 'AWS::NoValue'
+    assert lt['CapacityReservationSpecification'] == ({'CapacityReservationTarget': {'CapacityReservationId': reservation}} if reservation else 'AWS::NoValue')
+    assert lt['Placement'] == ({'GroupName': placement or 'PlacementGroup'} if count or placement else 'AWS::NoValue')
+    assert evaluate(gc['CreatePlacementGroup'], cp, gc) == bool(count and not placement)
+
+cases = 0
+for instance, enabled, reservation, mode, placement in itertools.product(
+        expected, ('true', 'false'), ('', 'cr-test'),
+        ('capacity-block', 'targeted-odcr'), ('', 'existing-pg')):
+    params = {k: v.get('Default') for k, v in parameters.items()}
+    params.update(PseriesInstanceType=instance, DeployPseriesCNG=enabled,
+                  CapacityReservationId=reservation, CapacityReservationType=mode,
+                  PseriesPlacementGroupName=placement)
+    cond = parent['Conditions']
+    selected = [name for name in {v[0] for v in expected.values()}
+                if evaluate(cond[parent['Resources'][name]['Condition']], params, cond)]
+    assert selected == ([] if enabled == 'false' else [expected[instance][0]])
+    rule = parent['Rules']['G7ReservationType']
+    accepted = (not evaluate(rule['RuleCondition'], params, cond) or
+                evaluate(rule['Assertions'][0]['Assert'], params, cond))
+    assert accepted == (not (enabled == 'true' and instance == 'g7.48xlarge'
+                            and reservation and mode == 'capacity-block'))
+    if not selected or not accepted:
+        continue
+    call = parent['Resources'][selected[0]]['Properties']
+    child = load('assets/' + call['TemplateURL']['Fn::Sub'].split('${S3KeyPrefix}')[1])
+    cp = {k: v.get('Default') for k, v in child['Parameters'].items()}
+    cp.update(evaluate(call['Parameters'], params, cond))
+    assert cp['CapacityReservationType'] == mode
+    assert cp['PlacementGroupName'] == placement
+    cc = child['Conditions']
+    lt = evaluate(child['Resources']['PCSLaunchTemplate']['Properties']['LaunchTemplateData'], cp, cc)
+    block = bool(reservation and mode == 'capacity-block')
+    assert lt.get('InstanceMarketOptions', 'AWS::NoValue') == ({'MarketType': 'capacity-block'} if block else 'AWS::NoValue')
+    assert evaluate(child['Resources']['PCSNodeGroupCompute']['Properties'].get('PurchaseOption', 'AWS::NoValue'), cp, cc) == ('CAPACITY_BLOCK' if block else 'AWS::NoValue')
+    assert lt['CapacityReservationSpecification'] == ({'CapacityReservationTarget': {'CapacityReservationId': reservation}} if reservation else 'AWS::NoValue')
+    assert lt['Placement'] == ('AWS::NoValue' if block else {'GroupName': placement or 'PlacementGroup'})
+    assert evaluate(cc['CreatePlacementGroup'], cp, cc) == (not block and not placement)
+    nics = [nic for nic in lt['NetworkInterfaces'] if nic != 'AWS::NoValue']
+    assert len(nics) == expected[instance][1], instance
+    if instance == 'g7.48xlarge':
+        assert [(nic['NetworkCardIndex'], nic['DeviceIndex'], nic['InterfaceType']) for nic in nics] == [(0, 0, 'efa'), (1, 1, 'efa-only')]
+        assert nics[1]['SubnetId'] == 'AWS::NoValue'
+    cases += 1
+print(f'GPU caller/launch contracts: PASS ({cases} enabled valid combinations; disabled and rejected combinations checked)')
+PY
 
 if [ "$fail" -eq 0 ]; then
   echo "docs lint: PASS (no stale parameter references, all deploy-all params documented, NodeLifecycleActions in lock-step, lifecycle scripts exist, README anchors resolve)"

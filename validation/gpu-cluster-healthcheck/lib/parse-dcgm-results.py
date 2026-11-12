@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Parse DCGM diagnostic JSON output into severity classification.
 
 Reads dcgmi diag -j output from stdin and produces a structured JSON report
@@ -66,27 +68,65 @@ def parse_dcgm_json(raw_input: str) -> dict:
     if start == -1:
         raise ValueError("No JSON object found in dcgmi output")
 
-    # Find matching closing brace
-    depth = 0
-    for i, ch in enumerate(raw_input[start:], start):
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(raw_input[start : i + 1])
-                except json.JSONDecodeError:
-                    break
+    # raw_decode consumes exactly one JSON value and tolerates trailing text
+    # (dcgmi may append non-JSON lines after the payload).
+    try:
+        value, _ = json.JSONDecoder().raw_decode(raw_input[start:])
+        return value
+    except json.JSONDecodeError:
+        pass
 
     raise ValueError("Unable to parse JSON from dcgmi output")
 
 
+# DCGM error_severity is a different enum from the legacy warning_level.
+# NVIDIA/DCGM dcgmlib/dcgm_errors.h (dcgmErrorSeverity_t): NONE=0, MONITOR=1,
+# ISOLATE=2, UNKNOWN=3, TRIAGE=4, CONFIG=5, RESET=6. Map onto this suite's
+# SEVERITY_MAP levels; unknown/triage/config require review and map to RESET.
+# The original warning fields are preserved in the output.
+DCGM_ERROR_SEVERITY = {0: 0, 1: 1, 2: 3, 3: 2, 4: 2, 5: 2, 6: 2}
+
+# dcgmi/Diag.cpp HelperDisplayDiagResult emits Pass / Skip / Fail / Not Run.
+# (DCGM_DIAG_RESULT_WARN is displayed as Fail in JSON output.)
+_NOT_EXERCISED = ("SKIP", "SKIPPED", "NOT_RUN", "NOT RUN")
+
+
+def _warning_entries(entry) -> list:
+    """Normalize the modern ``warnings`` field to a list.
+
+    dcgmi emits ``warnings`` as a list of objects carrying ``warning``,
+    ``error_id``, ``error_category`` and ``error_severity``. A single object
+    or a list of plain strings (older schemas) is tolerated; non-list shapes
+    never raise.
+    """
+    warnings = entry.get("warnings", [])
+    if isinstance(warnings, dict):
+        return [warnings]
+    if isinstance(warnings, str):
+        return [warnings] if warnings else []
+    if isinstance(warnings, list):
+        return warnings
+    return []
+
+
+def _warning_level(warning) -> int:
+    """Severity level contributed by one ``warnings`` element."""
+    if isinstance(warning, dict):
+        try:
+            value = int(warning.get("error_severity", -1))
+        except (ValueError, TypeError):
+            value = -1
+        return DCGM_ERROR_SEVERITY.get(value, 2)
+    # A warning without a severity field still needs review.
+    return 1
+
+
 def classify_results(dcgm_data: dict, diag_level: int) -> dict:
-    """Classify DCGM diagnostic results by severity.
+    """Classify actual test records; missing or skipped coverage cannot pass.
 
     Args:
-        dcgm_data: Parsed DCGM JSON output
+        dcgm_data: Parsed DCGM JSON output (``DCGM Diagnostic`` root for
+            current dcgmi, ``DCGM GPU Diagnostic`` for older releases)
         diag_level: Diagnostic level (2 or 4)
 
     Returns:
@@ -95,145 +135,105 @@ def classify_results(dcgm_data: dict, diag_level: int) -> dict:
     result = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "diag_level": diag_level,
-        # Canonical fields consumed by the aggregator
-        "status": "PASS",
-        "severity": "PASS",
-        # Detailed fields for richer consumers
-        "overall_status": "PASS",
-        "overall_severity": "PASS",
-        "overall_action": ACTIONS["PASS"],
         "test_summary": [],
         "warnings": [],
     }
+    if not isinstance(dcgm_data, dict):
+        dcgm_data = {"runtime_error": "DCGM output must be a JSON object"}
+    root = dcgm_data.get("DCGM Diagnostic",
+                         dcgm_data.get("DCGM GPU Diagnostic", dcgm_data))
+    if not isinstance(root, dict):
+        root = dcgm_data
+    categories = root.get("test_categories", root.get("categories", []))
+    tests = [(category.get("category", "unknown"), test)
+             for category in categories for test in category.get("tests", [])]
+    tests.extend(("unknown", test) for test in root.get("tests", []))
+    runtime_errors = [source[key] for source in (dcgm_data, root)
+                      for key in ("runtime_error", "error") if source.get(key)]
+    global_errors = dcgm_data.get("global_errors", []) or root.get("global_errors", [])
+    max_level = 2 if runtime_errors or not tests else 0
+    if global_errors:
+        result["global_errors"] = global_errors
+        for error in global_errors:
+            max_level = max(max_level, _warning_level(error))
+    if runtime_errors:
+        result["runtime_errors"] = runtime_errors
 
-    max_severity_level = 0
+    def classify_entry(entry):
+        status = str(entry.get("status", "UNKNOWN")).upper()
+        try:
+            level = int(entry.get("warning_level", 0))
+        except (ValueError, TypeError):
+            level = 2
+        level = level if level in SEVERITY_MAP else 2
+        for warning in _warning_entries(entry):
+            level = max(level, _warning_level(warning))
+        if status == "FAIL" and level == 0:
+            level = 3
+        elif status in ("WARN", "WARNING") + _NOT_EXERCISED:
+            level = max(level, 1)
+        elif status not in ("PASS", "FAIL"):
+            level = max(level, 2)
+        return status, level
 
-    # Navigate DCGM JSON structure
-    # DCGM output structure varies by version; handle common formats
-    tests = []
-
-    if "DCGM GPU Diagnostic" in dcgm_data:
-        diag_root = dcgm_data["DCGM GPU Diagnostic"]
-        if "test_categories" in diag_root:
-            for category in diag_root["test_categories"]:
-                cat_name = category.get("category", "unknown")
-                for test in category.get("tests", []):
-                    tests.append({
-                        "category": cat_name,
-                        "test": test,
-                    })
-    elif "categories" in dcgm_data:
-        for category in dcgm_data["categories"]:
-            cat_name = category.get("category", "unknown")
-            for test in category.get("tests", []):
-                tests.append({
-                    "category": cat_name,
-                    "test": test,
-                })
-    elif "tests" in dcgm_data:
-        for test in dcgm_data["tests"]:
-            tests.append({
-                "category": "unknown",
-                "test": test,
-            })
-
-    # Process each test
-    for test_entry in tests:
-        test = test_entry["test"]
+    exercised = False
+    for category, test in tests:
+        details = []
+        levels = []
+        states = []
+        summary = test.get("test_summary", {})
+        entries = test.get("results", [])
         test_name = test.get("name", "unknown")
-        human_name = DCGM_TEST_NAMES.get(test_name, test_name)
-
-        test_result = {
-            "name": test_name,
-            "display_name": human_name,
-            "category": test_entry["category"],
-            "status": "PASS",
-            "severity": "PASS",
-            "gpu_details": [],
-        }
-        test_max_severity_level = 0
-
-        # Check per-GPU results
-        results_list = test.get("results", [])
-        for gpu_result in results_list:
-            gpu_id = gpu_result.get("gpu_id", gpu_result.get("gpuId", "N/A"))
-            status = gpu_result.get("status", "PASS")
-            warning = gpu_result.get("warning", "")
-            raw_warning_level = gpu_result.get("warning_level", 0)
-            info = gpu_result.get("info", "")
-
-            # Safely coerce warning_level to int (DCGM may emit it as a string)
-            try:
-                warning_level = int(raw_warning_level)
-            except (TypeError, ValueError):
-                warning_level = 0
-
-            gpu_entry = {
-                "gpu_id": gpu_id,
-                "status": status,
-                "warning": warning,
-                "warning_level": warning_level,
-                "info": info,
-            }
-
-            # Classify severity
-            if warning_level > 0:
-                severity = SEVERITY_MAP.get(warning_level, "MONITOR")
-                gpu_entry["severity"] = severity
-                gpu_entry["action"] = ACTIONS.get(severity, "Review manually")
-
-                max_severity_level = max(max_severity_level, warning_level)
-                test_max_severity_level = max(test_max_severity_level, warning_level)
-
-                if status.upper() == "FAIL":
-                    test_result["status"] = "FAIL"
-            elif status.upper() == "FAIL":
-                gpu_entry["severity"] = "ISOLATE"
-                gpu_entry["action"] = ACTIONS["ISOLATE"]
-                max_severity_level = max(max_severity_level, 3)
-                test_max_severity_level = max(test_max_severity_level, 3)
-                test_result["status"] = "FAIL"
+        for entry in entries:
+            status, level = classify_entry(entry)
+            levels.append(level)
+            states.append(status)
+            gpu_id = entry.get("gpu_id", entry.get("gpuId", entry.get("entity_id", "N/A")))
+            details.append(dict(entry, gpu_id=gpu_id, severity=SEVERITY_MAP[level],
+                                action=ACTIONS[SEVERITY_MAP[level]]))
+            for warning in _warning_entries(entry):
+                result["warnings"].append(dict(test=test_name, gpu_id=gpu_id,
+                                               entity_id=entry.get("entity_id"), raw=warning))
+            if entry.get("warning"):
+                result["warnings"].append(dict(test=test_name, gpu_id=gpu_id,
+                                               raw=entry["warning"]))
+        if summary:
+            status, level = classify_entry(summary)
+            # A failed summary without its own warning repeats entity failures;
+            # retain their supplied severity rather than inventing ISOLATE.
+            if (status == "FAIL" and "FAIL" in states and not summary.get("warnings")
+                    and not summary.get("warning_level")):
+                level = max(levels)
+            levels.append(level)
+            states.append(status)
+        if entries or summary:
+            exercised = True
+        if not entries:
+            if not summary:
+                # dcgmi omits results and test_summary for a test that was not
+                # run (DCGM_DIAG_RESULT_NOT_RUN); classify it like "Not Run".
+                levels.append(1)
+                states.append("NOT_RUN")
             else:
-                gpu_entry["severity"] = "PASS"
-
-            test_result["gpu_details"].append(gpu_entry)
-
-            if warning:
-                result["warnings"].append({
-                    "gpu_id": gpu_id,
-                    "test": test_name,
-                    "warning": warning,
-                    "level": warning_level,
-                })
-
-        # Set per-test severity as the max over all its GPU entries
-        if test_max_severity_level > 0:
-            test_result["severity"] = SEVERITY_MAP.get(
-                test_max_severity_level, "MONITOR"
-            )
-
-        result["test_summary"].append(test_result)
-
-    # Set overall severity
-    if max_severity_level > 0:
-        overall_severity = SEVERITY_MAP.get(max_severity_level, "MONITOR")
-        result["overall_status"] = "FAIL" if max_severity_level >= 2 else "WARN"
-        result["overall_severity"] = overall_severity
-        result["overall_action"] = ACTIONS.get(overall_severity, "Review manually")
-    else:
-        # Check if any tests had non-PASS status without warning levels
-        has_failures = any(
-            t["status"] == "FAIL" for t in result["test_summary"]
-        )
-        if has_failures:
-            result["overall_status"] = "FAIL"
-            result["overall_severity"] = "ISOLATE"
-            result["overall_action"] = ACTIONS["ISOLATE"]
-
-    # Keep status/severity in sync with overall_* for aggregator compatibility
-    result["status"] = result["overall_status"]
-    result["severity"] = result["overall_severity"]
-
+                # A summary alone cannot prove that any GPU was exercised.
+                levels.append(1 if all(s in _NOT_EXERCISED for s in states) else 2)
+        level = max(levels, default=2)
+        status = "FAIL" if level >= 2 else ("WARN" if level else "PASS")
+        result["test_summary"].append(dict(
+            name=test_name,
+            display_name=DCGM_TEST_NAMES.get(test_name, test_name),
+            category=category, status=status, severity=SEVERITY_MAP[level],
+            raw_summary=summary, gpu_details=details))
+        max_level = max(max_level, level)
+    if not exercised:
+        max_level = max(max_level, 2)
+        result["error"] = "No diagnostic test results were found"
+    severity = SEVERITY_MAP[max_level]
+    status = "FAIL" if max_level >= 2 else ("WARN" if max_level else "PASS")
+    # status/severity are the canonical fields consumed by the aggregator;
+    # overall_* mirror them for richer consumers.
+    result.update(status=status, severity=severity, overall_status=status,
+                  overall_severity=severity, overall_action=ACTIONS[severity])
     return result
 
 

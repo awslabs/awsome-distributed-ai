@@ -24,6 +24,10 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   CPU CNG (`add-cng.yaml`) takes a targeted ODCR directly via
   `CapacityReservationId` (deploy-all: `OnDemandCapacityReservationId`; no type
   enum — Capacity Blocks don't exist for CPU families).
+- [ ] 🟡 **G7 deployment qualification.** Local wrapper contracts cover the G7
+  branch, two-EFA topology, and targeted ODCR/placement forwarding. Actual
+  reservation consumption, placement-group compatibility and complete
+  published-template deployment require separate qualification.
 - [ ] 🟢 **Capacity Reservation resource-group targeting (On-Demand backfill).**
   Direct ODCR-ID targeting deliberately does not backfill: launches beyond the
   reservation's instance count fail rather than falling back to plain

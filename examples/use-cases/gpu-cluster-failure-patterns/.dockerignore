@@ -1,0 +1,4 @@
+results/
+*.sqsh
+__pycache__/
+*.pyc

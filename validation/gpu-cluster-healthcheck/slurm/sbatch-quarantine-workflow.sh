@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 #SBATCH --job-name=gpu-quarantine-workflow
 #SBATCH --output=gpu-quarantine-%j.out
 #SBATCH --error=gpu-quarantine-%j.err

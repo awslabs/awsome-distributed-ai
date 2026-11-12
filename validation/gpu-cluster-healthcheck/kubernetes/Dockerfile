@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Dockerfile -- GPU Cluster Health Check Agent for Kubernetes
 #
 # Base image bundles dcgmi + nv-hostengine. nvidia-smi is NOT included;

@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -28,4 +30,7 @@ data:
     p5en.48xlarge|8|16|true|efa
     p6-b200.48xlarge|8|8|true|efa
     g6.48xlarge|8|1|false|efa
+    g7.48xlarge|8|2|false|efa
+    g7.24xlarge|4|1|false|efa
+    g7e.48xlarge|8|4|false|efa
     g6.xlarge|1|0|false|efa

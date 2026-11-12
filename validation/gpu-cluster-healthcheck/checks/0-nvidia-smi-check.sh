@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Check 0: nvidia-smi Validation
 # Verifies nvidia-smi is functional, GPU count matches expectations,
 # and no recent Xid/SXid errors exist in kernel log.
@@ -241,19 +243,21 @@ run_check() {
             highest_severity=$(bump_severity "${highest_severity}" "${code_severity}")
         done
 
-        # Xid 154 derived action parsing: authoritative recovery action text
+        # Xid 154 records both the previous action and its destination. Only the
+        # destination contributes to the severity of that event. Keep the most
+        # severe event in this log window; this is not a current-state query.
         if echo "${xid_codes}" | grep -qw '154'; then
-            local xid154_lines
-            xid154_lines=$(echo "${xid_errors}" | grep -i 'Xid.*154' || true)
+            local xid154_actions
+            xid154_actions=$(echo "${xid_errors}" | sed -nE 's/.*Xid[^)]*\):[[:space:]]*154,[[:space:]]*GPU recovery action changed from 0x[[:xdigit:]]+[[:space:]]+\([^)]*\)[[:space:]]+to[[:space:]]+0x[[:xdigit:]]+[[:space:]]+\(([^)]*)\).*/\1/p')
             local xid154_severity="MONITOR"
 
-            if echo "${xid154_lines}" | grep -qi "Node Reboot Required"; then
+            if echo "${xid154_actions}" | grep -Fqi -x "Node Reboot Required"; then
                 xid154_severity="REBOOT"
-            elif echo "${xid154_lines}" | grep -qi "GPU Reset Required"; then
+            elif echo "${xid154_actions}" | grep -Fqi -x "GPU Reset Required"; then
                 xid154_severity="RESET"
-            elif echo "${xid154_lines}" | grep -qi "Drain and Reset"; then
+            elif echo "${xid154_actions}" | grep -Fqi -x "Drain and Reset"; then
                 xid154_severity="RESET"
-            elif echo "${xid154_lines}" | grep -qi "Drain P2P"; then
+            elif echo "${xid154_actions}" | grep -Fqi -x "Drain P2P"; then
                 xid154_severity="RESET"
             fi
             # "(None)" or unrecognized → no escalation (stays MONITOR)
