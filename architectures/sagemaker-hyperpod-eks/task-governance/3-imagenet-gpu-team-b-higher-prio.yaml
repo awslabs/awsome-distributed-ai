@@ -53,6 +53,10 @@ spec:
             - "--initial-cluster-state"
             - "new"
           image: quay.io/coreos/etcd:v3.5.19
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
           ports:
             - containerPort: 2379
               name: client
@@ -128,5 +132,5 @@ spec:
               command:
                 - bash
                 - -c
-                - "wget https://raw.githubusercontent.com/pytorch/elastic/master/examples/imagenet/main.py -O /workspace/examples/imagenet.py; /usr/local/bin/torchrun --nproc_per_node=1 --nnodes=3 /workspace/examples/imagenet.py --arch=resnet18 --epochs=50 --batch-size=32 --workers=0 --checkpoint-file=/workspace/checkpoint.pth.tar /workspace/data/tiny-imagenet-200"
+                - "wget https://raw.githubusercontent.com/pytorch/elastic/master/examples/imagenet/main.py -O /workspace/examples/imagenet.py; /usr/local/bin/torchrun --nproc_per_node=1 --nnodes=2 /workspace/examples/imagenet.py --arch=resnet18 --epochs=50 --batch-size=32 --workers=0 --checkpoint-file=/workspace/checkpoint.pth.tar /workspace/data/tiny-imagenet-200"
 
