@@ -27,6 +27,8 @@ The [`qwen3-235b/`](qwen3-235b/) case uses this to compare **NCCL all-to-all vs 
 vs DeepEP+NVSHMEM** head-to-head. Select the provider with the `EP_BACKEND` Docker build arg
 (one Dockerfile, two image tags); see [Shared environment workflow](#shared-environment-workflow).
 
+For the opt-in upstream Megatron dev / DeepEP v2 configuration, build and launch commands, and current verification limits, see [README.deepep-v2.md](README.deepep-v2.md).
+
 ## Layout
 
 The container environment (Dockerfile + its build/validation scripts) lives here at the

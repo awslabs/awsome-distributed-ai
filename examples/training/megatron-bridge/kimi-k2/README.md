@@ -10,6 +10,8 @@ This test case provides a reproducible recipe for **full-parameter supervised fi
 and [UCCL-EP](https://github.com/uccl-project/uccl) for the expert-parallel all-to-all over
 **AWS EFA**.
 
+The opt-in upstream dev configuration using `flex + deepepv2` is documented in [the shared DeepEP v2 guide](../README.deepep-v2.md). Its verification is separate from the historical results below.
+
 ## Overview
 
 Kimi K2 is a DeepSeek-V3-family MoE model: 1.04T total parameters with 32B active per token,
