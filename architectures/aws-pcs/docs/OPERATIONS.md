@@ -169,7 +169,7 @@ Monitoring (Prometheus + Grafana + the exporters) runs on the **login node**, so
 it's worth knowing what happens when that node is stopped or replaced (PCS replaces
 an unhealthy login node with a new instance that has a **new private IP** — see also
 the directory-service equivalent in [USER-MANAGEMENT.md](./USER-MANAGEMENT.md)).
-Most of the stack is **replacement-safe by design**; one thing is not.
+The stack is **replacement-safe by design**.
 
 **Survives a replacement (no action needed):**
 
@@ -188,21 +188,40 @@ Most of the stack is **replacement-safe by design**; one thing is not.
   ~13 stock dashboards re-appear automatically on the new node and the datasource still
   points at the co-located Prometheus.
 
-**Lost on a replacement (known limitation):**
+- **Historical metrics and Grafana changes.** On the login node, `install-monitoring.sh`
+  keeps the Prometheus TSDB and the Grafana DB on shared `/home`
+  (`/home/monitoring-data/prometheus-data`, `/home/monitoring-data/grafana-data`), so a
+  replacement picks up the existing time series and any user-created or user-edited
+  Grafana state (custom dashboards, edits to the stock dashboards, annotations, alert
+  rules). Only the data lives on `/home`; the monitoring install tree stays node-local in
+  `/opt`, and compute nodes never write to these directories.
 
-- **Historical metrics and any hand-made Grafana changes.** The Prometheus TSDB and
-  the Grafana DB live in **node-local Docker named volumes** (`/var/lib/docker/volumes/...`
-  — deliberately node-local to avoid the shared-`/home` Stale-file-handle race that
-  drove the `/opt` install). They are **not** on shared/persistent storage, so a
-  replacement starts both fresh: you lose the pre-replacement time-series history and
-  any **user-created or user-edited** Grafana state (custom dashboards, edits to the
-  stock dashboards — they are `editable`, annotations, alert rules). New metrics
-  collect normally from the moment the new node is up.
+**Retention.** Prometheus keeps **30 days** of history, capped at **50 GB** (whichever
+limit is reached first, the oldest data is removed), so the TSDB cannot fill `/home`.
 
-If long-term metric retention or custom dashboards matter for your cluster, export
-dashboards to JSON (or keep them in the provisioning tree) and treat the on-node TSDB
-as ephemeral. Persisting the TSDB/Grafana DB across replacement (shared FS, EBS
-snapshot, or a managed AMP/AMG backend) is tracked in [ROADMAP.md](./ROADMAP.md).
+**Caveats.**
+
+- Prometheus does not officially support NFS for its local storage, and `/home` is NFS
+  (FSx for OpenZFS or EFS). If the TSDB is corrupted (for example, if an old and a new
+  login node briefly run Prometheus on the same directory during a replacement),
+  Prometheus may fail to start or lose part of its history. Only monitoring is affected;
+  Slurm, jobs and the directory service keep running. To recover, stop the stack, remove
+  the damaged directory and let Prometheus start empty:
+
+  ```bash
+  cd /opt/aws-parallelcluster-monitoring
+  sudo docker compose -f compose/head.yml -p monitoring-head stop prometheus
+  sudo mv /home/monitoring-data/prometheus-data /home/monitoring-data/prometheus-data.broken
+  sudo mkdir /home/monitoring-data/prometheus-data
+  sudo chown 65534:65534 /home/monitoring-data/prometheus-data
+  sudo docker compose -f compose/head.yml -p monitoring-head up -d prometheus
+  ```
+
+- If `/home` is not mounted or Docker is not running when monitoring installs, the
+  installer logs a warning and falls back to node-local volumes, which do not survive a
+  replacement.
+- For retention beyond 30 days, or storage that does not depend on the login node at all,
+  use a managed backend (see [ROADMAP.md](./ROADMAP.md)).
 
 ### 3.3 Public Grafana exposure
 
