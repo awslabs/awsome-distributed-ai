@@ -29,7 +29,6 @@ available on shared `/fsx` (so every compute node sees the same scripts;
    partition name (e.g. `gpu-p5`, `gpu-b200`), not the suite's bare host invocation:
 
    ```bash
-   export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH
    # lightweight suite (checks 0-3) on one GPU node
    srun -p <gpu-partition> -N1 -n1 --exclusive bash $HC/gpu-healthcheck.sh --suite lightweight
    # multi-node NCCL (check 5) — runs inside the Slurm allocation

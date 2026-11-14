@@ -50,6 +50,7 @@ Parameters:
     AllowedValues:
          - 25.05
          - 25.11
+         - 26.05
 
   ManagedAccounting:
     Type: String
@@ -88,7 +89,7 @@ Conditions:
   # CommunicationParameters=enable_http) is only supported on Slurm 25.11+. PCS
   # rejects cluster creation if these are set on an older version (e.g. 25.05),
   # so only emit them when monitoring is enabled AND the version supports it.
-  IsSlurm2511OrLater: !Equals [!Ref SlurmVersion, "25.11"]
+  IsSlurm2511OrLater: !Or [!Equals [!Ref SlurmVersion, "25.11"], !Equals [!Ref SlurmVersion, "26.05"]]
   IncludeMetricsConfig: !And [!Condition IsMonitoringEnabled, !Condition IsSlurm2511OrLater]
   # Emit SlurmConfiguration only when at least one custom setting / accounting block
   # actually applies. Monitoring alone on Slurm < 25.11 contributes nothing (its

@@ -319,7 +319,7 @@ sudo sss_cache -E
 srun -N <compute-nodes> -n <compute-nodes> bash -c 'sudo sss_cache -E'
 
 # Also remove from Slurm accounting if you registered them there.
-sudo /opt/aws/pcs/scheduler/slurm-25.11/bin/sacctmgr -i remove user alice
+sudo "$(command -v sacctmgr)" -i remove user alice
 
 # The user's home directory is NOT deleted automatically.
 # Remove it if you want to reclaim the space:
@@ -401,7 +401,7 @@ sections below use the latter.)
 > work as any user.
 
 ```bash
-S=/opt/aws/pcs/scheduler/slurm-25.11/bin/sacctmgr   # slurm-25.05 for SlurmVersion=25.05
+S=$(command -v sacctmgr)   # full path: sudo drops the Slurm bin dir from PATH
 ```
 
 ### 4.1 Register users to accounts

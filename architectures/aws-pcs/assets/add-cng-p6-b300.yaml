@@ -270,6 +270,7 @@ Parameters:
     AllowedValues:
       - '25.05'
       - '25.11'
+      - '26.05'
 
   DirectoryDomainSuffix:
     Type: String

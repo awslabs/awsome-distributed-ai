@@ -92,7 +92,6 @@ uid=10001(testuser1) gid=3000(clusterusers) groups=3000(clusterusers)
 ### B3. Verify user visible on compute nodes
 
 ```bash
-export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH
 srun -N 1 -n 1 -p cpu1 bash -c 'getent passwd testuser1; id testuser1'
 ```
 
@@ -273,7 +272,6 @@ srun -N 1 -n 1 -p cpu1 bash -c 'sudo sss_cache -E; sleep 2; getent passwd testus
 ### C1. Add user to Slurm accounting
 
 ```bash
-export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH
 sacctmgr -i add account testaccount Description="Test Account"
 sacctmgr -i add user testuser1 Account=testaccount
 sacctmgr show user testuser1
@@ -284,7 +282,7 @@ Expected: user listed with account `testaccount`.
 ### C2. Run a job as LDAP user
 
 ```bash
-sudo su - testuser1 -c 'export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; srun -p cpu1 -N 1 -n 1 bash -c "whoami; id; hostname"'
+sudo su - testuser1 -c 'srun -p cpu1 -N 1 -n 1 bash -c "whoami; id; hostname"'
 ```
 
 Expected:
@@ -298,7 +296,7 @@ cpu1-1
 ### C3. Submit a batch job as LDAP user
 
 ```bash
-sudo su - testuser1 -c 'export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; sbatch --wrap="id; hostname" -p cpu1 -o /home/testuser1/test-job.out'
+sudo su - testuser1 -c 'sbatch --wrap="id; hostname" -p cpu1 -o /home/testuser1/test-job.out'
 sleep 30
 cat /home/testuser1/test-job.out
 ```
@@ -457,7 +455,6 @@ All commands run on the login node as root unless noted.
 ### A1. Verify accounting is active
 
 ```bash
-export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH
 sacctmgr show cluster
 ```
 
@@ -527,11 +524,11 @@ sacctmgr show user alice format=User,Account,GrpTRESRunMins
 
 ```bash
 # As alice
-sudo su - alice -c 'export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; \
+sudo su - alice -c '\
   sbatch --partition=cpu1 --wrap="sleep 10; hostname; id" -J alice-test'
 
 # As bob
-sudo su - bob -c 'export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; \
+sudo su - bob -c '\
   sbatch --partition=cpu1 --wrap="sleep 10; hostname; id" -J bob-test'
 ```
 
@@ -569,7 +566,7 @@ under `ml-team` with non-zero `Used`.
 
 ```bash
 # Submit a job that would exceed alice's limit
-sudo su - alice -c 'export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; \
+sudo su - alice -c '\
   sbatch --partition=cpu1 --ntasks=96 --time=120:00 --wrap="sleep 7200" -J limit-test'
 ```
 
@@ -608,7 +605,7 @@ An unregistered user can still submit jobs:
 ```bash
 # Create a user NOT in sacctmgr
 sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" ldap-add-user.sh charlie 10003 3000
-sudo su - charlie -c 'export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; \
+sudo su - charlie -c '\
   srun -p cpu1 -N1 -n1 hostname'
 ```
 
@@ -621,7 +618,7 @@ creation:
 
 ```bash
 # charlie (not in sacctmgr) should be rejected
-sudo su - charlie -c 'export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; \
+sudo su - charlie -c '\
   srun -p cpu1 -N1 -n1 hostname'
 ```
 
@@ -646,7 +643,7 @@ users (add carol here if only alice/bob exist).
 ### F1. Project accounts and quota
 
 ```bash
-S=/opt/aws/pcs/scheduler/slurm-25.11/bin/sacctmgr   # slurm-25.05 for SlurmVersion=25.05
+S=$(command -v sacctmgr)   # full path: sudo drops the Slurm bin dir from PATH
 
 sudo LDAP_ADMIN_PASSWORD="$ADMIN_PW" ldap-add-user.sh carol 10004 3000
 
