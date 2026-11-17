@@ -200,6 +200,18 @@ Resources:
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/grafana/*'
 
+              # setup-directory.sh (client role) finds the login node's IP by its
+              # directory-role=server tag. Granted here, not only in the
+              # monitoring policy, so an LDAP client works with MonitoringStack=none.
+              - Sid: EC2DescribeForDirectoryServerDiscovery
+                Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+
               # Hard-deny the OpenLDAP admin password on the shared/compute role.
               # AmazonSSMManagedInstanceCore (attached for SSM agent) grants
               # ssm:GetParameter on "*", and the SecureString is encrypted with the
