@@ -25,6 +25,13 @@ entries:
     key: amazon-eks/eks-add-gpu-nodegroup.yaml
   - source: architectures/amazon-eks/assets/eks-gpu-node-ami.yaml
     key: amazon-eks/eks-gpu-node-ami.yaml
+  - source: architectures/amazon-eks/assets/eks-monitoring.yaml
+    key: amazon-eks/eks-monitoring.yaml
+  # The runtime files of the optional in-cluster monitoring, staged as one tar.gz keyed by the sha256
+  # of its uncompressed tar (amazon-eks/monitoring/<sha256>.tar.gz). eks-monitoring.yaml pins that digest.
+  - bundle: observability/prometheus-grafana/eks-in-cluster
+    files: [install.py, monitoring_render.py, dashboards/*.json]
+    key_prefix: amazon-eks/monitoring/
   - source: architectures/aws-pcs/assets/add-cng.yaml
     key: aws-pcs/add-cng.yaml
   - source: architectures/aws-pcs/assets/add-cng-p5.yaml

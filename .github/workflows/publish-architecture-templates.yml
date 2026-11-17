@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'architectures/**'
+      - 'observability/prometheus-grafana/eks-in-cluster/**'
       - '.github/template-publish-manifest.yml'
       - '.github/scripts/stage-template-publish.py'
       - '.github/workflows/publish-architecture-templates.yml'
@@ -93,7 +94,7 @@ jobs:
             exit 0
           fi
           before="${{ github.event.before }}"
-          if [[ "$before" =~ ^0+$ ]] || git diff --name-only "$before" "${{ github.sha }}" -- architectures/amazon-eks/ "$PUBLISH_MANIFEST" .github/workflows/publish-architecture-templates.yml | grep -q .; then
+          if [[ "$before" =~ ^0+$ ]] || git diff --name-only "$before" "${{ github.sha }}" -- architectures/amazon-eks/ observability/prometheus-grafana/eks-in-cluster/ "$PUBLISH_MANIFEST" .github/scripts/stage-template-publish.py .github/workflows/publish-architecture-templates.yml | grep -q .; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"

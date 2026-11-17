@@ -63,6 +63,12 @@ Metadata:
           - PrePullImage
           - DeployFsxLustre
           - FsxStorageCapacity
+          - DeployMonitoring
+          - MonitoringNamespace
+          - MonitoringScrapeNamespaces
+          - MonitoringScrapeServices
+          - MonitoringBundleSha256
+          - MonitoringBundleUrl
       - Label:
           default: Template location (override to deploy an unpublished copy)
         Parameters:
@@ -274,6 +280,47 @@ Parameters:
       Filesystem size in GiB. An enumeration rather than a minimum, because FSx accepts only certain
       sizes and refuses the rest minutes into the deploy, in an error that names the service rather
       than this parameter. Add a size here if you need one these values do not cover.
+  DeployMonitoring:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      "true" installs Prometheus, Pushgateway and Grafana in MonitoringNamespace on the system nodes
+      (observability/prometheus-grafana/eks-in-cluster). No exporter is installed: without one there
+      are no GPU, node or EFA metrics; see MonitoringScrapeServices.
+  MonitoringNamespace:
+    Type: String
+    Default: in-cluster-monitoring
+    AllowedPattern: ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$
+    Description: Namespace of the monitoring install, with DeployMonitoring.
+  MonitoringScrapeNamespaces:
+    Type: String
+    Default: ""
+    AllowedPattern: ^([a-z0-9-]+(,[a-z0-9-]+)*)?$
+    Description: >-
+      Namespaces whose Services opt in with the label awsome-distributed-ai/scrape=<MonitoringNamespace>
+      and a port named metrics, comma-separated, with DeployMonitoring.
+  MonitoringScrapeServices:
+    Type: String
+    Default: ""
+    AllowedPattern: ^([a-z0-9-]+/[a-z0-9-]+:[A-Za-z0-9-]+(,[a-z0-9-]+/[a-z0-9-]+:[A-Za-z0-9-]+)*)?$
+    Description: >-
+      Existing exporters to read as NAMESPACE/SERVICE:PORT, comma-separated, with DeployMonitoring;
+      for example gpu-operator/nvidia-dcgm-exporter:9400. PORT is the Service's port name or its
+      target (container) port number. An exporter that is not running yet is named in the build log
+      and does not fail the stack.
+  MonitoringBundleSha256:
+    Type: String
+    Default: ""
+    AllowedPattern: ^([0-9a-f]{64})?$
+    Description: >-
+      sha256 of the monitoring install bundle. Empty installs the bundle eks-monitoring.yaml pins;
+      see that template.
+  MonitoringBundleUrl:
+    Type: String
+    Default: ""
+    AllowedPattern: ^(https://.+)?$
+    Description: Empty reads the bundle from S3BucketName/S3KeyPrefix; an https URL installs an unpublished bundle.
   S3BucketName:
     Type: String
     Default: awsome-distributed-ai
@@ -285,6 +332,7 @@ Parameters:
 
 Conditions:
   UsesGivenAmi: !Not [!Equals [!Ref NodeAmiId, ""]]
+  WithMonitoring: !Equals [!Ref DeployMonitoring, "true"]
   BuildsAnImage: !Or
     - !Not [!Equals [!Ref NodeImagePackages, ""]]
     - !Not [!Equals [!Ref NodeImageRecipeArn, ""]]
@@ -421,6 +469,24 @@ Resources:
         CapacityReservationType: !Ref CapacityReservationType
         PrePullImage: !Ref PrePullImage
 
+  MonitoringStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: WithMonitoring
+    Properties:
+      TemplateURL: !Sub "https://${S3BucketName}.s3.amazonaws.com/${S3KeyPrefix}eks-monitoring.yaml"
+      Parameters:
+        ClusterName: !GetAtt ClusterStack.Outputs.ClusterName
+        PrivateSubnetId: !GetAtt PrerequisitesStack.Outputs.PrivateSubnetId
+        ClusterSecurityGroupId: !GetAtt ClusterStack.Outputs.ClusterSecurityGroupId
+        KubectlVersion: !Ref KubectlVersion
+        MonitoringNamespace: !Ref MonitoringNamespace
+        MonitoringScrapeNamespaces: !Ref MonitoringScrapeNamespaces
+        MonitoringScrapeServices: !Ref MonitoringScrapeServices
+        MonitoringBundleSha256: !Ref MonitoringBundleSha256
+        MonitoringBundleUrl: !Ref MonitoringBundleUrl
+        S3BucketName: !Ref S3BucketName
+        S3KeyPrefix: !Ref S3KeyPrefix
+
 Outputs:
   NodeAmiId:
     Description: >-
@@ -462,3 +528,17 @@ Outputs:
   FsxMountName:
     Description: FSx for Lustre mount name, empty when DeployFsxLustre is false.
     Value: !GetAtt PrerequisitesStack.Outputs.FsxMountName
+  GrafanaPortForward:
+    Condition: WithMonitoring
+    Description: With DeployMonitoring; run it, then open http://localhost:3000/ and sign in as admin.
+    Value: !GetAtt MonitoringStack.Outputs.GrafanaPortForward
+  GrafanaPassword:
+    Condition: WithMonitoring
+    Description: Prints the generated Grafana admin password.
+    Value: !GetAtt MonitoringStack.Outputs.GrafanaPassword
+  MonitoringLogGroup:
+    Condition: WithMonitoring
+    Description: >-
+      Log group of the monitoring install and delete builds. It is kept when the stack is deleted, so a
+      delete that left the install behind can still be read; delete it when it is no longer needed.
+    Value: !GetAtt MonitoringStack.Outputs.MonitoringLogGroup
