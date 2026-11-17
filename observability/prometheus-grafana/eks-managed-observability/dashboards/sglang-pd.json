@@ -44,7 +44,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(sglang:time_to_first_token_seconds_bucket{namespace=\"$namespace\",component=\"decode\"}[1m])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(sglang:time_to_first_token_seconds_bucket{job=\"sglang\",namespace=\"$namespace\",component=\"decode\"}[1m])))",
           "legendFormat": "P50",
           "refId": "A",
           "range": true,
@@ -55,7 +55,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.9, sum by (le) (rate(sglang:time_to_first_token_seconds_bucket{namespace=\"$namespace\",component=\"decode\"}[1m])))",
+          "expr": "histogram_quantile(0.9, sum by (le) (rate(sglang:time_to_first_token_seconds_bucket{job=\"sglang\",namespace=\"$namespace\",component=\"decode\"}[1m])))",
           "legendFormat": "P90 (KEDA ttft_p90)",
           "refId": "B",
           "range": true,
@@ -66,7 +66,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(sglang:time_to_first_token_seconds_bucket{namespace=\"$namespace\",component=\"decode\"}[1m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(sglang:time_to_first_token_seconds_bucket{job=\"sglang\",namespace=\"$namespace\",component=\"decode\"}[1m])))",
           "legendFormat": "P99",
           "refId": "C",
           "range": true,
@@ -145,7 +145,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(sglang:inter_token_latency_seconds_bucket{namespace=\"$namespace\",component=\"decode\"}[1m])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(sglang:inter_token_latency_seconds_bucket{job=\"sglang\",namespace=\"$namespace\",component=\"decode\"}[1m])))",
           "legendFormat": "P50",
           "refId": "A",
           "range": true,
@@ -156,7 +156,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.9, sum by (le) (rate(sglang:inter_token_latency_seconds_bucket{namespace=\"$namespace\",component=\"decode\"}[1m])))",
+          "expr": "histogram_quantile(0.9, sum by (le) (rate(sglang:inter_token_latency_seconds_bucket{job=\"sglang\",namespace=\"$namespace\",component=\"decode\"}[1m])))",
           "legendFormat": "P90 (KEDA tpot_p90)",
           "refId": "B",
           "range": true,
@@ -167,7 +167,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(sglang:inter_token_latency_seconds_bucket{namespace=\"$namespace\",component=\"decode\"}[1m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(sglang:inter_token_latency_seconds_bucket{job=\"sglang\",namespace=\"$namespace\",component=\"decode\"}[1m])))",
           "legendFormat": "P99",
           "refId": "C",
           "range": true,
@@ -246,7 +246,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(sglang:prompt_tokens_total{namespace=\"$namespace\",component=\"prefill\"}[1m]))",
+          "expr": "sum(rate(sglang:prompt_tokens_total{job=\"sglang\",namespace=\"$namespace\",component=\"prefill\"}[1m]))",
           "legendFormat": "prompt tokens/s (prefill)",
           "refId": "A",
           "range": true,
@@ -257,7 +257,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(sglang:generation_tokens_total{namespace=\"$namespace\",component=\"decode\"}[1m]))",
+          "expr": "sum(rate(sglang:generation_tokens_total{job=\"sglang\",namespace=\"$namespace\",component=\"decode\"}[1m]))",
           "legendFormat": "generated tokens/s (decode)",
           "refId": "B",
           "range": true,
@@ -330,7 +330,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (is_streaming) (rate(sglang:num_requests_total{namespace=\"$namespace\",component=\"decode\"}[1m]))",
+          "expr": "sum by (is_streaming) (rate(sglang:num_requests_total{job=\"sglang\",namespace=\"$namespace\",component=\"decode\"}[1m]))",
           "legendFormat": "streaming={{is_streaming}}",
           "refId": "A",
           "range": true,
@@ -628,7 +628,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.9, sum by (le) (rate(sglang:time_to_first_token_seconds_bucket{namespace=\"$namespace\",component=\"decode\"}[1m])))",
+          "expr": "histogram_quantile(0.9, sum by (le) (rate(sglang:time_to_first_token_seconds_bucket{job=\"sglang\",namespace=\"$namespace\",component=\"decode\"}[1m])))",
           "legendFormat": "",
           "refId": "A",
           "range": false,
@@ -692,7 +692,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.9, sum by (le) (rate(sglang:inter_token_latency_seconds_bucket{namespace=\"$namespace\",component=\"decode\"}[1m])))",
+          "expr": "histogram_quantile(0.9, sum by (le) (rate(sglang:inter_token_latency_seconds_bucket{job=\"sglang\",namespace=\"$namespace\",component=\"decode\"}[1m])))",
           "legendFormat": "",
           "refId": "A",
           "range": false,
@@ -840,7 +840,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "ceil(sum(sglang:num_queue_reqs{namespace=\"$namespace\",component=\"prefill\"}) / 8)",
+          "expr": "ceil(sum(sglang:num_queue_reqs{job=\"sglang\",namespace=\"$namespace\",component=\"prefill\"}) / 8)",
           "legendFormat": "prefill_queue: ceil(total / 8)",
           "refId": "A",
           "range": true,
@@ -851,7 +851,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "ceil(sum(sglang:num_decode_prealloc_queue_reqs{namespace=\"$namespace\",component=\"decode\"}) / 8)",
+          "expr": "ceil(sum(sglang:num_decode_prealloc_queue_reqs{job=\"sglang\",namespace=\"$namespace\",component=\"decode\"}) / 8)",
           "legendFormat": "decode_prealloc_queue: ceil(total / 8)",
           "refId": "B",
           "range": true,
@@ -937,7 +937,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (component) (sglang:num_running_reqs{namespace=\"$namespace\"})",
+          "expr": "sum by (component) (sglang:num_running_reqs{job=\"sglang\",namespace=\"$namespace\"})",
           "legendFormat": "{{component}}",
           "refId": "A",
           "range": true,
@@ -1010,7 +1010,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "avg by (component) (sglang:token_usage{namespace=\"$namespace\"})",
+          "expr": "avg by (component) (sglang:token_usage{job=\"sglang\",namespace=\"$namespace\"})",
           "legendFormat": "{{component}}",
           "refId": "A",
           "range": true,
@@ -1084,7 +1084,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(sglang:kv_transfer_latency_ms_bucket{namespace=\"$namespace\"}[1m])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(sglang:kv_transfer_latency_ms_bucket{job=\"sglang\",namespace=\"$namespace\"}[1m])))",
           "legendFormat": "P50",
           "refId": "A",
           "range": true,
@@ -1095,7 +1095,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.9, sum by (le) (rate(sglang:kv_transfer_latency_ms_bucket{namespace=\"$namespace\"}[1m])))",
+          "expr": "histogram_quantile(0.9, sum by (le) (rate(sglang:kv_transfer_latency_ms_bucket{job=\"sglang\",namespace=\"$namespace\"}[1m])))",
           "legendFormat": "P90",
           "refId": "B",
           "range": true,
@@ -1106,7 +1106,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(sglang:kv_transfer_latency_ms_bucket{namespace=\"$namespace\"}[1m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(sglang:kv_transfer_latency_ms_bucket{job=\"sglang\",namespace=\"$namespace\"}[1m])))",
           "legendFormat": "P99",
           "refId": "C",
           "range": true,
@@ -1178,7 +1178,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(sglang:kv_transfer_speed_gb_s_sum{namespace=\"$namespace\"}[1m])) / sum(rate(sglang:kv_transfer_speed_gb_s_count{namespace=\"$namespace\"}[1m]))",
+          "expr": "sum(rate(sglang:kv_transfer_speed_gb_s_sum{job=\"sglang\",namespace=\"$namespace\"}[1m])) / sum(rate(sglang:kv_transfer_speed_gb_s_count{job=\"sglang\",namespace=\"$namespace\"}[1m]))",
           "legendFormat": "avg GB/s per transfer",
           "refId": "A",
           "range": true,
@@ -1251,7 +1251,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(sglang:kv_transfer_total_mb_sum{namespace=\"$namespace\"}[1m]))",
+          "expr": "sum(rate(sglang:kv_transfer_total_mb_sum{job=\"sglang\",namespace=\"$namespace\"}[1m]))",
           "legendFormat": "MB/s",
           "refId": "A",
           "range": true,
@@ -1337,7 +1337,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (kubernetes_node) (rate(node_amazonefa_tx_bytes_total{kubernetes_node=~\"$node\"}[1m]))",
+          "expr": "sum by (kubernetes_node) (rate(node_amazonefa_tx_bytes_total{job=\"efa-exporter\",kubernetes_node=~\"$node\"}[1m]))",
           "legendFormat": "{{kubernetes_node}}",
           "refId": "A",
           "range": true,
@@ -1410,7 +1410,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (kubernetes_node) (rate(node_amazonefa_rx_bytes_total{kubernetes_node=~\"$node\"}[1m]))",
+          "expr": "sum by (kubernetes_node) (rate(node_amazonefa_rx_bytes_total{job=\"efa-exporter\",kubernetes_node=~\"$node\"}[1m]))",
           "legendFormat": "{{kubernetes_node}}",
           "refId": "A",
           "range": true,
@@ -1483,7 +1483,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (kubernetes_node) (rate(node_amazonefa_rdma_write_bytes_total{kubernetes_node=~\"$node\"}[1m]))",
+          "expr": "sum by (kubernetes_node) (rate(node_amazonefa_rdma_write_bytes_total{job=\"efa-exporter\",kubernetes_node=~\"$node\"}[1m]))",
           "legendFormat": "{{kubernetes_node}} sent",
           "refId": "A",
           "range": true,
@@ -1494,7 +1494,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (kubernetes_node) (rate(node_amazonefa_rdma_write_recv_bytes_total{kubernetes_node=~\"$node\"}[1m]))",
+          "expr": "sum by (kubernetes_node) (rate(node_amazonefa_rdma_write_recv_bytes_total{job=\"efa-exporter\",kubernetes_node=~\"$node\"}[1m]))",
           "legendFormat": "{{kubernetes_node}} received",
           "refId": "B",
           "range": true,
@@ -1567,7 +1567,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (kubernetes_node) (rate(node_amazonefa_rdma_read_bytes_total{kubernetes_node=~\"$node\"}[1m]))",
+          "expr": "sum by (kubernetes_node) (rate(node_amazonefa_rdma_read_bytes_total{job=\"efa-exporter\",kubernetes_node=~\"$node\"}[1m]))",
           "legendFormat": "{{kubernetes_node}} read",
           "refId": "A",
           "range": true,
@@ -1578,7 +1578,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (kubernetes_node) (rate(node_amazonefa_rdma_read_resp_bytes_total{kubernetes_node=~\"$node\"}[1m]))",
+          "expr": "sum by (kubernetes_node) (rate(node_amazonefa_rdma_read_resp_bytes_total{job=\"efa-exporter\",kubernetes_node=~\"$node\"}[1m]))",
           "legendFormat": "{{kubernetes_node}} read response",
           "refId": "B",
           "range": true,
@@ -1651,7 +1651,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (kubernetes_node, device) (rate(node_amazonefa_tx_bytes_total{kubernetes_node=~\"$node\"}[1m]))",
+          "expr": "sum by (kubernetes_node, device) (rate(node_amazonefa_tx_bytes_total{job=\"efa-exporter\",kubernetes_node=~\"$node\"}[1m]))",
           "legendFormat": "{{kubernetes_node}} {{device}}",
           "refId": "A",
           "range": true,
@@ -1724,7 +1724,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(node_amazonefa_rx_drops_total{kubernetes_node=~\"$node\"}[1m]))",
+          "expr": "sum(rate(node_amazonefa_rx_drops_total{job=\"efa-exporter\",kubernetes_node=~\"$node\"}[1m]))",
           "legendFormat": "rx_drops",
           "refId": "A",
           "range": true,
@@ -1735,7 +1735,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(node_amazonefa_retrans_pkts_total{kubernetes_node=~\"$node\"}[1m]))",
+          "expr": "sum(rate(node_amazonefa_retrans_pkts_total{job=\"efa-exporter\",kubernetes_node=~\"$node\"}[1m]))",
           "legendFormat": "retrans_pkts",
           "refId": "B",
           "range": true,
@@ -1746,7 +1746,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(node_amazonefa_retrans_timeout_events_total{kubernetes_node=~\"$node\"}[1m]))",
+          "expr": "sum(rate(node_amazonefa_retrans_timeout_events_total{job=\"efa-exporter\",kubernetes_node=~\"$node\"}[1m]))",
           "legendFormat": "retrans_timeout_events",
           "refId": "C",
           "range": true,
@@ -1757,7 +1757,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(node_amazonefa_impaired_remote_conn_events_total{kubernetes_node=~\"$node\"}[1m]))",
+          "expr": "sum(rate(node_amazonefa_impaired_remote_conn_events_total{job=\"efa-exporter\",kubernetes_node=~\"$node\"}[1m]))",
           "legendFormat": "impaired_remote_conn_events",
           "refId": "D",
           "range": true,
@@ -1768,7 +1768,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(node_amazonefa_unresponsive_remote_events_total{kubernetes_node=~\"$node\"}[1m]))",
+          "expr": "sum(rate(node_amazonefa_unresponsive_remote_events_total{job=\"efa-exporter\",kubernetes_node=~\"$node\"}[1m]))",
           "legendFormat": "unresponsive_remote_events",
           "refId": "E",
           "range": true,
@@ -1779,7 +1779,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(node_amazonefa_rdma_read_wr_err_total{kubernetes_node=~\"$node\"}[1m]))",
+          "expr": "sum(rate(node_amazonefa_rdma_read_wr_err_total{job=\"efa-exporter\",kubernetes_node=~\"$node\"}[1m]))",
           "legendFormat": "rdma_read_wr_err",
           "refId": "F",
           "range": true,
@@ -1790,7 +1790,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(node_amazonefa_rdma_write_wr_err_total{kubernetes_node=~\"$node\"}[1m]))",
+          "expr": "sum(rate(node_amazonefa_rdma_write_wr_err_total{job=\"efa-exporter\",kubernetes_node=~\"$node\"}[1m]))",
           "legendFormat": "rdma_write_wr_err",
           "refId": "G",
           "range": true,
@@ -1961,9 +1961,9 @@
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "definition": "label_values(node_amazonefa_tx_bytes_total, kubernetes_node)",
+        "definition": "label_values(node_amazonefa_tx_bytes_total{job=\"efa-exporter\"}, kubernetes_node)",
         "query": {
-          "query": "label_values(node_amazonefa_tx_bytes_total, kubernetes_node)",
+          "query": "label_values(node_amazonefa_tx_bytes_total{job=\"efa-exporter\"}, kubernetes_node)",
           "refId": "node"
         },
         "current": {},

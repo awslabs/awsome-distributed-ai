@@ -9,10 +9,10 @@
   kubernetes_sd_configs:
   - role: endpoints
   relabel_configs:
-  # Keep only the EFA node exporter endpoints
-  - source_labels: [__meta_kubernetes_service_name]
+  # Keep only the Service of the efa-node-exporter Helm release
+  - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_name, __meta_kubernetes_service_label_app_kubernetes_io_instance]
     action: keep
-    regex: .*efa-node-exporter.*
+    regex: prometheus-node-exporter;efa-node-exporter
   - source_labels: [__meta_kubernetes_pod_node_name]
     action: replace
     target_label: kubernetes_node

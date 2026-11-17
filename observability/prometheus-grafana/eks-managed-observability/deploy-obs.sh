@@ -255,12 +255,6 @@ aws eks create-pod-identity-association \
   --role-arn $ADOT_ROLE_ARN \
   --region $AWS_REGION 2>/dev/null || echo "Pod Identity association already exists"
 
-# Pod Identity credentials are injected when a pod is created. Give the new
-# association a few seconds to propagate so the collector pod created in
-# Step 6 gets them; otherwise it falls back to the node role and remote write
-# to AMP fails with 403.
-sleep 10
-
 echo -e "${GREEN}✓ ADOT Operator installed${NC}"
 echo ""
 
@@ -269,7 +263,8 @@ echo ""
 
 # Render the ADOT Collector template. The scrape jobs are indented to sit
 # under scrape_configs (the first line inherits the placeholder's indent).
-export SCRAPE_CONFIGS=$(cat "${SCRAPE_CONFIG_FILES[@]}" | sed '1!s/^/          /')
+SCRAPE_CONFIGS=$(sed '1!s/^/          /' "${SCRAPE_CONFIG_FILES[@]}")
+export SCRAPE_CONFIGS
 # envsubst only sees exported variables; prompt_with_default does not export.
 export AWS_REGION_AMGP
 envsubst '${AMP_ENDPOINT} ${AWS_REGION_AMGP} ${SCRAPE_CONFIGS}' \
@@ -283,6 +278,23 @@ kubectl wait --for=condition=ready pod \
   -l app.kubernetes.io/component=opentelemetry-collector \
   -n adot-col \
   --timeout=120s 2>/dev/null || echo "Collector starting..."
+
+# Pod Identity credentials are injected only when a pod is created, and the
+# association from Step 5 is eventually consistent. A collector pod created
+# before it propagated falls back to the node role and remote write to AMP
+# fails with 403; re-applying an unchanged collector does not recreate it.
+# Recreate the pod if it started without the credentials.
+COLLECTOR_POD=$(kubectl get pods -n adot-col \
+  -l app.kubernetes.io/component=opentelemetry-collector -o name | head -1)
+if [ -n "$COLLECTOR_POD" ] && ! kubectl get -n adot-col "$COLLECTOR_POD" \
+    -o jsonpath='{.spec.containers[0].env[*].name}' | grep -qw AWS_CONTAINER_CREDENTIALS_FULL_URI; then
+    echo "Collector pod started without Pod Identity credentials; recreating it"
+    kubectl delete -n adot-col "$COLLECTOR_POD"
+    kubectl wait --for=condition=ready pod \
+      -l app.kubernetes.io/component=opentelemetry-collector \
+      -n adot-col \
+      --timeout=120s 2>/dev/null || echo "Collector starting..."
+fi
 
 echo -e "${GREEN}✓ ADOT Collector deployed${NC}"
 echo ""

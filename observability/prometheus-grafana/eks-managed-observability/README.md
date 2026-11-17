@@ -295,9 +295,9 @@ The ADOT Collector scrapes the selected metrics sources and sends them to Amazon
 Build `SCRAPE_CONFIGS` from the sources you want (list only those files), then deploy with variable substitution:
 
 ```bash
-export SCRAPE_CONFIGS=$(cat scrape-configs/dcgm-exporter.yaml | sed '1!s/^/          /')
+export SCRAPE_CONFIGS="$(sed '1!s/^/          /' scrape-configs/dcgm-exporter.yaml)"
 # DCGM + SGLang + EFA:
-# export SCRAPE_CONFIGS=$(cat scrape-configs/dcgm-exporter.yaml scrape-configs/sglang.yaml scrape-configs/efa-exporter.yaml | sed '1!s/^/          /')
+# export SCRAPE_CONFIGS="$(sed '1!s/^/          /' scrape-configs/dcgm-exporter.yaml scrape-configs/sglang.yaml scrape-configs/efa-exporter.yaml)"
 
 envsubst '${AMP_ENDPOINT} ${AWS_REGION_AMGP} ${SCRAPE_CONFIGS}' \
   < adot-collector-prometheus.yaml | kubectl apply -f -
@@ -343,9 +343,9 @@ metadata:
     prometheus.io/path: "/metrics"
 ```
 
-The SGLang examples under [`examples/inference/sglang/`](../../../examples/inference/sglang/) already set these. The pod's `component` label (e.g. `prefill` / `decode`) is copied to the metrics. Verify in Grafana Explore with a query such as `sglang:num_running_reqs`.
+The SGLang examples under [`examples/inference/sglang/`](../../../examples/inference/sglang/) already set these. The pod's `component` label (e.g. `prefill` / `decode`) is copied to the metrics. Only the port in `prometheus.io/port` is scraped, so a pod that runs several engines, such as [`qwen3.5-27b-b300-intra-pd`](../../../examples/inference/sglang/qwen3.5-27b-b300-intra-pd/) with eight engines on ports 30000-30005 and 30010-30011, reports only the engine on port 30000. Verify in Grafana Explore with a query such as `sglang:num_running_reqs`.
 
-The EFA job scrapes the Service of the [EFA node exporter](../../efa-node-exporter/EKS/README.md) (any Service whose name contains `efa-node-exporter`, in any namespace) and keeps only the `node_amazonefa_*` series. Install the exporter before enabling it. The collector appends `_total` to counters, so the series are named like `node_amazonefa_rdma_write_bytes_total`.
+The EFA job scrapes the Service of the [EFA node exporter](../../efa-node-exporter/EKS/README.md) (the Service of the `efa-node-exporter` Helm release, in any namespace) and keeps only the `node_amazonefa_*` series. Install the exporter before enabling it. The collector appends `_total` to counters, so the series are named like `node_amazonefa_rdma_write_bytes_total`.
 
 ### 7. Configure Custom DCGM Metrics (Optional)
 
@@ -447,7 +447,7 @@ Alternative dashboard: Try ID **22515** ("Better NVIDIA DCGM Dashboard") for enh
 Most panels filter on `component="prefill"` or `component="decode"`, so the SGLang pods must carry a `component: prefill|decode` label. Currently only [`dsv41flash-pd-autodiscovery`](../../../examples/inference/sglang/dsv41flash-pd-autodiscovery/) sets it.
 
 1. Navigate to **Dashboards** → **New** → **Import** and upload `dashboards/sglang-pd.json`
-2. Select your Prometheus data source and click **Import**
+2. Select the Amazon Managed Service for Prometheus data source added above and click **Import**
 3. Pick the **Namespace** that runs SGLang (for example `dsv4flash`)
 
 The dashboard has four sections:
@@ -460,7 +460,8 @@ The dashboard has four sections:
 Notes:
 
 - `sglang:inter_token_latency_seconds` (TPOT) does not exist on an engine until it has served streaming requests, and `sglang:time_to_first_token_seconds` is only populated on the decode engines, so the TPOT panels stay empty until streaming traffic arrives.
-- The dashboard uses a core `Prometheus` data source with SigV4. It does not list data sources of the Amazon Managed Service for Prometheus plugin type.
+- The dashboard was tested only on an Amazon Managed Grafana **10.4** workspace, with the Amazon Managed Service for Prometheus data source added above. Other Grafana versions have not been verified. Check your workspace version with `aws grafana describe-workspace --workspace-id <id> --query workspace.grafanaVersion`.
+- Queries select `job="sglang"` and `job="efa-exporter"`, so series that another collector writes into the same workspace are not counted.
 
 ### 9. Add Custom Metric Panels
 
