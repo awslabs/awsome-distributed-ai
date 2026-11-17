@@ -1,0 +1,27 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved. SPDX-License-Identifier: MIT-0
+# Copy to setup/env_vars (gitignored) and edit. Sourced by setup/build-push.sh; `source setup/env_vars`
+# before running recipe/*.sh from a shell (in-pod, the kubernetes manifest env supplies these).
+export REGISTRY="<your-account-id>.dkr.ecr.<your-region>.amazonaws.com"   # YOUR ECR — no registry is hardcoded anywhere
+export IMAGE_NAME="trtllm-nccl-ep-efa"
+# Immutable tag — never "latest": with the manifest's imagePullPolicy: IfNotPresent, a node
+# that cached "latest" silently keeps running the OLD image after a rebuild-and-push.
+export IMAGE_TAG="v1-20260825"
+export AWS_REGION="us-east-2"
+# Model: any MoE whose routed-expert count divides by the EP size (serve.sh preflights this).
+# Default is public + ungated. The measured E2E used exactly this model at EP8.
+export SERVE_MODEL="Qwen/Qwen3-30B-A3B"
+# Pin the model revision (commit SHA or tag) alongside the name: --trust_remote_code runs
+# repo Python in a privileged root container, so what executes should be an immutable
+# artifact, not "whatever main points at today". Empty = HF default branch. Look up a SHA on
+# the model's HF page ("Files and versions") and paste it here for a reproducible serve.
+export SERVE_REVISION=""
+export SERVE_TP="8"          # single-node: tp_size == ep_size == GPUs on the node
+export SERVE_EP="8"
+# Algorithm selection is meaningful ONLY on an image built with APPLY_HT_FLAT_PATCH=1
+# (NVIDIA/TensorRT-LLM PR#17715). The unpatched upstream default is LOW_LATENCY+RANK_MAJOR,
+# which is the measured-clean baseline on this substrate. serve.sh refuses a non-default
+# algorithm on an unpatched image rather than silently ignoring it.
+export TRTLLM_NCCL_EP_ALGO="LOW_LATENCY"
+# Build the opt-in patched image: APPLY_HT_FLAT_PATCH=1 setup/build-push.sh
+# (:- default so a value pre-set on the command line survives this file being sourced after it)
+export APPLY_HT_FLAT_PATCH="${APPLY_HT_FLAT_PATCH:-0}"
