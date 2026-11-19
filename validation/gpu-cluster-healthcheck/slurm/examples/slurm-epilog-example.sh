@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Slurm Epilog Example -- Post-job GPU health check with exit-code routing
 #
 # Runs a quick nvidia-smi validation after each job completes.

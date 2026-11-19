@@ -1,0 +1,407 @@
+{
+  "admission_intent_at": 1790216550.1966243,
+  "admission_lifetime": [
+    1790216550.0,
+    1821752550.0
+  ],
+  "admission_reservation_confirmed": true,
+  "admission_reservation_intent": true,
+  "admission_topology": {
+    "cores": 192,
+    "cpus": 192
+  },
+  "evidence": {
+    "active_efa_evidence": null,
+    "active_fault": {
+      "bdf": "0000:53:00.0",
+      "boot_id": "00000000-0000-4000-8000-000000000002",
+      "collective_progress": {
+        "job_id": "278",
+        "records": [
+          [
+            "10460",
+            "134217728",
+            "1790215874.476367",
+            "278",
+            "16"
+          ],
+          [
+            "10480",
+            "134217728",
+            "1790215874.671272",
+            "278",
+            "16"
+          ]
+        ],
+        "source": "participant coordinator workload log; not identity authority"
+      },
+      "events": [
+        {
+          "action": "active-flr-authorized",
+          "bdf": "0000:53:00.0",
+          "boot_id": "00000000-0000-4000-8000-000000000002",
+          "instance_id": "i-00000000000000101",
+          "job_id": "278",
+          "mutation": "efa-flr",
+          "operation": "table-1/1/00000000000000000000000000000101",
+          "original_reset_method": "flr bus",
+          "participant": "aim344-t1",
+          "pids": [
+            "49260"
+          ],
+          "timestamp": "2026-09-24T02:11:14.604197+00:00",
+          "traffic_delta": {
+            "1/hw_counters/rdma_write_bytes": 25843734512,
+            "1/hw_counters/rx_bytes": 25845771072,
+            "1/hw_counters/tx_bytes": 25842685936
+          }
+        },
+        {
+          "action": "mutation-start",
+          "allowed_job_id": 278,
+          "bdf": "0000:53:00.0",
+          "boot_id": "00000000-0000-4000-8000-000000000002",
+          "instance_id": "i-00000000000000101",
+          "operation": "efa-flr",
+          "timestamp": "2026-09-24T02:11:14.719793+00:00"
+        },
+        {
+          "action": "mutation-returned",
+          "bdf": "0000:53:00.0",
+          "boot_id": "00000000-0000-4000-8000-000000000002",
+          "instance_id": "i-00000000000000101",
+          "operation": "efa-flr",
+          "timestamp": "2026-09-24T02:11:15.092423+00:00"
+        }
+      ],
+      "mutation": "efa-flr",
+      "outcome": "returned"
+    },
+    "baseline_check_results": {},
+    "boot_id": "00000000-0000-4000-8000-000000000003",
+    "boot_id_after_reboot": "00000000-0000-4000-8000-000000000003",
+    "boot_id_before_reboot": "00000000-0000-4000-8000-000000000002",
+    "check_results": {
+      "round-1/recovered/check-2": {
+        "log": "/home/aim344-t1/aim344-results/collected/round-1/check-2-recovered.log",
+        "returncode": 0,
+        "verdict": "WARN",
+        "warnings": [
+          {
+            "condition": "[WARN] No profile found for instance type: g7.48xlarge",
+            "counter": null
+          },
+          {
+            "condition": "[WARN] Using defaults -- results may be unreliable",
+            "counter": null
+          },
+          {
+            "condition": "[WARN] No profile found for instance type: g7.48xlarge",
+            "counter": null
+          },
+          {
+            "condition": "[WARN] Using defaults -- results may be unreliable",
+            "counter": null
+          }
+        ]
+      },
+      "round-1/recovered/check-6": {
+        "log": "/home/aim344-t1/aim344-results/collected/round-1/check-6-recovered.log",
+        "returncode": 0,
+        "verdict": "WARN",
+        "warnings": [
+          {
+            "condition": "[WARN] 6-efa-loopback: EFA retransmission timeouts detected (4)",
+            "counter": {
+              "name": "retrans_timeout_events",
+              "value": 4
+            }
+          },
+          {
+            "condition": "[WARN] No profile found for instance type: g7.48xlarge",
+            "counter": null
+          },
+          {
+            "condition": "[WARN] Using defaults -- results may be unreliable",
+            "counter": null
+          },
+          {
+            "condition": "[WARN] No profile found for instance type: g7.48xlarge",
+            "counter": null
+          },
+          {
+            "condition": "[WARN] Using defaults -- results may be unreliable",
+            "counter": null
+          }
+        ]
+      }
+    },
+    "collected": [
+      "2",
+      "6"
+    ],
+    "deadline_at": 1790217671.1724818,
+    "deadline_attempts": 0,
+    "failure": "Check 2 returned WARN after recovery and this round recorded no pre-fault result for that check, so there is nothing establishing the warning was already there.; Check 6 returned WARN after recovery and this round recorded no pre-fault result for that check, so there is nothing establishing the warning was already there.",
+    "job_id": "278",
+    "kind": "efa",
+    "notes": "Check 2 returned WARN after recovery and this round recorded no pre-fault result for that check, so there is nothing establishing the warning was already there.; Check 6 returned WARN after recovery and this round recorded no pre-fault result for that check, so there is nothing establishing the warning was already there.",
+    "operation": "table-1/1/00000000000000000000000000000101",
+    "original_node_reason": "",
+    "original_node_state": "ALLOCATED+CLOUD",
+    "phase": "replacement-required",
+    "prepared": [
+      "drain",
+      "gpu-prepare-attempted",
+      "gpu-prepare-recorded",
+      "gpu-prepare",
+      "efa-flr-attempted",
+      "reboot"
+    ],
+    "reboot_completed": true,
+    "reboot_requested_at": 1790215980.6320074,
+    "reboot_requests": 1,
+    "recovered_at": null,
+    "recovered_by": null,
+    "round": 1,
+    "started_at": 1790215871.1724231,
+    "target_instance_id": "i-00000000000000101",
+    "target_node": "gpu-g7-aim344-1"
+  },
+  "initial_id": "i-00000000000000101",
+  "node": "gpu-g7-aim344-1",
+  "old_id": "i-00000000000000101",
+  "old_snapshot": {
+    "AmiLaunchIndex": 0,
+    "Architecture": "x86_64",
+    "BlockDeviceMappings": [
+      {
+        "DeviceName": "/dev/sda1",
+        "Ebs": {
+          "AttachTime": "2026-09-23T14:18:48+00:00",
+          "DeleteOnTermination": true,
+          "EbsCardIndex": 0,
+          "Status": "attached",
+          "VolumeId": "vol-00000000000000101"
+        }
+      }
+    ],
+    "BootMode": "uefi-preferred",
+    "CapacityReservationId": "cr-00000000000000101",
+    "CapacityReservationSpecification": {
+      "CapacityReservationPreference": "capacity-reservations-only",
+      "CapacityReservationTarget": {
+        "CapacityReservationId": "cr-00000000000000101"
+      }
+    },
+    "ClientToken": "fleet-00000000-0000-4000-8000-000000000001-0",
+    "CpuOptions": {
+      "CoreCount": 192,
+      "ThreadsPerCore": 1
+    },
+    "CurrentInstanceBootMode": "uefi",
+    "EbsOptimized": false,
+    "EnaSupport": true,
+    "EnclaveOptions": {
+      "Enabled": false
+    },
+    "HibernationOptions": {
+      "Configured": false
+    },
+    "Hypervisor": "xen",
+    "IamInstanceProfile": {
+      "Arn": "arn:aws:iam::123456789012:instance-profile/PCSInstanceProfile-example-pcs-cluster",
+      "Id": "AIPAAAAAAAAAAAAAAAAAA"
+    },
+    "ImageId": "ami-00000000000000101",
+    "InstanceId": "i-00000000000000101",
+    "InstanceType": "g7.48xlarge",
+    "LaunchTime": "2026-09-23T14:18:48+00:00",
+    "MaintenanceOptions": {
+      "AutoRecovery": "default",
+      "RebootMigration": "default"
+    },
+    "MetadataOptions": {
+      "HttpEndpoint": "enabled",
+      "HttpProtocolIpv6": "enabled",
+      "HttpPutResponseHopLimit": 1,
+      "HttpTokens": "required",
+      "InstanceMetadataTags": "disabled",
+      "State": "applied"
+    },
+    "Monitoring": {
+      "State": "disabled"
+    },
+    "NetworkInterfaces": [
+      {
+        "Attachment": {
+          "AttachTime": "2026-09-23T14:18:48+00:00",
+          "AttachmentId": "eni-attach-00000000000000101",
+          "DeleteOnTermination": true,
+          "DeviceIndex": 1,
+          "NetworkCardIndex": 1,
+          "Status": "attached"
+        },
+        "Description": "",
+        "Groups": [
+          {
+            "GroupId": "sg-00000000000000102",
+            "GroupName": "example-efa"
+          },
+          {
+            "GroupId": "sg-00000000000000101",
+            "GroupName": "example-pcs-security-group"
+          }
+        ],
+        "InterfaceType": "efa-only",
+        "Ipv6Addresses": [],
+        "MacAddress": "02:00:00:00:00:02",
+        "NetworkInterfaceId": "eni-00000000000000102",
+        "Operator": {
+          "Managed": false
+        },
+        "OwnerId": "123456789012",
+        "PrivateIpAddresses": [],
+        "SourceDestCheck": false,
+        "Status": "in-use",
+        "SubnetId": "subnet-00000000000000101",
+        "VpcId": "vpc-00000000000000101"
+      },
+      {
+        "Attachment": {
+          "AttachTime": "2026-09-23T14:18:48+00:00",
+          "AttachmentId": "eni-attach-00000000000000102",
+          "DeleteOnTermination": true,
+          "DeviceIndex": 0,
+          "NetworkCardIndex": 0,
+          "Status": "attached"
+        },
+        "Description": "",
+        "Groups": [
+          {
+            "GroupId": "sg-00000000000000102",
+            "GroupName": "example-efa"
+          },
+          {
+            "GroupId": "sg-00000000000000101",
+            "GroupName": "example-pcs-security-group"
+          }
+        ],
+        "InterfaceType": "efa",
+        "Ipv6Addresses": [],
+        "MacAddress": "02:00:00:00:00:01",
+        "NetworkInterfaceId": "eni-00000000000000101",
+        "Operator": {
+          "Managed": false
+        },
+        "OwnerId": "123456789012",
+        "PrivateDnsName": "ip-192-0-2-10.eu-south-2.compute.internal",
+        "PrivateIpAddress": "192.0.2.10",
+        "PrivateIpAddresses": [
+          {
+            "Primary": true,
+            "PrivateDnsName": "ip-192-0-2-10.eu-south-2.compute.internal",
+            "PrivateIpAddress": "192.0.2.10"
+          }
+        ],
+        "SourceDestCheck": true,
+        "Status": "in-use",
+        "SubnetId": "subnet-00000000000000101",
+        "VpcId": "vpc-00000000000000101"
+      }
+    ],
+    "NetworkPerformanceOptions": {
+      "BandwidthWeighting": "default"
+    },
+    "Operator": {
+      "HiddenByDefault": false,
+      "Managed": false
+    },
+    "Placement": {
+      "AvailabilityZone": "eu-south-2a",
+      "AvailabilityZoneId": "eus2-az1",
+      "GroupName": "",
+      "Tenancy": "default"
+    },
+    "PlatformDetails": "Linux/UNIX",
+    "PrivateDnsName": "ip-192-0-2-10.eu-south-2.compute.internal",
+    "PrivateDnsNameOptions": {
+      "EnableResourceNameDnsAAAARecord": false,
+      "EnableResourceNameDnsARecord": false,
+      "HostnameType": "ip-name"
+    },
+    "PrivateIpAddress": "192.0.2.10",
+    "ProductCodes": [],
+    "PublicDnsName": "",
+    "RootDeviceName": "/dev/sda1",
+    "RootDeviceType": "ebs",
+    "SecurityGroups": [
+      {
+        "GroupId": "sg-00000000000000102",
+        "GroupName": "example-efa"
+      },
+      {
+        "GroupId": "sg-00000000000000101",
+        "GroupName": "example-pcs-security-group"
+      }
+    ],
+    "SourceDestCheck": true,
+    "State": {
+      "Code": 16,
+      "Name": "running"
+    },
+    "StateTransitionReason": "",
+    "SubnetId": "subnet-00000000000000101",
+    "Tags": [
+      {
+        "Key": "aws:pcs:cluster-id",
+        "Value": "pcs_example002"
+      },
+      {
+        "Key": "aws:pcs:compute-node-group-id",
+        "Value": "pcs_example001"
+      },
+      {
+        "Key": "AWSPCSManaged",
+        "Value": "true"
+      },
+      {
+        "Key": "aws:ec2launchtemplate:version",
+        "Value": "2"
+      },
+      {
+        "Key": "Name",
+        "Value": "example-pcs-cluster-gpu-g7-aim344"
+      },
+      {
+        "Key": "aws:ec2:fleet-id",
+        "Value": "fleet-00000000-0000-4000-8000-000000000001"
+      },
+      {
+        "Key": "aws:ec2launchtemplate:id",
+        "Value": "lt-00000000000000101"
+      }
+    ],
+    "UsageOperation": "RunInstances",
+    "UsageOperationUpdateTime": "2026-09-23T14:18:48+00:00",
+    "VirtualizationType": "hvm",
+    "VpcId": "vpc-00000000000000101"
+  },
+  "originals_capture": {
+    "returncode": 0,
+    "stderr": "",
+    "stdout": "{\"instance_id\": \"i-00000000000000101\", \"records\": {\"selected-persistence-mode.txt\": \"{\\\"operation\\\": \\\"table-1/1/00000000000000000000000000000101\\\", \\\"recorded_at\\\": 1790215872.611895, \\\"value\\\": \\\"Enabled\\\"}\\n\", \"native-dcgm-state.txt\": \"{\\\"operation\\\": \\\"table-1/1/00000000000000000000000000000101\\\", \\\"recorded_at\\\": 1790215872.126016, \\\"value\\\": \\\"active\\\"}\\n\"}}\n"
+  },
+  "owner": "table-1",
+  "phase": "dispatching",
+  "predecessor": {
+    "host": "192.0.2.10",
+    "instance_id": "i-00000000000000101"
+  },
+  "prepared_at": 1790216550.170204,
+  "retired": [
+    "i-00000000000000101"
+  ],
+  "round": 1,
+  "target_only_originals": "Not reconstructed; unavailable after target loss."
+}

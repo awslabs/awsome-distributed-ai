@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 # Slurm Prolog: GPU Health Check
 # Runs fast checks (0, 2) before job execution by default.
 # Non-zero exit causes Slurm to drain the node and requeue the job.
