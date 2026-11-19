@@ -54,12 +54,14 @@ prompt_with_default "Scrape DCGM Exporter GPU metrics (y/n)" "y" ENABLE_DCGM_MET
 prompt_with_default "Scrape SGLang metrics (y/n)" "n" ENABLE_SGLANG_METRICS
 echo "  (EFA/RDMA metrics need the EFA node exporter, see ../../efa-node-exporter/EKS/README.md)"
 prompt_with_default "Scrape EFA node exporter RDMA metrics (y/n)" "n" ENABLE_EFA_METRICS
+prompt_with_default "Scrape llm-d router (EPP) metrics (y/n)" "n" ENABLE_LLMD_EPP_METRICS
 
 # Collect the selected scrape jobs from scrape-configs/
 SCRAPE_CONFIG_FILES=()
 [ "$ENABLE_DCGM_METRICS" = "y" ] && SCRAPE_CONFIG_FILES+=(scrape-configs/dcgm-exporter.yaml)
 [ "$ENABLE_SGLANG_METRICS" = "y" ] && SCRAPE_CONFIG_FILES+=(scrape-configs/sglang.yaml)
 [ "$ENABLE_EFA_METRICS" = "y" ] && SCRAPE_CONFIG_FILES+=(scrape-configs/efa-exporter.yaml)
+[ "$ENABLE_LLMD_EPP_METRICS" = "y" ] && SCRAPE_CONFIG_FILES+=(scrape-configs/llmd-epp.yaml)
 if [ ${#SCRAPE_CONFIG_FILES[@]} -eq 0 ]; then
     echo -e "${RED}At least one metrics source must be enabled.${NC}"
     exit 1

@@ -1,0 +1,52 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# SGLang model servers for llm-d: 4 x TP2 DeepSeek-V4-Flash-0731 replicas on one 8x B200 node.
+# Derived from llm-d v1.0.0 guides/optimized-baseline/modelserver/gpu/sglang (base recipe +
+# patch-sglang.yaml). The InferencePool created by the router chart selects these pods by the
+# llm-d.ai/guide label, and only Ready pods are routed to.
+
+# Required: node-local NVMe holding <nvmeHostPath>/huggingface/hub (staged by
+# ../../../sglang/download-model.sh); /opt/dlami/nvme on HyperPod, /mnt/k8s-disks/0 on
+# self-managed EKS. The JIT caches go to <nvmeHostPath>/sglang-jit-cache.
+nvmeHostPath: ""
+
+# InferencePool selector label value; must match router.modelServers.matchLabels in
+# ../router/values.yaml
+guide: dsv4flash
+
+image: docker.io/lmsysorg/sglang:v0.5.22
+model: deepseek-ai/DeepSeek-V4-Flash-0731
+replicas: 4                     # 4 x TP2 on one 8x B200 node
+tp: 2                           # GPUs per replica
+
+# EKS managed nodegroups label the bare EC2 type, HyperPod the ml.-prefixed one
+instanceTypes: [p6-b200.48xlarge, ml.p6-b200.48xlarge]
+
+# SGLang flags besides --model-path/--served-model-name/--host/--port/--tp
+engineArgs:
+- --speculative-algorithm=DSPARK
+- --moe-runner-backend=flashinfer_mxfp4
+- --disable-flashinfer-autotune
+- --swa-full-tokens-ratio=0.1
+- --mem-fraction-static=0.88
+- --chunked-prefill-size=16384
+- --trust-remote-code
+- --reasoning-parser=deepseek-v4
+- --tool-call-parser=deepseekv4
+- --context-length=512000
+- --enable-cache-report         # cached_tokens in the response usage
+- --enable-metrics              # required: EPP scrapes /metrics for load + page size
+
+resources:
+  requests: {cpu: "16", memory: 200Gi}
+  limits: {memory: 280Gi}       # nvidia.com/gpu is set from tp
+
+# Optional load-test client: AIPerf in a venv on the SGLang image (for its tokenizer deps and
+# Python 3.12). Requests no GPU. The dataset/tokenizer cache goes to <nvmeHostPath>/huggingface,
+# so a re-created pod does not rebuild the AgentX dataset.
+bench:
+  enabled: false
+  aiperfVersion: 0.13.0
+  # the system nodes this was verified on (m5.large) cannot fit 32 CPU, so it runs on the GPU node
+  resources: {requests: {cpu: "32", memory: 64Gi}}

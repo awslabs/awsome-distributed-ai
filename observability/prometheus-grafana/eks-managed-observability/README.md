@@ -133,7 +133,7 @@ The script will prompt for:
 - AMP/AMG region (must support Amazon Managed Grafana)
 - Cluster name
 - CloudFormation stack name
-- Which metrics sources to scrape: DCGM Exporter (default `y`), SGLang (default `n`) and EFA RDMA counters (default `n`). See [Scrape Configs](#scrape-configs)
+- Which metrics sources to scrape: DCGM Exporter (default `y`), SGLang (default `n`), EFA RDMA counters (default `n`) and the llm-d router EPP (default `n`). See [Scrape Configs](#scrape-configs)
 
 **Note:** Custom DCGM metrics are optional. If a `custom-dcgm-metrics.csv` file exists in this directory, the script creates a `custom-dcgm-metrics` ConfigMap and points DCGM Exporter at it. If the file is absent, the script clears any custom override and leaves DCGM Exporter on the GPU Operator's built-in default metrics.
 
@@ -298,12 +298,16 @@ Build `SCRAPE_CONFIGS` from the sources you want (list only those files), then d
 export SCRAPE_CONFIGS="$(sed '1!s/^/          /' scrape-configs/dcgm-exporter.yaml)"
 # DCGM + SGLang + EFA:
 # export SCRAPE_CONFIGS="$(sed '1!s/^/          /' scrape-configs/dcgm-exporter.yaml scrape-configs/sglang.yaml scrape-configs/efa-exporter.yaml)"
+# DCGM + SGLang + llm-d router (EPP):
+# export SCRAPE_CONFIGS="$(sed '1!s/^/          /' scrape-configs/dcgm-exporter.yaml scrape-configs/sglang.yaml scrape-configs/llmd-epp.yaml)"
 
 envsubst '${AMP_ENDPOINT} ${AWS_REGION_AMGP} ${SCRAPE_CONFIGS}' \
   < adot-collector-prometheus.yaml | kubectl apply -f -
 ```
 
 The `sed` indents the jobs so they sit under `scrape_configs` in the collector config.
+
+To add a source to a running collector, including one deployed by `deploy-obs.sh` (which cannot be re-run once its CloudFormation stack exists), set `AMP_ENDPOINT` and `AWS_REGION_AMGP` and re-run this step, listing every job the collector should keep.
 
 Verify deployment:
 
@@ -328,6 +332,7 @@ Each metrics source is a standalone Prometheus scrape job under `scrape-configs/
 | `dcgm-exporter.yaml` | DCGM Exporter GPU metrics | Scrapes the `gpu-operator` namespace. If you installed DCGM Exporter standalone in a different namespace (e.g., `dcgm-exporter`), update the namespace in this file |
 | `sglang.yaml` | SGLang server metrics (`sglang:*`) | Scraped every 10 seconds; see below |
 | `efa-exporter.yaml` | EFA / RDMA counters (`node_amazonefa_*`) | Needs the EFA node exporter installed first; see below |
+| `llmd-epp.yaml` | llm-d router Endpoint Picker metrics (`llm_d_epp_*`) | Scrapes every llm-d EPP Service (`app.kubernetes.io/name` ending in `-epp`, port `http-metrics`) with the collector's ServiceAccount token, because EPP authenticates `/metrics`. Series carry `job="epp"`. Used by [`examples/inference/llm-d/dsv4flash-agg`](../../../examples/inference/llm-d/dsv4flash-agg/) |
 
 To add another source, drop a new scrape job file into `scrape-configs/` and include it when building `SCRAPE_CONFIGS`.
 
