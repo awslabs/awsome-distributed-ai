@@ -1,0 +1,139 @@
+diff --git a/olmo/train.py b/olmo/train.py
+index ec458a24..5bed7b54 100644
+--- a/olmo/train.py
++++ b/olmo/train.py
+@@ -7,6 +7,7 @@ import logging
+ import math
+ import os
+ import random
++import re
+ import shutil
+ import time
+ from collections import deque
+@@ -83,6 +84,32 @@ __all__ = ["SpeedMonitor", "LRMonitor", "Trainer"]
+ 
+ log = logging.getLogger(__name__)
+ 
++try:
++    import mlflow
++except ImportError:
++    mlflow = None
++
++
++def mlflow_log(metrics: Dict[str, float], step: int) -> None:
++    """Mirror a wandb.log call to MLflow (SageMaker managed tracking server).
++
++    No-op unless an MLflow run is active (started in scripts/train.py on rank 0).
++    """
++    if mlflow is None or mlflow.active_run() is None:
++        return
++    try:
++        # MLflow only allows alphanumerics, _ - . space : / in metric names.
++        mlflow.log_metrics(
++            {
++                re.sub(r"[^A-Za-z0-9_\-. :/]", "", k): float(v)
++                for k, v in metrics.items()
++                if isinstance(v, (int, float))
++            },
++            step=step,
++        )
++    except Exception:
++        log.warning("Failed to log metrics to MLflow", exc_info=True)
++
+ 
+ @dataclass
+ class SpeedMonitor:
+@@ -1199,6 +1226,7 @@ class Trainer:
+             eval_metrics = self.eval()
+             if wandb.run is not None:
+                 wandb.log(eval_metrics, step=self.global_step)
++            mlflow_log(eval_metrics, step=self.global_step)
+ 
+         # Set model to 'train' mode.
+         self.dist_model.train()
+@@ -1214,6 +1242,7 @@ class Trainer:
+             self.log_metrics_to_console("Pre-train system metrics", sys_metrics)
+             if wandb.run is not None:
+                 wandb.log(sys_metrics, step=0)
++            mlflow_log(sys_metrics, step=0)
+ 
+         # Python Profiler stuff
+         if self.cfg.python_profiling:
+@@ -1324,6 +1353,7 @@ class Trainer:
+                         and self.global_step % self.cfg.wandb.log_interval == 0
+                     ):
+                         wandb.log(metrics, step=self.global_step)
++                        mlflow_log(metrics, step=self.global_step)
+ 
+                     # Check if/when run should be canceled.
+                     if not cancel_initiated and self.global_step % self.cfg.canceled_check_interval == 0:
+@@ -1390,6 +1420,7 @@ class Trainer:
+                         # Log metrics to W&B.
+                         if wandb.run is not None:
+                             wandb.log(eval_metrics, step=self.global_step)
++                        mlflow_log(eval_metrics, step=self.global_step)
+ 
+                         # Reset speed monitor so that we don't count the time taken to run evaluations.
+                         speed_monitor.reset()
+@@ -1459,7 +1490,12 @@ class Trainer:
+         else:
+             gc.disable()
+         if wandb.run is not None:
+-            wandb.finish(exit_code=exit_code, quiet=True)
++            try:
++                wandb.finish(exit_code=exit_code, quiet=True)
++            except TypeError:
++                # newer wandb clients dropped the `quiet` kwarg; never let
++                # cleanup mask the original training exception
++                wandb.finish(exit_code=exit_code)
+ 
+     def __enter__(self) -> Trainer:
+         return self
+diff --git a/scripts/train.py b/scripts/train.py
+index eeb6a82e..be791860 100644
+--- a/scripts/train.py
++++ b/scripts/train.py
+@@ -2,6 +2,7 @@
+ 
+ import gzip
+ import logging
++import os
+ import sys
+ from datetime import timedelta
+ from pathlib import Path
+@@ -114,6 +115,23 @@ def main(cfg: TrainConfig) -> None:
+             config=cfg.asdict(exclude=["wandb"]),
+         )
+ 
++    # Maybe start MLflow run (SageMaker managed tracking server).
++    # Enabled by setting MLFLOW_TRACKING_URI in the environment.
++    if os.environ.get("MLFLOW_TRACKING_URI") and get_global_rank() == 0:
++        import mlflow
++
++        mlflow.set_experiment(os.environ.get("MLFLOW_EXPERIMENT_NAME", "olmoe-protein"))
++        mlflow.start_run(run_name=cfg.run_name)
++        flat_cfg = {
++            f"{section}.{k}": v
++            for section, sub in cfg.asdict(exclude=["wandb"]).items()
++            if isinstance(sub, dict)
++            for k, v in sub.items()
++            if isinstance(v, (int, float, str, bool)) or v is None
++        }
++        # MLflow caps params per batch; log the most useful subset.
++        mlflow.log_params(dict(list(flat_cfg.items())[:100]))
++
+     barrier()
+ 
+     # Set seed.
+@@ -344,6 +362,11 @@ def main(cfg: TrainConfig) -> None:
+         else:
+             log.info("Dry run complete")
+ 
++    if os.environ.get("MLFLOW_TRACKING_URI") and get_global_rank() == 0:
++        import mlflow
++
++        mlflow.end_run()
++
+ 
+ if __name__ == "__main__":
+     try:
