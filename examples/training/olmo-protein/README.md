@@ -87,7 +87,9 @@ g5.12xlarge (4×A10G, microbatch 4, fine-grained activation checkpointing);
 
 ## Observability
 
-The fork mirrors metrics to MLflow (~50 lines in `olmo/train.py`); set
-`MLFLOW_TRACKING_URI` (a SageMaker managed MLflow ARN works directly) and you
-get per-step loss, optimizer stats, and MoE router load per layer/expert.
-W&B works out of the box via OLMo's native config.
+`4.mlflow-mirroring.patch` (applied in the Dockerfile) adds MLflow mirroring
+to OLMo's trainer: a no-op-safe `mlflow_log()` beside each `wandb.log` call
+(~50 lines). Set `MLFLOW_TRACKING_URI` — a SageMaker managed MLflow ARN works
+directly — and you get per-step loss, optimizer stats, and MoE router load per
+layer/expert. Without a tracking URI it's inert. W&B works out of the box via
+OLMo's native config.
