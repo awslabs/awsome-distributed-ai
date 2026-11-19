@@ -20,8 +20,8 @@ SMOKE = os.environ.get("SDC_SMOKE", "0") == "1"
 
 def cfg():
     if SMOKE:
-        return dict(V=4096, D=256, L=4, H=8, FFN=704, S=256, B=2, W=6, LR=3e-4, WARM=3)
-    return dict(V=32000, D=2048, L=16, H=16, FFN=5632, S=2048, B=2, W=400, LR=3e-4, WARM=100)
+        return dict(V=4096, D=256, L=4, H=8, FFN=704, S=256, B=2, W=6, LR=3e-4, WARM=3, COST=20)
+    return dict(V=32000, D=2048, L=16, H=16, FFN=5632, S=2048, B=2, W=400, LR=3e-4, WARM=100, COST=1000)
 
 
 def lr_at(c, step):
