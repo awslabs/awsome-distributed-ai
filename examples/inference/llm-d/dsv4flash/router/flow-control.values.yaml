@@ -32,10 +32,9 @@ router:
         - type: fcfs-ordering-policy
         - type: concurrency-detector
           parameters:
-            # Per-replica in-flight limit; above it requests wait in the EPP. 4 replicas held
-            # AgentX at c=256 (64 each) and saturated on uncached prefill at c=512, so 64 is the
-            # knee for this workload. Re-derive it for others, see README.md.
-            maxConcurrency: 64
+            # Per-replica in-flight limit; above it requests wait in the EPP. Set for the
+            # bench_serving workload in README.md#verifying-flow-control, not for AgentX.
+            maxConcurrency: 128
             concurrencyMode: requests
         schedulingProfiles:
         - name: default
@@ -45,11 +44,11 @@ router:
         flowControl:
           maxBytes: "10Gi"
           maxRequests: "1k"
-          defaultRequestTTL: "300s"         # guide: 60s; AgentX requests run ~80 s, so a queued one waits minutes
+          defaultRequestTTL: "300s"         # guide: 60s; gives best-effort requests queued behind premium more time
           saturationDetector:
             pluginRef: concurrency-detector
-          # Queue limits per band. The guide uses 500/200/50; at c=512 about 256 requests wait
-          # (512 - 4 x 64), so the lower two bands are raised to 300 to hold that without shedding.
+          # Queue limits per band. The guide uses 500/200/50; at 768 in flight about 256 requests
+          # wait (768 - 4 x 128), so the lower two bands are raised to 300 to hold that without shedding.
           priorityBands:
           - priority: 100
             maxRequests: "500"

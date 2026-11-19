@@ -33,16 +33,16 @@ kubectl -n $NS get cm dsv4flash-router-epp -o jsonpath='{.data.optimized-baselin
 
 ## Flow control overlay
 
-Once more than ready replicas × `maxConcurrency` requests are in flight (4 × 64 = 256), EPP queues new requests. As slots free up, it releases them by priority band, then round-robin across `x-llm-d-inference-fairness-id` values, then first come, first served.
+Once more than ready replicas × `maxConcurrency` requests are in flight (4 × 128 = 512), EPP queues new requests. As slots free up, it releases them by priority band, then round-robin across `x-llm-d-inference-fairness-id` values, then first come, first served.
 
 Differences from llm-d v1.0.0 `guides/flow-control`:
 
 | Value | Here | Guide | Why |
 | --- | --- | --- | --- |
 | Scheduling profile | as in `values.yaml` | queue/KV/prefix scorers | Flow control only decides when a request is released |
-| `maxConcurrency` | 64 | 132 | 4 replicas held AgentX at c=256 and saturated at c=512 ([comparison](../TEST_RESULTS.md#earlier-router-comparison)) |
-| `defaultRequestTTL` | 300s | 60s | AgentX requests run ~80 s, so queued ones wait minutes |
-| Band `maxRequests` | 500 / 300 / 300 | 500 / 200 / 50 | About 256 requests wait at c=512; the guide's limits would reject most of them |
+| `maxConcurrency` | 128 | 132 | Set for the `bench_serving` workload in [Verifying flow control](#verifying-flow-control), not for AgentX |
+| `defaultRequestTTL` | 300s | 60s | Gives best-effort requests queued behind premium more time before they are dropped |
+| Band `maxRequests` | 500 / 300 / 300 | 500 / 200 / 50 | About 256 requests wait at 768 in flight (768 − 512); the guide's limits would reject most of them |
 | `inferenceObjectives` | in values | separate `objectives.yaml` | The chart binds them to this release's pool |
 
 - If `maxConcurrency` is too high, the backlog moves back into SGLang, where priority does not apply. If it is too low, GPUs sit idle. For other workloads, see [Tune Flow Control Concurrency](https://github.com/llm-d/llm-d/blob/v1.0.0/docs/operations/traffic/flow-control-tuning.md).
@@ -51,12 +51,49 @@ Differences from llm-d v1.0.0 `guides/flow-control`:
 
 ### Verifying flow control
 
-The effect only shows above 256 in flight. Run the [Benchmark](../README.md#benchmark) command three times:
+The effect only shows above 512 in flight, so both runs below keep 768 in flight from two clients started together, one at c=512 and one at c=256. Run 1 needs flow control off, so do it before the [Flow control](../README.md#flow-control-and-priority-optional) steps.
+
+The load is SGLang's `bench_serving` with the `generated-shared-prefix` dataset in multi-turn mode, sized from the statistics of `semianalysis_cc_traces_weka_062126_256k` instead of replaying it. Each concurrency slot is one 8-turn conversation with its own system prompt, so conversations share no prefix. With `--gsp-range-ratio 0.5`, the averages are a 43k-token first turn, 1380 new input tokens and 1260 output tokens per turn. The numbers are for comparing the two runs with each other, not with AgentX results.
 
 | Run | Load | Expected |
 | --- | --- | --- |
-| 1. No overlay | c=512 | Deep SGLang queues; TTFT rises for everyone |
-| 2. Overlay | c=512 | The queue moves from SGLang into EPP, throughput about the same |
-| 3. Overlay | premium c=128 + best-effort c=384, together | Premium TTFT stays near the c=256 level; best-effort waits |
+| 1. No overlay | c=512 + c=256, no headers, together | Deep SGLang queues; TTFT rises for both clients |
+| 2. Overlay | premium c=512 + best-effort c=256, together | About 256 requests wait in EPP instead of SGLang; premium TTFT stays well below best-effort |
 
-For run 3, start two AIPerf clients with different `--artifact-dir` values, one with `-H 'x-llm-d-inference-objective:premium'` and one with `-H 'x-llm-d-inference-objective:best-effort'`. Watch the flow-control dashboard ([Monitoring](../README.md#monitoring-optional)): run 2 shows up in "Where requests wait: EPP vs SGLang", run 3 in "Queue time P90 by priority".
+Run from the recipe directory, with `NS` set and the bench pod enabled (see [Benchmark](../README.md#benchmark)). This helper starts `bench_serving` from the SGLang image in the background inside the bench pod, so a dropped `kubectl` session does not stop the run. Arguments: concurrency (also the number of conversations), run name, request_rate, then any extra `bench_serving` flags.
+
+```bash
+run_bench() {
+  local c=$1 name=$2 rate=$3; shift 3
+  kubectl -n $NS exec dsv4flash-sglang-bench -- bash -c "
+    mkdir -p /nvme/bench-results && cd /nvme
+    setsid nohup python3 -m sglang.benchmark.serving --backend sglang-oai-chat \
+      --base-url http://dsv4flash-router-epp.$NS.svc.cluster.local:80 \
+      --model deepseek-ai/DeepSeek-V4-Flash-0731 \
+      --dataset-name generated-shared-prefix \
+      --gsp-num-groups $c --gsp-prompts-per-group 1 --gsp-num-turns 8 \
+      --gsp-system-prompt-len 57000 --gsp-question-len 1840 --gsp-output-len 1680 \
+      --gsp-range-ratio 0.5 --gsp-fast-prepare \
+      --max-concurrency $c --request-rate $rate --warmup-requests 1 --ready-check-timeout-sec 0 --seed 42 \
+      --output-file /nvme/bench-results/$name.jsonl $* > /nvme/bench-results/$name.log 2>&1 &"
+}
+watch_bench() { kubectl -n $NS exec dsv4flash-sglang-bench -- tail -f /nvme/bench-results/$1.log; }
+```
+
+1. Baseline, flow control off, both clients without priority headers:
+
+   ```bash
+   run_bench 512 fc-run1-c512 4
+   run_bench 256 fc-run1-c256 2
+   watch_bench fc-run1-c512    # Ctrl-C stops watching, not the run; wait for the summary table
+   ```
+
+2. Turn flow control on with [Flow control](../README.md#flow-control-and-priority-optional) steps 1–3, then run the same load with two tiers:
+
+   ```bash
+   run_bench 512 fc-run2-premium 4 --header x-llm-d-inference-objective=premium x-llm-d-inference-fairness-id=interactive
+   run_bench 256 fc-run2-besteffort 2 --header x-llm-d-inference-objective=best-effort x-llm-d-inference-fairness-id=batch
+   watch_bench fc-run2-premium
+   ```
+
+Compare TTFT in the summary tables at the end of each log, client by client: `fc-run1-c512` against `fc-run2-premium`, and `fc-run1-c256` against `fc-run2-besteffort`. For example, `kubectl -n $NS exec dsv4flash-sglang-bench -- tail -40 /nvme/bench-results/fc-run2-besteffort.log`. On the flow-control dashboard ([Monitoring](../README.md#monitoring-optional)), run 2 shows up in "Where requests wait: EPP vs SGLang", "Queue time P90 by priority" and "Request outcomes by priority". Any `RejectedCapacity` or `EvictedTTL` there means the band limits or `defaultRequestTTL` are too tight for the load.

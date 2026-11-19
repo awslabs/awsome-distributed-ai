@@ -30,7 +30,6 @@ flowchart LR
 | [`modelserver/`](./modelserver) | Helm chart for the SGLang replicas and an optional AIPerf client pod | [`values.yaml`](./modelserver/values.yaml) comments |
 | [`router/`](./router) | Values for the llm-d `llm-d-router-standalone` chart: two verbatim upstream files, this sample's overrides, and the optional flow-control overlay | [`router/README.md`](./router/README.md) |
 | [`monitoring/`](./monitoring) | Grafana dashboards (serving, flow control) for the EKS managed observability stack | [Monitoring](#monitoring-optional) |
-| [`TEST_RESULTS.md`](./TEST_RESULTS.md) | How this sample was verified: environment, commands, output | |
 
 ## Prerequisites
 
@@ -109,7 +108,7 @@ Repeating a long prompt should show `usage.prompt_tokens_details.cached_tokens` 
 Run a 300 s AIPerf AgentX smoke test at c=64 from the client pod:
 
 ```bash
-helm upgrade dsv4flash-sglang ./modelserver -n $NS --reuse-values --set bench.enabled=true   # replicas untouched
+helm upgrade dsv4flash-sglang ./modelserver -n $NS --reuse-values --set bench.enabled=true   # launch bench pod, replicas untouched
 kubectl -n $NS logs -f dsv4flash-sglang-bench      # wait for "aiperf ready"
 
 kubectl -n $NS exec dsv4flash-sglang-bench -- bash -c '
@@ -151,7 +150,7 @@ If panels show no data, check in Grafana Explore that `up{job=~"sglang|epp", nam
 
 ## Flow control and priority (Optional)
 
-With llm-d's flow control on, EPP holds requests once the pool is saturated and releases them by priority as slots free up, instead of letting the backlog form in SGLang's queues. The overlay defines three tiers and admits up to 64 in-flight requests per replica. How it works and why each value was chosen are in [Flow control overlay](./router/README.md#flow-control-overlay).
+With llm-d's flow control on, EPP holds requests once the pool is saturated and releases them by priority as slots free up, instead of letting the backlog form in SGLang's queues. The overlay defines three tiers and admits up to 128 in-flight requests per replica. How it works and why each value was chosen are in [Flow control overlay](./router/README.md#flow-control-overlay).
 
 | `x-llm-d-inference-objective` | Priority |
 | --- | --- |
@@ -182,12 +181,13 @@ With llm-d's flow control on, EPP holds requests once the pool is saturated and 
    kubectl -n $NS logs deploy/dsv4flash-router-epp -c epp | grep 'Initializing Flow Control layer'
    kubectl -n $NS get inferenceobjectives    # premium, standard, best-effort
 
+   kubectl -n $NS port-forward svc/dsv4flash-router-epp 8080:80 &   # again: the upgrade replaced the EPP pod
    curl -s localhost:8080/v1/chat/completions -H 'Content-Type: application/json' \
      -H 'x-llm-d-inference-objective: premium' -H 'x-llm-d-inference-fairness-id: tenant-a' \
      -d '{"model": "deepseek-ai/DeepSeek-V4-Flash-0731", "messages": [{"role": "user", "content": "Hi"}], "max_tokens": 16}'
    ```
 
-Requests queue only above 256 in flight (4 replicas × 64). To see priority in effect, follow [Verifying flow control](./router/README.md#verifying-flow-control). To turn flow control off, re-run [Deploy](#deploy) step 3 as written, without the overlay.
+Requests queue only above 512 in flight (4 replicas × 128). To see priority in effect, follow [Verifying flow control](./router/README.md#verifying-flow-control), and start it before step 1: its baseline run needs flow control off. To turn flow control off, re-run [Deploy](#deploy) step 3 as written, without the overlay.
 
 ## Scaling (Optional)
 
@@ -196,7 +196,5 @@ Requests queue only above 256 in flight (4 replicas × 64). To see priority in e
 ## Known limitations
 
 - Verified on one B200 node (4 replicas) on EKS only. The chart also accepts the HyperPod node label `ml.p6-b200.48xlarge`, but that is untested.
-- The flow-control overlay has not been run on hardware yet. Its `maxConcurrency: 64` comes from the earlier c=256/c=512 runs, not from a run with the overlay.
+- The flow-control overlay has not been run on hardware yet.
 - Any load balancer between clients and the Service needs an idle timeout as long as the longest time to first token you expect.
-
-Test environment, commands, and output: [TEST_RESULTS.md](./TEST_RESULTS.md).

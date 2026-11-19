@@ -1302,13 +1302,13 @@
   },
   {
    "type": "timeseries",
-   "title": "GPU utilization",
+   "title": "GPU activity per node (SM / Tensor / DRAM)",
    "id": 27,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
    },
-   "description": "",
+   "description": "DCGM profiling metrics, averaged over the GPUs of each node. SM active: share of cycles with at least one warp on an SM. Tensor active: share of cycles the tensor pipe is busy (high in prefill). DRAM active: share of cycles the HBM interface is busy (high in decode). Needs DCGM_FI_PROF_SM_ACTIVE, DCGM_FI_PROF_PIPE_TENSOR_ACTIVE and DCGM_FI_PROF_DRAM_ACTIVE in the DCGM exporter metrics file",
    "gridPos": {
     "h": 8,
     "w": 12,
@@ -1317,7 +1317,7 @@
    },
    "fieldConfig": {
     "defaults": {
-     "unit": "percent",
+     "unit": "percentunit",
      "custom": {
       "lineWidth": 1,
       "fillOpacity": 10,
@@ -1325,7 +1325,7 @@
        "mode": "none"
       }
      },
-     "max": 100,
+     "max": 1,
      "min": 0
     },
     "overrides": []
@@ -1351,9 +1351,27 @@
       "type": "prometheus",
       "uid": "${datasource}"
      },
-     "expr": "avg by (gpu) (DCGM_FI_DEV_GPU_UTIL{job=\"dcgm-exporter\",kubernetes_node=~\"$node\"})",
-     "legendFormat": "GPU {{gpu}}",
+     "expr": "avg by (kubernetes_node) (DCGM_FI_PROF_SM_ACTIVE{job=\"dcgm-exporter\",kubernetes_node=~\"$node\"})",
+     "legendFormat": "{{kubernetes_node}} SM active",
      "refId": "A"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "avg by (kubernetes_node) (DCGM_FI_PROF_PIPE_TENSOR_ACTIVE{job=\"dcgm-exporter\",kubernetes_node=~\"$node\"})",
+     "legendFormat": "{{kubernetes_node}} Tensor active",
+     "refId": "B"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "avg by (kubernetes_node) (DCGM_FI_PROF_DRAM_ACTIVE{job=\"dcgm-exporter\",kubernetes_node=~\"$node\"})",
+     "legendFormat": "{{kubernetes_node}} DRAM active",
+     "refId": "C"
     }
    ]
   },
