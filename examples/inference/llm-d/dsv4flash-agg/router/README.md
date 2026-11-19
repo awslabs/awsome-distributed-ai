@@ -57,7 +57,7 @@ The load is SGLang's `bench_serving` with the `generated-shared-prefix` dataset 
 
 | Run | Load | Expected |
 | --- | --- | --- |
-| 1. No overlay | c=512 + c=256, no headers, together | Deep SGLang queues; TTFT rises for both clients |
+| 1. No overlay | c=512 + c=256, no headers, together | SGLang admits all 768 at once (up to 256 running per replica), so TTFT stays low and larger batches raise TPOT |
 | 2. Overlay | premium c=512 + best-effort c=256, together | About 256 requests wait in EPP instead of SGLang; premium TTFT stays well below best-effort |
 
 Run from the recipe directory, with `NS` set and the bench pod enabled (see [Benchmark](../README.md#benchmark)). This helper starts `bench_serving` from the SGLang image in the background inside the bench pod, so a dropped `kubectl` session does not stop the run. Arguments: concurrency (also the number of conversations), run name, request_rate, then any extra `bench_serving` flags.

@@ -196,5 +196,4 @@ Requests queue only above 512 in flight (4 replicas × 128). To see priority in 
 ## Known limitations
 
 - Verified on one B200 node (4 replicas) on EKS only. The chart also accepts the HyperPod node label `ml.p6-b200.48xlarge`, but that is untested.
-- The flow-control overlay has not been run on hardware yet.
 - Any load balancer between clients and the Service needs an idle timeout as long as the longest time to first token you expect.
