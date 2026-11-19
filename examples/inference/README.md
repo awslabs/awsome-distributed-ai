@@ -7,7 +7,7 @@ Framework-centric inference engine examples, organized by serving engine.
 | [`vllm`](./vllm) | [`dsv3-uccl-nixl`](./vllm/dsv3-uccl-nixl) | DeepSeek-V3 disaggregated (prefill/decode) inference with vLLM, UCCL-EP, and NIXL on EKS |
 | [`vllm`](./vllm) | [`cosmos-reason`](./vllm/cosmos-reason) | NVIDIA Cosmos Reason physical-reasoning VLM served by vLLM on EKS / SageMaker HyperPod EKS |
 | [`sglang`](./sglang) | [`dsr1-deepep-efa`](./sglang/dsr1-deepep-efa) | DeepSeek-R1 on p5/p5en (EC2 + Docker) with DeepEP MoE all-to-all over NVSHMEM-libfabric/EFA — colocated and 2P2D PD-disaggregated |
-| [`llm-d`](./llm-d) | [`dsv4flash`](./llm-d/dsv4flash) | DeepSeek-V4-Flash as 4× SGLang tp=2 replicas on one B200 node behind the llm-d router (InferencePool pod discovery, prefix-cache-aware routing) on EKS |
+| [`llm-d`](./llm-d) | [`dsv4flash-agg`](./llm-d/dsv4flash-agg) | DeepSeek-V4-Flash as 4× aggregated SGLang tp=2 replicas on one B200 node behind the llm-d router (InferencePool pod discovery, prefix-cache-aware routing) on EKS |
 | [`nvidia-dynamo`](./nvidia-dynamo) | [`nvidia-dynamo`](./nvidia-dynamo) | NVIDIA Dynamo (SGLang backend) on SageMaker HyperPod EKS — aggregated and PD-disaggregated serving via the Dynamo operator |
 | [`sglang`](./sglang) | [`qwen3.5-27b-b300-intra-pd`](./sglang/qwen3.5-27b-b300-intra-pd) | Qwen3.5-27B with intra-node prefill/decode disaggregation on a single B300 node |
 | [`sglang`](./sglang) | [`kimi2.6-h200-1p1d`](./sglang/kimi2.6-h200-1p1d) | Kimi2.6 with node-level 1-prefill / 1-decode disaggregation across two H200 nodes |

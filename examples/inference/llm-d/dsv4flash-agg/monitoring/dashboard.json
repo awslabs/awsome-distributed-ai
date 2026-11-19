@@ -12,7 +12,7 @@
   "from": "now-1h",
   "to": "now"
  },
- "description": "examples/inference/llm-d/dsv4flash: SGLang replicas behind the llm-d EPP. Needs the sglang and dcgm-exporter scrape jobs of observability/prometheus-grafana/eks-managed-observability plus its llmd-epp scrape job (scrape-configs/llmd-epp.yaml).",
+ "description": "examples/inference/llm-d/dsv4flash-agg: SGLang replicas behind the llm-d EPP. Needs the sglang and dcgm-exporter scrape jobs of observability/prometheus-grafana/eks-managed-observability plus its llmd-epp scrape job (scrape-configs/llmd-epp.yaml).",
  "templating": {
   "list": [
    {

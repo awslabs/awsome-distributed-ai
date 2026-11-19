@@ -332,7 +332,7 @@ Each metrics source is a standalone Prometheus scrape job under `scrape-configs/
 | `dcgm-exporter.yaml` | DCGM Exporter GPU metrics | Scrapes the `gpu-operator` namespace. If you installed DCGM Exporter standalone in a different namespace (e.g., `dcgm-exporter`), update the namespace in this file |
 | `sglang.yaml` | SGLang server metrics (`sglang:*`) | Scraped every 10 seconds; see below |
 | `efa-exporter.yaml` | EFA / RDMA counters (`node_amazonefa_*`) | Needs the EFA node exporter installed first; see below |
-| `llmd-epp.yaml` | llm-d router Endpoint Picker metrics (`llm_d_epp_*`) | Scrapes every llm-d EPP Service (`app.kubernetes.io/name` ending in `-epp`, port `http-metrics`) with the collector's ServiceAccount token, because EPP authenticates `/metrics`. Series carry `job="epp"`. Used by [`examples/inference/llm-d/dsv4flash`](../../../examples/inference/llm-d/dsv4flash/) |
+| `llmd-epp.yaml` | llm-d router Endpoint Picker metrics (`llm_d_epp_*`) | Scrapes every llm-d EPP Service (`app.kubernetes.io/name` ending in `-epp`, port `http-metrics`) with the collector's ServiceAccount token, because EPP authenticates `/metrics`. Series carry `job="epp"`. Used by [`examples/inference/llm-d/dsv4flash-agg`](../../../examples/inference/llm-d/dsv4flash-agg/) |
 
 To add another source, drop a new scrape job file into `scrape-configs/` and include it when building `SCRAPE_CONFIGS`.
 

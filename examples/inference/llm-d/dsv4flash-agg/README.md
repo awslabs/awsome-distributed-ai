@@ -3,9 +3,9 @@ Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 SPDX-License-Identifier: MIT-0
 -->
 
-# DeepSeek-V4-Flash on SGLang behind the llm-d router (B200, EKS)
+# DeepSeek-V4-Flash on SGLang behind the llm-d router, aggregated (B200, EKS)
 
-This sample runs four SGLang replicas of `deepseek-ai/DeepSeek-V4-Flash-0731` (`tp=2` each, DSpark speculative decoding) on one `p6-b200.48xlarge`. They sit behind the [llm-d](https://github.com/llm-d/llm-d) router configured as in the v1.0.0 [`optimized-baseline`](https://github.com/llm-d/llm-d/tree/v1.0.0/guides/optimized-baseline) guide. An `InferencePool` selects the replicas by label, and the Endpoint Picker (EPP) picks a replica for every request by prefix-cache affinity and token load. Pods join the pool when they turn Ready and leave when they stop being Ready, so scaling needs no router change.
+This sample runs four aggregated SGLang replicas, each doing both prefill and decode, of `deepseek-ai/DeepSeek-V4-Flash-0731` (`tp=2` each, DSpark speculative decoding) on one `p6-b200.48xlarge`. They sit behind the [llm-d](https://github.com/llm-d/llm-d) router configured as in the v1.0.0 [`optimized-baseline`](https://github.com/llm-d/llm-d/tree/v1.0.0/guides/optimized-baseline) guide. An `InferencePool` selects the replicas by label, and the Endpoint Picker (EPP) picks a replica for every request by prefix-cache affinity and token load. Pods join the pool when they turn Ready and leave when they stop being Ready, so scaling needs no router change.
 
 ```mermaid
 flowchart LR
@@ -41,7 +41,7 @@ flowchart LR
 Pre-stage the weights (on self-managed EKS, set the DaemonSet `hostPath` to `/mnt/k8s-disks/0`):
 
 ```bash
-cd examples/inference/llm-d/dsv4flash
+cd examples/inference/llm-d/dsv4flash-agg
 ../../sglang/download-model.sh deepseek-ai/DeepSeek-V4-Flash-0731 p6-b200.48xlarge
 kubectl logs -f -l app=model-downloader     # wait for "Download complete!"
 kubectl delete daemonset model-downloader

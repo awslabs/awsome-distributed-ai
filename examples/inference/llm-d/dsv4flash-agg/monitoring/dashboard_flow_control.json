@@ -13,7 +13,7 @@
   "from": "now-1h",
   "to": "now"
  },
- "description": "examples/inference/llm-d/dsv4flash with router/flow-control.values.yaml: EPP flow-control queues by priority and fairness ID. Needs the llmd-epp and sglang scrape jobs of observability/prometheus-grafana/eks-managed-observability. Panels show no data until the overlay is on and the pool saturates.",
+ "description": "examples/inference/llm-d/dsv4flash-agg with router/flow-control.values.yaml: EPP flow-control queues by priority and fairness ID. Needs the llmd-epp and sglang scrape jobs of observability/prometheus-grafana/eks-managed-observability. Panels show no data until the overlay is on and the pool saturates.",
  "templating": {
   "list": [
    {

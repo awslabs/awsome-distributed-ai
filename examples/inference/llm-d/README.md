@@ -9,4 +9,4 @@ SPDX-License-Identifier: MIT-0
 
 | Test case | Hardware | Topology | Images |
 | --- | --- | --- | --- |
-| [`dsv4flash`](./dsv4flash) | 1× B200 (`p6-b200.48xlarge`, 8 GPU) | DeepSeek-V4-Flash-0731 as 4× SGLang tp=2 replicas behind the llm-d router (v1.0.0 optimized-baseline, Standalone Mode: EPP + Envoy sidecar, no Gateway controller). Replicas are discovered through an `InferencePool`; prefix-cache-aware routing | `lmsysorg/sglang:v0.5.22`, `ghcr.io/llm-d/llm-d-router-endpoint-picker:v1.0.0` (pinned by the chart) |
+| [`dsv4flash-agg`](./dsv4flash-agg) | 1× B200 (`p6-b200.48xlarge`, 8 GPU) | DeepSeek-V4-Flash-0731 as 4× aggregated SGLang tp=2 replicas behind the llm-d router (v1.0.0 optimized-baseline, Standalone Mode: EPP + Envoy sidecar, no Gateway controller). Replicas are discovered through an `InferencePool`; prefix-cache-aware routing | `lmsysorg/sglang:v0.5.22`, `ghcr.io/llm-d/llm-d-router-endpoint-picker:v1.0.0` (pinned by the chart) |
