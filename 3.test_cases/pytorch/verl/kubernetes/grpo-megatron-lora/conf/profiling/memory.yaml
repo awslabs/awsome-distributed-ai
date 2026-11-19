@@ -1,0 +1,16 @@
+# @package _global_
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# CUDA memory snapshots — OOM/fragmentation debugging, ~5-10% overhead.
+# View with PyTorch Memory Viz (https://pytorch.org/memory_viz).
+profiling:
+  tool: torch_memory
+  steps: [3, 4, 5]
+  save_path: /fsx/data/verl/profiling
+  profile_continuous_steps: false
+  actor_enable: true
+  actor_all_ranks: false
+  actor_ranks: [0]
+  critic_enable: false
+  critic_all_ranks: false
+  critic_ranks: []

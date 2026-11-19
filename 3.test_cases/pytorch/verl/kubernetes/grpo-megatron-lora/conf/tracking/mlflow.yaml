@@ -1,0 +1,10 @@
+# @package _global_
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# MLflow + console logging
+# MLFLOW_TRACKING_URI must be set in the environment (injected by K8s secret
+# or exported locally). verl's tracking.py reads it automatically.
+tracking:
+  logger:
+    - console
+    - mlflow
