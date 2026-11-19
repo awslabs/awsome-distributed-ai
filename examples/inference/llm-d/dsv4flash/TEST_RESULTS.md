@@ -60,7 +60,7 @@ During that window, AMP showed the following per replica:
 | `…-7g5cg` | 144 (21.1%) | 93.9% | 0 | 25% |
 | `…-vm5xn` | 121 (17.7%) | 93.7% | 0 | 34% |
 
-The actual hit rate is within 1 point of the trace's ceiling with no queueing. Uneven request shares are expected, because affinity keeps each session on the replica that holds its prefix. Speculative decoding accepted 3.9 tokens per step (mean). At c=64 the KV is far from full, so this run checks routing correctness, not capacity. See [Routing notes](./router/README.md#routing-notes) for behavior at higher concurrency.
+The actual hit rate is within 1 point of the trace's ceiling with no queueing. Uneven request shares are expected, because affinity keeps each session on the replica that holds its prefix. Speculative decoding accepted 3.9 tokens per step (mean). At c=64 the KV is far from full, so this run checks routing correctness, not capacity. See [Earlier router comparison](#earlier-router-comparison) for behavior at higher concurrency.
 
 ## Helm re-run
 
@@ -76,3 +76,12 @@ affinity:    3,413-token prompt x4 -> all on 10.90.28.204 (1 -> 5), requests 2-4
 13:43:40  helm upgrade --reuse-values --set replicas=4   (revision 4); new pod Ready 13:46:11 (151 s)
           llm_d_epp_ready_endpoints 4, EndpointSlice 4 x ready; 40 requests: 40 x 200, new pod 10.90.25.162 served 10
 ```
+
+## Earlier router comparison
+
+Not a run of this sample: an earlier comparison on the same 4 replicas with AgentX (round-robin, the SGLang model gateway, and several EPP configurations, 1800 s per concurrency level), with EPP configured through `file-discovery` instead of an `InferencePool`. It is why this sample uses an affinity-first profile and `maxConcurrency: 64`.
+
+- Prefix-aware routing matters most. At c=256, round-robin reached 2.09 req/s at 49% cache hits; prefix-aware routers reached 6.2–6.5 req/s at 89–94%.
+- Without an affinity filter first, EPP adds a `utilization-detector` filter that, at c=512, pushed requests off the replica holding their prefix (17% lower throughput). This profile puts the affinity filter first, which avoids that.
+- Above c≈256, uncached prefill saturates the replicas whatever the router does.
+- Precise prefix-cache routing (KV events) is not included. It needs extra SGLang flags and a vLLM render service, and was not tried with an `InferencePool`.

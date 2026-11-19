@@ -40,7 +40,7 @@ Differences from llm-d v1.0.0 `guides/flow-control`:
 | Value | Here | Guide | Why |
 | --- | --- | --- | --- |
 | Scheduling profile | as in `values.yaml` | queue/KV/prefix scorers | Flow control only decides when a request is released |
-| `maxConcurrency` | 64 | 132 | 4 replicas held AgentX at c=256 and saturated at c=512 |
+| `maxConcurrency` | 64 | 132 | 4 replicas held AgentX at c=256 and saturated at c=512 ([comparison](../TEST_RESULTS.md#earlier-router-comparison)) |
 | `defaultRequestTTL` | 300s | 60s | AgentX requests run ~80 s, so queued ones wait minutes |
 | Band `maxRequests` | 500 / 300 / 300 | 500 / 200 / 50 | About 256 requests wait at c=512; the guide's limits would reject most of them |
 | `inferenceObjectives` | in values | separate `objectives.yaml` | The chart binds them to this release's pool |
@@ -59,13 +59,4 @@ The effect only shows above 256 in flight. Run the [Benchmark](../README.md#benc
 | 2. Overlay | c=512 | The queue moves from SGLang into EPP, throughput about the same |
 | 3. Overlay | premium c=128 + best-effort c=384, together | Premium TTFT stays near the c=256 level; best-effort waits |
 
-For run 3, start two AIPerf clients with different `--artifact-dir` values, one with `-H 'x-llm-d-inference-objective:premium'` and one with `-H 'x-llm-d-inference-objective:best-effort'`. Watch the [flow-control dashboard](../monitoring/README.md#flow-control-dashboard): run 2 shows up in "Where requests wait: EPP vs SGLang", run 3 in "Queue time P90 by priority".
-
-## Routing notes
-
-Measured earlier on the same 4 replicas with AgentX, using EPP with `file-discovery` instead of an `InferencePool`, so treat these numbers as background:
-
-- Prefix-aware routing matters most. At c=256, round-robin reached 2.09 req/s at 49% cache hits; prefix-aware routers reached 6.2–6.5 req/s at 89–94%.
-- Without an affinity filter first, EPP adds a `utilization-detector` filter that, at c=512, pushed requests off the replica holding their prefix (17% lower throughput). This profile puts the affinity filter first, which avoids that.
-- Above c≈256, uncached prefill saturates the replicas whatever the router does.
-- Precise prefix-cache routing (KV events) is not included. It needs extra SGLang flags and a vLLM render service, and was not tried with an `InferencePool`.
+For run 3, start two AIPerf clients with different `--artifact-dir` values, one with `-H 'x-llm-d-inference-objective:premium'` and one with `-H 'x-llm-d-inference-objective:best-effort'`. Watch the flow-control dashboard ([Monitoring](../README.md#monitoring-optional)): run 2 shows up in "Where requests wait: EPP vs SGLang", run 3 in "Queue time P90 by priority".

@@ -27,9 +27,9 @@ flowchart LR
 
 | Path | What it is | Details |
 | --- | --- | --- |
-| [`modelserver/`](./modelserver) | Helm chart for the SGLang replicas and an optional AIPerf client pod | [`modelserver/README.md`](./modelserver/README.md) |
+| [`modelserver/`](./modelserver) | Helm chart for the SGLang replicas and an optional AIPerf client pod | [`values.yaml`](./modelserver/values.yaml) comments |
 | [`router/`](./router) | Values for the llm-d `llm-d-router-standalone` chart: two verbatim upstream files, this sample's overrides, and the optional flow-control overlay | [`router/README.md`](./router/README.md) |
-| [`monitoring/`](./monitoring) | Grafana dashboards (serving, flow control) for the EKS managed observability stack | [`monitoring/README.md`](./monitoring/README.md) |
+| [`monitoring/`](./monitoring) | Grafana dashboards (serving, flow control) for the EKS managed observability stack | [Monitoring](#monitoring-optional) |
 | [`TEST_RESULTS.md`](./TEST_RESULTS.md) | How this sample was verified: environment, commands, output | |
 
 ## Prerequisites
@@ -124,7 +124,7 @@ kubectl -n $NS exec dsv4flash-sglang-bench -- bash -c '
     --random-seed 42 --use-server-token-count --artifact-dir /nvme/aiperf-results/c64'
 ```
 
-Each run starts with a ~10-minute warmup. Use `--benchmark-duration 1800` without `--unsafe-override` for comparable numbers; see [Benchmark client](./modelserver/README.md#benchmark-client). Remove the pod with `--set bench.enabled=false`.
+Each run starts with a ~10-minute warmup. Use `--benchmark-duration 1800` without `--unsafe-override` for comparable numbers. AIPerf's server-metrics export is unreliable behind the router (it logs `counter reset`), so use its client-side table and the dashboard. Keep `AIPERF_HTTP_KEEPALIVE_TIMEOUT` below every idle timeout on the path, or requests fail with `ECONNRESET`. Remove the pod with `--set bench.enabled=false`.
 
 ## Cleanup
 
@@ -139,13 +139,15 @@ kubectl delete namespace $NS
 
 ## Monitoring (Optional)
 
-Monitoring uses the [EKS managed observability](../../../../observability/prometheus-grafana/eks-managed-observability) stack (ADOT collector → Amazon Managed Service for Prometheus → Amazon Managed Grafana). The scrape jobs and dashboard panels are described in [`monitoring/README.md`](./monitoring/README.md).
+Monitoring uses the [EKS managed observability](../../../../observability/prometheus-grafana/eks-managed-observability) stack (ADOT collector → Amazon Managed Service for Prometheus → Amazon Managed Grafana). Each panel's description in Grafana says what to look for.
 
 1. Collect the `dcgm-exporter`, `sglang`, and `llmd-epp` scrape jobs:
    - New stack with `deploy-obs.sh`: answer `y` to "Scrape SGLang metrics" and "Scrape llm-d router (EPP) metrics".
    - Manual install, or a stack that is already running: follow [step 6](../../../../observability/prometheus-grafana/eks-managed-observability/README.md#6-deploy-adot-collector) with its "DCGM + SGLang + llm-d router (EPP)" `SCRAPE_CONFIGS` line.
 
 2. In Amazon Managed Grafana, add the AMP data source as in [step 8](../../../../observability/prometheus-grafana/eks-managed-observability/README.md#8-configure-amazon-managed-grafana). Then go to **Dashboards** → **New** → **Import**, upload [`monitoring/dashboard.json`](./monitoring/dashboard.json), select that data source, and pick the namespace (default `dsv4flash-llmd`). With flow control on, import [`monitoring/dashboard_flow_control.json`](./monitoring/dashboard_flow_control.json) the same way.
+
+If panels show no data, check in Grafana Explore that `up{job=~"sglang|epp", namespace="dsv4flash-llmd"}` returns 5 series (4 replicas + EPP) with value 1.
 
 ## Flow control and priority (Optional)
 
@@ -189,7 +191,7 @@ Requests queue only above 256 in flight (4 replicas × 64). To see priority in e
 
 ## Scaling (Optional)
 
-`helm upgrade dsv4flash-sglang ./modelserver -n $NS --reuse-values --set replicas=N`. Pods join or leave the pool by readiness, with no router change. See [Scaling](./modelserver/README.md#scaling).
+`helm upgrade dsv4flash-sglang ./modelserver -n $NS --reuse-values --set replicas=N`. Pods join or leave the pool by readiness, with no router change. Prefer this over `kubectl scale`, which the next `helm upgrade` resets.
 
 ## Known limitations
 
