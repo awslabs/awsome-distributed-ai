@@ -1,0 +1,65 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Optional overlay: EPP flow control with three priority tiers. Layer it after values.yaml
+# (see ../README.md#flow-control-and-priority-optional). Adapted from llm-d v1.0.0
+# guides/flow-control/router/flow-control.values.yaml; the scheduling profile below is the
+# one from values.yaml, unchanged.
+router:
+  # Created by the chart for this release's InferencePool. Needs the InferenceObjective CRD
+  # from llm-d-router v1.0.0 manifests.yaml. Clients pick one with x-llm-d-inference-objective;
+  # requests without it get priority 0.
+  inferenceObjectives:
+  - {name: premium, priority: 100}
+  - {name: standard, priority: 0}
+  - {name: best-effort, priority: -10}
+  epp:
+    pluginsConfigFile: flow-control-plugins.yaml
+    pluginsCustomConfig:
+      flow-control-plugins.yaml: |
+        apiVersion: llm-d.ai/v1
+        kind: EndpointPickerConfig
+        featureGates:
+        - flowControl
+        plugins:
+        - type: approx-prefix-cache-producer
+        - type: inflight-load-producer
+        - type: prefix-cache-affinity-filter
+          parameters:
+            peakPrefillThroughput: 30000
+        - type: token-load-scorer
+        - type: round-robin-fairness-policy
+        - type: fcfs-ordering-policy
+        - type: concurrency-detector
+          parameters:
+            # Per-replica in-flight limit; above it requests wait in the EPP. 4 replicas held
+            # AgentX at c=256 (64 each) and saturated on uncached prefill at c=512, so 64 is the
+            # knee for this workload. Re-derive it for others, see README.md.
+            maxConcurrency: 64
+            concurrencyMode: requests
+        schedulingProfiles:
+        - name: default
+          plugins:
+          - pluginRef: prefix-cache-affinity-filter
+          - pluginRef: token-load-scorer
+        flowControl:
+          maxBytes: "10Gi"
+          maxRequests: "1k"
+          defaultRequestTTL: "300s"         # guide: 60s; AgentX requests run ~80 s, so a queued one waits minutes
+          saturationDetector:
+            pluginRef: concurrency-detector
+          # Queue limits per band. The guide uses 500/200/50; at c=512 about 256 requests wait
+          # (512 - 4 x 64), so the lower two bands are raised to 300 to hold that without shedding.
+          priorityBands:
+          - priority: 100
+            maxRequests: "500"
+            fairnessPolicyRef: round-robin-fairness-policy
+            orderingPolicyRef: fcfs-ordering-policy
+          - priority: 0
+            maxRequests: "300"
+            fairnessPolicyRef: round-robin-fairness-policy
+            orderingPolicyRef: fcfs-ordering-policy
+          - priority: -10
+            maxRequests: "300"
+            fairnessPolicyRef: round-robin-fairness-policy
+            orderingPolicyRef: fcfs-ordering-policy

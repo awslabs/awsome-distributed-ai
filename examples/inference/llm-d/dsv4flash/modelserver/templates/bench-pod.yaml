@@ -1,0 +1,25 @@
+{{- if .Values.bench.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-bench
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- include "dsv4flash.scheduling" . | nindent 2 }}
+  restartPolicy: Never
+  containers:
+  - name: bench
+    image: {{ .Values.image }}
+    command: ["bash", "-c"]
+    args:
+    - |
+      python3 -m venv /opt/aiperf && /opt/aiperf/bin/pip install -q aiperf=={{ .Values.bench.aiperfVersion }} &&
+      echo "aiperf ready" && sleep infinity
+    env:
+    - {name: HF_HOME, value: /nvme/huggingface}
+    - {name: NVIDIA_VISIBLE_DEVICES, value: "void"}   # no GPU access
+    resources:
+      {{- toYaml .Values.bench.resources | nindent 6 }}
+    volumeMounts: [{name: nvme, mountPath: /nvme}]
+  volumes: [{name: nvme, hostPath: {path: {{ include "dsv4flash.nvmeHostPath" . | quote }}, type: Directory}}]
+{{- end }}
