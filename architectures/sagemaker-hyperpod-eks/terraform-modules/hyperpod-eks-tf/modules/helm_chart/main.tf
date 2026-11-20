@@ -1,18 +1,23 @@
 data "aws_region" "current" {}
 
 locals {
-  revision            = var.rig_mode ? var.helm_repo_revision_rig : var.helm_repo_revision
-  rig_script_dir      = var.rig_mode ? dirname(var.rig_script_path) : ""
-  rig_script_filename = var.rig_mode ? basename(var.rig_script_path) : ""
+  revision = var.rig_mode ? var.helm_repo_revision_rig : var.helm_repo_revision
 }
 
 resource "null_resource" "git_checkout" {
   provisioner "local-exec" {
+    working_dir = "/tmp/helm-repo"
+    environment = {
+      HELM_REPO_REVISION = local.revision
+    }
     command = <<-EOT
-      cd /tmp/helm-repo
+      set -e
+      case "$HELM_REPO_REVISION" in
+        ""|-*) echo "Expected a Git revision, not an empty value or option" >&2; exit 1 ;;
+      esac
       git reset --hard HEAD
       git clean -fd
-      git checkout ${local.revision}
+      git checkout "$HELM_REPO_REVISION" --
     EOT
   }
 }
@@ -106,11 +111,23 @@ resource "null_resource" "run_rig_script" {
   count = var.rig_mode ? 1 : 0
 
   provisioner "local-exec" {
+    environment = {
+      HELM_REPO_DIR    = "/tmp/helm-repo"
+      REGION           = data.aws_region.current.region
+      EKS_CLUSTER_NAME = var.eks_cluster_name
+      RIG_SCRIPT_PATH  = var.rig_script_path
+    }
     command = <<-EOT
-      aws eks update-kubeconfig --region ${data.aws_region.current.region} --name ${var.eks_cluster_name}
-      cd /tmp/helm-repo/${local.rig_script_dir}
-      chmod +x ${local.rig_script_filename}
-      echo "y" | ./${local.rig_script_filename}
+      set -e
+      entry="$HELM_REPO_DIR/$RIG_SCRIPT_PATH"
+      script=$(realpath "$entry")
+      # Check the configured entry and its target so symlinks stay within the checkout.
+      git -C "$HELM_REPO_DIR" --literal-pathspecs ls-files --error-unmatch -- "$entry" "$script" > /dev/null
+      test -f "$script"
+      aws eks update-kubeconfig --region="$REGION" --name="$EKS_CLUSTER_NAME"
+      cd "$(dirname "$entry")"
+      chmod +x "$script"
+      echo "y" | "./$(basename "$entry")"
     EOT
   }
 
@@ -119,8 +136,9 @@ resource "null_resource" "run_rig_script" {
 
 resource "null_resource" "git_cleanup" {
   provisioner "local-exec" {
-    command = <<-EOT
-      cd /tmp/helm-repo
+    working_dir = "/tmp/helm-repo"
+    command     = <<-EOT
+      set -e
       git reset --hard HEAD
       git clean -fd
       git checkout main
