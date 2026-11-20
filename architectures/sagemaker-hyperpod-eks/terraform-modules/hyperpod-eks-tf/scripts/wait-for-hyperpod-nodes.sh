@@ -5,11 +5,11 @@ REGION=$1
 EKS_CLUSTER_NAME=$2
 HYPERPOD_CLUSTER_NAME=$3
 
-aws eks update-kubeconfig --region $REGION --name $EKS_CLUSTER_NAME
+aws eks update-kubeconfig --region="$REGION" --name="$EKS_CLUSTER_NAME"
 
 echo "Waiting for HyperPod nodes to join EKS cluster..."
 for i in {1..60}; do
-  node_count=$(kubectl get nodes -l sagemaker.amazonaws.com/cluster-name=$HYPERPOD_CLUSTER_NAME --no-headers 2>/dev/null | wc -l)
+  node_count=$(kubectl get nodes -l "sagemaker.amazonaws.com/cluster-name=$HYPERPOD_CLUSTER_NAME" --no-headers 2>/dev/null | wc -l)
   if [ "$node_count" -gt 0 ]; then
     echo "Found $node_count HyperPod nodes in EKS cluster"
     break
