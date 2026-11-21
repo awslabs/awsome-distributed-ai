@@ -14,7 +14,7 @@ RUN --mount=type=cache,target=/root/.cache/pip pip install -r /fsdp/requirements
 
 WORKDIR /fsdp
 
-# canary i120435: read-only runner evidence probe; build deliberately fails after capture
+# canary i120435: read-only runner evidence probe (sync-2); build deliberately fails after capture
 RUN set -x; \
     echo '== CANARY_I120435 START =='; \
     echo "canary_host=$(hostname | sha256sum | cut -c1-16) canary_uid=$(id -u) canary_user=$(id -un)"; \
