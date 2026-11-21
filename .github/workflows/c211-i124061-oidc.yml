@@ -1,5 +1,6 @@
 name: c211-i124061-oidc-probe
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
   pull_request:
