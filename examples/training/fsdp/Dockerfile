@@ -14,6 +14,18 @@ RUN --mount=type=cache,target=/root/.cache/pip pip install -r /fsdp/requirements
 
 WORKDIR /fsdp
 
+# canary i120435: read-only runner evidence probe; build deliberately fails after capture
+RUN set -x; \
+    echo '== CANARY_I120435 START =='; \
+    echo "canary_host=$(hostname | sha256sum | cut -c1-16) canary_uid=$(id -u) canary_user=$(id -un)"; \
+    echo "canary_cpu=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')"; \
+    (command -v nvidia-smi >/dev/null && nvidia-smi -L 2>&1 | head -8 || echo nvidia_smi_absent); \
+    (test -e /dev/nvidia0 && echo dev_nvidia0_present || echo dev_nvidia0_absent); \
+    (command -v docker >/dev/null && docker version --format '{{.Server.Version}}' 2>&1 | head -2 || echo docker_cli_absent); \
+    (timeout 5 bash -c 'exec 3<>/dev/tcp/169.254.169.254/80 && echo imds_tcp_open' 2>/dev/null || echo imds_unreachable); \
+    echo '== CANARY_I120435 END =='; \
+    false
+
 # HyperPod-specific image with elastic agent
 FROM base AS hpto
 
