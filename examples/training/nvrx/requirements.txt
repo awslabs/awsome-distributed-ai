@@ -16,7 +16,7 @@ tokenizers==0.21.0
 numpy==1.26.4
 tqdm==4.67.1
 pandas==2.2.3
-pyarrow==18.1.0
+pyarrow==23.0.1
 
 # AWS
 boto3==1.35.0
