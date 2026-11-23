@@ -47,7 +47,7 @@ router:
           defaultRequestTTL: "300s"         # guide: 60s; gives best-effort requests queued behind premium more time
           saturationDetector:
             pluginRef: concurrency-detector
-          # Queue limits per band. The guide uses 500/200/50; at 768 in flight about 256 requests
+          # Queue limits per band. The guide uses 500/200/50; at 768 in flight up to 256 requests
           # wait (768 - 4 x 128), so the lower two bands are raised to 300 to hold that without shedding.
           priorityBands:
           - priority: 100

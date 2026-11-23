@@ -7,6 +7,8 @@ SPDX-License-Identifier: MIT-0
 
 This sample runs four aggregated SGLang replicas, each doing both prefill and decode, of `deepseek-ai/DeepSeek-V4-Flash-0731` (`tp=2` each, DSpark speculative decoding) on one `p6-b200.48xlarge`. They sit behind the [llm-d](https://github.com/llm-d/llm-d) router configured as in the v1.0.0 [`optimized-baseline`](https://github.com/llm-d/llm-d/tree/v1.0.0/guides/optimized-baseline) guide. An `InferencePool` selects the replicas by label, and the Endpoint Picker (EPP) picks a replica for every request by prefix-cache affinity and token load. Pods join the pool when they turn Ready and leave when they stop being Ready, so scaling needs no router change.
 
+The sample shows two llm-d router features on aggregated SGLang: prefix-cache affinity with token-load scoring, and optional [flow control with priority bands](#flow-control-and-priority-optional).
+
 ```mermaid
 flowchart LR
     client["client"] -->|HTTP| svc["Service dsv4flash-router-epp :80"]
@@ -143,6 +145,8 @@ Monitoring uses the [EKS managed observability](../../../../observability/promet
 1. Collect the `dcgm-exporter`, `sglang`, and `llmd-epp` scrape jobs:
    - New stack with `deploy-obs.sh`: answer `y` to "Scrape SGLang metrics" and "Scrape llm-d router (EPP) metrics".
    - Manual install, or a stack that is already running: follow [step 6](../../../../observability/prometheus-grafana/eks-managed-observability/README.md#6-deploy-adot-collector) with its "DCGM + SGLang + llm-d router (EPP)" `SCRAPE_CONFIGS` line.
+
+   The `llmd-epp` job sends no token, so it relies on [`router/values.yaml`](./router/values.yaml) setting `monitoring.prometheus.auth.enabled: false`, which makes EPP serve `/metrics` without auth.
 
 2. In Amazon Managed Grafana, add the AMP data source as in [step 8](../../../../observability/prometheus-grafana/eks-managed-observability/README.md#8-configure-amazon-managed-grafana). Then go to **Dashboards** → **New** → **Import**, upload [`monitoring/dashboard.json`](./monitoring/dashboard.json), select that data source, and pick the namespace (default `dsv4flash-llmd`). With flow control on, import [`monitoring/dashboard_flow_control.json`](./monitoring/dashboard_flow_control.json) the same way.
 

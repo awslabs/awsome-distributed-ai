@@ -277,7 +277,7 @@
     "type": "prometheus",
     "uid": "${datasource}"
    },
-   "description": "Time from enqueue to dispatch for dispatched requests. Premium should stay near 0 while lower bands absorb the wait.",
+   "description": "Time from enqueue to dispatch for dispatched requests. Premium should stay near 0 while lower bands absorb the wait. The histogram's largest finite bucket is 60 s while defaultRequestTTL is 300 s, so values cap at 60 s: a P90 of 60 means 60 s or more.",
    "gridPos": {
     "h": 8,
     "w": 12,
@@ -526,7 +526,7 @@
     "type": "prometheus",
     "uid": "${datasource}"
    },
-   "description": "Per-flow wait for dispatched requests.",
+   "description": "Per-flow wait for dispatched requests. The histogram's largest finite bucket is 60 s while defaultRequestTTL is 300 s, so values cap at 60 s: a P90 of 60 means 60 s or more.",
    "gridPos": {
     "h": 8,
     "w": 12,

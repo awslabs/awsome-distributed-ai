@@ -14,6 +14,7 @@ metadata:
 spec:
   replicas: {{ .Values.replicas }}
   strategy: {type: Recreate}            # GPUs are fully allocated; avoid surge pods stuck Pending
+  progressDeadlineSeconds: 2700         # cold start ~12 min; above the startupProbe's 60 s + 40 min
   selector:
     matchLabels:
       {{- include "dsv4flash.labels" . | nindent 6 }}
@@ -58,13 +59,13 @@ spec:
             {{- toYaml .Values.resources.limits | nindent 12 }}
             nvidia.com/gpu: {{ .Values.tp }}
         startupProbe:                   # cold start ~12 min (weights ~5 min + CUDA graphs ~6 min)
-          httpGet: {path: /v1/models, port: modelserver}
+          httpGet: {path: /ready, port: modelserver}   # 503 until SGLang's warmup finishes; /v1/models answers earlier
           initialDelaySeconds: 60
           periodSeconds: 30
           timeoutSeconds: 5
           failureThreshold: 80          # up to 40 min
         readinessProbe:                 # only Ready pods enter the InferencePool
-          httpGet: {path: /v1/models, port: modelserver}
+          httpGet: {path: /ready, port: modelserver}
           periodSeconds: 5
           timeoutSeconds: 2
           failureThreshold: 3

@@ -362,13 +362,13 @@
   },
   {
    "type": "timeseries",
-   "title": "TTFT",
+   "title": "TTFT (SGLang-side)",
    "id": 9,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
    },
-   "description": "",
+   "description": "SGLang time to first token, measured from when SGLang receives the request. With flow control on, the time a request waits in the EPP queue is not included: use the client summary or the flow-control dashboard for that wait.",
    "gridPos": {
     "h": 8,
     "w": 12,
@@ -435,13 +435,13 @@
   },
   {
    "type": "timeseries",
-   "title": "TPOT (per request: (latency - TTFT) / (output - 1))",
+   "title": "TPOT (SGLang-side, per request: (latency - TTFT) / (output - 1))",
    "id": 10,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
    },
-   "description": "sglang:request_time_per_output_token_seconds; matches the client-side per-request TPOT",
+   "description": "sglang:request_time_per_output_token_seconds. Same formula as the client-side per-request TPOT, but from SGLang's timestamps. With flow control on, the time a request waits in the EPP queue is not included: use the client summary or the flow-control dashboard for that wait.",
    "gridPos": {
     "h": 8,
     "w": 12,
@@ -508,13 +508,13 @@
   },
   {
    "type": "timeseries",
-   "title": "End-to-end request latency",
+   "title": "End-to-end request latency (SGLang-side)",
    "id": 11,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
    },
-   "description": "",
+   "description": "SGLang end-to-end latency, measured from when SGLang receives the request. With flow control on, the time a request waits in the EPP queue is not included: use the client summary or the flow-control dashboard for that wait.",
    "gridPos": {
     "h": 8,
     "w": 12,

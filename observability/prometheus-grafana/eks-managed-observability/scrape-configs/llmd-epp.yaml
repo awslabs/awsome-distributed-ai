@@ -1,14 +1,15 @@
 # llm-d router Endpoint Picker (EPP) metrics (llm_d_epp_*). Scrapes the metrics
 # port (http-metrics) of every llm-d EPP Service in any namespace, i.e. Services
 # whose app.kubernetes.io/name ends in -epp, as created by the llm-d router Helm
-# charts. EPP authenticates /metrics by default (--metrics-endpoint-auth=true), so
-# the job sends the collector's ServiceAccount token; the ClusterRole in
-# adot-collector-prometheus.yaml grants it get on the non-resource URL /metrics.
+# charts. The job sends no credentials, so EPP must serve /metrics without auth:
+# set router.monitoring.prometheus.auth.enabled=false in the router values, which
+# makes the chart pass --metrics-endpoint-auth=false to EPP. Sending the collector's
+# ServiceAccount token instead would hand a cluster-wide credential to any Service
+# that matches the labels below.
 - job_name: 'llmd-epp'
   scrape_interval: 10s
   metrics_path: /metrics
   scheme: http
-  bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
   kubernetes_sd_configs:
   - role: endpoints
   relabel_configs:
