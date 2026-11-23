@@ -59,8 +59,8 @@ The two clients must use different seeds. `bench_serving` draws the system promp
 
 | Run | Load | Expected |
 | --- | --- | --- |
-| 1. No overlay | c=512 + c=256, no headers, together | SGLang admits every request at once (up to 256 running per replica), so the backlog forms inside SGLang and both clients see the same latency |
-| 2. Overlay | premium c=512 + best-effort c=256, together | Requests above 512 in flight wait in EPP and are released premium first. Premium's gain comes from priority, at best-effort's expense: best-effort waits longer, and some of its requests can expire at the TTL (`EvictedTTL`, `429`) |
+| 1. No overlay | c=512 + c=256, no headers, together | SGLang admits every request at once (up to 256 running per replica). The KV cache fills, cached prefixes are evicted and prefilled again, and both clients see the same high latency |
+| 2. Overlay | premium c=512 + best-effort c=256, together | Requests above 512 in flight wait in EPP and are released premium first. The gain has two sources. Capping each replica at 128 keeps its KV cache from filling, so prefixes stay cached and both clients can finish sooner than in run 1. Priority then gives premium the free slots first, at best-effort's expense: best-effort's queued requests wait longer, and some expire at the TTL (`EvictedTTL`, `429`) |
 
 Run from the recipe directory, with `NS` set and the bench pod enabled (see [Benchmark](../README.md#benchmark)). This helper starts `bench_serving` from the SGLang image in the background inside the bench pod, so a dropped `kubectl` session does not stop the run. Arguments: concurrency (also the number of conversations), run name, request_rate, then any extra `bench_serving` flags.
 
@@ -113,3 +113,24 @@ flush_cache() {
    ```
 
 Compare the summary tables at the end of each log, client by client: `fc-run1-c512` against `fc-run2-premium`, and `fc-run1-c256` against `fc-run2-besteffort`, including each client's completed count. For example, `kubectl -n $NS exec dsv4flash-sglang-bench -- tail -40 /nvme/bench-results/fc-run2-besteffort.log`. On the flow-control dashboard ([Monitoring](../README.md#monitoring-optional)), run 2 shows up in "Where requests wait: EPP vs SGLang", "Queue time P90 by priority" and "Request outcomes by priority". `RejectedCapacity` or `EvictedTTL` on the premium band means the band limits or `defaultRequestTTL` are too tight for the load; on the best-effort band it is the cost of giving premium priority at this load.
+
+### Reference results
+
+One run of the steps above on one `p6-b200.48xlarge` (4 replicas, `tp=2`), for reference. The prefix-cache hit rate is cached tokens over prefill tokens, summed over the 4 replicas' prefill log lines. KV usage is the mean `token usage` on the same lines.
+
+| Client | Completed | Duration (s) | Req/s | Output tok/s | TTFT p50 / p90 / p99 (ms) | TPOT p50 / p90 / p99 (ms) | E2E p50 / p90 / p99 (ms) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Run 1, c=512 | 4096 / 4096 | 1478.03 | 2.77 | 3,508 | 12,226 / 34,048 / 39,682 | 137.4 / 166.7 / 233.5 | 167,379 / 254,622 / 340,466 |
+| Run 2, c=512 `premium` | 4096 / 4096 | 851.02 | 4.81 | 6,092 | 2,732 / 17,150 / 39,045 | 57.9 / 75.3 / 123.5 | 74,880 / 115,109 / 166,055 |
+| Run 1, c=256 | 2048 / 2048 | 1467.87 | 1.40 | 1,784 | 12,220 / 33,963 / 39,134 | 137.9 / 162.9 / 232.0 | 167,038 / 256,602 / 328,355 |
+| Run 2, c=256 `best-effort` | 1846 / 2048 | 872.86 | 2.11 | 2,710 | 658 / 155,733 / 302,399 | 15.3 / 86.6 / 124.3 | 19,646 / 248,706 / 412,542 |
+
+| Run | Prefix-cache hit rate | Mean KV usage | EPP outcomes |
+| --- | --- | --- | --- |
+| 1. No overlay | 0.208 | 0.89 | n/a |
+| 2. Overlay | 0.574 | 0.62 | premium: all `Dispatched`; best-effort: 202 `EvictedTTL` (= 2048 − 1846) |
+
+- In run 1, both clients see the same latency: TTFT p50 about 12.2 s and TPOT p50 about 137 ms. Each replica runs about 170 requests at once (client concurrency 451 + 227, over 4), its KV cache stays near full, and only 21% of prefill tokens hit the cache.
+- In run 2, both clients finish in about 860 s instead of about 1470 s. Holding each replica at 128 requests lowers KV usage to 0.62 and raises the hit rate to 0.57, which is where most of premium's TPOT gain (137 → 58 ms) comes from.
+- Best-effort's median request is fast (TTFT p50 0.66 s), because once admitted it runs on an unsaturated replica. Its tail is where priority costs it: TTFT p90 is 156 s, and 202 requests expired in the EPP queue at the 300 s TTL.
+- These runs do not separate the two sources of the gain. To measure the concurrency cap alone, repeat run 2 without the `x-llm-d-inference-objective` headers.
