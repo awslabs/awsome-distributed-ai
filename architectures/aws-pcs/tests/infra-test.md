@@ -74,7 +74,7 @@ The Test 1/6/7 container jobs are the functional proof that Pyxis works.
 > us repeatedly in ways a single 25.11 GPU run does not catch. **Any change to it MUST be
 > retested across the full matrix at the top of this guide**, specifically:
 >
-> - **All supported Slurm versions** (25.05 **and** 25.11). The Pyxis SPANK plugin is
+> - **All supported Slurm versions** (25.05, 25.11 **and** 26.05). The Pyxis SPANK plugin is
 >   ABI-locked to its Slurm version — a plugin built for the wrong version stops slurmd from
 >   starting (`Incompatible Slurm plugin version`). The script builds Pyxis for the version
 >   passed as the script's first argument (or `PCS_SLURM_VERSION` on the AMI-build path) and installs the `.so` to a per-version path; a regression
@@ -119,13 +119,13 @@ standalone template, then deploy a cluster pinned to that AMI ID with
 
 The AMI is **single-Slurm-version by design** (Pyxis SPANK plugin ABI is
 version-locked) — so when you run this test, run it for **every supported
-`SlurmVersion`** that the install-script change could affect (typically both 25.05
-and 25.11).
+`SlurmVersion`** that the install-script change could affect (typically 25.05, 25.11
+and 26.05).
 
 ### Step 1 — build the AMI (~30 min one-time per Slurm version)
 
 ```bash
-SLURM_VERSION=25.11   # repeat for 25.05 if relevant
+SLURM_VERSION=25.11   # repeat for 25.05 / 26.05 if relevant
 
 aws cloudformation create-stack \
   --stack-name pcs-dlami-${SLURM_VERSION/./} \
@@ -166,7 +166,7 @@ On any node from the new cluster:
 
 ```bash
 which enroot                                                       # /usr/bin/enroot (pre-baked)
-ls /opt/aws/pcs/scheduler/slurm-${SLURM_VERSION}/lib/slurm/spank_pyxis.so  # built for matching Slurm
+ls /usr/local/lib/slurm/spank_pyxis.so                              # built for matching Slurm by the AMI build
 cat /etc/aws/pcs/scheduler/slurm-${SLURM_VERSION}/plugstack.conf.d/pyxis.conf  # references the .so
 sudo test ! -e /var/log/amazon/pcs/lifecycle/actions/nodeBootstrapped/install-enroot-pyxis.log && echo "install-enroot-pyxis did not run (InstallEnrootPyxis=false)"
 ```

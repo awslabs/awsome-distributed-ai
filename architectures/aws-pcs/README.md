@@ -2,7 +2,7 @@
 
 This repository provides reference architectures and deployment templates for setting up distributed training clusters using [AWS Parallel Computing Service (PCS)](https://aws.amazon.com/pcs/). AWS Parallel Computing Service is a fully managed service that makes it easy to run and scale HPC workloads using Slurm scheduler. These architectures are optimized for machine learning workloads and ship dedicated multi-NIC EFA launch templates for the **P5 / P5e / P5en / P6-B200 / P6-B300** GPU families with shared filesystems (FSx for Lustre scratch, and FSx for OpenZFS or Amazon EFS home directories).
 
-> **Upstream Repository**: These templates are based on [aws-samples/aws-hpc-recipes](https://github.com/aws-samples/aws-hpc-recipes/tree/main/recipes/pcs), customized for ML workloads: container support (Enroot/Pyxis) installable at first boot without an AMI build, built-in monitoring, updated Slurm versions (25.05/25.11), and dedicated P5/P6 multi-NIC EFA templates. The templates in this repository are maintained independently and may diverge from the upstream recipes.
+> **Upstream Repository**: These templates are based on [aws-samples/aws-hpc-recipes](https://github.com/aws-samples/aws-hpc-recipes/tree/main/recipes/pcs), customized for ML workloads: container support (Enroot/Pyxis) installable at first boot without an AMI build, built-in monitoring, updated Slurm versions (25.05/25.11/26.05), and dedicated P5/P6 multi-NIC EFA templates. The templates in this repository are maintained independently and may diverge from the upstream recipes.
 
 ## 1. Key Features
 
@@ -24,7 +24,7 @@ A default deployment (`pcs-ml-cluster-deploy-all.yaml`) provisions:
 
 - VPC with a public subnet and private subnets in up to 3 AZs, a NAT gateway (primary AZ), and an S3 endpoint
 - FSx for Lustre (`/fsx`, high-performance shared scratch) and FSx for OpenZFS (`/home`); `/home` on Amazon EFS and no `/fsx` are options
-- PCS cluster with the Slurm scheduler (25.05 or 25.11), on the PCS-Ready DLAMI
+- PCS cluster with the Slurm scheduler (25.05, 25.11 or 26.05), on the PCS-Ready DLAMI
 - Login node group (public subnet) with the monitoring stack (Prometheus + Grafana + Nginx); SSH/Grafana can be opened to a trusted CIDR
 - CPU compute node group (private subnet); EFA can be enabled for HPC/MPI workloads
 - Optional GPU (P5/P6) node group with multi-NIC EFA, plus DCGM Exporter for the GPU dashboards
@@ -116,7 +116,7 @@ complete reference see [PARAMETERS.md](./docs/PARAMETERS.md).
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `SlurmVersion` | `25.11` | `25.05` or `25.11`; 25.11 is needed for the Slurm OpenMetrics dashboards. See [OPERATIONS.md §1](./docs/OPERATIONS.md#1-slurm-version-selection) |
+| `SlurmVersion` | `25.11` | `25.05`, `25.11` or `26.05`; 25.11 or later is needed for the Slurm OpenMetrics dashboards. See [OPERATIONS.md §1](./docs/OPERATIONS.md#1-slurm-version-selection) |
 | `AmiId` | *(empty → SSM auto)* | Empty auto-resolves the latest PCS-Ready DLAMI. See [AMI and container runtime](#ami-and-container-runtime) |
 | `SSHAccessCidr` | *(empty)* | Open SSH/22 on the login node to a trusted CIDR (default: SSM only). See [§6](#6-accessing-the-cluster) |
 

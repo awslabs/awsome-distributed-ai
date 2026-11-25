@@ -124,8 +124,8 @@ aws ssm start-session --target $LOGIN_ID --region ${REGION}
 Then `sudo su - ubuntu` and run the checks relevant to your change. A few quick ones:
 
 ```bash
-# Slurm sees the queues / nodes (adjust the version if you set SlurmVersion=25.05)
-export PATH=/opt/aws/pcs/scheduler/slurm-25.11/bin:$PATH; sinfo -N; squeue
+# Slurm sees the queues / nodes
+sinfo -N; squeue
 
 # Container runtime came from your bucket (the executor log shows the s3:// it fetched)
 sudo grep -r s3:// /var/log/amazon/pcs/lifecycle/actions/executor.log
