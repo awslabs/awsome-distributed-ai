@@ -611,9 +611,8 @@ NCCL, FSDP), see the [Test & Validation Guide](tests/README.md).
 
 > **Note — monitoring across login-node replacement.** Prometheus + Grafana run on the
 > (single) login node. Metric collection, the Grafana password, and the built-in
-> dashboards all recover automatically if the login node is replaced — but the
-> **historical metrics and any custom dashboards are lost** (the TSDB / Grafana DB are
-> node-local). Export custom dashboards to JSON if you need them to persist. Details:
+> dashboards all recover automatically if the login node is replaced, and the metric
+> history, custom dashboards and other Grafana state are kept on shared `/home`. Details:
 > [OPERATIONS.md §3.2](./docs/OPERATIONS.md#32-monitoring-across-a-login-node-stop--replacement).
 
 ---

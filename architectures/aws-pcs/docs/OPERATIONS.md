@@ -191,13 +191,17 @@ The stack is **replacement-safe by design**.
 - **Historical metrics and Grafana changes.** On the login node, `install-monitoring.sh`
   keeps the Prometheus TSDB and the Grafana DB on shared `/home`
   (`/home/monitoring-data/prometheus-data`, `/home/monitoring-data/grafana-data`), so a
-  replacement picks up the existing time series and any user-created or user-edited
-  Grafana state (custom dashboards, edits to the stock dashboards, annotations, alert
-  rules). Only the data lives on `/home`; the monitoring install tree stays node-local in
-  `/opt`, and compute nodes never write to these directories.
+  replacement picks up the existing time series and the Grafana state users created
+  (custom dashboards, including copies saved from the stock ones, annotations, alert
+  rules). The stock dashboards are file-provisioned and Grafana does not save edits to
+  them in place. Only the data lives on `/home`; `/home/monitoring-data` is root-only, the
+  monitoring install tree stays node-local in `/opt`, and compute nodes never write to
+  these directories.
 
 **Retention.** Prometheus keeps **30 days** of history, capped at **50 GB** (whichever
-limit is reached first, the oldest data is removed), so the TSDB cannot fill `/home`.
+limit is reached first, the oldest data is removed). Prometheus recommends keeping the
+cap at no more than 80-85% of the space it can use, so plan for the TSDB to take up to
+about 60 GB of `/home`.
 
 **Caveats.**
 
@@ -217,9 +221,28 @@ limit is reached first, the oldest data is removed), so the TSDB cannot fill `/h
   sudo docker compose -f compose/head.yml -p monitoring-head up -d prometheus
   ```
 
-- If `/home` is not mounted or Docker is not running when monitoring installs, the
-  installer logs a warning and falls back to node-local volumes, which do not survive a
-  replacement.
+- A login node lost without a clean shutdown can leave its file locks held by the
+  FSx for OpenZFS (NFSv3) server. The replacement removes the stale Prometheus lock file
+  and Grafana's search index (a cache Grafana rebuilds) before the services start.
+- Over NFS, a TSDB block that Prometheus deletes while its files are still open can stay
+  behind as a directory without `meta.json` (holding `.nfs*` files). Prometheus then logs
+  `compaction failed: plan compaction: open /prometheus/<block>/meta.json: no such file or
+  directory` every minute and stops merging blocks; ingestion and retention continue. A
+  replacement login node removes such directories before Prometheus starts. To clean them
+  up on the running login node:
+
+  ```bash
+  cd /opt/aws-parallelcluster-monitoring
+  sudo docker compose -f compose/head.yml -p monitoring-head stop prometheus
+  sudo bash -c 'for b in /home/monitoring-data/prometheus-data/0*/; do [ -e "${b}meta.json" ] || rm -rf "$b"; done'
+  sudo docker compose -f compose/head.yml -p monitoring-head up -d prometheus
+  ```
+
+- If `/home` is not mounted, both stores stay node-local. If Docker is not running when
+  monitoring installs, Grafana stays node-local; if the installer's compose file no
+  longer has the expected `--storage.tsdb.path` line, Prometheus stays node-local with
+  its default retention. The installer logs a warning in each case. Node-local data does
+  not survive a replacement.
 - For retention beyond 30 days, or storage that does not depend on the login node at all,
   use a managed backend (see [ROADMAP.md](./ROADMAP.md)).
 
