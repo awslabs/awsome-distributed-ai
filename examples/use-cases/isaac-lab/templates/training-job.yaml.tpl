@@ -32,10 +32,10 @@ spec:
               echo "Date: $$(date)"
               nvidia-smi -L
 
-              cd /workspace/IsaacLab
+              cd /workspace/isaaclab
               mkdir -p ${JOB_FSX_LOG_DIR}
-              rm -rf /workspace/IsaacLab/logs
-              ln -sf ${JOB_FSX_LOG_DIR} /workspace/IsaacLab/logs
+              rm -rf /workspace/isaaclab/logs
+              ln -sf ${JOB_FSX_LOG_DIR} /workspace/isaaclab/logs
 
               # Auto-resume: find the latest checkpoint on FSx from a previous run
               LATEST_CKPT=$$(find ${JOB_FSX_LOG_DIR} -name "best_agent.pt" -printf "%T@ %p\n" 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2)
@@ -48,7 +48,7 @@ spec:
               fi
 
               echo "=== Starting Master (${JOB_NUM_NODES}-node, $$((${JOB_GPUS} * ${JOB_NUM_NODES})) GPUs total, ${MAX_ITERATIONS} iterations) ==="
-              /isaac-sim/python.sh -m torch.distributed.run \
+              /workspace/isaaclab/isaaclab.sh -p -m torch.distributed.run \
                 --nproc_per_node=${JOB_GPUS} \
                 --nnodes=${JOB_NUM_NODES} \
                 --node_rank=$$RANK \
@@ -56,10 +56,10 @@ spec:
                 --rdzv_backend=c10d \
                 --rdzv_endpoint=$$MASTER_ADDR:$$MASTER_PORT \
                 run_train.py \
+                --rl_library=${FRAMEWORK} \
                 --distributed \
                 --task=${TASK} \
                 --max_iterations=${MAX_ITERATIONS} \
-                --headless \
                 $$RESUME_FLAG
 
               echo "=== Training Complete at $$(date) ==="
@@ -76,7 +76,7 @@ spec:
             - name: ISAACLAB_INIT_LOCK
               value: "/tmp/isaaclab_init.lock"
             - name: ISAACLAB_TRAIN_SCRIPT
-              value: "/workspace/IsaacLab/scripts/reinforcement_learning/${FRAMEWORK}/train.py"
+              value: "/workspace/isaaclab/scripts/reinforcement_learning/train.py"
             - name: MLFLOW_ARTIFACT_DIR
               value: "${JOB_FSX_LOG_DIR}/${FRAMEWORK}"
             - name: MLFLOW_TRACKING_URI
@@ -138,7 +138,7 @@ spec:
               echo "RANK: $$RANK"
               nvidia-smi -L
 
-              cd /workspace/IsaacLab
+              cd /workspace/isaaclab
 
               # Auto-resume: find the latest checkpoint on FSx from a previous run
               LATEST_CKPT=$$(find ${JOB_FSX_LOG_DIR} -name "best_agent.pt" -printf "%T@ %p\n" 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2)
@@ -151,7 +151,7 @@ spec:
               fi
 
               echo "=== Starting Worker ==="
-              /isaac-sim/python.sh -m torch.distributed.run \
+              /workspace/isaaclab/isaaclab.sh -p -m torch.distributed.run \
                 --nproc_per_node=${JOB_GPUS} \
                 --nnodes=${JOB_NUM_NODES} \
                 --node_rank=$$RANK \
@@ -159,10 +159,10 @@ spec:
                 --rdzv_backend=c10d \
                 --rdzv_endpoint=$$MASTER_ADDR:$$MASTER_PORT \
                 run_train.py \
+                --rl_library=${FRAMEWORK} \
                 --distributed \
                 --task=${TASK} \
                 --max_iterations=${MAX_ITERATIONS} \
-                --headless \
                 $$RESUME_FLAG
 
               echo "=== Worker Complete at $$(date) ==="
@@ -178,7 +178,7 @@ spec:
             - name: ISAACLAB_INIT_LOCK
               value: "/tmp/isaaclab_init.lock"
             - name: ISAACLAB_TRAIN_SCRIPT
-              value: "/workspace/IsaacLab/scripts/reinforcement_learning/${FRAMEWORK}/train.py"
+              value: "/workspace/isaaclab/scripts/reinforcement_learning/train.py"
             - name: MLFLOW_ARTIFACT_DIR
               value: "${JOB_FSX_LOG_DIR}/${FRAMEWORK}"
             - name: MLFLOW_TRACKING_URI
