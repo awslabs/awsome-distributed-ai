@@ -1,16 +1,19 @@
-"""Download UniRef50 and tokenize into OLMo memmap .npy format.
+"""Download UniRef50 and tokenize for OLMo-core's NumpyFSLDataset.
 
 Produces:
-  data/protein/train/part-{NN}-00000.npy   (uint16, flat token IDs)
-  data/protein/val/part-00-00000.npy       (uint16, flat token IDs)
+  $OUTPUT/train/part-{NN}-00000.npy   (uint8, flat token IDs)
+  $OUTPUT/val/part-00-00000.npy       (uint8, flat token IDs)
 
-Each .npy file is a flat array of uint16 token IDs. Protein sequences are
-concatenated with EOS (token 0) between them, matching OLMo's MemMapDataset
-expectations: no special framing, just a flat stream of tokens chunked into
-max_sequence_length blocks at training time.
+Each shard is a headerless flat array of uint8 token IDs — the dtype
+OLMo-core infers for a 28-token vocabulary (NumpyDatasetConfig.get_dtype
+picks the smallest unsigned type that fits vocab_size - 1), so writer and
+reader agree without a dtype override, and storage halves vs uint16.
+Protein sequences are concatenated with EOS (token 0) between them; the
+dataset chunks the stream into sequence_length blocks at training time.
 
 Usage:
-    python scripts/prepare_protein_data.py [--max-sequences N] [--val-fraction 0.005]
+    python 1.prepare_uniref.py --output /fsx/olmo-protein/data/protein \
+        [--max-sequences N] [--val-fraction 0.005]
 
 Set --max-sequences for a quick test run (e.g. --max-sequences 100000).
 """
@@ -26,6 +29,7 @@ from pathlib import Path
 import numpy as np
 
 UNIREF50_URL = "https://ftp.uniprot.org/pub/databases/uniprot/uniref/uniref50/uniref50.fasta.gz"
+# Set from --output in main().
 DATA_DIR = Path("data/protein")
 RAW_FILE = DATA_DIR / "uniref50.fasta.gz"
 
@@ -40,7 +44,7 @@ for i, aa in enumerate(ALL_RESIDUES):
     RESIDUE_TO_ID[aa] = i + 2  # ids 2..27
 UNK_ID = RESIDUE_TO_ID["X"]  # fallback for unexpected characters
 
-TOKENS_PER_SHARD = 50_000_000  # ~100 MB per shard at uint16
+TOKENS_PER_SHARD = 100_000_000  # ~100 MB per shard at uint8
 
 
 def download_uniref50():
@@ -74,25 +78,31 @@ def parse_fasta_gz(path, max_sequences=None):
 
 
 def tokenize_sequence(seq):
-    """Convert amino acid string to list of uint16 token IDs, with trailing EOS."""
+    """Convert amino acid string to a list of token IDs, with trailing EOS."""
     ids = [RESIDUE_TO_ID.get(ch, UNK_ID) for ch in seq]
     ids.append(EOS_ID)
     return ids
 
 
 def write_shard(tokens, path):
-    arr = np.array(tokens, dtype=np.uint16)
+    arr = np.array(tokens, dtype=np.uint8)
     arr.tofile(str(path))
     print(f"  wrote {path} ({len(tokens):,} tokens, {path.stat().st_size / 1e6:.1f} MB)")
 
 
 def main():
+    global DATA_DIR, RAW_FILE
     parser = argparse.ArgumentParser()
+    parser.add_argument("--output", type=Path, default=Path("data/protein"),
+                        help="Output directory for shards (train/ and val/ created inside)")
     parser.add_argument("--max-sequences", type=int, default=None,
                         help="Limit number of sequences (for testing)")
     parser.add_argument("--val-fraction", type=float, default=0.005,
                         help="Fraction of sequences for validation")
     args = parser.parse_args()
+
+    DATA_DIR = args.output
+    RAW_FILE = DATA_DIR / "uniref50.fasta.gz"
 
     download_uniref50()
 
