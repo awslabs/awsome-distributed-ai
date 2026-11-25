@@ -125,9 +125,13 @@ class QuizBase(fixture.Base):
 
 
 class Grammar(unittest.TestCase):
-    def test_next_takes_no_argument(self):
+    def test_next_takes_at_most_the_number_of_the_pages_incident(self):
         self.assertEqual('next', session.parse_participant_request('next').verb)
-        for text in ('next 2', 'next efa-reset', 'next --incident 3', 'next;id'):
+        self.assertIsNone(session.parse_participant_request('next').argument)
+        request = session.parse_participant_request('next 2')
+        self.assertEqual(('next', 2, None), (request.verb, request.argument, request.error))
+        for text in ('next 0', 'next 02', 'next 100', 'next 2 3', 'next efa-reset',
+                     'next --incident 3', 'next;id'):
             with self.subTest(text=text):
                 self.assertIsNotNone(session.parse_participant_request(text).error)
 
@@ -145,7 +149,9 @@ class Grammar(unittest.TestCase):
 
     def test_entry_point_passes_next_and_lists_no_replace(self):
         text = ENTRY.read_text()
-        self.assertIn('next|status|recover|replace)', text)
+        self.assertIn('status|recover|replace)', text)
+        self.assertIn('[[ $# -eq 1 || ( $# -eq 2 && $2 =~ ^[1-9][0-9]?$ ) ]] || usage\n'
+                      '        request=("$@")', text)
         self.assertIn('[[ $2 =~ ^[0-9a-f]{32}$ ]] || usage\n        request=(ended "$2")', text)
         usage = text[text.index("<<'USAGE'"):text.index('\nUSAGE\n')]
         self.assertIn('next ', usage)
@@ -491,6 +497,111 @@ class JobIncidents(QuizBase):
         self.assertEqual({'writer_rank': 0},
                          json.loads(Path(result.saved_path).read_text())['settings'])
 
+    def started(self):
+        return [entry['number'] for entry in self.progress_record()['issued']]
+
+    def profiles(self):
+        return sorted(p.name for p in (self.answers / 'incidents').iterdir())
+
+    def test_a_named_incident_starts_whatever_was_started_before(self):
+        self.assertEqual(3, self.make().next(3).incident)
+        self.assertEqual(1, self.make().next(1).incident)
+        self.assertEqual(2, self.make().next(2).incident)
+        self.assertEqual([3, 1, 2], self.started())
+        self.assertEqual(['incident-1.json', 'incident-2.json', 'incident-3.json'],
+                         self.profiles())
+        self.assertEqual('Incidents issued: 3 of 4', self.make().status().schedule_line)
+
+    def test_an_incident_started_again_is_a_new_start_with_its_own_profile(self):
+        first = self.make().next(2)
+        again = self.make().next(2)
+        self.assertEqual((2, 2), (first.incident, again.incident))
+        self.assertEqual(['incident-2-attempt-2.json', 'incident-2.json'], self.profiles())
+        one, two = (json.loads(Path(r.saved_path).read_text()) for r in (first, again))
+        self.assertNotEqual(one['issue_id'], two['issue_id'])
+        self.assertEqual((one['exercise'], one['settings']), (two['exercise'], two['settings']))
+        self.assertEqual([2, 2], self.started())
+        # Started twice, it is still one incident of the four.
+        self.assertEqual('Incidents issued: 1 of 4', self.make().status().schedule_line)
+        self.assertIn('Next: Incident 2 is under way.',
+                      session.render(self.make().status(), 'status'))
+
+    def test_ended_marks_the_start_it_names_and_no_other(self):
+        first = json.loads(Path(self.make().next(2).saved_path).read_text())['issue_id']
+        self.make().next(2)
+        self.make().ended(first)
+        issued = self.progress_record()['issued']
+        self.assertIn('ended_at', issued[0])
+        self.assertNotIn('ended_at', issued[1])
+        self.assertIn('Next: Incident 2 is under way.',
+                      session.render(self.make().status(), 'status'))
+
+    def test_a_number_outside_the_schedule_is_refused(self):
+        with self.assertRaisesRegex(session.Refusal,
+                                    'incidents 1 to 4; there is no incident 5'):
+            self.make().next(5)
+        self.assertFalse((self.state_dir / 'schedule-table-1.json').exists())
+
+    def test_without_a_number_next_follows_the_current_incident(self):
+        self.make().next(2)
+        self.assertEqual(3, self.make().next().incident)
+        self.make().next(1)
+        self.assertEqual(2, self.make().next().incident)
+        self.assertEqual([2, 3, 1, 2], self.started())
+
+    def test_an_unfinished_hand_over_is_finished_by_its_number_or_replaced_by_another(self):
+        os.chmod(self.answers, 0o500)
+        try:
+            with self.assertRaises(session.Refusal):
+                self.make().next(1)
+        finally:
+            os.chmod(self.answers, 0o700)
+        self.assertEqual(1, self.make().next(1).incident)
+        self.assertEqual([1], self.started())
+        os.chmod(self.answers / 'incidents', 0o500)
+        try:
+            with self.assertRaises(session.Refusal):
+                self.make().next(2)
+        finally:
+            os.chmod(self.answers / 'incidents', 0o700)
+        # Another number does not wait for the hand-over that failed.
+        self.assertEqual(3, self.make().next(3).incident)
+        self.assertEqual([1, 2, 3], self.started())
+        self.assertIsNone(self.progress_record()['issued'][1]['profile'])
+        self.assertEqual(['incident-1.json', 'incident-3.json'], self.profiles())
+
+    def test_one_incident_starts_a_bounded_number_of_times(self):
+        with mock.patch.object(session.DeviceSession, 'START_LIMIT', 2):
+            self.make().next(1)
+            self.make().next(1)
+            with self.assertRaisesRegex(session.Refusal,
+                                        'Incident 1 has been started 2 times'):
+                self.make().next(1)
+            self.assertEqual([1, 1], self.started())
+            self.assertEqual(2, self.make().next(2).incident)
+
+    def test_the_operator_view_shows_each_incidents_latest_start(self):
+        self.make().next(2)
+        self.make().next(1)
+        self.make().next(2)
+        view = session.operator_view(self.make())
+        self.assertIn('Schedule (2 of 4 issued):', view)
+        rows = {line.split('.')[0].strip(): line for line in view.splitlines()
+                if line.startswith('  ') and line.strip()[:1].isdigit()}
+        self.assertRegex(rows['2'], r'incident-2-attempt-2\.json starts=2 current$')
+        self.assertRegex(rows['1'], r'profile=\S+incident-1\.json$')
+        self.assertTrue(rows['3'].endswith(' not issued'))
+
+    def test_the_device_incident_is_handed_over_again_under_its_own_number(self):
+        issued = self.advance_to(4)
+        repeat = self.make().next(4)
+        self.assertEqual(issued.saved_path, repeat.saved_path)
+        self.assertEqual([1, 2, 3, 4], self.started())
+        # Another number starts its own incident; the device incident's
+        # operation was never issued, so nothing holds the node.
+        self.assertEqual(2, self.make().next(2).incident)
+        self.assertEqual([], self.active_calls)
+
     def test_an_exhausted_schedule_says_so(self):
         self.set_schedule(session.validate_schedule([{'exercise': 'slow-job'}]))
         self.make().next()
@@ -806,7 +917,7 @@ class DeviceIncident(QuizBase):
         rendered = self.device_round_that_did_not_return()
         self.assertEqual('not-issued', self.make().store.read().active_fault['outcome'])
         self.assertIn('Answer for incident 1: the lab did not apply this incident, so nothing '
-                      'you saw came from it. Start it again with bash job.sh incident.', rendered)
+                      'you saw came from it. Start it again with bash job.sh incident 1.', rendered)
         # The whole status stays concealed: the incident is started again.
         self.assert_no_kind(rendered)
         self.assertNotIn('reset', rendered)
@@ -1007,6 +1118,30 @@ class ScheduleReissue(QuizBase):
         self.assertTrue(result.under_way)
         self.assertEqual(calls + 1, len(self.active_calls))
         self.assertEqual(2, self.make().store.read().round)
+
+    def test_the_device_incident_starts_again_after_its_recovery(self):
+        self.rehearse_device_incident()
+        calls = len(self.active_calls)
+        # Named again, it is handed over as a new start and nothing is applied
+        # until its job reports progress.
+        again = self.make().next(4)
+        self.assertFalse(again.under_way)
+        self.assertEqual('incident-4-attempt-2.json', Path(again.saved_path).name)
+        self.assertEqual(calls, len(self.active_calls))
+        self.running_job_with_progress()
+        self.assertTrue(self.make().next(4).under_way)
+        self.assertEqual(calls + 1, len(self.active_calls))
+        self.assertEqual(2, self.make().store.read().round)
+
+    def test_a_round_that_holds_the_node_refuses_every_start(self):
+        self.advance_to(4)
+        self.running_job_with_progress()
+        self.assertTrue(self.make().next(4).under_way)
+        for number in (1, 4):
+            with self.subTest(number=number):
+                with self.assertRaisesRegex(session.Refusal, 'Incident 4 still holds your node'):
+                    self.make().next(number)
+        self.assertEqual(4, len(self.progress_record()['issued']))
 
     def test_an_issued_entry_without_an_identifier_is_refused(self):
         self.make().next()
@@ -1938,15 +2073,34 @@ class ApplicationIncidentNext(ApplicationIncidentBase):
             self.make().next()
         self.assertFalse((self.state_dir / 'schedule-table-1.json').exists())
 
-    def test_next_waits_until_the_incident_has_ended(self):
+    def test_an_incident_that_has_not_ended_does_not_hold_the_seat(self):
         self.issue()
-        with self.assertRaisesRegex(session.Refusal, 'Incident 1 is under way'):
-            self.make().next()
-        self.assertEqual(1, len(self.progress_record()['issued']))
-        self.make().ended(self.issue_id(1))
         following = self.make().next()
         self.assertEqual(2, following.incident)
         self.assertEqual('storage', json.loads(Path(following.saved_path).read_text())['exercise'])
+        issued = self.progress_record()['issued']
+        self.assertEqual([1, 2], [entry['number'] for entry in issued])
+        self.assertNotIn('ended_at', issued[0])
+        # Its resume and its checks belonged to the incident while it was current.
+        with self.assertRaisesRegex(session.Refusal, 'Incident 1 is not your current incident'):
+            self.make().resume(issued[0]['issue_id'])
+        self.assertEqual([], self.mutations())
+
+    def test_it_starts_again_in_a_new_allocation_after_the_first_one_ended(self):
+        # The allocation ended before the resume: the participant's terminal closed.
+        self.issue()
+        self.executor.jobs = []
+        with self.assertRaisesRegex(session.Refusal, 'not ready to resume'):
+            self.make().resume(self.issue_id(1))
+        self.running_allocation(job='231')
+        again = self.make().next(1)
+        self.assertEqual(1, again.incident)
+        first, second = self.progress_record()['issued']
+        self.assertEqual(('226', '231'), (first['job']['id'], second['job']['id']))
+        self.assertNotEqual(first['issue_id'], second['issue_id'])
+        rendered = session.render(self.make().status(), 'status')
+        self.assertIn('Incidents issued: 1 of 2', rendered)
+        self.assertIn('Next: Incident 1 is under way. Collect your evidence', rendered)
         self.assertEqual([], self.mutations())
 
     def test_status_tells_collect_then_resume_and_later_next(self):

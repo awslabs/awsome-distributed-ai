@@ -8,7 +8,8 @@
 # its configuration.
 #
 #   ./12.device-exercise.sh status       where your incident stands
-#   ./12.device-exercise.sh next         start your seat's next incident (job.sh runs this)
+#   ./12.device-exercise.sh next [N]     start incident N of your seat (job.sh runs this,
+#                                        with the number of the page's incident)
 #   ./12.device-exercise.sh ended <issue id>  record that the incident has ended (job.sh runs this)
 #   ./12.device-exercise.sh collect 0    run one allowed check and keep its output
 #   ./12.device-exercise.sh recover      ask for recovery once you have your evidence
@@ -26,7 +27,8 @@ usage() {
 Usage: 12.device-exercise.sh <command>
 
   status           Show where your incident stands and which checks you can collect
-  next             Start your seat's next incident; job.sh runs this for you
+  next [N]         Start incident N of your seat, or without a number the one
+                   after your current incident; job.sh runs this for you
   ended <issue id> Record that the incident has ended; job.sh runs this for you
   collect <check>  Run one allowed check on your target and save its output
   collect kernel   Save a window of your target's kernel log
@@ -66,7 +68,11 @@ case "$1" in
         [[ $2 =~ ^[0-9a-f]{32}$ ]] || usage
         request=(resume "$2")
         ;;
-    next|status|recover|replace)
+    next)
+        [[ $# -eq 1 || ( $# -eq 2 && $2 =~ ^[1-9][0-9]?$ ) ]] || usage
+        request=("$@")
+        ;;
+    status|recover|replace)
         [[ $# -eq 1 ]] || usage
         request=("$1")
         ;;

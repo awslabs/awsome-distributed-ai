@@ -6,14 +6,20 @@
 #   bash job.sh notes      create your notes file
 #   bash job.sh run        run the training stand-in, the epoch job and the all-reduce
 #                          sweep on your pair
-#   bash job.sh incident   start your next incident and run its job
+#   bash job.sh incident N start incident N, the one your page is on, and run its job
 #   bash job.sh rerun      run the current incident's job again, as the pair is now
 #                          (with the options a page gives for that incident)
 #   bash job.sh resume     undo what the lab changed and resume the job
 #
 # Every command except notes runs inside your two-node allocation (terminal A).
-# incident asks the lab controls for the incident's profile
-# (12.device-exercise.sh next) and runs its job from that profile; rerun and
+# incident takes the number of the incident the participant's page is on and
+# sends it with its request for the incident's profile
+# (12.device-exercise.sh next N). The lab controls start that incident, whichever
+# incidents ran before and whether or not it ran already, so a participant can
+# go back to an incident or start one again, also in a new allocation. Before
+# its job starts, incident removes what an earlier incident may have left on the
+# pair (clear_checkpoint_leftovers, and the plugin restored before it is hidden),
+# so that every start shows the same failure. It runs the job from the profile; rerun and
 # resume reuse the same profile and never ask for a new incident. The launcher
 # prints none of the incident's settings: the job reads them from
 # AIM344_INCIDENT_SETTINGS (workload.py apply_incident_settings). The lab's own
@@ -69,7 +75,8 @@ Usage: bash job.sh <command>
 
   notes      Create your notes file, ~/aim344-results/notes.md
   run        Run the training stand-in, the epoch job and the all-reduce sweep on your pair
-  incident   Start your next incident and run its job
+  incident N Start incident N, the one your page is on, and run its job;
+             an incident can be started again, and in any order
   rerun      Run the current incident's job again, as your pair is now;
              add an option only where your page gives one
   resume     Undo what the lab changed in the current incident and resume the job
@@ -382,11 +389,18 @@ if newest:
     print(newest[1])
 PY
 )
-    [[ -n $path ]] || refuse 'No incident has started on your seat yet. Start one with: bash job.sh incident'
+    [[ -n $path ]] || refuse 'No incident has started on your seat yet. Start the first with: bash job.sh incident 1'
     read_profile "$path"
 }
 
 # ---------------------------------------------------------------- jobs
+# The last line of an incident's job, below the job log's path: which incident
+# the job was. The line that names the incident at the start has scrolled away
+# under the job's output by then. The healthy run reads no profile and prints none.
+incident_line() {
+    [[ -z ${incident:-} ]] || printf 'This job was incident %s.\n' "$incident"
+}
+
 # One torch run with a neutral run id. Prints the job log's path before and
 # after the run, and the time the job ended in UTC.
 torch_job() {
@@ -398,6 +412,7 @@ torch_job() {
     run_torch "$phase" "$@" || rc=$?
     printf 'job_end_utc=%s\n' "$(date -u +%FT%TZ)"
     printf 'Job log: %s\n' "$RESULTS_DIR/$AIM344_RUN_ID.log"
+    incident_line
     return "$rc"
 }
 
@@ -411,6 +426,7 @@ sweep_job() {
     (unset AIM344_EFA_IFACE; run_sweep job) || rc=$?
     printf 'job_end_utc=%s\n' "$(date -u +%FT%TZ)"
     printf 'Job log: %s\n' "$RESULTS_DIR/$AIM344_RUN_ID.nccl.log"
+    incident_line
     return "$rc"
 }
 
@@ -498,7 +514,9 @@ controller_step() {
             return 0
         fi
         status=0
-        reply=$(bash "$LAB_DIR/12.device-exercise.sh" next 2>&1) || status=$?
+        # With the incident's number, so that the request can only be this
+        # incident's and never starts another one.
+        reply=$(bash "$LAB_DIR/12.device-exercise.sh" next "$incident" 2>&1) || status=$?
         if busy_reply && ((busy < BUSY_SECONDS)); then
             busy=$((busy + 1))
             lab_note "next, busy reply $busy, exit $status: $reply"
@@ -568,6 +586,20 @@ healthy_job() {
     sweep_job job
 }
 
+# Removes what an earlier incident may have left in the checkpoint directories of
+# the pair: the filler and the partial write of the incident that fills one of
+# them. The directories are on the nodes and outlive the allocation, the removal
+# is safe when there is nothing to remove, and it is not asked which incident
+# ran before. Without it a job that starts at step 0 fails at its first save,
+# before it shows anything of its own incident.
+clear_checkpoint_leftovers() {
+    # The job container may be created here, which takes a while in a new
+    # allocation. Every incident with a checkpoint writer prints this line.
+    printf 'Clearing the checkpoint directories on both nodes.\n'
+    prepare_torch
+    lab_step node_command python3 /opt/aim344/recover-checkpoint.py
+}
+
 # The current incident's job: $1 is incident, rerun or resume.
 incident_job() {
     local what=$1 name=incident-$incident
@@ -577,6 +609,11 @@ incident_job() {
     # before any container starts.
     if ((${#rerun_options[@]})) && [[ $exercise != dataloader ]]; then
         refuse "Incident $incident takes no options. Run it again with: bash job.sh rerun"
+    fi
+    # Every job with a checkpoint writer starts its incident on clean directories.
+    if [[ $what == incident && $exercise =~ ^(storage|silent-corruption|cuda-assert|efa-reset)$ ]]; then
+        ensure_prepared
+        clear_checkpoint_leftovers
     fi
     case $exercise in
         storage)
@@ -597,6 +634,9 @@ incident_job() {
             ensure_prepared
             case $what in
                 incident)
+                    # Started again in the same allocation, the plugin is still
+                    # hidden in its container; restore changes nothing otherwise.
+                    lab_step node_command bash /opt/aim344/plugin-state.sh restore
                     lab_step node_command bash /opt/aim344/plugin-state.sh hide
                     sweep_job "$name"
                     ;;
@@ -719,7 +759,8 @@ verb=$1
 shift
 case $verb in
     notes) (($# == 0)) || usage; make_notes; exit 0 ;;
-    run|incident|resume) (($# == 0)) || usage ;;
+    run|resume) (($# == 0)) || usage ;;
+    incident) [[ $# -eq 1 && $1 =~ ^[1-9][0-9]?$ ]] || usage; named=$1 ;;
     rerun) parse_rerun_options "$@" ;;
     *) usage ;;
 esac
@@ -747,14 +788,20 @@ case $verb in
         # Prepared before the request, so that a failure here leaves the incident
         # unissued. One request for the incident itself, sent again only while the
         # lab controls are busy; the incident in which the lab controls act asks
-        # again from controller_step, after progress.
+        # again from controller_step, after progress. The request carries the
+        # number the participant named, which is the incident the lab controls start.
         ensure_prepared
-        ask_controller next
+        ask_controller next "$named"
         ((status == 0)) || { printf '%s\n' "$reply" >&2; exit "$status"; }
         handed=$(sed -n 's/^Profile: //p' <<< "$reply" | tail -n 1)
         [[ -n $handed ]] || { printf '%s\n' "$reply" >&2; refuse 'The lab controls handed over no incident profile; raise your hand.'; }
         read_profile "$handed"
         AIM344_LAB_LOG=$lab_log
+        # The lab controls start the number they are sent, so this is never expected.
+        if [[ $incident != "$named" ]]; then
+            lab_note "next $named: handed incident $incident"
+            refuse "The lab controls started incident $incident, not incident $named; raise your hand."
+        fi
         ((busy == 0)) || lab_note "next: sent again after $busy busy replies"
         lab_note "next: $reply"
         printf 'Starting incident %s.\n' "$incident"

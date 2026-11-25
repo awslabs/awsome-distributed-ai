@@ -178,7 +178,8 @@ class Launcher(unittest.TestCase):
         return [line.split(': ', 1)[0].split(' ', 1)[1] for line in self.lines(self.next_log)]
 
     def next_calls(self):
-        return [line for line in self.lines(self.next_log) if line.split()[1] == 'next:']
+        return [line for line in self.lines(self.next_log)
+                if line.split()[1].rstrip(':') == 'next']
 
     def test_readonly_recovery_commands_reach_existing_controller(self):
         entry = LAB / '12.device-exercise.sh'
@@ -196,7 +197,7 @@ class Launcher(unittest.TestCase):
 
     def test_cuda_assert_profile_runs_as_job_and_preserves_failure(self):
         self.issue(5, 'cuda-assert', {'assert_rank': 0, 'assert_step': 201})
-        result = self.run_job('incident', TEST_RC='1')
+        result = self.run_job('incident', '5', TEST_RC='1')
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
         self.assertEqual(1, len(self.torch_calls()))
         self.assertIn('phase=job', self.torch_calls()[0])
@@ -244,7 +245,9 @@ class Launcher(unittest.TestCase):
 
     # ---------------------------------------------------------------- grammar
     def test_usage_and_unknown_arguments_fail(self):
-        for argv in ((), ('incident', 'extra'), ('fix-storage',), ('run', '--writer-rank', '9'),
+        for argv in ((), ('incident',), ('incident', 'extra'), ('incident', '0'), ('incident', '1x'),
+                     ('incident', '-1'), ('incident', '1', '2'),
+                     ('fix-storage',), ('run', '--writer-rank', '9'),
                      ('--help',), ('notes', 'x'), ('resume', '--reinit-in-worker'),
                      ('run', '--dataset-cache', 'worker-thread'), ('rerun', '--writer-rank=9'),
                      ('rerun', '--dataset-cache', 'lock'), ('rerun', '--dataset-cache'),
@@ -330,10 +333,10 @@ class Launcher(unittest.TestCase):
                   'job name starts with aim344-'),
                  ({'AIM344_EFA_DEVICE': ''}, 'AIM344_EFA_DEVICE is not set'),
                  ({'AIM344_EFA_DEVICE': 'x;y'}, 'AIM344_EFA_DEVICE is not set'))
-        for verb in ('run', 'incident', 'rerun', 'resume'):
+        for argv in (('run',), ('incident', '1'), ('rerun',), ('resume',)):
             for env, message in cases:
-                with self.subTest(verb=verb, env=env):
-                    result = self.run_job(verb, **env)
+                with self.subTest(argv=argv, env=env):
+                    result = self.run_job(*argv, **env)
                     self.assertEqual(3, result.returncode)
                     self.assertIn(message, result.stderr)
                     self.assertEqual([], self.next_calls())
@@ -425,7 +428,7 @@ class Launcher(unittest.TestCase):
     # ---------------------------------------------------------------- storage incident
     def test_storage_incident_asks_once_and_passes_its_settings_silently(self):
         profile = self.issue(1, 'storage', {'writer_rank': 9})
-        result = self.run_job('incident', TEST_RC='1')
+        result = self.run_job('incident', '1', TEST_RC='1')
         self.assertEqual(1, result.returncode)
         self.assertEqual(1, len(self.next_calls()))
         [call] = self.torch_calls()
@@ -446,14 +449,100 @@ class Launcher(unittest.TestCase):
 
     def test_a_refused_incident_prints_the_refusal_and_runs_nothing(self):
         self.reply(1, 'All 4 incidents for this seat have been issued; there is no next incident.\n', rc=3)
-        result = self.run_job('incident')
+        result = self.run_job('incident', '1')
         self.assertEqual(3, result.returncode)
         self.assertIn('there is no next incident', result.stderr)
         self.assertEqual([], self.torch_calls())
 
+    def test_the_incident_request_carries_the_number_the_participant_named(self):
+        self.issue(2, 'slow-job')
+        result = self.run_job('incident', '2')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(['next 2'], self.controller_requests())
+
+    def test_a_number_the_lab_controls_refuse_starts_nothing(self):
+        self.reply(1, 'This seat has incidents 1 to 6; there is no incident 9.\n', rc=3)
+        result = self.run_job('incident', '9')
+        self.assertEqual(3, result.returncode)
+        self.assertIn('there is no incident 9', result.stderr)
+        self.assertEqual(['next 9'], self.controller_requests())
+        self.assertEqual([], self.torch_calls())
+
+    def test_an_incident_with_a_checkpoint_writer_starts_on_cleared_directories(self):
+        # What an earlier incident left in the checkpoint directories is removed
+        # before the job, whichever incident it was and in whichever allocation.
+        removal = 'node_command python3 /opt/aim344/recover-checkpoint.py'
+        for number, exercise, settings in ((2, 'storage', {'writer_rank': 9}),
+                                           (4, 'silent-corruption', {'corrupt_rank': 13}),
+                                           (5, 'cuda-assert', {'assert_rank': 0, 'assert_step': 201}),
+                                           (6, 'efa-reset', {})):
+            with self.subTest(exercise=exercise):
+                for path in self.incidents.glob('*'):
+                    path.unlink()
+                self.reset_calls()
+                if self.next_log.exists():
+                    self.next_log.unlink()
+                self.issue(number, exercise, settings)
+                result = self.run_job('incident', str(number))
+                self.assertEqual(0, result.returncode, result.stderr)
+                calls = self.lines(self.calls)
+                job = next(line for line in calls if line.startswith('run_torch'))
+                self.assertLess(calls.index(removal), calls.index(job))
+                self.assertIn('Removed lab filler',
+                              (self.incidents / f'incident-{number}-lab.log').read_text())
+                self.assertIn('Starting incident %d.\nClearing the checkpoint directories on '
+                              'both nodes.\nJob log: ' % number, result.stdout)
+                self.assert_no_cause(result)
+
+    def test_rerun_and_the_jobs_without_a_checkpoint_writer_clear_nothing(self):
+        removal = 'node_command python3 /opt/aim344/recover-checkpoint.py'
+        self.issue(1, 'storage', {'writer_rank': 9})
+        self.assertEqual(0, self.run_job('incident', '1').returncode)
+        self.reset_calls()
+        self.assertEqual(0, self.run_job('rerun').returncode)
+        self.assertNotIn(removal, self.lines(self.calls))
+        for number, exercise in ((2, 'slow-job'), (3, 'dataloader')):
+            with self.subTest(exercise=exercise):
+                self.reset_calls()
+                self.next_log.unlink()
+                self.issue(number, exercise)
+                result = self.run_job('incident', str(number))
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertNotIn(removal, self.lines(self.calls))
+                self.assertNotIn('Clearing the checkpoint', result.stdout)
+
+    def test_the_slow_job_incident_restores_the_plugin_before_it_hides_it(self):
+        # Started again in one allocation, the plugin is still hidden in the container.
+        self.issue(1, 'slow-job')
+        self.assertEqual(0, self.run_job('incident', '1').returncode)
+        calls = self.lines(self.calls)
+        restore = calls.index('node_command bash /opt/aim344/plugin-state.sh restore')
+        hide = calls.index('node_command bash /opt/aim344/plugin-state.sh hide')
+        self.assertLess(restore, hide)
+        self.assertLess(hide, next(i for i, line in enumerate(calls) if line.startswith('run_sweep')))
+
+    def test_a_profile_for_another_number_than_the_one_named_runs_nothing(self):
+        self.issue(2, 'slow-job')
+        result = self.run_job('incident', '1')
+        self.assertEqual(3, result.returncode)
+        self.assertIn('The lab controls started incident 2, not incident 1; raise your hand.',
+                      result.stderr)
+        self.assertEqual([], self.torch_calls())
+        self.assertIn('next 1: handed incident 2',
+                      (self.incidents / 'incident-2-lab.log').read_text())
+
+    def test_every_incident_job_ends_by_naming_its_incident(self):
+        self.issue(1, 'storage', {'writer_rank': 9})
+        for argv in (('incident', '1'), ('rerun',), ('resume',)):
+            with self.subTest(argv=argv):
+                result = self.run_job(*argv)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertRegex(result.stdout, r'Job log: \S+\nThis job was incident 1\.\n\Z')
+        self.assertNotIn('This job was incident', self.run_job('run').stdout)
+
     def test_a_reply_without_a_profile_runs_nothing(self):
         self.reply(1, 'Incident 1 is ready.\n')
-        result = self.run_job('incident')
+        result = self.run_job('incident', '1')
         self.assertEqual(3, result.returncode)
         self.assertIn('handed over no incident profile', result.stderr)
         self.assertEqual([], self.torch_calls())
@@ -580,7 +669,7 @@ class Launcher(unittest.TestCase):
         self.reply(1, self.BUSY, rc=3)
         self.reply(2, f'Incident 1 is ready.\nProfile: {path}\nNext: Your launcher runs '
                       'this incident from the profile above.\n')
-        result = self.run_job('incident')
+        result = self.run_job('incident', '1')
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(['next', 'next'], self.controller_verbs())
         self.assertIn('Starting incident 1.', result.stdout)
@@ -592,7 +681,7 @@ class Launcher(unittest.TestCase):
     # ---------------------------------------------------------------- slow job incident
     def test_slow_job_incident_keeps_the_lab_step_out_of_the_participant_output(self):
         self.issue(2, 'slow-job')
-        result = self.run_job('incident')
+        result = self.run_job('incident', '2')
         self.assertEqual(0, result.returncode, result.stderr)
         calls = self.lines(self.calls)
         lab = self.incidents / 'incident-2-lab.log'
@@ -630,7 +719,7 @@ class Launcher(unittest.TestCase):
     def test_a_failed_lab_step_stops_with_a_neutral_message(self):
         self.issue(2, 'slow-job')
         (self.lab / 'common.sh').write_text(FAKE_COMMON + '\nnode_command() { echo "Unexpected plugin state." >&2; return 1; }\n')
-        result = self.run_job('incident')
+        result = self.run_job('incident', '2')
         self.assertEqual(3, result.returncode)
         self.assertIn('could not prepare this step', result.stderr)
         self.assertIn('Unexpected plugin state.', (self.incidents / 'incident-2-lab.log').read_text())
@@ -641,12 +730,13 @@ class Launcher(unittest.TestCase):
         self.issue(4, 'efa-reset')
         self.reply(2, 'Incident 4 is ready.\nProfile: x\n')
         self.reply(3, 'Incident 4 is under way.\nNext: Watch your job.\n')
-        result = self.run_job('incident', TEST_PROGRESS='1', TEST_RUN_SECONDS='20',
+        result = self.run_job('incident', '4', TEST_PROGRESS='1', TEST_RUN_SECONDS='20',
                               TEST_UNTIL='under way')
         self.assertEqual(0, result.returncode, result.stderr)
         calls = self.next_calls()
         self.assertEqual(3, len(calls), calls)
-        self.assertTrue(all(' next: ' in line for line in calls), calls)
+        # Every request names the incident, so none of them can start another one.
+        self.assertEqual(['next 4', 'next 4', 'next 4'], self.controller_requests())
         [call] = self.torch_calls()
         self.assertRegex(call, r'^run_torch phase=device run_id=incident-4-\d{8}T\d{6}Z copy=1 .* '
                                r'args=device --checkpoint-every=200 --replica-check --stack-dump-seconds=60 '
@@ -662,7 +752,7 @@ class Launcher(unittest.TestCase):
     def test_controller_step_stops_at_the_first_refusal(self):
         self.issue(4, 'efa-reset')
         self.reply(2, 'Your job is not running on your node; nothing was changed.\n', rc=3)
-        result = self.run_job('incident', TEST_PROGRESS='1', TEST_RUN_SECONDS='6')
+        result = self.run_job('incident', '4', TEST_PROGRESS='1', TEST_RUN_SECONDS='6')
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(2, len(self.next_calls()))
         self.assertIn('Your job is not running on your node; nothing was changed.', result.stderr)
@@ -672,7 +762,7 @@ class Launcher(unittest.TestCase):
         self.issue(4, 'efa-reset')
         self.reply(2, self.BUSY, rc=3)
         self.reply(3, 'Incident 4 is under way.\nNext: Watch your job.\n')
-        result = self.run_job('incident', TEST_PROGRESS='1', TEST_RUN_SECONDS='20',
+        result = self.run_job('incident', '4', TEST_PROGRESS='1', TEST_RUN_SECONDS='20',
                               TEST_UNTIL='under way')
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(3, len(self.next_calls()))
@@ -686,7 +776,7 @@ class Launcher(unittest.TestCase):
 
     def test_controller_step_waits_for_progress_and_ends_with_the_job(self):
         self.issue(4, 'efa-reset')
-        result = self.run_job('incident')
+        result = self.run_job('incident', '4')
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(1, len(self.next_calls()))
         self.assertIn('The job ended before the lab controls could act', result.stderr)
@@ -694,7 +784,7 @@ class Launcher(unittest.TestCase):
     def test_controller_step_is_bounded_by_the_run(self):
         self.issue(4, 'efa-reset')
         self.reply('default', 'Incident 4 is ready.\nProfile: x\n')
-        result = self.run_job('incident', TEST_PROGRESS='1', TEST_RUN_SECONDS='4')
+        result = self.run_job('incident', '4', TEST_PROGRESS='1', TEST_RUN_SECONDS='4')
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertLessEqual(len(self.next_calls()), 3)
         self.assertIn('The lab controls did not act during this run', result.stderr)
@@ -706,7 +796,7 @@ class Launcher(unittest.TestCase):
         copy.write_text(''.join(
             f'AIM344 collective_progress={n} collectives; tensor_bytes=1 B; timestamp=1 s since '
             f'epoch; 0 mismatches; job_id=4242; world_size=16; rank=0.\n' for n in (20, 40)))
-        result = self.run_job('incident')
+        result = self.run_job('incident', '4')
         self.assertEqual(1, len(self.next_calls()))
         self.assertIn('The job ended before the lab controls could act', result.stderr)
 
@@ -722,7 +812,7 @@ class Launcher(unittest.TestCase):
                 self.issue(5, 'efa-reset')
                 (self.lab / 'common.sh').write_text(
                     FAKE_COMMON + f'\nrun_torch() {{ note run_torch; {body}; }}\n')
-                result = self.run_job('incident', timeout=30)
+                result = self.run_job('incident', '5', timeout=30)
                 self.assertEqual(1, result.returncode, result.stderr)
                 self.assertEqual([], self.job_processes())
                 self.later_progress()
@@ -736,7 +826,7 @@ class Launcher(unittest.TestCase):
                 if self.next_log.exists():
                     self.next_log.unlink()
                 self.issue(5, 'efa-reset')
-                launcher = subprocess.Popen(['bash', str(self.lab / 'job.sh'), 'incident'],
+                launcher = subprocess.Popen(['bash', str(self.lab / 'job.sh'), 'incident', '5'],
                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                             env={**self.env, 'TEST_RUN_SECONDS': '60'})
                 try:
@@ -792,7 +882,7 @@ class Launcher(unittest.TestCase):
         self.issue(1, 'storage', {'writer_rank': 9})
         self.reply(1, 'Incident 4 still holds your node. Collect your evidence and finish it '
                       'with recover; next continues after that.\n', rc=3)
-        result = self.run_job('incident')
+        result = self.run_job('incident', '1')
         self.assertEqual(3, result.returncode)
         self.assertEqual([f'prepare_allocation RESULTS_DIR={self.results}'], self.lines(self.calls))
         self.assertIn('still holds your node', result.stderr)
@@ -802,7 +892,7 @@ class Launcher(unittest.TestCase):
 
     def test_dataloader_incident_runs_the_rank_thread_job_without_naming_it(self):
         self.issue(3, 'dataloader')
-        result = self.run_job('incident', TEST_RC='124')
+        result = self.run_job('incident', '3', TEST_RC='124')
         self.assertEqual(124, result.returncode)
         self.assertEqual(1, len(self.next_calls()))
         [call] = self.torch_calls()
@@ -879,7 +969,7 @@ class Launcher(unittest.TestCase):
 
     def test_dataloader_settings_from_the_profile_are_passed_as_given(self):
         self.issue(3, 'dataloader', {'affected_rank': 5, 'worker_cuda': True})
-        self.assertEqual(0, self.run_job('incident').returncode)
+        self.assertEqual(0, self.run_job('incident', '3').returncode)
         self.assertEqual(['job_env settings={"affected_rank":5,"dataset_cache":"rank-thread",'
                           '"worker_cuda":true} limit=120'], self.job_env())
 
@@ -888,7 +978,7 @@ class Launcher(unittest.TestCase):
 
     def test_silent_corruption_incident_passes_the_seats_flip_in_the_environment(self):
         self.issue(4, 'silent-corruption', self.FLIP)
-        result = self.run_job('incident')
+        result = self.run_job('incident', '4')
         self.assertEqual(0, result.returncode, result.stderr)
         [call] = self.torch_calls()
         self.assertRegex(call, r'^run_torch phase=job run_id=incident-4-\d{8}T\d{6}Z copy=1 .* '
@@ -950,7 +1040,7 @@ class Launcher(unittest.TestCase):
 
     def test_an_unknown_exercise_is_answered_from_the_page(self):
         self.issue(6, 'future-exercise')
-        result = self.run_job('incident')
+        result = self.run_job('incident', '6')
         self.assertEqual(3, result.returncode)
         self.assertIn('Incident 6 cannot run live with this version of the lab', result.stderr)
         self.assertEqual([], self.torch_calls())
@@ -983,7 +1073,7 @@ class Launcher(unittest.TestCase):
                 self.issue(1, exercise, settings)
                 if self.next_log.exists():
                     self.next_log.unlink()
-                result = self.run_job('incident')
+                result = self.run_job('incident', '1')
                 self.assertEqual(3, result.returncode)
                 self.assertIn('cannot be used by this launcher', result.stderr)
                 self.assertNotIn('Traceback', result.stderr)
@@ -994,7 +1084,7 @@ class Launcher(unittest.TestCase):
         link = self.incidents / 'incident-1.json'
         link.symlink_to(real)
         self.reply(1, f'Incident 1 is ready.\nProfile: {link}\n')
-        result = self.run_job('incident')
+        result = self.run_job('incident', '1')
         self.assertEqual(0, result.returncode, result.stderr)
         [call] = self.torch_calls()
         self.assertIn('--writer-rank=9', call)

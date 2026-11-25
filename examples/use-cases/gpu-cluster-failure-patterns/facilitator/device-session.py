@@ -65,7 +65,8 @@ PHASES = ('ready', 'preparing', 'fault-applied', 'investigating', 'recovering',
 # Phases in which this assignment still holds its exercise node.
 HOLDING_PHASES = ('preparing', 'fault-applied', 'investigating', 'recovering',
                   'recovery-failed', 'replacement-required')
-USAGE = ('Commands: start gpu | start efa | active gpu | active efa | next | ended <issue id> | '
+USAGE = ('Commands: start gpu | start efa | active gpu | active efa | next [<incident number>] | '
+         'ended <issue id> | '
          'resume <issue id> | status | collect <check> | collect recovery | recover')
 
 # The incidents a seat's schedule can name (v2 hour design, section 4). The job
@@ -930,6 +931,12 @@ def parse_participant_request(text):
         if arguments[0] not in ('gpu', 'efa'):
             return Request(error='The exercise provides start gpu and start efa only.')
         return Request(verb=verb, argument=arguments[0])
+    if verb == 'next' and arguments:
+        # The number of the incident the participant's page is on, which job.sh
+        # sends: next starts that incident.
+        if len(arguments) != 1 or not re.fullmatch(r'[1-9][0-9]?', arguments[0]):
+            return Request(error=f'Use next or next <incident number>. {USAGE}')
+        return Request(verb=verb, argument=int(arguments[0]))
     if verb in ('next', 'status', 'recover', 'replace'):
         if arguments:
             return Request(error=f'{verb} takes no argument. {USAGE}')
@@ -2815,6 +2822,10 @@ class DeviceSession:
                       'recover when your page says so.')
     PROGRESS_ENTRY_FIELDS = {'number', 'exercise', 'issued_at', 'issue_id', 'profile',
                              'last_refusal', 'ended_at', 'job', 'resume_check'}
+    # How often one incident may be started on a seat. Each start keeps a profile
+    # and an entry in the record, so the number is bounded; a session comes
+    # nowhere near it.
+    START_LIMIT = 32
 
     def _schedule(self):
         """The seat's checked schedule, or None when account preparation set none."""
@@ -2838,7 +2849,13 @@ class DeviceSession:
         return self.store.directory / f'schedule-{self.assignment_id}.json'
 
     def _read_progress(self, schedule):
-        """Which incidents this seat has been given, from the root-only record."""
+        """The incidents started on this seat, from the root-only record.
+
+        `issued` is a log, oldest first: one entry for each time an incident was
+        started. A participant may start any incident of the schedule, and start
+        it again, so a number can come more than once and in any order. The last
+        entry is the seat's current incident.
+        """
         path = self._progress_path()
         if path.is_symlink():
             raise Refusal('Unusable incident record: refusing a symlinked file.')
@@ -2850,12 +2867,14 @@ class DeviceSession:
             progress = json.loads(path.read_text())
             issued = progress['issued']
             if set(progress) != {'issued'} or not isinstance(issued, list) \
-                    or len(issued) > len(schedule):
+                    or len(issued) > self.START_LIMIT * len(schedule):
                 raise ValueError('shape')
-            for number, entry in enumerate(issued, start=1):
+            for entry in issued:
+                number = entry['number']
                 # A schedule changed after incidents were issued is not this record's.
                 if (set(entry) - self.PROGRESS_ENTRY_FIELDS
-                        or entry['number'] != number
+                        or isinstance(number, bool) or not isinstance(number, int)
+                        or not 1 <= number <= len(schedule)
                         or entry['exercise'] != schedule[number - 1]['exercise']
                         or not isinstance(entry['issued_at'], (int, float))
                         or not isinstance(entry.get('ended_at', 0), (int, float))
@@ -2873,7 +2892,9 @@ class DeviceSession:
             schedule = self._schedule()
             if schedule is None:
                 return None
-            issued = len(self._read_progress(schedule)['issued'])
+            # An incident started twice counts once.
+            issued = len({entry['number']
+                          for entry in self._read_progress(schedule)['issued']})
         except Refusal:
             return "Incidents: this seat's schedule is unusable; raise your hand."
         return f'Incidents issued: {issued} of {len(schedule)}'
@@ -2921,34 +2942,48 @@ class DeviceSession:
             return False
         return True
 
-    def _note_refusal(self, number, text):
+    def _note_refusal(self, issue_id, text):
         """Keep, for the operator, why a scheduled device step did not start."""
         try:
             with self.store.exclusive():
                 schedule = self._schedule()
                 progress = self._read_progress(schedule)
-                progress['issued'][number - 1]['last_refusal'] = {'at': self.clock(),
-                                                                  'text': text}
+                entry = next(entry for entry in progress['issued']
+                             if entry['issue_id'] == issue_id)
+                entry['last_refusal'] = {'at': self.clock(), 'text': text}
                 _write_private_json(self._progress_path(), progress)
-        except (Refusal, IndexError):
+        except (Refusal, StopIteration):
             pass
 
-    def next(self):
-        """Start the seat's next incident without naming it.
+    def next(self, named=None):
+        """Start an incident of the seat's schedule.
+
+        `named` is the number of the incident the participant's page is on, which
+        the launcher sends (job.sh incident N). The request starts that incident,
+        whichever incidents were started before and whether or not it was started
+        already: every start is a new entry in the record, with its own issue id
+        and profile, and becomes the seat's current incident. An incident left
+        unfinished, for example because its allocation ended, is replaced the
+        same way, so no incident can hold the seat. What still refuses a start is
+        the node itself: a device round that holds it until recover, and a node
+        kept out of service. Without a number the request means the incident
+        after the current one, in the schedule's order.
 
         A job exercise is applied by the participant's launcher inside their own
         job, so starting it means handing the launcher that incident's profile: a
         file in the participant's results directory with the exercise and its
-        settings. Only the current incident's profile leaves this helper's
-        root-only records, so later incidents and their order stay unreadable.
+        settings. A profile leaves this helper's root-only records only when its
+        incident is started, and it names no kind the participant's job does not
+        show.
 
         The device exercise needs the participant's job running. Its first `next`
         hands over its profile like any other. A later `next`, once the
         participant's own job is RUNNING on the target and its progress log shows
         two fresh advancing records, applies the scheduled device operation
         through `start`, with every guard `start` has, and records the round as
-        this incident. Until then `next` repeats the same answer and changes
-        nothing, so the launcher may ask before and after its job starts.
+        this incident. Until then a `next` for the same incident repeats the same
+        answer and changes nothing, so the launcher may ask before and after its
+        job starts.
         """
         with self.store.exclusive():
             schedule = self._schedule()
@@ -2966,9 +3001,34 @@ class DeviceSession:
                 raise Refusal(f'{held} still holds your node. Collect your evidence and '
                               'finish it with recover; next continues after that.')
             current = issued[-1] if issued else None
-            if current and current['profile'] is None:
+            # Applied means this round was started for this issuance and issued
+            # its operation. A round left by an earlier pass of the schedule has
+            # another issue_id. A round that never issued its operation is started
+            # again; one whose outcome is unknown is not, because the device may
+            # have been reset.
+            applied = same_issue(state.incident, current) and not not_issued(state)
+            if named is None:
+                # The current incident again while its hand-over is unfinished or
+                # its device operation has not been issued, as the launcher asks
+                # beside the device incident's job; otherwise the one after it.
+                again = bool(current) and (current['profile'] is None or (
+                    current['exercise'] in DEVICE_EXERCISES and not applied))
+                number = (current['number'] + (0 if again else 1)) if current else 1
+                if number > len(schedule):
+                    raise Refusal(f'All {len(schedule)} incidents for this seat have been '
+                                  'issued; there is no next incident.')
+            elif named > len(schedule):
+                raise Refusal(f'This seat has incidents 1 to {len(schedule)}; there is no '
+                              f'incident {named}.')
+            else:
+                number = named
+            # The current entry answers this request only if it is this incident.
+            # Any other number starts its own incident below, and the current
+            # one, finished or not, is no longer current.
+            same = bool(current) and current['number'] == number
+            if same and current['profile'] is None:
                 # The record advanced but the profile was not written: finish that
-                # incident's hand-over rather than advancing past it.
+                # incident's hand-over rather than starting it a second time.
                 if current['exercise'] in APPLICATION_EXERCISES:
                     observed = self._application_allocation(
                         state, schedule[current['number'] - 1]['settings'])
@@ -2977,43 +3037,34 @@ class DeviceSession:
                                       'could be handed over. Nothing was issued; ask the '
                                       'operator to reset this unfinished seat.')
                 return self._issue_profile(progress, current, schedule)
-            # Applied means this round was started for this issuance and issued
-            # its operation. A round left by an earlier pass of the schedule has
-            # another issue_id. A round that never issued its operation is started
-            # again; one whose outcome is unknown is not, because the device may
-            # have been reset.
-            applied = same_issue(state.incident, current) and not not_issued(state)
-            if current and current['exercise'] in DEVICE_EXERCISES and not applied:
+            if same and current['exercise'] in DEVICE_EXERCISES and not applied:
                 if not self._device_incident_ready():
                     return Result(state, incident=current['number'],
                                   saved_path=Path(current['profile']),
                                   next_step=self.ISSUED_STEP)
                 step = current
             else:
-                if (current and current['exercise'] in APPLICATION_EXERCISES
-                        and 'ended_at' not in current):
-                    # The application incident's evidence is read against the
-                    # allocation recorded for it. Another incident on top of it
-                    # would make that record ambiguous, so it ends first: job.sh
-                    # sends ended once the resumed job completes.
-                    raise Refusal(f'Incident {current["number"]} is under way. Collect your '
-                                  'evidence and run the resume step your page shows; '
-                                  'next continues after that.')
-                if len(issued) >= len(schedule):
-                    raise Refusal(f'All {len(schedule)} incidents for this seat have been '
-                                  'issued; there is no next incident.')
-                entry = {'number': len(issued) + 1,
-                         'exercise': schedule[len(issued)]['exercise'],
+                # A new start. An application incident that has not ended is not
+                # waited for: its evidence is read against the allocation recorded
+                # in its own entry, collect and resume serve the current entry
+                # only, and an incident whose allocation has ended could never
+                # end. The new entry replaces it as the current incident.
+                if sum(entry['number'] == number for entry in issued) >= self.START_LIMIT:
+                    raise Refusal(f'Incident {number} has been started {self.START_LIMIT} '
+                                  'times on this seat, which is the most the lab keeps; '
+                                  'raise your hand.')
+                entry = {'number': number,
+                         'exercise': schedule[number - 1]['exercise'],
                          'issued_at': self.clock(), 'issue_id': secrets.token_hex(16),
                          'profile': None}
                 if entry['exercise'] in APPLICATION_EXERCISES:
                     # Read before the record advances, so a refusal here leaves
-                    # the schedule where it was and nothing to finish later.
+                    # the record where it was and nothing to finish later.
                     entry['job'] = self._application_allocation(
-                        state, schedule[len(issued)]['settings'])
+                        state, schedule[number - 1]['settings'])
                 issued.append(entry)
                 # Recorded before the profile is written, so a failed write is
-                # finished by the next call instead of skipping an incident.
+                # finished by the next request for this incident.
                 _write_private_json(self._progress_path(), progress)
                 return self._issue_profile(progress, entry, schedule)
         # start takes the seat's lock itself and repeats every check.
@@ -3023,7 +3074,7 @@ class DeviceSession:
         try:
             result = self.start(planned['kind'], active=planned['active'], incident=incident)
         except Refusal as refusal:
-            self._note_refusal(step['number'], str(refusal))
+            self._note_refusal(step['issue_id'], str(refusal))
             raise Refusal(conceal_kind(str(refusal))) from refusal
         return Result(result.state, incident=step['number'], under_way=True,
                       already_started=result.already_started,
@@ -3059,8 +3110,8 @@ class DeviceSession:
             return Result(self.store.read(), incident=entry['number'])
 
     def _issued_progress(self):
-        """(incidents issued, whether the latest has ended, schedule length), or
-        (0, False, 0) when the record cannot be read."""
+        """(the current incident's number, whether it has ended, schedule length),
+        or (0, False, 0) when nothing was started or the record cannot be read."""
         try:
             schedule = self._schedule()
             if not schedule:
@@ -3068,7 +3119,9 @@ class DeviceSession:
             issued = self._read_progress(schedule)['issued']
         except Refusal:
             return 0, False, 0
-        return len(issued), bool(issued and 'ended_at' in issued[-1]), len(schedule)
+        if not issued:
+            return 0, False, len(schedule)
+        return issued[-1]['number'], 'ended_at' in issued[-1], len(schedule)
 
     # ---------------- the application incident ----------------
     # What status and next tell the participant while it is under way. The same
@@ -3604,21 +3657,19 @@ class DeviceSession:
             issued = self._read_progress(schedule)['issued'] if schedule else []
         except Refusal:
             return None
-        number = state.incident['number']
-        if number <= len(issued) and same_issue(state.incident, issued[number - 1]):
+        if any(same_issue(state.incident, entry) for entry in issued):
             return state.incident
         return None
 
     def _issued_since(self, state):
-        """Has `next` issued an incident after the one this finished round began?"""
+        """Has `next` started an incident after the one this finished round began?"""
         schedule = self._schedule()
         if schedule is None:
             return False
         issued = self._read_progress(schedule)['issued']
         if state.incident:
             # A round from an earlier pass of the schedule is not this pass's.
-            return (self._current_incident(state) is None
-                    or len(issued) > state.incident['number'])
+            return not (issued and same_issue(state.incident, issued[-1]))
         return any(entry['issued_at'] > float(state.started_at) for entry in issued)
 
     def _collectable(self, state):
@@ -4753,7 +4804,8 @@ def incident_answer(state):
         answer = NOT_ISSUED_ANSWER
         # next refuses every incident once the node is kept out of service.
         if state.phase != 'replacement-required':
-            answer += '. Start it again with bash job.sh incident'
+            answer += ('. Start it again with bash job.sh incident '
+                       f'{state.incident["number"]}')
     else:
         answer = exercise['unconfirmed']
     return f'Answer for incident {state.incident["number"]}: ' + answer.format(bdf=bdf) + '.'
@@ -4902,15 +4954,22 @@ def operator_view(handler):
     except Refusal as refusal:
         lines.append(f'Schedule progress: unusable ({refusal})')
         issued = []
-    lines.append(f'Schedule ({len(issued)} of {len(schedule)} issued):')
+    started = {entry['number'] for entry in issued}
+    lines.append(f'Schedule ({len(started)} of {len(schedule)} issued):')
     for number, planned in enumerate(schedule, start=1):
         settings = json.dumps(planned['settings'], sort_keys=True)
         row = f'  {number}. {planned["exercise"]} {settings}'
-        if number <= len(issued):
-            entry = issued[number - 1]
+        if number in started:
+            # The latest start of this incident; the participant may start one again.
+            starts = [entry for entry in issued if entry['number'] == number]
+            entry = starts[-1]
             when = datetime.datetime.fromtimestamp(
                 entry['issued_at'], datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
             row += f' issued {when} profile={entry["profile"]}'
+            if len(starts) > 1:
+                row += f' starts={len(starts)}'
+            if entry is issued[-1]:
+                row += ' current'
             if 'ended_at' in entry:
                 ended = datetime.datetime.fromtimestamp(
                     entry['ended_at'], datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -4962,7 +5021,7 @@ def main(argv=None):
         if verb in ('start', 'active'):
             result = handler.start(request.argument, active=verb == 'active')
         elif verb == 'next':
-            result = handler.next()
+            result = handler.next(request.argument)
         elif verb == 'ended':
             result = handler.ended(request.argument)
         elif verb == 'resume':
