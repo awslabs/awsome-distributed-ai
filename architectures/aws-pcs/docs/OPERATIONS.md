@@ -32,6 +32,11 @@ date, after which no new cluster can be created with it; check
 [Slurm versions in AWS PCS](https://docs.aws.amazon.com/pcs/latest/userguide/slurm-versions.html)
 before pinning one.
 
+`26.05` also needs an AMI that ships Slurm 26.05. A PCS-Ready DLAMI's `Description`
+lists its Slurm builds, so check the one you pass as `AmiId`, or as `BaseAmiId` when you
+build a custom AMI. In [PCS-READY-DLAMI.md](./PCS-READY-DLAMI.md), the x86\_64
+PCS-Ready DLAMI carries 26.05 from the 2026-09-09 build on.
+
 `24.11` is intentionally **out of scope** here — `cluster.yaml`'s `AllowedValues`
 doesn't include it, and `install-enroot-pyxis.sh` builds Pyxis only for 25.05/25.11/26.05.
 

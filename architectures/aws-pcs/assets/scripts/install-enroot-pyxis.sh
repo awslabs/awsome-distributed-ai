@@ -217,7 +217,7 @@ done
 # "spank_pyxis.so: task_init() failed".
 #
 # Use exactly the cluster's version, never a glob of all installed versions: the PCS
-# DLAMI ships several (slurm-24.11/25.05/25.11) and an OLDER scontrol fatally fails to
+# DLAMI ships several (e.g. slurm-25.05/25.11/26.05) and an OLDER scontrol fatally fails to
 # parse a NEWER slurm.conf key (e.g. 24.11 chokes on MetricsType, set by 25.11 for the
 # monitoring OpenMetrics endpoint). The version is passed as $1 by the lifecycle action
 # (from the template's SlurmVersion), with the PCS_SLURM_VERSION env var as a fallback;

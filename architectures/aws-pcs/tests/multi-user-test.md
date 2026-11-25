@@ -272,8 +272,8 @@ srun -N 1 -n 1 -p cpu1 bash -c 'sudo sss_cache -E; sleep 2; getent passwd testus
 ### C1. Add user to Slurm accounting
 
 ```bash
-sacctmgr -i add account testaccount Description="Test Account"
-sacctmgr -i add user testuser1 Account=testaccount
+sudo "$(command -v sacctmgr)" -i add account testaccount Description="Test Account"
+sudo "$(command -v sacctmgr)" -i add user testuser1 Account=testaccount
 sacctmgr show user testuser1
 ```
 
@@ -446,7 +446,7 @@ reporting.
 - Slurm 25.11 (accounting is available on 24.11+; templates default to 25.11)
 - At least one compute node available
 
-All commands run on the login node as root unless noted.
+All commands run on the login node in a root login shell (`sudo -i`) unless noted.
 
 ---
 
