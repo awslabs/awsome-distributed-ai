@@ -165,12 +165,10 @@ Resources:
       # grants), never iam:CreatePolicy. Split by feature so monitoring and
       # multi-user don't depend on each other:
       Policies:
-        # Always present (every cluster): register with PCS + read boot scripts
-        # from S3 + read this cluster's own SSM parameters (grafana password,
-        # ldap admin password) + decrypt SSM SecureStrings. None of this is
-        # monitoring- or directory-specific; it is the baseline an instance
-        # needs to register, fetch its post-install/directory scripts, and
-        # store/read the per-cluster secrets it generates.
+        # Always present (every cluster): register with PCS, read and write
+        # this cluster's grafana/* SSM parameters, look up the directory server
+        # for setup-directory.sh, and deny user jobs the ldap/* admin password.
+        # Boot scripts are read through AmazonS3ReadOnlyAccess above.
         - PolicyName: PcsInstanceBasePolicy
           PolicyDocument:
             Version: "2012-10-17"
@@ -229,7 +227,8 @@ Resources:
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/ldap/*'
 
-  # IAM Instance Profile (compute + login share this base profile)
+  # IAM Instance Profile for compute node groups (the login node group uses
+  # PcsLoginInstanceProfile below)
   PcsInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
@@ -239,8 +238,10 @@ Resources:
       Roles:
         - !Ref PcsInstanceIamRole
 
-  # Login-node-only role: the base role plus the OpenLDAP admin password
-  # (ssm /pcs/<id>/ldap/*) read/write and KMS decrypt. Only the login node runs
+  # Login-node-only role: PCS registration and grafana/* SSM access as in the
+  # base role, plus the OpenLDAP admin password (ssm /pcs/<id>/ldap/*) read/write
+  # and KMS decrypt. It has no directory-server lookup: the login node configures
+  # SSSD against localhost. Only the login node runs
   # the OpenLDAP server and needs this secret; keeping it off the compute role
   # prevents a user job on a compute node from reading the directory admin
   # password via IMDS (directory-takeover). deploy-all passes this profile to the
