@@ -103,13 +103,15 @@ if [ "$NNODES" -gt 1 ]; then
 fi
 
 echo "=== Starting Isaac Lab H1 Training ==="
-cd /workspace/IsaacLab
+cd /workspace/isaaclab
 
-# Redirect skrl's log/checkpoint directory to /opt/ml/checkpoints so SageMaker
-# syncs checkpoints to S3 continuously during training.  On a resumed job,
-# SageMaker will have already restored the previous checkpoints into that path.
+# Redirect the RL library's log/checkpoint directory to /opt/ml/checkpoints so
+# SageMaker syncs checkpoints to S3 continuously during training. On a resumed
+# job, SageMaker will have already restored the previous checkpoints into that
+# path. The Isaac Lab image ships an empty logs/ directory, so replace it.
 mkdir -p /opt/ml/checkpoints
-ln -s /opt/ml/checkpoints /workspace/IsaacLab/logs
+rm -rf /workspace/isaaclab/logs
+ln -s /opt/ml/checkpoints /workspace/isaaclab/logs
 
 # Auto-resume: find the latest checkpoint restored by SageMaker from a previous run
 LATEST_CKPT=$(find /opt/ml/checkpoints -name "best_agent.pt" -printf "%T@ %p\n" 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2)
@@ -128,10 +130,12 @@ if [ -n "${MLFLOW_TRACKING_URI:-}" ]; then
   # Point at the framework root; mlflow_isaaclab.finalize() walks it to find
   # the most recently created run subdirectory (skrl renames the task in the
   # path, so we cannot construct the per-run path from env vars upfront).
-  export MLFLOW_ARTIFACT_DIR="${MLFLOW_ARTIFACT_DIR:-/workspace/IsaacLab/logs/${FRAMEWORK:-skrl}}"
+  export MLFLOW_ARTIFACT_DIR="${MLFLOW_ARTIFACT_DIR:-/workspace/isaaclab/logs/${FRAMEWORK:-skrl}}"
 fi
 
-/isaac-sim/python.sh -m torch.distributed.run \
+# isaaclab.sh -p runs the Isaac Lab venv's Python with Isaac Sim's environment.
+# Isaac Lab 3.0 runs headless unless a visualizer is requested with --viz.
+/workspace/isaaclab/isaaclab.sh -p -m torch.distributed.run \
   --nproc_per_node=$NPROC \
   --nnodes=$NNODES \
   --node_rank=$NODE_RANK \
@@ -139,10 +143,10 @@ fi
   --rdzv_backend=c10d \
   --rdzv_endpoint=$MASTER_HOST:$MASTER_PORT \
   run_train.py \
+  --rl_library=${FRAMEWORK:-skrl} \
   --distributed \
-  --task=${TASK:-Isaac-Velocity-Rough-H1-v0} \
+  --task=${TASK:-Isaac-Velocity-Rough-H1} \
   --max_iterations=${MAX_ITERATIONS:-1000} \
-  --headless \
   $RESUME_FLAG
 
 TRAIN_EXIT=$?
@@ -156,7 +160,7 @@ fi
 
 echo "=== Copying Checkpoints ==="
 mkdir -p /opt/ml/model
-cp -rv /workspace/IsaacLab/logs/* /opt/ml/model/ 2>/dev/null || true
+cp -rv /workspace/isaaclab/logs/* /opt/ml/model/ 2>/dev/null || true
 echo "=== Checkpoints ==="
 find /opt/ml/model -name "*.pt" -ls 2>/dev/null
 echo "Done!"

@@ -18,7 +18,7 @@ aws:
 
 ecr:
   repository: "isaaclab-sagemaker"
-  tag: "5.1.0"
+  tag: "3.0.0"
 
 s3:
   bucket: ""                      # e.g. "my-isaaclab-bucket"
@@ -27,7 +27,7 @@ s3:
 # Isaac Lab training settings
 # ---------------------------------------------------------------------------
 training:
-  task: "Isaac-Velocity-Rough-H1-v0"
+  task: "Isaac-Velocity-Rough-H1"  # Isaac Lab 3.0 task IDs have no -v0 suffix
   max_iterations: 1000
   framework: "skrl"               # skrl | rsl_rl | rl_games | sb3
 

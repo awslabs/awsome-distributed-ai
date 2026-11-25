@@ -13,15 +13,15 @@ if [ -z "$CHECKPOINT" ]; then
   exit 1
 fi
 # Remap to container path
-CONTAINER_PATH="${CHECKPOINT/\/home\/ubuntu\/environment\/shared-efs/\/workspace\/IsaacLab\/TrainedModel}"
+CONTAINER_PATH="${CHECKPOINT/\/home\/ubuntu\/environment\/shared-efs/\/workspace\/isaaclab\/TrainedModel}"
 echo "Starting skrl playback with checkpoint: $CONTAINER_PATH"
 cd ~/environment/IsaacLab
-xhost +
+xhost +SI:localuser:root
 docker kill isaac-lab 2>/dev/null
 docker run --shm-size=60g --name isaac-lab --entrypoint bash -it --gpus all \
   -e "ACCEPT_EULA=Y" --rm --network=host \
-  -v /home/ubuntu/environment/shared-efs:/workspace/IsaacLab/TrainedModel \
+  -v /home/ubuntu/environment/shared-efs:/workspace/isaaclab/TrainedModel \
   -e DISPLAY \
   -e "PRIVACY_CONSENT=Y" \
-  ${ISAAC_IMAGE:-isaaclab-sagemaker:5.1.0} \
-  -c "cd /workspace/IsaacLab && /isaac-sim/python.sh scripts/reinforcement_learning/skrl/play.py --task=Isaac-Velocity-Rough-H1-v0 --checkpoint $CONTAINER_PATH --num_envs 25"
+  ${ISAAC_IMAGE:-isaaclab-sagemaker:3.0.0} \
+  -c "cd /workspace/isaaclab && ./isaaclab.sh -p scripts/reinforcement_learning/play.py --rl_library skrl --task=Isaac-Velocity-Rough-H1 --checkpoint $CONTAINER_PATH --num_envs 25 --viz kit"

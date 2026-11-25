@@ -14,7 +14,7 @@ spec:
   containers:
   - name: isaacsim
     image: ${IMAGE}
-    workingDir: /workspace/IsaacLab
+    workingDir: /workspace/isaaclab
     command: ["/bin/bash", "-c"]
     args:
     - |
@@ -22,7 +22,8 @@ spec:
       # For other frameworks (rsl_rl, rl_games, sb3), adjust the filename pattern.
       CKPT=$$(find ${VIZ_FSX_LOG_DIR} -name best_agent.pt -printf "%T@ %p\n" | sort -n | tail -1 | cut -d' ' -f2)
       echo "Using checkpoint: $$CKPT"
-      exec /isaac-sim/python.sh scripts/reinforcement_learning/skrl/play.py \
+      exec ./isaaclab.sh -p scripts/reinforcement_learning/play.py \
+        --rl_library=${FRAMEWORK} \
         --task=${TASK} \
         --checkpoint $$CKPT \
         --num_envs ${VIZ_NUM_ENVS} \

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT-0
 
 # ============================================================================
-# TensorBoard Deployment + NodePort Service
+# TensorBoard Deployment + ClusterIP Service (reach it with kubectl port-forward)
 # Generated from config.yaml -- do not edit directly
 # ============================================================================
 apiVersion: apps/v1
@@ -39,7 +39,7 @@ spec:
             sleep 10
           done
           echo "Starting TensorBoard on port 6006..."
-          /isaac-sim/python.sh -m tensorboard.main \
+          /opt/isaaclab-venv/bin/python -m tensorboard.main \
             --logdir /fsx \
             --host 0.0.0.0 \
             --port 6006 \
@@ -49,6 +49,10 @@ spec:
           value: "Y"
         - name: PRIVACY_CONSENT
           value: "Y"
+        # The Isaac Lab image sets NVIDIA_VISIBLE_DEVICES=all; TensorBoard
+        # needs no GPU, so don't expose any (and allow CPU-only nodes).
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: "void"
         ports:
         - containerPort: 6006
           name: tensorboard
@@ -84,5 +88,4 @@ spec:
   ports:
   - port: 6006
     targetPort: 6006
-    nodePort: 30006
-  type: NodePort
+  type: ClusterIP
