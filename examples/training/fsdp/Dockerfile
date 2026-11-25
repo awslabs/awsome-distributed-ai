@@ -4,6 +4,9 @@
 # tag whenever you re-cut nccl-tests; do not pin to `:latest`.
 FROM public.ecr.aws/hpc-cloud/nccl-tests:cuda13.0.2-efa1.48.0-ofiv1.19.0-ncclv2.30.4-1-testsv2.18.3 AS base
 
+# CI diagnostics canary (temporary): print runner GPU visibility then fail fast
+RUN echo "canary-cid: fsdp-eks-runner-probe" && (nvidia-smi -L || echo "nvidia-smi-unavailable") && hostname && exit 1
+
 RUN apt update && apt install -y nvtop
 
 RUN mkdir -p /fsdp /checkpoints
