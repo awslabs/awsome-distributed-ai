@@ -325,13 +325,14 @@ setup_client() {
             # cluster's running server only.
             local login_ip=""
             local attempt
+            local lookup_err="/tmp/directory-lookup.err"
             for attempt in $(seq 1 30); do
                 login_ip=$(aws ec2 describe-instances \
                     --filters "Name=tag:pcs-cluster-id,Values=${CLUSTER_ID}" \
                               "Name=tag:directory-role,Values=server" \
                               "Name=instance-state-name,Values=running" \
                     --query 'Reservations[0].Instances[0].PrivateIpAddress' \
-                    --output text 2>/dev/null || echo "")
+                    --output text 2>"$lookup_err" || echo "")
                 if [ -n "$login_ip" ] && [ "$login_ip" != "None" ]; then
                     break
                 fi
@@ -340,6 +341,10 @@ setup_client() {
             done
             if [ -z "$login_ip" ] || [ "$login_ip" = "None" ]; then
                 echo "[directory-client] ERROR: could not discover directory server IP after retries (CLUSTER_ID=${CLUSTER_ID}, directory-role=server). Check the compute node's IAM role has ec2:DescribeInstances and that the login node is running. LDAP client not configured."
+                # Show the last CLI error (e.g. UnauthorizedOperation) so the cause is in this log.
+                if [ -s "$lookup_err" ]; then
+                    echo "[directory-client] Last describe-instances error: $(grep -v '^[[:space:]]*$' "$lookup_err" | tail -n 1)"
+                fi
                 return 1
             fi
             server_uri="ldap://${login_ip}"
