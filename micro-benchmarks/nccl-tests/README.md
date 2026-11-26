@@ -364,3 +364,5 @@ The formula defines the maximum theoretical bandwidth that can be achieved on di
 - `t` : time to complete the operation. (similar to sec for Algbw and Busbw)
 - `S` : number of elements being communicated (similar to count for Algbw and Busbw)
 - `B` : theoretical peak bandwidth.
+
+<!-- ci: self-hosted runner availability probe (test-only, reverted) -->
