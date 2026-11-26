@@ -46,7 +46,7 @@ echo "Starting Enroot/Pyxis installation for AWS PCS..."
 ENROOT_RELEASE=3.5.0
 PYXIS_RELEASE=v0.20.0
 # Slurm versions Pyxis is built for. These match the SlurmVersion values the PCS
-# templates allow (cluster.yaml AllowedValues: 25.05, 25.11). PCS also offers Slurm
+# templates allow (cluster.yaml AllowedValues: 25.05, 25.11, 26.05). PCS also offers Slurm
 # 24.11, but it is intentionally OUT OF SCOPE for these templates and this script --
 # the templates don't expose it, and it is not validated here, so a 24.11 cluster
 # would get no Pyxis plugstack. Keep this list in sync with cluster.yaml's
@@ -67,12 +67,12 @@ if [ -n "${1:-}" ]; then PCS_SLURM_VERSION="$1"; fi
 # (the SPANK ABI is version-locked; slurmd won't start against a mismatched plugin).
 # When PCS_SLURM_VERSION is unset (e.g. a manual run, or a cluster-agnostic AMI build),
 # fall back to building every supported version. Keep the fallback list in sync with
-# cluster.yaml's SlurmVersion AllowedValues (25.05, 25.11); PCS also offers 24.11 but
+# cluster.yaml's SlurmVersion AllowedValues (25.05, 25.11, 26.05); PCS also offers 24.11 but
 # it is intentionally out of scope here.
 if [ -n "${PCS_SLURM_VERSION}" ]; then
   SLURM_VERSIONS="${PCS_SLURM_VERSION}"
 else
-  SLURM_VERSIONS="25.05 25.11"
+  SLURM_VERSIONS="25.05 25.11 26.05"
 fi
 
 # At first boot this script runs alongside cloud-init and Ubuntu's
@@ -217,7 +217,7 @@ done
 # "spank_pyxis.so: task_init() failed".
 #
 # Use exactly the cluster's version, never a glob of all installed versions: the PCS
-# DLAMI ships several (slurm-24.11/25.05/25.11) and an OLDER scontrol fatally fails to
+# DLAMI ships several (e.g. slurm-25.05/25.11/26.05) and an OLDER scontrol fatally fails to
 # parse a NEWER slurm.conf key (e.g. 24.11 chokes on MetricsType, set by 25.11 for the
 # monitoring OpenMetrics endpoint). The version is passed as $1 by the lifecycle action
 # (from the template's SlurmVersion), with the PCS_SLURM_VERSION env var as a fallback;

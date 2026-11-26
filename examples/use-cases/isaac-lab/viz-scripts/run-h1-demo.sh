@@ -7,12 +7,12 @@
 echo "Starting H1 Locomotion Interactive Demo..."
 echo "Controls: UP=forward, DOWN=stop, LEFT=turn left, RIGHT=turn right, C=camera toggle"
 cd ~/environment/IsaacLab
-xhost +
+xhost +SI:localuser:root
 docker kill isaac-lab 2>/dev/null
 docker run --shm-size=60g --name isaac-lab --entrypoint bash -it --gpus all \
   -e "ACCEPT_EULA=Y" --rm --network=host \
-  -v /home/ubuntu/environment/shared-efs:/workspace/IsaacLab/TrainedModel \
+  -v /home/ubuntu/environment/shared-efs:/workspace/isaaclab/TrainedModel \
   -e DISPLAY \
   -e "PRIVACY_CONSENT=Y" \
-  ${ISAAC_IMAGE:-isaaclab-sagemaker:5.1.0} \
-  -c "cd /workspace/IsaacLab && /isaac-sim/python.sh scripts/demos/h1_locomotion.py"
+  ${ISAAC_IMAGE:-isaaclab-sagemaker:3.0.0} \
+  -c "cd /workspace/isaaclab && ./isaaclab.sh -p examples/demos/h1_locomotion.py --viz kit"

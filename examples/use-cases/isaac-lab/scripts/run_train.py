@@ -4,7 +4,7 @@
 
 train.py is executed via runpy with run_name="__main__" so its
 `if __name__ == "__main__":` guard fires and sys.argv is forwarded
-unchanged (--task, --num_envs, --distributed, etc.).
+unchanged (--rl_library, --task, --num_envs, --distributed, etc.).
 """
 
 import os
@@ -13,7 +13,8 @@ import sys
 
 import mlflow_isaaclab
 
-DEFAULT_TRAIN_SCRIPT = "/workspace/IsaacLab/scripts/reinforcement_learning/skrl/train.py"
+# Isaac Lab 3.0 has one train.py for every RL library (selected with --rl_library).
+DEFAULT_TRAIN_SCRIPT = "/workspace/isaaclab/scripts/reinforcement_learning/train.py"
 
 if __name__ == "__main__":
     train_script = os.environ.get("ISAACLAB_TRAIN_SCRIPT", DEFAULT_TRAIN_SCRIPT)

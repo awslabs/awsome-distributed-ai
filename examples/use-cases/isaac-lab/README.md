@@ -1,6 +1,8 @@
 # Isaac Lab Distributed RL Training on AWS
 
-Train the [Unitree H1 humanoid robot](https://www.unitree.com/h1) to walk on rough terrain using distributed reinforcement learning on AWS. This test case demonstrates multi-node GPU training with [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacLab) (v2.3.2) and Isaac Sim 5.1.0, using the [skrl](https://skrl.readthedocs.io/) framework with PPO for the `Isaac-Velocity-Rough-H1-v0` task.
+Train the [Unitree H1 humanoid robot](https://www.unitree.com/h1) to walk on rough terrain using distributed reinforcement learning on AWS. This test case demonstrates multi-node GPU training with [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacLab) (v3.0.0) and Isaac Sim 6.2, using the [skrl](https://skrl.readthedocs.io/) framework with PPO for the `Isaac-Velocity-Rough-H1` task.
+
+> **Security update:** Isaac Lab 0.0 through 2.3.2 are affected by CVE-2026-65141 ([NVIDIA security bulletin](https://github.com/NVIDIA/product-security/blob/main/2026/5902/5902.md)). This sample now builds on the official `nvcr.io/nvidia/isaac-lab:3.0.0` image. If you built an image from an earlier version of this sample (tag `5.1.0`, Isaac Lab v2.3.2), rebuild it, update your manifests, and delete the old image. Don't resume from checkpoints written by the old image: Isaac Lab 3.0 changed the environments and skrl moved from 1.4 to 2.1. Point `hyperpod_eks.jobs.training_job.fsx_log_dir` and `sagemaker_training.checkpoint_prefix` at new locations so auto-resume starts fresh.
 
 ## Key Features
 
@@ -14,13 +16,14 @@ Train the [Unitree H1 humanoid robot](https://www.unitree.com/h1) to walk on rou
 
 ## Supported Instances
 
-Isaac Sim is built on NVIDIA Omniverse and uses the Omniverse RTX Renderer, which requires GPUs with hardware RT Cores. The G family of AWS GPU instances is suitable for Isaac Lab workloads; the P family is not, as it uses data center GPUs without RT Cores. See the [Isaac Sim 5.1 requirements page](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/requirements.html) for the full list of supported and unsupported hardware.
+Isaac Sim is built on NVIDIA Omniverse and uses the Omniverse RTX Renderer, which requires GPUs with hardware RT Cores. The G family of AWS GPU instances is suitable for Isaac Lab workloads; the P family is not, as it uses data center GPUs without RT Cores. See the [Isaac Sim 6.2 requirements page](https://docs.isaacsim.omniverse.nvidia.com/6.2.0/installation/requirements.html) for the full list of supported and unsupported hardware. Isaac Sim 6.2 needs NVIDIA driver 595.58.03 or newer on the host.
 
 | Instance family | GPU Type and Generation | RT Cores / Isaac Sim Compatibility |
 |---|---|---|
 | ml.g5 | NVIDIA A10G (Ampere) | Yes |
 | ml.g6 | NVIDIA L4 (Ada Lovelace) | Yes |
 | ml.g6e | NVIDIA L40S (Ada Lovelace) | Yes |
+| ml.g7 | NVIDIA RTX PRO 4500 (Blackwell) | Yes |
 | ml.g7e | NVIDIA RTX PRO 6000 (Blackwell) | Yes |
 | ml.p4d, ml.p4de, ml.p5, ml.p5e, ml.p5en, ml.p6-b200, ml.p6-b300, ml.p6e-gb200 | NVIDIA A100 (Ampere), H100 / H200 (Hopper), B200 / B300 / GB200 (Blackwell) | No |
 
@@ -41,14 +44,14 @@ Cluster creation instructions can be found in the [SageMaker HyperPod EKS Worksh
 
 ## 1. Build Container Image
 
-From the repository root, build a container image based on `nvcr.io/nvidia/isaac-sim:5.1.0` with Isaac Lab v2.3.2 and the training scripts:
+From the repository root, build a container image based on NVIDIA's `nvcr.io/nvidia/isaac-lab:3.0.0` image (Isaac Sim 6.2, PyTorch 2.11, CUDA 13.0) with the training scripts:
 
 ```bash
 export AWS_REGION=$(aws configure get region)
 export ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 export REGISTRY=${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com
 export IMAGE_NAME=isaaclab-sagemaker
-export IMAGE_TAG=5.1.0
+export IMAGE_TAG=3.0.0
 
 docker build -t ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} -f docker/Dockerfile .
 ```
@@ -178,7 +181,7 @@ kubectl delete -f generated/viz-eks-webrtc-pod.yaml
 
 ## MLflow Integration (Optional)
 
-MLflow integration is implemented as a runtime hook (`scripts/mlflow_isaaclab.py`) invoked by `scripts/run_train.py` before Isaac Lab's `train.py` runs. It monkey-patches `SummaryWriter.add_scalar` to mirror metrics to a background thread that flushes batches via `MlflowClient.log_batch` every 2 seconds. Enabled when `MLFLOW_TRACKING_URI` is set; no-op otherwise.
+MLflow integration is implemented as a runtime hook (`scripts/mlflow_isaaclab.py`) invoked by `scripts/run_train.py` before Isaac Lab's `train.py` runs. It monkey-patches `add_scalar` on the TensorBoard writers (PyTorch's `SummaryWriter` and skrl's own `SummaryWriter`) to mirror metrics to a background thread that flushes batches via `MlflowClient.log_batch` every 2 seconds. Enabled when `MLFLOW_TRACKING_URI` is set; no-op otherwise.
 
 **Configuration:**
 
@@ -201,8 +204,8 @@ mlflow:
 |------|---------|
 | `generate.py` | Config-driven manifest generator (Python `string.Template`) |
 | `config.yaml.example` | Configuration template with all options documented |
-| `docker/Dockerfile` | Isaac Sim 5.1.0 + Isaac Lab v2.3.2 + training dependencies + AWS EFA stack |
-| `scripts/mlflow_isaaclab.py` | MLflow runtime hook: patches SummaryWriter + argparse, batched log_batch |
+| `docker/Dockerfile` | Isaac Lab 3.0.0 (NVIDIA image) + MLflow client + AWS EFA stack |
+| `scripts/mlflow_isaaclab.py` | MLflow runtime hook: patches the TensorBoard writers + argparse, batched log_batch |
 | `scripts/run_train.py` | Entrypoint shim: installs MLflow hook then runs train.py via runpy |
 | `scripts/sm-train-entrypoint.sh` | SageMaker BYOC entrypoint (parses `resourceconfig.json`, launches `torchrun`) |
 | `templates/*.tpl` | Kubernetes manifest and Python script templates |

@@ -9,9 +9,12 @@ Two monkey-patches:
   - argparse.ArgumentParser.parse_args / parse_known_args -> on the first
     call whose namespace contains "task", start an MLflow run and log the
     parsed CLI namespace as run params.
-  - SummaryWriter.add_scalar -> mirror each scalar to a queue drained by
-    a background thread that batch-writes via MlflowClient.log_batch
-    (up to 1000 metrics every ~2 s).
+  - add_scalar of the TensorBoard writers -> mirror each scalar to a queue
+    drained by a background thread that batch-writes via
+    MlflowClient.log_batch (up to 1000 metrics every ~2 s). Two writers are
+    patched: torch.utils.tensorboard.SummaryWriter (rsl_rl, rl_games, sb3)
+    and skrl.utils.tensorboard.SummaryWriter (skrl 2.x, keyword-only
+    tag/value/timestep).
 
 finalize() drains the queue, uploads MLFLOW_ARTIFACT_DIR (if set), and
 ends the run. It is registered with atexit so it runs on normal exit or
@@ -45,34 +48,51 @@ def _is_rank0():
         return True
 
 
+def _queue_metric(tag, value, step):
+    if _state["queue"] is None:
+        return
+    try:
+        from mlflow.entities import Metric
+        _state["queue"].put_nowait(Metric(
+            key=_INVALID_TAG_CHARS.sub("_", tag),
+            value=float(value),
+            timestamp=int(time.time() * 1000),
+            step=int(step or 0),
+        ))
+    except Exception:
+        pass
+
+
+def _patch_writer(writer_cls, value_arg, step_arg):
+    """Mirror writer_cls.add_scalar(tag, <value_arg>, <step_arg>) calls to MLflow."""
+    orig_add_scalar = writer_cls.add_scalar
+    names = ("tag", value_arg, step_arg)
+
+    def patched_add_scalar(self, *args, **kwargs):
+        result = orig_add_scalar(self, *args, **kwargs)
+        bound = dict(zip(names, args))
+        bound.update((k, v) for k, v in kwargs.items() if k in names)
+        _queue_metric(bound.get("tag"), bound.get(value_arg), bound.get(step_arg))
+        return result
+
+    writer_cls.add_scalar = patched_add_scalar
+
+
 def install():
-    """Install monkey-patches on argparse and SummaryWriter."""
+    """Install monkey-patches on argparse and the TensorBoard writers."""
     if not os.environ.get("MLFLOW_TRACKING_URI") or not _is_rank0():
         return
 
     try:
         import argparse
+
         from torch.utils.tensorboard import SummaryWriter
-
-        # SummaryWriter.add_scalar -> queue metric for the worker thread.
-        orig_add_scalar = SummaryWriter.add_scalar
-
-        def patched_add_scalar(self, tag, value, global_step=None, *a, **kw):
-            orig_add_scalar(self, tag, value, global_step, *a, **kw)
-            if _state["queue"] is None:
-                return
-            try:
-                from mlflow.entities import Metric
-                _state["queue"].put_nowait(Metric(
-                    key=_INVALID_TAG_CHARS.sub("_", tag),
-                    value=float(value),
-                    timestamp=int(time.time() * 1000),
-                    step=int(global_step or 0),
-                ))
-            except Exception:
-                pass
-
-        SummaryWriter.add_scalar = patched_add_scalar
+        _patch_writer(SummaryWriter, "scalar_value", "global_step")
+        try:
+            from skrl.utils.tensorboard import SummaryWriter as SkrlSummaryWriter
+            _patch_writer(SkrlSummaryWriter, "value", "timestep")
+        except ImportError:
+            pass
 
         # ArgumentParser.parse_args / parse_known_args -> start MLflow run on
         # the first invocation whose namespace looks like Isaac Lab's training
@@ -193,7 +213,7 @@ def _resolve_artifact_dir():
     """Resolve the per-run log directory, scanning for the most recent run.
 
     The user supplies MLFLOW_ARTIFACT_DIR as a parent path (e.g.
-    /workspace/IsaacLab/logs/skrl). Frameworks create per-run subdirectories
+    /workspace/isaaclab/logs/skrl). Frameworks create per-run subdirectories
     with their own naming (skrl uses <task_short_name>/<timestamp_algo>).
     Pick the most recently modified directory within the parent that has a
     `checkpoints/` subdirectory - that's the current training run.

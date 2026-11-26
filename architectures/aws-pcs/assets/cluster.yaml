@@ -50,6 +50,7 @@ Parameters:
     AllowedValues:
          - 25.05
          - 25.11
+         - 26.05
 
   ManagedAccounting:
     Type: String
@@ -88,7 +89,7 @@ Conditions:
   # CommunicationParameters=enable_http) is only supported on Slurm 25.11+. PCS
   # rejects cluster creation if these are set on an older version (e.g. 25.05),
   # so only emit them when monitoring is enabled AND the version supports it.
-  IsSlurm2511OrLater: !Equals [!Ref SlurmVersion, "25.11"]
+  IsSlurm2511OrLater: !Not [!Equals [!Ref SlurmVersion, "25.05"]]
   IncludeMetricsConfig: !And [!Condition IsMonitoringEnabled, !Condition IsSlurm2511OrLater]
   # Emit SlurmConfiguration only when at least one custom setting / accounting block
   # actually applies. Monitoring alone on Slurm < 25.11 contributes nothing (its
@@ -165,12 +166,10 @@ Resources:
       # grants), never iam:CreatePolicy. Split by feature so monitoring and
       # multi-user don't depend on each other:
       Policies:
-        # Always present (every cluster): register with PCS + read boot scripts
-        # from S3 + read this cluster's own SSM parameters (grafana password,
-        # ldap admin password) + decrypt SSM SecureStrings. None of this is
-        # monitoring- or directory-specific; it is the baseline an instance
-        # needs to register, fetch its post-install/directory scripts, and
-        # store/read the per-cluster secrets it generates.
+        # Always present (every cluster): register with PCS, read and write
+        # this cluster's grafana/* SSM parameters, look up the directory server
+        # for setup-directory.sh, and deny user jobs the ldap/* admin password.
+        # Boot scripts are read through AmazonS3ReadOnlyAccess above.
         - PolicyName: PcsInstanceBasePolicy
           PolicyDocument:
             Version: "2012-10-17"
@@ -200,6 +199,18 @@ Resources:
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/grafana/*'
 
+              # setup-directory.sh (client role) finds the login node's IP by its
+              # directory-role=server tag. Granted here, not only in the
+              # monitoring policy, so an LDAP client works with MonitoringStack=none.
+              - Sid: EC2DescribeForDirectoryServerDiscovery
+                Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+
               # Hard-deny the OpenLDAP admin password on the shared/compute role.
               # AmazonSSMManagedInstanceCore (attached for SSM agent) grants
               # ssm:GetParameter on "*", and the SecureString is encrypted with the
@@ -217,7 +228,8 @@ Resources:
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pcs/${PCSCluster.Id}/ldap/*'
 
-  # IAM Instance Profile (compute + login share this base profile)
+  # IAM Instance Profile for compute node groups (the login node group uses
+  # PcsLoginInstanceProfile below)
   PcsInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
@@ -227,8 +239,10 @@ Resources:
       Roles:
         - !Ref PcsInstanceIamRole
 
-  # Login-node-only role: the base role plus the OpenLDAP admin password
-  # (ssm /pcs/<id>/ldap/*) read/write and KMS decrypt. Only the login node runs
+  # Login-node-only role: PCS registration and grafana/* SSM access as in the
+  # base role, plus the OpenLDAP admin password (ssm /pcs/<id>/ldap/*) read/write
+  # and KMS decrypt. It has no directory-server lookup: the login node configures
+  # SSSD against localhost. Only the login node runs
   # the OpenLDAP server and needs this secret; keeping it off the compute role
   # prevents a user job on a compute node from reading the directory admin
   # password via IMDS (directory-takeover). deploy-all passes this profile to the

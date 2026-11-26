@@ -12,25 +12,33 @@ come here when something doesn't behave as expected, or when planning a producti
 
 ## 1. Slurm version selection
 
-The templates' `SlurmVersion` parameter accepts **`25.05`** and **`25.11`**. The choice
-affects more than just the scheduler binary:
+The templates' `SlurmVersion` parameter accepts **`25.05`**, **`25.11`** and **`26.05`**.
+The choice affects more than just the scheduler binary:
 
-| Capability | `25.05` | `25.11` |
-|---|---|---|
-| PCS cluster create + Pyxis container jobs | ✅ | ✅ |
-| Slurm native OpenMetrics endpoint (port 6817) | ❌ | ✅ |
-| Prometheus `slurm_openmetrics` job + Slurm dashboards in Grafana | ❌ | ✅ |
-| Node/CPU/memory/GPU/CloudWatch dashboards | ✅ | ✅ |
+| Capability | `25.05` | `25.11` | `26.05` |
+|---|---|---|---|
+| PCS cluster create + Pyxis container jobs | ✅ | ✅ | ✅ |
+| Slurm native OpenMetrics endpoint (port 6817) | ❌ | ✅ | ✅ |
+| Prometheus `slurm_openmetrics` job + Slurm dashboards in Grafana | ❌ | ✅ | ✅ |
+| Node/CPU/memory/GPU/CloudWatch dashboards | ✅ | ✅ | ✅ |
 
 The Slurm OpenMetrics endpoint requires `MetricsType=metrics/openmetrics` +
 `CommunicationParameters=enable_http`, and **PCS rejects those settings on Slurm <
 25.11** ("Slurm custom settings parameter MetricsType is only supported for Slurm
 version 25.11 or later"). `cluster.yaml` therefore emits them only when
-`SlurmVersion=25.11`. On a 25.05 cluster the rest of monitoring still works; only the
-Slurm-specific dashboards stay empty. Pick 25.11 unless you have a reason to pin 25.05.
+`SlurmVersion` is 25.11 or 26.05. On a 25.05 cluster the rest of monitoring still works;
+only the Slurm-specific dashboards stay empty. Each version has an AWS PCS end-of-life
+date, after which no new cluster can be created with it; check
+[Slurm versions in AWS PCS](https://docs.aws.amazon.com/pcs/latest/userguide/slurm-versions.html)
+before pinning one.
+
+`26.05` also needs an AMI that ships Slurm 26.05. A PCS-Ready DLAMI's `Description`
+lists its Slurm builds, so check the one you pass as `AmiId`, or as `BaseAmiId` when you
+build a custom AMI. In [PCS-READY-DLAMI.md](./PCS-READY-DLAMI.md), the x86\_64
+PCS-Ready DLAMI carries 26.05 from the 2026-09-09 build on.
 
 `24.11` is intentionally **out of scope** here — `cluster.yaml`'s `AllowedValues`
-doesn't include it, and `install-enroot-pyxis.sh` builds Pyxis only for 25.05/25.11.
+doesn't include it, and `install-enroot-pyxis.sh` builds Pyxis only for 25.05/25.11/26.05.
 
 ## 2. AMI and container runtime
 

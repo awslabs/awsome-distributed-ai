@@ -95,6 +95,7 @@ def build_vars(cfg: dict) -> dict:
         "JOB_CPU_LIMIT": job["cpu_limit"],
         "JOB_CPU_REQUEST": job["cpu_request"],
         "JOB_SHM": job["shm_size"],
+        "JOB_EFA_PER_NODE": str(job.get("efa_per_node", 0)),
         "JOB_FSX_LOG_DIR": job["fsx_log_dir"],
         # SageMaker Training
         "SM_ROLE_ARN": sm["role_arn"],
