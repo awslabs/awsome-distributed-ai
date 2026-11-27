@@ -93,7 +93,7 @@ def collect(results, notes):
     results = Path(results)
     ceilings = workshop.read_ceilings(results)
     world = workshop.world_size()
-    summaries, rows, gpus = {}, [], set()
+    summaries, rows, gpus, failed = {}, [], set(), set()
     for name in stage_names(results):
         run = workshop.read_json(results / name / 'run.json') or {}
         if run.get('status') != 'finished':
@@ -106,8 +106,9 @@ def collect(results, notes):
         row = dict(_name=name, Stage=name, Transport=stage['transport'], Attention=stage['attention'], Saving=stage['saving'],
                    Work=f"{stage['updates']} x {stage['sequence_length']:,}")
         if run.get('exit_status') == 5:
-            failed = ', '.join(check['name'] for check in run.get('checks', []) if not check['ok'])
-            row['Stage'] += ' ' + notes.mark(f'{name}: a check failed ({failed})')
+            failed.add(name)
+            checks = ', '.join(check['name'] for check in run.get('checks', []) if not check['ok'])
+            row['Stage'] += ' ' + notes.mark(f'{name}: a check failed ({checks})')
         if stage['kind'] == 'interrupt':
             campaign = workshop.read_json(results / name / 'campaign' / 'campaign.json') or {}
             once = notes.mark('interrupt: one command that stopped and resumed the job, not one run')
@@ -140,14 +141,16 @@ def collect(results, notes):
             row['Goodput'] = goodput(results, summary, summary.get('retained_progress'), workshop.gpu_name(summary),
                                      name, notes)
         rows.append(row)
-    baseline = summaries.get('baseline')
     for row in rows:
         name = row['_name']
-        if name in summaries and baseline:
-            row['vs baseline'] = ratio(baseline, summaries[name], f'{name} vs baseline', notes)
-        previous = PREVIOUS.get(name)
-        if previous and name in summaries and previous in summaries:
-            row['vs previous step'] = ratio(summaries[previous], summaries[name], f'{name} vs {previous}', notes)
+        for column, reference in (('vs baseline', 'baseline'), ('vs previous step', PREVIOUS.get(name))):
+            if name not in summaries or reference not in summaries:
+                continue
+            label = f'{name} vs {reference}'
+            # A failed check means the run did not measure what its row names, so it gets no ratio.
+            unchecked = [stage for stage in (reference, name) if stage in failed]
+            row[column] = (notes.mark(f'{label}: not compared, a check of {unchecked[0]} failed') if unchecked
+                           else ratio(summaries[reference], summaries[name], label, notes))
     return ceilings, rows, denominator_lines(ceilings, gpus, world)
 
 

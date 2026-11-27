@@ -533,7 +533,7 @@ def merge_efa_readings(lines):
 
 
 def efa_deltas(before, after):
-    """{host: None (unavailable) or dict(sent, received, increased)}."""
+    """{host: None (unavailable) or dict(sent, received, increased); sent or received is None if not read."""
     deltas = {}
     for host in sorted(set(before) | set(after)):
         first, last = before.get(host) or {}, after.get(host) or {}
@@ -543,10 +543,12 @@ def efa_deltas(before, after):
         if not changes:
             deltas[host] = None
             continue
-        deltas[host] = dict(
-            sent=sum(v for (_, counter), v in changes.items() if counter == 'tx_bytes'),
-            received=sum(v for (_, counter), v in changes.items() if counter == 'rx_bytes'),
-            increased=any(v > 0 for v in changes.values()))
+        totals = {}
+        for name in ('tx_bytes', 'rx_bytes'):
+            values = [v for (_, counter), v in changes.items() if counter == name]
+            totals[name] = sum(values) if values else None
+        deltas[host] = dict(sent=totals['tx_bytes'], received=totals['rx_bytes'],
+                            increased=any(v > 0 for v in changes.values()))
     return deltas
 
 
@@ -558,10 +560,13 @@ def format_bytes(value):
 
 
 def efa_text(deltas):
+    def change(value, direction):
+        return f'{direction} bytes not read' if value is None else f'+{format_bytes(value)} {direction}'
+
     if not deltas:
         return 'EFA counters unavailable on both nodes'
     return '; '.join(f'EFA counters unavailable on {host}' if delta is None else
-                     f"{host} +{format_bytes(delta['sent'])} sent, +{format_bytes(delta['received'])} received"
+                     f"{host} {change(delta['sent'], 'sent')}, {change(delta['received'], 'received')}"
                      for host, delta in deltas.items())
 
 
@@ -1084,7 +1089,7 @@ def failed_check(run):
 
 def cumulative_chart_lines(results):
     """One bar per main-path stage: 1.00x plus each later step's measured change."""
-    _, baseline, _ = chart_stage(results, 'baseline')
+    baseline_run, baseline, _ = chart_stage(results, 'baseline')
     rows = []
     for name in MAIN_PATH:
         label, change = MAIN_PATH_LABELS[name]
@@ -1094,6 +1099,8 @@ def cumulative_chart_lines(results):
             row['label'] += failed_check(run)
             if baseline is None:
                 row['note'] = 'no baseline to compare with'
+            elif failed_check(run) or failed_check(baseline_run):
+                row['note'] = 'not compared: a check failed'
             elif name == 'baseline':
                 row['total'] = 1.0
             else:
@@ -1202,9 +1209,11 @@ def try_comparison_lines(change, results):
     names = ('sdpa', f'rerun-{change}', f'try-{change}')
     summaries = []
     for name in names:
-        _, summary, problem = chart_stage(results, name)
+        run, summary, problem = chart_stage(results, name)
         if problem:
             return [f'not compared: {name} {problem}']
+        if failed_check(run):
+            return [f'not compared: a check of {name} failed']
         summaries.append(summary)
     sdpa, rerun, tried = summaries
     try:

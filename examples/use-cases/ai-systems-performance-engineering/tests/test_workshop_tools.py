@@ -623,6 +623,10 @@ class EfaCounterTests(unittest.TestCase):
             text = workshop.efa_text(deltas)
             self.assertIn('gpu-node-1 +4.0 GB sent, +3.0 GB received', text)
             self.assertIn('EFA counters unavailable on gpu-node-2', text)
+            # Only an RDMA counter was read: the sent and received bytes are unknown, not zero.
+            rdma_only = workshop.efa_deltas({'gpu-node-1': {'rdmap0s0': {'rdma_write_bytes': 1}}},
+                                            {'gpu-node-1': {'rdmap0s0': {'rdma_write_bytes': 9}}})
+            self.assertEqual(workshop.efa_text(rdma_only), 'gpu-node-1 sent bytes not read, received bytes not read')
             if os.geteuid() != 0:
                 self.assertIn('EFA counters unavailable on gpu-node-3', text)
 
@@ -750,6 +754,24 @@ class ProfileTableTests(unittest.TestCase):
 
 
 class ProgressionTests(unittest.TestCase):
+    def test_a_stage_whose_check_failed_gets_no_ratio(self):
+        tool = load_tool('progression')
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, LLM_RESULTS_DIR=directory):
+            results = Path(directory)
+            for name, settings, exit_status, measured in (('baseline', job(), 0, BASELINE), ('efa', job('efa'), 5, EFA)):
+                stage = workshop.plan(name, settings)[0]
+                record = summary(stage, measured['seconds'], measured['rate'], 2**30)
+                (finished_stage(results, stage, exit_status=exit_status) / 'train/summary.json').write_text(json.dumps(record))
+            notes = tool.Notes()
+            _, table, _ = tool.collect(results, notes)
+            self.assertEqual(table[0]['vs baseline'], '1.00x')
+            for column in ('vs baseline', 'vs previous step'):
+                self.assertRegex(table[1][column], r'^\(\d\)$')
+            self.assertIn('efa vs baseline: not compared, a check of efa failed', notes.texts)
+            chart = '\n'.join(workshop.cumulative_chart_lines(results))
+            self.assertIn('not compared: a check failed', chart)
+            self.assertNotIn('2.34x', chart)
+
     def test_rows_ratios_notes_goodput_and_markdown(self):
         tool = load_tool('progression')
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, LLM_RESULTS_DIR=directory):
