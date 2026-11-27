@@ -1,0 +1,466 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Optional in-cluster monitoring for the GPU cluster: Prometheus, Pushgateway and Grafana in one
+  namespace, installed by observability/prometheus-grafana/eks-in-cluster/install.py from a bundle
+  pinned by sha256. Nothing outside that namespace is created except read-only grants in the
+  namespaces given to scrape. Deleting this stack removes the install.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Cluster
+        Parameters:
+          - ClusterName
+          - PrivateSubnetId
+          - ClusterSecurityGroupId
+          - BootstrapVpcId
+          - KubectlVersion
+      - Label:
+          default: Monitoring
+        Parameters:
+          - MonitoringNamespace
+          - MonitoringNodeSelector
+          - MonitoringScrapeNamespaces
+          - MonitoringScrapeServices
+          - MonitoringBundleSha256
+          - MonitoringBundleUrl
+      - Label:
+          default: Template location
+        Parameters:
+          - S3BucketName
+          - S3KeyPrefix
+
+Parameters:
+  ClusterName:
+    Type: String
+    Description: Name of the existing EKS cluster.
+  PrivateSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet the bootstrap runs in when BootstrapVpcId is set.
+  ClusterSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: The cluster security group, used by the bootstrap when BootstrapVpcId is set.
+  BootstrapVpcId:
+    Type: String
+    Default: ""
+    AllowedPattern: ^(vpc-[0-9a-f]{8,17})?$
+    Description: >-
+      VPC of PrivateSubnetId. Set it when the cluster API cannot be reached from outside the VPC:
+      the bootstrap then runs in PrivateSubnetId with ClusterSecurityGroupId.
+  KubectlVersion:
+    Type: String
+    Default: "1.36.4"
+    Description: kubectl the bootstrap downloads. Within one minor of the cluster's version.
+  MonitoringNamespace:
+    Type: String
+    Default: in-cluster-monitoring
+    AllowedPattern: ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$
+    Description: >-
+      Namespace of the install. Create refuses when it exists and was not created by this stack;
+      changing it on an update installs into the new namespace and then removes the old install.
+  MonitoringNodeSelector:
+    Type: String
+    Default: role=system
+    AllowedPattern: ^([A-Za-z0-9./-]+=[A-Za-z0-9._-]+)?$
+    Description: key=value label of the nodes the three pods run on. The default is the system node group's label.
+  MonitoringScrapeNamespaces:
+    Type: String
+    Default: ""
+    AllowedPattern: ^([a-z0-9-]+(,[a-z0-9-]+)*)?$
+    Description: >-
+      Namespaces whose Services opt in with the label awsome-distributed-ai/scrape=<MonitoringNamespace>
+      and a port named metrics, comma-separated. Each gets a read-only Role for Prometheus; a
+      namespace created after the install is granted by the next update that changes a monitoring parameter.
+  MonitoringScrapeServices:
+    Type: String
+    Default: ""
+    AllowedPattern: ^([a-z0-9-]+/[a-z0-9-]+:[A-Za-z0-9-]+(,[a-z0-9-]+/[a-z0-9-]+:[A-Za-z0-9-]+)*)?$
+    Description: >-
+      Existing exporters to read, as NAMESPACE/SERVICE:PORT, comma-separated; for example the GPU
+      Operator's DCGM exporter gpu-operator/nvidia-dcgm-exporter:9400. PORT is the Service's port
+      name or its target (container) port number, not the Service's own port number. An exporter
+      with no target up a minute after the install is named in the build log and does not fail the
+      stack, so one can be named before it runs. Empty adds no exporter; the stack itself, pushed
+      metrics and MonitoringScrapeNamespaces are still read. No exporter is installed.
+  MonitoringBundleSha256:
+    Type: String
+    Default: ""
+    AllowedPattern: ^([0-9a-f]{64})?$
+    Description: >-
+      sha256 of the install bundle's uncompressed tar; the build refuses a bundle with another digest.
+      Empty installs the bundle this template pins (Mappings, Bundle), so an update to newer templates
+      that keeps this value empty installs their bundle. Set it to install another bundle, for example
+      a fork's from MonitoringBundleUrl.
+  MonitoringBundleUrl:
+    Type: String
+    Default: ""
+    AllowedPattern: ^(https://.+)?$
+    Description: >-
+      Empty takes s3://S3BucketName/S3KeyPrefix monitoring/<sha256>.tar.gz. Set an https URL to
+      install an unpublished bundle, for example from a fork, with MonitoringBundleSha256 set to its
+      digest. Every request, a Delete included, reads the bundle, so keep it for the life of the stack.
+  S3BucketName:
+    Type: String
+    Default: awsome-distributed-ai
+    Description: Bucket the bundle is read from when MonitoringBundleUrl is empty.
+  S3KeyPrefix:
+    Type: String
+    Default: templates/amazon-eks/
+    Description: Key prefix of the bundle in S3BucketName, ending with a slash.
+
+Mappings:
+  # The bundle of this template's commit. architectures/amazon-eks/tests/lint-templates.sh check 11 fails
+  # when it is not the bundle built from observability/prometheus-grafana/eks-in-cluster.
+  Bundle:
+    Pinned:
+      Sha256: 24d38dad327d782dc5266844b0ef1b7bf3c2d53f885fb6b1df553b1bad6b0462
+
+Conditions:
+  BootstrapInVpc: !Not [!Equals [!Ref BootstrapVpcId, ""]]
+  PinnedBundle: !Equals [!Ref MonitoringBundleSha256, ""]
+
+Resources:
+  MonitoringLogGroup:
+    Type: AWS::Logs::LogGroup
+    # Kept after the stack is deleted: when a delete could not remove the install, this log says why.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RetentionInDays: 30
+
+  MonitoringBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: monitoring-bootstrap
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: eks:DescribeCluster
+                Resource: !Sub "arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}"
+              - Effect: Allow
+                Action: s3:GetObject
+                # Every bundle key is named by its own digest and the build checks the digest, so reading any
+                # of them grants nothing more; a rollback or a replaced install's Delete needs an older one.
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${S3BucketName}/${S3KeyPrefix}monitoring/*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt MonitoringLogGroup.Arn
+              - !If
+                - BootstrapInVpc
+                - Effect: Allow
+                  Action: [ec2:CreateNetworkInterface, ec2:DeleteNetworkInterface, ec2:DescribeDhcpOptions, ec2:DescribeNetworkInterfaces, ec2:DescribeSecurityGroups, ec2:DescribeSubnets, ec2:DescribeVpcs]
+                  Resource: "*"
+                - !Ref AWS::NoValue
+              - !If
+                - BootstrapInVpc
+                # As the CodeBuild VPC policy scopes it: CodeBuild's own interfaces in the build's subnet.
+                - Effect: Allow
+                  Action: ec2:CreateNetworkInterfacePermission
+                  Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/*"
+                  Condition:
+                    StringEquals:
+                      ec2:AuthorizedService: codebuild.amazonaws.com
+                      ec2:Subnet: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${PrivateSubnetId}"
+                - !Ref AWS::NoValue
+
+  # Cluster-admin on the target cluster, as the GPU node group's bootstrap has: install.py creates a
+  # namespace and, in the namespaces it scrapes, a Role and RoleBinding. Anyone who can start this
+  # build can therefore act as cluster-admin.
+  MonitoringAccessEntry:
+    Type: AWS::EKS::AccessEntry
+    Properties:
+      ClusterName: !Ref ClusterName
+      PrincipalArn: !GetAtt MonitoringBuildRole.Arn
+      AccessPolicies:
+        - PolicyArn: !Sub "arn:${AWS::Partition}:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+          AccessScope:
+            Type: cluster
+
+  MonitoringProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${AWS::StackName}-monitoring"
+      ServiceRole: !GetAtt MonitoringBuildRole.Arn
+      # Below the custom resource's ServiceTimeout (25 minutes). The build's own waits (10 minutes for
+      # the rollouts, 5 for a cleanup) end well before this, so the build answers; a build that cannot
+      # start is answered by the Lambda.
+      TimeoutInMinutes: 20
+      VpcConfig: !If
+        - BootstrapInVpc
+        - {VpcId: !Ref BootstrapVpcId, Subnets: [!Ref PrivateSubnetId], SecurityGroupIds: [!Ref ClusterSecurityGroupId]}
+        - !Ref AWS::NoValue
+      Artifacts:
+        Type: NO_ARTIFACTS
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref MonitoringLogGroup
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
+      Source:
+        Type: NO_SOURCE
+        # Every input that decides what is installed comes from the request (the Lambda passes the
+        # custom resource's properties), so a Delete removes what the recorded properties installed.
+        BuildSpec: |
+          version: 0.2
+          env:
+            shell: bash
+          phases:
+            build:
+              commands:
+                - |
+                  set -uo pipefail
+                  STAGE="starting"
+                  RESPONDED=/tmp/responded
+                  send() { # $1 = SUCCESS|FAILED, $2 = reason
+                    [ -n "${CFN_RESPONSE_URL:-}" ] || return 0
+                    [ -f "$RESPONDED" ] && return 0
+                    python3 - "$1" "$2" <<'PY' > /tmp/resp.json
+                  import json, os, sys
+                  print(json.dumps({
+                      "Status": sys.argv[1],
+                      "Reason": sys.argv[2][:1000],
+                      "PhysicalResourceId": os.environ["CFN_PHYSICAL_ID"],
+                      "StackId": os.environ["CFN_STACK_ID"],
+                      "RequestId": os.environ["CFN_REQUEST_ID"],
+                      "LogicalResourceId": os.environ["CFN_LOGICAL_ID"],
+                      "Data": {"BuildId": os.environ.get("CODEBUILD_BUILD_ID", ""), "Namespace": os.environ["NAMESPACE"]},
+                  }))
+                  PY
+                    curl -fsS --retry 3 --retry-all-errors -X PUT -H 'Content-Type:' --data-binary @/tmp/resp.json \
+                      "${CFN_RESPONSE_URL}" && touch "$RESPONDED"
+                  }
+                  # A Delete answers SUCCESS with the reason, so a failed removal does not block the
+                  # stack's delete; what was left is named in the reason.
+                  fail() {
+                    trap - ERR
+                    echo "$STAGE failed: $1"
+                    if [ "$REQUEST_TYPE" = Delete ]; then send SUCCESS "$STAGE failed: $1; the install may remain (see CodeBuild log $CODEBUILD_BUILD_ID)"
+                    else
+                      # An install this request started in a namespace this owner did not already hold is
+                      # removed (only this owner's objects). A Create answers "not-created:" only when
+                      # that removal succeeded; otherwise its rollback Delete has to try again.
+                      if [ "${PRE_EXISTING:-}" = no ]; then
+                        if [ -f /tmp/bundle/install.py ] && python3 /tmp/bundle/install.py delete --namespace "$NAMESPACE" --owner "$OWNER" --timeout 300; then
+                          [ "$REQUEST_TYPE" = Create ] && export CFN_PHYSICAL_ID="not-created:$NAMESPACE"
+                        fi
+                      elif [ "$REQUEST_TYPE" = Create ] && [ -z "${PRE_EXISTING:-}" ]; then
+                        export CFN_PHYSICAL_ID="not-created:$NAMESPACE"
+                      fi
+                      send FAILED "$STAGE failed: $1 (see CodeBuild log $CODEBUILD_BUILD_ID)"
+                    fi
+                    exit 1
+                  }
+                  trap 'fail "unexpected error"' ERR
+
+                  STAGE="tool install"
+                  curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/v$KUBECTL_VERSION/bin/linux/amd64/kubectl" || fail "kubectl download"
+                  chmod +x /usr/local/bin/kubectl
+                  aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION" || fail "update-kubeconfig"
+
+                  STAGE="bundle download"
+                  mkdir -p /tmp/bundle
+                  if [ -n "$BUNDLE_URL" ]; then
+                    curl -fsSLo /tmp/bundle.tar.gz "$BUNDLE_URL" || fail "download of $BUNDLE_URL"
+                  else
+                    aws s3 cp "s3://$S3_BUCKET/${S3_PREFIX}monitoring/$BUNDLE_SHA256.tar.gz" /tmp/bundle.tar.gz || fail "download of s3://$S3_BUCKET/${S3_PREFIX}monitoring/$BUNDLE_SHA256.tar.gz"
+                  fi
+                  have=$(gzip -dc /tmp/bundle.tar.gz | sha256sum | cut -d' ' -f1)
+                  [ "$have" = "$BUNDLE_SHA256" ] || fail "bundle digest is $have, the stack pins $BUNDLE_SHA256"
+                  tar -xzf /tmp/bundle.tar.gz -C /tmp/bundle
+
+                  STAGE="monitoring $REQUEST_TYPE"
+                  # Whether this owner already held the namespace, read before anything is written. A read
+                  # that fails for another reason than NotFound stops here, with PRE_EXISTING unset, so
+                  # fail() removes nothing.
+                  if owner_now=$(kubectl get namespace "$NAMESPACE" -o jsonpath='{.metadata.labels.awsome-distributed-ai/monitoring-owner}' 2>/tmp/namespace-read.err); then :
+                  elif grep -q NotFound /tmp/namespace-read.err; then owner_now=""
+                  else fail "cannot read namespace $NAMESPACE: $(tail -1 /tmp/namespace-read.err)"
+                  fi
+                  if [ "$owner_now" = "$OWNER" ]; then PRE_EXISTING=yes; else PRE_EXISTING=no; fi
+                  args=(--namespace "$NAMESPACE" --owner "$OWNER" --timeout 600)
+                  if [ "$REQUEST_TYPE" = Delete ]; then
+                    out=$(python3 /tmp/bundle/install.py delete "${args[@]}" 2>&1) || { echo "$out"; fail "$(echo "$out" | tail -1)"; }
+                    echo "$out"
+                    trap - ERR
+                    echo SUCCESS > /tmp/outcome
+                    send SUCCESS "$(echo "$out" | tail -1)" || echo "the SUCCESS answer could not be delivered; post_build answers"
+                  else
+                    [ -n "$NODE_SELECTOR" ] && args+=(--node-selector "$NODE_SELECTOR")
+                    for s in ${SCRAPE_SERVICES//,/ }; do args+=(--scrape-service "$s"); done
+                    for n in ${SCRAPE_NAMESPACES//,/ }; do args+=(--scrape-namespace "$n"); done
+                    out=$(python3 /tmp/bundle/install.py apply "${args[@]}" 2>&1) || { echo "$out"; fail "$(echo "$out" | tail -1)"; }
+                    echo "$out"
+                    rc=0; python3 /tmp/bundle/install.py check --namespace "$NAMESPACE" || rc=$?
+                    [ "$rc" = 0 ] || [ "$rc" = 4 ] || fail "check after apply"
+                    note=""; [ "$rc" = 4 ] && note="; an exporter of ScrapeServices has no target up yet (see the build log)"
+                    # A failed delivery of SUCCESS must not run fail(), which would remove a working install.
+                    trap - ERR
+                    echo SUCCESS > /tmp/outcome
+                    send SUCCESS "installed in $NAMESPACE$note" || echo "the SUCCESS answer could not be delivered; post_build answers"
+                  fi
+            post_build:
+              commands:
+                # Reached on a failed build as well, so a failure the trap did not catch still answers.
+                - |
+                  if [ ! -f /tmp/responded ] && [ -n "${CFN_RESPONSE_URL:-}" ] && [ -f /tmp/resp.json ]; then
+                    # The build prepared its answer but could not deliver it: send that same answer, with its
+                    # reason and physical id, again.
+                    curl -fsS --retry 5 --retry-all-errors -X PUT -H 'Content-Type:' --data-binary @/tmp/resp.json "${CFN_RESPONSE_URL}"
+                  elif [ ! -f /tmp/responded ] && [ -n "${CFN_RESPONSE_URL:-}" ]; then
+                    # The outcome the build reached, if it reached one; otherwise a Delete answers SUCCESS and
+                    # a Create or Update FAILED, keeping its physical id so a rollback Delete still cleans up.
+                    status=FAILED; [ "${REQUEST_TYPE:-}" = Delete ] && status=SUCCESS
+                    [ -f /tmp/outcome ] && status=$(cat /tmp/outcome)
+                    python3 - "$status" "monitoring bootstrap ended without a result; see CodeBuild log ${CODEBUILD_BUILD_ID}" <<'PY' > /tmp/resp.json
+                  import json, os, sys
+                  print(json.dumps({
+                      "Status": sys.argv[1],
+                      "Reason": sys.argv[2][:1000],
+                      "PhysicalResourceId": os.environ["CFN_PHYSICAL_ID"],
+                      "StackId": os.environ["CFN_STACK_ID"],
+                      "RequestId": os.environ["CFN_REQUEST_ID"],
+                      "LogicalResourceId": os.environ["CFN_LOGICAL_ID"],
+                      "Data": {"BuildId": os.environ.get("CODEBUILD_BUILD_ID", ""), "Namespace": os.environ["NAMESPACE"]},
+                  }))
+                  PY
+                    curl -fsS --retry 3 --retry-all-errors -X PUT -H 'Content-Type:' --data-binary @/tmp/resp.json "${CFN_RESPONSE_URL}"
+                  fi
+
+  MonitoringTriggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: start-build
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: codebuild:StartBuild
+                Resource: !GetAtt MonitoringProject.Arn
+
+  MonitoringTriggerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
+
+  # Starts the build with the request's properties; the build answers CloudFormation itself. This
+  # answers only when the build cannot start, and for the Delete of an install that was never created.
+  MonitoringTrigger:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.13
+      Handler: index.handler
+      Timeout: 60
+      Role: !GetAtt MonitoringTriggerRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref MonitoringTriggerLogGroup
+      Code:
+        ZipFile: |
+          import hashlib, json, re, urllib.request, boto3
+
+          # Physical ids: "installed:<namespace>" after a Create or Update that succeeded, "not-created:<namespace>"
+          # after a Create that failed. ":" cannot occur in a namespace name, so the two never collide with one.
+          INSTALLED, NOT_CREATED = "installed:", "not-created:"
+
+          def respond(event, status, reason, physical):
+              print(f"{event['RequestType']} {status}: {reason}")
+              body = json.dumps({"Status": status, "Reason": reason[:1000], "PhysicalResourceId": physical,
+                                 "StackId": event["StackId"], "RequestId": event["RequestId"],
+                                 "LogicalResourceId": event["LogicalResourceId"], "Data": {}}).encode()
+              urllib.request.urlopen(urllib.request.Request(event["ResponseURL"], data=body, method="PUT",
+                                                            headers={"Content-Type": ""}))
+
+          def owner(stack_id):
+              # Label-value safe and unique across Regions and accounts: stack name plus a digest of its id.
+              name = re.sub(r"[^A-Za-z0-9_.-]", "-", stack_id.split("/")[1])[:50].strip("-_.")
+              return f"{name}-{hashlib.sha256(stack_id.encode()).hexdigest()[:8]}"
+
+          def handler(event, context):
+              kind, props = event["RequestType"], event["ResourceProperties"]
+              old = event.get("PhysicalResourceId", "")
+              # Only an id this stack wrote itself says nothing was installed; a Create that never answered
+              # leaves an id CloudFormation made up, and its install, if any, still has to be removed.
+              if kind == "Delete" and old.startswith(NOT_CREATED):
+                  respond(event, "SUCCESS", "nothing was installed", old)
+                  return
+              # The physical id carries the namespace, so only a namespace change makes CloudFormation
+              # delete the earlier install; a rollback Delete runs the removal unless the build answered not-created.
+              physical = INSTALLED + props["Namespace"] if kind != "Delete" else old
+              env = {"CFN_RESPONSE_URL": event["ResponseURL"], "CFN_STACK_ID": event["StackId"],
+                     "CFN_REQUEST_ID": event["RequestId"], "CFN_LOGICAL_ID": event["LogicalResourceId"],
+                     "CFN_PHYSICAL_ID": physical,
+                     "REQUEST_TYPE": kind, "NAMESPACE": props["Namespace"], "OWNER": owner(event["StackId"]),
+                     "CLUSTER_NAME": props["ClusterName"],
+                     "BUNDLE_SHA256": props["BundleSha256"], "BUNDLE_URL": props.get("BundleUrl", ""),
+                     "S3_BUCKET": props["S3BucketName"], "S3_PREFIX": props["S3KeyPrefix"],
+                     "NODE_SELECTOR": props.get("NodeSelector", ""), "SCRAPE_SERVICES": props.get("ScrapeServices", ""),
+                     "SCRAPE_NAMESPACES": props.get("ScrapeNamespaces", ""), "KUBECTL_VERSION": props["KubectlVersion"]}
+              try:
+                  boto3.client("codebuild").start_build(
+                      projectName=props["ProjectName"],
+                      environmentVariablesOverride=[{"name": k, "value": v, "type": "PLAINTEXT"} for k, v in env.items()])
+              except Exception as exc:
+                  if kind == "Delete":
+                      respond(event, "SUCCESS", f"could not start the monitoring delete build ({exc}); the install may remain", physical)
+                  else:
+                      respond(event, "FAILED", f"could not start the monitoring build: {exc}",
+                              NOT_CREATED + props["Namespace"] if kind == "Create" else physical)
+
+  Monitoring:
+    Type: Custom::EksMonitoring
+    # The access entry must outlive the custom resource, so the Delete build can still reach the cluster.
+    DependsOn: MonitoringAccessEntry
+    Properties:
+      ServiceToken: !GetAtt MonitoringTrigger.Arn
+      ServiceTimeout: 1500
+      ProjectName: !Ref MonitoringProject
+      ClusterName: !Ref ClusterName
+      Namespace: !Ref MonitoringNamespace
+      NodeSelector: !Ref MonitoringNodeSelector
+      ScrapeServices: !Ref MonitoringScrapeServices
+      ScrapeNamespaces: !Ref MonitoringScrapeNamespaces
+      BundleSha256: !If [PinnedBundle, !FindInMap [Bundle, Pinned, Sha256], !Ref MonitoringBundleSha256]
+      BundleUrl: !Ref MonitoringBundleUrl
+      S3BucketName: !Ref S3BucketName
+      S3KeyPrefix: !Ref S3KeyPrefix
+      KubectlVersion: !Ref KubectlVersion
+
+Outputs:
+  MonitoringNamespace:
+    Description: Namespace of the monitoring install.
+    Value: !GetAtt Monitoring.Namespace
+  GrafanaPortForward:
+    Description: Run where your kubeconfig reaches the cluster, then open http://localhost:3000/ and sign in as admin.
+    Value: !Sub "kubectl -n ${MonitoringNamespace} port-forward service/grafana 3000:80"
+  GrafanaPassword:
+    Description: Prints the generated Grafana admin password (needs get on secrets in the namespace).
+    Value: !Sub "kubectl -n ${MonitoringNamespace} get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d"
+  MonitoringLogGroup:
+    Description: CloudWatch log group of the install and delete builds.
+    Value: !Ref MonitoringLogGroup
