@@ -32,9 +32,6 @@ DATASETS = {
     'tokens-2048-160': dict(config='configs/smol-2048.json', records=160),
     'tokens-1024-160': dict(config='configs/smol-1024.json', records=160),
 }
-# OFI_NCCL_PROTOCOL of the EFA path (2.run-llm.sh, lib/nccl-protocols-rank.sh); RDMA otherwise.
-OFI_PROTOCOLS = {'g6e.48xlarge': 'SENDRECV'}
-
 EFA_COUNTERS = ('tx_bytes', 'rx_bytes', 'rdma_read_bytes', 'rdma_write_bytes', 'rdma_write_recv_bytes')
 NETWORK = {'socket': 'Socket', 'efa': 'AWS Libfabric'}
 RESTORE_FROM, RESTORE_STOP, INTERRUPT_AFTER = 20, 25, 30
@@ -1143,8 +1140,7 @@ def run_protocols(runner=subprocess.run, env=None):
         suffix += 1
         out = out.with_name(f'{stamp}-{suffix}')
     world = 2 * int(env.get('GPUS_PER_NODE', 8))
-    protocol = OFI_PROTOCOLS.get(env.get('AIM347_INSTANCE_TYPE'), 'RDMA')
-    print(f'[aim347] all_reduce_perf, 1 MiB to 64 MiB, on {world} GPUs over EFA with OFI_NCCL_PROTOCOL={protocol}')
+    print(f'[aim347] all_reduce_perf, 1 MiB to 64 MiB, on {world} GPUs over EFA with OFI_NCCL_PROTOCOL=RDMA')
     print(f'[aim347] results {out}')
     for number, (variant, label) in enumerate(PROTOCOL_RUNS, 1):
         (out / variant).mkdir(parents=True)
