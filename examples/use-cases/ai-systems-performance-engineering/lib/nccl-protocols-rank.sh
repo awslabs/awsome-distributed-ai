@@ -3,7 +3,7 @@
 # Usage: bash lib/nccl-protocols-rank.sh nccl-choice|simple LOG_DIR
 set -euo pipefail
 variant=${1:?} logs=${2:?}
-# MPI bootstrap only, as in lib/nccl-rank.sh, set after the image's environment.
+# MPI bootstrap only, set after the image's environment.
 export PMIX_MCA_gds=hash
 export OMPI_MCA_pml=ob1 OMPI_MCA_btl=tcp,self
 export OMPI_MCA_btl_tcp_if_include="${NCCL_SOCKET_IFNAME#=}"

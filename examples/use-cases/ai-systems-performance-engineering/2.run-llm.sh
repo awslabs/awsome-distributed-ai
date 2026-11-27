@@ -48,8 +48,8 @@ ofi_protocol=RDMA
 [[ ${AIM347_INSTANCE_TYPE:-} != g6e.48xlarge ]] || ofi_protocol=SENDRECV
 case ${LLM_TRANSPORT:-efa} in
     # Under RDMA, NCCL runs all-reduce from 64 KiB to 8 MiB on two g7.48xlarge
-    # as LL, which is many times slower there than Simple (numbers in
-    # lib/instance-type.sh). NCCL_PROTO=^LL would enable LL128 over PCIe.
+    # as LL, which is many times slower there than Simple (tools/nccl-protocols.sh
+    # measures both). NCCL_PROTO=^LL would enable LL128 over PCIe.
     # An NCCL_PROTO set by the caller is kept; an empty one lets NCCL choose.
     efa) export FI_PROVIDER=efa NCCL_NET='AWS Libfabric' OFI_NCCL_PROTOCOL=$ofi_protocol NCCL_PROTO=${NCCL_PROTO-Simple}
          [[ -n $NCCL_PROTO ]] || unset NCCL_PROTO

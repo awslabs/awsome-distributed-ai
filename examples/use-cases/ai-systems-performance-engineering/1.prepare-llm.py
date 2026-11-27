@@ -16,7 +16,7 @@ def main():
     from transformers import AutoTokenizer
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', type=Path, default=Path(__file__).parent / 'configs/llm.json')
+    parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--records', type=int, default=1024)
     parser.add_argument('--minimum-document-tokens', type=int, default=0)

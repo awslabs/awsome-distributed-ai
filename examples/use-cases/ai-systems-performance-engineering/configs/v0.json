@@ -1,6 +1,0 @@
-{
-  "name": "v0",
-  "network": "Socket",
-  "workers_per_rank": 48,
-  "layout": "small"
-}

@@ -9,4 +9,3 @@ __pycache__/
 !lib/*.py
 !lib/*.sh
 !lib/*.cu
-!observability/dcgm.csv

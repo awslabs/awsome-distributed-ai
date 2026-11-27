@@ -410,11 +410,6 @@ class ServeLlmConfigTests(unittest.TestCase):
             self.assertEqual((root / 'endpoints.txt').read_text().split(),
                              [f'http://10.0.0.1:{8100 + i}' for i in range(8)])
 
-    def test_default_config_refuses_the_smol_snapshot(self):
-        with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(ValueError, 'pin mismatch'):
-            self.launch(Path(directory), [])
-
-
 class PrepareServingImageTests(unittest.TestCase):
     """prepare-event.sh with stubs; the training image exists and verifies, data preparation fails."""
 

@@ -5,8 +5,8 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
-from llm_metrics import (ContinuousWindow, accumulation_steps, observability_values,
-                         paired_training_report, retained_progress, training_goodput, update_work)
+from llm_metrics import (ContinuousWindow, accumulation_steps, paired_training_report,
+                         retained_progress, training_goodput, update_work)
 
 # Synthetic run of 5 updates of 32 x 2,048 positions without saves, the first one warmup.
 WORKLOAD = dict(model_id='m', sequence_length=2048, global_batch_samples=32, data_parallel_size=16,
@@ -86,43 +86,6 @@ class LLMMetricTests(unittest.TestCase):
                 training_goodput(20000.0, work, reference)
         with self.assertRaises(ValueError):
             training_goodput(20000.0, work, dict(FAULT_FREE, training_throughput_tokens_per_second=0.0))
-
-    def test_dashboard_never_promotes_segment_to_campaign_goodput(self):
-        row = dict(status='completed', evidence_kind='LLM hardware run', profiled=False, numerical_verification=False,
-                   training_throughput_tokens_per_second=100, measured_useful_tokens=1000,
-                   measured_seconds=10, retained_progress={'retained_tokens_per_second': 80})
-        values = observability_values(row)
-        self.assertEqual(values['llm_training_segment_retained_tokens_per_second'], 80)
-        self.assertNotIn('llm_campaign_retained_tokens_per_second', values)
-        row['evidence_kind'] = 'CPU correctness fixture'
-        with self.assertRaises(ValueError):
-            observability_values(row)
-        campaign = retained_progress(0, 1000, 20, scope='synthetic test', initial_updates=0, durable_updates=6)
-        campaign.update(status='completed', evidence_kind='LLM hardware run', source='fresh controlled interruption and resume')
-        self.assertEqual(observability_values(campaign), {'llm_campaign_retained_tokens_per_second': 50,
-                                                          'llm_campaign_retained_tokens': 1000,
-                                                          'llm_campaign_elapsed_seconds': 20})
-        for flag in ('profiled', 'numerical_verification'):
-            campaign[flag] = True
-            with self.assertRaises(ValueError):
-                observability_values(campaign)
-            campaign[flag] = False
-        campaign['status'] = 'failed'
-        with self.assertRaises(ValueError):
-            observability_values(campaign)
-
-    def test_incomplete_or_unidentified_serving_is_not_published(self):
-        row = dict(status='running', evidence_kind='LLM serving hardware run',
-                   metrics={'metric': 'Serving goodput'})
-        with self.assertRaises(ValueError):
-            observability_values(row)
-        row['status'] = 'failed'
-        with self.assertRaises(ValueError):
-            observability_values(row)
-        row['status'] = 'completed'
-        row.pop('evidence_kind')
-        with self.assertRaises(ValueError):
-            observability_values(row)
 
     def test_pair_rejects_work_changes_and_profiles(self):
         before = dict(workload={'global_batch_samples': 32}, allocation={'gpus': 8},

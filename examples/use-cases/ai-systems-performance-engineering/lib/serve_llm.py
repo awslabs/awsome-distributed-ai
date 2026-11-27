@@ -164,7 +164,7 @@ def main():
     parser.add_argument('--max-num-seqs', type=int, default=256)
     parser.add_argument('--max-num-batched-tokens', type=int, default=8192)
     parser.add_argument('--model', default='/data/model')
-    parser.add_argument('--config', default='configs/llm.json',
+    parser.add_argument('--config', required=True,
                         help='config whose model_id and model_revision the model snapshot must pin, '
                              'relative to the example directory')
     parser.add_argument('--output', type=Path, required=True)

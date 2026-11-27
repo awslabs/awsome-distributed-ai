@@ -1,8 +1,7 @@
 """CPU tests of the workshop tools (tools/ and lib/workshop.py). Standard library only.
 
 Recorded values come from job 487 (two g7.48xlarge nodes, 16 GPUs, 2,048
-positions, eager attention, Socket and EFA) and the GEMM peak recorded in
-VALIDATION.md. Values marked synthetic are software fixtures, not measurements.
+positions, eager attention, Socket and EFA). Values marked synthetic are software fixtures, not measurements.
 """
 from contextlib import redirect_stderr, redirect_stdout
 import importlib.util
@@ -131,17 +130,6 @@ class JobEnvTests(unittest.TestCase):
         for text, message in cases.items():
             with self.subTest(text=text), self.assertRaisesRegex(workshop.UsageError, message):
                 workshop.parse_job_env(text)
-
-    def test_configs_change_only_the_listed_fields(self):
-        base = json.loads((LAB / 'configs/llm-zero-smol.json').read_text())
-        expected = {'smol-2048': (2048, 5, 1, [5], 'AIM347 workshop job'),
-                    'smol-1024': (1024, 5, 1, [5], 'AIM347 half-length probe'),
-                    'smol-2048-40': (2048, 40, 2, [5, 20, 40], 'AIM347 saving and interruption')}
-        for name, (length, updates, warmup, saves, qualification) in expected.items():
-            config = json.loads((LAB / f'configs/{name}.json').read_text())
-            self.assertEqual(config, dict(base, sequence_length=length, updates=updates, warmup_updates=warmup,
-                                          checkpoint_updates=saves, qualification=qualification))
-
 
 class PlanTests(unittest.TestCase):
     def test_every_subcommand_plans_its_stages_arguments_config_and_data(self):
@@ -1394,31 +1382,6 @@ count=$(grep -c "^curl $SLURMD_NODENAME$" {calls})
 class NcclProtocolSettingTests(unittest.TestCase):
     """NCCL_PROTO=Simple wherever the launchers set OFI_NCCL_PROTOCOL=RDMA for G7."""
 
-    def protocol_environment(self, instance_type):
-        script = (f'source {LAB / "lib/instance-type.sh"}\n'
-                  f'detect_instance_type() {{ printf "%s\\n" {instance_type}; }}\n'
-                  'apply_g7_protocol\n'
-                  'printf "OFI_NCCL_PROTOCOL=%s NCCL_PROTO=%s\\n" "${OFI_NCCL_PROTOCOL-unset}" "${NCCL_PROTO-unset}"\n')
-        # stdin from /dev/null: bash reads the bashrc files when its input is a socket.
-        result = subprocess.run(['bash', '-euc', script], capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                                env={'PATH': os.environ['PATH'], 'NCCL_PROTO': '^LL'}, check=True)
-        return result.stderr, result.stdout.strip()
-
-    def test_g7_selects_rdma_and_simple_and_says_so(self):
-        stderr, values = self.protocol_environment('g7.48xlarge')
-        self.assertEqual(values, 'OFI_NCCL_PROTOCOL=RDMA NCCL_PROTO=Simple')
-        self.assertRegex(stderr, r'^host=\S+ instance_type=g7\.48xlarge OFI_NCCL_PROTOCOL=RDMA NCCL_PROTO=Simple\n$')
-        stderr, values = self.protocol_environment('p5.48xlarge')
-        self.assertEqual((stderr, values), ('', 'OFI_NCCL_PROTOCOL=unset NCCL_PROTO=^LL'))
-
-    def test_legacy_job_passes_nccl_proto_into_every_container_that_gets_the_protocol(self):
-        lines = [line for line in (LAB / 'lib/job.sh').read_text().splitlines() if '--container-env=' in line]
-        self.assertEqual(len(lines), 2)
-        for line in lines:
-            names = line.split('--container-env=', 1)[1].split()[0].split(',')
-            self.assertIn('OFI_NCCL_PROTOCOL', names)
-            self.assertIn('NCCL_PROTO', names)
-
     def test_training_launcher_sets_simple_for_efa_unless_the_caller_sets_nccl_proto(self):
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
@@ -1568,7 +1531,7 @@ class NcclProtocolSettingTests(unittest.TestCase):
                     self.assertEqual((seen['debug'], seen['subsys']), (expected_debug, expected_subsys))
                     self.assertEqual(seen['argv'][:5], ['--nnodes=2', '--nproc-per-node=8', '--node-rank=0',
                                                         '--master-addr=10.0.0.1', '--master-port=29547'])
-                    self.assertEqual(seen['argv'][5:7], ['lib/train_llm.py', '--config=configs/llm.json'])
+                    self.assertEqual(seen['argv'][5], 'lib/train_llm.py')
                     self.assertIn('the launcher exited with status 73', result.stdout)
 
 

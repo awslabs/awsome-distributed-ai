@@ -1,49 +1,13 @@
-"""Regression checks for the workshop's arithmetic and real counter wire formats."""
-import math
+"""Regression checks for the real counter wire formats."""
 from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
-from metrics import push
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'lib'))
-from metrics import calculate
 from counters import lustre_metrics, efa_metrics
 
 
 class MeasurementTests(unittest.TestCase):
-    def test_dense_denominator_and_gpu_count(self):
-        # Synthetic arithmetic fixture, not a measured training result.
-        result=calculate(10000,3_000_000_000,4,429.1)
-        self.assertEqual(result['tflops_per_gpu'],45)
-        self.assertAlmostEqual(result['measured_gemm_share'],45/429.1)
-        self.assertNotIn('mfu_dense_gemm_ratio', result)
-        sparse=calculate(10000,3_000_000_000,4,1000)
-        self.assertLess(sparse['measured_gemm_share'],result['measured_gemm_share'])
-        self.assertAlmostEqual(result['measured_gemm_share']/sparse['measured_gemm_share'],1000/429.1)
-        self.assertEqual(calculate(20000,3_000_000_000,8,429.1),dict(result,tokens_per_second=20000))
-
-    def test_pushgateway_keeps_each_configuration(self):
-        with patch('urllib.request.urlopen') as request:
-            push('http://localhost:9091','run-a','v0','test-fixture',{'tokens_per_second':10})
-            baseline=request.call_args.args[0].full_url
-            push('http://localhost:9091','run-a','v1','test-fixture',{'tokens_per_second':20})
-            fixed=request.call_args.args[0].full_url
-            push('http://localhost:9091','run-a','sync','test-fixture',{'tokens_per_second':10}, measurement_kind='campaign')
-            campaign=request.call_args.args[0]
-            push('http://localhost:9091','run-a','sync','test-fixture',{'tokens_per_second':20}, measurement_kind='training_segment')
-            segment=request.call_args.args[0]
-            self.assertEqual(campaign.method, 'PUT')
-            self.assertEqual(segment.method, 'PUT')
-            self.assertNotEqual(campaign.full_url, segment.full_url)
-        self.assertNotEqual(baseline,fixed)
-        self.assertTrue(baseline.endswith('/config/v0'))
-        self.assertTrue(fixed.endswith('/config/v1'))
-
-    def test_bad_inputs_fail(self):
-        for value in [0,-1,math.inf,math.nan]:
-            with self.assertRaises(ValueError): calculate(value,3_000_000_000,4,429.1)
-
     def test_lustre_sum_not_samples_and_multiple_mounts(self):
         raw='''llite.fs-a.stats=
 snapshot_time 12345.000000 secs.nsecs
