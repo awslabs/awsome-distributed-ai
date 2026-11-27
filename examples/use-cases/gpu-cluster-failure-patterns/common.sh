@@ -21,9 +21,9 @@ unset aim344_pmi_var SLURM_MPI_TYPE
 # process of that group that reads the terminal is stopped, so a key pressed in
 # terminal A could otherwise hold a job until the launcher's limit.
 
-# Check 5 has a separate, job-local cold-start budget. Pyxis names are scoped by
-# UID and job, never borrowed from another participant or an earlier allocation.
-# Keep SPANK options in this subshell: host counters/storage must not inherit them.
+# Check 5 creates its own container, named after the job, within a time limit of
+# its own. The SPANK options stay in this subshell, so that the host steps that
+# read the EFA counters do not inherit them.
 run_check5() (
     local suite=$1 out=$2
     export NCCL_CONTAINER=${NCCL_CONTAINER:-$NCCL_ENROOT_IMAGE}
@@ -40,8 +40,8 @@ run_check5() (
     unset NCCL_NET NCCL_NET_PLUGIN NCCL_IB_DISABLE FI_EFA_IFACE FI_EFA_DEVICE_NAME
     export SLURM_SPANK__SLURM_SPANK_OPTION_pyxis_container_name="aim344_check5_${SLURM_JOB_ID:?}"
     export SLURM_SPANK__SLURM_SPANK_OPTION_pyxis_container_env=OMPI_MCA_pml,OMPI_MCA_btl,OMPI_MCA_btl_tcp_if_include,OMPI_MCA_btl_tcp_if_exclude,NCCL_SOCKET_IFNAME,FI_PROVIDER,FI_EFA_USE_HUGE_PAGE,OFI_NCCL_PROTOCOL,NCCL_PROTO,PMIX_MCA_gds
-    # Initialize both roots before NCCL's bounded collective/isolation timers.
-    # This timeout is configurable, not a claim that cold extraction was qualified.
+    # Create the container on both nodes before the suite's own collective and
+    # isolation timers start.
     local start=$SECONDS rc=0
     SLURM_MPI_TYPE=none timeout --signal=TERM --kill-after=30s "${AIM344_CONTAINER_PREP_TIMEOUT:-600}s" \
         srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --mpi=none --cpu-bind=none \
@@ -49,7 +49,7 @@ run_check5() (
     printf 'Check 5 container preparation: elapsed=%s s exit_code=%s\n' "$((SECONDS-start))" "$rc"
     ((rc == 0)) || return "$rc"
     # Match the suite's --mpi option and enable the real step's PMIx IPC hook.
-    # Keep both settings inside run_check5; later storage is not an MPI step.
+    # Keep both settings inside run_check5; the counter steps after it are not MPI steps.
     export SLURM_MPI_TYPE=$NCCL_MPI PMIX_MCA_gds=${PMIX_MCA_gds:-hash}
     # NCCL_PROTO comes only from lab.env or the caller (on g7, Simple), and
     # nothing else shows which protocol the 1 to 8 MiB rows ran with.
@@ -69,7 +69,7 @@ set_allocation_cpus() {
     export AIM344_CPUS_PER_NODE=${BASH_REMATCH[1]}
     # srun does not inherit sbatch's -c on every Slurm version. Set its native
     # default from the allocation, including Check 5's unflagged MPI steps.
-    # Explicit per-rank -c (the optional sweep) still takes precedence.
+    # The sweep's explicit per-rank -c still takes precedence.
     export SRUN_CPUS_PER_TASK=$AIM344_CPUS_PER_NODE
 }
 
@@ -135,7 +135,7 @@ run_sweep() {
     fi
     node_command python3 /opt/aim344/efa-counters.py snapshot "/results/$run_id.before"
     local start=$SECONDS
-    # The optional sweep uses one MPI rank per GPU within the same CPU budget.
+    # The sweep uses one MPI rank per GPU within the same CPU budget.
     SLURM_MPI_TYPE=pmix timeout --signal=TERM --kill-after=30s 600s \
         srun --nodes=2 --ntasks="$((2 * GPUS_PER_NODE))" --ntasks-per-node="$GPUS_PER_NODE" --cpus-per-task="$((AIM344_CPUS_PER_NODE / GPUS_PER_NODE))" --mpi=pmix --cpu-bind=none \
         "${CONTAINER_ARGS[@]}" --no-container-remap-root bash /opt/aim344/sweep-rank.sh < /dev/null \
@@ -150,7 +150,7 @@ run_sweep() {
 
 prepare_torch() {
     : "${TORCH_IMAGE:?Set TORCH_IMAGE to the absolute path of the built aim344.sqsh image}"
-    : "${CHECKPOINT_DIR:?Set CHECKPOINT_DIR to the isolated per-attendee quota path or private mount}"
+    : "${CHECKPOINT_DIR:?Set CHECKPOINT_DIR to the checkpoint tmpfs that setup-node.sh mounts}"
     [[ $TORCH_IMAGE == /* && $CHECKPOINT_DIR == /* && $CHECKPOINT_DIR != *[:,]* && $CHECKPOINT_DIR != *' '* ]] || exit 1
     CONTAINER_ARGS=(--container-image="$TORCH_IMAGE"
         --container-name="aim344_torch_$SLURM_JOB_ID" --container-writable
@@ -170,7 +170,7 @@ run_torch() {
     run_id=${AIM344_RUN_ID:-$phase-$(date -u +%Y%m%dT%H%M%SZ)}
     # Device faults can leave GPU cleanup in D-state beyond the watchdog.
     # The device step therefore has no launcher timeout, which would SIGKILL
-    # the srun client and close the evidence at 210 seconds. Slurm ends it at
+    # the srun client and close the job's log at 210 seconds. Slurm ends it at
     # the step's own time limit of six minutes instead (srun --time, KillWait
     # between SIGTERM and SIGKILL), while tee stays attached. The allocation
     # may have no time limit, so this step limit is the device step's bound.
@@ -181,7 +181,7 @@ run_torch() {
     [[ $limit =~ ^[1-9][0-9]*$ ]] || { echo "AIM344_JOB_LIMIT_SECONDS must be a positive number of seconds; got: $limit" >&2; return 2; }
     local -a deadline=(timeout --signal=TERM --kill-after=30s "${limit}s")
     local -a step_limit=()
-    local -a evidence=()
+    local -a progress_copy=()
     if [[ $phase == device ]]; then
         deadline=()
         step_limit=(--time=6)
@@ -209,7 +209,7 @@ run_torch() {
     # node, which Incident 6 watches for progress before the EFA reset.
     if [[ $phase == device || ${AIM344_PROGRESS_COPY:-0} == 1 ]]; then
         mkdir -p -- "$HOME/aim344-results"
-        evidence=("$HOME/aim344-results/device-$SLURM_JOB_ID.log")
+        progress_copy=("$HOME/aim344-results/device-$SLURM_JOB_ID.log")
     fi
     local -a lab_args=()
     if [[ -n ${AIM344_LAB_LOG:-} && $phase != device ]]; then
@@ -218,7 +218,7 @@ run_torch() {
     SLURM_MPI_TYPE=none "${deadline[@]}" \
         srun "${step_limit[@]}" --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
         "${CONTAINER_ARGS[@]}" bash /opt/aim344/torch-node.sh "$@" "${lab_args[@]}" < /dev/null \
-        2>&1 | tee "$RESULTS_DIR/$run_id.log" "${evidence[@]}" || rc=$?
+        2>&1 | tee "$RESULTS_DIR/$run_id.log" "${progress_copy[@]}" || rc=$?
     printf 'launcher_exit_code=%s (dimensionless)\n' "$rc" | tee "$RESULTS_DIR/$run_id.status.log"
     return "$rc"
 }

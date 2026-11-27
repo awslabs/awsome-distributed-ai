@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-# Fault, evidence and recovery commands for the target GPU node, run from the
+# Fault, record and recovery commands for the target GPU node, run from the
 # login node with your own sudo. The target is AIM344_TARGET_NODE in lab.env.
 #
 #   bash lab.sh status            the target's state in Slurm and the current incident

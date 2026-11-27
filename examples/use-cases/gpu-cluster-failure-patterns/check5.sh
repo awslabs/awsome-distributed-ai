@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-# One coordinator invocation of the named suite's Check 5 per allocation.
+# The verification job: Check 5 of the health suite (a two-node NCCL all-reduce)
+# with each node's EFA byte changes. Run it inside your two-node allocation.
 set -euo pipefail
 [[ $# -eq 0 ]] || { echo "Usage: bash ${0##*/} (it takes no arguments)" >&2; exit 2; }
 LAB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$LAB_DIR/common.sh"
 set_allocation_cpus
-: "${SLURM_JOB_ID:?Run from the coordinator inside a fresh dedicated two-node allocation}"
+: "${SLURM_JOB_ID:?Run this inside your two-node allocation}"
 [[ ${SLURM_JOB_NUM_NODES:-${SLURM_NNODES:-0}} == 2 ]]
-: "${NCCL_ENROOT_IMAGE:?Load lab.env with the native-kernel staged image}"
+: "${NCCL_ENROOT_IMAGE:?Open a new shell, whose login profile loads lab.env}"
 suite=${AIM344_SUITE_ENTRY:-/opt/aim344-healthcheck/validation/gpu-cluster-healthcheck/gpu-healthcheck.sh}
 out=${RESULTS_DIR:-$LAB_DIR/results/$SLURM_JOB_ID}/healthcheck-$(date -u +%Y%m%dT%H%M%SZ)
 mkdir -p "$out"
