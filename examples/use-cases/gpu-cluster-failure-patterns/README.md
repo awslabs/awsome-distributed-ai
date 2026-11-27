@@ -21,7 +21,7 @@ The lab assumes that you own the cluster for the session: one login node and two
 ## Set up
 
 1. Build both targets of the [Dockerfile](Dockerfile) (`nccl-baseline` and `aim344`), import them with `enroot import`, and copy `aim344.sqsh` and `nccl-baseline.sqsh` to `/opt/aim344` on both GPU nodes.
-2. Copy this directory to `/opt/aim344/device-recovery/companion` on the login node and both GPU nodes.
+2. Copy this directory to `/opt/aim344/device-recovery/companion` on the login node and both GPU nodes, and unpack the health suite archive under `/opt/aim344-healthcheck` on the login node, where `check5.sh` starts Check 5.
 3. On each GPU node, run `sudo bash setup-node.sh ubuntu <health suite archive>`. It unpacks the health suite, installs the Prolog and mounts the 32 MiB checkpoint tmpfs as a systemd mount unit.
 4. Write `lab.env` in the lab directory on all three nodes, and source `profile.sh` from `~/.bashrc` on the login node:
 

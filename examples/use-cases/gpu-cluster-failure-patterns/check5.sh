@@ -12,6 +12,11 @@ set_allocation_cpus
 [[ ${SLURM_JOB_NUM_NODES:-${SLURM_NNODES:-0}} == 2 ]]
 : "${NCCL_ENROOT_IMAGE:?Open a new shell, whose login profile loads lab.env}"
 suite=${AIM344_SUITE_ENTRY:-/opt/aim344-healthcheck/validation/gpu-cluster-healthcheck/gpu-healthcheck.sh}
+# The suite runs in this shell, which salloc opens on the login node, and starts
+# its sweep on the allocation with srun. It sizes the sweep from the instance
+# type, so it gets the GPU nodes' type, not this host's.
+INSTANCE_TYPE=$(srun --nodes=1 --ntasks=1 --mpi=none cat /sys/devices/virtual/dmi/id/product_name < /dev/null)
+export INSTANCE_TYPE
 out=${RESULTS_DIR:-$LAB_DIR/results/$SLURM_JOB_ID}/healthcheck-$(date -u +%Y%m%dT%H%M%SZ)
 mkdir -p "$out"
 export AIM344_COUNTER_DIR=$out AIM344_COUNTER_SCRIPT=$LAB_DIR/efa-counters.py
