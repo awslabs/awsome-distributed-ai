@@ -3,14 +3,10 @@
 Recorded values come from job 487 (two g7.48xlarge nodes, 16 GPUs, 2,048
 positions, eager attention, Socket and EFA). Values marked synthetic are software fixtures, not measurements.
 """
-from contextlib import redirect_stderr, redirect_stdout
 import importlib.util
-import io
 import json
 import os
 from pathlib import Path
-import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,7 +19,6 @@ sys.path.insert(0, str(LAB / 'lib'))
 import workshop  # noqa: E402
 
 FIXTURES = Path(__file__).resolve().parent / 'fixtures'
-GEMM_PEAK = 171.702538
 LOSSES = [2.157260686159134, 2.170563116669655, 2.138267382979393, 2.0402668192982674, 2.1076911836862564]
 BASELINE = dict(seconds=13.514139526057988, rate=19388.285839048818, peak=28648466432,
                 monotonic=[3477353.777025936, 3477357.151745839, 3477360.544529955, 3477363.923061297,
@@ -90,12 +85,12 @@ def finished_stage(results, stage, *, exit_status=0, checks=()):
 
 
 class StageTableTests(unittest.TestCase):
-    def test_every_stage_has_its_config_and_dataset(self):
+    def test_every_stage_has_its_config_and_a_launch_command(self):
         for name in workshop.STAGES:
             with self.subTest(stage=name):
                 stage = workshop.stage_plan(name)
                 self.assertTrue((LAB / stage['config']).is_file())
-                self.assertEqual(workshop.launch_command(stage, 'label', '/results', 16)[0] in ('bash', 'python3'), True)
+                self.assertIn(workshop.launch_command(stage, 'label', '/results', 16)[0], ('bash', 'python3'))
         self.assertTrue(workshop.stage_plan('try-microbatch2')['with_change'])
         self.assertFalse(workshop.stage_plan('rerun-microbatch2')['with_change'])
         with self.assertRaisesRegex(workshop.UsageError, 'unknown stage'):

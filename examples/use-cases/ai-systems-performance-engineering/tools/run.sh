@@ -13,5 +13,8 @@ job=$(sbatch --parsable --job-name=aim347 "${two_nodes[@]}" --output="$log" \
     --wrap="exec python3 -u $lab/lib/workshop.py run $*")
 echo "Batch job $job, log $log"
 echo "Ctrl-C stops only this following. Follow it again with: tail -f $log"
+# tail ends when the job has left the queue; the EXIT trap ends the queue watcher after Ctrl-C.
 while [[ -n $(squeue -h -j "$job" -t PENDING,RUNNING,COMPLETING 2> /dev/null) ]]; do sleep 2; done &
-tail -F --pid=$! "$log" 2> /dev/null
+watcher=$!
+trap 'kill "$watcher" 2> /dev/null || true' EXIT
+tail -F --pid="$watcher" "$log" 2> /dev/null
