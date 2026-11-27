@@ -123,10 +123,10 @@ def trainer_arguments(stage, label, *, output=True):
     return arguments
 
 
-def launch_command(stage, label, results, gpus):
+def launch_command(stage, label, results):
     if stage['kind'] == 'interrupt':
         return (['python3', '13.measure-recovery.py', '--output', str(Path(results) / stage['name'] / 'campaign'),
-                 '--allocated-gpus', str(gpus), '--interrupt-after-update', str(INTERRUPT_AFTER), '--', 'bash',
+                 '--interrupt-after-update', str(INTERRUPT_AFTER), '--', 'bash',
                  '2.run-llm.sh'] + trainer_arguments(stage, label, output=False))
     return ['bash', '2.run-llm.sh'] + trainer_arguments(stage, label)
 
@@ -987,7 +987,7 @@ def run_stage(stage, results, *, popen=subprocess.Popen, efa_reader=None, out=pr
         attempts.mkdir(exist_ok=True)
         stage_dir.rename(attempts / f"{stage['name']}-{utc_stamp()}")
     stage_dir.mkdir(parents=True)
-    command = launch_command(stage, os.environ.get('AIM347_ALLOCATION_LABEL', 'aim347'), results, world)
+    command = launch_command(stage, os.environ.get('AIM347_ALLOCATION_LABEL', 'aim347'), results)
     run = dict(stage=stage['name'], plan=stage,
                settings=dict(transport=stage['transport'], attention=stage['attention'], saving=stage['saving']),
                trainer_argv=command, config=stage['config'], data=stage['data'], allocation_id=job_id,

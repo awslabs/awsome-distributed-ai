@@ -90,7 +90,7 @@ class StageTableTests(unittest.TestCase):
             with self.subTest(stage=name):
                 stage = workshop.stage_plan(name)
                 self.assertTrue((LAB / stage['config']).is_file())
-                self.assertIn(workshop.launch_command(stage, 'label', '/results', 16)[0], ('bash', 'python3'))
+                self.assertIn(workshop.launch_command(stage, 'label', '/results')[0], ('bash', 'python3'))
         self.assertTrue(workshop.stage_plan('try-microbatch2')['with_change'])
         self.assertFalse(workshop.stage_plan('rerun-microbatch2')['with_change'])
         with self.assertRaisesRegex(workshop.UsageError, 'unknown stage'):

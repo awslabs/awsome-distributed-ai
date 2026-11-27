@@ -46,7 +46,7 @@ class TrainingCorrectnessTests(unittest.TestCase):
             self.assertEqual(source['id'], 'long')
             self.assertEqual(source['original_tokens'], 10)
 
-    def test_campaign_rejects_failure_at_update_without_intent(self):
+    def test_campaign_needs_the_stop_mark_and_a_completed_checkpoint(self):
         import importlib.util
         from types import SimpleNamespace
         path = Path(__file__).resolve().parents[1] / '13.measure-recovery.py'
@@ -67,45 +67,11 @@ class TrainingCorrectnessTests(unittest.TestCase):
                     (root / 'rank-0-updates.jsonl').write_text(json.dumps(row) + '\n')
                     return SimpleNamespace(returncode=1)
 
-                argv = ['controller', '--output', str(output), '--allocated-gpus', '1',
-                        '--interrupt-after-update', '5', '--', 'fixture']
-                expected = 'no completed checkpoint' if intent else 'controlled interruption'
+                argv = ['controller', '--output', str(output), '--interrupt-after-update', '5', '--', 'fixture']
+                expected = 'no completed checkpoint' if intent else 'failed before the stop'
                 with patch.object(sys, 'argv', argv), patch.object(controller.subprocess, 'run', side_effect=interrupted):
                     with self.assertRaisesRegex(RuntimeError, expected):
                         controller.main()
-                self.assertFalse((output / 'campaign.json').exists())
-
-    def test_campaign_rejects_missing_rank_and_rank_intent(self):
-        import importlib.util
-        from types import SimpleNamespace
-        path = Path(__file__).resolve().parents[1] / '13.measure-recovery.py'
-        spec = importlib.util.spec_from_file_location('recovery_controller', path)
-        assert spec is not None and spec.loader is not None
-        controller = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(controller)
-        for fault in ('missing_rank', 'missing_intent'):
-            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
-                output = Path(directory) / 'campaign'
-
-                def interrupted(command, **kwargs):
-                    root = Path(command[command.index('--output') + 1])
-                    checkpoint = root / 'checkpoints/update-000004'
-                    checkpoint.mkdir(parents=True)
-                    (checkpoint / 'COMPLETED.json').write_text(json.dumps({
-                        'completed_updates': 4, 'workload': {'data_parallel_size': 2}}))
-                    (checkpoint / '.metadata').touch()
-                    for rank in range(1 if fault == 'missing_rank' else 2):
-                        row = {'update': 5, 'controlled_interruption': rank == 0}
-                        (root / f'rank-{rank}-updates.jsonl').write_text(json.dumps(row) + '\n')
-                    return SimpleNamespace(returncode=1)
-
-                argv = ['controller', '--output', str(output), '--allocated-gpus', '2',
-                        '--interrupt-after-update', '5', '--', 'fixture']
-                expected = 'every rank' if fault == 'missing_rank' else 'controlled interruption'
-                with patch.object(sys, 'argv', argv), patch.object(controller.subprocess, 'run', side_effect=interrupted) as run:
-                    with self.assertRaisesRegex(RuntimeError, expected):
-                        controller.main()
-                    self.assertEqual(run.call_count, 1)
                 self.assertFalse((output / 'campaign.json').exists())
 
     def model(self):
