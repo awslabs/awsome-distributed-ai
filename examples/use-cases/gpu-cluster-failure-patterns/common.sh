@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-# Sourced by numbered entry points; not an attendee command.
+# Sourced by job.sh and check5.sh; not a participant command.
 # These are allocation-level launchers, not MPI ranks. lab.env (or an enclosing
 # step) can export PMIX_MCA_gds without any live PMIx server. Enroot 3.5's
 # 50-slurm-pmi.sh treats ANY exported PMIX_ name as a server when MPI type is
@@ -77,7 +77,7 @@ set_allocation_cpus() {
 # arguments. It starts no container: the first node_command or sweep creates it.
 prepare_allocation() {
     set_allocation_cpus
-    : "${SLURM_JOB_ID:?Run inside the dedicated two-node salloc allocation in README.md}"
+    : "${SLURM_JOB_ID:?Run inside the two-node salloc allocation in README.md}"
     [[ ${SLURM_JOB_NUM_NODES:-${SLURM_NNODES:-0}} == 2 ]] || {
         echo 'This exercise requires exactly 2 allocated nodes.' >&2; exit 1;
     }
@@ -111,87 +111,18 @@ use_nccl_container() {
         --container-mounts="$LAB_DIR:/opt/aim344:ro,$RESULTS_DIR:/results")
 }
 
-prepare_slurm() {
-    prepare_allocation
-    # This initializes one private writable root filesystem on each node.
-    node_command true
-}
-
 node_command() {
     SLURM_MPI_TYPE=none srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task="${AIM344_CPUS_PER_NODE:?}" --mpi=none --cpu-bind=none \
         "${CONTAINER_ARGS[@]}" --container-remap-root "$@" < /dev/null
 }
 
-# job.sh runs incidents without naming their cause. It sets AIM344_RUN_ID to a
-# neutral run id for the result files, and AIM344_LAB_LOG to its lab log, which
-# then receives the lab's own lines instead of the participant's output.
+# job.sh sets AIM344_RUN_ID to the run id for the result files, and AIM344_LAB_LOG
+# to its lab log, which then receives the launcher's own lines.
 #
 # A torch job's processes write their lab lines (workload.py --lab-dir) to one
 # file per process in this directory of RESULTS_DIR on each node, not to the
-# job's output, and collect_lab_records moves them into the lab log after the job.
+# job's output. They stay on the nodes.
 LAB_RECORDS=.lab-records
-
-# Moves the lab records in each node's LAB_RECORDS into the lab log, in time
-# order. Each node gets two steps, outside the container and bounded, so that
-# the participant's prompt never waits on them for long.
-#
-# Each step handles only the files of the node it runs on: workload.py names
-# each file <host>-pid<pid>.log with the host's name, and a step on one node
-# cannot tell whether a process on another node still writes. The collect step
-# takes a file only after its writer has exited. The containers share the
-# host's PID namespace, so the step waits for /proc/<pid> to go, for at most
-# AIM344_LAB_RECORDS_WAIT_SECONDS (default 20) on the node. After a launcher
-# timeout, a process can still be exiting and appending. A file whose writer
-# still runs stays for the next collection.
-#
-# The collect step appends each taken file, and each file an earlier collection
-# sent but did not acknowledge, to <file>.sent-<token>, where the token names
-# this collection. An unacknowledged file of the earlier form, <file>.collected,
-# is taken the same way. It prints those files and exits nonzero if any append,
-# removal or read failed. The coordinator stores a node's lines only when its
-# collect step succeeded. The acknowledge step then removes that node's files
-# of this token and no others. A failed step or a failed append leaves the
-# files on the node, and the next torch job in the allocation collects them
-# again. A record can then reach the lab log twice, but none is lost.
-LAB_RECORDS_COLLECT='cd -- "$1" 2>/dev/null || exit 0; end=$((SECONDS + $2)); token=$3; read -r host < /proc/sys/kernel/hostname || exit 1; rc=0; for f in "$host"-pid*.log; do [[ -f $f ]] || continue; pid=${f##*-pid}; pid=${pid%.log}; while [[ $pid =~ ^[0-9]+$ && -e /proc/$pid ]] && ((SECONDS < end)); do sleep 1; done; [[ $pid =~ ^[0-9]+$ && -e /proc/$pid ]] && continue; { cat -- "$f" >> "$f.sent-$token" && rm -f -- "$f"; } || rc=1; done; for f in "$host"-pid*.log.sent-* "$host"-pid*.log.collected; do [[ -f $f && $f != *.sent-"$token" ]] || continue; b=${f%.collected}; b=${b%.sent-*}; { cat -- "$f" >> "$b.sent-$token" && rm -f -- "$f"; } || rc=1; done; for f in "$host"-pid*.log.sent-"$token"; do [[ -f $f ]] || continue; cat -- "$f" || rc=1; done; exit "$rc"'
-LAB_RECORDS_ACKNOWLEDGE='cd -- "$1" 2>/dev/null || exit 0; read -r host < /proc/sys/kernel/hostname || exit 1; rm -f -- "$host"-pid*.log.sent-"$2"'
-
-# One bounded step on one node, outside the container:
-# lab_records_step NODE NAME SCRIPT [ARGUMENT...]; the script's $1 is the directory.
-lab_records_step() {
-    SLURM_MPI_TYPE=none timeout --signal=TERM --kill-after=10s 60s \
-        srun --nodes=1 --ntasks=1 --nodelist="$1" --cpus-per-task=1 --mpi=none --cpu-bind=none --overlap \
-        bash -c "$3" "$2" "$RESULTS_DIR/$LAB_RECORDS" "${@:4}" < /dev/null 2>> "$AIM344_LAB_LOG"
-}
-
-collect_lab_records() {
-    local node output status records= token
-    local -a stored=()
-    token=$SLURM_JOB_ID-$(date -u +%Y%m%dT%H%M%S%N)
-    for node in $(scontrol show hostnames "$SLURM_JOB_NODELIST"); do
-        status=0
-        output=$(lab_records_step "$node" collect "$LAB_RECORDS_COLLECT" \
-            "${AIM344_LAB_RECORDS_WAIT_SECONDS:-20}" "$token") || status=$?
-        if ((status == 0)); then
-            stored+=("$node")
-            [[ -z $output ]] || records+=$output$'\n'
-        else
-            printf '%s collect_lab_records: collect on %s exit %s; files left in %s\n' \
-                "$(date -u +%FT%TZ)" "$node" "$status" "$RESULTS_DIR/$LAB_RECORDS" >> "$AIM344_LAB_LOG"
-        fi
-    done
-    if [[ -n $records ]]; then
-        # Nothing stored, nothing removed.
-        { LC_ALL=C sort -s -k1,1 <<< "${records%$'\n'}" >> "$AIM344_LAB_LOG"; } 2>/dev/null || return 0
-    fi
-    for node in "${stored[@]}"; do
-        status=0
-        lab_records_step "$node" acknowledge "$LAB_RECORDS_ACKNOWLEDGE" "$token" || status=$?
-        ((status == 0)) || printf '%s collect_lab_records: acknowledge on %s exit %s; files left in %s\n' \
-            "$(date -u +%FT%TZ)" "$node" "$status" "$RESULTS_DIR/$LAB_RECORDS" >> "$AIM344_LAB_LOG"
-    done
-    return 0
-}
 
 run_sweep() {
     local phase=$1 run_id rc=0
@@ -274,17 +205,12 @@ run_torch() {
         printf 'launcher_exit_code=%s (dimensionless)\n' "$prep" | tee "$RESULTS_DIR/$run_id.status.log"
         return "$prep"
     fi
-    # The controller reads this copy before an active device fault. job.sh sets
-    # AIM344_PROGRESS_COPY=1 so that every run it starts writes the same copy,
-    # and the file's presence does not single out one incident.
+    # job.sh sets AIM344_PROGRESS_COPY=1: a copy of the job's output on the login
+    # node, which Incident 6 watches for progress before the EFA reset.
     if [[ $phase == device || ${AIM344_PROGRESS_COPY:-0} == 1 ]]; then
-        # Existing workload output, also at a fixed job-bound coordinator path.
-        # Run this launcher as the participant on the unaffected coordinator.
         mkdir -p -- "$HOME/aim344-results"
         evidence=("$HOME/aim344-results/device-$SLURM_JOB_ID.log")
     fi
-    # The device phase writes no lab line, so no collection step runs on a node
-    # whose device the lab may have reset.
     local -a lab_args=()
     if [[ -n ${AIM344_LAB_LOG:-} && $phase != device ]]; then
         lab_args=(--lab-dir="/results/$LAB_RECORDS")
@@ -294,6 +220,5 @@ run_torch() {
         "${CONTAINER_ARGS[@]}" bash /opt/aim344/torch-node.sh "$@" "${lab_args[@]}" < /dev/null \
         2>&1 | tee "$RESULTS_DIR/$run_id.log" "${evidence[@]}" || rc=$?
     printf 'launcher_exit_code=%s (dimensionless)\n' "$rc" | tee "$RESULTS_DIR/$run_id.status.log"
-    ((${#lab_args[@]} == 0)) || collect_lab_records
     return "$rc"
 }

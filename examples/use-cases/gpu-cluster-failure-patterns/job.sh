@@ -1,100 +1,65 @@
 #!/usr/bin/env bash
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-# The participant's job launcher for the hour's incidents.
+# The participant's job launcher for the six incidents.
 #
-#   bash job.sh notes      create your notes file
-#   bash job.sh run        run the training stand-in, the epoch job and the all-reduce
-#                          sweep on your pair
-#   bash job.sh incident N start incident N, the one your page is on, and run its job
-#   bash job.sh rerun      run the current incident's job again, as the pair is now
-#                          (with the options a page gives for that incident)
-#   bash job.sh resume     undo what the lab changed and resume the job
+#   bash job.sh notes        create your notes file
+#   bash job.sh run          run the training stand-in, the epoch job and the all-reduce
+#                            sweep on your pair
+#   bash job.sh incident [N] start incident N and run its job (without N, the one after
+#                            the incident started last)
+#   bash job.sh rerun        run the current incident's job again, as the pair is now
+#                            (with the options a page gives for that incident)
+#   bash job.sh resume       undo what the incident changed and resume the job
 #
 # Every command except notes runs inside your two-node allocation (terminal A).
-# incident takes the number of the incident the participant's page is on and
-# sends it with its request for the incident's profile
-# (12.device-exercise.sh next N). The lab controls start that incident, whichever
-# incidents ran before and whether or not it ran already, so a participant can
-# go back to an incident or start one again, also in a new allocation. Before
-# its job starts, incident removes what an earlier incident may have left on the
-# pair (clear_checkpoint_leftovers, and the plugin restored before it is hidden),
-# so that every start shows the same failure. It runs the job from the profile; rerun and
-# resume reuse the same profile and never ask for a new incident. The launcher
-# prints none of the incident's settings: the job reads them from
-# AIM344_INCIDENT_SETTINGS (workload.py apply_incident_settings). The lab's own
-# lines go to a lab log beside the profile, which the lab's operators read. run and
-# resume end by removing the allocation's containers from the GPU nodes. A job
-# that ends its incident tells the lab controls, with the profile's issue id, that
-# the incident has ended (12.device-exercise.sh ended <issue id>), so that status
-# stops calling it under way: a resume whose job completes, and a rerun of the
-# DataLoader incident with one of its page's two fixes whose job completes.
+# Each incident is a fixed recipe in incident_job below. The number of the incident
+# started last is kept in ~/aim344-results/current-incident, which rerun and resume read.
 set -euo pipefail
 LAB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 RESULTS_HOME=$HOME/aim344-results
-INCIDENTS=$RESULTS_HOME/incidents
-# The training stand-in runs 60 seconds; the incident in which the lab controls
-# act on the target runs 120, which leaves them a window after two progress
-# records. A resumed job ends shortly after its first checkpoint past the step it
-# resumed from (workload.py --end-after-save), and at the latest after 60 seconds.
+CURRENT=$RESULTS_HOME/current-incident
+# What the launcher's own steps print (plugin moves, checkpoint clean-up, the EFA reset).
+lab_log=$RESULTS_HOME/lab.log
+# The training stand-in runs 60 seconds. Incident 6 runs 120, which leaves time for
+# the EFA reset after two progress records. A resumed job ends shortly after its
+# first checkpoint past the step it resumed from (workload.py --end-after-save).
 RUN_SECONDS=60
-CONTROLLER_RUN_SECONDS=120
+EFA_RESET_RUN_SECONDS=120
 # The job whose answer differs needs only a few seconds of steps.
 CORRUPTION_SECONDS=20
 # Every job writes the stacks of a process still waiting 60 seconds after its
-# timer starts: the DataLoader job's timer starts when an epoch's workers exist,
-# the training stand-in's at each progress record. The launcher ends the
-# DataLoader job 120 seconds after srun.
+# timer starts. The launcher ends the DataLoader job 120 seconds after srun.
 STACK_DUMP_SECONDS=60
 DATALOADER_LIMIT_SECONDS=120
-# Checkpoint interval in steps; measurement 1 on g7.48xlarge may change it.
 CHECKPOINT_EVERY=200
 # The training stand-in: a broadcast, a cross-rank checksum comparison and a
 # checked all-reduce per step, with the checkpoint writer.
 STAND_IN=(device --checkpoint-every="$CHECKPOINT_EVERY" --replica-check
           --stack-dump-seconds="$STACK_DUMP_SECONDS")
 # The epoch job: two epochs of four batches from a DataLoader whose workers are
-# created anew for each epoch, one checked all-reduce and one progress record per
-# batch. Its stack dump is on for every run, the healthy one and the fixes included.
+# created anew for each epoch, one checked all-reduce and one progress record per batch.
 EPOCH_JOB=(dataloader --start-method fork --epochs 2 --stack-dump-seconds="$STACK_DUMP_SECONDS")
-# The controller's own checks decide when it acts. These only bound how long the
-# launcher keeps asking during one run.
-NEXT_ATTEMPTS=10
-NEXT_INTERVAL=3
-# The lab controls take one request per seat at a time. A request that arrives
-# while another one runs, such as a status typed in terminal B, is refused before
-# the controller does anything, so the launcher sends it again, once a second,
-# for up to BUSY_SECONDS, before it treats the reply as the answer.
-BUSY_SECONDS=30
-BUSY_REPLY='Another request for this assignment is in progress.'
 
 usage() {
     cat >&2 <<'USAGE'
 Usage: bash job.sh <command>
 
-  notes      Create your notes file, ~/aim344-results/notes.md
-  run        Run the training stand-in, the epoch job and the all-reduce sweep on your pair
-  incident N Start incident N, the one your page is on, and run its job;
-             an incident can be started again, and in any order
-  rerun      Run the current incident's job again, as your pair is now;
-             add an option only where your page gives one
-  resume     Undo what the lab changed in the current incident and resume the job
+  notes        Create your notes file, ~/aim344-results/notes.md
+  run          Run the training stand-in, the epoch job and the all-reduce sweep on your pair
+  incident [N] Start incident N (1 to 6) and run its job; without N, the incident
+               after the one you started last
+  rerun        Run the current incident's job again, as your pair is now;
+               add an option only where your page gives one
+  resume       Undo what the current incident changed and resume the job
 
 Run every command except notes inside your allocation, in terminal A.
 USAGE
     exit 2
 }
 
-refuse() {
-    printf '%s\n' "$*" >&2
-    exit 3
-}
-
-lab_note() {
-    printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >> "$lab_log"
-}
-
+# ---------------------------------------------------------------- notes
 # ---------------------------------------------------------------- notes
 make_notes() {
     local notes=$RESULTS_HOME/notes.md
@@ -223,7 +188,7 @@ Alternative that remains:
 
 Recovery and why:
 
-Will the lab's recovery accept this node?
+Checks that must pass after the reboot:
 
 What the verification job shows, and what it does not:
 
@@ -269,150 +234,18 @@ NOTES
     printf 'Created your notes file: %s\n' "$notes"
 }
 
-# ---------------------------------------------------------------- checks
-require_allocation() {
-    [[ -n ${SLURM_JOB_ID:-} ]] || refuse 'Run this inside your allocation: take it in terminal A with the salloc line on your page, then run job.sh there.'
-    local job
-    job=$(scontrol show job "$SLURM_JOB_ID" -o) || refuse "Slurm did not describe your allocation $SLURM_JOB_ID; raise your hand."
-    # The lab controls act only on a job of this account whose name starts with
-    # aim344-. Every run is held to the same rule, so that no incident is singled
-    # out by a refusal. The allocation's time limit is not checked: each seat holds
-    # its own two nodes for the session.
-    [[ " $job " == *" JobName=aim344-"* ]] || refuse 'Take your allocation with the salloc line on your page: its job name starts with aim344-.'
-    [[ ${AIM344_EFA_DEVICE:-} =~ ^[A-Za-z0-9_]+$ ]] \
-        || refuse 'AIM344_EFA_DEVICE is not set. Open a new terminal, whose login profile sets it, or raise your hand.'
-    # The training stand-in uses this one EFA device on each node.
-    export AIM344_EFA_IFACE=$AIM344_EFA_DEVICE
-    # Node-local results, as the login profile sets them in an allocation shell.
-    export RESULTS_DIR=${RESULTS_DIR:-/var/tmp/aim344-$(id -un)-$SLURM_JOB_ID}
-}
-
-# ---------------------------------------------------------------- profiles
-# Sets incident, exercise, writer_rank, issue_id, incident_settings, rerun_settings
-# and resume_settings from one profile, after checking that this launcher applies
-# every setting. The three settings values are the JSON the job reads from
-# AIM344_INCIDENT_SETTINGS, or - for none.
-read_profile() {
-    local fields
-    fields=$(python3 - "$1" 2>/dev/null <<'PY'
-import json, re, sys
-with open(sys.argv[1]) as stream:
-    profile = json.load(stream)
-number, exercise = profile['incident'], profile['exercise']
-settings = profile.get('settings') or {}
-# The controller's identifier for this issuance, which ended sends back.
-issue = profile['issue_id']
-
-
-def rank(value):
-    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 4096
-
-
-def flag(value):
-    return isinstance(value, bool)
-
-
-# The settings the job reads from AIM344_INCIDENT_SETTINGS, with the values it
-# accepts. They are checked here so that a bad one is refused before any
-# container starts, and the job's own refusal, which names the option, never
-# reaches the participant.
-workload = {
-    'dataloader': {'dataset_cache': lambda v: v in ('none', 'rank-thread', 'worker-thread'),
-                   'affected_rank': rank, 'worker_cuda': flag},
-    'silent-corruption': {'corrupt_rank': rank,
-                          'corrupt_step': lambda v: rank(v) and v >= 1,
-                          'corrupt_bit': lambda v: rank(v) and v <= 31,
-                          'corrupt_recurring': flag},
-    'cuda-assert': {'assert_rank': rank,
-                    'assert_step': lambda v: rank(v) and v > 200},
-}
-# The settings this launcher applies, for each exercise it runs.
-applied = {'storage': {'writer_rank'}, 'slow-job': set(), 'efa-reset': set(),
-           **{name: set(checks) for name, checks in workload.items()}}
-if (not isinstance(number, int) or isinstance(number, bool) or number < 1
-        or not isinstance(exercise, str) or not exercise.replace('-', '').isalpha()
-        or not isinstance(issue, str) or not re.fullmatch('[0-9a-f]{32}', issue)
-        or not isinstance(settings, dict)
-        or set(settings) - applied.get(exercise, set(settings))
-        or not all(workload[exercise][key](value) for key, value in settings.items()
-                   if exercise in workload)
-        or (exercise == 'silent-corruption' and 'corrupt_rank' not in settings)
-        or (exercise == 'cuda-assert' and 'assert_rank' not in settings)
-        # These act on the cached dataset; the job refuses them without one.
-        or (exercise == 'dataloader' and settings.get('dataset_cache') == 'none'
-            and ('affected_rank' in settings or settings.get('worker_cuda')))):
-    raise SystemExit(1)
-writer = settings.get('writer_rank', 0)
-if not rank(writer):
-    raise SystemExit(1)
-incident = dict(settings) if exercise in workload else {}
-# The DataLoader incident is the same on every seat: the rank process owns the
-# dataset's lock, cache and refill thread.
-if exercise == 'dataloader':
-    incident.setdefault('dataset_cache', 'rank-thread')
-# rerun runs the job as the pair is now: the DataLoader job keeps its dataset, a
-# recurring flip recurs, and a one-time flip does not happen again.
-rerun = incident if exercise in ('dataloader', 'cuda-assert') or incident.get('corrupt_recurring') else {}
-# resume runs the job without the lab's change. After a changed result it starts
-# from the last checkpoint saved before the changed step (workload.py --resume-before).
-resume = {'resume_before': incident.get('corrupt_step', 1)} if exercise == 'silent-corruption' else {}
-
-
-def encoded(values):
-    return json.dumps(values, sort_keys=True, separators=(',', ':')) if values else '-'
-
-
-print(number, exercise, writer, issue, encoded(incident), encoded(rerun), encoded(resume))
-PY
-) || refuse 'The incident profile cannot be used by this launcher; raise your hand.'
-    read -r incident exercise writer_rank issue_id incident_settings rerun_settings resume_settings \
-        <<< "$fields"
-    profile=$1
-    lab_log=${profile%.json}-lab.log
-}
-
-# The profile of the incident issued last.
-read_current_profile() {
-    local path
-    path=$(python3 - "$INCIDENTS" <<'PY'
-import glob, json, os, sys
-newest = None
-for path in glob.glob(os.path.join(sys.argv[1], 'incident-*.json')):
-    try:
-        with open(path) as stream:
-            issued = json.load(stream)['issued_at']
-    except (OSError, ValueError, KeyError, TypeError):
-        continue
-    if isinstance(issued, (int, float)) and (newest is None or issued > newest[0]):
-        newest = (issued, path)
-if newest:
-    print(newest[1])
-PY
-)
-    [[ -n $path ]] || refuse 'No incident has started on your seat yet. Start the first with: bash job.sh incident 1'
-    read_profile "$path"
-}
-
 # ---------------------------------------------------------------- jobs
-# The last line of an incident's job, below the job log's path: which incident
-# the job was. The line that names the incident at the start has scrolled away
-# under the job's output by then. The healthy run reads no profile and prints none.
-incident_line() {
-    [[ -z ${incident:-} ]] || printf 'This job was incident %s.\n' "$incident"
-}
-
-# One torch run with a neutral run id. Prints the job log's path before and
-# after the run, and the time the job ended in UTC.
+# One torch run. Prints the job log's path before and after the run, the time the
+# job ended in UTC and, for an incident, which incident the job was.
 torch_job() {
     local name=$1 phase=$2 rc=0
     shift 2
     AIM344_RUN_ID=$name-$(date -u +%Y%m%dT%H%M%SZ)
-    AIM344_PROGRESS_COPY=1
     printf 'Job log: %s\n' "$RESULTS_DIR/$AIM344_RUN_ID.log"
     run_torch "$phase" "$@" || rc=$?
     printf 'job_end_utc=%s\n' "$(date -u +%FT%TZ)"
     printf 'Job log: %s\n' "$RESULTS_DIR/$AIM344_RUN_ID.log"
-    incident_line
+    [[ -z ${incident:-} ]] || printf 'This job was incident %s.\n' "$incident"
     return "$rc"
 }
 
@@ -420,164 +253,37 @@ sweep_job() {
     local name=$1 rc=0
     AIM344_RUN_ID=$name-$(date -u +%Y%m%dT%H%M%SZ)
     printf 'Job log: %s\n' "$RESULTS_DIR/$AIM344_RUN_ID.nccl.log"
-    # The sweep runs in the NCCL container, also after a torch job in the same
-    # launcher, and uses every EFA device of each node, as 0.baseline.sh does.
+    # The sweep runs in the NCCL container and uses every EFA device of each node.
     use_nccl_container
     (unset AIM344_EFA_IFACE; run_sweep job) || rc=$?
     printf 'job_end_utc=%s\n' "$(date -u +%FT%TZ)"
     printf 'Job log: %s\n' "$RESULTS_DIR/$AIM344_RUN_ID.nccl.log"
-    incident_line
+    [[ -z ${incident:-} ]] || printf 'This job was incident %s.\n' "$incident"
     return "$rc"
 }
 
-# Check the allocation once, just before the first step that uses it, so that a
-# refusal costs no container start. Each container starts with the first step
-# that uses it: the NCCL container with a sweep or a lab step, the torch
-# container with a torch job.
-prepared=0
-ensure_prepared() {
-    if ((prepared == 0)); then
-        prepare_allocation
-        prepared=1
-    fi
-}
-
-# A lab step whose output belongs in the lab log, not on the participant's terminal.
+# A step of the launcher itself, whose output goes to the lab log.
 lab_step() {
-    lab_note "lab step: $*"
-    "$@" >> "$lab_log" 2>&1 || refuse 'The lab could not prepare this step; raise your hand.'
+    printf '%s lab step: %s\n' "$(date -u +%FT%TZ)" "$*" >> "$lab_log"
+    "$@" >> "$lab_log" 2>&1 || { printf 'A lab step failed; read %s\n' "$lab_log" >&2; exit 1; }
 }
 
-# Runs one job, then removes the allocation's containers from both GPU nodes, so
-# that the hour's allocations do not fill the nodes' container storage. Returns
-# the job's status. Only run and resume end this way: incident and rerun keep the
-# container in which the lab made its change.
+# Runs one job, then removes the lab's containers from both GPU nodes, so that the
+# hour's allocations do not fill the nodes' container storage. Returns the job's
+# status. Only run and resume end this way: incident and rerun keep the container
+# in which the incident made its change.
 ending_job() {
     local rc=0
     "$@" || rc=$?
-    lab_note 'lab step: 9.cleanup.sh'
-    bash "$LAB_DIR/9.cleanup.sh" >> "$lab_log" 2>&1 \
-        || printf 'The lab could not remove the job containers on your nodes; raise your hand.\n' >&2
+    # shellcheck disable=SC2016
+    srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --mpi=none --cpu-bind=none bash -c '
+        export ENROOT_DATA_PATH=${ENROOT_DATA_PATH:-/tmp/enroot/data/user-$EUID}
+        enroot list | grep aim344_ | xargs -r -n 1 enroot remove -f' < /dev/null >> "$lab_log" 2>&1 || true
     return "$rc"
 }
 
-progress_records() {
-    local count
-    count=$(grep -cE "^AIM344 collective_progress=[0-9]+ collectives; .*; job_id=$SLURM_JOB_ID; " "$1" 2>/dev/null) || true
-    printf '%s\n' "${count:-0}"
-}
-
-# Did the request just sent find the lab controls busy with another request?
-busy_reply() {
-    ((status != 0)) && [[ $reply == *"$BUSY_REPLY"* ]]
-}
-
-# Sends one request to the lab controls and sets status and reply. A busy reply
-# is sent again, once a second for up to BUSY_SECONDS; busy counts those replies.
-ask_controller() {
-    busy=0
-    while :; do
-        status=0
-        reply=$(bash "$LAB_DIR/12.device-exercise.sh" "$@" 2>&1) || status=$?
-        busy_reply && ((busy < BUSY_SECONDS)) || return 0
-        busy=$((busy + 1))
-        sleep 1
-    done
-}
-
-# Runs beside the job: once the job has printed two progress records, ask the lab
-# controls to act, until they reply that the incident is under way. A refusal is
-# final, even one that comes after they acted, so it is never asked again. A busy
-# reply is not such a refusal, because the controller refused the request before
-# acting: it is sent again, once a second for up to BUSY_SECONDS, after the same
-# checks as every attempt. The step also ends when the launcher that started it
-# is gone ($$ in this background subshell is the launcher's process), so that no
-# later job in the allocation can make it ask.
-controller_step() {
-    local copy=$1 stop=$2 attempt=0 busy=0 status reply
-    until (( $(progress_records "$copy") >= 2 )); do
-        if ! kill -0 "$$" 2>/dev/null; then
-            lab_note 'controller step: the launcher ended before two progress records'
-            return 0
-        fi
-        if [[ -e $stop ]]; then
-            lab_note 'controller step: the job ended before two progress records'
-            printf 'The job ended before the lab controls could act. Raise your hand.\n' >&2
-            return 0
-        fi
-        sleep 1
-    done
-    while ((attempt < NEXT_ATTEMPTS)); do
-        [[ -e $stop ]] && break
-        if ! kill -0 "$$" 2>/dev/null; then
-            lab_note 'controller step: the launcher ended'
-            return 0
-        fi
-        status=0
-        # With the incident's number, so that the request can only be this
-        # incident's and never starts another one.
-        reply=$(bash "$LAB_DIR/12.device-exercise.sh" next "$incident" 2>&1) || status=$?
-        if busy_reply && ((busy < BUSY_SECONDS)); then
-            busy=$((busy + 1))
-            lab_note "next, busy reply $busy, exit $status: $reply"
-            sleep 1
-            continue
-        fi
-        attempt=$((attempt + 1))
-        lab_note "next, attempt $attempt, exit $status: $reply"
-        if ((status != 0)); then
-            printf '%s\n' "$reply" >&2
-            return 0
-        fi
-        [[ $reply == *' is under way.'* ]] && return 0
-        sleep "$NEXT_INTERVAL"
-    done
-    lab_note 'controller step: no reply said the incident is under way'
-    printf 'The lab controls did not act during this run. Raise your hand.\n' >&2
-}
-
-# Ends the controller step and waits for it. A request that is under way
-# finishes; it is never cut off.
-helper=
-helper_stop=
-end_controller_step() {
-    [[ -n $helper ]] || return 0
-    : > "$helper_stop"
-    wait "$helper" || true
-    rm -f -- "$helper_stop"
-    helper=
-}
-
-controller_job() {
-    local name=$1 copy=$RESULTS_HOME/device-$SLURM_JOB_ID.log rc=0
-    shift
-    helper_stop=$INCIDENTS/.job-ended-$SLURM_JOB_ID-$$
-    rm -f -- "$helper_stop"
-    mkdir -p -- "$RESULTS_HOME"
-    # An earlier run in this allocation must not count as this run's progress.
-    : > "$copy"
-    # run_torch can exit the launcher instead of returning (an unset image or
-    # checkpoint path, or no node address), and a TERM ends it too. The step
-    # beside the job ends on every one of these exits.
-    trap end_controller_step EXIT
-    controller_step "$copy" "$helper_stop" &
-    helper=$!
-    torch_job "$name" device "$@" || rc=$?
-    end_controller_step
-    trap - EXIT
-    return "$rc"
-}
-
-# The settings the job reads, or none: $1 is a value from read_profile.
-job_settings() {
-    unset AIM344_INCIDENT_SETTINGS
-    [[ $1 == - ]] || export AIM344_INCIDENT_SETTINGS=$1
-}
-
-# The healthy run: the training stand-in, the epoch job as the DataLoader
-# incident runs it without the lab's change, and the all-reduce sweep that the
-# slow job's incident runs, so that each incident's output differs from a healthy
-# one only in what the lab changes.
+# The healthy run: the training stand-in, the epoch job and the all-reduce sweep,
+# so that each incident's output differs from a healthy one only in its fault.
 healthy_job() {
     torch_job job job "${STAND_IN[@]}" --writer-rank=0 --duration-seconds="$RUN_SECONDS" \
         || return
@@ -586,18 +292,25 @@ healthy_job() {
     sweep_job job
 }
 
-# Removes what an earlier incident may have left in the checkpoint directories of
-# the pair: the filler and the partial write of the incident that fills one of
-# them. The directories are on the nodes and outlive the allocation, the removal
-# is safe when there is nothing to remove, and it is not asked which incident
-# ran before. Without it a job that starts at step 0 fails at its first save,
-# before it shows anything of its own incident.
+# Removes the filler and the partial write that Incident 2 leaves in the checkpoint
+# directories, which are on the nodes and outlive the allocation. Without it a job
+# that starts at step 0 fails at its first save.
 clear_checkpoint_leftovers() {
-    # The job container may be created here, which takes a while in a new
-    # allocation. Every incident with a checkpoint writer prints this line.
     printf 'Clearing the checkpoint directories on both nodes.\n'
     prepare_torch
     lab_step node_command python3 /opt/aim344/recover-checkpoint.py
+}
+
+# Incident 6: once the job has printed two progress records, reset one EFA device
+# of the target node (lab.sh reset-efa). Runs beside the job and ends with it.
+reset_efa_after_progress() {
+    local log=$1 count
+    while :; do
+        count=$(grep -c '^AIM344 collective_progress=' "$log" 2>/dev/null || true)
+        (( ${count:-0} < 2 )) || break
+        sleep 1
+    done
+    lab_step bash "$LAB_DIR/lab.sh" reset-efa
 }
 
 # The current incident's job: $1 is incident, rerun or resume.
@@ -605,37 +318,18 @@ incident_job() {
     local what=$1 name=incident-$incident
     [[ $what == incident ]] || name=$name-$what
     local -a steps=("${STAND_IN[@]}")
-    # Only the DataLoader job takes the options of rerun; refuse them elsewhere
-    # before any container starts.
-    if ((${#rerun_options[@]})) && [[ $exercise != dataloader ]]; then
-        refuse "Incident $incident takes no options. Run it again with: bash job.sh rerun"
+    if ((${#rerun_options[@]})) && [[ $incident != 3 ]]; then
+        echo "Incident $incident takes no options. Run it again with: bash job.sh rerun" >&2
+        exit 2
     fi
+    prepare_allocation
     # Every job with a checkpoint writer starts its incident on clean directories.
-    if [[ $what == incident && $exercise =~ ^(storage|silent-corruption|cuda-assert|efa-reset)$ ]]; then
-        ensure_prepared
-        clear_checkpoint_leftovers
-    fi
-    case $exercise in
-        storage)
-            steps+=(--writer-rank="$writer_rank")
-            ensure_prepared
-            case $what in
-                incident) torch_job "$name" job "${steps[@]}" --duration-seconds="$RUN_SECONDS" --inject ;;
-                rerun) torch_job "$name" job "${steps[@]}" --duration-seconds="$RUN_SECONDS" --resume ;;
-                resume)
-                    prepare_torch
-                    lab_step node_command python3 /opt/aim344/recover-checkpoint.py
-                    ending_job torch_job "$name" job "${steps[@]}" --duration-seconds="$RUN_SECONDS" \
-                        --resume --end-after-save
-                    ;;
-            esac
-            ;;
-        slow-job)
-            ensure_prepared
+    [[ $what != incident || $incident =~ ^[13]$ ]] || clear_checkpoint_leftovers
+    case $incident in
+        1)  # A slow job: the aws-ofi-nccl plugin is moved out of NCCL's search path
+            # inside the allocation's container, so NCCL falls back to sockets.
             case $what in
                 incident)
-                    # Started again in the same allocation, the plugin is still
-                    # hidden in its container; restore changes nothing otherwise.
                     lab_step node_command bash /opt/aim344/plugin-state.sh restore
                     lab_step node_command bash /opt/aim344/plugin-state.sh hide
                     sweep_job "$name"
@@ -647,104 +341,84 @@ incident_job() {
                     ;;
             esac
             ;;
-        dataloader)
-            local -a loader=("${EPOCH_JOB[@]}")
+        2)  # A checkpoint write fails: rank 9's node writes the checkpoint, and
+            # workload.py --inject fills its 32 MiB checkpoint directory first.
+            steps+=(--writer-rank=9 --duration-seconds="$RUN_SECONDS")
             case $what in
-                incident) job_settings "$incident_settings" ;;
-                # Options on the command line win over the incident's settings.
-                rerun) job_settings "$rerun_settings"; loader+=("${rerun_options[@]}") ;;
-                resume) job_settings - ;;
+                incident) torch_job "$name" job "${steps[@]}" --inject ;;
+                rerun) torch_job "$name" job "${steps[@]}" --resume ;;
+                resume)
+                    clear_checkpoint_leftovers
+                    ending_job torch_job "$name" job "${steps[@]}" --resume --end-after-save
+                    ;;
             esac
-            AIM344_JOB_LIMIT_SECONDS=$DATALOADER_LIMIT_SECONDS
-            ensure_prepared
-            if [[ $what == resume ]]; then
-                ending_job torch_job "$name" job "${loader[@]}"
-            else
-                torch_job "$name" job "${loader[@]}"
-            fi
             ;;
-        silent-corruption)
+        3)  # A DataLoader that stops: the rank process holds the dataset's lock in a
+            # thread when the second epoch forks its workers.
+            local -a loader=("${EPOCH_JOB[@]}")
+            AIM344_JOB_LIMIT_SECONDS=$DATALOADER_LIMIT_SECONDS
+            case $what in
+                incident) torch_job "$name" job "${loader[@]}" --dataset-cache=rank-thread ;;
+                # Options from the command line come last, so they win.
+                rerun) torch_job "$name" job "${loader[@]}" --dataset-cache=rank-thread "${rerun_options[@]}" ;;
+                resume) ending_job torch_job "$name" job "${loader[@]}" ;;
+            esac
+            ;;
+        4)  # A wrong result on one GPU: rank 13 flips bit 22 of one element at step 37.
             steps+=(--writer-rank=0)
-            ensure_prepared
             case $what in
                 incident)
-                    job_settings "$incident_settings"
-                    torch_job "$name" job "${steps[@]}" --duration-seconds="$CORRUPTION_SECONDS"
+                    torch_job "$name" job "${steps[@]}" --duration-seconds="$CORRUPTION_SECONDS" \
+                        --corrupt-rank=13 --corrupt-step=37 --corrupt-bit=22
                     ;;
-                rerun)
-                    job_settings "$rerun_settings"
-                    torch_job "$name" job "${steps[@]}" --duration-seconds="$CORRUPTION_SECONDS"
-                    ;;
+                # The flip happens once, so a second run is clean.
+                rerun) torch_job "$name" job "${steps[@]}" --duration-seconds="$CORRUPTION_SECONDS" ;;
+                # Roll back to the last checkpoint saved before the changed step.
                 resume)
-                    # No flip, and a rollback: the job starts from the last
-                    # checkpoint saved before the seat's changed step.
-                    job_settings "$resume_settings"
                     ending_job torch_job "$name" job "${steps[@]}" --duration-seconds="$RUN_SECONDS" \
-                        --resume --end-after-save
+                        --resume --resume-before=37 --end-after-save
                     ;;
             esac
             ;;
-        cuda-assert)
-            steps+=(--writer-rank=0)
-            if [[ $what == resume ]]; then
-                ask_controller resume "$issue_id"
-                ((status == 0)) || { printf '%s\n' "$reply" >&2; return "$status"; }
-                printf '%s\n' "$reply"
-                job_settings -
-                ensure_prepared
-                ending_job torch_job "$name" job "${steps[@]}" --duration-seconds="$RUN_SECONDS" \
-                    --resume --end-after-save
-            else
-                job_settings "$incident_settings"
-                ensure_prepared
-                torch_job "$name" job "${steps[@]}" --duration-seconds="$RUN_SECONDS"
-            fi
-            ;;
-        efa-reset)
-            steps+=(--writer-rank=0 --duration-seconds="$CONTROLLER_RUN_SECONDS")
+        5)  # A device-side assertion (Xid 43 class): rank 0 indexes out of range on its GPU at step 201.
+            steps+=(--writer-rank=0 --duration-seconds="$RUN_SECONDS")
             case $what in
-                incident) ensure_prepared; controller_job "$name" "${steps[@]}" ;;
-                rerun) ensure_prepared; torch_job "$name" device "${steps[@]}" ;;
-                resume) refuse "Incident $incident is recovered with the command on your page, not with job.sh resume." ;;
+                incident|rerun) torch_job "$name" job "${steps[@]}" --assert-rank=0 --assert-step=201 ;;
+                resume) ending_job torch_job "$name" job "${steps[@]}" --resume --end-after-save ;;
             esac
             ;;
-        *)
-            refuse "Incident $incident cannot run live with this version of the lab. Answer its questions from the expected output on your page."
+        6)  # An EFA device reset under a running job.
+            steps+=(--writer-rank=0 --duration-seconds="$EFA_RESET_RUN_SECONDS")
+            case $what in
+                incident)
+                    local progress=$RESULTS_HOME/device-$SLURM_JOB_ID.log rc=0
+                    # An earlier run in this allocation must not count as this run's progress.
+                    : > "$progress"
+                    reset_efa_after_progress "$progress" &
+                    local helper=$!
+                    torch_job "$name" device "${steps[@]}" || rc=$?
+                    kill "$helper" 2>/dev/null || true
+                    wait "$helper" 2>/dev/null || true
+                    return "$rc"
+                    ;;
+                rerun) torch_job "$name" device "${steps[@]}" ;;
+                resume)
+                    echo 'Incident 6 is recovered from terminal B, outside the allocation: bash lab.sh recover' >&2
+                    exit 2
+                    ;;
+            esac
             ;;
     esac
-}
-
-# A resume whose job completed ends its incident. So does a completed rerun of the
-# DataLoader incident with either fix its page gives, the dataset cache in the
-# worker or the worker's own re-initialization; without one the rerun stops as
-# the incident did.
-ends_incident() {
-    [[ $verb == resume ]] && return 0
-    [[ $exercise == dataloader ]] || return 1
-    local option
-    for option in "${rerun_options[@]}"; do
-        [[ $option == --dataset-cache=worker-thread || $option == --reinit-in-worker ]] && return 0
-    done
-    return 1
 }
 
 # The options rerun passes on to the DataLoader job, in the forms its page gives.
 rerun_options=()
 parse_rerun_options() {
-    local seconds='^[0-9]+([.][0-9]+)?$'
     while (($#)); do
         case $1 in
-            --dataset-cache=rank-thread|--dataset-cache=worker-thread|--reinit-in-worker)
-                rerun_options+=("$1") ;;
-            --dataset-cache)
-                [[ ${2:-} =~ ^(rank-thread|worker-thread)$ ]] || usage
-                rerun_options+=("$1=$2")
-                shift ;;
-            --dataloader-timeout=*)
-                [[ ${1#*=} =~ $seconds ]] || usage
-                rerun_options+=("$1") ;;
-            --dataloader-timeout)
-                [[ ${2:-} =~ $seconds ]] || usage
+            --dataset-cache=*|--dataloader-timeout=*|--reinit-in-worker) rerun_options+=("$1") ;;
+            --dataset-cache|--dataloader-timeout)
+                (($# >= 2)) || usage
                 rerun_options+=("$1=$2")
                 shift ;;
             *) usage ;;
@@ -760,64 +434,45 @@ shift
 case $verb in
     notes) (($# == 0)) || usage; make_notes; exit 0 ;;
     run|resume) (($# == 0)) || usage ;;
-    incident) [[ $# -eq 1 && $1 =~ ^[1-9][0-9]?$ ]] || usage; named=$1 ;;
+    incident) (($# <= 1)) || usage ;;
     rerun) parse_rerun_options "$@" ;;
     *) usage ;;
 esac
 
-require_allocation
-# Only an incident's job reads settings; nothing inherited from the shell does.
-unset AIM344_INCIDENT_SETTINGS
+if [[ -z ${SLURM_JOB_ID:-} ]]; then
+    echo 'Run this inside your allocation: take it in terminal A with the salloc line on your page.' >&2
+    exit 2
+fi
+: "${AIM344_EFA_DEVICE:?Open a new shell, whose login profile sets AIM344_EFA_DEVICE}"
+# The training stand-in uses this one EFA device on each node.
+export AIM344_EFA_IFACE=$AIM344_EFA_DEVICE
+# Node-local results, as the login profile sets them in an allocation shell.
+export RESULTS_DIR=${RESULTS_DIR:-/var/tmp/aim344-$(id -un)-$SLURM_JOB_ID}
+mkdir -p -- "$RESULTS_HOME"
 # shellcheck source=common.sh
 source "$LAB_DIR/common.sh"
-AIM344_RUN_ID=
-AIM344_LAB_LOG=
-AIM344_PROGRESS_COPY=0
+# Every torch job copies its output to ~/aim344-results/device-<job>.log, and its
+# processes write the fault injector's own lines to files on the nodes
+# (workload.py --lab-dir), not to the job's output.
+AIM344_PROGRESS_COPY=1
+AIM344_LAB_LOG=$lab_log
 
 case $verb in
     run)
-        ensure_prepared
-        # The healthy run's lab lines (the sweep's inventory, the container
-        # removal) go to a lab log beside the incidents' lab logs.
-        (umask 077; mkdir -p -- "$INCIDENTS")
-        lab_log=$INCIDENTS/job-lab.log
-        AIM344_LAB_LOG=$lab_log
+        prepare_allocation
         ending_job healthy_job
         ;;
     incident)
-        # Prepared before the request, so that a failure here leaves the incident
-        # unissued. One request for the incident itself, sent again only while the
-        # lab controls are busy; the incident in which the lab controls act asks
-        # again from controller_step, after progress. The request carries the
-        # number the participant named, which is the incident the lab controls start.
-        ensure_prepared
-        ask_controller next "$named"
-        ((status == 0)) || { printf '%s\n' "$reply" >&2; exit "$status"; }
-        handed=$(sed -n 's/^Profile: //p' <<< "$reply" | tail -n 1)
-        [[ -n $handed ]] || { printf '%s\n' "$reply" >&2; refuse 'The lab controls handed over no incident profile; raise your hand.'; }
-        read_profile "$handed"
-        AIM344_LAB_LOG=$lab_log
-        # The lab controls start the number they are sent, so this is never expected.
-        if [[ $incident != "$named" ]]; then
-            lab_note "next $named: handed incident $incident"
-            refuse "The lab controls started incident $incident, not incident $named; raise your hand."
-        fi
-        ((busy == 0)) || lab_note "next: sent again after $busy busy replies"
-        lab_note "next: $reply"
+        incident=${1:-$(( $(cat "$CURRENT" 2>/dev/null || echo 0) + 1 ))}
+        [[ $incident =~ ^[1-6]$ ]] || usage
+        printf '%s\n' "$incident" > "$CURRENT"
         printf 'Starting incident %s.\n' "$incident"
         incident_job incident
         ;;
     rerun|resume)
-        read_current_profile
-        AIM344_LAB_LOG=$lab_log
+        incident=$(cat "$CURRENT" 2>/dev/null) || {
+            echo 'No incident has started yet. Start the first with: bash job.sh incident 1' >&2; exit 2;
+        }
         incident_job "$verb"
-        # Reached only when the job succeeded: a failed job exits above. The
-        # job's status stays the launcher's, whatever this request answers.
-        if ends_incident; then
-            ask_controller ended "$issue_id"
-            ((busy == 0)) || lab_note "ended: sent again after $busy busy replies"
-            lab_note "ended, exit $status: $reply"
-            ((status == 0)) || printf 'The lab controls did not record that incident %s has ended; raise your hand.\n' "$incident" >&2
-        fi
         ;;
 esac

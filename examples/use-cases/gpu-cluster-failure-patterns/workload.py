@@ -27,7 +27,6 @@ from torch.utils.data import DataLoader, Dataset, TensorDataset, get_worker_info
 # The lab controls hand the launcher one incident profile; the launcher exports the
 # profile's settings as JSON in this variable. workload.py applies them as if they
 # were options, so they appear neither on the job's command line nor in its log.
-INCIDENT_SETTINGS_VARIABLE = 'AIM344_INCIDENT_SETTINGS'
 # Stack dumps go to the container's mount of RESULTS_DIR, which is node-local.
 STACK_DUMP_DIR = '/results'
 # How long a cache refill holds the dataset's lock.
@@ -94,10 +93,7 @@ def progress_record(count, tensor):
 
 
 def checkpoint_dir():
-    path = Path('/checkpoints')
-    if (path / '.aim344-fixture').read_text().strip() != 'AIM344 isolated checkpoint fixture':
-        raise RuntimeError('/checkpoints is not the lab\'s isolated checkpoint fixture; raise your hand.')
-    return path
+    return Path('/checkpoints')
 
 
 def save_checkpoint(path, step, saved=None):
@@ -727,52 +723,6 @@ class ReplicaCheck:
         self.window_differences = Counter()
 
 
-# ---------------- settings from the lab controls ----------------
-def apply_incident_settings(parser, args, environ=os.environ, argv=None):
-    """Apply the incident profile's settings from INCIDENT_SETTINGS_VARIABLE.
-
-    The value is a JSON object whose keys are option names in attribute form
-    (`corrupt_rank` for `--corrupt-rank`). Values pass the option's own validation.
-    An option given on the command line keeps its value, so a participant's fix
-    flag on a rerun wins over the incident's setting. The positional mode cannot be
-    set here.
-    """
-    raw = environ.get(INCIDENT_SETTINGS_VARIABLE)
-    if not raw:
-        return args
-    variable = INCIDENT_SETTINGS_VARIABLE
-    argv = sys.argv[1:] if argv is None else argv
-    given = {word.split('=', 1)[0] for word in argv if word.startswith('--')}
-    try:
-        settings = json.loads(raw)
-    except ValueError:
-        parser.error(f'{variable} is not JSON')
-    if not isinstance(settings, dict):
-        parser.error(f'{variable} must be a JSON object')
-    options = {action.dest: action for action in parser._actions
-               if action.option_strings and action.dest != 'help'}
-    for key, value in settings.items():
-        action = options.get(key)
-        if action is None:
-            parser.error(f'{variable}: unknown setting {key!r}')
-        if given.intersection(action.option_strings):
-            continue
-        if isinstance(action, argparse._StoreTrueAction):
-            if not isinstance(value, bool):
-                parser.error(f'{variable}: {key} must be true or false')
-        else:
-            if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-                parser.error(f'{variable}: {key} must be a number or a string')
-            try:
-                value = action.type(str(value)) if action.type else str(value)
-            except (argparse.ArgumentTypeError, ValueError) as error:
-                parser.error(f'{variable}: {key}: {error}')
-            if action.choices is not None and value not in action.choices:
-                parser.error(f'{variable}: {key} must be one of {", ".join(map(str, action.choices))}')
-        setattr(args, key, value)
-    return args
-
-
 def nonnegative_seconds(value):
     try:
         seconds = float(value)
@@ -912,7 +862,7 @@ def parse_args(argv=None):
                         help='DataLoader epochs (default: 1); numbered controls use 2')
     add_exercise_arguments(parser)
     args = parser.parse_args(argv)
-    check_exercise_arguments(parser, apply_incident_settings(parser, args, argv=argv))
+    check_exercise_arguments(parser, args)
     if args.mode == 'dataloader':
         # The DataLoader launchers pass extra arguments through, so a checkpoint
         # option given by mistake must fail rather than run the unchanged control.
