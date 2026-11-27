@@ -4,6 +4,7 @@
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -79,6 +80,26 @@ class Smoke(unittest.TestCase):
             self.assertIn('--dataset-cache=worker-thread', calls)
             result, calls = self.run_job(home, 'resume')
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_lab_collect_saves_the_kernel_log_that_the_page_greps(self):
+        with tempfile.TemporaryDirectory() as home:
+            lab = Path(home, 'lab')
+            shutil.copytree(LAB, lab, ignore=shutil.ignore_patterns('tests', '__pycache__'))
+            (lab / 'lab.env').write_text('export PARTITION=gpu GPUS_PER_NODE=8 AIM344_TARGET_NODE=gpu-1\n')
+            bin_dir = Path(home, 'bin')
+            bin_dir.mkdir()
+            kernel_line = 'kernel: NVRM: Xid (PCI:0000:53:00): 43, pid=4242, name=python3'
+            for name, text in (('squeue', '#!/bin/bash\n'), ('srun', f'#!/bin/bash\necho "{kernel_line}"\n')):
+                (bin_dir / name).write_text(text)
+                (bin_dir / name).chmod(0o755)
+            env = dict(os.environ, HOME=home, PATH=f'{bin_dir}:{os.environ["PATH"]}')
+            result = subprocess.run(['bash', str(lab / 'lab.sh'), 'collect', 'kernel'], env=env,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            record = result.stdout.splitlines()[-1].removeprefix('Saved: ')
+            # Incident 5's page reads the record with: grep -E 'NVRM|Xid' "$record"
+            found = subprocess.run(['grep', '-E', 'NVRM|Xid', record], capture_output=True, text=True)
+            self.assertEqual(found.stdout.strip(), kernel_line)
 
     def test_notes(self):
         with tempfile.TemporaryDirectory() as home:

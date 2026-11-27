@@ -80,4 +80,4 @@ After the reboot, run Checks 2 and 6 on the node (`bash lab.sh collect 2`, `bash
 
 ## Tests
 
-`python3 -m unittest discover -s tests` checks the scripts' syntax and starts each incident of `job.sh` against stub `srun` and `scontrol` commands. It needs no GPU. The incidents themselves were measured on g7.48xlarge; a change to `job.sh`, `lab.sh` or `workload.py` needs a run on a GPU pair.
+`python3 -m unittest discover -s tests` checks the scripts' syntax, starts each incident of `job.sh` against stub `srun` and `scontrol` commands, and reads a kernel log saved by `lab.sh collect kernel`. It needs no GPU. The incidents themselves were measured on g7.48xlarge; a change to `job.sh`, `lab.sh` or `workload.py` needs a run on a GPU pair.
