@@ -16,7 +16,7 @@ srun "${two_nodes[@]}" --time=00:02:00 bash -c '
 echo '== FSx for Lustre: Module 6 writes about 205 GB of checkpoints'
 df -h --output=target,fstype,size,avail "$AIM347_HOME"
 echo '== the training image, the data and the model'
-ls -l "$LAB_IMAGE" "$LLM_DATA_DIR"/tokens-*/manifest.json "$LLM_DATA_DIR/model/model.safetensors"
+ls -l "$LAB_IMAGE" "$LLM_DATA_DIR"/tokens-{2048-1280,2048-160,1024-160}/manifest.json "$LLM_DATA_DIR/model/model.safetensors"
 echo '== node counters in Prometheus on the login node'
 nodes_with() {
     curl -fsk --get --data-urlencode "query=count($1)" https://localhost/prometheus/api/v1/query |
