@@ -84,7 +84,7 @@ def lab_line(lab_dir, text):
 
 
 def progress_record(count, tensor):
-    """Rank 0's progress record, which the controller and the pages read."""
+    """Rank 0's progress record, which job.sh and the pages read."""
     emit(f'AIM344 collective_progress={count} collectives; '
          f'tensor_bytes={tensor.numel() * tensor.element_size()} B; '
          f'timestamp={time.time():.6f} s since epoch; 0 mismatches; '
@@ -222,7 +222,7 @@ def run_steps(args, tensor):
     """The training stand-in: one broadcast and one checked all-reduce per step.
 
     Rank 0 decides when to stop and prints a progress record every 20 collectives;
-    the external controller reads those records before an active device fault.
+    job.sh incident 6 waits for two of those records before it resets the EFA device.
     With --replica-check, each step first all-gathers the ranks' checksums of one
     matrix product (ReplicaCheck), checked by step index, and rank 0 prints the
     agreement after each progress record. With --checkpoint-every N, the checkpoint
@@ -247,7 +247,7 @@ def run_steps(args, tensor):
         end_step = first_save + END_AFTER_SAVE_STEPS
     injected = False
     # Progress comes only after a completed, correctness-checked collective.
-    # The external controller observes progress and device counters before injection.
+    # job.sh incident 6 waits for two progress records before it resets the EFA device.
     deadline = time.monotonic() + args.duration_seconds
     sequence = 0
     keep_running = torch.ones(1, dtype=torch.int32, device=DEVICE)
