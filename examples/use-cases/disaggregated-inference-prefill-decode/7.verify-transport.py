@@ -5,7 +5,7 @@ import asyncio
 import json
 from pathlib import Path
 from benchmark import stream_request
-from deployment import kubectl, owned_namespace, read_config
+from deployment import kubectl, read_config
 from traffic import tokenizer, initial_prompt
 import httpx
 
@@ -43,7 +43,6 @@ def main():
     c = read_config(a.config)
     if a.bandwidth_gib_s is not None and c.get('engine_profile') == 'v4-optional':
         p.error('The optional V4 cache layout needs separate byte accounting; the V2 MLA wire-time formula does not apply')
-    owned_namespace(c)
     pods = json.loads(kubectl(c, "get", "pods", "-l", "component=engine", "-o", "json", capture_output=True).stdout)["items"]
     packed = c.get('placement') == 'packed'
     assert len(pods) == 1 if packed else len(pods) >= 2

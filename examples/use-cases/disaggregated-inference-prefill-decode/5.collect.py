@@ -5,7 +5,7 @@ import csv
 import json
 import math
 from pathlib import Path
-from deployment import kubectl, owned_namespace, read_config
+from deployment import kubectl, read_config
 from scoring import (ORIGINAL_SUMMARY_KEYS, PAIR_SETTINGS, TPOT_METRICS, TTFT_METRICS, UNAVAILABLE,
                      availability_by_arch, check_reproduces, gap_data_available, highest_qualifying, load_file,
                      score, score_factory_for)
@@ -77,7 +77,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--runs", nargs="+", required=True, help="Directories containing rate-measured.json files")
     p.add_argument("--output", required=True)
-    p.add_argument("--config", help="Also collect live resources and engine logs from the owned namespace")
+    p.add_argument("--config", help="Also collect live resources and engine logs from this configuration's namespace")
     p.add_argument("--ttft-slo-ms", type=float, help="TTFT bound, ms. Default: the one recorded with each file")
     p.add_argument("--tpot-slo-ms", type=float, help="TPOT bound, ms: per output token under mean and itl-p99, one raw gap under worst-itl. Default: recorded")
     p.add_argument("--attainment-fraction", type=float, help="Share of planned calls that must be good, e.g. 0.9. Default: recorded")
@@ -108,7 +108,7 @@ def main():
         writer = csv.DictWriter(f, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
-    # Group by hardware, workload, thresholds and GPU budget. Never mix the scaling arm with the iso-resource arm.
+    # Group by hardware, workload, thresholds and GPU budget.
     groups = {}
     for m, r in zip(measured, rows):
         groups.setdefault(tuple(r[k] for k in GROUP_KEY), []).append((m, r))
@@ -161,7 +161,6 @@ def main():
         print(notice)
     if a.config:
         c = read_config(a.config)
-        owned_namespace(c)
         (out / "config.json").write_text(json.dumps(c, indent=2))
         for resource in ("pods", "deployments", "services", "events"):
             (out / f"{resource}.json").write_text(kubectl(c, "get", resource, "-o", "json", capture_output=True).stdout)

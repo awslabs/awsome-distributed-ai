@@ -38,7 +38,7 @@ The production allocation is `g7.48xlarge` primary or `g7.24xlarge` secondary. D
 
 Use an existing EKS cluster with separately allocated, same-AZ GPU nodes, EFA interfaces attached at launch, compatible NVIDIA drivers, and working GPU and EFA device plugins. Inspect the actual GPU-memory registration and transfer evidence; EFA counter movement alone does not prove a path without host staging. Security groups must allow the EFA self-traffic required by the cluster architecture and TCP communication among the lab nodes for serving and bootstrap. The scripts create serving resources, a dedicated namespace, and its nonpreempting PriorityClass; they do not provision nodes or change cluster networking. Cluster administrators can use the repository's [EKS architecture](../../../architectures/sagemaker-hyperpod-eks/) as a platform reference.
 
-The sequential path uses two nodes, with one worker per node. Configure GPU and EFA resource counts from the allocated nodes; the example requires those counts to be supplied. Packed paired mode puts both workers in one pod and requests twice `gpus_per_worker` GPUs and `efa_per_worker` EFA devices for that pod. The observed `g7e.12xlarge` allocation used one GPU per engine, two GPUs per stack and one EFA device per stack. Those counts do not describe `g7e.24xlarge`. Prefill scaling uses the separate-node path and adds an allocated worker.
+The sequential path uses two nodes, with one worker per node. Configure GPU and EFA resource counts from the allocated nodes; the example requires those counts to be supplied. Packed paired mode puts both workers in one pod and requests twice `gpus_per_worker` GPUs and `efa_per_worker` EFA devices for that pod. The observed `g7e.12xlarge` allocation used one GPU per engine, two GPUs per stack and one EFA device per stack. Those counts do not describe `g7e.24xlarge`.
 
 The checked controller tool versions are Python version `3.12.3`, Docker version `29.7.2`, AWS CLI version `2.36.7`, and `kubectl` version `1.31.0`. Use a `kubectl` version compatible with your EKS API and record any version change. Python client dependencies, including transitive packages, are pinned in [requirements.txt](requirements.txt). Provision these tools before the timed lab. Model download, image pull, and kernel compilation can consume minutes; complete them before attendees arrive.
 
@@ -77,7 +77,7 @@ docker push "$LAB_ROUTER_IMAGE"
 cp config.example.json config.json
 ```
 
-Fill `context`, `namespace`, `image`, `router_image`, `instance_type`, `nodes`, and the GPU/EFA counts in `config.json`. `nodes` are Kubernetes hostname labels for resources allocated to this lab. The namespace must start with `aim345-`. Add only the tolerations needed for that allocation. The scripts disable preemption and never scale or delete another workload. A pending pod is a capacity or configuration finding; inspect its events rather than freeing occupied capacity.
+Fill `context`, `namespace`, `image`, `router_image`, `instance_type`, `nodes`, and the GPU/EFA counts in `config.json`. `nodes` are Kubernetes hostname labels for resources allocated to this lab. Add only the tolerations needed for that allocation. The scripts disable preemption. A pending pod is a capacity or configuration finding; inspect its events rather than freeing occupied capacity.
 
 The engine requests `80Gi` of ephemeral storage and the CPU router requests `2Gi`. These are storage reservations, not measured application usage. Verify enough free container-image space on each target node before pulling; image downloads and unpacking can exceed the image layer sizes. An earlier Seoul attempt using the engine image for the router exhausted a system-node filesystem. The separate router image and explicit requests address that deployment error.
 
@@ -173,7 +173,7 @@ cp config.example.json config.unified.json
 cp config.example.json config.disaggregated.json
 ```
 
-Fill both files before deployment. Give them different `aim345-*` namespaces and disjoint assigned node lists. Set `placement` to `packed` for one node per stack, or `separate-nodes` for two nodes per stack. Packed placement requires an even allocated GPU count: set `gpus_per_worker` to half that count and `efa_per_worker` to the pod's assigned EFA count. Each engine process receives a disjoint `CUDA_VISIBLE_DEVICES` list. Packed placement uses pod networking, engine TCP ports 30000 and 30001, and a shared EFA device allocation; the prefill bootstrap listener uses TCP port 8998. The CPU router is pinned to the same assigned node. The packed pod defaults to a CPU request of 8 cores and a memory request of 128 GiB; `packed_cpu` and `packed_memory` configure them equally for both stacks.
+Fill both files before deployment. Give them different namespaces and disjoint assigned node lists. Set `placement` to `packed` for one node per stack, or `separate-nodes` for two nodes per stack. Packed placement requires an even allocated GPU count: set `gpus_per_worker` to half that count and `efa_per_worker` to the pod's assigned EFA count. Each engine process receives a disjoint `CUDA_VISIBLE_DEVICES` list. Packed placement uses pod networking, engine TCP ports 30000 and 30001, and a shared EFA device allocation; the prefill bootstrap listener uses TCP port 8998. The CPU router is pinned to the same assigned node. The packed pod defaults to a CPU request of 8 cores and a memory request of 128 GiB; `packed_cpu` and `packed_memory` configure them equally for both stacks.
 
 For the measured `g7e.12xlarge` shape, both configuration files use `gpus_per_worker: 1` and `efa_per_worker: 1`, requesting two GPUs and one EFA device per stack. Keep hardware labels, model settings and resource requests explicit. Model staging and engine compilation happen before the timed participant session.
 
@@ -184,7 +184,7 @@ python3 paired.py render
 python3 paired.py deploy
 ```
 
-The deploy operation refuses existing namespaces. It does not replace either live stack when measuring the other. Load the endpoint variables from the prepared configuration files. Set the Region to the event's actual Region before collecting measurements:
+Both stacks stay deployed while you measure either one. Load the endpoint variables from the prepared configuration files. Set the Region to the event's actual Region before collecting measurements:
 
 ```bash
 export LAB_CONTEXT="$(python3 -c 'import json; print(json.load(open("config.unified.json"))["context"])')"
@@ -273,12 +273,12 @@ After saving evidence, remove the pair and its PriorityClasses:
 
 ```bash
 python3 paired.py cleanup
-python3 -m unittest -v test_paired test_lab test_scoring test_benchmark test_report test_collect
+python3 -m unittest -v test_paired test_lab test_scoring test_benchmark test_collect
 ```
 
 ## Sequential comparison
 
-The numbered scripts follow the preparation and experiment order. Scripts numbered after collection are repeatable diagnostic, scaling, and cleanup steps. The deployment scripts switch architectures on the same allocated nodes by removing only this lab's serving resources. Full GPU allocations cannot host both architectures simultaneously on the same GPUs. Rehearse the switch and weight-loading time; simultaneous predeployment requires separate, equal GPU allocations and separate namespaces.
+The numbered scripts follow the preparation and experiment order. Scripts numbered after collection are repeatable diagnostic and cleanup steps. The deployment scripts switch architectures on the same allocated nodes by removing only this lab's serving resources. Full GPU allocations cannot host both architectures simultaneously on the same GPUs. Rehearse the switch and weight-loading time; simultaneous predeployment requires separate, equal GPU allocations and separate namespaces.
 
 Set convenient controller variables and generate both traffic shapes:
 
@@ -396,7 +396,7 @@ python3 8.warm-connections.py --config config.json --url http://127.0.0.1:8000 -
 
 The script issues startup requests through the round-robin router and flushes engine prompt caches afterward. That is request priming, not an implementation of eager `makeConnection`. It also warms kernels, so a timing improvement is not pure connection-setup attribution. A clean cold-versus-primed comparison needs fresh engine starts, identical compilation state, separate prefixes, and explicit labels; routine per-rate warmup already removes some cold costs. The warmup workaround's effect remains **UNVALIDATED**.
 
-## Round 2: useful throughput and independent scaling
+## Round 2: useful throughput
 
 Run shape B against disaggregation with the same offered rates and absolute objectives used for unified:
 
@@ -409,17 +409,6 @@ python3 5.collect.py --runs results/unified-a results/unified-b results/disaggre
 The starting objectives are TTFT at most 2000 ms and average TPOT at most 100 ms, with joint attainment of at least 90 percent of planned calls. These are configurable lab objectives, not production commitments. Use `--ttft-slo-ms`, `--tpot-slo-ms`, and `--attainment-fraction` to set the same absolute objective for both arms. Do not calibrate separate objectives from each arm's unloaded latency.
 
 **UNVALIDATED expected result:** at some prefill-heavy offered rate, unified violates the latency objective while disaggregation remains within it. Both architectures have finite capacity. The lab leaves chunked prefill and prefix caching enabled in unified; chunked prefill can reduce interference, so a collapse is not guaranteed. Describe the observed ranking if it differs. Inspect queue and cache metrics before attributing a failure to prefill.
-
-When prefill is the binding pool, append a separately allocated third hostname to `nodes` in `config.json`. Preserve all existing engine settings. Then run:
-
-```bash
-./6.scale-prefill.sh --config config.json
-kubectl --context "$LAB_CONTEXT" -n "$LAB_NAMESPACE" rollout status deployment/prefill-1 --timeout=1800s
-kubectl --context "$LAB_CONTEXT" -n "$LAB_NAMESPACE" rollout status deployment/router --timeout=1800s
-export LAB_SCALED_GPUS="$(python3 -c 'import json; print(3 * json.load(open("config.json"))["gpus_per_worker"])')"
-```
-
-Restart port forwarding after the router changes. Repeat the shape B ramp with `--architecture disaggregated-scaled`, `--gpus "$LAB_SCALED_GPUS"`, and a new output directory. The scaling script adds a prefill worker and changes router membership while preserving the decode Deployment. Capture decode pod identity and restart count before and after. **UNVALIDATED expected result:** the objective recovers if prefill capacity was the bottleneck. This arm has a larger GPU budget and is not an iso-resource comparison against the original unified baseline. Report useful throughput per GPU; a fair capacity comparison would add a full unified replica, which adds both prefill and decode capacity.
 
 ## Read the measurements and locate the crossover
 
@@ -463,7 +452,7 @@ Collect logs before switching deployments or cleaning up. Cleanup deletes only t
 
 ```bash
 ./9.cleanup.sh --config config.json
-python3 -m unittest -v test_lab test_scoring test_benchmark test_report test_collect test_paired
+python3 -m unittest -v test_lab test_scoring test_benchmark test_collect test_paired
 ```
 
 Common failures include insufficient scheduled GPU/EFA resources, missing EFA devices, incompatible host drivers, insufficient locked-memory permissions, blocked bootstrap TCP, incomplete image pulls, and version mismatches. Inspect pod events and engine logs first. Never treat a successful HTTP response on an unverified transport as an EFA result.
@@ -505,7 +494,7 @@ curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8001/health
 
 ## Facilitator configuration handoff
 
-The facilitator prepares the two resident endpoints and the controller before the participant session. `facilitator/prepare-config.py` generates matched packed configurations from the two explicitly assigned Kubernetes nodes. It requires immutable engine and router images, derives the even GPU count and EFA request from node inventory, copies the assigned node taints as tolerations, and refuses to overwrite an existing configuration. Review the allocation before deploying.
+The facilitator prepares the two resident endpoints and the controller before the participant session. `facilitator/prepare-config.py` generates matched packed configurations from the two explicitly assigned Kubernetes nodes. It derives the even GPU count and EFA request from node inventory, copies the assigned node taints as tolerations, and overwrites `config.unified.json` and `config.disaggregated.json` in the output directory. Review the allocation before deploying.
 
 ```bash
 python3 facilitator/prepare-config.py --context "$LAB_CONTEXT" --nodes "$LAB_NODES" \
@@ -517,13 +506,13 @@ For an offline configuration review, `--inventory` accepts a saved `kubectl get 
 
 ## Spain preparation and constrained paired result, 2026-09-10
 
-`facilitator/prepare-config.py` can cap each packed stack below the physical node's inventory. The following options describe the Spain allocation; supply the actual context, allocated node names and immutable engine/router images through the required arguments:
+`facilitator/prepare-config.py` can cap each packed stack below the physical node's inventory. The following options describe the Spain allocation; supply the actual context, allocated node names and engine/router images through the required arguments:
 
 ```bash
 python3 facilitator/prepare-config.py --context "$LAB_CONTEXT" --nodes "$LAB_NODES" --engine-image "$LAB_IMAGE" --router-image "$LAB_ROUTER_IMAGE" --namespace-prefix aim345-spain-paired --gpus-per-stack 4 --efas-per-stack 1 --cpu-per-stack 96 --memory-gib-per-stack 384 --model-cache-host-path /mnt/k8s-disks/0/aim345-models
 ```
 
-Each stack receives four GPUs and one EFA. Its engine pod receives 92 vCPUs and 376 GiB, reserving 4 vCPUs and 8 GiB for the local router within the combined limit. Init-container requests and limits are both 2 vCPUs and 4 GiB. The helper validates the selected GPU/EFA budgets against allocatable resources; without explicit GPU/EFA options it uses all allocatable devices. The current helper derives its default combined CPU/memory budget from the smaller allocatable quantities across the pair, leaving 3 vCPUs and 4 GiB of headroom for node agents. A `/mnt/` host path must be on the intended prepared filesystem; the helper does not mount or provision storage.
+Each stack receives four GPUs and one EFA. Its engine pod receives 92 vCPUs and 376 GiB, reserving 4 vCPUs and 8 GiB for the local router within the combined limit. Init-container requests and limits are both 2 vCPUs and 4 GiB. The helper validates the selected GPU/EFA budgets against allocatable resources; without explicit GPU/EFA options it uses all allocatable devices. The current helper derives its default combined CPU/memory budget from the smaller allocatable quantities across the pair, leaving 3 vCPUs and 4 GiB of headroom for node agents. The model cache host path must be on the intended prepared filesystem; the helper does not mount or provision storage.
 
 On the g7.24xlarge-stand-in allocation of two physical g7.48xlarge nodes, the complete paired DeepSeek-V2-Lite-Chat flow took 27.85 minutes with unchanged engine pod identities. The long-context sweeps plus collection took about 25 minutes, so the participant introduction now reserves 26 minutes for the load-ramp module. An offered window of 30 seconds does not include warmup or request drain. Unified serving qualified at a highest tested rate of 2 tasks/s, while disaggregation qualified at 0.25 tasks/s; no qualifying disaggregated crossover was observed.
 

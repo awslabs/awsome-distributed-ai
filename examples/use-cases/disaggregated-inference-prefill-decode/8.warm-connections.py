@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import httpx
 from benchmark import stream_request
-from deployment import kubectl, owned_namespace, read_config
+from deployment import kubectl, read_config
 from traffic import tokenizer, tokens
 
 
@@ -29,7 +29,6 @@ def main():
     p.add_argument("--output", required=True)
     a = p.parse_args()
     c = read_config(a.config)
-    owned_namespace(c)
     pods = json.loads(kubectl(c, "get", "pods", "-l", "component=engine", "-o", "json", capture_output=True).stdout)["items"]
     packed = c.get('placement') == 'packed'
     prefill = pods if packed else [x for x in pods if x["metadata"]["labels"]["role"] == "prefill"]

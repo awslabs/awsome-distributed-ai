@@ -36,7 +36,7 @@ The startup-priming helper also completed its requests and cache flushes on the 
 
 ## Prefill scaling operation: VALIDATED
 
-The scaling script added a prefill worker on a third existing Seoul `p6-b300.48xlarge` bench node, each worker using one GPU and one EFA device. The total GPU count increased from two GPUs to three GPUs. The decode pod UID remained unchanged and its restart count remained zero restarts. All workers became Ready, startup requests completed through the expanded router pool, and shape B completed one warmup call and one measured call with 8192 input tokens and 256 output tokens per call. The new prefill worker's log recorded an 8192-token prefill.
+The scaling script, `6.scale-prefill.sh`, has since been removed from this example; this section records the run made with it. It added a prefill worker on a third existing Seoul `p6-b300.48xlarge` bench node, each worker using one GPU and one EFA device. The total GPU count increased from two GPUs to three GPUs. The decode pod UID remained unchanged and its restart count remained zero restarts. All workers became Ready, startup requests completed through the expanded router pool, and shape B completed one warmup call and one measured call with 8192 input tokens and 256 output tokens per call. The new prefill worker's log recorded an 8192-token prefill.
 
 This validates adding prefill capacity and routing requests through the expanded pool. SLO recovery remains UNVALIDATED because the short smoke runs did not establish a prefill bottleneck or a failing objective before scaling.
 

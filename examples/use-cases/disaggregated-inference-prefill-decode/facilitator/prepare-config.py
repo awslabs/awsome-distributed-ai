@@ -25,10 +25,8 @@ p.add_argument('--model-cache-host-path', default='/mnt/k8s-disks/0/aim345-model
 p.add_argument('--inventory', type=Path, help='Saved kubectl node List for offline review')
 a = p.parse_args()
 names = a.nodes.split(',')
-if len(set(names)) != 2 or not a.namespace_prefix.startswith('aim345-'):
-    p.error('Use two distinct nodes and an aim345- namespace prefix')
-if not all('@sha256:' in image for image in (a.engine_image, a.router_image)):
-    p.error('Both images require immutable digests')
+if len(set(names)) != 2:
+    p.error('Use two distinct nodes')
 inventory = json.loads(a.inventory.read_text()) if a.inventory else json.loads(subprocess.check_output(
     ['kubectl', '--context', a.context, 'get', 'nodes', *names, '-o', 'json'], text=True))
 nodes = {node['metadata']['name']: node for node in inventory['items']}
@@ -56,8 +54,6 @@ base = json.loads((Path(__file__).resolve().parents[1] / 'config.example.json').
 a.output.mkdir(parents=True, exist_ok=True)
 if a.cpu_per_stack <= 4 or a.memory_gib_per_stack <= 8:
     p.error('The stack budget must exceed the router limit of 4 vCPUs and 8 GiB')
-if not a.model_cache_host_path.startswith('/mnt/'):
-    p.error('Use a dedicated model cache under /mnt')
 configs = []
 for mode, name in zip(('unified', 'disaggregated'), names):
     node = nodes[name]
@@ -81,8 +77,6 @@ for mode, name in zip(('unified', 'disaggregated'), names):
     config['tolerations'] = [dict(key=t['key'], operator='Equal', value=t.get('value', ''), effect=t['effect'])
                              for t in node['spec'].get('taints', [])]
     path = a.output / f'config.{mode}.json'
-    if path.exists():
-        raise FileExistsError(f'Preserve the existing configuration: {path}')
     path.write_text(json.dumps(config, indent=2) + '\n')
     configs.append(read_config(path))
 print(json.dumps(dict(gpus_per_stack=check_pair(*configs), nodes=names,

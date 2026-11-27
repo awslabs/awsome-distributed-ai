@@ -11,17 +11,11 @@ OWNER = {"app.kubernetes.io/part-of": "aim345-lab"}
 def read_config(path):
     c = json.loads(Path(path).read_text())
     assert all("REPLACE" not in str(v) for v in c.values()), "Fill config.example.json first"
-    assert re.fullmatch(r"[a-z][a-z0-9-]{0,61}[a-z0-9]", c["namespace"])
-    assert c["namespace"].startswith("aim345-"), "Use a dedicated aim345-* namespace"
     assert re.fullmatch(r"[a-f0-9]{40}", c["model_revision"])
-    for key in ("image", "router_image"):
-        image = c[key]
-        assert "@sha256:" in image or (":" in image.rsplit("/", 1)[-1] and not image.endswith(":latest"))
     assert c["gpus_per_worker"] > 0 and c["efa_per_worker"] > 0
     minimum_nodes = 1 if c.get("placement") == "packed" else 2
     assert c.get("placement", "separate-nodes") in ("packed", "separate-nodes")
     assert len(c["nodes"]) == len(set(c["nodes"])) >= minimum_nodes
-    assert c["model_cache_host_path"].startswith("/mnt/"), "Use a dedicated cache under /mnt"
     if c.get('engine_profile') == 'v4-optional' or c['model_id'] == 'deepseek-ai/DeepSeek-V4-Flash':
         assert c.get('engine_profile') == 'v4-optional', 'V4 requires the separately pinned optional engine'
         assert c['model_id'] == 'deepseek-ai/DeepSeek-V4-Flash', 'The optional profile is qualified only for V4'
@@ -32,19 +26,6 @@ def read_config(path):
 
 def kubectl(c, *args, **kwargs):
     return subprocess.run(["kubectl", "--context", c["context"], "-n", c["namespace"], *args], check=True, text=True, **kwargs)
-
-
-def owned_namespace(c, create=False):
-    r = subprocess.run(["kubectl", "--context", c["context"], "get", "namespace", c["namespace"], "--ignore-not-found", "-o", "json"], text=True, capture_output=True, check=True)
-    priority = subprocess.run(["kubectl", "--context", c["context"], "get", "priorityclass", c["namespace"] + "-nonpreempting", "--ignore-not-found", "-o", "json"], text=True, capture_output=True, check=True)
-    if priority.stdout.strip():
-        assert json.loads(priority.stdout)["metadata"].get("labels", {}).get("app.kubernetes.io/part-of") == "aim345-lab", "PriorityClass is not owned by this lab"
-    if r.stdout.strip():
-        assert json.loads(r.stdout)["metadata"].get("labels", {}).get("app.kubernetes.io/part-of") == "aim345-lab", "Namespace is not owned by this lab"
-    elif create:
-        kubectl(c, "create", "-f", "-", input=json.dumps({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": c["namespace"], "labels": OWNER}}))
-    else:
-        raise RuntimeError("Lab namespace does not exist")
 
 
 def metadata(c, name, labels=None):
@@ -94,16 +75,13 @@ def worker(c, name, node, role):
     return {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": metadata(c, name, labels), "spec": {"replicas": 1, "strategy": {"type": "Recreate"}, "selector": {"matchLabels": {"app": name}}, "template": {"metadata": {"labels": labels}, "spec": spec}}}
 
 
-def render(c, mode, prefill_replicas=1):
-    assert prefill_replicas in (1, 2), "This lab implements one or two prefill workers"
+def render(c, mode):
     if mode == "unified":
         roles = [("unified-0", c["nodes"][0], "unified"), ("unified-1", c["nodes"][1], "unified")]
     else:
-        assert len(c["nodes"]) >= prefill_replicas + 1, "Add a separately allocated node to scale prefill"
         roles = [("prefill-0", c["nodes"][0], "prefill"), ("decode-0", c["nodes"][1], "decode")]
-        if prefill_replicas == 2:
-            roles.append(("prefill-1", c["nodes"][2], "prefill"))
-    items = [{"apiVersion": "scheduling.k8s.io/v1", "kind": "PriorityClass", "metadata": {"name": c["namespace"] + "-nonpreempting", "labels": OWNER}, "value": -10, "preemptionPolicy": "Never", "globalDefault": False, "description": "Nonpreempting priority for the AIM345 lab namespace"}]
+    items = [{"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": c["namespace"], "labels": OWNER}},
+             {"apiVersion": "scheduling.k8s.io/v1", "kind": "PriorityClass", "metadata": {"name": c["namespace"] + "-nonpreempting", "labels": OWNER}, "value": -10, "preemptionPolicy": "Never", "globalDefault": False, "description": "Nonpreempting priority for the AIM345 lab namespace"}]
     for name, node, role in roles:
         items += [worker(c, name, node, role), service(c, name, 30000, headless=True)]
     # Use individual worker endpoints: one Service balancing replicas hides them from the router.
@@ -123,49 +101,28 @@ def render(c, mode, prefill_replicas=1):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("mode", choices=["unified", "disaggregated", "scale-prefill", "cleanup"])
+    p.add_argument("mode", choices=["unified", "disaggregated", "cleanup"])
     p.add_argument("--config", default="config.json")
     p.add_argument("--render", action="store_true")
     a = p.parse_args()
     c = read_config(a.config)
     assert c.get("placement") != "packed", "Use paired.py for packed allocations"
     if a.mode == "cleanup":
-        owned_namespace(c)
         kubectl(c, "delete", "namespace", c["namespace"], "--wait=true")
         kubectl(c, "delete", "priorityclass", c["namespace"] + "-nonpreempting", "--ignore-not-found")
         return
-    mode = "disaggregated" if a.mode == "scale-prefill" else a.mode
-    doc = render(c, mode, 2 if a.mode == "scale-prefill" else 1)
+    doc = render(c, a.mode)
     if a.render:
         print(json.dumps(doc, indent=2))
         return
-    owned_namespace(c, create=True)
-    if a.mode != "scale-prefill":
-        kubectl(c, "delete", "deployment,service", "-l", "app.kubernetes.io/part-of=aim345-lab", "--ignore-not-found", "--wait=true")
-        remaining = json.loads(kubectl(c, "get", "pods", "-l", "app.kubernetes.io/part-of=aim345-lab", "-o", "json", capture_output=True).stdout)["items"]
-        for pod in remaining:
-            kubectl(c, "wait", "--for=delete", "pod/" + pod["metadata"]["name"], "--timeout=180s")
-    else:
-        # Scaling adds a prefill worker and changes router membership only.
-        existing = json.loads(kubectl(c, "get", "deploy", "-o", "json", capture_output=True).stdout)
-        assert {"prefill-0", "decode-0", "router"} <= {x["metadata"]["name"] for x in existing["items"]}, "Deploy disaggregated first"
-        # Reject configuration drift that would also restart existing engines.
-        desired = {x["metadata"]["name"]: x for x in doc["items"] if x["kind"] == "Deployment"}
-        for old in existing["items"]:
-            if old["metadata"]["name"] not in ("prefill-0", "decode-0"):
-                continue
-            want = desired[old["metadata"]["name"]]["spec"]["template"]["spec"]
-            have = old["spec"]["template"]["spec"]
-            for key in ("nodeSelector", "tolerations"):
-                assert have[key] == want[key], f"Existing engine {key} changed"
-            for key in ("image", "args", "env"):
-                assert have["containers"][0][key] == want["containers"][0][key], f"Existing engine {key} changed"
-            normalize = lambda resources: {section: {k: str(v) for k, v in quantities.items()} for section, quantities in resources.items()}
-            assert normalize(have["containers"][0]["resources"]) == normalize(want["containers"][0]["resources"]), "Existing engine resources changed"
-        doc["items"] = [x for x in doc["items"] if x["metadata"]["name"] in ("prefill-1", "router")]
+    # Replace the lab's previous serving resources, and wait until their pods have released the GPUs.
+    kubectl(c, "delete", "deployment,service", "-l", "app.kubernetes.io/part-of=aim345-lab", "--ignore-not-found", "--wait=true")
+    remaining = json.loads(kubectl(c, "get", "pods", "-l", "app.kubernetes.io/part-of=aim345-lab", "-o", "json", capture_output=True).stdout)["items"]
+    for pod in remaining:
+        kubectl(c, "wait", "--for=delete", "pod/" + pod["metadata"]["name"], "--timeout=180s")
     kubectl(c, "apply", "-f", "-", input=json.dumps(doc))
     Path("results").mkdir(exist_ok=True)
-    Path("results/deployment.json").write_text(json.dumps({"config": c, "mode": mode, "prefill_replicas": 2 if a.mode == "scale-prefill" else 1}, indent=2))
+    Path("results/deployment.json").write_text(json.dumps({"config": c, "mode": a.mode}, indent=2))
     print("Submitted. Wait for each Deployment to become Available; capture pod events if scheduling is blocked.")
 
 if __name__ == "__main__":

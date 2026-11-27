@@ -4,7 +4,7 @@ import copy
 import json
 from pathlib import Path
 import urllib.request
-from deployment import OWNER, kubectl, owned_namespace, read_config, render
+from deployment import OWNER, kubectl, read_config, render
 
 MATCHED = ('context', 'image', 'router_image', 'instance_type', 'gpus_per_worker', 'efa_per_worker',
            'model_id', 'model_revision', 'context_length_tokens',
@@ -26,11 +26,8 @@ def check_pair(unified, split):
 
 
 def paired_render(c, mode):
-    namespace = {'apiVersion': 'v1', 'kind': 'Namespace', 'metadata': {'name': c['namespace'], 'labels': OWNER}}
     if c.get('placement') != 'packed':
-        doc = render(c, mode)
-        doc['items'].insert(0, namespace)
-        return doc
+        return render(c, mode)
     # Reuse exactly the sequential engine options, then give each process its
     # own GPUs and listening port. One pod requests the EFA device once.
     expanded = copy.deepcopy(c)
@@ -67,7 +64,7 @@ def paired_render(c, mode):
         engine[key].pop('httpGet')
         engine[key]['exec'] = {'command': ['python3', '-c', health]}
         engine[key]['timeoutSeconds'] = 20
-    result = [namespace]
+    result = []
     names = [x['metadata']['name'] for x in engines]
     for item in doc['items']:
         if item in engines:
@@ -108,24 +105,16 @@ def main():
         print(json.dumps({'gpus_per_stack': gpus, 'namespaces': [c['namespace'] for c in configs], 'output': str(a.output)}))
         return
     if a.action == 'deploy':
-        # Do not silently adopt another participant's existing namespace.
-        for c in configs:
-            existing = kubectl(c, 'get', 'namespace', c['namespace'], '--ignore-not-found', '-o', 'name', capture_output=True).stdout.strip()
-            if existing:
-                raise RuntimeError(f'Namespace already exists: {existing}; verify or explicitly clean up your own run')
         for c, doc in zip(configs, docs):
-            owned_namespace(c, create=True)
             kubectl(c, 'apply', '-f', '-', input=json.dumps(doc))
         return
     if a.action == 'cleanup':
         for c in configs:
-            owned_namespace(c)
             kubectl(c, 'delete', 'namespace', c['namespace'], '--wait=true')
             kubectl(c, 'delete', 'priorityclass', c['namespace']+'-nonpreempting')
         return
     records = []
     for c, url in zip(configs, [a.unified_url, a.disaggregated_url]):
-        owned_namespace(c)
         pods = json.loads(kubectl(c, 'get', 'pods', '-l', 'component=engine', '-o', 'json', capture_output=True).stdout)['items']
         count = sum(int(x['resources']['requests'].get('nvidia.com/gpu', 0)) for pod in pods for x in pod['spec']['containers'])
         if count != gpus or not pods:

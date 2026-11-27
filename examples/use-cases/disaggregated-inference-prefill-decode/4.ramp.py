@@ -7,7 +7,7 @@ p = argparse.ArgumentParser(description="Poisson task arrivals; shape B has one 
 p.add_argument("--traffic", required=True)
 p.add_argument("--url", required=True)
 p.add_argument("--output", required=True)
-p.add_argument("--architecture", choices=["unified", "disaggregated", "disaggregated-scaled"], required=True)
+p.add_argument("--architecture", choices=["unified", "disaggregated"], required=True)
 p.add_argument("--instance-type", required=True)
 p.add_argument("--region", required=True)
 p.add_argument("--evidence-scope", choices=["mechanism-validation", "production-calibration", "local-mock"], required=True)

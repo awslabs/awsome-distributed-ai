@@ -90,15 +90,13 @@ class LabTests(unittest.TestCase):
 
     def test_deployments_hold_gpu_count_and_keep_both_selectors(self):
         c = json.loads(Path('config.example.json').read_text())
-        c['nodes'] = ['node-a', 'node-b', 'node-c']
+        c['nodes'] = ['node-a', 'node-b']
         def workers(doc):
             return [x for x in doc['items'] if x['kind'] == 'Deployment' and x['metadata']['labels'].get('component') == 'engine']
         unified = workers(render(c, 'unified'))
         split = workers(render(c, 'disaggregated'))
-        scaled = workers(render(c, 'disaggregated', 2))
         self.assertEqual(len(unified), 2)
         self.assertEqual(len(split), 2)
-        self.assertEqual(len(scaled), 3)
         for worker in split:
             pod = worker['spec']['template']['spec']
             engine = pod['containers'][0]
@@ -106,7 +104,6 @@ class LabTests(unittest.TestCase):
             self.assertNotIn('--disaggregation-ib-device', engine['args'])
             self.assertEqual({x['name']: x['value'] for x in engine['env']}['SGLANG_DISAGGREGATION_NIXL_BACKEND'], 'LIBFABRIC')
             self.assertEqual(pod['preemptionPolicy'], 'Never')
-        self.assertEqual(split[1], scaled[1])
 
 if __name__ == '__main__':
     unittest.main()
