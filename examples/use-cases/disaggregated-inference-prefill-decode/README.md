@@ -4,7 +4,7 @@ This Amazon EKS lab compares two unified SGLang replicas behind a round-robin ro
 
 Prefill processes the input tokens in parallel and is often compute-bound. Decode repeatedly reads model weights and KV state to generate the next token and is often memory-bandwidth-bound. In a unified engine, a long prefill forward pass occupies the same GPUs as active decode steps; queued prefills can also raise TTFT. Chunked prefill reduces each interruption, while separate pools remove that source of shared-GPU interference. Neither arrangement removes queueing when its own capacity is exhausted.
 
-Prepared for re:Invent 2026 session AIM345, led by Keita Watanabe with Mijanur Palash. The scripts are review material. Hardware results and remaining validation gaps are listed below; the expected ranking is a hypothesis for this configuration, not a benchmark transcript.
+Prepared for re:Invent 2026 session AIM345, led by Keita Watanabe with Mijanur Palash. The session follows its Workshop Studio guide, which runs one engine of each stack on each of a team's two nodes and starts both clients together. The packed, separate-node and sequential procedures in this README are the example's own and are not the session's steps. The scripts are review material. Hardware results and remaining validation gaps are listed below; the expected ranking is a hypothesis for this configuration, not a benchmark transcript.
 
 ## Validation status
 
@@ -430,8 +430,6 @@ Read `report.html` first; `summary.csv` and `qualified-rates.json` hold the resu
 The harness never caps concurrent tasks to hide overload. `max_client_launch_lag_ms` detects controller-side scheduling lag; excessive lag marks the rate invalid. For agentic traffic, later calls depend on earlier responses, so the offered task rate and realized call rate differ. The highest tested qualifying rate is a finite-window observation. Extend runs and inspect queue growth before calling it sustained goodput capacity.
 
 For Round 3, edit one factor at a time in a copy of the shape JSON and regenerate traffic: shape B's `input_tokens`; the ramp's `--rates`; or shape A's `shared_system_fraction`, keeping its sequential-call and overlap bounds intact. Lower shared-system availability is an input intervention, not a guaranteed cache-hit percentage. Record the engine's cached-token observations and cache-policy settings. Repeat both architectures at each setting and enter the observed crossover into the [decision framework](DECISION-FRAMEWORK.md).
-
-The session budget is framing for 5 minutes, Round 0 for 12 minutes, Round 1 for 15 minutes, Round 2 for 13 minutes, Round 3 for 8 minutes, and wrap-up for 5 minutes, leaving 2 minutes for transitions. These are teaching allocations. Image preparation, model loading, and the full benchmark sweep belong in rehearsal. Round 3 can use a guided comparison of measurements already collected if time is short.
 
 ## How the results are judged
 
