@@ -174,7 +174,6 @@ class Checkpoints:
             retain(state)
             self.event('retained_source_storages', count=len(self.source_storage_refs),
                        bytes=sum(s.nbytes() for s in self.source_storage_refs.values()))
-        if self.process:
             from torch.distributed.checkpoint.state_dict_saver import AsyncCheckpointerType
             # The child receives CPU-staged tensors. With a copy-ahead buffer its GPU copy
             # loader would initialize a needless CUDA context on GPU 0 (native 2.9.1).
